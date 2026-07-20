@@ -51,4 +51,39 @@ describe('AI media migration safety', () => {
     expect(priority.match(/CREATE\s/gu)).toHaveLength(1);
     expect(priority).not.toMatch(/BEGIN|COMMIT|SET /u);
   });
+
+  it('prebuilds the listing-draft composite keys with FK-compatible column order', () => {
+    const target = migration('20260721001000_prebuild_source_listing_draft_ai_media_context_key').trim();
+    expect(target).toMatch(/^CREATE UNIQUE INDEX CONCURRENTLY "source_listing_draft_ai_media_context_key"/u);
+    expect(target).toMatch(/ON "source_listing_draft_versions"\(\s*"workflow_id", "revision", "owner_user_id", "draft_version"\s*\)/u);
+    expect(target.match(/CREATE\s/gu)).toHaveLength(1);
+    expect(target).not.toMatch(/BEGIN|COMMIT|SET /u);
+
+    const columns = migration('20260721002000_add_ai_media_listing_draft_context_columns');
+    expect(columns).toMatch(/ADD COLUMN "context_draft_revision" INTEGER/u);
+    expect(columns).toMatch(/ADD COLUMN "context_draft_version" INTEGER/u);
+    expect(columns).toMatch(/existing listing-draft AI media workflows require draft revision\/version backfill/u);
+    expect(columns).toMatch(/"context_type" = 'listing-draft'[\s\S]*"context_draft_revision" IS NULL/u);
+    expect(columns).toMatch(/ADD CONSTRAINT "ai_media_workflow_context_version_check"[\s\S]*\) NOT VALID;/u);
+    expect(columns).toMatch(/VALIDATE CONSTRAINT "ai_media_workflow_context_version_check"/u);
+
+    const child = migration('20260721003000_prebuild_ai_media_listing_draft_context_index').trim();
+    expect(child).toMatch(/^CREATE INDEX CONCURRENTLY "ai_media_workflow_listing_draft_context_idx"/u);
+    expect(child).toMatch(/ON "ai_media_workflows"\(\s*"context_id", "context_draft_revision", "owner_user_id", "context_draft_version"\s*\)/u);
+    expect(child.match(/CREATE\s/gu)).toHaveLength(1);
+    expect(child).not.toMatch(/BEGIN|COMMIT|SET /u);
+  });
+
+  it('binds listing-draft context only after the prebuilt keys and validates the FK online', () => {
+    const binding = migration('20260721010000_add_ai_media_listing_draft_context');
+    expect(binding).toMatch(/ADD CONSTRAINT "ai_media_workflow_listing_draft_context_fkey"[\s\S]*REFERENCES "source_listing_draft_versions"/u);
+    expect(binding).toMatch(/\) ON DELETE RESTRICT ON UPDATE NO ACTION\s+NOT VALID;/u);
+    expect(binding).toMatch(/VALIDATE CONSTRAINT "ai_media_workflow_listing_draft_context_fkey"/u);
+    expect(binding).not.toMatch(/CREATE (?:UNIQUE )?INDEX/u);
+    expect(binding).toMatch(/context_draft_revision" IS DISTINCT FROM OLD/u);
+
+    const schema = readFileSync(new URL('../../prisma/schema.prisma', import.meta.url), 'utf8');
+    expect(schema).toMatch(/@@index\(\[contextId, contextDraftRevision, ownerUserId, contextDraftVersion\], map: "ai_media_workflow_listing_draft_context_idx"\)/u);
+    expect(schema).toMatch(/listingDraftContext[\s\S]*map: "ai_media_workflow_listing_draft_context_fkey"\)/u);
+  });
 });

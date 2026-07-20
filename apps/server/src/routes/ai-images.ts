@@ -108,12 +108,24 @@ const workflowApplicationRollbackSchema = z.object({
   expectedWorkflowRevision: z.number().int().min(1),
   expectedTargetUpdatedAt: z.string().datetime(),
 }).strict();
-const workflowContextSchema = z.object({
+const collectWorkflowContextSchema = z.object({
   type: z.literal('collect'),
   id: z.string().trim().min(1).max(200),
   skuKey: z.string().trim().min(1).max(500).nullable().optional(),
   slotKey: z.string().trim().min(1).max(200).nullable().optional(),
 });
+const listingDraftWorkflowContextSchema = z.object({
+  type: z.literal('listing-draft'),
+  id: z.string().trim().min(1).max(200),
+  revision: z.number().int().min(1),
+  draftVersion: z.number().int().min(1),
+  skuKey: z.string().trim().min(1).max(500).nullable().optional(),
+  slotKey: z.string().trim().min(1).max(1024).nullable().optional(),
+});
+const workflowContextSchema = z.discriminatedUnion('type', [
+  collectWorkflowContextSchema,
+  listingDraftWorkflowContextSchema,
+]);
 const imageToImageWorkflowSchema = z.object({
   operation: z.literal('IMAGE_TO_IMAGE'),
   sourceAssetId: z.string().trim().min(1).max(128).optional(),
@@ -215,6 +227,10 @@ const editMaskSchema = z.object({
   slotKey: z.string().trim().min(1).max(200).nullable().optional(),
   maskSemantics: z.literal(AI_IMAGE_EDIT_MASK_SEMANTICS),
   maskDataUrl: z.string().min(32).max(28 * 1024 * 1024),
+});
+const listingDraftEditMaskSchema = editMaskSchema.extend({
+  revision: z.number().int().min(1),
+  draftVersion: z.number().int().min(1),
 });
 
 interface AiImageRouteSettings {
@@ -662,6 +678,8 @@ function publicWorkflow(workflow: any) {
     contextId: workflow.contextId,
     contextSkuKey: workflow.contextSkuKey,
     contextSlotKey: workflow.contextSlotKey,
+    contextDraftRevision: workflow.contextDraftRevision ?? null,
+    contextDraftVersion: workflow.contextDraftVersion ?? null,
     selectedOutputAssetId: workflow.selectedOutputAssetId,
     reviewedAt: workflow.reviewedAt,
     completedAt: workflow.completedAt,
@@ -899,8 +917,29 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   });
   const createEditMaskAsset = options.createEditMask || createAiImageEditMask;
   const assertWorkflowSourceCurrent = async (workflow: any, ownerUserId: string) => {
-    if (workflow.contextType !== 'collect' || !workflow.contextId) return;
-    const currentContext = await mediaContextService.loadCollect(ownerUserId, workflow.contextId);
+    if (!workflow.contextId) return;
+    let currentContext;
+    try {
+      currentContext = workflow.contextType === 'listing-draft'
+        ? await mediaContextService.loadListingDraft(ownerUserId, workflow.contextId, {
+          expectedRevision: workflow.contextDraftRevision,
+          expectedDraftVersion: workflow.contextDraftVersion,
+          skuKey: workflow.contextSkuKey,
+          slotKey: workflow.contextSlotKey,
+        })
+        : workflow.contextType === 'collect'
+          ? await mediaContextService.loadCollect(ownerUserId, workflow.contextId)
+          : null;
+    } catch (error) {
+      if (workflow.contextType === 'listing-draft' && error instanceof AiMediaContextError) {
+        throw new AiMediaWorkflowError(
+          'STALE_MEDIA_WORKFLOW',
+          'The listing draft changed; review and generate a new candidate',
+        );
+      }
+      throw error;
+    }
+    if (!currentContext) return;
     const currentAssetIds = new Set(
       currentContext.inputs.flatMap((input) => [
         input.assetId,
@@ -1633,6 +1672,34 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     } catch (error) { return sendError(reply, error); }
   });
 
+  app.get('/contexts/listing-draft/:id', async (request, reply) => {
+    const parsed = z.object({
+      revision: z.coerce.number().int().min(1),
+      draftVersion: z.coerce.number().int().min(1),
+      skuKey: z.string().trim().min(1).max(500).nullable().optional(),
+      slotKey: z.string().trim().min(1).max(1024).nullable().optional(),
+    }).safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    if (!await getMediaWorkflowEnabled(actor(request).ownerUserId)) {
+      return reply.send({ code: 0, msg: 'AI media workflow is disabled' });
+    }
+    try {
+      const context = await mediaContextService.loadListingDraft(
+        actor(request).ownerUserId,
+        (request.params as any).id,
+        {
+          expectedRevision: parsed.data.revision,
+          expectedDraftVersion: parsed.data.draftVersion,
+          skuKey: parsed.data.skuKey,
+          slotKey: parsed.data.slotKey,
+        },
+      );
+      return { code: 1, data: context };
+    } catch (error) { return sendError(reply, error); }
+  });
+
   app.post('/contexts/collect/:id/edit-masks', {
     bodyLimit: 30 * 1024 * 1024,
     onRequest: async (request, reply) => {
@@ -1670,6 +1737,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       const maskBuffer = decodePngDataUrl(parsed.data.maskDataUrl);
       const result = await createEditMaskAsset({
         ...ids,
+        contextType: 'collect',
         contextId: (request.params as any).id,
         contextSkuKey: parsed.data.skuKey,
         contextSlotKey: parsed.data.slotKey,
@@ -1680,6 +1748,78 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         database: prisma as any,
         getStorage: getStorageBackend,
         checkUploadQuota: checkEditMaskUploadQuota,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({
+        code: 1,
+        replayed: result.replayed,
+        data: {
+          id: result.asset.id,
+          url: result.asset.url,
+          mimeType: result.asset.mimeType,
+          width: result.asset.width,
+          height: result.asset.height,
+          maskSemantics: result.diagnostics.maskSemantics,
+          editPixelCount: result.diagnostics.editPixelCount,
+          preservedPixelCount: result.diagnostics.preservedPixelCount,
+          featheredPixelCount: result.diagnostics.featheredPixelCount,
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/contexts/listing-draft/:id/edit-masks', {
+    bodyLimit: 30 * 1024 * 1024,
+    onRequest: async (request, reply) => {
+      const rateCheck = await checkEditMaskRequestRate(actor(request).ownerUserId);
+      if (!rateCheck.allowed) {
+        return reply.status(429).send({
+          code: 'EDIT_RESOURCE_RATE_LIMITED',
+          msg: rateCheck.reason,
+        });
+      }
+    },
+  }, async (request, reply) => {
+    const parsed = listingDraftEditMaskSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    try {
+      if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
+        return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
+      }
+      await requireSourceListingWebMedia(ids.ownerUserId);
+      const [editSettings, editStorageReadiness] = await Promise.all([
+        getEditSettings(),
+        getEditStorageReadiness(),
+      ]);
+      const readiness = resolveAiImageEditReadiness('INPAINT', editSettings, {
+        workflowEnabled: true,
+        production,
+        storageReadiness: editStorageReadiness,
+      });
+      if (!readiness.ready) {
+        return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+      }
+      const maskBuffer = decodePngDataUrl(parsed.data.maskDataUrl);
+      const result = await createEditMaskAsset({
+        ...ids,
+        contextType: 'listing-draft',
+        contextId: (request.params as any).id,
+        contextSkuKey: parsed.data.skuKey,
+        contextSlotKey: parsed.data.slotKey,
+        contextDraftRevision: parsed.data.revision,
+        contextDraftVersion: parsed.data.draftVersion,
+        sourceAssetId: parsed.data.sourceAssetId,
+        maskBuffer,
+        maskSemantics: parsed.data.maskSemantics,
+      }, {
+        database: prisma as any,
+        getStorage: getStorageBackend,
+        checkUploadQuota: checkEditMaskUploadQuota,
+        loadListingDraftContext: (ownerUserId, draftId, scope) => (
+          mediaContextService.loadListingDraft(ownerUserId, draftId, scope)
+        ),
       });
       return reply.status(result.replayed ? 200 : 201).send({
         code: 1,
@@ -1714,6 +1854,40 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         actor(request).ownerUserId,
         (request.params as any).id,
         parsed.data.sourceMediaKey,
+        parsed.data.purpose,
+      );
+      return { code: 1, data: {
+        id: asset.id, url: asset.url, mimeType: asset.mimeType,
+        width: asset.width, height: asset.height, editReady: asset.editReady,
+      } };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/contexts/listing-draft/:id/internalize', async (request, reply) => {
+    const parsed = z.object({
+      sourceMediaKey: z.string().trim().min(1).max(500),
+      purpose: z.enum(['GENERAL', 'EDIT']).default('GENERAL'),
+      revision: z.number().int().min(1),
+      draftVersion: z.number().int().min(1),
+      skuKey: z.string().trim().min(1).max(500).nullable().optional(),
+      slotKey: z.string().trim().min(1).max(1024).nullable().optional(),
+    }).safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    if (!await getMediaWorkflowEnabled(actor(request).ownerUserId)) {
+      return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
+    }
+    try {
+      await requireSourceListingWebMedia(actor(request).ownerUserId);
+      const asset = await mediaContextService.internalizeListingDraft(
+        actor(request).ownerUserId,
+        (request.params as any).id,
+        parsed.data.sourceMediaKey,
+        {
+          expectedRevision: parsed.data.revision,
+          expectedDraftVersion: parsed.data.draftVersion,
+          skuKey: parsed.data.skuKey,
+          slotKey: parsed.data.slotKey,
+        },
         parsed.data.purpose,
       );
       return { code: 1, data: {

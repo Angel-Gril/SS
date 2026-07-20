@@ -335,5 +335,36 @@ assert.equal(isAiMediaWorkflowInputCurrent(
   { inputs: [{ assetId: 'old-asset', url: '/old.png' }] },
   [{ sourceMediaKey: 'main', role: 'main', sourceUrl: '/source.png', assetId: 'asset-1', assetUrl: '/source.png', mimeType: 'image/png', width: null, height: null }],
 ), false);
+const listingContext = {
+  target: {
+    type: 'listing-draft', id: 'draft-1', label: 'Draft',
+    revision: 4, draftVersion: 2, skuKey: 'sku-red', slotKey: 'sku-hero',
+    assignedAssetId: 'asset-1',
+  },
+};
+const listingWorkflow = {
+  contextType: 'listing-draft', contextId: 'draft-1',
+  contextDraftRevision: 4, contextDraftVersion: 2,
+  contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+  inputs: [{ assetId: 'asset-1', url: '/source.png' }],
+};
+assert.equal(isAiMediaWorkflowInputCurrent(
+  listingWorkflow,
+  [{ sourceMediaKey: 'main', role: 'main', sourceUrl: '/source.png', assetId: 'asset-1', assetUrl: '/source.png', mimeType: 'image/png', width: null, height: null }],
+  'snapshot-1',
+  listingContext,
+), true);
+assert.equal(isAiMediaWorkflowInputCurrent(
+  { ...listingWorkflow, contextDraftVersion: 1 },
+  [{ sourceMediaKey: 'main', role: 'main', sourceUrl: '/source.png', assetId: 'asset-1', assetUrl: '/source.png', mimeType: 'image/png', width: null, height: null }],
+  'snapshot-1',
+  listingContext,
+), false, 'a listing-draft version change must stale a workflow even when the source asset is unchanged');
+assert.equal(isAiMediaWorkflowInputCurrent(
+  { ...listingWorkflow, contextSlotKey: 'gallery-1' },
+  [{ sourceMediaKey: 'main', role: 'main', sourceUrl: '/source.png', assetId: 'asset-1', assetUrl: '/source.png', mimeType: 'image/png', width: null, height: null }],
+  'snapshot-1',
+  listingContext,
+), false, 'a listing-draft slot change must stale a workflow');
 
 console.log('PASS AI media frontend behavior contract');

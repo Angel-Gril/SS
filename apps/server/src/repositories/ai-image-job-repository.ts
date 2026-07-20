@@ -32,6 +32,21 @@ const record = (row: any): AiImageJobRecord => ({
   billedUnits: Number(row.billedUnits || 0),
 });
 
+const INPUT_SOURCE_SNAPSHOT_OPERATIONS = new Set([
+  'IMAGE_TO_IMAGE',
+  'IMAGE_TRANSLATE',
+  'FULL_EDIT',
+  'INPAINT',
+]);
+
+function uniqueFrozenInputSnapshotId(inputs: Array<{ asset?: { sourceCaptureSnapshotId?: string | null } | null }>) {
+  if (!inputs.length) return null;
+  const snapshotIds = inputs.map((input) => String(input.asset?.sourceCaptureSnapshotId || '').trim());
+  if (snapshotIds.some((id) => !id)) return null;
+  const unique = new Set(snapshotIds);
+  return unique.size === 1 ? snapshotIds[0]! : null;
+}
+
 async function appendWorkflowEvent(client: any, job: any, eventType: string, payload: Record<string, unknown> = {}) {
   if (!job?.workflowId) return;
   await client.aiMediaWorkflowEvent.create({ data: {
@@ -855,13 +870,14 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           include: { asset: { select: { sourceCaptureSnapshotId: true } } },
         })
         : [];
-      const editSourceSnapshotId = ['FULL_EDIT', 'INPAINT'].includes(String(job.operation))
-        ? String(inputs.find((input: any) => input.role === 'REFERENCE')
-          ?.asset?.sourceCaptureSnapshotId || '').trim()
-        : '';
-      if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation)) && !editSourceSnapshotId) {
-        throw Object.assign(new Error('Edit completion requires a frozen source snapshot'), {
-          code: 'INVALID_EDIT_OUTPUT_GRAPH',
+      const inputSourceSnapshotId = uniqueFrozenInputSnapshotId(inputs);
+      const operationRequiresInputSnapshot = Boolean(
+        job.workflowId && INPUT_SOURCE_SNAPSHOT_OPERATIONS.has(String(job.operation)),
+      );
+      if (operationRequiresInputSnapshot && !inputSourceSnapshotId) {
+        const isEdit = ['FULL_EDIT', 'INPAINT'].includes(String(job.operation));
+        throw Object.assign(new Error(`${isEdit ? 'Edit' : 'Input-based'} completion requires one frozen source snapshot`), {
+          code: isEdit ? 'INVALID_EDIT_OUTPUT_GRAPH' : 'INVALID_INPUT_OUTPUT_GRAPH',
         });
       }
       const outputs = [];
@@ -879,7 +895,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           height: asset.height ?? null,
           sha256: asset.sha256,
           metadata: asset.metadata || undefined,
-          ...(editSourceSnapshotId ? { sourceCaptureSnapshotId: editSourceSnapshotId } : {}),
+          ...(inputSourceSnapshotId ? { sourceCaptureSnapshotId: inputSourceSnapshotId } : {}),
         } }));
       }
       if (job.workflowId) {

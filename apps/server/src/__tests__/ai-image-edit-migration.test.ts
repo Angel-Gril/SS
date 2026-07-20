@@ -50,6 +50,10 @@ const unboundCandidateMigrationUrl = new URL(
   '../../prisma/migrations/20260720166000_reject_unbound_ai_image_edit_candidates/migration.sql',
   import.meta.url,
 );
+const listingDraftCandidateMigrationUrl = new URL(
+  '../../prisma/migrations/20260721011000_allow_listing_draft_ai_image_edit_candidates/migration.sql',
+  import.meta.url,
+);
 
 describe('AI image edit persistence migrations', () => {
   it('adds edit operations and asset kinds in a dedicated additive enum migration', async () => {
@@ -248,5 +252,22 @@ describe('AI image edit persistence migrations', () => {
     expect(migration).toMatch(/DO \$\$[\s\S]*PERFORM assert_ai_image_edit_candidate_contract/u);
     expect(migration).not.toMatch(/origin_operation|origin_job\."operation"/u);
     expect(migration).not.toMatch(/source_capture_snapshots|ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('keeps generated edit candidates inside the exact listing-draft revision', async () => {
+    const migration = await readFile(listingDraftCandidateMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION assert_standalone_ai_image_edit_graph/u);
+    expect(migration).toMatch(/workflow\."context_type" IS NULL\s+OR workflow\."context_type" NOT IN \('collect', 'listing-draft'\)/u);
+    expect(migration).toMatch(/workflow\."context_draft_revision" IS NULL/u);
+    expect(migration).toMatch(/origin_workflow\."context_type" IS NOT DISTINCT FROM workflow\."context_type"/u);
+    expect(migration).toMatch(/origin_workflow\."context_id" IS NOT DISTINCT FROM workflow\."context_id"/u);
+    expect(migration).toMatch(/origin_workflow\."context_draft_revision" IS NOT DISTINCT FROM workflow\."context_draft_revision"/u);
+    expect(migration).toMatch(/origin_workflow\."context_draft_version" IS NOT DISTINCT FROM workflow\."context_draft_version"/u);
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION assert_ai_image_edit_candidate_scope/u);
+    expect(migration).toMatch(/origin_workflow\."context_type" IS NOT NULL/u);
+    expect(migration).toMatch(/source_asset\."source_capture_snapshot_id" IS NOT DISTINCT FROM/u);
+    expect(migration).toMatch(/LOCK TABLE[\s\S]*"ai_media_workflows"[\s\S]*IN SHARE ROW EXCLUSIVE MODE/u);
+    expect(migration).not.toMatch(/ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
   });
 });

@@ -399,7 +399,8 @@ describe('AI image manual edit workflow contract', () => {
     id: 'edit-workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
     operation: 'FULL_EDIT', status: 'QUEUED', reviewStatus: 'NOT_READY',
     revision: 1, currentAttempt: 1, contextType: 'collect', contextId: 'goods-1',
-    contextSkuKey: null, contextSlotKey: null, idempotencyKey: 'edit-workflow-idem-1',
+    contextSkuKey: null, contextSlotKey: null, contextDraftRevision: null,
+    contextDraftVersion: null, idempotencyKey: 'edit-workflow-idem-1',
     requestFingerprint: 'a'.repeat(64), selectedOutputAssetId: null,
     createdAt: new Date(), updatedAt: new Date(), completedAt: null,
   };
@@ -495,6 +496,117 @@ describe('AI image manual edit workflow contract', () => {
 });
 
 describe('AI image edit mask authority', () => {
+  it('freezes listing-draft revision and slot authority into a content-addressed mask', async () => {
+    const mask = await maskPng(2, 2, [0, 255, 0, 255]);
+    const source = {
+      id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+      sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64), width: 2, height: 2,
+      url: '/uploads/source.png', mimeType: 'image/png', storageBackend: 'local',
+      storageKey: 'source.png', sizeBytes: 100, metadata: { pixelOrientationNormalized: true },
+    };
+    const create = vi.fn(async ({ data }: any) => ({ id: 'listing-mask-1', ...data }));
+    const loadListingDraftContext = vi.fn(async () => ({
+      snapshot: { id: 'snapshot-1' },
+      target: { assignedAssetId: 'legacy-source-asset' },
+      inputs: [{ assetId: 'edit-ready-source', compatibleAssetIds: ['source-asset-1'] }],
+    }));
+
+    const result = await createAiImageEditMask({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      contextType: 'listing-draft', contextId: 'draft-1',
+      contextDraftRevision: 4, contextDraftVersion: 2,
+      contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+      sourceAssetId: source.id, maskBuffer: mask,
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    }, {
+      database: {
+        supplyGoods: { findFirst: vi.fn(async () => { throw new Error('collect authority must not load'); }) },
+        mediaAsset: {
+          findFirst: vi.fn().mockResolvedValueOnce(source).mockResolvedValueOnce(null),
+          create,
+        },
+      },
+      loadListingDraftContext,
+      getStorage: async () => ({ uploadBuffer: vi.fn(async () => ({
+        url: '/uploads/listing-mask.png', backend: 'local', key: 'listing-mask.png',
+      })) }),
+    });
+
+    expect(result).toMatchObject({ asset: { id: 'listing-mask-1' }, replayed: false });
+    expect(loadListingDraftContext).toHaveBeenCalledWith('owner-1', 'draft-1', {
+      expectedRevision: 4, expectedDraftVersion: 2, skuKey: 'sku-red', slotKey: 'sku-hero',
+    });
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      sourceCaptureSnapshotId: 'snapshot-1',
+      sourceMediaKey: expect.stringMatching(/^edit-mask:v2:[a-f0-9]{64}:[a-f0-9]{64}$/u),
+      metadata: expect.objectContaining({
+        contextType: 'listing-draft', contextId: 'draft-1',
+        contextDraftRevision: 4, contextDraftVersion: 2,
+        contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+      }),
+    }) });
+  });
+
+  it('rejects a listing-draft source that has not been normalized for editing', async () => {
+    const mask = await maskPng(2, 2, [0, 255, 0, 255]);
+    const source = {
+      id: 'general-source-asset', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+      sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64), width: 2, height: 2,
+      url: '/uploads/source.png', mimeType: 'image/png', storageBackend: 'local',
+      storageKey: 'source.png', sizeBytes: 100, metadata: {},
+    };
+    const create = vi.fn();
+    const uploadBuffer = vi.fn();
+
+    await expect(createAiImageEditMask({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      contextType: 'listing-draft', contextId: 'draft-1',
+      contextDraftRevision: 4, contextDraftVersion: 2,
+      contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+      sourceAssetId: source.id, maskBuffer: mask,
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    }, {
+      database: {
+        supplyGoods: { findFirst: vi.fn() },
+        mediaAsset: {
+          findFirst: vi.fn().mockResolvedValueOnce(source),
+          create,
+        },
+      },
+      loadListingDraftContext: vi.fn(async () => ({
+        snapshot: { id: 'snapshot-1' },
+        target: { assignedAssetId: source.id },
+        inputs: [{ assetId: source.id }],
+      })),
+      getStorage: async () => ({ uploadBuffer }),
+    })).rejects.toMatchObject({ code: 'SOURCE_ASSET_NOT_FOUND' });
+    expect(create).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale listing draft before reading or storing mask assets', async () => {
+    const findFirst = vi.fn();
+    await expect(createAiImageEditMask({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      contextType: 'listing-draft', contextId: 'draft-1',
+      contextDraftRevision: 4, contextDraftVersion: 2,
+      sourceAssetId: 'source-asset-1', maskBuffer: await maskPng(2, 2, [0, 255, 0, 255]),
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    }, {
+      database: {
+        supplyGoods: { findFirst: vi.fn() },
+        mediaAsset: { findFirst, create: vi.fn() },
+      },
+      loadListingDraftContext: vi.fn(async () => {
+        throw Object.assign(new Error('draft advanced'), {
+          name: 'AiMediaContextError', code: 'STALE_MEDIA_CONTEXT',
+        });
+      }),
+      getStorage: vi.fn(),
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
   it('binds a validated mask to the owned current source snapshot with content-addressed storage', async () => {
     const mask = await maskPng(2, 2, [0, 255, 0, 128]);
     const create = vi.fn(async ({ data }: any) => ({ id: 'mask-asset-1', ...data }));

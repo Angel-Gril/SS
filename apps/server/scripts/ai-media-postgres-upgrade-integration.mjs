@@ -31,6 +31,11 @@ const WORKFLOW_HISTORY_INDEX_MIGRATION = '20260720167000_add_ai_media_workflow_h
 const WORKFLOW_PRIORITY_INDEX_MIGRATION = '20260720168000_add_ai_media_workflow_priority_index';
 const APPLICATION_MUTATION_MIGRATION = '20260720169000_add_ai_media_application_mutations';
 const APPLICATION_AUTHORITY_MIGRATION = '20260720170000_harden_ai_media_application_mutation_authority';
+const LISTING_DRAFT_SOURCE_KEY_MIGRATION = '20260721001000_prebuild_source_listing_draft_ai_media_context_key';
+const LISTING_DRAFT_CONTEXT_COLUMNS_MIGRATION = '20260721002000_add_ai_media_listing_draft_context_columns';
+const LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION = '20260721003000_prebuild_ai_media_listing_draft_context_index';
+const LISTING_DRAFT_CONTEXT_FK_MIGRATION = '20260721010000_add_ai_media_listing_draft_context';
+const LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION = '20260721011000_allow_listing_draft_ai_image_edit_candidates';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -130,6 +135,11 @@ function prepareHistoricalMigrations() {
   const workflowPriorityIndex = names.indexOf(WORKFLOW_PRIORITY_INDEX_MIGRATION);
   const applicationMutationIndex = names.indexOf(APPLICATION_MUTATION_MIGRATION);
   const applicationAuthorityIndex = names.indexOf(APPLICATION_AUTHORITY_MIGRATION);
+  const listingDraftSourceKeyIndex = names.indexOf(LISTING_DRAFT_SOURCE_KEY_MIGRATION);
+  const listingDraftContextColumnsIndex = names.indexOf(LISTING_DRAFT_CONTEXT_COLUMNS_MIGRATION);
+  const listingDraftWorkflowIndexIndex = names.indexOf(LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION);
+  const listingDraftContextFkIndex = names.indexOf(LISTING_DRAFT_CONTEXT_FK_MIGRATION);
+  const listingDraftCandidateScopeIndex = names.indexOf(LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -152,6 +162,11 @@ function prepareHistoricalMigrations() {
     || workflowPriorityIndex !== workflowHistoryIndex + 1
     || applicationMutationIndex !== workflowPriorityIndex + 1
     || applicationAuthorityIndex !== applicationMutationIndex + 1
+    || listingDraftSourceKeyIndex !== applicationAuthorityIndex + 1
+    || listingDraftContextColumnsIndex !== listingDraftSourceKeyIndex + 1
+    || listingDraftWorkflowIndexIndex !== listingDraftContextColumnsIndex + 1
+    || listingDraftContextFkIndex !== listingDraftWorkflowIndexIndex + 1
+    || listingDraftCandidateScopeIndex !== listingDraftContextFkIndex + 1
     || names.filter((name) => name === EDIT_OUTPUT_GUARD_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CHAINING_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CONTRACT_MIGRATION).length !== 1
@@ -163,9 +178,14 @@ function prepareHistoricalMigrations() {
     || names.filter((name) => name === WORKFLOW_HISTORY_INDEX_MIGRATION).length !== 1
     || names.filter((name) => name === WORKFLOW_PRIORITY_INDEX_MIGRATION).length !== 1
     || names.filter((name) => name === APPLICATION_MUTATION_MIGRATION).length !== 1
-    || names.filter((name) => name === APPLICATION_AUTHORITY_MIGRATION).length !== 1) {
+    || names.filter((name) => name === APPLICATION_AUTHORITY_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_SOURCE_KEY_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_CONTEXT_COLUMNS_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_CONTEXT_FK_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION).length !== 1) {
     throw new Error(
-      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${APPLICATION_AUTHORITY_MIGRATION} must be one unique consecutive migration block`,
+      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -195,6 +215,11 @@ function prepareHistoricalMigrations() {
     workflowPriorityIndex,
     applicationMutationIndex,
     applicationAuthorityIndex,
+    listingDraftSourceKeyIndex,
+    listingDraftContextColumnsIndex,
+    listingDraftWorkflowIndexIndex,
+    listingDraftContextFkIndex,
+    listingDraftCandidateScopeIndex,
   };
 }
 
@@ -517,12 +542,39 @@ async function validateLegacyEditUpgrade(client, fixture) {
   );
 }
 
+async function addAiMediaContextCompatibilityColumns(client) {
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_media_workflows"
+      ADD COLUMN "context_draft_revision" INTEGER,
+      ADD COLUMN "context_draft_version" INTEGER
+  `);
+}
+
 async function addCurrentClientCompatibilityColumns(client) {
   await client.$executeRawUnsafe(`
     ALTER TABLE "ai_media_suite_slots"
       ADD COLUMN "execution_claim_token" CHAR(64),
       ADD COLUMN "execution_lease_expires_at" TIMESTAMP(3)
   `);
+  await addAiMediaContextCompatibilityColumns(client);
+}
+
+async function dropAiMediaContextCompatibilityColumns(client) {
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_media_workflows"
+      DROP COLUMN "context_draft_revision",
+      DROP COLUMN "context_draft_version"
+  `);
+  const rows = await client.$queryRawUnsafe(`
+    SELECT count(*)::int AS "count"
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'ai_media_workflows'
+      AND column_name IN ('context_draft_revision', 'context_draft_version')
+  `);
+  if (Number(rows[0]?.count) !== 0) {
+    throw new Error('Temporary AI media context compatibility columns were not removed before H3a migrations');
+  }
 }
 
 async function loadAndValidateMaterializedFixture(client) {
@@ -745,6 +797,7 @@ try {
     datasources: { db: { url: invalidTestUrl.toString() } },
   });
   await invalidFixtureClient.$connect();
+  await addAiMediaContextCompatibilityColumns(invalidFixtureClient);
   const invalidOrigin = await seedLegacySuccessfulEditFixture(invalidFixtureClient, {
     candidateContract: true,
     finalMimeType: 'image/webp',
@@ -824,6 +877,11 @@ try {
   fixtureClient = undefined;
 
   if (migrationStages.unboundCandidateRejectionIndex < migrationStages.names.length - 1) {
+    fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+    await fixtureClient.$connect();
+    await dropAiMediaContextCompatibilityColumns(fixtureClient);
+    await fixtureClient.$disconnect();
+    fixtureClient = undefined;
     addHistoricalMigrationRange(
       migrationStages.names,
       migrationStages.unboundCandidateRejectionIndex + 1,

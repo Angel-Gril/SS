@@ -4,12 +4,14 @@ import { aiImageRoutes, resolveAiImageToImageReadiness } from '../routes/ai-imag
 import { AiMediaApplicationMutationError } from '../services/ai-media-application-mutations.js';
 import { AiImageJobError } from '../services/ai-image-jobs.js';
 import { AiMediaWorkflowError, type AiMediaWorkflowRecord } from '../services/ai-media-workflows.js';
+import { AiMediaContextError } from '../services/ai-media-context.js';
 
 const workflow: AiMediaWorkflowRecord = {
   id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
   operation: 'IMAGE_TO_IMAGE', status: 'QUEUED', reviewStatus: 'NOT_READY',
   revision: 1, currentAttempt: 1, contextType: 'collect', contextId: 'goods-1',
-  contextSkuKey: null, contextSlotKey: null, idempotencyKey: 'workflow-idem-1',
+  contextSkuKey: null, contextSlotKey: null, contextDraftRevision: null,
+  contextDraftVersion: null, idempotencyKey: 'workflow-idem-1',
   requestFingerprint: 'secret-fingerprint', selectedOutputAssetId: null,
   createdAt: new Date(), updatedAt: new Date(), completedAt: null,
   inputs: [{ id: 'input-1', assetId: 'asset-1', role: 'REFERENCE', ordinal: 0, assetUrl: '/images/source.png', mimeType: 'image/png', asset: { storageKey: 'secret-key' } }],
@@ -87,7 +89,26 @@ async function build(
       snapshot: { id: 'snapshot-1', version: 1, captureHash: 'hash-1' },
       inputs: [{ sourceMediaKey: 'main-1', role: 'main', sourceUrl: 'https://source.example/main.jpg', assetId: 'asset-1', compatibleAssetIds: ['asset-1'], assetUrl: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000, editReady: false }],
     })),
+    loadListingDraft: vi.fn(async (_ownerUserId: string, _draftId: string, scope: any) => ({
+      target: {
+        type: 'listing-draft' as const, id: 'draft-1', label: 'Draft product',
+        revision: 7, draftVersion: 3, skuKey: scope?.skuKey ?? null,
+        slotKey: scope?.slotKey ?? null, assignedAssetId: 'asset-1',
+      },
+      snapshot: { id: 'snapshot-1', version: 5, captureHash: 'hash-1' },
+      selectedSkuKeys: ['sku-red'],
+      inputs: [{
+        sourceMediaKey: 'main-1', role: 'main', scope: 'PRODUCT', skuKeys: [],
+        sourceUrl: 'https://source.example/main.jpg', assetId: 'asset-1',
+        compatibleAssetIds: ['asset-1'], assetUrl: 'https://cdn.example/main.jpg',
+        mimeType: 'image/jpeg', width: 1000, height: 1000, editReady: false,
+      }],
+    })),
     internalizeCollect: vi.fn(async () => ({ id: 'asset-1', url: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000 })),
+    internalizeListingDraft: vi.fn(async () => ({
+      id: 'asset-1', url: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg',
+      width: 1000, height: 1000, editReady: true,
+    })),
   };
   const enqueue = vi.fn(async () => undefined);
   const enqueueTranslation = vi.fn(async () => undefined);
@@ -406,6 +427,38 @@ describe('AI media workflow routes', () => {
     expect(enqueueEdit).toHaveBeenCalledWith('job-edit-1');
   });
 
+  it('forwards a listing-draft context unchanged when creating image-to-image work', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    const context = {
+      type: 'listing-draft', id: 'draft-1', revision: 7, draftVersion: 3,
+      skuKey: 'sku-red', slotKey: 'sku-hero',
+    } as const;
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', sourceAssetId: 'asset-1', prompt: 'Clean the background',
+      idempotencyKey: 'listing-image-to-image-1', context,
+    } });
+
+    expect(response.statusCode).toBe(202);
+    expect(mediaWorkflowService.createImageToImage).toHaveBeenCalledWith(expect.objectContaining({
+      sourceAssetId: 'asset-1', context,
+    }));
+    expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('requires both frozen listing-draft version fields at the workflow boundary', async () => {
+    const { app, mediaWorkflowService } = await build();
+    const missingDraftVersion = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', sourceAssetId: 'asset-1', prompt: 'Keep the product',
+      idempotencyKey: 'listing-image-to-image-2',
+      context: { type: 'listing-draft', id: 'draft-1', revision: 7, skuKey: 'sku-red' },
+    } });
+    const missingRevision = await app.inject({ method: 'GET', url: '/contexts/listing-draft/draft-1?draftVersion=3' });
+
+    expect(missingDraftVersion.statusCode).toBe(400);
+    expect(missingRevision.statusCode).toBe(400);
+    expect(mediaWorkflowService.createImageToImage).not.toHaveBeenCalled();
+  });
+
   it('rejects manual edit in production even when its dark flag is enabled', async () => {
     const { app, mediaWorkflowService, enqueueEdit } = await build(
       true, 'owner-1', false, 'fake', true, true, true, 'oss', true, true, true,
@@ -466,6 +519,36 @@ describe('AI media workflow routes', () => {
       code: 1, replayed: false,
       data: { id: 'mask-asset-1', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' },
     });
+  });
+
+  it('freezes listing-draft revision, SKU, and slot authority into an edit mask', async () => {
+    const { app, createEditMask } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, false, true,
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/listing-draft/draft-1/edit-masks',
+      payload: {
+        revision: 7,
+        draftVersion: 3,
+        sourceAssetId: 'asset-1',
+        skuKey: 'sku-red',
+        slotKey: 'sku-hero',
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createEditMask).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      contextType: 'listing-draft', contextId: 'draft-1',
+      contextDraftRevision: 7, contextDraftVersion: 3,
+      contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+      sourceAssetId: 'asset-1', maskBuffer: Buffer.from('mask-mask-mask-mask'),
+    }), expect.objectContaining({
+      loadListingDraftContext: expect.any(Function),
+    }));
   });
 
   it('rejects an edit mask before storage when the upload resource limit is exhausted', async () => {
@@ -1506,6 +1589,42 @@ describe('AI media workflow routes', () => {
     expect(mediaContextService.internalizeCollect).toHaveBeenCalledWith('owner-1', 'goods-1', 'main-1', 'EDIT');
   });
 
+  it('resolves and internalizes an exact listing-draft revision, SKU, and slot', async () => {
+    const { app, mediaContextService } = await build();
+    const loaded = await app.inject({
+      method: 'GET',
+      url: '/contexts/listing-draft/draft-1?revision=7&draftVersion=3&skuKey=sku-red&slotKey=sku-hero',
+    });
+
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().data.target).toMatchObject({
+      type: 'listing-draft', id: 'draft-1', revision: 7, draftVersion: 3,
+      skuKey: 'sku-red', slotKey: 'sku-hero',
+    });
+    expect(mediaContextService.loadListingDraft).toHaveBeenCalledWith('owner-1', 'draft-1', {
+      expectedRevision: 7, expectedDraftVersion: 3, skuKey: 'sku-red', slotKey: 'sku-hero',
+    });
+
+    const internalized = await app.inject({
+      method: 'POST',
+      url: '/contexts/listing-draft/draft-1/internalize',
+      payload: {
+        sourceMediaKey: 'main-1', purpose: 'EDIT', revision: 7, draftVersion: 3,
+        skuKey: 'sku-red', slotKey: 'sku-hero',
+      },
+    });
+
+    expect(internalized.statusCode).toBe(200);
+    expect(internalized.json().data).toMatchObject({ id: 'asset-1', editReady: true });
+    expect(mediaContextService.internalizeListingDraft).toHaveBeenCalledWith(
+      'owner-1',
+      'draft-1',
+      'main-1',
+      { expectedRevision: 7, expectedDraftVersion: 3, skuKey: 'sku-red', slotKey: 'sku-hero' },
+      'EDIT',
+    );
+  });
+
   it('compensates a retry when the queue is unavailable', async () => {
     const { app, repository, enqueue } = await build();
     enqueue.mockRejectedValueOnce(new Error('queue offline'));
@@ -1561,6 +1680,36 @@ describe('AI media workflow routes', () => {
     } });
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(mediaWorkflowService.review).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the frozen listing-draft authority before review', async () => {
+    const { app, mediaWorkflowService, mediaContextService } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      contextType: 'listing-draft',
+      contextId: 'draft-1',
+      contextSkuKey: 'sku-red',
+      contextSlotKey: 'sku-hero',
+      contextDraftRevision: 7,
+      contextDraftVersion: 3,
+      inputs: [{ assetId: 'asset-1', role: 'REFERENCE', ordinal: 0 }],
+    });
+    mediaContextService.loadListingDraft.mockRejectedValueOnce(
+      new AiMediaContextError('STALE_MEDIA_CONTEXT', 409, 'draft pointer changed'),
+    );
+
+    const response = await app.inject({ method: 'POST', url: '/workflows/workflow-1/review', payload: {
+      expectedRevision: 1, outputAssetId: 'output-1', decision: 'APPROVE',
+    } });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(mediaContextService.loadListingDraft).toHaveBeenCalledWith('owner-1', 'draft-1', {
+      expectedRevision: 7, expectedDraftVersion: 3, skuKey: 'sku-red', slotKey: 'sku-hero',
+    });
     expect(mediaWorkflowService.review).not.toHaveBeenCalled();
   });
 

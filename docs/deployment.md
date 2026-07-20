@@ -91,7 +91,7 @@ MIGRATION_TIMEOUT=20m
 
 ## AI Media 暗态发布门禁
 
-Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史分页、优先任务续页和候选对比恢复，Unit 10A-H2 已增加不可变 APPEND/受限 REPLACE/补偿 ROLLBACK 账本和 stale 阻断，但不改变暗态边界。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 以 `CREATE INDEX CONCURRENTLY` 增加 owner/context 的 history/updates keyset 索引；`1690`/`1700` 创建并加固 application mutation authority。应用版本回滚不得尝试回退这些 additive database guards、账本数据或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft/SKU 上下文、submitted-provider reconciliation 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
+Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史分页、优先任务续页和候选对比恢复，Unit 10A-H2 已增加不可变 APPEND/受限 REPLACE/补偿 ROLLBACK 账本和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 的当前指针、source snapshot、draft revision/version、空槽/精确 slot 和候选链 authority，但都不改变暗态边界。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 以 `CREATE INDEX CONCURRENTLY` 增加 owner/context 的 history/updates keyset 索引；`1690`/`1700` 创建并加固 collect application mutation authority；`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束。应用版本回滚不得尝试回退这些 additive database guards、账本数据或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
 
 - `feature_ai_media_workflow_v2`
 - `feature_ai_media_suite`
@@ -113,6 +113,7 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 4. 若失败来自 `20260720153000_bind_ai_image_edit_outputs` 并发索引 migration，禁止直接 `resolve --applied`。按 `docs/RUNBOOK.md` 检查 `pg_index.indisvalid` 和 `pg_get_indexdef`，必要时 `DROP INDEX CONCURRENTLY`、`prisma migrate resolve --rolled-back`、重新 deploy 并复核定义。
 5. 若失败来自 `1670`/`1680`，分别检查 `ai_media_workflow_owner_context_history` 和 `ai_media_workflow_owner_context_updates` 的 `indisvalid`、`indisready` 与精确定义。对失败项留下的同名 invalid index 执行独立 `DROP INDEX CONCURRENTLY`，只把实际失败的 migration resolve 为 rolled back，再重跑 deploy；完整命令见 `docs/RUNBOOK.md`。
 6. 若 `1700` 报 `application mutation authority upgrade requires an empty ledger`，保持所有 writer 停止；禁止删除账本、禁止 `resolve --applied`。保留数据并按 Runbook 升级为审计后的前向迁移。
+7. H3a listing-draft migrations 已通过空库与 populated upgrade；若 `21001000` 至 `21011000` 任一项失败，保持 API/Worker 停止，检查对应预建索引、约束和 deferred candidate trigger 后只修复失败项并重放。不要删除已有 listing-draft context 或候选资产，也不要把暗态 gate 改为 enabled。
 
 ### Unit 10A-H1 滚动部署边界
 
@@ -120,7 +121,7 @@ H1 的 `GET /workflows` 只有在显式 `pageVersion=1` 时返回 additive `{ite
 
 Web 以 revision、再以 `updatedAt` 合并响应，并保持 `appliedMode` 和 cost 状态单调；运行中任务每 2 秒、待人工审核/应用任务每 30 秒刷新，页面 hidden 时暂停并在恢复可见时刷新。候选绑定使用 `selectedOutputAssetId`，最多并排比较两张，并显示商品/SKU/slot scope。上述行为仍全部处于暗态、fake-only，不允许据此启用付费 Provider 或真实 Ozon 写入。
 
-Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、`1690`/`1700` 账本结构和暗态 gate。Unit 10A 仍缺 listing-draft/SKU 与 submitted-provider reconciliation。
+Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。Unit 10A-H3a 增至 118 migrations，并已完成 listing-draft/SKU context authority 的关闭验证。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、`1690`/`1700` collect 账本、`21001000` 至 `21011000` listing-draft 约束和暗态 gate。Unit 10A 仍缺 H3b listing-draft candidate writeback/rollback 与 submitted-provider reconciliation。
 
 ## Cloudflare 设置
 

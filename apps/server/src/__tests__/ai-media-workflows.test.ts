@@ -4,6 +4,7 @@ import {
   createAiMediaWorkflowService,
   createAiMediaWorkflowFingerprint,
   createAiImageTranslationWorkflowFingerprint,
+  createAiImageEditWorkflowFingerprint,
   type AiMediaWorkflowRecord,
   type AiMediaWorkflowRepository,
   type CreateAiMediaWorkflowInput,
@@ -14,7 +15,8 @@ const workflow: AiMediaWorkflowRecord = {
   id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
   operation: 'IMAGE_TO_IMAGE', status: 'QUEUED', reviewStatus: 'NOT_READY',
   revision: 1, currentAttempt: 1, contextType: 'collect', contextId: 'goods-1',
-  contextSkuKey: null, contextSlotKey: null, idempotencyKey: 'workflow-idem-1',
+  contextSkuKey: null, contextSlotKey: null, contextDraftRevision: null,
+  contextDraftVersion: null, idempotencyKey: 'workflow-idem-1',
   requestFingerprint: 'a'.repeat(64), selectedOutputAssetId: null,
   createdAt: new Date('2026-07-16T00:00:00Z'), updatedAt: new Date('2026-07-16T00:00:00Z'),
   completedAt: null,
@@ -297,6 +299,21 @@ describe('AI media workflow service', () => {
       ...multi,
       references: [...multi.references].reverse(),
     }));
+    const listingContext = {
+      type: 'listing-draft' as const,
+      id: 'draft-1', revision: 4, draftVersion: 2,
+      skuKey: 'sku-red', slotKey: 'sku-hero',
+    };
+    for (const [key, value] of [
+      ['revision', 5], ['draftVersion', 3], ['skuKey', 'sku-blue'], ['slotKey', 'gallery-1'],
+    ] as const) {
+      expect(createAiMediaWorkflowFingerprint({
+        ...createInput, context: listingContext,
+      })).not.toBe(createAiMediaWorkflowFingerprint({
+        ...createInput,
+        context: { ...listingContext, [key]: value },
+      }));
+    }
   });
 
   it('binds translation idempotency to the complete prompt snapshot', () => {
@@ -312,6 +329,28 @@ describe('AI media workflow service', () => {
     expect(createAiImageTranslationWorkflowFingerprint(base)).not.toBe(
       createAiImageTranslationWorkflowFingerprint({ ...base, templateSnapshot: { sequence: 2 } }),
     );
+    expect(createAiImageTranslationWorkflowFingerprint({
+      ...base,
+      context: { type: 'listing-draft', id: 'draft-1', revision: 4, draftVersion: 2 },
+    })).not.toBe(createAiImageTranslationWorkflowFingerprint({
+      ...base,
+      context: { type: 'listing-draft', id: 'draft-1', revision: 5, draftVersion: 2 },
+    }));
+  });
+
+  it('binds edit idempotency to the frozen listing-draft scope', () => {
+    const base: any = {
+      ownerUserId: 'owner-1', sourceAssetId: 'asset-1', maskAssetId: 'mask-1',
+      maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1', operation: 'INPAINT',
+      prompt: 'edit', negativePrompt: null, resolvedPrompt: 'frozen',
+      resolvedNegativePrompt: '', templateKey: 'inpaint.base', templateReleaseId: 'release-1',
+      templateChecksum: 'a'.repeat(64), templateSnapshot: { sequence: 1 },
+      context: { type: 'listing-draft', id: 'draft-1', revision: 4, draftVersion: 2,
+        skuKey: 'sku-red', slotKey: 'sku-hero' },
+    };
+    expect(createAiImageEditWorkflowFingerprint(base)).not.toBe(createAiImageEditWorkflowFingerprint({
+      ...base, context: { ...base.context, draftVersion: 3 },
+    }));
   });
 
   it('returns NOT_FOUND instead of exposing another owner workflow', async () => {

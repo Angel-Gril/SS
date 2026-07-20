@@ -414,7 +414,7 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 ### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / 10A-H2）
 
-Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，Unit 10A-H2 已增加暗态的不可变应用账本、APPEND/受限 REPLACE、严格 frontier 补偿 ROLLBACK 和 stale 阻断，但都不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询，`1690`/`1700` 建立并加固 application mutation ledger；这些 migration 只能前向保留，应用回滚不得删除其数据、函数、触发器或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft/SKU 上下文、submitted-provider reconciliation 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，Unit 10A-H2 已增加暗态的不可变应用账本、APPEND/受限 REPLACE、严格 frontier 补偿 ROLLBACK 和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 当前指针、source snapshot、draft revision/version、空槽与候选链 authority，但都不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询，`1690`/`1700` 建立并加固 collect application mutation ledger，`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束；这些 migration 只能前向保留，应用回滚不得删除其数据、函数、触发器或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式
@@ -529,7 +529,7 @@ npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 listing-draft/SKU 和 submitted-provider reconciliation 仍未完成，H2 账本检查见下一节。
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 H3a listing-draft/SKU context authority 已完成，但 H3b candidate writeback/rollback 和 submitted-provider reconciliation 仍未完成，H2 账本检查见下一节。
 
 ### AI Media 应用账本与补偿回滚检查（Unit 10A-H2）
 

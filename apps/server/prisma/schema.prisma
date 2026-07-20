@@ -988,8 +988,10 @@ model SourceListingDraftVersion {
   events                  SourceListingWorkflowEvent[]
   publishIntents          SourceListingPublishIntent[]
   ozonPublishAttempts     OzonPublishAttempt[]
+  aiMediaContextWorkflows AiMediaWorkflow[]            @relation("AiMediaWorkflowListingDraftContext")
 
   @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
+  @@unique([workflowId, revision, ownerUserId, draftVersion], map: "source_listing_draft_ai_media_context_key")
   @@index([workflowId, draftVersion, revision], map: "source_listing_draft_major_revision_idx")
   @@index([ownerUserId, createdAt], map: "source_listing_draft_owner_created_idx")
   @@index([sourceCaptureSnapshotId], map: "source_listing_draft_snapshot_idx")
@@ -2937,6 +2939,9 @@ model AiMediaWorkflow {
   contextId             String?               @map("context_id") @db.VarChar(200)
   contextSkuKey         String?               @map("context_sku_key") @db.VarChar(500)
   contextSlotKey        String?               @map("context_slot_key") @db.VarChar(1024)
+  contextDraftRevision  Int?                  @map("context_draft_revision")
+  contextDraftVersion   Int?                  @map("context_draft_version")
+  listingDraftContext   SourceListingDraftVersion? @relation("AiMediaWorkflowListingDraftContext", fields: [contextId, contextDraftRevision, ownerUserId, contextDraftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction, map: "ai_media_workflow_listing_draft_context_fkey")
   idempotencyKey        String?               @map("idempotency_key") @db.VarChar(128)
   requestFingerprint    String                @map("request_fingerprint") @db.Char(64)
   selectedOutputAssetId String?               @map("selected_output_asset_id")
@@ -2964,6 +2969,7 @@ model AiMediaWorkflow {
   @@index([contextType, contextId, createdAt])
   @@index([ownerUserId, contextType, contextId, createdAt(sort: Desc), id(sort: Desc)], map: "ai_media_workflow_owner_context_history")
   @@index([ownerUserId, contextType, contextId, updatedAt(sort: Desc), id(sort: Desc)], map: "ai_media_workflow_owner_context_updates")
+  @@index([contextId, contextDraftRevision, ownerUserId, contextDraftVersion], map: "ai_media_workflow_listing_draft_context_idx")
   @@map("ai_media_workflows")
 }
 

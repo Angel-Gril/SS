@@ -26,11 +26,31 @@ export interface AiMediaContextInput {
   sourceCaptureSnapshotId?: string | null;
   contextSkuKey?: string | null;
   contextSlotKey?: string | null;
+  scope?: 'PRODUCT' | 'SKU';
+  skuKeys?: string[];
 }
 
+export type AiMediaContextTarget =
+  | {
+    type: 'collect';
+    id: string;
+    label: string;
+  }
+  | {
+    type: 'listing-draft';
+    id: string;
+    label: string;
+    revision: number;
+    draftVersion: number;
+    skuKey: string | null;
+    slotKey: string | null;
+    assignedAssetId: string | null;
+  };
+
 export interface AiMediaContextResponse {
-  target: { type: 'collect'; id: string; label: string };
+  target: AiMediaContextTarget;
   snapshot: { id: string; version: number; captureHash: string };
+  selectedSkuKeys?: string[];
   inputs: AiMediaContextInput[];
 }
 
@@ -102,6 +122,8 @@ export interface AiMediaWorkflow {
   contextId: string | null;
   contextSkuKey: string | null;
   contextSlotKey: string | null;
+  contextDraftRevision: number | null;
+  contextDraftVersion: number | null;
   selectedOutputAssetId?: string | null;
   reviewedAt?: string | null;
   application?: AiMediaWorkflowApplicationSummary | null;
@@ -1909,10 +1931,36 @@ export function buildAiImageEditWorkflowRequest(input: {
 }
 
 export function isAiMediaWorkflowInputCurrent(
-  workflow: Pick<AiMediaWorkflow, 'inputs'>,
+  workflow: Pick<AiMediaWorkflow, 'inputs'> & Partial<Pick<
+    AiMediaWorkflow,
+    | 'contextType'
+    | 'contextId'
+    | 'contextSkuKey'
+    | 'contextSlotKey'
+    | 'contextDraftRevision'
+    | 'contextDraftVersion'
+  >>,
   currentInputs: AiMediaContextInput[],
   currentSnapshotId?: string | null,
+  currentContext?: Pick<AiMediaContextResponse, 'target'> | null,
 ) {
+  if (workflow.contextType === 'listing-draft') {
+    const target = currentContext?.target;
+    if (
+      !target
+      || target.type !== 'listing-draft'
+      || workflow.contextId !== target.id
+      || workflow.contextDraftRevision !== target.revision
+      || workflow.contextDraftVersion !== target.draftVersion
+      || (workflow.contextSkuKey ?? null) !== target.skuKey
+      || (workflow.contextSlotKey ?? null) !== target.slotKey
+    ) return false;
+  } else if (workflow.contextType === 'collect' && currentContext) {
+    if (
+      currentContext.target.type !== 'collect'
+      || (workflow.contextId != null && workflow.contextId !== currentContext.target.id)
+    ) return false;
+  }
   const sourceInputs = workflow.inputs.filter((input) => input.role !== 'MASK');
   if (!sourceInputs.length) return false;
   const currentAssetIds = new Set(currentInputs.flatMap((input) => [

@@ -1261,6 +1261,7 @@ export function SourceAiMediaPanel({
       workflow,
       context.inputs,
       context.snapshot.id,
+      context,
     )) {
       toast({ title: '源图版本已变化', description: '请基于当前采集快照重新生成候选图', variant: 'destructive' });
       await refreshQuietly();
@@ -1899,6 +1900,7 @@ export function SourceAiMediaPanel({
             workflow,
             context!.inputs,
             context!.snapshot.id,
+            context,
           );
           const costReconciled = job?.costStatus === 'SETTLED' || job?.costStatus === 'RELEASED';
           const requiresReconciliation = workflow.status === 'FAILED' && (

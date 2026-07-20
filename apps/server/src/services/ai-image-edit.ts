@@ -25,6 +25,7 @@ import {
   AI_MEDIA_EDIT_SOURCE_MAX_BYTES,
   AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
   isAiMediaEditInputFromContext,
+  isAiMediaEditReadySourceAsset,
 } from './ai-image-edit-source.js';
 
 export const AI_IMAGE_EDIT_MAX_INPUT_BYTES = AI_MEDIA_EDIT_SOURCE_MAX_BYTES;
@@ -36,9 +37,12 @@ type FrozenInputAsset = NonNullable<AiImageJobRecord['inputAssets']>[number];
 export interface CreateAiImageEditMaskInput {
   ownerUserId: string;
   actorUserId: string;
+  contextType?: 'collect' | 'listing-draft';
   contextId: string;
   contextSkuKey?: string | null;
   contextSlotKey?: string | null;
+  contextDraftRevision?: number | null;
+  contextDraftVersion?: number | null;
   sourceAssetId: string;
   maskBuffer: Buffer;
   maskSemantics: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
@@ -50,6 +54,12 @@ export interface AiImageEditMaskDatabase {
     findFirst(args: unknown): Promise<any>;
     create(args: unknown): Promise<any>;
   };
+}
+
+interface ListingDraftMaskContext {
+  snapshot: { id: string };
+  target: { assignedAssetId?: string | null };
+  inputs: Array<{ assetId?: string | null; compatibleAssetIds?: string[] }>;
 }
 
 export interface AiImageEditMaskStorage {
@@ -70,6 +80,16 @@ export async function createAiImageEditMask(
   deps: {
     database: AiImageEditMaskDatabase;
     getStorage: () => Promise<AiImageEditMaskStorage>;
+    loadListingDraftContext?: (
+      ownerUserId: string,
+      draftId: string,
+      scope: {
+        expectedRevision: number;
+        expectedDraftVersion: number;
+        skuKey?: string | null;
+        slotKey?: string | null;
+      },
+    ) => Promise<ListingDraftMaskContext>;
     checkUploadQuota?: (
       ownerUserId: string,
       bytes: number,
@@ -85,22 +105,49 @@ export async function createAiImageEditMask(
   ) {
     throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Edit mask authority input is invalid');
   }
-  const authority = await deps.database.supplyGoods.findFirst({
-    where: { id: input.contextId, userId: input.ownerUserId },
-    select: {
-      id: true,
-      sourceCaptureSubject: {
-        select: {
-          snapshots: {
-            orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
-            take: 1,
-            select: { id: true },
+  const contextType = input.contextType || 'collect';
+  let snapshotId: string | null = null;
+  let listingContext: ListingDraftMaskContext | null = null;
+  if (contextType === 'listing-draft') {
+    if (!Number.isSafeInteger(input.contextDraftRevision) || Number(input.contextDraftRevision) < 1
+      || !Number.isSafeInteger(input.contextDraftVersion) || Number(input.contextDraftVersion) < 1
+      || !deps.loadListingDraftContext) {
+      throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Listing draft mask authority is incomplete');
+    }
+    try {
+      listingContext = await deps.loadListingDraftContext(input.ownerUserId, input.contextId, {
+        expectedRevision: Number(input.contextDraftRevision),
+        expectedDraftVersion: Number(input.contextDraftVersion),
+        skuKey: input.contextSkuKey,
+        slotKey: input.contextSlotKey,
+      });
+    } catch (error: any) {
+      if (error?.name === 'AiMediaContextError'
+        || String(error?.code || '').startsWith('AI_MEDIA_CONTEXT_')
+        || error?.code === 'STALE_MEDIA_CONTEXT') {
+        throw new AiImageJobError('STALE_MEDIA_WORKFLOW', 'Listing draft context changed; refresh before drawing a mask');
+      }
+      throw error;
+    }
+    snapshotId = listingContext.snapshot.id;
+  } else {
+    const authority = await deps.database.supplyGoods.findFirst({
+      where: { id: input.contextId, userId: input.ownerUserId },
+      select: {
+        id: true,
+        sourceCaptureSubject: {
+          select: {
+            snapshots: {
+              orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+              take: 1,
+              select: { id: true },
+            },
           },
         },
       },
-    },
-  });
-  const snapshotId = authority?.sourceCaptureSubject?.snapshots?.[0]?.id || null;
+    });
+    snapshotId = authority?.sourceCaptureSubject?.snapshots?.[0]?.id || null;
+  }
   const source = await deps.database.mediaAsset.findFirst({
     where: {
       id: input.sourceAssetId,
@@ -112,17 +159,37 @@ export async function createAiImageEditMask(
       },
     },
   });
-  if (
-    !authority
-    || !snapshotId
-    || !isAiMediaEditInputFromContext(source, {
+  const listingAllowedAssetIds = new Set((listingContext?.inputs || []).flatMap((item) => [
+    item.assetId,
+    ...(item.compatibleAssetIds || []),
+  ]).filter((id): id is string => Boolean(id)));
+  const sourceAuthorized = contextType === 'listing-draft'
+    ? Boolean(
+      listingContext
+      && snapshotId
+      && ((source?.kind === 'SOURCE_ORIGINAL'
+        && listingAllowedAssetIds.has(source.id)
+        && isAiMediaEditReadySourceAsset(source))
+        || (source?.sourceCaptureSnapshotId === snapshotId && isAiMediaEditInputFromContext(source, {
+          ownerUserId: input.ownerUserId,
+          contextType: 'listing-draft',
+          contextId: input.contextId,
+          contextSkuKey: input.contextSkuKey,
+          contextSlotKey: input.contextSlotKey,
+          contextDraftRevision: input.contextDraftRevision,
+          contextDraftVersion: input.contextDraftVersion,
+          sourceCaptureSnapshotId: snapshotId!,
+        }))),
+    )
+    : Boolean(snapshotId && isAiMediaEditInputFromContext(source, {
       ownerUserId: input.ownerUserId,
+      contextType: 'collect',
       contextId: input.contextId,
       contextSkuKey: input.contextSkuKey,
       contextSlotKey: input.contextSlotKey,
-      sourceCaptureSnapshotId: snapshotId,
-    })
-  ) {
+      sourceCaptureSnapshotId: snapshotId!,
+    }));
+  if (!sourceAuthorized) {
     throw new AiImageJobError('SOURCE_ASSET_NOT_FOUND', 'Owned current source asset was not found');
   }
   const diagnostics = await validateAiImageEditMask({
@@ -137,7 +204,18 @@ export async function createAiImageEditMask(
     throw error;
   });
   const maskSha256 = diagnostics.maskSha256;
-  const sourceMediaKey = `edit-mask:${source.id}:${maskSha256}`;
+  const sourceMediaKey = contextType === 'listing-draft'
+    ? `edit-mask:v2:${sha256(Buffer.from(JSON.stringify({
+      contextType,
+      contextId: input.contextId,
+      contextDraftRevision: input.contextDraftRevision,
+      contextDraftVersion: input.contextDraftVersion,
+      contextSkuKey: input.contextSkuKey || null,
+      contextSlotKey: input.contextSlotKey || null,
+      sourceAssetId: source.id,
+      maskSha256,
+    })))}:${maskSha256}`
+    : `edit-mask:${source.id}:${maskSha256}`;
   const matchesStoredMask = (candidate: any) => {
     const metadata = candidate?.metadata && typeof candidate.metadata === 'object'
       ? candidate.metadata as Record<string, unknown>
@@ -157,7 +235,17 @@ export async function createAiImageEditMask(
       && candidate.sha256 === maskSha256
       && metadata.maskSemantics === input.maskSemantics
       && metadata.sourceAssetId === source.id
-      && metadata.sourceSha256 === source.sha256,
+      && metadata.sourceSha256 === source.sha256
+      && (metadata.contextType == null ? contextType === 'collect' : (
+        metadata.contextType === contextType
+        && metadata.contextId === input.contextId
+        && (metadata.contextSkuKey ?? null) === (input.contextSkuKey ?? null)
+        && (metadata.contextSlotKey ?? null) === (input.contextSlotKey ?? null)
+      ))
+      && (contextType !== 'listing-draft' || (
+        metadata.contextDraftRevision === input.contextDraftRevision
+        && metadata.contextDraftVersion === input.contextDraftVersion
+      )),
     );
   };
   const existing = await deps.database.mediaAsset.findFirst({
@@ -188,6 +276,14 @@ export async function createAiImageEditMask(
   const uploadIdempotencyKey = sha256(Buffer.from([
     AI_IMAGE_EDIT_POLICY_VERSION,
     input.ownerUserId,
+    ...(contextType === 'listing-draft' ? [
+      contextType,
+      input.contextId,
+      String(input.contextDraftRevision),
+      String(input.contextDraftVersion),
+      input.contextSkuKey || '',
+      input.contextSlotKey || '',
+    ] : []),
     source.id,
     source.sha256,
     maskSha256,
@@ -221,6 +317,14 @@ export async function createAiImageEditMask(
       maskSemantics: input.maskSemantics,
       sourceAssetId: source.id,
       sourceSha256: source.sha256,
+      contextType,
+      contextId: input.contextId,
+      contextSkuKey: input.contextSkuKey || null,
+      contextSlotKey: input.contextSlotKey || null,
+      ...(contextType === 'listing-draft' ? {
+        contextDraftRevision: input.contextDraftRevision,
+        contextDraftVersion: input.contextDraftVersion,
+      } : {}),
       createdByActorUserId: input.actorUserId,
       editPixelCount: diagnostics.editPixelCount,
       preservedPixelCount: diagnostics.preservedPixelCount,
@@ -292,6 +396,22 @@ function assertOperationConfig(job: AiImageJobRecord) {
   }
   if (job.operation === 'FULL_EDIT' && config.maskSemantics != null) {
     throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Full-image edit cannot include mask semantics');
+  }
+  if (config.contextType == null) return;
+  if (
+    !['collect', 'listing-draft'].includes(String(config.contextType || ''))
+    || !String(config.contextId || '').trim()
+    || (config.contextType === 'listing-draft' && (
+      !Number.isSafeInteger(config.contextDraftRevision)
+      || Number(config.contextDraftRevision) < 1
+      || !Number.isSafeInteger(config.contextDraftVersion)
+      || Number(config.contextDraftVersion) < 1
+    ))
+    || (config.contextType === 'collect' && (
+      config.contextDraftRevision != null || config.contextDraftVersion != null
+    ))
+  ) {
+    throw new AiImageJobError('INVALID_MEDIA_INPUT', 'AI image edit context authority is not frozen');
   }
 }
 

@@ -99,6 +99,87 @@ describe('AI image workflow child terminal transitions', () => {
     }) });
   });
 
+  it.each(['IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE'] as const)(
+    'inherits one frozen source snapshot onto %s outputs',
+    async (operation) => {
+      const job = {
+        id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
+        workflowAttempt: 1, attemptCount: 1, operation, status: 'RUNNING', providerJobId: null,
+      };
+      const inputs = [
+        { assetId: 'source-1', role: 'REFERENCE', ordinal: 0, asset: { sourceCaptureSnapshotId: 'snapshot-1' } },
+        ...(operation === 'IMAGE_TO_IMAGE'
+          ? [{ assetId: 'source-2', role: 'REFERENCE', ordinal: 1, asset: { sourceCaptureSnapshotId: 'snapshot-1' } }]
+          : []),
+      ];
+      const createAsset = vi.fn(async ({ data }: any) => ({ id: 'candidate-1', ...data }));
+      const tx = {
+        aiImageJob: {
+          findUnique: vi.fn(async () => job),
+          updateMany: vi.fn(async ({ data }: any) => {
+            Object.assign(job, data);
+            return { count: 1 };
+          }),
+        },
+        aiMediaWorkflowInput: { findMany: vi.fn(async () => inputs) },
+        mediaAsset: { create: createAsset },
+        mediaAssetLineage: { create: vi.fn(async () => ({})) },
+        aiMediaWorkflow: { updateMany: vi.fn(async () => ({ count: 1 })) },
+        aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+      };
+
+      await new PrismaAiImageJobRepository({
+        $transaction: vi.fn(async (callback: any) => callback(tx)),
+      } as never).complete('job-1', {
+        providerJobId: null, actualCostCents: 0, billedUnits: 1,
+        assets: [{
+          ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_GENERATED',
+          url: '/candidate.png', storageBackend: 'local', storageKey: 'candidate.png',
+          mimeType: 'image/png', sizeBytes: 10, width: 2, height: 2, sha256: 'a'.repeat(64),
+        }],
+      });
+
+      expect(createAsset).toHaveBeenCalledWith({ data: expect.objectContaining({
+        sourceCaptureSnapshotId: 'snapshot-1',
+      }) });
+    },
+  );
+
+  it('rejects ambiguous frozen source snapshots before persisting an input-based output', async () => {
+    const job = {
+      id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
+      workflowAttempt: 1, attemptCount: 1, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
+      providerJobId: null,
+    };
+    const createAsset = vi.fn();
+    const tx = {
+      aiImageJob: {
+        findUnique: vi.fn(async () => job),
+        updateMany: vi.fn(async ({ data }: any) => {
+          Object.assign(job, data);
+          return { count: 1 };
+        }),
+      },
+      aiMediaWorkflowInput: { findMany: vi.fn(async () => [
+        { role: 'REFERENCE', ordinal: 0, asset: { sourceCaptureSnapshotId: 'snapshot-1' } },
+        { role: 'REFERENCE', ordinal: 1, asset: { sourceCaptureSnapshotId: 'snapshot-2' } },
+      ]) },
+      mediaAsset: { create: createAsset },
+    };
+
+    await expect(new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).complete('job-1', {
+      providerJobId: null, actualCostCents: 0, billedUnits: 1,
+      assets: [{
+        ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_GENERATED',
+        url: '/candidate.png', storageBackend: 'local', storageKey: 'candidate.png',
+        mimeType: 'image/png', sizeBytes: 10, sha256: 'a'.repeat(64),
+      }],
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT_OUTPUT_GRAPH' });
+    expect(createAsset).not.toHaveBeenCalled();
+  });
+
   it('recovers the exact raw-output winner after a concurrent unique-key race', async () => {
     const asset = {
       ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_PROVIDER_OUTPUT' as const,

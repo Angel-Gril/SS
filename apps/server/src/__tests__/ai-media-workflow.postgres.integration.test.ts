@@ -338,6 +338,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     })]);
     const output = (succeeded.jobs?.[0] as any)?.assets?.[0];
     expect(output?.id).toBeTruthy();
+    expect(output?.sourceCaptureSnapshotId).toBe(snapshotId);
     expect(await client!.mediaAssetLineage.count({ where: {
       workflowId: succeeded.id, inputAssetId: sourceAssetId, outputAssetId: output.id,
     } })).toBe(1);

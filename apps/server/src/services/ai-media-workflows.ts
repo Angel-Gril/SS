@@ -20,6 +20,24 @@ export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
 export type AiMediaReviewStatus = 'NOT_READY' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
+export type AiMediaWorkflowContext =
+  | {
+    type: 'collect';
+    id: string;
+    skuKey?: string | null;
+    slotKey?: string | null;
+    revision?: never;
+    draftVersion?: never;
+  }
+  | {
+    type: 'listing-draft';
+    id: string;
+    skuKey?: string | null;
+    slotKey?: string | null;
+    revision: number;
+    draftVersion: number;
+  };
+
 export interface AiMediaWorkflowRecord {
   id: string;
   ownerUserId: string;
@@ -33,6 +51,8 @@ export interface AiMediaWorkflowRecord {
   contextId: string | null;
   contextSkuKey: string | null;
   contextSlotKey: string | null;
+  contextDraftRevision: number | null;
+  contextDraftVersion: number | null;
   /** Present only for internal routing; suite children are parent-owned. */
   suiteId?: string | null;
   idempotencyKey: string | null;
@@ -101,7 +121,7 @@ export interface CreateAiMediaWorkflowInput {
   width: number;
   height: number;
   idempotencyKey: string;
-  context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
+  context: AiMediaWorkflowContext;
 }
 
 export interface CreateAiImageTranslationWorkflowInput {
@@ -125,7 +145,7 @@ export interface CreateAiImageTranslationWorkflowInput {
   templateChecksum?: string | null;
   templateSnapshot?: Record<string, unknown> | null;
   idempotencyKey: string;
-  context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
+  context: AiMediaWorkflowContext;
 }
 
 export interface CreateAiImageEditWorkflowInput {
@@ -145,7 +165,7 @@ export interface CreateAiImageEditWorkflowInput {
   templateSnapshot: Record<string, unknown>;
   dailyLimit: number;
   idempotencyKey: string;
-  context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
+  context: AiMediaWorkflowContext;
 }
 
 export function normalizeAiImageTranslationOptions(input: Pick<
@@ -703,6 +723,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         }
         if (error?.code === 'AI_IMAGE_EDIT_QUOTA_UNAVAILABLE') {
           throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
+        }
+        if (error?.code === 'STALE_MEDIA_WORKFLOW') {
+          throw new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', error.message);
         }
         throw error;
       }

@@ -12,9 +12,12 @@ function metadataRecord(asset: { metadata?: unknown } | null | undefined): Recor
 
 export interface AiMediaEditContextAuthority {
   ownerUserId: string;
+  contextType?: 'collect' | 'listing-draft';
   contextId: string;
   contextSkuKey?: string | null;
   contextSlotKey?: string | null;
+  contextDraftRevision?: number | null;
+  contextDraftVersion?: number | null;
   sourceCaptureSnapshotId: string;
 }
 
@@ -65,6 +68,7 @@ export function isAiMediaEditCandidateFromContext(
 ): boolean {
   const job = asset?.aiImageJob;
   const workflow = job?.workflow;
+  const contextType = authority.contextType || 'collect';
   return Boolean(
     isAiMediaEditReadyCandidateAsset(asset)
     && asset.ownerUserId === authority.ownerUserId
@@ -81,10 +85,14 @@ export function isAiMediaEditCandidateFromContext(
     && workflow.status === 'SUCCEEDED'
     && workflow.completedAt != null
     && workflow.operation === job.operation
-    && workflow.contextType === 'collect'
+    && workflow.contextType === contextType
     && workflow.contextId === authority.contextId
     && (workflow.contextSkuKey ?? null) === (authority.contextSkuKey ?? null)
     && (workflow.contextSlotKey ?? null) === (authority.contextSlotKey ?? null)
+    && (contextType !== 'listing-draft' || (
+      workflow.contextDraftRevision === authority.contextDraftRevision
+      && workflow.contextDraftVersion === authority.contextDraftVersion
+    ))
     && workflow.suiteSlot == null,
   );
 }

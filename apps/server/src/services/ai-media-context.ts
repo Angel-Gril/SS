@@ -14,6 +14,7 @@ import {
   AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
   isAiMediaEditReadySourceAsset,
 } from './ai-image-edit-source.js';
+import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
 
 export {
   AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
@@ -25,6 +26,15 @@ export {
 } from './ai-image-edit-source.js';
 
 type AiMediaInternalizePurpose = 'GENERAL' | 'EDIT';
+
+export const AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS = 50;
+
+export interface AiMediaListingDraftContextScope {
+  expectedRevision?: number;
+  expectedDraftVersion?: number;
+  skuKey?: string | null;
+  slotKey?: string | null;
+}
 
 interface AiMediaContextDependencies {
   downloadPublicImage: typeof downloadPublicImage;
@@ -48,6 +58,146 @@ function productImages(capture: SourceProductCaptureV2) {
     && media.skuKeys.length === 0
     && Boolean(media.url)
   )).slice(0, 50);
+}
+
+function normalizedIdentifier(value: unknown, label: string, maxLength: number): string | null {
+  if (value == null) return null;
+  if (typeof value !== 'string') {
+    throw new AiMediaContextError('AI_MEDIA_CONTEXT_INVALID', 400, `${label} is invalid`);
+  }
+  const normalized = value.normalize('NFKC').trim();
+  if (!normalized || normalized.length > maxLength || normalized !== value) {
+    throw new AiMediaContextError('AI_MEDIA_CONTEXT_INVALID', 400, `${label} is invalid`);
+  }
+  return normalized;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function exactIdentifier(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.normalize('NFKC').trim();
+  if (!normalized || normalized !== value || Array.from(value).length > maxLength) return null;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return null;
+  }
+  return value;
+}
+
+function listingCapture(value: unknown): SourceProductCaptureV2 | null {
+  const capture = record(value);
+  if (!capture
+    || capture.captureVersion !== 'source-product-capture-v2'
+    || !record(capture.facts)
+    || !Array.isArray(capture.skus)
+    || !Array.isArray(capture.media)) {
+    return null;
+  }
+  const skuKeys = new Set<string>();
+  for (const value of capture.skus) {
+    const sku = record(value);
+    const key = exactIdentifier(sku?.key, 500);
+    if (!sku || !key || skuKeys.has(key)
+      || (sku.sourceSkuId != null && !exactIdentifier(sku.sourceSkuId, 500))) {
+      return null;
+    }
+    skuKeys.add(key);
+  }
+  const mediaKeys = new Set<string>();
+  for (const value of capture.media) {
+    const media = record(value);
+    const key = exactIdentifier(media?.key, 500);
+    if (!media || !key || mediaKeys.has(key)
+      || !['image', 'video'].includes(String(media.kind || ''))
+      || !['accepted', 'rejected'].includes(String(media.disposition || ''))
+      || typeof media.role !== 'string'
+      || (media.url != null && typeof media.url !== 'string')
+      || !Array.isArray(media.skuKeys)
+      || media.skuKeys.some((skuKey) => !exactIdentifier(skuKey, 500))) {
+      return null;
+    }
+    mediaKeys.add(key);
+  }
+  const aliases = capturedSourceSkuAliases(capture);
+  if (capture.media.some((value) => {
+    const media = value as Record<string, unknown>;
+    return (media.skuKeys as unknown[]).some((skuKey) => !aliases.get(String(skuKey)));
+  })) {
+    return null;
+  }
+  return capture as unknown as SourceProductCaptureV2;
+}
+
+interface ListingDraftAssignment {
+  scope: 'PRODUCT' | 'SKU';
+  slotKey: string;
+  assetId: string;
+  skuKey: string | null;
+  source: 'SOURCE' | 'REVIEWED' | 'GENERATED' | 'TRANSLATED' | 'EDITED';
+}
+
+function listingDraftAssignments(value: unknown): ListingDraftAssignment[] | null {
+  const media = record(value);
+  if (!media || !Array.isArray(media.assignments)) return null;
+  const assignments: ListingDraftAssignment[] = [];
+  const slotKeys = new Set<string>();
+  const assetIds = new Set<string>();
+  for (const value of media.assignments) {
+    const assignment = record(value);
+    const slotKey = exactIdentifier(assignment?.slotKey, 1024);
+    const assetId = exactIdentifier(assignment?.assetId, 500);
+    const source = typeof assignment?.source === 'string'
+      && ['SOURCE', 'REVIEWED', 'GENERATED', 'TRANSLATED', 'EDITED'].includes(assignment.source)
+      ? assignment.source as ListingDraftAssignment['source']
+      : null;
+    if (!assignment || !slotKey || !assetId || !source
+      || slotKeys.has(slotKey) || assetIds.has(assetId)) return null;
+    slotKeys.add(slotKey);
+    assetIds.add(assetId);
+    if (assignment.scope === 'PRODUCT') {
+      if (Object.prototype.hasOwnProperty.call(assignment, 'skuKey')) return null;
+      assignments.push({ scope: 'PRODUCT', slotKey, assetId, skuKey: null, source });
+      continue;
+    }
+    const skuKey = exactIdentifier(assignment.skuKey, 500);
+    if (assignment.scope !== 'SKU' || !skuKey) return null;
+    assignments.push({ scope: 'SKU', slotKey, assetId, skuKey, source });
+  }
+  return assignments;
+}
+
+function listingDraftImages(
+  capture: SourceProductCaptureV2,
+  selectedSkuKeys: string[],
+  requestedSkuKey: string | null,
+) {
+  const aliases = capturedSourceSkuAliases(capture);
+  const selected = new Set(requestedSkuKey ? [requestedSkuKey] : selectedSkuKeys);
+  const media = capture.media.filter((media) => {
+    if (media.kind !== 'image' || media.disposition !== 'accepted' || !media.url) return false;
+    if (media.role !== 'sku' && media.skuKeys.length === 0) return true;
+    const canonicalSkuKeys = media.skuKeys
+      .map((key) => aliases.get(key) || null)
+      .filter((key): key is string => Boolean(key));
+    return canonicalSkuKeys.some((key) => selected.has(key));
+  });
+  if (media.length > AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS) {
+    throw new AiMediaContextError(
+      'AI_MEDIA_CONTEXT_LIMIT_EXCEEDED',
+      413,
+      `Listing draft media context exceeds ${AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS} source images`,
+    );
+  }
+  return media;
 }
 
 function editSourceMediaKey(sourceMediaKey: string) {
@@ -134,6 +284,89 @@ export function createAiMediaContextService(
     ...dependencyOverrides,
   };
 
+  async function loadInputs(input: {
+    ownerUserId: string;
+    snapshotId: string;
+    media: SourceProductCaptureV2['media'];
+    skuAliases?: Map<string, string | null>;
+    allowedSkuKeys?: Set<string>;
+  }) {
+    const mediaKeys = input.media.map((item) => item.key);
+    const editKeyToSourceKey = new Map(mediaKeys.map((key) => [editSourceMediaKey(key), key]));
+    const assets = await client.mediaAsset.findMany({
+      where: {
+        ownerUserId: input.ownerUserId,
+        sourceCaptureSnapshotId: input.snapshotId,
+        sourceMediaKey: { in: [...mediaKeys, ...editKeyToSourceKey.keys()] },
+        kind: 'SOURCE_ORIGINAL',
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    const assetByKey = new Map<string | null, (typeof assets)[number]>();
+    const editAssetByKey = new Map<string | null, (typeof assets)[number]>();
+    const compatibleAssetsByKey = new Map<string | null, Array<(typeof assets)[number]>>();
+    const storageRank = (backend: string) => (
+      backend === 'oss' ? 0 : backend === 'local' ? 1 : 2
+    );
+    const assetOrder = (left: (typeof assets)[number], right: (typeof assets)[number]) => (
+      storageRank(left.storageBackend) - storageRank(right.storageBackend)
+      || (String(left.id) < String(right.id) ? -1 : String(left.id) > String(right.id) ? 1 : 0)
+    );
+    const sourceUrlByKey = new Map(input.media.map((item) => [item.key, item.url]));
+    for (const asset of assets) {
+      const sourceMediaKey = editKeyToSourceKey.get(String(asset.sourceMediaKey || ''))
+        || asset.sourceMediaKey;
+      const expectedSourceUrl = sourceUrlByKey.get(String(sourceMediaKey || ''));
+      if (!expectedSourceUrl || asset.sourceUrl !== expectedSourceUrl) continue;
+      compatibleAssetsByKey.set(sourceMediaKey, [
+        ...(compatibleAssetsByKey.get(sourceMediaKey) || []),
+        asset,
+      ]);
+      const existing = assetByKey.get(sourceMediaKey);
+      if (!existing || assetOrder(asset, existing) < 0) {
+        assetByKey.set(sourceMediaKey, asset);
+      }
+      if (isAiMediaEditReadySourceAsset(asset)) {
+        const existingEdit = editAssetByKey.get(sourceMediaKey);
+        if (!existingEdit || assetOrder(asset, existingEdit) < 0) {
+          editAssetByKey.set(sourceMediaKey, asset);
+        }
+      }
+    }
+    return input.media.map((item) => {
+      const editAsset = editAssetByKey.get(item.key);
+      const asset = editAsset || assetByKey.get(item.key);
+      const compatibleAssetIds = [...new Set([
+        ...(asset?.id ? [asset.id] : []),
+        ...(compatibleAssetsByKey.get(item.key) || [])
+          .sort(assetOrder)
+          .map((candidate) => candidate.id),
+      ])];
+      const canonicalSkuKeys = input.skuAliases
+        ? item.skuKeys
+          .map((key) => input.skuAliases!.get(key) || null)
+          .filter((key): key is string => Boolean(key))
+          .filter((key) => !input.allowedSkuKeys || input.allowedSkuKeys.has(key))
+        : [];
+      return {
+        sourceMediaKey: item.key,
+        role: item.role,
+        sourceUrl: item.url!,
+        assetId: asset?.id || null,
+        assetUrl: asset?.url || null,
+        mimeType: asset?.mimeType || null,
+        width: asset?.width || null,
+        height: asset?.height || null,
+        editReady: Boolean(editAsset),
+        compatibleAssetIds,
+        ...(input.skuAliases ? {
+          scope: canonicalSkuKeys.length ? 'SKU' as const : 'PRODUCT' as const,
+          skuKeys: [...new Set(canonicalSkuKeys)].sort(),
+        } : {}),
+      };
+    });
+  }
+
   async function loadCollect(ownerUserId: string, collectId: string) {
     const goods = await client.supplyGoods.findFirst({
       where: { id: collectId, userId: ownerUserId },
@@ -157,75 +390,214 @@ export function createAiMediaContextService(
       throw new AiMediaContextError('AI_MEDIA_CONTEXT_NOT_FOUND', 404, 'Owned capture context was not found');
     }
     const media = productImages(capture);
-    const mediaKeys = media.map((item) => item.key);
-    const editKeyToSourceKey = new Map(mediaKeys.map((key) => [editSourceMediaKey(key), key]));
-    const assets = await client.mediaAsset.findMany({
-      where: {
-        ownerUserId,
-        sourceCaptureSnapshotId: snapshot.id,
-        sourceMediaKey: { in: [...mediaKeys, ...editKeyToSourceKey.keys()] },
-        kind: 'SOURCE_ORIGINAL',
-      },
-    });
-    const assetByKey = new Map<string | null, (typeof assets)[number]>();
-    const editAssetByKey = new Map<string | null, (typeof assets)[number]>();
-    const compatibleAssetsByKey = new Map<string | null, Array<(typeof assets)[number]>>();
-    const storageRank = (backend: string) => (
-      backend === 'oss' ? 0 : backend === 'local' ? 1 : 2
-    );
-    for (const asset of assets) {
-      const sourceMediaKey = editKeyToSourceKey.get(String(asset.sourceMediaKey || ''))
-        || asset.sourceMediaKey;
-      compatibleAssetsByKey.set(sourceMediaKey, [
-        ...(compatibleAssetsByKey.get(sourceMediaKey) || []),
-        asset,
-      ]);
-      const existing = assetByKey.get(sourceMediaKey);
-      if (!existing || storageRank(asset.storageBackend) < storageRank(existing.storageBackend)) {
-        assetByKey.set(sourceMediaKey, asset);
-      }
-      if (isAiMediaEditReadySourceAsset(asset)) {
-        const existingEdit = editAssetByKey.get(sourceMediaKey);
-        if (!existingEdit || storageRank(asset.storageBackend) < storageRank(existingEdit.storageBackend)) {
-          editAssetByKey.set(sourceMediaKey, asset);
-        }
-      }
-    }
     return {
       target: { type: 'collect' as const, id: goods.id, label: goods.title },
       snapshot: { id: snapshot.id, version: snapshot.version, captureHash: snapshot.captureHash },
-      inputs: media.map((item) => {
-        const editAsset = editAssetByKey.get(item.key);
-        const asset = editAsset || assetByKey.get(item.key);
-        const compatibleAssetIds = [...new Set([
-          ...(asset?.id ? [asset.id] : []),
-          ...(compatibleAssetsByKey.get(item.key) || []).map((candidate) => candidate.id),
-        ])];
-        return {
-          sourceMediaKey: item.key,
-          role: item.role,
-          sourceUrl: item.url!,
-          assetId: asset?.id || null,
-          assetUrl: asset?.url || null,
-          mimeType: asset?.mimeType || null,
-          width: asset?.width || null,
-          height: asset?.height || null,
-          editReady: Boolean(editAsset),
-          compatibleAssetIds,
-        };
-      }),
+      inputs: await loadInputs({ ownerUserId, snapshotId: snapshot.id, media }),
     };
   }
 
-  return {
-    loadCollect,
-    async internalizeCollect(
-      ownerUserId: string,
-      collectId: string,
-      sourceMediaKey: string,
-      purpose: AiMediaInternalizePurpose = 'GENERAL',
-    ) {
-      const context = await loadCollect(ownerUserId, collectId);
+  async function loadListingDraft(
+    ownerUserId: string,
+    draftId: string,
+    rawScope: AiMediaListingDraftContextScope = {},
+  ) {
+    const skuKey = normalizedIdentifier(rawScope.skuKey, 'skuKey', 500);
+    const slotKey = normalizedIdentifier(rawScope.slotKey, 'slotKey', 1024);
+    const expectedRevision = rawScope.expectedRevision == null
+      ? null
+      : positiveInteger(rawScope.expectedRevision);
+    const expectedDraftVersion = rawScope.expectedDraftVersion == null
+      ? null
+      : positiveInteger(rawScope.expectedDraftVersion);
+    if ((rawScope.expectedRevision != null && expectedRevision == null)
+      || (rawScope.expectedDraftVersion != null && expectedDraftVersion == null)) {
+      throw new AiMediaContextError(
+        'AI_MEDIA_CONTEXT_INVALID', 400, 'Listing draft revision is invalid',
+      );
+    }
+    const workflow = await client.sourceListingWorkflow.findFirst({
+      where: { id: draftId, ownerUserId },
+      select: {
+        id: true,
+        ownerUserId: true,
+        sourceSubjectId: true,
+        currentRevision: true,
+        currentDraftVersion: true,
+        currentSourceCaptureSnapshotId: true,
+        currentDraft: {
+          select: {
+            workflowId: true,
+            ownerUserId: true,
+            revision: true,
+            draftVersion: true,
+            sourceCaptureSnapshotId: true,
+            payload: true,
+          },
+        },
+        currentSourceCaptureSnapshot: {
+          select: {
+            id: true,
+            version: true,
+            captureHash: true,
+            payload: true,
+            subjectId: true,
+            subject: { select: { ownerUserId: true } },
+          },
+        },
+      },
+    });
+    if (!workflow) {
+      throw new AiMediaContextError(
+        'AI_MEDIA_CONTEXT_NOT_FOUND', 404, 'Owned listing draft context was not found',
+      );
+    }
+    if (workflow.id !== draftId || workflow.ownerUserId !== ownerUserId) {
+      throw new AiMediaContextError(
+        'AI_MEDIA_CONTEXT_NOT_FOUND', 404, 'Owned listing draft context was not found',
+      );
+    }
+    const draft = record(workflow.currentDraft?.payload);
+    const snapshot = workflow.currentSourceCaptureSnapshot;
+    const capture = listingCapture(snapshot?.payload);
+    const assignments = listingDraftAssignments(record(draft?.media));
+    if (!draft
+      || !workflow.currentDraft
+      || !snapshot
+      || snapshot.subject?.ownerUserId !== ownerUserId
+      || snapshot.subjectId !== workflow.sourceSubjectId
+      || !capture
+      || !assignments
+      || positiveInteger(workflow.currentRevision) == null
+      || positiveInteger(workflow.currentDraftVersion) == null
+      || positiveInteger(workflow.currentDraft.revision) == null
+      || positiveInteger(workflow.currentDraft.draftVersion) == null
+      || positiveInteger(draft.revision) == null
+      || positiveInteger(draft.draftVersion) == null
+      || positiveInteger(snapshot.version) == null
+      || workflow.currentDraft.workflowId !== workflow.id
+      || workflow.currentDraft.ownerUserId !== ownerUserId
+      || workflow.currentRevision !== workflow.currentDraft.revision
+      || workflow.currentDraftVersion !== workflow.currentDraft.draftVersion
+      || workflow.currentSourceCaptureSnapshotId !== snapshot.id
+      || workflow.currentDraft.sourceCaptureSnapshotId !== snapshot.id
+      || draft.id !== workflow.id
+      || draft.ownerUserId !== ownerUserId
+      || draft.revision !== workflow.currentRevision
+      || draft.draftVersion !== workflow.currentDraftVersion
+      || draft.sourceCaptureSnapshotId !== snapshot.id
+      || draft.sourceCaptureHash !== snapshot.captureHash
+      || typeof snapshot.captureHash !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(snapshot.captureHash)
+      || !Array.isArray(draft.selectedSkuKeys)) {
+      throw new AiMediaContextError(
+        'STALE_MEDIA_CONTEXT', 409, 'Listing draft context no longer matches its current source snapshot',
+      );
+    }
+    if ((expectedRevision != null && expectedRevision !== draft.revision)
+      || (expectedDraftVersion != null && expectedDraftVersion !== draft.draftVersion)) {
+      throw new AiMediaContextError(
+        'STALE_MEDIA_CONTEXT', 409, 'Listing draft revision changed; refresh before continuing',
+      );
+    }
+    const aliases = capturedSourceSkuAliases(capture);
+    const selectedSkuKeys: string[] = [];
+    const selectedSkuKeySet = new Set<string>();
+    for (const value of draft.selectedSkuKeys) {
+      const key = exactIdentifier(value, 500);
+      if (!key || aliases.get(key) !== key || selectedSkuKeySet.has(key)) {
+        throw new AiMediaContextError(
+          'STALE_MEDIA_CONTEXT', 409, 'Listing draft SKU selection no longer matches the source snapshot',
+        );
+      }
+      selectedSkuKeySet.add(key);
+      selectedSkuKeys.push(key);
+    }
+    selectedSkuKeys.sort();
+    if (!selectedSkuKeys.length || assignments.some((assignment) => (
+      assignment.scope === 'SKU'
+      && (!assignment.skuKey
+        || aliases.get(assignment.skuKey) !== assignment.skuKey
+        || !selectedSkuKeySet.has(assignment.skuKey))
+    ))) {
+      throw new AiMediaContextError(
+        'STALE_MEDIA_CONTEXT', 409, 'Listing draft SKU selection no longer matches the source snapshot',
+      );
+    }
+    if (skuKey && !selectedSkuKeys.includes(skuKey)) {
+      throw new AiMediaContextError(
+        'AI_MEDIA_CONTEXT_MISMATCH', 409, 'Requested SKU is not selected in the current listing draft',
+      );
+    }
+    const slotAssignments = slotKey
+      ? assignments.filter((item) => item.slotKey === slotKey)
+      : [];
+    const matchingAssignments = slotAssignments.filter((item) => (
+      skuKey
+        ? item.scope === 'SKU' && item.skuKey === skuKey
+        : item.scope === 'PRODUCT'
+    ));
+    if (slotAssignments.length && matchingAssignments.length !== 1) {
+      throw new AiMediaContextError(
+        'AI_MEDIA_CONTEXT_MISMATCH', 409, 'Requested media slot belongs to another product or SKU scope',
+      );
+    }
+    const assignment = matchingAssignments[0] || null;
+    const media = listingDraftImages(capture, selectedSkuKeys, skuKey);
+    const inputs = await loadInputs({
+      ownerUserId,
+      snapshotId: snapshot.id,
+      media,
+      skuAliases: aliases,
+      allowedSkuKeys: new Set(skuKey ? [skuKey] : selectedSkuKeys),
+    });
+    const assignmentAssetIds = [...new Set(assignments.map((item) => item.assetId))];
+    if (assignmentAssetIds.length) {
+      const assignmentAssets = await client.mediaAsset.findMany({
+        where: {
+          ownerUserId,
+          id: { in: assignmentAssetIds },
+        },
+        select: { id: true, sourceCaptureSnapshotId: true, kind: true, mimeType: true },
+      });
+      const assignmentById = new Map(assignmentAssets.map((asset) => [String(asset.id), asset]));
+      if (assignmentAssetIds.some((id) => (
+        assignmentById.get(id)?.sourceCaptureSnapshotId !== snapshot.id
+        || !['SOURCE_ORIGINAL', 'AI_GENERATED'].includes(String(assignmentById.get(id)?.kind || ''))
+        || !String(assignmentById.get(id)?.mimeType || '').startsWith('image/')
+      ))) {
+        throw new AiMediaContextError(
+          'STALE_MEDIA_CONTEXT', 409, 'Listing draft media assignments no longer match the source snapshot',
+        );
+      }
+    }
+    const copy = record(draft.copy);
+    const facts = record(capture.facts);
+    return {
+      target: {
+        type: 'listing-draft' as const,
+        id: workflow.id,
+        label: typeof copy?.publishTitleRu === 'string'
+          ? copy.publishTitleRu
+          : typeof facts?.title === 'string' ? facts.title : workflow.id,
+        revision: draft.revision,
+        draftVersion: draft.draftVersion,
+        skuKey,
+        slotKey,
+        assignedAssetId: assignment?.assetId || null,
+      },
+      snapshot: { id: snapshot.id, version: snapshot.version, captureHash: snapshot.captureHash },
+      selectedSkuKeys,
+      inputs,
+    };
+  }
+
+  async function internalizeContext(
+    ownerUserId: string,
+    context: Awaited<ReturnType<typeof loadCollect>> | Awaited<ReturnType<typeof loadListingDraft>>,
+    sourceMediaKey: string,
+    purpose: AiMediaInternalizePurpose,
+  ) {
       const selected = context.inputs.find((item) => item.sourceMediaKey === sourceMediaKey);
       if (!selected) throw new AiMediaContextError('SOURCE_MEDIA_NOT_FOUND', 404, 'Source image was not found');
       if (selected.assetId && (purpose !== 'EDIT' || selected.editReady)) {
@@ -291,6 +663,11 @@ export function createAiMediaContextService(
             storageBackend: uploaded.backend,
           } });
           if (!winner) throw error;
+          if (winner.sourceUrl !== selected.sourceUrl) {
+            throw new AiMediaContextError(
+              'SOURCE_ASSET_CONFLICT', 409, 'Persisted source image conflicts with the current capture authority',
+            );
+          }
           return { ...winner, editReady: isAiMediaEditReadySourceAsset(winner) };
         }
       }
@@ -402,11 +779,64 @@ export function createAiMediaContextService(
           storageBackend: uploaded.backend,
         } });
         if (!winner) throw error;
+        if (winner.sourceUrl !== selected.sourceUrl) {
+          throw new AiMediaContextError(
+            'SOURCE_ASSET_CONFLICT', 409, 'Persisted edit source conflicts with the current capture authority',
+          );
+        }
         if (purpose === 'EDIT' && !isAiMediaEditReadySourceAsset(winner)) {
           throw new AiMediaContextError('INVALID_MEDIA_INPUT', 409, 'Persisted edit source conflicts with its normalization contract');
         }
         return { ...winner, editReady: isAiMediaEditReadySourceAsset(winner) };
       }
+  }
+
+  return {
+    loadCollect,
+    loadListingDraft,
+    async load(
+      ownerUserId: string,
+      context:
+        | { type: 'collect'; id: string }
+        | ({ type: 'listing-draft'; id: string; revision: number; draftVersion: number }
+          & Pick<AiMediaListingDraftContextScope, 'skuKey' | 'slotKey'>),
+    ) {
+      if (context.type === 'listing-draft') {
+        return loadListingDraft(ownerUserId, context.id, {
+          expectedRevision: context.revision,
+          expectedDraftVersion: context.draftVersion,
+          skuKey: context.skuKey,
+          slotKey: context.slotKey,
+        });
+      }
+      return loadCollect(ownerUserId, context.id);
+    },
+    async internalizeCollect(
+      ownerUserId: string,
+      collectId: string,
+      sourceMediaKey: string,
+      purpose: AiMediaInternalizePurpose = 'GENERAL',
+    ) {
+      return internalizeContext(
+        ownerUserId,
+        await loadCollect(ownerUserId, collectId),
+        sourceMediaKey,
+        purpose,
+      );
+    },
+    async internalizeListingDraft(
+      ownerUserId: string,
+      draftId: string,
+      sourceMediaKey: string,
+      scope: AiMediaListingDraftContextScope,
+      purpose: AiMediaInternalizePurpose = 'GENERAL',
+    ) {
+      return internalizeContext(
+        ownerUserId,
+        await loadListingDraft(ownerUserId, draftId, scope),
+        sourceMediaKey,
+        purpose,
+      );
     },
   };
 }

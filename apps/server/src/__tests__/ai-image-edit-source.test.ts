@@ -73,6 +73,41 @@ describe('AI image edit candidate source authority', () => {
     })).toBe(true);
   });
 
+  it('binds listing-draft candidates to the exact frozen revision, version, SKU, and slot', () => {
+    const source = candidate({ aiImageJob: {
+      ...candidate().aiImageJob,
+      workflow: {
+        ...candidate().aiImageJob.workflow,
+        contextType: 'listing-draft',
+        contextId: 'draft-1',
+        contextDraftRevision: 4,
+        contextDraftVersion: 2,
+        contextSkuKey: 'sku-1',
+        contextSlotKey: 'hero',
+      },
+    } });
+    const authority = {
+      ownerUserId: 'owner-1',
+      contextType: 'listing-draft' as const,
+      contextId: 'draft-1',
+      contextDraftRevision: 4,
+      contextDraftVersion: 2,
+      contextSkuKey: 'sku-1',
+      contextSlotKey: 'hero',
+      sourceCaptureSnapshotId: 'snapshot-1',
+    };
+
+    expect(isAiMediaEditCandidateFromContext(source, authority)).toBe(true);
+    expect(isAiMediaEditCandidateFromContext(source, {
+      ...authority,
+      contextDraftRevision: 5,
+    })).toBe(false);
+    expect(isAiMediaEditCandidateFromContext(source, {
+      ...authority,
+      contextDraftVersion: 3,
+    })).toBe(false);
+  });
+
   it.each([
     ['another owner', { ownerUserId: 'owner-2' }],
     ['another snapshot', { sourceCaptureSnapshotId: 'snapshot-old' }],

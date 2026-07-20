@@ -4,8 +4,139 @@ import {
   aiMediaPayloadHash,
   createAiImageEditWorkflowFingerprint,
   createAiMediaWorkflowFingerprint,
+  type AiMediaWorkflowContext,
 } from '../services/ai-media-workflows.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+
+const listingDraftCapture = {
+  captureVersion: 'source-product-capture-v2',
+  facts: { title: 'Source listing' },
+  skus: [
+    { key: 'sku-red', sourceSkuId: 'red-source' },
+    { key: 'sku-blue', sourceSkuId: 'blue-source' },
+  ],
+  media: [
+    {
+      key: 'main-1', ordinal: 0, kind: 'image', disposition: 'accepted',
+      role: 'product_main', skuKeys: [], url: 'https://source.example/main.jpg',
+    },
+    {
+      key: 'sku-red-1', ordinal: 1, kind: 'image', disposition: 'accepted',
+      role: 'sku', skuKeys: ['red-source'], url: 'https://source.example/red.jpg',
+    },
+    {
+      key: 'sku-blue-1', ordinal: 2, kind: 'image', disposition: 'accepted',
+      role: 'sku', skuKeys: ['blue-source'], url: 'https://source.example/blue.jpg',
+    },
+  ],
+};
+
+function listingDraftAsset(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'asset-red', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+    sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+    sourceMediaKey: 'sku-red-1', sourceUrl: 'https://source.example/red.jpg',
+    url: 'https://cdn.example/red.jpg', mimeType: 'image/jpeg',
+    width: 1200, height: 900, storageBackend: 'oss', storageKey: 'red.jpg', sizeBytes: 120,
+    metadata: { pixelOrientationNormalized: true },
+    ...overrides,
+  };
+}
+
+function listingDraftImageToImageTransaction() {
+  const product = listingDraftAsset({
+    id: 'asset-product', sha256: 'b'.repeat(64), sourceMediaKey: 'main-1',
+    sourceUrl: 'https://source.example/main.jpg', url: 'https://cdn.example/main.jpg',
+  });
+  const red = listingDraftAsset();
+  const blue = listingDraftAsset({
+    id: 'asset-blue', sha256: 'c'.repeat(64), sourceMediaKey: 'sku-blue-1',
+    sourceUrl: 'https://source.example/blue.jpg', url: 'https://cdn.example/blue.jpg',
+  });
+  const assets = new Map([
+    [product.id, product],
+    [red.id, red],
+    [blue.id, blue],
+  ]);
+  const sourceListingWorkflowFindFirst = vi.fn(async ({ where }: any) => (
+    where.id === 'draft-1' && where.ownerUserId === 'owner-1'
+      ? {
+        id: 'draft-1', ownerUserId: 'owner-1', sourceSubjectId: 'subject-1',
+        currentRevision: 4, currentDraftVersion: 2,
+        currentSourceCaptureSnapshotId: 'snapshot-1',
+        currentDraft: {
+          workflowId: 'draft-1', ownerUserId: 'owner-1', revision: 4, draftVersion: 2,
+          sourceCaptureSnapshotId: 'snapshot-1', payload: {
+            id: 'draft-1', ownerUserId: 'owner-1', revision: 4, draftVersion: 2,
+            sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: 'd'.repeat(64),
+            selectedSkuKeys: ['sku-red'], copy: { publishTitleRu: 'Red listing' },
+            media: { assignments: [
+              { scope: 'PRODUCT', slotKey: 'main-1', assetId: 'asset-product', source: 'SOURCE' },
+              { scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku-hero', assetId: 'asset-red', source: 'SOURCE' },
+            ] },
+          },
+        },
+        currentSourceCaptureSnapshot: {
+          id: 'snapshot-1', subjectId: 'subject-1', version: 7, captureHash: 'd'.repeat(64),
+          payload: listingDraftCapture, subject: { ownerUserId: 'owner-1' },
+        },
+      }
+      : null
+  ));
+  const mediaAssetFindMany = vi.fn(async ({ where }: any = {}) => {
+    if (where.sourceMediaKey?.in) return [product, red];
+    if (where.id?.in) {
+      return (where.id.in as string[])
+        .map((id) => assets.get(id))
+        .filter((asset): asset is typeof product => Boolean(asset));
+    }
+    return [];
+  });
+  const workflowCreate = vi.fn(async ({ data }: any) => ({ id: 'workflow-listing-1', ...data }));
+  const inputCreate = vi.fn(async ({ data }: any) => data);
+  const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'job-listing-1', ...data }));
+  const costCreate = vi.fn(async ({ data }: any) => ({ id: 'cost-listing-1', ...data }));
+  const tx = {
+    sourceListingWorkflow: { findFirst: sourceListingWorkflowFindFirst },
+    mediaAsset: { findMany: mediaAssetFindMany },
+    aiMediaWorkflow: {
+      findUnique: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'workflow-listing-1', contextType: 'listing-draft', contextId: 'draft-1',
+          contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+          contextDraftRevision: 4, contextDraftVersion: 2,
+          inputs: [], jobs: [], events: [],
+        }),
+      create: workflowCreate,
+    },
+    aiMediaWorkflowInput: { create: inputCreate },
+    aiImageJob: { create: jobCreate },
+    aiCostReservation: { findUnique: vi.fn(async () => null), create: costCreate },
+    aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+  };
+  return {
+    tx,
+    sourceListingWorkflowFindFirst,
+    mediaAssetFindMany,
+    workflowCreate,
+    inputCreate,
+    client: { $transaction: vi.fn(async (callback: any) => callback(tx)) },
+  };
+}
+
+function listingDraftImageToImageInput(overrides: Record<string, unknown> = {}) {
+  return {
+    ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-red',
+    prompt: 'Translate the red product scene', negativePrompt: null,
+    count: 1, width: 1024, height: 1024, idempotencyKey: 'listing-image-1',
+    context: {
+      type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-red', slotKey: 'sku-hero',
+      revision: 4, draftVersion: 2,
+    },
+    ...overrides,
+  };
+}
 
 describe('Prisma AI media workflow repository recovery fence', () => {
   it('returns a stable owner/context keyset page and probes one extra row', async () => {
@@ -473,6 +604,111 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(jobCreate.mock.invocationCallOrder[0]).toBeLessThan(costReservationCreate.mock.invocationCallOrder[0]!);
   });
 
+  it('creates IMAGE_TO_IMAGE only for the current listing draft source/SKU/slot authority', async () => {
+    const fixture = listingDraftImageToImageTransaction();
+    const repository = new PrismaAiMediaWorkflowRepository(fixture.client as never);
+
+    const result = await repository.createImageToImage(listingDraftImageToImageInput());
+
+    expect(result).toMatchObject({ kind: 'created', jobId: 'job-listing-1' });
+    expect(fixture.workflowCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      contextType: 'listing-draft', contextId: 'draft-1',
+      contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+      contextDraftRevision: 4, contextDraftVersion: 2,
+    }) });
+    expect(fixture.inputCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      assetId: 'asset-red', role: 'REFERENCE', ordinal: 0,
+      assetSha256: 'a'.repeat(64),
+    }) });
+    expect(fixture.sourceListingWorkflowFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'draft-1', ownerUserId: 'owner-1' },
+    }));
+    expect(fixture.mediaAssetFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1',
+        sourceMediaKey: expect.objectContaining({ in: expect.arrayContaining(['sku-red-1']) }),
+      }),
+    }));
+  });
+
+  it.each([
+    {
+      name: 'a stale draft revision',
+      context: {
+        type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-red', slotKey: 'sku-hero',
+        revision: 3, draftVersion: 2,
+      },
+      sourceAssetId: 'asset-red', code: 'STALE_MEDIA_CONTEXT',
+    },
+    {
+      name: 'an unselected SKU',
+      context: {
+        type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-blue', slotKey: 'sku-hero',
+        revision: 4, draftVersion: 2,
+      },
+      sourceAssetId: 'asset-blue', code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    },
+    {
+      name: 'a product slot used as a SKU slot',
+      context: {
+        type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-red', slotKey: 'main-1',
+        revision: 4, draftVersion: 2,
+      },
+      sourceAssetId: 'asset-red', code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    },
+    {
+      name: 'a source asset outside the selected SKU context',
+      context: {
+        type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-red', slotKey: 'sku-hero',
+        revision: 4, draftVersion: 2,
+      },
+      sourceAssetId: 'asset-blue', code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    },
+  ])('rejects $name without creating a workflow', async ({ context, sourceAssetId, code }) => {
+    const fixture = listingDraftImageToImageTransaction();
+    const repository = new PrismaAiMediaWorkflowRepository(fixture.client as never);
+
+    await expect(repository.createImageToImage(listingDraftImageToImageInput({
+      sourceAssetId,
+      context,
+      idempotencyKey: `listing-invalid-${sourceAssetId}-${context.slotKey}-${context.revision}`,
+    }))).rejects.toMatchObject({ code });
+    expect(fixture.workflowCreate).not.toHaveBeenCalled();
+  });
+
+  it('replays an existing listing-draft workflow without rereading mutable draft authority', async () => {
+    const input = listingDraftImageToImageInput({ idempotencyKey: 'listing-replay-1' });
+    const frozenHash = 'a'.repeat(64);
+    const existing = {
+      id: 'workflow-existing-listing', ownerUserId: 'owner-1',
+      requestFingerprint: aiMediaPayloadHash({
+        request: createAiMediaWorkflowFingerprint(input),
+        sourceAssetSha256: frozenHash,
+      }),
+      inputs: [{ assetSha256: frozenHash }],
+      jobs: [{ id: 'job-existing-listing', workflowAttempt: 1 }], events: [],
+    };
+    const draftRead = vi.fn(async () => { throw new Error('replay must not reread mutable listing draft'); });
+    const assetRead = vi.fn(async () => { throw new Error('replay must not reread mutable source assets'); });
+    const tx = {
+      aiMediaWorkflow: { findUnique: vi.fn(async () => existing) },
+      sourceListingWorkflow: { findFirst: draftRead },
+      mediaAsset: { findMany: assetRead },
+    };
+    const client = { $transaction: vi.fn(async (callback: any) => callback(tx)) };
+
+    const result = await new PrismaAiMediaWorkflowRepository(client as never)
+      .createImageToImage(input as {
+        ownerUserId: string; actorUserId: string; sourceAssetId: string;
+        prompt: string; negativePrompt: string | null; count: number; width: number; height: number;
+        idempotencyKey: string; context: AiMediaWorkflowContext;
+      });
+
+    expect(result).toMatchObject({ kind: 'existing', jobId: 'job-existing-listing' });
+    expect(draftRead).not.toHaveBeenCalled();
+    expect(assetRead).not.toHaveBeenCalled();
+  });
+
   it('keeps workflow creation inside the transaction when cost reservation fails', async () => {
     const eventCreate = vi.fn(async () => ({}));
     const tx = {
@@ -616,6 +852,37 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     expect(findPrevious).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
+  });
+
+  it('never creates a retry attempt after the frozen listing draft advances', async () => {
+    const findPrevious = vi.fn();
+    const createJob = vi.fn();
+    const tx = {
+      aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null) },
+      aiMediaWorkflow: {
+        findFirst: vi.fn(async () => ({
+          id: 'workflow-1', ownerUserId: 'owner-1', status: 'FAILED', revision: 3,
+          currentAttempt: 1, contextType: 'listing-draft', contextId: 'draft-1',
+          contextDraftRevision: 4, contextDraftVersion: 2,
+          contextSkuKey: 'sku-red', contextSlotKey: 'sku-hero',
+          inputs: [{ asset: { sourceCaptureSnapshotId: 'snapshot-1' } }],
+        })),
+      },
+      sourceListingWorkflow: { findFirst: vi.fn(async () => null) },
+      mediaAsset: { findMany: vi.fn() },
+      aiImageJob: { findFirst: findPrevious, create: createJob },
+    };
+
+    await expect(new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).retryOwned({
+      id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 3, idempotencyKey: 'retry-stale-listing-draft',
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+
+    expect(findPrevious).not.toHaveBeenCalled();
+    expect(createJob).not.toHaveBeenCalled();
+    expect(tx.mediaAsset.findMany).not.toHaveBeenCalled();
   });
 
   it.each(['SETTLED', 'RELEASED'])('allows retry after provider cost is manually reconciled to %s', async (status) => {

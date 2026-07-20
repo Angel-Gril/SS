@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
+import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import {
   AI_MEDIA_EDIT_SOURCE_MAX_BYTES,
+  AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS,
   createAiMediaContextService,
   normalizeAiMediaSourceBuffer,
 } from '../services/ai-media-context.js';
@@ -17,6 +19,104 @@ const capture = {
     url: 'https://source.example/red.jpg',
   }],
 };
+
+const listingCapture = {
+  captureVersion: 'source-product-capture-v2',
+  facts: { title: 'Source product' },
+  skus: [
+    { key: 'sku-red', sourceSkuId: 'red-source' },
+    { key: 'sku-blue', sourceSkuId: 'blue-source' },
+  ],
+  media: [{
+    key: 'main-1', ordinal: 0, kind: 'image', disposition: 'accepted',
+    role: 'product_main', skuKeys: [], url: 'https://source.example/main.jpg',
+  }, {
+    key: 'sku-red-1', ordinal: 1, kind: 'image', disposition: 'accepted',
+    role: 'sku', skuKeys: ['red-source'], url: 'https://source.example/red.jpg',
+  }, {
+    key: 'sku-blue-1', ordinal: 2, kind: 'image', disposition: 'accepted',
+    role: 'sku', skuKeys: ['blue-source'], url: 'https://source.example/blue.jpg',
+  }, {
+    key: 'sku-shared-1', ordinal: 3, kind: 'image', disposition: 'accepted',
+    role: 'sku', skuKeys: ['red-source', 'blue-source'], url: 'https://source.example/shared.jpg',
+  }],
+};
+
+function listingDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'draft-1', ownerUserId: 'owner-1', revision: 4, draftVersion: 2,
+    sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: 'b'.repeat(64),
+    selectedSkuKeys: ['sku-red'], copy: { publishTitleRu: 'Russian title' },
+    media: { assignments: [
+      { scope: 'PRODUCT', slotKey: 'main-1', assetId: 'asset-1', source: 'SOURCE' },
+      { scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku-hero', assetId: 'asset-red', source: 'SOURCE' },
+    ] },
+    ...overrides,
+  };
+}
+
+function listingClient(options: {
+  draft?: Record<string, unknown>;
+  workflow?: Record<string, unknown>;
+  currentDraft?: Record<string, unknown>;
+  snapshot?: Record<string, unknown>;
+  capture?: Record<string, unknown>;
+  assets?: unknown[];
+  assignmentAssets?: unknown[];
+  ownerFound?: boolean;
+} = {}) {
+  const draft = listingDraft(options.draft || {});
+  const capture = { ...listingCapture, ...(options.capture || {}) };
+  const db = client() as any;
+  db.sourceListingWorkflow = {
+    findFirst: vi.fn(async ({ where }: any) => options.ownerFound !== false
+      && where.id === 'draft-1' && where.ownerUserId === 'owner-1' ? {
+      id: 'draft-1', ownerUserId: 'owner-1', currentRevision: 4, currentDraftVersion: 2,
+      sourceSubjectId: 'subject-1',
+      currentSourceCaptureSnapshotId: 'snapshot-1',
+      currentDraft: {
+        id: 'draft-row-1', workflowId: 'draft-1', ownerUserId: 'owner-1',
+        revision: 4, draftVersion: 2, sourceCaptureSnapshotId: 'snapshot-1', payload: draft,
+      },
+      currentSourceCaptureSnapshot: {
+        id: 'snapshot-1', subjectId: 'subject-1', version: 5, captureHash: 'b'.repeat(64), payload: capture,
+        subject: { ownerUserId: 'owner-1' },
+      },
+      ...(options.workflow || {}),
+      ...(options.currentDraft ? { currentDraft: {
+        id: 'draft-row-1', workflowId: 'draft-1', ownerUserId: 'owner-1',
+        revision: 4, draftVersion: 2, sourceCaptureSnapshotId: 'snapshot-1', payload: draft,
+        ...options.currentDraft,
+      } } : {}),
+      ...(options.snapshot ? { currentSourceCaptureSnapshot: {
+        id: 'snapshot-1', subjectId: 'subject-1', version: 5, captureHash: 'b'.repeat(64), payload: capture,
+        subject: { ownerUserId: 'owner-1' }, ...options.snapshot,
+      } } : {}),
+    } : null),
+  };
+  db.mediaAsset.findMany.mockImplementation(async ({ where }: any = {}) => {
+    const ids = Array.isArray(where?.id?.in) ? where.id.in as string[] : [];
+    if (ids.length) {
+      if (options.assignmentAssets) return options.assignmentAssets;
+      return ids.map((id) => editReadyAsset({
+        id,
+        sourceMediaKey: id === 'asset-red' ? 'sku-red-1' : 'main-1',
+        sourceUrl: id === 'asset-red'
+          ? 'https://source.example/red.jpg'
+          : 'https://source.example/main.jpg',
+      }));
+    }
+    return options.assets || [
+      editReadyAsset(),
+      editReadyAsset({
+        id: 'asset-red',
+        sourceMediaKey: 'sku-red-1',
+        sourceUrl: 'https://source.example/red.jpg',
+      }),
+    ];
+  });
+  return db;
+}
 
 function editReadyAsset(overrides: Record<string, unknown> = {}) {
   return {
@@ -249,5 +349,265 @@ describe('AI media collect context', () => {
       sourceMediaKey: 'main-1',
       metadata: expect.objectContaining({ lineageVersion: 'ai-media-source/v1' }),
     }) });
+  });
+});
+
+describe('AI media listing-draft context', () => {
+  it('loads the current owner-scoped draft with product and selected-SKU media', async () => {
+    const db = listingClient();
+    const result = await createAiMediaContextService(db as never).loadListingDraft(
+      'owner-1',
+      'draft-1',
+      { expectedRevision: 4, expectedDraftVersion: 2, skuKey: 'sku-red', slotKey: 'sku-hero' },
+    );
+
+    expect(result.target).toEqual({
+      type: 'listing-draft', id: 'draft-1', label: 'Russian title', revision: 4,
+      draftVersion: 2, skuKey: 'sku-red', slotKey: 'sku-hero', assignedAssetId: 'asset-red',
+    });
+    expect(result.snapshot).toEqual({
+      id: 'snapshot-1', version: 5, captureHash: 'b'.repeat(64),
+    });
+    expect(result.selectedSkuKeys).toEqual(['sku-red']);
+    expect(result.inputs.map((input) => ({ key: input.sourceMediaKey, scope: input.scope, skuKeys: input.skuKeys })))
+      .toEqual([
+        { key: 'main-1', scope: 'PRODUCT', skuKeys: [] },
+        { key: 'sku-red-1', scope: 'SKU', skuKeys: ['sku-red'] },
+        { key: 'sku-shared-1', scope: 'SKU', skuKeys: ['sku-red'] },
+      ]);
+    expect(db.sourceListingWorkflow.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'draft-1', ownerUserId: 'owner-1' },
+    }));
+  });
+
+  it('allows source discovery before a fresh draft has assigned a target slot', async () => {
+    const db = listingClient({ draft: { media: { assignments: [] } } });
+    const result = await createAiMediaContextService(db as never).loadListingDraft(
+      'owner-1', 'draft-1', { expectedRevision: 4, expectedDraftVersion: 2 },
+    );
+    expect(result.target).toMatchObject({ skuKey: null, slotKey: null, assignedAssetId: null });
+    expect(result.inputs.map((input) => input.sourceMediaKey)).toEqual([
+      'main-1', 'sku-red-1', 'sku-shared-1',
+    ]);
+  });
+
+  it('allows a null SKU scope for a product-only listing draft', async () => {
+    const database = listingClient({
+      draft: {
+        selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+        media: { assignments: [
+          { scope: 'PRODUCT', slotKey: 'main-1', assetId: 'asset-1', source: 'SOURCE' },
+        ] },
+      },
+      capture: { skus: [], media: [listingCapture.media[0]] },
+    });
+    const result = await createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1', { expectedRevision: 4, expectedDraftVersion: 2, skuKey: null },
+    );
+    expect(result.target).toMatchObject({ skuKey: null, slotKey: null });
+    expect(result.selectedSkuKeys).toEqual([SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY]);
+    expect(result.inputs.map((input) => input.sourceMediaKey)).toEqual(['main-1']);
+  });
+
+  it('rejects stale draft pointers and expected versions', async () => {
+    const service = createAiMediaContextService(listingClient() as never);
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      expectedRevision: 3, expectedDraftVersion: 2,
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      expectedRevision: 4, expectedDraftVersion: 1,
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+
+    const stale = listingClient({ draft: { sourceCaptureHash: 'c'.repeat(64) } });
+    await expect(createAiMediaContextService(stale as never).loadListingDraft(
+      'owner-1', 'draft-1',
+    )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+  });
+
+  it.each([
+    ['workflow revision', () => listingClient({ workflow: { currentRevision: 5 } })],
+    ['workflow draft version', () => listingClient({ workflow: { currentDraftVersion: 3 } })],
+    ['draft row revision', () => listingClient({ currentDraft: { revision: 3 } })],
+    ['draft payload revision', () => listingClient({ draft: { revision: 3 } })],
+    ['workflow snapshot pointer', () => listingClient({
+      workflow: { currentSourceCaptureSnapshotId: 'snapshot-old' },
+    })],
+    ['draft row snapshot pointer', () => listingClient({
+      currentDraft: { sourceCaptureSnapshotId: 'snapshot-old' },
+    })],
+    ['draft payload snapshot pointer', () => listingClient({
+      draft: { sourceCaptureSnapshotId: 'snapshot-old' },
+    })],
+    ['snapshot subject owner', () => listingClient({
+      snapshot: { subject: { ownerUserId: 'owner-2' } },
+    })],
+    ['snapshot subject identity', () => listingClient({
+      snapshot: { subjectId: 'subject-2' },
+    })],
+  ])('rejects stale %s authority', async (_name, database) => {
+    await expect(createAiMediaContextService(database() as never).loadListingDraft(
+      'owner-1', 'draft-1',
+    )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+  });
+
+  it('requires stored selected SKU keys to remain canonical', async () => {
+    const database = listingClient({ draft: { selectedSkuKeys: ['red-source'] } });
+    await expect(createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1',
+    )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+  });
+
+  it('resolves exactly one product slot and one SKU slot', async () => {
+    const service = createAiMediaContextService(listingClient() as never);
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      slotKey: 'main-1',
+    })).resolves.toMatchObject({ target: {
+      skuKey: null, slotKey: 'main-1', assignedAssetId: 'asset-1',
+    } });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      skuKey: 'sku-red', slotKey: 'sku-hero',
+    })).resolves.toMatchObject({ target: {
+      skuKey: 'sku-red', slotKey: 'sku-hero', assignedAssetId: 'asset-red',
+    } });
+  });
+
+  it('allows exact empty product and SKU slots but rejects an occupied slot from another scope', async () => {
+    const service = createAiMediaContextService(listingClient() as never);
+    await expect(service.loadListingDraft('owner-1', 'draft-1', { slotKey: 'missing' }))
+      .resolves.toMatchObject({ target: {
+        skuKey: null, slotKey: 'missing', assignedAssetId: null,
+      } });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      skuKey: 'sku-red', slotKey: 'sku-gallery-2',
+    })).resolves.toMatchObject({ target: {
+      skuKey: 'sku-red', slotKey: 'sku-gallery-2', assignedAssetId: null,
+    } });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', { slotKey: 'sku-hero' }))
+      .rejects.toMatchObject({ code: 'AI_MEDIA_CONTEXT_MISMATCH', statusCode: 409 });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      skuKey: 'sku-red', slotKey: 'main-1',
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_CONTEXT_MISMATCH', statusCode: 409 });
+  });
+
+  it('rejects duplicate stored slots but permits a fresh draft to freeze an empty target slot', async () => {
+    const duplicate = listingClient({ draft: { media: { assignments: [
+      { scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku-hero', assetId: 'asset-red', source: 'SOURCE' },
+      { scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku-hero', assetId: 'asset-red-2', source: 'SOURCE' },
+    ] } } });
+    await expect(createAiMediaContextService(duplicate as never).loadListingDraft(
+      'owner-1', 'draft-1', { skuKey: 'sku-red', slotKey: 'sku-hero' },
+    )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+
+    const fresh = listingClient({ draft: { media: { assignments: [] } } });
+    await expect(createAiMediaContextService(fresh as never).loadListingDraft(
+      'owner-1', 'draft-1', { slotKey: 'main-1' },
+    )).resolves.toMatchObject({ target: {
+      skuKey: null, slotKey: 'main-1', assignedAssetId: null,
+    } });
+  });
+
+  it('fails closed instead of truncating an oversized listing media context', async () => {
+    const media = Array.from({ length: AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS + 1 }, (_, index) => ({
+      key: `main-${String(index).padStart(3, '0')}`,
+      ordinal: index,
+      kind: 'image',
+      disposition: 'accepted',
+      role: 'product_detail',
+      skuKeys: [],
+      url: `https://source.example/main-${index}.jpg`,
+    }));
+    const database = listingClient({ capture: { media } });
+
+    await expect(createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1', { expectedRevision: 4, expectedDraftVersion: 2 },
+    )).rejects.toMatchObject({
+      code: 'AI_MEDIA_CONTEXT_LIMIT_EXCEEDED', statusCode: 413,
+    });
+    expect(database.mediaAsset.findMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps the exact listing media input limit in capture order', async () => {
+    const media = Array.from({ length: AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS }, (_, index) => ({
+      key: `main-${String(index).padStart(3, '0')}`,
+      ordinal: index,
+      kind: 'image',
+      disposition: 'accepted',
+      role: 'product_detail',
+      skuKeys: [],
+      url: `https://source.example/main-${index}.jpg`,
+    }));
+    const database = listingClient({ capture: { media } });
+
+    const result = await createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1', { expectedRevision: 4, expectedDraftVersion: 2 },
+    );
+
+    expect(result.inputs).toHaveLength(AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS);
+    expect(result.inputs.map((input) => input.sourceMediaKey)).toEqual(media.map((item) => item.key));
+  });
+
+  it('keeps listing assets snapshot-bound and deterministic across storage copies', async () => {
+    const editKey = `ai-edit-source:v1:${createHash('sha256').update('main-1').digest('hex')}`;
+    const database = listingClient({ assets: [
+      editReadyAsset({ id: 'zz-direct', sourceMediaKey: 'main-1', metadata: {} }),
+      editReadyAsset({ id: 'bb-edit', sourceMediaKey: editKey }),
+      editReadyAsset({ id: 'aa-edit', sourceMediaKey: editKey }),
+      editReadyAsset({
+        id: 'local-edit', sourceMediaKey: editKey, storageBackend: 'local',
+        url: 'http://localhost/edit.jpg', storageKey: 'raw/edit.jpg',
+      }),
+    ] });
+
+    const result = await createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1', { skuKey: 'sku-red' },
+    );
+
+    expect(result.inputs[0]).toMatchObject({
+      sourceMediaKey: 'main-1', assetId: 'aa-edit', editReady: true,
+      compatibleAssetIds: ['aa-edit', 'bb-edit', 'zz-direct', 'local-edit'],
+    });
+    expect(database.mediaAsset.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', kind: 'SOURCE_ORIGINAL',
+      }),
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    }));
+  });
+
+  it('does not bind a same-key asset whose source URL differs from the frozen capture', async () => {
+    const database = listingClient({ assets: [editReadyAsset({
+      id: 'wrong-url', sourceMediaKey: 'main-1', sourceUrl: 'https://other.example/main.jpg',
+    })] });
+
+    const result = await createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1', { skuKey: 'sku-red' },
+    );
+
+    expect(result.inputs.find((input) => input.sourceMediaKey === 'main-1')).toMatchObject({
+      assetId: null, compatibleAssetIds: [],
+    });
+  });
+
+  it('rejects a draft assignment whose asset is not bound to the current snapshot', async () => {
+    const database = listingClient({ assignmentAssets: [
+      editReadyAsset({ id: 'asset-1', sourceCaptureSnapshotId: 'snapshot-old' }),
+      editReadyAsset({ id: 'asset-red', sourceCaptureSnapshotId: 'snapshot-old' }),
+    ] });
+
+    await expect(createAiMediaContextService(database as never).loadListingDraft(
+      'owner-1', 'draft-1',
+    )).rejects.toMatchObject({ code: 'STALE_MEDIA_CONTEXT', statusCode: 409 });
+  });
+
+  it('rejects cross-owner, unselected-SKU, and mismatched slot access', async () => {
+    const service = createAiMediaContextService(listingClient() as never);
+    await expect(service.loadListingDraft('owner-2', 'draft-1'))
+      .rejects.toMatchObject({ code: 'AI_MEDIA_CONTEXT_NOT_FOUND', statusCode: 404 });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', { skuKey: 'sku-blue' }))
+      .rejects.toMatchObject({ code: 'AI_MEDIA_CONTEXT_MISMATCH', statusCode: 409 });
+    await expect(service.loadListingDraft('owner-1', 'draft-1', {
+      skuKey: 'sku-red', slotKey: 'main-1',
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_CONTEXT_MISMATCH', statusCode: 409 });
   });
 });

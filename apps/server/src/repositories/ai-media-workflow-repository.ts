@@ -28,6 +28,11 @@ import {
   isAiMediaEditReadyCandidateAsset,
   isAiMediaEditReadySourceAsset,
 } from '../services/ai-image-edit-source.js';
+import {
+  AiMediaContextError,
+  createAiMediaContextService,
+  type AiMediaListingDraftContextScope,
+} from '../services/ai-media-context.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
   releaseAiCostInTransaction,
@@ -61,6 +66,137 @@ function eventData(input: {
 }) {
   const payload = input.payload || {};
   return { ...input, payload, payloadHash: aiMediaPayloadHash(payload) };
+}
+
+async function assertListingDraftContextAssets(
+  tx: any,
+  input: {
+    ownerUserId: string;
+    context: Extract<CreateAiMediaWorkflowInput['context'], { type: 'listing-draft' }>;
+    assets: Array<{ id: string; sourceCaptureSnapshotId: string | null; sourceMediaKey?: string | null }>;
+  },
+) {
+  const scope: AiMediaListingDraftContextScope = {
+    expectedRevision: input.context.revision,
+    expectedDraftVersion: input.context.draftVersion,
+    skuKey: input.context.skuKey,
+    slotKey: input.context.slotKey,
+  };
+  const context = await createAiMediaContextService(tx as any).loadListingDraft(
+    input.ownerUserId,
+    input.context.id,
+    scope,
+  );
+  const allowedAssetIds = new Set(context.inputs.flatMap((item) => [
+    item.assetId,
+    ...(Array.isArray(item.compatibleAssetIds) ? item.compatibleAssetIds : []),
+  ]).filter((id): id is string => Boolean(id)));
+  if (!input.assets.length || input.assets.some((asset) => (
+    !allowedAssetIds.has(asset.id)
+    || asset.sourceCaptureSnapshotId !== context.snapshot.id
+  ))) {
+    throw Object.assign(new Error('Source asset does not belong to the current listing draft context'), {
+      code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    });
+  }
+  return context;
+}
+
+async function assertListingDraftEditSource(
+  tx: any,
+  input: {
+    ownerUserId: string;
+    context: Extract<CreateAiMediaWorkflowInput['context'], { type: 'listing-draft' }>;
+    source: FrozenEditAsset;
+  },
+) {
+  if (input.source.kind === 'SOURCE_ORIGINAL') {
+    return assertListingDraftContextAssets(tx, {
+      ownerUserId: input.ownerUserId,
+      context: input.context,
+      assets: [input.source],
+    });
+  }
+  const context = await createAiMediaContextService(tx as any).loadListingDraft(
+    input.ownerUserId,
+    input.context.id,
+    {
+      expectedRevision: input.context.revision,
+      expectedDraftVersion: input.context.draftVersion,
+      skuKey: input.context.skuKey,
+      slotKey: input.context.slotKey,
+    },
+  );
+  if (!isAiMediaEditInputFromContext(input.source, {
+    ownerUserId: input.ownerUserId,
+    contextType: 'listing-draft',
+    contextId: input.context.id,
+    contextSkuKey: input.context.skuKey,
+    contextSlotKey: input.context.slotKey,
+    contextDraftRevision: input.context.revision,
+    contextDraftVersion: input.context.draftVersion,
+    sourceCaptureSnapshotId: context.snapshot.id,
+  })) {
+    throw Object.assign(new Error('Edit candidate does not belong to the current listing draft context'), {
+      code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    });
+  }
+  return context;
+}
+
+async function assertCollectContextAssets(
+  tx: any,
+  ownerUserId: string,
+  contextId: string,
+  assets: Array<{ sourceCaptureSnapshotId: string | null }>,
+) {
+  const context = await tx.supplyGoods.findFirst({
+    where: { id: contextId, userId: ownerUserId },
+    select: {
+      id: true,
+      sourceCaptureSubject: {
+        select: {
+          snapshots: {
+            orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+            take: 1,
+            select: { id: true },
+          },
+        },
+      },
+    },
+  });
+  const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id;
+  if (!context || assets.some((asset) => asset.sourceCaptureSnapshotId !== snapshotId)) {
+    throw Object.assign(new Error('Source asset does not belong to the requested collect context'), {
+      code: 'AI_MEDIA_CONTEXT_MISMATCH',
+    });
+  }
+  return snapshotId;
+}
+
+function contextDraftVersionData(context: CreateAiMediaWorkflowInput['context']) {
+  return context.type === 'listing-draft'
+    ? {
+      contextDraftRevision: context.revision,
+      contextDraftVersion: context.draftVersion,
+    }
+    : {
+      contextDraftRevision: null,
+      contextDraftVersion: null,
+    };
+}
+
+function imageToImageFingerprintFromFrozenInputs(
+  input: CreateAiMediaWorkflowInput,
+  frozenInputs: Array<{ assetSha256?: string | null }>,
+) {
+  const hashes = frozenInputs.map((row) => row.assetSha256 || null);
+  return aiMediaPayloadHash({
+    request: createAiMediaWorkflowFingerprint(input),
+    ...(input.references
+      ? { referenceAssetSha256: hashes }
+      : { sourceAssetSha256: hashes[0] || null }),
+  });
 }
 
 const applicationSummarySelect = {
@@ -116,7 +252,29 @@ const historyInclude = {
 } as const;
 
 async function assertWorkflowSourceSnapshotCurrent(tx: any, workflow: any) {
-  if (workflow?.contextType !== 'collect' || !workflow.contextId) return;
+  if (!workflow?.contextId || !['collect', 'listing-draft'].includes(String(workflow.contextType))) return;
+  let listingSnapshotId: string | null = null;
+  if (workflow.contextType === 'listing-draft') {
+    try {
+      const listingContext = await createAiMediaContextService(tx as any).loadListingDraft(
+        workflow.ownerUserId,
+        workflow.contextId,
+        {
+          expectedRevision: workflow.contextDraftRevision,
+          expectedDraftVersion: workflow.contextDraftVersion,
+          skuKey: workflow.contextSkuKey,
+          slotKey: workflow.contextSlotKey,
+        },
+      );
+      listingSnapshotId = listingContext.snapshot.id;
+    } catch (error: any) {
+      if (!(error instanceof AiMediaContextError)) throw error;
+      throw Object.assign(new Error('The listing draft changed; review and generate a new candidate'), {
+        code: 'STALE_MEDIA_WORKFLOW',
+        cause: error,
+      });
+    }
+  }
   const inputSnapshotIds = Array.isArray(workflow.inputs)
     ? workflow.inputs.map((input: any) => String(input.asset?.sourceCaptureSnapshotId || '').trim())
     : [];
@@ -124,6 +282,15 @@ async function assertWorkflowSourceSnapshotCurrent(tx: any, workflow: any) {
     throw Object.assign(new Error('The workflow source snapshot is no longer available'), {
       code: 'STALE_MEDIA_WORKFLOW',
     });
+  }
+  if (workflow.contextType === 'listing-draft') {
+    const currentSnapshotId = String(listingSnapshotId || '').trim();
+    if (!currentSnapshotId || inputSnapshotIds.some((id: string) => id !== currentSnapshotId)) {
+      throw Object.assign(new Error('The listing draft source snapshot is no longer available'), {
+        code: 'STALE_MEDIA_WORKFLOW',
+      });
+    }
+    return;
   }
   const context = await tx.supplyGoods.findFirst({
     where: { id: workflow.contextId, userId: workflow.ownerUserId },
@@ -277,6 +444,44 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const references = normalizeAiMediaWorkflowReferences(input);
+      const existingBeforeAuthority = typeof tx.aiMediaWorkflow?.findUnique === 'function'
+        ? await tx.aiMediaWorkflow.findUnique({
+          where: { ai_media_workflow_owner_idempotency: {
+            ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
+          } },
+          include: detailInclude,
+        })
+        : null;
+      if (existingBeforeAuthority) {
+        let frozenInputs = Array.isArray(existingBeforeAuthority.inputs)
+          ? existingBeforeAuthority.inputs
+          : [];
+        if (!frozenInputs.length && typeof tx.mediaAsset?.findMany === 'function') {
+          const frozenRows = await tx.mediaAsset.findMany({
+            where: {
+              id: { in: references.map((reference) => reference.assetId) },
+              ownerUserId: input.ownerUserId,
+              kind: 'SOURCE_ORIGINAL',
+            },
+          });
+          const frozenAssets = orderSourceAssets(frozenRows as FrozenSourceAsset[], references);
+          if (frozenAssets) {
+            frozenInputs = frozenAssets.map((asset) => ({ assetSha256: asset.sha256 }));
+          }
+        }
+        const fingerprint = imageToImageFingerprintFromFrozenInputs(
+          input,
+          frozenInputs,
+        );
+        const jobId = String(existingBeforeAuthority.jobs?.[existingBeforeAuthority.jobs.length - 1]?.id || '');
+        return {
+          kind: existingBeforeAuthority.requestFingerprint === fingerprint
+            ? 'existing' as const
+            : 'conflict' as const,
+          workflow: workflowRecord(existingBeforeAuthority),
+          jobId,
+        };
+      }
       const assetRows = await tx.mediaAsset.findMany({
         where: {
           id: { in: references.map((reference) => reference.assetId) },
@@ -295,17 +500,19 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       if (new Set(assets.map((asset) => asset.sha256)).size !== assets.length) {
         throw Object.assign(new Error('Source references must have unique content'), { code: 'SOURCE_ASSET_DUPLICATE' });
       }
-      const context = await tx.supplyGoods.findFirst({
-        where: { id: input.context.id, userId: input.ownerUserId },
-        select: { id: true, sourceCaptureSubject: { select: {
-          snapshots: { orderBy: [{ version: 'desc' }, { createdAt: 'desc' }], take: 1, select: { id: true } },
-        } } },
-      });
-      const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id;
-      if (!context || assets.some((asset) => asset.sourceCaptureSnapshotId !== snapshotId)) {
-        throw Object.assign(new Error('Source asset does not belong to the requested collect context'), {
-          code: 'AI_MEDIA_CONTEXT_MISMATCH',
+      if (input.context.type === 'listing-draft') {
+        await assertListingDraftContextAssets(tx, {
+          ownerUserId: input.ownerUserId,
+          context: input.context,
+          assets,
         });
+      } else {
+        await assertCollectContextAssets(
+          tx,
+          input.ownerUserId,
+          input.context.id,
+          assets,
+        );
       }
       const fingerprint = aiMediaPayloadHash({
         request: createAiMediaWorkflowFingerprint(input),
@@ -313,19 +520,6 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           ? { referenceAssetSha256: assets.map((asset) => asset.sha256) }
           : { sourceAssetSha256: primaryAsset.sha256 }),
       });
-      const existing = await tx.aiMediaWorkflow.findUnique({
-        where: { ai_media_workflow_owner_idempotency: {
-          ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
-        } },
-        include: detailInclude,
-      });
-      if (existing) {
-        const jobId = String(existing.jobs?.[existing.jobs.length - 1]?.id || '');
-        return {
-          kind: existing.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
-          workflow: workflowRecord(existing), jobId,
-        };
-      }
       const workflow = await tx.aiMediaWorkflow.create({ data: {
         ownerUserId: input.ownerUserId,
         actorUserId: input.actorUserId,
@@ -338,6 +532,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         contextId: input.context.id,
         contextSkuKey: input.context.skuKey || null,
         contextSlotKey: input.context.slotKey || null,
+        ...contextDraftVersionData(input.context),
       } });
       for (const [ordinal, asset] of assets.entries()) {
         await tx.aiMediaWorkflowInput.create({ data: {
@@ -402,31 +597,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       });
     } catch (error: any) {
       if (error?.code !== 'P2002') throw error;
-      const references = normalizeAiMediaWorkflowReferences(input);
-      const [assetRows, existing] = await Promise.all([
-        (this.prisma as any).mediaAsset.findMany({
-          where: {
-            id: { in: references.map((reference) => reference.assetId) },
-            ownerUserId: input.ownerUserId,
-            kind: 'SOURCE_ORIGINAL',
-          },
-        }),
-        (this.prisma as any).aiMediaWorkflow.findUnique({
+      const existing = await (this.prisma as any).aiMediaWorkflow.findUnique({
           where: { ai_media_workflow_owner_idempotency: {
             ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
           } },
           include: detailInclude,
-        }),
-      ]);
-      const assets = orderSourceAssets(assetRows as FrozenSourceAsset[], references);
-      if (!assets || !existing) throw error;
-      const primaryAsset = assets[0]!;
-      const fingerprint = aiMediaPayloadHash({
-        request: createAiMediaWorkflowFingerprint(input),
-        ...(input.references
-          ? { referenceAssetSha256: assets.map((asset) => asset.sha256) }
-          : { sourceAssetSha256: primaryAsset.sha256 }),
       });
+      if (!existing) throw error;
+      const fingerprint = imageToImageFingerprintFromFrozenInputs(input, existing.inputs || []);
       const jobId = String(existing.jobs?.[existing.jobs.length - 1]?.id || '');
       return {
         kind: existing.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
@@ -465,6 +643,19 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         const maskMetadata = mask!.metadata && typeof mask!.metadata === 'object'
           ? mask!.metadata as Record<string, unknown>
           : {};
+        const maskContextMatches = input.context.type === 'listing-draft'
+          ? maskMetadata.contextType === 'listing-draft'
+            && maskMetadata.contextId === input.context.id
+            && maskMetadata.contextDraftRevision === input.context.revision
+            && maskMetadata.contextDraftVersion === input.context.draftVersion
+            && (maskMetadata.contextSkuKey ?? null) === (input.context.skuKey ?? null)
+            && (maskMetadata.contextSlotKey ?? null) === (input.context.slotKey ?? null)
+          : maskMetadata.contextType == null || (
+            maskMetadata.contextType === 'collect'
+            && maskMetadata.contextId === input.context.id
+            && (maskMetadata.contextSkuKey ?? null) === (input.context.skuKey ?? null)
+            && (maskMetadata.contextSlotKey ?? null) === (input.context.slotKey ?? null)
+          );
         if (
           mask!.sourceCaptureSnapshotId !== source!.sourceCaptureSnapshotId
           || mask!.width !== source!.width
@@ -472,6 +663,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           || maskMetadata.maskSemantics !== AI_IMAGE_EDIT_MASK_SEMANTICS
           || maskMetadata.sourceAssetId !== source!.id
           || maskMetadata.sourceSha256 !== source!.sha256
+          || !maskContextMatches
         ) {
           throw Object.assign(new Error('Edit mask does not match the frozen source contract'), {
             code: 'MASK_ASSET_INVALID',
@@ -497,27 +689,38 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         }
         const loaded = await loadAssets(tx);
         const { source, mask } = assertAssets(loaded.source, loaded.mask);
-        const context = await tx.supplyGoods.findFirst({
-          where: { id: input.context.id, userId: input.ownerUserId },
-          select: { id: true, sourceCaptureSubject: { select: {
-            snapshots: {
-              orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
-              take: 1,
-              select: { id: true },
-            },
-          } } },
-        });
-        const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id || null;
-        if (!context || !snapshotId || !isAiMediaEditInputFromContext(source, {
-          ownerUserId: input.ownerUserId,
-          contextId: input.context.id,
-          contextSkuKey: input.context.skuKey,
-          contextSlotKey: input.context.slotKey,
-          sourceCaptureSnapshotId: snapshotId,
-        })) {
-          throw Object.assign(new Error('Source asset does not belong to the current collect context'), {
-            code: 'AI_MEDIA_CONTEXT_MISMATCH',
+        let snapshotId: string | null = null;
+        if (input.context.type === 'listing-draft') {
+          const context = await assertListingDraftEditSource(tx, {
+            ownerUserId: input.ownerUserId,
+            context: input.context,
+            source,
           });
+          snapshotId = context.snapshot.id;
+        } else {
+          const context = await tx.supplyGoods.findFirst({
+            where: { id: input.context.id, userId: input.ownerUserId },
+            select: { id: true, sourceCaptureSubject: { select: {
+              snapshots: {
+                orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+                take: 1,
+                select: { id: true },
+              },
+            } } },
+          });
+          snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id || null;
+          if (!context || !snapshotId || !isAiMediaEditInputFromContext(source, {
+            ownerUserId: input.ownerUserId,
+            contextType: 'collect',
+            contextId: input.context.id,
+            contextSkuKey: input.context.skuKey,
+            contextSlotKey: input.context.slotKey,
+            sourceCaptureSnapshotId: snapshotId,
+          })) {
+            throw Object.assign(new Error('Source asset does not belong to the current collect context'), {
+              code: 'AI_MEDIA_CONTEXT_MISMATCH',
+            });
+          }
         }
         const fingerprint = editRequestFingerprint(input, source, mask);
         await assertImageEditDailyQuota(tx, input.ownerUserId, input.dailyLimit);
@@ -534,6 +737,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           contextId: input.context.id,
           contextSkuKey: input.context.skuKey || null,
           contextSlotKey: input.context.slotKey || null,
+          ...contextDraftVersionData(input.context),
         } });
         const frozenInputs = [
           { asset: source, role: 'REFERENCE' as const },
@@ -555,6 +759,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         }
         const operationConfig = {
           policyVersion: AI_IMAGE_EDIT_POLICY_VERSION,
+          contextType: input.context.type,
+          contextId: input.context.id,
+          contextSkuKey: input.context.skuKey || null,
+          contextSlotKey: input.context.slotKey || null,
+          ...(input.context.type === 'listing-draft' ? {
+            contextDraftRevision: input.context.revision,
+            contextDraftVersion: input.context.draftVersion,
+          } : {}),
           sourceAssetSha256: source.sha256,
           ...(mask ? {
             maskAssetSha256: mask.sha256,
@@ -682,17 +894,19 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         if (!/^[a-f0-9]{64}$/u.test(String(asset.sha256 || ''))) {
           throw Object.assign(new Error('Source asset has no immutable content hash'), { code: 'SOURCE_ASSET_INVALID' });
         }
-        const context = await tx.supplyGoods.findFirst({
-          where: { id: input.context.id, userId: input.ownerUserId },
-          select: { id: true, sourceCaptureSubject: { select: {
-            snapshots: { orderBy: [{ version: 'desc' }, { createdAt: 'desc' }], take: 1, select: { id: true } },
-          } } },
-        });
-        const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id;
-        if (!context || asset.sourceCaptureSnapshotId !== snapshotId) {
-          throw Object.assign(new Error('Source asset does not belong to the requested collect context'), {
-            code: 'AI_MEDIA_CONTEXT_MISMATCH',
+        if (input.context.type === 'listing-draft') {
+          await assertListingDraftContextAssets(tx, {
+            ownerUserId: input.ownerUserId,
+            context: input.context,
+            assets,
           });
+        } else {
+          await assertCollectContextAssets(
+            tx,
+            input.ownerUserId,
+            input.context.id,
+            assets,
+          );
         }
         const fingerprint = fingerprintForSha(assets[0]?.sha256);
         const existing = await tx.aiMediaWorkflow.findUnique({
@@ -748,6 +962,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           contextId: input.context.id,
           contextSkuKey: input.context.skuKey || null,
           contextSlotKey: input.context.slotKey || null,
+          ...contextDraftVersionData(input.context),
         } });
         await tx.aiMediaWorkflowInput.create({ data: {
           workflowId: workflow.id,
@@ -778,7 +993,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           templateReleaseId: input.templateReleaseId || null,
           templateChecksum: input.templateChecksum || null,
           templateSnapshot: input.templateSnapshot || undefined,
-          operationConfig: input.options,
+          operationConfig: {
+            ...input.options,
+            contextType: input.context.type,
+            contextId: input.context.id,
+            contextSkuKey: input.context.skuKey || null,
+            contextSlotKey: input.context.slotKey || null,
+            ...contextDraftVersionData(input.context),
+          },
           requestedImageCount: 1,
           width: asset.width || 1024,
           height: asset.height || 1024,
