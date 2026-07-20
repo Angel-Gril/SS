@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AI_IMAGE_EDIT_MODEL,
+  AI_IMAGE_EDIT_PROVIDER,
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
   AI_IMAGE_PROVIDER_CAPABILITIES,
@@ -44,6 +46,94 @@ describe('AI image provider capability matrix', () => {
       'IMAGE_TO_IMAGE',
       5,
     )).toBe(true);
+  });
+
+  it('requires the exact reference and mask shape for fake edit operations', () => {
+    expect(resolveAiImageProviderCapability(AI_IMAGE_EDIT_PROVIDER, AI_IMAGE_EDIT_MODEL)).toMatchObject({
+      provider: 'fake',
+      model: 'fake-image-edit-v1',
+      operations: ['FULL_EDIT', 'INPAINT'],
+      maxReferences: 1,
+      supportsMask: true,
+      evidenceLevel: 'local-test',
+    });
+
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'FULL_EDIT',
+      1,
+      0,
+    )).toBe(true);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'FULL_EDIT',
+      1,
+      1,
+    )).toBe(false);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'INPAINT',
+      1,
+      1,
+    )).toBe(true);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'INPAINT',
+      1,
+      true,
+    )).toBe(true);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'INPAINT',
+      1,
+      0,
+    )).toBe(false);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_EDIT_PROVIDER,
+      AI_IMAGE_EDIT_MODEL,
+      'INPAINT',
+      1,
+      2,
+    )).toBe(false);
+
+    expect(() => assertAiMediaCapability({
+      provider: AI_IMAGE_EDIT_PROVIDER,
+      model: AI_IMAGE_EDIT_MODEL,
+      operation: 'INPAINT',
+      inputCount: 1,
+      maskCount: 1,
+    })).not.toThrow();
+    expect(() => assertAiMediaCapability({
+      provider: AI_IMAGE_EDIT_PROVIDER,
+      model: AI_IMAGE_EDIT_MODEL,
+      operation: 'INPAINT',
+      inputCount: 1,
+      hasMask: true,
+    })).not.toThrow();
+    expect(() => assertAiMediaCapability({
+      provider: AI_IMAGE_EDIT_PROVIDER,
+      model: AI_IMAGE_EDIT_MODEL,
+      operation: 'FULL_EDIT',
+      inputCount: 1,
+      maskCount: 1,
+    })).toThrow(expect.objectContaining({ code: 'INVALID_MEDIA_INPUT' }));
+    expect(supportsAiMediaOperation('fake', 'test', 'FULL_EDIT', 1, 0)).toBe(false);
+  });
+
+  it('keeps every real provider fail-closed for edit and inpaint', () => {
+    for (const [provider, model] of [
+      ['dashscope-wanx', 'wanx2.1-t2i-turbo'],
+      ['dashscope-qwen-mt-image', 'qwen-mt-image'],
+      ['openai-images', 'gpt-image-1'],
+    ] as const) {
+      expect(supportsAiMediaOperation(provider, model, 'FULL_EDIT', 1, 0)).toBe(false);
+      expect(supportsAiMediaOperation(provider, model, 'INPAINT', 1, 1)).toBe(false);
+    }
   });
 
   it('preserves typed capability failure reasons', () => {

@@ -40,6 +40,7 @@ export class AiImageApplicationError extends Error {
 
 interface GeneratedAssetRow {
   id?: string;
+  kind?: string;
   ownerUserId: string;
   aiImageJobId: string | null;
   url: string;
@@ -57,6 +58,8 @@ interface AiImageJobRow {
   workflow?: {
     contextType: string | null;
     contextId: string | null;
+    reviewStatus?: string | null;
+    selectedOutputAssetId?: string | null;
     inputs: Array<{ asset?: { sourceCaptureSnapshotId: string | null } | null }>;
   } | null;
 }
@@ -94,9 +97,10 @@ export interface AiImageApplicationDatabase {
 }
 
 function generatedUrls(job: AiImageJobRow, ownerUserId: string, selectedAssetId?: string | null): string[] {
+  const reviewable = job.assets.filter((asset) => asset.kind === 'AI_GENERATED');
   const selected = selectedAssetId
-    ? job.assets.filter((asset) => asset.id === selectedAssetId)
-    : job.assets;
+    ? reviewable.filter((asset) => asset.id === selectedAssetId)
+    : reviewable;
   if (!selected.length) {
     throw new AiImageApplicationError('INVALID_ASSETS', 'AI image job has no generated assets');
   }
@@ -271,6 +275,24 @@ export async function applyAiImageAssets(
         'UNSAFE_APPLY_MODE',
         'Image translation candidates can only be appended to existing product images',
       );
+    }
+    if (job.operation === 'FULL_EDIT' || job.operation === 'INPAINT') {
+      if (input.mode !== 'append') {
+        throw new AiImageApplicationError(
+          'UNSAFE_APPLY_MODE',
+          'Manual edit candidates can only be appended; originals are immutable',
+        );
+      }
+      if (
+        job.workflow?.reviewStatus !== 'APPROVED'
+        || !input.selectedAssetId
+        || job.workflow?.selectedOutputAssetId !== input.selectedAssetId
+      ) {
+        throw new AiImageApplicationError(
+          'INVALID_STATE',
+          'Manual edit application requires the explicitly approved final candidate',
+        );
+      }
     }
     if (job.status !== 'SUCCEEDED') {
       throw new AiImageApplicationError('INVALID_STATE', 'Only succeeded jobs can be applied');

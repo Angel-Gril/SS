@@ -40,6 +40,8 @@ try {
         in: [
           'feature_ai_media_workflow_v2',
           'feature_ai_media_suite',
+          'feature_ai_media_full_edit',
+          'feature_ai_media_inpaint',
           'feature_source_listing_web_media',
           'ai_media_workflow_v2_rollout_policy',
         ],

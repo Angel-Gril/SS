@@ -15,6 +15,7 @@ import { startListingTaskRefreshWorker } from './workers/listing-task-refresh.js
 import { startBrowserOneClickListingWorker } from './workers/browser-one-click-listing.js';
 import { startAiImageGenerationWorker } from './workers/ai-image-generation.js';
 import { startAiImageTranslationWorker } from './workers/ai-image-translation.js';
+import { startAiImageEditWorker } from './workers/ai-image-edit.js';
 import { startAiImageSuiteGenerationWorker } from './workers/ai-image-suite-generation.js';
 import { prisma } from './lib/prisma.js';
 import { PrismaAiImageSuiteGenerationCoordinator } from './repositories/ai-image-suite-execution-repository.js';
@@ -31,6 +32,7 @@ startListingTaskRefreshWorker();
 startBrowserOneClickListingWorker();
 startAiImageGenerationWorker();
 startAiImageTranslationWorker();
+startAiImageEditWorker();
 startAiImageSuiteGenerationWorker(new PrismaAiImageSuiteGenerationCoordinator(prisma));
 startProductSyncWorker();
 startOrderSyncWorker();

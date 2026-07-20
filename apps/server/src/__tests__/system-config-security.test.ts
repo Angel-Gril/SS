@@ -48,15 +48,26 @@ describe('SystemConfig sensitive storage', () => {
   });
 
   it('encrypts AI provider API keys and exposes safe disabled defaults', async () => {
-    const { getConfig, setConfig } = await import('../config/system-config-schema.js');
+    const { getConfig, setConfig, SystemConfigMeta } = await import('../config/system-config-schema.js');
 
     await expect(getConfig('ai_provider')).resolves.toBe('disabled');
     await expect(getConfig('ai_category_translation_enabled')).resolves.toBe(false);
     await expect(getConfig('ai_product_generation_enabled')).resolves.toBe(false);
     await expect(getConfig('ai_user_daily_product_generation_limit')).resolves.toBe(20);
     await expect(getConfig('feature_image_translate')).resolves.toBe(false);
+    await expect(getConfig('feature_ai_media_full_edit')).resolves.toBe(false);
+    await expect(getConfig('feature_ai_media_inpaint')).resolves.toBe(false);
     await expect(getConfig('ai_image_translation_provider')).resolves.toBe('disabled');
     await expect(getConfig('ai_image_translation_model')).resolves.toBe('qwen-mt-image');
+    expect(SystemConfigMeta.feature_ai_media_full_edit).toMatchObject({ group: 'feature' });
+    expect(SystemConfigMeta.feature_ai_media_inpaint).toMatchObject({ group: 'feature' });
+
+    await setConfig('feature_ai_media_full_edit', true);
+    await setConfig('feature_ai_media_inpaint', true);
+    expect(configStore.get('feature_ai_media_full_edit')).toBe('true');
+    expect(configStore.get('feature_ai_media_inpaint')).toBe('true');
+    await expect(getConfig('feature_ai_media_full_edit')).resolves.toBe(true);
+    await expect(getConfig('feature_ai_media_inpaint')).resolves.toBe(true);
 
     await setConfig('ai_api_key', 'ai-secret-token');
 

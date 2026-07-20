@@ -28,6 +28,9 @@ RUN apt-get update -y \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /prod/server ./
+COPY docker/migrate-and-verify-ai-media-dark.sh ./scripts/migrate-and-verify-ai-media-dark.sh
+COPY docker/verify-ai-media-dark.mjs ./scripts/verify-ai-media-dark.mjs
+COPY scripts/verify-ai-media-dark-policy.mjs ./scripts/verify-ai-media-dark-policy.mjs
 
 EXPOSE 3001
 CMD ["node", "dist/index.js"]

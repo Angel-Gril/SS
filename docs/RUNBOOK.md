@@ -412,6 +412,42 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
+### AI Media 暗态门禁（Unit 9C-A）
+
+Unit 9C-A 只交付 fake-only 后端 `FULL_EDIT` / `INPAINT` 契约。真实 Provider、Web/扩展 Mask 编辑器、候选图链式编辑和回滚 UI 尚未验收，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+
+```bash
+# app-dir 模式
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-ai-media-dark.sh
+
+# release/symlink 模式
+cd /opt/ss-erp/current
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-media-dark.sh
+```
+
+唯一通过结果以 `PASS AI Media rollout is dark` 开头，并确认 master、suite、fullEdit、inpaint、webMedia 均为 `false` 或 absent，rollout policy 的 `tenantIds` 为空。检查失败时：
+
+1. 不得切换 release，不得启动或重启 API/Worker，也不得用 `|| true` 忽略失败。
+2. 记录当前 `system_configs` 中相关 key、value、revision；确认没有批准中的试点租户。
+3. 通过受审计的管理员变更把以下开关恢复为 `false`，并把 policy 恢复为非负 revision 和空 `tenantIds`：
+   - `feature_ai_media_workflow_v2`
+   - `feature_ai_media_suite`
+   - `feature_ai_media_full_edit`
+   - `feature_ai_media_inpaint`
+   - `feature_source_listing_web_media`
+   - `ai_media_workflow_v2_rollout_policy={"revision":<non-negative>,"tenantIds":[]}`
+4. 重新运行暗态检查；只有通过后才允许恢复服务。若本次发布失败，保持数据库前向兼容并恢复上一版应用，不要回滚这些 additive migrations。
+
+三个 systemd 部署入口和 `deploy-compose.sh` / Compose migration wrapper 的 `MIGRATION_TIMEOUT` 均默认为 `20m`，格式必须是正整数加 `s`、`m` 或 `h`（例如 `900s`、`20m`、`1h`）。Linux 入口从进程环境读取；Compose 从对应 env 文件读取。超时会先向 Prisma 发送 TERM，并在 30 秒后强制结束。Compose 升级必须使用 `deploy-compose.sh`，由它先停止旧 API/Worker/Web，再执行 gate；不要用裸 `docker compose up -d`。可用以下命令确认一次性 gate 结果：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production logs migrate
+# staging 改用 docker-compose.staging.yml 和 .env.staging
+```
+
+超时或非零退出时 API/Worker 必须保持停止。若当前 migration 使用 `CREATE INDEX CONCURRENTLY`，超时也可能留下 invalid index；先执行本页“Prisma migration 失败”的 `pg_index` / `pg_get_indexdef` 检查，不得把重跑当作恢复策略。
+
 ## 服务器功能验收清单
 
 验证码未实现时，可以先把验证码相关检查视为已知缺口，其余项目必须给出明确通过/失败结果。
@@ -579,11 +615,65 @@ systemctl status ss-erp-worker
 ```
 
 ### Prisma migration 失败
+
+先停止 API/Worker 写入、完成数据库备份，并查看状态和失败日志。不要在没有核对实际数据库对象时把 migration 标记为已应用：
+
 ```bash
-cd /opt/ss-erp/apps/server
+cd /opt/ss-erp/current/apps/server   # app-dir 模式改为 /opt/ss-erp/app/apps/server
+set -a
+. ../../.env.staging
+set +a
 npx prisma migrate status
-npx prisma migrate resolve --applied <migration-name>  # 标记已应用
+
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT migration_name, started_at, finished_at, rolled_back_at, logs
+FROM "_prisma_migrations"
+WHERE migration_name = '20260720153000_bind_ai_image_edit_outputs';
+
+SELECT c.relname AS index_name,
+       i.indisvalid,
+       i.indisready,
+       pg_get_indexdef(i.indexrelid) AS index_definition
+FROM pg_index AS i
+JOIN pg_class AS c ON c.oid = i.indexrelid
+WHERE c.relname = 'media_assets_edit_output_job_kind_unique';
+SQL
 ```
+
+`20260720153000_bind_ai_image_edit_outputs` 使用 `CREATE UNIQUE INDEX CONCURRENTLY`。该命令失败时可能留下 `indisvalid=false` 的索引。**禁止直接执行** `prisma migrate resolve --applied 20260720153000_bind_ai_image_edit_outputs`；migration ledger 不能替代索引有效性和定义检查。
+
+预期索引定义必须同时满足：
+
+- `UNIQUE (ai_image_job_id, kind)`；
+- predicate 只覆盖 `AI_PROVIDER_OUTPUT`，以及 metadata 含 `providerOutputAssetId` 的 `AI_GENERATED`；
+- `indisvalid=true` 且 `indisready=true`。
+
+若索引不存在、无效，或 migration 已失败但留下了索引，保持 API/Worker 停止，并在独立语句中清理后重放。`DROP INDEX CONCURRENTLY` 不能放在 transaction block 中：
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c 'DROP INDEX CONCURRENTLY IF EXISTS "media_assets_edit_output_job_kind_unique";'
+
+npx prisma migrate resolve --rolled-back 20260720153000_bind_ai_image_edit_outputs
+npx prisma migrate deploy
+npx prisma migrate status
+```
+
+如果首次创建 unique index 是因重复数据失败，先查询并人工审计冲突记录，不要自动删除资产：
+
+```sql
+SELECT ai_image_job_id, kind, count(*)
+FROM media_assets
+WHERE ai_image_job_id IS NOT NULL
+  AND (
+    kind = 'AI_PROVIDER_OUTPUT'
+    OR (kind = 'AI_GENERATED' AND metadata->>'providerOutputAssetId' IS NOT NULL)
+  )
+GROUP BY ai_image_job_id, kind
+HAVING count(*) > 1;
+```
+
+重放后再次执行 `pg_index` / `pg_get_indexdef` 查询，确认有效性和 predicate 与 migration 文件完全一致；随后运行 `verify-ai-media-dark.sh`。两项都通过后才能恢复 API/Worker。若已存在有效但定义不同的同名索引，停止处理并升级审查，不能标记 applied 或自行改写 migration 历史。
 
 ## 维护模式
 

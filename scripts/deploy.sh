@@ -19,6 +19,7 @@ set -euo pipefail
 #   WORKER_SERVICE=ss-erp-worker
 #   HEALTH_URL=http://127.0.0.1:3001/ready
 #   KEEP_RELEASES=5
+#   MIGRATION_TIMEOUT=20m
 #   DEPLOY_ENV_PROFILE=cloud-r2   # optional: validate shared env before build
 #
 # Usage:
@@ -37,6 +38,7 @@ WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
+MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT:-20m}"
 DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
 
 log() { printf '[deploy] %s\n' "$*"; }
@@ -44,6 +46,9 @@ fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 if [ -z "$DEPLOY_HOST" ]; then
   fail "DEPLOY_HOST is required"
+fi
+if [[ ! "$MIGRATION_TIMEOUT" =~ ^[1-9][0-9]*[smh]$ ]]; then
+  fail "MIGRATION_TIMEOUT must be a positive duration ending in s, m, or h"
 fi
 
 SSH_ARGS=(-o BatchMode=yes)
@@ -70,7 +75,7 @@ log "Deploying release"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
   "$COMMIT_HASH" "$RELEASE_DIR" "$RELEASES_DIR" "$CURRENT_LINK" "$SHARED_DIR" "$ENV_FILE_NAME" \
   "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" "$HEALTH_URL" "$KEEP_RELEASES" "$(basename "$TARBALL")" \
-  "$DEPLOY_ENV_PROFILE" <<'REMOTE'
+  "$DEPLOY_ENV_PROFILE" "$MIGRATION_TIMEOUT" <<'REMOTE'
 set -euo pipefail
 
 COMMIT_HASH="$1"
@@ -86,6 +91,7 @@ HEALTH_URL="${10}"
 KEEP_RELEASES="${11}"
 TARBALL="${12}"
 DEPLOY_ENV_PROFILE="${13}"
+REQUESTED_MIGRATION_TIMEOUT="${14}"
 
 echo "[deploy] Preparing $RELEASE_DIR"
 mkdir -p "$RELEASE_DIR" "$SHARED_DIR"
@@ -110,6 +116,7 @@ set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE_NAME"
 set +a
+MIGRATION_TIMEOUT="$REQUESTED_MIGRATION_TIMEOUT"
 
 if [ -n "$DEPLOY_ENV_PROFILE" ]; then
   if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
@@ -142,8 +149,8 @@ restore_quiesced_services() {
   local status=$?
   trap - EXIT
   if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
-    echo "[deploy] Restoring current Worker/API after failed deploy"
-    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+    systemctl stop "$WORKER_SERVICE" "$API_SERVICE" || true
+    echo "[deploy] Worker/API remain stopped after failed migration or gate; operator recovery is required" >&2
   fi
   exit "$status"
 }
@@ -168,7 +175,7 @@ SERVICES_QUIESCED=1
 
 echo "[deploy] Migrating database"
 cd apps/server
-npx prisma migrate deploy
+timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" npx prisma migrate deploy
 cd "$RELEASE_DIR"
 
 if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
@@ -180,6 +187,9 @@ if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
   SKIP_HTTP_CHECK=1 \
   bash scripts/diagnose-runtime-env.sh
 fi
+
+echo "[deploy] Verifying AI Media rollout remains dark"
+DEPLOY_DIR="$RELEASE_DIR" ENV_FILE="$ENV_FILE_NAME" bash scripts/verify-ai-media-dark.sh
 
 echo "[deploy] Switching current symlink"
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"

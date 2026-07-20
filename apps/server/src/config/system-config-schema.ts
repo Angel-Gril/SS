@@ -32,6 +32,8 @@ export const SystemConfigSchema = {
   feature_source_network_capture: z.boolean().default(false),
   feature_ai_media_workflow_v2: z.boolean().default(false),
   feature_ai_media_suite: z.boolean().default(false),
+  feature_ai_media_full_edit: z.boolean().default(false),
+  feature_ai_media_inpaint: z.boolean().default(false),
   feature_ai_listing_copy_generation: z.boolean().default(false),
   ai_media_workflow_v2_rollout_policy: z.string().max(100000).default('{"revision":0,"tenantIds":[]}'),
   feature_source_listing_web_media: z.boolean().default(false),
@@ -337,6 +339,16 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: 'AI 商品套图生成',
     group: 'feature',
     description: '启用已审核图片计划的套图预览与认领；默认关闭，且仍受 AI 媒体租户策略约束',
+  },
+  feature_ai_media_full_edit: {
+    label: 'AI 全图编辑',
+    group: 'feature',
+    description: '启用手动全图编辑；默认关闭，且仍受 AI 媒体总开关、租户策略和 Provider 能力门禁约束',
+  },
+  feature_ai_media_inpaint: {
+    label: 'AI 局部重绘',
+    group: 'feature',
+    description: '启用遮罩局部重绘；默认关闭，且仍受 AI 媒体总开关、租户策略和 Provider 能力门禁约束',
   },
   feature_ai_listing_copy_generation: {
     label: '来源商品 AI 文案生成',

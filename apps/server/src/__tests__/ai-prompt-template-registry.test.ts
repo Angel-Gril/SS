@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AI_LISTING_COPY_SAFETY_POLICY,
+  AI_MEDIA_EDIT_SAFETY_POLICY,
   AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
   AI_PROMPT_SAFETY_POLICY,
   InMemoryAiPromptTemplateStore,
 } from '../services/ai-prompt-templates.js';
 import {
   AiPromptTemplateRegistryService,
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
@@ -160,6 +163,8 @@ describe('AI prompt template registry', () => {
       KEY,
       AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
       AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+      AI_MEDIA_INPAINT_TEMPLATE_KEY,
       LISTING_COPY_TITLE_TEMPLATE_KEY,
       LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
       AI_MEDIA_CURATION_TEMPLATE_KEY,
@@ -182,6 +187,49 @@ describe('AI prompt template registry', () => {
     expect(description.variableSchema.prompt).toEqual(expect.arrayContaining([
       expect.objectContaining({ inputKey: 'confirmedAttributesJson', requiredForTest: true }),
     ]));
+  });
+
+  it.each([
+    [AI_MEDIA_FULL_EDIT_TEMPLATE_KEY, 'Rebuild the background as a white studio'],
+    [AI_MEDIA_INPAINT_TEMPLATE_KEY, 'Remove the selected label only'],
+  ])('bootstraps and resolves the versioned %s template', async (templateKey, userPrompt) => {
+    const target = registry();
+    const listed = await target.listTemplates();
+    const template = listed.items.find((item) => item.key === templateKey)!;
+
+    expect(template).toMatchObject({
+      currentSequence: 1,
+      outputMode: 'media_candidate',
+      variableSchema: {
+        safetyPolicy: AI_MEDIA_EDIT_SAFETY_POLICY,
+        outputMode: 'media_candidate',
+      },
+    });
+    expect(template.variableSchema.prompt.map((variable) => variable.inputKey)).toEqual(['userPrompt']);
+    expect(template.variableSchema.negativePrompt.map((variable) => variable.inputKey)).toEqual([
+      'userNegativePrompt',
+    ]);
+
+    const resolved = await target.resolvePrompt({
+      templateKey,
+      userPrompt,
+      userNegativePrompt: 'watermarks',
+    });
+    expect(resolved).toMatchObject({
+      templateKey,
+      release: { sequence: 1 },
+      snapshot: {
+        templateKey,
+        outputMode: 'media_candidate',
+        variableKeys: {
+          prompt: ['userPrompt'],
+          negativePrompt: ['userNegativePrompt'],
+        },
+      },
+    });
+    expect(resolved.resolvedPrompt).toContain(AI_MEDIA_EDIT_SAFETY_POLICY);
+    expect(resolved.resolvedPrompt).toContain(userPrompt);
+    expect(resolved.resolvedNegativePrompt).toContain('watermarks');
   });
 
   it('bootstraps structured planning templates only with frozen consumer contracts', async () => {
@@ -589,7 +637,7 @@ describe('AI prompt template registry', () => {
 
     await Promise.all([first.listTemplates(), second.listTemplates()]);
     const listed = await first.listTemplates();
-    expect(listed.items).toHaveLength(8);
+    expect(listed.items).toHaveLength(10);
     for (const template of listed.items) {
       expect(template.currentSequence).toBe(1);
       expect(template.revisions).toHaveLength(1);

@@ -16,7 +16,7 @@
 
 - Web: Next.js 容器
 - API: Fastify 容器
-- Worker: 后续从 API 中拆出独立进程
+- Worker: 独立进程（API 使用 `RUN_WORKERS=0`）
 - DB: RDS PostgreSQL 或托管 PostgreSQL
 - Redis: 托管 Redis
 - 文件: OSS/COS/R2 + CDN
@@ -37,11 +37,12 @@
 2. 创建 PostgreSQL 和 Redis。
 3. 创建 OSS/R2/COS bucket，配置 CORS 和 CDN 域名。
 4. 执行 Prisma baseline 校准。
-5. 构建并启动容器。
-6. 执行 `prisma migrate deploy`。
-7. 验证 `/health`、登录、店铺连接、图片上传、订单同步。
-8. Cloudflare 开启代理、WAF 和 Turnstile。
-9. 防火墙限制源站只接受 Cloudflare IP 和运维 SSH。
+5. 构建镜像，但先不要启动 API/Worker。
+6. 停止写入后执行 `prisma migrate deploy`。
+7. 运行 `scripts/verify-ai-media-dark.sh`；失败时保持 API/Worker 停止。
+8. 暗态检查通过后启动服务，验证 `/health`、登录、店铺连接、图片上传、订单同步。
+9. Cloudflare 开启代理、WAF 和 Turnstile。
+10. 防火墙限制源站只接受 Cloudflare IP 和运维 SSH。
 
 ## 生产环境变量
 
@@ -71,14 +72,45 @@ OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见�
 
 ## 部署命令示例
 
-```powershell
-$env:ENV_FILE=".env.production"
-docker compose -f docker-compose.prod.yml --env-file .env.production build
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d
-docker compose -f docker-compose.prod.yml --env-file .env.production exec api node node_modules/prisma/build/index.js migrate deploy
+```bash
+COMPOSE_FILE=docker-compose.prod.yml \
+ENV_FILE=.env.production \
+MIGRATION_TIMEOUT=20m \
+bash scripts/deploy-compose.sh
 ```
 
-当前 API 进程会同时启动 workers。后续应拆出 `apps/server/src/worker.ts` 或类似入口，再在 compose 中单独启动 `worker` 服务。
+`deploy-compose.sh` 先构建镜像，再停止旧 API/Worker/Web，随后启动基础设施并运行一次性 `migrate` service；只有 `prisma migrate deploy` 和容器内暗态 verifier 都通过，才会重建并启动应用服务。失败或超时时旧应用服务保持停止，必须由运维按 Runbook 检查后恢复。不要用裸 `docker compose up -d` 执行升级，因为 `depends_on` 不会静默已经运行的旧容器。生产和 staging Compose 仍保留 `service_completed_successfully`，用于约束全新环境的首次启动。Compose 中 API 和 Worker 已分离：API 设置 `RUN_WORKERS=0`，Worker 使用 `node dist/worker.js`。
+
+标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
+
+```env
+MIGRATION_TIMEOUT=20m
+```
+
+超时时 wrapper 先发送 TERM，并在 30 秒后强制结束。若超时发生在 concurrent-index migration，不要直接重跑或标记 applied；先按 `docs/RUNBOOK.md` 检查 invalid index，再决定清理和重放。
+
+## AI Media 暗态发布门禁
+
+Unit 9C-A 仅实现后端 fake-only `FULL_EDIT` / `INPAINT`。真实 Provider、Web/扩展 Mask 编辑器、候选图链式编辑、回滚 UI 和外部质量验收均未完成。发布时以下状态必须为 `false` 或 absent：
+
+- `feature_ai_media_workflow_v2`
+- `feature_ai_media_suite`
+- `feature_ai_media_full_edit`
+- `feature_ai_media_inpaint`
+- `feature_source_listing_web_media`
+
+`ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-media-dark.sh
+```
+
+只有 `PASS AI Media rollout is dark` 才允许切换 release 或启动 API/Worker。检查失败时按以下顺序恢复：
+
+1. 保持 API/Worker 停止，保存失败输出和当前 `system_configs` 快照。
+2. 确认没有经过审批的试点后，通过受审计的管理员变更将五个开关恢复为 `false`，将 rollout policy 恢复为空 tenant 列表；不要用 shell 忽略 verifier 的退出码。
+3. Compose 修复配置后重新运行 `deploy-compose.sh`，并检查一次性 migrate/gate 日志；systemd/手工部署重新运行宿主机 verifier。通过后再恢复服务；仍失败则恢复上一版应用，数据库保持 additive migration 的前向状态。
+4. 若失败来自 `20260720153000_bind_ai_image_edit_outputs` 并发索引 migration，禁止直接 `resolve --applied`。按 `docs/RUNBOOK.md` 检查 `pg_index.indisvalid` 和 `pg_get_indexdef`，必要时 `DROP INDEX CONCURRENTLY`、`prisma migrate resolve --rolled-back`、重新 deploy 并复核定义。
 
 ## Cloudflare 设置
 
@@ -93,6 +125,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production exec api no
 
 - 应用回滚：保留最近 3 个镜像 tag，Nginx 或 compose 切回上一版。
 - 数据库回滚：优先前向修复；破坏性 migration 必须先备份并准备手写回滚 SQL。
+- Unit 9C-A 暗态回滚：关闭 AI Media master/suite/full-edit/inpaint/Web-media 开关并清空 rollout tenant 列表；保留 workflow、asset、job 和 migration 数据供兼容读取与审计。
 - OSS 回滚：对象 key 不覆盖，用版本化路径，如 `ss-erp/images/yyyy/mm/...`。
 
 ## 备份策略

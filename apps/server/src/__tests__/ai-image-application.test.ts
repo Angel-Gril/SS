@@ -19,12 +19,14 @@ function createState() {
     applyTargetId: null as string | null,
     appliedAt: null as Date | null,
     assets: [
-      { id: 'asset-1', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-1.png' },
-      { id: 'asset-2', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-2.png' },
+      { id: 'asset-1', kind: 'AI_GENERATED', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-1.png' },
+      { id: 'asset-2', kind: 'AI_GENERATED', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-2.png' },
     ],
     workflow: {
       contextType: 'collect',
       contextId: 'collect-1',
+      reviewStatus: 'APPROVED',
+      selectedOutputAssetId: 'asset-1',
       inputs: [{ asset: { sourceCaptureSnapshotId: 'snapshot-1' } }],
     },
   };
@@ -90,6 +92,53 @@ const apply = (db: ReturnType<typeof database>, overrides: Partial<Parameters<ty
 });
 
 describe('AI image asset application', () => {
+  it('applies only the explicitly approved final edit candidate and never the raw Provider output', async () => {
+    const state = createState();
+    state.job.workflowId = 'workflow-1';
+    state.job.operation = 'INPAINT';
+    state.job.assets.push({
+      id: 'raw-asset-1', kind: 'AI_PROVIDER_OUTPUT', ownerUserId: 'owner-1',
+      aiImageJobId: 'job-1', url: 'https://cdn.example/provider-raw.png',
+    });
+    const db = database(state);
+
+    const result = await apply(db, {
+      selectedAssetId: 'asset-1',
+      expectedTargetUpdatedAt: state.collect.updatedAt.toISOString(),
+    });
+
+    expect(result.images).toContain('https://cdn.example/generated-1.png');
+    expect(result.images).not.toContain('https://cdn.example/provider-raw.png');
+    expect(result.mode).toBe('append');
+  });
+
+  it('rejects edit replacement, missing final selection, and raw-output selection', async () => {
+    const state = createState();
+    state.job.workflowId = 'workflow-1';
+    state.job.operation = 'FULL_EDIT';
+    state.job.assets.push({
+      id: 'raw-asset-1', kind: 'AI_PROVIDER_OUTPUT', ownerUserId: 'owner-1',
+      aiImageJobId: 'job-1', url: 'https://cdn.example/provider-raw.png',
+    });
+    const updatedAt = state.collect.updatedAt.toISOString();
+
+    await expect(apply(database(structuredClone(state) as State), {
+      mode: 'replace', selectedAssetId: 'asset-1', expectedTargetUpdatedAt: updatedAt,
+    })).rejects.toMatchObject({ code: 'UNSAFE_APPLY_MODE' });
+    await expect(apply(database(structuredClone(state) as State), {
+      selectedAssetId: null, expectedTargetUpdatedAt: updatedAt,
+    })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+    await expect(apply(database(structuredClone(state) as State), {
+      selectedAssetId: 'raw-asset-1', expectedTargetUpdatedAt: updatedAt,
+    })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+
+    const rejected = structuredClone(state) as State;
+    rejected.job.workflow.reviewStatus = 'REJECTED';
+    await expect(apply(database(rejected), {
+      selectedAssetId: 'asset-1', expectedTargetUpdatedAt: updatedAt,
+    })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+  });
+
   it('projects append-only collect images from the current publish authority without mutating input', () => {
     const metadata = {
       marker: 'keep',

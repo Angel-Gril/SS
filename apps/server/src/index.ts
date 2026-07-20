@@ -1257,6 +1257,7 @@ if (RUN_WORKERS) {
       { startBrowserOneClickListingWorker },
       { startAiImageGenerationWorker },
       { startAiImageTranslationWorker },
+      { startAiImageEditWorker },
       { startAiImageSuiteGenerationWorker },
     ] = await Promise.all([
       import('./workers/product-sync.js'),
@@ -1268,6 +1269,7 @@ if (RUN_WORKERS) {
       import('./workers/browser-one-click-listing.js'),
       import('./workers/ai-image-generation.js'),
       import('./workers/ai-image-translation.js'),
+      import('./workers/ai-image-edit.js'),
       import('./workers/ai-image-suite-generation.js'),
     ]);
 
@@ -1280,6 +1282,7 @@ if (RUN_WORKERS) {
     startBrowserOneClickListingWorker();
     startAiImageGenerationWorker();
     startAiImageTranslationWorker();
+    startAiImageEditWorker();
     startAiImageSuiteGenerationWorker(aiImageSuiteGenerationCoordinator);
   } else {
     console.log('[bootstrap] REDIS_DISABLED=1, skipping BullMQ workers');

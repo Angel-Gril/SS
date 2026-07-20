@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from '../config/system-config-schema.js';
+import { uploadLimiter } from '../lib/upload-limiter.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
 import { AiImageJobError, createAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
@@ -29,17 +30,22 @@ import {
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
 import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
+import { getStorageBackend } from '../services/image-storage.js';
 import {
   resolveAiImageTranslationStorageReadiness,
   type AiImageTranslationStorageReadiness,
 } from '../services/ai-image-translation-storage.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import {
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   resolveActiveAiPrompt,
   resolveActiveAiTemplate,
 } from '../services/ai-prompt-template-registry.js';
 import { AiPromptTemplateError } from '../services/ai-prompt-templates.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import { createAiImageEditMask } from '../services/ai-image-edit.js';
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(8000),
@@ -91,9 +97,29 @@ const imageTranslationWorkflowSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(128),
   context: workflowContextSchema,
 });
+const fullEditWorkflowSchema = z.object({
+  operation: z.literal('FULL_EDIT'),
+  sourceAssetId: z.string().trim().min(1).max(128),
+  userPrompt: z.string().trim().min(1).max(8000),
+  userNegativePrompt: z.string().trim().max(4000).optional().default(''),
+  idempotencyKey: z.string().trim().min(8).max(128),
+  context: workflowContextSchema,
+});
+const inpaintWorkflowSchema = z.object({
+  operation: z.literal('INPAINT'),
+  sourceAssetId: z.string().trim().min(1).max(128),
+  maskAssetId: z.string().trim().min(1).max(128),
+  maskSemantics: z.literal(AI_IMAGE_EDIT_MASK_SEMANTICS),
+  userPrompt: z.string().trim().min(1).max(8000),
+  userNegativePrompt: z.string().trim().max(4000).optional().default(''),
+  idempotencyKey: z.string().trim().min(8).max(128),
+  context: workflowContextSchema,
+});
 const createWorkflowSchema = z.discriminatedUnion('operation', [
   imageToImageWorkflowSchema,
   imageTranslationWorkflowSchema,
+  fullEditWorkflowSchema,
+  inpaintWorkflowSchema,
 ]).superRefine((value, context) => {
   if (value.operation === 'IMAGE_TO_IMAGE') {
     if (Boolean(value.sourceAssetId) === Boolean(value.references)) {
@@ -105,6 +131,7 @@ const createWorkflowSchema = z.discriminatedUnion('operation', [
     }
     return;
   }
+  if (value.operation === 'FULL_EDIT' || value.operation === 'INPAINT') return;
   if (value.sourceLanguage.toLowerCase() === value.targetLanguage.toLowerCase()) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -135,6 +162,11 @@ const reviewSchema = revisionSchema.extend({
   decision: z.enum(['APPROVE', 'REJECT']),
   note: z.string().trim().max(1000).nullable().optional(),
 });
+const editMaskSchema = z.object({
+  sourceAssetId: z.string().trim().min(1).max(128),
+  maskSemantics: z.literal(AI_IMAGE_EDIT_MASK_SEMANTICS),
+  maskDataUrl: z.string().min(32).max(28 * 1024 * 1024),
+});
 
 interface AiImageRouteSettings {
   enabled: boolean;
@@ -152,6 +184,14 @@ interface AiImageTranslationRouteSettings {
   estimatedCostCents: number;
 }
 
+interface AiImageEditRouteSettings {
+  fullEditEnabled: boolean;
+  inpaintEnabled: boolean;
+  dailyLimit: number;
+}
+
+type EditMaskUploadLimitCheck = { allowed: true } | { allowed: false; reason: string };
+
 export interface AiImageOperationReadiness {
   enabled: boolean;
   ready: boolean;
@@ -165,10 +205,12 @@ interface AiImageRouteOptions {
   repository?: AiImageJobRepository;
   enqueue?: (jobId: string) => Promise<void>;
   enqueueTranslation?: (jobId: string) => Promise<void>;
+  enqueueEdit?: (jobId: string) => Promise<void>;
   authenticate?: (request: FastifyRequest, reply: any) => Promise<unknown>;
   getSettings?: () => Promise<AiImageRouteSettings>;
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
   getTranslationStorageReadiness?: () => Promise<AiImageTranslationStorageReadiness>;
+  getEditSettings?: () => Promise<AiImageEditRouteSettings>;
   getSourceListingWebMediaEnabled?: () => Promise<boolean>;
   sourceWorkflowFeatureFlags?: SourceWorkflowFeatureFlagEvaluator;
   production?: boolean;
@@ -185,10 +227,14 @@ interface AiImageRouteOptions {
     resolvedNegativePrompt: string;
   }>;
   resolveTranslationPrompt?: typeof resolveActiveAiTemplate;
+  resolveEditPrompt?: typeof resolveActiveAiTemplate;
   mediaWorkflowService?: AiMediaWorkflowService;
   mediaContextService?: AiMediaContextService;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
   applyAssets?: (input: ApplyAiImageAssetsInput) => Promise<ApplyAiImageAssetsResult>;
+  createEditMask?: typeof createAiImageEditMask;
+  checkEditMaskRequestRate?: (ownerUserId: string) => Promise<EditMaskUploadLimitCheck>;
+  checkEditMaskUploadQuota?: (ownerUserId: string, bytes: number) => Promise<EditMaskUploadLimitCheck>;
 }
 
 const DEFAULT_TEMPLATE_KEY = 'text-to-image.base';
@@ -212,6 +258,7 @@ function sendError(reply: any, error: unknown) {
         || error.code === 'STALE_MEDIA_WORKFLOW'
         ? 409
         : error.code === 'IMAGE_TRANSLATION_QUOTA_EXCEEDED'
+          || error.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED'
           ? 429
         : error.code === 'AI_MEDIA_OPERATION_DISABLED'
           || error.code === 'SOURCE_LISTING_WEB_MEDIA_DISABLED'
@@ -237,15 +284,18 @@ function sendError(reply: any, error: unknown) {
     return reply.status(status).send({ code: error.code, msg: error.message, data: error.data });
   }
   if (error instanceof AiImageJobError) {
-    const status = error.code === 'NOT_FOUND'
+    const status = error.code === 'NOT_FOUND' || error.code === 'SOURCE_ASSET_NOT_FOUND'
       ? 404
       : error.code === 'IDEMPOTENCY_KEY_CONFLICT'
         || error.code === 'STALE_MEDIA_WORKFLOW'
         ? 409
-        : error.code === 'QUOTA_EXCEEDED'
+      : error.code === 'QUOTA_EXCEEDED'
+          || error.code === 'EDIT_RESOURCE_QUOTA_EXCEEDED'
           ? 429
           : error.code === 'PROVIDER_DISABLED'
             || error.code === 'PROVIDER_NOT_READY'
+            || error.code === 'EDIT_STORAGE_NOT_READY'
+            || error.code === 'EDIT_PERSISTENCE_NOT_READY'
             ? 503
             : 400;
     return reply.status(status).send({ code: error.code, msg: error.message });
@@ -257,6 +307,16 @@ function sendError(reply: any, error: unknown) {
     });
   }
   throw error;
+}
+
+function decodePngDataUrl(value: string) {
+  const matched = /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/u.exec(value);
+  if (!matched) throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Edit mask must be a canonical PNG data URL');
+  const buffer = Buffer.from(matched[1]!, 'base64');
+  if (!buffer.length || buffer.toString('base64') !== matched[1]) {
+    throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Edit mask base64 payload is invalid');
+  }
+  return buffer;
 }
 
 function canonicalTranslationTerminologies(terms: Array<{ src: string; tgt: string }>) {
@@ -387,6 +447,49 @@ export function resolveAiImageToImageReadiness(
   };
 }
 
+export function resolveAiImageEditReadiness(
+  operation: 'FULL_EDIT' | 'INPAINT',
+  settings: { fullEditEnabled: boolean; inpaintEnabled: boolean },
+  options: { workflowEnabled?: boolean; production?: boolean } = {},
+): AiImageOperationReadiness {
+  if (options.workflowEnabled === false) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_WORKFLOW_DISABLED',
+      reason: 'AI media workflow is not enabled for this account',
+    };
+  }
+  const enabled = operation === 'FULL_EDIT'
+    ? settings.fullEditEnabled
+    : settings.inpaintEnabled;
+  if (!enabled) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: operation === 'FULL_EDIT' ? 'Full-image edit is disabled' : 'Masked inpaint is disabled',
+      testOnly: true,
+    };
+  }
+  if (options.production ?? process.env.NODE_ENV === 'production') {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'Manual image edit has not passed its production Provider gate',
+      testOnly: true,
+    };
+  }
+  return {
+    enabled: true,
+    ready: true,
+    reasonCode: 'READY',
+    reason: operation === 'FULL_EDIT' ? 'Full-image edit is ready' : 'Masked inpaint is ready',
+    testOnly: true,
+  };
+}
+
 function gateReadinessByWebMedia(
   readiness: AiImageOperationReadiness,
   webMediaEnabled: boolean,
@@ -464,6 +567,7 @@ function publicJob(job: Record<string, unknown>) {
     templateSnapshot: _templateSnapshot,
     operationConfig,
     requestFingerprint: _requestFingerprint,
+    inputAssets: _inputAssets,
     workflow: _workflow,
     costReservation,
     assets,
@@ -494,13 +598,16 @@ function publicJob(job: Record<string, unknown>) {
     costStatus: typeof (costReservation as { status?: unknown } | null)?.status === 'string'
       ? (costReservation as { status: string }).status
       : null,
-    assets: Array.isArray(assets) ? assets.map((asset: any) => ({
+    assets: Array.isArray(assets) ? assets
+      .filter((asset: any) => asset?.kind === 'AI_GENERATED')
+      .map((asset: any) => ({
       id: asset.id,
+      kind: asset.kind,
       url: asset.url,
       mimeType: asset.mimeType,
       width: asset.width,
       height: asset.height,
-    })) : [],
+      })) : [],
   };
 }
 
@@ -547,6 +654,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       };
     }
   });
+  const getEditSettings = options.getEditSettings || (async () => ({
+    fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
+    inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
+    dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
+  }));
   const featureFlags = options.sourceWorkflowFeatureFlags || sourceWorkflowFeatureFlags;
   const getSourceListingWebMediaDecision = async (ownerUserId: string) => {
     if (options.getSourceListingWebMediaEnabled) {
@@ -577,12 +689,41 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     const worker = await import('../workers/ai-image-translation.js');
     await worker.enqueueAiImageTranslationJob(jobId);
   });
+  const enqueueEdit = options.enqueueEdit || (async (jobId: string) => {
+    const worker = await import('../workers/ai-image-edit.js');
+    await worker.enqueueAiImageEditJob(jobId);
+  });
   const resolvePrompt = options.resolvePrompt || resolveActiveAiPrompt;
   const resolveTranslationPrompt = options.resolveTranslationPrompt || resolveActiveAiTemplate;
+  const resolveEditPrompt = options.resolveEditPrompt || resolveActiveAiTemplate;
   const getMediaWorkflowEnabled = options.getMediaWorkflowEnabled
     || (async (ownerUserId: string) => (await getAiMediaRolloutDecision(ownerUserId)).enabled);
   const applyAssets = options.applyAssets
     || ((input: ApplyAiImageAssetsInput) => applyAiImageAssets(prisma as any, input));
+  const checkEditMaskRequestRate = options.checkEditMaskRequestRate || (async (
+    ownerUserId: string,
+  ): Promise<EditMaskUploadLimitCheck> => {
+    if (await getConfig('upload_rate_limit_enabled')) {
+      const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
+      if (!uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)) {
+        return { allowed: false, reason: `Edit mask upload exceeds ${maxPerMinute} requests per minute` };
+      }
+    }
+    return { allowed: true };
+  });
+  const checkEditMaskUploadQuota = options.checkEditMaskUploadQuota || (async (
+    ownerUserId: string,
+    bytes: number,
+  ): Promise<EditMaskUploadLimitCheck> => {
+    if (await getConfig('upload_daily_quota_enabled')) {
+      const maxMegabytes = await getConfig('upload_daily_quota_mb');
+      if (!uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)) {
+        return { allowed: false, reason: `Edit mask upload exceeds the ${maxMegabytes} MB daily quota` };
+      }
+    }
+    return { allowed: true };
+  });
+  const createEditMaskAsset = options.createEditMask || createAiImageEditMask;
   const assertWorkflowSourceCurrent = async (workflow: any, ownerUserId: string) => {
     if (workflow.contextType !== 'collect' || !workflow.contextId) return;
     const currentContext = await mediaContextService.loadCollect(ownerUserId, workflow.contextId);
@@ -590,7 +731,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       currentContext.inputs.map((input) => input.assetId).filter((id): id is string => Boolean(id)),
     );
     const workflowInputAssets = Array.isArray(workflow.inputs)
-      ? workflow.inputs.map((input: any) => String(input.assetId || '').trim()).filter(Boolean)
+      ? workflow.inputs
+        .filter((input: any) => input?.role !== 'MASK')
+        .map((input: any) => String(input.assetId || '').trim())
+        .filter(Boolean)
       : [];
     if (!workflowInputAssets.length || workflowInputAssets.some((assetId: string) => !currentAssetIds.has(assetId))) {
       throw new AiMediaWorkflowError(
@@ -600,15 +744,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     }
   };
 
-  app.addHook('preHandler', authHook as any);
+  app.addHook('onRequest', authHook as any);
 
   app.get('/capabilities', async (request) => {
     const ids = actor(request);
-    const [workflowEnabled, webMediaDecision, translationSettings, translationStorageReadiness] = await Promise.all([
+    const [workflowEnabled, webMediaDecision, translationSettings, translationStorageReadiness, editSettings] = await Promise.all([
       getMediaWorkflowEnabled(ids.ownerUserId),
       getSourceListingWebMediaDecision(ids.ownerUserId),
       getTranslationSettings(),
       getTranslationStorageReadiness(),
+      getEditSettings(),
     ]);
     const translation = resolveAiImageTranslationReadiness(translationSettings, {
       workflowEnabled,
@@ -616,6 +761,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       storageReadiness: translationStorageReadiness,
     });
     const imageToImage = resolveAiImageToImageReadiness({ workflowEnabled, production });
+    const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, { workflowEnabled, production });
+    const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, { workflowEnabled, production });
     return {
       code: 1,
       data: {
@@ -626,6 +773,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         operations: {
           IMAGE_TO_IMAGE: gateReadinessByWebMedia(imageToImage, webMediaDecision.enabled),
           IMAGE_TRANSLATE: gateReadinessByWebMedia(translation, webMediaDecision.enabled),
+          FULL_EDIT: gateReadinessByWebMedia(fullEdit, webMediaDecision.enabled),
+          INPAINT: gateReadinessByWebMedia(inpaint, webMediaDecision.enabled),
         },
       },
     };
@@ -843,6 +992,46 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           context: parsed.data.context,
         });
         enqueueOperation = enqueueTranslation;
+      } else if (parsed.data.operation === 'FULL_EDIT' || parsed.data.operation === 'INPAINT') {
+        const editSettings = await getEditSettings();
+        const readiness = resolveAiImageEditReadiness(parsed.data.operation, editSettings, {
+          workflowEnabled: true,
+          production,
+        });
+        if (!readiness.ready) {
+          return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
+        const templateKey = parsed.data.operation === 'FULL_EDIT'
+          ? AI_MEDIA_FULL_EDIT_TEMPLATE_KEY
+          : AI_MEDIA_INPAINT_TEMPLATE_KEY;
+        const resolved = await resolveEditPrompt({
+          templateKey,
+          variables: {
+            userPrompt: parsed.data.userPrompt,
+            userNegativePrompt: parsed.data.userNegativePrompt,
+          },
+        });
+        created = await mediaWorkflowService.createImageEdit({
+          ...ids,
+          operation: parsed.data.operation,
+          sourceAssetId: parsed.data.sourceAssetId,
+          ...(parsed.data.operation === 'INPAINT' ? {
+            maskAssetId: parsed.data.maskAssetId,
+            maskSemantics: parsed.data.maskSemantics,
+          } : {}),
+          prompt: parsed.data.userPrompt,
+          negativePrompt: parsed.data.userNegativePrompt || null,
+          resolvedPrompt: resolved.resolvedPrompt,
+          resolvedNegativePrompt: resolved.resolvedNegativePrompt,
+          templateKey: resolved.templateKey,
+          templateReleaseId: resolved.release.id,
+          templateChecksum: resolved.checksum,
+          templateSnapshot: resolved.snapshot,
+          dailyLimit: editSettings.dailyLimit,
+          idempotencyKey: parsed.data.idempotencyKey,
+          context: parsed.data.context,
+        });
+        enqueueOperation = enqueueEdit;
       } else {
         const readiness = resolveAiImageToImageReadiness({ production });
         if (!readiness.ready) {
@@ -884,8 +1073,12 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (error?.code === 'SOURCE_ASSET_NOT_FOUND') {
         return reply.status(404).send({ code: 'SOURCE_ASSET_NOT_FOUND', msg: 'Owned source image was not found' });
       }
+      if (error?.code === 'MASK_ASSET_NOT_FOUND') {
+        return reply.status(404).send({ code: 'MASK_ASSET_NOT_FOUND', msg: 'Owned edit mask was not found' });
+      }
       if (error?.code === 'SOURCE_ASSET_INVALID'
         || error?.code === 'SOURCE_ASSET_DUPLICATE'
+        || error?.code === 'MASK_ASSET_INVALID'
         || error?.code === 'AI_MEDIA_CONTEXT_MISMATCH') {
         return reply.status(409).send({ code: error.code, msg: error.message });
       }
@@ -938,9 +1131,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         ids.ownerUserId,
       );
       assertStandaloneWorkflow(existingWorkflow);
-      await assertWorkflowSourceCurrent(existingWorkflow, ids.ownerUserId);
       let retryEnqueue: (jobId: string) => Promise<void> = enqueue;
       let translationRetryDailyLimit: number | undefined;
+      let editRetryDailyLimit: number | undefined;
       if ((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE') {
         const [translationSettings, translationStorageReadiness] = await Promise.all([
           getTranslationSettings(),
@@ -979,6 +1172,18 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           });
         }
         retryEnqueue = enqueueTranslation;
+      } else if (['FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))) {
+        const operation = existingWorkflow.operation as 'FULL_EDIT' | 'INPAINT';
+        const editSettings = await getEditSettings();
+        editRetryDailyLimit = editSettings.dailyLimit;
+        const readiness = resolveAiImageEditReadiness(operation, editSettings, {
+          workflowEnabled: true,
+          production,
+        });
+        if (!readiness.ready) {
+          return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
+        retryEnqueue = enqueueEdit;
       } else {
         const readiness = resolveAiImageToImageReadiness({ production });
         if (!readiness.ready) {
@@ -991,6 +1196,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         ...parsed.data,
         ...((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE'
           ? { dailyLimit: translationRetryDailyLimit }
+          : ['FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))
+            ? { dailyLimit: editRetryDailyLimit }
           : {}),
       });
       if (!result.replayed) {
@@ -1041,6 +1248,65 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     try {
       const context = await mediaContextService.loadCollect(actor(request).ownerUserId, (request.params as any).id);
       return { code: 1, data: context };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/contexts/collect/:id/edit-masks', {
+    bodyLimit: 30 * 1024 * 1024,
+    onRequest: async (request, reply) => {
+      const rateCheck = await checkEditMaskRequestRate(actor(request).ownerUserId);
+      if (!rateCheck.allowed) {
+        return reply.status(429).send({
+          code: 'EDIT_RESOURCE_RATE_LIMITED',
+          msg: rateCheck.reason,
+        });
+      }
+    },
+  }, async (request, reply) => {
+    const parsed = editMaskSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    try {
+      if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
+        return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
+      }
+      await requireSourceListingWebMedia(ids.ownerUserId);
+      const readiness = resolveAiImageEditReadiness('INPAINT', await getEditSettings(), {
+        workflowEnabled: true,
+        production,
+      });
+      if (!readiness.ready) {
+        return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+      }
+      const maskBuffer = decodePngDataUrl(parsed.data.maskDataUrl);
+      const result = await createEditMaskAsset({
+        ...ids,
+        contextId: (request.params as any).id,
+        sourceAssetId: parsed.data.sourceAssetId,
+        maskBuffer,
+        maskSemantics: parsed.data.maskSemantics,
+      }, {
+        database: prisma as any,
+        getStorage: getStorageBackend,
+        checkUploadQuota: checkEditMaskUploadQuota,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({
+        code: 1,
+        replayed: result.replayed,
+        data: {
+          id: result.asset.id,
+          url: result.asset.url,
+          mimeType: result.asset.mimeType,
+          width: result.asset.width,
+          height: result.asset.height,
+          maskSemantics: result.diagnostics.maskSemantics,
+          editPixelCount: result.diagnostics.editPixelCount,
+          preservedPixelCount: result.diagnostics.preservedPixelCount,
+          featheredPixelCount: result.diagnostics.featheredPixelCount,
+        },
+      });
     } catch (error) { return sendError(reply, error); }
   });
 

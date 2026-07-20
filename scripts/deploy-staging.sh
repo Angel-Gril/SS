@@ -52,6 +52,12 @@ set -a
 . "$ENV_FILE"
 set +a
 
+MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT:-20m}"
+if [[ ! "$MIGRATION_TIMEOUT" =~ ^[1-9][0-9]*[smh]$ ]]; then
+  echo "ERROR: MIGRATION_TIMEOUT must be a positive duration ending in s, m, or h" >&2
+  exit 1
+fi
+
 if [ -n "$DEPLOY_ENV_PROFILE" ]; then
   if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
     echo "[0/7] Validating bootstrap env for profile: $DEPLOY_ENV_PROFILE"
@@ -83,8 +89,8 @@ restore_quiesced_services() {
   local status=$?
   trap - EXIT
   if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
-    echo "[deploy] Restoring current Worker/API after failed deploy"
-    sudo systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+    sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" || true
+    echo "[deploy] Worker/API remain stopped after failed build, migration, or gate; operator recovery is required" >&2
   fi
   exit "$status"
 }
@@ -112,7 +118,7 @@ fi
 # 6. 迁移并重启服务
 echo "[6b/7] Running database migrations..."
 cd apps/server
-npx prisma migrate deploy
+timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" npx prisma migrate deploy
 cd "$DEPLOY_DIR"
 
 if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
@@ -123,6 +129,13 @@ if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
   SKIP_PROCESS_ENV_CHECKS=1 \
   SKIP_HTTP_CHECK=1 \
   bash scripts/diagnose-runtime-env.sh
+fi
+
+echo "[6d/7] Verifying AI Media rollout remains dark..."
+if ! DEPLOY_DIR="$DEPLOY_DIR" ENV_FILE="$ENV_FILE" bash scripts/verify-ai-media-dark.sh; then
+  SERVICES_QUIESCED=0
+  echo "ERROR: AI Media rollout is not dark; Worker/API remain stopped" >&2
+  exit 1
 fi
 
 echo "[6/7] Restarting services..."

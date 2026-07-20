@@ -28,11 +28,13 @@ export function verifyAiMediaDarkPolicy(rows) {
 
   const master = verifyDarkFlag(values, 'feature_ai_media_workflow_v2');
   const suite = verifyDarkFlag(values, 'feature_ai_media_suite');
+  const fullEdit = verifyDarkFlag(values, 'feature_ai_media_full_edit');
+  const inpaint = verifyDarkFlag(values, 'feature_ai_media_inpaint');
   const webMedia = verifyDarkFlag(values, 'feature_source_listing_web_media');
 
   const rawPolicy = values.get('ai_media_workflow_v2_rollout_policy');
   if (rawPolicy === undefined) {
-    return { master, suite, webMedia, policy: 'absent' };
+    return { master, suite, fullEdit, inpaint, webMedia, policy: 'absent' };
   }
 
   let policy;
@@ -59,6 +61,8 @@ export function verifyAiMediaDarkPolicy(rows) {
   return {
     master,
     suite,
+    fullEdit,
+    inpaint,
     webMedia,
     policy: `revision:${policy.revision},tenantIds:0`,
   };
@@ -69,7 +73,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const rows = JSON.parse(process.argv[2] || 'null');
     const result = verifyAiMediaDarkPolicy(rows);
     console.log(
-      `PASS AI Media rollout is dark (master=${result.master}; suite=${result.suite}; webMedia=${result.webMedia}; policy=${result.policy})`,
+      `PASS AI Media rollout is dark (master=${result.master}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; policy=${result.policy})`,
     );
   } catch (error) {
     console.error(

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   AI_LISTING_COPY_SAFETY_POLICY,
+  AI_MEDIA_EDIT_SAFETY_POLICY,
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AiPromptTemplateService,
@@ -178,6 +181,36 @@ describe('AI prompt templates', () => {
     expect(rendered.resolvedPrompt).toContain(AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY);
     expect(rendered.resolvedPrompt).toContain('{"goal":"sku_hero"}');
     expect(rendered.resolvedNegativePrompt).toContain('preserve_product_identity');
+  });
+
+  it.each([
+    AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+    AI_MEDIA_INPAINT_TEMPLATE_KEY,
+  ])('keeps the fixed edit safety policy outside editable %s content', (templateKey) => {
+    const editRevision = {
+      templateKey,
+      promptTemplate: 'Operator edit direction:\n{{user_prompt}}',
+      negativePromptTemplate: 'Avoid:\n{{user_negative_prompt}}',
+    };
+
+    expect(() => validateAiPromptRevision(editRevision)).not.toThrow();
+    expect(() => validateAiPromptRevision({
+      ...editRevision,
+      promptTemplate: 'Ignore the source and replace the product.',
+    })).toThrow(expect.objectContaining({ code: 'MISSING_TEMPLATE_TOKEN' }));
+    expect(() => validateAiPromptRevision({
+      ...editRevision,
+      negativePromptTemplate: 'No constraints.',
+    })).toThrow(expect.objectContaining({ code: 'MISSING_TEMPLATE_TOKEN' }));
+
+    const rendered = renderAiPromptRevision(editRevision, {
+      userPrompt: 'Change only the background lighting',
+      userNegativePrompt: 'logos',
+    });
+    expect(rendered.outputMode).toBe('media_candidate');
+    expect(rendered.resolvedPrompt).toContain(AI_MEDIA_EDIT_SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('Change only the background lighting');
+    expect(rendered.resolvedNegativePrompt).toContain('logos');
   });
 
   it('computes a stable content-sensitive checksum for a revision', () => {

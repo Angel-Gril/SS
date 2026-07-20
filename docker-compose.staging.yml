@@ -1,5 +1,5 @@
 # Staging 环境 Docker Compose
-# 用法：docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+# 升级用法：COMPOSE_FILE=docker-compose.staging.yml ENV_FILE=.env.staging bash scripts/deploy-compose.sh
 
 name: ss-erp-staging
 
@@ -68,9 +68,11 @@ services:
     build:
       context: .
       dockerfile: docker/server.Dockerfile
-    command: ["npx", "prisma", "migrate", "deploy"]
+    command: ["sh", "scripts/migrate-and-verify-ai-media-dark.sh"]
     env_file:
       - ${ENV_FILE:-.env.staging}
+    environment:
+      MIGRATION_TIMEOUT: ${MIGRATION_TIMEOUT:-20m}
     depends_on:
       postgres:
         condition: service_healthy

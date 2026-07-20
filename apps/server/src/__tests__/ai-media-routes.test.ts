@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { aiImageRoutes, resolveAiImageToImageReadiness } from '../routes/ai-images.js';
+import { AiImageJobError } from '../services/ai-image-jobs.js';
 import { AiMediaWorkflowError, type AiMediaWorkflowRecord } from '../services/ai-media-workflows.js';
 
 const workflow: AiMediaWorkflowRecord = {
@@ -14,7 +15,10 @@ const workflow: AiMediaWorkflowRecord = {
   jobs: [{
     id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', status: 'SUCCEEDED',
     prompt: 'Keep product', costReservation: { status: 'RELEASED', maximumCostMinor: 99 },
-    assets: [{ id: 'output-1', url: '/output.png', storageKey: 'secret-output-key', storageBackend: 'oss' }],
+    assets: [
+      { id: 'output-1', kind: 'AI_GENERATED', url: '/output.png', storageKey: 'secret-output-key', storageBackend: 'oss' },
+      { id: 'raw-output-1', kind: 'AI_PROVIDER_OUTPUT', url: '/provider-raw.png', storageKey: 'secret-raw-key', storageBackend: 'oss' },
+    ],
   }], events: [],
 };
 
@@ -22,7 +26,11 @@ function jobRepository() {
   return {
     getById: vi.fn(async () => ({
       id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', status: 'SUCCEEDED',
-      assets: [{ id: 'output-1', url: '/output.png' }],
+      inputAssets: [{
+        assetId: 'asset-1', role: 'REFERENCE', ordinal: 0, sha256: 'a'.repeat(64),
+        storageBackend: 'oss', storageKey: 'owners/owner-1/private-source.png',
+      }],
+      assets: [{ id: 'output-1', kind: 'AI_GENERATED', url: '/output.png' }],
     })),
     createWithQuota: vi.fn(), requestCancellation: vi.fn(), recordApplication: vi.fn(async () => ({
       id: 'job-1', ownerUserId: 'owner-1', status: 'SUCCEEDED', appliedMode: 'append', assets: [],
@@ -42,11 +50,19 @@ async function build(
   translationStorageReady = true,
   translationStorageBackend: 'oss' | 'local' | 'ozon-cdn' = 'oss',
   translationStoragePublicHttps = true,
+  fullEditEnabled = false,
+  inpaintEnabled = false,
+  editDailyLimit = 5,
+  editMaskUploadAllowed = true,
+  editMaskRateAllowed = true,
 ) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
     createImageTranslation: vi.fn(async () => ({
       workflow: { ...workflow, operation: 'IMAGE_TRANSLATE' as const }, jobId: 'job-translation-1', replayed: false,
+    })),
+    createImageEdit: vi.fn(async (input: any) => ({
+      workflow: { ...workflow, operation: input.operation }, jobId: 'job-edit-1', replayed: false,
     })),
     list: vi.fn(async () => [workflow]),
     get: vi.fn(async (_id: string, owner: string) => {
@@ -67,6 +83,7 @@ async function build(
   };
   const enqueue = vi.fn(async () => undefined);
   const enqueueTranslation = vi.fn(async () => undefined);
+  const enqueueEdit = vi.fn(async () => undefined);
   const applyAssets = vi.fn(async (input: any) => ({
     jobId: input.jobId,
     mode: input.mode,
@@ -78,10 +95,32 @@ async function build(
     targetUpdatedAt: new Date(),
     appliedAt: new Date(),
   }));
+  const createEditMask = vi.fn(async (input: any, deps: any) => {
+    const limit = await deps.checkUploadQuota(input.ownerUserId, input.maskBuffer.length);
+    if (!limit.allowed) throw new AiImageJobError('EDIT_RESOURCE_QUOTA_EXCEEDED', limit.reason);
+    return {
+      asset: {
+        id: 'mask-asset-1', url: '/uploads/mask.png', mimeType: 'image/png', width: 2, height: 2,
+      },
+      replayed: false,
+      diagnostics: {
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        editPixelCount: 2, preservedPixelCount: 2, featheredPixelCount: 0,
+      },
+    };
+  });
   const repository = jobRepository();
   const app = Fastify();
   await app.register(aiImageRoutes, {
-    repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation, applyAssets,
+    repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation, enqueueEdit, applyAssets,
+    createEditMask: createEditMask as any,
+    getEditSettings: async () => ({ fullEditEnabled, inpaintEnabled, dailyLimit: editDailyLimit }),
+    checkEditMaskRequestRate: async () => editMaskRateAllowed
+      ? ({ allowed: true })
+      : ({ allowed: false, reason: 'Edit mask request rate exceeded' }),
+    checkEditMaskUploadQuota: async () => editMaskUploadAllowed
+      ? ({ allowed: true })
+      : ({ allowed: false, reason: 'Edit mask upload quota exceeded' }),
     getTranslationSettings: async () => ({
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
@@ -94,6 +133,14 @@ async function build(
       snapshot: { templateKey: 'image-translation.base', sequence: 1 },
       resolvedPrompt: 'Frozen translation domain policy',
       resolvedNegativePrompt: 'Frozen terminology policy',
+    } as any),
+    resolveEditPrompt: async ({ templateKey }: any) => ({
+      templateKey,
+      release: { id: 'edit-release-1', revisionId: 'edit-revision-1', sequence: 1 },
+      checksum: 'b'.repeat(64),
+      snapshot: { templateKey, sequence: 1 },
+      resolvedPrompt: 'Frozen edit prompt',
+      resolvedNegativePrompt: 'Frozen edit constraints',
     } as any),
     getSourceListingWebMediaEnabled: async () => webMediaEnabled,
     getTranslationStorageReadiness: async () => ({
@@ -112,11 +159,168 @@ async function build(
   });
   return {
     app, repository, mediaWorkflowService, mediaContextService,
-    enqueue, enqueueTranslation, applyAssets,
+    enqueue, enqueueTranslation, enqueueEdit, applyAssets, createEditMask,
   };
 }
 
 describe('AI media workflow routes', () => {
+  it('keeps manual edit capabilities dark by default', async () => {
+    const { app } = await build();
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+    expect(response.json().data.operations).toMatchObject({
+      FULL_EDIT: { enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED' },
+      INPAINT: { enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED' },
+    });
+  });
+
+  it('creates an enabled fake-only manual edit with a frozen Prompt and dedicated queue', async () => {
+    const { app, mediaWorkflowService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, true, true,
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'INPAINT',
+      sourceAssetId: 'asset-1',
+      maskAssetId: 'mask-asset-1',
+      maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+      userPrompt: 'Remove the printed label',
+      userNegativePrompt: '',
+      idempotencyKey: 'manual-inpaint-idempotency',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+
+    expect(response.statusCode).toBe(202);
+    expect(mediaWorkflowService.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'INPAINT', sourceAssetId: 'asset-1', maskAssetId: 'mask-asset-1',
+      templateKey: 'inpaint.base', templateReleaseId: 'edit-release-1',
+      resolvedPrompt: 'Frozen edit prompt', dailyLimit: 5,
+    }));
+    expect(enqueueEdit).toHaveBeenCalledWith('job-edit-1');
+  });
+
+  it('rejects manual edit in production even when its dark flag is enabled', async () => {
+    const { app, mediaWorkflowService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, true, true, 'oss', true, true, true,
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'FULL_EDIT', sourceAssetId: 'asset-1', userPrompt: 'Clean background',
+      idempotencyKey: 'manual-full-edit-production', context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(mediaWorkflowService.createImageEdit).not.toHaveBeenCalled();
+    expect(enqueueEdit).not.toHaveBeenCalled();
+  });
+
+  it('finalizes a mask only through the owner-scoped inpaint endpoint', async () => {
+    const { app, createEditMask } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, false, true,
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      payload: {
+        sourceAssetId: 'asset-1',
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(createEditMask).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', contextId: 'goods-1',
+      sourceAssetId: 'asset-1', maskBuffer: Buffer.from('mask-mask-mask-mask'),
+    }), expect.any(Object));
+    expect(response.json()).toMatchObject({
+      code: 1, replayed: false,
+      data: { id: 'mask-asset-1', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' },
+    });
+  });
+
+  it('rejects an edit mask before storage when the upload resource limit is exhausted', async () => {
+    const { app, createEditMask } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, false, true, 5, false,
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      payload: {
+        sourceAssetId: 'asset-1',
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ code: 'EDIT_RESOURCE_QUOTA_EXCEEDED' });
+    expect(createEditMask).toHaveBeenCalledOnce();
+  });
+
+  it('rate-limits edit-mask requests before decode and mask validation', async () => {
+    const { app, createEditMask } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true,
+      false, true, 5, true, false,
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      payload: {
+        sourceAssetId: 'asset-1',
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ code: 'EDIT_RESOURCE_RATE_LIMITED' });
+    expect(createEditMask).not.toHaveBeenCalled();
+  });
+
+  it('authenticates edit-mask requests before parsing their large JSON body', async () => {
+    const app = Fastify();
+    const rateCheck = vi.fn(async () => ({ allowed: true as const }));
+    await app.register(aiImageRoutes, {
+      authenticate: async (_request: FastifyRequest, reply: any) => reply.status(401).send({
+        code: 0,
+        msg: 'not signed in',
+      }),
+      checkEditMaskRequestRate: rateCheck,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      headers: { 'content-type': 'application/json' },
+      payload: '{invalid-json',
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(rateCheck).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits authenticated edit-mask requests before JSON parsing', async () => {
+    const app = Fastify();
+    const rateCheck = vi.fn(async () => ({
+      allowed: false as const,
+      reason: 'Edit mask request rate exceeded',
+    }));
+    await app.register(aiImageRoutes, {
+      authenticate: async (request: FastifyRequest) => {
+        (request as any).user = { userId: 'owner-1', actorUserId: 'actor-1' };
+      },
+      checkEditMaskRequestRate: rateCheck,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      headers: { 'content-type': 'application/json' },
+      payload: '{invalid-json',
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ code: 'EDIT_RESOURCE_RATE_LIMITED' });
+    expect(rateCheck).toHaveBeenCalledWith('owner-1');
+  });
+
   it('reports owner-scoped Web operation readiness without exposing provider secrets', async () => {
     const { app } = await build(true, 'owner-1', true);
     const response = await app.inject({ method: 'GET', url: '/capabilities' });
@@ -229,14 +433,14 @@ describe('AI media workflow routes', () => {
       ...workflow,
       status: 'SUCCEEDED',
       reviewStatus: 'PENDING',
-      jobs: [{ id: 'job-1', provider: 'fake', assets: [{ id: 'output-1', url: '/output.png' }] }],
+      jobs: [{ id: 'job-1', provider: 'fake', assets: [{ id: 'output-1', kind: 'AI_GENERATED', url: '/output.png' }] }],
     });
     const review = await app.inject({ method: 'POST', url: '/workflows/workflow-1/review', payload: {
       expectedRevision: 1, outputAssetId: 'output-1', decision: 'APPROVE',
     } });
     repository.getById.mockResolvedValueOnce({
       id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', operation: 'IMAGE_TO_IMAGE',
-      provider: 'fake', status: 'SUCCEEDED', assets: [{ id: 'output-1', url: '/output.png' }],
+      provider: 'fake', status: 'SUCCEEDED', assets: [{ id: 'output-1', kind: 'AI_GENERATED', url: '/output.png' }],
     } as any);
     const apply = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
       mode: 'append', targetType: 'collect', targetId: 'goods-1',
@@ -354,6 +558,7 @@ describe('AI media workflow routes', () => {
     expect(response.json().data).not.toHaveProperty('requestFingerprint');
     expect(JSON.stringify(response.json())).not.toContain('secret-key');
     expect(JSON.stringify(response.json())).not.toContain('secret-output-key');
+    expect(JSON.stringify(response.json())).not.toContain('/provider-raw.png');
     expect(response.json().data.jobs[0]).toMatchObject({ costStatus: 'RELEASED' });
     expect(response.json().data.jobs[0]).not.toHaveProperty('costReservation');
     expect(JSON.stringify(response.json())).not.toContain('maximumCostMinor');
@@ -481,6 +686,62 @@ describe('AI media workflow routes', () => {
     expect(enqueueTranslation).not.toHaveBeenCalled();
   });
 
+  it('forwards and enforces the image generation daily limit on an edit retry', async () => {
+    const { app, mediaWorkflowService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, true, false, 7,
+    );
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'FULL_EDIT' as any,
+      status: 'FAILED',
+    });
+    mediaWorkflowService.retry.mockRejectedValueOnce(
+      new AiMediaWorkflowError('AI_IMAGE_EDIT_QUOTA_EXCEEDED', 'quota exceeded'),
+    );
+
+    const response = await app.inject({
+      method: 'POST', url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 2, idempotencyKey: 'edit-retry-daily-quota' },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ code: 'AI_IMAGE_EDIT_QUOTA_EXCEEDED' });
+    expect(mediaWorkflowService.retry).toHaveBeenCalledWith(expect.objectContaining({ dailyLimit: 7 }));
+    expect(enqueueEdit).not.toHaveBeenCalled();
+  });
+
+  it('replays an accepted edit retry after the source snapshot changes', async () => {
+    const { app, mediaWorkflowService, mediaContextService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, true, false, 7,
+    );
+    const failed = {
+      ...workflow,
+      operation: 'FULL_EDIT' as any,
+      status: 'FAILED' as const,
+      inputs: [{ assetId: 'old-source', role: 'REFERENCE', ordinal: 0 }],
+    };
+    mediaWorkflowService.get.mockResolvedValueOnce(failed);
+    mediaWorkflowService.retry.mockResolvedValueOnce({
+      workflow: { ...failed, status: 'QUEUED' as const },
+      jobId: 'edit-job-replayed',
+      replayed: true,
+    });
+    mediaContextService.loadCollect.mockRejectedValueOnce(new Error('source snapshot changed'));
+
+    const response = await app.inject({
+      method: 'POST', url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 2, idempotencyKey: 'edit-retry-response-loss' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ code: 1, replayed: true });
+    expect(mediaWorkflowService.retry).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'edit-retry-response-loss', dailyLimit: 7,
+    }));
+    expect(mediaContextService.loadCollect).not.toHaveBeenCalled();
+    expect(enqueueEdit).not.toHaveBeenCalled();
+  });
+
   it('reports a disabled read context without surfacing a transport error', async () => {
     const { app, mediaContextService } = await build(false);
     const response = await app.inject({ method: 'GET', url: '/contexts/collect/goods-1' });
@@ -497,6 +758,15 @@ describe('AI media workflow routes', () => {
       ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 10,
     });
     expect(response.json().data).toHaveLength(1);
+  });
+
+  it('does not expose trusted input storage coordinates from the job detail DTO', async () => {
+    const { app } = await build();
+    const response = await app.inject({ method: 'GET', url: '/jobs/job-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).not.toHaveProperty('inputAssets');
+    expect(response.body).not.toContain('private-source.png');
   });
 
   it('returns safe translation metadata while keeping the frozen operation config private', async () => {
@@ -543,6 +813,33 @@ describe('AI media workflow routes', () => {
     } });
     expect(retried.statusCode).toBe(202);
     expect(enqueue).toHaveBeenCalledWith('job-2');
+  });
+
+  it('validates an inpaint workflow against its source image without treating the mask as stale source media', async () => {
+    const { app, mediaWorkflowService } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true, false, true,
+    );
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'INPAINT' as any,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      inputs: [
+        { assetId: 'asset-1', role: 'REFERENCE', ordinal: 0 },
+        { assetId: 'mask-asset-1', role: 'MASK', ordinal: 0 },
+      ],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/review',
+      payload: { expectedRevision: 2, outputAssetId: 'output-1', decision: 'APPROVE' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mediaWorkflowService.review).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'workflow-1', outputAssetId: 'output-1', decision: 'APPROVE',
+    }));
   });
 
   it('keeps suite child workflows behind the suite-level lifecycle contract', async () => {
@@ -605,6 +902,9 @@ describe('AI media workflow routes', () => {
       status: 'FAILED',
       inputs: [{ assetId: 'asset-from-old-snapshot', url: '/images/old-source.png' }],
     });
+    mediaWorkflowService.retry.mockRejectedValueOnce(
+      new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', 'source snapshot changed'),
+    );
 
     const response = await app.inject({ method: 'POST', url: '/workflows/workflow-1/retry', payload: {
       expectedRevision: 1,
@@ -613,7 +913,9 @@ describe('AI media workflow routes', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
-    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(mediaWorkflowService.retry).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'retry-stale-source',
+    }));
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -692,7 +994,7 @@ describe('AI media workflow routes', () => {
     const { app, repository } = await build();
     repository.getById.mockResolvedValueOnce({
       id: 'job-translation-1', ownerUserId: 'owner-1', workflowId: 'workflow-1',
-      operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', assets: [{ id: 'output-1', url: '/output.png' }],
+      operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', assets: [{ id: 'output-1', kind: 'AI_GENERATED', url: '/output.png' }],
     } as any);
     const response = await app.inject({ method: 'POST', url: '/jobs/job-translation-1/apply', payload: {
       mode: 'replace', targetType: 'collect', targetId: 'goods-1',

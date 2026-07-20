@@ -39,6 +39,11 @@ const steps = [
     args: ['scripts/ai-provider-dispatch-deploy-safety.test.mjs'],
   },
   {
+    name: 'AI media dark deployment contract',
+    command: 'node',
+    args: ['scripts/ai-media-dark-deploy.test.mjs'],
+  },
+  {
     name: 'admin AI cost reconciliation contract',
     command: 'node',
     args: ['scripts/web-admin-ai-cost-reconciliation.test.mjs'],

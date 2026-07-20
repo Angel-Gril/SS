@@ -19,6 +19,12 @@ const record = (row: any): AiImageJobRecord => ({
       url: input.assetUrl,
       mimeType: input.mimeType,
       sha256: input.assetSha256,
+      sizeBytes: input.asset?.sizeBytes ?? null,
+      width: input.width,
+      height: input.height,
+      storageBackend: input.asset?.storageBackend ?? null,
+      storageKey: input.asset?.storageKey ?? null,
+      kind: input.asset?.kind,
     }))
     : row.inputAssets,
   estimatedCostCents: Number(row.estimatedCostCents || 0),
@@ -463,7 +469,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         assets: true,
         workflow: {
           include: {
-            inputs: { orderBy: { ordinal: 'asc' } },
+            inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
             suiteSlot: { select: { suiteId: true, ownerUserId: true } },
           },
         },
@@ -687,6 +693,103 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       );
     });
   }
+  async recordProviderOutput(id: string, asset: AiImageAssetInput) {
+    if (
+      asset.jobId !== id
+      || asset.kind !== 'AI_PROVIDER_OUTPUT'
+      || !asset.sha256
+      || asset.storageBackend === 'ozon-cdn'
+      || !asset.storageKey
+    ) {
+      throw Object.assign(new Error('Provider output asset does not satisfy the edit persistence contract'), {
+        code: 'INVALID_PROVIDER_OUTPUT',
+      });
+    }
+    const matchesPersistedOutput = (existing: any) => Boolean(
+      existing
+      && existing.aiImageJobId === id
+      && existing.ownerUserId === asset.ownerUserId
+      && existing.kind === 'AI_PROVIDER_OUTPUT'
+      && existing.sha256 === asset.sha256
+      && existing.url === asset.url
+      && existing.storageBackend === asset.storageBackend
+      && existing.storageKey === asset.storageKey
+      && existing.mimeType === asset.mimeType
+      && Number(existing.sizeBytes) === asset.sizeBytes
+      && (existing.width ?? null) === (asset.width ?? null)
+      && (existing.height ?? null) === (asset.height ?? null),
+    );
+    try {
+      return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        const job = await tx.aiImageJob.findUnique({ where: { id } });
+        if (
+          !job
+          || job.ownerUserId !== asset.ownerUserId
+          || !['FULL_EDIT', 'INPAINT'].includes(String(job.operation))
+          || !['RUNNING', 'CANCEL_REQUESTED'].includes(String(job.status))
+        ) {
+          throw Object.assign(new Error('Provider output cannot be persisted for the current job'), {
+            code: 'INVALID_STATE',
+          });
+        }
+        const existing = await tx.mediaAsset.findFirst({
+          where: { aiImageJobId: id, ownerUserId: asset.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
+        });
+        if (existing) {
+          if (!matchesPersistedOutput(existing)) {
+            throw Object.assign(new Error('Provider output identity conflicts with the persisted attempt'), {
+              code: 'PROVIDER_OUTPUT_CONFLICT',
+            });
+          }
+          return { ...asset, ...existing };
+        }
+        const created = await tx.mediaAsset.create({ data: {
+          ownerUserId: asset.ownerUserId,
+          aiImageJobId: asset.jobId,
+          kind: 'AI_PROVIDER_OUTPUT',
+          url: asset.url,
+          storageBackend: asset.storageBackend,
+          storageKey: asset.storageKey,
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes,
+          width: asset.width ?? null,
+          height: asset.height ?? null,
+          sha256: asset.sha256,
+          metadata: asset.metadata || undefined,
+        } });
+        if (job.workflowId) {
+          const inputs = await tx.aiMediaWorkflowInput.findMany({
+            where: { workflowId: job.workflowId },
+            orderBy: [{ role: 'asc' }, { ordinal: 'asc' }],
+          });
+          for (const input of inputs) {
+            await tx.mediaAssetLineage.create({ data: {
+              ownerUserId: job.ownerUserId,
+              workflowId: job.workflowId,
+              jobId: job.id,
+              inputAssetId: input.assetId,
+              outputAssetId: created.id,
+              inputRole: input.role,
+              ordinal: input.ordinal,
+              operation: job.operation,
+            } });
+          }
+          await appendWorkflowEvent(tx, job, 'PROVIDER_OUTPUT_PERSISTED', {
+            outputAssetId: created.id,
+            sha256: asset.sha256,
+          });
+        }
+        return { ...asset, ...created };
+      });
+    } catch (error: any) {
+      if (error?.code !== 'P2002') throw error;
+      const winner = await (this.prisma as any).mediaAsset.findFirst({
+        where: { aiImageJobId: id, ownerUserId: asset.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
+      });
+      if (!matchesPersistedOutput(winner)) throw error;
+      return { ...asset, ...winner };
+    }
+  }
   async complete(id: string, data: {
     providerJobId: string | null;
     providerResultReceivedWithoutIdentity?: boolean;
@@ -694,6 +797,11 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
     billedUnits: number;
     assets: AiImageAssetInput[];
   }) {
+    if (data.assets.some((asset) => asset.kind && asset.kind !== 'AI_GENERATED')) {
+      throw Object.assign(new Error('Job completion accepts only reviewable final assets'), {
+        code: 'INVALID_FINAL_OUTPUT',
+      });
+    }
     const mismatch = await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const persisted = await tx.aiImageJob.findUnique({ where: { id } });
       if (!persisted) return false;
@@ -716,6 +824,20 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         await finalizeJobCost(tx, job, 'FAILED');
         return false;
       }
+      if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation))) {
+        const providerOutputCount = await tx.mediaAsset.count({
+          where: { aiImageJobId: id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
+        });
+        if (
+          providerOutputCount !== 1
+          || data.assets.length !== 1
+          || data.assets[0]?.kind !== 'AI_GENERATED'
+        ) {
+          throw Object.assign(new Error('Edit completion requires one raw output and one final candidate'), {
+            code: 'INVALID_EDIT_OUTPUT_GRAPH',
+          });
+        }
+      }
       const providerJobId = job.providerJobId;
       const completed = await tx.aiImageJob.updateMany({
         where: { id, status: 'RUNNING' },
@@ -728,7 +850,20 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       });
       const outputs = [];
       for (const asset of data.assets) {
-        outputs.push(await tx.mediaAsset.create({ data: { ownerUserId: asset.ownerUserId, aiImageJobId: asset.jobId, kind: 'AI_GENERATED', url: asset.url, storageBackend: asset.storageBackend, storageKey: asset.storageKey, mimeType: asset.mimeType, sizeBytes: asset.sizeBytes, sha256: asset.sha256 } }));
+        outputs.push(await tx.mediaAsset.create({ data: {
+          ownerUserId: asset.ownerUserId,
+          aiImageJobId: asset.jobId,
+          kind: asset.kind || 'AI_GENERATED',
+          url: asset.url,
+          storageBackend: asset.storageBackend,
+          storageKey: asset.storageKey,
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes,
+          width: asset.width ?? null,
+          height: asset.height ?? null,
+          sha256: asset.sha256,
+          metadata: asset.metadata || undefined,
+        } }));
       }
       if (job.workflowId) {
         const inputs = await tx.aiMediaWorkflowInput.findMany({ where: { workflowId: job.workflowId }, orderBy: { ordinal: 'asc' } });

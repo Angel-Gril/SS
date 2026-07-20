@@ -26,6 +26,7 @@ set -euo pipefail
 #   WEB_SERVICE=ss-erp-web
 #   WORKER_SERVICE=ss-erp-worker
 #   HEALTH_URL=http://127.0.0.1:3001/ready
+#   MIGRATION_TIMEOUT=20m
 #
 # Usage:
 #   DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg ./scripts/deploy-app-dir.sh [commit]
@@ -46,12 +47,16 @@ API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
+MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT:-20m}"
 
 log() { printf '[deploy-app] %s\n' "$*"; }
 fail() { printf '[deploy-app] ERROR: %s\n' "$*" >&2; exit 1; }
 
 if [ -z "$DEPLOY_HOST" ]; then
   fail "DEPLOY_HOST is required"
+fi
+if [[ ! "$MIGRATION_TIMEOUT" =~ ^[1-9][0-9]*[smh]$ ]]; then
+  fail "MIGRATION_TIMEOUT must be a positive duration ending in s, m, or h"
 fi
 
 SSH_ARGS=(-o BatchMode=yes)
@@ -78,7 +83,7 @@ log "Uploading package to $DEPLOY_USER@$DEPLOY_HOST"
 scp "${SSH_ARGS[@]}" "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
 
 log "Deploying app-dir release"
-REMOTE_COMMAND="COMMIT_HASH=$(shell_escape "$COMMIT_HASH") DEPLOY_BASE=$(shell_escape "$DEPLOY_BASE") APP_DIR=$(shell_escape "$APP_DIR") BACKUP_DIR=$(shell_escape "$BACKUP_DIR") BACKUP_LOG_DIR=$(shell_escape "$BACKUP_LOG_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") RUN_DB_BACKUP=$(shell_escape "$RUN_DB_BACKUP") KEEP_APP_BACKUPS=$(shell_escape "$KEEP_APP_BACKUPS") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") TARBALL_NAME=$(shell_escape "$(basename "$TARBALL")") bash -s"
+REMOTE_COMMAND="COMMIT_HASH=$(shell_escape "$COMMIT_HASH") DEPLOY_BASE=$(shell_escape "$DEPLOY_BASE") APP_DIR=$(shell_escape "$APP_DIR") BACKUP_DIR=$(shell_escape "$BACKUP_DIR") BACKUP_LOG_DIR=$(shell_escape "$BACKUP_LOG_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") RUN_DB_BACKUP=$(shell_escape "$RUN_DB_BACKUP") KEEP_APP_BACKUPS=$(shell_escape "$KEEP_APP_BACKUPS") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") TARBALL_NAME=$(shell_escape "$(basename "$TARBALL")") bash -s"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 
@@ -96,6 +101,7 @@ API_SERVICE="${API_SERVICE:?}"
 WEB_SERVICE="${WEB_SERVICE:?}"
 WORKER_SERVICE="${WORKER_SERVICE:?}"
 HEALTH_URL="${HEALTH_URL:?}"
+MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT:?}"
 TARBALL="${TARBALL_NAME:?}"
 
 log() { printf '[deploy-app] %s\n' "$*"; }
@@ -187,8 +193,8 @@ restore_quiesced_services() {
   local status=$?
   trap - EXIT
   if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
-    log "Restoring current Worker/API after failed deploy"
-    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+    systemctl stop "$WORKER_SERVICE" "$API_SERVICE" || true
+    log "Worker/API remain stopped after failed migration or gate; operator recovery is required"
   fi
   exit "$status"
 }
@@ -216,12 +222,15 @@ fi
 SERVICES_QUIESCED=1
 
 log "Migrating database"
-run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma migrate deploy"
+run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; timeout --signal=TERM --kill-after=30s '$MIGRATION_TIMEOUT' npx prisma migrate deploy"
 
 if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
   log "Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
   run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' SKIP_SERVICE_CHECKS=1 SKIP_PROCESS_ENV_CHECKS=1 SKIP_HTTP_CHECK=1 bash scripts/diagnose-runtime-env.sh"
 fi
+
+log "Verifying AI Media rollout remains dark"
+run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' bash scripts/verify-ai-media-dark.sh"
 
 log "Switching $APP_DIR"
 mv "$APP_DIR" "$BACKUP_TARGET"

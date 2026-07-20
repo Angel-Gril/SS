@@ -4,14 +4,25 @@ import {
   AI_MEDIA_WORKFLOW_PROVIDER,
   aiMediaPayloadHash,
   createAiImageTranslationWorkflowFingerprint,
+  createAiImageEditWorkflowFingerprint,
   createAiMediaWorkflowFingerprint,
   normalizeAiImageTranslationOptions,
   normalizeAiMediaWorkflowReferences,
   type AiMediaWorkflowRecord,
   type AiMediaWorkflowRepository,
   type CreateAiImageTranslationWorkflowInput,
+  type CreateAiImageEditWorkflowInput,
   type CreateAiMediaWorkflowInput,
 } from '../services/ai-media-workflows.js';
+import {
+  AI_IMAGE_EDIT_MODEL,
+  AI_IMAGE_EDIT_PROVIDER,
+} from '../services/ai-image-provider-capabilities.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import {
+  AI_IMAGE_EDIT_MAX_INPUT_BYTES,
+  AI_IMAGE_EDIT_POLICY_VERSION,
+} from '../services/ai-image-edit.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
   releaseAiCostInTransaction,
@@ -97,6 +108,102 @@ interface FrozenSourceAsset {
   mimeType: string;
   width: number | null;
   height: number | null;
+}
+
+interface FrozenEditAsset extends FrozenSourceAsset {
+  ownerUserId: string;
+  kind: string;
+  storageBackend: string;
+  storageKey: string | null;
+  sizeBytes: number;
+  metadata: unknown;
+}
+
+function validFrozenEditAsset(asset: FrozenEditAsset | undefined, kind: 'SOURCE_ORIGINAL' | 'EDIT_MASK') {
+  return Boolean(
+    asset
+    && asset.kind === kind
+    && /^[a-f0-9]{64}$/u.test(String(asset.sha256 || ''))
+    && ['local', 'oss'].includes(asset.storageBackend)
+    && asset.storageKey
+    && Number.isSafeInteger(asset.width)
+    && Number.isSafeInteger(asset.height)
+    && Number(asset.width) >= 1
+    && Number(asset.height) >= 1
+    && Number(asset.width) * Number(asset.height) <= 12_000_000
+    && Number.isSafeInteger(asset.sizeBytes)
+    && asset.sizeBytes > 0
+    && asset.sizeBytes <= AI_IMAGE_EDIT_MAX_INPUT_BYTES,
+  );
+}
+
+function editRequestFingerprint(
+  input: CreateAiImageEditWorkflowInput,
+  source: FrozenEditAsset,
+  mask: FrozenEditAsset | null,
+) {
+  return aiMediaPayloadHash({
+    request: createAiImageEditWorkflowFingerprint(input),
+    sourceAssetSha256: source.sha256,
+    maskAssetSha256: mask?.sha256 || null,
+  });
+}
+
+function editRequestFingerprintFromHashes(
+  input: CreateAiImageEditWorkflowInput,
+  sourceAssetSha256: string | null | undefined,
+  maskAssetSha256: string | null | undefined,
+) {
+  return aiMediaPayloadHash({
+    request: createAiImageEditWorkflowFingerprint(input),
+    sourceAssetSha256: sourceAssetSha256 || null,
+    maskAssetSha256: maskAssetSha256 || null,
+  });
+}
+
+function replayImageEditWorkflow(existing: any, input: CreateAiImageEditWorkflowInput) {
+  const inputs = Array.isArray(existing?.inputs) ? existing.inputs : [];
+  const source = inputs.find((row: any) => row?.role === 'REFERENCE' && row?.ordinal === 0);
+  const mask = inputs.find((row: any) => row?.role === 'MASK' && row?.ordinal === 0);
+  const fingerprint = editRequestFingerprintFromHashes(
+    input,
+    source?.assetSha256,
+    mask?.assetSha256,
+  );
+  const jobId = String(existing?.jobs?.[existing.jobs.length - 1]?.id || '');
+  return {
+    kind: existing?.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
+    workflow: workflowRecord(existing),
+    jobId,
+  };
+}
+
+async function assertImageEditDailyQuota(tx: any, ownerUserId: string, dailyLimit: number) {
+  if (dailyLimit <= 0) return;
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const [active, completed] = await Promise.all([
+    tx.aiImageJob.aggregate({
+      where: {
+        ownerUserId,
+        createdAt: { gte: dayStart },
+        status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+      },
+      _sum: { requestedImageCount: true },
+    }),
+    tx.aiImageJob.aggregate({
+      where: { ownerUserId, createdAt: { gte: dayStart }, status: 'SUCCEEDED' },
+      _sum: { billedUnits: true },
+    }),
+  ]);
+  const used = Number(active._sum.requestedImageCount || 0) + Number(completed._sum.billedUnits || 0);
+  if (used + 1 > dailyLimit) {
+    throw Object.assign(new Error(`AI image edit daily quota exceeded (${used}/${dailyLimit})`), {
+      code: 'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+      used,
+      limit: dailyLimit,
+    });
+  }
 }
 
 function orderSourceAssets(
@@ -275,6 +382,203 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         kind: existing.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
         workflow: workflowRecord(existing), jobId,
       };
+    }
+  }
+
+  async createImageEdit(input: CreateAiImageEditWorkflowInput) {
+    const sourceAssetId = input.sourceAssetId.trim();
+    const maskAssetId = input.operation === 'INPAINT' ? String(input.maskAssetId || '').trim() : '';
+    const assetIds = [sourceAssetId, ...(maskAssetId ? [maskAssetId] : [])];
+    const loadAssets = async (client: any) => {
+      const rows = await client.mediaAsset.findMany({
+        where: { id: { in: assetIds }, ownerUserId: input.ownerUserId },
+      }) as FrozenEditAsset[];
+      const byId = new Map(rows.map((asset) => [asset.id, asset]));
+      return {
+        source: byId.get(sourceAssetId),
+        mask: maskAssetId ? byId.get(maskAssetId) : null,
+      };
+    };
+    const assertAssets = (source: FrozenEditAsset | undefined, mask: FrozenEditAsset | null | undefined) => {
+      if (!validFrozenEditAsset(source, 'SOURCE_ORIGINAL')) {
+        throw Object.assign(new Error('Owned immutable source asset not found'), { code: 'SOURCE_ASSET_NOT_FOUND' });
+      }
+      if (input.operation === 'INPAINT') {
+        if (!validFrozenEditAsset(mask || undefined, 'EDIT_MASK')) {
+          throw Object.assign(new Error('Owned immutable edit mask not found'), { code: 'MASK_ASSET_NOT_FOUND' });
+        }
+        const maskMetadata = mask!.metadata && typeof mask!.metadata === 'object'
+          ? mask!.metadata as Record<string, unknown>
+          : {};
+        if (
+          mask!.sourceCaptureSnapshotId !== source!.sourceCaptureSnapshotId
+          || mask!.width !== source!.width
+          || mask!.height !== source!.height
+          || maskMetadata.maskSemantics !== AI_IMAGE_EDIT_MASK_SEMANTICS
+          || maskMetadata.sourceAssetId !== source!.id
+          || maskMetadata.sourceSha256 !== source!.sha256
+        ) {
+          throw Object.assign(new Error('Edit mask does not match the frozen source contract'), {
+            code: 'MASK_ASSET_INVALID',
+          });
+        }
+      } else if (mask) {
+        throw Object.assign(new Error('Full-image edit cannot include a mask asset'), { code: 'MASK_ASSET_INVALID' });
+      }
+      return { source: source!, mask: mask || null };
+    };
+
+    try {
+      return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        const existingBeforeAuthority = await tx.aiMediaWorkflow.findUnique({
+          where: { ai_media_workflow_owner_idempotency: {
+            ownerUserId: input.ownerUserId,
+            idempotencyKey: input.idempotencyKey,
+          } },
+          include: detailInclude,
+        });
+        if (existingBeforeAuthority) {
+          return replayImageEditWorkflow(existingBeforeAuthority, input);
+        }
+        const loaded = await loadAssets(tx);
+        const { source, mask } = assertAssets(loaded.source, loaded.mask);
+        const context = await tx.supplyGoods.findFirst({
+          where: { id: input.context.id, userId: input.ownerUserId },
+          select: { id: true, sourceCaptureSubject: { select: {
+            snapshots: {
+              orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+              take: 1,
+              select: { id: true },
+            },
+          } } },
+        });
+        const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id || null;
+        if (!context || !snapshotId || source.sourceCaptureSnapshotId !== snapshotId) {
+          throw Object.assign(new Error('Source asset does not belong to the current collect context'), {
+            code: 'AI_MEDIA_CONTEXT_MISMATCH',
+          });
+        }
+        const fingerprint = editRequestFingerprint(input, source, mask);
+        await assertImageEditDailyQuota(tx, input.ownerUserId, input.dailyLimit);
+
+        const workflow = await tx.aiMediaWorkflow.create({ data: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          operation: input.operation,
+          status: 'QUEUED',
+          reviewStatus: 'NOT_READY',
+          idempotencyKey: input.idempotencyKey,
+          requestFingerprint: fingerprint,
+          contextType: input.context.type,
+          contextId: input.context.id,
+          contextSkuKey: input.context.skuKey || null,
+          contextSlotKey: input.context.slotKey || null,
+        } });
+        const frozenInputs = [
+          { asset: source, role: 'REFERENCE' as const },
+          ...(mask ? [{ asset: mask, role: 'MASK' as const }] : []),
+        ];
+        for (const frozen of frozenInputs) {
+          await tx.aiMediaWorkflowInput.create({ data: {
+            workflowId: workflow.id,
+            ownerUserId: input.ownerUserId,
+            assetId: frozen.asset.id,
+            role: frozen.role,
+            ordinal: 0,
+            assetSha256: frozen.asset.sha256,
+            assetUrl: frozen.asset.url,
+            mimeType: frozen.asset.mimeType,
+            width: frozen.asset.width,
+            height: frozen.asset.height,
+          } });
+        }
+        const operationConfig = {
+          policyVersion: AI_IMAGE_EDIT_POLICY_VERSION,
+          sourceAssetSha256: source.sha256,
+          ...(mask ? {
+            maskAssetSha256: mask.sha256,
+            maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+          } : {}),
+        };
+        const job = await tx.aiImageJob.create({ data: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          operation: input.operation,
+          workflowId: workflow.id,
+          workflowAttempt: 1,
+          status: 'QUEUED',
+          provider: AI_IMAGE_EDIT_PROVIDER,
+          model: AI_IMAGE_EDIT_MODEL,
+          prompt: input.prompt,
+          negativePrompt: input.negativePrompt,
+          resolvedPrompt: input.resolvedPrompt,
+          resolvedNegativePrompt: input.resolvedNegativePrompt,
+          templateKey: input.templateKey,
+          templateReleaseId: input.templateReleaseId,
+          templateChecksum: input.templateChecksum,
+          templateSnapshot: input.templateSnapshot,
+          requestFingerprint: fingerprint,
+          inputAssets: frozenInputs.map((frozen) => ({
+            assetId: frozen.asset.id,
+            role: frozen.role,
+            ordinal: 0,
+            sha256: frozen.asset.sha256,
+            sizeBytes: frozen.asset.sizeBytes,
+          })),
+          operationConfig,
+          requestedImageCount: 1,
+          width: source.width,
+          height: source.height,
+          maxAttempts: 1,
+          idempotencyKey: `${input.idempotencyKey}:attempt:1`,
+          estimatedCostCents: 0,
+        } });
+        await reserveAiCostInTransaction(tx, {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          workflowId: workflow.id,
+          jobId: job.id,
+          idempotencyKey: costReservationIdempotencyKey(job.id),
+          requestFingerprint: fingerprint,
+          provider: AI_IMAGE_EDIT_PROVIDER,
+          model: AI_IMAGE_EDIT_MODEL,
+          operation: input.operation,
+          currency: 'USD',
+          estimatedCostMinor: 0,
+          maximumCostMinor: 0,
+        });
+        await tx.aiMediaWorkflowEvent.create({ data: eventData({
+          workflowId: workflow.id,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          jobId: job.id,
+          eventKey: `${workflow.id}:created`,
+          eventType: 'CREATED',
+          payload: {
+            operation: input.operation,
+            attempt: 1,
+            sourceAssetId: source.id,
+            maskAssetId: mask?.id || null,
+            maskSemantics: mask ? AI_IMAGE_EDIT_MASK_SEMANTICS : null,
+          },
+        }) });
+        const created = await tx.aiMediaWorkflow.findUnique({
+          where: { id: workflow.id },
+          include: detailInclude,
+        });
+        return { kind: 'created' as const, workflow: workflowRecord(created), jobId: job.id };
+      });
+    } catch (error: any) {
+      if (error?.code !== 'P2002') throw error;
+      const existing = await (this.prisma as any).aiMediaWorkflow.findUnique({
+        where: { ai_media_workflow_owner_idempotency: {
+          ownerUserId: input.ownerUserId,
+          idempotencyKey: input.idempotencyKey,
+        } },
+        include: detailInclude,
+      });
+      if (!existing) throw error;
+      return replayImageEditWorkflow(existing, input);
     }
   }
 
@@ -603,6 +907,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
             });
           }
         }
+        if (previous.operation === 'FULL_EDIT' || previous.operation === 'INPAINT') {
+          if (!Number.isSafeInteger(input.dailyLimit) || Number(input.dailyLimit) < 0) {
+            throw Object.assign(new Error('AI image edit retry quota is not available'), {
+              code: 'AI_IMAGE_EDIT_QUOTA_UNAVAILABLE',
+            });
+          }
+          await assertImageEditDailyQuota(tx, input.ownerUserId, Number(input.dailyLimit));
+        }
         if (previous.operation === 'IMAGE_TRANSLATE' && Number(input.dailyLimit) > 0) {
           const dayStart = new Date();
           dayStart.setUTCHours(0, 0, 0, 0);
@@ -702,7 +1014,13 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       await assertWorkflowSourceSnapshotCurrent(tx, workflow);
       const output = await tx.mediaAsset.findFirst({ where: {
         id: input.outputAssetId, ownerUserId: input.ownerUserId,
-        aiImageJob: { workflowId: input.id, status: 'SUCCEEDED' },
+        kind: 'AI_GENERATED',
+        aiImageJob: {
+          workflowId: input.id,
+          workflowAttempt: workflow.currentAttempt,
+          operation: workflow.operation,
+          status: 'SUCCEEDED',
+        },
       } });
       if (!output) return null;
       const reviewStatus = input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';

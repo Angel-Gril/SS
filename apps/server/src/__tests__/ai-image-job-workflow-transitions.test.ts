@@ -37,6 +37,44 @@ describe('AI image workflow child terminal transitions', () => {
     };
   }
 
+  it('rejects raw Provider assets passed through the shared completion interface', async () => {
+    const transaction = vi.fn();
+    const repository = new PrismaAiImageJobRepository({ $transaction: transaction } as never);
+
+    await expect(repository.complete('job-1', {
+      providerJobId: null,
+      actualCostCents: 0,
+      billedUnits: 1,
+      assets: [{
+        ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_PROVIDER_OUTPUT',
+        url: '/uploads/raw.png', storageBackend: 'local', storageKey: 'raw.png',
+        mimeType: 'image/png', sizeBytes: 1, sha256: 'a'.repeat(64),
+      }],
+    })).rejects.toMatchObject({ code: 'INVALID_FINAL_OUTPUT' });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('recovers the exact raw-output winner after a concurrent unique-key race', async () => {
+    const asset = {
+      ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_PROVIDER_OUTPUT' as const,
+      url: '/uploads/raw.png', storageBackend: 'local', storageKey: 'raw.png',
+      mimeType: 'image/png', sizeBytes: 10, width: 2, height: 2, sha256: 'a'.repeat(64),
+    };
+    const winner = {
+      id: 'raw-winner-1', aiImageJobId: 'job-1', ...asset,
+    };
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async () => {
+        throw Object.assign(new Error('unique race'), { code: 'P2002' });
+      }),
+      mediaAsset: { findFirst: vi.fn(async () => winner) },
+    } as never);
+
+    await expect(repository.recordProviderOutput('job-1', asset)).resolves.toMatchObject({
+      id: 'raw-winner-1', sha256: asset.sha256,
+    });
+  });
+
   it('loads frozen workflow inputs in ordinal order for provider execution', async () => {
     const findUnique = vi.fn(async () => null);
     await new PrismaAiImageJobRepository({ aiImageJob: { findUnique } } as never).getById('job-1');
@@ -44,7 +82,7 @@ describe('AI image workflow child terminal transitions', () => {
       include: expect.objectContaining({
         workflow: {
           include: {
-            inputs: { orderBy: { ordinal: 'asc' } },
+            inputs: expect.objectContaining({ orderBy: { ordinal: 'asc' } }),
             suiteSlot: { select: { suiteId: true, ownerUserId: true } },
           },
         },

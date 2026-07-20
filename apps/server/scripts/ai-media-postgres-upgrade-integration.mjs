@@ -67,14 +67,15 @@ function prepareHistoricalMigrations() {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  if (names.at(-3) !== EXECUTION_MIGRATION
-    || names.at(-2) !== PLAN_ACTIVITY_MIGRATION
-    || names.at(-1) !== OUTPUT_JOB_OWNERSHIP_MIGRATION
+  const executionIndex = names.indexOf(EXECUTION_MIGRATION);
+  if (executionIndex < 0
+    || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
+    || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
     || names.filter((name) => name === EXECUTION_MIGRATION).length !== 1
     || names.filter((name) => name === PLAN_ACTIVITY_MIGRATION).length !== 1
     || names.filter((name) => name === OUTPUT_JOB_OWNERSHIP_MIGRATION).length !== 1) {
     throw new Error(
-      `${EXECUTION_MIGRATION}, ${PLAN_ACTIVITY_MIGRATION}, and ${OUTPUT_JOB_OWNERSHIP_MIGRATION} must be the three latest migrations`,
+      `${EXECUTION_MIGRATION}, ${PLAN_ACTIVITY_MIGRATION}, and ${OUTPUT_JOB_OWNERSHIP_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -84,14 +85,14 @@ function prepareHistoricalMigrations() {
     join(migrationsRoot, 'migration_lock.toml'),
     join(tempPrismaRoot, 'migrations', 'migration_lock.toml'),
   );
-  for (const name of names.slice(0, -3)) {
+  for (const name of names.slice(0, executionIndex)) {
     cpSync(
       join(migrationsRoot, name),
       join(tempPrismaRoot, 'migrations', name),
       { recursive: true, errorOnExist: true },
     );
   }
-  return names.length - 3;
+  return executionIndex;
 }
 
 async function addCurrentClientCompatibilityColumns(client) {

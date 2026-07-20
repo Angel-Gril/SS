@@ -11,6 +11,8 @@ import {
   type AiPromptConsumerContractDescriptor,
 } from './ai-prompt-consumer-contracts.js';
 import {
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_PROMPT_SAFETY_POLICY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
@@ -26,6 +28,8 @@ export const DEFAULT_AI_IMAGE_TEMPLATE_KEY = 'text-to-image.base';
 export const LISTING_COPY_TITLE_TEMPLATE_KEY = 'listing-copy.title';
 export const LISTING_COPY_DESCRIPTION_TEMPLATE_KEY = 'listing-copy.description';
 export {
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
 } from './ai-prompt-templates.js';
@@ -109,6 +113,8 @@ const BUILTIN_TEMPLATE_DEFINITIONS = {
   [DEFAULT_AI_IMAGE_TEMPLATE_KEY]: { label: '基础文生图', outputMode: 'media_candidate' as const },
   [AI_MEDIA_TRANSLATION_TEMPLATE_KEY]: { label: '图片翻译', outputMode: 'media_candidate' as const },
   [AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY]: { label: '套图槽位生成', outputMode: 'media_candidate' as const },
+  [AI_MEDIA_FULL_EDIT_TEMPLATE_KEY]: { label: '全图编辑', outputMode: 'media_candidate' as const },
+  [AI_MEDIA_INPAINT_TEMPLATE_KEY]: { label: '局部重绘', outputMode: 'media_candidate' as const },
   [LISTING_COPY_TITLE_TEMPLATE_KEY]: { label: '商品标题候选', outputMode: 'listing_copy_candidate' as const },
   [LISTING_COPY_DESCRIPTION_TEMPLATE_KEY]: { label: '商品描述候选', outputMode: 'listing_copy_candidate' as const },
   [AI_MEDIA_CURATION_TEMPLATE_KEY]: {
@@ -196,6 +202,24 @@ const DEFAULT_MEDIA_SUITE_GENERATION_TEMPLATE = [
 const DEFAULT_MEDIA_SUITE_GENERATION_CONSTRAINTS_TEMPLATE = [
   'Reject any result that violates this frozen constraint set:',
   '{{safety_constraints_json}}',
+].join('\n');
+const DEFAULT_FULL_IMAGE_EDIT_TEMPLATE = [
+  'Edit the supplied immutable source image while preserving the product and SKU identity.',
+  'Operator direction:',
+  '{{user_prompt}}',
+  'Return one unapplied review candidate.',
+].join('\n');
+const DEFAULT_INPAINT_TEMPLATE = [
+  'Edit only the white region of the server-validated mask over the immutable source image.',
+  'Preserve the product and every pixel outside the selected region.',
+  'Operator direction:',
+  '{{user_prompt}}',
+  'Return one unapplied review candidate.',
+].join('\n');
+const DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE = [
+  'Avoid watermarks, illegible text, invented claims, unrelated objects, and distorted products.',
+  'Operator exclusions (may be empty):',
+  '{{user_negative_prompt}}',
 ].join('\n');
 
 interface RegistryOptions {
@@ -788,6 +812,20 @@ export class AiPromptTemplateRegistryService {
         promptTemplate: DEFAULT_MEDIA_SUITE_GENERATION_TEMPLATE,
         negativePromptTemplate: DEFAULT_MEDIA_SUITE_GENERATION_CONSTRAINTS_TEMPLATE,
         note: 'Initialized as a fact-bound per-slot suite image generation template',
+      };
+    } else if (templateKey === AI_MEDIA_FULL_EDIT_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_FULL_IMAGE_EDIT_TEMPLATE,
+        negativePromptTemplate: DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized as a source-bound full-image edit candidate template',
+      };
+    } else if (templateKey === AI_MEDIA_INPAINT_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_INPAINT_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_INPAINT_TEMPLATE,
+        negativePromptTemplate: DEFAULT_MEDIA_EDIT_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized as a source-and-mask-bound inpaint candidate template',
       };
     } else if (templateKey === LISTING_COPY_TITLE_TEMPLATE_KEY) {
       template = {

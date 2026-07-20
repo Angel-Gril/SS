@@ -28,6 +28,8 @@ export interface AiImageProviderCapability {
 
 export const AI_IMAGE_SUITE_PROVIDER = 'fake';
 export const AI_IMAGE_SUITE_MODEL = 'fake-image-suite-v1';
+export const AI_IMAGE_EDIT_PROVIDER = 'fake';
+export const AI_IMAGE_EDIT_MODEL = 'fake-image-edit-v1';
 
 export class AiMediaCapabilityError extends Error {
   constructor(
@@ -40,6 +42,17 @@ export class AiMediaCapabilityError extends Error {
 }
 
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
+  {
+    provider: AI_IMAGE_EDIT_PROVIDER,
+    model: AI_IMAGE_EDIT_MODEL,
+    operations: ['FULL_EDIT', 'INPAINT'],
+    maxReferences: 1,
+    supportsMask: true,
+    inputTransport: 'none',
+    resultMode: 'sync',
+    evidenceLevel: 'local-test',
+    evidence: 'local deterministic full-edit and masked-inpaint lifecycle only; it does not prove a cloud edit transport',
+  },
   {
     provider: AI_IMAGE_SUITE_PROVIDER,
     model: AI_IMAGE_SUITE_MODEL,
@@ -139,16 +152,22 @@ export function supportsAiMediaOperation(
   model: string,
   operation: AiMediaOperation,
   inputCount = 0,
-  hasMask = false,
+  maskCountOrHasMask: number | boolean = 0,
 ): boolean {
   const capability = resolveAiImageProviderCapability(provider, model);
   if (!capability || !capability.operations.includes(operation)) return false;
+  if (!Number.isInteger(inputCount) || inputCount < 0) return false;
+  const maskCount = typeof maskCountOrHasMask === 'boolean'
+    ? (maskCountOrHasMask ? 1 : 0)
+    : maskCountOrHasMask;
+  if (!Number.isInteger(maskCount) || maskCount < 0) return false;
   if (inputCount > capability.maxReferences) return false;
-  if (hasMask && !capability.supportsMask) return false;
-  if (operation === 'TEXT_TO_IMAGE' && inputCount !== 0) return false;
-  if (operation === 'IMAGE_TRANSLATE' && inputCount !== 1) return false;
-  if (operation !== 'TEXT_TO_IMAGE' && inputCount < 1) return false;
-  return true;
+  if (maskCount > 0 && !capability.supportsMask) return false;
+  if (operation === 'TEXT_TO_IMAGE') return inputCount === 0 && maskCount === 0;
+  if (operation === 'IMAGE_TO_IMAGE') return inputCount >= 1 && maskCount === 0;
+  if (operation === 'IMAGE_TRANSLATE') return inputCount === 1 && maskCount === 0;
+  if (operation === 'FULL_EDIT') return inputCount === 1 && maskCount === 0;
+  return operation === 'INPAINT' && inputCount === 1 && maskCount === 1;
 }
 
 export function assertAiMediaCapability(input: {
@@ -156,6 +175,7 @@ export function assertAiMediaCapability(input: {
   model: string;
   operation: AiMediaOperation;
   inputCount?: number;
+  maskCount?: number;
   hasMask?: boolean;
 }) {
   const capability = resolveAiImageProviderCapability(input.provider, input.model);
@@ -172,6 +192,19 @@ export function assertAiMediaCapability(input: {
       'AI media reference count must be a non-negative integer',
     );
   }
+  const maskCount = input.maskCount ?? (input.hasMask ? 1 : 0);
+  if (
+    !Number.isInteger(maskCount)
+    || maskCount < 0
+    || (input.maskCount !== undefined
+      && input.hasMask !== undefined
+      && input.hasMask !== (maskCount > 0))
+  ) {
+    throw new AiMediaCapabilityError(
+      'INVALID_MEDIA_INPUT',
+      'AI media mask count must be a non-negative integer consistent with hasMask',
+    );
+  }
   if (!capability.operations.includes(input.operation)) {
     throw new AiMediaCapabilityError(
       'UNSUPPORTED_OPERATION',
@@ -184,7 +217,7 @@ export function assertAiMediaCapability(input: {
       input.model,
       input.operation,
       inputCount,
-      input.hasMask ?? false,
+      maskCount,
     )
   ) {
     throw new AiMediaCapabilityError(

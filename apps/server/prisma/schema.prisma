@@ -2641,6 +2641,8 @@ enum AiMediaOperation {
   TEXT_TO_IMAGE
   IMAGE_TO_IMAGE
   IMAGE_TRANSLATE
+  FULL_EDIT
+  INPAINT
 }
 
 enum AiMediaWorkflowStatus {
@@ -2718,6 +2720,8 @@ enum AiCostSettlementKind {
 enum MediaAssetKind {
   AI_GENERATED
   SOURCE_ORIGINAL
+  EDIT_MASK
+  AI_PROVIDER_OUTPUT
 }
 
 enum AiPromptRevisionStatus {

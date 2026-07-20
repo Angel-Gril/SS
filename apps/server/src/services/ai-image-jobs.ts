@@ -57,6 +57,12 @@ export interface AiImageJobRecord {
     url?: string;
     mimeType?: string;
     sha256?: string | null;
+    sizeBytes?: number | null;
+    width?: number | null;
+    height?: number | null;
+    storageBackend?: string | null;
+    storageKey?: string | null;
+    kind?: 'SOURCE_ORIGINAL' | 'EDIT_MASK' | 'AI_GENERATED' | 'AI_PROVIDER_OUTPUT';
   }> | null;
 }
 
@@ -88,12 +94,16 @@ export type AiImageJobProvider = AiImageProvider;
 export interface AiImageAssetInput {
   ownerUserId: string;
   jobId: string;
+  kind?: 'AI_GENERATED' | 'AI_PROVIDER_OUTPUT';
   url: string;
   storageBackend: string;
   storageKey: string | null;
   mimeType: string;
   sizeBytes: number;
   sha256: string;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AiImageJobRepository {
@@ -107,6 +117,7 @@ export interface AiImageJobRepository {
   recoverInterruptedJob?(id: string, data: FailureUpdate): Promise<'FAILED_PRE_DISPATCH' | 'SUBMISSION_UNCERTAIN' | null>;
   recordProviderDispatchStarted?(id: string, providerDispatchedAt: Date): Promise<boolean>;
   recordProviderJobId?(id: string, providerJobId: string, providerAcceptedAt?: Date): Promise<void>;
+  recordProviderOutput?(id: string, asset: AiImageAssetInput): Promise<{ id: string } & AiImageAssetInput>;
   complete(id: string, data: {
     providerJobId: string | null;
     providerResultReceivedWithoutIdentity?: boolean;

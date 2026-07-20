@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
 import {
+  AI_IMAGE_EDIT_MODEL,
+  AI_IMAGE_EDIT_PROVIDER,
   AiMediaCapabilityError,
   assertAiMediaCapability,
   type AiMediaOperation,
 } from './ai-image-provider-capabilities.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
+import {
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
+} from './ai-prompt-templates.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
 export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
@@ -73,6 +80,26 @@ export interface CreateAiImageTranslationWorkflowInput {
   templateReleaseId?: string | null;
   templateChecksum?: string | null;
   templateSnapshot?: Record<string, unknown> | null;
+  idempotencyKey: string;
+  context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
+}
+
+export interface CreateAiImageEditWorkflowInput {
+  ownerUserId: string;
+  actorUserId: string;
+  operation: 'FULL_EDIT' | 'INPAINT';
+  sourceAssetId: string;
+  maskAssetId?: string;
+  maskSemantics?: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
+  prompt: string;
+  negativePrompt: string | null;
+  resolvedPrompt: string;
+  resolvedNegativePrompt: string;
+  templateKey: string;
+  templateReleaseId: string;
+  templateChecksum: string;
+  templateSnapshot: Record<string, unknown>;
+  dailyLimit: number;
   idempotencyKey: string;
   context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
 }
@@ -158,6 +185,11 @@ export interface AiMediaWorkflowRepository {
     workflow: AiMediaWorkflowRecord;
     jobId: string;
   }>;
+  createImageEdit?(input: CreateAiImageEditWorkflowInput): Promise<{
+    kind: 'created' | 'existing' | 'conflict';
+    workflow: AiMediaWorkflowRecord;
+    jobId: string;
+  }>;
   listOwned(input: {
     ownerUserId: string;
     contextType?: string;
@@ -235,6 +267,27 @@ export function createAiImageTranslationWorkflowFingerprint(input: Omit<
     templateReleaseId: input.templateReleaseId || null,
     templateChecksum: input.templateChecksum || null,
     templateSnapshot: input.templateSnapshot || null,
+    context: input.context,
+  });
+}
+
+export function createAiImageEditWorkflowFingerprint(
+  input: Omit<CreateAiImageEditWorkflowInput, 'actorUserId' | 'idempotencyKey'>,
+) {
+  return aiMediaPayloadHash({
+    operation: input.operation,
+    ownerUserId: input.ownerUserId,
+    sourceAssetId: input.sourceAssetId,
+    maskAssetId: input.maskAssetId || null,
+    maskSemantics: input.maskSemantics || null,
+    prompt: input.prompt,
+    negativePrompt: input.negativePrompt,
+    resolvedPrompt: input.resolvedPrompt,
+    resolvedNegativePrompt: input.resolvedNegativePrompt,
+    templateKey: input.templateKey,
+    templateReleaseId: input.templateReleaseId,
+    templateChecksum: input.templateChecksum,
+    templateSnapshot: input.templateSnapshot,
     context: input.context,
   });
 }
@@ -328,6 +381,70 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       return { workflow: result.workflow, jobId: result.jobId, replayed: result.kind === 'existing' };
     },
 
+    async createImageEdit(input: CreateAiImageEditWorkflowInput) {
+      const sourceAssetId = String(input.sourceAssetId || '').trim();
+      const maskAssetId = String(input.maskAssetId || '').trim();
+      const expectedTemplateKey = input.operation === 'FULL_EDIT'
+        ? AI_MEDIA_FULL_EDIT_TEMPLATE_KEY
+        : AI_MEDIA_INPAINT_TEMPLATE_KEY;
+      if (
+        !sourceAssetId
+        || !input.prompt.trim()
+        || !input.resolvedPrompt.trim()
+        || input.templateKey !== expectedTemplateKey
+        || !input.templateReleaseId.trim()
+        || !/^[a-f0-9]{64}$/u.test(input.templateChecksum)
+        || !input.templateSnapshot
+        || Array.isArray(input.templateSnapshot)
+        || typeof input.templateSnapshot !== 'object'
+        || !Number.isSafeInteger(input.dailyLimit)
+        || input.dailyLimit < 0
+      ) {
+        throw new AiMediaWorkflowError('INVALID_REQUEST', 'AI image edit request or frozen Prompt is invalid');
+      }
+      if (
+        (input.operation === 'FULL_EDIT' && (maskAssetId || input.maskSemantics != null))
+        || (input.operation === 'INPAINT'
+          && (!maskAssetId || input.maskSemantics !== AI_IMAGE_EDIT_MASK_SEMANTICS))
+      ) {
+        throw new AiMediaWorkflowError('INVALID_REQUEST', 'AI image edit mask contract is invalid');
+      }
+      try {
+        assertAiMediaCapability({
+          provider: AI_IMAGE_EDIT_PROVIDER,
+          model: AI_IMAGE_EDIT_MODEL,
+          operation: input.operation,
+          inputCount: 1,
+          maskCount: input.operation === 'INPAINT' ? 1 : 0,
+        });
+      } catch (error) {
+        if (error instanceof AiMediaCapabilityError) {
+          throw new AiMediaWorkflowError(error.code, error.message);
+        }
+        throw error;
+      }
+      if (!repository.createImageEdit) {
+        throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'AI image edit workflow is not installed');
+      }
+      let result;
+      try {
+        result = await repository.createImageEdit({
+          ...input,
+          sourceAssetId,
+          ...(input.operation === 'INPAINT' ? { maskAssetId } : { maskAssetId: undefined }),
+        });
+      } catch (error: any) {
+        if (error?.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED') {
+          throw new AiMediaWorkflowError('AI_IMAGE_EDIT_QUOTA_EXCEEDED', error.message);
+        }
+        throw error;
+      }
+      if (result.kind === 'conflict') {
+        throw new AiMediaWorkflowError('IDEMPOTENCY_KEY_CONFLICT', 'Idempotency key was used for another media workflow');
+      }
+      return { workflow: result.workflow, jobId: result.jobId, replayed: result.kind === 'existing' };
+    },
+
     list(input: { ownerUserId: string; contextType?: string; contextId?: string; limit?: number }) {
       return repository.listOwned({ ...input, limit: Math.min(100, Math.max(1, input.limit || 20)) });
     },
@@ -353,6 +470,12 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
           throw new AiMediaWorkflowError('IMAGE_TRANSLATION_QUOTA_EXCEEDED', error.message);
         }
         if (error?.code === 'IMAGE_TRANSLATION_QUOTA_UNAVAILABLE') {
+          throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
+        }
+        if (error?.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED') {
+          throw new AiMediaWorkflowError('AI_IMAGE_EDIT_QUOTA_EXCEEDED', error.message);
+        }
+        if (error?.code === 'AI_IMAGE_EDIT_QUOTA_UNAVAILABLE') {
           throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
         }
         throw error;
