@@ -63,6 +63,27 @@ function eventData(input: {
   return { ...input, payload, payloadHash: aiMediaPayloadHash(payload) };
 }
 
+const applicationSummarySelect = {
+  id: true,
+  mode: true,
+  workflowId: true,
+  jobId: true,
+  assetId: true,
+  targetType: true,
+  targetId: true,
+  contextSkuKey: true,
+  contextSlotKey: true,
+  createdAt: true,
+  targetVersionAfter: true,
+  rolledBackBy: {
+    select: {
+      id: true,
+      createdAt: true,
+      targetVersionAfter: true,
+    },
+  },
+} as const;
+
 const detailInclude = {
   suiteSlot: { select: { suiteId: true, ownerUserId: true } },
   inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
@@ -71,6 +92,12 @@ const detailInclude = {
     orderBy: { workflowAttempt: 'asc' },
   },
   events: { orderBy: { createdAt: 'asc' }, take: 200 },
+  applicationMutations: {
+    where: { kind: 'APPLY' },
+    orderBy: { targetSequence: 'desc' },
+    take: 1,
+    select: applicationSummarySelect,
+  },
 } as const;
 
 const historyInclude = {
@@ -79,6 +106,12 @@ const historyInclude = {
     include: { assets: true, costReservation: { select: { status: true } } },
     orderBy: { workflowAttempt: 'desc' },
     take: 1,
+  },
+  applicationMutations: {
+    where: { kind: 'APPLY' },
+    orderBy: { targetSequence: 'desc' },
+    take: 1,
+    select: applicationSummarySelect,
   },
 } as const;
 

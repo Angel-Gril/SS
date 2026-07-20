@@ -48,6 +48,11 @@ import {
   sourceWorkflowFeatureFlags,
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
+import {
+  AiMediaApplicationMutationError,
+  applyAiMediaWorkflowApplication,
+  type ApplyAiMediaWorkflowApplicationInput,
+} from '../services/ai-media-application-mutations.js';
 const previewSchema = z.object({
   planId: z.string().trim().min(1).max(200),
 }).strict();
@@ -117,6 +122,9 @@ const maxPublicDiagnostics = 20;
 export interface AiImageSuiteRouteOptions {
   service?: AiImageSuiteService;
   candidateService?: AiImageSuiteCandidateService;
+  applicationService?: {
+    apply(input: ApplyAiMediaWorkflowApplicationInput): Promise<any>;
+  };
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'>;
   materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'>;
@@ -287,6 +295,30 @@ function publicSlotApplication(
 ) {
   const workflow = record(slot.childWorkflow);
   const currentJob = Array.isArray(workflow?.jobs) ? record(workflow.jobs[0]) : null;
+  const mutation = Array.isArray(workflow?.applicationMutations)
+    ? record(workflow.applicationMutations[0])
+    : null;
+  const rollback = record(mutation?.rolledBackBy);
+  if (workflow && currentJob && mutation
+    && String(mutation.jobId || '') === String(currentJob.id || '')
+    && String(mutation.targetType || '') === 'collect'
+    && String(mutation.targetId || '') === String(workflow.contextId || '')
+    && ['APPEND', 'REPLACE'].includes(String(mutation.mode || ''))
+    && mutation.createdAt
+    && mutation.targetVersionAfter) {
+    return {
+      id: String(mutation.id),
+      revision: rollback ? 2 : 1,
+      state: rollback ? 'ROLLED_BACK' : 'APPLIED',
+      legacy: false,
+      jobId: String(currentJob.id),
+      outputAssetId: String(mutation.assetId || ''),
+      mode: mutation.mode === 'REPLACE' ? 'replace' : 'append',
+      appliedAt: mutation.createdAt,
+      rolledBackAt: rollback?.createdAt || null,
+      targetUpdatedAt: rollback?.targetVersionAfter || mutation.targetVersionAfter,
+    };
+  }
   const event = Array.isArray(workflow?.events) ? record(workflow.events[0]) : null;
   const payload = record(event?.payload);
   if (!workflow || !currentJob || !event || !payload
@@ -316,9 +348,15 @@ function publicSlotApplication(
     || !Number.isFinite(Date.parse(appliedAt))
     || !Number.isFinite(Date.parse(targetUpdatedAt))) return null;
   return {
+    id: null,
+    revision: 1,
+    state: 'APPLIED',
+    legacy: true,
     jobId: String(currentJob.id),
     outputAssetId,
+    mode: 'append',
     appliedAt,
+    rolledBackAt: null,
     targetUpdatedAt,
   };
 }
@@ -468,6 +506,24 @@ function publicExecutionSummary(summary: AiImageSuiteExecutionSummary) {
 }
 
 function sendError(reply: FastifyReply, error: unknown) {
+  if (error instanceof AiMediaApplicationMutationError) {
+    const statusCode = error.code === 'NOT_FOUND' || error.code === 'TARGET_NOT_FOUND'
+      ? 404
+      : error.code === 'PROVIDER_NOT_READY'
+        ? 503
+      : [
+        'IDEMPOTENCY_KEY_CONFLICT', 'WORKFLOW_CONFLICT', 'TARGET_CONFLICT',
+        'APPLICATION_CONFLICT', 'APPLICATION_NO_CHANGE', 'LEGACY_APPLICATION',
+        'ROLLBACK_ORDER_CONFLICT', 'ROLLBACK_TARGET_CHANGED', 'STALE_MEDIA_WORKFLOW',
+      ].includes(error.code)
+        ? 409
+        : 400;
+    return reply.status(statusCode).send({
+      code: error.code,
+      msg: error.message,
+      ...(error.data ? { data: error.data } : {}),
+    });
+  }
   if (error instanceof AiImageSuiteCandidateError) {
     return reply.status(error.statusCode).send({
       code: error.code,
@@ -598,6 +654,12 @@ export async function aiImageSuiteRoutes(
   const candidateService = options.candidateService || createAiImageSuiteCandidateService(
     new PrismaAiImageSuiteCandidateRepository(prisma),
   );
+  const applicationService = options.applicationService || {
+    apply: (input: ApplyAiMediaWorkflowApplicationInput) => (
+      applyAiMediaWorkflowApplication(prisma, input)
+    ),
+  };
+  const useMutationLedger = Boolean(options.applicationService || !options.candidateService);
   const authHook = options.authenticate || authenticate;
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const getProviderConfig = options.getProviderConfig || (async () => providerFreeConfig());
@@ -1262,21 +1324,72 @@ export async function aiImageSuiteRoutes(
     const gate = await writeGate(ids.ownerUserId, options);
     if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
     try {
-      const result = await candidateService.apply({
-        suiteId,
-        slotId,
-        ...ids,
-        ...parsed.data,
-        production,
-      });
+      let application: unknown;
+      let replayed = false;
+      if (useMutationLedger) {
+        const current = await service.get(suiteId, ids.ownerUserId);
+        const slot = current.slots.find((entry) => String(entry.id || '') === slotId);
+        const workflowId = typeof slot?.childWorkflowId === 'string'
+          ? slot.childWorkflowId.trim()
+          : '';
+        if (!slot || !workflowId) {
+          throw new AiMediaApplicationMutationError(
+            'NOT_FOUND',
+            'AI media suite candidate was not found',
+          );
+        }
+        const result = await applicationService.apply({
+          workflowId,
+          ...ids,
+          expectedWorkflowRevision: parsed.data.expectedWorkflowRevision,
+          expectedTargetUpdatedAt: parsed.data.expectedTargetUpdatedAt,
+          operationKey: parsed.data.operationKey,
+          mode: 'append',
+          production,
+          suiteId,
+          suiteSlotId: slotId,
+        });
+        replayed = result.replayed;
+        const rolledBack = Boolean(result.application.rolledBackById);
+        application = {
+          id: result.application.id,
+          revision: Number(result.application.revision || 1) + (rolledBack ? 1 : 0),
+          state: rolledBack ? 'ROLLED_BACK' : 'APPLIED',
+          legacy: false,
+          suiteId,
+          slotId,
+          workflowId: result.application.workflowId,
+          jobId: result.application.jobId,
+          outputAssetId: result.application.assetId,
+          mode: result.application.mode,
+          targetType: result.application.targetType,
+          targetId: result.application.targetId,
+          images: Array.isArray(result.target.images) ? result.target.images : [],
+          mainImage: result.target.mainImage,
+          editedImages: result.target.editedImages,
+          targetUpdatedAt: result.target.updatedAt,
+          appliedAt: result.application.createdAt,
+          rolledBackAt: result.application.rolledBackAt || null,
+        };
+      } else {
+        const result = await candidateService.apply({
+          suiteId,
+          slotId,
+          ...ids,
+          ...parsed.data,
+          production,
+        });
+        replayed = result.replayed;
+        application = result.application;
+      }
       const refreshed = await service.get(suiteId, ids.ownerUserId);
       return {
         code: 1,
         data: {
           suite: publicSuite(refreshed, { includePreviewHash: false }),
-          application: result.application,
+          application,
         },
-        replayed: result.replayed,
+        replayed,
       };
     } catch (error) {
       return sendError(reply, error);

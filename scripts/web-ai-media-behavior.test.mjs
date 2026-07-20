@@ -118,6 +118,29 @@ const staleJobProjection = [{
 const mergedApplied = mergeAiMediaWorkflowHistoryHead(appliedCurrent, staleJobProjection)[0];
 assert.equal(mergedApplied.jobs[0].appliedMode, 'append', 'appliedMode must be monotonic within one workflow revision');
 assert.equal(mergedApplied.jobs[0].costStatus, 'SETTLED', 'a final cost state must not regress to RESERVED');
+const rolledBackProjection = [{
+  ...appliedCurrent[0],
+  application: {
+    id: 'application-1', revision: 2, state: 'ROLLED_BACK', mode: 'append',
+    workflowId: 'workflow-applied', jobId: 'job-applied', outputAssetId: 'asset-1',
+    targetType: 'collect', targetId: 'goods-1', contextSkuKey: null, contextSlotKey: null,
+    appliedAt: '2026-07-20T08:05:00.000Z', rolledBackAt: '2026-07-20T08:06:00.000Z',
+    targetUpdatedAt: '2026-07-20T08:06:00.000Z', legacy: false,
+  },
+}];
+const lateAppliedProjection = [{
+  ...appliedCurrent[0],
+  application: {
+    ...rolledBackProjection[0].application,
+    revision: 1, state: 'APPLIED', rolledBackAt: null,
+    targetUpdatedAt: '2026-07-20T08:05:00.000Z',
+  },
+}];
+assert.equal(
+  mergeAiMediaWorkflowHistoryHead(rolledBackProjection, lateAppliedProjection)[0].application.state,
+  'ROLLED_BACK',
+  'a late workflow response must not regress an application from ROLLED_BACK to APPLIED',
+);
 
 const waiters = new Map();
 const applied = [];

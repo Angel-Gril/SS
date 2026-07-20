@@ -75,7 +75,9 @@ assert.match(state, /createLatestRequestGuard/u);
 assert.match(state, /createMediaMutationLock/u);
 assert.match(state, /executeWithBusyState/u);
 assert.match(state, /buildSaveSourceImagesRequest/u);
-assert.match(route, /Workflow output must be approved before it can be applied/u);
+assert.match(route, /workflows\/:id\/applications/u);
+assert.match(route, /APPLICATION_MUTATION_REQUIRED/u);
+assert.doesNotMatch(panel, /jobs\/\$\{job\.id\}\/apply/u);
 assert.match(route, /getAiMediaRolloutDecision|feature_ai_media_workflow_v2/u);
 
 console.log('PASS contextual AI media history and review contract');

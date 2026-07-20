@@ -20,10 +20,10 @@ assert.match(panel, /saveWorkflowSubmissionIntent/u);
 assert.match(panel, /clearWorkflowSubmissionIntent/u);
 assert.match(panel, /if \(!capabilities \|\| !readiness\)/u);
 assert.match(panel, /!canCreateCurrentOperation/u);
-assert.match(panel, /load\(false, true\)/u);
+assert.match(panel, /load\(true, true, true\)/u);
 assert.match(panel, /isAiMediaWorkflowInputCurrent/u);
 assert.match(panel, /追加翻译图/u);
-assert.match(panel, /mode: 'append'/u);
+assert.match(panel, /mode: AiMediaApplicationMode = 'append'/u);
 assert.doesNotMatch(panel, /IMAGE_TRANSLATE[\s\S]{0,1200}mode: 'replace'/u);
 assert.match(panel, /grid-cols-1[\s\S]{0,160}sm:grid-cols-/u);
 

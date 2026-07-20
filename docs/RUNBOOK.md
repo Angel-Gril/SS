@@ -412,9 +412,9 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
-### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1）
+### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / 10A-H2）
 
-Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，但不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询；这些 migration 只能前向保留，应用回滚不得删除其数据、函数或有效索引。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI、listing-draft/SKU 上下文和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，Unit 10A-H2 已增加暗态的不可变应用账本、APPEND/受限 REPLACE、严格 frontier 补偿 ROLLBACK 和 stale 阻断，但都不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询，`1690`/`1700` 建立并加固 application mutation ledger；这些 migration 只能前向保留，应用回滚不得删除其数据、函数、触发器或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft/SKU 上下文、submitted-provider reconciliation 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式
@@ -529,7 +529,60 @@ npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核，也不代表 Unit 10A 的 listing-draft/SKU、reconciliation 或 H2 回滚能力已经完成。
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 listing-draft/SKU 和 submitted-provider reconciliation 仍未完成，H2 账本检查见下一节。
+
+### AI Media 应用账本与补偿回滚检查（Unit 10A-H2）
+
+H2 对应 migrations `20260720169000_add_ai_media_application_mutations` 和 `20260720170000_harden_ai_media_application_mutation_authority`，使当前 collect 图片应用成为 owner-scoped、不可变的 APPLY/ROLLBACK 账本。`1690` 创建表、外键、唯一键和 immutable/authority triggers；`1700` 在 `ACCESS EXCLUSIVE` 锁下要求账本为空后再安装加固约束并清理旧 authority trigger。两项 migration 都必须前向保留，不能用应用版本回滚或 down migration 删除账本。
+
+部署或故障排查时，先停止 API/Worker 写入并完成备份：
+
+```bash
+cd /opt/ss-erp/current/apps/server   # app-dir 模式改为 /opt/ss-erp/app/apps/server
+set -a
+. ../../.env.staging
+set +a
+
+npx prisma migrate status
+
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT migration_name, finished_at, rolled_back_at
+FROM "_prisma_migrations"
+WHERE migration_name IN (
+  '20260720169000_add_ai_media_application_mutations',
+  '20260720170000_harden_ai_media_application_mutation_authority'
+)
+ORDER BY migration_name;
+
+SELECT count(*) AS application_mutation_rows
+FROM ai_media_application_mutations;
+
+SELECT tgname, tgenabled
+FROM pg_trigger
+WHERE tgrelid = 'ai_media_application_mutations'::regclass
+  AND NOT tgisinternal
+ORDER BY tgname;
+
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'ai_media_application_mutations'
+ORDER BY indexname;
+SQL
+```
+
+正常首次升级必须在 API/Worker 停止、暗态开关关闭时看到账本行数为 `0`，两个 migration 的 `finished_at` 非空且 `rolled_back_at` 为空，并存在以下 triggers：`ai_media_application_mutations_validate_insert`、`ai_media_application_mutations_immutable`。结构检查还应确认 `ai_media_application_mutation_id_owner_key`、`ai_media_application_mutation_rollback_of_key`、`ai_media_application_mutation_owner_operation_key`、`ai_media_application_mutation_job_kind_key`、`ai_media_application_mutation_target_sequence_key`、`ai_media_application_mutation_target_history_idx` 和 `ai_media_application_mutation_workflow_history_idx`。迁移后账本非零是正常业务状态，不得据此清空数据。
+
+如果 `1700` 报 `application mutation authority upgrade requires an empty ledger`：保持 API/Worker 停止，**不得** `TRUNCATE`/`DELETE` 账本，**不得** `prisma migrate resolve --applied`，也不得伪造 migration 状态；保留数据并升级为逐行审计后的前向迁移。只有确认是 lock timeout、事务已完整回滚且表仍为空时，才可按 migration 状态将实际失败项标为 rolled back 后重放。重放后重新执行结构查询和 `verify-ai-media-dark.sh`。
+
+应用版本回滚跨 H2 时，先关闭所有 AI Media/Web-media 开关并阻止旧 binary 新增应用；保留 `1690`/`1700` 的表、函数、触发器、索引和所有历史记录。媒体撤销只能通过 API 的补偿式 `ROLLBACK` mutation 完成：只允许当前 target frontier，遇到 `ROLLBACK_ORDER_CONFLICT` 必须先处理后续应用，遇到 `ROLLBACK_TARGET_CHANGED` 必须刷新并人工复核，不能强制覆盖。重复请求应复用相同 operation key 取得 replay；不同 fingerprint 必须失败。只读历史可通过：
+
+```text
+GET /api/ai-images/applications?targetType=collect&targetId=<owned-target-id>
+```
+
+服务端和数据库共同限制每个 managed array 最多 100 项、完整 projection 最多 262144 bytes；超限、跨 owner/workflow/job/asset、非当前 frontier 或 stale CAS 均必须 fail closed。确认账本检查和暗态 verifier 均通过后，才允许恢复 API/Worker。
+
+H2 本地关闭基线为 focused 143/143、PostgreSQL 46/46、populated upgrade 1/1、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight、production build 和 lint 0 errors / 20 条既有 warnings 均通过。浏览器验收覆盖 stale refresh、5→6 APPEND、确认式 6→5 补偿 ROLLBACK、成对历史与空 rollback frontier，并在 `1440x1000` 和 `375x812` 下无可见横向溢出或新增 console/network 错误。该证据不替代每个目标环境的 migration/status/trigger/index/dark-gate 复核，也不授权真实 Provider 或 Ozon 写入。
 
 ## 服务器功能验收清单
 

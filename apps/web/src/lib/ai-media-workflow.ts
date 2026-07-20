@@ -1,4 +1,8 @@
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared/ozon-listing-draft';
+import type {
+  AiMediaApplicationCapability,
+  AiMediaWorkflowApplicationSummary,
+} from './ai-media-application';
 
 export type AiMediaOperation = 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE' | 'FULL_EDIT' | 'INPAINT';
 export type AiMediaWorkflowStatus =
@@ -100,6 +104,7 @@ export interface AiMediaWorkflow {
   contextSlotKey: string | null;
   selectedOutputAssetId?: string | null;
   reviewedAt?: string | null;
+  application?: AiMediaWorkflowApplicationSummary | null;
   inputs: Array<{
     assetId: string;
     role?: 'REFERENCE' | 'MASK' | string;
@@ -140,7 +145,7 @@ export function shouldRefreshAiMediaWorkflow(workflow: AiMediaWorkflow) {
   const latestJob = workflow.jobs[workflow.jobs.length - 1];
   return workflow.status === 'SUCCEEDED' && (
     workflow.reviewStatus === 'PENDING'
-    || (workflow.reviewStatus === 'APPROVED' && !latestJob?.appliedMode)
+    || (workflow.reviewStatus === 'APPROVED' && !workflow.application && !latestJob?.appliedMode)
   );
 }
 
@@ -218,6 +223,19 @@ const AI_MEDIA_COST_STATUS_RANK: Record<NonNullable<AiMediaWorkflowJob['costStat
   RELEASED: 3,
 };
 
+function mergeMonotonicAiMediaApplication(
+  current: AiMediaWorkflowApplicationSummary | null | undefined,
+  incoming: AiMediaWorkflowApplicationSummary | null | undefined,
+) {
+  if (!current) return incoming || null;
+  if (!incoming) return current;
+  if (current.id && incoming.id && current.id === incoming.id) {
+    if (current.state === 'ROLLED_BACK' && incoming.state === 'APPLIED') return current;
+    if (incoming.revision < current.revision) return current;
+  }
+  return incoming;
+}
+
 function mergeMonotonicAiMediaJobState(
   current: AiMediaWorkflow,
   incoming: AiMediaWorkflow,
@@ -225,6 +243,10 @@ function mergeMonotonicAiMediaJobState(
   const currentJobs = new Map((current.jobs || []).map((job) => [job.id, job]));
   return {
     ...incoming,
+    application: mergeMonotonicAiMediaApplication(
+      current.application,
+      incoming.application,
+    ),
     jobs: (incoming.jobs || []).map((job) => {
       const existing = currentJobs.get(job.id);
       if (!existing) return job;
@@ -298,6 +320,7 @@ export interface AiMediaOperationReadiness {
 export interface AiMediaCapabilities {
   webMediaEnabled: boolean;
   workflowEnabled: boolean;
+  applications?: AiMediaApplicationCapability;
   operations: Partial<Record<AiMediaOperation, AiMediaOperationReadiness>>;
 }
 
@@ -755,9 +778,16 @@ export interface AiMediaSuiteReferenceAsset extends AiMediaSuiteOutputAsset {
 }
 
 export interface AiMediaSuiteApplication {
+  id: string | null;
+  revision: number;
+  state: 'APPLIED' | 'ROLLED_BACK';
+  legacy: boolean;
   jobId: string;
   outputAssetId: string;
+  mode: 'append' | 'replace';
   appliedAt: string;
+  rolledBackAt: string | null;
+  targetUpdatedAt: string;
 }
 
 export interface AiMediaSuiteSlot {
@@ -1124,14 +1154,42 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
     const applicationValue = slot.application === null ? null : planningObject(slot.application);
     let application: AiMediaSuiteApplication | null = null;
     if (slot.application !== null) {
+      const applicationId = applicationValue?.id === null
+        ? null
+        : planningText(applicationValue?.id, 200);
+      const applicationRevision = planningNumber(applicationValue?.revision, Number.NaN);
+      const applicationState = applicationValue?.state;
+      const applicationLegacy = applicationValue?.legacy;
       const applicationJobId = planningText(applicationValue?.jobId, 200);
       const applicationOutputAssetId = planningText(applicationValue?.outputAssetId, 200);
+      const applicationMode = applicationValue?.mode;
       const appliedAt = suiteDate(applicationValue?.appliedAt);
-      if (!applicationValue || !applicationJobId || !applicationOutputAssetId || !appliedAt) return null;
+      const rolledBackAt = applicationValue?.rolledBackAt === null
+        ? null
+        : suiteDate(applicationValue?.rolledBackAt);
+      const targetUpdatedAt = suiteDate(applicationValue?.targetUpdatedAt);
+      if (!applicationValue
+        || (applicationValue.id !== null && !applicationId)
+        || !Number.isSafeInteger(applicationRevision) || applicationRevision < 1
+        || (applicationState !== 'APPLIED' && applicationState !== 'ROLLED_BACK')
+        || typeof applicationLegacy !== 'boolean'
+        || applicationLegacy !== (applicationId === null)
+        || !applicationJobId || !applicationOutputAssetId
+        || (applicationMode !== 'append' && applicationMode !== 'replace')
+        || !appliedAt || !targetUpdatedAt
+        || (applicationValue.rolledBackAt !== null && !rolledBackAt)
+        || (applicationState === 'ROLLED_BACK') !== Boolean(rolledBackAt)) return null;
       application = {
+        id: applicationId ?? null,
+        revision: applicationRevision,
+        state: applicationState,
+        legacy: applicationLegacy,
         jobId: applicationJobId,
         outputAssetId: applicationOutputAssetId,
+        mode: applicationMode,
         appliedAt,
+        rolledBackAt: rolledBackAt ?? null,
+        targetUpdatedAt,
       };
     }
     const outputAssetIds = new Set(outputAssets.map((asset) => asset.id));
@@ -1521,7 +1579,7 @@ export function buildAiMediaSuiteSlotApplyRequest(input: {
 }) {
   const expectedTargetUpdatedAt = input.expectedTargetUpdatedAt.trim();
   const output = input.slot.outputAssets[0] || null;
-  if (input.slot.application) throw new Error('当前套图候选已经追加到商品');
+  if (input.slot.application) throw new Error('当前套图候选已经应用过，不能重复追加');
   if (input.slot.status !== 'SUCCEEDED'
     || input.slot.reviewStatus !== 'APPROVED'
     || input.slot.workflowRevision === null
@@ -1541,6 +1599,17 @@ export function buildAiMediaSuiteSlotApplyRequest(input: {
 
 export type AiMediaSuiteSlotRecoveryDecision = 'confirmed' | 'retry' | 'conflict';
 
+const AI_MEDIA_SUITE_TARGET_REFRESH_ERROR_CODES = new Set([
+  'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT',
+  'AI_MEDIA_SUITE_CANDIDATE_STALE',
+  'TARGET_CONFLICT',
+  'STALE_MEDIA_WORKFLOW',
+]);
+
+export function shouldRefreshAiMediaSuiteTargetAfterError(code: unknown): boolean {
+  return AI_MEDIA_SUITE_TARGET_REFRESH_ERROR_CODES.has(String(code || '').toUpperCase());
+}
+
 export function resolveAiMediaSuiteSlotReviewRecovery(input: {
   slot: AiMediaSuiteSlot;
   outputAssetId: string;
@@ -1559,7 +1628,8 @@ export function resolveAiMediaSuiteSlotApplyRecovery(input: {
   slot: AiMediaSuiteSlot;
   outputAssetId: string;
 }): AiMediaSuiteSlotRecoveryDecision {
-  if (input.slot.application?.outputAssetId === input.outputAssetId) return 'confirmed';
+  if (input.slot.application?.state === 'APPLIED'
+    && input.slot.application.outputAssetId === input.outputAssetId) return 'confirmed';
   if (input.slot.status === 'SUCCEEDED'
     && input.slot.reviewStatus === 'APPROVED'
     && input.slot.selectedOutputAssetId === input.outputAssetId

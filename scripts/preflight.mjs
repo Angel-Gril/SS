@@ -59,6 +59,11 @@ const steps = [
     args: ['scripts/web-ai-media-behavior.test.mjs'],
   },
   {
+    name: 'Web AI media application ledger contract',
+    command: 'node',
+    args: ['scripts/web-ai-media-application-ledger.test.mjs'],
+  },
+  {
     name: 'Web AI media recovery contract',
     command: 'node',
     args: ['scripts/web-ai-media-recovery.test.mjs'],

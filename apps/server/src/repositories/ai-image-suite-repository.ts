@@ -39,9 +39,34 @@ const suiteInclude = {
         select: {
           id: true,
           revision: true,
+          contextId: true,
           reviewStatus: true,
           selectedOutputAssetId: true,
           reviewedAt: true,
+          applicationMutations: {
+            where: { kind: 'APPLY' },
+            orderBy: { targetSequence: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              revision: true,
+              jobId: true,
+              assetId: true,
+              mode: true,
+              targetType: true,
+              targetId: true,
+              targetSequence: true,
+              targetVersionAfter: true,
+              createdAt: true,
+              rolledBackBy: {
+                select: {
+                  id: true,
+                  targetVersionAfter: true,
+                  createdAt: true,
+                },
+              },
+            },
+          },
           events: {
             where: { eventType: 'SUITE_CANDIDATE_APPLIED' },
             orderBy: { createdAt: 'desc' },

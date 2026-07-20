@@ -44,6 +44,7 @@ export interface AiMediaWorkflowRecord {
   inputs?: Array<Record<string, unknown>>;
   jobs?: Array<Record<string, unknown>>;
   events?: Array<Record<string, unknown>>;
+  applicationMutations?: Array<Record<string, unknown>>;
 }
 
 export interface AiMediaWorkflowListCursor {

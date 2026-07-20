@@ -10,6 +10,7 @@ import { SourceAiMediaSuitePanel } from './source-ai-media-suite-panel';
 import type {
   AiImageApplyResult,
   RunMediaMutation,
+  SynchronizeAiMediaTarget,
 } from './source-ai-media-state';
 import {
   buildAiMediaPlanReviewRequest,
@@ -225,6 +226,7 @@ export function SourceAiMediaPlanningPanel({
   enabled = true,
   planningEnabled = false,
   selectedSkuKeys = [],
+  mediaDraftDirty,
   mediaMutationBusy,
   runMediaMutation,
   onApplied,
@@ -235,10 +237,11 @@ export function SourceAiMediaPlanningPanel({
   enabled?: boolean;
   planningEnabled?: boolean;
   selectedSkuKeys?: string[];
+  mediaDraftDirty: boolean;
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
   onApplied?: (result: AiImageApplyResult) => void;
-  onConflictRefresh: () => Promise<void>;
+  onConflictRefresh: SynchronizeAiMediaTarget;
 }) {
   const [bundle, setBundle] = useState<AiMediaPlanBundle | null>(null);
   const [loading, setLoading] = useState(enabled);
@@ -475,6 +478,7 @@ export function SourceAiMediaPlanningPanel({
             targetId={targetId}
             targetUpdatedAt={targetUpdatedAt}
             plan={bundle.plan}
+            mediaDraftDirty={mediaDraftDirty}
             mediaMutationBusy={mediaMutationBusy}
             runMediaMutation={runMediaMutation}
             onApplied={onApplied}

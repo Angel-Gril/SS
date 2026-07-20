@@ -32,6 +32,7 @@ import {
   AiImageSuiteCandidateError,
   type AiImageSuiteCandidateService,
 } from '../services/ai-image-suite-candidates.js';
+import { AiMediaApplicationMutationError } from '../services/ai-media-application-mutations.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -309,6 +310,7 @@ async function build(options: {
     'dispatch' | 'cancel' | 'retryFailedSlot'
   > | null;
   candidateService?: AiImageSuiteCandidateService;
+  applicationService?: { apply(input: any): Promise<any> };
   enqueueSuiteFrontier?: ((suiteId: string) => Promise<void>) | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
@@ -344,6 +346,7 @@ async function build(options: {
   await app.register(aiImageSuiteRoutes, {
     service,
     candidateService,
+    ...(options.applicationService ? { applicationService: options.applicationService } : {}),
     ...(referenceService ? { referenceService } : {}),
     ...(promptService ? { promptService } : {}),
     ...(materializationService ? { materializationService } : {}),
@@ -380,6 +383,7 @@ async function build(options: {
     materializationService,
     executionService,
     candidateService,
+    applicationService: options.applicationService,
     enqueueSuiteFrontier,
   };
 }
@@ -1785,6 +1789,217 @@ describe('AI image suite routes', () => {
       },
       replayed: false,
     });
+  });
+
+  it('routes default suite application through the immutable mutation ledger with suite authority', async () => {
+    const current: any = suite();
+    current.slots[0]!.childWorkflowId = 'workflow-1';
+    const service = serviceMock();
+    vi.mocked(service.get).mockResolvedValue(current as any);
+    const applicationService = {
+      apply: vi.fn(async () => ({
+        contractVersion: 'ai-media-application-mutation/v1',
+        application: {
+          id: 'mutation-1', kind: 'APPLY', workflowId: 'workflow-1', jobId: 'job-1',
+          assetId: 'asset-1', mode: 'append', targetType: 'collect', targetId: 'goods-1',
+          createdAt: new Date('2026-07-20T01:01:00.000Z'),
+        },
+        target: {
+          images: ['/original.png', '/suite-output.png'], mainImage: '/original.png',
+          editedImages: ['/suite-output.png'], updatedAt: new Date('2026-07-20T01:01:00.001Z'),
+        },
+        replayed: false,
+      })),
+    };
+    const { app, candidateService } = await build({ service, applicationService });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-ledger-apply-1',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(applicationService.apply).toHaveBeenCalledWith({
+      workflowId: 'workflow-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedWorkflowRevision: 4,
+      expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      operationKey: 'suite-ledger-apply-1',
+      mode: 'append',
+      production: false,
+      suiteId: 'suite-1',
+      suiteSlotId: 'suite-slot-1',
+    });
+    expect(candidateService.apply).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        application: {
+          id: 'mutation-1', state: 'APPLIED', legacy: false,
+          suiteId: 'suite-1', slotId: 'suite-slot-1', workflowId: 'workflow-1',
+        },
+      },
+    });
+  });
+
+  it('maps a mutation-ledger production fake rejection to service unavailable', async () => {
+    const current: any = suite();
+    current.slots[0]!.childWorkflowId = 'workflow-1';
+    const service = serviceMock();
+    vi.mocked(service.get).mockResolvedValue(current as any);
+    const applicationService = {
+      apply: vi.fn(async () => {
+        throw new AiMediaApplicationMutationError(
+          'PROVIDER_NOT_READY',
+          'Test-only AI media suite candidates cannot be applied in production',
+        );
+      }),
+    };
+    const { app } = await build({ service, applicationService, production: true });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-ledger-fake-production',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 'PROVIDER_NOT_READY',
+      msg: 'Test-only AI media suite candidates cannot be applied in production',
+    });
+  });
+
+  it('keeps an original suite apply replay rolled back after the mutation was reversed', async () => {
+    const base: any = suite();
+    base.slots[0]!.childWorkflowId = 'workflow-1';
+    const applicationMutation = {
+      id: 'mutation-1',
+      revision: 1,
+      kind: 'APPLY',
+      workflowId: 'workflow-1',
+      jobId: 'job-1',
+      assetId: 'asset-1',
+      mode: 'append',
+      targetType: 'collect',
+      targetId: 'goods-1',
+      createdAt: new Date('2026-07-20T01:01:00.000Z'),
+      targetVersionAfter: new Date('2026-07-20T01:01:00.001Z'),
+      rolledBackById: null,
+      rolledBackAt: null,
+      rollbackTargetVersionAfter: null,
+    };
+    const suiteWithApplication = (rolledBack: boolean) => {
+      const value: any = suite();
+      value.slots[0]!.childWorkflowId = 'workflow-1';
+      value.slots[0]!.childWorkflow = {
+        id: 'workflow-1',
+        contextId: 'goods-1',
+        jobs: [{
+          id: 'job-1',
+          assets: [{
+            id: 'asset-1', ownerUserId: 'owner-1', url: '/suite-output.png',
+          }],
+        }],
+        applicationMutations: [{
+          ...applicationMutation,
+          mode: 'APPEND',
+          rolledBackBy: rolledBack ? {
+            id: 'rollback-1',
+            createdAt: new Date('2026-07-20T01:02:00.000Z'),
+            targetVersionAfter: new Date('2026-07-20T01:02:00.001Z'),
+          } : null,
+        }],
+      };
+      return value;
+    };
+    const service = serviceMock();
+    vi.mocked(service.get)
+      .mockResolvedValueOnce(base)
+      .mockResolvedValueOnce(suiteWithApplication(false))
+      .mockResolvedValueOnce(suiteWithApplication(true))
+      .mockResolvedValueOnce(suiteWithApplication(true));
+    const applicationService = {
+      apply: vi.fn()
+        .mockResolvedValueOnce({
+          contractVersion: 'ai-media-application-mutation/v1',
+          application: applicationMutation,
+          target: {
+            images: ['/original.png', '/suite-output.png'],
+            mainImage: '/original.png',
+            editedImages: ['/suite-output.png'],
+            updatedAt: new Date('2026-07-20T01:01:00.001Z'),
+          },
+          replayed: false,
+        })
+        .mockResolvedValueOnce({
+          contractVersion: 'ai-media-application-mutation/v1',
+          application: {
+            ...applicationMutation,
+            rolledBackById: 'rollback-1',
+            rolledBackAt: new Date('2026-07-20T01:02:00.000Z'),
+            rollbackTargetVersionAfter: new Date('2026-07-20T01:02:00.001Z'),
+          },
+          target: {
+            images: ['/original.png'],
+            mainImage: '/original.png',
+            editedImages: [],
+            updatedAt: new Date('2026-07-20T01:02:00.001Z'),
+          },
+          replayed: true,
+        }),
+    };
+    const { app } = await build({ service, applicationService });
+    const request = {
+      method: 'POST' as const,
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-ledger-replay-1',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    };
+
+    const applied = await app.inject(request);
+    const replayed = await app.inject(request);
+
+    expect(applied.json()).toMatchObject({
+      replayed: false,
+      data: {
+        application: { id: 'mutation-1', revision: 1, state: 'APPLIED' },
+        suite: { slots: [{ application: { id: 'mutation-1', revision: 1, state: 'APPLIED' } }] },
+      },
+    });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toMatchObject({
+      replayed: true,
+      data: {
+        application: {
+          id: 'mutation-1', revision: 2, state: 'ROLLED_BACK',
+          rolledBackAt: '2026-07-20T01:02:00.000Z',
+          targetUpdatedAt: '2026-07-20T01:02:00.001Z',
+        },
+        suite: {
+          slots: [{
+            application: {
+              id: 'mutation-1', revision: 2, state: 'ROLLED_BACK',
+              rolledBackAt: '2026-07-20T01:02:00.000Z',
+              targetUpdatedAt: '2026-07-20T01:02:00.001Z',
+            },
+          }],
+        },
+      },
+    });
+    expect(applicationService.apply).toHaveBeenCalledTimes(2);
   });
 
   it('preserves candidate target conflict data for the client refresh path', async () => {

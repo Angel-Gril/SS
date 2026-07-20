@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import {
   cpSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -28,6 +29,8 @@ const CANDIDATE_MUTATION_SERIALIZATION_MIGRATION = '20260720165000_serialize_ai_
 const UNBOUND_CANDIDATE_REJECTION_MIGRATION = '20260720166000_reject_unbound_ai_image_edit_candidates';
 const WORKFLOW_HISTORY_INDEX_MIGRATION = '20260720167000_add_ai_media_workflow_history_index';
 const WORKFLOW_PRIORITY_INDEX_MIGRATION = '20260720168000_add_ai_media_workflow_priority_index';
+const APPLICATION_MUTATION_MIGRATION = '20260720169000_add_ai_media_application_mutations';
+const APPLICATION_AUTHORITY_MIGRATION = '20260720170000_harden_ai_media_application_mutation_authority';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,7 +48,14 @@ const testUrl = new URL(baseDatabaseUrl);
 testUrl.searchParams.set('schema', schema);
 const invalidTestUrl = new URL(baseDatabaseUrl);
 invalidTestUrl.searchParams.set('schema', invalidSchema);
-const pnpmCli = process.env.npm_execpath || '';
+const globalPnpmCli = process.platform === 'win32'
+  ? join(process.env.APPDATA || '', 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.mjs')
+  : '';
+const pnpmCli = process.env.npm_execpath
+  || (globalPnpmCli && existsSync(globalPnpmCli) ? globalPnpmCli : '');
+if (process.platform === 'win32' && !pnpmCli) {
+  throw new Error('Unable to resolve the pnpm CLI without a Windows command shell');
+}
 const command = pnpmCli ? process.execPath : 'pnpm';
 const admin = new PrismaClient({ datasources: { db: { url: baseDatabaseUrl } } });
 const tempRoot = mkdtempSync(join(tmpdir(), TEMP_ROOT_PREFIX));
@@ -63,13 +73,16 @@ function assertSafeTempRoot(target) {
   }
 }
 
+function resolveCommand(args) {
+  return { executable: command, args: pnpmCli ? [pnpmCli, ...args] : args };
+}
+
 function run(args, extraEnv = {}) {
-  const commandArgs = pnpmCli ? [pnpmCli, ...args] : args;
-  const result = spawnSync(command, commandArgs, {
+  const invocation = resolveCommand(args);
+  const result = spawnSync(invocation.executable, invocation.args, {
     cwd: serverRoot,
     env: { ...process.env, ...extraEnv },
     stdio: 'inherit',
-    shell: !pnpmCli && process.platform === 'win32',
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -78,12 +91,11 @@ function run(args, extraEnv = {}) {
 }
 
 function runExpectingFailure(args, expectedPattern, extraEnv = {}) {
-  const commandArgs = pnpmCli ? [pnpmCli, ...args] : args;
-  const result = spawnSync(command, commandArgs, {
+  const invocation = resolveCommand(args);
+  const result = spawnSync(invocation.executable, invocation.args, {
     cwd: serverRoot,
     env: { ...process.env, ...extraEnv },
     encoding: 'utf8',
-    shell: !pnpmCli && process.platform === 'win32',
   });
   if (result.error) throw result.error;
   const output = `${result.stdout || ''}\n${result.stderr || ''}`;
@@ -116,6 +128,8 @@ function prepareHistoricalMigrations() {
   const unboundCandidateRejectionIndex = names.indexOf(UNBOUND_CANDIDATE_REJECTION_MIGRATION);
   const workflowHistoryIndex = names.indexOf(WORKFLOW_HISTORY_INDEX_MIGRATION);
   const workflowPriorityIndex = names.indexOf(WORKFLOW_PRIORITY_INDEX_MIGRATION);
+  const applicationMutationIndex = names.indexOf(APPLICATION_MUTATION_MIGRATION);
+  const applicationAuthorityIndex = names.indexOf(APPLICATION_AUTHORITY_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -136,6 +150,8 @@ function prepareHistoricalMigrations() {
     || unboundCandidateRejectionIndex !== candidateMutationSerializationIndex + 1
     || workflowHistoryIndex !== unboundCandidateRejectionIndex + 1
     || workflowPriorityIndex !== workflowHistoryIndex + 1
+    || applicationMutationIndex !== workflowPriorityIndex + 1
+    || applicationAuthorityIndex !== applicationMutationIndex + 1
     || names.filter((name) => name === EDIT_OUTPUT_GUARD_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CHAINING_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CONTRACT_MIGRATION).length !== 1
@@ -145,9 +161,11 @@ function prepareHistoricalMigrations() {
     || names.filter((name) => name === CANDIDATE_MUTATION_SERIALIZATION_MIGRATION).length !== 1
     || names.filter((name) => name === UNBOUND_CANDIDATE_REJECTION_MIGRATION).length !== 1
     || names.filter((name) => name === WORKFLOW_HISTORY_INDEX_MIGRATION).length !== 1
-    || names.filter((name) => name === WORKFLOW_PRIORITY_INDEX_MIGRATION).length !== 1) {
+    || names.filter((name) => name === WORKFLOW_PRIORITY_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === APPLICATION_MUTATION_MIGRATION).length !== 1
+    || names.filter((name) => name === APPLICATION_AUTHORITY_MIGRATION).length !== 1) {
     throw new Error(
-      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${WORKFLOW_PRIORITY_INDEX_MIGRATION} must be one unique consecutive migration block`,
+      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${APPLICATION_AUTHORITY_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -175,6 +193,8 @@ function prepareHistoricalMigrations() {
     unboundCandidateRejectionIndex,
     workflowHistoryIndex,
     workflowPriorityIndex,
+    applicationMutationIndex,
+    applicationAuthorityIndex,
   };
 }
 

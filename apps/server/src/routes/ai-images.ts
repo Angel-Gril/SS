@@ -51,6 +51,18 @@ import { AiPromptTemplateError } from '../services/ai-prompt-templates.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 import { createAiImageEditMask } from '../services/ai-image-edit.js';
 import { isAiMediaEditReadyCandidateAsset } from '../services/ai-image-edit-source.js';
+import {
+  AI_MEDIA_APPLICATION_CONTRACT_VERSION,
+  AiMediaApplicationMutationError,
+  applyAiMediaWorkflowApplication,
+  listAiMediaTargetApplications,
+  listAiMediaWorkflowApplications,
+  rollbackAiMediaWorkflowApplication,
+  type ApplyAiMediaWorkflowApplicationInput,
+  type ListAiMediaTargetApplicationsInput,
+  type ListAiMediaWorkflowApplicationsInput,
+  type RollbackAiMediaWorkflowApplicationInput,
+} from '../services/ai-media-application-mutations.js';
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(8000),
@@ -66,6 +78,36 @@ const applySchema = z.object({
   targetId: z.string().trim().min(1).max(128),
   expectedTargetUpdatedAt: z.string().datetime().nullable().optional(),
 });
+const workflowApplicationSchema = z.object({
+  mode: z.enum(['append', 'replace']),
+  operationKey: z.string().trim().min(8).max(128),
+  expectedWorkflowRevision: z.number().int().min(1),
+  expectedTargetUpdatedAt: z.string().datetime(),
+  replaceConfirmed: z.literal(true).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.mode === 'replace' && value.replaceConfirmed !== true) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replaceConfirmed'],
+      message: 'Replacing all publish images requires explicit confirmation',
+    });
+  }
+});
+const workflowApplicationListSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  beforeSequence: z.coerce.number().int().min(1).optional(),
+  operationKey: z.string().trim().min(8).max(128).optional(),
+}).strict();
+const targetApplicationListSchema = workflowApplicationListSchema.extend({
+  targetType: z.literal('collect'),
+  targetId: z.string().trim().min(1).max(200),
+});
+const workflowApplicationRollbackSchema = z.object({
+  operationKey: z.string().trim().min(8).max(128),
+  expectedApplicationRevision: z.number().int().min(1),
+  expectedWorkflowRevision: z.number().int().min(1),
+  expectedTargetUpdatedAt: z.string().datetime(),
+}).strict();
 const workflowContextSchema = z.object({
   type: z.literal('collect'),
   id: z.string().trim().min(1).max(200),
@@ -240,6 +282,10 @@ interface AiImageRouteOptions {
   mediaContextService?: AiMediaContextService;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
   applyAssets?: (input: ApplyAiImageAssetsInput) => Promise<ApplyAiImageAssetsResult>;
+  applyWorkflowApplication?: (input: ApplyAiMediaWorkflowApplicationInput) => Promise<any>;
+  listTargetApplications?: (input: ListAiMediaTargetApplicationsInput) => Promise<any>;
+  listWorkflowApplications?: (input: ListAiMediaWorkflowApplicationsInput) => Promise<any>;
+  rollbackWorkflowApplication?: (input: RollbackAiMediaWorkflowApplicationInput) => Promise<any>;
   createEditMask?: typeof createAiImageEditMask;
   checkEditMaskRequestRate?: (ownerUserId: string) => Promise<EditMaskUploadLimitCheck>;
   checkEditMaskUploadQuota?: (ownerUserId: string, bytes: number) => Promise<EditMaskUploadLimitCheck>;
@@ -269,6 +315,7 @@ function sendError(reply: any, error: unknown) {
           || error.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED'
           ? 429
         : error.code === 'AI_MEDIA_OPERATION_DISABLED'
+          || error.code === 'AI_MEDIA_WORKFLOW_DISABLED'
           || error.code === 'SOURCE_LISTING_WEB_MEDIA_DISABLED'
           || error.code === 'PROVIDER_NOT_READY'
           || error.code === 'STORAGE_NOT_READY'
@@ -291,11 +338,33 @@ function sendError(reply: any, error: unknown) {
         : 400;
     return reply.status(status).send({ code: error.code, msg: error.message, data: error.data });
   }
+  if (error instanceof AiMediaApplicationMutationError) {
+    const status = error.code === 'NOT_FOUND' || error.code === 'TARGET_NOT_FOUND'
+      ? 404
+      : error.code === 'PROVIDER_NOT_READY'
+        ? 503
+      : [
+        'IDEMPOTENCY_KEY_CONFLICT',
+        'WORKFLOW_CONFLICT',
+        'TARGET_CONFLICT',
+        'APPLICATION_CONFLICT',
+        'APPLICATION_NO_CHANGE',
+        'LEGACY_APPLICATION',
+        'ALREADY_ROLLED_BACK',
+        'ROLLBACK_ORDER_CONFLICT',
+        'ROLLBACK_TARGET_CHANGED',
+        'STALE_MEDIA_WORKFLOW',
+      ].includes(error.code)
+        ? 409
+        : 400;
+    return reply.status(status).send({ code: error.code, msg: error.message, data: error.data });
+  }
   if (error instanceof AiImageJobError) {
     const status = error.code === 'NOT_FOUND' || error.code === 'SOURCE_ASSET_NOT_FOUND'
       ? 404
       : error.code === 'IDEMPOTENCY_KEY_CONFLICT'
         || error.code === 'STALE_MEDIA_WORKFLOW'
+        || error.code === 'APPLICATION_MUTATION_REQUIRED'
         ? 409
       : error.code === 'QUOTA_EXCEEDED'
           || error.code === 'EDIT_RESOURCE_QUOTA_EXCEEDED'
@@ -534,6 +603,53 @@ function compileTranslationProviderPolicy(resolvedPrompt: string, resolvedNegati
   ].filter(Boolean).join('\n\n');
 }
 
+function publicWorkflowApplication(workflow: any) {
+  const mutation = Array.isArray(workflow.applicationMutations)
+    ? workflow.applicationMutations[0]
+    : null;
+  if (mutation?.id) {
+    const rollback = mutation.rolledBackBy || null;
+    return {
+      id: String(mutation.id),
+      revision: rollback ? 2 : 1,
+      state: rollback ? 'ROLLED_BACK' : 'APPLIED',
+      mode: mutation.mode === 'REPLACE' ? 'replace' : 'append',
+      workflowId: String(mutation.workflowId),
+      jobId: String(mutation.jobId),
+      outputAssetId: String(mutation.assetId),
+      targetType: 'collect',
+      targetId: String(mutation.targetId),
+      contextSkuKey: mutation.contextSkuKey || null,
+      contextSlotKey: mutation.contextSlotKey || null,
+      appliedAt: mutation.createdAt,
+      rolledBackAt: rollback?.createdAt || null,
+      targetUpdatedAt: rollback?.targetVersionAfter || mutation.targetVersionAfter,
+      legacy: false,
+    };
+  }
+  const currentJob = Array.isArray(workflow.jobs) ? workflow.jobs.at(-1) : null;
+  if (!currentJob?.appliedAt || !currentJob.applyTargetId || !currentJob.appliedMode) return null;
+  return {
+    id: null,
+    revision: 1,
+    state: 'APPLIED',
+    mode: currentJob.appliedMode === 'replace' ? 'replace' : 'append',
+    workflowId: String(workflow.id),
+    jobId: String(currentJob.id),
+    outputAssetId: workflow.selectedOutputAssetId || '',
+    targetType: currentJob.applyTargetType === 'collect' ? 'collect' : currentJob.applyTargetType,
+    targetId: String(currentJob.applyTargetId),
+    contextSkuKey: workflow.contextSkuKey || null,
+    contextSlotKey: workflow.contextSlotKey || null,
+    appliedAt: currentJob.appliedAt,
+    rolledBackAt: null,
+    targetUpdatedAt: currentJob.appliedAt,
+    legacy: true,
+    rollbackEligible: false,
+    rollbackIneligibilityReason: 'LEGACY_NO_LEDGER',
+  };
+}
+
 function publicWorkflow(workflow: any) {
   return {
     id: workflow.id,
@@ -551,6 +667,7 @@ function publicWorkflow(workflow: any) {
     completedAt: workflow.completedAt,
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
+    application: publicWorkflowApplication(workflow),
     inputs: Array.isArray(workflow.inputs) ? workflow.inputs.map((input: any) => ({
       id: input.id,
       assetId: input.assetId,
@@ -749,6 +866,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     || (async (ownerUserId: string) => (await getAiMediaRolloutDecision(ownerUserId)).enabled);
   const applyAssets = options.applyAssets
     || ((input: ApplyAiImageAssetsInput) => applyAiImageAssets(prisma as any, input));
+  const applyWorkflowApplication = options.applyWorkflowApplication
+    || ((input: ApplyAiMediaWorkflowApplicationInput) => applyAiMediaWorkflowApplication(prisma, input));
+  const listTargetApplications = options.listTargetApplications
+    || ((input: ListAiMediaTargetApplicationsInput) => listAiMediaTargetApplications(prisma, input));
+  const listWorkflowApplications = options.listWorkflowApplications
+    || ((input: ListAiMediaWorkflowApplicationsInput) => listAiMediaWorkflowApplications(prisma, input));
+  const rollbackWorkflowApplication = options.rollbackWorkflowApplication
+    || ((input: RollbackAiMediaWorkflowApplicationInput) => rollbackAiMediaWorkflowApplication(prisma, input));
   const checkEditMaskRequestRate = options.checkEditMaskRequestRate || (async (
     ownerUserId: string,
   ): Promise<EditMaskUploadLimitCheck> => {
@@ -854,6 +979,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         webMediaReason: webMediaDecision.reason,
         webMediaRevision: webMediaDecision.revision,
         workflowEnabled,
+        applications: {
+          contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
+          readEnabled: true,
+          applyEnabled: workflowEnabled && webMediaDecision.enabled,
+          rollbackEnabled: true,
+          defaultMode: 'append',
+          replaceOperations: ['IMAGE_TO_IMAGE'],
+        },
         operations: {
           IMAGE_TO_IMAGE: gateReadinessByWebMedia(imageToImage, webMediaDecision.enabled),
           IMAGE_TRANSLATE: gateReadinessByWebMedia(translation, webMediaDecision.enabled),
@@ -970,8 +1103,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!ownedJob || ownedJob.ownerUserId !== actor(request).ownerUserId) {
         throw new AiImageJobError('NOT_FOUND', 'AI image job not found');
       }
-      if (ownedJob.workflowId && ownedJob.provider === 'fake' && production) {
-        throw new AiImageJobError('PROVIDER_NOT_READY', 'Test-only AI media candidates cannot be applied in production');
+      if (ownedJob.workflowId) {
+        throw new AiImageJobError(
+          'APPLICATION_MUTATION_REQUIRED',
+          'Workflow-backed candidates must use the versioned application mutation endpoint',
+        );
       }
       if (ownedJob.operation === 'IMAGE_TRANSLATE' && parsed.data.mode !== 'append') {
         throw new AiImageJobError(
@@ -979,34 +1115,102 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           'Image translation candidates can only be appended to existing product images',
         );
       }
-      let selectedAssetId: string | null = null;
-      if (ownedJob.workflowId) {
-        const workflow = await mediaWorkflowService.get(ownedJob.workflowId, actor(request).ownerUserId);
-        if (workflow.suiteId) {
-          throw new AiImageJobError(
-            'INVALID_STATE',
-            'Suite child outputs must be reviewed and applied through the suite workflow',
-          );
-        }
-        if (parsed.data.targetType !== workflow.contextType || parsed.data.targetId !== workflow.contextId) {
-          throw new AiImageJobError('INVALID_STATE', 'Workflow output can only be applied to its reviewed context');
-        }
-        const selectedBelongsToJob = Array.isArray((ownedJob as any).assets)
-          && (ownedJob as any).assets.some((asset: any) => asset.id === workflow.selectedOutputAssetId);
-        if (workflow.reviewStatus !== 'APPROVED' || !selectedBelongsToJob) {
-          throw new AiImageJobError('INVALID_STATE', 'Workflow output must be approved before it can be applied');
-        }
-        await assertWorkflowSourceCurrent(workflow, actor(request).ownerUserId);
-        selectedAssetId = workflow.selectedOutputAssetId;
-      }
       const application = await applyAssets({
         jobId: id,
         ownerUserId: actor(request).ownerUserId,
         actorUserId: actor(request).actorUserId,
         ...parsed.data,
-        selectedAssetId,
+        selectedAssetId: null,
       });
       return { code: 1, data: application };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.get('/applications', async (request, reply) => {
+    const parsed = targetApplicationListSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    try {
+      const result = await listTargetApplications({
+        ownerUserId: actor(request).ownerUserId,
+        targetId: parsed.data.targetId,
+        limit: parsed.data.limit,
+        beforeSequence: parsed.data.beforeSequence,
+        operationKey: parsed.data.operationKey,
+      });
+      return { code: 1, data: result };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.get('/workflows/:id/applications', async (request, reply) => {
+    const parsed = workflowApplicationListSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const { id } = request.params as { id: string };
+    try {
+      const result = await listWorkflowApplications({
+        workflowId: id,
+        ownerUserId: actor(request).ownerUserId,
+        ...parsed.data,
+      });
+      return { code: 1, data: result };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/workflows/:id/applications', async (request, reply) => {
+    const parsed = workflowApplicationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const { id } = request.params as { id: string };
+    try {
+      if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
+        throw new AiMediaWorkflowError(
+          'AI_MEDIA_WORKFLOW_DISABLED',
+          'AI media workflow is disabled',
+        );
+      }
+      await requireSourceListingWebMedia(ids.ownerUserId);
+      const existing = await mediaWorkflowService.get(id, ids.ownerUserId);
+      const currentJob = Array.isArray(existing.jobs)
+        ? existing.jobs.find((job: any) => Array.isArray(job.assets)
+          && job.assets.some((asset: any) => asset.id === existing.selectedOutputAssetId))
+        : null;
+      if (production && currentJob?.provider === 'fake') {
+        throw new AiMediaWorkflowError(
+          'PROVIDER_NOT_READY',
+          'Test-only AI media candidates cannot be applied in production',
+        );
+      }
+      const result = await applyWorkflowApplication({
+        workflowId: id,
+        ownerUserId: ids.ownerUserId,
+        actorUserId: ids.actorUserId,
+        production,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({ code: 1, data: result });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/applications/:id/rollback', async (request, reply) => {
+    const parsed = workflowApplicationRollbackSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const { id } = request.params as { id: string };
+    try {
+      const result = await rollbackWorkflowApplication({
+        applicationId: id,
+        ownerUserId: ids.ownerUserId,
+        actorUserId: ids.actorUserId,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({ code: 1, data: result });
     } catch (error) { return sendError(reply, error); }
   });
 

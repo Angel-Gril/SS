@@ -430,6 +430,8 @@ model User {
   ownedAiMediaSuites                   AiMediaSuite[]                         @relation("AiMediaSuiteOwner")
   createdAiMediaSuites                 AiMediaSuite[]                         @relation("AiMediaSuiteActor")
   aiMediaSuiteEventsAsActor            AiMediaSuiteEvent[]                    @relation("AiMediaSuiteEventActor")
+  ownedAiMediaApplicationMutations     AiMediaApplicationMutation[]           @relation("AiMediaApplicationMutationOwner")
+  createdAiMediaApplicationMutations   AiMediaApplicationMutation[]           @relation("AiMediaApplicationMutationActor")
   ownedAiMediaSuitePromptSets           AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetOwner")
   createdAiMediaSuitePromptSets         AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetActor")
   mediaAssets                         MediaAsset[]
@@ -2700,6 +2702,16 @@ enum AiMediaSuiteSlotStatus {
   CANCELLED
 }
 
+enum AiMediaApplicationMutationKind {
+  APPLY
+  ROLLBACK
+}
+
+enum AiMediaApplicationMode {
+  APPEND
+  REPLACE
+}
+
 enum AiCostReservationStatus {
   RESERVED
   SUBMISSION_UNCERTAIN
@@ -2860,6 +2872,7 @@ model AiImageJob {
   assets                 MediaAsset[]
   mediaLineage           MediaAssetLineage[]
   workflowEvents         AiMediaWorkflowEvent[]
+  applicationMutations   AiMediaApplicationMutation[]
   costReservation        AiCostReservation?
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
@@ -2898,6 +2911,7 @@ model MediaAsset {
   lineageOutputs          MediaAssetLineage[]     @relation("MediaAssetLineageOutput")
   selectedByWorkflows     AiMediaWorkflow[]       @relation("AiMediaWorkflowSelectedOutput")
   workflowEvents          AiMediaWorkflowEvent[]
+  applicationMutations    AiMediaApplicationMutation[]
   aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]
 
   @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend], map: "media_asset_source_capture_storage_key")
@@ -2937,6 +2951,7 @@ model AiMediaWorkflow {
   inputs                AiMediaWorkflowInput[]
   jobs                  AiImageJob[]
   events                AiMediaWorkflowEvent[]
+  applicationMutations  AiMediaApplicationMutation[]
   lineage               MediaAssetLineage[]
   costReservations      AiCostReservation[]
   suiteSlot             AiMediaSuiteSlot?    @relation("AiMediaSuiteSlotWorkflow")
@@ -2995,6 +3010,51 @@ model AiMediaWorkflowEvent {
   @@index([ownerUserId, createdAt])
   @@index([ownerUserId, assetId])
   @@map("ai_media_workflow_events")
+}
+
+model AiMediaApplicationMutation {
+  id                     String                         @id @default(cuid())
+  ownerUserId            String                         @map("owner_user_id")
+  owner                  User                           @relation("AiMediaApplicationMutationOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId            String                         @map("actor_user_id")
+  actor                  User                           @relation("AiMediaApplicationMutationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  workflowId             String                         @map("workflow_id")
+  workflow               AiMediaWorkflow                @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  jobId                  String                         @map("job_id")
+  job                    AiImageJob                     @relation(fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  assetId                String                         @map("asset_id")
+  asset                  MediaAsset                     @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  kind                   AiMediaApplicationMutationKind
+  revision               Int                            @default(1)
+  rollbackOfId           String?                        @map("rollback_of_id")
+  rollbackOf             AiMediaApplicationMutation?    @relation("AiMediaApplicationRollback", fields: [rollbackOfId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  rolledBackBy           AiMediaApplicationMutation?    @relation("AiMediaApplicationRollback")
+  targetType             String                         @map("target_type") @db.VarChar(30)
+  targetId               String                         @map("target_id") @db.VarChar(200)
+  targetSequence         Int                            @map("target_sequence")
+  mode                   AiMediaApplicationMode
+  contextSkuKey          String?                        @map("context_sku_key") @db.VarChar(500)
+  contextSlotKey         String?                        @map("context_slot_key") @db.VarChar(1024)
+  operationKey           String                         @map("operation_key") @db.VarChar(128)
+  requestFingerprint     String                         @map("request_fingerprint") @db.Char(64)
+  workflowRevisionBefore Int                            @map("workflow_revision_before")
+  workflowRevisionAfter  Int                            @map("workflow_revision_after")
+  targetVersionBefore    DateTime                       @map("target_version_before")
+  targetVersionAfter     DateTime                       @map("target_version_after")
+  beforeState            Json                           @map("before_state_json")
+  beforeStateHash        String                         @map("before_state_hash") @db.Char(64)
+  afterState             Json                           @map("after_state_json")
+  afterStateHash         String                         @map("after_state_hash") @db.Char(64)
+  createdAt              DateTime                       @default(now()) @map("created_at")
+
+  @@unique([id, ownerUserId], map: "ai_media_application_mutation_id_owner_key")
+  @@unique([rollbackOfId, ownerUserId], map: "ai_media_application_mutation_rollback_of_key")
+  @@unique([ownerUserId, operationKey], map: "ai_media_application_mutation_owner_operation_key")
+  @@unique([jobId, kind], map: "ai_media_application_mutation_job_kind_key")
+  @@unique([ownerUserId, targetType, targetId, targetSequence], map: "ai_media_application_mutation_target_sequence_key")
+  @@index([ownerUserId, targetType, targetId, targetSequence(sort: Desc)], map: "ai_media_application_mutation_target_history_idx")
+  @@index([workflowId, createdAt(sort: Desc)], map: "ai_media_application_mutation_workflow_history_idx")
+  @@map("ai_media_application_mutations")
 }
 
 model AiMediaPlan {

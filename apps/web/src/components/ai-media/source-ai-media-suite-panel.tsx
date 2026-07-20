@@ -26,9 +26,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
+import { projectAiMediaApplicationImageUrls } from '@/lib/ai-media-application';
 import type {
   AiImageApplyResult,
   RunMediaMutation,
+  SynchronizeAiMediaTarget,
 } from './source-ai-media-state';
 import {
   buildAiMediaSuiteCancelRequest,
@@ -55,6 +57,7 @@ import {
   resolveAiMediaSuiteSlotReviewRecovery,
   resolveWorkflowSubmissionIntent,
   saveWorkflowSubmissionIntent,
+  shouldRefreshAiMediaSuiteTargetAfterError,
   startAiMediaSuitePolling,
   type AiMediaPlanRecord,
   type AiMediaSuite,
@@ -141,8 +144,8 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function normalizeApplyResult(value: unknown, targetId: string): AiImageApplyResult | null {
   const candidate = record(value);
-  const images = Array.isArray(candidate?.images) ? candidate.images : null;
-  const editedImages = Array.isArray(candidate?.editedImages) ? candidate.editedImages : null;
+  const images = projectAiMediaApplicationImageUrls(candidate?.images);
+  const editedImages = projectAiMediaApplicationImageUrls(candidate?.editedImages);
   if (!candidate
     || typeof candidate.jobId !== 'string'
     || candidate.mode !== 'append'
@@ -150,16 +153,15 @@ function normalizeApplyResult(value: unknown, targetId: string): AiImageApplyRes
     || candidate.targetId !== targetId
     || typeof candidate.targetUpdatedAt !== 'string'
     || !Number.isFinite(Date.parse(candidate.targetUpdatedAt))
-    || !images || images.some((entry) => typeof entry !== 'string')
-    || !editedImages || editedImages.some((entry) => typeof entry !== 'string')) return null;
+    || images.length === 0) return null;
   return {
     jobId: candidate.jobId,
     mode: 'append',
     targetType: 'collect',
     targetId,
     targetUpdatedAt: candidate.targetUpdatedAt,
-    images: images as string[],
-    editedImages: editedImages as string[],
+    images,
+    editedImages,
   };
 }
 
@@ -225,6 +227,7 @@ export function SourceAiMediaSuitePanel({
   targetId,
   targetUpdatedAt,
   plan,
+  mediaDraftDirty,
   mediaMutationBusy,
   runMediaMutation,
   onApplied,
@@ -233,10 +236,11 @@ export function SourceAiMediaSuitePanel({
   targetId: string;
   targetUpdatedAt?: string;
   plan: AiMediaPlanRecord;
+  mediaDraftDirty: boolean;
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
   onApplied?: (result: AiImageApplyResult) => void;
-  onConflictRefresh: () => Promise<void>;
+  onConflictRefresh: SynchronizeAiMediaTarget;
 }) {
   const [readiness, setReadiness] = useState<AiMediaSuiteReadiness | null>(null);
   const [preview, setPreview] = useState<AiMediaSuitePreview | null>(null);
@@ -283,7 +287,8 @@ export function SourceAiMediaSuitePanel({
     pending: suite?.slots.filter((slot) => slot.reviewStatus === 'PENDING').length || 0,
     approved: suite?.slots.filter((slot) => slot.reviewStatus === 'APPROVED').length || 0,
     rejected: suite?.slots.filter((slot) => slot.reviewStatus === 'REJECTED').length || 0,
-    applied: suite?.slots.filter((slot) => Boolean(slot.application)).length || 0,
+    applied: suite?.slots.filter((slot) => slot.application?.state === 'APPLIED').length || 0,
+    rolledBack: suite?.slots.filter((slot) => slot.application?.state === 'ROLLED_BACK').length || 0,
   }), [suite]);
 
   function isCurrentIdentity(snapshot: typeof identityRef.current, version: number) {
@@ -446,7 +451,7 @@ export function SourceAiMediaSuitePanel({
       requestVersion.current += 1;
       readinessRequestVersion.current += 1;
     };
-  }, [loadAll, plan.currentVersionId, plan.id, plan.revision, targetId]);
+  }, [loadAll, plan.currentVersionId, plan.id, plan.revision, targetId, targetUpdatedAt]);
 
   useEffect(() => {
     if (!actions.shouldPoll && !activeActions.shouldPoll) return;
@@ -828,6 +833,10 @@ export function SourceAiMediaSuitePanel({
 
   async function applyCandidate(slot: AiMediaSuiteSlot) {
     if (!suite) return;
+    if (mediaDraftDirty) {
+      toast({ title: '图片筛选尚未保存', description: '请先保存或放弃当前图片筛选，再追加候选图' });
+      return;
+    }
     const slotActions = resolveAiMediaSuiteSlotActions({ plan, readiness, suite, slot, targetUpdatedAt });
     const output = slot.outputAssets[0];
     const actionKey = `apply:${slot.id}`;
@@ -867,8 +876,17 @@ export function SourceAiMediaSuitePanel({
         : 'conflict';
       if (recovery === 'confirmed') {
         clearSubmissionIntent(operation);
-        try { await onConflictRefresh(); } catch { /* suite state remains authoritative */ }
-        toast({ title: '套图候选已由服务器追加到商品' });
+        const expectedTargetUpdatedAt = recoveredSlot?.application?.targetUpdatedAt;
+        const targetSynchronized = expectedTargetUpdatedAt
+          ? await onConflictRefresh(expectedTargetUpdatedAt)
+          : false;
+        toast(targetSynchronized
+          ? { title: '套图候选已由服务器追加到商品' }
+          : {
+            title: '套图候选已追加，商品图片待同步',
+            description: '服务端已完成追加，但当前页面尚未取得对应商品版本；图片操作已暂停，请刷新商品图片',
+            variant: 'destructive',
+          });
         return recovery;
       }
       if (!ambiguous || recovery === 'conflict') clearSubmissionIntent(operation);
@@ -913,19 +931,27 @@ export function SourceAiMediaSuitePanel({
         await recover(
           result.code === 1,
           result.msg,
-          resultCode === 'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT'
-            || resultCode === 'AI_MEDIA_SUITE_CANDIDATE_STALE',
+          shouldRefreshAiMediaSuiteTargetAfterError(resultCode),
         );
         return;
       }
       setSuite(normalized);
       clearSubmissionIntent(operation);
-      if (application) onApplied?.(application);
-      else {
-        try { await onConflictRefresh(); } catch { /* suite application remains visible */ }
+      let targetSynchronized = false;
+      if (application && onApplied) {
+        onApplied(application);
+        targetSynchronized = true;
+      } else if (normalizedSlot.application?.targetUpdatedAt) {
+        targetSynchronized = await onConflictRefresh(normalizedSlot.application.targetUpdatedAt);
       }
       setReviewSlotId(null);
-      toast({ title: '套图候选已追加到商品' });
+      toast(targetSynchronized
+        ? { title: '套图候选已追加到商品' }
+        : {
+          title: '套图候选已追加，商品图片待同步',
+          description: '服务端已完成追加，但当前页面尚未取得对应商品版本；图片操作已暂停，请刷新商品图片',
+          variant: 'destructive',
+        });
     } catch {
       await recover(true);
     } finally {
@@ -1008,6 +1034,7 @@ export function SourceAiMediaSuitePanel({
           <span className="text-muted-foreground">已通过 {reviewCounts.approved}</span>
           <span className="text-muted-foreground">已拒绝 {reviewCounts.rejected}</span>
           <span className="text-muted-foreground">已追加 {reviewCounts.applied}</span>
+          <span className="text-muted-foreground">已回滚 {reviewCounts.rolledBack}</span>
         </div> : null}
         {readiness && !readiness.ready && actions.retryableSlotIds.length === 0 && suite.status !== 'SUCCEEDED' ? <p className="break-words text-xs text-muted-foreground">{readiness.reason}</p> : null}
         <div className="flex flex-wrap gap-2">
@@ -1029,7 +1056,7 @@ export function SourceAiMediaSuitePanel({
             return <div key={slot.id} className="grid min-w-0 grid-cols-[80px_minmax(0,1fr)] gap-3 border px-3 py-3 sm:grid-cols-[80px_minmax(0,1fr)_auto] sm:items-center">
               {output ? <SuiteOutputPreview key={output.id} output={output} testOnly={suite.provider === 'fake'} /> : <div className="flex h-20 w-20 items-center justify-center border bg-muted"><Images className="h-5 w-5 text-muted-foreground" /></div>}
               <div className="min-w-0 text-xs">
-                <div className="flex min-w-0 flex-wrap items-center gap-2"><span className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</span><Badge variant={slotStatusVariant(slot.status)}>{SLOT_STATUS_LABEL[slot.status]}</Badge>{slot.reviewStatus !== 'NOT_READY' ? <Badge variant={slotReviewStatusVariant(slot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[slot.reviewStatus]}</Badge> : null}{slot.application ? <Badge variant="outline">已追加</Badge> : null}</div>
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><span className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</span><Badge variant={slotStatusVariant(slot.status)}>{SLOT_STATUS_LABEL[slot.status]}</Badge>{slot.reviewStatus !== 'NOT_READY' ? <Badge variant={slotReviewStatusVariant(slot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[slot.reviewStatus]}</Badge> : null}{slot.application ? <Badge variant="outline">{slot.application.state === 'ROLLED_BACK' ? '已回滚' : '已追加'}</Badge> : null}</div>
                 <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{formatAiMediaPlanningSlotKey(slot.slotKey)}</div>
                 <div className="mt-1 break-words text-muted-foreground">{slot.ownership.level === 'sku' ? 'SKU' : '兼容组'}：{formatAiMediaPlanningIdentity(slot.ownership.key)} · 第 {slot.attempt} 次尝试</div>
                 {slot.referenceAssets.length ? <div className="mt-2 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">参考</span>{slot.referenceAssets.slice(0, 3).map((reference) => <a key={reference.id} href={suiteImageUrl(reference.url)} target="_blank" rel="noreferrer" className="h-8 w-8 shrink-0 overflow-hidden border bg-muted" title={`打开冻结参考图 ${reference.candidateId}`}><img src={suiteImageUrl(reference.url)} alt="冻结参考图" className="h-full w-full object-cover" /></a>)}{slot.referenceAssets.length > 3 ? <span className="text-muted-foreground">+{slot.referenceAssets.length - 3}</span> : null}</div> : null}
@@ -1040,7 +1067,7 @@ export function SourceAiMediaSuitePanel({
               <div className="col-span-2 flex min-w-0 flex-wrap gap-2 sm:col-span-1 sm:justify-end">
                 {canRetry ? <Button type="button" size="icon" variant="outline" onClick={() => void retrySlot(slot)} disabled={mutationBusy} title="重试失败槽位" aria-label={`重试失败槽位 ${slot.slotKey}`}>{pendingActions.has(`retry:${slot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}</Button> : null}
                 {output ? <Button type="button" size="sm" variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => { setReviewSlotId(slot.id); setReviewNote(''); setRejectConfirm(false); }} disabled={mutationBusy}><Eye className="h-3.5 w-3.5" />{slotActions.canReview ? '审核候选' : '查看候选'}</Button> : null}
-                {slotActions.canApply ? <Button type="button" size="sm" className="min-h-10 flex-1 sm:flex-none" onClick={() => void applyCandidate(slot)} disabled={mutationBusy}><ImagePlus className="h-3.5 w-3.5" />{pendingActions.has(`apply:${slot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
+                {slotActions.canApply ? <Button type="button" size="sm" className="min-h-10 flex-1 sm:flex-none" onClick={() => void applyCandidate(slot)} disabled={mutationBusy || mediaDraftDirty} title={mediaDraftDirty ? '请先保存或放弃当前图片筛选' : '追加到商品'}><ImagePlus className="h-3.5 w-3.5" />{pendingActions.has(`apply:${slot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
               </div>
             </div>;
           })}
@@ -1074,7 +1101,7 @@ export function SourceAiMediaSuitePanel({
           </DialogHeader>
           {reviewSlot?.outputAssets[0] ? <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
             <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><span className="font-medium">生成候选</span><Badge variant={slotReviewStatusVariant(reviewSlot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[reviewSlot.reviewStatus]}</Badge>{reviewSlot.application ? <Badge variant="outline">已追加</Badge> : null}</div>
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><span className="font-medium">生成候选</span><Badge variant={slotReviewStatusVariant(reviewSlot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[reviewSlot.reviewStatus]}</Badge>{reviewSlot.application ? <Badge variant="outline">{reviewSlot.application.state === 'ROLLED_BACK' ? '已回滚' : '已追加'}</Badge> : null}</div>
               <a href={suiteImageUrl(reviewSlot.outputAssets[0].url)} target="_blank" rel="noreferrer" className="flex aspect-square max-h-[56dvh] w-full items-center justify-center overflow-hidden border bg-muted/30" title="打开原始尺寸候选图"><img src={suiteImageUrl(reviewSlot.outputAssets[0].url)} alt="套图生成候选" className="h-full w-full object-contain" /></a>
             </div>
             <div className="min-w-0">
@@ -1095,7 +1122,7 @@ export function SourceAiMediaSuitePanel({
               <Button type="button" variant="outline" className="min-h-10" onClick={() => setRejectConfirm(false)} disabled={mutationBusy}>返回</Button>
               <Button type="button" variant="destructive" className="min-h-10" onClick={() => reviewSlot && void reviewCandidate(reviewSlot, 'REJECT')} disabled={mutationBusy}>{reviewSlot && pendingActions.has(`review:${reviewSlot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}确认拒绝</Button>
             </> : null}
-            {reviewSlot && reviewSlotActions?.canApply ? <Button type="button" className="min-h-10" onClick={() => void applyCandidate(reviewSlot)} disabled={mutationBusy}><ImagePlus className="h-4 w-4" />{pendingActions.has(`apply:${reviewSlot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
+            {reviewSlot && reviewSlotActions?.canApply ? <Button type="button" className="min-h-10" onClick={() => void applyCandidate(reviewSlot)} disabled={mutationBusy || mediaDraftDirty} title={mediaDraftDirty ? '请先保存或放弃当前图片筛选' : '追加到商品'}><ImagePlus className="h-4 w-4" />{pendingActions.has(`apply:${reviewSlot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

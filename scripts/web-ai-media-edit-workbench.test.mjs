@@ -168,7 +168,7 @@ assert.match(panel, /selected\.editReady/u);
 assert.match(panel, /maskAssetId/u);
 assert.match(panel, /fullEditIntentRef/u);
 assert.match(panel, /inpaintIntentRef/u);
-assert.match(panel, /mode: 'append'/u);
+assert.match(panel, /mode: AiMediaApplicationMode = 'append'/u);
 assert.match(panel, /confirmMaskDraftDiscard/u);
 assert.match(panel, /beforeunload/u);
 assert.match(panel, /popstate/u);

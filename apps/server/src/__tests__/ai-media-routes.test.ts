@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { aiImageRoutes, resolveAiImageToImageReadiness } from '../routes/ai-images.js';
+import { AiMediaApplicationMutationError } from '../services/ai-media-application-mutations.js';
 import { AiImageJobError } from '../services/ai-image-jobs.js';
 import { AiMediaWorkflowError, type AiMediaWorkflowRecord } from '../services/ai-media-workflows.js';
 
@@ -102,6 +103,34 @@ async function build(
     targetUpdatedAt: new Date(),
     appliedAt: new Date(),
   }));
+  const mutationTarget = {
+    type: 'collect', id: 'goods-1', updatedAt: '2026-07-20T12:00:00.001Z',
+    images: ['/output.png'], editedImages: ['/output.png'], mainImage: '/output.png',
+  };
+  const mutationApplication = {
+    id: 'application-1', revision: 7, kind: 'APPLY', workflowId: 'workflow-1', jobId: 'job-1',
+    assetId: 'output-1', targetType: 'collect', targetId: 'goods-1', targetSequence: 1,
+    mode: 'append', operationKey: 'application-operation-1', rollbackEligible: true,
+  };
+  const applyWorkflowApplication = vi.fn(async () => ({
+    contractVersion: 'ai-media-application-mutation/v1',
+    application: mutationApplication, target: mutationTarget, replayed: false,
+  }));
+  const listWorkflowApplications = vi.fn(async () => ({
+    contractVersion: 'ai-media-application-mutation/v1',
+    items: [mutationApplication], frontier: mutationApplication, target: mutationTarget,
+    nextBeforeSequence: null, recoveredOperation: null, legacyApplications: [],
+  }));
+  const listTargetApplications = vi.fn(async () => ({
+    contractVersion: 'ai-media-application-mutation/v1',
+    items: [mutationApplication], frontier: mutationApplication, target: mutationTarget,
+    nextBeforeSequence: null, recoveredOperation: null, legacyApplications: [],
+  }));
+  const rollbackWorkflowApplication = vi.fn(async () => ({
+    contractVersion: 'ai-media-application-mutation/v1',
+    application: { ...mutationApplication, id: 'rollback-1', revision: 8, kind: 'ROLLBACK' },
+    target: mutationTarget, replayed: false,
+  }));
   const createEditMask = vi.fn(async (input: any, deps: any) => {
     const limit = await deps.checkUploadQuota(input.ownerUserId, input.maskBuffer.length);
     if (!limit.allowed) throw new AiImageJobError('EDIT_RESOURCE_QUOTA_EXCEEDED', limit.reason);
@@ -120,6 +149,7 @@ async function build(
   const app = Fastify();
   await app.register(aiImageRoutes, {
     repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation, enqueueEdit, applyAssets,
+    applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
     createEditMask: createEditMask as any,
     getEditSettings: async () => ({ fullEditEnabled, inpaintEnabled, dailyLimit: editDailyLimit }),
     checkEditMaskRequestRate: async () => editMaskRateAllowed
@@ -174,10 +204,175 @@ async function build(
   return {
     app, repository, mediaWorkflowService, mediaContextService,
     enqueue, enqueueTranslation, enqueueEdit, applyAssets, createEditMask,
+    applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
   };
 }
 
 describe('AI media workflow routes', () => {
+  it('advertises the versioned mutation contract and keeps reads and rollback available while dark', async () => {
+    const { app } = await build(false, 'owner-1', false, 'fake', false);
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.applications).toEqual({
+      contractVersion: 'ai-media-application-mutation/v1',
+      readEnabled: true,
+      applyEnabled: false,
+      rollbackEnabled: true,
+      defaultMode: 'append',
+      replaceOperations: ['IMAGE_TO_IMAGE'],
+    });
+  });
+
+  it('uses the mutation endpoints for apply, recovery reads and rollback', async () => {
+    const {
+      app, applyWorkflowApplication, listTargetApplications, listWorkflowApplications,
+      rollbackWorkflowApplication,
+    } = await build();
+    const targetVersion = '2026-07-20T12:00:00.000Z';
+    const applied = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/applications',
+      payload: {
+        mode: 'append', operationKey: 'application-operation-1',
+        expectedWorkflowRevision: 1, expectedTargetUpdatedAt: targetVersion,
+      },
+    });
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/workflows/workflow-1/applications?limit=10&operationKey=application-operation-1',
+    });
+    const targetListed = await app.inject({
+      method: 'GET',
+      url: '/applications?targetType=collect&targetId=goods-1&limit=10&operationKey=application-operation-1',
+    });
+    const rolledBack = await app.inject({
+      method: 'POST',
+      url: '/applications/application-1/rollback',
+      payload: {
+        operationKey: 'rollback-operation-1',
+        expectedApplicationRevision: 7,
+        expectedWorkflowRevision: 2, expectedTargetUpdatedAt: targetVersion,
+      },
+    });
+
+    expect(applied.statusCode).toBe(201);
+    expect(listed.statusCode).toBe(200);
+    expect(targetListed.statusCode).toBe(200);
+    expect(rolledBack.statusCode).toBe(201);
+    expect(applied.json().data.application.revision).toBe(7);
+    expect(listed.json().data).toMatchObject({
+      items: [{ id: 'application-1', revision: 7 }],
+      frontier: { id: 'application-1', revision: 7 },
+    });
+    expect(rolledBack.json().data.application).toMatchObject({
+      id: 'rollback-1', revision: 8,
+    });
+    expect(applyWorkflowApplication).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+    }));
+    expect(listWorkflowApplications).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'workflow-1', operationKey: 'application-operation-1', limit: 10,
+    }));
+    expect(listTargetApplications).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', targetId: 'goods-1', limit: 10,
+      operationKey: 'application-operation-1',
+    });
+    expect(rollbackWorkflowApplication).toHaveBeenCalledWith(expect.objectContaining({
+      applicationId: 'application-1', operationKey: 'rollback-operation-1',
+      expectedApplicationRevision: 7,
+    }));
+  });
+
+  it('keeps mutation reads and rollback available after rollout is disabled', async () => {
+    const { app, applyWorkflowApplication, listTargetApplications, rollbackWorkflowApplication } = await build(
+      false, 'owner-1', false, 'fake', false,
+    );
+    const targetVersion = '2026-07-20T12:00:00.000Z';
+    const apply = await app.inject({ method: 'POST', url: '/workflows/workflow-1/applications', payload: {
+      mode: 'append', operationKey: 'dark-apply-operation',
+      expectedWorkflowRevision: 1, expectedTargetUpdatedAt: targetVersion,
+    } });
+    const list = await app.inject({
+      method: 'GET', url: '/applications?targetType=collect&targetId=goods-1',
+    });
+    const rollback = await app.inject({ method: 'POST', url: '/applications/application-1/rollback', payload: {
+      operationKey: 'dark-rollback-operation',
+      expectedApplicationRevision: 1,
+      expectedWorkflowRevision: 2, expectedTargetUpdatedAt: targetVersion,
+    } });
+
+    expect(apply.statusCode).toBe(503);
+    expect(applyWorkflowApplication).not.toHaveBeenCalled();
+    expect(list.statusCode).toBe(200);
+    expect(rollback.statusCode).toBe(201);
+    expect(listTargetApplications).toHaveBeenCalledOnce();
+    expect(rollbackWorkflowApplication).toHaveBeenCalledOnce();
+  });
+
+  it('keeps target-scoped reads owner-bound while rollout is disabled', async () => {
+    const { app, listTargetApplications } = await build(false, 'owner-2', false, 'fake', false);
+    listTargetApplications.mockRejectedValueOnce(new AiMediaApplicationMutationError(
+      'TARGET_NOT_FOUND',
+      'Image application target not found',
+    ));
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/applications?targetType=collect&targetId=goods-1',
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      code: 'TARGET_NOT_FOUND',
+      msg: 'Image application target not found',
+    });
+    expect(listTargetApplications).toHaveBeenCalledWith({
+      ownerUserId: 'owner-2',
+      targetId: 'goods-1',
+      limit: undefined,
+      beforeSequence: undefined,
+      operationKey: undefined,
+    });
+  });
+
+  it('maps application provider readiness failures to a retryable 503', async () => {
+    const { app, applyWorkflowApplication } = await build();
+    applyWorkflowApplication.mockRejectedValueOnce(new AiMediaApplicationMutationError(
+      'PROVIDER_NOT_READY',
+      'Test-only AI media candidates cannot be applied in production',
+    ));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/applications',
+      payload: {
+        mode: 'append', operationKey: 'provider-not-ready-application',
+        expectedWorkflowRevision: 1, expectedTargetUpdatedAt: '2026-07-20T12:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+  });
+
+  it('requires explicit replace confirmation and blocks the legacy workflow apply route', async () => {
+    const { app, applyWorkflowApplication, applyAssets } = await build();
+    const replace = await app.inject({ method: 'POST', url: '/workflows/workflow-1/applications', payload: {
+      mode: 'replace', operationKey: 'replace-without-confirmation',
+      expectedWorkflowRevision: 1, expectedTargetUpdatedAt: '2026-07-20T12:00:00.000Z',
+    } });
+    const legacy = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
+      mode: 'append', targetType: 'collect', targetId: 'goods-1',
+    } });
+
+    expect(replace.statusCode).toBe(400);
+    expect(applyWorkflowApplication).not.toHaveBeenCalled();
+    expect(legacy.statusCode).toBe(409);
+    expect(legacy.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
+    expect(applyAssets).not.toHaveBeenCalled();
+  });
+
   it('keeps manual edit capabilities dark by default', async () => {
     const { app } = await build();
     const response = await app.inject({ method: 'GET', url: '/capabilities' });
@@ -514,9 +709,9 @@ describe('AI media workflow routes', () => {
     } });
 
     expect(review.statusCode).toBe(503);
-    expect(apply.statusCode).toBe(503);
+    expect(apply.statusCode).toBe(409);
     expect(review.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
-    expect(apply.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(apply.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
     expect(mediaWorkflowService.review).not.toHaveBeenCalled();
   });
 
@@ -1266,8 +1461,8 @@ describe('AI media workflow routes', () => {
     const apply = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
       mode: 'append', targetType: 'collect', targetId: 'goods-1',
     } });
-    expect(apply.statusCode).toBe(400);
-    expect(apply.json()).toMatchObject({ code: 'INVALID_STATE' });
+    expect(apply.statusCode).toBe(409);
+    expect(apply.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
     expect(applyAssets).not.toHaveBeenCalled();
   });
 
@@ -1345,7 +1540,8 @@ describe('AI media workflow routes', () => {
     const response = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
       mode: 'append', targetType: 'collect', targetId: 'other-goods',
     } });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
     expect(repository.recordApplication).not.toHaveBeenCalled();
   });
 
@@ -1377,8 +1573,8 @@ describe('AI media workflow routes', () => {
     const response = await app.inject({ method: 'POST', url: '/jobs/job-translation-1/apply', payload: {
       mode: 'replace', targetType: 'collect', targetId: 'goods-1',
     } });
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ code: 'UNSAFE_APPLY_MODE' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
   });
 
   it('rejects an approved candidate after its source capture snapshot changes', async () => {
@@ -1398,7 +1594,7 @@ describe('AI media workflow routes', () => {
       expectedTargetUpdatedAt: '2026-07-19T00:00:00.000Z',
     } });
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(response.json()).toMatchObject({ code: 'APPLICATION_MUTATION_REQUIRED' });
   });
 
   it('requires workflow cancellation for a workflow-backed child job', async () => {

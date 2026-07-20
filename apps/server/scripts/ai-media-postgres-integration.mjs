@@ -41,11 +41,28 @@ try {
     'src/__tests__/ai-image-suite.postgres.integration.test.ts',
     'src/__tests__/ai-image-suite-execution.postgres.integration.test.ts',
     'src/__tests__/ai-image-output-ownership.postgres.integration.test.ts',
+    'src/__tests__/ai-media-application-mutations.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),
     AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),
     RUN_AI_MEDIA_POSTGRES_TESTS: '1',
   });
+} catch (error) {
+  try {
+    const failures = await admin.$queryRawUnsafe(`
+      SELECT migration_name, logs
+      FROM "${schema}"."_prisma_migrations"
+      WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
+      ORDER BY started_at DESC
+      LIMIT 3
+    `);
+    for (const failure of failures) {
+      console.error(`[ai-media-postgres] migration failure ${failure.migration_name}:\n${failure.logs || '(no logs)'}`);
+    }
+  } catch (diagnosticError) {
+    console.error(`[ai-media-postgres] could not read migration diagnostics: ${diagnosticError.message}`);
+  }
+  throw error;
 } finally {
   await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
   await admin.$disconnect();

@@ -19,6 +19,7 @@ import {
   resolveAiMediaSuiteSlotActions,
   resolveAiMediaSuiteSlotApplyRecovery,
   resolveAiMediaSuiteSlotReviewRecovery,
+  shouldRefreshAiMediaSuiteTargetAfterError,
   startAiMediaSuitePolling,
 } from '../apps/web/src/lib/ai-media-workflow.ts';
 
@@ -353,10 +354,24 @@ assert.ok(approvedReviewSuite);
 const appliedPayload = structuredClone(approvedReviewPayload);
 appliedPayload.slots[0].workflowRevision = 4;
 appliedPayload.slots[0].application = {
-  jobId: 'job-1', outputAssetId: 'asset-1', appliedAt: '2026-07-20T00:04:00.000Z',
+  id: 'application-1', revision: 1, state: 'APPLIED', legacy: false,
+  jobId: 'job-1', outputAssetId: 'asset-1', mode: 'append',
+  appliedAt: '2026-07-20T00:04:00.000Z', rolledBackAt: null,
+  targetUpdatedAt: '2026-07-20T00:04:00.001Z',
 };
 const appliedSuite = normalizeAiMediaSuite(appliedPayload);
 assert.ok(appliedSuite);
+const rolledBackPayload = structuredClone(appliedPayload);
+rolledBackPayload.slots[0].workflowRevision = 5;
+rolledBackPayload.slots[0].application = {
+  ...rolledBackPayload.slots[0].application,
+  revision: 2,
+  state: 'ROLLED_BACK',
+  rolledBackAt: '2026-07-20T00:05:00.000Z',
+  targetUpdatedAt: '2026-07-20T00:05:00.001Z',
+};
+const rolledBackSuite = normalizeAiMediaSuite(rolledBackPayload);
+assert.ok(rolledBackSuite);
 
 assert.deepEqual(resolveAiMediaSuiteSlotActions({
   plan, readiness: { ready: true }, suite: pendingReviewSuite, slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
@@ -373,6 +388,9 @@ assert.equal(resolveAiMediaSuiteSlotActions({
 assert.equal(resolveAiMediaSuiteSlotActions({
   plan, readiness: { ready: true }, suite: appliedSuite, slot: appliedSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
 }).applied, true);
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: rolledBackSuite, slot: rolledBackSuite.slots[0], targetUpdatedAt: '2026-07-20T00:06:00.000Z',
+}).canApply, false, 'a rolled-back suite candidate remains ever-applied and cannot be submitted twice');
 assert.equal(resolveAiMediaSuiteSlotActions({
   plan: { ...plan, sourceCurrent: false }, readiness: { ready: true }, suite: pendingReviewSuite,
   slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
@@ -415,7 +433,7 @@ assert.throws(() => buildAiMediaSuiteSlotReviewRequest({
 assert.throws(() => buildAiMediaSuiteSlotApplyRequest({
   slot: appliedSuite.slots[0], operationKey: 'suite-apply-123',
   expectedTargetUpdatedAt: '2026-07-20T00:05:00.000Z',
-}), /已经追加/u);
+}), /已经应用过/u);
 
 assert.equal(resolveAiMediaSuiteSlotReviewRecovery({
   slot: approvedReviewSuite.slots[0], outputAssetId: 'asset-1', decision: 'APPROVE',
@@ -430,6 +448,9 @@ assert.equal(resolveAiMediaSuiteSlotReviewRecovery({
 assert.equal(resolveAiMediaSuiteSlotApplyRecovery({
   slot: appliedSuite.slots[0], outputAssetId: 'asset-1',
 }), 'confirmed');
+assert.equal(resolveAiMediaSuiteSlotApplyRecovery({
+  slot: rolledBackSuite.slots[0], outputAssetId: 'asset-1',
+}), 'conflict', 'rolled back is terminal for the original suite apply intent');
 assert.equal(resolveAiMediaSuiteSlotApplyRecovery({
   slot: approvedReviewSuite.slots[0], outputAssetId: 'asset-1',
 }), 'retry');
@@ -583,6 +604,20 @@ assert.throws(() => startAiMediaSuitePolling({
   poll: () => undefined,
 }), /轮询间隔无效/u);
 
+for (const code of [
+  'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT',
+  'AI_MEDIA_SUITE_CANDIDATE_STALE',
+  'TARGET_CONFLICT',
+  'STALE_MEDIA_WORKFLOW',
+]) {
+  assert.equal(
+    shouldRefreshAiMediaSuiteTargetAfterError(code),
+    true,
+    `${code} must refresh the exact collect target before another apply attempt`,
+  );
+}
+assert.equal(shouldRefreshAiMediaSuiteTargetAfterError('WORKFLOW_CONFLICT'), false);
+
 const panel = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-suite-panel.tsx', 'utf8');
 const planningPanel = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-planning-panel.tsx', 'utf8');
 const mediaPanel = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-panel.tsx', 'utf8');
@@ -592,6 +627,7 @@ assert.match(planningPanel, /SourceAiMediaSuitePanel/u);
 assert.match(planningPanel, /plan=\{bundle\.plan\}/u);
 assert.match(planningPanel, /targetUpdatedAt=\{targetUpdatedAt\}/u);
 assert.match(planningPanel, /runMediaMutation=\{runMediaMutation\}/u);
+assert.match(planningPanel, /mediaDraftDirty=\{mediaDraftDirty\}/u);
 assert.match(planningPanel, /onConflictRefresh=\{onConflictRefresh\}/u);
 assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?enabled[\s\S]*?planningEnabled=/u);
 assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?targetUpdatedAt=\{target\.updatedAt\}/u);
@@ -634,8 +670,11 @@ assert.match(panel, /审核套图候选/u);
 assert.match(panel, /追加到商品/u);
 assert.match(panel, /resolveAiMediaSuiteSlotReviewRecovery/u);
 assert.match(panel, /resolveAiMediaSuiteSlotApplyRecovery/u);
+assert.match(panel, /projectAiMediaApplicationImageUrls/u);
+assert.match(panel, /mediaDraftDirty/u);
+assert.match(panel, /已回滚/u);
 assert.match(panel, /recovered === undefined[\s\S]*保留本次操作/u);
-assert.match(panel, /AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT[\s\S]*onConflictRefresh/u);
+assert.match(panel, /shouldRefreshAiMediaSuiteTargetAfterError[\s\S]*onConflictRefresh/u);
 assert.match(panel, /enqueuePending/u);
 assert.match(panel, /isCurrentIdentity\(identity, context\)\) endAction/u);
 assert.ok([...panel.matchAll(/isCurrentIdentity\(identity, context\)\) endAction/gu)].length >= 5);

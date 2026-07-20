@@ -48,6 +48,7 @@ import {
   executeWithBusyState,
   isMediaMutationConflict,
   type RunMediaMutation,
+  type RefreshAiMediaTarget,
   type SaveSourceImagesResult,
 } from '@/components/ai-media/source-ai-media-state';
 import { evaluateSourceListingFieldDiagnostics, evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
@@ -400,6 +401,10 @@ function sourceManagedImageList(values: unknown[]): string[] {
     out.push(url);
   });
   return out;
+}
+
+function sameSourceImageSelection(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function sourcePublishPreviewImages(item: SourceCollectItem): string[] {
@@ -1255,7 +1260,7 @@ function SourceDetailContent({
   activeSection: DetailSection;
   onSectionChange: (section: DetailSection) => void;
   onItemUpdate: (item: SourceCollectItem) => void;
-  onRefreshItem: () => Promise<void>;
+  onRefreshItem: RefreshAiMediaTarget;
   aiMaskDraftDirty: boolean;
   onAiMaskDraftDirtyChange: (dirty: boolean) => void;
 }) {
@@ -1583,7 +1588,7 @@ function SourceImagesSection({
 }: {
   item: SourceCollectItem;
   onItemUpdate: (item: SourceCollectItem) => void;
-  onRefreshItem: () => Promise<void>;
+  onRefreshItem: RefreshAiMediaTarget;
   onAiMaskDraftDirtyChange: (dirty: boolean) => void;
 }) {
   const sourceImages = sourcePreviewImages(item);
@@ -1600,6 +1605,8 @@ function SourceImagesSection({
   );
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoMaterialRows(item);
+  const mediaDraftDirty = !sameSourceImageSelection(images, sourcePublishPreviewImages(item))
+    || !sameSourceImageSelection(detailImages, sourceDetailPreviewImages(item));
   const selectedSkuKeys = sourceDisplayVariants(item).map((variant, index) => sourceWorkflowVariantKey(variant, index));
   const planningSkuKeys = [...new Set(selectedSkuKeys.filter(Boolean))].sort();
 
@@ -1664,7 +1671,7 @@ function SourceImagesSection({
           images={images}
           empty="暂无可发布商品图片"
           limit={32}
-          onRemove={(image) => setImages((current) => {
+          onRemove={saving || mediaMutationBusy ? undefined : (image) => setImages((current) => {
             const next = current.filter((entry) => entry !== image);
             setError(next.length ? '' : '至少保留一张发布图片');
             return next;
@@ -1676,7 +1683,9 @@ function SourceImagesSection({
           images={detailImages}
           empty="未采集到详情图原始素材"
           limit={50}
-          onRemove={(image) => setDetailImages((current) => current.filter((entry) => entry !== image))}
+          onRemove={saving || mediaMutationBusy
+            ? undefined
+            : (image) => setDetailImages((current) => current.filter((entry) => entry !== image))}
         />
       </InfoPanel>
       <div className="flex flex-wrap items-center gap-2">
@@ -1699,6 +1708,7 @@ function SourceImagesSection({
       <SourceAiMediaPanel
         target={{ type: 'collect', id: item.id, label: item.title, updatedAt: item.updatedAt }}
         selectedSkuKeys={planningSkuKeys}
+        mediaDraftDirty={mediaDraftDirty}
         mediaMutationBusy={mediaMutationBusy}
         runMediaMutation={runMediaMutation}
         onConflictRefresh={onRefreshItem}
@@ -3124,7 +3134,7 @@ function SourceCollectPageContent() {
   const [aiMaskDraftDirty, setAiMaskDraftDirty] = useState(false);
   const loadItemsGuardRef = useRef(createLatestRequestGuard());
 
-  async function loadItems() {
+  async function loadItems(refreshTargetId?: string): Promise<SourceCollectItem | null> {
     const isCurrent = loadItemsGuardRef.current.begin();
     setLoading(true);
     setError('');
@@ -3132,11 +3142,15 @@ function SourceCollectPageContent() {
       const params = new URLSearchParams({ limit: '50', sourceGroup: 'source' });
       if (search.trim()) params.set('search', search.trim());
       const res = await api.get<{ total: number; rows: SourceCollectItem[] }>(`/api/collect?${params}`);
-      if (!isCurrent()) return;
+      if (!isCurrent()) return null;
       if (res.code === 1 && res.data) {
         const nextItems = res.data.rows.filter(isSourceCollectItem);
+        const refreshedTarget = refreshTargetId
+          ? nextItems.find((row) => row.id === refreshTargetId) || null
+          : null;
         setItems(nextItems);
         setDetailItem((current) => current ? nextItems.find((row) => row.id === current.id) || current : current);
+        return refreshedTarget;
       } else {
         setError(res.msg || '读取货源采集列表失败');
       }
@@ -3147,6 +3161,7 @@ function SourceCollectPageContent() {
     } finally {
       if (isCurrent()) setLoading(false);
     }
+    return null;
   }
 
   function updateItem(next: SourceCollectItem) {
@@ -3209,7 +3224,7 @@ function SourceCollectPageContent() {
           <h1 className="text-2xl font-semibold tracking-tight">1688商品采集</h1>
           <div className="text-sm text-muted-foreground mt-1">货源商品采集、翻译、类目映射和上架准备</div>
         </div>
-        <Button variant="outline" onClick={loadItems} disabled={loading}>
+        <Button variant="outline" onClick={() => void loadItems()} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
           刷新
         </Button>
@@ -3245,7 +3260,7 @@ function SourceCollectPageContent() {
                   placeholder="标题 / SKU / 商品ID"
                 />
               </div>
-              <Button variant="outline" onClick={loadItems}>搜索</Button>
+              <Button variant="outline" onClick={() => void loadItems()}>搜索</Button>
             </div>
           </div>
         </CardHeader>
@@ -3289,7 +3304,7 @@ function SourceCollectPageContent() {
               activeSection={activeDetailSection}
               onSectionChange={setActiveDetailSection}
               onItemUpdate={updateItem}
-              onRefreshItem={loadItems}
+              onRefreshItem={() => loadItems(detailItem.id)}
               aiMaskDraftDirty={aiMaskDraftDirty}
               onAiMaskDraftDirtyChange={setAiMaskDraftDirty}
             />

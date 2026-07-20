@@ -120,6 +120,14 @@ export async function executeLockedMediaMutation<T>(
 
 export type RunMediaMutation = <T>(action: () => Promise<T>) => Promise<MediaMutationExecution<T>>;
 
+export interface RefreshedAiMediaTarget {
+  id: string;
+  updatedAt?: string;
+}
+
+export type RefreshAiMediaTarget = () => Promise<RefreshedAiMediaTarget | null>;
+export type SynchronizeAiMediaTarget = (expectedTargetUpdatedAt?: string) => Promise<boolean>;
+
 export async function executeWithBusyState<T>(
   onBusyChange: (busy: boolean) => void,
   action: () => Promise<T>,
