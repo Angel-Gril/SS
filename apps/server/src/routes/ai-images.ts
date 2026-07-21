@@ -791,6 +791,18 @@ function publicJob(job: Record<string, unknown>, workflow?: Record<string, unkno
     workflow: _workflow,
     costReservation,
     assets,
+    providerReconciliationStatus,
+    providerReconciliationRevision,
+    providerReconciliationAttemptCount,
+    providerReconciliationNextAt,
+    providerReconciliationDeadlineAt,
+    providerReconciliationLeaseOwner: _providerReconciliationLeaseOwner,
+    providerReconciliationLeaseTokenHash: _providerReconciliationLeaseTokenHash,
+    providerReconciliationLeaseExpiresAt: _providerReconciliationLeaseExpiresAt,
+    providerReconciliationLastProviderStatus,
+    providerReconciliationLastErrorCode,
+    providerReconciliationLastErrorMessage,
+    providerReconciledAt,
     ...visible
   } = job;
   const translationConfig = operationConfig && typeof operationConfig === 'object'
@@ -805,6 +817,21 @@ function publicJob(job: Record<string, unknown>, workflow?: Record<string, unkno
       return src && tgt ? [{ src, tgt }] : [];
     }).slice(0, 50)
     : [];
+  const costStatus = typeof (costReservation as { status?: unknown } | null)?.status === 'string'
+    ? (costReservation as { status: string }).status
+    : null;
+  const reconciliationStatus = typeof providerReconciliationStatus === 'string'
+    ? providerReconciliationStatus
+    : 'NOT_REQUIRED';
+  const providerResultTerminalWithoutOutput = ['NO_OUTPUT', 'NOT_SUBMITTED']
+    .includes(reconciliationStatus);
+  const providerResultNeedsReconciliation = Boolean(visible.providerJobId)
+    || visible.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN'
+    || reconciliationStatus !== 'NOT_REQUIRED';
+  const costAllowsRetry = costStatus == null || ['SETTLED', 'RELEASED'].includes(costStatus);
+  const retryAllowed = workflow?.status === 'FAILED'
+    && costAllowsRetry
+    && (!providerResultNeedsReconciliation || providerResultTerminalWithoutOutput);
   return {
     ...visible,
     ...(visible.operation === 'IMAGE_TRANSLATE' && translationConfig ? {
@@ -815,9 +842,20 @@ function publicJob(job: Record<string, unknown>, workflow?: Record<string, unkno
         terminologies: translationTerminologies,
       },
     } : {}),
-    costStatus: typeof (costReservation as { status?: unknown } | null)?.status === 'string'
-      ? (costReservation as { status: string }).status
-      : null,
+    costStatus,
+    retryAllowed,
+    providerReconciliation: {
+      status: reconciliationStatus,
+      revision: Number(providerReconciliationRevision || 0),
+      attemptCount: Number(providerReconciliationAttemptCount || 0),
+      nextAt: providerReconciliationNextAt || null,
+      deadlineAt: providerReconciliationDeadlineAt || null,
+      lastProviderStatus: providerReconciliationLastProviderStatus || null,
+      lastErrorCode: providerReconciliationLastErrorCode || null,
+      lastErrorMessage: providerReconciliationLastErrorMessage || null,
+      reconciledAt: providerReconciledAt || null,
+      actionRequired: reconciliationStatus === 'MANUAL_REVIEW',
+    },
     assets: Array.isArray(assets) ? assets
       .filter((asset: any) => asset?.kind === 'AI_GENERATED')
       .map((asset: any) => ({

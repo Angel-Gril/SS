@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
 import { AiCostReconciliationPanel } from '@/components/admin/ai-cost-reconciliation-panel';
+import { AiProviderReconciliationPanel } from '@/components/admin/ai-provider-reconciliation-panel';
 
 interface OpsResponse {
   checks: Record<string, { status: string; detail?: string }>;
@@ -31,15 +32,7 @@ export default function AdminOpsPage() {
     setLoading(false);
   }
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-96"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
-  }
-
-  if (!data) {
-    return <p className="text-center text-muted-foreground py-12">加载失败</p>;
-  }
-
-  const checks = data.checks;
+  const checks = data?.checks || {};
 
   return (
     <div className="space-y-6">
@@ -55,50 +48,61 @@ export default function AdminOpsPage() {
         <Button variant="outline" size="sm" onClick={load}>立即刷新</Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <StatusCard
-          icon={Database}
-          title="PostgreSQL"
-          status={checks.db?.status || 'unknown'}
-          detail={checks.db?.detail}
-        />
-        <StatusCard
-          icon={Cpu}
-          title="Redis"
-          status={checks.redis?.status || 'unknown'}
-          detail={checks.redis?.detail}
-        />
-        <StatusCard
-          icon={Server}
-          title="Worker 模式"
-          status={checks.workers?.status || 'unknown'}
-          detail={checks.workers?.detail}
-        />
-        <StatusCard
-          icon={Activity}
-          title="Runtime Mode"
-          status={checks.runtime?.status || 'unknown'}
-          detail={checks.runtime?.status === 'cloud' ? '云端 SaaS 模式（OSS+Turnstile+SMS）' : '本地模式（cookie+CDN）'}
-        />
-        <StatusCard
-          icon={Server}
-          title="CORS"
-          status={checks.cors?.status || 'unknown'}
-          detail={checks.cors?.detail}
-        />
-      </div>
+      {loading ? (
+        <div className="flex h-40 items-center justify-center text-muted-foreground">
+          <Loader2 className="mr-2 h-6 w-6 animate-spin" />正在读取运行状态
+        </div>
+      ) : !data ? (
+        <div className="border py-10 text-center text-sm text-muted-foreground">运行状态加载失败</div>
+      ) : (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <StatusCard
+              icon={Database}
+              title="PostgreSQL"
+              status={checks.db?.status || 'unknown'}
+              detail={checks.db?.detail}
+            />
+            <StatusCard
+              icon={Cpu}
+              title="Redis"
+              status={checks.redis?.status || 'unknown'}
+              detail={checks.redis?.detail}
+            />
+            <StatusCard
+              icon={Server}
+              title="Worker 模式"
+              status={checks.workers?.status || 'unknown'}
+              detail={checks.workers?.detail}
+            />
+            <StatusCard
+              icon={Activity}
+              title="Runtime Mode"
+              status={checks.runtime?.status || 'unknown'}
+              detail={checks.runtime?.status === 'cloud' ? '云端 SaaS 模式（OSS+Turnstile+SMS）' : '本地模式（cookie+CDN）'}
+            />
+            <StatusCard
+              icon={Server}
+              title="CORS"
+              status={checks.cors?.status || 'unknown'}
+              detail={checks.cors?.detail}
+            />
+          </div>
 
-      <Card>
-        <CardHeader>
-          <h2 className="font-medium">应用元信息</h2>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <KvRow label="版本" value={data.version} />
-          <KvRow label="NODE_ENV" value={data.nodeEnv} />
-          <KvRow label="进程已运行" value={formatUptime(data.uptimeSeconds)} />
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <h2 className="font-medium">应用元信息</h2>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <KvRow label="版本" value={data.version} />
+              <KvRow label="NODE_ENV" value={data.nodeEnv} />
+              <KvRow label="进程已运行" value={formatUptime(data.uptimeSeconds)} />
+            </CardContent>
+          </Card>
+        </>
+      )}
 
+      <AiProviderReconciliationPanel />
       <AiCostReconciliationPanel />
     </div>
   );

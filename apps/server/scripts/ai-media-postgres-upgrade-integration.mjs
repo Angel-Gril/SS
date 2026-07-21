@@ -40,6 +40,14 @@ const LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION = '20260721120000_add_ai_medi
 const LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION = '20260721121000_harden_ai_media_listing_draft_application_authority';
 const LISTING_DRAFT_PROJECTION_FIX_MIGRATION = '20260721122000_fix_ai_media_listing_draft_projection_constraints';
 const LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION = '20260721123000_enforce_ai_media_listing_draft_actor_authority';
+const PROVIDER_RECONCILIATION_STATE_MIGRATION = '20260721124000_add_ai_provider_reconciliation_state';
+const PROVIDER_RECONCILIATION_HARDENING_MIGRATION = '20260721125000_harden_ai_provider_reconciliation_state';
+const PROVIDER_RECONCILIATION_WORKFLOW_INDEX_MIGRATION = '20260721126000_add_ai_provider_reconciliation_workflow_index';
+const PROVIDER_RECONCILIATION_EVENT_MIGRATION = '20260721127000_add_ai_provider_reconciliation_events';
+const PROVIDER_RECONCILIATION_IDENTITY_MIGRATION = '20260721128000_normalize_ai_provider_reconciliation_identity';
+const PROVIDER_RECONCILIATION_ANOMALY_MIGRATION = '20260721129000_allow_ai_provider_reconciliation_anomalies';
+const PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION = '20260721130000_index_ai_provider_reconciliation_leases';
+const PROVIDER_RECONCILIATION_DEADLINE_MIGRATION = '20260721131000_extend_ai_provider_reconciliation_backfill_deadlines';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -151,6 +159,27 @@ function prepareHistoricalMigrations() {
     LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION,
   );
   const listingDraftProjectionFixIndex = names.indexOf(LISTING_DRAFT_PROJECTION_FIX_MIGRATION);
+  const listingDraftActorAuthorityIndex = names.indexOf(LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION);
+  const providerReconciliationStateIndex = names.indexOf(PROVIDER_RECONCILIATION_STATE_MIGRATION);
+  const providerReconciliationHardeningIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_HARDENING_MIGRATION,
+  );
+  const providerReconciliationWorkflowIndexIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_WORKFLOW_INDEX_MIGRATION,
+  );
+  const providerReconciliationEventIndex = names.indexOf(PROVIDER_RECONCILIATION_EVENT_MIGRATION);
+  const providerReconciliationIdentityIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_IDENTITY_MIGRATION,
+  );
+  const providerReconciliationAnomalyIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_ANOMALY_MIGRATION,
+  );
+  const providerReconciliationLeaseIndexIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION,
+  );
+  const providerReconciliationDeadlineIndex = names.indexOf(
+    PROVIDER_RECONCILIATION_DEADLINE_MIGRATION,
+  );
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -181,6 +210,15 @@ function prepareHistoricalMigrations() {
     || listingDraftApplicationMutationIndex !== listingDraftCandidateScopeIndex + 1
     || listingDraftApplicationAuthorityIndex !== listingDraftApplicationMutationIndex + 1
     || listingDraftProjectionFixIndex !== listingDraftApplicationAuthorityIndex + 1
+    || listingDraftActorAuthorityIndex !== listingDraftProjectionFixIndex + 1
+    || providerReconciliationStateIndex !== listingDraftActorAuthorityIndex + 1
+    || providerReconciliationHardeningIndex !== providerReconciliationStateIndex + 1
+    || providerReconciliationWorkflowIndexIndex !== providerReconciliationHardeningIndex + 1
+    || providerReconciliationEventIndex !== providerReconciliationWorkflowIndexIndex + 1
+    || providerReconciliationIdentityIndex !== providerReconciliationEventIndex + 1
+    || providerReconciliationAnomalyIndex !== providerReconciliationIdentityIndex + 1
+    || providerReconciliationLeaseIndexIndex !== providerReconciliationAnomalyIndex + 1
+    || providerReconciliationDeadlineIndex !== providerReconciliationLeaseIndexIndex + 1
     || names.filter((name) => name === EDIT_OUTPUT_GUARD_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CHAINING_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CONTRACT_MIGRATION).length !== 1
@@ -200,9 +238,18 @@ function prepareHistoricalMigrations() {
     || names.filter((name) => name === LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION).length !== 1
     || names.filter((name) => name === LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION).length !== 1
     || names.filter((name) => name === LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION).length !== 1
-    || names.filter((name) => name === LISTING_DRAFT_PROJECTION_FIX_MIGRATION).length !== 1) {
+    || names.filter((name) => name === LISTING_DRAFT_PROJECTION_FIX_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_STATE_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_HARDENING_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_WORKFLOW_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_EVENT_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_IDENTITY_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_ANOMALY_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === PROVIDER_RECONCILIATION_DEADLINE_MIGRATION).length !== 1) {
     throw new Error(
-      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION} must be one unique consecutive migration block`,
+      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${PROVIDER_RECONCILIATION_DEADLINE_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -240,6 +287,15 @@ function prepareHistoricalMigrations() {
     listingDraftApplicationMutationIndex,
     listingDraftApplicationAuthorityIndex,
     listingDraftProjectionFixIndex,
+    listingDraftActorAuthorityIndex,
+    providerReconciliationStateIndex,
+    providerReconciliationHardeningIndex,
+    providerReconciliationWorkflowIndexIndex,
+    providerReconciliationEventIndex,
+    providerReconciliationIdentityIndex,
+    providerReconciliationAnomalyIndex,
+    providerReconciliationLeaseIndexIndex,
+    providerReconciliationDeadlineIndex,
   };
 }
 
@@ -437,6 +493,47 @@ async function seedLegacySuccessfulEditFixture(client, options = {}) {
   };
 }
 
+async function seedProviderReconciliationDeadlineFixture(client, ownerUserId) {
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const jobId = `upgrade_provider_reconciliation_job_${suffix}`;
+  const seededAt = new Date();
+  const initialDeadlineAt = new Date(seededAt.getTime() + 15 * 60 * 1000);
+
+  await client.aiImageJob.create({ data: {
+    id: jobId,
+    ownerUserId,
+    actorUserId: ownerUserId,
+    status: 'FAILED',
+    operation: 'IMAGE_TRANSLATE',
+    provider: 'fake',
+    model: 'historical-reconciliation-fixture',
+    prompt: 'Historical accepted Provider task; never submit again',
+    resolvedPrompt: 'Historical accepted Provider task; never submit again',
+    requestFingerprint: '9'.repeat(64),
+    requestedImageCount: 1,
+    width: 1,
+    height: 1,
+    attemptCount: 1,
+    maxAttempts: 1,
+    providerDispatchedAt: seededAt,
+    providerJobId: `historical-provider-task-${suffix}`,
+    providerReconciliationStatus: 'PENDING',
+    providerReconciliationRevision: 1,
+    providerReconciliationNextAt: seededAt,
+    providerReconciliationDeadlineAt: initialDeadlineAt,
+    providerReconciliationLastErrorCode: 'PROVIDER_POLL_TIMEOUT',
+    providerReconciliationLastErrorMessage: 'Historical task accepted before deadline extension',
+    errorCode: 'PROVIDER_POLL_TIMEOUT',
+    errorMessage: 'Historical task accepted before H4 deadline extension',
+    completedAt: seededAt,
+  } });
+
+  return {
+    jobId,
+    minimumExtendedDeadlineAt: new Date(seededAt.getTime() + 23 * 60 * 60 * 1000),
+  };
+}
+
 async function seedCandidateConsumerFixture(client, origin) {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const workflowId = `upgrade_invalid_consumer_${suffix}`;
@@ -570,6 +667,37 @@ async function addAiMediaContextCompatibilityColumns(client) {
   `);
 }
 
+async function addAiProviderReconciliationCompatibilityColumns(client) {
+  await client.$executeRawUnsafe(`
+    CREATE TYPE "AiProviderReconciliationStatus" AS ENUM (
+      'NOT_REQUIRED',
+      'PENDING',
+      'RUNNING',
+      'RETRY_WAIT',
+      'MANUAL_REVIEW',
+      'RECOVERED',
+      'NO_OUTPUT',
+      'NOT_SUBMITTED',
+      'CANCELLED_OUTPUT_RETAINED'
+    )
+  `);
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_image_jobs"
+      ADD COLUMN "provider_reconciliation_status" "AiProviderReconciliationStatus" NOT NULL DEFAULT 'NOT_REQUIRED',
+      ADD COLUMN "provider_reconciliation_revision" INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN "provider_reconciliation_attempt_count" INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN "provider_reconciliation_next_at" TIMESTAMP(3),
+      ADD COLUMN "provider_reconciliation_deadline_at" TIMESTAMP(3),
+      ADD COLUMN "provider_reconciliation_lease_owner" VARCHAR(100),
+      ADD COLUMN "provider_reconciliation_lease_token_hash" CHAR(64),
+      ADD COLUMN "provider_reconciliation_lease_expires_at" TIMESTAMP(3),
+      ADD COLUMN "provider_reconciliation_last_provider_status" VARCHAR(100),
+      ADD COLUMN "provider_reconciliation_last_error_code" VARCHAR(100),
+      ADD COLUMN "provider_reconciliation_last_error_message" VARCHAR(500),
+      ADD COLUMN "provider_reconciled_at" TIMESTAMP(3)
+  `);
+}
+
 async function addCurrentClientCompatibilityColumns(client) {
   await client.$executeRawUnsafe(`
     ALTER TABLE "ai_media_suite_slots"
@@ -577,6 +705,7 @@ async function addCurrentClientCompatibilityColumns(client) {
       ADD COLUMN "execution_lease_expires_at" TIMESTAMP(3)
   `);
   await addAiMediaContextCompatibilityColumns(client);
+  await addAiProviderReconciliationCompatibilityColumns(client);
 }
 
 async function dropAiMediaContextCompatibilityColumns(client) {
@@ -594,6 +723,47 @@ async function dropAiMediaContextCompatibilityColumns(client) {
   `);
   if (Number(rows[0]?.count) !== 0) {
     throw new Error('Temporary AI media context compatibility columns were not removed before H3a migrations');
+  }
+}
+
+async function dropAiProviderReconciliationCompatibilityColumns(client) {
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_image_jobs"
+      DROP COLUMN "provider_reconciliation_status",
+      DROP COLUMN "provider_reconciliation_revision",
+      DROP COLUMN "provider_reconciliation_attempt_count",
+      DROP COLUMN "provider_reconciliation_next_at",
+      DROP COLUMN "provider_reconciliation_deadline_at",
+      DROP COLUMN "provider_reconciliation_lease_owner",
+      DROP COLUMN "provider_reconciliation_lease_token_hash",
+      DROP COLUMN "provider_reconciliation_lease_expires_at",
+      DROP COLUMN "provider_reconciliation_last_provider_status",
+      DROP COLUMN "provider_reconciliation_last_error_code",
+      DROP COLUMN "provider_reconciliation_last_error_message",
+      DROP COLUMN "provider_reconciled_at"
+  `);
+  await client.$executeRawUnsafe('DROP TYPE "AiProviderReconciliationStatus"');
+  const [columns, enumTypes] = await Promise.all([
+    client.$queryRawUnsafe(`
+      SELECT count(*)::int AS "count"
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'ai_image_jobs'
+        AND (
+          column_name LIKE 'provider_reconciliation_%'
+          OR column_name = 'provider_reconciled_at'
+        )
+    `),
+    client.$queryRawUnsafe(`
+      SELECT count(*)::int AS "count"
+      FROM pg_type type_state
+      JOIN pg_namespace namespace_state ON namespace_state.oid = type_state.typnamespace
+      WHERE namespace_state.nspname = current_schema()
+        AND type_state.typname = 'AiProviderReconciliationStatus'
+    `),
+  ]);
+  if (Number(columns[0]?.count) !== 0 || Number(enumTypes[0]?.count) !== 0) {
+    throw new Error('Temporary AI Provider reconciliation compatibility schema was not removed before H4 migrations');
   }
 }
 
@@ -823,6 +993,354 @@ async function validateListingDraftApplicationLedger(client) {
   }
 }
 
+async function validateAiProviderReconciliationSchema(client, deadlineFixture) {
+  const [
+    columns,
+    enumLabels,
+    indexes,
+    checks,
+    triggers,
+    eventTables,
+    eventIndexes,
+    eventConstraints,
+    eventTriggers,
+    migrations,
+    deadlineRows,
+    deadlineEvents,
+  ] = await Promise.all([
+    client.$queryRawUnsafe(`
+      SELECT
+        column_name AS "name",
+        is_nullable AS "nullable",
+        udt_name AS "type",
+        character_maximum_length::int AS "length"
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'ai_image_jobs'
+        AND (
+          column_name LIKE 'provider_reconciliation_%'
+          OR column_name = 'provider_reconciled_at'
+        )
+      ORDER BY column_name
+    `),
+    client.$queryRawUnsafe(`
+      SELECT enum_state.enumlabel AS "label"
+      FROM pg_type type_state
+      JOIN pg_namespace namespace_state ON namespace_state.oid = type_state.typnamespace
+      JOIN pg_enum enum_state ON enum_state.enumtypid = type_state.oid
+      WHERE namespace_state.nspname = current_schema()
+        AND type_state.typname = 'AiProviderReconciliationStatus'
+      ORDER BY enum_state.enumsortorder
+    `),
+    client.$queryRawUnsafe(`
+      SELECT
+        index_class.relname AS "name",
+        index_state.indisvalid AS "valid",
+        index_state.indisready AS "ready",
+        array_agg(attribute.attname ORDER BY key.ordinality) AS "columns"
+      FROM pg_index index_state
+      JOIN pg_class index_class ON index_class.oid = index_state.indexrelid
+      JOIN pg_class table_class ON table_class.oid = index_state.indrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      JOIN LATERAL unnest(index_state.indkey) WITH ORDINALITY AS key(attnum, ordinality)
+        ON key.ordinality <= index_state.indnkeyatts
+      JOIN pg_attribute attribute
+        ON attribute.attrelid = table_class.oid
+        AND attribute.attnum = key.attnum
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_image_jobs'
+        AND index_class.relname IN (
+          'ai_image_job_provider_reconciliation_due',
+          'ai_image_job_provider_reconciliation_lease_due',
+          'ai_image_job_workflow_provider_reconciliation'
+        )
+      GROUP BY index_class.relname, index_state.indisvalid, index_state.indisready
+      ORDER BY index_class.relname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT
+        constraint_state.conname AS "name",
+        constraint_state.contype AS "type",
+        constraint_state.convalidated AS "validated"
+      FROM pg_constraint constraint_state
+      JOIN pg_class table_class ON table_class.oid = constraint_state.conrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_image_jobs'
+        AND constraint_state.conname IN (
+          'ai_image_job_provider_reconciliation_state_check',
+          'ai_image_job_provider_job_id_nonblank_check'
+        )
+      ORDER BY constraint_state.conname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT trigger_state.tgname AS "name", trigger_state.tgenabled AS "enabled"
+      FROM pg_trigger trigger_state
+      JOIN pg_class table_class ON table_class.oid = trigger_state.tgrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_image_jobs'
+        AND NOT trigger_state.tgisinternal
+        AND trigger_state.tgname = 'ai_image_jobs_provider_reconciliation_transition'
+    `),
+    client.$queryRawUnsafe(`
+      SELECT count(*)::int AS "count"
+      FROM information_schema.tables
+      WHERE table_schema = current_schema()
+        AND table_name = 'ai_provider_reconciliation_events'
+    `),
+    client.$queryRawUnsafe(`
+      SELECT
+        index_class.relname AS "name",
+        index_state.indisunique AS "unique",
+        index_state.indisvalid AS "valid",
+        index_state.indisready AS "ready",
+        array_agg(attribute.attname ORDER BY key.ordinality) AS "columns"
+      FROM pg_index index_state
+      JOIN pg_class index_class ON index_class.oid = index_state.indexrelid
+      JOIN pg_class table_class ON table_class.oid = index_state.indrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      JOIN LATERAL unnest(index_state.indkey) WITH ORDINALITY AS key(attnum, ordinality)
+        ON key.ordinality <= index_state.indnkeyatts
+      JOIN pg_attribute attribute
+        ON attribute.attrelid = table_class.oid
+        AND attribute.attnum = key.attnum
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_provider_reconciliation_events'
+        AND index_class.relname IN (
+          'ai_provider_reconciliation_event_job_revision',
+          'ai_provider_reconciliation_event_key',
+          'ai_provider_reconciliation_event_owner_created',
+          'ai_provider_reconciliation_event_workflow_created'
+        )
+      GROUP BY
+        index_class.relname,
+        index_state.indisunique,
+        index_state.indisvalid,
+        index_state.indisready
+      ORDER BY index_class.relname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT constraint_state.conname AS "name", constraint_state.contype AS "type",
+             constraint_state.convalidated AS "validated"
+      FROM pg_constraint constraint_state
+      JOIN pg_class table_class ON table_class.oid = constraint_state.conrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_provider_reconciliation_events'
+        AND constraint_state.conname IN (
+          'ai_provider_reconciliation_event_shape_check',
+          'ai_provider_reconciliation_event_job_owner_fkey',
+          'ai_provider_reconciliation_event_workflow_owner_fkey',
+          'ai_provider_reconciliation_event_actor_fkey'
+        )
+      ORDER BY constraint_state.conname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT trigger_state.tgname AS "name", trigger_state.tgenabled AS "enabled"
+      FROM pg_trigger trigger_state
+      JOIN pg_class table_class ON table_class.oid = trigger_state.tgrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_provider_reconciliation_events'
+        AND NOT trigger_state.tgisinternal
+      ORDER BY trigger_state.tgname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT migration_name AS "name"
+      FROM "_prisma_migrations"
+      WHERE migration_name IN ($1, $2, $3, $4, $5, $6, $7, $8)
+        AND finished_at IS NOT NULL
+        AND rolled_back_at IS NULL
+      ORDER BY started_at, id
+    `,
+    PROVIDER_RECONCILIATION_STATE_MIGRATION,
+    PROVIDER_RECONCILIATION_HARDENING_MIGRATION,
+    PROVIDER_RECONCILIATION_WORKFLOW_INDEX_MIGRATION,
+    PROVIDER_RECONCILIATION_EVENT_MIGRATION,
+    PROVIDER_RECONCILIATION_IDENTITY_MIGRATION,
+    PROVIDER_RECONCILIATION_ANOMALY_MIGRATION,
+    PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION,
+    PROVIDER_RECONCILIATION_DEADLINE_MIGRATION),
+    client.$queryRawUnsafe(`
+      SELECT
+        "provider" AS "provider",
+        "provider_reconciliation_status"::text AS "status",
+        "provider_reconciliation_revision" AS "revision",
+        "provider_reconciliation_next_at" AS "nextAt",
+        "provider_reconciliation_deadline_at" AS "deadlineAt"
+      FROM "ai_image_jobs"
+      WHERE "id" = $1
+    `, deadlineFixture.jobId),
+    client.$queryRawUnsafe(`
+      SELECT
+        "reconciliation_revision" AS "revision",
+        "event_type" AS "eventType",
+        "payload" ->> 'schema' AS "payloadSchema",
+        "payload" ->> 'source' AS "source",
+        "payload" ->> 'status' AS "status",
+        ("payload" ->> 'deadlineAt')::timestamp AS "deadlineAt"
+      FROM "ai_provider_reconciliation_events"
+      WHERE "job_id" = $1
+        AND "event_type" = 'PROVIDER_RECONCILIATION_DEADLINE_EXTENDED'
+      ORDER BY "created_at", "id"
+    `, deadlineFixture.jobId),
+  ]);
+
+  const expectedColumns = [
+    ['provider_reconciled_at', 'YES', 'timestamp', null],
+    ['provider_reconciliation_attempt_count', 'NO', 'int4', null],
+    ['provider_reconciliation_deadline_at', 'YES', 'timestamp', null],
+    ['provider_reconciliation_last_error_code', 'YES', 'varchar', 100],
+    ['provider_reconciliation_last_error_message', 'YES', 'varchar', 500],
+    ['provider_reconciliation_last_provider_status', 'YES', 'varchar', 100],
+    ['provider_reconciliation_lease_expires_at', 'YES', 'timestamp', null],
+    ['provider_reconciliation_lease_owner', 'YES', 'varchar', 100],
+    ['provider_reconciliation_lease_token_hash', 'YES', 'bpchar', 64],
+    ['provider_reconciliation_next_at', 'YES', 'timestamp', null],
+    ['provider_reconciliation_revision', 'NO', 'int4', null],
+    ['provider_reconciliation_status', 'NO', 'AiProviderReconciliationStatus', null],
+  ];
+  const actualColumns = columns.map((column) => [
+    column.name,
+    column.nullable,
+    column.type,
+    column.length,
+  ]);
+  if (JSON.stringify(actualColumns) !== JSON.stringify(expectedColumns)) {
+    throw new Error('AI Provider reconciliation columns are missing or invalid');
+  }
+
+  const expectedEnumLabels = [
+    'NOT_REQUIRED',
+    'PENDING',
+    'RUNNING',
+    'RETRY_WAIT',
+    'MANUAL_REVIEW',
+    'RECOVERED',
+    'NO_OUTPUT',
+    'NOT_SUBMITTED',
+    'CANCELLED_OUTPUT_RETAINED',
+  ];
+  if (JSON.stringify(enumLabels.map((row) => row.label)) !== JSON.stringify(expectedEnumLabels)) {
+    throw new Error('AI Provider reconciliation status enum is missing or invalid');
+  }
+
+  const expectedIndexes = new Map([
+    ['ai_image_job_provider_reconciliation_due', [
+      'provider_reconciliation_status',
+      'provider_reconciliation_next_at',
+      'id',
+    ]],
+    ['ai_image_job_provider_reconciliation_lease_due', [
+      'provider_reconciliation_status',
+      'provider_reconciliation_lease_expires_at',
+      'id',
+    ]],
+    ['ai_image_job_workflow_provider_reconciliation', [
+      'workflow_id',
+      'provider_reconciliation_status',
+    ]],
+  ]);
+  if (indexes.length !== expectedIndexes.size
+    || indexes.some((row) => (
+      row.valid !== true
+      || row.ready !== true
+      || JSON.stringify(row.columns) !== JSON.stringify(expectedIndexes.get(String(row.name)))
+    ))) {
+    throw new Error('AI Provider reconciliation indexes are missing or invalid');
+  }
+  const expectedChecks = [
+    'ai_image_job_provider_job_id_nonblank_check',
+    'ai_image_job_provider_reconciliation_state_check',
+  ];
+  if (checks.length !== expectedChecks.length
+    || checks.some((row, index) => (
+      row.name !== expectedChecks[index] || row.type !== 'c' || row.validated !== true
+    ))) {
+    throw new Error('AI Provider reconciliation state check is missing or unvalidated');
+  }
+  if (triggers.length !== 1
+    || triggers[0].name !== 'ai_image_jobs_provider_reconciliation_transition'
+    || triggers[0].enabled !== 'O') {
+    throw new Error('AI Provider reconciliation transition trigger is missing or disabled');
+  }
+  if (Number(eventTables[0]?.count) !== 1) {
+    throw new Error('AI Provider reconciliation event ledger is missing');
+  }
+  const expectedEventIndexes = new Map([
+    ['ai_provider_reconciliation_event_job_revision', {
+      unique: false,
+      columns: ['job_id', 'reconciliation_revision', 'created_at'],
+    }],
+    ['ai_provider_reconciliation_event_key', {
+      unique: true,
+      columns: ['event_key'],
+    }],
+    ['ai_provider_reconciliation_event_owner_created', {
+      unique: false,
+      columns: ['owner_user_id', 'created_at'],
+    }],
+    ['ai_provider_reconciliation_event_workflow_created', {
+      unique: false,
+      columns: ['workflow_id', 'created_at'],
+    }],
+  ]);
+  if (eventIndexes.length !== expectedEventIndexes.size
+    || eventIndexes.some((row) => (
+      row.valid !== true
+      || row.ready !== true
+      || row.unique !== expectedEventIndexes.get(String(row.name))?.unique
+      || JSON.stringify(row.columns)
+        !== JSON.stringify(expectedEventIndexes.get(String(row.name))?.columns)
+    ))) {
+    throw new Error('AI Provider reconciliation event indexes are missing or invalid');
+  }
+  if (eventConstraints.length !== 4
+    || eventConstraints.some((row) => row.validated !== true)
+    || eventConstraints.filter((row) => row.type === 'f').length !== 3
+    || eventConstraints.filter((row) => row.type === 'c').length !== 1) {
+    throw new Error('AI Provider reconciliation event constraints are missing or invalid');
+  }
+  if (eventTriggers.length !== 1
+    || eventTriggers[0].name !== 'ai_provider_reconciliation_events_immutable'
+    || eventTriggers[0].enabled !== 'O') {
+    throw new Error('AI Provider reconciliation event immutability trigger is missing or disabled');
+  }
+  const expectedMigrations = [
+    PROVIDER_RECONCILIATION_STATE_MIGRATION,
+    PROVIDER_RECONCILIATION_HARDENING_MIGRATION,
+    PROVIDER_RECONCILIATION_WORKFLOW_INDEX_MIGRATION,
+    PROVIDER_RECONCILIATION_EVENT_MIGRATION,
+    PROVIDER_RECONCILIATION_IDENTITY_MIGRATION,
+    PROVIDER_RECONCILIATION_ANOMALY_MIGRATION,
+    PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION,
+    PROVIDER_RECONCILIATION_DEADLINE_MIGRATION,
+  ];
+  if (JSON.stringify(migrations.map((row) => row.name)) !== JSON.stringify(expectedMigrations)) {
+    throw new Error('AI Provider reconciliation migrations are missing or out of order');
+  }
+  if (deadlineRows.length !== 1
+    || deadlineRows[0].provider !== 'fake'
+    || deadlineRows[0].status !== 'PENDING'
+    || deadlineRows[0].revision !== 2
+    || !(deadlineRows[0].nextAt instanceof Date)
+    || !(deadlineRows[0].deadlineAt instanceof Date)
+    || deadlineRows[0].deadlineAt < deadlineFixture.minimumExtendedDeadlineAt) {
+    throw new Error('Historical AI Provider reconciliation deadline was not extended revision-safely');
+  }
+  if (deadlineEvents.length !== 1
+    || deadlineEvents[0].revision !== 2
+    || deadlineEvents[0].eventType !== 'PROVIDER_RECONCILIATION_DEADLINE_EXTENDED'
+    || deadlineEvents[0].payloadSchema !== 'ai-provider-reconciliation-event/v1'
+    || deadlineEvents[0].source !== 'MIGRATION_DEADLINE_EXTENSION'
+    || deadlineEvents[0].status !== 'PENDING'
+    || !(deadlineEvents[0].deadlineAt instanceof Date)
+    || deadlineEvents[0].deadlineAt.getTime() !== deadlineRows[0].deadlineAt.getTime()) {
+    throw new Error('Historical AI Provider deadline extension event is missing or invalid');
+  }
+}
+
 const selectedFixtureTests = [
   'allows one serializable claim and exact replay under concurrent requests',
   'rejects cross-authority and forged reference bindings without leaving partial rows',
@@ -908,6 +1426,7 @@ try {
   });
   await invalidFixtureClient.$connect();
   await addAiMediaContextCompatibilityColumns(invalidFixtureClient);
+  await addAiProviderReconciliationCompatibilityColumns(invalidFixtureClient);
   const invalidOrigin = await seedLegacySuccessfulEditFixture(invalidFixtureClient, {
     candidateContract: true,
     finalMimeType: 'image/webp',
@@ -986,15 +1505,47 @@ try {
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
 
-  if (migrationStages.unboundCandidateRejectionIndex < migrationStages.names.length - 1) {
-    fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
-    await fixtureClient.$connect();
-    await dropAiMediaContextCompatibilityColumns(fixtureClient);
-    await fixtureClient.$disconnect();
-    fixtureClient = undefined;
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  await dropAiMediaContextCompatibilityColumns(fixtureClient);
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
+  addHistoricalMigrationRange(
+    migrationStages.names,
+    migrationStages.unboundCandidateRejectionIndex + 1,
+    migrationStages.listingDraftActorAuthorityIndex,
+  );
+  run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
+    DATABASE_URL: testUrl.toString(),
+  });
+
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  await dropAiProviderReconciliationCompatibilityColumns(fixtureClient);
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
+  addHistoricalMigrationRange(
+    migrationStages.names,
+    migrationStages.providerReconciliationStateIndex,
+    migrationStages.providerReconciliationWorkflowIndexIndex,
+  );
+  run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
+    DATABASE_URL: testUrl.toString(),
+  });
+
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  const providerDeadlineFixture = await seedProviderReconciliationDeadlineFixture(
+    fixtureClient,
+    fixture.ownerUserId,
+  );
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
+
+  if (migrationStages.providerReconciliationWorkflowIndexIndex < migrationStages.names.length - 1) {
     addHistoricalMigrationRange(
       migrationStages.names,
-      migrationStages.unboundCandidateRejectionIndex + 1,
+      migrationStages.providerReconciliationWorkflowIndexIndex + 1,
       migrationStages.names.length - 1,
     );
     run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
@@ -1006,6 +1557,7 @@ try {
   await fixtureClient.$connect();
   await validateWorkflowHistoryIndexes(fixtureClient);
   await validateListingDraftApplicationLedger(fixtureClient);
+  await validateAiProviderReconciliationSchema(fixtureClient, providerDeadlineFixture);
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
 

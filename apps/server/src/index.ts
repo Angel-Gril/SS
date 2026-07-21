@@ -80,6 +80,7 @@ import {
 } from './repositories/ai-image-suite-execution-repository.js';
 import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
 import { adminAiCostReconciliationRoutes } from './routes/admin-ai-cost-reconciliations.js';
+import { adminAiProviderReconciliationRoutes } from './routes/admin-ai-provider-reconciliations.js';
 import { adminOzonPublisherParityRoutes } from './routes/admin-ozon-publisher-parity.js';
 import { adminOzonPublisherRolloutRoutes } from './routes/admin-ozon-publisher-rollout.js';
 import {
@@ -89,6 +90,7 @@ import {
 import { createOzonPublisherRolloutAdminService } from './services/ozon-publisher-rollout-admin.js';
 import { createPrismaOzonPublisherRolloutAdminRepository } from './services/ozon-publisher-rollout-admin-prisma.js';
 import { createAiCostReconciliationAdminService } from './services/ai-cost-reconciliation-admin.js';
+import { createAiProviderReconciliationAdminService } from './services/ai-provider-reconciliation-admin.js';
 import { loadPrismaOzonPublisherRolloutControlSnapshot } from './services/ozon-publisher-rollout-control.js';
 import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/ozon-publisher-rollout-readiness-prisma.js';
 import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
@@ -1034,6 +1036,10 @@ await app.register(adminAiCostReconciliationRoutes, {
   prefix: '/api/admin/ai-cost-reconciliations',
   service: createAiCostReconciliationAdminService({ database: prisma as never }),
 });
+await app.register(adminAiProviderReconciliationRoutes, {
+  prefix: '/api/admin/ai-provider-reconciliations',
+  service: createAiProviderReconciliationAdminService({ database: prisma as never }),
+});
 await app.register(adminOzonPublisherParityRoutes, {
   prefix: '/api/admin/ozon-publisher-parity',
   service: sourceOzonPublisherParityObservationService,
@@ -1200,6 +1206,7 @@ if (RUN_WORKERS) {
     { startRechargeTimeoutWorker },
     { startListingTaskRefreshWorker },
     { startOzonPublishReconciliationWorker },
+    { startAiProviderReconciliationWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
@@ -1208,6 +1215,7 @@ if (RUN_WORKERS) {
     import('./workers/recharge-timeout.js'),
     import('./workers/listing-task-refresh.js'),
     import('./workers/ozon-publish-reconciliation.js'),
+    import('./workers/ai-provider-reconciliation.js'),
   ]);
 
   startWarehouseCommandPollWorker();
@@ -1243,6 +1251,11 @@ if (RUN_WORKERS) {
     }),
     logger: {
       info: (message, details) => app.log.info({ details }, message),
+      error: (message, details) => app.log.error({ err: details }, message),
+    },
+  });
+  startAiProviderReconciliationWorker({
+    logger: {
       error: (message, details) => app.log.error({ err: details }, message),
     },
   });

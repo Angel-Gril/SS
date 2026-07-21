@@ -46,6 +46,24 @@ export interface AiImageJobRecord {
   billedUnits: number;
   providerJobId: string | null;
   providerDispatchedAt?: Date | null;
+  providerReconciliationStatus?:
+    | 'NOT_REQUIRED'
+    | 'PENDING'
+    | 'RUNNING'
+    | 'RETRY_WAIT'
+    | 'MANUAL_REVIEW'
+    | 'RECOVERED'
+    | 'NO_OUTPUT'
+    | 'NOT_SUBMITTED'
+    | 'CANCELLED_OUTPUT_RETAINED';
+  providerReconciliationRevision?: number;
+  providerReconciliationAttemptCount?: number;
+  providerReconciliationNextAt?: Date | null;
+  providerReconciliationDeadlineAt?: Date | null;
+  providerReconciliationLastProviderStatus?: string | null;
+  providerReconciliationLastErrorCode?: string | null;
+  providerReconciliationLastErrorMessage?: string | null;
+  providerReconciledAt?: Date | null;
   errorCode: string | null;
   errorMessage: string | null;
   appliedMode?: 'append' | 'replace' | null;

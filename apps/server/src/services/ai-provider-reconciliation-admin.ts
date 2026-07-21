@@ -1,0 +1,509 @@
+import { createHash } from 'node:crypto';
+import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import {
+  appendAiCostSettlementInTransaction,
+  markAiCostUnknownInTransaction,
+} from './ai-cost-ledger.js';
+import {
+  aiProviderReconciliationEventData,
+  aiProviderReconciliationEventKey,
+} from './ai-provider-reconciliation-events.js';
+
+const UNRESOLVED_STATUSES = ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] as const;
+const LIST_STATUSES = ['ALL', ...UNRESOLVED_STATUSES] as const;
+const MAX_RECONCILIATION_AGE_MS = 24 * 60 * 60 * 1000;
+
+export type AiProviderReconciliationListStatus = typeof LIST_STATUSES[number];
+
+export interface ListAiProviderReconciliationsInput {
+  limit?: number;
+  status?: AiProviderReconciliationListStatus;
+  cursor?: string;
+}
+
+export class AiProviderReconciliationAdminError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly statusCode: 400 | 404 | 409,
+  ) {
+    super(message);
+    this.name = 'AiProviderReconciliationAdminError';
+  }
+}
+
+function required(value: unknown, field: string, maxLength = 500) {
+  const text = String(value || '').trim();
+  if (!text || text.length > maxLength) {
+    throw new AiProviderReconciliationAdminError('INVALID_REQUEST', `${field} is invalid`, 400);
+  }
+  return text;
+}
+
+function sha256(value: unknown, field: string) {
+  const text = required(value, field, 64).toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(text)) {
+    throw new AiProviderReconciliationAdminError('INVALID_REQUEST', `${field} is invalid`, 400);
+  }
+  return text;
+}
+
+function iso(value: unknown): string | null {
+  return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : null;
+}
+
+function validDate(value: unknown, field: string) {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) {
+    throw new AiProviderReconciliationAdminError('INVALID_REQUEST', `${field} is invalid`, 400);
+  }
+  return date;
+}
+
+function listStatus(value: unknown): AiProviderReconciliationListStatus {
+  const status = String(value || 'MANUAL_REVIEW') as AiProviderReconciliationListStatus;
+  if (!LIST_STATUSES.includes(status)) {
+    throw new AiProviderReconciliationAdminError('INVALID_REQUEST', 'status is invalid', 400);
+  }
+  return status;
+}
+
+function encodeListCursor(status: AiProviderReconciliationListStatus, id: string) {
+  return Buffer.from(JSON.stringify({ v: 1, s: status, i: id }), 'utf8').toString('base64url');
+}
+
+function decodeListCursor(status: AiProviderReconciliationListStatus, value: unknown) {
+  try {
+    const cursor = String(value || '');
+    if (!cursor || cursor.length > 1_000 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) throw new Error();
+    const bytes = Buffer.from(cursor, 'base64url');
+    if (!bytes.length || bytes.toString('base64url') !== cursor) throw new Error();
+    const serialized = bytes.toString('utf8');
+    const payload = JSON.parse(serialized) as Record<string, unknown>;
+    if (!payload || Array.isArray(payload)
+      || Object.keys(payload).sort().join(',') !== 'i,s,v'
+      || payload.v !== 1
+      || payload.s !== status
+      || typeof payload.i !== 'string'
+      || !payload.i
+      || payload.i.length > 300
+      || serialized !== JSON.stringify({ v: 1, s: payload.s, i: payload.i })) {
+      throw new Error();
+    }
+    return { id: payload.i };
+  } catch {
+    throw new AiProviderReconciliationAdminError(
+      'INVALID_REQUEST',
+      'cursor is invalid for this reconciliation queue',
+      400,
+    );
+  }
+}
+
+function evidenceHash(job: any) {
+  return createHash('sha256').update(JSON.stringify({
+    id: job.id,
+    ownerUserId: job.ownerUserId,
+    workflowId: job.workflowId || null,
+    workflowAttempt: job.workflowAttempt ?? null,
+    jobStatus: job.status,
+    provider: job.provider,
+    model: job.model,
+    providerJobId: job.providerJobId || null,
+    costProviderJobId: job.costReservation?.providerRequestId || null,
+    providerDispatchedAt: iso(job.providerDispatchedAt),
+    reconciliation: {
+      status: job.providerReconciliationStatus,
+      revision: Number(job.providerReconciliationRevision || 0),
+      attemptCount: Number(job.providerReconciliationAttemptCount || 0),
+      nextAt: iso(job.providerReconciliationNextAt),
+      deadlineAt: iso(job.providerReconciliationDeadlineAt),
+      lastProviderStatus: job.providerReconciliationLastProviderStatus || null,
+      lastErrorCode: job.providerReconciliationLastErrorCode || null,
+      lastErrorMessage: job.providerReconciliationLastErrorMessage || null,
+      reconciledAt: iso(job.providerReconciledAt),
+    },
+    cost: job.costReservation ? {
+      status: job.costReservation.status,
+      providerRequestId: job.costReservation.providerRequestId || null,
+      providerAcceptedAt: iso(job.costReservation.providerAcceptedAt),
+      updatedAt: iso(job.costReservation.updatedAt),
+    } : null,
+    updatedAt: iso(job.updatedAt),
+  })).digest('hex');
+}
+
+function publicRecord(job: any) {
+  return {
+    id: job.id,
+    ownerUserId: job.ownerUserId,
+    workflowId: job.workflowId || null,
+    operation: job.operation,
+    provider: job.provider,
+    model: job.model,
+    jobStatus: job.status,
+    providerJobId: job.providerJobId || null,
+    costProviderJobId: job.costReservation?.providerRequestId || null,
+    providerDispatchedAt: iso(job.providerDispatchedAt),
+    providerAcceptedAt: iso(job.costReservation?.providerAcceptedAt),
+    status: job.providerReconciliationStatus,
+    revision: Number(job.providerReconciliationRevision || 0),
+    attemptCount: Number(job.providerReconciliationAttemptCount || 0),
+    nextAt: iso(job.providerReconciliationNextAt),
+    deadlineAt: iso(job.providerReconciliationDeadlineAt),
+    lastProviderStatus: job.providerReconciliationLastProviderStatus || null,
+    lastErrorCode: job.providerReconciliationLastErrorCode || null,
+    lastErrorMessage: job.providerReconciliationLastErrorMessage || null,
+    reconciledAt: iso(job.providerReconciledAt),
+    updatedAt: iso(job.updatedAt),
+    costStatus: job.costReservation?.status || null,
+    context: job.workflow ? {
+      type: job.workflow.contextType || null,
+      id: job.workflow.contextId || null,
+      skuKey: job.workflow.contextSkuKey || null,
+      slotKey: job.workflow.contextSlotKey || null,
+    } : null,
+    allowedActions: allowedActions(job),
+    evidenceHash: evidenceHash(job),
+  };
+}
+
+function include() {
+  return {
+    workflow: {
+      select: {
+        id: true,
+        ownerUserId: true,
+        currentAttempt: true,
+        contextType: true,
+        contextId: true,
+        contextSkuKey: true,
+        contextSlotKey: true,
+      },
+    },
+    costReservation: {
+      include: { settlements: { orderBy: { createdAt: 'desc' }, take: 10 } },
+    },
+  };
+}
+
+function isCurrentAttempt(job: any) {
+  return Boolean(job.workflowId && job.workflow
+    && job.workflow.ownerUserId === job.ownerUserId
+    && Number(job.workflow.currentAttempt) === Number(job.workflowAttempt));
+}
+
+function allowedActions(job: any): Array<'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME'> {
+  if (job.providerReconciliationStatus !== 'MANUAL_REVIEW') return [];
+  const jobProviderId = String(job.providerJobId || '').trim();
+  const costProviderId = String(job.costReservation?.providerRequestId || '').trim();
+  const identitiesConflict = Boolean(
+    jobProviderId && costProviderId && jobProviderId !== costProviderId,
+  );
+  const resumeAllowed = (!job.workflowId || isCurrentAttempt(job)) && !identitiesConflict;
+  if (jobProviderId) return resumeAllowed ? ['RESUME', 'NO_OUTPUT'] : ['NO_OUTPUT'];
+  if (costProviderId || job.costReservation?.providerAcceptedAt) {
+    return resumeAllowed && costProviderId ? ['RESUME'] : [];
+  }
+  return resumeAllowed ? ['RESUME', 'NOT_SUBMITTED'] : ['NOT_SUBMITTED'];
+}
+
+function assertCurrentAttempt(job: any) {
+  if (job.workflowId && !isCurrentAttempt(job)) {
+    throw new AiProviderReconciliationAdminError(
+      'RECONCILIATION_CHANGED',
+      'Provider reconciliation is not the current workflow attempt',
+      409,
+    );
+  }
+}
+
+export interface ResolveAiProviderReconciliationInput {
+  jobId: string;
+  actorUserId: string;
+  requestId: string;
+  expectedStatus: 'MANUAL_REVIEW';
+  expectedRevision: number;
+  expectedEvidenceHash: string;
+  action: 'NOT_SUBMITTED' | 'NO_OUTPUT' | 'RESUME';
+  providerJobId?: string;
+  providerAcceptedAt?: Date | string;
+  reason: string;
+}
+
+export function createAiProviderReconciliationAdminService(input: {
+  database: any;
+  now?: () => Date;
+}) {
+  const database = input.database;
+  const now = input.now || (() => new Date());
+  return {
+    async listReconciliations(query: ListAiProviderReconciliationsInput = {}) {
+      const limit = Number(query.limit ?? 50);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        throw new AiProviderReconciliationAdminError('INVALID_REQUEST', 'limit is invalid', 400);
+      }
+      const status = listStatus(query.status);
+      const cursor = query.cursor ? decodeListCursor(status, query.cursor) : null;
+      const rows = await database.aiImageJob.findMany({
+        where: {
+          providerReconciliationStatus: status === 'ALL'
+            ? { in: [...UNRESOLVED_STATUSES] }
+            : status,
+          ...(cursor ? { id: { gt: cursor.id } } : {}),
+        },
+        orderBy: { id: 'asc' },
+        take: limit + 1,
+        include: include(),
+      });
+      const pageRows = rows.slice(0, limit);
+      const last = pageRows.at(-1);
+      return {
+        items: pageRows.map(publicRecord),
+        limit,
+        status,
+        nextCursor: rows.length > limit && last ? encodeListCursor(status, last.id) : null,
+      };
+    },
+
+    async resolveReconciliation(raw: ResolveAiProviderReconciliationInput) {
+      const jobId = required(raw.jobId, 'jobId', 300);
+      const actorUserId = required(raw.actorUserId, 'actorUserId', 300);
+      const requestId = required(raw.requestId, 'requestId', 100);
+      const expectedEvidenceHash = sha256(raw.expectedEvidenceHash, 'expectedEvidenceHash');
+      if (raw.expectedStatus !== 'MANUAL_REVIEW'
+        || !Number.isSafeInteger(raw.expectedRevision)
+        || raw.expectedRevision < 0
+        || !['NOT_SUBMITTED', 'NO_OUTPUT', 'RESUME'].includes(raw.action)) {
+        throw new AiProviderReconciliationAdminError('INVALID_REQUEST', 'resolution state is invalid', 400);
+      }
+      const reason = required(raw.reason, 'reason').replace(/\s+/gu, ' ');
+      if (reason.length < 10) {
+        throw new AiProviderReconciliationAdminError('INVALID_REQUEST', 'reason is too short', 400);
+      }
+
+      try {
+        return await runAiMediaSerializableTransaction(database, async (tx: any) => {
+          const job = await tx.aiImageJob.findUnique({ where: { id: jobId }, include: include() });
+          if (!job) {
+            throw new AiProviderReconciliationAdminError('NOT_FOUND', 'Provider reconciliation was not found', 404);
+          }
+          const eventKey = aiProviderReconciliationEventKey(
+            job.id,
+            `PROVIDER_RECONCILIATION_MANUAL:${requestId}`,
+          );
+          const requestedProviderJobId = raw.action === 'RESUME'
+            ? required(
+              raw.providerJobId || job.providerJobId || job.costReservation?.providerRequestId,
+              'providerJobId',
+            )
+            : job.providerJobId || null;
+          const acceptedAt = raw.action === 'RESUME'
+            ? validDate(raw.providerAcceptedAt || job.providerDispatchedAt, 'providerAcceptedAt')
+            : null;
+          const replayPayload = {
+            expectedStatus: raw.expectedStatus,
+            expectedRevision: raw.expectedRevision,
+            expectedEvidenceHash,
+            action: raw.action,
+            reason,
+            providerJobId: requestedProviderJobId,
+            providerAcceptedAt: acceptedAt?.toISOString() || null,
+          };
+          const nextRevision = Number(job.providerReconciliationRevision) + 1;
+          const nextStatus = raw.action === 'RESUME' ? 'PENDING' : raw.action;
+          const reconciliationEvent = aiProviderReconciliationEventData({
+            jobId: job.id,
+            ownerUserId: job.ownerUserId,
+            actorUserId,
+            workflowId: job.workflowId || null,
+            reconciliationRevision: nextRevision,
+            eventType: `PROVIDER_RECONCILIATION_${raw.action}`,
+            status: nextStatus,
+            payload: replayPayload,
+            eventDiscriminator: `PROVIDER_RECONCILIATION_MANUAL:${requestId}`,
+          });
+          const existing = await tx.aiProviderReconciliationEvent.findUnique({ where: { eventKey } });
+          if (existing) {
+            const exactReplay = existing.actorUserId === actorUserId
+              && existing.jobId === job.id
+              && Number(existing.reconciliationRevision) === raw.expectedRevision + 1
+              && existing.payloadHash === reconciliationEvent.payloadHash;
+            if (!exactReplay) {
+              throw new AiProviderReconciliationAdminError(
+                'IDEMPOTENCY_KEY_CONFLICT',
+                'Provider reconciliation request was reused for another decision',
+                409,
+              );
+            }
+            return publicRecord(job);
+          }
+          if (job.providerReconciliationStatus !== raw.expectedStatus
+            || Number(job.providerReconciliationRevision) !== raw.expectedRevision
+            || evidenceHash(job) !== expectedEvidenceHash) {
+            throw new AiProviderReconciliationAdminError(
+              'RECONCILIATION_CHANGED',
+              'Provider reconciliation changed before the decision',
+              409,
+            );
+          }
+          if (!allowedActions(job).includes(raw.action)) {
+            throw new AiProviderReconciliationAdminError(
+              'RECONCILIATION_CHANGED',
+              'Provider reconciliation action is no longer allowed',
+              409,
+            );
+          }
+          if (raw.action === 'RESUME') assertCurrentAttempt(job);
+          if (raw.action === 'NOT_SUBMITTED' && (
+            job.providerJobId
+            || job.costReservation?.providerRequestId
+            || job.costReservation?.providerAcceptedAt
+          )) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'A persisted Provider task cannot be marked not submitted',
+              400,
+            );
+          }
+          if (raw.action === 'NO_OUTPUT' && !job.providerJobId) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'No-output resolution requires a Provider task identity',
+              400,
+            );
+          }
+          if (raw.action === 'RESUME' && job.providerJobId && job.providerJobId !== requestedProviderJobId) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'The persisted Provider task identity cannot be replaced',
+              400,
+            );
+          }
+          if (raw.action === 'RESUME'
+            && job.costReservation?.providerRequestId
+            && job.costReservation.providerRequestId !== requestedProviderJobId) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'The cost ledger Provider task identity cannot be replaced',
+              400,
+            );
+          }
+
+          const timestamp = now();
+          if (acceptedAt && acceptedAt.getTime() > timestamp.getTime() + 5 * 60 * 1000) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'providerAcceptedAt cannot be in the future',
+              400,
+            );
+          }
+          if (acceptedAt && job.costReservation?.providerAcceptedAt instanceof Date
+            && acceptedAt.getTime() !== job.costReservation.providerAcceptedAt.getTime()) {
+            throw new AiProviderReconciliationAdminError(
+              'INVALID_REQUEST',
+              'Provider acceptance time does not match the persisted evidence',
+              400,
+            );
+          }
+          const data = raw.action === 'RESUME' ? {
+            providerJobId: requestedProviderJobId,
+            providerReconciliationStatus: 'PENDING',
+            providerReconciliationRevision: nextRevision,
+            providerReconciliationNextAt: timestamp,
+            providerReconciliationDeadlineAt: new Date(timestamp.getTime() + MAX_RECONCILIATION_AGE_MS),
+            providerReconciliationLastErrorCode: null,
+            providerReconciliationLastErrorMessage: null,
+            providerReconciledAt: null,
+          } : {
+            providerReconciliationStatus: raw.action,
+            providerReconciliationRevision: nextRevision,
+            providerReconciliationNextAt: null,
+            providerReconciliationDeadlineAt: null,
+            providerReconciliationLastErrorCode: `OPERATOR_${raw.action}`,
+            providerReconciliationLastErrorMessage: reason,
+            providerReconciledAt: timestamp,
+          };
+          const changed = await tx.aiImageJob.updateMany({
+            where: {
+              id: job.id,
+              ownerUserId: job.ownerUserId,
+              providerJobId: job.providerJobId,
+              providerReconciliationStatus: raw.expectedStatus,
+              providerReconciliationRevision: raw.expectedRevision,
+            },
+            data,
+          });
+          if (changed.count !== 1) {
+            throw new AiProviderReconciliationAdminError(
+              'RECONCILIATION_CHANGED',
+              'Provider reconciliation changed before the decision',
+              409,
+            );
+          }
+
+          const reservation = job.costReservation;
+          if (raw.action === 'NOT_SUBMITTED' && reservation
+            && !['SETTLED', 'RELEASED'].includes(reservation.status)) {
+            await appendAiCostSettlementInTransaction(tx, {
+              reservationId: reservation.id,
+              ownerUserId: job.ownerUserId,
+              actorUserId,
+              idempotencyKey: `admin-provider-reconcile:${requestId}:cost`,
+              requestFingerprint: reservation.requestFingerprint,
+              kind: reservation.status === 'RESERVED' ? 'RELEASE' : 'RECONCILED_RELEASE',
+              actualCostMinor: 0,
+              billedUnits: 0,
+              reason,
+              expectedReservationUpdatedAt: reservation.updatedAt,
+            });
+          }
+          if (raw.action === 'RESUME' && reservation
+            && ['RESERVED', 'SUBMISSION_UNCERTAIN'].includes(reservation.status)) {
+            await markAiCostUnknownInTransaction(tx, {
+              reservationId: reservation.id,
+              ownerUserId: job.ownerUserId,
+              actorUserId,
+              idempotencyKey: `${job.id}:cost:unknown`,
+              requestFingerprint: reservation.requestFingerprint,
+              providerRequestId: requestedProviderJobId!,
+              providerAcceptedAt: acceptedAt!,
+              billedUnits: 0,
+              reason: 'Operator restored the accepted Provider task identity',
+            });
+          }
+          await tx.aiProviderReconciliationEvent.create({ data: reconciliationEvent });
+          if (job.workflowId) {
+            await tx.aiMediaWorkflowEvent.create({ data: {
+              workflowId: job.workflowId,
+              ownerUserId: job.ownerUserId,
+              actorUserId,
+              jobId: job.id,
+              eventKey,
+              eventType: `PROVIDER_RECONCILIATION_${raw.action}`,
+              payload: reconciliationEvent.payload,
+              payloadHash: reconciliationEvent.payloadHash,
+            } });
+          }
+          const updated = await tx.aiImageJob.findUnique({ where: { id: job.id }, include: include() });
+          return publicRecord(updated);
+        });
+      } catch (error) {
+        if (error instanceof AiProviderReconciliationAdminError) throw error;
+        const code = String((error as { code?: unknown }).code || '');
+        if (['CONFLICT', 'INVALID_STATE', 'IDEMPOTENCY_KEY_CONFLICT'].includes(code)) {
+          throw new AiProviderReconciliationAdminError(
+            'RECONCILIATION_CHANGED',
+            'Provider reconciliation changed before the decision',
+            409,
+          );
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+export type AiProviderReconciliationAdminService = ReturnType<
+  typeof createAiProviderReconciliationAdminService
+>;

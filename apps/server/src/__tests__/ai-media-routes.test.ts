@@ -1510,6 +1510,51 @@ describe('AI media workflow routes', () => {
     expect(JSON.stringify(response.json())).not.toContain('private compiled provider policy');
   });
 
+  it('returns safe Provider reconciliation state without lease authority', async () => {
+    const { app, mediaWorkflowService } = await build(true, 'owner-1', true);
+    mediaWorkflowService.list.mockResolvedValueOnce({ items: [{
+      ...workflow,
+      operation: 'IMAGE_TRANSLATE' as any,
+      status: 'FAILED' as any,
+      jobs: [{
+        id: 'translation-job-1', operation: 'IMAGE_TRANSLATE', status: 'FAILED',
+        providerJobId: 'provider-task-1', errorCode: 'PROVIDER_RECOVERY_REQUIRED',
+        costReservation: { status: 'SETTLED' },
+        providerReconciliationStatus: 'PENDING', providerReconciliationRevision: 3,
+        providerReconciliationAttemptCount: 1,
+        providerReconciliationNextAt: new Date('2026-07-21T08:01:00.000Z'),
+        providerReconciliationDeadlineAt: new Date('2026-07-22T08:00:00.000Z'),
+        providerReconciliationLeaseOwner: 'worker-secret',
+        providerReconciliationLeaseTokenHash: 'f'.repeat(64),
+        providerReconciliationLeaseExpiresAt: new Date('2026-07-21T08:02:00.000Z'),
+        providerReconciliationLastProviderStatus: 'RUNNING',
+        providerReconciliationLastErrorCode: 'PROVIDER_TIMEOUT',
+        providerReconciliationLastErrorMessage: 'temporary timeout',
+        providerReconciledAt: null,
+        assets: [],
+      }],
+    }], nextCursor: null });
+
+    const response = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&pageVersion=1',
+    });
+    const returned = response.json().data.items[0].jobs[0];
+
+    expect(returned).toMatchObject({
+      retryAllowed: false,
+      providerReconciliation: {
+        status: 'PENDING', revision: 3, attemptCount: 1,
+        lastProviderStatus: 'RUNNING', lastErrorCode: 'PROVIDER_TIMEOUT',
+        actionRequired: false,
+      },
+    });
+    expect(returned).not.toHaveProperty('providerReconciliationLeaseOwner');
+    expect(returned).not.toHaveProperty('providerReconciliationLeaseTokenHash');
+    expect(returned).not.toHaveProperty('providerReconciliationLeaseExpiresAt');
+    expect(response.body).not.toContain('worker-secret');
+    expect(response.body).not.toContain('f'.repeat(64));
+  });
+
   it('does not expose another tenant workflow', async () => {
     const { app } = await build(true, 'owner-2');
     const response = await app.inject({ method: 'GET', url: '/workflows/workflow-1' });

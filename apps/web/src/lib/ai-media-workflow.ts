@@ -8,6 +8,29 @@ export type AiMediaOperation = 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE' | 'FULL_EDIT
 export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
 export type AiMediaReviewStatus = 'NOT_READY' | 'PENDING' | 'APPROVED' | 'REJECTED';
+export type AiMediaProviderReconciliationStatus =
+  | 'NOT_REQUIRED'
+  | 'PENDING'
+  | 'RUNNING'
+  | 'RETRY_WAIT'
+  | 'MANUAL_REVIEW'
+  | 'RECOVERED'
+  | 'NO_OUTPUT'
+  | 'NOT_SUBMITTED'
+  | 'CANCELLED_OUTPUT_RETAINED';
+
+export interface AiMediaProviderReconciliation {
+  status: AiMediaProviderReconciliationStatus;
+  revision: number;
+  attemptCount: number;
+  nextAt: string | null;
+  deadlineAt: string | null;
+  lastProviderStatus: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  reconciledAt: string | null;
+  actionRequired: boolean;
+}
 
 export const AI_MEDIA_EXECUTION_POLL_INTERVAL_MS = 2_000;
 export const AI_MEDIA_REVIEW_POLL_INTERVAL_MS = 30_000;
@@ -105,6 +128,8 @@ export interface AiMediaWorkflowJob {
   errorMessage?: string | null;
   providerJobId?: string | null;
   costStatus?: 'RESERVED' | 'SUBMISSION_UNCERTAIN' | 'RECONCILIATION_REQUIRED' | 'SETTLED' | 'RELEASED' | null;
+  retryAllowed?: boolean;
+  providerReconciliation?: AiMediaProviderReconciliation;
   appliedMode?: 'append' | 'replace' | null;
   translation?: {
     sourceLanguage: string;
@@ -181,9 +206,23 @@ export function shouldRefreshAiMediaWorkflow(workflow: AiMediaWorkflow) {
     return true;
   }
   const latestJob = workflow.jobs[workflow.jobs.length - 1];
+  if (latestJob && aiMediaProviderReconciliationPending(latestJob)) return true;
   return workflow.status === 'SUCCEEDED' && (
     workflow.reviewStatus === 'PENDING'
     || (workflow.reviewStatus === 'APPROVED' && !workflow.application && !latestJob?.appliedMode)
+  );
+}
+
+const AI_MEDIA_PROVIDER_RECONCILIATION_PENDING = new Set<AiMediaProviderReconciliationStatus>([
+  'PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW',
+]);
+
+export function aiMediaProviderReconciliationPending(
+  job: Pick<AiMediaWorkflowJob, 'providerReconciliation'>,
+): boolean {
+  return Boolean(
+    job.providerReconciliation
+    && AI_MEDIA_PROVIDER_RECONCILIATION_PENDING.has(job.providerReconciliation.status),
   );
 }
 
@@ -290,10 +329,21 @@ function mergeMonotonicAiMediaJobState(
       if (!existing) return job;
       const currentCostRank = existing.costStatus ? AI_MEDIA_COST_STATUS_RANK[existing.costStatus] : -1;
       const incomingCostRank = job.costStatus ? AI_MEDIA_COST_STATUS_RANK[job.costStatus] : -1;
+      const currentReconciliationRevision = existing.providerReconciliation?.revision ?? -1;
+      const incomingReconciliationRevision = job.providerReconciliation?.revision ?? -1;
+      const preserveCurrentReconciliation = currentReconciliationRevision > incomingReconciliationRevision;
+      const preserveCurrentRetryAllowed = preserveCurrentReconciliation || (
+        currentReconciliationRevision === incomingReconciliationRevision
+        && currentCostRank > incomingCostRank
+      );
       return {
         ...job,
         appliedMode: job.appliedMode || existing.appliedMode,
         costStatus: currentCostRank > incomingCostRank ? existing.costStatus : job.costStatus,
+        ...(preserveCurrentReconciliation ? {
+          providerReconciliation: existing.providerReconciliation,
+        } : {}),
+        ...(preserveCurrentRetryAllowed ? { retryAllowed: existing.retryAllowed } : {}),
       };
     }),
   };

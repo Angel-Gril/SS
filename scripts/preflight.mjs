@@ -49,6 +49,11 @@ const steps = [
     args: ['scripts/web-admin-ai-cost-reconciliation.test.mjs'],
   },
   {
+    name: 'admin AI Provider-result reconciliation contract',
+    command: 'node',
+    args: ['scripts/web-ai-provider-reconciliation.test.mjs'],
+  },
+  {
     name: 'Web AI media edit workbench contract',
     command: 'node',
     args: ['scripts/web-ai-media-edit-workbench.test.mjs'],

@@ -417,6 +417,7 @@ model User {
   legalAcceptances                    LegalAcceptance[]
   ownedAiImageJobs                    AiImageJob[]                           @relation("AiImageJobOwner")
   createdAiImageJobs                  AiImageJob[]                           @relation("AiImageJobActor")
+  aiProviderReconciliationEventsAsActor AiProviderReconciliationEvent[]      @relation("AiProviderReconciliationEventActor")
   ownedAiMediaWorkflows               AiMediaWorkflow[]                     @relation("AiMediaWorkflowOwner")
   createdAiMediaWorkflows             AiMediaWorkflow[]                     @relation("AiMediaWorkflowActor")
   reviewedAiMediaWorkflows            AiMediaWorkflow[]                     @relation("AiMediaWorkflowReviewer")
@@ -2647,6 +2648,18 @@ enum AiImageJobStatus {
   CANCELLED
 }
 
+enum AiProviderReconciliationStatus {
+  NOT_REQUIRED
+  PENDING
+  RUNNING
+  RETRY_WAIT
+  MANUAL_REVIEW
+  RECOVERED
+  NO_OUTPUT
+  NOT_SUBMITTED
+  CANCELLED_OUTPUT_RETAINED
+}
+
 enum AiMediaOperation {
   TEXT_TO_IMAGE
   IMAGE_TO_IMAGE
@@ -2864,6 +2877,18 @@ model AiImageJob {
   idempotencyKey         String?          @map("idempotency_key")
   providerDispatchedAt   DateTime?        @map("provider_dispatched_at")
   providerJobId          String?          @map("provider_job_id")
+  providerReconciliationStatus             AiProviderReconciliationStatus @default(NOT_REQUIRED) @map("provider_reconciliation_status")
+  providerReconciliationRevision           Int                            @default(0) @map("provider_reconciliation_revision")
+  providerReconciliationAttemptCount       Int                            @default(0) @map("provider_reconciliation_attempt_count")
+  providerReconciliationNextAt             DateTime?                      @map("provider_reconciliation_next_at")
+  providerReconciliationDeadlineAt         DateTime?                      @map("provider_reconciliation_deadline_at")
+  providerReconciliationLeaseOwner         String?                        @map("provider_reconciliation_lease_owner") @db.VarChar(100)
+  providerReconciliationLeaseTokenHash     String?                        @map("provider_reconciliation_lease_token_hash") @db.Char(64)
+  providerReconciliationLeaseExpiresAt     DateTime?                      @map("provider_reconciliation_lease_expires_at")
+  providerReconciliationLastProviderStatus String?                        @map("provider_reconciliation_last_provider_status") @db.VarChar(100)
+  providerReconciliationLastErrorCode      String?                        @map("provider_reconciliation_last_error_code") @db.VarChar(100)
+  providerReconciliationLastErrorMessage   String?                        @map("provider_reconciliation_last_error_message") @db.VarChar(500)
+  providerReconciledAt                     DateTime?                      @map("provider_reconciled_at")
   estimatedCostCents     Int              @default(0) @map("estimated_cost_cents")
   actualCostCents        Int?             @map("actual_cost_cents")
   billedUnits            Int              @default(0) @map("billed_units")
@@ -2880,6 +2905,7 @@ model AiImageJob {
   assets                 MediaAsset[]
   mediaLineage           MediaAssetLineage[]
   workflowEvents         AiMediaWorkflowEvent[]
+  providerReconciliationEvents AiProviderReconciliationEvent[] @relation("AiProviderReconciliationEventJob")
   applicationMutations   AiMediaApplicationMutation[]
   listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   costReservation        AiCostReservation?
@@ -2891,6 +2917,9 @@ model AiImageJob {
   @@index([actorUserId, createdAt])
   @@index([status, createdAt])
   @@index([templateKey, templateReleaseId])
+  @@index([providerReconciliationStatus, providerReconciliationNextAt, id], map: "ai_image_job_provider_reconciliation_due")
+  @@index([providerReconciliationStatus, providerReconciliationLeaseExpiresAt, id], map: "ai_image_job_provider_reconciliation_lease_due")
+  @@index([workflowId, providerReconciliationStatus], map: "ai_image_job_workflow_provider_reconciliation")
   @@map("ai_image_jobs")
 }
 
@@ -2964,6 +2993,7 @@ model AiMediaWorkflow {
   inputs                AiMediaWorkflowInput[]
   jobs                  AiImageJob[]
   events                AiMediaWorkflowEvent[]
+  providerReconciliationEvents AiProviderReconciliationEvent[] @relation("AiProviderReconciliationEventWorkflow")
   applicationMutations  AiMediaApplicationMutation[]
   listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   lineage               MediaAssetLineage[]
@@ -3025,6 +3055,28 @@ model AiMediaWorkflowEvent {
   @@index([ownerUserId, createdAt])
   @@index([ownerUserId, assetId])
   @@map("ai_media_workflow_events")
+}
+
+model AiProviderReconciliationEvent {
+  id                     String           @id @default(cuid())
+  ownerUserId            String           @map("owner_user_id")
+  actorUserId            String?          @map("actor_user_id")
+  actor                  User?            @relation("AiProviderReconciliationEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  jobId                  String           @map("job_id")
+  job                    AiImageJob       @relation("AiProviderReconciliationEventJob", fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  workflowId             String?          @map("workflow_id")
+  workflow               AiMediaWorkflow? @relation("AiProviderReconciliationEventWorkflow", fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  reconciliationRevision Int              @map("reconciliation_revision")
+  eventKey               String           @unique(map: "ai_provider_reconciliation_event_key") @map("event_key") @db.VarChar(100)
+  eventType              String           @map("event_type") @db.VarChar(80)
+  payload                Json
+  payloadHash            String           @map("payload_hash") @db.Char(64)
+  createdAt              DateTime         @default(now()) @map("created_at")
+
+  @@index([jobId, reconciliationRevision, createdAt], map: "ai_provider_reconciliation_event_job_revision")
+  @@index([ownerUserId, createdAt], map: "ai_provider_reconciliation_event_owner_created")
+  @@index([workflowId, createdAt], map: "ai_provider_reconciliation_event_workflow_created")
+  @@map("ai_provider_reconciliation_events")
 }
 
 model AiMediaApplicationMutation {

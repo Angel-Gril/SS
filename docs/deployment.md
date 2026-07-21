@@ -91,7 +91,7 @@ MIGRATION_TIMEOUT=20m
 
 ## AI Media 暗态发布门禁
 
-Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史分页、优先任务续页和候选对比恢复，Unit 10A-H2 已增加不可变 APPEND/受限 REPLACE/补偿 ROLLBACK 账本和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 的当前指针、source snapshot、draft revision/version、空槽/精确 slot 和候选链 authority，但都不改变暗态边界。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 以 `CREATE INDEX CONCURRENTLY` 增加 owner/context 的 history/updates keyset 索引；`1690`/`1700` 创建并加固 collect application mutation authority；`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束。应用版本回滚不得尝试回退这些 additive database guards、账本数据或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
+Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1/H2/H3a/H3b 已完成历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已增加对“已经被 Provider 接收”的异步图片翻译任务进行只查询、不重提的结果核对。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 增加 history/updates keyset 索引；`1690`/`1700` 及 `21120000` 至 `21123000` 建立 collect/listing-draft 应用账本；`21124000` 至 `21131000` 建立 Provider 结果核对状态、租约、事件和积压恢复索引。应用版本回滚不得回退这些数据库约束、账本、审计事件或有效索引。真实 Provider 新任务提交、扩展端 Mask 编辑器和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
 
 Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirmed REPLACE、不可变账本及前向补偿 ROLLBACK。`20260721120000` 至 `20260721123000` 建立并加固 owner/actor/snapshot/operation/projection authority；生产能力响应必须保持 `listingDraftApplyEnabled=false`，只读历史和既有 rollback 仍可用。
 
@@ -119,15 +119,17 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 
 8. H3b migrations 必须按 `120000`、`121000`、`122000`、`123000` 顺序全部成功；失败时保持 writer 停止，不得删除账本或回退草稿版本。检查 `ai_media_listing_draft_application_mutations` 的六个索引和四个 triggers，并确认 actor trigger 拒绝 owner 之外的账号。
 
+9. H4 migrations 必须按 `124000` 至 `131000` 顺序全部成功。`126000` 与 `130000` 都是单语句 concurrent index；失败时分别检查 `ai_image_job_workflow_provider_reconciliation` 或 `ai_image_job_provider_reconciliation_lease_due`，只清理同名 invalid index，并且只将实际失败的 migration 标记 rolled back。`131000` 会对未解决任务递增 revision、延长 deadline 并写不可变事件，不能绕过触发器或标记 applied。
+
 ### Unit 10A-H1 滚动部署边界
 
 H1 的 `GET /workflows` 只有在显式 `pageVersion=1` 时返回 additive `{items, priorityItems, priorityItemsTruncated, priorityNextCursor, nextCursor}` DTO；未带版本的旧客户端继续接收 legacy 数组。history cursor 使用 `createdAt/id`，priority cursor 使用固定 recent cutoff 的 `updatedAt/id`，两者均绑定 owner、context 和 lane，不能互换。新 Web 首屏最多合并 100 条 priority 记录，更多待处理记录只在用户显式点击后通过 `GET /workflows/priority` 逐页加载，因此 API 应先于或与 Web 同批部署；旧 Web 不依赖新端点。
 
 Web 以 revision、再以 `updatedAt` 合并响应，并保持 `appliedMode` 和 cost 状态单调；运行中任务每 2 秒、待人工审核/应用任务每 30 秒刷新，页面 hidden 时暂停并在恢复可见时刷新。候选绑定使用 `selectedOutputAssetId`，最多并排比较两张，并显示商品/SKU/slot scope。上述行为仍全部处于暗态、fake-only，不允许据此启用付费 Provider 或真实 Ozon 写入。
 
-Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。Unit 10A-H3a 增至 118 migrations，并已完成 listing-draft/SKU context authority 的关闭验证。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、`1690`/`1700` collect 账本、`21001000` 至 `21011000` listing-draft 约束和暗态 gate。H3b candidate writeback/rollback 已由下一段的 122-migration 基线覆盖；Unit 10A 仍缺 submitted-provider reconciliation。
+Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。Unit 10A-H3a 增至 118 migrations，并已完成 listing-draft/SKU context authority 的关闭验证。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、两个应用账本、H4 状态/事件/索引和暗态 gate。
 
-Unit 10A-H3b 增至 122 migrations；本地验证覆盖 PostgreSQL 51/51、populated upgrade、真实双连接跨账本 operation-key serialization、owner/actor/snapshot/operation/source/SKU-slot 篡改拒绝、服务端 2706 passed/131 skipped、扩展 192 checks、生产构建、浏览器 product/SKU 写回与多步回滚、刷新风暴回归、桌面/移动无溢出和生产能力门禁。Unit 10A 仍缺 submitted-provider reconciliation 与更完整的扩展工作台，不允许据此启用真实 Provider 或 Ozon 写入。
+Unit 10A-H3b 增至 122 migrations。Unit 10A-H4 增至 130 migrations；空库 PostgreSQL 54/54、94-migration populated upgrade、2769 passed/134 skipped 服务端测试、192 项扩展检查、workspace typecheck、生产构建和 lint 0 errors 已通过。H4 Worker 每次只即时领取一个任务并有界排空积压，只调用既有 task ID 的 lookup/poll，绝不调用 submit；超级管理员结果核对与成本结算保持两个独立界面。上述能力不允许据此启用真实 Provider 新任务或 Ozon 写入。
 
 ## Cloudflare 设置
 

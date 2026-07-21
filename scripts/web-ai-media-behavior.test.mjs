@@ -77,6 +77,18 @@ assert.equal(aiMediaWorkflowPollInterval([{
 assert.equal(aiMediaWorkflowPollInterval([{
   status: 'SUCCEEDED', reviewStatus: 'APPROVED', jobs: [{ id: 'job-applied', appliedMode: 'append' }],
 }]), null);
+assert.equal(aiMediaWorkflowPollInterval([{
+  status: 'FAILED', reviewStatus: 'NOT_READY', jobs: [{
+    id: 'job-reconciling',
+    providerReconciliation: { status: 'MANUAL_REVIEW', revision: 2 },
+  }],
+}]), AI_MEDIA_REVIEW_POLL_INTERVAL_MS, 'failed jobs awaiting Provider reconciliation must keep polling');
+assert.equal(aiMediaWorkflowPollInterval([{
+  status: 'FAILED', reviewStatus: 'NOT_READY', jobs: [{
+    id: 'job-no-output',
+    providerReconciliation: { status: 'NO_OUTPUT', revision: 3 },
+  }],
+}]), null, 'terminal Provider-result outcomes do not need reconciliation polling');
 const selectedOutput = aiMediaWorkflowReviewOutput(
   { selectedOutputAssetId: 'asset-selected' },
   { assets: [{ id: 'asset-first' }, { id: 'asset-selected' }] },
@@ -118,6 +130,66 @@ const staleJobProjection = [{
 const mergedApplied = mergeAiMediaWorkflowHistoryHead(appliedCurrent, staleJobProjection)[0];
 assert.equal(mergedApplied.jobs[0].appliedMode, 'append', 'appliedMode must be monotonic within one workflow revision');
 assert.equal(mergedApplied.jobs[0].costStatus, 'SETTLED', 'a final cost state must not regress to RESERVED');
+const currentProviderReconciliation = [{
+  id: 'workflow-provider-reconciliation', status: 'FAILED', reviewStatus: 'NOT_READY', revision: 5,
+  createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-20T08:05:00.000Z',
+  jobs: [{
+    id: 'job-provider-reconciliation', retryAllowed: true,
+    providerReconciliation: { status: 'NO_OUTPUT', revision: 4 },
+  }],
+}];
+const staleProviderReconciliation = [{
+  ...currentProviderReconciliation[0],
+  updatedAt: '2026-07-20T08:06:00.000Z',
+  jobs: [{
+    id: 'job-provider-reconciliation', retryAllowed: false,
+    providerReconciliation: { status: 'MANUAL_REVIEW', revision: 3 },
+  }],
+}];
+const mergedProviderReconciliation = mergeAiMediaWorkflowHistoryHead(
+  currentProviderReconciliation,
+  staleProviderReconciliation,
+)[0].jobs[0];
+assert.equal(mergedProviderReconciliation.providerReconciliation.status, 'NO_OUTPUT');
+assert.equal(mergedProviderReconciliation.providerReconciliation.revision, 4);
+assert.equal(
+  mergedProviderReconciliation.retryAllowed,
+  true,
+  'retryAllowed must stay paired with the preserved Provider reconciliation revision',
+);
+const staleCostProjection = [{
+  ...currentProviderReconciliation[0],
+  updatedAt: '2026-07-20T08:06:30.000Z',
+  jobs: [{
+    id: 'job-provider-reconciliation', costStatus: 'RESERVED', retryAllowed: false,
+    providerReconciliation: { status: 'NO_OUTPUT', revision: 4 },
+  }],
+}];
+currentProviderReconciliation[0].jobs[0].costStatus = 'RELEASED';
+const mergedStaleCostProjection = mergeAiMediaWorkflowHistoryHead(
+  currentProviderReconciliation,
+  staleCostProjection,
+)[0].jobs[0];
+assert.equal(mergedStaleCostProjection.costStatus, 'RELEASED');
+assert.equal(
+  mergedStaleCostProjection.retryAllowed,
+  true,
+  'retryAllowed must stay paired with the preserved cost state at the same reconciliation revision',
+);
+const newerProviderReconciliation = [{
+  ...currentProviderReconciliation[0],
+  updatedAt: '2026-07-20T08:07:00.000Z',
+  jobs: [{
+    id: 'job-provider-reconciliation', retryAllowed: false,
+    providerReconciliation: { status: 'RECOVERED', revision: 5 },
+  }],
+}];
+const mergedNewerProviderReconciliation = mergeAiMediaWorkflowHistoryHead(
+  currentProviderReconciliation,
+  newerProviderReconciliation,
+)[0].jobs[0];
+assert.equal(mergedNewerProviderReconciliation.providerReconciliation.revision, 5);
+assert.equal(mergedNewerProviderReconciliation.retryAllowed, false);
 const rolledBackProjection = [{
   ...appliedCurrent[0],
   application: {

@@ -38,6 +38,10 @@ import {
   releaseAiCostInTransaction,
   reserveAiCostInTransaction,
 } from '../services/ai-cost-ledger.js';
+import {
+  AI_IMAGE_BILLED_JOB_STATUSES,
+  aiImageReservedQuotaWhere,
+} from '../services/ai-image-quota.js';
 
 function costReservationIdempotencyKey(jobId: string) {
   return `${jobId}:cost:reserve`;
@@ -434,12 +438,17 @@ async function assertImageEditDailyQuota(tx: any, ownerUserId: string, dailyLimi
       where: {
         ownerUserId,
         createdAt: { gte: dayStart },
-        status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+        ...aiImageReservedQuotaWhere(),
       },
       _sum: { requestedImageCount: true },
     }),
     tx.aiImageJob.aggregate({
-      where: { ownerUserId, createdAt: { gte: dayStart }, status: 'SUCCEEDED' },
+      where: {
+        ownerUserId,
+        createdAt: { gte: dayStart },
+        status: { in: [...AI_IMAGE_BILLED_JOB_STATUSES] },
+        billedUnits: { gt: 0 },
+      },
       _sum: { billedUnits: true },
     }),
   ]);
@@ -960,7 +969,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
               ownerUserId: input.ownerUserId,
               operation: 'IMAGE_TRANSLATE',
               createdAt: { gte: dayStart },
-              status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+              ...aiImageReservedQuotaWhere(),
             },
             _sum: { requestedImageCount: true },
           });
@@ -969,7 +978,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
               ownerUserId: input.ownerUserId,
               operation: 'IMAGE_TRANSLATE',
               createdAt: { gte: dayStart },
-              status: 'SUCCEEDED',
+              status: { in: [...AI_IMAGE_BILLED_JOB_STATUSES] },
+              billedUnits: { gt: 0 },
             },
             _sum: { billedUnits: true },
           });
@@ -1172,6 +1182,11 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
                 reviewStatus: 'APPROVED',
                 selectedOutputAsset: { is: { aiImageJob: { is: { appliedAt: null } } } },
               },
+              {
+                jobs: { some: { providerReconciliationStatus: {
+                  in: ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'],
+                } } },
+              },
               { updatedAt: { gte: recentCutoff } },
             ],
           },
@@ -1286,9 +1301,16 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
             ai_cost_reservation_job_owner: { jobId: previous.id, ownerUserId: previous.ownerUserId },
           } })
           : null;
+        const providerReconciliationAllowsRetry = ['NO_OUTPUT', 'NOT_SUBMITTED']
+          .includes(String(previous.providerReconciliationStatus || 'NOT_REQUIRED'));
+        const providerResultRequiresReconciliation = Boolean(previous.providerJobId)
+          || previous.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN'
+          || !['NOT_REQUIRED', 'NO_OUTPUT', 'NOT_SUBMITTED']
+            .includes(String(previous.providerReconciliationStatus || 'NOT_REQUIRED'));
         if (previousCost) {
           if (!['SETTLED', 'RELEASED'].includes(previousCost.status)) return null;
-        } else if (previous.providerJobId || previous.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN') {
+          if (providerResultRequiresReconciliation && !providerReconciliationAllowsRetry) return null;
+        } else if (providerResultRequiresReconciliation && !providerReconciliationAllowsRetry) {
           return null;
         }
         const estimatedCostCents = Math.max(0, Number(previous.estimatedCostCents || 0));
@@ -1315,7 +1337,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
               ownerUserId: input.ownerUserId,
               operation: 'IMAGE_TRANSLATE',
               createdAt: { gte: dayStart },
-              status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+              ...aiImageReservedQuotaWhere(),
             },
             _sum: { requestedImageCount: true },
           });
@@ -1324,7 +1346,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
               ownerUserId: input.ownerUserId,
               operation: 'IMAGE_TRANSLATE',
               createdAt: { gte: dayStart },
-              status: 'SUCCEEDED',
+              status: { in: [...AI_IMAGE_BILLED_JOB_STATUSES] },
+              billedUnits: { gt: 0 },
             },
             _sum: { billedUnits: true },
           });

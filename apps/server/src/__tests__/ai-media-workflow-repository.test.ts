@@ -139,6 +139,20 @@ function listingDraftImageToImageInput(overrides: Record<string, unknown> = {}) 
 }
 
 describe('Prisma AI media workflow repository recovery fence', () => {
+  const unresolvedQuotaFilter = expect.objectContaining({
+    OR: expect.arrayContaining([
+      expect.objectContaining({ status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } }),
+      expect.objectContaining({
+        status: { in: ['FAILED', 'CANCELLED'] },
+        billedUnits: 0,
+        OR: expect.arrayContaining([
+          { providerReconciliationStatus: { in: ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] } },
+          { costReservation: { is: { status: { in: ['SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } } } },
+        ]),
+      }),
+    ]),
+  });
+
   it('returns a stable owner/context keyset page and probes one extra row', async () => {
     const createdAt = new Date('2026-07-20T09:00:00.000Z');
     const findMany = vi.fn(async () => [
@@ -209,6 +223,11 @@ describe('Prisma AI media workflow repository recovery fence', () => {
               {
                 status: 'SUCCEEDED', reviewStatus: 'APPROVED',
                 selectedOutputAsset: { is: { aiImageJob: { is: { appliedAt: null } } } },
+              },
+              {
+                jobs: { some: { providerReconciliationStatus: {
+                  in: ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'],
+                } } },
               },
               { updatedAt: { gte: recentCutoff } },
             ],
@@ -487,6 +506,15 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       idempotencyKey: 'edit-quota-1', context: { type: 'collect', id: 'goods-1' },
     })).rejects.toMatchObject({ code: 'AI_IMAGE_EDIT_QUOTA_EXCEEDED' });
     expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ['SUCCEEDED', 'FAILED', 'CANCELLED'] },
+        billedUnits: { gt: 0 },
+      }),
+    }));
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
     expect(tx.aiMediaWorkflow.create).not.toHaveBeenCalled();
   });
 
@@ -541,6 +569,9 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
       operation: 'IMAGE_TRANSLATE', estimatedCostMinor: 7, maximumCostMinor: 7,
     }) });
+    expect(tx.aiImageJob.aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
   });
 
   it('freezes ordered multi-reference inputs and child-job compatibility JSON', async () => {
@@ -885,7 +916,9 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(tx.mediaAsset.findMany).not.toHaveBeenCalled();
   });
 
-  it.each(['SETTLED', 'RELEASED'])('allows retry after provider cost is manually reconciled to %s', async (status) => {
+  it.each(['SETTLED', 'RELEASED'])(
+    'allows retry after provider result is terminal and cost is manually reconciled to %s',
+    async (status) => {
     const fingerprint = 'f'.repeat(64);
     const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'job-2', ...data }));
     const tx = {
@@ -908,6 +941,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
         findFirst: vi.fn(async () => ({
           id: 'job-1', ownerUserId: 'owner-1', providerJobId: 'provider-task-accepted',
           errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN', operation: 'IMAGE_TO_IMAGE',
+          providerReconciliationStatus: 'NO_OUTPUT',
           provider: 'fake', model: 'fake-image-to-image-v1', prompt: 'Retry prompt',
           negativePrompt: null, requestFingerprint: fingerprint, inputAssets: [],
           requestedImageCount: 1, width: 1024, height: 1024,
@@ -931,9 +965,41 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       expectedRevision: 3, idempotencyKey: `retry-after-${status.toLowerCase()}`,
     });
 
-    expect(result).toMatchObject({ jobId: 'job-2', replayed: false });
-    expect(jobCreate).toHaveBeenCalledTimes(1);
-  });
+      expect(result).toMatchObject({ jobId: 'job-2', replayed: false });
+      expect(jobCreate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'])(
+    'blocks retry after cost reconciliation while provider result remains %s',
+    async (providerReconciliationStatus) => {
+      const jobCreate = vi.fn();
+      const tx = {
+        aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null) },
+        aiMediaWorkflow: { findFirst: vi.fn(async () => ({
+          id: 'workflow-1', ownerUserId: 'owner-1', status: 'FAILED', revision: 3, currentAttempt: 1,
+        })) },
+        aiImageJob: {
+          findFirst: vi.fn(async () => ({
+            id: 'job-1', ownerUserId: 'owner-1', providerJobId: 'provider-task-accepted',
+            errorCode: 'PROVIDER_RECOVERY_REQUIRED', providerReconciliationStatus,
+          })),
+          create: jobCreate,
+        },
+        aiCostReservation: { findUnique: vi.fn(async () => ({ id: 'cost-1', status: 'SETTLED' })) },
+      };
+
+      const result = await new PrismaAiMediaWorkflowRepository({
+        $transaction: vi.fn(async (callback: any) => callback(tx)),
+      } as never).retryOwned({
+        id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+        expectedRevision: 3, idempotencyKey: `retry-provider-${providerReconciliationStatus.toLowerCase()}`,
+      });
+
+      expect(result).toBeNull();
+      expect(jobCreate).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(['RESERVED', 'SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'])(
     'blocks retry while provider cost remains %s',
@@ -1070,6 +1136,15 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     });
     expect(result).toMatchObject({ jobId: 'translation-job-2', replayed: false });
     expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ['SUCCEEDED', 'FAILED', 'CANCELLED'] },
+        billedUnits: { gt: 0 },
+      }),
+    }));
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
     expect(jobCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
       operation: 'IMAGE_TRANSLATE', estimatedCostCents: 7,
       operationConfig: { policyVersion: 'ai-image-translation-policy/1.0' },
@@ -1122,6 +1197,9 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       expectedRevision: 2, idempotencyKey: 'edit-retry-quota', dailyLimit: 5,
     })).rejects.toMatchObject({ code: 'AI_IMAGE_EDIT_QUOTA_EXCEEDED' });
     expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
     expect(jobCreate).not.toHaveBeenCalled();
   });
 

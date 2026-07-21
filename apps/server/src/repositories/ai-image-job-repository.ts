@@ -7,7 +7,15 @@ import {
   settleAiCostInTransaction,
 } from '../services/ai-cost-ledger.js';
 import { aiMediaPayloadHash } from '../services/ai-media-workflows.js';
+import {
+  aiProviderReconciliationEventData,
+  appendAiProviderReconciliationEvent,
+} from '../services/ai-provider-reconciliation-events.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import {
+  AI_IMAGE_BILLED_JOB_STATUSES,
+  aiImageReservedQuotaWhere,
+} from '../services/ai-image-quota.js';
 
 const record = (row: any): AiImageJobRecord => ({
   ...row,
@@ -38,7 +46,16 @@ const INPUT_SOURCE_SNAPSHOT_OPERATIONS = new Set([
   'FULL_EDIT',
   'INPAINT',
 ]);
-
+const PROVIDER_RECONCILIATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PROVIDER_RECONCILIATION_MANUAL_ERRORS = new Set([
+  'PROVIDER_JOB_ID_INVALID',
+  'PROVIDER_JOB_ID_MISMATCH',
+  'PROVIDER_JOB_ID_PERSISTENCE_CONFLICT',
+  'PROVIDER_ACCEPTED_PERSISTENCE_FAILED',
+  'PROVIDER_ACCEPTANCE_EVIDENCE_MISSING',
+  'PROVIDER_TASK_NOT_FOUND',
+  'INVALID_PROVIDER_RESULT',
+]);
 function uniqueFrozenInputSnapshotId(inputs: Array<{ asset?: { sourceCaptureSnapshotId?: string | null } | null }>) {
   if (!inputs.length) return null;
   const snapshotIds = inputs.map((input) => String(input.asset?.sourceCaptureSnapshotId || '').trim());
@@ -59,6 +76,81 @@ async function appendWorkflowEvent(client: any, job: any, eventType: string, pay
     payload,
     payloadHash: aiMediaPayloadHash(payload),
   } });
+}
+
+async function appendProviderReconciliationTransition(
+  client: any,
+  job: any,
+  eventType: string,
+  data: Record<string, any>,
+) {
+  if (!data.providerReconciliationStatus || !data.providerReconciliationRevision) return;
+  await appendAiProviderReconciliationEvent(client, {
+    jobId: job.id,
+    ownerUserId: job.ownerUserId,
+    actorUserId: job.actorUserId || job.ownerUserId,
+    workflowId: job.workflowId || null,
+    reconciliationRevision: Number(data.providerReconciliationRevision),
+    eventType,
+    status: String(data.providerReconciliationStatus),
+    payload: {
+      providerJobId: job.providerJobId || null,
+      errorCode: data.providerReconciliationLastErrorCode || null,
+      errorMessage: data.providerReconciliationLastErrorMessage || null,
+      ...(data.persistedProviderJobId
+        ? { persistedProviderJobId: String(data.persistedProviderJobId) }
+        : {}),
+      ...(data.observedProviderJobId
+        ? { observedProviderJobId: String(data.observedProviderJobId) }
+        : {}),
+    },
+  });
+}
+
+async function appendProviderReconciliationIdentityAnomaly(
+  client: any,
+  job: any,
+  persistedProviderJobId: string,
+  observedProviderJobId: string,
+) {
+  if (!client.aiProviderReconciliationEvent?.createMany) return;
+  const payload = { persistedProviderJobId, observedProviderJobId };
+  const payloadHash = aiMediaPayloadHash(payload);
+  await client.aiProviderReconciliationEvent.createMany({
+    skipDuplicates: true,
+    data: [aiProviderReconciliationEventData({
+      jobId: job.id,
+      ownerUserId: job.ownerUserId,
+      actorUserId: job.actorUserId || job.ownerUserId,
+      workflowId: job.workflowId || null,
+      reconciliationRevision: Number(job.providerReconciliationRevision),
+      eventType: 'PROVIDER_JOB_ID_MISMATCH_OBSERVED',
+      status: String(job.providerReconciliationStatus),
+      payload,
+      eventDiscriminator: `PROVIDER_JOB_ID_MISMATCH_OBSERVED:${payloadHash}`,
+    })],
+  });
+}
+
+function lateProviderReconciliationBindingData(job: any, providerAcceptedAt: Date) {
+  if (job.status !== 'FAILED'
+    || job.operation !== 'IMAGE_TRANSLATE'
+    || job.errorCode !== 'PROVIDER_SUBMISSION_UNCERTAIN'
+    || !['NOT_REQUIRED', 'MANUAL_REVIEW'].includes(
+      String(job.providerReconciliationStatus || 'NOT_REQUIRED'),
+    )) return {};
+  const now = new Date();
+  return {
+    providerReconciliationStatus: 'PENDING',
+    providerReconciliationRevision: Number(job.providerReconciliationRevision || 0) + 1,
+    providerReconciliationNextAt: now,
+    providerReconciliationDeadlineAt: new Date(
+      providerAcceptedAt.getTime() + PROVIDER_RECONCILIATION_MAX_AGE_MS,
+    ),
+    providerReconciliationLastErrorCode: null,
+    providerReconciliationLastErrorMessage: null,
+    providerReconciledAt: null,
+  };
 }
 
 async function bindProviderJobIdInTransaction(tx: any, job: any, providerJobId: string, providerAcceptedAt?: Date) {
@@ -107,10 +199,12 @@ async function bindProviderJobIdInTransaction(tx: any, job: any, providerJobId: 
   const acceptedAt = providerAcceptedAt instanceof Date && !Number.isNaN(providerAcceptedAt.getTime())
     ? providerAcceptedAt
     : new Date();
+  const reconciliationBinding = lateProviderReconciliationBindingData(job, acceptedAt);
   const updated = await tx.aiImageJob.updateMany({
     where: { id: job.id, status: { in: allowedStatuses }, providerJobId: null },
     data: {
       providerJobId: normalized,
+      ...reconciliationBinding,
       ...(!job.providerDispatchedAt && job.status === 'RUNNING'
         ? { providerDispatchedAt: acceptedAt }
         : {}),
@@ -134,12 +228,19 @@ async function bindProviderJobIdInTransaction(tx: any, job: any, providerJobId: 
   const bound = {
     ...job,
     providerJobId: normalized,
+    ...reconciliationBinding,
     providerDispatchedAt: job.providerDispatchedAt || (job.status === 'RUNNING' ? acceptedAt : null),
   };
   await appendWorkflowEvent(tx, bound, 'PROVIDER_SUBMITTED', {
     providerJobId: normalized,
     providerAcceptedAt: acceptedAt.toISOString(),
   });
+  await appendProviderReconciliationTransition(
+    tx,
+    bound,
+    'PROVIDER_RECONCILIATION_RESUMED',
+    reconciliationBinding,
+  );
   return { job: bound, mismatch: false } as const;
 }
 
@@ -176,6 +277,60 @@ async function hasProviderDispatchStarted(tx: any, job: any): Promise<boolean> {
     eventKey: `${job.workflowId}:PROVIDER_DISPATCH_STARTED:${job.id}:${job.attemptCount || 0}`,
   } });
   return Boolean(event);
+}
+
+function providerReconciliationFailureData(
+  job: any,
+  failure: any,
+  now = new Date(),
+): Record<string, any> {
+  if (String(job.providerReconciliationStatus || 'NOT_REQUIRED') !== 'NOT_REQUIRED') return {};
+  const revision = Number(job.providerReconciliationRevision || 0) + 1;
+  const providerJobId = String(job.providerJobId || '').trim();
+  const errorCode = String(failure?.errorCode || '').trim().slice(0, 100) || null;
+  const errorMessage = String(failure?.errorMessage || '').replace(/[\r\n\t]+/gu, ' ').trim().slice(0, 500) || null;
+  const common = {
+    providerReconciliationRevision: revision,
+    providerReconciliationLastErrorCode: errorCode,
+    providerReconciliationLastErrorMessage: errorMessage,
+  };
+  if (!providerJobId) {
+    if (errorCode !== 'PROVIDER_SUBMISSION_UNCERTAIN') return {};
+    return {
+      ...common,
+      providerReconciliationStatus: 'MANUAL_REVIEW',
+      providerReconciliationNextAt: null,
+      providerReconciliationDeadlineAt: null,
+    };
+  }
+  if (job.operation !== 'IMAGE_TRANSLATE' || PROVIDER_RECONCILIATION_MANUAL_ERRORS.has(errorCode || '')) {
+    return {
+      ...common,
+      providerReconciliationStatus: 'MANUAL_REVIEW',
+      providerReconciliationNextAt: null,
+      providerReconciliationDeadlineAt: null,
+    };
+  }
+  if (errorCode === 'PROVIDER_TASK_FAILED') {
+    return {
+      ...common,
+      providerReconciliationStatus: 'NO_OUTPUT',
+      providerReconciliationLastProviderStatus: 'FAILED',
+      providerReconciliationNextAt: null,
+      providerReconciliationDeadlineAt: null,
+      providerReconciledAt: now,
+    };
+  }
+  const acceptedAt = job.providerDispatchedAt instanceof Date
+    && !Number.isNaN(job.providerDispatchedAt.getTime())
+    ? job.providerDispatchedAt
+    : now;
+  return {
+    ...common,
+    providerReconciliationStatus: 'PENDING',
+    providerReconciliationNextAt: now,
+    providerReconciliationDeadlineAt: new Date(acceptedAt.getTime() + PROVIDER_RECONCILIATION_MAX_AGE_MS),
+  };
 }
 
 async function finalizeJobCost(
@@ -269,28 +424,74 @@ async function quarantineProviderJobIdMismatchInTransaction(
     `Persisted: ${JSON.stringify(persistedProviderJobId)}.`,
     `Observed: ${JSON.stringify(observedProviderJobId)}.`,
   ].join(' ');
-  const changed = await tx.aiImageJob.updateMany({
-    where: {
-      id: job.id,
-      status: { in: ['RUNNING', 'CANCEL_REQUESTED', 'FAILED'] },
-      providerJobId: persistedProviderJobId,
-    },
-    data: {
-      status: 'FAILED',
-      progress: 0,
+  const reconciliationStatus = String(job.providerReconciliationStatus || 'NOT_REQUIRED');
+  const cancelled = job.status === 'CANCELLED';
+  const reconciliationCanQuarantine = [
+    'NOT_REQUIRED', 'PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW',
+  ].includes(reconciliationStatus);
+  const reconciliationFailure = reconciliationCanQuarantine
+    ? {
+      providerReconciliationStatus: 'MANUAL_REVIEW',
+      providerReconciliationRevision: Number(job.providerReconciliationRevision || 0) + 1,
+      providerReconciliationNextAt: null,
+      providerReconciliationLeaseOwner: null,
+      providerReconciliationLeaseTokenHash: null,
+      providerReconciliationLeaseExpiresAt: null,
+      providerReconciliationLastErrorCode: 'PROVIDER_JOB_ID_MISMATCH',
+      providerReconciliationLastErrorMessage: errorMessage.slice(0, 500),
+      providerReconciledAt: null,
+    }
+    : {};
+  if (!reconciliationCanQuarantine) {
+    await appendProviderReconciliationIdentityAnomaly(
+      tx,
+      job,
+      persistedProviderJobId,
+      observedProviderJobId,
+    );
+  }
+  const changed = reconciliationCanQuarantine
+    ? await tx.aiImageJob.updateMany({
+      where: {
+        id: job.id,
+        status: { in: ['RUNNING', 'CANCEL_REQUESTED', 'FAILED', 'CANCELLED'] },
+        providerJobId: persistedProviderJobId,
+      },
+      data: {
+        status: cancelled ? 'CANCELLED' : 'FAILED',
+        progress: 0,
+        billedUnits: 0,
+        errorCode: 'PROVIDER_JOB_ID_MISMATCH',
+        errorMessage,
+        ...(cancelled ? {} : { completedAt: new Date() }),
+        ...reconciliationFailure,
+      },
+    })
+    : { count: 0 };
+  const failed = changed.count === 1
+    ? {
+      ...job,
+      status: cancelled ? 'CANCELLED' : 'FAILED',
       billedUnits: 0,
       errorCode: 'PROVIDER_JOB_ID_MISMATCH',
       errorMessage,
-      completedAt: new Date(),
-    },
-  });
-  const failed = changed.count === 1
-    ? { ...job, status: 'FAILED', errorCode: 'PROVIDER_JOB_ID_MISMATCH', errorMessage }
+      ...reconciliationFailure,
+    }
     : await tx.aiImageJob.findUnique({ where: { id: job.id } }) || job;
 
   if (changed.count === 1) {
+    await appendProviderReconciliationTransition(
+      tx,
+      failed,
+      'PROVIDER_RECONCILIATION_MANUAL_REVIEW',
+      {
+        ...reconciliationFailure,
+        persistedProviderJobId,
+        observedProviderJobId,
+      },
+    );
     try {
-      await finalizeJobCost(tx, failed, 'FAILED');
+      await finalizeJobCost(tx, failed, cancelled ? 'CANCELLED' : 'FAILED');
     } catch (error) {
       if ((error as any)?.code !== 'PROVIDER_ACCEPTANCE_EVIDENCE_MISSING') throw error;
       const reservation = await loadJobCostReservation(tx, failed);
@@ -353,6 +554,10 @@ function providerJobIdMismatchError() {
 async function quarantineSubmissionInTransaction(tx: any, job: any, data: any) {
   if (!['RUNNING', 'CANCEL_REQUESTED'].includes(job.status) || job.providerJobId) return false;
   const attemptCount = Number.isSafeInteger(data.attemptCount) ? data.attemptCount : job.attemptCount || 0;
+  const reconciliationFailure = providerReconciliationFailureData(job, {
+    errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+    errorMessage: 'Provider submission outcome requires manual reconciliation',
+  });
   const changed = await tx.aiImageJob.updateMany({
     where: { id: job.id, status: { in: ['RUNNING', 'CANCEL_REQUESTED'] }, providerJobId: null },
     data: {
@@ -363,9 +568,16 @@ async function quarantineSubmissionInTransaction(tx: any, job: any, data: any) {
       errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
       errorMessage: 'Provider submission outcome requires manual reconciliation',
       completedAt: new Date(),
+      ...reconciliationFailure,
     },
   });
   if (changed.count !== 1) return false;
+  await appendProviderReconciliationTransition(
+    tx,
+    job,
+    'PROVIDER_RECONCILIATION_MANUAL_REVIEW',
+    reconciliationFailure,
+  );
   const reservation = await loadJobCostReservation(tx, job);
   const cancellationActorUserId = job.status === 'CANCEL_REQUESTED'
     ? await loadCancellationActor(tx, job)
@@ -500,8 +712,23 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           if (existing) return { kind: 'existing', job: record(existing) };
         }
         const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
-        const reserved = await tx.aiImageJob.aggregate({ where: { ownerUserId: input.ownerUserId, createdAt: { gte: dayStart }, status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } }, _sum: { requestedImageCount: true } });
-        const billed = await tx.aiImageJob.aggregate({ where: { ownerUserId: input.ownerUserId, createdAt: { gte: dayStart }, status: 'SUCCEEDED' }, _sum: { billedUnits: true } });
+        const reserved = await tx.aiImageJob.aggregate({
+          where: {
+            ownerUserId: input.ownerUserId,
+            createdAt: { gte: dayStart },
+            ...aiImageReservedQuotaWhere(),
+          },
+          _sum: { requestedImageCount: true },
+        });
+        const billed = await tx.aiImageJob.aggregate({
+          where: {
+            ownerUserId: input.ownerUserId,
+            createdAt: { gte: dayStart },
+            status: { in: [...AI_IMAGE_BILLED_JOB_STATUSES] },
+            billedUnits: { gt: 0 },
+          },
+          _sum: { billedUnits: true },
+        });
         const used = Number(reserved._sum.requestedImageCount || 0) + Number(billed._sum.billedUnits || 0);
         if (dailyLimit > 0 && used + input.count > dailyLimit) return { kind: 'quota-exceeded', used, limit: dailyLimit };
         const created = await tx.aiImageJob.create({ data: {
@@ -679,11 +906,29 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         await quarantineSubmissionInTransaction(tx, job, data);
         return false;
       }
+      const reconciliationFailure = providerReconciliationFailureData(job, failure);
       const changed = await tx.aiImageJob.updateMany({
         where: { id, status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } },
-        data: { status: 'FAILED', progress: 0, billedUnits: 0, completedAt: new Date(), ...failure },
+        data: {
+          status: 'FAILED',
+          progress: 0,
+          billedUnits: 0,
+          completedAt: new Date(),
+          ...failure,
+          ...reconciliationFailure,
+        },
       });
       if (changed.count !== 1) return false;
+      await appendProviderReconciliationTransition(
+        tx,
+        job,
+        reconciliationFailure.providerReconciliationStatus === 'NO_OUTPUT'
+          ? 'PROVIDER_RECONCILIATION_NO_OUTPUT'
+          : reconciliationFailure.providerReconciliationStatus === 'PENDING'
+            ? 'PROVIDER_RECONCILIATION_QUEUED'
+            : 'PROVIDER_RECONCILIATION_MANUAL_REVIEW',
+        reconciliationFailure,
+      );
       await finalizeJobCost(tx, job, 'FAILED', { providerAcceptedAt, providerSubmissionRejected });
       if (!job.workflowId) return false;
       const parent = await tx.aiMediaWorkflow.updateMany({
@@ -939,6 +1184,18 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       || (!job.providerJobId && await hasProviderDispatchStarted(tx, job)),
     );
     if (job.status === 'CANCEL_REQUESTED') {
+      const reconciliationFailure = providerReconciliationFailureData(job, {
+        errorCode: submissionUncertain
+          ? 'PROVIDER_SUBMISSION_UNCERTAIN'
+          : job.providerJobId
+            ? 'PROVIDER_RECOVERY_REQUIRED'
+            : null,
+        errorMessage: submissionUncertain
+          ? 'Provider submission outcome requires manual reconciliation'
+          : job.providerJobId
+            ? 'Cancelled Provider task result requires reconciliation'
+            : null,
+      });
       const cancelled = await tx.aiImageJob.updateMany({
         where: { id: job.id, status: 'CANCEL_REQUESTED' },
         data: {
@@ -950,9 +1207,18 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
             errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
             errorMessage: 'Provider submission outcome requires manual reconciliation',
           } : {}),
+          ...reconciliationFailure,
         },
       });
       if (cancelled.count !== 1) return;
+      await appendProviderReconciliationTransition(
+        tx,
+        job,
+        reconciliationFailure.providerReconciliationStatus === 'PENDING'
+          ? 'PROVIDER_RECONCILIATION_QUEUED'
+          : 'PROVIDER_RECONCILIATION_MANUAL_REVIEW',
+        reconciliationFailure,
+      );
     } else if (job.status !== 'CANCELLED') return;
     const cancellationActorUserId = await loadCancellationActor(tx, job);
     await finalizeJobCost(tx, job, 'CANCELLED', {

@@ -35,6 +35,7 @@ try {
   run([
     'exec', 'vitest', 'run', '--no-file-parallelism',
     'src/__tests__/ai-cost-ledger.postgres.integration.test.ts',
+    'src/__tests__/ai-provider-reconciliation.postgres.integration.test.ts',
     'src/__tests__/ai-media-workflow.postgres.integration.test.ts',
     'src/__tests__/ai-image-edit.postgres.integration.test.ts',
     'src/__tests__/ai-image-edit-listing-draft.postgres.integration.test.ts',

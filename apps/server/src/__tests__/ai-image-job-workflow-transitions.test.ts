@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 
 describe('AI image workflow child terminal transitions', () => {
+  const unresolvedQuotaFilter = expect.objectContaining({
+    OR: expect.arrayContaining([
+      expect.objectContaining({ status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] } }),
+      expect.objectContaining({
+        status: { in: ['FAILED', 'CANCELLED'] },
+        billedUnits: 0,
+        OR: expect.arrayContaining([
+          { providerReconciliationStatus: { in: ['PENDING', 'RUNNING', 'RETRY_WAIT', 'MANUAL_REVIEW'] } },
+          { costReservation: { is: { status: { in: ['SUBMISSION_UNCERTAIN', 'RECONCILIATION_REQUIRED'] } } } },
+        ]),
+      }),
+    ]),
+  });
+
   function costLedger(
     status: 'RESERVED' | 'SUBMISSION_UNCERTAIN' | 'RECONCILIATION_REQUIRED' | 'SETTLED' | 'RELEASED' = 'RESERVED',
   ) {
@@ -36,6 +50,53 @@ describe('AI image workflow child terminal transitions', () => {
       },
     };
   }
+
+  it('charges cancelled recovered outputs against the standalone daily quota', async () => {
+    const aggregate = vi.fn()
+      .mockResolvedValueOnce({ _sum: { requestedImageCount: 0 } })
+      .mockResolvedValueOnce({ _sum: { billedUnits: 1 } });
+    const create = vi.fn();
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback({
+        aiImageJob: { aggregate, create },
+      })),
+    } as never);
+
+    await expect(repository.createWithQuota({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', idempotencyKey: null,
+      prompt: 'photo', provider: 'fake', model: 'fake-image-v1',
+      count: 1, width: 1024, height: 1024, estimatedCostCents: 0,
+    }, 1)).resolves.toEqual({ kind: 'quota-exceeded', used: 1, limit: 1 });
+
+    expect(aggregate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ['SUCCEEDED', 'FAILED', 'CANCELLED'] },
+        billedUnits: { gt: 0 },
+      }),
+    }));
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('reserves standalone quota while either Provider result or cost remains unresolved', async () => {
+    const aggregate = vi.fn()
+      .mockResolvedValueOnce({ _sum: { requestedImageCount: 1 } })
+      .mockResolvedValueOnce({ _sum: { billedUnits: 0 } });
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback({
+        aiImageJob: { aggregate, create: vi.fn() },
+      })),
+    } as never);
+
+    await expect(repository.createWithQuota({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', idempotencyKey: null,
+      prompt: 'photo', provider: 'fake', model: 'fake-image-v1',
+      count: 1, width: 1024, height: 1024, estimatedCostCents: 0,
+    }, 1)).resolves.toEqual({ kind: 'quota-exceeded', used: 1, limit: 1 });
+
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
+  });
 
   it('rejects raw Provider assets passed through the shared completion interface', async () => {
     const transaction = vi.fn();
@@ -612,6 +673,83 @@ describe('AI image workflow child terminal transitions', () => {
     });
     expect(cost.settlements.filter((row) => row.kind === 'RECONCILIATION_REQUIRED')).toHaveLength(1);
     expect(cost.settlements.some((row) => row.kind === 'RELEASE')).toBe(false);
+  });
+
+  it('quarantines a cancelled task identity conflict without changing its cancellation time', async () => {
+    const completedAt = new Date('2026-07-17T07:15:00.000Z');
+    const job: any = {
+      id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
+      workflowAttempt: null, attemptCount: 3, operation: 'IMAGE_TRANSLATE', status: 'CANCELLED',
+      providerJobId: 'provider-cancelled-1', completedAt, billedUnits: 0,
+      providerReconciliationStatus: 'PENDING', providerReconciliationRevision: 2,
+    };
+    const providerEventCreate = vi.fn(async ({ data }: any) => data);
+    const updateMany = vi.fn(async ({ data }: any) => {
+      Object.assign(job, data);
+      return { count: 1 };
+    });
+    const tx = {
+      aiImageJob: { findUnique: vi.fn(async () => job), updateMany },
+      aiProviderReconciliationEvent: { create: providerEventCreate },
+    };
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.recordProviderJobId('job-1', 'provider-cancelled-2'))
+      .rejects.toMatchObject({ code: 'PROVIDER_JOB_ID_MISMATCH' });
+
+    expect(job).toMatchObject({
+      status: 'CANCELLED', completedAt, providerJobId: 'provider-cancelled-1',
+      providerReconciliationStatus: 'MANUAL_REVIEW', providerReconciliationRevision: 3,
+      errorCode: 'PROVIDER_JOB_ID_MISMATCH',
+    });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({ completedAt: expect.anything() }),
+    }));
+    expect(providerEventCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      payload: expect.objectContaining({
+        persistedProviderJobId: 'provider-cancelled-1',
+        observedProviderJobId: 'provider-cancelled-2',
+      }),
+    }) });
+  });
+
+  it('rejects a late identity conflict without mutating terminal reconciliation evidence', async () => {
+    const completedAt = new Date('2026-07-17T07:15:00.000Z');
+    const job = {
+      id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: null,
+      workflowAttempt: null, attemptCount: 3, operation: 'IMAGE_TRANSLATE', status: 'CANCELLED',
+      providerJobId: 'provider-cancelled-1', completedAt, billedUnits: 1,
+      providerReconciliationStatus: 'CANCELLED_OUTPUT_RETAINED', providerReconciliationRevision: 5,
+    };
+    const updateMany = vi.fn();
+    const providerEventCreateMany = vi.fn(async () => ({ count: 1 }));
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback({
+        aiImageJob: { findUnique: vi.fn(async () => job), updateMany },
+        aiProviderReconciliationEvent: { createMany: providerEventCreateMany },
+      })),
+    } as never);
+
+    await expect(repository.recordProviderJobId('job-1', 'provider-cancelled-2'))
+      .rejects.toMatchObject({ code: 'PROVIDER_JOB_ID_MISMATCH' });
+    expect(job).toMatchObject({
+      status: 'CANCELLED', completedAt, billedUnits: 1,
+      providerReconciliationStatus: 'CANCELLED_OUTPUT_RETAINED', providerReconciliationRevision: 5,
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(providerEventCreateMany).toHaveBeenCalledWith({
+      skipDuplicates: true,
+      data: [expect.objectContaining({
+        reconciliationRevision: 5,
+        eventType: 'PROVIDER_JOB_ID_MISMATCH_OBSERVED',
+        payload: expect.objectContaining({
+          persistedProviderJobId: 'provider-cancelled-1',
+          observedProviderJobId: 'provider-cancelled-2',
+        }),
+      })],
+    });
   });
 
   it('rejects a late provider identity after cancelled cost was definitively released', async () => {

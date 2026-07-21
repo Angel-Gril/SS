@@ -35,6 +35,7 @@ import {
   aiMediaWorkflowContextFromTarget,
   aiMediaWorkflowPollInterval,
   aiMediaWorkflowReviewOutput,
+  aiMediaProviderReconciliationPending,
   buildAiImageEditWorkflowRequest,
   buildImageTranslationWorkflowRequest,
   clearWorkflowSubmissionIntent,
@@ -151,6 +152,60 @@ function workflowOperationLabel(operation: AiMediaOperation) {
       : operation === 'INPAINT'
         ? '局部重绘'
         : '参考改图';
+}
+
+type ProviderReconciliationPresentation = {
+  label: string;
+  variant: 'outline' | 'secondary' | 'destructive' | 'success' | 'warning';
+  detail: string | null;
+};
+
+function providerReconciliationPresentation(
+  job?: AiMediaWorkflowJob,
+): ProviderReconciliationPresentation | null {
+  const reconciliation = job?.providerReconciliation;
+  if (!reconciliation) return null;
+  const lastEvidence = [
+    reconciliation.lastProviderStatus,
+    reconciliation.lastErrorCode,
+    reconciliation.lastErrorMessage,
+  ].filter(Boolean).join(' · ') || null;
+  if (reconciliation.status === 'PENDING') {
+    return { label: '等待 Provider 核对', variant: 'warning', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'RUNNING') {
+    return { label: '正在核对 Provider', variant: 'secondary', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'RETRY_WAIT') {
+    const nextAt = formatProviderReconciliationTime(reconciliation.nextAt);
+    return {
+      label: '等待再次核对',
+      variant: 'warning',
+      detail: nextAt ? `下次核对 ${nextAt}` : lastEvidence,
+    };
+  }
+  if (reconciliation.status === 'MANUAL_REVIEW') {
+    return { label: '需要人工核对', variant: 'destructive', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'RECOVERED') {
+    return { label: 'Provider 结果已恢复', variant: 'success', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'NO_OUTPUT') {
+    return { label: '已确认无可恢复输出', variant: 'outline', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'NOT_SUBMITTED') {
+    return { label: '已确认未提交', variant: 'outline', detail: lastEvidence };
+  }
+  if (reconciliation.status === 'CANCELLED_OUTPUT_RETAINED') {
+    return { label: '取消后已保留输出', variant: 'outline', detail: lastEvidence };
+  }
+  return null;
+}
+
+function formatProviderReconciliationTime(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
 }
 
 function workflowScopeLabel(workflow: AiMediaWorkflow) {
@@ -2399,11 +2454,9 @@ export function SourceAiMediaPanel({
             context!.snapshot.id,
             context,
           );
-          const costReconciled = job?.costStatus === 'SETTLED' || job?.costStatus === 'RELEASED';
-          const requiresReconciliation = workflow.status === 'FAILED' && (
-            job?.costStatus
-              ? !costReconciled
-              : job?.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN' || Boolean(job?.providerJobId)
+          const providerReconciliation = providerReconciliationPresentation(job);
+          const providerReconciliationPending = Boolean(
+            job && aiMediaProviderReconciliationPending(job),
           );
           const isTranslation = workflow.operation === 'IMAGE_TRANSLATE';
           const isFullEdit = workflow.operation === 'FULL_EDIT';
@@ -2441,19 +2494,24 @@ export function SourceAiMediaPanel({
                 <Badge variant="outline" className="max-w-full truncate">{workflowScopeLabel(workflow)}</Badge>
                 {workflow.application ? <Badge variant="outline">{workflow.application.state === 'ROLLED_BACK' ? '已回滚' : workflow.application.mode === 'replace' ? '已替换' : '已追加'}</Badge>
                   : job?.appliedMode ? <Badge variant="outline">历史{job.appliedMode === 'replace' ? '已替换' : '已追加'}</Badge> : null}
-                {requiresReconciliation ? <Badge variant="outline">待人工核对</Badge> : null}
+                {providerReconciliation ? (
+                  <Badge variant={providerReconciliation.variant}>{providerReconciliation.label}</Badge>
+                ) : null}
                 {!sourceIsCurrent ? <Badge variant="outline">源图已过期</Badge> : null}
               </div>
               <p className="mt-1 text-xs text-muted-foreground">第 {workflow.currentAttempt} 次尝试 · {new Date(workflow.createdAt).toLocaleString()}</p>
               {isTranslation && job?.translation ? <p className="mt-1 break-words text-xs text-muted-foreground">{job.translation.sourceLanguage} → {job.translation.targetLanguage} · 术语 {job.translation.terminologies?.length || 0} 条</p> : null}
               {job?.prompt ? <p className="mt-1 line-clamp-2 text-xs">{job.prompt}</p> : null}
               {job?.errorMessage ? <p className="mt-1 break-words text-xs text-destructive">{job.errorMessage}</p> : null}
+              {providerReconciliation?.detail ? <p className="mt-1 break-words text-xs text-amber-700">{providerReconciliation.detail}</p> : null}
+              {providerReconciliationPending && job?.providerReconciliation?.status === 'MANUAL_REVIEW' ? <p className="mt-1 text-xs text-amber-700">等待超级管理员完成 Provider 结果核对，系统不会自动重新提交。</p> : null}
+              {job?.providerReconciliation && ['NO_OUTPUT', 'NOT_SUBMITTED'].includes(job.providerReconciliation.status) && job.retryAllowed !== true ? <p className="mt-1 text-xs text-muted-foreground">Provider 结果已终止，仍需完成独立成本对账后才能重试。</p> : null}
               {!sourceIsCurrent ? <p className="mt-1 text-xs text-amber-700">采集快照已变化，候选仅供查看，不能继续审核或应用。</p> : null}
             </div>
             <div className="flex min-w-0 flex-wrap gap-1.5 lg:col-start-2">
               {output ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => toggleCandidateComparison(workflow.id)}><Columns2 className="h-3.5 w-3.5" />{comparisonWorkflowIds.includes(workflow.id) ? '移出对比' : '加入对比'}</Button> : null}
               {ACTIVE.has(workflow.status) ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`cancel:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/cancel`, { expectedRevision: workflow.revision }, '已请求取消')}><Square className="h-3.5 w-3.5" />取消</Button> : null}
-              {workflow.status === 'FAILED' && !requiresReconciliation && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || !retryReady} title={retryReady ? '重试任务' : retryReadiness ? describeAiMediaReadiness(workflow.operation, retryReadiness) : '当前操作状态未知'} onClick={() => void retryWorkflow(workflow)}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
+              {workflow.status === 'FAILED' && job?.retryAllowed === true && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || !retryReady} title={retryReady ? '重试任务' : retryReadiness ? describeAiMediaReadiness(workflow.operation, retryReadiness) : '当前操作状态未知'} onClick={() => void retryWorkflow(workflow)}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
               {workflow.status === 'SUCCEEDED' && workflow.reviewStatus === 'PENDING' && output && sourceIsCurrent ? <><Button size="sm" disabled={Boolean(pendingAction)} onClick={() => void action(`approve:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'APPROVE' }, '候选图已通过审核')}><Check className="h-3.5 w-3.5" />通过</Button><Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`reject:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'REJECT' }, '候选图已拒绝')}><X className="h-3.5 w-3.5" />拒绝</Button></> : null}
               {workflow.reviewStatus === 'APPROVED' && job && !workflow.application && !job.appliedMode && !listingWorkflowHasApplication && sourceIsCurrent ? target.type === 'listing-draft' ? <>
                 {!target.assignedAssetId ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || maskDirty || listingDraftTargetStale || listingDraftApplicationSlotKeyTooLong || !target.slotKey || capabilities?.applications?.listingDraftApplyEnabled !== true} title={maskDirty ? '请先提交或放弃当前遮罩草稿' : !target.slotKey ? '请先从当前草稿或已有任务选择冻结槽位' : listingDraftApplicationSlotKeyTooLong ? '当前槽位标识过长，请重新选择标准槽位' : '写入当前空槽位'} onClick={() => void applyWorkflow(workflow, job)}><ImageIcon className="h-3.5 w-3.5" />写入空槽位</Button> : null}

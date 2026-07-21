@@ -412,9 +412,9 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
-### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / 10A-H2 / 10A-H3b）
+### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / H2 / H3 / H4）
 
-Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，Unit 10A-H2 已增加暗态的不可变应用账本、APPEND/受限 REPLACE、严格 frontier 补偿 ROLLBACK 和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 当前指针、source snapshot、draft revision/version、空槽与候选链 authority，但都不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询，`1690`/`1700` 建立并加固 collect application mutation ledger，`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束；这些 migration 只能前向保留，应用回滚不得删除其数据、函数、触发器或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1/H2/H3 已交付历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已交付“只恢复既有 Provider task ID、绝不重提”的结果核对状态机、Worker 和超管操作面。它们都不是新付费任务的功能激活。`1600` 至 `1660` 保护候选契约，`1670`/`1680` 支持 history/updates keyset 查询，两个应用账本及 `21124000` 至 `21131000` 的结果核对状态/事件/租约索引只能前向保留。真实 Provider 新任务、扩展端 Mask 编辑器和外部质量验收尚未完成，因此所有环境必须保持暗态。标准部署脚本会在 migration 后、启动 API/Worker 前执行同一检查；手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式
@@ -529,7 +529,74 @@ npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 H3a listing-draft/SKU context authority 与 H3b candidate writeback/rollback 已完成，submitted-provider reconciliation 仍未完成，H2/H3b 账本检查见后续两节。
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境复核；H4 检查见下一节，H2/H3b 账本检查见后续各节。
+
+### Provider 结果核对检查与恢复（Unit 10A-H4）
+
+H4 对应连续 migrations `20260721124000` 至 `20260721131000`。它只查询已经持久化的异步 Provider task ID；没有 task ID 时只能进入人工核对，任何路径都不能调用 submit 或创建替代付费任务。Worker 使用 20 分钟租约、每次即时领取一条并在单轮内有界排空；超管 `/admin/ops` 默认显示 `MANUAL_REVIEW`，结果决定与 AI 成本结算是两个独立审计流程。
+
+部署前停止 API/Worker，执行 migrate 后检查八个 migration、due/工作流恢复/租约三个任务索引、事件索引和延期事件：
+
+```bash
+cd /opt/ss-erp/current/apps/server   # app-dir 模式改为 /opt/ss-erp/app/apps/server
+set -a
+. ../../.env.staging
+set +a
+npx prisma migrate status
+
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT migration_name, finished_at, rolled_back_at
+FROM "_prisma_migrations"
+WHERE migration_name BETWEEN
+  '20260721124000_add_ai_provider_reconciliation_state' AND
+  '20260721131000_extend_ai_provider_reconciliation_backfill_deadlines'
+ORDER BY migration_name;
+
+SELECT c.relname AS index_name, i.indisunique, i.indisvalid, i.indisready,
+       pg_get_indexdef(i.indexrelid) AS definition
+FROM pg_index i
+JOIN pg_class c ON c.oid = i.indexrelid
+JOIN pg_class t ON t.oid = i.indrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE n.nspname = current_schema()
+  AND c.relname IN (
+    'ai_image_job_provider_reconciliation_due',
+    'ai_image_job_workflow_provider_reconciliation',
+    'ai_image_job_provider_reconciliation_lease_due',
+    'ai_provider_reconciliation_event_job_revision'
+  )
+ORDER BY c.relname;
+
+SELECT provider_reconciliation_status, count(*)
+FROM ai_image_jobs
+WHERE provider_reconciliation_status <> 'NOT_REQUIRED'
+GROUP BY provider_reconciliation_status
+ORDER BY provider_reconciliation_status;
+SQL
+```
+
+四个索引必须 `indisvalid=true` 且 `indisready=true`；事件 job/revision/created 索引必须 `indisunique=false`，从而允许终态后追加身份冲突证据。`126000` 与 `130000` 都必须保持为单语句 `CREATE INDEX CONCURRENTLY`。若其中一项失败并留下同名 invalid index，在所有 writer 停止时只执行对应的一组命令：
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c 'DROP INDEX CONCURRENTLY IF EXISTS ai_image_job_workflow_provider_reconciliation'
+npx prisma migrate resolve --rolled-back 20260721126000_add_ai_provider_reconciliation_workflow_index
+
+# 或仅在 130000 实际失败时：
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c 'DROP INDEX CONCURRENTLY IF EXISTS ai_image_job_provider_reconciliation_lease_due'
+npx prisma migrate resolve --rolled-back 20260721130000_index_ai_provider_reconciliation_leases
+```
+
+不得对已经成功的另一个 concurrent-index migration 执行 `resolve --rolled-back`。清理实际失败项后重新执行 `prisma migrate deploy`、上述 `pg_index` 查询和暗态 verifier。
+
+`131000` 会为仍处于 `PENDING/RUNNING/RETRY_WAIT` 且期限不足 24 小时的任务同时延长 deadline、将 revision 加一，并写 `PROVIDER_RECONCILIATION_DEADLINE_EXTENDED` 不可变事件。任何失败都必须保持 API/Worker 停止；不得禁用 transition trigger、不得手工改 revision、不得 `resolve --applied`。修复后重跑 migration/status 和暗态 verifier，再启动 Worker，并检查：
+
+```bash
+journalctl -u ss-erp-worker --since '10 minutes ago' | grep -E 'ai-provider-reconciliation|error|failed'
+```
+
+超管只可依据 Provider 控制台证据执行 `RESUME`（同一 task ID）、`NO_OUTPUT` 或 `NOT_SUBMITTED`；任务身份冲突、过期、配置不可查询时不能猜测成功。取消后的迟到输出只保存为审计资产，不恢复工作流，已计费单位仍计入每日额度。H4 本地关闭基线为 130 migrations、PostgreSQL 54/54、94-migration populated upgrade、2769 passed/134 skipped 服务端测试、192 项扩展检查、workspace typecheck/build 和 lint 0 errors。该基线不代表真实 Provider 质量验收或允许 Ozon 写入。
 
 ### AI Media 应用账本与补偿回滚检查（Unit 10A-H2）
 
