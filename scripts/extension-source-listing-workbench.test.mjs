@@ -27,9 +27,11 @@ assert.ok(sourceEntry.css.includes('content/source-listing-workbench.css'));
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/listing-workflow-client\.js['"]\)/);
 assert.match(worker, /ss-erp:source-listing-workbench-status/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
+assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
@@ -46,7 +48,7 @@ const clientSource = fs.readFileSync(clientPath, 'utf8');
 const viewSource = fs.readFileSync(viewPath, 'utf8');
 const context = {
   URL, URLSearchParams, AbortController, Array, Boolean, Date, Error, JSON, Number, Object,
-  Set, String, TextDecoder, TextEncoder, Uint8Array, clearTimeout, setTimeout,
+  Set, String, TextDecoder, TextEncoder, Uint8Array, clearTimeout, crypto: globalThis.crypto, setTimeout,
 };
 context.globalThis = context;
 vm.runInNewContext(sessionSource, context, { filename: sessionPath });
@@ -58,7 +60,7 @@ const credentials = {
   async beginOperation() {
     return {
       state: 'paired', epoch: 1, baseUrl: 'https://erp.example', sessionId: 'session-1',
-      scopes: ['listing:review'], accessToken: 'device-access-token',
+      scopes: ['listing:review', 'media:execute'], accessToken: 'device-access-token',
     };
   },
   async isOperationCurrent() { return current; },
@@ -101,6 +103,57 @@ assert.equal(requests[0].init.headers.Authorization, 'Bearer device-access-token
 assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.signal instanceof AbortSignal, true);
+
+const commandRequests = [];
+const commandClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('command test must not use GET'); },
+    async post(path, body, options) {
+      commandRequests.push({ path, body, options });
+      if (path.endsWith('/command-grants')) {
+        return {
+          state: 'response', status: 201,
+          body: {
+            code: 1,
+            data: { grantId: 'grant-1', grantToken: 'g'.repeat(43), expiresAt: '2026-07-21T00:01:00.000Z' },
+          },
+        };
+      }
+      return {
+        state: 'response', status: 202,
+        body: {
+          code: 1,
+          data: {
+            replay: false,
+            receipt: {
+              id: 'receipt-1', status: 'SUCCEEDED', failureCode: null,
+              result: { workflowId: 'media-1', action: 'RETRY', status: 'QUEUED', revision: 4 },
+            },
+          },
+        },
+      };
+    },
+  },
+});
+const mediaCommandInput = {
+  action: 'RETRY', mediaWorkflowId: 'media-1', expectedRevision: 3,
+  shopId: 'shop-1', listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+};
+const commandResult = await commandClient.executeMediaCommand(mediaCommandInput);
+assert.equal(commandResult.state, 'completed');
+assert.equal(commandRequests.length, 2);
+assert.equal(commandRequests[0].path, '/api/extension-device/command-grants');
+assert.equal(commandRequests[0].body.operation, 'MEDIA_EXECUTE');
+assert.match(commandRequests[0].body.idempotencyKey, /^extension-media:[a-f0-9]{64}$/);
+assert.equal(commandRequests[1].path, '/api/extension-device/media-workflows/execute');
+assert.equal(commandRequests[1].body.idempotencyKey, commandRequests[0].body.idempotencyKey);
+assert.equal(commandRequests[1].options.commandGrant, 'g'.repeat(43));
+await commandClient.executeMediaCommand(mediaCommandInput);
+assert.notEqual(
+  commandRequests[2].body.idempotencyKey,
+  commandRequests[0].body.idempotencyKey,
+  'a failed or response-lost command must be retryable with a fresh attempt key',
+);
 
 const invalidClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
   transport: {
@@ -216,9 +269,14 @@ class TestNode {
     this.className = '';
     this.textContent = '';
     this.hidden = true;
+    this.disabled = false;
+    this.attributes = {};
+    this.listeners = {};
   }
   appendChild(child) { this.children.push(child); return child; }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  addEventListener(name, listener) { this.listeners[name] = listener; }
   get firstChild() { return this.children[0] || null; }
 }
 const viewContext = {
@@ -274,6 +332,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(approvedContainer, {
 assert.match(renderedText(approvedContainer), /参考改图 · 审核通过，等待应用/u);
 
 const failedContainer = new TestNode('section');
+const commands = [];
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(failedContainer, {
   state: 'ready',
   status: {
@@ -283,12 +342,28 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(failedContainer, {
       actionableCount: 1,
       items: [{
         operation: 'FULL_EDIT', status: 'FAILED', reviewStatus: 'NOT_READY',
-        hasSelectedOutput: false, actionable: true,
+        hasSelectedOutput: false, actionable: true, id: 'media-1', revision: 3,
+        allowedActions: ['RETRY'],
+        commandContext: {
+          shopId: 'shop-1', listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+        },
       }],
     },
   },
+}, {
+  onCommand(task, action) { commands.push({ task, action }); },
 });
-assert.match(renderedText(failedContainer), /全图编辑 · 处理失败，请在 ERP 检查/u);
-assert.doesNotMatch(renderedText(failedContainer), /可重试/u);
+assert.match(renderedText(failedContainer), /全图编辑 · 处理失败/u);
+assert.match(renderedText(failedContainer), /任务操作/u);
+assert.match(renderedText(failedContainer), /重试/u);
+const retryButton = failedContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .find((node) => node.textContent === '重试');
+assert.ok(retryButton);
+retryButton.listeners.click({ isTrusted: false });
+assert.equal(commands.length, 0, 'scripted page clicks must not execute extension commands');
+retryButton.listeners.click({ isTrusted: true });
+assert.equal(commands.length, 1);
+assert.equal(commands[0].action, 'RETRY');
 
 console.log('PASS extension source listing workbench contract');

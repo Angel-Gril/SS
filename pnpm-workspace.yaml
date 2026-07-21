@@ -4,6 +4,7 @@ packages:
 overrides:
   form-data: 3.0.5
 allowBuilds:
+  '@alicloud/openapi-core': false
   '@prisma/client': true
   '@prisma/engines': true
   '@sentry/cli': true

@@ -408,9 +408,19 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 # release/symlink 模式
 cd /opt/ss-erp/current
 DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
+
+# 国内 direct-origin app-dir 模式
+cd /opt/ss-erp/app
+VERIFY_ORIGIN_MODE=direct \
+VERIFY_DIRECT_HOSTNAMES=ss-erp.cn,www.ss-erp.cn,app.ss-erp.cn,admin.ss-erp.cn \
+VERIFY_DOMAIN=ss-erp.cn \
+VERIFY_READY_URL=https://ss-erp.cn/ready \
+DEPLOY_DIR=/opt/ss-erp/app \
+ENV_FILE=.env.staging \
+bash scripts/verify-vps-deploy.sh
 ```
 
-覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
+覆盖 systemd 服务、Nginx 配置、端口绑定、UFW、防火墙策略、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。默认 `cloudflare` 模式检查 Cloudflare 真源保护和 IP 更新任务；`direct` 模式改为检查 active Nginx 的合法/未知 Host 路由、ACME HTTP-01 不重定向、`acme.sh` 自动续期，以及列表内每个域名的有效证书和 `/ready`。任一模式缺少 UFW 都视为失败。
 
 ### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / H2 / H3 / H4）
 
@@ -685,11 +695,25 @@ SQL
 
 正常结果必须包含六个 ledger indexes 和四个启用的 triggers：`ai_media_listing_draft_mutation_actor_insert`、`ai_media_listing_draft_mutation_authority_insert`、`ai_media_listing_draft_mutation_immutable`、`ai_media_listing_draft_mutation_validate_insert`。历史查询使用 `GET /api/ai-images/contexts/listing-draft/<draft-id>/applications`；写入只接受当前冻结 product/SKU slot，rollback 只能是当前 target frontier 的补偿 mutation。遇到 stale、cross-owner、operation-key conflict 或 forged projection 时必须 fail closed，不得手工更新账本。
 
-本地 H3b 关闭证据为 PostgreSQL 51/51、populated upgrade、真实双连接跨账本 operation-key serialization、forward-only apply/rollback chain、reapply conflict 和 owner/actor/snapshot/operation/source/SKU-slot 篡改拒绝；全量 preflight 为服务端 2706 passed/131 skipped、扩展 192 checks，生产构建与 lint 0 errors。浏览器已覆盖 product/SKU APPEND、confirmed REPLACE、reload recovery、严格多步回滚、刷新风暴回归及 1440x1000/390x844 无溢出，并确认所有 rollout/provider/Ozon gate 恢复暗态。本地 Ozon 凭证不可用时 `/attributes` 的预期 503 不属于 H3b 写回失败。该证据不授权真实 Provider、扩展完整工作台或 Ozon 写入。
+本地 H3b 关闭证据为 PostgreSQL 51/51、populated upgrade、真实双连接跨账本 operation-key serialization、forward-only apply/rollback chain、reapply conflict 和 owner/actor/snapshot/operation/source/SKU-slot 篡改拒绝；当前全量 preflight 为服务端 2843 passed/137 skipped、扩展 201 checks，生产构建与 lint 0 errors / 20 条既有 warnings。浏览器已覆盖 product/SKU APPEND、confirmed REPLACE、reload recovery、严格多步回滚、刷新风暴回归及 1440x1000/390x844 无溢出，并确认所有 rollout/provider/Ozon gate 恢复暗态。本地 Ozon 凭证不可用时 `/attributes` 的预期 503 不属于 H3b 写回失败。该证据不授权真实 Provider、扩展完整工作台或 Ozon 写入。
+
+### 阿里云短信（Dysmsapi 2017-05-25）
+
+当前服务端支持 `SendSms`、已审核签名/验证码模板候选查询，以及注册、密码找回和可选的短信登录。OpenAPI Explorer 能使用浏览器登录态自动签名，但 VPS 进程必须配置机器凭证：
+
+- 推荐阿里云 ECS：创建只允许 `dysms:SendSms`、`dysms:QuerySmsSignList`、`dysms:QuerySmsTemplateList` 的 RAM 角色并绑定到 ECS；设置 `SMS_ALIYUN_CREDENTIAL_MODE=ecs_ram_role`，角色名可留空由 IMDS 自动发现。
+- 也可使用 SDK 默认凭证链：`SMS_ALIYUN_CREDENTIAL_MODE=auto`。它按环境变量、配置文件、ECS RAM Role 等顺序查找凭证。
+- 只有无法使用角色时才使用 `SMS_ALIYUN_CREDENTIAL_MODE=access_key`，并把 `SMS_ALIYUN_ACCESS_KEY_ID/SECRET` 放在 VPS 私有环境，不进 Git 或聊天。
+
+无论凭证来源是哪一种，都必须明确选择已审核的短信签名、验证码模板 Code 和模板变量名。管理员设置页的“读取已审核资源”只查询候选，不会自动选择，也不会发送短信。
+
+真实测试前必须在系统设置填写 `auth_sms_test_phone_whitelist`。然后在“管理 -> 集成”输入白名单手机号并点击测试；无白名单时服务端拒绝真实测试发送。测试接口为 `GET /api/admin/system-status/test/sms/aliyun-resources`（查询候选）和 `POST /api/admin/system-status/test/sms`（只有带白名单手机号才发送）。
+
+短信登录默认关闭，需在系统设置显式打开 `feature_sms_login`；首位管理员仍通过 `/setup` 创建，不经过短信登录。
 
 ## 服务器功能验收清单
 
-验证码未实现时，可以先把验证码相关检查视为已知缺口，其余项目必须给出明确通过/失败结果。
+真实短信尚未配置时，可以先把短信发送检查视为待验收项；console provider 只允许本地/测试环境使用，其余项目必须给出明确通过/失败结果。
 
 ### 公网基础功能
 

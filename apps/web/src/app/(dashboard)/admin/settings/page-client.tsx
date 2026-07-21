@@ -9,6 +9,7 @@ import {
   HardDrive,
   CheckCircle2,
   XCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
+import { deploymentHosts, deploymentOrigin } from '@/lib/deployment-hosts';
 import { AiPromptTemplateEditor } from '@/components/admin/ai-prompt-template-editor';
 import { api } from '@/lib/api';
 import {
@@ -471,6 +473,18 @@ interface AuthSettingsPanelProps {
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
 }
 
+interface AliyunSmsResourceSnapshot {
+  signs: Array<{ name: string; businessType: string | null }>;
+  templates: Array<{
+    code: string;
+    name: string | null;
+    signatureName: string | null;
+    content: string;
+    variableNames: string[];
+  }>;
+  truncated: boolean;
+}
+
 interface BackupSettingsPanelProps {
   items: SystemConfig[];
   editing: Record<string, string>;
@@ -638,6 +652,7 @@ function ListingSettingsPanel({
 }
 const AUTH_GENERAL_KEYS = [
   'feature_sms_register',
+  'feature_sms_login',
   'feature_turnstile_login',
   'auth_human_challenge_provider',
   'auth_pow_signing_secret',
@@ -660,6 +675,16 @@ const AUTH_TENCENT_KEYS = [
   'auth_sms_tencent_template_id',
 ];
 
+const AUTH_ALIYUN_KEYS = [
+  'auth_sms_aliyun_access_key_id',
+  'auth_sms_aliyun_access_key_secret',
+  'auth_sms_aliyun_credential_mode',
+  'auth_sms_aliyun_role_name',
+  'auth_sms_aliyun_sign_name',
+  'auth_sms_aliyun_template_code',
+  'auth_sms_aliyun_template_param_name',
+];
+
 const AUTH_TURNSTILE_KEYS = [
   'auth_human_challenge_provider',
   'auth_pow_difficulty',
@@ -678,11 +703,41 @@ function AuthSettingsPanel({
 }: AuthSettingsPanelProps) {
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const provider = editing.auth_sms_provider || 'env';
+  const aliyunCredentialMode = editing.auth_sms_aliyun_credential_mode || 'auto';
   const challengeProvider = editing.auth_human_challenge_provider || (editing.feature_turnstile_login === 'true' ? 'cloudflare-turnstile' : 'disabled');
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const isSavingAuth = savingKey === 'group:短信与人机验证';
   const isSavingTencent = savingKey === 'group:腾讯云短信';
+  const isSavingAliyun = savingKey === 'group:阿里云短信';
   const isSavingTurnstile = savingKey === 'group:Cloudflare Turnstile';
+  const [aliyunResources, setAliyunResources] = useState<AliyunSmsResourceSnapshot | null>(null);
+  const [loadingAliyunResources, setLoadingAliyunResources] = useState(false);
+
+  const loadAliyunResources = async () => {
+    setLoadingAliyunResources(true);
+    const res = await api.get<AliyunSmsResourceSnapshot>('/api/admin/system-status/test/sms/aliyun-resources');
+    setLoadingAliyunResources(false);
+    if (res.code !== 1 || !res.data) {
+      toast({ title: '阿里云短信资源查询失败', description: res.msg, variant: 'destructive' });
+      return;
+    }
+    setAliyunResources(res.data);
+    toast({
+      title: '已读取阿里云短信资源',
+      description: `${res.data.signs.length} 个签名，${res.data.templates.length} 个验证码模板`,
+    });
+  };
+
+  const selectAliyunTemplate = (templateCode: string) => {
+    const template = aliyunResources?.templates.find((item) => item.code === templateCode);
+    setEditing({
+      ...editing,
+      auth_sms_aliyun_template_code: templateCode,
+      ...(template?.variableNames.length === 1
+        ? { auth_sms_aliyun_template_param_name: template.variableNames[0] }
+        : {}),
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -730,6 +785,11 @@ function AuthSettingsPanel({
                   setValue={setValue}
                 />
                 <ConfigToggle
+                  cfg={configs.feature_sms_login}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigToggle
                   cfg={configs.feature_turnstile_login}
                   editing={editing}
                   setValue={setValue}
@@ -741,11 +801,12 @@ function AuthSettingsPanel({
               <div>
                 <h3 className="text-sm font-medium">短信服务来源</h3>
                 <p className="text-xs text-muted-foreground">
-                  正式云端建议选择腾讯云短信；env 表示继续读取服务器环境变量。
+                  正式云端可选择阿里云或腾讯云短信；env 表示继续读取服务器环境变量。
                 </p>
               </div>
-              <div className="grid gap-2 md:grid-cols-3">
+              <div className="grid gap-2 md:grid-cols-4">
                 {[
+                  { value: 'aliyun', label: '阿里云短信', desc: '国内验证码' },
                   { value: 'tencent', label: '腾讯云短信', desc: '正式注册验证码' },
                   { value: 'env', label: '服务器环境', desc: '读取 VPS .env' },
                   { value: 'console', label: 'Console 测试', desc: '只写日志不发短信' },
@@ -786,6 +847,160 @@ function AuthSettingsPanel({
                   placeholder="13800138000,13900139000"
                 />
               </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">阿里云短信</h3>
+                  <p className="text-xs text-muted-foreground">
+                    使用 Dysmsapi 2017-05-25 SendSms；模板变量默认按 {`{"code":"123456"}`} 发送。
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={loadAliyunResources}
+                    disabled={loadingAliyunResources}
+                  >
+                    {loadingAliyunResources ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    <span className="ml-1">读取已审核资源</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      saveConfigs(['auth_sms_provider', ...AUTH_ALIYUN_KEYS], '阿里云短信', {
+                        auth_sms_provider: 'aliyun',
+                      })
+                    }
+                    disabled={isSavingAliyun}
+                  >
+                    {isSavingAliyun ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    <span className="ml-1">保存阿里云短信</span>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2 md:col-span-2">
+                  <Label className="text-sm font-medium">凭证来源</Label>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {[
+                      { value: 'auto', label: '默认凭证链', desc: 'SDK 自动查找环境、配置文件或 ECS 角色' },
+                      { value: 'ecs_ram_role', label: 'ECS RAM 角色', desc: '使用当前阿里云 ECS 的实例角色' },
+                      { value: 'access_key', label: 'AccessKey', desc: '使用下方显式密钥' },
+                    ].map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setValue('auth_sms_aliyun_credential_mode', option.value)}
+                        className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                          aliyunCredentialMode === option.value
+                            ? 'border-primary bg-primary/5'
+                            : 'hover:bg-muted/50'
+                        }`}
+                      >
+                        <span className="block text-sm font-medium">{option.label}</span>
+                        <span className="text-xs text-muted-foreground">{option.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {aliyunCredentialMode === 'ecs_ram_role' && (
+                  <ConfigInput
+                    cfg={configs.auth_sms_aliyun_role_name}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="留空自动发现实例角色"
+                  />
+                )}
+                {aliyunCredentialMode === 'access_key' && (
+                  <>
+                    <ConfigInput
+                      cfg={configs.auth_sms_aliyun_access_key_id}
+                      editing={editing}
+                      setValue={setValue}
+                      type="password"
+                      placeholder="AccessKey ID"
+                    />
+                    <ConfigInput
+                      cfg={configs.auth_sms_aliyun_access_key_secret}
+                      editing={editing}
+                      setValue={setValue}
+                      type="password"
+                      placeholder="AccessKey Secret"
+                    />
+                  </>
+                )}
+                {aliyunResources?.signs.length ? (
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">已审核签名</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={editing.auth_sms_aliyun_sign_name || ''}
+                      onChange={(event) => setValue('auth_sms_aliyun_sign_name', event.target.value)}
+                    >
+                      <option value="">请选择签名</option>
+                      {aliyunResources.signs.map((sign) => (
+                        <option key={sign.name} value={sign.name}>
+                          {sign.name}{sign.businessType ? ` (${sign.businessType})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <ConfigInput
+                    cfg={configs.auth_sms_aliyun_sign_name}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="已审核签名"
+                  />
+                )}
+                {aliyunResources?.templates.length ? (
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">已审核验证码模板</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={editing.auth_sms_aliyun_template_code || ''}
+                      onChange={(event) => selectAliyunTemplate(event.target.value)}
+                    >
+                      <option value="">请选择模板</option>
+                      {aliyunResources.templates.map((template) => (
+                        <option key={template.code} value={template.code}>
+                          {template.name || template.code} ({template.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <ConfigInput
+                    cfg={configs.auth_sms_aliyun_template_code}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="SMS_123456789"
+                  />
+                )}
+                <ConfigInput
+                  cfg={configs.auth_sms_aliyun_template_param_name}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="code"
+                />
+              </div>
+              {aliyunResources?.truncated && (
+                <p className="text-xs text-muted-foreground">
+                  阿里云返回的资源超过单页上限，当前仅显示前 50 条，请在控制台确认其余候选。
+                </p>
+              )}
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
@@ -2022,9 +2237,7 @@ const UPLOAD_ADVANCED_KEYS = [
   'upload_local_base_url',
 ];
 
-const RECOMMENDED_UPLOAD_BASE_URL = process.env.NEXT_PUBLIC_USER_HOSTNAME
-  ? `https://${process.env.NEXT_PUBLIC_USER_HOSTNAME}`
-  : 'https://app.ss-erp.com';
+const RECOMMENDED_UPLOAD_BASE_URL = deploymentOrigin(deploymentHosts.userHostname);
 
 function UploadSettingsPanel({
   items,

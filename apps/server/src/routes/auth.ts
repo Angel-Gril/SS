@@ -1,12 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { getLegalProfile, registerSchema, loginSchema, resetPasswordWithSmsSchema, sendSmsCodeSchema } from 'shared';
+import { getLegalProfile, registerSchema, loginSchema, smsLoginSchema, resetPasswordWithSmsSchema, sendSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
 import { signToken, signLegacyExtensionToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie, clearAuthContextCache } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 import {
   getPublicAuthChallengeConfig,
+  isSmsLoginChallengeEnabled,
   isSmsRegistrationChallengeEnabled,
 } from '../lib/auth-challenge-config.js';
 import { getPublicHumanChallengeConfig, issueHumanChallenge, verifyHumanChallenge, type HumanChallengeAction } from '../lib/human-challenge.js';
@@ -91,6 +92,30 @@ export async function authRoutes(app: FastifyInstance) {
     const user = await prisma.user.findUnique({ where: { phone } });
     if (user && user.status !== 'SUSPENDED') {
       await sendSmsCode(phone, 'password-reset');
+    }
+    return reply.send({ code: 1, msg: '如果该手机号已注册，验证码将发送至该手机' });
+  });
+
+  app.post('/sms-login-code', { config: authRateLimitConfig }, async (request, reply) => {
+    const parsed = sendSmsCodeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    if (!await isSmsLoginChallengeEnabled()) {
+      return reply.status(403).send({ code: 0, msg: '短信验证码登录未启用' });
+    }
+
+    const { phone, turnstileToken, humanChallengeToken } = parsed.data;
+    if (!await verifyHumanChallenge({ action: 'sms_login', token: humanChallengeToken || turnstileToken || '', ip: request.ip })) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
+
+    // Keep the response identical for unknown, suspended, and active numbers.
+    const user = await prisma.user.findUnique({ where: { phone }, select: { status: true } });
+    if (user && user.status !== 'SUSPENDED') {
+      const result = await sendSmsCode(phone, 'sms-login');
+      if (!result.ok) request.log.warn('SMS login code delivery failed');
     }
     return reply.send({ code: 1, msg: '如果该手机号已注册，验证码将发送至该手机' });
   });
@@ -237,6 +262,57 @@ export async function authRoutes(app: FastifyInstance) {
 
     // 登录成功，清除失败计数
     await redis.del(failKey);
+
+    const sessionTtlSeconds = rememberMe ? REMEMBER_ME_TTL_SECONDS : undefined;
+    const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion }, rememberMe ? '7d' : undefined);
+    await storeSession(user.id, token, sessionTtlSeconds);
+    setAuthCookie(reply, token, sessionTtlSeconds);
+
+    return reply.send({
+      code: 1,
+      msg: '登录成功',
+      data: {
+        user: {
+          id: user.id,
+          phone: user.phone,
+          nickname: user.nickname,
+          avatar: user.avatar,
+          role: user.role,
+          status: user.status,
+          balance: user.balance.toString(),
+        },
+      },
+    });
+  });
+
+  app.post('/sms-login', { config: authRateLimitConfig }, async (request, reply) => {
+    const parsed = smsLoginSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    if (!await isSmsLoginChallengeEnabled()) {
+      return reply.status(403).send({ code: 0, msg: '短信验证码登录未启用' });
+    }
+
+    const { phone, smsCode, rememberMe = false, turnstileToken, humanChallengeToken } = parsed.data;
+    if (!await verifyHumanChallenge({ action: 'sms_login', token: humanChallengeToken || turnstileToken || '', ip: request.ip })) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
+
+    const validCode = await verifySmsCode(phone, smsCode, 'sms-login');
+    const user = await prisma.user.findUnique({ where: { phone } });
+    if (!validCode || !user) {
+      return reply.status(401).send({ code: 0, msg: '手机号或验证码错误' });
+    }
+    if (user.status === 'SUSPENDED') {
+      return reply.status(403).send({ code: 0, msg: '账号已被禁用' });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
 
     const sessionTtlSeconds = rememberMe ? REMEMBER_ME_TTL_SECONDS : undefined;
     const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion }, rememberMe ? '7d' : undefined);

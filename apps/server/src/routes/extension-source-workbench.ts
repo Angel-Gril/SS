@@ -80,6 +80,7 @@ export async function extensionSourceWorkbenchRoutes(
       const status = await options.service.loadStatus({
         ownerUserId: device.ownerUserId,
         allowedShopIds: device.allowedShopIds,
+        canExecuteMedia: device.scopes.includes('media:execute'),
         snapshotId: parsed.data.snapshotId,
         supplyGoodsId: parsed.data.supplyGoodsId,
       });

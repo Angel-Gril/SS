@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { ArrowLeft, Cable, CheckCircle2, Download, Key, Package, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { deploymentOrigin, resolvePublicAppHostname } from '@/lib/deployment-hosts';
 
-const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
-  || (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
-const appOrigin = appHostname ? `https://${appHostname}` : '';
+const appHostname = resolvePublicAppHostname(process.env.NEXT_PUBLIC_RUNTIME_MODE);
+const appOrigin = deploymentOrigin(appHostname);
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
 const cloudExtensionHref = `${appOrigin}/api/extensions/download/cloud`;
@@ -57,7 +57,7 @@ export default function DownloadPage() {
             </Button>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            云端扩展连接 app.ss-erp.com；本地扩展连接 127.0.0.1:3001，适合 Windows 本地测试包。
+            云端扩展连接 {appHostname || '当前 ERP'}；本地扩展连接 127.0.0.1:3001，适合 Windows 本地测试包。
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export default function DownloadPage() {
           <ModeCard
             title="云端 SaaS 扩展"
             items={[
-              '默认连接 app.ss-erp.com 的 API',
+              `默认连接 ${appHostname || '当前 ERP'} 的 API`,
               '支持 R2/OSS 图片上传和云端队列',
               '适合多电脑、多账号团队协作',
             ]}

@@ -52,6 +52,20 @@ describe('captcha runtime config', () => {
     expect(redis.set).toHaveBeenCalledWith('sms:rate:13800138000', '1', 'EX', 120, 'NX');
   });
 
+  it('releases the send interval when a provider throws', async () => {
+    configStore.set('auth_sms_rate_limit_seconds', '120');
+    const { redis } = await import('../lib/redis.js');
+    vi.mocked(redis.set).mockResolvedValue('OK');
+    sendMock.mockRejectedValueOnce(new Error('provider unavailable'));
+
+    const { sendSmsCode } = await import('../lib/captcha.js');
+    await expect(sendSmsCode('13800138000')).resolves.toEqual({
+      ok: false,
+      msg: '验证码发送失败，请稍后重试',
+    });
+    expect(redis.del).toHaveBeenCalledWith('sms:rate:13800138000');
+  });
+
   it('uses configured Turnstile secret instead of env secret', async () => {
     configStore.set('feature_turnstile_login', 'true');
     configStore.set('auth_turnstile_secret_key', 'db-secret');

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { deploymentOrigin, resolvePublicAppHostname } from '@/lib/deployment-hosts';
 import {
   Store,
   ShoppingCart,
@@ -21,9 +22,8 @@ import {
   Server,
 } from 'lucide-react';
 
-const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
-  || (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
-const appOrigin = appHostname ? `https://${appHostname}` : '';
+const appHostname = resolvePublicAppHostname(process.env.NEXT_PUBLIC_RUNTIME_MODE);
+const appOrigin = deploymentOrigin(appHostname);
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
 const downloadHref = appOrigin ? `${appOrigin}/download` : '/download';

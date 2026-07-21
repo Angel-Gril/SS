@@ -27,6 +27,29 @@ if (!existsSync(path.join(sourceDir, 'manifest.json'))) {
 
 const outDir = path.join(outRoot, `ss-erp-${target}`);
 
+function normalizeErpBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    if (url.protocol !== 'https:' && !(target === 'local' && url.protocol === 'http:')) return '';
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
+
+function resolveDefaultErpBaseUrl() {
+  if (target === 'local') {
+    return normalizeErpBaseUrl(process.env.EXTENSION_LOCAL_BASE_URL) || 'http://127.0.0.1:3001';
+  }
+  const userHostname = String(process.env.NEXT_PUBLIC_USER_HOSTNAME || '').trim();
+  return normalizeErpBaseUrl(process.env.EXTENSION_CLOUD_BASE_URL)
+    || normalizeErpBaseUrl(userHostname ? `https://${userHostname}` : '')
+    || normalizeErpBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL)
+    || 'https://app.ss-erp.com';
+}
+
 function parseVersion(value) {
   const match = String(value || '').match(/^(\d+)\.(\d+)\.(\d+)$/);
   if (!match) return null;
@@ -99,6 +122,18 @@ writeFileSync(logisticsFeaturePath, [
   `    source: 'package-${target}',`,
   '  });',
   '})(typeof globalThis !== \'undefined\' ? globalThis : self);',
+  '',
+].join('\n'));
+
+const deploymentDefaultsPath = path.join(outDir, 'shared/erp-adapter/deployment-defaults.js');
+mkdirSync(path.dirname(deploymentDefaultsPath), { recursive: true });
+writeFileSync(deploymentDefaultsPath, [
+  '(function (root) {',
+  '  root.SS_ERP_DEPLOYMENT_DEFAULTS = Object.freeze({',
+  `    target: ${JSON.stringify(target)},`,
+  `    erpBaseUrl: ${JSON.stringify(resolveDefaultErpBaseUrl())},`,
+  '  });',
+  "})(typeof globalThis !== 'undefined' ? globalThis : self);",
   '',
 ].join('\n'));
 

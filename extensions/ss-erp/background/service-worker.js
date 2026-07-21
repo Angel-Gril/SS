@@ -51,6 +51,8 @@ const SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY = 'ss-erp:source-workflow:last-handoff:
 const SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY = 'ss-erp:source-workflow:handoffs:v2';
 const SS_ERP_SOURCE_WORKFLOW_HANDOFF_LIMIT = 20;
 const SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE = 'ss-erp:open-source-workflow-handoff';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE =
+  'ss-erp:source-listing-workbench-media-command';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
@@ -2192,6 +2194,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await getSourceListingWorkflowClient().getStatus({
         snapshotId: handoff.snapshotId,
         supplyGoodsId: handoff.supplyGoodsId,
+      });
+      return { handoff, result };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+      const platform = sourceWorkflowPlatform(message.platform);
+      const mediaWorkflowId = sourceWorkflowHandoffText(message.mediaWorkflowId, 200);
+      const expectedRevision = Number(message.expectedRevision);
+      const action = message.action === 'CANCEL' || message.action === 'RETRY'
+        ? message.action
+        : '';
+      const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      if (!handoff || !sourceProductId || !platform || !mediaWorkflowId || !action
+        || !Number.isSafeInteger(expectedRevision) || expectedRevision <= 0
+        || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+        throw new Error('ERP 媒体任务上下文无效，请刷新后重试');
+      }
+      const client = getSourceListingWorkflowClient();
+      const current = await client.getStatus({
+        snapshotId: handoff.snapshotId,
+        supplyGoodsId: handoff.supplyGoodsId,
+      });
+      if (!current || current.state !== 'ready' || !current.status) {
+        throw new Error('ERP 媒体任务状态暂不可用');
+      }
+      const task = current.status.media.items.find((item) => (
+        item.id === mediaWorkflowId
+        && item.revision === expectedRevision
+        && item.commandContext
+        && Array.isArray(item.allowedActions)
+        && item.allowedActions.includes(action)
+      ));
+      if (!task) throw new Error('ERP 媒体任务已变化，请刷新后重试');
+      const result = await client.executeMediaCommand({
+        action,
+        mediaWorkflowId: task.id,
+        expectedRevision: task.revision,
+        shopId: task.commandContext.shopId,
+        listingWorkflowId: task.commandContext.listingWorkflowId,
+        draftRevision: task.commandContext.draftRevision,
+        draftVersion: task.commandContext.draftVersion,
       });
       return { handoff, result };
     }).then((result) => {

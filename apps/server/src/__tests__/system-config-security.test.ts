@@ -84,6 +84,22 @@ describe('SystemConfig sensitive storage', () => {
     expect(translationStored).not.toContain('translation-secret-token');
     await expect(getConfig('ai_image_translation_api_key')).resolves.toBe('translation-secret-token');
   });
+
+  it('encrypts Aliyun SMS credentials and marks both fields as sensitive', async () => {
+    const { getConfig, setConfig, SystemConfigMeta } = await import('../config/system-config-schema.js');
+
+    await setConfig('auth_sms_aliyun_access_key_id', 'aliyun-access-key-id');
+    await setConfig('auth_sms_aliyun_access_key_secret', 'aliyun-access-key-secret');
+
+    for (const key of ['auth_sms_aliyun_access_key_id', 'auth_sms_aliyun_access_key_secret'] as const) {
+      const stored = configStore.get(key);
+      expect(stored).toMatch(/^enc:v1:/);
+      expect(stored).not.toContain('aliyun-access-key');
+      expect(SystemConfigMeta[key]).toMatchObject({ sensitive: true, encrypted: true });
+    }
+    await expect(getConfig('auth_sms_aliyun_access_key_id')).resolves.toBe('aliyun-access-key-id');
+    await expect(getConfig('auth_sms_aliyun_access_key_secret')).resolves.toBe('aliyun-access-key-secret');
+  });
   it('keeps reading legacy plaintext sensitive values for backward compatibility', async () => {
     const { getConfig } = await import('../config/system-config-schema.js');
 

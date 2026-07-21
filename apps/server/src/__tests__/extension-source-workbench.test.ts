@@ -20,6 +20,7 @@ async function buildRouteApp(input: {
   enabled?: boolean;
   withDevice?: boolean;
   allowedShopIds?: string[];
+  scopes?: string[];
 }) {
   const loadStatus = vi.fn(async () => ({
     contractVersion: 'extension-source-workbench-status/v1' as const,
@@ -42,7 +43,7 @@ async function buildRouteApp(input: {
         ownerUserId: 'owner-1',
         actorUserId: 'owner-1',
         sessionId: 'session-1',
-        scopes: ['listing:review'],
+        scopes: input.scopes ?? ['listing:review', 'media:execute'],
         allowedShopIds: input.allowedShopIds ?? ['shop-1', 'shop-2'],
       };
     },
@@ -80,6 +81,7 @@ describe('extension source workbench route', () => {
       expect(loadStatus).toHaveBeenCalledWith({
         ownerUserId: 'owner-1',
         allowedShopIds: ['shop-1', 'shop-2'],
+        canExecuteMedia: true,
         snapshotId: 'snapshot-1',
         supplyGoodsId: 'goods-1',
       });
@@ -117,7 +119,9 @@ describe('extension source workbench route', () => {
         url: '/api/extension-device/source-workbench/status?snapshotId=snapshot-1&supplyGoodsId=goods-1',
       });
       expect(response.statusCode).toBe(200);
-      expect(loadStatus).toHaveBeenCalledWith(expect.objectContaining({ allowedShopIds: [] }));
+      expect(loadStatus).toHaveBeenCalledWith(expect.objectContaining({
+        allowedShopIds: [], canExecuteMedia: true,
+      }));
     } finally {
       await app.close();
     }
@@ -139,6 +143,20 @@ describe('extension source workbench route', () => {
       });
       expect(invalid.statusCode).toBe(400);
       expect(loadStatus).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps media actions disabled for a read-only device session', async () => {
+    const { app, loadStatus } = await buildRouteApp({ scopes: ['listing:review'] });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/extension-device/source-workbench/status?snapshotId=snapshot-1&supplyGoodsId=goods-1',
+      });
+      expect(response.statusCode).toBe(200);
+      expect(loadStatus).toHaveBeenCalledWith(expect.objectContaining({ canExecuteMedia: false }));
     } finally {
       await app.close();
     }
@@ -187,9 +205,16 @@ describe('extension source workbench status service', () => {
           revision: 2,
           contextType: 'listing-draft',
           contextId: 'draft-1',
+          contextDraftRevision: 8,
+          contextDraftVersion: 3,
           contextSkuKey: 'sku-1',
           contextSlotKey: 'hero',
           selectedOutputAssetId: null,
+          jobs: [{
+            provider: 'fake', providerJobId: null,
+            providerReconciliationStatus: 'NOT_REQUIRED',
+            costReservation: { status: 'RELEASED' },
+          }],
           updatedAt: new Date('2026-07-21T02:00:00.000Z'),
         }]),
       },
@@ -199,6 +224,7 @@ describe('extension source workbench status service', () => {
     const result = await service.loadStatus({
       ownerUserId: 'owner-1',
       allowedShopIds: ['shop-1'],
+      canExecuteMedia: true,
       snapshotId: 'snapshot-1',
       supplyGoodsId: 'goods-1',
     });
@@ -229,6 +255,11 @@ describe('extension source workbench status service', () => {
           reviewStatus: 'NOT_READY', revision: 2, contextType: 'listing-draft',
           contextId: 'draft-1', contextSkuKey: 'sku-1', contextSlotKey: 'hero',
           hasSelectedOutput: false, actionable: true,
+          commandContext: {
+            shopId: 'shop-1', listingWorkflowId: 'draft-1',
+            draftRevision: 8, draftVersion: 3,
+          },
+          allowedActions: ['CANCEL'],
           updatedAt: '2026-07-21T02:00:00.000Z',
         }],
       },
@@ -296,6 +327,7 @@ describe('extension source workbench status service', () => {
     await expect(service.loadStatus({
       ownerUserId: 'owner-2',
       allowedShopIds: ['shop-1'],
+      canExecuteMedia: true,
       snapshotId: 'snapshot-1',
       supplyGoodsId: 'goods-1',
     })).rejects.toEqual(expect.objectContaining<Partial<ExtensionSourceWorkbenchError>>({
@@ -336,6 +368,7 @@ describe('extension source workbench status service', () => {
     const service = createExtensionSourceWorkbenchService({ client: client as never });
     const result = await service.loadStatus({
       ownerUserId: 'owner-1', allowedShopIds: ['shop-1'],
+      canExecuteMedia: true,
       snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
     });
     expect(result.media.actionableCount).toBe(2);
@@ -345,5 +378,50 @@ describe('extension source workbench status service', () => {
       ['applied', false],
       ['rejected', false],
     ]);
+    expect(result.media.items.every((item) => (
+      item.commandContext === null && item.allowedActions.length === 0
+    ))).toBe(true);
+  });
+
+  it('never exposes extension commands for a paid provider or a read-only device', async () => {
+    const row = {
+      id: 'media-1', operation: 'IMAGE_TRANSLATE', status: 'FAILED',
+      reviewStatus: 'NOT_READY', revision: 2, contextType: 'listing-draft',
+      contextId: 'draft-1', contextDraftRevision: 8, contextDraftVersion: 3,
+      contextSkuKey: null, contextSlotKey: 'hero', selectedOutputAssetId: null,
+      updatedAt: new Date('2026-07-21T02:00:00.000Z'),
+      jobs: [{
+        provider: 'dashscope-qwen-mt-image', providerJobId: null,
+        providerReconciliationStatus: 'NOT_REQUIRED', costReservation: { status: 'RELEASED' },
+      }],
+    };
+    const client = {
+      sourceCaptureSnapshot: { findFirst: vi.fn(async () => ({
+        id: 'snapshot-1', version: 1, capturedAt: new Date(),
+        subject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      sourceListingWorkflow: { findMany: vi.fn(async () => [{
+        id: 'draft-1', shopId: 'shop-1', stage: 'MEDIA_REVIEW', status: 'ACTIVE',
+        currentRevision: 8, currentDraftVersion: 3, selectedSkuKeys: [],
+        updatedAt: new Date(), currentDraft: { payload: {} },
+      }]) },
+      aiMediaWorkflow: { findMany: vi.fn(async () => [row]) },
+    };
+    const service = createExtensionSourceWorkbenchService({ client: client as never });
+    const paid = await service.loadStatus({
+      ownerUserId: 'owner-1', allowedShopIds: ['shop-1'], canExecuteMedia: true,
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    });
+    expect(paid.media.items[0]).toMatchObject({ commandContext: null, allowedActions: [] });
+
+    row.jobs = [{
+      provider: 'fake', providerJobId: null,
+      providerReconciliationStatus: 'NOT_REQUIRED', costReservation: { status: 'RELEASED' },
+    }];
+    const readOnly = await service.loadStatus({
+      ownerUserId: 'owner-1', allowedShopIds: ['shop-1'], canExecuteMedia: false,
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    });
+    expect(readOnly.media.items[0]).toMatchObject({ commandContext: null, allowedActions: [] });
   });
 });

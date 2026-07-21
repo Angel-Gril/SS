@@ -147,6 +147,10 @@ import { createSourceCaptureService } from './services/source-capture.js';
 import { createPrismaSourceCaptureRepository } from './services/source-capture-prisma.js';
 import { createSourceCaptureViewService } from './services/source-capture-view.js';
 import { createExtensionSourceWorkbenchService } from './services/extension-source-workbench.js';
+import { PrismaAiMediaWorkflowRepository } from './repositories/ai-media-workflow-repository.js';
+import { PrismaAiImageJobRepository } from './repositories/ai-image-job-repository.js';
+import { createAiMediaWorkflowService } from './services/ai-media-workflows.js';
+import { createExtensionMediaWorkflowCommandExecutor } from './services/extension-media-workflow-commands.js';
 import {
   createSourceOzonCategoryMappingService,
   PrismaSourceOzonCategoryMappingRepository,
@@ -782,6 +786,51 @@ if (isExtensionDeviceAuthEnabled()) {
   if (!extensionDeviceRepository) throw new Error('Extension device repository is unavailable');
   const extensionDeviceAuthConfig = resolveExtensionDeviceAuthConfig();
   const extensionCommandGrantSecret = resolveExtensionCommandGrantSecret();
+  const extensionMediaWorkflowService = createAiMediaWorkflowService(
+    new PrismaAiMediaWorkflowRepository(prisma),
+  );
+  const extensionMediaJobRepository = new PrismaAiImageJobRepository(prisma);
+  const executeExtensionMediaWorkflowCommand = createExtensionMediaWorkflowCommandExecutor({
+    workflowService: extensionMediaWorkflowService,
+    loadListingDraft: async ({ listingWorkflowId, ownerUserId }) => {
+      try {
+        const draft = await sourceListingWorkflowService.getDraft({
+          draftId: listingWorkflowId,
+          ownerUserId,
+        });
+        return {
+          id: draft.id,
+          ownerUserId: draft.ownerUserId,
+          shopId: draft.shopId,
+          revision: draft.revision,
+          draftVersion: draft.draftVersion,
+        };
+      } catch {
+        return null;
+      }
+    },
+    getTranslationDailyLimit: async () => getConfig('ai_user_daily_image_translation_limit'),
+    getEditDailyLimit: async () => getConfig('ai_user_daily_image_generation_limit'),
+    enqueueGeneration: async (jobId) => {
+      const worker = await import('./workers/ai-image-generation.js');
+      await worker.enqueueAiImageJob(jobId);
+    },
+    enqueueTranslation: async (jobId) => {
+      const worker = await import('./workers/ai-image-translation.js');
+      await worker.enqueueAiImageTranslationJob(jobId);
+    },
+    enqueueEdit: async (jobId) => {
+      const worker = await import('./workers/ai-image-edit.js');
+      await worker.enqueueAiImageEditJob(jobId);
+    },
+    markEnqueueFailed: async (jobId) => {
+      return extensionMediaJobRepository.markEnqueueFailed(jobId, {
+        attemptCount: 0,
+        errorCode: 'QUEUE_UNAVAILABLE',
+        errorMessage: 'AI media queue is temporarily unavailable',
+      });
+    },
+  });
   sourceCaptureService = createSourceCaptureService({
     repository: createPrismaSourceCaptureRepository({
       client: prisma,
@@ -815,6 +864,39 @@ if (isExtensionDeviceAuthEnabled()) {
         draftId: workflowId,
         ownerUserId,
       }),
+      loadMediaWorkflow: async ({ workflowId, ownerUserId }) => {
+        const row = await prisma.aiMediaWorkflow.findFirst({
+          where: { id: workflowId, ownerUserId },
+          select: {
+            id: true,
+            ownerUserId: true,
+            contextType: true,
+            contextId: true,
+            contextDraftRevision: true,
+            contextDraftVersion: true,
+            revision: true,
+            status: true,
+            suiteSlot: { select: { id: true } },
+            jobs: {
+              orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { provider: true },
+            },
+          },
+        });
+        return row ? {
+          id: row.id,
+          ownerUserId: row.ownerUserId,
+          contextType: row.contextType,
+          contextId: row.contextId,
+          contextDraftRevision: row.contextDraftRevision,
+          contextDraftVersion: row.contextDraftVersion,
+          revision: row.revision,
+          status: row.status,
+          suiteId: row.suiteSlot?.id || null,
+          provider: row.jobs[0]?.provider || null,
+        } : null;
+      },
     }),
     executeOzonPublish: async ({ ownerUserId, actorUserId, workflowId, command }) => {
       const commandRow = command as { draftRevision?: unknown; publishIntentId?: unknown };
@@ -831,6 +913,7 @@ if (isExtensionDeviceAuthEnabled()) {
         idempotencyKey,
       });
     },
+    executeMediaWorkflowCommand: executeExtensionMediaWorkflowCommand,
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',

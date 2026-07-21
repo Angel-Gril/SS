@@ -952,6 +952,11 @@
   var logisticsDeviceIdKey = 'ss-erp:logistics-device-id';
   var logisticsDeploymentKey = 'ss-erp:logistics-deployment-id';
 
+  function defaultErpBaseUrl() {
+    var defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS;
+    return String(defaults && defaults.erpBaseUrl || '').trim().replace(/\/+$/, '');
+  }
+
   function loadErpConfig() {
     chrome.storage.local.get(['ss_erp_connection', 'ozon-calc:erp-endpoint', 'ozon-calc:erp-token'], function (data) {
       var conn = data.ss_erp_connection || {};
@@ -964,7 +969,11 @@
       if (conn.baseUrl && conn.token) {
         chrome.storage.local.set({ ss_erp_connection: conn });
       }
-      if (erpUrlInput && conn.baseUrl) erpUrlInput.value = conn.baseUrl;
+      if (erpUrlInput) {
+        var defaultBaseUrl = defaultErpBaseUrl();
+        erpUrlInput.value = conn.baseUrl || defaultBaseUrl;
+        if (defaultBaseUrl) erpUrlInput.placeholder = defaultBaseUrl;
+      }
       if (erpTokenInput && conn.token) erpTokenInput.value = conn.token;
     });
   }

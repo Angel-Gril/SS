@@ -92,6 +92,15 @@ jobs:
       - name: Verify Web AI media plan slot editor contract
         run: node scripts/web-ai-media-plan-slot-editor.test.mjs
 
+      - name: Verify Web deployment domain config
+        run: node scripts/web-deployment-domain-config.test.mjs
+
+      - name: Verify Aliyun SMS configuration
+        run: node scripts/aliyun-sms-config.test.mjs
+
+      - name: Verify VPS origin-mode deployment contract
+        run: node scripts/vps-origin-mode-contract.test.mjs
+
       - name: Test server
         run: pnpm --filter server test
 

@@ -72,8 +72,70 @@
   color: #b91c1c;
 }
 
+.ss-erp-source-workbench-drawer {
+  margin-top: 10px;
+  border-top: 1px solid #cbd5e1;
+  padding-top: 8px;
+}
+
+.ss-erp-source-workbench-drawer summary {
+  color: #334155;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-command-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ss-erp-source-workbench-command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-command-row > span {
+  min-width: 0;
+  color: #475569;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ss-erp-source-workbench-command-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.ss-erp-source-workbench-command-actions button {
+  min-width: 44px;
+  height: 28px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-command-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 @media (max-width: 520px) {
   .ss-erp-source-workbench-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .ss-erp-source-workbench-command-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

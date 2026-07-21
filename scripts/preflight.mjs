@@ -19,6 +19,21 @@ const steps = [
     args: ['--filter', 'web', 'typecheck'],
   },
   {
+    name: 'Web deployment domain config contract',
+    command: 'node',
+    args: ['scripts/web-deployment-domain-config.test.mjs'],
+  },
+  {
+    name: 'Aliyun SMS configuration contract',
+    command: 'node',
+    args: ['scripts/aliyun-sms-config.test.mjs'],
+  },
+  {
+    name: 'VPS origin-mode deployment contract',
+    command: 'node',
+    args: ['scripts/vps-origin-mode-contract.test.mjs'],
+  },
+  {
     name: 'AI media provider foundation contract',
     command: 'node',
     args: ['scripts/ai-media-provider-contract.test.mjs'],

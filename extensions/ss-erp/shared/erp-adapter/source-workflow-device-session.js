@@ -3,6 +3,7 @@
 
   var DEFAULT_REQUEST_TIMEOUT_MS = 10000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
+  var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
 
   function requiredText(value, label) {
     var normalized = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -10,14 +11,23 @@
     return normalized;
   }
 
-  function statusPath(value) {
+  function requestPath(value, method) {
     var path = requiredText(value, 'path');
-    if (!path.startsWith('/api/extension-device/source-workbench/')) {
+    var commandPaths = new Set([
+      '/api/extension-device/command-grants',
+      '/api/extension-device/media-workflows/execute',
+    ]);
+    var allowed = method === 'GET'
+      ? path.startsWith('/api/extension-device/source-workbench/')
+      : commandPaths.has(path);
+    if (!allowed) {
       throw new TypeError('source workbench path is invalid');
     }
     var parsed = new URL(path, 'https://ss-erp.invalid');
     if (parsed.origin !== 'https://ss-erp.invalid'
-      || !parsed.pathname.startsWith('/api/extension-device/source-workbench/')) {
+      || (method === 'GET'
+        ? !parsed.pathname.startsWith('/api/extension-device/source-workbench/')
+        : !commandPaths.has(parsed.pathname) || parsed.search)) {
       throw new TypeError('source workbench path is invalid');
     }
     return parsed.pathname + parsed.search;
@@ -97,7 +107,25 @@
 
     return {
       async get(pathValue) {
-        var path = statusPath(pathValue);
+        return send('GET', pathValue, null, null);
+      },
+      async post(pathValue, bodyValue, commandOptions) {
+        return send('POST', pathValue, bodyValue, commandOptions || null);
+      },
+    };
+
+    async function send(method, pathValue, bodyValue, commandOptions) {
+        var path = requestPath(pathValue, method);
+        var requestBody = null;
+        if (method === 'POST') {
+          if (!bodyValue || typeof bodyValue !== 'object' || Array.isArray(bodyValue)) {
+            throw new TypeError('source workbench command body is invalid');
+          }
+          requestBody = JSON.stringify(bodyValue);
+          if (byteLength(requestBody) > MAX_COMMAND_REQUEST_BYTES) {
+            throw new Error('source workbench command is too large');
+          }
+        }
         var controller = new AbortController();
         var timeoutId;
         var timeout = new Promise(function (_resolve, reject) {
@@ -109,17 +137,27 @@
         var request = (async function () {
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
-          if (!Array.isArray(operation.scopes) || !operation.scopes.includes('listing:review')) {
-            return { state: 'scope_required', scope: 'listing:review' };
+          var requiredScope = method === 'GET' ? 'listing:review' : 'media:execute';
+          if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {
+            return { state: 'scope_required', scope: requiredScope };
           }
           var accessToken = requiredText(operation.accessToken, 'device access token');
           var baseUrl = requiredText(operation.baseUrl, 'baseUrl').replace(/\/+$/, '');
+          var headers = {
+            Accept: 'application/json',
+            Authorization: 'Bearer ' + accessToken,
+          };
+          if (method === 'POST') {
+            headers['Content-Type'] = 'application/json';
+            var commandGrant = String(commandOptions && commandOptions.commandGrant || '').trim();
+            if (commandGrant) headers['X-SS-ERP-Command-Grant'] = commandGrant;
+          }
           var response = await fetchImpl(baseUrl + path, {
-            method: 'GET',
+            method: method,
             headers: {
-              Accept: 'application/json',
-              Authorization: 'Bearer ' + accessToken,
+              ...headers,
             },
+            ...(requestBody == null ? {} : { body: requestBody }),
             credentials: 'omit',
             cache: 'no-store',
             signal: controller.signal,
@@ -137,9 +175,13 @@
             }
             return { state: 'authorization_required', status: response.status };
           }
-          if (response.status === 403) return { state: 'scope_required', scope: 'listing:review' };
-          if (response.status === 404) return { state: 'not_found' };
-          if (!response.ok) return { state: 'http_error', status: response.status };
+          if (response.status === 403) return { state: 'scope_required', scope: requiredScope };
+          if (method === 'GET' && response.status === 404) return { state: 'not_found' };
+          if (!response.ok) {
+            var errorBody = null;
+            try { errorBody = await readJsonResponse(response); } catch {}
+            return { state: 'http_error', status: response.status, body: errorBody };
+          }
           var responseBody = await readJsonResponse(response);
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
@@ -154,8 +196,7 @@
         } finally {
           clearTimeout(timeoutId);
         }
-      },
-    };
+    }
   }
 
   global.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION = {

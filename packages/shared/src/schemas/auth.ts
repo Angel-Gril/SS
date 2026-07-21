@@ -28,6 +28,14 @@ export const loginSchema = z.object({
   humanChallengeToken: z.string().optional(),
 });
 
+export const smsLoginSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  smsCode: z.string().regex(/^\d{6}$/, '请输入 6 位验证码'),
+  rememberMe: z.boolean().optional(),
+  turnstileToken: z.string().optional(),
+  humanChallengeToken: z.string().optional(),
+});
+
 export const sendSmsCodeSchema = z.object({
   phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
   turnstileToken: z.string().optional(),
@@ -47,6 +55,7 @@ export const resetPasswordWithSmsSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type SmsLoginInput = z.infer<typeof smsLoginSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export type ResetPasswordWithSmsInput = z.infer<typeof resetPasswordWithSmsSchema>;
 

@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { deploymentHostMode, deploymentHosts } from '@/lib/deployment-hosts';
 
-const ADMIN_HOSTNAME = process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || 'admin.ss-erp.com';
-const USER_HOSTNAME = process.env.NEXT_PUBLIC_USER_HOSTNAME || 'app.ss-erp.com';
-const MARKETING_HOSTNAME = 'ss-erp.com';
-const WWW_MARKETING_HOSTNAME = 'www.ss-erp.com';
+const ADMIN_HOSTNAME = deploymentHosts.adminHostname;
+const USER_HOSTNAME = deploymentHosts.userHostname;
+const MARKETING_HOSTNAME = deploymentHosts.marketingHostname;
+const WWW_MARKETING_HOSTNAME = MARKETING_HOSTNAME.startsWith('www.')
+  ? MARKETING_HOSTNAME
+  : `www.${MARKETING_HOSTNAME}`;
 const MARKETING_HOSTNAMES = [MARKETING_HOSTNAME, WWW_MARKETING_HOSTNAME];
 
 function hostMatches(host: string, configured: string): boolean {
@@ -50,12 +53,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (normalizedHost === WWW_MARKETING_HOSTNAME) {
+  if (deploymentHostMode.splitMarketing && normalizedHost === WWW_MARKETING_HOSTNAME) {
     return redirectToHost(request, MARKETING_HOSTNAME, pathname === '/landing' ? '/' : pathname, 301);
   }
 
-  // 管理员域名：admin.ss-erp.com
-  if (hostMatches(host, ADMIN_HOSTNAME)) {
+  // 管理员独立域名。单域部署时保留 /admin 路径，不做跨域隔离。
+  if (deploymentHostMode.splitAdmin && hostMatches(host, ADMIN_HOSTNAME)) {
     if (pathname === '/') {
       return redirectTo(request, '/admin/login');
     }
@@ -67,10 +70,10 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // 用户域名：app.ss-erp.com
+  // 用户域名。
   if (hostMatches(host, USER_HOSTNAME)) {
     // 访问 /admin 路径时重定向到登录
-    if (pathname.startsWith('/admin')) {
+    if (deploymentHostMode.splitAdmin && pathname.startsWith('/admin')) {
       return redirectTo(request, '/login');
     }
     // 访问根路径时进入用户工作台；未登录再回登录页。
@@ -80,9 +83,9 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // 根域名：ss-erp.com / www.ss-erp.com
+  // 独立官网域名。
   // 根路径直接渲染官网首页，避免公开 URL 出现 /landing。
-  if (MARKETING_HOSTNAMES.includes(normalizedHost)) {
+  if (deploymentHostMode.splitMarketing && MARKETING_HOSTNAMES.includes(normalizedHost)) {
     if (pathname === '/') {
       return rewriteTo(request, '/landing');
     }

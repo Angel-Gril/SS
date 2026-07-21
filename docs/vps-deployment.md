@@ -101,6 +101,52 @@ pnpm preflight --remote-oss
 
 For R2 this only passes when `/api/extension/runtime` reports `mode:"cloud"` and `capabilities.imageUpload:"oss"`, and the upload response returns `backend:"oss"`.
 
+## Domestic Direct-Origin HTTPS
+
+The domestic `.cn` deployment is DNS-direct and must not use the Cloudflare origin guard from `docker/nginx/ss-erp.conf`. Use the tracked direct-origin template instead:
+
+```text
+docker/nginx/ss-erp-cn-direct.conf
+```
+
+It has separate default virtual hosts that reject unknown Host values, allowlists the four `.cn` application domains, redirects allowlisted HTTP requests to HTTPS, serves the ACME HTTP-01 webroot, and proxies only to loopback API/Web upstreams. The installed certificate paths are:
+
+```text
+/etc/ssl/certs/ss-erp.cn.fullchain.pem
+/etc/ssl/private/ss-erp.cn.key
+```
+
+Set the domestic build-time hosts in `/opt/ss-erp/app/.env.staging` before deploying a commit. The Web middleware and cloud extension package are compiled from these values:
+
+```env
+NEXT_PUBLIC_USER_HOSTNAME=app.ss-erp.cn
+NEXT_PUBLIC_ADMIN_HOSTNAME=admin.ss-erp.cn
+NEXT_PUBLIC_MARKETING_HOSTNAME=ss-erp.cn
+EXTENSION_CLOUD_BASE_URL=https://app.ss-erp.cn
+```
+
+After installing or renewing a certificate, validate and reload Nginx:
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+Run the VPS verifier in direct mode with the complete public hostname allowlist. This requires active Nginx routing to reject unknown HTTP and HTTPS Host values, preserve the unredirected ACME HTTP-01 location, redirect each allowlisted HTTP host to HTTPS, and return a certificate-valid `/ready` response for every hostname. It also requires listeners on `80/443`, an active UFW installation and rules, loopback-only application/data ports, and an `acme.sh --cron` crontab entry or equivalent systemd timer. It does not require Cloudflare real-IP configuration or its IP-update cron:
+
+```bash
+cd /opt/ss-erp/app
+VERIFY_ORIGIN_MODE=direct \
+VERIFY_DIRECT_HOSTNAMES=ss-erp.cn,www.ss-erp.cn,app.ss-erp.cn,admin.ss-erp.cn \
+VERIFY_DOMAIN=ss-erp.cn \
+VERIFY_READY_URL=https://ss-erp.cn/ready \
+DEPLOY_DIR=/opt/ss-erp/app \
+ENV_FILE=.env.staging \
+bash scripts/verify-cloud-runtime.sh
+```
+
+The default verifier mode remains `cloudflare`, so the international VPS keeps its existing checks without additional arguments. Missing UFW is a deployment failure in both modes. Do not use `curl -k`, omit a SAN hostname from `VERIFY_DIRECT_HOSTNAMES`, or downgrade the public readiness URL to HTTP to make verification pass.
+
 ## Release/Symlink Deployment
 
 Use this after you intentionally switch systemd to `/opt/ss-erp/current`.

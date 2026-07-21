@@ -38,6 +38,7 @@
     sourceWorkbenchLastRefreshAt: 0,
     sourceWorkbenchLoadingProductId: '',
     sourceWorkbenchRequestSeq: 0,
+    sourceWorkbenchCommandKey: '',
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
@@ -264,6 +265,7 @@
     state.sourceWorkbenchLastRefreshAt = 0;
     state.sourceWorkbenchLoadingProductId = '';
     state.sourceWorkbenchRequestSeq += 1;
+    state.sourceWorkbenchCommandKey = '';
   }
 
   function resetSourceProductForPage(pageKey) {
@@ -413,6 +415,42 @@
     if (requestSeq === state.sourceWorkbenchRequestSeq) renderContent();
   }
 
+  async function executeSourceWorkbenchMediaCommand(task, action) {
+    var key = String(task && task.id || '') + ':' + action;
+    if (state.sourceWorkbenchCommandKey) return;
+    if (!task || !task.id || !Number.isSafeInteger(task.revision)
+      || (action !== 'CANCEL' && action !== 'RETRY')) return;
+    if (action === 'CANCEL' && !window.confirm('确认取消这个图片任务？')) return;
+    var sourceProductId = currentSourceProductId();
+    if (!sourceProductId || state.sourcePageKey !== currentSourcePageKey()) {
+      setStatus('当前货源页面已变化，请刷新后重试。', 'fail');
+      return;
+    }
+    state.sourceWorkbenchCommandKey = key;
+    renderContent();
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-command',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM,
+        mediaWorkflowId: task.id,
+        expectedRevision: task.revision,
+        action: action
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || '媒体任务操作失败');
+      }
+      setStatus(action === 'CANCEL' ? '图片任务已取消。' : '图片任务已重新排队。', 'ok');
+      state.sourceWorkbenchLastRefreshAt = 0;
+      await refreshSourceWorkbenchStatus({ force: true });
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      if (state.sourceWorkbenchCommandKey === key) state.sourceWorkbenchCommandKey = '';
+      renderContent();
+    }
+  }
+
   function renderContent() {
     var panel = document.getElementById(PANEL_ID);
     if (!panel) return;
@@ -460,7 +498,16 @@
     ].join('');
     if (window.SS_ERP_SOURCE_LISTING_WORKBENCH
       && typeof window.SS_ERP_SOURCE_LISTING_WORKBENCH.render === 'function') {
-      window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(sourceWorkbench, state.sourceWorkbenchStatus);
+      window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(
+        sourceWorkbench,
+        state.sourceWorkbenchStatus,
+        {
+          busyCommandKey: state.sourceWorkbenchCommandKey,
+          onCommand: function (task, action) {
+            void executeSourceWorkbenchMediaCommand(task, action);
+          }
+        }
+      );
     }
 
     if (costNode) costNode.textContent = cost > 0 ? ('¥ ' + formatMoney(cost)) : '--';

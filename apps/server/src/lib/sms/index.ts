@@ -3,17 +3,22 @@ import { ConsoleSmsProvider } from './console.js';
 import { TencentSmsProvider } from './tencent.js';
 import { AliyunSmsProvider } from './aliyun.js';
 import { getSmsRuntimeConfig } from '../auth-challenge-config.js';
+import type { AliyunSmsRuntimeConfig, TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
 
 export type { SmsProvider, SmsResult } from './types.js';
 
 let _provider: { signature: string; provider: SmsProvider } | null = null;
 
-function createProvider(name: string, tencentConfig?: ConstructorParameters<typeof TencentSmsProvider>[0]): SmsProvider {
+function createProvider(
+  name: string,
+  tencentConfig?: TencentSmsRuntimeConfig,
+  aliyunConfig?: AliyunSmsRuntimeConfig,
+): SmsProvider {
   switch (name) {
     case 'tencent':
       return new TencentSmsProvider(tencentConfig);
     case 'aliyun':
-      return new AliyunSmsProvider();
+      return new AliyunSmsProvider(aliyunConfig);
     case 'console':
       return new ConsoleSmsProvider();
     default:
@@ -26,11 +31,12 @@ export async function getSmsProvider(): Promise<SmsProvider> {
   const signature = JSON.stringify({
     provider: config.provider,
     tencent: config.tencent,
+    aliyun: config.aliyun,
   });
 
   if (_provider?.signature === signature) return _provider.provider;
 
-  const provider = createProvider(config.provider, config.tencent);
+  const provider = createProvider(config.provider, config.tencent, config.aliyun);
   _provider = { signature, provider };
   console.log(`[SMS] provider = ${config.provider || 'unset'} (${config.source})`);
   return provider;

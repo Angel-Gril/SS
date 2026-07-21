@@ -54,19 +54,62 @@
     return labels[task && task.status] || String(task && task.status || '状态未知');
   }
 
-  function renderMediaTask(container, status, mediaItems) {
-    var actionableItems = mediaItems.filter(function (item) { return item.actionable === true; });
-    if (!actionableItems.length) return;
-    var task = actionableItems[0];
-    container.appendChild(element(
-      'p',
-      'ss-erp-source-workbench-task',
-      operationLabel(task.operation) + ' · ' + statusLabel(task)
-        + (status.media.actionableCount > 1 ? ' · 另有 ' + (status.media.actionableCount - 1) + ' 项待处理' : ''),
-    ));
+  function actionLabel(action) {
+    return action === 'CANCEL' ? '取消' : '重试';
   }
 
-  function renderReady(container, status) {
+  function commandKey(task, action) {
+    return String(task && task.id || '') + ':' + action;
+  }
+
+  function renderMediaCommands(container, mediaItems, options) {
+    var commandable = mediaItems.filter(function (item) {
+      return item && item.commandContext
+        && Array.isArray(item.allowedActions)
+        && item.allowedActions.length > 0;
+    }).slice(0, 10);
+    if (!commandable.length || !options || typeof options.onCommand !== 'function') return;
+    var drawer = element('details', 'ss-erp-source-workbench-drawer');
+    drawer.appendChild(element('summary', '', '任务操作'));
+    var list = element('div', 'ss-erp-source-workbench-command-list');
+    commandable.forEach(function (task) {
+      var row = element('div', 'ss-erp-source-workbench-command-row');
+      var label = element('span', '', operationLabel(task.operation) + ' · ' + statusLabel(task));
+      row.appendChild(label);
+      var actions = element('div', 'ss-erp-source-workbench-command-actions');
+      task.allowedActions.forEach(function (action) {
+        var button = element('button', '', actionLabel(action));
+        button.type = 'button';
+        button.title = actionLabel(action) + operationLabel(task.operation);
+        button.disabled = options.busyCommandKey === commandKey(task, action);
+        button.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true) return;
+          options.onCommand(task, action);
+        });
+        actions.appendChild(button);
+      });
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+    drawer.appendChild(list);
+    container.appendChild(drawer);
+  }
+
+  function renderMediaTask(container, status, mediaItems, options) {
+    var actionableItems = mediaItems.filter(function (item) { return item.actionable === true; });
+    if (actionableItems.length) {
+      var task = actionableItems[0];
+      container.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-task',
+        operationLabel(task.operation) + ' · ' + statusLabel(task)
+          + (status.media.actionableCount > 1 ? ' · 另有 ' + (status.media.actionableCount - 1) + ' 项待处理' : ''),
+      ));
+    }
+    renderMediaCommands(container, mediaItems, options);
+  }
+
+  function renderReady(container, status, options) {
     var listing = status.listing.items[0] || null;
     var mediaItems = status.media.items || [];
     var heading = element('div', 'ss-erp-source-workbench-heading');
@@ -84,7 +127,7 @@
         'ss-erp-source-workbench-empty',
         '已保存采集快照，前往 ERP 选择店铺和 SKU 后继续。',
       ));
-      renderMediaTask(container, status, mediaItems);
+      renderMediaTask(container, status, mediaItems, options);
       return;
     }
 
@@ -110,10 +153,10 @@
         listing.blockers[0].message,
       ));
     }
-    renderMediaTask(container, status, mediaItems);
+    renderMediaTask(container, status, mediaItems, options);
   }
 
-  function render(container, result) {
+  function render(container, result, options) {
     if (!container) return;
     clear(container);
     if (!result || result.state !== 'ready' || !result.status) {
@@ -121,7 +164,7 @@
       return;
     }
     container.hidden = false;
-    renderReady(container, result.status);
+    renderReady(container, result.status, options || null);
   }
 
   root.SS_ERP_SOURCE_LISTING_WORKBENCH = {

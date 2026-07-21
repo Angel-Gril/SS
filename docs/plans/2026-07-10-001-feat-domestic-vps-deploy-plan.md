@@ -11,6 +11,16 @@ date: 2026-07-10
 
 Add a third deployment environment for domestic commercial testing while keeping local development and the current overseas VPS staging flow intact. Use one source repository and one deployment toolchain, but separate runtime configuration, database, storage, domains, release promotion, and verification.
 
+## Implementation Status (2026-07-22)
+
+- Domestic host `8.163.122.40` intentionally remains on promoted application commit `bb3d8cd`; the database is empty and `/setup` is ready for first-administrator initialization.
+- `ss-erp.cn`, `www.ss-erp.cn`, `app.ss-erp.cn`, and `admin.ss-erp.cn` resolve directly to the domestic origin. Nginx serves HTTPS on `443`, redirects allowlisted HTTP hosts to HTTPS, and UFW allows only the public Web ports while application and data ports remain private.
+- A ZeroSSL ECC SAN certificate is installed at `/etc/ssl/certs/ss-erp.cn.fullchain.pem` with its key at `/etc/ssl/private/ss-erp.cn.key`. `acme.sh` owns renewal and reloads Nginx after installation; the initial certificate expires on 2026-10-19.
+- Domestic runtime URLs, CORS and secure cookie settings use the `.cn` domains. API, Web, Worker, PostgreSQL and Redis are healthy, and public `https://ss-erp.cn/ready` reports DB/Redis ready.
+- The next promoted domestic build must freeze `NEXT_PUBLIC_USER_HOSTNAME=app.ss-erp.cn`, `NEXT_PUBLIC_ADMIN_HOSTNAME=admin.ss-erp.cn`, `NEXT_PUBLIC_MARKETING_HOSTNAME=ss-erp.cn`, and `EXTENSION_CLOUD_BASE_URL=https://app.ss-erp.cn`; these are build inputs, not runtime-only switches.
+- The domestic origin is intentionally not Cloudflare-proxied. Repository deployment verification uses `VERIFY_ORIGIN_MODE=direct` plus the explicit four-host `VERIFY_DIRECT_HOSTNAMES` list, validates unknown-host rejection, the ACME exception, `acme.sh` renewal and each hostname's certificate; the international VPS retains the default `cloudflare` mode.
+- First administrator creation does not use SMS. Aliyun SMS remains a separate provider/configuration step after administrator initialization and a whitelist-only test.
+
 ## Problem Frame
 
 The project currently supports local ERP testing and an overseas VPS staging deployment. A new domestic VPS should be more stable and less exposed to active development churn, but it should not drift into a separate hand-maintained project that becomes hard to debug or deploy.
@@ -59,7 +69,7 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 
 ## Implementation Units
 
-- [ ] **Unit 1: Provision domestic VPS runtime**
+- [x] **Unit 1: Provision domestic VPS runtime**
 
 **Goal:** Prepare the new VPS so it can run the same app-dir deployment shape.
 
@@ -82,7 +92,7 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 **Verification:**
 - Domestic VPS passes `scripts/verify-cloud-runtime.sh` after first deployment.
 
-- [ ] **Unit 2: Create domestic environment config**
+- [x] **Unit 2: Create domestic environment config**
 
 **Goal:** Give domestic VPS independent runtime configuration.
 
@@ -94,6 +104,7 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 **Approach:**
 - Use a domestic-specific `.env.staging` or introduce a clearly named env file if the service templates are adjusted later.
 - Set domestic domain/API/web/admin URLs.
+- Set the user/admin/marketing build hostnames and extension cloud base explicitly before Web and extension packaging.
 - Use domestic DB, Redis, upload backend, SMS/payment, and cookie/session secrets.
 - Do not reuse overseas R2/OSS credentials unless that is an explicit business decision.
 
@@ -103,9 +114,9 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 - Public `/ready` is reachable through the domestic domain.
 
 **Verification:**
-- `scripts/verify-cloud-runtime.sh` reports 0 failures and 0 warnings.
+- Direct-origin deployment verification reports 0 failures after checking UFW, active Host routing, ACME renewal and all four certificate-valid HTTPS `/ready` endpoints. The remaining local-only backup warning is tracked until a domestic remote backup destination is selected.
 
-- [ ] **Unit 3: Define release promotion workflow**
+- [x] **Unit 3: Define release promotion workflow**
 
 **Goal:** Make domestic deployment stable and intentional.
 
@@ -127,7 +138,7 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 **Verification:**
 - `DEPLOYED_COMMIT` on domestic VPS matches the selected tag/commit.
 
-- [ ] **Unit 4: Add domestic deployment documentation**
+- [x] **Unit 4: Add domestic deployment documentation**
 
 **Goal:** Make the workflow repeatable without relying on memory.
 
@@ -175,9 +186,10 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 
 ## Open Questions
 
-- Domestic domain name and whether it needs ICP/filing related routing constraints.
+- Complete or confirm the applicable ICP/public-security filing and retain the resulting operational record outside the repository.
 - Domestic upload backend choice: existing OSS/R2 style backend or a domestic object storage provider.
-- Whether domestic should use `.env.staging` for compatibility or a renamed environment file with systemd updates.
+- Configure and test the approved Aliyun SMS sign/template after the first administrator exists.
+- Replace the temporary certificate notification address with a monitored operator email.
 - Whether we should add a dedicated `deploy-domestic-app-dir.sh` wrapper to reduce command mistakes.
 
 ## Sources & References

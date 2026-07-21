@@ -22,7 +22,12 @@ assert.match(component, /重新验证/, 'component must offer a refresh path aft
 for (const [name, file, action] of pages) {
   const source = readFileSync(file, 'utf8');
   assert.match(source, /HumanChallenge/, `${name} must use the shared human challenge component`);
-  assert.match(source, new RegExp(`action=["']${action}["']`), `${name} must bind its challenge to ${action}`);
+  if (name === 'login') {
+    assert.match(source, /challengeAction/, 'login must bind the challenge to its selected mode');
+    assert.match(source, /'sms_login'/, 'login must use a purpose-bound SMS challenge');
+  } else {
+    assert.match(source, new RegExp(`action=["']${action}["']`), `${name} must bind its challenge to ${action}`);
+  }
   assert.match(source, /humanChallengeToken/, `${name} must submit the provider-neutral token`);
 }
 

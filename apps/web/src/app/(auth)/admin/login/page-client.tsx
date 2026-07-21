@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { api, tokenStore } from '@/lib/api';
 import { formatAuthNetworkError } from '@/lib/auth-ui';
+import { deploymentHosts, resolveCrossDeploymentHref } from '@/lib/deployment-hosts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,7 +36,12 @@ const DEFAULT_CHALLENGE_CONFIG: HumanChallengeConfig = {
 };
 
 function resolveUserLoginHref(hostname: string): string {
-  return hostname === 'admin.ss-erp.com' ? 'https://app.ss-erp.com/login' : '/login';
+  return resolveCrossDeploymentHref(
+    hostname,
+    deploymentHosts.adminHostname,
+    deploymentHosts.userHostname,
+    '/login',
+  );
 }
 
 export default function AdminLoginPage() {

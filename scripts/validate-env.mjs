@@ -63,6 +63,65 @@ function warnIfMissing(env, key) {
   if (!isSet(env[key])) warn(`${key} is empty`);
 }
 
+function validateSmsProvider(env) {
+  if (!isSet(env.SMS_PROVIDER)) return;
+  expectOneOf(env, 'SMS_PROVIDER', ['console', 'tencent', 'aliyun']);
+  if (env.SMS_PROVIDER === 'aliyun') {
+    const credentialMode = env.SMS_ALIYUN_CREDENTIAL_MODE || 'auto';
+    if (isSet(env.SMS_ALIYUN_CREDENTIAL_MODE)) {
+      expectOneOf(env, 'SMS_ALIYUN_CREDENTIAL_MODE', ['auto', 'access_key', 'ecs_ram_role']);
+    }
+    const usesExplicitAccessKey = credentialMode === 'access_key'
+      || isSet(env.SMS_ALIYUN_ACCESS_KEY_ID)
+      || isSet(env.SMS_ALIYUN_ACCESS_KEY_SECRET);
+    const required = [
+      ...(usesExplicitAccessKey
+        ? ['SMS_ALIYUN_ACCESS_KEY_ID', 'SMS_ALIYUN_ACCESS_KEY_SECRET']
+        : []),
+      'SMS_ALIYUN_SIGN_NAME',
+      'SMS_ALIYUN_TEMPLATE_CODE',
+    ];
+    for (const key of required) requireValue(env, key);
+  }
+  const required = env.SMS_PROVIDER === 'tencent'
+    ? [
+        'SMS_TENCENT_SECRET_ID',
+        'SMS_TENCENT_SECRET_KEY',
+        'SMS_TENCENT_REGION',
+        'SMS_TENCENT_SDK_APP_ID',
+        'SMS_TENCENT_SIGN_NAME',
+        'SMS_TENCENT_TEMPLATE_ID',
+      ]
+    : [];
+  for (const key of required) requireValue(env, key);
+  if (
+    isSet(env.SMS_ALIYUN_TEMPLATE_PARAM_NAME)
+    && !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(env.SMS_ALIYUN_TEMPLATE_PARAM_NAME)
+  ) {
+    fail('SMS_ALIYUN_TEMPLATE_PARAM_NAME must be an identifier such as code');
+  }
+}
+
+function validateDeploymentHosts(env) {
+  const keys = [
+    'NEXT_PUBLIC_USER_HOSTNAME',
+    'NEXT_PUBLIC_ADMIN_HOSTNAME',
+    'NEXT_PUBLIC_MARKETING_HOSTNAME',
+  ];
+  const configured = keys.filter((key) => isSet(env[key]));
+  if (configured.length !== 0 && configured.length !== keys.length) {
+    fail(`${keys.join(', ')} must be configured together or all left empty`);
+    return;
+  }
+  for (const key of configured) {
+    const value = String(env[key]).trim();
+    if (value.length > 253
+      || !/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(value)) {
+      fail(`${key} must be a hostname without a scheme, port, path, query, or fragment`);
+    }
+  }
+}
+
 function loadEnv(path) {
   if (!existsSync(path)) {
     fail(`env file not found: ${path}`);
@@ -109,6 +168,7 @@ function validateBootstrapBase(env) {
   }
   requireValue(env, 'JWT_SECRET', { minLength: 16 });
   requireValue(env, 'ENCRYPTION_KEY', { minLength: 32 });
+  validateDeploymentHosts(env);
   for (const key of [
     'LOGISTICS_DISTRIBUTION_ENABLED',
     'EXTENSION_DEVICE_AUTH_ENABLED',
@@ -202,18 +262,7 @@ function validateCloudR2(env) {
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
   warnIfMissing(env, 'SMS_PROVIDER');
-  if (env.SMS_PROVIDER === 'tencent') {
-    for (const key of [
-      'SMS_TENCENT_SECRET_ID',
-      'SMS_TENCENT_SECRET_KEY',
-      'SMS_TENCENT_REGION',
-      'SMS_TENCENT_SDK_APP_ID',
-      'SMS_TENCENT_SIGN_NAME',
-      'SMS_TENCENT_TEMPLATE_ID',
-    ]) {
-      requireValue(env, key);
-    }
-  }
+  validateSmsProvider(env);
 }
 
 function validateCloudBootstrap(env) {
@@ -227,18 +276,7 @@ function validateCloudBootstrap(env) {
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
   warnIfMissing(env, 'SMS_PROVIDER');
-  if (env.SMS_PROVIDER === 'tencent') {
-    for (const key of [
-      'SMS_TENCENT_SECRET_ID',
-      'SMS_TENCENT_SECRET_KEY',
-      'SMS_TENCENT_REGION',
-      'SMS_TENCENT_SDK_APP_ID',
-      'SMS_TENCENT_SIGN_NAME',
-      'SMS_TENCENT_TEMPLATE_ID',
-    ]) {
-      requireValue(env, key);
-    }
-  }
+  validateSmsProvider(env);
 }
 
 function validateLocal(env) {

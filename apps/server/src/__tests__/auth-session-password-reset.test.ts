@@ -70,11 +70,13 @@ vi.mock('../lib/auth-challenge-config.js', () => ({
   getPublicAuthChallengeConfig: vi.fn(async () => ({
     runtimeMode: 'cloud',
     smsRegisterEnabled: true,
+    smsLoginEnabled: true,
     turnstileEnabled: true,
     turnstileSiteKey: 'site-key',
     smsRateLimitSeconds: 60,
   })),
   isSmsRegistrationChallengeEnabled: vi.fn(async () => true),
+  isSmsLoginChallengeEnabled: vi.fn(async () => true),
 }));
 
 vi.mock('../lib/auth.js', () => ({
@@ -265,6 +267,103 @@ describe('SMS password reset', () => {
       expect(mocks.userUpdate).not.toHaveBeenCalled();
       expect(mocks.removeAllSessions).not.toHaveBeenCalled();
       expect(mocks.revokeExtensionDeviceSessionsForUser).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('SMS login', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindUnique.mockResolvedValue(activeUser);
+    mocks.userUpdate.mockResolvedValue(activeUser);
+    mocks.verifyHumanChallenge.mockResolvedValue(true);
+    mocks.verifySmsCode.mockResolvedValue(true);
+    mocks.sendSmsCode.mockResolvedValue({ ok: true, msg: '验证码已发送' });
+    mocks.signToken.mockReturnValue('signed-token');
+  });
+
+  it('keeps the SMS login code response identical for known and unknown phones', async () => {
+    mocks.userFindUnique
+      .mockResolvedValueOnce(activeUser)
+      .mockResolvedValueOnce(null);
+    const app = await buildApp();
+    try {
+      const known = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sms-login-code',
+        payload: { phone: activeUser.phone, humanChallengeToken: 'challenge-token' },
+      });
+      const unknown = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sms-login-code',
+        payload: { phone: '19300000000', humanChallengeToken: 'challenge-token' },
+      });
+
+      expect(known.statusCode).toBe(200);
+      expect(unknown.statusCode).toBe(200);
+      expect(known.json()).toEqual(unknown.json());
+      expect(mocks.verifyHumanChallenge).toHaveBeenCalledWith({
+        action: 'sms_login', token: 'challenge-token', ip: expect.any(String),
+      });
+      expect(mocks.sendSmsCode).toHaveBeenCalledWith(activeUser.phone, 'sms-login');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates the same persistent session as password login after a valid code', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sms-login',
+        payload: {
+          phone: activeUser.phone,
+          smsCode: '123456',
+          rememberMe: true,
+          humanChallengeToken: 'challenge-token',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mocks.verifyHumanChallenge).toHaveBeenCalledWith({
+        action: 'sms_login', token: 'challenge-token', ip: expect.any(String),
+      });
+      expect(mocks.verifySmsCode).toHaveBeenCalledWith(activeUser.phone, '123456', 'sms-login');
+      expect(mocks.userUpdate).toHaveBeenCalledWith({
+        where: { id: activeUser.id },
+        data: { lastLoginAt: expect.any(Date) },
+      });
+      expect(mocks.signToken).toHaveBeenCalledWith(
+        { userId: activeUser.id, role: activeUser.role, authVersion: activeUser.authVersion },
+        '7d',
+      );
+      expect(mocks.storeSession).toHaveBeenCalledWith(activeUser.id, 'signed-token', 604800);
+      expect(mocks.setAuthCookie.mock.calls[0]?.[2]).toBe(604800);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not create a session for an invalid code', async () => {
+    mocks.verifySmsCode.mockResolvedValue(false);
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sms-login',
+        payload: {
+          phone: activeUser.phone,
+          smsCode: '000000',
+          humanChallengeToken: 'challenge-token',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(mocks.storeSession).not.toHaveBeenCalled();
+      expect(mocks.setAuthCookie).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

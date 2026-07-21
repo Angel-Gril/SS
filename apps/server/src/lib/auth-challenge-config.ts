@@ -1,7 +1,7 @@
 import { getRuntimeMode, type RuntimeMode } from '../adapters/runtime-config.js';
 import { getConfig, getDefaultValue, type SystemConfigKey, type SystemConfigValue } from '../config/system-config-schema.js';
 
-export type SmsProviderName = 'console' | 'tencent';
+export type SmsProviderName = 'console' | 'tencent' | 'aliyun';
 
 export interface TencentSmsRuntimeConfig {
   secretId: string;
@@ -12,6 +12,21 @@ export interface TencentSmsRuntimeConfig {
   templateId: string;
 }
 
+export interface AliyunSmsRuntimeConfig {
+  accessKeyId: string;
+  accessKeySecret: string;
+  /**
+   * `auto` uses the Alibaba Cloud default credential chain when no explicit
+   * SMS_* key pair is configured. `ecs_ram_role` is useful on an Alibaba ECS
+   * instance with an attached RAM role.
+   */
+  credentialMode: 'auto' | 'access_key' | 'ecs_ram_role';
+  roleName: string;
+  signName: string;
+  templateCode: string;
+  templateParamName: string;
+}
+
 export interface SmsRuntimeConfig {
   provider: SmsProviderName | '';
   source: 'env' | 'system-config' | 'mixed';
@@ -19,6 +34,7 @@ export interface SmsRuntimeConfig {
   rateLimitSeconds: number;
   testPhoneWhitelist: string[];
   tencent: TencentSmsRuntimeConfig;
+  aliyun: AliyunSmsRuntimeConfig;
 }
 
 export interface TurnstileRuntimeConfig {
@@ -31,6 +47,7 @@ export interface TurnstileRuntimeConfig {
 export interface PublicAuthChallengeConfig {
   runtimeMode: RuntimeMode;
   smsRegisterEnabled: boolean;
+  smsLoginEnabled: boolean;
   turnstileEnabled: boolean;
   turnstileSiteKey: string;
   smsRateLimitSeconds: number;
@@ -38,6 +55,11 @@ export interface PublicAuthChallengeConfig {
 
 function clean(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function normalizeAliyunCredentialMode(value: unknown): AliyunSmsRuntimeConfig['credentialMode'] {
+  const mode = clean(value);
+  return mode === 'access_key' || mode === 'ecs_ram_role' || mode === 'auto' ? mode : 'auto';
 }
 
 async function readConfig<K extends SystemConfigKey>(key: K): Promise<SystemConfigValue<K>> {
@@ -55,12 +77,16 @@ function splitCsv(value: string): string[] {
 
 function envSmsProvider(): SmsProviderName | '' {
   const provider = process.env.SMS_PROVIDER || (process.env.NODE_ENV === 'production' ? '' : 'console');
-  if (provider === 'console' || provider === 'tencent') return provider;
+  if (provider === 'console' || provider === 'tencent' || provider === 'aliyun') return provider;
   return '';
 }
 
 export async function isSmsRegistrationChallengeEnabled(): Promise<boolean> {
   return getRuntimeMode() === 'cloud' && await readConfig('feature_sms_register');
+}
+
+export async function isSmsLoginChallengeEnabled(): Promise<boolean> {
+  return getRuntimeMode() === 'cloud' && await readConfig('feature_sms_login');
 }
 
 export async function isTurnstileChallengeEnabled(): Promise<boolean> {
@@ -76,6 +102,13 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     sdkAppId,
     signName,
     templateId,
+    aliyunAccessKeyId,
+    aliyunAccessKeySecret,
+    configuredAliyunCredentialMode,
+    configuredAliyunRoleName,
+    aliyunSignName,
+    aliyunTemplateCode,
+    aliyunTemplateParamName,
     codeTtlSeconds,
     rateLimitSeconds,
     whitelist,
@@ -87,6 +120,13 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     readConfig('auth_sms_tencent_sdk_app_id'),
     readConfig('auth_sms_tencent_sign_name'),
     readConfig('auth_sms_tencent_template_id'),
+    readConfig('auth_sms_aliyun_access_key_id'),
+    readConfig('auth_sms_aliyun_access_key_secret'),
+    readConfig('auth_sms_aliyun_credential_mode'),
+    readConfig('auth_sms_aliyun_role_name'),
+    readConfig('auth_sms_aliyun_sign_name'),
+    readConfig('auth_sms_aliyun_template_code'),
+    readConfig('auth_sms_aliyun_template_param_name'),
     readConfig('auth_sms_code_ttl_seconds'),
     readConfig('auth_sms_rate_limit_seconds'),
     readConfig('auth_sms_test_phone_whitelist'),
@@ -94,11 +134,23 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
 
   const provider = configuredProvider === 'env' ? envSmsProvider() : configuredProvider;
   const useDbTencent = configuredProvider === 'tencent';
-  const hasDbTencentFields = !!(secretId || secretKey || sdkAppId || signName || templateId);
+  const useDbAliyun = configuredProvider === 'aliyun';
+  const aliyunCredentialMode = normalizeAliyunCredentialMode(
+    useDbAliyun ? configuredAliyunCredentialMode : process.env.SMS_ALIYUN_CREDENTIAL_MODE,
+  );
+  const aliyunRoleName = useDbAliyun
+    ? clean(configuredAliyunRoleName) || clean(process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA)
+    : clean(process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA);
+  const hasDbProviderFields = !!(
+    secretId || secretKey || sdkAppId || signName || templateId
+    || aliyunAccessKeyId || aliyunAccessKeySecret
+    || (configuredAliyunCredentialMode !== 'auto' && configuredAliyunCredentialMode)
+    || configuredAliyunRoleName || aliyunSignName || aliyunTemplateCode
+  );
 
   return {
     provider,
-    source: configuredProvider === 'env' ? (hasDbTencentFields ? 'mixed' : 'env') : 'system-config',
+    source: configuredProvider === 'env' ? (hasDbProviderFields ? 'mixed' : 'env') : 'system-config',
     codeTtlSeconds,
     rateLimitSeconds,
     testPhoneWhitelist: splitCsv(whitelist),
@@ -109,6 +161,17 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
       sdkAppId: useDbTencent ? clean(sdkAppId) || process.env.SMS_TENCENT_SDK_APP_ID || '' : process.env.SMS_TENCENT_SDK_APP_ID || '',
       signName: useDbTencent ? clean(signName) || process.env.SMS_TENCENT_SIGN_NAME || '' : process.env.SMS_TENCENT_SIGN_NAME || '',
       templateId: useDbTencent ? clean(templateId) || process.env.SMS_TENCENT_TEMPLATE_ID || '' : process.env.SMS_TENCENT_TEMPLATE_ID || '',
+    },
+    aliyun: {
+      accessKeyId: useDbAliyun ? clean(aliyunAccessKeyId) || process.env.SMS_ALIYUN_ACCESS_KEY_ID || '' : process.env.SMS_ALIYUN_ACCESS_KEY_ID || '',
+      accessKeySecret: useDbAliyun ? clean(aliyunAccessKeySecret) || process.env.SMS_ALIYUN_ACCESS_KEY_SECRET || '' : process.env.SMS_ALIYUN_ACCESS_KEY_SECRET || '',
+      credentialMode: aliyunCredentialMode,
+      roleName: aliyunRoleName,
+      signName: useDbAliyun ? clean(aliyunSignName) || process.env.SMS_ALIYUN_SIGN_NAME || '' : process.env.SMS_ALIYUN_SIGN_NAME || '',
+      templateCode: useDbAliyun ? clean(aliyunTemplateCode) || process.env.SMS_ALIYUN_TEMPLATE_CODE || '' : process.env.SMS_ALIYUN_TEMPLATE_CODE || '',
+      templateParamName: useDbAliyun
+        ? clean(aliyunTemplateParamName) || process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code'
+        : process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code',
     },
   };
 }
@@ -144,20 +207,23 @@ export async function getPublicAuthChallengeConfig(): Promise<PublicAuthChalleng
     return {
       runtimeMode,
       smsRegisterEnabled: false,
+      smsLoginEnabled: false,
       turnstileEnabled: false,
       turnstileSiteKey: '',
       smsRateLimitSeconds: smsConfig.rateLimitSeconds,
     };
   }
 
-  const [smsRegisterEnabled, turnstile] = await Promise.all([
+  const [smsRegisterEnabled, smsLoginEnabled, turnstile] = await Promise.all([
     isSmsRegistrationChallengeEnabled(),
+    isSmsLoginChallengeEnabled(),
     getTurnstileRuntimeConfig(),
   ]);
 
   return {
     runtimeMode,
     smsRegisterEnabled,
+    smsLoginEnabled,
     turnstileEnabled: turnstile.enabled,
     turnstileSiteKey: turnstile.enabled ? turnstile.siteKey : '',
     smsRateLimitSeconds: smsConfig.rateLimitSeconds,

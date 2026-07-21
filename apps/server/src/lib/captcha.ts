@@ -52,7 +52,7 @@ export async function verifyTurnstile(token: string, ip?: string): Promise<boole
 const SMS_RATE_KEY_PREFIX = 'sms:rate:';
 const SMS_CODE_KEY_PREFIX = 'sms:code:';
 const SMS_FAIL_KEY_PREFIX = 'sms:fail:';
-export type SmsCodePurpose = 'register' | 'password-reset';
+export type SmsCodePurpose = 'register' | 'password-reset' | 'sms-login';
 
 function smsKeySuffix(phone: string, purpose: SmsCodePurpose): string {
   return purpose === 'register' ? phone : `${purpose}:${phone}`;
@@ -75,8 +75,16 @@ export async function sendSmsCode(
   }
   const code = String(randomInt(100000, 1000000));
 
-  const provider = await getSmsProvider();
-  const result = await provider.send(phone, code);
+  let result;
+  try {
+    const provider = await getSmsProvider();
+    result = await provider.send(phone, code);
+  } catch (error) {
+    await redis.del(rateKey);
+    const message = error instanceof Error ? error.message : String(error || 'unknown');
+    console.error(`[SMS] provider 加载或发送失败 ${maskPhone(phone)}: ${message.replace(/\s+/g, ' ').slice(0, 300)}`);
+    return { ok: false, msg: '验证码发送失败，请稍后重试' };
+  }
   if (!result.ok) {
     await redis.del(rateKey);
     console.error(`[SMS] 发送失败 ${maskPhone(phone)}: ${result.err}`);

@@ -7,6 +7,7 @@ import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
 import { getSmsProvider } from '../lib/sms/index.js';
+import { queryApprovedAliyunSmsResources } from '../lib/sms/aliyun.js';
 import { getBackupRuntimeConfig, testBackupRemoteStorage } from '../services/backup.service.js';
 import { testAiImageProviderConnection } from '../services/ai-image-providers.js';
 import {
@@ -286,7 +287,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     if (!smsConfig.provider) {
       return reply.send({
         code: 0,
-        msg: '短信 provider 未配置。请在系统设置 -> 短信与人机验证中选择 tencent，或配置 SMS_PROVIDER',
+        msg: '短信 provider 未配置。请在系统设置 -> 短信与人机验证中选择 aliyun/tencent，或配置 SMS_PROVIDER',
       });
     }
 
@@ -303,21 +304,41 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       });
     }
 
-    if (smsConfig.provider !== 'tencent') {
+    if (smsConfig.provider !== 'tencent' && smsConfig.provider !== 'aliyun') {
       return reply.send({ code: 0, msg: `provider=${smsConfig.provider} 测试尚未实现` });
     }
 
-    const missing = [
-      ['SecretId', smsConfig.tencent.secretId],
-      ['SecretKey', smsConfig.tencent.secretKey],
-      ['SDK AppId', smsConfig.tencent.sdkAppId],
-      ['签名', smsConfig.tencent.signName],
-      ['模板 ID', smsConfig.tencent.templateId],
-    ]
+    const providerLabel = smsConfig.provider === 'aliyun' ? '阿里云' : '腾讯云';
+    const requiredFields = smsConfig.provider === 'aliyun'
+      ? [
+          ...(smsConfig.aliyun.credentialMode === 'access_key'
+            ? [
+                ['AccessKey ID', smsConfig.aliyun.accessKeyId],
+                ['AccessKey Secret', smsConfig.aliyun.accessKeySecret],
+              ]
+            : smsConfig.aliyun.credentialMode === 'auto'
+              && smsConfig.aliyun.accessKeyId !== smsConfig.aliyun.accessKeySecret
+              ? [
+                  ['AccessKey ID', smsConfig.aliyun.accessKeyId],
+                  ['AccessKey Secret', smsConfig.aliyun.accessKeySecret],
+                ]
+              : []),
+          ['签名', smsConfig.aliyun.signName],
+          ['模板 Code', smsConfig.aliyun.templateCode],
+          ['模板变量名', smsConfig.aliyun.templateParamName],
+        ]
+      : [
+          ['SecretId', smsConfig.tencent.secretId],
+          ['SecretKey', smsConfig.tencent.secretKey],
+          ['SDK AppId', smsConfig.tencent.sdkAppId],
+          ['签名', smsConfig.tencent.signName],
+          ['模板 ID', smsConfig.tencent.templateId],
+        ];
+    const missing = requiredFields
       .filter(([, value]) => !String(value || '').trim())
       .map(([label]) => label);
     if (missing.length > 0) {
-      return reply.send({ code: 0, msg: `腾讯云 SMS 配置不完整：缺少 ${missing.join('、')}` });
+      return reply.send({ code: 0, msg: `${providerLabel} SMS 配置不完整：缺少 ${missing.join('、')}` });
     }
 
     try {
@@ -325,14 +346,14 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       if (!phone) {
         return reply.send({
           code: 1,
-          msg: '腾讯云 SMS 配置已加载，凭证字段齐全。填写手机号可发送真实测试短信',
+          msg: `${providerLabel} SMS 配置已加载，凭证字段齐全。填写手机号可发送真实测试短信`,
         });
       }
 
-      if (
-        smsConfig.testPhoneWhitelist.length > 0 &&
-        !smsConfig.testPhoneWhitelist.includes(phone)
-      ) {
+      if (smsConfig.testPhoneWhitelist.length === 0) {
+        return reply.send({ code: 0, msg: '发送真实测试短信前必须配置测试手机号白名单' });
+      }
+      if (!smsConfig.testPhoneWhitelist.includes(phone)) {
         return reply.send({ code: 0, msg: `测试手机号不在白名单中：${maskPhone(phone)}` });
       }
 
@@ -631,6 +652,20 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       return reply.send({ code: 1, msg: `已发送测试事件到 Sentry（id=${id || 'unknown'}）` });
     } catch (e: any) {
       return reply.send({ code: 0, msg: e?.message || '发送失败' });
+    }
+  });
+
+  app.get('/test/sms/aliyun-resources', async (_request, reply) => {
+    const smsConfig = await getSmsRuntimeConfig();
+    if (smsConfig.provider !== 'aliyun') {
+      return reply.send({ code: 0, msg: '当前短信 provider 不是 aliyun' });
+    }
+
+    try {
+      const resources = await queryApprovedAliyunSmsResources(smsConfig.aliyun);
+      return reply.send({ code: 1, data: resources });
+    } catch (error) {
+      return reply.send({ code: 0, msg: `查询阿里云签名/模板失败：${shortError(error)}` });
     }
   });
 }

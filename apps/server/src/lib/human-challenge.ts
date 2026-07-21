@@ -4,9 +4,9 @@ import { getRuntimeMode } from '../adapters/runtime-config.js';
 import { redis } from './redis.js';
 
 export type HumanChallengeProvider = 'disabled' | 'cloudflare-turnstile' | 'builtin-pow';
-export type HumanChallengeAction = 'login' | 'register_sms' | 'password_reset_sms' | 'admin_login';
+export type HumanChallengeAction = 'login' | 'sms_login' | 'register_sms' | 'password_reset_sms' | 'admin_login';
 
-const ACTIONS = new Set<HumanChallengeAction>(['login', 'register_sms', 'password_reset_sms', 'admin_login']);
+const ACTIONS = new Set<HumanChallengeAction>(['login', 'sms_login', 'register_sms', 'password_reset_sms', 'admin_login']);
 
 export interface HumanChallengeRuntimeConfig {
   provider: HumanChallengeProvider;

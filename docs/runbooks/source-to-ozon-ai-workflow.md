@@ -14,6 +14,21 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Unit 11-A Staging And Domestic HTTPS Evidence (2026-07-22)
+
+This checkpoint keeps the extension workbench read-only and every paid/media/publisher rollout dark. It also separates application promotion from domestic infrastructure repair: staging receives the reviewed Unit 11-A commit, while the empty domestic environment stays on its previously promoted baseline for first-administrator setup.
+
+| Evidence | Result |
+|---|---|
+| Git | `de02052` (`feat(ai-media): add dark extension workbench sandbox`) is pushed to `origin/feat/ai-media-prompt-registry`; the tracked worktree was clean when the staging deployment was packaged |
+| Automated verification | Server `2843 passed / 137 skipped`; extension `201 passed` with three existing permission warnings; server/Web typecheck and production builds passed; lint reported zero errors and 20 existing warnings; Prisma validation passed; no credential entered the diff |
+| International VPS | `45.76.49.64` deployed exact commit `de02052` after a successful 33 MB database backup; API/Web/Worker, local/public `/ready`, 130 migrations, runtime upload configuration and AI Media dark checks passed; full verifier reported `0 failures / 1 warning`; cloud extension package `1.0.244` |
+| International infrastructure limit | The remaining verifier warning is local-only backup retention with no configured remote backup destination |
+| Domestic application state | `8.163.122.40` intentionally remains on `bb3d8cd`; a pre-reset backup exists at `/var/backups/ss-erp/ss_erp_20260722_020948.sql.gz`; 130 migrations are current and the database has no user, administrator, shop, order, capture or media records |
+| Domestic HTTPS | `ss-erp.cn`, `www.ss-erp.cn`, `app.ss-erp.cn`, and `admin.ss-erp.cn` use a ZeroSSL ECC SAN certificate through direct-origin Nginx; HTTP redirects to HTTPS, UFW allows `443/tcp`, and public `/`, `/ready`, `/setup` plus the admin login route return successfully with certificate verification enabled; the strengthened direct-origin verifier checked active Host allowlisting/default rejection, the unredirected ACME path, the `acme.sh` renewal cron and certificate-valid `/ready` on all four domains, returning `0 failures / 1 local-backup warning` |
+| Domestic setup | `/api/setup/status` reports `needsSetup:true` and `hasAdmin:false`; the existing private setup token remains server-only and first administrator creation proceeds through `https://ss-erp.cn/setup`, not SMS registration |
+| Rollout state | Both environments retain AI Media master false, rollout revision zero with no tenant IDs, extension workbench false, listing/publisher masters false and Ozon writer stages off; no paid Provider or Ozon write was invoked |
+
 ## Release Evidence: `bb3d8cd`
 
 This release adds the provider-free Unit 10B-C2 manual suite-slot reference editor. Operators can replace or clear ordered pre-claim references with server-owned evidence validation, immutable plan lineage, CAS/idempotent replay, approval invalidation and suite-claim exclusion. It does not enable a paid Provider, fake production dispatch, tenant rollout or Ozon writes.

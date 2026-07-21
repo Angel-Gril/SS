@@ -11,6 +11,7 @@ const nextConfig = {
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
     NEXT_PUBLIC_ADMIN_HOSTNAME: process.env.NEXT_PUBLIC_ADMIN_HOSTNAME,
     NEXT_PUBLIC_USER_HOSTNAME: process.env.NEXT_PUBLIC_USER_HOSTNAME,
+    NEXT_PUBLIC_MARKETING_HOSTNAME: process.env.NEXT_PUBLIC_MARKETING_HOSTNAME,
   },
   experimental: {
     optimizePackageImports: ['lucide-react'],

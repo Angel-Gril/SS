@@ -7,11 +7,12 @@ import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 
 export type HumanChallengeProvider = 'disabled' | 'cloudflare-turnstile' | 'builtin-pow';
-export type HumanChallengeAction = 'login' | 'register_sms' | 'password_reset_sms' | 'admin_login';
+export type HumanChallengeAction = 'login' | 'sms_login' | 'register_sms' | 'password_reset_sms' | 'admin_login';
 
 export interface HumanChallengeConfig {
   runtimeMode: 'local' | 'cloud';
   smsRegisterEnabled: boolean;
+  smsLoginEnabled?: boolean;
   humanChallengeProvider?: HumanChallengeProvider;
   turnstileEnabled: boolean;
   turnstileSiteKey: string;

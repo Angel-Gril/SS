@@ -22,6 +22,14 @@ test('login offers a session-safe seven-day option and password recovery', () =>
   assert.match(login, /EyeOff/);
 });
 
+test('login exposes the guarded SMS mode and purpose-bound endpoints', () => {
+  assert.match(login, /smsLoginEnabled/);
+  assert.match(login, /sms-login-code/);
+  assert.match(login, /sms-login/);
+  assert.match(login, /action=\{challengeAction\}/);
+  assert.match(login, /验证码登录/);
+});
+
 test('registration and setup passwords can be revealed without changing autocomplete semantics', () => {
   assert.match(register, /showPassword/);
   assert.match(register, /autoComplete="new-password"/);
@@ -29,9 +37,10 @@ test('registration and setup passwords can be revealed without changing autocomp
   assert.match(setup, /showConfirmPassword/);
 });
 
-test('forgot-password flow uses SMS, Turnstile and the purpose-specific reset endpoints', () => {
+test('forgot-password flow uses SMS, the shared human challenge and purpose-specific endpoints', () => {
   assert.match(forgotPassword, /找回密码/);
-  assert.match(forgotPassword, /Turnstile/);
+  assert.match(forgotPassword, /HumanChallenge/);
+  assert.match(forgotPassword, /humanChallengeToken/);
   assert.match(forgotPassword, /password-reset\/sms-code/);
   assert.match(forgotPassword, /api\/auth\/password-reset/);
   assert.match(forgotPassword, /newPassword/);

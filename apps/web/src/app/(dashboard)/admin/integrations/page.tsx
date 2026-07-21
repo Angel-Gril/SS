@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
+import { deploymentOrigin, resolvePublicAppHostname } from '@/lib/deployment-hosts';
 import { api } from '@/lib/api';
 
 interface IntegrationCheck {
@@ -30,10 +31,8 @@ interface IntegrationCheck {
 type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'backup' | 'sentry';
 type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
 
-const appHostname =
-  process.env.NEXT_PUBLIC_USER_HOSTNAME ||
-  (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
-const appOrigin = appHostname ? `https://${appHostname}` : '';
+const appHostname = resolvePublicAppHostname(process.env.NEXT_PUBLIC_RUNTIME_MODE);
+const appOrigin = deploymentOrigin(appHostname);
 
 function toAppHref(pathname: string): string {
   return appOrigin ? `${appOrigin}${pathname}` : pathname;
@@ -274,7 +273,7 @@ function IntegrationRow({
         <Input
           value={testPhone || ''}
           onChange={(event) => onTestPhoneChange(event.target.value)}
-          placeholder="测试手机号（可选）"
+          placeholder="测试手机号（需在白名单中）"
           className="hidden h-8 w-40 shrink-0 md:block"
         />
       )}

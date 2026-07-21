@@ -108,7 +108,64 @@ function listingSummary(row: any) {
   };
 }
 
-function mediaSummary(row: any) {
+interface ExtensionMediaCommandContext {
+  shopId: string;
+  listingWorkflowId: string;
+  draftRevision: number;
+  draftVersion: number;
+}
+
+function mediaCommandContract(
+  row: any,
+  listingById: Map<string, ReturnType<typeof listingSummary>>,
+  canExecuteMedia: boolean,
+): {
+  commandContext: ExtensionMediaCommandContext | null;
+  allowedActions: Array<'CANCEL' | 'RETRY'>;
+} {
+  const listing = row.contextType === 'listing-draft'
+    ? listingById.get(String(row.contextId || ''))
+    : null;
+  const currentJob = Array.isArray(row.jobs) ? row.jobs[0] : null;
+  if (!canExecuteMedia
+    || !listing
+    || row.contextDraftRevision !== listing.revision
+    || row.contextDraftVersion !== listing.draftVersion
+    || String(currentJob?.provider || '') !== 'fake') {
+    return { commandContext: null, allowedActions: [] };
+  }
+  const allowedActions: Array<'CANCEL' | 'RETRY'> = [];
+  if (['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(String(row.status))) {
+    allowedActions.push('CANCEL');
+  }
+  const reconciliationStatus = String(
+    currentJob?.providerReconciliationStatus || 'NOT_REQUIRED',
+  );
+  const costStatus = currentJob?.costReservation?.status == null
+    ? null
+    : String(currentJob.costReservation.status);
+  const retrySafe = !currentJob?.providerJobId
+    && currentJob?.errorCode !== 'PROVIDER_SUBMISSION_UNCERTAIN'
+    && ['NOT_REQUIRED', 'NO_OUTPUT', 'NOT_SUBMITTED'].includes(reconciliationStatus)
+    && (costStatus == null || ['SETTLED', 'RELEASED'].includes(costStatus));
+  if (row.status === 'FAILED' && retrySafe) allowedActions.push('RETRY');
+  if (!allowedActions.length) return { commandContext: null, allowedActions };
+  return {
+    commandContext: {
+      shopId: listing.shopId,
+      listingWorkflowId: listing.id,
+      draftRevision: listing.revision,
+      draftVersion: listing.draftVersion,
+    },
+    allowedActions,
+  };
+}
+
+function mediaSummary(
+  row: any,
+  listingById: Map<string, ReturnType<typeof listingSummary>>,
+  canExecuteMedia: boolean,
+) {
   return {
     id: String(row.id),
     operation: String(row.operation),
@@ -121,6 +178,7 @@ function mediaSummary(row: any) {
     contextSlotKey: row.contextSlotKey == null ? null : String(row.contextSlotKey),
     hasSelectedOutput: Boolean(row.selectedOutputAssetId),
     actionable: mediaActionable(row),
+    ...mediaCommandContract(row, listingById, canExecuteMedia),
     updatedAt: isoDate(row.updatedAt),
   };
 }
@@ -149,6 +207,7 @@ export function createExtensionSourceWorkbenchService(options: {
     async loadStatus(input: {
       ownerUserId: string;
       allowedShopIds: string[];
+      canExecuteMedia?: boolean;
       snapshotId: string;
       supplyGoodsId: string;
     }) {
@@ -213,6 +272,7 @@ export function createExtensionSourceWorkbenchService(options: {
       const listingItems = listingRows
         .slice(0, EXTENSION_SOURCE_WORKBENCH_LISTING_LIMIT)
         .map(listingSummary);
+      const listingById = new Map(listingItems.map((item) => [item.id, item]));
       const mediaContexts = [
         {
           contextType: 'collect',
@@ -245,18 +305,31 @@ export function createExtensionSourceWorkbenchService(options: {
           revision: true,
           contextType: true,
           contextId: true,
+          contextDraftRevision: true,
+          contextDraftVersion: true,
           contextSkuKey: true,
           contextSlotKey: true,
           selectedOutputAssetId: true,
           selectedOutputAsset: {
             select: { aiImageJob: { select: { appliedAt: true } } },
           },
+          jobs: {
+            orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: {
+              provider: true,
+              providerJobId: true,
+              providerReconciliationStatus: true,
+              errorCode: true,
+              costReservation: { select: { status: true } },
+            },
+          },
           updatedAt: true,
         },
       });
       const mediaItems = mediaRows
         .slice(0, EXTENSION_SOURCE_WORKBENCH_MEDIA_LIMIT)
-        .map(mediaSummary);
+        .map((row) => mediaSummary(row, listingById, input.canExecuteMedia === true));
 
       return {
         contractVersion: EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION,
