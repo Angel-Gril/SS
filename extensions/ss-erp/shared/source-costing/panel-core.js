@@ -7,18 +7,24 @@
     var host = '';
     try {
       host = new URL(url || (runtimeRoot.location && runtimeRoot.location.href) || '').hostname.toLowerCase();
-    } catch (_error) {
+    } catch {
       host = String(fallbackHostname || (runtimeRoot.location && runtimeRoot.location.hostname) || '').toLowerCase();
     }
     if (host === 'detail.1688.com') return '1688';
-    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'PDD';
-    if (host.indexOf('taobao.com') >= 0) return '淘宝';
-    if (host.indexOf('tmall.com') >= 0) return '天猫';
+    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'pdd';
+    if (host.indexOf('taobao.com') >= 0) return 'taobao';
+    if (host.indexOf('tmall.com') >= 0) return 'tmall';
     return '';
   }
 
   function platformLabel(sourcePlatform) {
-    return sourcePlatform || '货源';
+    var labels = {
+      '1688': '1688',
+      pdd: 'PDD',
+      taobao: '淘宝',
+      tmall: '天猫'
+    };
+    return labels[String(sourcePlatform || '').toLowerCase()] || sourcePlatform || '货源';
   }
 
   function buildProductSignature(product) {

@@ -48,6 +48,8 @@ const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
 const SS_ERP_SOURCE_QUOTES_KEY = 'ss-erp:source-quotes';
 const SS_ERP_SOURCE_QUOTE_PENDING_KEY = 'ss-erp:source-quote-pending';
 const SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY = 'ss-erp:source-workflow:last-handoff:v1';
+const SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY = 'ss-erp:source-workflow:handoffs:v2';
+const SS_ERP_SOURCE_WORKFLOW_HANDOFF_LIMIT = 20;
 const SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE = 'ss-erp:open-source-workflow-handoff';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
@@ -216,6 +218,12 @@ try {
 } catch (error) {
   console.warn('[SS ERP] logistics distribution modules failed to load', error);
 }
+try { importScripts('../shared/erp-adapter/source-workflow-device-session.js'); } catch (error) {
+  console.warn('[SS ERP] source workflow device session module failed to load', error);
+}
+try { importScripts('../shared/erp-adapter/listing-workflow-client.js'); } catch (error) {
+  console.warn('[SS ERP] listing workflow client module failed to load', error);
+}
 
 try { importScripts('../shared/logistics-rules/manual-fallback-persistence.js'); } catch (error) {
   console.warn('[SS ERP] logistics manual fallback module failed to load', error);
@@ -245,6 +253,7 @@ let logisticsCaptureMessageHandler = null;
 let logisticsBindingProbeRuntime = null;
 let logisticsBindingProbeMessageHandler = null;
 let sourceCaptureSubmitter = null;
+let sourceListingWorkflowClient = null;
 const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
@@ -298,12 +307,49 @@ function getSourceCaptureSubmitter() {
   return sourceCaptureSubmitter;
 }
 
+function getSourceListingWorkflowClient() {
+  if (sourceListingWorkflowClient) return sourceListingWorkflowClient;
+  const sessionApi = globalThis.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION;
+  const clientApi = globalThis.SS_ERP_LISTING_WORKFLOW_CLIENT;
+  if (!sessionApi || typeof sessionApi.createTransport !== 'function'
+    || !clientApi || typeof clientApi.createClient !== 'function') {
+    throw new Error('来源商品扩展工作台模块不可用');
+  }
+  sourceListingWorkflowClient = clientApi.createClient({
+    transport: sessionApi.createTransport({
+      credentials: getLogisticsDeviceCredentials(),
+      fetchImpl: globalThis.fetch.bind(globalThis),
+    }),
+  });
+  return sourceListingWorkflowClient;
+}
+
 function sourceWorkflowHandoffText(value, maxLength) {
   const text = String(value == null ? '' : value).normalize('NFKC').trim();
   return text && text.length <= maxLength ? text : '';
 }
 
+function sourceWorkflowPlatform(value) {
+  const platform = sourceWorkflowHandoffText(value, 20).toLowerCase();
+  return ['1688', 'pdd', 'taobao', 'tmall'].includes(platform) ? platform : '';
+}
+
+function sourceWorkflowHandoffIdentity(platform, sourceProductId) {
+  return encodeURIComponent(platform) + ':' + encodeURIComponent(sourceProductId);
+}
+
 function buildSourceWorkflowHandoffPath(value) {
+  const params = new URLSearchParams();
+  params.set('supplyGoodsId', value.supplyGoodsId);
+  params.set('snapshotId', value.snapshotId);
+  params.set('snapshotVersion', String(value.snapshotVersion));
+  if (value.sourceProductId) params.set('sourceProductId', value.sourceProductId);
+  params.set('platform', value.platform);
+  params.set('section', 'listing');
+  return '/collect/source?' + params.toString();
+}
+
+function buildLegacySourceWorkflowHandoffPath(value) {
   const params = new URLSearchParams();
   params.set('supplyGoodsId', value.supplyGoodsId);
   params.set('snapshotId', value.snapshotId);
@@ -313,42 +359,116 @@ function buildSourceWorkflowHandoffPath(value) {
   return '/collect/source?' + params.toString();
 }
 
-function createSourceWorkflowHandoff(result, sourceProductIdValue) {
+function createSourceWorkflowHandoff(result, sourceProductIdValue, platformValue) {
   const source = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
   const supplyGoodsId = sourceWorkflowHandoffText(source.supplyGoodsId, 200);
   const snapshotId = sourceWorkflowHandoffText(source.snapshotId, 200);
   const snapshotVersion = Number(source.snapshotVersion);
   const sourceProductId = sourceWorkflowHandoffText(sourceProductIdValue, 200);
-  if (!supplyGoodsId || !snapshotId || !Number.isSafeInteger(snapshotVersion) || snapshotVersion < 1) {
+  const platform = sourceWorkflowPlatform(platformValue || source.platform);
+  if (!supplyGoodsId || !snapshotId || !sourceProductId || !platform
+    || !Number.isSafeInteger(snapshotVersion) || snapshotVersion < 1) {
     return null;
   }
   const identity = {
     supplyGoodsId,
     snapshotId,
     snapshotVersion,
-    ...(sourceProductId ? { sourceProductId } : {}),
+    sourceProductId,
+    platform,
   };
   return { ...identity, path: buildSourceWorkflowHandoffPath(identity) };
 }
 
 function validateSourceWorkflowHandoff(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const allowedKeys = new Set(['supplyGoodsId', 'snapshotId', 'snapshotVersion', 'sourceProductId', 'path']);
+  const allowedKeys = new Set(['supplyGoodsId', 'snapshotId', 'snapshotVersion', 'sourceProductId', 'platform', 'path']);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
-  const normalized = createSourceWorkflowHandoff(value, value.sourceProductId);
+  const normalized = createSourceWorkflowHandoff(value, value.sourceProductId, value.platform);
   if (!normalized || sourceWorkflowHandoffText(value.path, 2048) !== normalized.path) return null;
   return normalized;
 }
 
-async function persistSourceWorkflowHandoff(value) {
-  const handoff = validateSourceWorkflowHandoff(value);
-  if (!handoff) return null;
-  await chrome.storage.local.set({ [SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]: handoff });
-  return handoff;
+function migrateLegacySourceWorkflowHandoff(value, platformValue, sourceProductIdValue) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const allowedKeys = new Set(['supplyGoodsId', 'snapshotId', 'snapshotVersion', 'sourceProductId', 'path']);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const platform = sourceWorkflowPlatform(platformValue);
+  const sourceProductId = sourceWorkflowHandoffText(sourceProductIdValue, 200);
+  if (platform !== '1688' || !sourceProductId
+    || sourceWorkflowHandoffText(value.sourceProductId, 200) !== sourceProductId) return null;
+  const migrated = createSourceWorkflowHandoff(value, sourceProductId, platform);
+  if (!migrated
+    || sourceWorkflowHandoffText(value.path, 2048) !== buildLegacySourceWorkflowHandoffPath(migrated)) {
+    return null;
+  }
+  return migrated;
 }
 
-async function readPersistedSourceWorkflowHandoff() {
-  const result = await chrome.storage.local.get([SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]);
+let sourceWorkflowHandoffWriteQueue = Promise.resolve();
+
+function enqueueSourceWorkflowHandoffWrite(operation) {
+  const next = sourceWorkflowHandoffWriteQueue.then(operation, operation);
+  sourceWorkflowHandoffWriteQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function persistSourceWorkflowHandoffs(values) {
+  const handoffs = (Array.isArray(values) ? values : [values])
+    .map((value) => validateSourceWorkflowHandoff(value))
+    .filter(Boolean);
+  if (!handoffs.length) return [];
+  return enqueueSourceWorkflowHandoffWrite(async () => {
+    const stored = await chrome.storage.local.get([SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY]);
+    const raw = stored[SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY];
+    const records = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
+    for (const handoff of handoffs) {
+      const identity = sourceWorkflowHandoffIdentity(handoff.platform, handoff.sourceProductId);
+      delete records[identity];
+      records[identity] = handoff;
+    }
+    const boundedRecords = Object.fromEntries(
+      Object.entries(records)
+        .filter(([, candidate]) => Boolean(validateSourceWorkflowHandoff(candidate)))
+        .slice(-SS_ERP_SOURCE_WORKFLOW_HANDOFF_LIMIT),
+    );
+    const latestHandoff = handoffs[handoffs.length - 1];
+    await chrome.storage.local.set({
+      [SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]: latestHandoff,
+      [SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY]: boundedRecords,
+    });
+    return handoffs;
+  });
+}
+
+async function persistSourceWorkflowHandoff(value) {
+  const handoffs = await persistSourceWorkflowHandoffs([value]);
+  return handoffs.length ? handoffs[0] : null;
+}
+
+async function readPersistedSourceWorkflowHandoff(platformValue, sourceProductIdValue) {
+  const platform = sourceWorkflowPlatform(platformValue);
+  const sourceProductId = sourceWorkflowHandoffText(sourceProductIdValue, 200);
+  const result = await chrome.storage.local.get([
+    SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY,
+    SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY,
+  ]);
+  if (platform && sourceProductId) {
+    const records = result[SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY];
+    const candidate = records && typeof records === 'object' && !Array.isArray(records)
+      ? records[sourceWorkflowHandoffIdentity(platform, sourceProductId)]
+      : null;
+    const current = validateSourceWorkflowHandoff(candidate);
+    if (current) return current;
+    const migrated = migrateLegacySourceWorkflowHandoff(
+      result[SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY],
+      platform,
+      sourceProductId,
+    );
+    if (!migrated) return null;
+    await persistSourceWorkflowHandoff(migrated);
+    return migrated;
+  }
   return validateSourceWorkflowHandoff(result[SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]);
 }
 
@@ -2042,7 +2162,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const [config, handoff] = await Promise.all([
         self.SS_ERP_CONFIG.getConfig(),
-        readPersistedSourceWorkflowHandoff(),
+        readPersistedSourceWorkflowHandoff(message.platform, message.sourceProductId),
       ]);
       if (!handoff) throw new Error('没有可继续的 ERP 来源商品记录');
       const expectedSnapshotId = sourceWorkflowHandoffText(message.snapshotId, 200);
@@ -2052,6 +2172,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const url = buildConfiguredSourceWorkflowUrl(config && config.baseUrl, handoff);
       await chrome.tabs.create({ url, active: true });
       return { url, handoff };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-listing-workbench-status') {
+    Promise.resolve().then(async () => {
+      const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+      const platform = sourceWorkflowPlatform(message.platform);
+      const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      if (!handoff || !sourceProductId || !platform
+        || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+        return { state: 'unavailable', reason: 'source_handoff_mismatch' };
+      }
+      const result = await getSourceListingWorkflowClient().getStatus({
+        snapshotId: handoff.snapshotId,
+        supplyGoodsId: handoff.supplyGoodsId,
+      });
+      return { handoff, result };
     }).then((result) => {
       sendResponse({ ok: true, ...result });
     }).catch((error) => {
@@ -2603,11 +2745,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const sourceProductId = sourceItem.captureV2 && sourceItem.captureV2.sourceIdentity
             ? sourceItem.captureV2.sourceIdentity.productId
             : null;
-          const handoff = createSourceWorkflowHandoff(outcome.data, sourceProductId);
+          const handoff = createSourceWorkflowHandoff(
+            outcome.data,
+            sourceProductId,
+            sourceItem.captureV2 && sourceItem.captureV2.platform,
+          );
           if (handoff) handoffs.push(handoff);
         }
         if (submitted.length === nativeCaptureItems.length) {
-          const handoff = handoffs.length ? await persistSourceWorkflowHandoff(handoffs[handoffs.length - 1]) : null;
+          const persistedHandoffs = await persistSourceWorkflowHandoffs(handoffs);
+          const handoff = persistedHandoffs.length ? persistedHandoffs[persistedHandoffs.length - 1] : null;
           notifyErpCollectCompleted(submitted.length, 0);
           sendResponse({
             ok: true,

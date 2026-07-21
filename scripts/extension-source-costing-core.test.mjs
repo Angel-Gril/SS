@@ -19,11 +19,15 @@ function loadCore(extraContext = {}) {
 test('source costing core detects supported source platforms', () => {
   const core = loadCore();
   assert.equal(core.detectSourcePlatform('https://detail.1688.com/offer/123.html'), '1688');
-  assert.equal(core.detectSourcePlatform('https://mobile.yangkeduo.com/goods.html'), 'PDD');
-  assert.equal(core.detectSourcePlatform('https://pifa.pinduoduo.com/goods/detail'), 'PDD');
-  assert.equal(core.detectSourcePlatform('https://item.taobao.com/item.htm?id=99887766'), '淘宝');
-  assert.equal(core.detectSourcePlatform('https://detail.tmall.com/item.htm?id=99887766'), '天猫');
+  assert.equal(core.detectSourcePlatform('https://mobile.yangkeduo.com/goods.html'), 'pdd');
+  assert.equal(core.detectSourcePlatform('https://pifa.pinduoduo.com/goods/detail'), 'pdd');
+  assert.equal(core.detectSourcePlatform('https://item.taobao.com/item.htm?id=99887766'), 'taobao');
+  assert.equal(core.detectSourcePlatform('https://detail.tmall.com/item.htm?id=99887766'), 'tmall');
   assert.equal(core.detectSourcePlatform('https://example.com/product/1'), '');
+  assert.equal(core.platformLabel('1688'), '1688');
+  assert.equal(core.platformLabel('pdd'), 'PDD');
+  assert.equal(core.platformLabel('taobao'), '淘宝');
+  assert.equal(core.platformLabel('tmall'), '天猫');
 });
 
 test('source costing core builds stable SKU-sensitive product signatures', () => {

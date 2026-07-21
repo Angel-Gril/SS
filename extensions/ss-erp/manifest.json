@@ -167,9 +167,11 @@
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
         "shared/source-costing/panel-core.js",
+        "content/source-listing-workbench.js",
         "content/source-costing-panel.js"
       ],
       "css": [
+        "content/source-listing-workbench.css",
         "content/source-costing-panel.css"
       ],
       "run_at": "document_idle"

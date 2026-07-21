@@ -7,6 +7,7 @@ import { registerWorker } from '../lib/worker-registry.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { getStorageBackend } from '../services/image-storage.js';
 import { createDashScopeWanxProvider, createOpenAiImagesProvider } from '../services/ai-image-providers.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { AiImageJobError, createDisabledAiImageProvider, createFakeAiImageProvider, runAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
 
 const QUEUE_NAME = 'ai-image-generation';
@@ -45,6 +46,10 @@ export function resolveAiImageProvider(
     return createFakeAiImageProvider({ images: [{ buffer: fakePng, mimeType: 'image/png' }], actualCostCents: 0 });
   }
   if (provider !== config.provider || !config.apiKey || !config.model) return createDisabledAiImageProvider();
+  const capability = resolveAiImageProviderCapability(provider, config.model);
+  if (capability?.evidenceLevel !== 'sandbox-verified' || config.costPerImageCents <= 0) {
+    return createDisabledAiImageProvider();
+  }
   const options = { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, costPerImageCents: config.costPerImageCents, onProviderJobCreated };
   if (provider === 'dashscope-wanx') return createDashScopeWanxProvider(options);
   if (provider === 'openai-images') return createOpenAiImagesProvider(options);

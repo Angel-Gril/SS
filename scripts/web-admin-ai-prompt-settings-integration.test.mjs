@@ -13,11 +13,11 @@ assert.match(
 assert.match(source, /<AiPromptTemplateEditor/);
 assert.doesNotMatch(source, /cfg=\{configs\.ai_image_prompt\}/);
 
-assert.match(source, /真实生图任务已启用/);
+assert.match(source, /真实 Provider/);
 assert.doesNotMatch(source, /真实供应商调用尚未启用/);
 assert.doesNotMatch(source, /生图\/改图当前为预留配置/);
 
-assert.match(source, /测试生图连接/);
+assert.match(source, /检查生图配置/);
 assert.match(source, /测试当前表单配置/);
 assert.match(source, /provider: imageProvider/);
 assert.match(source, /baseUrl: editing\.ai_image_base_url \|\| ''/);

@@ -24,6 +24,20 @@ const steps = [
     args: ['scripts/ai-media-provider-contract.test.mjs'],
   },
   {
+    name: 'single-submit AI image sandbox contract',
+    command: 'node',
+    args: ['scripts/ai-image-single-submit-contract.test.mjs'],
+  },
+  {
+    name: 'single-submit AI image sandbox typecheck',
+    command: 'pnpm',
+    args: [
+      '--filter', 'server', 'exec', 'tsc', '--noEmit', '--target', 'ES2022',
+      '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
+      '--skipLibCheck', 'scripts/ai-image-provider-single-submit.ts',
+    ],
+  },
+  {
     name: 'AI media evaluation policy contract',
     command: 'node',
     args: ['scripts/ai-media-evaluation-contract.test.mjs'],
@@ -92,6 +106,11 @@ const steps = [
     name: 'extension source network lifecycle contract',
     command: 'node',
     args: ['scripts/extension-source-network-capture.test.mjs'],
+  },
+  {
+    name: 'extension source listing workbench contract',
+    command: 'node',
+    args: ['scripts/extension-source-listing-workbench.test.mjs'],
   },
   {
     name: 'server tests',

@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import ipaddr from 'ipaddr.js';
 import { AiImageJobError, type AiImageProvider, type AiImageProviderRequest, type AiImageProviderResult } from './ai-image-jobs.js';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -45,8 +46,29 @@ function dashScopeApiBase(baseUrl: string) {
   return /\/api\/v1$/i.test(base) ? base : `${base}/api/v1`;
 }
 
-function openAiApiBase(baseUrl: string) {
-  return withoutTrailingSlash(baseUrl || 'https://api.openai.com/v1');
+export function normalizeOpenAiImagesApiBase(baseUrl: string) {
+  const raw = withoutTrailingSlash(baseUrl || 'https://api.openai.com/v1');
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new AiImageJobError('INVALID_PROVIDER_URL', 'OpenAI-compatible API base URL is invalid');
+  }
+  if (parsed.search || parsed.hash || parsed.username || parsed.password) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_URL',
+      'OpenAI-compatible API base URL must not contain credentials, query, or fragment',
+    );
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  if (/\/images\/(?:generations|edits|tasks)(?:\/|$)/i.test(path)) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_URL',
+      'OpenAI-compatible API base URL must not include an image endpoint path',
+    );
+  }
+  parsed.pathname = /\/v1$/i.test(path) ? path : `${path}/v1`;
+  return withoutTrailingSlash(parsed.toString());
 }
 
 function delay(ms: number) {
@@ -178,15 +200,15 @@ async function recordProviderAcceptance(
 }
 
 function isPrivateIp(address: string): boolean {
-  const normalized = address.replace(/^\[|\]$/g, '').toLowerCase();
-  if (normalized === '::1' || normalized === '::') return true;
-  if (normalized.startsWith('fe80:') || normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-  const mapped = normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized;
-  if (isIP(mapped) !== 4) return false;
-  const [a = 0, b = 0] = mapped.split('.').map(Number);
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || a >= 224;
+  try {
+    let parsed = ipaddr.parse(address.replace(/^\[|\]$/g, ''));
+    if (parsed.kind() === 'ipv6' && (parsed as ipaddr.IPv6).isIPv4MappedAddress()) {
+      parsed = (parsed as ipaddr.IPv6).toIPv4Address();
+    }
+    return parsed.range() !== 'unicast';
+  } catch {
+    return true;
+  }
 }
 
 function validateProviderUrl(rawUrl: string): string {
@@ -415,7 +437,7 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
 export function createOpenAiImagesProvider(options: ProviderOptions): AiImageProvider {
   const fetcher = options.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
-  const apiBase = openAiApiBase(options.baseUrl);
+  const apiBase = normalizeOpenAiImagesApiBase(options.baseUrl);
   return {
     name: 'openai-images',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
@@ -445,6 +467,12 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
       }
       const data = Array.isArray(body?.data) ? body.data : [];
       try {
+        if (data.length !== request.count) {
+          throw new AiImageJobError(
+            'INVALID_PROVIDER_RESULT',
+            `OpenAI Images returned ${data.length} images for a ${request.count}-image request`,
+          );
+        }
         const images = await Promise.all(data.map(async (item: any, index: number) => {
           if (item?.b64_json) {
             const buffer = Buffer.from(String(item.b64_json), 'base64');
@@ -642,9 +670,15 @@ export async function testAiImageProviderConnection(config: AiImageConnectionCon
   const timeoutMs = Math.max(1, config.timeoutMs || 10_000);
   let url: string;
   let label: string;
-  if (config.provider === 'openai-images') {
-    label = 'OpenAI Images';
-    url = `${openAiApiBase(config.baseUrl)}/models/${encodeURIComponent(config.model)}`;
+  if (config.provider === 'openai-images' || config.provider === 'custom') {
+    if (config.provider === 'custom' && !config.baseUrl.trim()) {
+      throw new AiImageJobError(
+        'INVALID_PROVIDER_CONFIG',
+        'Custom OpenAI-compatible image provider requires an explicit base URL',
+      );
+    }
+    label = config.provider === 'custom' ? 'OpenAI-compatible Images' : 'OpenAI Images';
+    url = `${normalizeOpenAiImagesApiBase(config.baseUrl)}/models/${encodeURIComponent(config.model)}`;
   } else if (config.provider === 'dashscope-wanx') {
     validateProviderUrl(dashScopeApiBase(config.baseUrl));
     if (!config.apiKey.trim() || !config.model.trim()) {

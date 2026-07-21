@@ -60,22 +60,30 @@ for (const rows of [
   [{ key: 'ai_media_workflow_v2_rollout_policy', value: '{"revision":0,"tenantIds":[]}' }],
   [
     { key: 'feature_ai_media_workflow_v2', value: 'false' },
+    { key: 'feature_ai_media_image_to_image', value: 'false' },
     { key: 'feature_ai_media_suite', value: 'false' },
     { key: 'feature_ai_media_full_edit', value: 'false' },
     { key: 'feature_ai_media_inpaint', value: 'false' },
     { key: 'feature_source_listing_web_media', value: 'false' },
+    { key: 'feature_source_listing_extension_workbench', value: 'false' },
+    { key: 'ai_image_generation_enabled', value: 'true' },
+    { key: 'ai_image_provider', value: 'disabled' },
+    { key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'disabled' },
     { key: 'ai_media_workflow_v2_rollout_policy', value: '{"revision":8,"tenantIds":[]}' },
   ],
 ]) {
   const result = run(rows);
   assert.equal(result.status, 0, `safe AI Media rollout should pass: ${result.stderr}`);
   assert.match(result.stdout, /PASS AI Media rollout is dark/u);
-  assert.match(result.stdout, /master=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); policy=/u);
+  assert.match(result.stdout, /master=(?:false|absent); imageToImage=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); extensionWorkbench=(?:false|absent); legacyGeneration=.+; imageTranslation=.+; policy=/u);
 }
 
 for (const rows of [
   [{ key: 'feature_ai_media_workflow_v2', value: 'true' }],
   [{ key: 'feature_ai_media_workflow_v2', value: 'invalid' }],
+  [{ key: 'feature_ai_media_image_to_image', value: 'true' }],
+  [{ key: 'feature_ai_media_image_to_image', value: 'invalid' }],
   [{ key: 'feature_ai_media_suite', value: 'true' }],
   [{ key: 'feature_ai_media_suite', value: 'invalid' }],
   [{ key: 'feature_ai_media_full_edit', value: 'true' }],
@@ -84,6 +92,26 @@ for (const rows of [
   [{ key: 'feature_ai_media_inpaint', value: 'invalid' }],
   [{ key: 'feature_source_listing_web_media', value: 'true' }],
   [{ key: 'feature_source_listing_web_media', value: 'invalid' }],
+  [{ key: 'feature_source_listing_extension_workbench', value: 'true' }],
+  [{ key: 'feature_source_listing_extension_workbench', value: 'invalid' }],
+  [
+    { key: 'ai_image_generation_enabled', value: 'true' },
+    { key: 'ai_image_provider', value: 'custom' },
+  ],
+  [
+    { key: 'ai_image_generation_enabled', value: 'true' },
+    { key: 'ai_image_provider', value: 'openai-images' },
+  ],
+  [
+    { key: 'ai_image_generation_enabled', value: 'true' },
+    { key: 'ai_image_provider', value: 'dashscope-wanx' },
+  ],
+  [{ key: 'ai_image_generation_enabled', value: 'invalid' }],
+  [
+    { key: 'feature_image_translate', value: 'true' },
+    { key: 'ai_image_translation_provider', value: 'dashscope-qwen-mt-image' },
+  ],
+  [{ key: 'feature_image_translate', value: 'invalid' }],
   [{ key: 'ai_media_workflow_v2_rollout_policy', value: '{}' }],
   [{ key: 'ai_media_workflow_v2_rollout_policy', value: '{bad json' }],
   [{ key: 'ai_media_workflow_v2_rollout_policy', value: '{"revision":0,"tenantIds":["owner-1"]}' }],
@@ -286,10 +314,16 @@ assert.doesNotMatch(
 
 for (const key of [
   'feature_ai_media_workflow_v2',
+  'feature_ai_media_image_to_image',
   'feature_ai_media_suite',
   'feature_ai_media_full_edit',
   'feature_ai_media_inpaint',
   'feature_source_listing_web_media',
+  'feature_source_listing_extension_workbench',
+  'ai_image_generation_enabled',
+  'ai_image_provider',
+  'feature_image_translate',
+  'ai_image_translation_provider',
   'ai_media_workflow_v2_rollout_policy',
 ]) {
   assert.match(

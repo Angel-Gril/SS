@@ -206,7 +206,12 @@ async function build(
     applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
     applyListingDraftApplication, listListingDraftApplications, rollbackListingDraftApplication,
     createEditMask: createEditMask as any,
-    getEditSettings: async () => ({ fullEditEnabled, inpaintEnabled, dailyLimit: editDailyLimit }),
+    getEditSettings: async () => ({
+      imageToImageEnabled: true,
+      fullEditEnabled,
+      inpaintEnabled,
+      dailyLimit: editDailyLimit,
+    }),
     checkEditMaskRequestRate: async () => editMaskRateAllowed
       ? ({ allowed: true })
       : ({ allowed: false, reason: 'Edit mask request rate exceeded' }),
@@ -924,15 +929,36 @@ describe('AI media workflow routes', () => {
   });
 
   it('keeps the fake image-to-image lifecycle unavailable in production', () => {
-    expect(resolveAiImageToImageReadiness({ workflowEnabled: true, production: true })).toMatchObject({
+    expect(resolveAiImageToImageReadiness({
+      enabled: true, workflowEnabled: true, production: true,
+    })).toMatchObject({
       enabled: true,
       ready: false,
       reasonCode: 'PROVIDER_NOT_READY',
       testOnly: true,
     });
-    expect(resolveAiImageToImageReadiness({ workflowEnabled: true, production: false })).toMatchObject({
+    expect(resolveAiImageToImageReadiness({
+      enabled: true, workflowEnabled: true, production: false,
+    })).toMatchObject({
       ready: true,
       testOnly: true,
+    });
+  });
+
+  it('keeps image-to-image dark behind its independent operation switch', () => {
+    expect(resolveAiImageToImageReadiness({
+      enabled: false, workflowEnabled: true, production: false,
+    })).toMatchObject({
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+    });
+    expect(resolveAiImageToImageReadiness({
+      workflowEnabled: true, production: false,
+    })).toMatchObject({
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
     });
   });
 

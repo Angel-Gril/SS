@@ -129,17 +129,21 @@ describe('AI image job routes', () => {
       targetUpdatedAt: '2026-07-17T00:00:00.000Z',
     }));
   });
-  it('accepts supported real providers and rejects unsupported custom adapters', async () => {
+  it('keeps every paid legacy provider dark until sandbox evidence and cost are accepted', async () => {
     const { app: dashscope, enqueue } = await buildApp('owner-1', 'dashscope-wanx');
-    const accepted = await dashscope.inject({
+    const rejectedDashscope = await dashscope.inject({
       method: 'POST', url: '/jobs',
       payload: { prompt: 'photo', count: 1, width: 1024, height: 1024, idempotencyKey: 'idem-real-1' },
     });
-    expect(accepted.statusCode).toBe(202);
-    expect(enqueue).toHaveBeenCalledWith('job-1');
+    expect(rejectedDashscope.statusCode).toBe(503);
+    expect(enqueue).not.toHaveBeenCalled();
 
     const { app: custom } = await buildApp('owner-1', 'custom');
     const rejected = await custom.inject({ method: 'POST', url: '/jobs', payload: { prompt: 'photo' } });
     expect(rejected.statusCode).toBe(503);
+
+    const { app: openai } = await buildApp('owner-1', 'openai-images');
+    const rejectedAlias = await openai.inject({ method: 'POST', url: '/jobs', payload: { prompt: 'photo' } });
+    expect(rejectedAlias.statusCode).toBe(503);
   });
 });

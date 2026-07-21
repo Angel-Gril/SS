@@ -22,7 +22,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:generate": "prisma generate",
     "smoke:live": "node scripts/live-smoke.mjs",
-    "smoke:remote": "node scripts/remote-smoke.mjs"
+    "smoke:remote": "node scripts/remote-smoke.mjs",
+    "sandbox:ai-image:single": "tsx scripts/ai-image-provider-single-submit.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",

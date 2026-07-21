@@ -31,6 +31,7 @@ export const SystemConfigSchema = {
   source_ozon_publisher_extension_adapter_stage: sourceOzonPublisherEntrypointStage.default('off'),
   feature_source_network_capture: z.boolean().default(false),
   feature_ai_media_workflow_v2: z.boolean().default(false),
+  feature_ai_media_image_to_image: z.boolean().default(false),
   feature_ai_media_suite: z.boolean().default(false),
   feature_ai_media_full_edit: z.boolean().default(false),
   feature_ai_media_inpaint: z.boolean().default(false),
@@ -335,6 +336,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'feature',
     description: 'AI 媒体工作流总开关；仅 rollout policy 明确允许的租户可新建任务',
   },
+  feature_ai_media_image_to_image: {
+    label: 'AI 以图生图',
+    group: 'feature',
+    description: '启用单图参考生成；默认关闭，且仍受 AI 媒体总开关、租户策略和 Provider 能力门禁约束',
+  },
   feature_ai_media_suite: {
     label: 'AI 商品套图生成',
     group: 'feature',
@@ -447,7 +453,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: 'AI 文生图',
     group: 'ai',
     description:
-      '允许普通用户创建真实文生图任务，受 Provider 配置、每日额度和全局预算限制',
+      '允许进入文生图任务前置检查；真实 Provider 还必须通过精确能力、成本和配置冻结门禁',
   },
   ai_category_translation_prompt: {
     label: '类目翻译提示词',
@@ -467,12 +473,12 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_provider: {
     label: '生图服务来源',
     group: 'ai',
-    description: 'disabled 表示关闭；当前已接入 DashScope Wanx 与 OpenAI Images 文生图接口',
+    description: 'disabled 表示关闭；适配器可做连接与沙箱验证，真实任务仍受 Provider 验收门禁',
   },
   ai_image_base_url: {
     label: '生图 Base URL',
     group: 'ai',
-    description: '生图服务接口地址；不同供应商可填自定义网关',
+    description: '生图服务接口地址；自定义网关仅用于连接和本地单次沙箱验证，不能直接进入正式队列',
   },
   ai_image_api_key: {
     label: '生图 API Key',
@@ -484,7 +490,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_model: {
     label: '生图模型',
     group: 'ai',
-    description: '例如 minimax image 模型、自定义网关模型 ID',
+    description: 'Provider 模型 ID；自定义模型必须按精确端点、模型、价格和配置版本单独验收',
   },
   ai_image_prompt: {
     label: '旧版生图提示词（兼容）',

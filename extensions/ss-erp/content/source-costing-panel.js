@@ -33,6 +33,13 @@
     loaded: false,
     opened: false,
     sourceWorkflowHandoff: null,
+    sourceWorkbenchStatus: null,
+    sourceWorkbenchProductId: '',
+    sourceWorkbenchLastRefreshAt: 0,
+    sourceWorkbenchLoadingProductId: '',
+    sourceWorkbenchRequestSeq: 0,
+    productRequestSeq: 0,
+    sourcePageKey: '',
     openingSourceWorkflow: false,
     refreshTimer: null,
     lastCostSignature: '',
@@ -93,6 +100,7 @@
       '<div class="ss-erp-source-body">',
       '  <section class="ss-erp-source-section" data-role="ozon-card"></section>',
       '  <section class="ss-erp-source-section" data-role="source-card"></section>',
+      '  <section class="ss-erp-source-section" data-role="source-listing-workbench" hidden></section>',
       '  <div class="ss-erp-source-cost"><span>采购成本</span><strong data-role="cost">--</strong></div>',
       '  <section class="ss-erp-source-section" data-role="input-card"></section>',
       '  <section class="ss-erp-source-section" data-role="result-card"></section>',
@@ -207,7 +215,7 @@
       if (!drag) return;
       drag = null;
       panel.classList.remove('dragging');
-      try { header.releasePointerCapture(event.pointerId); } catch (_error) {}
+      try { header.releasePointerCapture(event.pointerId); } catch {}
       persistPanelPosition(panel);
     });
     header.addEventListener('pointercancel', function () {
@@ -239,6 +247,41 @@
     });
   }
 
+  function currentSourcePageKey() {
+    try {
+      var url = new URL(location.href);
+      url.hash = '';
+      return url.href;
+    } catch {
+      return String(location.href || '');
+    }
+  }
+
+  function invalidateSourceWorkflowState() {
+    state.sourceWorkflowHandoff = null;
+    state.sourceWorkbenchStatus = null;
+    state.sourceWorkbenchProductId = '';
+    state.sourceWorkbenchLastRefreshAt = 0;
+    state.sourceWorkbenchLoadingProductId = '';
+    state.sourceWorkbenchRequestSeq += 1;
+  }
+
+  function resetSourceProductForPage(pageKey) {
+    invalidateSourceWorkflowState();
+    state.sourcePageKey = pageKey;
+    state.product = null;
+    state.lastProductSignature = '';
+    state.lastCostSignature = '';
+    state.initializedInputs = false;
+    state.result = null;
+    state.unavailable = [];
+    state.inputs.cost = 0;
+    state.inputs.weightG = 0;
+    state.inputs.lenCm = 0;
+    state.inputs.widCm = 0;
+    state.inputs.hgtCm = 0;
+  }
+
   async function refreshAll() {
     setStatus('读取 Ozon 关联和当前 ' + platformLabel() + ' 成本...', '');
     await Promise.all([refreshContext(), refreshCalculatorStatus(), refreshProductOnly()]);
@@ -251,7 +294,7 @@
     try {
       var response = await sendRuntimeMessage({ type: 'ss-erp:source-candidate-context-get' });
       state.context = response && response.ok ? response.context : null;
-    } catch (_error) {
+    } catch {
       state.context = null;
     }
   }
@@ -260,37 +303,114 @@
     try {
       var response = await sendRuntimeMessage({ type: 'ozon-calculator:status' });
       state.calculatorStatus = response && response.ok ? response : null;
-    } catch (_error) {
+    } catch {
       state.calculatorStatus = null;
     }
   }
 
   async function refreshProductOnly(options) {
     options = options || {};
+    var requestPageKey = currentSourcePageKey();
+    if (state.sourcePageKey && requestPageKey !== state.sourcePageKey) {
+      resetSourceProductForPage(requestPageKey);
+      renderContent();
+    } else if (!state.sourcePageKey) {
+      state.sourcePageKey = requestPageKey;
+    }
     if ((!options.force && state.busy) || state.collecting) return;
+    var requestSeq = ++state.productRequestSeq;
     state.collecting = true;
     try {
       var response = await collectCurrentSourceProduct();
+      if (requestSeq !== state.productRequestSeq || requestPageKey !== currentSourcePageKey()) return;
       if (response && response.ok) {
         var nextProduct = response.data || null;
         var nextSignature = buildProductSignature(nextProduct);
-        var changed = Boolean(nextSignature && nextSignature !== state.lastProductSignature);
-        if (changed) state.sourceWorkflowHandoff = null;
-        state.product = response.data || null;
-        if (nextSignature) state.lastProductSignature = nextSignature;
+        var changed = nextSignature !== state.lastProductSignature;
+        if (changed) {
+          invalidateSourceWorkflowState();
+        }
+        state.product = nextProduct;
+        state.lastProductSignature = nextSignature;
         hydrateInputs();
         renderContent();
+        void refreshSourceWorkbenchStatus({
+          force: Boolean(changed || options.force),
+          maxAgeMs: 5000,
+        });
         if (changed && !options.skipAuto) tryAutoCosting();
         return;
       }
+      resetSourceProductForPage(requestPageKey);
+      renderContent();
       setStatus((response && response.error) || '读取当前 ' + platformLabel() + ' 商品失败', 'fail');
     } finally {
-      state.collecting = false;
+      if (requestSeq === state.productRequestSeq) {
+        state.collecting = false;
+        if (!state.product) renderContent();
+      }
     }
   }
 
   function buildProductSignature(product) {
     return SourceCosting.buildProductSignature(product);
+  }
+
+  function currentSourceProductId() {
+    var product = state.product || {};
+    return String(
+      product.captureV2 && product.captureV2.sourceIdentity && product.captureV2.sourceIdentity.productId
+      || product.sourceProductId
+      || product.productId
+      || '',
+    ).normalize('NFKC').trim();
+  }
+
+  async function refreshSourceWorkbenchStatus(options) {
+    options = options || {};
+    var sourceProductId = currentSourceProductId();
+    if (!sourceProductId || sourceProductId.length > 200) {
+      state.sourceWorkbenchStatus = null;
+      state.sourceWorkbenchProductId = '';
+      state.sourceWorkbenchLastRefreshAt = 0;
+      state.sourceWorkbenchLoadingProductId = '';
+      state.sourceWorkbenchRequestSeq += 1;
+      renderContent();
+      return;
+    }
+    var maxAgeMs = Number.isFinite(Number(options.maxAgeMs)) ? Math.max(1000, Number(options.maxAgeMs)) : 5000;
+    if (state.sourceWorkbenchLoadingProductId === sourceProductId) return;
+    if (!options.force
+      && state.sourceWorkbenchProductId === sourceProductId
+      && Date.now() - state.sourceWorkbenchLastRefreshAt < maxAgeMs) return;
+    var requestSeq = ++state.sourceWorkbenchRequestSeq;
+    state.sourceWorkbenchProductId = sourceProductId;
+    state.sourceWorkbenchLastRefreshAt = Date.now();
+    state.sourceWorkbenchLoadingProductId = sourceProductId;
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-status',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM
+      });
+      if (requestSeq !== state.sourceWorkbenchRequestSeq
+        || currentSourceProductId() !== sourceProductId) return;
+      state.sourceWorkflowHandoff = response && response.ok && response.handoff
+        ? response.handoff
+        : null;
+      state.sourceWorkbenchStatus = response && response.ok ? response.result || null : null;
+    } catch {
+      if (requestSeq === state.sourceWorkbenchRequestSeq
+        && currentSourceProductId() === sourceProductId) {
+        state.sourceWorkflowHandoff = null;
+        state.sourceWorkbenchStatus = null;
+      }
+    } finally {
+      if (requestSeq === state.sourceWorkbenchRequestSeq) {
+        state.sourceWorkbenchLoadingProductId = '';
+      }
+    }
+    if (requestSeq === state.sourceWorkbenchRequestSeq) renderContent();
   }
 
   function renderContent() {
@@ -306,6 +426,7 @@
     var titleNode = panel.querySelector('[data-role="context-title"]');
     var ozonCard = panel.querySelector('[data-role="ozon-card"]');
     var sourceCard = panel.querySelector('[data-role="source-card"]');
+    var sourceWorkbench = panel.querySelector('[data-role="source-listing-workbench"]');
     var inputCard = panel.querySelector('[data-role="input-card"]');
     var resultCard = panel.querySelector('[data-role="result-card"]');
     var costNode = panel.querySelector('[data-role="cost"]');
@@ -337,6 +458,10 @@
       '<div class="ss-erp-source-row"><span>SKU</span><b>' + escapeHtml((product.selectedSku && (product.selectedSku.specText || product.selectedSku.name || product.selectedSku.skuId)) || product.sku || product.productId || '-') + '</b></div>',
       '<div class="ss-erp-source-muted">' + escapeHtml(product.title || document.title || '') + '</div>'
     ].join('');
+    if (window.SS_ERP_SOURCE_LISTING_WORKBENCH
+      && typeof window.SS_ERP_SOURCE_LISTING_WORKBENCH.render === 'function') {
+      window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(sourceWorkbench, state.sourceWorkbenchStatus);
+    }
 
     if (costNode) costNode.textContent = cost > 0 ? ('¥ ' + formatMoney(cost)) : '--';
     if (inputCard) inputCard.innerHTML = buildInputCardHtml();
@@ -357,6 +482,7 @@
     if (!panel) return;
     var ozonCard = panel.querySelector('[data-role="ozon-card"]');
     var sourceCard = panel.querySelector('[data-role="source-card"]');
+    var sourceWorkbench = panel.querySelector('[data-role="source-listing-workbench"]');
     var inputCard = panel.querySelector('[data-role="input-card"]');
     var resultCard = panel.querySelector('[data-role="result-card"]');
     var costNode = panel.querySelector('[data-role="cost"]');
@@ -370,6 +496,7 @@
     if (sourceCard) {
       sourceCard.innerHTML = '<div class="ss-erp-source-loading"><b>读取当前 ' + escapeHtml(platformLabel()) + ' 商品</b><span>正在提取标题、SKU、价格、运费和商品素材。</span></div>';
     }
+    if (sourceWorkbench) sourceWorkbench.hidden = true;
     if (inputCard) {
       inputCard.innerHTML = '<div class="ss-erp-source-loading compact"><b>核价输入准备中</b><span>读取完成后可调整重量、尺寸、汇率和佣金。</span></div>';
     }
@@ -572,7 +699,7 @@
       return;
     }
     state.busy = true;
-    state.sourceWorkflowHandoff = null;
+    invalidateSourceWorkflowState();
     renderContent();
     setStatus('采集当前 ' + platformLabel() + ' 货源到 ERP...', '');
     try {
@@ -582,6 +709,9 @@
       });
       if (!response || !response.ok) throw new Error(response && response.error || '写入失败');
       state.sourceWorkflowHandoff = response.handoff || null;
+      state.sourceWorkbenchProductId = '';
+      state.sourceWorkbenchLastRefreshAt = 0;
+      await refreshSourceWorkbenchStatus({ force: true });
       setStatus('已采集当前 ' + platformLabel() + ' 货源到 ERP。', 'ok');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
@@ -593,13 +723,34 @@
 
   async function openSourceWorkflow() {
     if (!state.sourceWorkflowHandoff || state.openingSourceWorkflow) return;
+    var pageKey = currentSourcePageKey();
+    if (state.sourcePageKey !== pageKey) {
+      resetSourceProductForPage(pageKey);
+      renderContent();
+      setStatus('当前货源页面已变化，请等待重新读取后再继续。', 'fail');
+      return;
+    }
+    var handoff = state.sourceWorkflowHandoff;
+    if (handoff.platform !== SOURCE_PLATFORM
+      || handoff.sourceProductId !== currentSourceProductId()) {
+      invalidateSourceWorkflowState();
+      renderContent();
+      setStatus('ERP 来源商品记录已变化，请刷新后重试。', 'fail');
+      return;
+    }
     state.openingSourceWorkflow = true;
+    state.sourceWorkflowHandoff = null;
+    state.sourceWorkbenchLoadingProductId = '';
+    state.sourceWorkbenchLastRefreshAt = 0;
+    state.sourceWorkbenchRequestSeq += 1;
     renderContent();
     setStatus('正在打开 ERP 来源商品...', '');
     try {
       var response = await sendRuntimeMessage({
         type: 'ss-erp:open-source-workflow-handoff',
-        snapshotId: state.sourceWorkflowHandoff.snapshotId
+        snapshotId: handoff.snapshotId,
+        sourceProductId: handoff.sourceProductId,
+        platform: handoff.platform
       });
       if (!response || !response.ok) throw new Error(response && response.error || '打开 ERP 失败');
       setStatus('已打开 ERP，可继续处理上架信息。', 'ok');
@@ -608,6 +759,7 @@
     } finally {
       state.openingSourceWorkflow = false;
       renderContent();
+      void refreshSourceWorkbenchStatus({ force: true });
     }
   }
 

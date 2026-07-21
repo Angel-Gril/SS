@@ -33,6 +33,7 @@
   var sourceWorkflowHandoffBtn = createSourceWorkflowHandoffButton();
   var sourceWorkflowHandoff = null;
   var primaryActionState = { type: 'loading', tab: null, productId: '' };
+  var primaryActionRevision = 0;
   var secondaryActionState = { type: 'hidden' };
   var sourceSearchPlatformSelection = DEFAULT_SOURCE_SEARCH_PLATFORMS.slice();
 
@@ -70,11 +71,16 @@
 
   function openSourceWorkflowHandoff() {
     if (!sourceWorkflowHandoff || !sourceWorkflowHandoffBtn) return;
+    var handoff = sourceWorkflowHandoff;
+    primaryActionRevision += 1;
+    setSourceWorkflowHandoff(null);
     sourceWorkflowHandoffBtn.disabled = true;
     sourceWorkflowHandoffBtn.textContent = '打开中...';
     sendRuntimeMessage({
       type: 'ss-erp:open-source-workflow-handoff',
-      snapshotId: sourceWorkflowHandoff.snapshotId
+      snapshotId: handoff.snapshotId,
+      sourceProductId: handoff.sourceProductId,
+      platform: handoff.platform
     }, function (response) {
       sourceWorkflowHandoffBtn.textContent = '打开 ERP 继续';
       sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
@@ -87,6 +93,7 @@
   }
 
   function setPrimaryAction(state) {
+    primaryActionRevision += 1;
     primaryActionState = state || { type: 'unsupported', tab: null, productId: '' };
     setText(activePageLabel, primaryActionState.label || '当前页面');
     setText(primaryActionTitle, primaryActionState.title || '当前页面暂不支持');
@@ -196,7 +203,7 @@
     var host = '';
     try {
       host = baseUrl ? new URL(baseUrl).host : '';
-    } catch (_error) {
+    } catch {
       host = baseUrl.replace(/^https?:\/\//, '');
     }
     var parts = [account, host].filter(Boolean);
@@ -244,7 +251,7 @@
   function getHost(url) {
     try {
       return new URL(url || '').hostname.toLowerCase();
-    } catch (_error) {
+    } catch {
       return '';
     }
   }
@@ -261,10 +268,66 @@
 
   function detectSourcePlatform(host) {
     if (host.indexOf('1688.com') >= 0) return '1688';
-    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'PDD';
-    if (host.indexOf('taobao.com') >= 0) return '淘宝';
-    if (host.indexOf('tmall.com') >= 0) return '天猫';
+    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'pdd';
+    if (host.indexOf('taobao.com') >= 0) return 'taobao';
+    if (host.indexOf('tmall.com') >= 0) return 'tmall';
     return '';
+  }
+
+  function normalizeSourcePlatform(value) {
+    var platform = String(value || '').normalize('NFKC').trim().toLowerCase();
+    if (platform === 'pinduoduo' || platform === '拼多多' || platform === 'pdd') return 'pdd';
+    if (platform === '淘宝' || platform === 'taobao') return 'taobao';
+    if (platform === '天猫' || platform === 'tmall') return 'tmall';
+    return platform === '1688' ? '1688' : '';
+  }
+
+  function sourcePlatformLabel(platform) {
+    return { '1688': '1688', pdd: 'PDD', taobao: '淘宝', tmall: '天猫' }[platform] || '货源';
+  }
+
+  function sourceProductIdentity(product) {
+    product = product && typeof product === 'object' ? product : {};
+    var capture = product.captureV2 && typeof product.captureV2 === 'object' ? product.captureV2 : {};
+    var sourceIdentity = capture.sourceIdentity && typeof capture.sourceIdentity === 'object'
+      ? capture.sourceIdentity
+      : {};
+    return {
+      sourceProductId: String(
+        sourceIdentity.productId || product.sourceProductId || product.productId || '',
+      ).normalize('NFKC').trim(),
+      platform: normalizeSourcePlatform(capture.platform || product.sourcePlatform || product.platform),
+    };
+  }
+
+  function isCurrentSourceAction(tab, platform, revision) {
+    return revision === primaryActionRevision
+      && primaryActionState.type === 'quoteSourcePage'
+      && primaryActionState.tab
+      && primaryActionState.tab.id === tab.id
+      && primaryActionState.tab.url === tab.url
+      && primaryActionState.sourcePlatform === platform;
+  }
+
+  function restoreSourceWorkflowHandoffForCurrentPage(tab, platform, revision) {
+    sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (collectResponse) {
+      if (!isCurrentSourceAction(tab, platform, revision)
+        || !collectResponse || !collectResponse.ok) return;
+      var identity = sourceProductIdentity(collectResponse.data);
+      if (!identity.sourceProductId || identity.sourceProductId.length > 200) return;
+      var canonicalPlatform = identity.platform || platform;
+      if (canonicalPlatform !== platform) return;
+      sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-status',
+        sourceProductId: identity.sourceProductId,
+        platform: canonicalPlatform
+      }, function (statusResponse) {
+        if (!isCurrentSourceAction(tab, platform, revision)) return;
+        setSourceWorkflowHandoff(
+          statusResponse && statusResponse.ok ? statusResponse.handoff || null : null,
+        );
+      });
+    });
   }
 
   function buildOzonCandidateContext(tab, productId, product) {
@@ -353,7 +416,8 @@
         setPrimaryAction({
           type: 'quoteSourcePage',
           tab: tab,
-          label: sourcePlatform + ' 货源页',
+          sourcePlatform: sourcePlatform,
+          label: sourcePlatformLabel(sourcePlatform) + ' 货源页',
           title: '货源核价',
           hint: host,
           buttonText: '核价',
@@ -363,6 +427,7 @@
             buttonText: '采集到 ERP'
           }
         });
+        restoreSourceWorkflowHandoffForCurrentPage(tab, sourcePlatform, primaryActionRevision);
         updateSourceContextHint(host);
         return;
       }
@@ -504,6 +569,7 @@
     } else {
       setPrimaryButtonBusy('采集中...');
     }
+    primaryActionRevision += 1;
     setSourceWorkflowHandoff(null);
     setActionStatus('', '');
     sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {

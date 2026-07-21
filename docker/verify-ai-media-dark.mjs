@@ -5,10 +5,16 @@ import { verifyAiMediaDarkPolicy } from './verify-ai-media-dark-policy.mjs';
 
 const keys = [
   'feature_ai_media_workflow_v2',
+  'feature_ai_media_image_to_image',
   'feature_ai_media_suite',
   'feature_ai_media_full_edit',
   'feature_ai_media_inpaint',
   'feature_source_listing_web_media',
+  'feature_source_listing_extension_workbench',
+  'ai_image_generation_enabled',
+  'ai_image_provider',
+  'feature_image_translate',
+  'ai_image_translation_provider',
   'ai_media_workflow_v2_rollout_policy',
 ];
 
@@ -20,7 +26,7 @@ try {
   });
   const result = verifyAiMediaDarkPolicy(rows);
   console.log(
-    `PASS AI Media rollout is dark (master=${result.master}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; policy=${result.policy})`,
+    `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
   );
 } catch (error) {
   console.error(

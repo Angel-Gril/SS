@@ -1337,6 +1337,13 @@ const AI_IMAGE_PROVIDER_PRESETS = [
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-image-1',
   },
+  {
+    value: 'custom',
+    label: 'OpenAI-compatible 自定义网关',
+    desc: '仅用于连接与沙箱验证；通过精确模型、价格和成本门禁前不进入正式任务队列',
+    baseUrl: '',
+    model: '',
+  },
 ] as const;
 
 const AI_IMAGE_TRANSLATION_PROVIDER_PRESETS = [
@@ -1601,8 +1608,8 @@ function AiSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">AI 生图基础平台</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    任务与存储基础已就绪；真实生图任务已启用。当前仅支持 text-to-image，
-                    用户入口仍受生图功能开关、额度和 Provider 配置控制。
+                    任务与存储基础已就绪。当前仅支持 text-to-image 适配器验证；真实 Provider
+                    还需通过精确能力、成本和配置冻结门禁后才能进入任务队列。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant="outline">任务队列：基础就绪</Badge>
@@ -1624,7 +1631,7 @@ function AiSettingsPanel({
                     ) : (
                       <CheckCircle2 className="h-3.5 w-3.5" />
                     )}
-                    <span className="ml-1">测试生图连接</span>
+                    <span className="ml-1">检查生图配置</span>
                   </Button>
                   <Button
                     size="sm"

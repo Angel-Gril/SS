@@ -101,6 +101,7 @@ import {
   extensionCommandGrantRoutes,
 } from './routes/extension-command-grants.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
+import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
 import { createSourceListingWorkflowService } from './services/source-listing-workflow.js';
 import { createSourceListingAiCopyService } from './services/source-listing-ai-copy.js';
@@ -145,6 +146,7 @@ import { buildSourceListingAttributeSourceContext } from './services/source-list
 import { createSourceCaptureService } from './services/source-capture.js';
 import { createPrismaSourceCaptureRepository } from './services/source-capture-prisma.js';
 import { createSourceCaptureViewService } from './services/source-capture-view.js';
+import { createExtensionSourceWorkbenchService } from './services/extension-source-workbench.js';
 import {
   createSourceOzonCategoryMappingService,
   PrismaSourceOzonCategoryMappingRepository,
@@ -837,6 +839,16 @@ if (isExtensionDeviceAuthEnabled()) {
     authenticateDevice: authenticateExtensionDevice({
       config: extensionDeviceAuthConfig,
       requiredScopes: ['capture:write'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+  await app.register(extensionSourceWorkbenchRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    service: createExtensionSourceWorkbenchService(),
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
   });

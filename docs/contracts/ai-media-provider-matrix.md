@@ -9,9 +9,10 @@ The server registry is a fail-closed operation/input guard. Text-to-image job cr
 | `fake`           | local non-production lifecycle wildcard                                      | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `IMAGE_TRANSLATE` | zero references for text-to-image; owned reference(s) for derived operations | sync                          | local test only                             |
 | `dashscope-wanx` | preset `wanx2.1-t2i-turbo`; legacy model wildcard retained for compatibility | `TEXT_TO_IMAGE`                   | no source asset                                                           | async task + URL download     | adapter characterized, not sandbox verified |
 | `openai-images`  | preset `gpt-image-1`; legacy model wildcard retained for compatibility       | `TEXT_TO_IMAGE`                   | no source asset                                                           | sync JSON (`b64_json` or URL) | adapter characterized, not sandbox verified |
+| `custom` | exact model configured per environment; wildcard is compatibility only | `TEXT_TO_IMAGE` | no source asset | OpenAI-compatible sync JSON (`b64_json` or URL) | adapter characterized, exact host/model not sandbox verified |
 | `dashscope-qwen-mt-image` | exact `qwen-mt-image` model                                         | `IMAGE_TRANSLATE`                 | one owned HTTPS/public source URL; `imageSegment=false`                   | async task + immediate URL download | adapter characterized, **not sandbox verified** |
 
-Wildcard model entries exist only to avoid breaking historical text-to-image jobs. A wildcard entry can never count as `sandbox-verified`. Paid image-to-image, full edit, masked inpaint, multi-reference inputs and provider cancellation remain disabled. The qwen-mt-image adapter is implemented as a resumable submit/poll contract with frozen positive/constraint Prompt provenance, bounded recovery, and cost reservation; paid dispatch remains blocked until Unit 0B sandbox evidence and a positive verified price upgrade its capability level.
+Wildcard model entries exist only to avoid breaking historical text-to-image jobs. A wildcard entry can never count as `sandbox-verified`. The normal route and Worker reject every non-fake text-to-image provider while its exact capability is below `sandbox-verified` or its verified cost is not positive; selecting `openai-images` cannot be used as an alias to send an arbitrary Base URL into the paid queue. Future activation also requires a frozen normalized endpoint/config hash and non-secret credential revision on each job. Paid image-to-image, full edit, masked inpaint, multi-reference inputs and provider cancellation remain disabled. The qwen-mt-image adapter is implemented as a resumable submit/poll contract with frozen positive/constraint Prompt provenance, bounded recovery, and cost reservation; paid dispatch remains blocked until Unit 0B sandbox evidence and a positive verified price upgrade its capability level.
 
 ## Required Evidence Before Enabling A Capability
 
@@ -23,6 +24,19 @@ Wildcard model entries exist only to avoid breaking historical text-to-image job
 - A route/worker preflight that rejects unsupported combinations before quota or cost reservation and revalidates before submission.
 
 No localhost/private URL may be sent to a cloud provider. A signed URL is valid only when its TTL exceeds the documented provider fetch and polling window. Transport, timing, dimension and cost fields are intentionally absent from runtime acceptance until sandbox evidence exists.
+
+## Local Single-Submit Smoke (2026-07-21)
+
+One explicitly confirmed local request characterized the configured custom OpenAI-compatible relay with exact model `gpt-image-2-count` for `TEXT_TO_IMAGE` only:
+
+- exactly one `POST /v1/images/generations` with `n=1`; no queue, retry, object-storage upload or SystemConfig mutation;
+- one synchronous normalized result, PNG, `1024x1024`, 1,175,118 bytes;
+- 62,410 ms elapsed; output SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`;
+- local visual inspection confirmed one nonblank, text-free studio product image;
+- the image and sanitized local report remain under ignored `tmp/`; API credentials and the raw response were not persisted.
+- the reusable sandbox now claims an immutable operation intent, fingerprints the complete normalized API Base, verifies the exact endpoint plus prompt hash/size/allowed body fields, pins the validated public DNS records for the actual connection, and rejects a second POST across retries.
+
+This is a transport smoke, not `sandbox-verified` capability evidence. Actual price, repeated success rate, quality corpus thresholds, image-to-image, edits, masks, async tasks and image translation remain unverified and disabled.
 
 ## Listing-Copy Prompt Foundation
 

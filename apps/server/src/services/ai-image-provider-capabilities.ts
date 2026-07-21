@@ -130,6 +130,17 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
     evidenceLevel: 'adapter-characterized',
     evidence: 'legacy text-to-image compatibility only; wildcard models are not sandbox acceptance',
   },
+  {
+    provider: 'custom',
+    model: '*',
+    operations: ['TEXT_TO_IMAGE'],
+    maxReferences: 0,
+    supportsMask: false,
+    inputTransport: 'none',
+    resultMode: 'sync',
+    evidenceLevel: 'adapter-characterized',
+    evidence: 'OpenAI-compatible text-to-image adapter only; each exact host and model requires separate sandbox acceptance',
+  },
 ];
 
 export function resolveAiImageProviderCapability(

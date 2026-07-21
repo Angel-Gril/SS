@@ -1,0 +1,79 @@
+#ss-erp-source-costing-panel [data-role="source-listing-workbench"] {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.ss-erp-source-workbench-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ss-erp-source-workbench-heading strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.ss-erp-source-workbench-heading span {
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-heading .is-current {
+  color: #047857;
+}
+
+.ss-erp-source-workbench-heading .is-stale {
+  color: #b45309;
+}
+
+.ss-erp-source-workbench-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ss-erp-source-workbench-metric {
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-metric span,
+.ss-erp-source-workbench-metric b {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ss-erp-source-workbench-metric span {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.ss-erp-source-workbench-metric b {
+  margin-top: 2px;
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.ss-erp-source-workbench-empty,
+.ss-erp-source-workbench-blocker,
+.ss-erp-source-workbench-task {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ss-erp-source-workbench-empty,
+.ss-erp-source-workbench-task {
+  color: #475569;
+}
+
+.ss-erp-source-workbench-blocker {
+  color: #b91c1c;
+}
+
+@media (max-width: 520px) {
+  .ss-erp-source-workbench-metrics {
+    grid-template-columns: 1fr;
+  }
+}

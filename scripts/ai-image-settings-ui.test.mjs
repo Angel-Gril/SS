@@ -12,7 +12,8 @@ const configSchema = fs.readFileSync(
 
 assert.match(source, /AI 生图基础平台/);
 assert.match(source, /任务与存储基础已就绪/);
-assert.match(source, /真实生图任务已启用/);
+assert.match(source, /真实 Provider/);
+assert.match(source, /配置冻结门禁/);
 assert.doesNotMatch(source, /真实供应商调用尚未启用/);
 
 assert.match(source, /value: 'disabled'/);
@@ -35,7 +36,7 @@ assert.match(source, /ai_user_daily_image_generation_limit/);
 assert.match(source, /ai_daily_budget_cents/);
 
 assert.match(source, /\/api\/admin\/system-status\/test\/ai-image/);
-assert.match(source, /测试生图连接/);
+assert.match(source, /检查生图配置/);
 assert.match(source, /测试当前表单配置/);
 
 assert.match(source, /function SecretConfigInput/);

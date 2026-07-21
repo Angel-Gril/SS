@@ -197,6 +197,29 @@ describe('AI image provider adapters', () => {
     expect(request).toEqual({ model: 'gpt-image-1', prompt: 'photo', n: 1, size: '1024x1024' });
   });
 
+  it('rejects an unexpected OpenAI result count before downloading any URL', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: 'response-too-many',
+      data: [
+        { url: 'https://temp.example/1.png' },
+        { url: 'https://temp.example/2.png' },
+      ],
+    }));
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret',
+      model: 'gpt-image-1', fetch, timeoutMs: 1000,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      code: 'INVALID_PROVIDER_RESULT',
+      providerJobId: 'response-too-many',
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('uses an OpenAI response request id when the body has no provider identity', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(json({
       data: [{ b64_json: png.toString('base64') }],
@@ -444,6 +467,44 @@ describe('AI image provider adapters', () => {
       expect.objectContaining({ method: 'GET' }),
     );
   });
+
+  it('normalizes a custom OpenAI-compatible root URL through /v1 without creating an image', async () => {
+    const fetch = vi.fn().mockResolvedValue(json({ id: 'custom-image-model' }));
+
+    const result = await testAiImageProviderConnection({
+      provider: 'custom', baseUrl: 'https://relay.example',
+      apiKey: 'secret', model: 'custom-image-model', fetch, timeoutMs: 1000,
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: true, provider: 'custom', model: 'custom-image-model',
+    }));
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith(
+      'https://relay.example/v1/models/custom-image-model',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('rejects a custom provider without an explicit base URL before sending credentials', async () => {
+    const fetch = vi.fn();
+    await expect(testAiImageProviderConnection({
+      provider: 'custom', baseUrl: '', apiKey: 'secret', model: 'custom-image-model', fetch,
+    })).rejects.toMatchObject({ code: 'INVALID_PROVIDER_CONFIG' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://relay.example/v1/images/generations',
+    'https://relay.example/v1?tenant=one',
+    'https://relay.example/v1#images',
+  ])('rejects a non-base OpenAI-compatible URL before dispatch: %s', async (baseUrl) => {
+    const fetch = vi.fn();
+    expect(() => createOpenAiImagesProvider({
+      baseUrl, apiKey: 'secret', model: 'custom-image-model', fetch,
+    })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it('rejects insecure provider base URLs before sending credentials', async () => {
     const fetch = vi.fn();
     const provider = createOpenAiImagesProvider({
@@ -474,6 +535,22 @@ describe('AI image provider adapters', () => {
       'https://provider.example/v1',
       async () => [{ address: '169.254.169.254' }],
     )).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
+    await expect(validateAiImageProviderUrl(
+      'https://provider.example/v1',
+      async () => [{ address: '198.18.0.9' }],
+    )).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
+    await expect(validateAiImageProviderUrl(
+      'https://provider.example/v1',
+      async () => [{ address: '::ffff:7f00:1' }],
+    )).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
+    await expect(validateAiImageProviderUrl(
+      'https://provider.example/v1',
+      async () => [{ address: '2001:db8::1' }],
+    )).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
+    await expect(validateAiImageProviderUrl(
+      'https://provider.example/v1',
+      async () => [{ address: '2606:4700:4700::1111' }],
+    )).resolves.toBe('https://provider.example/v1');
   });
 
   it('rejects downloaded content that only claims to be an image', async () => {

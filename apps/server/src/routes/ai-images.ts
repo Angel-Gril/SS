@@ -286,6 +286,7 @@ interface AiImageTranslationRouteSettings {
 }
 
 interface AiImageEditRouteSettings {
+  imageToImageEnabled: boolean;
   fullEditEnabled: boolean;
   inpaintEnabled: boolean;
   dailyLimit: number;
@@ -551,7 +552,7 @@ export function resolveAiImageTranslationReadiness(
 }
 
 export function resolveAiImageToImageReadiness(
-  options: { workflowEnabled?: boolean; production?: boolean } = {},
+  options: { enabled?: boolean; workflowEnabled?: boolean; production?: boolean } = {},
 ): AiImageOperationReadiness {
   if (options.workflowEnabled === false) {
     return {
@@ -559,6 +560,14 @@ export function resolveAiImageToImageReadiness(
       ready: false,
       reasonCode: 'AI_MEDIA_WORKFLOW_DISABLED',
       reason: 'AI media workflow is not enabled for this account',
+    };
+  }
+  if (options.enabled !== true) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: 'AI image-to-image is disabled',
     };
   }
   if (options.production ?? process.env.NODE_ENV === 'production') {
@@ -929,6 +938,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     }
   });
   const getEditSettings = options.getEditSettings || (async () => ({
+    imageToImageEnabled: await getConfig('feature_ai_media_image_to_image'),
     fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
     inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
     dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
@@ -1112,7 +1122,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       production,
       storageReadiness: translationStorageReadiness,
     });
-    const imageToImage = resolveAiImageToImageReadiness({ workflowEnabled, production });
+    const imageToImage = resolveAiImageToImageReadiness({
+      enabled: editSettings.imageToImageEnabled,
+      workflowEnabled,
+      production,
+    });
     const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, {
       workflowEnabled,
       production,
@@ -1156,6 +1170,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!settings.enabled || settings.provider === 'disabled') return reply.status(503).send({ code: 'PROVIDER_DISABLED', msg: 'AI image generation is disabled' });
     if (!['fake', 'dashscope-wanx', 'openai-images'].includes(settings.provider)) {
       return reply.status(503).send({ code: 'PROVIDER_NOT_READY', msg: 'AI image provider adapter is not enabled yet' });
+    }
+    const generationCapability = resolveAiImageProviderCapability(settings.provider, settings.model);
+    if (settings.provider !== 'fake' && (
+      generationCapability?.evidenceLevel !== 'sandbox-verified'
+      || settings.estimatedCostCents <= 0
+    )) {
+      return reply.status(503).send({
+        code: 'PROVIDER_NOT_READY',
+        msg: 'AI image provider has not passed its paid dispatch and cost gates',
+      });
     }
     const ids = actor(request);
     try {
@@ -1537,7 +1561,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         });
         enqueueOperation = enqueueEdit;
       } else {
-        const readiness = resolveAiImageToImageReadiness({ production });
+        const editSettings = await getEditSettings();
+        const readiness = resolveAiImageToImageReadiness({
+          enabled: editSettings.imageToImageEnabled,
+          production,
+        });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         }
@@ -1779,7 +1807,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         }
         retryEnqueue = enqueueEdit;
       } else {
-        const readiness = resolveAiImageToImageReadiness({ production });
+        const editSettings = await getEditSettings();
+        const readiness = resolveAiImageToImageReadiness({
+          enabled: editSettings.imageToImageEnabled,
+          production,
+        });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         }

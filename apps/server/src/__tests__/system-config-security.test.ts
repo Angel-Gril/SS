@@ -55,11 +55,13 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('ai_product_generation_enabled')).resolves.toBe(false);
     await expect(getConfig('ai_user_daily_product_generation_limit')).resolves.toBe(20);
     await expect(getConfig('feature_image_translate')).resolves.toBe(false);
+    await expect(getConfig('feature_ai_media_image_to_image')).resolves.toBe(false);
     await expect(getConfig('feature_ai_media_full_edit')).resolves.toBe(false);
     await expect(getConfig('feature_ai_media_inpaint')).resolves.toBe(false);
     await expect(getConfig('ai_image_translation_provider')).resolves.toBe('disabled');
     await expect(getConfig('ai_image_translation_model')).resolves.toBe('qwen-mt-image');
     expect(SystemConfigMeta.feature_ai_media_full_edit).toMatchObject({ group: 'feature' });
+    expect(SystemConfigMeta.feature_ai_media_image_to_image).toMatchObject({ group: 'feature' });
     expect(SystemConfigMeta.feature_ai_media_inpaint).toMatchObject({ group: 'feature' });
 
     await setConfig('feature_ai_media_full_edit', true);

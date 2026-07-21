@@ -24,7 +24,7 @@ describe('AI image BullMQ worker boundary', () => {
     expect(run).toHaveBeenCalledWith('job-1', 2, expect.objectContaining({ repository, provider }));
   });
 
-  it('builds a real adapter from the current SystemConfig credentials', async () => {
+  it('keeps an adapter-characterized paid provider disabled until sandbox evidence is promoted', async () => {
     const repository = { getById: vi.fn(async () => ({ id: 'job-1', provider: 'dashscope-wanx' })) };
     const run = vi.fn(async () => undefined);
     await processAiImageQueueJob('job-1', 1, {
@@ -32,7 +32,21 @@ describe('AI image BullMQ worker boundary', () => {
       getProviderConfig: vi.fn(async () => ({ provider: 'dashscope-wanx', baseUrl: 'https://dashscope.example/api/v1', apiKey: 'secret', model: 'wanx-v1', costPerImageCents: 5 })),
       uploadBuffer: vi.fn(), run,
     });
-    expect((run as any).mock.calls[0]?.[2].provider.name).toBe('dashscope-wanx');
+    expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
+  });
+
+  it('keeps an unverified custom image provider disabled in the normal worker', async () => {
+    const repository = { getById: vi.fn(async () => ({ id: 'job-custom', provider: 'custom' })) };
+    const run = vi.fn(async () => undefined);
+    await processAiImageQueueJob('job-custom', 1, {
+      repository: repository as any,
+      getProviderConfig: vi.fn(async () => ({
+        provider: 'custom', baseUrl: 'https://relay.example', apiKey: 'secret',
+        model: 'custom-image-model', costPerImageCents: 0,
+      })),
+      uploadBuffer: vi.fn(), run,
+    });
+    expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
   });
   it('quarantines an unclassified paid provider failure when the queue allows one attempt', async () => {
     const job = {
