@@ -39,9 +39,9 @@ import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
-import { confirmAiImageMaskDraftDiscard } from '@/lib/ai-image-mask';
 import {
   buildSaveSourceImagesRequest,
+  confirmAiMediaInteractiveDraftDiscard,
   createMediaMutationLock,
   createLatestRequestGuard,
   executeLockedMediaMutation,
@@ -1253,21 +1253,23 @@ function SourceDetailContent({
   onSectionChange,
   onItemUpdate,
   onRefreshItem,
-  aiMaskDraftDirty,
-  onAiMaskDraftDirtyChange,
+  aiMediaInteractiveDraftDirty,
+  onAiMediaInteractiveDraftDirtyChange,
+  onDiscardAiMediaInteractiveDraft,
 }: {
   item: SourceCollectItem;
   activeSection: DetailSection;
   onSectionChange: (section: DetailSection) => void;
   onItemUpdate: (item: SourceCollectItem) => void;
   onRefreshItem: RefreshAiMediaTarget;
-  aiMaskDraftDirty: boolean;
-  onAiMaskDraftDirtyChange: (dirty: boolean) => void;
+  aiMediaInteractiveDraftDirty: boolean;
+  onAiMediaInteractiveDraftDirtyChange: (dirty: boolean, discard?: () => void) => void;
+  onDiscardAiMediaInteractiveDraft: () => void;
 }) {
   function selectSection(section: DetailSection) {
     if (section === activeSection) return;
-    if (!confirmAiImageMaskDraftDiscard(aiMaskDraftDirty, (message) => window.confirm(message))) return;
-    onAiMaskDraftDirtyChange(false);
+    if (!confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => window.confirm(message))) return;
+    onDiscardAiMediaInteractiveDraft();
     onSectionChange(section);
   }
 
@@ -1318,7 +1320,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} onRefreshItem={onRefreshItem} onAiMaskDraftDirtyChange={onAiMaskDraftDirtyChange} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} onRefreshItem={onRefreshItem} onAiMediaInteractiveDraftDirtyChange={onAiMediaInteractiveDraftDirtyChange} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1584,12 +1586,12 @@ function SourceImagesSection({
   item,
   onItemUpdate,
   onRefreshItem,
-  onAiMaskDraftDirtyChange,
+  onAiMediaInteractiveDraftDirtyChange,
 }: {
   item: SourceCollectItem;
   onItemUpdate: (item: SourceCollectItem) => void;
   onRefreshItem: RefreshAiMediaTarget;
-  onAiMaskDraftDirtyChange: (dirty: boolean) => void;
+  onAiMediaInteractiveDraftDirtyChange: (dirty: boolean, discard?: () => void) => void;
 }) {
   const sourceImages = sourcePreviewImages(item);
   const [images, setImages] = useState<string[]>(() => sourcePublishPreviewImages(item));
@@ -1712,7 +1714,7 @@ function SourceImagesSection({
         mediaMutationBusy={mediaMutationBusy}
         runMediaMutation={runMediaMutation}
         onConflictRefresh={onRefreshItem}
-        onMaskDraftDirtyChange={onAiMaskDraftDirtyChange}
+        onMaskDraftDirtyChange={onAiMediaInteractiveDraftDirtyChange}
         onApplied={({ images: nextImages, editedImages, targetUpdatedAt }) => onItemUpdate({
           ...item,
           updatedAt: targetUpdatedAt,
@@ -3131,8 +3133,20 @@ function SourceCollectPageContent() {
   const [error, setError] = useState('');
   const [detailItem, setDetailItem] = useState<SourceCollectItem | null>(null);
   const [activeDetailSection, setActiveDetailSection] = useState<DetailSection>('overview');
-  const [aiMaskDraftDirty, setAiMaskDraftDirty] = useState(false);
+  const [aiMediaInteractiveDraftDirty, setAiMediaInteractiveDraftDirty] = useState(false);
+  const aiMediaInteractiveDraftDiscardRef = useRef<(() => void) | null>(null);
   const loadItemsGuardRef = useRef(createLatestRequestGuard());
+
+  const handleAiMediaInteractiveDraftDirtyChange = useCallback((dirty: boolean, discard?: () => void) => {
+    aiMediaInteractiveDraftDiscardRef.current = dirty && discard ? discard : null;
+    setAiMediaInteractiveDraftDirty(dirty);
+  }, []);
+
+  const discardAiMediaInteractiveDraft = useCallback(() => {
+    aiMediaInteractiveDraftDiscardRef.current?.();
+    aiMediaInteractiveDraftDiscardRef.current = null;
+    setAiMediaInteractiveDraftDirty(false);
+  }, []);
 
   async function loadItems(refreshTargetId?: string): Promise<SourceCollectItem | null> {
     const isCurrent = loadItemsGuardRef.current.begin();
@@ -3206,8 +3220,8 @@ function SourceCollectPageContent() {
   }, [items]);
 
   function closeDetail() {
-    if (!confirmAiImageMaskDraftDiscard(aiMaskDraftDirty, (message) => window.confirm(message))) return;
-    setAiMaskDraftDirty(false);
+    if (!confirmAiMediaInteractiveDraftDiscard(aiMediaInteractiveDraftDirty, (message) => window.confirm(message))) return;
+    discardAiMediaInteractiveDraft();
     setDetailItem(null);
   }
 
@@ -3279,7 +3293,7 @@ function SourceCollectPageContent() {
                 key={item.id}
                 item={item}
                 onDetail={(next, section = 'overview') => {
-                  setAiMaskDraftDirty(false);
+                  setAiMediaInteractiveDraftDirty(false);
                   setDetailItem(next);
                   setActiveDetailSection(section);
                 }}
@@ -3305,8 +3319,9 @@ function SourceCollectPageContent() {
               onSectionChange={setActiveDetailSection}
               onItemUpdate={updateItem}
               onRefreshItem={() => loadItems(detailItem.id)}
-              aiMaskDraftDirty={aiMaskDraftDirty}
-              onAiMaskDraftDirtyChange={setAiMaskDraftDirty}
+              aiMediaInteractiveDraftDirty={aiMediaInteractiveDraftDirty}
+              onAiMediaInteractiveDraftDirtyChange={handleAiMediaInteractiveDraftDirtyChange}
+              onDiscardAiMediaInteractiveDraft={discardAiMediaInteractiveDraft}
             />
           ) : null}
         </DialogContent>

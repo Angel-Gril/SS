@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
 import {
   AI_MEDIA_GALLERY_GOALS,
+  AI_MEDIA_MANUAL_SLOT_CHANGE_MAX,
   AI_MEDIA_PLAN_VERSION_PAGE_DEFAULT,
   AI_MEDIA_PLAN_VERSION_PAGE_MAX,
   AiMediaPlanningError,
@@ -14,6 +15,8 @@ import {
   type AiMediaPlanVersionRecord,
   type AiMediaGalleryGoal,
 } from '../services/ai-media-planning.js';
+import { AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES } from '../services/ai-image-prompt-plan.js';
+import { AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH } from '../services/ai-media-planning-contract.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 import {
   sourceWorkflowFeatureFlags,
@@ -52,6 +55,33 @@ const reviewSchema = z.object({
   decision: z.enum(['APPROVE', 'REJECT']),
   note: z.string().trim().max(2_000).nullable().optional(),
 }).strict();
+
+const slotReferenceSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+  baseVersionId: z.string().trim().min(1).max(200),
+  operationKey: z.string().trim().min(8).max(128),
+  changes: z.array(z.object({
+    slotKey: z.string().trim().min(1).max(AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH),
+    referenceCandidateIds: z.array(z.string().trim().min(1).max(500))
+      .max(AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES),
+  }).strict().superRefine((value, context) => {
+    if (new Set(value.referenceCandidateIds).size !== value.referenceCandidateIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['referenceCandidateIds'],
+        message: 'referenceCandidateIds must be unique',
+      });
+    }
+  })).min(1).max(AI_MEDIA_MANUAL_SLOT_CHANGE_MAX),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.changes.map((change) => change.slotKey)).size !== value.changes.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['changes'],
+      message: 'slotKey changes must be unique',
+    });
+  }
+});
 
 const versionPageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(AI_MEDIA_PLAN_VERSION_PAGE_MAX)
@@ -233,7 +263,7 @@ function publicSlotPlan(value: unknown): unknown {
   }).slice(0, 50) : [];
   const slots = Array.isArray(source.slots) ? source.slots.flatMap((entry) => {
     const slot = record(entry);
-    const slotKey = boundedString(slot?.slotKey, 200);
+    const slotKey = boundedString(slot?.slotKey, AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH);
     const ownership = record(slot?.ownership);
     const ownershipKey = boundedString(ownership?.key, 500);
     if (!slot || !slotKey || !ownership || !ownershipKey) return [];
@@ -280,7 +310,7 @@ function publicSlotPlan(value: unknown): unknown {
     diagnostics: Array.isArray(source.diagnostics) ? source.diagnostics.flatMap((entry) => {
       const item = record(entry);
       const code = boundedString(item?.code, 100);
-      const slotKey = boundedString(item?.slotKey, 200);
+      const slotKey = boundedString(item?.slotKey, AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH);
       return code && slotKey ? [{ code, slotKey, ...(boundedString(item?.candidateId) ? { candidateId: boundedString(item?.candidateId) } : {}) }] : [];
     }).slice(0, 100) : [],
     fallbackReason: boundedString(source.fallbackReason, 100),
@@ -468,6 +498,34 @@ export async function aiMediaPlanningRoutes(
         if (nextBeforeVersion) reply.header('x-ai-media-next-before-version', String(nextBeforeVersion));
       }
       return { code: 1, data: versions.map((version) => publicVersion(version)) };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/plans/:id/slot-references', async (request, reply) => {
+    const parsed = slotReferenceSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const id = String((request.params as { id?: unknown }).id || '').trim();
+    if (!id || id.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'plan id is invalid' });
+    }
+    const ids = actor(request);
+    try {
+      await requirePlanningRollout(ids.ownerUserId);
+      const result = await service.updateSlotReferences({
+        planId: id,
+        ...ids,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 202).send({
+        code: 1,
+        data: publicPlan(result.plan, result.sourceCurrent),
+        replayed: result.replayed,
+        createdVersionId: result.createdVersionId,
+      });
     } catch (error) {
       return sendError(reply, error);
     }

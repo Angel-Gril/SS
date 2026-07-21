@@ -69,6 +69,11 @@ const steps = [
     args: ['scripts/web-ai-media-application-ledger.test.mjs'],
   },
   {
+    name: 'Web AI media plan slot editor contract',
+    command: 'node',
+    args: ['scripts/web-ai-media-plan-slot-editor.test.mjs'],
+  },
+  {
     name: 'Web AI media listing-draft application contract',
     command: 'node',
     args: ['scripts/web-ai-media-listing-draft-application.test.mjs'],

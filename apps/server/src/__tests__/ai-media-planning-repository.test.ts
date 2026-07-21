@@ -16,16 +16,21 @@ function versionRow(overrides: Record<string, unknown> = {}) {
     planId: 'plan-1',
     ownerUserId: 'owner-1',
     version: 1,
+    planningRunId: 'run-1',
+    parentVersionId: null,
     sourceCaptureSnapshotId: 'snapshot-1',
     sourceCaptureHash: 'a'.repeat(64),
     sourceProfileHash: 'b'.repeat(64),
     sourceSchemaVersion: 'source-product-capture-v2',
+    selectedSkuHash: '2'.repeat(64),
+    inputAssetSetHash: '3'.repeat(64),
     inputFingerprint: 'c'.repeat(64),
     planSchemaVersion: 'ai-image-prompt-plan/2.0',
     plannerVersion: 'ai-media-rule-planner/v1',
     mode: 'RULE_BASED',
     fallbackReason: null,
-    inputSnapshot: { candidates: [{ id: 'media-1' }] },
+    inputSnapshot: { candidates: [{ id: 'media-1', skuKeys: ['sku-1'] }] },
+    inputHash: '4'.repeat(64),
     curation: {
       selectedCandidateIds: ['media-1'],
       selectionTarget: { minimum: 1, maximum: 14, eligibleCount: 1, selectedCount: 1, met: true },
@@ -35,15 +40,24 @@ function versionRow(overrides: Record<string, unknown> = {}) {
     visionEvidenceHash: 'e'.repeat(64),
     planHash: 'f'.repeat(64),
     planPayload: {
+      version: '2.0',
+      mode: 'rule_based',
+      compatibilityGroups: [{ groupKey: 'group-1', identitySignature: '{}', skuKeys: ['sku-1'] }],
       verifiedFacts: [],
       slots: [{
+        slotKey: 'sku:sku-1:hero',
         status: 'READY', goal: 'sku_hero', ownership: { level: 'sku', key: 'sku-1' },
         references: [{ candidateId: 'media-1', evidenceIds: [candidateEvidenceId('snapshot-1', 'media-1')] }],
         factEvidenceIds: [],
         safetyConstraints: ['preserve_product_identity'],
         acceptanceChecks: ['product_matches_references'],
       }],
+      manualSelectionAllowed: true,
+      recoverable: true,
+      diagnostics: [],
+      fallbackReason: null,
     },
+    planBytes: 1_000,
     provenance: {},
     provenanceHash: '1'.repeat(64),
     createdAt: new Date('2026-07-19T00:00:00.000Z'),
@@ -92,6 +106,15 @@ function sourceClient(plan: any, latest = {
     aiMediaPlanEvent: {
       findUnique: vi.fn(async () => null),
       create: vi.fn(async () => ({})),
+    },
+    aiMediaSuite: { findFirst: vi.fn(async () => null) },
+    aiMediaPlanningRun: {
+      findUnique: vi.fn(async () => ({ inputBytes: 1_000 })),
+      findFirst: vi.fn(async () => ({ attempt: 1 })),
+      create: vi.fn(async ({ data }: any) => ({ id: 'run-2', ...data })),
+    },
+    aiMediaPlanVersion: {
+      create: vi.fn(async ({ data }: any) => ({ id: 'version-2', ...data })),
     },
     supplyGoods: { findFirst: vi.fn(async () => ({ id: 'goods-1' })) },
     sourceCaptureSubject: { findFirst: vi.fn(async () => ({ snapshots: [latest] })) },
@@ -307,6 +330,236 @@ describe('Prisma AI media planning repository boundaries', () => {
 
     expect(execution).toMatchObject({ kind: 'not-approved', plan: { revision: 3 } });
     expect(client.aiMediaPlanEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('creates one immutable manual slot version and clears prior approval', async () => {
+    const currentVersion = versionRow({
+      inputSnapshot: { candidates: [
+        { id: 'media-1', skuKeys: ['sku-1'] },
+        { id: 'media-2', skuKeys: [] },
+      ] },
+      curation: {
+        selectedCandidateIds: ['media-1', 'media-2'],
+        selectionTarget: { minimum: 1, maximum: 14, eligibleCount: 2, selectedCount: 2, met: true },
+      },
+      visionEvidence: { images: [{ candidateId: 'media-1' }, { candidateId: 'media-2' }] },
+    });
+    const plan = planRow({
+      revision: 2,
+      reviewStatus: 'APPROVED',
+      approvedVersionId: 'version-1',
+      reviewedByUserId: 'owner-1',
+      reviewedAt: new Date(),
+      currentVersion,
+      approvedVersion: currentVersion,
+    }) as any;
+    const client = sourceClient(plan);
+    const repository = new PrismaAiMediaPlanningRepository(client);
+    const result = await repository.updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 2, baseVersionId: 'version-1', operationKey: 'slot-update-1',
+      changes: [{
+        slotKey: 'sku:sku-1:hero',
+        referenceCandidateIds: ['media-2', 'media-1'],
+      }],
+    });
+
+    expect(result).toMatchObject({ kind: 'updated', createdVersionId: 'version-2' });
+    expect(client.aiMediaPlanningRun.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      attempt: 2,
+      inputFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      inputSnapshot: expect.objectContaining({ manualSlotEdit: expect.objectContaining({
+        parentVersionId: 'version-1',
+      }) }),
+      engineVersion: 'ai-media-manual-slot-editor/v1',
+      status: 'SUCCEEDED',
+    }) });
+    expect(client.aiMediaPlanVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      version: 2,
+      parentVersionId: 'version-1',
+      inputFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      plannerVersion: 'ai-media-manual-slot-editor/v1',
+      planPayload: expect.objectContaining({ slots: [expect.objectContaining({
+        slotKey: 'sku:sku-1:hero',
+        status: 'READY',
+        references: [{
+          candidateId: 'media-2', evidenceIds: [candidateEvidenceId('snapshot-1', 'media-2')],
+        }, {
+          candidateId: 'media-1', evidenceIds: [candidateEvidenceId('snapshot-1', 'media-1')],
+        }],
+      })] }),
+    }) });
+    const runInput = client.aiMediaPlanningRun.create.mock.calls[0]![0].data;
+    const versionInput = client.aiMediaPlanVersion.create.mock.calls[0]![0].data;
+    expect(runInput.inputFingerprint).not.toBe(currentVersion.inputFingerprint);
+    expect(versionInput).toMatchObject({
+      inputFingerprint: runInput.inputFingerprint,
+      inputSnapshot: runInput.inputSnapshot,
+      inputHash: runInput.inputHash,
+    });
+    expect(client.aiMediaPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ revision: 2, currentVersionId: 'version-1' }),
+      data: expect.objectContaining({
+        approvedVersionId: null, reviewStatus: 'PENDING',
+        reviewedByUserId: null, reviewedAt: null,
+      }),
+    }));
+    expect(client.aiMediaPlanEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      versionId: 'version-2', runId: 'run-2', revision: 3,
+      eventType: 'SLOT_REFERENCES_UPDATED',
+    }) });
+  });
+
+  it('blocks every non-terminal suite but allows terminal suite history', async () => {
+    const plan = planRow() as any;
+    const blockedClient = sourceClient(plan);
+    blockedClient.aiMediaSuite.findFirst.mockResolvedValue({ id: 'suite-1', status: 'FAILED' });
+    const blocked = await new PrismaAiMediaPlanningRepository(blockedClient).updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-suite-blocked',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    });
+    expect(blocked.kind).toBe('active-suite-conflict');
+    expect(blockedClient.aiMediaPlanningRun.create).not.toHaveBeenCalled();
+    expect(blockedClient.aiMediaSuite.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { planVersionId: 'version-1', status: { notIn: ['SUCCEEDED', 'CANCELLED'] } },
+    }));
+
+    const terminalClient = sourceClient(plan);
+    terminalClient.aiMediaSuite.findFirst.mockResolvedValue(null);
+    const terminal = await new PrismaAiMediaPlanningRepository(terminalClient).updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-suite-terminal',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    });
+    expect(terminal.kind).toBe('updated');
+  });
+
+  it('rejects no-op, unselected and ownership-incompatible references before writes', async () => {
+    const noOpClient = sourceClient(planRow());
+    const noOp = await new PrismaAiMediaPlanningRepository(noOpClient).updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-noop-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-1'] }],
+    });
+    expect(noOp.kind).toBe('no-changes');
+    expect(noOpClient.aiMediaPlanningRun.create).not.toHaveBeenCalled();
+
+    const unselectedVersion = versionRow({
+      inputSnapshot: { candidates: [
+        { id: 'media-1', skuKeys: ['sku-1'] },
+        { id: 'media-2', skuKeys: ['sku-1'] },
+      ] },
+      visionEvidence: { images: [{ candidateId: 'media-1' }, { candidateId: 'media-2' }] },
+    });
+    const unselectedClient = sourceClient(planRow({ currentVersion: unselectedVersion }));
+    const unselected = await new PrismaAiMediaPlanningRepository(unselectedClient).updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-unselected-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-2'] }],
+    });
+    expect(unselected.kind).toBe('invalid-reference');
+
+    const incompatibleVersion = versionRow({
+      inputSnapshot: { candidates: [
+        { id: 'media-1', skuKeys: ['sku-1'] },
+        { id: 'media-2', skuKeys: ['sku-2'] },
+      ] },
+      curation: {
+        selectedCandidateIds: ['media-1', 'media-2'],
+        selectionTarget: { minimum: 1, maximum: 14, eligibleCount: 2, selectedCount: 2, met: true },
+      },
+      visionEvidence: { images: [{ candidateId: 'media-1' }, { candidateId: 'media-2' }] },
+    });
+    const incompatibleClient = sourceClient(planRow({ currentVersion: incompatibleVersion }));
+    const incompatible = await new PrismaAiMediaPlanningRepository(incompatibleClient)
+      .updateSlotReferences({
+        planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+        expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-incompatible-1',
+        changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-2'] }],
+      });
+    expect(incompatible.kind).toBe('invalid-reference');
+    expect(incompatibleClient.aiMediaPlanningRun.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps operation replay tenant-scoped and conflicts on changed payload', async () => {
+    const input = {
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-operation-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    };
+    const plan = planRow();
+    const client = sourceClient(plan);
+    client.aiMediaPlanEvent.findUnique.mockResolvedValue({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      eventType: 'SLOT_REFERENCES_UPDATED', versionId: 'version-2',
+      payload: { requestFingerprint: hashAiMediaPlanningJson({
+        ...input,
+        changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-1'] }],
+      }) },
+    });
+    const conflict = await new PrismaAiMediaPlanningRepository(client).updateSlotReferences(input);
+    expect(conflict.kind).toBe('operation-conflict');
+    expect(client.aiMediaSuite.findFirst).not.toHaveBeenCalled();
+
+    const foreignClient = sourceClient(null);
+    const missing = await new PrismaAiMediaPlanningRepository(foreignClient).updateSlotReferences(input);
+    expect(missing.kind).toBe('not-found');
+    expect(foreignClient.aiMediaPlanEvent.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('replays exactly while persisting newly stale source state', async () => {
+    const input = {
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-replay-stale',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    };
+    const plan = planRow() as any;
+    const event = {
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      eventType: 'SLOT_REFERENCES_UPDATED', versionId: 'version-2',
+      payload: { requestFingerprint: hashAiMediaPlanningJson(input) },
+    };
+    const client = sourceClient(plan, {
+      id: 'snapshot-new', captureHash: '9'.repeat(64), profileHash: '8'.repeat(64),
+      schemaVersion: 'source-product-capture-v2',
+    });
+    client.aiMediaPlanEvent.findUnique.mockResolvedValue(event);
+    client.aiMediaPlan.updateMany.mockImplementation(async () => {
+      plan.staleAt = new Date();
+      plan.revision = 2;
+      return { count: 1 };
+    });
+
+    const result = await new PrismaAiMediaPlanningRepository(client).updateSlotReferences(input);
+    expect(result).toMatchObject({
+      kind: 'replayed', createdVersionId: 'version-2', plan: { staleAt: expect.any(Date) },
+    });
+    expect(client.aiMediaPlanEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      eventType: 'SOURCE_CONTEXT_STALE',
+    }) });
+    expect(client.aiMediaPlanningRun.create).not.toHaveBeenCalled();
+  });
+
+  it('rolls back run/version work before classifying a lost plan CAS', async () => {
+    const initial = planRow() as any;
+    const concurrent = planRow({ revision: 2, currentVersionId: 'version-concurrent' }) as any;
+    const client = sourceClient(initial);
+    client.aiMediaPlan.findFirst
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(concurrent);
+    client.aiMediaPlan.updateMany.mockResolvedValueOnce({ count: 0 });
+    const result = await new PrismaAiMediaPlanningRepository(client).updateSlotReferences({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-cas-rollback',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    });
+
+    expect(result.kind).toBe('revision-conflict');
+    expect(client.$transaction).toHaveBeenCalledTimes(2);
+    expect(client.aiMediaPlanEvent.create).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ eventType: 'SLOT_REFERENCES_UPDATED' }),
+    }));
   });
 
   it('re-runs unique-conflict classification inside a Serializable transaction', async () => {

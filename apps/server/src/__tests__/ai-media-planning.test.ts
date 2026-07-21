@@ -498,4 +498,100 @@ describe('AI media planning rule worker', () => {
       code: 'AI_MEDIA_PLANNING_NOT_READY', statusCode: 409,
     });
   });
+
+  it('normalizes a manual slot-reference mutation without reordering references', async () => {
+    const currentVersion = {
+      id: 'version-2', planId: 'plan-slot-edit', ownerUserId: 'owner-1', version: 2,
+      sourceCaptureSnapshotId: 'snapshot-1', sourceCaptureHash: 'a'.repeat(64),
+      sourceProfileHash: 'b'.repeat(64), sourceSchemaVersion: 'source-product-capture-v2',
+      inputFingerprint: 'c'.repeat(64), planSchemaVersion: 'plan/v1', plannerVersion: 'manual/v1',
+      mode: 'RULE_BASED' as const, fallbackReason: null, curation: {}, curationHash: 'd'.repeat(64),
+      visionEvidence: {}, visionEvidenceHash: 'e'.repeat(64), planHash: 'f'.repeat(64),
+      planPayload: {}, provenance: {}, provenanceHash: '1'.repeat(64), createdAt: new Date(),
+    };
+    const updatedPlan = {
+      id: 'plan-slot-edit', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      sourceSubjectId: 'subject-1', contextType: 'collect', contextId: 'goods-1',
+      revision: 2, latestVersion: 2, currentVersionId: currentVersion.id, approvedVersionId: null,
+      reviewStatus: 'PENDING' as const, staleAt: null, staleAgainstFingerprint: null,
+      staleReasons: null, reviewedByUserId: null, reviewedAt: null,
+      createdAt: new Date(), updatedAt: new Date(), currentVersion, approvedVersion: null,
+    };
+    const repository = {
+      updateSlotReferences: vi.fn().mockResolvedValue({
+        kind: 'updated', plan: updatedPlan, createdVersionId: 'version-2',
+      }),
+      loadLatestSourceAuthority: vi.fn().mockResolvedValue({
+        snapshotId: 'snapshot-1', captureHash: 'a'.repeat(64),
+        profileHash: 'b'.repeat(64), schemaVersion: 'source-product-capture-v2',
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+
+    const result = await service.updateSlotReferences({
+      planId: 'plan-slot-edit', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-edit-operation-1',
+      changes: [{
+        slotKey: 'sku:sku-1:hero',
+        referenceCandidateIds: ['media-secondary', 'media-primary'],
+      }],
+    });
+
+    expect(result).toMatchObject({
+      replayed: false, createdVersionId: 'version-2', sourceCurrent: true,
+      plan: { id: 'plan-slot-edit', reviewStatus: 'PENDING' },
+    });
+    expect(repository.updateSlotReferences).toHaveBeenCalledWith(expect.objectContaining({
+      changes: [{
+        slotKey: 'sku:sku-1:hero',
+        referenceCandidateIds: ['media-secondary', 'media-primary'],
+      }],
+    }));
+  });
+
+  it('rejects duplicate slot changes before repository dispatch', async () => {
+    const repository = { updateSlotReferences: vi.fn() };
+    const service = createAiMediaPlanningService(repository as never);
+
+    await expect(service.updateSlotReferences({
+      planId: 'plan-slot-edit', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-edit-operation-2',
+      changes: [
+        { slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-1'] },
+        { slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] },
+      ],
+    })).rejects.toMatchObject({
+      code: 'AI_MEDIA_PLANNING_INVALID_INPUT', statusCode: 400,
+    });
+    expect(repository.updateSlotReferences).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not-found', null, 'AI_MEDIA_PLANNING_NOT_FOUND', 404],
+    ['operation-conflict', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_OPERATION_CONFLICT', 409],
+    ['revision-conflict', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_REVISION_CONFLICT', 409],
+    ['state-conflict', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT', 409],
+    ['stale', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_STALE', 409],
+    ['no-changes', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_NO_CHANGES', 409],
+    ['invalid-reference', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_INVALID_INPUT', 400],
+    ['active-suite-conflict', { id: 'plan-slot-edit' }, 'AI_MEDIA_PLANNING_ACTIVE_SUITE_CONFLICT', 409],
+  ] as const)('maps slot-reference repository result %s to %s', async (
+    kind,
+    resultPlan,
+    code,
+    statusCode,
+  ) => {
+    const repository = {
+      updateSlotReferences: vi.fn().mockResolvedValue({
+        kind, plan: resultPlan, createdVersionId: null,
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+
+    await expect(service.updateSlotReferences({
+      planId: 'plan-slot-edit', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: `slot-error-${kind}`,
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-1'] }],
+    })).rejects.toMatchObject({ code, statusCode });
+  });
 });

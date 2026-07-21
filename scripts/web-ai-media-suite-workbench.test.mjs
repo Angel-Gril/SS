@@ -627,7 +627,7 @@ assert.match(planningPanel, /SourceAiMediaSuitePanel/u);
 assert.match(planningPanel, /plan=\{bundle\.plan\}/u);
 assert.match(planningPanel, /targetUpdatedAt=\{targetUpdatedAt\}/u);
 assert.match(planningPanel, /runMediaMutation=\{runMediaMutation\}/u);
-assert.match(planningPanel, /mediaDraftDirty=\{mediaDraftDirty\}/u);
+assert.match(planningPanel, /mediaDraftDirty=\{mediaDraftDirty \|\| slotDraftDirty\}/u);
 assert.match(planningPanel, /onConflictRefresh=\{onConflictRefresh\}/u);
 assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?enabled[\s\S]*?planningEnabled=/u);
 assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?targetUpdatedAt=\{target\.updatedAt\}/u);

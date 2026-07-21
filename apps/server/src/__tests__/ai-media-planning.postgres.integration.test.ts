@@ -300,6 +300,135 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
     expect(await client.aiMediaPlanEvent.count({ where: { planId: created.plan.id } })).toBe(2);
   });
 
+  it('appends coherent immutable slot versions through A-to-B-to-A and replays exactly', async () => {
+    const created = await service.createRuleBased(input({
+      idempotencyKey: `slot-version-${suffix}`,
+    }));
+    const approved = await service.review({
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: created.plan.revision,
+      operationKey: `slot-version-approve-${suffix}`,
+      decision: 'APPROVE',
+      note: null,
+    });
+    const clearInput = {
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: approved.plan.revision,
+      baseVersionId: approved.plan.currentVersionId!,
+      operationKey: `slot-version-clear-${suffix}`,
+      changes: [{ slotKey: `sku:${selectedSkuKey}:hero`, referenceCandidateIds: [] }],
+    };
+    const cleared = await service.updateSlotReferences(clearInput);
+    const replayed = await service.updateSlotReferences(clearInput);
+
+    expect(cleared).toMatchObject({
+      replayed: false,
+      plan: { revision: 3, latestVersion: 2, reviewStatus: 'PENDING', approvedVersionId: null },
+    });
+    expect(replayed).toMatchObject({
+      replayed: true, createdVersionId: cleared.createdVersionId,
+      plan: { revision: 3 },
+    });
+    await expect(service.updateSlotReferences({
+      ...clearInput,
+      changes: [{
+        slotKey: `sku:${selectedSkuKey}:hero`, referenceCandidateIds: [selectedMediaKey],
+      }],
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_PLANNING_OPERATION_CONFLICT' });
+
+    const restored = await service.updateSlotReferences({
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: cleared.plan.revision,
+      baseVersionId: cleared.createdVersionId,
+      operationKey: `slot-version-restore-${suffix}`,
+      changes: [{
+        slotKey: `sku:${selectedSkuKey}:hero`, referenceCandidateIds: [selectedMediaKey],
+      }],
+    });
+    const versions = await client.aiMediaPlanVersion.findMany({
+      where: { planId: created.plan.id },
+      orderBy: { version: 'asc' },
+    });
+    const runs = await client.aiMediaPlanningRun.findMany({
+      where: { planId: created.plan.id },
+      orderBy: { attempt: 'asc' },
+    });
+
+    expect(restored).toMatchObject({
+      replayed: false,
+      plan: { revision: 4, latestVersion: 3, reviewStatus: 'PENDING' },
+    });
+    expect(versions).toHaveLength(3);
+    expect(runs).toHaveLength(3);
+    expect(new Set(versions.map((version) => version.inputFingerprint)).size).toBe(3);
+    expect(versions[2]!.planHash).toBe(versions[0]!.planHash);
+    expect(versions[2]!.inputHash).not.toBe(versions[0]!.inputHash);
+    expect(versions[1]!.inputSnapshot).toMatchObject({ manualSlotEdit: {
+      version: 'ai-media-manual-slot-editor/v1',
+      parentVersionId: versions[0]!.id,
+      parentPlanHash: versions[0]!.planHash,
+    } });
+    expect(versions[2]!.inputSnapshot).toMatchObject({ manualSlotEdit: {
+      version: 'ai-media-manual-slot-editor/v1',
+      parentVersionId: versions[1]!.id,
+      parentPlanHash: versions[1]!.planHash,
+    } });
+    expect(runs.map((run) => run.inputHash)).toEqual(versions.map((version) => version.inputHash));
+    expect(runs.map((run) => run.inputFingerprint))
+      .toEqual(versions.map((version) => version.inputFingerprint));
+    await expect(service.updateSlotReferences({
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: restored.plan.revision,
+      baseVersionId: restored.createdVersionId,
+      operationKey: `slot-version-noop-${suffix}`,
+      changes: [{
+        slotKey: `sku:${selectedSkuKey}:hero`, referenceCandidateIds: [selectedMediaKey],
+      }],
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_PLANNING_NO_CHANGES' });
+    await expect(service.requireApprovedForExecution({
+      planId: created.plan.id, ownerUserId, actorUserId: ownerUserId,
+    })).rejects.toMatchObject({ code: 'AI_MEDIA_PLANNING_NOT_APPROVED' });
+  });
+
+  it('rolls back losing concurrent slot edits without orphan runs or versions', async () => {
+    const created = await service.createRuleBased(input({
+      idempotencyKey: `slot-race-${suffix}`,
+    }));
+    const base = {
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: created.plan.revision,
+      baseVersionId: created.plan.currentVersionId!,
+      changes: [{ slotKey: `sku:${selectedSkuKey}:hero`, referenceCandidateIds: [] }],
+    };
+    const results = await Promise.allSettled([
+      service.updateSlotReferences({ ...base, operationKey: `slot-race-a-${suffix}` }),
+      service.updateSlotReferences({ ...base, operationKey: `slot-race-b-${suffix}` }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({
+        code: expect.stringMatching(/AI_MEDIA_PLANNING_(REVISION|REVIEW_STATE)_CONFLICT/u),
+      }),
+    });
+    expect(await client.aiMediaPlanningRun.count({ where: { planId: created.plan.id } })).toBe(2);
+    expect(await client.aiMediaPlanVersion.count({ where: { planId: created.plan.id } })).toBe(2);
+    expect(await client.aiMediaPlanEvent.count({ where: {
+      planId: created.plan.id, eventType: 'SLOT_REFERENCES_UPDATED',
+    } })).toBe(1);
+  });
+
   it('marks a plan stale when a newer source snapshot exists and blocks review and execution', async () => {
     const staleGoodsId = `plan_stale_goods_${suffix}`;
     const staleSubjectId = `plan_stale_subject_${suffix}`;

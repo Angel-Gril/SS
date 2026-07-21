@@ -73,6 +73,77 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 5_000): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
+function withTransactionFindFirstBarrier(input: {
+  client: PrismaClient;
+  modelName: 'aiMediaPlanningRun' | 'aiMediaSuite';
+  matches: (args: any) => boolean;
+  wait: () => Promise<void>;
+}) {
+  let armed = true;
+  let transactionAttempts = 0;
+  const wrapTransaction = (transaction: any) => new Proxy(transaction, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== input.modelName || !value) {
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+      return new Proxy(value, {
+        get(model, method, modelReceiver) {
+          const operation = Reflect.get(model, method, modelReceiver);
+          if (method !== 'findFirst' || typeof operation !== 'function') {
+            return typeof operation === 'function' ? operation.bind(model) : operation;
+          }
+          return async (args: any) => {
+            const result = await operation.call(model, args);
+            if (armed && input.matches(args)) {
+              armed = false;
+              await input.wait();
+            }
+            return result;
+          };
+        },
+      });
+    },
+  });
+  const wrapped = new Proxy(input.client as any, {
+    get(target, property, receiver) {
+      if (property === '$transaction') {
+        return (action: (transaction: any) => Promise<unknown>, options: unknown) => {
+          transactionAttempts += 1;
+          return target.$transaction(
+            (transaction: any) => action(wrapTransaction(transaction)),
+            options,
+          );
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return {
+    client: wrapped as PrismaClient,
+    transactionAttempts: () => transactionAttempts,
+  };
+}
+
 describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
   let client: PrismaClient;
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
@@ -286,6 +357,158 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     } })).rejects.toThrow(/AI media suite provenance mismatch/u);
   });
 
+  it('serializes a manual slot edit against claiming the same approved version', async () => {
+    const planning = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client));
+    const created = await planning.createRuleBased({
+      ownerUserId,
+      actorUserId: ownerUserId,
+      sourceSubjectId: subjectId,
+      sourceCaptureSnapshotId: snapshotId,
+      context: { type: 'collect', id: goodsId },
+      idempotencyKey: `suite-slot-race-plan-${suffix}`,
+      selectedSkuKeys: [selectedSkuKey],
+      candidateMediaKeys: capture.media.map((media) => media.key),
+    });
+    const approved = await planning.review({
+      planId: created.plan.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: created.plan.revision,
+      operationKey: `suite-slot-race-approve-${suffix}`,
+      decision: 'APPROVE',
+      note: null,
+    });
+    const repository = new PrismaAiImageSuiteRepository(client);
+    const authority = await repository.loadApprovedAuthority({
+      ownerUserId,
+      actorUserId: ownerUserId,
+      planId: created.plan.id,
+    });
+    expect(authority).not.toBeNull();
+    const config = {
+      provider: AI_IMAGE_SUITE_PROVIDER,
+      model: AI_IMAGE_SUITE_MODEL,
+      providerConfigHash: '9'.repeat(64),
+      pricingVersion: 'provider-free-zero/v1',
+      estimatedCostPerImageCents: 0,
+      maximumCostPerImageCents: 0,
+      concurrencyLimit: 2,
+    } as const;
+    const preview = createAiImageSuitePreview(authority!, config);
+
+    const editReached = deferred();
+    const editRelease = deferred();
+    const claimReached = deferred();
+    const claimRelease = deferred();
+    const editDatabase = withTransactionFindFirstBarrier({
+      client,
+      modelName: 'aiMediaPlanningRun',
+      matches: (args) => args?.where?.planId === created.plan.id,
+      wait: async () => {
+        editReached.resolve();
+        await editRelease.promise;
+      },
+    });
+    const claimDatabase = withTransactionFindFirstBarrier({
+      client,
+      modelName: 'aiMediaSuite',
+      matches: (args) => args?.where?.planId === created.plan.id
+        && args?.where?.planVersionId?.not === approved.plan.currentVersionId,
+      wait: async () => {
+        claimReached.resolve();
+        await claimRelease.promise;
+      },
+    });
+    const racingPlanning = createAiMediaPlanningService(
+      new PrismaAiMediaPlanningRepository(editDatabase.client),
+    );
+    const racingRepository = new PrismaAiImageSuiteRepository(claimDatabase.client);
+    const editPromise = racingPlanning.updateSlotReferences({
+        planId: created.plan.id,
+        ownerUserId,
+        actorUserId: ownerUserId,
+        expectedRevision: approved.plan.revision,
+        baseVersionId: approved.plan.currentVersionId!,
+        operationKey: `suite-slot-race-edit-${suffix}`,
+        changes: [{
+          slotKey: `sku:${selectedSkuKey}:hero`,
+          referenceCandidateIds: [],
+        }],
+      });
+    const claimPromise = racingRepository.claimApproved({
+        ownerUserId,
+        actorUserId: ownerUserId,
+        planId: created.plan.id,
+        expectedPlanRevision: approved.plan.revision,
+        idempotencyKey: `suite-slot-race-claim-${suffix}`,
+        expectedPreviewHash: preview.previewHash,
+        providerConfig: config,
+      });
+    const operations = Promise.allSettled([editPromise, claimPromise]);
+    let claimResult: Awaited<typeof claimPromise> | undefined;
+    let editResult: PromiseSettledResult<Awaited<typeof editPromise>> | undefined;
+    let operationError: unknown;
+    try {
+      await withTimeout(
+        Promise.all([editReached.promise, claimReached.promise]),
+        'AI media suite race barrier timed out',
+      );
+      claimRelease.resolve();
+      claimResult = await withTimeout(
+        claimPromise,
+        'AI media suite claim completion timed out',
+      );
+    } catch (error) {
+      operationError = error;
+    } finally {
+      claimRelease.resolve();
+      editRelease.resolve();
+      try {
+        const [settledEdit] = await withTimeout(
+          operations,
+          'AI media suite race operation cleanup timed out',
+        );
+        editResult = settledEdit;
+      } catch (cleanupError) {
+        operationError ??= cleanupError;
+      }
+    }
+    if (operationError) throw operationError;
+    if (!claimResult || !editResult) throw new Error('AI media suite race result was not captured');
+
+    const storedPlan = await client.aiMediaPlan.findUniqueOrThrow({
+      where: { id: created.plan.id },
+    });
+    const storedSuite = await client.aiMediaSuite.findFirst({
+      where: { ownerUserId, planId: created.plan.id },
+    });
+    const runCount = await client.aiMediaPlanningRun.count({ where: { planId: created.plan.id } });
+    const versionCount = await client.aiMediaPlanVersion.count({ where: { planId: created.plan.id } });
+    const editEventCount = await client.aiMediaPlanEvent.count({ where: {
+      planId: created.plan.id,
+      eventType: 'SLOT_REFERENCES_UPDATED',
+    } });
+
+    expect(claimResult).toMatchObject({ kind: 'created' });
+    expect(editResult).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ code: 'AI_MEDIA_PLANNING_ACTIVE_SUITE_CONFLICT' }),
+    });
+    expect(editDatabase.transactionAttempts()).toBeGreaterThanOrEqual(2);
+    expect(storedSuite).not.toBeNull();
+    expect(storedPlan).toMatchObject({
+      revision: approved.plan.revision,
+      currentVersionId: approved.plan.currentVersionId,
+      reviewStatus: 'APPROVED',
+    });
+    expect({ runCount, versionCount, editEventCount }).toEqual({
+      runCount: 1,
+      versionCount: 1,
+      editEventCount: 0,
+    });
+    expect(await client.aiMediaSuiteSlot.count({ where: { suiteId: storedSuite!.id } })).toBe(8);
+  });
+
   it('allows one serializable claim and exact replay under concurrent requests', async () => {
     const repository = new PrismaAiImageSuiteRepository(client);
     const input = {
@@ -303,8 +526,8 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     const storedSuite = await client.aiMediaSuite.findFirstOrThrow({ where: { ownerUserId, planId } });
     suiteId = storedSuite.id;
     expect(await client.aiMediaSuite.count({ where: { ownerUserId, planId } })).toBe(1);
-    expect(await client.aiMediaSuiteSlot.count({ where: { ownerUserId } })).toBe(8);
-    expect(await client.aiMediaSuiteEvent.count({ where: { ownerUserId } })).toBe(1);
+    expect(await client.aiMediaSuiteSlot.count({ where: { suiteId } })).toBe(8);
+    expect(await client.aiMediaSuiteEvent.count({ where: { suiteId } })).toBe(1);
     expect(await client.aiImageJob.count({ where: { ownerUserId, idempotencyKey: { startsWith: `suite-claim-${suffix}` } } })).toBe(0);
     expect(await client.aiCostReservation.count({ where: { ownerUserId } })).toBe(0);
   });

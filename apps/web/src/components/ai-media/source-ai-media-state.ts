@@ -130,6 +130,15 @@ export interface RefreshedAiMediaTarget {
 export type RefreshAiMediaTarget = () => Promise<RefreshedAiMediaTarget | null>;
 export type SynchronizeAiMediaTarget = (expectedTargetUpdatedAt?: string) => Promise<boolean>;
 
+export const AI_MEDIA_INTERACTIVE_DRAFT_DISCARD_MESSAGE = '当前 AI 图片编辑尚未保存，继续将放弃这些修改。';
+
+export function confirmAiMediaInteractiveDraftDiscard(
+  dirty: boolean,
+  confirm: (message: string) => boolean,
+): boolean {
+  return !dirty || confirm(AI_MEDIA_INTERACTIVE_DRAFT_DISCARD_MESSAGE);
+}
+
 export async function executeWithBusyState<T>(
   onBusyChange: (busy: boolean) => void,
   action: () => Promise<T>,

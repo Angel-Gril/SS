@@ -490,8 +490,64 @@ export interface AiMediaPlanPayload {
   compatibilityGroups: AiMediaPlanCompatibilityGroup[];
   slots: AiMediaPlanSlot[];
   verifiedFacts: Array<{ path: string; value: unknown; evidenceIds: string[]; skuKeys: string[] }>;
+  manualSelectionAllowed: boolean;
+  recoverable: boolean;
   diagnostics: Array<{ code: string; slotKey: string; candidateId: string | null }>;
   fallbackReason: string | null;
+}
+
+export type AiMediaPlanSlotCandidateReason = 'NOT_CURATED' | 'SLOT_INCOMPATIBLE' | 'SOURCE_UNAVAILABLE';
+
+export interface AiMediaPlanSlotCandidateOption {
+  candidateId: string;
+  input: AiMediaContextInput | null;
+  selectable: boolean;
+  reasonCode: AiMediaPlanSlotCandidateReason | null;
+}
+
+export interface AiMediaPlanSlotDraftEnvelope {
+  planId: string;
+  baseVersionId: string;
+  baseRevision: number;
+  slotKey: string;
+  referenceCandidateIds: string[];
+  savedAt: number;
+}
+
+export type AiMediaPlanSlotDraftAuthority = 'CURRENT' | 'VERSION_CONFLICT' | 'STALE_SOURCE';
+export type AiMediaPlanSlotCandidateEditMode = 'current' | 'version-conflict' | 'read-only';
+
+export function resolveAiMediaPlanSlotDraftAuthority(input: {
+  draft: Pick<AiMediaPlanSlotDraftEnvelope, 'planId' | 'baseVersionId' | 'baseRevision'>;
+  plan: Pick<AiMediaPlanRecord, 'id' | 'revision' | 'staleAt' | 'sourceCurrent'>;
+  currentVersionId: string | null;
+}): AiMediaPlanSlotDraftAuthority {
+  if (input.plan.staleAt || input.plan.sourceCurrent === false) return 'STALE_SOURCE';
+  if (input.draft.planId !== input.plan.id
+    || input.draft.baseRevision !== input.plan.revision
+    || input.draft.baseVersionId !== input.currentVersionId) return 'VERSION_CONFLICT';
+  return 'CURRENT';
+}
+
+export function resolveAiMediaPlanSlotCandidateEditMode(input: {
+  editingAllowed: boolean;
+  staleConflict: boolean;
+  rebaseRequested: boolean;
+  authority: AiMediaPlanSlotDraftAuthority | null;
+}): AiMediaPlanSlotCandidateEditMode {
+  if (!input.editingAllowed || input.staleConflict) return 'read-only';
+  if (!input.rebaseRequested) return 'current';
+  return input.authority === 'VERSION_CONFLICT' ? 'version-conflict' : 'read-only';
+}
+
+export function canToggleAiMediaPlanSlotCandidate(input: {
+  mode: AiMediaPlanSlotCandidateEditMode;
+  selected: boolean;
+  selectable: boolean;
+}): boolean {
+  if (input.mode === 'read-only') return false;
+  if (input.mode === 'version-conflict') return input.selected;
+  return input.selected || input.selectable;
 }
 
 export interface AiMediaPlanVersion {
@@ -660,6 +716,8 @@ function normalizePlanningPayload(value: unknown): AiMediaPlanPayload | null {
     compatibilityGroups: groups,
     slots,
     verifiedFacts,
+    manualSelectionAllowed: object.manualSelectionAllowed === true,
+    recoverable: object.recoverable === true,
     diagnostics,
     fallbackReason: planningText(object.fallbackReason, 200),
   };
@@ -765,6 +823,164 @@ const AI_MEDIA_PLANNING_GOAL_LABELS: Record<string, string> = {
 export function formatAiMediaPlanningGoal(value: string): string {
   const normalized = value.trim();
   return AI_MEDIA_PLANNING_GOAL_LABELS[normalized.toLowerCase()] || normalized || '未命名槽位';
+}
+
+function aiMediaPlanSlotReferenceIds(value: unknown, options: { allowEmpty?: boolean } = {}): string[] {
+  if (!Array.isArray(value) || (!options.allowEmpty && value.length < 1) || value.length > 5) {
+    throw new Error(options.allowEmpty ? '每个槽位最多选择 5 张参考图' : '每个槽位需要选择 1 到 5 张参考图');
+  }
+  const normalized = value.map((entry) => {
+    const candidateId = planningText(entry, 500);
+    if (!candidateId) throw new Error('参考图标识无效');
+    return candidateId;
+  });
+  if (new Set(normalized).size !== normalized.length) throw new Error('同一槽位不能重复选择参考图');
+  return normalized;
+}
+
+export function buildAiMediaPlanSlotReferenceUpdateRequest(input: {
+  expectedRevision: number;
+  baseVersionId: string;
+  operationKey: string;
+  slotKey: string;
+  referenceCandidateIds: string[];
+}) {
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new Error('计划版本已失效，请刷新后重试');
+  }
+  const baseVersionId = planningText(input.baseVersionId, 200);
+  if (!baseVersionId) throw new Error('计划基础版本无效');
+  const operationKey = planningText(input.operationKey, 128);
+  if (!operationKey || operationKey.length < 8) throw new Error('槽位保存操作标识无效');
+  const slotKey = planningText(input.slotKey, 1_024);
+  if (!slotKey) throw new Error('图片槽位标识无效');
+  const referenceCandidateIds = aiMediaPlanSlotReferenceIds(input.referenceCandidateIds, { allowEmpty: true });
+  return {
+    expectedRevision: input.expectedRevision,
+    baseVersionId,
+    operationKey,
+    changes: [{ slotKey, referenceCandidateIds }],
+  };
+}
+
+function aiMediaPlanSlotSkuKeys(
+  slot: AiMediaPlanSlot,
+  compatibilityGroups: AiMediaPlanCompatibilityGroup[],
+): Set<string> {
+  if (slot.ownership.level === 'sku') return new Set([slot.ownership.key]);
+  const group = compatibilityGroups.find((candidate) => candidate.groupKey === slot.ownership.key);
+  return new Set(group?.skuKeys || []);
+}
+
+export function resolveAiMediaPlanSlotCandidateOptions(input: {
+  slot: AiMediaPlanSlot;
+  compatibilityGroups: AiMediaPlanCompatibilityGroup[];
+  consideredCandidateIds: string[];
+  selectedCandidateIds: string[];
+  draftCandidateIds?: string[];
+  inputs: AiMediaContextInput[];
+}): AiMediaPlanSlotCandidateOption[] {
+  const selected = new Set(input.selectedCandidateIds);
+  const sourceByKey = new Map(input.inputs.map((candidate) => [candidate.sourceMediaKey, candidate]));
+  const slotSkuKeys = aiMediaPlanSlotSkuKeys(input.slot, input.compatibilityGroups);
+  const candidateIds = [...new Set([
+    ...input.consideredCandidateIds,
+    ...input.slot.references.map((reference) => reference.candidateId),
+    ...(input.draftCandidateIds || []),
+  ])];
+  return candidateIds.map((candidateId) => {
+    const source = sourceByKey.get(candidateId) || null;
+    if (!source) return { candidateId, input: null, selectable: false, reasonCode: 'SOURCE_UNAVAILABLE' };
+    if (!selected.has(candidateId)) {
+      return { candidateId, input: source, selectable: false, reasonCode: 'NOT_CURATED' };
+    }
+    const sourceSkuKeys = source.skuKeys || [];
+    const compatible = sourceSkuKeys.length === 0 || (input.slot.ownership.level === 'sku'
+      ? sourceSkuKeys.includes(input.slot.ownership.key)
+      : sourceSkuKeys.every((skuKey) => slotSkuKeys.has(skuKey)));
+    return compatible
+      ? { candidateId, input: source, selectable: true, reasonCode: null }
+      : { candidateId, input: source, selectable: false, reasonCode: 'SLOT_INCOMPATIBLE' };
+  });
+}
+
+export function aiMediaPlanSlotDraftStorageKey(planId: string, slotKey: string): string {
+  return `ss-erp:ai-media-plan-slot-draft:${encodeURIComponent(planId)}:${encodeURIComponent(slotKey)}`;
+}
+
+function validAiMediaPlanSlotDraft(value: unknown): value is AiMediaPlanSlotDraftEnvelope {
+  const object = planningObject(value);
+  if (!object) return false;
+  const planId = planningText(object.planId, 200);
+  const baseVersionId = planningText(object.baseVersionId, 200);
+  const slotKey = planningText(object.slotKey, 1_024);
+  if (!planId || !baseVersionId || !slotKey
+    || !Number.isSafeInteger(object.baseRevision) || Number(object.baseRevision) < 1
+    || !Number.isSafeInteger(object.savedAt) || Number(object.savedAt) < 0) return false;
+  try {
+    aiMediaPlanSlotReferenceIds(object.referenceCandidateIds, { allowEmpty: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadAiMediaPlanSlotDraft(
+  storage: WorkflowIntentStorage | null | undefined,
+  key: string,
+  options: { now?: number; ttlMs?: number } = {},
+): AiMediaPlanSlotDraftEnvelope | null {
+  if (!storage || !key) return null;
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!validAiMediaPlanSlotDraft(parsed)) {
+      storage.removeItem(key);
+      return null;
+    }
+    const now = options.now ?? Date.now();
+    const ttlMs = options.ttlMs ?? AI_MEDIA_INTENT_TTL_MS;
+    if (parsed.savedAt > now || now - parsed.savedAt > ttlMs) {
+      storage.removeItem(key);
+      return null;
+    }
+    return {
+      planId: parsed.planId.trim(),
+      baseVersionId: parsed.baseVersionId.trim(),
+      baseRevision: parsed.baseRevision,
+      slotKey: parsed.slotKey.trim(),
+      referenceCandidateIds: aiMediaPlanSlotReferenceIds(parsed.referenceCandidateIds, { allowEmpty: true }),
+      savedAt: parsed.savedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveAiMediaPlanSlotDraft(
+  storage: WorkflowIntentStorage | null | undefined,
+  key: string,
+  draft: AiMediaPlanSlotDraftEnvelope,
+): void {
+  if (!storage || !key || !validAiMediaPlanSlotDraft(draft)) return;
+  try {
+    storage.setItem(key, JSON.stringify(draft));
+  } catch {
+    // Session storage can be unavailable; the in-memory draft remains authoritative.
+  }
+}
+
+export function clearAiMediaPlanSlotDraft(
+  storage: WorkflowIntentStorage | null | undefined,
+  key: string,
+): void {
+  if (!storage || !key) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Storage can become unavailable after the browser context changes.
+  }
 }
 
 export function buildAiMediaPlanReviewRequest(input: {

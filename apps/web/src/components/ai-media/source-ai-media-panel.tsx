@@ -23,6 +23,7 @@ import {
 } from './source-ai-image-mask-editor';
 import {
   createLatestLoadCoordinator,
+  confirmAiMediaInteractiveDraftDiscard,
   isMediaMutationConflict,
   type AiImageApplyResult,
   type LatestLoadRequest,
@@ -342,7 +343,7 @@ export function SourceAiMediaPanel({
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
   onConflictRefresh: RefreshAiMediaTarget;
-  onMaskDraftDirtyChange?: (dirty: boolean) => void;
+  onMaskDraftDirtyChange?: (dirty: boolean, discard?: () => void) => void;
 }) {
   const [context, setContext] = useState<AiMediaContextResponse | null>(null);
   const [capabilities, setCapabilities] = useState<AiMediaCapabilities | null>(null);
@@ -379,6 +380,7 @@ export function SourceAiMediaPanel({
   const [preparingSource, setPreparingSource] = useState(false);
   const [maskReady, setMaskReady] = useState(false);
   const [maskDirty, setMaskDirty] = useState(false);
+  const [planningDraftDirty, setPlanningDraftDirty] = useState(false);
   const [maskResetNonce, setMaskResetNonce] = useState(0);
   const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState('');
@@ -413,6 +415,9 @@ export function SourceAiMediaPanel({
   const capabilitiesRef = useRef<AiMediaCapabilities | null>(null);
   const contextRef = useRef<AiMediaContextResponse | null>(null);
   const maskDirtyRef = useRef(false);
+  const planningDraftDirtyRef = useRef(false);
+  const interactiveDraftDirtyRef = useRef(false);
+  const slotDraftDiscardRef = useRef<(() => void) | null>(null);
   const maskHistoryGuardRef = useRef<{ token: string | null; suppressNextPop: boolean }>({
     token: null,
     suppressNextPop: false,
@@ -435,14 +440,27 @@ export function SourceAiMediaPanel({
   const updateMaskDirty = useCallback((dirty: boolean) => {
     maskDirtyRef.current = dirty;
     setMaskDirty(dirty);
-    onMaskDraftDirtyChangeRef.current?.(dirty);
-    if (typeof window === 'undefined') return;
+  }, []);
+  const registerSlotDraftDiscard = useCallback((discard: (() => void) | null) => {
+    slotDraftDiscardRef.current = discard;
+  }, []);
+  const discardInteractiveDrafts = useCallback(() => {
+    updateMaskDirty(false);
+    slotDraftDiscardRef.current?.();
+    planningDraftDirtyRef.current = false;
+    setPlanningDraftDirty(false);
+  }, [updateMaskDirty]);
+  const aiMediaInteractiveDraftDirty = maskDirty || planningDraftDirty;
+  useEffect(() => {
+    planningDraftDirtyRef.current = planningDraftDirty;
+    interactiveDraftDirtyRef.current = aiMediaInteractiveDraftDirty;
+    onMaskDraftDirtyChangeRef.current?.(aiMediaInteractiveDraftDirty, discardInteractiveDrafts);
     const guard = maskHistoryGuardRef.current;
-    // A same-URL sentinel lets popstate ask before Next unmounts the editor.
-    if (dirty && !guard.token) {
-      guard.token = idempotencyKey('mask-draft');
+    // A same-URL sentinel protects every unsaved AI media interaction before Next unmounts it.
+    if (aiMediaInteractiveDraftDirty && !guard.token) {
+      guard.token = idempotencyKey('ai-media-draft');
       window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
-    } else if (!dirty && guard.token && !guard.suppressNextPop) {
+    } else if (!aiMediaInteractiveDraftDirty && guard.token && !guard.suppressNextPop) {
       if (window.history.state?.[AI_MASK_HISTORY_GUARD_KEY] === guard.token) {
         guard.suppressNextPop = true;
         window.history.back();
@@ -451,7 +469,10 @@ export function SourceAiMediaPanel({
         guard.suppressNextPop = false;
       }
     }
-  }, []);
+    return () => {
+      if (aiMediaInteractiveDraftDirty) onMaskDraftDirtyChangeRef.current?.(false);
+    };
+  }, [aiMediaInteractiveDraftDirty, discardInteractiveDrafts, planningDraftDirty]);
 
   const reconcileApplicationTargetVersion = useCallback((authoritativeTargetUpdatedAt?: string | null) => {
     setApplicationTargetStaleVersion((currentStaleVersion) => resolveAiMediaApplicationTargetStaleVersion({
@@ -876,6 +897,7 @@ export function SourceAiMediaPanel({
     setSelectedKey('');
     setCandidateSource(null);
     updateMaskDirty(false);
+    setPlanningDraftDirty(false);
     setMaskReady(false);
     setError('');
     setDisabled(false);
@@ -943,33 +965,33 @@ export function SourceAiMediaPanel({
     if (operation === 'INPAINT') setMaskReady(false);
   }, [candidateSource?.sourceMediaKey, operation, selectedKey]);
   useEffect(() => {
-    if (!maskDirty) return;
+    if (!aiMediaInteractiveDraftDirty) return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [maskDirty]);
+  }, [aiMediaInteractiveDraftDirty]);
   useEffect(() => {
     const handlePopState = () => {
       const guard = maskHistoryGuardRef.current;
       if (guard.suppressNextPop) {
         guard.suppressNextPop = false;
         guard.token = null;
-        if (maskDirtyRef.current) {
-          guard.token = idempotencyKey('mask-draft');
+        if (interactiveDraftDirtyRef.current) {
+          guard.token = idempotencyKey('ai-media-draft');
           window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
         }
         return;
       }
-      if (!maskDirtyRef.current || !guard.token) return;
-      if (!confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(message))) {
+      if (!interactiveDraftDirtyRef.current || !guard.token) return;
+      if (!confirmAiMediaInteractiveDraftDiscard(true, (message) => window.confirm(message))) {
         window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
         return;
       }
       guard.token = null;
-      updateMaskDirty(false);
+      discardInteractiveDrafts();
       window.setTimeout(() => window.history.back(), 0);
     };
     window.addEventListener('popstate', handlePopState);
@@ -985,7 +1007,7 @@ export function SourceAiMediaPanel({
       guard.suppressNextPop = false;
       if (shouldRemoveGuard) window.history.back();
     };
-  }, [updateMaskDirty]);
+  }, [discardInteractiveDrafts]);
   const currentReadiness = operationReadiness(operation);
   const canCreateCurrentOperation = Boolean(
     capabilities?.webMediaEnabled
@@ -2214,11 +2236,15 @@ export function SourceAiMediaPanel({
           enabled
           planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
           selectedSkuKeys={selectedSkuKeys}
-          mediaDraftDirty={mediaDraftDirty || Boolean(applicationTargetStaleVersion)}
+          candidateInputs={context?.inputs ?? []}
+          candidateSnapshotId={context?.snapshot.id}
+          mediaDraftDirty={mediaDraftDirty || planningDraftDirty || Boolean(applicationTargetStaleVersion)}
           mediaMutationBusy={mediaMutationBusy}
           runMediaMutation={runMediaMutation}
           onApplied={onApplied}
           onConflictRefresh={synchronizeApplicationTarget}
+          onSlotDraftDirtyChange={setPlanningDraftDirty}
+          onRegisterSlotDraftDiscard={registerSlotDraftDiscard}
         /> : null}
 
       {!disabled && context?.inputs.length ? <>

@@ -8,6 +8,8 @@ import {
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
 import {
+  AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
+  buildManualAiMediaSlotVersionArtifacts,
   hashAiMediaPlanningJson,
   type AiMediaPlanningAuthority,
   type AiMediaPlanningRepository,
@@ -22,6 +24,8 @@ import {
   type ReviewAiMediaPlanInput,
   type ReviewRulePlanResult,
   type RuleBasedAiMediaPlanningArtifacts,
+  type UpdateAiMediaPlanSlotReferencesInput,
+  type UpdateAiMediaPlanSlotReferencesResult,
 } from '../services/ai-media-planning.js';
 
 const planDetailInclude = {
@@ -312,6 +316,12 @@ function retryStaleCasConflict(): never {
   throw error;
 }
 
+function retrySlotReferenceCasConflict(): never {
+  const error = new Error('AI media slot-reference CAS conflicted with a concurrent update');
+  (error as { code?: string }).code = 'P2034';
+  throw error;
+}
+
 function candidateEvidenceId(snapshotId: string, candidateId: string): string {
   const path = `/media/${encodeURIComponent(candidateId)}`;
   const evidenceHash = createHash('sha256').update(`${path}\u0000${candidateId}`).digest('hex');
@@ -418,6 +428,215 @@ export function hasAiMediaPlanExecutionEvidence(plan: any): boolean {
     return nonEmptyStringArray(slot.safetyConstraints)
       && nonEmptyStringArray(slot.acceptanceChecks);
   });
+}
+
+function slotReferenceEventKey(input: UpdateAiMediaPlanSlotReferencesInput): string {
+  return `${input.planId}:slot-references:${hashAiMediaPlanningJson({ operationKey: input.operationKey })}`;
+}
+
+function isExactSlotReferenceEvent(
+  event: any,
+  input: UpdateAiMediaPlanSlotReferencesInput,
+  requestFingerprint: string,
+): boolean {
+  const payload = event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload as Record<string, unknown>
+    : null;
+  return Boolean(event
+    && event.planId === input.planId
+    && event.ownerUserId === input.ownerUserId
+    && event.actorUserId === input.actorUserId
+    && event.eventType === 'SLOT_REFERENCES_UPDATED'
+    && payload?.requestFingerprint === requestFingerprint
+    && event.versionId);
+}
+
+async function updateSlotReferencesInTransaction(
+  tx: any,
+  input: UpdateAiMediaPlanSlotReferencesInput,
+): Promise<UpdateAiMediaPlanSlotReferencesResult> {
+  const plan = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
+  if (!plan) return { kind: 'not-found', plan: null, createdVersionId: null };
+
+  const eventKey = slotReferenceEventKey(input);
+  const requestFingerprint = hashAiMediaPlanningJson(input);
+  const existingEvent = await tx.aiMediaPlanEvent.findUnique({ where: { eventKey } });
+  if (existingEvent) {
+    if (!isExactSlotReferenceEvent(existingEvent, input, requestFingerprint)) {
+      return { kind: 'operation-conflict', plan: planRecord(plan), createdVersionId: null };
+    }
+    if (plan.staleAt) {
+      return {
+        kind: 'replayed', plan: planRecord(plan), createdVersionId: String(existingEvent.versionId),
+      };
+    }
+    const replayStaleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
+    if (replayStaleCheck.kind === 'conflict') retrySlotReferenceCasConflict();
+    return {
+      kind: 'replayed',
+      plan: replayStaleCheck.kind === 'stale' ? replayStaleCheck.plan : planRecord(plan),
+      createdVersionId: String(existingEvent.versionId),
+    };
+  }
+  if (plan.staleAt) {
+    return { kind: 'stale', plan: planRecord(plan), createdVersionId: null };
+  }
+  const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
+  if (staleCheck.kind === 'stale') {
+    return { kind: 'stale', plan: staleCheck.plan, createdVersionId: null };
+  }
+  if (staleCheck.kind === 'conflict') {
+    if (!staleCheck.plan) return { kind: 'not-found', plan: null, createdVersionId: null };
+    return {
+      kind: staleCheck.plan.revision !== input.expectedRevision
+        ? 'revision-conflict'
+        : 'state-conflict',
+      plan: staleCheck.plan,
+      createdVersionId: null,
+    };
+  }
+  if (Number(plan.revision) !== input.expectedRevision) {
+    return { kind: 'revision-conflict', plan: planRecord(plan), createdVersionId: null };
+  }
+  if (!plan.currentVersion || plan.currentVersionId !== input.baseVersionId
+    || plan.currentVersion.id !== input.baseVersionId || plan.reviewStatus === 'NOT_READY') {
+    return { kind: 'state-conflict', plan: planRecord(plan), createdVersionId: null };
+  }
+
+  const blockingSuite = await tx.aiMediaSuite.findFirst({
+    where: {
+      planVersionId: input.baseVersionId,
+      status: { notIn: ['SUCCEEDED', 'CANCELLED'] },
+    },
+    select: { id: true, status: true },
+  });
+  if (blockingSuite) {
+    return { kind: 'active-suite-conflict', plan: planRecord(plan), createdVersionId: null };
+  }
+
+  let artifacts;
+  try {
+    artifacts = buildManualAiMediaSlotVersionArtifacts(input, versionRecord(plan.currentVersion));
+  } catch {
+    return { kind: 'invalid-reference', plan: planRecord(plan), createdVersionId: null };
+  }
+  if (!artifacts.changed) {
+    return { kind: 'no-changes', plan: planRecord(plan), createdVersionId: null };
+  }
+
+  const latestRun = await tx.aiMediaPlanningRun.findFirst({
+    where: { planId: plan.id, ownerUserId: input.ownerUserId },
+    orderBy: { attempt: 'desc' },
+    select: { attempt: true },
+  });
+  const now = new Date();
+  const run = await tx.aiMediaPlanningRun.create({ data: {
+    planId: plan.id,
+    ownerUserId: input.ownerUserId,
+    sourceSubjectId: plan.sourceSubjectId,
+    actorUserId: input.actorUserId,
+    sourceCaptureSnapshotId: plan.currentVersion.sourceCaptureSnapshotId,
+    attempt: Number(latestRun?.attempt || 0) + 1,
+    mode: plan.currentVersion.mode,
+    engineVersion: AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
+    status: 'SUCCEEDED',
+    idempotencyKey: `slot-ref:${hashAiMediaPlanningJson({
+      ownerUserId: input.ownerUserId,
+      planId: input.planId,
+      operationKey: input.operationKey,
+    })}`,
+    requestFingerprint: artifacts.requestFingerprint,
+    sourceCaptureHash: plan.currentVersion.sourceCaptureHash,
+    sourceProfileHash: plan.currentVersion.sourceProfileHash,
+    inputFingerprint: artifacts.inputFingerprint,
+    inputSnapshot: artifacts.inputSnapshot,
+    inputHash: artifacts.inputHash,
+    inputBytes: artifacts.inputBytes,
+    startedAt: now,
+    completedAt: now,
+  } });
+  const nextVersionNumber = Number(plan.latestVersion) + 1;
+  const version = await tx.aiMediaPlanVersion.create({ data: {
+    planId: plan.id,
+    ownerUserId: input.ownerUserId,
+    sourceSubjectId: plan.sourceSubjectId,
+    version: nextVersionNumber,
+    planningRunId: run.id,
+    parentVersionId: input.baseVersionId,
+    sourceCaptureSnapshotId: plan.currentVersion.sourceCaptureSnapshotId,
+    sourceCaptureHash: plan.currentVersion.sourceCaptureHash,
+    sourceProfileHash: plan.currentVersion.sourceProfileHash,
+    sourceSchemaVersion: plan.currentVersion.sourceSchemaVersion,
+    selectedSkuHash: plan.currentVersion.selectedSkuHash,
+    inputAssetSetHash: plan.currentVersion.inputAssetSetHash,
+    inputFingerprint: artifacts.inputFingerprint,
+    planSchemaVersion: plan.currentVersion.planSchemaVersion,
+    plannerVersion: AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
+    mode: plan.currentVersion.mode,
+    fallbackReason: plan.currentVersion.fallbackReason,
+    inputSnapshot: artifacts.inputSnapshot,
+    inputHash: artifacts.inputHash,
+    curation: plan.currentVersion.curation,
+    curationHash: plan.currentVersion.curationHash,
+    visionEvidence: plan.currentVersion.visionEvidence,
+    visionEvidenceHash: plan.currentVersion.visionEvidenceHash,
+    planPayload: artifacts.planPayload,
+    planHash: artifacts.planHash,
+    planBytes: artifacts.planBytes,
+    provenance: artifacts.provenance,
+    provenanceHash: artifacts.provenanceHash,
+    actorUserId: input.actorUserId,
+  } });
+  const updated = await tx.aiMediaPlan.updateMany({
+    where: {
+      id: plan.id,
+      ownerUserId: input.ownerUserId,
+      revision: input.expectedRevision,
+      currentVersionId: input.baseVersionId,
+      staleAt: null,
+    },
+    data: {
+      revision: { increment: 1 },
+      latestVersion: { increment: 1 },
+      currentVersionId: version.id,
+      approvedVersionId: null,
+      reviewStatus: 'PENDING',
+      reviewedByUserId: null,
+      reviewedAt: null,
+    },
+  });
+  if (updated.count !== 1) {
+    // run/version rows have already been inserted. Returning would commit
+    // orphans, so abort the whole transaction and classify from a fresh
+    // Serializable snapshot on retry.
+    retrySlotReferenceCasConflict();
+  }
+  const eventBody = {
+    version: 'ai-media-plan-slot-reference-event/v1',
+    requestFingerprint: artifacts.requestFingerprint,
+    operation: artifacts.operation,
+    baseVersionId: input.baseVersionId,
+    createdVersionId: version.id,
+    basePlanHash: plan.currentVersion.planHash,
+    createdPlanHash: artifacts.planHash,
+  };
+  await tx.aiMediaPlanEvent.create({ data: {
+    planId: plan.id,
+    ownerUserId: input.ownerUserId,
+    versionId: version.id,
+    runId: run.id,
+    revision: input.expectedRevision + 1,
+    actorUserId: input.actorUserId,
+    eventKey,
+    eventType: 'SLOT_REFERENCES_UPDATED',
+    ...eventPayload(eventBody),
+  } });
+  const saved = await readOwnedAiMediaPlan(tx, plan.id, input.ownerUserId);
+  return {
+    kind: 'updated',
+    plan: saved ? planRecord(saved) : null,
+    createdVersionId: version.id,
+  };
 }
 
 export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepository {
@@ -683,6 +902,23 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
       take: page.limit,
     });
     return rows.map(versionRecord);
+  }
+
+  async updateSlotReferences(
+    input: UpdateAiMediaPlanSlotReferencesInput,
+  ): Promise<UpdateAiMediaPlanSlotReferencesResult> {
+    try {
+      return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => (
+        updateSlotReferencesInTransaction(tx, input)
+      ));
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      // A concurrent exact delivery may win on the event/run/version unique
+      // keys. Re-run the complete classification in one Serializable snapshot.
+      return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => (
+        updateSlotReferencesInTransaction(tx, input)
+      ));
+    }
   }
 
   async reviewCurrent(input: ReviewAiMediaPlanInput): Promise<ReviewRulePlanResult> {

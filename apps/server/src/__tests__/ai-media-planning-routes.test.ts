@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { aiMediaPlanningRoutes } from '../routes/ai-media-plans.js';
+import { AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH } from '../services/ai-media-planning-contract.js';
 import { AiMediaPlanningError, type AiMediaPlanningService } from '../services/ai-media-planning.js';
 
 function version() {
@@ -85,6 +86,9 @@ function serviceMock() {
     getWithSourceStatus: vi.fn().mockResolvedValue({ plan: plan(), sourceCurrent: true }),
     listVersions: vi.fn().mockResolvedValue([version()]),
     review: vi.fn().mockResolvedValue({ plan: plan(), replayed: false, sourceCurrent: true }),
+    updateSlotReferences: vi.fn().mockResolvedValue({
+      plan: plan(), replayed: false, sourceCurrent: true, createdVersionId: 'version-2',
+    }),
   } as unknown as AiMediaPlanningService;
 }
 
@@ -121,6 +125,33 @@ describe('AI media planning routes', () => {
     expect(JSON.stringify(body)).not.toContain('must not leak');
     expect(JSON.stringify(body)).not.toContain('secret-hash');
     expect(body.data.staleReasons).toEqual(['SOURCE_CAPTURE_HASH_CHANGED']);
+  });
+
+  it('preserves valid long slot keys in the public plan projection', async () => {
+    const service = serviceMock();
+    const current = plan();
+    const skuKey = 's'.repeat(500);
+    const slotKey = `sku:${skuKey}:hero`;
+    expect(slotKey.length).toBeGreaterThan(200);
+    expect(slotKey.length).toBeLessThanOrEqual(AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH);
+    (current.currentVersion.planPayload as any).compatibilityGroups[0].skuKeys = [skuKey];
+    (current.currentVersion.planPayload as any).slots[0].slotKey = slotKey;
+    (current.currentVersion.planPayload as any).slots[0].ownership.key = skuKey;
+    (current.currentVersion.planPayload as any).diagnostics = [{
+      code: 'MANUAL_REFERENCE_REQUIRED', slotKey, candidateId: 'media-1',
+    }];
+    (service.getCurrentByContext as any).mockResolvedValueOnce({ plan: current, sourceCurrent: true });
+    const { app } = await build(service);
+
+    const response = await app.inject({
+      method: 'GET', url: '/plans/current?contextType=collect&contextId=goods-1',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.currentVersion.planPayload).toMatchObject({
+      slots: [{ slotKey, ownership: { key: skuKey } }],
+      diagnostics: [{ code: 'MANUAL_REFERENCE_REQUIRED', slotKey, candidateId: 'media-1' }],
+    });
   });
 
   it('returns an empty current context without manufacturing a plan', async () => {
@@ -208,6 +239,81 @@ describe('AI media planning routes', () => {
     } });
     expect(success.statusCode).toBe(409);
     expect(success.json()).toMatchObject({ code: 'AI_MEDIA_PLANNING_REVISION_CONFLICT' });
+  });
+
+  it('edits slot references with server-derived tenant identity and strict input', async () => {
+    const service = serviceMock();
+    const { app } = await build(service);
+    const rejected = await app.inject({ method: 'POST', url: '/plans/plan-1/slot-references', payload: {
+      expectedRevision: 1,
+      baseVersionId: 'version-1',
+      operationKey: 'slot-route-operation-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-2', 'media-1'] }],
+      ownerUserId: 'attacker',
+    } });
+    expect(rejected.statusCode).toBe(400);
+    expect(service.updateSlotReferences).not.toHaveBeenCalled();
+
+    const response = await app.inject({ method: 'POST', url: '/plans/plan-1/slot-references', payload: {
+      expectedRevision: 1,
+      baseVersionId: 'version-1',
+      operationKey: 'slot-route-operation-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-2', 'media-1'] }],
+    } });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      code: 1, replayed: false, createdVersionId: 'version-2',
+    });
+    expect(service.updateSlotReferences).toHaveBeenCalledWith({
+      planId: 'plan-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 1, baseVersionId: 'version-1', operationKey: 'slot-route-operation-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-2', 'media-1'] }],
+    });
+  });
+
+  it('returns HTTP 200 for an exact slot-reference replay', async () => {
+    const service = serviceMock();
+    (service.updateSlotReferences as any).mockResolvedValueOnce({
+      plan: plan(), replayed: true, sourceCurrent: true, createdVersionId: 'version-2',
+    });
+    const { app } = await build(service);
+    const response = await app.inject({ method: 'POST', url: '/plans/plan-1/slot-references', payload: {
+      expectedRevision: 1,
+      baseVersionId: 'version-1',
+      operationKey: 'slot-route-replay-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: ['media-1'] }],
+    } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1, replayed: true, createdVersionId: 'version-2',
+    });
+  });
+
+  it('fails closed for slot edits while either planning rollout is disabled', async () => {
+    const payload = {
+      expectedRevision: 1,
+      baseVersionId: 'version-1',
+      operationKey: 'slot-rollout-operation-1',
+      changes: [{ slotKey: 'sku:sku-1:hero', referenceCandidateIds: [] }],
+    };
+    const workflowService = serviceMock();
+    const workflowDisabled = await build(workflowService, { workflowEnabled: false });
+    const workflowResponse = await workflowDisabled.app.inject({
+      method: 'POST', url: '/plans/plan-1/slot-references', payload,
+    });
+    expect(workflowResponse.statusCode).toBe(503);
+    expect(workflowResponse.json()).toMatchObject({ code: 'AI_MEDIA_WORKFLOW_DISABLED' });
+    expect(workflowService.updateSlotReferences).not.toHaveBeenCalled();
+
+    const webService = serviceMock();
+    const webDisabled = await build(webService, { workflowEnabled: true, webMediaEnabled: false });
+    const webResponse = await webDisabled.app.inject({
+      method: 'POST', url: '/plans/plan-1/slot-references', payload,
+    });
+    expect(webResponse.statusCode).toBe(503);
+    expect(webResponse.json()).toMatchObject({ code: 'SOURCE_LISTING_WEB_MEDIA_DISABLED' });
+    expect(webService.updateSlotReferences).not.toHaveBeenCalled();
   });
 
   it('fails closed for review while either planning rollout is disabled', async () => {

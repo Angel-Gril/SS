@@ -1,10 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ClipboardCheck, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { api } from '@/lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, ClipboardCheck, ImageIcon, Loader2, Pencil, RefreshCw, Save, ShieldCheck, X } from 'lucide-react';
+import { api, apiUrl } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { SourceAiMediaSuitePanel } from './source-ai-media-suite-panel';
 import type {
@@ -13,26 +21,40 @@ import type {
   SynchronizeAiMediaTarget,
 } from './source-ai-media-state';
 import {
+  aiMediaPlanSlotDraftStorageKey,
   buildAiMediaPlanReviewRequest,
+  buildAiMediaPlanSlotReferenceUpdateRequest,
+  canToggleAiMediaPlanSlotCandidate,
   canApproveAiMediaPlan,
   canRegenerateAiMediaPlan,
+  clearAiMediaPlanSlotDraft,
   clearWorkflowSubmissionIntent,
   formatAiMediaPlanningGoal,
   formatAiMediaPlanningIdentity,
   formatAiMediaPlanningSlotKey,
+  loadAiMediaPlanSlotDraft,
   loadWorkflowSubmissionIntent,
   normalizeAiMediaPlanBundle,
+  resolveAiMediaPlanSlotCandidateEditMode,
+  resolveAiMediaPlanSlotCandidateOptions,
+  resolveAiMediaPlanSlotDraftAuthority,
   resolveWorkflowSubmissionIntent,
+  saveAiMediaPlanSlotDraft,
   saveWorkflowSubmissionIntent,
   type AiMediaPlanBundle,
   type AiMediaPlanCurationDecision,
   type AiMediaPlanPayload,
   type AiMediaPlanSlot,
+  type AiMediaContextInput,
   type WorkflowIntentStorage,
   type WorkflowSubmissionIntent,
 } from '@/lib/ai-media-workflow';
 
 const REVIEWABLE = new Set(['PENDING']);
+
+type PlanLoadOutcome =
+  | { ok: true; bundle: AiMediaPlanBundle | null }
+  | { ok: false; reason: 'disabled' | 'superseded' | 'request-failed' | 'invalid-response' };
 
 const REVIEW_STATUS_LABEL: Record<AiMediaPlanBundle['plan']['reviewStatus'], string> = {
   NOT_READY: '未就绪',
@@ -82,6 +104,27 @@ function operationKey(prefix = 'plan-review') {
 function reviewStorageKey(planId: string, decision: 'APPROVE' | 'REJECT') {
   return `ss-erp:ai-media-plan-review:${encodeURIComponent(planId)}:${decision.toLowerCase()}`;
 }
+
+function slotIntentStorageKey(planId: string, slotKey: string) {
+  return `ss-erp:ai-media-plan-slot-intent:${encodeURIComponent(planId)}:${encodeURIComponent(slotKey)}`;
+}
+
+function sameReferences(left: string[], right: string[]) {
+  return left.length === right.length && left.every((candidateId, index) => candidateId === right[index]);
+}
+
+function candidateImageUrl(value: string) {
+  return /^https?:\/\//iu.test(value) ? value : apiUrl(value);
+}
+
+type SlotDraft = {
+  planId: string;
+  baseVersionId: string;
+  baseRevision: number;
+  slotKey: string;
+  baselineReferenceCandidateIds: string[];
+  referenceCandidateIds: string[];
+};
 
 function statusVariant(status: AiMediaPlanBundle['plan']['reviewStatus']) {
   if (status === 'APPROVED') return 'success' as const;
@@ -195,7 +238,15 @@ function CompatibilityDetails({ payload }: { payload: AiMediaPlanPayload | null 
   );
 }
 
-function SlotDetails({ payload }: { payload: AiMediaPlanPayload | null }) {
+function SlotDetails({
+  payload,
+  editable,
+  onEdit,
+}: {
+  payload: AiMediaPlanPayload | null;
+  editable: boolean;
+  onEdit: (slot: AiMediaPlanSlot) => void;
+}) {
   if (!payload) return null;
   return (
     <details className="border">
@@ -209,6 +260,7 @@ function SlotDetails({ payload }: { payload: AiMediaPlanPayload | null }) {
               <span className="break-all font-mono">{formatAiMediaPlanningSlotKey(slot.slotKey)}</span>
               <Badge variant={slot.status === 'READY' ? 'success' : 'warning'}>{slot.status === 'READY' ? '可执行' : '需人工'}</Badge>
               <span className="text-muted-foreground">{slotLabel(slot)} · {slot.aspectRatio}</span>
+              {editable ? <Button type="button" size="icon" variant="ghost" className="ml-auto h-7 w-7 shrink-0" onClick={() => onEdit(slot)} title="编辑槽位参考图" aria-label={`编辑槽位参考图 ${slotLabel(slot)}`}><Pencil className="h-3.5 w-3.5" /></Button> : null}
             </div>
             <div className="mt-1 break-words text-muted-foreground">归属：{slot.ownership.level === 'sku' ? 'SKU' : '兼容组'} / {formatAiMediaPlanningIdentity(slot.ownership.key)}</div>
             <div className="mt-1 break-words">引用：{slot.references.length ? slot.references.map((reference) => `${reference.candidateId} [${reference.evidenceIds.join(', ') || '无证据'}]`).join('；') : '无引用，需人工选择'}</div>
@@ -226,22 +278,30 @@ export function SourceAiMediaPlanningPanel({
   enabled = true,
   planningEnabled = false,
   selectedSkuKeys = [],
+  candidateInputs = [],
+  candidateSnapshotId,
   mediaDraftDirty,
   mediaMutationBusy,
   runMediaMutation,
   onApplied,
   onConflictRefresh,
+  onSlotDraftDirtyChange,
+  onRegisterSlotDraftDiscard,
 }: {
   targetId: string;
   targetUpdatedAt?: string;
   enabled?: boolean;
   planningEnabled?: boolean;
   selectedSkuKeys?: string[];
+  candidateInputs?: AiMediaContextInput[];
+  candidateSnapshotId?: string;
   mediaDraftDirty: boolean;
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
   onApplied?: (result: AiImageApplyResult) => void;
   onConflictRefresh: SynchronizeAiMediaTarget;
+  onSlotDraftDirtyChange?: (dirty: boolean) => void;
+  onRegisterSlotDraftDiscard?: (discard: (() => void) | null) => void;
 }) {
   const [bundle, setBundle] = useState<AiMediaPlanBundle | null>(null);
   const [loading, setLoading] = useState(enabled);
@@ -249,52 +309,123 @@ export function SourceAiMediaPlanningPanel({
   const [note, setNote] = useState('');
   const [reviewing, setReviewing] = useState<'APPROVE' | 'REJECT' | null>(null);
   const [creating, setCreating] = useState(false);
+  const [slotDraft, setSlotDraft] = useState<SlotDraft | null>(null);
+  const [slotDialogOpen, setSlotDialogOpen] = useState(false);
+  const [slotSaving, setSlotSaving] = useState(false);
+  const [slotConflictRefreshing, setSlotConflictRefreshing] = useState(false);
+  const [slotSaveConflict, setSlotSaveConflict] = useState('');
+  const [slotConflictRequiresRebase, setSlotConflictRequiresRebase] = useState(false);
+  const [slotSourceStaleConflict, setSlotSourceStaleConflict] = useState(false);
+  const [recoverableSlotDraft, setRecoverableSlotDraft] = useState<ReturnType<typeof loadAiMediaPlanSlotDraft>>(null);
   const requestVersion = useRef(0);
   const contextVersion = useRef(0);
   const targetIdRef = useRef(targetId);
   targetIdRef.current = targetId;
   const reviewIntents = useRef(new Map<string, WorkflowSubmissionIntent>());
   const createIntent = useRef<WorkflowSubmissionIntent | null>(null);
+  const slotIntents = useRef(new Map<string, WorkflowSubmissionIntent>());
+  const slotSavingRef = useRef(false);
+  slotSavingRef.current = slotSaving;
   const regenerationAllowed = !bundle || canRegenerateAiMediaPlan(bundle.plan);
   const approvalReady = bundle ? canApproveAiMediaPlan(bundle) : false;
+  const currentPlanVersionId = bundle?.plan.currentVersionId || bundle?.currentVersion?.id || null;
+  const slotDraftDirty = Boolean(slotDraft && (
+    !sameReferences(slotDraft.referenceCandidateIds, slotDraft.baselineReferenceCandidateIds)
+    || slotDraft.planId !== bundle?.plan.id
+    || slotDraft.baseRevision !== bundle?.plan.revision
+    || slotDraft.baseVersionId !== currentPlanVersionId
+  ));
+  const editedSlot = slotDraft && bundle?.currentVersion?.planPayload?.slots.find(
+    (slot) => slot.slotKey === slotDraft.slotKey,
+  ) || null;
+  const candidateOptions = useMemo(() => {
+    const payload = bundle?.currentVersion?.planPayload;
+    const curation = bundle?.currentVersion?.curation;
+    if (!editedSlot || !payload || !curation) return [];
+    return resolveAiMediaPlanSlotCandidateOptions({
+      slot: editedSlot,
+      compatibilityGroups: payload.compatibilityGroups,
+      consideredCandidateIds: curation.consideredCandidateIds,
+      selectedCandidateIds: curation.selectedCandidateIds,
+      draftCandidateIds: slotDraft?.referenceCandidateIds,
+      inputs: candidateInputs,
+    });
+  }, [bundle?.currentVersion, candidateInputs, editedSlot, slotDraft?.referenceCandidateIds]);
+  const slotReferencesStillSelectable = slotDraft?.referenceCandidateIds.every((candidateId) => (
+    candidateOptions.some((option) => option.candidateId === candidateId && option.selectable)
+  )) ?? false;
+  const slotSourceCurrent = Boolean(bundle?.currentVersion
+    && candidateSnapshotId
+    && bundle.currentVersion.sourceCaptureSnapshotId === candidateSnapshotId
+    && (!bundle.plan.sourceCaptureSnapshotId || bundle.plan.sourceCaptureSnapshotId === candidateSnapshotId));
+  const slotEditingAllowed = Boolean(planningEnabled
+    && bundle
+    && ['PENDING', 'APPROVED', 'REJECTED'].includes(bundle.plan.reviewStatus)
+    && !bundle.plan.staleAt
+    && bundle.plan.sourceCurrent !== false
+    && bundle.currentVersion?.planPayload?.manualSelectionAllowed
+    && slotSourceCurrent);
+  const slotDraftAuthority = slotDraft && bundle
+    ? resolveAiMediaPlanSlotDraftAuthority({
+      draft: slotDraft,
+      plan: bundle.plan,
+      currentVersionId: currentPlanVersionId,
+    })
+    : null;
+  const slotCandidateEditMode = resolveAiMediaPlanSlotCandidateEditMode({
+    editingAllowed: slotEditingAllowed,
+    staleConflict: slotSourceStaleConflict,
+    rebaseRequested: slotConflictRequiresRebase,
+    authority: slotDraftAuthority,
+  });
+  const canRebaseSlotDraft = slotCandidateEditMode === 'version-conflict'
+    && slotReferencesStillSelectable;
+  const canRefreshSlotConflict = slotConflictRequiresRebase
+    && slotCandidateEditMode === 'read-only'
+    && !slotSourceStaleConflict
+    && !slotSaving;
 
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async (quiet = false): Promise<PlanLoadOutcome> => {
     if (!enabled) {
       setLoading(false);
       setBundle(null);
       setError('');
-      return;
+      return { ok: false, reason: 'disabled' };
     }
     const version = ++requestVersion.current;
     if (!quiet) setLoading(true);
     try {
       const result = await api.get<unknown>(`/api/ai-images/plans/current?contextType=collect&contextId=${encodeURIComponent(targetId)}`);
-      if (version !== requestVersion.current) return;
+      if (version !== requestVersion.current) return { ok: false, reason: 'superseded' };
       if (result.code !== 1) {
         if (String(result.code).toUpperCase() === 'AI_MEDIA_PLANNING_NOT_FOUND') {
           setBundle(null);
           setError('');
+          return { ok: true, bundle: null };
         } else {
-          setBundle(null);
+          if (!quiet) setBundle(null);
           setError(result.msg || '图片策展计划加载失败');
+          return { ok: false, reason: 'request-failed' };
         }
-        return;
       }
       if (result.data === null || result.data === undefined) {
         setBundle(null);
         setError('');
-        return;
+        return { ok: true, bundle: null };
       }
       const normalized = normalizeAiMediaPlanBundle(result.data);
       if (!normalized) {
-        setBundle(null);
+        if (!quiet) setBundle(null);
         setError('服务端返回的图片策展计划格式无效');
-        return;
+        return { ok: false, reason: 'invalid-response' };
       }
       setBundle(normalized);
       setError('');
+      return { ok: true, bundle: normalized };
     } catch (caught) {
-      if (version === requestVersion.current) setError(caught instanceof Error ? caught.message : '网络错误，请重试');
+      if (version !== requestVersion.current) return { ok: false, reason: 'superseded' };
+      setError(caught instanceof Error ? caught.message : '网络错误，请重试');
+      return { ok: false, reason: 'request-failed' };
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
@@ -305,11 +436,20 @@ export function SourceAiMediaPlanningPanel({
     requestVersion.current += 1;
     reviewIntents.current.clear();
     createIntent.current = null;
+    slotIntents.current.clear();
     setBundle(null);
     setError('');
     setNote('');
     setCreating(false);
     setReviewing(null);
+    setSlotDraft(null);
+    setSlotDialogOpen(false);
+    setSlotSaving(false);
+    setSlotConflictRefreshing(false);
+    setSlotSaveConflict('');
+    setSlotConflictRequiresRebase(false);
+    setSlotSourceStaleConflict(false);
+    setRecoverableSlotDraft(null);
     void load();
     return () => {
       contextVersion.current += 1;
@@ -317,8 +457,348 @@ export function SourceAiMediaPlanningPanel({
     };
   }, [load]);
 
+  useEffect(() => {
+    onSlotDraftDirtyChange?.(slotDraftDirty);
+    return () => {
+      if (slotDraftDirty) onSlotDraftDirtyChange?.(false);
+    };
+  }, [onSlotDraftDirtyChange, slotDraftDirty]);
+
+  useEffect(() => {
+    onRegisterSlotDraftDiscard?.(() => discardSlotDraft());
+    return () => onRegisterSlotDraftDiscard?.(null);
+  }, [onRegisterSlotDraftDiscard, slotDraft?.planId, slotDraft?.slotKey]);
+
+  useEffect(() => {
+    if (!slotDraftDirty) return undefined;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [slotDraftDirty]);
+
+  useEffect(() => {
+    if (!slotDraft || !slotDraftDirty) return;
+    const storageValue = storage();
+    saveAiMediaPlanSlotDraft(
+      storageValue,
+      aiMediaPlanSlotDraftStorageKey(slotDraft.planId, slotDraft.slotKey),
+      {
+        planId: slotDraft.planId,
+        baseVersionId: slotDraft.baseVersionId,
+        baseRevision: slotDraft.baseRevision,
+        slotKey: slotDraft.slotKey,
+        referenceCandidateIds: slotDraft.referenceCandidateIds,
+        savedAt: Date.now(),
+      },
+    );
+  }, [slotDraft, slotDraftDirty]);
+
+  useEffect(() => {
+    if (!slotDraft || !bundle || !slotDraftDirty) return;
+    const authority = resolveAiMediaPlanSlotDraftAuthority({
+      draft: slotDraft,
+      plan: bundle.plan,
+      currentVersionId: currentPlanVersionId,
+    });
+    if (authority === 'STALE_SOURCE') {
+      setSlotSourceStaleConflict(true);
+      setSlotConflictRequiresRebase(false);
+      setSlotSaveConflict('来源图片快照已变化，请放弃当前修改并基于最新快照重新规划。');
+      return;
+    }
+    if (slotSourceStaleConflict) return;
+    if (authority === 'VERSION_CONFLICT') {
+      setSlotSaveConflict('计划已在服务端变化。当前选择仍保留，请采用最新版本后重新确认。');
+      setSlotConflictRequiresRebase(true);
+    }
+  }, [bundle, currentPlanVersionId, slotDraft, slotDraftDirty, slotSourceStaleConflict]);
+
+  function openSlotEditor(slot: AiMediaPlanSlot) {
+    if (!bundle?.currentVersion || !currentPlanVersionId || !slotEditingAllowed || slotSaving) return;
+    if (slotDraftDirty && slotDraft?.slotKey !== slot.slotKey) {
+      toast({ title: '请先保存或放弃当前槽位修改', variant: 'destructive' });
+      return;
+    }
+    const baselineReferenceCandidateIds = slot.references.map((reference) => reference.candidateId);
+    const storageValue = storage();
+    const draftKey = aiMediaPlanSlotDraftStorageKey(bundle.plan.id, slot.slotKey);
+    const storedDraft = loadAiMediaPlanSlotDraft(storageValue, draftKey);
+    const exactStoredDraft = storedDraft
+      && storedDraft.planId === bundle.plan.id
+      && storedDraft.baseVersionId === currentPlanVersionId
+      && storedDraft.baseRevision === bundle.plan.revision
+      && storedDraft.slotKey === slot.slotKey
+      ? storedDraft
+      : null;
+    setSlotDraft({
+      planId: bundle.plan.id,
+      baseVersionId: currentPlanVersionId,
+      baseRevision: bundle.plan.revision,
+      slotKey: slot.slotKey,
+      baselineReferenceCandidateIds,
+      referenceCandidateIds: exactStoredDraft?.referenceCandidateIds || baselineReferenceCandidateIds,
+    });
+    setRecoverableSlotDraft(exactStoredDraft ? null : storedDraft);
+    setSlotSaveConflict(storedDraft && !exactStoredDraft
+      ? '发现基于旧计划版本的未保存选择。为避免覆盖最新计划，系统没有自动恢复。'
+      : '');
+    setSlotConflictRequiresRebase(false);
+    setSlotSourceStaleConflict(false);
+    setSlotConflictRefreshing(false);
+    setSlotDialogOpen(true);
+  }
+
+  function discardSlotDraft() {
+    if (slotDraft) {
+      const storageValue = storage();
+      // Navigation may unmount this component while a request is still in flight.
+      // Keep both the body and operation key until its outcome can be reconciled.
+      if (!slotSavingRef.current) {
+        clearAiMediaPlanSlotDraft(
+          storageValue,
+          aiMediaPlanSlotDraftStorageKey(slotDraft.planId, slotDraft.slotKey),
+        );
+        clearWorkflowSubmissionIntent(
+          storageValue,
+          slotIntentStorageKey(slotDraft.planId, slotDraft.slotKey),
+        );
+        slotIntents.current.delete(slotDraft.slotKey);
+      }
+    }
+    setSlotDraft(null);
+    setRecoverableSlotDraft(null);
+    setSlotSaveConflict('');
+    setSlotConflictRequiresRebase(false);
+    setSlotSourceStaleConflict(false);
+    setSlotConflictRefreshing(false);
+    setSlotDialogOpen(false);
+  }
+
+  function closeSlotEditor() {
+    if (slotSaving || slotConflictRefreshing) return;
+    if (slotDraftDirty && !window.confirm('当前槽位参考图尚未保存，确认放弃这些修改？')) return;
+    discardSlotDraft();
+  }
+
+  function refreshPlan() {
+    if (slotDraftDirty) {
+      toast({ title: '槽位参考图尚未保存', description: '请先保存或放弃当前修改，再刷新图片策展计划。' });
+      return;
+    }
+    void load();
+  }
+
+  function reconcileSlotConflictRefresh(refreshed: PlanLoadOutcome) {
+    if (!slotDraft) return;
+    if (!refreshed.ok) {
+      setSlotSaveConflict('计划已变化，但最新版本读取失败。当前草稿已锁定，读取成功前不能采用或保存。');
+      return;
+    }
+    if (!refreshed.bundle) {
+      setSlotSaveConflict('计划已变化且当前计划已不存在。当前草稿已锁定，请放弃修改。');
+      return;
+    }
+    const authority = resolveAiMediaPlanSlotDraftAuthority({
+      draft: slotDraft,
+      plan: refreshed.bundle.plan,
+      currentVersionId: refreshed.bundle.plan.currentVersionId || refreshed.bundle.currentVersion?.id || null,
+    });
+    if (authority === 'STALE_SOURCE') {
+      setSlotConflictRequiresRebase(false);
+      setSlotSourceStaleConflict(true);
+      setSlotSaveConflict('来源图片快照已变化，请放弃当前修改并基于最新快照重新规划。');
+    } else if (authority === 'VERSION_CONFLICT') {
+      setSlotConflictRequiresRebase(true);
+      setSlotSourceStaleConflict(false);
+      setSlotSaveConflict('计划已在服务端变化。当前选择仍保留，请采用最新版本后重新确认。');
+    } else {
+      setSlotSaveConflict('计划冲突尚未在最新读取结果中解决。当前草稿已锁定，请稍后重新读取或放弃修改。');
+    }
+  }
+
+  async function retrySlotConflictRefresh() {
+    if (!canRefreshSlotConflict || slotConflictRefreshing || slotSaving) return;
+    const operationContextVersion = contextVersion.current;
+    const operationTargetId = targetId;
+    const isCurrentOperation = () => operationContextVersion === contextVersion.current
+      && operationTargetId === targetIdRef.current;
+    setSlotConflictRefreshing(true);
+    try {
+      const refreshed = await load(true);
+      if (isCurrentOperation()) reconcileSlotConflictRefresh(refreshed);
+    } finally {
+      if (isCurrentOperation()) setSlotConflictRefreshing(false);
+    }
+  }
+
+  function toggleSlotCandidate(candidateId: string) {
+    const option = candidateOptions.find((candidate) => candidate.candidateId === candidateId);
+    if (!slotDraft || !option || slotSaving) return;
+    const alreadySelected = slotDraft.referenceCandidateIds.includes(candidateId);
+    if (!canToggleAiMediaPlanSlotCandidate({
+      mode: slotCandidateEditMode,
+      selected: alreadySelected,
+      selectable: option.selectable,
+    })) return;
+    setSlotDraft((current) => {
+      if (!current) return current;
+      if (current.referenceCandidateIds.includes(candidateId)) {
+        return {
+          ...current,
+          referenceCandidateIds: current.referenceCandidateIds.filter((value) => value !== candidateId),
+        };
+      }
+      if (current.referenceCandidateIds.length >= 5) {
+        toast({ title: '每个槽位最多选择 5 张参考图', variant: 'destructive' });
+        return current;
+      }
+      return { ...current, referenceCandidateIds: [...current.referenceCandidateIds, candidateId] };
+    });
+  }
+
+  function restoreOldSlotDraft() {
+    if (!slotDraft || !recoverableSlotDraft) return;
+    const selectable = new Set(candidateOptions.filter((option) => option.selectable).map((option) => option.candidateId));
+    if (!recoverableSlotDraft.referenceCandidateIds.every((candidateId) => selectable.has(candidateId))) {
+      toast({ title: '旧草稿包含当前不可用的参考图，无法恢复', variant: 'destructive' });
+      return;
+    }
+    setSlotDraft((current) => current ? {
+      ...current,
+      referenceCandidateIds: [...recoverableSlotDraft.referenceCandidateIds],
+    } : current);
+    setRecoverableSlotDraft(null);
+    setSlotSaveConflict('已载入旧草稿选择；保存前请重新核对。');
+  }
+
+  function rebaseSlotDraft() {
+    if (!slotDraft || !bundle?.currentVersion || !currentPlanVersionId || !editedSlot
+      || !canRebaseSlotDraft) return;
+    const storageValue = storage();
+    clearWorkflowSubmissionIntent(
+      storageValue,
+      slotIntentStorageKey(slotDraft.planId, slotDraft.slotKey),
+    );
+    slotIntents.current.delete(slotDraft.slotKey);
+    setSlotDraft({
+      ...slotDraft,
+      planId: bundle.plan.id,
+      baseVersionId: currentPlanVersionId,
+      baseRevision: bundle.plan.revision,
+      baselineReferenceCandidateIds: editedSlot.references.map((reference) => reference.candidateId),
+    });
+    setSlotSaveConflict('已切换到最新计划版本，请核对后保存。');
+    setSlotConflictRequiresRebase(false);
+    setSlotSourceStaleConflict(false);
+  }
+
+  async function saveSlotReferences() {
+    if (!slotDraft || !bundle || slotSaving || !slotDraftDirty
+      || slotCandidateEditMode !== 'current' || !slotReferencesStillSelectable) return;
+    const operationContextVersion = contextVersion.current;
+    const operationTargetId = targetId;
+    const isCurrentOperation = () => operationContextVersion === contextVersion.current
+      && operationTargetId === targetIdRef.current;
+    const storageValue = storage();
+    const intentKey = slotIntentStorageKey(slotDraft.planId, slotDraft.slotKey);
+    const fingerprint = JSON.stringify({
+      planId: slotDraft.planId,
+      baseVersionId: slotDraft.baseVersionId,
+      expectedRevision: slotDraft.baseRevision,
+      slotKey: slotDraft.slotKey,
+      referenceCandidateIds: slotDraft.referenceCandidateIds,
+    });
+    const intent = resolveWorkflowSubmissionIntent(
+      slotIntents.current.get(slotDraft.slotKey) || loadWorkflowSubmissionIntent(storageValue, intentKey),
+      fingerprint,
+      () => operationKey('plan-slot-save'),
+    );
+    slotIntents.current.set(slotDraft.slotKey, intent);
+    saveWorkflowSubmissionIntent(storageValue, intentKey, intent);
+    let body;
+    try {
+      body = buildAiMediaPlanSlotReferenceUpdateRequest({
+        expectedRevision: slotDraft.baseRevision,
+        baseVersionId: slotDraft.baseVersionId,
+        operationKey: intent.idempotencyKey,
+        slotKey: slotDraft.slotKey,
+        referenceCandidateIds: slotDraft.referenceCandidateIds,
+      });
+    } catch (caught) {
+      toast({ title: '槽位参考图无效', description: caught instanceof Error ? caught.message : '请重新选择', variant: 'destructive' });
+      return;
+    }
+    setSlotSaving(true);
+    setSlotSaveConflict('');
+    setSlotSourceStaleConflict(false);
+    try {
+      const path = `/api/ai-images/plans/${encodeURIComponent(slotDraft.planId)}/slot-references`;
+      let result;
+      try {
+        result = await api.post<unknown>(path, body);
+      } catch {
+        if (!isCurrentOperation()) return;
+        // An ambiguous transport failure is reconciled by replaying the exact operation key once.
+        result = await api.post<unknown>(path, body);
+      }
+      if (!isCurrentOperation()) return;
+      if (result.code !== 1) {
+        const code = String(result.code || '').toUpperCase();
+        if (code.includes('ACTIVE_SUITE_CONFLICT')) {
+          setSlotConflictRequiresRebase(false);
+          setSlotSourceStaleConflict(false);
+          setSlotSaveConflict(result.msg || '当前计划版本已有可恢复的套图任务，请等待任务结束后重试保存。');
+        } else if (code.includes('STALE')) {
+          setSlotConflictRequiresRebase(false);
+          setSlotSourceStaleConflict(true);
+          setSlotSaveConflict(result.msg || '来源图片快照已变化，请放弃当前修改并基于最新快照重新规划。');
+          const refreshed = await load(true);
+          if (!isCurrentOperation()) return;
+          if (!refreshed.ok) {
+            setSlotSaveConflict('来源图片快照已变化，且最新计划读取失败。当前草稿已锁定，请稍后刷新或放弃修改。');
+          }
+        } else if (code.includes('REVISION_CONFLICT') || code.includes('STATE_CONFLICT')) {
+          setSlotConflictRequiresRebase(true);
+          setSlotSourceStaleConflict(false);
+          setSlotSaveConflict(result.msg || '计划已变化，请刷新最新版本后重新应用当前选择。');
+          const refreshed = await load(true);
+          if (!isCurrentOperation()) return;
+          reconcileSlotConflictRefresh(refreshed);
+        } else {
+          toast({ title: '槽位参考图保存失败', description: result.msg, variant: 'destructive' });
+        }
+        return;
+      }
+      const normalized = normalizeAiMediaPlanBundle(result.data);
+      if (!normalized) {
+        setSlotSaveConflict('保存结果格式无效；已保留本次操作，可使用同一请求安全核对。');
+        return;
+      }
+      setBundle(normalized);
+      clearAiMediaPlanSlotDraft(
+        storageValue,
+        aiMediaPlanSlotDraftStorageKey(slotDraft.planId, slotDraft.slotKey),
+      );
+      clearWorkflowSubmissionIntent(storageValue, intentKey);
+      slotIntents.current.delete(slotDraft.slotKey);
+      setSlotDraft(null);
+      setRecoverableSlotDraft(null);
+      setSlotDialogOpen(false);
+      toast({ title: '槽位参考图已保存' });
+    } catch (caught) {
+      if (!isCurrentOperation()) return;
+      setSlotSaveConflict('网络结果尚未确认。当前选择与操作标识已保留，再次保存会核对同一请求。');
+      toast({ title: '槽位参考图保存结果待核对', description: caught instanceof Error ? caught.message : '网络错误', variant: 'destructive' });
+    } finally {
+      if (isCurrentOperation()) setSlotSaving(false);
+    }
+  }
+
   async function createPlan() {
-    if (!planningEnabled || creating || !regenerationAllowed) return;
+    if (!planningEnabled || creating || !regenerationAllowed || slotDraftDirty) return;
     const operationContextVersion = contextVersion.current;
     const operationTargetId = targetId;
     const isCurrentOperation = () => operationContextVersion === contextVersion.current
@@ -382,6 +862,7 @@ export function SourceAiMediaPlanningPanel({
   async function review(decision: 'APPROVE' | 'REJECT') {
     if (!planningEnabled || !bundle || reviewing || !REVIEWABLE.has(bundle.plan.reviewStatus)
       || bundle.plan.staleAt || bundle.plan.sourceCurrent === false
+      || slotDraftDirty
       || (decision === 'APPROVE' && !approvalReady)) return;
     const operationContextVersion = contextVersion.current;
     const operationTargetId = targetId;
@@ -447,38 +928,39 @@ export function SourceAiMediaPlanningPanel({
   if (loading) return <div className="flex items-center gap-2 border-t pt-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />加载图片策展计划</div>;
 
   return (
+    <>
     <section className="space-y-3 border-t pt-4" aria-label="图片策展计划">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2"><ClipboardCheck className="h-4 w-4" /><h3 className="text-sm font-medium">图片策展计划</h3>{bundle ? <Badge variant={statusVariant(bundle.plan.reviewStatus)}>{REVIEW_STATUS_LABEL[bundle.plan.reviewStatus]}</Badge> : <Badge variant="outline">未生成</Badge>}</div>
           <p className="mt-1 text-xs text-muted-foreground">展示候选选择、SKU 兼容组和套图槽位证据；未通过审核不会进入执行。</p>
         </div>
-        <Button type="button" size="icon" variant="ghost" onClick={() => void load()} title="刷新图片策展计划" aria-label="刷新图片策展计划"><RefreshCw className="h-4 w-4" /></Button>
+        <Button type="button" size="icon" variant="ghost" onClick={refreshPlan} disabled={slotSaving} title={slotDraftDirty ? '请先保存或放弃槽位修改' : '刷新图片策展计划'} aria-label="刷新图片策展计划"><RefreshCw className="h-4 w-4" /></Button>
       </div>
       {error ? <div className="break-words border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
       {!error && !bundle ? <div className="space-y-3 border border-dashed px-3 py-3 text-sm text-muted-foreground">
         <p>尚未生成图片策展计划。</p>
-        {planningEnabled ? <div className="flex flex-wrap items-center gap-2"><Button type="button" size="sm" onClick={() => void createPlan()} disabled={creating}><ClipboardCheck className="h-3.5 w-3.5" />{creating ? '生成中' : '生成规则策展计划'}</Button><span className="text-xs">使用当前已确认采集快照，不调用 Provider。</span></div> : <p className="text-xs">当前阶段仅开放读取与审核，计划生成能力未对该账号开放。</p>}
+        {planningEnabled ? <div className="flex flex-wrap items-center gap-2"><Button type="button" size="sm" onClick={() => void createPlan()} disabled={creating || slotDraftDirty}><ClipboardCheck className="h-3.5 w-3.5" />{creating ? '生成中' : '生成规则策展计划'}</Button><span className="text-xs">使用当前已确认采集快照，不调用 Provider。</span></div> : <p className="text-xs">当前阶段仅开放读取与审核，计划生成能力未对该账号开放。</p>}
       </div> : null}
       {bundle ? (
         <>
           <PlanSummary bundle={bundle} />
           {bundle.plan.staleAt || bundle.plan.sourceCurrent === false ? <div className="flex items-start gap-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>计划对应的采集快照已变化，当前计划只能查看，不能审核或执行。{bundle.plan.staleReasons.length ? ` 原因：${bundle.plan.staleReasons.join('、')}` : ''}</span></div> : null}
-          {regenerationAllowed ? <div className="flex flex-wrap items-center gap-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"><span>{bundle.plan.reviewStatus === 'REJECTED' ? '当前计划已拒绝，可保留审计记录并重新规划。' : '当前计划已过期，可基于最新采集快照重新规划。'}</span>{planningEnabled ? <Button type="button" size="sm" variant="outline" onClick={() => void createPlan()} disabled={creating}><RefreshCw className="h-3.5 w-3.5" />{creating ? '生成中' : '基于当前快照重新生成'}</Button> : <span>计划生成能力未对该账号开放。</span>}</div> : null}
+          {regenerationAllowed ? <div className="flex flex-wrap items-center gap-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"><span>{bundle.plan.reviewStatus === 'REJECTED' ? '当前计划已拒绝，可保留审计记录并重新规划。' : '当前计划已过期，可基于最新采集快照重新规划。'}</span>{planningEnabled ? <Button type="button" size="sm" variant="outline" onClick={() => void createPlan()} disabled={creating || slotDraftDirty}><RefreshCw className="h-3.5 w-3.5" />{creating ? '生成中' : '基于当前快照重新生成'}</Button> : <span>计划生成能力未对该账号开放。</span>}</div> : null}
           {!bundle.currentVersion ? <div className="border border-dashed px-3 py-3 text-xs text-muted-foreground">计划没有可读取的当前版本，审核入口已关闭。</div> : <>
             <CurationDetails curation={bundle.currentVersion.curation} />
             <CompatibilityDetails payload={bundle.currentVersion.planPayload} />
-            <SlotDetails payload={bundle.currentVersion.planPayload} />
+            <SlotDetails payload={bundle.currentVersion.planPayload} editable={slotEditingAllowed} onEdit={openSlotEditor} />
             {bundle.currentVersion.planPayload?.verifiedFacts.length ? <details className="border"><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium [&::-webkit-details-marker]:hidden"><ChevronDown className="h-4 w-4" />事实证据 <span className="ml-auto text-xs text-muted-foreground">{bundle.currentVersion.planPayload.verifiedFacts.length} 条</span></summary><div className="max-h-64 space-y-1 overflow-auto border-t px-3 py-3">{bundle.currentVersion.planPayload.verifiedFacts.map((fact) => <div key={`${fact.path}:${fact.evidenceIds.join(',')}`} className="border bg-background px-2 py-2 text-xs"><div className="break-all font-mono">{fact.path}</div><div className="mt-1 break-words">{shortJson(fact.value)}</div><div className="mt-1 break-all text-muted-foreground">证据：{fact.evidenceIds.join(', ') || '无'}</div></div>)}</div></details> : null}
           </>}
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>版本 {bundle.currentVersion?.version || bundle.plan.latestVersion || '-'}</span>{bundle.currentVersion?.sourceCaptureSnapshotId ? <span className="break-all font-mono">快照 {bundle.currentVersion.sourceCaptureSnapshotId}</span> : null}</div>
           {REVIEWABLE.has(bundle.plan.reviewStatus) && !approvalReady ? <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">计划仍有待人工补选或证据不完整的槽位，当前不能通过审核。</div> : null}
-          {planningEnabled && REVIEWABLE.has(bundle.plan.reviewStatus) && !bundle.plan.staleAt && bundle.plan.sourceCurrent !== false ? <div className="space-y-2 border px-3 py-3"><label className="block text-xs font-medium" htmlFor={`ai-media-plan-review-note-${targetId}`}>审核备注（可选）</label><textarea id={`ai-media-plan-review-note-${targetId}`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={2_000} rows={2} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="记录人工确认或拒绝原因" /><div className="flex flex-wrap gap-2"><Button type="button" size="sm" onClick={() => void review('APPROVE')} disabled={Boolean(reviewing) || !approvalReady}><Check className="h-3.5 w-3.5" />{reviewing === 'APPROVE' ? '提交中' : '通过计划'}</Button><Button type="button" size="sm" variant="outline" onClick={() => void review('REJECT')} disabled={Boolean(reviewing)}><X className="h-3.5 w-3.5" />{reviewing === 'REJECT' ? '提交中' : '拒绝计划'}</Button></div></div> : null}
+          {planningEnabled && REVIEWABLE.has(bundle.plan.reviewStatus) && !bundle.plan.staleAt && bundle.plan.sourceCurrent !== false ? <div className="space-y-2 border px-3 py-3"><label className="block text-xs font-medium" htmlFor={`ai-media-plan-review-note-${targetId}`}>审核备注（可选）</label><textarea id={`ai-media-plan-review-note-${targetId}`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={2_000} rows={2} disabled={slotDraftDirty} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" placeholder="记录人工确认或拒绝原因" /><div className="flex flex-wrap gap-2"><Button type="button" size="sm" onClick={() => void review('APPROVE')} disabled={Boolean(reviewing) || !approvalReady || slotDraftDirty}><Check className="h-3.5 w-3.5" />{reviewing === 'APPROVE' ? '提交中' : '通过计划'}</Button><Button type="button" size="sm" variant="outline" onClick={() => void review('REJECT')} disabled={Boolean(reviewing) || slotDraftDirty}><X className="h-3.5 w-3.5" />{reviewing === 'REJECT' ? '提交中' : '拒绝计划'}</Button></div></div> : null}
           <SourceAiMediaSuitePanel
             targetId={targetId}
             targetUpdatedAt={targetUpdatedAt}
             plan={bundle.plan}
-            mediaDraftDirty={mediaDraftDirty}
+            mediaDraftDirty={mediaDraftDirty || slotDraftDirty}
             mediaMutationBusy={mediaMutationBusy}
             runMediaMutation={runMediaMutation}
             onApplied={onApplied}
@@ -487,5 +969,74 @@ export function SourceAiMediaPlanningPanel({
         </>
       ) : null}
     </section>
+    <Dialog open={slotDialogOpen} onOpenChange={(open) => { if (!open) closeSlotEditor(); }}>
+      <DialogContent className="max-h-[85vh] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>编辑槽位参考图</DialogTitle>
+          <DialogDescription>
+            {editedSlot ? `${slotLabel(editedSlot)} · ${formatAiMediaPlanningIdentity(editedSlot.ownership.key)} · ${editedSlot.aspectRatio}` : '选择当前槽位使用的参考商品图'}
+          </DialogDescription>
+        </DialogHeader>
+        {slotDraft ? <div className="min-w-0 space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+            <Badge variant="outline" className="max-w-full break-all font-mono">{formatAiMediaPlanningSlotKey(slotDraft.slotKey)}</Badge>
+            <span className="text-muted-foreground">已选 {slotDraft.referenceCandidateIds.length} / 5</span>
+            {slotDraftDirty ? <Badge variant="warning">未保存</Badge> : <Badge variant="outline">无修改</Badge>}
+          </div>
+          {slotSaveConflict ? <div className="space-y-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <p className="break-words">{slotSaveConflict}</p>
+            <div className="flex flex-wrap gap-2">
+              {recoverableSlotDraft ? <Button type="button" size="sm" variant="outline" onClick={restoreOldSlotDraft}>载入旧选择</Button> : null}
+              {slotConflictRequiresRebase ? <Button type="button" size="sm" variant="outline" onClick={rebaseSlotDraft} disabled={!canRebaseSlotDraft}>采用最新版本并保留选择</Button> : null}
+              {canRefreshSlotConflict ? <Button type="button" size="sm" variant="outline" onClick={() => void retrySlotConflictRefresh()} disabled={slotConflictRefreshing || slotSaving}>{slotConflictRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}重新读取最新版本</Button> : null}
+            </div>
+          </div> : null}
+          {!slotSourceCurrent ? <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">当前商品图片快照与计划不一致，参考图编辑已暂停。</div> : null}
+          <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            {candidateOptions.map((option) => {
+              const selectedIndex = slotDraft.referenceCandidateIds.indexOf(option.candidateId);
+              const selected = selectedIndex >= 0;
+              const reason = option.reasonCode === 'NOT_CURATED'
+                ? '未被当前策展计划选中'
+                : option.reasonCode === 'SLOT_INCOMPATIBLE'
+                  ? '与当前 SKU/兼容组不匹配'
+                  : option.reasonCode === 'SOURCE_UNAVAILABLE'
+                    ? '当前快照中不可用'
+                    : '';
+              const sourceUrl = option.input?.assetUrl || option.input?.sourceUrl || '';
+              return <button
+                key={option.candidateId}
+                type="button"
+                onClick={() => toggleSlotCandidate(option.candidateId)}
+                disabled={slotSaving || !canToggleAiMediaPlanSlotCandidate({
+                  mode: slotCandidateEditMode,
+                  selected,
+                  selectable: option.selectable,
+                })}
+                aria-pressed={selected}
+                title={reason || (selected ? '取消选择参考图' : '选择参考图')}
+                className={`relative min-w-0 border bg-background p-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-55 ${selected ? 'border-primary ring-1 ring-primary' : ''}`}
+              >
+                <div className="relative aspect-square w-full overflow-hidden bg-muted">
+                  {sourceUrl ? <img src={candidateImageUrl(sourceUrl)} alt="参考图候选" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-7 w-7" /></div>}
+                  {selected ? <span className="absolute right-1 top-1 flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1 text-[11px] text-primary-foreground">{selectedIndex + 1}</span> : null}
+                </div>
+                <div className="mt-1 break-all font-mono text-[11px] leading-4">{option.candidateId}</div>
+                <div className="break-words text-[11px] leading-4 text-muted-foreground">{reason || option.input?.role || '可选参考图'}</div>
+              </button>;
+            })}
+          </div>
+          {!candidateOptions.length ? <div className="border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">当前计划没有可显示的参考图候选。</div> : null}
+        </div> : null}
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button type="button" variant="outline" onClick={closeSlotEditor} disabled={slotSaving || slotConflictRefreshing}>放弃修改</Button>
+          <Button type="button" onClick={() => void saveSlotReferences()} disabled={slotSaving || slotCandidateEditMode !== 'current' || !slotDraftDirty || !slotReferencesStillSelectable}>
+            {slotSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {slotSaving ? '保存中' : slotSaveConflict.includes('网络结果') ? '核对保存结果' : '保存槽位'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

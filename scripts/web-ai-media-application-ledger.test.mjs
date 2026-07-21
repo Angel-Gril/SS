@@ -479,7 +479,7 @@ assert.match(panel, /撤销此次应用/u);
 assert.match(sourcePage, /const mediaDraftDirty =/u);
 assert.match(sourcePage, /onRemove=\{saving \|\| mediaMutationBusy/u);
 assert.match(sourcePage, /mediaDraftDirty=\{mediaDraftDirty\}/u);
-assert.match(planningPanel, /mediaDraftDirty=\{mediaDraftDirty\}/u);
+assert.match(planningPanel, /mediaDraftDirty=\{mediaDraftDirty \|\| slotDraftDirty\}/u);
 assert.match(suitePanel, /mediaDraftDirty/u);
 assert.match(suitePanel, /套图候选已追加，商品图片待同步/u);
 assert.match(sourcePage, /return refreshedTarget/u);

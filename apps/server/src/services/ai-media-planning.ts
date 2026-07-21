@@ -11,6 +11,7 @@ import {
 } from './ai-image-curation.js';
 import {
   createRuleBasedImagePromptPlan,
+  AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES,
   AI_IMAGE_PROMPT_PLAN_VERSION,
   type ImagePromptPlan,
   type ImagePromptPlanSku,
@@ -21,7 +22,11 @@ import {
   normalizeAiImageVisionOutput,
   type NormalizedAiImageVisionOutput,
 } from './ai-image-vision.js';
-import { compareAiMediaPlanningStrings } from './ai-media-planning-contract.js';
+import {
+  AI_MEDIA_PLANNING_IDENTIFIER_MAX_LENGTH,
+  AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH,
+  compareAiMediaPlanningStrings,
+} from './ai-media-planning-contract.js';
 
 export const AI_MEDIA_RULE_PLANNER_VERSION = 'ai-media-rule-planner/v1';
 export const AI_MEDIA_PLANNING_INPUT_VERSION = 'ai-media-planning-input/v1';
@@ -32,6 +37,8 @@ export const AI_MEDIA_PLANNING_MAX_CANDIDATES = 25;
 export const AI_MEDIA_PLANNING_MAX_VERIFIED_FACTS = 32;
 export const AI_MEDIA_PLAN_VERSION_PAGE_DEFAULT = 10;
 export const AI_MEDIA_PLAN_VERSION_PAGE_MAX = 20;
+export const AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION = 'ai-media-manual-slot-editor/v1';
+export const AI_MEDIA_MANUAL_SLOT_CHANGE_MAX = 50;
 
 export const AI_MEDIA_GALLERY_GOALS = Object.freeze([
   'scene',
@@ -144,7 +151,7 @@ export interface AiMediaPlanVersionRecord {
   inputFingerprint: string;
   planSchemaVersion: string;
   plannerVersion: string;
-  mode: 'RULE_BASED' | 'MODEL' | 'FALLBACK';
+  mode: 'RULE_BASED' | 'MODEL_ASSISTED';
   fallbackReason: string | null;
   inputSnapshot: unknown;
   curation: unknown;
@@ -191,6 +198,36 @@ export interface ReviewAiMediaPlanInput {
   note: string | null;
 }
 
+export interface AiMediaSlotReferenceChange {
+  slotKey: string;
+  referenceCandidateIds: string[];
+}
+
+export interface UpdateAiMediaPlanSlotReferencesInput {
+  planId: string;
+  ownerUserId: string;
+  actorUserId: string;
+  expectedRevision: number;
+  baseVersionId: string;
+  operationKey: string;
+  changes: AiMediaSlotReferenceChange[];
+}
+
+export interface AiMediaManualSlotVersionArtifacts {
+  operation: UpdateAiMediaPlanSlotReferencesInput;
+  requestFingerprint: string;
+  inputSnapshot: JsonObject;
+  inputHash: string;
+  inputBytes: number;
+  inputFingerprint: string;
+  planPayload: JsonObject;
+  planHash: string;
+  planBytes: number;
+  provenance: JsonObject;
+  provenanceHash: string;
+  changed: boolean;
+}
+
 export type CreateRulePlanResult = {
   kind: 'created' | 'existing' | 'conflict' | 'context-changed';
   plan: AiMediaPlanRecord | null;
@@ -212,6 +249,22 @@ export type ReviewRulePlanResult = {
 export type ExecutionPlanResult = {
   kind: 'ready' | 'not-found' | 'not-approved' | 'not-ready' | 'stale';
   plan: AiMediaPlanRecord | null;
+};
+
+export type UpdateAiMediaPlanSlotReferencesResult = {
+  kind:
+    | 'updated'
+    | 'replayed'
+    | 'not-found'
+    | 'operation-conflict'
+    | 'revision-conflict'
+    | 'state-conflict'
+    | 'stale'
+    | 'no-changes'
+    | 'invalid-reference'
+    | 'active-suite-conflict';
+  plan: AiMediaPlanRecord | null;
+  createdVersionId: string | null;
 };
 
 export interface AiMediaPlanningRepository {
@@ -241,6 +294,9 @@ export interface AiMediaPlanningRepository {
     page: AiMediaPlanVersionPageInput,
   ): Promise<AiMediaPlanVersionRecord[]>;
   reviewCurrent(input: ReviewAiMediaPlanInput): Promise<ReviewRulePlanResult>;
+  updateSlotReferences(
+    input: UpdateAiMediaPlanSlotReferencesInput,
+  ): Promise<UpdateAiMediaPlanSlotReferencesResult>;
   requireApprovedForExecution(input: {
     planId: string;
     ownerUserId: string;
@@ -260,6 +316,8 @@ export type AiMediaPlanningErrorCode =
   | 'AI_MEDIA_PLANNING_STALE'
   | 'AI_MEDIA_PLANNING_NOT_READY'
   | 'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT'
+  | 'AI_MEDIA_PLANNING_NO_CHANGES'
+  | 'AI_MEDIA_PLANNING_ACTIVE_SUITE_CONFLICT'
   | 'AI_MEDIA_PLANNING_NOT_APPROVED';
 
 export class AiMediaPlanningError extends Error {
@@ -338,6 +396,229 @@ function sha256(value: string, label: string): string {
   const normalized = required(value.toLowerCase(), label, 64);
   if (!/^[a-f0-9]{64}$/u.test(normalized)) throw new TypeError(`${label} is invalid`);
   return normalized;
+}
+
+function normalizeSlotReferenceMutation(
+  input: UpdateAiMediaPlanSlotReferencesInput,
+): UpdateAiMediaPlanSlotReferencesInput {
+  const planId = required(input.planId, 'planId', 200);
+  const ownerUserId = required(input.ownerUserId, 'ownerUserId', 200);
+  const actorUserId = required(input.actorUserId, 'actorUserId', 200);
+  const baseVersionId = required(input.baseVersionId, 'baseVersionId', 200);
+  const operationKey = required(input.operationKey, 'operationKey', 128);
+  if (operationKey.length < 8) throw new TypeError('operationKey is invalid');
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new TypeError('expectedRevision is invalid');
+  }
+  if (!Array.isArray(input.changes)
+    || input.changes.length < 1
+    || input.changes.length > AI_MEDIA_MANUAL_SLOT_CHANGE_MAX) {
+    throw new TypeError(`slot reference changes require 1 to ${AI_MEDIA_MANUAL_SLOT_CHANGE_MAX} slots`);
+  }
+  const slotKeys = new Set<string>();
+  const changes = input.changes.map((change) => {
+    if (!change || typeof change !== 'object') throw new TypeError('slot reference change is invalid');
+    const slotKey = required(change.slotKey, 'slotKey', AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH);
+    if (slotKeys.has(slotKey)) throw new TypeError('slot reference change slotKeys must be unique');
+    slotKeys.add(slotKey);
+    if (!Array.isArray(change.referenceCandidateIds)
+      || change.referenceCandidateIds.length > AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES) {
+      throw new TypeError(
+        `slot references support at most ${AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES} candidates`,
+      );
+    }
+    const referenceCandidateIds = change.referenceCandidateIds.map((candidateId) => (
+      required(candidateId, 'referenceCandidateId', AI_MEDIA_PLANNING_IDENTIFIER_MAX_LENGTH)
+    ));
+    if (new Set(referenceCandidateIds).size !== referenceCandidateIds.length) {
+      throw new TypeError('slot reference candidate IDs must be unique');
+    }
+    return { slotKey, referenceCandidateIds };
+  });
+  return jsonClone({
+    planId,
+    ownerUserId,
+    actorUserId,
+    expectedRevision: input.expectedRevision,
+    baseVersionId,
+    operationKey,
+    changes,
+  });
+}
+
+function planningRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function planningStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) return null;
+  return value as string[];
+}
+
+function sameSlotReferences(
+  references: unknown,
+  candidateIds: string[],
+  snapshotId: string,
+): boolean {
+  if (!Array.isArray(references) || references.length !== candidateIds.length) return false;
+  return references.every((rawReference, index) => {
+    const reference = planningRecord(rawReference);
+    const evidenceIds = planningStringArray(reference?.evidenceIds);
+    const candidateId = candidateIds[index];
+    return reference?.candidateId === candidateId
+      && evidenceIds?.length === 1
+      && evidenceIds[0] === selectedCandidateEvidenceId(snapshotId, candidateId!);
+  });
+}
+
+export function buildManualAiMediaSlotVersionArtifacts(
+  rawInput: UpdateAiMediaPlanSlotReferencesInput,
+  baseVersion: AiMediaPlanVersionRecord,
+): AiMediaManualSlotVersionArtifacts {
+  const operation = normalizeSlotReferenceMutation(rawInput);
+  if (baseVersion.id !== operation.baseVersionId) throw new TypeError('baseVersionId is not current');
+  const inputSnapshot = planningRecord(baseVersion.inputSnapshot);
+  const rawCandidates = inputSnapshot?.candidates;
+  const curation = planningRecord(baseVersion.curation);
+  const selectedCandidateIds = planningStringArray(curation?.selectedCandidateIds);
+  const visionEvidence = planningRecord(baseVersion.visionEvidence);
+  const visionImages = visionEvidence?.images;
+  const planPayload = jsonClone(baseVersion.planPayload);
+  const payload = planningRecord(planPayload);
+  if (!inputSnapshot || !Array.isArray(rawCandidates) || !selectedCandidateIds
+    || !Array.isArray(visionImages) || !payload || !Array.isArray(payload.slots)
+    || !Array.isArray(payload.compatibilityGroups)) {
+    throw new TypeError('current plan version has invalid frozen slot authority');
+  }
+
+  const candidates = new Map<string, { skuKeys: string[] }>();
+  for (const rawCandidate of rawCandidates) {
+    const candidate = planningRecord(rawCandidate);
+    const candidateId = typeof candidate?.id === 'string' ? candidate.id : '';
+    const skuKeys = planningStringArray(candidate?.skuKeys);
+    if (!candidateId || !skuKeys || candidates.has(candidateId)) {
+      throw new TypeError('current plan version has invalid frozen candidates');
+    }
+    candidates.set(candidateId, { skuKeys });
+  }
+  const selected = new Set(selectedCandidateIds);
+  const vision = new Set<string>();
+  for (const rawImage of visionImages) {
+    const image = planningRecord(rawImage);
+    if (typeof image?.candidateId === 'string' && image.candidateId) vision.add(image.candidateId);
+  }
+  const groups = new Map<string, Set<string>>();
+  for (const rawGroup of payload.compatibilityGroups) {
+    const group = planningRecord(rawGroup);
+    const groupKey = typeof group?.groupKey === 'string' ? group.groupKey : '';
+    const skuKeys = planningStringArray(group?.skuKeys);
+    if (!groupKey || !skuKeys || groups.has(groupKey)) {
+      throw new TypeError('current plan version has invalid compatibility groups');
+    }
+    groups.set(groupKey, new Set(skuKeys));
+  }
+  const slots = new Map<string, Record<string, unknown>>();
+  for (const rawSlot of payload.slots) {
+    const slot = planningRecord(rawSlot);
+    const slotKey = typeof slot?.slotKey === 'string' ? slot.slotKey : '';
+    if (!slotKey || slots.has(slotKey)) throw new TypeError('current plan version has invalid slots');
+    slots.set(slotKey, slot!);
+  }
+
+  let changed = false;
+  for (const change of operation.changes) {
+    const slot = slots.get(change.slotKey);
+    if (!slot) throw new TypeError(`unknown AI media slot: ${change.slotKey}`);
+    const ownership = planningRecord(slot.ownership);
+    const ownershipLevel = ownership?.level;
+    const ownershipKey = typeof ownership?.key === 'string' ? ownership.key : '';
+    if ((ownershipLevel !== 'sku' && ownershipLevel !== 'compatibility_group') || !ownershipKey) {
+      throw new TypeError(`AI media slot ownership is invalid: ${change.slotKey}`);
+    }
+    for (const candidateId of change.referenceCandidateIds) {
+      const candidate = candidates.get(candidateId);
+      if (!candidate || !selected.has(candidateId) || !vision.has(candidateId)) {
+        throw new TypeError(`AI media slot reference is outside frozen evidence: ${candidateId}`);
+      }
+      const compatible = ownershipLevel === 'sku'
+        ? candidate.skuKeys.length === 0 || candidate.skuKeys.includes(ownershipKey)
+        : (() => {
+            const members = groups.get(ownershipKey);
+            return Boolean(members
+              && (candidate.skuKeys.length === 0
+                || candidate.skuKeys.every((skuKey) => members.has(skuKey))));
+          })();
+      if (!compatible) {
+        throw new TypeError(`AI media slot reference is incompatible with slot ownership: ${candidateId}`);
+      }
+    }
+    const nextStatus = change.referenceCandidateIds.length > 0 ? 'READY' : 'MANUAL_REQUIRED';
+    if (slot.status !== nextStatus
+      || !sameSlotReferences(
+        slot.references,
+        change.referenceCandidateIds,
+        baseVersion.sourceCaptureSnapshotId,
+      )) {
+      changed = true;
+    }
+    slot.status = nextStatus;
+    slot.references = change.referenceCandidateIds.map((candidateId) => ({
+      candidateId,
+      evidenceIds: [selectedCandidateEvidenceId(baseVersion.sourceCaptureSnapshotId, candidateId)],
+    }));
+  }
+  const planSerialized = canonicalJson(planPayload);
+  const planBytes = Buffer.byteLength(planSerialized, 'utf8');
+  if (planBytes > AI_MEDIA_PLANNING_MAX_JSON_BYTES) {
+    throw new TypeError('AI media planning output exceeds the 1 MiB persistence limit');
+  }
+  const planHash = createHash('sha256').update(planSerialized).digest('hex');
+  const nextInputSnapshot = jsonClone<JsonObject>({
+    ...inputSnapshot,
+    manualSlotEdit: {
+      version: AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
+      parentVersionId: baseVersion.id,
+      parentPlanHash: baseVersion.planHash,
+      changes: operation.changes,
+    },
+  });
+  const inputSerialized = canonicalJson(nextInputSnapshot);
+  const inputBytes = Buffer.byteLength(inputSerialized, 'utf8');
+  if (inputBytes > AI_MEDIA_PLANNING_MAX_JSON_BYTES) {
+    throw new TypeError('AI media planning input exceeds the 1 MiB persistence limit');
+  }
+  const inputHash = createHash('sha256').update(inputSerialized).digest('hex');
+  const inputFingerprint = hashAiMediaPlanningJson({
+    inputHash,
+    sourceCaptureSnapshotId: baseVersion.sourceCaptureSnapshotId,
+    sourceCaptureHash: baseVersion.sourceCaptureHash,
+    sourceProfileHash: baseVersion.sourceProfileHash,
+  });
+  const provenance = jsonClone<JsonObject>({
+    version: AI_MEDIA_PLANNING_PROVENANCE_VERSION,
+    mode: 'MANUAL_SLOT_EDIT',
+    engineVersion: AI_MEDIA_MANUAL_SLOT_EDITOR_VERSION,
+    parentVersionId: baseVersion.id,
+    parentPlanHash: baseVersion.planHash,
+    changes: operation.changes,
+    provider: null,
+  });
+  return {
+    operation,
+    requestFingerprint: hashAiMediaPlanningJson(operation),
+    inputSnapshot: nextInputSnapshot,
+    inputHash,
+    inputBytes,
+    inputFingerprint,
+    planPayload: planPayload as JsonObject,
+    planHash,
+    planBytes,
+    provenance,
+    provenanceHash: hashAiMediaPlanningJson(provenance),
+    changed,
+  };
 }
 
 function normalizeCreateInput(
@@ -833,6 +1114,77 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
         limit,
         ...(beforeVersion === undefined ? {} : { beforeVersion }),
       });
+    },
+
+    async updateSlotReferences(input: UpdateAiMediaPlanSlotReferencesInput) {
+      let normalized: UpdateAiMediaPlanSlotReferencesInput;
+      try {
+        normalized = normalizeSlotReferenceMutation(input);
+      } catch (error) {
+        return inputError(error);
+      }
+      const result = await repository.updateSlotReferences(normalized);
+      if (result.kind === 'not-found' || !result.plan) {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_NOT_FOUND', 'AI media plan was not found', 404,
+        );
+      }
+      if (result.kind === 'operation-conflict') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_OPERATION_CONFLICT',
+          'Slot-reference operation key was reused with different input',
+          409,
+        );
+      }
+      if (result.kind === 'revision-conflict') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_REVISION_CONFLICT', 'AI media plan revision changed', 409,
+        );
+      }
+      if (result.kind === 'state-conflict') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT',
+          'AI media plan version changed before slot references were saved',
+          409,
+        );
+      }
+      if (result.kind === 'stale') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_STALE', 'AI media plan is stale against the current source context', 409,
+        );
+      }
+      if (result.kind === 'no-changes') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_NO_CHANGES', 'Slot references are unchanged', 409,
+        );
+      }
+      if (result.kind === 'invalid-reference') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_INVALID_INPUT',
+          'Slot references are not valid for the frozen plan evidence',
+          400,
+        );
+      }
+      if (result.kind === 'active-suite-conflict') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_ACTIVE_SUITE_CONFLICT',
+          'Slot references cannot change while the current plan version has a non-terminal suite',
+          409,
+        );
+      }
+      if (!result.createdVersionId) {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT',
+          'AI media plan version was not created',
+          409,
+        );
+      }
+      return {
+        plan: result.plan,
+        replayed: result.kind === 'replayed',
+        createdVersionId: result.createdVersionId,
+        sourceCurrent: await sourceCurrent(result.plan),
+      };
     },
 
     async review(input: ReviewAiMediaPlanInput) {

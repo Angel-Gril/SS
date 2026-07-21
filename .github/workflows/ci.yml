@@ -89,6 +89,9 @@ jobs:
       - name: Verify AI Media dark deployment contract
         run: node scripts/ai-media-dark-deploy.test.mjs
 
+      - name: Verify Web AI media plan slot editor contract
+        run: node scripts/web-ai-media-plan-slot-editor.test.mjs
+
       - name: Test server
         run: pnpm --filter server test
 
