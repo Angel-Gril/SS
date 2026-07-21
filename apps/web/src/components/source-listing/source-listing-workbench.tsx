@@ -21,6 +21,12 @@ import {
   type OzonListingDraftView as OzonListingDraft,
 } from 'shared';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
+import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
+import {
+  createMediaMutationLock,
+  executeLockedMediaMutation,
+  type RunMediaMutation,
+} from '@/components/ai-media/source-ai-media-state';
 import { useSystemDialog } from '@/components/system-dialog-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -321,6 +327,43 @@ function stableMediaSlot(media: SourceCaptureView['media']['items'][number]): st
   return `${prefix}-${media.ordinal + 1}`;
 }
 
+type ListingAiMediaScope = {
+  key: string;
+  skuKey: string | null;
+  slotKey: string;
+  assetId: string | null;
+  occupied: boolean;
+};
+
+const LISTING_AI_MEDIA_PRODUCT_SLOTS = [
+  'product-main',
+  ...Array.from({ length: 7 }, (_, index) => `product-gallery-${index + 1}`),
+] as const;
+
+function listingAiMediaScopes(draft: OzonListingDraft): ListingAiMediaScope[] {
+  const seen = new Set<string>();
+  const scopes: ListingAiMediaScope[] = draft.media.assignments.flatMap((assignment) => {
+    const skuKey = assignment.scope === 'SKU' ? assignment.skuKey : null;
+    const key = `${skuKey || ''}\u0000${assignment.slotKey}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ key, skuKey, slotKey: assignment.slotKey, assetId: assignment.assetId, occupied: true }];
+  });
+  const emptySlots: Array<{ skuKey: string | null; slotKey: string }> = [
+    ...LISTING_AI_MEDIA_PRODUCT_SLOTS.map((slotKey) => ({ skuKey: null, slotKey })),
+    ...draft.selectedSkuKeys
+      .filter((skuKey) => skuKey !== SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY)
+      .map((skuKey) => ({ skuKey, slotKey: `sku:${skuKey}:hero` })),
+  ];
+  for (const slot of emptySlots) {
+    const key = `${slot.skuKey || ''}\u0000${slot.slotKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    scopes.push({ key, ...slot, assetId: null, occupied: false });
+  }
+  return scopes;
+}
+
 function sourceCategoryLabel(candidate: CategoryCandidate): string {
   return candidate.displayPathZh
     || `${candidate.categoryNameZh || candidate.categoryName} / ${candidate.typeNameZh || candidate.typeName}`;
@@ -336,6 +379,9 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const [mediaOffset, setMediaOffset] = useState(0);
   const [selectedSkuKeys, setSelectedSkuKeys] = useState<string[]>([]);
   const [mediaSelections, setMediaSelections] = useState<Record<string, MediaSelectionDraft>>({});
+  const [aiMediaScopeKey, setAiMediaScopeKey] = useState('');
+  const [aiMediaMaskDraftDirty, setAiMediaMaskDraftDirty] = useState(false);
+  const [aiMediaMutationBusy, setAiMediaMutationBusy] = useState(false);
   const [shops, setShops] = useState<OzonShopOption[]>([]);
   const [shopId, setShopId] = useState('');
   const [draft, setDraft] = useState<OzonListingDraft | null>(null);
@@ -375,6 +421,23 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   ));
   const pendingCopyApplyRef = useRef<PendingCopyApply | null>(null);
   const handledHandoffIdentityRef = useRef(activeHandoffIdentity(handoff));
+  const aiMediaMutationLockRef = useRef(createMediaMutationLock());
+  const aiMediaMaskDraftDirtyRef = useRef(aiMediaMaskDraftDirty);
+  const runAiMediaMutation = useCallback<RunMediaMutation>(
+    (action) => executeLockedMediaMutation(aiMediaMutationLockRef.current, setAiMediaMutationBusy, action),
+    [],
+  );
+  const handleAiMediaMaskDraftDirtyChange = useCallback((dirty: boolean) => {
+    aiMediaMaskDraftDirtyRef.current = dirty;
+    setAiMediaMaskDraftDirty(dirty);
+  }, []);
+  const handleAttributeDraftChange = useCallback((nextDraft: OzonListingDraft) => {
+    if (aiMediaMaskDraftDirtyRef.current) {
+      setDraftError('草稿已在服务端变化；当前遮罩仍保留，请先提交或放弃后刷新草稿');
+      return;
+    }
+    setDraft(nextDraft);
+  }, []);
 
   useLayoutEffect(() => {
     const incomingHandoff = { ...handoff, section: 'listing' as const };
@@ -405,6 +468,12 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
     return request.epoch === handoffEpochRef.current
       && request.identity === activeHandoffIdentity(current)
       && (!expectedDraftId || current.workflowId === expectedDraftId);
+  }
+
+  function blockDraftRevisionChangeForMask(): boolean {
+    if (!aiMediaMaskDraftDirtyRef.current) return false;
+    setDraftError('当前局部重绘遮罩尚未提交，请先提交或放弃遮罩草稿，再修改或刷新草稿');
+    return true;
   }
 
   function rememberPendingGeneration(entry: PendingCopyGeneration) {
@@ -741,6 +810,20 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   }, [draft?.id, draft?.pricing.value, draft?.selectedSkuKeys]);
 
   const selectedSkuSet = useMemo(() => new Set(selectedSkuKeys), [selectedSkuKeys]);
+  const aiMediaScopes = useMemo(() => (draft ? listingAiMediaScopes(draft) : []), [draft]);
+  const selectedAiMediaScope = aiMediaScopes.find((scope) => scope.key === aiMediaScopeKey) || aiMediaScopes[0] || null;
+  useEffect(() => {
+    if (!draft) handleAiMediaMaskDraftDirtyChange(false);
+  }, [draft?.id, handleAiMediaMaskDraftDirtyChange]);
+  useEffect(() => {
+    if (!aiMediaScopes.length) {
+      setAiMediaScopeKey('');
+      return;
+    }
+    if (!aiMediaScopes.some((scope) => scope.key === aiMediaScopeKey)) {
+      setAiMediaScopeKey(aiMediaScopes[0]!.key);
+    }
+  }, [aiMediaScopeKey, aiMediaScopes]);
   const acceptedMedia = useMemo(() => (
     capture?.media.items.filter((item) => item.kind === 'image' && item.disposition === 'accepted' && mediaUrl(item)) || []
   ), [capture]);
@@ -834,6 +917,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function refreshDraft() {
     if (!draft) return null;
+    if (blockDraftRevisionChangeForMask()) return null;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setBusyAction('refresh');
@@ -856,6 +940,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function confirmCategory() {
     if (!draft || !selectedCandidate || !categoryData) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setBusyAction('category');
@@ -905,6 +990,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function applyCopyReview() {
     if (!draft || (!copyTitle.trim() && !copyDescription.trim())) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestEditorVersion = copyEditorVersionRef.current;
     const requestedTitle = copyTitle.trim();
@@ -1061,6 +1147,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       setDraftError('请先确认当前 Ozon 类目和属性事实');
       return;
     }
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestEditorVersion = copyEditorVersionRef.current;
     const requestDraftId = draft.id;
@@ -1157,6 +1244,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function internalizeAndAssignMedia() {
     if (!draft) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     const selections = Object.values(mediaSelections);
@@ -1181,6 +1269,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       });
       if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(updated);
+      setMediaSelections({});
       setMessage(`已转存并分配 ${internalized.assets.length} 张来源图片`);
     } catch (error) {
       if (isHandoffRequestActive(request, requestDraftId)) {
@@ -1200,6 +1289,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function saveStrictPricing() {
     if (!draft) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setBusyAction('pricing');
@@ -1240,6 +1330,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function validateFinalDraft() {
     if (!draft) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setBusyAction('validate');
@@ -1291,6 +1382,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function publish() {
     if (!draft || !capability || busyAction) return;
+    if (blockDraftRevisionChangeForMask()) return;
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setDraftError('');
@@ -1491,7 +1583,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
             刷新快照
           </Button>
           {draft ? (
-            <Button type="button" size="sm" variant="outline" onClick={refreshDraft} disabled={Boolean(busyAction)}>
+            <Button type="button" size="sm" variant="outline" onClick={refreshDraft} disabled={Boolean(busyAction) || aiMediaMaskDraftDirty} title={aiMediaMaskDraftDirty ? '请先提交或放弃当前遮罩草稿' : undefined}>
               <RefreshCw className="h-4 w-4" />刷新草稿
             </Button>
           ) : null}
@@ -1609,7 +1701,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                 <div className="font-medium">Ozon 官方类目</div>
                 <div className="text-xs text-muted-foreground">候选只供人工确认，服务端会再次校验目录版本。</div>
               </div>
-              <Button type="button" size="sm" onClick={confirmCategory} disabled={!selectedCandidate || busyAction === 'category'}>
+              <Button type="button" size="sm" onClick={confirmCategory} disabled={!selectedCandidate || busyAction === 'category' || aiMediaMaskDraftDirty}>
                 {busyAction === 'category' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                 确认类目
               </Button>
@@ -1641,7 +1733,8 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
               exactSnapshotId={activeHandoff.snapshotId}
               lockedShopId={draft.shopId}
               exactRevision={draft.revision}
-              onDraftChange={setDraft}
+              disabled={aiMediaMaskDraftDirty}
+              onDraftChange={handleAttributeDraftChange}
             />
           ) : null}
 
@@ -1659,11 +1752,11 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={generateCopyReview} disabled={draftLoading || !aiCopyFactsReady || !aiCopyCapability?.enabled || Boolean(busyAction)}>
+                <Button type="button" size="sm" variant="outline" onClick={generateCopyReview} disabled={draftLoading || !aiCopyFactsReady || !aiCopyCapability?.enabled || Boolean(busyAction) || aiMediaMaskDraftDirty}>
                   {busyAction === 'copy-generate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   生成候选
                 </Button>
-                <Button type="button" size="sm" onClick={applyCopyReview} disabled={draftLoading || (!copyTitle.trim() && !copyDescription.trim()) || Boolean(busyAction)}>
+                <Button type="button" size="sm" onClick={applyCopyReview} disabled={draftLoading || (!copyTitle.trim() && !copyDescription.trim()) || Boolean(busyAction) || aiMediaMaskDraftDirty}>
                   {busyAction === 'copy' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                   保存并采用
                 </Button>
@@ -1757,7 +1850,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                   <div className="font-medium">来源图片选择与持久化</div>
                   <div className="text-xs text-muted-foreground">完整快照共 {capture.media.total} 个素材，已选 {Object.keys(mediaSelections).length}</div>
                 </div>
-                <Button type="button" size="sm" onClick={internalizeAndAssignMedia} disabled={!Object.keys(mediaSelections).length || busyAction === 'media'}>
+                <Button type="button" size="sm" onClick={internalizeAndAssignMedia} disabled={!Object.keys(mediaSelections).length || busyAction === 'media' || aiMediaMaskDraftDirty}>
                   {busyAction === 'media' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                   转存并分配
                 </Button>
@@ -1802,13 +1895,59 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
             </div>
           ) : null}
 
+          {selectedAiMediaScope ? (
+            <div className="space-y-3 border p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <div className="font-medium">AI 图片候选与草稿槽位</div>
+                  <div className="text-xs text-muted-foreground">目标只能从当前草稿 assignment 或受限标准空槽中选择，应用阶段不会再次接收目标槽位。</div>
+                </div>
+                <label className="block min-w-0 space-y-1 text-xs sm:w-[min(100%,420px)]">
+                  <span className="text-muted-foreground">精确目标槽位</span>
+                  <select
+                    value={selectedAiMediaScope.key}
+                    onChange={(event) => setAiMediaScopeKey(event.target.value)}
+                    disabled={aiMediaMutationBusy || Boolean(busyAction) || aiMediaMaskDraftDirty}
+                    title={aiMediaMaskDraftDirty ? '请先提交或放弃当前遮罩草稿，再切换图片槽位' : undefined}
+                    className="h-9 w-full border bg-background px-2 text-sm"
+                    aria-label="AI 图片精确目标槽位"
+                  >
+                    {aiMediaScopes.map((scope) => (
+                      <option key={scope.key} value={scope.key}>
+                        {scope.skuKey ? `SKU ${scope.skuKey}` : '商品级'} · {scope.slotKey} · {scope.occupied ? '已有图片' : '空槽'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <SourceAiMediaPanel
+                target={{
+                  type: 'listing-draft',
+                  id: draft.id,
+                  label: draft.copy.publishTitleRu || activeHandoff.sourceProductId || draft.id,
+                  revision: draft.revision,
+                  draftVersion: draft.draftVersion,
+                  skuKey: selectedAiMediaScope.skuKey,
+                  slotKey: selectedAiMediaScope.slotKey,
+                  assignedAssetId: selectedAiMediaScope.assetId,
+                }}
+                selectedSkuKeys={draft.selectedSkuKeys}
+                mediaDraftDirty={Object.keys(mediaSelections).length > 0}
+                mediaMutationBusy={aiMediaMutationBusy || Boolean(busyAction)}
+                runMediaMutation={runAiMediaMutation}
+                onConflictRefresh={refreshDraft}
+                onMaskDraftDirtyChange={handleAiMediaMaskDraftDirtyChange}
+              />
+            </div>
+          ) : null}
+
           <div className="space-y-3 border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-medium">逐 SKU 定价</div>
                 <div className="text-xs text-muted-foreground">必须精确覆盖 {draft.selectedSkuKeys.length} 个 canonical SKU，币种固定 RUB，VAT 显式填写。</div>
               </div>
-              <Button type="button" size="sm" onClick={saveStrictPricing} disabled={busyAction === 'pricing'}>
+              <Button type="button" size="sm" onClick={saveStrictPricing} disabled={busyAction === 'pricing' || aiMediaMaskDraftDirty}>
                 {busyAction === 'pricing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 保存严格定价
               </Button>
@@ -1847,7 +1986,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                 <div className="mt-1 text-xs text-muted-foreground">发布按钮仅在服务端 VALID/current/blockers=0 时启用。</div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={validateFinalDraft} disabled={busyAction === 'validate'}>
+                <Button type="button" variant="outline" onClick={validateFinalDraft} disabled={busyAction === 'validate' || aiMediaMaskDraftDirty}>
                   {busyAction === 'validate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                   最终服务端校验
                 </Button>
@@ -1858,7 +1997,8 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                     || !capability
                     || (!capability.enabled && !capability.legacyAllowed)
                     || attemptDiscoveryState !== 'ready'
-                    || Boolean(busyAction)}
+                    || Boolean(busyAction)
+                    || aiMediaMaskDraftDirty}
                 >
                   {busyAction === 'publish' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   {attemptDiscoveryState === 'loading'

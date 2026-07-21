@@ -432,6 +432,8 @@ model User {
   aiMediaSuiteEventsAsActor            AiMediaSuiteEvent[]                    @relation("AiMediaSuiteEventActor")
   ownedAiMediaApplicationMutations     AiMediaApplicationMutation[]           @relation("AiMediaApplicationMutationOwner")
   createdAiMediaApplicationMutations   AiMediaApplicationMutation[]           @relation("AiMediaApplicationMutationActor")
+  ownedAiMediaListingDraftMutations    AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationOwner")
+  createdAiMediaListingDraftMutations  AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationActor")
   ownedAiMediaSuitePromptSets           AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetOwner")
   createdAiMediaSuitePromptSets         AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetActor")
   mediaAssets                         MediaAsset[]
@@ -907,6 +909,7 @@ model SourceCaptureSnapshot {
   aiMediaPlanningRuns                AiMediaPlanningRun[]                @relation("AiMediaPlanningRunSnapshot")
   aiMediaPlanVersions                AiMediaPlanVersion[]                @relation("AiMediaPlanVersionSnapshot")
   aiMediaSuites                      AiMediaSuite[]                      @relation("AiMediaSuiteSnapshot")
+  aiMediaListingDraftMutations       AiMediaListingDraftApplicationMutation[]
   ingestChannel                      SourceCaptureIngestChannel          @map("ingest_channel")
   rolloutRevision                    String                              @map("rollout_revision")
   rolloutStage                       String                              @map("rollout_stage")
@@ -949,6 +952,7 @@ model SourceListingWorkflow {
   events                         SourceListingWorkflowEvent[]
   publishIntents                 SourceListingPublishIntent[]
   ozonPublishAttempts            OzonPublishAttempt[]
+  aiMediaApplicationMutations    AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationTarget")
 
   @@unique([id, ownerUserId], map: "source_listing_workflow_owner_key")
   @@unique([id, currentRevision], map: "source_listing_workflow_current_pointer_key")
@@ -989,6 +993,8 @@ model SourceListingDraftVersion {
   publishIntents          SourceListingPublishIntent[]
   ozonPublishAttempts     OzonPublishAttempt[]
   aiMediaContextWorkflows AiMediaWorkflow[]            @relation("AiMediaWorkflowListingDraftContext")
+  aiMediaMutationsBefore  AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationBefore")
+  aiMediaMutationsAfter   AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationAfter")
 
   @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
   @@unique([workflowId, revision, ownerUserId, draftVersion], map: "source_listing_draft_ai_media_context_key")
@@ -2875,6 +2881,7 @@ model AiImageJob {
   mediaLineage           MediaAssetLineage[]
   workflowEvents         AiMediaWorkflowEvent[]
   applicationMutations   AiMediaApplicationMutation[]
+  listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   costReservation        AiCostReservation?
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
@@ -2914,6 +2921,7 @@ model MediaAsset {
   selectedByWorkflows     AiMediaWorkflow[]       @relation("AiMediaWorkflowSelectedOutput")
   workflowEvents          AiMediaWorkflowEvent[]
   applicationMutations    AiMediaApplicationMutation[]
+  listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]
 
   @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend], map: "media_asset_source_capture_storage_key")
@@ -2957,6 +2965,7 @@ model AiMediaWorkflow {
   jobs                  AiImageJob[]
   events                AiMediaWorkflowEvent[]
   applicationMutations  AiMediaApplicationMutation[]
+  listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   lineage               MediaAssetLineage[]
   costReservations      AiCostReservation[]
   suiteSlot             AiMediaSuiteSlot?    @relation("AiMediaSuiteSlotWorkflow")
@@ -3061,6 +3070,63 @@ model AiMediaApplicationMutation {
   @@index([ownerUserId, targetType, targetId, targetSequence(sort: Desc)], map: "ai_media_application_mutation_target_history_idx")
   @@index([workflowId, createdAt(sort: Desc)], map: "ai_media_application_mutation_workflow_history_idx")
   @@map("ai_media_application_mutations")
+}
+
+model AiMediaListingDraftApplicationMutation {
+  id                       String                         @id @default(cuid())
+  ownerUserId              String                         @map("owner_user_id")
+  owner                    User                           @relation("AiMediaListingDraftMutationOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId              String                         @map("actor_user_id")
+  actor                    User                           @relation("AiMediaListingDraftMutationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  workflowId               String                         @map("workflow_id")
+  workflow                 AiMediaWorkflow                @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  jobId                    String                         @map("job_id")
+  job                      AiImageJob                     @relation(fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  assetId                  String                         @map("asset_id")
+  asset                    MediaAsset                     @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  sourceCaptureSnapshotId  String                         @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot    SourceCaptureSnapshot          @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
+  operation                AiMediaOperation
+  kind                     AiMediaApplicationMutationKind
+  revision                 Int                            @default(1)
+  rollbackOfId             String?                        @map("rollback_of_id")
+  rollbackOf               AiMediaListingDraftApplicationMutation? @relation("AiMediaListingDraftApplicationRollback", fields: [rollbackOfId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  rolledBackBy             AiMediaListingDraftApplicationMutation? @relation("AiMediaListingDraftApplicationRollback")
+  targetId                 String                         @map("target_id") @db.VarChar(200)
+  target                   SourceListingWorkflow          @relation("AiMediaListingDraftMutationTarget", fields: [targetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  targetSequence           Int                            @map("target_sequence")
+  mode                     AiMediaApplicationMode
+  replaceConfirmed         Boolean                        @default(false) @map("replace_confirmed")
+  contextSkuKey            String?                        @map("context_sku_key") @db.VarChar(500)
+  contextSlotKey           String                         @map("context_slot_key") @db.VarChar(1024)
+  contextDraftRevision     Int                            @map("context_draft_revision")
+  contextDraftVersion      Int                            @map("context_draft_version")
+  operationKey             String                         @map("operation_key") @db.VarChar(128)
+  requestFingerprint       String                         @map("request_fingerprint") @db.Char(64)
+  workflowRevisionBefore   Int                            @map("workflow_revision_before")
+  workflowRevisionAfter    Int                            @map("workflow_revision_after")
+  targetRevisionBefore     Int                            @map("target_revision_before")
+  targetDraftVersionBefore Int                            @map("target_draft_version_before")
+  targetBefore             SourceListingDraftVersion      @relation("AiMediaListingDraftMutationBefore", fields: [targetId, targetRevisionBefore, ownerUserId, targetDraftVersionBefore], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction, map: "ai_media_listing_draft_mutation_before_fkey")
+  targetRevisionAfter      Int                            @map("target_revision_after")
+  targetDraftVersionAfter  Int                            @map("target_draft_version_after")
+  targetAfter              SourceListingDraftVersion      @relation("AiMediaListingDraftMutationAfter", fields: [targetId, targetRevisionAfter, ownerUserId, targetDraftVersionAfter], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction, map: "ai_media_listing_draft_mutation_after_fkey")
+  beforeState              Json                           @map("before_state_json")
+  beforeStateHash          String                         @map("before_state_hash") @db.Char(64)
+  afterState               Json                           @map("after_state_json")
+  afterStateHash           String                         @map("after_state_hash") @db.Char(64)
+  createdAt                DateTime                       @default(now()) @map("created_at")
+
+  @@unique([id, ownerUserId], map: "ai_media_listing_draft_mutation_id_owner_key")
+  @@unique([rollbackOfId, ownerUserId], map: "ai_media_listing_draft_mutation_rollback_key")
+  @@unique([ownerUserId, operationKey], map: "ai_media_listing_draft_mutation_operation_key")
+  @@unique([jobId, kind], map: "ai_media_listing_draft_mutation_job_kind_key")
+  @@unique([ownerUserId, targetId, targetSequence], map: "ai_media_listing_draft_mutation_target_sequence_key")
+  @@index([ownerUserId, targetId, targetSequence(sort: Desc)], map: "ai_media_listing_draft_mutation_target_history_idx")
+  @@index([workflowId, createdAt(sort: Desc)], map: "ai_media_listing_draft_mutation_workflow_history_idx")
+  @@index([targetId, targetRevisionBefore, ownerUserId, targetDraftVersionBefore], map: "ai_media_listing_draft_mutation_before_idx")
+  @@index([targetId, targetRevisionAfter, ownerUserId, targetDraftVersionAfter], map: "ai_media_listing_draft_mutation_after_idx")
+  @@map("ai_media_listing_draft_application_mutations")
 }
 
 model AiMediaPlan {

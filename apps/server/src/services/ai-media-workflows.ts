@@ -65,6 +65,7 @@ export interface AiMediaWorkflowRecord {
   jobs?: Array<Record<string, unknown>>;
   events?: Array<Record<string, unknown>>;
   applicationMutations?: Array<Record<string, unknown>>;
+  listingDraftApplicationMutations?: Array<Record<string, unknown>>;
 }
 
 export interface AiMediaWorkflowListCursor {

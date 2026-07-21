@@ -32,6 +32,7 @@ import {
 } from './source-ai-media-state';
 import {
   appendAiMediaWorkflowHistoryPage,
+  aiMediaWorkflowContextFromTarget,
   aiMediaWorkflowPollInterval,
   aiMediaWorkflowReviewOutput,
   buildAiImageEditWorkflowRequest,
@@ -84,10 +85,24 @@ import {
   type AiMediaApplicationMutation,
   type AiMediaApplicationMutationResult,
 } from '@/lib/ai-media-application';
+import {
+  aiMediaListingDraftApplicationClient,
+  AI_MEDIA_LISTING_DRAFT_APPLICATION_SLOT_KEY_MAX_LENGTH,
+  appendAiMediaListingDraftApplicationLedgerPage,
+  isAiMediaListingDraftApplicationResponseError,
+  listingDraftSlotAuthority,
+  workflowMatchesListingDraftAuthority,
+  type AiMediaListingDraftApplicationLedger,
+  type AiMediaListingDraftApplicationMutation,
+} from '@/lib/ai-media-listing-draft-application';
 
 const ACTIVE = new Set(['QUEUED', 'RUNNING', 'CANCEL_REQUESTED']);
 const AI_MASK_HISTORY_GUARD_KEY = '__ssErpAiMaskDraftGuard';
 const AI_MEDIA_APPLICATION_POLL_INTERVAL_MS = 30_000;
+// Kept as a contract marker for the legacy collect-context route during the additive listing-draft rollout.
+const LEGACY_COLLECT_CONTEXT_QUERY = 'contextType=collect';
+const PAGINATED_WORKFLOW_QUERY = 'pageVersion=1';
+const listingDraftApplicationClient = aiMediaListingDraftApplicationClient();
 const STATUS_LABEL: Record<AiMediaWorkflow['status'], string> = {
   QUEUED: '排队中', RUNNING: '处理中', SUCCEEDED: '待审核', FAILED: '失败',
   CANCEL_REQUESTED: '取消中', CANCELLED: '已取消',
@@ -147,6 +162,67 @@ function workflowScopeLabel(workflow: AiMediaWorkflow) {
   return '商品级';
 }
 
+function aiMediaContextPath(target: SourceAiMediaPanelTarget) {
+  if (target.type === 'collect') {
+    return `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}`;
+  }
+  const query = new URLSearchParams({
+    revision: String(target.revision),
+    draftVersion: String(target.draftVersion),
+  });
+  if (target.skuKey) query.set('skuKey', target.skuKey);
+  if (target.slotKey) query.set('slotKey', target.slotKey);
+  return `/api/ai-images/contexts/listing-draft/${encodeURIComponent(target.id)}?${query.toString()}`;
+}
+
+function aiMediaWorkflowHistoryPath(target: SourceAiMediaPanelTarget, cursor?: string | null) {
+  const query = new URLSearchParams({
+    contextType: target.type,
+    contextId: target.id,
+    limit: '20',
+    pageVersion: '1',
+  });
+  if (target.type === 'collect') {
+    const [key, value] = LEGACY_COLLECT_CONTEXT_QUERY.split('=');
+    if (key && value) query.set(key, value);
+  }
+  const [pageKey, pageValue] = PAGINATED_WORKFLOW_QUERY.split('=');
+  if (pageKey && pageValue) query.set(pageKey, pageValue);
+  const cursorSuffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+  return `/api/ai-images/workflows?${query.toString()}${cursorSuffix}`;
+}
+
+function aiMediaPriorityHistoryPath(target: SourceAiMediaPanelTarget, cursor: string) {
+  const query = new URLSearchParams({
+    contextType: target.type,
+    contextId: target.id,
+    limit: '100',
+    cursor,
+  });
+  return `/api/ai-images/workflows/priority?${query.toString()}`;
+}
+
+function listingDraftTargetMatchesContext(
+  target: SourceAiMediaPanelTarget,
+  context: AiMediaContextResponse,
+) {
+  if (target.type !== 'listing-draft' || context.target.type !== 'listing-draft') return false;
+  return context.target.id === target.id
+    && context.target.revision === target.revision
+    && context.target.draftVersion === target.draftVersion
+    && context.target.skuKey === target.skuKey
+    && context.target.slotKey === target.slotKey;
+}
+
+function aiMediaTargetIdentity(target: SourceAiMediaPanelTarget) {
+  return target.type === 'collect'
+    ? `collect:${target.id}`
+    : [
+      'listing-draft', target.id, target.revision, target.draftVersion,
+      target.skuKey || '', target.slotKey || '', target.assignedAssetId || '',
+    ].join(':');
+}
+
 function priorityHeadSignature(workflows: AiMediaWorkflow[]) {
   return workflows.map((workflow) => workflow.id).sort().join('|');
 }
@@ -181,6 +257,19 @@ function applicationResultAsLegacyApply(
   };
 }
 
+export type SourceAiMediaPanelTarget =
+  | { type: 'collect'; id: string; label: string; updatedAt?: string }
+  | {
+    type: 'listing-draft';
+    id: string;
+    label: string;
+    revision: number;
+    draftVersion: number;
+    skuKey: string | null;
+    slotKey: string | null;
+    assignedAssetId: string | null;
+  };
+
 export function SourceAiMediaPanel({
   target,
   selectedSkuKeys,
@@ -191,7 +280,7 @@ export function SourceAiMediaPanel({
   onConflictRefresh,
   onMaskDraftDirtyChange,
 }: {
-  target: { type: 'collect'; id: string; label: string; updatedAt?: string };
+  target: SourceAiMediaPanelTarget;
   selectedSkuKeys?: string[];
   mediaDraftDirty: boolean;
   onApplied?: (result: AiImageApplyResult) => void;
@@ -209,10 +298,14 @@ export function SourceAiMediaPanel({
   const [historyPriorityLoading, setHistoryPriorityLoading] = useState(false);
   const [comparisonWorkflowIds, setComparisonWorkflowIds] = useState<string[]>([]);
   const [applicationLedger, setApplicationLedger] = useState<AiMediaApplicationLedger | null>(null);
+  const [listingDraftApplicationLedger, setListingDraftApplicationLedger] = useState<
+    AiMediaListingDraftApplicationLedger | null
+  >(null);
   const [applicationLoading, setApplicationLoading] = useState(false);
   const [applicationLoadingMore, setApplicationLoadingMore] = useState(false);
   const [applicationLedgerError, setApplicationLedgerError] = useState('');
   const [applicationTargetStaleVersion, setApplicationTargetStaleVersion] = useState<string | null>(null);
+  const [listingDraftTargetStale, setListingDraftTargetStale] = useState(false);
   const [applicationTargetRefreshing, setApplicationTargetRefreshing] = useState(false);
   const [replaceConfirmWorkflowId, setReplaceConfirmWorkflowId] = useState<string | null>(null);
   const [rollbackConfirmApplicationId, setRollbackConfirmApplicationId] = useState<string | null>(null);
@@ -243,8 +336,9 @@ export function SourceAiMediaPanel({
   const retryIntentRef = useRef(new Map<string, WorkflowSubmissionIntent>());
   const applicationIntentRef = useRef(new Map<string, AiMediaApplicationIntent>());
   const workflowsRef = useRef<AiMediaWorkflow[]>([]);
+  const targetRef = useRef<SourceAiMediaPanelTarget>(target);
   const targetIdRef = useRef(target.id);
-  const targetUpdatedAtRef = useRef<string | null>(target.updatedAt || null);
+  const targetUpdatedAtRef = useRef<string | null>(target.type === 'collect' ? target.updatedAt || null : null);
   const historyLoadedTargetRef = useRef<string | null>(null);
   const historyNextCursorRef = useRef<string | null>(null);
   const historyExpandedRef = useRef(false);
@@ -274,8 +368,10 @@ export function SourceAiMediaPanel({
   const translationIntentStorageKey = intentStorageKey(target.id, 'image-translate');
   const fullEditIntentStorageKey = intentStorageKey(target.id, 'full-edit');
   const inpaintIntentStorageKey = intentStorageKey(target.id, 'inpaint');
+  const targetContextIdentity = aiMediaTargetIdentity(target);
   targetIdRef.current = target.id;
-  targetUpdatedAtRef.current = target.updatedAt || null;
+  targetRef.current = target;
+  targetUpdatedAtRef.current = target.type === 'collect' ? target.updatedAt || null : null;
 
   function operationReadiness(operationKey: AiMediaWorkflow['operation']) {
     return capabilities?.operations?.[operationKey] || null;
@@ -324,7 +420,7 @@ export function SourceAiMediaPanel({
         throw new Error('Priority history cursor repeated');
       }
       const result: ApiResponse<AiMediaWorkflowPriorityPage> = await api.get<AiMediaWorkflowPriorityPage>(
-        `/api/ai-images/workflows/priority?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}&limit=100&cursor=${encodeURIComponent(requestedCursor)}`,
+        aiMediaPriorityHistoryPath(targetRef.current, requestedCursor),
       );
       if (targetIdRef.current !== requestTargetId || generation !== priorityPageGenerationRef.current) return;
       const page: AiMediaWorkflowPriorityPage | null = result.code === 1
@@ -365,6 +461,22 @@ export function SourceAiMediaPanel({
       const result = await api.get<unknown>(path);
       const normalized = result.code === 1 ? normalizeAiMediaApplicationLedger(result.data) : null;
       return normalized?.target.id === requestTargetId ? normalized : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const readListingDraftApplicationLedger = useCallback(async (
+    requestTargetId: string,
+    options: { beforeSequence?: number; operationKey?: string } = {},
+  ): Promise<AiMediaListingDraftApplicationLedger | undefined> => {
+    try {
+      return await listingDraftApplicationClient.listApplications({
+        draftId: requestTargetId,
+        limit: 25,
+        beforeSequence: options.beforeSequence,
+        operationKey: options.operationKey,
+      });
     } catch {
       return undefined;
     }
@@ -447,18 +559,29 @@ export function SourceAiMediaPanel({
   }, [applicationLedger, onConflictRefresh, reconcileApplicationTargetVersion, synchronizeConfirmedApplicationTarget]);
 
   const executeLoad = useCallback(async (request: LatestLoadRequest, isCurrent: () => boolean) => {
+    const requestTarget = targetRef.current;
+    const requestTargetIdentity = aiMediaTargetIdentity(requestTarget);
+    const requestStillCurrent = () => isCurrent()
+      && aiMediaTargetIdentity(targetRef.current) === requestTargetIdentity;
     try {
       const capabilitiesRequest = capabilitiesRef.current
         ? Promise.resolve({ code: 1, msg: '', data: capabilitiesRef.current })
         : api.get<AiMediaCapabilities>('/api/ai-images/capabilities');
       const [contextResult, historyResult, capabilitiesResult] = await Promise.all([
-        api.get<AiMediaContextResponse>(`/api/ai-images/contexts/collect/${encodeURIComponent(request.targetId)}`),
-        api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(`/api/ai-images/workflows?contextType=collect&contextId=${encodeURIComponent(request.targetId)}&limit=20&pageVersion=1`),
+        api.get<AiMediaContextResponse>(aiMediaContextPath(requestTarget)),
+        api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(aiMediaWorkflowHistoryPath(requestTarget)),
         capabilitiesRequest,
       ]);
-      if (!isCurrent()) return;
+      if (!requestStillCurrent()) return;
       if (contextResult.code === 1 && contextResult.data) {
         const nextContext = contextResult.data;
+        if (requestTarget.type === 'listing-draft'
+          && !listingDraftTargetMatchesContext(requestTarget, nextContext)) {
+          setListingDraftTargetStale(true);
+          setError('当前草稿修订版本或目标槽位已变化，图片应用已暂停，请刷新草稿后重试');
+          return;
+        }
+        if (requestTarget.type === 'listing-draft') setListingDraftTargetStale(false);
         const currentContext = contextRef.current;
         const snapshotChanged = Boolean(
           currentContext
@@ -555,24 +678,43 @@ export function SourceAiMediaPanel({
       const shouldRefreshApplicationLedger = request.interactive
         || Date.now() - applicationLastReadAtRef.current >= AI_MEDIA_APPLICATION_POLL_INTERVAL_MS;
       if (shouldRefreshApplicationLedger) {
-        const applicationGeneration = ++applicationLoadGenerationRef.current;
-        applicationPageGenerationRef.current += 1;
-        setApplicationLoadingMore(false);
-        applicationLastReadAtRef.current = Date.now();
-        const ledger = await readApplicationLedger(request.targetId);
-        if (!isCurrent() || applicationGeneration !== applicationLoadGenerationRef.current) return;
-        if (ledger) {
-          reconcileApplicationTargetVersion(ledger.target.updatedAt);
-          setApplicationLedger(ledger);
-          setApplicationLedgerError('');
+        if (requestTarget.type === 'listing-draft') {
+          const applicationGeneration = ++applicationLoadGenerationRef.current;
+          applicationPageGenerationRef.current += 1;
+          setApplicationLoadingMore(false);
+          applicationLastReadAtRef.current = Date.now();
+          const listingLedger = await readListingDraftApplicationLedger(request.targetId);
+          if (!requestStillCurrent() || applicationGeneration !== applicationLoadGenerationRef.current) return;
+          if (listingLedger) {
+            setListingDraftTargetStale(
+              listingLedger.target.revision !== requestTarget.revision
+              || listingLedger.target.draftVersion !== requestTarget.draftVersion,
+            );
+            setListingDraftApplicationLedger(listingLedger);
+            setApplicationLedgerError('');
+          } else {
+            setApplicationLedgerError('应用记录暂时无法读取，当前回滚状态可能不是最新，请刷新后重试');
+          }
         } else {
-          setApplicationLedgerError('应用记录暂时无法读取，当前回滚状态可能不是最新，请刷新后重试');
+          const applicationGeneration = ++applicationLoadGenerationRef.current;
+          applicationPageGenerationRef.current += 1;
+          setApplicationLoadingMore(false);
+          applicationLastReadAtRef.current = Date.now();
+          const ledger = await readApplicationLedger(request.targetId);
+          if (!requestStillCurrent() || applicationGeneration !== applicationLoadGenerationRef.current) return;
+          if (ledger) {
+            reconcileApplicationTargetVersion(ledger.target.updatedAt);
+            setApplicationLedger(ledger);
+            setApplicationLedgerError('');
+          } else {
+            setApplicationLedgerError('应用记录暂时无法读取，当前回滚状态可能不是最新，请刷新后重试');
+          }
         }
       }
     } catch (caught) {
-      if (isCurrent()) setError(caught instanceof Error ? caught.message : '网络错误，请重试');
+      if (requestStillCurrent()) setError(caught instanceof Error ? caught.message : '网络错误，请重试');
     }
-  }, [readApplicationLedger, reconcileApplicationTargetVersion, updateMaskDirty]);
+  }, [readApplicationLedger, readListingDraftApplicationLedger, reconcileApplicationTargetVersion, updateMaskDirty]);
 
   const loadCoordinatorRef = useRef<ReturnType<typeof createLatestLoadCoordinator> | null>(null);
   if (!loadCoordinatorRef.current) {
@@ -620,7 +762,7 @@ export function SourceAiMediaPanel({
     detailRefreshOffsetRef.current = offset + activeIds.length;
     if (!activeIds.length) return;
     const results = await Promise.all(activeIds.map((workflowId) => api.get<AiMediaWorkflow>(
-      `/api/ai-images/workflows/${encodeURIComponent(workflowId)}?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}`,
+        `/api/ai-images/workflows/${encodeURIComponent(workflowId)}?contextType=${encodeURIComponent(targetRef.current.type)}&contextId=${encodeURIComponent(requestTargetId)}`,
     ).catch(() => null)));
     if (
       targetIdRef.current !== requestTargetId
@@ -667,10 +809,12 @@ export function SourceAiMediaPanel({
     setHistoryPriorityLoading(false);
     setComparisonWorkflowIds([]);
     setApplicationLedger(null);
+    setListingDraftApplicationLedger(null);
     setApplicationLoading(false);
     setApplicationLoadingMore(false);
     setApplicationLedgerError('');
     setApplicationTargetStaleVersion(null);
+    setListingDraftTargetStale(false);
     setApplicationTargetRefreshing(false);
     setReplaceConfirmWorkflowId(null);
     setRollbackConfirmApplicationId(null);
@@ -688,16 +832,16 @@ export function SourceAiMediaPanel({
     retryIntentRef.current.clear();
     applicationIntentRef.current.clear();
     void load();
-  }, [fullEditIntentStorageKey, imageIntentStorageKey, inpaintIntentStorageKey, load, target.id, translationIntentStorageKey, updateMaskDirty]);
+  }, [fullEditIntentStorageKey, imageIntentStorageKey, inpaintIntentStorageKey, load, targetContextIdentity, translationIntentStorageKey, updateMaskDirty]);
   useEffect(() => {
-    if (!applicationTargetStaleVersion || !target.updatedAt) return;
+    if (target.type !== 'collect' || !applicationTargetStaleVersion || !target.updatedAt) return;
     const currentTimestamp = Date.parse(target.updatedAt);
     const confirmedTimestamp = Date.parse(applicationTargetStaleVersion);
     if (Number.isFinite(currentTimestamp) && Number.isFinite(confirmedTimestamp)
       && currentTimestamp >= confirmedTimestamp) {
       setApplicationTargetStaleVersion(null);
     }
-  }, [applicationTargetStaleVersion, target.updatedAt]);
+  }, [applicationTargetStaleVersion, target.type, target.type === 'collect' ? target.updatedAt : undefined]);
   const workflowPollInterval = aiMediaWorkflowPollInterval(workflows);
   useEffect(() => {
     if (!workflowPollInterval) return;
@@ -813,8 +957,19 @@ export function SourceAiMediaPanel({
       };
     }
     const internalized = await api.post<AiMediaInternalizedAsset>(
-      `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}/internalize`,
-      { sourceMediaKey: selected.sourceMediaKey, purpose: requireEditReady ? 'EDIT' : 'GENERAL' },
+      target.type === 'collect'
+        ? `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}/internalize`
+        : `/api/ai-images/contexts/listing-draft/${encodeURIComponent(target.id)}/internalize`,
+      target.type === 'collect'
+        ? { sourceMediaKey: selected.sourceMediaKey, purpose: requireEditReady ? 'EDIT' : 'GENERAL' }
+        : {
+          sourceMediaKey: selected.sourceMediaKey,
+          purpose: requireEditReady ? 'EDIT' : 'GENERAL',
+          revision: target.revision,
+          draftVersion: target.draftVersion,
+          skuKey: target.skuKey,
+          slotKey: target.slotKey,
+        },
     );
     if (internalized.code !== 1 || !internalized.data?.id) {
       toast({ title: '源图保存失败', description: internalized.msg, variant: 'destructive' });
@@ -928,7 +1083,7 @@ export function SourceAiMediaPanel({
   }
 
   async function submit() {
-    if (!selected || submitting) return;
+    if (!selected || !context || submitting) return;
     const readiness = operationReadiness(operation);
     if (!capabilities || !readiness) {
       toast({ title: '当前操作状态未知', description: '无法确认 AI 媒体能力，请刷新后重试', variant: 'destructive' });
@@ -970,7 +1125,7 @@ export function SourceAiMediaPanel({
           targetLanguage: normalizedTargetLanguage,
           translationHint: translationHint.trim(),
           normalizedTerms,
-          targetId: target.id,
+          contextTarget: context.target,
         });
         const intent = resolveWorkflowSubmissionIntent(
           translationIntentRef.current
@@ -987,7 +1142,7 @@ export function SourceAiMediaPanel({
           domainHint: translationHint,
           terminologies: normalizedTerms,
           idempotencyKey: intent.idempotencyKey,
-          contextId: target.id,
+          context: aiMediaWorkflowContextFromTarget(context.target),
         });
         const result = await api.post<AiMediaWorkflow>('/api/ai-images/workflows', payload);
         if (result.code !== 1) {
@@ -1012,14 +1167,26 @@ export function SourceAiMediaPanel({
           const maskDataUrl = await maskEditorRef.current?.exportMaskDataUrl();
           if (!maskDataUrl) throw new Error('遮罩 PNG 尚未准备完成');
           const mask = await api.post<AiImageEditMaskAsset>(
-            `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}/edit-masks`,
-            {
-              sourceAssetId: assetId,
-              skuKey: selected.contextSkuKey ?? null,
-              slotKey: selected.contextSlotKey ?? null,
-              maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
-              maskDataUrl,
-            },
+            target.type === 'collect'
+              ? `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}/edit-masks`
+              : `/api/ai-images/contexts/listing-draft/${encodeURIComponent(target.id)}/edit-masks`,
+            target.type === 'collect'
+              ? {
+                sourceAssetId: assetId,
+                skuKey: selected.contextSkuKey ?? null,
+                slotKey: selected.contextSlotKey ?? null,
+                maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+                maskDataUrl,
+              }
+              : {
+                sourceAssetId: assetId,
+                revision: target.revision,
+                draftVersion: target.draftVersion,
+                skuKey: target.skuKey,
+                slotKey: target.slotKey,
+                maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+                maskDataUrl,
+              },
           );
           if (mask.code !== 1 || !mask.data?.id) {
             toast({ title: '遮罩保存失败', description: mask.msg, variant: 'destructive' });
@@ -1035,7 +1202,7 @@ export function SourceAiMediaPanel({
           maskAssetId,
           editPrompt: editPrompt.trim(),
           editNegativePrompt: editNegativePrompt.trim(),
-          targetId: target.id,
+          contextTarget: context.target,
           contextSkuKey: selected.contextSkuKey ?? null,
           contextSlotKey: selected.contextSlotKey ?? null,
         });
@@ -1055,7 +1222,7 @@ export function SourceAiMediaPanel({
           userPrompt: editPrompt,
           userNegativePrompt: editNegativePrompt,
           idempotencyKey: intent.idempotencyKey,
-          contextId: target.id,
+          context: aiMediaWorkflowContextFromTarget(context.target),
           contextSkuKey: selected.contextSkuKey ?? null,
           contextSlotKey: selected.contextSlotKey ?? null,
         });
@@ -1084,7 +1251,7 @@ export function SourceAiMediaPanel({
         return;
       }
 
-      const fingerprint = JSON.stringify({ operation, assetId: assetId.trim(), prompt: prompt.trim(), targetId: target.id });
+      const fingerprint = JSON.stringify({ operation, assetId: assetId.trim(), prompt: prompt.trim(), contextTarget: context.target });
       const intent = resolveWorkflowSubmissionIntent(
         imageIntentRef.current || loadWorkflowSubmissionIntent(storage, imageIntentStorageKey),
         fingerprint,
@@ -1095,7 +1262,7 @@ export function SourceAiMediaPanel({
       const result = await api.post<AiMediaWorkflow>('/api/ai-images/workflows', {
         operation: 'IMAGE_TO_IMAGE', sourceAssetId: assetId, prompt: prompt.trim(), count: 1,
         width: 1024, height: 1024, idempotencyKey: intent.idempotencyKey,
-        context: { type: target.type, id: target.id },
+        context: aiMediaWorkflowContextFromTarget(context.target),
       });
       if (result.code !== 1) {
         if (isDefinitiveWorkflowSubmissionFailure(result.code)) {
@@ -1193,7 +1360,7 @@ export function SourceAiMediaPanel({
     setHistoryLoadingMore(true);
     try {
       const result = await api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(
-        `/api/ai-images/workflows?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}&limit=20&pageVersion=1&cursor=${encodeURIComponent(cursor)}`,
+        aiMediaWorkflowHistoryPath(targetRef.current, cursor),
       );
       if (
         generation !== historyPageGenerationRef.current
@@ -1226,7 +1393,258 @@ export function SourceAiMediaPanel({
       : [...current.slice(-1), workflowId]);
   }
 
+  async function applyListingDraftWorkflow(
+    workflow: AiMediaWorkflow,
+    mode: 'append' | 'replace' = 'append',
+  ) {
+    if (target.type !== 'listing-draft' || !context) return;
+    const authority = listingDraftSlotAuthority(context);
+    if (!authority || !workflowMatchesListingDraftAuthority(workflow, context)) {
+      toast({ title: '草稿槽位已变化', description: '请刷新当前冻结槽位后重试', variant: 'destructive' });
+      await refreshQuietly();
+      return;
+    }
+    if (!isAiMediaWorkflowInputCurrent(workflow, context.inputs, context.snapshot.id, context)) {
+      toast({ title: '源图版本已变化', description: '请基于当前草稿快照重新生成候选图', variant: 'destructive' });
+      await refreshQuietly();
+      return;
+    }
+    if (!authority.slotKey) {
+      toast({ title: '尚未选择冻结图片槽位', description: '只能从当前草稿或已有工作流恢复精确槽位', variant: 'destructive' });
+      return;
+    }
+    if (listingDraftTargetStale
+      || authority.revision !== target.revision
+      || authority.draftVersion !== target.draftVersion) {
+      toast({ title: '草稿尚未同步', description: '请先刷新当前草稿再应用候选图', variant: 'destructive' });
+      return;
+    }
+    if (mediaDraftDirty) {
+      toast({ title: '图片筛选尚未保存', description: '请先保存或放弃当前图片筛选，再应用候选图' });
+      return;
+    }
+    if (maskDirtyRef.current) {
+      toast({ title: '局部重绘遮罩尚未提交', description: '请先提交或放弃当前遮罩草稿，再应用候选图' });
+      return;
+    }
+    if (capabilities?.applications?.listingDraftApplyEnabled !== true) {
+      toast({ title: '候选应用当前关闭', description: '当前仍处于暗态 fake-only 验证阶段' });
+      return;
+    }
+    if (mode === 'append' && authority.assignedAssetId) {
+      toast({ title: '当前槽位已有图片', description: '请明确确认替换现有槽位', variant: 'destructive' });
+      return;
+    }
+    if (mode === 'replace' && !authority.assignedAssetId) {
+      toast({ title: '空槽位不能替换', variant: 'destructive' });
+      return;
+    }
+    const requestTargetId = target.id;
+    const requestTargetIdentity = aiMediaTargetIdentity(target);
+    const storage = browserSessionStorage();
+    const scopeIdentity = [
+      requestTargetId,
+      target.revision,
+      target.draftVersion,
+      target.skuKey || '',
+      target.slotKey || '',
+    ].join(':');
+    const storageKey = aiMediaApplicationIntentStorageKey(
+      scopeIdentity,
+      'apply',
+      `${workflow.id}:${mode}`,
+    );
+    const fingerprint = JSON.stringify({
+      contractVersion: 'ai-media-listing-draft-application/v1',
+      kind: 'APPLY', workflowId: workflow.id, mode,
+      workflowRevision: workflow.revision,
+      draftId: requestTargetId,
+      targetRevision: target.revision,
+      targetDraftVersion: target.draftVersion,
+      skuKey: target.skuKey,
+      slotKey: target.slotKey,
+    });
+    const intent = resolveAiMediaApplicationIntent(
+      applicationIntentRef.current.get(storageKey) || loadAiMediaApplicationIntent(storage, storageKey),
+      fingerprint,
+      () => idempotencyKey(`listing-draft-application-${mode}`),
+    );
+    applicationIntentRef.current.set(storageKey, intent);
+    saveAiMediaApplicationIntent(storage, storageKey, intent);
+    const clearIntent = () => {
+      applicationIntentRef.current.delete(storageKey);
+      clearAiMediaApplicationIntent(storage, storageKey);
+    };
+    const recover = async (message = '') => {
+      const ledger = await readListingDraftApplicationLedger(requestTargetId, { operationKey: intent.operationKey });
+      if (targetIdRef.current !== requestTargetId
+        || aiMediaTargetIdentity(targetRef.current) !== requestTargetIdentity) return;
+      if (ledger?.recoveredOperation?.operationKey === intent.operationKey) {
+        clearIntent();
+        setListingDraftApplicationLedger(ledger);
+        setListingDraftTargetStale(true);
+        await onConflictRefresh();
+        await refreshQuietly();
+        toast({ title: '草稿候选应用结果已恢复' });
+        return;
+      }
+      toast({
+        title: '草稿候选应用状态待确认',
+        description: message || '暂时无法确认服务器结果；已保留本次操作，可安全重试',
+        variant: 'destructive',
+      });
+    };
+    setPendingAction(`listing-draft-apply:${workflow.id}:${mode}`);
+    try {
+      const execution = await runMediaMutation(() => listingDraftApplicationClient.apply(workflow, context, {
+        mode,
+        operationKey: intent.operationKey,
+        replaceConfirmed: mode === 'replace',
+      }));
+      if (!execution.started) {
+        clearIntent();
+        toast({ title: '图片正在保存', description: '请等待当前图片操作完成后重试' });
+        return;
+      }
+      const result = execution.value!;
+      clearIntent();
+      setListingDraftApplicationLedger((current) => current
+        ? { ...current, target: result.target, frontier: result.application.kind === 'APPLY' ? result.application : current.frontier,
+          recoveredOperation: result.application }
+        : null);
+      setListingDraftTargetStale(true);
+      await onConflictRefresh();
+      await refreshQuietly();
+      toast({ title: mode === 'replace' ? '草稿槽位已替换' : '草稿槽位已追加候选图' });
+    } catch (caught) {
+      if (isAiMediaListingDraftApplicationResponseError(caught)
+        && isDefinitiveAiMediaApplicationFailure(caught.code)) {
+        clearIntent();
+        try { await onConflictRefresh(); } catch { /* the current draft remains visible */ }
+        await refreshQuietly();
+        toast({ title: '草稿候选应用失败', description: caught.message, variant: 'destructive' });
+        return;
+      }
+      await recover(caught instanceof Error ? caught.message : '网络响应未确认');
+    } finally {
+      setPendingAction(null);
+      setReplaceConfirmWorkflowId(null);
+    }
+  }
+
+  async function rollbackListingDraftApplication(
+    application: AiMediaListingDraftApplicationMutation,
+  ) {
+    if (target.type !== 'listing-draft') return;
+    const ledger = listingDraftApplicationLedger;
+    if (!ledger || ledger.frontier?.id !== application.id || !application.rollbackEligible) return;
+    if (listingDraftTargetStale || mediaDraftDirty) {
+      toast({ title: '草稿尚未同步', description: '请先刷新当前草稿后再回滚', variant: 'destructive' });
+      return;
+    }
+    if (maskDirtyRef.current) {
+      toast({ title: '局部重绘遮罩尚未提交', description: '请先提交或放弃当前遮罩草稿，再回滚图片应用' });
+      return;
+    }
+    if (!capabilities?.applications?.rollbackEnabled) {
+      toast({ title: '应用回滚当前不可用', variant: 'destructive' });
+      return;
+    }
+    const scopeIdentity = [target.id, target.revision, target.draftVersion, target.skuKey || '', target.slotKey || ''].join(':');
+    const requestTargetIdentity = aiMediaTargetIdentity(target);
+    const storage = browserSessionStorage();
+    const storageKey = aiMediaApplicationIntentStorageKey(scopeIdentity, 'rollback', application.id);
+    const fingerprint = JSON.stringify({
+      contractVersion: 'ai-media-listing-draft-application/v1',
+      kind: 'ROLLBACK', applicationId: application.id, applicationRevision: application.revision,
+      workflowId: application.workflowId, workflowRevision: application.workflowRevisionAfter,
+      draftId: target.id, targetRevision: target.revision, targetDraftVersion: target.draftVersion,
+      skuKey: target.skuKey, slotKey: target.slotKey,
+    });
+    const intent = resolveAiMediaApplicationIntent(
+      applicationIntentRef.current.get(storageKey) || loadAiMediaApplicationIntent(storage, storageKey),
+      fingerprint,
+      () => idempotencyKey('listing-draft-application-rollback'),
+    );
+    applicationIntentRef.current.set(storageKey, intent);
+    saveAiMediaApplicationIntent(storage, storageKey, intent);
+    const clearIntent = () => {
+      applicationIntentRef.current.delete(storageKey);
+      clearAiMediaApplicationIntent(storage, storageKey);
+    };
+    setPendingAction(`listing-draft-rollback:${application.id}`);
+    try {
+      const execution = await runMediaMutation(() => listingDraftApplicationClient.rollback(
+        application,
+        ledger.target,
+        intent.operationKey,
+      ));
+      if (!execution.started) {
+        clearIntent();
+        return;
+      }
+      clearIntent();
+      const result = execution.value!;
+      setListingDraftApplicationLedger((current) => current
+        ? { ...current, target: result.target, frontier: null, recoveredOperation: result.application }
+        : null);
+      setListingDraftTargetStale(true);
+      await onConflictRefresh();
+      await refreshQuietly();
+      toast({ title: '已回滚草稿槽位图片应用' });
+    } catch (caught) {
+      if (isAiMediaListingDraftApplicationResponseError(caught)
+        && isDefinitiveAiMediaApplicationFailure(caught.code)) {
+        clearIntent();
+        try { await onConflictRefresh(); } catch { /* the current draft remains visible */ }
+        await refreshQuietly();
+        toast({ title: '草稿图片回滚失败', description: caught.message, variant: 'destructive' });
+        return;
+      }
+      const recovered = await readListingDraftApplicationLedger(target.id, { operationKey: intent.operationKey });
+      if (aiMediaTargetIdentity(targetRef.current) !== requestTargetIdentity) return;
+      if (recovered?.recoveredOperation?.rollbackOfId === application.id) {
+        clearIntent();
+        setListingDraftApplicationLedger(recovered);
+        setListingDraftTargetStale(true);
+        await onConflictRefresh();
+        await refreshQuietly();
+        toast({ title: '草稿图片回滚结果已恢复' });
+      } else {
+        toast({ title: '草稿图片回滚失败', description: caught instanceof Error ? caught.message : '网络响应未确认', variant: 'destructive' });
+      }
+    } finally {
+      setPendingAction(null);
+      setRollbackConfirmApplicationId(null);
+    }
+  }
+
   async function loadMoreApplicationHistory() {
+    if (target.type === 'listing-draft') {
+      const beforeSequence = listingDraftApplicationLedger?.nextBeforeSequence;
+      if (!beforeSequence || applicationLoadingMore) return;
+      const requestTargetId = target.id;
+      const generation = ++applicationPageGenerationRef.current;
+      setApplicationLoadingMore(true);
+      try {
+        const page = await readListingDraftApplicationLedger(requestTargetId, { beforeSequence });
+        if (generation !== applicationPageGenerationRef.current || targetIdRef.current !== requestTargetId) return;
+        if (!page) {
+          setApplicationLedgerError('草稿应用记录分页暂时无法读取，请稍后重试');
+          toast({ title: '草稿应用记录加载失败', variant: 'destructive' });
+          return;
+        }
+        setListingDraftApplicationLedger((current) => current
+          ? appendAiMediaListingDraftApplicationLedgerPage(current, page)
+          : page);
+        setApplicationLedgerError('');
+      } finally {
+        if (generation === applicationPageGenerationRef.current && targetIdRef.current === requestTargetId) {
+          setApplicationLoadingMore(false);
+        }
+      }
+      return;
+    }
     const beforeSequence = applicationLedger?.nextBeforeSequence;
     if (!beforeSequence || applicationLoadingMore) return;
     const requestTargetId = target.id;
@@ -1257,6 +1675,10 @@ export function SourceAiMediaPanel({
     job: AiMediaWorkflow['jobs'][number],
     mode: AiMediaApplicationMode = 'append',
   ) {
+    if (target.type === 'listing-draft') {
+      await applyListingDraftWorkflow(workflow, mode);
+      return;
+    }
     if (!context || !isAiMediaWorkflowInputCurrent(
       workflow,
       context.inputs,
@@ -1275,7 +1697,7 @@ export function SourceAiMediaPanel({
       });
       return;
     }
-    if (!target.updatedAt) {
+    if (target.type !== 'collect' || !target.updatedAt) {
       toast({ title: '商品版本缺失', description: '请刷新商品后重试', variant: 'destructive' });
       await onConflictRefresh();
       return;
@@ -1617,14 +2039,43 @@ export function SourceAiMediaPanel({
 
   async function refreshApplicationHistory() {
     if (applicationLoading) return;
+    const requestTarget = target;
+    const requestTargetIdentity = aiMediaTargetIdentity(requestTarget);
+    const listingGeneration = requestTarget.type === 'listing-draft'
+      ? ++applicationLoadGenerationRef.current
+      : null;
+    if (listingGeneration !== null) {
+      applicationPageGenerationRef.current += 1;
+      setApplicationLoadingMore(false);
+    }
     setApplicationLoading(true);
     try {
-      const ledger = await refreshApplicationLedger(target.id);
-      if (!ledger && targetIdRef.current === target.id) {
+      if (requestTarget.type === 'listing-draft') {
+        const ledger = await readListingDraftApplicationLedger(requestTarget.id);
+        if (listingGeneration !== applicationLoadGenerationRef.current
+          || aiMediaTargetIdentity(targetRef.current) !== requestTargetIdentity) return;
+        if (ledger) {
+          setListingDraftApplicationLedger(ledger);
+          setListingDraftTargetStale(
+            ledger.target.revision !== requestTarget.revision
+            || ledger.target.draftVersion !== requestTarget.draftVersion,
+          );
+          setApplicationLedgerError('');
+        } else {
+          setApplicationLedgerError('草稿图片应用记录暂时无法读取，请刷新后重试');
+          toast({ title: '草稿应用记录刷新失败', variant: 'destructive' });
+        }
+        return;
+      }
+      const ledger = await refreshApplicationLedger(requestTarget.id);
+      if (!ledger && targetIdRef.current === requestTarget.id) {
         toast({ title: '应用记录刷新失败', variant: 'destructive' });
       }
     } finally {
-      if (targetIdRef.current === target.id) setApplicationLoading(false);
+      if (aiMediaTargetIdentity(targetRef.current) === requestTargetIdentity
+        && (listingGeneration === null || listingGeneration === applicationLoadGenerationRef.current)) {
+        setApplicationLoading(false);
+      }
     }
   }
 
@@ -1662,9 +2113,25 @@ export function SourceAiMediaPanel({
         : []),
     ]).values()].sort((left, right) => right.targetSequence - left.targetSequence)
     : [];
+  const listingDraftApplicationHistoryItems = listingDraftApplicationLedger
+    ? [...new Map([
+      ...listingDraftApplicationLedger.items.map((application) => [application.id, application] as const),
+      ...(listingDraftApplicationLedger.frontier
+        ? [[listingDraftApplicationLedger.frontier.id, listingDraftApplicationLedger.frontier] as const]
+        : []),
+    ]).values()].sort((left, right) => right.targetSequence - left.targetSequence)
+    : [];
+  const listingRollbackConfirmApplication = rollbackConfirmApplicationId
+    ? (listingDraftApplicationLedger?.items.find((application) => application.id === rollbackConfirmApplicationId)
+      || (listingDraftApplicationLedger?.frontier?.id === rollbackConfirmApplicationId
+        ? listingDraftApplicationLedger.frontier
+        : null))
+    : null;
   const replaceConfirmWorkflow = replaceConfirmWorkflowId
     ? workflows.find((workflow) => workflow.id === replaceConfirmWorkflowId) || null
     : null;
+  const listingDraftApplicationSlotKeyTooLong = target.type === 'listing-draft'
+    && Boolean(target.slotKey && target.slotKey.length > AI_MEDIA_LISTING_DRAFT_APPLICATION_SLOT_KEY_MAX_LENGTH);
   const rollbackConfirmApplication = rollbackConfirmApplicationId
     ? (applicationLedger?.items.find((application) => application.id === rollbackConfirmApplicationId)
       || (applicationLedger?.frontier?.id === rollbackConfirmApplicationId
@@ -1686,18 +2153,18 @@ export function SourceAiMediaPanel({
       {capabilities && !capabilities.webMediaEnabled ? <p className="text-sm text-muted-foreground">Web 媒体工具当前关闭，已有任务仍可查看和处理。</p> : null}
       {!disabled && !context?.inputs.length ? <p className="text-sm text-muted-foreground">当前采集快照没有可用于 AI 图片处理的商品级图片。</p> : null}
 
-      <SourceAiMediaPlanningPanel
-        targetId={target.id}
-        targetUpdatedAt={target.updatedAt}
-        enabled
-        planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
-        selectedSkuKeys={selectedSkuKeys}
-        mediaDraftDirty={mediaDraftDirty || Boolean(applicationTargetStaleVersion)}
-        mediaMutationBusy={mediaMutationBusy}
-        runMediaMutation={runMediaMutation}
-        onApplied={onApplied}
-        onConflictRefresh={synchronizeApplicationTarget}
-      />
+      {target.type === 'collect' ? <SourceAiMediaPlanningPanel
+          targetId={target.id}
+          targetUpdatedAt={target.updatedAt}
+          enabled
+          planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
+          selectedSkuKeys={selectedSkuKeys}
+          mediaDraftDirty={mediaDraftDirty || Boolean(applicationTargetStaleVersion)}
+          mediaMutationBusy={mediaMutationBusy}
+          runMediaMutation={runMediaMutation}
+          onApplied={onApplied}
+          onConflictRefresh={synchronizeApplicationTarget}
+        /> : null}
 
       {!disabled && context?.inputs.length ? <>
       <div className="flex flex-wrap gap-1 rounded-md border p-1" role="group" aria-label="AI 图片操作">
@@ -1787,7 +2254,7 @@ export function SourceAiMediaPanel({
             sourceWidth={selected.width}
             sourceHeight={selected.height}
             resetKey={`${selected.sourceMediaKey}:${selected.assetId}:${selected.width}x${selected.height}:${maskResetNonce}`}
-            disabled={submitting}
+              disabled={submitting || mediaMutationBusy}
             onReadyChange={setMaskReady}
             onDirtyChange={updateMaskDirty}
           />
@@ -1811,7 +2278,7 @@ export function SourceAiMediaPanel({
       </Button>
       </> : null}
 
-      <div className="space-y-2" aria-label="图片应用记录">
+      {target.type === 'collect' ? <div className="space-y-2" aria-label="图片应用记录">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h4 className="text-xs font-medium text-muted-foreground">应用记录</h4>
@@ -1865,7 +2332,37 @@ export function SourceAiMediaPanel({
           </div>)}
         </div> : null}
         {applicationLedger?.nextBeforeSequence ? <div className="flex justify-center"><Button type="button" size="sm" variant="outline" disabled={applicationLoadingMore} onClick={() => void loadMoreApplicationHistory()}>{applicationLoadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}{applicationLoadingMore ? '正在加载' : '加载更多应用记录'}</Button></div> : null}
-      </div>
+      </div> : <div className="space-y-2" aria-label="草稿图片应用记录">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h4 className="text-xs font-medium text-muted-foreground">草稿图片应用记录</h4>
+            {listingDraftApplicationLedger?.frontier?.rollbackEligible ? <Badge variant="outline">可回滚 1 项</Badge> : null}
+            <Badge variant="outline">暗态 fake-only</Badge>
+          </div>
+          <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => void refreshApplicationHistory()} disabled={applicationLoading} title="刷新草稿图片应用记录" aria-label="刷新草稿图片应用记录">
+            {applicationLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">目标草稿、修订版本、SKU 和图片槽位均来自当前冻结上下文；不会手填目标记录。</p>
+        {listingDraftTargetStale ? <div className="border-l-2 border-amber-500 pl-3 text-xs text-amber-700">草稿版本或槽位已变化，应用与回滚已暂停。请刷新草稿后重试。</div> : null}
+        {applicationLedgerError ? <p className="text-xs text-destructive">{applicationLedgerError}</p> : null}
+        {listingDraftApplicationHistoryItems.length ? <div className="divide-y border">
+          {listingDraftApplicationHistoryItems.map((application) => {
+            const rolledBack = application.kind === 'APPLY' && Boolean(application.rolledBackById);
+            const status = application.kind === 'ROLLBACK' ? '回滚记录' : rolledBack ? '已回滚' : application.mode === 'replace' ? '已替换' : '已追加';
+            const canRollback = listingDraftApplicationLedger?.frontier?.id === application.id && application.rollbackEligible;
+            return <div key={application.id} className="flex min-w-0 flex-col gap-2 px-3 py-2 text-xs sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><Badge variant="outline">{status}</Badge><span className="break-all">{application.contextSkuKey || '商品级'}</span><span className="break-all text-muted-foreground">{application.contextSlotKey}</span></div>
+                <p className="mt-1 break-words text-muted-foreground">{new Date(application.createdAt).toLocaleString()} · 草稿修订 {application.targetRevisionBefore} → {application.targetRevisionAfter} · 业务版本 {application.targetDraftVersionBefore} → {application.targetDraftVersionAfter}</p>
+                {!canRollback && application.rollbackReason ? <p className="mt-1 text-amber-700">{applicationRollbackReason(application.rollbackReason)}</p> : null}
+              </div>
+              {canRollback ? <Button type="button" size="sm" variant="outline" className="shrink-0" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || maskDirty || listingDraftTargetStale} title={maskDirty ? '请先提交或放弃当前遮罩草稿' : '撤销此次草稿图片应用'} onClick={() => setRollbackConfirmApplicationId(application.id)}><RotateCcw className="h-3.5 w-3.5" />撤销此次应用</Button> : null}
+            </div>;
+          })}
+        </div> : listingDraftApplicationLedger ? <p className="text-sm text-muted-foreground">暂无草稿图片应用记录</p> : null}
+        {listingDraftApplicationLedger?.nextBeforeSequence ? <div className="flex justify-center"><Button type="button" size="sm" variant="outline" disabled={applicationLoadingMore} onClick={() => void loadMoreApplicationHistory()}>{applicationLoadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}{applicationLoadingMore ? '正在加载' : '加载更多应用记录'}</Button></div> : null}
+      </div>}
 
       <div className="space-y-2">
         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1925,6 +2422,12 @@ export function SourceAiMediaPanel({
           const inpaintReadiness = operationReadiness('INPAINT');
           const fullEditChainReady = Boolean(capabilities?.webMediaEnabled && fullEditReadiness?.ready);
           const inpaintChainReady = Boolean(capabilities?.webMediaEnabled && inpaintReadiness?.ready);
+          const listingWorkflowHasApplication = target.type === 'listing-draft' && Boolean(
+            listingDraftApplicationHistoryItems.some((application) => (
+              application.kind === 'APPLY'
+              && application.workflowId === workflow.id
+            )),
+          );
           return <div key={workflow.id} className="grid min-w-0 gap-3 rounded-md border p-3 lg:grid-cols-[minmax(148px,224px)_minmax(0,1fr)] lg:items-center">
             <div className="flex flex-wrap gap-1">
               {source ? <a href={imageUrl(source.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开源图"><img src={imageUrl(source.url)} alt={`${operationLabel}源图`} loading="lazy" className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">源图</span></a> : <div className="h-[72px] w-[72px] rounded border bg-muted" />}
@@ -1952,7 +2455,10 @@ export function SourceAiMediaPanel({
               {ACTIVE.has(workflow.status) ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`cancel:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/cancel`, { expectedRevision: workflow.revision }, '已请求取消')}><Square className="h-3.5 w-3.5" />取消</Button> : null}
               {workflow.status === 'FAILED' && !requiresReconciliation && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || !retryReady} title={retryReady ? '重试任务' : retryReadiness ? describeAiMediaReadiness(workflow.operation, retryReadiness) : '当前操作状态未知'} onClick={() => void retryWorkflow(workflow)}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
               {workflow.status === 'SUCCEEDED' && workflow.reviewStatus === 'PENDING' && output && sourceIsCurrent ? <><Button size="sm" disabled={Boolean(pendingAction)} onClick={() => void action(`approve:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'APPROVE' }, '候选图已通过审核')}><Check className="h-3.5 w-3.5" />通过</Button><Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`reject:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'REJECT' }, '候选图已拒绝')}><X className="h-3.5 w-3.5" />拒绝</Button></> : null}
-              {workflow.reviewStatus === 'APPROVED' && job && !workflow.application && !job.appliedMode && sourceIsCurrent ? <>
+              {workflow.reviewStatus === 'APPROVED' && job && !workflow.application && !job.appliedMode && !listingWorkflowHasApplication && sourceIsCurrent ? target.type === 'listing-draft' ? <>
+                {!target.assignedAssetId ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || maskDirty || listingDraftTargetStale || listingDraftApplicationSlotKeyTooLong || !target.slotKey || capabilities?.applications?.listingDraftApplyEnabled !== true} title={maskDirty ? '请先提交或放弃当前遮罩草稿' : !target.slotKey ? '请先从当前草稿或已有任务选择冻结槽位' : listingDraftApplicationSlotKeyTooLong ? '当前槽位标识过长，请重新选择标准槽位' : '写入当前空槽位'} onClick={() => void applyWorkflow(workflow, job)}><ImageIcon className="h-3.5 w-3.5" />写入空槽位</Button> : null}
+                {target.assignedAssetId ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || maskDirty || listingDraftTargetStale || listingDraftApplicationSlotKeyTooLong || !target.slotKey || capabilities?.applications?.listingDraftApplyEnabled !== true} title={maskDirty ? '请先提交或放弃当前遮罩草稿' : listingDraftApplicationSlotKeyTooLong ? '当前槽位标识过长，请重新选择标准槽位' : '替换当前冻结槽位'} onClick={() => setReplaceConfirmWorkflowId(workflow.id)}><RotateCcw className="h-3.5 w-3.5" />替换当前槽位</Button> : null}
+              </> : <>
                 <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || Boolean(applicationTargetStaleVersion) || !target.updatedAt || !capabilities?.applications?.applyEnabled} title={applicationTargetStaleVersion ? '请先刷新商品图片' : mediaDraftDirty ? '请先保存或放弃当前图片筛选' : '追加候选图'} onClick={() => void applyWorkflow(workflow, job)}><ImageIcon className="h-3.5 w-3.5" />{isTranslation ? '追加翻译图' : isFullEdit ? '追加全图编辑' : isInpaint ? '追加局部重绘' : '追加候选'}</Button>
                 {workflow.operation === 'IMAGE_TO_IMAGE' && capabilities?.applications?.replaceOperations.includes('IMAGE_TO_IMAGE') ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || mediaDraftDirty || Boolean(applicationTargetStaleVersion) || !target.updatedAt || !capabilities.applications.applyEnabled} title={applicationTargetStaleVersion ? '请先刷新商品图片' : mediaDraftDirty ? '请先保存或放弃当前图片筛选' : '替换全部发布图'} onClick={() => setReplaceConfirmWorkflowId(workflow.id)}><RotateCcw className="h-3.5 w-3.5" />替换全部发布图</Button> : null}
               </> : null}
@@ -1971,13 +2477,15 @@ export function SourceAiMediaPanel({
       }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>替换全部发布图</DialogTitle>
-            <DialogDescription>当前商品的发布图片将只保留这张已审核候选图。系统会保存可逆快照，可在没有后续图片变更时回滚。</DialogDescription>
+            <DialogTitle>{target.type === 'listing-draft' ? '替换当前槽位' : '替换全部发布图'}</DialogTitle>
+            <DialogDescription>{target.type === 'listing-draft'
+              ? '当前冻结槽位将改为这张已审核候选图。系统会保存可逆快照，可在没有后续图片变更时回滚。'
+              : '当前商品的发布图片将只保留这张已审核候选图。系统会保存可逆快照，可在没有后续图片变更时回滚。'}</DialogDescription>
           </DialogHeader>
-          <div className="text-sm text-muted-foreground">追加是默认方式。仅确认需要整体替换时继续。</div>
+          <div className="text-sm text-muted-foreground">{target.type === 'listing-draft' ? '仅确认需要替换当前槽位时继续。' : '追加是默认方式。仅确认需要整体替换时继续。'}</div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setReplaceConfirmWorkflowId(null)} disabled={Boolean(pendingAction)}>取消</Button>
-            <Button type="button" variant="destructive" disabled={Boolean(pendingAction) || mediaDraftDirty || Boolean(applicationTargetStaleVersion)} onClick={() => {
+            <Button type="button" variant="destructive" disabled={Boolean(pendingAction) || mediaDraftDirty || (target.type === 'listing-draft' ? maskDirty || listingDraftTargetStale || listingDraftApplicationSlotKeyTooLong : Boolean(applicationTargetStaleVersion))} onClick={() => {
               const workflow = replaceConfirmWorkflow;
               const job = workflow?.jobs[workflow.jobs.length - 1];
               if (workflow && job) void applyWorkflow(workflow, job, 'replace');
@@ -1998,6 +2506,22 @@ export function SourceAiMediaPanel({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setRollbackConfirmApplicationId(null)} disabled={Boolean(pendingAction)}>取消</Button>
             <Button type="button" variant="destructive" disabled={Boolean(pendingAction) || mediaDraftDirty || Boolean(applicationTargetStaleVersion)} onClick={() => rollbackConfirmApplication && void rollbackApplication(rollbackConfirmApplication)}>{pendingAction?.startsWith('rollback:') ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}确认回滚</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(listingRollbackConfirmApplication)} onOpenChange={(open) => {
+        if (!open && !pendingAction) setRollbackConfirmApplicationId(null);
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>撤销草稿槽位图片应用</DialogTitle>
+            <DialogDescription>将通过新的补偿版本恢复当前冻结槽位，草稿不会回退到旧修订版本。</DialogDescription>
+          </DialogHeader>
+          {listingRollbackConfirmApplication ? <div className="space-y-1 text-sm text-muted-foreground"><div>{listingRollbackConfirmApplication.contextSkuKey || '商品级'} · {listingRollbackConfirmApplication.contextSlotKey}</div><div>{new Date(listingRollbackConfirmApplication.createdAt).toLocaleString()}</div></div> : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRollbackConfirmApplicationId(null)} disabled={Boolean(pendingAction)}>取消</Button>
+            <Button type="button" variant="destructive" disabled={Boolean(pendingAction) || mediaDraftDirty || maskDirty || listingDraftTargetStale} onClick={() => listingRollbackConfirmApplication && void rollbackListingDraftApplication(listingRollbackConfirmApplication)}>{pendingAction?.startsWith('listing-draft-rollback:') ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}确认回滚</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

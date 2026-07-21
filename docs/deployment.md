@@ -93,6 +93,8 @@ MIGRATION_TIMEOUT=20m
 
 Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史分页、优先任务续页和候选对比恢复，Unit 10A-H2 已增加不可变 APPEND/受限 REPLACE/补偿 ROLLBACK 账本和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 的当前指针、source snapshot、draft revision/version、空槽/精确 slot 和候选链 authority，但都不改变暗态边界。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 以 `CREATE INDEX CONCURRENTLY` 增加 owner/context 的 history/updates keyset 索引；`1690`/`1700` 创建并加固 collect application mutation authority；`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束。应用版本回滚不得尝试回退这些 additive database guards、账本数据或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
 
+Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirmed REPLACE、不可变账本及前向补偿 ROLLBACK。`20260721120000` 至 `20260721123000` 建立并加固 owner/actor/snapshot/operation/projection authority；生产能力响应必须保持 `listingDraftApplyEnabled=false`，只读历史和既有 rollback 仍可用。
+
 - `feature_ai_media_workflow_v2`
 - `feature_ai_media_suite`
 - `feature_ai_media_full_edit`
@@ -115,13 +117,17 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 6. 若 `1700` 报 `application mutation authority upgrade requires an empty ledger`，保持所有 writer 停止；禁止删除账本、禁止 `resolve --applied`。保留数据并按 Runbook 升级为审计后的前向迁移。
 7. H3a listing-draft migrations 已通过空库与 populated upgrade；若 `21001000` 至 `21011000` 任一项失败，保持 API/Worker 停止，检查对应预建索引、约束和 deferred candidate trigger 后只修复失败项并重放。不要删除已有 listing-draft context 或候选资产，也不要把暗态 gate 改为 enabled。
 
+8. H3b migrations 必须按 `120000`、`121000`、`122000`、`123000` 顺序全部成功；失败时保持 writer 停止，不得删除账本或回退草稿版本。检查 `ai_media_listing_draft_application_mutations` 的六个索引和四个 triggers，并确认 actor trigger 拒绝 owner 之外的账号。
+
 ### Unit 10A-H1 滚动部署边界
 
 H1 的 `GET /workflows` 只有在显式 `pageVersion=1` 时返回 additive `{items, priorityItems, priorityItemsTruncated, priorityNextCursor, nextCursor}` DTO；未带版本的旧客户端继续接收 legacy 数组。history cursor 使用 `createdAt/id`，priority cursor 使用固定 recent cutoff 的 `updatedAt/id`，两者均绑定 owner、context 和 lane，不能互换。新 Web 首屏最多合并 100 条 priority 记录，更多待处理记录只在用户显式点击后通过 `GET /workflows/priority` 逐页加载，因此 API 应先于或与 Web 同批部署；旧 Web 不依赖新端点。
 
 Web 以 revision、再以 `updatedAt` 合并响应，并保持 `appliedMode` 和 cost 状态单调；运行中任务每 2 秒、待人工审核/应用任务每 30 秒刷新，页面 hidden 时暂停并在恢复可见时刷新。候选绑定使用 `selectedOutputAssetId`，最多并排比较两张，并显示商品/SKU/slot scope。上述行为仍全部处于暗态、fake-only，不允许据此启用付费 Provider 或真实 Ozon 写入。
 
-Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。Unit 10A-H3a 增至 118 migrations，并已完成 listing-draft/SKU context authority 的关闭验证。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、`1690`/`1700` collect 账本、`21001000` 至 `21011000` listing-draft 约束和暗态 gate。Unit 10A 仍缺 H3b listing-draft candidate writeback/rollback 与 submitted-provider reconciliation。
+Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。Unit 10A-H2 增至 113 migrations；本地关闭证据为 focused 143/143、PostgreSQL 46/46、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查、workspace typecheck、production build 和桌面/移动 stale-refresh/rollback 浏览器验收通过，lint 为 0 errors / 20 条既有 warnings。Unit 10A-H3a 增至 118 migrations，并已完成 listing-draft/SKU context authority 的关闭验证。部署前仍必须按 Runbook 在目标环境验证 `1670`/`1680` 索引、`1690`/`1700` collect 账本、`21001000` 至 `21011000` listing-draft 约束和暗态 gate。H3b candidate writeback/rollback 已由下一段的 122-migration 基线覆盖；Unit 10A 仍缺 submitted-provider reconciliation。
+
+Unit 10A-H3b 增至 122 migrations；本地验证覆盖 PostgreSQL 51/51、populated upgrade、真实双连接跨账本 operation-key serialization、owner/actor/snapshot/operation/source/SKU-slot 篡改拒绝、服务端 2706 passed/131 skipped、扩展 192 checks、生产构建、浏览器 product/SKU 写回与多步回滚、刷新风暴回归、桌面/移动无溢出和生产能力门禁。Unit 10A 仍缺 submitted-provider reconciliation 与更完整的扩展工作台，不允许据此启用真实 Provider 或 Ozon 写入。
 
 ## Cloudflare 设置
 
@@ -137,7 +143,7 @@ Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、popula
 - 应用回滚：保留最近 3 个镜像 tag，Nginx 或 compose 切回上一版。
 - 数据库回滚：优先前向修复；破坏性 migration 必须先备份并准备手写回滚 SQL。
 - Unit 9C 暗态回滚：关闭 AI Media master/suite/full-edit/inpaint/Web-media 开关并清空 rollout tenant 列表；保留 workflow、asset、job 和 migration 数据供兼容读取与审计。
-- Unit 10A-H1/H2 应用回滚：旧客户端继续使用未版本化数组；保留 `1670`/`1680` 有效索引、`1690`/`1700` 表/函数/触发器/账本和所有 workflow/job/asset 历史。媒体撤销只能通过当前 frontier 的补偿式 ROLLBACK mutation；legacy 应用保持不可回滚，不删除候选、不伪造历史。
+- Unit 10A-H1/H2/H3b 应用回滚：旧客户端继续使用未版本化数组；保留 `1670`/`1680` 有效索引、`1690`/`1700` collect 账本、`20260721120000` 至 `20260721123000` listing-draft 账本及所有 workflow/job/asset/draft 历史。媒体撤销只能通过当前 frontier 的补偿式 ROLLBACK mutation；不得回指旧草稿版本、删除候选或伪造历史。
 - OSS 回滚：对象 key 不覆盖，用版本化路径，如 `ss-erp/images/yyyy/mm/...`。
 
 ## 备份策略

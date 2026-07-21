@@ -63,6 +63,14 @@ import {
   type ListAiMediaWorkflowApplicationsInput,
   type RollbackAiMediaWorkflowApplicationInput,
 } from '../services/ai-media-application-mutations.js';
+import {
+  applyAiMediaListingDraftApplication,
+  listAiMediaListingDraftApplications,
+  rollbackAiMediaListingDraftApplication,
+  type ApplyAiMediaListingDraftApplicationInput,
+  type ListAiMediaListingDraftApplicationsInput,
+  type RollbackAiMediaListingDraftApplicationInput,
+} from '../services/ai-media-listing-draft-application-mutations.js';
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(8000),
@@ -107,6 +115,34 @@ const workflowApplicationRollbackSchema = z.object({
   expectedApplicationRevision: z.number().int().min(1),
   expectedWorkflowRevision: z.number().int().min(1),
   expectedTargetUpdatedAt: z.string().datetime(),
+}).strict();
+const listingDraftApplicationSchema = z.object({
+  mode: z.enum(['append', 'replace']),
+  operationKey: z.string().trim().min(8).max(128),
+  expectedWorkflowRevision: z.number().int().min(1),
+  expectedTargetRevision: z.number().int().min(1),
+  expectedTargetDraftVersion: z.number().int().min(1),
+  replaceConfirmed: z.literal(true).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.mode === 'replace' && value.replaceConfirmed !== true) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replaceConfirmed'],
+      message: 'Replacing a listing draft slot requires explicit confirmation',
+    });
+  }
+});
+const listingDraftApplicationRollbackSchema = z.object({
+  operationKey: z.string().trim().min(8).max(128),
+  expectedApplicationRevision: z.number().int().min(1),
+  expectedWorkflowRevision: z.number().int().min(1),
+  expectedTargetRevision: z.number().int().min(1),
+  expectedTargetDraftVersion: z.number().int().min(1),
+}).strict();
+const listingDraftApplicationListSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  beforeSequence: z.coerce.number().int().min(1).optional(),
+  operationKey: z.string().trim().min(8).max(128).optional(),
 }).strict();
 const collectWorkflowContextSchema = z.object({
   type: z.literal('collect'),
@@ -302,6 +338,9 @@ interface AiImageRouteOptions {
   listTargetApplications?: (input: ListAiMediaTargetApplicationsInput) => Promise<any>;
   listWorkflowApplications?: (input: ListAiMediaWorkflowApplicationsInput) => Promise<any>;
   rollbackWorkflowApplication?: (input: RollbackAiMediaWorkflowApplicationInput) => Promise<any>;
+  applyListingDraftApplication?: (input: ApplyAiMediaListingDraftApplicationInput) => Promise<any>;
+  listListingDraftApplications?: (input: ListAiMediaListingDraftApplicationsInput) => Promise<any>;
+  rollbackListingDraftApplication?: (input: RollbackAiMediaListingDraftApplicationInput) => Promise<any>;
   createEditMask?: typeof createAiImageEditMask;
   checkEditMaskRequestRate?: (ownerUserId: string) => Promise<EditMaskUploadLimitCheck>;
   checkEditMaskUploadQuota?: (ownerUserId: string, bytes: number) => Promise<EditMaskUploadLimitCheck>;
@@ -620,6 +659,29 @@ function compileTranslationProviderPolicy(resolvedPrompt: string, resolvedNegati
 }
 
 function publicWorkflowApplication(workflow: any) {
+  const listingDraftMutation = Array.isArray(workflow.listingDraftApplicationMutations)
+    ? workflow.listingDraftApplicationMutations[0]
+    : null;
+  if (listingDraftMutation?.id) {
+    const rollback = listingDraftMutation.rolledBackBy || null;
+    return {
+      id: String(listingDraftMutation.id),
+      revision: rollback ? 2 : 1,
+      state: rollback ? 'ROLLED_BACK' : 'APPLIED',
+      mode: listingDraftMutation.mode === 'REPLACE' ? 'replace' : 'append',
+      workflowId: String(listingDraftMutation.workflowId),
+      jobId: String(listingDraftMutation.jobId),
+      outputAssetId: String(listingDraftMutation.assetId),
+      targetType: 'listing-draft',
+      targetId: String(listingDraftMutation.targetId),
+      contextSkuKey: listingDraftMutation.contextSkuKey || null,
+      contextSlotKey: listingDraftMutation.contextSlotKey || null,
+      appliedAt: listingDraftMutation.createdAt,
+      rolledBackAt: rollback?.createdAt || null,
+      targetUpdatedAt: rollback?.createdAt || listingDraftMutation.createdAt,
+      legacy: false,
+    };
+  }
   const mutation = Array.isArray(workflow.applicationMutations)
     ? workflow.applicationMutations[0]
     : null;
@@ -892,6 +954,18 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     || ((input: ListAiMediaWorkflowApplicationsInput) => listAiMediaWorkflowApplications(prisma, input));
   const rollbackWorkflowApplication = options.rollbackWorkflowApplication
     || ((input: RollbackAiMediaWorkflowApplicationInput) => rollbackAiMediaWorkflowApplication(prisma, input));
+  const applyListingDraftApplication = options.applyListingDraftApplication
+    || ((input: ApplyAiMediaListingDraftApplicationInput) => (
+      applyAiMediaListingDraftApplication(prisma, input)
+    ));
+  const listListingDraftApplications = options.listListingDraftApplications
+    || ((input: ListAiMediaListingDraftApplicationsInput) => (
+      listAiMediaListingDraftApplications(prisma, input)
+    ));
+  const rollbackListingDraftApplication = options.rollbackListingDraftApplication
+    || ((input: RollbackAiMediaListingDraftApplicationInput) => (
+      rollbackAiMediaListingDraftApplication(prisma, input)
+    ));
   const checkEditMaskRequestRate = options.checkEditMaskRequestRate || (async (
     ownerUserId: string,
   ): Promise<EditMaskUploadLimitCheck> => {
@@ -1022,6 +1096,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
           readEnabled: true,
           applyEnabled: workflowEnabled && webMediaDecision.enabled,
+          listingDraftApplyEnabled: !production && workflowEnabled && webMediaDecision.enabled,
           rollbackEnabled: true,
           defaultMode: 'append',
           replaceOperations: ['IMAGE_TO_IMAGE'],
@@ -1179,6 +1254,66 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         operationKey: parsed.data.operationKey,
       });
       return { code: 1, data: result };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.get('/contexts/listing-draft/:id/applications', async (request, reply) => {
+    const parsed = listingDraftApplicationListSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const { id } = request.params as { id: string };
+    try {
+      const result = await listListingDraftApplications({
+        targetId: id,
+        ownerUserId: actor(request).ownerUserId,
+        ...parsed.data,
+      });
+      return { code: 1, data: result };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/workflows/:id/listing-draft-application', async (request, reply) => {
+    const parsed = listingDraftApplicationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const { id } = request.params as { id: string };
+    try {
+      if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
+        throw new AiMediaWorkflowError(
+          'AI_MEDIA_WORKFLOW_DISABLED',
+          'AI media workflow is disabled',
+        );
+      }
+      await requireSourceListingWebMedia(ids.ownerUserId);
+      const result = await applyListingDraftApplication({
+        workflowId: id,
+        ownerUserId: ids.ownerUserId,
+        actorUserId: ids.actorUserId,
+        production,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({ code: 1, data: result });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post('/listing-draft-applications/:id/rollback', async (request, reply) => {
+    const parsed = listingDraftApplicationRollbackSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const { id } = request.params as { id: string };
+    try {
+      const result = await rollbackListingDraftApplication({
+        applicationId: id,
+        ownerUserId: ids.ownerUserId,
+        actorUserId: ids.actorUserId,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 201).send({ code: 1, data: result });
     } catch (error) { return sendError(reply, error); }
   });
 

@@ -1,5 +1,8 @@
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
-import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import {
+  lockAiMediaApplicationOperation,
+  runAiMediaSerializableTransaction,
+} from '../lib/ai-media-transaction.js';
 
 export const AI_MEDIA_APPLICATION_CONTRACT_VERSION = 'ai-media-application-mutation/v1';
 export const AI_MEDIA_COLLECT_PROJECTION_VERSION = 'ai-media-collect-projection/v1';
@@ -674,7 +677,21 @@ async function loadReplay(tx: any, ownerUserId: string, operationKey: string, fi
     where: { ownerUserId, operationKey },
     include: { rolledBackBy: { select: rollbackSummarySelect } },
   });
-  if (!existing) return null;
+  if (!existing) {
+    const listingDraftOperation = tx.aiMediaListingDraftApplicationMutation?.findFirst
+      ? await tx.aiMediaListingDraftApplicationMutation.findFirst({
+        where: { ownerUserId, operationKey },
+        select: { id: true },
+      })
+      : null;
+    if (listingDraftOperation) {
+      throw new AiMediaApplicationMutationError(
+        'IDEMPOTENCY_KEY_CONFLICT',
+        'Application operation key is already used by a listing draft mutation',
+      );
+    }
+    return null;
+  }
   if (existing.requestFingerprint !== fingerprint) {
     throw new AiMediaApplicationMutationError(
       'IDEMPOTENCY_KEY_CONFLICT',
@@ -710,7 +727,10 @@ async function runAiMediaApplicationMutationTransaction(
   action: (tx: any) => Promise<any>,
 ) {
   try {
-    return await runAiMediaSerializableTransaction(database, action);
+    return await runAiMediaSerializableTransaction(database, async (tx) => {
+      await lockAiMediaApplicationOperation(tx, input.ownerUserId, input.operationKey);
+      return action(tx);
+    });
   } catch (error) {
     if (!isApplicationOperationKeyUniqueConflict(error)) throw error;
     const existing = await loadReplay(

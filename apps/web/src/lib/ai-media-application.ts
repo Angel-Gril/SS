@@ -9,6 +9,7 @@ export interface AiMediaApplicationCapability {
   contractVersion: typeof AI_MEDIA_APPLICATION_CONTRACT_VERSION;
   readEnabled: boolean;
   applyEnabled: boolean;
+  listingDraftApplyEnabled: boolean;
   rollbackEnabled: boolean;
   defaultMode: 'append';
   replaceOperations: string[];
@@ -201,6 +202,7 @@ export function normalizeAiMediaApplicationCapability(
     contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
     readEnabled: candidate.readEnabled,
     applyEnabled: candidate.applyEnabled,
+    listingDraftApplyEnabled: candidate.listingDraftApplyEnabled === true,
     rollbackEnabled: candidate.rollbackEnabled,
     defaultMode: 'append',
     replaceOperations: [...new Set(candidate.replaceOperations as string[])],
@@ -661,5 +663,6 @@ export function isDefinitiveAiMediaApplicationFailure(code: unknown): boolean {
     'APPLICATION_STATE_INVALID',
     'APPLICATION_STATE_TOO_LARGE',
     'APPLICATION_OUTPUT_INVALID',
+    'UNSUPPORTED_TARGET',
   ]).has(String(code || '').toUpperCase());
 }

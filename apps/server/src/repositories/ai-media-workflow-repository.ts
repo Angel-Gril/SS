@@ -220,6 +220,24 @@ const applicationSummarySelect = {
   },
 } as const;
 
+const listingDraftApplicationSummarySelect = {
+  id: true,
+  mode: true,
+  workflowId: true,
+  jobId: true,
+  assetId: true,
+  targetId: true,
+  contextSkuKey: true,
+  contextSlotKey: true,
+  createdAt: true,
+  rolledBackBy: {
+    select: {
+      id: true,
+      createdAt: true,
+    },
+  },
+} as const;
+
 const detailInclude = {
   suiteSlot: { select: { suiteId: true, ownerUserId: true } },
   inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
@@ -233,6 +251,12 @@ const detailInclude = {
     orderBy: { targetSequence: 'desc' },
     take: 1,
     select: applicationSummarySelect,
+  },
+  listingDraftApplicationMutations: {
+    where: { kind: 'APPLY' },
+    orderBy: { targetSequence: 'desc' },
+    take: 1,
+    select: listingDraftApplicationSummarySelect,
   },
 } as const;
 
@@ -248,6 +272,12 @@ const historyInclude = {
     orderBy: { targetSequence: 'desc' },
     take: 1,
     select: applicationSummarySelect,
+  },
+  listingDraftApplicationMutations: {
+    where: { kind: 'APPLY' },
+    orderBy: { targetSequence: 'desc' },
+    take: 1,
+    select: listingDraftApplicationSummarySelect,
   },
 } as const;
 

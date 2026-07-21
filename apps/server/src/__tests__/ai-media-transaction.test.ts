@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import {
+  lockAiMediaApplicationOperation,
+  runAiMediaSerializableTransaction,
+} from '../lib/ai-media-transaction.js';
 
 describe('AI media serializable transactions', () => {
   it.each([
@@ -25,5 +28,20 @@ describe('AI media serializable transactions', () => {
 
     await expect(runAiMediaSerializableTransaction(client, vi.fn())).rejects.toBe(error);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes collect and listing-draft mutations on one owner operation key', async () => {
+    const query = vi.fn(async () => [{ locked: 1 }]);
+
+    await lockAiMediaApplicationOperation(
+      { $queryRawUnsafe: query },
+      'owner-1',
+      'shared-operation-key',
+    );
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock(hashtextextended($1, 7390421))'),
+      'ai-media-application-operation/v1:owner-1:shared-operation-key',
+    );
   });
 });

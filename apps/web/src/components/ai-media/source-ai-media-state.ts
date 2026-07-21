@@ -123,6 +123,8 @@ export type RunMediaMutation = <T>(action: () => Promise<T>) => Promise<MediaMut
 export interface RefreshedAiMediaTarget {
   id: string;
   updatedAt?: string;
+  revision?: number;
+  draftVersion?: number;
 }
 
 export type RefreshAiMediaTarget = () => Promise<RefreshedAiMediaTarget | null>;

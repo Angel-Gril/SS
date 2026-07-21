@@ -412,7 +412,7 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
-### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / 10A-H2）
+### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / 10A-H2 / 10A-H3b）
 
 Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，Unit 10A-H2 已增加暗态的不可变应用账本、APPEND/受限 REPLACE、严格 frontier 补偿 ROLLBACK 和 stale 阻断，Unit 10A-H3a 已增加 listing-draft/SKU 当前指针、source snapshot、draft revision/version、空槽与候选链 authority，但都不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询，`1690`/`1700` 建立并加固 collect application mutation ledger，`21001000` 至 `21011000` 建立 listing-draft context 与候选链约束；这些 migration 只能前向保留，应用回滚不得删除其数据、函数、触发器或有效索引。真实 Provider、扩展端 Mask 编辑器、listing-draft candidate writeback/rollback、submitted-provider reconciliation 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
 
@@ -529,7 +529,7 @@ npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 H3a listing-draft/SKU context authority 已完成，但 H3b candidate writeback/rollback 和 submitted-provider reconciliation 仍未完成，H2 账本检查见下一节。
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核；Unit 10A 的 H3a listing-draft/SKU context authority 与 H3b candidate writeback/rollback 已完成，submitted-provider reconciliation 仍未完成，H2/H3b 账本检查见后续两节。
 
 ### AI Media 应用账本与补偿回滚检查（Unit 10A-H2）
 
@@ -583,6 +583,42 @@ GET /api/ai-images/applications?targetType=collect&targetId=<owned-target-id>
 服务端和数据库共同限制每个 managed array 最多 100 项、完整 projection 最多 262144 bytes；超限、跨 owner/workflow/job/asset、非当前 frontier 或 stale CAS 均必须 fail closed。确认账本检查和暗态 verifier 均通过后，才允许恢复 API/Worker。
 
 H2 本地关闭基线为 focused 143/143、PostgreSQL 46/46、populated upgrade 1/1、2648 项服务端测试通过且 126 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight、production build 和 lint 0 errors / 20 条既有 warnings 均通过。浏览器验收覆盖 stale refresh、5→6 APPEND、确认式 6→5 补偿 ROLLBACK、成对历史与空 rollback frontier，并在 `1440x1000` 和 `375x812` 下无可见横向溢出或新增 console/network 错误。该证据不替代每个目标环境的 migration/status/trigger/index/dark-gate 复核，也不授权真实 Provider 或 Ozon 写入。
+
+### AI Media listing-draft 应用账本检查（Unit 10A-H3b）
+
+H3b 对应 migrations `20260721120000_add_ai_media_listing_draft_application_mutations`、`20260721121000_harden_ai_media_listing_draft_application_authority`、`20260721122000_fix_ai_media_listing_draft_projection_constraints` 和 `20260721123000_enforce_ai_media_listing_draft_actor_authority`。四项 migration 必须按顺序前向保留；应用版本回滚不得删除账本、草稿版本、触发器或有效索引。生产环境保持 fake-only/dark，能力 DTO 的 `listingDraftApplyEnabled` 必须为 `false`。
+
+部署或故障排查时停止 API/Worker 写入并执行：
+
+```bash
+npx prisma migrate status
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT migration_name, finished_at, rolled_back_at
+FROM "_prisma_migrations"
+WHERE migration_name IN (
+  '20260721120000_add_ai_media_listing_draft_application_mutations',
+  '20260721121000_harden_ai_media_listing_draft_application_authority',
+  '20260721122000_fix_ai_media_listing_draft_projection_constraints',
+  '20260721123000_enforce_ai_media_listing_draft_actor_authority'
+)
+ORDER BY started_at, id;
+
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'ai_media_listing_draft_application_mutations'
+ORDER BY indexname;
+
+SELECT tgname, tgenabled
+FROM pg_trigger
+WHERE tgrelid = 'ai_media_listing_draft_application_mutations'::regclass
+  AND NOT tgisinternal
+ORDER BY tgname;
+SQL
+```
+
+正常结果必须包含六个 ledger indexes 和四个启用的 triggers：`ai_media_listing_draft_mutation_actor_insert`、`ai_media_listing_draft_mutation_authority_insert`、`ai_media_listing_draft_mutation_immutable`、`ai_media_listing_draft_mutation_validate_insert`。历史查询使用 `GET /api/ai-images/contexts/listing-draft/<draft-id>/applications`；写入只接受当前冻结 product/SKU slot，rollback 只能是当前 target frontier 的补偿 mutation。遇到 stale、cross-owner、operation-key conflict 或 forged projection 时必须 fail closed，不得手工更新账本。
+
+本地 H3b 关闭证据为 PostgreSQL 51/51、populated upgrade、真实双连接跨账本 operation-key serialization、forward-only apply/rollback chain、reapply conflict 和 owner/actor/snapshot/operation/source/SKU-slot 篡改拒绝；全量 preflight 为服务端 2706 passed/131 skipped、扩展 192 checks，生产构建与 lint 0 errors。浏览器已覆盖 product/SKU APPEND、confirmed REPLACE、reload recovery、严格多步回滚、刷新风暴回归及 1440x1000/390x844 无溢出，并确认所有 rollout/provider/Ozon gate 恢复暗态。本地 Ozon 凭证不可用时 `/attributes` 的预期 503 不属于 H3b 写回失败。该证据不授权真实 Provider、扩展完整工作台或 Ozon 写入。
 
 ## 服务器功能验收清单
 

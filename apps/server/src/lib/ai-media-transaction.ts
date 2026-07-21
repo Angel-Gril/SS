@@ -11,6 +11,17 @@ export function isRetryableAiMediaTransactionError(error: unknown): boolean {
   return retryableDatabaseCodes(error).some((code) => ['P2034', '40001', '40P01'].includes(code));
 }
 
+export async function lockAiMediaApplicationOperation(
+  transaction: any,
+  ownerUserId: string,
+  operationKey: string,
+): Promise<void> {
+  await transaction.$queryRawUnsafe(
+    'SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1, 7390421))',
+    `ai-media-application-operation/v1:${ownerUserId}:${operationKey}`,
+  );
+}
+
 export async function runAiMediaSerializableTransaction<T>(
   client: any,
   action: (tx: any) => Promise<T>,

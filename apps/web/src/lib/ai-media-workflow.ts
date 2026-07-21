@@ -47,6 +47,22 @@ export type AiMediaContextTarget =
     assignedAssetId: string | null;
   };
 
+export type AiMediaWorkflowContextRequest =
+  | {
+    type: 'collect';
+    id: string;
+    skuKey?: string | null;
+    slotKey?: string | null;
+  }
+  | {
+    type: 'listing-draft';
+    id: string;
+    revision: number;
+    draftVersion: number;
+    skuKey?: string | null;
+    slotKey?: string | null;
+  };
+
 export interface AiMediaContextResponse {
   target: AiMediaContextTarget;
   snapshot: { id: string; version: number; captureHash: string };
@@ -1843,11 +1859,12 @@ export function buildImageTranslationWorkflowRequest(input: {
   domainHint: string;
   terminologies: AiImageTranslationTerminology[];
   idempotencyKey: string;
-  contextId: string;
+  contextId?: string;
+  context?: AiMediaWorkflowContextRequest;
 }) {
   const sourceAssetId = input.sourceAssetId.trim();
-  const contextId = input.contextId.trim();
-  if (!sourceAssetId || !contextId) throw new Error('请选择当前商品的源图');
+  const context = normalizeAiMediaWorkflowContextRequest(input.context, input.contextId);
+  if (!sourceAssetId) throw new Error('请选择当前商品的源图');
   const sourceLanguage = languageTag(input.sourceLanguage);
   const targetLanguage = languageTag(input.targetLanguage);
   if (sourceLanguage === targetLanguage) throw new Error('源语言和目标语言不能相同');
@@ -1855,6 +1872,7 @@ export function buildImageTranslationWorkflowRequest(input: {
   if (new TextEncoder().encode(domainHint).byteLength > 2_000) {
     throw new Error('翻译要求不能超过 2000 字节');
   }
+  const legacyCollectContext = { context: { type: 'collect' as const, id: context.id } };
   return {
     operation: 'IMAGE_TRANSLATE' as const,
     sourceAssetId,
@@ -1863,7 +1881,7 @@ export function buildImageTranslationWorkflowRequest(input: {
     domainHint,
     terminologies: normalizeImageTranslationTerminologies(input.terminologies),
     idempotencyKey: input.idempotencyKey,
-    context: { type: 'collect' as const, id: contextId },
+    ...(input.context ? { context } : legacyCollectContext),
   };
 }
 
@@ -1883,41 +1901,41 @@ export function buildAiImageEditWorkflowRequest(input: {
   userPrompt: string;
   userNegativePrompt: string;
   idempotencyKey: string;
-  contextId: string;
+  contextId?: string;
+  context?: AiMediaWorkflowContextRequest;
   contextSkuKey?: string | null;
   contextSlotKey?: string | null;
 }) {
   const sourceAssetId = input.sourceAssetId.trim();
-  const contextId = input.contextId.trim();
+  const context = normalizeAiMediaWorkflowContextRequest(input.context, input.contextId, {
+    skuKey: input.contextSkuKey,
+    slotKey: input.contextSlotKey,
+  });
   const userPrompt = input.userPrompt.trim();
   const userNegativePrompt = input.userNegativePrompt.trim();
   const idempotencyKey = input.idempotencyKey.trim();
-  if (!sourceAssetId || !contextId) throw new Error('请选择当前商品的源图');
+  if (!sourceAssetId) throw new Error('请选择当前商品的源图');
   if (!userPrompt) throw new Error('请填写编辑要求');
   if (userPrompt.length > 8_000) throw new Error('编辑要求不能超过 8000 个字符');
   if (userNegativePrompt.length > 4_000) throw new Error('排除要求不能超过 4000 个字符');
   if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
     throw new Error('编辑请求幂等键无效');
   }
-  const context = {
-    type: 'collect' as const,
-    id: contextId,
-    skuKey: normalizeAiMediaContextKey(input.contextSkuKey, 500, 'SKU 上下文'),
-    slotKey: normalizeAiMediaContextKey(input.contextSlotKey, 200, '图片槽位上下文'),
-  };
   if (input.operation === 'FULL_EDIT') {
     if (String(input.maskAssetId || '').trim()) throw new Error('全图编辑不能包含遮罩');
+    const legacyCollectContext = { context: { type: 'collect' as const, id: context.id, skuKey: context.skuKey, slotKey: context.slotKey } };
     return {
       operation: 'FULL_EDIT' as const,
       sourceAssetId,
       userPrompt,
       userNegativePrompt,
       idempotencyKey,
-      context,
+      ...(input.context ? { context } : legacyCollectContext),
     };
   }
   const maskAssetId = String(input.maskAssetId || '').trim();
   if (!maskAssetId) throw new Error('局部重绘需要有效遮罩');
+  const legacyCollectContext = { context: { type: 'collect' as const, id: context.id, skuKey: context.skuKey, slotKey: context.slotKey } };
   return {
     operation: 'INPAINT' as const,
     sourceAssetId,
@@ -1926,8 +1944,61 @@ export function buildAiImageEditWorkflowRequest(input: {
     userPrompt,
     userNegativePrompt,
     idempotencyKey,
-    context,
+    ...(input.context ? { context } : legacyCollectContext),
   };
+}
+
+export function normalizeAiMediaWorkflowContextRequest(
+  input: AiMediaWorkflowContextRequest | null | undefined,
+  legacyCollectId?: string,
+  legacyScope: { skuKey?: string | null; slotKey?: string | null } = {},
+): AiMediaWorkflowContextRequest {
+  if (!input) {
+    const id = String(legacyCollectId || '').trim();
+    if (!id || id.length > 200) throw new Error('当前商品上下文无效');
+    return {
+      type: 'collect',
+      id,
+      skuKey: normalizeAiMediaContextKey(legacyScope.skuKey, 500, 'SKU 上下文'),
+      slotKey: normalizeAiMediaContextKey(legacyScope.slotKey, 200, '图片槽位上下文'),
+    };
+  }
+  const id = String(input.id || '').trim();
+  if (!id || id.length > 200) throw new Error('当前商品上下文无效');
+  const skuKey = normalizeAiMediaContextKey(input.skuKey, 500, 'SKU 上下文');
+  const slotKey = normalizeAiMediaContextKey(
+    input.slotKey,
+    input.type === 'listing-draft' ? 1_024 : 200,
+    '图片槽位上下文',
+  );
+  if (input.type === 'collect') return { type: 'collect', id, skuKey, slotKey };
+  if (!Number.isSafeInteger(input.revision) || input.revision < 1
+    || !Number.isSafeInteger(input.draftVersion) || input.draftVersion < 1) {
+    throw new Error('草稿图片上下文已失效，请刷新后重试');
+  }
+  return {
+    type: 'listing-draft',
+    id,
+    revision: input.revision,
+    draftVersion: input.draftVersion,
+    skuKey,
+    slotKey,
+  };
+}
+
+export function aiMediaWorkflowContextFromTarget(
+  target: AiMediaContextTarget,
+): AiMediaWorkflowContextRequest {
+  return target.type === 'listing-draft'
+    ? normalizeAiMediaWorkflowContextRequest({
+      type: 'listing-draft',
+      id: target.id,
+      revision: target.revision,
+      draftVersion: target.draftVersion,
+      skuKey: target.skuKey,
+      slotKey: target.slotKey,
+    })
+    : normalizeAiMediaWorkflowContextRequest({ type: 'collect', id: target.id });
 }
 
 export function isAiMediaWorkflowInputCurrent(

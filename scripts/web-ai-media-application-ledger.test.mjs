@@ -119,6 +119,7 @@ assert.deepEqual(normalizeAiMediaApplicationCapability({
   contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
   readEnabled: true,
   applyEnabled: false,
+  listingDraftApplyEnabled: true,
   rollbackEnabled: true,
   defaultMode: 'append',
   replaceOperations: ['IMAGE_TO_IMAGE', 'IMAGE_TO_IMAGE'],
@@ -126,6 +127,7 @@ assert.deepEqual(normalizeAiMediaApplicationCapability({
   contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
   readEnabled: true,
   applyEnabled: false,
+  listingDraftApplyEnabled: true,
   rollbackEnabled: true,
   defaultMode: 'append',
   replaceOperations: ['IMAGE_TO_IMAGE'],
@@ -321,6 +323,7 @@ assert.deepEqual(Object.fromEntries(targetApplicationsQuery), {
   operationKey: 'application-operation-1',
 });
 assert.equal(isDefinitiveAiMediaApplicationFailure('ROLLBACK_ORDER_CONFLICT'), true);
+assert.equal(isDefinitiveAiMediaApplicationFailure('UNSUPPORTED_TARGET'), true);
 assert.equal(isDefinitiveAiMediaApplicationFailure(0), false);
 
 const firstPage = normalizedLedger;

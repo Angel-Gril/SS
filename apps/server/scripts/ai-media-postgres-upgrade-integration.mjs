@@ -36,6 +36,10 @@ const LISTING_DRAFT_CONTEXT_COLUMNS_MIGRATION = '20260721002000_add_ai_media_lis
 const LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION = '20260721003000_prebuild_ai_media_listing_draft_context_index';
 const LISTING_DRAFT_CONTEXT_FK_MIGRATION = '20260721010000_add_ai_media_listing_draft_context';
 const LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION = '20260721011000_allow_listing_draft_ai_image_edit_candidates';
+const LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION = '20260721120000_add_ai_media_listing_draft_application_mutations';
+const LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION = '20260721121000_harden_ai_media_listing_draft_application_authority';
+const LISTING_DRAFT_PROJECTION_FIX_MIGRATION = '20260721122000_fix_ai_media_listing_draft_projection_constraints';
+const LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION = '20260721123000_enforce_ai_media_listing_draft_actor_authority';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -140,6 +144,13 @@ function prepareHistoricalMigrations() {
   const listingDraftWorkflowIndexIndex = names.indexOf(LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION);
   const listingDraftContextFkIndex = names.indexOf(LISTING_DRAFT_CONTEXT_FK_MIGRATION);
   const listingDraftCandidateScopeIndex = names.indexOf(LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION);
+  const listingDraftApplicationMutationIndex = names.indexOf(
+    LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION,
+  );
+  const listingDraftApplicationAuthorityIndex = names.indexOf(
+    LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION,
+  );
+  const listingDraftProjectionFixIndex = names.indexOf(LISTING_DRAFT_PROJECTION_FIX_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -167,6 +178,9 @@ function prepareHistoricalMigrations() {
     || listingDraftWorkflowIndexIndex !== listingDraftContextColumnsIndex + 1
     || listingDraftContextFkIndex !== listingDraftWorkflowIndexIndex + 1
     || listingDraftCandidateScopeIndex !== listingDraftContextFkIndex + 1
+    || listingDraftApplicationMutationIndex !== listingDraftCandidateScopeIndex + 1
+    || listingDraftApplicationAuthorityIndex !== listingDraftApplicationMutationIndex + 1
+    || listingDraftProjectionFixIndex !== listingDraftApplicationAuthorityIndex + 1
     || names.filter((name) => name === EDIT_OUTPUT_GUARD_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CHAINING_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CONTRACT_MIGRATION).length !== 1
@@ -183,9 +197,12 @@ function prepareHistoricalMigrations() {
     || names.filter((name) => name === LISTING_DRAFT_CONTEXT_COLUMNS_MIGRATION).length !== 1
     || names.filter((name) => name === LISTING_DRAFT_WORKFLOW_INDEX_MIGRATION).length !== 1
     || names.filter((name) => name === LISTING_DRAFT_CONTEXT_FK_MIGRATION).length !== 1
-    || names.filter((name) => name === LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION).length !== 1) {
+    || names.filter((name) => name === LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION).length !== 1
+    || names.filter((name) => name === LISTING_DRAFT_PROJECTION_FIX_MIGRATION).length !== 1) {
     throw new Error(
-      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION} must be one unique consecutive migration block`,
+      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -220,6 +237,9 @@ function prepareHistoricalMigrations() {
     listingDraftWorkflowIndexIndex,
     listingDraftContextFkIndex,
     listingDraftCandidateScopeIndex,
+    listingDraftApplicationMutationIndex,
+    listingDraftApplicationAuthorityIndex,
+    listingDraftProjectionFixIndex,
   };
 }
 
@@ -713,6 +733,96 @@ async function validateWorkflowHistoryIndexes(client) {
   }
 }
 
+async function validateListingDraftApplicationLedger(client) {
+  const [tables, indexes, triggers, migrations] = await Promise.all([
+    client.$queryRawUnsafe(`
+      SELECT count(*)::int AS "count"
+      FROM information_schema.tables
+      WHERE table_schema = current_schema()
+        AND table_name = 'ai_media_listing_draft_application_mutations'
+    `),
+    client.$queryRawUnsafe(`
+      SELECT index_class.relname AS "name", index_state.indisvalid AS "valid",
+             index_state.indisready AS "ready"
+      FROM pg_index index_state
+      JOIN pg_class index_class ON index_class.oid = index_state.indexrelid
+      JOIN pg_class table_class ON table_class.oid = index_state.indrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_media_listing_draft_application_mutations'
+        AND index_class.relname IN (
+          'ai_media_listing_draft_mutation_operation_key',
+          'ai_media_listing_draft_mutation_target_sequence_key',
+          'ai_media_listing_draft_mutation_target_history_idx',
+          'ai_media_listing_draft_mutation_workflow_history_idx',
+          'ai_media_listing_draft_mutation_before_idx',
+          'ai_media_listing_draft_mutation_after_idx'
+        )
+      ORDER BY index_class.relname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT trigger_state.tgname AS "name", trigger_state.tgenabled AS "enabled"
+      FROM pg_trigger trigger_state
+      JOIN pg_class table_class ON table_class.oid = trigger_state.tgrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      WHERE table_namespace.nspname = current_schema()
+        AND table_class.relname = 'ai_media_listing_draft_application_mutations'
+        AND NOT trigger_state.tgisinternal
+      ORDER BY trigger_state.tgname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT migration_name AS "name"
+      FROM "_prisma_migrations"
+      WHERE migration_name IN ($1, $2, $3, $4, $5)
+        AND finished_at IS NOT NULL
+        AND rolled_back_at IS NULL
+      ORDER BY started_at, id
+    `,
+    LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION,
+    LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION,
+    LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION,
+    LISTING_DRAFT_PROJECTION_FIX_MIGRATION,
+    LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION),
+  ]);
+  if (Number(tables[0]?.count) !== 1) {
+    throw new Error('AI media listing-draft application ledger table is missing');
+  }
+  const expectedIndexes = [
+    'ai_media_listing_draft_mutation_after_idx',
+    'ai_media_listing_draft_mutation_before_idx',
+    'ai_media_listing_draft_mutation_operation_key',
+    'ai_media_listing_draft_mutation_target_history_idx',
+    'ai_media_listing_draft_mutation_target_sequence_key',
+    'ai_media_listing_draft_mutation_workflow_history_idx',
+  ];
+  if (indexes.length !== expectedIndexes.length
+    || indexes.some((row, index) => (
+      row.name !== expectedIndexes[index] || row.valid !== true || row.ready !== true
+    ))) {
+    throw new Error('AI media listing-draft application ledger indexes are invalid');
+  }
+  const expectedTriggers = [
+    'ai_media_listing_draft_mutation_actor_insert',
+    'ai_media_listing_draft_mutation_authority_insert',
+    'ai_media_listing_draft_mutation_immutable',
+    'ai_media_listing_draft_mutation_validate_insert',
+  ];
+  if (triggers.length !== expectedTriggers.length
+    || triggers.some((row, index) => row.name !== expectedTriggers[index] || row.enabled !== 'O')) {
+    throw new Error('AI media listing-draft application ledger triggers are invalid');
+  }
+  const expectedMigrations = [
+    LISTING_DRAFT_CANDIDATE_SCOPE_MIGRATION,
+    LISTING_DRAFT_APPLICATION_MUTATION_MIGRATION,
+    LISTING_DRAFT_APPLICATION_AUTHORITY_MIGRATION,
+    LISTING_DRAFT_PROJECTION_FIX_MIGRATION,
+    LISTING_DRAFT_ACTOR_AUTHORITY_MIGRATION,
+  ];
+  if (JSON.stringify(migrations.map((row) => row.name)) !== JSON.stringify(expectedMigrations)) {
+    throw new Error('AI media listing-draft application migrations are missing or out of order');
+  }
+}
+
 const selectedFixtureTests = [
   'allows one serializable claim and exact replay under concurrent requests',
   'rejects cross-authority and forged reference bindings without leaving partial rows',
@@ -895,6 +1005,7 @@ try {
   fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
   await fixtureClient.$connect();
   await validateWorkflowHistoryIndexes(fixtureClient);
+  await validateListingDraftApplicationLedger(fixtureClient);
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
 

@@ -15,13 +15,15 @@ import {
   type OzonListingDraftRepository,
 } from './ozon-listing-draft.js';
 
-interface SqlClient {
+export interface SourceListingWorkflowSqlClient {
   $queryRawUnsafe<T>(sql: string, ...params: unknown[]): Promise<T>;
   $transaction<T>(
-    action: (tx: SqlClient) => Promise<T>,
+    action: (tx: SourceListingWorkflowSqlClient) => Promise<T>,
     options?: { isolationLevel?: 'Serializable' },
   ): Promise<T>;
 }
+
+type SqlClient = SourceListingWorkflowSqlClient;
 
 type CasInput = Parameters<OzonListingDraftRepository['compareAndSwap']>[0];
 type PublishIntentInput = Parameters<OzonListingDraftRepository['recordPublishIntent']>[0];
@@ -413,6 +415,27 @@ async function applyCas(
     tx, input.draftId, input.ownerUserId, next.revision, next.draftVersion, events, now,
   );
   return next;
+}
+
+export async function lockCurrentSourceListingDraft(
+  client: SourceListingWorkflowSqlClient,
+  input: { draftId: string; ownerUserId: string },
+): Promise<OzonListingDraft | null> {
+  const row = await loadCurrentRow(
+    client,
+    required(input.draftId, 'draftId'),
+    required(input.ownerUserId, 'ownerUserId'),
+    true,
+  );
+  return row ? draftFromPayload(row.payload) : null;
+}
+
+export async function applySourceListingDraftCasInTransaction(
+  client: SourceListingWorkflowSqlClient,
+  input: CasInput,
+  timestamp = new Date(),
+): Promise<OzonListingDraft> {
+  return applyCas(client, input, timestamp);
 }
 
 function publishIntent(row: any): OzonListingPublishIntent {

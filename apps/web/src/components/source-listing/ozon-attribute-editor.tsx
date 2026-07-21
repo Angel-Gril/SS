@@ -149,6 +149,7 @@ export interface OzonAttributeEditorProps {
   exactSnapshotId?: string;
   lockedShopId?: string;
   exactRevision?: number;
+  disabled?: boolean;
   onDraftChange?: (draft: OzonListingDraft) => void;
 }
 
@@ -328,6 +329,7 @@ export function OzonAttributeEditor({
   exactSnapshotId,
   lockedShopId,
   exactRevision,
+  disabled = false,
   onDraftChange,
 }: OzonAttributeEditorProps) {
   const exactMode = Boolean(exactWorkflowId || exactSnapshotId || lockedShopId);
@@ -959,7 +961,7 @@ export function OzonAttributeEditor({
     }
   }
 
-  const editorLocked = listingWorkflowLoading || workspaceLoading || !!busyAction;
+  const editorLocked = disabled || listingWorkflowLoading || workspaceLoading || !!busyAction;
   const displayedValidation = authoritativeValidation || workspace?.validationPreview || null;
   const displayedIssues = displayedValidation
     ? [

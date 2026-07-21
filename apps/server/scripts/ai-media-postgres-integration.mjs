@@ -43,6 +43,7 @@ try {
     'src/__tests__/ai-image-suite-execution.postgres.integration.test.ts',
     'src/__tests__/ai-image-output-ownership.postgres.integration.test.ts',
     'src/__tests__/ai-media-application-mutations.postgres.integration.test.ts',
+    'src/__tests__/ai-media-listing-draft-application.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),
     AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),

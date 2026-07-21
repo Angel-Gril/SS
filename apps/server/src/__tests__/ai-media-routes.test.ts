@@ -152,6 +152,39 @@ async function build(
     application: { ...mutationApplication, id: 'rollback-1', revision: 8, kind: 'ROLLBACK' },
     target: mutationTarget, replayed: false,
   }));
+  const listingTarget = {
+    type: 'listing-draft', id: 'draft-1', revision: 8, draftVersion: 4,
+    sourceCaptureSnapshotId: 'snapshot-1', media: { assignments: [] },
+  };
+  const listingApplication = {
+    id: 'listing-application-1', revision: 1, kind: 'APPLY',
+    workflowId: 'workflow-1', jobId: 'job-1', assetId: 'output-1',
+    outputAssetId: 'output-1', operation: 'IMAGE_TO_IMAGE', source: 'GENERATED',
+    rollbackOfId: null, rolledBackById: null, targetType: 'listing-draft',
+    targetId: 'draft-1', targetSequence: 1, mode: 'append',
+    contextSkuKey: 'sku-red', contextSlotKey: 'hero',
+    operationKey: 'listing-application-operation', workflowRevisionBefore: 1,
+    workflowRevisionAfter: 2, targetRevisionBefore: 7, targetRevisionAfter: 8,
+    targetDraftVersionBefore: 3, targetDraftVersionAfter: 4,
+    createdAt: new Date().toISOString(), rollbackEligible: true, rollbackReason: 'READY',
+  };
+  const applyListingDraftApplication = vi.fn(async () => ({
+    contractVersion: 'ai-media-listing-draft-application/v1',
+    application: listingApplication, target: listingTarget, replayed: false,
+  }));
+  const listListingDraftApplications = vi.fn(async () => ({
+    contractVersion: 'ai-media-listing-draft-application/v1',
+    items: [listingApplication], frontier: listingApplication,
+    recoveredOperation: null, nextBeforeSequence: null, target: listingTarget,
+  }));
+  const rollbackListingDraftApplication = vi.fn(async () => ({
+    contractVersion: 'ai-media-listing-draft-application/v1',
+    application: {
+      ...listingApplication, id: 'listing-rollback-1', kind: 'ROLLBACK',
+      rollbackOfId: listingApplication.id, targetSequence: 2,
+    },
+    target: { ...listingTarget, revision: 9, draftVersion: 5 }, replayed: false,
+  }));
   const createEditMask = vi.fn(async (input: any, deps: any) => {
     const limit = await deps.checkUploadQuota(input.ownerUserId, input.maskBuffer.length);
     if (!limit.allowed) throw new AiImageJobError('EDIT_RESOURCE_QUOTA_EXCEEDED', limit.reason);
@@ -171,6 +204,7 @@ async function build(
   await app.register(aiImageRoutes, {
     repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation, enqueueEdit, applyAssets,
     applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
+    applyListingDraftApplication, listListingDraftApplications, rollbackListingDraftApplication,
     createEditMask: createEditMask as any,
     getEditSettings: async () => ({ fullEditEnabled, inpaintEnabled, dailyLimit: editDailyLimit }),
     checkEditMaskRequestRate: async () => editMaskRateAllowed
@@ -226,10 +260,88 @@ async function build(
     app, repository, mediaWorkflowService, mediaContextService,
     enqueue, enqueueTranslation, enqueueEdit, applyAssets, createEditMask,
     applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
+    applyListingDraftApplication, listListingDraftApplications, rollbackListingDraftApplication,
   };
 }
 
 describe('AI media workflow routes', () => {
+  it('exposes owner-scoped listing draft apply, history and compensating rollback endpoints', async () => {
+    const {
+      app, applyListingDraftApplication, listListingDraftApplications,
+      rollbackListingDraftApplication,
+    } = await build();
+    const applied = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/listing-draft-application',
+      payload: {
+        mode: 'append', operationKey: 'listing-application-operation',
+        expectedWorkflowRevision: 1, expectedTargetRevision: 7,
+        expectedTargetDraftVersion: 3,
+      },
+    });
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/contexts/listing-draft/draft-1/applications?limit=10',
+    });
+    const rolledBack = await app.inject({
+      method: 'POST',
+      url: '/listing-draft-applications/listing-application-1/rollback',
+      payload: {
+        operationKey: 'listing-rollback-operation', expectedApplicationRevision: 1,
+        expectedWorkflowRevision: 2, expectedTargetRevision: 8,
+        expectedTargetDraftVersion: 4,
+      },
+    });
+
+    expect(applied.statusCode).toBe(201);
+    expect(listed.statusCode).toBe(200);
+    expect(rolledBack.statusCode).toBe(201);
+    expect(applyListingDraftApplication).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedTargetRevision: 7, expectedTargetDraftVersion: 3,
+    }));
+    expect(listListingDraftApplications).toHaveBeenCalledWith({
+      targetId: 'draft-1', ownerUserId: 'owner-1', limit: 10,
+    });
+    expect(rollbackListingDraftApplication).toHaveBeenCalledWith(expect.objectContaining({
+      applicationId: 'listing-application-1', expectedTargetRevision: 8,
+      expectedTargetDraftVersion: 4,
+    }));
+  });
+
+  it('keeps listing draft history and rollback readable while dark but blocks new apply', async () => {
+    const {
+      app, applyListingDraftApplication, listListingDraftApplications,
+      rollbackListingDraftApplication,
+    } = await build(false, 'owner-1', false, 'fake', false);
+    const apply = await app.inject({
+      method: 'POST', url: '/workflows/workflow-1/listing-draft-application',
+      payload: {
+        mode: 'append', operationKey: 'listing-dark-application',
+        expectedWorkflowRevision: 1, expectedTargetRevision: 7,
+        expectedTargetDraftVersion: 3,
+      },
+    });
+    const list = await app.inject({
+      method: 'GET', url: '/contexts/listing-draft/draft-1/applications',
+    });
+    const rollback = await app.inject({
+      method: 'POST', url: '/listing-draft-applications/listing-application-1/rollback',
+      payload: {
+        operationKey: 'listing-dark-rollback', expectedApplicationRevision: 1,
+        expectedWorkflowRevision: 2, expectedTargetRevision: 8,
+        expectedTargetDraftVersion: 4,
+      },
+    });
+
+    expect(apply.statusCode).toBe(503);
+    expect(applyListingDraftApplication).not.toHaveBeenCalled();
+    expect(list.statusCode).toBe(200);
+    expect(rollback.statusCode).toBe(201);
+    expect(listListingDraftApplications).toHaveBeenCalledOnce();
+    expect(rollbackListingDraftApplication).toHaveBeenCalledOnce();
+  });
+
   it('advertises the versioned mutation contract and keeps reads and rollback available while dark', async () => {
     const { app } = await build(false, 'owner-1', false, 'fake', false);
     const response = await app.inject({ method: 'GET', url: '/capabilities' });
@@ -239,9 +351,68 @@ describe('AI media workflow routes', () => {
       contractVersion: 'ai-media-application-mutation/v1',
       readEnabled: true,
       applyEnabled: false,
+      listingDraftApplyEnabled: false,
       rollbackEnabled: true,
       defaultMode: 'append',
       replaceOperations: ['IMAGE_TO_IMAGE'],
+    });
+  });
+
+  it('keeps listing draft application fake-only in production without disabling reads or rollback', async () => {
+    const { app } = await build(true, 'owner-1', false, 'fake', true, true);
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.applications).toMatchObject({
+      readEnabled: true,
+      applyEnabled: true,
+      listingDraftApplyEnabled: false,
+      rollbackEnabled: true,
+    });
+  });
+
+  it('reports rolled-back listing draft applications from the immutable ledger', async () => {
+    const { app, mediaWorkflowService } = await build();
+    const appliedAt = new Date('2026-07-21T01:00:00.000Z');
+    const rolledBackAt = new Date('2026-07-21T01:05:00.000Z');
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      contextType: 'listing-draft',
+      contextId: 'draft-1',
+      contextSkuKey: 'sku-red',
+      contextSlotKey: 'sku:sku-red:hero',
+      applicationMutations: [],
+      listingDraftApplicationMutations: [{
+        id: 'listing-application-1',
+        mode: 'APPEND',
+        workflowId: workflow.id,
+        jobId: 'job-1',
+        assetId: 'output-1',
+        targetId: 'draft-1',
+        contextSkuKey: 'sku-red',
+        contextSlotKey: 'sku:sku-red:hero',
+        createdAt: appliedAt,
+        rolledBackBy: { id: 'listing-rollback-1', createdAt: rolledBackAt },
+      }],
+      jobs: [{
+        ...workflow.jobs![0],
+        appliedAt,
+        appliedMode: 'append',
+        applyTargetType: 'listing-draft',
+        applyTargetId: 'draft-1',
+      }],
+    } as any);
+
+    const response = await app.inject({ method: 'GET', url: '/workflows/workflow-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.application).toMatchObject({
+      id: 'listing-application-1',
+      state: 'ROLLED_BACK',
+      targetType: 'listing-draft',
+      targetId: 'draft-1',
+      rolledBackAt: rolledBackAt.toISOString(),
+      legacy: false,
     });
   });
 
