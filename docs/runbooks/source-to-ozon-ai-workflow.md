@@ -14,6 +14,24 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Release Evidence: `bb3d8cd`
+
+This release adds the provider-free Unit 10B-C2 manual suite-slot reference editor. Operators can replace or clear ordered pre-claim references with server-owned evidence validation, immutable plan lineage, CAS/idempotent replay, approval invalidation and suite-claim exclusion. It does not enable a paid Provider, fake production dispatch, tenant rollout or Ozon writes.
+
+| Evidence | Result |
+|---|---|
+| Git | Feature commit `3e2fa8b` and close-out commit `bb3d8cd` were reviewed with no P0-P3 findings and pushed to `origin/feat/ai-media-prompt-registry`; local, domestic and international deployments used the exact `bb3d8cd` application commit |
+| Automated verification | Full preflight passed with server `2789 passed / 137 skipped`, 192 extension checks and production server/Web builds; focused planning tests passed 54/54; lint reported 0 errors and 21 existing warnings; the slot-editor contract is wired into preflight and CI |
+| PostgreSQL | The isolated PostgreSQL suite replayed all 130 migrations and passed 57/57 checks plus the populated-upgrade path. Both VPS databases migrated from the prior 79-migration release to all 130 migrations and report schema up to date |
+| Local ERP | API reports DB/Redis ready, Web returns 200, the AI Media dark verifier passes, and desktop `1440x1000` plus mobile `390x844` checks show historical plans/suites without overflow or console errors while editing remains disabled |
+| International VPS | `45.76.49.64` deployed `bb3d8cd` after a successful 33 MB database backup; API/Web/Worker and local/public `/ready` passed; Prisma reports 130 migrations current; full verifier passed with `0 failures / 1 warning`; `https://ss-erp.com` returned 200 without browser console errors; unauthenticated slot-reference mutation returned 401; cloud extension package `1.0.243` |
+| International infrastructure limit | The only verifier warning remains that the latest backup is local and no remote backup destination is configured |
+| Domestic VPS | `8.163.122.40` deployed `bb3d8cd` after a successful 100 KB database backup; API/Web/Worker and local/public HTTP `/ready` passed; Prisma reports 130 migrations current; unauthenticated slot-reference mutation returned 401; cloud extension package `1.0.208`; the setup page returned 200 with its expected unauthenticated `/api/user/me` 401 |
+| Domestic infrastructure limits | Full verifier retains the four existing failures and two warnings: no 443 listener, no UFW 443 rule, no Cloudflare real-IP restoration, no Cloudflare origin guard, no Cloudflare IP-update cron and no remote backup. Bootstrap validation separately retains the two empty Turnstile-key warnings |
+| Rollout state | In both VPS environments, all five AI Media entry flags are false, AI Media rollout remains `revision:0` with zero tenant IDs, listing/publisher masters are false, and all five publisher stages are `off@0` |
+| Rollback | The prior deployed application commit was `274f9c5`; app-dir deployment retained pre-switch backups and can redeploy that exact commit if application rollback is required. Applied forward-only migrations are not rolled back |
+| External effects | No paid AI Provider call, fake production dispatch, tenant activation, image generation/upload, commercial charge or Ozon write was executed |
+
 ## Release Evidence: `274f9c5`
 
 This release adds the dark Unit 7B listing-copy execution path. It generates Russian title and description candidates from trusted Capture V2 and reviewed Ozon facts, freezes Prompt/Provider provenance, and requires an explicit audited apply before publish compilation. It does not enable paid generation or Ozon writes.
