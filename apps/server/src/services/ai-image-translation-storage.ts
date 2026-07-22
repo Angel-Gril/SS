@@ -11,11 +11,17 @@ export interface AiImageTranslationStorageReadiness {
 }
 function isPrivateIp(address: string): boolean {
   const normalized = address.replace(/^\[|\]$/g, '').toLowerCase();
-  if (normalized === '::' || normalized === '::1') return true;
-  if (normalized.startsWith('fe80:') || normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-  const mapped = normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized;
-  if (isIP(mapped) !== 4) return false;
-  const [a = 0, b = 0] = mapped.split('.').map(Number);
+  const version = isIP(normalized);
+  if (version === 6) {
+    // URL canonicalization converts dotted IPv4-mapped literals to hex, so
+    // reject the entire mapped range. Only global-unicast 2000::/3 literals
+    // are eligible; loopback, ULA, link-local and multicast remain private.
+    if (normalized.startsWith('::ffff:')) return true;
+    const first = Number.parseInt(normalized.split(':', 1)[0] || '0', 16);
+    return !Number.isFinite(first) || (first & 0xe000) !== 0x2000;
+  }
+  if (version !== 4) return false;
+  const [a = 0, b = 0] = normalized.split('.').map(Number);
   return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
     || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
     || (a === 192 && b === 168) || a >= 224;
@@ -35,8 +41,9 @@ export function isPublicHttpsStorageUrl(raw: string | null | undefined): boolean
   } catch {
     return false;
   }
-  const hostname = parsed.hostname.toLowerCase();
-  if (parsed.protocol !== 'https:' || !hostname || parsed.username || parsed.password) return false;
+  const hostname = parsed.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
+  if (parsed.protocol !== 'https:' || !hostname || hostname.endsWith('.')
+    || parsed.username || parsed.password) return false;
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) return false;
   if (isIP(hostname) !== 0 && isPrivateIp(hostname)) return false;
   return true;

@@ -7,6 +7,10 @@ const migrationUrl = new URL(
   import.meta.url,
 );
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
+const recoveryMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260722100000_add_extension_media_review_apply_operations/migration.sql',
+  import.meta.url,
+), 'utf8');
 
 function modelBlock(name: string): string {
   return schema.match(new RegExp(`model ${name} \\{[\\s\\S]*?\\n\\}`))?.[0] || '';
@@ -16,7 +20,7 @@ describe('extension command grant persistence contract', () => {
   it('stores command bindings and only the keyed grant token digest', () => {
     const grant = modelBlock('ExtensionCommandGrant');
 
-    expect(schema).toMatch(/enum ExtensionCommandOperation[\s\S]*SOURCE_CAPTURE[\s\S]*LISTING_WRITE[\s\S]*LISTING_REVIEW[\s\S]*MEDIA_EXECUTE[\s\S]*OZON_PUBLISH/);
+    expect(schema).toMatch(/enum ExtensionCommandOperation[\s\S]*SOURCE_CAPTURE[\s\S]*LISTING_WRITE[\s\S]*LISTING_REVIEW[\s\S]*MEDIA_EXECUTE[\s\S]*MEDIA_REVIEW[\s\S]*MEDIA_APPLY[\s\S]*OZON_PUBLISH/);
     expect(grant).toMatch(/sessionId\s+String[\s\S]*tokenId\s+String[\s\S]*ownerUserId\s+String/);
     expect(grant).toMatch(/shopId\s+String\?[\s\S]*operation\s+ExtensionCommandOperation/);
     expect(grant).toMatch(/workflowId\s+String\?[\s\S]*draftVersion\s+Int\?/);
@@ -52,6 +56,9 @@ describe('extension command grant persistence contract', () => {
     expect(migration).toContain('extension_command_grants_protect');
     expect(migration).toContain('validate_extension_command_grant_binding');
     expect(migration).toContain('extension_command_grants_binding_validate');
+    expect(recoveryMigration).toContain('extension command grant renewal is invalid');
+    expect(recoveryMigration).toContain('extension command grant renewal token is not current');
+    expect(recoveryMigration).toContain('SELECT 1 FROM "extension_command_receipts"');
   });
 
   it('stores exactly one durable receipt with a valid status shape', () => {
@@ -61,6 +68,7 @@ describe('extension command grant persistence contract', () => {
     expect(receipt).toMatch(/grantId\s+String\s+@unique/);
     expect(receipt).toMatch(/status\s+ExtensionCommandReceiptStatus\s+@default\(PENDING\)/);
     expect(receipt).toMatch(/result\s+Json\?[\s\S]*failureCode\s+String\?[\s\S]*completedAt\s+DateTime\?/);
+    expect(receipt).toMatch(/recoveryNotBefore\s+DateTime\?/);
     expect(migration).toContain('extension_command_receipt_status_shape_check');
     expect(migration).toContain('extension_command_receipts_grant_id_key');
     expect(migration).toContain('validate_extension_command_receipt_insert');
@@ -73,6 +81,9 @@ describe('extension command grant persistence contract', () => {
     expect(migration).toContain('extension_command_receipts_immutable');
     expect(migration).toContain("OLD.\"status\" <> 'PENDING'");
     expect(migration).toContain("NEW.\"status\" NOT IN ('SUCCEEDED', 'FAILED')");
+    expect(recoveryMigration).toContain('extension_command_receipt_recovery_time_check');
+    expect(recoveryMigration).toContain("IF NEW.\"status\" = 'PENDING'");
+    expect(recoveryMigration).toContain('pending extension command receipt recovery lease is invalid');
   });
 
   it('retains command history when sessions, owners, shops or grants are deleted', () => {

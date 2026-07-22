@@ -32,6 +32,8 @@ export const EXTENSION_COMMAND_OPERATIONS = [
   'LISTING_WRITE',
   'LISTING_REVIEW',
   'MEDIA_EXECUTE',
+  'MEDIA_REVIEW',
+  'MEDIA_APPLY',
   'OZON_PUBLISH',
 ] as const;
 
@@ -40,10 +42,13 @@ export const EXTENSION_COMMAND_SCOPE_BY_OPERATION = {
   LISTING_WRITE: 'listing:write',
   LISTING_REVIEW: 'listing:review',
   MEDIA_EXECUTE: 'media:execute',
+  MEDIA_REVIEW: 'listing:review',
+  MEDIA_APPLY: 'listing:write',
   OZON_PUBLISH: 'listing:publish',
 } as const;
 
 export const MAX_OUTSTANDING_EXTENSION_COMMAND_GRANTS = 50;
+export const EXTENSION_COMMAND_RECOVERY_LEASE_MS = 60_000;
 
 export type ExtensionCommandOperation = typeof EXTENSION_COMMAND_OPERATIONS[number];
 export type ExtensionCommandReceiptStatus = 'PENDING' | 'SUCCEEDED' | 'FAILED';
@@ -104,6 +109,7 @@ export type ExtensionCommandConsumeResult =
 
 export type ExtensionCommandIssueResult =
   | { kind: 'issued'; grant: ExtensionCommandGrantRecord }
+  | { kind: 'renewed'; grant: ExtensionCommandGrantRecord }
   | { kind: 'replay'; grant: ExtensionCommandGrantRecord }
   | { kind: 'conflict' }
   | { kind: 'limit' };
@@ -113,6 +119,10 @@ export type ExtensionCommandCompleteResult =
   | { kind: 'idempotent'; receipt: ExtensionCommandReceipt }
   | { kind: 'not_found' }
   | { kind: 'immutable' };
+
+export type ExtensionCommandRecoveryClaimResult =
+  | { kind: 'acquired' | 'not_ready'; receipt: ExtensionCommandReceipt }
+  | { kind: 'not_found' };
 
 export type ExtensionCommandRevokeResult =
   | { kind: 'revoked'; grant: ExtensionCommandGrantRecord }
@@ -128,6 +138,11 @@ export interface ExtensionCommandGrantStore {
     receiptId: string;
     now: Date;
   }): Promise<ExtensionCommandConsumeResult>;
+  claimPendingRecovery(input: {
+    receiptId: string;
+    now: Date;
+    recoveryNotBefore: Date;
+  }): Promise<ExtensionCommandRecoveryClaimResult>;
   completeReceipt(input: {
     receiptId: string;
     status: Exclude<ExtensionCommandReceiptStatus, 'PENDING'>;
@@ -295,6 +310,20 @@ export function extensionCommandBindingsEqual(
     && left.requestHash === right.requestHash;
 }
 
+export function extensionCommandIdentityEqual(
+  left: ExtensionCommandBinding,
+  right: ExtensionCommandBinding,
+): boolean {
+  return left.sessionId === right.sessionId
+    && left.ownerUserId === right.ownerUserId
+    && left.shopId === right.shopId
+    && left.operation === right.operation
+    && left.workflowId === right.workflowId
+    && left.draftVersion === right.draftVersion
+    && left.idempotencyKey === right.idempotencyKey
+    && left.requestHash === right.requestHash;
+}
+
 function sameResult(left: unknown, right: unknown): boolean {
   try {
     return canonicalJson(left, new Set()) === canonicalJson(right, new Set());
@@ -306,15 +335,27 @@ function sameResult(left: unknown, right: unknown): boolean {
 export class InMemoryExtensionCommandGrantStore implements ExtensionCommandGrantStore {
   private readonly grants = new Map<string, ExtensionCommandGrantRecord>();
   private readonly receipts = new Map<string, ExtensionCommandReceipt>();
+  private readonly recoveryNotBefore = new Map<string, Date>();
 
   async issueGrant(grant: ExtensionCommandGrantRecord): Promise<ExtensionCommandIssueResult> {
     const existing = [...this.grants.values()].find(
       (item) => item.sessionId === grant.sessionId && item.idempotencyKey === grant.idempotencyKey,
     );
     if (existing) {
-      return extensionCommandBindingsEqual(existing, grant)
-        ? { kind: 'replay', grant: clone(existing) }
-        : { kind: 'conflict' };
+      if (!extensionCommandIdentityEqual(existing, grant)) return { kind: 'conflict' };
+      if (existing.consumedAt || existing.revokedAt
+        || (existing.tokenId === grant.tokenId
+          && existing.expiresAt.getTime() > grant.issuedAt.getTime())) {
+        return { kind: 'replay', grant: clone(existing) };
+      }
+      const renewed = {
+        ...existing,
+        tokenId: grant.tokenId,
+        issuedAt: new Date(grant.issuedAt),
+        expiresAt: new Date(grant.expiresAt),
+      };
+      this.grants.set(existing.id, renewed);
+      return { kind: 'renewed', grant: clone(renewed) };
     }
     const outstanding = [...this.grants.values()].filter((item) => (
       item.sessionId === grant.sessionId
@@ -338,10 +379,11 @@ export class InMemoryExtensionCommandGrantStore implements ExtensionCommandGrant
   }): Promise<ExtensionCommandConsumeResult> {
     const grant = [...this.grants.values()].find((item) => item.tokenDigest === input.tokenDigest);
     if (!grant) return { kind: 'not_found' };
-    if (!extensionCommandBindingsEqual(grant, input.binding)) return { kind: 'mismatch' };
+    if (!extensionCommandIdentityEqual(grant, input.binding)) return { kind: 'mismatch' };
 
     const existing = [...this.receipts.values()].find((item) => item.grantId === grant.id);
     if (existing) return { kind: 'replay', receipt: clone(existing) };
+    if (grant.tokenId !== input.binding.tokenId) return { kind: 'mismatch' };
     if (grant.revokedAt) return { kind: 'revoked' };
     if (grant.expiresAt.getTime() <= input.now.getTime()) return { kind: 'expired' };
 
@@ -357,7 +399,27 @@ export class InMemoryExtensionCommandGrantStore implements ExtensionCommandGrant
       completedAt: null,
     };
     this.receipts.set(receipt.id, receipt);
+    this.recoveryNotBefore.set(
+      receipt.id,
+      new Date(input.now.getTime() + EXTENSION_COMMAND_RECOVERY_LEASE_MS),
+    );
     return { kind: 'execute', receipt: clone(receipt) };
+  }
+
+  async claimPendingRecovery(input: {
+    receiptId: string;
+    now: Date;
+    recoveryNotBefore: Date;
+  }): Promise<ExtensionCommandRecoveryClaimResult> {
+    const receipt = this.receipts.get(input.receiptId);
+    if (!receipt) return { kind: 'not_found' };
+    const availableAt = this.recoveryNotBefore.get(receipt.id);
+    if (receipt.status !== 'PENDING'
+      || (availableAt && availableAt.getTime() > input.now.getTime())) {
+      return { kind: 'not_ready', receipt: clone(receipt) };
+    }
+    this.recoveryNotBefore.set(receipt.id, new Date(input.recoveryNotBefore));
+    return { kind: 'acquired', receipt: clone(receipt) };
   }
 
   async completeReceipt(input: {
@@ -384,6 +446,7 @@ export class InMemoryExtensionCommandGrantStore implements ExtensionCommandGrant
       completedAt: new Date(input.now),
     };
     this.receipts.set(completed.id, completed);
+    this.recoveryNotBefore.delete(completed.id);
     return { kind: 'completed', receipt: clone(completed) };
   }
 
@@ -527,6 +590,22 @@ export function createExtensionCommandGrantService(options: {
       };
       const [code, statusCode, message] = errors[result.kind];
       throw new ExtensionCommandGrantError(code, statusCode, message);
+    },
+
+    async claimPendingRecovery(input: { receiptId: string }) {
+      const receiptId = requiredIdentifier(input.receiptId, 'receiptId');
+      const claimedAt = now();
+      const result = await options.store.claimPendingRecovery({
+        receiptId,
+        now: claimedAt,
+        recoveryNotBefore: new Date(claimedAt.getTime() + EXTENSION_COMMAND_RECOVERY_LEASE_MS),
+      });
+      if (result.kind !== 'not_found') return result;
+      throw new ExtensionCommandGrantError(
+        'COMMAND_RECEIPT_NOT_FOUND',
+        404,
+        'Command receipt not found',
+      );
     },
 
     async complete(input: { receiptId: string; result: unknown }) {

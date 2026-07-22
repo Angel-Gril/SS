@@ -2,8 +2,9 @@ import type { PrismaClient } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import {
   EXTENSION_COMMAND_SCOPE_BY_OPERATION,
+  EXTENSION_COMMAND_RECOVERY_LEASE_MS,
   MAX_OUTSTANDING_EXTENSION_COMMAND_GRANTS,
-  extensionCommandBindingsEqual,
+  extensionCommandIdentityEqual,
   hashExtensionCommandRequest,
   type ExtensionCommandBinding,
   type ExtensionCommandCompleteResult,
@@ -12,6 +13,7 @@ import {
   type ExtensionCommandGrantStore,
   type ExtensionCommandIssueResult,
   type ExtensionCommandReceipt,
+  type ExtensionCommandRecoveryClaimResult,
   type ExtensionCommandRevokeResult,
 } from './extension-command-grants.js';
 
@@ -219,7 +221,7 @@ export async function consumeExtensionCommandGrantInTransaction(
     actorRole: String(raw.actorRole),
     actorParentId: raw.actorParentId == null ? null : String(raw.actorParentId),
   };
-  if (!extensionCommandBindingsEqual(stored, input.binding)) return { kind: 'mismatch' };
+  if (!extensionCommandIdentityEqual(stored, input.binding)) return { kind: 'mismatch' };
 
   const receiptRows = await tx.$queryRawUnsafe<any[]>(
     `SELECT ${RECEIPT_COLUMNS}
@@ -228,6 +230,7 @@ export async function consumeExtensionCommandGrantInTransaction(
     stored.id,
   );
   if (receiptRows[0]) return { kind: 'replay', receipt: receiptFromRow(receiptRows[0]) };
+  if (stored.tokenId !== input.binding.tokenId) return { kind: 'mismatch' };
   if (stored.revokedAt) return { kind: 'revoked' };
   if (stored.expiresAt.getTime() <= input.now.getTime()) return { kind: 'expired' };
   if (!sessionIsLive(live, input.binding, input.now)) return { kind: 'session_invalid' };
@@ -272,12 +275,14 @@ export async function consumeExtensionCommandGrantInTransaction(
 
   const insertedReceipts = await tx.$queryRawUnsafe<any[]>(
     `INSERT INTO "extension_command_receipts"
-      ("id", "grant_id", "status", "result", "failure_code", "created_at", "completed_at")
-     VALUES ($1, $2, 'PENDING', NULL, NULL, $3, NULL)
+      ("id", "grant_id", "status", "result", "failure_code", "recovery_not_before",
+       "created_at", "completed_at")
+     VALUES ($1, $2, 'PENDING', NULL, NULL, $4, $3, NULL)
      RETURNING ${RECEIPT_COLUMNS}`,
     input.receiptId,
     stored.id,
     input.now,
+    new Date(input.now.getTime() + EXTENSION_COMMAND_RECOVERY_LEASE_MS),
   );
   if (!insertedReceipts[0]) throw new Error('EXTENSION_COMMAND_RECEIPT_INSERT_FAILED');
   return { kind: 'execute', receipt: receiptFromRow(insertedReceipts[0]) };
@@ -311,9 +316,27 @@ export function createPrismaExtensionCommandGrantStore(options: {
         );
         const existing = existingRows[0] ? grantFromRow(existingRows[0]) : null;
         if (existing) {
-          return extensionCommandBindingsEqual(existing, grant)
-            ? { kind: 'replay', grant: existing }
-            : { kind: 'conflict' };
+          if (!extensionCommandIdentityEqual(existing, grant)) return { kind: 'conflict' };
+          if (existing.consumedAt || existing.revokedAt
+            || (existing.tokenId === grant.tokenId
+              && existing.expiresAt.getTime() > grant.issuedAt.getTime())) {
+            return { kind: 'replay', grant: existing };
+          }
+          const renewedRows = await tx.$queryRawUnsafe<any[]>(
+            `UPDATE "extension_command_grants"
+             SET "token_id" = $2, "issued_at" = $3, "expires_at" = $4
+             WHERE "id" = $1
+               AND "consumed_at" IS NULL
+               AND "revoked_at" IS NULL
+               AND ("token_id" <> $2 OR "expires_at" <= $3)
+             RETURNING ${GRANT_COLUMNS}`,
+            existing.id,
+            grant.tokenId,
+            grant.issuedAt,
+            grant.expiresAt,
+          );
+          if (!renewedRows[0]) throw new Error('EXTENSION_COMMAND_GRANT_RENEW_CONFLICT');
+          return { kind: 'renewed', grant: grantFromRow(renewedRows[0]) };
         }
 
         const counts = await tx.$queryRawUnsafe<Array<{ count: bigint }>>(
@@ -364,6 +387,34 @@ export function createPrismaExtensionCommandGrantStore(options: {
 
     async consumeOrReplay(input): Promise<ExtensionCommandConsumeResult> {
       return runSerializable(client, (tx) => consumeExtensionCommandGrantInTransaction(tx, input));
+    },
+
+    async claimPendingRecovery(input): Promise<ExtensionCommandRecoveryClaimResult> {
+      return runSerializable(client, async (tx) => {
+        const acquired = await tx.$queryRawUnsafe<any[]>(
+          `UPDATE "extension_command_receipts"
+           SET "recovery_not_before" = $2
+           WHERE "id" = $1
+             AND "status" = 'PENDING'
+             AND ("recovery_not_before" IS NULL OR "recovery_not_before" <= $3)
+           RETURNING ${RECEIPT_COLUMNS}`,
+          input.receiptId,
+          input.recoveryNotBefore,
+          input.now,
+        );
+        if (acquired[0]) {
+          return { kind: 'acquired', receipt: receiptFromRow(acquired[0]) };
+        }
+        const existing = await tx.$queryRawUnsafe<any[]>(
+          `SELECT ${RECEIPT_COLUMNS}
+           FROM "extension_command_receipts"
+           WHERE "id" = $1`,
+          input.receiptId,
+        );
+        return existing[0]
+          ? { kind: 'not_ready', receipt: receiptFromRow(existing[0]) }
+          : { kind: 'not_found' };
+      });
     },
 
     async completeReceipt(input): Promise<ExtensionCommandCompleteResult> {

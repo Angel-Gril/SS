@@ -161,11 +161,16 @@ import {
 } from './services/ai-media-context.js';
 import { createExtensionMediaWorkflowCommandExecutor } from './services/extension-media-workflow-commands.js';
 import {
+  createExtensionMediaApplyCommandExecutor,
+  createExtensionMediaReviewCommandExecutor,
+} from './services/extension-media-review-commands.js';
+import {
   createExtensionMediaTranslationLauncher,
   resolveExtensionMediaWorkflowSourceMediaKey,
   resolveExtensionMediaTranslationReadiness,
 } from './services/extension-media-workflow-launch.js';
 import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-translation-storage.js';
+import { applyAiMediaListingDraftApplication } from './services/ai-media-listing-draft-application-mutations.js';
 import {
   createSourceOzonCategoryMappingService,
   PrismaSourceOzonCategoryMappingRepository,
@@ -941,26 +946,35 @@ if (isExtensionDeviceAuthEnabled()) {
       errorMessage: 'AI media queue is temporarily unavailable',
     }),
   });
+  const loadExtensionListingDraft = async ({
+    listingWorkflowId,
+    ownerUserId,
+  }: {
+    listingWorkflowId: string;
+    ownerUserId: string;
+  }) => {
+    try {
+      const draft = await sourceListingWorkflowService.getDraft({
+        draftId: listingWorkflowId,
+        ownerUserId,
+      });
+      return {
+        id: draft.id,
+        ownerUserId: draft.ownerUserId,
+        shopId: draft.shopId,
+        revision: draft.revision,
+        draftVersion: draft.draftVersion,
+      };
+    } catch (error) {
+      if (error instanceof SourceListingWorkflowError
+        && error.code === 'OZON_LISTING_DRAFT_NOT_FOUND') return null;
+      throw error;
+    }
+  };
   const executeExtensionMediaWorkflowCommand = createExtensionMediaWorkflowCommandExecutor({
     workflowService: extensionMediaWorkflowService,
     launchTranslation: extensionMediaTranslationLauncher,
-    loadListingDraft: async ({ listingWorkflowId, ownerUserId }) => {
-      try {
-        const draft = await sourceListingWorkflowService.getDraft({
-          draftId: listingWorkflowId,
-          ownerUserId,
-        });
-        return {
-          id: draft.id,
-          ownerUserId: draft.ownerUserId,
-          shopId: draft.shopId,
-          revision: draft.revision,
-          draftVersion: draft.draftVersion,
-        };
-      } catch {
-        return null;
-      }
-    },
+    loadListingDraft: loadExtensionListingDraft,
     getTranslationDailyLimit: async () => getConfig('ai_user_daily_image_translation_limit'),
     getEditDailyLimit: async () => getConfig('ai_user_daily_image_generation_limit'),
     enqueueGeneration: async (jobId) => {
@@ -982,6 +996,16 @@ if (isExtensionDeviceAuthEnabled()) {
         errorMessage: 'AI media queue is temporarily unavailable',
       });
     },
+  });
+  const executeExtensionMediaReviewCommand = createExtensionMediaReviewCommandExecutor({
+    workflowService: extensionMediaWorkflowService,
+    loadListingDraft: loadExtensionListingDraft,
+    production: process.env.NODE_ENV === 'production',
+  });
+  const executeExtensionMediaApplyCommand = createExtensionMediaApplyCommandExecutor({
+    workflowService: extensionMediaWorkflowService,
+    applyListingDraftApplication: (input) => applyAiMediaListingDraftApplication(prisma, input),
+    production: process.env.NODE_ENV === 'production',
   });
   sourceCaptureService = createSourceCaptureService({
     repository: createPrismaSourceCaptureRepository({
@@ -1022,31 +1046,101 @@ if (isExtensionDeviceAuthEnabled()) {
           select: {
             id: true,
             ownerUserId: true,
+            operation: true,
             contextType: true,
             contextId: true,
             contextDraftRevision: true,
             contextDraftVersion: true,
             revision: true,
             status: true,
+            reviewStatus: true,
+            selectedOutputAssetId: true,
             suiteSlot: { select: { suiteId: true } },
             jobs: {
               orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
               take: 1,
-              select: { provider: true },
+              select: {
+                id: true,
+                provider: true,
+                status: true,
+                assets: {
+                  where: { kind: 'AI_GENERATED' },
+                  take: 10,
+                  select: {
+                    id: true,
+                    ownerUserId: true,
+                    aiImageJobId: true,
+                  },
+                },
+              },
+            },
+            events: {
+              where: { eventType: { in: ['REVIEW_APPROVED', 'REVIEW_REJECTED'] } },
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              take: 20,
+              select: {
+                eventKey: true,
+                eventType: true,
+                assetId: true,
+                payload: true,
+              },
+            },
+            listingDraftApplicationMutations: {
+              where: { kind: 'APPLY' },
+              orderBy: [{ targetSequence: 'desc' }, { id: 'desc' }],
+              take: 20,
+              select: {
+                assetId: true,
+                operationKey: true,
+                requestFingerprint: true,
+                workflowRevisionBefore: true,
+                workflowRevisionAfter: true,
+                targetRevisionBefore: true,
+                targetDraftVersionBefore: true,
+                targetRevisionAfter: true,
+                targetDraftVersionAfter: true,
+                rolledBackBy: { select: { id: true } },
+              },
             },
           },
         });
         return row ? {
           id: row.id,
           ownerUserId: row.ownerUserId,
+          operation: String(row.operation),
           contextType: row.contextType,
           contextId: row.contextId,
           contextDraftRevision: row.contextDraftRevision,
           contextDraftVersion: row.contextDraftVersion,
           revision: row.revision,
           status: row.status,
+          reviewStatus: row.reviewStatus,
+          selectedOutputAssetId: row.selectedOutputAssetId,
           suiteId: row.suiteSlot?.suiteId || null,
           provider: row.jobs[0]?.provider || null,
+          currentJobStatus: row.jobs[0]?.status || null,
+          outputAssetIds: (row.jobs[0]?.assets || [])
+            .filter((asset) => asset.ownerUserId === ownerUserId
+              && asset.aiImageJobId === row.jobs[0]?.id)
+            .map((asset) => asset.id),
+          reviewEvents: row.events.map((event) => ({
+            eventKey: event.eventKey,
+            eventType: event.eventType,
+            assetId: event.assetId,
+            payload: event.payload,
+          })),
+          applications: row.listingDraftApplicationMutations.map((item) => ({
+            assetId: item.assetId,
+            operationKey: item.operationKey,
+            requestFingerprint: item.requestFingerprint,
+            workflowRevisionBefore: item.workflowRevisionBefore,
+            workflowRevisionAfter: item.workflowRevisionAfter,
+            targetRevisionBefore: item.targetRevisionBefore,
+            targetDraftVersionBefore: item.targetDraftVersionBefore,
+            targetRevisionAfter: item.targetRevisionAfter,
+            targetDraftVersionAfter: item.targetDraftVersionAfter,
+            rolledBackById: item.rolledBackBy?.id || null,
+          })),
         } : null;
       },
       loadMediaLaunchContext: async ({ ownerUserId, workflowId, draftRevision, draftVersion, sourceMediaKey }) => {
@@ -1077,6 +1171,8 @@ if (isExtensionDeviceAuthEnabled()) {
       });
     },
     executeMediaWorkflowCommand: executeExtensionMediaWorkflowCommand,
+    executeMediaReviewCommand: executeExtensionMediaReviewCommand,
+    executeMediaApplyCommand: executeExtensionMediaApplyCommand,
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',
@@ -1090,7 +1186,13 @@ if (isExtensionDeviceAuthEnabled()) {
   });
   await app.register(extensionSourceWorkbenchRoutes, {
     prefix: '/api/extension-device/source-workbench',
-    service: createExtensionSourceWorkbenchService(),
+    service: createExtensionSourceWorkbenchService({
+      loadAllowedPreviewOrigins: async () => {
+        const config = await getRuntimeConfigForStorage();
+        return [config.localBaseUrl, config.oss?.cdnDomain]
+          .filter((value): value is string => Boolean(value));
+      },
+    }),
     featureFlags: sourceWorkflowFeatureFlags,
     authenticateDevice: authenticateExtensionDevice({
       config: extensionDeviceAuthConfig,

@@ -250,6 +250,40 @@
   text-decoration: none;
 }
 
+.ss-erp-source-workbench-output-item {
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-output-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.ss-erp-source-workbench-output-actions button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-output-actions button.is-primary {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+
+.ss-erp-source-workbench-output-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .ss-erp-source-workbench-output-frame {
   position: relative;
   display: flex;

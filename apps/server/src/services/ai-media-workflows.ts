@@ -288,6 +288,7 @@ export interface AiMediaWorkflowRepository {
     outputAssetId: string;
     decision: 'APPROVE' | 'REJECT';
     note: string | null;
+    operationKey?: string;
   }): Promise<AiMediaWorkflowRecord | null>;
 }
 

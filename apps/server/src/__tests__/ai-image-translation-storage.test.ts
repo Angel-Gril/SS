@@ -41,6 +41,12 @@ describe('AI image translation storage readiness', () => {
     expect(isPublicHttpsStorageUrl('http://cdn.example.com/media')).toBe(false);
     expect(isPublicHttpsStorageUrl('https://localhost/media')).toBe(false);
     expect(isPublicHttpsStorageUrl('https://127.0.0.1/media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://[::1]/media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://[fd00::1]/media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://[::ffff:127.0.0.1]/media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://[ff02::1]/media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://localhost./media')).toBe(false);
+    expect(isPublicHttpsStorageUrl('https://foo.local./media')).toBe(false);
     expect(isPublicHttpsStorageUrl('https://user:pass@cdn.example.com/media')).toBe(false);
     expect(isPublicHttpsStorageUrl('https://cdn.example.com/media')).toBe(true);
   });

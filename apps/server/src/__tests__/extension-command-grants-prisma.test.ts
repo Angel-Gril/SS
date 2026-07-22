@@ -205,6 +205,40 @@ describe('Prisma extension command grant store', () => {
     expect(await store.issueGrant(grant({ requestHash: 'c'.repeat(64) }))).toEqual({ kind: 'conflict' });
   });
 
+  it('atomically renews an exact unconsumed grant for the current token', async () => {
+    const expired = grant({
+      tokenId: 'jti-old',
+      issuedAt: new Date(NOW.getTime() - 120_000),
+      expiresAt: new Date(NOW.getTime() - 60_000),
+    });
+    const renewed = {
+      ...expired,
+      tokenId: 'jti-2',
+      issuedAt: LATER,
+      expiresAt: new Date(LATER.getTime() + 60_000),
+    };
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "extension_device_sessions"') && sql.includes('FOR UPDATE')) {
+        return [{ id: 'session-1' }];
+      }
+      if (sql.includes('FROM "extension_command_grants"') && sql.includes('"idempotency_key"')) {
+        return [expired];
+      }
+      if (sql.includes('UPDATE "extension_command_grants"')
+        && sql.includes('SET "token_id"')) return [renewed];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const store = createPrismaExtensionCommandGrantStore({ client: client as never });
+
+    await expect(store.issueGrant(grant({
+      tokenId: 'jti-2',
+      issuedAt: LATER,
+      expiresAt: new Date(LATER.getTime() + 60_000),
+    }))).resolves.toEqual({ kind: 'renewed', grant: renewed });
+    expect(client.calls.find(({ sql }) => sql.includes('SET "token_id"'))?.sql)
+      .toContain('"consumed_at" IS NULL');
+  });
+
   it('locks live authorization and atomically creates one pending receipt', async () => {
     const client = new ScriptedClient((sql) => {
       if (sql.includes('FROM "extension_command_grants" g')) return [grantRow()];
@@ -233,6 +267,34 @@ describe('Prisma extension command grant store', () => {
       expect.stringContaining('UPDATE "extension_command_grants"'),
       expect.stringContaining('INSERT INTO "extension_command_receipts"'),
     ]));
+    expect(client.calls.find(({ sql }) => sql.includes('INSERT INTO "extension_command_receipts"'))?.sql)
+      .toContain('"recovery_not_before"');
+  });
+
+  it('atomically leases one PENDING receipt recovery attempt', async () => {
+    let acquired = true;
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('UPDATE "extension_command_receipts"')
+        && sql.includes('"recovery_not_before"')) {
+        if (acquired) {
+          acquired = false;
+          return [pendingReceipt()];
+        }
+        return [];
+      }
+      if (sql.includes('FROM "extension_command_receipts"')) return [pendingReceipt()];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const store = createPrismaExtensionCommandGrantStore({ client: client as never });
+    const recoveryNotBefore = new Date(LATER.getTime() + 60_000);
+
+    await expect(store.claimPendingRecovery({
+      receiptId: 'receipt-1', now: LATER, recoveryNotBefore,
+    })).resolves.toMatchObject({ kind: 'acquired', receipt: { id: 'receipt-1' } });
+    await expect(store.claimPendingRecovery({
+      receiptId: 'receipt-1', now: LATER, recoveryNotBefore,
+    })).resolves.toMatchObject({ kind: 'not_ready', receipt: { id: 'receipt-1' } });
+    expect(client.calls[0]?.sql).toContain('"recovery_not_before" <= $3');
   });
 
   it('fails closed on a live scope change without consuming the grant', async () => {
@@ -290,6 +352,27 @@ describe('Prisma extension command grant store', () => {
       now: LATER,
     })).toEqual({ kind: 'replay', receipt });
     expect(client.calls).toHaveLength(2);
+  });
+
+  it('replays a persisted receipt after the device access token rotates', async () => {
+    const receipt = {
+      ...pendingReceipt(), status: 'SUCCEEDED', result: { action: 'REVIEW' }, completedAt: NOW,
+    };
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "extension_command_grants" g')) {
+        return [grantRow({ tokenId: 'jti-1', currentJti: 'jti-2' })];
+      }
+      if (sql.includes('FROM "extension_command_receipts"')) return [receipt];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const store = createPrismaExtensionCommandGrantStore({ client: client as never });
+
+    await expect(store.consumeOrReplay({
+      tokenDigest: 'b'.repeat(64),
+      binding: binding({ tokenId: 'jti-2' }),
+      receiptId: 'unused-receipt',
+      now: LATER,
+    })).resolves.toEqual({ kind: 'replay', receipt });
   });
 
   it.each([

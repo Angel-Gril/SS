@@ -1,0 +1,161 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f4f6f8;
+  color: #17202a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 360px;
+  margin: 0;
+  background: #f4f6f8;
+}
+
+.confirm-shell {
+  width: min(100%, 440px);
+  min-height: 520px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d9dee5;
+}
+
+.brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: #d85f20;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+p {
+  margin: 3px 0 0;
+  color: #64707d;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.target {
+  margin-top: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid #d9dee5;
+  color: #485461;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.preview {
+  margin-top: 18px;
+}
+
+.preview a {
+  display: flex;
+  width: 100%;
+  aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #cfd6de;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.preview-meta {
+  min-height: 18px;
+  margin-top: 7px;
+  color: #64707d;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.status {
+  min-height: 40px;
+  padding: 14px 0;
+  color: #5c6670;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.status.is-error {
+  color: #b42318;
+}
+
+.status.is-success {
+  color: #167448;
+  font-weight: 700;
+}
+
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid #d9dee5;
+}
+
+button {
+  min-width: 0;
+  height: 40px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button.secondary {
+  border: 1px solid #aeb8c4;
+  background: #fff;
+  color: #33404d;
+}
+
+button.primary {
+  border: 1px solid #116b50;
+  background: #167a5a;
+  color: #fff;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@media (max-width: 400px) {
+  body {
+    min-width: 300px;
+  }
+
+  .confirm-shell {
+    min-height: 480px;
+    padding: 14px;
+  }
+}

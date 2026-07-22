@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
 
 export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
@@ -147,16 +148,40 @@ function boundedText(value: unknown, maximum: number): string | null {
   return normalized && normalized.length <= maximum ? normalized : null;
 }
 
-function previewUrl(value: unknown): string | null {
+function allowedPreviewOrigin(value: unknown): string | null {
   const normalized = boundedText(value, EXTENSION_SOURCE_MEDIA_HISTORY_URL_LIMIT);
   if (!normalized) return null;
   try {
     const url = new URL(normalized);
-    if (url.protocol === 'https:') return url.href;
-    // Local HTTP is permitted only for the explicitly local development hosts.
+    if (url.search || url.hash || url.username || url.password || url.hostname.endsWith('.')) {
+      return null;
+    }
+    if (isPublicHttpsStorageUrl(url.origin)) return url.origin;
+    const hostname = url.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
     if (process.env.NODE_ENV !== 'production'
       && url.protocol === 'http:'
-      && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
+      && ['localhost', '127.0.0.1', '::1'].includes(hostname)) return url.origin;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function previewUrl(value: unknown, allowedOrigins: Set<string>): string | null {
+  const normalized = boundedText(value, EXTENSION_SOURCE_MEDIA_HISTORY_URL_LIMIT);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    if (url.search || url.hash || url.username || url.password
+      || url.hostname.endsWith('.') || !allowedOrigins.has(url.origin)) return null;
+    if (isPublicHttpsStorageUrl(url.href)) return url.href;
+    // Local HTTP is permitted only for the explicitly local development hosts.
+    const hostname = url.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
+    if (process.env.NODE_ENV !== 'production'
+      && url.protocol === 'http:'
+      && !url.username
+      && !url.password
+      && ['localhost', '127.0.0.1', '::1'].includes(hostname)) {
       return url.href;
     }
   } catch {
@@ -165,16 +190,24 @@ function previewUrl(value: unknown): string | null {
   return null;
 }
 
-function safeOutputAsset(asset: any, ownerUserId: string, jobId: string) {
+function safeOutputAsset(
+  asset: any,
+  ownerUserId: string,
+  jobId: string,
+  snapshotId: string,
+  allowedOrigins: Set<string>,
+) {
   if (!asset
     || String(asset.ownerUserId || '') !== ownerUserId
     || String(asset.aiImageJobId || '') !== jobId
+    || String(asset.sourceCaptureSnapshotId || '') !== snapshotId
     || String(asset.kind || '') !== 'AI_GENERATED'
     || !['local', 'oss'].includes(String(asset.storageBackend || ''))) return null;
-  const url = previewUrl(asset.url);
+  const url = previewUrl(asset.url, allowedOrigins);
   const id = boundedText(asset.id, 200);
   const mimeType = boundedText(asset.mimeType, 100);
-  if (!id || !url || !mimeType || !/^image\//iu.test(mimeType)) return null;
+  if (!id || !url || !mimeType
+    || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType.toLowerCase())) return null;
   const width = Number(asset.width);
   const height = Number(asset.height);
   return {
@@ -207,29 +240,37 @@ function mediaHistoryApplication(row: any) {
   };
 }
 
-function mediaHistoryItem(row: any, ownerUserId: string) {
+function mediaHistoryItem(
+  row: any,
+  ownerUserId: string,
+  snapshotId: string,
+  allowedOrigins: Set<string>,
+) {
   const job = Array.isArray(row.jobs) ? row.jobs[0] : null;
   const jobId = String(job?.id || '');
   const outputs = jobId
     ? array(job?.assets)
-      .map((asset) => safeOutputAsset(asset, ownerUserId, jobId))
+      .map((asset) => safeOutputAsset(asset, ownerUserId, jobId, snapshotId, allowedOrigins))
       .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
       .slice(0, EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT)
     : [];
-  const selected = row.selectedOutputAsset && row.selectedOutputAsset.aiImageJobId
+  const selected = jobId && row.selectedOutputAsset
     ? safeOutputAsset(
       row.selectedOutputAsset,
       ownerUserId,
-      String(row.selectedOutputAsset.aiImageJobId),
+      jobId,
+      snapshotId,
+      allowedOrigins,
     )
     : null;
   if (selected && !outputs.some((output) => output.id === selected.id)) {
+    if (outputs.length >= EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT) outputs.pop();
     outputs.push(selected);
-    outputs.splice(EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT);
   }
-  const selectedOutputAssetId = row.selectedOutputAssetId == null
-    ? null
-    : String(row.selectedOutputAssetId);
+  const selectedOutputAssetId = selected
+    && selected.id === String(row.selectedOutputAssetId || '')
+    ? selected.id
+    : null;
   return {
     id: String(row.id),
     operation: String(row.operation),
@@ -389,6 +430,7 @@ function mediaActionable(row: any) {
 
 export function createExtensionSourceWorkbenchService(options: {
   client?: ExtensionSourceWorkbenchClient;
+  loadAllowedPreviewOrigins?(): Promise<string[]>;
 } = {}) {
   const client = options.client || prisma as unknown as ExtensionSourceWorkbenchClient;
 
@@ -543,6 +585,9 @@ export function createExtensionSourceWorkbenchService(options: {
     },
     async loadMediaHistory(input: ExtensionSourceMediaHistoryInput) {
       const ownerUserId = identifier(input.ownerUserId, 'ownerUserId');
+      const allowedOrigins = new Set((await options.loadAllowedPreviewOrigins?.() || [])
+        .map(allowedPreviewOrigin)
+        .filter((origin): origin is string => Boolean(origin)));
       const snapshotId = identifier(input.snapshotId, 'snapshotId');
       const supplyGoodsId = identifier(input.supplyGoodsId, 'supplyGoodsId');
       const shopId = identifier(input.shopId, 'shopId');
@@ -663,6 +708,7 @@ export function createExtensionSourceWorkbenchService(options: {
               id: true,
               ownerUserId: true,
               aiImageJobId: true,
+              sourceCaptureSnapshotId: true,
               kind: true,
               url: true,
               storageBackend: true,
@@ -686,6 +732,7 @@ export function createExtensionSourceWorkbenchService(options: {
                   id: true,
                   ownerUserId: true,
                   aiImageJobId: true,
+                  sourceCaptureSnapshotId: true,
                   kind: true,
                   url: true,
                   storageBackend: true,
@@ -729,7 +776,12 @@ export function createExtensionSourceWorkbenchService(options: {
           version: Number(snapshot.version),
           capturedAt: isoDate(snapshot.capturedAt),
         },
-        items: pageRows.map((row) => mediaHistoryItem(row, ownerUserId)),
+        items: pageRows.map((row) => mediaHistoryItem(
+          row,
+          ownerUserId,
+          snapshotId,
+          allowedOrigins,
+        )),
         nextCursor: rows.length > limit && last
           ? encodeExtensionSourceMediaHistoryCursor(scope, {
             updatedAt: last.updatedAt,

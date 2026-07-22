@@ -9,6 +9,8 @@ import {
   ExtensionCommandGrantError,
   hashExtensionCommandRequest,
 } from '../services/extension-command-grants.js';
+import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
+import { createExtensionMediaReviewCommandExecutor } from '../services/extension-media-review-commands.js';
 
 function device(overrides: Record<string, unknown> = {}) {
   return {
@@ -16,7 +18,7 @@ function device(overrides: Record<string, unknown> = {}) {
     tokenId: 'jti-1',
     ownerUserId: 'owner-1',
     actorUserId: 'owner-1',
-    scopes: ['listing:review', 'media:execute', 'listing:publish'],
+    scopes: ['listing:review', 'listing:write', 'media:execute', 'listing:publish'],
     allowedShopIds: ['shop-1'],
     ...overrides,
   };
@@ -46,6 +48,10 @@ function dependencies(options: {
     kind: 'execute' as const,
     receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
   }));
+  const claimPendingRecovery = vi.fn(async (): Promise<any> => ({
+    kind: 'acquired' as const,
+    receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+  }));
   const complete = vi.fn(async ({ receiptId, result }: { receiptId: string; result: unknown }) => ({
     id: receiptId, status: 'SUCCEEDED', result, failureCode: null,
   }));
@@ -63,6 +69,17 @@ function dependencies(options: {
   }> => ({
     workflowId: 'media-1', action: 'CANCEL', status: 'CANCELLED', revision: 4,
   }));
+  const executeMediaReviewCommand = vi.fn(async () => ({
+    workflowId: 'media-1', action: 'REVIEW', status: 'SUCCEEDED',
+    reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
+    revision: 4, replayed: false,
+  }));
+  const executeMediaApplyCommand = vi.fn(async () => ({
+    workflowId: 'media-1', action: 'APPLY', status: 'SUCCEEDED',
+    reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
+    revision: 5, applicationId: 'application-1',
+    targetRevision: 12, targetDraftVersion: 8, replayed: false,
+  }));
   const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
     (request as any).device = device(options.device);
   });
@@ -74,8 +91,10 @@ function dependencies(options: {
     command: input.command,
   }));
   return {
-    service: { issue, authorize, complete, fail }, authenticateDevice, resolveCommand,
+    service: { issue, authorize, claimPendingRecovery, complete, fail },
+    authenticateDevice, resolveCommand,
     executeOzonPublish, executeMediaWorkflowCommand,
+    executeMediaReviewCommand, executeMediaApplyCommand,
   };
 }
 
@@ -117,6 +136,42 @@ function mediaPayload(overrides: Record<string, unknown> = {}) {
     draftVersion: 7,
     idempotencyKey: 'media-command-operation-1',
     command: mediaCommand(),
+    ...overrides,
+  };
+}
+
+function mediaReviewCommand(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 'ai-media-workflow-review/v1', action: 'REVIEW',
+    mediaWorkflowId: 'media-1', expectedRevision: 3, draftRevision: 11,
+    outputAssetId: 'output-1', decision: 'APPROVE', note: null,
+    ...overrides,
+  };
+}
+
+function mediaApplyCommand(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 'ai-media-workflow-apply/v1', action: 'APPLY',
+    mediaWorkflowId: 'media-1', expectedWorkflowRevision: 4,
+    expectedTargetRevision: 11, expectedTargetDraftVersion: 7,
+    outputAssetId: 'output-1', mode: 'append',
+    ...overrides,
+  };
+}
+
+function mediaApplyRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    assetId: 'output-1',
+    operationKey: 'media-apply-operation-1',
+    requestFingerprint: createAiMediaListingDraftApplyFingerprint({
+      workflowId: 'media-1', mode: 'append', expectedWorkflowRevision: 4,
+      expectedTargetRevision: 11, expectedTargetDraftVersion: 7,
+      replaceConfirmed: false,
+    }),
+    workflowRevisionBefore: 4, workflowRevisionAfter: 5,
+    targetRevisionBefore: 11, targetDraftVersionBefore: 7,
+    targetRevisionAfter: 12, targetDraftVersionAfter: 8,
+    rolledBackById: null,
     ...overrides,
   };
 }
@@ -298,6 +353,284 @@ describe('extension command grant routes', () => {
       listingWorkflowId: 'workflow-1', draftVersion: 7,
       idempotencyKey: 'extension-media-create-attempt-1', command,
     });
+  });
+
+  it('binds media review execution to listing:review and a MEDIA_REVIEW grant', async () => {
+    const deps = await buildApp();
+    const command = mediaReviewCommand();
+    const payload = {
+      operation: 'MEDIA_REVIEW', shopId: 'shop-1', workflowId: 'workflow-1',
+      draftVersion: 7, idempotencyKey: 'media-review-operation-1', command,
+    };
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ data: { receipt: { result: {
+      action: 'REVIEW', reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
+    } } } });
+    expect(deps.service.authorize).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'MEDIA_REVIEW', idempotencyKey: 'media-review-operation-1',
+      requestHash: hashExtensionCommandRequest({
+        operation: 'MEDIA_REVIEW', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, command,
+      }),
+    }));
+    expect(deps.executeMediaReviewCommand).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', listingWorkflowId: 'workflow-1',
+      idempotencyKey: 'media-review-operation-1', command,
+    }));
+    expect(deps.executeMediaApplyCommand).not.toHaveBeenCalled();
+  });
+
+  it('recovers a PENDING media apply receipt through the application ledger executor', async () => {
+    const deps = await buildApp();
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    deps.executeMediaApplyCommand.mockResolvedValueOnce({
+      workflowId: 'media-1', action: 'APPLY', status: 'SUCCEEDED',
+      reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
+      revision: 5, applicationId: 'application-1',
+      targetRevision: 12, targetDraftVersion: 8, replayed: true,
+    });
+    const command = mediaApplyCommand();
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        operation: 'MEDIA_APPLY', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, idempotencyKey: 'media-apply-operation-1', command,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: { replay: true, receipt: { status: 'SUCCEEDED', result: {
+        action: 'APPLY', applicationId: 'application-1', replayed: true,
+      } } },
+    });
+    expect(deps.executeMediaApplyCommand).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'media-apply-operation-1', command,
+    }));
+    expect(deps.service.complete).toHaveBeenCalledWith(expect.objectContaining({
+      receiptId: 'receipt-1',
+    }));
+  });
+
+  it('keeps a successful media mutation recoverable when receipt completion fails', async () => {
+    const deps = await buildApp();
+    deps.service.complete.mockRejectedValueOnce(new Error('receipt store unavailable'));
+    const payload = {
+      operation: 'MEDIA_REVIEW', shopId: 'shop-1', workflowId: 'workflow-1',
+      draftVersion: 7, idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand(),
+    };
+    const first = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(first.statusCode).toBe(500);
+    expect(deps.executeMediaReviewCommand).toHaveBeenCalledTimes(1);
+    expect(deps.service.fail).not.toHaveBeenCalled();
+
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    deps.executeMediaReviewCommand.mockResolvedValueOnce({
+      workflowId: 'media-1', action: 'REVIEW', status: 'SUCCEEDED',
+      reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
+      revision: 4, replayed: true,
+    });
+    const recovered = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      data: { replay: true, receipt: { status: 'SUCCEEDED' } },
+    });
+    expect(deps.service.claimPendingRecovery).toHaveBeenCalledTimes(1);
+    expect(deps.executeMediaReviewCommand).toHaveBeenCalledTimes(2);
+    expect(deps.service.fail).not.toHaveBeenCalled();
+  });
+
+  it('preserves a PENDING receipt when an applied mutation result is temporarily unavailable', async () => {
+    const deps = await buildApp();
+    deps.executeMediaApplyCommand.mockRejectedValueOnce(Object.assign(
+      new Error('application projection unavailable'),
+      { code: 'MEDIA_APPLY_STATE_UNAVAILABLE' },
+    ));
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        operation: 'MEDIA_APPLY', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, idempotencyKey: 'media-apply-operation-1',
+        command: mediaApplyCommand(),
+      },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      errorCode: 'media_command_unavailable',
+      data: { receipt: { status: 'PENDING' } },
+    });
+    expect(deps.service.fail).not.toHaveBeenCalled();
+    expect(deps.service.complete).not.toHaveBeenCalled();
+  });
+
+  it('does not execute a concurrent PENDING media recovery without the receipt lease', async () => {
+    const deps = await buildApp();
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    deps.service.claimPendingRecovery.mockResolvedValueOnce({
+      kind: 'not_ready',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        operation: 'MEDIA_REVIEW', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, idempotencyKey: 'media-review-operation-1',
+        command: mediaReviewCommand(),
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      data: { replay: true, receipt: { status: 'PENDING' } },
+    });
+    expect(deps.executeMediaReviewCommand).not.toHaveBeenCalled();
+    expect(deps.service.complete).not.toHaveBeenCalled();
+    expect(deps.service.fail).not.toHaveBeenCalled();
+  });
+
+  it('recovers a PENDING review only through its exact persisted event operation key', async () => {
+    let current: any = {
+      id: 'media-1', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+      status: 'SUCCEEDED', reviewStatus: 'PENDING', revision: 3,
+      contextType: 'listing-draft', contextId: 'workflow-1',
+      contextDraftRevision: 11, contextDraftVersion: 7, suiteId: null,
+      selectedOutputAssetId: null, events: [],
+      jobs: [{
+        id: 'job-1', provider: 'fake', status: 'SUCCEEDED',
+        assets: [{
+          id: 'output-1', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          kind: 'AI_GENERATED', storageBackend: 'local',
+        }],
+      }],
+    };
+    const listing = {
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      revision: 11, draftVersion: 7,
+    };
+    const workflowService = {
+      get: vi.fn(async () => current),
+      review: vi.fn(async (input: any) => {
+        current = {
+          ...current,
+          reviewStatus: input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+          selectedOutputAssetId: input.outputAssetId,
+          revision: input.expectedRevision + 1,
+          events: [{
+            eventKey: `media-1:review:${input.expectedRevision}`,
+            eventType: input.decision === 'APPROVE' ? 'REVIEW_APPROVED' : 'REVIEW_REJECTED',
+            assetId: input.outputAssetId,
+            payload: { note: input.note, operationKey: input.operationKey },
+          }],
+        };
+        return current;
+      }),
+    };
+    const executeReview = createExtensionMediaReviewCommandExecutor({
+      workflowService,
+      loadListingDraft: vi.fn(async () => listing),
+      production: false,
+    });
+    const command = mediaReviewCommand();
+    await executeReview({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1',
+      listingWorkflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1', command,
+    });
+
+    const authorize = vi.fn(async () => ({
+      kind: 'replay' as const,
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    }));
+    const claimPendingRecovery = vi.fn(async () => ({
+      kind: 'acquired' as const,
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    }));
+    const complete = vi.fn(async ({ receiptId, result }: any) => ({
+      id: receiptId, status: 'SUCCEEDED', result, failureCode: null,
+    }));
+    const app = Fastify();
+    await app.register(extensionCommandGrantRoutes, {
+      service: {
+        issue: vi.fn(), authorize, claimPendingRecovery, complete, fail: vi.fn(),
+      },
+      authenticateDevice: async (request: FastifyRequest) => {
+        (request as any).device = device();
+      },
+      resolveCommand: createSourceWorkflowCommandResolver({
+        featureFlags: { evaluate: vi.fn(async () => ({
+          enabled: true, legacyAllowed: false, captureStage: null,
+          reason: 'pilot_match' as const, revision: 'pilot-1',
+        })) },
+        loadShop: vi.fn(async () => ({
+          id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+        })),
+        loadDraft: vi.fn(async () => ({
+          ...listing, stage: 'MEDIA_REVIEW', selectedSkuKeys: [], publishTaskIds: [],
+        })),
+        loadMediaWorkflow: vi.fn(async () => ({
+          ...current,
+          provider: current.jobs[0].provider,
+          currentJobStatus: current.jobs[0].status,
+          outputAssetIds: current.jobs[0].assets.map((asset: any) => asset.id),
+          reviewEvents: current.events,
+          applications: [],
+        })),
+      }),
+      executeMediaReviewCommand: executeReview,
+    } as never);
+    const response = await app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        operation: 'MEDIA_REVIEW', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, idempotencyKey: 'media-review-operation-1', command,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: { replay: true, receipt: { result: { action: 'REVIEW', replayed: true } } },
+    });
+    expect(workflowService.review).toHaveBeenCalledTimes(1);
+    expect(claimPendingRecovery).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('requires listing:write for media application execution', async () => {
+    const deps = await buildApp({ device: { scopes: ['listing:review'] } });
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        operation: 'MEDIA_APPLY', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, idempotencyKey: 'media-apply-operation-1',
+        command: mediaApplyCommand(),
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(deps.service.authorize).not.toHaveBeenCalled();
+    expect(deps.executeMediaApplyCommand).not.toHaveBeenCalled();
   });
 
   it('reports transient media context failures as unavailable instead of a client conflict', async () => {
@@ -630,6 +963,180 @@ describe('extension command grant routes', () => {
     expect(loadShop).not.toHaveBeenCalled();
     expect(loadDraft).not.toHaveBeenCalled();
     expect(loadMediaLaunchContext).not.toHaveBeenCalled();
+  });
+
+  it('resolves an exact pending media review and an already-applied draft replay', async () => {
+    const evaluate = vi.fn(async () => ({
+      enabled: true, legacyAllowed: false, captureStage: null,
+      reason: 'pilot_match' as const, revision: 'pilot-1',
+    }));
+    const currentMedia: any = {
+      id: 'media-1', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+      contextType: 'listing-draft', contextId: 'workflow-1',
+      contextDraftRevision: 11, contextDraftVersion: 7,
+      revision: 3, status: 'SUCCEEDED', reviewStatus: 'PENDING',
+      selectedOutputAssetId: null, suiteId: null, provider: 'fake',
+      currentJobStatus: 'SUCCEEDED', outputAssetIds: ['output-1'],
+      reviewEvents: [], applications: [],
+    };
+    const loadMediaWorkflow = vi.fn(async () => currentMedia);
+    const loadDraft = vi.fn(async () => ({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+      selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+    }));
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft,
+      loadMediaWorkflow,
+    });
+
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand(),
+    })).resolves.toMatchObject({ kind: 'allowed', command: mediaReviewCommand() });
+
+    const reviewedMedia = {
+      ...currentMedia, revision: 4, reviewStatus: 'APPROVED',
+      selectedOutputAssetId: 'output-1',
+      reviewEvents: [{
+        eventKey: 'media-1:review:3', eventType: 'REVIEW_APPROVED',
+        assetId: 'output-1', payload: {
+          note: null, operationKey: 'media-review-operation-1',
+        },
+      }],
+    };
+    loadMediaWorkflow.mockResolvedValueOnce(reviewedMedia);
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand(),
+    })).resolves.toMatchObject({ kind: 'allowed' });
+    loadDraft.mockResolvedValueOnce({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 8, revision: 12, stage: 'MEDIA_REVIEW',
+      selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+    });
+    loadMediaWorkflow.mockResolvedValueOnce({ ...reviewedMedia, revision: 5 });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand(),
+    })).resolves.toMatchObject({ kind: 'allowed', draftVersion: 7 });
+    loadMediaWorkflow.mockResolvedValueOnce(reviewedMedia);
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'different-media-review-operation',
+      command: mediaReviewCommand(),
+    })).resolves.toEqual({ kind: 'stale' });
+    loadMediaWorkflow.mockResolvedValueOnce(reviewedMedia);
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand({ note: 'changed command' }),
+    })).resolves.toEqual({ kind: 'stale' });
+
+    loadDraft.mockResolvedValueOnce({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 8, revision: 12, stage: 'MEDIA_REVIEW',
+      selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+    });
+    loadMediaWorkflow.mockResolvedValueOnce({
+      ...currentMedia, revision: 5, reviewStatus: 'APPROVED',
+      selectedOutputAssetId: 'output-1', applications: [mediaApplyRecord()],
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_APPLY',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-apply-operation-1',
+      command: mediaApplyCommand(),
+    })).resolves.toMatchObject({
+      kind: 'allowed', draftVersion: 7, command: mediaApplyCommand(),
+    });
+
+    loadDraft.mockResolvedValueOnce({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 8, revision: 12, stage: 'MEDIA_REVIEW',
+      selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+    });
+    loadMediaWorkflow.mockResolvedValueOnce({
+      ...currentMedia, revision: 5, reviewStatus: 'APPROVED',
+      selectedOutputAssetId: 'output-1', applications: [],
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_APPLY',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-apply-operation-1',
+      command: mediaApplyCommand(),
+    })).resolves.toEqual({ kind: 'stale' });
+
+    for (const [idempotencyKey, application] of [
+      ['different-media-apply-operation', mediaApplyRecord()],
+      ['media-apply-operation-1', mediaApplyRecord({ rolledBackById: 'rollback-1' })],
+      ['media-apply-operation-1', mediaApplyRecord({ requestFingerprint: 'f'.repeat(64) })],
+    ] as const) {
+      loadDraft.mockResolvedValueOnce({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 8, revision: 12, stage: 'MEDIA_REVIEW',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+      });
+      loadMediaWorkflow.mockResolvedValueOnce({
+        ...currentMedia, revision: 5, reviewStatus: 'APPROVED',
+        selectedOutputAssetId: 'output-1', applications: [application],
+      });
+      await expect(resolve({
+        sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_APPLY',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey,
+        command: mediaApplyCommand(),
+      })).resolves.toEqual({ kind: 'stale' });
+    }
+  });
+
+  it.each([
+    ['paid Provider', { provider: 'dashscope-qwen-mt-image' }],
+    ['suite child', { suiteId: 'suite-1' }],
+    ['foreign output', { outputAssetIds: ['other-output'] }],
+    ['running job', { currentJobStatus: 'RUNNING' }],
+  ])('rejects unsafe media review authority: %s', async (_label, patch) => {
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate: vi.fn(async () => ({
+        enabled: true, legacyAllowed: false, captureStage: null,
+        reason: 'pilot_match' as const, revision: 'pilot-1',
+      })) },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft: vi.fn(async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+      })),
+      loadMediaWorkflow: vi.fn(async () => ({
+        id: 'media-1', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+        contextType: 'listing-draft', contextId: 'workflow-1',
+        contextDraftRevision: 11, contextDraftVersion: 7,
+        revision: 3, status: 'SUCCEEDED', reviewStatus: 'PENDING',
+        selectedOutputAssetId: null, suiteId: null, provider: 'fake',
+        currentJobStatus: 'SUCCEEDED', outputAssetIds: ['output-1'],
+        reviewEvents: [], applications: [], ...patch,
+      })),
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_REVIEW',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'media-review-operation-1',
+      command: mediaReviewCommand(),
+    })).resolves.toEqual({ kind: 'forbidden' });
   });
 
   it.each([

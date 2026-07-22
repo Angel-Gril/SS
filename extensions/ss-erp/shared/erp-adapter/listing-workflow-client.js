@@ -170,6 +170,39 @@
     return prefix + bytesToHex(new Uint8Array(digest));
   }
 
+  async function stableOperationKey(identity, prefix) {
+    var digest = await globalThis.crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(JSON.stringify(identity)),
+    );
+    return prefix + bytesToHex(new Uint8Array(digest));
+  }
+
+  async function executeGrantedMediaMutation(transport, operation, requiredScope, envelope) {
+    var issued = await transport.post('/api/extension-device/command-grants', {
+      operation: operation,
+      ...envelope,
+    }, { requiredScope: requiredScope });
+    var issuedBody = issued && issued.state === 'response' ? record(issued.body) : null;
+    var issuedData = issuedBody && issuedBody.code === 1 ? record(issuedBody.data) : null;
+    if (!issuedData || !text(issuedData.grantToken, 1000)) {
+      throw new Error('media mutation command grant was not issued');
+    }
+    var executed = await transport.post(
+      '/api/extension-device/media-workflows/execute',
+      { operation: operation, ...envelope },
+      { commandGrant: issuedData.grantToken, requiredScope: requiredScope },
+    );
+    var executedBody = executed && executed.state === 'response' ? record(executed.body) : null;
+    var executedData = executedBody && executedBody.code === 1 ? record(executedBody.data) : null;
+    var receipt = executedData ? record(executedData.receipt) : null;
+    var result = receipt ? record(receipt.result) : null;
+    if (!receipt || receipt.status !== 'SUCCEEDED' || !result) {
+      throw new Error('media mutation command did not complete');
+    }
+    return { executedData: executedData, receipt: receipt, result: result };
+  }
+
   function validStatus(value, snapshotId) {
     return record(value)
       && value.contractVersion === 'extension-source-workbench-status/v1'
@@ -200,9 +233,23 @@
     if (!text(value, 4096)) return false;
     try {
       var parsed = new URL(value);
-      return parsed.protocol === 'https:'
-        || (parsed.protocol === 'http:'
-          && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname));
+      if (parsed.username || parsed.password) return false;
+      var hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      var local = hostname === 'localhost' || hostname.endsWith('.localhost')
+        || hostname.endsWith('.local') || hostname === '::1';
+      var octets = hostname.split('.').map(Number);
+      var ipv4 = octets.length === 4 && octets.every(function (item) {
+        return Number.isInteger(item) && item >= 0 && item <= 255;
+      });
+      var privateIpv4 = ipv4 && (octets[0] === 0 || octets[0] === 10
+        || octets[0] === 127 || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127)
+        || (octets[0] === 169 && octets[1] === 254)
+        || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+        || (octets[0] === 192 && octets[1] === 168) || octets[0] >= 224);
+      var ipv6Literal = hostname.includes(':');
+      if (parsed.protocol === 'https:') return !local && !privateIpv4 && !ipv6Literal;
+      return parsed.protocol === 'http:'
+        && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1');
     } catch (_error) {
       return false;
     }
@@ -217,7 +264,7 @@
       && text(output.id, 200)
       && validPreviewUrl(output.url)
       && text(output.mimeType, 100)
-      && /^image\//iu.test(output.mimeType)
+      && ['image/jpeg', 'image/png', 'image/webp'].includes(output.mimeType.toLowerCase())
       && (output.width === null || (Number.isSafeInteger(output.width) && output.width > 0))
       && (output.height === null || (Number.isSafeInteger(output.height) && output.height > 0));
   }
@@ -489,6 +536,144 @@
           receipt: receipt,
           result: result,
           workflowOperationKey: workflowOperationKey,
+        };
+      },
+      async reviewMediaOutput(input) {
+        var mediaWorkflowId = identifier(input && input.mediaWorkflowId, 'mediaWorkflowId');
+        var shopId = identifier(input && input.shopId, 'shopId');
+        var listingWorkflowId = identifier(input && input.listingWorkflowId, 'listingWorkflowId');
+        var outputAssetId = identifier(input && input.outputAssetId, 'outputAssetId');
+        var expectedRevision = positiveRevision(input && input.expectedRevision, 'expectedRevision');
+        var draftRevision = positiveRevision(input && input.draftRevision, 'draftRevision');
+        var draftVersion = positiveRevision(input && input.draftVersion, 'draftVersion');
+        var decision = input && input.decision;
+        if (decision !== 'APPROVE' && decision !== 'REJECT') {
+          throw new TypeError('media review decision is invalid');
+        }
+        var note = input && input.note == null ? null : identifier(input.note, 'note', 1000);
+        var command = {
+          schemaVersion: 'ai-media-workflow-review/v1',
+          action: 'REVIEW',
+          mediaWorkflowId: mediaWorkflowId,
+          expectedRevision: expectedRevision,
+          draftRevision: draftRevision,
+          outputAssetId: outputAssetId,
+          decision: decision,
+          note: note,
+        };
+        var idempotencyKey = await stableOperationKey({
+          operation: 'MEDIA_REVIEW', shopId: shopId,
+          listingWorkflowId: listingWorkflowId, draftVersion: draftVersion,
+          command: command,
+        }, 'extension-media-review:');
+        var envelope = {
+          shopId: shopId,
+          workflowId: listingWorkflowId,
+          draftVersion: draftVersion,
+          idempotencyKey: idempotencyKey,
+          command: command,
+        };
+        var completed = await executeGrantedMediaMutation(
+          transport,
+          'MEDIA_REVIEW',
+          'listing:review',
+          envelope,
+        );
+        var result = completed.result;
+        var allowed = [
+          'workflowId', 'action', 'status', 'reviewStatus', 'selectedOutputAssetId',
+          'revision', 'replayed',
+        ];
+        var expectedReviewStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        if (Object.keys(result).some(function (key) { return !allowed.includes(key); })
+          || result.workflowId !== mediaWorkflowId
+          || result.action !== 'REVIEW'
+          || result.status !== 'SUCCEEDED'
+          || result.reviewStatus !== expectedReviewStatus
+          || result.selectedOutputAssetId !== outputAssetId
+          || !Number.isSafeInteger(result.revision) || result.revision <= expectedRevision
+          || typeof result.replayed !== 'boolean') {
+          throw new Error('media review result is invalid');
+        }
+        return {
+          state: 'completed',
+          replay: completed.executedData.replay === true,
+          receipt: completed.receipt,
+          result: result,
+          idempotencyKey: idempotencyKey,
+        };
+      },
+      async applyMediaOutput(input) {
+        var mediaWorkflowId = identifier(input && input.mediaWorkflowId, 'mediaWorkflowId');
+        var shopId = identifier(input && input.shopId, 'shopId');
+        var listingWorkflowId = identifier(input && input.listingWorkflowId, 'listingWorkflowId');
+        var outputAssetId = identifier(input && input.outputAssetId, 'outputAssetId');
+        var expectedWorkflowRevision = positiveRevision(
+          input && input.expectedWorkflowRevision,
+          'expectedWorkflowRevision',
+        );
+        var expectedTargetRevision = positiveRevision(
+          input && input.expectedTargetRevision,
+          'expectedTargetRevision',
+        );
+        var expectedTargetDraftVersion = positiveRevision(
+          input && input.expectedTargetDraftVersion,
+          'expectedTargetDraftVersion',
+        );
+        var command = {
+          schemaVersion: 'ai-media-workflow-apply/v1',
+          action: 'APPLY',
+          mediaWorkflowId: mediaWorkflowId,
+          expectedWorkflowRevision: expectedWorkflowRevision,
+          expectedTargetRevision: expectedTargetRevision,
+          expectedTargetDraftVersion: expectedTargetDraftVersion,
+          outputAssetId: outputAssetId,
+          mode: 'append',
+        };
+        var idempotencyKey = await stableOperationKey({
+          operation: 'MEDIA_APPLY', shopId: shopId,
+          listingWorkflowId: listingWorkflowId,
+          command: command,
+        }, 'extension-media-apply:');
+        var envelope = {
+          shopId: shopId,
+          workflowId: listingWorkflowId,
+          draftVersion: expectedTargetDraftVersion,
+          idempotencyKey: idempotencyKey,
+          command: command,
+        };
+        var completed = await executeGrantedMediaMutation(
+          transport,
+          'MEDIA_APPLY',
+          'listing:write',
+          envelope,
+        );
+        var result = completed.result;
+        var allowed = [
+          'workflowId', 'action', 'status', 'reviewStatus', 'selectedOutputAssetId',
+          'revision', 'applicationId', 'targetRevision', 'targetDraftVersion', 'replayed',
+        ];
+        if (Object.keys(result).some(function (key) { return !allowed.includes(key); })
+          || result.workflowId !== mediaWorkflowId
+          || result.action !== 'APPLY'
+          || result.status !== 'SUCCEEDED'
+          || result.reviewStatus !== 'APPROVED'
+          || result.selectedOutputAssetId !== outputAssetId
+          || !Number.isSafeInteger(result.revision) || result.revision <= expectedWorkflowRevision
+          || !text(result.applicationId, 200)
+          || !Number.isSafeInteger(result.targetRevision)
+          || result.targetRevision <= expectedTargetRevision
+          || !Number.isSafeInteger(result.targetDraftVersion)
+          || result.targetDraftVersion <= expectedTargetDraftVersion
+          || typeof result.replayed !== 'boolean') {
+          throw new Error('media application result is invalid');
+        }
+        return {
+          state: 'completed',
+          replay: completed.executedData.replay === true,
+          receipt: completed.receipt,
+          result: result,
+          idempotencyKey: idempotencyKey,
         };
       },
       async executeMediaCommand(input) {

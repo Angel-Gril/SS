@@ -1417,7 +1417,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     }
   }
 
-  async reviewOwned(input: { id: string; ownerUserId: string; actorUserId: string; expectedRevision: number; outputAssetId: string; decision: 'APPROVE' | 'REJECT'; note: string | null }) {
+  async reviewOwned(input: { id: string; ownerUserId: string; actorUserId: string; expectedRevision: number; outputAssetId: string; decision: 'APPROVE' | 'REJECT'; note: string | null; operationKey?: string }) {
     return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const workflow = await tx.aiMediaWorkflow.findFirst({ where: {
         id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision,
@@ -1447,7 +1447,9 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         workflowId: input.id, ownerUserId: input.ownerUserId, actorUserId: input.actorUserId,
         assetId: output.id, eventKey: `${input.id}:review:${input.expectedRevision}`,
         eventType: input.decision === 'APPROVE' ? 'REVIEW_APPROVED' : 'REVIEW_REJECTED',
-        payload: { note: input.note },
+        payload: input.operationKey
+          ? { note: input.note, operationKey: input.operationKey }
+          : { note: input.note },
       }) });
       return workflowRecord(await tx.aiMediaWorkflow.findUnique({ where: { id: input.id }, include: detailInclude }));
     });

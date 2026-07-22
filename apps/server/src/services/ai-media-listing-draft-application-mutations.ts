@@ -280,6 +280,25 @@ function operationFingerprint(value: Record<string, unknown>): string {
   });
 }
 
+export function createAiMediaListingDraftApplyFingerprint(input: {
+  workflowId: string;
+  mode: 'append' | 'replace';
+  expectedWorkflowRevision: number;
+  expectedTargetRevision: number;
+  expectedTargetDraftVersion: number;
+  replaceConfirmed?: boolean;
+}): string {
+  return operationFingerprint({
+    kind: 'APPLY',
+    workflowId: input.workflowId,
+    mode: input.mode,
+    expectedWorkflowRevision: input.expectedWorkflowRevision,
+    expectedTargetRevision: input.expectedTargetRevision,
+    expectedTargetDraftVersion: input.expectedTargetDraftVersion,
+    replaceConfirmed: input.replaceConfirmed === true,
+  });
+}
+
 const rollbackSummarySelect = {
   id: true,
   createdAt: true,
@@ -644,10 +663,13 @@ export async function applyAiMediaListingDraftApplication(
       'Replacing a listing draft slot requires explicit confirmation',
     );
   }
-  const requestFingerprint = operationFingerprint({
-    kind: 'APPLY', workflowId, mode: input.mode, expectedWorkflowRevision,
-    expectedTargetRevision, expectedTargetDraftVersion,
-    replaceConfirmed: input.replaceConfirmed === true,
+  const requestFingerprint = createAiMediaListingDraftApplyFingerprint({
+    workflowId,
+    mode: input.mode,
+    expectedWorkflowRevision,
+    expectedTargetRevision,
+    expectedTargetDraftVersion,
+    replaceConfirmed: input.replaceConfirmed,
   });
 
   return applicationTransaction(database, {

@@ -14,6 +14,11 @@ import {
   ExtensionMediaWorkflowLaunchError,
   parseExtensionMediaTranslationCreateCommand,
 } from '../services/extension-media-workflow-launch.js';
+import {
+  parseExtensionMediaApplyCommand,
+  parseExtensionMediaReviewCommand,
+} from '../services/extension-media-review-commands.js';
+import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
 
 interface CommandDeviceContext {
   sessionId: string;
@@ -31,6 +36,7 @@ export interface ExtensionCommandResolutionInput {
   shopId: string | null;
   workflowId: string | null;
   draftVersion: number | null;
+  idempotencyKey?: string;
   command: Record<string, unknown>;
 }
 
@@ -80,8 +86,31 @@ export interface SourceWorkflowCommandResolverOptions {
     contextDraftVersion: number | null;
     revision: number;
     status: string;
+    operation?: string;
+    reviewStatus?: string;
+    selectedOutputAssetId?: string | null;
     suiteId: string | null;
     provider: string | null;
+    currentJobStatus?: string | null;
+    outputAssetIds?: string[];
+    reviewEvents?: Array<{
+      eventKey: string;
+      eventType: string;
+      assetId: string | null;
+      payload: unknown;
+    }>;
+    applications?: Array<{
+      assetId: string;
+      operationKey: string;
+      requestFingerprint: string;
+      workflowRevisionBefore: number;
+      workflowRevisionAfter: number;
+      targetRevisionBefore: number;
+      targetDraftVersionBefore: number;
+      targetRevisionAfter: number;
+      targetDraftVersionAfter: number;
+      rolledBackById: string | null;
+    }>;
   } | null>;
   loadMediaLaunchContext?(input: {
     ownerUserId: string;
@@ -150,6 +179,186 @@ export function createSourceWorkflowCommandResolver(
         workflowId: null,
         draftVersion: null,
         command: parsed.data,
+      };
+    }
+    if (input.operation === 'MEDIA_REVIEW' || input.operation === 'MEDIA_APPLY') {
+      if (!input.shopId || !input.workflowId || input.draftVersion == null
+        || !input.idempotencyKey
+        || input.idempotencyKey !== input.idempotencyKey.normalize('NFKC').trim()
+        || input.idempotencyKey.length < 16
+        || input.idempotencyKey.length > 200
+        || !options.loadDraft || !options.loadMediaWorkflow) return { kind: 'forbidden' };
+      let reviewCommand;
+      let applyCommand;
+      try {
+        reviewCommand = input.operation === 'MEDIA_REVIEW'
+          ? parseExtensionMediaReviewCommand(input.command)
+          : null;
+        applyCommand = input.operation === 'MEDIA_APPLY'
+          ? parseExtensionMediaApplyCommand(input.command)
+          : null;
+      } catch (error) {
+        if (error instanceof ExtensionMediaWorkflowLaunchError) return { kind: 'forbidden' };
+        return { kind: 'forbidden' };
+      }
+      const command = reviewCommand || applyCommand;
+      if (!command) return { kind: 'forbidden' };
+      let extensionRollout;
+      let mediaRollouts;
+      try {
+        [extensionRollout, mediaRollouts] = await Promise.all([
+          options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+            ownerUserId: input.ownerUserId,
+            shopId: input.shopId || undefined,
+            deviceSessionId: input.sessionId,
+          }),
+          Promise.all([
+            options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: input.ownerUserId }),
+            options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: input.ownerUserId }),
+          ]),
+        ]);
+      } catch {
+        return { kind: 'rollout_unavailable' };
+      }
+      if (!extensionRollout.enabled || mediaRollouts.some((decision) => !decision.enabled)) {
+        const unavailable = [extensionRollout, ...mediaRollouts]
+          .find((decision) => ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(decision.reason));
+        return unavailable ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
+      }
+      let shop: Awaited<ReturnType<SourceWorkflowCommandResolverOptions['loadShop']>>;
+      let draft: Awaited<ReturnType<NonNullable<SourceWorkflowCommandResolverOptions['loadDraft']>>>;
+      let media: Awaited<ReturnType<NonNullable<SourceWorkflowCommandResolverOptions['loadMediaWorkflow']>>>;
+      try {
+        [shop, draft, media] = await Promise.all([
+          options.loadShop({ shopId: input.shopId!, ownerUserId: input.ownerUserId }),
+          options.loadDraft({ workflowId: input.workflowId!, ownerUserId: input.ownerUserId }),
+          options.loadMediaWorkflow({
+            workflowId: command.mediaWorkflowId,
+            ownerUserId: input.ownerUserId,
+          }),
+        ]);
+      } catch {
+        return { kind: 'rollout_unavailable' };
+      }
+      const commandDraftRevision = reviewCommand
+        ? reviewCommand.draftRevision
+        : applyCommand!.expectedTargetRevision;
+      const commandDraftVersion = reviewCommand
+        ? input.draftVersion
+        : applyCommand!.expectedTargetDraftVersion;
+      if (!shop
+        || shop.id !== input.shopId
+        || shop.userId !== input.ownerUserId
+        || shop.platform !== 'OZON'
+        || shop.status !== 'ACTIVE'
+        || !draft
+        || draft.id !== input.workflowId
+        || draft.ownerUserId !== input.ownerUserId
+        || draft.shopId !== input.shopId
+        || input.draftVersion !== commandDraftVersion
+        || !media
+        || media.id !== command.mediaWorkflowId
+        || media.ownerUserId !== input.ownerUserId
+        || media.contextType !== 'listing-draft'
+        || media.contextId !== draft.id
+        || media.contextDraftRevision !== commandDraftRevision
+        || media.contextDraftVersion !== commandDraftVersion
+        || media.suiteId != null
+        || media.provider !== 'fake'
+        || media.currentJobStatus !== 'SUCCEEDED'
+        || !Array.isArray(media.outputAssetIds)
+        || !media.outputAssetIds.includes(command.outputAssetId)) {
+        return { kind: 'forbidden' };
+      }
+      if (reviewCommand) {
+        const expectedReviewStatus = reviewCommand.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        const expectedEventType = reviewCommand.decision === 'APPROVE'
+          ? 'REVIEW_APPROVED'
+          : 'REVIEW_REJECTED';
+        const expectedEventKey = `${media.id}:review:${reviewCommand.expectedRevision}`;
+        const matchingAudit = Array.isArray(media.reviewEvents)
+          && media.reviewEvents.some((event) => {
+            const payload = event?.payload && typeof event.payload === 'object'
+              && !Array.isArray(event.payload)
+              ? event.payload as Record<string, unknown>
+              : null;
+            return event.eventKey === expectedEventKey
+              && event.eventType === expectedEventType
+              && event.assetId === reviewCommand.outputAssetId
+              && payload
+              && Object.keys(payload).sort().join(',') === 'note,operationKey'
+              && Object.prototype.hasOwnProperty.call(payload, 'note')
+              && payload.note === reviewCommand.note
+              && payload.operationKey === input.idempotencyKey;
+          });
+        const pending = media.reviewStatus === 'PENDING'
+          && media.revision === reviewCommand.expectedRevision;
+        const replay = media.reviewStatus === expectedReviewStatus
+          && media.selectedOutputAssetId === reviewCommand.outputAssetId
+          && media.revision > reviewCommand.expectedRevision
+          && matchingAudit;
+        const pendingReview = pending
+          && draft.revision === reviewCommand.draftRevision
+          && draft.draftVersion === input.draftVersion;
+        const replayedReview = replay
+          && draft.revision >= reviewCommand.draftRevision
+          && draft.draftVersion >= input.draftVersion;
+        if (media.status !== 'SUCCEEDED'
+          || (!pendingReview && !replayedReview)) {
+          return { kind: 'stale' };
+        }
+      } else {
+        const applications = Array.isArray(media.applications) ? media.applications : [];
+        const outputAlreadyApplied = applications.some((application) => (
+          application.assetId === applyCommand!.outputAssetId
+        ));
+        const expectedFingerprint = createAiMediaListingDraftApplyFingerprint({
+          workflowId: media.id,
+          mode: 'append',
+          expectedWorkflowRevision: applyCommand!.expectedWorkflowRevision,
+          expectedTargetRevision: applyCommand!.expectedTargetRevision,
+          expectedTargetDraftVersion: applyCommand!.expectedTargetDraftVersion,
+          replaceConfirmed: false,
+        });
+        const matchingApplication = input.idempotencyKey
+          ? applications.find((application) => (
+            application.assetId === applyCommand!.outputAssetId
+            && application.operationKey === input.idempotencyKey
+            && application.requestFingerprint === expectedFingerprint
+            && application.workflowRevisionBefore === applyCommand!.expectedWorkflowRevision
+            && application.targetRevisionBefore === applyCommand!.expectedTargetRevision
+            && application.targetDraftVersionBefore === applyCommand!.expectedTargetDraftVersion
+            && application.workflowRevisionAfter > application.workflowRevisionBefore
+            && application.targetRevisionAfter > application.targetRevisionBefore
+            && application.targetDraftVersionAfter > application.targetDraftVersionBefore
+            && application.rolledBackById === null
+          ))
+          : null;
+        const pendingApply = draft.revision === applyCommand!.expectedTargetRevision
+          && draft.draftVersion === applyCommand!.expectedTargetDraftVersion
+          && media.revision === applyCommand!.expectedWorkflowRevision
+          && !outputAlreadyApplied;
+        const replayedApply = Boolean(matchingApplication
+          && draft.revision >= matchingApplication.targetRevisionAfter
+          && draft.draftVersion >= matchingApplication.targetDraftVersionAfter
+          && media.revision >= matchingApplication.workflowRevisionAfter);
+        if (media.status !== 'SUCCEEDED'
+          || media.reviewStatus !== 'APPROVED'
+          || media.selectedOutputAssetId !== applyCommand!.outputAssetId
+          || (!pendingApply && !replayedApply)) {
+          return { kind: 'stale' };
+        }
+      }
+      return {
+        kind: 'allowed',
+        shopId: shop.id,
+        workflowId: draft.id,
+        // Replays remain bound to the immutable command context even after
+        // a successful apply advances the current listing draft version.
+        draftVersion: commandDraftVersion,
+        // The parsed command is a strict JSON object; spreading it keeps the
+        // resolver contract independent from the parser's branded interface.
+        command: { ...command },
       };
     }
     if (input.operation === 'MEDIA_EXECUTE') {
@@ -425,6 +634,10 @@ interface ExtensionCommandGrantRouteService {
     requestHash: string;
     token: string;
   }): Promise<{ kind: 'execute' | 'replay'; receipt: { id: string; status: string; result: unknown; failureCode: string | null } }>;
+  claimPendingRecovery(input: { receiptId: string }): Promise<{
+    kind: 'acquired' | 'not_ready';
+    receipt: { id: string; status: string; result: unknown; failureCode: string | null };
+  }>;
   complete(input: { receiptId: string; result: unknown }): Promise<unknown>;
   fail(input: { receiptId: string; failureCode: string; result?: unknown }): Promise<unknown>;
 }
@@ -457,6 +670,24 @@ export interface ExtensionCommandGrantRoutesOptions {
     revision: number;
     replayed?: boolean;
   }>;
+  executeMediaReviewCommand?(input: {
+    ownerUserId: string;
+    actorUserId: string;
+    shopId: string;
+    listingWorkflowId: string;
+    draftVersion: number;
+    idempotencyKey: string;
+    command: Record<string, unknown>;
+  }): Promise<Record<string, unknown>>;
+  executeMediaApplyCommand?(input: {
+    ownerUserId: string;
+    actorUserId: string;
+    shopId: string;
+    listingWorkflowId: string;
+    draftVersion: number;
+    idempotencyKey: string;
+    command: Record<string, unknown>;
+  }): Promise<Record<string, unknown>>;
 }
 
 const requestSchema = z.object({
@@ -474,6 +705,14 @@ const executeSchema = z.object({
   idempotencyKey: z.string().trim().min(16).max(200),
   command: z.record(z.string(), z.unknown()),
 }).strict();
+const mediaExecuteSchema = z.object({
+  operation: z.enum(['MEDIA_EXECUTE', 'MEDIA_REVIEW', 'MEDIA_APPLY']).optional(),
+  shopId: z.string().trim().min(1).max(200),
+  workflowId: z.string().trim().min(1).max(200),
+  draftVersion: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(16).max(200),
+  command: z.record(z.string(), z.unknown()),
+}).strict();
 
 const mediaCommandUnavailableCodes = new Set([
   'MEDIA_CAPABILITY_UNAVAILABLE',
@@ -481,9 +720,16 @@ const mediaCommandUnavailableCodes = new Set([
   'MEDIA_CONTEXT_UNAVAILABLE',
   'MEDIA_PROMPT_UNAVAILABLE',
   'MEDIA_QUEUE_UNAVAILABLE',
+  'MEDIA_APPLY_STATE_UNAVAILABLE',
   'MEDIA_SOURCE_UNAVAILABLE',
   'MEDIA_STORAGE_NOT_READY',
   'STORAGE_NOT_READY',
+]);
+
+const mediaCommandRecoveryRequiredCodes = new Set([
+  // The application may already be committed when its result projection is
+  // temporarily unavailable. Preserve PENDING so exact ledger recovery can run.
+  'MEDIA_APPLY_STATE_UNAVAILABLE',
 ]);
 
 function error(reply: FastifyReply, statusCode: number, errorCode: string, message: string) {
@@ -530,6 +776,7 @@ export async function extensionCommandGrantRoutes(
       shopId: requestedShopId,
       workflowId: parsed.data.workflowId || null,
       draftVersion: parsed.data.draftVersion ?? null,
+      idempotencyKey: parsed.data.idempotencyKey,
       command: parsed.data.command,
     });
     if (resolution.kind !== 'allowed') {
@@ -607,6 +854,7 @@ export async function extensionCommandGrantRoutes(
         shopId: parsed.data.shopId,
         workflowId: parsed.data.workflowId,
         draftVersion: parsed.data.draftVersion,
+        idempotencyKey: parsed.data.idempotencyKey,
         command: parsed.data.command,
       });
       if (resolution.kind !== 'allowed'
@@ -676,11 +924,13 @@ export async function extensionCommandGrantRoutes(
   });
 
   app.post('/media-workflows/execute', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
-    const parsed = executeSchema.safeParse(request.body);
+    const parsed = mediaExecuteSchema.safeParse(request.body);
     if (!parsed.success) return error(reply, 400, 'invalid_request', '参数错误');
     const device = deviceContext(request);
     if (!device) return error(reply, 401, 'invalid_device_token', '无效的设备令牌');
-    if (!device.scopes.includes(EXTENSION_COMMAND_SCOPE_BY_OPERATION.MEDIA_EXECUTE)
+    const operation = parsed.data.operation || 'MEDIA_EXECUTE';
+    const requiredScope = EXTENSION_COMMAND_SCOPE_BY_OPERATION[operation];
+    if (!device.scopes.includes(requiredScope)
       || !device.allowedShopIds.includes(parsed.data.shopId)) {
       return error(reply, 403, 'command_scope_denied', '设备无权执行媒体任务命令');
     }
@@ -690,10 +940,11 @@ export async function extensionCommandGrantRoutes(
       const resolution = await options.resolveCommand({
         sessionId: device.sessionId,
         ownerUserId: device.ownerUserId,
-        operation: 'MEDIA_EXECUTE',
+        operation,
         shopId: parsed.data.shopId,
         workflowId: parsed.data.workflowId,
         draftVersion: parsed.data.draftVersion,
+        idempotencyKey: parsed.data.idempotencyKey,
         command: parsed.data.command,
       });
       if (resolution.kind !== 'allowed'
@@ -713,7 +964,7 @@ export async function extensionCommandGrantRoutes(
         return error(reply, statusCode, code, message);
       }
       const envelope = {
-        operation: 'MEDIA_EXECUTE' as const,
+        operation,
         shopId: resolution.shopId,
         workflowId: resolution.workflowId,
         draftVersion: resolution.draftVersion,
@@ -724,26 +975,56 @@ export async function extensionCommandGrantRoutes(
         tokenId: device.tokenId,
         ownerUserId: device.ownerUserId,
         shopId: resolution.shopId,
-        operation: 'MEDIA_EXECUTE',
+        operation,
         workflowId: resolution.workflowId,
         draftVersion: resolution.draftVersion,
         idempotencyKey: parsed.data.idempotencyKey,
         requestHash: hashExtensionCommandRequest(envelope),
         token,
       });
-      if (authorized.kind === 'replay') {
+      const pendingReplay = authorized.kind === 'replay'
+        && authorized.receipt.status === 'PENDING'
+        && operation !== 'MEDIA_EXECUTE';
+      let recoverPending = false;
+      if (pendingReplay) {
+        const recovery = await options.service.claimPendingRecovery({
+          receiptId: authorized.receipt.id,
+        });
+        if (recovery.kind !== 'acquired') {
+          return reply.status(recovery.receipt.status === 'PENDING' ? 202 : 200).send({
+            code: 1,
+            data: { receipt: recovery.receipt, replay: true },
+          });
+        }
+        recoverPending = true;
+      }
+      if (authorized.kind === 'replay' && !recoverPending) {
         return reply.send({ code: 1, data: { receipt: authorized.receipt, replay: true } });
       }
+      let result: Record<string, unknown> | undefined;
       try {
-        const result = await options.executeMediaWorkflowCommand?.({
+        const executorInput = {
           ownerUserId: device.ownerUserId,
           actorUserId: device.actorUserId,
           shopId: parsed.data.shopId,
           listingWorkflowId: parsed.data.workflowId,
           draftVersion: parsed.data.draftVersion,
-          idempotencyKey: parsed.data.idempotencyKey,
           command: resolution.command,
-        });
+        };
+        result = operation === 'MEDIA_REVIEW'
+          ? await options.executeMediaReviewCommand?.({
+            ...executorInput,
+            idempotencyKey: parsed.data.idempotencyKey,
+          })
+          : operation === 'MEDIA_APPLY'
+            ? await options.executeMediaApplyCommand?.({
+              ...executorInput,
+              idempotencyKey: parsed.data.idempotencyKey,
+            })
+            : await options.executeMediaWorkflowCommand?.({
+              ...executorInput,
+              idempotencyKey: parsed.data.idempotencyKey,
+            });
         if (result === undefined) {
           await options.service.fail({
             receiptId: authorized.receipt.id,
@@ -751,11 +1032,6 @@ export async function extensionCommandGrantRoutes(
           });
           return error(reply, 503, 'media_command_executor_unavailable', '媒体任务执行器暂不可用');
         }
-        const receipt = await options.service.complete({
-          receiptId: authorized.receipt.id,
-          result,
-        });
-        return reply.status(202).send({ code: 1, data: { receipt, replay: false } });
       } catch (caught) {
         const candidateCode = caught && typeof caught === 'object'
           ? String((caught as { code?: unknown }).code || '')
@@ -763,6 +1039,14 @@ export async function extensionCommandGrantRoutes(
         const failureCode = /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidateCode)
           ? candidateCode
           : 'MEDIA_COMMAND_FAILED';
+        if (mediaCommandRecoveryRequiredCodes.has(failureCode)) {
+          return reply.status(503).send({
+            code: 0,
+            errorCode: 'media_command_unavailable',
+            msg: '媒体任务服务暂不可用',
+            data: { receipt: authorized.receipt },
+          });
+        }
         const receipt = await options.service.fail({
           receiptId: authorized.receipt.id,
           failureCode,
@@ -776,6 +1060,16 @@ export async function extensionCommandGrantRoutes(
           data: { receipt },
         });
       }
+      // The business mutation has succeeded. A transient receipt write failure
+      // must leave the receipt PENDING so the recovery lease can replay it.
+      const receipt = await options.service.complete({
+        receiptId: authorized.receipt.id,
+        result,
+      });
+      return reply.status(recoverPending ? 200 : 202).send({
+        code: 1,
+        data: { receipt, replay: recoverPending },
+      });
     } catch (caught) {
       if (!(caught instanceof ExtensionCommandGrantError)) throw caught;
       return error(reply, caught.statusCode, caught.code, caught.message);

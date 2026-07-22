@@ -171,6 +171,199 @@ describePostgres('extension command grant PostgreSQL integration', () => {
     expect(Number(rows[0]?.count || 0)).toBe(1);
   });
 
+  it('renews only unconsumed exact grants and replays receipts across token rotation', async () => {
+    const seed = await seedAuthorizedDevice(first, 'renew');
+    const store = createPrismaExtensionCommandGrantStore({ client: first });
+    const issuedAt = new Date(Date.now() - 120_000);
+    const original = commandGrant(seed, {
+      issuedAt,
+      expiresAt: new Date(issuedAt.getTime() + 60_000),
+    });
+    const issued = await store.issueGrant(original);
+    if (!('grant' in issued)) throw new Error('expected initial command grant');
+    const currentTokenId = `${seed.prefix}_rotated_jti`;
+    await first.$executeRawUnsafe(
+      'UPDATE "extension_device_sessions" SET "current_jti" = $1, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = $2',
+      currentTokenId,
+      seed.sessionId,
+    );
+    const renewalTime = new Date();
+    const renewed = await store.issueGrant(commandGrant(seed, {
+      tokenId: currentTokenId,
+      issuedAt: renewalTime,
+      expiresAt: new Date(renewalTime.getTime() + 60_000),
+    }));
+    expect(renewed).toMatchObject({
+      kind: 'renewed',
+      grant: { id: issued.grant.id, tokenId: currentTokenId, consumedAt: null },
+    });
+    if (!('grant' in renewed)) throw new Error('expected renewed command grant');
+
+    const consumed = await store.consumeOrReplay({
+      tokenDigest: renewed.grant.tokenDigest,
+      binding: commandBinding(renewed.grant),
+      receiptId: randomUUID(),
+      now: new Date(),
+    });
+    if (consumed.kind !== 'execute') throw new Error('expected executable renewed grant');
+    const completed = await store.completeReceipt({
+      receiptId: consumed.receipt.id,
+      status: 'SUCCEEDED',
+      result: { action: 'REVIEW' },
+      failureCode: null,
+      now: new Date(),
+    });
+    expect(completed).toMatchObject({ kind: 'completed' });
+
+    const nextTokenId = `${seed.prefix}_next_jti`;
+    await first.$executeRawUnsafe(
+      'UPDATE "extension_device_sessions" SET "current_jti" = $1, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = $2',
+      nextTokenId,
+      seed.sessionId,
+    );
+    const replayGrant = await store.issueGrant(commandGrant(seed, { tokenId: nextTokenId }));
+    expect(replayGrant).toMatchObject({ kind: 'replay', grant: { id: issued.grant.id } });
+    await expect(store.consumeOrReplay({
+      tokenDigest: renewed.grant.tokenDigest,
+      binding: { ...commandBinding(renewed.grant), tokenId: nextTokenId },
+      receiptId: randomUUID(),
+      now: new Date(),
+    })).resolves.toMatchObject({ kind: 'replay', receipt: { status: 'SUCCEEDED' } });
+  }, 30_000);
+
+  it('keeps the durable command binding immutable', async () => {
+    const seed = await seedAuthorizedDevice(first, 'immutable_binding');
+    const store = createPrismaExtensionCommandGrantStore({ client: first });
+    const issued = await store.issueGrant(commandGrant(seed));
+    if (!('grant' in issued)) throw new Error('expected issued immutable-binding grant');
+
+    const mutations = [
+      () => first.$executeRawUnsafe(
+        'UPDATE "extension_command_grants" SET "request_hash" = $2 WHERE "id" = $1',
+        issued.grant.id,
+        'f'.repeat(64),
+      ),
+      () => first.$executeRawUnsafe(
+        'UPDATE "extension_command_grants" SET "workflow_id" = $2 WHERE "id" = $1',
+        issued.grant.id,
+        `${seed.prefix}_other_workflow`,
+      ),
+      () => first.$executeRawUnsafe(
+        'UPDATE "extension_command_grants" SET "idempotency_key" = $2 WHERE "id" = $1',
+        issued.grant.id,
+        `${seed.prefix}_other_operation_key`,
+      ),
+    ];
+    for (const mutation of mutations) {
+      await expect(mutation()).rejects.toThrow(/extension command grant binding is immutable/iu);
+    }
+
+    const rows = await first.$queryRawUnsafe<Array<{
+      workflowId: string | null;
+      idempotencyKey: string;
+      requestHash: string;
+    }>>(
+      `SELECT "workflow_id" AS "workflowId",
+              "idempotency_key" AS "idempotencyKey",
+              "request_hash" AS "requestHash"
+       FROM "extension_command_grants"
+       WHERE "id" = $1`,
+      issued.grant.id,
+    );
+    expect(rows[0]).toEqual({
+      workflowId: issued.grant.workflowId,
+      idempotencyKey: issued.grant.idempotencyKey,
+      requestHash: issued.grant.requestHash,
+    });
+  });
+
+  it('rejects renewal of consumed, revoked, or receipt-bound grants', async () => {
+    type RenewalFixture = {
+      grant: ExtensionCommandGrantRecord;
+      nextTokenId: string;
+      renewalTime: Date;
+    };
+    const fixtures: RenewalFixture[] = [];
+
+    async function renewableGrant(label: string): Promise<RenewalFixture> {
+      const seed = await seedAuthorizedDevice(first, label);
+      const store = createPrismaExtensionCommandGrantStore({ client: first });
+      const result = await store.issueGrant(commandGrant(seed));
+      if (!('grant' in result)) throw new Error(`expected issued ${label} grant`);
+      const nextTokenId = `${seed.prefix}_renewal_jti`;
+      await first.$executeRawUnsafe(
+        'UPDATE "extension_device_sessions" SET "current_jti" = $1, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = $2',
+        nextTokenId,
+        seed.sessionId,
+      );
+      return {
+        grant: result.grant,
+        nextTokenId,
+        renewalTime: new Date(Math.max(Date.now(), result.grant.issuedAt.getTime() + 1)),
+      };
+    }
+
+    const consumed = await renewableGrant('renew_consumed');
+    await first.$executeRawUnsafe(
+      'UPDATE "extension_command_grants" SET "consumed_at" = $2 WHERE "id" = $1',
+      consumed.grant.id,
+      consumed.renewalTime,
+    );
+    fixtures.push(consumed);
+
+    const revoked = await renewableGrant('renew_revoked');
+    const revokedStore = createPrismaExtensionCommandGrantStore({ client: first });
+    await expect(revokedStore.revokeGrant({
+      grantId: revoked.grant.id,
+      ownerUserId: revoked.grant.ownerUserId,
+      reason: 'OWNER_REVOKED',
+      now: revoked.renewalTime,
+    })).resolves.toMatchObject({ kind: 'revoked' });
+    fixtures.push(revoked);
+
+    const receiptBound = await renewableGrant('renew_receipt');
+    const receiptCreatedAt = receiptBound.renewalTime;
+    await first.$executeRawUnsafe(
+      'UPDATE "extension_command_grants" SET "consumed_at" = $2 WHERE "id" = $1',
+      receiptBound.grant.id,
+      receiptCreatedAt,
+    );
+    await first.$executeRawUnsafe(
+      `INSERT INTO "extension_command_receipts"
+         ("id", "grant_id", "status", "result", "failure_code",
+          "recovery_not_before", "created_at", "completed_at")
+       VALUES ($1, $2, 'PENDING', NULL, NULL, $4, $3, NULL)`,
+      randomUUID(),
+      receiptBound.grant.id,
+      receiptCreatedAt,
+      new Date(receiptCreatedAt.getTime() + 60_000),
+    );
+    fixtures.push(receiptBound);
+
+    for (const fixture of fixtures) {
+      await expect(first.$executeRawUnsafe(
+        `UPDATE "extension_command_grants"
+         SET "token_id" = $2, "issued_at" = $3, "expires_at" = $4
+         WHERE "id" = $1`,
+        fixture.grant.id,
+        fixture.nextTokenId,
+        fixture.renewalTime,
+        new Date(fixture.renewalTime.getTime() + 60_000),
+      )).rejects.toThrow(/extension command grant renewal is invalid/iu);
+    }
+
+    const persisted = await first.$queryRawUnsafe<Array<{ id: string; tokenId: string }>>(
+      `SELECT "id", "token_id" AS "tokenId"
+       FROM "extension_command_grants"
+       WHERE "id" = ANY($1::text[])
+       ORDER BY "id"`,
+      fixtures.map(({ grant }) => grant.id),
+    );
+    expect(persisted).toHaveLength(3);
+    const expectedTokenIds = new Map(fixtures.map(({ grant }) => [grant.id, grant.tokenId]));
+    expect(persisted.every(({ id, tokenId }) => expectedTokenIds.get(id) === tokenId)).toBe(true);
+  }, 30_000);
+
   it('allows one concurrent consumer and replays the single durable receipt', async () => {
     const seed = await seedAuthorizedDevice(first, 'consume');
     const firstStore = createPrismaExtensionCommandGrantStore({ client: first });
@@ -207,6 +400,70 @@ describePostgres('extension command grant PostgreSQL integration', () => {
     );
     expect(Number(rows[0]?.count || 0)).toBe(1);
   });
+
+  it('leases one pending recovery across connections and keeps the lease monotonic', async () => {
+    const seed = await seedAuthorizedDevice(first, 'recovery_lease');
+    const firstStore = createPrismaExtensionCommandGrantStore({ client: first });
+    const secondStore = createPrismaExtensionCommandGrantStore({ client: second });
+    const issued = await firstStore.issueGrant(commandGrant(seed));
+    if (!('grant' in issued)) throw new Error('expected issued recovery grant');
+    const consumedAt = new Date();
+    const consumed = await firstStore.consumeOrReplay({
+      tokenDigest: issued.grant.tokenDigest,
+      binding: commandBinding(issued.grant),
+      receiptId: randomUUID(),
+      now: consumedAt,
+    });
+    if (consumed.kind !== 'execute') throw new Error('expected pending recovery receipt');
+
+    const initialRows = await first.$queryRawUnsafe<Array<{ recoveryNotBefore: Date }>>(
+      `SELECT "recovery_not_before" AS "recoveryNotBefore"
+       FROM "extension_command_receipts"
+       WHERE "id" = $1`,
+      consumed.receipt.id,
+    );
+    const initialLease = initialRows[0]?.recoveryNotBefore;
+    if (!initialLease) throw new Error('expected initial recovery lease');
+    const claimTime = new Date(initialLease.getTime() + 1);
+    const nextLease = new Date(claimTime.getTime() + 60_000);
+
+    const claims = await Promise.all([
+      firstStore.claimPendingRecovery({
+        receiptId: consumed.receipt.id,
+        now: claimTime,
+        recoveryNotBefore: nextLease,
+      }),
+      secondStore.claimPendingRecovery({
+        receiptId: consumed.receipt.id,
+        now: claimTime,
+        recoveryNotBefore: nextLease,
+      }),
+    ]);
+    expect(claims.map(({ kind }) => kind).sort()).toEqual(['acquired', 'not_ready']);
+
+    const acquiredRows = await first.$queryRawUnsafe<Array<{ recoveryNotBefore: Date }>>(
+      `SELECT "recovery_not_before" AS "recoveryNotBefore"
+       FROM "extension_command_receipts"
+       WHERE "id" = $1`,
+      consumed.receipt.id,
+    );
+    expect(acquiredRows[0]?.recoveryNotBefore).toEqual(nextLease);
+
+    for (const invalidLease of [nextLease, new Date(nextLease.getTime() - 1)]) {
+      await expect(firstStore.claimPendingRecovery({
+        receiptId: consumed.receipt.id,
+        now: new Date(nextLease.getTime() + 1),
+        recoveryNotBefore: invalidLease,
+      })).rejects.toThrow(/pending extension command receipt recovery lease is invalid/iu);
+    }
+    const finalRows = await first.$queryRawUnsafe<Array<{ recoveryNotBefore: Date }>>(
+      `SELECT "recovery_not_before" AS "recoveryNotBefore"
+       FROM "extension_command_receipts"
+       WHERE "id" = $1`,
+      consumed.receipt.id,
+    );
+    expect(finalRows[0]?.recoveryNotBefore).toEqual(nextLease);
+  }, 30_000);
 
   it('rechecks grant, session, current JTI, and scope immediately before consumption', async () => {
     const store = createPrismaExtensionCommandGrantStore({ client: first });

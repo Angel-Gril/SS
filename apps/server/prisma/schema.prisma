@@ -134,6 +134,8 @@ enum ExtensionCommandOperation {
   LISTING_WRITE
   LISTING_REVIEW
   MEDIA_EXECUTE
+  MEDIA_REVIEW
+  MEDIA_APPLY
   OZON_PUBLISH
 }
 
@@ -4016,14 +4018,15 @@ model ExtensionCommandGrant {
 }
 
 model ExtensionCommandReceipt {
-  id          String                        @id
-  grantId     String                        @unique @map("grant_id")
-  grant       ExtensionCommandGrant         @relation(fields: [grantId], references: [id], onDelete: Restrict)
-  status      ExtensionCommandReceiptStatus @default(PENDING)
-  result      Json?
-  failureCode String?                       @map("failure_code")
-  createdAt   DateTime                      @default(now()) @map("created_at")
-  completedAt DateTime?                     @map("completed_at")
+  id                  String                        @id
+  grantId             String                        @unique @map("grant_id")
+  grant               ExtensionCommandGrant         @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  status              ExtensionCommandReceiptStatus @default(PENDING)
+  result              Json?
+  failureCode         String?                       @map("failure_code")
+  recoveryNotBefore   DateTime?                     @map("recovery_not_before")
+  createdAt           DateTime                      @default(now()) @map("created_at")
+  completedAt         DateTime?                     @map("completed_at")
 
   @@index([status, createdAt])
   @@map("extension_command_receipts")

@@ -55,6 +55,20 @@ const SS_ERP_SOURCE_WORKBENCH_MEDIA_HISTORY_MESSAGE =
   'ss-erp:source-listing-workbench-media-history';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-media-command';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE =
+  'ss-erp:source-listing-workbench-media-confirm-prepare';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_READ_MESSAGE =
+  'ss-erp:source-listing-workbench-media-confirm-read';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_SUBMIT_MESSAGE =
+  'ss-erp:source-listing-workbench-media-confirm-submit';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_CANCEL_MESSAGE =
+  'ss-erp:source-listing-workbench-media-confirm-cancel';
+const SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_PAGE_LIMIT = 10;
+const SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_MAX_PAGES = 5;
+const SS_ERP_SOURCE_MEDIA_CONFIRMATIONS_KEY =
+  'ss-erp:source-workbench:media-confirmations:v1';
+const SS_ERP_SOURCE_MEDIA_CONFIRMATION_LIMIT = 20;
+const SS_ERP_SOURCE_MEDIA_CONFIRMATION_TTL_MS = 2 * 60 * 1000;
 const SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY =
   'ss-erp:source-workbench:translation-intents:v1';
 const SS_ERP_SOURCE_TRANSLATION_INTENT_LIMIT = 20;
@@ -62,6 +76,10 @@ const SS_ERP_SOURCE_TRANSLATION_INTENT_LIMIT = 20;
 // than the device access token. Keep the durable intent long enough to retry
 // a lost response without creating a second billable workflow.
 const SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
+const SS_ERP_SOURCE_MEDIA_MUTATION_INTENTS_KEY =
+  'ss-erp:source-workbench:media-mutation-intents:v1';
+const SS_ERP_SOURCE_MEDIA_MUTATION_INTENT_LIMIT = 20;
+const SS_ERP_SOURCE_MEDIA_MUTATION_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
@@ -235,6 +253,15 @@ try { importScripts('../shared/erp-adapter/source-workflow-device-session.js'); 
 try { importScripts('../shared/erp-adapter/listing-workflow-client.js'); } catch (error) {
   console.warn('[SS ERP] listing workflow client module failed to load', error);
 }
+try { importScripts('../shared/erp-adapter/source-media-mutation-intent.js'); } catch (error) {
+  console.warn('[SS ERP] source media mutation intent module failed to load', error);
+}
+try { importScripts('../shared/erp-adapter/source-media-confirmation.js'); } catch (error) {
+  console.warn('[SS ERP] source media confirmation module failed to load', error);
+}
+try { importScripts('../shared/erp-adapter/source-media-confirmation-coordinator.js'); } catch (error) {
+  console.warn('[SS ERP] source media confirmation coordinator failed to load', error);
+}
 
 try { importScripts('../shared/logistics-rules/manual-fallback-persistence.js'); } catch (error) {
   console.warn('[SS ERP] logistics manual fallback module failed to load', error);
@@ -266,6 +293,8 @@ let logisticsBindingProbeMessageHandler = null;
 let sourceCaptureSubmitter = null;
 let sourceListingWorkflowClient = null;
 let sourceTranslationIntentWriteQueue = Promise.resolve();
+let sourceMediaMutationIntentStore = null;
+let sourceMediaConfirmationCoordinator = null;
 const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
@@ -604,6 +633,64 @@ async function clearSourceTranslationIntent(identity) {
   });
 }
 
+function getSourceMediaMutationIntentContract() {
+  const contract = globalThis.SS_ERP_SOURCE_MEDIA_MUTATION_INTENT;
+  if (!contract || typeof contract.identity !== 'function'
+    || typeof contract.createStore !== 'function') {
+    throw new Error('ERP 媒体结果操作意图安全契约不可用');
+  }
+  return contract;
+}
+
+function getSourceMediaMutationIntentStore() {
+  if (sourceMediaMutationIntentStore) return sourceMediaMutationIntentStore;
+  sourceMediaMutationIntentStore = getSourceMediaMutationIntentContract().createStore({
+    storage: chrome.storage.local,
+    storageKey: SS_ERP_SOURCE_MEDIA_MUTATION_INTENTS_KEY,
+    ttlMs: SS_ERP_SOURCE_MEDIA_MUTATION_INTENT_TTL_MS,
+    limit: SS_ERP_SOURCE_MEDIA_MUTATION_INTENT_LIMIT,
+  });
+  return sourceMediaMutationIntentStore;
+}
+
+function sourceMediaMutationIntentIdentity(value) {
+  return getSourceMediaMutationIntentContract().identity(value);
+}
+
+function readSourceMediaMutationIntent(identity) {
+  return getSourceMediaMutationIntentStore().read(identity);
+}
+
+async function getOrCreateSourceMediaMutationIntent(input) {
+  const result = await getSourceMediaMutationIntentStore().getOrCreate(input);
+  return result.intent;
+}
+
+async function executeSourceMediaMutationIntent(client, intent) {
+  if (intent.action === 'REVIEW_APPROVE' || intent.action === 'REVIEW_REJECT') {
+    return client.reviewMediaOutput({
+      mediaWorkflowId: intent.mediaWorkflowId,
+      shopId: intent.shopId,
+      listingWorkflowId: intent.listingWorkflowId,
+      outputAssetId: intent.outputAssetId,
+      expectedRevision: intent.expectedWorkflowRevision,
+      draftRevision: intent.expectedTargetRevision,
+      draftVersion: intent.expectedTargetDraftVersion,
+      decision: intent.action === 'REVIEW_APPROVE' ? 'APPROVE' : 'REJECT',
+      note: null,
+    });
+  }
+  return client.applyMediaOutput({
+    mediaWorkflowId: intent.mediaWorkflowId,
+    shopId: intent.shopId,
+    listingWorkflowId: intent.listingWorkflowId,
+    outputAssetId: intent.outputAssetId,
+    expectedWorkflowRevision: intent.expectedWorkflowRevision,
+    expectedTargetRevision: intent.expectedTargetRevision,
+    expectedTargetDraftVersion: intent.expectedTargetDraftVersion,
+  });
+}
+
 function currentSourceListingContext(result, requestedListingWorkflowId) {
   if (!result || result.state !== 'ready' || !result.status
     || result.status.snapshot?.current !== true) return null;
@@ -624,6 +711,255 @@ function currentSourceListingContext(result, requestedListingWorkflowId) {
     revision: item.revision,
     draftVersion: item.draftVersion,
   };
+}
+
+async function loadBoundedSourceMediaHistoryItem(client, handoff, listing, mediaWorkflowId) {
+  let beforeCursor = null;
+  const seenCursors = new Set();
+  for (let page = 0; page < SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_MAX_PAGES; page += 1) {
+    const result = await client.getMediaHistory({
+      snapshotId: handoff.snapshotId,
+      supplyGoodsId: handoff.supplyGoodsId,
+      shopId: listing.shopId,
+      listingWorkflowId: listing.listingWorkflowId,
+      revision: listing.revision,
+      draftVersion: listing.draftVersion,
+      limit: SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_PAGE_LIMIT,
+      beforeCursor,
+    });
+    if (!result || result.state !== 'ready' || !result.history) {
+      throw new Error('ERP 媒体历史暂不可用');
+    }
+    const item = result.history.items.find((candidate) => candidate.id === mediaWorkflowId);
+    if (item) return item;
+    const nextCursor = result.history.nextCursor;
+    if (!nextCursor) return null;
+    if (seenCursors.has(nextCursor)) throw new Error('ERP 媒体历史游标重复');
+    seenCursors.add(nextCursor);
+    beforeCursor = nextCursor;
+  }
+  throw new Error('ERP 媒体任务超出安全读取范围，请在 ERP 中处理');
+}
+
+function getSourceMediaConfirmationContract() {
+  const contract = globalThis.SS_ERP_SOURCE_MEDIA_CONFIRMATION;
+  if (!contract || typeof contract.createNonce !== 'function'
+    || typeof contract.isNonce !== 'function'
+    || typeof contract.normalizeIntent !== 'function'
+    || typeof contract.publicConfirmation !== 'function'
+    || typeof contract.createSerialQueue !== 'function'
+    || typeof contract.bindSender !== 'function'
+    || typeof contract.isBoundSender !== 'function') {
+    throw new Error('ERP 媒体确认安全契约不可用');
+  }
+  return contract;
+}
+
+function getSourceMediaConfirmationCoordinator() {
+  if (sourceMediaConfirmationCoordinator) return sourceMediaConfirmationCoordinator;
+  const factory = globalThis.SS_ERP_SOURCE_MEDIA_CONFIRMATION_COORDINATOR;
+  if (!factory || typeof factory.createCoordinator !== 'function') {
+    throw new Error('ERP 媒体确认编排契约不可用');
+  }
+  if (!chrome.storage?.session || typeof chrome.storage.session.get !== 'function'
+    || typeof chrome.storage.session.set !== 'function') {
+    throw new Error('浏览器不支持安全的临时确认存储');
+  }
+  sourceMediaConfirmationCoordinator = factory.createCoordinator({
+    contract: getSourceMediaConfirmationContract(),
+    storage: chrome.storage.session,
+    windows: chrome.windows,
+    tabs: chrome.tabs,
+    runtime: chrome.runtime,
+    crypto: globalThis.crypto,
+    storageKey: SS_ERP_SOURCE_MEDIA_CONFIRMATIONS_KEY,
+    ttlMs: SS_ERP_SOURCE_MEDIA_CONFIRMATION_TTL_MS,
+    limit: SS_ERP_SOURCE_MEDIA_CONFIRMATION_LIMIT,
+  });
+  return sourceMediaConfirmationCoordinator;
+}
+
+function sourceMediaMutationRequest(value) {
+  const action = ['REVIEW_APPROVE', 'REVIEW_REJECT', 'APPLY_APPEND'].includes(value && value.action)
+    ? value.action
+    : '';
+  const request = {
+    sourceProductId: sourceWorkflowHandoffText(value && value.sourceProductId, 200),
+    platform: sourceWorkflowPlatform(value && value.platform),
+    listingWorkflowId: sourceWorkflowHandoffText(value && value.listingWorkflowId, 200),
+    mediaWorkflowId: sourceWorkflowHandoffText(value && value.mediaWorkflowId, 200),
+    outputAssetId: sourceWorkflowHandoffText(value && value.outputAssetId, 200),
+    expectedWorkflowRevision: Number(value && value.expectedRevision),
+    action,
+  };
+  if (!request.sourceProductId || !request.platform || !request.listingWorkflowId
+    || !request.mediaWorkflowId || !request.outputAssetId || !request.action
+    || !Number.isSafeInteger(request.expectedWorkflowRevision)
+    || request.expectedWorkflowRevision <= 0) return null;
+  return request;
+}
+
+function assertSourceMediaMutationItem(item, request) {
+  const output = item && Array.isArray(item.outputs)
+    ? item.outputs.find((candidate) => candidate.id === request.outputAssetId)
+    : null;
+  if (!item || item.id !== request.mediaWorkflowId
+    || item.revision !== request.expectedWorkflowRevision
+    || item.status !== 'SUCCEEDED' || !output) {
+    throw new Error('ERP 媒体结果已变化，请刷新后重试');
+  }
+  if (request.action === 'REVIEW_APPROVE' || request.action === 'REVIEW_REJECT') {
+    if (item.reviewStatus !== 'PENDING' || item.application !== null) {
+      throw new Error('ERP 媒体结果已不再等待审核');
+    }
+  } else if (item.reviewStatus !== 'APPROVED'
+    || item.selectedOutputAssetId !== request.outputAssetId
+    || item.application !== null) {
+    throw new Error('ERP 媒体结果尚未通过审核或已写入草稿');
+  }
+  return output;
+}
+
+async function loadSourceMediaMutationAuthority(request) {
+  const handoff = await readPersistedSourceWorkflowHandoff(
+    request.platform,
+    request.sourceProductId,
+  );
+  if (!handoff || handoff.sourceProductId !== request.sourceProductId
+    || handoff.platform !== request.platform) {
+    throw new Error('ERP 媒体确认上下文无效，请刷新后重试');
+  }
+  const client = getSourceListingWorkflowClient();
+  const current = await client.getStatus({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, request.listingWorkflowId);
+  if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+  const item = await loadBoundedSourceMediaHistoryItem(
+    client,
+    handoff,
+    listing,
+    request.mediaWorkflowId,
+  );
+  const output = assertSourceMediaMutationItem(item, request);
+  return { handoff, client, listing, item, output };
+}
+
+async function openSourceMediaConfirmation(request, sender) {
+  const sourceTabId = Number(sender?.tab?.id);
+  if (!Number.isSafeInteger(sourceTabId) || sourceTabId < 0) {
+    throw new Error('ERP 媒体确认来源标签页无效');
+  }
+  const authority = await loadSourceMediaMutationAuthority(request);
+  return getSourceMediaConfirmationCoordinator().open({
+    platform: request.platform,
+    sourceProductId: request.sourceProductId,
+    snapshotId: authority.handoff.snapshotId,
+    listingWorkflowId: authority.listing.listingWorkflowId,
+    shopId: authority.listing.shopId,
+    mediaWorkflowId: authority.item.id,
+    outputAssetId: authority.output.id,
+    action: request.action,
+    operation: authority.item.operation,
+    expectedWorkflowRevision: authority.item.revision,
+    expectedTargetRevision: authority.listing.revision,
+    expectedTargetDraftVersion: authority.listing.draftVersion,
+    preview: {
+      url: authority.output.url,
+      mimeType: authority.output.mimeType,
+      width: authority.output.width,
+      height: authority.output.height,
+    },
+    sourceTabId,
+  });
+}
+
+async function executeConfirmedSourceMediaMutation(confirmation) {
+  const handoff = await readPersistedSourceWorkflowHandoff(
+    confirmation.platform,
+    confirmation.sourceProductId,
+  );
+  if (!handoff || handoff.sourceProductId !== confirmation.sourceProductId
+    || handoff.platform !== confirmation.platform
+    || handoff.snapshotId !== confirmation.snapshotId) {
+    throw new Error('ERP 媒体确认上下文已过期');
+  }
+  const client = getSourceListingWorkflowClient();
+  const current = await client.getStatus({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, confirmation.listingWorkflowId);
+  if (!listing || listing.shopId !== confirmation.shopId
+    || listing.revision < confirmation.expectedTargetRevision
+    || listing.draftVersion < confirmation.expectedTargetDraftVersion) {
+    throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+  }
+  const mutationIdentity = sourceMediaMutationIntentIdentity({
+    ...confirmation,
+    expectedWorkflowRevision: confirmation.expectedWorkflowRevision,
+  });
+  const existingIntent = await readSourceMediaMutationIntent(mutationIdentity);
+  if (existingIntent) {
+    if (existingIntent.snapshotId !== confirmation.snapshotId
+      || existingIntent.listingWorkflowId !== confirmation.listingWorkflowId
+      || existingIntent.shopId !== confirmation.shopId
+      || existingIntent.expectedTargetRevision !== confirmation.expectedTargetRevision
+      || existingIntent.expectedTargetDraftVersion !== confirmation.expectedTargetDraftVersion) {
+      throw new Error('ERP 媒体结果操作意图上下文冲突');
+    }
+    return executeSourceMediaMutationIntent(client, existingIntent);
+  }
+  const item = await loadBoundedSourceMediaHistoryItem(
+    client,
+    handoff,
+    listing,
+    confirmation.mediaWorkflowId,
+  );
+  assertSourceMediaMutationItem(item, {
+    mediaWorkflowId: confirmation.mediaWorkflowId,
+    outputAssetId: confirmation.outputAssetId,
+    action: confirmation.action,
+    expectedWorkflowRevision: confirmation.expectedWorkflowRevision,
+  });
+  const intent = await getOrCreateSourceMediaMutationIntent({
+    platform: confirmation.platform,
+    sourceProductId: confirmation.sourceProductId,
+    snapshotId: confirmation.snapshotId,
+    listingWorkflowId: confirmation.listingWorkflowId,
+    shopId: confirmation.shopId,
+    mediaWorkflowId: confirmation.mediaWorkflowId,
+    outputAssetId: confirmation.outputAssetId,
+    action: confirmation.action,
+    expectedWorkflowRevision: confirmation.expectedWorkflowRevision,
+    expectedTargetRevision: confirmation.expectedTargetRevision,
+    expectedTargetDraftVersion: confirmation.expectedTargetDraftVersion,
+  });
+  return executeSourceMediaMutationIntent(client, intent);
+}
+
+async function submitSourceMediaConfirmation(nonce, sender) {
+  const outcome = await getSourceMediaConfirmationCoordinator().submit(
+    nonce,
+    sender,
+    executeConfirmedSourceMediaMutation,
+  );
+  if (outcome.completedNow) {
+    try {
+      await chrome.tabs.sendMessage(outcome.confirmation.sourceTabId, {
+        type: 'ss-erp:source-listing-workbench-media-confirmed',
+        platform: outcome.confirmation.platform,
+        sourceProductId: outcome.confirmation.sourceProductId,
+        listingWorkflowId: outcome.confirmation.listingWorkflowId,
+      });
+    } catch {}
+  }
+  return { state: outcome.state, replay: outcome.replay };
+}
+
+async function cancelSourceMediaConfirmation(nonce, sender) {
+  return getSourceMediaConfirmationCoordinator().cancel(nonce, sender);
 }
 
 function inferErpWebBaseUrl(value) {
@@ -2406,6 +2742,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { handoff, result };
     }).then((result) => {
       sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const request = sourceMediaMutationRequest(message);
+      if (!request) throw new Error('ERP 媒体确认请求无效，请刷新后重试');
+      return openSourceMediaConfirmation(request, sender);
+    }).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_READ_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const confirmation = await getSourceMediaConfirmationCoordinator().claim(message.nonce, sender);
+      if (!confirmation) throw new Error('图片确认已失效，请从商品页重新发起');
+      return getSourceMediaConfirmationContract().publicConfirmation(confirmation);
+    }).then((confirmation) => {
+      sendResponse({ ok: true, confirmation });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_SUBMIT_MESSAGE) {
+    Promise.resolve().then(() => submitSourceMediaConfirmation(message.nonce, sender)).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_CANCEL_MESSAGE) {
+    Promise.resolve().then(() => cancelSourceMediaConfirmation(message.nonce, sender)).then((result) => {
+      sendResponse({ ok: true, result });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });

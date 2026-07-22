@@ -120,6 +120,61 @@ describe('extension command grants', () => {
     expect(store.snapshot().grants).toHaveLength(1);
   });
 
+  it('renews an unconsumed exact grant after expiry or device token rotation', async () => {
+    const { service, store } = target();
+    const first = await service.issue(publishBinding());
+    const renewedService = createExtensionCommandGrantService({
+      store,
+      secret: SECRET,
+      now: () => new Date(NOW.getTime() + 60_001),
+      deriveToken: () => TOKEN,
+    });
+
+    const renewed = await renewedService.issue(publishBinding({ tokenId: 'jti-2' }));
+
+    expect(renewed.grantId).toBe(first.grantId);
+    expect(renewed.expiresAt).toEqual(new Date(NOW.getTime() + 120_001));
+    expect(store.snapshot().grants).toEqual([
+      expect.objectContaining({
+        id: first.grantId,
+        tokenId: 'jti-2',
+        issuedAt: new Date(NOW.getTime() + 60_001),
+        expiresAt: new Date(NOW.getTime() + 120_001),
+        consumedAt: null,
+      }),
+    ]);
+    await expect(renewedService.authorize({
+      token: TOKEN,
+      ...publishBinding({ tokenId: 'jti-2' }),
+    })).resolves.toMatchObject({ kind: 'execute' });
+  });
+
+  it('replays a completed receipt under the current token without renewing consumed authority', async () => {
+    const { service, store } = target();
+    const issued = await service.issue(publishBinding());
+    const authorized = await service.authorize({ token: TOKEN, ...publishBinding() });
+    if (authorized.kind !== 'execute') throw new Error('expected executable receipt');
+    const completed = await service.complete({
+      receiptId: authorized.receipt.id,
+      result: { action: 'REVIEW', replayed: false },
+    });
+    const rotated = createExtensionCommandGrantService({
+      store,
+      secret: SECRET,
+      now: () => new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
+      deriveToken: () => TOKEN,
+    });
+
+    await expect(rotated.issue(publishBinding({ tokenId: 'jti-2' }))).resolves.toMatchObject({
+      grantId: issued.grantId,
+    });
+    await expect(rotated.authorize({
+      token: TOKEN,
+      ...publishBinding({ tokenId: 'jti-2' }),
+    })).resolves.toEqual({ kind: 'replay', receipt: completed });
+    expect(store.snapshot().grants[0]).toMatchObject({ tokenId: 'jti-1', consumedAt: NOW });
+  });
+
   it('limits outstanding unconsumed grants per device session', async () => {
     const store = new InMemoryExtensionCommandGrantStore();
     const service = createExtensionCommandGrantService({
@@ -185,6 +240,7 @@ describe('extension command grants', () => {
     const store = {
       issueGrant: async () => ({ kind: 'conflict' as const }),
       consumeOrReplay: async () => ({ kind }),
+      claimPendingRecovery: async () => ({ kind: 'not_found' as const }),
       completeReceipt: async () => ({ kind: 'not_found' as const }),
       revokeGrant: async () => ({ kind: 'not_found' as const }),
     } satisfies ExtensionCommandGrantStore;
@@ -225,6 +281,33 @@ describe('extension command grants', () => {
       receiptId: authorized.receipt.id,
       result: { attemptId: 'attempt-2', state: 'PREPARED' },
     })).rejects.toMatchObject({ code: 'COMMAND_RECEIPT_IMMUTABLE', statusCode: 409 });
+  });
+
+  it('leases PENDING receipt recovery only after the initial execution window', async () => {
+    const { service, store } = target();
+    await service.issue(publishBinding());
+    const authorized = await service.authorize({ token: TOKEN, ...publishBinding() });
+    if (authorized.kind !== 'execute') throw new Error('expected executable receipt');
+
+    const tooEarly = createExtensionCommandGrantService({
+      store,
+      secret: SECRET,
+      now: () => new Date(NOW.getTime() + 59_999),
+      deriveToken: () => TOKEN,
+    });
+    await expect(tooEarly.claimPendingRecovery({ receiptId: authorized.receipt.id }))
+      .resolves.toMatchObject({ kind: 'not_ready', receipt: { status: 'PENDING' } });
+
+    const eligible = createExtensionCommandGrantService({
+      store,
+      secret: SECRET,
+      now: () => new Date(NOW.getTime() + 60_000),
+      deriveToken: () => TOKEN,
+    });
+    await expect(eligible.claimPendingRecovery({ receiptId: authorized.receipt.id }))
+      .resolves.toMatchObject({ kind: 'acquired', receipt: { status: 'PENDING' } });
+    await expect(eligible.claimPendingRecovery({ receiptId: authorized.receipt.id }))
+      .resolves.toMatchObject({ kind: 'not_ready', receipt: { status: 'PENDING' } });
   });
 
   it('persists one immutable failure result and replays it without executing again', async () => {

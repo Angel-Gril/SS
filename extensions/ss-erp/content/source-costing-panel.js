@@ -62,6 +62,7 @@
   if (!SOURCE_PLATFORM) return;
 
   renderShell();
+  bindSourceMediaConfirmationNotifications();
 
   function platformLabel() {
     return SourceCosting.platformLabel(SOURCE_PLATFORM);
@@ -80,6 +81,26 @@
       } catch (error) {
         reject(error);
       }
+    });
+  }
+
+  function bindSourceMediaConfirmationNotifications() {
+    chrome.runtime.onMessage.addListener(function (message, sender) {
+      if (!message || message.type !== 'ss-erp:source-listing-workbench-media-confirmed'
+        || !sender || sender.id !== chrome.runtime.id
+        || message.platform !== SOURCE_PLATFORM
+        || message.sourceProductId !== currentSourceProductId()
+        || message.listingWorkflowId !== state.sourceWorkbenchListingId) return false;
+      state.sourceWorkbenchHistory = null;
+      state.sourceWorkbenchHistoryListingId = '';
+      state.sourceWorkbenchHistoryLoading = false;
+      state.sourceWorkbenchHistoryError = '';
+      state.sourceWorkbenchHistoryRequestSeq += 1;
+      state.sourceWorkbenchHistoryOpen = false;
+      state.sourceWorkbenchLastRefreshAt = 0;
+      setStatus('图片操作已通过独立确认并完成。', 'ok');
+      void refreshSourceWorkbenchStatus({ force: true });
+      return false;
     });
   }
 
@@ -476,7 +497,7 @@
 
   async function executeSourceWorkbenchMediaCommand(task, action) {
     var key = String(task && task.id || '') + ':' + action;
-    if (state.sourceWorkbenchCommandKey) return;
+    if (state.sourceWorkbenchCommandKey || state.sourceWorkbenchCreateKey) return;
     if (!task || !task.id || !Number.isSafeInteger(task.revision)
       || (action !== 'CANCEL' && action !== 'RETRY')) return;
     if (action === 'CANCEL' && !window.confirm('确认取消这个图片任务？')) return;
@@ -505,6 +526,51 @@
       state.sourceWorkbenchHistoryRequestSeq += 1;
       state.sourceWorkbenchLastRefreshAt = 0;
       await refreshSourceWorkbenchStatus({ force: true });
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      if (state.sourceWorkbenchCommandKey === key) state.sourceWorkbenchCommandKey = '';
+      renderContent();
+    }
+  }
+
+  async function executeSourceWorkbenchMediaMutation(item, output, action) {
+    var allowedActions = ['REVIEW_APPROVE', 'REVIEW_REJECT', 'APPLY_APPEND'];
+    var workflowId = String(item && item.id || '').normalize('NFKC').trim();
+    var outputAssetId = String(output && output.id || '').normalize('NFKC').trim();
+    var listingWorkflowId = String(state.sourceWorkbenchListingId || '').normalize('NFKC').trim();
+    var key = workflowId + ':' + action + ':' + outputAssetId;
+    if (state.sourceWorkbenchCommandKey || state.sourceWorkbenchCreateKey
+      || !allowedActions.includes(action)
+      || !workflowId || workflowId.length > 200
+      || !outputAssetId || outputAssetId.length > 200
+      || !listingWorkflowId || listingWorkflowId.length > 200
+      || !Number.isSafeInteger(item && item.revision) || item.revision <= 0) return;
+    var sourceProductId = currentSourceProductId();
+    if (!sourceProductId || state.sourcePageKey !== currentSourcePageKey()) {
+      setStatus('当前货源页面已变化，请刷新后重试。', 'fail');
+      return;
+    }
+    state.sourceWorkbenchCommandKey = key;
+    renderContent();
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-confirm-prepare',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: listingWorkflowId,
+        mediaWorkflowId: workflowId,
+        outputAssetId: outputAssetId,
+        expectedRevision: item.revision,
+        action: action
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || '媒体确认窗口打开失败');
+      }
+      if (!response.result || response.result.state !== 'confirmation_opened') {
+        throw new Error('媒体确认窗口状态无效');
+      }
+      setStatus('已打开独立确认窗口，完成确认后将自动刷新。', '');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
@@ -706,6 +772,16 @@
           busyCreateKey: state.sourceWorkbenchCreateKey,
           onCommand: function (task, action) {
             void executeSourceWorkbenchMediaCommand(task, action);
+          },
+          onReviewOutput: function (item, output, decision) {
+            void executeSourceWorkbenchMediaMutation(
+              item,
+              output,
+              decision === 'APPROVE' ? 'REVIEW_APPROVE' : 'REVIEW_REJECT'
+            );
+          },
+          onApplyOutput: function (item, output) {
+            void executeSourceWorkbenchMediaMutation(item, output, 'APPLY_APPEND');
           },
           onCreateTranslation: function (source) {
             void createSourceWorkbenchTranslation(source);

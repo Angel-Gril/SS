@@ -138,7 +138,9 @@
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
           var requestedScope = commandOptions && commandOptions.requiredScope;
-          var requiredScope = requestedScope === 'listing:review' || requestedScope === 'media:execute'
+          var requiredScope = requestedScope === 'listing:review'
+            || requestedScope === 'listing:write'
+            || requestedScope === 'media:execute'
             ? requestedScope
             : method === 'GET' ? 'listing:review' : 'media:execute';
           if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {

@@ -1369,9 +1369,13 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     await new PrismaAiMediaWorkflowRepository(client as never).reviewOwned({
       id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
       expectedRevision: 4, outputAssetId: 'output-1', decision: 'REJECT', note: null,
+      operationKey: 'extension-media-review-operation-1',
     });
     expect(created).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ eventType: 'REVIEW_REJECTED' }),
+      data: expect.objectContaining({
+        eventType: 'REVIEW_REJECTED',
+        payload: { note: null, operationKey: 'extension-media-review-operation-1' },
+      }),
     }));
     expect(findOutput).toHaveBeenCalledWith({ where: expect.objectContaining({
       id: 'output-1', ownerUserId: 'owner-1', kind: 'AI_GENERATED',

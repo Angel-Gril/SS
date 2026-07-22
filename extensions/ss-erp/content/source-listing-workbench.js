@@ -43,6 +43,9 @@
     if (task && task.status === 'SUCCEEDED' && task.reviewStatus === 'APPROVED') {
       return '审核通过，等待应用';
     }
+    if (task && task.status === 'SUCCEEDED' && task.reviewStatus === 'REJECTED') {
+      return '审核已驳回';
+    }
     var labels = {
       QUEUED: '等待处理',
       RUNNING: '处理中',
@@ -56,10 +59,6 @@
 
   function actionLabel(action) {
     return action === 'CANCEL' ? '取消' : '重试';
-  }
-
-  function commandKey(task, action) {
-    return String(task && task.id || '') + ':' + action;
   }
 
   function renderReviewAction(container, mediaItems, options) {
@@ -111,7 +110,7 @@
     });
     var button = element('button', 'ss-erp-source-workbench-create-button', '翻译为俄文');
     button.type = 'button';
-    button.disabled = Boolean(options.busyCreateKey);
+    button.disabled = Boolean(options.busyCreateKey || options.busyCommandKey);
     button.addEventListener('click', function (event) {
       if (!event || event.isTrusted !== true || button.disabled) return;
       var selected = sourceInputs.find(function (item) {
@@ -171,7 +170,7 @@
         var button = element('button', '', actionLabel(action));
         button.type = 'button';
         button.title = actionLabel(action) + operationLabel(task.operation);
-        button.disabled = options.busyCommandKey === commandKey(task, action);
+        button.disabled = Boolean(options.busyCommandKey || options.busyCreateKey);
         button.addEventListener('click', function (event) {
           if (!event || event.isTrusted !== true) return;
           options.onCommand(task, action);
@@ -185,7 +184,40 @@
     container.appendChild(drawer);
   }
 
-  function renderHistoryOutput(container, output, operation) {
+  function renderHistoryOutputActions(container, item, output, options) {
+    if (!options || item.status !== 'SUCCEEDED' || item.application !== null) return;
+    var actions = element('div', 'ss-erp-source-workbench-output-actions');
+    if (item.reviewStatus === 'PENDING' && typeof options.onReviewOutput === 'function') {
+      [
+        { decision: 'APPROVE', action: 'REVIEW_APPROVE', label: '通过' },
+        { decision: 'REJECT', action: 'REVIEW_REJECT', label: '驳回' },
+      ].forEach(function (definition) {
+        var button = element('button', '', definition.label);
+        button.type = 'button';
+        button.disabled = Boolean(options.busyCommandKey || options.busyCreateKey);
+        button.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true || button.disabled) return;
+          options.onReviewOutput(item, output, definition.decision);
+        });
+        actions.appendChild(button);
+      });
+    } else if (item.reviewStatus === 'APPROVED'
+      && item.selectedOutputAssetId === output.id
+      && typeof options.onApplyOutput === 'function') {
+      var apply = element('button', 'is-primary', '追加到草稿');
+      apply.type = 'button';
+      apply.disabled = Boolean(options.busyCommandKey || options.busyCreateKey);
+      apply.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || apply.disabled) return;
+        options.onApplyOutput(item, output);
+      });
+      actions.appendChild(apply);
+    }
+    if (actions.children.length) container.appendChild(actions);
+  }
+
+  function renderHistoryOutput(container, output, item, options) {
+    var wrapper = element('div', 'ss-erp-source-workbench-output-item');
     var link = element('a', 'ss-erp-source-workbench-output');
     link.href = output.url;
     link.target = '_blank';
@@ -194,8 +226,9 @@
     var frame = element('span', 'ss-erp-source-workbench-output-frame');
     var image = element('img');
     image.src = output.url;
-    image.alt = operationLabel(operation) + '候选图';
+    image.alt = operationLabel(item.operation) + '候选图';
     image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
     var fallback = element('span', 'ss-erp-source-workbench-output-fallback', '预览不可用');
     image.addEventListener('error', function () {
       frame.classList.add('is-error');
@@ -208,10 +241,12 @@
       ? output.width + ' × ' + output.height
       : output.mimeType;
     link.appendChild(element('span', 'ss-erp-source-workbench-output-meta', dimensions));
-    container.appendChild(link);
+    wrapper.appendChild(link);
+    renderHistoryOutputActions(wrapper, item, output, options);
+    container.appendChild(wrapper);
   }
 
-  function renderHistoryItem(container, item) {
+  function renderHistoryItem(container, item, options) {
     var card = element('article', 'ss-erp-source-workbench-history-item');
     var heading = element('div', 'ss-erp-source-workbench-history-heading');
     heading.appendChild(element('strong', '', operationLabel(item.operation)));
@@ -220,7 +255,7 @@
     if (Array.isArray(item.outputs) && item.outputs.length) {
       var outputs = element('div', 'ss-erp-source-workbench-output-grid');
       item.outputs.forEach(function (output) {
-        renderHistoryOutput(outputs, output, item.operation);
+        renderHistoryOutput(outputs, output, item, options);
       });
       card.appendChild(outputs);
     } else {
@@ -272,7 +307,7 @@
       if (!items.length) {
         list.appendChild(element('div', 'ss-erp-source-workbench-history-state', '暂无图片任务'));
       } else {
-        items.forEach(function (item) { renderHistoryItem(list, item); });
+        items.forEach(function (item) { renderHistoryItem(list, item, options); });
       }
       drawer.appendChild(list);
       if (options.history.nextCursor && typeof options.onLoadMoreHistory === 'function') {

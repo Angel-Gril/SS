@@ -10,12 +10,24 @@ const popup = fs.readFileSync(`${root}/pages/popup.js`, 'utf8');
 const policy = fs.readFileSync(`${root}/shared/message-security/runtime-message-policy.js`, 'utf8');
 const sessionPath = `${root}/shared/erp-adapter/source-workflow-device-session.js`;
 const clientPath = `${root}/shared/erp-adapter/listing-workflow-client.js`;
+const confirmationContractPath = `${root}/shared/erp-adapter/source-media-confirmation.js`;
+const confirmationCoordinatorPath = `${root}/shared/erp-adapter/source-media-confirmation-coordinator.js`;
+const mutationIntentPath = `${root}/shared/erp-adapter/source-media-mutation-intent.js`;
 const viewPath = `${root}/content/source-listing-workbench.js`;
 const cssPath = `${root}/content/source-listing-workbench.css`;
+const confirmHtmlPath = `${root}/pages/media-confirm.html`;
+const confirmCssPath = `${root}/pages/media-confirm.css`;
+const confirmPagePath = `${root}/pages/media-confirm.js`;
+const confirmLaunchPath = `${root}/pages/media-confirm-launch.html`;
 
-for (const path of [sessionPath, clientPath, viewPath, cssPath]) {
+for (const path of [
+  sessionPath, clientPath, confirmationContractPath, confirmationCoordinatorPath,
+  mutationIntentPath, viewPath, cssPath,
+  confirmHtmlPath, confirmCssPath, confirmPagePath, confirmLaunchPath,
+]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
 }
+assert.ok(Number(manifest.minimum_chrome_version) >= 106, 'document-bound confirmation requires Chrome 106+');
 
 const sourceEntry = manifest.content_scripts.find((entry) => (
   entry.js?.includes('content/source-costing-panel.js')
@@ -26,6 +38,9 @@ assert.ok(sourceEntry.js.indexOf('content/source-listing-workbench.js') < source
 assert.ok(sourceEntry.css.includes('content/source-listing-workbench.css'));
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/listing-workflow-client\.js['"]\)/);
+assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-confirmation\.js['"]\)/);
+assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-confirmation-coordinator\.js['"]\)/);
+assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-mutation-intent\.js['"]\)/);
 assert.match(worker, /ss-erp:source-listing-workbench-status/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
@@ -36,6 +51,37 @@ assert.match(worker, /ss-erp:source-workbench:translation-intents:v1/);
 assert.match(worker, /getOrCreateSourceTranslationIntent/);
 assert.match(worker, /clearSourceTranslationIntent/);
 assert.match(worker, /requestedListingWorkflowId/);
+assert.match(worker, /REVIEW_APPROVE/);
+assert.match(worker, /REVIEW_REJECT/);
+assert.match(worker, /APPLY_APPEND/);
+assert.match(worker, /loadBoundedSourceMediaHistoryItem/);
+assert.match(worker, /SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_MAX_PAGES\s*=\s*5/);
+assert.match(worker, /currentSourceListingContext\(current, requestedListingWorkflowId\)/);
+assert.match(worker, /client\.reviewMediaOutput/);
+assert.match(worker, /client\.applyMediaOutput/);
+assert.match(worker, /ss-erp:source-workbench:media-mutation-intents:v1/);
+assert.match(worker, /getOrCreateSourceMediaMutationIntent/);
+assert.match(worker, /executeSourceMediaMutationIntent/);
+assert.match(worker, /SS_ERP_SOURCE_MEDIA_MUTATION_INTENT_TTL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-confirm-prepare/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-confirm-read/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-confirm-submit/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-confirm-cancel/);
+assert.match(worker, /SS_ERP_SOURCE_MEDIA_CONFIRMATION_TTL_MS\s*=\s*2\s*\*\s*60\s*\*\s*1000/);
+assert.match(worker, /chrome\.storage\.session/);
+assert.match(worker, /getSourceMediaConfirmationCoordinator\(\)\.open/);
+assert.match(worker, /getSourceMediaConfirmationCoordinator\(\)\.claim/);
+assert.match(worker, /getSourceMediaConfirmationCoordinator\(\)\.submit/);
+assert.match(worker, /getSourceMediaConfirmationCoordinator\(\)\.cancel/);
+assert.match(worker, /executeConfirmedSourceMediaMutation/);
+assert.match(worker, /publicConfirmation\(confirmation\)/);
+const directMediaCommandHandler = worker.slice(
+  worker.indexOf('if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE)'),
+  worker.indexOf('if (OZON_CALC_SETTINGS_WRITE_CHANNELS.has(message.type))'),
+);
+assert.doesNotMatch(directMediaCommandHandler, /REVIEW_APPROVE|REVIEW_REJECT|APPLY_APPEND/);
+assert.match(directMediaCommandHandler, /CREATE_TRANSLATION/);
+assert.doesNotMatch(panel, /shopId:\s*(?:item|output|task)\./);
 assert.match(worker, /sourceTranslationIntentWriteQueue/);
 assert.match(worker, /SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
 assert.match(worker, /draftRevision: listing\.revision/);
@@ -43,11 +89,23 @@ assert.match(worker, /crypto\.getRandomValues/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-history/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
+assert.match(policy, /SOURCE_MEDIA_CONFIRM_PREPARE_TYPES/);
+assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
 assert.match(panel, /listings\.length === 1/);
 assert.match(panel, /currentSourcePageKey/);
+assert.match(panel, /onReviewOutput/);
+assert.match(panel, /onApplyOutput/);
+assert.match(panel, /sourceWorkbenchHistoryOpen\s*=\s*false/);
+const mutationPanelSource = panel.slice(
+  panel.indexOf('async function executeSourceWorkbenchMediaMutation'),
+  panel.indexOf('function currentSourceMediaInputs'),
+);
+assert.match(mutationPanelSource, /ss-erp:source-listing-workbench-media-confirm-prepare/);
+assert.doesNotMatch(mutationPanelSource, /ss-erp:source-listing-workbench-media-command/);
+assert.doesNotMatch(mutationPanelSource, /client\.(?:reviewMediaOutput|applyMediaOutput)/);
 assert.match(popup, /restoreSourceWorkflowHandoffForCurrentPage/);
 assert.match(popup, /ss-erp:source-listing-workbench-status/);
 assert.doesNotMatch(
@@ -57,7 +115,486 @@ assert.doesNotMatch(
 
 const sessionSource = fs.readFileSync(sessionPath, 'utf8');
 const clientSource = fs.readFileSync(clientPath, 'utf8');
+const confirmationContractSource = fs.readFileSync(confirmationContractPath, 'utf8');
+const confirmationCoordinatorSource = fs.readFileSync(confirmationCoordinatorPath, 'utf8');
+const mutationIntentSource = fs.readFileSync(mutationIntentPath, 'utf8');
 const viewSource = fs.readFileSync(viewPath, 'utf8');
+
+const policyContext = { URL, Array, Boolean, Object, Set, String };
+policyContext.globalThis = policyContext;
+vm.runInNewContext(policy, policyContext, { filename: `${root}/shared/message-security/runtime-message-policy.js` });
+const runtimePolicy = policyContext.SS_ERP_RUNTIME_MESSAGE_POLICY;
+const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
+const sourceSender = {
+  id: extensionId,
+  url: 'https://detail.1688.com/offer/123.html',
+  tab: { url: 'https://detail.1688.com/offer/123.html' },
+};
+const confirmSender = {
+  id: extensionId,
+  url: `chrome-extension://${extensionId}/pages/media-confirm.html`,
+  documentId: 'document-confirm-1',
+  frameId: 0,
+  tab: {
+    id: 91,
+    url: `chrome-extension://${extensionId}/pages/media-confirm.html`,
+  },
+};
+const popupSender = {
+  id: extensionId,
+  url: `chrome-extension://${extensionId}/pages/popup.html`,
+};
+assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
+  'ss-erp:source-listing-workbench-media-confirm-prepare', sourceSender, extensionId,
+), true);
+for (const type of [
+  'ss-erp:source-listing-workbench-media-confirm-read',
+  'ss-erp:source-listing-workbench-media-confirm-submit',
+  'ss-erp:source-listing-workbench-media-confirm-cancel',
+]) {
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, sourceSender, extensionId), false);
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, popupSender, extensionId), false);
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, confirmSender, extensionId), true);
+}
+assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
+  'ss-erp:source-listing-workbench-media-confirm-prepare', confirmSender, extensionId,
+), false);
+
+const confirmationContractContext = {
+  URL, Array, Date, Number, Object, Set, String, Uint8Array,
+};
+confirmationContractContext.globalThis = confirmationContractContext;
+vm.runInNewContext(confirmationContractSource, confirmationContractContext, {
+  filename: confirmationContractPath,
+});
+vm.runInNewContext(confirmationCoordinatorSource, confirmationContractContext, {
+  filename: confirmationCoordinatorPath,
+});
+const confirmationContract = confirmationContractContext.SS_ERP_SOURCE_MEDIA_CONFIRMATION;
+const confirmationCoordinatorContract =
+  confirmationContractContext.SS_ERP_SOURCE_MEDIA_CONFIRMATION_COORDINATOR;
+let randomByte = 0;
+const nonce = confirmationContract.createNonce({
+  getRandomValues(bytes) {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = randomByte++;
+    return bytes;
+  },
+});
+assert.match(nonce, /^[a-f0-9]{64}$/u);
+const confirmationNow = Date.parse('2026-07-22T00:00:00.000Z');
+const normalizedConfirmation = confirmationContract.normalizeIntent({
+  nonce,
+  platform: '1688',
+  sourceProductId: 'source-1',
+  snapshotId: 'snapshot-1',
+  listingWorkflowId: 'listing-1',
+  shopId: 'shop-1',
+  mediaWorkflowId: 'media-1',
+  outputAssetId: 'asset-1',
+  action: 'APPLY_APPEND',
+  operation: 'IMAGE_TRANSLATE',
+  expectedWorkflowRevision: 3,
+  expectedTargetRevision: 11,
+  expectedTargetDraftVersion: 7,
+  preview: {
+    url: 'https://cdn.example/output.png', mimeType: 'image/png', width: 900, height: 1200,
+  },
+  sourceTabId: 42,
+  confirmationTabId: 91,
+  confirmationDocumentId: null,
+  createdAt: confirmationNow,
+  expiresAt: confirmationNow + 120000,
+  completedAt: null,
+}, { now: confirmationNow, maximumLifetimeMs: 120000 });
+assert.ok(normalizedConfirmation);
+const documentBoundConfirmation = confirmationContract.bindSender(normalizedConfirmation, {
+  tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-1',
+});
+assert.ok(documentBoundConfirmation);
+assert.equal(confirmationContract.isBoundSender(documentBoundConfirmation, {
+  tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-1',
+}), true);
+assert.equal(confirmationContract.isBoundSender(documentBoundConfirmation, {
+  tab: { id: 92 }, frameId: 0, documentId: 'document-confirm-1',
+}), false);
+assert.equal(confirmationContract.isBoundSender(documentBoundConfirmation, {
+  tab: { id: 91 }, frameId: 1, documentId: 'document-confirm-1',
+}), false);
+assert.equal(confirmationContract.isBoundSender(documentBoundConfirmation, {
+  tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-2',
+}), false);
+assert.deepEqual(JSON.parse(JSON.stringify(
+  confirmationContract.publicConfirmation(normalizedConfirmation),
+)), {
+  action: 'APPLY_APPEND',
+  operation: 'IMAGE_TRANSLATE',
+  target: {
+    platform: '1688', sourceProductId: 'source-1', shopId: 'shop-1', listingWorkflowId: 'listing-1',
+  },
+  preview: {
+    url: 'https://cdn.example/output.png', mimeType: 'image/png', width: 900, height: 1200,
+  },
+  expiresAt: confirmationNow + 120000,
+  completed: false,
+});
+assert.equal(Object.prototype.hasOwnProperty.call(
+  confirmationContract.publicConfirmation(normalizedConfirmation), 'shopId',
+), false);
+assert.equal(confirmationContract.normalizeIntent(
+  { ...normalizedConfirmation, provider: 'must-not-cross-boundary' },
+  { now: confirmationNow, maximumLifetimeMs: 120000 },
+), null);
+assert.equal(confirmationContract.normalizeIntent(
+  normalizedConfirmation,
+  { now: confirmationNow + 120001, maximumLifetimeMs: 120000 },
+), null);
+const completedAfterExpiry = confirmationContract.normalizeIntent({
+  ...normalizedConfirmation,
+  completedAt: confirmationNow + 120001,
+}, { now: confirmationNow + 120001, maximumLifetimeMs: 120000 });
+assert.ok(completedAfterExpiry, 'an operation authorized before expiry may record its completed state');
+assert.equal(confirmationContract.normalizeIntent(
+  completedAfterExpiry,
+  { now: confirmationNow + 240001, maximumLifetimeMs: 120000 },
+), null, 'completed confirmations remain bounded in session storage');
+for (const url of [
+  'https://cdn.example/output.png?token=secret',
+  'https://cdn.example/output.png#candidate',
+  'https://cdn.example./output.png',
+]) {
+  assert.equal(confirmationContract.normalizeIntent({
+    ...normalizedConfirmation,
+    preview: { ...normalizedConfirmation.preview, url },
+  }, { now: confirmationNow, maximumLifetimeMs: 120000 }), null);
+}
+
+const confirmationStorageKey = 'test:media-confirmations';
+const confirmationInput = {
+  platform: '1688',
+  sourceProductId: 'source-1',
+  snapshotId: 'snapshot-1',
+  listingWorkflowId: 'listing-1',
+  shopId: 'shop-1',
+  mediaWorkflowId: 'media-1',
+  outputAssetId: 'asset-1',
+  action: 'APPLY_APPEND',
+  operation: 'IMAGE_TRANSLATE',
+  expectedWorkflowRevision: 3,
+  expectedTargetRevision: 11,
+  expectedTargetDraftVersion: 7,
+  preview: {
+    url: 'https://cdn.example/output.png', mimeType: 'image/png', width: 900, height: 1200,
+  },
+  sourceTabId: 42,
+};
+
+function cloneConfirmationHarnessValue(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function createConfirmationCoordinatorHarness(options = {}) {
+  const storageState = {};
+  const events = [];
+  let currentTime = confirmationNow;
+  let randomOffset = Number(options.randomOffset || 0);
+  const chromeMock = {
+    storage: {
+      session: {
+        async get(keys) {
+          events.push({ type: 'storage.get', keys: [...keys] });
+          return Object.fromEntries(keys.map((key) => [
+            key, cloneConfirmationHarnessValue(storageState[key]),
+          ]));
+        },
+        async set(values) {
+          events.push({ type: 'storage.set', values: cloneConfirmationHarnessValue(values) });
+          Object.assign(storageState, cloneConfirmationHarnessValue(values));
+        },
+      },
+    },
+    windows: {
+      async create(createOptions) {
+        events.push({ type: 'windows.create', options: cloneConfirmationHarnessValue(createOptions) });
+        return {
+          id: 701,
+          tabs: options.popupIncludesTab === false ? [] : [{ id: 91 }],
+        };
+      },
+      async remove(windowId) {
+        events.push({ type: 'windows.remove', windowId });
+      },
+    },
+    tabs: {
+      async query(query) {
+        events.push({ type: 'tabs.query', query: cloneConfirmationHarnessValue(query) });
+        return [{ id: 91 }];
+      },
+      async update(tabId, update) {
+        events.push({ type: 'tabs.update', tabId, update: cloneConfirmationHarnessValue(update) });
+        if (options.failNavigation) throw new Error('test navigation failure');
+        return { id: tabId, ...update };
+      },
+    },
+    runtime: {
+      getURL(path) { return `chrome-extension://${extensionId}/${path}`; },
+    },
+  };
+  const coordinator = confirmationCoordinatorContract.createCoordinator({
+    contract: confirmationContract,
+    storage: chromeMock.storage.session,
+    windows: chromeMock.windows,
+    tabs: chromeMock.tabs,
+    runtime: chromeMock.runtime,
+    crypto: {
+      getRandomValues(bytes) {
+        for (let index = 0; index < bytes.length; index += 1) {
+          bytes[index] = (randomOffset + index) % 256;
+        }
+        randomOffset += bytes.length;
+        return bytes;
+      },
+    },
+    storageKey: confirmationStorageKey,
+    ttlMs: 120000,
+    limit: 20,
+    now: () => currentTime,
+  });
+  return {
+    coordinator,
+    events,
+    storageState,
+    setNow(value) { currentTime = value; },
+  };
+}
+
+async function openAndClaimConfirmation(harness, documentId = 'document-confirm-1') {
+  const opened = await harness.coordinator.open(confirmationInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), { state: 'confirmation_opened' });
+  const records = harness.storageState[confirmationStorageKey];
+  const nonces = Object.keys(records || {});
+  assert.equal(nonces.length, 1);
+  const openedNonce = nonces[0];
+  const sender = { tab: { id: 91 }, frameId: 0, documentId };
+  const claimed = await harness.coordinator.claim(openedNonce, sender);
+  assert.ok(claimed);
+  return { nonce: openedNonce, sender, claimed };
+}
+
+const coordinatorHarness = createConfirmationCoordinatorHarness({ popupIncludesTab: false });
+const opened = await coordinatorHarness.coordinator.open(confirmationInput);
+assert.deepEqual(JSON.parse(JSON.stringify(opened)), { state: 'confirmation_opened' });
+const coordinatorRecords = coordinatorHarness.storageState[confirmationStorageKey];
+const coordinatorNonce = Object.keys(coordinatorRecords)[0];
+assert.match(coordinatorNonce, /^[a-f0-9]{64}$/u);
+assert.equal(coordinatorRecords[coordinatorNonce].confirmationDocumentId, null);
+assert.equal(coordinatorRecords[coordinatorNonce].confirmationTabId, 91);
+const launchEvent = coordinatorHarness.events.find((event) => event.type === 'windows.create');
+assert.equal(
+  launchEvent.options.url,
+  `chrome-extension://${extensionId}/pages/media-confirm-launch.html`,
+);
+assert.ok(coordinatorHarness.events.some((event) => event.type === 'tabs.query'));
+const persistIndex = coordinatorHarness.events.findIndex((event) => event.type === 'storage.set');
+const navigationIndex = coordinatorHarness.events.findIndex((event) => event.type === 'tabs.update');
+assert.ok(persistIndex >= 0 && navigationIndex > persistIndex, 'intent persists before confirm navigation');
+assert.equal(
+  coordinatorHarness.events[navigationIndex].update.url,
+  `chrome-extension://${extensionId}/pages/media-confirm.html#nonce=${coordinatorNonce}`,
+);
+
+const navigationFailureHarness = createConfirmationCoordinatorHarness({ failNavigation: true });
+await assert.rejects(
+  navigationFailureHarness.coordinator.open(confirmationInput),
+  /test navigation failure/u,
+);
+assert.deepEqual(
+  navigationFailureHarness.storageState[confirmationStorageKey],
+  {},
+  'failed confirm navigation removes the persisted intent',
+);
+assert.ok(
+  navigationFailureHarness.events.some((event) => (
+    event.type === 'windows.remove' && event.windowId === 701
+  )),
+  'failed confirm navigation closes the orphaned popup',
+);
+
+const claimedSender = { tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-1' };
+const firstClaim = await coordinatorHarness.coordinator.claim(coordinatorNonce, claimedSender);
+assert.equal(firstClaim.confirmationDocumentId, 'document-confirm-1');
+for (const wrongSender of [
+  { tab: { id: 92 }, frameId: 0, documentId: 'document-confirm-1' },
+  { tab: { id: 91 }, frameId: 1, documentId: 'document-confirm-1' },
+  { tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-2' },
+]) {
+  assert.equal(
+    await coordinatorHarness.coordinator.claim(coordinatorNonce, wrongSender),
+    null,
+    'the first top-frame document claim cannot be rebound',
+  );
+}
+assert.equal(
+  coordinatorHarness.storageState[confirmationStorageKey][coordinatorNonce].confirmationDocumentId,
+  'document-confirm-1',
+);
+let unauthorizedMutations = 0;
+for (const wrongSender of [
+  { tab: { id: 42 }, frameId: 0, documentId: 'source-page-document' },
+  { tab: { id: 91 }, frameId: 1, documentId: 'document-confirm-1' },
+  { tab: { id: 91 }, frameId: 0, documentId: 'document-confirm-2' },
+]) {
+  await assert.rejects(
+    coordinatorHarness.coordinator.submit(coordinatorNonce, wrongSender, async () => {
+      unauthorizedMutations += 1;
+      return { replay: false };
+    }),
+    /确认窗口身份无效/u,
+  );
+}
+assert.equal(unauthorizedMutations, 0, 'source-page and mismatched senders cannot mutate');
+
+const cancelFirstHarness = createConfirmationCoordinatorHarness({ randomOffset: 32 });
+const cancelFirst = await openAndClaimConfirmation(cancelFirstHarness, 'cancel-first-document');
+let cancelFirstMutations = 0;
+const [cancelWon, submitAfterCancel] = await Promise.allSettled([
+  cancelFirstHarness.coordinator.cancel(cancelFirst.nonce, cancelFirst.sender),
+  cancelFirstHarness.coordinator.submit(cancelFirst.nonce, cancelFirst.sender, async () => {
+    cancelFirstMutations += 1;
+    return { replay: false };
+  }),
+]);
+assert.equal(cancelWon.status, 'fulfilled');
+assert.equal(cancelWon.value.state, 'cancelled');
+assert.equal(submitAfterCancel.status, 'rejected');
+assert.equal(cancelFirstMutations, 0, 'cancel winning the nonce queue prevents mutation');
+
+const submitFirstHarness = createConfirmationCoordinatorHarness({ randomOffset: 64 });
+const submitFirst = await openAndClaimConfirmation(submitFirstHarness, 'submit-first-document');
+let submitFirstMutations = 0;
+const [submitWon, cancelAfterSubmit] = await Promise.all([
+  submitFirstHarness.coordinator.submit(submitFirst.nonce, submitFirst.sender, async () => {
+    submitFirstMutations += 1;
+    await Promise.resolve();
+    return { replay: false };
+  }),
+  submitFirstHarness.coordinator.cancel(submitFirst.nonce, submitFirst.sender),
+]);
+assert.equal(submitWon.state, 'completed');
+assert.equal(submitWon.completedNow, true);
+assert.equal(cancelAfterSubmit.state, 'completed');
+assert.equal(submitFirstMutations, 1, 'submit winning the nonce queue executes exactly once');
+const replayedSubmit = await submitFirstHarness.coordinator.submit(
+  submitFirst.nonce,
+  submitFirst.sender,
+  async () => {
+    submitFirstMutations += 1;
+    return { replay: false };
+  },
+);
+assert.equal(replayedSubmit.replay, true);
+assert.equal(replayedSubmit.completedNow, false);
+assert.equal(submitFirstMutations, 1, 'completed confirmation replay does not execute twice');
+
+const serialQueue = confirmationContract.createSerialQueue();
+let serialState = 'pending';
+let serialMutations = 0;
+await Promise.all([
+  serialQueue.run(async () => { serialState = 'cancelled'; }),
+  serialQueue.run(async () => {
+    if (serialState === 'pending') {
+      serialMutations += 1;
+      serialState = 'completed';
+    }
+  }),
+]);
+assert.equal(serialMutations, 0, 'cancel winning the confirmation queue prevents mutation');
+const submitFirstQueue = confirmationContract.createSerialQueue();
+serialState = 'pending';
+await Promise.all([
+  submitFirstQueue.run(async () => {
+    if (serialState === 'pending') {
+      serialMutations += 1;
+      await Promise.resolve();
+      serialState = 'completed';
+    }
+  }),
+  submitFirstQueue.run(async () => {
+    if (serialState === 'pending') serialState = 'cancelled';
+  }),
+]);
+assert.equal(serialState, 'completed', 'submit winning the confirmation queue retains completion');
+assert.equal(serialMutations, 1);
+
+const mutationIntentContext = { Array, Date, Error, Map, Number, Object, Promise, Set, String };
+mutationIntentContext.globalThis = mutationIntentContext;
+vm.runInNewContext(mutationIntentSource, mutationIntentContext, { filename: mutationIntentPath });
+const mutationIntentContract = mutationIntentContext.SS_ERP_SOURCE_MEDIA_MUTATION_INTENT;
+const mutationStorageState = {};
+const mutationStorage = {
+  async get(keys) {
+    return Object.fromEntries(keys.map((key) => [
+      key,
+      mutationStorageState[key] === undefined
+        ? undefined
+        : JSON.parse(JSON.stringify(mutationStorageState[key])),
+    ]));
+  },
+  async set(values) {
+    Object.assign(mutationStorageState, JSON.parse(JSON.stringify(values)));
+  },
+};
+const mutationStorageKey = 'test:media-mutation-intents';
+const mutationTtlMs = 24 * 60 * 60 * 1000;
+let mutationNow = confirmationNow;
+const mutationBase = {
+  platform: '1688', sourceProductId: 'source-1', snapshotId: 'snapshot-1',
+  listingWorkflowId: 'listing-1', shopId: 'shop-1', mediaWorkflowId: 'media-1',
+  outputAssetId: 'asset-1', action: 'APPLY_APPEND', expectedWorkflowRevision: 3,
+  expectedTargetRevision: 11, expectedTargetDraftVersion: 7,
+};
+const firstMutationStore = mutationIntentContract.createStore({
+  storage: mutationStorage, storageKey: mutationStorageKey, ttlMs: mutationTtlMs,
+  limit: 20, now: () => mutationNow,
+});
+const firstMutation = await firstMutationStore.getOrCreate(mutationBase);
+assert.equal(firstMutation.replay, false);
+assert.ok(await firstMutationStore.read(firstMutation.intent.identity));
+const restartedMutationStore = mutationIntentContract.createStore({
+  storage: mutationStorage, storageKey: mutationStorageKey, ttlMs: mutationTtlMs,
+  limit: 20, now: () => mutationNow,
+});
+const responseLossReplay = await restartedMutationStore.getOrCreate(mutationBase);
+assert.equal(responseLossReplay.replay, true, 'persisted intent recovers response-loss after worker restart');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(responseLossReplay.intent)),
+  JSON.parse(JSON.stringify(firstMutation.intent)),
+);
+await assert.rejects(
+  restartedMutationStore.getOrCreate({ ...mutationBase, snapshotId: 'snapshot-conflict' }),
+  /上下文冲突/u,
+);
+mutationNow += mutationTtlMs;
+assert.equal(await restartedMutationStore.read(firstMutation.intent.identity), null, 'intent expires at 24h');
+delete mutationStorageState[mutationStorageKey];
+mutationNow = confirmationNow;
+const boundedMutationStore = mutationIntentContract.createStore({
+  storage: mutationStorage, storageKey: mutationStorageKey, ttlMs: mutationTtlMs,
+  limit: 20, now: () => mutationNow,
+});
+let firstBoundedIdentity = '';
+for (let index = 0; index < 21; index += 1) {
+  mutationNow += 1;
+  const created = await boundedMutationStore.getOrCreate({
+    ...mutationBase,
+    mediaWorkflowId: `media-${index}`,
+    outputAssetId: `asset-${index}`,
+  });
+  if (index === 0) firstBoundedIdentity = created.intent.identity;
+}
+assert.equal(Object.keys(mutationStorageState[mutationStorageKey]).length, 20);
+assert.equal(Object.prototype.hasOwnProperty.call(
+  mutationStorageState[mutationStorageKey], firstBoundedIdentity,
+), false, 'bounded persistence evicts the oldest valid mutation intent');
 const context = {
   URL, URLSearchParams, AbortController, Array, Boolean, Date, Error, JSON, Number, Object,
   Set, String, TextDecoder, TextEncoder, Uint8Array, clearTimeout, crypto: globalThis.crypto, setTimeout,
@@ -302,6 +839,117 @@ assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command
 assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'model'), false);
 assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'apiKey'), false);
 assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'resolvedPrompt'), false);
+
+const mutationRequests = [];
+const mutationClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('mutation test must not GET'); },
+    async post(path, body, options) {
+      mutationRequests.push({ path, body, options });
+      if (path.endsWith('/command-grants')) {
+        return {
+          state: 'response', status: 201,
+          body: { code: 1, data: { grantToken: 'm'.repeat(43) } },
+        };
+      }
+      const result = body.operation === 'MEDIA_REVIEW'
+        ? {
+          workflowId: 'media-history-1', action: 'REVIEW', status: 'SUCCEEDED',
+          reviewStatus: 'APPROVED', selectedOutputAssetId: 'asset-1',
+          revision: 3, replayed: false,
+        }
+        : {
+          workflowId: 'media-history-1', action: 'APPLY', status: 'SUCCEEDED',
+          reviewStatus: 'APPROVED', selectedOutputAssetId: 'asset-1',
+          revision: 4, applicationId: 'application-1', targetRevision: 12,
+          targetDraftVersion: 8, replayed: false,
+        };
+      return {
+        state: 'response', status: 202,
+        body: {
+          code: 1,
+          data: {
+            replay: false,
+            receipt: { id: 'receipt-mutation-1', status: 'SUCCEEDED', result },
+          },
+        },
+      };
+    },
+  },
+});
+const reviewInput = {
+  mediaWorkflowId: 'media-history-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', outputAssetId: 'asset-1',
+  expectedRevision: 2, draftRevision: 11, draftVersion: 7,
+  decision: 'APPROVE', note: null,
+};
+await mutationClient.reviewMediaOutput(reviewInput);
+await mutationClient.reviewMediaOutput(reviewInput);
+assert.equal(mutationRequests[0].body.operation, 'MEDIA_REVIEW');
+assert.equal(mutationRequests[0].options.requiredScope, 'listing:review');
+assert.equal(mutationRequests[1].options.requiredScope, 'listing:review');
+assert.match(mutationRequests[0].body.idempotencyKey, /^extension-media-review:[a-f0-9]{64}$/u);
+assert.equal(mutationRequests[2].body.idempotencyKey, mutationRequests[0].body.idempotencyKey);
+assert.deepEqual(JSON.parse(JSON.stringify(mutationRequests[0].body.command)), {
+  schemaVersion: 'ai-media-workflow-review/v1', action: 'REVIEW',
+  mediaWorkflowId: 'media-history-1', expectedRevision: 2, draftRevision: 11,
+  outputAssetId: 'asset-1', decision: 'APPROVE', note: null,
+});
+
+const applyInput = {
+  mediaWorkflowId: 'media-history-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', outputAssetId: 'asset-1',
+  expectedWorkflowRevision: 3, expectedTargetRevision: 11,
+  expectedTargetDraftVersion: 7,
+};
+await mutationClient.applyMediaOutput(applyInput);
+await mutationClient.applyMediaOutput(applyInput);
+assert.equal(mutationRequests[4].body.operation, 'MEDIA_APPLY');
+assert.equal(mutationRequests[4].options.requiredScope, 'listing:write');
+assert.equal(mutationRequests[5].options.requiredScope, 'listing:write');
+assert.match(mutationRequests[4].body.idempotencyKey, /^extension-media-apply:[a-f0-9]{64}$/u);
+assert.equal(mutationRequests[6].body.idempotencyKey, mutationRequests[4].body.idempotencyKey);
+assert.deepEqual(JSON.parse(JSON.stringify(mutationRequests[4].body.command)), {
+  schemaVersion: 'ai-media-workflow-apply/v1', action: 'APPLY',
+  mediaWorkflowId: 'media-history-1', expectedWorkflowRevision: 3,
+  expectedTargetRevision: 11, expectedTargetDraftVersion: 7,
+  outputAssetId: 'asset-1', mode: 'append',
+});
+for (const request of mutationRequests) {
+  assert.equal(Object.prototype.hasOwnProperty.call(request.body, 'provider'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(request.body, 'model'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(request.body, 'apiKey'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(request.body, 'resolvedPrompt'), false);
+}
+
+const secretResultClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('secret result test must not GET'); },
+    async post(path) {
+      if (path.endsWith('/command-grants')) {
+        return { state: 'response', body: { code: 1, data: { grantToken: 's'.repeat(43) } } };
+      }
+      return {
+        state: 'response',
+        body: {
+          code: 1,
+          data: {
+            replay: false,
+            receipt: {
+              status: 'SUCCEEDED',
+              result: {
+                workflowId: 'media-history-1', action: 'REVIEW', status: 'SUCCEEDED',
+                reviewStatus: 'APPROVED', selectedOutputAssetId: 'asset-1',
+                revision: 3, replayed: false, apiKey: 'must-not-cross-boundary',
+              },
+            },
+          },
+        },
+      };
+    },
+  },
+});
+await assert.rejects(secretResultClient.reviewMediaOutput(reviewInput), /media review result is invalid/u);
 
 const darkLaunchClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
   transport: {
@@ -624,6 +1272,7 @@ assert.deepEqual(selectedListings, ['listing-b']);
 
 const historyContainer = new TestNode('section');
 const historyEvents = [];
+const historyReviewEvents = [];
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(historyContainer, {
   state: 'ready',
   status: {
@@ -638,7 +1287,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(historyContainer, {
     context: { listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7 },
     items: [{
       id: 'history-1', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', reviewStatus: 'PENDING',
-      revision: 2, outputs: [{
+      revision: 2, selectedOutputAssetId: null, outputs: [{
         id: 'asset-1', url: 'https://cdn.example/output.png', mimeType: 'image/png', width: 900, height: 1200,
       }], application: null, updatedAt: '2026-07-21T00:00:01.000Z',
     }],
@@ -647,10 +1296,27 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(historyContainer, {
   onLoadHistory() { historyEvents.push('load'); },
   onLoadMoreHistory() { historyEvents.push('more'); },
   onHistoryOpenChange(open) { historyEvents.push(open ? 'open' : 'close'); },
+  onReviewOutput(item, output, decision) { historyReviewEvents.push({ item, output, decision }); },
 });
 assert.match(renderedText(historyContainer), /图片结果与历史/u);
 assert.match(renderedText(historyContainer), /图片翻译.*等待审核/u);
 assert.match(renderedText(historyContainer), /900 × 1200/u);
+assert.doesNotMatch(renderedText(historyContainer), /追加到草稿/u);
+const historyNodes = historyContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
+const previewImage = historyNodes.find((node) => node.tag === 'img');
+assert.ok(previewImage);
+assert.equal(previewImage.loading, 'lazy');
+assert.equal(previewImage.referrerPolicy, 'no-referrer');
+const approveButton = historyNodes.find((node) => node.textContent === '通过');
+const rejectButton = historyNodes.find((node) => node.textContent === '驳回');
+assert.ok(approveButton);
+assert.ok(rejectButton);
+approveButton.listeners.click({ isTrusted: false });
+assert.equal(historyReviewEvents.length, 0, 'scripted review clicks must not mutate media');
+approveButton.listeners.click({ isTrusted: true });
+rejectButton.listeners.click({ isTrusted: true });
+assert.deepEqual(historyReviewEvents.map((entry) => entry.decision), ['APPROVE', 'REJECT']);
 const moreButton = historyContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
   .find((node) => node.textContent === '加载更多');
@@ -659,6 +1325,66 @@ moreButton.listeners.click({ isTrusted: false });
 assert.deepEqual(historyEvents, []);
 moreButton.listeners.click({ isTrusted: true });
 assert.deepEqual(historyEvents, ['more']);
+
+const applyContainer = new TestNode('section');
+const applyEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(applyContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{ id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  historyOpen: true,
+  history: {
+    context: { listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7 },
+    items: [
+      {
+        id: 'approved-selected', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+        reviewStatus: 'APPROVED', revision: 3, selectedOutputAssetId: 'asset-selected',
+        outputs: [{
+          id: 'asset-selected', url: 'https://cdn.example/selected.png',
+          mimeType: 'image/png', width: 900, height: 1200,
+        }], application: null, updatedAt: '2026-07-21T00:00:03.000Z',
+      },
+      {
+        id: 'approved-unselected', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+        reviewStatus: 'APPROVED', revision: 3, selectedOutputAssetId: 'different-asset',
+        outputs: [{
+          id: 'asset-unselected', url: 'https://cdn.example/unselected.png',
+          mimeType: 'image/png', width: 900, height: 1200,
+        }], application: null, updatedAt: '2026-07-21T00:00:02.000Z',
+      },
+      {
+        id: 'approved-applied', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+        reviewStatus: 'APPROVED', revision: 4, selectedOutputAssetId: 'asset-applied',
+        outputs: [{
+          id: 'asset-applied', url: 'https://cdn.example/applied.png',
+          mimeType: 'image/png', width: 900, height: 1200,
+        }], application: {
+          id: 'application-1', mode: 'append', state: 'APPLIED', targetId: 'listing-1',
+          contextSkuKey: null, contextSlotKey: null,
+          appliedAt: '2026-07-21T00:00:02.000Z', rolledBackAt: null,
+        }, updatedAt: '2026-07-21T00:00:01.000Z',
+      },
+    ],
+    nextCursor: null,
+  },
+  onLoadHistory() {},
+  onApplyOutput(item, output) { applyEvents.push({ item, output }); },
+});
+const applyButtons = applyContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .filter((node) => node.textContent === '追加到草稿');
+assert.equal(applyButtons.length, 1, 'only the approved selected unapplied output can be appended');
+applyButtons[0].listeners.click({ isTrusted: false });
+assert.equal(applyEvents.length, 0, 'scripted apply clicks must not mutate a listing');
+applyButtons[0].listeners.click({ isTrusted: true });
+assert.equal(applyEvents.length, 1);
+assert.equal(applyEvents[0].item.id, 'approved-selected');
+assert.equal(applyEvents[0].output.id, 'asset-selected');
 
 const approvedContainer = new TestNode('section');
 const reviewEvents = [];
@@ -688,6 +1414,23 @@ reviewButton.listeners.click({ isTrusted: false });
 assert.equal(reviewEvents.length, 0);
 reviewButton.listeners.click({ isTrusted: true });
 assert.equal(reviewEvents.length, 1);
+
+const rejectedContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(rejectedContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [] },
+    media: {
+      actionableCount: 1,
+      items: [{
+        operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', reviewStatus: 'REJECTED',
+        hasSelectedOutput: false, actionable: true,
+      }],
+    },
+  },
+}, {});
+assert.match(renderedText(rejectedContainer), /图片翻译 · 审核已驳回/u);
 
 const failedContainer = new TestNode('section');
 const commands = [];
@@ -723,5 +1466,117 @@ assert.equal(commands.length, 0, 'scripted page clicks must not execute extensio
 retryButton.listeners.click({ isTrusted: true });
 assert.equal(commands.length, 1);
 assert.equal(commands[0].action, 'RETRY');
+
+const confirmHtml = fs.readFileSync(confirmHtmlPath, 'utf8');
+const confirmLaunchHtml = fs.readFileSync(confirmLaunchPath, 'utf8');
+const confirmPageSource = fs.readFileSync(confirmPagePath, 'utf8');
+assert.match(confirmHtml, /media-confirm\.css/u);
+assert.match(confirmHtml, /media-confirm\.js/u);
+assert.match(confirmHtml, /referrerpolicy=["']no-referrer["']/u);
+assert.doesNotMatch(confirmHtml, /<script[^>]*>\s*[^<]/iu, 'confirmation page must not use inline scripts');
+assert.doesNotMatch(confirmLaunchHtml, /<script/iu, 'confirmation launch page must remain inert');
+
+async function createConfirmPageHarness(expiresAt) {
+  const nodes = Object.fromEntries([
+    'confirmTitle', 'confirmSubtitle', 'confirmTarget', 'previewSection', 'previewLink', 'previewImage',
+    'previewMeta', 'confirmStatus', 'cancelButton', 'confirmButton',
+  ].map((id) => [id, new TestNode(id === 'previewImage' ? 'img' : id.endsWith('Button') ? 'button' : 'div')]));
+  const messages = [];
+  const timers = [];
+  let windowClosed = false;
+  const context = {
+    URLSearchParams,
+    Date,
+    Error,
+    Number,
+    Promise,
+    String,
+    document: {
+      getElementById(id) { return nodes[id] || null; },
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          messages.push(JSON.parse(JSON.stringify(message)));
+          if (message.type === 'ss-erp:source-listing-workbench-media-confirm-read') {
+            callback({
+              ok: true,
+              confirmation: {
+                action: 'APPLY_APPEND', operation: 'IMAGE_TRANSLATE',
+                target: {
+                  platform: '1688', sourceProductId: 'source-product-123456789',
+                  shopId: 'shop-123456789', listingWorkflowId: 'listing-123456789',
+                },
+                preview: {
+                  url: 'https://cdn.example/output.png', mimeType: 'image/png',
+                  width: 900, height: 1200,
+                },
+                expiresAt,
+                completed: false,
+              },
+            });
+            return;
+          }
+          if (message.type === 'ss-erp:source-listing-workbench-media-confirm-submit') {
+            callback({ ok: true, result: { state: 'completed', replay: false } });
+            return;
+          }
+          callback({ ok: true, result: { state: 'cancelled' } });
+        },
+      },
+    },
+    window: {
+      location: { hash: `#nonce=${nonce}` },
+      close() { windowClosed = true; },
+      setTimeout(callback, delay) {
+        const timer = { callback, delay, cleared: false };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout(timer) { if (timer) timer.cleared = true; },
+    },
+  };
+  vm.runInNewContext(confirmPageSource, context, { filename: confirmPagePath });
+  await new Promise((resolve) => setImmediate(resolve));
+  return { nodes, messages, timers, windowClosed: () => windowClosed };
+}
+
+const confirmHarness = await createConfirmPageHarness(Date.now() + 120000);
+const confirmNodes = confirmHarness.nodes;
+const confirmMessages = confirmHarness.messages;
+assert.deepEqual(confirmMessages, [{
+  type: 'ss-erp:source-listing-workbench-media-confirm-read', nonce,
+}]);
+assert.equal(confirmNodes.previewImage.src, 'https://cdn.example/output.png');
+assert.equal(confirmNodes.confirmButton.textContent, '确认追加');
+assert.match(confirmNodes.confirmTarget.textContent, /1688 商品 .* · 店铺 .* · 草稿 /u);
+assert.equal(confirmNodes.confirmButton.disabled, true, 'confirmation waits for a visible preview');
+confirmNodes.confirmButton.listeners.click({ isTrusted: true });
+assert.equal(confirmMessages.length, 1, 'unloaded previews cannot be confirmed');
+confirmNodes.previewImage.listeners.error();
+assert.equal(confirmNodes.confirmButton.disabled, true);
+assert.match(confirmNodes.confirmStatus.textContent, /预览加载失败/u);
+confirmNodes.previewImage.listeners.load();
+assert.equal(confirmNodes.confirmButton.disabled, false);
+confirmNodes.confirmButton.listeners.click({ isTrusted: false });
+assert.equal(confirmMessages.length, 1, 'scripted extension-page clicks must not submit');
+confirmNodes.confirmButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(confirmMessages[1], {
+  type: 'ss-erp:source-listing-workbench-media-confirm-submit', nonce,
+});
+assert.deepEqual(Object.keys(confirmMessages[1]).sort(), ['nonce', 'type']);
+assert.equal(confirmNodes.confirmStatus.textContent, '操作已完成，可以关闭此窗口。');
+assert.equal(confirmHarness.windowClosed(), false, 'successful confirmation remains visible for user acknowledgement');
+
+const expiredHarness = await createConfirmPageHarness(Date.now() + 120000);
+expiredHarness.nodes.previewImage.listeners.load();
+assert.equal(expiredHarness.nodes.confirmButton.disabled, false);
+expiredHarness.timers[0].callback();
+assert.equal(expiredHarness.nodes.confirmButton.disabled, true);
+assert.match(expiredHarness.nodes.confirmStatus.textContent, /确认已过期/u);
+expiredHarness.nodes.confirmButton.listeners.click({ isTrusted: true });
+assert.equal(expiredHarness.messages.length, 1, 'expired confirmation cannot submit');
 
 console.log('PASS extension source listing workbench contract');

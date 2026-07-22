@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>确认图片操作</title>
+  <link rel="stylesheet" href="media-confirm.css" />
+</head>
+<body>
+  <main class="confirm-shell" aria-labelledby="confirmTitle">
+    <header class="confirm-head">
+      <div class="brand-mark" aria-hidden="true">SS</div>
+      <div>
+        <h1 id="confirmTitle">确认图片操作</h1>
+        <p id="confirmSubtitle">正在读取当前任务...</p>
+      </div>
+    </header>
+
+    <div class="target" id="confirmTarget" hidden></div>
+
+    <section class="preview" id="previewSection" hidden>
+      <a id="previewLink" target="_blank" rel="noreferrer">
+        <img id="previewImage" alt="待确认商品图" loading="lazy" referrerpolicy="no-referrer" />
+      </a>
+      <div class="preview-meta" id="previewMeta"></div>
+    </section>
+
+    <div class="status" id="confirmStatus" role="status">请稍候</div>
+
+    <footer class="confirm-actions">
+      <button class="secondary" id="cancelButton" type="button">取消</button>
+      <button class="primary" id="confirmButton" type="button" disabled>确认</button>
+    </footer>
+  </main>
+  <script src="media-confirm.js"></script>
+</body>
+</html>

@@ -149,6 +149,12 @@ function workflow(id: string, updatedAt: Date, overrides: Record<string, unknown
     contextSkuKey: null,
     contextSlotKey: 'product:gallery:1',
     selectedOutputAssetId: 'asset-valid',
+    selectedOutputAsset: {
+      id: 'asset-valid', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+      sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+      url: 'https://cdn.example/translated.png', mimeType: 'image/png',
+      width: 900, height: 1200,
+    },
     createdAt: new Date(updatedAt.getTime() - 60_000),
     updatedAt,
     jobs: [{
@@ -156,24 +162,48 @@ function workflow(id: string, updatedAt: Date, overrides: Record<string, unknown
       assets: [
         {
           id: 'asset-valid', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1',
           kind: 'AI_GENERATED', storageBackend: 'oss',
           url: 'https://cdn.example/translated.png', mimeType: 'image/png',
           width: 900, height: 1200, storageKey: 'must-not-leak',
         },
         {
           id: 'asset-foreign', ownerUserId: 'owner-2', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1',
           kind: 'AI_GENERATED', storageBackend: 'oss',
           url: 'https://cdn.example/foreign.png', mimeType: 'image/png', width: 1, height: 1,
         },
         {
           id: 'asset-provider', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1',
           kind: 'AI_PROVIDER_OUTPUT', storageBackend: 'oss',
           url: 'https://provider.example/private.png?token=secret', mimeType: 'image/png',
         },
         {
           id: 'asset-http', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1',
           kind: 'AI_GENERATED', storageBackend: 'local',
           url: 'http://remote.example/insecure.png', mimeType: 'image/png',
+        },
+        {
+          id: 'asset-private', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+          url: 'https://127.0.0.1/private.png', mimeType: 'image/png',
+        },
+        {
+          id: 'asset-credentials', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+          url: 'https://user:pass@cdn.example/private.png', mimeType: 'image/png',
+        },
+        {
+          id: 'asset-signed', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+          url: 'https://cdn.example/private.png?token=secret', mimeType: 'image/png',
+        },
+        {
+          id: 'asset-other-origin', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+          url: 'https://other.example/output.png', mimeType: 'image/png',
         },
       ],
     }],
@@ -202,7 +232,10 @@ describe('extension source media history service', () => {
       sourceListingWorkflow: { findMany: vi.fn(async () => [{ id: 'listing-1', shopId: 'shop-1' }]) },
       aiMediaWorkflow: { findMany: vi.fn(async () => rows) },
     };
-    const service = createExtensionSourceWorkbenchService({ client: client as never });
+    const service = createExtensionSourceWorkbenchService({
+      client: client as never,
+      loadAllowedPreviewOrigins: async () => ['https://cdn.example/media'],
+    });
     const result = await service.loadMediaHistory({
       ...scope(), allowedShopIds: ['shop-1'], limit: 1,
     });
@@ -221,6 +254,8 @@ describe('extension source media history service', () => {
     expect(serialized).not.toContain('must-not-leak');
     expect(serialized).not.toContain('provider.example');
     expect(serialized).not.toContain('remote.example');
+    expect(serialized).not.toContain('token=secret');
+    expect(serialized).not.toContain('other.example');
     expect(client.aiMediaWorkflow.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         ownerUserId: 'owner-1', suiteSlot: { is: null }, contextType: 'listing-draft',
@@ -228,6 +263,75 @@ describe('extension source media history service', () => {
       }),
       take: 2,
     }));
+  });
+
+  it('keeps the selected output inside the bounded four-image projection', async () => {
+    const assets = Array.from({ length: 4 }, (_, index) => ({
+      id: `asset-${index + 1}`, ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+      sourceCaptureSnapshotId: 'snapshot-1', kind: 'AI_GENERATED', storageBackend: 'oss',
+      url: `https://cdn.example/output-${index + 1}.png`, mimeType: 'image/png',
+      width: 100, height: 100,
+    }));
+    const selected = {
+      ...assets[0], id: 'asset-selected', url: 'https://cdn.example/selected.png',
+    };
+    const row = workflow('workflow-selected', NOW, {
+      selectedOutputAssetId: selected.id,
+      selectedOutputAsset: selected,
+      jobs: [{ id: 'job-1', assets }],
+      listingDraftApplicationMutations: [],
+    });
+    const client = {
+      sourceCaptureSnapshot: { findFirst: vi.fn(async () => ({
+        id: 'snapshot-1', version: 4, capturedAt: NOW,
+        subject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      sourceListingWorkflow: { findMany: vi.fn(async () => [{ id: 'listing-1', shopId: 'shop-1' }]) },
+      aiMediaWorkflow: { findMany: vi.fn(async () => [row]) },
+    };
+    const service = createExtensionSourceWorkbenchService({
+      client: client as never,
+      loadAllowedPreviewOrigins: async () => ['https://cdn.example'],
+    });
+    const result = await service.loadMediaHistory({
+      ...scope(), allowedShopIds: ['shop-1'], limit: 10,
+    });
+
+    expect(result.items[0]?.outputs).toHaveLength(4);
+    expect(result.items[0]?.outputs.map((output) => output.id)).toContain('asset-selected');
+    expect(result.items[0]?.selectedOutputAssetId).toBe('asset-selected');
+  });
+
+  it.each([
+    ['empty', []],
+    ['invalid', [
+      'https://cdn.example/path?signature=secret',
+      'https://localhost./media',
+      'https://user:pass@cdn.example/media',
+    ]],
+  ])('fails closed for an %s preview origin allowlist', async (_label, origins) => {
+    const client = {
+      sourceCaptureSnapshot: { findFirst: vi.fn(async () => ({
+        id: 'snapshot-1', version: 4, capturedAt: NOW,
+        subject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      sourceListingWorkflow: {
+        findMany: vi.fn(async () => [{ id: 'listing-1', shopId: 'shop-1' }]),
+      },
+      aiMediaWorkflow: {
+        findMany: vi.fn(async () => [workflow('workflow-no-origin', NOW)]),
+      },
+    };
+    const service = createExtensionSourceWorkbenchService({
+      client: client as never,
+      loadAllowedPreviewOrigins: async () => origins,
+    });
+    const result = await service.loadMediaHistory({
+      ...scope(), allowedShopIds: ['shop-1'], limit: 10,
+    });
+
+    expect(result.items[0]?.outputs).toEqual([]);
+    expect(result.items[0]?.selectedOutputAssetId).toBeNull();
   });
 
   it('binds canonical keyset cursors to the exact owner/snapshot/draft authority', async () => {
@@ -256,7 +360,10 @@ describe('extension source media history service', () => {
       sourceListingWorkflow: { findMany: vi.fn() },
       aiMediaWorkflow: { findMany: vi.fn() },
     };
-    const service = createExtensionSourceWorkbenchService({ client: client as never });
+    const service = createExtensionSourceWorkbenchService({
+      client: client as never,
+      loadAllowedPreviewOrigins: async () => ['https://cdn.example'],
+    });
     await expect(service.loadMediaHistory({
       ...scope(), allowedShopIds: ['shop-1'],
     })).rejects.toMatchObject({ code: 'SOURCE_WORKBENCH_STALE', statusCode: 409 });
