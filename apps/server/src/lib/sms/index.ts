@@ -3,7 +3,7 @@ import { ConsoleSmsProvider } from './console.js';
 import { TencentSmsProvider } from './tencent.js';
 import { AliyunSmsProvider } from './aliyun.js';
 import { getSmsRuntimeConfig } from '../auth-challenge-config.js';
-import type { AliyunSmsRuntimeConfig, TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
+import type { AliyunSmsRuntimeConfig, SmsRuntimeConfig, TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
 import { getRuntimeMode } from '../../adapters/runtime-config.js';
 
 export type { SmsCodePurpose, SmsProvider, SmsResult } from './types.js';
@@ -27,8 +27,8 @@ function createProvider(
   }
 }
 
-export async function getSmsProvider(): Promise<SmsProvider> {
-  const config = await getSmsRuntimeConfig();
+export async function getSmsProvider(runtimeConfig?: SmsRuntimeConfig): Promise<SmsProvider> {
+  const config = runtimeConfig || await getSmsRuntimeConfig();
   if (config.provider === 'console' && getRuntimeMode() === 'cloud') {
     throw new Error('[SMS] cloud 运行模式禁止使用 console provider');
   }

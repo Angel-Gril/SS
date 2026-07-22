@@ -661,6 +661,9 @@ const AUTH_GENERAL_KEYS = [
   'auth_sms_provider',
   'auth_sms_code_ttl_seconds',
   'auth_sms_rate_limit_seconds',
+  'auth_sms_daily_per_phone_limit',
+  'auth_sms_daily_per_ip_limit',
+  'auth_sms_daily_global_limit',
   'auth_sms_test_phone_whitelist',
   'auth_turnstile_site_key',
   'auth_turnstile_secret_key',
@@ -698,6 +701,7 @@ const AUTH_TURNSTILE_KEYS = [
   'feature_turnstile_login',
   'auth_turnstile_site_key',
   'auth_turnstile_secret_key',
+  'auth_turnstile_allowed_hostnames',
 ];
 
 function AuthSettingsPanel({
@@ -814,7 +818,8 @@ function AuthSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">云端注册与登录保护</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    后台配置优先于 VPS .env。密钥保存后会加密入库，页面只返回掩码。
+                    VPS 显式设置的 HUMAN_CHALLENGE_PROVIDER / TURNSTILE_* 环境变量优先于后台配置；
+                    未设置时使用后台值。密钥保存后会加密入库，页面只返回掩码。
                   </p>
                 </div>
                 <Button
@@ -902,6 +907,43 @@ function AuthSettingsPanel({
                   placeholder="13800138000,13900139000"
                 />
               </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div>
+                <h3 className="text-sm font-medium">短信每日额度与费用熔断</h3>
+                <p className="text-xs text-muted-foreground">
+                  无论阿里云、腾讯云还是 env 选择的正式短信服务，每次提交给供应商的发送尝试都会计数，
+                  超时或结果不确定时也不会退还额度。
+                  额度按 Asia/Shanghai 自然日重置；达到手机号、来源 IP 或全局任一上限后拒绝继续发送。
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <ConfigInput
+                  cfg={configs.auth_sms_daily_per_phone_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  type="number"
+                  placeholder="10"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_daily_per_ip_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  type="number"
+                  placeholder="100"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_daily_global_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  type="number"
+                  placeholder="1000"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                三项均为强制安全上限，不能填写 0。全局额度按当前 Redis 实例统计，国内与国外独立部署分别计数。
+              </p>
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
@@ -1238,7 +1280,19 @@ function AuthSettingsPanel({
                   type="password"
                   placeholder="0x4AAAA... secret"
                 />
+                <div className="md:col-span-2">
+                  <ConfigInput
+                    cfg={configs.auth_turnstile_allowed_hostnames}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="example.com,www.example.com"
+                  />
+                </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                使用英文逗号分隔精确 hostname，不要填写 https://、端口、路径或通配符。
+                留空或配置非法时 Turnstile 会拒绝通过；生产环境应填写全部实际登录域名。
+              </p>
             </section>
           </CardContent>
         </details>

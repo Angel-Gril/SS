@@ -115,6 +115,56 @@ function validateSmsProvider(env) {
   }
 }
 
+function validateHumanChallenge(env) {
+  let provider = env.HUMAN_CHALLENGE_PROVIDER;
+  if (isSet(provider)) {
+    expectOneOf(env, 'HUMAN_CHALLENGE_PROVIDER', [
+      'disabled',
+      'cloudflare-turnstile',
+      'builtin-pow',
+    ]);
+  } else if (env.FEATURE_TURNSTILE_LOGIN === 'true') {
+    provider = 'cloudflare-turnstile';
+  } else {
+    return;
+  }
+
+  if (provider === 'cloudflare-turnstile') {
+    requireValue(env, 'TURNSTILE_SECRET_KEY');
+    requireValue(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
+    requireValue(env, 'TURNSTILE_ALLOWED_HOSTNAMES');
+    const hostnames = String(env.TURNSTILE_ALLOWED_HOSTNAMES || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    for (const hostname of hostnames) {
+      if (hostname.length > 253
+        || hostname.endsWith('.')
+        || !hostname.split('.').every((label) => (
+          label.length >= 1
+          && label.length <= 63
+          && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
+        ))) {
+        fail(`TURNSTILE_ALLOWED_HOSTNAMES contains invalid hostname: ${hostname}`);
+      }
+    }
+  }
+
+  if (provider === 'builtin-pow') {
+    requireValue(env, 'HUMAN_CHALLENGE_SIGNING_SECRET', { minLength: 32 });
+    if (isSet(env.HUMAN_CHALLENGE_POW_DIFFICULTY)
+      && !['1', '2', '3', '4', '5'].includes(env.HUMAN_CHALLENGE_POW_DIFFICULTY)) {
+      fail('HUMAN_CHALLENGE_POW_DIFFICULTY expected an integer from 1 to 5');
+    }
+    if (isSet(env.HUMAN_CHALLENGE_TTL_SECONDS)) {
+      const ttl = Number(env.HUMAN_CHALLENGE_TTL_SECONDS);
+      if (!Number.isInteger(ttl) || ttl < 30 || ttl > 600) {
+        fail('HUMAN_CHALLENGE_TTL_SECONDS expected an integer from 30 to 600');
+      }
+    }
+  }
+}
+
 function validateDeploymentHosts(env) {
   const keys = [
     'NEXT_PUBLIC_USER_HOSTNAME',
@@ -277,6 +327,7 @@ function validateCloudR2(env) {
   warnIfMissing(env, 'SMS_PROVIDER');
   if (env.SMS_PROVIDER === 'console') fail('SMS_PROVIDER=console is not allowed in cloud profiles');
   validateSmsProvider(env);
+  validateHumanChallenge(env);
 }
 
 function validateCloudBootstrap(env) {
@@ -292,6 +343,7 @@ function validateCloudBootstrap(env) {
   warnIfMissing(env, 'SMS_PROVIDER');
   if (env.SMS_PROVIDER === 'console') fail('SMS_PROVIDER=console is not allowed in cloud profiles');
   validateSmsProvider(env);
+  validateHumanChallenge(env);
 }
 
 function validateLocal(env) {

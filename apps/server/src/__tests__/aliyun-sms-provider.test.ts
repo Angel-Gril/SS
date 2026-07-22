@@ -89,6 +89,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('13800138000', '654321', 'password-reset')).resolves.toEqual({
       ok: false,
       err: '阿里云找回密码短信模板未配置',
+      failureKind: 'not_dispatched',
     });
     expect(sendSms).not.toHaveBeenCalled();
   });
@@ -124,6 +125,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('not-a-mainland-number', '123456')).resolves.toEqual({
       ok: false,
       err: '手机号格式不正确',
+      failureKind: 'not_dispatched',
     });
     expect(process.env.ALIBABA_CLOUD_IMDSV1_DISABLED).toBe('true');
   });
@@ -153,6 +155,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('not-a-mainland-number', '123456')).resolves.toEqual({
       ok: false,
       err: '手机号格式不正确',
+      failureKind: 'not_dispatched',
     });
   });
 
@@ -191,6 +194,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('13800138000', '123456')).resolves.toEqual({
       ok: false,
       err: 'isv.BUSINESS_LIMIT_CONTROL: 触发流控',
+      failureKind: 'rejected',
     });
   });
 
@@ -203,6 +207,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('008613800138000', '123456')).resolves.toEqual({
       ok: false,
       err: 'network timeout with details',
+      failureKind: 'unknown',
     });
   });
 
@@ -213,6 +218,7 @@ describe('AliyunSmsProvider', () => {
     await expect(provider.send('85212345678', '123456')).resolves.toEqual({
       ok: false,
       err: '手机号格式不正确',
+      failureKind: 'not_dispatched',
     });
     expect(sendSms).not.toHaveBeenCalled();
   });

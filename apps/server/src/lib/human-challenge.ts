@@ -1,5 +1,12 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { getConfig, getDefaultValue, type SystemConfigKey, type SystemConfigValue } from '../config/system-config-schema.js';
+import {
+  getConfig,
+  getDefaultValue,
+  getStrictConfig,
+  SystemConfigSchema,
+  type SystemConfigKey,
+  type SystemConfigValue,
+} from '../config/system-config-schema.js';
 import { getRuntimeMode } from '../adapters/runtime-config.js';
 import { redis } from './redis.js';
 
@@ -7,15 +14,16 @@ export type HumanChallengeProvider = 'disabled' | 'cloudflare-turnstile' | 'buil
 export type HumanChallengeAction = 'login' | 'sms_login' | 'register_sms' | 'password_reset_sms' | 'admin_login';
 
 const ACTIONS = new Set<HumanChallengeAction>(['login', 'sms_login', 'register_sms', 'password_reset_sms', 'admin_login']);
-
 export interface HumanChallengeRuntimeConfig {
   provider: HumanChallengeProvider;
+  providerConfigValid: boolean;
   difficulty: number;
   ttlSeconds: number;
   signingSecret: string;
   turnstileSiteKey: string;
   turnstileSecretKey: string;
   allowedHostnames: string[];
+  hostnameConfigValid: boolean;
   source: 'env' | 'system-config';
 }
 
@@ -32,30 +40,66 @@ async function readConfig<K extends SystemConfigKey>(key: K): Promise<SystemConf
 }
 
 function splitCsv(value: string): string[] {
-  return value.split(',').map((item) => item.trim()).filter(Boolean);
+  return [...new Set(value.split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+async function readProviderConfig(): Promise<{ value: HumanChallengeProvider; valid: boolean }> {
+  try {
+    return { value: await getStrictConfig('auth_human_challenge_provider'), valid: true };
+  } catch (error) {
+    console.error(`[human-challenge] invalid provider configuration: ${String(error)}`);
+    return { value: 'disabled', valid: false };
+  }
+}
+
+async function readAllowedHostnamesConfig(): Promise<{ value: string; valid: boolean }> {
+  try {
+    return { value: await getStrictConfig('auth_turnstile_allowed_hostnames'), valid: true };
+  } catch (error) {
+    console.error(`[human-challenge] invalid Turnstile hostname allowlist: ${String(error)}`);
+    return { value: '', valid: false };
+  }
 }
 
 export async function getHumanChallengeRuntimeConfig(): Promise<HumanChallengeRuntimeConfig> {
-  const envProvider = process.env.HUMAN_CHALLENGE_PROVIDER;
-  const hasEnvProvider = isProvider(envProvider) || process.env.FEATURE_TURNSTILE_LOGIN === 'true';
+  const rawEnvProvider = process.env.HUMAN_CHALLENGE_PROVIDER;
+  const hasExplicitEnvProvider = typeof rawEnvProvider === 'string' && rawEnvProvider.trim().length > 0;
+  const legacyEnvTurnstileEnabled = process.env.FEATURE_TURNSTILE_LOGIN === 'true';
+  const hasEnvProvider = hasExplicitEnvProvider || legacyEnvTurnstileEnabled;
   const [dbProvider, legacyTurnstileEnabled, dbSecret, dbDifficulty, dbTtl, dbHostnames, dbSiteKey, dbTurnstileSecret] = await Promise.all([
-    readConfig('auth_human_challenge_provider'), readConfig('feature_turnstile_login'), readConfig('auth_pow_signing_secret'),
+    readProviderConfig(), readConfig('feature_turnstile_login'), readConfig('auth_pow_signing_secret'),
     readConfig('auth_pow_difficulty'), readConfig('auth_pow_ttl_seconds'),
-    readConfig('auth_turnstile_allowed_hostnames'), readConfig('auth_turnstile_site_key'),
+    readAllowedHostnamesConfig(), readConfig('auth_turnstile_site_key'),
     readConfig('auth_turnstile_secret_key'),
   ]);
-  const configuredProvider = isProvider(envProvider)
-    ? envProvider
-    : process.env.FEATURE_TURNSTILE_LOGIN === 'true' ? 'cloudflare-turnstile' : legacyTurnstileEnabled && dbProvider === 'disabled' ? 'cloudflare-turnstile' : dbProvider;
-  const provider = getRuntimeMode() === 'cloud' ? configuredProvider : 'disabled';
+  const configuredProvider = hasExplicitEnvProvider
+    ? isProvider(rawEnvProvider) ? rawEnvProvider : 'disabled'
+    : legacyEnvTurnstileEnabled
+      ? 'cloudflare-turnstile'
+      : legacyTurnstileEnabled && dbProvider.value === 'disabled'
+        ? 'cloudflare-turnstile'
+        : dbProvider.value;
+  const runtimeMode = getRuntimeMode();
+  const provider = runtimeMode === 'cloud' ? configuredProvider : 'disabled';
+  const providerConfigValid = runtimeMode !== 'cloud'
+    || (hasExplicitEnvProvider ? isProvider(rawEnvProvider) : legacyEnvTurnstileEnabled || dbProvider.valid);
+  const rawEnvHostnames = process.env.TURNSTILE_ALLOWED_HOSTNAMES || '';
+  const hasEnvHostnames = rawEnvHostnames.trim().length > 0;
+  const rawAllowedHostnames = hasEnvHostnames ? rawEnvHostnames : dbHostnames.value;
+  const parsedAllowedHostnames = SystemConfigSchema.auth_turnstile_allowed_hostnames.safeParse(rawAllowedHostnames);
+  const hostnameConfigValid = (hasEnvHostnames || dbHostnames.valid) && parsedAllowedHostnames.success;
   return {
     provider,
+    providerConfigValid,
     difficulty: Math.min(5, Math.max(1, Number(process.env.HUMAN_CHALLENGE_POW_DIFFICULTY || dbDifficulty))),
     ttlSeconds: Math.min(600, Math.max(30, Number(process.env.HUMAN_CHALLENGE_TTL_SECONDS || dbTtl))),
     signingSecret: process.env.HUMAN_CHALLENGE_SIGNING_SECRET || dbSecret || '',
     turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || dbSiteKey,
     turnstileSecretKey: process.env.TURNSTILE_SECRET_KEY || dbTurnstileSecret,
-    allowedHostnames: splitCsv(process.env.TURNSTILE_ALLOWED_HOSTNAMES || dbHostnames),
+    allowedHostnames: hostnameConfigValid ? splitCsv(rawAllowedHostnames) : [],
+    hostnameConfigValid,
     source: hasEnvProvider ? 'env' : 'system-config',
   };
 }
@@ -67,7 +111,12 @@ function sign(payload: string, secret: string): string {
 export async function issueHumanChallenge(action: HumanChallengeAction) {
   if (!ACTIONS.has(action)) throw new Error('Unsupported human challenge action');
   const config = await getHumanChallengeRuntimeConfig();
+  if (!config.providerConfigValid) throw new Error('HUMAN_CHALLENGE_PROVIDER configuration is invalid');
   const selected = config.provider;
+  if (selected === 'cloudflare-turnstile'
+    && (!config.hostnameConfigValid || config.allowedHostnames.length === 0)) {
+    throw new Error('TURNSTILE_ALLOWED_HOSTNAMES configuration is invalid or empty');
+  }
   if (selected !== 'builtin-pow') return { provider: selected, action };
   if (config.signingSecret.length < 32) throw new Error('HUMAN_CHALLENGE_SIGNING_SECRET must contain at least 32 characters');
   const payload = Buffer.from(JSON.stringify({
@@ -83,6 +132,7 @@ export async function issueHumanChallenge(action: HumanChallengeAction) {
 export async function verifyHumanChallenge(input: { action: HumanChallengeAction; token: string; ip?: string }): Promise<boolean> {
   const config = await getHumanChallengeRuntimeConfig();
   const selected = config.provider;
+  if (!config.providerConfigValid) return false;
   if (selected === 'disabled') return true;
   if (!input.token) return false;
   if (selected === 'cloudflare-turnstile') return verifyTurnstile(input, config);
@@ -103,13 +153,17 @@ export async function verifyHumanChallenge(input: { action: HumanChallengeAction
 
 async function verifyTurnstile(input: { action: HumanChallengeAction; token: string; ip?: string }, config: HumanChallengeRuntimeConfig): Promise<boolean> {
   const secret = config.turnstileSecretKey;
-  if (!secret) return false;
+  if (!secret || !config.hostnameConfigValid) return false;
   try {
     const body = new URLSearchParams({ secret, response: input.token, ...(input.ip ? { remoteip: input.ip } : {}) });
     const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body, signal: AbortSignal.timeout(5000) });
     const data = await response.json() as { success?: boolean; hostname?: string; action?: string };
     const allowed = config.allowedHostnames;
-    return data.success === true && data.action === input.action && (allowed.length === 0 || (!!data.hostname && allowed.includes(data.hostname)));
+    const responseHostname = String(data.hostname || '').trim().toLowerCase();
+    return data.success === true
+      && data.action === input.action
+      && allowed.length > 0
+      && allowed.includes(responseHostname);
   } catch { return false; }
 }
 

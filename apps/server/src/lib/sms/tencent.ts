@@ -5,13 +5,25 @@ import type { TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
 
 const SmsClient = tencentcloud.sms.v20210111.Client;
 
+export interface TencentSmsClient {
+  SendSms(input: {
+    SmsSdkAppId: string;
+    SignName: string;
+    TemplateId: string;
+    TemplateParamSet: string[];
+    PhoneNumberSet: string[];
+  }): Promise<{
+    SendStatusSet?: Array<{ Code?: string; Message?: string; SerialNo?: string }>;
+  }>;
+}
+
 export class TencentSmsProvider implements SmsProvider {
-  private client: InstanceType<typeof SmsClient>;
+  private client: TencentSmsClient;
   private sdkAppId: string;
   private signName: string;
   private templateId: string;
 
-  constructor(config?: Partial<TencentSmsRuntimeConfig>) {
+  constructor(config?: Partial<TencentSmsRuntimeConfig>, client?: TencentSmsClient) {
     const secretId = config?.secretId || process.env.SMS_TENCENT_SECRET_ID;
     const secretKey = config?.secretKey || process.env.SMS_TENCENT_SECRET_KEY;
     const region = config?.region || process.env.SMS_TENCENT_REGION || 'ap-guangzhou';
@@ -28,7 +40,7 @@ export class TencentSmsProvider implements SmsProvider {
       throw new Error('[SMS] SMS_TENCENT_SDK_APP_ID / SIGN_NAME / TEMPLATE_ID 未配置');
     }
 
-    this.client = new SmsClient({
+    this.client = client || new SmsClient({
       credential: { secretId, secretKey },
       region,
     });
@@ -51,12 +63,13 @@ export class TencentSmsProvider implements SmsProvider {
         return {
           ok: false,
           err: status?.Message || '发送失败',
+          failureKind: 'rejected',
         };
       }
 
       return { ok: true, bizId: status.SerialNo };
     } catch (e: any) {
-      return { ok: false, err: e.message };
+      return { ok: false, err: e.message, failureKind: 'unknown' };
     }
   }
 }

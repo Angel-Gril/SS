@@ -11,6 +11,14 @@ const directNginx = readFileSync(
   new URL('../docker/nginx/ss-erp-cn-direct.conf', import.meta.url),
   'utf8',
 );
+const cloudflareNginx = readFileSync(
+  new URL('../docker/nginx/ss-erp.conf', import.meta.url),
+  'utf8',
+);
+const serverEntrypoint = readFileSync(
+  new URL('../apps/server/src/index.ts', import.meta.url),
+  'utf8',
+);
 
 function bashExecutable() {
   if (process.platform !== 'win32') return 'bash';
@@ -99,6 +107,14 @@ test('origin mode accepts only the two supported deployment policies', () => {
   });
   assert.notEqual(wiredInvalid.status, 0);
   assert.match(wiredInvalid.stderr, /VERIFY_ORIGIN_MODE must be cloudflare or direct/u);
+});
+
+test('client IP forwarding trusts only the nearest Nginx hop', () => {
+  assert.match(serverEntrypoint, /trustProxy: process\.env\.NODE_ENV === 'production' \? 1 : false/u);
+  for (const nginxConfig of [cloudflareNginx, directNginx]) {
+    assert.match(nginxConfig, /proxy_set_header X-Forwarded-For \$remote_addr;/u);
+    assert.doesNotMatch(nginxConfig, /proxy_add_x_forwarded_for/u);
+  }
 });
 
 test('direct hostnames are explicit, normalized, bounded, and validated', () => {

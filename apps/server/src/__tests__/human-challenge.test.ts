@@ -66,6 +66,95 @@ describe('human challenge', () => {
     await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(false);
   });
 
+  it('normalizes an exact hostname allowlist loaded from SystemConfig', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', '');
+    vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', '');
+    vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', '');
+    vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', '');
+    vi.stubEnv('TURNSTILE_ALLOWED_HOSTNAMES', '');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
+    configStore.set('auth_human_challenge_provider', 'cloudflare-turnstile');
+    configStore.set('auth_turnstile_secret_key', 'db-secret');
+    configStore.set('auth_turnstile_allowed_hostnames', 'APP.SS-ERP.COM, app.ss-erp.com');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, hostname: 'app.ss-erp.com', action: 'login' }),
+    })));
+
+    const { getHumanChallengeRuntimeConfig, verifyHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      allowedHostnames: ['app.ss-erp.com'],
+      hostnameConfigValid: true,
+      providerConfigValid: true,
+      source: 'system-config',
+    });
+    await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(true);
+  });
+
+  it('fails closed when Turnstile has no hostname allowlist', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret');
+    vi.stubEnv('TURNSTILE_ALLOWED_HOSTNAMES', '');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, hostname: 'app.ss-erp.com', action: 'login' }),
+    })));
+
+    const { verifyHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(false);
+  });
+
+  it('fails closed for a historically invalid saved hostname value', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret');
+    vi.stubEnv('TURNSTILE_ALLOWED_HOSTNAMES', '');
+    configStore.set('auth_turnstile_allowed_hostnames', 'https://app.ss-erp.com');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      json: async () => ({ success: true, hostname: 'app.ss-erp.com', action: 'login' }),
+    })));
+
+    const { getHumanChallengeRuntimeConfig, verifyHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      allowedHostnames: [],
+      hostnameConfigValid: false,
+    });
+    await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(false);
+  });
+
+  it('fails closed instead of falling back when the explicit provider is invalid', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'turnstile-typo');
+    configStore.set('auth_human_challenge_provider', 'disabled');
+
+    const {
+      getHumanChallengeRuntimeConfig,
+      issueHumanChallenge,
+      verifyHumanChallenge,
+    } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'disabled',
+      providerConfigValid: false,
+      source: 'env',
+    });
+    await expect(issueHumanChallenge('login')).rejects.toThrow(/HUMAN_CHALLENGE_PROVIDER/);
+    await expect(verifyHumanChallenge({ action: 'login', token: '' })).resolves.toBe(false);
+  });
+
+  it('marks an invalid environment hostname allowlist as unhealthy', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('TURNSTILE_ALLOWED_HOSTNAMES', 'https://app.ss-erp.com');
+
+    const { getHumanChallengeRuntimeConfig } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'cloudflare-turnstile',
+      allowedHostnames: [],
+      hostnameConfigValid: false,
+      source: 'env',
+    });
+  });
+
   it('loads the challenge provider and PoW settings from SystemConfig when env is absent', async () => {
     vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', '');
     vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', '');

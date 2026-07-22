@@ -34,6 +34,11 @@ const steps = [
     args: ['scripts/vps-origin-mode-contract.test.mjs'],
   },
   {
+    name: 'Web auth security settings contract',
+    command: 'node',
+    args: ['scripts/web-auth-security-settings.test.mjs'],
+  },
+  {
     name: 'AI media provider foundation contract',
     command: 'node',
     args: ['scripts/ai-media-provider-contract.test.mjs'],

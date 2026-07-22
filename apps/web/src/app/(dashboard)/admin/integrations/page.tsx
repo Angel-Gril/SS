@@ -26,6 +26,7 @@ interface IntegrationCheck {
   configured: boolean;
   source: 'env' | 'db' | 'mixed';
   detail?: string;
+  testable?: boolean;
 }
 
 type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'backup' | 'sentry';
@@ -155,7 +156,7 @@ export default function AdminIntegrationsPage() {
               check={c}
               testing={testingKey === c.key}
               onTest={
-                c.key === 'turnstile' ||
+                (c.key === 'turnstile' && c.testable !== false) ||
                 c.key === 'sms' ||
                 c.key === 'oss' ||
                 c.key === 'backup' ||

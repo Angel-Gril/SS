@@ -101,6 +101,30 @@ pnpm preflight --remote-oss
 
 For R2 this only passes when `/api/extension/runtime` reports `mode:"cloud"` and `capabilities.imageUpload:"oss"`, and the upload response returns `backend:"oss"`.
 
+## Human Challenge Rollout Gate
+
+Configure the effective human-challenge provider before deploying an auth change. Explicit environment variables override the super-admin `SystemConfig`; do not maintain conflicting values in both places.
+
+International deployment:
+
+```env
+HUMAN_CHALLENGE_PROVIDER=cloudflare-turnstile
+TURNSTILE_SECRET_KEY=...
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+TURNSTILE_ALLOWED_HOSTNAMES=ss-erp.com,www.ss-erp.com,app.ss-erp.com,admin.ss-erp.com
+```
+
+Domestic deployment:
+
+```env
+HUMAN_CHALLENGE_PROVIDER=builtin-pow
+HUMAN_CHALLENGE_SIGNING_SECRET=<at-least-32-random-characters>
+HUMAN_CHALLENGE_POW_DIFFICULTY=4
+HUMAN_CHALLENGE_TTL_SECONDS=120
+```
+
+Turnstile is fail-closed when the exact hostname allowlist is empty or invalid. Before switching an international release, open the super-admin integrations page and confirm the effective provider, Site Key, Secret Key, and hostname count. For the domestic deployment, confirm a challenge can be issued and consumed once for each auth action. Never silently fall back to `disabled` when an external verifier is unavailable.
+
 ## Domestic Direct-Origin HTTPS
 
 The domestic `.cn` deployment is DNS-direct and must not use the Cloudflare origin guard from `docker/nginx/ss-erp.conf`. Use the tracked direct-origin template instead:

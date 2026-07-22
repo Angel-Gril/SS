@@ -109,7 +109,7 @@ const activeUser = {
 };
 
 async function buildApp() {
-  const app = Fastify();
+  const app = Fastify({ trustProxy: 1 });
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.ready();
   return app;
@@ -174,18 +174,45 @@ describe('SMS password reset', () => {
     mocks.verifySmsCode.mockResolvedValue(true);
   });
 
+  it('forwards the registration request IP into SMS quota enforcement', async () => {
+    mocks.userFindUnique.mockResolvedValueOnce(null);
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/sms-code',
+        headers: { 'x-forwarded-for': '198.51.100.99, 203.0.113.10' },
+        payload: { phone: '19300000000', humanChallengeToken: 'challenge-token' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mocks.sendSmsCode).toHaveBeenCalledWith(
+        '19300000000',
+        'register',
+        { ip: '203.0.113.10' },
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it('sends a purpose-scoped password reset code after Turnstile verification', async () => {
     const app = await buildApp();
     try {
       const response = await app.inject({
         method: 'POST',
         url: '/api/auth/password-reset/sms-code',
+        headers: { 'x-forwarded-for': '203.0.113.11' },
         payload: { phone: activeUser.phone, turnstileToken: 'turnstile-token' },
       });
 
       expect(response.statusCode).toBe(200);
       expect(mocks.verifyHumanChallenge).toHaveBeenCalledWith({ action: 'password_reset_sms', token: 'turnstile-token', ip: expect.any(String) });
-      expect(mocks.sendSmsCode).toHaveBeenCalledWith(activeUser.phone, 'password-reset');
+      expect(mocks.sendSmsCode).toHaveBeenCalledWith(
+        activeUser.phone,
+        'password-reset',
+        { ip: '203.0.113.11' },
+      );
     } finally {
       await app.close();
     }
@@ -293,6 +320,7 @@ describe('SMS login', () => {
       const known = await app.inject({
         method: 'POST',
         url: '/api/auth/sms-login-code',
+        headers: { 'x-forwarded-for': '203.0.113.12' },
         payload: { phone: activeUser.phone, humanChallengeToken: 'challenge-token' },
       });
       const unknown = await app.inject({
@@ -307,7 +335,11 @@ describe('SMS login', () => {
       expect(mocks.verifyHumanChallenge).toHaveBeenCalledWith({
         action: 'sms_login', token: 'challenge-token', ip: expect.any(String),
       });
-      expect(mocks.sendSmsCode).toHaveBeenCalledWith(activeUser.phone, 'sms-login');
+      expect(mocks.sendSmsCode).toHaveBeenCalledWith(
+        activeUser.phone,
+        'sms-login',
+        { ip: '203.0.113.12' },
+      );
     } finally {
       await app.close();
     }

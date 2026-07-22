@@ -4,6 +4,26 @@ import { decrypt, encrypt } from '../lib/crypto.js';
 
 const sourceOzonPublisherEntrypointStage = z.enum(['off', 'shadow', 'v2']);
 
+function isExactHostname(value: string): boolean {
+  if (value.length === 0 || value.length > 253 || value.endsWith('.')) return false;
+  return value.split('.').every((label) => (
+    label.length >= 1
+    && label.length <= 63
+    && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u.test(label)
+  ));
+}
+
+const turnstileAllowedHostnamesSchema = z.string().max(2048).superRefine((value, ctx) => {
+  const invalid = value.split(',').map((item) => item.trim()).filter(Boolean)
+    .find((hostname) => !isExactHostname(hostname));
+  if (invalid) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `无效 hostname: ${invalid}；只能填写精确域名，不支持协议、端口、路径或通配符`,
+    });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema 定义：所有 SystemConfig key 的类型、默认值、校验规则
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +116,7 @@ export const SystemConfigSchema = {
   auth_pow_signing_secret: z.string().default(''),
   auth_pow_difficulty: z.number().int().min(1).max(5).default(4),
   auth_pow_ttl_seconds: z.number().int().min(30).max(600).default(120),
-  auth_turnstile_allowed_hostnames: z.string().default(''),
+  auth_turnstile_allowed_hostnames: turnstileAllowedHostnamesSchema.default(''),
   auth_sms_provider: z.enum(['env', 'console', 'tencent', 'aliyun']).default('env'),
   auth_sms_tencent_secret_id: z.string().default(''),
   auth_sms_tencent_secret_key: z.string().default(''),
@@ -119,6 +139,9 @@ export const SystemConfigSchema = {
   auth_sms_aliyun_sms_login_template_param_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).default('code'),
   auth_sms_code_ttl_seconds: z.number().int().min(60).max(1800).default(300),
   auth_sms_rate_limit_seconds: z.number().int().min(30).max(600).default(60),
+  auth_sms_daily_per_phone_limit: z.number().int().min(1).max(100).default(10),
+  auth_sms_daily_per_ip_limit: z.number().int().min(1).max(100000).default(100),
+  auth_sms_daily_global_limit: z.number().int().min(1).max(1000000).default(1000),
   auth_sms_test_phone_whitelist: z.string().default(''),
   auth_turnstile_site_key: z.string().default(''),
   auth_turnstile_secret_key: z.string().default(''),
@@ -569,7 +592,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   auth_pow_difficulty: {
     label: '工作量证明难度',
     group: 'auth',
-    description: 'SHA-256 十六进制摘要要求的前导零字符数，范围 1-6',
+    description: 'SHA-256 十六进制摘要要求的前导零字符数，范围 1-5',
   },
   auth_pow_ttl_seconds: {
     label: '工作量证明有效期（秒）',
@@ -579,7 +602,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   auth_turnstile_allowed_hostnames: {
     label: 'Turnstile 允许域名',
     group: 'auth',
-    description: '逗号分隔的合法 hostname；留空表示不额外限制',
+    description: '逗号分隔的精确 hostname；Turnstile 模式下留空或非法会拒绝验证',
   },
   auth_sms_provider: {
     label: '短信服务来源',
@@ -698,6 +721,21 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '短信发送间隔（秒）',
     group: 'auth',
     description: '同一手机号两次发送验证码之间的最小间隔，默认 60 秒',
+  },
+  auth_sms_daily_per_phone_limit: {
+    label: '每手机号每日短信上限',
+    group: 'auth',
+    description: '按 Asia/Shanghai 自然日统计，所有验证码用途合并计算，默认 10 条',
+  },
+  auth_sms_daily_per_ip_limit: {
+    label: '每 IP 每日短信上限',
+    group: 'auth',
+    description: '按 Asia/Shanghai 自然日统计，所有验证码用途合并计算，默认 100 条',
+  },
+  auth_sms_daily_global_limit: {
+    label: '全局每日短信熔断上限',
+    group: 'auth',
+    description: '当前 Redis 实例内所有真实短信发送尝试的每日总上限，与短信服务商无关，默认 1000 条',
   },
   auth_sms_test_phone_whitelist: {
     label: '测试手机号白名单',
@@ -1147,6 +1185,20 @@ export async function getConfig<K extends SystemConfigKey>(key: K): Promise<Syst
     return schema.parse(undefined) as SystemConfigValue<K>;
   }
   return parseValue(key, record.value);
+}
+
+/**
+ * Read a security-sensitive setting without silently replacing an invalid
+ * persisted value with its default. Callers can choose a fail-closed path.
+ */
+export async function getStrictConfig<K extends SystemConfigKey>(key: K): Promise<SystemConfigValue<K>> {
+  const record = await prisma.systemConfig.findUnique({ where: { key }, select: { value: true } });
+  if (!record) {
+    const schema = SystemConfigSchema[key];
+    return schema.parse(undefined) as SystemConfigValue<K>;
+  }
+  const schema = SystemConfigSchema[key];
+  return schema.parse(coerceConfigValue(key, decryptConfigValue(key, record.value))) as SystemConfigValue<K>;
 }
 
 export async function setConfig<K extends SystemConfigKey>(

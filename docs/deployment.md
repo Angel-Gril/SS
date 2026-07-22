@@ -60,13 +60,16 @@
 强烈推荐：
 
 - `REDIS_URL`（启用短信验证码、登录失败计数和 BullMQ worker）
-- `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`（注册/登录人机验证）
+- 国际站人机验证：`HUMAN_CHALLENGE_PROVIDER=cloudflare-turnstile` + `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_ALLOWED_HOSTNAMES`。白名单填写英文逗号分隔的精确 hostname，不支持协议、端口、路径或通配符，留空或非法时认证失败关闭。
+- 国内站人机验证：`HUMAN_CHALLENGE_PROVIDER=builtin-pow` + 至少 32 位随机 `HUMAN_CHALLENGE_SIGNING_SECRET`；按需设置 `HUMAN_CHALLENGE_POW_DIFFICULTY=4` 和 `HUMAN_CHALLENGE_TTL_SECONDS=120`。
 - `SMS_PROVIDER` + `SMS_ALIYUN_*` 或 `SMS_TENCENT_*`（短信验证码；阿里云生产优先使用 ECS RAM Role）
 - `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN`（服务端 / 浏览器端错误追踪）
 - `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
 - `IMAGE_STORAGE_BACKEND` + `OSS_*`（图片存储；云端推荐 `oss`，OSS 未准备好时 staging 可临时用 `ozon-cdn`）
 
 OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见根目录 `DEPLOYMENT.md` 第 3.3 节。
+
+`HUMAN_CHALLENGE_PROVIDER`、`TURNSTILE_*` 和 PoW 环境变量显式设置后优先于管理员后台；未设置时才读取 `SystemConfig`。部署前必须确认最终生效来源，避免环境变量和后台保存两套冲突值。旧部署若仍使用 `FEATURE_TURNSTILE_LOGIN=true`，同样必须配置 Turnstile 两把 key 与 `TURNSTILE_ALLOWED_HOSTNAMES`。
 
 首个超级管理员只允许通过 `/setup` 引导流程创建。公开注册只创建普通 `USER`，且在系统没有任何 `ADMIN` 前会被后端拒绝。生产环境必须配置 `SETUP_TOKEN`，防止公网首次访问者抢占管理员账号。
 

@@ -1,5 +1,5 @@
 import { getRuntimeMode, type RuntimeMode } from '../adapters/runtime-config.js';
-import { getConfig, getDefaultValue, type SystemConfigKey, type SystemConfigValue } from '../config/system-config-schema.js';
+import { getConfig, getDefaultValue, getStrictConfig, type SystemConfigKey, type SystemConfigValue } from '../config/system-config-schema.js';
 
 export type SmsProviderName = 'console' | 'tencent' | 'aliyun';
 
@@ -38,6 +38,9 @@ export interface SmsRuntimeConfig {
   source: 'env' | 'system-config' | 'mixed';
   codeTtlSeconds: number;
   rateLimitSeconds: number;
+  dailyPerPhoneLimit: number;
+  dailyPerIpLimit: number;
+  dailyGlobalLimit: number;
   testPhoneWhitelist: string[];
   tencent: TencentSmsRuntimeConfig;
   aliyun: AliyunSmsRuntimeConfig;
@@ -102,11 +105,11 @@ export async function isTurnstileChallengeEnabled(): Promise<boolean> {
 export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
   // Provider selection is a security boundary. A database read failure must
   // not silently switch a cloud deployment to another environment provider.
-  const configuredProvider = await getConfig('auth_sms_provider');
+  const configuredProvider = await getStrictConfig('auth_sms_provider');
   const useDbTencent = configuredProvider === 'tencent';
   const useDbAliyun = configuredProvider === 'aliyun';
   const providerConfig = <K extends SystemConfigKey>(key: K, active: boolean) => (
-    active ? getConfig(key) : readConfig(key)
+    active ? getStrictConfig(key) : readConfig(key)
   );
   const [
     secretId,
@@ -130,6 +133,9 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     aliyunSmsLoginTemplateParamName,
     codeTtlSeconds,
     rateLimitSeconds,
+    dailyPerPhoneLimit,
+    dailyPerIpLimit,
+    dailyGlobalLimit,
     whitelist,
   ] = await Promise.all([
     providerConfig('auth_sms_tencent_secret_id', useDbTencent),
@@ -153,6 +159,9 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     providerConfig('auth_sms_aliyun_sms_login_template_param_name', useDbAliyun),
     readConfig('auth_sms_code_ttl_seconds'),
     readConfig('auth_sms_rate_limit_seconds'),
+    getStrictConfig('auth_sms_daily_per_phone_limit'),
+    getStrictConfig('auth_sms_daily_per_ip_limit'),
+    getStrictConfig('auth_sms_daily_global_limit'),
     readConfig('auth_sms_test_phone_whitelist'),
   ]);
 
@@ -176,6 +185,9 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     source: configuredProvider === 'env' ? (hasDbProviderFields ? 'mixed' : 'env') : 'system-config',
     codeTtlSeconds,
     rateLimitSeconds,
+    dailyPerPhoneLimit,
+    dailyPerIpLimit,
+    dailyGlobalLimit,
     testPhoneWhitelist: splitCsv(whitelist),
     tencent: {
       secretId: useDbTencent ? clean(secretId) || process.env.SMS_TENCENT_SECRET_ID || '' : process.env.SMS_TENCENT_SECRET_ID || '',

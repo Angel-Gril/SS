@@ -70,6 +70,28 @@ describe('auth challenge config', () => {
     });
   });
 
+  it('loads SMS daily quota defaults and SystemConfig overrides', async () => {
+    configStore.set('auth_sms_daily_per_phone_limit', '7');
+    configStore.set('auth_sms_daily_per_ip_limit', '80');
+    configStore.set('auth_sms_daily_global_limit', '900');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      dailyPerPhoneLimit: 7,
+      dailyPerIpLimit: 80,
+      dailyGlobalLimit: 900,
+    });
+  });
+
+  it('fails closed when a daily cost-fuse setting cannot be read', async () => {
+    configFailures.add('auth_sms_daily_global_limit');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).rejects.toThrow(/database unavailable.*daily_global_limit/);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });

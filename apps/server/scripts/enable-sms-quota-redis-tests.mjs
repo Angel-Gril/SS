@@ -1,0 +1,1 @@
+process.env.RUN_REDIS_INTEGRATION_TESTS = '1';

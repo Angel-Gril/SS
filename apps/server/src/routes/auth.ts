@@ -74,8 +74,12 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(409).send({ code: 0, msg: '该手机号已注册' });
     }
 
-    const result = await sendSmsCode(phone);
-    return reply.send({ code: result.ok ? 1 : 0, msg: result.msg });
+    const result = await sendSmsCode(phone, 'register', { ip: request.ip });
+    return reply.send({
+      code: result.ok ? 1 : 0,
+      msg: result.msg,
+      ...(!result.ok ? { errorCode: result.errorCode } : {}),
+    });
   });
 
   app.post('/password-reset/sms-code', { config: authRateLimitConfig }, async (request, reply) => {
@@ -91,7 +95,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({ where: { phone } });
     if (user && user.status !== 'SUSPENDED') {
-      await sendSmsCode(phone, 'password-reset');
+      await sendSmsCode(phone, 'password-reset', { ip: request.ip });
     }
     return reply.send({ code: 1, msg: '如果该手机号已注册，验证码将发送至该手机' });
   });
@@ -114,7 +118,7 @@ export async function authRoutes(app: FastifyInstance) {
     // Keep the response identical for unknown, suspended, and active numbers.
     const user = await prisma.user.findUnique({ where: { phone }, select: { status: true } });
     if (user && user.status !== 'SUSPENDED') {
-      const result = await sendSmsCode(phone, 'sms-login');
+      const result = await sendSmsCode(phone, 'sms-login', { ip: request.ip });
       if (!result.ok) request.log.warn('SMS login code delivery failed');
     }
     return reply.send({ code: 1, msg: '如果该手机号已注册，验证码将发送至该手机' });

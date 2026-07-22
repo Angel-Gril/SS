@@ -5,9 +5,18 @@ import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { getRuntimeConfigForStorage, getRuntimeMode } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
-import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
+import { getSmsRuntimeConfig } from '../lib/auth-challenge-config.js';
+import { getHumanChallengeRuntimeConfig, type HumanChallengeRuntimeConfig } from '../lib/human-challenge.js';
 import { getSmsProvider } from '../lib/sms/index.js';
 import { queryApprovedAliyunSmsResources } from '../lib/sms/aliyun.js';
+import {
+  commitSmsSendQuota,
+  getSmsGlobalQuotaSnapshot,
+  getSmsQuotaDenialMessage,
+  reserveSmsSendQuota,
+  rollbackSmsSendQuota,
+  SMS_QUOTA_HASH_TAG,
+} from '../lib/sms/send-quota.js';
 import { getBackupRuntimeConfig, testBackupRemoteStorage } from '../services/backup.service.js';
 import { testAiImageProviderConnection } from '../services/ai-image-providers.js';
 import {
@@ -22,6 +31,7 @@ interface ConfiguredCheck {
   configured: boolean;
   source: 'env' | 'db' | 'mixed';
   detail?: string;
+  testable?: boolean;
 }
 
 type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
@@ -42,6 +52,38 @@ function envIsSet(name: string): boolean {
 
 function hasAll(values: string[]): boolean {
   return values.every((value) => String(value || '').trim().length > 0);
+}
+
+export function buildHumanChallengeIntegrationCheck(
+  config: HumanChallengeRuntimeConfig,
+): ConfiguredCheck {
+  const turnstileConfigured = config.provider === 'cloudflare-turnstile'
+    && config.hostnameConfigValid
+    && hasAll([config.turnstileSiteKey, config.turnstileSecretKey])
+    && config.allowedHostnames.length > 0;
+  const powConfigured = config.provider === 'builtin-pow'
+    && config.signingSecret.length >= 32
+    && config.difficulty >= 1
+    && config.difficulty <= 5
+    && config.ttlSeconds >= 30
+    && config.ttlSeconds <= 600;
+
+  return {
+    key: 'turnstile',
+    label: '人机验证',
+    configured: config.providerConfigValid && (turnstileConfigured || powConfigured),
+    source: config.source === 'system-config' ? 'db' : 'env',
+    testable: config.provider === 'cloudflare-turnstile',
+    detail: !config.providerConfigValid
+      ? 'HUMAN_CHALLENGE_PROVIDER 配置非法，认证已失败关闭'
+      : config.provider === 'cloudflare-turnstile'
+        ? !config.hostnameConfigValid
+          ? 'Turnstile hostname 白名单配置非法，认证已失败关闭'
+          : `已启用 Cloudflare Turnstile，Site Key ${config.turnstileSiteKey ? '已配置' : '未配置'}，hostname 白名单 ${config.allowedHostnames.length} 个`
+        : config.provider === 'builtin-pow'
+          ? `已启用内置 PoW，签名密钥 ${config.signingSecret.length >= 32 ? '已配置' : '未配置或不足 32 位'}，难度 ${config.difficulty}，有效期 ${config.ttlSeconds} 秒`
+          : '人机验证已关闭',
+  };
 }
 
 function maskPhone(phone: string): string {
@@ -101,11 +143,12 @@ export async function systemStatusRoutes(app: FastifyInstance) {
 
   app.get('/integrations', async (_request, reply) => {
     const rc = await getRuntimeConfigForStorage();
-    const [smsConfig, turnstileConfig] = await Promise.all([
+    const [smsConfig, humanChallengeConfig] = await Promise.all([
       getSmsRuntimeConfig(),
-      getTurnstileRuntimeConfig(),
+      getHumanChallengeRuntimeConfig(),
     ]);
     const backupConfig = await getBackupRuntimeConfig();
+    const smsQuota = await getSmsGlobalQuotaSnapshot(smsConfig.dailyGlobalLimit);
     const uploadOss = await getUploadOssDiagnostic();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
@@ -140,6 +183,9 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       smsConfig.aliyun.smsLoginTemplateCode,
       smsConfig.aliyun.smsLoginTemplateParamName,
     ]);
+    const smsQuotaDetail = smsQuota.available
+      ? `今日发送尝试 ${smsQuota.used}/${smsQuota.limit}，剩余 ${smsQuota.remaining}，Asia/Shanghai 次日重置`
+      : '短信额度 Redis 状态不可用，真实发送将失败关闭';
 
     const checks: ConfiguredCheck[] = [
       {
@@ -157,7 +203,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
             ])) ||
           (smsConfig.provider === 'aliyun' && aliyunConfigured),
         source: smsConfig.source === 'system-config' ? 'db' : smsConfig.source,
-        detail:
+        detail: `${
           smsConfig.provider === 'console'
             ? runtimeMode === 'cloud'
               ? 'cloud 模式禁止 console provider'
@@ -166,22 +212,10 @@ export async function systemStatusRoutes(app: FastifyInstance) {
               ? `provider=tencent, region=${smsConfig.tencent.region}, sdkAppId=${smsConfig.tencent.sdkAppId || '未填'}`
               : smsConfig.provider === 'aliyun'
                 ? `provider=aliyun, credential=${smsConfig.aliyun.credentialMode}, register=${aliyunRegisterTemplateCode || '未填'}, password-reset=${smsConfig.aliyun.passwordResetTemplateCode || '未填'}, sms-login=${smsConfig.aliyun.smsLoginTemplateCode || '未填'}`
-                : '未配置短信 provider',
+                : '未配置短信 provider'
+        }；${smsQuotaDetail}`,
       },
-      {
-        key: 'turnstile',
-        label: 'Cloudflare Turnstile',
-        configured: hasAll([turnstileConfig.secretKey]),
-        source:
-          turnstileConfig.source === 'system-config'
-            ? 'db'
-            : turnstileConfig.source === 'none'
-              ? 'env'
-              : turnstileConfig.source,
-        detail: turnstileConfig.enabled
-          ? `已启用，Site Key ${turnstileConfig.siteKey ? '已配置' : '未配置'}`
-          : '后台开关已关闭，当前不会要求人机验证',
-      },
+      buildHumanChallengeIntegrationCheck(humanChallengeConfig),
       {
         key: 'sentry',
         label: 'Sentry',
@@ -270,8 +304,32 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   });
 
   app.post('/test/turnstile', async (_request, reply) => {
-    const turnstileConfig = await getTurnstileRuntimeConfig();
-    const secret = turnstileConfig.secretKey;
+    const turnstileConfig = await getHumanChallengeRuntimeConfig();
+    if (!turnstileConfig.providerConfigValid) {
+      return reply.send({
+        code: 0,
+        errorCode: 'human_challenge_provider_invalid',
+        msg: 'HUMAN_CHALLENGE_PROVIDER 配置非法，认证已失败关闭',
+      });
+    }
+    if (turnstileConfig.provider !== 'cloudflare-turnstile') {
+      return reply.send({ code: 0, msg: `当前人机验证 provider=${turnstileConfig.provider}，未启用 Turnstile` });
+    }
+    if (!turnstileConfig.hostnameConfigValid) {
+      return reply.send({
+        code: 0,
+        errorCode: 'turnstile_hostname_config_invalid',
+        msg: 'Turnstile hostname 白名单格式非法，线上校验将拒绝通过',
+      });
+    }
+    if (turnstileConfig.allowedHostnames.length === 0) {
+      return reply.send({
+        code: 0,
+        errorCode: 'turnstile_hostname_allowlist_empty',
+        msg: 'Turnstile hostname 白名单为空，线上校验将拒绝通过',
+      });
+    }
+    const secret = turnstileConfig.turnstileSecretKey;
     if (!secret)
       return reply.send({
         code: 0,
@@ -328,7 +386,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         return reply.send({ code: 0, msg: 'cloud 运行模式禁止使用 console provider' });
       }
       if (phone) {
-        const provider = await getSmsProvider();
+        const provider = await getSmsProvider(smsConfig);
         await provider.send(phone, '123456', 'register');
       }
       return reply.send({
@@ -379,7 +437,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
 
     try {
-      const provider = await getSmsProvider();
+      const provider = await getSmsProvider(smsConfig);
       if (!phone) {
         return reply.send({
           code: 1,
@@ -395,10 +453,52 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       }
 
       const code = String(Math.floor(100000 + Math.random() * 900000));
-      const result = await provider.send(phone, code, 'register');
-      if (!result.ok) {
-        return reply.send({ code: 0, msg: `测试短信发送失败：${result.err || 'unknown'}` });
+      const testCodeKey = `${SMS_QUOTA_HASH_TAG}:test-code:${randomUUID()}`;
+      const quota = await reserveSmsSendQuota({
+        phone,
+        ip: request.ip,
+        purpose: 'register',
+        rateLimitSeconds: smsConfig.rateLimitSeconds,
+        dailyPerPhoneLimit: smsConfig.dailyPerPhoneLimit,
+        dailyPerIpLimit: smsConfig.dailyPerIpLimit,
+        dailyGlobalLimit: smsConfig.dailyGlobalLimit,
+        codeKey: testCodeKey,
+        code,
+        codeTtlSeconds: 60,
+      });
+      if (!quota.ok) {
+        return reply.send({
+          code: 0,
+          errorCode: `sms_quota_${quota.reason}`,
+          msg: getSmsQuotaDenialMessage(quota.reason),
+        });
       }
+
+      let result;
+      try {
+        result = await provider.send(phone, code, 'register');
+      } catch (error) {
+        await commitSmsSendQuota(quota.reservation).catch(() => undefined);
+        await redis.del(testCodeKey).catch(() => undefined);
+        throw error;
+      }
+      if (!result.ok) {
+        if (result.failureKind === 'not_dispatched') {
+          await rollbackSmsSendQuota(quota.reservation).catch(() => false);
+        } else if (result.failureKind === 'rejected') {
+          await rollbackSmsSendQuota(quota.reservation, { refundQuota: false }).catch(() => false);
+        } else {
+          await commitSmsSendQuota(quota.reservation).catch(() => undefined);
+        }
+        await redis.del(testCodeKey).catch(() => undefined);
+        return reply.send({
+          code: 0,
+          errorCode: 'sms_provider_failed',
+          msg: `测试短信发送失败：${result.err || 'unknown'}`,
+        });
+      }
+      await commitSmsSendQuota(quota.reservation).catch(() => undefined);
+      await redis.del(testCodeKey).catch(() => undefined);
       return reply.send({ code: 1, msg: `测试短信已发送到 ${maskPhone(phone)}` });
     } catch (e: any) {
       return reply.send({ code: 0, msg: e?.message || '加载失败' });

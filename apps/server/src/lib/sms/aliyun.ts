@@ -247,13 +247,13 @@ export class AliyunSmsProvider implements SmsProvider {
 
   async send(phone: string, code: string, purpose: SmsCodePurpose = 'register'): Promise<SmsResult> {
     const phoneNumbers = normalizeCnPhone(phone);
-    if (!phoneNumbers) return { ok: false, err: '手机号格式不正确' };
+    if (!phoneNumbers) return { ok: false, err: '手机号格式不正确', failureKind: 'not_dispatched' };
     const template = this.templateFor(purpose);
     if (!template.templateCode) {
-      return { ok: false, err: `阿里云${template.label}短信模板未配置` };
+      return { ok: false, err: `阿里云${template.label}短信模板未配置`, failureKind: 'not_dispatched' };
     }
     if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(template.templateParamName)) {
-      return { ok: false, err: `阿里云${template.label}短信模板变量名格式不正确` };
+      return { ok: false, err: `阿里云${template.label}短信模板变量名格式不正确`, failureKind: 'not_dispatched' };
     }
 
     const request = new SendSmsRequest({
@@ -267,12 +267,20 @@ export class AliyunSmsProvider implements SmsProvider {
       const response = await this.client.sendSms(request);
       const body = response.body;
       if (!body || body.code !== 'OK') {
-        return { ok: false, err: [body?.code, body?.message].filter(Boolean).join(': ') || '发送失败' };
+        return {
+          ok: false,
+          err: [body?.code, body?.message].filter(Boolean).join(': ') || '发送失败',
+          failureKind: 'rejected',
+        };
       }
       return { ok: true, bizId: body.bizId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || '发送失败');
-      return { ok: false, err: message.replace(/\s+/g, ' ').slice(0, 300) };
+      return {
+        ok: false,
+        err: message.replace(/\s+/g, ' ').slice(0, 300),
+        failureKind: 'unknown',
+      };
     }
   }
 }
