@@ -14,6 +14,24 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Unit 11-B3-A International Dark Deployment Evidence (2026-07-22)
+
+This checkpoint adds fake-only output review and append-only listing-draft application to the dark extension workbench. It does not enable a paid Provider, tenant rollout, production fake dispatch or Ozon write. The domestic first-administrator environment remains frozen on its earlier application baseline.
+
+| Evidence | Result |
+|---|---|
+| Git | `83bc851` (`feat(extension): review and apply media outputs`) was independently reviewed with no remaining P0-P2 and pushed to `origin/feat/ai-media-prompt-registry`; the international app-dir deployment used that exact commit |
+| Automated verification | Full preflight passed with server `2917 passed / 141 skipped`, 208 extension checks, server/Web typecheck and production builds; lint reported zero errors and 20 existing warnings; secret scans found none of the locally supplied Provider credentials or Base URL |
+| PostgreSQL | A fresh isolated schema replayed all `131/131` tracked migrations and passed `7/7` real dual-connection grant/receipt tests; the populated local database upgraded to 131 with no pending migration. The international database also has all 131 tracked migrations current. Its migration ledger contains two additional legacy names no longer present in the repository (`20260608090000_add_user_legal_consent` and `20260608100000_add_category_mappings`), producing 133 distinct historical rows without duplicates or pending work |
+| Review/apply safety | `MEDIA_REVIEW` requires `listing:review`; `MEDIA_APPLY` requires `listing:write`; immutable review events/application ledgers, exact request hashes, token-rotation replay and a persistent recovery lease protect response-loss recovery. The source page only prepares a request; an extension-origin popup binds the popup tab, top frame and first `documentId`, then serializes submit/cancel |
+| International VPS | `45.76.49.64` deployed exact commit `83bc851` after a successful 33 MB backup at `/var/backups/ss-erp/ss_erp_20260722_090305.sql.gz`; API/Web/Worker, local and public `/ready`, runtime upload configuration and migration checks passed; full verifier returned `0 failures / 1 warning`; cloud extension package `1.0.246` contains the confirmation coordinator |
+| International infrastructure limit | The only verifier warning remains that backups are local and no remote backup destination is configured |
+| Domestic VPS | `8.163.122.40` was not deployed or migrated and remains at exact commit `bb3d8cd`; API/Web/Worker are active |
+| Rollout state | AI Media master/image-to-image/suite/full-edit/inpaint/Web/extension flags remain false, the tenant policy remains revision zero with no tenant IDs, all Provider channels remain disabled, listing/publisher masters remain false, and all five Ozon publisher stages remain `off` |
+| External effects | No paid AI call, translation, image generation/upload, tenant activation, production fake dispatch or Ozon write was executed |
+
+Unit 11 remains incomplete after this checkpoint. Extension full-edit/inpaint and multi-reference suite controls, exact paid Provider/model/pricing/config acceptance, tenant pilot activation and final Ozon test-shop validation remain pending.
+
 ## Unit 11-A Staging And Domestic HTTPS Evidence (2026-07-22)
 
 This checkpoint keeps the extension workbench read-only and every paid/media/publisher rollout dark. It also separates application promotion from domestic infrastructure repair: staging receives the reviewed Unit 11-A commit, while the empty domestic environment stays on its previously promoted baseline for first-administrator setup.
