@@ -1,6 +1,6 @@
 # SS ERP 人机验证与雷池 WAF 评估
 
-日期：2026-07-22
+日期：2026-07-22（2026-07-23 复核）
 
 ## 结论
 
@@ -12,6 +12,8 @@
 4. 中国内地正式对公网开放、出现真实自动化滥用后：增加阿里云验证码 2.0 provider。它比自托管 PoW 多了设备、行为和风险情报判断，且与现有阿里云 ECS/短信体系更一致。
 5. ALTCHA 只在需要标准化、无障碍组件或内存硬 PoW 时值得替换现有 PoW；mCaptcha 和雷池都不值得仅为验证码而增加一套常驻服务。
 6. 雷池可单独作为 WAF 项目评估，但 SS ERP 若属于商业用途，**当前免费的个人版协议是阻断项**：官方协议明确禁止商业用途。未经长亭书面确认或购买合适授权，不应部署到商业生产。
+7. 若观测数据证明国内需要独立 WAF，免费方案的首选是独立边缘机 PoC aaWAF；若不增加反向代理跳数，则评估与生产 Nginx ABI 兼容的 ModSecurity v3 + OWASP CRS 模块。两者都必须先以观察模式验证误报、真实 IP 和源站旁路，再决定是否阻断流量。
+8. Coraza 当前更适合 Caddy、Envoy/Istio 等集成，面向 Nginx 的 C library 仍处于实验状态；uuWAF 的发行许可存在非商业限制；EdgeOne Free 的中国大陆长期权益未得到正式合同确认，因此三者暂不进入 SS ERP 的生产候选短名单。
 
 ## 方案对比
 
@@ -22,6 +24,8 @@
 | 开源 ALTCHA | 应用，自托管库 | 可由应用在挑战数据/签发端实现；不是自动获得 | 开源模式要求应用自行保存已用挑战；Sentinel API 才内置防重放 | 开源版主要是 PoW | 可只引入前后端库；MIT | 能改善组件和算法，但与现有实现高度重叠 |
 | mCaptcha | 应用，自托管服务 | sitekey/token 可分场景，应用向服务验证 token | 官方称配置 30 秒且只用一次 | 主要是动态难度 PoW | Rust 服务 + PostgreSQL + 专用 cache/Redis；AGPL | 能工作，但本项目收益低于新增运维成本 |
 | 雷池个人版/CE | 反向代理/WAF | 未提供交给业务接口校验的 action token；是站点 Session/Cookie | 可选“请求防重放”会为 Session 的后续请求轮换一次性 Cookie 签名 | IP 历史、浏览器真实性、调试与键鼠行为 | 至少 1C/2GB/5GB；Compose 含多个容器和独立 PostgreSQL | 只能做边界纵深；商业授权与数据采集需先解决 |
+| 堡塔 aaWAF | 反向代理/WAF | 未提供业务 action token；人机验证属于 WAF 规则/会话层 | 不能替代应用 OTP 和 Redis 单次消费 | Web 攻击规则、基础/URL 级 CC、人机验证 | 建议独立边缘机；部署制品、AGPL 义务和管理面需单独审查 | 厂商材料声明免费可商用，可作为国内 GUI WAF 首选 PoC，不直接进入生产 |
+| ModSecurity v3 + OWASP CRS | 现有 Nginx 的可选 WAF 模块 | 无 | 无业务防重放 | OWASP CRS 规则检测 | 需匹配 Nginx ABI、维护模块和调优误报；Apache-2.0 | 不增加代理跳数的免费备选，但没有托管 DDoS 或人机验证能力 |
 | 阿里云验证码 2.0 | 应用，云托管 | 服务端可强制传入预期 `SceneId` | 官方返回重复提交错误；V3 参数与场景/用户不匹配也会失败 | 设备、交互行为、IP/设备频率及托管策略 | SDK/API；可从上海 ECS 走 VPC endpoint | 国内公开生产首选升级路径 |
 
 ## 当前内置 PoW 的位置
@@ -63,7 +67,13 @@ SS ERP 的实现不是普通“图片验证码”。[`human-challenge.ts`](../..
 Internet -> 雷池 80/443 -> 仅本机/私网可达的现有反向代理或 Web/API
 ```
 
-必须关闭原 Web/API 公网端口，否则攻击者可绕过雷池；9443 管理口只允许 VPN/管理 IP。与应用同机还会共享 CPU、内存、磁盘和故障域，不提供 CDN/带宽清洗。若确需雷池，独立小型边缘 ECS、源站安全组只接受边缘机流量，比同机部署更清晰；但仍然需要上游抗 DDoS 能力。
+必须关闭原 Web/API 公网端口，否则攻击者可绕过雷池；9443 管理口只允许 VPN/管理 IP。当前 SS ERP 的国内入口由宿主机 Nginx 监听 80/443，而雷池官方 Compose 的 Tengine 使用 `network_mode: host`；因此不能在生产机上直接 `docker compose up`，必须先把现有 Nginx 改到仅回环/私网的非冲突端口，或让雷池完全接管 TLS 与回源。这个切换需要维护窗口和可验证的回滚方案。[国内直连 Nginx 模板](../../docker/nginx/ss-erp-cn-direct.conf) [官方 Compose](https://github.com/chaitin/SafeLine/blob/92d5502fb42c50a87c97e4e4bc2362241af4347a/compose.yaml)
+
+“封闭源站”必须由外部 verifier 持续证明，而不能只检查配置文件：同时测试 IPv4/IPv6、历史 DNS 记录、直接 IP、备用域名、Docker published ports、云安全组和主机防火墙，确认除预期 WAF 节点外没有 origin listener 可达；故障切换和回滚也不得静默重新开放公网源站。
+
+与应用同机还会共享 CPU、内存、磁盘和故障域，不提供 CDN 或带宽清洗。官方将雷池定义为位于 Web 应用前的反向代理，并将限频能力描述为防 DoS/CC；由此部署边界决定，已经打满 ECS 公网带宽或上游链路的流量不会因为本机 WAF 而恢复可用性，DDoS 仍需阿里云等上游清洗能力。[官方项目说明](https://github.com/chaitin/SafeLine/blob/92d5502fb42c50a87c97e4e4bc2362241af4347a/README.md)
+
+若确需雷池，独立小型边缘 ECS、源站安全组只接受边缘机流量，比同机部署更清晰；但它会增加一台需补丁、监控、备份和故障切换的公网关键节点。中国内地应使用国内发行路径；官方 README 明确警告中国大陆安装国际版可能无法连接其云服务。海外也能自托管，但应部署在靠近用户和源站的区域，不能让所有海外流量绕行中国 ECS。[官方项目说明](https://github.com/chaitin/SafeLine/blob/92d5502fb42c50a87c97e4e4bc2362241af4347a/README.md)
 
 ### 授权和数据采集
 
@@ -116,4 +126,27 @@ Cloudflare 官方的中国网络产品表明确注明 Turnstile 不在中国大�
 2. 国内启用 `builtin-pow`，海外保留 Turnstile；记录挑战失败率、短信发送率、按 IP/手机号拒绝数和熔断次数。
 3. 国内出现持续攻击或 PoW 对正常用户设备影响明显时，再接入 `aliyun-captcha` provider；保留 PoW 作为显式回退，不自动静默降级为 disabled。
 4. 海外 Cloudflare 代理后配置少量路径化 WAF/限流规则，并封闭源站直连；不要对整个 API 打开不可配置的 Bot Fight Mode。
-5. 只有在完成商业授权和隐私评审后，才对雷池做隔离环境 PoC。验证浏览器、XHR、文件上传、WebSocket、健康检查、回源 IP、失败旁路和资源占用；PoC 成功也只作为 WAF，不替换应用挑战和短信预算控制。
+5. 只有观测到 WAF 能解决的 L7 攻击或扫描压力后，才启动国内免费 WAF PoC：需要中文 GUI 时在独立边缘机评估 aaWAF；希望保持当前代理跳数时评估 ModSecurity + CRS。先使用观察模式和流量回放，验证浏览器、XHR、CORS、文件上传、WebSocket/SSE、健康检查、ACME、回源 IP、失败旁路、延迟和资源占用。同步审计出站 DNS/HTTP 并采用默认拒绝策略；用模拟敏感字段验证日志、告警和管理后台不会保存 Authorization、Cookie、密码、验证码或请求体，明确脱敏、访问控制、留存、删除、TLS 私钥权限和备份边界。
+6. aaWAF PoC 还必须将管理面限制为私网、VPN 或管理 IP，立即轮换初始凭据；若目标发行版提供 MFA、签名制品或可验证 checksum，必须启用并核验。若不提供，则使用上游身份代理/VPN，并从固定源码构建、在自有镜像仓库签名后部署；无论哪种路径，都要记录 SBOM 以及部署制品与已审查源码/许可证的对应关系。
+7. 只有在完成商业授权、隐私和数据采集评审后，才对雷池做隔离环境 PoC。无论选择哪种 WAF，PoC 成功也只代表可增加边界纵深，不能替换应用挑战和短信预算控制。
+
+## 国内免费 WAF 补充（2026-07-23）
+
+### 官方材料显示可商用、仍需按制品复核的候选
+
+- **堡塔云 WAF / aaWAF**：截至 2026-07-23，官方产品页标注“真开源免费可商用”，免费版价格为 0；官方仓库采用 AGPL-3.0，堡塔开源协议也说明允许以自用为目的用于盈利或非盈利项目，并称免费功能部署后可不依赖堡塔云端永久运行。该证据只覆盖公开页面和已审查源码，不能自动覆盖具体安装脚本、容器镜像、规则库、付费插件和第三方依赖；商业 PoC 前仍需按实际制品核对许可证/SBOM并保留厂商或法务结论。免费版提供基础 Web 攻击防护、基础/单 URL CC 防护和按规则触发的人机验证，适合先在独立边缘机验证。[官方产品页](https://www.bt.cn/new/aawaf.html) [当前仓库](https://github.com/aaPanel/aaWAF) [复核源码快照](https://github.com/aaPanel/aaWAF/tree/d6d343076c650c45b7f24197387786fa1743dec1) [AGPL-3.0 快照](https://github.com/aaPanel/aaWAF/blob/d6d343076c650c45b7f24197387786fa1743dec1/LICENSE) [堡塔开源协议](https://www.bt.cn/new/agreement_open.html)
+- **ModSecurity v3 + OWASP CRS**：三个项目的复核快照均采用 Apache-2.0，可通过与生产 Nginx ABI 兼容的 Connector/动态模块集成，但不能预设现有发行包无需替换或重编译。PoC 必须记录 `nginx -V`、`--with-compat`、模块 ABI、升级路径和回滚包，并从 `DetectionOnly` 开始调优 CRS 误报；它没有管理后台或内置交互式验证码，CC 仍需 Nginx 限速或应用配额处理。[ModSecurity 快照](https://github.com/owasp-modsecurity/ModSecurity/tree/7ea9fefbe0ba409d8733b4d682c8c4c059cd028d) [ModSecurity 许可证](https://github.com/owasp-modsecurity/ModSecurity/blob/7ea9fefbe0ba409d8733b4d682c8c4c059cd028d/LICENSE) [Nginx Connector 快照](https://github.com/owasp-modsecurity/ModSecurity-nginx/tree/9eb44fd9ab0988756e1ab8ce5aa5548ddbe57846) [Connector 许可证](https://github.com/owasp-modsecurity/ModSecurity-nginx/blob/9eb44fd9ab0988756e1ab8ce5aa5548ddbe57846/LICENSE) [OWASP CRS 快照](https://github.com/coreruleset/coreruleset/tree/d59fba49e0a59d69e7ff4eec0a2a3ac2ddaadaf9) [CRS 许可证](https://github.com/coreruleset/coreruleset/blob/d59fba49e0a59d69e7ff4eec0a2a3ac2ddaadaf9/LICENSE) [推荐配置快照](https://github.com/owasp-modsecurity/ModSecurity/blob/7ea9fefbe0ba409d8733b4d682c8c4c059cd028d/modsecurity.conf-recommended)
+- **Coraza + OWASP CRS**：Coraza 为 Apache-2.0 的 Go WAF 引擎，官方声明兼容 CRS v4。官方维护的 Caddy 集成稳定，Proxy-WASM 可用于 Envoy/Istio，但面向 Nginx 的 `libcoraza` 仍被官方列为 experimental，因此不如 ModSecurity 适合当前 Nginx 拓扑。[Coraza 快照](https://github.com/corazawaf/coraza/tree/85a896868480a52ae5f8ebe3fcab1a2895dd1d9f) [Coraza 许可证](https://github.com/corazawaf/coraza/blob/85a896868480a52ae5f8ebe3fcab1a2895dd1d9f/LICENSE) [Caddy 集成快照](https://github.com/corazawaf/coraza-caddy/tree/82f09c076b75f0096b8c9ebc58e1ce53e2947198) [Proxy-WASM 快照](https://github.com/corazawaf/coraza-proxy-wasm/tree/b0c1b024854049ffd5e8cc63a869bbb6de153b71) [libcoraza 快照](https://github.com/corazawaf/libcoraza/tree/e4e338f867e4db23e9b6cd3747fc45421945bb10)
+
+### 许可存在冲突的候选
+
+- **南墙 uuWAF**：复核源码快照的根许可证为 BSD-2-Clause，项目也提供 WAF、CC 和滑动旋转验证码；但同一快照随发行文档提供的产品许可证明确限制为单设备、个人非商业用途，并禁止修改和分发。商业 ERP 不能只依据根许可证上线包含预编译镜像的发行产品，必须先获得厂商书面授权。[当前仓库](https://github.com/Safe3/uusec-waf) [复核源码快照](https://github.com/Safe3/uusec-waf/tree/9ec915d2ae911632b77ea5243895353ada3ada9f) [根许可证快照](https://github.com/Safe3/uusec-waf/blob/9ec915d2ae911632b77ea5243895353ada3ada9f/LICENSE) [发行产品许可证快照](https://github.com/Safe3/uusec-waf/blob/9ec915d2ae911632b77ea5243895353ada3ada9f/docs/zh-cn/LICENSE.md) [官方文档](https://waf.uusec.com/#/zh-cn/guide/)
+
+### 托管免费层结论
+
+以下是 2026-07-23 对无需登录的公开页面所做的证据快照：阿里云和腾讯云引用中国站、中国大陆产品与人民币价格，EdgeOne Free 引用国际站美元计划并与腾讯云中国站交叉核对；未进入目标账号控制台，也没有取得合同、SLA 或账号专属权益。它适合产品筛选，不构成采购报价或长期权益保证。
+
+- **阿里云 WAF / 腾讯云 WAF**：未核验到可长期免费的正式 WAF 套餐。阿里云 WAF 官方列出的计费方式为包年包月和按量付费；阿里云免费中心明确说明试用是一次性、限时或限额且不能延期。腾讯云中国大陆 WAF 官方计费页要求购买实例套餐，2026-07-16 页面列出的 SaaS 型和云原生型高级版均为 3,880 元/月起。[阿里云 WAF 计费](https://help.aliyun.com/zh/waf/web-application-firewall-3-0/billing-methods/) [阿里云免费试用规则](https://free.aliyun.com/) [腾讯云 WAF 中国大陆计费](https://cloud.tencent.com/document/product/627/11730)
+- **Tencent EdgeOne Free**：国际站定价页确实承诺 `$0/月`、永久免费，并列出基础 WAF、基础 CC 和平台 DDoS 防护；但领取页同时注明 Free Plan 仍处于 limited beta，并通过活动领取。其“China Access”宣传没有给出大陆节点、ICP备案、SLA 和长期大陆权益的明确合同；腾讯云中国站产品页没有免费档，且把“中国大陆网络优化”列为企业版能力。因此，目前只能确认国际站 Free 计划存在，**不能确认它可作为中国大陆生产站点的长期免费 WAF/加速承诺**。[国际站定价](https://edgeone.ai/pricing) [Free Plan 领取规则](https://edgeone.ai/get-free-plan) [腾讯云中国站 EdgeOne](https://cloud.tencent.com/product/teo) [中国加速与合规说明](https://edgeone.ai/solutions/global-to-china)
+
+以上自托管方案都只能处理已经到达服务器的 HTTP(S)/CC 流量，无法吸收打满公网链路的体积型 DDoS；而 WAF 的浏览器挑战也不能替代 SS ERP 绑定业务 action 的应用级人机挑战、手机号/IP 配额和全局短信费用熔断。若增加堡塔、ModSecurity 或其他代理层，还必须同步重做当前 `trustProxy: 1` 的真实 IP 信任链并封闭源站直连。
