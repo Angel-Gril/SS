@@ -13,13 +13,14 @@ Add a third deployment environment for domestic commercial testing while keeping
 
 ## Implementation Status (2026-07-22)
 
-- Domestic host `8.163.122.40` intentionally remains on promoted application commit `bb3d8cd`; the database is empty and `/setup` is ready for first-administrator initialization.
+- International staging and domestic host `8.163.122.40` now run promoted application commit `580710f`; both app-dir deployments preserved their existing databases and completed with no pending migrations.
 - `ss-erp.cn`, `www.ss-erp.cn`, `app.ss-erp.cn`, and `admin.ss-erp.cn` resolve directly to the domestic origin. Nginx serves HTTPS on `443`, redirects allowlisted HTTP hosts to HTTPS, and UFW allows only the public Web ports while application and data ports remain private.
 - A ZeroSSL ECC SAN certificate is installed at `/etc/ssl/certs/ss-erp.cn.fullchain.pem` with its key at `/etc/ssl/private/ss-erp.cn.key`. `acme.sh` owns renewal and reloads Nginx after installation; the initial certificate expires on 2026-10-19.
 - Domestic runtime URLs, CORS and secure cookie settings use the `.cn` domains. API, Web, Worker, PostgreSQL and Redis are healthy, and public `https://ss-erp.cn/ready` reports DB/Redis ready.
 - The next promoted domestic build must freeze `NEXT_PUBLIC_USER_HOSTNAME=app.ss-erp.cn`, `NEXT_PUBLIC_ADMIN_HOSTNAME=admin.ss-erp.cn`, `NEXT_PUBLIC_MARKETING_HOSTNAME=ss-erp.cn`, and `EXTENSION_CLOUD_BASE_URL=https://app.ss-erp.cn`; these are build inputs, not runtime-only switches.
 - The domestic origin is intentionally not Cloudflare-proxied. Repository deployment verification uses `VERIFY_ORIGIN_MODE=direct` plus the explicit four-host `VERIFY_DIRECT_HOSTNAMES` list, validates unknown-host rejection, the ACME exception, `acme.sh` renewal and each hostname's certificate; the international VPS retains the default `cloudflare` mode.
-- First administrator creation does not use SMS. Aliyun SMS remains a separate provider/configuration step after administrator initialization and a whitelist-only test.
+- Both hosts passed their environment-specific runtime verifiers with 0 failures; each still reports the existing warning that the latest database backup is local-only.
+- Domestic Aliyun SMS uses an ECS RAM Role and system configuration. Read-only discovery returned 2 approved signs and 4 approved templates, and the configured register, password-reset, and SMS-login templates all match an approved sign and their single template variable. The native-ESM constructor probe passed without calling `SendSms`; a real whitelist-only SMS test is still pending.
 
 ## Problem Frame
 
@@ -188,7 +189,7 @@ The project currently supports local ERP testing and an overseas VPS staging dep
 
 - Complete or confirm the applicable ICP/public-security filing and retain the resulting operational record outside the repository.
 - Domestic upload backend choice: existing OSS/R2 style backend or a domestic object storage provider.
-- Configure and test the approved Aliyun SMS sign/template after the first administrator exists.
+- Add an operator-controlled phone to the SMS test whitelist, perform the first real Aliyun SMS send, then remove or narrow the whitelist after verification.
 - Replace the temporary certificate notification address with a monitored operator email.
 - Whether we should add a dedicated `deploy-domestic-app-dir.sh` wrapper to reduce command mistakes.
 
