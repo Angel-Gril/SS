@@ -260,6 +260,23 @@ check_ufw() {
   done
 }
 
+check_proxy_ip_forwarding() {
+  local nginx_dump
+  if ! nginx_dump=$(nginx -T 2>&1); then
+    fail "unable to inspect active Nginx client IP forwarding"
+    return
+  fi
+  if printf '%s\n' "$nginx_dump" | grep -q 'proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;'; then
+    fail "active Nginx trusts a client-supplied X-Forwarded-For chain"
+    return
+  fi
+  if printf '%s\n' "$nginx_dump" | grep -q 'proxy_set_header X-Forwarded-For \$remote_addr;'; then
+    pass "active Nginx overwrites X-Forwarded-For with the trusted client address"
+  else
+    fail "active Nginx does not set X-Forwarded-For from \$remote_addr"
+  fi
+}
+
 check_cloudflare_origin_guard() {
   if grep -Rqs 'real_ip_header CF-Connecting-IP' /etc/nginx/conf.d /etc/nginx/sites-enabled; then
     pass "nginx restores Cloudflare real IP"
@@ -783,6 +800,7 @@ check_port_loopback 5432 postgres
 check_port_loopback 6379 redis
 
 check_ufw
+check_proxy_ip_forwarding
 check_origin_security
 load_backup_config
 check_cron

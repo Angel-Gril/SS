@@ -115,6 +115,11 @@ test('client IP forwarding trusts only the nearest Nginx hop', () => {
     assert.match(nginxConfig, /proxy_set_header X-Forwarded-For \$remote_addr;/u);
     assert.doesNotMatch(nginxConfig, /proxy_add_x_forwarded_for/u);
   }
+  const activeForwardingCheck = extractFunction('check_proxy_ip_forwarding');
+  assert.match(activeForwardingCheck, /nginx -T/u);
+  assert.ok(activeForwardingCheck.includes('proxy_set_header X-Forwarded-For \\$remote_addr;'));
+  assert.ok(activeForwardingCheck.includes('proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;'));
+  assert.match(verifier, /check_ufw\r?\ncheck_proxy_ip_forwarding\r?\ncheck_origin_security/u);
 });
 
 test('direct hostnames are explicit, normalized, bounded, and validated', () => {
@@ -306,7 +311,7 @@ test('origin selection does not bypass common deployment checks', () => {
   ]) {
     assert.ok(verifier.includes(requiredCall), `missing common verification: ${requiredCall}`);
   }
-  assert.match(verifier, /check_ufw\r?\ncheck_origin_security/u);
+  assert.match(verifier, /check_ufw\r?\ncheck_proxy_ip_forwarding\r?\ncheck_origin_security/u);
   assert.match(verifier, /check_http_json_ready "public \/ready" "\$READY_URL"\r?\ncheck_direct_public_hosts/u);
 });
 
