@@ -9,7 +9,7 @@ import DysmsapiClient, {
 import AlibabaCredential, { Config as AlibabaCredentialConfig } from '@alicloud/credentials';
 import { $OpenApiUtil } from '@alicloud/openapi-core';
 import type { AliyunSmsRuntimeConfig } from '../auth-challenge-config.js';
-import type { SmsProvider, SmsResult } from './types.js';
+import type { SmsCodePurpose, SmsProvider, SmsResult } from './types.js';
 
 const ALIYUN_SMS_ENDPOINT = 'dysmsapi.aliyuncs.com';
 
@@ -53,6 +53,11 @@ function createClient(config: AliyunSmsRuntimeConfig): DysmsapiClient {
   const hasAccessKeyPair = Boolean(config.accessKeyId && config.accessKeySecret);
   const useAccessKeyPair = config.credentialMode === 'access_key'
     || (config.credentialMode === 'auto' && hasAccessKeyPair);
+  if (config.credentialMode === 'auto' && !useAccessKeyPair) {
+    // The default chain may eventually reach ECS metadata; force its provider
+    // to reject IMDSv1 even when the deployment forgot the SDK env switch.
+    process.env.ALIBABA_CLOUD_IMDSV1_DISABLED = 'true';
+  }
   const credential = config.credentialMode === 'ecs_ram_role'
     ? new AlibabaCredential(new AlibabaCredentialConfig({
         type: 'ecs_ram_role',
@@ -135,16 +140,35 @@ export class AliyunSmsProvider implements SmsProvider {
   private readonly client: AliyunSmsClient;
 
   constructor(config?: Partial<AliyunSmsRuntimeConfig>, client?: AliyunSmsClient) {
+    const runtime = config === undefined ? {
+      accessKeyId: process.env.SMS_ALIYUN_ACCESS_KEY_ID,
+      accessKeySecret: process.env.SMS_ALIYUN_ACCESS_KEY_SECRET,
+      credentialMode: process.env.SMS_ALIYUN_CREDENTIAL_MODE,
+      roleName: process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA,
+      signName: process.env.SMS_ALIYUN_SIGN_NAME,
+      templateCode: process.env.SMS_ALIYUN_TEMPLATE_CODE,
+      templateParamName: process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME,
+      registerTemplateCode: process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE,
+      registerTemplateParamName: process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME,
+      passwordResetTemplateCode: process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE,
+      passwordResetTemplateParamName: process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME,
+      smsLoginTemplateCode: process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE,
+      smsLoginTemplateParamName: process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME,
+    } : config;
     this.config = {
-      accessKeyId: clean(config?.accessKeyId || process.env.SMS_ALIYUN_ACCESS_KEY_ID),
-      accessKeySecret: clean(config?.accessKeySecret || process.env.SMS_ALIYUN_ACCESS_KEY_SECRET),
-      credentialMode: normalizeCredentialMode(
-        config?.credentialMode || process.env.SMS_ALIYUN_CREDENTIAL_MODE,
-      ),
-      roleName: clean(config?.roleName || process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA),
-      signName: clean(config?.signName || process.env.SMS_ALIYUN_SIGN_NAME),
-      templateCode: clean(config?.templateCode || process.env.SMS_ALIYUN_TEMPLATE_CODE),
-      templateParamName: clean(config?.templateParamName || process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code'),
+      accessKeyId: clean(runtime.accessKeyId),
+      accessKeySecret: clean(runtime.accessKeySecret),
+      credentialMode: normalizeCredentialMode(runtime.credentialMode),
+      roleName: clean(runtime.roleName),
+      signName: clean(runtime.signName),
+      templateCode: clean(runtime.templateCode),
+      templateParamName: clean(runtime.templateParamName || 'code'),
+      registerTemplateCode: clean(runtime.registerTemplateCode),
+      registerTemplateParamName: clean(runtime.registerTemplateParamName || 'code'),
+      passwordResetTemplateCode: clean(runtime.passwordResetTemplateCode),
+      passwordResetTemplateParamName: clean(runtime.passwordResetTemplateParamName || 'code'),
+      smsLoginTemplateCode: clean(runtime.smsLoginTemplateCode),
+      smsLoginTemplateParamName: clean(runtime.smsLoginTemplateParamName || 'code'),
     };
 
     const hasAccessKeyId = Boolean(this.config.accessKeyId);
@@ -159,25 +183,58 @@ export class AliyunSmsProvider implements SmsProvider {
           ]
         : []),
       ['SMS_ALIYUN_SIGN_NAME', this.config.signName],
-      ['SMS_ALIYUN_TEMPLATE_CODE', this.config.templateCode],
     ].filter(([, value]) => !value).map(([name]) => name);
     if (missing.length > 0) throw new Error(`[SMS] 阿里云短信配置不完整：缺少 ${missing.join('、')}`);
-    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(this.config.templateParamName)) {
-      throw new Error('[SMS] SMS_ALIYUN_TEMPLATE_PARAM_NAME 格式不正确');
-    }
 
     this.client = client || createClient(this.config);
   }
 
-  async send(phone: string, code: string): Promise<SmsResult> {
+  private templateFor(purpose: SmsCodePurpose): {
+    templateCode: string;
+    templateParamName: string;
+    label: string;
+  } {
+    switch (purpose) {
+      case 'password-reset':
+        return {
+          templateCode: this.config.passwordResetTemplateCode,
+          templateParamName: this.config.passwordResetTemplateParamName,
+          label: '找回密码',
+        };
+      case 'sms-login':
+        return {
+          templateCode: this.config.smsLoginTemplateCode,
+          templateParamName: this.config.smsLoginTemplateParamName,
+          label: '短信登录',
+        };
+      case 'register':
+      default:
+        return {
+          templateCode: this.config.registerTemplateCode || this.config.templateCode,
+          templateParamName: this.config.registerTemplateCode
+            ? this.config.registerTemplateParamName
+            : this.config.templateParamName,
+          label: '注册',
+        };
+    }
+  }
+
+  async send(phone: string, code: string, purpose: SmsCodePurpose = 'register'): Promise<SmsResult> {
     const phoneNumbers = normalizeCnPhone(phone);
     if (!phoneNumbers) return { ok: false, err: '手机号格式不正确' };
+    const template = this.templateFor(purpose);
+    if (!template.templateCode) {
+      return { ok: false, err: `阿里云${template.label}短信模板未配置` };
+    }
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(template.templateParamName)) {
+      return { ok: false, err: `阿里云${template.label}短信模板变量名格式不正确` };
+    }
 
     const request = new SendSmsRequest({
       phoneNumbers,
       signName: this.config.signName,
-      templateCode: this.config.templateCode,
-      templateParam: JSON.stringify({ [this.config.templateParamName]: code }),
+      templateCode: template.templateCode,
+      templateParam: JSON.stringify({ [template.templateParamName]: code }),
     });
 
     try {

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
-import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
+import { getRuntimeConfigForStorage, getRuntimeMode } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
 import { getSmsProvider } from '../lib/sms/index.js';
@@ -120,13 +120,33 @@ export async function systemStatusRoutes(app: FastifyInstance) {
             : '后台 upload_* 未配置',
           '需在系统设置保存完整 R2 必填项后才会切换为 oss',
         ].join('；');
+    const runtimeMode = getRuntimeMode();
+    const aliyunRegisterTemplateCode = smsConfig.aliyun.registerTemplateCode || smsConfig.aliyun.templateCode;
+    const aliyunRegisterTemplateParamName = smsConfig.aliyun.registerTemplateCode
+      ? smsConfig.aliyun.registerTemplateParamName
+      : smsConfig.aliyun.templateParamName;
+    const aliyunHasAnyAccessKey = Boolean(smsConfig.aliyun.accessKeyId || smsConfig.aliyun.accessKeySecret);
+    const aliyunCredentialsConfigured = smsConfig.aliyun.credentialMode === 'access_key'
+      ? hasAll([smsConfig.aliyun.accessKeyId, smsConfig.aliyun.accessKeySecret])
+      : smsConfig.aliyun.credentialMode === 'auto' && aliyunHasAnyAccessKey
+        ? hasAll([smsConfig.aliyun.accessKeyId, smsConfig.aliyun.accessKeySecret])
+        : true;
+    const aliyunConfigured = aliyunCredentialsConfigured && hasAll([
+      smsConfig.aliyun.signName,
+      aliyunRegisterTemplateCode,
+      aliyunRegisterTemplateParamName,
+      smsConfig.aliyun.passwordResetTemplateCode,
+      smsConfig.aliyun.passwordResetTemplateParamName,
+      smsConfig.aliyun.smsLoginTemplateCode,
+      smsConfig.aliyun.smsLoginTemplateParamName,
+    ]);
 
     const checks: ConfiguredCheck[] = [
       {
         key: 'sms',
         label: '短信服务',
         configured:
-          smsConfig.provider === 'console' ||
+          (smsConfig.provider === 'console' && runtimeMode !== 'cloud') ||
           (smsConfig.provider === 'tencent' &&
             hasAll([
               smsConfig.tencent.secretId,
@@ -134,14 +154,19 @@ export async function systemStatusRoutes(app: FastifyInstance) {
               smsConfig.tencent.sdkAppId,
               smsConfig.tencent.signName,
               smsConfig.tencent.templateId,
-            ])),
+            ])) ||
+          (smsConfig.provider === 'aliyun' && aliyunConfigured),
         source: smsConfig.source === 'system-config' ? 'db' : smsConfig.source,
         detail:
           smsConfig.provider === 'console'
-            ? '当前为 console（仅开发/测试，不发送真实短信）'
+            ? runtimeMode === 'cloud'
+              ? 'cloud 模式禁止 console provider'
+              : '当前为 console（仅开发/测试，不发送真实短信）'
             : smsConfig.provider === 'tencent'
               ? `provider=tencent, region=${smsConfig.tencent.region}, sdkAppId=${smsConfig.tencent.sdkAppId || '未填'}`
-              : '未配置短信 provider',
+              : smsConfig.provider === 'aliyun'
+                ? `provider=aliyun, credential=${smsConfig.aliyun.credentialMode}, register=${aliyunRegisterTemplateCode || '未填'}, password-reset=${smsConfig.aliyun.passwordResetTemplateCode || '未填'}, sms-login=${smsConfig.aliyun.smsLoginTemplateCode || '未填'}`
+                : '未配置短信 provider',
       },
       {
         key: 'turnstile',
@@ -280,6 +305,13 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   });
 
   app.post('/test/sms', async (request, reply) => {
+    if ((request as any).user?.tokenUse !== 'account_session') {
+      return reply.status(403).send({
+        code: 0,
+        errorCode: 'sms_test_account_session_required',
+        msg: '短信测试需要当前账号会话',
+      });
+    }
     const smsConfig = await getSmsRuntimeConfig();
     const body = request.body as { phone?: string };
     const phone = String(body?.phone || '').trim();
@@ -292,9 +324,12 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
 
     if (smsConfig.provider === 'console') {
+      if (getRuntimeMode() === 'cloud') {
+        return reply.send({ code: 0, msg: 'cloud 运行模式禁止使用 console provider' });
+      }
       if (phone) {
         const provider = await getSmsProvider();
-        await provider.send(phone, '123456');
+        await provider.send(phone, '123456', 'register');
       }
       return reply.send({
         code: 1,
@@ -324,8 +359,10 @@ export async function systemStatusRoutes(app: FastifyInstance) {
                 ]
               : []),
           ['签名', smsConfig.aliyun.signName],
-          ['模板 Code', smsConfig.aliyun.templateCode],
-          ['模板变量名', smsConfig.aliyun.templateParamName],
+          ['注册模板 Code', smsConfig.aliyun.registerTemplateCode || smsConfig.aliyun.templateCode],
+          ['注册模板变量名', smsConfig.aliyun.registerTemplateCode
+            ? smsConfig.aliyun.registerTemplateParamName
+            : smsConfig.aliyun.templateParamName],
         ]
       : [
           ['SecretId', smsConfig.tencent.secretId],
@@ -358,7 +395,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       }
 
       const code = String(Math.floor(100000 + Math.random() * 900000));
-      const result = await provider.send(phone, code);
+      const result = await provider.send(phone, code, 'register');
       if (!result.ok) {
         return reply.send({ code: 0, msg: `测试短信发送失败：${result.err || 'unknown'}` });
       }
@@ -655,7 +692,14 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get('/test/sms/aliyun-resources', async (_request, reply) => {
+  app.get('/test/sms/aliyun-resources', async (request, reply) => {
+    if ((request as any).user?.tokenUse !== 'account_session') {
+      return reply.status(403).send({
+        code: 0,
+        errorCode: 'sms_resources_account_session_required',
+        msg: '短信资源查询需要当前账号会话',
+      });
+    }
     const smsConfig = await getSmsRuntimeConfig();
     if (smsConfig.provider !== 'aliyun') {
       return reply.send({ code: 0, msg: '当前短信 provider 不是 aliyun' });

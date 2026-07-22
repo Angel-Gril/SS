@@ -701,19 +701,21 @@ SQL
 
 当前服务端支持 `SendSms`、已审核签名/验证码模板候选查询，以及注册、密码找回和可选的短信登录。OpenAPI Explorer 能使用浏览器登录态自动签名，但 VPS 进程必须配置机器凭证：
 
-- 推荐阿里云 ECS：创建只允许 `dysms:SendSms`、`dysms:QuerySmsSignList`、`dysms:QuerySmsTemplateList` 的 RAM 角色并绑定到 ECS；设置 `SMS_ALIYUN_CREDENTIAL_MODE=ecs_ram_role`，角色名可留空由 IMDS 自动发现。
-- 也可使用 SDK 默认凭证链：`SMS_ALIYUN_CREDENTIAL_MODE=auto`。它按环境变量、配置文件、ECS RAM Role 等顺序查找凭证。
+- 推荐阿里云 ECS：创建只允许 `dysms:SendSms`、`dysms:QuerySmsSignList`、`dysms:QuerySmsTemplateList` 的 RAM 角色并绑定到 ECS；设置 `SMS_ALIYUN_CREDENTIAL_MODE=ecs_ram_role`，角色名可留空由 IMDS 自动发现。该显式模式强制 IMDSv2。
+- 也可使用 SDK 默认凭证链：`SMS_ALIYUN_CREDENTIAL_MODE=auto`。为兼容旧部署，存在完整 `SMS_ALIYUN_ACCESS_KEY_ID/SECRET` 时会优先使用这对密钥；没有完整密钥时按环境变量、配置文件、ECS RAM Role 等顺序查找凭证，并必须设置 `ALIBABA_CLOUD_IMDSV1_DISABLED=true`。
 - 只有无法使用角色时才使用 `SMS_ALIYUN_CREDENTIAL_MODE=access_key`，并把 `SMS_ALIYUN_ACCESS_KEY_ID/SECRET` 放在 VPS 私有环境，不进 Git 或聊天。
 
-无论凭证来源是哪一种，都必须明确选择已审核的短信签名、验证码模板 Code 和模板变量名。管理员设置页的“读取已审核资源”只查询候选，不会自动选择，也不会发送短信。
+无论凭证来源是哪一种，都必须按用途明确选择已审核的签名、模板 Code 和变量名：注册、找回密码、短信登录互不回退。旧版单模板只兼容注册用途；同一个通用模板若确实通过了多个业务场景的审核，也必须由管理员显式填入每个用途。管理员设置页的“读取已审核资源”只查询候选并读取变量名，不会自动判断用途，也不会发送短信；候选模板会按所选签名过滤，切换签名会清空旧模板选择。
 
-真实测试前必须在系统设置填写 `auth_sms_test_phone_whitelist`。然后在“管理 -> 集成”输入白名单手机号并点击测试；无白名单时服务端拒绝真实测试发送。测试接口为 `GET /api/admin/system-status/test/sms/aliyun-resources`（查询候选）和 `POST /api/admin/system-status/test/sms`（只有带白名单手机号才发送）。
+国内当前已审核资源使用签名 `常青藤上云`：注册 `SMS_509985065`、找回密码 `SMS_509985066`、短信登录 `SMS_510180079`，变量均为 `code`。`SMS_510120085` 属于修改/重制密码模板，但当前 ERP 没有对应的用户短信改密流程，因此保留未接线，不能替代找回密码模板。
+
+真实测试前必须在系统设置填写 `auth_sms_test_phone_whitelist`。然后在“管理 -> 集成”输入白名单手机号并点击测试；无白名单时服务端拒绝真实测试发送。测试接口为 `GET /api/admin/system-status/test/sms/aliyun-resources`（只读查询候选）和 `POST /api/admin/system-status/test/sms`（只有当前网页登录会话和白名单手机号才能发送，固定使用注册用途）。
 
 短信登录默认关闭，需在系统设置显式打开 `feature_sms_login`；首位管理员仍通过 `/setup` 创建，不经过短信登录。
 
 ## 服务器功能验收清单
 
-真实短信尚未配置时，可以先把短信发送检查视为待验收项；console provider 只允许本地/测试环境使用，其余项目必须给出明确通过/失败结果。
+真实短信尚未配置时，可以先把短信发送检查视为待验收项；cloud 运行模式会拒绝 console provider，只有本地环境允许将验证码写入开发日志，其余项目必须给出明确通过/失败结果。
 
 ### 公网基础功能
 

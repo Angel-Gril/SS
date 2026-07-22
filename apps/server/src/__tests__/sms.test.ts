@@ -3,8 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const cryptoMocks = vi.hoisted(() => ({
   randomInt: vi.fn(() => 654321),
 }));
+const smsMocks = vi.hoisted(() => ({
+  send: vi.fn(async () => ({ ok: true, bizId: 'test-biz-id' })),
+}));
 
 vi.mock('node:crypto', () => ({ randomInt: cryptoMocks.randomInt }));
+vi.mock('../lib/sms/index.js', () => ({
+  getSmsProvider: vi.fn(async () => ({ send: smsMocks.send })),
+}));
 
 import { sendSmsCode, verifySmsCode, verifyTurnstile } from '../lib/captcha.js';
 
@@ -22,6 +28,7 @@ vi.mock('../lib/redis.js', () => ({
 describe('SMS verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    smsMocks.send.mockResolvedValue({ ok: true, bizId: 'test-biz-id' });
     vi.stubEnv('RUNTIME_MODE', 'cloud');
   });
 
@@ -36,6 +43,7 @@ describe('SMS verification', () => {
     const result = await sendSmsCode('13800138000');
 
     expect(result.ok).toBe(true);
+    expect(smsMocks.send).toHaveBeenCalledWith('13800138000', '654321', 'register');
     expect(redis.set).toHaveBeenCalledWith(
       'sms:code:13800138000',
       expect.stringMatching(/^\d{6}$/),
@@ -51,6 +59,7 @@ describe('SMS verification', () => {
     await sendSmsCode('13800138000', 'password-reset');
 
     expect(cryptoMocks.randomInt).toHaveBeenCalledWith(100000, 1000000);
+    expect(smsMocks.send).toHaveBeenCalledWith('13800138000', '654321', 'password-reset');
     expect(redis.set).toHaveBeenCalledWith(
       'sms:code:password-reset:13800138000',
       '654321',

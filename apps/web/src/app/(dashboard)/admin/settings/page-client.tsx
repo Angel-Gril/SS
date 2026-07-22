@@ -683,6 +683,12 @@ const AUTH_ALIYUN_KEYS = [
   'auth_sms_aliyun_sign_name',
   'auth_sms_aliyun_template_code',
   'auth_sms_aliyun_template_param_name',
+  'auth_sms_aliyun_register_template_code',
+  'auth_sms_aliyun_register_template_param_name',
+  'auth_sms_aliyun_password_reset_template_code',
+  'auth_sms_aliyun_password_reset_template_param_name',
+  'auth_sms_aliyun_sms_login_template_code',
+  'auth_sms_aliyun_sms_login_template_param_name',
 ];
 
 const AUTH_TURNSTILE_KEYS = [
@@ -706,6 +712,18 @@ function AuthSettingsPanel({
   const aliyunCredentialMode = editing.auth_sms_aliyun_credential_mode || 'auto';
   const challengeProvider = editing.auth_human_challenge_provider || (editing.feature_turnstile_login === 'true' ? 'cloudflare-turnstile' : 'disabled');
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const selectAliyunCredentialMode = (mode: string) => {
+    const clearCompatibilityKeys = mode === 'ecs_ram_role'
+      || (mode === 'auto' && aliyunCredentialMode === 'access_key');
+    setEditing({
+      ...editing,
+      auth_sms_aliyun_credential_mode: mode,
+      ...(clearCompatibilityKeys ? {
+        auth_sms_aliyun_access_key_id: '',
+        auth_sms_aliyun_access_key_secret: '',
+      } : {}),
+    });
+  };
   const isSavingAuth = savingKey === 'group:短信与人机验证';
   const isSavingTencent = savingKey === 'group:腾讯云短信';
   const isSavingAliyun = savingKey === 'group:阿里云短信';
@@ -728,16 +746,53 @@ function AuthSettingsPanel({
     });
   };
 
-  const selectAliyunTemplate = (templateCode: string) => {
+  const selectAliyunTemplate = (codeKey: string, paramKey: string, templateCode: string) => {
     const template = aliyunResources?.templates.find((item) => item.code === templateCode);
     setEditing({
       ...editing,
-      auth_sms_aliyun_template_code: templateCode,
+      [codeKey]: templateCode,
       ...(template?.variableNames.length === 1
-        ? { auth_sms_aliyun_template_param_name: template.variableNames[0] }
+        ? { [paramKey]: template.variableNames[0] || 'code' }
         : {}),
     });
   };
+  const selectedAliyunSign = editing.auth_sms_aliyun_sign_name || '';
+  const selectAliyunSign = (signName: string) => {
+    const signChanged = signName !== selectedAliyunSign;
+    setEditing({
+      ...editing,
+      auth_sms_aliyun_sign_name: signName,
+      ...(signChanged ? {
+        auth_sms_aliyun_template_code: '',
+        auth_sms_aliyun_register_template_code: '',
+        auth_sms_aliyun_password_reset_template_code: '',
+        auth_sms_aliyun_sms_login_template_code: '',
+      } : {}),
+    });
+  };
+  const aliyunTemplateOptions = aliyunResources?.templates.filter((template) => (
+    !selectedAliyunSign || !template.signatureName || template.signatureName === selectedAliyunSign
+  )) || [];
+  const aliyunPurposeTemplates = [
+    {
+      label: '注册验证码模板',
+      description: '用于新用户手机号注册',
+      codeKey: 'auth_sms_aliyun_register_template_code',
+      paramKey: 'auth_sms_aliyun_register_template_param_name',
+    },
+    {
+      label: '找回密码验证码模板',
+      description: '用于未登录用户找回密码',
+      codeKey: 'auth_sms_aliyun_password_reset_template_code',
+      paramKey: 'auth_sms_aliyun_password_reset_template_param_name',
+    },
+    {
+      label: '短信登录验证码模板',
+      description: '用于短信验证码登录；功能开关默认关闭',
+      codeKey: 'auth_sms_aliyun_sms_login_template_code',
+      paramKey: 'auth_sms_aliyun_sms_login_template_param_name',
+    },
+  ];
 
   return (
     <div className="space-y-4">
@@ -850,17 +905,18 @@ function AuthSettingsPanel({
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
                   <h3 className="text-sm font-medium">阿里云短信</h3>
                   <p className="text-xs text-muted-foreground">
                     使用 Dysmsapi 2017-05-25 SendSms；模板变量默认按 {`{"code":"123456"}`} 发送。
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:shrink-0 sm:flex-row sm:items-center">
                   <Button
                     size="sm"
                     variant="outline"
+                    className="w-full sm:w-auto"
                     onClick={loadAliyunResources}
                     disabled={loadingAliyunResources}
                   >
@@ -873,6 +929,7 @@ function AuthSettingsPanel({
                   </Button>
                   <Button
                     size="sm"
+                    className="w-full sm:w-auto"
                     onClick={() =>
                       saveConfigs(['auth_sms_provider', ...AUTH_ALIYUN_KEYS], '阿里云短信', {
                         auth_sms_provider: 'aliyun',
@@ -893,24 +950,24 @@ function AuthSettingsPanel({
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2 md:col-span-2">
                   <Label className="text-sm font-medium">凭证来源</Label>
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid min-w-0 gap-2 sm:grid-cols-3">
                     {[
-                      { value: 'auto', label: '默认凭证链', desc: 'SDK 自动查找环境、配置文件或 ECS 角色' },
+                      { value: 'auto', label: '默认凭证链', desc: '兼容模式：有完整 AccessKey 时优先使用，否则走默认链并强制 IMDSv2' },
                       { value: 'ecs_ram_role', label: 'ECS RAM 角色', desc: '使用当前阿里云 ECS 的实例角色' },
                       { value: 'access_key', label: 'AccessKey', desc: '使用下方显式密钥' },
                     ].map((option) => (
                       <button
                         key={option.value}
                         type="button"
-                        onClick={() => setValue('auth_sms_aliyun_credential_mode', option.value)}
-                        className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                        onClick={() => selectAliyunCredentialMode(option.value)}
+                        className={`min-w-0 rounded-md border px-3 py-2 text-left transition-colors ${
                           aliyunCredentialMode === option.value
                             ? 'border-primary bg-primary/5'
                             : 'hover:bg-muted/50'
                         }`}
                       >
                         <span className="block text-sm font-medium">{option.label}</span>
-                        <span className="text-xs text-muted-foreground">{option.desc}</span>
+                        <span className="block break-words text-xs text-muted-foreground">{option.desc}</span>
                       </button>
                     ))}
                   </div>
@@ -923,8 +980,13 @@ function AuthSettingsPanel({
                     placeholder="留空自动发现实例角色"
                   />
                 )}
-                {aliyunCredentialMode === 'access_key' && (
+                {(aliyunCredentialMode === 'access_key' || aliyunCredentialMode === 'auto') && (
                   <>
+                    {aliyunCredentialMode === 'auto' && (
+                      <p className="text-xs text-muted-foreground md:col-span-2">
+                        auto 模式保留旧部署兼容性：下方填写完整 AccessKey 时会优先使用；不填写则使用默认凭证链。
+                      </p>
+                    )}
                     <ConfigInput
                       cfg={configs.auth_sms_aliyun_access_key_id}
                       editing={editing}
@@ -947,7 +1009,7 @@ function AuthSettingsPanel({
                     <select
                       className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                       value={editing.auth_sms_aliyun_sign_name || ''}
-                      onChange={(event) => setValue('auth_sms_aliyun_sign_name', event.target.value)}
+                      onChange={(event) => selectAliyunSign(event.target.value)}
                     >
                       <option value="">请选择签名</option>
                       {aliyunResources.signs.map((sign) => (
@@ -965,36 +1027,73 @@ function AuthSettingsPanel({
                     placeholder="已审核签名"
                   />
                 )}
-                {aliyunResources?.templates.length ? (
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">已审核验证码模板</Label>
-                    <select
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      value={editing.auth_sms_aliyun_template_code || ''}
-                      onChange={(event) => selectAliyunTemplate(event.target.value)}
-                    >
-                      <option value="">请选择模板</option>
-                      {aliyunResources.templates.map((template) => (
-                        <option key={template.code} value={template.code}>
-                          {template.name || template.code} ({template.code})
-                        </option>
-                      ))}
-                    </select>
+                {aliyunPurposeTemplates.map((purpose) => (
+                  <div key={purpose.codeKey} className="space-y-3 rounded-md border p-3 md:col-span-2">
+                    <div>
+                      <Label className="text-sm font-medium">{purpose.label}</Label>
+                      <p className="text-xs text-muted-foreground">{purpose.description}</p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {aliyunResources ? (
+                        <div className="space-y-1.5">
+                          <Label className="text-sm font-medium">已审核模板</Label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={editing[purpose.codeKey] || ''}
+                            onChange={(event) => selectAliyunTemplate(
+                              purpose.codeKey,
+                              purpose.paramKey,
+                              event.target.value,
+                            )}
+                          >
+                            <option value="">请选择模板</option>
+                            {aliyunTemplateOptions.map((template) => (
+                              <option key={template.code} value={template.code}>
+                                {template.name || template.code} ({template.code})
+                              </option>
+                            ))}
+                          </select>
+                          {selectedAliyunSign && aliyunTemplateOptions.length === 0 && (
+                            <p className="text-xs text-destructive">当前签名没有可用的已审核验证码模板</p>
+                          )}
+                        </div>
+                      ) : (
+                        <ConfigInput
+                          cfg={configs[purpose.codeKey]}
+                          editing={editing}
+                          setValue={setValue}
+                          placeholder="SMS_123456789"
+                        />
+                      )}
+                      <ConfigInput
+                        cfg={configs[purpose.paramKey]}
+                        editing={editing}
+                        setValue={setValue}
+                        placeholder="code"
+                      />
+                    </div>
                   </div>
-                ) : (
-                  <ConfigInput
-                    cfg={configs.auth_sms_aliyun_template_code}
-                    editing={editing}
-                    setValue={setValue}
-                    placeholder="SMS_123456789"
-                  />
-                )}
-                <ConfigInput
-                  cfg={configs.auth_sms_aliyun_template_param_name}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="code"
-                />
+                ))}
+                <details className="rounded-md border p-3 md:col-span-2">
+                  <summary className="cursor-pointer text-sm font-medium">旧版单模板兼容</summary>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    仅在未填写注册专用模板时作为注册模板使用，不会用于找回密码或短信登录。
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <ConfigInput
+                      cfg={configs.auth_sms_aliyun_template_code}
+                      editing={editing}
+                      setValue={setValue}
+                      placeholder="SMS_123456789"
+                    />
+                    <ConfigInput
+                      cfg={configs.auth_sms_aliyun_template_param_name}
+                      editing={editing}
+                      setValue={setValue}
+                      placeholder="code"
+                    />
+                  </div>
+                </details>
               </div>
               {aliyunResources?.truncated && (
                 <p className="text-xs text-muted-foreground">
@@ -2706,10 +2805,10 @@ function SecretConfigInput({
   const value = editing[cfg.key] || '';
   const hasSavedSecret = isSavedMaskedSecret(value, cfg.value);
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <div>
         <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
-        <code className="ml-2 text-[11px] text-muted-foreground">{cfg.key}</code>
+        <code className="ml-2 break-all text-[11px] text-muted-foreground">{cfg.key}</code>
       </div>
       {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
       <Input
@@ -2743,10 +2842,10 @@ function ConfigInput({
 }) {
   if (!cfg) return null;
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <div>
         <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
-        <code className="ml-2 text-[11px] text-muted-foreground">{cfg.key}</code>
+        <code className="ml-2 break-all text-[11px] text-muted-foreground">{cfg.key}</code>
       </div>
       {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
       <Input

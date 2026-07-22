@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configStore = new Map<string, string>();
+const configFailures = new Set<string>();
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
     systemConfig: {
       findUnique: vi.fn(async ({ where }: { where: { key: string } }) => {
+        if (configFailures.has(where.key)) throw new Error(`database unavailable for ${where.key}`);
         if (!configStore.has(where.key)) return null;
         return { key: where.key, value: configStore.get(where.key) };
       }),
@@ -16,6 +18,7 @@ vi.mock('../lib/prisma.js', () => ({
 describe('auth challenge config', () => {
   beforeEach(() => {
     configStore.clear();
+    configFailures.clear();
     vi.resetModules();
     vi.stubEnv('RUNTIME_MODE', 'cloud');
   });
@@ -67,6 +70,10 @@ describe('auth challenge config', () => {
     });
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('uses Aliyun SMS settings from SystemConfig before env fallback', async () => {
     configStore.set('auth_sms_provider', 'aliyun');
     configStore.set('auth_sms_aliyun_credential_mode', 'access_key');
@@ -75,6 +82,12 @@ describe('auth challenge config', () => {
     configStore.set('auth_sms_aliyun_sign_name', 'db-sign');
     configStore.set('auth_sms_aliyun_template_code', 'SMS_DB_TEMPLATE');
     configStore.set('auth_sms_aliyun_template_param_name', 'verifyCode');
+    configStore.set('auth_sms_aliyun_register_template_code', 'SMS_DB_REGISTER');
+    configStore.set('auth_sms_aliyun_register_template_param_name', 'registerCode');
+    configStore.set('auth_sms_aliyun_password_reset_template_code', 'SMS_DB_PASSWORD_RESET');
+    configStore.set('auth_sms_aliyun_password_reset_template_param_name', 'resetCode');
+    configStore.set('auth_sms_aliyun_sms_login_template_code', 'SMS_DB_LOGIN');
+    configStore.set('auth_sms_aliyun_sms_login_template_param_name', 'loginCode');
     vi.stubEnv('SMS_ALIYUN_ACCESS_KEY_ID', 'env-access-key-id');
     vi.stubEnv('SMS_ALIYUN_CREDENTIAL_MODE', 'ecs_ram_role');
 
@@ -90,8 +103,67 @@ describe('auth challenge config', () => {
         signName: 'db-sign',
         templateCode: 'SMS_DB_TEMPLATE',
         templateParamName: 'verifyCode',
+        registerTemplateCode: 'SMS_DB_REGISTER',
+        registerTemplateParamName: 'registerCode',
+        passwordResetTemplateCode: 'SMS_DB_PASSWORD_RESET',
+        passwordResetTemplateParamName: 'resetCode',
+        smsLoginTemplateCode: 'SMS_DB_LOGIN',
+        smsLoginTemplateParamName: 'loginCode',
       },
     });
+  });
+
+  it('uses only matching purpose environment fallbacks for mixed SystemConfig deployments', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_sign_name', 'db-sign');
+    configStore.set('auth_sms_aliyun_template_code', 'SMS_LEGACY_REGISTER');
+    configStore.set('auth_sms_aliyun_template_param_name', 'code');
+    vi.stubEnv('SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE', 'SMS_ENV_RESET_FALLBACK');
+    vi.stubEnv('SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE', 'SMS_ENV_LOGIN_FALLBACK');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      aliyun: {
+        templateCode: 'SMS_LEGACY_REGISTER',
+        templateParamName: 'code',
+        registerTemplateCode: '',
+        registerTemplateParamName: 'code',
+        passwordResetTemplateCode: 'SMS_ENV_RESET_FALLBACK',
+        passwordResetTemplateParamName: 'code',
+        smsLoginTemplateCode: 'SMS_ENV_LOGIN_FALLBACK',
+        smsLoginTemplateParamName: 'code',
+      },
+    });
+  });
+
+  it('never reuses a legacy registration environment template for reset or login', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_sign_name', 'db-sign');
+    vi.stubEnv('SMS_ALIYUN_TEMPLATE_CODE', 'SMS_ENV_LEGACY_REGISTER');
+    vi.stubEnv('SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE', '');
+    vi.stubEnv('SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE', '');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      aliyun: {
+        templateCode: 'SMS_ENV_LEGACY_REGISTER',
+        passwordResetTemplateCode: '',
+        smsLoginTemplateCode: '',
+      },
+    });
+  });
+
+  it('fails closed when an active provider configuration cannot be read', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configFailures.add('auth_sms_aliyun_credential_mode');
+    vi.stubEnv('SMS_PROVIDER', 'aliyun');
+    vi.stubEnv('SMS_ALIYUN_CREDENTIAL_MODE', 'auto');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).rejects.toThrow(/database unavailable.*credential_mode/);
   });
 
   it('supports Alibaba ECS RAM role credentials without SMS AccessKey fields', async () => {

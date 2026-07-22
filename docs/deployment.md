@@ -61,7 +61,7 @@
 
 - `REDIS_URL`（启用短信验证码、登录失败计数和 BullMQ worker）
 - `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`（注册/登录人机验证）
-- `SMS_PROVIDER` + `SMS_TENCENT_*`（短信验证码）
+- `SMS_PROVIDER` + `SMS_ALIYUN_*` 或 `SMS_TENCENT_*`（短信验证码；阿里云生产优先使用 ECS RAM Role）
 - `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN`（服务端 / 浏览器端错误追踪）
 - `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
 - `IMAGE_STORAGE_BACKEND` + `OSS_*`（图片存储；云端推荐 `oss`，OSS 未准备好时 staging 可临时用 `ozon-cdn`）

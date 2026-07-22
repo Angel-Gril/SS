@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AliyunSmsProvider,
   queryApprovedAliyunSmsResources,
@@ -9,12 +9,23 @@ import {
 const config = {
   accessKeyId: 'test-access-key-id',
   accessKeySecret: 'test-access-key-secret',
+  credentialMode: 'access_key' as const,
+  roleName: '',
   signName: '测试签名',
   templateCode: 'SMS_123456789',
   templateParamName: 'code',
+  registerTemplateCode: 'SMS_REGISTER',
+  registerTemplateParamName: 'registerCode',
+  passwordResetTemplateCode: 'SMS_PASSWORD_RESET',
+  passwordResetTemplateParamName: 'resetCode',
+  smsLoginTemplateCode: 'SMS_LOGIN',
+  smsLoginTemplateParamName: 'loginCode',
 };
 
 describe('AliyunSmsProvider', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it('rejects incomplete credentials before any send can occur', () => {
     const sendSms = vi.fn<AliyunSmsClient['sendSms']>();
 
@@ -31,7 +42,7 @@ describe('AliyunSmsProvider', () => {
     }) as Awaited<ReturnType<AliyunSmsClient['sendSms']>>);
     const provider = new AliyunSmsProvider(config, { sendSms });
 
-    await expect(provider.send('+86 138-0013-8000', '654321')).resolves.toEqual({
+    await expect(provider.send('+86 138-0013-8000', '654321', 'register')).resolves.toEqual({
       ok: true,
       bizId: 'biz-123',
     });
@@ -41,12 +52,62 @@ describe('AliyunSmsProvider', () => {
     expect(request).toMatchObject({
       phoneNumbers: '13800138000',
       signName: '测试签名',
+      templateCode: 'SMS_REGISTER',
+      templateParam: JSON.stringify({ registerCode: '654321' }),
+    });
+  });
+
+  it.each([
+    ['password-reset', 'SMS_PASSWORD_RESET', 'resetCode'],
+    ['sms-login', 'SMS_LOGIN', 'loginCode'],
+  ] as const)('uses the dedicated %s template and parameter', async (purpose, templateCode, paramName) => {
+    const sendSms = vi.fn<AliyunSmsClient['sendSms']>(async () => ({
+      body: { code: 'OK', message: 'OK', bizId: `biz-${purpose}` },
+    }) as Awaited<ReturnType<AliyunSmsClient['sendSms']>>);
+    const provider = new AliyunSmsProvider(config, { sendSms });
+
+    await expect(provider.send('13800138000', '654321', purpose)).resolves.toMatchObject({ ok: true });
+
+    expect(sendSms.mock.calls[0]?.[0]).toMatchObject({
+      templateCode,
+      templateParam: JSON.stringify({ [paramName]: '654321' }),
+    });
+  });
+
+  it('does not fall back to the registration template for another purpose', async () => {
+    const sendSms = vi.fn<AliyunSmsClient['sendSms']>();
+    const provider = new AliyunSmsProvider({
+      ...config,
+      passwordResetTemplateCode: '',
+      passwordResetTemplateParamName: '',
+    }, { sendSms });
+
+    await expect(provider.send('13800138000', '654321', 'password-reset')).resolves.toEqual({
+      ok: false,
+      err: '阿里云找回密码短信模板未配置',
+    });
+    expect(sendSms).not.toHaveBeenCalled();
+  });
+
+  it('uses the legacy single template only as a registration fallback', async () => {
+    const sendSms = vi.fn<AliyunSmsClient['sendSms']>(async () => ({
+      body: { code: 'OK', message: 'OK', bizId: 'legacy-register' },
+    }) as Awaited<ReturnType<AliyunSmsClient['sendSms']>>);
+    const provider = new AliyunSmsProvider({
+      ...config,
+      registerTemplateCode: '',
+      registerTemplateParamName: '',
+    }, { sendSms });
+
+    await expect(provider.send('13800138000', '654321', 'register')).resolves.toMatchObject({ ok: true });
+    expect(sendSms.mock.calls[0]?.[0]).toMatchObject({
       templateCode: 'SMS_123456789',
       templateParam: JSON.stringify({ code: '654321' }),
     });
   });
 
   it('allows the SDK default credential chain when no SMS AccessKey is configured', async () => {
+    vi.stubEnv('ALIBABA_CLOUD_IMDSV1_DISABLED', '');
     const provider = new AliyunSmsProvider({
       credentialMode: 'auto',
       accessKeyId: '',
@@ -60,6 +121,18 @@ describe('AliyunSmsProvider', () => {
       ok: false,
       err: '手机号格式不正确',
     });
+    expect(process.env.ALIBABA_CLOUD_IMDSV1_DISABLED).toBe('true');
+  });
+
+  it('preserves complete AccessKey pairs in auto mode for existing deployments', async () => {
+    vi.stubEnv('ALIBABA_CLOUD_IMDSV1_DISABLED', '');
+    const provider = new AliyunSmsProvider({
+      ...config,
+      credentialMode: 'auto',
+    });
+
+    await expect(provider.send('not-a-mainland-number', '123456')).resolves.toMatchObject({ ok: false });
+    expect(process.env.ALIBABA_CLOUD_IMDSV1_DISABLED).toBe('');
   });
 
   it('allows an ECS RAM role without a static AccessKey pair', async () => {

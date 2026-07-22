@@ -16,15 +16,21 @@ export interface AliyunSmsRuntimeConfig {
   accessKeyId: string;
   accessKeySecret: string;
   /**
-   * `auto` uses the Alibaba Cloud default credential chain when no explicit
-   * SMS_* key pair is configured. `ecs_ram_role` is useful on an Alibaba ECS
-   * instance with an attached RAM role.
+   * `auto` preserves existing complete SMS AccessKey pairs, otherwise it uses
+   * the Alibaba Cloud default credential chain. `ecs_ram_role` is preferred on
+   * an Alibaba ECS instance with an attached RAM role.
    */
   credentialMode: 'auto' | 'access_key' | 'ecs_ram_role';
   roleName: string;
   signName: string;
   templateCode: string;
   templateParamName: string;
+  registerTemplateCode: string;
+  registerTemplateParamName: string;
+  passwordResetTemplateCode: string;
+  passwordResetTemplateParamName: string;
+  smsLoginTemplateCode: string;
+  smsLoginTemplateParamName: string;
 }
 
 export interface SmsRuntimeConfig {
@@ -94,8 +100,15 @@ export async function isTurnstileChallengeEnabled(): Promise<boolean> {
 }
 
 export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
+  // Provider selection is a security boundary. A database read failure must
+  // not silently switch a cloud deployment to another environment provider.
+  const configuredProvider = await getConfig('auth_sms_provider');
+  const useDbTencent = configuredProvider === 'tencent';
+  const useDbAliyun = configuredProvider === 'aliyun';
+  const providerConfig = <K extends SystemConfigKey>(key: K, active: boolean) => (
+    active ? getConfig(key) : readConfig(key)
+  );
   const [
-    configuredProvider,
     secretId,
     secretKey,
     region,
@@ -109,32 +122,41 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     aliyunSignName,
     aliyunTemplateCode,
     aliyunTemplateParamName,
+    aliyunRegisterTemplateCode,
+    aliyunRegisterTemplateParamName,
+    aliyunPasswordResetTemplateCode,
+    aliyunPasswordResetTemplateParamName,
+    aliyunSmsLoginTemplateCode,
+    aliyunSmsLoginTemplateParamName,
     codeTtlSeconds,
     rateLimitSeconds,
     whitelist,
   ] = await Promise.all([
-    readConfig('auth_sms_provider'),
-    readConfig('auth_sms_tencent_secret_id'),
-    readConfig('auth_sms_tencent_secret_key'),
-    readConfig('auth_sms_tencent_region'),
-    readConfig('auth_sms_tencent_sdk_app_id'),
-    readConfig('auth_sms_tencent_sign_name'),
-    readConfig('auth_sms_tencent_template_id'),
-    readConfig('auth_sms_aliyun_access_key_id'),
-    readConfig('auth_sms_aliyun_access_key_secret'),
-    readConfig('auth_sms_aliyun_credential_mode'),
-    readConfig('auth_sms_aliyun_role_name'),
-    readConfig('auth_sms_aliyun_sign_name'),
-    readConfig('auth_sms_aliyun_template_code'),
-    readConfig('auth_sms_aliyun_template_param_name'),
+    providerConfig('auth_sms_tencent_secret_id', useDbTencent),
+    providerConfig('auth_sms_tencent_secret_key', useDbTencent),
+    providerConfig('auth_sms_tencent_region', useDbTencent),
+    providerConfig('auth_sms_tencent_sdk_app_id', useDbTencent),
+    providerConfig('auth_sms_tencent_sign_name', useDbTencent),
+    providerConfig('auth_sms_tencent_template_id', useDbTencent),
+    providerConfig('auth_sms_aliyun_access_key_id', useDbAliyun),
+    providerConfig('auth_sms_aliyun_access_key_secret', useDbAliyun),
+    providerConfig('auth_sms_aliyun_credential_mode', useDbAliyun),
+    providerConfig('auth_sms_aliyun_role_name', useDbAliyun),
+    providerConfig('auth_sms_aliyun_sign_name', useDbAliyun),
+    providerConfig('auth_sms_aliyun_template_code', useDbAliyun),
+    providerConfig('auth_sms_aliyun_template_param_name', useDbAliyun),
+    providerConfig('auth_sms_aliyun_register_template_code', useDbAliyun),
+    providerConfig('auth_sms_aliyun_register_template_param_name', useDbAliyun),
+    providerConfig('auth_sms_aliyun_password_reset_template_code', useDbAliyun),
+    providerConfig('auth_sms_aliyun_password_reset_template_param_name', useDbAliyun),
+    providerConfig('auth_sms_aliyun_sms_login_template_code', useDbAliyun),
+    providerConfig('auth_sms_aliyun_sms_login_template_param_name', useDbAliyun),
     readConfig('auth_sms_code_ttl_seconds'),
     readConfig('auth_sms_rate_limit_seconds'),
     readConfig('auth_sms_test_phone_whitelist'),
   ]);
 
   const provider = configuredProvider === 'env' ? envSmsProvider() : configuredProvider;
-  const useDbTencent = configuredProvider === 'tencent';
-  const useDbAliyun = configuredProvider === 'aliyun';
   const aliyunCredentialMode = normalizeAliyunCredentialMode(
     useDbAliyun ? configuredAliyunCredentialMode : process.env.SMS_ALIYUN_CREDENTIAL_MODE,
   );
@@ -146,6 +168,7 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
     || aliyunAccessKeyId || aliyunAccessKeySecret
     || (configuredAliyunCredentialMode !== 'auto' && configuredAliyunCredentialMode)
     || configuredAliyunRoleName || aliyunSignName || aliyunTemplateCode
+    || aliyunRegisterTemplateCode || aliyunPasswordResetTemplateCode || aliyunSmsLoginTemplateCode
   );
 
   return {
@@ -172,6 +195,24 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
       templateParamName: useDbAliyun
         ? clean(aliyunTemplateParamName) || process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code'
         : process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code',
+      registerTemplateCode: useDbAliyun
+        ? clean(aliyunRegisterTemplateCode) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || ''
+        : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || '',
+      registerTemplateParamName: useDbAliyun
+        ? clean(aliyunRegisterTemplateParamName) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code'
+        : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code',
+      passwordResetTemplateCode: useDbAliyun
+        ? clean(aliyunPasswordResetTemplateCode) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || ''
+        : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || '',
+      passwordResetTemplateParamName: useDbAliyun
+        ? clean(aliyunPasswordResetTemplateParamName) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code'
+        : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code',
+      smsLoginTemplateCode: useDbAliyun
+        ? clean(aliyunSmsLoginTemplateCode) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || ''
+        : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || '',
+      smsLoginTemplateParamName: useDbAliyun
+        ? clean(aliyunSmsLoginTemplateParamName) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code'
+        : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code',
     },
   };
 }

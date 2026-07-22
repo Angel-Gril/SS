@@ -1,5 +1,7 @@
+export type SmsCodePurpose = 'register' | 'password-reset' | 'sms-login';
+
 export interface SmsProvider {
-  send(phone: string, code: string): Promise<SmsResult>;
+  send(phone: string, code: string, purpose?: SmsCodePurpose): Promise<SmsResult>;
 }
 
 export interface SmsResult {

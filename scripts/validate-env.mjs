@@ -71,17 +71,26 @@ function validateSmsProvider(env) {
     if (isSet(env.SMS_ALIYUN_CREDENTIAL_MODE)) {
       expectOneOf(env, 'SMS_ALIYUN_CREDENTIAL_MODE', ['auto', 'access_key', 'ecs_ram_role']);
     }
-    const usesExplicitAccessKey = credentialMode === 'access_key'
-      || isSet(env.SMS_ALIYUN_ACCESS_KEY_ID)
+    const hasAnySmsAccessKey = isSet(env.SMS_ALIYUN_ACCESS_KEY_ID)
       || isSet(env.SMS_ALIYUN_ACCESS_KEY_SECRET);
+    const usesExplicitAccessKey = credentialMode === 'access_key'
+      || (credentialMode === 'auto' && hasAnySmsAccessKey);
+    if (credentialMode === 'auto' && !hasAnySmsAccessKey
+      && env.ALIBABA_CLOUD_IMDSV1_DISABLED !== 'true') {
+      fail('SMS_ALIYUN_CREDENTIAL_MODE=auto requires ALIBABA_CLOUD_IMDSV1_DISABLED=true');
+    }
     const required = [
       ...(usesExplicitAccessKey
         ? ['SMS_ALIYUN_ACCESS_KEY_ID', 'SMS_ALIYUN_ACCESS_KEY_SECRET']
         : []),
       'SMS_ALIYUN_SIGN_NAME',
-      'SMS_ALIYUN_TEMPLATE_CODE',
+      'SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE',
+      'SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE',
     ];
     for (const key of required) requireValue(env, key);
+    if (!isSet(env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE) && !isSet(env.SMS_ALIYUN_TEMPLATE_CODE)) {
+      fail('SMS_ALIYUN_REGISTER_TEMPLATE_CODE or legacy SMS_ALIYUN_TEMPLATE_CODE is required');
+    }
   }
   const required = env.SMS_PROVIDER === 'tencent'
     ? [
@@ -94,11 +103,15 @@ function validateSmsProvider(env) {
       ]
     : [];
   for (const key of required) requireValue(env, key);
-  if (
-    isSet(env.SMS_ALIYUN_TEMPLATE_PARAM_NAME)
-    && !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(env.SMS_ALIYUN_TEMPLATE_PARAM_NAME)
-  ) {
-    fail('SMS_ALIYUN_TEMPLATE_PARAM_NAME must be an identifier such as code');
+  for (const key of [
+    'SMS_ALIYUN_TEMPLATE_PARAM_NAME',
+    'SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME',
+    'SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME',
+    'SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME',
+  ]) {
+    if (isSet(env[key]) && !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(env[key])) {
+      fail(`${key} must be an identifier such as code`);
+    }
   }
 }
 
@@ -262,6 +275,7 @@ function validateCloudR2(env) {
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
   warnIfMissing(env, 'SMS_PROVIDER');
+  if (env.SMS_PROVIDER === 'console') fail('SMS_PROVIDER=console is not allowed in cloud profiles');
   validateSmsProvider(env);
 }
 
@@ -276,6 +290,7 @@ function validateCloudBootstrap(env) {
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
   warnIfMissing(env, 'SMS_PROVIDER');
+  if (env.SMS_PROVIDER === 'console') fail('SMS_PROVIDER=console is not allowed in cloud profiles');
   validateSmsProvider(env);
 }
 

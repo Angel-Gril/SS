@@ -1,6 +1,6 @@
 import * as tencentcloud from 'tencentcloud-sdk-nodejs-sms';
 
-import type { SmsProvider, SmsResult } from './types.js';
+import type { SmsCodePurpose, SmsProvider, SmsResult } from './types.js';
 import type { TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
 
 const SmsClient = tencentcloud.sms.v20210111.Client;
@@ -34,7 +34,7 @@ export class TencentSmsProvider implements SmsProvider {
     });
   }
 
-  async send(phone: string, code: string): Promise<SmsResult> {
+  async send(phone: string, code: string, _purpose: SmsCodePurpose = 'register'): Promise<SmsResult> {
     const phoneNumber = phone.startsWith('+') ? phone : `+86${phone}`;
 
     try {

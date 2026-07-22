@@ -36,7 +36,7 @@ function validateDeploymentEnv(hostLines) {
     'LEGAL_PROFILE=cloud-cn',
     'CORS_ORIGIN=https://ss-erp.cn',
     'NEXT_PUBLIC_API_BASE_URL=https://ss-erp.cn',
-    'SMS_PROVIDER=console',
+    'SMS_PROVIDER=',
     ...hostLines,
     '',
   ].join('\n'));

@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { redis } from '../lib/redis.js';
-import { getSmsProvider } from './sms/index.js';
+import { getSmsProvider, type SmsCodePurpose } from './sms/index.js';
 import {
   getSmsRuntimeConfig,
   getTurnstileRuntimeConfig,
@@ -52,8 +52,6 @@ export async function verifyTurnstile(token: string, ip?: string): Promise<boole
 const SMS_RATE_KEY_PREFIX = 'sms:rate:';
 const SMS_CODE_KEY_PREFIX = 'sms:code:';
 const SMS_FAIL_KEY_PREFIX = 'sms:fail:';
-export type SmsCodePurpose = 'register' | 'password-reset' | 'sms-login';
-
 function smsKeySuffix(phone: string, purpose: SmsCodePurpose): string {
   return purpose === 'register' ? phone : `${purpose}:${phone}`;
 }
@@ -78,7 +76,7 @@ export async function sendSmsCode(
   let result;
   try {
     const provider = await getSmsProvider();
-    result = await provider.send(phone, code);
+    result = await provider.send(phone, code, purpose);
   } catch (error) {
     await redis.del(rateKey);
     const message = error instanceof Error ? error.message : String(error || 'unknown');

@@ -4,8 +4,9 @@ import { TencentSmsProvider } from './tencent.js';
 import { AliyunSmsProvider } from './aliyun.js';
 import { getSmsRuntimeConfig } from '../auth-challenge-config.js';
 import type { AliyunSmsRuntimeConfig, TencentSmsRuntimeConfig } from '../auth-challenge-config.js';
+import { getRuntimeMode } from '../../adapters/runtime-config.js';
 
-export type { SmsProvider, SmsResult } from './types.js';
+export type { SmsCodePurpose, SmsProvider, SmsResult } from './types.js';
 
 let _provider: { signature: string; provider: SmsProvider } | null = null;
 
@@ -28,6 +29,9 @@ function createProvider(
 
 export async function getSmsProvider(): Promise<SmsProvider> {
   const config = await getSmsRuntimeConfig();
+  if (config.provider === 'console' && getRuntimeMode() === 'cloud') {
+    throw new Error('[SMS] cloud 运行模式禁止使用 console provider');
+  }
   const signature = JSON.stringify({
     provider: config.provider,
     tencent: config.tencent,

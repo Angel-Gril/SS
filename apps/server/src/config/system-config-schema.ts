@@ -111,6 +111,12 @@ export const SystemConfigSchema = {
   auth_sms_aliyun_sign_name: z.string().default(''),
   auth_sms_aliyun_template_code: z.string().default(''),
   auth_sms_aliyun_template_param_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).default('code'),
+  auth_sms_aliyun_register_template_code: z.string().default(''),
+  auth_sms_aliyun_register_template_param_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).default('code'),
+  auth_sms_aliyun_password_reset_template_code: z.string().default(''),
+  auth_sms_aliyun_password_reset_template_param_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).default('code'),
+  auth_sms_aliyun_sms_login_template_code: z.string().default(''),
+  auth_sms_aliyun_sms_login_template_param_name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/).default('code'),
   auth_sms_code_ttl_seconds: z.number().int().min(60).max(1800).default(300),
   auth_sms_rate_limit_seconds: z.number().int().min(30).max(600).default(60),
   auth_sms_test_phone_whitelist: z.string().default(''),
@@ -651,7 +657,37 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   auth_sms_aliyun_template_param_name: {
     label: '阿里云验证码变量名',
     group: 'auth',
-    description: '模板中的验证码变量名，默认 code；请求参数会生成 {"code":"123456"}',
+    description: '旧版单模板的验证码变量名；仅在没有配置用途专用模板时使用',
+  },
+  auth_sms_aliyun_register_template_code: {
+    label: '阿里云注册模板 Code',
+    group: 'auth',
+    description: '用户注册验证码专用模板；未填写时仅注册用途可回退旧版单模板',
+  },
+  auth_sms_aliyun_register_template_param_name: {
+    label: '阿里云注册验证码变量名',
+    group: 'auth',
+    description: '注册模板中的验证码变量名，通常为 code',
+  },
+  auth_sms_aliyun_password_reset_template_code: {
+    label: '阿里云找回密码模板 Code',
+    group: 'auth',
+    description: '找回密码验证码专用模板',
+  },
+  auth_sms_aliyun_password_reset_template_param_name: {
+    label: '阿里云找回密码验证码变量名',
+    group: 'auth',
+    description: '找回密码模板中的验证码变量名，通常为 code',
+  },
+  auth_sms_aliyun_sms_login_template_code: {
+    label: '阿里云短信登录模板 Code',
+    group: 'auth',
+    description: '短信验证码登录专用模板',
+  },
+  auth_sms_aliyun_sms_login_template_param_name: {
+    label: '阿里云登录验证码变量名',
+    group: 'auth',
+    description: '登录模板中的验证码变量名，通常为 code',
   },
   auth_sms_code_ttl_seconds: {
     label: '验证码有效期（秒）',
