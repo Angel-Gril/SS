@@ -1,4 +1,5 @@
-import DysmsapiClient, {
+import * as Dysmsapi from '@alicloud/dysmsapi20170525';
+import {
   QuerySmsSignListRequest,
   QuerySmsTemplateListRequest,
   SendSmsRequest,
@@ -6,12 +7,37 @@ import DysmsapiClient, {
   type QuerySmsTemplateListResponse,
   type SendSmsResponse,
 } from '@alicloud/dysmsapi20170525';
-import AlibabaCredential, { Config as AlibabaCredentialConfig } from '@alicloud/credentials';
+import * as AlibabaCredentials from '@alicloud/credentials';
 import { $OpenApiUtil } from '@alicloud/openapi-core';
 import type { AliyunSmsRuntimeConfig } from '../auth-challenge-config.js';
 import type { SmsCodePurpose, SmsProvider, SmsResult } from './types.js';
 
 const ALIYUN_SMS_ENDPOINT = 'dysmsapi.aliyuncs.com';
+
+function resolveDefaultConstructor<T>(moduleValue: unknown, packageName: string): T {
+  const directDefault = moduleValue && typeof moduleValue === 'object'
+    ? (moduleValue as { default?: unknown }).default
+    : undefined;
+  const candidate = typeof directDefault === 'function'
+    ? directDefault
+    : directDefault && typeof directDefault === 'object'
+      ? (directDefault as { default?: unknown }).default
+      : undefined;
+  if (typeof candidate !== 'function') {
+    throw new TypeError(`Unable to load the ${packageName} default constructor`);
+  }
+  return candidate as T;
+}
+
+const DysmsapiClient = resolveDefaultConstructor<typeof Dysmsapi.default>(
+  Dysmsapi,
+  '@alicloud/dysmsapi20170525',
+);
+const AlibabaCredential = resolveDefaultConstructor<typeof AlibabaCredentials.default>(
+  AlibabaCredentials,
+  '@alicloud/credentials',
+);
+const AlibabaCredentialConfig = AlibabaCredentials.Config;
 
 export interface AliyunSmsClient {
   sendSms(request: SendSmsRequest): Promise<SendSmsResponse>;
@@ -49,7 +75,7 @@ function normalizeCnPhone(phone: string): string | null {
   return /^1[3-9]\d{9}$/.test(domestic) ? domestic : null;
 }
 
-function createClient(config: AliyunSmsRuntimeConfig): DysmsapiClient {
+function createClient(config: AliyunSmsRuntimeConfig): InstanceType<typeof Dysmsapi.default> {
   const hasAccessKeyPair = Boolean(config.accessKeyId && config.accessKeySecret);
   const useAccessKeyPair = config.credentialMode === 'access_key'
     || (config.credentialMode === 'auto' && hasAccessKeyPair);

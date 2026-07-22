@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AliyunSmsProvider,
@@ -5,6 +7,8 @@ import {
   type AliyunSmsClient,
   type AliyunSmsResourceClient,
 } from '../lib/sms/aliyun.js';
+
+const execFileAsync = promisify(execFile);
 
 const config = {
   accessKeyId: 'test-access-key-id',
@@ -150,6 +154,32 @@ describe('AliyunSmsProvider', () => {
       ok: false,
       err: '手机号格式不正确',
     });
+  });
+
+  it('constructs ECS RAM-role credentials through the native ESM module shape', async () => {
+    const moduleUrl = new URL('../lib/sms/aliyun.ts', import.meta.url).href;
+    const script = `
+      import { AliyunSmsProvider } from ${JSON.stringify(moduleUrl)};
+      const provider = new AliyunSmsProvider({
+        credentialMode: 'ecs_ram_role',
+        roleName: 'ss-erp-sms',
+        accessKeyId: '',
+        accessKeySecret: '',
+        signName: 'test-sign',
+        templateCode: 'SMS_TEST',
+        templateParamName: 'code',
+      });
+      const result = await provider.send('invalid-phone', '123456');
+      if (result.ok || result.err !== '手机号格式不正确') {
+        throw new Error('unexpected provider result: ' + JSON.stringify(result));
+      }
+    `;
+
+    await expect(execFileAsync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '--eval', script],
+      { cwd: process.cwd(), timeout: 10_000 },
+    )).resolves.toMatchObject({ stderr: '' });
   });
 
   it('returns the provider error without treating a non-OK response as sent', async () => {
