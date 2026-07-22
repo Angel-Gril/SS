@@ -200,6 +200,146 @@
   background: #475569;
 }
 
+.ss-erp-source-workbench-history-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ss-erp-source-workbench-history-item {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  padding: 8px;
+}
+
+.ss-erp-source-workbench-history-heading,
+.ss-erp-source-workbench-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-history-heading strong {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ss-erp-source-workbench-history-heading span,
+.ss-erp-source-workbench-history-footer {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.ss-erp-source-workbench-output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.ss-erp-source-workbench-output {
+  display: block;
+  min-width: 0;
+  color: #475569;
+  text-decoration: none;
+}
+
+.ss-erp-source-workbench-output-frame {
+  position: relative;
+  display: flex;
+  width: 100%;
+  aspect-ratio: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  background: #e2e8f0;
+}
+
+.ss-erp-source-workbench-output-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ss-erp-source-workbench-output-fallback {
+  display: none;
+  padding: 6px;
+  color: #64748b;
+  font-size: 10px;
+  text-align: center;
+}
+
+.ss-erp-source-workbench-output-frame.is-error img {
+  display: none;
+}
+
+.ss-erp-source-workbench-output-frame.is-error .ss-erp-source-workbench-output-fallback {
+  display: block;
+}
+
+.ss-erp-source-workbench-output-meta {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-erp-source-workbench-output-empty,
+.ss-erp-source-workbench-history-state {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.ss-erp-source-workbench-history-state.is-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  color: #b91c1c;
+}
+
+.ss-erp-source-workbench-history-state button,
+.ss-erp-source-workbench-history-more {
+  min-width: 54px;
+  height: 28px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-history-more {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.ss-erp-source-workbench-history-footer {
+  margin-top: 7px;
+}
+
+.ss-erp-source-workbench-history-footer b {
+  flex: 0 0 auto;
+  color: #047857;
+}
+
+.ss-erp-source-workbench-history-footer b.is-muted {
+  color: #64748b;
+}
+
 @media (max-width: 520px) {
   .ss-erp-source-workbench-metrics {
     grid-template-columns: 1fr;
@@ -218,5 +358,9 @@
   .ss-erp-source-workbench-create-button,
   .ss-erp-source-workbench-review {
     width: 100%;
+  }
+
+  .ss-erp-source-workbench-output-grid {
+    grid-template-columns: 1fr;
   }
 }

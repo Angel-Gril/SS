@@ -27,6 +27,7 @@ assert.ok(sourceEntry.css.includes('content/source-listing-workbench.css'));
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/listing-workflow-client\.js['"]\)/);
 assert.match(worker, /ss-erp:source-listing-workbench-status/);
+assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
@@ -40,10 +41,12 @@ assert.match(worker, /SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS\s*=\s*24\s*\*\s*60
 assert.match(worker, /draftRevision: listing\.revision/);
 assert.match(worker, /crypto\.getRandomValues/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
+assert.match(policy, /ss-erp:source-listing-workbench-media-history/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
+assert.match(panel, /listings\.length === 1/);
 assert.match(panel, /currentSourcePageKey/);
 assert.match(popup, /restoreSourceWorkflowHandoffForCurrentPage/);
 assert.match(popup, /ss-erp:source-listing-workbench-status/);
@@ -112,6 +115,99 @@ assert.equal(requests[0].init.headers.Authorization, 'Bearer device-access-token
 assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.signal instanceof AbortSignal, true);
+
+const historyRequests = [];
+const historyClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get(path, options) {
+      historyRequests.push({ path, options });
+      return {
+        state: 'response', status: 200,
+        body: {
+          code: 1,
+          data: {
+            capability: { enabled: true, reason: 'pilot_match', revision: 'pilot-history-1' },
+            history: {
+              contractVersion: 'extension-source-media-history/v1',
+              context: {
+                snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+                listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+              },
+              snapshot: { id: 'snapshot-1', version: 4, capturedAt: '2026-07-21T00:00:00.000Z' },
+              items: [{
+                id: 'media-history-1', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+                reviewStatus: 'PENDING', revision: 2, contextSkuKey: null,
+                contextSlotKey: 'hero', selectedOutputAssetId: 'asset-1',
+                outputs: [{
+                  id: 'asset-1', url: 'https://cdn.example/output.png', mimeType: 'image/png',
+                  width: 900, height: 1200,
+                }],
+                application: null,
+                createdAt: '2026-07-21T00:00:00.000Z',
+                updatedAt: '2026-07-21T00:00:01.000Z',
+              }],
+              nextCursor: 'cursor-1',
+            },
+          },
+        },
+      };
+    },
+    async post() { throw new Error('history client must not POST'); },
+  },
+});
+const history = await historyClient.getMediaHistory({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7, limit: 10,
+});
+assert.equal(history.state, 'ready');
+assert.equal(history.history.items[0].outputs[0].url, 'https://cdn.example/output.png');
+assert.equal(historyRequests[0].options.requiredScope, 'listing:review');
+assert.match(historyRequests[0].path, /media-history\?/u);
+assert.match(historyRequests[0].path, /listingWorkflowId=listing-1/u);
+
+const invalidHistoryClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() {
+      return {
+        state: 'response', status: 200,
+        body: {
+          code: 1,
+          data: {
+            capability: { enabled: true, reason: 'pilot_match', revision: 'pilot-history-1' },
+            history: {
+              contractVersion: 'extension-source-media-history/v1',
+              context: {
+                snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+                listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+              },
+              snapshot: { id: 'snapshot-1', version: 4, capturedAt: '2026-07-21T00:00:00.000Z' },
+              items: [{
+                id: 'media-history-1', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+                reviewStatus: 'PENDING', revision: 2, contextSkuKey: null,
+                contextSlotKey: null, selectedOutputAssetId: null,
+                outputs: [{
+                  id: 'secret', url: 'http://remote.example/private.png', mimeType: 'image/png',
+                  width: 1, height: 1,
+                }],
+                application: null,
+                createdAt: '2026-07-21T00:00:00.000Z',
+                updatedAt: '2026-07-21T00:00:01.000Z',
+              }],
+              nextCursor: null,
+            },
+          },
+        },
+      };
+    },
+  },
+});
+await assert.rejects(
+  invalidHistoryClient.getMediaHistory({
+    snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+    listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+  }),
+  /invalid source media history response/u,
+);
 
 const launchRequests = [];
 const launchClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
@@ -401,10 +497,12 @@ class TestNode {
     this.disabled = false;
     this.attributes = {};
     this.listeners = {};
+    this.classList = { add: (...names) => names.forEach((name) => { this.className += ` ${name}`; }) };
   }
   appendChild(child) { this.children.push(child); return child; }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, listener) { this.listeners[name] = listener; }
   get firstChild() { return this.children[0] || null; }
 }
@@ -523,6 +621,44 @@ listingSelect.listeners.change({ isTrusted: false });
 assert.equal(selectedListings.length, 0);
 listingSelect.listeners.change({ isTrusted: true });
 assert.deepEqual(selectedListings, ['listing-b']);
+
+const historyContainer = new TestNode('section');
+const historyEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(historyContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{ id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  historyOpen: true,
+  history: {
+    context: { listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7 },
+    items: [{
+      id: 'history-1', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', reviewStatus: 'PENDING',
+      revision: 2, outputs: [{
+        id: 'asset-1', url: 'https://cdn.example/output.png', mimeType: 'image/png', width: 900, height: 1200,
+      }], application: null, updatedAt: '2026-07-21T00:00:01.000Z',
+    }],
+    nextCursor: 'next-1',
+  },
+  onLoadHistory() { historyEvents.push('load'); },
+  onLoadMoreHistory() { historyEvents.push('more'); },
+  onHistoryOpenChange(open) { historyEvents.push(open ? 'open' : 'close'); },
+});
+assert.match(renderedText(historyContainer), /图片结果与历史/u);
+assert.match(renderedText(historyContainer), /图片翻译.*等待审核/u);
+assert.match(renderedText(historyContainer), /900 × 1200/u);
+const moreButton = historyContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .find((node) => node.textContent === '加载更多');
+assert.ok(moreButton);
+moreButton.listeners.click({ isTrusted: false });
+assert.deepEqual(historyEvents, []);
+moreButton.listeners.click({ isTrusted: true });
+assert.deepEqual(historyEvents, ['more']);
 
 const approvedContainer = new TestNode('section');
 const reviewEvents = [];

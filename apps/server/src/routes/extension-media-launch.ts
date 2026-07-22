@@ -231,6 +231,7 @@ export async function extensionMediaLaunchRoutes(
       || context.ownerUserId !== device.ownerUserId
       || context.id !== parsed.data.listingWorkflowId
       || context.shopId !== parsed.data.shopId
+      || context.supplyGoodsId !== parsed.data.supplyGoodsId
       || context.snapshotId !== parsed.data.snapshotId
       || context.revision !== parsed.data.revision
       || context.draftVersion !== parsed.data.draftVersion) {

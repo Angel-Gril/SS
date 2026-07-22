@@ -185,6 +185,109 @@
     container.appendChild(drawer);
   }
 
+  function renderHistoryOutput(container, output, operation) {
+    var link = element('a', 'ss-erp-source-workbench-output');
+    link.href = output.url;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.title = '打开原始候选图';
+    var frame = element('span', 'ss-erp-source-workbench-output-frame');
+    var image = element('img');
+    image.src = output.url;
+    image.alt = operationLabel(operation) + '候选图';
+    image.loading = 'lazy';
+    var fallback = element('span', 'ss-erp-source-workbench-output-fallback', '预览不可用');
+    image.addEventListener('error', function () {
+      frame.classList.add('is-error');
+      image.removeAttribute('src');
+    }, { once: true });
+    frame.appendChild(image);
+    frame.appendChild(fallback);
+    link.appendChild(frame);
+    var dimensions = output.width && output.height
+      ? output.width + ' × ' + output.height
+      : output.mimeType;
+    link.appendChild(element('span', 'ss-erp-source-workbench-output-meta', dimensions));
+    container.appendChild(link);
+  }
+
+  function renderHistoryItem(container, item) {
+    var card = element('article', 'ss-erp-source-workbench-history-item');
+    var heading = element('div', 'ss-erp-source-workbench-history-heading');
+    heading.appendChild(element('strong', '', operationLabel(item.operation)));
+    heading.appendChild(element('span', '', statusLabel(item)));
+    card.appendChild(heading);
+    if (Array.isArray(item.outputs) && item.outputs.length) {
+      var outputs = element('div', 'ss-erp-source-workbench-output-grid');
+      item.outputs.forEach(function (output) {
+        renderHistoryOutput(outputs, output, item.operation);
+      });
+      card.appendChild(outputs);
+    } else {
+      card.appendChild(element('div', 'ss-erp-source-workbench-output-empty', '尚无可预览结果'));
+    }
+    var footer = element('div', 'ss-erp-source-workbench-history-footer');
+    footer.appendChild(element('span', '', new Date(item.updatedAt).toLocaleString('zh-CN')));
+    if (item.application) {
+      footer.appendChild(element(
+        'b',
+        item.application.state === 'ROLLED_BACK' ? 'is-muted' : 'is-applied',
+        item.application.state === 'ROLLED_BACK' ? '已回滚' : '已写入草稿',
+      ));
+    }
+    card.appendChild(footer);
+    container.appendChild(card);
+  }
+
+  function renderMediaHistory(container, listing, options) {
+    if (!listing || !options || typeof options.onLoadHistory !== 'function') return;
+    var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-history');
+    drawer.open = options.historyOpen === true;
+    drawer.appendChild(element('summary', '', '图片结果与历史'));
+    drawer.addEventListener('toggle', function (event) {
+      if (!event || event.isTrusted !== true) return;
+      if (typeof options.onHistoryOpenChange === 'function') {
+        options.onHistoryOpenChange(drawer.open);
+      }
+      if (drawer.open && !options.history && !options.historyLoading) {
+        options.onLoadHistory();
+      }
+    });
+    if (options.historyLoading) {
+      drawer.appendChild(element('div', 'ss-erp-source-workbench-history-state', '正在读取图片任务...'));
+    } else if (options.historyError) {
+      var error = element('div', 'ss-erp-source-workbench-history-state is-error');
+      error.appendChild(element('span', '', options.historyError));
+      var retry = element('button', '', '重试');
+      retry.type = 'button';
+      retry.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true) return;
+        options.onLoadHistory();
+      });
+      error.appendChild(retry);
+      drawer.appendChild(error);
+    } else if (options.history) {
+      var items = Array.isArray(options.history.items) ? options.history.items : [];
+      var list = element('div', 'ss-erp-source-workbench-history-list');
+      if (!items.length) {
+        list.appendChild(element('div', 'ss-erp-source-workbench-history-state', '暂无图片任务'));
+      } else {
+        items.forEach(function (item) { renderHistoryItem(list, item); });
+      }
+      drawer.appendChild(list);
+      if (options.history.nextCursor && typeof options.onLoadMoreHistory === 'function') {
+        var more = element('button', 'ss-erp-source-workbench-history-more', '加载更多');
+        more.type = 'button';
+        more.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true) return;
+          options.onLoadMoreHistory();
+        });
+        drawer.appendChild(more);
+      }
+    }
+    container.appendChild(drawer);
+  }
+
   function renderMediaTask(container, status, mediaItems, options) {
     var actionableItems = mediaItems.filter(function (item) { return item.actionable === true; });
     if (actionableItems.length) {
@@ -254,6 +357,7 @@
     }
     renderTranslationLaunch(container, listing, options);
     renderMediaTask(container, status, mediaItems, options);
+    renderMediaHistory(container, listing, options);
   }
 
   function render(container, result, options) {

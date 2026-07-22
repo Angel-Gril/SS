@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { SourceWorkflowFeatureFlagEvaluator } from '../services/source-workflow-feature-flags.js';
 import {
   ExtensionSourceWorkbenchError,
+  type ExtensionSourceMediaHistoryInput,
   type ExtensionSourceWorkbenchService,
 } from '../services/extension-source-workbench.js';
 
@@ -17,13 +18,23 @@ interface ExtensionSourceWorkbenchDevice {
 export interface ExtensionSourceWorkbenchRoutesOptions {
   authenticateDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   featureFlags: Pick<SourceWorkflowFeatureFlagEvaluator, 'evaluate'>;
-  service: Pick<ExtensionSourceWorkbenchService, 'loadStatus'>;
+  service: Pick<ExtensionSourceWorkbenchService, 'loadStatus' | 'loadMediaHistory'>;
 }
 
 const id = z.string().trim().min(1).max(200);
 const statusQuery = z.object({
   snapshotId: id,
   supplyGoodsId: id,
+}).strict();
+const mediaHistoryQuery = z.object({
+  snapshotId: id,
+  supplyGoodsId: id,
+  shopId: id,
+  listingWorkflowId: id,
+  revision: z.coerce.number().int().min(1),
+  draftVersion: z.coerce.number().int().min(1),
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+  beforeCursor: z.string().trim().min(1).max(1_000).optional(),
 }).strict();
 
 function deviceContext(request: FastifyRequest): ExtensionSourceWorkbenchDevice | null {
@@ -42,6 +53,10 @@ function deviceContext(request: FastifyRequest): ExtensionSourceWorkbenchDevice 
 
 function routeError(reply: FastifyReply, statusCode: number, errorCode: string, msg: string) {
   return reply.status(statusCode).send({ code: 0, errorCode, msg });
+}
+
+function mapWorkbenchError(error: ExtensionSourceWorkbenchError): [number, string, string] {
+  return [error.statusCode, error.code.toLowerCase(), error.message];
 }
 
 export async function extensionSourceWorkbenchRoutes(
@@ -98,6 +113,53 @@ export async function extensionSourceWorkbenchRoutes(
       }
       request.log.error({ err: error }, 'extension source workbench status failed');
       return routeError(reply, 500, 'source_workbench_failed', '读取扩展工作台失败');
+    }
+  });
+
+  app.get('/media-history', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
+    const parsed = mediaHistoryQuery.safeParse(request.query);
+    if (!parsed.success) return routeError(reply, 400, 'invalid_request', '参数错误');
+    const device = deviceContext(request);
+    if (!device) {
+      return routeError(reply, 401, 'invalid_device_context', '无效的设备工作台身份');
+    }
+    if (!device.allowedShopIds.includes(parsed.data.shopId)) {
+      return routeError(reply, 403, 'command_shop_denied', '设备无权访问该店铺');
+    }
+
+    let capability;
+    try {
+      capability = await options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+        ownerUserId: device.ownerUserId,
+        shopId: parsed.data.shopId,
+        deviceSessionId: device.sessionId,
+      });
+    } catch {
+      return routeError(reply, 503, 'source_workbench_rollout_unavailable', '扩展工作台策略暂不可用');
+    }
+    reply.header('Cache-Control', 'no-store');
+    const publicCapability = {
+      enabled: capability.enabled,
+      reason: capability.reason,
+      revision: capability.revision,
+    };
+    if (!capability.enabled) {
+      return reply.send({ code: 1, data: { capability: publicCapability, history: null } });
+    }
+    try {
+      const history = await options.service.loadMediaHistory({
+        ownerUserId: device.ownerUserId,
+        allowedShopIds: device.allowedShopIds,
+        ...parsed.data,
+      } as ExtensionSourceMediaHistoryInput);
+      return reply.send({ code: 1, data: { capability: publicCapability, history } });
+    } catch (error) {
+      if (error instanceof ExtensionSourceWorkbenchError) {
+        const [statusCode, errorCode, message] = mapWorkbenchError(error);
+        return routeError(reply, statusCode, errorCode, message);
+      }
+      request.log.error({ err: error }, 'extension source media history failed');
+      return routeError(reply, 500, 'source_workbench_failed', '读取扩展媒体历史失败');
     }
   });
 }

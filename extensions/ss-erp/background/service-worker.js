@@ -51,6 +51,8 @@ const SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY = 'ss-erp:source-workflow:last-handoff:
 const SS_ERP_SOURCE_WORKFLOW_HANDOFFS_KEY = 'ss-erp:source-workflow:handoffs:v2';
 const SS_ERP_SOURCE_WORKFLOW_HANDOFF_LIMIT = 20;
 const SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE = 'ss-erp:open-source-workflow-handoff';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_HISTORY_MESSAGE =
+  'ss-erp:source-listing-workbench-media-history';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-media-command';
 const SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY =
@@ -2360,6 +2362,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       return { handoff, result, launch };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_HISTORY_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+      const platform = sourceWorkflowPlatform(message.platform);
+      const requestedListingWorkflowId = sourceWorkflowHandoffText(message.listingWorkflowId, 200);
+      const beforeCursor = message.beforeCursor == null
+        ? null
+        : sourceWorkflowHandoffText(message.beforeCursor, 1000);
+      if (message.beforeCursor != null && !beforeCursor) {
+        throw new Error('ERP 媒体历史游标无效');
+      }
+      const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+      if (!handoff || !sourceProductId || !platform || !requestedListingWorkflowId
+        || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+        throw new Error('ERP 媒体历史上下文无效，请刷新后重试');
+      }
+      const client = getSourceListingWorkflowClient();
+      const current = await client.getStatus({
+        snapshotId: handoff.snapshotId,
+        supplyGoodsId: handoff.supplyGoodsId,
+      });
+      const listing = currentSourceListingContext(current, requestedListingWorkflowId);
+      if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+      const result = await client.getMediaHistory({
+        snapshotId: handoff.snapshotId,
+        supplyGoodsId: handoff.supplyGoodsId,
+        shopId: listing.shopId,
+        listingWorkflowId: listing.listingWorkflowId,
+        revision: listing.revision,
+        draftVersion: listing.draftVersion,
+        limit: 10,
+        beforeCursor,
+      });
+      return { handoff, result };
     }).then((result) => {
       sendResponse({ ok: true, ...result });
     }).catch((error) => {

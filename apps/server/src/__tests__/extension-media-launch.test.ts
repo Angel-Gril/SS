@@ -123,14 +123,22 @@ describe('extension media launch route', () => {
     const noScope = await setup({ scopes: ['listing:review'] });
     const wrongShop = await setup({ allowedShopIds: [] });
     const stale = await setup({ context: null });
+    const wrongSupplyGoods = await setup({ context: {
+      id: 'listing-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      supplyGoodsId: 'goods-2', snapshotId: 'snapshot-1',
+      revision: 11, draftVersion: 7, sourceMediaKeys: ['media-1'],
+    } });
     try {
       expect((await noScope.app.inject({ method: 'GET', url })).statusCode).toBe(403);
       expect((await wrongShop.app.inject({ method: 'GET', url })).statusCode).toBe(403);
       const staleResponse = await stale.app.inject({ method: 'GET', url });
       expect(staleResponse.statusCode).toBe(409);
       expect(staleResponse.json()).toMatchObject({ errorCode: 'media_create_context_stale' });
+      expect((await wrongSupplyGoods.app.inject({ method: 'GET', url })).statusCode).toBe(409);
     } finally {
-      await Promise.all([noScope.app.close(), wrongShop.app.close(), stale.app.close()]);
+      await Promise.all([
+        noScope.app.close(), wrongShop.app.close(), stale.app.close(), wrongSupplyGoods.app.close(),
+      ]);
     }
   });
 

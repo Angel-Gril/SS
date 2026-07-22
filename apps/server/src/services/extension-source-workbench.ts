@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 
@@ -5,6 +6,11 @@ export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
 export const EXTENSION_SOURCE_WORKBENCH_LISTING_LIMIT = 10;
 export const EXTENSION_SOURCE_WORKBENCH_MEDIA_LIMIT = 50;
+export const EXTENSION_SOURCE_MEDIA_HISTORY_CONTRACT_VERSION =
+  'extension-source-media-history/v1' as const;
+export const EXTENSION_SOURCE_MEDIA_HISTORY_LIMIT = 20;
+export const EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT = 4;
+export const EXTENSION_SOURCE_MEDIA_HISTORY_URL_LIMIT = 4_096;
 
 interface ExtensionSourceWorkbenchClient {
   sourceCaptureSnapshot: {
@@ -20,12 +26,96 @@ interface ExtensionSourceWorkbenchClient {
 
 export class ExtensionSourceWorkbenchError extends Error {
   constructor(
-    public readonly code: 'SOURCE_WORKBENCH_NOT_FOUND' | 'SOURCE_WORKBENCH_INVALID',
-    public readonly statusCode: 404 | 400,
+    public readonly code: 'SOURCE_WORKBENCH_NOT_FOUND' | 'SOURCE_WORKBENCH_INVALID' | 'SOURCE_WORKBENCH_STALE',
+    public readonly statusCode: 404 | 400 | 409,
     message: string,
   ) {
     super(message);
     this.name = 'ExtensionSourceWorkbenchError';
+  }
+}
+
+export interface ExtensionSourceMediaHistoryInput {
+  ownerUserId: string;
+  allowedShopIds: string[];
+  snapshotId: string;
+  supplyGoodsId: string;
+  shopId: string;
+  listingWorkflowId: string;
+  revision: number;
+  draftVersion: number;
+  limit?: number;
+  beforeCursor?: string | null;
+}
+
+interface ExtensionSourceMediaHistoryCursor {
+  updatedAt: Date;
+  id: string;
+}
+
+function positiveInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new ExtensionSourceWorkbenchError(
+      'SOURCE_WORKBENCH_INVALID',
+      400,
+      `${field} is invalid`,
+    );
+  }
+  return Number(value);
+}
+
+function mediaHistoryScopeHash(input: Pick<ExtensionSourceMediaHistoryInput, 'ownerUserId' | 'snapshotId' | 'supplyGoodsId' | 'shopId' | 'listingWorkflowId' | 'revision' | 'draftVersion'>) {
+  return createHash('sha256').update(JSON.stringify({
+    ownerUserId: input.ownerUserId,
+    snapshotId: input.snapshotId,
+    supplyGoodsId: input.supplyGoodsId,
+    shopId: input.shopId,
+    listingWorkflowId: input.listingWorkflowId,
+    revision: input.revision,
+    draftVersion: input.draftVersion,
+  })).digest('hex');
+}
+
+export function encodeExtensionSourceMediaHistoryCursor(
+  input: Pick<ExtensionSourceMediaHistoryInput, 'ownerUserId' | 'snapshotId' | 'supplyGoodsId' | 'shopId' | 'listingWorkflowId' | 'revision' | 'draftVersion'>,
+  cursor: ExtensionSourceMediaHistoryCursor,
+): string {
+  return Buffer.from(JSON.stringify({
+    v: 1,
+    u: cursor.updatedAt.toISOString(),
+    i: cursor.id,
+    s: mediaHistoryScopeHash(input),
+  }), 'utf8').toString('base64url');
+}
+
+export function decodeExtensionSourceMediaHistoryCursor(
+  input: Pick<ExtensionSourceMediaHistoryInput, 'ownerUserId' | 'snapshotId' | 'supplyGoodsId' | 'shopId' | 'listingWorkflowId' | 'revision' | 'draftVersion'>,
+  value: string,
+): ExtensionSourceMediaHistoryCursor {
+  try {
+    if (!value || value.length > 1_000 || !/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error();
+    const bytes = Buffer.from(value, 'base64url');
+    if (!bytes.length || bytes.toString('base64url') !== value) throw new Error();
+    const serialized = bytes.toString('utf8');
+    const payload = JSON.parse(serialized) as Record<string, unknown>;
+    if (!payload || Array.isArray(payload)
+      || Object.keys(payload).sort().join(',') !== 'i,s,u,v'
+      || payload.v !== 1
+      || typeof payload.u !== 'string'
+      || typeof payload.i !== 'string'
+      || !payload.i
+      || payload.i.length > 200
+      || payload.s !== mediaHistoryScopeHash(input)) throw new Error();
+    const updatedAt = new Date(payload.u);
+    if (Number.isNaN(updatedAt.getTime()) || updatedAt.toISOString() !== payload.u) throw new Error();
+    if (serialized !== JSON.stringify({ v: 1, u: payload.u, i: payload.i, s: payload.s })) throw new Error();
+    return { updatedAt, id: payload.i };
+  } catch {
+    throw new ExtensionSourceWorkbenchError(
+      'SOURCE_WORKBENCH_INVALID',
+      400,
+      'Media history cursor is invalid',
+    );
   }
 }
 
@@ -55,6 +145,105 @@ function boundedText(value: unknown, maximum: number): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.normalize('NFKC').trim();
   return normalized && normalized.length <= maximum ? normalized : null;
+}
+
+function previewUrl(value: unknown): string | null {
+  const normalized = boundedText(value, EXTENSION_SOURCE_MEDIA_HISTORY_URL_LIMIT);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    if (url.protocol === 'https:') return url.href;
+    // Local HTTP is permitted only for the explicitly local development hosts.
+    if (process.env.NODE_ENV !== 'production'
+      && url.protocol === 'http:'
+      && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
+      return url.href;
+    }
+  } catch {
+    // Relative/data/javascript URLs are intentionally not exposed to the extension.
+  }
+  return null;
+}
+
+function safeOutputAsset(asset: any, ownerUserId: string, jobId: string) {
+  if (!asset
+    || String(asset.ownerUserId || '') !== ownerUserId
+    || String(asset.aiImageJobId || '') !== jobId
+    || String(asset.kind || '') !== 'AI_GENERATED'
+    || !['local', 'oss'].includes(String(asset.storageBackend || ''))) return null;
+  const url = previewUrl(asset.url);
+  const id = boundedText(asset.id, 200);
+  const mimeType = boundedText(asset.mimeType, 100);
+  if (!id || !url || !mimeType || !/^image\//iu.test(mimeType)) return null;
+  const width = Number(asset.width);
+  const height = Number(asset.height);
+  return {
+    id,
+    url,
+    mimeType,
+    width: Number.isSafeInteger(width) && width > 0 ? width : null,
+    height: Number.isSafeInteger(height) && height > 0 ? height : null,
+  };
+}
+
+function mediaHistoryApplication(row: any) {
+  const application = Array.isArray(row?.listingDraftApplicationMutations)
+    ? row.listingDraftApplicationMutations[0]
+    : null;
+  if (!application?.id) return null;
+  const rollback = application.rolledBackBy || null;
+  const id = boundedText(application.id, 200);
+  const targetId = boundedText(application.targetId, 200);
+  if (!id || !targetId) return null;
+  return {
+    id,
+    mode: String(application.mode || '').toUpperCase() === 'REPLACE' ? 'replace' : 'append',
+    state: rollback ? 'ROLLED_BACK' : 'APPLIED',
+    targetId,
+    contextSkuKey: application.contextSkuKey == null ? null : String(application.contextSkuKey),
+    contextSlotKey: application.contextSlotKey == null ? null : String(application.contextSlotKey),
+    appliedAt: isoDate(application.createdAt),
+    rolledBackAt: rollback?.createdAt ? isoDate(rollback.createdAt) : null,
+  };
+}
+
+function mediaHistoryItem(row: any, ownerUserId: string) {
+  const job = Array.isArray(row.jobs) ? row.jobs[0] : null;
+  const jobId = String(job?.id || '');
+  const outputs = jobId
+    ? array(job?.assets)
+      .map((asset) => safeOutputAsset(asset, ownerUserId, jobId))
+      .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
+      .slice(0, EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT)
+    : [];
+  const selected = row.selectedOutputAsset && row.selectedOutputAsset.aiImageJobId
+    ? safeOutputAsset(
+      row.selectedOutputAsset,
+      ownerUserId,
+      String(row.selectedOutputAsset.aiImageJobId),
+    )
+    : null;
+  if (selected && !outputs.some((output) => output.id === selected.id)) {
+    outputs.push(selected);
+    outputs.splice(EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT);
+  }
+  const selectedOutputAssetId = row.selectedOutputAssetId == null
+    ? null
+    : String(row.selectedOutputAssetId);
+  return {
+    id: String(row.id),
+    operation: String(row.operation),
+    status: String(row.status),
+    reviewStatus: String(row.reviewStatus),
+    revision: Number(row.revision),
+    contextSkuKey: row.contextSkuKey == null ? null : String(row.contextSkuKey),
+    contextSlotKey: row.contextSlotKey == null ? null : String(row.contextSlotKey),
+    selectedOutputAssetId,
+    outputs,
+    application: mediaHistoryApplication(row),
+    createdAt: isoDate(row.createdAt),
+    updatedAt: isoDate(row.updatedAt),
+  };
 }
 
 function isoDate(value: unknown): string {
@@ -350,6 +539,203 @@ export function createExtensionSourceWorkbenchService(options: {
             .slice(0, EXTENSION_SOURCE_WORKBENCH_MEDIA_LIMIT)
             .filter(mediaActionable).length,
         },
+      };
+    },
+    async loadMediaHistory(input: ExtensionSourceMediaHistoryInput) {
+      const ownerUserId = identifier(input.ownerUserId, 'ownerUserId');
+      const snapshotId = identifier(input.snapshotId, 'snapshotId');
+      const supplyGoodsId = identifier(input.supplyGoodsId, 'supplyGoodsId');
+      const shopId = identifier(input.shopId, 'shopId');
+      const listingWorkflowId = identifier(input.listingWorkflowId, 'listingWorkflowId');
+      const revision = positiveInteger(input.revision, 'revision');
+      const draftVersion = positiveInteger(input.draftVersion, 'draftVersion');
+      const allowedShopIds = [...new Set((input.allowedShopIds || []).map((value) => (
+        identifier(value, 'allowedShopId')
+      )))].slice(0, 50);
+      if (!allowedShopIds.includes(shopId)) {
+        throw new ExtensionSourceWorkbenchError(
+          'SOURCE_WORKBENCH_NOT_FOUND',
+          404,
+          'Owned source workbench was not found',
+        );
+      }
+      const limit = Math.min(
+        EXTENSION_SOURCE_MEDIA_HISTORY_LIMIT,
+        Math.max(1, Number.isSafeInteger(input.limit) ? Number(input.limit) : 10),
+      );
+      const scope = {
+        ownerUserId,
+        snapshotId,
+        supplyGoodsId,
+        shopId,
+        listingWorkflowId,
+        revision,
+        draftVersion,
+      } as const;
+      const cursor = input.beforeCursor
+        ? decodeExtensionSourceMediaHistoryCursor(scope, input.beforeCursor)
+        : null;
+
+      const snapshot = await client.sourceCaptureSnapshot.findFirst({
+        where: {
+          id: snapshotId,
+          subject: { ownerUserId, legacySupplyGoodsId: supplyGoodsId },
+        },
+        select: {
+          id: true,
+          version: true,
+          capturedAt: true,
+          subject: {
+            select: {
+              snapshots: {
+                orderBy: [{ version: 'desc' }, { id: 'desc' }],
+                take: 1,
+                select: { id: true },
+              },
+            },
+          },
+        },
+      });
+      if (!snapshot) {
+        throw new ExtensionSourceWorkbenchError(
+          'SOURCE_WORKBENCH_NOT_FOUND',
+          404,
+          'Owned source workbench was not found',
+        );
+      }
+      if (snapshot.subject?.snapshots?.[0]?.id !== snapshotId) {
+        throw new ExtensionSourceWorkbenchError(
+          'SOURCE_WORKBENCH_STALE',
+          409,
+          'Source snapshot is no longer current',
+        );
+      }
+
+      const listings = await client.sourceListingWorkflow.findMany({
+        where: {
+          id: listingWorkflowId,
+          ownerUserId,
+          supplyGoodsId,
+          shopId,
+          currentSourceCaptureSnapshotId: snapshotId,
+          currentRevision: revision,
+          currentDraftVersion: draftVersion,
+        },
+        take: 2,
+        select: { id: true, shopId: true },
+      });
+      if (listings.length !== 1 || listings[0]?.id !== listingWorkflowId) {
+        throw new ExtensionSourceWorkbenchError(
+          'SOURCE_WORKBENCH_STALE',
+          409,
+          'Listing draft is no longer current',
+        );
+      }
+
+      const rows = await client.aiMediaWorkflow.findMany({
+        where: {
+          ownerUserId,
+          suiteSlot: { is: null },
+          contextType: 'listing-draft',
+          contextId: listingWorkflowId,
+          contextDraftRevision: revision,
+          contextDraftVersion: draftVersion,
+          ...(cursor ? {
+            OR: [
+              { updatedAt: { lt: cursor.updatedAt } },
+              { updatedAt: cursor.updatedAt, id: { lt: cursor.id } },
+            ],
+          } : {}),
+        } satisfies Prisma.AiMediaWorkflowWhereInput,
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        select: {
+          id: true,
+          operation: true,
+          status: true,
+          reviewStatus: true,
+          revision: true,
+          contextSkuKey: true,
+          contextSlotKey: true,
+          selectedOutputAssetId: true,
+          selectedOutputAsset: {
+            select: {
+              id: true,
+              ownerUserId: true,
+              aiImageJobId: true,
+              kind: true,
+              url: true,
+              storageBackend: true,
+              mimeType: true,
+              width: true,
+              height: true,
+            },
+          },
+          createdAt: true,
+          updatedAt: true,
+          jobs: {
+            orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: {
+              id: true,
+              assets: {
+                where: { kind: 'AI_GENERATED' },
+                orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                take: EXTENSION_SOURCE_MEDIA_HISTORY_OUTPUT_LIMIT,
+                select: {
+                  id: true,
+                  ownerUserId: true,
+                  aiImageJobId: true,
+                  kind: true,
+                  url: true,
+                  storageBackend: true,
+                  mimeType: true,
+                  width: true,
+                  height: true,
+                },
+              },
+            },
+          },
+          listingDraftApplicationMutations: {
+            where: { kind: 'APPLY' },
+            orderBy: [{ targetSequence: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: {
+              id: true,
+              mode: true,
+              targetId: true,
+              contextSkuKey: true,
+              contextSlotKey: true,
+              createdAt: true,
+              rolledBackBy: { select: { id: true, createdAt: true } },
+            },
+          },
+        },
+      });
+      const pageRows = rows.slice(0, limit);
+      const last = pageRows.at(-1);
+      return {
+        contractVersion: EXTENSION_SOURCE_MEDIA_HISTORY_CONTRACT_VERSION,
+        context: {
+          snapshotId,
+          supplyGoodsId,
+          shopId,
+          listingWorkflowId,
+          revision,
+          draftVersion,
+        },
+        snapshot: {
+          id: String(snapshot.id),
+          version: Number(snapshot.version),
+          capturedAt: isoDate(snapshot.capturedAt),
+        },
+        items: pageRows.map((row) => mediaHistoryItem(row, ownerUserId)),
+        nextCursor: rows.length > limit && last
+          ? encodeExtensionSourceMediaHistoryCursor(scope, {
+            updatedAt: last.updatedAt,
+            id: String(last.id),
+          })
+          : null,
       };
     },
   };

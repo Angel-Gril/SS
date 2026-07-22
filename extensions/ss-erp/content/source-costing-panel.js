@@ -35,6 +35,12 @@
     sourceWorkflowHandoff: null,
     sourceWorkbenchStatus: null,
     sourceWorkbenchLaunch: null,
+    sourceWorkbenchHistory: null,
+    sourceWorkbenchHistoryListingId: '',
+    sourceWorkbenchHistoryLoading: false,
+    sourceWorkbenchHistoryError: '',
+    sourceWorkbenchHistoryRequestSeq: 0,
+    sourceWorkbenchHistoryOpen: false,
     sourceWorkbenchListingId: '',
     sourceWorkbenchProductId: '',
     sourceWorkbenchLastRefreshAt: 0,
@@ -265,6 +271,12 @@
     state.sourceWorkflowHandoff = null;
     state.sourceWorkbenchStatus = null;
     state.sourceWorkbenchLaunch = null;
+    state.sourceWorkbenchHistory = null;
+    state.sourceWorkbenchHistoryListingId = '';
+    state.sourceWorkbenchHistoryLoading = false;
+    state.sourceWorkbenchHistoryError = '';
+    state.sourceWorkbenchHistoryRequestSeq += 1;
+    state.sourceWorkbenchHistoryOpen = false;
     state.sourceWorkbenchListingId = '';
     state.sourceWorkbenchProductId = '';
     state.sourceWorkbenchLastRefreshAt = 0;
@@ -381,6 +393,10 @@
       state.sourceWorkbenchStatus = null;
       state.sourceWorkbenchLaunch = null;
       state.sourceWorkbenchListingId = '';
+      state.sourceWorkbenchHistory = null;
+      state.sourceWorkbenchHistoryListingId = '';
+      state.sourceWorkbenchHistoryError = '';
+      state.sourceWorkbenchHistoryOpen = false;
       state.sourceWorkbenchProductId = '';
       state.sourceWorkbenchLastRefreshAt = 0;
       state.sourceWorkbenchLoadingProductId = '';
@@ -416,10 +432,32 @@
         && Array.isArray(state.sourceWorkbenchStatus.status.listing.items)
         ? state.sourceWorkbenchStatus.status.listing.items
         : [];
+      if (!state.sourceWorkbenchListingId && listings.length === 1 && listings[0]?.id) {
+        state.sourceWorkbenchListingId = listings[0].id;
+      }
       if (state.sourceWorkbenchListingId
         && !listings.some(function (item) { return item && item.id === state.sourceWorkbenchListingId; })) {
         state.sourceWorkbenchListingId = '';
         state.sourceWorkbenchLaunch = null;
+        state.sourceWorkbenchHistory = null;
+        state.sourceWorkbenchHistoryListingId = '';
+        state.sourceWorkbenchHistoryError = '';
+        state.sourceWorkbenchHistoryRequestSeq += 1;
+        state.sourceWorkbenchHistoryOpen = false;
+      }
+      var selectedListing = listings.find(function (item) {
+        return item && item.id === state.sourceWorkbenchListingId;
+      });
+      var historyContext = state.sourceWorkbenchHistory && state.sourceWorkbenchHistory.context;
+      if (historyContext && (!selectedListing
+        || historyContext.listingWorkflowId !== selectedListing.id
+        || historyContext.revision !== selectedListing.revision
+        || historyContext.draftVersion !== selectedListing.draftVersion)) {
+        state.sourceWorkbenchHistory = null;
+        state.sourceWorkbenchHistoryListingId = '';
+        state.sourceWorkbenchHistoryError = '';
+        state.sourceWorkbenchHistoryRequestSeq += 1;
+        state.sourceWorkbenchHistoryOpen = false;
       }
     } catch {
       if (requestSeq === state.sourceWorkbenchRequestSeq
@@ -462,6 +500,9 @@
         throw new Error(response && response.error || '媒体任务操作失败');
       }
       setStatus(action === 'CANCEL' ? '图片任务已取消。' : '图片任务已重新排队。', 'ok');
+      state.sourceWorkbenchHistory = null;
+      state.sourceWorkbenchHistoryError = '';
+      state.sourceWorkbenchHistoryRequestSeq += 1;
       state.sourceWorkbenchLastRefreshAt = 0;
       await refreshSourceWorkbenchStatus({ force: true });
     } catch (error) {
@@ -525,6 +566,9 @@
         throw new Error(response && response.error || '图片翻译任务创建失败');
       }
       setStatus('图片翻译测试任务已进入队列。', 'ok');
+      state.sourceWorkbenchHistory = null;
+      state.sourceWorkbenchHistoryError = '';
+      state.sourceWorkbenchHistoryRequestSeq += 1;
       state.sourceWorkbenchLastRefreshAt = 0;
       await refreshSourceWorkbenchStatus({ force: true });
     } catch (error) {
@@ -532,6 +576,69 @@
     } finally {
       if (state.sourceWorkbenchCreateKey === sourceMediaKey) state.sourceWorkbenchCreateKey = '';
       renderContent();
+    }
+  }
+
+  async function loadSourceWorkbenchMediaHistory(options) {
+    options = options || {};
+    var listingWorkflowId = String(state.sourceWorkbenchListingId || '').normalize('NFKC').trim();
+    var sourceProductId = currentSourceProductId();
+    if (!listingWorkflowId || !sourceProductId || state.sourcePageKey !== currentSourcePageKey()
+      || state.sourceWorkbenchHistoryLoading) return;
+    var append = options.append === true;
+    var beforeCursor = append && state.sourceWorkbenchHistory
+      ? state.sourceWorkbenchHistory.nextCursor
+      : null;
+    if (append && !beforeCursor) return;
+    var requestSeq = ++state.sourceWorkbenchHistoryRequestSeq;
+    var requestPageKey = currentSourcePageKey();
+    state.sourceWorkbenchHistoryLoading = true;
+    state.sourceWorkbenchHistoryError = '';
+    renderContent();
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-history',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: listingWorkflowId,
+        beforeCursor: beforeCursor || undefined
+      });
+      if (requestSeq !== state.sourceWorkbenchHistoryRequestSeq
+        || requestPageKey !== currentSourcePageKey()
+        || sourceProductId !== currentSourceProductId()
+        || listingWorkflowId !== state.sourceWorkbenchListingId) return;
+      var result = response && response.ok ? response.result : null;
+      if (!result || result.state !== 'ready' || !result.history) {
+        throw new Error(response && response.error || '图片任务历史暂不可用');
+      }
+      var next = result.history;
+      if (append && state.sourceWorkbenchHistory
+        && state.sourceWorkbenchHistory.context
+        && next.context
+        && state.sourceWorkbenchHistory.context.listingWorkflowId === next.context.listingWorkflowId
+        && state.sourceWorkbenchHistory.context.revision === next.context.revision
+        && state.sourceWorkbenchHistory.context.draftVersion === next.context.draftVersion) {
+        var merged = new Map();
+        state.sourceWorkbenchHistory.items.concat(next.items).forEach(function (item) {
+          if (item && item.id && !merged.has(item.id)) merged.set(item.id, item);
+        });
+        state.sourceWorkbenchHistory = Object.assign({}, next, {
+          items: Array.from(merged.values()).slice(0, 50),
+          nextCursor: merged.size >= 50 ? null : next.nextCursor
+        });
+      } else {
+        state.sourceWorkbenchHistory = next;
+      }
+      state.sourceWorkbenchHistoryListingId = listingWorkflowId;
+    } catch (error) {
+      if (requestSeq === state.sourceWorkbenchHistoryRequestSeq) {
+        state.sourceWorkbenchHistoryError = error && error.message ? error.message : String(error);
+      }
+    } finally {
+      if (requestSeq === state.sourceWorkbenchHistoryRequestSeq) {
+        state.sourceWorkbenchHistoryLoading = false;
+        renderContent();
+      }
     }
   }
 
@@ -587,6 +694,12 @@
         state.sourceWorkbenchStatus,
         {
           launch: state.sourceWorkbenchLaunch,
+          history: state.sourceWorkbenchHistoryListingId === state.sourceWorkbenchListingId
+            ? state.sourceWorkbenchHistory
+            : null,
+          historyLoading: state.sourceWorkbenchHistoryLoading,
+          historyError: state.sourceWorkbenchHistoryError,
+          historyOpen: state.sourceWorkbenchHistoryOpen,
           sourceInputs: currentSourceMediaInputs(),
           selectedListingWorkflowId: state.sourceWorkbenchListingId,
           busyCommandKey: state.sourceWorkbenchCommandKey,
@@ -599,6 +712,12 @@
           },
           onSelectListing: function (listingWorkflowId) {
             state.sourceWorkbenchListingId = String(listingWorkflowId || '');
+            state.sourceWorkbenchHistory = null;
+            state.sourceWorkbenchHistoryListingId = '';
+            state.sourceWorkbenchHistoryLoading = false;
+            state.sourceWorkbenchHistoryError = '';
+            state.sourceWorkbenchHistoryRequestSeq += 1;
+            state.sourceWorkbenchHistoryOpen = false;
             state.sourceWorkbenchLoadingProductId = '';
             state.sourceWorkbenchLastRefreshAt = 0;
             state.sourceWorkbenchRequestSeq += 1;
@@ -607,6 +726,15 @@
           },
           onReview: function () {
             void openSourceWorkflow();
+          },
+          onLoadHistory: function () {
+            void loadSourceWorkbenchMediaHistory();
+          },
+          onLoadMoreHistory: function () {
+            void loadSourceWorkbenchMediaHistory({ append: true });
+          },
+          onHistoryOpenChange: function (open) {
+            state.sourceWorkbenchHistoryOpen = open === true;
           }
         }
       );

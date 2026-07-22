@@ -33,6 +33,16 @@ async function buildRouteApp(input: {
     listing: { items: [], truncated: false },
     media: { items: [], truncated: false, actionableCount: 0 },
   }));
+  const loadMediaHistory = vi.fn(async () => ({
+    contractVersion: 'extension-source-media-history/v1' as const,
+    context: {
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+      listingWorkflowId: 'listing-1', revision: 1, draftVersion: 1,
+    },
+    snapshot: { id: 'snapshot-1', version: 4, capturedAt: '2026-07-21T00:00:00.000Z' },
+    items: [],
+    nextCursor: null,
+  }));
   const evaluate = vi.fn(async () => decision(input.enabled !== false));
   const app = Fastify();
   await app.register(extensionSourceWorkbenchRoutes, {
@@ -48,10 +58,10 @@ async function buildRouteApp(input: {
       };
     },
     featureFlags: { evaluate },
-    service: { loadStatus },
+    service: { loadStatus, loadMediaHistory },
   });
   await app.ready();
-  return { app, loadStatus, evaluate };
+  return { app, loadStatus, loadMediaHistory, evaluate };
 }
 
 describe('extension source workbench route', () => {

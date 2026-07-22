@@ -196,6 +196,113 @@
       }).length;
   }
 
+  function validPreviewUrl(value) {
+    if (!text(value, 4096)) return false;
+    try {
+      var parsed = new URL(value);
+      return parsed.protocol === 'https:'
+        || (parsed.protocol === 'http:'
+          && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function validHistoryOutput(value) {
+    var output = record(value);
+    return output
+      && Object.keys(output).every(function (key) {
+        return ['id', 'url', 'mimeType', 'width', 'height'].includes(key);
+      })
+      && text(output.id, 200)
+      && validPreviewUrl(output.url)
+      && text(output.mimeType, 100)
+      && /^image\//iu.test(output.mimeType)
+      && (output.width === null || (Number.isSafeInteger(output.width) && output.width > 0))
+      && (output.height === null || (Number.isSafeInteger(output.height) && output.height > 0));
+  }
+
+  function validHistoryApplication(value) {
+    if (value === null) return true;
+    var application = record(value);
+    return application
+      && Object.keys(application).every(function (key) {
+        return [
+          'id', 'mode', 'state', 'targetId', 'contextSkuKey', 'contextSlotKey',
+          'appliedAt', 'rolledBackAt',
+        ].includes(key);
+      })
+      && text(application.id, 200)
+      && (application.mode === 'append' || application.mode === 'replace')
+      && (application.state === 'APPLIED' || application.state === 'ROLLED_BACK')
+      && text(application.targetId, 200)
+      && text(application.contextSkuKey, 500, true)
+      && text(application.contextSlotKey, 1024, true)
+      && dateTime(application.appliedAt)
+      && (application.rolledBackAt === null || dateTime(application.rolledBackAt));
+  }
+
+  function validHistoryItem(value) {
+    var item = record(value);
+    return item
+      && Object.keys(item).every(function (key) {
+        return [
+          'id', 'operation', 'status', 'reviewStatus', 'revision', 'contextSkuKey',
+          'contextSlotKey', 'selectedOutputAssetId', 'outputs', 'application',
+          'createdAt', 'updatedAt',
+        ].includes(key);
+      })
+      && text(item.id, 200)
+      && text(item.operation, 100)
+      && text(item.status, 100)
+      && text(item.reviewStatus, 100)
+      && Number.isSafeInteger(item.revision) && item.revision > 0
+      && text(item.contextSkuKey, 500, true)
+      && text(item.contextSlotKey, 1024, true)
+      && text(item.selectedOutputAssetId, 200, true)
+      && Array.isArray(item.outputs)
+      && item.outputs.length <= 4
+      && item.outputs.every(validHistoryOutput)
+      && validHistoryApplication(item.application)
+      && dateTime(item.createdAt)
+      && dateTime(item.updatedAt);
+  }
+
+  function validMediaHistory(value, input) {
+    var history = record(value);
+    var context = history && record(history.context);
+    var snapshot = history && record(history.snapshot);
+    return history
+      && Object.keys(history).every(function (key) {
+        return ['contractVersion', 'context', 'snapshot', 'items', 'nextCursor'].includes(key);
+      })
+      && history.contractVersion === 'extension-source-media-history/v1'
+      && context
+      && Object.keys(context).every(function (key) {
+        return [
+          'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
+          'revision', 'draftVersion',
+        ].includes(key);
+      })
+      && context.snapshotId === input.snapshotId
+      && context.supplyGoodsId === input.supplyGoodsId
+      && context.shopId === input.shopId
+      && context.listingWorkflowId === input.listingWorkflowId
+      && context.revision === input.revision
+      && context.draftVersion === input.draftVersion
+      && snapshot
+      && Object.keys(snapshot).every(function (key) {
+        return ['id', 'version', 'capturedAt'].includes(key);
+      })
+      && snapshot.id === input.snapshotId
+      && Number.isSafeInteger(snapshot.version) && snapshot.version > 0
+      && dateTime(snapshot.capturedAt)
+      && Array.isArray(history.items)
+      && history.items.length <= input.limit
+      && history.items.every(validHistoryItem)
+      && (history.nextCursor === null || text(history.nextCursor, 1000));
+  }
+
   function createClient(options) {
     var transport = options && options.transport;
     if (!transport || typeof transport.get !== 'function') {
@@ -226,6 +333,50 @@
           throw new Error('invalid source workbench status response');
         }
         return { state: 'ready', capability: data.capability, status: data.status };
+      },
+      async getMediaHistory(input) {
+        var normalized = {
+          snapshotId: identifier(input && input.snapshotId, 'snapshotId'),
+          supplyGoodsId: identifier(input && input.supplyGoodsId, 'supplyGoodsId'),
+          shopId: identifier(input && input.shopId, 'shopId'),
+          listingWorkflowId: identifier(input && input.listingWorkflowId, 'listingWorkflowId'),
+          revision: positiveRevision(input && input.revision, 'revision'),
+          draftVersion: positiveRevision(input && input.draftVersion, 'draftVersion'),
+          limit: Number(input && input.limit),
+        };
+        normalized.limit = Number.isSafeInteger(normalized.limit)
+          ? Math.max(1, Math.min(20, normalized.limit))
+          : 10;
+        var query = new URLSearchParams({
+          snapshotId: normalized.snapshotId,
+          supplyGoodsId: normalized.supplyGoodsId,
+          shopId: normalized.shopId,
+          listingWorkflowId: normalized.listingWorkflowId,
+          revision: String(normalized.revision),
+          draftVersion: String(normalized.draftVersion),
+          limit: String(normalized.limit),
+        });
+        if (input && input.beforeCursor != null) {
+          query.set('beforeCursor', identifier(input.beforeCursor, 'beforeCursor', 1000));
+        }
+        var response = await transport.get(
+          '/api/extension-device/source-workbench/media-history?' + query.toString(),
+          { requiredScope: 'listing:review' },
+        );
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var envelope = record(response.body);
+        var data = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (!data || !validCapability(data.capability)) {
+          throw new Error('invalid source media history capability response');
+        }
+        if (!data.capability.enabled) {
+          if (data.history !== null) throw new Error('disabled source media history returned tenant data');
+          return { state: 'disabled', capability: data.capability, history: null };
+        }
+        if (!validMediaHistory(data.history, normalized)) {
+          throw new Error('invalid source media history response');
+        }
+        return { state: 'ready', capability: data.capability, history: data.history };
       },
       async getMediaLaunch(input) {
         var snapshotId = identifier(input && input.snapshotId, 'snapshotId');
