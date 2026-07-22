@@ -62,6 +62,96 @@
     return String(task && task.id || '') + ':' + action;
   }
 
+  function renderReviewAction(container, mediaItems, options) {
+    if (!options || typeof options.onReview !== 'function') return;
+    var reviewable = mediaItems.find(function (item) {
+      return item && item.status === 'SUCCEEDED'
+        && (item.reviewStatus === 'PENDING' || item.reviewStatus === 'APPROVED');
+    });
+    if (!reviewable) return;
+    var button = element('button', 'ss-erp-source-workbench-review', '在 ERP 审核');
+    button.type = 'button';
+    button.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true) return;
+      options.onReview(reviewable);
+    });
+    container.appendChild(button);
+  }
+
+  function renderTranslationLaunch(container, listing, options) {
+    var launch = options && options.launch;
+    var context = launch && launch.context;
+    var capability = launch && launch.capability;
+    if (!listing || !launch || launch.state !== 'ready' || !context || !capability
+      || capability.enabled !== true || capability.ready !== true || capability.testOnly !== true
+      || capability.operation !== 'IMAGE_TRANSLATE'
+      || context.id !== listing.id || context.shopId !== listing.shopId
+      || context.revision !== listing.revision || context.draftVersion !== listing.draftVersion
+      || typeof options.onCreateTranslation !== 'function') return;
+    var allowedKeys = new Set((context.sourceInputs || []).map(function (item) {
+      return item && item.sourceMediaKey;
+    }).filter(Boolean));
+    var sourceInputs = (Array.isArray(options.sourceInputs) ? options.sourceInputs : [])
+      .filter(function (item) {
+        return item && allowedKeys.has(item.sourceMediaKey);
+      }).slice(0, 50);
+    if (!sourceInputs.length) return;
+
+    var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create');
+    drawer.open = true;
+    drawer.appendChild(element('summary', '', '图片翻译（测试）'));
+    var controls = element('div', 'ss-erp-source-workbench-create-controls');
+    var select = element('select', 'ss-erp-source-workbench-source-select');
+    select.setAttribute('aria-label', '选择待翻译图片');
+    sourceInputs.forEach(function (source, index) {
+      var label = source.label || source.role || ('图片 ' + (index + 1));
+      var option = element('option', '', label);
+      option.value = source.sourceMediaKey;
+      select.appendChild(option);
+    });
+    var button = element('button', 'ss-erp-source-workbench-create-button', '翻译为俄文');
+    button.type = 'button';
+    button.disabled = Boolean(options.busyCreateKey);
+    button.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || button.disabled) return;
+      var selected = sourceInputs.find(function (item) {
+        return item.sourceMediaKey === select.value;
+      }) || sourceInputs[0];
+      options.onCreateTranslation(selected);
+    });
+    controls.appendChild(select);
+    controls.appendChild(button);
+    drawer.appendChild(controls);
+    container.appendChild(drawer);
+  }
+
+  function renderListingSelector(container, listings, options) {
+    if (!Array.isArray(listings) || listings.length <= 1
+      || !options || typeof options.onSelectListing !== 'function') return;
+    var wrapper = element('div', 'ss-erp-source-workbench-listing-picker');
+    var label = element('label', '', '店铺草稿');
+    var select = element('select', 'ss-erp-source-workbench-listing-select');
+    select.setAttribute('aria-label', '选择店铺草稿');
+    var selectedId = String(options.selectedListingWorkflowId || '');
+    var placeholder = element('option', '', '请选择店铺草稿');
+    placeholder.value = '';
+    select.appendChild(placeholder);
+    listings.slice(0, 10).forEach(function (listing, index) {
+      if (!listing || !listing.id) return;
+      var option = element('option', '', '店铺 ' + (listing.shopId || '-') + ' · 草稿 ' + (index + 1));
+      option.value = listing.id;
+      option.selected = listing.id === selectedId;
+      select.appendChild(option);
+    });
+    select.addEventListener('change', function (event) {
+      if (!event || event.isTrusted !== true) return;
+      options.onSelectListing(select.value);
+    });
+    label.appendChild(select);
+    wrapper.appendChild(label);
+    container.appendChild(wrapper);
+  }
+
   function renderMediaCommands(container, mediaItems, options) {
     var commandable = mediaItems.filter(function (item) {
       return item && item.commandContext
@@ -106,11 +196,16 @@
           + (status.media.actionableCount > 1 ? ' · 另有 ' + (status.media.actionableCount - 1) + ' 项待处理' : ''),
       ));
     }
+    renderReviewAction(container, mediaItems, options);
     renderMediaCommands(container, mediaItems, options);
   }
 
   function renderReady(container, status, options) {
-    var listing = status.listing.items[0] || null;
+    var listings = Array.isArray(status.listing.items) ? status.listing.items : [];
+    var selectedId = String(options && options.selectedListingWorkflowId || '');
+    var listing = selectedId
+      ? listings.find(function (item) { return item && item.id === selectedId; }) || null
+      : (listings.length === 1 ? listings[0] : null);
     var mediaItems = status.media.items || [];
     var heading = element('div', 'ss-erp-source-workbench-heading');
     heading.appendChild(element('strong', '', 'ERP 商品工作流'));
@@ -121,11 +216,15 @@
     ));
     container.appendChild(heading);
 
+    renderListingSelector(container, listings, options);
+
     if (!listing) {
       container.appendChild(element(
         'p',
         'ss-erp-source-workbench-empty',
-        '已保存采集快照，前往 ERP 选择店铺和 SKU 后继续。',
+        listings.length > 1
+          ? '请选择要处理的店铺草稿。'
+          : '已保存采集快照，前往 ERP 选择店铺和 SKU 后继续。',
       ));
       renderMediaTask(container, status, mediaItems, options);
       return;
@@ -153,6 +252,7 @@
         listing.blockers[0].message,
       ));
     }
+    renderTranslationLaunch(container, listing, options);
     renderMediaTask(container, status, mediaItems, options);
   }
 

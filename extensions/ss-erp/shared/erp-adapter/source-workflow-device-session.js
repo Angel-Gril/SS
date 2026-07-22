@@ -106,8 +106,8 @@
     }
 
     return {
-      async get(pathValue) {
-        return send('GET', pathValue, null, null);
+      async get(pathValue, requestOptions) {
+        return send('GET', pathValue, null, requestOptions || null);
       },
       async post(pathValue, bodyValue, commandOptions) {
         return send('POST', pathValue, bodyValue, commandOptions || null);
@@ -137,7 +137,10 @@
         var request = (async function () {
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
-          var requiredScope = method === 'GET' ? 'listing:review' : 'media:execute';
+          var requestedScope = commandOptions && commandOptions.requiredScope;
+          var requiredScope = requestedScope === 'listing:review' || requestedScope === 'media:execute'
+            ? requestedScope
+            : method === 'GET' ? 'listing:review' : 'media:execute';
           if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {
             return { state: 'scope_required', scope: requiredScope };
           }

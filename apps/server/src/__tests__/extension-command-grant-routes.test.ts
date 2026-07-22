@@ -53,7 +53,14 @@ function dependencies(options: {
     id: receiptId, status: 'FAILED', result: null, failureCode,
   }));
   const executeOzonPublish = vi.fn(async () => ({ attemptId: 'attempt-1', state: 'SUBMITTED' }));
-  const executeMediaWorkflowCommand = vi.fn(async () => ({
+  const executeMediaWorkflowCommand = vi.fn(async (): Promise<{
+    workflowId: string;
+    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
+    operation?: 'IMAGE_TRANSLATE';
+    status: string;
+    revision: number;
+    replayed?: boolean;
+  }> => ({
     workflowId: 'media-1', action: 'CANCEL', status: 'CANCELLED', revision: 4,
   }));
   const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
@@ -255,6 +262,63 @@ describe('extension command grant routes', () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toMatchObject({ data: { replay: true } });
     expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('consumes a CREATE_TRANSLATION grant with the resolved command and records its workflow result', async () => {
+    const command = {
+      schemaVersion: 'ai-media-workflow-create/v1', action: 'CREATE_TRANSLATION',
+      sourceMediaKey: 'media-main-1', draftRevision: 11,
+      workflowOperationKey: 'extension-media-workflow:test-1',
+    };
+    const deps = await buildApp({
+      resolution: {
+        kind: 'allowed', shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, command,
+      },
+    });
+    deps.executeMediaWorkflowCommand.mockResolvedValueOnce({
+      workflowId: 'media-created-1', action: 'CREATE_TRANSLATION', operation: 'IMAGE_TRANSLATE',
+      status: 'QUEUED', revision: 1, replayed: false,
+    });
+    const payload = {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'extension-media-create-attempt-1', command,
+    };
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      code: 1, data: { receipt: { status: 'SUCCEEDED', result: {
+        workflowId: 'media-created-1', action: 'CREATE_TRANSLATION', operation: 'IMAGE_TRANSLATE',
+      } } },
+    });
+    expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1',
+      listingWorkflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'extension-media-create-attempt-1', command,
+    });
+  });
+
+  it('reports transient media context failures as unavailable instead of a client conflict', async () => {
+    const deps = await buildApp();
+    deps.executeMediaWorkflowCommand.mockRejectedValueOnce(Object.assign(
+      new Error('database unavailable'),
+      { code: 'MEDIA_CONTEXT_UNAVAILABLE' },
+    ));
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey: 'media-command-operation-1', command: mediaCommand(),
+      },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ errorCode: 'media_command_unavailable' });
+    expect(deps.service.fail).toHaveBeenCalledWith({
+      receiptId: 'receipt-1', failureCode: 'MEDIA_CONTEXT_UNAVAILABLE', result: null,
+    });
   });
 
   it('rechecks the live draft and rollout before consuming an already-issued grant', async () => {
@@ -460,6 +524,113 @@ describe('extension command grant routes', () => {
       });
     },
   );
+
+  it('resolves an exact listing-draft translation create command without accepting provider fields', async () => {
+    const evaluate = vi.fn(async () => ({
+      enabled: true, legacyAllowed: false, captureStage: null,
+      reason: 'pilot_match' as const, revision: 'pilot-1',
+    }));
+    const loadMediaLaunchContext = vi.fn(async () => ({
+      sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+    }));
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft: vi.fn(async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+      })),
+      loadMediaLaunchContext,
+    });
+    const command = {
+      schemaVersion: 'ai-media-workflow-create/v1', action: 'CREATE_TRANSLATION',
+      sourceMediaKey: 'media-main-1', draftRevision: 11,
+      workflowOperationKey: 'extension-media-workflow:test-1',
+    };
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, command,
+    })).resolves.toEqual({
+      kind: 'allowed', shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, command,
+    });
+    expect(loadMediaLaunchContext).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', workflowId: 'workflow-1', draftRevision: 11,
+      draftVersion: 7, sourceMediaKey: 'media-main-1',
+    });
+    expect(evaluate).toHaveBeenCalledWith('SOURCE_LISTING_EXTENSION_WORKBENCH', expect.any(Object));
+
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: { ...command, provider: 'dashscope-qwen-mt-image' },
+    })).resolves.toEqual({ kind: 'forbidden' });
+  });
+
+  it('rejects a translation create command when its source or draft revision is stale', async () => {
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate: vi.fn(async () => ({
+        enabled: true, legacyAllowed: false, captureStage: null,
+        reason: 'pilot_match' as const, revision: 'pilot-1',
+      })) },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft: vi.fn(async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+      })),
+      loadMediaLaunchContext: vi.fn(async () => ({ sourceMediaKeys: ['media-main-1'] })),
+    });
+    const base = {
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE' as const,
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: {
+        schemaVersion: 'ai-media-workflow-create/v1', action: 'CREATE_TRANSLATION',
+        sourceMediaKey: 'media-main-1', draftRevision: 11,
+        workflowOperationKey: 'extension-media-workflow:test-2',
+      },
+    };
+    await expect(resolve({ ...base, command: { ...base.command, sourceMediaKey: 'missing' } }))
+      .resolves.toEqual({ kind: 'stale' });
+    await expect(resolve({ ...base, command: { ...base.command, draftRevision: 10 } }))
+      .resolves.toEqual({ kind: 'stale' });
+  });
+
+  it('does not read tenant media context while the extension rollout is dark', async () => {
+    const loadShop = vi.fn(async () => ({
+      id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+    }));
+    const loadDraft = vi.fn(async () => ({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+      selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+    }));
+    const loadMediaLaunchContext = vi.fn(async () => ({ sourceMediaKeys: ['media-main-1'] }));
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate: vi.fn(async (feature: string) => ({
+        enabled: feature !== 'SOURCE_LISTING_EXTENSION_WORKBENCH',
+        legacyAllowed: false, captureStage: null,
+        reason: 'master_off' as const, revision: 'master-off',
+      })) },
+      loadShop, loadDraft, loadMediaLaunchContext,
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: {
+        schemaVersion: 'ai-media-workflow-create/v1', action: 'CREATE_TRANSLATION',
+        sourceMediaKey: 'media-main-1', draftRevision: 11,
+        workflowOperationKey: 'extension-media-workflow:dark-1',
+      },
+    })).resolves.toEqual({ kind: 'unavailable' });
+    expect(loadShop).not.toHaveBeenCalled();
+    expect(loadDraft).not.toHaveBeenCalled();
+    expect(loadMediaLaunchContext).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['paid provider', { provider: 'dashscope-qwen-mt-image' }, {}, 'forbidden'],

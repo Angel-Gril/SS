@@ -53,6 +53,13 @@ const SS_ERP_SOURCE_WORKFLOW_HANDOFF_LIMIT = 20;
 const SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE = 'ss-erp:open-source-workflow-handoff';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-media-command';
+const SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY =
+  'ss-erp:source-workbench:translation-intents:v1';
+const SS_ERP_SOURCE_TRANSLATION_INTENT_LIMIT = 20;
+// Translation jobs are asynchronous and may sit behind a queue for longer
+// than the device access token. Keep the durable intent long enough to retry
+// a lost response without creating a second billable workflow.
+const SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
@@ -256,6 +263,7 @@ let logisticsBindingProbeRuntime = null;
 let logisticsBindingProbeMessageHandler = null;
 let sourceCaptureSubmitter = null;
 let sourceListingWorkflowClient = null;
+let sourceTranslationIntentWriteQueue = Promise.resolve();
 const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
@@ -472,6 +480,148 @@ async function readPersistedSourceWorkflowHandoff(platformValue, sourceProductId
     return migrated;
   }
   return validateSourceWorkflowHandoff(result[SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]);
+}
+
+function sourceTranslationIntentText(value, maxLength) {
+  const normalized = String(value == null ? '' : value).normalize('NFKC').trim();
+  return normalized && normalized.length <= maxLength ? normalized : '';
+}
+
+function sourceTranslationIntentIdentity(value) {
+  const platform = sourceWorkflowPlatform(value && value.platform);
+  const sourceProductId = sourceTranslationIntentText(value && value.sourceProductId, 200);
+  const listingWorkflowId = sourceTranslationIntentText(value && value.listingWorkflowId, 200);
+  const sourceMediaKey = sourceTranslationIntentText(value && value.sourceMediaKey, 500);
+  const draftRevision = Number(value && value.draftRevision);
+  const draftVersion = Number(value && value.draftVersion);
+  if (!platform || !sourceProductId || !listingWorkflowId || !sourceMediaKey
+    || !Number.isSafeInteger(draftRevision) || draftRevision <= 0
+    || !Number.isSafeInteger(draftVersion) || draftVersion <= 0) return '';
+  return [platform, sourceProductId, listingWorkflowId, draftRevision, draftVersion, sourceMediaKey]
+    .map((part) => encodeURIComponent(String(part))).join(':');
+}
+
+function validateSourceTranslationIntent(value, expectedIdentity) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const allowed = new Set([
+    'identity', 'platform', 'sourceProductId', 'listingWorkflowId', 'draftRevision', 'draftVersion',
+    'sourceMediaKey', 'workflowOperationKey', 'createdAt',
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const identity = sourceTranslationIntentIdentity(value);
+  const createdAt = Number(value.createdAt);
+  const workflowOperationKey = sourceTranslationIntentText(value.workflowOperationKey, 128);
+  if (!identity || identity !== expectedIdentity || value.identity !== identity
+    || !workflowOperationKey || !Number.isSafeInteger(createdAt)
+    || createdAt > Date.now() + 60_000
+    || createdAt <= Date.now() - SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS) return null;
+  return {
+    identity,
+    platform: sourceWorkflowPlatform(value.platform),
+    sourceProductId: sourceTranslationIntentText(value.sourceProductId, 200),
+    listingWorkflowId: sourceTranslationIntentText(value.listingWorkflowId, 200),
+    draftRevision: Number(value.draftRevision),
+    draftVersion: Number(value.draftVersion),
+    sourceMediaKey: sourceTranslationIntentText(value.sourceMediaKey, 500),
+    workflowOperationKey,
+    createdAt,
+  };
+}
+
+async function readSourceTranslationIntent(identity) {
+  if (!identity) return null;
+  const stored = await chrome.storage.local.get([SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]);
+  const raw = stored[SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const candidate = validateSourceTranslationIntent(raw[identity], identity);
+  if (candidate) return candidate;
+  if (Object.prototype.hasOwnProperty.call(raw, identity)) {
+    delete raw[identity];
+    await chrome.storage.local.set({ [SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]: raw });
+  }
+  return null;
+}
+
+function enqueueSourceTranslationIntentWrite(operation) {
+  const next = sourceTranslationIntentWriteQueue.then(operation, operation);
+  sourceTranslationIntentWriteQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function getOrCreateSourceTranslationIntent(input) {
+  const identity = sourceTranslationIntentIdentity(input);
+  if (!identity) throw new Error('图片翻译意图上下文无效');
+  return enqueueSourceTranslationIntentWrite(async () => {
+    const existing = await readSourceTranslationIntent(identity);
+    if (existing) return existing;
+    if (!globalThis.crypto || typeof globalThis.crypto.getRandomValues !== 'function') {
+      throw new Error('安全随机数不可用，无法创建图片翻译意图');
+    }
+    const randomBytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(randomBytes);
+    const random = Array.from(randomBytes)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+    const intent = {
+      identity,
+      platform: sourceWorkflowPlatform(input.platform),
+      sourceProductId: sourceTranslationIntentText(input.sourceProductId, 200),
+      listingWorkflowId: sourceTranslationIntentText(input.listingWorkflowId, 200),
+      draftRevision: Number(input.draftRevision),
+      draftVersion: Number(input.draftVersion),
+      sourceMediaKey: sourceTranslationIntentText(input.sourceMediaKey, 500),
+      workflowOperationKey: `extension-media-workflow:${random}`.slice(0, 128),
+      createdAt: Date.now(),
+    };
+    const valid = validateSourceTranslationIntent(intent, identity);
+    if (!valid) throw new Error('图片翻译意图无效');
+    const stored = await chrome.storage.local.get([SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]);
+    const raw = stored[SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY];
+    const records = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
+    records[identity] = valid;
+    const bounded = Object.fromEntries(
+      Object.entries(records)
+        .filter(([key, value]) => Boolean(validateSourceTranslationIntent(value, key)))
+        .slice(-SS_ERP_SOURCE_TRANSLATION_INTENT_LIMIT),
+    );
+    await chrome.storage.local.set({ [SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]: bounded });
+    return valid;
+  });
+}
+
+async function clearSourceTranslationIntent(identity) {
+  if (!identity) return;
+  await enqueueSourceTranslationIntentWrite(async () => {
+    const stored = await chrome.storage.local.get([SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]);
+    const raw = stored[SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || !Object.prototype.hasOwnProperty.call(raw, identity)) return;
+    const records = { ...raw };
+    delete records[identity];
+    await chrome.storage.local.set({ [SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY]: records });
+  });
+}
+
+function currentSourceListingContext(result, requestedListingWorkflowId) {
+  if (!result || result.state !== 'ready' || !result.status
+    || result.status.snapshot?.current !== true) return null;
+  const items = Array.isArray(result.status.listing?.items)
+    ? result.status.listing.items.filter(Boolean)
+    : [];
+  const requested = sourceTranslationIntentText(requestedListingWorkflowId, 200);
+  const item = requested
+    ? items.find((candidate) => candidate.id === requested)
+    : (items.length === 1 ? items[0] : null);
+  if (!item) return null;
+  if (!item.id || !item.shopId
+    || !Number.isSafeInteger(item.revision) || item.revision <= 0
+    || !Number.isSafeInteger(item.draftVersion) || item.draftVersion <= 0) return null;
+  return {
+    shopId: item.shopId,
+    listingWorkflowId: item.id,
+    revision: item.revision,
+    draftVersion: item.draftVersion,
+  };
 }
 
 function inferErpWebBaseUrl(value) {
@@ -2186,6 +2336,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     Promise.resolve().then(async () => {
       const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
       const platform = sourceWorkflowPlatform(message.platform);
+      const listingWorkflowId = sourceWorkflowHandoffText(message.listingWorkflowId, 200);
       const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
       if (!handoff || !sourceProductId || !platform
         || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
@@ -2195,7 +2346,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         snapshotId: handoff.snapshotId,
         supplyGoodsId: handoff.supplyGoodsId,
       });
-      return { handoff, result };
+      let launch = null;
+      const listing = currentSourceListingContext(result, listingWorkflowId);
+      if (listing) {
+        try {
+          launch = await getSourceListingWorkflowClient().getMediaLaunch({
+            snapshotId: handoff.snapshotId,
+            supplyGoodsId: handoff.supplyGoodsId,
+            ...listing,
+          });
+        } catch (error) {
+          launch = { state: 'unavailable', reason: error && error.message ? error.message : String(error) };
+        }
+      }
+      return { handoff, result, launch };
     }).then((result) => {
       sendResponse({ ok: true, ...result });
     }).catch((error) => {
@@ -2208,6 +2372,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     Promise.resolve().then(async () => {
       const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
       const platform = sourceWorkflowPlatform(message.platform);
+      if (message.action === 'CREATE_TRANSLATION') {
+        const requestedSourceMediaKey = sourceTranslationIntentText(message.sourceMediaKey, 500);
+        const requestedListingWorkflowId = sourceTranslationIntentText(message.listingWorkflowId, 200);
+        const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+        if (!handoff || !sourceProductId || !platform || !requestedSourceMediaKey
+          || !requestedListingWorkflowId
+          || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+          throw new Error('ERP 图片翻译上下文无效，请刷新后重试');
+        }
+        const client = getSourceListingWorkflowClient();
+        // Re-read the authoritative listing and launch context for every attempt.
+        const current = await client.getStatus({
+          snapshotId: handoff.snapshotId,
+          supplyGoodsId: handoff.supplyGoodsId,
+        });
+        const listing = currentSourceListingContext(current, requestedListingWorkflowId);
+        if (!listing) throw new Error('ERP 商品草稿状态暂不可用，请先在 ERP 选择店铺和 SKU');
+        const launch = await client.getMediaLaunch({
+          snapshotId: handoff.snapshotId,
+          supplyGoodsId: handoff.supplyGoodsId,
+          ...listing,
+        });
+        if (!launch || launch.state !== 'ready' || !launch.context
+          || !launch.context.sourceInputs.some((item) => item.sourceMediaKey === requestedSourceMediaKey)) {
+          throw new Error('当前图片不在服务器允许的来源列表中');
+        }
+        const intent = await getOrCreateSourceTranslationIntent({
+          platform,
+          sourceProductId,
+          listingWorkflowId: listing.listingWorkflowId,
+          draftRevision: listing.revision,
+          draftVersion: listing.draftVersion,
+          sourceMediaKey: requestedSourceMediaKey,
+        });
+        const result = await client.createTranslationCommand({
+          snapshotId: handoff.snapshotId,
+          supplyGoodsId: handoff.supplyGoodsId,
+          shopId: listing.shopId,
+          listingWorkflowId: listing.listingWorkflowId,
+          draftRevision: listing.revision,
+          draftVersion: listing.draftVersion,
+          sourceMediaKey: requestedSourceMediaKey,
+          workflowOperationKey: intent.workflowOperationKey,
+        });
+        await clearSourceTranslationIntent(intent.identity);
+        return { handoff, result, launch };
+      }
       const mediaWorkflowId = sourceWorkflowHandoffText(message.mediaWorkflowId, 200);
       const expectedRevision = Number(message.expectedRevision);
       const action = message.action === 'CANCEL' || message.action === 'RETRY'

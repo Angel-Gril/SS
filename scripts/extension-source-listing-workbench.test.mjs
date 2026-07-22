@@ -30,6 +30,15 @@ assert.match(worker, /ss-erp:source-listing-workbench-status/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
+assert.match(worker, /CREATE_TRANSLATION/);
+assert.match(worker, /ss-erp:source-workbench:translation-intents:v1/);
+assert.match(worker, /getOrCreateSourceTranslationIntent/);
+assert.match(worker, /clearSourceTranslationIntent/);
+assert.match(worker, /requestedListingWorkflowId/);
+assert.match(worker, /sourceTranslationIntentWriteQueue/);
+assert.match(worker, /SS_ERP_SOURCE_TRANSLATION_INTENT_TTL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
+assert.match(worker, /draftRevision: listing\.revision/);
+assert.match(worker, /crypto\.getRandomValues/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
@@ -103,6 +112,126 @@ assert.equal(requests[0].init.headers.Authorization, 'Bearer device-access-token
 assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.signal instanceof AbortSignal, true);
+
+const launchRequests = [];
+const launchClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get(path) {
+      launchRequests.push(path);
+      return {
+        state: 'response', status: 200,
+        body: {
+          code: 1,
+          data: {
+            capability: {
+              enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+              revision: 'pilot-1', testOnly: true, operation: 'IMAGE_TRANSLATE',
+              sourceLanguage: 'zh', targetLanguage: 'ru',
+            },
+            context: {
+              id: 'listing-1', shopId: 'shop-1', supplyGoodsId: 'goods-1',
+              snapshotId: 'snapshot-1', revision: 11, draftVersion: 7,
+              sourceInputs: [{ sourceMediaKey: 'media-1' }],
+              requested: {
+                snapshotId: 'snapshot-1', listingWorkflowId: 'listing-1',
+                revision: 11, draftVersion: 7,
+              },
+            },
+          },
+        },
+      };
+    },
+    async post() { throw new Error('launch test must not POST'); },
+  },
+});
+const launch = await launchClient.getMediaLaunch({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+});
+assert.equal(launch.state, 'ready');
+assert.match(launchRequests[0], /\/media-launch\?/u);
+assert.match(launchRequests[0], /revision=11/u);
+assert.match(launchRequests[0], /draftVersion=7/u);
+
+const createRequests = [];
+const createClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('create test must not GET'); },
+    async post(path, body, options) {
+      createRequests.push({ path, body, options });
+      if (path.endsWith('/command-grants')) {
+        return {
+          state: 'response', status: 201,
+          body: { code: 1, data: { grantToken: 'g'.repeat(43) } },
+        };
+      }
+      return {
+        state: 'response', status: 202,
+        body: {
+          code: 1,
+          data: {
+            replay: false,
+            receipt: {
+              id: 'receipt-create-1', status: 'SUCCEEDED', failureCode: null,
+              result: {
+                workflowId: 'media-created', action: 'CREATE_TRANSLATION',
+                operation: 'IMAGE_TRANSLATE', status: 'QUEUED', revision: 1,
+              },
+            },
+          },
+        },
+      };
+    },
+  },
+});
+const createdTranslation = await createClient.createTranslationCommand({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+  sourceMediaKey: 'media-1', workflowOperationKey: 'intent-key-1',
+  provider: 'openai', model: 'gpt-image-2', apiKey: 'must-not-be-sent',
+  resolvedPrompt: 'must-not-be-sent',
+});
+assert.equal(createdTranslation.state, 'completed');
+assert.equal(createRequests.length, 2);
+assert.match(createRequests[0].body.idempotencyKey, /^extension-media-create:[a-f0-9]{64}$/u);
+assert.equal(createRequests[1].options.commandGrant, 'g'.repeat(43));
+assert.deepEqual(JSON.parse(JSON.stringify(createRequests[0].body.command)), {
+  schemaVersion: 'ai-media-workflow-create/v1',
+  action: 'CREATE_TRANSLATION',
+  sourceMediaKey: 'media-1',
+  draftRevision: 11,
+  workflowOperationKey: 'intent-key-1',
+});
+assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'provider'), false);
+assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'model'), false);
+assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'apiKey'), false);
+assert.equal(Object.prototype.hasOwnProperty.call(createRequests[0].body.command, 'resolvedPrompt'), false);
+
+const darkLaunchClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() {
+      return {
+        state: 'response', status: 200,
+        body: {
+          code: 1,
+          data: {
+            capability: {
+              enabled: false, ready: false, reasonCode: 'MEDIA_CREATE_DISABLED',
+              reason: 'dark', revision: 'off', testOnly: true,
+              operation: 'IMAGE_TRANSLATE', sourceLanguage: 'zh', targetLanguage: 'ru',
+            },
+            context: null,
+          },
+        },
+      };
+    },
+    async post() { throw new Error('dark launch must not POST'); },
+  },
+});
+assert.equal((await darkLaunchClient.getMediaLaunch({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+})).state, 'disabled');
 
 const commandRequests = [];
 const commandClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
@@ -314,7 +443,89 @@ assert.match(rendered, /前往 ERP 选择店铺和 SKU/u);
 assert.match(rendered, /图片翻译 · 等待审核/u);
 assert.doesNotMatch(rendered, /已取消|CANCELLED|PENDING/u);
 
+const createContainer = new TestNode('section');
+const createEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(createContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{ id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  launch: {
+    state: 'ready',
+    capability: {
+      enabled: true, ready: true, testOnly: true, operation: 'IMAGE_TRANSLATE',
+    },
+    context: {
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      sourceInputs: [{ sourceMediaKey: 'media-1' }],
+    },
+  },
+  sourceInputs: [{ sourceMediaKey: 'media-1', label: '主图 1' }],
+  onCreateTranslation(source) { createEvents.push(source); },
+});
+assert.match(renderedText(createContainer), /图片翻译（测试）/u);
+const createButton = createContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .find((node) => node.textContent === '翻译为俄文');
+assert.ok(createButton);
+createButton.listeners.click({ isTrusted: false });
+assert.equal(createEvents.length, 0, 'scripted translation clicks must not launch work');
+createButton.listeners.click({ isTrusted: true });
+assert.equal(createEvents.length, 1);
+assert.equal(createEvents[0].sourceMediaKey, 'media-1');
+
+const darkCreateContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(darkCreateContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{ id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  launch: { state: 'disabled', capability: { enabled: false, ready: false } },
+  sourceInputs: [{ sourceMediaKey: 'media-1', label: '主图 1' }],
+  onCreateTranslation(source) { createEvents.push(source); },
+});
+assert.doesNotMatch(renderedText(darkCreateContainer), /图片翻译（测试）/u);
+
+const multiListingContainer = new TestNode('section');
+const selectedListings = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(multiListingContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [
+        { id: 'listing-a', shopId: 'shop-a', revision: 1, draftVersion: 1 },
+        { id: 'listing-b', shopId: 'shop-b', revision: 2, draftVersion: 3 },
+      ],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  launch: { state: 'ready', capability: { enabled: true, ready: true, testOnly: true, operation: 'IMAGE_TRANSLATE' }, context: null },
+  sourceInputs: [{ sourceMediaKey: 'media-1', label: '主图 1' }],
+  selectedListingWorkflowId: '',
+  onSelectListing(id) { selectedListings.push(id); },
+  onCreateTranslation() { throw new Error('must not create before selecting listing'); },
+});
+assert.match(renderedText(multiListingContainer), /请选择店铺草稿/u);
+const listingSelect = multiListingContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .find((node) => node.tag === 'select' && node.attributes['aria-label'] === '选择店铺草稿');
+assert.ok(listingSelect);
+listingSelect.value = 'listing-b';
+listingSelect.listeners.change({ isTrusted: false });
+assert.equal(selectedListings.length, 0);
+listingSelect.listeners.change({ isTrusted: true });
+assert.deepEqual(selectedListings, ['listing-b']);
+
 const approvedContainer = new TestNode('section');
+const reviewEvents = [];
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(approvedContainer, {
   state: 'ready',
   status: {
@@ -328,8 +539,19 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(approvedContainer, {
       }],
     },
   },
+}, {
+  onReview(task) { reviewEvents.push(task); },
 });
 assert.match(renderedText(approvedContainer), /参考改图 · 审核通过，等待应用/u);
+assert.match(renderedText(approvedContainer), /在 ERP 审核/u);
+const reviewButton = approvedContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
+  .find((node) => node.textContent === '在 ERP 审核');
+assert.ok(reviewButton);
+reviewButton.listeners.click({ isTrusted: false });
+assert.equal(reviewEvents.length, 0);
+reviewButton.listeners.click({ isTrusted: true });
+assert.equal(reviewEvents.length, 1);
 
 const failedContainer = new TestNode('section');
 const commands = [];

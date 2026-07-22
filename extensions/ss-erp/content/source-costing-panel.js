@@ -34,11 +34,14 @@
     opened: false,
     sourceWorkflowHandoff: null,
     sourceWorkbenchStatus: null,
+    sourceWorkbenchLaunch: null,
+    sourceWorkbenchListingId: '',
     sourceWorkbenchProductId: '',
     sourceWorkbenchLastRefreshAt: 0,
     sourceWorkbenchLoadingProductId: '',
     sourceWorkbenchRequestSeq: 0,
     sourceWorkbenchCommandKey: '',
+    sourceWorkbenchCreateKey: '',
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
@@ -261,11 +264,14 @@
   function invalidateSourceWorkflowState() {
     state.sourceWorkflowHandoff = null;
     state.sourceWorkbenchStatus = null;
+    state.sourceWorkbenchLaunch = null;
+    state.sourceWorkbenchListingId = '';
     state.sourceWorkbenchProductId = '';
     state.sourceWorkbenchLastRefreshAt = 0;
     state.sourceWorkbenchLoadingProductId = '';
     state.sourceWorkbenchRequestSeq += 1;
     state.sourceWorkbenchCommandKey = '';
+    state.sourceWorkbenchCreateKey = '';
   }
 
   function resetSourceProductForPage(pageKey) {
@@ -373,6 +379,8 @@
     var sourceProductId = currentSourceProductId();
     if (!sourceProductId || sourceProductId.length > 200) {
       state.sourceWorkbenchStatus = null;
+      state.sourceWorkbenchLaunch = null;
+      state.sourceWorkbenchListingId = '';
       state.sourceWorkbenchProductId = '';
       state.sourceWorkbenchLastRefreshAt = 0;
       state.sourceWorkbenchLoadingProductId = '';
@@ -393,7 +401,8 @@
       var response = await sendRuntimeMessage({
         type: 'ss-erp:source-listing-workbench-status',
         sourceProductId: sourceProductId,
-        platform: SOURCE_PLATFORM
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: state.sourceWorkbenchListingId || undefined
       });
       if (requestSeq !== state.sourceWorkbenchRequestSeq
         || currentSourceProductId() !== sourceProductId) return;
@@ -401,11 +410,23 @@
         ? response.handoff
         : null;
       state.sourceWorkbenchStatus = response && response.ok ? response.result || null : null;
+      state.sourceWorkbenchLaunch = response && response.ok ? response.launch || null : null;
+      var listings = state.sourceWorkbenchStatus && state.sourceWorkbenchStatus.status
+        && state.sourceWorkbenchStatus.status.listing
+        && Array.isArray(state.sourceWorkbenchStatus.status.listing.items)
+        ? state.sourceWorkbenchStatus.status.listing.items
+        : [];
+      if (state.sourceWorkbenchListingId
+        && !listings.some(function (item) { return item && item.id === state.sourceWorkbenchListingId; })) {
+        state.sourceWorkbenchListingId = '';
+        state.sourceWorkbenchLaunch = null;
+      }
     } catch {
       if (requestSeq === state.sourceWorkbenchRequestSeq
         && currentSourceProductId() === sourceProductId) {
         state.sourceWorkflowHandoff = null;
         state.sourceWorkbenchStatus = null;
+        state.sourceWorkbenchLaunch = null;
       }
     } finally {
       if (requestSeq === state.sourceWorkbenchRequestSeq) {
@@ -447,6 +468,69 @@
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
       if (state.sourceWorkbenchCommandKey === key) state.sourceWorkbenchCommandKey = '';
+      renderContent();
+    }
+  }
+
+  function currentSourceMediaInputs() {
+    var capture = state.product && state.product.captureV2;
+    var media = capture && Array.isArray(capture.media) ? capture.media : [];
+    var seen = new Set();
+    return media.filter(function (item) {
+      if (!item || item.kind !== 'image' || item.disposition !== 'accepted'
+        || typeof item.key !== 'string' || !item.key || item.key.length > 500
+        || seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    }).slice(0, 50).map(function (item, index) {
+      var roleLabels = {
+        product_main: '主图',
+        product_detail: '详情图',
+        sku: 'SKU 图',
+        video_cover: '视频封面',
+        unknown: '商品图'
+      };
+      return {
+        sourceMediaKey: item.key,
+        role: item.role,
+        label: (roleLabels[item.role] || '商品图') + ' ' + (index + 1),
+        url: typeof item.url === 'string' ? item.url : ''
+      };
+    });
+  }
+
+  async function createSourceWorkbenchTranslation(source) {
+    var sourceMediaKey = String(source && source.sourceMediaKey || '').normalize('NFKC').trim();
+    if (state.sourceWorkbenchCreateKey || state.sourceWorkbenchCommandKey
+      || !state.sourceWorkbenchListingId
+      || !sourceMediaKey || sourceMediaKey.length > 500) return;
+    var sourceProductId = currentSourceProductId();
+    if (!sourceProductId || state.sourcePageKey !== currentSourcePageKey()) {
+      setStatus('当前货源页面已变化，请刷新后重试。', 'fail');
+      return;
+    }
+    state.sourceWorkbenchCreateKey = sourceMediaKey;
+    renderContent();
+    setStatus('正在创建图片翻译测试任务...', '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-command',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: state.sourceWorkbenchListingId,
+        sourceMediaKey: sourceMediaKey,
+        action: 'CREATE_TRANSLATION'
+      });
+      if (!response || !response.ok) {
+        throw new Error(response && response.error || '图片翻译任务创建失败');
+      }
+      setStatus('图片翻译测试任务已进入队列。', 'ok');
+      state.sourceWorkbenchLastRefreshAt = 0;
+      await refreshSourceWorkbenchStatus({ force: true });
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      if (state.sourceWorkbenchCreateKey === sourceMediaKey) state.sourceWorkbenchCreateKey = '';
       renderContent();
     }
   }
@@ -502,9 +586,27 @@
         sourceWorkbench,
         state.sourceWorkbenchStatus,
         {
+          launch: state.sourceWorkbenchLaunch,
+          sourceInputs: currentSourceMediaInputs(),
+          selectedListingWorkflowId: state.sourceWorkbenchListingId,
           busyCommandKey: state.sourceWorkbenchCommandKey,
+          busyCreateKey: state.sourceWorkbenchCreateKey,
           onCommand: function (task, action) {
             void executeSourceWorkbenchMediaCommand(task, action);
+          },
+          onCreateTranslation: function (source) {
+            void createSourceWorkbenchTranslation(source);
+          },
+          onSelectListing: function (listingWorkflowId) {
+            state.sourceWorkbenchListingId = String(listingWorkflowId || '');
+            state.sourceWorkbenchLoadingProductId = '';
+            state.sourceWorkbenchLastRefreshAt = 0;
+            state.sourceWorkbenchRequestSeq += 1;
+            renderContent();
+            void refreshSourceWorkbenchStatus({ force: true });
+          },
+          onReview: function () {
+            void openSourceWorkflow();
           }
         }
       );

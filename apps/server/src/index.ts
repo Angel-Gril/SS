@@ -86,6 +86,7 @@ import { adminOzonPublisherRolloutRoutes } from './routes/admin-ozon-publisher-r
 import {
   aiPromptTemplateRegistry,
   resolveActiveAiPrompt,
+  resolveActiveAiTemplate,
 } from './services/ai-prompt-template-registry.js';
 import { createOzonPublisherRolloutAdminService } from './services/ozon-publisher-rollout-admin.js';
 import { createPrismaOzonPublisherRolloutAdminRepository } from './services/ozon-publisher-rollout-admin-prisma.js';
@@ -102,8 +103,12 @@ import {
 } from './routes/extension-command-grants.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
+import { extensionMediaLaunchRoutes } from './routes/extension-media-launch.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
-import { createSourceListingWorkflowService } from './services/source-listing-workflow.js';
+import {
+  SourceListingWorkflowError,
+  createSourceListingWorkflowService,
+} from './services/source-listing-workflow.js';
 import { createSourceListingAiCopyService } from './services/source-listing-ai-copy.js';
 import { createPrismaSourceListingWorkflowRepository } from './services/source-listing-workflow-prisma.js';
 import { createPrismaSourceListingWorkflowContextResolver } from './services/source-listing-workflow-context.js';
@@ -150,7 +155,17 @@ import { createExtensionSourceWorkbenchService } from './services/extension-sour
 import { PrismaAiMediaWorkflowRepository } from './repositories/ai-media-workflow-repository.js';
 import { PrismaAiImageJobRepository } from './repositories/ai-image-job-repository.js';
 import { createAiMediaWorkflowService } from './services/ai-media-workflows.js';
+import {
+  AiMediaContextError,
+  createAiMediaContextService,
+} from './services/ai-media-context.js';
 import { createExtensionMediaWorkflowCommandExecutor } from './services/extension-media-workflow-commands.js';
+import {
+  createExtensionMediaTranslationLauncher,
+  resolveExtensionMediaWorkflowSourceMediaKey,
+  resolveExtensionMediaTranslationReadiness,
+} from './services/extension-media-workflow-launch.js';
+import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-translation-storage.js';
 import {
   createSourceOzonCategoryMappingService,
   PrismaSourceOzonCategoryMappingRepository,
@@ -789,9 +804,146 @@ if (isExtensionDeviceAuthEnabled()) {
   const extensionMediaWorkflowService = createAiMediaWorkflowService(
     new PrismaAiMediaWorkflowRepository(prisma),
   );
+  const extensionMediaContextService = createAiMediaContextService(prisma);
   const extensionMediaJobRepository = new PrismaAiImageJobRepository(prisma);
+  const loadExtensionMediaTranslationExistingWorkflow = async ({
+    ownerUserId,
+    idempotencyKey,
+  }: {
+    ownerUserId: string;
+    idempotencyKey: string;
+  }) => {
+    const row = await prisma.aiMediaWorkflow.findFirst({
+      where: { ownerUserId, idempotencyKey, suiteSlot: { is: null } },
+      select: {
+        id: true,
+        ownerUserId: true,
+        operation: true,
+        status: true,
+        revision: true,
+        contextType: true,
+        contextId: true,
+        contextDraftRevision: true,
+        contextDraftVersion: true,
+        suiteSlot: { select: { suiteId: true } },
+        inputs: {
+          where: { ordinal: 0 },
+          orderBy: { id: 'asc' },
+          take: 1,
+          select: { asset: { select: { sourceMediaKey: true, metadata: true } } },
+        },
+        jobs: {
+          orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: { id: true, provider: true },
+        },
+      },
+    });
+    if (!row) return null;
+    const sourceAsset = row.inputs[0]?.asset;
+    return {
+      id: row.id,
+      ownerUserId: row.ownerUserId,
+      operation: String(row.operation),
+      provider: row.jobs[0]?.provider || null,
+      status: String(row.status),
+      revision: row.revision,
+      contextType: row.contextType,
+      contextId: row.contextId,
+      contextDraftRevision: row.contextDraftRevision,
+      contextDraftVersion: row.contextDraftVersion,
+      suiteId: row.suiteSlot?.suiteId || null,
+      sourceMediaKey: resolveExtensionMediaWorkflowSourceMediaKey(sourceAsset),
+      jobId: row.jobs[0]?.id || null,
+    };
+  };
+  const loadExtensionMediaTranslationContext = async ({
+    ownerUserId,
+    listingWorkflowId,
+    draftRevision,
+    draftVersion,
+  }: {
+    ownerUserId: string;
+    listingWorkflowId: string;
+    draftRevision: number;
+    draftVersion: number;
+  }) => {
+    try {
+      const draft = await sourceListingWorkflowService.getDraft({
+        draftId: listingWorkflowId,
+        ownerUserId,
+      });
+      const context = await extensionMediaContextService.loadListingDraft(
+        ownerUserId,
+        listingWorkflowId,
+        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
+      );
+      if (draft.revision !== draftRevision || draft.draftVersion !== draftVersion) return null;
+      return {
+        id: draft.id,
+        ownerUserId: draft.ownerUserId,
+        shopId: draft.shopId,
+        supplyGoodsId: draft.supplyGoodsId,
+        snapshotId: draft.sourceCaptureSnapshotId,
+        revision: draft.revision,
+        draftVersion: draft.draftVersion,
+        sourceMediaKeys: [...new Set(context.inputs
+          .map((item) => String(item.sourceMediaKey || '').trim())
+          .filter(Boolean))].slice(0, 50),
+      };
+    } catch (error) {
+      if (error instanceof SourceListingWorkflowError) {
+        if (error.code === 'OZON_LISTING_DRAFT_NOT_FOUND'
+          || error.code === 'OZON_LISTING_DRAFT_VERSION_CONFLICT') return null;
+      }
+      if (error instanceof AiMediaContextError) {
+        if (error.statusCode === 404 || error.statusCode === 409) return null;
+      }
+      throw error;
+    }
+  };
+  const extensionMediaTranslationLauncher = createExtensionMediaTranslationLauncher({
+    workflowService: extensionMediaWorkflowService,
+    loadContext: loadExtensionMediaTranslationContext,
+    loadExisting: loadExtensionMediaTranslationExistingWorkflow,
+    internalizeSource: async ({ ownerUserId, listingWorkflowId, sourceMediaKey, draftRevision, draftVersion }) => {
+      const asset = await extensionMediaContextService.internalizeListingDraft(
+        ownerUserId,
+        listingWorkflowId,
+        sourceMediaKey,
+        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
+        'GENERAL',
+      );
+      return { id: asset.id };
+    },
+    getSettings: async () => ({
+      enabled: await getConfig('feature_image_translate'),
+      provider: await getConfig('ai_image_translation_provider'),
+      model: await getConfig('ai_image_translation_model'),
+      dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
+      estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
+    }),
+    getStorageReadiness: async () => {
+      try {
+        return resolveAiImageTranslationStorageReadiness(await getRuntimeConfigForStorage());
+      } catch {
+        return { ready: false, reason: 'Image translation storage is unavailable' };
+      }
+    },
+    resolvePrompt: resolveActiveAiTemplate,
+    enqueue: async (jobId) => {
+      const worker = await import('./workers/ai-image-translation.js');
+      await worker.enqueueAiImageTranslationJob(jobId);
+    },
+    markEnqueueFailed: async (jobId) => extensionMediaJobRepository.markEnqueueFailed(jobId, {
+      attemptCount: 0,
+      errorCode: 'QUEUE_UNAVAILABLE',
+      errorMessage: 'AI media queue is temporarily unavailable',
+    }),
+  });
   const executeExtensionMediaWorkflowCommand = createExtensionMediaWorkflowCommandExecutor({
     workflowService: extensionMediaWorkflowService,
+    launchTranslation: extensionMediaTranslationLauncher,
     loadListingDraft: async ({ listingWorkflowId, ownerUserId }) => {
       try {
         const draft = await sourceListingWorkflowService.getDraft({
@@ -876,7 +1028,7 @@ if (isExtensionDeviceAuthEnabled()) {
             contextDraftVersion: true,
             revision: true,
             status: true,
-            suiteSlot: { select: { id: true } },
+            suiteSlot: { select: { suiteId: true } },
             jobs: {
               orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
               take: 1,
@@ -893,9 +1045,20 @@ if (isExtensionDeviceAuthEnabled()) {
           contextDraftVersion: row.contextDraftVersion,
           revision: row.revision,
           status: row.status,
-          suiteId: row.suiteSlot?.id || null,
+          suiteId: row.suiteSlot?.suiteId || null,
           provider: row.jobs[0]?.provider || null,
         } : null;
+      },
+      loadMediaLaunchContext: async ({ ownerUserId, workflowId, draftRevision, draftVersion, sourceMediaKey }) => {
+        const context = await loadExtensionMediaTranslationContext({
+          ownerUserId,
+          listingWorkflowId: workflowId,
+          draftRevision,
+          draftVersion,
+        });
+        return context && context.sourceMediaKeys.includes(sourceMediaKey)
+          ? { sourceMediaKeys: context.sourceMediaKeys }
+          : null;
       },
     }),
     executeOzonPublish: async ({ ownerUserId, actorUserId, workflowId, command }) => {
@@ -934,6 +1097,83 @@ if (isExtensionDeviceAuthEnabled()) {
       requiredScopes: ['listing:review'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
+  });
+  await app.register(extensionMediaLaunchRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    loadContext: async ({
+      ownerUserId,
+      snapshotId,
+      supplyGoodsId,
+      shopId,
+      listingWorkflowId,
+      revision,
+      draftVersion,
+    }) => {
+      const draft = await sourceListingWorkflowService.getDraft({
+        draftId: listingWorkflowId,
+        ownerUserId,
+      });
+      if (draft.shopId !== shopId
+        || draft.supplyGoodsId !== supplyGoodsId
+        || draft.sourceCaptureSnapshotId !== snapshotId
+        || draft.revision !== revision
+        || draft.draftVersion !== draftVersion) return null;
+      const context = await extensionMediaContextService.loadListingDraft(
+        ownerUserId,
+        listingWorkflowId,
+        { expectedRevision: revision, expectedDraftVersion: draftVersion },
+      );
+      return {
+        id: draft.id,
+        ownerUserId: draft.ownerUserId,
+        shopId: draft.shopId,
+        supplyGoodsId: draft.supplyGoodsId,
+        snapshotId: draft.sourceCaptureSnapshotId,
+        revision: draft.revision,
+        draftVersion: draft.draftVersion,
+        sourceMediaKeys: [...new Set(context.inputs
+          .map((item) => String(item.sourceMediaKey || '').trim())
+          .filter(Boolean))].slice(0, 50),
+      };
+    },
+    getCapability: async ({ workflowDecision }) => {
+      const [enabled, provider, model, dailyLimit, estimatedCostCents, storage] = await Promise.all([
+        getConfig('feature_image_translate'),
+        getConfig('ai_image_translation_provider'),
+        getConfig('ai_image_translation_model'),
+        getConfig('ai_user_daily_image_translation_limit'),
+        getConfig('ai_image_translation_cost_cents'),
+        getRuntimeConfigForStorage().then(resolveAiImageTranslationStorageReadiness),
+      ]);
+      const readiness = resolveExtensionMediaTranslationReadiness({
+        settings: {
+          enabled,
+          provider,
+          model,
+          dailyLimit,
+          estimatedCostCents,
+        },
+        production: process.env.NODE_ENV === 'production',
+        storageReadiness: storage,
+      });
+      return {
+        enabled: readiness.enabled,
+        ready: readiness.ready,
+        reasonCode: readiness.reasonCode,
+        reason: readiness.reason,
+        revision: workflowDecision.revision,
+        testOnly: true as const,
+        operation: 'IMAGE_TRANSLATE' as const,
+        sourceLanguage: 'zh' as const,
+        targetLanguage: 'ru' as const,
+      };
+    },
   });
 }
 if (isLogisticsDistributionEnabled()) {

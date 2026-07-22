@@ -10,6 +10,10 @@ import {
 import {
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
+import {
+  ExtensionMediaWorkflowLaunchError,
+  parseExtensionMediaTranslationCreateCommand,
+} from '../services/extension-media-workflow-launch.js';
 
 interface CommandDeviceContext {
   sessionId: string;
@@ -79,6 +83,13 @@ export interface SourceWorkflowCommandResolverOptions {
     suiteId: string | null;
     provider: string | null;
   } | null>;
+  loadMediaLaunchContext?(input: {
+    ownerUserId: string;
+    workflowId: string;
+    draftRevision: number;
+    draftVersion: number;
+    sourceMediaKey: string;
+  }): Promise<{ sourceMediaKeys: string[] } | null>;
 }
 
 const sourceCaptureCommandSchema = z.object({
@@ -143,9 +154,84 @@ export function createSourceWorkflowCommandResolver(
     }
     if (input.operation === 'MEDIA_EXECUTE') {
       if (!input.shopId || !input.workflowId || input.draftVersion == null
-        || !options.loadDraft || !options.loadMediaWorkflow) {
+        || !options.loadDraft) {
         return { kind: 'forbidden' };
       }
+      let createCommand;
+      try {
+        createCommand = parseExtensionMediaTranslationCreateCommand(input.command);
+      } catch (error) {
+        if (error instanceof ExtensionMediaWorkflowLaunchError) return { kind: 'forbidden' };
+        throw error;
+      }
+      if (createCommand) {
+        if (!options.loadMediaLaunchContext) return { kind: 'forbidden' };
+        let extensionRollout;
+        let mediaRollouts;
+        try {
+          [extensionRollout, mediaRollouts] = await Promise.all([
+            options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+              ownerUserId: input.ownerUserId,
+              shopId: input.shopId,
+              deviceSessionId: input.sessionId,
+            }),
+            Promise.all([
+              options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: input.ownerUserId }),
+              options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: input.ownerUserId }),
+            ]),
+          ]);
+        } catch {
+          return { kind: 'rollout_unavailable' };
+        }
+        if (!extensionRollout.enabled || mediaRollouts.some((decision) => !decision.enabled)) {
+          const unavailable = [extensionRollout, ...mediaRollouts]
+            .find((decision) => ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(decision.reason));
+          return unavailable ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
+        }
+        let shop: Awaited<ReturnType<SourceWorkflowCommandResolverOptions['loadShop']>>;
+        let draft: Awaited<ReturnType<NonNullable<SourceWorkflowCommandResolverOptions['loadDraft']>>>;
+        let context: Awaited<ReturnType<NonNullable<SourceWorkflowCommandResolverOptions['loadMediaLaunchContext']>>>;
+        try {
+          [shop, draft, context] = await Promise.all([
+            options.loadShop({ shopId: input.shopId, ownerUserId: input.ownerUserId }),
+            options.loadDraft({ workflowId: input.workflowId, ownerUserId: input.ownerUserId }),
+            options.loadMediaLaunchContext({
+              ownerUserId: input.ownerUserId,
+              workflowId: input.workflowId,
+              draftRevision: createCommand.draftRevision,
+              draftVersion: input.draftVersion,
+              sourceMediaKey: createCommand.sourceMediaKey,
+            }),
+          ]);
+        } catch {
+          return { kind: 'rollout_unavailable' };
+        }
+        if (!shop
+          || shop.id !== input.shopId
+          || shop.userId !== input.ownerUserId
+          || shop.platform !== 'OZON'
+          || shop.status !== 'ACTIVE'
+          || !draft
+          || draft.id !== input.workflowId
+          || draft.ownerUserId !== input.ownerUserId
+          || draft.shopId !== input.shopId) {
+          return { kind: 'forbidden' };
+        }
+        if (draft.draftVersion !== input.draftVersion
+          || draft.revision !== createCommand.draftRevision
+          || !context
+          || !context.sourceMediaKeys.includes(createCommand.sourceMediaKey)) {
+          return { kind: 'stale' };
+        }
+        return {
+          kind: 'allowed',
+          shopId: shop.id,
+          workflowId: draft.id,
+          draftVersion: draft.draftVersion,
+          command: createCommand,
+        };
+      }
+      if (!options.loadMediaWorkflow) return { kind: 'forbidden' };
       const parsedCommand = mediaWorkflowCommandSchema.safeParse(input.command);
       if (!parsedCommand.success) return { kind: 'forbidden' };
 
@@ -365,9 +451,11 @@ export interface ExtensionCommandGrantRoutesOptions {
     command: Record<string, unknown>;
   }): Promise<{
     workflowId: string;
-    action: 'CANCEL' | 'RETRY';
+    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
+    operation?: 'IMAGE_TRANSLATE';
     status: string;
     revision: number;
+    replayed?: boolean;
   }>;
 }
 
@@ -386,6 +474,17 @@ const executeSchema = z.object({
   idempotencyKey: z.string().trim().min(16).max(200),
   command: z.record(z.string(), z.unknown()),
 }).strict();
+
+const mediaCommandUnavailableCodes = new Set([
+  'MEDIA_CAPABILITY_UNAVAILABLE',
+  'MEDIA_CREATE_STATE_UNAVAILABLE',
+  'MEDIA_CONTEXT_UNAVAILABLE',
+  'MEDIA_PROMPT_UNAVAILABLE',
+  'MEDIA_QUEUE_UNAVAILABLE',
+  'MEDIA_SOURCE_UNAVAILABLE',
+  'MEDIA_STORAGE_NOT_READY',
+  'STORAGE_NOT_READY',
+]);
 
 function error(reply: FastifyReply, statusCode: number, errorCode: string, message: string) {
   return reply.status(statusCode).send({ code: 0, errorCode, msg: message });
@@ -587,13 +686,6 @@ export async function extensionCommandGrantRoutes(
     }
     const token = String(request.headers['x-ss-erp-command-grant'] || '').trim();
     if (!token) return error(reply, 401, 'command_grant_required', '缺少命令授权');
-    const envelope = {
-      operation: 'MEDIA_EXECUTE' as const,
-      shopId: parsed.data.shopId,
-      workflowId: parsed.data.workflowId,
-      draftVersion: parsed.data.draftVersion,
-      command: parsed.data.command,
-    };
     try {
       const resolution = await options.resolveCommand({
         sessionId: device.sessionId,
@@ -620,14 +712,21 @@ export async function extensionCommandGrantRoutes(
         const [statusCode, code, message] = decisions[resolution.kind];
         return error(reply, statusCode, code, message);
       }
+      const envelope = {
+        operation: 'MEDIA_EXECUTE' as const,
+        shopId: resolution.shopId,
+        workflowId: resolution.workflowId,
+        draftVersion: resolution.draftVersion,
+        command: resolution.command,
+      };
       const authorized = await options.service.authorize({
         sessionId: device.sessionId,
         tokenId: device.tokenId,
         ownerUserId: device.ownerUserId,
-        shopId: parsed.data.shopId,
+        shopId: resolution.shopId,
         operation: 'MEDIA_EXECUTE',
-        workflowId: parsed.data.workflowId,
-        draftVersion: parsed.data.draftVersion,
+        workflowId: resolution.workflowId,
+        draftVersion: resolution.draftVersion,
         idempotencyKey: parsed.data.idempotencyKey,
         requestHash: hashExtensionCommandRequest(envelope),
         token,
@@ -669,10 +768,11 @@ export async function extensionCommandGrantRoutes(
           failureCode,
           result: null,
         });
-        return reply.status(409).send({
+        const unavailable = mediaCommandUnavailableCodes.has(failureCode);
+        return reply.status(unavailable ? 503 : 409).send({
           code: 0,
-          errorCode: 'media_command_failed',
-          msg: '媒体任务命令执行失败',
+          errorCode: unavailable ? 'media_command_unavailable' : 'media_command_failed',
+          msg: unavailable ? '媒体任务服务暂不可用' : '媒体任务命令执行失败',
           data: { receipt },
         });
       }

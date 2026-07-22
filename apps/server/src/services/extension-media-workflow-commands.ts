@@ -1,4 +1,8 @@
 import type { AiMediaWorkflowService } from './ai-media-workflows.js';
+import {
+  parseExtensionMediaTranslationCreateCommand,
+  type ExtensionMediaTranslationLauncher,
+} from './extension-media-workflow-launch.js';
 
 export const EXTENSION_MEDIA_WORKFLOW_COMMAND_VERSION =
   'ai-media-workflow-command/v1' as const;
@@ -60,6 +64,7 @@ function fail(code: string, message: string): never {
 
 export function createExtensionMediaWorkflowCommandExecutor(options: {
   workflowService: Pick<AiMediaWorkflowService, 'get' | 'cancel' | 'retry'>;
+  launchTranslation?: ExtensionMediaTranslationLauncher;
   loadListingDraft(input: {
     listingWorkflowId: string;
     ownerUserId: string;
@@ -80,6 +85,13 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
     idempotencyKey: string;
     command: Record<string, unknown>;
   }) => {
+    const translationCreate = parseExtensionMediaTranslationCreateCommand(input.command);
+    if (translationCreate) {
+      if (!options.launchTranslation) {
+        fail('MEDIA_CREATE_UNAVAILABLE', 'Media translation launch is unavailable');
+      }
+      return options.launchTranslation(input);
+    }
     const requested = command(input.command);
     const [draft, workflow] = await Promise.all([
       options.loadListingDraft({

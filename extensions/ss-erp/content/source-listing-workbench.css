@@ -34,6 +34,29 @@
   gap: 8px;
 }
 
+.ss-erp-source-workbench-listing-picker {
+  margin: 8px 0 10px;
+}
+
+.ss-erp-source-workbench-listing-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-listing-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  font-size: 11px;
+}
+
 .ss-erp-source-workbench-metric {
   min-width: 0;
 }
@@ -129,6 +152,54 @@
   opacity: 0.55;
 }
 
+.ss-erp-source-workbench-create {
+  border-top-color: #94a3b8;
+}
+
+.ss-erp-source-workbench-create-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.ss-erp-source-workbench-source-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-create-button,
+.ss-erp-source-workbench-review {
+  min-width: 76px;
+  height: 30px;
+  border: 1px solid #0f766e;
+  border-radius: 4px;
+  background: #0f766e;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-create-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.ss-erp-source-workbench-review {
+  display: block;
+  margin-top: 8px;
+  border-color: #475569;
+  background: #475569;
+}
+
 @media (max-width: 520px) {
   .ss-erp-source-workbench-metrics {
     grid-template-columns: 1fr;
@@ -137,5 +208,15 @@
   .ss-erp-source-workbench-command-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .ss-erp-source-workbench-create-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ss-erp-source-workbench-create-button,
+  .ss-erp-source-workbench-review {
+    width: 100%;
   }
 }
