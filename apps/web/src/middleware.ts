@@ -72,20 +72,23 @@ export function middleware(request: NextRequest) {
 
   // 用户域名。
   if (hostMatches(host, USER_HOSTNAME)) {
-    // 访问 /admin 路径时重定向到登录
+    // 管理员页面只在独立管理员域呈现，避免两个登录入口互相覆盖。
     if (deploymentHostMode.splitAdmin && pathname.startsWith('/admin')) {
-      return redirectTo(request, '/login');
+      return redirectToHost(request, ADMIN_HOSTNAME, pathname);
     }
-    // 访问根路径时进入用户工作台；未登录再回登录页。
+    // 已登录时让根路由呈现 ERP 首页；未登录时直接进入普通登录页。
     if (pathname === '/') {
       const hasAuthCookie = request.cookies.has('sserp_token');
-      return redirectTo(request, hasAuthCookie ? '/orders' : '/login');
+      if (!hasAuthCookie) return redirectTo(request, '/login');
     }
   }
 
   // 独立官网域名。
   // 根路径直接渲染官网首页，避免公开 URL 出现 /landing。
   if (deploymentHostMode.splitMarketing && MARKETING_HOSTNAMES.includes(normalizedHost)) {
+    if (deploymentHostMode.splitAdmin && pathname.startsWith('/admin')) {
+      return redirectToHost(request, ADMIN_HOSTNAME, pathname);
+    }
     if (pathname === '/') {
       return rewriteTo(request, '/landing');
     }

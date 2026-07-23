@@ -11,6 +11,7 @@ function read(path) {
 
 const deploymentHosts = read('apps/web/src/lib/deployment-hosts.ts');
 const middleware = read('apps/web/src/middleware.ts');
+const dashboardLayout = read('apps/web/src/app/(dashboard)/layout.tsx');
 const userLogin = read('apps/web/src/app/(auth)/login/page-client.tsx');
 const adminLogin = read('apps/web/src/app/(auth)/admin/login/page-client.tsx');
 const downloadPage = read('apps/web/src/app/download/page.tsx');
@@ -75,6 +76,30 @@ test('middleware preserves admin paths and marketing routes in a single-domain d
   assert.match(deploymentHosts, /splitMarketing:[\s\S]*marketingHostname !== deploymentHosts\.userHostname/);
   assert.match(middleware, /deploymentHostMode\.splitAdmin && pathname\.startsWith\('\/admin'\)/);
   assert.match(middleware, /deploymentHostMode\.splitMarketing && MARKETING_HOSTNAMES\.includes/);
+});
+
+test('middleware keeps the ERP homepage and canonical login hosts separated', () => {
+  const result = spawnSync(process.execPath, [
+    'apps/server/node_modules/tsx/dist/cli.mjs',
+    'apps/web/scripts/middleware-routing-contract.ts',
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      TSX_TSCONFIG_PATH: 'apps/web/tsconfig.json',
+      NEXT_PUBLIC_USER_HOSTNAME: 'app.ss-erp.cn',
+      NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.ss-erp.cn',
+      NEXT_PUBLIC_MARKETING_HOSTNAME: 'ss-erp.cn',
+    },
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /PASS Web middleware routing contract/);
+  assert.match(
+    dashboardLayout,
+    /function getLoginPath[\s\S]*pathname\.startsWith\('\/admin'\)[\s\S]*return '\/login';/,
+  );
+  assert.doesNotMatch(dashboardLayout, /pathname === '\/'[\s\S]{0,80}'\/landing'/);
 });
 
 test('extension settings default is generated from the deployment environment', () => {

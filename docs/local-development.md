@@ -279,7 +279,7 @@ pnpm smoke:remote
 - `ss-erp.com/` 是否直接显示官网首页
 - `ss-erp.com/landing`、`www.ss-erp.com/` 是否跳转到 `ss-erp.com/`
 - `ss-erp.com/login`、`ss-erp.com/register` 是否跳转到 `app.ss-erp.com`
-- `app.ss-erp.com/admin*` 是否跳转到用户登录页
+- `app.ss-erp.com/admin*` 是否跳转到 `admin.ss-erp.com` 的同一路径
 - `admin.ss-erp.com/`、`/login`、`/register` 是否跳转到 `admin.ss-erp.com/admin/login`
 
 如果只是要证明线上上传链路是否真的走 R2/OSS，可以创建临时用户并上传 1x1 测试图：

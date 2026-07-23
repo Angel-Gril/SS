@@ -48,7 +48,6 @@ function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean)
 
 function getLoginPath(pathname: string): string {
   if (pathname.startsWith('/admin')) return '/admin/login';
-  if (pathname === '/') return '/landing';
   return '/login';
 }
 

@@ -279,13 +279,18 @@ push('domain routing isolates user and admin hosts', async () => {
     },
     {
       label: 'root login redirects to user app',
-      url: 'https://ss-erp.com/login',
+      url: `${marketingBaseUrl}/login`,
       locationPrefix: `${userWebBaseUrl}/login`,
     },
     {
       label: 'root register redirects to user app',
-      url: 'https://ss-erp.com/register',
+      url: `${marketingBaseUrl}/register`,
       locationPrefix: `${userWebBaseUrl}/register`,
+    },
+    {
+      label: 'root admin login redirects to admin app',
+      url: `${marketingBaseUrl}/admin/login`,
+      locationPrefix: `${adminWebBaseUrl}/admin/login`,
     },
     {
       label: 'user root redirects to login',
@@ -293,9 +298,9 @@ push('domain routing isolates user and admin hosts', async () => {
       locationPrefix: `${userWebBaseUrl}/login`,
     },
     {
-      label: 'user admin path redirects to login',
-      url: `${userWebBaseUrl}/admin`,
-      locationPrefix: `${userWebBaseUrl}/login`,
+      label: 'user admin login redirects to admin app',
+      url: `${userWebBaseUrl}/admin/login`,
+      locationPrefix: `${adminWebBaseUrl}/admin/login`,
     },
     {
       label: 'admin root redirects to admin login',
