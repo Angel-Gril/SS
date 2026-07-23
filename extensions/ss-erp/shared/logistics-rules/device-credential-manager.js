@@ -54,6 +54,16 @@
     var localStorage = options && options.localStorage;
     var fetchImpl = options && options.fetchImpl;
     var now = options && options.now ? options.now : function () { return new Date(); };
+    var configuredRequestTimeoutMs = Number(options && options.requestTimeoutMs);
+    var requestTimeoutMs = Number.isFinite(configuredRequestTimeoutMs) && configuredRequestTimeoutMs > 0
+      ? configuredRequestTimeoutMs
+      : 6000;
+    var expectedBaseUrl = options && options.expectedBaseUrl
+      ? normalizeBaseUrl(options.expectedBaseUrl)
+      : '';
+    var validateBaseUrl = options && typeof options.validateBaseUrl === 'function'
+      ? options.validateBaseUrl
+      : null;
     var access = null;
     var refreshInFlight = null;
     var credentialEpoch = 0;
@@ -68,11 +78,45 @@
       }
     }
 
+    function trustedBaseUrl(value) {
+      var normalized = normalizeBaseUrl(value);
+      if (expectedBaseUrl && normalized !== expectedBaseUrl) {
+        throw new Error('device credential belongs to another ERP deployment');
+      }
+      if (validateBaseUrl && validateBaseUrl(normalized) !== true) {
+        throw new Error('device credential ERP endpoint is not allowed');
+      }
+      return normalized;
+    }
+
+    async function requestJsonWithDeadline(url, init, jsonStatus, timeoutMessage) {
+      var controller = new AbortController();
+      var timer = null;
+      var timedOut = new Promise(function (_resolve, reject) {
+        timer = setTimeout(function () {
+          reject(new Error(timeoutMessage));
+          controller.abort();
+        }, requestTimeoutMs);
+      });
+      var request = Promise.resolve().then(async function () {
+        var response = await fetchImpl(url, Object.assign({}, init, {
+          signal: controller.signal,
+        }));
+        var body = response.status === jsonStatus ? await response.json() : null;
+        return { response: response, body: body };
+      });
+      try {
+        return await Promise.race([request, timedOut]);
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+    }
+
     function operationFromCredential(credential, operationEpoch, accessToken) {
       return {
         state: 'paired',
         epoch: operationEpoch,
-        baseUrl: normalizeBaseUrl(credential.baseUrl),
+        baseUrl: trustedBaseUrl(credential.baseUrl),
         deploymentId: requiredText(credential.deploymentId, 'deploymentId'),
         deviceId: requiredText(credential.deviceId, 'deviceId'),
         ownerUserId: requiredText(credential.ownerUserId, 'ownerUserId'),
@@ -88,7 +132,7 @@
         || operation.state !== 'paired'
         || !Number.isSafeInteger(operation.epoch)) return false;
       try {
-        return normalizeBaseUrl(credential.baseUrl) === normalizeBaseUrl(operation.baseUrl)
+        return trustedBaseUrl(credential.baseUrl) === trustedBaseUrl(operation.baseUrl)
           && requiredText(credential.deploymentId, 'deploymentId') === operation.deploymentId
           && requiredText(credential.deviceId, 'deviceId') === operation.deviceId
           && requiredText(credential.ownerUserId, 'ownerUserId') === operation.ownerUserId
@@ -103,8 +147,25 @@
     }
     if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl is required');
 
+    async function getCompatibleStoredCredential(operationEpoch) {
+      var stored = await localStorage.get([CREDENTIAL_KEY]);
+      var credential = stored && stored[CREDENTIAL_KEY];
+      if (!credential) return null;
+      try {
+        trustedBaseUrl(credential.baseUrl);
+        assertCurrentEpoch(operationEpoch);
+        return credential;
+      } catch (_error) {
+        assertCurrentEpoch(operationEpoch);
+        access = null;
+        credentialEpoch += 1;
+        await localStorage.remove([CREDENTIAL_KEY]);
+        return null;
+      }
+    }
+
     async function claim(input) {
-      var baseUrl = normalizeBaseUrl(input && input.baseUrl);
+      var baseUrl = trustedBaseUrl(input && input.baseUrl);
       var operationEpoch = ++credentialEpoch;
       var code = requiredText(input && input.code, 'pairing code');
       var deploymentId = requiredText(input && input.deploymentId, 'deploymentId');
@@ -113,7 +174,9 @@
       if (code.length < 20 || code.length > 1000 || deviceId.length > 200 || deviceLabel.length > 120) {
         throw new TypeError('pairing input is invalid');
       }
-      var response = await fetchImpl(baseUrl + '/api/extension-device/pairing-claims', {
+      var result = await requestJsonWithDeadline(
+        baseUrl + '/api/extension-device/pairing-claims',
+        {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -127,11 +190,15 @@
           deviceId: deviceId,
           deviceLabel: deviceLabel,
         }),
-      });
+        },
+        201,
+        'device pairing request timed out',
+      );
+      var response = result.response;
       if (response.status !== 201) {
         throw new Error('device pairing failed');
       }
-      var body = await response.json();
+      var body = result.body;
       var data = body && body.code === 1 && body.data;
       var session = data && data.session;
       if (
@@ -189,8 +256,8 @@
     }
 
     async function getStatus() {
-      var stored = await localStorage.get([CREDENTIAL_KEY]);
-      var credential = stored && stored[CREDENTIAL_KEY];
+      var operationEpoch = credentialEpoch;
+      var credential = await getCompatibleStoredCredential(operationEpoch);
       if (!credential) return { state: 'unpaired' };
       return {
         state: 'paired',
@@ -204,11 +271,11 @@
     }
 
     async function getConnection() {
-      var stored = await localStorage.get([CREDENTIAL_KEY]);
-      var credential = stored && stored[CREDENTIAL_KEY];
+      var operationEpoch = credentialEpoch;
+      var credential = await getCompatibleStoredCredential(operationEpoch);
       if (!credential) return null;
       return {
-        baseUrl: normalizeBaseUrl(credential.baseUrl),
+        baseUrl: trustedBaseUrl(credential.baseUrl),
         deploymentId: requiredText(credential.deploymentId, 'deploymentId'),
         deviceId: requiredText(credential.deviceId, 'deviceId'),
         ownerUserId: requiredText(credential.ownerUserId, 'ownerUserId'),
@@ -218,12 +285,11 @@
 
     async function beginOperation() {
       var operationEpoch = credentialEpoch;
-      var stored = await localStorage.get([CREDENTIAL_KEY]);
-      assertCurrentEpoch(operationEpoch);
-      var credential = stored && stored[CREDENTIAL_KEY];
+      var credential = await getCompatibleStoredCredential(operationEpoch);
       if (!credential) {
-        return { state: 'unpaired', epoch: operationEpoch };
+        return { state: 'unpaired', epoch: credentialEpoch };
       }
+      assertCurrentEpoch(operationEpoch);
       var identity = operationFromCredential(credential, operationEpoch, '');
       var accessToken = await getAccessToken();
       assertCurrentEpoch(operationEpoch);
@@ -263,56 +329,72 @@
     async function rotateRefreshCredential() {
       if (refreshInFlight) return refreshInFlight;
       refreshInFlight = (async function () {
-        var stored = await localStorage.get([CREDENTIAL_KEY]);
         var operationEpoch = credentialEpoch;
-        var credential = stored && stored[CREDENTIAL_KEY];
+        var credential = await getCompatibleStoredCredential(operationEpoch);
         if (!credential) throw new Error('device refresh credential is unavailable');
+        assertCurrentEpoch(operationEpoch);
         var refreshOperation = operationFromCredential(credential, operationEpoch, '');
         assertCurrentEpoch(operationEpoch);
-        var baseUrl = normalizeBaseUrl(credential.baseUrl);
-        var response = await fetchImpl(baseUrl + '/api/extension-device/refresh', {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({
-            refreshToken: requiredText(credential.refreshToken, 'refresh token'),
-          }),
-        });
-        if (response.status === 401 || response.status === 403 || response.status === 410) {
-          var cleared = await clearIfCurrent(refreshOperation, {
-            status: response.status,
-            reason: 'device_refresh_authorization_revoked',
-          });
+        var baseUrl = trustedBaseUrl(credential.baseUrl);
+        async function requireRepair(reason) {
+          var cleared = await clearIfCurrent(refreshOperation, { reason: reason });
           if (!cleared) throw supersededError();
-          throw new Error('device re-pairing required');
+          throw new Error('device refresh result is uncertain; device re-pairing required');
         }
-        if (response.status !== 200) throw new Error('device refresh failed');
-        var body = await response.json();
+        var result;
+        try {
+          result = await requestJsonWithDeadline(
+            baseUrl + '/api/extension-device/refresh',
+            {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            credentials: 'omit',
+            cache: 'no-store',
+            body: JSON.stringify({
+              refreshToken: requiredText(credential.refreshToken, 'refresh token'),
+            }),
+            },
+            200,
+            'device refresh request timed out',
+          );
+        } catch (_error) {
+          return requireRepair('device_refresh_transport_ambiguous');
+        }
+        var response = result.response;
+        if (response.status !== 200) {
+          return requireRepair('device_refresh_http_' + response.status);
+        }
+        var body = result.body;
         var data = body && body.code === 1 && body.data;
         var session = data && data.session;
-        if (
-          !session ||
-          requiredText(session.id, 'session.id') !== credential.sessionId ||
-          requiredText(session.deploymentId, 'session.deploymentId') !== credential.deploymentId ||
-          requiredText(session.deviceId, 'session.deviceId') !== credential.deviceId ||
-          requiredText(session.ownerUserId, 'session.ownerUserId') !== credential.ownerUserId ||
-          !Array.isArray(session.scopes)
-        ) {
-          throw new Error('device refresh response scope mismatch');
-        }
-        var accessToken = requiredText(data.accessToken, 'access token');
-        var refreshToken = requiredText(data.refreshToken, 'refresh token');
-        var accessExpiresAt = tokenExpiresAt(accessToken);
-        if (refreshToken.length < 32 || accessExpiresAt <= now().getTime()) {
-          throw new Error('rotated device credentials are invalid');
-        }
-        var expiresAt = requiredText(session.expiresAt, 'session.expiresAt');
-        if (!Number.isFinite(Date.parse(expiresAt))) {
-          throw new Error('device session expiry is invalid');
+        var accessToken;
+        var refreshToken;
+        var accessExpiresAt;
+        var expiresAt;
+        try {
+          if (
+            !session ||
+            requiredText(session.id, 'session.id') !== credential.sessionId ||
+            requiredText(session.deploymentId, 'session.deploymentId') !== credential.deploymentId ||
+            requiredText(session.deviceId, 'session.deviceId') !== credential.deviceId ||
+            requiredText(session.ownerUserId, 'session.ownerUserId') !== credential.ownerUserId ||
+            !Array.isArray(session.scopes)
+          ) throw new Error('device refresh response scope mismatch');
+          accessToken = requiredText(data.accessToken, 'access token');
+          refreshToken = requiredText(data.refreshToken, 'refresh token');
+          accessExpiresAt = tokenExpiresAt(accessToken);
+          if (refreshToken.length < 32 || accessExpiresAt <= now().getTime()) {
+            throw new Error('rotated device credentials are invalid');
+          }
+          expiresAt = requiredText(session.expiresAt, 'session.expiresAt');
+          if (!Number.isFinite(Date.parse(expiresAt))) {
+            throw new Error('device session expiry is invalid');
+          }
+        } catch (_error) {
+          return requireRepair('device_refresh_response_invalid');
         }
         assertCurrentEpoch(operationEpoch);
         var currentStored = await localStorage.get([CREDENTIAL_KEY]);

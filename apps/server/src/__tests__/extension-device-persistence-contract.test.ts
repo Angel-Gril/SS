@@ -13,6 +13,18 @@ function modelBlock(name: string): string {
 }
 
 describe('extension device persistence contract', () => {
+  it('serializes active-session replacement by owner, deployment, and device', () => {
+    const repository = readFileSync(
+      new URL('../services/extension-device-session-prisma.ts', import.meta.url),
+      'utf8',
+    );
+    expect(repository).toContain('pg_advisory_xact_lock(hashtextextended($1, 0))');
+    expect(repository).toContain('SELECT 1::int AS "locked" FROM device_lock');
+    expect(repository).toMatch(
+      /owner_user_id" = \$1[\s\S]*deployment_id" = \$2[\s\S]*device_id" = \$3[\s\S]*status" = 'ACTIVE'/,
+    );
+  });
+
   it('stores only keyed digests for pairing and refresh credentials', () => {
     const pairing = modelBlock('ExtensionDevicePairingCode');
     const refresh = modelBlock('ExtensionDeviceRefreshCredential');

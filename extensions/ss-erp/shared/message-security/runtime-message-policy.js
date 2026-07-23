@@ -32,6 +32,8 @@
 
   var ERP_BRIDGE_TYPES = setOf([
     'ss-erp:ping',
+    'ss-erp:extension-device-status',
+    'ss-erp:extension-device-claim',
     'ss-erp:query-collect-status',
     'ss-erp:query-collect-batch-snapshot',
     'ss-erp:collect-product',

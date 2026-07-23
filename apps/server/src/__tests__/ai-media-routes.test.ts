@@ -851,7 +851,11 @@ describe('AI media workflow routes', () => {
       code: 1,
       data: {
         webMediaEnabled: true,
+        webMediaReason: 'global',
+        webMediaRevision: 'test-hook',
         workflowEnabled: true,
+        workflowReason: 'tenant_allowed',
+        workflowRevision: 0,
         operations: {
           IMAGE_TO_IMAGE: { enabled: true, ready: true, reasonCode: 'READY' },
           IMAGE_TRANSLATE: { enabled: true, ready: true, reasonCode: 'READY' },
@@ -859,6 +863,18 @@ describe('AI media workflow routes', () => {
       },
     });
     expect(JSON.stringify(response.json())).not.toContain('apiKey');
+  });
+
+  it('reports the workflow rollout blocker instead of collapsing it into a boolean', async () => {
+    const { app } = await build(false, 'owner-1', true);
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      workflowEnabled: false,
+      workflowReason: 'master_off',
+      workflowRevision: 0,
+    });
   });
 
   it('keeps paid image translation unavailable until sandbox evidence is verified', async () => {

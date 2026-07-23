@@ -26,6 +26,7 @@ assert.match(source, /\/api\/admin\/system-status\/integrations/, 'settings must
 assert.match(source, /runtimeSelections/, 'runtime selections must be passed into custom settings panels');
 assert.match(source, /VISIBLE_CONFIG_GROUPS/, 'settings must use an explicit visible-group allowlist');
 for (const hiddenKey of [
+  'ai_media_workflow_v2_rollout_policy',
   'source_workflow_rollout_policy',
   'source_ozon_publisher_browser_one_click_stage',
   'source_ozon_publisher_collect_publish_stage',

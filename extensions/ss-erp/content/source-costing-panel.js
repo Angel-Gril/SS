@@ -461,7 +461,9 @@
       state.sourceWorkflowHandoff = response && response.ok && response.handoff
         ? response.handoff
         : null;
-      state.sourceWorkbenchStatus = response && response.ok ? response.result || null : null;
+      state.sourceWorkbenchStatus = response && response.ok
+        ? response.result || { state: 'unavailable', reason: 'empty_response' }
+        : { state: 'unavailable', reason: 'runtime_unavailable' };
       state.sourceWorkbenchLaunch = response && response.ok ? response.launch || null : null;
       var listings = state.sourceWorkbenchStatus && state.sourceWorkbenchStatus.status
         && state.sourceWorkbenchStatus.status.listing
@@ -499,7 +501,7 @@
       if (requestSeq === state.sourceWorkbenchRequestSeq
         && currentSourceProductId() === sourceProductId) {
         state.sourceWorkflowHandoff = null;
-        state.sourceWorkbenchStatus = null;
+        state.sourceWorkbenchStatus = { state: 'unavailable', reason: 'runtime_unavailable' };
         state.sourceWorkbenchLaunch = null;
       }
     } finally {

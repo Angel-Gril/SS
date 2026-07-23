@@ -246,6 +246,7 @@
         "https://*.ss-erp.cn/*"
       ],
       "js": [
+        "shared/erp-adapter/deployment-defaults.js",
         "content/erp-collect-bridge.js"
       ],
       "run_at": "document_start"

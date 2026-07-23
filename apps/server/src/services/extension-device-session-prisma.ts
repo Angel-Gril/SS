@@ -59,6 +59,32 @@ interface SqlClient extends SqlTransaction {
   ): Promise<T>;
 }
 
+function isPostgresSerializationConflict(error: unknown): boolean {
+  const value = error && typeof error === 'object'
+    ? error as { code?: unknown; message?: unknown; meta?: unknown }
+    : {};
+  const meta = value.meta && typeof value.meta === 'object'
+    ? value.meta as { code?: unknown; message?: unknown }
+    : {};
+  return value.code === 'P2034'
+    || meta.code === '40001'
+    || String(value.message || meta.message || '').includes('could not serialize access');
+}
+
+async function runSerializableTransaction<T>(
+  client: SqlClient,
+  operation: (transaction: SqlTransaction) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await client.$transaction(operation, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      if (attempt === 2 || !isPostgresSerializationConflict(error)) throw error;
+    }
+  }
+  throw new Error('SERIALIZABLE_TRANSACTION_RETRY_EXHAUSTED');
+}
+
 type ClaimAttemptLimiter = ExtensionDeviceSessionRepository['consumePairingClaimAttemptBudget'];
 
 export interface PrismaExtensionDeviceSessionRepository
@@ -287,7 +313,7 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
     },
 
     async createPairingCode(input) {
-      return client.$transaction(async (tx) => {
+      return runSerializableTransaction(client, async (tx) => {
         const owner = await tx.$queryRawUnsafe<Array<{ id: string }>>(
           'SELECT "id" FROM "users" WHERE "id" = $1 FOR UPDATE',
           input.ownerUserId,
@@ -310,11 +336,11 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
           input.shopIds, input.scopes, input.deviceLabel, input.expiresAt, input.createdAt,
         );
         return { kind: 'created' as const, id };
-      }, { isolationLevel: 'Serializable' });
+      });
     },
 
     async claimPairingCodeAtomically(input) {
-      return client.$transaction(async (tx) => {
+      return runSerializableTransaction(client, async (tx) => {
         const rows = await tx.$queryRawUnsafe<PairingRow[]>(
           `SELECT p."id", p."actor_user_id" AS "actorUserId", p."owner_user_id" AS "ownerUserId",
                   p."status"::text AS "status", p."shop_ids" AS "shopIds", p."scopes",
@@ -356,6 +382,36 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
           input.now, pairing.id,
         );
         if (consumed.length !== 1) return { kind: 'invalid' as const };
+
+        const deviceLockKey = JSON.stringify([
+          pairing.ownerUserId,
+          input.deploymentId,
+          input.deviceId,
+        ]);
+        await tx.$queryRawUnsafe<Array<{ locked: number }>>(
+          `WITH device_lock AS (
+             SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+           )
+           SELECT 1::int AS "locked" FROM device_lock`,
+          deviceLockKey,
+        );
+        const replacedSessions = await tx.$queryRawUnsafe<Array<{
+          sessionId: string;
+          familyId: string;
+        }>>(
+          `SELECT s."id" AS "sessionId", f."id" AS "familyId"
+           FROM "extension_device_sessions" s
+           JOIN "extension_device_refresh_families" f ON f."session_id" = s."id"
+           WHERE s."owner_user_id" = $1 AND s."deployment_id" = $2
+             AND s."device_id" = $3 AND s."status" = 'ACTIVE'
+           FOR UPDATE OF s, f`,
+          pairing.ownerUserId, input.deploymentId, input.deviceId,
+        );
+        for (const session of replacedSessions) {
+          await revokeRefreshFamily(tx, session, 'PAIRING_APPROVED', input.now, {
+            actorUserId: pairing.actorUserId,
+          });
+        }
 
         await tx.$executeRawUnsafe(
           `INSERT INTO "extension_device_sessions"
@@ -409,7 +465,7 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
             expiresAt: input.sessionExpiresAt,
           },
         };
-      }, { isolationLevel: 'Serializable' });
+      });
     },
 
     async rotateRefreshCredentialOrRevokeReuse(input) {

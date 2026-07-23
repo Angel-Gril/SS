@@ -29,6 +29,7 @@ export interface AiImageConnectionResult {
   ok: true;
   provider: string;
   model: string;
+  verification: 'remote' | 'config-only';
   detail: string;
 }
 
@@ -684,7 +685,7 @@ export async function testAiImageProviderConnection(config: AiImageConnectionCon
     if (!config.apiKey.trim() || !config.model.trim()) {
       throw new AiImageJobError('INVALID_PROVIDER_CONFIG', 'DashScope API key and model are required');
     }
-    return { ok: true, provider: config.provider, model: config.model,
+    return { ok: true, provider: config.provider, model: config.model, verification: 'config-only',
       detail: 'DashScope configuration loaded; credentials will be verified by the first image job' };
   } else {
     throw new AiImageJobError('PROVIDER_DISABLED', 'AI image provider does not support a no-cost connection test');
@@ -693,5 +694,11 @@ export async function testAiImageProviderConnection(config: AiImageConnectionCon
     method: 'GET',
     headers: { Authorization: `Bearer ${config.apiKey}` },
   }, timeoutMs);
-  return { ok: true, provider: config.provider, model: config.model, detail: `${label} authentication and model access verified` };
+  return {
+    ok: true,
+    provider: config.provider,
+    model: config.model,
+    verification: 'remote',
+    detail: `${label} authentication and model access verified`,
+  };
 }

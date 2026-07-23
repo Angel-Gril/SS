@@ -5,6 +5,11 @@ import test from 'node:test';
 const layout = fs.readFileSync('apps/web/src/app/(dashboard)/layout.tsx', 'utf8');
 const sidebar = fs.readFileSync('apps/web/src/components/layout/sidebar.tsx', 'utf8');
 
+test('dashboard shell clips horizontal overflow without breaking sticky navigation', () => {
+  assert.match(layout, /relative min-h-screen flex overflow-x-clip bg-background/);
+  assert.doesNotMatch(layout, /overflow-x-hidden/);
+});
+
 test('dashboard navigation becomes a dismissible overlay without shrinking mobile content', () => {
   assert.match(layout, /mobileNavigationOpen/);
   assert.match(layout, /mobileOpen=\{mobileNavigationOpen\}/);

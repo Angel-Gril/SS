@@ -52,6 +52,12 @@ export interface ExtensionMediaOperationCapability {
   maxMaskBytes?: number;
 }
 
+export interface ExtensionMediaWorkflowDecision {
+  enabled: boolean;
+  revision: string | number;
+  reason: string;
+}
+
 export type ExtensionMediaOperationCapabilities = {
   [K in ExtensionMediaStandaloneOperation]: ExtensionMediaOperationCapability & { operation: K };
 };
@@ -59,6 +65,7 @@ export type ExtensionMediaOperationCapabilities = {
 export interface ExtensionMediaLaunchRoutesOptions {
   authenticateDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   featureFlags: Pick<SourceWorkflowFeatureFlagEvaluator, 'evaluate'>;
+  getMediaWorkflowDecision?: (ownerUserId: string) => Promise<ExtensionMediaWorkflowDecision>;
   loadContext(input: {
     ownerUserId: string;
     snapshotId: string;
@@ -70,11 +77,11 @@ export interface ExtensionMediaLaunchRoutesOptions {
   }): Promise<ExtensionMediaTranslationLaunchContext | null>;
   getCapability(input: {
     ownerUserId: string;
-    workflowDecision: SourceWorkflowFeatureDecision;
+    workflowDecision: ExtensionMediaWorkflowDecision;
   }): Promise<ExtensionMediaLaunchCapability>;
   getCapabilities?(input: {
     ownerUserId: string;
-    workflowDecision: SourceWorkflowFeatureDecision;
+    workflowDecision: ExtensionMediaWorkflowDecision;
   }): Promise<ExtensionMediaOperationCapabilities>;
 }
 
@@ -84,7 +91,9 @@ const CAPABILITY_REVISION_MAX_LENGTH = 200;
  * Feature revisions are operator-provided strings. Keep the client contract
  * bounded without silently making long revisions collide by truncation alone.
  */
-export function boundedExtensionMediaCapabilityRevision(values: readonly string[]): string {
+export function boundedExtensionMediaCapabilityRevision(
+  values: readonly (string | number)[],
+): string {
   const normalized = values.map((value) => String(value || '').trim() || 'unknown');
   const combined = normalized
     .filter((value, index) => normalized.indexOf(value) === index)
@@ -297,11 +306,15 @@ export async function extensionMediaLaunchRoutes(
       });
     }
 
-    let workflowDecision: SourceWorkflowFeatureDecision;
+    let workflowDecision: ExtensionMediaWorkflowDecision;
     let webDecision: SourceWorkflowFeatureDecision;
     try {
       [workflowDecision, webDecision] = await Promise.all([
-        options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: device.ownerUserId }),
+        options.getMediaWorkflowDecision
+          ? options.getMediaWorkflowDecision(device.ownerUserId)
+          : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', {
+            ownerUserId: device.ownerUserId,
+          }),
         options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: device.ownerUserId }),
       ]);
     } catch {

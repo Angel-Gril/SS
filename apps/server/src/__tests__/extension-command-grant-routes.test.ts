@@ -186,6 +186,7 @@ describe('extension command grant routes', () => {
     expect(commandRegistration).toBeGreaterThan(deviceStart);
     expect(commandRegistration).toBeLessThan(logisticsStart);
     expect(index).toContain('resolveExtensionCommandGrantSecret');
+    expect(index.match(/getMediaWorkflowDecision: getAiMediaRolloutDecision/gu)).toHaveLength(3);
   });
 
   it('issues a no-store grant bound only to authenticated device identity and resolved context', async () => {
@@ -969,6 +970,40 @@ describe('extension command grant routes', () => {
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
       command: { ...command, sourceMediaKeys: ['media-main-1', 'missing-media'] },
     })).resolves.toEqual({ kind: 'stale' });
+  });
+
+  it.each([
+    ['tenant_not_allowed', 'unavailable'],
+    ['invalid_policy', 'rollout_unavailable'],
+    ['policy_invalid', 'rollout_unavailable'],
+  ] as const)('maps a canonical AI media denial reason %s to %s', async (reason, kind) => {
+    const evaluate = vi.fn(async () => ({
+      enabled: true, legacyAllowed: false, captureStage: null,
+      reason: 'pilot_match' as const, revision: 'source-policy-1',
+    }));
+    const getMediaWorkflowDecision = vi.fn(async () => ({
+      enabled: false, reason, revision: 9,
+    }));
+    const loadMediaLaunchContext = vi.fn();
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate },
+      getMediaWorkflowDecision,
+      loadShop: vi.fn(),
+      loadDraft: vi.fn(),
+      loadMediaLaunchContext,
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: {
+        schemaVersion: 'ai-media-workflow-create/v2', action: 'CREATE_WORKFLOW',
+        operation: 'IMAGE_TO_IMAGE', sourceMediaKeys: ['media-main-1'],
+        prompt: 'Improve the background.', negativePrompt: '', draftRevision: 11,
+        workflowOperationKey: 'extension-media-workflow:canonical-deny',
+      },
+    })).resolves.toEqual({ kind });
+    expect(getMediaWorkflowDecision).toHaveBeenCalledWith('owner-1');
+    expect(loadMediaLaunchContext).not.toHaveBeenCalled();
   });
 
   it('rejects a translation create command when its source or draft revision is stale', async () => {

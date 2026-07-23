@@ -113,6 +113,7 @@ import {
 } from './routes/extension-media-launch.js';
 import { extensionMediaEditRoutes } from './routes/extension-media-edit.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
+import { getAiMediaRolloutDecision } from './services/ai-media-rollout.js';
 import {
   SourceListingWorkflowError,
   createSourceListingWorkflowService,
@@ -1153,6 +1154,7 @@ if (isExtensionDeviceAuthEnabled()) {
     }),
     resolveCommand: createSourceWorkflowCommandResolver({
       featureFlags: sourceWorkflowFeatureFlags,
+      getMediaWorkflowDecision: getAiMediaRolloutDecision,
       loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
         where: { id: shopId, userId: ownerUserId },
         select: { id: true, userId: true, platform: true, status: true },
@@ -1324,6 +1326,7 @@ if (isExtensionDeviceAuthEnabled()) {
   await app.register(extensionMediaLaunchRoutes, {
     prefix: '/api/extension-device/source-workbench',
     featureFlags: sourceWorkflowFeatureFlags,
+    getMediaWorkflowDecision: getAiMediaRolloutDecision,
     authenticateDevice: authenticateExtensionDevice({
       config: extensionDeviceAuthConfig,
       requiredScopes: ['listing:review'],
@@ -1390,7 +1393,7 @@ if (isExtensionDeviceAuthEnabled()) {
         ready: readiness.ready,
         reasonCode: readiness.reasonCode,
         reason: readiness.reason,
-        revision: workflowDecision.revision,
+        revision: String(workflowDecision.revision),
         testOnly: true as const,
         operation: 'IMAGE_TRANSLATE' as const,
         sourceLanguage: 'zh' as const,
@@ -1452,7 +1455,7 @@ if (isExtensionDeviceAuthEnabled()) {
         ready: readiness.ready,
         reasonCode: readiness.reasonCode,
         reason: readiness.reason,
-        revision: workflowDecision.revision,
+        revision: String(workflowDecision.revision),
         testOnly: readiness.testOnly === true,
         operation: name,
       });
@@ -1466,7 +1469,7 @@ if (isExtensionDeviceAuthEnabled()) {
           ready: translation.ready,
           reasonCode: translation.reasonCode,
           reason: translation.reason,
-          revision: workflowDecision.revision,
+          revision: String(workflowDecision.revision),
           testOnly: true,
           operation: 'IMAGE_TRANSLATE' as const,
           sourceLanguage: 'zh' as const,
@@ -1484,6 +1487,7 @@ if (isExtensionDeviceAuthEnabled()) {
   await app.register(extensionMediaEditRoutes, {
     prefix: '/api/extension-device/source-workbench',
     featureFlags: sourceWorkflowFeatureFlags,
+    getMediaWorkflowDecision: getAiMediaRolloutDecision,
     authenticateDevice: authenticateExtensionDevice({
       config: extensionDeviceAuthConfig,
       requiredScopes: ['media:execute'],

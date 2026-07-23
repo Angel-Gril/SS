@@ -107,8 +107,106 @@ test('extension settings default is generated from the deployment environment', 
   assert.match(extensionSettings, /deployment-defaults\.js/);
   assert.match(extensionSettingsScript, /SS_ERP_DEPLOYMENT_DEFAULTS/);
   assert.match(extensionBuild, /process\.env\.NEXT_PUBLIC_USER_HOSTNAME/);
+  assert.match(extensionBuild, /process\.env\.NEXT_PUBLIC_ADMIN_HOSTNAME/);
   assert.match(extensionBuild, /process\.env\.NEXT_PUBLIC_API_BASE_URL/);
   assert.match(extensionBuild, /https:\/\/app\.ss-erp\.com/);
+});
+
+test('cloud extension packages keep Web navigation and API claim origins separate', () => {
+  const outRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-erp-extension-origins-'));
+  const result = spawnSync(process.execPath, [
+    'scripts/build-extension-package.mjs', 'cloud',
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EXTENSION_OUT_DIR: outRoot,
+      EXTENSION_CLOUD_BASE_URL: 'https://app.ss-erp.cn',
+      NEXT_PUBLIC_USER_HOSTNAME: 'app.ss-erp.cn',
+      NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.ss-erp.cn',
+      NEXT_PUBLIC_API_BASE_URL: 'https://ss-erp.cn',
+    },
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const defaults = read(path.join(
+    outRoot,
+    'ss-erp-cloud/shared/erp-adapter/deployment-defaults.js',
+  ));
+  assert.match(defaults, /erpBaseUrl: "https:\/\/app\.ss-erp\.cn"/);
+  assert.match(defaults, /erpAdminBaseUrl: "https:\/\/admin\.ss-erp\.cn"/);
+  assert.match(defaults, /erpApiBaseUrl: "https:\/\/ss-erp\.cn"/);
+});
+
+test('cloud extension packaging rejects mixed SS ERP roots without blocking custom or local origins', () => {
+  const outRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-erp-extension-root-pinning-'));
+  const build = (buildTarget, env) => spawnSync(process.execPath, [
+    'scripts/build-extension-package.mjs', buildTarget,
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, EXTENSION_OUT_DIR: outRoot, ...env },
+  });
+
+  const international = build('cloud', {
+    EXTENSION_CLOUD_BASE_URL: 'https://app.ss-erp.com',
+    NEXT_PUBLIC_USER_HOSTNAME: 'app.ss-erp.com',
+    NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.ss-erp.com',
+    NEXT_PUBLIC_API_BASE_URL: 'https://ss-erp.com',
+  });
+  assert.equal(international.status, 0, `${international.stdout}\n${international.stderr}`);
+
+  const mixed = build('cloud', {
+    EXTENSION_CLOUD_BASE_URL: 'https://app.ss-erp.cn',
+    NEXT_PUBLIC_USER_HOSTNAME: 'app.ss-erp.cn',
+    NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.ss-erp.cn',
+    NEXT_PUBLIC_API_BASE_URL: 'https://ss-erp.com',
+  });
+  assert.notEqual(mixed.status, 0);
+  assert.match(mixed.stderr, /must use the same SS ERP deployment root/);
+
+  const insecure = build('cloud', {
+    EXTENSION_CLOUD_BASE_URL: 'https://app.ss-erp.com',
+    NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.ss-erp.com',
+    NEXT_PUBLIC_API_BASE_URL: 'http://ss-erp.com',
+  });
+  assert.notEqual(insecure.status, 0);
+  assert.match(insecure.stderr, /API URL must use HTTPS/);
+
+  const custom = build('cloud', {
+    EXTENSION_CLOUD_BASE_URL: 'https://erp.internal.example',
+    NEXT_PUBLIC_USER_HOSTNAME: 'erp.internal.example',
+    NEXT_PUBLIC_ADMIN_HOSTNAME: 'admin.internal.example',
+    NEXT_PUBLIC_API_BASE_URL: 'https://api.internal.example',
+  });
+  assert.equal(custom.status, 0, `${custom.stdout}\n${custom.stderr}`);
+  const customPackageDir = path.join(outRoot, 'ss-erp-cloud');
+  const customManifest = JSON.parse(read(path.join(customPackageDir, 'manifest.json')));
+  const customErpBridge = customManifest.content_scripts.find((entry) =>
+    entry.js.includes('content/erp-collect-bridge.js'));
+  assert.ok(customErpBridge);
+  for (const match of [
+    'https://erp.internal.example/*',
+    'https://admin.internal.example/*',
+  ]) {
+    assert.ok(customManifest.externally_connectable.matches.includes(match));
+    assert.ok(customErpBridge.matches.includes(match));
+    assert.ok(customManifest.web_accessible_resources.every((group) => group.matches.includes(match)));
+  }
+  assert.ok(customManifest.host_permissions.includes('https://api.internal.example/*'));
+  assert.equal(JSON.stringify(customManifest).includes('*.internal.example'), false);
+  const strictVerify = spawnSync(process.execPath, ['scripts/verify-extension-package.mjs'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EXTENSION_DIR: customPackageDir,
+      STRICT_EXTENSION_CHECK: '1',
+    },
+  });
+  assert.equal(strictVerify.status, 0, `${strictVerify.stdout}\n${strictVerify.stderr}`);
+
+  const local = build('local', {
+    EXTENSION_LOCAL_BASE_URL: 'http://127.0.0.1:3001',
+  });
+  assert.equal(local.status, 0, `${local.stdout}\n${local.stderr}`);
 });
 
 test('deployment validation accepts a complete host set or no host overrides', () => {

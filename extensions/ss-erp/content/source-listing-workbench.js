@@ -61,6 +61,93 @@
     return action === 'CANCEL' ? '取消' : '重试';
   }
 
+  function mediaOperationDefinitions() {
+    return [
+      { operation: 'IMAGE_TO_IMAGE', label: '参考生图' },
+      { operation: 'IMAGE_TRANSLATE', label: '图片翻译' },
+      { operation: 'FULL_EDIT', label: '全图编辑' },
+      { operation: 'INPAINT', label: '局部重绘' },
+    ];
+  }
+
+  function mediaCapabilityReason(definition, capability) {
+    var label = definition && definition.label || '媒体操作';
+    var reasonCode = String(capability && capability.reasonCode || '').trim();
+    if (reasonCode === 'AI_MEDIA_WORKFLOW_DISABLED') {
+      return 'AI 媒体工作流未对当前账号开放。';
+    }
+    if (reasonCode === 'SOURCE_LISTING_WEB_MEDIA_DISABLED') {
+      return 'Web 媒体工作台未对当前账号开放。';
+    }
+    if (reasonCode === 'AI_MEDIA_OPERATION_DISABLED'
+      || reasonCode === 'MEDIA_CREATE_DISABLED') {
+      return label + '当前关闭。';
+    }
+    if (reasonCode === 'PROVIDER_NOT_READY'
+      || reasonCode === 'MEDIA_PROVIDER_NOT_ALLOWED') {
+      return 'Provider 尚未完成生产验证。';
+    }
+    if (reasonCode === 'STORAGE_NOT_READY'
+      || reasonCode === 'MEDIA_STORAGE_NOT_READY') {
+      return '需要可用的对象存储，当前存储配置不兼容。';
+    }
+    return label + '当前不可用，请在 ERP 管理后台查看能力状态。';
+  }
+
+  function renderWorkbenchAvailability(container, result) {
+    var heading = element('div', 'ss-erp-source-workbench-heading');
+    heading.appendChild(element('strong', '', 'ERP 商品工作流'));
+    heading.appendChild(element('span', 'is-stale', '尚未就绪'));
+    container.appendChild(heading);
+    var scopeLabels = {
+      'listing:review': '商品工作台审核',
+      'media:execute': 'AI 媒体执行',
+      'listing:write': '商品草稿编辑',
+      'capture:write': '来源商品采集',
+    };
+    var message = result.state === 'unpaired'
+      ? '扩展尚未连接 ERP，请先完成扩展连接。'
+      : result.state === 'scope_required'
+        ? '设备缺少“' + (scopeLabels[result.scope] || result.scope || '所需功能')
+          + '”权限，请在 ERP 扩展连接中更新授权。'
+      : result.state === 'disabled'
+        ? '扩展工作台未开放，请在管理员后台开启扩展工作台及当前账号发布策略。'
+        : result.reason === 'source_handoff_mismatch'
+          ? '当前商品尚未进入 ERP 工作流，请先采集货源到 ERP。'
+          : 'ERP 商品工作流状态暂不可用，请检查扩展连接后重试。';
+    container.appendChild(element('p', 'ss-erp-source-workbench-empty', message));
+  }
+
+  function renderMediaLaunchStatus(container, listing, options) {
+    var launch = options && options.launch;
+    if (!listing || !launch || launch.state === 'ready') return;
+    var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create');
+    drawer.open = true;
+    drawer.appendChild(element('summary', '', 'AI 修图与生图'));
+    var operations = launch.contractVersion === 2 && launch.operations;
+    if (operations) {
+      mediaOperationDefinitions().forEach(function (definition) {
+        var capability = operations[definition.operation];
+        if (!capability || capability.ready === true) return;
+        drawer.appendChild(element(
+          'p',
+          'ss-erp-source-workbench-empty',
+          definition.label + '：' + mediaCapabilityReason(definition, capability),
+        ));
+      });
+    } else {
+      var legacyCapability = launch.capability;
+      drawer.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-empty',
+        legacyCapability && legacyCapability.reasonCode
+          ? mediaCapabilityReason({ label: '图片翻译' }, legacyCapability)
+          : '媒体能力当前未开放。',
+      ));
+    }
+    container.appendChild(drawer);
+  }
+
   function renderReviewAction(container, mediaItems, options) {
     if (!options || typeof options.onReview !== 'function') return;
     var reviewable = mediaItems.find(function (item) {
@@ -197,18 +284,18 @@
     });
     drawer.appendChild(element('summary', '', 'AI 修图与生图'));
     var segmented = element('div', 'ss-erp-source-workbench-operation-tabs');
-    [
-      { operation: 'IMAGE_TO_IMAGE', label: '参考生图' },
-      { operation: 'FULL_EDIT', label: '全图编辑' },
-      { operation: 'INPAINT', label: '局部重绘' },
-    ].forEach(function (definition) {
+    mediaOperationDefinitions().filter(function (definition) {
+      return definition.operation !== 'IMAGE_TRANSLATE';
+    }).forEach(function (definition) {
       var capability = operations[definition.operation];
       var button = element('button', definition.operation === draft.operation ? 'is-active' : '', definition.label);
       button.type = 'button';
       button.setAttribute('data-media-operation', definition.operation);
       button.setAttribute('aria-pressed', definition.operation === draft.operation ? 'true' : 'false');
       button.disabled = !capability || capability.enabled !== true;
-      button.title = capability && capability.ready === true ? definition.label : String(capability && capability.reason || definition.label + '当前不可用');
+      button.title = capability && capability.ready === true
+        ? definition.label
+        : mediaCapabilityReason(definition, capability);
       button.addEventListener('click', function (event) {
         if (!event || event.isTrusted !== true || button.disabled) return;
         emit({
@@ -508,7 +595,7 @@
         'ss-erp-source-workbench-empty',
         listings.length > 1
           ? '请选择要处理的店铺草稿。'
-          : '已保存采集快照，前往 ERP 选择店铺和 SKU 后继续。',
+          : '已保存采集快照。可在 Web ERP 的采集详情中使用 AI 图片工作台；扩展内处理需先创建店铺草稿。',
       ));
       renderMediaTask(container, status, mediaItems, options);
       return;
@@ -536,6 +623,7 @@
         listing.blockers[0].message,
       ));
     }
+    renderMediaLaunchStatus(container, listing, options);
     renderStandaloneMediaLaunch(container, listing, options);
     renderTranslationLaunch(container, listing, options);
     renderMediaTask(container, status, mediaItems, options);
@@ -545,11 +633,15 @@
   function render(container, result, options) {
     if (!container) return;
     clear(container);
-    if (!result || result.state !== 'ready' || !result.status) {
+    if (!result) {
       container.hidden = true;
       return;
     }
     container.hidden = false;
+    if (result.state !== 'ready' || !result.status) {
+      renderWorkbenchAvailability(container, result);
+      return;
+    }
     renderReady(container, result.status, options || null);
   }
 

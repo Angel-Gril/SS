@@ -212,6 +212,7 @@ const GROUP_ORDER = [
 
 const VISIBLE_CONFIG_GROUPS = new Set(GROUP_ORDER);
 const HIDDEN_CONFIG_KEYS = new Set([
+  'ai_media_workflow_v2_rollout_policy',
   'source_workflow_rollout_policy',
   'source_ozon_publisher_browser_one_click_stage',
   'source_ozon_publisher_collect_publish_stage',
@@ -2227,14 +2228,14 @@ const AI_IMAGE_PROVIDER_PRESETS = [
   {
     value: 'dashscope-wanx',
     label: '阿里云百炼 · 通义万相',
-    desc: '适合国内部署，使用 DashScope 图像生成接口',
+    desc: '国内部署候选；正式任务需完成精确模型、成本与质量验收',
     baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     model: 'wanx2.1-t2i-turbo',
   },
   {
     value: 'openai-images',
     label: 'OpenAI Images',
-    desc: '适合国外部署，使用 OpenAI Images API',
+    desc: '国外部署候选；正式任务需完成精确模型、成本与质量验收',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-image-1',
   },
@@ -2301,7 +2302,7 @@ function AiSettingsPanel({
   };
   const isSavingProvider = savingKey === 'group:AI 服务';
   const isSavingLimits = savingKey === 'group:AI 额度';
-  const isSavingPrompts = savingKey === 'group:AI 提示词';
+  const isSavingPrompts = savingKey === 'group:AI 兼容提示词';
   const isSavingFeatures = savingKey === 'group:AI 功能开关';
   const providerReady =
     provider === 'custom' &&
@@ -2354,7 +2355,11 @@ function AiSettingsPanel({
     setTestingImageProvider(true);
     setImageTestResult(null);
     try {
-      const res = await api.post<{ detail?: string; provider?: string }>(
+      const res = await api.post<{
+        detail?: string;
+        provider?: string;
+        verification?: 'remote' | 'config-only';
+      }>(
         '/api/admin/system-status/test/ai-image',
         {
           provider: imageProvider,
@@ -2363,14 +2368,18 @@ function AiSettingsPanel({
           model: editing.ai_image_model || '',
         },
       );
-      const message =
-        res.data?.detail ||
-        res.msg ||
-        (res.code === 1 ? '供应商连接正常' : '连接测试失败，请检查配置');
+      const configOnly = res.code === 1 && res.data?.verification === 'config-only';
+      const message = configOnly
+        ? '配置格式有效；本次未请求供应商，API Key 与模型需在受控图片任务中验证。'
+        : res.data?.detail ||
+          res.msg ||
+          (res.code === 1 ? '供应商连接正常' : '连接测试失败，请检查配置');
       if (imageTestFingerprintRef.current !== testedFingerprint) return;
       setImageTestResult({ ok: res.code === 1, message, fingerprint: testedFingerprint });
       toast({
-        title: res.code === 1 ? '生图连接正常' : '生图连接失败',
+        title: res.code === 1
+          ? configOnly ? '配置格式有效，凭据尚未验证' : '鉴权与模型访问正常'
+          : '供应商配置检查失败',
         description: message,
         ...(res.code === 1 ? {} : { variant: 'destructive' as const }),
       });
@@ -2378,7 +2387,7 @@ function AiSettingsPanel({
       const message = error instanceof Error ? error.message : '网络请求失败';
       if (imageTestFingerprintRef.current !== testedFingerprint) return;
       setImageTestResult({ ok: false, message, fingerprint: testedFingerprint });
-      toast({ title: '生图连接失败', description: message, variant: 'destructive' });
+      toast({ title: '供应商配置检查失败', description: message, variant: 'destructive' });
     } finally {
       setTestingImageProvider(false);
     }
@@ -2509,15 +2518,17 @@ function AiSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">AI 生图基础平台</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    任务与存储基础已就绪。当前仅支持 text-to-image 适配器验证；真实 Provider
-                    还需通过精确能力、成本和配置冻结门禁后才能进入任务队列。
+                    此处保存供应商参数。OpenAI-compatible 会检查鉴权与模型访问；DashScope
+                    当前只校验配置格式。真实 Provider 的生产任务仍受精确模型、成本、租户和
+                    费用门禁限制；检查通过不会自动开启工作流。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant="outline">任务队列：基础就绪</Badge>
                     <Badge variant="outline">对象存储：基础就绪</Badge>
                     <Badge variant={imageProviderReady ? 'default' : 'secondary'}>
-                      {imageProviderReady ? '供应商配置完整' : '等待供应商配置'}
+                      {imageProviderReady ? '配置项已填写' : '等待供应商配置'}
                     </Badge>
+                    <Badge variant="warning">生产调度：尚未验收</Badge>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2532,7 +2543,7 @@ function AiSettingsPanel({
                     ) : (
                       <CheckCircle2 className="h-3.5 w-3.5" />
                     )}
-                    <span className="ml-1">检查生图配置</span>
+                    <span className="ml-1">检查供应商配置</span>
                   </Button>
                   <Button
                     size="sm"
@@ -2590,7 +2601,8 @@ function AiSettingsPanel({
               </div>
 
               <p className="text-xs text-muted-foreground">
-                测试当前表单配置；只验证配置与供应商连通性，不消耗用户每日图片额度。
+                检查当前表单配置；不会生成图片、不消耗图片额度，也不会改变工作流发布状态。
+                DashScope 的 API Key 不会在此步骤联网验证。
               </p>
 
               {imageTestResult?.fingerprint === imageTestFingerprint && (
@@ -2673,14 +2685,24 @@ function AiSettingsPanel({
               </div>
             </section>
 
-            <AiPromptTemplateEditor />
+            <section className="space-y-2">
+              <div>
+                <h3 className="text-sm font-medium">新版工作流 Prompt Registry</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  来源商品上架 V2 的图片策展、图片翻译、全图编辑与局部重绘，以及独立文生图
+                  任务使用这里发布的版本化模板；参考改图当前冻结用户提示词，不使用 Registry。
+                </p>
+              </div>
+              <AiPromptTemplateEditor />
+            </section>
 
             <section className="space-y-3 rounded-md border p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">功能与额度</h3>
                   <p className="text-xs text-muted-foreground">
-                    缓存命中不扣用户额度；额度只限制新的外部 API 调用。当前图片链路仅开放文生图。
+                    缓存命中不扣用户额度；功能开关只表达操作意图，生产调用仍需通过 Provider、
+                    成本、租户和费用门禁。
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -2809,15 +2831,18 @@ function AiSettingsPanel({
             </section>
 
             <details className="rounded-md border p-4">
-              <summary className="cursor-pointer text-sm font-medium">提示词</summary>
+              <summary className="cursor-pointer text-sm font-medium">
+                兼容提示词（类目翻译 / 旧商品草稿）
+              </summary>
               <div className="mt-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    类目翻译和商品生成提示词分开保存，避免互相污染缓存。
+                    类目自动翻译仍使用这里的类目提示词；旧商品详情草稿使用标题和描述提示词。
+                    来源商品上架 V2 使用上方 Prompt Registry。
                   </p>
                   <Button
                     size="sm"
-                    onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 提示词')}
+                    onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 兼容提示词')}
                     disabled={savingKey !== null}
                   >
                     {isSavingPrompts ? (
@@ -2825,7 +2850,7 @@ function AiSettingsPanel({
                     ) : (
                       <Save className="h-3.5 w-3.5" />
                     )}
-                    <span className="ml-1">保存提示词</span>
+                    <span className="ml-1">保存兼容提示词</span>
                   </Button>
                 </div>
                 <div className="grid gap-3">

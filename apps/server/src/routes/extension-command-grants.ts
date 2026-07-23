@@ -21,6 +21,12 @@ import {
 } from '../services/extension-media-review-commands.js';
 import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
 
+interface MediaWorkflowRolloutDecision {
+  enabled: boolean;
+  revision: string | number;
+  reason: string;
+}
+
 interface CommandDeviceContext {
   sessionId: string;
   tokenId: string;
@@ -53,6 +59,7 @@ export type ExtensionCommandResolution =
 
 export interface SourceWorkflowCommandResolverOptions {
   featureFlags: SourceWorkflowFeatureFlagEvaluator;
+  getMediaWorkflowDecision?: (ownerUserId: string) => Promise<MediaWorkflowRolloutDecision>;
   loadShop(input: {
     shopId: string;
     ownerUserId: string;
@@ -146,7 +153,16 @@ const mediaWorkflowCommandSchema = z.object({
 }).strict();
 
 function rolloutUnavailableReason(reason: string) {
-  return ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(reason);
+  return ['invalid_policy', 'policy_invalid', 'context_invalid', 'config_unavailable'].includes(reason);
+}
+
+function mediaWorkflowDecision(
+  options: SourceWorkflowCommandResolverOptions,
+  ownerUserId: string,
+): Promise<MediaWorkflowRolloutDecision> {
+  return options.getMediaWorkflowDecision
+    ? options.getMediaWorkflowDecision(ownerUserId)
+    : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId });
 }
 
 export function createSourceWorkflowCommandResolver(
@@ -214,7 +230,7 @@ export function createSourceWorkflowCommandResolver(
             deviceSessionId: input.sessionId,
           }),
           Promise.all([
-            options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: input.ownerUserId }),
+            mediaWorkflowDecision(options, input.ownerUserId),
             options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: input.ownerUserId }),
           ]),
         ]);
@@ -223,7 +239,7 @@ export function createSourceWorkflowCommandResolver(
       }
       if (!extensionRollout.enabled || mediaRollouts.some((decision) => !decision.enabled)) {
         const unavailable = [extensionRollout, ...mediaRollouts]
-          .find((decision) => ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(decision.reason));
+          .find((decision) => rolloutUnavailableReason(decision.reason));
         return unavailable ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
       }
       let shop: Awaited<ReturnType<SourceWorkflowCommandResolverOptions['loadShop']>>;
@@ -391,7 +407,7 @@ export function createSourceWorkflowCommandResolver(
               deviceSessionId: input.sessionId,
             }),
             Promise.all([
-              options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: input.ownerUserId }),
+              mediaWorkflowDecision(options, input.ownerUserId),
               options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: input.ownerUserId }),
             ]),
           ]);
@@ -400,7 +416,7 @@ export function createSourceWorkflowCommandResolver(
         }
         if (!extensionRollout.enabled || mediaRollouts.some((decision) => !decision.enabled)) {
           const unavailable = [extensionRollout, ...mediaRollouts]
-            .find((decision) => ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(decision.reason));
+            .find((decision) => rolloutUnavailableReason(decision.reason));
           return unavailable ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
         }
         let shop: Awaited<ReturnType<SourceWorkflowCommandResolverOptions['loadShop']>>;
@@ -518,9 +534,7 @@ export function createSourceWorkflowCommandResolver(
         let webMediaRollout;
         try {
           [mediaWorkflowRollout, webMediaRollout] = await Promise.all([
-            options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', {
-              ownerUserId: input.ownerUserId,
-            }),
+            mediaWorkflowDecision(options, input.ownerUserId),
             options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', {
               ownerUserId: input.ownerUserId,
             }),

@@ -141,6 +141,85 @@ describePostgres('extension device PostgreSQL integration', () => {
     ]);
   });
 
+  it('atomically replaces the active session when the same device updates its authorization', async () => {
+    const seed = await seedOwnerAndShop(first, 'reauthorize');
+    const { repository, service } = serviceFor(first);
+    const firstPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['logistics:read'],
+    });
+    const deviceId = `${seed.prefix}_device`;
+    const original = await service.claimPairingCode({
+      code: firstPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    const replacementPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['capture:write', 'media:execute'],
+    });
+    const replacement = await service.claimPairingCode({
+      code: replacementPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+
+    expect(replacement.session.id).not.toBe(original.session.id);
+    expect(replacement.session.scopes).toEqual(['capture:write', 'media:execute']);
+    expect((await repository.loadAuthorization(original.session.id))?.status).toBe('REVOKED');
+    expect((await repository.loadAuthorization(replacement.session.id))?.status).toBe('ACTIVE');
+    const active = await first.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(*) AS "count" FROM "extension_device_sessions"
+       WHERE "owner_user_id" = $1 AND "device_id" = $2 AND "status" = 'ACTIVE'`,
+      seed.ownerUserId, deviceId,
+    );
+    expect(Number(active[0]?.count || 0)).toBe(1);
+  });
+
+  it('serializes two concurrent authorization replacements for the same device', async () => {
+    const seed = await seedOwnerAndShop(first, 'concurrent_reauthorize');
+    const firstClient = serviceFor(first);
+    const secondClient = serviceFor(second);
+    const pairings = await Promise.all([
+      firstClient.service.createPairingCode({
+        actorUserId: seed.ownerUserId,
+        ownerUserId: seed.ownerUserId,
+        actorParentId: null,
+        shopIds: [seed.shopId],
+        scopes: ['capture:write'],
+      }),
+      secondClient.service.createPairingCode({
+        actorUserId: seed.ownerUserId,
+        ownerUserId: seed.ownerUserId,
+        actorParentId: null,
+        shopIds: [seed.shopId],
+        scopes: ['media:execute'],
+      }),
+    ]);
+    const deviceId = `${seed.prefix}_device`;
+
+    await Promise.all(pairings.map((pairing, index) => (
+      (index === 0 ? firstClient : secondClient).service.claimPairingCode({
+        code: pairing.code,
+        deviceId,
+        deploymentId: authConfig.deploymentId,
+      })
+    )));
+
+    const active = await first.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(*) AS "count" FROM "extension_device_sessions"
+       WHERE "owner_user_id" = $1 AND "device_id" = $2 AND "status" = 'ACTIVE'`,
+      seed.ownerUserId, deviceId,
+    );
+    expect(Number(active[0]?.count || 0)).toBe(1);
+  });
+
   it('treats a transferred shop as a revoked known grant during live authorization', async () => {
     const seed = await seedOwnerAndShop(first, 'transfer');
     const { repository, service } = serviceFor(first);

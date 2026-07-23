@@ -872,13 +872,47 @@
     });
   }
 
-  // Check ERP connection
-  function checkErpConnection() {
+  function erpEndpointHost(value) {
+    var endpoint = normalizeErpBaseUrl(value || '');
+    try {
+      return endpoint ? new URL(endpoint).host : '';
+    } catch (_error) {
+      return endpoint.replace(/^https?:\/\//, '');
+    }
+  }
+
+  function renderScopedDeviceStatus(deviceStatus) {
+    if (!deviceStatus) return false;
+    var statePolicy = globalThis.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE;
+    if (!statePolicy || typeof statePolicy.isScopedStateAuthoritative !== 'function') {
+      setStatus(erpStatusRow, false, '设备状态模块不可用');
+      return true;
+    }
+    if (!statePolicy.isScopedStateAuthoritative(deviceStatus.state)) return false;
+    var deviceHost = erpEndpointHost(deviceStatus.endpoint);
+    if (deviceStatus.state === 'paired') {
+      setStatus(erpStatusRow, true, deviceHost ? ('设备已连接 · ' + deviceHost) : '设备已连接');
+    } else if (deviceStatus.state === 'invalid') {
+      setStatus(erpStatusRow, false, deviceHost ? ('设备授权失效 · ' + deviceHost) : '设备授权失效');
+    } else if (deviceStatus.state === 'unreachable') {
+      setStatus(erpStatusRow, false, deviceHost ? ('设备验证失败 · ' + deviceHost) : '设备验证失败');
+    } else {
+      setStatus(erpStatusRow, false, deviceHost ? ('设备待授权 · ' + deviceHost) : '设备等待 ERP 授权');
+    }
+    return true;
+  }
+
+  function checkLegacyErpConnection(deviceStatus) {
+    if (renderScopedDeviceStatus(deviceStatus)) return;
     getErpConnectionStorage([], function (conn) {
       var baseUrl = conn.baseUrl;
       var token = conn.token;
       if (!baseUrl || !token) {
-        setStatus(erpStatusRow, false, '未配置');
+        setStatus(
+          erpStatusRow,
+          false,
+          deviceStatus && deviceStatus.state === 'unconfigured' ? '未检测到 ERP' : '未配置'
+        );
         return;
       }
 
@@ -888,9 +922,13 @@
       }).then(function (res) {
         return res.json().catch(function () { return null; }).then(function (data) {
           if (res.ok && data && data.code === 1 && data.data) {
-            setStatus(erpStatusRow, true, formatErpCollectTargetLabel({ baseUrl: baseUrl, user: data.data }).replace(/[（）]/g, ''));
+            setStatus(
+              erpStatusRow,
+              true,
+              '兼容模式 · ' + formatErpCollectTargetLabel({ baseUrl: baseUrl, user: data.data }).replace(/[（）]/g, '')
+            );
           } else if (res.ok) {
-            setStatus(erpStatusRow, true, baseUrl.replace(/https?:\/\//, ''));
+            setStatus(erpStatusRow, true, '兼容模式 · ' + baseUrl.replace(/https?:\/\//, ''));
           } else {
             setStatus(erpStatusRow, false, 'Token 无效');
           }
@@ -898,6 +936,15 @@
       }).catch(function () {
         setStatus(erpStatusRow, false, '无法连接');
       });
+    });
+  }
+
+  // Prefer the scoped, rotating device session used by the source/AI workbench.
+  // Legacy account tokens remain a compatibility fallback for older collection actions.
+  function checkErpConnection() {
+    sendRuntimeMessage({ type: 'ss-erp:extension-device-status', verify: true }, function (response) {
+      var deviceStatus = response && response.ok && response.data;
+      checkLegacyErpConnection(deviceStatus || null);
     });
   }
 

@@ -94,9 +94,12 @@ test('production env example documents the disabled-by-default device auth rollo
     'EXTENSION_AUTH_MODE',
     'LOGISTICS_DISTRIBUTION_ENABLED',
     'NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED',
+    'EXTENSION_DEVICE_AUTH_ENABLED',
+    'NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED',
     'SS_ERP_DEPLOYMENT_ID',
     'AUTH_JWT_ISSUER',
     'EXTENSION_DEVICE_JWT_SECRET',
+    'EXTENSION_COMMAND_GRANT_SECRET',
     'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS',
   ]) {
     assert.match(source, new RegExp(`^${key}=`, 'm'));
@@ -104,4 +107,22 @@ test('production env example documents the disabled-by-default device auth rollo
   assert.match(source, /^EXTENSION_AUTH_MODE=compat\r?$/m);
   assert.match(source, /^LOGISTICS_DISTRIBUTION_ENABLED=false\r?$/m);
   assert.match(source, /^NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED=false\r?$/m);
+  assert.match(source, /^EXTENSION_DEVICE_AUTH_ENABLED=false\r?$/m);
+  assert.match(source, /^NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED=false\r?$/m);
+});
+
+test('staging env example documents independent device pairing as disabled by default', () => {
+  const source = readFileSync('.env.staging.example', 'utf8');
+  for (const key of [
+    'EXTENSION_DEVICE_AUTH_ENABLED',
+    'NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED',
+    'SS_ERP_DEPLOYMENT_ID',
+    'AUTH_JWT_ISSUER',
+    'EXTENSION_DEVICE_JWT_SECRET',
+    'EXTENSION_COMMAND_GRANT_SECRET',
+  ]) {
+    assert.match(source, new RegExp(`^${key}=`, 'm'));
+  }
+  assert.match(source, /^EXTENSION_DEVICE_AUTH_ENABLED=false\r?$/m);
+  assert.match(source, /^NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED=false\r?$/m);
 });

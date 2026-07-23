@@ -12,6 +12,7 @@ import {
   describeAiMediaReadiness,
   isAiMediaWorkflowInputCurrent,
   isDefinitiveWorkflowSubmissionFailure,
+  listAiMediaReadinessNotices,
   loadWorkflowSubmissionIntent,
   mergeAiMediaWorkflowHistoryHead,
   normalizeAiMediaWorkflowPage,
@@ -389,7 +390,93 @@ assert.equal(describeAiMediaReadiness('IMAGE_TRANSLATE', {
 }), '图片翻译 Provider 尚未完成生产验证。');
 assert.equal(describeAiMediaReadiness('IMAGE_TRANSLATE', {
   enabled: true, ready: false, reasonCode: 'STORAGE_NOT_READY', reason: 'storage unavailable',
-}), '图片翻译需要可用的 OSS 或本地存储，当前存储配置不兼容。');
+}), '图片翻译需要可用的对象存储；付费 Provider 必须使用公网 HTTPS 的自有 OSS，当前配置不兼容。');
+assert.deepEqual(listAiMediaReadinessNotices({
+  disabled: true,
+  capabilities: {
+    workflowEnabled: false,
+    workflowReason: 'master_off',
+    workflowRevision: 0,
+    webMediaEnabled: false,
+    webMediaReason: 'pilot_miss',
+    webMediaRevision: 'policy-7',
+    operations: {
+      IMAGE_TO_IMAGE: {
+        enabled: false, ready: false, reasonCode: 'SOURCE_LISTING_WEB_MEDIA_DISABLED', reason: 'web disabled',
+      },
+      FULL_EDIT: {
+        enabled: true, ready: false, reasonCode: 'PROVIDER_NOT_READY', reason: 'provider pending',
+      },
+    },
+  },
+}), [
+  {
+    id: 'workflow',
+    label: 'AI 媒体工作流',
+    message: '全局主开关未开启。',
+    revision: 0,
+  },
+  {
+    id: 'web-media',
+    label: 'Web 媒体工作台',
+    message: '当前账号、店铺或设备不在入口灰度范围内。',
+    revision: 'policy-7',
+  },
+  {
+    id: 'FULL_EDIT',
+    label: '全图编辑',
+    message: 'AI 全图编辑 Provider 尚未完成生产验证。',
+  },
+]);
+assert.deepEqual(listAiMediaReadinessNotices({
+  disabled: true,
+  capabilities: {
+    workflowEnabled: false,
+    workflowReason: 'tenant_not_allowed',
+    workflowRevision: 12,
+    webMediaEnabled: false,
+    webMediaReason: 'policy_invalid',
+    webMediaRevision: 'invalid-3',
+    operations: {},
+  },
+}), [
+  {
+    id: 'workflow',
+    label: 'AI 媒体工作流',
+    message: '当前账号不在媒体工作流灰度名单中。',
+    revision: 12,
+  },
+  {
+    id: 'web-media',
+    label: 'Web 媒体工作台',
+    message: '来源工作流发布策略无效，请由管理员修复。',
+    revision: 'invalid-3',
+  },
+]);
+assert.match(listAiMediaReadinessNotices({
+  disabled: true,
+  capabilities: {
+    workflowEnabled: false,
+    workflowReason: 'invalid_policy',
+    workflowRevision: 13,
+    webMediaEnabled: false,
+    webMediaReason: 'config_unavailable',
+    webMediaRevision: 'unavailable-1',
+    operations: {},
+  },
+})[0].message, /租户策略无效/u);
+assert.match(listAiMediaReadinessNotices({
+  disabled: true,
+  capabilities: {
+    workflowEnabled: false,
+    workflowReason: 'invalid_policy',
+    workflowRevision: 13,
+    webMediaEnabled: false,
+    webMediaReason: 'config_unavailable',
+    webMediaRevision: 'unavailable-1',
+    operations: {},
+  },
+})[1].message, /发布配置暂时不可读取/u);
 assert.deepEqual(buildImageTranslationWorkflowRequest({
   sourceAssetId: 'asset-1', sourceLanguage: 'zh', targetLanguage: 'ru',
   domainHint: 'Translate visible copy', terminologies: terms,

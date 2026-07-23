@@ -150,6 +150,11 @@ describe('AI image prompt resolution boundary', () => {
         dailyLimit: 5,
         estimatedCostCents: 4,
       }),
+      getMediaWorkflowDecision: async () => ({
+        enabled: true,
+        reason: 'tenant_allowed',
+        revision: 1,
+      }),
     } as any);
 
     const created = await app.inject({

@@ -31,7 +31,7 @@ function loadMessagePolicy() {
   vm.runInNewContext(source, context, { filename: 'runtime-message-policy.js' });
   return context.SS_ERP_RUNTIME_MESSAGE_POLICY;
 }
-function runErpBridge({ protocol = 'https:', hostname, marker = false }) {
+function runErpBridge({ protocol = 'https:', hostname, marker = false, defaults = null }) {
   const listenerTypes = [];
   const documentElement = {
     getAttribute(name) {
@@ -48,8 +48,9 @@ function runErpBridge({ protocol = 'https:', hostname, marker = false }) {
 
     disconnect() {}
   }
+  const origin = `${protocol}//${hostname}`;
   const window = {
-    location: { protocol, hostname },
+    location: { protocol, hostname, origin },
     addEventListener(type) {
       listenerTypes.push(type);
     },
@@ -66,9 +67,11 @@ function runErpBridge({ protocol = 'https:', hostname, marker = false }) {
     },
     MutationObserver: FakeMutationObserver,
     setTimeout() {},
+    URL,
     window,
   };
   context.globalThis = context;
+  if (defaults) context.SS_ERP_DEPLOYMENT_DEFAULTS = Object.freeze(defaults);
   vm.runInNewContext(erpBridgeSource, context, { filename: 'erp-collect-bridge.js' });
   return listenerTypes;
 }
@@ -77,6 +80,11 @@ test('an arbitrary webpage cannot activate the ERP bridge by forging the app mar
   const erpBridgeRegistration = (manifest.content_scripts || []).find((entry) =>
     (entry.js || []).includes('content/erp-collect-bridge.js'));
   assert.ok(erpBridgeRegistration, 'ERP bridge registration is required');
+  assert.ok(
+    erpBridgeRegistration.js.indexOf('shared/erp-adapter/deployment-defaults.js')
+      < erpBridgeRegistration.js.indexOf('content/erp-collect-bridge.js'),
+    'deployment defaults must load before the ERP bridge',
+  );
   assert.equal(
     (erpBridgeRegistration.matches || []).includes('<all_urls>'),
     false,
@@ -91,6 +99,27 @@ test('an arbitrary webpage cannot activate the ERP bridge by forging the app mar
     runErpBridge({ hostname: 'ss-erp.cn' }).includes('message'),
     true,
     'the production ERP origin must retain the bridge workflow',
+  );
+});
+
+test('the ERP bridge activates exact custom packaged Web and admin origins but not custom siblings', () => {
+  const defaults = {
+    target: 'cloud',
+    erpBaseUrl: 'https://erp.internal.example',
+    erpAdminBaseUrl: 'https://admin.internal.example',
+    erpApiBaseUrl: 'https://api.internal.example',
+  };
+  assert.equal(
+    runErpBridge({ hostname: 'erp.internal.example', defaults }).includes('message'),
+    true,
+  );
+  assert.equal(
+    runErpBridge({ hostname: 'admin.internal.example', defaults }).includes('message'),
+    true,
+  );
+  assert.equal(
+    runErpBridge({ hostname: 'evil.internal.example', defaults }).includes('message'),
+    false,
   );
 });
 
@@ -141,6 +170,7 @@ test('runtime message policy preserves only each trusted surface required workfl
   const seller = runtimeSender('https://seller.ozon.ru/app/products', extensionId);
   const official = runtimeSender('https://globalcalculator.ozon.ru/', extensionId);
   const source = runtimeSender('https://detail.1688.com/offer/123.html', extensionId);
+  const evil = runtimeSender('https://evil.example/app', extensionId);
 
   assert.equal(policy.isAllowedRuntimeMessageSender(
     'ss-erp:logistics-device-claim', settings, extensionId,
@@ -157,6 +187,12 @@ test('runtime message policy preserves only each trusted surface required workfl
 
   assert.equal(policy.isAllowedRuntimeMessageSender('ss-erp:ping', erp, extensionId), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-status', erp, extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', erp, extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
     'spb-self-hosted:fetch-ozon-product-to-erp', erp, extensionId,
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
@@ -167,6 +203,12 @@ test('runtime message policy preserves only each trusted surface required workfl
   ), false);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     'ozon-calc:erp-endpoint-save', erp, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', source, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', evil, extensionId,
   ), false);
 
   assert.equal(policy.isAllowedRuntimeMessageSender(
@@ -198,6 +240,262 @@ test('runtime message policy preserves only each trusted surface required workfl
   assert.equal(policy.isAllowedRuntimeMessageSender(
     'ozon-calc:erp-endpoint-save', source, extensionId,
   ), false);
+});
+
+test('one-click device pairing pins cloud API traffic to the packaged deployment', () => {
+  assert.match(serviceWorkerSource, /erp-adapter\/deployment-defaults\.js/);
+  assert.match(serviceWorkerSource, /SS_ERP_DEPLOYMENT_DEFAULTS/);
+  assert.match(serviceWorkerSource, /defaults\.erpApiBaseUrl \|\| defaults\.erpBaseUrl/);
+  assert.match(serviceWorkerSource, /defaults\.target === 'cloud'/);
+  assert.match(serviceWorkerSource, /connectionState\.isAllowedCloudDeviceClaim\(defaults, sender, baseUrl\.origin\)/);
+  assert.match(serviceWorkerSource, /defaults\.target === 'local'/);
+  assert.match(serviceWorkerSource, /expectedBaseUrl = defaults\.target === 'cloud'/);
+  assert.match(serviceWorkerSource, /\{ expectedBaseUrl \}/);
+  assert.match(serviceWorkerSource, /credentials: getLogisticsDeviceCredentials\(\)/);
+  assert.doesNotMatch(
+    serviceWorkerSource,
+    /baseUrl\.origin === senderUrl\.origin/,
+    'admin and API origins are intentionally split in cloud deployments',
+  );
+});
+
+test('cloud device claims use exact packaged Web, admin, and API origins for custom and SS ERP deployments', () => {
+  const stateSource = fs.readFileSync(
+    'extensions/ss-erp/shared/erp-adapter/device-connection-state.js',
+    'utf8',
+  );
+  const context = { URL };
+  context.globalThis = context;
+  vm.runInNewContext(stateSource, context, { filename: 'device-connection-state.js' });
+  const allowed = context.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE.isAllowedCloudDeviceClaim;
+  const custom = {
+    target: 'cloud',
+    erpBaseUrl: 'https://erp.internal.example',
+    erpAdminBaseUrl: 'https://admin.internal.example',
+    erpApiBaseUrl: 'https://api.internal.example',
+  };
+  assert.equal(allowed(custom, 'https://erp.internal.example/settings', 'https://api.internal.example'), true);
+  assert.equal(allowed(custom, 'https://admin.internal.example/admin', 'https://api.internal.example'), true);
+  assert.equal(allowed(custom, 'https://evil.internal.example/settings', 'https://api.internal.example'), false);
+  assert.equal(allowed(custom, 'https://erp.internal.example/settings', 'https://other.internal.example'), false);
+
+  const international = {
+    target: 'cloud',
+    erpBaseUrl: 'https://app.ss-erp.com',
+    erpAdminBaseUrl: 'https://admin.ss-erp.com',
+    erpApiBaseUrl: 'https://ss-erp.com',
+  };
+  assert.equal(allowed(international, 'https://app.ss-erp.com/settings', 'https://ss-erp.com'), true);
+  assert.equal(allowed(international, 'https://admin.ss-erp.com/admin', 'https://ss-erp.com'), true);
+  assert.equal(allowed(international, 'https://app.ss-erp.cn/settings', 'https://ss-erp.com'), false);
+  assert.equal(allowed(international, 'https://app.ss-erp.com/settings', 'https://ss-erp.cn'), false);
+
+  const domestic = {
+    target: 'cloud',
+    erpBaseUrl: 'https://app.ss-erp.cn',
+    erpAdminBaseUrl: 'https://admin.ss-erp.cn',
+    erpApiBaseUrl: 'https://ss-erp.cn',
+  };
+  assert.equal(allowed(domestic, 'https://app.ss-erp.cn/settings', 'https://ss-erp.cn'), true);
+  assert.equal(allowed(domestic, 'https://admin.ss-erp.cn/admin', 'https://ss-erp.cn'), true);
+  assert.equal(allowed(domestic, 'https://app.ss-erp.com/settings', 'https://ss-erp.cn'), false);
+  assert.equal(allowed(domestic, 'https://app.ss-erp.cn/settings', 'https://ss-erp.com'), false);
+});
+
+test('one-click pairing verifies an existing credential and clears stale local authorization before reclaiming', () => {
+  assert.match(serviceWorkerSource, /const verified = await readExtensionDeviceStatus\(true\)/);
+  assert.match(serviceWorkerSource, /verified\.state === 'paired' && message\.reauthorize !== true/);
+  assert.match(serviceWorkerSource, /verified\.state !== 'paired'\) await credentials\.clear\(\)/);
+  assert.match(serviceWorkerSource, /message\.reauthorize !== true/);
+  assert.match(serviceWorkerSource, /verified\.state === 'unreachable'/);
+});
+
+test('one-click pairing never carries an unverified legacy account token into a device session', () => {
+  assert.match(serviceWorkerSource, /validateStoredCompatibilityCredential/);
+  assert.match(serviceWorkerSource, /baseUrl \+ '\/api\/user\/me'/);
+  assert.match(serviceWorkerSource, /credentials: 'omit'/);
+  assert.match(serviceWorkerSource, /claimed\.ownerUserId/);
+  assert.match(serviceWorkerSource, /\[OZON_CALC_ERP_TOKEN_KEY\]: legacyToken/);
+});
+
+test('device status never reports a retained but unverifiable credential as paired', () => {
+  const stateSource = fs.readFileSync(
+    'extensions/ss-erp/shared/erp-adapter/device-connection-state.js',
+    'utf8',
+  );
+  const context = { URL };
+  vm.runInNewContext(stateSource, context, { filename: 'device-connection-state.js' });
+  const resolve = context.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE.resolve;
+  assert.equal(resolve({ verificationFailed: true, storedPaired: true, hasEndpoint: true }), 'unreachable');
+  assert.equal(resolve({ verificationFailed: true, storedPaired: false, hasEndpoint: true }), 'invalid');
+  assert.equal(resolve({ verificationFailed: false, storedPaired: true, hasEndpoint: true }), 'paired');
+  assert.equal(
+    resolve({ verificationFailed: false, storedPaired: false, hasEndpoint: true }),
+    'authorization_required',
+  );
+  assert.match(serviceWorkerSource, /SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE/);
+  assert.equal(resolve({ verificationFailed: false, storedPaired: false, hasEndpoint: false }), 'unconfigured');
+  assert.equal(
+    context.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE.isScopedStateAuthoritative('invalid'),
+    true,
+  );
+  assert.equal(
+    context.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE.isScopedStateAuthoritative('unconfigured'),
+    false,
+  );
+});
+
+test('device status sender authorization is pinned to each packaged deployment', () => {
+  const stateSource = fs.readFileSync(
+    'extensions/ss-erp/shared/erp-adapter/device-connection-state.js',
+    'utf8',
+  );
+  const context = { URL };
+  context.globalThis = context;
+  vm.runInNewContext(stateSource, context, { filename: 'device-connection-state.js' });
+  const allowed = context.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE.isAllowedDeploymentSender;
+  const international = {
+    target: 'cloud',
+    erpBaseUrl: 'https://app.ss-erp.com',
+    erpAdminBaseUrl: 'https://admin.ss-erp.com',
+    erpApiBaseUrl: 'https://ss-erp.com',
+  };
+  assert.equal(allowed(international, runtimeSender('https://app.ss-erp.com/settings', 'id')), true);
+  assert.equal(allowed(international, runtimeSender('https://admin.ss-erp.com/admin', 'id')), true);
+  assert.equal(allowed(international, runtimeSender('https://app.ss-erp.cn/settings', 'id')), false);
+  assert.equal(allowed(international, runtimeSender('https://foo.ss-erp.com/settings', 'id')), false);
+  assert.equal(allowed(international, runtimeSender('https://ss-erp.com/settings', 'id')), false);
+  assert.equal(allowed(
+    international,
+    runtimeSender('chrome-extension://extension-id/pages/popup.html', 'extension-id'),
+    'extension-id',
+  ), true);
+
+  const domestic = {
+    ...international,
+    erpBaseUrl: 'https://app.ss-erp.cn',
+    erpAdminBaseUrl: 'https://admin.ss-erp.cn',
+    erpApiBaseUrl: 'https://ss-erp.cn',
+  };
+  assert.equal(allowed(domestic, 'https://app.ss-erp.cn/collect'), true);
+  assert.equal(allowed(domestic, 'https://admin.ss-erp.cn/admin/settings'), true);
+  assert.equal(allowed(domestic, 'https://app.ss-erp.com/collect'), false);
+  assert.equal(allowed(domestic, 'https://foo.ss-erp.cn/collect'), false);
+
+  const local = { target: 'local', erpBaseUrl: 'http://127.0.0.1:3000' };
+  assert.equal(allowed(local, 'http://127.0.0.1:3000/settings'), true);
+  assert.equal(allowed(local, 'http://localhost:3000/settings'), true);
+  assert.equal(allowed(local, 'https://app.ss-erp.com/settings'), false);
+  const sourceDefaults = {
+    target: 'source',
+    erpBaseUrl: 'https://app.ss-erp.com',
+    erpAdminBaseUrl: 'https://admin.ss-erp.com',
+  };
+  assert.equal(allowed(sourceDefaults, 'http://localhost:3000/settings'), true);
+  assert.equal(allowed(sourceDefaults, 'https://admin.ss-erp.com/admin/settings'), true);
+  assert.equal(allowed(sourceDefaults, 'https://foo.ss-erp.com/settings'), false);
+  assert.match(serviceWorkerSource, /assertTrustedErpDeviceSender\(sender\)/);
+  assert.match(serviceWorkerSource, /readExtensionDeviceStatusAfterClaims/);
+});
+
+test('a timed-out credential request releases the serialized claim queue for the next page', async () => {
+  const queueSource = fs.readFileSync(
+    'extensions/ss-erp/shared/erp-adapter/device-claim-queue.js',
+    'utf8',
+  );
+  const credentialSource = fs.readFileSync(
+    'extensions/ss-erp/shared/logistics-rules/device-credential-manager.js',
+    'utf8',
+  );
+  const values = new Map();
+  const localStorage = {
+    async get(keys) {
+      return Object.fromEntries((Array.isArray(keys) ? keys : [keys])
+        .filter((key) => values.has(key)).map((key) => [key, values.get(key)]));
+    },
+    async set(input) {
+      for (const [key, value] of Object.entries(input)) values.set(key, value);
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key);
+    },
+  };
+  const context = {
+    AbortController, Array, Boolean, Date, JSON, Map, Number, Object, Promise, Set, String,
+    TypeError, URL, atob, clearTimeout, setTimeout,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(credentialSource, context, { filename: 'device-credential-manager.js' });
+  vm.runInNewContext(queueSource, context, { filename: 'device-claim-queue.js' });
+  const events = [];
+  let firstSignal;
+  const accessToken = [
+    Buffer.from('{}').toString('base64url'),
+    Buffer.from(JSON.stringify({ exp: 1783858500 })).toString('base64url'),
+    'signature',
+  ].join('.');
+  const manager = context.SS_ERP_EXTENSION_DEVICE_CREDENTIALS.createManager({
+    localStorage,
+    requestTimeoutMs: 15,
+    now: () => new Date('2026-07-12T12:00:00.000Z'),
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      events.push('fetch:' + body.code[0]);
+      if (body.code.startsWith('a')) {
+        firstSignal = init.signal;
+        return new Promise(() => {});
+      }
+      return {
+        status: 201,
+        async json() {
+          return {
+            code: 1,
+            data: {
+              session: {
+                id: 'session-second', deploymentId: body.deploymentId,
+                deviceId: body.deviceId, ownerUserId: 'owner-1',
+                scopes: ['capture:write'], expiresAt: '2026-08-11T12:00:00.000Z',
+              },
+              accessToken,
+              refreshToken: 'r'.repeat(43),
+            },
+          };
+        },
+      };
+    },
+  });
+  const enqueue = context.SS_ERP_EXTENSION_DEVICE_CLAIM_QUEUE.create((message) => {
+    return manager.claim({
+      baseUrl: 'https://erp.example',
+      code: message.code,
+      deploymentId: 'deployment-1',
+      deviceId: 'device-1',
+      deviceLabel: message.id,
+    });
+  });
+
+  const first = enqueue({ id: 'first', code: 'a'.repeat(22) });
+  await Promise.resolve();
+  const status = enqueue.afterIdle(async () => {
+    events.push('status');
+    return manager.getStatus();
+  });
+  const second = enqueue({ id: 'second', code: 'b'.repeat(22) });
+  const [firstResult, statusResult, secondResult] = await Promise.allSettled([
+    first,
+    status,
+    second,
+  ]);
+  assert.equal(firstResult.status, 'rejected');
+  assert.match(firstResult.reason.message, /pairing request timed out/);
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(statusResult.status, 'fulfilled');
+  assert.equal(statusResult.value.state, 'unpaired');
+  assert.equal(secondResult.status, 'fulfilled');
+  assert.equal(secondResult.value.sessionId, 'session-second');
+  assert.deepEqual(events, ['fetch:a', 'status', 'fetch:b']);
+  await enqueue.whenIdle();
+  assert.match(serviceWorkerSource, /enqueueExtensionDeviceClaim\(message, sender\)/);
 });
 
 test('both background message listeners enforce the centralized policy before dispatch', () => {

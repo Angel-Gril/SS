@@ -25,6 +25,7 @@ const basePayload = {
 
 async function setup(input: {
   enabled?: boolean;
+  aiMediaEnabled?: boolean;
   scopes?: string[];
   allowedShopIds?: string[];
   rateAllowed?: boolean;
@@ -75,6 +76,11 @@ async function setup(input: {
   const evaluate = vi.fn(async () => input.enabled === false
     ? { ...enabledDecision(), enabled: false, reason: 'master_off' }
     : enabledDecision());
+  const getMediaWorkflowDecision = vi.fn(async () => ({
+    enabled: input.aiMediaEnabled ?? input.enabled !== false,
+    reason: input.aiMediaEnabled === false ? 'tenant_not_allowed' : 'tenant_allowed',
+    revision: 7,
+  }));
   const getReadiness = vi.fn(async () => ({
     enabled: input.enabled !== false,
     ready: input.enabled !== false,
@@ -89,6 +95,7 @@ async function setup(input: {
     featureFlags: {
       evaluate,
     } as any,
+    getMediaWorkflowDecision,
     getReadiness,
     loadContext,
     internalizeSource,
@@ -99,7 +106,7 @@ async function setup(input: {
   await app.ready();
   return {
     app, authenticateDevice, loadContext, internalizeSource,
-    checkMaskRequestRate, createMask, evaluate, getReadiness,
+    checkMaskRequestRate, createMask, evaluate, getMediaWorkflowDecision, getReadiness,
   };
 }
 
@@ -271,6 +278,24 @@ describe('extension media edit routes', () => {
       }
     } finally {
       await Promise.all(states.map((state) => state.app.close()));
+    }
+  });
+
+  it('rejects editing when the canonical AI tenant policy denies the owner', async () => {
+    const state = await setup({ aiMediaEnabled: false });
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-edit-source',
+        payload: basePayload,
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ errorCode: 'media_edit_disabled' });
+      expect(state.getMediaWorkflowDecision).toHaveBeenCalledWith('owner-1');
+      expect(state.loadContext).not.toHaveBeenCalled();
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
     }
   });
 

@@ -94,6 +94,7 @@ assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
+assert.match(panel, /state:\s*'unavailable',\s*reason:\s*'runtime_unavailable'/);
 assert.match(panel, /listings\.length === 1/);
 assert.match(panel, /currentSourcePageKey/);
 assert.match(panel, /onReviewOutput/);
@@ -1159,6 +1160,44 @@ const viewContext = {
   window: {},
 };
 vm.runInNewContext(viewSource, viewContext, { filename: viewPath });
+function renderedText(node) {
+  return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join(' ');
+}
+
+const unpairedContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(unpairedContainer, {
+  state: 'unpaired',
+});
+assert.equal(unpairedContainer.hidden, false);
+assert.match(renderedText(unpairedContainer), /扩展尚未连接 ERP/u);
+
+const notCollectedContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(notCollectedContainer, {
+  state: 'unavailable', reason: 'source_handoff_mismatch',
+});
+assert.equal(notCollectedContainer.hidden, false);
+assert.match(renderedText(notCollectedContainer), /先采集货源到 ERP/u);
+
+const disabledContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(disabledContainer, {
+  state: 'disabled', capability: { enabled: false, reason: 'master_off', revision: 'master-off' }, status: null,
+});
+assert.equal(disabledContainer.hidden, false);
+assert.match(renderedText(disabledContainer), /扩展工作台未开放/u);
+
+for (const [scope, label] of [
+  ['listing:review', '商品工作台审核'],
+  ['media:execute', 'AI 媒体执行'],
+]) {
+  const scopeContainer = new TestNode('section');
+  viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(scopeContainer, {
+    state: 'scope_required', scope,
+  });
+  assert.equal(scopeContainer.hidden, false);
+  assert.match(renderedText(scopeContainer), new RegExp(label));
+  assert.match(renderedText(scopeContainer), /更新授权/u);
+}
+
 const container = new TestNode('section');
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(container, {
   state: 'ready',
@@ -1180,12 +1219,10 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(container, {
     },
   },
 });
-function renderedText(node) {
-  return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join(' ');
-}
 const rendered = renderedText(container);
 assert.equal(container.hidden, false);
-assert.match(rendered, /前往 ERP 选择店铺和 SKU/u);
+assert.match(rendered, /Web ERP 的采集详情中使用 AI 图片工作台/u);
+assert.match(rendered, /扩展内处理需先创建店铺草稿/u);
 assert.match(rendered, /图片翻译 · 等待审核/u);
 assert.doesNotMatch(rendered, /已取消|CANCELLED|PENDING/u);
 
@@ -1237,6 +1274,46 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(darkCreateContainer, {
   onCreateTranslation(source) { createEvents.push(source); },
 });
 assert.doesNotMatch(renderedText(darkCreateContainer), /图片翻译（测试）/u);
+assert.match(renderedText(darkCreateContainer), /AI 修图与生图/u);
+assert.match(renderedText(darkCreateContainer), /媒体能力当前未开放/u);
+
+const providerBlockedContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(providerBlockedContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{ id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  launch: {
+    state: 'not_ready', contractVersion: 2, context: null,
+    operations: {
+      IMAGE_TO_IMAGE: {
+        enabled: true, ready: false, reasonCode: 'PROVIDER_NOT_READY',
+        reason: 'provider has not completed sandbox verification',
+      },
+      IMAGE_TRANSLATE: {
+        enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+        reason: 'translation feature disabled',
+      },
+      FULL_EDIT: {
+        enabled: true, ready: false, reasonCode: 'MEDIA_PROVIDER_NOT_ALLOWED',
+        reason: 'production provider not allowed',
+      },
+      INPAINT: {
+        enabled: false, ready: false, reasonCode: 'MEDIA_STORAGE_NOT_READY',
+        reason: 'storage backend is incompatible',
+      },
+    },
+  },
+  sourceInputs: [{ sourceMediaKey: 'media-1', label: '主图 1' }],
+});
+assert.match(renderedText(providerBlockedContainer), /参考生图：Provider 尚未完成生产验证/u);
+assert.match(renderedText(providerBlockedContainer), /全图编辑：Provider 尚未完成生产验证/u);
+assert.match(renderedText(providerBlockedContainer), /局部重绘：需要可用的对象存储/u);
+assert.doesNotMatch(renderedText(providerBlockedContainer), /sandbox|not allowed|incompatible/u);
 
 const multiListingContainer = new TestNode('section');
 const selectedListings = [];

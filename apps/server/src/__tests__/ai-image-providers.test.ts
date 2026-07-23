@@ -460,7 +460,9 @@ describe('AI image provider adapters', () => {
       apiKey: 'secret', model: 'gpt-image-1', fetch, timeoutMs: 1000,
     });
 
-    expect(result).toEqual(expect.objectContaining({ ok: true, provider: 'openai-images', model: 'gpt-image-1' }));
+    expect(result).toEqual(expect.objectContaining({
+      ok: true, provider: 'openai-images', model: 'gpt-image-1', verification: 'remote',
+    }));
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith(
       'https://api.openai.example/v1/models/gpt-image-1',
@@ -575,6 +577,7 @@ describe('AI image provider adapters', () => {
     });
 
     expect(result.detail).toContain('first image job');
+    expect(result.verification).toBe('config-only');
     expect(fetch).not.toHaveBeenCalled();
   });
 

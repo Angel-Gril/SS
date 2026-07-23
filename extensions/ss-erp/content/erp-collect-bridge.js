@@ -18,9 +18,21 @@
     );
   }
 
+  function isPackagedErpOrigin() {
+    var defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+    var currentOrigin = String(window.location.origin || '').trim();
+    if (!currentOrigin) return false;
+    return [defaults.erpBaseUrl, defaults.erpAdminBaseUrl].some(function (value) {
+      try {
+        return new URL(String(value || '').trim()).origin === currentOrigin;
+      } catch (_error) {
+        return false;
+      }
+    });
+  }
 
   function shouldActivate() {
-    return isKnownLegacyErpOrigin();
+    return isPackagedErpOrigin() || isKnownLegacyErpOrigin();
   }
 
   function activateBridge() {

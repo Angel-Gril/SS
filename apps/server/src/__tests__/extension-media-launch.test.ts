@@ -17,6 +17,7 @@ function decision(enabled: boolean, reason = enabled ? 'pilot_match' : 'master_o
 async function setup(input: {
   extensionEnabled?: boolean;
   mediaEnabled?: boolean;
+  aiMediaEnabled?: boolean;
   scopes?: string[];
   allowedShopIds?: string[];
   ready?: boolean;
@@ -30,6 +31,11 @@ async function setup(input: {
       ? decision(input.extensionEnabled !== false)
       : decision(input.mediaEnabled !== false)
   ));
+  const getMediaWorkflowDecision = vi.fn(async () => ({
+    enabled: input.aiMediaEnabled ?? input.mediaEnabled !== false,
+    reason: input.aiMediaEnabled === false ? 'tenant_not_allowed' : 'tenant_allowed',
+    revision: 7,
+  }));
   const loadContext = vi.fn(async () => {
     if (input.loadContextError) throw input.loadContextError;
     return input.context === undefined ? ({
@@ -79,12 +85,15 @@ async function setup(input: {
       };
     },
     featureFlags: { evaluate },
+    getMediaWorkflowDecision,
     loadContext: loadContext as any,
     getCapability,
     getCapabilities: getCapabilities as any,
   });
   await app.ready();
-  return { app, evaluate, loadContext, getCapability, getCapabilities };
+  return {
+    app, evaluate, getMediaWorkflowDecision, loadContext, getCapability, getCapabilities,
+  };
 }
 
 const url = '/api/extension-device/source-workbench/media-launch'
@@ -103,7 +112,7 @@ describe('extension media launch route', () => {
         data: {
           capability: {
             enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
-            revision: 'pilot-1', testOnly: true, operation: 'IMAGE_TRANSLATE',
+            revision: 'pilot-1|7', testOnly: true, operation: 'IMAGE_TRANSLATE',
             sourceLanguage: 'zh', targetLanguage: 'ru',
           },
           context: {
@@ -136,7 +145,7 @@ describe('extension media launch route', () => {
         code: 1,
         data: {
           contractVersion: 'extension-media-launch/v2',
-          revision: 'pilot-1|image-to-image-1|translation-1|full-edit-1|inpaint-1',
+          revision: 'pilot-1|7|image-to-image-1|translation-1|full-edit-1|inpaint-1',
           operations: {
             IMAGE_TO_IMAGE: {
               enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
@@ -217,6 +226,23 @@ describe('extension media launch route', () => {
       } finally {
         await state.app.close();
       }
+    }
+  });
+
+  it('uses the canonical AI tenant decision instead of the source rollout policy', async () => {
+    const state = await setup({ aiMediaEnabled: false });
+    try {
+      const response = await state.app.inject({ method: 'GET', url: `${url}&contractVersion=2` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.context).toBeNull();
+      expect(state.getMediaWorkflowDecision).toHaveBeenCalledWith('owner-1');
+      expect(state.evaluate).not.toHaveBeenCalledWith(
+        'AI_MEDIA_WORKFLOW_V2',
+        expect.anything(),
+      );
+      expect(state.loadContext).not.toHaveBeenCalled();
+    } finally {
+      await state.app.close();
     }
   });
 

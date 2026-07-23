@@ -20,6 +20,33 @@ test('extension background exposes ERP collect diagnostics ping', () => {
     /hasToken:\s*Boolean\(/,
     'ping response should report ERP token presence without exposing the token',
   );
+  assert.match(
+    source,
+    /deviceState:/,
+    'ping response should report the scoped device connection state without exposing credentials',
+  );
+});
+
+test('extension popup treats a scoped device session as the primary ERP connection', () => {
+  const popup = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+  const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
+
+  assert.match(popup, /ss-erp:extension-device-status/);
+  assert.match(popup, /deviceStatus[\s\S]{0,1000}state\s*===\s*['"]paired['"]/);
+  assert.match(popup, /设备已连接/);
+  assert.match(popup, /设备待授权/);
+  assert.match(popup, /设备授权失效/);
+  assert.match(popup, /设备验证失败/);
+  assert.match(popup, /未检测到 ERP/);
+  assert.match(popup, /renderScopedDeviceStatus\(deviceStatus\)/);
+  assert.match(popup, /isScopedStateAuthoritative/);
+  assert.match(popup, /兼容模式/);
+  assert.match(popupHtml, /device-connection-state\.js/);
+  assert.match(
+    popup,
+    /if \(!baseUrl \|\| !token\)/,
+    'legacy token status should remain as a compatibility fallback',
+  );
 });
 
 test('ERP collect page checks extension status before starting Ozon collection', () => {

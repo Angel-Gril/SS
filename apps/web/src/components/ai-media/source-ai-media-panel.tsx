@@ -43,6 +43,7 @@ import {
   describeAiMediaReadiness,
   isAiMediaWorkflowInputCurrent,
   isDefinitiveWorkflowSubmissionFailure,
+  listAiMediaReadinessNotices,
   loadWorkflowSubmissionIntent,
   mergeAiMediaWorkflowHistoryHead,
   normalizeAiMediaWorkflowPage,
@@ -1009,6 +1010,10 @@ export function SourceAiMediaPanel({
     };
   }, [discardInteractiveDrafts]);
   const currentReadiness = operationReadiness(operation);
+  const readinessNotices = useMemo(
+    () => listAiMediaReadinessNotices({ disabled, capabilities }),
+    [capabilities, disabled],
+  );
   const canCreateCurrentOperation = Boolean(
     capabilities?.webMediaEnabled
     && currentReadiness?.ready,
@@ -2226,8 +2231,20 @@ export function SourceAiMediaPanel({
       </div>
 
       {error ? <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
-      {disabled ? <p className="text-sm text-muted-foreground">新建 AI 图片任务当前关闭，已有任务仍可查看和处理。</p> : null}
-      {capabilities && !capabilities.webMediaEnabled ? <p className="text-sm text-muted-foreground">Web 媒体工具当前关闭，已有任务仍可查看和处理。</p> : null}
+      {readinessNotices.length ? (
+        <div className="border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-900">
+          <div className="font-medium">当前阻塞</div>
+          <ul className="mt-2 space-y-1">
+            {readinessNotices.map((notice) => (
+              <li key={notice.id} className="break-words">
+                <span className="font-medium">{notice.label}：</span>
+                {notice.message}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-amber-800">已有任务仍可查看、审核和处理。</p>
+        </div>
+      ) : null}
       {!disabled && !context?.inputs.length ? <p className="text-sm text-muted-foreground">当前采集快照没有可用于 AI 图片处理的商品级图片。</p> : null}
 
       {target.type === 'collect' ? <SourceAiMediaPlanningPanel

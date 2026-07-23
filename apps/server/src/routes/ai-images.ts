@@ -24,7 +24,10 @@ import {
   type ApplyAiImageAssetsInput,
   type ApplyAiImageAssetsResult,
 } from '../services/ai-image-application.js';
-import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
+import {
+  getAiMediaRolloutDecision,
+  type AiMediaRolloutDecision,
+} from '../services/ai-media-rollout.js';
 import {
   sourceWorkflowFeatureFlags,
   type SourceWorkflowFeatureFlagEvaluator,
@@ -333,6 +336,7 @@ interface AiImageRouteOptions {
   resolveEditPrompt?: typeof resolveActiveAiTemplate;
   mediaWorkflowService?: AiMediaWorkflowService;
   mediaContextService?: AiMediaContextService;
+  getMediaWorkflowDecision?: (ownerUserId: string) => Promise<AiMediaRolloutDecision>;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
   applyAssets?: (input: ApplyAiImageAssetsInput) => Promise<ApplyAiImageAssetsResult>;
   applyWorkflowApplication?: (input: ApplyAiMediaWorkflowApplicationInput) => Promise<any>;
@@ -990,8 +994,20 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const resolvePrompt = options.resolvePrompt || resolveActiveAiPrompt;
   const resolveTranslationPrompt = options.resolveTranslationPrompt || resolveActiveAiTemplate;
   const resolveEditPrompt = options.resolveEditPrompt || resolveActiveAiTemplate;
-  const getMediaWorkflowEnabled = options.getMediaWorkflowEnabled
-    || (async (ownerUserId: string) => (await getAiMediaRolloutDecision(ownerUserId)).enabled);
+  const getMediaWorkflowDecision = options.getMediaWorkflowDecision
+    || (options.getMediaWorkflowEnabled
+      ? async (ownerUserId: string): Promise<AiMediaRolloutDecision> => {
+        const enabled = await options.getMediaWorkflowEnabled!(ownerUserId);
+        return {
+          enabled,
+          revision: 0,
+          reason: enabled ? 'tenant_allowed' : 'master_off',
+        };
+      }
+      : getAiMediaRolloutDecision);
+  const getMediaWorkflowEnabled = async (ownerUserId: string) => (
+    await getMediaWorkflowDecision(ownerUserId)
+  ).enabled;
   const applyAssets = options.applyAssets
     || ((input: ApplyAiImageAssetsInput) => applyAiImageAssets(prisma as any, input));
   const applyWorkflowApplication = options.applyWorkflowApplication
@@ -1103,20 +1119,21 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   app.get('/capabilities', async (request) => {
     const ids = actor(request);
     const [
-      workflowEnabled,
+      workflowDecision,
       webMediaDecision,
       translationSettings,
       translationStorageReadiness,
       editSettings,
       editStorageReadiness,
     ] = await Promise.all([
-      getMediaWorkflowEnabled(ids.ownerUserId),
+      getMediaWorkflowDecision(ids.ownerUserId),
       getSourceListingWebMediaDecision(ids.ownerUserId),
       getTranslationSettings(),
       getTranslationStorageReadiness(),
       getEditSettings(),
       getEditStorageReadiness(),
     ]);
+    const workflowEnabled = workflowDecision.enabled;
     const translation = resolveAiImageTranslationReadiness(translationSettings, {
       workflowEnabled,
       production,
@@ -1144,6 +1161,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         webMediaReason: webMediaDecision.reason,
         webMediaRevision: webMediaDecision.revision,
         workflowEnabled,
+        workflowReason: workflowDecision.reason,
+        workflowRevision: workflowDecision.revision,
         applications: {
           contractVersion: AI_MEDIA_APPLICATION_CONTRACT_VERSION,
           readEnabled: true,
@@ -1183,6 +1202,13 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     }
     const ids = actor(request);
     try {
+      const workflowDecision = await getMediaWorkflowDecision(ids.ownerUserId);
+      if (!workflowDecision.enabled) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_WORKFLOW_DISABLED',
+          msg: 'AI media workflow is disabled',
+        });
+      }
       const resolved = await resolvePrompt({
         templateKey: DEFAULT_TEMPLATE_KEY,
         userPrompt: parsed.data.prompt,

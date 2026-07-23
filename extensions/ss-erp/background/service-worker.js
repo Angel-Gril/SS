@@ -1,5 +1,8 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
+try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
+try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch (e) { console.warn('[SS ERP] device connection state load error:', e); }
+try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
 try { importScripts('../shared/currency/price-currency.js'); } catch (e) { console.warn('[SS ERP] price-currency load error:', e); }
 try { importScripts('../shared/contracts/source-product-capture-v2.js'); } catch (e) { console.warn('[SS ERP] source capture V2 contract load error:', e); }
 try { importScripts('../shared/source-capture/source-capture-submit.js'); } catch (e) { console.warn('[SS ERP] source capture V2 submit helper load error:', e); }
@@ -102,6 +105,7 @@ let ozonInsightCookieSyncInFlight = null;
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
+const SS_ERP_EXTENSION_DEVICE_ID_KEY = 'ss-erp:logistics-device-id';
 const OZON_CALC_ERP_PUSH_HISTORY_KEY = 'ozon-calc:erp-push-history';
 const OZON_SYNC_LEGACY_COMPANY_ID_STORAGE_KEY = 'ss_erp_ozon_company_id';
 const OZON_SYNC_LEGACY_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_captured_at';
@@ -308,6 +312,7 @@ try {
 let logisticsDistributionRuntime = null;
 let logisticsDistributionMessageHandler = null;
 let logisticsDeviceCredentials = null;
+let extensionDeviceClaimQueue = null;
 let logisticsManualFallbackPersistence = null;
 let logisticsCaptureRuntime = null;
 let logisticsCaptureMessageHandler = null;
@@ -345,12 +350,265 @@ function getLogisticsDeviceCredentials() {
   if (!api || typeof api.createManager !== 'function') {
     throw new Error('扩展设备凭据管理器不可用');
   }
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  const expectedBaseUrl = defaults.target === 'cloud' ? packagedErpDeviceBaseUrl() : '';
+  if (defaults.target === 'cloud' && !expectedBaseUrl) {
+    throw new Error('云端扩展安装包缺少受信任的 ERP API 地址');
+  }
   logisticsDeviceCredentials = api.createManager({
     localStorage: chrome.storage.local,
     fetchImpl: globalThis.fetch.bind(globalThis),
     now: () => new Date(),
+    requestTimeoutMs: 6000,
+    ...(expectedBaseUrl ? { expectedBaseUrl } : {}),
   });
   return logisticsDeviceCredentials;
+}
+
+function trustedErpDeviceBaseUrl(value, sender) {
+  let baseUrl;
+  let senderUrl;
+  try {
+    baseUrl = new URL(String(value || '').trim());
+    senderUrl = new URL(String(sender && (sender.url || sender.documentUrl) || '').trim());
+  } catch (_error) {
+    throw new Error('ERP 地址无效');
+  }
+  const localHosts = new Set(['localhost', '127.0.0.1']);
+  const bothLocal = localHosts.has(baseUrl.hostname) && localHosts.has(senderUrl.hostname);
+  if (baseUrl.username || baseUrl.password || (baseUrl.protocol !== 'https:' && !bothLocal)) {
+    throw new Error('ERP 地址不安全');
+  }
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  if (bothLocal) {
+    if (defaults.target === 'cloud') throw new Error('云端扩展安装包不能连接本机 ERP');
+    return baseUrl.origin;
+  }
+  if (defaults.target === 'cloud') {
+    const connectionState = globalThis.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE;
+    if (!connectionState || typeof connectionState.isAllowedCloudDeviceClaim !== 'function') {
+      throw new Error('扩展部署领取校验模块不可用');
+    }
+    if (!connectionState.isAllowedCloudDeviceClaim(defaults, sender, baseUrl.origin)) {
+      throw new Error('ERP 地址与扩展安装包不一致');
+    }
+    return baseUrl.origin;
+  }
+  if (!bothLocal) {
+    if (senderUrl.protocol !== 'https:') throw new Error('ERP 登录页面不安全');
+    const deploymentRoot = (hostname) => {
+      const normalized = String(hostname || '').toLowerCase();
+      if (normalized === 'ss-erp.com' || normalized.endsWith('.ss-erp.com')) return 'ss-erp.com';
+      if (normalized === 'ss-erp.cn' || normalized.endsWith('.ss-erp.cn')) return 'ss-erp.cn';
+      return '';
+    };
+    const senderRoot = deploymentRoot(senderUrl.hostname);
+    const baseRoot = deploymentRoot(baseUrl.hostname);
+    if (defaults.target === 'local') {
+      throw new Error('本地扩展安装包只能连接本机 ERP');
+    }
+    if (!senderRoot || senderRoot !== baseRoot) {
+      throw new Error('ERP 地址与当前登录页面不属于同一部署');
+    }
+  }
+  return baseUrl.origin;
+}
+
+function packagedErpDeviceBaseUrl() {
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  try {
+    const parsed = new URL(String(
+      defaults.erpApiBaseUrl || defaults.erpBaseUrl || '',
+    ).trim());
+    const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+    if (parsed.username || parsed.password || (parsed.protocol !== 'https:' && !local)) return '';
+    return parsed.origin;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function assertTrustedErpDeviceSender(sender) {
+  const connectionState = globalThis.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE;
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  if (!connectionState || typeof connectionState.isAllowedDeploymentSender !== 'function') {
+    throw new Error('扩展部署来源校验模块不可用');
+  }
+  if (!connectionState.isAllowedDeploymentSender(defaults, sender, chrome.runtime.id)) {
+    throw new Error('当前页面与扩展安装包的 ERP 部署不一致');
+  }
+}
+
+async function ensureExtensionDeviceId() {
+  const stored = await chrome.storage.local.get([SS_ERP_EXTENSION_DEVICE_ID_KEY]);
+  let deviceId = toText(stored[SS_ERP_EXTENSION_DEVICE_ID_KEY]).trim();
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    await chrome.storage.local.set({ [SS_ERP_EXTENSION_DEVICE_ID_KEY]: deviceId });
+  }
+  return deviceId;
+}
+
+async function validateStoredCompatibilityCredential(baseUrl, token, ownerUserId) {
+  const candidate = toText(token).trim();
+  if (!candidate || !ownerUserId) return '';
+  const controller = new AbortController();
+  let timer = null;
+  try {
+    const request = Promise.resolve().then(async () => {
+      const response = await fetch(baseUrl + '/api/user/me', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer ' + candidate,
+        },
+        credentials: 'omit',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      return {
+        response,
+        body: response.ok ? await response.json() : null,
+      };
+    });
+    const timedOut = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('compatibility credential validation timed out'));
+      }, 1500);
+    });
+    const { response, body } = await Promise.race([request, timedOut]);
+    if (!response.ok) return '';
+    return Number(body && body.code) === 1
+      && toText(body && body.data && body.data.id).trim() === ownerUserId
+      ? candidate
+      : '';
+  } catch (_error) {
+    return '';
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+async function readExtensionDeviceStatus(verify) {
+  const credentials = getLogisticsDeviceCredentials();
+  let status = await credentials.getStatus();
+  let connection = status && status.state === 'paired'
+    ? await credentials.getConnection()
+    : null;
+  let verificationFailed = false;
+  if (verify === true && status && status.state === 'paired') {
+    try {
+      const operation = await credentials.beginOperation();
+      status = operation && operation.state === 'paired'
+        ? {
+            state: 'paired',
+            sessionId: operation.sessionId,
+            deploymentId: operation.deploymentId,
+            deviceId: operation.deviceId,
+            ownerUserId: operation.ownerUserId,
+            scopes: operation.scopes,
+            expiresAt: operation.expiresAt,
+          }
+        : { state: 'unpaired' };
+    } catch (_error) {
+      verificationFailed = true;
+      status = await credentials.getStatus();
+    }
+  }
+  if (!connection && status && status.state === 'paired') {
+    connection = await credentials.getConnection();
+  }
+  const endpoint = connection && connection.baseUrl || packagedErpDeviceBaseUrl();
+  const connectionState = globalThis.SS_ERP_EXTENSION_DEVICE_CONNECTION_STATE;
+  if (!connectionState || typeof connectionState.resolve !== 'function') {
+    throw new Error('扩展设备连接状态模块不可用');
+  }
+  const state = connectionState.resolve({
+    verificationFailed,
+    storedPaired: Boolean(status && status.state === 'paired'),
+    hasEndpoint: Boolean(endpoint),
+  });
+  return {
+    state,
+    version: chrome.runtime.getManifest().version,
+    endpoint,
+    sessionId: status && status.sessionId || '',
+    deploymentId: status && status.deploymentId || '',
+    deviceId: status && status.deviceId || '',
+    ownerUserId: status && status.ownerUserId || '',
+    scopes: status && Array.isArray(status.scopes) ? status.scopes.slice() : [],
+    expiresAt: status && status.expiresAt || '',
+  };
+}
+
+async function claimExtensionDeviceFromErp(message, sender) {
+  const baseUrl = trustedErpDeviceBaseUrl(message.baseUrl, sender);
+  const credentials = getLogisticsDeviceCredentials();
+  const current = await credentials.getStatus();
+  if (current && current.state === 'paired') {
+    const connection = await credentials.getConnection();
+    if (!connection || connection.baseUrl !== baseUrl) {
+      throw new Error('扩展已连接其他 ERP，请先在完整设置中解除配对');
+    }
+    const verified = await readExtensionDeviceStatus(true);
+    if (verified.state === 'paired' && message.reauthorize !== true) return verified;
+    if (verified.state === 'unreachable') {
+      throw new Error('原设备授权暂时无法验证，请恢复 ERP 网络后重试');
+    }
+    if (verified.state !== 'paired') await credentials.clear();
+  }
+
+  const deviceId = await ensureExtensionDeviceId();
+  const claimed = await credentials.claim({
+    baseUrl,
+    code: message.code,
+    deploymentId: message.deploymentId,
+    deviceId,
+    deviceLabel: toText(message.deviceLabel).trim() || 'Chrome extension',
+  });
+
+  const stored = await chrome.storage.local.get([
+    OZON_CALC_ERP_ENDPOINT_KEY,
+    OZON_CALC_ERP_TOKEN_KEY,
+    'ss_erp_connection',
+  ]);
+  const legacy = stored.ss_erp_connection || {};
+  const legacyBaseUrl = toText(legacy.baseUrl).trim().replace(/\/+$/, '');
+  const legacyTokenCandidate = legacyBaseUrl === baseUrl
+    ? toText(stored[OZON_CALC_ERP_TOKEN_KEY] || legacy.token).trim()
+    : '';
+  const legacyToken = await validateStoredCompatibilityCredential(
+    baseUrl,
+    legacyTokenCandidate,
+    claimed.ownerUserId,
+  );
+  await chrome.storage.local.set({
+    [OZON_CALC_ERP_ENDPOINT_KEY]: baseUrl + '/api/collect',
+    [OZON_CALC_ERP_TOKEN_KEY]: legacyToken,
+    ss_erp_connection: { baseUrl, token: legacyToken },
+  });
+  if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
+  return readExtensionDeviceStatus(false);
+}
+
+function enqueueExtensionDeviceClaim(message, sender) {
+  assertTrustedErpDeviceSender(sender);
+  if (!extensionDeviceClaimQueue) {
+    const api = globalThis.SS_ERP_EXTENSION_DEVICE_CLAIM_QUEUE;
+    if (!api || typeof api.create !== 'function') {
+      throw new Error('扩展设备领取队列不可用');
+    }
+    extensionDeviceClaimQueue = api.create(claimExtensionDeviceFromErp);
+  }
+  return extensionDeviceClaimQueue(message, sender);
+}
+
+async function readExtensionDeviceStatusAfterClaims(verify) {
+  if (extensionDeviceClaimQueue && typeof extensionDeviceClaimQueue.afterIdle === 'function') {
+    return extensionDeviceClaimQueue.afterIdle(() => readExtensionDeviceStatus(verify));
+  }
+  return readExtensionDeviceStatus(verify);
 }
 
 function getSourceCaptureSubmitter() {
@@ -3447,8 +3705,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'ss-erp:extension-device-status') {
+    Promise.resolve().then(() => {
+      assertTrustedErpDeviceSender(sender);
+      return readExtensionDeviceStatusAfterClaims(message.verify === true);
+    }).then((deviceStatus) => {
+      sendResponse({ ok: true, data: deviceStatus });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:extension-device-claim') {
+    Promise.resolve().then(() => enqueueExtensionDeviceClaim(message, sender)).then((deviceStatus) => {
+      sendResponse({ ok: true, data: deviceStatus });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === 'ss-erp:ping') {
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']).then((result) => {
+    Promise.resolve().then(() => {
+      assertTrustedErpDeviceSender(sender);
+      return Promise.all([
+        chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']),
+        readExtensionDeviceStatusAfterClaims(false),
+      ]);
+    }).then(([result, deviceStatus]) => {
       const legacyConn = result.ss_erp_connection || {};
       const rawEndpoint = result[OZON_CALC_ERP_ENDPOINT_KEY] || (legacyConn.baseUrl ? legacyConn.baseUrl + '/api/collect' : '');
       const endpoint = normalizeEndpoint(rawEndpoint);
@@ -3463,6 +3748,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         endpoint: baseUrl,
         hasEndpoint: Boolean(baseUrl),
         hasToken: Boolean(token),
+        deviceState: deviceStatus.state,
+        deviceEndpoint: deviceStatus.endpoint,
         hasCollectModule: Boolean(collectModule.collectOzonProductsToErp),
       });
     }).catch((error) => {

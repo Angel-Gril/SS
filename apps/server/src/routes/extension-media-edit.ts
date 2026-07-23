@@ -11,7 +11,10 @@ import {
 } from '../services/ai-image-edit-source.js';
 import { AiImageJobError } from '../services/ai-image-jobs.js';
 import { AiMediaContextError } from '../services/ai-media-context.js';
-import { EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES } from './extension-media-launch.js';
+import {
+  EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
+  type ExtensionMediaWorkflowDecision,
+} from './extension-media-launch.js';
 
 const EXTENSION_MEDIA_EDIT_SOURCE_CONTRACT = 'extension-media-edit-source/v1' as const;
 const EXTENSION_MEDIA_EDIT_MASK_CONTRACT = 'extension-media-edit-mask/v1' as const;
@@ -54,6 +57,7 @@ interface ExtensionMediaEditMaskResult {
 export interface ExtensionMediaEditRoutesOptions {
   authenticateDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   featureFlags: Pick<SourceWorkflowFeatureFlagEvaluator, 'evaluate'>;
+  getMediaWorkflowDecision?: (ownerUserId: string) => Promise<ExtensionMediaWorkflowDecision>;
   getReadiness: () => Promise<ExtensionMediaEditReadiness>;
   loadContext(input: {
     ownerUserId: string;
@@ -183,7 +187,11 @@ async function checkAvailability(
         shopId,
         deviceSessionId: device.sessionId,
       }),
-      options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId: device.ownerUserId }),
+      options.getMediaWorkflowDecision
+        ? options.getMediaWorkflowDecision(device.ownerUserId)
+        : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', {
+          ownerUserId: device.ownerUserId,
+        }),
       options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId: device.ownerUserId }),
       options.getReadiness(),
     ]);

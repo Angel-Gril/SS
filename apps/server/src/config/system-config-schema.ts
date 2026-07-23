@@ -467,9 +467,9 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     description: '单次 AI 请求超时时间，默认 30000',
   },
   ai_daily_budget_cents: {
-    label: 'AI 全局每日预算（分）',
+    label: 'AI 全局每日预算（未执行）',
     group: 'ai',
-    description: '0 表示不按金额限制；后续用量统计接入后生效',
+    description: '当前仅保存配置，尚未接入任务费用预留和全局熔断；填写数值不会限制真实 AI 消费',
   },
   ai_user_daily_category_translation_limit: {
     label: '用户每日类目翻译额度',

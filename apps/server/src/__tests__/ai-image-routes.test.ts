@@ -11,7 +11,15 @@ const baseJob: AiImageJobRecord = {
   providerJobId: 'provider-1', errorCode: null, errorMessage: null,
 };
 
-async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
+async function buildApp(
+  ownerUserId = 'owner-1',
+  provider = 'fake',
+  workflowDecision: { enabled: boolean; reason: string; revision: number } = {
+    enabled: true,
+    reason: 'tenant_allowed',
+    revision: 1,
+  },
+) {
   const repository: AiImageJobRepository = {
     getById: vi.fn(async () => baseJob),
     createWithQuota: vi.fn(async () => ({ kind: 'created' as const, job: { ...baseJob, status: 'QUEUED' as const } })),
@@ -32,6 +40,22 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
     targetUpdatedAt: new Date('2026-07-17T00:00:00.000Z'),
     appliedAt: new Date('2026-07-17T00:00:00.000Z'),
   }));
+  const resolvePrompt = vi.fn(async ({
+    templateKey,
+    userPrompt,
+    userNegativePrompt,
+  }: {
+    templateKey: string;
+    userPrompt: string;
+    userNegativePrompt: string;
+  }) => ({
+    templateKey,
+    release: { id: 'release-1', revisionId: 'revision-1', sequence: 1 },
+    checksum: 'a'.repeat(64),
+    snapshot: { templateKey, releaseId: 'release-1', revisionId: 'revision-1', sequence: 1 },
+    resolvedPrompt: userPrompt,
+    resolvedNegativePrompt: userNegativePrompt,
+  }));
   const app = Fastify();
   await app.register(aiImageRoutes, {
     repository,
@@ -41,24 +65,10 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1', role: 'USER' };
     },
     getSettings: async () => ({ enabled: true, provider, model: provider === 'fake' ? 'fake-image-v1' : 'wanx-v1', dailyLimit: 5, estimatedCostCents: 4 }),
-    resolvePrompt: async ({
-      templateKey,
-      userPrompt,
-      userNegativePrompt,
-    }: {
-      templateKey: string;
-      userPrompt: string;
-      userNegativePrompt: string;
-    }) => ({
-      templateKey,
-      release: { id: 'release-1', revisionId: 'revision-1', sequence: 1 },
-      checksum: 'a'.repeat(64),
-      snapshot: { templateKey, releaseId: 'release-1', revisionId: 'revision-1', sequence: 1 },
-      resolvedPrompt: userPrompt,
-      resolvedNegativePrompt: userNegativePrompt,
-    }),
+    getMediaWorkflowDecision: async () => workflowDecision,
+    resolvePrompt,
   });
-  return { app, repository, enqueue, applyAssets };
+  return { app, repository, enqueue, applyAssets, resolvePrompt };
 }
 
 describe('AI image job routes', () => {
@@ -68,6 +78,32 @@ describe('AI image job routes', () => {
     expect(response.statusCode).toBe(202);
     expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'owner-1', actorUserId: 'actor-1' }), 5);
     expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('rejects a tenant outside the canonical media rollout before any job side effect', async () => {
+    const { app, repository, enqueue, resolvePrompt } = await buildApp('owner-1', 'fake', {
+      enabled: false,
+      reason: 'tenant_not_allowed',
+      revision: 2,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/jobs',
+      payload: {
+        prompt: 'photo',
+        count: 1,
+        width: 1024,
+        height: 1024,
+        idempotencyKey: 'idem-rollout-denied',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'AI_MEDIA_WORKFLOW_DISABLED' });
+    expect(resolvePrompt).not.toHaveBeenCalled();
+    expect(repository.createWithQuota).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('marks a queued job failed when enqueueing never reached a worker', async () => {

@@ -407,7 +407,11 @@ export interface AiMediaOperationReadiness {
 
 export interface AiMediaCapabilities {
   webMediaEnabled: boolean;
+  webMediaReason?: string;
+  webMediaRevision?: string | number;
   workflowEnabled: boolean;
+  workflowReason?: string;
+  workflowRevision?: string | number;
   applications?: AiMediaApplicationCapability;
   operations: Partial<Record<AiMediaOperation, AiMediaOperationReadiness>>;
 }
@@ -1968,10 +1972,99 @@ export function describeAiMediaReadiness(
   }
   if (readiness.reasonCode === 'STORAGE_NOT_READY') {
     return operation === 'IMAGE_TRANSLATE'
-      ? '图片翻译需要可用的 OSS 或本地存储，当前存储配置不兼容。'
+      ? '图片翻译需要可用的对象存储；付费 Provider 必须使用公网 HTTPS 的自有 OSS，当前配置不兼容。'
       : 'AI 图片编辑需要可用的 OSS 或本地存储，当前存储配置不兼容。';
   }
   return readiness.reason;
+}
+
+export interface AiMediaReadinessNotice {
+  id: string;
+  label: string;
+  message: string;
+  revision?: string | number;
+}
+
+const AI_MEDIA_OPERATION_LABELS: Record<AiMediaOperation, string> = {
+  IMAGE_TO_IMAGE: '参考改图',
+  IMAGE_TRANSLATE: '图片翻译',
+  FULL_EDIT: '全图编辑',
+  INPAINT: '局部重绘',
+};
+
+function describeAiMediaWorkflowRollout(reason?: string): string {
+  if (reason === 'master_off') {
+    return '全局主开关未开启。';
+  }
+  if (reason === 'tenant_not_allowed') {
+    return '当前账号不在媒体工作流灰度名单中。';
+  }
+  if (reason === 'invalid_policy') {
+    return '媒体工作流租户策略无效，请由管理员修复。';
+  }
+  return '未开放。请由管理员检查媒体工作流主开关与租户策略。';
+}
+
+function describeWebMediaRollout(reason?: string): string {
+  if (reason === 'master_off') {
+    return '全局入口开关未开启。';
+  }
+  if (reason === 'policy_off') {
+    return '来源工作流发布策略已关闭此入口。';
+  }
+  if (reason === 'pilot_miss') {
+    return '当前账号、店铺或设备不在入口灰度范围内。';
+  }
+  if (reason === 'policy_invalid') {
+    return '来源工作流发布策略无效，请由管理员修复。';
+  }
+  if (reason === 'context_invalid') {
+    return '当前账号上下文无效。';
+  }
+  if (reason === 'config_unavailable') {
+    return '来源工作流发布配置暂时不可读取。';
+  }
+  return '未开放。请由管理员检查 Web 媒体入口与来源工作流发布策略。';
+}
+
+export function listAiMediaReadinessNotices(input: {
+  disabled: boolean;
+  capabilities: AiMediaCapabilities | null;
+}): AiMediaReadinessNotice[] {
+  const notices: AiMediaReadinessNotice[] = [];
+  const { capabilities } = input;
+  if (input.disabled || capabilities?.workflowEnabled === false) {
+    notices.push({
+      id: 'workflow',
+      label: 'AI 媒体工作流',
+      message: describeAiMediaWorkflowRollout(capabilities?.workflowReason),
+      ...(capabilities?.workflowRevision === undefined
+        ? {}
+        : { revision: capabilities.workflowRevision }),
+    });
+  }
+  if (capabilities && !capabilities.webMediaEnabled) {
+    notices.push({
+      id: 'web-media',
+      label: 'Web 媒体工作台',
+      message: describeWebMediaRollout(capabilities.webMediaReason),
+      ...(capabilities.webMediaRevision === undefined
+        ? {}
+        : { revision: capabilities.webMediaRevision }),
+    });
+  }
+  for (const operation of Object.keys(AI_MEDIA_OPERATION_LABELS) as AiMediaOperation[]) {
+    const readiness = capabilities?.operations[operation];
+    if (!readiness || readiness.ready
+      || readiness.reasonCode === 'AI_MEDIA_WORKFLOW_DISABLED'
+      || readiness.reasonCode === 'SOURCE_LISTING_WEB_MEDIA_DISABLED') continue;
+    notices.push({
+      id: operation,
+      label: AI_MEDIA_OPERATION_LABELS[operation],
+      message: describeAiMediaReadiness(operation, readiness),
+    });
+  }
+  return notices;
 }
 
 export interface WorkflowSubmissionIntent {

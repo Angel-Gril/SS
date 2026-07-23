@@ -129,7 +129,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="relative min-h-screen flex overflow-x-hidden bg-background">
+    <div className="relative min-h-screen flex overflow-x-clip bg-background">
       <Sidebar
         collapsed={collapsed}
         pathname={pathname}

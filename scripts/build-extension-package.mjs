@@ -50,6 +50,82 @@ function resolveDefaultErpBaseUrl() {
     || 'https://app.ss-erp.com';
 }
 
+function resolveDefaultErpApiBaseUrl(erpBaseUrl) {
+  if (target === 'local') return erpBaseUrl;
+  return normalizeErpBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL)
+    || erpBaseUrl;
+}
+
+function resolveDefaultErpAdminBaseUrl(erpBaseUrl) {
+  if (target === 'local') return erpBaseUrl;
+  const adminHostname = String(process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || '').trim();
+  const configured = normalizeErpBaseUrl(adminHostname ? `https://${adminHostname}` : '');
+  if (configured) return configured;
+  try {
+    const userUrl = new URL(erpBaseUrl);
+    if (userUrl.hostname.startsWith('app.')) {
+      userUrl.hostname = `admin.${userUrl.hostname.slice(4)}`;
+      return userUrl.origin;
+    }
+  } catch {
+    // Fall through to the international production default.
+  }
+  return 'https://admin.ss-erp.com';
+}
+
+function knownDeploymentRoot(hostname) {
+  const normalized = String(hostname || '').toLowerCase();
+  if (normalized === 'ss-erp.com' || normalized.endsWith('.ss-erp.com')) return 'ss-erp.com';
+  if (normalized === 'ss-erp.cn' || normalized.endsWith('.ss-erp.cn')) return 'ss-erp.cn';
+  return '';
+}
+
+function assertConfiguredCloudHttps(label, value) {
+  if (target !== 'cloud' || !String(value || '').trim()) return;
+  const raw = String(value).trim();
+  let parsed;
+  try {
+    parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+  } catch {
+    throw new Error(`Cloud extension ${label} URL is invalid`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Cloud extension ${label} URL must use HTTPS`);
+  }
+}
+
+assertConfiguredCloudHttps(
+  'Web',
+  process.env.EXTENSION_CLOUD_BASE_URL || process.env.NEXT_PUBLIC_USER_HOSTNAME,
+);
+assertConfiguredCloudHttps('admin', process.env.NEXT_PUBLIC_ADMIN_HOSTNAME);
+assertConfiguredCloudHttps('API', process.env.NEXT_PUBLIC_API_BASE_URL);
+
+const resolvedErpBaseUrl = resolveDefaultErpBaseUrl();
+const resolvedErpAdminBaseUrl = resolveDefaultErpAdminBaseUrl(resolvedErpBaseUrl);
+const resolvedErpApiBaseUrl = resolveDefaultErpApiBaseUrl(resolvedErpBaseUrl);
+const deploymentUrls = {
+  web: new URL(resolvedErpBaseUrl),
+  admin: new URL(resolvedErpAdminBaseUrl),
+  api: new URL(resolvedErpApiBaseUrl),
+};
+
+if (target === 'cloud') {
+  for (const [label, url] of Object.entries(deploymentUrls)) {
+    if (url.protocol !== 'https:') {
+      throw new Error(`Cloud extension ${label} URL must use HTTPS`);
+    }
+  }
+  const roots = Object.values(deploymentUrls).map((url) => knownDeploymentRoot(url.hostname));
+  const knownRoots = roots.filter(Boolean);
+  if (knownRoots.length > 0 && (
+    knownRoots.length !== roots.length
+    || new Set(knownRoots).size !== 1
+  )) {
+    throw new Error('Cloud extension Web, admin, and API URLs must use the same SS ERP deployment root');
+  }
+}
+
 function parseVersion(value) {
   const match = String(value || '').match(/^(\d+)\.(\d+)\.(\d+)$/);
   if (!match) return null;
@@ -131,7 +207,9 @@ writeFileSync(deploymentDefaultsPath, [
   '(function (root) {',
   '  root.SS_ERP_DEPLOYMENT_DEFAULTS = Object.freeze({',
   `    target: ${JSON.stringify(target)},`,
-  `    erpBaseUrl: ${JSON.stringify(resolveDefaultErpBaseUrl())},`,
+  `    erpBaseUrl: ${JSON.stringify(deploymentUrls.web.origin)},`,
+  `    erpAdminBaseUrl: ${JSON.stringify(deploymentUrls.admin.origin)},`,
+  `    erpApiBaseUrl: ${JSON.stringify(deploymentUrls.api.origin)},`,
   '  });',
   "})(typeof globalThis !== 'undefined' ? globalThis : self);",
   '',
@@ -141,7 +219,7 @@ const manifestPath = path.join(outDir, 'manifest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 manifest.version = buildVersion;
 
-const CLOUD_HOST_PERMISSIONS = [
+const CLOUD_HOST_PERMISSIONS = unique([
   'https://ss-erp.com/*',
   'https://*.ss-erp.com/*',
   'https://ss-erp.cn/*',
@@ -173,14 +251,17 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://www.goofish.com/*',
   'https://goofish.com/*',
   'https://2.taobao.com/*',
-];
+  `${deploymentUrls.api.origin}/*`,
+]);
 
-const CLOUD_ERP_MATCHES = [
+const CLOUD_ERP_MATCHES = unique([
   'https://ss-erp.com/*',
   'https://*.ss-erp.com/*',
   'https://ss-erp.cn/*',
   'https://*.ss-erp.cn/*',
-];
+  `${deploymentUrls.web.origin}/*`,
+  `${deploymentUrls.admin.origin}/*`,
+]);
 
 const CLOUD_WEB_RESOURCE_MATCHES = [
   ...CLOUD_ERP_MATCHES,
