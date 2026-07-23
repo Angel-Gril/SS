@@ -35,8 +35,22 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/challenge-config', async (_request, reply) => {
-    const config = await getPublicAuthChallengeConfig();
-    return reply.send({ code: 1, msg: 'ok', data: { ...config, ...await getPublicHumanChallengeConfig() } });
+    const [config, humanChallenge] = await Promise.all([
+      getPublicAuthChallengeConfig(),
+      getPublicHumanChallengeConfig(),
+    ]);
+    const turnstileEnabled = humanChallenge.humanChallengeProvider === 'cloudflare-turnstile';
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: {
+        ...config,
+        ...humanChallenge,
+        // Keep legacy clients aligned with the effective provider.
+        turnstileEnabled,
+        turnstileSiteKey: turnstileEnabled ? humanChallenge.turnstileSiteKey : '',
+      },
+    });
   });
 
   app.get('/human-challenge', async (request, reply) => {

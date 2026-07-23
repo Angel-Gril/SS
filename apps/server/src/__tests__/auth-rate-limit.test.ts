@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { authRoutes } from '../routes/auth.js';
 
 const mocks = vi.hoisted(() => ({
-  systemConfigFindUnique: vi.fn(async () => null),
+  systemConfigFindUnique: vi.fn(async (_input: { where: { key: string } }) => (
+    null as { key: string; value: string } | null
+  )),
   redisGet: vi.fn(async () => null),
   redisIncr: vi.fn(async () => 1),
   redisExpire: vi.fn(async () => 1),
@@ -45,6 +47,32 @@ async function buildApp() {
 }
 
 describe('authRoutes rate limiting', () => {
+  it('reports the effective human challenge provider through legacy fields', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'builtin-pow');
+    mocks.systemConfigFindUnique.mockImplementation(async ({ where }) => (
+      where.key === 'feature_turnstile_login'
+        ? { key: where.key, value: 'true' }
+        : null
+    ));
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/auth/challenge-config' });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toMatchObject({
+        humanChallengeProvider: 'builtin-pow',
+        turnstileEnabled: false,
+        turnstileSiteKey: '',
+      });
+    } finally {
+      await app.close();
+      mocks.systemConfigFindUnique.mockResolvedValue(null);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('does not let challenge-config requests consume the login rate limit', async () => {
     const app = await buildApp();
 
