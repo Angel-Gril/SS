@@ -63,12 +63,26 @@ const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_SUBMIT_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-submit';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_CANCEL_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-cancel';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_OPEN_MESSAGE =
+  'ss-erp:source-listing-workbench-media-editor-open';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_READ_MESSAGE =
+  'ss-erp:source-listing-workbench-media-editor-read';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_SUBMIT_MESSAGE =
+  'ss-erp:source-listing-workbench-media-editor-submit';
+const SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_CANCEL_MESSAGE =
+  'ss-erp:source-listing-workbench-media-editor-cancel';
 const SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_PAGE_LIMIT = 10;
 const SS_ERP_SOURCE_MEDIA_MUTATION_HISTORY_MAX_PAGES = 5;
 const SS_ERP_SOURCE_MEDIA_CONFIRMATIONS_KEY =
   'ss-erp:source-workbench:media-confirmations:v1';
 const SS_ERP_SOURCE_MEDIA_CONFIRMATION_LIMIT = 20;
 const SS_ERP_SOURCE_MEDIA_CONFIRMATION_TTL_MS = 2 * 60 * 1000;
+const SS_ERP_SOURCE_MEDIA_EDITOR_SESSIONS_KEY =
+  'ss-erp:source-workbench:media-editor-sessions:v1';
+const SS_ERP_SOURCE_MEDIA_EDITOR_SESSION_LIMIT = 10;
+const SS_ERP_SOURCE_MEDIA_EDITOR_SESSION_TTL_MS = 30 * 60 * 1000;
+const SS_ERP_SOURCE_MEDIA_EDITOR_SUBMIT_LEASE_MS = 5 * 60 * 1000;
+const SS_ERP_SOURCE_MEDIA_EDITOR_SUBMIT_MINIMUM_REMAINING_MS = 4 * 60 * 1000;
 const SS_ERP_SOURCE_TRANSLATION_INTENTS_KEY =
   'ss-erp:source-workbench:translation-intents:v1';
 const SS_ERP_SOURCE_TRANSLATION_INTENT_LIMIT = 20;
@@ -262,6 +276,15 @@ try { importScripts('../shared/erp-adapter/source-media-confirmation.js'); } cat
 try { importScripts('../shared/erp-adapter/source-media-confirmation-coordinator.js'); } catch (error) {
   console.warn('[SS ERP] source media confirmation coordinator failed to load', error);
 }
+try { importScripts('../shared/erp-adapter/source-media-editor-session.js'); } catch (error) {
+  console.warn('[SS ERP] source media editor session module failed to load', error);
+}
+try { importScripts('../shared/erp-adapter/source-media-editor-coordinator.js'); } catch (error) {
+  console.warn('[SS ERP] source media editor coordinator failed to load', error);
+}
+try { importScripts('../shared/erp-adapter/source-media-editor-lifecycle.js'); } catch (error) {
+  console.warn('[SS ERP] source media editor lifecycle failed to load', error);
+}
 
 try { importScripts('../shared/logistics-rules/manual-fallback-persistence.js'); } catch (error) {
   console.warn('[SS ERP] logistics manual fallback module failed to load', error);
@@ -295,6 +318,7 @@ let sourceListingWorkflowClient = null;
 let sourceTranslationIntentWriteQueue = Promise.resolve();
 let sourceMediaMutationIntentStore = null;
 let sourceMediaConfirmationCoordinator = null;
+let sourceMediaEditorCoordinator = null;
 const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
@@ -713,6 +737,452 @@ function currentSourceListingContext(result, requestedListingWorkflowId) {
   };
 }
 
+async function executeSourceMediaCreateWorkflow(input) {
+  const client = input?.client;
+  const shopId = sourceWorkflowHandoffText(input?.shopId, 200);
+  const listingWorkflowId = sourceWorkflowHandoffText(input?.listingWorkflowId, 200);
+  const revision = Number(input?.revision);
+  const draftVersion = Number(input?.draftVersion);
+  const operation = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(input?.operation)
+    ? input.operation
+    : '';
+  const maximumSources = operation === 'IMAGE_TO_IMAGE' ? 4 : 1;
+  const sourceMediaKeys = Array.isArray(input?.sourceMediaKeys)
+    ? input.sourceMediaKeys.map((value) => sourceWorkflowHandoffText(value, 500))
+    : [];
+  const prompt = sourceWorkflowHandoffText(input?.prompt, 8000);
+  const negativePrompt = String(input?.negativePrompt == null ? '' : input.negativePrompt)
+    .normalize('NFKC').trim();
+  const maskAssetId = input?.maskAssetId == null
+    ? null
+    : sourceWorkflowHandoffText(input.maskAssetId, 200);
+  const attemptId = String(input?.attemptId || '').trim();
+  if (!client || typeof client.createWorkflowCommand !== 'function'
+    || !shopId || !listingWorkflowId
+    || !Number.isSafeInteger(revision) || revision <= 0
+    || !Number.isSafeInteger(draftVersion) || draftVersion <= 0 || !operation
+    || !prompt || negativePrompt.length > 4000
+    || sourceMediaKeys.length < 1 || sourceMediaKeys.length > maximumSources
+    || sourceMediaKeys.some((value) => !value)
+    || new Set(sourceMediaKeys).size !== sourceMediaKeys.length
+    || !/^[a-f0-9]{64}$/.test(attemptId)
+    || (operation === 'INPAINT' ? !maskAssetId : maskAssetId !== null)) {
+    throw new Error('ERP 图片创建请求无效，请检查图片和指令');
+  }
+  const result = await client.createWorkflowCommand({
+    shopId,
+    listingWorkflowId,
+    draftRevision: revision,
+    draftVersion,
+    operation,
+    sourceMediaKeys,
+    prompt,
+    negativePrompt,
+    maskAssetId,
+    workflowOperationKey: 'extension-media-workflow:' + attemptId.slice(0, 32),
+  });
+  return { result };
+}
+
+function getSourceMediaEditorContract() {
+  const contract = globalThis.SS_ERP_SOURCE_MEDIA_EDITOR_SESSION;
+  if (!contract || typeof contract.normalizeSession !== 'function'
+    || typeof contract.normalizeMaskCheckpoint !== 'function'
+    || typeof contract.createNonce !== 'function'
+    || typeof contract.bindSender !== 'function'
+    || typeof contract.isBoundSender !== 'function') {
+    throw new Error('ERP 局部重绘会话安全契约不可用');
+  }
+  return contract;
+}
+
+function getSourceMediaEditorCoordinator() {
+  if (sourceMediaEditorCoordinator) return sourceMediaEditorCoordinator;
+  const factory = globalThis.SS_ERP_SOURCE_MEDIA_EDITOR_COORDINATOR;
+  if (!factory || typeof factory.createCoordinator !== 'function') {
+    throw new Error('ERP 局部重绘会话编排契约不可用');
+  }
+  if (!chrome.storage?.session || typeof chrome.storage.session.get !== 'function'
+    || typeof chrome.storage.session.set !== 'function') {
+    throw new Error('浏览器不支持安全的临时编辑器存储');
+  }
+  sourceMediaEditorCoordinator = factory.createCoordinator({
+    contract: getSourceMediaEditorContract(),
+    storage: chrome.storage.session,
+    windows: chrome.windows,
+    tabs: chrome.tabs,
+    runtime: chrome.runtime,
+    crypto: globalThis.crypto,
+    storageKey: SS_ERP_SOURCE_MEDIA_EDITOR_SESSIONS_KEY,
+    ttlMs: SS_ERP_SOURCE_MEDIA_EDITOR_SESSION_TTL_MS,
+    submitLeaseMs: SS_ERP_SOURCE_MEDIA_EDITOR_SUBMIT_LEASE_MS,
+    minimumSubmitRemainingMs: SS_ERP_SOURCE_MEDIA_EDITOR_SUBMIT_MINIMUM_REMAINING_MS,
+    limit: SS_ERP_SOURCE_MEDIA_EDITOR_SESSION_LIMIT,
+    launchPath: 'pages/media-confirm-launch.html',
+    editorPath: 'pages/media-editor.html',
+  });
+  return sourceMediaEditorCoordinator;
+}
+
+function registerSourceMediaEditorTabCleanup() {
+  const lifecycle = globalThis.SS_ERP_SOURCE_MEDIA_EDITOR_LIFECYCLE;
+  if (!lifecycle || typeof lifecycle.registerTabCleanup !== 'function') {
+    console.warn('[SS ERP] source media editor tab cleanup is unavailable');
+    return;
+  }
+  lifecycle.registerTabCleanup({
+    tabs: chrome.tabs,
+    getCoordinator: getSourceMediaEditorCoordinator,
+    onError(error) {
+      console.warn('[SS ERP] source media editor tab cleanup failed', error);
+    },
+  });
+}
+
+registerSourceMediaEditorTabCleanup();
+
+function sourceMediaEditorOpenRequest(value, sender) {
+  const allowedKeys = new Set([
+    'type', 'sourceProductId', 'platform', 'snapshotId', 'supplyGoodsId', 'shopId',
+    'listingWorkflowId', 'revision', 'draftVersion', 'operation', 'sourceMediaKeys',
+  ]);
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const operation = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(value.operation)
+    ? value.operation
+    : '';
+  const maximumSources = operation === 'IMAGE_TO_IMAGE' ? 4 : 1;
+  const sourceMediaKeys = Array.isArray(value.sourceMediaKeys)
+    ? value.sourceMediaKeys.map((key) => sourceWorkflowHandoffText(key, 500))
+    : [];
+  const request = {
+    sourceProductId: sourceWorkflowHandoffText(value.sourceProductId, 200),
+    platform: sourceWorkflowPlatform(value.platform),
+    snapshotId: sourceWorkflowHandoffText(value.snapshotId, 200),
+    supplyGoodsId: sourceWorkflowHandoffText(value.supplyGoodsId, 200),
+    shopId: sourceWorkflowHandoffText(value.shopId, 200),
+    listingWorkflowId: sourceWorkflowHandoffText(value.listingWorkflowId, 200),
+    revision: Number(value.revision),
+    draftVersion: Number(value.draftVersion),
+    operation,
+    sourceMediaKeys,
+    sourceTabId: Number(sender?.tab?.id),
+  };
+  if (!request.sourceProductId || !request.platform || !request.snapshotId
+    || !request.supplyGoodsId || !request.shopId || !request.listingWorkflowId
+    || !Number.isSafeInteger(request.revision) || request.revision <= 0
+    || !Number.isSafeInteger(request.draftVersion) || request.draftVersion <= 0
+    || !request.operation
+    || request.sourceMediaKeys.length < 1 || request.sourceMediaKeys.length > maximumSources
+    || request.sourceMediaKeys.some((key) => !key)
+    || new Set(request.sourceMediaKeys).size !== request.sourceMediaKeys.length
+    || !Number.isSafeInteger(request.sourceTabId) || request.sourceTabId < 0
+    || sender?.frameId !== 0 || !sourceWorkflowHandoffText(sender?.documentId, 200)) return null;
+  return request;
+}
+
+function sourceMediaEditorCapability(launch, operation, sourceMediaKeys) {
+  const capability = launch && launch.contractVersion === 2
+    && launch.operations && launch.operations[operation];
+  const allowedSourceKeys = new Set(launch && launch.context
+    && Array.isArray(launch.context.sourceInputs)
+    ? launch.context.sourceInputs.map((item) => item.sourceMediaKey)
+    : []);
+  const maximumSources = operation === 'IMAGE_TO_IMAGE'
+    ? Number(capability && capability.maxReferences)
+    : 1;
+  if (!launch || launch.state !== 'ready' || launch.contractVersion !== 2
+    || !launch.context || !capability || capability.enabled !== true || capability.ready !== true
+    || !Number.isSafeInteger(maximumSources) || maximumSources < 1
+    || sourceMediaKeys.length > maximumSources
+    || sourceMediaKeys.some((key) => !allowedSourceKeys.has(key))
+    || (operation === 'INPAINT'
+      && capability.maskSemantics !== 'WHITE_EDIT_BLACK_PRESERVE_V1')) {
+    throw new Error('当前 AI 图片能力或来源图片已变化，请刷新后重试');
+  }
+  return capability;
+}
+
+function sourceMediaEditorPreparedSnapshot(prepared) {
+  if (!prepared || prepared.state !== 'ready' || !prepared.sourceAsset) {
+    throw new Error('局部重绘来源图片暂不可用');
+  }
+  return {
+    sourceMediaKey: prepared.sourceMediaKey,
+    sourceAssetId: prepared.sourceAsset.id,
+    mimeType: prepared.sourceAsset.mimeType,
+    width: prepared.sourceAsset.width,
+    height: prepared.sourceAsset.height,
+    maskSemantics: prepared.maskSemantics,
+    maxMaskBytes: prepared.maxMaskBytes,
+  };
+}
+
+function sameSourceMediaEditorPreparedSource(frozen, prepared) {
+  if (!frozen || !prepared) return frozen === null && prepared === null;
+  const latest = sourceMediaEditorPreparedSnapshot(prepared);
+  return frozen.sourceMediaKey === latest.sourceMediaKey
+    && frozen.sourceAssetId === latest.sourceAssetId
+    && frozen.mimeType === latest.mimeType
+    && frozen.width === latest.width
+    && frozen.height === latest.height
+    && frozen.maskSemantics === latest.maskSemantics
+    && frozen.maxMaskBytes === latest.maxMaskBytes;
+}
+
+async function resolveSourceMediaEditorOpenAuthority(request) {
+  const handoff = await readPersistedSourceWorkflowHandoff(
+    request.platform,
+    request.sourceProductId,
+  );
+  if (!handoff || handoff.sourceProductId !== request.sourceProductId
+    || handoff.platform !== request.platform) {
+    throw new Error('ERP 局部重绘上下文已变化，请刷新后重试');
+  }
+  const client = getSourceListingWorkflowClient();
+  const current = await client.getStatus({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, request.listingWorkflowId);
+  if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+  const launch = await client.getMediaLaunch({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+    ...listing,
+  });
+  sourceMediaEditorCapability(launch, request.operation, request.sourceMediaKeys);
+  if (launch.context.snapshotId !== request.snapshotId
+    || launch.context.supplyGoodsId !== request.supplyGoodsId
+    || launch.context.shopId !== request.shopId
+    || launch.context.id !== request.listingWorkflowId
+    || launch.context.revision !== request.revision
+    || launch.context.draftVersion !== request.draftVersion) {
+    throw new Error('ERP 商品草稿已变化，请刷新后重试');
+  }
+  const prepared = request.operation === 'INPAINT'
+    ? await client.prepareMediaEditSource({
+      snapshotId: launch.context.snapshotId,
+      supplyGoodsId: launch.context.supplyGoodsId,
+      shopId: launch.context.shopId,
+      listingWorkflowId: launch.context.id,
+      revision: launch.context.revision,
+      draftVersion: launch.context.draftVersion,
+      sourceMediaKey: request.sourceMediaKeys[0],
+    })
+    : null;
+  const preparedSource = prepared ? sourceMediaEditorPreparedSnapshot(prepared) : null;
+  return { handoff, client, listing, launch, prepared, preparedSource };
+}
+
+async function openSourceMediaEditor(request) {
+  const authority = await resolveSourceMediaEditorOpenAuthority(request);
+  const context = authority.launch.context;
+  return getSourceMediaEditorCoordinator().open({
+    platform: request.platform,
+    sourceProductId: request.sourceProductId,
+    snapshotId: context.snapshotId,
+    supplyGoodsId: context.supplyGoodsId,
+    shopId: context.shopId,
+    listingWorkflowId: context.id,
+    revision: context.revision,
+    draftVersion: context.draftVersion,
+    operation: request.operation,
+    sourceMediaKeys: [...request.sourceMediaKeys],
+    preparedSource: authority.preparedSource,
+    sourceTabId: request.sourceTabId,
+  });
+}
+
+async function loadFrozenSourceMediaEditorAuthority(session) {
+  const handoff = await readPersistedSourceWorkflowHandoff(
+    session.platform,
+    session.sourceProductId,
+  );
+  if (!handoff || handoff.sourceProductId !== session.sourceProductId
+    || handoff.platform !== session.platform
+    || handoff.snapshotId !== session.snapshotId
+    || handoff.supplyGoodsId !== session.supplyGoodsId) {
+    throw new Error('ERP 局部重绘上下文已变化，请从商品页重新发起');
+  }
+  const client = getSourceListingWorkflowClient();
+  const current = await client.getStatus({
+    snapshotId: session.snapshotId,
+    supplyGoodsId: session.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, session.listingWorkflowId);
+  if (!listing || listing.shopId !== session.shopId
+    || listing.revision !== session.revision
+    || listing.draftVersion !== session.draftVersion) {
+    throw new Error('ERP 商品草稿已变化，请从商品页重新发起');
+  }
+  const launch = await client.getMediaLaunch({
+    snapshotId: session.snapshotId,
+    supplyGoodsId: session.supplyGoodsId,
+    shopId: session.shopId,
+    listingWorkflowId: session.listingWorkflowId,
+    revision: session.revision,
+    draftVersion: session.draftVersion,
+  });
+  sourceMediaEditorCapability(launch, session.operation, session.sourceMediaKeys);
+  const context = launch.context;
+  if (context.snapshotId !== session.snapshotId
+    || context.supplyGoodsId !== session.supplyGoodsId
+    || context.shopId !== session.shopId
+    || context.id !== session.listingWorkflowId
+    || context.revision !== session.revision
+    || context.draftVersion !== session.draftVersion) {
+    throw new Error('ERP 局部重绘授权已变化，请从商品页重新发起');
+  }
+  const prepared = session.operation === 'INPAINT'
+    ? await client.prepareMediaEditSource({
+      snapshotId: session.snapshotId,
+      supplyGoodsId: session.supplyGoodsId,
+      shopId: session.shopId,
+      listingWorkflowId: session.listingWorkflowId,
+      revision: session.revision,
+      draftVersion: session.draftVersion,
+      sourceMediaKey: session.sourceMediaKeys[0],
+    })
+    : null;
+  if (!sameSourceMediaEditorPreparedSource(session.preparedSource, prepared)) {
+    throw new Error('局部重绘来源图片已变化，请从商品页重新发起');
+  }
+  return { client, listing, launch, prepared };
+}
+
+async function readSourceMediaEditor(nonce, sender) {
+  const session = await getSourceMediaEditorCoordinator().claim(nonce, sender);
+  if (!session) throw new Error('局部重绘会话已失效，请从商品页重新发起');
+  const authority = await loadFrozenSourceMediaEditorAuthority(session);
+  return {
+    operation: session.operation,
+    sourceMediaKeys: session.sourceMediaKeys,
+    expiresAt: session.expiresAt,
+    completed: session.completion !== null,
+    completion: session.completion,
+    source: authority.prepared ? {
+      url: authority.prepared.sourceAsset.url,
+      mimeType: authority.prepared.sourceAsset.mimeType,
+      width: authority.prepared.sourceAsset.width,
+      height: authority.prepared.sourceAsset.height,
+      maskSemantics: authority.prepared.maskSemantics,
+      maxMaskBytes: authority.prepared.maxMaskBytes,
+    } : null,
+  };
+}
+
+async function sourceMediaMaskSha256(maskDataUrl) {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(maskDataUrl),
+  );
+  return Array.from(new Uint8Array(digest)).map((byte) => (
+    byte.toString(16).padStart(2, '0')
+  )).join('');
+}
+
+async function submitSourceMediaEditor(message, sender) {
+  const operation = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(message?.operation)
+    ? message.operation
+    : '';
+  const allowedKeys = new Set([
+    'type', 'nonce', 'operation', 'prompt', 'negativePrompt',
+    ...(operation === 'INPAINT' ? ['maskDataUrl'] : []),
+  ]);
+  const prompt = sourceWorkflowHandoffText(message?.prompt, 8000);
+  const negativePrompt = String(message?.negativePrompt == null ? '' : message.negativePrompt)
+    .normalize('NFKC').trim();
+  if (!message || Object.keys(message).some((key) => !allowedKeys.has(key))
+    || !operation || typeof message.prompt !== 'string'
+    || typeof message.negativePrompt !== 'string'
+    || !prompt || negativePrompt.length > 4000
+    || (operation === 'INPAINT' && (typeof message.maskDataUrl !== 'string'
+      || message.maskDataUrl.length > 30 * 1024 * 1024))) {
+    throw new Error('AI 图片任务提交请求无效');
+  }
+  const coordinator = getSourceMediaEditorCoordinator();
+  const outcome = await coordinator.submit(
+    message.nonce,
+    sender,
+    async (session, saveMaskCheckpoint) => {
+      if (session.operation !== operation) {
+        throw new Error('AI 图片编辑器操作已变化，请重新打开');
+      }
+      const authority = await loadFrozenSourceMediaEditorAuthority(session);
+      let maskAssetId = null;
+      if (session.operation === 'INPAINT') {
+        if (typeof message.maskDataUrl !== 'string') {
+          throw new Error('局部重绘遮罩请求无效');
+        }
+        const maskSha256 = await sourceMediaMaskSha256(message.maskDataUrl);
+        maskAssetId = session.maskCheckpoint
+          && session.maskCheckpoint.maskSha256 === maskSha256
+          ? session.maskCheckpoint.maskAssetId
+          : '';
+        if (!maskAssetId) {
+          const uploaded = await authority.client.uploadMediaEditMask({
+            snapshotId: session.snapshotId,
+            supplyGoodsId: session.supplyGoodsId,
+            shopId: session.shopId,
+            listingWorkflowId: session.listingWorkflowId,
+            revision: session.revision,
+            draftVersion: session.draftVersion,
+            sourceMediaKey: session.sourceMediaKeys[0],
+            maskSemantics: authority.prepared.maskSemantics,
+            maskDataUrl: message.maskDataUrl,
+            expectedWidth: authority.prepared.sourceAsset.width,
+            expectedHeight: authority.prepared.sourceAsset.height,
+            maxMaskBytes: authority.prepared.maxMaskBytes,
+          });
+          if (!uploaded || uploaded.state !== 'ready') {
+            throw new Error('局部重绘遮罩上传失败');
+          }
+          const checkpointed = await saveMaskCheckpoint({
+            maskSha256,
+            maskAssetId: uploaded.maskAssetId,
+          });
+          maskAssetId = checkpointed.maskCheckpoint.maskAssetId;
+        }
+      }
+      const created = await executeSourceMediaCreateWorkflow({
+        client: authority.client,
+        shopId: session.shopId,
+        listingWorkflowId: session.listingWorkflowId,
+        revision: session.revision,
+        draftVersion: session.draftVersion,
+        operation: session.operation,
+        sourceMediaKeys: session.sourceMediaKeys,
+        prompt,
+        negativePrompt,
+        maskAssetId,
+        attemptId: session.nonce,
+      });
+      return {
+        replay: created.result.replay === true,
+        result: created.result.result,
+      };
+    },
+  );
+  const session = await coordinator.read(message.nonce);
+  if (session && outcome.state === 'completed') {
+    try {
+      await chrome.tabs.sendMessage(session.sourceTabId, {
+        type: 'ss-erp:source-listing-workbench-media-confirmed',
+        platform: session.platform,
+        sourceProductId: session.sourceProductId,
+        listingWorkflowId: session.listingWorkflowId,
+        resultKind: 'TASK_QUEUED',
+      });
+    } catch {}
+  }
+  return outcome;
+}
+
+async function cancelSourceMediaEditor(nonce, sender) {
+  return getSourceMediaEditorCoordinator().cancel(nonce, sender);
+}
+
 async function loadBoundedSourceMediaHistoryItem(client, handoff, listing, mediaWorkflowId) {
   let beforeCursor = null;
   const seenCursors = new Set();
@@ -952,6 +1422,7 @@ async function submitSourceMediaConfirmation(nonce, sender) {
         platform: outcome.confirmation.platform,
         sourceProductId: outcome.confirmation.sourceProductId,
         listingWorkflowId: outcome.confirmation.listingWorkflowId,
+        resultKind: 'MUTATION_COMPLETED',
       });
     } catch {}
   }
@@ -2785,6 +3256,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_CANCEL_MESSAGE) {
     Promise.resolve().then(() => cancelSourceMediaConfirmation(message.nonce, sender)).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_OPEN_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const request = sourceMediaEditorOpenRequest(message, sender);
+      if (!request) throw new Error('ERP 局部重绘打开请求无效');
+      return openSourceMediaEditor(request);
+    }).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_READ_MESSAGE) {
+    Promise.resolve().then(() => readSourceMediaEditor(message.nonce, sender)).then((editor) => {
+      sendResponse({ ok: true, editor });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_SUBMIT_MESSAGE) {
+    Promise.resolve().then(() => submitSourceMediaEditor(message, sender)).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_MEDIA_EDITOR_CANCEL_MESSAGE) {
+    Promise.resolve().then(() => cancelSourceMediaEditor(message.nonce, sender)).then((result) => {
       sendResponse({ ok: true, result });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

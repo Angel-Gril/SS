@@ -107,6 +107,60 @@
       && value.targetLanguage === 'ru';
   }
 
+  var STANDALONE_MEDIA_OPERATIONS = [
+    'IMAGE_TRANSLATE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT',
+  ];
+
+  function validStandaloneLaunchCapability(value, operation) {
+    if (!validCapability(value)
+      || typeof value.ready !== 'boolean'
+      || !text(value.reasonCode, 100)
+      || typeof value.testOnly !== 'boolean'
+      || value.operation !== operation) return false;
+    var commonKeys = [
+      'enabled', 'ready', 'reasonCode', 'reason', 'revision', 'testOnly', 'operation',
+      'estimatedCostCents', 'maximumCostCents',
+    ];
+    var operationKeys = operation === 'IMAGE_TRANSLATE'
+      ? ['sourceLanguage', 'targetLanguage']
+      : operation === 'IMAGE_TO_IMAGE'
+        ? ['maxReferences']
+        : operation === 'INPAINT'
+          ? ['maskSemantics', 'maxMaskBytes']
+          : [];
+    if (Object.keys(value).some(function (key) {
+      return !commonKeys.includes(key) && !operationKeys.includes(key);
+    })) return false;
+    if (value.estimatedCostCents !== undefined
+      && (!Number.isSafeInteger(value.estimatedCostCents) || value.estimatedCostCents < 0)) return false;
+    if (value.maximumCostCents !== undefined
+      && (!Number.isSafeInteger(value.maximumCostCents)
+        || value.maximumCostCents < Number(value.estimatedCostCents || 0))) return false;
+    if (operation === 'IMAGE_TRANSLATE') {
+      return value.sourceLanguage === 'zh' && value.targetLanguage === 'ru';
+    }
+    if (operation === 'IMAGE_TO_IMAGE') {
+      return Number.isSafeInteger(value.maxReferences)
+        && value.maxReferences >= 1 && value.maxReferences <= 4;
+    }
+    if (operation === 'INPAINT') {
+      return value.maskSemantics === 'WHITE_EDIT_BLACK_PRESERVE_V1'
+        && Number.isSafeInteger(value.maxMaskBytes)
+        && value.maxMaskBytes > 0 && value.maxMaskBytes <= 20 * 1024 * 1024;
+    }
+    return true;
+  }
+
+  function validStandaloneLaunchOperations(value) {
+    var operations = record(value);
+    if (!operations || Object.keys(operations).some(function (key) {
+      return !STANDALONE_MEDIA_OPERATIONS.includes(key);
+    })) return false;
+    return STANDALONE_MEDIA_OPERATIONS.every(function (operation) {
+      return validStandaloneLaunchCapability(operations[operation], operation);
+    });
+  }
+
   function positiveRevision(value, label) {
     var normalized = Number(value);
     if (!Number.isSafeInteger(normalized) || normalized <= 0) {
@@ -146,12 +200,26 @@
     var requested = record(context.requested);
     return requested
       && Object.keys(requested).every(function (key) {
-        return ['snapshotId', 'listingWorkflowId', 'revision', 'draftVersion'].includes(key);
+        return ['snapshotId', 'listingWorkflowId', 'revision', 'draftVersion', 'contractVersion'].includes(key);
       })
       && requested.snapshotId === input.snapshotId
       && requested.listingWorkflowId === input.listingWorkflowId
       && requested.revision === input.revision
-      && requested.draftVersion === input.draftVersion;
+      && requested.draftVersion === input.draftVersion
+      && (requested.contractVersion === undefined || requested.contractVersion === 2);
+  }
+
+  function normalizedSourceMediaKeys(value, operation) {
+    if (!Array.isArray(value)) throw new TypeError('source media keys are invalid');
+    var maximum = operation === 'IMAGE_TO_IMAGE' ? 4 : 1;
+    if (value.length < 1 || value.length > maximum) {
+      throw new TypeError('source media keys are invalid');
+    }
+    var keys = value.map(function (item) {
+      return identifier(item, 'sourceMediaKey', 500);
+    });
+    if (new Set(keys).size !== keys.length) throw new TypeError('source media keys are invalid');
+    return keys;
   }
 
   function bytesToHex(bytes) {
@@ -178,7 +246,14 @@
     return prefix + bytesToHex(new Uint8Array(digest));
   }
 
-  async function executeGrantedMediaMutation(transport, operation, requiredScope, envelope) {
+  async function executeGrantedMediaMutation(
+    transport,
+    operation,
+    requiredScope,
+    envelope,
+    failureSubject,
+  ) {
+    var subject = text(failureSubject, 100) ? failureSubject : 'media mutation';
     var issued = await transport.post('/api/extension-device/command-grants', {
       operation: operation,
       ...envelope,
@@ -186,11 +261,14 @@
     var issuedBody = issued && issued.state === 'response' ? record(issued.body) : null;
     var issuedData = issuedBody && issuedBody.code === 1 ? record(issuedBody.data) : null;
     if (!issuedData || !text(issuedData.grantToken, 1000)) {
-      throw new Error('media mutation command grant was not issued');
+      throw new Error(subject + ' command grant was not issued');
     }
+    var executeEnvelope = operation === 'MEDIA_EXECUTE'
+      ? envelope
+      : { operation: operation, ...envelope };
     var executed = await transport.post(
       '/api/extension-device/media-workflows/execute',
-      { operation: operation, ...envelope },
+      executeEnvelope,
       { commandGrant: issuedData.grantToken, requiredScope: requiredScope },
     );
     var executedBody = executed && executed.state === 'response' ? record(executed.body) : null;
@@ -198,7 +276,7 @@
     var receipt = executedData ? record(executedData.receipt) : null;
     var result = receipt ? record(receipt.result) : null;
     if (!receipt || receipt.status !== 'SUCCEEDED' || !result) {
-      throw new Error('media mutation command did not complete');
+      throw new Error(subject + ' command did not complete');
     }
     return { executedData: executedData, receipt: receipt, result: result };
   }
@@ -350,6 +428,110 @@
       && (history.nextCursor === null || text(history.nextCursor, 1000));
   }
 
+  var MEDIA_EDIT_MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1';
+  var MAX_MEDIA_EDIT_MASK_BYTES = 20 * 1024 * 1024;
+  var MAX_MEDIA_EDIT_DIMENSION = 16384;
+  var MAX_MEDIA_EDIT_PIXELS = 12 * 1000 * 1000;
+  var MAX_MEDIA_EDIT_ASPECT_RATIO = 20;
+
+  function normalizedMediaEditContext(input) {
+    return {
+      snapshotId: identifier(input && input.snapshotId, 'snapshotId'),
+      supplyGoodsId: identifier(input && input.supplyGoodsId, 'supplyGoodsId'),
+      shopId: identifier(input && input.shopId, 'shopId'),
+      listingWorkflowId: identifier(input && input.listingWorkflowId, 'listingWorkflowId'),
+      revision: positiveRevision(input && input.revision, 'revision'),
+      draftVersion: positiveRevision(input && input.draftVersion, 'draftVersion'),
+      sourceMediaKey: identifier(input && input.sourceMediaKey, 'sourceMediaKey', 500),
+    };
+  }
+
+  function validMediaEditDimensions(width, height) {
+    return Number.isSafeInteger(width) && width > 0 && width <= MAX_MEDIA_EDIT_DIMENSION
+      && Number.isSafeInteger(height) && height > 0 && height <= MAX_MEDIA_EDIT_DIMENSION
+      && Number.isSafeInteger(width * height) && width * height <= MAX_MEDIA_EDIT_PIXELS
+      && Math.max(width, height) / Math.min(width, height) <= MAX_MEDIA_EDIT_ASPECT_RATIO;
+  }
+
+  function validMediaEditUrl(value) {
+    if (!text(value, 4096)) return false;
+    try {
+      var parsed = new URL(value);
+      var local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+        || parsed.hostname === '[::1]' || parsed.hostname === '::1';
+      return !parsed.username && !parsed.password && !parsed.hash
+        && (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && local));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function validPreparedMediaSource(value, expectedSourceMediaKey) {
+    var data = record(value);
+    var asset = data && record(data.sourceAsset);
+    return data
+      && Object.keys(data).every(function (key) {
+        return [
+          'contractVersion', 'sourceMediaKey', 'sourceAsset', 'maskSemantics', 'maxMaskBytes',
+        ].includes(key);
+      })
+      && data.contractVersion === 'extension-media-edit-source/v1'
+      && data.sourceMediaKey === expectedSourceMediaKey
+      && data.maskSemantics === MEDIA_EDIT_MASK_SEMANTICS
+      && Number.isSafeInteger(data.maxMaskBytes) && data.maxMaskBytes > 0
+      && data.maxMaskBytes <= MAX_MEDIA_EDIT_MASK_BYTES
+      && asset
+      && Object.keys(asset).every(function (key) {
+        return ['id', 'url', 'mimeType', 'width', 'height'].includes(key);
+      })
+      && text(asset.id, 200)
+      && validMediaEditUrl(asset.url)
+      && ['image/jpeg', 'image/png', 'image/webp'].includes(asset.mimeType)
+      && validMediaEditDimensions(asset.width, asset.height);
+  }
+
+  function maskDataUrlBytes(value, maximum) {
+    if (typeof value !== 'string' || !value.startsWith('data:image/png;base64,iVBORw0KGgo')) {
+      throw new TypeError('maskDataUrl is invalid');
+    }
+    var encoded = value.slice('data:image/png;base64,'.length);
+    if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+      throw new TypeError('maskDataUrl is invalid');
+    }
+    var padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+    var bytes = encoded.length / 4 * 3 - padding;
+    if (!Number.isSafeInteger(maximum) || maximum <= 0 || maximum > MAX_MEDIA_EDIT_MASK_BYTES
+      || bytes <= 0 || bytes > maximum) throw new TypeError('maskDataUrl is too large');
+    return bytes;
+  }
+
+  function validUploadedMediaMask(value, expected) {
+    var data = record(value);
+    if (!data || Object.keys(data).some(function (key) {
+      return ![
+        'contractVersion', 'sourceMediaKey', 'sourceAssetId', 'maskAssetId', 'url',
+        'mimeType', 'width', 'height', 'maskSemantics', 'editPixelCount',
+        'preservedPixelCount', 'featheredPixelCount',
+      ].includes(key);
+    })) return false;
+    var countsValid = count(data.editPixelCount) && count(data.preservedPixelCount)
+      && count(data.featheredPixelCount)
+      && data.editPixelCount + data.preservedPixelCount === data.width * data.height
+      && data.featheredPixelCount <= data.editPixelCount;
+    return data.contractVersion === 'extension-media-edit-mask/v1'
+      && data.sourceMediaKey === expected.sourceMediaKey
+      && text(data.sourceAssetId, 200)
+      && text(data.maskAssetId, 200)
+      && validMediaEditUrl(data.url)
+      && data.mimeType === 'image/png'
+      && data.width === expected.width
+      && data.height === expected.height
+      && data.maskSemantics === MEDIA_EDIT_MASK_SEMANTICS
+      && countsValid
+      && data.editPixelCount > 0
+      && data.preservedPixelCount > 0;
+  }
+
   function createClient(options) {
     var transport = options && options.transport;
     if (!transport || typeof transport.get !== 'function') {
@@ -440,13 +622,60 @@
           revision: String(revision),
           draftVersion: String(draftVersion),
         });
+        var requestContext = {
+          snapshotId: snapshotId,
+          supplyGoodsId: supplyGoodsId,
+          shopId: shopId,
+          listingWorkflowId: listingWorkflowId,
+          revision: revision,
+          draftVersion: draftVersion,
+        };
+        var versionedQuery = new URLSearchParams(query);
+        versionedQuery.set('contractVersion', '2');
         var response = await transport.get(
-          '/api/extension-device/source-workbench/media-launch?' + query.toString(),
+          '/api/extension-device/source-workbench/media-launch?' + versionedQuery.toString(),
           { requiredScope: 'media:execute' },
         );
+        if (response && response.state === 'http_error' && response.status === 400) {
+          response = await transport.get(
+            '/api/extension-device/source-workbench/media-launch?' + query.toString(),
+            { requiredScope: 'media:execute' },
+          );
+        }
         if (!response || response.state !== 'response') return response || { state: 'unavailable' };
         var envelope = record(response.body);
         var data = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (data && data.contractVersion === 'extension-media-launch/v2') {
+          if (!text(data.revision, 200)
+            || !validStandaloneLaunchOperations(data.operations)) {
+            throw new Error('invalid source media launch v2 response');
+          }
+          if (data.context === null) {
+            var enabled = STANDALONE_MEDIA_OPERATIONS.some(function (operation) {
+              return data.operations[operation].enabled;
+            });
+            var ready = STANDALONE_MEDIA_OPERATIONS.some(function (operation) {
+              return data.operations[operation].ready;
+            });
+            return {
+              state: ready ? 'not_ready' : enabled ? 'not_ready' : 'disabled',
+              contractVersion: 2,
+              revision: data.revision,
+              operations: data.operations,
+              context: null,
+            };
+          }
+          if (!validLaunchContext(data.context, requestContext)) {
+            throw new Error('invalid source media launch v2 context response');
+          }
+          return {
+            state: 'ready',
+            contractVersion: 2,
+            revision: data.revision,
+            operations: data.operations,
+            context: data.context,
+          };
+        }
         if (!data || !validLaunchCapability(data.capability)) {
           throw new Error('invalid source media launch capability response');
         }
@@ -454,17 +683,82 @@
           if (data.context !== null) throw new Error('disabled source media launch returned context data');
           return { state: data.capability.enabled ? 'not_ready' : 'disabled', capability: data.capability, context: null };
         }
-        if (!validLaunchContext(data.context, {
-          snapshotId: snapshotId,
-          supplyGoodsId: supplyGoodsId,
-          shopId: shopId,
-          listingWorkflowId: listingWorkflowId,
-          revision: revision,
-          draftVersion: draftVersion,
-        })) {
+        if (!validLaunchContext(data.context, requestContext)) {
           throw new Error('invalid source media launch context response');
         }
-        return { state: 'ready', capability: data.capability, context: data.context };
+        return { state: 'ready', contractVersion: 1, capability: data.capability, context: data.context };
+      },
+      async prepareMediaEditSource(input) {
+        var context = normalizedMediaEditContext(input);
+        var response = await transport.post(
+          '/api/extension-device/source-workbench/media-edit-source',
+          context,
+          { requiredScope: 'media:execute' },
+        );
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var envelope = record(response.body);
+        var data = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (!validPreparedMediaSource(data, context.sourceMediaKey)) {
+          throw new Error('invalid media edit source response');
+        }
+        return {
+          state: 'ready',
+          contractVersion: data.contractVersion,
+          sourceMediaKey: data.sourceMediaKey,
+          sourceAsset: { ...data.sourceAsset },
+          maskSemantics: data.maskSemantics,
+          maxMaskBytes: data.maxMaskBytes,
+        };
+      },
+      async uploadMediaEditMask(input) {
+        var context = normalizedMediaEditContext(input);
+        var semantics = input && input.maskSemantics;
+        if (semantics !== MEDIA_EDIT_MASK_SEMANTICS) {
+          throw new TypeError('maskSemantics is invalid');
+        }
+        var expectedWidth = positiveRevision(input && input.expectedWidth, 'expectedWidth');
+        var expectedHeight = positiveRevision(input && input.expectedHeight, 'expectedHeight');
+        if (!validMediaEditDimensions(expectedWidth, expectedHeight)) {
+          throw new TypeError('expected mask dimensions are invalid');
+        }
+        var maskDataUrl = input && input.maskDataUrl;
+        maskDataUrlBytes(maskDataUrl, Number(input && input.maxMaskBytes));
+        var response = await transport.post(
+          '/api/extension-device/source-workbench/media-edit-mask',
+          {
+            ...context,
+            maskSemantics: semantics,
+            maskDataUrl: maskDataUrl,
+          },
+          { requiredScope: 'media:execute' },
+        );
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var envelope = record(response.body);
+        var data = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (!envelope || typeof envelope.replayed !== 'boolean'
+          || !validUploadedMediaMask(data, {
+            sourceMediaKey: context.sourceMediaKey,
+            width: expectedWidth,
+            height: expectedHeight,
+          })) {
+          throw new Error('invalid media edit mask response');
+        }
+        return {
+          state: 'ready',
+          replayed: envelope.replayed,
+          contractVersion: data.contractVersion,
+          sourceMediaKey: data.sourceMediaKey,
+          sourceAssetId: data.sourceAssetId,
+          maskAssetId: data.maskAssetId,
+          url: data.url,
+          mimeType: data.mimeType,
+          width: data.width,
+          height: data.height,
+          maskSemantics: data.maskSemantics,
+          editPixelCount: data.editPixelCount,
+          preservedPixelCount: data.preservedPixelCount,
+          featheredPixelCount: data.featheredPixelCount,
+        };
       },
       async createTranslationCommand(input) {
         var shopId = identifier(input && input.shopId, 'shopId');
@@ -525,7 +819,7 @@
           || !text(result.workflowId, 200)
           || result.action !== 'CREATE_TRANSLATION'
           || result.operation !== 'IMAGE_TRANSLATE'
-          || !text(result.status, 100)
+          || !['QUEUED', 'RUNNING', 'SUCCEEDED'].includes(result.status)
           || !Number.isSafeInteger(result.revision)
           || result.revision <= 0) {
           throw new Error('media translation command did not complete');
@@ -534,6 +828,77 @@
           state: 'completed',
           replay: executedData.replay === true,
           receipt: receipt,
+          result: result,
+          workflowOperationKey: workflowOperationKey,
+        };
+      },
+      async createWorkflowCommand(input) {
+        var operation = input && input.operation;
+        if (!['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) {
+          throw new TypeError('media workflow operation is invalid');
+        }
+        var shopId = identifier(input && input.shopId, 'shopId');
+        var listingWorkflowId = identifier(input && input.listingWorkflowId, 'listingWorkflowId');
+        var draftRevision = positiveRevision(input && input.draftRevision, 'draftRevision');
+        var draftVersion = positiveRevision(input && input.draftVersion, 'draftVersion');
+        var sourceMediaKeys = normalizedSourceMediaKeys(input && input.sourceMediaKeys, operation);
+        var prompt = identifier(input && input.prompt, 'prompt', 8000);
+        var rawNegativePrompt = input && input.negativePrompt == null
+          ? ''
+          : String(input.negativePrompt).normalize('NFKC').trim();
+        if (rawNegativePrompt.length > 4000) throw new TypeError('negativePrompt is invalid');
+        var workflowOperationKey = identifier(input && input.workflowOperationKey, 'workflowOperationKey');
+        if (workflowOperationKey.length > 128) throw new TypeError('workflowOperationKey is invalid');
+        var command = {
+          schemaVersion: 'ai-media-workflow-create/v2',
+          action: 'CREATE_WORKFLOW',
+          operation: operation,
+          sourceMediaKeys: sourceMediaKeys,
+          prompt: prompt,
+          negativePrompt: rawNegativePrompt,
+          draftRevision: draftRevision,
+          workflowOperationKey: workflowOperationKey,
+        };
+        if (operation === 'INPAINT') {
+          command.maskAssetId = identifier(input && input.maskAssetId, 'maskAssetId');
+          command.maskSemantics = 'WHITE_EDIT_BLACK_PRESERVE_V1';
+        } else if (input && (input.maskAssetId != null || input.maskSemantics != null)) {
+          throw new TypeError('maskAssetId is invalid for this operation');
+        }
+        var idempotencyKey = await freshAttemptKey({
+          operation: 'MEDIA_EXECUTE',
+          shopId: shopId,
+          listingWorkflowId: listingWorkflowId,
+          draftVersion: draftVersion,
+          command: command,
+        }, 'extension-media-create:');
+        var envelope = {
+          shopId: shopId,
+          workflowId: listingWorkflowId,
+          draftVersion: draftVersion,
+          idempotencyKey: idempotencyKey,
+          command: command,
+        };
+        var completed = await executeGrantedMediaMutation(
+          transport,
+          'MEDIA_EXECUTE',
+          'media:execute',
+          envelope,
+          'media workflow',
+        );
+        var result = completed.result;
+        if (!text(result.workflowId, 200)
+          || result.action !== 'CREATE_WORKFLOW'
+          || result.operation !== operation
+          || !['QUEUED', 'RUNNING', 'SUCCEEDED'].includes(result.status)
+          || !Number.isSafeInteger(result.revision)
+          || result.revision <= 0) {
+          throw new Error('media workflow command did not complete');
+        }
+        return {
+          state: 'completed',
+          replay: completed.executedData.replay === true,
+          receipt: completed.receipt,
           result: result,
           workflowOperationKey: workflowOperationKey,
         };

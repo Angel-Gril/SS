@@ -113,6 +113,18 @@ jobs:
       - name: Verify VPS origin-mode deployment contract
         run: node scripts/vps-origin-mode-contract.test.mjs
 
+      - name: Verify extension package versioning and deployment targets
+        run: node scripts/extension-package-auto-bump.test.mjs
+
+      - name: Verify extension standalone media workflow
+        run: node scripts/extension-source-media-standalone.test.mjs
+
+      - name: Verify extension media Mask editor
+        run: node scripts/extension-media-mask-editor.test.mjs
+
+      - name: Verify extension media editor runtime behavior
+        run: node scripts/extension-media-editor-behavior.test.mjs
+
       - name: Verify Web auth security settings contract
         run: node scripts/web-auth-security-settings.test.mjs
 

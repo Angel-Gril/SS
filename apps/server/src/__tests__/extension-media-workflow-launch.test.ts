@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createExtensionMediaWorkflowLauncher,
   createExtensionMediaTranslationLauncher,
   ExtensionMediaWorkflowLaunchError,
+  parseExtensionMediaWorkflowCreateCommand,
   resolveExtensionMediaWorkflowSourceMediaKey,
   type ExtensionMediaTranslationExistingWorkflow,
 } from '../services/extension-media-workflow-launch.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import {
+  AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+  AI_MEDIA_INPAINT_TEMPLATE_KEY,
+} from '../services/ai-prompt-templates.js';
 
 function workflow(overrides: Record<string, unknown> = {}) {
   return {
@@ -18,6 +25,17 @@ function workflow(overrides: Record<string, unknown> = {}) {
     jobs: [{ provider: 'fake', model: 'fake-translation-v1' }],
     ...overrides,
   } as any;
+}
+
+function translationExisting(status: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'media-created-1', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+    provider: 'fake', model: 'fake-translation-v1', status, revision: 2,
+    contextType: 'listing-draft', contextId: 'listing-1',
+    contextDraftRevision: 11, contextDraftVersion: 7, suiteId: null,
+    sourceMediaKey: 'media-main-1', jobId: 'job-created-1',
+    ...overrides,
+  };
 }
 
 function command(overrides: Record<string, unknown> = {}) {
@@ -44,6 +62,7 @@ function input(overrides: Record<string, unknown> = {}) {
 function setup(options: {
   production?: boolean;
   provider?: string;
+  model?: string;
   replayed?: boolean;
   sourceMediaKeys?: string[];
   storageReady?: boolean;
@@ -51,11 +70,15 @@ function setup(options: {
   existingError?: Error;
   createError?: Error;
   createdSuiteId?: string;
+  createdStatus?: string;
 } = {}) {
   const createImageTranslation = vi.fn(async () => {
     if (options.createError) throw options.createError;
     return {
-      workflow: workflow(options.createdSuiteId ? { suiteId: options.createdSuiteId } : {}),
+      workflow: workflow({
+        ...(options.createdSuiteId ? { suiteId: options.createdSuiteId } : {}),
+        ...(options.createdStatus ? { status: options.createdStatus } : {}),
+      }),
       jobId: 'job-created-1',
       replayed: options.replayed === true,
     };
@@ -89,7 +112,7 @@ function setup(options: {
     getSettings: vi.fn(async () => ({
       enabled: true,
       provider: options.provider || 'fake',
-      model: 'fake-translation-v1',
+      model: options.model || 'fake-translation-v1',
       dailyLimit: 5,
       estimatedCostCents: 0,
     })),
@@ -108,7 +131,185 @@ function setup(options: {
   };
 }
 
+function v2Command(
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    schemaVersion: 'ai-media-workflow-create/v2',
+    action: 'CREATE_WORKFLOW',
+    operation,
+    sourceMediaKeys: operation === 'IMAGE_TO_IMAGE'
+      ? ['media-main-1', 'media-detail-1']
+      : ['media-main-1'],
+    prompt: 'Keep the product identity and improve the background.',
+    negativePrompt: '',
+    draftRevision: 11,
+    workflowOperationKey: `extension-media-workflow:${operation.toLowerCase()}-1`,
+    ...(operation === 'INPAINT' ? {
+      maskAssetId: 'mask-asset-1',
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    } : {}),
+    ...overrides,
+  };
+}
+
+function v2Existing(status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED', overrides: Record<string, unknown> = {}) {
+  return {
+    id: `media-existing-${status.toLowerCase()}`,
+    ownerUserId: 'owner-1',
+    operation: 'IMAGE_TO_IMAGE',
+    provider: 'fake',
+    model: null,
+    status,
+    revision: 2,
+    contextType: 'listing-draft',
+    contextId: 'listing-1',
+    contextDraftRevision: 11,
+    contextDraftVersion: 7,
+    suiteId: null,
+    sourceMediaKey: null,
+    sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+    maskAssetId: null,
+    prompt: 'Keep the product identity and improve the background.',
+    negativePrompt: null,
+    jobId: 'generation-job-existing-1',
+    ...overrides,
+  };
+}
+
+function setupV2(options: {
+  production?: boolean;
+  ready?: boolean;
+  existing?: any;
+  createError?: Error;
+  replayed?: boolean;
+  createdStatus?: string;
+} = {}) {
+  const createImageToImage = vi.fn(async () => {
+    if (options.createError) throw options.createError;
+    return {
+      workflow: workflow({
+        operation: 'IMAGE_TO_IMAGE',
+        ...(options.createdStatus ? { status: options.createdStatus } : {}),
+      }),
+      jobId: 'generation-job-1', replayed: options.replayed === true,
+    };
+  });
+  const createImageEdit = vi.fn(async (createInput: any) => {
+    if (options.createError) throw options.createError;
+    return {
+      workflow: workflow({
+        operation: createInput.operation,
+        ...(options.createdStatus ? { status: options.createdStatus } : {}),
+      }),
+      jobId: 'edit-job-1', replayed: options.replayed === true,
+    };
+  });
+  const internalizeSource = vi.fn(async (source: { sourceMediaKey: string }) => ({
+    id: source.sourceMediaKey === 'media-main-1' ? 'source-asset-1' : 'source-asset-2',
+  }));
+  const resolvePrompt = vi.fn(async ({ templateKey }: { templateKey: string }) => ({
+    templateKey,
+    release: { id: 'release-edit-1' },
+    checksum: 'c'.repeat(64),
+    snapshot: { version: 1 },
+    resolvedPrompt: 'Frozen edit prompt',
+    resolvedNegativePrompt: 'Frozen edit negative prompt',
+  }));
+  const enqueueGeneration = vi.fn(async () => undefined);
+  const enqueueEdit = vi.fn(async () => undefined);
+  const loadContext = vi.fn(async () => ({
+    id: 'listing-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+    supplyGoodsId: 'goods-1', snapshotId: 'snapshot-1', revision: 11, draftVersion: 7,
+    sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+  }));
+  const loadExisting = vi.fn(async () => options.existing || null);
+  const getReadiness = vi.fn(async (operation: string) => ({
+    enabled: options.ready !== false,
+    ready: options.ready !== false,
+    reasonCode: options.ready !== false ? 'READY' : 'AI_MEDIA_OPERATION_DISABLED',
+    reason: options.ready !== false ? 'ready' : 'disabled',
+    testOnly: true,
+    operation,
+  }));
+  const markEnqueueFailed = vi.fn(async () => true);
+  const launch = createExtensionMediaWorkflowLauncher({
+    workflowService: { createImageToImage, createImageEdit } as any,
+    loadContext,
+    loadExisting,
+    internalizeSource,
+    getReadiness,
+    getEditDailyLimit: vi.fn(async () => 4),
+    resolvePrompt,
+    enqueueGeneration,
+    enqueueEdit,
+    markEnqueueFailed,
+    production: options.production ?? false,
+  });
+  return {
+    launch, createImageToImage, createImageEdit, internalizeSource,
+    resolvePrompt, enqueueGeneration, enqueueEdit, loadContext,
+    loadExisting, getReadiness, markEnqueueFailed,
+  };
+}
+
 describe('extension media translation launch', () => {
+  it('parses only the strict v2 standalone create union', () => {
+    const base = {
+      schemaVersion: 'ai-media-workflow-create/v2',
+      action: 'CREATE_WORKFLOW',
+      prompt: 'Keep the product identity and improve the background.',
+      negativePrompt: '',
+      draftRevision: 11,
+      workflowOperationKey: 'extension-media-workflow:v2-create-1',
+    };
+    expect(parseExtensionMediaWorkflowCreateCommand({
+      ...base,
+      operation: 'IMAGE_TO_IMAGE',
+      sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+    })).toEqual({
+      ...base,
+      operation: 'IMAGE_TO_IMAGE',
+      sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+    });
+    expect(parseExtensionMediaWorkflowCreateCommand({
+      ...base,
+      operation: 'FULL_EDIT',
+      sourceMediaKeys: ['media-main-1'],
+    })).toEqual({
+      ...base,
+      operation: 'FULL_EDIT',
+      sourceMediaKeys: ['media-main-1'],
+    });
+    expect(parseExtensionMediaWorkflowCreateCommand({
+      ...base,
+      operation: 'INPAINT',
+      sourceMediaKeys: ['media-main-1'],
+      maskAssetId: 'mask-asset-1',
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    })).toEqual({
+      ...base,
+      operation: 'INPAINT',
+      sourceMediaKeys: ['media-main-1'],
+      maskAssetId: 'mask-asset-1',
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    });
+
+    for (const invalid of [
+      { ...base, operation: 'IMAGE_TO_IMAGE', sourceMediaKeys: [] },
+      { ...base, operation: 'IMAGE_TO_IMAGE', sourceMediaKeys: ['1', '2', '3', '4', '5'] },
+      { ...base, operation: 'FULL_EDIT', sourceMediaKeys: ['1', '2'] },
+      { ...base, operation: 'INPAINT', sourceMediaKeys: ['1'], maskAssetId: 'mask-1' },
+      { ...base, operation: 'INPAINT', sourceMediaKeys: ['1'], maskAssetId: 'mask-1', maskSemantics: 'WHITE_KEEP' },
+      { ...base, operation: 'FULL_EDIT', sourceMediaKeys: ['1'], provider: 'client-provider' },
+    ]) {
+      expect(() => parseExtensionMediaWorkflowCreateCommand(invalid)).toThrow(
+        expect.objectContaining({ code: 'MEDIA_CREATE_INVALID' }),
+      );
+    }
+  });
+
   it('recovers the original source key from an internalized edit asset metadata snapshot', () => {
     expect(resolveExtensionMediaWorkflowSourceMediaKey({
       sourceMediaKey: 'ai-edit-source:v1:hash',
@@ -205,7 +406,7 @@ describe('extension media translation launch', () => {
   it('replays an existing queued workflow and re-enqueues only that frozen job', async () => {
     const state = setup({ existing: {
       id: 'existing-queued', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
-      provider: 'fake', status: 'QUEUED', revision: 4,
+      provider: 'fake', model: 'fake-translation-v1', status: 'QUEUED', revision: 4,
       contextType: 'listing-draft', contextId: 'listing-1',
       contextDraftRevision: 11, contextDraftVersion: 7,
       sourceMediaKey: 'media-main-1', jobId: 'frozen-job-4',
@@ -224,7 +425,7 @@ describe('extension media translation launch', () => {
   it('does not re-enqueue a queued fake workflow after the production gate closes', async () => {
     const state = setup({ production: true, existing: {
       id: 'existing-queued-prod', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
-      provider: 'fake', status: 'QUEUED', revision: 5,
+      provider: 'fake', model: 'fake-translation-v1', status: 'QUEUED', revision: 5,
       contextType: 'listing-draft', contextId: 'listing-1',
       contextDraftRevision: 11, contextDraftVersion: 7,
       sourceMediaKey: 'media-main-1', jobId: 'frozen-job-5',
@@ -234,6 +435,55 @@ describe('extension media translation launch', () => {
         code: 'MEDIA_PROVIDER_NOT_ALLOWED',
       }),
     );
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enqueue a queued translation after its frozen model changes', async () => {
+    const state = setup({ model: 'fake-translation-v2', existing: {
+      id: 'existing-queued-old-model', ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+      provider: 'fake', model: 'fake-translation-v1', status: 'QUEUED', revision: 6,
+      contextType: 'listing-draft', contextId: 'listing-1',
+      contextDraftRevision: 11, contextDraftVersion: 7,
+      sourceMediaKey: 'media-main-1', jobId: 'frozen-job-6',
+    } });
+    await expect(state.launch(input())).rejects.toEqual(
+      expect.objectContaining<Partial<ExtensionMediaWorkflowLaunchError>>({
+        code: 'MEDIA_PROVIDER_CONFIG_CHANGED',
+      }),
+    );
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCEL_REQUESTED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+  ])('does not report an idempotent translation in %s as successfully created', async (status, code) => {
+    const state = setup({ existing: {
+      id: `existing-${String(status).toLowerCase()}`,
+      ownerUserId: 'owner-1', operation: 'IMAGE_TRANSLATE',
+      provider: 'fake', model: 'fake-translation-v1', status, revision: 7,
+      contextType: 'listing-draft', contextId: 'listing-1',
+      contextDraftRevision: 11, contextDraftVersion: 7,
+      sourceMediaKey: 'media-main-1', jobId: 'frozen-job-7',
+    } });
+    await expect(state.launch(input())).rejects.toEqual(
+      expect.objectContaining<Partial<ExtensionMediaWorkflowLaunchError>>({ code }),
+    );
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCEL_REQUESTED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+  ])('rejects a workflow-service translation replay that returns %s after an empty lookup', async (status, code) => {
+    const state = setup({ replayed: true, createdStatus: status });
+    await expect(state.launch(input())).rejects.toEqual(
+      expect.objectContaining<Partial<ExtensionMediaWorkflowLaunchError>>({ code }),
+    );
+    expect(state.loadExisting).toHaveBeenCalledTimes(1);
+    expect(state.createImageTranslation).toHaveBeenCalledTimes(1);
     expect(state.enqueue).not.toHaveBeenCalled();
   });
 
@@ -321,6 +571,69 @@ describe('extension media translation launch', () => {
     expect(state.markEnqueueFailed).toHaveBeenCalledWith('job-created-1');
   });
 
+  it.each(['RUNNING', 'SUCCEEDED'] as const)(
+    'returns the authoritative %s translation after an enqueue-failure CAS miss',
+    async (status) => {
+      const state = setup();
+      state.enqueue.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(translationExisting(status, { revision: 5 }));
+
+      await expect(state.launch(input())).resolves.toEqual({
+        workflowId: 'media-created-1', action: 'CREATE_TRANSLATION',
+        operation: 'IMAGE_TRANSLATE', status, revision: 5, replayed: true,
+      });
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ['QUEUED', 'MEDIA_QUEUE_UNAVAILABLE'],
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['UNKNOWN', 'MEDIA_CREATE_STATE_UNAVAILABLE'],
+  ] as const)(
+    'rejects authoritative %s translation state after an enqueue-failure CAS miss',
+    async (status, code) => {
+      const state = setup();
+      state.enqueue.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(translationExisting(status));
+
+      await expect(state.launch(input())).rejects.toEqual(
+        expect.objectContaining({ code }),
+      );
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ['missing', null],
+    ['unreadable', new Error('database unavailable')],
+  ] as const)(
+    'fails when authoritative translation state is %s after an enqueue-failure CAS miss',
+    async (_label, authoritative) => {
+      const state = setup();
+      state.enqueue.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting.mockResolvedValueOnce(null);
+      if (authoritative instanceof Error) {
+        state.loadExisting.mockRejectedValueOnce(authoritative);
+      } else {
+        state.loadExisting.mockResolvedValueOnce(authoritative);
+      }
+
+      await expect(state.launch(input())).rejects.toEqual(
+        expect.objectContaining({ code: 'MEDIA_CREATE_STATE_UNAVAILABLE' }),
+      );
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it('classifies an unknown workflow persistence failure as a retryable state outage', async () => {
     const state = setup({ createError: new Error('database unavailable') });
     await expect(state.launch(input())).rejects.toEqual(
@@ -329,5 +642,305 @@ describe('extension media translation launch', () => {
       }),
     );
     expect(state.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('extension standalone media launch', () => {
+  it('creates one image-to-image workflow from one to four server-internalized sources', async () => {
+    const state = setupV2();
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+      workflowId: 'media-created-1', action: 'CREATE_WORKFLOW', operation: 'IMAGE_TO_IMAGE',
+      status: 'QUEUED', revision: 1, replayed: false,
+    });
+    expect(state.internalizeSource).toHaveBeenNthCalledWith(1, {
+      ownerUserId: 'owner-1', listingWorkflowId: 'listing-1',
+      sourceMediaKey: 'media-main-1', draftRevision: 11, draftVersion: 7, role: 'GENERAL',
+    });
+    expect(state.createImageToImage).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      references: [{ assetId: 'source-asset-1' }, { assetId: 'source-asset-2' }],
+      prompt: 'Keep the product identity and improve the background.', negativePrompt: null,
+      count: 1, width: 1024, height: 1024,
+      idempotencyKey: 'extension-media-workflow:image_to_image-1',
+      context: { type: 'listing-draft', id: 'listing-1', revision: 11, draftVersion: 7 },
+    });
+    expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-1');
+    expect(state.resolvePrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['FULL_EDIT', AI_MEDIA_FULL_EDIT_TEMPLATE_KEY],
+    ['INPAINT', AI_MEDIA_INPAINT_TEMPLATE_KEY],
+  ] as const)('freezes the %s prompt and dispatches the dedicated edit worker', async (operation, templateKey) => {
+    const state = setupV2();
+    await expect(state.launch(input({ command: v2Command(operation) }))).resolves.toMatchObject({
+      action: 'CREATE_WORKFLOW', operation, status: 'QUEUED', replayed: false,
+    });
+    expect(state.internalizeSource).toHaveBeenCalledWith(expect.objectContaining({
+      sourceMediaKey: 'media-main-1', role: 'EDIT',
+    }));
+    expect(state.resolvePrompt).toHaveBeenCalledWith({
+      templateKey,
+      variables: {
+        userPrompt: 'Keep the product identity and improve the background.',
+        userNegativePrompt: '',
+      },
+    });
+    expect(state.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', actorUserId: 'owner-1', operation,
+      sourceAssetId: 'source-asset-1',
+      ...(operation === 'INPAINT' ? {
+        maskAssetId: 'mask-asset-1', maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+      } : {}),
+      prompt: 'Keep the product identity and improve the background.', negativePrompt: null,
+      resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen edit negative prompt',
+      templateKey, templateReleaseId: 'release-edit-1', templateChecksum: 'c'.repeat(64),
+      templateSnapshot: { version: 1 }, dailyLimit: 4,
+      idempotencyKey: `extension-media-workflow:${operation.toLowerCase()}-1`,
+      context: { type: 'listing-draft', id: 'listing-1', revision: 11, draftVersion: 7 },
+    }));
+    expect(state.enqueueEdit).toHaveBeenCalledWith('edit-job-1');
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
+
+  it.each([[], 'serialized-snapshot'] as const)(
+    'rejects a non-object edit prompt snapshot before workflow creation',
+    async (snapshot) => {
+      const state = setupV2();
+      state.resolvePrompt.mockResolvedValueOnce({
+        templateKey: AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
+        release: { id: 'release-edit-1' },
+        checksum: 'c'.repeat(64),
+        snapshot,
+        resolvedPrompt: 'Frozen edit prompt',
+        resolvedNegativePrompt: 'Frozen edit negative prompt',
+      } as never);
+
+      await expect(state.launch(input({ command: v2Command('FULL_EDIT') }))).rejects.toEqual(
+        expect.objectContaining({ code: 'MEDIA_PROMPT_UNAVAILABLE' }),
+      );
+      expect(state.createImageEdit).not.toHaveBeenCalled();
+      expect(state.enqueueEdit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails every v2 fake operation closed in production before source internalization', async () => {
+    for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const) {
+      const state = setupV2({ production: true });
+      await expect(state.launch(input({ command: v2Command(operation) }))).rejects.toEqual(
+        expect.objectContaining({ code: 'MEDIA_PROVIDER_NOT_ALLOWED' }),
+      );
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+      expect(state.createImageToImage).not.toHaveBeenCalled();
+      expect(state.createImageEdit).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCEL_REQUESTED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+  ])('does not report an idempotent %s workflow as successfully created', async (status, errorCode) => {
+    const state = setupV2({
+      existing: {
+        id: 'media-failed-1',
+        ownerUserId: 'owner-1',
+        operation: 'IMAGE_TO_IMAGE',
+        provider: 'fake',
+        status,
+        revision: 2,
+        contextType: 'listing-draft',
+        contextId: 'listing-1',
+        contextDraftRevision: 11,
+        contextDraftVersion: 7,
+        suiteId: null,
+        sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+        maskAssetId: null,
+        prompt: 'Keep the product identity and improve the background.',
+        negativePrompt: null,
+        jobId: 'generation-job-failed-1',
+      },
+    });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: errorCode }),
+    );
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
+
+  it.each(['QUEUED', 'RUNNING', 'SUCCEEDED'] as const)(
+    'replays an exact existing v2 %s workflow without creating another workflow',
+    async (status) => {
+      const existing = v2Existing(status);
+      const state = setupV2({ existing });
+      await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+        workflowId: existing.id,
+        action: 'CREATE_WORKFLOW',
+        operation: 'IMAGE_TO_IMAGE',
+        status,
+        revision: 2,
+        replayed: true,
+      });
+      expect(state.loadExisting).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1',
+        idempotencyKey: 'extension-media-workflow:image_to_image-1',
+      });
+      expect(state.internalizeSource).not.toHaveBeenCalled();
+      expect(state.createImageToImage).not.toHaveBeenCalled();
+      if (status === 'QUEUED') {
+        expect(state.getReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+        expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-existing-1');
+      } else {
+        expect(state.getReadiness).not.toHaveBeenCalled();
+        expect(state.enqueueGeneration).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('classifies a v2 existing-workflow lookup outage before any create side effect', async () => {
+    const state = setupV2();
+    state.loadExisting.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_CREATE_STATE_UNAVAILABLE' }),
+    );
+    expect(state.getReadiness).not.toHaveBeenCalled();
+    expect(state.loadContext).not.toHaveBeenCalled();
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageToImage).not.toHaveBeenCalled();
+  });
+
+  it('recovers the authoritative v2 workflow after an idempotency conflict race', async () => {
+    const conflict = Object.assign(new Error('idempotency conflict'), {
+      code: 'IDEMPOTENCY_KEY_CONFLICT',
+    });
+    const raced = v2Existing('RUNNING', { id: 'media-raced-1', revision: 4 });
+    const state = setupV2({ createError: conflict });
+    state.loadExisting
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(raced);
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+      workflowId: 'media-raced-1',
+      action: 'CREATE_WORKFLOW',
+      operation: 'IMAGE_TO_IMAGE',
+      status: 'RUNNING',
+      revision: 4,
+      replayed: true,
+    });
+    expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    expect(state.createImageToImage).toHaveBeenCalledTimes(1);
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
+
+  it('rejects an existing queued v2 workflow whose frozen job is missing', async () => {
+    const state = setupV2({ existing: v2Existing('QUEUED', { jobId: null }) });
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_QUEUE_UNAVAILABLE' }),
+    );
+    expect(state.getReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+  });
+
+  it('marks a newly committed v2 workflow failed when normal enqueue is unavailable', async () => {
+    const state = setupV2();
+    state.enqueueGeneration.mockRejectedValueOnce(new Error('redis unavailable'));
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_QUEUE_UNAVAILABLE' }),
+    );
+    expect(state.createImageToImage).toHaveBeenCalledTimes(1);
+    expect(state.markEnqueueFailed).toHaveBeenCalledWith('generation-job-1');
+  });
+
+  it.each(['RUNNING', 'SUCCEEDED'] as const)(
+    'returns the authoritative %s v2 workflow after an enqueue-failure CAS miss',
+    async (status) => {
+      const state = setupV2();
+      state.enqueueGeneration.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(v2Existing(status, { id: 'media-created-1', revision: 6 }));
+
+      await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+        workflowId: 'media-created-1', action: 'CREATE_WORKFLOW',
+        operation: 'IMAGE_TO_IMAGE', status, revision: 6, replayed: true,
+      });
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ['QUEUED', 'MEDIA_QUEUE_UNAVAILABLE'],
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['UNKNOWN', 'MEDIA_CREATE_STATE_UNAVAILABLE'],
+  ] as const)(
+    'rejects authoritative %s v2 state after an enqueue-failure CAS miss',
+    async (status, code) => {
+      const state = setupV2();
+      state.enqueueGeneration.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(v2Existing('RUNNING', { status }));
+
+      await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+        expect.objectContaining({ code }),
+      );
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ['missing', null],
+    ['unreadable', new Error('database unavailable')],
+  ] as const)(
+    'fails when authoritative v2 workflow state is %s after an enqueue-failure CAS miss',
+    async (_label, authoritative) => {
+      const state = setupV2();
+      state.enqueueGeneration.mockRejectedValueOnce(new Error('redis unavailable'));
+      state.markEnqueueFailed.mockResolvedValueOnce(false);
+      state.loadExisting.mockResolvedValueOnce(null);
+      if (authoritative instanceof Error) {
+        state.loadExisting.mockRejectedValueOnce(authoritative);
+      } else {
+        state.loadExisting.mockResolvedValueOnce(authoritative);
+      }
+
+      await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+        expect.objectContaining({ code: 'MEDIA_CREATE_STATE_UNAVAILABLE' }),
+      );
+      expect(state.loadExisting).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ['FAILED', 'MEDIA_CREATE_ALREADY_FAILED'],
+    ['CANCEL_REQUESTED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+    ['CANCELLED', 'MEDIA_CREATE_ALREADY_CANCELLED'],
+  ])('rejects a workflow-service v2 replay that returns %s after an empty lookup', async (status, errorCode) => {
+    const state = setupV2({ replayed: true, createdStatus: status });
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: errorCode }),
+    );
+    expect(state.createImageToImage).toHaveBeenCalledTimes(1);
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'SOURCE_ASSET_DUPLICATE',
+    'SOURCE_ASSET_INVALID',
+    'MASK_ASSET_INVALID',
+  ])('reports deterministic %s input failures as invalid instead of unavailable', async (code) => {
+    const state = setupV2({
+      createError: Object.assign(new Error(code), { code }),
+    });
+
+    await expect(state.launch(input({
+      command: v2Command(code === 'MASK_ASSET_INVALID' ? 'INPAINT' : 'IMAGE_TO_IMAGE'),
+    }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_CREATE_INPUT_INVALID' }),
+    );
   });
 });

@@ -9,6 +9,7 @@ import type {
   ExtensionMediaTranslationLaunchContext,
 } from '../services/extension-media-workflow-launch.js';
 import { isExtensionMediaContextStaleError } from '../services/extension-media-workflow-launch.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 
 interface ExtensionMediaLaunchDevice {
   ownerUserId: string;
@@ -30,6 +31,31 @@ export interface ExtensionMediaLaunchCapability {
   targetLanguage: 'ru';
 }
 
+export const EXTENSION_MEDIA_LAUNCH_V2 = 'extension-media-launch/v2' as const;
+export const EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES = 20 * 1024 * 1024;
+
+type ExtensionMediaStandaloneOperation =
+  | 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE' | 'FULL_EDIT' | 'INPAINT';
+
+export interface ExtensionMediaOperationCapability {
+  enabled: boolean;
+  ready: boolean;
+  reasonCode: string;
+  reason: string;
+  revision: string;
+  testOnly: boolean;
+  operation: ExtensionMediaStandaloneOperation;
+  maxReferences?: number;
+  sourceLanguage?: 'zh';
+  targetLanguage?: 'ru';
+  maskSemantics?: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
+  maxMaskBytes?: number;
+}
+
+export type ExtensionMediaOperationCapabilities = {
+  [K in ExtensionMediaStandaloneOperation]: ExtensionMediaOperationCapability & { operation: K };
+};
+
 export interface ExtensionMediaLaunchRoutesOptions {
   authenticateDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   featureFlags: Pick<SourceWorkflowFeatureFlagEvaluator, 'evaluate'>;
@@ -46,6 +72,10 @@ export interface ExtensionMediaLaunchRoutesOptions {
     ownerUserId: string;
     workflowDecision: SourceWorkflowFeatureDecision;
   }): Promise<ExtensionMediaLaunchCapability>;
+  getCapabilities?(input: {
+    ownerUserId: string;
+    workflowDecision: SourceWorkflowFeatureDecision;
+  }): Promise<ExtensionMediaOperationCapabilities>;
 }
 
 const CAPABILITY_REVISION_MAX_LENGTH = 200;
@@ -72,7 +102,47 @@ const querySchema = z.object({
   listingWorkflowId: id,
   revision: z.coerce.number().int().min(1),
   draftVersion: z.coerce.number().int().min(1),
+  contractVersion: z.literal('2').optional(),
 }).strict();
+
+function disabledOperations(reason: string, revision: string): ExtensionMediaOperationCapabilities {
+  const disabled = <T extends ExtensionMediaStandaloneOperation>(operation: T) => ({
+    enabled: false,
+    ready: false,
+    reasonCode: 'MEDIA_CREATE_DISABLED',
+    reason,
+    revision,
+    testOnly: true,
+    operation,
+  });
+  return {
+    IMAGE_TO_IMAGE: { ...disabled('IMAGE_TO_IMAGE'), maxReferences: 4 },
+    IMAGE_TRANSLATE: {
+      ...disabled('IMAGE_TRANSLATE'),
+      sourceLanguage: 'zh',
+      targetLanguage: 'ru',
+    },
+    FULL_EDIT: disabled('FULL_EDIT'),
+    INPAINT: {
+      ...disabled('INPAINT'),
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+      maxMaskBytes: EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
+    },
+  };
+}
+
+function v2Payload(
+  operations: ExtensionMediaOperationCapabilities,
+  revision: string,
+  context: ReturnType<typeof publicContext> | null,
+) {
+  return {
+    contractVersion: EXTENSION_MEDIA_LAUNCH_V2,
+    revision,
+    operations,
+    context,
+  };
+}
 
 function deviceContext(request: FastifyRequest): ExtensionMediaLaunchDevice | null {
   const candidate = (request as any).device as Partial<ExtensionMediaLaunchDevice> | undefined;
@@ -125,6 +195,60 @@ function publicContext(context: ExtensionMediaTranslationLaunchContext, query: z
   };
 }
 
+type ExactContextResult =
+  | { kind: 'ready'; context: ExtensionMediaTranslationLaunchContext }
+  | { kind: 'error'; statusCode: 409 | 503; errorCode: string; message: string };
+
+async function loadExactContext(
+  options: ExtensionMediaLaunchRoutesOptions,
+  device: ExtensionMediaLaunchDevice,
+  query: z.infer<typeof querySchema>,
+): Promise<ExactContextResult> {
+  let context: ExtensionMediaTranslationLaunchContext | null;
+  try {
+    context = await options.loadContext({
+      ownerUserId: device.ownerUserId,
+      snapshotId: query.snapshotId,
+      supplyGoodsId: query.supplyGoodsId,
+      shopId: query.shopId,
+      listingWorkflowId: query.listingWorkflowId,
+      revision: query.revision,
+      draftVersion: query.draftVersion,
+    });
+  } catch (caught) {
+    if (isExtensionMediaContextStaleError(caught)) {
+      return {
+        kind: 'error',
+        statusCode: 409,
+        errorCode: 'media_create_context_stale',
+        message: '来源商品上下文已变化，请刷新后重试',
+      };
+    }
+    return {
+      kind: 'error',
+      statusCode: 503,
+      errorCode: 'media_context_unavailable',
+      message: '来源商品上下文暂不可用，请稍后重试',
+    };
+  }
+  if (!context
+    || context.ownerUserId !== device.ownerUserId
+    || context.id !== query.listingWorkflowId
+    || context.shopId !== query.shopId
+    || context.supplyGoodsId !== query.supplyGoodsId
+    || context.snapshotId !== query.snapshotId
+    || context.revision !== query.revision
+    || context.draftVersion !== query.draftVersion) {
+    return {
+      kind: 'error',
+      statusCode: 409,
+      errorCode: 'media_create_context_stale',
+      message: '来源商品上下文已变化，请刷新后重试',
+    };
+  }
+  return { kind: 'ready', context };
+}
+
 export async function extensionMediaLaunchRoutes(
   app: FastifyInstance,
   options: ExtensionMediaLaunchRoutesOptions,
@@ -152,7 +276,15 @@ export async function extensionMediaLaunchRoutes(
       return error(reply, 503, 'source_workbench_rollout_unavailable', '扩展工作台策略暂不可用');
     }
     reply.header('Cache-Control', 'no-store');
+    const wantsV2 = parsed.data.contractVersion === '2';
     if (!extensionDecision.enabled) {
+      const revision = boundedExtensionMediaCapabilityRevision([extensionDecision.revision]);
+      if (wantsV2) {
+        return reply.send({
+          code: 1,
+          data: v2Payload(disabledOperations('扩展工作台尚未开放', revision), revision, null),
+        });
+      }
       return reply.send({
         code: 1,
         data: {
@@ -176,11 +308,23 @@ export async function extensionMediaLaunchRoutes(
       return error(reply, 503, 'source_workbench_rollout_unavailable', '媒体策略暂不可用');
     }
     if (!workflowDecision.enabled || !webDecision.enabled) {
+      const reason = !workflowDecision.enabled ? 'AI 媒体工作流尚未开放' : 'Web 媒体工作台尚未开放';
+      const revision = boundedExtensionMediaCapabilityRevision([
+        extensionDecision.revision,
+        workflowDecision.revision,
+        webDecision.revision,
+      ]);
+      if (wantsV2) {
+        return reply.send({
+          code: 1,
+          data: v2Payload(disabledOperations(reason, revision), revision, null),
+        });
+      }
       return reply.send({
         code: 1,
         data: {
           capability: disabledCapability(
-            !workflowDecision.enabled ? 'AI 媒体工作流尚未开放' : 'Web 媒体工作台尚未开放',
+            reason,
             boundedExtensionMediaCapabilityRevision([
               extensionDecision.revision,
               workflowDecision.revision,
@@ -189,6 +333,50 @@ export async function extensionMediaLaunchRoutes(
           ),
           context: null,
         },
+      });
+    }
+
+    if (wantsV2) {
+      let operations: ExtensionMediaOperationCapabilities;
+      try {
+        if (options.getCapabilities) {
+          operations = await options.getCapabilities({
+            ownerUserId: device.ownerUserId,
+            workflowDecision,
+          });
+        } else {
+          const legacy = await options.getCapability({
+            ownerUserId: device.ownerUserId,
+            workflowDecision,
+          });
+          operations = disabledOperations('该媒体操作尚未开放', legacy.revision);
+          operations.IMAGE_TRANSLATE = legacy;
+        }
+      } catch {
+        return error(reply, 503, 'media_capability_unavailable', '媒体 Provider 配置暂不可用');
+      }
+      const revision = boundedExtensionMediaCapabilityRevision([
+        extensionDecision.revision,
+        workflowDecision.revision,
+        webDecision.revision,
+        ...Object.values(operations).map((capability) => capability.revision),
+      ]);
+      if (!Object.values(operations).some((capability) => capability.enabled && capability.ready)) {
+        return reply.send({ code: 1, data: v2Payload(operations, revision, null) });
+      }
+
+      const exactContext = await loadExactContext(options, device, parsed.data);
+      if (exactContext.kind === 'error') {
+        return error(
+          reply,
+          exactContext.statusCode,
+          exactContext.errorCode,
+          exactContext.message,
+        );
+      }
+      return reply.send({
+        code: 1,
+        data: v2Payload(operations, revision, publicContext(exactContext.context, parsed.data)),
       });
     }
 
@@ -214,34 +402,20 @@ export async function extensionMediaLaunchRoutes(
       return reply.send({ code: 1, data: { capability, context: null } });
     }
 
-    let context: ExtensionMediaTranslationLaunchContext | null;
-    try {
-      context = await options.loadContext({
-        ownerUserId: device.ownerUserId,
-        ...parsed.data,
-        listingWorkflowId: parsed.data.listingWorkflowId,
-      });
-    } catch (caught) {
-      if (isExtensionMediaContextStaleError(caught)) {
-        return error(reply, 409, 'media_create_context_stale', '来源商品上下文已变化，请刷新后重试');
-      }
-      return error(reply, 503, 'media_context_unavailable', '来源商品上下文暂不可用，请稍后重试');
-    }
-    if (!context
-      || context.ownerUserId !== device.ownerUserId
-      || context.id !== parsed.data.listingWorkflowId
-      || context.shopId !== parsed.data.shopId
-      || context.supplyGoodsId !== parsed.data.supplyGoodsId
-      || context.snapshotId !== parsed.data.snapshotId
-      || context.revision !== parsed.data.revision
-      || context.draftVersion !== parsed.data.draftVersion) {
-      return error(reply, 409, 'media_create_context_stale', '来源商品上下文已变化，请刷新后重试');
+    const exactContext = await loadExactContext(options, device, parsed.data);
+    if (exactContext.kind === 'error') {
+      return error(
+        reply,
+        exactContext.statusCode,
+        exactContext.errorCode,
+        exactContext.message,
+      );
     }
     return reply.send({
       code: 1,
       data: {
         capability,
-        context: publicContext(context, parsed.data),
+        context: publicContext(exactContext.context, parsed.data),
       },
     });
   });

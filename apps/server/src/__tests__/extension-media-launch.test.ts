@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionMediaLaunchRoutes } from '../routes/extension-media-launch.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 
 function decision(enabled: boolean, reason = enabled ? 'pilot_match' : 'master_off') {
   return {
@@ -19,6 +21,7 @@ async function setup(input: {
   allowedShopIds?: string[];
   ready?: boolean;
   capabilityRevision?: string;
+  operationCapabilities?: Record<string, Record<string, unknown>>;
   loadContextError?: Error;
   context?: Record<string, unknown> | null;
 } = {}) {
@@ -44,6 +47,27 @@ async function setup(input: {
     operation: 'IMAGE_TRANSLATE' as const,
     sourceLanguage: 'zh' as const, targetLanguage: 'ru' as const,
   }));
+  const getCapabilities = vi.fn(async () => input.operationCapabilities || ({
+    IMAGE_TO_IMAGE: {
+      enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+      revision: 'image-to-image-1', testOnly: true, operation: 'IMAGE_TO_IMAGE',
+      maxReferences: 4,
+    },
+    IMAGE_TRANSLATE: {
+      enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+      revision: 'translation-1', testOnly: true, operation: 'IMAGE_TRANSLATE',
+      sourceLanguage: 'zh', targetLanguage: 'ru',
+    },
+    FULL_EDIT: {
+      enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: 'disabled', revision: 'full-edit-1', testOnly: true, operation: 'FULL_EDIT',
+    },
+    INPAINT: {
+      enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+      revision: 'inpaint-1', testOnly: true, operation: 'INPAINT',
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS, maxMaskBytes: 20 * 1024 * 1024,
+    },
+  }));
   const app = Fastify();
   await app.register(extensionMediaLaunchRoutes, {
     prefix: '/api/extension-device/source-workbench',
@@ -57,9 +81,10 @@ async function setup(input: {
     featureFlags: { evaluate },
     loadContext: loadContext as any,
     getCapability,
+    getCapabilities: getCapabilities as any,
   });
   await app.ready();
-  return { app, evaluate, loadContext, getCapability };
+  return { app, evaluate, loadContext, getCapability, getCapabilities };
 }
 
 const url = '/api/extension-device/source-workbench/media-launch'
@@ -96,6 +121,82 @@ describe('extension media launch route', () => {
         ownerUserId: 'owner-1', snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
         shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
       });
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('returns the v2 standalone operation matrix without changing the legacy response', async () => {
+    const state = await setup();
+    try {
+      const response = await state.app.inject({ method: 'GET', url: `${url}&contractVersion=2` });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.json()).toEqual({
+        code: 1,
+        data: {
+          contractVersion: 'extension-media-launch/v2',
+          revision: 'pilot-1|image-to-image-1|translation-1|full-edit-1|inpaint-1',
+          operations: {
+            IMAGE_TO_IMAGE: {
+              enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+              revision: 'image-to-image-1', testOnly: true, operation: 'IMAGE_TO_IMAGE',
+              maxReferences: 4,
+            },
+            IMAGE_TRANSLATE: {
+              enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+              revision: 'translation-1', testOnly: true, operation: 'IMAGE_TRANSLATE',
+              sourceLanguage: 'zh', targetLanguage: 'ru',
+            },
+            FULL_EDIT: {
+              enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+              reason: 'disabled', revision: 'full-edit-1', testOnly: true, operation: 'FULL_EDIT',
+            },
+            INPAINT: {
+              enabled: true, ready: true, reasonCode: 'READY', reason: 'ready',
+              revision: 'inpaint-1', testOnly: true, operation: 'INPAINT',
+              maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS, maxMaskBytes: 20 * 1024 * 1024,
+            },
+          },
+          context: {
+            id: 'listing-1', shopId: 'shop-1', supplyGoodsId: 'goods-1',
+            snapshotId: 'snapshot-1', revision: 11, draftVersion: 7,
+            sourceInputs: [{ sourceMediaKey: 'media-1' }, { sourceMediaKey: 'media-2' }],
+            requested: {
+              snapshotId: 'snapshot-1', listingWorkflowId: 'listing-1',
+              revision: 11, draftVersion: 7,
+            },
+          },
+        },
+      });
+      expect(state.getCapability).not.toHaveBeenCalled();
+      expect(state.getCapabilities).toHaveBeenCalledOnce();
+      expect(state.loadContext).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1', snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+      });
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('keeps v2 tenant context dark when no standalone operation is ready', async () => {
+    const disabled = Object.fromEntries([
+      'IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE', 'FULL_EDIT', 'INPAINT',
+    ].map((operation) => [operation, {
+      enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: 'disabled', revision: `${operation.toLowerCase()}-off`, testOnly: true, operation,
+    }]));
+    const state = await setup({ operationCapabilities: disabled });
+    try {
+      const response = await state.app.inject({ method: 'GET', url: `${url}&contractVersion=2` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toMatchObject({
+        contractVersion: 'extension-media-launch/v2',
+        operations: disabled,
+        context: null,
+      });
+      expect(state.loadContext).not.toHaveBeenCalled();
     } finally {
       await state.app.close();
     }
@@ -158,9 +259,11 @@ describe('extension media launch route', () => {
   it('does not turn infrastructure context failures into stale-context responses', async () => {
     const state = await setup({ loadContextError: new Error('database unavailable') });
     try {
-      const response = await state.app.inject({ method: 'GET', url });
-      expect(response.statusCode).toBe(503);
-      expect(response.json()).toMatchObject({ errorCode: 'media_context_unavailable' });
+      for (const requestUrl of [url, `${url}&contractVersion=2`]) {
+        const response = await state.app.inject({ method: 'GET', url: requestUrl });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({ errorCode: 'media_context_unavailable' });
+      }
     } finally {
       await state.app.close();
     }
@@ -173,11 +276,48 @@ describe('extension media launch route', () => {
       }),
     });
     try {
-      const response = await state.app.inject({ method: 'GET', url });
-      expect(response.statusCode).toBe(409);
-      expect(response.json()).toMatchObject({ errorCode: 'media_create_context_stale' });
+      for (const requestUrl of [url, `${url}&contractVersion=2`]) {
+        const response = await state.app.inject({ method: 'GET', url: requestUrl });
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ errorCode: 'media_create_context_stale' });
+      }
     } finally {
       await state.app.close();
     }
+  });
+
+  it('loads one request-level config and storage snapshot for the v2 capability matrix', () => {
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const registrationStart = source.indexOf('await app.register(extensionMediaLaunchRoutes');
+    const capabilitiesStart = source.indexOf(
+      'getCapabilities: async ({ workflowDecision }) => {',
+      registrationStart,
+    );
+    const capabilitiesEnd = source.indexOf(
+      '\n  });\n  await app.register(extensionMediaEditRoutes',
+      capabilitiesStart,
+    );
+    expect(registrationStart).toBeGreaterThanOrEqual(0);
+    expect(capabilitiesStart).toBeGreaterThan(registrationStart);
+    expect(capabilitiesEnd).toBeGreaterThan(capabilitiesStart);
+    const block = source.slice(capabilitiesStart, capabilitiesEnd);
+    for (const key of [
+      'feature_ai_media_image_to_image',
+      'feature_ai_media_full_edit',
+      'feature_ai_media_inpaint',
+      'feature_image_translate',
+      'ai_image_translation_provider',
+      'ai_image_translation_model',
+      'ai_user_daily_image_translation_limit',
+      'ai_image_translation_cost_cents',
+    ]) {
+      expect(block.match(new RegExp(`getConfig\\('${key}'\\)`, 'gu'))).toHaveLength(1);
+    }
+    expect(block.match(/getRuntimeConfigForStorage\(\)/gu)).toHaveLength(1);
+    expect(block).not.toMatch(/getExtensionStandaloneReadiness/u);
+    expect(block).toMatch(/resolveAiImageToImageReadiness/u);
+    expect(block).toMatch(/resolveAiImageEditReadiness\('FULL_EDIT'/u);
+    expect(block).toMatch(/resolveAiImageEditReadiness\('INPAINT'/u);
+    expect(block).toMatch(/resolveExtensionMediaTranslationReadiness/u);
   });
 });

@@ -140,9 +140,10 @@ echo "[deploy] Building server and web"
 pnpm --filter server build
 pnpm --filter web build
 
-echo "[deploy] Building cloud extension package"
+echo "[deploy] Building cloud and local extension packages"
 PREVIOUS_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
 EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:cloud
+EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:local
 
 SERVICES_QUIESCED=0
 restore_quiesced_services() {

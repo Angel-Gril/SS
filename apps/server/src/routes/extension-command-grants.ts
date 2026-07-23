@@ -12,6 +12,7 @@ import {
 } from '../services/source-workflow-feature-flags.js';
 import {
   ExtensionMediaWorkflowLaunchError,
+  parseExtensionMediaWorkflowCreateCommand,
   parseExtensionMediaTranslationCreateCommand,
 } from '../services/extension-media-workflow-launch.js';
 import {
@@ -368,12 +369,17 @@ export function createSourceWorkflowCommandResolver(
       }
       let createCommand;
       try {
-        createCommand = parseExtensionMediaTranslationCreateCommand(input.command);
+        createCommand = parseExtensionMediaWorkflowCreateCommand(input.command)
+          || parseExtensionMediaTranslationCreateCommand(input.command);
       } catch (error) {
         if (error instanceof ExtensionMediaWorkflowLaunchError) return { kind: 'forbidden' };
         throw error;
       }
       if (createCommand) {
+        const candidateSourceMediaKeys = (createCommand as { sourceMediaKeys?: unknown }).sourceMediaKeys;
+        const sourceMediaKeys = Array.isArray(candidateSourceMediaKeys)
+          ? candidateSourceMediaKeys as string[]
+          : [(createCommand as { sourceMediaKey: string }).sourceMediaKey];
         if (!options.loadMediaLaunchContext) return { kind: 'forbidden' };
         let extensionRollout;
         let mediaRollouts;
@@ -409,7 +415,7 @@ export function createSourceWorkflowCommandResolver(
               workflowId: input.workflowId,
               draftRevision: createCommand.draftRevision,
               draftVersion: input.draftVersion,
-              sourceMediaKey: createCommand.sourceMediaKey,
+              sourceMediaKey: sourceMediaKeys[0]!,
             }),
           ]);
         } catch {
@@ -429,7 +435,7 @@ export function createSourceWorkflowCommandResolver(
         if (draft.draftVersion !== input.draftVersion
           || draft.revision !== createCommand.draftRevision
           || !context
-          || !context.sourceMediaKeys.includes(createCommand.sourceMediaKey)) {
+          || sourceMediaKeys.some((sourceMediaKey) => !context.sourceMediaKeys.includes(sourceMediaKey))) {
           return { kind: 'stale' };
         }
         return {
@@ -664,8 +670,8 @@ export interface ExtensionCommandGrantRoutesOptions {
     command: Record<string, unknown>;
   }): Promise<{
     workflowId: string;
-    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
-    operation?: 'IMAGE_TRANSLATE';
+    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION' | 'CREATE_WORKFLOW';
+    operation?: 'IMAGE_TRANSLATE' | 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
     status: string;
     revision: number;
     replayed?: boolean;
@@ -730,6 +736,11 @@ const mediaCommandRecoveryRequiredCodes = new Set([
   // The application may already be committed when its result projection is
   // temporarily unavailable. Preserve PENDING so exact ledger recovery can run.
   'MEDIA_APPLY_STATE_UNAVAILABLE',
+]);
+
+const mediaCommandQuotaExceededCodes = new Set([
+  'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+  'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
 ]);
 
 function error(reply: FastifyReply, statusCode: number, errorCode: string, message: string) {
@@ -1052,11 +1063,16 @@ export async function extensionCommandGrantRoutes(
           failureCode,
           result: null,
         });
+        const quotaExceeded = mediaCommandQuotaExceededCodes.has(failureCode);
         const unavailable = mediaCommandUnavailableCodes.has(failureCode);
-        return reply.status(unavailable ? 503 : 409).send({
+        return reply.status(quotaExceeded ? 429 : unavailable ? 503 : 409).send({
           code: 0,
-          errorCode: unavailable ? 'media_command_unavailable' : 'media_command_failed',
-          msg: unavailable ? '媒体任务服务暂不可用' : '媒体任务命令执行失败',
+          errorCode: quotaExceeded
+            ? 'media_quota_exceeded'
+            : unavailable ? 'media_command_unavailable' : 'media_command_failed',
+          msg: quotaExceeded
+            ? '媒体任务额度已用尽'
+            : unavailable ? '媒体任务服务暂不可用' : '媒体任务命令执行失败',
           data: { receipt },
         });
       }

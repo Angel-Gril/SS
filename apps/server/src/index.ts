@@ -67,7 +67,11 @@ import { announcementRoutes } from './routes/announcements.js';
 import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
 import { sourceCandidateRoutes } from './routes/source-candidates.js';
-import { aiImageRoutes } from './routes/ai-images.js';
+import {
+  aiImageRoutes,
+  resolveAiImageEditReadiness,
+  resolveAiImageToImageReadiness,
+} from './routes/ai-images.js';
 import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
 import type { AiImageSuiteProviderConfig } from './services/ai-image-suite.js';
@@ -103,7 +107,11 @@ import {
 } from './routes/extension-command-grants.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
-import { extensionMediaLaunchRoutes } from './routes/extension-media-launch.js';
+import {
+  EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
+  extensionMediaLaunchRoutes,
+} from './routes/extension-media-launch.js';
+import { extensionMediaEditRoutes } from './routes/extension-media-edit.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
 import {
   SourceListingWorkflowError,
@@ -165,11 +173,16 @@ import {
   createExtensionMediaReviewCommandExecutor,
 } from './services/extension-media-review-commands.js';
 import {
+  createExtensionMediaWorkflowLauncher,
   createExtensionMediaTranslationLauncher,
   resolveExtensionMediaWorkflowSourceMediaKey,
   resolveExtensionMediaTranslationReadiness,
 } from './services/extension-media-workflow-launch.js';
 import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-translation-storage.js';
+import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
+import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
+import { createAiImageEditMask } from './services/ai-image-edit.js';
+import { uploadLimiter } from './lib/upload-limiter.js';
 import { applyAiMediaListingDraftApplication } from './services/ai-media-listing-draft-application-mutations.js';
 import {
   createSourceOzonCategoryMappingService,
@@ -834,25 +847,40 @@ if (isExtensionDeviceAuthEnabled()) {
         contextDraftVersion: true,
         suiteSlot: { select: { suiteId: true } },
         inputs: {
-          where: { ordinal: 0 },
-          orderBy: { id: 'asc' },
-          take: 1,
-          select: { asset: { select: { sourceMediaKey: true, metadata: true } } },
+          orderBy: [{ ordinal: 'asc' }, { id: 'asc' }],
+          select: {
+            role: true,
+            ordinal: true,
+            asset: { select: { id: true, sourceMediaKey: true, metadata: true } },
+          },
         },
         jobs: {
           orderBy: [{ workflowAttempt: 'desc' }, { id: 'desc' }],
           take: 1,
-          select: { id: true, provider: true },
+          select: {
+            id: true,
+            provider: true,
+            model: true,
+            prompt: true,
+            negativePrompt: true,
+          },
         },
       },
     });
     if (!row) return null;
-    const sourceAsset = row.inputs[0]?.asset;
+    const sourceInputs = row.inputs.filter((item) => item.role === 'REFERENCE');
+    const sourceMediaKeys = sourceInputs.flatMap((item) => {
+      const sourceMediaKey = resolveExtensionMediaWorkflowSourceMediaKey(item.asset);
+      return sourceMediaKey ? [sourceMediaKey] : [];
+    });
+    const maskAssetId = row.inputs.find((item) => item.role === 'MASK')?.asset.id || null;
+    const sourceAsset = sourceInputs[0]?.asset;
     return {
       id: row.id,
       ownerUserId: row.ownerUserId,
       operation: String(row.operation),
       provider: row.jobs[0]?.provider || null,
+      model: row.jobs[0]?.model || null,
       status: String(row.status),
       revision: row.revision,
       contextType: row.contextType,
@@ -861,6 +889,10 @@ if (isExtensionDeviceAuthEnabled()) {
       contextDraftVersion: row.contextDraftVersion,
       suiteId: row.suiteSlot?.suiteId || null,
       sourceMediaKey: resolveExtensionMediaWorkflowSourceMediaKey(sourceAsset),
+      sourceMediaKeys,
+      maskAssetId,
+      prompt: row.jobs[0]?.prompt || null,
+      negativePrompt: row.jobs[0]?.negativePrompt || null,
       jobId: row.jobs[0]?.id || null,
     };
   };
@@ -909,6 +941,20 @@ if (isExtensionDeviceAuthEnabled()) {
       throw error;
     }
   };
+  const getExtensionMediaTranslationSettings = async () => ({
+    enabled: await getConfig('feature_image_translate'),
+    provider: await getConfig('ai_image_translation_provider'),
+    model: await getConfig('ai_image_translation_model'),
+    dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
+    estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
+  });
+  const getExtensionMediaTranslationStorageReadiness = async () => {
+    try {
+      return resolveAiImageTranslationStorageReadiness(await getRuntimeConfigForStorage());
+    } catch {
+      return { ready: false, reason: 'Image translation storage is unavailable' };
+    }
+  };
   const extensionMediaTranslationLauncher = createExtensionMediaTranslationLauncher({
     workflowService: extensionMediaWorkflowService,
     loadContext: loadExtensionMediaTranslationContext,
@@ -923,20 +969,8 @@ if (isExtensionDeviceAuthEnabled()) {
       );
       return { id: asset.id };
     },
-    getSettings: async () => ({
-      enabled: await getConfig('feature_image_translate'),
-      provider: await getConfig('ai_image_translation_provider'),
-      model: await getConfig('ai_image_translation_model'),
-      dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
-      estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
-    }),
-    getStorageReadiness: async () => {
-      try {
-        return resolveAiImageTranslationStorageReadiness(await getRuntimeConfigForStorage());
-      } catch {
-        return { ready: false, reason: 'Image translation storage is unavailable' };
-      }
-    },
+    getSettings: getExtensionMediaTranslationSettings,
+    getStorageReadiness: getExtensionMediaTranslationStorageReadiness,
     resolvePrompt: resolveActiveAiTemplate,
     enqueue: async (jobId) => {
       const worker = await import('./workers/ai-image-translation.js');
@@ -948,6 +982,71 @@ if (isExtensionDeviceAuthEnabled()) {
       errorMessage: 'AI media queue is temporarily unavailable',
     }),
   });
+  const getExtensionStandaloneReadiness = async (
+    operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+  ) => {
+    if (operation === 'IMAGE_TO_IMAGE') {
+      return resolveAiImageToImageReadiness({
+        enabled: await getConfig('feature_ai_media_image_to_image'),
+        workflowEnabled: true,
+        production: process.env.NODE_ENV === 'production',
+      });
+    }
+    const [fullEditEnabled, inpaintEnabled, runtimeConfig] = await Promise.all([
+      getConfig('feature_ai_media_full_edit'),
+      getConfig('feature_ai_media_inpaint'),
+      getRuntimeConfigForStorage(),
+    ]);
+    return resolveAiImageEditReadiness(operation, { fullEditEnabled, inpaintEnabled }, {
+      workflowEnabled: true,
+      production: process.env.NODE_ENV === 'production',
+      storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
+    });
+  };
+  const extensionMediaWorkflowLauncher = createExtensionMediaWorkflowLauncher({
+    workflowService: extensionMediaWorkflowService,
+    loadContext: loadExtensionMediaTranslationContext,
+    loadExisting: loadExtensionMediaTranslationExistingWorkflow,
+    internalizeSource: async ({
+      ownerUserId,
+      listingWorkflowId,
+      sourceMediaKey,
+      draftRevision,
+      draftVersion,
+      role,
+    }) => {
+      const asset = await extensionMediaContextService.internalizeListingDraft(
+        ownerUserId,
+        listingWorkflowId,
+        sourceMediaKey,
+        { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
+        role,
+      );
+      return { id: asset.id };
+    },
+    getReadiness: getExtensionStandaloneReadiness,
+    getEditDailyLimit: async () => getConfig('ai_user_daily_image_generation_limit'),
+    resolvePrompt: resolveActiveAiTemplate,
+    enqueueGeneration: async (jobId) => {
+      const worker = await import('./workers/ai-image-generation.js');
+      await worker.enqueueAiImageJob(jobId);
+    },
+    enqueueEdit: async (jobId) => {
+      const worker = await import('./workers/ai-image-edit.js');
+      await worker.enqueueAiImageEditJob(jobId);
+    },
+    markEnqueueFailed: async (jobId) => extensionMediaJobRepository.markEnqueueFailed(jobId, {
+      attemptCount: 0,
+      errorCode: 'QUEUE_UNAVAILABLE',
+      errorMessage: 'AI media queue is temporarily unavailable',
+    }),
+    production: process.env.NODE_ENV === 'production',
+  });
+  const absoluteExtensionMediaUrl = async (value: string) => {
+    const runtimeConfig = await getRuntimeConfigForStorage();
+    const publicOrigin = new URL(runtimeConfig.localBaseUrl).origin;
+    return new URL(value, `${publicOrigin}/`).toString();
+  };
   const loadExtensionListingDraft = async ({
     listingWorkflowId,
     ownerUserId,
@@ -975,10 +1074,29 @@ if (isExtensionDeviceAuthEnabled()) {
   };
   const executeExtensionMediaWorkflowCommand = createExtensionMediaWorkflowCommandExecutor({
     workflowService: extensionMediaWorkflowService,
+    launchWorkflow: extensionMediaWorkflowLauncher,
     launchTranslation: extensionMediaTranslationLauncher,
     loadListingDraft: loadExtensionListingDraft,
     getTranslationDailyLimit: async () => getConfig('ai_user_daily_image_translation_limit'),
     getEditDailyLimit: async () => getConfig('ai_user_daily_image_generation_limit'),
+    getRetryReadiness: async (operation) => {
+      if (operation === 'IMAGE_TRANSLATE') {
+        const [settings, storageReadiness] = await Promise.all([
+          getExtensionMediaTranslationSettings(),
+          getExtensionMediaTranslationStorageReadiness(),
+        ]);
+        const readiness = resolveExtensionMediaTranslationReadiness({
+          settings,
+          production: process.env.NODE_ENV === 'production',
+          storageReadiness,
+        });
+        return { ...readiness, provider: settings.provider, model: settings.model };
+      }
+      if (operation === 'IMAGE_TO_IMAGE' || operation === 'FULL_EDIT' || operation === 'INPAINT') {
+        return getExtensionStandaloneReadiness(operation);
+      }
+      return { ready: false };
+    },
     enqueueGeneration: async (jobId) => {
       const worker = await import('./workers/ai-image-generation.js');
       await worker.enqueueAiImageJob(jobId);
@@ -998,6 +1116,7 @@ if (isExtensionDeviceAuthEnabled()) {
         errorMessage: 'AI media queue is temporarily unavailable',
       });
     },
+    production: process.env.NODE_ENV === 'production',
   });
   const executeExtensionMediaReviewCommand = createExtensionMediaReviewCommandExecutor({
     workflowService: extensionMediaWorkflowService,
@@ -1278,6 +1397,164 @@ if (isExtensionDeviceAuthEnabled()) {
         targetLanguage: 'ru' as const,
       };
     },
+    getCapabilities: async ({ workflowDecision }) => {
+      const [
+        imageToImageEnabled,
+        fullEditEnabled,
+        inpaintEnabled,
+        translationEnabled,
+        translationProvider,
+        translationModel,
+        translationDailyLimit,
+        translationEstimatedCostCents,
+        runtimeConfig,
+      ] = await Promise.all([
+        getConfig('feature_ai_media_image_to_image'),
+        getConfig('feature_ai_media_full_edit'),
+        getConfig('feature_ai_media_inpaint'),
+        getConfig('feature_image_translate'),
+        getConfig('ai_image_translation_provider'),
+        getConfig('ai_image_translation_model'),
+        getConfig('ai_user_daily_image_translation_limit'),
+        getConfig('ai_image_translation_cost_cents'),
+        getRuntimeConfigForStorage(),
+      ]);
+      const production = process.env.NODE_ENV === 'production';
+      const imageToImage = resolveAiImageToImageReadiness({
+        enabled: imageToImageEnabled,
+        workflowEnabled: true,
+        production,
+      });
+      const editFlags = { fullEditEnabled, inpaintEnabled };
+      const editOptions = {
+        workflowEnabled: true,
+        production,
+        storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
+      };
+      const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editFlags, editOptions);
+      const inpaint = resolveAiImageEditReadiness('INPAINT', editFlags, editOptions);
+      const translation = resolveExtensionMediaTranslationReadiness({
+        settings: {
+          enabled: translationEnabled,
+          provider: translationProvider,
+          model: translationModel,
+          dailyLimit: translationDailyLimit,
+          estimatedCostCents: translationEstimatedCostCents,
+        },
+        production,
+        storageReadiness: resolveAiImageTranslationStorageReadiness(runtimeConfig),
+      });
+      const operation = <T extends 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT'>(
+        name: T,
+        readiness: typeof imageToImage,
+      ) => ({
+        enabled: readiness.enabled,
+        ready: readiness.ready,
+        reasonCode: readiness.reasonCode,
+        reason: readiness.reason,
+        revision: workflowDecision.revision,
+        testOnly: readiness.testOnly === true,
+        operation: name,
+      });
+      return {
+        IMAGE_TO_IMAGE: {
+          ...operation('IMAGE_TO_IMAGE', imageToImage),
+          maxReferences: 4,
+        },
+        IMAGE_TRANSLATE: {
+          enabled: translation.enabled,
+          ready: translation.ready,
+          reasonCode: translation.reasonCode,
+          reason: translation.reason,
+          revision: workflowDecision.revision,
+          testOnly: true,
+          operation: 'IMAGE_TRANSLATE' as const,
+          sourceLanguage: 'zh' as const,
+          targetLanguage: 'ru' as const,
+        },
+        FULL_EDIT: operation('FULL_EDIT', fullEdit),
+        INPAINT: {
+          ...operation('INPAINT', inpaint),
+          maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+          maxMaskBytes: EXTENSION_MEDIA_EDIT_MASK_MAX_BYTES,
+        },
+      };
+    },
+  });
+  await app.register(extensionMediaEditRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['media:execute'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    getReadiness: () => getExtensionStandaloneReadiness('INPAINT'),
+    loadContext: ({ ownerUserId, listingWorkflowId, revision, draftVersion }) => (
+      loadExtensionMediaTranslationContext({
+        ownerUserId,
+        listingWorkflowId,
+        draftRevision: revision,
+        draftVersion,
+      })
+    ),
+    internalizeSource: async ({
+      ownerUserId,
+      listingWorkflowId,
+      sourceMediaKey,
+      revision,
+      draftVersion,
+      role,
+    }) => {
+      const asset = await extensionMediaContextService.internalizeListingDraft(
+        ownerUserId,
+        listingWorkflowId,
+        sourceMediaKey,
+        { expectedRevision: revision, expectedDraftVersion: draftVersion },
+        role,
+      );
+      return {
+        id: asset.id,
+        url: await absoluteExtensionMediaUrl(asset.url),
+        mimeType: asset.mimeType,
+        width: Number(asset.width),
+        height: Number(asset.height),
+      };
+    },
+    checkMaskRequestRate: async (ownerUserId) => {
+      if (!await getConfig('upload_rate_limit_enabled')) return { allowed: true } as const;
+      const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
+      return uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)
+        ? { allowed: true } as const
+        : { allowed: false, reason: `Edit mask upload exceeds ${maxPerMinute} requests per minute` } as const;
+    },
+    createMask: async (input) => {
+      const result = await createAiImageEditMask(input, {
+        database: prisma as any,
+        getStorage: getStorageBackend,
+        loadListingDraftContext: (ownerUserId, draftId, scope) => (
+          extensionMediaContextService.loadListingDraft(ownerUserId, draftId, scope)
+        ),
+        checkUploadQuota: async (ownerUserId, bytes) => {
+          if (!await getConfig('upload_daily_quota_enabled')) return { allowed: true } as const;
+          const maxMegabytes = await getConfig('upload_daily_quota_mb');
+          return uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)
+            ? { allowed: true } as const
+            : {
+              allowed: false,
+              reason: `Edit mask upload exceeds the ${maxMegabytes} MB daily quota`,
+            } as const;
+        },
+      });
+      return {
+        ...result,
+        asset: {
+          ...result.asset,
+          url: await absoluteExtensionMediaUrl(result.asset.url),
+        },
+      };
+    },
+    production: process.env.NODE_ENV === 'production',
   });
 }
 if (isLogisticsDistributionEnabled()) {

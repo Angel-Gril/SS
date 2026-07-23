@@ -80,7 +80,9 @@
   function renderTranslationLaunch(container, listing, options) {
     var launch = options && options.launch;
     var context = launch && launch.context;
-    var capability = launch && launch.capability;
+    var capability = launch && launch.contractVersion === 2
+      ? launch.operations && launch.operations.IMAGE_TRANSLATE
+      : launch && launch.capability;
     if (!listing || !launch || launch.state !== 'ready' || !context || !capability
       || capability.enabled !== true || capability.ready !== true || capability.testOnly !== true
       || capability.operation !== 'IMAGE_TRANSLATE'
@@ -121,6 +123,150 @@
     controls.appendChild(select);
     controls.appendChild(button);
     drawer.appendChild(controls);
+    container.appendChild(drawer);
+  }
+
+  function mediaCreateDraft(value) {
+    var operation = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(value && value.operation)
+      ? value.operation
+      : 'IMAGE_TO_IMAGE';
+    return {
+      operation: operation,
+      sourceMediaKeys: Array.isArray(value && value.sourceMediaKeys)
+        ? value.sourceMediaKeys.filter(function (key) { return typeof key === 'string' && key; })
+        : [],
+    };
+  }
+
+  function renderStandaloneMediaLaunch(container, listing, options) {
+    var launch = options && options.launch;
+    var context = launch && launch.context;
+    var operations = launch && launch.contractVersion === 2 && launch.operations;
+    if (!listing || !operations || launch.state !== 'ready' || !context
+      || context.id !== listing.id || context.shopId !== listing.shopId
+      || context.revision !== listing.revision || context.draftVersion !== listing.draftVersion
+      || typeof options.onMediaCreateDraftChange !== 'function') return;
+    var allowedKeys = new Set((context.sourceInputs || []).map(function (item) {
+      return item && item.sourceMediaKey;
+    }).filter(Boolean));
+    var sourceInputs = (Array.isArray(options.sourceInputs) ? options.sourceInputs : [])
+      .filter(function (item) { return item && allowedKeys.has(item.sourceMediaKey); })
+      .slice(0, 50);
+    if (!sourceInputs.length) return;
+
+    var draft = mediaCreateDraft(options.mediaCreateDraft);
+    var allowedSourceKeys = new Set(sourceInputs.map(function (item) { return item.sourceMediaKey; }));
+    draft.sourceMediaKeys = draft.sourceMediaKeys.filter(function (key) {
+      return allowedSourceKeys.has(key);
+    });
+    var operationCapability = operations[draft.operation];
+    var maximumReferences = draft.operation === 'IMAGE_TO_IMAGE'
+      ? Math.min(4, Math.max(1, Number(operationCapability && operationCapability.maxReferences) || 4))
+      : 1;
+    draft.sourceMediaKeys = draft.sourceMediaKeys.slice(0, maximumReferences);
+    var create = null;
+
+    function refreshCreateState() {
+      if (!create) return;
+      var capability = operations[draft.operation];
+      create.disabled = Boolean(options.busyCreateKey || options.busyCommandKey
+        || !capability || capability.ready !== true
+        || !draft.sourceMediaKeys.length);
+    }
+
+    function emit(patch, structural) {
+      var next = mediaCreateDraft(Object.assign({}, draft, patch || {}));
+      var capability = operations[next.operation];
+      var maximum = next.operation === 'IMAGE_TO_IMAGE'
+        ? Math.min(4, Math.max(1, Number(capability && capability.maxReferences) || 4))
+        : 1;
+      next.sourceMediaKeys = next.sourceMediaKeys
+        .filter(function (key) { return allowedSourceKeys.has(key); })
+        .slice(0, maximum);
+      draft = next;
+      refreshCreateState();
+      options.onMediaCreateDraftChange(next, { structural: structural === true });
+    }
+
+    var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create ss-erp-source-workbench-media-create');
+    drawer.open = options.mediaCreateOpen === true;
+    drawer.addEventListener('toggle', function (event) {
+      if (!event || event.isTrusted !== true
+        || typeof options.onMediaCreateOpenChange !== 'function') return;
+      options.onMediaCreateOpenChange(drawer.open === true);
+    });
+    drawer.appendChild(element('summary', '', 'AI 修图与生图'));
+    var segmented = element('div', 'ss-erp-source-workbench-operation-tabs');
+    [
+      { operation: 'IMAGE_TO_IMAGE', label: '参考生图' },
+      { operation: 'FULL_EDIT', label: '全图编辑' },
+      { operation: 'INPAINT', label: '局部重绘' },
+    ].forEach(function (definition) {
+      var capability = operations[definition.operation];
+      var button = element('button', definition.operation === draft.operation ? 'is-active' : '', definition.label);
+      button.type = 'button';
+      button.setAttribute('data-media-operation', definition.operation);
+      button.setAttribute('aria-pressed', definition.operation === draft.operation ? 'true' : 'false');
+      button.disabled = !capability || capability.enabled !== true;
+      button.title = capability && capability.ready === true ? definition.label : String(capability && capability.reason || definition.label + '当前不可用');
+      button.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || button.disabled) return;
+        emit({
+          operation: definition.operation,
+          sourceMediaKeys: draft.sourceMediaKeys.slice(0, definition.operation === 'IMAGE_TO_IMAGE' ? 4 : 1),
+        }, true);
+      });
+      segmented.appendChild(button);
+    });
+    drawer.appendChild(segmented);
+
+    var gallery = element('div', 'ss-erp-source-workbench-source-gallery');
+    sourceInputs.forEach(function (source, index) {
+      var selected = draft.sourceMediaKeys.includes(source.sourceMediaKey);
+      var label = element('label', 'ss-erp-source-workbench-source-card' + (selected ? ' is-selected' : ''));
+      var checkbox = element('input');
+      checkbox.type = draft.operation === 'IMAGE_TO_IMAGE' ? 'checkbox' : 'radio';
+      checkbox.name = 'ss-erp-source-workbench-media-source';
+      checkbox.checked = selected;
+      checkbox.setAttribute('data-source-media-key', source.sourceMediaKey);
+      checkbox.setAttribute('aria-label', source.label || ('图片 ' + (index + 1)));
+      checkbox.addEventListener('change', function (event) {
+        if (!event || event.isTrusted !== true) return;
+        var nextKeys;
+        if (draft.operation === 'IMAGE_TO_IMAGE') {
+          nextKeys = checkbox.checked
+            ? draft.sourceMediaKeys.concat([source.sourceMediaKey])
+            : draft.sourceMediaKeys.filter(function (key) { return key !== source.sourceMediaKey; });
+        } else {
+          nextKeys = [source.sourceMediaKey];
+        }
+        emit({ sourceMediaKeys: Array.from(new Set(nextKeys)) }, true);
+      });
+      label.appendChild(checkbox);
+      if (source.url) {
+        var image = element('img');
+        image.src = source.url;
+        image.alt = source.label || ('来源图片 ' + (index + 1));
+        image.loading = 'lazy';
+        image.referrerPolicy = 'no-referrer';
+        label.appendChild(image);
+      }
+      label.appendChild(element('span', '', source.label || source.role || ('图片 ' + (index + 1))));
+      gallery.appendChild(label);
+    });
+    drawer.appendChild(gallery);
+
+    var createLabel = draft.operation === 'IMAGE_TO_IMAGE'
+      ? '配置参考生图'
+      : draft.operation === 'FULL_EDIT' ? '配置全图编辑' : '打开局部重绘';
+    create = element('button', 'ss-erp-source-workbench-create-button', createLabel);
+    create.type = 'button';
+    refreshCreateState();
+    create.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || create.disabled) return;
+      if (typeof options.onOpenMediaEditor === 'function') options.onOpenMediaEditor(draft);
+    });
+    drawer.appendChild(create);
     container.appendChild(drawer);
   }
 
@@ -390,6 +536,7 @@
         listing.blockers[0].message,
       ));
     }
+    renderStandaloneMediaLaunch(container, listing, options);
     renderTranslationLaunch(container, listing, options);
     renderMediaTask(container, status, mediaItems, options);
     renderMediaHistory(container, listing, options);

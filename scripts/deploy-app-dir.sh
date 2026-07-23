@@ -185,8 +185,8 @@ run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; np
 log "Building server and web"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"
 
-log "Building cloud extension package"
-run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:cloud"
+log "Building cloud and local extension packages"
+run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:cloud && EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:local"
 
 SERVICES_QUIESCED=0
 restore_quiesced_services() {

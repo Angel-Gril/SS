@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>AI 图片任务</title>
+  <link rel="stylesheet" href="media-editor.css" />
+</head>
+<body>
+  <main class="editor-shell" aria-labelledby="editorTitle">
+    <header class="editor-header">
+      <div class="editor-identity">
+        <div class="brand-mark" aria-hidden="true">SS</div>
+        <div>
+          <h1 id="editorTitle">AI 图片任务</h1>
+          <p id="sourceMeta">正在准备任务</p>
+        </div>
+      </div>
+      <div class="editor-tools" id="maskTools" aria-label="遮罩工具" hidden>
+        <div class="tool-segment" role="group" aria-label="绘制模式">
+          <button class="tool-button is-active" id="paintTool" type="button" aria-pressed="true">画笔</button>
+          <button class="tool-button" id="eraseTool" type="button" aria-pressed="false">橡皮</button>
+        </div>
+        <label class="brush-control" for="brushSize">
+          <span>笔刷</span>
+          <input id="brushSize" type="range" min="1" max="100" value="24" />
+          <output id="brushValue" for="brushSize">24 px</output>
+        </label>
+        <div class="history-actions" role="group" aria-label="编辑历史">
+          <button id="undoButton" type="button" disabled>撤销</button>
+          <button id="redoButton" type="button" disabled>重做</button>
+          <button id="clearButton" type="button" disabled>清空</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="editor-workspace is-prompt-only">
+      <section class="canvas-workspace" id="canvasWorkspace" aria-label="遮罩画布" hidden>
+        <div class="canvas-stage" id="canvasStage">
+          <img id="sourceImage" alt="局部重绘来源图" referrerpolicy="no-referrer" />
+          <canvas id="maskCanvas" aria-label="局部重绘遮罩"></canvas>
+          <div class="canvas-loading" id="canvasLoading" role="status">正在加载图片</div>
+        </div>
+      </section>
+
+      <aside class="task-panel" aria-label="任务信息">
+        <section>
+          <h2>编辑指令</h2>
+          <textarea class="task-input" id="promptInput" maxlength="8000" rows="7" autocomplete="off" placeholder="描述期望画面或需要修改的内容" required></textarea>
+        </section>
+        <section>
+          <h2>排除内容</h2>
+          <textarea class="task-input is-muted" id="negativePromptInput" maxlength="4000" rows="4" autocomplete="off" placeholder="不希望出现的内容（可选）"></textarea>
+        </section>
+        <section class="mask-metrics" id="maskMetrics" aria-label="遮罩统计" hidden>
+          <div><span>预估重绘像素</span><b id="editPixelCount">0</b></div>
+          <div><span>预估保留像素</span><b id="preservedPixelCount">0</b></div>
+        </section>
+        <div class="editor-status" id="editorStatus" role="status">请稍候</div>
+        <footer class="editor-actions">
+          <button class="secondary" id="cancelButton" type="button">关闭</button>
+          <button class="primary" id="submitButton" type="button" disabled>创建任务</button>
+        </footer>
+      </aside>
+    </div>
+  </main>
+
+  <script src="../shared/ai-media/image-mask-core.js"></script>
+  <script src="../shared/ai-media/image-mask-layout.js"></script>
+  <script src="media-editor.js"></script>
+</body>
+</html>

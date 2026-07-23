@@ -48,6 +48,11 @@
     sourceWorkbenchRequestSeq: 0,
     sourceWorkbenchCommandKey: '',
     sourceWorkbenchCreateKey: '',
+    sourceWorkbenchMediaCreateDraft: {
+      operation: 'IMAGE_TO_IMAGE',
+      sourceMediaKeys: []
+    },
+    sourceWorkbenchMediaCreateOpen: false,
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
@@ -98,7 +103,12 @@
       state.sourceWorkbenchHistoryRequestSeq += 1;
       state.sourceWorkbenchHistoryOpen = false;
       state.sourceWorkbenchLastRefreshAt = 0;
-      setStatus('图片操作已通过独立确认并完成。', 'ok');
+      setStatus(
+        message.resultKind === 'TASK_QUEUED'
+          ? '图片任务已进入队列。'
+          : '图片操作已通过独立确认并完成。',
+        'ok',
+      );
       void refreshSourceWorkbenchStatus({ force: true });
       return false;
     });
@@ -305,6 +315,11 @@
     state.sourceWorkbenchRequestSeq += 1;
     state.sourceWorkbenchCommandKey = '';
     state.sourceWorkbenchCreateKey = '';
+    state.sourceWorkbenchMediaCreateDraft = {
+      operation: 'IMAGE_TO_IMAGE',
+      sourceMediaKeys: []
+    };
+    state.sourceWorkbenchMediaCreateOpen = false;
   }
 
   function resetSourceProductForPage(pageKey) {
@@ -645,6 +660,65 @@
     }
   }
 
+  async function openSourceWorkbenchMediaEditor(draft) {
+    var operation = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(draft && draft.operation)
+      ? draft.operation
+      : '';
+    var sourceMediaKeys = Array.isArray(draft && draft.sourceMediaKeys)
+      ? draft.sourceMediaKeys.map(function (value) {
+        return String(value == null ? '' : value).normalize('NFKC').trim();
+      })
+      : [];
+    var maximumSources = operation === 'IMAGE_TO_IMAGE' ? 4 : 1;
+    var listingWorkflowId = String(state.sourceWorkbenchListingId || '').normalize('NFKC').trim();
+    var launchContext = state.sourceWorkbenchLaunch && state.sourceWorkbenchLaunch.context;
+    if (state.sourceWorkbenchCreateKey || state.sourceWorkbenchCommandKey
+      || !operation || sourceMediaKeys.length < 1 || sourceMediaKeys.length > maximumSources
+      || sourceMediaKeys.some(function (key) { return !key || key.length > 500; })
+      || new Set(sourceMediaKeys).size !== sourceMediaKeys.length
+      || !listingWorkflowId || listingWorkflowId.length > 200
+      || !launchContext || launchContext.id !== listingWorkflowId
+      || typeof launchContext.snapshotId !== 'string' || !launchContext.snapshotId
+      || typeof launchContext.supplyGoodsId !== 'string' || !launchContext.supplyGoodsId
+      || typeof launchContext.shopId !== 'string' || !launchContext.shopId
+      || !Number.isSafeInteger(launchContext.revision) || launchContext.revision <= 0
+      || !Number.isSafeInteger(launchContext.draftVersion) || launchContext.draftVersion <= 0) return;
+    var sourceProductId = currentSourceProductId();
+    if (!sourceProductId || state.sourcePageKey !== currentSourcePageKey()) {
+      setStatus('当前货源页面已变化，请刷新后重试。', 'fail');
+      return;
+    }
+    var createKey = operation + ':' + sourceMediaKeys.join(',');
+    state.sourceWorkbenchCreateKey = createKey;
+    renderContent();
+    setStatus('正在准备 AI 图片编辑器...', '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-media-editor-open',
+        sourceProductId: sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: listingWorkflowId,
+        snapshotId: launchContext.snapshotId,
+        supplyGoodsId: launchContext.supplyGoodsId,
+        shopId: launchContext.shopId,
+        revision: launchContext.revision,
+        draftVersion: launchContext.draftVersion,
+        operation: operation,
+        sourceMediaKeys: sourceMediaKeys
+      });
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'editor_opened') {
+        throw new Error(response && response.error || 'AI 图片编辑器打开失败');
+      }
+      setStatus('AI 图片编辑器已打开。', 'ok');
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      if (state.sourceWorkbenchCreateKey === createKey) state.sourceWorkbenchCreateKey = '';
+      renderContent();
+    }
+  }
+
   async function loadSourceWorkbenchMediaHistory(options) {
     options = options || {};
     var listingWorkflowId = String(state.sourceWorkbenchListingId || '').normalize('NFKC').trim();
@@ -768,6 +842,8 @@
           historyOpen: state.sourceWorkbenchHistoryOpen,
           sourceInputs: currentSourceMediaInputs(),
           selectedListingWorkflowId: state.sourceWorkbenchListingId,
+          mediaCreateDraft: state.sourceWorkbenchMediaCreateDraft,
+          mediaCreateOpen: state.sourceWorkbenchMediaCreateOpen,
           busyCommandKey: state.sourceWorkbenchCommandKey,
           busyCreateKey: state.sourceWorkbenchCreateKey,
           onCommand: function (task, action) {
@@ -786,8 +862,23 @@
           onCreateTranslation: function (source) {
             void createSourceWorkbenchTranslation(source);
           },
+          onMediaCreateDraftChange: function (draft, metadata) {
+            state.sourceWorkbenchMediaCreateDraft = draft;
+            if (metadata && metadata.structural === true) renderContent();
+          },
+          onMediaCreateOpenChange: function (open) {
+            state.sourceWorkbenchMediaCreateOpen = open === true;
+          },
+          onOpenMediaEditor: function (draft) {
+            void openSourceWorkbenchMediaEditor(draft);
+          },
           onSelectListing: function (listingWorkflowId) {
             state.sourceWorkbenchListingId = String(listingWorkflowId || '');
+            state.sourceWorkbenchMediaCreateDraft = {
+              operation: 'IMAGE_TO_IMAGE',
+              sourceMediaKeys: []
+            };
+            state.sourceWorkbenchMediaCreateOpen = false;
             state.sourceWorkbenchHistory = null;
             state.sourceWorkbenchHistoryListingId = '';
             state.sourceWorkbenchHistoryLoading = false;

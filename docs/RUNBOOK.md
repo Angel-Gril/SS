@@ -424,7 +424,7 @@ bash scripts/verify-vps-deploy.sh
 
 ### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / H2 / H3 / H4）
 
-Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1/H2/H3 已交付历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已交付“只恢复既有 Provider task ID、绝不重提”的结果核对状态机、Worker 和超管操作面。它们都不是新付费任务的功能激活。`1600` 至 `1660` 保护候选契约，`1670`/`1680` 支持 history/updates keyset 查询，两个应用账本及 `21124000` 至 `21131000` 的结果核对状态/事件/租约索引只能前向保留。真实 Provider 新任务、扩展端 Mask 编辑器和外部质量验收尚未完成，因此所有环境必须保持暗态。标准部署脚本会在 migration 后、启动 API/Worker 前执行同一检查；手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1/H2/H3 已交付历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已交付“只恢复既有 Provider task ID、绝不重提”的结果核对状态机、Worker 和超管操作面。它们都不是新付费任务的功能激活。`1600` 至 `1660` 保护候选契约，`1670`/`1680` 支持 history/updates keyset 查询，两个应用账本及 `21124000` 至 `21131000` 的结果核对状态/事件/租约索引只能前向保留。扩展端参考图生图、整图编辑、局部重绘 Mask、历史/审核/`APPLY_APPEND` 控件已在开发和测试环境实现，可用 `node scripts/extension-source-media-standalone.test.mjs` 和 `node scripts/extension-media-mask-editor.test.mjs` 验证。真实生产 Provider 新任务和外部质量验收仍未开启，生产扩展媒体执行会 fail closed，因此所有环境必须保持暗态。标准部署脚本会在 migration 后、启动 API/Worker 前执行同一检查；手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式

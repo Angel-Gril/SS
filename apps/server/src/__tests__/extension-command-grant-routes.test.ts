@@ -654,6 +654,31 @@ describe('extension command grant routes', () => {
     });
   });
 
+  it.each([
+    'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+    'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+  ])('reports %s as a rate-limited failed receipt', async (failureCode) => {
+    const deps = await buildApp();
+    deps.executeMediaWorkflowCommand.mockRejectedValueOnce(Object.assign(
+      new Error('daily quota exhausted'),
+      { code: failureCode },
+    ));
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: mediaPayload(),
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({
+      errorCode: 'media_quota_exceeded',
+      data: { receipt: { status: 'FAILED', failureCode } },
+    });
+    expect(deps.service.fail).toHaveBeenCalledWith({
+      receiptId: 'receipt-1', failureCode, result: null,
+    });
+  });
+
   it('rechecks the live draft and rollout before consuming an already-issued grant', async () => {
     const deps = await buildApp({ resolution: { kind: 'stale' } });
     const response = await deps.app.inject({
@@ -900,6 +925,50 @@ describe('extension command grant routes', () => {
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
       command: { ...command, provider: 'dashscope-qwen-mt-image' },
     })).resolves.toEqual({ kind: 'forbidden' });
+  });
+
+  it('resolves a strict v2 standalone create against every current source key', async () => {
+    const evaluate = vi.fn(async () => ({
+      enabled: true, legacyAllowed: false, captureStage: null,
+      reason: 'pilot_match' as const, revision: 'pilot-1',
+    }));
+    const loadMediaLaunchContext = vi.fn(async () => ({
+      sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+    }));
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft: vi.fn(async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, stage: 'MEDIA_REVIEW',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+      })),
+      loadMediaLaunchContext,
+    });
+    const command = {
+      schemaVersion: 'ai-media-workflow-create/v2', action: 'CREATE_WORKFLOW',
+      operation: 'IMAGE_TO_IMAGE', sourceMediaKeys: ['media-main-1', 'media-detail-1'],
+      prompt: 'Improve the background.', negativePrompt: '', draftRevision: 11,
+      workflowOperationKey: 'extension-media-workflow:v2-grant-1',
+    };
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, command,
+    })).resolves.toEqual({
+      kind: 'allowed', shopId: 'shop-1', workflowId: 'workflow-1',
+      draftVersion: 7, command,
+    });
+    expect(loadMediaLaunchContext).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', workflowId: 'workflow-1', draftRevision: 11,
+      draftVersion: 7, sourceMediaKey: 'media-main-1',
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1', operation: 'MEDIA_EXECUTE',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: { ...command, sourceMediaKeys: ['media-main-1', 'missing-media'] },
+    })).resolves.toEqual({ kind: 'stale' });
   });
 
   it('rejects a translation create command when its source or draft revision is stale', async () => {

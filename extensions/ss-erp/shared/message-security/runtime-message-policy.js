@@ -57,6 +57,16 @@
     'ss-erp:source-listing-workbench-media-confirm-cancel',
   ]);
 
+  var SOURCE_MEDIA_EDITOR_OPEN_TYPES = setOf([
+    'ss-erp:source-listing-workbench-media-editor-open',
+  ]);
+
+  var SOURCE_MEDIA_EDITOR_PAGE_TYPES = setOf([
+    'ss-erp:source-listing-workbench-media-editor-read',
+    'ss-erp:source-listing-workbench-media-editor-submit',
+    'ss-erp:source-listing-workbench-media-editor-cancel',
+  ]);
+
   var SOURCE_PAGE_TYPES = setOf([
     'ss-erp:source-candidate-context-get',
     'ss-erp:collect-source-to-erp',
@@ -234,6 +244,8 @@
     OFFICIAL_PAGE_TYPES,
     SOURCE_MEDIA_CONFIRM_PREPARE_TYPES,
     SOURCE_MEDIA_CONFIRM_PAGE_TYPES,
+    SOURCE_MEDIA_EDITOR_OPEN_TYPES,
+    SOURCE_MEDIA_EDITOR_PAGE_TYPES,
     SOURCE_PAGE_TYPES,
     OZON_PAGE_TYPES,
     GENERAL_EXTENSION_TYPES,
@@ -290,6 +302,7 @@
     var url = parseSenderUrl(sender);
     if (!url || !senderUrlIsConsistent(sender, url)) return null;
     if (url.protocol === 'chrome-extension:' && url.hostname === extensionId) {
+      if (url.pathname === '/pages/media-editor.html') return 'media_editor';
       if (url.pathname === '/pages/media-confirm.html') return 'media_confirm';
       if (url.pathname === '/pages/settings.html') return 'settings';
       if (url.pathname === '/pages/config-import.html') return 'config_import';
@@ -334,18 +347,24 @@
     var messageType = text(type);
     if (!KNOWN_TYPES.has(messageType)) return false;
     var kind = senderKind(sender, runtimeId);
+    if (kind === 'media_editor') return SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'media_confirm') return SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType);
     if (kind === 'settings') return !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
-      && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType);
+      && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
+      && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
+      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'config_import') return CONFIG_IMPORT_TYPES.has(messageType);
     if (kind === 'extension') return !SETTINGS_ONLY_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
-      && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType);
+      && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
+      && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
+      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
     if (kind === 'erp') return ERP_BRIDGE_TYPES.has(messageType);
     if (kind === 'official') return OFFICIAL_PAGE_TYPES.has(messageType);
     if (kind === 'ozon') return OZON_PAGE_TYPES.has(messageType);
     if (kind === 'source') return SOURCE_PAGE_TYPES.has(messageType)
-      || SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType);
+      || SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
+      || SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType);
     return false;
   }
 

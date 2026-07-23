@@ -34,6 +34,11 @@ const steps = [
     args: ['scripts/vps-origin-mode-contract.test.mjs'],
   },
   {
+    name: 'extension package versioning and deployment contract',
+    command: 'node',
+    args: ['scripts/extension-package-auto-bump.test.mjs'],
+  },
+  {
     name: 'Web auth security settings contract',
     command: 'node',
     args: ['scripts/web-auth-security-settings.test.mjs'],
@@ -146,6 +151,21 @@ const steps = [
     name: 'extension source listing workbench contract',
     command: 'node',
     args: ['scripts/extension-source-listing-workbench.test.mjs'],
+  },
+  {
+    name: 'extension standalone media workflow contract',
+    command: 'node',
+    args: ['scripts/extension-source-media-standalone.test.mjs'],
+  },
+  {
+    name: 'extension media mask editor contract',
+    command: 'node',
+    args: ['scripts/extension-media-mask-editor.test.mjs'],
+  },
+  {
+    name: 'extension media editor runtime behavior',
+    command: 'node',
+    args: ['scripts/extension-media-editor-behavior.test.mjs'],
   },
   {
     name: 'server tests',

@@ -1,6 +1,8 @@
 import type { AiMediaWorkflowService } from './ai-media-workflows.js';
 import {
+  parseExtensionMediaWorkflowCreateCommand,
   parseExtensionMediaTranslationCreateCommand,
+  type ExtensionMediaWorkflowLauncher,
   type ExtensionMediaTranslationLauncher,
 } from './extension-media-workflow-launch.js';
 
@@ -64,6 +66,7 @@ function fail(code: string, message: string): never {
 
 export function createExtensionMediaWorkflowCommandExecutor(options: {
   workflowService: Pick<AiMediaWorkflowService, 'get' | 'cancel' | 'retry'>;
+  launchWorkflow?: ExtensionMediaWorkflowLauncher;
   launchTranslation?: ExtensionMediaTranslationLauncher;
   loadListingDraft(input: {
     listingWorkflowId: string;
@@ -71,10 +74,16 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
   }): Promise<CurrentListingDraft | null>;
   getTranslationDailyLimit(): Promise<number>;
   getEditDailyLimit(): Promise<number>;
+  getRetryReadiness(operation: string): Promise<{
+    ready: boolean;
+    provider?: string;
+    model?: string;
+  }>;
   enqueueGeneration(jobId: string): Promise<void>;
   enqueueTranslation(jobId: string): Promise<void>;
   enqueueEdit(jobId: string): Promise<void>;
   markEnqueueFailed(jobId: string): Promise<boolean>;
+  production?: boolean;
 }) {
   return async (input: {
     ownerUserId: string;
@@ -85,6 +94,13 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
     idempotencyKey: string;
     command: Record<string, unknown>;
   }) => {
+    const workflowCreate = parseExtensionMediaWorkflowCreateCommand(input.command);
+    if (workflowCreate) {
+      if (!options.launchWorkflow) {
+        fail('MEDIA_CREATE_UNAVAILABLE', 'Standalone media launch is unavailable');
+      }
+      return options.launchWorkflow(input);
+    }
     const translationCreate = parseExtensionMediaTranslationCreateCommand(input.command);
     if (translationCreate) {
       if (!options.launchTranslation) {
@@ -137,6 +153,25 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
       };
     }
 
+    if (options.production ?? process.env.NODE_ENV === 'production') {
+      fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Fake extension media workflows cannot be retried in production');
+    }
+
+    let retryReadiness: { ready: boolean; provider?: string; model?: string };
+    try {
+      retryReadiness = await options.getRetryReadiness(workflow.operation);
+    } catch {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry capability is temporarily unavailable');
+    }
+    if (!retryReadiness.ready) {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry capability is disabled or not ready');
+    }
+    if (workflow.operation === 'IMAGE_TRANSLATE'
+      && ((retryReadiness.provider && currentJob?.provider !== retryReadiness.provider)
+        || (retryReadiness.model && currentJob?.model !== retryReadiness.model))) {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'The frozen translation provider configuration changed');
+    }
+
     if (workflow.status !== 'FAILED') {
       fail('MEDIA_COMMAND_CONTEXT_STALE', 'Media workflow cannot be retried');
     }
@@ -160,21 +195,49 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
       idempotencyKey: input.idempotencyKey,
       ...(dailyLimit == null ? {} : { dailyLimit }),
     });
+    let resultWorkflow = retried.workflow;
     if (!retried.replayed) {
       try {
         await enqueue(retried.jobId);
       } catch {
-        const markedFailed = await options.markEnqueueFailed(retried.jobId);
+        let markedFailed: boolean;
+        try {
+          markedFailed = await options.markEnqueueFailed(retried.jobId);
+        } catch {
+          fail('MEDIA_CREATE_STATE_UNAVAILABLE', 'Media retry state is temporarily unavailable');
+        }
         if (markedFailed) {
           fail('MEDIA_QUEUE_UNAVAILABLE', 'Media queue is temporarily unavailable');
         }
+        let authoritative;
+        try {
+          authoritative = await options.workflowService.get(
+            retried.workflow.id,
+            input.ownerUserId,
+          );
+        } catch {
+          fail('MEDIA_CREATE_STATE_UNAVAILABLE', 'Media retry state is temporarily unavailable');
+        }
+        if (!authoritative
+          || authoritative.id !== retried.workflow.id
+          || authoritative.operation !== retried.workflow.operation
+          || authoritative.revision < retried.workflow.revision) {
+          fail('MEDIA_CREATE_STATE_UNAVAILABLE', 'Media retry state is temporarily unavailable');
+        }
+        if (authoritative.status === 'QUEUED') {
+          fail('MEDIA_QUEUE_UNAVAILABLE', 'Media queue is temporarily unavailable');
+        }
+        if (authoritative.status !== 'RUNNING' && authoritative.status !== 'SUCCEEDED') {
+          fail('MEDIA_CREATE_STATE_UNAVAILABLE', 'Media retry state is temporarily unavailable');
+        }
+        resultWorkflow = authoritative;
       }
     }
     return {
-      workflowId: retried.workflow.id,
+      workflowId: resultWorkflow.id,
       action: requested.action,
-      status: retried.workflow.status,
-      revision: retried.workflow.revision,
+      status: resultWorkflow.status,
+      revision: resultWorkflow.revision,
     };
   };
 }

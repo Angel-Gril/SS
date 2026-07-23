@@ -2,8 +2,13 @@
   'use strict';
 
   var DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+  var DEFAULT_MASK_REQUEST_TIMEOUT_MS = 60000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
+  var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
+  var MEDIA_EDIT_SOURCE_PATH = '/api/extension-device/source-workbench/media-edit-source';
+  var MEDIA_EDIT_MASK_PATH = '/api/extension-device/source-workbench/media-edit-mask';
+  var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([MEDIA_EDIT_SOURCE_PATH, MEDIA_EDIT_MASK_PATH]);
 
   function requiredText(value, label) {
     var normalized = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -16,6 +21,8 @@
     var commandPaths = new Set([
       '/api/extension-device/command-grants',
       '/api/extension-device/media-workflows/execute',
+      MEDIA_EDIT_SOURCE_PATH,
+      MEDIA_EDIT_MASK_PATH,
     ]);
     var allowed = method === 'GET'
       ? path.startsWith('/api/extension-device/source-workbench/')
@@ -95,6 +102,10 @@
     var requestTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? Math.min(configuredTimeout, DEFAULT_REQUEST_TIMEOUT_MS)
       : DEFAULT_REQUEST_TIMEOUT_MS;
+    var configuredMaskTimeout = Number(options && options.maskRequestTimeoutMs);
+    var maskRequestTimeoutMs = Number.isFinite(configuredMaskTimeout) && configuredMaskTimeout > 0
+      ? Math.min(configuredMaskTimeout, DEFAULT_MASK_REQUEST_TIMEOUT_MS)
+      : DEFAULT_MASK_REQUEST_TIMEOUT_MS;
     if (!credentials || typeof credentials.beginOperation !== 'function') {
       throw new TypeError('device credentials are required');
     }
@@ -122,17 +133,23 @@
             throw new TypeError('source workbench command body is invalid');
           }
           requestBody = JSON.stringify(bodyValue);
-          if (byteLength(requestBody) > MAX_COMMAND_REQUEST_BYTES) {
+          var maximumRequestBytes = path === MEDIA_EDIT_MASK_PATH
+            ? MAX_MEDIA_EDIT_MASK_REQUEST_BYTES
+            : MAX_COMMAND_REQUEST_BYTES;
+          if (byteLength(requestBody) > maximumRequestBytes) {
             throw new Error('source workbench command is too large');
           }
         }
         var controller = new AbortController();
         var timeoutId;
+        var timeoutMs = MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
+          ? maskRequestTimeoutMs
+          : requestTimeoutMs;
         var timeout = new Promise(function (_resolve, reject) {
           timeoutId = setTimeout(function () {
             controller.abort();
             reject(new Error('source workbench request timed out'));
-          }, requestTimeoutMs);
+          }, timeoutMs);
         });
         var request = (async function () {
           var operation = await credentials.beginOperation();
