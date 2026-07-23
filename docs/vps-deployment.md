@@ -156,12 +156,13 @@ nginx -t
 systemctl reload nginx
 ```
 
-Run the VPS verifier in direct mode with the complete public hostname allowlist. This requires active Nginx routing to reject unknown HTTP and HTTPS Host values, preserve the unredirected ACME HTTP-01 location, redirect each allowlisted HTTP host to HTTPS, and return a certificate-valid `/ready` response for every hostname. It also requires listeners on `80/443`, an active UFW installation and rules, loopback-only application/data ports, and an `acme.sh --cron` crontab entry or equivalent systemd timer. It does not require Cloudflare real-IP configuration or its IP-update cron:
+Run the VPS verifier in direct mode with the complete public hostname allowlist. This requires active Nginx routing to reject unknown HTTP and HTTPS Host values, preserve the unredirected ACME HTTP-01 location, redirect each allowlisted HTTP host to HTTPS, and return a certificate-valid `/ready` response for every hostname. It also requires listeners on `80/443`, an active UFW installation and rules, loopback-only application/data ports, and an `acme.sh --cron` crontab entry or equivalent systemd timer. The domestic deployment uses external Aliyun RDS, so `VERIFY_EXPECT_LOCAL_POSTGRES=false` requires local port `5432` to remain closed while Prisma and `/ready` validate the configured RDS. Direct mode does not require Cloudflare real-IP configuration or its IP-update cron:
 
 ```bash
 cd /opt/ss-erp/app
 VERIFY_ORIGIN_MODE=direct \
 VERIFY_DIRECT_HOSTNAMES=ss-erp.cn,www.ss-erp.cn,app.ss-erp.cn,admin.ss-erp.cn \
+VERIFY_EXPECT_LOCAL_POSTGRES=false \
 VERIFY_DOMAIN=ss-erp.cn \
 VERIFY_READY_URL=https://ss-erp.cn/ready \
 DEPLOY_DIR=/opt/ss-erp/app \

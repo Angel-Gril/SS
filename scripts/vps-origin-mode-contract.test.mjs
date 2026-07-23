@@ -109,6 +109,126 @@ test('origin mode accepts only the two supported deployment policies', () => {
   assert.match(wiredInvalid.stderr, /VERIFY_ORIGIN_MODE must be cloudflare or direct/u);
 });
 
+test('PostgreSQL verification distinguishes local and external database topologies', () => {
+  assert.ok(
+    verifier.includes('VERIFY_EXPECT_LOCAL_POSTGRES="${VERIFY_EXPECT_LOCAL_POSTGRES:-true}"'),
+  );
+  const validateFn = extractFunction('validate_boolean_setting');
+  for (const value of ['true', 'false']) {
+    const result = runShell(
+      `${validateFn}\nvalidate_boolean_setting VERIFY_EXPECT_LOCAL_POSTGRES "$1"`,
+      value,
+    );
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const invalid = runShell(
+    `${validateFn}\nvalidate_boolean_setting VERIFY_EXPECT_LOCAL_POSTGRES "$1"`,
+    'external',
+  );
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /must be true or false/u);
+
+  const absentFn = extractFunction('check_port_absent');
+  const topologyFn = extractFunction('check_postgres_topology');
+  const prelude = `
+FAILURES=0
+FAKE_SS_MODE="$1"
+pass() { printf 'PASS %s\\n' "$1"; }
+fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL %s\\n' "$1"; }
+check_service() { printf 'SERVICE %s\\n' "$1"; }
+check_port_loopback() { printf 'LOOPBACK %s %s\\n' "$1" "$2"; }
+ss() {
+  if [ "$#" -ne 3 ]; then return 64; fi
+  if [ "$1" != "-H" ] || [ "$2" != "-ltn" ] || [ "$3" != "sport = :5432" ]; then
+    return 64
+  fi
+  case "$FAKE_SS_MODE" in
+    absent) return 0 ;;
+    listening) printf 'LISTEN 0 244 127.0.0.1:5432 0.0.0.0:*\\n' ;;
+    error) return 42 ;;
+    *) return 65 ;;
+  esac
+}
+`;
+  const runTopology = (expectLocalPostgres, fakeSsMode) => runShell(`
+${prelude}
+${absentFn}
+${topologyFn}
+VERIFY_EXPECT_LOCAL_POSTGRES=${expectLocalPostgres}
+check_postgres_topology
+printf 'FAILURES=%s\\n' "$FAILURES"
+[ "$FAILURES" -eq 0 ]
+`, fakeSsMode);
+
+  const local = runTopology(true, 'absent');
+  assert.equal(local.status, 0, local.stderr);
+  assert.match(local.stdout, /SERVICE postgresql/u);
+  assert.match(local.stdout, /LOOPBACK 5432 postgres/u);
+  assert.match(local.stdout, /FAILURES=0/u);
+  assert.doesNotMatch(local.stdout, /not listening \(external service expected\)/u);
+
+  const externalWithoutListener = runTopology(false, 'absent');
+  assert.equal(externalWithoutListener.status, 0, externalWithoutListener.stderr);
+  assert.match(externalWithoutListener.stdout, /external postgres expected/u);
+  assert.match(
+    externalWithoutListener.stdout,
+    /PASS postgres port 5432 not listening \(external service expected\)/u,
+  );
+  assert.match(externalWithoutListener.stdout, /FAILURES=0/u);
+  assert.doesNotMatch(externalWithoutListener.stdout, /SERVICE postgresql|LOOPBACK/u);
+
+  const externalWithListener = runTopology(false, 'listening');
+  assert.notEqual(externalWithListener.status, 0);
+  assert.match(
+    externalWithListener.stdout,
+    /FAIL postgres port 5432 must not listen when an external service is expected: 127\.0\.0\.1:5432/u,
+  );
+  assert.match(externalWithListener.stdout, /FAILURES=1/u);
+
+  const externalQueryError = runTopology(false, 'error');
+  assert.notEqual(externalQueryError.status, 0);
+  assert.match(
+    externalQueryError.stdout,
+    /FAIL postgres port 5432 check failed: ss query failed/u,
+  );
+  assert.match(externalQueryError.stdout, /FAILURES=1/u);
+  assert.doesNotMatch(
+    externalQueryError.stdout,
+    /postgres port 5432 not listening/u,
+  );
+
+  const restoreFn = extractFunction('check_no_restore_temp_db');
+  const restorePrelude = `
+pass() { printf 'PASS %s\\n' "$1"; }
+warn() { printf 'WARN %s\\n' "$1"; }
+fail() { printf 'FAIL %s\\n' "$1"; }
+`;
+  const runRestoreCheck = (expectLocalPostgres) => runShell(`
+${restorePrelude}
+${restoreFn}
+PATH=/nonexistent
+VERIFY_EXPECT_LOCAL_POSTGRES=${expectLocalPostgres}
+check_no_restore_temp_db
+`);
+  const externalRestoreCheck = runRestoreCheck(false);
+  assert.equal(externalRestoreCheck.status, 0, externalRestoreCheck.stderr);
+  assert.equal(
+    externalRestoreCheck.stdout.trim(),
+    'PASS local restore temp DB check skipped (external postgres expected)',
+  );
+  const localRestoreCheck = runRestoreCheck(true);
+  assert.equal(localRestoreCheck.status, 0, localRestoreCheck.stderr);
+  assert.equal(
+    localRestoreCheck.stdout.trim(),
+    'WARN cannot check restore temp DBs without local postgres user',
+  );
+  assert.match(
+    verifier,
+    /check_service nginx\r?\ncheck_postgres_topology\r?\ncheck_service redis-server/u,
+  );
+  assert.doesNotMatch(verifier, /\r?\ncheck_port_loopback 5432 postgres\r?\n/u);
+});
+
 test('client IP forwarding trusts only the nearest Nginx hop', () => {
   assert.match(serverEntrypoint, /trustProxy: process\.env\.NODE_ENV === 'production' \? 1 : false/u);
   for (const nginxConfig of [cloudflareNginx, directNginx]) {
@@ -311,6 +431,7 @@ test('origin selection does not bypass common deployment checks', () => {
   ]) {
     assert.ok(verifier.includes(requiredCall), `missing common verification: ${requiredCall}`);
   }
+  assert.match(verifier, /\r?\ncheck_prisma_migrations\r?\n/u);
   assert.match(verifier, /check_ufw\r?\ncheck_proxy_ip_forwarding\r?\ncheck_origin_security/u);
   assert.match(verifier, /check_http_json_ready "public \/ready" "\$READY_URL"\r?\ncheck_direct_public_hosts/u);
 });

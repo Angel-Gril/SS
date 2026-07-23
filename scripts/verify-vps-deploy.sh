@@ -20,6 +20,7 @@ VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_LOGISTICS_DISTRIBU
 VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:-false}"
 VERIFY_EXPECT_EXTENSION_AUTH_MODE="${VERIFY_EXPECT_EXTENSION_AUTH_MODE:-compat}"
 VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"
+VERIFY_EXPECT_LOCAL_POSTGRES="${VERIFY_EXPECT_LOCAL_POSTGRES:-true}"
 
 FAILURES=0
 WARNINGS=0
@@ -36,6 +37,18 @@ warn() {
 fail() {
   FAILURES=$((FAILURES + 1))
   echo "FAIL $1"
+}
+
+validate_boolean_setting() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    true|false) return 0 ;;
+    *)
+      echo "[verify-vps] ERROR: $name must be true or false, got ${value:-empty}" >&2
+      return 1
+      ;;
+  esac
 }
 
 validate_origin_mode() {
@@ -138,6 +151,9 @@ validate_direct_ready_hostname() {
 if ! validate_origin_mode "$VERIFY_ORIGIN_MODE"; then
   exit 1
 fi
+if ! validate_boolean_setting VERIFY_EXPECT_LOCAL_POSTGRES "$VERIFY_EXPECT_LOCAL_POSTGRES"; then
+  exit 1
+fi
 if ! load_direct_hostnames; then
   exit 1
 fi
@@ -211,6 +227,31 @@ check_port_loopback() {
     fail "$label port ${port} is not loopback-only: $(echo "$rows" | awk '{print $4}' | paste -sd ',' -)"
   else
     pass "$label port ${port} loopback-only"
+  fi
+}
+
+check_port_absent() {
+  local port="$1"
+  local label="$2"
+  local rows
+  if ! rows=$(ss -H -ltn "sport = :${port}" 2>/dev/null); then
+    fail "$label port ${port} check failed: ss query failed"
+    return
+  fi
+  if [ -z "$rows" ]; then
+    pass "$label port ${port} not listening (external service expected)"
+  else
+    fail "$label port ${port} must not listen when an external service is expected: $(echo "$rows" | awk '{print $4}' | paste -sd ',' -)"
+  fi
+}
+
+check_postgres_topology() {
+  if [ "$VERIFY_EXPECT_LOCAL_POSTGRES" = "true" ]; then
+    check_service postgresql
+    check_port_loopback 5432 postgres
+  else
+    pass "postgres service check skipped (external postgres expected)"
+    check_port_absent 5432 postgres
   fi
 }
 
@@ -686,6 +727,10 @@ check_recent_logs() {
 }
 
 check_no_restore_temp_db() {
+  if [ "$VERIFY_EXPECT_LOCAL_POSTGRES" != "true" ]; then
+    pass "local restore temp DB check skipped (external postgres expected)"
+    return
+  fi
   if ! command -v sudo >/dev/null 2>&1 || ! id postgres >/dev/null 2>&1; then
     warn "cannot check restore temp DBs without local postgres user"
     return
@@ -779,7 +824,7 @@ else
 fi
 
 check_service nginx
-check_service postgresql
+check_postgres_topology
 check_service redis-server
 check_service ss-erp-api
 check_service ss-erp-worker
@@ -796,7 +841,6 @@ check_public_port 80 nginx
 check_public_port 443 nginx
 check_port_loopback 3000 web
 check_port_loopback 3001 api
-check_port_loopback 5432 postgres
 check_port_loopback 6379 redis
 
 check_ufw

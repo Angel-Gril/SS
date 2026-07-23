@@ -413,6 +413,7 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 cd /opt/ss-erp/app
 VERIFY_ORIGIN_MODE=direct \
 VERIFY_DIRECT_HOSTNAMES=ss-erp.cn,www.ss-erp.cn,app.ss-erp.cn,admin.ss-erp.cn \
+VERIFY_EXPECT_LOCAL_POSTGRES=false \
 VERIFY_DOMAIN=ss-erp.cn \
 VERIFY_READY_URL=https://ss-erp.cn/ready \
 DEPLOY_DIR=/opt/ss-erp/app \
@@ -420,7 +421,7 @@ ENV_FILE=.env.staging \
 bash scripts/verify-vps-deploy.sh
 ```
 
-覆盖 systemd 服务、Nginx 配置、端口绑定、UFW、防火墙策略、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。默认 `cloudflare` 模式检查 Cloudflare 真源保护和 IP 更新任务；`direct` 模式改为检查 active Nginx 的合法/未知 Host 路由、ACME HTTP-01 不重定向、`acme.sh` 自动续期，以及列表内每个域名的有效证书和 `/ready`。任一模式缺少 UFW 都视为失败。
+覆盖 systemd 服务、Nginx 配置、端口绑定、UFW、防火墙策略、备份 cron、备份状态文件、Prisma migration、`/ready` 和最近错误日志。默认 `VERIFY_EXPECT_LOCAL_POSTGRES=true`，此时还验证本地 PostgreSQL 服务、loopback 5432 和临时恢复库残留；external/RDS 模式必须显式设为 `false`，此时要求本机 5432 无监听并跳过本地临时恢复库检查，因此不提供远端 RDS 临时恢复库残留证明，但仍无条件验证 Prisma migration 及本地/公网 `/ready`。默认 `cloudflare` 模式检查 Cloudflare 真源保护和 IP 更新任务；`direct` 模式改为检查 active Nginx 的合法/未知 Host 路由、ACME HTTP-01 不重定向、`acme.sh` 自动续期，以及列表内每个域名的有效证书和 `/ready`。任一模式缺少 UFW 都视为失败。
 
 ### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / H2 / H3 / H4）
 
@@ -775,10 +776,11 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 
 通过标准：
 
-- `ss-erp-api`、`ss-erp-worker`、`ss-erp-web`、Nginx、PostgreSQL、Redis 都 active
-- API/Web/PostgreSQL/Redis 内部端口只监听 loopback
+- `ss-erp-api`、`ss-erp-worker`、`ss-erp-web`、Nginx、Redis 都 active；本地 PostgreSQL 模式还要求 PostgreSQL active
+- API/Web/Redis 内部端口只监听 loopback；本地 PostgreSQL 模式要求 5432 只监听 loopback，external/RDS 模式要求本机 5432 无监听
 - 80/443 对外可用
-- Prisma migration up to date
+- 两种 PostgreSQL 模式都要求 Prisma migration up to date，且本地和公网 `/ready` 通过
+- 仅 `VERIFY_EXPECT_LOCAL_POSTGRES=true` 的本地 PostgreSQL 模式检查临时恢复库残留；external/RDS 模式不提供远端临时恢复库残留证明
 - `backup-status.json` 存在且格式正确
 - 最近 API/Worker 日志没有 fatal、exception、unhandled、panic
 
