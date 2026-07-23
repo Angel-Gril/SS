@@ -120,4 +120,73 @@ describe('runtime config', () => {
 
     vi.doUnmock('../config/system-config-schema.js');
   });
+
+  it('reports mixed provenance for a database backend using environment OSS credentials', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('IMAGE_STORAGE_BACKEND', 'oss');
+    vi.stubEnv('OSS_ENDPOINT', 'https://oss.example.com');
+    vi.stubEnv('OSS_BUCKET', 'env-assets');
+    vi.stubEnv('OSS_ACCESS_KEY_ID', 'env-ak');
+    vi.stubEnv('OSS_ACCESS_KEY_SECRET', 'env-sk');
+
+    vi.doMock('../config/system-config-schema.js', () => ({
+      getConfig: async (key: string) => {
+        const values: Record<string, string> = {
+          upload_storage_backend: 'oss',
+          upload_oss_endpoint: 'https://incomplete-db.example.com',
+          upload_oss_bucket: '',
+          upload_oss_access_key_id: '',
+          upload_oss_access_key_secret: '',
+          upload_oss_region: 'auto',
+          upload_oss_cdn_domain: '',
+          upload_ozon_cdn_relay_url: '',
+          upload_local_base_url: '',
+        };
+        return values[key] ?? '';
+      },
+    }));
+
+    const config = await getRuntimeConfigForStorage();
+
+    expect(config.source).toBe('mixed');
+    expect(config.oss).toMatchObject({
+      endpoint: 'https://oss.example.com',
+      bucket: 'env-assets',
+    });
+
+    vi.doUnmock('../config/system-config-schema.js');
+  });
+
+  it('ignores partial database OSS fields when both backend and effective tuple come from env', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('IMAGE_STORAGE_BACKEND', 'oss');
+    vi.stubEnv('OSS_ENDPOINT', 'https://oss.example.com');
+    vi.stubEnv('OSS_BUCKET', 'env-assets');
+    vi.stubEnv('OSS_ACCESS_KEY_ID', 'env-ak');
+    vi.stubEnv('OSS_ACCESS_KEY_SECRET', 'env-sk');
+
+    vi.doMock('../config/system-config-schema.js', () => ({
+      getConfig: async (key: string) => {
+        const values: Record<string, string> = {
+          upload_storage_backend: 'env',
+          upload_oss_endpoint: 'https://ignored-partial-db.example.com',
+          upload_oss_bucket: '',
+          upload_oss_access_key_id: '',
+          upload_oss_access_key_secret: '',
+          upload_oss_region: 'auto',
+          upload_oss_cdn_domain: '',
+          upload_ozon_cdn_relay_url: '',
+          upload_local_base_url: '',
+        };
+        return values[key] ?? '';
+      },
+    }));
+
+    const config = await getRuntimeConfigForStorage();
+
+    expect(config.source).toBe('env');
+    expect(config.oss?.endpoint).toBe('https://oss.example.com');
+
+    vi.doUnmock('../config/system-config-schema.js');
+  });
 });

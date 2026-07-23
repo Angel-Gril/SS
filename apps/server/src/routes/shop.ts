@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -70,6 +70,42 @@ const extensionConfigReadRouteOptions = {
     rateLimit: false,
   },
 };
+
+function ozonVideoProbeRouteOptions() {
+  return {
+    bodyLimit: OZON_VIDEO_PROBE_BODY_LIMIT,
+    config: {
+      rateLimit: {
+        max: 3,
+        timeWindow: '1 minute',
+        groupId: 'ozon-video-probe',
+        keyGenerator: (request: FastifyRequest) => request.ip,
+        errorResponseBuilder: (_request: FastifyRequest, context: { statusCode: number }) => ({
+          statusCode: context.statusCode,
+          code: 0,
+          msg: '视频探针请求过于频繁，请稍后再试',
+        }),
+      },
+    },
+    preHandler: [requireOzonVideoProbeAdminSession],
+  };
+}
+
+async function requireOzonVideoProbeAdminSession(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const user = (request as any).user;
+  if (!user || user.role !== 'ADMIN' || user.isSuperAdmin !== true) {
+    return reply.status(403).send({ code: 0, msg: '需要超级管理员权限' });
+  }
+  if (user.tokenUse === 'account_session' && user.isSubAccount !== true) return;
+  return reply.status(403).send({
+    code: 0,
+    errorCode: 'ozon_video_probe_account_session_required',
+    msg: '视频探针仅允许超级管理员网页登录会话',
+  });
+}
 
 function positiveInt(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -1569,7 +1605,7 @@ export async function shopRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/:id/ozon-video-probe', { bodyLimit: OZON_VIDEO_PROBE_BODY_LIMIT }, async (request, reply) => {
+  app.post('/:id/ozon-video-probe', ozonVideoProbeRouteOptions(), async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
     const body = (request.body || {}) as { dataUrl?: string; filename?: string };

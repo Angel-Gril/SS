@@ -20,13 +20,13 @@ function arrayBlock(name) {
   return match[1];
 }
 
-const generalKeys = arrayBlock('AUTH_GENERAL_KEYS');
+const generalKeys = arrayBlock('AUTH_SMS_POLICY_KEYS');
 for (const key of [
   'auth_sms_daily_per_phone_limit',
   'auth_sms_daily_per_ip_limit',
   'auth_sms_daily_global_limit',
 ]) {
-  assert.match(generalKeys, new RegExp(`'${key}'`), `${key} must be saved with general auth settings`);
+  assert.match(generalKeys, new RegExp(`'${key}'`), `${key} must be saved with SMS security settings`);
   assert.match(
     settings,
     new RegExp(`cfg=\\{configs\\.${key}\\}[\\s\\S]{0,180}type="number"`),
@@ -38,6 +38,7 @@ assert.match(settings, /短信每日额度与费用熔断/);
 assert.match(settings, /阿里云、腾讯云还是 env/);
 assert.match(settings, /Asia\/Shanghai 自然日/);
 assert.match(settings, /全局额度按当前 Redis 实例统计/);
+assert.match(settings, /保存短信开关与安全策略/);
 
 const turnstileKeys = arrayBlock('AUTH_TURNSTILE_KEYS');
 assert.match(
@@ -53,6 +54,11 @@ assert.match(settings, /留空或配置非法时 Turnstile 会拒绝通过/);
 
 assert.match(settings, /HUMAN_CHALLENGE_PROVIDER \/ TURNSTILE_\*/);
 assert.match(settings, /环境变量优先于后台配置/);
+assert.doesNotMatch(
+  settings,
+  /cfg=\{configs\.feature_turnstile_login\}/,
+  'the legacy Turnstile flag must not appear as a second independent switch',
+);
 
 for (const envExample of [productionEnv, stagingEnv]) {
   assert.match(envExample, /^HUMAN_CHALLENGE_PROVIDER=/m);

@@ -279,23 +279,25 @@ export async function runAiImageTranslationJob(
     throw error;
   }
   try {
-    let capability;
-    try {
-      capability = assertAiMediaCapability({
-        provider: job.provider,
-        model: job.model,
-        operation: 'IMAGE_TRANSLATE',
-        inputCount: 1,
-        hasMask: (job.inputAssets || []).some((asset) => asset.role === 'MASK'),
-      });
-    } catch (error) {
-      throw capabilityError(error);
-    }
-    if (job.provider !== 'fake' && capability.evidenceLevel !== 'sandbox-verified') {
-      throw new AiImageJobError(
-        'PROVIDER_NOT_READY',
-        'Image translation provider has not passed its sandbox capability gate',
-      );
+    if (!job.providerJobId) {
+      let capability;
+      try {
+        capability = assertAiMediaCapability({
+          provider: job.provider,
+          model: job.model,
+          operation: 'IMAGE_TRANSLATE',
+          inputCount: 1,
+          hasMask: (job.inputAssets || []).some((asset) => asset.role === 'MASK'),
+        });
+      } catch (error) {
+        throw capabilityError(error);
+      }
+      if (job.provider !== 'fake' && capability.evidenceLevel !== 'sandbox-verified') {
+        throw new AiImageJobError(
+          'PROVIDER_NOT_READY',
+          'Image translation provider has not passed its sandbox capability gate',
+        );
+      }
     }
     if (deps.provider.name !== job.provider) {
       throw new AiImageJobError('PROVIDER_CONFIG_CHANGED', 'Image translation provider does not match the frozen job');

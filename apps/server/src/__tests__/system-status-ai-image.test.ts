@@ -7,7 +7,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/auth.js', () => ({
-  authenticate: async () => undefined,
+  authenticate: async (request: any) => {
+    request.user = { tokenUse: request.headers['x-token-use'] || 'account_session' };
+  },
   requireSuperAdmin: async () => undefined,
 }));
 
@@ -112,5 +114,26 @@ describe('system status AI image connection test', () => {
       apiKey: 'sk-saved-provider-key',
     }));
     expect(response.body).not.toContain('sk-saved-provider-key');
+  });
+
+  it('rejects legacy extension tokens before loading or forwarding saved credentials', async () => {
+    mocks.savedConfig.set('ai_image_provider', 'custom');
+    mocks.savedConfig.set('ai_image_base_url', 'https://images.example.test/v1');
+    mocks.savedConfig.set('ai_image_api_key', 'sk-saved-provider-key');
+    mocks.savedConfig.set('ai_image_model', 'image-model-v2');
+    const app = await createApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test/ai-image',
+      headers: { 'x-token-use': 'legacy_extension' },
+      payload: { baseUrl: 'https://attacker.example.test/v1' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      errorCode: 'system_status_account_session_required',
+    });
+    expect(mocks.testConnection).not.toHaveBeenCalled();
   });
 });

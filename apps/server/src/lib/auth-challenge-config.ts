@@ -3,6 +3,14 @@ import { getConfig, getDefaultValue, getStrictConfig, type SystemConfigKey, type
 
 export type SmsProviderName = 'console' | 'tencent' | 'aliyun';
 
+export type AliyunSmsCredentialSource =
+  | 'db_access_key'
+  | 'sms_env_access_key'
+  | 'mixed_access_key'
+  | 'aliyun_env_access_key'
+  | 'ecs_ram_role'
+  | 'aliyun_default_chain';
+
 export interface TencentSmsRuntimeConfig {
   secretId: string;
   secretKey: string;
@@ -21,6 +29,8 @@ export interface AliyunSmsRuntimeConfig {
    * an Alibaba ECS instance with an attached RAM role.
    */
   credentialMode: 'auto' | 'access_key' | 'ecs_ram_role';
+  /** Non-secret provenance for the credential mechanism used by the SMS SDK. */
+  credentialSource?: AliyunSmsCredentialSource;
   roleName: string;
   signName: string;
   templateCode: string;
@@ -85,7 +95,8 @@ function splitCsv(value: string): string[] {
 }
 
 function envSmsProvider(): SmsProviderName | '' {
-  const provider = process.env.SMS_PROVIDER || (process.env.NODE_ENV === 'production' ? '' : 'console');
+  const provider = clean(process.env.SMS_PROVIDER)
+    || (process.env.NODE_ENV === 'production' ? '' : 'console');
   if (provider === 'console' || provider === 'tencent' || provider === 'aliyun') return provider;
   return '';
 }
@@ -172,60 +183,154 @@ export async function getSmsRuntimeConfig(): Promise<SmsRuntimeConfig> {
   const aliyunRoleName = useDbAliyun
     ? clean(configuredAliyunRoleName) || clean(process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA)
     : clean(process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA);
-  const hasDbProviderFields = !!(
-    secretId || secretKey || sdkAppId || signName || templateId
-    || aliyunAccessKeyId || aliyunAccessKeySecret
-    || (configuredAliyunCredentialMode !== 'auto' && configuredAliyunCredentialMode)
-    || configuredAliyunRoleName || aliyunSignName || aliyunTemplateCode
-    || aliyunRegisterTemplateCode || aliyunPasswordResetTemplateCode || aliyunSmsLoginTemplateCode
+  const dbAliyunAccessKeyId = clean(aliyunAccessKeyId);
+  const dbAliyunAccessKeySecret = clean(aliyunAccessKeySecret);
+  const smsEnvAliyunAccessKeyId = clean(process.env.SMS_ALIYUN_ACCESS_KEY_ID);
+  const smsEnvAliyunAccessKeySecret = clean(process.env.SMS_ALIYUN_ACCESS_KEY_SECRET);
+  const resolvedAliyunAccessKeyId = useDbAliyun
+    ? dbAliyunAccessKeyId || smsEnvAliyunAccessKeyId
+    : smsEnvAliyunAccessKeyId;
+  const resolvedAliyunAccessKeySecret = useDbAliyun
+    ? dbAliyunAccessKeySecret || smsEnvAliyunAccessKeySecret
+    : smsEnvAliyunAccessKeySecret;
+  const delegatesToAliyunDefaultChain = aliyunCredentialMode === 'auto'
+    && !resolvedAliyunAccessKeyId
+    && !resolvedAliyunAccessKeySecret;
+  const hasAlibabaEnvironmentAccessKey = Boolean(
+    clean(process.env.ALIBABA_CLOUD_ACCESS_KEY_ID)
+    && clean(process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET),
   );
+  const hasAlibabaEcsMetadataRole = Boolean(clean(process.env.ALIBABA_CLOUD_ECS_METADATA));
+  const aliyunCredentialSource: AliyunSmsCredentialSource = aliyunCredentialMode === 'ecs_ram_role'
+    ? 'ecs_ram_role'
+    : delegatesToAliyunDefaultChain
+      ? hasAlibabaEnvironmentAccessKey
+        ? 'aliyun_env_access_key'
+        : hasAlibabaEcsMetadataRole
+          ? 'ecs_ram_role'
+          : 'aliyun_default_chain'
+      : useDbAliyun
+        ? (dbAliyunAccessKeyId || dbAliyunAccessKeySecret)
+          && ((!dbAliyunAccessKeyId && smsEnvAliyunAccessKeyId)
+            || (!dbAliyunAccessKeySecret && smsEnvAliyunAccessKeySecret))
+          ? 'mixed_access_key'
+          : (!dbAliyunAccessKeyId && smsEnvAliyunAccessKeyId)
+            || (!dbAliyunAccessKeySecret && smsEnvAliyunAccessKeySecret)
+            ? 'sms_env_access_key'
+            : 'db_access_key'
+        : 'sms_env_access_key';
+  const tencent = {
+    secretId: useDbTencent ? clean(secretId) || process.env.SMS_TENCENT_SECRET_ID || '' : process.env.SMS_TENCENT_SECRET_ID || '',
+    secretKey: useDbTencent ? clean(secretKey) || process.env.SMS_TENCENT_SECRET_KEY || '' : process.env.SMS_TENCENT_SECRET_KEY || '',
+    region: useDbTencent ? clean(region) || process.env.SMS_TENCENT_REGION || 'ap-guangzhou' : process.env.SMS_TENCENT_REGION || 'ap-guangzhou',
+    sdkAppId: useDbTencent ? clean(sdkAppId) || process.env.SMS_TENCENT_SDK_APP_ID || '' : process.env.SMS_TENCENT_SDK_APP_ID || '',
+    signName: useDbTencent ? clean(signName) || process.env.SMS_TENCENT_SIGN_NAME || '' : process.env.SMS_TENCENT_SIGN_NAME || '',
+    templateId: useDbTencent ? clean(templateId) || process.env.SMS_TENCENT_TEMPLATE_ID || '' : process.env.SMS_TENCENT_TEMPLATE_ID || '',
+  };
+  const aliyun = {
+    accessKeyId: resolvedAliyunAccessKeyId,
+    accessKeySecret: resolvedAliyunAccessKeySecret,
+    credentialMode: aliyunCredentialMode,
+    credentialSource: aliyunCredentialSource,
+    roleName: aliyunRoleName,
+    signName: useDbAliyun ? clean(aliyunSignName) || process.env.SMS_ALIYUN_SIGN_NAME || '' : process.env.SMS_ALIYUN_SIGN_NAME || '',
+    templateCode: useDbAliyun ? clean(aliyunTemplateCode) || process.env.SMS_ALIYUN_TEMPLATE_CODE || '' : process.env.SMS_ALIYUN_TEMPLATE_CODE || '',
+    templateParamName: useDbAliyun
+      ? clean(aliyunTemplateParamName) || process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code'
+      : process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code',
+    registerTemplateCode: useDbAliyun
+      ? clean(aliyunRegisterTemplateCode) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || ''
+      : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || '',
+    registerTemplateParamName: useDbAliyun
+      ? clean(aliyunRegisterTemplateParamName) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code'
+      : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code',
+    passwordResetTemplateCode: useDbAliyun
+      ? clean(aliyunPasswordResetTemplateCode) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || ''
+      : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || '',
+    passwordResetTemplateParamName: useDbAliyun
+      ? clean(aliyunPasswordResetTemplateParamName) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code'
+      : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code',
+    smsLoginTemplateCode: useDbAliyun
+      ? clean(aliyunSmsLoginTemplateCode) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || ''
+      : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || '',
+    smsLoginTemplateParamName: useDbAliyun
+      ? clean(aliyunSmsLoginTemplateParamName) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code'
+      : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code',
+  };
+  const usesEnvFallback = (dbValue: unknown, envValue: string | undefined) => (
+    clean(dbValue).length === 0 && Boolean(envValue)
+  );
+  let source: SmsRuntimeConfig['source'] = configuredProvider === 'env' ? 'env' : 'system-config';
+  if (useDbTencent && [
+    [secretId, process.env.SMS_TENCENT_SECRET_ID],
+    [secretKey, process.env.SMS_TENCENT_SECRET_KEY],
+    [region, process.env.SMS_TENCENT_REGION],
+    [sdkAppId, process.env.SMS_TENCENT_SDK_APP_ID],
+    [signName, process.env.SMS_TENCENT_SIGN_NAME],
+    [templateId, process.env.SMS_TENCENT_TEMPLATE_ID],
+  ].some(([dbValue, envValue]) => usesEnvFallback(dbValue, envValue as string | undefined))) {
+    source = 'mixed';
+  }
+  if (useDbAliyun) {
+    const fallbackFields: Array<[unknown, string | undefined]> = [
+      [aliyunSignName, process.env.SMS_ALIYUN_SIGN_NAME],
+    ];
+    const usesAccessKeyPair = aliyun.credentialMode === 'access_key'
+      || (aliyun.credentialMode === 'auto' && Boolean(aliyun.accessKeyId || aliyun.accessKeySecret));
+    if (usesAccessKeyPair) {
+      fallbackFields.push(
+        [aliyunAccessKeyId, process.env.SMS_ALIYUN_ACCESS_KEY_ID],
+        [aliyunAccessKeySecret, process.env.SMS_ALIYUN_ACCESS_KEY_SECRET],
+      );
+    }
+    if (aliyun.credentialMode === 'ecs_ram_role' && aliyun.roleName) {
+      fallbackFields.push([
+        configuredAliyunRoleName,
+        clean(process.env.SMS_ALIYUN_ROLE_NAME || process.env.ALIBABA_CLOUD_ECS_METADATA),
+      ]);
+    }
+    if (aliyun.registerTemplateCode) {
+      fallbackFields.push(
+        [aliyunRegisterTemplateCode, process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE],
+        [aliyunRegisterTemplateParamName, process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME],
+      );
+    } else if (aliyun.templateCode) {
+      fallbackFields.push(
+        [aliyunTemplateCode, process.env.SMS_ALIYUN_TEMPLATE_CODE],
+        [aliyunTemplateParamName, process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME],
+      );
+    }
+    if (aliyun.passwordResetTemplateCode) {
+      fallbackFields.push(
+        [aliyunPasswordResetTemplateCode, process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE],
+        [aliyunPasswordResetTemplateParamName, process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME],
+      );
+    }
+    if (aliyun.smsLoginTemplateCode) {
+      fallbackFields.push(
+        [aliyunSmsLoginTemplateCode, process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE],
+        [aliyunSmsLoginTemplateParamName, process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME],
+      );
+    }
+    if (fallbackFields.some(([dbValue, envValue]) => usesEnvFallback(dbValue, envValue))) {
+      source = 'mixed';
+    }
+    // In auto mode the SDK default chain can source the effective identity
+    // from ALIBABA_CLOUD_* env, a local profile, URI credentials, or ECS IMDS.
+    if (delegatesToAliyunDefaultChain) source = 'mixed';
+  }
 
   return {
     provider,
-    source: configuredProvider === 'env' ? (hasDbProviderFields ? 'mixed' : 'env') : 'system-config',
+    source,
     codeTtlSeconds,
     rateLimitSeconds,
     dailyPerPhoneLimit,
     dailyPerIpLimit,
     dailyGlobalLimit,
     testPhoneWhitelist: splitCsv(whitelist),
-    tencent: {
-      secretId: useDbTencent ? clean(secretId) || process.env.SMS_TENCENT_SECRET_ID || '' : process.env.SMS_TENCENT_SECRET_ID || '',
-      secretKey: useDbTencent ? clean(secretKey) || process.env.SMS_TENCENT_SECRET_KEY || '' : process.env.SMS_TENCENT_SECRET_KEY || '',
-      region: useDbTencent ? clean(region) || process.env.SMS_TENCENT_REGION || 'ap-guangzhou' : process.env.SMS_TENCENT_REGION || 'ap-guangzhou',
-      sdkAppId: useDbTencent ? clean(sdkAppId) || process.env.SMS_TENCENT_SDK_APP_ID || '' : process.env.SMS_TENCENT_SDK_APP_ID || '',
-      signName: useDbTencent ? clean(signName) || process.env.SMS_TENCENT_SIGN_NAME || '' : process.env.SMS_TENCENT_SIGN_NAME || '',
-      templateId: useDbTencent ? clean(templateId) || process.env.SMS_TENCENT_TEMPLATE_ID || '' : process.env.SMS_TENCENT_TEMPLATE_ID || '',
-    },
-    aliyun: {
-      accessKeyId: useDbAliyun ? clean(aliyunAccessKeyId) || process.env.SMS_ALIYUN_ACCESS_KEY_ID || '' : process.env.SMS_ALIYUN_ACCESS_KEY_ID || '',
-      accessKeySecret: useDbAliyun ? clean(aliyunAccessKeySecret) || process.env.SMS_ALIYUN_ACCESS_KEY_SECRET || '' : process.env.SMS_ALIYUN_ACCESS_KEY_SECRET || '',
-      credentialMode: aliyunCredentialMode,
-      roleName: aliyunRoleName,
-      signName: useDbAliyun ? clean(aliyunSignName) || process.env.SMS_ALIYUN_SIGN_NAME || '' : process.env.SMS_ALIYUN_SIGN_NAME || '',
-      templateCode: useDbAliyun ? clean(aliyunTemplateCode) || process.env.SMS_ALIYUN_TEMPLATE_CODE || '' : process.env.SMS_ALIYUN_TEMPLATE_CODE || '',
-      templateParamName: useDbAliyun
-        ? clean(aliyunTemplateParamName) || process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code'
-        : process.env.SMS_ALIYUN_TEMPLATE_PARAM_NAME || 'code',
-      registerTemplateCode: useDbAliyun
-        ? clean(aliyunRegisterTemplateCode) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || ''
-        : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_CODE || '',
-      registerTemplateParamName: useDbAliyun
-        ? clean(aliyunRegisterTemplateParamName) || process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code'
-        : process.env.SMS_ALIYUN_REGISTER_TEMPLATE_PARAM_NAME || 'code',
-      passwordResetTemplateCode: useDbAliyun
-        ? clean(aliyunPasswordResetTemplateCode) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || ''
-        : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_CODE || '',
-      passwordResetTemplateParamName: useDbAliyun
-        ? clean(aliyunPasswordResetTemplateParamName) || process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code'
-        : process.env.SMS_ALIYUN_PASSWORD_RESET_TEMPLATE_PARAM_NAME || 'code',
-      smsLoginTemplateCode: useDbAliyun
-        ? clean(aliyunSmsLoginTemplateCode) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || ''
-        : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_CODE || '',
-      smsLoginTemplateParamName: useDbAliyun
-        ? clean(aliyunSmsLoginTemplateParamName) || process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code'
-        : process.env.SMS_ALIYUN_SMS_LOGIN_TEMPLATE_PARAM_NAME || 'code',
-    },
+    tencent,
+    aliyun,
   };
 }
 

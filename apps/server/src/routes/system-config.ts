@@ -8,26 +8,46 @@ import { logAudit, extractRequestMeta } from '../lib/audit-log.js';
 import {
   SystemConfigSchema,
   SystemConfigMeta,
+  ENCRYPTED_CONFIG_PREFIX,
   type SystemConfigKey,
   getDefaultValue,
   validateKey,
   coerceConfigValue,
   decryptConfigValue,
+  decryptConfigValueStrict,
   encryptConfigValue,
   isSensitiveConfigKey,
 } from '../config/system-config-schema.js';
 import { createPrismaAiUsageStore, normalizeAiUsageDate } from '../services/ai-usage.js';
+import { getRuntimeMode } from '../adapters/runtime-config.js';
+import {
+  AUTH_PROVIDER_PREFLIGHT_KEYS,
+  requiresAuthProviderPreflight,
+  validateAuthProviderActivation,
+} from '../lib/auth-provider-activation.js';
+
+const expectedRevisionSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
 const upsertSchema = z.object({
   key: z.string().min(1),
   value: z.string(),
+  expectedRevision: expectedRevisionSchema,
   label: z.string().optional(),
   group: z.string().default('general'),
   description: z.string().optional(),
 });
 
 const batchUpdateSchema = z.object({
-  items: z.array(z.object({ key: z.string().min(1), value: z.string() })).min(1).max(50),
+  items: z.array(z.object({
+    key: z.string().min(1),
+    value: z.string(),
+    expectedRevision: expectedRevisionSchema,
+  })).min(1).max(50),
+});
+
+const singleUpdateSchema = z.object({
+  value: z.string(),
+  expectedRevision: expectedRevisionSchema,
 });
 
 const PROTECTED_OZON_PUBLISHER_STAGE_KEYS = new Set<string>([
@@ -48,7 +68,7 @@ function maskSecretValue(key: string, value: string): string {
   if (!isSecretKey(key) || !value) return value;
   try {
     const parsed = JSON.parse(value);
-    if (parsed && typeof parsed === 'object') {
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && SECRET_FIELDS.length > 0) {
       for (const field of SECRET_FIELDS) {
         if (parsed[field] && typeof parsed[field] === 'string' && parsed[field].length > 0) {
           parsed[field] = '***MASKED***';
@@ -57,18 +77,45 @@ function maskSecretValue(key: string, value: string): string {
       return JSON.stringify(parsed);
     }
   } catch {
-    // 非 JSON 字符串：整体掩码（保留前 4 后 4）
-    if (value.length > 12) {
-      return `${value.slice(0, 4)}***${value.slice(-4)}`;
-    }
-    return '***MASKED***';
+    // 非 JSON 字符串继续走整体掩码。
   }
-  return value;
+  return value.length > 12 ? `${value.slice(0, 4)}***${value.slice(-4)}` : '***MASKED***';
+}
+
+function isMaskedSecretPlaceholder(value: string): boolean {
+  return value === '***MASKED***' || /^.{4}\*{3}.{4}$/.test(value);
+}
+
+class SystemConfigMutationError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly errorCode: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SystemConfigMutationError';
+  }
+}
+
+class SystemConfigRevisionConflictError extends SystemConfigMutationError {
+  constructor(readonly keys: string[]) {
+    super(
+      409,
+      'system_config_revision_conflict',
+      '配置已被其他会话更新，请刷新后重新确认',
+    );
+    this.name = 'SystemConfigRevisionConflictError';
+  }
 }
 
 // 用户提交时如果某 secret 字段是 ***MASKED*** 占位符，保留原值
 function mergeMaskedValue(key: string, newValue: string, oldValue: string): string {
-  if (!isSecretKey(key) || !oldValue) return newValue;
+  if (!isSecretKey(key)) return newValue;
+  if (isMaskedSecretPlaceholder(newValue)) {
+    if (!oldValue) throw new SystemConfigRevisionConflictError([key]);
+    return oldValue;
+  }
+  if (!oldValue) return newValue;
   try {
     const next = JSON.parse(newValue);
     const prev = JSON.parse(oldValue);
@@ -81,9 +128,6 @@ function mergeMaskedValue(key: string, newValue: string, oldValue: string): stri
       return JSON.stringify(next);
     }
   } catch {
-    if (newValue === '***MASKED***' || newValue === maskSecretValue(key, oldValue)) {
-      return oldValue;
-    }
     // ignore
   }
   return newValue;
@@ -96,6 +140,94 @@ function invalidateConfigCaches(key?: string) {
 
 function toPublicConfigValue(key: string, storedValue: string): string {
   return maskSecretValue(key, decryptConfigValue(key, storedValue));
+}
+
+async function preflightAuthProviderMutation(
+  changes: ReadonlyMap<SystemConfigKey, string | null>,
+  client: Pick<typeof prisma, 'systemConfig'> = prisma,
+) {
+  const changedKeys = new Set<SystemConfigKey>(changes.keys());
+  if (!requiresAuthProviderPreflight(changedKeys)) return null;
+
+  const records = await client.systemConfig.findMany({
+    where: { key: { in: [...AUTH_PROVIDER_PREFLIGHT_KEYS] } },
+    select: { key: true, value: true },
+  });
+  const values = new Map<SystemConfigKey, string>();
+  const decryptFailures = new Set<SystemConfigKey>();
+  for (const key of AUTH_PROVIDER_PREFLIGHT_KEYS) {
+    const record = records.find((item) => item.key === key);
+    if (!record) {
+      values.set(key, String(getDefaultValue(key)));
+      continue;
+    }
+    try {
+      values.set(key, decryptConfigValueStrict(key, record.value));
+    } catch {
+      decryptFailures.add(key);
+      values.set(key, '');
+    }
+  }
+  const previousValues = new Map(values);
+  for (const [key, value] of changes) {
+    if (!values.has(key)) continue;
+    if (value !== null) decryptFailures.delete(key);
+    values.set(key, value === null ? String(getDefaultValue(key)) : value);
+  }
+
+  const humanProvider = (() => {
+    const explicit = String(process.env.HUMAN_CHALLENGE_PROVIDER || '').trim();
+    if (explicit) return explicit;
+    if (String(process.env.FEATURE_TURNSTILE_LOGIN || '').trim() === 'true') {
+      return 'cloudflare-turnstile';
+    }
+    const configured = String(values.get('auth_human_challenge_provider') || '').trim();
+    if (configured === 'disabled' && values.get('feature_turnstile_login') === 'true') {
+      return 'cloudflare-turnstile';
+    }
+    return configured;
+  })();
+  const activeHumanSecretKeys = humanProvider === 'builtin-pow'
+    ? new Set<SystemConfigKey>(['auth_pow_signing_secret'])
+    : humanProvider === 'cloudflare-turnstile'
+      ? new Set<SystemConfigKey>(['auth_turnstile_secret_key'])
+      : new Set<SystemConfigKey>();
+  const envPowSecret = String(process.env.HUMAN_CHALLENGE_SIGNING_SECRET || '').trim();
+  const envTurnstileSecret = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
+  const activeHumanSecretDecryptFailure = [...decryptFailures].some((key) => {
+    if (!activeHumanSecretKeys.has(key)) return false;
+    if (key === 'auth_pow_signing_secret') return envPowSecret.length < 32;
+    if (key === 'auth_turnstile_secret_key') return envTurnstileSecret.length === 0;
+    return true;
+  });
+  if (activeHumanSecretDecryptFailure) {
+    return {
+      errorCode: 'system_config_human_challenge_not_ready' as const,
+      msg: '人机验证敏感配置解密失败，请先停用当前服务商并刷新配置',
+    };
+  }
+
+  const smsFeaturesDisabled = values.get('feature_sms_register') === 'false'
+    && values.get('feature_sms_login') === 'false';
+  const configuredSmsProvider = String(values.get('auth_sms_provider') || '').trim();
+  const effectiveSmsProvider = configuredSmsProvider === 'env'
+    ? String(process.env.SMS_PROVIDER || '').trim()
+    : configuredSmsProvider;
+  const activeSmsSecretPrefix = configuredSmsProvider === 'env'
+    ? null
+    : effectiveSmsProvider === 'tencent'
+      ? 'auth_sms_tencent_'
+      : effectiveSmsProvider === 'aliyun'
+        ? 'auth_sms_aliyun_'
+        : null;
+  if (!smsFeaturesDisabled && activeSmsSecretPrefix
+    && [...decryptFailures].some((key) => key.startsWith(activeSmsSecretPrefix))) {
+    return {
+      errorCode: 'system_config_sms_provider_not_ready' as const,
+      msg: '短信服务敏感配置解密失败，请先关闭短信功能并刷新配置',
+    };
+  }
+  return validateAuthProviderActivation({ values, previousValues, changedKeys });
 }
 
 function requireLiveAccountSession(request: FastifyRequest, reply: FastifyReply) {
@@ -113,6 +245,162 @@ function rejectProtectedStageMutation(reply: FastifyReply, key: string) {
     errorCode: 'system_config_rollout_stage_cas_required',
     msg: `发布阶段配置 ${key} 只能通过专用 CAS 接口修改`,
   });
+}
+
+function rejectRevisionRequired(reply: FastifyReply) {
+  return reply.status(428).send({
+    code: 0,
+    errorCode: 'system_config_revision_required',
+    msg: '缺少 expectedRevision，请刷新配置后重试',
+  });
+}
+
+function isDatabaseRevisionConflict(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code || '');
+  return ['P2002', 'P2034', '23505', '40001'].includes(code);
+}
+
+function sendMutationError(reply: FastifyReply, error: unknown) {
+  if (error instanceof SystemConfigMutationError) {
+    return reply.status(error.statusCode).send({
+      code: 0,
+      errorCode: error.errorCode,
+      msg: error.message,
+      ...(error instanceof SystemConfigRevisionConflictError ? { data: { keys: error.keys } } : {}),
+    });
+  }
+  if (isDatabaseRevisionConflict(error)) {
+    return reply.status(409).send({
+      code: 0,
+      errorCode: 'system_config_revision_conflict',
+      msg: '配置已被其他会话更新，请刷新后重新确认',
+    });
+  }
+  return null;
+}
+
+interface ConfigMutationInput {
+  key: SystemConfigKey;
+  value: string;
+  expectedRevision: number;
+  metadata?: {
+    label: string;
+    group: string;
+    description: string;
+  };
+}
+
+async function applyConfigMutations(
+  client: Pick<typeof prisma, 'systemConfig'>,
+  inputs: readonly ConfigMutationInput[],
+) {
+  const existingRows = await client.systemConfig.findMany({
+    where: { key: { in: inputs.map((item) => item.key) } },
+  });
+  const existingByKey = new Map(existingRows.map((row) => [row.key, row]));
+  const prepared = inputs.map((item) => {
+    if (isSecretKey(item.key) && item.value.startsWith(ENCRYPTED_CONFIG_PREFIX)) {
+      throw new SystemConfigMutationError(
+        400,
+        'system_config_invalid_value',
+        `${item.key}: 不接受已加密格式的输入`,
+      );
+    }
+    const existing = existingByKey.get(item.key) || null;
+    let oldValue = '';
+    let oldValueUnreadable = false;
+    if (existing) {
+      try {
+        oldValue = decryptConfigValueStrict(item.key, existing.value);
+      } catch {
+        if (isMaskedSecretPlaceholder(item.value)) {
+          throw new SystemConfigRevisionConflictError([item.key]);
+        }
+        oldValueUnreadable = true;
+      }
+    }
+    const finalValue = mergeMaskedValue(item.key, item.value, oldValue);
+    const validated = SystemConfigSchema[item.key].safeParse(coerceConfigValue(item.key, finalValue));
+    if (!validated.success) {
+      const errMsg = validated.error.errors[0]?.message || '值不符合要求';
+      throw new SystemConfigMutationError(400, 'system_config_invalid_value', `${item.key}: ${errMsg}`);
+    }
+    const displayValue = String(validated.data);
+    const metadataChanged = Boolean(item.metadata && existing && (
+      existing.label !== item.metadata.label
+      || existing.group !== item.metadata.group
+      || existing.description !== item.metadata.description
+    ));
+    return {
+      ...item,
+      existing,
+      oldValue,
+      displayValue,
+      storedValue: encryptConfigValue(item.key, displayValue),
+      oldValueUnreadable,
+      metadataChanged,
+      changed: !existing || oldValueUnreadable || oldValue !== displayValue || metadataChanged,
+    };
+  });
+
+  const changed = prepared.filter((item) => item.changed);
+  const staleKeys = changed
+    .filter((item) => item.existing
+      ? item.existing.revision !== item.expectedRevision
+      : item.expectedRevision !== 0)
+    .map((item) => item.key);
+  if (staleKeys.length > 0) throw new SystemConfigRevisionConflictError(staleKeys);
+
+  const preflightFailure = await preflightAuthProviderMutation(
+    new Map(changed.map((item) => [item.key, item.displayValue] as const)),
+    client,
+  );
+  if (preflightFailure) {
+    throw new SystemConfigMutationError(422, preflightFailure.errorCode, preflightFailure.msg);
+  }
+
+  for (const item of changed) {
+    const meta = SystemConfigMeta[item.key];
+    if (!item.existing) {
+      const metadata = item.metadata || {
+        label: meta.label,
+        group: meta.group,
+        description: meta.description,
+      };
+      await client.systemConfig.create({
+        data: {
+          key: item.key,
+          value: item.storedValue,
+          label: metadata.label,
+          group: metadata.group,
+          description: metadata.description,
+          revision: 1,
+        },
+      });
+      continue;
+    }
+    const metadataData = item.metadata
+      ? {
+        label: item.metadata.label,
+        group: item.metadata.group,
+        description: item.metadata.description,
+      }
+      : {};
+    const updated = await client.systemConfig.updateMany({
+      where: { key: item.key, revision: item.expectedRevision },
+      data: { value: item.storedValue, revision: { increment: 1 }, ...metadataData },
+    });
+    if (updated.count !== 1) throw new SystemConfigRevisionConflictError([item.key]);
+  }
+
+  const configs = await client.systemConfig.findMany({
+    where: { key: { in: inputs.map((item) => item.key) } },
+  });
+  const configByKey = new Map(configs.map((config) => [config.key, config]));
+  return {
+    configs: inputs.map((item) => configByKey.get(item.key)).filter((config) => config !== undefined),
+    changed,
+  };
 }
 
 // 从 schema 生成 DEFAULTS（启动时 seed）
@@ -147,7 +435,11 @@ export async function seedSystemConfig(
   for (const item of DEFAULTS) {
     const existing = await client.systemConfig.findUnique({ where: { key: item.key } });
     if (!existing) {
-      await client.systemConfig.create({ data: item });
+      const safeCloudDefault = getRuntimeMode() === 'cloud'
+        && (item.key === 'feature_sms_register' || item.key === 'feature_turnstile_login')
+        ? 'false'
+        : item.value;
+      await client.systemConfig.create({ data: { ...item, value: safeCloudDefault } });
     } else if (
       !PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(item.key) &&
       (
@@ -200,6 +492,15 @@ export async function systemConfigRoutes(app: FastifyInstance) {
   });
 
   app.put('/batch', async (request, reply) => {
+    const rawItems = (request.body as { items?: Array<Record<string, unknown>> } | null)?.items;
+    const rawProtectedItem = Array.isArray(rawItems)
+      ? rawItems.find((item) => typeof item?.key === 'string' && PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(item.key))
+      : null;
+    if (rawProtectedItem) return rejectProtectedStageMutation(reply, String(rawProtectedItem.key));
+    if (Array.isArray(rawItems)
+      && rawItems.some((item) => !Object.prototype.hasOwnProperty.call(item, 'expectedRevision'))) {
+      return rejectRevisionRequired(reply);
+    }
     const parsed = batchUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
@@ -213,48 +514,40 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     const protectedItem = parsed.data.items.find((item) => PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(item.key));
     if (protectedItem) return rejectProtectedStageMutation(reply, protectedItem.key);
 
-    const prepared = [] as Array<{
-      key: SystemConfigKey;
-      oldValue: string;
-      displayValue: string;
-      storedValue: string;
-      existing: { key: string; value: string } | null;
-    }>;
-
     for (const item of parsed.data.items) {
       if (!validateKey(item.key)) {
         return reply.status(400).send({ code: 0, msg: `未知配置项: ${item.key}` });
       }
-      const key = item.key as SystemConfigKey;
-      const existing = await prisma.systemConfig.findUnique({ where: { key } });
-      const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
-      const finalValue = mergeMaskedValue(key, item.value, oldValue);
-      const validated = SystemConfigSchema[key].safeParse(coerceConfigValue(key, finalValue));
-      if (!validated.success) {
-        const errMsg = validated.error.errors[0]?.message || '值不符合要求';
-        return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
-      }
-      const displayValue = String(validated.data);
-      prepared.push({ key, oldValue, displayValue, storedValue: encryptConfigValue(key, displayValue), existing });
     }
 
-    const configs = await prisma.$transaction(prepared.map(({ key, storedValue }) => {
-      const meta = SystemConfigMeta[key];
-      return prisma.systemConfig.upsert({
-        where: { key },
-        create: { key, value: storedValue, label: meta.label, group: meta.group, description: meta.description },
-        update: { value: storedValue },
-      });
-    }));
+    let result: Awaited<ReturnType<typeof applyConfigMutations>>;
+    try {
+      result = await prisma.$transaction(
+        (tx) => applyConfigMutations(
+          tx,
+          parsed.data.items.map((item) => ({
+            ...item,
+            key: item.key as SystemConfigKey,
+          })),
+        ),
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error) {
+      const response = sendMutationError(reply, error);
+      if (response) return response;
+      throw error;
+    }
 
     const actor = (request as any).user;
-    for (const item of prepared) {
+    for (const item of result.changed) {
       await logAudit({
         actorId: actor.actorUserId || actor.userId,
         actorRole: actor.role,
         action: 'system_config_update',
         target: item.key,
-        before: item.existing ? { value: maskSecretValue(item.key, item.oldValue) } : null,
+        before: item.existing
+          ? { value: item.oldValueUnreadable ? '***UNREADABLE***' : maskSecretValue(item.key, item.oldValue) }
+          : null,
         after: { value: maskSecretValue(item.key, item.displayValue) },
         force: item.key === 'security_audit_log_enabled',
         ...extractRequestMeta(request),
@@ -265,7 +558,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     return reply.send({
       code: 1,
       msg: '已批量保存',
-      data: configs.map((config) => ({ ...config, value: toPublicConfigValue(config.key, config.value) })),
+      data: result.configs.map((config) => ({ ...config, value: toPublicConfigValue(config.key, config.value) })),
     });
   });
 
@@ -278,59 +571,70 @@ export async function systemConfigRoutes(app: FastifyInstance) {
 
   app.put('/:key', async (request, reply) => {
     const { key } = request.params as { key: string };
-    const body = request.body as { value: string };
-    if (typeof body?.value !== 'string') {
-      return reply.status(400).send({ code: 0, msg: '缺少 value 字段' });
-    }
-
     if (PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(key)) {
       return rejectProtectedStageMutation(reply, key);
+    }
+    const body = request.body as { value?: unknown; expectedRevision?: unknown } | null;
+    if (!body || !Object.prototype.hasOwnProperty.call(body, 'expectedRevision')) {
+      return rejectRevisionRequired(reply);
+    }
+    const parsed = singleUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
 
     if (!validateKey(key)) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }
 
-    const existing = await prisma.systemConfig.findUnique({ where: { key } });
-    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
-    const finalValue = mergeMaskedValue(key, body.value, oldValue);
-
-    // Schema 校验
-    const schema = SystemConfigSchema[key];
-    const coerced = coerceConfigValue(key, finalValue);
-    const validated = schema.safeParse(coerced);
-    if (!validated.success) {
-      const errMsg = validated.error.errors[0]?.message || '值不符合要求';
-      return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
+    let result: Awaited<ReturnType<typeof applyConfigMutations>>;
+    try {
+      result = await prisma.$transaction(
+        (tx) => applyConfigMutations(tx, [{
+          key,
+          value: parsed.data.value,
+          expectedRevision: parsed.data.expectedRevision,
+        }]),
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error) {
+      const response = sendMutationError(reply, error);
+      if (response) return response;
+      throw error;
     }
-
-    const displayValue = String(validated.data);
-    const storedValue = encryptConfigValue(key, displayValue);
-    const meta = SystemConfigMeta[key];
-    const config = await prisma.systemConfig.upsert({
-      where: { key },
-      create: { key, value: storedValue, label: meta.label, group: meta.group, description: meta.description },
-      update: { value: storedValue },
-    });
+    const config = result.configs[0];
+    if (!config) throw new Error(`SystemConfig ${key} missing after update`);
 
     // 审计日志
     const actor = (request as any).user;
-    await logAudit({
-      actorId: actor.actorUserId || actor.userId,
-      actorRole: actor.role,
-      action: 'system_config_update',
-      target: key,
-      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
-      after: { value: maskSecretValue(key, displayValue) },
-      force: key === 'security_audit_log_enabled',
-      ...extractRequestMeta(request),
-    });
+    const changed = result.changed[0];
+    if (changed) {
+      await logAudit({
+        actorId: actor.actorUserId || actor.userId,
+        actorRole: actor.role,
+        action: 'system_config_update',
+        target: key,
+        before: changed.existing
+          ? { value: changed.oldValueUnreadable ? '***UNREADABLE***' : maskSecretValue(key, changed.oldValue) }
+          : null,
+        after: { value: maskSecretValue(key, changed.displayValue) },
+        force: key === 'security_audit_log_enabled',
+        ...extractRequestMeta(request),
+      });
+    }
 
-    invalidateConfigCaches(key);
+    if (changed) invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: toPublicConfigValue(config.key, config.value) } });
   });
 
   app.post('/', async (request, reply) => {
+    const rawBody = request.body as Record<string, unknown> | null;
+    if (typeof rawBody?.key === 'string' && PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(rawBody.key)) {
+      return rejectProtectedStageMutation(reply, rawBody.key);
+    }
+    if (!rawBody || !Object.prototype.hasOwnProperty.call(rawBody, 'expectedRevision')) {
+      return rejectRevisionRequired(reply);
+    }
     const parsed = upsertSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
@@ -344,53 +648,49 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }
 
-    const existing = await prisma.systemConfig.findUnique({ where: { key } });
-    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
-    const finalValue = mergeMaskedValue(key, parsed.data.value, oldValue);
-
-    // Schema 校验
-    const schema = SystemConfigSchema[key];
-    const coerced = coerceConfigValue(key, finalValue);
-    const validated = schema.safeParse(coerced);
-    if (!validated.success) {
-      const errMsg = validated.error.errors[0]?.message || '值不符合要求';
-      return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
-    }
-
-    const displayValue = String(validated.data);
-    const storedValue = encryptConfigValue(key, displayValue);
     const meta = SystemConfigMeta[key];
-    const config = await prisma.systemConfig.upsert({
-      where: { key },
-      create: {
-        key,
-        value: storedValue,
-        label: parsed.data.label || meta.label,
-        group: parsed.data.group === 'general' ? meta.group : parsed.data.group,
-        description: parsed.data.description || meta.description,
-      },
-      update: {
-        value: storedValue,
-        label: parsed.data.label || meta.label,
-        group: parsed.data.group === 'general' ? meta.group : parsed.data.group,
-        description: parsed.data.description || meta.description,
-      },
-    });
+    let result: Awaited<ReturnType<typeof applyConfigMutations>>;
+    try {
+      result = await prisma.$transaction(
+        (tx) => applyConfigMutations(tx, [{
+          key,
+          value: parsed.data.value,
+          expectedRevision: parsed.data.expectedRevision,
+          metadata: {
+            label: parsed.data.label || meta.label,
+            group: parsed.data.group === 'general' ? meta.group : parsed.data.group,
+            description: parsed.data.description || meta.description,
+          },
+        }]),
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error) {
+      const response = sendMutationError(reply, error);
+      if (response) return response;
+      throw error;
+    }
+    const config = result.configs[0];
+    if (!config) throw new Error(`SystemConfig ${key} missing after upsert`);
 
     // 审计日志
     const actor = (request as any).user;
-    await logAudit({
-      actorId: actor.actorUserId || actor.userId,
-      actorRole: actor.role,
-      action: 'system_config_update',
-      target: key,
-      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
-      after: { value: maskSecretValue(key, displayValue) },
-      force: key === 'security_audit_log_enabled',
-      ...extractRequestMeta(request),
-    });
+    const changed = result.changed[0];
+    if (changed) {
+      await logAudit({
+        actorId: actor.actorUserId || actor.userId,
+        actorRole: actor.role,
+        action: 'system_config_update',
+        target: key,
+        before: changed.existing
+          ? { value: changed.oldValueUnreadable ? '***UNREADABLE***' : maskSecretValue(key, changed.oldValue) }
+          : null,
+        after: { value: maskSecretValue(key, changed.displayValue) },
+        force: key === 'security_audit_log_enabled',
+        ...extractRequestMeta(request),
+      });
+    }
 
-    invalidateConfigCaches(key);
+    if (changed) invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: toPublicConfigValue(config.key, config.value) } });
   });
 
@@ -399,13 +699,70 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     if (PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(key)) {
       return rejectProtectedStageMutation(reply, key);
     }
+    const body = request.body as { expectedRevision?: unknown } | null;
+    if (!body || !Object.prototype.hasOwnProperty.call(body, 'expectedRevision')) {
+      return rejectRevisionRequired(reply);
+    }
+    const parsed = z.object({ expectedRevision: expectedRevisionSchema }).safeParse(body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
     if (!validateKey(key)) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }
 
-    const existing = await prisma.systemConfig.findUnique({ where: { key } });
-    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
-    await prisma.systemConfig.deleteMany({ where: { key } });
+    let deleted: {
+      key: string;
+      revision: number;
+      oldValue: string;
+      oldValueUnreadable: boolean;
+    } | null = null;
+    try {
+      deleted = await prisma.$transaction(async (tx) => {
+        const existing = await tx.systemConfig.findUnique({ where: { key } });
+        if (!existing) {
+          if (parsed.data.expectedRevision !== 0) throw new SystemConfigRevisionConflictError([key]);
+          return null;
+        }
+        if (existing.revision !== parsed.data.expectedRevision) {
+          throw new SystemConfigRevisionConflictError([key]);
+        }
+        let oldValue = '';
+        let oldValueUnreadable = false;
+        try {
+          oldValue = decryptConfigValueStrict(key, existing.value);
+        } catch {
+          oldValueUnreadable = true;
+          if (!requiresAuthProviderPreflight(new Set([key]))) {
+            throw new SystemConfigMutationError(
+              422,
+              'system_config_sensitive_value_unreadable',
+              '已保存的敏感配置无法解密，请刷新配置后重试',
+            );
+          }
+        }
+        const preflightFailure = await preflightAuthProviderMutation(new Map([[key, null]]), tx);
+        if (preflightFailure) {
+          throw new SystemConfigMutationError(422, preflightFailure.errorCode, preflightFailure.msg);
+        }
+        const result = await tx.systemConfig.deleteMany({
+          where: { key, revision: parsed.data.expectedRevision },
+        });
+        if (result.count !== 1) throw new SystemConfigRevisionConflictError([key]);
+        return {
+          key: existing.key,
+          revision: existing.revision,
+          oldValue,
+          oldValueUnreadable,
+        };
+      }, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      const response = sendMutationError(reply, error);
+      if (response) return response;
+      throw error;
+    }
+
+    if (!deleted) return reply.send({ code: 1, msg: '配置不存在，未执行删除' });
 
     const actor = (request as any).user;
     await logAudit({
@@ -413,7 +770,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       actorRole: actor.role,
       action: 'system_config_delete',
       target: key,
-      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
+      before: { value: deleted.oldValueUnreadable ? '***UNREADABLE***' : maskSecretValue(key, deleted.oldValue) },
       after: null,
       force: key === 'security_audit_log_enabled',
       ...extractRequestMeta(request),

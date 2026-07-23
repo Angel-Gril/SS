@@ -84,12 +84,49 @@ describe('auth challenge config', () => {
     });
   });
 
+  it('reports mixed provenance when a database-selected Tencent provider uses an env fallback', async () => {
+    configStore.set('auth_sms_provider', 'tencent');
+    configStore.set('auth_sms_tencent_secret_id', 'db-secret-id');
+    configStore.set('auth_sms_tencent_region', 'ap-shanghai');
+    configStore.set('auth_sms_tencent_sdk_app_id', 'db-sdk-app-id');
+    configStore.set('auth_sms_tencent_sign_name', 'db-sign');
+    configStore.set('auth_sms_tencent_template_id', 'db-template');
+    vi.stubEnv('SMS_TENCENT_SECRET_KEY', 'env-secret-key');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      provider: 'tencent',
+      source: 'mixed',
+      tencent: {
+        secretId: 'db-secret-id',
+        secretKey: 'env-secret-key',
+      },
+    });
+  });
+
   it('fails closed when a daily cost-fuse setting cannot be read', async () => {
     configFailures.add('auth_sms_daily_global_limit');
 
     const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
 
     await expect(getSmsRuntimeConfig()).rejects.toThrow(/database unavailable.*daily_global_limit/);
+  });
+
+  it('keeps ordinary decrypt compatibility but rejects malformed encrypted values in strict reads', async () => {
+    vi.stubEnv('ENCRYPTION_KEY', '12345678901234567890123456789012');
+    const malformed = 'enc:v1:not-valid-ciphertext';
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_access_key_secret', malformed);
+
+    const { decryptConfigValue, decryptConfigValueStrict, getConfig, getStrictConfig } = await import('../config/system-config-schema.js');
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    expect(decryptConfigValue('auth_sms_aliyun_access_key_secret', malformed)).toBe(malformed);
+    expect(() => decryptConfigValueStrict('auth_sms_aliyun_access_key_secret', malformed)).toThrow(/解密失败/);
+    await expect(getConfig('auth_sms_aliyun_access_key_secret')).resolves.toBe(malformed);
+    await expect(getStrictConfig('auth_sms_aliyun_access_key_secret')).rejects.toThrow(/解密失败/);
+    await expect(getSmsRuntimeConfig()).rejects.toThrow(/auth_sms_aliyun_access_key_secret.*解密失败/);
   });
 
   afterEach(() => {
@@ -120,6 +157,7 @@ describe('auth challenge config', () => {
       source: 'system-config',
       aliyun: {
         credentialMode: 'access_key',
+        credentialSource: 'db_access_key',
         accessKeyId: 'db-access-key-id',
         accessKeySecret: 'db-access-key-secret',
         signName: 'db-sign',
@@ -135,6 +173,64 @@ describe('auth challenge config', () => {
     });
   });
 
+  it('keeps auto-mode credentials database-sourced when the saved AccessKey pair is complete', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_credential_mode', 'auto');
+    configStore.set('auth_sms_aliyun_access_key_id', 'db-access-key-id');
+    configStore.set('auth_sms_aliyun_access_key_secret', 'db-access-key-secret');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      source: 'system-config',
+      aliyun: { credentialSource: 'db_access_key' },
+    });
+  });
+
+  it('reports mixed provenance when auto mode uses Alibaba environment credentials through the default chain', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_credential_mode', 'auto');
+    configStore.set('auth_sms_aliyun_sign_name', 'db-sign');
+    vi.stubEnv('SMS_ALIYUN_ACCESS_KEY_ID', '');
+    vi.stubEnv('SMS_ALIYUN_ACCESS_KEY_SECRET', '');
+    vi.stubEnv('ALIBABA_CLOUD_ACCESS_KEY_ID', 'default-chain-access-key-id');
+    vi.stubEnv('ALIBABA_CLOUD_ACCESS_KEY_SECRET', 'default-chain-access-key-secret');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      provider: 'aliyun',
+      source: 'mixed',
+      aliyun: {
+        accessKeyId: '',
+        accessKeySecret: '',
+        credentialMode: 'auto',
+        credentialSource: 'aliyun_env_access_key',
+      },
+    });
+  });
+
+  it('identifies an ECS metadata role selected through the Alibaba default chain', async () => {
+    configStore.set('auth_sms_provider', 'aliyun');
+    configStore.set('auth_sms_aliyun_credential_mode', 'auto');
+    vi.stubEnv('SMS_ALIYUN_ACCESS_KEY_ID', '');
+    vi.stubEnv('SMS_ALIYUN_ACCESS_KEY_SECRET', '');
+    vi.stubEnv('ALIBABA_CLOUD_ACCESS_KEY_ID', '');
+    vi.stubEnv('ALIBABA_CLOUD_ACCESS_KEY_SECRET', '');
+    vi.stubEnv('ALIBABA_CLOUD_ECS_METADATA', 'ss-erp-sms');
+
+    const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
+
+    await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      source: 'mixed',
+      aliyun: {
+        credentialMode: 'auto',
+        credentialSource: 'ecs_ram_role',
+        roleName: 'ss-erp-sms',
+      },
+    });
+  });
+
   it('uses only matching purpose environment fallbacks for mixed SystemConfig deployments', async () => {
     configStore.set('auth_sms_provider', 'aliyun');
     configStore.set('auth_sms_aliyun_sign_name', 'db-sign');
@@ -146,6 +242,7 @@ describe('auth challenge config', () => {
     const { getSmsRuntimeConfig } = await import('../lib/auth-challenge-config.js');
 
     await expect(getSmsRuntimeConfig()).resolves.toMatchObject({
+      source: 'mixed',
       aliyun: {
         templateCode: 'SMS_LEGACY_REGISTER',
         templateParamName: 'code',
@@ -207,6 +304,7 @@ describe('auth challenge config', () => {
         accessKeyId: '',
         accessKeySecret: '',
         credentialMode: 'ecs_ram_role',
+        credentialSource: 'ecs_ram_role',
         roleName: 'ss-erp-sms',
         signName: 'ecs-sign',
         templateCode: 'SMS_ECS_TEMPLATE',

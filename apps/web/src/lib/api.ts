@@ -164,14 +164,16 @@ export async function apiDownload(
 }
 
 export const api = {
-  get: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'GET' }),
-  post: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
-  put: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
-  patch: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
-  delete: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
+  get: <T = unknown>(path: string, options: RequestInit = {}) =>
+    apiFetch<T>(path, { ...options, method: 'GET' }),
+  post: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+    apiFetch<T>(path, { ...options, method: 'POST', body: JSON.stringify(body ?? {}) }),
+  put: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+    apiFetch<T>(path, { ...options, method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  patch: <T = unknown>(path: string, body?: unknown, options: RequestInit = {}) =>
+    apiFetch<T>(path, { ...options, method: 'PATCH', body: JSON.stringify(body ?? {}) }),
+  delete: <T = unknown>(path: string, options: RequestInit = {}) =>
+    apiFetch<T>(path, { ...options, method: 'DELETE' }),
   download: apiDownload,
 };
 

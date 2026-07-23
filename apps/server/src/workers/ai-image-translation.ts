@@ -8,6 +8,7 @@ import { redis, redisDisabled } from '../lib/redis.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { getStorageBackend } from '../services/image-storage.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import {
   isPublicHttpsStorageUrl,
   resolveAiImageTranslationStorageReadiness,
@@ -244,10 +245,6 @@ async function processClaimedTranslationJob(
         ));
       }
     }
-    provider = (overrides.resolveProvider || resolveAiImageTranslationProvider)(
-      persisted.provider,
-      providerConfig,
-    );
     if (!overrides.uploadBuffer) {
       const storageConfig = await (overrides.getStorageConfig || getRuntimeConfigForStorage)();
       const storageReadiness: AiImageTranslationStorageReadiness =
@@ -274,6 +271,27 @@ async function processClaimedTranslationJob(
         }
       }
     }
+    // Capability evidence gates only new paid dispatches. Once a Provider has
+    // accepted a task, recovery must keep polling it even if the current
+    // capability registry is still dark or has since been tightened.
+    if (persisted.provider !== 'fake' && !persisted.providerJobId) {
+      const capability = resolveAiImageProviderCapability(persisted.provider, persisted.model);
+      if (capability?.evidenceLevel !== 'sandbox-verified') {
+        return await failRuntimeGate(
+          repository,
+          persisted,
+          attemptNumber,
+          new AiImageJobError(
+            'PROVIDER_NOT_READY',
+            'Image translation provider has not passed its sandbox capability gate',
+          ),
+        );
+      }
+    }
+    provider = (overrides.resolveProvider || resolveAiImageTranslationProvider)(
+      persisted.provider,
+      providerConfig,
+    );
     const storage = overrides.uploadBuffer ? null : await getStorageBackend();
     uploadBuffer = overrides.uploadBuffer || storage!.uploadBuffer.bind(storage);
   } catch (error) {

@@ -234,6 +234,85 @@ describe('AI image translation worker recovery', () => {
     expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'STORAGE_NOT_READY' });
   });
 
+  it('fails a public HTTPS paid job before dispatch while its capability is not sandbox verified', async () => {
+    const paidJob = {
+      ...job('QUEUED', null),
+      provider: 'dashscope-qwen-mt-image',
+      model: 'qwen-mt-image',
+      estimatedCostCents: 10,
+    };
+    const state = repositoryState(paidJob);
+    const provider: AiImageTranslationProvider = {
+      name: 'dashscope-qwen-mt-image',
+      submit: vi.fn(async () => {
+        throw new AiImageJobError('UNEXPECTED_PROVIDER_CALL', 'provider must remain dark');
+      }),
+      poll: vi.fn(),
+    };
+    const resolveProvider = vi.fn(() => provider);
+
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({
+        enabled: true,
+        provider: 'dashscope-qwen-mt-image',
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        apiKey: 'test-only-key',
+        model: 'qwen-mt-image',
+        costPerImageCents: 10,
+      }),
+      resolveProvider,
+      uploadBuffer: vi.fn(),
+      schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_NOT_READY' });
+  });
+
+  it('continues polling an accepted paid task while its capability remains dark', async () => {
+    const paidJob = {
+      ...job('RUNNING', 'provider-task-accepted'),
+      provider: 'dashscope-qwen-mt-image',
+      model: 'qwen-mt-image',
+      estimatedCostCents: 10,
+    };
+    const state = repositoryState(paidJob);
+    const provider: AiImageTranslationProvider = {
+      name: 'dashscope-qwen-mt-image',
+      submit: vi.fn(),
+      poll: vi.fn(async () => ({
+        status: 'PENDING' as const,
+        providerStatus: 'RUNNING',
+      })),
+    };
+    const resolveProvider = vi.fn(() => provider);
+    const schedulePoll = vi.fn(async () => undefined);
+
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 2, {
+      repository: state.repository,
+      getProviderConfig: async () => ({
+        enabled: true,
+        provider: 'dashscope-qwen-mt-image',
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        apiKey: 'test-only-key',
+        model: 'qwen-mt-image',
+        costPerImageCents: 10,
+      }),
+      resolveProvider,
+      uploadBuffer: vi.fn(),
+      schedulePoll,
+    })).resolves.toBe('pending');
+
+    expect(resolveProvider).toHaveBeenCalledOnce();
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).toHaveBeenCalledWith('provider-task-accepted');
+    expect(schedulePoll).toHaveBeenCalledWith('translation-job-1', expect.any(Number));
+    expect(state.current()).toMatchObject({ status: 'RUNNING', providerJobId: 'provider-task-accepted' });
+  });
+
   it('does not reschedule permanent accepted-task authentication failures', async () => {
     const state = repositoryState({ ...job('RUNNING', 'provider-task-auth'), providerDispatchedAt: new Date() });
     const schedulePoll = vi.fn(async () => undefined);

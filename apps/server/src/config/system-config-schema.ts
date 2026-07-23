@@ -1124,10 +1124,24 @@ export function isEncryptedConfigKey(key: string): key is SystemConfigKey {
 export function decryptConfigValue(key: string, raw: string): string {
   if (!validateKey(key) || !raw.startsWith(ENCRYPTED_CONFIG_PREFIX)) return raw;
   try {
-    return decrypt(raw.slice(ENCRYPTED_CONFIG_PREFIX.length));
+    return decryptConfigValueStrict(key, raw);
   } catch (error: any) {
     console.warn(`[SystemConfig] ${key} 解密失败，使用原始值: ${error?.message || error}`);
     return raw;
+  }
+}
+
+/**
+ * Decrypt a persisted config value without hiding corruption. Sensitive
+ * callers use this path so an invalid `enc:v1:` value cannot become an
+ * apparently valid fallback or default.
+ */
+export function decryptConfigValueStrict(key: string, raw: string): string {
+  if (!validateKey(key) || !raw.startsWith(ENCRYPTED_CONFIG_PREFIX)) return raw;
+  try {
+    return decrypt(raw.slice(ENCRYPTED_CONFIG_PREFIX.length));
+  } catch (error) {
+    throw new Error(`[SystemConfig] ${key} 解密失败`, { cause: error });
   }
 }
 
@@ -1198,7 +1212,7 @@ export async function getStrictConfig<K extends SystemConfigKey>(key: K): Promis
     return schema.parse(undefined) as SystemConfigValue<K>;
   }
   const schema = SystemConfigSchema[key];
-  return schema.parse(coerceConfigValue(key, decryptConfigValue(key, record.value))) as SystemConfigValue<K>;
+  return schema.parse(coerceConfigValue(key, decryptConfigValueStrict(key, record.value))) as SystemConfigValue<K>;
 }
 
 export async function setConfig<K extends SystemConfigKey>(

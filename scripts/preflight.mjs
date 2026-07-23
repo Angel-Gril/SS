@@ -39,6 +39,21 @@ const steps = [
     args: ['scripts/web-auth-security-settings.test.mjs'],
   },
   {
+    name: 'Web admin runtime settings UI contract',
+    command: 'node',
+    args: ['scripts/web-admin-runtime-settings-ui.test.mjs'],
+  },
+  {
+    name: 'Web Next dist directory isolation contract',
+    command: 'node',
+    args: ['scripts/web-next-dist-dir.test.mjs'],
+  },
+  {
+    name: 'Web Ozon video probe surface contract',
+    command: 'node',
+    args: ['scripts/web-ozon-video-probe-routing.test.mjs'],
+  },
+  {
     name: 'AI media provider foundation contract',
     command: 'node',
     args: ['scripts/ai-media-provider-contract.test.mjs'],

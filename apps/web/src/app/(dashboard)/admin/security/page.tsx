@@ -16,6 +16,13 @@ interface SystemConfig {
   label: string | null;
   group: string;
   description: string | null;
+  revision: number;
+}
+
+function getResponseErrorCode(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const errorCode = (response as { errorCode?: unknown }).errorCode;
+  return typeof errorCode === 'string' ? errorCode : null;
 }
 
 export default function AdminSecurityPage() {
@@ -40,11 +47,22 @@ export default function AdminSecurityPage() {
 
   async function save(key: string) {
     setSavingKey(key);
-    const res = await api.put(`/api/admin/system-config/${key}`, { value: editing[key] || '' });
+    const expectedRevision = configs.find((config) => config.key === key)?.revision ?? 0;
+    const res = await api.put(`/api/admin/system-config/${key}`, {
+      value: editing[key] || '',
+      expectedRevision,
+    });
     setSavingKey(null);
     if (res.code === 1) {
       toast({ title: '已保存' });
-      load();
+      await load();
+    } else if (getResponseErrorCode(res) === 'system_config_revision_conflict') {
+      toast({
+        title: '配置已被更新',
+        description: '已读取服务器最新值，请重新确认后保存',
+        variant: 'destructive',
+      });
+      await load();
     } else {
       toast({ title: '保存失败', description: res.msg, variant: 'destructive' });
     }

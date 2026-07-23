@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomUUID } from 'crypto';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -6,6 +6,7 @@ import { redis } from '../lib/redis.js';
 import { getRuntimeConfigForStorage, getRuntimeMode } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { getSmsRuntimeConfig } from '../lib/auth-challenge-config.js';
+import { isAliyunTemplateParamName } from '../lib/auth-provider-activation.js';
 import { getHumanChallengeRuntimeConfig, type HumanChallengeRuntimeConfig } from '../lib/human-challenge.js';
 import { getSmsProvider } from '../lib/sms/index.js';
 import { queryApprovedAliyunSmsResources } from '../lib/sms/aliyun.js';
@@ -31,6 +32,7 @@ interface ConfiguredCheck {
   configured: boolean;
   source: 'env' | 'db' | 'mixed';
   detail?: string;
+  warning?: string;
   testable?: boolean;
 }
 
@@ -54,6 +56,10 @@ function hasAll(values: string[]): boolean {
   return values.every((value) => String(value || '').trim().length > 0);
 }
 
+function mapRuntimeSource(source: 'env' | 'system-config' | 'mixed'): ConfiguredCheck['source'] {
+  return source === 'system-config' ? 'db' : source;
+}
+
 export function buildHumanChallengeIntegrationCheck(
   config: HumanChallengeRuntimeConfig,
 ): ConfiguredCheck {
@@ -72,7 +78,7 @@ export function buildHumanChallengeIntegrationCheck(
     key: 'turnstile',
     label: '人机验证',
     configured: config.providerConfigValid && (turnstileConfigured || powConfigured),
-    source: config.source === 'system-config' ? 'db' : 'env',
+    source: mapRuntimeSource(config.source),
     testable: config.provider === 'cloudflare-turnstile',
     detail: !config.providerConfigValid
       ? 'HUMAN_CHALLENGE_PROVIDER 配置非法，认证已失败关闭'
@@ -103,9 +109,19 @@ function buildCdnProxyUrl(baseUrl: string, objectKey: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/api/cdn/${objectKey.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+async function requireLiveAccountSession(request: FastifyRequest, reply: FastifyReply) {
+  if ((request as any).user?.tokenUse === 'account_session') return;
+  return reply.status(403).send({
+    code: 0,
+    errorCode: 'system_status_account_session_required',
+    msg: '系统诊断需要当前账号会话',
+  });
+}
+
 async function getUploadOssDiagnostic() {
-  const [backend, endpoint, bucket, accessKeyId, accessKeySecret, region] = await Promise.all([
+  const [backend, provider, endpoint, bucket, accessKeyId, accessKeySecret, region] = await Promise.all([
     getConfig('upload_storage_backend'),
+    getConfig('upload_oss_provider'),
     getConfig('upload_oss_endpoint'),
     getConfig('upload_oss_bucket'),
     getConfig('upload_oss_access_key_id'),
@@ -126,10 +142,14 @@ async function getUploadOssDiagnostic() {
   const filled = required
     .filter((item) => String(item.value || '').trim())
     .map((item) => item.label);
-  const hasAnyDbUploadConfig = backend !== 'env' || filled.length > 0;
+  const hasAnyDbUploadConfig = backend !== 'env'
+    || provider !== 's3-compatible'
+    || [endpoint, bucket, accessKeyId, accessKeySecret].some((value) => String(value || '').trim())
+    || (String(region || '').trim() !== '' && String(region || '').trim() !== 'auto');
 
   return {
     backend,
+    provider,
     missing,
     filled,
     hasAnyDbUploadConfig,
@@ -141,21 +161,34 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
 
-  app.get('/integrations', async (_request, reply) => {
+  app.get('/integrations', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     const rc = await getRuntimeConfigForStorage();
-    const [smsConfig, humanChallengeConfig] = await Promise.all([
+    const [
+      smsConfig,
+      humanChallengeConfig,
+      savedHumanChallengeProvider,
+      savedSmsProvider,
+      featureSmsRegister,
+      featureSmsLogin,
+    ] = await Promise.all([
       getSmsRuntimeConfig(),
       getHumanChallengeRuntimeConfig(),
+      getConfig('auth_human_challenge_provider'),
+      getConfig('auth_sms_provider'),
+      getConfig('feature_sms_register'),
+      getConfig('feature_sms_login'),
     ]);
     const backupConfig = await getBackupRuntimeConfig();
     const smsQuota = await getSmsGlobalQuotaSnapshot(smsConfig.dailyGlobalLimit);
     const uploadOss = await getUploadOssDiagnostic();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
-    const ossSource =
-      rc.source === 'system-config' ? 'db' : uploadOss.hasAnyDbUploadConfig ? 'mixed' : 'env';
+    const ossSource = mapRuntimeSource(rc.source);
+    const effectiveStorageProvider = rc.imageStorage === 'oss' && rc.oss
+      ? inferObjectStorageProvider(rc.oss.endpoint)
+      : null;
     const ossDetail = ossConfigured
-      ? `backend=${rc.imageStorage}, bucket=${rc.oss!.bucket}`
+      ? `backend=${rc.imageStorage}, provider=${effectiveStorageProvider}`
       : [
           `backend=${rc.imageStorage}`,
           uploadOss.hasAnyDbUploadConfig
@@ -168,41 +201,108 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     const aliyunRegisterTemplateParamName = smsConfig.aliyun.registerTemplateCode
       ? smsConfig.aliyun.registerTemplateParamName
       : smsConfig.aliyun.templateParamName;
+    const aliyunCredentialSource = smsConfig.aliyun.credentialSource
+      || (smsConfig.aliyun.credentialMode === 'ecs_ram_role'
+        ? 'ecs_ram_role'
+        : smsConfig.aliyun.accessKeyId || smsConfig.aliyun.accessKeySecret
+          ? 'sms_env_access_key'
+          : 'aliyun_default_chain');
+    const aliyunDelegatesToDefaultChain = smsConfig.aliyun.credentialMode === 'auto'
+      && !smsConfig.aliyun.accessKeyId
+      && !smsConfig.aliyun.accessKeySecret;
+    const aliyunCredentialWarning = smsConfig.provider === 'aliyun' && aliyunDelegatesToDefaultChain
+      ? '阿里云 SDK 默认凭据链正在生效，实际凭据来源与可用性未验证；可能来自 ALIBABA_CLOUD_*、本机 profile 或 ECS 元数据'
+      : null;
     const aliyunHasAnyAccessKey = Boolean(smsConfig.aliyun.accessKeyId || smsConfig.aliyun.accessKeySecret);
     const aliyunCredentialsConfigured = smsConfig.aliyun.credentialMode === 'access_key'
       ? hasAll([smsConfig.aliyun.accessKeyId, smsConfig.aliyun.accessKeySecret])
       : smsConfig.aliyun.credentialMode === 'auto' && aliyunHasAnyAccessKey
         ? hasAll([smsConfig.aliyun.accessKeyId, smsConfig.aliyun.accessKeySecret])
         : true;
-    const aliyunConfigured = aliyunCredentialsConfigured && hasAll([
-      smsConfig.aliyun.signName,
-      aliyunRegisterTemplateCode,
-      aliyunRegisterTemplateParamName,
+    const aliyunRegisterConfigured = !featureSmsRegister || (
+      hasAll([aliyunRegisterTemplateCode, aliyunRegisterTemplateParamName])
+      && isAliyunTemplateParamName(aliyunRegisterTemplateParamName)
+    );
+    const aliyunPasswordResetConfigured = hasAll([
       smsConfig.aliyun.passwordResetTemplateCode,
       smsConfig.aliyun.passwordResetTemplateParamName,
-      smsConfig.aliyun.smsLoginTemplateCode,
-      smsConfig.aliyun.smsLoginTemplateParamName,
-    ]);
+    ]) && isAliyunTemplateParamName(smsConfig.aliyun.passwordResetTemplateParamName);
+    const aliyunSmsLoginConfigured = !featureSmsLogin || (
+      hasAll([
+        smsConfig.aliyun.smsLoginTemplateCode,
+        smsConfig.aliyun.smsLoginTemplateParamName,
+      ]) && isAliyunTemplateParamName(smsConfig.aliyun.smsLoginTemplateParamName)
+    );
+    const aliyunConfigured = aliyunCredentialsConfigured
+      && hasAll([smsConfig.aliyun.signName])
+      && aliyunRegisterConfigured
+      && aliyunPasswordResetConfigured
+      && aliyunSmsLoginConfigured;
     const smsQuotaDetail = smsQuota.available
       ? `今日发送尝试 ${smsQuota.used}/${smsQuota.limit}，剩余 ${smsQuota.remaining}，Asia/Shanghai 次日重置`
       : '短信额度 Redis 状态不可用，真实发送将失败关闭';
+    const smsConfigured =
+      (smsConfig.provider === 'console' && runtimeMode !== 'cloud')
+      || (smsConfig.provider === 'tencent'
+        && hasAll([
+          smsConfig.tencent.secretId,
+          smsConfig.tencent.secretKey,
+          smsConfig.tencent.sdkAppId,
+          smsConfig.tencent.signName,
+          smsConfig.tencent.templateId,
+        ]))
+      || (smsConfig.provider === 'aliyun' && aliyunConfigured);
+    const humanChallengeCheck = buildHumanChallengeIntegrationCheck(humanChallengeConfig);
+    const humanChallengeSource = mapRuntimeSource(humanChallengeConfig.source);
+    const smsSource = mapRuntimeSource(smsConfig.source);
+    const uploadStorageConfigured = rc.imageStorage !== 'oss' || ossConfigured;
+    const runtimeSelections = {
+      runtimeMode,
+      humanChallenge: {
+        savedProvider: savedHumanChallengeProvider,
+        effectiveProvider: humanChallengeConfig.provider,
+        source: humanChallengeSource,
+        configured: humanChallengeCheck.configured,
+        providerConfigValid: humanChallengeConfig.providerConfigValid,
+        hostnameConfigValid: humanChallengeConfig.provider === 'cloudflare-turnstile'
+          ? humanChallengeConfig.hostnameConfigValid
+          : true,
+        overridden: humanChallengeSource !== 'db'
+          || savedHumanChallengeProvider !== humanChallengeConfig.provider,
+      },
+      sms: {
+        savedProvider: savedSmsProvider,
+        effectiveProvider: smsConfig.provider,
+        source: smsSource,
+        configured: smsConfigured,
+        overridden: smsSource !== 'db' || savedSmsProvider !== smsConfig.provider,
+        ...(smsConfig.provider === 'aliyun'
+          ? {
+              credentialSource: aliyunCredentialSource,
+              warning: aliyunCredentialWarning,
+            }
+          : {}),
+      },
+      uploadStorage: {
+        savedBackend: uploadOss.backend,
+        savedProvider: uploadOss.provider,
+        effectiveBackend: rc.imageStorage,
+        effectiveProvider: effectiveStorageProvider,
+        source: ossSource,
+        configured: uploadStorageConfigured,
+        overridden: ossSource !== 'db'
+          || uploadOss.backend !== rc.imageStorage
+          || (effectiveStorageProvider !== null && uploadOss.provider !== effectiveStorageProvider),
+      },
+    };
 
     const checks: ConfiguredCheck[] = [
       {
         key: 'sms',
         label: '短信服务',
-        configured:
-          (smsConfig.provider === 'console' && runtimeMode !== 'cloud') ||
-          (smsConfig.provider === 'tencent' &&
-            hasAll([
-              smsConfig.tencent.secretId,
-              smsConfig.tencent.secretKey,
-              smsConfig.tencent.sdkAppId,
-              smsConfig.tencent.signName,
-              smsConfig.tencent.templateId,
-            ])) ||
-          (smsConfig.provider === 'aliyun' && aliyunConfigured),
-        source: smsConfig.source === 'system-config' ? 'db' : smsConfig.source,
+        configured: smsConfigured,
+        source: smsSource,
+        warning: aliyunCredentialWarning || undefined,
         detail: `${
           smsConfig.provider === 'console'
             ? runtimeMode === 'cloud'
@@ -211,11 +311,11 @@ export async function systemStatusRoutes(app: FastifyInstance) {
             : smsConfig.provider === 'tencent'
               ? `provider=tencent, region=${smsConfig.tencent.region}, sdkAppId=${smsConfig.tencent.sdkAppId || '未填'}`
               : smsConfig.provider === 'aliyun'
-                ? `provider=aliyun, credential=${smsConfig.aliyun.credentialMode}, register=${aliyunRegisterTemplateCode || '未填'}, password-reset=${smsConfig.aliyun.passwordResetTemplateCode || '未填'}, sms-login=${smsConfig.aliyun.smsLoginTemplateCode || '未填'}`
+                ? `provider=aliyun, credential=${smsConfig.aliyun.credentialMode}, credentialSource=${aliyunCredentialSource}, register=${aliyunRegisterTemplateCode || '未填'}, password-reset=${smsConfig.aliyun.passwordResetTemplateCode || '未填'}, sms-login=${smsConfig.aliyun.smsLoginTemplateCode || '未填'}${aliyunCredentialWarning ? `；警告：${aliyunCredentialWarning}` : ''}`
                 : '未配置短信 provider'
         }；${smsQuotaDetail}`,
       },
-      buildHumanChallengeIntegrationCheck(humanChallengeConfig),
+      humanChallengeCheck,
       {
         key: 'sentry',
         label: 'Sentry',
@@ -235,7 +335,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         configured: !!backupConfig.remote,
         source: backupConfig.remoteSource === 'system-config' ? 'db' : 'env',
         detail: backupConfig.remote
-          ? `bucket=${backupConfig.remote.bucket}, prefix=${backupConfig.remote.prefix}, source=${backupConfig.remoteSource}`
+          ? `远程备份已配置，source=${backupConfig.remoteSource}`
           : backupConfig.remoteEnabled
             ? `远程备份未完整：缺少 ${backupConfig.remoteMissing.join('、') || '未知字段'}`
             : '未启用远程备份；可在系统设置 -> 备份策略中配置',
@@ -244,15 +344,15 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         key: 'ozon_cdn_relay',
         label: 'OZON CDN 中转',
         configured: ozonRelay,
-        source: rc.source === 'system-config' ? 'db' : 'env',
+        source: mapRuntimeSource(rc.source),
         detail: '可选，国内直连失败时用',
       },
     ];
 
-    return reply.send({ code: 1, data: { checks } });
+    return reply.send({ code: 1, data: { checks, runtimeSelections } });
   });
 
-  app.get('/ops', async (_request, reply) => {
+  app.get('/ops', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     const checks: Record<string, { status: string; detail?: string }> = {};
 
     try {
@@ -303,7 +403,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/test/turnstile', async (_request, reply) => {
+  app.post('/test/turnstile', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     const turnstileConfig = await getHumanChallengeRuntimeConfig();
     if (!turnstileConfig.providerConfigValid) {
       return reply.send({
@@ -505,7 +605,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/test/oss', async (_request, reply) => {
+  app.post('/test/oss', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     try {
       const storageConfig = await getRuntimeConfigForStorage();
       if (!storageConfig.oss) {
@@ -723,7 +823,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/test/backup', async (_request, reply) => {
+  app.post('/test/backup', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     try {
       const result = await testBackupRemoteStorage();
       return reply.send({
@@ -739,7 +839,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/test/ai-image', async (request, reply) => {
+  app.post('/test/ai-image', { preHandler: requireLiveAccountSession }, async (request, reply) => {
     const body = request.body && typeof request.body === 'object'
       ? request.body as Record<string, unknown>
       : {};
@@ -780,7 +880,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       return reply.send({ code: 0, msg: error?.message || 'AI 生图连接测试失败' });
     }
   });
-  app.post('/test/sentry', async (_request, reply) => {
+  app.post('/test/sentry', { preHandler: requireLiveAccountSession }, async (_request, reply) => {
     if (!process.env.SENTRY_DSN) return reply.send({ code: 0, msg: 'SENTRY_DSN 未配置' });
     try {
       const { Sentry } = await import('../lib/sentry.js');

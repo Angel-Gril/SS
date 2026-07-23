@@ -6,6 +6,8 @@ node_modules
 .pnpm-store
 .next
 **/.next
+.next-dev
+**/.next-dev
 dist
 **/dist
 build/dist

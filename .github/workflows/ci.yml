@@ -116,6 +116,15 @@ jobs:
       - name: Verify Web auth security settings contract
         run: node scripts/web-auth-security-settings.test.mjs
 
+      - name: Verify Web admin runtime settings UI contract
+        run: node scripts/web-admin-runtime-settings-ui.test.mjs
+
+      - name: Verify Web Next dist directory isolation contract
+        run: node scripts/web-next-dist-dir.test.mjs
+
+      - name: Verify Web Ozon video probe surface contract
+        run: node scripts/web-ozon-video-probe-routing.test.mjs
+
       - name: Test SMS quota Redis state machine
         run: pnpm --filter server test:sms-quota:redis
 

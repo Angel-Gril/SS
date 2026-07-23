@@ -37,6 +37,7 @@ interface SystemConfig {
   label: string | null;
   group: string;
   description: string | null;
+  revision: number;
   updatedAt: string;
 }
 
@@ -79,6 +80,108 @@ interface BackupStatus {
   warnings?: string[];
 }
 
+type HumanChallengeProvider = 'disabled' | 'cloudflare-turnstile' | 'builtin-pow';
+type SmsProviderSelection = 'env' | 'console' | 'tencent' | 'aliyun';
+type AliyunSmsCredentialSource =
+  | 'db_access_key'
+  | 'sms_env_access_key'
+  | 'mixed_access_key'
+  | 'aliyun_env_access_key'
+  | 'ecs_ram_role'
+  | 'aliyun_default_chain';
+
+interface RuntimeSelections {
+  runtimeMode: 'local' | 'cloud';
+  humanChallenge: {
+    savedProvider: HumanChallengeProvider;
+    effectiveProvider: HumanChallengeProvider;
+    source: 'env' | 'db' | 'mixed';
+    configured: boolean;
+    providerConfigValid: boolean;
+    hostnameConfigValid?: boolean;
+    overridden: boolean;
+  };
+  sms: {
+    savedProvider: SmsProviderSelection;
+    effectiveProvider: '' | 'console' | 'tencent' | 'aliyun';
+    source: 'env' | 'db' | 'mixed';
+    configured: boolean;
+    overridden: boolean;
+    credentialSource: AliyunSmsCredentialSource | null;
+    warning: string | null;
+  };
+  uploadStorage: {
+    savedBackend: 'env' | 'local' | 'oss' | 'ozon-cdn';
+    savedProvider: ObjectStorageProvider;
+    effectiveBackend: 'local' | 'oss' | 'ozon-cdn';
+    effectiveProvider: ObjectStorageProvider | null;
+    source: 'env' | 'db' | 'mixed';
+    configured: boolean;
+    overridden: boolean;
+  };
+}
+
+interface IntegrationStatusResponse {
+  runtimeSelections: RuntimeSelections;
+}
+
+type RuntimeSelectionsRequestState = 'loading' | 'ready' | 'error';
+type RuntimeState = 'loading' | 'active' | 'disabled' | 'not-ready' | 'invalid' | 'error';
+
+interface ConfigRefreshOptions {
+  showInitialLoader?: boolean;
+  savedDraftValues?: Record<string, string>;
+  preserveEditing?: boolean;
+}
+
+function getResponseErrorCode(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const errorCode = (response as { errorCode?: unknown }).errorCode;
+  return typeof errorCode === 'string' ? errorCode : null;
+}
+
+const SETTINGS_REQUEST_TIMEOUT_MS = 15_000;
+const BACKUP_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
+
+function withSettingsRequestTimeout<T>(request: Promise<T>, timeoutMs = SETTINGS_REQUEST_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('settings request timed out')), timeoutMs);
+    request.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function withAbortableSettingsRequest<T>(
+  request: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = SETTINGS_REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error('settings request timed out'));
+    }, timeoutMs);
+    request(controller.signal).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
   auth: '短信与人机验证',
@@ -107,6 +210,16 @@ const GROUP_ORDER = [
   'general',
 ];
 
+const VISIBLE_CONFIG_GROUPS = new Set(GROUP_ORDER);
+const HIDDEN_CONFIG_KEYS = new Set([
+  'source_workflow_rollout_policy',
+  'source_ozon_publisher_browser_one_click_stage',
+  'source_ozon_publisher_collect_publish_stage',
+  'source_ozon_publisher_extension_adapter_stage',
+  'source_ozon_publisher_listing_batch_stage',
+  'source_ozon_publisher_listing_import_by_sku_stage',
+]);
+
 const REQUIRED_CONFIG_KEYS = [
   'upload_oss_provider',
   'ai_provider',
@@ -122,63 +235,174 @@ export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [aiUsage, setAiUsage] = useState<AiUsageDiagnostics | null>(null);
+  const [runtimeSelections, setRuntimeSelections] = useState<RuntimeSelections | null>(null);
+  const [runtimeSelectionsRequestState, setRuntimeSelectionsRequestState] =
+    useState<RuntimeSelectionsRequestState>('loading');
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [runningBackup, setRunningBackup] = useState(false);
+  const refreshRequestRef = useRef(0);
+  const saveInFlightRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    fetchConfigs(true);
+    fetchConfigs({ showInitialLoader: true });
   }, []);
 
-  function applyConfigRows(rows: SystemConfig[]) {
-    const filtered = rows.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
+  function applyConfigRows(
+    rows: SystemConfig[],
+    options: Pick<ConfigRefreshOptions, 'savedDraftValues' | 'preserveEditing'> = {},
+  ) {
+    const filtered = rows.filter((c) => {
+      if (!VISIBLE_CONFIG_GROUPS.has(c.group)) return false;
+      return !HIDDEN_CONFIG_KEYS.has(c.key);
+    });
     setConfigs(filtered);
     const map: Record<string, string> = {};
     filtered.forEach((c) => {
       map[c.key] = c.value;
     });
-    setEditing(map);
+    if (options.preserveEditing) {
+      setEditing((current) => {
+        const next = { ...map };
+        filtered.forEach((cfg) => {
+          if (Object.prototype.hasOwnProperty.call(current, cfg.key)) {
+            next[cfg.key] = current[cfg.key]!;
+          }
+        });
+        return next;
+      });
+    } else if (!options.savedDraftValues) {
+      setEditing(map);
+    } else {
+      setEditing((current) => {
+        const next = { ...current };
+        filtered.forEach((cfg) => {
+          const isNewConfig = !Object.prototype.hasOwnProperty.call(current, cfg.key);
+          const savedDraftUnchanged = Object.prototype.hasOwnProperty.call(options.savedDraftValues!, cfg.key)
+            && current[cfg.key] === options.savedDraftValues![cfg.key];
+          if (isNewConfig || savedDraftUnchanged) next[cfg.key] = cfg.value;
+        });
+        return next;
+      });
+    }
     return filtered;
   }
 
-  async function fetchConfigs(showInitialLoader = false) {
+  async function fetchConfigs(options: ConfigRefreshOptions = {}) {
+    const {
+      showInitialLoader = false,
+      savedDraftValues,
+      preserveEditing = false,
+    } = options;
+    const requestId = ++refreshRequestRef.current;
+    const isCurrentRequest = () => requestId === refreshRequestRef.current;
     if (showInitialLoader) setLoading(true);
-    const [configRes, backupRes, aiUsageRes] = await Promise.all([
-      api.get<SystemConfig[]>('/api/admin/system-config'),
-      api.get<BackupStatus>('/api/admin/ops/backup-status'),
-      api.get<AiUsageDiagnostics>('/api/admin/system-config/ai-usage/summary'),
-    ]);
-    if (configRes.code === 1 && configRes.data) {
-      const filtered = applyConfigRows(configRes.data);
-      const hasRequiredKeys = REQUIRED_CONFIG_KEYS.every((key) =>
-        filtered.some((cfg) => cfg.key === key),
-      );
-      if (!hasRequiredKeys) {
-        await api.post('/api/admin/system-config/seed', {});
-        const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
-        if (res2.code === 1 && res2.data) applyConfigRows(res2.data);
+    setRuntimeSelectionsRequestState('loading');
+    let runtimeRequestHandled = false;
+    try {
+      const [configResult, backupResult, aiUsageResult, integrationResult] = await Promise.allSettled([
+        withSettingsRequestTimeout(api.get<SystemConfig[]>('/api/admin/system-config')),
+        withSettingsRequestTimeout(api.get<BackupStatus>('/api/admin/ops/backup-status')),
+        withSettingsRequestTimeout(api.get<AiUsageDiagnostics>('/api/admin/system-config/ai-usage/summary')),
+        withSettingsRequestTimeout(api.get<IntegrationStatusResponse>('/api/admin/system-status/integrations')),
+      ]);
+      if (!isCurrentRequest()) return;
+
+      const configRes = configResult.status === 'fulfilled' ? configResult.value : null;
+      const backupRes = backupResult.status === 'fulfilled' ? backupResult.value : null;
+      const aiUsageRes = aiUsageResult.status === 'fulfilled' ? aiUsageResult.value : null;
+      const integrationRes = integrationResult.status === 'fulfilled' ? integrationResult.value : null;
+
+      if (backupRes?.code === 1 && backupRes.data) setBackupStatus(backupRes.data);
+      if (aiUsageRes?.code === 1 && aiUsageRes.data) setAiUsage(aiUsageRes.data);
+      if (integrationRes?.code === 1 && integrationRes.data?.runtimeSelections) {
+        setRuntimeSelections(integrationRes.data.runtimeSelections);
+        setRuntimeSelectionsRequestState('ready');
+      } else {
+        setRuntimeSelections(null);
+        setRuntimeSelectionsRequestState('error');
       }
-    } else if (configRes.code === 0) {
-      await api.post('/api/admin/system-config/seed', {});
-      const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
-      if (res2.code === 1 && res2.data) applyConfigRows(res2.data);
+      runtimeRequestHandled = true;
+
+      const applyOptions = { savedDraftValues, preserveEditing };
+      if (configRes?.code === 1 && configRes.data) {
+        const filtered = applyConfigRows(configRes.data, applyOptions);
+        const hasRequiredKeys = REQUIRED_CONFIG_KEYS.every((key) =>
+          filtered.some((cfg) => cfg.key === key),
+        );
+        if (!hasRequiredKeys) {
+          await withAbortableSettingsRequest((signal) => (
+            api.post('/api/admin/system-config/seed', {}, { signal })
+          ));
+          if (!isCurrentRequest()) return;
+          const res2 = await withSettingsRequestTimeout(api.get<SystemConfig[]>('/api/admin/system-config'));
+          if (!isCurrentRequest()) return;
+          if (res2.code === 1 && res2.data) applyConfigRows(res2.data, applyOptions);
+        }
+      } else if (configRes?.code === 0) {
+        await withAbortableSettingsRequest((signal) => (
+          api.post('/api/admin/system-config/seed', {}, { signal })
+        ));
+        if (!isCurrentRequest()) return;
+        const res2 = await withSettingsRequestTimeout(api.get<SystemConfig[]>('/api/admin/system-config'));
+        if (!isCurrentRequest()) return;
+        if (res2.code === 1 && res2.data) applyConfigRows(res2.data, applyOptions);
+      }
+    } catch {
+      if (isCurrentRequest() && !runtimeRequestHandled) {
+        setRuntimeSelections(null);
+        setRuntimeSelectionsRequestState('error');
+      }
+    } finally {
+      if (isCurrentRequest()) setLoading(false);
     }
-    if (backupRes.code === 1 && backupRes.data) setBackupStatus(backupRes.data);
-    if (aiUsageRes.code === 1 && aiUsageRes.data) setAiUsage(aiUsageRes.data);
-    setLoading(false);
+  }
+
+  function enqueueSave(saveKey: string, operation: () => Promise<void>): Promise<void> {
+    const queued = saveInFlightRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        setSavingKey(saveKey);
+        try {
+          await operation();
+        } finally {
+          setSavingKey((current) => (current === saveKey ? null : current));
+        }
+      });
+    saveInFlightRef.current = queued;
+    return queued;
   }
 
   async function saveConfig(key: string) {
-    setSavingKey(key);
-    const res = await api.put(`/api/admin/system-config/${key}`, { value: editing[key] || '' });
-    setSavingKey(null);
-    if (res.code === 1) {
-      toast({ title: '已保存', description: `配置 ${key} 更新成功` });
-      fetchConfigs();
-    } else {
-      toast({ title: '保存失败', description: res.msg || '未知错误', variant: 'destructive' });
-    }
+    const savedDraftValues = { [key]: editing[key] || '' };
+    const expectedRevision = configs.find((config) => config.key === key)?.revision ?? 0;
+    return enqueueSave(key, async () => {
+      try {
+        const res = await withAbortableSettingsRequest((signal) => (
+          api.put(`/api/admin/system-config/${key}`, {
+            value: savedDraftValues[key],
+            expectedRevision,
+          }, { signal })
+        ));
+        if (res.code === 1) {
+          toast({ title: '已保存', description: `配置 ${key} 更新成功` });
+          await fetchConfigs({ savedDraftValues });
+        } else if (getResponseErrorCode(res) === 'system_config_revision_conflict') {
+          toast({
+            title: '配置已被更新',
+            description: '已读取服务器最新值，请重新确认后保存',
+            variant: 'destructive',
+          });
+          await fetchConfigs({ savedDraftValues });
+        } else {
+          toast({ title: '保存失败', description: res.msg || '未知错误', variant: 'destructive' });
+        }
+      } catch {
+        toast({ title: '保存失败', description: '网络请求失败，请稍后重试', variant: 'destructive' });
+        await fetchConfigs({ preserveEditing: true });
+      }
+    });
   }
 
   async function saveConfigs(
@@ -186,46 +410,100 @@ export default function AdminSettingsPage() {
     label: string,
     overrides: Record<string, string> = {},
   ) {
+    const revisionByKey = new Map(configs.map((config) => [config.key, config.revision]));
     const items = keys
       .filter((key) => Object.prototype.hasOwnProperty.call(editing, key))
-      .map((key) => ({ key, value: overrides[key] ?? editing[key] ?? '' }));
-    setSavingKey(`group:${label}`);
-    const res = await api.put('/api/admin/system-config/batch', { items });
-    setSavingKey(null);
-    if (res.code !== 1) {
-      toast({
-        title: '保存失败',
-        description: res.msg || '对象存储配置未写入，原配置保持不变',
-        variant: 'destructive',
-      });
-      return;
-    }
-    toast({ title: '已保存', description: `${label} 更新成功` });
-    fetchConfigs();
+      .map((key) => ({
+        key,
+        value: overrides[key] ?? editing[key] ?? '',
+        expectedRevision: revisionByKey.get(key) ?? 0,
+      }));
+    const savedDraftValues = Object.fromEntries(
+      items.map(({ key }) => [key, editing[key] ?? '']),
+    );
+    return enqueueSave(`group:${label}`, async () => {
+      try {
+        const res = await withAbortableSettingsRequest((signal) => (
+          api.put('/api/admin/system-config/batch', { items }, { signal })
+        ));
+        if (res.code !== 1) {
+          if (getResponseErrorCode(res) === 'system_config_revision_conflict') {
+            toast({
+              title: '配置已被更新',
+              description: '已读取服务器最新值，请重新确认后保存',
+              variant: 'destructive',
+            });
+            await fetchConfigs({ savedDraftValues });
+            return;
+          }
+          toast({
+            title: '保存失败',
+            description: res.msg || '配置未写入，原配置保持不变',
+            variant: 'destructive',
+          });
+          return;
+        }
+        toast({ title: '已保存', description: `${label} 更新成功` });
+        await fetchConfigs({ savedDraftValues });
+      } catch {
+        toast({ title: '保存失败', description: '网络请求失败，请稍后重试', variant: 'destructive' });
+        await fetchConfigs({ preserveEditing: true });
+      }
+    });
   }
 
   async function initDefaults() {
-    const res = await api.post('/api/admin/system-config/seed', {});
-    if (res.code === 1) {
-      toast({ title: '默认配置已初始化' });
-      fetchConfigs();
-    }
+    return enqueueSave('defaults', async () => {
+      try {
+        const res = await withAbortableSettingsRequest((signal) => (
+          api.post('/api/admin/system-config/seed', {}, { signal })
+        ));
+        if (res.code === 1) {
+          toast({ title: '默认配置已初始化' });
+          await fetchConfigs();
+        }
+      } catch {
+        toast({ title: '初始化失败', description: '网络请求失败，请稍后重试', variant: 'destructive' });
+      }
+    });
   }
 
   async function runBackupNow() {
     setRunningBackup(true);
-    const res = await api.post<BackupStatus>('/api/admin/ops/backup/run', {});
-    setRunningBackup(false);
-    if (res.code === 1) {
-      toast({ title: '备份完成', description: res.msg || '数据库备份已完成' });
-      fetchConfigs();
-    } else {
+    try {
+      const res = await withAbortableSettingsRequest(
+        (signal) => api.post<BackupStatus>('/api/admin/ops/backup/run', {}, { signal }),
+        BACKUP_REQUEST_TIMEOUT_MS,
+      );
+      if (res.code === 1) {
+        toast({ title: '备份完成', description: res.msg || '数据库备份已完成' });
+      } else {
+        toast({
+          title: '备份失败',
+          description: res.msg || '请查看运维状态',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      const timedOut = error instanceof Error && error.message === 'settings request timed out';
       toast({
-        title: '备份失败',
-        description: res.msg || '请查看运维状态',
+        title: timedOut ? '备份请求超时' : '备份失败',
+        description: timedOut
+          ? '服务器可能仍在执行备份，已刷新状态；请稍后查看备份状态'
+          : '网络请求失败，请稍后重试',
         variant: 'destructive',
       });
-      fetchConfigs();
+    } finally {
+      try {
+        const status = await withSettingsRequestTimeout(
+          api.get<BackupStatus>('/api/admin/ops/backup-status'),
+        );
+        if (status.code === 1 && status.data) setBackupStatus(status.data);
+      } catch {
+        // The backup result has already been reported; keep the current status if refresh fails.
+      } finally {
+        setRunningBackup(false);
+      }
     }
   }
 
@@ -257,14 +535,36 @@ export default function AdminSettingsPage() {
             <SettingsIcon className="h-6 w-6" /> 系统设置
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            常用配置默认展开，高级运维参数默认收起。对象存储配置同时适用于本地版、国内服务器和国外
-            VPS。
+            先查看实际运行状态，再按需展开修改。对象存储配置同时适用于本地版、国内服务器和国外 VPS。
           </p>
         </div>
-        <Button variant="outline" onClick={initDefaults}>
-          初始化默认配置
+        <Button variant="outline" onClick={initDefaults} disabled={savingKey !== null}>
+          {savingKey === 'defaults' ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <SettingsIcon className="h-4 w-4" />
+          )}
+          <span className="ml-1">初始化默认配置</span>
         </Button>
       </div>
+
+      {runtimeSelectionsRequestState === 'error' && (
+        <div className="flex flex-col gap-3 border border-destructive/40 bg-destructive/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>实际运行状态读取失败。配置仍可查看，但保存前请重新确认服务端生效状态。</span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => fetchConfigs({ preserveEditing: true })}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span className="ml-1">重新读取</span>
+          </Button>
+        </div>
+      )}
 
       {Object.keys(grouped).length === 0 && (
         <Card>
@@ -301,6 +601,8 @@ export default function AdminSettingsPage() {
               savingKey={savingKey}
               saveConfig={saveConfig}
               saveConfigs={saveConfigs}
+              runtimeSelections={runtimeSelections}
+              runtimeSelectionsRequestState={runtimeSelectionsRequestState}
             />
           );
         }
@@ -326,6 +628,8 @@ export default function AdminSettingsPage() {
               setEditing={setEditing}
               savingKey={savingKey}
               saveConfigs={saveConfigs}
+              runtimeSelections={runtimeSelections}
+              runtimeSelectionsRequestState={runtimeSelectionsRequestState}
             />
           );
         }
@@ -386,7 +690,7 @@ export default function AdminSettingsPage() {
                         <Button
                           size="sm"
                           onClick={() => saveConfig(cfg.key)}
-                          disabled={savingKey === cfg.key || editing[cfg.key] === cfg.value}
+                          disabled={savingKey !== null || editing[cfg.key] === cfg.value}
                         >
                           {savingKey === cfg.key ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -456,6 +760,8 @@ interface UploadSettingsPanelProps {
   savingKey: string | null;
   saveConfig: (key: string) => Promise<void>;
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+  runtimeSelections: RuntimeSelections | null;
+  runtimeSelectionsRequestState: RuntimeSelectionsRequestState;
 }
 
 interface ListingSettingsPanelProps {
@@ -471,6 +777,8 @@ interface AuthSettingsPanelProps {
   setEditing: (next: Record<string, string>) => void;
   savingKey: string | null;
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+  runtimeSelections: RuntimeSelections | null;
+  runtimeSelectionsRequestState: RuntimeSelectionsRequestState;
 }
 
 interface AliyunSmsResourceSnapshot {
@@ -555,7 +863,7 @@ function ListingSettingsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <details open className="group">
+        <details className="group">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
             <div className="flex items-center gap-2">
               <Badge variant="secondary">上架任务</Badge>
@@ -576,7 +884,7 @@ function ListingSettingsPanel({
                 <Button
                   size="sm"
                   onClick={() => saveConfigs(LISTING_REFRESH_KEYS, '上架任务刷新')}
-                  disabled={isSavingRefresh}
+                  disabled={savingKey !== null}
                 >
                   {isSavingRefresh ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -650,23 +958,28 @@ function ListingSettingsPanel({
     </div>
   );
 }
-const AUTH_GENERAL_KEYS = [
+const AUTH_SMS_POLICY_KEYS = [
   'feature_sms_register',
   'feature_sms_login',
-  'feature_turnstile_login',
-  'auth_human_challenge_provider',
-  'auth_pow_signing_secret',
-  'auth_pow_difficulty',
-  'auth_pow_ttl_seconds',
-  'auth_sms_provider',
   'auth_sms_code_ttl_seconds',
   'auth_sms_rate_limit_seconds',
   'auth_sms_daily_per_phone_limit',
   'auth_sms_daily_per_ip_limit',
   'auth_sms_daily_global_limit',
   'auth_sms_test_phone_whitelist',
-  'auth_turnstile_site_key',
-  'auth_turnstile_secret_key',
+];
+
+const AUTH_SMS_PROVIDER_KEYS = ['auth_sms_provider'];
+
+const AUTH_HUMAN_PROVIDER_KEYS = [
+  'auth_human_challenge_provider',
+  'feature_turnstile_login',
+];
+
+const AUTH_POW_KEYS = [
+  'auth_pow_signing_secret',
+  'auth_pow_difficulty',
+  'auth_pow_ttl_seconds',
 ];
 
 const AUTH_TENCENT_KEYS = [
@@ -695,14 +1008,73 @@ const AUTH_ALIYUN_KEYS = [
 ];
 
 const AUTH_TURNSTILE_KEYS = [
-  'auth_human_challenge_provider',
-  'auth_pow_difficulty',
-  'auth_pow_ttl_seconds',
-  'feature_turnstile_login',
   'auth_turnstile_site_key',
   'auth_turnstile_secret_key',
   'auth_turnstile_allowed_hostnames',
 ];
+
+const HUMAN_CHALLENGE_LABELS: Record<HumanChallengeProvider, string> = {
+  disabled: '已关闭',
+  'builtin-pow': '浏览器工作量证明',
+  'cloudflare-turnstile': 'Cloudflare Turnstile',
+};
+
+const SMS_PROVIDER_LABELS: Record<string, string> = {
+  '': '未启用',
+  env: '服务器环境',
+  console: 'Console 测试',
+  tencent: '腾讯云短信',
+  aliyun: '阿里云短信',
+};
+
+const ALIYUN_CREDENTIAL_SOURCE_LABELS: Record<AliyunSmsCredentialSource, string> = {
+  db_access_key: '后台 AccessKey',
+  sms_env_access_key: 'SMS_ALIYUN_* 环境凭证',
+  mixed_access_key: '后台 + 环境 AccessKey',
+  aliyun_env_access_key: '阿里云 SDK 环境凭证',
+  ecs_ram_role: 'ECS RAM 角色',
+  aliyun_default_chain: '阿里云 SDK 默认凭证链',
+};
+
+function runtimeSourceLabel(source: 'env' | 'db' | 'mixed'): string {
+  return source === 'db' ? '后台配置' : source === 'mixed' ? '后台 + 环境' : '环境变量';
+}
+
+function resolveRuntimeState(
+  requestState: RuntimeSelectionsRequestState,
+  readiness: {
+    configured: boolean | undefined;
+    effectiveAvailable: boolean;
+    providerConfigValid?: boolean;
+    configurationValid?: boolean;
+    disabled?: boolean;
+  },
+): RuntimeState {
+  if (requestState === 'loading') return 'loading';
+  if (requestState === 'error') return 'error';
+  if (readiness.providerConfigValid === false || readiness.configurationValid === false) return 'invalid';
+  if (readiness.disabled) return 'disabled';
+  if (!readiness.configured || !readiness.effectiveAvailable) return 'not-ready';
+  return 'active';
+}
+
+function runtimeStateLabel(state: RuntimeState): string {
+  if (state === 'active') return '已生效';
+  if (state === 'disabled') return '已关闭';
+  if (state === 'not-ready') return '未配置/未就绪';
+  if (state === 'invalid') return '配置无效（失败关闭）';
+  if (state === 'error') return '状态读取失败';
+  return '状态读取中';
+}
+
+function runtimeStateBadgeVariant(
+  state: RuntimeState,
+): 'success' | 'warning' | 'destructive' | 'secondary' {
+  if (state === 'active') return 'success';
+  if (state === 'not-ready') return 'warning';
+  if (state === 'invalid' || state === 'error') return 'destructive';
+  return 'secondary';
+}
 
 function AuthSettingsPanel({
   items,
@@ -710,11 +1082,14 @@ function AuthSettingsPanel({
   setEditing,
   savingKey,
   saveConfigs,
+  runtimeSelections,
+  runtimeSelectionsRequestState,
 }: AuthSettingsPanelProps) {
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
-  const provider = editing.auth_sms_provider || 'env';
+  const provider = (editing.auth_sms_provider || 'env') as SmsProviderSelection;
   const aliyunCredentialMode = editing.auth_sms_aliyun_credential_mode || 'auto';
-  const challengeProvider = editing.auth_human_challenge_provider || (editing.feature_turnstile_login === 'true' ? 'cloudflare-turnstile' : 'disabled');
+  const challengeProvider = (editing.auth_human_challenge_provider
+    || (editing.feature_turnstile_login === 'true' ? 'cloudflare-turnstile' : 'disabled')) as HumanChallengeProvider;
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const selectAliyunCredentialMode = (mode: string) => {
     const clearCompatibilityKeys = mode === 'ecs_ram_role'
@@ -728,10 +1103,26 @@ function AuthSettingsPanel({
       } : {}),
     });
   };
-  const isSavingAuth = savingKey === 'group:短信与人机验证';
+  const isSavingSmsPolicy = savingKey === 'group:短信开关与安全策略';
+  const isSavingSmsProvider = savingKey === 'group:短信服务商';
+  const isSavingHumanProvider = savingKey === 'group:人机验证服务商';
+  const isSavingPow = savingKey === 'group:浏览器工作量证明';
   const isSavingTencent = savingKey === 'group:腾讯云短信';
   const isSavingAliyun = savingKey === 'group:阿里云短信';
   const isSavingTurnstile = savingKey === 'group:Cloudflare Turnstile';
+  const smsRuntime = runtimeSelections?.sms;
+  const humanRuntime = runtimeSelections?.humanChallenge;
+  const smsRuntimeState = resolveRuntimeState(runtimeSelectionsRequestState, {
+    configured: smsRuntime?.configured,
+    effectiveAvailable: Boolean(smsRuntime?.effectiveProvider),
+  });
+  const humanRuntimeState = resolveRuntimeState(runtimeSelectionsRequestState, {
+    configured: humanRuntime?.configured,
+    effectiveAvailable: Boolean(humanRuntime && humanRuntime.effectiveProvider !== 'disabled'),
+    providerConfigValid: humanRuntime?.providerConfigValid,
+    configurationValid: humanRuntime?.hostnameConfigValid,
+    disabled: humanRuntime?.effectiveProvider === 'disabled',
+  });
   const [aliyunResources, setAliyunResources] = useState<AliyunSmsResourceSnapshot | null>(null);
   const [loadingAliyunResources, setLoadingAliyunResources] = useState(false);
 
@@ -801,43 +1192,120 @@ function AuthSettingsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <details open className="group">
+        <details className="group">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Badge variant="secondary">短信与人机验证</Badge>
               <span className="text-sm text-muted-foreground">
                 注册短信、登录人机验证、测试短信白名单
               </span>
+              <Badge variant={runtimeStateBadgeVariant(smsRuntimeState)}>
+                短信：
+                {runtimeSelectionsRequestState === 'ready' && smsRuntime
+                  ? `${SMS_PROVIDER_LABELS[smsRuntime.effectiveProvider] || smsRuntime.effectiveProvider} · `
+                  : ''}
+                {runtimeStateLabel(smsRuntimeState)}
+              </Badge>
+              <Badge variant={runtimeStateBadgeVariant(humanRuntimeState)}>
+                人机：
+                {runtimeSelectionsRequestState === 'ready' && humanRuntime
+                  ? `${HUMAN_CHALLENGE_LABELS[humanRuntime.effectiveProvider]} · `
+                  : ''}
+                {runtimeStateLabel(humanRuntimeState)}
+              </Badge>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
           </summary>
           <CardContent className="space-y-6 border-t pt-5">
-            <section className="rounded-md border bg-muted/20 p-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <section className="space-y-3 rounded-md border bg-muted/20 p-4">
+              <div>
+                <h3 className="text-sm font-medium">当前运行状态</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  这里显示服务端实际生效值；下方选择器显示待保存的后台值，两者不会再混用。
+                  VPS 的 HUMAN_CHALLENGE_PROVIDER / TURNSTILE_* 环境变量优先于后台配置。
+                </p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="flex flex-wrap items-center gap-2 rounded-md bg-background px-3 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-muted-foreground">短信当前生效：</span>
+                    <span className="font-medium">
+                      {runtimeSelectionsRequestState === 'loading'
+                        ? '读取中'
+                        : runtimeSelectionsRequestState === 'ready' && smsRuntime
+                          ? SMS_PROVIDER_LABELS[smsRuntime.effectiveProvider] || smsRuntime.effectiveProvider
+                          : '无法确认'}
+                    </span>
+                    {runtimeSelectionsRequestState === 'ready' && smsRuntime && (
+                      <>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          配置来源：{runtimeSourceLabel(smsRuntime.source)}
+                        </span>
+                        {smsRuntime.effectiveProvider === 'aliyun' && smsRuntime.credentialSource && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            凭证：{ALIYUN_CREDENTIAL_SOURCE_LABELS[smsRuntime.credentialSource]}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  <Badge className="shrink-0" variant={runtimeStateBadgeVariant(smsRuntimeState)}>
+                    {runtimeStateLabel(smsRuntimeState)}
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 rounded-md bg-background px-3 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-muted-foreground">人机验证当前生效：</span>
+                    <span className="font-medium">
+                      {runtimeSelectionsRequestState === 'loading'
+                        ? '读取中'
+                        : runtimeSelectionsRequestState === 'ready' && humanRuntime
+                          ? HUMAN_CHALLENGE_LABELS[humanRuntime.effectiveProvider]
+                          : '无法确认'}
+                    </span>
+                    {runtimeSelectionsRequestState === 'ready' && humanRuntime && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        配置来源：{runtimeSourceLabel(humanRuntime.source)}
+                      </span>
+                    )}
+                  </div>
+                  <Badge className="shrink-0" variant={runtimeStateBadgeVariant(humanRuntimeState)}>
+                    {runtimeStateLabel(humanRuntimeState)}
+                  </Badge>
+                </div>
+              </div>
+              {(smsRuntime?.overridden || humanRuntime?.overridden) && (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                  当前存在环境变量或运行模式覆盖。保存后台值后，实际状态可能需要同步 VPS 环境配置并重启服务才会改变。
+                </p>
+              )}
+              {smsRuntime?.warning && (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                  {smsRuntime.warning}
+                </p>
+              )}
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="text-sm font-medium">云端注册与登录保护</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    VPS 显式设置的 HUMAN_CHALLENGE_PROVIDER / TURNSTILE_* 环境变量优先于后台配置；
-                    未设置时使用后台值。密钥保存后会加密入库，页面只返回掩码。
-                  </p>
+                  <h3 className="text-sm font-medium">短信开关与安全策略</h3>
+                  <p className="text-xs text-muted-foreground">控制注册/登录入口、验证码时效、频率和费用上限。</p>
                 </div>
                 <Button
                   size="sm"
-                  onClick={() => saveConfigs(AUTH_GENERAL_KEYS, '短信与人机验证')}
-                  disabled={isSavingAuth}
+                  onClick={() => saveConfigs(AUTH_SMS_POLICY_KEYS, '短信开关与安全策略')}
+                  disabled={savingKey !== null}
                 >
-                  {isSavingAuth ? (
+                  {isSavingSmsPolicy ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Save className="h-3.5 w-3.5" />
                   )}
-                  <span className="ml-1">保存验证配置</span>
+                  <span className="ml-1">保存短信开关与安全策略</span>
                 </Button>
               </div>
-            </section>
-
-            <section className="space-y-3">
               <div className="grid gap-4 md:grid-cols-2">
                 <ConfigToggle
                   cfg={configs.feature_sms_register}
@@ -849,20 +1317,85 @@ function AuthSettingsPanel({
                   editing={editing}
                   setValue={setValue}
                 />
-                <ConfigToggle
-                  cfg={configs.feature_turnstile_login}
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.auth_sms_code_ttl_seconds}
                   editing={editing}
                   setValue={setValue}
+                  placeholder="300"
                 />
+                <ConfigInput
+                  cfg={configs.auth_sms_rate_limit_seconds}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="60"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_test_phone_whitelist}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="13800138000,13900139000"
+                />
+              </div>
+              <div className="space-y-3 border-t pt-3">
+                <div>
+                  <h4 className="text-sm font-medium">短信每日额度与费用熔断</h4>
+                  <p className="text-xs text-muted-foreground">
+                    无论阿里云、腾讯云还是 env 选择的正式短信服务，每次提交给供应商的发送尝试都会计数，
+                    超时或结果不确定时也不会退还额度。
+                    额度按 Asia/Shanghai 自然日重置；达到手机号、来源 IP 或全局任一上限后拒绝继续发送。
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <ConfigInput
+                    cfg={configs.auth_sms_daily_per_phone_limit}
+                    editing={editing}
+                    setValue={setValue}
+                    type="number"
+                    placeholder="10"
+                  />
+                  <ConfigInput
+                    cfg={configs.auth_sms_daily_per_ip_limit}
+                    editing={editing}
+                    setValue={setValue}
+                    type="number"
+                    placeholder="100"
+                  />
+                  <ConfigInput
+                    cfg={configs.auth_sms_daily_global_limit}
+                    editing={editing}
+                    setValue={setValue}
+                    type="number"
+                    placeholder="1000"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  三项均为强制安全上限，不能填写 0。全局额度按当前 Redis 实例统计，国内与国外独立部署分别计数。
+                </p>
               </div>
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
-              <div>
-                <h3 className="text-sm font-medium">短信服务来源</h3>
-                <p className="text-xs text-muted-foreground">
-                  正式云端可选择阿里云或腾讯云短信；env 表示继续读取服务器环境变量。
-                </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">短信服务商</h3>
+                  <p className="text-xs text-muted-foreground">
+                    正式云端可选择阿里云或腾讯云短信；服务器环境表示继续读取 VPS .env。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(AUTH_SMS_PROVIDER_KEYS, '短信服务商')}
+                  disabled={savingKey !== null}
+                >
+                  {isSavingSmsProvider ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存短信服务商</span>
+                </Button>
               </div>
               <div className="grid gap-2 md:grid-cols-4">
                 {[
@@ -886,67 +1419,15 @@ function AuthSettingsPanel({
                   </button>
                 ))}
               </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput
-                  cfg={configs.auth_sms_code_ttl_seconds}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="300"
-                />
-                <ConfigInput
-                  cfg={configs.auth_sms_rate_limit_seconds}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="60"
-                />
-                <ConfigInput
-                  cfg={configs.auth_sms_test_phone_whitelist}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="13800138000,13900139000"
-                />
-              </div>
             </section>
 
-            <section className="space-y-3 rounded-md border p-4">
-              <div>
-                <h3 className="text-sm font-medium">短信每日额度与费用熔断</h3>
-                <p className="text-xs text-muted-foreground">
-                  无论阿里云、腾讯云还是 env 选择的正式短信服务，每次提交给供应商的发送尝试都会计数，
-                  超时或结果不确定时也不会退还额度。
-                  额度按 Asia/Shanghai 自然日重置；达到手机号、来源 IP 或全局任一上限后拒绝继续发送。
-                </p>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <ConfigInput
-                  cfg={configs.auth_sms_daily_per_phone_limit}
-                  editing={editing}
-                  setValue={setValue}
-                  type="number"
-                  placeholder="10"
-                />
-                <ConfigInput
-                  cfg={configs.auth_sms_daily_per_ip_limit}
-                  editing={editing}
-                  setValue={setValue}
-                  type="number"
-                  placeholder="100"
-                />
-                <ConfigInput
-                  cfg={configs.auth_sms_daily_global_limit}
-                  editing={editing}
-                  setValue={setValue}
-                  type="number"
-                  placeholder="1000"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                三项均为强制安全上限，不能填写 0。全局额度按当前 Redis 实例统计，国内与国外独立部署分别计数。
-              </p>
-            </section>
-
-            <section className="space-y-3 rounded-md border p-4">
+            {provider === 'aliyun' && (
+              <details className="rounded-md border">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                  阿里云短信配置
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">默认收起</span>
+                </summary>
+                <section className="space-y-3 border-t p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <h3 className="text-sm font-medium">阿里云短信</h3>
@@ -972,12 +1453,8 @@ function AuthSettingsPanel({
                   <Button
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() =>
-                      saveConfigs(['auth_sms_provider', ...AUTH_ALIYUN_KEYS], '阿里云短信', {
-                        auth_sms_provider: 'aliyun',
-                      })
-                    }
-                    disabled={isSavingAliyun}
+                    onClick={() => saveConfigs(AUTH_ALIYUN_KEYS, '阿里云短信')}
+                    disabled={savingKey !== null}
                   >
                     {isSavingAliyun ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1142,9 +1619,17 @@ function AuthSettingsPanel({
                   阿里云返回的资源超过单页上限，当前仅显示前 50 条，请在控制台确认其余候选。
                 </p>
               )}
-            </section>
+                </section>
+              </details>
+            )}
 
-            <section className="space-y-3 rounded-md border p-4">
+            {provider === 'tencent' && (
+              <details className="rounded-md border">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                  腾讯云短信配置
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">默认收起</span>
+                </summary>
+                <section className="space-y-3 border-t p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">腾讯云短信</h3>
@@ -1154,12 +1639,8 @@ function AuthSettingsPanel({
                 </div>
                 <Button
                   size="sm"
-                  onClick={() =>
-                    saveConfigs(['auth_sms_provider', ...AUTH_TENCENT_KEYS], '腾讯云短信', {
-                      auth_sms_provider: 'tencent',
-                    })
-                  }
-                  disabled={isSavingTencent}
+                  onClick={() => saveConfigs(AUTH_TENCENT_KEYS, '腾讯云短信')}
+                  disabled={savingKey !== null}
                 >
                   {isSavingTencent ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1210,14 +1691,37 @@ function AuthSettingsPanel({
                   placeholder="模板 ID"
                 />
               </div>
-            </section>
+                </section>
+              </details>
+            )}
 
             <section className="space-y-3 rounded-md border p-4">
-              <div>
-                <h3 className="text-sm font-medium">人机验证服务商</h3>
-                <p className="text-xs text-muted-foreground">
-                  国内可使用免费的浏览器工作量证明；国外可继续使用 Cloudflare Turnstile。
-                </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">人机验证服务商</h3>
+                  <p className="text-xs text-muted-foreground">
+                    国内可使用免费的浏览器工作量证明；国外可继续使用 Cloudflare Turnstile。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(
+                    AUTH_HUMAN_PROVIDER_KEYS,
+                    '人机验证服务商',
+                    {
+                      auth_human_challenge_provider: challengeProvider,
+                      feature_turnstile_login: challengeProvider === 'cloudflare-turnstile' ? 'true' : 'false',
+                    },
+                  )}
+                  disabled={savingKey !== null}
+                >
+                  {isSavingHumanProvider ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存人机验证服务商</span>
+                </Button>
               </div>
               <div className="grid gap-2 md:grid-cols-3">
                 {[
@@ -1239,60 +1743,89 @@ function AuthSettingsPanel({
                 ))}
               </div>
               {challengeProvider === 'builtin-pow' && (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <ConfigInput cfg={configs.auth_pow_signing_secret} editing={editing} setValue={setValue} type="password" placeholder="至少 32 位随机密钥" />
-                  <ConfigInput cfg={configs.auth_pow_difficulty} editing={editing} setValue={setValue} placeholder="4" />
-                  <ConfigInput cfg={configs.auth_pow_ttl_seconds} editing={editing} setValue={setValue} placeholder="120" />
-                  <p className="md:col-span-2 text-xs text-muted-foreground">建议难度 4–5 个十六进制前导零、有效期 120 秒；难度越高，低性能设备需要更久。</p>
-                </div>
+                <details className="rounded-md border border-dashed">
+                  <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                    浏览器工作量证明参数
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">默认收起</span>
+                  </summary>
+                  <div className="space-y-3 border-t p-3">
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        onClick={() => saveConfigs(AUTH_POW_KEYS, '浏览器工作量证明')}
+                        disabled={savingKey !== null}
+                      >
+                        {isSavingPow ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )}
+                        <span className="ml-1">保存 PoW 参数</span>
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <ConfigInput cfg={configs.auth_pow_signing_secret} editing={editing} setValue={setValue} type="password" placeholder="至少 32 位随机密钥" />
+                      <ConfigInput cfg={configs.auth_pow_difficulty} editing={editing} setValue={setValue} placeholder="4" />
+                      <ConfigInput cfg={configs.auth_pow_ttl_seconds} editing={editing} setValue={setValue} placeholder="120" />
+                      <p className="md:col-span-2 text-xs text-muted-foreground">建议难度 4-5 个十六进制前导零、有效期 120 秒；难度越高，低性能设备需要更久。</p>
+                    </div>
+                  </div>
+                </details>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => saveConfigs(AUTH_TURNSTILE_KEYS, 'Cloudflare Turnstile')}
-                  disabled={isSavingTurnstile}
-                >
-                  {isSavingTurnstile ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Save className="h-3.5 w-3.5" />
-                  )}
-                  <span className="ml-1">保存 Turnstile</span>
-                </Button>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput
-                  cfg={configs.auth_turnstile_site_key}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="0x4AAAA..."
-                />
-                <ConfigInput
-                  cfg={configs.auth_turnstile_secret_key}
-                  editing={editing}
-                  setValue={setValue}
-                  type="password"
-                  placeholder="0x4AAAA... secret"
-                />
-                <div className="md:col-span-2">
-                  <ConfigInput
-                    cfg={configs.auth_turnstile_allowed_hostnames}
-                    editing={editing}
-                    setValue={setValue}
-                    placeholder="example.com,www.example.com"
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                使用英文逗号分隔精确 hostname，不要填写 https://、端口、路径或通配符。
-                留空或配置非法时 Turnstile 会拒绝通过；生产环境应填写全部实际登录域名。
-              </p>
+              {challengeProvider === 'cloudflare-turnstile' && (
+                <details className="rounded-md border border-dashed">
+                  <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
+                    Cloudflare Turnstile 配置
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">默认收起</span>
+                  </summary>
+                  <div className="space-y-3 border-t p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground">
+                        Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={() => saveConfigs(AUTH_TURNSTILE_KEYS, 'Cloudflare Turnstile')}
+                        disabled={savingKey !== null}
+                      >
+                        {isSavingTurnstile ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )}
+                        <span className="ml-1">保存 Turnstile</span>
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <ConfigInput
+                        cfg={configs.auth_turnstile_site_key}
+                        editing={editing}
+                        setValue={setValue}
+                        placeholder="0x4AAAA..."
+                      />
+                      <ConfigInput
+                        cfg={configs.auth_turnstile_secret_key}
+                        editing={editing}
+                        setValue={setValue}
+                        type="password"
+                        placeholder="0x4AAAA... secret"
+                      />
+                      <div className="md:col-span-2">
+                        <ConfigInput
+                          cfg={configs.auth_turnstile_allowed_hostnames}
+                          editing={editing}
+                          setValue={setValue}
+                          placeholder="example.com,www.example.com"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      使用英文逗号分隔精确 hostname，不要填写 https://、端口、路径或通配符。
+                      留空或配置非法时 Turnstile 会拒绝通过；生产环境应填写全部实际登录域名。
+                    </p>
+                  </div>
+                </details>
+              )}
             </section>
           </CardContent>
         </details>
@@ -1461,7 +1994,7 @@ function BackupSettingsPanel({
                 <Button
                   size="sm"
                   onClick={() => saveConfigs(BACKUP_GENERAL_KEYS, '备份基础策略')}
-                  disabled={isSavingGeneral}
+                  disabled={savingKey !== null}
                 >
                   {isSavingGeneral ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1503,7 +2036,7 @@ function BackupSettingsPanel({
                       backup_remote_provider: remoteProvider,
                     })
                   }
-                  disabled={isSavingRemote || (remoteEnabled && missingRemote.length > 0)}
+                  disabled={savingKey !== null || (remoteEnabled && missingRemote.length > 0)}
                   title={
                     remoteEnabled && missingRemote.length > 0
                       ? `缺少 ${missingRemote.length} 个必填项`
@@ -1892,7 +2425,7 @@ function AiSettingsPanel({
                 <Button
                   size="sm"
                   onClick={() => saveConfigs(AI_PROVIDER_KEYS, 'AI 服务')}
-                  disabled={isSavingProvider}
+                  disabled={savingKey !== null}
                 >
                   {isSavingProvider ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2004,7 +2537,7 @@ function AiSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
-                    disabled={savingKey === 'group:AI 生图服务'}
+                    disabled={savingKey !== null}
                   >
                     {savingKey === 'group:AI 生图服务' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2090,7 +2623,7 @@ function AiSettingsPanel({
                 <Button
                   size="sm"
                   onClick={() => saveConfigs(AI_IMAGE_TRANSLATION_PROVIDER_KEYS, 'AI 图片翻译服务')}
-                  disabled={savingKey === 'group:AI 图片翻译服务'}
+                    disabled={savingKey !== null}
                 >
                   {savingKey === 'group:AI 图片翻译服务' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2155,7 +2688,7 @@ function AiSettingsPanel({
                     size="sm"
                     variant="outline"
                     onClick={() => saveConfigs(AI_FEATURE_KEYS, 'AI 功能开关')}
-                    disabled={isSavingFeatures}
+                    disabled={savingKey !== null}
                   >
                     {isSavingFeatures ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2167,7 +2700,7 @@ function AiSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(AI_LIMIT_KEYS, 'AI 额度')}
-                    disabled={isSavingLimits}
+                    disabled={savingKey !== null}
                   >
                     {isSavingLimits ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2285,7 +2818,7 @@ function AiSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 提示词')}
-                    disabled={isSavingPrompts}
+                    disabled={savingKey !== null}
                   >
                     {isSavingPrompts ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2399,6 +2932,8 @@ function UploadSettingsPanel({
   savingKey,
   saveConfig,
   saveConfigs,
+  runtimeSelections,
+  runtimeSelectionsRequestState,
 }: UploadSettingsPanelProps) {
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const mode = editing.upload_storage_backend || 'env';
@@ -2408,18 +2943,34 @@ function UploadSettingsPanel({
   const isSavingAdvanced = savingKey === 'group:上传高级选项';
 
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
-  const inferredProvider = inferObjectStorageProvider(editing.upload_oss_endpoint || '');
   const savedProvider = editing.upload_oss_provider as ObjectStorageProvider | undefined;
-  const provider =
-    savedProvider && !(savedProvider === 's3-compatible' && inferredProvider !== 's3-compatible')
-      ? savedProvider
-      : inferredProvider;
+  const provider: ObjectStorageProvider = savedProvider === 'aliyun-oss'
+    || savedProvider === 'cloudflare-r2'
+    || savedProvider === 's3-compatible'
+    ? savedProvider
+    : runtimeSelections?.uploadStorage.savedProvider || 's3-compatible';
+  const storageRuntime = runtimeSelections?.uploadStorage;
+  const storageRuntimeState = resolveRuntimeState(runtimeSelectionsRequestState, {
+    configured: storageRuntime?.configured,
+    effectiveAvailable: Boolean(storageRuntime?.effectiveBackend),
+  });
   const providerLabel =
     provider === 'aliyun-oss'
       ? '阿里云 OSS'
       : provider === 'cloudflare-r2'
         ? 'Cloudflare R2'
         : 'S3 兼容';
+  const effectiveProviderLabel = storageRuntime?.effectiveProvider === 'aliyun-oss'
+    ? '阿里云 OSS'
+    : storageRuntime?.effectiveProvider === 'cloudflare-r2'
+      ? 'Cloudflare R2'
+      : storageRuntime?.effectiveProvider === 's3-compatible'
+        ? 'S3 兼容'
+        : storageRuntime?.effectiveBackend === 'local'
+          ? '本地存储'
+          : storageRuntime?.effectiveBackend === 'ozon-cdn'
+            ? 'OZON CDN'
+            : '未配置';
   const aliyunRamPolicy =
     provider === 'aliyun-oss' && editing.upload_oss_bucket
       ? JSON.stringify(getAliyunOssRamPolicy(editing.upload_oss_bucket), null, 2)
@@ -2475,11 +3026,18 @@ function UploadSettingsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <details open className="group">
+        <details className="group">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Badge variant="secondary">上传与对象存储</Badge>
-              <span className="text-sm text-muted-foreground">S3 兼容对象存储配置中心</span>
+              <span className="text-sm text-muted-foreground">阿里云 OSS / Cloudflare R2 / S3</span>
+              <Badge variant={runtimeStateBadgeVariant(storageRuntimeState)}>
+                当前生效：
+                {runtimeSelectionsRequestState === 'ready' && storageRuntime
+                  ? `${effectiveProviderLabel} · `
+                  : ''}
+                {runtimeStateLabel(storageRuntimeState)}
+              </Badge>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
@@ -2493,13 +3051,22 @@ function UploadSettingsPanel({
                     这里是图片和公告附件上传用的对象存储，不是数据库备份。填完必填项后，到"接口与集成"页面点
                     OSS 测试。
                   </p>
+                  {runtimeSelectionsRequestState === 'ready' && storageRuntime && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      当前生效：<span className="font-medium text-foreground">{effectiveProviderLabel}</span>
+                      <span className="ml-2">配置来源：{runtimeSourceLabel(storageRuntime.source)}</span>
+                    </p>
+                  )}
                 </div>
-                <Badge variant={isR2Ready ? 'default' : 'secondary'}>
-                  {isR2Ready
-                    ? `${providerLabel} 已启用`
-                    : `对象存储必填项 ${filledR2Count}/${R2_REQUIRED_KEYS.length}`}
+                <Badge variant={runtimeStateBadgeVariant(storageRuntimeState)}>
+                  {runtimeStateLabel(storageRuntimeState)}
                 </Badge>
               </div>
+              {runtimeSelectionsRequestState === 'ready' && storageRuntime?.overridden && (
+                <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                  当前运行配置与后台保存选择不同。请先确认配置来源，再决定是否覆盖服务器环境。
+                </p>
+              )}
               {!isR2Ready && (
                 <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                   {!hasAllR2Required ? (
@@ -2542,7 +3109,7 @@ function UploadSettingsPanel({
                   size="sm"
                   onClick={() => saveConfig('upload_storage_backend')}
                   disabled={
-                    isSavingMode ||
+                    savingKey !== null ||
                     editing.upload_storage_backend === configs.upload_storage_backend?.value
                   }
                 >
@@ -2668,7 +3235,7 @@ function UploadSettingsPanel({
                       { upload_storage_backend: 'oss', upload_oss_provider: provider },
                     )
                   }
-                  disabled={isSavingR2 || !hasAllR2Required}
+                  disabled={savingKey !== null || !hasAllR2Required}
                   title={!hasAllR2Required ? '请先补齐对象存储必填项' : undefined}
                 >
                   {isSavingR2 ? (
@@ -2751,7 +3318,7 @@ function UploadSettingsPanel({
                       type="button"
                       size="sm"
                       onClick={() => saveConfigs(UPLOAD_ADVANCED_KEYS, '上传高级选项')}
-                      disabled={isSavingAdvanced}
+                      disabled={savingKey !== null}
                     >
                       {isSavingAdvanced ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2797,7 +3364,7 @@ function UploadSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
-                    disabled={isSavingSecurity}
+                    disabled={savingKey !== null}
                   >
                     {isSavingSecurity ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />

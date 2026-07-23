@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const consumed = new Set<string>();
 const configStore = new Map<string, string>();
@@ -35,6 +35,11 @@ describe('human challenge', () => {
     vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', 'test-secret-at-least-32-characters-long');
     vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', '2');
     vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', '60');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it('issues an action-bound signed challenge and accepts it only once', async () => {
@@ -122,6 +127,58 @@ describe('human challenge', () => {
     await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(false);
   });
 
+  it('fails closed when the active PoW signing secret is malformed ciphertext', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', '');
+    vi.stubEnv('ENCRYPTION_KEY', '12345678901234567890123456789012');
+    configStore.set('auth_pow_signing_secret', 'enc:v1:not-valid-ciphertext');
+
+    const { getHumanChallengeRuntimeConfig, issueHumanChallenge, verifyHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'builtin-pow',
+      providerConfigValid: false,
+      signingSecret: '',
+    });
+    await expect(issueHumanChallenge('login')).rejects.toThrow(/configuration is invalid/);
+    await expect(verifyHumanChallenge({ action: 'login', token: '' })).resolves.toBe(false);
+  });
+
+  it('fails closed without calling Turnstile when its active secret is malformed ciphertext', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
+    vi.stubEnv('TURNSTILE_ALLOWED_HOSTNAMES', 'app.ss-erp.com');
+    vi.stubEnv('ENCRYPTION_KEY', '12345678901234567890123456789012');
+    configStore.set('auth_turnstile_secret_key', 'enc:v1:not-valid-ciphertext');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getHumanChallengeRuntimeConfig, verifyHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'cloudflare-turnstile',
+      providerConfigValid: false,
+      turnstileSecretKey: '',
+    });
+    await expect(verifyHumanChallenge({ action: 'login', token: 'token' })).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores malformed secrets belonging to an inactive provider', async () => {
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
+    vi.stubEnv('ENCRYPTION_KEY', '12345678901234567890123456789012');
+    configStore.set('auth_turnstile_secret_key', 'enc:v1:not-valid-ciphertext');
+
+    const { getHumanChallengeRuntimeConfig, issueHumanChallenge } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'builtin-pow',
+      providerConfigValid: true,
+      signingSecret: 'test-secret-at-least-32-characters-long',
+      turnstileSecretKey: '',
+    });
+    await expect(issueHumanChallenge('login')).resolves.toMatchObject({ provider: 'builtin-pow' });
+  });
+
   it('fails closed instead of falling back when the explicit provider is invalid', async () => {
     vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'turnstile-typo');
     configStore.set('auth_human_challenge_provider', 'disabled');
@@ -155,6 +212,73 @@ describe('human challenge', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'non-numeric difficulty', difficulty: 'invalid', ttl: '60',
+      expectedDifficulty: 4, expectedTtl: 60,
+    },
+    {
+      name: 'fractional difficulty', difficulty: '2.5', ttl: '60',
+      expectedDifficulty: 4, expectedTtl: 60,
+    },
+    {
+      name: 'out-of-range difficulty', difficulty: '6', ttl: '60',
+      expectedDifficulty: 4, expectedTtl: 60,
+    },
+    {
+      name: 'non-numeric TTL', difficulty: '2', ttl: 'invalid',
+      expectedDifficulty: 2, expectedTtl: 120,
+    },
+    {
+      name: 'fractional TTL', difficulty: '2', ttl: '60.5',
+      expectedDifficulty: 2, expectedTtl: 120,
+    },
+    {
+      name: 'out-of-range TTL', difficulty: '2', ttl: '601',
+      expectedDifficulty: 2, expectedTtl: 120,
+    },
+  ])('fails closed for $name', async ({ difficulty, ttl, expectedDifficulty, expectedTtl }) => {
+    vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', difficulty);
+    vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', ttl);
+
+    const {
+      getHumanChallengeRuntimeConfig,
+      getPublicHumanChallengeConfig,
+      issueHumanChallenge,
+      verifyHumanChallenge,
+    } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'builtin-pow',
+      providerConfigValid: false,
+      difficulty: expectedDifficulty,
+      ttlSeconds: expectedTtl,
+      source: 'env',
+    });
+    await expect(getPublicHumanChallengeConfig()).resolves.toMatchObject({
+      humanChallengeProvider: 'builtin-pow',
+      powDifficulty: expectedDifficulty,
+      powTtlSeconds: expectedTtl,
+    });
+    await expect(issueHumanChallenge('login')).rejects.toThrow(/configuration is invalid/);
+    await expect(verifyHumanChallenge({ action: 'login', token: '' })).resolves.toBe(false);
+  });
+
+  it('ignores invalid PoW overrides when a different challenge provider is active', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', 'not-a-number');
+    vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', '999');
+
+    const { getHumanChallengeRuntimeConfig } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'cloudflare-turnstile',
+      providerConfigValid: true,
+      difficulty: 4,
+      ttlSeconds: 120,
+    });
+  });
+
   it('loads the challenge provider and PoW settings from SystemConfig when env is absent', async () => {
     vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', '');
     vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', '');
@@ -172,6 +296,25 @@ describe('human challenge', () => {
       difficulty: 1,
       ttlSeconds: 45,
       source: 'system-config',
+    });
+  });
+
+  it('reports mixed provenance when a database-selected challenge uses an environment secret', async () => {
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', '');
+    vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', 'environment-secret-at-least-32-characters-long');
+    vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', '');
+    vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', '');
+    configStore.set('auth_human_challenge_provider', 'builtin-pow');
+    configStore.set('auth_pow_signing_secret', 'database-secret-at-least-32-characters-long');
+    configStore.set('auth_pow_difficulty', '3');
+    configStore.set('auth_pow_ttl_seconds', '90');
+
+    const { getHumanChallengeRuntimeConfig } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({
+      provider: 'builtin-pow',
+      signingSecret: 'environment-secret-at-least-32-characters-long',
+      source: 'mixed',
     });
   });
 

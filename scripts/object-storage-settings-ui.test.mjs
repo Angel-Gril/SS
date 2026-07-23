@@ -11,7 +11,9 @@ const integrations = fs.readFileSync(
 );
 const systemConfigRoute = fs.readFileSync('apps/server/src/routes/system-config.ts', 'utf8');
 
-assert.match(source, /S3 兼容对象存储配置中心/);
+assert.match(source, /阿里云 OSS \/ Cloudflare R2 \/ S3/);
+assert.match(source, /当前生效/);
+assert.match(source, /配置来源/);
 assert.match(source, /阿里云 OSS/);
 assert.match(source, /Cloudflare R2/);
 assert.match(source, /S3 兼容/);

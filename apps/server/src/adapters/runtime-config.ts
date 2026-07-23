@@ -16,7 +16,7 @@ export interface OssEnvConfig {
 }
 
 export interface RuntimeConfig {
-  source: 'env' | 'system-config';
+  source: 'env' | 'system-config' | 'mixed';
   mode: RuntimeMode;
   imageStorage: 'local' | 'oss' | 'ozon-cdn';
   authSource: 'cookie' | 'token';
@@ -122,14 +122,27 @@ export async function getRuntimeConfigForStorage(): Promise<RuntimeConfig> {
         }
       : null;
 
-    const selectedBackend = normalizeStorageBackend(configuredBackend === 'env' ? undefined : configuredBackend)
-      || (hasOssConfig(dbOss) ? 'oss' : envConfig.imageStorage);
+    const normalizedConfiguredBackend = normalizeStorageBackend(
+      configuredBackend === 'env' ? undefined : configuredBackend,
+    );
+    const hasDbOssConfig = hasOssConfig(dbOss);
+    const selectedBackend = normalizedConfiguredBackend
+      || (hasDbOssConfig ? 'oss' : envConfig.imageStorage);
+    const backendSource: RuntimeConfig['source'] = normalizedConfiguredBackend || hasDbOssConfig
+      ? 'system-config'
+      : 'env';
+    const effectiveOssSource: RuntimeConfig['source'] = hasDbOssConfig ? 'system-config' : 'env';
+    const source: RuntimeConfig['source'] = selectedBackend === 'oss'
+      && hasOssConfig(hasDbOssConfig ? dbOss : envConfig.oss)
+      && backendSource !== effectiveOssSource
+      ? 'mixed'
+      : backendSource;
 
     return {
       ...envConfig,
-      source: configuredBackend !== 'env' || hasOssConfig(dbOss) ? 'system-config' : 'env',
+      source,
       imageStorage: selectedBackend,
-      oss: hasOssConfig(dbOss) ? dbOss : envConfig.oss,
+      oss: hasDbOssConfig ? dbOss : envConfig.oss,
       ozonCdnRelayUrl: ozonRelayUrl || envConfig.ozonCdnRelayUrl,
       localBaseUrl: localBaseUrl || envConfig.localBaseUrl,
     };

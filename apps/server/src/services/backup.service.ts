@@ -69,6 +69,14 @@ export interface BackupRunResult {
   warnings?: string[];
 }
 
+export interface BackupRunOptions {
+  force?: boolean;
+  trigger?: 'scheduled' | 'manual';
+  runId?: string;
+  signal?: AbortSignal;
+  assertLease?: () => Promise<void>;
+}
+
 const LEGACY_STATUS_PATH = '/var/backups/ss-erp/backup-status.json';
 const BACKUP_FILE_PREFIX = 'ss_erp_';
 const BACKUP_FILE_SUFFIX = '.sql.gz';
@@ -269,7 +277,7 @@ export function shouldRunBackupNow(schedule: string, now: Date, lastRunAt: Date 
       || (currentDayOfWeek === 0 && matchCronField(dayOfWeek!, 7, 0, 7)));
 }
 
-function backupFilename(date = new Date()): string {
+function backupFilename(date = new Date(), runId = ''): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   const ts = [
     date.getFullYear(),
@@ -280,7 +288,8 @@ function backupFilename(date = new Date()): string {
     pad(date.getMinutes()),
     pad(date.getSeconds()),
   ].join('');
-  return `${BACKUP_FILE_PREFIX}${ts}${BACKUP_FILE_SUFFIX}`;
+  const normalizedRunId = runId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 36);
+  return `${BACKUP_FILE_PREFIX}${ts}${normalizedRunId ? `_${normalizedRunId}` : ''}${BACKUP_FILE_SUFFIX}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -323,7 +332,11 @@ export function normalizePgDumpConnection(dbUrl: string): { dbUrl: string; schem
   }
 }
 
-async function dumpDatabaseToGzip(dbUrl: string, outputPath: string): Promise<void> {
+async function dumpDatabaseToGzip(
+  dbUrl: string,
+  outputPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
   if (!dbUrl) throw new Error('DATABASE_URL/BACKUP_DB_URL 未配置，无法执行数据库备份');
   const pgDump = process.env.PG_DUMP_BIN || 'pg_dump';
   const normalized = normalizePgDumpConnection(dbUrl);
@@ -339,6 +352,7 @@ async function dumpDatabaseToGzip(dbUrl: string, outputPath: string): Promise<vo
   }
   const child = spawn(pgDump, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(signal ? { signal } : {}),
   });
 
   let stderr = '';
@@ -354,21 +368,32 @@ async function dumpDatabaseToGzip(dbUrl: string, outputPath: string): Promise<vo
     });
   });
 
+  const outputPipeline = signal
+    ? pipeline(child.stdout!, createGzip(), createWriteStream(outputPath), { signal })
+    : pipeline(child.stdout!, createGzip(), createWriteStream(outputPath));
   await Promise.all([
-    pipeline(child.stdout!, createGzip(), createWriteStream(outputPath)),
+    outputPipeline,
     exitPromise,
   ]);
 }
 
-async function uploadBackup(remote: BackupRemoteConfig, filePath: string, filename: string): Promise<string> {
+async function uploadBackup(
+  remote: BackupRemoteConfig,
+  filePath: string,
+  filename: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const client = createS3Client(remote);
   const key = `${remote.prefix}${filename}`;
-  await client.send(new PutObjectCommand({
-    Bucket: remote.bucket,
-    Key: key,
-    Body: createReadStream(filePath),
-    ContentType: 'application/gzip',
-  }));
+  await client.send(
+    new PutObjectCommand({
+      Bucket: remote.bucket,
+      Key: key,
+      Body: createReadStream(filePath),
+      ContentType: 'application/gzip',
+    }),
+    signal ? { abortSignal: signal } : undefined,
+  );
   return key;
 }
 
@@ -463,7 +488,22 @@ export async function readBackupStatus(): Promise<Record<string, unknown> | null
   return null;
 }
 
-export async function runDatabaseBackup(options: { force?: boolean; trigger?: 'scheduled' | 'manual' } = {}): Promise<BackupRunResult> {
+function abortReason(signal: AbortSignal | undefined): Error | null {
+  if (!signal?.aborted) return null;
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error('数据库备份租约已失效');
+}
+
+async function assertBackupLease(options: BackupRunOptions): Promise<void> {
+  const before = abortReason(options.signal);
+  if (before) throw before;
+  await options.assertLease?.();
+  const after = abortReason(options.signal);
+  if (after) throw after;
+}
+
+export async function runDatabaseBackup(options: BackupRunOptions = {}): Promise<BackupRunResult> {
   const startedAt = new Date();
   const config = await getBackupRuntimeConfig();
   const warnings: string[] = [];
@@ -476,23 +516,31 @@ export async function runDatabaseBackup(options: { force?: boolean; trigger?: 's
     };
   }
 
+  await assertBackupLease(options);
   await mkdir(config.localDir, { recursive: true });
-  const filename = backupFilename(startedAt);
+  const filename = backupFilename(startedAt, options.runId);
   const finalPath = path.join(config.localDir, filename);
   const tmpPath = `${finalPath}.tmp.${process.pid}`;
+  let finalCommitted = false;
 
   try {
-    await dumpDatabaseToGzip(config.dbUrl, tmpPath);
+    await dumpDatabaseToGzip(config.dbUrl, tmpPath, options.signal);
+    await assertBackupLease(options);
     await rename(tmpPath, finalPath);
+    finalCommitted = true;
+    await assertBackupLease(options);
     const fileStat = await stat(finalPath);
+    await assertBackupLease(options);
     const localDeleted = await cleanupLocalBackups(config.localDir, config.localKeepDays);
 
     let remoteUploaded = false;
     let remoteKey = '';
     let remoteCleanupDeleted = 0;
     if (config.remote) {
-      remoteKey = await uploadBackup(config.remote, finalPath, filename);
+      await assertBackupLease(options);
+      remoteKey = await uploadBackup(config.remote, finalPath, filename, options.signal);
       remoteUploaded = true;
+      await assertBackupLease(options);
       try {
         remoteCleanupDeleted = await cleanupRemoteBackups(config.remote, config.remoteKeepDays);
       } catch (error: any) {
@@ -502,6 +550,7 @@ export async function runDatabaseBackup(options: { force?: boolean; trigger?: 's
       warnings.push(`远程备份未配置完整：缺少 ${config.remoteMissing.join('、') || '未知字段'}`);
     }
 
+    await assertBackupLease(options);
     const result: BackupRunResult = {
       ok: true,
       msg: `${options.trigger === 'manual' ? '手动' : '定时'}备份完成`,
@@ -525,6 +574,14 @@ export async function runDatabaseBackup(options: { force?: boolean; trigger?: 's
       await unlink(tmpPath);
     } catch {
       // ignore cleanup failure
+    }
+    const lostLease = abortReason(options.signal)
+      || (error?.name === 'BackupRunLeaseLostError' ? error as Error : null);
+    if (lostLease) {
+      if (finalCommitted) {
+        await unlink(finalPath).catch(() => undefined);
+      }
+      throw lostLease;
     }
     const result: BackupRunResult = {
       ok: false,

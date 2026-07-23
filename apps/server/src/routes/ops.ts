@@ -1,14 +1,31 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
-import { readBackupStatus, runDatabaseBackup } from '../services/backup.service.js';
+import { readBackupStatus } from '../services/backup.service.js';
+import {
+  BackupRunInProgressError,
+  BackupRunLeaseLostError,
+  BackupRunLockUnavailableError,
+  runDatabaseBackupSingleFlight,
+  startManualDatabaseBackup,
+} from '../services/backup-run.service.js';
 
 const DEFAULT_STATUS_PATH = '/var/backups/ss-erp/backup-status.json';
+
+async function requireLiveAccountSession(request: FastifyRequest, reply: FastifyReply) {
+  if ((request as any).user?.tokenUse === 'account_session') return;
+  return reply.status(403).send({
+    code: 0,
+    errorCode: 'ops_account_session_required',
+    msg: '运维操作需要当前账号会话',
+  });
+}
 
 export async function opsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
+  app.addHook('preHandler', requireLiveAccountSession);
 
   app.get('/backup-status', async (_request, reply) => {
     const serviceStatus = await readBackupStatus();
@@ -39,7 +56,42 @@ export async function opsRoutes(app: FastifyInstance) {
   });
 
   app.post('/backup/run', async (_request, reply) => {
-    const result = await runDatabaseBackup({ force: true, trigger: 'manual' });
+    const attempt = startManualDatabaseBackup();
+    if (!attempt.accepted) {
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'backup_in_progress',
+        msg: '已有手动备份正在执行，请稍后重试',
+      });
+    }
+
+    let result: Awaited<ReturnType<typeof runDatabaseBackupSingleFlight>>;
+    try {
+      result = await attempt.promise;
+    } catch (error) {
+      if (error instanceof BackupRunInProgressError) {
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'backup_in_progress',
+          msg: error.message,
+        });
+      }
+      if (error instanceof BackupRunLockUnavailableError) {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'backup_lock_unavailable',
+          msg: error.message,
+        });
+      }
+      if (error instanceof BackupRunLeaseLostError) {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'backup_lease_lost',
+          msg: error.message,
+        });
+      }
+      throw error;
+    }
     return reply.send({
       code: result.ok ? 1 : 0,
       msg: result.msg,

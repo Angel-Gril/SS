@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const PHASE_DEVELOPMENT_SERVER = 'phase-development-server';
+const PHASE_PRODUCTION_BUILD = 'phase-production-build';
+const PHASE_PRODUCTION_SERVER = 'phase-production-server';
+const configUrl = pathToFileURL('apps/web/next.config.mjs').href;
+
+async function loadConfigs({ sentryEnabled, cacheKey }) {
+  const originalDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+  if (sentryEnabled) {
+    process.env.NEXT_PUBLIC_SENTRY_DSN = 'https://public@example.invalid/1';
+  } else {
+    delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+  }
+
+  try {
+    const { default: createNextConfig } = await import(`${configUrl}?case=${cacheKey}`);
+    assert.equal(typeof createNextConfig, 'function', 'Next config should be phase-aware');
+
+    const dev = createNextConfig(PHASE_DEVELOPMENT_SERVER, { defaultConfig: {} });
+    return sentryEnabled ? { dev } : {
+      dev,
+      build: createNextConfig(PHASE_PRODUCTION_BUILD, { defaultConfig: {} }),
+      start: createNextConfig(PHASE_PRODUCTION_SERVER, { defaultConfig: {} }),
+    };
+  } finally {
+    if (originalDsn === undefined) {
+      delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    } else {
+      process.env.NEXT_PUBLIC_SENTRY_DSN = originalDsn;
+    }
+  }
+}
+
+const configs = await loadConfigs({ sentryEnabled: false, cacheKey: 'without-sentry' });
+assert.equal(configs.dev.distDir, '.next-dev', 'next dev should use .next-dev');
+assert.equal(configs.build.distDir, '.next', 'next build should use .next');
+assert.equal(configs.start.distDir, '.next', 'next start should use .next');
+
+const sentryConfigs = await loadConfigs({ sentryEnabled: true, cacheKey: 'with-sentry' });
+assert.equal(
+  sentryConfigs.dev.distDir,
+  '.next-dev',
+  'Sentry wrapping should preserve the development dist directory',
+);
+
+const gitignore = fs.readFileSync('.gitignore', 'utf8');
+const dockerignore = fs.readFileSync('.dockerignore', 'utf8');
+const ciWorkflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
+const tsconfig = JSON.parse(fs.readFileSync('apps/web/tsconfig.json', 'utf8'));
+
+assert.match(gitignore, /^\.next-dev\/$/m, 'root .next-dev output should be ignored');
+assert.match(gitignore, /^\*\*\/\.next-dev\/$/m, 'workspace .next-dev output should be ignored');
+assert.match(dockerignore, /^\.next-dev$/m, 'root .next-dev output should be excluded from Docker');
+assert.match(
+  dockerignore,
+  /^\*\*\/\.next-dev$/m,
+  'workspace .next-dev output should be excluded from Docker',
+);
+assert.ok(
+  tsconfig.include.includes('.next-dev/types/**/*.ts'),
+  'TypeScript should include generated Next dev types',
+);
+assert.ok(
+  tsconfig.include.includes('.next/types/**/*.ts'),
+  'TypeScript should keep generated production build types',
+);
+assert.match(
+  ciWorkflow,
+  /node scripts\/web-next-dist-dir\.test\.mjs/u,
+  'CI must run the Next dist directory isolation contract',
+);
+
+console.log('PASS web Next dist directory isolation');

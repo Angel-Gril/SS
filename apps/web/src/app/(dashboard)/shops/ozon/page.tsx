@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, TestTube2, Package, Trash2, Loader2, Pencil, Eye, EyeOff, Video, Upload } from 'lucide-react';
+import { Plus, RefreshCw, TestTube2, Package, Trash2, Loader2, Pencil, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -41,21 +41,6 @@ interface Shop {
   createdAt: string;
 }
 
-interface OzonVideoProbeResult {
-  ok: boolean;
-  status: 'auto_publish_ready' | 'uploaded_temp_video_url' | 'uploaded_not_video_asset' | 'upload_failed';
-  message: string;
-  uploadedUrl?: string;
-  videoAsset?: {
-    videoId: string;
-    assetUrl: string;
-    masterUrl: string;
-    coverUrl: string;
-  };
-}
-
-const VIDEO_PROBE_MAX_BYTES = 8 * 1024 * 1024;
-
 export default function OzonShopsPage() {
   const systemDialog = useSystemDialog();
   const [shops, setShops] = useState<Shop[]>([]);
@@ -63,19 +48,12 @@ export default function OzonShopsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editShopId, setEditShopId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
-  const [videoProbeShopId, setVideoProbeShopId] = useState('');
 
   async function loadShops() {
     setLoading(true);
     const res = await api.get<Shop[]>('/api/shops');
     if (res.code === 1 && res.data) {
-      const ozonShops = res.data.filter((s) => s.platform === 'OZON');
-      setShops(ozonShops);
-      setVideoProbeShopId((current) => (
-        current && ozonShops.some((shop) => shop.id === current)
-          ? current
-          : (ozonShops[0]?.id || '')
-      ));
+      setShops(res.data.filter((s) => s.platform === 'OZON'));
     }
     setLoading(false);
   }
@@ -113,55 +91,6 @@ export default function OzonShopsPage() {
     });
   }
 
-  async function handleVideoProbe(id: string, file?: File) {
-    let payload: { dataUrl?: string; filename?: string } = {};
-    if (file) {
-      const type = (file.type || '').toLowerCase();
-      if (type && type !== 'video/mp4') {
-        toast({ title: '视频探针：仅支持 MP4', variant: 'destructive' });
-        return;
-      }
-      if (file.size > VIDEO_PROBE_MAX_BYTES) {
-        toast({ title: '视频探针：文件过大', description: '请选择 8MB 以内的 MP4 测试文件', variant: 'destructive' });
-        return;
-      }
-      payload = { dataUrl: await readVideoProbeFile(file), filename: file.name };
-    }
-
-    setActionLoading((s) => ({ ...s, [id]: file ? 'video-probe-file' : 'video-probe' }));
-    const res = await api.post<OzonVideoProbeResult>(`/api/shops/${id}/ozon-video-probe`, payload);
-    setActionLoading((s) => {
-      const { [id]: _, ...rest } = s;
-      return rest;
-    });
-
-    const data = res.data;
-    const ready = res.code === 1 && data?.status === 'auto_publish_ready';
-    const tempReady = res.code === 1 && data?.status === 'uploaded_temp_video_url';
-    const title = ready
-      ? '视频探针：可自动挂载商品视频'
-      : tempReady
-      ? '视频探针：已上传到 Ozon 临时视频素材'
-      : '视频探针：暂不可自动挂载商品视频';
-    const description = ready
-      ? `已返回 Ozon 视频资产 videoId=${data?.videoAsset?.videoId || ''}`
-      : tempReady
-      ? (data?.message || `已返回临时视频 URL：${data?.uploadedUrl || ''}`)
-      : (data?.message || res.msg || '未拿到 Ozon 视频资产');
-    toast({
-      title,
-      description,
-      variant: ready || tempReady ? 'default' : 'destructive',
-    });
-  }
-
-  async function handleVideoProbeFileSelect(id: string, event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = '';
-    if (!file) return;
-    await handleVideoProbe(id, file);
-  }
-
   async function handleDelete(id: string) {
     const confirmed = await systemDialog.confirm({
       title: '删除 Ozon 店铺',
@@ -196,67 +125,6 @@ export default function OzonShopsPage() {
           添加店铺
         </Button>
       </div>
-
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-1">
-              <div className="text-sm font-medium">Ozon 视频上传探针</div>
-              <p className="text-sm text-muted-foreground">
-                复用店铺已同步的 Ozon 登录态，测试本地 MP4 是否会返回可自动挂载的 Ozon 视频资产。
-              </p>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                选择店铺
-                <select
-                  value={videoProbeShopId}
-                  onChange={(event) => setVideoProbeShopId(event.target.value)}
-                  className="h-9 min-w-[180px] rounded-md border bg-background px-3 text-sm text-foreground"
-                  disabled={loading || shops.length === 0}
-                >
-                  {shops.length === 0 ? (
-                    <option value="">暂无 OZON 店铺</option>
-                  ) : shops.map((shop) => (
-                    <option key={shop.id} value={shop.id}>{shop.name}</option>
-                  ))}
-                </select>
-              </label>
-              <Button
-                variant="outline"
-                onClick={() => videoProbeShopId && handleVideoProbe(videoProbeShopId)}
-                disabled={!videoProbeShopId || !!actionLoading[videoProbeShopId]}
-              >
-                {actionLoading[videoProbeShopId] === 'video-probe' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Video className="h-4 w-4" />
-                )}
-                自动探针
-              </Button>
-              <input
-                id="ozon-video-probe-file-main"
-                type="file"
-                accept="video/mp4"
-                className="hidden"
-                onChange={(event) => videoProbeShopId && handleVideoProbeFileSelect(videoProbeShopId, event)}
-              />
-              <Button
-                variant="outline"
-                onClick={() => document.getElementById('ozon-video-probe-file-main')?.click()}
-                disabled={!videoProbeShopId || !!actionLoading[videoProbeShopId]}
-              >
-                {actionLoading[videoProbeShopId] === 'video-probe-file' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="h-4 w-4" />
-                )}
-                选择本地 MP4
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardContent className="p-0">
@@ -343,39 +211,6 @@ export default function OzonShopsPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => handleVideoProbe(shop.id)}
-                          disabled={!!actionLoading[shop.id]}
-                          title="视频探针"
-                        >
-                          {actionLoading[shop.id] === 'video-probe' ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Video className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                        <input
-                          id={`ozon-video-probe-file-${shop.id}`}
-                          type="file"
-                          accept="video/mp4"
-                          className="hidden"
-                          onChange={(event) => handleVideoProbeFileSelect(shop.id, event)}
-                        />
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => document.getElementById(`ozon-video-probe-file-${shop.id}`)?.click()}
-                          disabled={!!actionLoading[shop.id]}
-                          title="选择本地 MP4 视频探针"
-                        >
-                          {actionLoading[shop.id] === 'video-probe-file' ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Upload className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
                           asChild
                           title="查看商品"
                         >
@@ -416,15 +251,6 @@ function StatusBadge({ status, message }: { status: string; message: string | nu
       </Badge>
     );
   return <Badge variant="secondary">已禁用</Badge>;
-}
-
-function readVideoProbeFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('读取视频文件失败'));
-    reader.readAsDataURL(file);
-  });
 }
 
 function AddShopDialog({

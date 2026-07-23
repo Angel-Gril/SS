@@ -151,10 +151,23 @@ async function expectOkJson(path) {
 }
 
 async function putConfig(key, value) {
+  const current = await api(`/api/admin/system-config/${key}`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  const expectedRevision = current.status === 404
+    ? 0
+    : current.status === 200
+      && current.body?.code === 1
+      && Number.isSafeInteger(current.body?.data?.revision)
+      ? current.body.data.revision
+      : null;
+  if (expectedRevision === null) {
+    throw new Error(`config ${key} revision read failed: ${current.status} ${JSON.stringify(current.body)}`);
+  }
   const out = await api(`/api/admin/system-config/${key}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ value, expectedRevision }),
   });
   if (out.status !== 200 || out.body?.code !== 1) {
     throw new Error(`config ${key} failed: ${out.status} ${JSON.stringify(out.body)}`);

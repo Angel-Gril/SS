@@ -24,7 +24,7 @@ export interface HumanChallengeRuntimeConfig {
   turnstileSecretKey: string;
   allowedHostnames: string[];
   hostnameConfigValid: boolean;
-  source: 'env' | 'system-config';
+  source: 'env' | 'system-config' | 'mixed';
 }
 
 function isProvider(value: unknown): value is HumanChallengeProvider {
@@ -39,10 +39,61 @@ async function readConfig<K extends SystemConfigKey>(key: K): Promise<SystemConf
   }
 }
 
+interface StrictConfigRead<K extends SystemConfigKey> {
+  value: SystemConfigValue<K>;
+  valid: boolean;
+}
+
+/**
+ * Sensitive challenge secrets must never fall back to the persisted ciphertext
+ * when decryption fails. Keep a validity bit so the active provider can fail
+ * closed while an unrelated provider's damaged secret remains inert.
+ */
+async function readSensitiveConfig<K extends SystemConfigKey>(key: K): Promise<StrictConfigRead<K>> {
+  try {
+    return { value: await getStrictConfig(key), valid: true };
+  } catch (error) {
+    console.error(`[human-challenge] invalid ${key}: ${String(error)}`);
+    return { value: getDefaultValue(key), valid: false };
+  }
+}
+
 function splitCsv(value: string): string[] {
   return [...new Set(value.split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean))];
+}
+
+function configValueIsPresent(value: unknown): boolean {
+  return typeof value === 'number'
+    ? Number.isFinite(value)
+    : typeof value === 'string'
+      ? value.length > 0
+      : Boolean(value);
+}
+
+interface BoundedIntegerOverride {
+  value: number;
+  valid: boolean;
+  present: boolean;
+}
+
+function readBoundedIntegerOverride(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): BoundedIntegerOverride {
+  const raw = process.env[name]?.trim() || '';
+  const safeFallback = Number.isInteger(fallback) && Number.isFinite(fallback)
+    && fallback >= minimum && fallback <= maximum
+    ? fallback
+    : minimum;
+  if (!raw) return { value: safeFallback, valid: true, present: false };
+  const parsed = Number(raw);
+  const valid = Number.isInteger(parsed) && Number.isFinite(parsed)
+    && parsed >= minimum && parsed <= maximum;
+  return { value: valid ? parsed : safeFallback, valid, present: true };
 }
 
 async function readProviderConfig(): Promise<{ value: HumanChallengeProvider; valid: boolean }> {
@@ -64,15 +115,15 @@ async function readAllowedHostnamesConfig(): Promise<{ value: string; valid: boo
 }
 
 export async function getHumanChallengeRuntimeConfig(): Promise<HumanChallengeRuntimeConfig> {
-  const rawEnvProvider = process.env.HUMAN_CHALLENGE_PROVIDER;
+  const rawEnvProvider = process.env.HUMAN_CHALLENGE_PROVIDER?.trim();
   const hasExplicitEnvProvider = typeof rawEnvProvider === 'string' && rawEnvProvider.trim().length > 0;
-  const legacyEnvTurnstileEnabled = process.env.FEATURE_TURNSTILE_LOGIN === 'true';
+  const legacyEnvTurnstileEnabled = process.env.FEATURE_TURNSTILE_LOGIN?.trim() === 'true';
   const hasEnvProvider = hasExplicitEnvProvider || legacyEnvTurnstileEnabled;
-  const [dbProvider, legacyTurnstileEnabled, dbSecret, dbDifficulty, dbTtl, dbHostnames, dbSiteKey, dbTurnstileSecret] = await Promise.all([
-    readProviderConfig(), readConfig('feature_turnstile_login'), readConfig('auth_pow_signing_secret'),
+  const [dbProvider, legacyTurnstileEnabled, dbSecretRead, dbDifficulty, dbTtl, dbHostnames, dbSiteKey, dbTurnstileSecretRead] = await Promise.all([
+    readProviderConfig(), readConfig('feature_turnstile_login'), readSensitiveConfig('auth_pow_signing_secret'),
     readConfig('auth_pow_difficulty'), readConfig('auth_pow_ttl_seconds'),
     readAllowedHostnamesConfig(), readConfig('auth_turnstile_site_key'),
-    readConfig('auth_turnstile_secret_key'),
+    readSensitiveConfig('auth_turnstile_secret_key'),
   ]);
   const configuredProvider = hasExplicitEnvProvider
     ? isProvider(rawEnvProvider) ? rawEnvProvider : 'disabled'
@@ -83,24 +134,72 @@ export async function getHumanChallengeRuntimeConfig(): Promise<HumanChallengeRu
         : dbProvider.value;
   const runtimeMode = getRuntimeMode();
   const provider = runtimeMode === 'cloud' ? configuredProvider : 'disabled';
-  const providerConfigValid = runtimeMode !== 'cloud'
+  const difficultyOverride = readBoundedIntegerOverride(
+    'HUMAN_CHALLENGE_POW_DIFFICULTY',
+    dbDifficulty,
+    1,
+    5,
+  );
+  const ttlOverride = readBoundedIntegerOverride(
+    'HUMAN_CHALLENGE_TTL_SECONDS',
+    dbTtl,
+    30,
+    600,
+  );
+  const providerSelectionValid = runtimeMode !== 'cloud'
     || (hasExplicitEnvProvider ? isProvider(rawEnvProvider) : legacyEnvTurnstileEnabled || dbProvider.valid);
+  const powConfigValid = provider !== 'builtin-pow'
+    || (difficultyOverride.valid && ttlOverride.valid
+      && (Boolean(process.env.HUMAN_CHALLENGE_SIGNING_SECRET) || dbSecretRead.valid));
+  const turnstileSecretConfigValid = provider !== 'cloudflare-turnstile'
+    || (Boolean(process.env.TURNSTILE_SECRET_KEY) || dbTurnstileSecretRead.valid);
+  const providerConfigValid = providerSelectionValid && powConfigValid && turnstileSecretConfigValid;
   const rawEnvHostnames = process.env.TURNSTILE_ALLOWED_HOSTNAMES || '';
   const hasEnvHostnames = rawEnvHostnames.trim().length > 0;
   const rawAllowedHostnames = hasEnvHostnames ? rawEnvHostnames : dbHostnames.value;
   const parsedAllowedHostnames = SystemConfigSchema.auth_turnstile_allowed_hostnames.safeParse(rawAllowedHostnames);
   const hostnameConfigValid = (hasEnvHostnames || dbHostnames.valid) && parsedAllowedHostnames.success;
+  const difficulty = difficultyOverride.value;
+  const ttlSeconds = ttlOverride.value;
+  const signingSecret = process.env.HUMAN_CHALLENGE_SIGNING_SECRET || dbSecretRead.value || '';
+  const turnstileSiteKey = process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || dbSiteKey;
+  const turnstileSecretKey = process.env.TURNSTILE_SECRET_KEY || dbTurnstileSecretRead.value;
+  const fieldSources: Array<'env' | 'system-config'> = [hasEnvProvider ? 'env' : 'system-config'];
+  if (provider === 'builtin-pow') {
+    if (configValueIsPresent(signingSecret)) {
+      fieldSources.push(process.env.HUMAN_CHALLENGE_SIGNING_SECRET ? 'env' : 'system-config');
+    }
+    if (configValueIsPresent(difficulty)) {
+      fieldSources.push(difficultyOverride.present ? 'env' : 'system-config');
+    }
+    if (configValueIsPresent(ttlSeconds)) {
+      fieldSources.push(ttlOverride.present ? 'env' : 'system-config');
+    }
+  } else if (provider === 'cloudflare-turnstile') {
+    if (configValueIsPresent(turnstileSiteKey)) {
+      fieldSources.push(process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ? 'env' : 'system-config');
+    }
+    if (configValueIsPresent(turnstileSecretKey)) {
+      fieldSources.push(process.env.TURNSTILE_SECRET_KEY ? 'env' : 'system-config');
+    }
+    if (configValueIsPresent(rawAllowedHostnames)) {
+      fieldSources.push(hasEnvHostnames ? 'env' : 'system-config');
+    }
+  }
+  const source: HumanChallengeRuntimeConfig['source'] = new Set(fieldSources).size > 1
+    ? 'mixed'
+    : fieldSources[0] ?? 'system-config';
   return {
     provider,
     providerConfigValid,
-    difficulty: Math.min(5, Math.max(1, Number(process.env.HUMAN_CHALLENGE_POW_DIFFICULTY || dbDifficulty))),
-    ttlSeconds: Math.min(600, Math.max(30, Number(process.env.HUMAN_CHALLENGE_TTL_SECONDS || dbTtl))),
-    signingSecret: process.env.HUMAN_CHALLENGE_SIGNING_SECRET || dbSecret || '',
-    turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || dbSiteKey,
-    turnstileSecretKey: process.env.TURNSTILE_SECRET_KEY || dbTurnstileSecret,
+    difficulty,
+    ttlSeconds,
+    signingSecret,
+    turnstileSiteKey,
+    turnstileSecretKey,
     allowedHostnames: hostnameConfigValid ? splitCsv(rawAllowedHostnames) : [],
     hostnameConfigValid,
-    source: hasEnvProvider ? 'env' : 'system-config',
+    source,
   };
 }
 
