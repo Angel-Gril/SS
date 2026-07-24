@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
@@ -11,6 +11,11 @@ const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
 const describePostgres = enabled ? describe : describe.skip;
 const client = enabled ? new PrismaClient({ datasources: { db: { url: databaseUrl } } }) : null;
+const SOURCE_PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=',
+  'base64',
+);
+const SOURCE_PNG_SHA256 = createHash('sha256').update(SOURCE_PNG_BYTES).digest('hex');
 
 function assertIsolatedSchema() {
   const schema = databaseUrl ? new URL(databaseUrl).searchParams.get('schema') || '' : '';
@@ -273,7 +278,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
       id: sourceAssetId, ownerUserId, kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: snapshotId,
       sourceMediaKey: 'main-1', sourceUrl: 'https://source.example/main.png',
       url: '/uploads/source.png', storageBackend: 'local', storageKey: 'source.png',
-      mimeType: 'image/png', sizeBytes: 68, sha256: 'd'.repeat(64),
+      mimeType: 'image/png', sizeBytes: SOURCE_PNG_BYTES.length, sha256: SOURCE_PNG_SHA256,
     } });
 
     const workflowRepository = new PrismaAiMediaWorkflowRepository(client!);
@@ -282,6 +287,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const created = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Keep product unchanged',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `create-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     expect(await client!.aiCostReservation.findUnique({ where: { jobId: created.jobId } }))
@@ -325,6 +331,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
       repository: jobRepository,
       provider: createFakeAiImageProvider({ images: [{ buffer: Buffer.from('generated'), mimeType: 'image/png' }] }),
       uploadBuffer: async () => ({ url: '/uploads/generated.png', backend: 'local', key: 'generated.png' }),
+      loadInputBuffer: async () => SOURCE_PNG_BYTES,
       maxAttempts: 1,
     });
     const succeeded = await workflowService.get(created.workflow.id, ownerUserId);
@@ -389,6 +396,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const cancelling = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Cancellation race',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `cancel-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markRunning(cancelling.jobId, 1);
@@ -425,6 +433,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const interrupted = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Interrupted provider recovery',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `interrupted-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markRunning(interrupted.jobId, 1);
@@ -459,6 +468,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const missingEvidence = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Missing provider evidence',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `missing-evidence-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markRunning(missingEvidence.jobId, 1);
@@ -481,6 +491,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const retrying = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Retry idempotency race',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `retry-create-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markFailed(retrying.jobId, {
@@ -491,7 +502,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const failed = await workflowService.get(retrying.workflow.id, ownerUserId);
     const retryInput = {
       id: failed.id, ownerUserId, actorUserId: ownerUserId,
-      expectedRevision: failed.revision, idempotencyKey: `retry-race-${suffix}`,
+      expectedRevision: failed.revision, idempotencyKey: `retry-race-${suffix}`, dailyLimit: 0,
     };
     const retries = await Promise.all([
       workflowService.retry(retryInput),
@@ -508,6 +519,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const competing = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Competing retry keys',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `competing-create-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markFailed(competing.jobId, {
@@ -518,10 +530,12 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
       workflowService.retry({
         id: competingFailed.id, ownerUserId, actorUserId: ownerUserId,
         expectedRevision: competingFailed.revision, idempotencyKey: `competing-a-${suffix}`,
+        dailyLimit: 0,
       }),
       workflowService.retry({
         id: competingFailed.id, ownerUserId, actorUserId: ownerUserId,
         expectedRevision: competingFailed.revision, idempotencyKey: `competing-b-${suffix}`,
+        dailyLimit: 0,
       }),
     ]);
     expect(competingRetries.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
@@ -532,6 +546,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const enqueueRace = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Enqueue acknowledgement race',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `enqueue-race-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     const enqueueRaceResults = await Promise.all([
@@ -560,6 +575,7 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const completionRace = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Completion cancellation race',
       negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
       idempotencyKey: `completion-race-${suffix}`, context: { type: 'collect', id: goodsId },
     });
     await jobRepository.markRunning(completionRace.jobId, 1);

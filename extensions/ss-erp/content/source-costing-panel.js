@@ -41,6 +41,13 @@
     sourceWorkbenchHistoryError: '',
     sourceWorkbenchHistoryRequestSeq: 0,
     sourceWorkbenchHistoryOpen: false,
+    sourceWorkbenchAiImageSuite: null,
+    sourceWorkbenchAiImageSuiteLoading: false,
+    sourceWorkbenchAiImageSuiteError: '',
+    sourceWorkbenchAiImageSuiteBusyKey: '',
+    sourceWorkbenchAiImageSuiteOpen: true,
+    sourceWorkbenchAiImageSuiteEpoch: 0,
+    sourceWorkbenchAiImageSuiteBindingKey: '',
     sourceWorkbenchListingId: '',
     sourceWorkbenchProductId: '',
     sourceWorkbenchLastRefreshAt: 0,
@@ -60,6 +67,53 @@
     lastCostSignature: '',
     lastProductSignature: ''
   };
+  var AiImageSuiteController = window.SS_ERP_SOURCE_AI_IMAGE_SUITE_CONTROLLER;
+  if (!AiImageSuiteController || typeof AiImageSuiteController.createController !== 'function') return;
+  var sourceWorkbenchAiImageSuiteController = AiImageSuiteController.createController({
+    read: async function (binding, metadata) {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-ai-image-suite',
+        sourceProductId: binding.sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: binding.listingWorkflowId,
+        reason: metadata && metadata.reason || 'refresh'
+      });
+      if (!response || !response.ok || !response.result) {
+        throw new Error(response && response.error || 'AI 主图/套图状态读取失败');
+      }
+      return response.result;
+    },
+    execute: async function (binding, payload) {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+        sourceProductId: binding.sourceProductId,
+        platform: SOURCE_PLATFORM,
+        listingWorkflowId: binding.listingWorkflowId,
+        action: String(payload && payload.action || ''),
+        slotId: payload && payload.slotId || undefined,
+        decision: payload && payload.decision || undefined,
+        costConfirmed: payload && payload.costConfirmed === true,
+        intentWitness: payload && payload.intentWitness
+      });
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'completed') {
+        throw new Error(response && response.error || 'AI 主图/套图操作失败');
+      }
+      return response.result;
+    },
+    onState: function (next) {
+      state.sourceWorkbenchAiImageSuite = next.value;
+      state.sourceWorkbenchAiImageSuiteLoading = next.loading;
+      state.sourceWorkbenchAiImageSuiteError = next.error;
+      state.sourceWorkbenchAiImageSuiteBusyKey = next.busyKey;
+      state.sourceWorkbenchAiImageSuiteEpoch = next.epoch;
+      state.sourceWorkbenchAiImageSuiteBindingKey = next.bindingKey;
+      renderContent();
+    },
+    onCommandSuccess: function () {
+      setStatus('AI 主图/套图操作已提交。', 'ok');
+    }
+  });
 
   if (window.__ssErpSourceCostingPanelLoaded) return;
   window.__ssErpSourceCostingPanelLoaded = true;
@@ -315,6 +369,7 @@
     state.sourceWorkbenchRequestSeq += 1;
     state.sourceWorkbenchCommandKey = '';
     state.sourceWorkbenchCreateKey = '';
+    resetSourceWorkbenchAiImageSuite();
     state.sourceWorkbenchMediaCreateDraft = {
       operation: 'IMAGE_TO_IMAGE',
       sourceMediaKeys: []
@@ -437,6 +492,7 @@
       state.sourceWorkbenchLastRefreshAt = 0;
       state.sourceWorkbenchLoadingProductId = '';
       state.sourceWorkbenchRequestSeq += 1;
+      resetSourceWorkbenchAiImageSuite();
       renderContent();
       return;
     }
@@ -482,6 +538,7 @@
         state.sourceWorkbenchHistoryError = '';
         state.sourceWorkbenchHistoryRequestSeq += 1;
         state.sourceWorkbenchHistoryOpen = false;
+        resetSourceWorkbenchAiImageSuite();
       }
       var selectedListing = listings.find(function (item) {
         return item && item.id === state.sourceWorkbenchListingId;
@@ -496,6 +553,11 @@
         state.sourceWorkbenchHistoryError = '';
         state.sourceWorkbenchHistoryRequestSeq += 1;
         state.sourceWorkbenchHistoryOpen = false;
+      }
+      if (selectedListing) {
+        sourceWorkbenchAiImageSuiteController.syncBinding(
+          sourceWorkbenchAiImageSuiteBinding(selectedListing, sourceProductId)
+        );
       }
     } catch {
       if (requestSeq === state.sourceWorkbenchRequestSeq
@@ -594,6 +656,53 @@
       if (state.sourceWorkbenchCommandKey === key) state.sourceWorkbenchCommandKey = '';
       renderContent();
     }
+  }
+
+  function resetSourceWorkbenchAiImageSuite() {
+    sourceWorkbenchAiImageSuiteController.reset();
+  }
+
+  function currentSourceWorkbenchListing() {
+    var items = state.sourceWorkbenchStatus && state.sourceWorkbenchStatus.status
+      && state.sourceWorkbenchStatus.status.listing
+      && Array.isArray(state.sourceWorkbenchStatus.status.listing.items)
+      ? state.sourceWorkbenchStatus.status.listing.items
+      : [];
+    return items.find(function (item) {
+      return item && item.id === state.sourceWorkbenchListingId;
+    }) || null;
+  }
+
+  function sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId) {
+    return {
+      sourceProductId: sourceProductId,
+      listingWorkflowId: listing && listing.id,
+      shopId: listing && listing.shopId,
+      revision: listing && listing.revision,
+      draftVersion: listing && listing.draftVersion
+    };
+  }
+
+  async function loadSourceWorkbenchAiImageSuite(metadata) {
+    var listing = currentSourceWorkbenchListing();
+    var sourceProductId = currentSourceProductId();
+    if (!listing || !sourceProductId || state.sourcePageKey !== currentSourcePageKey()
+      ) return state.sourceWorkbenchAiImageSuite;
+    return sourceWorkbenchAiImageSuiteController.load(
+      sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId),
+      metadata || {}
+    );
+  }
+
+  async function executeSourceWorkbenchAiImageSuiteCommand(payload) {
+    var listing = currentSourceWorkbenchListing();
+    var sourceProductId = currentSourceProductId();
+    if (!listing || !sourceProductId || state.sourcePageKey !== currentSourcePageKey()
+      || state.sourceWorkbenchAiImageSuiteBusyKey) return;
+    return sourceWorkbenchAiImageSuiteController.execute(
+      sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId),
+      payload
+    );
   }
 
   function currentSourceMediaInputs() {
@@ -848,6 +957,23 @@
           mediaCreateOpen: state.sourceWorkbenchMediaCreateOpen,
           busyCommandKey: state.sourceWorkbenchCommandKey,
           busyCreateKey: state.sourceWorkbenchCreateKey,
+          aiImageSuite: state.sourceWorkbenchAiImageSuite,
+          aiImageSuiteLoading: state.sourceWorkbenchAiImageSuiteLoading,
+          aiImageSuiteError: state.sourceWorkbenchAiImageSuiteError,
+          aiImageSuiteBusyKey: state.sourceWorkbenchAiImageSuiteBusyKey,
+          aiImageSuiteOpen: state.sourceWorkbenchAiImageSuiteOpen,
+          onLoadAiImageSuite: function (metadata) {
+            return loadSourceWorkbenchAiImageSuite(metadata);
+          },
+          onAiImageSuiteCommand: function (payload) {
+            return executeSourceWorkbenchAiImageSuiteCommand(payload);
+          },
+          onAiImageSuiteError: function (error) {
+            setStatus(error && error.message ? error.message : String(error), 'fail');
+          },
+          onAiImageSuiteOpenChange: function (open) {
+            state.sourceWorkbenchAiImageSuiteOpen = open === true;
+          },
           onCommand: function (task, action) {
             void executeSourceWorkbenchMediaCommand(task, action);
           },
@@ -890,6 +1016,7 @@
             state.sourceWorkbenchLoadingProductId = '';
             state.sourceWorkbenchLastRefreshAt = 0;
             state.sourceWorkbenchRequestSeq += 1;
+            resetSourceWorkbenchAiImageSuite();
             renderContent();
             void refreshSourceWorkbenchStatus({ force: true });
           },

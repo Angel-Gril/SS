@@ -26,7 +26,6 @@ assert.match(source, /\/api\/admin\/system-status\/integrations/, 'settings must
 assert.match(source, /runtimeSelections/, 'runtime selections must be passed into custom settings panels');
 assert.match(source, /VISIBLE_CONFIG_GROUPS/, 'settings must use an explicit visible-group allowlist');
 for (const hiddenKey of [
-  'ai_media_workflow_v2_rollout_policy',
   'source_workflow_rollout_policy',
   'source_ozon_publisher_browser_one_click_stage',
   'source_ozon_publisher_collect_publish_stage',
@@ -40,6 +39,11 @@ for (const hiddenKey of [
     `${hiddenKey} must stay out of the generic settings UI`,
   );
 }
+assert.doesNotMatch(
+  source,
+  /HIDDEN_CONFIG_KEYS[\s\S]{0,300}ai_media_workflow_v2_rollout_policy/,
+  'AI media tenant rollout policy must be editable from the administrator feature settings',
+);
 assert.match(source, /!VISIBLE_CONFIG_GROUPS\.has\(c\.group\)/, 'unknown/internal groups must not render');
 
 for (const [name, block] of [['auth', auth], ['listing', listing], ['upload', upload]]) {

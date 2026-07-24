@@ -5,10 +5,27 @@ import { prisma } from '../lib/prisma.js';
 import { redisDisabled } from '../lib/redis.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
+import { loadAiImageEditInputBuffer } from '../services/ai-image-edit-input-reader.js';
 import { getStorageBackend } from '../services/image-storage.js';
-import { createDashScopeWanxProvider, createOpenAiImagesProvider } from '../services/ai-image-providers.js';
+import {
+  createDashScopeWanxProvider,
+  createOpenAiImageEditProvider,
+  createOpenAiImagesProvider,
+} from '../services/ai-image-providers.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
-import { AiImageJobError, createDisabledAiImageProvider, createFakeAiImageProvider, runAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
+import {
+  AiImageProviderRuntimeContractError,
+  assertAiImageProviderRuntimeContract,
+} from '../services/ai-image-provider-runtime-contract.js';
+import {
+  AiImageJobError,
+  createDisabledAiImageProvider,
+  createFakeAiImageProvider,
+  runAiImageJob,
+  type AiImageJobRepository,
+  type AiImageProvider,
+} from '../services/ai-image-jobs.js';
+import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 
 const QUEUE_NAME = 'ai-image-generation';
 const fakePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=', 'base64');
@@ -29,30 +46,111 @@ export interface AiImageProviderRuntimeConfig {
   costPerImageCents: number;
 }
 
+export interface AiImageDispatchAuthorization {
+  enabled: boolean;
+  reasonCode: string;
+  reason: string;
+}
+
+export async function getAiImageDispatchAuthorization(
+  ownerUserId: string,
+): Promise<AiImageDispatchAuthorization> {
+  const [generationEnabled, rollout] = await Promise.all([
+    getConfig('ai_image_generation_enabled'),
+    getAiMediaRolloutDecision(ownerUserId),
+  ]);
+  if (!generationEnabled) {
+    return {
+      enabled: false,
+      reasonCode: 'master_off',
+      reason: 'AI image generation was disabled before Provider dispatch',
+    };
+  }
+  if (!rollout.enabled) {
+    return {
+      enabled: false,
+      reasonCode: rollout.reason,
+      reason: 'AI media rollout was revoked before Provider dispatch',
+    };
+  }
+  return {
+    enabled: true,
+    reasonCode: rollout.reason,
+    reason: 'AI image dispatch is authorized',
+  };
+}
+
 export async function getAiImageProviderRuntimeConfig(): Promise<AiImageProviderRuntimeConfig> {
-  const [provider, baseUrl, apiKey, model] = await Promise.all([
+  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
     getConfig('ai_image_provider'), getConfig('ai_image_base_url'),
     getConfig('ai_image_api_key'), getConfig('ai_image_model'),
+    getConfig('ai_image_generation_cost_cents'),
   ]);
-  return { provider, baseUrl, apiKey, model, costPerImageCents: 0 };
+  return { provider, baseUrl, apiKey, model, costPerImageCents };
+}
+
+export interface AiImageProviderResolverDependencies {
+  resolveCapability?: typeof resolveAiImageProviderCapability;
+  createOpenAiGenerationProvider?: typeof createOpenAiImagesProvider;
+  createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
 }
 
 export function resolveAiImageProvider(
   provider: string,
   config: AiImageProviderRuntimeConfig,
   onProviderJobCreated?: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>,
-) {
+  dependencies: AiImageProviderResolverDependencies = {},
+): AiImageProvider {
   if (provider === 'fake') {
     return createFakeAiImageProvider({ images: [{ buffer: fakePng, mimeType: 'image/png' }], actualCostCents: 0 });
   }
   if (provider !== config.provider || !config.apiKey || !config.model) return createDisabledAiImageProvider();
-  const capability = resolveAiImageProviderCapability(provider, config.model);
+  const capability = (dependencies.resolveCapability || resolveAiImageProviderCapability)(
+    provider,
+    config.model,
+  );
   if (capability?.evidenceLevel !== 'sandbox-verified' || config.costPerImageCents <= 0) {
     return createDisabledAiImageProvider();
   }
   const options = { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, costPerImageCents: config.costPerImageCents, onProviderJobCreated };
   if (provider === 'dashscope-wanx') return createDashScopeWanxProvider(options);
-  if (provider === 'openai-images') return createOpenAiImagesProvider(options);
+  if (provider === 'openai-images') {
+    const generation = (
+      dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider
+    )(options);
+    const edit = (
+      dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider
+    )(options);
+    return {
+      name: 'openai-images',
+      async generate(request) {
+        const operation = request.operation || 'TEXT_TO_IMAGE';
+        if (operation === 'TEXT_TO_IMAGE') return generation.generate(request);
+        if (operation !== 'IMAGE_TO_IMAGE') {
+          throw new AiImageJobError(
+            'UNSUPPORTED_OPERATION',
+            `OpenAI ${operation} must run through its operation-specific worker`,
+          );
+        }
+        if (!request.inputImages?.length) {
+          throw new AiImageJobError(
+            'INVALID_MEDIA_INPUT',
+            'OpenAI IMAGE_TO_IMAGE requires trusted runtime image bytes',
+          );
+        }
+        return edit.edit({
+          operation,
+          prompt: request.prompt,
+          negativePrompt: request.negativePrompt,
+          width: request.width,
+          height: request.height,
+          model: request.model,
+          images: request.inputImages,
+          mask: request.mask ?? null,
+        });
+      },
+    };
+  }
   return createDisabledAiImageProvider();
 }
 
@@ -63,6 +161,8 @@ export async function processAiImageQueueJob(
     repository?: AiImageJobRepository;
     resolveProvider?: typeof resolveAiImageProvider;
     getProviderConfig?: typeof getAiImageProviderRuntimeConfig;
+    getDispatchAuthorization?: typeof getAiImageDispatchAuthorization;
+    loadInputBuffer?: typeof loadAiImageEditInputBuffer;
     uploadBuffer?: (...args: any[]) => Promise<any>;
     run?: typeof runAiImageJob;
   } = {},
@@ -138,11 +238,76 @@ export async function processAiImageQueueJob(
     });
     throw uncertainError;
   }
+  const failBeforeDispatch = async (errorCode: string, errorMessage: string) => {
+    const failure = { attemptCount: attemptNumber, errorCode, errorMessage };
+    if (repository.markEnqueueFailed) {
+      const failed = await repository.markEnqueueFailed(jobId, failure);
+      if (!failed) {
+        const latest = await repository.getById(jobId);
+        if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
+          await repository.markCancelled(jobId);
+        }
+      }
+    } else {
+      await repository.markFailed(jobId, failure);
+    }
+  };
+  const paidJob = persisted.provider !== 'fake';
+  if (paidJob) {
+    const authorization = await (
+      overrides.getDispatchAuthorization || getAiImageDispatchAuthorization
+    )(persisted.ownerUserId);
+    if (!authorization.enabled) {
+      await failBeforeDispatch('AI_IMAGE_DISPATCH_REVOKED', authorization.reason);
+      return;
+    }
+    const reservation = (persisted as typeof persisted & {
+      costReservation?: {
+        status?: unknown;
+        provider?: unknown;
+        model?: unknown;
+        estimatedCostMinor?: unknown;
+        maximumCostMinor?: unknown;
+      } | null;
+    }).costReservation;
+    if (!reservation
+      || reservation.status !== 'RESERVED'
+      || reservation.provider !== persisted.provider
+      || reservation.model !== persisted.model
+      || Number(reservation.estimatedCostMinor) !== persisted.estimatedCostCents
+      || Number(reservation.maximumCostMinor) !== persisted.estimatedCostCents) {
+      await failBeforeDispatch(
+        'AI_IMAGE_COST_RESERVATION_REQUIRED',
+        'Paid AI image dispatch requires an exact RESERVED cost reservation',
+      );
+      return;
+    }
+  }
   let providerConfig: AiImageProviderRuntimeConfig;
   let provider;
   let uploadBuffer: (...args: any[]) => Promise<any>;
   try {
     providerConfig = await (overrides.getProviderConfig || getAiImageProviderRuntimeConfig)();
+    if (paidJob) {
+      try {
+        assertAiImageProviderRuntimeContract(
+          persisted.operationConfig,
+          providerConfig,
+          {
+            count: persisted.requestedImageCount,
+            width: persisted.width,
+            height: persisted.height,
+            estimatedCostCents: persisted.estimatedCostCents,
+          },
+        );
+      } catch (error) {
+        if (error instanceof AiImageProviderRuntimeContractError) {
+          await failBeforeDispatch(error.code, error.message);
+          return;
+        }
+        throw error;
+      }
+    }
     const onProviderJobCreated = repository.recordProviderJobId
       ? (providerJobId: string, providerAcceptedAt: Date) => repository.recordProviderJobId!(jobId, providerJobId, providerAcceptedAt)
       : undefined;
@@ -155,18 +320,16 @@ export async function processAiImageQueueJob(
       errorCode: 'WORKER_SETUP_FAILED',
       errorMessage: 'AI image worker setup failed before provider dispatch',
     };
-    if (repository.markEnqueueFailed) {
-      const failed = await repository.markEnqueueFailed(jobId, failure);
-      if (!failed) {
-        const latest = await repository.getById(jobId);
-        if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
-          await repository.markCancelled(jobId);
-        }
-      }
-    } else await repository.markFailed(jobId, failure);
+    await failBeforeDispatch(failure.errorCode, failure.errorMessage);
     throw error;
   }
-  await (overrides.run || runAiImageJob)(jobId, attemptNumber, { repository, provider, uploadBuffer, maxAttempts: 1 });
+  await (overrides.run || runAiImageJob)(jobId, attemptNumber, {
+    repository,
+    provider,
+    loadInputBuffer: overrides.loadInputBuffer || loadAiImageEditInputBuffer,
+    uploadBuffer,
+    maxAttempts: 1,
+  });
 }
 
 export async function enqueueAiImageJob(jobId: string) {

@@ -11,6 +11,7 @@ const keys = [
   'feature_ai_media_inpaint',
   'feature_source_listing_web_media',
   'feature_source_listing_extension_workbench',
+  'feature_source_ozon_publisher_v2',
   'ai_image_generation_enabled',
   'ai_image_provider',
   'feature_image_translate',
@@ -26,7 +27,7 @@ try {
   });
   const result = verifyAiMediaDarkPolicy(rows);
   console.log(
-    `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
+    `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
   );
 } catch (error) {
   console.error(

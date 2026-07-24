@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
+import { resolveAiImageProviderCapability } from './ai-image-provider-capabilities.js';
 
 export const EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION =
   'extension-source-workbench-status/v1' as const;
@@ -349,6 +350,7 @@ function mediaCommandContract(
   row: any,
   listingById: Map<string, ReturnType<typeof listingSummary>>,
   canExecuteMedia: boolean,
+  production: boolean,
 ): {
   commandContext: ExtensionMediaCommandContext | null;
   allowedActions: Array<'CANCEL' | 'RETRY'>;
@@ -357,11 +359,21 @@ function mediaCommandContract(
     ? listingById.get(String(row.contextId || ''))
     : null;
   const currentJob = Array.isArray(row.jobs) ? row.jobs[0] : null;
+  const provider = String(currentJob?.provider || '');
+  const model = String(currentJob?.model || '');
+  const operation = String(row.operation || '');
+  const capability = provider && provider !== 'fake'
+    ? resolveAiImageProviderCapability(provider, model)
+    : null;
+  const providerAllowed = provider === 'fake'
+    ? !production
+    : capability?.evidenceLevel === 'sandbox-verified'
+      && capability.operations.includes(operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT');
   if (!canExecuteMedia
     || !listing
     || row.contextDraftRevision !== listing.revision
     || row.contextDraftVersion !== listing.draftVersion
-    || String(currentJob?.provider || '') !== 'fake') {
+    || !providerAllowed) {
     return { commandContext: null, allowedActions: [] };
   }
   const allowedActions: Array<'CANCEL' | 'RETRY'> = [];
@@ -395,6 +407,7 @@ function mediaSummary(
   row: any,
   listingById: Map<string, ReturnType<typeof listingSummary>>,
   canExecuteMedia: boolean,
+  production: boolean,
 ) {
   return {
     id: String(row.id),
@@ -408,7 +421,7 @@ function mediaSummary(
     contextSlotKey: row.contextSlotKey == null ? null : String(row.contextSlotKey),
     hasSelectedOutput: Boolean(row.selectedOutputAssetId),
     actionable: mediaActionable(row),
-    ...mediaCommandContract(row, listingById, canExecuteMedia),
+    ...mediaCommandContract(row, listingById, canExecuteMedia, production),
     updatedAt: isoDate(row.updatedAt),
   };
 }
@@ -431,6 +444,7 @@ function mediaActionable(row: any) {
 export function createExtensionSourceWorkbenchService(options: {
   client?: ExtensionSourceWorkbenchClient;
   loadAllowedPreviewOrigins?(): Promise<string[]>;
+  production?: boolean;
 } = {}) {
   const client = options.client || prisma as unknown as ExtensionSourceWorkbenchClient;
 
@@ -549,6 +563,7 @@ export function createExtensionSourceWorkbenchService(options: {
             take: 1,
             select: {
               provider: true,
+              model: true,
               providerJobId: true,
               providerReconciliationStatus: true,
               errorCode: true,
@@ -560,7 +575,12 @@ export function createExtensionSourceWorkbenchService(options: {
       });
       const mediaItems = mediaRows
         .slice(0, EXTENSION_SOURCE_WORKBENCH_MEDIA_LIMIT)
-        .map((row) => mediaSummary(row, listingById, input.canExecuteMedia === true));
+        .map((row) => mediaSummary(
+          row,
+          listingById,
+          input.canExecuteMedia === true,
+          options.production ?? process.env.NODE_ENV === 'production',
+        ));
 
       return {
         contractVersion: EXTENSION_SOURCE_WORKBENCH_CONTRACT_VERSION,

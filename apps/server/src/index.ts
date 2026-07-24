@@ -74,10 +74,21 @@ import {
 } from './routes/ai-images.js';
 import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
-import type { AiImageSuiteProviderConfig } from './services/ai-image-suite.js';
+import {
+  createAiImageSuiteService,
+  type AiImageSuiteProviderConfig,
+} from './services/ai-image-suite.js';
+import {
+  aiImageSuiteProviderConfigMatches,
+  aiImageSuiteProviderRuntimeMatches,
+  createAiImageSuiteProviderRuntimeSnapshot,
+} from './services/ai-image-suite-provider-runtime.js';
+import { getAiImageSuiteDispatchAuthorization } from './services/ai-image-suite-dispatch-authorization.js';
+import { PrismaAiImageSuiteRepository } from './repositories/ai-image-suite-repository.js';
 import { PrismaAiImageSuiteReferenceRepository } from './repositories/ai-image-suite-reference-repository.js';
 import { PrismaAiImageSuitePromptRepository } from './repositories/ai-image-suite-prompt-repository.js';
 import { PrismaAiImageSuiteMaterializationRepository } from './repositories/ai-image-suite-materialization-repository.js';
+import { PrismaAiImageSuiteCandidateRepository } from './repositories/ai-image-suite-candidate-repository.js';
 import {
   PrismaAiImageSuiteExecutionRepository,
   PrismaAiImageSuiteGenerationCoordinator,
@@ -112,6 +123,8 @@ import {
   extensionMediaLaunchRoutes,
 } from './routes/extension-media-launch.js';
 import { extensionMediaEditRoutes } from './routes/extension-media-edit.js';
+import { extensionAiImageSuiteRoutes } from './routes/extension-ai-image-suite.js';
+import { projectExtensionAiImageSuite } from './services/extension-ai-image-suite-projection.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
 import { getAiMediaRolloutDecision } from './services/ai-media-rollout.js';
 import {
@@ -141,6 +154,7 @@ import { probeAiImageSuiteRuntime } from './services/ai-image-suite-runtime-read
 import { createAiImageSuitePromptService } from './services/ai-image-suite-prompts.js';
 import { createAiImageSuiteMaterializationService } from './services/ai-image-suite-materialization.js';
 import { createAiImageSuiteExecutionService } from './services/ai-image-suite-execution.js';
+import { createAiImageSuiteCandidateService } from './services/ai-image-suite-candidates.js';
 import {
   aiImageSuiteGenerationQueue,
   enqueueAiImageSuiteGenerationRecoveryJob,
@@ -174,6 +188,17 @@ import {
   createExtensionMediaReviewCommandExecutor,
 } from './services/extension-media-review-commands.js';
 import {
+  createExtensionAiImageSuitePostCommitRunner,
+  createExtensionAiImageSuiteApplyCommandExecutor,
+  createExtensionAiImageSuiteExecuteCommandExecutor,
+  createExtensionAiImageSuiteReviewCommandExecutor,
+} from './services/extension-ai-image-suite-commands.js';
+import {
+  EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION,
+  EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION,
+  EXTENSION_AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION,
+} from './services/extension-ai-image-suite.js';
+import {
   createExtensionMediaWorkflowLauncher,
   createExtensionMediaTranslationLauncher,
   resolveExtensionMediaWorkflowSourceMediaKey,
@@ -183,6 +208,8 @@ import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-t
 import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
 import { createAiImageEditMask } from './services/ai-image-edit.js';
+import { resolveAiImageProviderCapability } from './services/ai-image-provider-capabilities.js';
+import type { AiImageProviderRuntimeContract } from './services/ai-image-provider-runtime-contract.js';
 import { uploadLimiter } from './lib/upload-limiter.js';
 import { applyAiMediaListingDraftApplication } from './services/ai-media-listing-draft-application-mutations.js';
 import {
@@ -817,6 +844,68 @@ const sourceOzonListingPublisher = createOzonListingPublisher({
 const extensionDeviceRepository = isExtensionDeviceAuthEnabled()
   ? createPrismaExtensionDeviceSessionRepository()
   : null;
+const getAiImageSuiteCostControls = async () => {
+  const [dailyLimit, globalDailyBudgetCents] = await Promise.all([
+    getConfig('ai_user_daily_image_generation_limit'),
+    getConfig('ai_daily_budget_cents'),
+  ]);
+  return { dailyLimit, globalDailyBudgetCents };
+};
+const getAiImageSuiteProviderRuntime = async () => {
+  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
+    getConfig('ai_image_provider'),
+    getConfig('ai_image_base_url'),
+    getConfig('ai_image_api_key'),
+    getConfig('ai_image_model'),
+    getConfig('ai_image_generation_cost_cents'),
+  ]);
+  return createAiImageSuiteProviderRuntimeSnapshot({
+    provider,
+    baseUrl,
+    apiKey,
+    model,
+    costPerImageCents,
+  });
+};
+const requireAiImageSuiteProviderRuntime = async () => {
+  const snapshot = await getAiImageSuiteProviderRuntime();
+  if (!snapshot.providerConfig) {
+    throw new Error(snapshot.reason);
+  }
+  return snapshot;
+};
+const requireAiImageSuiteExecutionRuntime = async () => {
+  const snapshot = await requireAiImageSuiteProviderRuntime();
+  if (!snapshot.executionReady || !aiImageSuiteGenerationQueue) {
+    throw new Error(snapshot.executionReady
+      ? 'AI image suite generation queue is unavailable'
+      : snapshot.reason);
+  }
+  return snapshot;
+};
+type AiImageSuiteRuntimeIdentity = {
+  provider: string;
+  model: string;
+  providerConfigHash: string;
+  pricingVersion: string;
+  concurrencyLimit: number;
+  itemCount: number;
+  estimatedCostCents: number;
+  maximumCostCents: number;
+};
+const aiImageSuiteRuntimeEvidence = async (suite: AiImageSuiteRuntimeIdentity) => {
+  if (!aiImageSuiteGenerationQueue) return null;
+  const snapshot = await getAiImageSuiteProviderRuntime();
+  if (!snapshot.executionReady || !aiImageSuiteProviderRuntimeMatches(suite, snapshot)) return null;
+  return snapshot.capability?.evidenceLevel === 'sandbox-verified'
+    ? 'sandbox-verified' as const
+    : snapshot.capability?.evidenceLevel === 'local-test'
+      ? 'local-test' as const
+      : null;
+};
+const aiImageSuiteRuntimeReady = async (suite: AiImageSuiteRuntimeIdentity) => (
+  Boolean(await aiImageSuiteRuntimeEvidence(suite))
+);
 let sourceCaptureService: ReturnType<typeof createSourceCaptureService> | null = null;
 if (isExtensionDeviceAuthEnabled()) {
   if (!extensionDeviceRepository) throw new Error('Extension device repository is unavailable');
@@ -824,6 +913,9 @@ if (isExtensionDeviceAuthEnabled()) {
   const extensionCommandGrantSecret = resolveExtensionCommandGrantSecret();
   const extensionMediaWorkflowService = createAiMediaWorkflowService(
     new PrismaAiMediaWorkflowRepository(prisma),
+  );
+  const extensionAiImageSuiteService = createAiImageSuiteService(
+    new PrismaAiImageSuiteRepository(prisma),
   );
   const extensionMediaContextService = createAiMediaContextService(prisma);
   const extensionMediaJobRepository = new PrismaAiImageJobRepository(prisma);
@@ -864,6 +956,8 @@ if (isExtensionDeviceAuthEnabled()) {
             model: true,
             prompt: true,
             negativePrompt: true,
+            estimatedCostCents: true,
+            operationConfig: true,
           },
         },
       },
@@ -894,6 +988,19 @@ if (isExtensionDeviceAuthEnabled()) {
       maskAssetId,
       prompt: row.jobs[0]?.prompt || null,
       negativePrompt: row.jobs[0]?.negativePrompt || null,
+      estimatedCostCents: row.jobs[0]?.estimatedCostCents ?? null,
+      providerRuntimeContract: (() => {
+        const operationConfig = row.jobs[0]?.operationConfig;
+        if (!operationConfig || typeof operationConfig !== 'object' || Array.isArray(operationConfig)) {
+          return null;
+        }
+        const candidate = row.operation === 'IMAGE_TO_IMAGE'
+          ? operationConfig
+          : (operationConfig as Record<string, unknown>).providerRuntime;
+        return candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+          ? candidate as AiImageProviderRuntimeContract
+          : null;
+      })(),
       jobId: row.jobs[0]?.id || null,
     };
   };
@@ -942,12 +1049,240 @@ if (isExtensionDeviceAuthEnabled()) {
       throw error;
     }
   };
+  const loadExtensionAiImageSuiteState = async (input: {
+    ownerUserId: string;
+    snapshotId: string;
+    supplyGoodsId: string;
+    shopId: string;
+    listingWorkflowId: string;
+    draftRevision: number;
+    draftVersion: number;
+  }) => {
+    const context = await loadExtensionMediaTranslationContext({
+      ownerUserId: input.ownerUserId,
+      listingWorkflowId: input.listingWorkflowId,
+      draftRevision: input.draftRevision,
+      draftVersion: input.draftVersion,
+    });
+    if (!context
+      || context.snapshotId !== input.snapshotId
+      || context.supplyGoodsId !== input.supplyGoodsId
+      || context.shopId !== input.shopId) return null;
+    const [plan, target] = await Promise.all([prisma.aiMediaPlan.findFirst({
+      where: {
+        ownerUserId: input.ownerUserId,
+        contextType: 'collect',
+        contextId: input.supplyGoodsId,
+        reviewStatus: 'APPROVED',
+        staleAt: null,
+        approvedVersion: { is: { sourceCaptureSnapshotId: input.snapshotId } },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        revision: true,
+        contextType: true,
+        contextId: true,
+        reviewStatus: true,
+        staleAt: true,
+        currentVersionId: true,
+        approvedVersionId: true,
+        approvedVersion: { select: { id: true, sourceCaptureSnapshotId: true } },
+      },
+    }), prisma.supplyGoods.findFirst({
+      where: { id: input.supplyGoodsId, userId: input.ownerUserId },
+      select: { updatedAt: true },
+    })]);
+    const authority = {
+      snapshotId: input.snapshotId,
+      supplyGoodsId: input.supplyGoodsId,
+      shopId: input.shopId,
+      listingWorkflowId: input.listingWorkflowId,
+      draftRevision: input.draftRevision,
+      draftVersion: input.draftVersion,
+    };
+    if (!plan || !plan.approvedVersion) {
+      return {
+        authority,
+        plan: null,
+        suite: null,
+        targetUpdatedAt: target?.updatedAt.toISOString() || null,
+      };
+    }
+    const [providerRuntime, currentSuite] = await Promise.all([
+      getAiImageSuiteProviderRuntime(),
+      extensionAiImageSuiteService.getCurrentByPlan(plan.id, input.ownerUserId),
+    ]);
+    const preview = currentSuite
+      ? {
+        version: 'ai-image-suite-preview/v1',
+        planId: plan.id,
+        planVersionId: currentSuite.planVersionId,
+        planRevision: plan.revision,
+        provider: currentSuite.provider,
+        model: currentSuite.model,
+        providerConfigHash: currentSuite.providerConfigHash,
+        pricingVersion: currentSuite.pricingVersion,
+        concurrencyLimit: currentSuite.concurrencyLimit,
+        itemCount: currentSuite.itemCount,
+        estimatedCostCents: currentSuite.estimatedCostCents,
+        maximumCostCents: currentSuite.maximumCostCents,
+        previewHash: currentSuite.previewHash,
+        slots: currentSuite.slots.map((rawSlot) => {
+          const slot = rawSlot as Record<string, any>;
+          return {
+            ordinal: Number(slot.ordinal),
+            slotKey: String(slot.slotKey),
+            goal: String(slot.goal),
+            ownership: {
+              level: slot.ownershipLevel,
+              key: String(slot.ownershipKey),
+            },
+            compatibilityGroupKey: slot.compatibilityGroupKey || null,
+            references: [],
+            estimatedCostCents: Number(slot.estimatedCostCents),
+            maximumCostCents: Number(slot.maximumCostCents),
+          };
+        }),
+      }
+      : providerRuntime.providerConfig
+        ? await extensionAiImageSuiteService.preview({
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.ownerUserId,
+          planId: plan.id,
+          providerConfig: providerRuntime.providerConfig,
+        }).catch(() => null)
+        : null;
+    if (!preview) {
+      return {
+        authority,
+        plan: null,
+        suite: null,
+        targetUpdatedAt: target?.updatedAt.toISOString() || null,
+        executionReady: false,
+      };
+    }
+    const suite = currentSuite ? {
+      ...currentSuite,
+      slots: currentSuite.slots.map((rawSlot) => {
+        const slot = rawSlot as Record<string, any>;
+        const workflow = slot.childWorkflow as Record<string, any> | null | undefined;
+        const application = Array.isArray(workflow?.applicationMutations)
+          ? workflow.applicationMutations[0] || null
+          : null;
+        return {
+          ...slot,
+          childWorkflow: workflow ? { ...workflow, application } : null,
+        };
+      }),
+    } : null;
+    const [authorization, operational, storageRuntime] = await Promise.all([
+      getAiImageSuiteDispatchAuthorization(input.ownerUserId),
+      probeAiImageSuiteRuntime({
+        redis,
+        queueAvailable: Boolean(aiImageSuiteGenerationQueue),
+      }),
+      getRuntimeConfigForStorage(),
+    ]);
+    const frozenRuntimeReady = currentSuite
+      ? await aiImageSuiteRuntimeReady(currentSuite)
+      : providerRuntime.executionReady;
+    const providerName = currentSuite?.provider || providerRuntime.providerConfig?.provider;
+    const storageReady = providerName === 'fake'
+      ? ['local', 'oss'].includes(storageRuntime.imageStorage)
+      : storageRuntime.imageStorage === 'oss' && Boolean(storageRuntime.oss);
+    return {
+      authority,
+      plan: { ...plan, skuKey: null, preview },
+      suite,
+      targetUpdatedAt: target?.updatedAt.toISOString() || null,
+      executionReady: authorization.enabled
+        && operational.queueReady
+        && operational.workerReady
+        && frozenRuntimeReady
+        && storageReady,
+    };
+  };
+  const loadExtensionAiImageSuitePreviewOrigins = async () => {
+    const runtime = await getRuntimeConfigForStorage();
+    return [runtime.localBaseUrl, normalizeAiImageSuiteOssCdnDomain(runtime.oss?.cdnDomain)]
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  };
+  const loadExtensionAiImageSuiteProjection = async (
+    input: Parameters<typeof loadExtensionAiImageSuiteState>[0],
+    scopes: string[],
+  ) => {
+    const state = await loadExtensionAiImageSuiteState(input);
+    if (!state) return null;
+    return projectExtensionAiImageSuite({
+      requested: input,
+      state,
+      ownerUserId: input.ownerUserId,
+      scopes,
+      trustedPreviewOrigins: await loadExtensionAiImageSuitePreviewOrigins(),
+      allowInsecureLocalPreview: process.env.NODE_ENV !== 'production',
+    });
+  };
+  const extensionAiImageSuiteReferenceService = createAiImageSuiteReferenceService({
+    repository: new PrismaAiImageSuiteReferenceRepository(prisma),
+    preparationLease: createRedisAiImageSuitePreparationLease({
+      redis,
+      disabled: redisDisabled,
+    }),
+    getStorage: async () => {
+      const runtime = await getRuntimeConfigForStorage();
+      if (runtime.imageStorage === 'ozon-cdn') {
+        throw new Error('AI image suite references require local or OSS storage');
+      }
+      const storage = await getStorageBackend();
+      return {
+        backend: runtime.imageStorage,
+        uploadBuffer: storage.uploadBuffer.bind(storage),
+      };
+    },
+  });
+  const extensionAiImageSuitePromptService = createAiImageSuitePromptService({
+    repository: new PrismaAiImageSuitePromptRepository(prisma),
+    templateResolver: aiPromptTemplateRegistry,
+  });
+  const extensionAiImageSuiteMaterializationService = createAiImageSuiteMaterializationService(
+    new PrismaAiImageSuiteMaterializationRepository(prisma, {
+      getCostControls: getAiImageSuiteCostControls,
+      getProviderRuntime: async () => getAiImageSuiteProviderRuntime(),
+    }),
+  );
+  const extensionAiImageSuiteExecutionRepository = new PrismaAiImageSuiteExecutionRepository(
+    prisma,
+    {
+      runtimeReady: aiImageSuiteRuntimeReady,
+      getCostControls: getAiImageSuiteCostControls,
+    },
+  );
+  const extensionAiImageSuiteExecutionService = createAiImageSuiteExecutionService(
+    extensionAiImageSuiteExecutionRepository,
+  );
+  const extensionAiImageSuiteCandidateService = createAiImageSuiteCandidateService(
+    new PrismaAiImageSuiteCandidateRepository(prisma),
+  );
+  const enqueueExtensionAiImageSuiteFrontier = async (suiteId: string) => {
+    const tasks = await extensionAiImageSuiteExecutionRepository.listQueueableTasks(suiteId);
+    await Promise.all(tasks.map((task) => enqueueAiImageSuiteGenerationRecoveryJob(task)));
+  };
+  const commitExtensionAiImageSuiteWithFrontierRecovery =
+    createExtensionAiImageSuitePostCommitRunner({
+      enqueue: enqueueExtensionAiImageSuiteFrontier,
+      onDeferred: (suiteId, error) => app.log.error(
+        { err: error, suiteId },
+        'AI image suite frontier enqueue deferred to recovery',
+      ),
+    });
   const getExtensionMediaTranslationSettings = async () => ({
     enabled: await getConfig('feature_image_translate'),
     provider: await getConfig('ai_image_translation_provider'),
     model: await getConfig('ai_image_translation_model'),
     dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
     estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
+    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
   });
   const getExtensionMediaTranslationStorageReadiness = async () => {
     try {
@@ -986,23 +1321,75 @@ if (isExtensionDeviceAuthEnabled()) {
   const getExtensionStandaloneReadiness = async (
     operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
   ) => {
-    if (operation === 'IMAGE_TO_IMAGE') {
-      return resolveAiImageToImageReadiness({
-        enabled: await getConfig('feature_ai_media_image_to_image'),
-        workflowEnabled: true,
-        production: process.env.NODE_ENV === 'production',
-      });
-    }
-    const [fullEditEnabled, inpaintEnabled, runtimeConfig] = await Promise.all([
+    const [
+      imageToImageEnabled,
+      fullEditEnabled,
+      inpaintEnabled,
+      provider,
+      configuredModel,
+      baseUrl,
+      costPerImageCents,
+      globalDailyBudgetCents,
+      runtimeConfig,
+    ] = await Promise.all([
+      getConfig('feature_ai_media_image_to_image'),
       getConfig('feature_ai_media_full_edit'),
       getConfig('feature_ai_media_inpaint'),
+      getConfig('ai_image_provider'),
+      getConfig('ai_image_model'),
+      getConfig('ai_image_base_url'),
+      getConfig('ai_image_generation_cost_cents'),
+      getConfig('ai_daily_budget_cents'),
       getRuntimeConfigForStorage(),
     ]);
-    return resolveAiImageEditReadiness(operation, { fullEditEnabled, inpaintEnabled }, {
+    const providerName = String(provider);
+    const model = providerName === 'fake'
+      ? operation === 'IMAGE_TO_IMAGE' ? 'fake-image-to-image-v1' : 'fake-image-edit-v1'
+      : configuredModel;
+    const storageReadiness = resolveAiImageEditStorageReadiness(runtimeConfig);
+    const production = process.env.NODE_ENV === 'production';
+    if (operation === 'IMAGE_TO_IMAGE') {
+      const readiness = resolveAiImageToImageReadiness({
+        enabled: imageToImageEnabled,
+        workflowEnabled: true,
+        production,
+        provider: providerName,
+        model,
+        estimatedCostCents: costPerImageCents,
+        storageReadiness,
+      });
+      return {
+        ...readiness,
+        testOnly: readiness.testOnly === true,
+        provider: providerName,
+        model,
+        baseUrl,
+        costPerImageCents,
+        globalDailyBudgetCents,
+        evidenceLevel: resolveAiImageProviderCapability(providerName, model)?.evidenceLevel,
+      };
+    }
+    const readiness = resolveAiImageEditReadiness(operation, {
+      fullEditEnabled,
+      inpaintEnabled,
+      provider: providerName,
+      model,
+      estimatedCostCents: costPerImageCents,
+    }, {
       workflowEnabled: true,
-      production: process.env.NODE_ENV === 'production',
-      storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
+      production,
+      storageReadiness,
     });
+    return {
+      ...readiness,
+      testOnly: readiness.testOnly === true,
+      provider: providerName,
+      model,
+      baseUrl,
+      costPerImageCents,
+      globalDailyBudgetCents,
+      evidenceLevel: resolveAiImageProviderCapability(providerName, model)?.evidenceLevel,
+    };
   };
   const extensionMediaWorkflowLauncher = createExtensionMediaWorkflowLauncher({
     workflowService: extensionMediaWorkflowService,
@@ -1023,7 +1410,11 @@ if (isExtensionDeviceAuthEnabled()) {
         { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
         role,
       );
-      return { id: asset.id };
+      return {
+        id: asset.id,
+        width: Number(asset.width),
+        height: Number(asset.height),
+      };
     },
     getReadiness: getExtensionStandaloneReadiness,
     getEditDailyLimit: async () => getConfig('ai_user_daily_image_generation_limit'),
@@ -1091,7 +1482,12 @@ if (isExtensionDeviceAuthEnabled()) {
           production: process.env.NODE_ENV === 'production',
           storageReadiness,
         });
-        return { ...readiness, provider: settings.provider, model: settings.model };
+        return {
+          ...readiness,
+          provider: settings.provider,
+          model: settings.model,
+          globalDailyBudgetCents: settings.globalDailyBudgetCents,
+        };
       }
       if (operation === 'IMAGE_TO_IMAGE' || operation === 'FULL_EDIT' || operation === 'INPAINT') {
         return getExtensionStandaloneReadiness(operation);
@@ -1122,13 +1518,241 @@ if (isExtensionDeviceAuthEnabled()) {
   const executeExtensionMediaReviewCommand = createExtensionMediaReviewCommandExecutor({
     workflowService: extensionMediaWorkflowService,
     loadListingDraft: loadExtensionListingDraft,
+    getProviderReadiness: async (operation) => {
+      if (!['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) {
+        return { enabled: false, ready: false };
+      }
+      return getExtensionStandaloneReadiness(
+        operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+      );
+    },
     production: process.env.NODE_ENV === 'production',
   });
   const executeExtensionMediaApplyCommand = createExtensionMediaApplyCommandExecutor({
     workflowService: extensionMediaWorkflowService,
     applyListingDraftApplication: (input) => applyAiMediaListingDraftApplication(prisma, input),
+    getProviderReadiness: async (operation) => {
+      if (!['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) {
+        return { enabled: false, ready: false };
+      }
+      return getExtensionStandaloneReadiness(
+        operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+      );
+    },
     production: process.env.NODE_ENV === 'production',
   });
+  const extensionAiImageSuiteCommandLoaders = (scopes: string[]) => ({
+    loadAuthority: async (input: Parameters<typeof loadExtensionAiImageSuiteState>[0]) => {
+      const state = await loadExtensionAiImageSuiteState(input);
+      return state ? { ownerUserId: input.ownerUserId, ...state.authority } : null;
+    },
+    loadProjection: async (input: Parameters<typeof loadExtensionAiImageSuiteState>[0]) => (
+      loadExtensionAiImageSuiteProjection(input, scopes)
+    ),
+  });
+  const assertExtensionAiImageSuiteWriteEnabled = async (ownerUserId: string) => {
+    const authorization = await getAiImageSuiteDispatchAuthorization(ownerUserId);
+    if (!authorization.enabled) throw new Error(authorization.reason);
+  };
+  const executeExtensionAiImageSuiteCommand = createExtensionAiImageSuiteExecuteCommandExecutor({
+    ...extensionAiImageSuiteCommandLoaders(['listing:review', 'media:execute']),
+    start: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      const providerRuntime = await requireAiImageSuiteExecutionRuntime();
+      const result = await extensionAiImageSuiteService.claim({
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        planId: input.planId,
+        expectedPlanRevision: input.planRevision,
+        idempotencyKey: input.operationKey,
+        expectedPreviewHash: input.expectedPreviewHash,
+        providerConfig: providerRuntime.providerConfig!,
+      });
+      return {
+        suiteId: result.suite.id,
+        status: result.suite.status,
+        revision: result.suite.revision,
+        replayed: result.replayed,
+      };
+    },
+    continue: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await requireAiImageSuiteExecutionRuntime();
+      let suite = await extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
+      if (suite.revision !== input.expectedSuiteRevision) {
+        throw new Error('AI image suite revision changed');
+      }
+      const advance = async (expectedRevision: 1 | 2 | 3, action: () => Promise<unknown>) => {
+        try {
+          await action();
+        } catch (error) {
+          const refreshed = await extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
+          if (refreshed.revision <= expectedRevision) throw error;
+          return refreshed;
+        }
+        return extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
+      };
+      if (suite.revision === 1) {
+        suite = await advance(1, () => extensionAiImageSuiteReferenceService.internalize({
+          suiteId: input.suiteId,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          expectedRevision: 1,
+          operationKey: `${input.operationKey}:references`,
+        }));
+      }
+      if (suite.revision === 2) {
+        suite = await advance(2, () => extensionAiImageSuitePromptService.freeze({
+          suiteId: input.suiteId,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          expectedRevision: 2,
+          operationKey: `${input.operationKey}:prompts`,
+        }));
+      }
+      if (suite.revision === 3) {
+        suite = await advance(3, () => extensionAiImageSuiteMaterializationService.materialize({
+          suiteId: input.suiteId,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          expectedRevision: 3,
+          operationKey: `${input.operationKey}:children`,
+        }));
+      }
+      if (suite.revision === 4) {
+        const dispatched = await commitExtensionAiImageSuiteWithFrontierRecovery(
+          input.suiteId,
+          () => extensionAiImageSuiteExecutionService.dispatch({
+            suiteId: input.suiteId,
+            ownerUserId: input.ownerUserId,
+            actorUserId: input.actorUserId,
+            expectedRevision: 4,
+            operationKey: `${input.operationKey}:dispatch`,
+          }),
+        );
+        return {
+          suiteId: dispatched.suiteId,
+          status: dispatched.status,
+          revision: dispatched.revision,
+          replayed: dispatched.replayed,
+        };
+      }
+      return {
+        suiteId: suite.id,
+        status: suite.status,
+        revision: suite.revision,
+        replayed: true,
+      };
+    },
+    cancel: async (input) => {
+      const result = await commitExtensionAiImageSuiteWithFrontierRecovery(
+        input.suiteId,
+        () => extensionAiImageSuiteExecutionService.cancel({
+          suiteId: input.suiteId,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          expectedRevision: input.expectedSuiteRevision,
+          operationKey: input.operationKey,
+        }),
+      );
+      return {
+        suiteId: result.suiteId,
+        status: result.status,
+        revision: result.revision,
+        replayed: result.replayed,
+      };
+    },
+    retry: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await requireAiImageSuiteExecutionRuntime();
+      const result = await commitExtensionAiImageSuiteWithFrontierRecovery(
+        input.suiteId,
+        () => extensionAiImageSuiteExecutionService.retryFailedSlot({
+          suiteId: input.suiteId,
+          slotId: input.slotId,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          expectedSlotRevision: input.expectedSlotRevision,
+          operationKey: input.operationKey,
+        }),
+      );
+      return {
+        suiteId: result.suiteId,
+        status: result.status,
+        revision: result.revision,
+        replayed: result.replayed,
+      };
+    },
+  });
+  const executeExtensionAiImageSuiteReview = createExtensionAiImageSuiteReviewCommandExecutor({
+    ...extensionAiImageSuiteCommandLoaders(['listing:review']),
+    review: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      const result = await extensionAiImageSuiteCandidateService.review({
+        suiteId: input.suiteId,
+        slotId: input.slotId,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        expectedWorkflowRevision: input.expectedWorkflowRevision,
+        operationKey: input.operationKey,
+        outputAssetId: input.outputAssetId,
+        decision: input.decision,
+        note: null,
+        production: process.env.NODE_ENV === 'production',
+      });
+      const suite = await extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
+      return {
+        suiteId: suite.id,
+        status: suite.status,
+        revision: suite.revision,
+        replayed: result.replayed,
+      };
+    },
+  });
+  const executeExtensionAiImageSuiteApply = createExtensionAiImageSuiteApplyCommandExecutor({
+    ...extensionAiImageSuiteCommandLoaders(['listing:review', 'listing:write']),
+    apply: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      const result = await extensionAiImageSuiteCandidateService.apply({
+        suiteId: input.suiteId,
+        slotId: input.slotId,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        expectedWorkflowRevision: input.expectedWorkflowRevision,
+        operationKey: input.operationKey,
+        expectedTargetUpdatedAt: input.expectedTargetUpdatedAt,
+        production: process.env.NODE_ENV === 'production',
+      });
+      const suite = await extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
+      return {
+        suiteId: suite.id,
+        status: suite.status,
+        revision: suite.revision,
+        replayed: result.replayed,
+      };
+    },
+  });
+  const executeExtensionMediaOrSuiteCommand = async (input: Parameters<
+    typeof executeExtensionMediaWorkflowCommand
+  >[0]) => (
+    input.command.version === EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION
+      ? executeExtensionAiImageSuiteCommand(input)
+      : executeExtensionMediaWorkflowCommand(input)
+  );
+  const executeExtensionMediaOrSuiteReview = async (input: Parameters<
+    typeof executeExtensionMediaReviewCommand
+  >[0]) => (
+    input.command.version === EXTENSION_AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION
+      ? executeExtensionAiImageSuiteReview(input)
+      : executeExtensionMediaReviewCommand(input)
+  );
+  const executeExtensionMediaOrSuiteApply = async (input: Parameters<
+    typeof executeExtensionMediaApplyCommand
+  >[0]) => (
+    input.command.version === EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION
+      ? executeExtensionAiImageSuiteApply(input)
+      : executeExtensionMediaApplyCommand(input)
+  );
   sourceCaptureService = createSourceCaptureService({
     repository: createPrismaSourceCaptureRepository({
       client: prisma,
@@ -1155,6 +1779,8 @@ if (isExtensionDeviceAuthEnabled()) {
     resolveCommand: createSourceWorkflowCommandResolver({
       featureFlags: sourceWorkflowFeatureFlags,
       getMediaWorkflowDecision: getAiMediaRolloutDecision,
+      getAiImageSuiteEnabled: async () => getConfig('feature_ai_media_suite'),
+      production: process.env.NODE_ENV === 'production',
       loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
         where: { id: shopId, userId: ownerUserId },
         select: { id: true, userId: true, platform: true, status: true },
@@ -1185,6 +1811,7 @@ if (isExtensionDeviceAuthEnabled()) {
               select: {
                 id: true,
                 provider: true,
+                model: true,
                 status: true,
                 assets: {
                   where: { kind: 'AI_GENERATED' },
@@ -1241,6 +1868,7 @@ if (isExtensionDeviceAuthEnabled()) {
           selectedOutputAssetId: row.selectedOutputAssetId,
           suiteId: row.suiteSlot?.suiteId || null,
           provider: row.jobs[0]?.provider || null,
+          model: row.jobs[0]?.model || null,
           currentJobStatus: row.jobs[0]?.status || null,
           outputAssetIds: (row.jobs[0]?.assets || [])
             .filter((asset) => asset.ownerUserId === ownerUserId
@@ -1293,9 +1921,9 @@ if (isExtensionDeviceAuthEnabled()) {
         idempotencyKey,
       });
     },
-    executeMediaWorkflowCommand: executeExtensionMediaWorkflowCommand,
-    executeMediaReviewCommand: executeExtensionMediaReviewCommand,
-    executeMediaApplyCommand: executeExtensionMediaApplyCommand,
+    executeMediaWorkflowCommand: executeExtensionMediaOrSuiteCommand,
+    executeMediaReviewCommand: executeExtensionMediaOrSuiteReview,
+    executeMediaApplyCommand: executeExtensionMediaOrSuiteApply,
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',
@@ -1310,6 +1938,7 @@ if (isExtensionDeviceAuthEnabled()) {
   await app.register(extensionSourceWorkbenchRoutes, {
     prefix: '/api/extension-device/source-workbench',
     service: createExtensionSourceWorkbenchService({
+      production: process.env.NODE_ENV === 'production',
       loadAllowedPreviewOrigins: async () => {
         const config = await getRuntimeConfigForStorage();
         return [config.localBaseUrl, config.oss?.cdnDomain]
@@ -1410,6 +2039,9 @@ if (isExtensionDeviceAuthEnabled()) {
         translationModel,
         translationDailyLimit,
         translationEstimatedCostCents,
+        imageProvider,
+        configuredImageModel,
+        imageEstimatedCostCents,
         runtimeConfig,
       ] = await Promise.all([
         getConfig('feature_ai_media_image_to_image'),
@@ -1420,22 +2052,42 @@ if (isExtensionDeviceAuthEnabled()) {
         getConfig('ai_image_translation_model'),
         getConfig('ai_user_daily_image_translation_limit'),
         getConfig('ai_image_translation_cost_cents'),
+        getConfig('ai_image_provider'),
+        getConfig('ai_image_model'),
+        getConfig('ai_image_generation_cost_cents'),
         getRuntimeConfigForStorage(),
       ]);
       const production = process.env.NODE_ENV === 'production';
+      const imageProviderName = String(imageProvider);
+      const imageToImageModel = imageProviderName === 'fake'
+        ? 'fake-image-to-image-v1'
+        : configuredImageModel;
       const imageToImage = resolveAiImageToImageReadiness({
         enabled: imageToImageEnabled,
         workflowEnabled: true,
         production,
+        provider: imageProviderName,
+        model: imageToImageModel,
+        estimatedCostCents: imageEstimatedCostCents,
+        storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
       });
       const editFlags = { fullEditEnabled, inpaintEnabled };
+      const editModel = imageProviderName === 'fake'
+        ? 'fake-image-edit-v1'
+        : configuredImageModel;
+      const editSettings = {
+        ...editFlags,
+        provider: imageProviderName,
+        model: editModel,
+        estimatedCostCents: imageEstimatedCostCents,
+      };
       const editOptions = {
         workflowEnabled: true,
         production,
         storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
       };
-      const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editFlags, editOptions);
-      const inpaint = resolveAiImageEditReadiness('INPAINT', editFlags, editOptions);
+      const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, editOptions);
+      const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, editOptions);
       const translation = resolveExtensionMediaTranslationReadiness({
         settings: {
           enabled: translationEnabled,
@@ -1483,6 +2135,17 @@ if (isExtensionDeviceAuthEnabled()) {
         },
       };
     },
+  });
+  await app.register(extensionAiImageSuiteRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    loadState: loadExtensionAiImageSuiteState,
+    loadTrustedPreviewOrigins: loadExtensionAiImageSuitePreviewOrigins,
+    allowInsecureLocalPreview: process.env.NODE_ENV !== 'production',
   });
   await app.register(extensionMediaEditRoutes, {
     prefix: '/api/extension-device/source-workbench',
@@ -1774,24 +2437,18 @@ await app.register(aiImageRoutes, {
   prefix: '/api/ai-images',
   resolvePrompt: resolveActiveAiPrompt,
 });
-const aiImageSuiteRuntimeReady = async (suite: {
-  provider: string;
-  model: string;
-  estimatedCostCents: number;
-  maximumCostCents: number;
-}) => Boolean(
-  aiImageSuiteGenerationQueue
-  && process.env.NODE_ENV !== 'production'
-  && suite.provider === 'fake'
-  && suite.model === 'fake-image-suite-v1'
-  && Number(suite.estimatedCostCents) === 0
-  && Number(suite.maximumCostCents) === 0
-);
 const aiImageSuiteExecutionRepository = new PrismaAiImageSuiteExecutionRepository(prisma, {
   runtimeReady: aiImageSuiteRuntimeReady,
+  getCostControls: getAiImageSuiteCostControls,
 });
 const aiImageSuiteGenerationCoordinator = new PrismaAiImageSuiteGenerationCoordinator(prisma, {
   runtimeReady: aiImageSuiteRuntimeReady,
+  getRuntimeEvidence: aiImageSuiteRuntimeEvidence,
+  outputStorageReady: async () => {
+    const runtime = await getRuntimeConfigForStorage();
+    return runtime.imageStorage === 'local' || runtime.imageStorage === 'oss';
+  },
+  getDispatchAuthorization: getAiImageSuiteDispatchAuthorization,
 });
 const aiImageSuitePreparationLease = createRedisAiImageSuitePreparationLease({
   redis,
@@ -1803,23 +2460,24 @@ const enqueueAiImageSuiteFrontier = async (suiteId: string) => {
 };
 await app.register(aiImageSuiteRoutes, {
   prefix: '/api/ai-images',
+  getProviderConfig: async () => (await requireAiImageSuiteProviderRuntime()).providerConfig!,
   getSuiteRuntimeReadiness: async (
-    _ownerUserId: string,
+    ownerUserId: string,
     providerConfig: AiImageSuiteProviderConfig,
   ) => {
-    const operational = await probeAiImageSuiteRuntime({
-      redis,
-      queueAvailable: Boolean(aiImageSuiteGenerationQueue),
-    });
-    const providerRuntimeReady = await aiImageSuiteRuntimeReady({
-      provider: providerConfig.provider,
-      model: providerConfig.model,
-      estimatedCostCents: providerConfig.estimatedCostPerImageCents,
-      maximumCostCents: providerConfig.maximumCostPerImageCents,
-    });
+    const [operational, activeRuntime, authorization] = await Promise.all([
+      probeAiImageSuiteRuntime({
+        redis,
+        queueAvailable: Boolean(aiImageSuiteGenerationQueue),
+      }),
+      getAiImageSuiteProviderRuntime(),
+      getAiImageSuiteDispatchAuthorization(ownerUserId),
+    ]);
+    const providerRuntimeReady = activeRuntime.executionReady
+      && aiImageSuiteProviderConfigMatches(providerConfig, activeRuntime);
     return {
       queueReady: operational.queueReady,
-      runtimeReady: operational.workerReady && providerRuntimeReady,
+      runtimeReady: authorization.enabled && operational.workerReady && providerRuntimeReady,
     };
   },
   getReferenceStorageReadiness: async (
@@ -1858,7 +2516,10 @@ await app.register(aiImageSuiteRoutes, {
     templateResolver: aiPromptTemplateRegistry,
   }),
   materializationService: createAiImageSuiteMaterializationService(
-    new PrismaAiImageSuiteMaterializationRepository(prisma),
+    new PrismaAiImageSuiteMaterializationRepository(prisma, {
+      getCostControls: getAiImageSuiteCostControls,
+      getProviderRuntime: async () => getAiImageSuiteProviderRuntime(),
+    }),
   ),
   executionService: createAiImageSuiteExecutionService(aiImageSuiteExecutionRepository),
   enqueueSuiteFrontier: enqueueAiImageSuiteFrontier,

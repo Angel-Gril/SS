@@ -46,6 +46,7 @@ export function verifyAiMediaDarkPolicy(rows) {
   const inpaint = verifyDarkFlag(values, 'feature_ai_media_inpaint');
   const webMedia = verifyDarkFlag(values, 'feature_source_listing_web_media');
   const extensionWorkbench = verifyDarkFlag(values, 'feature_source_listing_extension_workbench');
+  const ozonPublisher = verifyDarkFlag(values, 'feature_source_ozon_publisher_v2');
   const legacyGeneration = verifyInactiveProviderChannel(
     values,
     'ai_image_generation_enabled',
@@ -61,7 +62,7 @@ export function verifyAiMediaDarkPolicy(rows) {
   if (rawPolicy === undefined) {
     return {
       master, imageToImage, suite, fullEdit, inpaint, webMedia,
-      extensionWorkbench, legacyGeneration, imageTranslation, policy: 'absent',
+      extensionWorkbench, ozonPublisher, legacyGeneration, imageTranslation, policy: 'absent',
     };
   }
 
@@ -94,6 +95,7 @@ export function verifyAiMediaDarkPolicy(rows) {
     inpaint,
     webMedia,
     extensionWorkbench,
+    ozonPublisher,
     legacyGeneration,
     imageTranslation,
     policy: `revision:${policy.revision},tenantIds:0`,
@@ -105,7 +107,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const rows = JSON.parse(process.argv[2] || 'null');
     const result = verifyAiMediaDarkPolicy(rows);
     console.log(
-      `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
+      `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
     );
   } catch (error) {
     console.error(

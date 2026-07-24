@@ -7,6 +7,14 @@ import {
   type AiMediaWorkflowContext,
 } from '../services/ai-media-workflows.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+
+function paidProviderRuntime(width = 1024, height = 1024, costPerImageCents = 7) {
+  return createAiImageProviderRuntimeContract({
+    provider: 'openai-images', model: 'gpt-image-1',
+    baseUrl: 'https://api.openai.com/v1', costPerImageCents,
+  }, { count: 1, width, height });
+}
 
 const listingDraftCapture = {
   captureVersion: 'source-product-capture-v2',
@@ -129,7 +137,7 @@ function listingDraftImageToImageInput(overrides: Record<string, unknown> = {}) 
   return {
     ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-red',
     prompt: 'Translate the red product scene', negativePrompt: null,
-    count: 1, width: 1024, height: 1024, idempotencyKey: 'listing-image-1',
+    count: 1, width: 1024, height: 1024, dailyLimit: 0, idempotencyKey: 'listing-image-1',
     context: {
       type: 'listing-draft' as const, id: 'draft-1', skuKey: 'sku-red', slotKey: 'sku-hero',
       revision: 4, draftVersion: 2,
@@ -298,6 +306,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     const result = await repository.createImageEdit({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'INPAINT',
       sourceAssetId: 'source-1', maskAssetId: 'mask-1',
+      width: 1000, height: 1000,
       maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
       prompt: 'Remove label', negativePrompt: null,
       resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
@@ -334,10 +343,78 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     }) });
   });
 
+  it('freezes paid FULL_EDIT Provider identity, runtime contract and cost in one transaction', async () => {
+    const runtime = paidProviderRuntime(1000, 1000);
+    const workflowCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-workflow-1', ...data }));
+    const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-job-1', ...data }));
+    const costCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-paid-cost-1', ...data }));
+    const tx = {
+      $queryRawUnsafe: vi.fn(async () => [{ locked: 1 }]),
+      mediaAsset: { findMany: vi.fn(async () => [{
+        id: 'source-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+        sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+        url: '/uploads/source.png', mimeType: 'image/png', width: 1000, height: 1000,
+        storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100,
+        metadata: { pixelOrientationNormalized: true },
+      }]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: {
+        findUnique: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({
+          id: 'edit-paid-workflow-1', operation: 'FULL_EDIT', inputs: [], jobs: [], events: [],
+        }),
+        create: workflowCreate,
+      },
+      aiMediaWorkflowInput: { create: vi.fn(async ({ data }: any) => data) },
+      aiImageJob: {
+        aggregate: vi.fn(async () => ({ _sum: { requestedImageCount: 0, billedUnits: 0 } })),
+        create: jobCreate,
+      },
+      aiCostSettlement: { aggregate: vi.fn(async () => ({ _sum: { actualCostMinor: 0 } })) },
+      aiCostReservation: {
+        aggregate: vi.fn(async () => ({ _sum: { maximumCostMinor: 0 } })),
+        findUnique: vi.fn(async () => null), create: costCreate,
+      },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageEdit({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
+      sourceAssetId: 'source-1', width: 1000, height: 1000,
+      prompt: 'Clean background', negativePrompt: null,
+      resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
+      templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
+      templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
+      dailyLimit: 5, provider: 'openai-images', model: 'gpt-image-1',
+      estimatedCostCents: 7, globalDailyBudgetCents: 100,
+      providerRuntimeContract: runtime, idempotencyKey: 'edit-paid-1',
+      context: { type: 'collect', id: 'goods-1' },
+    })).resolves.toMatchObject({ kind: 'created', jobId: 'edit-paid-job-1' });
+    expect(jobCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      operationConfig: expect.objectContaining({
+        policyVersion: 'ai-image-edit-policy/1.0', providerRuntime: runtime,
+      }),
+    }) });
+    expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      provider: 'openai-images', model: 'gpt-image-1',
+      estimatedCostMinor: 7, maximumCostMinor: 7,
+    }) });
+    expect(tx.aiCostReservation.aggregate.mock.invocationCallOrder[0])
+      .toBeLessThan(workflowCreate.mock.invocationCallOrder[0]!);
+    expect(workflowCreate.mock.invocationCallOrder[0]).toBeLessThan(jobCreate.mock.invocationCallOrder[0]!);
+    expect(jobCreate.mock.invocationCallOrder[0]).toBeLessThan(costCreate.mock.invocationCallOrder[0]!);
+  });
+
   it('replays an edit before mutable source authority checks and conflicts on a different fingerprint', async () => {
     const input = {
       ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'INPAINT' as const,
       sourceAssetId: 'source-1', maskAssetId: 'mask-1',
+      width: 1000, height: 1000,
       maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
       prompt: 'Remove label', negativePrompt: null,
       resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
@@ -429,7 +506,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     await expect(repository.createImageEdit({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
-      sourceAssetId: candidate.id, prompt: 'Refine the candidate', negativePrompt: null,
+      sourceAssetId: candidate.id, width: 900, height: 1200,
+      prompt: 'Refine the candidate', negativePrompt: null,
       resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
       templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
       templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
@@ -461,7 +539,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     await expect(repository.createImageEdit({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
-      sourceAssetId: 'source-legacy', prompt: 'Clean background', negativePrompt: null,
+      sourceAssetId: 'source-legacy', width: 3, height: 2,
+      prompt: 'Clean background', negativePrompt: null,
       resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
       templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
       templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
@@ -498,7 +577,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     await expect(repository.createImageEdit({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
-      sourceAssetId: 'source-1', prompt: 'Clean background', negativePrompt: null,
+      sourceAssetId: 'source-1', width: 1000, height: 1000,
+      prompt: 'Clean background', negativePrompt: null,
       resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
       templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
       templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
@@ -606,7 +686,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       ownerUserId: 'owner-1', actorUserId: 'actor-1',
       references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
       prompt: 'Use both views', negativePrompt: null, count: 1, width: 1024, height: 1024,
-      idempotencyKey: 'workflow-idem-multi', context: { type: 'collect', id: 'goods-1' },
+      dailyLimit: 0, idempotencyKey: 'workflow-idem-multi', context: { type: 'collect', id: 'goods-1' },
     });
     expect(inputCreates.map(({ assetId, ordinal }) => ({ assetId, ordinal }))).toEqual([
       { assetId: 'asset-1', ordinal: 0 },
@@ -633,6 +713,191 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       maximumCostMinor: 0,
     }) });
     expect(jobCreate.mock.invocationCallOrder[0]).toBeLessThan(costReservationCreate.mock.invocationCallOrder[0]!);
+  });
+
+  it('rejects IMAGE_TO_IMAGE creation when active and billed units exhaust the daily quota', async () => {
+    const workflowCreate = vi.fn();
+    const jobCreate = vi.fn();
+    const aggregate = vi.fn()
+      .mockResolvedValueOnce({ _sum: { requestedImageCount: 2 } })
+      .mockResolvedValueOnce({ _sum: { billedUnits: 3 } });
+    const tx = {
+      mediaAsset: { findMany: vi.fn(async () => [{
+        id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+        url: 'https://cdn/1.png', mimeType: 'image/png', width: 1024, height: 1024,
+      }]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: { findUnique: vi.fn(async () => null), create: workflowCreate },
+      aiImageJob: { aggregate, create: jobCreate },
+    };
+
+    await expect(new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).createImageToImage({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 5, idempotencyKey: 'workflow-quota-overflow',
+      context: { type: 'collect', id: 'goods-1' },
+    })).rejects.toMatchObject({
+      code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED', used: 5, limit: 5,
+    });
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
+    expect(aggregate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.objectContaining({
+        ownerUserId: 'owner-1', status: { in: ['SUCCEEDED', 'FAILED', 'CANCELLED'] },
+        billedUnits: { gt: 0 },
+      }),
+    }));
+    expect(workflowCreate).not.toHaveBeenCalled();
+    expect(jobCreate).not.toHaveBeenCalled();
+  });
+
+  it('locks and reserves the global budget before atomically freezing a paid IMAGE_TO_IMAGE job', async () => {
+    const runtime = paidProviderRuntime();
+    const lock = vi.fn(async () => [{ locked: 1 }]);
+    const idempotencyRead = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'workflow-paid-1', inputs: [], jobs: [], events: [] });
+    const workflowCreate = vi.fn(async ({ data }: any) => ({ id: 'workflow-paid-1', ...data }));
+    const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'job-paid-1', ...data }));
+    const costCreate = vi.fn(async ({ data }: any) => ({ id: 'cost-paid-1', ...data }));
+    const tx = {
+      $queryRawUnsafe: lock,
+      mediaAsset: { findMany: vi.fn(async () => [{
+        id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+        url: 'https://cdn/1.png', mimeType: 'image/png', width: 1024, height: 1024,
+      }]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: {
+        findUnique: idempotencyRead,
+        create: workflowCreate,
+      },
+      aiMediaWorkflowInput: { create: vi.fn(async ({ data }: any) => data) },
+      aiImageJob: { create: jobCreate },
+      aiCostSettlement: { aggregate: vi.fn(async () => ({ _sum: { actualCostMinor: 0 } })) },
+      aiCostReservation: {
+        aggregate: vi.fn(async () => ({ _sum: { maximumCostMinor: 0 } })),
+        findUnique: vi.fn(async () => null),
+        create: costCreate,
+      },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageToImage({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: runtime,
+      idempotencyKey: 'workflow-paid-1', context: { type: 'collect', id: 'goods-1' },
+    })).resolves.toMatchObject({ kind: 'created', jobId: 'job-paid-1' });
+
+    expect(jobCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      operationConfig: runtime,
+    }) });
+    expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      provider: 'openai-images', model: 'gpt-image-1',
+      estimatedCostMinor: 7, maximumCostMinor: 7,
+    }) });
+    expect(lock.mock.invocationCallOrder[0]).toBeLessThan(idempotencyRead.mock.invocationCallOrder[0]!);
+    expect(tx.aiCostReservation.aggregate.mock.invocationCallOrder[0])
+      .toBeLessThan(workflowCreate.mock.invocationCallOrder[0]!);
+    expect(workflowCreate.mock.invocationCallOrder[0]).toBeLessThan(jobCreate.mock.invocationCallOrder[0]!);
+    expect(jobCreate.mock.invocationCallOrder[0]).toBeLessThan(costCreate.mock.invocationCallOrder[0]!);
+  });
+
+  it('rejects a paid IMAGE_TO_IMAGE budget overflow before creating any workflow state', async () => {
+    const workflowCreate = vi.fn();
+    const jobCreate = vi.fn();
+    const costCreate = vi.fn();
+    const tx = {
+      $queryRawUnsafe: vi.fn(async () => [{ locked: 1 }]),
+      mediaAsset: { findMany: vi.fn(async () => [{
+        id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+        url: 'https://cdn/1.png', mimeType: 'image/png', width: 1024, height: 1024,
+      }]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: { findUnique: vi.fn(async () => null), create: workflowCreate },
+      aiCostSettlement: { aggregate: vi.fn(async () => ({ _sum: { actualCostMinor: 0 } })) },
+      aiCostReservation: {
+        aggregate: vi.fn(async () => ({ _sum: { maximumCostMinor: 95 } })),
+        findUnique: vi.fn(), create: costCreate,
+      },
+      aiImageJob: { create: jobCreate },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageToImage({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime(),
+      idempotencyKey: 'workflow-budget-overflow', context: { type: 'collect', id: 'goods-1' },
+    })).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED' });
+    expect(workflowCreate).not.toHaveBeenCalled();
+    expect(jobCreate).not.toHaveBeenCalled();
+    expect(costCreate).not.toHaveBeenCalled();
+  });
+
+  it('locks before paid idempotency replay and conflicts when frozen cost configuration changes', async () => {
+    const base = {
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      dailyLimit: 0,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime(),
+      idempotencyKey: 'workflow-paid-replay', context: { type: 'collect' as const, id: 'goods-1' },
+    };
+    const existing = {
+      id: 'workflow-paid-replay', ownerUserId: 'owner-1',
+      requestFingerprint: aiMediaPayloadHash({
+        request: createAiMediaWorkflowFingerprint(base),
+        sourceAssetSha256: 'a'.repeat(64),
+      }),
+      inputs: [{ assetSha256: 'a'.repeat(64) }],
+      jobs: [{ id: 'job-paid-replay', workflowAttempt: 1 }], events: [],
+    };
+    const lock = vi.fn(async () => [{ locked: 1 }]);
+    const idempotencyRead = vi.fn(async () => existing);
+    const budgetAggregate = vi.fn();
+    const tx = {
+      $queryRawUnsafe: lock,
+      aiMediaWorkflow: { findUnique: idempotencyRead },
+      mediaAsset: { findMany: vi.fn() },
+      aiCostReservation: { aggregate: budgetAggregate },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageToImage(base)).resolves.toMatchObject({
+      kind: 'existing', jobId: 'job-paid-replay',
+    });
+    await expect(repository.createImageToImage({
+      ...base,
+      estimatedCostCents: 8,
+      providerRuntimeContract: paidProviderRuntime(1024, 1024, 8),
+    })).resolves.toMatchObject({ kind: 'conflict', jobId: 'job-paid-replay' });
+    expect(lock).toHaveBeenCalledTimes(2);
+    expect(lock.mock.invocationCallOrder[0]).toBeLessThan(idempotencyRead.mock.invocationCallOrder[0]!);
+    expect(tx.mediaAsset.findMany).not.toHaveBeenCalled();
+    expect(budgetAggregate).not.toHaveBeenCalled();
   });
 
   it('creates IMAGE_TO_IMAGE only for the current listing draft source/SKU/slot authority', async () => {
@@ -732,7 +997,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       .createImageToImage(input as {
         ownerUserId: string; actorUserId: string; sourceAssetId: string;
         prompt: string; negativePrompt: string | null; count: number; width: number; height: number;
-        idempotencyKey: string; context: AiMediaWorkflowContext;
+        dailyLimit: number; idempotencyKey: string; context: AiMediaWorkflowContext;
       });
 
     expect(result).toMatchObject({ kind: 'existing', jobId: 'job-existing-listing' });
@@ -767,16 +1032,17 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     await expect(new PrismaAiMediaWorkflowRepository(client as never).createImageToImage({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
       prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
-      idempotencyKey: 'workflow-cost-failure', context: { type: 'collect', id: 'goods-1' },
+      dailyLimit: 0, idempotencyKey: 'workflow-cost-failure', context: { type: 'collect', id: 'goods-1' },
     })).rejects.toThrow('cost reservation unavailable');
     expect(eventCreate).not.toHaveBeenCalled();
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('replays an existing workflow without creating a second cost reservation', async () => {
+  it('replays an existing workflow without charging quota or creating a second cost reservation', async () => {
     const costReservationCreate = vi.fn();
+    const quotaAggregate = vi.fn();
     const existing = {
-      id: 'workflow-1', requestFingerprint: '', inputs: [],
+      id: 'workflow-1', requestFingerprint: '', inputs: [{ assetSha256: 'a'.repeat(64) }],
       jobs: [{ id: 'job-1', workflowAttempt: 1 }], events: [],
     };
     const tx = {
@@ -788,6 +1054,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
         id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
       })) },
       aiMediaWorkflow: { findUnique: vi.fn(async () => existing) },
+      aiImageJob: { aggregate: quotaAggregate },
       aiCostReservation: { create: costReservationCreate },
     };
     const client = { $transaction: vi.fn(async (callback: any) => callback(tx)) };
@@ -795,7 +1062,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     const input = {
       ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
       prompt: 'Keep the product', negativePrompt: null, count: 1, width: 1024, height: 1024,
-      idempotencyKey: 'workflow-replay', context: { type: 'collect' as const, id: 'goods-1' },
+      dailyLimit: 1, idempotencyKey: 'workflow-replay', context: { type: 'collect' as const, id: 'goods-1' },
     };
     const fingerprint = createAiMediaWorkflowFingerprint(input);
     const payloadHash = aiMediaPayloadHash({
@@ -806,6 +1073,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     const result = await repository.createImageToImage(input);
     expect(result).toMatchObject({ kind: 'existing', jobId: 'job-1' });
+    expect(quotaAggregate).not.toHaveBeenCalled();
     expect(costReservationCreate).not.toHaveBeenCalled();
   });
 
@@ -821,7 +1089,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       ownerUserId: 'owner-1', actorUserId: 'actor-1',
       references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
       prompt: 'Use both views', negativePrompt: null, count: 1, width: 1024, height: 1024,
-      idempotencyKey: 'workflow-idem-duplicate', context: { type: 'collect', id: 'goods-1' },
+      dailyLimit: 0, idempotencyKey: 'workflow-idem-duplicate', context: { type: 'collect', id: 'goods-1' },
     })).rejects.toMatchObject({ code: 'SOURCE_ASSET_DUPLICATE' });
   });
 
@@ -962,7 +1230,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       $transaction: vi.fn(async (callback: any) => callback(tx)),
     } as never).retryOwned({
       id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
-      expectedRevision: 3, idempotencyKey: `retry-after-${status.toLowerCase()}`,
+      expectedRevision: 3, idempotencyKey: `retry-after-${status.toLowerCase()}`, dailyLimit: 0,
     });
 
       expect(result).toMatchObject({ jobId: 'job-2', replayed: false });
@@ -1072,7 +1340,7 @@ describe('Prisma AI media workflow repository recovery fence', () => {
 
     const result = await new PrismaAiMediaWorkflowRepository(client as never).retryOwned({
       id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
-      expectedRevision: 3, idempotencyKey: 'retry-idem-cost',
+      expectedRevision: 3, idempotencyKey: 'retry-idem-cost', dailyLimit: 0,
     });
 
     expect(result).toMatchObject({ jobId: 'job-2', replayed: false });
@@ -1199,6 +1467,55 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(aggregate).toHaveBeenCalledTimes(2);
     expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
       where: unresolvedQuotaFilter,
+    }));
+    expect(jobCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an IMAGE_TO_IMAGE retry when active and billed units exhaust the daily quota', async () => {
+    const fingerprint = 'c'.repeat(64);
+    const jobCreate = vi.fn();
+    const aggregate = vi.fn()
+      .mockResolvedValueOnce({ _sum: { requestedImageCount: 2 } })
+      .mockResolvedValueOnce({ _sum: { billedUnits: 3 } });
+    const tx = {
+      aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null) },
+      aiMediaWorkflow: {
+        findFirst: vi.fn(async () => ({
+          id: 'workflow-1', ownerUserId: 'owner-1', status: 'FAILED', revision: 2,
+          currentAttempt: 1, requestFingerprint: fingerprint,
+        })),
+      },
+      aiImageJob: {
+        findFirst: vi.fn(async () => ({
+          id: 'job-1', ownerUserId: 'owner-1', providerJobId: null,
+          operation: 'IMAGE_TO_IMAGE', provider: 'fake', model: 'fake-image-to-image-v1',
+          prompt: 'Retry prompt', negativePrompt: null, requestFingerprint: fingerprint,
+          inputAssets: [], requestedImageCount: 1, width: 1024, height: 1024,
+          estimatedCostCents: 0,
+        })),
+        aggregate,
+        create: jobCreate,
+      },
+      aiCostReservation: { findUnique: vi.fn(async () => null), create: vi.fn() },
+    };
+
+    await expect(new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).retryOwned({
+      id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 2, idempotencyKey: 'image-to-image-retry-quota', dailyLimit: 5,
+    })).rejects.toMatchObject({
+      code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED', used: 5, limit: 5,
+    });
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: unresolvedQuotaFilter,
+    }));
+    expect(aggregate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.objectContaining({
+        ownerUserId: 'owner-1', status: { in: ['SUCCEEDED', 'FAILED', 'CANCELLED'] },
+        billedUnits: { gt: 0 },
+      }),
     }));
     expect(jobCreate).not.toHaveBeenCalled();
   });

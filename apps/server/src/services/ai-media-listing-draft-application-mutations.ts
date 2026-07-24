@@ -745,6 +745,7 @@ export async function applyAiMediaListingDraftApplication(
       select: {
         id: true, status: true, operation: true, provider: true, appliedAt: true,
         workflowAttempt: true,
+        costReservation: { select: { status: true } },
       },
     });
     if (!job
@@ -756,10 +757,16 @@ export async function applyAiMediaListingDraftApplication(
         'Reviewed workflow job is not the current succeeded attempt',
       );
     }
-    if (input.production || job.provider !== 'fake') {
+    if (input.production && job.provider === 'fake') {
       throw new AiMediaApplicationMutationError(
         'PROVIDER_NOT_READY',
-        'Listing draft writeback remains available for fake-provider acceptance only',
+        'The fake AI image Provider is disabled in production',
+      );
+    }
+    if (job.provider !== 'fake' && job.costReservation?.status !== 'SETTLED') {
+      throw new AiMediaApplicationMutationError(
+        'PROVIDER_NOT_READY',
+        'Paid AI image cost settlement is not complete',
       );
     }
     assignmentSource(job.operation);

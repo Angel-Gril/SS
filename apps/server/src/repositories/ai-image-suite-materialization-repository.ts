@@ -3,6 +3,11 @@ import type { PrismaClient } from '@prisma/client';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import { reserveAiCostInTransaction } from '../services/ai-cost-ledger.js';
 import {
+  enforceAiImageSuiteCostControlsInTransaction,
+  resolveAiImageSuiteCostControls,
+  type AiImageSuiteCostControlResolver,
+} from '../services/ai-image-suite-cost-controls.js';
+import {
   AiMediaCapabilityError,
   assertAiMediaCapability,
 } from '../services/ai-image-provider-capabilities.js';
@@ -10,6 +15,7 @@ import {
   AI_IMAGE_SUITE_CHILD_BINDING_VERSION,
   AI_IMAGE_SUITE_CHILD_FINGERPRINT_VERSION,
   AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION,
+  AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION,
   AI_IMAGE_SUITE_MATERIALIZATION_EVENT_VERSION,
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
@@ -22,6 +28,14 @@ import {
   type AiImageSuiteMaterializationSummary,
   type MaterializeAiImageSuiteInput,
 } from '../services/ai-image-suite-materialization.js';
+import {
+  AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
+  AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+  aiImageSuiteProviderRuntimeMatches,
+  type AiImageSuiteProviderRuntimeSnapshot,
+} from '../services/ai-image-suite-provider-runtime.js';
+import { AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION } from '../services/ai-image-suite-output-normalizer.js';
+import type { AiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_SUITE_PROMPT_SET_VERSION,
   AI_IMAGE_SUITE_SLOT_PROMPT_VERSION,
@@ -118,6 +132,11 @@ interface PreparedReference {
   mimeType: string;
   width: number;
   height: number;
+  storageBackend: 'local' | 'oss';
+  storageKey: string;
+  sizeBytes: number;
+  kind: 'SOURCE_ORIGINAL';
+  sourceCaptureSnapshotId: string;
   bindingHash: string;
 }
 
@@ -127,6 +146,21 @@ interface PreparedSlot {
   references: PreparedReference[];
   requestFingerprint: string;
   operationConfig: Record<string, unknown>;
+}
+
+export interface AiImageSuiteMaterializationRepositoryOptions {
+  getCostControls?: AiImageSuiteCostControlResolver;
+  getProviderRuntime?: (suite: {
+    ownerUserId: string;
+    provider: string;
+    model: string;
+    providerConfigHash: string;
+    pricingVersion: string;
+    concurrencyLimit: number;
+    itemCount: number;
+    estimatedCostCents: number;
+    maximumCostCents: number;
+  }) => Promise<AiImageSuiteProviderRuntimeSnapshot>;
 }
 
 function sha256(value: unknown): value is string {
@@ -226,6 +260,7 @@ function childRequestFingerprint(
   slot: any,
   prompt: any,
   references: PreparedReference[],
+  operationConfig: Record<string, unknown>,
 ): string {
   return hashAiMediaPlanningJson({
     version: AI_IMAGE_SUITE_CHILD_FINGERPRINT_VERSION,
@@ -241,6 +276,7 @@ function childRequestFingerprint(
     outputProfile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
     width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
     height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
+    operationConfig,
     slotId: String(slot.id),
     ordinal: Number(slot.ordinal),
     slotKey: String(slot.slotKey),
@@ -398,7 +434,10 @@ function planAuthorityValid(suite: any): boolean {
     && String(version.sourceSchemaVersion) === String(suite.sourceSchemaVersion));
 }
 
-function prepareSlots(suite: any): PreparedSlot[] | null {
+function prepareSlots(
+  suite: any,
+  providerRuntime: AiImageProviderRuntimeContract | null,
+): PreparedSlot[] | null {
   const referenceRows = Array.isArray(suite.referenceAssets) ? suite.referenceAssets : [];
   const byCandidate = new Map<string, PreparedReference>();
   for (const [ordinal, row] of referenceRows.entries()) {
@@ -423,7 +462,13 @@ function prepareSlots(suite: any): PreparedSlot[] | null {
       || String(asset.url) !== String(row.assetUrl)
       || String(asset.mimeType) !== String(row.mimeType)
       || Number(asset.width) !== Number(row.width)
-      || Number(asset.height) !== Number(row.height)) return null;
+      || Number(asset.height) !== Number(row.height)
+      || !['local', 'oss'].includes(String(asset.storageBackend))
+      || !exact(asset.storageKey, 2_000)
+      || !Number.isSafeInteger(asset.sizeBytes)
+      || Number(asset.sizeBytes) < 1
+      || Number(asset.sizeBytes) > 20 * 1024 * 1024
+      || String(asset.sourceCaptureSnapshotId) !== String(suite.sourceCaptureSnapshotId)) return null;
     byCandidate.set(String(row.candidateId), {
       ordinal,
       candidateId: String(row.candidateId),
@@ -433,6 +478,11 @@ function prepareSlots(suite: any): PreparedSlot[] | null {
       mimeType: String(row.mimeType),
       width: Number(row.width),
       height: Number(row.height),
+      storageBackend: asset.storageBackend as 'local' | 'oss',
+      storageKey: String(asset.storageKey),
+      sizeBytes: Number(asset.sizeBytes),
+      kind: 'SOURCE_ORIGINAL',
+      sourceCaptureSnapshotId: String(asset.sourceCaptureSnapshotId),
       bindingHash: String(row.bindingHash),
     });
   }
@@ -468,8 +518,7 @@ function prepareSlots(suite: any): PreparedSlot[] | null {
     }
     const prompt = promptBySlot.get(String(slot.id));
     if (!prompt) return null;
-    const operationConfig = {
-      version: AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION,
+    const commonOperationConfig = {
       outputProfile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
       width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
       height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
@@ -477,12 +526,45 @@ function prepareSlots(suite: any): PreparedSlot[] | null {
       promptBindingHash: String(prompt.bindingHash),
       referenceSetHash: String(suite.promptSet.referenceSetHash),
     };
+    const operationConfig = suite.provider === 'fake'
+      ? {
+        version: AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION,
+        ...commonOperationConfig,
+      }
+      : providerRuntime
+        ? {
+          version: AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION,
+          ...commonOperationConfig,
+          providerRuntime,
+          providerRequest: {
+            count: 1,
+            width: AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
+            height: AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
+          },
+          finalOutput: {
+            profile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
+            width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
+            height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
+            fit: 'contain',
+            background: '#ffffff',
+            format: 'png',
+            normalizerVersion: AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
+          },
+        }
+        : null;
+    if (!operationConfig) return null;
     prepared.push({
       row: slot,
       prompt,
       references,
       operationConfig,
-      requestFingerprint: childRequestFingerprint(suite, slot, prompt, references),
+      requestFingerprint: childRequestFingerprint(
+        suite,
+        slot,
+        prompt,
+        references,
+        operationConfig,
+      ),
     });
   }
   if (usedCandidates.size !== byCandidate.size) return null;
@@ -522,9 +604,7 @@ async function loadAuthority(client: any, input: MaterializeAiImageSuiteInput) {
   if (!frozenPromptAuthorityValid(suite) || !costAuthorityValid(suite)) {
     return { kind: 'prompts-not-ready' as const };
   }
-  const prepared = prepareSlots(suite);
-  if (!prepared) return { kind: 'prompts-not-ready' as const };
-  return { kind: 'ready' as const, suite, prepared };
+  return { kind: 'ready' as const, suite };
 }
 
 function persistedChildFromEvent(value: unknown, expectedOrdinal: number): MaterializationChildRow | null {
@@ -786,6 +866,14 @@ async function createChildGraph(
     role: 'REFERENCE',
     ordinal: reference.ordinal,
     sha256: reference.assetSha256,
+    mimeType: reference.mimeType,
+    width: reference.width,
+    height: reference.height,
+    storageBackend: reference.storageBackend,
+    storageKey: reference.storageKey,
+    sizeBytes: reference.sizeBytes,
+    kind: reference.kind,
+    sourceCaptureSnapshotId: reference.sourceCaptureSnapshotId,
   }));
   const job = await tx.aiImageJob.create({ data: {
     ownerUserId: input.ownerUserId,
@@ -886,7 +974,10 @@ async function createChildGraph(
 
 export class PrismaAiImageSuiteMaterializationRepository
 implements AiImageSuiteMaterializationRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly options: AiImageSuiteMaterializationRepositoryOptions = {},
+  ) {}
 
   async findReplay(
     input: MaterializeAiImageSuiteInput,
@@ -909,7 +1000,41 @@ implements AiImageSuiteMaterializationRepository {
 
       const loaded = await loadAuthority(tx, input);
       if (loaded.kind !== 'ready') return loaded;
-      const { suite, prepared } = loaded;
+      const { suite } = loaded;
+      let providerRuntime: AiImageProviderRuntimeContract | null = null;
+      if (suite.provider !== 'fake') {
+        const runtime = await this.options.getProviderRuntime?.({
+          ownerUserId: String(suite.ownerUserId),
+          provider: String(suite.provider),
+          model: String(suite.model),
+          providerConfigHash: String(suite.providerConfigHash),
+          pricingVersion: String(suite.pricingVersion),
+          concurrencyLimit: Number(suite.concurrencyLimit),
+          itemCount: Number(suite.itemCount),
+          estimatedCostCents: Number(suite.estimatedCostCents),
+          maximumCostCents: Number(suite.maximumCostCents),
+        });
+        if (!runtime?.executionReady
+          || !runtime.providerRuntime
+          || !aiImageSuiteProviderRuntimeMatches(suite, runtime)) {
+          return { kind: 'provider-runtime-unavailable' as const };
+        }
+        providerRuntime = runtime.providerRuntime;
+        const controls = await resolveAiImageSuiteCostControls(
+          this.options.getCostControls,
+          input.ownerUserId,
+        );
+        if ('kind' in controls) return controls;
+        const costControlFailure = await enforceAiImageSuiteCostControlsInTransaction(tx, {
+          ownerUserId: input.ownerUserId,
+          controls,
+          requestedUnits: Number(suite.itemCount),
+          requestedMaximumCostCents: Number(suite.maximumCostCents),
+        });
+        if (costControlFailure) return costControlFailure;
+      }
+      const prepared = prepareSlots(suite, providerRuntime);
+      if (!prepared) return { kind: 'prompts-not-ready' as const };
       const advanced = await tx.aiMediaSuite.updateMany({
         where: {
           id: input.suiteId,

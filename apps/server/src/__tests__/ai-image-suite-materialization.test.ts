@@ -136,4 +136,34 @@ describe('AI image suite child materialization service', () => {
     expect(failure).toMatchObject({ code, statusCode });
     expect((failure as AiImageSuiteMaterializationError).message).toBeTruthy();
   });
+
+  it.each([
+    [
+      { kind: 'quota-exceeded', used: 5, requested: 1, limit: 5 } as const,
+      'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED',
+      429,
+    ],
+    [
+      {
+        kind: 'budget-exceeded',
+        settledCostCents: 10,
+        pendingMaximumCostCents: 20,
+        requestedMaximumCostCents: 11,
+        limit: 40,
+      } as const,
+      'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED',
+      429,
+    ],
+    [
+      { kind: 'cost-controls-unavailable', reason: 'cost controls unavailable' } as const,
+      'AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE',
+      503,
+    ],
+  ])('maps paid cost-control failure %# to a typed service error', async (result, code, statusCode) => {
+    const service = createAiImageSuiteMaterializationService(repository({
+      materialize: vi.fn(async () => result),
+    }));
+
+    await expect(service.materialize(input)).rejects.toMatchObject({ code, statusCode });
+  });
 });

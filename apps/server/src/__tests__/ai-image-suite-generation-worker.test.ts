@@ -4,12 +4,15 @@ import {
   AiImageSuiteGenerationWorkerError,
   aiImageSuiteGenerationQueueJobId,
   aiImageSuiteGenerationRecoveryJobId,
+  createAiImageSuiteGenerationRecoveryRunner,
+  createRedisAiImageSuiteGenerationRecoveryLease,
   enqueueAiImageSuiteGenerationJob,
   enqueueAiImageSuiteGenerationRecoveryJob,
   enqueueRecoverableAiImageSuiteGenerationJobs,
   processAiImageSuiteGenerationQueueJob,
   type AiImageSuiteGenerationCoordinator,
   type AiImageSuiteGenerationQueuePayload,
+  type AiImageSuiteGenerationRecoveryPage,
 } from '../workers/ai-image-suite-generation.js';
 
 const payload = (overrides: Partial<AiImageSuiteGenerationQueuePayload> = {}): AiImageSuiteGenerationQueuePayload => ({
@@ -359,5 +362,167 @@ describe('AI image suite generation startup recovery', () => {
     expect(dependency.scanRecoverable).toHaveBeenNthCalledWith(1, { cursor: undefined, limit: 1 });
     expect(dependency.scanRecoverable).toHaveBeenNthCalledWith(2, { cursor: 'cursor-1', limit: 1 });
     expect(enqueue.mock.calls.map(([value]) => value)).toEqual([first, second]);
+  });
+
+  it('skips a second local scan while the first recovery run is still active', async () => {
+    let finishScan: (() => void) | undefined;
+    const dependency = coordinator({
+      scanRecoverable: vi.fn(async () => await new Promise<AiImageSuiteGenerationRecoveryPage>((resolve) => {
+        finishScan = () => resolve({ items: [], nextCursor: null });
+      })),
+    });
+    const runner = createAiImageSuiteGenerationRecoveryRunner({
+      coordinator: dependency,
+      lease: {
+        acquire: vi.fn(async () => true),
+        renew: vi.fn(async () => true),
+        release: vi.fn(async () => undefined),
+      },
+      createLeaseToken: () => 'recovery-token-1',
+    });
+
+    const first = runner();
+    await vi.waitFor(() => expect(dependency.scanRecoverable).toHaveBeenCalledOnce());
+
+    await expect(runner()).resolves.toBe('skipped-local');
+    expect(dependency.scanRecoverable).toHaveBeenCalledOnce();
+
+    finishScan?.();
+    await expect(first).resolves.toBe('completed');
+  });
+
+  it('uses one distributed lease across worker replicas', async () => {
+    let owner: string | null = null;
+    const sharedLease = {
+      acquire: vi.fn(async (token: string) => {
+        if (owner) return false;
+        owner = token;
+        return true;
+      }),
+      renew: vi.fn(async (token: string) => owner === token),
+      release: vi.fn(async (token: string) => {
+        if (owner === token) owner = null;
+      }),
+    };
+    let finishScan: (() => void) | undefined;
+    const firstCoordinator = coordinator({
+      scanRecoverable: vi.fn(async () => await new Promise<AiImageSuiteGenerationRecoveryPage>((resolve) => {
+        finishScan = () => resolve({ items: [], nextCursor: null });
+      })),
+    });
+    const secondCoordinator = coordinator();
+    const firstRunner = createAiImageSuiteGenerationRecoveryRunner({
+      coordinator: firstCoordinator,
+      lease: sharedLease,
+      createLeaseToken: () => 'recovery-token-1',
+    });
+    const secondRunner = createAiImageSuiteGenerationRecoveryRunner({
+      coordinator: secondCoordinator,
+      lease: sharedLease,
+      createLeaseToken: () => 'recovery-token-2',
+    });
+
+    const first = firstRunner();
+    await vi.waitFor(() => expect(firstCoordinator.scanRecoverable).toHaveBeenCalledOnce());
+
+    await expect(secondRunner()).resolves.toBe('skipped-distributed');
+    expect(secondCoordinator.scanRecoverable).not.toHaveBeenCalled();
+
+    finishScan?.();
+    await expect(first).resolves.toBe('completed');
+  });
+
+  it('clears local recovery state after a failed scan so the next interval can retry', async () => {
+    const dependency = coordinator({
+      scanRecoverable: vi.fn()
+        .mockRejectedValueOnce(new Error('database unavailable'))
+        .mockResolvedValueOnce({ items: [], nextCursor: null }),
+    });
+    const lease = {
+      acquire: vi.fn(async () => true),
+      renew: vi.fn(async () => true),
+      release: vi.fn(async () => undefined),
+    };
+    const runner = createAiImageSuiteGenerationRecoveryRunner({
+      coordinator: dependency,
+      lease,
+      createLeaseToken: () => 'recovery-token-1',
+    });
+
+    await expect(runner()).rejects.toThrow('database unavailable');
+    await expect(runner()).resolves.toBe('completed');
+
+    expect(dependency.scanRecoverable).toHaveBeenCalledTimes(2);
+    expect(lease.release).toHaveBeenCalledTimes(2);
+  });
+
+  it('renews a long-running recovery lease and stops when ownership is lost', async () => {
+    vi.useFakeTimers();
+    let finishScan: (() => void) | undefined;
+    const dependency = coordinator({
+      scanRecoverable: vi.fn(async () => await new Promise<AiImageSuiteGenerationRecoveryPage>((resolve) => {
+        finishScan = () => resolve({ items: [], nextCursor: null });
+      })),
+    });
+    const renew = vi.fn(async () => false);
+    const runner = createAiImageSuiteGenerationRecoveryRunner({
+      coordinator: dependency,
+      lease: {
+        acquire: vi.fn(async () => true),
+        renew,
+        release: vi.fn(async () => undefined),
+      },
+      createLeaseToken: () => 'recovery-token-1',
+      heartbeatMs: 1_000,
+    });
+
+    const running = runner();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    finishScan?.();
+
+    await expect(running).rejects.toMatchObject({
+      code: 'AI_MEDIA_SUITE_GENERATION_RECOVERY_LEASE_LOST',
+    });
+    expect(renew).toHaveBeenCalledWith('recovery-token-1');
+  });
+
+  it('uses token-safe Redis renewal and release scripts', async () => {
+    let owner: string | null = null;
+    const redis = {
+      set: vi.fn(async (_key: string, token: string) => {
+        if (owner) return null;
+        owner = token;
+        return 'OK';
+      }),
+      eval: vi.fn(async (script: string, _keyCount: 1, _key: string, token: string) => {
+        if (owner !== token) return 0;
+        if (script.includes("redis.call('del'")) owner = null;
+        return 1;
+      }),
+    };
+    const lease = createRedisAiImageSuiteGenerationRecoveryLease({ redis });
+
+    await expect(lease.acquire('owner-token')).resolves.toBe(true);
+    await expect(lease.renew('owner-token')).resolves.toBe(true);
+    owner = 'replacement-token';
+    await lease.release('owner-token');
+
+    expect(owner).toBe('replacement-token');
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("redis.call('pexpire', KEYS[1], ARGV[2])"),
+      1,
+      expect.any(String),
+      'owner-token',
+      expect.any(Number),
+    );
+    expect(redis.eval).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("redis.call('del', KEYS[1])"),
+      1,
+      expect.any(String),
+      'owner-token',
+    );
   });
 });

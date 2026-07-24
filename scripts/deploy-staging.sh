@@ -123,6 +123,8 @@ fi
 echo "[6b/7] Running database migrations..."
 cd apps/server
 timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" npx prisma migrate deploy
+echo "[6b/7] Verifying AI media suite post-migration database invariants..."
+timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" node scripts/verify-ai-media-suite-post-migration.mjs
 cd "$DEPLOY_DIR"
 
 if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then

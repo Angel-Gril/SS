@@ -12,7 +12,10 @@ import {
   type DispatchAiImageSuiteInput,
   type RetryAiImageSuiteSlotInput,
 } from '../services/ai-image-suite-execution.js';
-import { PrismaAiImageSuiteExecutionRepository } from '../repositories/ai-image-suite-execution-repository.js';
+import {
+  PrismaAiImageSuiteExecutionRepository,
+  createAiImageSuiteOutputAssetData,
+} from '../repositories/ai-image-suite-execution-repository.js';
 
 const dispatchInput: DispatchAiImageSuiteInput = {
   suiteId: 'suite-1',
@@ -102,6 +105,35 @@ function repository(
 }
 
 describe('AI image suite execution service', () => {
+  it('binds generated suite outputs to the frozen source-capture snapshot', () => {
+    expect(createAiImageSuiteOutputAssetData({
+      ownerUserId: 'owner-1',
+      jobId: 'job-1',
+      sourceCaptureSnapshotId: 'snapshot-1',
+      suiteId: 'suite-1',
+      slotId: 'slot-1',
+      attempt: 2,
+      asset: {
+        url: 'https://erp.example/generated.png',
+        storageBackend: 'oss',
+        storageKey: 'generated.png',
+        mimeType: 'image/png',
+        sizeBytes: 123,
+        sha256: 'a'.repeat(64),
+      },
+    })).toMatchObject({
+      ownerUserId: 'owner-1',
+      aiImageJobId: 'job-1',
+      sourceCaptureSnapshotId: 'snapshot-1',
+      kind: 'AI_GENERATED',
+      metadata: {
+        suiteId: 'suite-1',
+        slotId: 'slot-1',
+        attempt: 2,
+      },
+    });
+  });
+
   it.each([
     ['suiteId', { suiteId: '' }],
     ['ownerUserId', { ownerUserId: ' owner-1' }],
@@ -278,6 +310,7 @@ describe('AI image suite execution service', () => {
     ['not-found', 'AI_MEDIA_SUITE_EXECUTION_NOT_FOUND', 404],
     ['not-materialized', 'AI_MEDIA_SUITE_EXECUTION_NOT_MATERIALIZED', 409],
     ['provider-not-ready', 'AI_MEDIA_SUITE_EXECUTION_PROVIDER_NOT_READY', 503],
+    ['cost-reservation-invalid', 'AI_MEDIA_SUITE_COST_RESERVATION_INVALID', 503],
     ['already-dispatched', 'AI_MEDIA_SUITE_ALREADY_DISPATCHED', 409],
     ['revision-conflict', 'AI_MEDIA_SUITE_DISPATCH_CONFLICT', 409],
     ['conflict', 'AI_MEDIA_SUITE_DISPATCH_CONFLICT', 409],
@@ -321,6 +354,36 @@ describe('AI image suite execution service', () => {
     const failure = await service.retryFailedSlot(retryInput).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(AiImageSuiteExecutionError);
     expect(failure).toMatchObject({ code, statusCode });
+  });
+
+  it.each([
+    [
+      { kind: 'quota-exceeded', used: 5, requested: 1, limit: 5 } as const,
+      'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED',
+      429,
+    ],
+    [
+      {
+        kind: 'budget-exceeded',
+        settledCostCents: 10,
+        pendingMaximumCostCents: 20,
+        requestedMaximumCostCents: 11,
+        limit: 40,
+      } as const,
+      'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED',
+      429,
+    ],
+    [
+      { kind: 'cost-controls-unavailable', reason: 'cost controls unavailable' } as const,
+      'AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE',
+      503,
+    ],
+  ])('maps retry paid cost-control failure %# to a typed error', async (result, code, statusCode) => {
+    const service = createAiImageSuiteExecutionService(repository({
+      retryFailedSlot: vi.fn(async () => result),
+    }));
+
+    await expect(service.retryFailedSlot(retryInput)).rejects.toMatchObject({ code, statusCode });
   });
 
   it('classifies a retry partial-index collision after confirming another plan version is active', async () => {

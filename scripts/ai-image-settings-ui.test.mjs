@@ -36,6 +36,7 @@ assert.match(source, /DashScope · qwen-mt-image/);
 assert.match(source, /沙箱证据通过前不会发起付费请求/);
 assert.doesNotMatch(source, /cfg=\{configs\.ai_image_prompt\}/);
 assert.match(source, /ai_user_daily_image_generation_limit/);
+assert.match(source, /ai_image_generation_cost_cents/);
 assert.match(source, /ai_daily_budget_cents/);
 
 assert.match(source, /\/api\/admin\/system-status\/test\/ai-image/);
@@ -50,8 +51,9 @@ assert.match(source, /密钥已保存；留空表示保留原密钥/);
 
 assert.match(configSchema, /label: 'AI 文生图'/);
 assert.match(configSchema, /label: '图片翻译服务来源'/);
-assert.match(configSchema, /label: 'AI 全局每日预算（未执行）'/);
-assert.match(configSchema, /填写数值不会限制真实 AI 消费/);
+assert.match(configSchema, /label: 'AI 全局每日预算'/);
+assert.match(configSchema, /付费文生图创建前执行的全局费用熔断/);
+assert.match(configSchema, /label: '文生图单张成本（分）'/);
 assert.doesNotMatch(configSchema, /0 表示不按金额限制/);
 assert.ok(!configSchema.includes('AI 生图/改图预留'));
 assert.doesNotMatch(configSchema, /预留开关：当前只保存配置/);

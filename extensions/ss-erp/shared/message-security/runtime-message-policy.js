@@ -87,6 +87,14 @@
     'spb-self-hosted:publish-ozon-workbench-rows',
   ]);
 
+  // These mutations expose billable AI generation and source-product writes. They are
+  // intentionally narrower than the legacy SOURCE_PAGE_TYPES surface: extension pages,
+  // ERP pages and non-product marketplace pages must not be able to invoke them.
+  var SOURCE_AI_IMAGE_SUITE_TYPES = setOf([
+    'ss-erp:source-listing-workbench-ai-image-suite',
+    'ss-erp:source-listing-workbench-ai-image-suite-command',
+  ]);
+
   var OZON_PAGE_TYPES = setOf([
     'ss-erp:ozon-company-id-captured',
     'ss-erp:collect-product',
@@ -249,6 +257,7 @@
     SOURCE_MEDIA_EDITOR_OPEN_TYPES,
     SOURCE_MEDIA_EDITOR_PAGE_TYPES,
     SOURCE_PAGE_TYPES,
+    SOURCE_AI_IMAGE_SUITE_TYPES,
     OZON_PAGE_TYPES,
     GENERAL_EXTENSION_TYPES,
     SELF_HOSTED_TYPES,
@@ -296,6 +305,22 @@
 
   function isHostOrSubdomain(hostname, base) {
     return hostname === base || hostname.endsWith('.' + base);
+  }
+
+  function isSourceProductPageUrl(url) {
+    if (!url || url.protocol !== 'https:') return false;
+    var hostname = url.hostname.toLowerCase();
+    if (isHostOrSubdomain(hostname, '1688.com')) {
+      return /^\/offer\/[^/]+\.html$/u.test(url.pathname);
+    }
+    if (isHostOrSubdomain(hostname, 'pinduoduo.com')
+      || isHostOrSubdomain(hostname, 'yangkeduo.com')) {
+      return url.pathname === '/goods.html' && Boolean(text(url.searchParams.get('goods_id')));
+    }
+    if (hostname === 'item.taobao.com' || hostname === 'detail.tmall.com') {
+      return url.pathname === '/item.htm' && Boolean(text(url.searchParams.get('id')));
+    }
+    return false;
   }
 
   function senderKind(sender, runtimeId) {
@@ -354,19 +379,26 @@
     if (kind === 'settings') return !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
-      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
+      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
+      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType);
     if (kind === 'config_import') return CONFIG_IMPORT_TYPES.has(messageType);
     if (kind === 'extension') return !SETTINGS_ONLY_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
-      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType);
+      && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
+      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType);
     if (kind === 'erp') return ERP_BRIDGE_TYPES.has(messageType);
     if (kind === 'official') return OFFICIAL_PAGE_TYPES.has(messageType);
     if (kind === 'ozon') return OZON_PAGE_TYPES.has(messageType);
-    if (kind === 'source') return SOURCE_PAGE_TYPES.has(messageType)
-      || SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
-      || SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType);
+    if (kind === 'source') {
+      if (SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)) {
+        return isSourceProductPageUrl(parseSenderUrl(sender));
+      }
+      return SOURCE_PAGE_TYPES.has(messageType)
+        || SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
+        || SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType);
+    }
     return false;
   }
 

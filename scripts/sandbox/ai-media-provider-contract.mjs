@@ -7,6 +7,22 @@ const root = process.cwd();
 const matrixPath = path.join(root, 'docs/contracts/ai-media-provider-matrix.md');
 const policyDir = path.join(root, 'scripts/fixtures/ai-media-evaluation');
 const evaluationContractPath = path.join(root, 'scripts/ai-media-evaluation-contract.test.mjs');
+const reviewedPaidDerivedCapabilities = new Map([
+  ['dashscope-qwen-mt-image:qwen-mt-image', {
+    operations: new Set(['IMAGE_TRANSLATE']),
+    inputTransport: 'public_url',
+    resultMode: 'async',
+    maxReferences: 1,
+    supportsMask: false,
+  }],
+  ['openai-images:gpt-image-1', {
+    operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),
+    inputTransport: 'multipart',
+    resultMode: 'sync',
+    maxReferences: 16,
+    supportsMask: true,
+  }],
+]);
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -46,23 +62,31 @@ for (const entry of capabilities) {
   if (entry.model === '*' && entry.evidenceLevel === 'sandbox-verified') {
     fail(`wildcard model cannot be sandbox verified: ${entry.provider}`);
   }
-  if (
-    entry.provider !== 'fake' &&
-    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
-    entry.provider !== 'dashscope-qwen-mt-image'
-  ) {
-    fail(`registry contains an unreviewed paid derived-image provider: ${entry.provider}`);
+  const paidDerivedOperations = entry.provider === 'fake'
+    ? []
+    : (entry.operations || []).filter((operation) => operation !== 'TEXT_TO_IMAGE');
+  const reviewed = reviewedPaidDerivedCapabilities.get(`${entry.provider}:${entry.model}`);
+  if (paidDerivedOperations.length && !reviewed) {
+    fail(`registry contains an unreviewed paid derived-image provider/model: ${entry.provider}:${entry.model}`);
+  }
+  if (reviewed && (
+    paidDerivedOperations.length !== reviewed.operations.size
+    || paidDerivedOperations.some((operation) => !reviewed.operations.has(operation))
+    || entry.inputTransport !== reviewed.inputTransport
+    || entry.resultMode !== reviewed.resultMode
+    || entry.maxReferences !== reviewed.maxReferences
+    || entry.supportsMask !== reviewed.supportsMask
+  )) {
+    fail(`reviewed paid derived-image capability drifted: ${entry.provider}:${entry.model}`);
   }
   if (
-    entry.provider !== 'fake' &&
-    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
+    paidDerivedOperations.length &&
     !['adapter-characterized', 'sandbox-verified'].includes(entry.evidenceLevel)
   ) {
     fail(`paid provider operation lacks an evidence classification: ${entry.provider}`);
   }
   if (
-    entry.provider !== 'fake' &&
-    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
+    paidDerivedOperations.length &&
     entry.evidenceLevel === 'sandbox-verified' &&
     !entry.evidence.toLowerCase().includes('sandbox')
   ) {

@@ -14,6 +14,14 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Current Worktree Extension Suite Status (2026-07-24)
+
+The current worktree implements the dark, scoped extension suite surface: `media:execute` provides `START`, `CONTINUE`, `CANCEL` and `RETRY_SLOT`; `listing:review` provides `REVIEW_SLOT`; and `listing:write` provides `APPLY_SLOT`.
+
+Each command uses a bounded immutable intent witness containing the full projection context, `authorityHash`, exact action template and review decision where applicable. The Service Worker reloads the authoritative projection and rejects price, revision, output or target drift. A binding-scoped epoch covers source product, listing workflow, shop, revision and draft version; old reads and commands cannot overwrite newer state, commands force a post-command refresh, and exhausted fast polling exposes explicit refresh/resume.
+
+This is implementation status only. Real paid Provider transport/model/cost/quality sandbox acceptance, tenant/production rollout and real Ozon test-shop end-to-end validation remain pending; no paid Provider or Ozon write is enabled by this update.
+
 ## Unit 11-B3-A International Dark Deployment Evidence (2026-07-22)
 
 This checkpoint adds fake-only output review and append-only listing-draft application to the dark extension workbench. It does not enable a paid Provider, tenant rollout, production fake dispatch or Ozon write. The domestic first-administrator environment remains frozen on its earlier application baseline.
@@ -30,7 +38,7 @@ This checkpoint adds fake-only output review and append-only listing-draft appli
 | Rollout state | AI Media master/image-to-image/suite/full-edit/inpaint/Web/extension flags remain false, the tenant policy remains revision zero with no tenant IDs, all Provider channels remain disabled, listing/publisher masters remain false, and all five Ozon publisher stages remain `off` |
 | External effects | No paid AI call, translation, image generation/upload, tenant activation, production fake dispatch or Ozon write was executed |
 
-Unit 11 remains incomplete after this checkpoint. Extension full-edit/inpaint and multi-reference suite controls, exact paid Provider/model/pricing/config acceptance, tenant pilot activation and final Ozon test-shop validation remain pending.
+At this 2026-07-22 checkpoint, Unit 11 remained incomplete and extension full-edit/inpaint and multi-reference suite controls were still pending. The current worktree section above supersedes only that extension-control status; exact paid Provider/model/pricing/config acceptance, tenant pilot activation and final Ozon test-shop validation remain pending.
 
 ## Unit 11-A Staging And Domestic HTTPS Evidence (2026-07-22)
 

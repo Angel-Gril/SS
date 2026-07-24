@@ -13,7 +13,10 @@ import { startDatabaseBackupWorker } from './workers/database-backup.js';
 import { startRechargeTimeoutWorker } from './workers/recharge-timeout.js';
 import { startListingTaskRefreshWorker } from './workers/listing-task-refresh.js';
 import { startBrowserOneClickListingWorker } from './workers/browser-one-click-listing.js';
-import { startAiImageGenerationWorker } from './workers/ai-image-generation.js';
+import {
+  getAiImageProviderRuntimeConfig,
+  startAiImageGenerationWorker,
+} from './workers/ai-image-generation.js';
 import { startAiImageTranslationWorker } from './workers/ai-image-translation.js';
 import { startAiImageEditWorker } from './workers/ai-image-edit.js';
 import { startAiImageSuiteGenerationWorker } from './workers/ai-image-suite-generation.js';
@@ -21,6 +24,12 @@ import { startAiProviderReconciliationWorker } from './workers/ai-provider-recon
 import { prisma } from './lib/prisma.js';
 import { PrismaAiImageSuiteGenerationCoordinator } from './repositories/ai-image-suite-execution-repository.js';
 import { shutdownAllWorkers } from './lib/worker-registry.js';
+import {
+  aiImageSuiteProviderRuntimeMatches,
+  createAiImageSuiteProviderRuntimeSnapshot,
+} from './services/ai-image-suite-provider-runtime.js';
+import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
+import { getAiImageSuiteDispatchAuthorization } from './services/ai-image-suite-dispatch-authorization.js';
 
 console.log('[worker] starting all workers as standalone process...');
 
@@ -34,7 +43,35 @@ startBrowserOneClickListingWorker();
 startAiImageGenerationWorker();
 startAiImageTranslationWorker();
 startAiImageEditWorker();
-startAiImageSuiteGenerationWorker(new PrismaAiImageSuiteGenerationCoordinator(prisma));
+const standaloneSuiteRuntimeEvidence = async (suite: {
+  provider: string;
+  model: string;
+  providerConfigHash: string;
+  pricingVersion: string;
+  concurrencyLimit: number;
+  itemCount: number;
+  estimatedCostCents: number;
+  maximumCostCents: number;
+}) => {
+  const snapshot = createAiImageSuiteProviderRuntimeSnapshot(
+    await getAiImageProviderRuntimeConfig(),
+  );
+  if (!snapshot.executionReady || !aiImageSuiteProviderRuntimeMatches(suite, snapshot)) return null;
+  return snapshot.capability?.evidenceLevel === 'sandbox-verified'
+    ? 'sandbox-verified' as const
+    : snapshot.capability?.evidenceLevel === 'local-test'
+      ? 'local-test' as const
+      : null;
+};
+startAiImageSuiteGenerationWorker(new PrismaAiImageSuiteGenerationCoordinator(prisma, {
+  runtimeReady: async (suite) => Boolean(await standaloneSuiteRuntimeEvidence(suite)),
+  getRuntimeEvidence: standaloneSuiteRuntimeEvidence,
+  outputStorageReady: async () => {
+    const runtime = await getRuntimeConfigForStorage();
+    return runtime.imageStorage === 'local' || runtime.imageStorage === 'oss';
+  },
+  getDispatchAuthorization: getAiImageSuiteDispatchAuthorization,
+}));
 startAiProviderReconciliationWorker();
 startProductSyncWorker();
 startOrderSyncWorker();

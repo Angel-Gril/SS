@@ -2,12 +2,11 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import {
   AiMediaCapabilityError,
-  AI_IMAGE_EDIT_MODEL,
-  AI_IMAGE_EDIT_PROVIDER,
   assertAiMediaCapability,
 } from './ai-image-provider-capabilities.js';
 import {
   AI_IMAGE_EDIT_MASK_SEMANTICS,
+  AI_IMAGE_COMPOSITOR_YIELD_INTERVAL,
   AiImageCompositorError,
   composeAiImageInpaint,
   validateAiImageEditCandidate,
@@ -19,6 +18,7 @@ import {
   type AiImageJobRecord,
   type AiImageJobRepository,
   type AiImageProvider,
+  type AiImageProviderRuntimeInput,
 } from './ai-image-jobs.js';
 import {
   AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
@@ -420,12 +420,36 @@ function failure(error: unknown, attemptCount: number) {
     ? new AiImageJobError('INVALID_MEDIA_INPUT', error.message)
     : error;
   const known = compositorError instanceof AiImageJobError;
+  const evidence = compositorError && typeof compositorError === 'object'
+    ? compositorError as {
+      providerJobId?: unknown;
+      providerAcceptedAt?: unknown;
+      providerSubmissionUncertain?: unknown;
+      providerSubmissionRejected?: unknown;
+    }
+    : {};
+  const providerJobId = typeof evidence.providerJobId === 'string'
+    && evidence.providerJobId.trim()
+    ? evidence.providerJobId.trim()
+    : undefined;
+  const providerAcceptedAt = evidence.providerAcceptedAt instanceof Date
+    && !Number.isNaN(evidence.providerAcceptedAt.getTime())
+    ? evidence.providerAcceptedAt
+    : undefined;
   return {
     error: compositorError,
     details: {
       attemptCount,
       errorCode: known ? compositorError.code : 'EDIT_PROCESSING_FAILED',
       errorMessage: known ? compositorError.message : 'AI image edit processing failed',
+      ...(providerJobId ? { providerJobId } : {}),
+      ...(providerAcceptedAt ? { providerAcceptedAt } : {}),
+      ...(evidence.providerSubmissionUncertain === true
+        ? { providerSubmissionUncertain: true }
+        : {}),
+      ...(evidence.providerSubmissionRejected === true
+        ? { providerSubmissionRejected: true }
+        : {}),
     },
   };
 }
@@ -493,6 +517,54 @@ async function normalizeReviewableEditCandidate(input: {
   };
 }
 
+async function yieldToEventLoop() {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function createOpenAiAlphaMask(
+  maskBuffer: Buffer,
+  expectedWidth: number,
+  expectedHeight: number,
+): Promise<AiImageProviderRuntimeInput> {
+  const decoded = await sharp(maskBuffer, {
+    animated: false,
+    limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+  }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  if (
+    decoded.info.width !== expectedWidth
+    || decoded.info.height !== expectedHeight
+    || decoded.info.channels !== 4
+  ) {
+    throw new AiImageJobError(
+      'INVALID_MEDIA_INPUT',
+      'OpenAI edit mask dimensions do not match the frozen source',
+    );
+  }
+  const openAiRgba = Buffer.alloc(decoded.data.length);
+  const pixelCount = expectedWidth * expectedHeight;
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const offset = pixel * 4;
+    const internalWeight = decoded.data[offset]!;
+    openAiRgba[offset] = 255;
+    openAiRgba[offset + 1] = 255;
+    openAiRgba[offset + 2] = 255;
+    openAiRgba[offset + 3] = 255 - internalWeight;
+    if ((pixel + 1) % AI_IMAGE_COMPOSITOR_YIELD_INTERVAL === 0) {
+      await yieldToEventLoop();
+    }
+  }
+  const buffer = await sharp(openAiRgba, {
+    raw: { width: expectedWidth, height: expectedHeight, channels: 4 },
+  }).png({ compressionLevel: 9, adaptiveFiltering: true, palette: false }).toBuffer();
+  if (buffer.length > AI_IMAGE_EDIT_MAX_INPUT_BYTES) {
+    throw new AiImageJobError(
+      'INVALID_MEDIA_INPUT',
+      'OpenAI edit mask exceeds the encoded byte limit',
+    );
+  }
+  return { buffer, mimeType: 'image/png' };
+}
+
 export async function runAiImageEditJob(
   jobId: string,
   attemptNumber: number,
@@ -529,15 +601,32 @@ export async function runAiImageEditJob(
     throw new AiImageJobError('UNSUPPORTED_OPERATION', 'Claimed job changed its edit operation');
   }
   const operation = job.operation;
+  let acceptedProviderEvidence: {
+    providerJobId?: string;
+    providerAcceptedAt?: Date;
+  } = {};
+  let paidProviderResultReceived = false;
+  let providerDispatchStarted = false;
 
   try {
     deps.assertExecutionLease?.();
     if (
-      job.provider !== AI_IMAGE_EDIT_PROVIDER
-      || job.model !== AI_IMAGE_EDIT_MODEL
-      || deps.provider.name !== AI_IMAGE_EDIT_PROVIDER
+      !job.provider.trim()
+      || !job.model.trim()
+      || deps.provider.name !== job.provider
     ) {
       throw new AiImageJobError('PROVIDER_CONFIG_CHANGED', 'AI image edit Provider does not match the frozen job');
+    }
+    const paidProviderInvocation = job.provider !== 'fake';
+    if (paidProviderInvocation && (
+      !deps.repository.recordProviderDispatchStarted
+      || !deps.repository.recordProviderJobId
+      || !deps.repository.markSubmissionUncertain
+    )) {
+      throw new AiImageJobError(
+        'EDIT_PERSISTENCE_NOT_READY',
+        'Paid AI image edit dispatch evidence persistence is not installed',
+      );
     }
     assertOperationConfig(job);
     if (!deps.repository.recordProviderOutput) {
@@ -563,13 +652,18 @@ export async function runAiImageEditJob(
     if (sourceBuffer.length !== source.sizeBytes || sha256(sourceBuffer) !== source.sha256) {
       throw new AiImageJobError('FROZEN_INPUT_MISMATCH', 'Source bytes do not match the frozen asset identity');
     }
-    await validateAiImageEditCandidate({
+    const sourceDiagnostics = await validateAiImageEditCandidate({
       buffer: sourceBuffer,
       expectedWidth: job.width,
       expectedHeight: job.height,
     });
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(sourceDiagnostics.mimeType)) {
+      throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Source image MIME type is not supported');
+    }
+    const sourceMimeType = sourceDiagnostics.mimeType as AiImageProviderRuntimeInput['mimeType'];
 
     let maskBuffer: Buffer | null = null;
+    let providerMask: AiImageProviderRuntimeInput | null = null;
     if (mask) {
       maskBuffer = await deps.loadInputBuffer(mask);
       if (maskBuffer.length !== mask.sizeBytes || sha256(maskBuffer) !== mask.sha256) {
@@ -581,9 +675,21 @@ export async function runAiImageEditJob(
         expectedHeight: job.height,
         maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
       });
+      providerMask = await createOpenAiAlphaMask(maskBuffer, job.width, job.height);
     }
 
     deps.assertExecutionLease?.();
+    if (paidProviderInvocation) {
+      const dispatchFenced = await deps.repository.recordProviderDispatchStarted!(job.id, new Date());
+      if (!dispatchFenced) {
+        const latest = await deps.repository.getById(job.id);
+        if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
+          await deps.repository.markCancelled(job.id);
+        }
+        return 'ignored';
+      }
+      providerDispatchStarted = true;
+    }
     const generated = await deps.provider.generate({
       operation,
       operationConfig: job.operationConfig,
@@ -594,13 +700,48 @@ export async function runAiImageEditJob(
       height: job.height,
       model: job.model,
       inputAssets: job.inputAssets || undefined,
+      inputImages: [{ buffer: sourceBuffer, mimeType: sourceMimeType }],
+      mask: providerMask,
     });
-    if (
+    paidProviderResultReceived = paidProviderInvocation;
+    if (generated.providerJobId) {
+      const providerAcceptedAt = new Date();
+      acceptedProviderEvidence = {
+        providerJobId: generated.providerJobId,
+        providerAcceptedAt,
+      };
+      try {
+        await deps.repository.recordProviderJobId!(
+          job.id,
+          generated.providerJobId,
+          providerAcceptedAt,
+        );
+      } catch (error) {
+        const acceptedError = error instanceof Error ? error : new Error(String(error));
+        throw Object.assign(acceptedError, acceptedProviderEvidence);
+      }
+    }
+    const actualCostCents = generated.actualCostCents ?? job.estimatedCostCents;
+    if (job.provider === 'fake') {
+      if (
+        generated.images.length !== 1
+        || generated.providerJobId
+        || Number(actualCostCents) !== 0
+      ) {
+        throw new AiImageJobError(
+          'INVALID_PROVIDER_RESULT',
+          'Fake edit Provider must return one zero-cost synchronous image',
+        );
+      }
+    } else if (
       generated.images.length !== 1
-      || generated.providerJobId
-      || Number(generated.actualCostCents || 0) !== 0
+      || !Number.isSafeInteger(actualCostCents)
+      || actualCostCents < 0
     ) {
-      throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Fake edit Provider must return one zero-cost synchronous image');
+      throw new AiImageJobError(
+        'INVALID_PROVIDER_RESULT',
+        'Paid edit Provider must return one image with a valid actual cost',
+      );
     }
     const raw = generated.images[0]!;
     const rawDiagnostics = await validateAiImageEditCandidate({
@@ -611,7 +752,11 @@ export async function runAiImageEditJob(
     const latestBeforeStorage = await deps.repository.getById(job.id);
     deps.assertExecutionLease?.();
     if (!latestBeforeStorage || ['CANCEL_REQUESTED', 'CANCELLED'].includes(latestBeforeStorage.status)) {
-      await deps.repository.markCancelled(job.id);
+      if (paidProviderResultReceived && !acceptedProviderEvidence.providerJobId) {
+        await deps.repository.markCancelled(job.id, { providerSubmissionUncertain: true });
+      } else {
+        await deps.repository.markCancelled(job.id);
+      }
       return 'ignored';
     }
     if (latestBeforeStorage.status !== 'RUNNING') return 'ignored';
@@ -646,7 +791,11 @@ export async function runAiImageEditJob(
     const latestAfterRaw = await deps.repository.getById(job.id);
     deps.assertExecutionLease?.();
     if (!latestAfterRaw || ['CANCEL_REQUESTED', 'CANCELLED'].includes(latestAfterRaw.status)) {
-      await deps.repository.markCancelled(job.id);
+      if (paidProviderResultReceived && !acceptedProviderEvidence.providerJobId) {
+        await deps.repository.markCancelled(job.id, { providerSubmissionUncertain: true });
+      } else {
+        await deps.repository.markCancelled(job.id);
+      }
       return 'ignored';
     }
     if (latestAfterRaw.status !== 'RUNNING') return 'ignored';
@@ -709,20 +858,49 @@ export async function runAiImageEditJob(
     });
     deps.assertExecutionLease?.();
     await deps.repository.complete(job.id, {
-      providerJobId: null,
-      actualCostCents: 0,
+      providerJobId: generated.providerJobId || null,
+      providerResultReceivedWithoutIdentity:
+        paidProviderResultReceived && !generated.providerJobId,
+      actualCostCents,
       billedUnits: 1,
       assets: [finalAsset],
     });
     return 'completed';
   } catch (error) {
     const normalized = failure(error, attemptNumber);
+    const details = {
+      ...acceptedProviderEvidence,
+      ...normalized.details,
+    };
     const latest = await deps.repository.getById(job.id);
     if (latest?.status === 'CANCEL_REQUESTED') {
-      await deps.repository.markCancelled(job.id);
+      const uncertainCancellation = (
+        details.providerSubmissionUncertain
+        || paidProviderResultReceived
+        || (providerDispatchStarted && details.providerSubmissionRejected !== true)
+      ) && !details.providerJobId;
+      if (uncertainCancellation) {
+        await deps.repository.markCancelled(job.id, { providerSubmissionUncertain: true });
+      } else {
+        await deps.repository.markCancelled(job.id);
+      }
       return 'ignored';
     }
-    if (latest?.status === 'RUNNING') await deps.repository.markFailed(job.id, normalized.details);
+    if (latest?.status === 'RUNNING') {
+      const submissionUncertain = (
+        details.providerSubmissionUncertain
+        || paidProviderResultReceived
+        || (providerDispatchStarted && details.providerSubmissionRejected !== true)
+      ) && !details.providerJobId;
+      if (submissionUncertain && deps.repository.markSubmissionUncertain) {
+        await deps.repository.markSubmissionUncertain(job.id, {
+          ...details,
+          providerSubmissionUncertain: true,
+        });
+      } else {
+        await deps.repository.markFailed(job.id, details);
+      }
+    }
     throw normalized.error;
   }
 }

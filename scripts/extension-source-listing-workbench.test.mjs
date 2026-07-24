@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
@@ -13,6 +14,7 @@ const clientPath = `${root}/shared/erp-adapter/listing-workflow-client.js`;
 const confirmationContractPath = `${root}/shared/erp-adapter/source-media-confirmation.js`;
 const confirmationCoordinatorPath = `${root}/shared/erp-adapter/source-media-confirmation-coordinator.js`;
 const mutationIntentPath = `${root}/shared/erp-adapter/source-media-mutation-intent.js`;
+const suiteControllerPath = `${root}/shared/source-costing/ai-image-suite-controller.js`;
 const viewPath = `${root}/content/source-listing-workbench.js`;
 const cssPath = `${root}/content/source-listing-workbench.css`;
 const confirmHtmlPath = `${root}/pages/media-confirm.html`;
@@ -22,7 +24,7 @@ const confirmLaunchPath = `${root}/pages/media-confirm-launch.html`;
 
 for (const path of [
   sessionPath, clientPath, confirmationContractPath, confirmationCoordinatorPath,
-  mutationIntentPath, viewPath, cssPath,
+  mutationIntentPath, suiteControllerPath, viewPath, cssPath,
   confirmHtmlPath, confirmCssPath, confirmPagePath, confirmLaunchPath,
 ]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
@@ -34,6 +36,9 @@ const sourceEntry = manifest.content_scripts.find((entry) => (
 ));
 assert.ok(sourceEntry, 'source costing content-script entry should exist');
 assert.ok(sourceEntry.js.includes('content/source-listing-workbench.js'));
+assert.ok(sourceEntry.js.includes('shared/source-costing/ai-image-suite-controller.js'));
+assert.ok(sourceEntry.js.indexOf('shared/source-costing/ai-image-suite-controller.js')
+  < sourceEntry.js.indexOf('content/source-costing-panel.js'));
 assert.ok(sourceEntry.js.indexOf('content/source-listing-workbench.js') < sourceEntry.js.indexOf('content/source-costing-panel.js'));
 assert.ok(sourceEntry.css.includes('content/source-listing-workbench.css'));
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
@@ -44,6 +49,10 @@ assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media
 assert.match(worker, /ss-erp:source-listing-workbench-status/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
+assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite/);
+assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-command/);
+assert.match(worker, /loadAuthoritativeSourceAiImageSuiteProjection/);
+assert.match(worker, /executeAuthoritativeSourceAiImageSuiteCommand/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
 assert.match(worker, /CREATE_TRANSLATION/);
@@ -89,11 +98,17 @@ assert.match(worker, /crypto\.getRandomValues/);
 assert.match(policy, /ss-erp:source-listing-workbench-status/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-history/);
 assert.match(policy, /ss-erp:source-listing-workbench-media-command/);
+assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite/);
+assert.match(policy, /ss-erp:source-listing-workbench-ai-image-suite-command/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PREPARE_TYPES/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
+assert.match(panel, /SS_ERP_SOURCE_AI_IMAGE_SUITE_CONTROLLER/);
+assert.match(panel, /sourceWorkbenchAiImageSuiteController\.execute/);
+assert.match(panel, /sourceWorkbenchAiImageSuiteController\.syncBinding/);
+assert.doesNotMatch(panel, /sourceWorkbenchAiImageSuiteRequestSeq/);
 assert.match(panel, /state:\s*'unavailable',\s*reason:\s*'runtime_unavailable'/);
 assert.match(panel, /listings\.length === 1/);
 assert.match(panel, /currentSourcePageKey/);
@@ -119,7 +134,75 @@ const clientSource = fs.readFileSync(clientPath, 'utf8');
 const confirmationContractSource = fs.readFileSync(confirmationContractPath, 'utf8');
 const confirmationCoordinatorSource = fs.readFileSync(confirmationCoordinatorPath, 'utf8');
 const mutationIntentSource = fs.readFileSync(mutationIntentPath, 'utf8');
+const suiteControllerSource = fs.readFileSync(suiteControllerPath, 'utf8');
 const viewSource = fs.readFileSync(viewPath, 'utf8');
+
+const suiteControllerContext = { Array, Error, JSON, Number, Object, Promise, String };
+suiteControllerContext.globalThis = suiteControllerContext;
+vm.runInNewContext(suiteControllerSource, suiteControllerContext, { filename: suiteControllerPath });
+const createSuiteController = suiteControllerContext.SS_ERP_SOURCE_AI_IMAGE_SUITE_CONTROLLER
+  .createController;
+const suiteBinding11 = {
+  sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1', shopId: 'shop-1',
+  revision: 11, draftVersion: 7,
+};
+let resolvePreCommandRead;
+const preCommandRead = new Promise((resolve) => { resolvePreCommandRead = resolve; });
+const suiteControllerReads = [];
+const readCommandRaceController = createSuiteController({
+  read(binding, metadata) {
+    suiteControllerReads.push({ binding: { ...binding }, metadata: { ...metadata } });
+    return suiteControllerReads.length === 1
+      ? preCommandRead
+      : Promise.resolve({ state: 'ready', projection: { marker: 'after-command' } });
+  },
+  execute() { return Promise.resolve({ state: 'completed' }); },
+});
+const staleReadPromise = readCommandRaceController.load(suiteBinding11, { reason: 'poll' });
+await Promise.resolve();
+await readCommandRaceController.execute(suiteBinding11, { action: 'START' });
+assert.equal(suiteControllerReads.length, 2, 'a command must force a fresh read while an old read is pending');
+assert.equal(suiteControllerReads[1].metadata.reason, 'command');
+assert.equal(suiteControllerReads[1].metadata.force, true);
+resolvePreCommandRead({ state: 'ready', projection: { marker: 'before-command' } });
+await staleReadPromise;
+assert.equal(
+  readCommandRaceController.getState().value.projection.marker,
+  'after-command',
+  'a pre-command read must never overwrite the authoritative post-command projection',
+);
+
+let rejectRevision11Command;
+let resolveRevision12Command;
+const revision11Command = new Promise((resolve, reject) => { rejectRevision11Command = reject; });
+const revision12Command = new Promise((resolve) => { resolveRevision12Command = resolve; });
+const bindingRaceController = createSuiteController({
+  read(binding) {
+    return Promise.resolve({ state: 'ready', projection: { revision: binding.revision } });
+  },
+  execute(binding) {
+    return binding.revision === 11 ? revision11Command : revision12Command;
+  },
+});
+const staleCommandPromise = bindingRaceController.execute(suiteBinding11, { action: 'START' });
+const suiteBinding12 = { ...suiteBinding11, revision: 12 };
+bindingRaceController.syncBinding(suiteBinding12);
+const currentCommandPromise = bindingRaceController.execute(suiteBinding12, { action: 'CONTINUE' });
+rejectRevision11Command(new Error('stale revision failure'));
+await staleCommandPromise;
+assert.notEqual(
+  bindingRaceController.getState().busyKey,
+  '',
+  'a stale command catch/finally must not clear the current revision command',
+);
+resolveRevision12Command({ state: 'completed' });
+await currentCommandPromise;
+assert.equal(bindingRaceController.getState().busyKey, '');
+assert.equal(bindingRaceController.getState().value.projection.revision, 12);
+bindingRaceController.syncBinding({
+  ...suiteBinding12, sourceProductId: 'source-product-2', shopId: 'shop-2',
+});
+assert.equal(bindingRaceController.getState().value, null, 'a full binding switch must invalidate state');
 
 const policyContext = { URL, Array, Boolean, Object, Set, String };
 policyContext.globalThis = policyContext;
@@ -145,6 +228,25 @@ const popupSender = {
   id: extensionId,
   url: `chrome-extension://${extensionId}/pages/popup.html`,
 };
+const nonProductSourceSender = {
+  id: extensionId,
+  url: 'https://www.1688.com/',
+  tab: { url: 'https://www.1688.com/' },
+};
+const erpSender = {
+  id: extensionId,
+  url: 'https://app.ss-erp.com/collect/source',
+  tab: { url: 'https://app.ss-erp.com/collect/source' },
+};
+for (const type of [
+  'ss-erp:source-listing-workbench-ai-image-suite',
+  'ss-erp:source-listing-workbench-ai-image-suite-command',
+]) {
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, sourceSender, extensionId), true);
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, nonProductSourceSender, extensionId), false);
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, popupSender, extensionId), false);
+  assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(type, erpSender, extensionId), false);
+}
 assert.equal(runtimePolicy.isAllowedRuntimeMessageSender(
   'ss-erp:source-listing-workbench-media-confirm-prepare', sourceSender, extensionId,
 ), true);
@@ -747,6 +849,508 @@ await assert.rejects(
   /invalid source media history response/u,
 );
 
+function aiImageSuiteProjectionFixture() {
+  return {
+    contractVersion: 'extension-ai-image-suite-projection/v1',
+    context: {
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+      listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+    },
+    commandAuthority: {
+      snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', draftRevision: 11,
+      planId: 'plan-1', planVersionId: 'plan-version-1', planRevision: 3,
+      skuKey: null, authorityHash: 'b'.repeat(64),
+    },
+    applyPolicy: { target: 'ERP_SOURCE_PRODUCT', mode: 'append', writesStoreDraft: false },
+    plan: {
+      id: 'plan-1', versionId: 'plan-version-1', revision: 3, status: 'APPROVED', skuKey: null,
+      preview: {
+        hash: 'a'.repeat(64), pricingVersion: 'pricing-v1', itemCount: 2,
+        estimatedCostCents: 18, maximumCostCents: 24, slots: [],
+      },
+      allowedActions: ['START'],
+      commands: {
+        START: {
+          expectedPreviewHash: 'a'.repeat(64), acceptedPricingVersion: 'pricing-v1',
+          acceptedEstimatedCostCents: 18, acceptedMaximumCostCents: 24,
+        },
+      },
+    },
+    suite: null,
+  };
+}
+
+const suiteReadRequests = [];
+const suiteProjection = aiImageSuiteProjectionFixture();
+const suiteReadClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get(path, options) {
+      suiteReadRequests.push({ path, options });
+      return { state: 'response', status: 200, body: { code: 1, data: suiteProjection } };
+    },
+    async post() { throw new Error('suite projection read must not POST'); },
+  },
+});
+const suiteRead = await suiteReadClient.getAiImageSuite({
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+});
+assert.equal(suiteRead.state, 'ready');
+assert.equal(suiteRead.projection.applyPolicy.writesStoreDraft, false);
+assert.equal(suiteReadRequests[0].options.requiredScope, 'listing:review');
+assert.match(suiteReadRequests[0].path, /\/ai-image-suite\?/u);
+assert.match(suiteReadRequests[0].path, /draftRevision=11/u);
+
+const invalidSuiteProjection = aiImageSuiteProjectionFixture();
+invalidSuiteProjection.provider = 'client-controlled';
+const invalidSuiteReadClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() {
+      return { state: 'response', status: 200, body: { code: 1, data: invalidSuiteProjection } };
+    },
+  },
+});
+await assert.rejects(
+  invalidSuiteReadClient.getAiImageSuite({
+    snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+    listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+  }),
+  /invalid AI image suite projection response/u,
+);
+
+function currentSuiteProjectionFixture(action) {
+  const projection = aiImageSuiteProjectionFixture();
+  projection.plan.allowedActions = [];
+  projection.plan.commands = {};
+  const slot = {
+    id: 'slot-1', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: '商品主图',
+    ownership: { level: 'sku', key: 'sku-1' }, status: 'FAILED', attempt: 1,
+    revision: 3, estimatedCostCents: 9, maximumCostCents: 12,
+    workflowId: null, workflowRevision: null, reviewStatus: 'NOT_READY', output: null,
+    application: null, allowedActions: ['RETRY_SLOT'],
+    commands: {
+      RETRY_SLOT: {
+        suiteId: 'suite-1', slotId: 'slot-1', expectedSuiteRevision: 8,
+        expectedSlotRevision: 3, acceptedAdditionalMaximumCostCents: 12,
+      },
+    },
+  };
+  projection.suite = {
+    id: 'suite-1', status: 'PARTIAL_FAILURE', revision: 8,
+    previewHash: 'a'.repeat(64), pricingVersion: 'pricing-v1', itemCount: 2,
+    estimatedCostCents: 18, maximumCostCents: 24,
+    allowedActions: [], commands: {}, slots: [slot],
+  };
+  if (action === 'REVIEW_SLOT' || action === 'APPLY_SLOT') {
+    projection.suite.status = 'SUCCEEDED';
+    slot.status = 'SUCCEEDED';
+    slot.revision = 5;
+    slot.workflowId = 'workflow-1';
+    slot.workflowRevision = 4;
+    slot.reviewStatus = action === 'REVIEW_SLOT' ? 'PENDING' : 'APPROVED';
+    slot.output = {
+      id: 'asset-1', url: 'https://erp.example/generated/asset-1.png',
+      storageBackend: 'oss', mimeType: 'image/png', width: 900, height: 1200,
+    };
+    slot.allowedActions = [action];
+    slot.commands = action === 'REVIEW_SLOT'
+      ? {
+        REVIEW_SLOT: {
+          suiteId: 'suite-1', slotId: 'slot-1', workflowId: 'workflow-1',
+          outputAssetId: 'asset-1', expectedSuiteRevision: 8, expectedSlotRevision: 5,
+          expectedWorkflowRevision: 4, decisions: ['APPROVE', 'REJECT'],
+        },
+      }
+      : {
+        APPLY_SLOT: {
+          suiteId: 'suite-1', slotId: 'slot-1', workflowId: 'workflow-1',
+          outputAssetId: 'asset-1', expectedSuiteRevision: 8, expectedSlotRevision: 5,
+          expectedWorkflowRevision: 4, mode: 'append', target: 'ERP_SOURCE_PRODUCT',
+          writesStoreDraft: false,
+          expectedTargetUpdatedAt: '2026-07-24T00:00:00.000Z',
+        },
+      };
+  }
+  return projection;
+}
+
+const suiteIntentContract = context.SS_ERP_LISTING_WORKFLOW_CLIENT;
+const startIntentWitness = suiteIntentContract.createAiImageSuiteIntentWitness({
+  projection: suiteProjection,
+  action: 'START',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(startIntentWitness)), {
+  version: 'extension-ai-image-suite-intent-witness/v1',
+  context: {
+    snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+    listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+  },
+  authorityHash: 'b'.repeat(64),
+  action: 'START',
+  slotId: null,
+  decision: null,
+  commandTemplate: {
+    expectedPreviewHash: 'a'.repeat(64),
+    acceptedPricingVersion: 'pricing-v1',
+    acceptedEstimatedCostCents: 18,
+    acceptedMaximumCostCents: 24,
+  },
+});
+assert.equal(
+  suiteIntentContract.matchesAiImageSuiteIntentWitness(startIntentWitness, startIntentWitness),
+  true,
+);
+const increasedPriceProjection = structuredClone(suiteProjection);
+increasedPriceProjection.plan.preview.estimatedCostCents = 27;
+increasedPriceProjection.plan.preview.maximumCostCents = 36;
+increasedPriceProjection.plan.commands.START.acceptedEstimatedCostCents = 27;
+increasedPriceProjection.plan.commands.START.acceptedMaximumCostCents = 36;
+const increasedPriceWitness = suiteIntentContract.createAiImageSuiteIntentWitness({
+  projection: increasedPriceProjection,
+  action: 'START',
+});
+assert.equal(
+  suiteIntentContract.matchesAiImageSuiteIntentWitness(startIntentWitness, increasedPriceWitness),
+  false,
+  'a price change must invalidate the exact user-confirmed START intent',
+);
+
+const suiteCommandRequests = [];
+const suiteCommandClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
+  transport: {
+    async get() { throw new Error('suite command test must not GET'); },
+    async post(path, body, options) {
+      suiteCommandRequests.push({ path, body, options });
+      if (path.endsWith('/command-grants')) {
+        return { state: 'response', status: 201, body: { code: 1, data: { grantToken: 'q'.repeat(43) } } };
+      }
+      const command = body.command;
+      const result = {
+        action: command.action,
+        suiteId: command.suiteId || 'suite-started',
+        status: command.action === 'START' ? 'PLANNED' : command.action === 'RETRY_SLOT' ? 'QUEUED' : 'SUCCEEDED',
+        revision: command.action === 'START' ? 1 : 9,
+        replayed: false,
+      };
+      if (command.slotId && body.operation) {
+        result.slotId = command.slotId;
+        result.workflowId = command.workflowId || 'workflow-retried';
+      }
+      if (command.action === 'APPLY_SLOT') {
+        Object.assign(result, {
+          target: 'ERP_SOURCE_PRODUCT', mode: 'append', writesStoreDraft: false,
+        });
+      }
+      return {
+        state: 'response', status: 202,
+        body: { code: 1, data: { replay: false, receipt: { status: 'SUCCEEDED', result } } },
+      };
+    },
+  },
+});
+await assert.rejects(
+  suiteCommandClient.executeAiImageSuiteCommand({
+    projection: suiteProjection, action: 'START', costConfirmed: false,
+  }),
+  /cost confirmation is required/u,
+);
+await suiteCommandClient.executeAiImageSuiteCommand({
+  projection: suiteProjection, action: 'START', costConfirmed: true,
+  provider: 'openai', model: 'gpt-image-2', baseUrl: 'https://provider.example',
+  apiKey: 'must-not-be-sent', url: 'https://provider.example/image.png',
+});
+const retryProjection = currentSuiteProjectionFixture('RETRY_SLOT');
+await assert.rejects(
+  suiteCommandClient.executeAiImageSuiteCommand({
+    projection: retryProjection, action: 'RETRY_SLOT', slotId: 'slot-1', costConfirmed: false,
+  }),
+  /cost confirmation is required/u,
+);
+await suiteCommandClient.executeAiImageSuiteCommand({
+  projection: retryProjection, action: 'RETRY_SLOT', slotId: 'slot-1', costConfirmed: true,
+});
+await suiteCommandClient.executeAiImageSuiteCommand({
+  projection: currentSuiteProjectionFixture('REVIEW_SLOT'),
+  action: 'REVIEW_SLOT', slotId: 'slot-1', decision: 'APPROVE',
+});
+await suiteCommandClient.executeAiImageSuiteCommand({
+  projection: currentSuiteProjectionFixture('APPLY_SLOT'),
+  action: 'APPLY_SLOT', slotId: 'slot-1',
+});
+assert.equal(suiteCommandRequests.length, 8);
+for (let index = 0; index < suiteCommandRequests.length; index += 2) {
+  const grant = suiteCommandRequests[index];
+  const execute = suiteCommandRequests[index + 1];
+  assert.equal(grant.path, '/api/extension-device/command-grants');
+  assert.equal(execute.path, '/api/extension-device/media-workflows/execute');
+  assert.match(grant.body.idempotencyKey, /^[a-f0-9]{64}$/u);
+  assert.equal(execute.body.idempotencyKey, grant.body.idempotencyKey);
+  assert.equal(execute.options.commandGrant, 'q'.repeat(43));
+  const serializedCommand = JSON.stringify(grant.body.command);
+  assert.doesNotMatch(serializedCommand, /provider|model|baseUrl|apiKey|url|authorityHash/iu);
+}
+assert.equal(suiteCommandRequests[0].body.operation, 'MEDIA_EXECUTE');
+assert.equal(suiteCommandRequests[1].options.requiredScope, 'media:execute');
+assert.equal(suiteCommandRequests[4].body.operation, 'MEDIA_REVIEW');
+assert.equal(suiteCommandRequests[5].body.operation, 'MEDIA_REVIEW');
+assert.equal(suiteCommandRequests[5].options.requiredScope, 'listing:review');
+assert.equal(suiteCommandRequests[6].body.operation, 'MEDIA_APPLY');
+assert.equal(suiteCommandRequests[7].body.operation, 'MEDIA_APPLY');
+assert.equal(suiteCommandRequests[7].options.requiredScope, 'listing:write');
+assert.deepEqual(JSON.parse(JSON.stringify(suiteCommandRequests[0].body.command)), {
+  version: 'extension-ai-image-suite-execute-command/v1', action: 'START',
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', draftRevision: 11,
+  planId: 'plan-1', planVersionId: 'plan-version-1', planRevision: 3, skuKey: null,
+  expectedPreviewHash: 'a'.repeat(64), acceptedPricingVersion: 'pricing-v1',
+  acceptedEstimatedCostCents: 18, acceptedMaximumCostCents: 24,
+});
+function canonicalCommand(value) {
+  if (Array.isArray(value)) return value.map(canonicalCommand);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, canonicalCommand(child)]));
+  }
+  return value;
+}
+assert.equal(
+  suiteCommandRequests[0].body.idempotencyKey,
+  createHash('sha256')
+    .update(JSON.stringify(canonicalCommand(suiteCommandRequests[0].body.command)))
+    .digest('hex'),
+  'suite idempotency must match the server command digest exactly',
+);
+assert.deepEqual(JSON.parse(JSON.stringify(suiteCommandRequests[4].body.command)), {
+  version: 'extension-ai-image-suite-review-command/v1', action: 'REVIEW_SLOT',
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', draftRevision: 11,
+  planId: 'plan-1', planVersionId: 'plan-version-1', planRevision: 3, skuKey: null,
+  suiteId: 'suite-1', slotId: 'slot-1', workflowId: 'workflow-1', outputAssetId: 'asset-1',
+  expectedSuiteRevision: 8, expectedSlotRevision: 5, expectedWorkflowRevision: 4,
+  decision: 'APPROVE',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(suiteCommandRequests[6].body.command)), {
+  version: 'extension-ai-image-suite-apply-command/v1', action: 'APPLY_SLOT',
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', draftRevision: 11,
+  planId: 'plan-1', planVersionId: 'plan-version-1', planRevision: 3, skuKey: null,
+  suiteId: 'suite-1', slotId: 'slot-1', workflowId: 'workflow-1', outputAssetId: 'asset-1',
+  expectedSuiteRevision: 8, expectedSlotRevision: 5, expectedWorkflowRevision: 4,
+  expectedTargetUpdatedAt: '2026-07-24T00:00:00.000Z',
+  mode: 'append',
+});
+
+function extractAsyncWorkerFunction(name) {
+  const expression = new RegExp(`async function ${name}\\([^]*?\\n\\}`, 'u');
+  const match = worker.match(expression);
+  assert.ok(match, `${name} should be independently testable`);
+  return match[0];
+}
+
+const authoritativeSuiteCalls = [];
+let authoritativeSuiteHandoff = {
+  platform: '1688', sourceProductId: 'source-product-1',
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+};
+let authoritativeSuiteListing = {
+  shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+};
+let authoritativeSuiteRead = { state: 'ready', projection: suiteProjection };
+const authoritativeSuiteClient = {
+  async getStatus(input) {
+    authoritativeSuiteCalls.push({ method: 'getStatus', input });
+    return { state: 'ready', status: { snapshot: { current: true } } };
+  },
+  async getAiImageSuite(input) {
+    authoritativeSuiteCalls.push({ method: 'getAiImageSuite', input });
+    return authoritativeSuiteRead;
+  },
+  async executeAiImageSuiteCommand(input) {
+    authoritativeSuiteCalls.push({ method: 'executeAiImageSuiteCommand', input });
+    return { state: 'completed', action: input.action, replay: false };
+  },
+};
+const authoritativeSuiteContext = {
+  Array, Error, Number, Object, Promise, Set, String,
+  SS_ERP_LISTING_WORKFLOW_CLIENT: suiteIntentContract,
+  sourceWorkflowHandoffText(value, maximum) {
+    const normalized = String(value == null ? '' : value).normalize('NFKC').trim();
+    return normalized && normalized.length <= maximum ? normalized : '';
+  },
+  sourceWorkflowPlatform(value) {
+    return ['1688', 'pdd', 'taobao', 'tmall'].includes(value) ? value : '';
+  },
+  async readPersistedSourceWorkflowHandoff() { return authoritativeSuiteHandoff; },
+  getSourceListingWorkflowClient() { return authoritativeSuiteClient; },
+  currentSourceListingContext() { return authoritativeSuiteListing; },
+};
+authoritativeSuiteContext.globalThis = authoritativeSuiteContext;
+vm.runInNewContext(
+  `${extractAsyncWorkerFunction('loadAuthoritativeSourceAiImageSuiteProjection')}\n`
+    + `${extractAsyncWorkerFunction('executeAuthoritativeSourceAiImageSuiteCommand')}\n`
+    + 'globalThis.authoritativeSuiteApi = {'
+    + 'loadAuthoritativeSourceAiImageSuiteProjection,'
+    + 'executeAuthoritativeSourceAiImageSuiteCommand};',
+  authoritativeSuiteContext,
+  { filename: 'service-worker-authoritative-ai-image-suite.js' },
+);
+const authoritativeSuiteApi = authoritativeSuiteContext.authoritativeSuiteApi;
+const suiteMessageContext = {
+  type: 'ss-erp:source-listing-workbench-ai-image-suite',
+  platform: '1688', sourceProductId: 'source-product-1', listingWorkflowId: 'listing-1',
+};
+const authoritativeReadResult = await authoritativeSuiteApi
+  .loadAuthoritativeSourceAiImageSuiteProjection(suiteMessageContext);
+assert.equal(authoritativeReadResult.result, authoritativeSuiteRead);
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), [
+  'getStatus', 'getAiImageSuite',
+]);
+assert.deepEqual(JSON.parse(JSON.stringify(authoritativeSuiteCalls[1].input)), {
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
+  listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
+});
+
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'START', costConfirmed: true,
+    projection: { commandAuthority: { provider: 'attacker' } },
+  }),
+  /请求字段无效/u,
+  'content-script projections must never cross the service-worker authority boundary',
+);
+assert.equal(authoritativeSuiteCalls.length, 2);
+
+const staleClientProjection = { contractVersion: 'stale-content-projection' };
+authoritativeSuiteCalls.length = 0;
+const authoritativeCommandResult = await authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+  ...suiteMessageContext,
+  type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+  action: 'START', costConfirmed: true, intentWitness: startIntentWitness,
+});
+assert.equal(authoritativeCommandResult.result.state, 'completed');
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), [
+  'getStatus', 'getAiImageSuite', 'executeAiImageSuiteCommand',
+]);
+assert.equal(
+  authoritativeSuiteCalls[2].input.projection,
+  authoritativeSuiteRead.projection,
+  'execution must use the freshly fetched server projection',
+);
+assert.notEqual(authoritativeSuiteCalls[2].input.projection, staleClientProjection);
+assert.deepEqual(JSON.parse(JSON.stringify(authoritativeSuiteCalls[2].input)), {
+  projection: suiteProjection, action: 'START', costConfirmed: true,
+});
+
+authoritativeSuiteCalls.length = 0;
+authoritativeSuiteRead = { state: 'ready', projection: increasedPriceProjection };
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'START', costConfirmed: true, intentWitness: startIntentWitness,
+  }),
+  /状态已变化|重新确认/u,
+  'the worker must reject a newly priced template instead of replacing confirmed intent',
+);
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), ['getStatus', 'getAiImageSuite']);
+
+const nextDraftProjection = structuredClone(suiteProjection);
+nextDraftProjection.context.draftVersion = 8;
+authoritativeSuiteListing = {
+  shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 8,
+};
+authoritativeSuiteCalls.length = 0;
+authoritativeSuiteRead = { state: 'ready', projection: nextDraftProjection };
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'START', costConfirmed: true, intentWitness: startIntentWitness,
+  }),
+  /状态已变化|重新确认/u,
+  'the witness must bind the exact draft context even when the command template is unchanged',
+);
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), ['getStatus', 'getAiImageSuite']);
+authoritativeSuiteListing = {
+  shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+};
+
+const actionRemovedProjection = structuredClone(suiteProjection);
+actionRemovedProjection.plan.allowedActions = [];
+actionRemovedProjection.plan.commands = {};
+authoritativeSuiteCalls.length = 0;
+authoritativeSuiteRead = { state: 'ready', projection: actionRemovedProjection };
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'START', costConfirmed: true, intentWitness: startIntentWitness,
+  }),
+  /状态已变化|重新确认/u,
+  'a disappeared action must map to the same stale-intent response',
+);
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), ['getStatus', 'getAiImageSuite']);
+
+const reviewedProjection = currentSuiteProjectionFixture('REVIEW_SLOT');
+const reviewIntentWitness = suiteIntentContract.createAiImageSuiteIntentWitness({
+  projection: reviewedProjection,
+  action: 'REVIEW_SLOT',
+  slotId: 'slot-1',
+  decision: 'APPROVE',
+});
+const replacedOutputProjection = structuredClone(reviewedProjection);
+replacedOutputProjection.suite.revision = 9;
+replacedOutputProjection.suite.slots[0].revision = 6;
+replacedOutputProjection.suite.slots[0].workflowRevision = 5;
+replacedOutputProjection.suite.slots[0].output.id = 'asset-2';
+Object.assign(replacedOutputProjection.suite.slots[0].commands.REVIEW_SLOT, {
+  outputAssetId: 'asset-2', expectedSuiteRevision: 9,
+  expectedSlotRevision: 6, expectedWorkflowRevision: 5,
+});
+authoritativeSuiteCalls.length = 0;
+authoritativeSuiteRead = { state: 'ready', projection: replacedOutputProjection };
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'REVIEW_SLOT', slotId: 'slot-1', decision: 'APPROVE', costConfirmed: false,
+    intentWitness: reviewIntentWitness,
+  }),
+  /状态已变化|重新确认/u,
+  'the worker must not redirect review intent to a replacement output/revision',
+);
+assert.deepEqual(authoritativeSuiteCalls.map((call) => call.method), ['getStatus', 'getAiImageSuite']);
+authoritativeSuiteRead = { state: 'ready', projection: suiteProjection };
+
+await assert.rejects(
+  authoritativeSuiteApi.executeAuthoritativeSourceAiImageSuiteCommand({
+    ...suiteMessageContext,
+    type: 'ss-erp:source-listing-workbench-ai-image-suite-command',
+    action: 'START', costConfirmed: true, apiKey: 'must-not-cross-background',
+  }),
+  /请求字段无效/u,
+);
+authoritativeSuiteListing = null;
+await assert.rejects(
+  authoritativeSuiteApi.loadAuthoritativeSourceAiImageSuiteProjection(suiteMessageContext),
+  /状态已变化/u,
+);
+authoritativeSuiteListing = {
+  shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
+};
+authoritativeSuiteHandoff = {
+  ...authoritativeSuiteHandoff,
+  sourceProductId: 'different-product',
+};
+await assert.rejects(
+  authoritativeSuiteApi.loadAuthoritativeSourceAiImageSuiteProjection(suiteMessageContext),
+  /上下文无效/u,
+);
+authoritativeSuiteHandoff = {
+  platform: '1688', sourceProductId: 'source-product-1',
+  snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+};
+
 const launchRequests = [];
 const launchClient = context.SS_ERP_LISTING_WORKFLOW_CLIENT.createClient({
   transport: {
@@ -1155,13 +1759,26 @@ class TestNode {
   addEventListener(name, listener) { this.listeners[name] = listener; }
   get firstChild() { return this.children[0] || null; }
 }
+const viewTimers = [];
+const viewWindowListeners = {};
 const viewContext = {
   document: { createElement: (tag) => new TestNode(tag) },
-  window: {},
+  window: {
+    setTimeout(callback, delay) {
+      const timer = { callback, delay, cleared: false };
+      viewTimers.push(timer);
+      return timer;
+    },
+    clearTimeout(timer) { if (timer) timer.cleared = true; },
+    addEventListener(name, listener) { viewWindowListeners[name] = listener; },
+  },
 };
 vm.runInNewContext(viewSource, viewContext, { filename: viewPath });
 function renderedText(node) {
   return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join(' ');
+}
+function renderedNodes(node) {
+  return [node, ...node.children.flatMap(renderedNodes)];
 }
 
 const unpairedContainer = new TestNode('section');
@@ -1314,6 +1931,352 @@ assert.match(renderedText(providerBlockedContainer), /参考生图：Provider �
 assert.match(renderedText(providerBlockedContainer), /全图编辑：Provider 尚未完成生产验证/u);
 assert.match(renderedText(providerBlockedContainer), /局部重绘：需要可用的对象存储/u);
 assert.doesNotMatch(renderedText(providerBlockedContainer), /sandbox|not allowed|incompatible/u);
+
+const suiteReloadContainer = new TestNode('section');
+const suiteReloadEvents = [];
+const suiteReloadErrors = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteReloadContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: null,
+  aiImageSuiteError: '上次读取失败',
+  onLoadAiImageSuite(metadata) {
+    suiteReloadEvents.push(metadata);
+    return Promise.reject(new Error('手动重读失败'));
+  },
+  onAiImageSuiteError(error) { suiteReloadErrors.push(error.message); },
+});
+const suiteReloadButton = renderedNodes(suiteReloadContainer)
+  .find((node) => node.textContent === '重新读取');
+assert.ok(suiteReloadButton);
+suiteReloadButton.listeners.click({ isTrusted: false });
+assert.equal(suiteReloadEvents.length, 0);
+suiteReloadButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(suiteReloadEvents.length, 1);
+assert.deepEqual(suiteReloadErrors, ['手动重读失败']);
+
+const suiteStartContainer = new TestNode('section');
+const suiteStartEvents = [];
+let finishSuiteStart;
+const pendingSuiteStart = new Promise((resolve) => { finishSuiteStart = resolve; });
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteStartContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: aiImageSuiteProjectionFixture() },
+  onAiImageSuiteCommand(payload) {
+    suiteStartEvents.push(payload);
+    return pendingSuiteStart;
+  },
+});
+const suiteStartText = renderedText(suiteStartContainer);
+assert.match(suiteStartText, /AI 主图 \/ AI 套图/u);
+assert.match(suiteStartText, /待生成 2 张/u);
+assert.match(suiteStartText, /预计费用 US\$0\.18 · 最高费用 US\$0\.24/u);
+assert.doesNotMatch(suiteStartText, /预计费用 ¥/u);
+assert.match(suiteStartText, /不会直接写入店铺草稿/u);
+const suiteStartNodes = renderedNodes(suiteStartContainer);
+const suiteCostConfirm = suiteStartNodes.find((node) => (
+  node.tag === 'input' && node.attributes['aria-label'] === '确认 AI 套图最高费用'
+));
+const suiteStartButton = suiteStartNodes.find((node) => node.textContent === '开始生成套图');
+assert.ok(suiteCostConfirm);
+assert.ok(suiteStartButton);
+assert.equal(suiteStartButton.disabled, true, 'suite start requires explicit maximum-cost confirmation');
+suiteCostConfirm.checked = true;
+suiteCostConfirm.listeners.change({ isTrusted: false });
+assert.equal(suiteStartButton.disabled, true, 'scripted cost confirmation must be ignored');
+suiteCostConfirm.listeners.change({ isTrusted: true });
+assert.equal(suiteStartButton.disabled, false);
+suiteStartButton.listeners.click({ isTrusted: false });
+assert.equal(suiteStartEvents.length, 0);
+suiteStartButton.listeners.click({ isTrusted: true });
+suiteStartButton.listeners.click({ isTrusted: true });
+assert.equal(suiteStartEvents.length, 1, 'pending suite commands must reject duplicate clicks');
+assert.equal(suiteStartButton.disabled, true);
+assert.equal(suiteStartEvents[0].action, 'START');
+assert.equal(suiteStartEvents[0].costConfirmed, true);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suiteStartEvents[0].intentWitness)),
+  JSON.parse(JSON.stringify(startIntentWitness)),
+);
+assert.equal('projection' in suiteStartEvents[0], false, 'the full projection must not leave the view');
+finishSuiteStart();
+await pendingSuiteStart;
+await Promise.resolve();
+
+const suiteRetryContainer = new TestNode('section');
+const suiteRetryEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteRetryContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: currentSuiteProjectionFixture('RETRY_SLOT') },
+  onAiImageSuiteCommand(payload) { suiteRetryEvents.push(payload); },
+});
+assert.match(renderedText(suiteRetryContainer), /AI 套图 0 \/ 2 · 失败 1/u);
+assert.match(renderedText(suiteRetryContainer), /商品主图 生成失败/u);
+const suiteRetryNodes = renderedNodes(suiteRetryContainer);
+const suiteRetryConfirm = suiteRetryNodes.find((node) => (
+  node.tag === 'input' && node.attributes['aria-label'] === '确认失败槽位追加费用'
+));
+const suiteRetryButton = suiteRetryNodes.find((node) => node.textContent === '重试失败图片');
+assert.ok(suiteRetryConfirm);
+assert.ok(suiteRetryButton);
+assert.equal(suiteRetryButton.disabled, true);
+suiteRetryConfirm.checked = true;
+suiteRetryConfirm.listeners.change({ isTrusted: true });
+suiteRetryButton.listeners.click({ isTrusted: true });
+assert.equal(suiteRetryEvents.length, 1);
+assert.equal(suiteRetryEvents[0].action, 'RETRY_SLOT');
+assert.equal(suiteRetryEvents[0].slotId, 'slot-1');
+assert.equal(suiteRetryEvents[0].costConfirmed, true);
+assert.equal(suiteRetryEvents[0].intentWitness.action, 'RETRY_SLOT');
+assert.equal(suiteRetryEvents[0].intentWitness.commandTemplate.acceptedAdditionalMaximumCostCents, 12);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suiteRetryEvents[0].intentWitness)),
+  JSON.parse(JSON.stringify(suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: retryProjection, action: 'RETRY_SLOT', slotId: 'slot-1',
+  }))),
+);
+
+const suiteReviewContainer = new TestNode('section');
+const suiteReviewEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteReviewContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: currentSuiteProjectionFixture('REVIEW_SLOT') },
+  onAiImageSuiteCommand(payload) { suiteReviewEvents.push(payload); },
+});
+const suiteReviewNodes = renderedNodes(suiteReviewContainer);
+assert.match(renderedText(suiteReviewContainer), /等待审核/u);
+const suiteReviewImage = suiteReviewNodes.find((node) => node.tag === 'img');
+assert.ok(suiteReviewImage);
+assert.equal(suiteReviewImage.referrerPolicy, 'no-referrer');
+const suiteApprove = suiteReviewNodes.find((node) => node.textContent === '审核通过');
+const suiteReject = suiteReviewNodes.find((node) => node.textContent === '驳回');
+suiteApprove.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+suiteReject.listeners.click({ isTrusted: true });
+assert.deepEqual(suiteReviewEvents.map((event) => event.decision), ['APPROVE', 'REJECT']);
+assert.deepEqual(
+  suiteReviewEvents.map((event) => event.intentWitness.decision),
+  ['APPROVE', 'REJECT'],
+);
+assert.equal(suiteReviewEvents[0].intentWitness.commandTemplate.outputAssetId, 'asset-1');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suiteReviewEvents[0].intentWitness)),
+  JSON.parse(JSON.stringify(suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: currentSuiteProjectionFixture('REVIEW_SLOT'),
+    action: 'REVIEW_SLOT', slotId: 'slot-1', decision: 'APPROVE',
+  }))),
+);
+
+const suiteApplyContainer = new TestNode('section');
+const suiteApplyEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteApplyContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: currentSuiteProjectionFixture('APPLY_SLOT') },
+  onAiImageSuiteCommand(payload) { suiteApplyEvents.push(payload); },
+});
+const suiteApplyButton = renderedNodes(suiteApplyContainer)
+  .find((node) => node.textContent === '追加到 ERP 来源商品');
+assert.ok(suiteApplyButton);
+assert.doesNotMatch(renderedText(suiteApplyContainer), /追加到店铺草稿/u);
+suiteApplyButton.listeners.click({ isTrusted: true });
+assert.equal(suiteApplyEvents[0].action, 'APPLY_SLOT');
+assert.equal(suiteApplyEvents[0].intentWitness.commandTemplate.expectedTargetUpdatedAt,
+  '2026-07-24T00:00:00.000Z');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(suiteApplyEvents[0].intentWitness)),
+  JSON.parse(JSON.stringify(suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: currentSuiteProjectionFixture('APPLY_SLOT'),
+    action: 'APPLY_SLOT', slotId: 'slot-1',
+  }))),
+);
+
+const suiteContinueProjection = currentSuiteProjectionFixture('RETRY_SLOT');
+suiteContinueProjection.suite.status = 'PLANNED';
+suiteContinueProjection.suite.allowedActions = ['CONTINUE', 'CANCEL'];
+suiteContinueProjection.suite.commands = {
+  CONTINUE: { suiteId: 'suite-1', expectedSuiteRevision: 8 },
+  CANCEL: { suiteId: 'suite-1', expectedSuiteRevision: 8 },
+};
+const suiteContinueContainer = new TestNode('section');
+const suiteContinueEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteContinueContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: suiteContinueProjection },
+  onAiImageSuiteCommand(payload) { suiteContinueEvents.push(payload); },
+});
+const suiteContinueNodes = renderedNodes(suiteContinueContainer);
+suiteContinueNodes.find((node) => node.textContent === '继续生成').listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+suiteContinueNodes.find((node) => node.textContent === '取消任务').listeners.click({ isTrusted: true });
+assert.deepEqual(suiteContinueEvents.map((event) => event.action), ['CONTINUE', 'CANCEL']);
+assert.deepEqual(
+  suiteContinueEvents.map((event) => event.intentWitness.action),
+  ['CONTINUE', 'CANCEL'],
+);
+assert.deepEqual(
+  suiteContinueEvents.map((event) => event.intentWitness.commandTemplate.expectedSuiteRevision),
+  [8, 8],
+);
+for (const event of suiteContinueEvents) {
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(event.intentWitness)),
+    JSON.parse(JSON.stringify(suiteIntentContract.createAiImageSuiteIntentWitness({
+      projection: suiteContinueProjection, action: event.action,
+    }))),
+  );
+}
+
+const suitePollingProjection = currentSuiteProjectionFixture('RETRY_SLOT');
+suitePollingProjection.suite.status = 'RUNNING';
+suitePollingProjection.suite.allowedActions = ['CANCEL'];
+suitePollingProjection.suite.commands = {
+  CANCEL: { suiteId: 'suite-1', expectedSuiteRevision: 8 },
+};
+const suitePollingContainer = new TestNode('section');
+const suitePolls = [];
+function renderSuitePolling() {
+  viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suitePollingContainer, {
+    state: 'ready',
+    status: {
+      snapshot: { current: true },
+      listing: { items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }] },
+      media: { actionableCount: 0, items: [] },
+    },
+  }, {
+    selectedListingWorkflowId: 'listing-1',
+    aiImageSuite: { state: 'ready', projection: suitePollingProjection },
+    aiImageSuitePollLimit: 2,
+    aiImageSuitePollIntervalMs: 1000,
+    onLoadAiImageSuite(metadata) { suitePolls.push(metadata); },
+  });
+}
+const pollingTimerStart = viewTimers.length;
+renderSuitePolling();
+assert.equal(viewTimers.length, pollingTimerStart + 1);
+assert.equal(viewTimers.at(-1).delay, 1000);
+viewTimers.at(-1).callback();
+assert.equal(suitePolls.length, 1);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(viewTimers.length, pollingTimerStart + 2);
+viewTimers.at(-1).callback();
+assert.equal(suitePolls.length, 2);
+await new Promise((resolve) => setImmediate(resolve));
+const boundedTimerCount = viewTimers.length;
+renderSuitePolling();
+assert.equal(viewTimers.length, boundedTimerCount, 'suite polling must stop at its bounded attempt limit');
+const postLimitRefresh = renderedNodes(suitePollingContainer)
+  .find((node) => node.textContent === '刷新任务状态');
+assert.ok(postLimitRefresh, 'a bounded active poll must expose an explicit recovery action');
+postLimitRefresh.listeners.click({ isTrusted: false });
+assert.equal(suitePolls.length, 2, 'scripted refresh clicks must be ignored');
+postLimitRefresh.listeners.click({ isTrusted: true });
+assert.equal(suitePolls.length, 3, 'trusted refresh must immediately re-read the active suite');
+assert.equal(suitePolls[2].reason, 'manual');
+assert.equal(suitePolls[2].force, true);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(viewTimers.length, boundedTimerCount + 1, 'manual refresh must resume bounded polling');
+
+const unloadingPollingContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(unloadingPollingContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: { items: [{
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 3,
+      blockerCount: 0, warningCount: 0, blockers: [],
+    }] },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiImageSuite: { state: 'ready', projection: suitePollingProjection },
+  onLoadAiImageSuite() {},
+});
+const unloadingTimer = viewTimers.at(-1);
+assert.equal(unloadingTimer.cleared, false);
+viewWindowListeners.pagehide();
+assert.equal(unloadingTimer.cleared, true, 'page unload must stop suite polling');
+const resumeTimerCount = viewTimers.length;
+viewWindowListeners.pageshow({ persisted: true });
+assert.equal(
+  viewTimers.length,
+  resumeTimerCount + 2,
+  'bfcache pageshow must resume every active suite poller, including a manually resumed one',
+);
+assert.equal(viewTimers.at(-1).cleared, false);
 
 const multiListingContainer = new TestNode('section');
 const selectedListings = [];

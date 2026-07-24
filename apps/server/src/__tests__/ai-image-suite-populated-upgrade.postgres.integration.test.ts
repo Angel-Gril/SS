@@ -1,13 +1,20 @@
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PrismaAiImageSuiteExecutionRepository } from '../repositories/ai-image-suite-execution-repository.js';
+import {
+  PrismaAiImageSuiteExecutionRepository,
+  PrismaAiImageSuiteGenerationCoordinator,
+} from '../repositories/ai-image-suite-execution-repository.js';
 import { createAiImageSuiteExecutionService } from '../services/ai-image-suite-execution.js';
 
 const enabled = process.env.RUN_AI_MEDIA_POPULATED_UPGRADE_TESTS === '1';
+const legacySuccessEnabled = process.env.RUN_AI_MEDIA_LEGACY_SUCCESS_SEED_TESTS === '1';
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const suiteId = process.env.AI_MEDIA_UPGRADE_SUITE_ID || '';
 const ownerUserId = process.env.AI_MEDIA_UPGRADE_OWNER_USER_ID || '';
 const actorUserId = process.env.AI_MEDIA_UPGRADE_ACTOR_USER_ID || '';
+const legacySuiteId = process.env.AI_MEDIA_LEGACY_SUITE_ID || '';
+const legacyOwnerUserId = process.env.AI_MEDIA_LEGACY_OWNER_USER_ID || '';
+const legacyActorUserId = process.env.AI_MEDIA_LEGACY_ACTOR_USER_ID || '';
 
 function exactFixtureId(value: string, label: string): string {
   if (!value || value !== value.trim() || value.length > 200) {
@@ -16,15 +23,151 @@ function exactFixtureId(value: string, label: string): string {
   return value;
 }
 
+function assertIsolatedDatabaseUrl(): void {
+  if (!databaseUrl) throw new Error('AI_MEDIA_TEST_DATABASE_URL is required');
+  const schema = new URL(databaseUrl).searchParams.get('schema') || '';
+  if (!/^ai_media_test_[a-z0-9_]+$/u.test(schema)) {
+    throw new Error('AI_MEDIA_TEST_DATABASE_URL must target an isolated ai_media_test_* schema');
+  }
+}
+
+function withoutSuiteOutputSnapshot(client: PrismaClient): PrismaClient {
+  const wrapTransaction = (transaction: any) => new Proxy(transaction, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== 'mediaAsset' || !value) {
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+      return new Proxy(value, {
+        get(model, method, modelReceiver) {
+          const operation = Reflect.get(model, method, modelReceiver);
+          if (method !== 'create' || typeof operation !== 'function') {
+            return typeof operation === 'function' ? operation.bind(model) : operation;
+          }
+          return (args: any) => {
+            const data = args?.data;
+            if (data?.kind !== 'AI_GENERATED'
+              || data?.metadata?.version !== 'ai-image-suite-output/v1') {
+              return operation.call(model, args);
+            }
+            const { sourceCaptureSnapshotId: _legacyMissingSnapshot, ...legacyData } = data;
+            return operation.call(model, { ...args, data: legacyData });
+          };
+        },
+      });
+    },
+  });
+  return new Proxy(client as any, {
+    get(target, property, receiver) {
+      if (property === '$transaction') {
+        return (action: any, options: any) => target.$transaction(
+          (transaction: any) => action(wrapTransaction(transaction)),
+          options,
+        );
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as PrismaClient;
+}
+
+describe.skipIf(!legacySuccessEnabled)('AI image suite legacy fake completion seed', () => {
+  let client: PrismaClient;
+
+  beforeAll(async () => {
+    assertIsolatedDatabaseUrl();
+    exactFixtureId(legacySuiteId, 'AI_MEDIA_LEGACY_SUITE_ID');
+    exactFixtureId(legacyOwnerUserId, 'AI_MEDIA_LEGACY_OWNER_USER_ID');
+    exactFixtureId(legacyActorUserId, 'AI_MEDIA_LEGACY_ACTOR_USER_ID');
+    client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    await client.$connect();
+  });
+
+  afterAll(async () => {
+    await client?.$disconnect();
+  });
+
+  it('persists the legal pre-upgrade fake output shape without a capture snapshot', async () => {
+    const before = await client.aiMediaSuite.findFirstOrThrow({
+      where: { id: legacySuiteId, ownerUserId: legacyOwnerUserId },
+    });
+    expect(before).toMatchObject({ provider: 'fake', status: 'PLANNED', revision: 4 });
+
+    const repository = new PrismaAiImageSuiteExecutionRepository(client, {
+      runtimeReady: async () => true,
+    });
+    const service = createAiImageSuiteExecutionService(repository);
+    await service.dispatch({
+      suiteId: legacySuiteId,
+      ownerUserId: legacyOwnerUserId,
+      actorUserId: legacyActorUserId,
+      expectedRevision: 4,
+      operationKey: `legacy-upgrade-dispatch-${legacySuiteId}`.slice(0, 128),
+    });
+    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(
+      withoutSuiteOutputSnapshot(client),
+      {
+        runtimeReady: async () => true,
+        createFakeImage: async () => ({
+          buffer: Buffer.from('legacy-suite-upgrade-output'),
+          mimeType: 'image/png',
+          filename: 'legacy-suite-upgrade-output.png',
+        }),
+        uploadBuffer: async (_buffer, filename, mimeType, options) => {
+          if (!options?.ownerId) throw new Error('Legacy suite upload owner is required');
+          return {
+            url: `https://storage.example/${options.ownerId}/${filename}`,
+            backend: 'local',
+            filename,
+            key: `${options.ownerId}/${filename}`,
+            mimeType,
+          };
+        },
+      },
+    );
+
+    for (let iteration = 0; iteration < before.itemCount * 2; iteration += 1) {
+      const tasks = await repository.listQueueableTasks(legacySuiteId);
+      if (tasks.length === 0) break;
+      for (const task of tasks) {
+        const claim = await coordinator.revalidateAndClaim(task);
+        expect(claim.kind).toBe('ready');
+        if (claim.kind !== 'ready') throw new Error('Legacy suite task was not claimable');
+        await expect(coordinator.execute(task, claim)).resolves.toMatchObject({ kind: 'completed' });
+      }
+    }
+
+    const upgradedCandidate = await client.aiMediaSuite.findFirstOrThrow({
+      where: { id: legacySuiteId, ownerUserId: legacyOwnerUserId },
+      include: {
+        slots: {
+          include: { childWorkflow: { include: { jobs: { include: { assets: true } } } } },
+        },
+      },
+    });
+    expect(upgradedCandidate).toMatchObject({ provider: 'fake', status: 'SUCCEEDED' });
+    const outputs = upgradedCandidate.slots.flatMap((slot) => (
+      slot.childWorkflow?.jobs.flatMap((job) => job.assets) || []
+    ));
+    expect(outputs).toHaveLength(upgradedCandidate.itemCount);
+    expect(outputs.every((output) => (
+      output.kind === 'AI_GENERATED'
+      && output.sourceCaptureSnapshotId === null
+      && (output.metadata as Record<string, unknown>)?.version === 'ai-image-suite-output/v1'
+    ))).toBe(true);
+    await client.$queryRawUnsafe(
+      'SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS "result"',
+      legacySuiteId,
+      legacyOwnerUserId,
+    );
+  }, 60_000);
+});
+
 describe.skipIf(!enabled)('AI image suite populated migration upgrade', () => {
   let client: PrismaClient;
 
   beforeAll(async () => {
-    if (!databaseUrl) throw new Error('AI_MEDIA_TEST_DATABASE_URL is required');
-    const schema = new URL(databaseUrl).searchParams.get('schema') || '';
-    if (!/^ai_media_test_[a-z0-9_]+$/u.test(schema)) {
-      throw new Error('AI_MEDIA_TEST_DATABASE_URL must target an isolated ai_media_test_* schema');
-    }
+    assertIsolatedDatabaseUrl();
     exactFixtureId(suiteId, 'AI_MEDIA_UPGRADE_SUITE_ID');
     exactFixtureId(ownerUserId, 'AI_MEDIA_UPGRADE_OWNER_USER_ID');
     exactFixtureId(actorUserId, 'AI_MEDIA_UPGRADE_ACTOR_USER_ID');

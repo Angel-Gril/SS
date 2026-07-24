@@ -532,6 +532,553 @@
       && data.preservedPixelCount > 0;
   }
 
+  var AI_IMAGE_SUITE_PROJECTION_VERSION = 'extension-ai-image-suite-projection/v1';
+  var AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION = 'extension-ai-image-suite-execute-command/v1';
+  var AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION = 'extension-ai-image-suite-review-command/v1';
+  var AI_IMAGE_SUITE_APPLY_COMMAND_VERSION = 'extension-ai-image-suite-apply-command/v1';
+  var AI_IMAGE_SUITE_INTENT_WITNESS_VERSION = 'extension-ai-image-suite-intent-witness/v1';
+  var AI_IMAGE_SUITE_MAX_COST_CENTS = 10000000;
+  var AI_IMAGE_SUITE_STATUSES = [
+    'PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL_FAILURE',
+    'CANCEL_REQUESTED', 'CANCELLED',
+  ];
+  var AI_IMAGE_SUITE_SLOT_STATUSES = [
+    'PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED',
+  ];
+  var AI_IMAGE_SUITE_REVIEW_STATUSES = ['NOT_READY', 'PENDING', 'APPROVED', 'REJECTED'];
+
+  function exactKeys(value, keys) {
+    var item = record(value);
+    return Boolean(item)
+      && Object.keys(item).sort().join(',') === keys.slice().sort().join(',');
+  }
+
+  function boundedSuiteCost(value, positive) {
+    return Number.isSafeInteger(value)
+      && value >= (positive ? 1 : 0)
+      && value <= AI_IMAGE_SUITE_MAX_COST_CENTS;
+  }
+
+  function sha256(value) {
+    return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  }
+
+  function nullableText(value, maximum) {
+    return value === null || text(value, maximum);
+  }
+
+  function validSuiteBinding(value, expected) {
+    return exactKeys(value, [
+      'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
+      'draftRevision', 'draftVersion',
+    ])
+      && text(value.snapshotId, 200)
+      && text(value.supplyGoodsId, 200)
+      && text(value.shopId, 200)
+      && text(value.listingWorkflowId, 200)
+      && Number.isSafeInteger(value.draftRevision) && value.draftRevision > 0
+      && Number.isSafeInteger(value.draftVersion) && value.draftVersion > 0
+      && (!expected
+        || (value.snapshotId === expected.snapshotId
+          && value.supplyGoodsId === expected.supplyGoodsId
+          && value.shopId === expected.shopId
+          && value.listingWorkflowId === expected.listingWorkflowId
+          && value.draftRevision === expected.draftRevision
+          && value.draftVersion === expected.draftVersion));
+  }
+
+  function validSuiteAuthority(value, context) {
+    return exactKeys(value, [
+      'snapshotId', 'supplyGoodsId', 'draftRevision', 'planId', 'planVersionId',
+      'planRevision', 'skuKey', 'authorityHash',
+    ])
+      && value.snapshotId === context.snapshotId
+      && value.supplyGoodsId === context.supplyGoodsId
+      && value.draftRevision === context.draftRevision
+      && text(value.planId, 200)
+      && text(value.planVersionId, 200)
+      && Number.isSafeInteger(value.planRevision) && value.planRevision > 0
+      && nullableText(value.skuKey, 500)
+      && sha256(value.authorityHash);
+  }
+
+  function validAllowedCommands(value, commands, allowed) {
+    if (!Array.isArray(value) || value.length > allowed.length
+      || new Set(value).size !== value.length
+      || value.some(function (action) { return !allowed.includes(action); })
+      || !record(commands)) return false;
+    var commandKeys = Object.keys(commands);
+    return commandKeys.length === value.length
+      && commandKeys.every(function (action) { return value.includes(action); });
+  }
+
+  function validPlanSlot(value) {
+    var slot = record(value);
+    var ownership = slot && record(slot.ownership);
+    return exactKeys(slot, [
+      'ordinal', 'slotKey', 'goal', 'ownership', 'estimatedCostCents', 'maximumCostCents',
+    ])
+      && Number.isSafeInteger(slot.ordinal) && slot.ordinal >= 0
+      && text(slot.slotKey, 500)
+      && text(slot.goal, 200)
+      && exactKeys(ownership, ['level', 'key'])
+      && ['sku', 'compatibility_group'].includes(ownership.level)
+      && text(ownership.key, 500)
+      && boundedSuiteCost(slot.estimatedCostCents, false)
+      && boundedSuiteCost(slot.maximumCostCents, false)
+      && slot.maximumCostCents >= slot.estimatedCostCents;
+  }
+
+  function validSuitePlan(value, authority) {
+    var plan = record(value);
+    var preview = plan && record(plan.preview);
+    var commands = plan && record(plan.commands);
+    if (!exactKeys(plan, [
+      'id', 'versionId', 'revision', 'status', 'skuKey', 'preview', 'allowedActions', 'commands',
+    ])
+      || plan.id !== authority.planId
+      || plan.versionId !== authority.planVersionId
+      || plan.revision !== authority.planRevision
+      || plan.status !== 'APPROVED'
+      || plan.skuKey !== authority.skuKey
+      || !exactKeys(preview, [
+        'hash', 'pricingVersion', 'itemCount', 'estimatedCostCents',
+        'maximumCostCents', 'slots',
+      ])
+      || !sha256(preview.hash)
+      || !text(preview.pricingVersion, 100)
+      || !Number.isSafeInteger(preview.itemCount) || preview.itemCount < 1 || preview.itemCount > 500
+      || !boundedSuiteCost(preview.estimatedCostCents, false)
+      || !boundedSuiteCost(preview.maximumCostCents, true)
+      || preview.maximumCostCents < preview.estimatedCostCents
+      || !Array.isArray(preview.slots) || preview.slots.length > 500
+      || !preview.slots.every(validPlanSlot)
+      || !validAllowedCommands(plan.allowedActions, commands, ['START'])) return false;
+    if (!commands.START) return plan.allowedActions.length === 0;
+    return exactKeys(commands.START, [
+      'expectedPreviewHash', 'acceptedPricingVersion',
+      'acceptedEstimatedCostCents', 'acceptedMaximumCostCents',
+    ])
+      && commands.START.expectedPreviewHash === preview.hash
+      && commands.START.acceptedPricingVersion === preview.pricingVersion
+      && commands.START.acceptedEstimatedCostCents === preview.estimatedCostCents
+      && commands.START.acceptedMaximumCostCents === preview.maximumCostCents;
+  }
+
+  function validSuiteOutput(value) {
+    if (value === null) return true;
+    return exactKeys(value, ['id', 'url', 'storageBackend', 'mimeType', 'width', 'height'])
+      && text(value.id, 200)
+      && validPreviewUrl(value.url)
+      && ['local', 'oss'].includes(value.storageBackend)
+      && ['image/jpeg', 'image/png', 'image/webp'].includes(value.mimeType)
+      && (value.width === null || (Number.isSafeInteger(value.width) && value.width > 0))
+      && (value.height === null || (Number.isSafeInteger(value.height) && value.height > 0));
+  }
+
+  function validSuiteApplication(value) {
+    if (value === null) return true;
+    return exactKeys(value, ['state', 'target', 'mode', 'writesStoreDraft'])
+      && ['APPLIED', 'ROLLED_BACK'].includes(value.state)
+      && value.target === 'ERP_SOURCE_PRODUCT'
+      && value.mode === 'append'
+      && value.writesStoreDraft === false;
+  }
+
+  function canonicalTimestamp(value) {
+    if (typeof value !== 'string' || !value || value.length > 100) return false;
+    var parsed = new Date(value);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+  }
+
+  function validSlotCommand(action, value, slot, suite) {
+    var command = record(value);
+    var baseValid = command
+      && command.suiteId === suite.id
+      && command.slotId === slot.id
+      && command.expectedSuiteRevision === suite.revision
+      && command.expectedSlotRevision === slot.revision;
+    if (!baseValid) return false;
+    if (action === 'RETRY_SLOT') {
+      return exactKeys(command, [
+        'suiteId', 'slotId', 'expectedSuiteRevision', 'expectedSlotRevision',
+        'acceptedAdditionalMaximumCostCents',
+      ])
+        && boundedSuiteCost(command.acceptedAdditionalMaximumCostCents, true)
+        && command.acceptedAdditionalMaximumCostCents === slot.maximumCostCents;
+    }
+    var outputValid = command.workflowId === slot.workflowId
+      && command.outputAssetId === (slot.output && slot.output.id)
+      && command.expectedWorkflowRevision === slot.workflowRevision;
+    if (!outputValid) return false;
+    if (action === 'REVIEW_SLOT') {
+      return exactKeys(command, [
+        'suiteId', 'slotId', 'workflowId', 'outputAssetId', 'expectedSuiteRevision',
+        'expectedSlotRevision', 'expectedWorkflowRevision', 'decisions',
+      ])
+        && Array.isArray(command.decisions)
+        && command.decisions.length === 2
+        && command.decisions.includes('APPROVE')
+        && command.decisions.includes('REJECT');
+    }
+    return action === 'APPLY_SLOT'
+      && exactKeys(command, [
+        'suiteId', 'slotId', 'workflowId', 'outputAssetId', 'expectedSuiteRevision',
+        'expectedSlotRevision', 'expectedWorkflowRevision', 'mode', 'target',
+        'writesStoreDraft', 'expectedTargetUpdatedAt',
+      ])
+      && command.mode === 'append'
+      && command.target === 'ERP_SOURCE_PRODUCT'
+      && command.writesStoreDraft === false
+      && canonicalTimestamp(command.expectedTargetUpdatedAt);
+  }
+
+  function validSuiteSlot(value, suite) {
+    var slot = record(value);
+    var ownership = slot && record(slot.ownership);
+    var commands = slot && record(slot.commands);
+    if (!exactKeys(slot, [
+      'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'status', 'attempt', 'revision',
+      'estimatedCostCents', 'maximumCostCents', 'workflowId', 'workflowRevision',
+      'reviewStatus', 'output', 'application', 'allowedActions', 'commands',
+    ])
+      || !text(slot.id, 200)
+      || !Number.isSafeInteger(slot.ordinal) || slot.ordinal < 0
+      || !text(slot.slotKey, 500)
+      || !text(slot.goal, 200)
+      || !exactKeys(ownership, ['level', 'key'])
+      || !['sku', 'compatibility_group'].includes(ownership.level)
+      || !text(ownership.key, 500)
+      || !AI_IMAGE_SUITE_SLOT_STATUSES.includes(slot.status)
+      || !Number.isSafeInteger(slot.attempt) || slot.attempt < 0
+      || !Number.isSafeInteger(slot.revision) || slot.revision < 1
+      || !boundedSuiteCost(slot.estimatedCostCents, false)
+      || !boundedSuiteCost(slot.maximumCostCents, false)
+      || slot.maximumCostCents < slot.estimatedCostCents
+      || !nullableText(slot.workflowId, 200)
+      || !(slot.workflowRevision === null
+        || (Number.isSafeInteger(slot.workflowRevision) && slot.workflowRevision > 0))
+      || (slot.workflowId === null) !== (slot.workflowRevision === null)
+      || !AI_IMAGE_SUITE_REVIEW_STATUSES.includes(slot.reviewStatus)
+      || !validSuiteOutput(slot.output)
+      || !validSuiteApplication(slot.application)
+      || !validAllowedCommands(
+        slot.allowedActions,
+        commands,
+        ['RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT'],
+      )) return false;
+    return Object.keys(commands).every(function (action) {
+      return validSlotCommand(action, commands[action], slot, suite);
+    });
+  }
+
+  function validCurrentSuite(value, plan) {
+    var suite = record(value);
+    var commands = suite && record(suite.commands);
+    if (!exactKeys(suite, [
+      'id', 'status', 'revision', 'previewHash', 'pricingVersion', 'itemCount',
+      'estimatedCostCents', 'maximumCostCents', 'allowedActions', 'commands', 'slots',
+    ])
+      || !text(suite.id, 200)
+      || !AI_IMAGE_SUITE_STATUSES.includes(suite.status)
+      || !Number.isSafeInteger(suite.revision) || suite.revision < 1
+      || suite.previewHash !== plan.preview.hash
+      || suite.pricingVersion !== plan.preview.pricingVersion
+      || !Number.isSafeInteger(suite.itemCount) || suite.itemCount < 1 || suite.itemCount > 500
+      || !boundedSuiteCost(suite.estimatedCostCents, false)
+      || !boundedSuiteCost(suite.maximumCostCents, true)
+      || suite.maximumCostCents < suite.estimatedCostCents
+      || !validAllowedCommands(suite.allowedActions, commands, ['CONTINUE', 'CANCEL'])
+      || !Array.isArray(suite.slots) || suite.slots.length > 500) return false;
+    if (!Object.keys(commands).every(function (action) {
+      return exactKeys(commands[action], ['suiteId', 'expectedSuiteRevision'])
+        && commands[action].suiteId === suite.id
+        && commands[action].expectedSuiteRevision === suite.revision;
+    })) return false;
+    return suite.slots.every(function (slot) { return validSuiteSlot(slot, suite); });
+  }
+
+  function validAiImageSuiteProjection(value, expected) {
+    var projection = record(value);
+    var context = projection && record(projection.context);
+    var policy = projection && record(projection.applyPolicy);
+    if (!exactKeys(projection, [
+      'contractVersion', 'context', 'commandAuthority', 'applyPolicy', 'plan', 'suite',
+    ])
+      || projection.contractVersion !== AI_IMAGE_SUITE_PROJECTION_VERSION
+      || !validSuiteBinding(context, expected)
+      || !exactKeys(policy, ['target', 'mode', 'writesStoreDraft'])
+      || policy.target !== 'ERP_SOURCE_PRODUCT'
+      || policy.mode !== 'append'
+      || policy.writesStoreDraft !== false) return false;
+    if (projection.plan === null) {
+      return projection.commandAuthority === null && projection.suite === null;
+    }
+    return validSuiteAuthority(projection.commandAuthority, context)
+      && validSuitePlan(projection.plan, projection.commandAuthority)
+      && (projection.suite === null || validCurrentSuite(projection.suite, projection.plan));
+  }
+
+  function normalizedSuiteBinding(input) {
+    return {
+      snapshotId: identifier(input && input.snapshotId, 'snapshotId'),
+      supplyGoodsId: identifier(input && input.supplyGoodsId, 'supplyGoodsId'),
+      shopId: identifier(input && input.shopId, 'shopId'),
+      listingWorkflowId: identifier(input && input.listingWorkflowId, 'listingWorkflowId'),
+      draftRevision: positiveRevision(input && input.draftRevision, 'draftRevision'),
+      draftVersion: positiveRevision(input && input.draftVersion, 'draftVersion'),
+    };
+  }
+
+  function suiteAuthorityCommand(authority) {
+    return {
+      snapshotId: authority.snapshotId,
+      supplyGoodsId: authority.supplyGoodsId,
+      draftRevision: authority.draftRevision,
+      planId: authority.planId,
+      planVersionId: authority.planVersionId,
+      planRevision: authority.planRevision,
+      skuKey: authority.skuKey,
+    };
+  }
+
+  function suiteCommandTemplate(projection, action, slotId) {
+    if (action === 'START') {
+      return projection.plan.allowedActions.includes(action)
+        ? projection.plan.commands.START
+        : null;
+    }
+    if (action === 'CONTINUE' || action === 'CANCEL') {
+      return projection.suite && projection.suite.allowedActions.includes(action)
+        ? projection.suite.commands[action]
+        : null;
+    }
+    var slot = projection.suite && projection.suite.slots.find(function (item) {
+      return item.id === slotId;
+    });
+    return slot && slot.allowedActions.includes(action) ? slot.commands[action] : null;
+  }
+
+  function cloneSuiteIntentValue(value) {
+    if (Array.isArray(value)) return value.map(cloneSuiteIntentValue);
+    if (record(value)) {
+      return Object.fromEntries(Object.entries(value).map(function (entry) {
+        return [entry[0], cloneSuiteIntentValue(entry[1])];
+      }));
+    }
+    return value;
+  }
+
+  function freezeSuiteIntentValue(value) {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(freezeSuiteIntentValue);
+    return Object.freeze(value);
+  }
+
+  function boundedSuiteIntentValue(value, depth, budget) {
+    if (budget.count >= 64 || depth > 4) return false;
+    budget.count += 1;
+    if (value === null || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0;
+    if (typeof value === 'string') return value.length <= 500;
+    if (Array.isArray(value)) {
+      return value.length <= 4 && value.every(function (item) {
+        return boundedSuiteIntentValue(item, depth + 1, budget);
+      });
+    }
+    var item = record(value);
+    if (!item || Object.keys(item).length > 16) return false;
+    return Object.keys(item).every(function (key) {
+      return key.length <= 100 && boundedSuiteIntentValue(item[key], depth + 1, budget);
+    });
+  }
+
+  function sameSuiteIntentValue(left, right) {
+    if (left === right) return true;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      return Array.isArray(left) && Array.isArray(right)
+        && left.length === right.length
+        && left.every(function (value, index) {
+          return sameSuiteIntentValue(value, right[index]);
+        });
+    }
+    var leftRecord = record(left);
+    var rightRecord = record(right);
+    if (!leftRecord || !rightRecord) return false;
+    var leftKeys = Object.keys(leftRecord).sort();
+    var rightKeys = Object.keys(rightRecord).sort();
+    return leftKeys.length === rightKeys.length
+      && leftKeys.every(function (key, index) {
+        return key === rightKeys[index]
+          && sameSuiteIntentValue(leftRecord[key], rightRecord[key]);
+      });
+  }
+
+  function createAiImageSuiteIntentWitness(input) {
+    var projection = input && input.projection;
+    if (!validAiImageSuiteProjection(projection, projection && projection.context)
+      || !projection.commandAuthority || !projection.plan) {
+      throw new TypeError('AI image suite projection is invalid');
+    }
+    var action = input && input.action;
+    var actions = ['START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT'];
+    if (!actions.includes(action)) throw new TypeError('AI image suite action is invalid');
+    var slotId = input && input.slotId == null ? null : identifier(input.slotId, 'slotId');
+    var decision = input && input.decision == null ? null : input.decision;
+    var slotAction = ['RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT'].includes(action);
+    if (slotAction !== Boolean(slotId)
+      || (action === 'REVIEW_SLOT'
+        ? !['APPROVE', 'REJECT'].includes(decision)
+        : decision !== null)) {
+      throw new TypeError('AI image suite intent shape is invalid');
+    }
+    var template = suiteCommandTemplate(projection, action, slotId);
+    if (!template) throw new TypeError('AI image suite action is not currently allowed');
+    if (action === 'REVIEW_SLOT' && !template.decisions.includes(decision)) {
+      throw new TypeError('AI image suite review decision is invalid');
+    }
+    return freezeSuiteIntentValue({
+      version: AI_IMAGE_SUITE_INTENT_WITNESS_VERSION,
+      context: cloneSuiteIntentValue(projection.context),
+      authorityHash: projection.commandAuthority.authorityHash,
+      action: action,
+      slotId: slotId,
+      decision: decision,
+      commandTemplate: cloneSuiteIntentValue(template),
+    });
+  }
+
+  function matchesAiImageSuiteIntentWitness(received, expected) {
+    if (!exactKeys(received, [
+      'version', 'context', 'authorityHash', 'action', 'slotId', 'decision', 'commandTemplate',
+    ]) || !exactKeys(expected, [
+      'version', 'context', 'authorityHash', 'action', 'slotId', 'decision', 'commandTemplate',
+    ]) || received.version !== AI_IMAGE_SUITE_INTENT_WITNESS_VERSION
+      || expected.version !== AI_IMAGE_SUITE_INTENT_WITNESS_VERSION
+      || !sha256(received.authorityHash)
+      || !boundedSuiteIntentValue(received, 0, { count: 0 })) return false;
+    return sameSuiteIntentValue(received, expected);
+  }
+
+  function buildSuiteCommand(input) {
+    var projection = input && input.projection;
+    if (!validAiImageSuiteProjection(projection, projection && projection.context)
+      || !projection.commandAuthority || !projection.plan) {
+      throw new TypeError('AI image suite projection is invalid');
+    }
+    var action = input && input.action;
+    var executeActions = ['START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT'];
+    if (![...executeActions, 'REVIEW_SLOT', 'APPLY_SLOT'].includes(action)) {
+      throw new TypeError('AI image suite action is invalid');
+    }
+    var slotId = input && input.slotId == null
+      ? null
+      : identifier(input.slotId, 'slotId');
+    var template = suiteCommandTemplate(projection, action, slotId);
+    if (!template) throw new TypeError('AI image suite action is not currently allowed');
+    if ((action === 'START' || action === 'RETRY_SLOT') && input.costConfirmed !== true) {
+      throw new TypeError('AI image suite cost confirmation is required');
+    }
+    var operation = executeActions.includes(action)
+      ? 'MEDIA_EXECUTE'
+      : action === 'REVIEW_SLOT' ? 'MEDIA_REVIEW' : 'MEDIA_APPLY';
+    var version = operation === 'MEDIA_EXECUTE'
+      ? AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION
+      : operation === 'MEDIA_REVIEW'
+        ? AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION
+        : AI_IMAGE_SUITE_APPLY_COMMAND_VERSION;
+    var command = {
+      version: version,
+      action: action,
+      ...suiteAuthorityCommand(projection.commandAuthority),
+    };
+    if (action === 'START') {
+      Object.assign(command, {
+        expectedPreviewHash: template.expectedPreviewHash,
+        acceptedPricingVersion: template.acceptedPricingVersion,
+        acceptedEstimatedCostCents: template.acceptedEstimatedCostCents,
+        acceptedMaximumCostCents: template.acceptedMaximumCostCents,
+      });
+    } else if (action === 'CONTINUE' || action === 'CANCEL') {
+      Object.assign(command, {
+        suiteId: template.suiteId,
+        expectedSuiteRevision: template.expectedSuiteRevision,
+      });
+    } else if (action === 'RETRY_SLOT') {
+      Object.assign(command, {
+        suiteId: template.suiteId,
+        slotId: template.slotId,
+        expectedSuiteRevision: template.expectedSuiteRevision,
+        expectedSlotRevision: template.expectedSlotRevision,
+        acceptedAdditionalMaximumCostCents: template.acceptedAdditionalMaximumCostCents,
+      });
+    } else {
+      Object.assign(command, {
+        suiteId: template.suiteId,
+        slotId: template.slotId,
+        workflowId: template.workflowId,
+        outputAssetId: template.outputAssetId,
+        expectedSuiteRevision: template.expectedSuiteRevision,
+        expectedSlotRevision: template.expectedSlotRevision,
+        expectedWorkflowRevision: template.expectedWorkflowRevision,
+      });
+      if (action === 'REVIEW_SLOT') {
+        var decision = input && input.decision;
+        if (!template.decisions.includes(decision)) {
+          throw new TypeError('AI image suite review decision is invalid');
+        }
+        command.decision = decision;
+      } else {
+        command.mode = 'append';
+        command.expectedTargetUpdatedAt = template.expectedTargetUpdatedAt;
+      }
+    }
+    return { operation: operation, command: command };
+  }
+
+  function canonicalSuiteCommandValue(value) {
+    if (Array.isArray(value)) return value.map(canonicalSuiteCommandValue);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort(function (left, right) {
+        return left.localeCompare(right);
+      }).map(function (key) {
+        return [key, canonicalSuiteCommandValue(value[key])];
+      }));
+    }
+    return value;
+  }
+
+  function validSuiteCommandResult(value, built) {
+    var result = record(value);
+    var common = result
+      && text(result.action, 100)
+      && result.action === built.command.action
+      && text(result.suiteId, 200)
+      && AI_IMAGE_SUITE_STATUSES.includes(result.status)
+      && Number.isSafeInteger(result.revision) && result.revision > 0
+      && typeof result.replayed === 'boolean';
+    if (!common) return false;
+    if (built.operation === 'MEDIA_EXECUTE') {
+      return exactKeys(result, ['action', 'suiteId', 'status', 'revision', 'replayed']);
+    }
+    var outputCommandMatches = result.suiteId === built.command.suiteId
+      && result.slotId === built.command.slotId
+      && result.workflowId === built.command.workflowId;
+    if (!outputCommandMatches) return false;
+    if (built.operation === 'MEDIA_REVIEW') {
+      return exactKeys(result, [
+        'action', 'suiteId', 'slotId', 'workflowId', 'status', 'revision', 'replayed',
+      ]);
+    }
+    return exactKeys(result, [
+      'action', 'suiteId', 'slotId', 'workflowId', 'status', 'revision', 'replayed',
+      'target', 'mode', 'writesStoreDraft',
+    ])
+      && result.target === 'ERP_SOURCE_PRODUCT'
+      && result.mode === 'append'
+      && result.writesStoreDraft === false;
+  }
+
   function createClient(options) {
     var transport = options && options.transport;
     if (!transport || typeof transport.get !== 'function') {
@@ -562,6 +1109,62 @@
           throw new Error('invalid source workbench status response');
         }
         return { state: 'ready', capability: data.capability, status: data.status };
+      },
+      async getAiImageSuite(input) {
+        var binding = normalizedSuiteBinding(input);
+        var query = new URLSearchParams({
+          snapshotId: binding.snapshotId,
+          supplyGoodsId: binding.supplyGoodsId,
+          shopId: binding.shopId,
+          listingWorkflowId: binding.listingWorkflowId,
+          draftRevision: String(binding.draftRevision),
+          draftVersion: String(binding.draftVersion),
+        });
+        var response = await transport.get(
+          '/api/extension-device/source-workbench/ai-image-suite?' + query.toString(),
+          { requiredScope: 'listing:review' },
+        );
+        if (!response || response.state !== 'response') return response || { state: 'unavailable' };
+        var envelope = record(response.body);
+        var projection = envelope && envelope.code === 1 ? record(envelope.data) : null;
+        if (!validAiImageSuiteProjection(projection, binding)) {
+          throw new Error('invalid AI image suite projection response');
+        }
+        return { state: 'ready', projection: projection };
+      },
+      async executeAiImageSuiteCommand(input) {
+        var projection = input && input.projection;
+        var built = buildSuiteCommand(input);
+        var context = projection.context;
+        var idempotencyKey = await stableOperationKey(
+          canonicalSuiteCommandValue(built.command),
+          '',
+        );
+        var envelope = {
+          shopId: context.shopId,
+          workflowId: context.listingWorkflowId,
+          draftVersion: context.draftVersion,
+          idempotencyKey: idempotencyKey,
+          command: built.command,
+        };
+        var requiredScope = built.operation === 'MEDIA_EXECUTE'
+          ? 'media:execute'
+          : built.operation === 'MEDIA_REVIEW' ? 'listing:review' : 'listing:write';
+        var completed = await executeGrantedMediaMutation(
+          transport,
+          built.operation,
+          requiredScope,
+          envelope,
+          'AI image suite',
+        );
+        if (!validSuiteCommandResult(completed.result, built)) {
+          throw new Error('AI image suite command result is invalid');
+        }
+        return {
+          state: 'completed',
+          replay: completed.executedData.replay === true,
+          action: built.command.action,
+        };
       },
       async getMediaHistory(input) {
         var normalized = {
@@ -1125,5 +1728,7 @@
 
   global.SS_ERP_LISTING_WORKFLOW_CLIENT = {
     createClient: createClient,
+    createAiImageSuiteIntentWitness: createAiImageSuiteIntentWitness,
+    matchesAiImageSuiteIntentWitness: matchesAiImageSuiteIntentWitness,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

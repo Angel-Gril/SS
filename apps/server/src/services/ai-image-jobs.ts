@@ -15,6 +15,16 @@ export type AiImageJobStatus =
   | 'CANCEL_REQUESTED'
   | 'CANCELLED';
 
+export interface AiImageJobCostReservation {
+  id: string;
+  status: 'RESERVED' | 'SUBMISSION_UNCERTAIN' | 'RECONCILIATION_REQUIRED' | 'SETTLED' | 'RELEASED';
+  estimatedCostMinor: number;
+  maximumCostMinor: number;
+  provider: string;
+  model: string;
+  requestFingerprint: string;
+}
+
 export interface AiImageJobRecord {
   id: string;
   ownerUserId: string;
@@ -44,6 +54,7 @@ export interface AiImageJobRecord {
   estimatedCostCents: number;
   actualCostCents: number | null;
   billedUnits: number;
+  costReservation?: AiImageJobCostReservation | null;
   providerJobId: string | null;
   providerDispatchedAt?: Date | null;
   providerReconciliationStatus?:
@@ -94,6 +105,13 @@ export interface AiImageProviderRequest {
   height: number;
   model: string;
   inputAssets?: NonNullable<AiImageJobRecord['inputAssets']>;
+  inputImages?: AiImageProviderRuntimeInput[];
+  mask?: AiImageProviderRuntimeInput | null;
+}
+
+export interface AiImageProviderRuntimeInput {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
 }
 
 export interface AiImageProviderResult {
@@ -143,7 +161,11 @@ export interface AiImageJobRepository {
     billedUnits: number;
     assets: AiImageAssetInput[];
   }): Promise<void>;
-  createWithQuota(input: CreateAiImageJobInput, dailyLimit: number): Promise<CreateWithQuotaResult>;
+  createWithQuota(
+    input: CreateAiImageJobInput,
+    dailyLimit: number,
+    globalDailyBudgetCents?: number,
+  ): Promise<CreateWithQuotaResult>;
   requestCancellation(id: string, ownerUserId: string): Promise<AiImageJobRecord | null>;
   recordApplication(id: string, data: ApplyAiImageJobInput): Promise<AiImageJobRecord>;
 }
@@ -171,6 +193,7 @@ export interface CreateAiImageJobInput {
   templateChecksum?: string | null;
   templateSnapshot?: Record<string, unknown> | null;
   requestFingerprint?: string | null;
+  operationConfig?: Record<string, unknown> | null;
   provider: string;
   model: string;
   count: number;
@@ -182,7 +205,15 @@ export interface CreateAiImageJobInput {
 export type CreateWithQuotaResult =
   | { kind: 'created'; job: AiImageJobRecord }
   | { kind: 'existing'; job: AiImageJobRecord }
-  | { kind: 'quota-exceeded'; used: number; limit: number };
+  | { kind: 'quota-exceeded'; used: number; limit: number }
+  | {
+    kind: 'budget-exceeded';
+    settledCostCents: number;
+    pendingMaximumCostCents: number;
+    requestedMaximumCostCents: number;
+    limit: number;
+  }
+  | { kind: 'invalid-cost'; reason: string };
 
 export interface ApplyAiImageJobInput {
   mode: 'append' | 'replace';
@@ -256,6 +287,132 @@ function errorDetails(error: unknown): Omit<FailureUpdate, 'attemptCount'> {
   };
 }
 
+type FrozenInputAsset = NonNullable<AiImageJobRecord['inputAssets']>[number];
+type RuntimeImageMime = AiImageProviderRuntimeInput['mimeType'];
+
+const AI_IMAGE_MAX_RUNTIME_INPUT_BYTES = 20 * 1024 * 1024;
+
+function normalizedRuntimeImageMime(value: unknown): RuntimeImageMime | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'image/jpg') return 'image/jpeg';
+  if (normalized === 'image/png' || normalized === 'image/jpeg' || normalized === 'image/webp') {
+    return normalized;
+  }
+  return null;
+}
+
+function detectedRuntimeImageMime(buffer: Buffer): RuntimeImageMime | null {
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
+    return 'image/png';
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buffer.length >= 12
+    && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+    && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
+function frozenImageToImageReferences(job: AiImageJobRecord): Array<{
+  asset: FrozenInputAsset;
+  mimeType: RuntimeImageMime;
+}> {
+  const inputs = job.inputAssets || [];
+  if (!inputs.length || inputs.some((asset) => asset.role !== 'REFERENCE')) {
+    throw new AiImageJobError(
+      'INVALID_MEDIA_INPUT',
+      'IMAGE_TO_IMAGE requires only frozen reference image inputs',
+    );
+  }
+
+  const assetIds = new Set<string>();
+  const ordinals = new Set<number>();
+  const references = inputs.map((asset) => {
+    const assetId = String(asset.assetId || '').trim();
+    const ordinal = Number(asset.ordinal);
+    const mimeType = normalizedRuntimeImageMime(asset.mimeType);
+    const sha = String(asset.sha256 || '').trim().toLowerCase();
+    const sizeBytes = Number(asset.sizeBytes);
+    const storageBackend = String(asset.storageBackend || '').trim();
+    const storageKey = String(asset.storageKey || '').trim();
+    if (
+      !assetId
+      || assetIds.has(assetId)
+      || !Number.isSafeInteger(ordinal)
+      || ordinal < 0
+      || ordinals.has(ordinal)
+      || !mimeType
+      || !/^[a-f0-9]{64}$/u.test(sha)
+      || !Number.isSafeInteger(sizeBytes)
+      || sizeBytes < 1
+      || sizeBytes > AI_IMAGE_MAX_RUNTIME_INPUT_BYTES
+      || !['local', 'oss'].includes(storageBackend)
+      || !storageKey
+    ) {
+      throw new AiImageJobError(
+        'INVALID_MEDIA_INPUT',
+        'Frozen IMAGE_TO_IMAGE reference is incomplete, duplicated, or not in trusted storage',
+      );
+    }
+    assetIds.add(assetId);
+    ordinals.add(ordinal);
+    return { asset, mimeType };
+  }).sort((left, right) => Number(left.asset.ordinal) - Number(right.asset.ordinal));
+
+  if (references.some((reference, index) => reference.asset.ordinal !== index)) {
+    throw new AiImageJobError(
+      'INVALID_MEDIA_INPUT',
+      'Frozen IMAGE_TO_IMAGE reference ordinals must be contiguous from zero',
+    );
+  }
+  return references;
+}
+
+async function loadFrozenImageToImageInputs(
+  job: AiImageJobRecord,
+  loadInputBuffer: ((asset: FrozenInputAsset) => Promise<Buffer>) | undefined,
+): Promise<{
+  inputAssets: FrozenInputAsset[];
+  inputImages: AiImageProviderRuntimeInput[];
+}> {
+  const references = frozenImageToImageReferences(job);
+  if (!loadInputBuffer) {
+    throw new AiImageJobError(
+      'INVALID_MEDIA_INPUT',
+      'IMAGE_TO_IMAGE requires a trusted local or OSS input reader',
+    );
+  }
+
+  const inputImages: AiImageProviderRuntimeInput[] = [];
+  for (const { asset, mimeType } of references) {
+    const buffer = await loadInputBuffer(asset);
+    if (!Buffer.isBuffer(buffer)) {
+      throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Frozen input reader returned invalid image bytes');
+    }
+    if (buffer.length !== asset.sizeBytes
+      || createHash('sha256').update(buffer).digest('hex') !== String(asset.sha256).toLowerCase()) {
+      throw new AiImageJobError(
+        'FROZEN_INPUT_MISMATCH',
+        'Stored image input does not match the frozen asset identity',
+      );
+    }
+    if (detectedRuntimeImageMime(buffer) !== mimeType) {
+      throw new AiImageJobError(
+        'FROZEN_INPUT_MISMATCH',
+        'Stored image input MIME does not match the frozen asset identity',
+      );
+    }
+    inputImages.push({ buffer, mimeType });
+  }
+  return {
+    inputAssets: references.map(({ asset }) => asset),
+    inputImages,
+  };
+}
+
 export async function runAiImageJob(
   jobId: string,
   attemptNumber: number,
@@ -268,6 +425,7 @@ export async function runAiImageJob(
       mimeType?: string,
       options?: { category?: 'ai-generated'; ownerId?: string },
     ) => Promise<{ url: string; backend: string; filename?: string; key?: string }>;
+    loadInputBuffer?: (asset: FrozenInputAsset) => Promise<Buffer>;
     maxAttempts?: number;
   },
 ) {
@@ -301,6 +459,9 @@ export async function runAiImageJob(
         hasMask: Boolean(job.inputAssets?.some((asset) => asset.role === 'MASK')),
       });
     } catch (error) { throw capabilityJobError(error); }
+    const runtimeInputs = operation === 'IMAGE_TO_IMAGE'
+      ? await loadFrozenImageToImageInputs(job, deps.loadInputBuffer)
+      : null;
     const paidProviderInvocation = job.provider !== 'fake' && deps.provider.name !== 'disabled';
     if (paidProviderInvocation && deps.repository.recordProviderDispatchStarted) {
       const dispatchFenced = await deps.repository.recordProviderDispatchStarted(job.id, new Date());
@@ -321,7 +482,8 @@ export async function runAiImageJob(
       width: job.width,
       height: job.height,
       model: job.model,
-      inputAssets: job.inputAssets || undefined,
+      inputAssets: runtimeInputs?.inputAssets,
+      inputImages: runtimeInputs?.inputImages,
     });
     paidProviderResultReceived = job.provider !== 'fake' && deps.provider.name !== 'disabled';
     if (generated.providerJobId) {
@@ -397,7 +559,12 @@ export async function runAiImageJob(
     const permanent = Boolean(details.providerJobId)
       || details.providerSubmissionRejected === true
       || (error instanceof AiImageJobError
-        && ['UNSUPPORTED_PROVIDER_MODEL', 'UNSUPPORTED_OPERATION', 'INVALID_MEDIA_INPUT'].includes(error.code));
+        && [
+          'UNSUPPORTED_PROVIDER_MODEL',
+          'UNSUPPORTED_OPERATION',
+          'INVALID_MEDIA_INPUT',
+          'FROZEN_INPUT_MISMATCH',
+        ].includes(error.code));
     if (!permanent && attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
     else await deps.repository.markFailed(job.id, details);
     throw error;
@@ -408,6 +575,7 @@ export async function createAiImageJob(
   input: CreateAiImageJobInput,
   repository: Pick<AiImageJobRepository, 'createWithQuota'>,
   dailyLimit: number,
+  globalDailyBudgetCents?: number,
 ) {
   if (!input.prompt.trim()) throw new AiImageJobError('INVALID_REQUEST', 'Prompt is required');
   if (!Number.isInteger(input.count) || input.count < 1 || input.count > 4) {
@@ -416,9 +584,30 @@ export async function createAiImageJob(
   try {
     assertAiMediaCapability({ provider: input.provider, model: input.model, operation: 'TEXT_TO_IMAGE' });
   } catch (error) { throw capabilityJobError(error); }
-  const result = await repository.createWithQuota(input, dailyLimit);
+  if (input.provider !== 'fake'
+    && (!Number.isSafeInteger(input.estimatedCostCents) || input.estimatedCostCents <= 0)) {
+    throw new AiImageJobError(
+      'PROVIDER_NOT_READY',
+      'A verified positive task cost is required before paid AI image generation',
+    );
+  }
+  const result = input.provider === 'fake' && globalDailyBudgetCents === undefined
+    ? await repository.createWithQuota(input, dailyLimit)
+    : await repository.createWithQuota(input, dailyLimit, globalDailyBudgetCents ?? 0);
   if (result.kind === 'quota-exceeded') {
     throw new AiImageJobError('QUOTA_EXCEEDED', `Daily image quota exceeded (${result.used}/${result.limit})`);
+  }
+  if (result.kind === 'budget-exceeded') {
+    const exposure = result.settledCostCents
+      + result.pendingMaximumCostCents
+      + result.requestedMaximumCostCents;
+    throw new AiImageJobError(
+      'BUDGET_EXCEEDED',
+      `Global daily AI budget exceeded (${exposure}/${result.limit} cents)`,
+    );
+  }
+  if (result.kind === 'invalid-cost') {
+    throw new AiImageJobError('PROVIDER_NOT_READY', result.reason);
   }
   if (
     result.kind === 'existing'

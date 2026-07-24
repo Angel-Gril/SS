@@ -5,6 +5,8 @@ import { AiImageJobError, type AiImageProvider, type AiImageProviderRequest, typ
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+export type BeforeAiImageProviderDispatch = () => Promise<void>;
+
 interface ProviderOptions {
   baseUrl: string;
   apiKey: string;
@@ -13,6 +15,38 @@ interface ProviderOptions {
   timeoutMs?: number;
   costPerImageCents?: number;
   onProviderJobCreated?: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>;
+}
+
+export interface OpenAiImageEditInput {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+}
+
+export interface OpenAiImageEditRequest {
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
+  prompt: string;
+  negativePrompt: string | null;
+  width: number;
+  height: number;
+  model?: string;
+  images: OpenAiImageEditInput[];
+  mask?: OpenAiImageEditInput | null;
+}
+
+export interface OpenAiImageEditProvider {
+  name: string;
+  edit(request: OpenAiImageEditRequest): Promise<AiImageProviderResult>;
+}
+
+export interface OpenAiImageEditProviderOptions {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  fetch?: FetchLike;
+  timeoutMs?: number;
+  costPerImageCents?: number;
+  onProviderJobCreated?: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>;
+  beforeProviderDispatch?: BeforeAiImageProviderDispatch;
 }
 
 interface DashScopeOptions extends ProviderOptions {
@@ -37,6 +71,16 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_OPENAI_EDIT_INPUT_IMAGES = 16;
+export const MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES = 50 * 1024 * 1024;
+const OPENAI_EDIT_SIZES = new Set(['1024x1024', '1024x1536', '1536x1024']);
+
+class BeforeProviderDispatchError extends Error {
+  constructor(public readonly original: unknown) {
+    super('AI image Provider dispatch was prevented before fetch');
+    this.name = 'BeforeProviderDispatchError';
+  }
+}
 
 function withoutTrailingSlash(value: string) {
   return value.replace(/\/+$/, '');
@@ -146,6 +190,7 @@ async function requestJsonWithIdentity(
   url: string,
   init: RequestInit,
   timeoutMs: number,
+  beforeProviderDispatch?: BeforeAiImageProviderDispatch,
 ) {
   return fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
     const providerAcceptedAt = new Date();
@@ -178,7 +223,7 @@ async function requestJsonWithIdentity(
       throw withProviderSubmissionUncertain(error);
     }
     return { body, providerJobId, providerAcceptedAt };
-  });
+  }, beforeProviderDispatch);
 }
 
 async function recordProviderAcceptance(
@@ -247,11 +292,19 @@ async function fetchWithTimeout<T>(
   init: RequestInit,
   timeoutMs: number,
   consume: (response: Response) => Promise<T>,
+  beforeFetch?: BeforeAiImageProviderDispatch,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {
     const targetUrl = fetcher === globalThis.fetch ? await validateAiImageProviderUrl(url) : validateProviderUrl(url);
+    if (beforeFetch) {
+      try {
+        await beforeFetch();
+      } catch (error) {
+        throw new BeforeProviderDispatchError(error);
+      }
+    }
     const response = await fetcher(targetUrl, { ...init, redirect: 'error', signal: controller.signal });
     return await consume(response);
   } catch (error: any) {
@@ -337,6 +390,74 @@ function validatedImageMime(buffer: Buffer, declaredMime: string): 'image/png' |
     throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Provider result is not a supported PNG, JPEG, or WebP image');
   }
   return detected;
+}
+
+function invalidOpenAiEditInput(message: string) {
+  return new AiImageJobError('INVALID_MEDIA_INPUT', message);
+}
+
+function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
+  if (
+    request.operation !== 'IMAGE_TO_IMAGE'
+    && request.operation !== 'FULL_EDIT'
+    && request.operation !== 'INPAINT'
+  ) {
+    throw invalidOpenAiEditInput('OpenAI image edit operation is invalid');
+  }
+  if (!Array.isArray(request.images) || request.images.length < 1) {
+    throw invalidOpenAiEditInput('OpenAI image edit requires at least one source image');
+  }
+  if (request.images.length > MAX_OPENAI_EDIT_INPUT_IMAGES) {
+    throw invalidOpenAiEditInput(`OpenAI image edit accepts at most ${MAX_OPENAI_EDIT_INPUT_IMAGES} source images`);
+  }
+  const size = `${request.width}x${request.height}`;
+  if (!OPENAI_EDIT_SIZES.has(size)) {
+    throw invalidOpenAiEditInput('OpenAI image edit output size is not supported');
+  }
+  if (request.operation === 'INPAINT' && !request.mask) {
+    throw invalidOpenAiEditInput('OpenAI inpaint requires exactly one PNG mask');
+  }
+  if (request.operation !== 'INPAINT' && request.mask) {
+    throw invalidOpenAiEditInput('OpenAI image-to-image and full-image edit must not include a mask');
+  }
+
+  let totalBytes = 0;
+  const imageMimeTypes = request.images.map((image) => {
+    if (!image || !Buffer.isBuffer(image.buffer) || image.buffer.byteLength < 1) {
+      throw invalidOpenAiEditInput('OpenAI image edit source bytes are invalid');
+    }
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(String(image.mimeType))) {
+      throw invalidOpenAiEditInput('OpenAI image edit source MIME type is not supported');
+    }
+    totalBytes += image.buffer.byteLength;
+    try {
+      return validatedImageMime(image.buffer, image.mimeType);
+    } catch {
+      throw invalidOpenAiEditInput('OpenAI image edit source bytes do not match the declared MIME type');
+    }
+  });
+
+  let maskMimeType: 'image/png' | null = null;
+  if (request.mask) {
+    if (!Buffer.isBuffer(request.mask.buffer) || request.mask.buffer.byteLength < 1
+      || request.mask.mimeType !== 'image/png') {
+      throw invalidOpenAiEditInput('OpenAI image edit mask must be a PNG image');
+    }
+    totalBytes += request.mask.buffer.byteLength;
+    try {
+      if (validatedImageMime(request.mask.buffer, request.mask.mimeType) !== 'image/png') {
+        throw invalidOpenAiEditInput('OpenAI image edit mask must be a PNG image');
+      }
+    } catch (error) {
+      if (error instanceof AiImageJobError && error.code === 'INVALID_MEDIA_INPUT') throw error;
+      throw invalidOpenAiEditInput('OpenAI image edit mask bytes are not a PNG image');
+    }
+    maskMimeType = 'image/png';
+  }
+  if (totalBytes > MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES) {
+    throw invalidOpenAiEditInput(`OpenAI image edit inputs exceed ${MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES} bytes`);
+  }
+  return { imageMimeTypes, maskMimeType, size };
 }
 
 async function downloadImage(fetcher: FetchLike, url: string, timeoutMs: number) {
@@ -492,6 +613,111 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
           images,
           providerJobId,
           actualCostCents: normalizedCost(options.costPerImageCents, images.length),
+        };
+      } catch (error) {
+        if (providerJobId) throw withProviderAcceptance(error, providerJobId, providerAcceptedAt);
+        throw withProviderSubmissionUncertain(error);
+      }
+    },
+  };
+}
+
+export function createOpenAiImageEditProvider(
+  options: OpenAiImageEditProviderOptions,
+): OpenAiImageEditProvider {
+  const fetcher = options.fetch || globalThis.fetch;
+  const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const apiBase = normalizeOpenAiImagesApiBase(options.baseUrl);
+  return {
+    name: 'openai-image-edits',
+    async edit(request: OpenAiImageEditRequest): Promise<AiImageProviderResult> {
+      let validated: ReturnType<typeof validateOpenAiImageEditRequest>;
+      try {
+        validated = validateOpenAiImageEditRequest(request);
+      } catch (error) {
+        throw withProviderSubmissionRejected(error);
+      }
+      const form = new FormData();
+      form.append('model', request.model || options.model);
+      form.append(
+        'prompt',
+        request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
+      );
+      form.append('n', '1');
+      form.append('size', validated.size);
+      request.images.forEach((image, index) => {
+        const mimeType = validated.imageMimeTypes[index]!;
+        form.append(
+          'image[]',
+          new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+          `image-${index + 1}.${extensionForMime(mimeType)}`,
+        );
+      });
+      if (request.operation === 'INPAINT' && request.mask) {
+        form.append(
+          'mask',
+          new Blob([new Uint8Array(request.mask.buffer)], { type: validated.maskMimeType! }),
+          'mask.png',
+        );
+      }
+
+      let accepted: { body: any; providerJobId: string | null; providerAcceptedAt: Date };
+      try {
+        accepted = await requestJsonWithIdentity(
+          'OpenAI Images',
+          fetcher,
+          options.apiKey,
+          `${apiBase}/images/edits`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${options.apiKey}` },
+            body: form,
+          },
+          timeoutMs,
+          options.beforeProviderDispatch,
+        );
+      } catch (error) {
+        if (error instanceof BeforeProviderDispatchError) throw error.original;
+        if (error && typeof error === 'object' && 'providerJobId' in error) throw error;
+        if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
+        throw withProviderSubmissionUncertain(error);
+      }
+
+      const { body, providerJobId, providerAcceptedAt } = accepted;
+      if (providerJobId) {
+        await recordProviderAcceptance(options.onProviderJobCreated, providerJobId, providerAcceptedAt);
+      }
+      try {
+        const data = Array.isArray(body?.data) ? body.data : [];
+        if (data.length !== 1) {
+          throw new AiImageJobError(
+            'INVALID_PROVIDER_RESULT',
+            `OpenAI Images returned ${data.length} images for a 1-image edit request`,
+          );
+        }
+        const item = data[0];
+        let image: { buffer: Buffer; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' };
+        if (item?.b64_json) {
+          const buffer = Buffer.from(String(item.b64_json), 'base64');
+          if (buffer.byteLength > MAX_IMAGE_BYTES) {
+            throw new AiImageJobError(
+              'PROVIDER_RESPONSE_TOO_LARGE',
+              `AI image provider response exceeds ${MAX_IMAGE_BYTES} bytes`,
+            );
+          }
+          image = { buffer, mimeType: validatedImageMime(buffer, 'image/png') };
+        } else if (item?.url) {
+          image = await downloadImage(fetcher, String(item.url), timeoutMs);
+        } else {
+          throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'OpenAI Images returned an empty image edit result');
+        }
+        return {
+          images: [{
+            ...image,
+            filename: `openai-edit-1.${extensionForMime(image.mimeType)}`,
+          }],
+          providerJobId,
+          actualCostCents: normalizedCost(options.costPerImageCents, 1),
         };
       } catch (error) {
         if (providerJobId) throw withProviderAcceptance(error, providerJobId, providerAcceptedAt);

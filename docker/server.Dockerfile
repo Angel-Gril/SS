@@ -30,6 +30,8 @@ RUN apt-get update -y \
 COPY --from=build /prod/server ./
 COPY docker/migrate-and-verify-ai-media-dark.sh ./scripts/migrate-and-verify-ai-media-dark.sh
 COPY docker/verify-ai-media-dark.mjs ./scripts/verify-ai-media-dark.mjs
+COPY apps/server/scripts/ai-media-suite-post-migration-contract.mjs ./scripts/ai-media-suite-post-migration-contract.mjs
+COPY apps/server/scripts/verify-ai-media-suite-post-migration.mjs ./scripts/verify-ai-media-suite-post-migration.mjs
 COPY scripts/verify-ai-media-dark-policy.mjs ./scripts/verify-ai-media-dark-policy.mjs
 
 EXPOSE 3001

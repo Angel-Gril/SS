@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Queue, Worker } from 'bullmq';
 import sharp from 'sharp';
+import { getConfig } from '../config/system-config-schema.js';
 import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { redis, redisDisabled } from '../lib/redis.js';
@@ -14,12 +15,23 @@ import {
   readBoundedAiImageEditStream,
 } from '../services/ai-image-edit-input-reader.js';
 import {
+  createOpenAiImageEditProvider,
+} from '../services/ai-image-providers.js';
+import {
+  resolveAiImageProviderCapability,
+} from '../services/ai-image-provider-capabilities.js';
+import {
+  AiImageProviderRuntimeContractError,
+  assertAiImageProviderRuntimeContract,
+} from '../services/ai-image-provider-runtime-contract.js';
+import {
   AiImageJobError,
   createDisabledAiImageProvider,
   type AiImageJobRecord,
   type AiImageJobRepository,
   type AiImageProvider,
 } from '../services/ai-image-jobs.js';
+import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 
 const QUEUE_NAME = 'ai-image-edit';
 const EDIT_EXECUTION_LEASE_MS = 20_000;
@@ -29,9 +41,30 @@ export const AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED =
 
 type FrozenInputAsset = NonNullable<AiImageJobRecord['inputAssets']>[number];
 
+export interface AiImageEditProviderRuntimeConfig {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  costPerImageCents: number;
+}
+
+export interface AiImageEditDispatchAuthorization {
+  enabled: boolean;
+  reasonCode: string;
+  reason: string;
+}
+
+export interface AiImageEditProviderResolverDependencies {
+  resolveCapability?: typeof resolveAiImageProviderCapability;
+  createOpenAiEditProvider?: typeof createOpenAiImageEditProvider;
+}
+
 type AiImageEditWorkerOverrides = {
   repository?: AiImageJobRepository;
   resolveProvider?: typeof resolveAiImageEditProvider;
+  getProviderConfig?: typeof getAiImageEditProviderRuntimeConfig;
+  getDispatchAuthorization?: typeof getAiImageEditDispatchAuthorization;
   uploadBuffer?: (...args: any[]) => Promise<any>;
   loadInputBuffer?: (asset: FrozenInputAsset) => Promise<Buffer>;
   run?: typeof runAiImageEditJob;
@@ -93,6 +126,62 @@ export {
   readBoundedAiImageEditStream,
 };
 
+export async function getAiImageEditProviderRuntimeConfig(): Promise<AiImageEditProviderRuntimeConfig> {
+  const [provider, baseUrl, apiKey, model, costPerImageCents] = await Promise.all([
+    getConfig('ai_image_provider'),
+    getConfig('ai_image_base_url'),
+    getConfig('ai_image_api_key'),
+    getConfig('ai_image_model'),
+    getConfig('ai_image_generation_cost_cents'),
+  ]);
+  return { provider, baseUrl, apiKey, model, costPerImageCents };
+}
+
+export async function getAiImageEditDispatchAuthorization(
+  ownerUserId: string,
+  operation: 'FULL_EDIT' | 'INPAINT',
+  dependencies: {
+    loadConfig?: typeof getConfig;
+    getRolloutDecision?: typeof getAiMediaRolloutDecision;
+  } = {},
+): Promise<AiImageEditDispatchAuthorization> {
+  const loadConfig = dependencies.loadConfig || getConfig;
+  const featureKey = operation === 'INPAINT'
+    ? 'feature_ai_media_inpaint' as const
+    : 'feature_ai_media_full_edit' as const;
+  const [generationEnabled, featureEnabled, rollout] = await Promise.all([
+    loadConfig('ai_image_generation_enabled'),
+    loadConfig(featureKey),
+    (dependencies.getRolloutDecision || getAiMediaRolloutDecision)(ownerUserId),
+  ]);
+  if (!generationEnabled) {
+    return {
+      enabled: false,
+      reasonCode: 'master_off',
+      reason: 'AI image generation was disabled before Provider dispatch',
+    };
+  }
+  if (!rollout.enabled) {
+    return {
+      enabled: false,
+      reasonCode: rollout.reason,
+      reason: 'AI media rollout was revoked before Provider dispatch',
+    };
+  }
+  if (!featureEnabled) {
+    return {
+      enabled: false,
+      reasonCode: 'feature_off',
+      reason: `${operation} was disabled before Provider dispatch`,
+    };
+  }
+  return {
+    enabled: true,
+    reasonCode: rollout.reason,
+    reason: 'AI image edit dispatch is authorized',
+  };
+}
+
 export function assertAiImageEditProviderRuntime(
   provider: string,
   nodeEnv = process.env.NODE_ENV,
@@ -108,37 +197,100 @@ export function assertAiImageEditProviderRuntime(
 export function resolveAiImageEditProvider(
   provider: string,
   model: string,
+  operation: 'FULL_EDIT' | 'INPAINT',
+  config: AiImageEditProviderRuntimeConfig,
+  onProviderJobCreated?: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>,
   nodeEnv = process.env.NODE_ENV,
+  dependencies: AiImageEditProviderResolverDependencies = {},
 ): AiImageProvider {
   assertAiImageEditProviderRuntime(provider, nodeEnv);
-  if (provider !== 'fake' || model !== 'fake-image-edit-v1') return createDisabledAiImageProvider();
+  if (provider === 'fake') {
+    if (model !== 'fake-image-edit-v1') return createDisabledAiImageProvider();
+    return {
+      name: 'fake',
+      async generate(request) {
+        if (
+          request.operation !== operation
+          || request.model !== 'fake-image-edit-v1'
+          || request.count !== 1
+        ) {
+          throw new AiImageJobError(
+            'INVALID_MEDIA_INPUT',
+            'Fake edit request does not match its frozen contract',
+          );
+        }
+        const buffer = await sharp({
+          create: {
+            width: request.width,
+            height: request.height,
+            channels: 4,
+            background:
+              request.operation === 'INPAINT'
+                ? { r: 38, g: 166, b: 154, alpha: 1 }
+                : { r: 225, g: 64, b: 73, alpha: 1 },
+          },
+        })
+          .png({ compressionLevel: 9 })
+          .toBuffer();
+        return { images: [{ buffer, mimeType: 'image/png' }], actualCostCents: 0 };
+      },
+    };
+  }
+  if (
+    provider !== 'openai-images'
+    || provider !== config.provider
+    || model !== config.model
+    || !config.apiKey.trim()
+    || config.costPerImageCents <= 0
+  ) {
+    return createDisabledAiImageProvider();
+  }
+  const capability = (dependencies.resolveCapability || resolveAiImageProviderCapability)(
+    provider,
+    model,
+  );
+  if (
+    capability?.provider !== provider
+    || capability.model !== model
+    || capability.evidenceLevel !== 'sandbox-verified'
+    || !capability.operations.includes(operation)
+  ) {
+    return createDisabledAiImageProvider();
+  }
+  const editProvider = (
+    dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider
+  )({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model: config.model,
+    costPerImageCents: config.costPerImageCents,
+    onProviderJobCreated,
+  });
   return {
-    name: 'fake',
+    name: 'openai-images',
     async generate(request) {
       if (
-        !['FULL_EDIT', 'INPAINT'].includes(String(request.operation)) ||
-        request.model !== 'fake-image-edit-v1' ||
-        request.count !== 1
+        request.operation !== operation
+        || request.model !== model
+        || request.count !== 1
+        || request.inputImages?.length !== 1
+        || (operation === 'INPAINT' ? !request.mask : Boolean(request.mask))
       ) {
         throw new AiImageJobError(
           'INVALID_MEDIA_INPUT',
-          'Fake edit request does not match its frozen contract',
+          'OpenAI edit request does not match its frozen runtime inputs',
         );
       }
-      const buffer = await sharp({
-        create: {
-          width: request.width,
-          height: request.height,
-          channels: 4,
-          background:
-            request.operation === 'INPAINT'
-              ? { r: 38, g: 166, b: 154, alpha: 1 }
-              : { r: 225, g: 64, b: 73, alpha: 1 },
-        },
-      })
-        .png({ compressionLevel: 9 })
-        .toBuffer();
-      return { images: [{ buffer, mimeType: 'image/png' }], actualCostCents: 0 };
+      return editProvider.edit({
+        operation,
+        prompt: request.prompt,
+        negativePrompt: request.negativePrompt,
+        width: request.width,
+        height: request.height,
+        model: request.model,
+        images: request.inputImages,
+        mask: request.mask ?? null,
+      });
     },
   };
 }
@@ -224,10 +376,94 @@ export async function processAiImageEditQueueJob(
       });
       throw interrupted;
     }
+    const failBeforeDispatch = async (errorCode: string, errorMessage: string) => {
+      const details = { attemptCount: attemptNumber, errorCode, errorMessage };
+      if (repository.markEnqueueFailed) {
+        const failed = await repository.markEnqueueFailed(jobId, details);
+        if (!failed) {
+          const latest = await repository.getById(jobId);
+          if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
+            await repository.markCancelled(jobId);
+          }
+        }
+      } else {
+        await repository.markFailed(jobId, details);
+      }
+    };
+    const paidJob = job.provider !== 'fake';
+    if (paidJob) {
+      if (job.operation !== 'FULL_EDIT' && job.operation !== 'INPAINT') {
+        await failBeforeDispatch('UNSUPPORTED_OPERATION', 'Queued AI image edit operation is invalid');
+        return 'ignored' as const;
+      }
+      const authorization = await (
+        overrides.getDispatchAuthorization || getAiImageEditDispatchAuthorization
+      )(job.ownerUserId, job.operation);
+      if (!authorization.enabled) {
+        await failBeforeDispatch('AI_IMAGE_EDIT_DISPATCH_REVOKED', authorization.reason);
+        return 'ignored' as const;
+      }
+      const reservation = job.costReservation;
+      if (
+        !reservation?.id
+        || reservation.status !== 'RESERVED'
+        || reservation.provider !== job.provider
+        || reservation.model !== job.model
+        || reservation.requestFingerprint !== job.requestFingerprint
+        || Number(reservation.estimatedCostMinor) !== job.estimatedCostCents
+        || Number(reservation.maximumCostMinor) !== job.estimatedCostCents
+      ) {
+        await failBeforeDispatch(
+          'AI_IMAGE_COST_RESERVATION_REQUIRED',
+          'Paid AI image edit dispatch requires an exact RESERVED cost reservation',
+        );
+        return 'ignored' as const;
+      }
+    }
     let provider: AiImageProvider;
     let uploadBuffer: (...args: any[]) => Promise<any>;
     try {
-      provider = (overrides.resolveProvider || resolveAiImageEditProvider)(job.provider, job.model, nodeEnv);
+      const providerConfig = await (
+        overrides.getProviderConfig || getAiImageEditProviderRuntimeConfig
+      )();
+      if (paidJob) {
+        const operationConfig = job.operationConfig && typeof job.operationConfig === 'object'
+          ? job.operationConfig
+          : {};
+        try {
+          assertAiImageProviderRuntimeContract(
+            operationConfig.providerRuntime,
+            providerConfig,
+            {
+              count: 1,
+              width: job.width,
+              height: job.height,
+              estimatedCostCents: job.estimatedCostCents,
+            },
+          );
+        } catch (error) {
+          if (error instanceof AiImageProviderRuntimeContractError) {
+            await failBeforeDispatch(error.code, error.message);
+            return 'ignored' as const;
+          }
+          throw error;
+        }
+      }
+      const onProviderJobCreated = repository.recordProviderJobId
+        ? (providerJobId: string, providerAcceptedAt: Date) => repository.recordProviderJobId!(
+          jobId,
+          providerJobId,
+          providerAcceptedAt,
+        )
+        : undefined;
+      provider = (overrides.resolveProvider || resolveAiImageEditProvider)(
+        job.provider,
+        job.model,
+        job.operation as 'FULL_EDIT' | 'INPAINT',
+        providerConfig,
+        onProviderJobCreated,
+        nodeEnv,
+      );
       const storage = overrides.uploadBuffer ? null : await getStorageBackend();
       uploadBuffer = overrides.uploadBuffer || storage!.uploadBuffer.bind(storage);
     } catch (error) {
@@ -236,8 +472,7 @@ export async function processAiImageEditQueueJob(
         errorCode: 'WORKER_SETUP_FAILED',
         errorMessage: 'AI image edit worker setup failed before Provider execution',
       };
-      if (repository.markEnqueueFailed) await repository.markEnqueueFailed(jobId, details);
-      else await repository.markFailed(jobId, details);
+      await failBeforeDispatch(details.errorCode, details.errorMessage);
       throw error;
     }
     return await (overrides.run || runAiImageEditJob)(jobId, attemptNumber, {

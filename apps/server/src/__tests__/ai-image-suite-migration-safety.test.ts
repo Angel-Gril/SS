@@ -45,6 +45,18 @@ const planActivityMigration = readFileSync(new URL(
   '../../prisma/migrations/20260720130000_enforce_ai_media_suite_plan_activity/migration.sql',
   import.meta.url,
 ), 'utf8');
+const paidExecutionMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260724140000_enable_paid_ai_image_suite_execution/migration.sql',
+  import.meta.url,
+), 'utf8');
+const globalSettlementBudgetIndexMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260724141000_index_global_ai_cost_settlements/migration.sql',
+  import.meta.url,
+), 'utf8');
+const globalReservationBudgetIndexMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260724142000_index_global_ai_cost_reservations/migration.sql',
+  import.meta.url,
+), 'utf8');
 const materializationMigrations = [
   materializationMigration,
   materializationHardeningMigration,
@@ -366,5 +378,121 @@ describe('AI image suite migration safety', () => {
     expect(planActivityMigration).not.toMatch(
       /"status" IN \([^)]*(?:PARTIAL_FAILURE|FAILED|SUCCEEDED|CANCELLED)/u,
     );
+  });
+
+  it('ships paid suite execution atomically without a production-cardinality graph scan', () => {
+    expect(paidExecutionMigration).toMatch(
+      /^BEGIN;\s+SET LOCAL lock_timeout = '5s';\s+SET LOCAL statement_timeout = '15min';/u,
+    );
+    expect(paidExecutionMigration).toMatch(/COMMIT;\s*$/u);
+    expect(paidExecutionMigration).toMatch(/CREATE OR REPLACE FUNCTION assert_ai_media_suite_execution_graph/u);
+    expect(paidExecutionMigration).not.toMatch(
+      /SELECT "id", "owner_user_id" FROM "ai_media_suites" WHERE "revision" >= 5/u,
+    );
+    expect(paidExecutionMigration).toMatch(
+      /EXECUTE FUNCTION require_ai_media_suite_execution_graph_from_asset\(\);\s+COMMIT;\s*$/u,
+    );
+  });
+
+  it('prebuilds covering global AI budget indexes without blocking table writes', () => {
+    expect(globalSettlementBudgetIndexMigration.trim()).toBe(
+      'CREATE INDEX CONCURRENTLY "ai_cost_settlements_global_budget_idx"\n'
+      + 'ON "ai_cost_settlements"("kind", "created_at", "actual_cost_minor");',
+    );
+    expect(globalReservationBudgetIndexMigration.trim()).toBe(
+      'CREATE INDEX CONCURRENTLY "ai_cost_reservations_global_budget_idx"\n'
+      + 'ON "ai_cost_reservations"("status", "maximum_cost_minor");',
+    );
+    expect(schema).toMatch(
+      /@@index\(\[kind, createdAt, actualCostMinor\], map: "ai_cost_settlements_global_budget_idx"\)/u,
+    );
+    expect(schema).toMatch(
+      /@@index\(\[status, maximumCostMinor\], map: "ai_cost_reservations_global_budget_idx"\)/u,
+    );
+  });
+
+  it('backfills only exact legacy fake suite outputs before making child assets immutable', () => {
+    const backfillIndex = paidExecutionMigration.indexOf('UPDATE "media_assets" AS asset');
+    const childIdentityIndex = paidExecutionMigration.indexOf(
+      'CREATE OR REPLACE FUNCTION protect_ai_media_suite_child_asset_identity',
+    );
+    const finalAssetGraphTriggerIndex = paidExecutionMigration.indexOf(
+      'CREATE CONSTRAINT TRIGGER "ai_media_suite_execution_asset_graph"',
+    );
+    expect(backfillIndex).toBeGreaterThan(0);
+    expect(childIdentityIndex).toBeGreaterThan(backfillIndex);
+    expect(finalAssetGraphTriggerIndex).toBeGreaterThan(childIdentityIndex);
+    expect(paidExecutionMigration).toMatch(
+      /ALTER TABLE "media_assets"\s+DISABLE TRIGGER "media_assets_referenced_identity_immutable"/u,
+    );
+    expect(paidExecutionMigration).toMatch(
+      /ALTER TABLE "media_assets"\s+ENABLE TRIGGER "media_assets_referenced_identity_immutable"/u,
+    );
+    expect(paidExecutionMigration).toMatch(
+      /UPDATE "media_assets" AS asset[\s\S]*SET CONSTRAINTS ALL IMMEDIATE;[\s\S]*ENABLE TRIGGER "media_assets_referenced_identity_immutable";[\s\S]*SET CONSTRAINTS ALL DEFERRED;/u,
+    );
+    expect(paidExecutionMigration).toMatch(/asset\."source_capture_snapshot_id" IS NULL/u);
+    expect(paidExecutionMigration).toMatch(/suite\."provider" = 'fake'/u);
+    expect(paidExecutionMigration).toMatch(
+      /asset\."metadata"->>'version' = 'ai-image-suite-output\/v1'/u,
+    );
+    expect(paidExecutionMigration).toMatch(
+      /asset\."metadata"->>'suiteId' = suite\."id"/u,
+    );
+    expect(paidExecutionMigration).toMatch(
+      /asset\."metadata"->>'slotId' = slot\."id"/u,
+    );
+    expect(paidExecutionMigration).toMatch(/asset\."owner_user_id" = job\."owner_user_id"/u);
+    expect(paidExecutionMigration).toMatch(/workflow\."owner_user_id" = job\."owner_user_id"/u);
+    expect(paidExecutionMigration).toMatch(/slot\."owner_user_id" = workflow\."owner_user_id"/u);
+    expect(paidExecutionMigration).toMatch(/suite\."owner_user_id" = slot\."owner_user_id"/u);
+  });
+
+  it('separates immutable raw Provider evidence from the normalized review output', () => {
+    expect(paidExecutionMigration).toMatch(/NEW\."kind" = 'AI_PROVIDER_OUTPUT'/u);
+    expect(paidExecutionMigration).toMatch(/stored_suite\."provider" = 'fake'[\s\S]*raw Provider output is invalid/u);
+    expect(paidExecutionMigration).toMatch(/raw_count >= 1 OR final_count <> 0/u);
+    expect(paidExecutionMigration).toMatch(/NEW\."width" IS DISTINCT FROM 1024 OR NEW\."height" IS DISTINCT FROM 1536/u);
+    expect(paidExecutionMigration).toMatch(/NEW\."width" IS DISTINCT FROM 900 OR NEW\."height" IS DISTINCT FROM 1200/u);
+    expect(paidExecutionMigration).toMatch(/providerOutputAssetId'[\s\S]*raw_output\."id"/u);
+    expect(paidExecutionMigration).toMatch(/NEW\."sha256" IS DISTINCT FROM raw_output\."metadata"->>'normalizedSha256'/u);
+    expect(paidExecutionMigration).toMatch(/protect_ai_media_suite_child_asset_identity/u);
+    expect(paidExecutionMigration).toMatch(/BEFORE UPDATE OR DELETE ON "media_assets"/u);
+    expect(paidExecutionMigration).toMatch(/child output evidence cannot be deleted/u);
+    expect(paidExecutionMigration).toMatch(/child output evidence is immutable/u);
+  });
+
+  it('allows review only for the normalized current output', () => {
+    expect(paidExecutionMigration).toMatch(/protect_ai_media_suite_selected_output/u);
+    expect(paidExecutionMigration).toMatch(/selected_asset\."kind" IS DISTINCT FROM 'AI_GENERATED'/u);
+    expect(paidExecutionMigration).toMatch(/selected_asset\."ai_image_job_id" IS DISTINCT FROM current_job\."id"/u);
+    expect(paidExecutionMigration).toMatch(/selected output is not bound to Provider evidence/u);
+    expect(paidExecutionMigration).toMatch(/BEFORE UPDATE OF "selected_output_asset_id", "review_status" ON "ai_media_workflows"/u);
+  });
+
+  it('renews only a live same-token lease and keeps retry authority fail closed', () => {
+    expect(paidExecutionMigration).toMatch(/CREATE OR REPLACE FUNCTION protect_ai_media_suite_slot_identity/u);
+    expect(paidExecutionMigration).toMatch(/NEW\."execution_claim_token" IS DISTINCT FROM OLD\."execution_claim_token"/u);
+    expect(paidExecutionMigration).toMatch(/OLD\."execution_lease_expires_at" <= statement_timestamp\(\)/u);
+    expect(paidExecutionMigration).toMatch(/NEW\."execution_lease_expires_at" <= OLD\."execution_lease_expires_at"/u);
+    expect(paidExecutionMigration).toMatch(/lease renewal must preserve a live claim/u);
+    expect(paidExecutionMigration).toMatch(/previous_reservation\."status" IS DISTINCT FROM 'RELEASED'/u);
+    expect(paidExecutionMigration).toMatch(/previous_job\."actual_cost_cents" IS NOT NULL/u);
+    expect(paidExecutionMigration).toMatch(/previous_job\."billed_units" IS DISTINCT FROM 0/u);
+    expect(paidExecutionMigration).toMatch(/previous_asset_count IS DISTINCT FROM 0/u);
+    expect(paidExecutionMigration).toMatch(/unsafe_attempt_count IS DISTINCT FROM 0/u);
+    expect(paidExecutionMigration).toMatch(/attempt_job\."workflow_attempt" <= maximum_attempt/u);
+    expect(paidExecutionMigration).toMatch(/provider_reconciliation_status" IN \('NOT_SUBMITTED', 'NO_OUTPUT'\)/u);
+  });
+
+  it('accepts bounded known-cost execution states without weakening terminal accounting', () => {
+    expect(paidExecutionMigration).toMatch(/slot\."status" IN \('RUNNING', 'CANCEL_REQUESTED'\)/u);
+    expect(paidExecutionMigration).toMatch(/current_job\."actual_cost_cents" = current_job\."estimated_cost_cents"[\s\S]*current_job\."billed_units" = 1[\s\S]*provider_dispatched_at" IS NOT NULL/u);
+    expect(paidExecutionMigration).toMatch(/slot\."status" = 'SUCCEEDED'[\s\S]*asset_counts\.final_count <> 1/u);
+    expect(paidExecutionMigration).toMatch(/stored_suite\."provider" <> 'fake'[\s\S]*asset_counts\.raw_count <> 1/u);
+    expect(paidExecutionMigration).toMatch(/slot\."status" IN \('FAILED', 'CANCELLED'\)[\s\S]*current_reservation\."status" = 'SETTLED'/u);
+    expect(paidExecutionMigration).toMatch(/old_reservation\."status" NOT IN \('SETTLED', 'RELEASED'\)/u);
+    expect(paidExecutionMigration).toMatch(/old_final[\s\S]*"kind" = 'AI_GENERATED'\) <> 0/u);
+    expect(paidExecutionMigration).toMatch(/old_raw[\s\S]*"kind" = 'AI_PROVIDER_OUTPUT'\) > 1/u);
   });
 });

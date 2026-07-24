@@ -1,5 +1,9 @@
 import type { AiMediaWorkflowService } from './ai-media-workflows.js';
 import {
+  assertAiImageProviderRuntimeContract,
+  type AiImageProviderRuntimeIdentity,
+} from './ai-image-provider-runtime-contract.js';
+import {
   parseExtensionMediaWorkflowCreateCommand,
   parseExtensionMediaTranslationCreateCommand,
   type ExtensionMediaWorkflowLauncher,
@@ -27,6 +31,33 @@ interface CurrentListingDraft {
   draftVersion: number;
 }
 
+export interface ExtensionMediaProviderReadiness {
+  enabled?: boolean;
+  ready: boolean;
+  testOnly?: boolean;
+  evidenceLevel?: string;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  costPerImageCents?: number;
+  globalDailyBudgetCents?: number;
+}
+
+type ExtensionMediaProviderAuthorizationCode =
+  | 'MEDIA_PROVIDER_NOT_ALLOWED'
+  | 'MEDIA_CAPABILITY_UNAVAILABLE'
+  | 'MEDIA_PROVIDER_CONFIG_CHANGED';
+
+export class ExtensionMediaProviderAuthorizationError extends Error {
+  constructor(
+    public readonly code: ExtensionMediaProviderAuthorizationCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ExtensionMediaProviderAuthorizationError';
+  }
+}
+
 export class ExtensionMediaWorkflowCommandError extends Error {
   constructor(
     public readonly code: string,
@@ -39,7 +70,11 @@ export class ExtensionMediaWorkflowCommandError extends Error {
 
 function command(value: Record<string, unknown>): ExtensionMediaWorkflowCommand {
   const parsed = value as Partial<ExtensionMediaWorkflowCommand>;
-  if (parsed.schemaVersion !== EXTENSION_MEDIA_WORKFLOW_COMMAND_VERSION
+  const expectedKeys = [
+    'action', 'draftRevision', 'expectedRevision', 'mediaWorkflowId', 'schemaVersion',
+  ].join(',');
+  if (Object.keys(value).sort().join(',') !== expectedKeys
+    || parsed.schemaVersion !== EXTENSION_MEDIA_WORKFLOW_COMMAND_VERSION
     || !['CANCEL', 'RETRY'].includes(String(parsed.action || ''))
     || !String(parsed.mediaWorkflowId || '').trim()
     || !Number.isSafeInteger(parsed.expectedRevision)
@@ -64,6 +99,139 @@ function fail(code: string, message: string): never {
   throw new ExtensionMediaWorkflowCommandError(code, message);
 }
 
+function providerText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function providerAuthorizationFail(
+  code: ExtensionMediaProviderAuthorizationCode,
+  message: string,
+): never {
+  throw new ExtensionMediaProviderAuthorizationError(code, message);
+}
+
+function frozenProviderRuntime(operationConfig: unknown): unknown {
+  if (!operationConfig || typeof operationConfig !== 'object' || Array.isArray(operationConfig)) {
+    return null;
+  }
+  const config = operationConfig as Record<string, unknown>;
+  return config.contractVersion ? config : config.providerRuntime;
+}
+
+export function assertExtensionMediaJobProviderAuthorized(input: {
+  operation: string;
+  job: any;
+  readiness?: ExtensionMediaProviderReadiness;
+  production: boolean;
+  requireReadiness: boolean;
+  requireGlobalDailyBudget: boolean;
+}): { paid: boolean; globalDailyBudgetCents?: number } {
+  const provider = providerText(input.job?.provider);
+  if (!provider) {
+    providerAuthorizationFail(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider configuration is missing',
+    );
+  }
+  if (provider === 'fake') {
+    if (input.production) {
+      providerAuthorizationFail(
+        'MEDIA_PROVIDER_NOT_ALLOWED',
+        'The fake AI image Provider is disabled in production',
+      );
+    }
+    if (input.requireReadiness
+      && (!input.readiness?.ready || input.readiness.enabled === false)) {
+      providerAuthorizationFail(
+        'MEDIA_CAPABILITY_UNAVAILABLE',
+        'Media capability is disabled or not ready',
+      );
+    }
+    const activeProvider = providerText(input.readiness?.provider);
+    const activeModel = providerText(input.readiness?.model);
+    if ((activeProvider && activeProvider !== provider)
+      || (activeModel && activeModel !== providerText(input.job?.model))) {
+      providerAuthorizationFail(
+        'MEDIA_CAPABILITY_UNAVAILABLE',
+        'The frozen test Provider configuration changed',
+      );
+    }
+    return { paid: false };
+  }
+
+  const readiness = input.readiness;
+  if (!readiness
+    || readiness.enabled !== true
+    || readiness.ready !== true
+    || readiness.testOnly !== false
+    || readiness.evidenceLevel !== 'sandbox-verified') {
+    providerAuthorizationFail(
+      'MEDIA_CAPABILITY_UNAVAILABLE',
+      'Paid AI image capability is disabled, unready, or unverified',
+    );
+  }
+  if (!['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(input.operation)
+    || providerText(input.job?.operation) !== input.operation) {
+    providerAuthorizationFail(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider operation changed',
+    );
+  }
+  const identity: AiImageProviderRuntimeIdentity = {
+    provider: providerText(readiness.provider),
+    model: providerText(readiness.model),
+    baseUrl: providerText(readiness.baseUrl),
+    costPerImageCents: Number(readiness.costPerImageCents),
+  };
+  if (!identity.provider
+    || !identity.model
+    || !identity.baseUrl
+    || !Number.isSafeInteger(identity.costPerImageCents)
+    || identity.costPerImageCents < 1) {
+    providerAuthorizationFail(
+      'MEDIA_CAPABILITY_UNAVAILABLE',
+      'Paid AI image Provider readiness is incomplete',
+    );
+  }
+  const globalDailyBudgetCents = Number(readiness.globalDailyBudgetCents);
+  if (input.requireGlobalDailyBudget
+    && (!Number.isSafeInteger(globalDailyBudgetCents) || globalDailyBudgetCents < 1)) {
+    providerAuthorizationFail(
+      'MEDIA_CAPABILITY_UNAVAILABLE',
+      'Global daily AI budget is unavailable',
+    );
+  }
+  if (provider !== identity.provider || providerText(input.job?.model) !== identity.model) {
+    providerAuthorizationFail(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider identity changed',
+    );
+  }
+  try {
+    assertAiImageProviderRuntimeContract(
+      frozenProviderRuntime(input.job?.operationConfig),
+      identity,
+      {
+        count: Number(input.job?.requestedImageCount),
+        width: Number(input.job?.width),
+        height: Number(input.job?.height),
+        estimatedCostCents: Number(input.job?.estimatedCostCents),
+      },
+    );
+  } catch (error) {
+    providerAuthorizationFail(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      error instanceof Error
+        ? error.message
+        : 'The frozen AI image Provider runtime contract changed',
+    );
+  }
+  return {
+    paid: true,
+    ...(input.requireGlobalDailyBudget ? { globalDailyBudgetCents } : {}),
+  };
+}
+
 export function createExtensionMediaWorkflowCommandExecutor(options: {
   workflowService: Pick<AiMediaWorkflowService, 'get' | 'cancel' | 'retry'>;
   launchWorkflow?: ExtensionMediaWorkflowLauncher;
@@ -74,11 +242,7 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
   }): Promise<CurrentListingDraft | null>;
   getTranslationDailyLimit(): Promise<number>;
   getEditDailyLimit(): Promise<number>;
-  getRetryReadiness(operation: string): Promise<{
-    ready: boolean;
-    provider?: string;
-    model?: string;
-  }>;
+  getRetryReadiness(operation: string): Promise<ExtensionMediaProviderReadiness>;
   enqueueGeneration(jobId: string): Promise<void>;
   enqueueTranslation(jobId: string): Promise<void>;
   enqueueEdit(jobId: string): Promise<void>;
@@ -131,9 +295,6 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
       fail('MEDIA_COMMAND_CONTEXT_STALE', 'Media workflow command context changed');
     }
     const currentJob = Array.isArray(workflow.jobs) ? workflow.jobs.at(-1) : null;
-    if (String(currentJob?.provider || '') !== 'fake') {
-      fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Extension media commands permit only the fake provider');
-    }
 
     if (requested.action === 'CANCEL') {
       if (!['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(workflow.status)) {
@@ -153,23 +314,32 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
       };
     }
 
-    if (options.production ?? process.env.NODE_ENV === 'production') {
+    const production = options.production ?? process.env.NODE_ENV === 'production';
+    if (String(currentJob?.provider || '').trim() === 'fake' && production) {
       fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Fake extension media workflows cannot be retried in production');
     }
 
-    let retryReadiness: { ready: boolean; provider?: string; model?: string };
+    let retryReadiness: ExtensionMediaProviderReadiness;
     try {
       retryReadiness = await options.getRetryReadiness(workflow.operation);
     } catch {
       fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry capability is temporarily unavailable');
     }
-    if (!retryReadiness.ready) {
-      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry capability is disabled or not ready');
-    }
-    if (workflow.operation === 'IMAGE_TRANSLATE'
-      && ((retryReadiness.provider && currentJob?.provider !== retryReadiness.provider)
-        || (retryReadiness.model && currentJob?.model !== retryReadiness.model))) {
-      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'The frozen translation provider configuration changed');
+    let providerAuthorization: { paid: boolean; globalDailyBudgetCents?: number };
+    try {
+      providerAuthorization = assertExtensionMediaJobProviderAuthorized({
+        operation: workflow.operation,
+        job: currentJob,
+        readiness: retryReadiness,
+        production,
+        requireReadiness: true,
+        requireGlobalDailyBudget: true,
+      });
+    } catch (error) {
+      if (error instanceof ExtensionMediaProviderAuthorizationError) {
+        fail(error.code, error.message);
+      }
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry capability is temporarily unavailable');
     }
 
     if (workflow.status !== 'FAILED') {
@@ -180,21 +350,41 @@ export function createExtensionMediaWorkflowCommandExecutor(options: {
     if (workflow.operation === 'IMAGE_TRANSLATE') {
       dailyLimit = await options.getTranslationDailyLimit();
       enqueue = options.enqueueTranslation;
-    } else if (workflow.operation === 'FULL_EDIT' || workflow.operation === 'INPAINT') {
+    } else if (workflow.operation === 'IMAGE_TO_IMAGE'
+      || workflow.operation === 'FULL_EDIT'
+      || workflow.operation === 'INPAINT') {
       dailyLimit = await options.getEditDailyLimit();
       enqueue = options.enqueueEdit;
+      if (workflow.operation === 'IMAGE_TO_IMAGE') enqueue = options.enqueueGeneration;
+    } else {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media retry operation is unsupported');
     }
     if (dailyLimit != null && (!Number.isSafeInteger(dailyLimit) || dailyLimit < 0)) {
       fail('MEDIA_QUOTA_UNAVAILABLE', 'Media retry quota is unavailable');
     }
-    const retried = await options.workflowService.retry({
-      id: workflow.id,
-      ownerUserId: input.ownerUserId,
-      actorUserId: input.actorUserId,
-      expectedRevision: requested.expectedRevision,
-      idempotencyKey: input.idempotencyKey,
-      ...(dailyLimit == null ? {} : { dailyLimit }),
-    });
+    let retried;
+    try {
+      retried = await options.workflowService.retry({
+        id: workflow.id,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        expectedRevision: requested.expectedRevision,
+        idempotencyKey: input.idempotencyKey,
+        dailyLimit,
+        ...(providerAuthorization.paid
+          ? { globalDailyBudgetCents: providerAuthorization.globalDailyBudgetCents }
+          : {}),
+      });
+    } catch (error) {
+      if (error && typeof error === 'object'
+        && String((error as { code?: unknown }).code || '') === 'BUDGET_EXCEEDED') {
+        fail(
+          'BUDGET_EXCEEDED',
+          error instanceof Error ? error.message : 'Global daily AI budget exceeded',
+        );
+      }
+      throw error;
+    }
     let resultWorkflow = retried.workflow;
     if (!retried.replayed) {
       try {

@@ -20,6 +20,15 @@ import {
   parseExtensionMediaReviewCommand,
 } from '../services/extension-media-review-commands.js';
 import { createAiMediaListingDraftApplyFingerprint } from '../services/ai-media-listing-draft-application-mutations.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import {
+  EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION,
+  EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION,
+  EXTENSION_AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION,
+  parseExtensionAiImageSuiteApplyCommand,
+  parseExtensionAiImageSuiteExecuteCommand,
+  parseExtensionAiImageSuiteReviewCommand,
+} from '../services/extension-ai-image-suite.js';
 
 interface MediaWorkflowRolloutDecision {
   enabled: boolean;
@@ -60,6 +69,8 @@ export type ExtensionCommandResolution =
 export interface SourceWorkflowCommandResolverOptions {
   featureFlags: SourceWorkflowFeatureFlagEvaluator;
   getMediaWorkflowDecision?: (ownerUserId: string) => Promise<MediaWorkflowRolloutDecision>;
+  getAiImageSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
+  production?: boolean;
   loadShop(input: {
     shopId: string;
     ownerUserId: string;
@@ -81,6 +92,8 @@ export interface SourceWorkflowCommandResolverOptions {
     stage: string;
     selectedSkuKeys: string[];
     publishTaskIds: string[];
+    supplyGoodsId?: string;
+    sourceCaptureSnapshotId?: string;
   } | null>;
   loadMediaWorkflow?(input: {
     workflowId: string;
@@ -99,6 +112,7 @@ export interface SourceWorkflowCommandResolverOptions {
     selectedOutputAssetId?: string | null;
     suiteId: string | null;
     provider: string | null;
+    model?: string | null;
     currentJobStatus?: string | null;
     outputAssetIds?: string[];
     reviewEvents?: Array<{
@@ -165,6 +179,21 @@ function mediaWorkflowDecision(
     : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', { ownerUserId });
 }
 
+function mediaProviderAllowed(
+  media: { provider: string | null; model?: string | null; operation?: string },
+  production: boolean,
+): boolean {
+  const provider = String(media.provider || '').trim();
+  const model = String(media.model || '').trim();
+  const operation = String(media.operation || '');
+  if (!provider) return false;
+  if (provider === 'fake') return !production;
+  if (!model || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) return false;
+  const capability = resolveAiImageProviderCapability(provider, model);
+  return capability?.evidenceLevel === 'sandbox-verified'
+    && capability.operations.includes(operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT');
+}
+
 export function createSourceWorkflowCommandResolver(
   options: SourceWorkflowCommandResolverOptions,
 ) {
@@ -196,6 +225,92 @@ export function createSourceWorkflowCommandResolver(
         workflowId: null,
         draftVersion: null,
         command: parsed.data,
+      };
+    }
+    const suiteCommandVersion = typeof input.command?.version === 'string'
+      ? input.command.version
+      : null;
+    const expectedSuiteVersion = input.operation === 'MEDIA_EXECUTE'
+      ? EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION
+      : input.operation === 'MEDIA_REVIEW'
+        ? EXTENSION_AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION
+        : input.operation === 'MEDIA_APPLY'
+          ? EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION
+          : null;
+    if (suiteCommandVersion && suiteCommandVersion === expectedSuiteVersion) {
+      if (!input.shopId || !input.workflowId || input.draftVersion == null || !options.loadDraft) {
+        return { kind: 'forbidden' };
+      }
+      let command;
+      try {
+        command = input.operation === 'MEDIA_EXECUTE'
+          ? parseExtensionAiImageSuiteExecuteCommand(input.command)
+          : input.operation === 'MEDIA_REVIEW'
+            ? parseExtensionAiImageSuiteReviewCommand(input.command)
+            : parseExtensionAiImageSuiteApplyCommand(input.command);
+      } catch {
+        return { kind: 'forbidden' };
+      }
+      let extensionRollout;
+      let mediaRollouts;
+      let suiteEnabled = false;
+      try {
+        [extensionRollout, mediaRollouts, suiteEnabled] = await Promise.all([
+          options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+            ownerUserId: input.ownerUserId,
+            shopId: input.shopId,
+            deviceSessionId: input.sessionId,
+          }),
+          Promise.all([
+            mediaWorkflowDecision(options, input.ownerUserId),
+            options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', {
+              ownerUserId: input.ownerUserId,
+            }),
+          ]),
+          options.getAiImageSuiteEnabled?.(input.ownerUserId) || Promise.resolve(false),
+        ]);
+      } catch {
+        return { kind: 'rollout_unavailable' };
+      }
+      const cancel = input.operation === 'MEDIA_EXECUTE' && command.action === 'CANCEL';
+      if (!extensionRollout.enabled
+        || mediaRollouts.some((decision) => !decision.enabled)
+        || (!cancel && !suiteEnabled)) {
+        const unavailable = [extensionRollout, ...mediaRollouts]
+          .find((decision) => rolloutUnavailableReason(decision.reason));
+        return unavailable ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
+      }
+      let shop;
+      let draft;
+      try {
+        [shop, draft] = await Promise.all([
+          options.loadShop({ shopId: input.shopId, ownerUserId: input.ownerUserId }),
+          options.loadDraft({ workflowId: input.workflowId, ownerUserId: input.ownerUserId }),
+        ]);
+      } catch {
+        return { kind: 'rollout_unavailable' };
+      }
+      if (!shop
+        || shop.id !== input.shopId
+        || shop.userId !== input.ownerUserId
+        || shop.platform !== 'OZON'
+        || shop.status !== 'ACTIVE'
+        || !draft
+        || draft.id !== input.workflowId
+        || draft.ownerUserId !== input.ownerUserId
+        || draft.shopId !== input.shopId
+        || draft.revision !== command.draftRevision
+        || draft.draftVersion !== input.draftVersion
+        || draft.supplyGoodsId !== command.supplyGoodsId
+        || draft.sourceCaptureSnapshotId !== command.snapshotId) {
+        return { kind: 'stale' };
+      }
+      return {
+        kind: 'allowed',
+        shopId: shop.id,
+        workflowId: draft.id,
+        draftVersion: draft.draftVersion,
+        command: { ...command },
       };
     }
     if (input.operation === 'MEDIA_REVIEW' || input.operation === 'MEDIA_APPLY') {
@@ -281,7 +396,10 @@ export function createSourceWorkflowCommandResolver(
         || media.contextDraftRevision !== commandDraftRevision
         || media.contextDraftVersion !== commandDraftVersion
         || media.suiteId != null
-        || media.provider !== 'fake'
+        || !mediaProviderAllowed(
+          media,
+          options.production ?? process.env.NODE_ENV === 'production',
+        )
         || media.currentJobStatus !== 'SUCCEEDED'
         || !Array.isArray(media.outputAssetIds)
         || !media.outputAssetIds.includes(command.outputAssetId)) {
@@ -504,7 +622,11 @@ export function createSourceWorkflowCommandResolver(
         || media.contextDraftRevision !== parsedCommand.data.draftRevision
         || media.contextDraftVersion !== input.draftVersion
         || media.suiteId != null
-        || media.provider !== 'fake') {
+        || (parsedCommand.data.action === 'RETRY'
+          && !mediaProviderAllowed(
+            media,
+            options.production ?? process.env.NODE_ENV === 'production',
+          ))) {
         return { kind: 'forbidden' };
       }
       const statusAllowed = parsedCommand.data.action === 'CANCEL'
@@ -682,14 +804,7 @@ export interface ExtensionCommandGrantRoutesOptions {
     draftVersion: number;
     idempotencyKey: string;
     command: Record<string, unknown>;
-  }): Promise<{
-    workflowId: string;
-    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION' | 'CREATE_WORKFLOW';
-    operation?: 'IMAGE_TRANSLATE' | 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
-    status: string;
-    revision: number;
-    replayed?: boolean;
-  }>;
+  }): Promise<Record<string, unknown>>;
   executeMediaReviewCommand?(input: {
     ownerUserId: string;
     actorUserId: string;
@@ -755,6 +870,8 @@ const mediaCommandRecoveryRequiredCodes = new Set([
 const mediaCommandQuotaExceededCodes = new Set([
   'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
   'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+  'AI_IMAGE_GENERATION_QUOTA_EXCEEDED',
+  'BUDGET_EXCEEDED',
 ]);
 
 function error(reply: FastifyReply, statusCode: number, errorCode: string, message: string) {
@@ -1008,8 +1125,7 @@ export async function extensionCommandGrantRoutes(
         token,
       });
       const pendingReplay = authorized.kind === 'replay'
-        && authorized.receipt.status === 'PENDING'
-        && operation !== 'MEDIA_EXECUTE';
+        && authorized.receipt.status === 'PENDING';
       let recoverPending = false;
       if (pendingReplay) {
         const recovery = await options.service.claimPendingRecovery({

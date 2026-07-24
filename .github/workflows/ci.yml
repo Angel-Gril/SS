@@ -101,6 +101,9 @@ jobs:
       - name: Verify AI Media dark deployment contract
         run: node scripts/ai-media-dark-deploy.test.mjs
 
+      - name: Verify AI media suite post-migration DB guard contract
+        run: node scripts/ai-media-suite-post-migration-guard.test.mjs
+
       - name: Verify Web AI media plan slot editor contract
         run: node scripts/web-ai-media-plan-slot-editor.test.mjs
 

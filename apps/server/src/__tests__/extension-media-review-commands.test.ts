@@ -4,6 +4,7 @@ import {
   createExtensionMediaReviewCommandExecutor,
   ExtensionMediaReviewCommandError,
 } from '../services/extension-media-review-commands.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 function outputAsset(overrides: Record<string, unknown> = {}) {
   return {
@@ -26,6 +27,34 @@ function workflow(overrides: Record<string, unknown> = {}) {
     }],
     ...overrides,
   } as any;
+}
+
+function paidJob(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'job-1', operation: 'IMAGE_TO_IMAGE',
+    provider: 'openai-images', model: 'gpt-image-1', status: 'SUCCEEDED',
+    requestedImageCount: 1, width: 1024, height: 1024, estimatedCostCents: 7,
+    operationConfig: createAiImageProviderRuntimeContract({
+      provider: 'openai-images', model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1', costPerImageCents: 7,
+    }, { count: 1, width: 1024, height: 1024 }),
+    assets: [outputAsset()],
+    ...overrides,
+  };
+}
+
+function paidWorkflow(overrides: Record<string, unknown> = {}) {
+  return workflow({ operation: 'IMAGE_TO_IMAGE', jobs: [paidJob()], ...overrides });
+}
+
+function paidReadiness(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: true, ready: true, testOnly: false, evidenceLevel: 'sandbox-verified',
+    provider: 'openai-images', model: 'gpt-image-1',
+    baseUrl: 'https://api.openai.com/v1', costPerImageCents: 7,
+    globalDailyBudgetCents: 100,
+    ...overrides,
+  };
 }
 
 function reviewCommand(overrides: Record<string, unknown> = {}) {
@@ -54,7 +83,11 @@ const baseInput = {
 };
 
 describe('extension media review command executor', () => {
-  function setup(current = workflow(), production = false) {
+  function setup(
+    current = workflow(),
+    production = false,
+    readiness: Record<string, unknown> = paidReadiness(),
+  ) {
     const get = vi.fn(async () => current);
     const review = vi.fn(async () => workflow({
       reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1', revision: 4,
@@ -63,12 +96,14 @@ describe('extension media review command executor', () => {
       id: 'listing-1', ownerUserId: 'owner-1', shopId: 'shop-1',
       revision: 11, draftVersion: 7,
     }));
+    const getProviderReadiness = vi.fn(async () => readiness as any);
     const execute = createExtensionMediaReviewCommandExecutor({
       workflowService: { get, review },
       loadListingDraft,
+      getProviderReadiness,
       production,
     });
-    return { execute, get, review, loadListingDraft };
+    return { execute, get, review, loadListingDraft, getProviderReadiness };
   }
 
   it('reviews one exact succeeded fake output through workflow revision CAS', async () => {
@@ -99,6 +134,35 @@ describe('extension media review command executor', () => {
     await expect(state.execute({ ...baseInput, command: reviewCommand() })).resolves.toMatchObject({
       reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1',
       revision: 4, replayed: true,
+    });
+    expect(state.review).not.toHaveBeenCalled();
+  });
+
+  it('reviews an authorized paid output in production', async () => {
+    const state = setup(paidWorkflow(), true);
+    await expect(state.execute({ ...baseInput, command: reviewCommand() })).resolves.toMatchObject({
+      action: 'REVIEW', reviewStatus: 'APPROVED', replayed: false,
+    });
+    expect(state.getProviderReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+    expect(state.review).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a paid review after capability authorization is revoked', async () => {
+    const state = setup(
+      paidWorkflow(),
+      true,
+      paidReadiness({ enabled: false, ready: false }),
+    );
+    await expect(state.execute({ ...baseInput, command: reviewCommand() })).rejects.toMatchObject({
+      code: 'MEDIA_CAPABILITY_UNAVAILABLE',
+    });
+    expect(state.review).not.toHaveBeenCalled();
+  });
+
+  it('rejects a paid review without a valid frozen runtime contract', async () => {
+    const state = setup(paidWorkflow({ jobs: [paidJob({ operationConfig: null })] }), true);
+    await expect(state.execute({ ...baseInput, command: reviewCommand() })).rejects.toMatchObject({
+      code: 'MEDIA_PROVIDER_CONFIG_CHANGED',
     });
     expect(state.review).not.toHaveBeenCalled();
   });
@@ -162,10 +226,6 @@ describe('extension media review command executor', () => {
 
   it.each([
     ['production', workflow(), true],
-    ['paid provider', workflow({ jobs: [{
-      id: 'job-1', provider: 'dashscope-qwen-mt-image', status: 'SUCCEEDED',
-      assets: [outputAsset()],
-    }] }), false],
     ['suite child', workflow({ suiteId: 'suite-1' }), false],
   ])('rejects %s review before mutation', async (_label, current, production) => {
     const state = setup(current, production);
@@ -186,7 +246,12 @@ describe('extension media review command executor', () => {
 });
 
 describe('extension media apply command executor', () => {
-  function setup(options: { current?: any; replayed?: boolean; production?: boolean } = {}) {
+  function setup(options: {
+    current?: any;
+    replayed?: boolean;
+    production?: boolean;
+    readiness?: Record<string, unknown>;
+  } = {}) {
     const current = options.current || workflow({
       reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1', revision: 4,
     });
@@ -203,12 +268,16 @@ describe('extension media apply command executor', () => {
       },
       target: { revision: 99, draftVersion: 77 },
     }));
+    const getProviderReadiness = vi.fn(async () => (
+      options.readiness || paidReadiness()
+    ) as any);
     const execute = createExtensionMediaApplyCommandExecutor({
       workflowService: { get },
       applyListingDraftApplication,
+      getProviderReadiness,
       production: options.production ?? false,
     });
-    return { execute, get, applyListingDraftApplication };
+    return { execute, get, applyListingDraftApplication, getProviderReadiness };
   }
 
   it('applies only append mode with the receipt operation key', async () => {
@@ -241,6 +310,40 @@ describe('extension media apply command executor', () => {
       applicationId: 'application-1', targetRevision: 12,
       targetDraftVersion: 8, replayed: true,
     });
+  });
+
+  it('applies an authorized paid output in production', async () => {
+    const state = setup({
+      current: paidWorkflow({
+        reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1', revision: 4,
+      }),
+      production: true,
+    });
+    await expect(state.execute({
+      ...baseInput,
+      idempotencyKey: 'extension-media-apply-operation-1',
+      command: applyCommand(),
+    })).resolves.toMatchObject({ action: 'APPLY', applicationId: 'application-1' });
+    expect(state.getProviderReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+    expect(state.applyListingDraftApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ production: true }),
+    );
+  });
+
+  it('rejects a paid application after capability authorization is revoked', async () => {
+    const state = setup({
+      current: paidWorkflow({
+        reviewStatus: 'APPROVED', selectedOutputAssetId: 'output-1', revision: 4,
+      }),
+      production: true,
+      readiness: paidReadiness({ enabled: false, ready: false }),
+    });
+    await expect(state.execute({
+      ...baseInput,
+      idempotencyKey: 'extension-media-apply-operation-1',
+      command: applyCommand(),
+    })).rejects.toMatchObject({ code: 'MEDIA_CAPABILITY_UNAVAILABLE' });
+    expect(state.applyListingDraftApplication).not.toHaveBeenCalled();
   });
 
   it.each([

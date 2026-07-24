@@ -1,10 +1,12 @@
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
+import type { AiImageSuiteCostControlFailure } from './ai-image-suite-cost-controls.js';
 
 export const AI_IMAGE_SUITE_MATERIALIZATION_REQUEST_VERSION = 'ai-image-suite-materialization-request/v1';
 export const AI_IMAGE_SUITE_MATERIALIZATION_EVENT_VERSION = 'ai-image-suite-children-materialized/v1';
 export const AI_IMAGE_SUITE_CHILD_FINGERPRINT_VERSION = 'ai-image-suite-child-workflow/v1';
 export const AI_IMAGE_SUITE_CHILD_BINDING_VERSION = 'ai-image-suite-child-binding/v1';
 export const AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION = 'ai-image-suite-child-operation/v1';
+export const AI_IMAGE_SUITE_PAID_CHILD_OPERATION_CONFIG_VERSION = 'ai-image-suite-child-operation/v2';
 export const AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION = 'ozon-suite-3x4-900x1200/v1';
 export const AI_IMAGE_SUITE_OUTPUT_WIDTH = 900;
 export const AI_IMAGE_SUITE_OUTPUT_HEIGHT = 1200;
@@ -43,6 +45,7 @@ export type AiImageSuiteMaterializationReplayResult =
 
 export type AiImageSuiteMaterializationCommitResult =
   | ({ kind: 'committed' | 'existing' } & AiImageSuiteMaterializationSummary)
+  | AiImageSuiteCostControlFailure
   | {
     kind:
       | 'already-materialized'
@@ -51,6 +54,7 @@ export type AiImageSuiteMaterializationCommitResult =
       | 'not-found'
       | 'stale'
       | 'prompts-not-ready'
+      | 'provider-runtime-unavailable'
       | 'revision-conflict';
   };
 
@@ -64,8 +68,12 @@ export type AiImageSuiteMaterializationErrorCode =
   | 'AI_MEDIA_SUITE_MATERIALIZATION_NOT_FOUND'
   | 'AI_MEDIA_SUITE_MATERIALIZATION_STALE'
   | 'AI_MEDIA_SUITE_PROMPTS_NOT_READY'
+  | 'AI_MEDIA_SUITE_PROVIDER_RUNTIME_NOT_READY'
   | 'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED'
   | 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT'
+  | 'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED'
+  | 'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED'
+  | 'AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE'
   | 'AI_MEDIA_SUITE_MATERIALIZATION_CONFLICT';
 
 export class AiImageSuiteMaterializationError extends Error {
@@ -153,6 +161,23 @@ function mapReplayFailure(
 }
 
 function mapCommitFailure(result: AiImageSuiteMaterializationCommitResult): never {
+  if (result.kind === 'quota-exceeded') {
+    return fail(
+      'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED',
+      429,
+      `AI image suite daily quota exceeded (${result.used} + ${result.requested}/${result.limit})`,
+    );
+  }
+  if (result.kind === 'budget-exceeded') {
+    return fail(
+      'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED',
+      429,
+      `Global daily AI budget exceeded (${result.settledCostCents + result.pendingMaximumCostCents + result.requestedMaximumCostCents}/${result.limit})`,
+    );
+  }
+  if (result.kind === 'cost-controls-unavailable') {
+    return fail('AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE', 503, result.reason);
+  }
   if (result.kind === 'not-found') {
     return fail(
       'AI_MEDIA_SUITE_MATERIALIZATION_NOT_FOUND',
@@ -172,6 +197,13 @@ function mapCommitFailure(result: AiImageSuiteMaterializationCommitResult): neve
       'AI_MEDIA_SUITE_PROMPTS_NOT_READY',
       409,
       'AI media suite frozen Prompts are incomplete',
+    );
+  }
+  if (result.kind === 'provider-runtime-unavailable') {
+    return fail(
+      'AI_MEDIA_SUITE_PROVIDER_RUNTIME_NOT_READY',
+      503,
+      'AI media suite Provider runtime is unavailable or changed',
     );
   }
   if (result.kind === 'already-materialized') {

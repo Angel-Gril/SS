@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('../lib/redis.js', () => ({ redisDisabled: true }));
-import { AI_IMAGE_QUEUE_JOB_OPTIONS, processAiImageQueueJob } from '../workers/ai-image-generation.js';
+import {
+  AI_IMAGE_QUEUE_JOB_OPTIONS,
+  processAiImageQueueJob,
+  resolveAiImageProvider,
+} from '../workers/ai-image-generation.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+
+const allowPaidDispatch = async () => ({
+  enabled: true,
+  reasonCode: 'tenant_allowed',
+  reason: 'allowed',
+});
 
 describe('AI image BullMQ worker boundary', () => {
   it('allows one BullMQ redelivery for state recovery without provider resubmission', () => {
@@ -16,43 +27,291 @@ describe('AI image BullMQ worker boundary', () => {
     const provider = { name: 'fake', generate: vi.fn() };
     const resolveProvider = vi.fn(() => provider);
     const run = vi.fn(async () => undefined);
+    const loadInputBuffer = vi.fn();
 
     const providerConfig = { provider: 'fake', baseUrl: '', apiKey: '', model: 'fake-image-v1', costPerImageCents: 0 };
-    await processAiImageQueueJob('job-1', 2, { repository: repository as any, getProviderConfig: vi.fn(async () => providerConfig), resolveProvider, uploadBuffer: vi.fn(), run });
+    await processAiImageQueueJob('job-1', 2, {
+      repository: repository as any,
+      getProviderConfig: vi.fn(async () => providerConfig),
+      resolveProvider,
+      loadInputBuffer,
+      uploadBuffer: vi.fn(),
+      run,
+    });
 
     expect(resolveProvider).toHaveBeenCalledWith('fake', providerConfig, undefined);
-    expect(run).toHaveBeenCalledWith('job-1', 2, expect.objectContaining({ repository, provider }));
+    expect(run).toHaveBeenCalledWith('job-1', 2, expect.objectContaining({
+      repository,
+      provider,
+      loadInputBuffer,
+    }));
+  });
+
+  it('routes OpenAI text generation and IMAGE_TO_IMAGE through their operation-specific adapters', async () => {
+    const generated = { images: [{ buffer: Buffer.from('generated'), mimeType: 'image/png' }] };
+    const edited = { images: [{ buffer: Buffer.from('edited'), mimeType: 'image/png' }] };
+    const generate = vi.fn(async () => generated);
+    const edit = vi.fn(async () => edited);
+    const inputImages = [{ buffer: Buffer.from('source'), mimeType: 'image/png' as const }];
+    const provider = resolveAiImageProvider(
+      'openai-images',
+      {
+        provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'secret',
+        model: 'gpt-image-1', costPerImageCents: 7,
+      },
+      undefined,
+      {
+        resolveCapability: () => ({
+          provider: 'openai-images', model: 'gpt-image-1',
+          operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'], maxReferences: 16,
+          supportsMask: false, inputTransport: 'multipart', resultMode: 'sync',
+          evidenceLevel: 'sandbox-verified', evidence: 'test',
+        }),
+        createOpenAiGenerationProvider: () => ({ name: 'openai-images', generate }),
+        createOpenAiEditProvider: () => ({ name: 'openai-image-edits', edit }),
+      },
+    );
+    const textRequest = {
+      operation: 'TEXT_TO_IMAGE' as const,
+      prompt: 'studio photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    };
+    const editRequest = {
+      operation: 'IMAGE_TO_IMAGE' as const,
+      prompt: 'keep the product', negativePrompt: 'text', count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1', inputImages,
+    };
+
+    await expect(provider.generate(textRequest)).resolves.toBe(generated);
+    await expect(provider.generate(editRequest)).resolves.toBe(edited);
+
+    expect(generate).toHaveBeenCalledWith(textRequest);
+    expect(edit).toHaveBeenCalledWith({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'keep the product',
+      negativePrompt: 'text',
+      width: 1024,
+      height: 1024,
+      model: 'gpt-image-1',
+      images: inputImages,
+      mask: null,
+    });
+  });
+
+  it('fails a queued paid job closed when tenant rollout is revoked before dispatch', async () => {
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-revoked', ownerUserId: 'owner-1', provider: 'openai-images',
+        model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+        requestedImageCount: 1, width: 1024, height: 1024,
+        costReservation: { status: 'RESERVED' },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    };
+    const getProviderConfig = vi.fn();
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageQueueJob('job-revoked', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: false,
+        reasonCode: 'tenant_not_allowed',
+        reason: 'AI media rollout was revoked',
+      })),
+      getProviderConfig,
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-revoked', {
+      attemptCount: 1,
+      errorCode: 'AI_IMAGE_DISPATCH_REVOKED',
+      errorMessage: 'AI media rollout was revoked',
+    });
+    expect(getProviderConfig).not.toHaveBeenCalled();
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('requires a RESERVED cost reservation before resolving a paid Provider', async () => {
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-no-cost', ownerUserId: 'owner-1', provider: 'openai-images',
+        model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+        requestedImageCount: 1, width: 1024, height: 1024,
+        costReservation: null,
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    };
+    const getProviderConfig = vi.fn();
+
+    await processAiImageQueueJob('job-no-cost', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
+      })),
+      getProviderConfig,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-no-cost', {
+      attemptCount: 1,
+      errorCode: 'AI_IMAGE_COST_RESERVATION_REQUIRED',
+      errorMessage: 'Paid AI image dispatch requires an exact RESERVED cost reservation',
+    });
+    expect(getProviderConfig).not.toHaveBeenCalled();
+  });
+
+  it('dispatches only when the active endpoint, model, price and request match the frozen contract', async () => {
+    const providerConfig = {
+      provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'secret',
+      model: 'gpt-image-1', costPerImageCents: 7,
+    };
+    const runtimeContract = createAiImageProviderRuntimeContract(providerConfig, {
+      count: 1, width: 1024, height: 1024,
+    });
+    const job = {
+      id: 'job-frozen', ownerUserId: 'owner-1', provider: 'openai-images',
+      model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+      requestedImageCount: 1, width: 1024, height: 1024,
+      operationConfig: runtimeContract,
+      costReservation: {
+        status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+        estimatedCostMinor: 7, maximumCostMinor: 7,
+      },
+    };
+    const repository = { getById: vi.fn(async () => job) };
+    const provider = { name: 'openai-images', generate: vi.fn() };
+    const run = vi.fn(async () => undefined);
+
+    await processAiImageQueueJob('job-frozen', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
+      })),
+      getProviderConfig: vi.fn(async () => providerConfig),
+      resolveProvider: vi.fn(() => provider),
+      uploadBuffer: vi.fn(),
+      run,
+    });
+
+    expect(run).toHaveBeenCalledWith('job-frozen', 1, expect.objectContaining({ provider }));
+  });
+
+  it('fails before Provider resolution when the configured endpoint changed after queueing', async () => {
+    const frozenConfig = {
+      provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'old',
+      model: 'gpt-image-1', costPerImageCents: 7,
+    };
+    const job = {
+      id: 'job-endpoint-changed', ownerUserId: 'owner-1', provider: 'openai-images',
+      model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+      requestedImageCount: 1, width: 1024, height: 1024,
+      operationConfig: createAiImageProviderRuntimeContract(frozenConfig, {
+        count: 1, width: 1024, height: 1024,
+      }),
+      costReservation: {
+        status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+        estimatedCostMinor: 7, maximumCostMinor: 7,
+      },
+    };
+    const repository = {
+      getById: vi.fn(async () => job),
+      markEnqueueFailed: vi.fn(async () => true),
+    };
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageQueueJob('job-endpoint-changed', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
+      })),
+      getProviderConfig: vi.fn(async () => ({
+        ...frozenConfig, baseUrl: 'https://relay.example/v1', apiKey: 'new',
+      })),
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-endpoint-changed', {
+      attemptCount: 1,
+      errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+      errorMessage: 'Active Provider identity does not match the frozen runtime contract',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('keeps an adapter-characterized paid provider disabled until sandbox evidence is promoted', async () => {
-    const repository = { getById: vi.fn(async () => ({ id: 'job-1', provider: 'dashscope-wanx' })) };
+    const providerConfig = {
+      provider: 'dashscope-wanx', baseUrl: 'https://dashscope.example/api/v1',
+      apiKey: 'secret', model: 'wanx-v1', costPerImageCents: 5,
+    };
+    const repository = { getById: vi.fn(async () => ({
+      id: 'job-1', ownerUserId: 'owner-1', provider: 'dashscope-wanx', model: 'wanx-v1',
+      status: 'QUEUED', requestedImageCount: 1, width: 1024, height: 1024,
+      estimatedCostCents: 5,
+      operationConfig: createAiImageProviderRuntimeContract(providerConfig, {
+        count: 1, width: 1024, height: 1024,
+      }),
+      costReservation: {
+        status: 'RESERVED', provider: 'dashscope-wanx', model: 'wanx-v1',
+        estimatedCostMinor: 5, maximumCostMinor: 5,
+      },
+    })) };
     const run = vi.fn(async () => undefined);
     await processAiImageQueueJob('job-1', 1, {
       repository: repository as any,
-      getProviderConfig: vi.fn(async () => ({ provider: 'dashscope-wanx', baseUrl: 'https://dashscope.example/api/v1', apiKey: 'secret', model: 'wanx-v1', costPerImageCents: 5 })),
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => providerConfig),
       uploadBuffer: vi.fn(), run,
     });
     expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
   });
 
   it('keeps an unverified custom image provider disabled in the normal worker', async () => {
-    const repository = { getById: vi.fn(async () => ({ id: 'job-custom', provider: 'custom' })) };
+    const providerConfig = {
+      provider: 'custom', baseUrl: 'https://relay.example', apiKey: 'secret',
+      model: 'custom-image-model', costPerImageCents: 5,
+    };
+    const repository = { getById: vi.fn(async () => ({
+      id: 'job-custom', ownerUserId: 'owner-1', provider: 'custom', model: 'custom-image-model',
+      status: 'QUEUED', requestedImageCount: 1, width: 1024, height: 1024,
+      estimatedCostCents: 5,
+      operationConfig: createAiImageProviderRuntimeContract(providerConfig, {
+        count: 1, width: 1024, height: 1024,
+      }),
+      costReservation: {
+        status: 'RESERVED', provider: 'custom', model: 'custom-image-model',
+        estimatedCostMinor: 5, maximumCostMinor: 5,
+      },
+    })) };
     const run = vi.fn(async () => undefined);
     await processAiImageQueueJob('job-custom', 1, {
       repository: repository as any,
-      getProviderConfig: vi.fn(async () => ({
-        provider: 'custom', baseUrl: 'https://relay.example', apiKey: 'secret',
-        model: 'custom-image-model', costPerImageCents: 0,
-      })),
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => providerConfig),
       uploadBuffer: vi.fn(), run,
     });
     expect((run as any).mock.calls[0]?.[2].provider.name).toBe('disabled');
   });
   it('quarantines an unclassified paid provider failure when the queue allows one attempt', async () => {
+    const providerConfig = {
+      provider: 'openai-images', baseUrl: 'https://api.openai.example/v1',
+      apiKey: 'secret', model: 'gpt-image-1', costPerImageCents: 7,
+    };
     const job = {
       id: 'job-paid', ownerUserId: 'owner-1', provider: 'openai-images', model: 'gpt-image-1',
       status: 'QUEUED', prompt: 'photo', negativePrompt: null, requestedImageCount: 1,
-      width: 1024, height: 1024, maxAttempts: 3, estimatedCostCents: 0,
+      width: 1024, height: 1024, maxAttempts: 3, estimatedCostCents: 7,
+      operationConfig: createAiImageProviderRuntimeContract(providerConfig, {
+        count: 1, width: 1024, height: 1024,
+      }),
+      costReservation: {
+        status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+        estimatedCostMinor: 7, maximumCostMinor: 7,
+      },
     };
     const repository = {
       getById: vi.fn(async () => job),
@@ -63,7 +322,8 @@ describe('AI image BullMQ worker boundary', () => {
     };
     await expect(processAiImageQueueJob('job-paid', 1, {
       repository: repository as any,
-      getProviderConfig: vi.fn(async () => ({ provider: 'openai-images', baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', costPerImageCents: 0 })),
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => providerConfig),
       resolveProvider: vi.fn(() => ({ name: 'openai-images', generate: vi.fn(async () => { throw new Error('provider failed'); }) })),
       uploadBuffer: vi.fn(),
     })).rejects.toThrow('provider failed');
@@ -264,7 +524,15 @@ describe('AI image BullMQ worker boundary', () => {
     const setupError = new Error('config unavailable');
     const repository = {
       getById: vi.fn()
-        .mockResolvedValueOnce({ id: 'job-setup-race', provider: 'openai-images', status: 'QUEUED' })
+        .mockResolvedValueOnce({
+          id: 'job-setup-race', ownerUserId: 'owner-1', provider: 'openai-images',
+          model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+          requestedImageCount: 1, width: 1024, height: 1024,
+          costReservation: {
+            status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+            estimatedCostMinor: 7, maximumCostMinor: 7,
+          },
+        })
         .mockResolvedValueOnce({ id: 'job-setup-race', provider: 'openai-images', status: 'CANCEL_REQUESTED' }),
       markEnqueueFailed: vi.fn(async () => false),
       markCancelled: vi.fn(async () => undefined),
@@ -273,6 +541,7 @@ describe('AI image BullMQ worker boundary', () => {
 
     await expect(processAiImageQueueJob('job-setup-race', 1, {
       repository: repository as any,
+      getDispatchAuthorization: allowPaidDispatch,
       getProviderConfig: vi.fn(async () => { throw setupError; }),
     })).rejects.toThrow(setupError);
 

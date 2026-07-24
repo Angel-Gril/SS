@@ -242,7 +242,10 @@ describe('Prisma AI image suite repository', () => {
 
     const result = await repository.claimApproved(claimInput());
 
-    expect(result).toMatchObject({ kind: 'created', suite: { id: 'suite-1', itemCount: 1 } });
+    expect(result).toMatchObject({
+      kind: 'created',
+      suite: { id: 'suite-1', itemCount: 1, providerConfigHash: '9'.repeat(64) },
+    });
     expect(fixture.tx.aiMediaSuite.create).toHaveBeenCalledOnce();
     expect(fixture.tx.aiMediaSuiteSlot.createMany).toHaveBeenCalledWith({
       data: [expect.objectContaining({
@@ -429,6 +432,7 @@ describe('Prisma AI image suite repository', () => {
             childWorkflow: {
               select: {
                 id: true,
+                status: true,
                 revision: true,
                 contextId: true,
                 reviewStatus: true,
@@ -473,20 +477,49 @@ describe('Prisma AI image suite repository', () => {
                 },
                 jobs: {
                   orderBy: { workflowAttempt: 'desc' },
-                  take: 1,
+                  take: 100,
                   select: {
                     id: true,
+                    status: true,
+                    workflowAttempt: true,
+                    provider: true,
+                    model: true,
+                    requestFingerprint: true,
+                    providerDispatchedAt: true,
+                    providerJobId: true,
+                    providerReconciliationStatus: true,
+                    providerReconciliationLeaseOwner: true,
+                    providerReconciliationLeaseTokenHash: true,
+                    providerReconciliationLeaseExpiresAt: true,
+                    providerReconciledAt: true,
+                    actualCostCents: true,
+                    billedUnits: true,
+                    costReservation: {
+                      select: {
+                        status: true,
+                        provider: true,
+                        model: true,
+                        requestFingerprint: true,
+                      },
+                    },
+                    _count: {
+                      select: { assets: true },
+                    },
                     assets: {
+                      where: { kind: 'AI_GENERATED' },
                       orderBy: { createdAt: 'asc' },
                       take: 1,
                       select: {
                         id: true,
                         ownerUserId: true,
                         aiImageJobId: true,
+                        kind: true,
                         url: true,
+                        storageBackend: true,
                         mimeType: true,
                         width: true,
                         height: true,
+                        sourceCaptureSnapshotId: true,
                       },
                     },
                   },

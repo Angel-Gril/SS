@@ -225,6 +225,695 @@
     };
   }
 
+  var aiImageSuiteInteractionStates = new WeakMap();
+  var aiImageSuitePollingStates = new WeakMap();
+  var activeAiImageSuitePollingStates = new Set();
+  var suspendedAiImageSuitePollingStates = new Set();
+  var aiImageSuitePageDisposed = false;
+
+  function cloneAiImageSuiteIntentValue(value) {
+    if (Array.isArray(value)) return value.map(cloneAiImageSuiteIntentValue);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(function (entry) {
+        return [entry[0], cloneAiImageSuiteIntentValue(entry[1])];
+      }));
+    }
+    return value;
+  }
+
+  function freezeAiImageSuiteIntentValue(value) {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(freezeAiImageSuiteIntentValue);
+    return Object.freeze(value);
+  }
+
+  function aiImageSuiteCommandTemplate(projection, action, slotId) {
+    if (!projection || !projection.plan) return null;
+    if (action === 'START') {
+      return projection.plan.allowedActions.includes(action)
+        ? projection.plan.commands.START
+        : null;
+    }
+    if (action === 'CONTINUE' || action === 'CANCEL') {
+      return projection.suite && projection.suite.allowedActions.includes(action)
+        ? projection.suite.commands[action]
+        : null;
+    }
+    var slot = projection.suite && projection.suite.slots.find(function (item) {
+      return item.id === slotId;
+    });
+    return slot && slot.allowedActions.includes(action) ? slot.commands[action] : null;
+  }
+
+  function aiImageSuiteIntentWitness(projection, action, slotId, decision) {
+    var authorityHash = projection && projection.commandAuthority
+      && projection.commandAuthority.authorityHash;
+    var normalizedSlotId = slotId || null;
+    var normalizedDecision = decision || null;
+    var template = aiImageSuiteCommandTemplate(projection, action, normalizedSlotId);
+    if (typeof authorityHash !== 'string' || !/^[a-f0-9]{64}$/u.test(authorityHash)
+      || !template || typeof template !== 'object' || Array.isArray(template)
+      || (action === 'REVIEW_SLOT'
+        ? !['APPROVE', 'REJECT'].includes(normalizedDecision)
+        : normalizedDecision !== null)) return null;
+    try {
+      var serialized = JSON.stringify(template);
+      if (!serialized || serialized.length > 4096) return null;
+      return freezeAiImageSuiteIntentValue({
+        version: 'extension-ai-image-suite-intent-witness/v1',
+        context: cloneAiImageSuiteIntentValue(projection.context),
+        authorityHash: authorityHash,
+        action: action,
+        slotId: normalizedSlotId,
+        decision: normalizedDecision,
+        commandTemplate: cloneAiImageSuiteIntentValue(template),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function aiImageSuiteInteractionKey(projection) {
+    var authority = projection && projection.commandAuthority;
+    var preview = projection && projection.plan && projection.plan.preview;
+    var suite = projection && projection.suite;
+    return [
+      authority && authority.authorityHash || '',
+      preview && preview.hash || '',
+      preview && preview.pricingVersion || '',
+      preview && preview.estimatedCostCents || 0,
+      preview && preview.maximumCostCents || 0,
+      suite && suite.id || '',
+      suite && suite.revision || 0,
+    ].join(':');
+  }
+
+  function aiImageSuiteInteractionState(container, interactionKey) {
+    var state = aiImageSuiteInteractionStates.get(container);
+    if (!state || state.interactionKey !== interactionKey) {
+      state = {
+        interactionKey: interactionKey || '',
+        startCostAccepted: false,
+        retryCostAccepted: new Set(),
+        pendingKey: '',
+      };
+      aiImageSuiteInteractionStates.set(container, state);
+    }
+    return state;
+  }
+
+  function stopAiImageSuitePolling(container) {
+    var state = aiImageSuitePollingStates.get(container);
+    if (!state) return;
+    if (state.timer != null && typeof root.clearTimeout === 'function') {
+      root.clearTimeout(state.timer);
+    }
+    state.timer = null;
+    state.stopped = true;
+    activeAiImageSuitePollingStates.delete(state);
+    suspendedAiImageSuitePollingStates.delete(state);
+  }
+
+  function stopAllAiImageSuitePolling() {
+    aiImageSuitePageDisposed = true;
+    activeAiImageSuitePollingStates.forEach(function (state) {
+      if (state.timer != null && typeof root.clearTimeout === 'function') {
+        root.clearTimeout(state.timer);
+      }
+      state.timer = null;
+      state.stopped = true;
+      suspendedAiImageSuitePollingStates.add(state);
+    });
+    activeAiImageSuitePollingStates.clear();
+  }
+
+  function resumeAllAiImageSuitePolling() {
+    aiImageSuitePageDisposed = false;
+    var states = Array.from(suspendedAiImageSuitePollingStates);
+    suspendedAiImageSuitePollingStates.clear();
+    states.forEach(function (state) {
+      state.stopped = false;
+      scheduleAiImageSuitePolling(state.container, state.listing, state.options, state.result);
+    });
+  }
+
+  if (typeof root.addEventListener === 'function') {
+    root.addEventListener('pagehide', stopAllAiImageSuitePolling);
+    root.addEventListener('pageshow', resumeAllAiImageSuitePolling);
+  }
+
+  function aiImageSuiteResult(value) {
+    if (!value) return null;
+    if (value.contractVersion === 'extension-ai-image-suite-projection/v1') {
+      return { state: 'ready', projection: value };
+    }
+    return value;
+  }
+
+  function aiImageSuiteNeedsPolling(result) {
+    if (!result || result.state !== 'ready' || !result.projection) return true;
+    var suite = result.projection.suite;
+    return Boolean(suite && [
+      'PLANNED', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED',
+    ].includes(suite.status));
+  }
+
+  function scheduleAiImageSuitePolling(container, listing, options, result) {
+    if (aiImageSuitePageDisposed
+      || !listing || !options || typeof options.onLoadAiImageSuite !== 'function'
+      || typeof root.setTimeout !== 'function'
+      || !aiImageSuiteNeedsPolling(result)) {
+      stopAiImageSuitePolling(container);
+      return;
+    }
+    var bindingKey = [listing.id, listing.shopId, listing.revision, listing.draftVersion].join(':');
+    var state = aiImageSuitePollingStates.get(container);
+    if (!state || state.bindingKey !== bindingKey) {
+      stopAiImageSuitePolling(container);
+      state = {
+        bindingKey: bindingKey,
+        count: 0,
+        timer: null,
+        inFlight: false,
+        stopped: false,
+        exhausted: false,
+        result: null,
+      };
+      aiImageSuitePollingStates.set(container, state);
+    }
+    state.stopped = false;
+    state.options = options;
+    state.container = container;
+    state.listing = listing;
+    state.result = result;
+    activeAiImageSuitePollingStates.add(state);
+    var maximum = Number.isSafeInteger(options.aiImageSuitePollLimit)
+      ? Math.max(1, Math.min(60, options.aiImageSuitePollLimit))
+      : 20;
+    if (state.count >= maximum) {
+      state.exhausted = true;
+      activeAiImageSuitePollingStates.delete(state);
+      return;
+    }
+    if (state.timer != null || state.inFlight) return;
+    var interval = Number.isFinite(Number(options.aiImageSuitePollIntervalMs))
+      ? Math.max(1000, Math.min(10000, Number(options.aiImageSuitePollIntervalMs)))
+      : 3000;
+    var delay = !result && options.aiImageSuiteLoading !== true ? 0 : interval;
+    state.timer = root.setTimeout(function () {
+      state.timer = null;
+      if (state.stopped || aiImageSuitePageDisposed || state.count >= maximum) return;
+      state.count += 1;
+      state.inFlight = true;
+      var returned;
+      try {
+        returned = state.options.onLoadAiImageSuite({
+          reason: result ? 'poll' : 'initial',
+          listing: state.listing,
+          attempt: state.count,
+          maximumAttempts: maximum,
+        });
+      } catch (error) {
+        if (typeof state.options.onAiImageSuiteError === 'function') {
+          state.options.onAiImageSuiteError(error);
+        }
+        state.inFlight = false;
+        return;
+      }
+      Promise.resolve(returned).catch(function (error) {
+        if (typeof state.options.onAiImageSuiteError === 'function') {
+          state.options.onAiImageSuiteError(error);
+        }
+      }).finally(function () {
+        state.inFlight = false;
+        if (!state.stopped && !aiImageSuitePageDisposed) {
+          scheduleAiImageSuitePolling(container, state.listing, state.options, state.result);
+        }
+      });
+    }, delay);
+  }
+
+  function refreshExhaustedAiImageSuitePolling(container, listing, options, result) {
+    var state = aiImageSuitePollingStates.get(container);
+    if (!state || !state.exhausted || state.inFlight
+      || typeof options.onLoadAiImageSuite !== 'function') return;
+    state.count = 0;
+    state.exhausted = false;
+    state.stopped = false;
+    state.inFlight = true;
+    activeAiImageSuitePollingStates.add(state);
+    var returned;
+    try {
+      returned = options.onLoadAiImageSuite({
+        reason: 'manual',
+        force: true,
+        listing: listing,
+        attempt: 0,
+      });
+    } catch (error) {
+      state.inFlight = false;
+      if (typeof options.onAiImageSuiteError === 'function') options.onAiImageSuiteError(error);
+      return;
+    }
+    Promise.resolve(returned).catch(function (error) {
+      if (typeof options.onAiImageSuiteError === 'function') options.onAiImageSuiteError(error);
+    }).finally(function () {
+      state.inFlight = false;
+      if (!state.stopped && !aiImageSuitePageDisposed) {
+        scheduleAiImageSuitePolling(container, listing, options, state.result || result);
+      }
+    });
+  }
+
+  function aiImageSuiteCost(value) {
+    var cents = Number(value);
+    if (!Number.isSafeInteger(cents) || cents < 0) return '--';
+    return 'US$' + (cents / 100).toFixed(2);
+  }
+
+  function aiImageSuiteStatusLabel(value) {
+    var labels = {
+      PLANNED: '等待开始',
+      QUEUED: '等待生成',
+      RUNNING: '生成中',
+      SUCCEEDED: '已完成',
+      FAILED: '生成失败',
+      PARTIAL_FAILURE: '部分失败',
+      CANCEL_REQUESTED: '正在取消',
+      CANCELLED: '已取消',
+    };
+    return labels[value] || String(value || '尚未开始');
+  }
+
+  function aiImageSuiteReviewLabel(value) {
+    var labels = {
+      NOT_READY: '尚未审核',
+      PENDING: '等待审核',
+      APPROVED: '审核通过',
+      REJECTED: '已驳回',
+    };
+    return labels[value] || '';
+  }
+
+  function invokeAiImageSuiteCommand(container, button, options, payload, interactionKey) {
+    if (!options || typeof options.onAiImageSuiteCommand !== 'function') return;
+    var state = aiImageSuiteInteractionState(container, interactionKey);
+    var key = [payload.action, payload.slotId || '', payload.decision || ''].join(':');
+    if (state.pendingKey || options.aiImageSuiteBusyKey) return;
+    state.pendingKey = key;
+    var polling = aiImageSuitePollingStates.get(container);
+    if (polling) {
+      polling.count = 0;
+      polling.exhausted = false;
+    }
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    var returned;
+    try {
+      returned = options.onAiImageSuiteCommand(payload);
+    } catch (error) {
+      state.pendingKey = '';
+      button.removeAttribute('aria-busy');
+      if (typeof options.onAiImageSuiteError === 'function') options.onAiImageSuiteError(error);
+      return;
+    }
+    Promise.resolve(returned).catch(function (error) {
+      if (typeof options.onAiImageSuiteError === 'function') options.onAiImageSuiteError(error);
+    }).finally(function () {
+      if (state.pendingKey === key) state.pendingKey = '';
+      button.removeAttribute('aria-busy');
+      button.disabled = Boolean(options.aiImageSuiteBusyKey);
+    });
+  }
+
+  function aiImageSuiteCommandButton(container, options, payload, label, className) {
+    var button = element('button', className || '', label);
+    button.type = 'button';
+    var projection = payload.projection;
+    var interactionKey = aiImageSuiteInteractionKey(projection);
+    var intentWitness = aiImageSuiteIntentWitness(
+      projection,
+      payload.action,
+      payload.slotId,
+      payload.decision,
+    );
+    var state = aiImageSuiteInteractionState(container, interactionKey);
+    var commandPayload = {
+      action: payload.action,
+      slotId: payload.slotId,
+      decision: payload.decision,
+      costConfirmed: payload.costConfirmed === true,
+      intentWitness: intentWitness,
+    };
+    button.disabled = Boolean(options.aiImageSuiteBusyKey || state.pendingKey || !intentWitness);
+    button.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || button.disabled) return;
+      invokeAiImageSuiteCommand(container, button, options, commandPayload, interactionKey);
+    });
+    return button;
+  }
+
+  function renderAiImageSuiteOutput(container, slot) {
+    if (!slot.output) return;
+    var link = element('a', 'ss-erp-source-workbench-output');
+    link.href = slot.output.url;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.title = '打开 AI 生图结果';
+    var frame = element('span', 'ss-erp-source-workbench-output-frame');
+    var image = element('img');
+    image.src = slot.output.url;
+    image.alt = slot.goal + '生成结果';
+    image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
+    var fallback = element('span', 'ss-erp-source-workbench-output-fallback', '预览不可用');
+    image.addEventListener('error', function () {
+      frame.classList.add('is-error');
+      image.removeAttribute('src');
+    }, { once: true });
+    frame.appendChild(image);
+    frame.appendChild(fallback);
+    link.appendChild(frame);
+    link.appendChild(element(
+      'span',
+      'ss-erp-source-workbench-output-meta',
+      slot.output.width && slot.output.height
+        ? slot.output.width + ' × ' + slot.output.height
+        : slot.output.mimeType,
+    ));
+    container.appendChild(link);
+  }
+
+  function renderAiImageSuiteSlot(container, rootContainer, projection, slot, options) {
+    var row = element('article', 'ss-erp-source-workbench-history-item');
+    var heading = element('div', 'ss-erp-source-workbench-history-heading');
+    heading.appendChild(element('strong', '', slot.goal));
+    heading.appendChild(element(
+      'span',
+      '',
+      aiImageSuiteStatusLabel(slot.status)
+        + (slot.reviewStatus !== 'NOT_READY' ? ' · ' + aiImageSuiteReviewLabel(slot.reviewStatus) : ''),
+    ));
+    row.appendChild(heading);
+    var meta = element('div', 'ss-erp-source-workbench-history-footer');
+    meta.appendChild(element('span', '', '第 ' + (slot.ordinal + 1) + ' 张 · 尝试 ' + slot.attempt + ' 次'));
+    meta.appendChild(element('span', '', '最高 ' + aiImageSuiteCost(slot.maximumCostCents)));
+    row.appendChild(meta);
+    renderAiImageSuiteOutput(row, slot);
+    var actions = element('div', 'ss-erp-source-workbench-output-actions');
+    if (slot.allowedActions.includes('RETRY_SLOT')) {
+      var retryState = aiImageSuiteInteractionState(
+        rootContainer,
+        aiImageSuiteInteractionKey(projection),
+      );
+      var retryKey = slot.id + ':' + slot.revision + ':' + slot.maximumCostCents;
+      var retryLabel = element('label', 'ss-erp-source-workbench-command-row');
+      var retryConfirm = element('input');
+      retryConfirm.type = 'checkbox';
+      retryConfirm.checked = retryState.retryCostAccepted.has(retryKey);
+      retryConfirm.setAttribute('aria-label', '确认失败槽位追加费用');
+      retryLabel.appendChild(retryConfirm);
+      retryLabel.appendChild(element(
+        'span',
+        '',
+        '确认本次最多增加 ' + aiImageSuiteCost(slot.maximumCostCents),
+      ));
+      row.appendChild(retryLabel);
+      var retry = aiImageSuiteCommandButton(rootContainer, options, {
+        projection: projection,
+        action: 'RETRY_SLOT',
+        slotId: slot.id,
+        costConfirmed: true,
+      }, '重试失败图片');
+      retry.disabled = retry.disabled || !retryConfirm.checked;
+      retryConfirm.addEventListener('change', function (event) {
+        if (!event || event.isTrusted !== true) return;
+        if (retryConfirm.checked) retryState.retryCostAccepted.add(retryKey);
+        else retryState.retryCostAccepted.delete(retryKey);
+        retry.disabled = Boolean(
+          options.aiImageSuiteBusyKey || retryState.pendingKey || !retryConfirm.checked,
+        );
+      });
+      actions.appendChild(retry);
+    }
+    if (slot.allowedActions.includes('REVIEW_SLOT')) {
+      actions.appendChild(aiImageSuiteCommandButton(rootContainer, options, {
+        projection: projection,
+        action: 'REVIEW_SLOT',
+        slotId: slot.id,
+        decision: 'APPROVE',
+      }, '审核通过', 'is-primary'));
+      actions.appendChild(aiImageSuiteCommandButton(rootContainer, options, {
+        projection: projection,
+        action: 'REVIEW_SLOT',
+        slotId: slot.id,
+        decision: 'REJECT',
+      }, '驳回'));
+    }
+    if (slot.allowedActions.includes('APPLY_SLOT')) {
+      actions.appendChild(aiImageSuiteCommandButton(rootContainer, options, {
+        projection: projection,
+        action: 'APPLY_SLOT',
+        slotId: slot.id,
+      }, '追加到 ERP 来源商品', 'is-primary'));
+    }
+    if (actions.children.length) row.appendChild(actions);
+    if (slot.application) {
+      row.appendChild(element(
+        'div',
+        'ss-erp-source-workbench-history-footer',
+        slot.application.state === 'ROLLED_BACK'
+          ? '追加结果已回滚'
+          : '已追加到 ERP 来源商品',
+      ));
+    }
+    container.appendChild(row);
+  }
+
+  function renderAiImageSuite(container, listing, options) {
+    if (!listing || !options
+      || (options.aiImageSuite === undefined
+        && typeof options.onLoadAiImageSuite !== 'function')) {
+      stopAiImageSuitePolling(container);
+      return;
+    }
+    var result = aiImageSuiteResult(options.aiImageSuite);
+    var drawer = element(
+      'details',
+      'ss-erp-source-workbench-drawer ss-erp-source-workbench-create ss-erp-source-workbench-history',
+    );
+    drawer.open = options.aiImageSuiteOpen !== false;
+    drawer.appendChild(element('summary', '', 'AI 主图 / AI 套图'));
+    drawer.addEventListener('toggle', function (event) {
+      if (!event || event.isTrusted !== true
+        || typeof options.onAiImageSuiteOpenChange !== 'function') return;
+      options.onAiImageSuiteOpenChange(drawer.open === true);
+    });
+    if (options.aiImageSuiteLoading === true && !result) {
+      drawer.appendChild(element('div', 'ss-erp-source-workbench-history-state', '正在读取生图计划...'));
+      container.appendChild(drawer);
+      scheduleAiImageSuitePolling(container, listing, options, result);
+      return;
+    }
+    if (options.aiImageSuiteError) {
+      var error = element('div', 'ss-erp-source-workbench-history-state is-error');
+      error.appendChild(element('span', '', String(options.aiImageSuiteError)));
+      var retryLoad = element('button', '', '重新读取');
+      retryLoad.type = 'button';
+      retryLoad.disabled = options.aiImageSuiteLoading === true
+        || typeof options.onLoadAiImageSuite !== 'function';
+      retryLoad.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || retryLoad.disabled) return;
+        retryLoad.disabled = true;
+        var returned;
+        try {
+          returned = options.onLoadAiImageSuite({ reason: 'manual', listing: listing });
+        } catch (loadError) {
+          if (typeof options.onAiImageSuiteError === 'function') {
+            options.onAiImageSuiteError(loadError);
+          }
+          retryLoad.disabled = false;
+          return;
+        }
+        Promise.resolve(returned).catch(function (loadError) {
+          if (typeof options.onAiImageSuiteError === 'function') {
+            options.onAiImageSuiteError(loadError);
+          }
+        }).finally(function () {
+          retryLoad.disabled = options.aiImageSuiteLoading === true;
+        });
+      });
+      error.appendChild(retryLoad);
+      drawer.appendChild(error);
+      container.appendChild(drawer);
+      stopAiImageSuitePolling(container);
+      return;
+    }
+    if (!result) {
+      drawer.appendChild(element('div', 'ss-erp-source-workbench-history-state', '正在读取生图计划...'));
+      container.appendChild(drawer);
+      scheduleAiImageSuitePolling(container, listing, options, result);
+      return;
+    }
+    if (result.state !== 'ready' || !result.projection) {
+      drawer.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-empty',
+        'AI 主图与套图状态暂不可用，请刷新 ERP 工作台后重试。',
+      ));
+      container.appendChild(drawer);
+      stopAiImageSuitePolling(container);
+      return;
+    }
+    var projection = result.projection;
+    var context = projection.context || {};
+    if (context.listingWorkflowId !== listing.id
+      || context.shopId !== listing.shopId
+      || context.draftRevision !== listing.revision
+      || context.draftVersion !== listing.draftVersion) {
+      drawer.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-empty',
+        '生图计划对应的商品版本已变化，请重新读取后操作。',
+      ));
+      container.appendChild(drawer);
+      stopAiImageSuitePolling(container);
+      return;
+    }
+    if (!projection.plan) {
+      drawer.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-empty',
+        '尚无已审核的生图计划。请先在 Web ERP 创建并审核主图/套图计划。',
+      ));
+      drawer.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-empty',
+        '生成结果只会追加到 ERP 来源商品，不会直接写入店铺草稿。',
+      ));
+      container.appendChild(drawer);
+      stopAiImageSuitePolling(container);
+      return;
+    }
+
+    var suite = projection.suite;
+    scheduleAiImageSuitePolling(container, listing, options, result);
+    var slots = suite && Array.isArray(suite.slots) ? suite.slots : [];
+    var primary = slots.find(function (slot) {
+      return /主图/u.test(slot.goal) || /(?:^|:)hero(?:$|:)/u.test(slot.slotKey);
+    }) || slots[0] || null;
+    var succeeded = slots.filter(function (slot) { return slot.status === 'SUCCEEDED'; }).length;
+    var failed = slots.filter(function (slot) { return slot.status === 'FAILED'; }).length;
+    var metrics = element('div', 'ss-erp-source-workbench-metrics');
+    var mainMetric = element('div', 'ss-erp-source-workbench-metric');
+    mainMetric.appendChild(element('span', '', 'AI 主图'));
+    mainMetric.appendChild(element(
+      'b',
+      '',
+      primary ? aiImageSuiteStatusLabel(primary.status) : suite ? '计划内无主图' : '待开始',
+    ));
+    metrics.appendChild(mainMetric);
+    var suiteMetric = element('div', 'ss-erp-source-workbench-metric');
+    suiteMetric.appendChild(element('span', '', 'AI 套图'));
+    suiteMetric.appendChild(element(
+      'b',
+      '',
+      suite
+        ? succeeded + ' / ' + suite.itemCount + (failed ? ' · 失败 ' + failed : '')
+        : '待生成 ' + projection.plan.preview.itemCount + ' 张',
+    ));
+    metrics.appendChild(suiteMetric);
+    var statusMetric = element('div', 'ss-erp-source-workbench-metric');
+    statusMetric.appendChild(element('span', '', '任务状态'));
+    statusMetric.appendChild(element('b', '', aiImageSuiteStatusLabel(suite && suite.status)));
+    metrics.appendChild(statusMetric);
+    drawer.appendChild(metrics);
+
+    var pricing = suite || projection.plan.preview;
+    drawer.appendChild(element(
+      'p',
+      'ss-erp-source-workbench-task',
+      '预计费用 ' + aiImageSuiteCost(pricing.estimatedCostCents)
+        + ' · 最高费用 ' + aiImageSuiteCost(pricing.maximumCostCents),
+    ));
+    var pollingState = aiImageSuitePollingStates.get(container);
+    if (pollingState && pollingState.exhausted && aiImageSuiteNeedsPolling(result)) {
+      var refreshStatus = element('button', '', '刷新任务状态');
+      refreshStatus.type = 'button';
+      refreshStatus.disabled = options.aiImageSuiteLoading === true;
+      refreshStatus.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || refreshStatus.disabled) return;
+        refreshStatus.disabled = true;
+        refreshExhaustedAiImageSuitePolling(container, listing, options, result);
+      });
+      drawer.appendChild(refreshStatus);
+    }
+    var state = aiImageSuiteInteractionState(
+      container,
+      aiImageSuiteInteractionKey(projection),
+    );
+    var suiteActions = element('div', 'ss-erp-source-workbench-command-actions');
+    if (!suite && projection.plan.allowedActions.includes('START')) {
+      var startConfirmLabel = element('label', 'ss-erp-source-workbench-command-row');
+      var startConfirm = element('input');
+      startConfirm.type = 'checkbox';
+      startConfirm.checked = state.startCostAccepted;
+      startConfirm.setAttribute('aria-label', '确认 AI 套图最高费用');
+      startConfirmLabel.appendChild(startConfirm);
+      startConfirmLabel.appendChild(element(
+        'span',
+        '',
+        '我确认本次最高费用 ' + aiImageSuiteCost(projection.plan.preview.maximumCostCents),
+      ));
+      drawer.appendChild(startConfirmLabel);
+      var start = aiImageSuiteCommandButton(container, options, {
+        projection: projection,
+        action: 'START',
+        costConfirmed: true,
+      }, '开始生成套图', 'ss-erp-source-workbench-create-button');
+      start.disabled = start.disabled || !startConfirm.checked;
+      startConfirm.addEventListener('change', function (event) {
+        if (!event || event.isTrusted !== true) return;
+        state.startCostAccepted = startConfirm.checked === true;
+        start.disabled = Boolean(
+          options.aiImageSuiteBusyKey || state.pendingKey || !state.startCostAccepted,
+        );
+      });
+      suiteActions.appendChild(start);
+    }
+    if (suite && suite.allowedActions.includes('CONTINUE')) {
+      suiteActions.appendChild(aiImageSuiteCommandButton(container, options, {
+        projection: projection,
+        action: 'CONTINUE',
+      }, '继续生成', 'is-primary'));
+    }
+    if (suite && suite.allowedActions.includes('CANCEL')) {
+      suiteActions.appendChild(aiImageSuiteCommandButton(container, options, {
+        projection: projection,
+        action: 'CANCEL',
+      }, '取消任务'));
+    }
+    if (suiteActions.children.length) drawer.appendChild(suiteActions);
+
+    if (slots.length) {
+      var slotList = element('div', 'ss-erp-source-workbench-history-list');
+      slots.slice().sort(function (left, right) {
+        return left.ordinal - right.ordinal;
+      }).forEach(function (slot) {
+        renderAiImageSuiteSlot(slotList, container, projection, slot, options);
+      });
+      drawer.appendChild(slotList);
+    } else if (suite) {
+      drawer.appendChild(element('div', 'ss-erp-source-workbench-history-state', '正在准备图片槽位...'));
+    }
+    drawer.appendChild(element(
+      'p',
+      'ss-erp-source-workbench-empty',
+      '生成结果只会追加到 ERP 来源商品，不会直接写入店铺草稿。',
+    ));
+    container.appendChild(drawer);
+  }
+
   function renderStandaloneMediaLaunch(container, listing, options) {
     var launch = options && options.launch;
     var context = launch && launch.context;
@@ -590,6 +1279,7 @@
     renderListingSelector(container, listings, options);
 
     if (!listing) {
+      stopAiImageSuitePolling(container);
       container.appendChild(element(
         'p',
         'ss-erp-source-workbench-empty',
@@ -625,6 +1315,7 @@
     }
     renderMediaLaunchStatus(container, listing, options);
     renderStandaloneMediaLaunch(container, listing, options);
+    renderAiImageSuite(container, listing, options);
     renderTranslationLaunch(container, listing, options);
     renderMediaTask(container, status, mediaItems, options);
     renderMediaHistory(container, listing, options);
@@ -634,11 +1325,13 @@
     if (!container) return;
     clear(container);
     if (!result) {
+      stopAiImageSuitePolling(container);
       container.hidden = true;
       return;
     }
     container.hidden = false;
     if (result.state !== 'ready' || !result.status) {
+      stopAiImageSuitePolling(container);
       renderWorkbenchAvailability(container, result);
       return;
     }

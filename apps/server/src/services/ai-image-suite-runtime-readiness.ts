@@ -1,4 +1,5 @@
-export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_KEY = 'health:ai-image-suite-generation-worker:v1';
+// v2 workers include the sandbox-verified paid execution bridge and DB lease heartbeat.
+export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_KEY = 'health:ai-image-suite-generation-worker:v2';
 export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_TTL_MS = 30_000;
 export const AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
 export const AI_IMAGE_SUITE_RUNTIME_PROBE_TIMEOUT_MS = 1_000;

@@ -212,7 +212,6 @@ const GROUP_ORDER = [
 
 const VISIBLE_CONFIG_GROUPS = new Set(GROUP_ORDER);
 const HIDDEN_CONFIG_KEYS = new Set([
-  'ai_media_workflow_v2_rollout_policy',
   'source_workflow_rollout_policy',
   'source_ozon_publisher_browser_one_click_stage',
   'source_ozon_publisher_collect_publish_stage',
@@ -2216,6 +2215,7 @@ const AI_IMAGE_TRANSLATION_PROVIDER_KEYS = [
 
 const AI_LIMIT_KEYS = [
   'ai_daily_budget_cents',
+  'ai_image_generation_cost_cents',
   'ai_user_daily_category_translation_limit',
   'ai_user_daily_product_generation_limit',
   'ai_user_daily_image_generation_limit',
@@ -2777,6 +2777,12 @@ function AiSettingsPanel({
                   editing={editing}
                   setValue={setValue}
                   placeholder="20"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_generation_cost_cents}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0"
                 />
                 <ConfigInput
                   cfg={configs.ai_image_translation_cost_cents}

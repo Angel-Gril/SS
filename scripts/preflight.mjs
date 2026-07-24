@@ -98,6 +98,11 @@ const steps = [
     args: ['scripts/ai-media-dark-deploy.test.mjs'],
   },
   {
+    name: 'AI media suite post-migration DB guard contract',
+    command: 'node',
+    args: ['scripts/ai-media-suite-post-migration-guard.test.mjs'],
+  },
+  {
     name: 'admin AI cost reconciliation contract',
     command: 'node',
     args: ['scripts/web-admin-ai-cost-reconciliation.test.mjs'],

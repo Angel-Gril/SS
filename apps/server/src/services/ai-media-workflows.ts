@@ -11,6 +11,11 @@ import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
   AI_MEDIA_INPAINT_TEMPLATE_KEY,
 } from './ai-prompt-templates.js';
+import {
+  AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+  type AiImageProviderRuntimeContract,
+} from './ai-image-provider-runtime-contract.js';
+import { AI_GLOBAL_COST_BUDGET_MAX_MINOR } from './ai-cost-budget.js';
 
 export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
 export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
@@ -121,6 +126,12 @@ export interface CreateAiMediaWorkflowInput {
   count: number;
   width: number;
   height: number;
+  dailyLimit: number;
+  provider?: string;
+  model?: string;
+  estimatedCostCents?: number;
+  globalDailyBudgetCents?: number;
+  providerRuntimeContract?: AiImageProviderRuntimeContract | null;
   idempotencyKey: string;
   context: AiMediaWorkflowContext;
 }
@@ -138,6 +149,7 @@ export interface CreateAiImageTranslationWorkflowInput {
   model: string;
   dailyLimit: number;
   estimatedCostCents: number;
+  globalDailyBudgetCents?: number;
   prompt?: string | null;
   resolvedPrompt?: string | null;
   resolvedNegativePrompt?: string | null;
@@ -154,6 +166,8 @@ export interface CreateAiImageEditWorkflowInput {
   actorUserId: string;
   operation: 'FULL_EDIT' | 'INPAINT';
   sourceAssetId: string;
+  width: number;
+  height: number;
   maskAssetId?: string;
   maskSemantics?: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
   prompt: string;
@@ -165,8 +179,149 @@ export interface CreateAiImageEditWorkflowInput {
   templateChecksum: string;
   templateSnapshot: Record<string, unknown>;
   dailyLimit: number;
+  provider?: string;
+  model?: string;
+  estimatedCostCents?: number;
+  globalDailyBudgetCents?: number;
+  providerRuntimeContract?: AiImageProviderRuntimeContract | null;
   idempotencyKey: string;
   context: AiMediaWorkflowContext;
+}
+
+type AiMediaProviderExecutionInput = Pick<
+  CreateAiMediaWorkflowInput,
+  'provider' | 'model' | 'estimatedCostCents' | 'globalDailyBudgetCents' | 'providerRuntimeContract'
+>;
+
+export interface AiMediaProviderExecutionConfig {
+  provider: string;
+  model: string;
+  estimatedCostCents: number;
+  globalDailyBudgetCents: number;
+  providerRuntimeContract: AiImageProviderRuntimeContract | null;
+  paid: boolean;
+}
+
+function providerRuntimeError(message: string): never {
+  throw new AiMediaWorkflowError('PROVIDER_NOT_READY', message);
+}
+
+function positiveRuntimeInteger(value: unknown, label: string) {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    providerRuntimeError(`${label} is invalid`);
+  }
+  return normalized;
+}
+
+function normalizeProviderRuntimeContract(
+  value: unknown,
+  expected: {
+    provider: string;
+    model: string;
+    estimatedCostCents: number;
+    count: number;
+    width?: number;
+    height?: number;
+  },
+): AiImageProviderRuntimeContract {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    providerRuntimeError('A frozen Provider runtime contract is required before paid dispatch');
+  }
+  const runtime = value as Record<string, unknown>;
+  const provider = String(runtime.provider || '').trim();
+  const model = String(runtime.model || '').trim();
+  const baseUrlSha256 = String(runtime.baseUrlSha256 || '');
+  const unitCostCents = positiveRuntimeInteger(runtime.unitCostCents, 'Frozen Provider unit cost');
+  const imageCount = positiveRuntimeInteger(runtime.imageCount, 'Frozen Provider image count');
+  const width = positiveRuntimeInteger(runtime.width, 'Frozen Provider image width');
+  const height = positiveRuntimeInteger(runtime.height, 'Frozen Provider image height');
+  const maximumCostCents = positiveRuntimeInteger(
+    runtime.maximumCostCents,
+    'Frozen Provider maximum cost',
+  );
+  if (
+    runtime.contractVersion !== AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
+    || provider.length > 500
+    || model.length > 500
+    || provider !== expected.provider
+    || model !== expected.model
+    || !/^[a-f0-9]{64}$/u.test(baseUrlSha256)
+    || imageCount !== expected.count
+    || (expected.width !== undefined && width !== expected.width)
+    || (expected.height !== undefined && height !== expected.height)
+    || !Number.isSafeInteger(unitCostCents * imageCount)
+    || maximumCostCents !== unitCostCents * imageCount
+    || maximumCostCents !== expected.estimatedCostCents
+  ) {
+    providerRuntimeError('Frozen Provider runtime contract does not match the requested operation');
+  }
+  return {
+    contractVersion: AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+    provider,
+    model,
+    baseUrlSha256,
+    unitCostCents,
+    imageCount,
+    width,
+    height,
+    maximumCostCents,
+  };
+}
+
+export function normalizeAiMediaProviderExecutionConfig(
+  input: AiMediaProviderExecutionInput,
+  defaults: { provider: string; model: string },
+  request: { count: number; width?: number; height?: number },
+): AiMediaProviderExecutionConfig {
+  const provider = String(input.provider ?? defaults.provider).trim();
+  const model = String(input.model ?? defaults.model).trim();
+  const estimatedCostCents = Number(input.estimatedCostCents ?? 0);
+  const globalDailyBudgetCents = Number(input.globalDailyBudgetCents ?? 0);
+  if (!provider || !model) providerRuntimeError('AI image Provider configuration is incomplete');
+  if (!Number.isSafeInteger(estimatedCostCents) || estimatedCostCents < 0) {
+    providerRuntimeError('AI image Provider cost estimate is invalid');
+  }
+  if (estimatedCostCents > AI_GLOBAL_COST_BUDGET_MAX_MINOR) {
+    providerRuntimeError('AI image Provider cost estimate exceeds the supported safety bound');
+  }
+  if (!Number.isSafeInteger(globalDailyBudgetCents)
+    || globalDailyBudgetCents < 0
+    || globalDailyBudgetCents > AI_GLOBAL_COST_BUDGET_MAX_MINOR) {
+    providerRuntimeError('Global daily AI budget is invalid');
+  }
+  const paid = provider !== 'fake';
+  if (!paid) {
+    if (estimatedCostCents !== 0 || input.providerRuntimeContract != null) {
+      providerRuntimeError('The fake AI image Provider must remain zero-cost without a runtime contract');
+    }
+    return {
+      provider,
+      model,
+      estimatedCostCents: 0,
+      globalDailyBudgetCents,
+      providerRuntimeContract: null,
+      paid: false,
+    };
+  }
+  if (estimatedCostCents < 1) {
+    providerRuntimeError('A verified positive task cost is required before paid dispatch');
+  }
+  return {
+    provider,
+    model,
+    estimatedCostCents,
+    globalDailyBudgetCents,
+    providerRuntimeContract: normalizeProviderRuntimeContract(input.providerRuntimeContract, {
+      provider,
+      model,
+      estimatedCostCents,
+      count: request.count,
+      width: request.width,
+      height: request.height,
+    }),
+    paid: true,
+  };
 }
 
 export function normalizeAiImageTranslationOptions(input: Pick<
@@ -279,6 +434,7 @@ export interface AiMediaWorkflowRepository {
     expectedRevision: number;
     idempotencyKey: string;
     dailyLimit?: number;
+    globalDailyBudgetCents?: number;
   }): Promise<{ workflow: AiMediaWorkflowRecord; jobId: string; replayed: boolean } | null>;
   reviewOwned(input: {
     id: string;
@@ -425,6 +581,10 @@ export function decodeAiMediaWorkflowPriorityCursor(
 
 export function createAiMediaWorkflowFingerprint(input: Omit<CreateAiMediaWorkflowInput, 'actorUserId' | 'idempotencyKey'>) {
   const references = normalizeAiMediaWorkflowReferences(input);
+  const execution = normalizeAiMediaProviderExecutionConfig(input, {
+    provider: AI_MEDIA_WORKFLOW_PROVIDER,
+    model: AI_MEDIA_WORKFLOW_MODEL,
+  }, { count: input.count, width: input.width, height: input.height });
   return aiMediaPayloadHash({
     operation: 'IMAGE_TO_IMAGE',
     ownerUserId: input.ownerUserId,
@@ -436,6 +596,10 @@ export function createAiMediaWorkflowFingerprint(input: Omit<CreateAiMediaWorkfl
     count: input.count,
     width: input.width,
     height: input.height,
+    provider: execution.provider,
+    model: execution.model,
+    estimatedCostCents: execution.estimatedCostCents,
+    providerRuntimeContract: execution.providerRuntimeContract,
     context: input.context,
   });
 }
@@ -469,10 +633,16 @@ export function createAiImageTranslationWorkflowFingerprint(input: Omit<
 export function createAiImageEditWorkflowFingerprint(
   input: Omit<CreateAiImageEditWorkflowInput, 'actorUserId' | 'idempotencyKey'>,
 ) {
+  const execution = normalizeAiMediaProviderExecutionConfig(input, {
+    provider: AI_IMAGE_EDIT_PROVIDER,
+    model: AI_IMAGE_EDIT_MODEL,
+  }, { count: 1, width: input.width, height: input.height });
   return aiMediaPayloadHash({
     operation: input.operation,
     ownerUserId: input.ownerUserId,
     sourceAssetId: input.sourceAssetId,
+    width: input.width,
+    height: input.height,
     maskAssetId: input.maskAssetId || null,
     maskSemantics: input.maskSemantics || null,
     prompt: input.prompt,
@@ -483,6 +653,10 @@ export function createAiImageEditWorkflowFingerprint(
     templateReleaseId: input.templateReleaseId,
     templateChecksum: input.templateChecksum,
     templateSnapshot: input.templateSnapshot,
+    provider: execution.provider,
+    model: execution.model,
+    estimatedCostCents: execution.estimatedCostCents,
+    providerRuntimeContract: execution.providerRuntimeContract,
     context: input.context,
   });
 }
@@ -492,21 +666,49 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
     async createImageToImage(input: CreateAiMediaWorkflowInput) {
       if (!input.prompt.trim()) throw new AiMediaWorkflowError('INVALID_REQUEST', 'Prompt is required');
       if (input.count !== 1) throw new AiMediaWorkflowError('INVALID_REQUEST', 'The first image-to-image slice supports one output');
+      if (!Number.isSafeInteger(input.dailyLimit) || input.dailyLimit < 0) {
+        throw new AiMediaWorkflowError('INVALID_REQUEST', 'AI image generation daily limit is invalid');
+      }
       const references = normalizeAiMediaWorkflowReferences(input);
+      const execution = normalizeAiMediaProviderExecutionConfig(input, {
+        provider: AI_MEDIA_WORKFLOW_PROVIDER,
+        model: AI_MEDIA_WORKFLOW_MODEL,
+      }, { count: input.count, width: input.width, height: input.height });
       try {
-        assertAiMediaCapability({
-          provider: AI_MEDIA_WORKFLOW_PROVIDER,
-          model: AI_MEDIA_WORKFLOW_MODEL,
+        const capability = assertAiMediaCapability({
+          provider: execution.provider,
+          model: execution.model,
           operation: 'IMAGE_TO_IMAGE',
           inputCount: references.length,
         });
+        if (execution.paid && (
+          capability.provider !== execution.provider
+          || capability.model !== execution.model
+          || capability.evidenceLevel !== 'sandbox-verified'
+        )) {
+          throw new AiMediaWorkflowError(
+            'PROVIDER_NOT_READY',
+            'AI image Provider has not passed its exact sandbox capability gate',
+          );
+        }
       } catch (error) {
         if (error instanceof AiMediaCapabilityError) {
-          throw new AiMediaWorkflowError(error.code, error.message);
+          throw new AiMediaWorkflowError(execution.paid ? 'PROVIDER_NOT_READY' : error.code, error.message);
         }
         throw error;
       }
-      const result = await repository.createImageToImage(input);
+      let result;
+      try {
+        result = await repository.createImageToImage(input);
+      } catch (error: any) {
+        if (error?.code === 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED') {
+          throw new AiMediaWorkflowError('AI_IMAGE_GENERATION_QUOTA_EXCEEDED', error.message);
+        }
+        if (error?.code === 'BUDGET_EXCEEDED') {
+          throw new AiMediaWorkflowError('BUDGET_EXCEEDED', error.message);
+        }
+        throw error;
+      }
       if (result.kind === 'conflict') {
         throw new AiMediaWorkflowError('IDEMPOTENCY_KEY_CONFLICT', 'Idempotency key was used for another media workflow');
       }
@@ -525,6 +727,12 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       }
       if (!Number.isSafeInteger(input.estimatedCostCents) || input.estimatedCostCents < 0) {
         throw new AiMediaWorkflowError('INVALID_REQUEST', 'Image translation cost estimate is invalid');
+      }
+      const globalDailyBudgetCents = Number(input.globalDailyBudgetCents ?? 0);
+      if (!Number.isSafeInteger(globalDailyBudgetCents)
+        || globalDailyBudgetCents < 0
+        || globalDailyBudgetCents > AI_GLOBAL_COST_BUDGET_MAX_MINOR) {
+        throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'Global daily AI budget is invalid');
       }
       if (input.provider !== 'fake' && input.estimatedCostCents <= 0) {
         throw new AiMediaWorkflowError(
@@ -568,6 +776,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         if (error?.code === 'STALE_MEDIA_WORKFLOW') {
           throw new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', error.message);
         }
+        if (error?.code === 'BUDGET_EXCEEDED') {
+          throw new AiMediaWorkflowError('BUDGET_EXCEEDED', error.message);
+        }
         throw error;
       }
       if (result.kind === 'conflict') {
@@ -584,6 +795,10 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         : AI_MEDIA_INPAINT_TEMPLATE_KEY;
       if (
         !sourceAssetId
+        || !Number.isSafeInteger(input.width)
+        || input.width < 1
+        || !Number.isSafeInteger(input.height)
+        || input.height < 1
         || !input.prompt.trim()
         || !input.resolvedPrompt.trim()
         || input.templateKey !== expectedTemplateKey
@@ -604,17 +819,31 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       ) {
         throw new AiMediaWorkflowError('INVALID_REQUEST', 'AI image edit mask contract is invalid');
       }
+      const execution = normalizeAiMediaProviderExecutionConfig(input, {
+        provider: AI_IMAGE_EDIT_PROVIDER,
+        model: AI_IMAGE_EDIT_MODEL,
+      }, { count: 1, width: input.width, height: input.height });
       try {
-        assertAiMediaCapability({
-          provider: AI_IMAGE_EDIT_PROVIDER,
-          model: AI_IMAGE_EDIT_MODEL,
+        const capability = assertAiMediaCapability({
+          provider: execution.provider,
+          model: execution.model,
           operation: input.operation,
           inputCount: 1,
           maskCount: input.operation === 'INPAINT' ? 1 : 0,
         });
+        if (execution.paid && (
+          capability.provider !== execution.provider
+          || capability.model !== execution.model
+          || capability.evidenceLevel !== 'sandbox-verified'
+        )) {
+          throw new AiMediaWorkflowError(
+            'PROVIDER_NOT_READY',
+            'AI image Provider has not passed its exact sandbox capability gate',
+          );
+        }
       } catch (error) {
         if (error instanceof AiMediaCapabilityError) {
-          throw new AiMediaWorkflowError(error.code, error.message);
+          throw new AiMediaWorkflowError(execution.paid ? 'PROVIDER_NOT_READY' : error.code, error.message);
         }
         throw error;
       }
@@ -631,6 +860,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       } catch (error: any) {
         if (error?.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED') {
           throw new AiMediaWorkflowError('AI_IMAGE_EDIT_QUOTA_EXCEEDED', error.message);
+        }
+        if (error?.code === 'BUDGET_EXCEEDED') {
+          throw new AiMediaWorkflowError('BUDGET_EXCEEDED', error.message);
         }
         throw error;
       }
@@ -725,6 +957,15 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         }
         if (error?.code === 'AI_IMAGE_EDIT_QUOTA_UNAVAILABLE') {
           throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
+        }
+        if (error?.code === 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED') {
+          throw new AiMediaWorkflowError('AI_IMAGE_GENERATION_QUOTA_EXCEEDED', error.message);
+        }
+        if (error?.code === 'AI_IMAGE_GENERATION_QUOTA_UNAVAILABLE') {
+          throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
+        }
+        if (error?.code === 'BUDGET_EXCEEDED') {
+          throw new AiMediaWorkflowError('BUDGET_EXCEEDED', error.message);
         }
         if (error?.code === 'STALE_MEDIA_WORKFLOW') {
           throw new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', error.message);

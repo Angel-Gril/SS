@@ -99,10 +99,12 @@ function suite() {
     previewHash: 'd'.repeat(64),
     provider: AI_IMAGE_SUITE_PROVIDER,
     model: AI_IMAGE_SUITE_MODEL,
+    providerConfigHash: 'c'.repeat(64),
     pricingVersion: 'provider-free-zero/v1',
     itemCount: 1,
     estimatedCostCents: 0,
     maximumCostCents: 0,
+    concurrencyLimit: 2,
     slots: [{
       id: 'suite-slot-1',
       suiteId: 'suite-1',

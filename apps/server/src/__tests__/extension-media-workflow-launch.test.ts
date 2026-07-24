@@ -115,6 +115,7 @@ function setup(options: {
       model: options.model || 'fake-translation-v1',
       dailyLimit: 5,
       estimatedCostCents: 0,
+      globalDailyBudgetCents: 100,
     })),
     getStorageReadiness: vi.fn(async () => ({
       ready: options.storageReady !== false,
@@ -160,7 +161,7 @@ function v2Existing(status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED', overrides: Recor
     ownerUserId: 'owner-1',
     operation: 'IMAGE_TO_IMAGE',
     provider: 'fake',
-    model: null,
+    model: 'fake-image-to-image-v1',
     status,
     revision: 2,
     contextType: 'listing-draft',
@@ -178,9 +179,61 @@ function v2Existing(status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED', overrides: Recor
   };
 }
 
+const paidStandaloneReadiness = {
+  enabled: true,
+  ready: true,
+  reasonCode: 'READY',
+  reason: 'paid provider ready',
+  provider: 'openai-images',
+  model: 'gpt-image-1',
+  baseUrl: 'https://api.openai.com/v1',
+  costPerImageCents: 9,
+  globalDailyBudgetCents: 1_000,
+  evidenceLevel: 'sandbox-verified',
+} as const;
+
+const paidImageToImageRuntimeContract = {
+  contractVersion: 'ai-image-provider-runtime/v1',
+  provider: 'openai-images',
+  model: 'gpt-image-1',
+  baseUrlSha256: 'd9617135d6fdd0a2cde722d637a1dfcc3da37515708b3ea5d66ae607c8ac785e',
+  unitCostCents: 9,
+  imageCount: 1,
+  width: 1024,
+  height: 1024,
+  maximumCostCents: 9,
+} as const;
+
+function paidV2Existing(
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED',
+  overrides: Record<string, unknown> = {},
+) {
+  return v2Existing(status, {
+    provider: 'openai-images',
+    model: 'gpt-image-1',
+    estimatedCostCents: 9,
+    providerRuntimeContract: paidImageToImageRuntimeContract,
+    ...overrides,
+  });
+}
+
 function setupV2(options: {
   production?: boolean;
   ready?: boolean;
+  readiness?: {
+    enabled: boolean;
+    ready: boolean;
+    reasonCode: string;
+    reason: string;
+    testOnly?: boolean;
+    operation?: string;
+    provider?: string;
+    model?: string;
+    baseUrl?: string;
+    costPerImageCents?: number;
+    globalDailyBudgetCents?: number;
+    evidenceLevel?: string;
+  };
   existing?: any;
   createError?: Error;
   replayed?: boolean;
@@ -208,6 +261,8 @@ function setupV2(options: {
   });
   const internalizeSource = vi.fn(async (source: { sourceMediaKey: string }) => ({
     id: source.sourceMediaKey === 'media-main-1' ? 'source-asset-1' : 'source-asset-2',
+    width: source.sourceMediaKey === 'media-main-1' ? 640 : 800,
+    height: source.sourceMediaKey === 'media-main-1' ? 480 : 600,
   }));
   const resolvePrompt = vi.fn(async ({ templateKey }: { templateKey: string }) => ({
     templateKey,
@@ -225,7 +280,7 @@ function setupV2(options: {
     sourceMediaKeys: ['media-main-1', 'media-detail-1'],
   }));
   const loadExisting = vi.fn(async () => options.existing || null);
-  const getReadiness = vi.fn(async (operation: string) => ({
+  const getReadiness = vi.fn(async (operation: string) => options.readiness || ({
     enabled: options.ready !== false,
     ready: options.ready !== false,
     reasonCode: options.ready !== false ? 'READY' : 'AI_MEDIA_OPERATION_DISABLED',
@@ -348,6 +403,7 @@ describe('extension media translation launch', () => {
       ownerUserId: 'owner-1', actorUserId: 'owner-1', sourceAssetId: 'source-asset-1',
       sourceLanguage: 'zh', targetLanguage: 'ru', terminologies: [], imageSegment: false,
       provider: 'fake', model: 'fake-translation-v1', estimatedCostCents: 0,
+      globalDailyBudgetCents: 100,
       idempotencyKey: 'extension-translation-intent-1',
       templateKey: 'image-translation.base', templateReleaseId: 'release-1',
       context: { type: 'listing-draft', id: 'listing-1', revision: 11, draftVersion: 7 },
@@ -646,6 +702,97 @@ describe('extension media translation launch', () => {
 });
 
 describe('extension standalone media launch', () => {
+  it('dispatches a production paid image-to-image task with a frozen server-only Provider quote', async () => {
+    const state = setupV2({ production: true, readiness: paidStandaloneReadiness });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+      workflowId: 'media-created-1', action: 'CREATE_WORKFLOW', operation: 'IMAGE_TO_IMAGE',
+      status: 'QUEUED', revision: 1, replayed: false,
+    });
+    expect(state.createImageToImage).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      estimatedCostCents: 9,
+      globalDailyBudgetCents: 1_000,
+      providerRuntimeContract: {
+        contractVersion: 'ai-image-provider-runtime/v1',
+        provider: 'openai-images',
+        model: 'gpt-image-1',
+        baseUrlSha256: 'd9617135d6fdd0a2cde722d637a1dfcc3da37515708b3ea5d66ae607c8ac785e',
+        unitCostCents: 9,
+        imageCount: 1,
+        width: 1024,
+        height: 1024,
+        maximumCostCents: 9,
+      },
+      count: 1,
+      width: 1024,
+      height: 1024,
+    }));
+    expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-1');
+  });
+
+  it('freezes a paid full-image edit quote against the internalized source dimensions', async () => {
+    const state = setupV2({ production: true, readiness: paidStandaloneReadiness });
+
+    await expect(state.launch(input({ command: v2Command('FULL_EDIT') }))).resolves.toMatchObject({
+      action: 'CREATE_WORKFLOW', operation: 'FULL_EDIT', status: 'QUEUED', replayed: false,
+    });
+    expect(state.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'FULL_EDIT',
+      sourceAssetId: 'source-asset-1',
+      width: 640,
+      height: 480,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      estimatedCostCents: 9,
+      globalDailyBudgetCents: 1_000,
+      providerRuntimeContract: expect.objectContaining({
+        provider: 'openai-images',
+        model: 'gpt-image-1',
+        unitCostCents: 9,
+        imageCount: 1,
+        width: 640,
+        height: 480,
+        maximumCostCents: 9,
+      }),
+    }));
+    expect(state.enqueueEdit).toHaveBeenCalledWith('edit-job-1');
+  });
+
+  it.each([
+    ['zero width', { id: 'source-asset-1', width: 0, height: 480 }],
+    ['fractional height', { id: 'source-asset-1', width: 640, height: 479.5 }],
+  ])('rejects an internalized source with %s before workflow creation', async (_label, source) => {
+    const state = setupV2();
+    state.internalizeSource.mockResolvedValue(source);
+
+    await expect(state.launch(input({ command: v2Command('FULL_EDIT') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_CREATE_CONTEXT_STALE' }),
+    );
+    expect(state.createImageEdit).not.toHaveBeenCalled();
+    expect(state.enqueueEdit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['test-only marker', { testOnly: true }],
+    ['zero unit cost', { costPerImageCents: 0 }],
+    ['missing global budget', { globalDailyBudgetCents: undefined }],
+    ['unverified evidence', { evidenceLevel: 'adapter-characterized' }],
+  ])('rejects paid readiness with an invalid %s before source internalization', async (_label, change) => {
+    const state = setupV2({
+      readiness: { ...paidStandaloneReadiness, ...change },
+      production: true,
+    });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_PROVIDER_NOT_ALLOWED' }),
+    );
+    expect(state.loadContext).not.toHaveBeenCalled();
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageToImage).not.toHaveBeenCalled();
+  });
+
   it('creates one image-to-image workflow from one to four server-internalized sources', async () => {
     const state = setupV2();
     await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
@@ -660,7 +807,7 @@ describe('extension standalone media launch', () => {
       ownerUserId: 'owner-1', actorUserId: 'owner-1',
       references: [{ assetId: 'source-asset-1' }, { assetId: 'source-asset-2' }],
       prompt: 'Keep the product identity and improve the background.', negativePrompt: null,
-      count: 1, width: 1024, height: 1024,
+      count: 1, width: 1024, height: 1024, dailyLimit: 4,
       idempotencyKey: 'extension-media-workflow:image_to_image-1',
       context: { type: 'listing-draft', id: 'listing-1', revision: 11, draftVersion: 7 },
     });
@@ -747,6 +894,7 @@ describe('extension standalone media launch', () => {
         ownerUserId: 'owner-1',
         operation: 'IMAGE_TO_IMAGE',
         provider: 'fake',
+        model: 'fake-image-to-image-v1',
         status,
         revision: 2,
         contextType: 'listing-draft',
@@ -797,6 +945,60 @@ describe('extension standalone media launch', () => {
       }
     },
   );
+
+  it('re-enqueues an exact paid workflow only after its frozen Provider quote matches readiness', async () => {
+    const existing = paidV2Existing('QUEUED');
+    const state = setupV2({ existing, readiness: paidStandaloneReadiness, production: true });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).resolves.toEqual({
+      workflowId: existing.id,
+      action: 'CREATE_WORKFLOW',
+      operation: 'IMAGE_TO_IMAGE',
+      status: 'QUEUED',
+      revision: 2,
+      replayed: true,
+    });
+    expect(state.getReadiness).toHaveBeenCalledWith('IMAGE_TO_IMAGE');
+    expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-existing-1');
+    expect(state.createImageToImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['price', { costPerImageCents: 10 }],
+    ['endpoint', { baseUrl: 'https://images.example.com/v1' }],
+  ])('does not re-enqueue a paid workflow after its frozen %s changes', async (_label, change) => {
+    const state = setupV2({
+      existing: paidV2Existing('QUEUED'),
+      readiness: { ...paidStandaloneReadiness, ...change },
+      production: true,
+    });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_PROVIDER_CONFIG_CHANGED' }),
+    );
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+    expect(state.markEnqueueFailed).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enqueue a paid workflow after Provider authorization is revoked', async () => {
+    const state = setupV2({
+      existing: paidV2Existing('QUEUED'),
+      readiness: {
+        ...paidStandaloneReadiness,
+        enabled: false,
+        ready: false,
+        reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+        reason: 'disabled by administrator',
+      },
+      production: true,
+    });
+
+    await expect(state.launch(input({ command: v2Command('IMAGE_TO_IMAGE') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_CREATE_DISABLED' }),
+    );
+    expect(state.enqueueGeneration).not.toHaveBeenCalled();
+    expect(state.markEnqueueFailed).not.toHaveBeenCalled();
+  });
 
   it('classifies a v2 existing-workflow lookup outage before any create side effect', async () => {
     const state = setupV2();

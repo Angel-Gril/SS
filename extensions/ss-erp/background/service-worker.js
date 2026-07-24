@@ -58,6 +58,10 @@ const SS_ERP_SOURCE_WORKBENCH_MEDIA_HISTORY_MESSAGE =
   'ss-erp:source-listing-workbench-media-history';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-media-command';
+const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE =
+  'ss-erp:source-listing-workbench-ai-image-suite';
+const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE =
+  'ss-erp:source-listing-workbench-ai-image-suite-command';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-prepare';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_READ_MESSAGE =
@@ -993,6 +997,113 @@ function currentSourceListingContext(result, requestedListingWorkflowId) {
     revision: item.revision,
     draftVersion: item.draftVersion,
   };
+}
+
+async function loadAuthoritativeSourceAiImageSuiteProjection(message) {
+  const sourceProductId = sourceWorkflowHandoffText(message?.sourceProductId, 200);
+  const platform = sourceWorkflowPlatform(message?.platform);
+  const requestedListingWorkflowId = sourceWorkflowHandoffText(
+    message?.listingWorkflowId,
+    200,
+  );
+  const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+  if (!handoff || !sourceProductId || !platform || !requestedListingWorkflowId
+    || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+    throw new Error('ERP AI 主图/套图上下文无效，请刷新后重试');
+  }
+  const client = getSourceListingWorkflowClient();
+  // The content script supplies only page identity. Re-read every mutable authority layer.
+  const current = await client.getStatus({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, requestedListingWorkflowId);
+  if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+  const result = await client.getAiImageSuite({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+    shopId: listing.shopId,
+    listingWorkflowId: listing.listingWorkflowId,
+    draftRevision: listing.revision,
+    draftVersion: listing.draftVersion,
+  });
+  if (!result || result.state !== 'ready' || !result.projection) {
+    throw new Error('ERP AI 主图/套图状态暂不可用');
+  }
+  return { handoff, client, listing, result };
+}
+
+async function executeAuthoritativeSourceAiImageSuiteCommand(message) {
+  const allowedKeys = new Set([
+    'type', 'sourceProductId', 'platform', 'listingWorkflowId',
+    'action', 'slotId', 'decision', 'costConfirmed', 'intentWitness',
+  ]);
+  if (!message || typeof message !== 'object' || Array.isArray(message)
+    || Object.keys(message).some((key) => !allowedKeys.has(key))) {
+    throw new Error('ERP AI 主图/套图请求字段无效');
+  }
+  const action = typeof message.action === 'string' ? message.action : '';
+  if (!['START', 'CONTINUE', 'CANCEL', 'RETRY_SLOT', 'REVIEW_SLOT', 'APPLY_SLOT']
+    .includes(action)) {
+    throw new Error('ERP AI 主图/套图操作无效');
+  }
+  const rawSlotId = message.slotId;
+  const slotId = rawSlotId == null ? null : sourceWorkflowHandoffText(rawSlotId, 200);
+  if (rawSlotId != null && (typeof rawSlotId !== 'string' || slotId !== rawSlotId)) {
+    throw new Error('ERP AI 主图/套图槽位无效');
+  }
+  const decision = message.decision == null ? null : message.decision;
+  if (decision !== null && decision !== 'APPROVE' && decision !== 'REJECT') {
+    throw new Error('ERP AI 主图/套图审核决定无效');
+  }
+  if (message.costConfirmed !== undefined && typeof message.costConfirmed !== 'boolean') {
+    throw new Error('ERP AI 主图/套图费用确认无效');
+  }
+  const costConfirmed = message.costConfirmed === true;
+  const validShape = action === 'START'
+    ? slotId === null && decision === null && costConfirmed
+    : action === 'CONTINUE' || action === 'CANCEL'
+      ? slotId === null && decision === null && !costConfirmed
+      : action === 'RETRY_SLOT'
+        ? Boolean(slotId) && decision === null && costConfirmed
+        : action === 'REVIEW_SLOT'
+          ? Boolean(slotId) && Boolean(decision) && !costConfirmed
+          : Boolean(slotId) && decision === null && !costConfirmed;
+  if (!validShape) throw new Error('ERP AI 主图/套图请求字段无效');
+
+  const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
+  const intentContract = globalThis.SS_ERP_LISTING_WORKFLOW_CLIENT;
+  if (!intentContract
+    || typeof intentContract.createAiImageSuiteIntentWitness !== 'function'
+    || typeof intentContract.matchesAiImageSuiteIntentWitness !== 'function') {
+    throw new Error('ERP AI 主图/套图意图校验不可用');
+  }
+  let expectedIntentWitness;
+  try {
+    expectedIntentWitness = intentContract.createAiImageSuiteIntentWitness({
+      projection: authority.result.projection,
+      action,
+      slotId,
+      decision,
+    });
+  } catch {
+    throw new Error('ERP AI 主图/套图状态已变化，请刷新并重新确认');
+  }
+  if (!intentContract.matchesAiImageSuiteIntentWitness(
+    message.intentWitness,
+    expectedIntentWitness,
+  )) {
+    throw new Error('ERP AI 主图/套图状态已变化，请刷新并重新确认');
+  }
+  const input = {
+    projection: authority.result.projection,
+    action,
+    costConfirmed,
+  };
+  if (slotId) input.slotId = slotId;
+  if (decision) input.decision = decision;
+  const result = await authority.client.executeAiImageSuiteCommand(input);
+  return { handoff: authority.handoff, result };
 }
 
 async function executeSourceMediaCreateWorkflow(input) {
@@ -3428,6 +3539,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       return { handoff, result, launch };
     }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE) {
+    Promise.resolve().then(async () => {
+      const authority = await loadAuthoritativeSourceAiImageSuiteProjection(message);
+      return { handoff: authority.handoff, result: authority.result };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE) {
+    Promise.resolve().then(
+      () => executeAuthoritativeSourceAiImageSuiteCommand(message),
+    ).then((result) => {
       sendResponse({ ok: true, ...result });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

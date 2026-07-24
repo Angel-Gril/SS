@@ -224,6 +224,9 @@ SERVICES_QUIESCED=1
 log "Migrating database"
 run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; timeout --signal=TERM --kill-after=30s '$MIGRATION_TIMEOUT' npx prisma migrate deploy"
 
+log "Verifying AI media suite post-migration database invariants"
+run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; timeout --signal=TERM --kill-after=30s '$MIGRATION_TIMEOUT' node scripts/verify-ai-media-suite-post-migration.mjs"
+
 if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
   log "Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
   run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' SKIP_SERVICE_CHECKS=1 SKIP_PROCESS_ENV_CHECKS=1 SKIP_HTTP_CHECK=1 bash scripts/diagnose-runtime-env.sh"

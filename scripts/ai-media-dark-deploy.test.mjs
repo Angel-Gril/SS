@@ -66,6 +66,7 @@ for (const rows of [
     { key: 'feature_ai_media_inpaint', value: 'false' },
     { key: 'feature_source_listing_web_media', value: 'false' },
     { key: 'feature_source_listing_extension_workbench', value: 'false' },
+    { key: 'feature_source_ozon_publisher_v2', value: 'false' },
     { key: 'ai_image_generation_enabled', value: 'true' },
     { key: 'ai_image_provider', value: 'disabled' },
     { key: 'feature_image_translate', value: 'true' },
@@ -76,7 +77,7 @@ for (const rows of [
   const result = run(rows);
   assert.equal(result.status, 0, `safe AI Media rollout should pass: ${result.stderr}`);
   assert.match(result.stdout, /PASS AI Media rollout is dark/u);
-  assert.match(result.stdout, /master=(?:false|absent); imageToImage=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); extensionWorkbench=(?:false|absent); legacyGeneration=.+; imageTranslation=.+; policy=/u);
+  assert.match(result.stdout, /master=(?:false|absent); imageToImage=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); extensionWorkbench=(?:false|absent); ozonPublisher=(?:false|absent); legacyGeneration=.+; imageTranslation=.+; policy=/u);
 }
 
 for (const rows of [
@@ -94,6 +95,8 @@ for (const rows of [
   [{ key: 'feature_source_listing_web_media', value: 'invalid' }],
   [{ key: 'feature_source_listing_extension_workbench', value: 'true' }],
   [{ key: 'feature_source_listing_extension_workbench', value: 'invalid' }],
+  [{ key: 'feature_source_ozon_publisher_v2', value: 'true' }],
+  [{ key: 'feature_source_ozon_publisher_v2', value: 'invalid' }],
   [
     { key: 'ai_image_generation_enabled', value: 'true' },
     { key: 'ai_image_provider', value: 'custom' },
@@ -320,6 +323,7 @@ for (const key of [
   'feature_ai_media_inpaint',
   'feature_source_listing_web_media',
   'feature_source_listing_extension_workbench',
+  'feature_source_ozon_publisher_v2',
   'ai_image_generation_enabled',
   'ai_image_provider',
   'feature_image_translate',
@@ -335,6 +339,27 @@ for (const key of [
     composeDarkVerifier,
     new RegExp(`['"]${key}['"]`, 'u'),
     `Compose AI Media dark query must fetch ${key}`,
+  );
+}
+
+assert.match(
+  composeDarkVerifier,
+  /ozonPublisher=\$\{result\.ozonPublisher\}/u,
+  'Compose AI Media dark PASS output must report the Ozon publisher state',
+);
+for (const [name, source] of [
+  ['app-dir', verifyAiMediaDark],
+  ['Compose', composeDarkVerifier],
+]) {
+  assert.doesNotMatch(
+    source,
+    /['"]feature_source_ozon_mapping_v2_write['"]/u,
+    `${name} dark gate must not disable the internal Ozon mapping write flag`,
+  );
+  assert.doesNotMatch(
+    source,
+    /['"]feature_source_listing_workflow['"]/u,
+    `${name} dark gate must not disable the source listing workflow master`,
   );
 }
 

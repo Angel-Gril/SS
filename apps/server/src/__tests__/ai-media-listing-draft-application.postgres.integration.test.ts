@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
@@ -19,6 +19,11 @@ const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
 const describePostgres = enabled ? describe : describe.skip;
 const client = enabled ? new PrismaClient({ datasources: { db: { url: databaseUrl } } }) : null;
+const SOURCE_PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=',
+  'base64',
+);
+const SOURCE_PNG_SHA256 = createHash('sha256').update(SOURCE_PNG_BYTES).digest('hex');
 
 function assertIsolatedSchema() {
   const schema = databaseUrl ? new URL(databaseUrl).searchParams.get('schema') || '' : '';
@@ -66,12 +71,13 @@ async function fixture(database: PrismaClient, suffix: string) {
   await database.shop.create({ data: {
     id: shopId, userId: ownerUserId, platform: 'OZON', name: 'H3b shop', apiKeyEncrypted: 'integration-test',
   } });
-  for (const [id, key, sha] of [[sourceA, 'sku-red-a', 'c'], [sourceB, 'sku-red-b', 'd']] as const) {
+  for (const [id, key] of [[sourceA, 'sku-red-a'], [sourceB, 'sku-red-b']] as const) {
     await database.mediaAsset.create({ data: {
       id, ownerUserId, kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: snapshotId,
       sourceMediaKey: key, sourceUrl: `https://source.example/${key}.png`, url: `/uploads/${id}.png`,
-      storageBackend: 'local', storageKey: `${id}.png`, mimeType: 'image/png', sizeBytes: 68,
-      width: 2, height: 2, sha256: sha.repeat(64), metadata: { pixelOrientationNormalized: true },
+      storageBackend: 'local', storageKey: `${id}.png`, mimeType: 'image/png',
+      sizeBytes: SOURCE_PNG_BYTES.length, width: 1, height: 1, sha256: SOURCE_PNG_SHA256,
+      metadata: { pixelOrientationNormalized: true },
     } });
   }
   const listingService = createSourceListingWorkflowService({
@@ -98,6 +104,7 @@ async function reviewedWorkflow(
   const created = await workflowService.createImageToImage({
     ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId, sourceAssetId,
     prompt: `H3b ${label}`, negativePrompt: null, count: 1, width: 2, height: 2,
+    dailyLimit: 0,
     idempotencyKey: `h3b-create-${label}-${data.draft.id}`,
     context: {
       type: 'listing-draft', id: data.draft.id, revision, draftVersion,
@@ -110,6 +117,7 @@ async function reviewedWorkflow(
       images: [{ buffer: Buffer.from(`h3b-generated-${label}`), mimeType: 'image/png' }],
     }),
     uploadBuffer: async () => ({ url: `/uploads/h3b-${label}.png`, backend: 'local', key: `h3b-${label}.png` }),
+    loadInputBuffer: async () => SOURCE_PNG_BYTES,
     maxAttempts: 1,
   });
   const succeeded = await workflowService.get(created.workflow.id, data.ownerUserId);
@@ -135,6 +143,7 @@ async function reviewedCollectWorkflow(
   const created = await workflowService.createImageToImage({
     ownerUserId: data.ownerUserId, actorUserId: data.ownerUserId, sourceAssetId: data.sourceA,
     prompt: `H3b collect ${label}`, negativePrompt: null, count: 1, width: 2, height: 2,
+    dailyLimit: 0,
     idempotencyKey: `h3b-collect-create-${label}-${data.draft.id}`,
     context: { type: 'collect', id: data.goodsId },
   });
@@ -146,6 +155,7 @@ async function reviewedCollectWorkflow(
     uploadBuffer: async () => ({
       url: `/uploads/h3b-collect-${label}.png`, backend: 'local', key: `h3b-collect-${label}.png`,
     }),
+    loadInputBuffer: async () => SOURCE_PNG_BYTES,
     maxAttempts: 1,
   });
   const succeeded = await workflowService.get(created.workflow.id, data.ownerUserId);

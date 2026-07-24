@@ -17,6 +17,8 @@ const workflow: AiMediaWorkflowRecord = {
   inputs: [{ id: 'input-1', assetId: 'asset-1', role: 'REFERENCE', ordinal: 0, assetUrl: '/images/source.png', mimeType: 'image/png', asset: { storageKey: 'secret-key' } }],
   jobs: [{
     id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', status: 'SUCCEEDED',
+    operation: 'IMAGE_TO_IMAGE', provider: 'fake', model: 'fake-image-to-image-v1',
+    requestedImageCount: 1, width: 1024, height: 1024, estimatedCostCents: 0,
     prompt: 'Keep product', costReservation: { status: 'RELEASED', maximumCostMinor: 99 },
     assets: [
       { id: 'output-1', kind: 'AI_GENERATED', url: '/output.png', storageKey: 'secret-output-key', storageBackend: 'oss' },
@@ -75,9 +77,23 @@ async function build(
       priorityNextCursor: null, nextCursor: null,
     })),
     listPriority: vi.fn(async (): Promise<any> => ({ items: [workflow], nextCursor: null })),
-    get: vi.fn(async (_id: string, owner: string) => {
+    get: vi.fn(async (_id: string, owner: string): Promise<AiMediaWorkflowRecord> => {
       if (owner !== 'owner-1') throw new AiMediaWorkflowError('NOT_FOUND', 'not found');
-      return { ...workflow, operation: existingWorkflowOperation };
+      const model = existingWorkflowOperation === 'IMAGE_TO_IMAGE'
+        ? 'fake-image-to-image-v1'
+        : existingWorkflowOperation === 'IMAGE_TRANSLATE'
+          ? 'fake-image-translation-v1'
+          : 'fake-image-edit-v1';
+      return {
+        ...workflow,
+        operation: existingWorkflowOperation,
+        jobs: (workflow.jobs || []).map((job) => ({
+          ...job,
+          operation: existingWorkflowOperation,
+          provider: 'fake',
+          model,
+        })),
+      };
     }),
     cancel: vi.fn(async () => ({ ...workflow, status: 'CANCELLED' as const })),
     retry: vi.fn(async () => ({ workflow, jobId: 'job-2', replayed: false })),
@@ -211,6 +227,11 @@ async function build(
       fullEditEnabled,
       inpaintEnabled,
       dailyLimit: editDailyLimit,
+      provider: 'fake',
+      model: 'fake-image-edit-v1',
+      baseUrl: '',
+      estimatedCostCents: 0,
+      globalDailyBudgetCents: 0,
     }),
     checkEditMaskRequestRate: async () => editMaskRateAllowed
       ? ({ allowed: true })
@@ -225,10 +246,11 @@ async function build(
         ? 'AI image edit storage is ready'
         : 'AI image edit requires owned local or OSS storage',
     }),
+    getOwnedAssetDimensions: async () => ({ width: 1000, height: 1000 }),
     getTranslationSettings: async () => ({
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
-      dailyLimit: 20, estimatedCostCents: 0,
+      dailyLimit: 20, estimatedCostCents: 0, globalDailyBudgetCents: 100,
     }),
     resolveTranslationPrompt: async () => ({
       templateKey: 'image-translation.base',
@@ -597,6 +619,7 @@ describe('AI media workflow routes', () => {
     expect(response.statusCode).toBe(202);
     expect(mediaWorkflowService.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'INPAINT', sourceAssetId: 'asset-1', maskAssetId: 'mask-asset-1',
+      width: 1000, height: 1000,
       templateKey: 'inpaint.base', templateReleaseId: 'edit-release-1',
       resolvedPrompt: 'Frozen edit prompt', dailyLimit: 5,
     }));
@@ -978,6 +1001,23 @@ describe('AI media workflow routes', () => {
     });
   });
 
+  it('keeps characterized OpenAI input operations dark until exact sandbox evidence is promoted', () => {
+    expect(resolveAiImageToImageReadiness({
+      enabled: true,
+      workflowEnabled: true,
+      production: true,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      estimatedCostCents: 7,
+      storageReadiness: { ready: true, backend: 'oss', reason: 'ready' },
+    })).toMatchObject({
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: expect.stringMatching(/sandbox/u),
+    });
+  });
+
   it('does not review or apply historical fake workflow candidates in production', async () => {
     const { app, repository, mediaWorkflowService } = await build(
       true,
@@ -1056,6 +1096,7 @@ describe('AI media workflow routes', () => {
       ownerUserId: 'owner-1', sourceAssetId: 'asset-1', sourceLanguage: 'zh', targetLanguage: 'ru',
       domainHint: expect.stringContaining('Frozen translation domain policy'),
       terminologies: [{ src: 'piano black', tgt: 'glossy black' }], provider: 'fake',
+      globalDailyBudgetCents: 100,
       templateKey: 'image-translation.base', templateReleaseId: 'translation-release-1',
     }));
     expect(enqueueTranslation).toHaveBeenCalledWith('job-translation-1');
@@ -1252,6 +1293,11 @@ describe('AI media workflow routes', () => {
       ...workflow,
       operation: 'FULL_EDIT' as any,
       status: 'FAILED',
+      jobs: (workflow.jobs || []).map((job) => ({
+        ...job,
+        operation: 'FULL_EDIT',
+        model: 'fake-image-edit-v1',
+      })),
     });
     mediaWorkflowService.retry.mockRejectedValueOnce(
       new AiMediaWorkflowError('AI_IMAGE_EDIT_QUOTA_EXCEEDED', 'quota exceeded'),
@@ -1277,6 +1323,11 @@ describe('AI media workflow routes', () => {
       operation: 'FULL_EDIT' as any,
       status: 'FAILED' as const,
       inputs: [{ assetId: 'old-source', role: 'REFERENCE', ordinal: 0 }],
+      jobs: (workflow.jobs || []).map((job) => ({
+        ...job,
+        operation: 'FULL_EDIT',
+        model: 'fake-image-edit-v1',
+      })),
     };
     mediaWorkflowService.get.mockResolvedValueOnce(failed);
     mediaWorkflowService.retry.mockResolvedValueOnce({

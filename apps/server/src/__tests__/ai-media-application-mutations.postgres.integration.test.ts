@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
@@ -15,6 +15,11 @@ const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
 const describePostgres = enabled ? describe : describe.skip;
 const client = enabled ? new PrismaClient({ datasources: { db: { url: databaseUrl } } }) : null;
+const SOURCE_PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=',
+  'base64',
+);
+const SOURCE_PNG_SHA256 = createHash('sha256').update(SOURCE_PNG_BYTES).digest('hex');
 
 function assertIsolatedSchema() {
   const schema = databaseUrl ? new URL(databaseUrl).searchParams.get('schema') || '' : '';
@@ -93,8 +98,8 @@ describePostgres('AI media application mutation PostgreSQL ledger', () => {
       storageBackend: 'local',
       storageKey: 'source.png',
       mimeType: 'image/png',
-      sizeBytes: 68,
-      sha256: 'c'.repeat(64),
+      sizeBytes: SOURCE_PNG_BYTES.length,
+      sha256: SOURCE_PNG_SHA256,
     } });
 
     const workflowService = createAiMediaWorkflowService(
@@ -111,6 +116,7 @@ describePostgres('AI media application mutation PostgreSQL ledger', () => {
         count: 1,
         width: 1024,
         height: 1024,
+        dailyLimit: 0,
         idempotencyKey: `mutation-create-${label}-${suffix}`,
         context: { type: 'collect', id: goodsId },
       });
@@ -124,6 +130,7 @@ describePostgres('AI media application mutation PostgreSQL ledger', () => {
           backend: 'local',
           key: `generated-${label}.png`,
         }),
+        loadInputBuffer: async () => SOURCE_PNG_BYTES,
         maxAttempts: 1,
       });
       const succeeded = await workflowService.get(created.workflow.id, ownerUserId);

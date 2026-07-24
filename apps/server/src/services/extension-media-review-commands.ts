@@ -1,5 +1,10 @@
 import type { ApplyAiMediaListingDraftApplicationInput } from './ai-media-listing-draft-application-mutations.js';
 import type { AiMediaWorkflowService } from './ai-media-workflows.js';
+import {
+  assertExtensionMediaJobProviderAuthorized,
+  ExtensionMediaProviderAuthorizationError,
+  type ExtensionMediaProviderReadiness,
+} from './extension-media-workflow-commands.js';
 
 export const EXTENSION_MEDIA_REVIEW_COMMAND_VERSION =
   'ai-media-workflow-review/v1' as const;
@@ -155,10 +160,45 @@ function assertFrozenContext(input: {
     fail('MEDIA_REVIEW_CONTEXT_STALE', 'Media review context changed');
   }
   const job = currentJob(workflow);
-  if (String(job?.provider || '') !== 'fake') {
-    fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Extension media review permits only the fake provider');
-  }
   return job;
+}
+
+type ExtensionMediaProviderReadinessLoader = (
+  operation: string,
+) => Promise<ExtensionMediaProviderReadiness>;
+
+async function assertProviderAuthorized(input: {
+  operation: string;
+  job: any;
+  production: boolean;
+  getProviderReadiness?: ExtensionMediaProviderReadinessLoader;
+}) {
+  let readiness: ExtensionMediaProviderReadiness | undefined;
+  if (String(input.job?.provider || '').trim() !== 'fake') {
+    if (!input.getProviderReadiness) {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Paid AI image capability authorization is unavailable');
+    }
+    try {
+      readiness = await input.getProviderReadiness(input.operation);
+    } catch {
+      fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Paid AI image capability authorization is unavailable');
+    }
+  }
+  try {
+    assertExtensionMediaJobProviderAuthorized({
+      operation: input.operation,
+      job: input.job,
+      readiness,
+      production: input.production,
+      requireReadiness: false,
+      requireGlobalDailyBudget: false,
+    });
+  } catch (error) {
+    if (error instanceof ExtensionMediaProviderAuthorizationError) {
+      fail(error.code, error.message);
+    }
+    fail('MEDIA_CAPABILITY_UNAVAILABLE', 'Media Provider authorization is unavailable');
+  }
 }
 
 function reviewableOutput(job: any, ownerUserId: string, outputAssetId: string) {
@@ -198,6 +238,7 @@ export function createExtensionMediaReviewCommandExecutor(options: {
     listingWorkflowId: string;
     ownerUserId: string;
   }): Promise<CurrentListingDraft | null>;
+  getProviderReadiness?: ExtensionMediaProviderReadinessLoader;
   production?: boolean;
 }) {
   return async (input: {
@@ -228,9 +269,13 @@ export function createExtensionMediaReviewCommandExecutor(options: {
       draft,
       workflow,
     });
-    if (options.production ?? process.env.NODE_ENV === 'production') {
-      fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Fake media review is disabled in production');
-    }
+    const production = options.production ?? process.env.NODE_ENV === 'production';
+    await assertProviderAuthorized({
+      operation: workflow.operation,
+      job,
+      production,
+      getProviderReadiness: options.getProviderReadiness,
+    });
     if (workflow.status !== 'SUCCEEDED'
       || job?.status !== 'SUCCEEDED'
       || !reviewableOutput(job, input.ownerUserId, requested.outputAssetId)) {
@@ -291,6 +336,7 @@ export function createExtensionMediaApplyCommandExecutor(options: {
   applyListingDraftApplication(
     input: ApplyAiMediaListingDraftApplicationInput,
   ): Promise<any>;
+  getProviderReadiness?: ExtensionMediaProviderReadinessLoader;
   production?: boolean;
 }) {
   return async (input: {
@@ -317,16 +363,18 @@ export function createExtensionMediaApplyCommandExecutor(options: {
       || workflow.suiteId != null
       || workflow.status !== 'SUCCEEDED'
       || job?.status !== 'SUCCEEDED'
-      || String(job?.provider || '') !== 'fake'
       || workflow.reviewStatus !== 'APPROVED'
       || workflow.selectedOutputAssetId !== requested.outputAssetId
       || !reviewableOutput(job, input.ownerUserId, requested.outputAssetId)) {
       fail('MEDIA_APPLY_CONTEXT_STALE', 'Media output is no longer applicable');
     }
     const production = options.production ?? process.env.NODE_ENV === 'production';
-    if (production) {
-      fail('MEDIA_PROVIDER_NOT_ALLOWED', 'Fake media application is disabled in production');
-    }
+    await assertProviderAuthorized({
+      operation: workflow.operation,
+      job,
+      production,
+      getProviderReadiness: options.getProviderReadiness,
+    });
     const result = await options.applyListingDraftApplication({
       workflowId: workflow.id,
       ownerUserId: input.ownerUserId,

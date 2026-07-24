@@ -4,6 +4,7 @@ import {
   markAiCostSubmissionUncertainInTransaction,
   markAiCostUnknownInTransaction,
   releaseAiCostInTransaction,
+  reserveAiCostInTransaction,
   settleAiCostInTransaction,
 } from '../services/ai-cost-ledger.js';
 import { aiMediaPayloadHash } from '../services/ai-media-workflows.js';
@@ -16,6 +17,23 @@ import {
   AI_IMAGE_BILLED_JOB_STATUSES,
   aiImageReservedQuotaWhere,
 } from '../services/ai-image-quota.js';
+import {
+  AiGlobalCostBudgetError,
+  lockGlobalAiCostBudgetInTransaction,
+  reserveGlobalAiCostBudgetInTransaction,
+} from '../services/ai-cost-budget.js';
+
+const costReservationRecord = (reservation: any) => reservation == null
+  ? reservation
+  : {
+    id: reservation.id,
+    status: reservation.status,
+    estimatedCostMinor: Number(reservation.estimatedCostMinor || 0),
+    maximumCostMinor: Number(reservation.maximumCostMinor || 0),
+    provider: reservation.provider,
+    model: reservation.model,
+    requestFingerprint: reservation.requestFingerprint,
+  };
 
 const record = (row: any): AiImageJobRecord => ({
   ...row,
@@ -35,10 +53,27 @@ const record = (row: any): AiImageJobRecord => ({
       kind: input.asset?.kind,
     }))
     : row.inputAssets,
+  ...(row.costReservation !== undefined
+    ? { costReservation: costReservationRecord(row.costReservation) }
+    : {}),
   estimatedCostCents: Number(row.estimatedCostCents || 0),
   actualCostCents: row.actualCostCents == null ? null : Number(row.actualCostCents),
   billedUnits: Number(row.billedUnits || 0),
 });
+
+const COST_RESERVATION_SELECT = {
+  id: true,
+  status: true,
+  estimatedCostMinor: true,
+  maximumCostMinor: true,
+  provider: true,
+  model: true,
+  requestFingerprint: true,
+} as const;
+
+function isPaidAiImageJob(input: CreateAiImageJobInput): boolean {
+  return input.provider !== 'fake';
+}
 
 const INPUT_SOURCE_SNAPSHOT_OPERATIONS = new Set([
   'IMAGE_TO_IMAGE',
@@ -694,6 +729,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       where: { id },
       include: {
         assets: true,
+        costReservation: { select: COST_RESERVATION_SELECT },
         workflow: {
           include: {
             inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
@@ -704,11 +740,38 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
     });
     return row ? record(row) : null;
   }
-  async createWithQuota(input: CreateAiImageJobInput, dailyLimit: number): Promise<CreateWithQuotaResult> {
+  async createWithQuota(
+    input: CreateAiImageJobInput,
+    dailyLimit: number,
+    globalDailyBudgetCents = 0,
+  ): Promise<CreateWithQuotaResult> {
+    const paid = isPaidAiImageJob(input);
+    if (paid && (!Number.isSafeInteger(input.estimatedCostCents) || input.estimatedCostCents <= 0)) {
+      return {
+        kind: 'invalid-cost',
+        reason: 'A verified positive task cost is required before paid AI image generation',
+      };
+    }
+    if (paid && !/^[a-f0-9]{64}$/u.test(String(input.requestFingerprint || ''))) {
+      return {
+        kind: 'invalid-cost',
+        reason: 'A frozen SHA-256 request fingerprint is required before paid AI image generation',
+      };
+    }
+    if (paid && (!Number.isSafeInteger(globalDailyBudgetCents) || globalDailyBudgetCents < 0)) {
+      return { kind: 'invalid-cost', reason: 'Global daily AI budget must be a non-negative integer' };
+    }
     try {
-      return await (this.prisma as any).$transaction(async (tx: any) => {
+      return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        if (paid) await lockGlobalAiCostBudgetInTransaction(tx);
         if (input.idempotencyKey) {
-          const existing = await tx.aiImageJob.findUnique({ where: { ai_image_job_owner_idempotency: { ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey } } });
+          const existing = await tx.aiImageJob.findUnique({
+            where: { ai_image_job_owner_idempotency: {
+              ownerUserId: input.ownerUserId,
+              idempotencyKey: input.idempotencyKey,
+            } },
+            include: { costReservation: { select: COST_RESERVATION_SELECT } },
+          });
           if (existing) return { kind: 'existing', job: record(existing) };
         }
         const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
@@ -731,6 +794,30 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         });
         const used = Number(reserved._sum.requestedImageCount || 0) + Number(billed._sum.billedUnits || 0);
         if (dailyLimit > 0 && used + input.count > dailyLimit) return { kind: 'quota-exceeded', used, limit: dailyLimit };
+        if (paid) {
+          try {
+            const exposure = await reserveGlobalAiCostBudgetInTransaction(tx, {
+              limit: globalDailyBudgetCents,
+              requestedMaximumCostMinor: input.estimatedCostCents,
+            }, { alreadyLocked: true });
+            void exposure;
+          } catch (error) {
+            if (error instanceof AiGlobalCostBudgetError && error.code === 'BUDGET_EXCEEDED') {
+              const summary = error.summary!;
+              return {
+                kind: 'budget-exceeded',
+                settledCostCents: summary.settledCostMinor,
+                pendingMaximumCostCents: summary.pendingMaximumCostMinor,
+                requestedMaximumCostCents: summary.requestedMaximumCostMinor,
+                limit: summary.limit,
+              };
+            }
+            if (error instanceof AiGlobalCostBudgetError) {
+              return { kind: 'invalid-cost', reason: error.message };
+            }
+            throw error;
+          }
+        }
         const created = await tx.aiImageJob.create({ data: {
           ownerUserId: input.ownerUserId,
           actorUserId: input.actorUserId,
@@ -746,17 +833,40 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           templateChecksum: input.templateChecksum || null,
           templateSnapshot: input.templateSnapshot || undefined,
           requestFingerprint: input.requestFingerprint || null,
+          operationConfig: input.operationConfig || undefined,
           requestedImageCount: input.count,
           width: input.width,
           height: input.height,
           idempotencyKey: input.idempotencyKey,
           estimatedCostCents: input.estimatedCostCents,
         } });
-        return { kind: 'created', job: record(created) };
-      }, { isolationLevel: 'Serializable' });
+        if (!paid) return { kind: 'created', job: record(created) };
+        const reservedCost = await reserveAiCostInTransaction(tx, {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          jobId: created.id,
+          idempotencyKey: `${created.id}:cost:reserve`,
+          requestFingerprint: input.requestFingerprint!,
+          provider: input.provider,
+          model: input.model,
+          operation: 'TEXT_TO_IMAGE',
+          estimatedCostMinor: input.estimatedCostCents,
+          maximumCostMinor: input.estimatedCostCents,
+        });
+        return {
+          kind: 'created',
+          job: record({ ...created, costReservation: reservedCost.reservation }),
+        };
+      });
     } catch (error: any) {
       if (error?.code === 'P2002' && input.idempotencyKey) {
-        const existing = await (this.prisma as any).aiImageJob.findUnique({ where: { ai_image_job_owner_idempotency: { ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey } } });
+        const existing = await (this.prisma as any).aiImageJob.findUnique({
+          where: { ai_image_job_owner_idempotency: {
+            ownerUserId: input.ownerUserId,
+            idempotencyKey: input.idempotencyKey,
+          } },
+          include: { costReservation: { select: COST_RESERVATION_SELECT } },
+        });
         if (existing) return { kind: 'existing', job: record(existing) };
       }
       throw error;

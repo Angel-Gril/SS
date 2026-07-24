@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED,
   assertAiImageEditProviderRuntime,
+  getAiImageEditDispatchAuthorization,
   loadAiImageEditInputBuffer,
   processAiImageEditQueueJob,
   readBoundedAiImageEditFile,
@@ -12,6 +13,23 @@ import {
   resolveAiImageEditProvider,
 } from '../workers/ai-image-edit.js';
 import { AI_IMAGE_EDIT_MAX_INPUT_BYTES } from '../services/ai-image-edit.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+
+const fakeProviderConfig = {
+  provider: 'fake', baseUrl: '', apiKey: '', model: 'fake-image-edit-v1',
+  costPerImageCents: 0,
+};
+
+const paidProviderConfig = {
+  provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'secret',
+  model: 'gpt-image-1', costPerImageCents: 7,
+};
+
+const allowPaidDispatch = async () => ({
+  enabled: true,
+  reasonCode: 'tenant_allowed',
+  reason: 'allowed',
+});
 
 const asset = {
   assetId: 'source-1', role: 'REFERENCE' as const, ordinal: 0,
@@ -77,7 +95,9 @@ describe('AI image edit worker boundary', () => {
   });
 
   it('uses an exact fake edit adapter that returns the requested dimensions', async () => {
-    const provider = resolveAiImageEditProvider('fake', 'fake-image-edit-v1');
+    const provider = resolveAiImageEditProvider(
+      'fake', 'fake-image-edit-v1', 'FULL_EDIT', fakeProviderConfig,
+    );
     const generated = await provider.generate({
       operation: 'FULL_EDIT', prompt: 'edit', negativePrompt: null,
       count: 1, width: 3, height: 2, model: 'fake-image-edit-v1',
@@ -86,7 +106,9 @@ describe('AI image edit worker boundary', () => {
     expect(generated.images).toHaveLength(1);
     const sharp = (await import('sharp')).default;
     await expect(sharp(generated.images[0]!.buffer).metadata()).resolves.toMatchObject({ width: 3, height: 2 });
-    await expect(resolveAiImageEditProvider('openai-images', 'gpt-image-1').generate({
+    await expect(resolveAiImageEditProvider(
+      'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig,
+    ).generate({
       operation: 'FULL_EDIT', prompt: 'edit', negativePrompt: null,
       count: 1, width: 3, height: 2, model: 'gpt-image-1',
     })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED' });
@@ -95,8 +117,149 @@ describe('AI image edit worker boundary', () => {
   it('blocks the fake edit Provider in production even when called directly', () => {
     expect(() => assertAiImageEditProviderRuntime('fake', 'production'))
       .toThrowError(expect.objectContaining({ code: AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED }));
-    expect(() => resolveAiImageEditProvider('fake', 'fake-image-edit-v1', 'production'))
+    expect(() => resolveAiImageEditProvider(
+      'fake', 'fake-image-edit-v1', 'FULL_EDIT', fakeProviderConfig, undefined,
+      'production',
+    ))
       .toThrowError(expect.objectContaining({ code: AI_IMAGE_EDIT_FAKE_PROVIDER_PRODUCTION_BLOCKED }));
+  });
+
+  it('requires an exact sandbox-verified OpenAI edit capability before creating the adapter', async () => {
+    const createOpenAiEditProvider = vi.fn(() => ({
+      name: 'openai-image-edits',
+      edit: vi.fn(async () => ({ images: [] })),
+    }));
+    const source = { buffer: Buffer.from('source'), mimeType: 'image/png' as const };
+
+    const disabled = resolveAiImageEditProvider(
+      'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig, undefined,
+      'production', { createOpenAiEditProvider },
+    );
+    await expect(disabled.generate({
+      operation: 'FULL_EDIT', prompt: 'edit', negativePrompt: null,
+      count: 1, width: 1024, height: 1024, model: 'gpt-image-1', inputImages: [source],
+    })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED' });
+    expect(createOpenAiEditProvider).not.toHaveBeenCalled();
+
+    const edit = vi.fn(async () => ({
+      images: [{ buffer: Buffer.from('edited'), mimeType: 'image/png' }],
+      actualCostCents: 7,
+    }));
+    const verified = resolveAiImageEditProvider(
+      'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig, undefined,
+      'production', {
+        resolveCapability: () => ({
+          provider: 'openai-images', model: 'gpt-image-1', operations: ['FULL_EDIT', 'INPAINT'],
+          maxReferences: 1, supportsMask: true, inputTransport: 'multipart', resultMode: 'sync',
+          evidenceLevel: 'sandbox-verified', evidence: 'test-only evidence',
+        }),
+        createOpenAiEditProvider: () => ({ name: 'openai-image-edits', edit }),
+      },
+    );
+    await expect(verified.generate({
+      operation: 'FULL_EDIT', prompt: 'edit', negativePrompt: 'text',
+      count: 1, width: 1024, height: 1024, model: 'gpt-image-1', inputImages: [source],
+    })).resolves.toMatchObject({ actualCostCents: 7 });
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'FULL_EDIT', images: [source], mask: null,
+    }));
+  });
+
+  it('checks the generation master switch, tenant rollout and operation switch together', async () => {
+    const values = new Map<string, unknown>([
+      ['ai_image_generation_enabled', true],
+      ['feature_ai_media_full_edit', false],
+    ]);
+    await expect(getAiImageEditDispatchAuthorization('owner-1', 'FULL_EDIT', {
+      loadConfig: vi.fn(async (key: string) => values.get(key)) as any,
+      getRolloutDecision: vi.fn(async () => ({
+        enabled: true, revision: 1, reason: 'tenant_allowed' as const,
+      })),
+    })).resolves.toMatchObject({ enabled: false, reasonCode: 'feature_off' });
+  });
+
+  it('fails a paid edit before reading Provider config when dispatch authorization is revoked', async () => {
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-revoked', ownerUserId: 'owner-1', status: 'QUEUED', operation: 'INPAINT',
+        provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    } as any;
+    const getProviderConfig = vi.fn();
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageEditQueueJob('job-revoked', 1, {
+      repository,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: false, reasonCode: 'feature_off', reason: 'INPAINT was disabled before Provider dispatch',
+      })),
+      getProviderConfig,
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-revoked', expect.objectContaining({
+      errorCode: 'AI_IMAGE_EDIT_DISPATCH_REVOKED',
+    }));
+    expect(getProviderConfig).not.toHaveBeenCalled();
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('requires an exact RESERVED cost reservation and nested Provider runtime contract', async () => {
+    const requestFingerprint = 'b'.repeat(64);
+    const baseJob = {
+      id: 'job-paid', ownerUserId: 'owner-1', status: 'QUEUED', operation: 'FULL_EDIT',
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      requestedImageCount: 1, width: 1024, height: 1024, requestFingerprint,
+      operationConfig: {
+        policyVersion: 'ai-image-edit-policy/1.0',
+        providerRuntime: createAiImageProviderRuntimeContract(paidProviderConfig, {
+          count: 1, width: 1024, height: 1024,
+        }),
+      },
+    };
+    const repositoryWithoutReservation = {
+      getById: vi.fn(async () => ({ ...baseJob, costReservation: null })),
+      markEnqueueFailed: vi.fn(async () => true),
+    } as any;
+    const getProviderConfig = vi.fn(async () => paidProviderConfig);
+
+    await processAiImageEditQueueJob('job-paid', 1, {
+      repository: repositoryWithoutReservation,
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig,
+    });
+    expect(repositoryWithoutReservation.markEnqueueFailed).toHaveBeenCalledWith('job-paid', expect.objectContaining({
+      errorCode: 'AI_IMAGE_COST_RESERVATION_REQUIRED',
+    }));
+    expect(getProviderConfig).not.toHaveBeenCalled();
+
+    const repositoryChangedEndpoint = {
+      getById: vi.fn(async () => ({
+        ...baseJob,
+        costReservation: {
+          id: 'reservation-1', status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+          estimatedCostMinor: 7, maximumCostMinor: 7, requestFingerprint,
+        },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    } as any;
+    const resolveProvider = vi.fn();
+    await processAiImageEditQueueJob('job-paid', 1, {
+      repository: repositoryChangedEndpoint,
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => ({
+        ...paidProviderConfig, baseUrl: 'https://relay.example/v1',
+      })),
+      resolveProvider,
+    });
+    expect(repositoryChangedEndpoint.markEnqueueFailed).toHaveBeenCalledWith('job-paid', expect.objectContaining({
+      errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+    }));
+    expect(resolveProvider).not.toHaveBeenCalled();
   });
 
   it('persists and rejects queued fake edit jobs in production before resolving or running a Provider', async () => {
@@ -138,7 +301,10 @@ describe('AI image edit worker boundary', () => {
     const run = vi.fn(async () => 'completed' as const);
     await processAiImageEditQueueJob('job-1', 1, {
       repository,
-      resolveProvider: vi.fn(() => resolveAiImageEditProvider('fake', 'fake-image-edit-v1')),
+      getProviderConfig: vi.fn(async () => fakeProviderConfig),
+      resolveProvider: vi.fn(() => resolveAiImageEditProvider(
+        'fake', 'fake-image-edit-v1', 'FULL_EDIT', fakeProviderConfig,
+      )),
       uploadBuffer: vi.fn(),
       loadInputBuffer: vi.fn(),
       run,

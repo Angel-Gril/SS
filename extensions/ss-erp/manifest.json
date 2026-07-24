@@ -168,6 +168,7 @@
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
         "shared/source-costing/panel-core.js",
+        "shared/source-costing/ai-image-suite-controller.js",
         "content/source-listing-workbench.js",
         "content/source-costing-panel.js"
       ],

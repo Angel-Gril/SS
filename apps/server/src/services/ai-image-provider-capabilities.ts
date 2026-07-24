@@ -111,13 +111,13 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
   {
     provider: 'openai-images',
     model: 'gpt-image-1',
-    operations: ['TEXT_TO_IMAGE'],
-    maxReferences: 0,
-    supportsMask: false,
-    inputTransport: 'none',
+    operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+    maxReferences: 16,
+    supportsMask: true,
+    inputTransport: 'multipart',
     resultMode: 'sync',
     evidenceLevel: 'adapter-characterized',
-    evidence: 'current adapter only submits images/generations',
+    evidence: 'images/generations and multipart images/edits adapters are locally characterized; sandbox acceptance remains pending',
   },
   {
     provider: 'openai-images',
@@ -177,8 +177,8 @@ export function supportsAiMediaOperation(
   if (operation === 'TEXT_TO_IMAGE') return inputCount === 0 && maskCount === 0;
   if (operation === 'IMAGE_TO_IMAGE') return inputCount >= 1 && maskCount === 0;
   if (operation === 'IMAGE_TRANSLATE') return inputCount === 1 && maskCount === 0;
-  if (operation === 'FULL_EDIT') return inputCount === 1 && maskCount === 0;
-  return operation === 'INPAINT' && inputCount === 1 && maskCount === 1;
+  if (operation === 'FULL_EDIT') return inputCount >= 1 && maskCount === 0;
+  return operation === 'INPAINT' && inputCount >= 1 && maskCount === 1;
 }
 
 export function assertAiMediaCapability(input: {

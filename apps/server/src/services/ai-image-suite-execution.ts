@@ -1,4 +1,5 @@
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
+import type { AiImageSuiteCostControlFailure } from './ai-image-suite-cost-controls.js';
 
 export const AI_IMAGE_SUITE_DISPATCH_REQUEST_VERSION = 'ai-image-suite-dispatch-request/v1';
 export const AI_IMAGE_SUITE_CANCEL_REQUEST_VERSION = 'ai-image-suite-cancel-request/v1';
@@ -88,11 +89,13 @@ export type AiImageSuiteExecutionReplayResult =
 
 export type AiImageSuiteDispatchResult =
   | ({ kind: 'committed' | 'existing' } & AiImageSuiteExecutionSummary)
+  | AiImageSuiteCostControlFailure
   | {
     kind:
       | 'not-found'
       | 'not-materialized'
       | 'provider-not-ready'
+      | 'cost-reservation-invalid'
       | 'already-dispatched'
       | 'revision-conflict'
       | 'conflict';
@@ -111,6 +114,7 @@ export type AiImageSuiteCancelResult =
 
 export type AiImageSuiteSlotRetryResult =
   | ({ kind: 'committed' | 'existing' } & AiImageSuiteExecutionSummary)
+  | AiImageSuiteCostControlFailure
   | {
     kind:
       | 'not-found'
@@ -138,6 +142,10 @@ export type AiImageSuiteExecutionErrorCode =
   | 'AI_MEDIA_SUITE_EXECUTION_NOT_FOUND'
   | 'AI_MEDIA_SUITE_EXECUTION_NOT_MATERIALIZED'
   | 'AI_MEDIA_SUITE_EXECUTION_PROVIDER_NOT_READY'
+  | 'AI_MEDIA_SUITE_COST_RESERVATION_INVALID'
+  | 'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED'
+  | 'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED'
+  | 'AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE'
   | 'AI_MEDIA_SUITE_ALREADY_DISPATCHED'
   | 'AI_MEDIA_SUITE_DISPATCH_CONFLICT'
   | 'AI_MEDIA_SUITE_NOT_CANCELLABLE'
@@ -321,7 +329,30 @@ function committedSummary(
   return { ...toPublicSummary(summary), replayed: kind === 'existing' };
 }
 
+function mapCostControlFailure(result: AiImageSuiteCostControlFailure): never {
+  if (result.kind === 'quota-exceeded') {
+    return fail(
+      'AI_MEDIA_SUITE_DAILY_QUOTA_EXCEEDED',
+      429,
+      `AI image suite daily quota exceeded (${result.used} + ${result.requested}/${result.limit})`,
+    );
+  }
+  if (result.kind === 'budget-exceeded') {
+    return fail(
+      'AI_MEDIA_SUITE_GLOBAL_BUDGET_EXCEEDED',
+      429,
+      `Global daily AI budget exceeded (${result.settledCostCents + result.pendingMaximumCostCents + result.requestedMaximumCostCents}/${result.limit})`,
+    );
+  }
+  return fail('AI_MEDIA_SUITE_COST_CONTROLS_UNAVAILABLE', 503, result.reason);
+}
+
 function mapDispatchFailure(result: AiImageSuiteDispatchResult): never {
+  if (result.kind === 'quota-exceeded'
+    || result.kind === 'budget-exceeded'
+    || result.kind === 'cost-controls-unavailable') {
+    return mapCostControlFailure(result);
+  }
   if (result.kind === 'not-found') {
     return fail('AI_MEDIA_SUITE_EXECUTION_NOT_FOUND', 404, 'AI media suite was not found');
   }
@@ -337,6 +368,13 @@ function mapDispatchFailure(result: AiImageSuiteDispatchResult): never {
       'AI_MEDIA_SUITE_EXECUTION_PROVIDER_NOT_READY',
       503,
       'AI media suite Provider is not ready for dispatch',
+    );
+  }
+  if (result.kind === 'cost-reservation-invalid') {
+    return fail(
+      'AI_MEDIA_SUITE_COST_RESERVATION_INVALID',
+      503,
+      'AI media suite paid cost reservations are not dispatchable',
     );
   }
   if (result.kind === 'already-dispatched') {
@@ -379,6 +417,11 @@ function mapCancelFailure(result: AiImageSuiteCancelResult): never {
 }
 
 function mapRetryFailure(result: AiImageSuiteSlotRetryResult): never {
+  if (result.kind === 'quota-exceeded'
+    || result.kind === 'budget-exceeded'
+    || result.kind === 'cost-controls-unavailable') {
+    return mapCostControlFailure(result);
+  }
   if (result.kind === 'not-found') {
     return fail('AI_MEDIA_SUITE_EXECUTION_NOT_FOUND', 404, 'AI media suite was not found');
   }

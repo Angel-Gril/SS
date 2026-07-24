@@ -29,4 +29,5 @@ case "$unit" in
 esac
 
 timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" npx prisma migrate deploy
+timeout --signal=TERM --kill-after=30s "$MIGRATION_TIMEOUT" node scripts/verify-ai-media-suite-post-migration.mjs
 node scripts/verify-ai-media-dark.mjs

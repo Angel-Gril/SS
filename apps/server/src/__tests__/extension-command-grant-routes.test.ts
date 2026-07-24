@@ -59,7 +59,7 @@ function dependencies(options: {
     id: receiptId, status: 'FAILED', result: null, failureCode,
   }));
   const executeOzonPublish = vi.fn(async () => ({ attemptId: 'attempt-1', state: 'SUBMITTED' }));
-  const executeMediaWorkflowCommand = vi.fn(async (): Promise<{
+  const executeMediaWorkflowCommand = vi.fn(async (_input: Record<string, unknown>): Promise<{
     workflowId: string;
     action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
     operation?: 'IMAGE_TRANSLATE';
@@ -269,6 +269,104 @@ describe('extension command grant routes', () => {
     expect(response.json()).toMatchObject({ data: { replay: true } });
     expect(deps.executeOzonPublish).not.toHaveBeenCalled();
     expect(deps.service.complete).not.toHaveBeenCalled();
+  });
+
+  it('recovers MEDIA_EXECUTE after the process exits between authorization and execution', async () => {
+    const deps = await buildApp();
+    const pendingReceipt = {
+      id: 'receipt-1', status: 'PENDING', result: null, failureCode: null,
+    };
+    deps.service.authorize.mockResolvedValueOnce({ kind: 'replay', receipt: pendingReceipt });
+
+    // A previous process durably consumed the grant, then exited before
+    // invoking the business executor. This process sees only its PENDING receipt.
+    expect(deps.executeMediaWorkflowCommand).not.toHaveBeenCalled();
+
+    const response = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: mediaPayload(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { replay: true, receipt: { status: 'SUCCEEDED' } },
+    });
+    expect(deps.service.claimPendingRecovery).toHaveBeenCalledWith({ receiptId: 'receipt-1' });
+    expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledTimes(1);
+    expect(deps.service.complete).toHaveBeenCalledTimes(1);
+    expect(deps.service.fail).not.toHaveBeenCalled();
+  });
+
+  it('recovers MEDIA_EXECUTE completion loss without duplicate cost or business writes', async () => {
+    const command = {
+      schemaVersion: 'ai-media-workflow-create/v1', action: 'CREATE_TRANSLATION',
+      sourceMediaKey: 'media-main-1', draftRevision: 11,
+      workflowOperationKey: 'extension-media-workflow:receipt-recovery-1',
+    };
+    const payload = mediaPayload({
+      idempotencyKey: 'media-execute-recovery-1',
+      command,
+    });
+    const deps = await buildApp({
+      resolution: {
+        kind: 'allowed', shopId: 'shop-1', workflowId: 'workflow-1',
+        draftVersion: 7, command,
+      },
+    });
+    const businessLedger = new Set<string>();
+    let chargedUnits = 0;
+    let businessWrites = 0;
+    deps.executeMediaWorkflowCommand.mockImplementation(async (input: any) => {
+      const operationKey = `${input.idempotencyKey}:${input.command.workflowOperationKey}`;
+      const replayed = businessLedger.has(operationKey);
+      if (!replayed) {
+        businessLedger.add(operationKey);
+        chargedUnits += 1;
+        businessWrites += 1;
+      }
+      return {
+        workflowId: 'media-created-1', action: 'CREATE_TRANSLATION' as const,
+        operation: 'IMAGE_TRANSLATE' as const, status: 'QUEUED', revision: 1, replayed,
+      };
+    });
+    deps.service.complete.mockRejectedValueOnce(new Error('receipt completion unavailable'));
+
+    const first = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(first.statusCode).toBe(500);
+    expect(chargedUnits).toBe(1);
+    expect(businessWrites).toBe(1);
+    expect(deps.service.fail).not.toHaveBeenCalled();
+
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    const recovered = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      code: 1,
+      data: {
+        replay: true,
+        receipt: { status: 'SUCCEEDED', result: { replayed: true } },
+      },
+    });
+    expect(deps.service.claimPendingRecovery).toHaveBeenCalledTimes(1);
+    expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledTimes(2);
+    expect(deps.executeMediaWorkflowCommand.mock.calls.map(([input]) => input.idempotencyKey))
+      .toEqual(['media-execute-recovery-1', 'media-execute-recovery-1']);
+    expect(chargedUnits).toBe(1);
+    expect(businessWrites).toBe(1);
+    expect(deps.service.complete).toHaveBeenCalledTimes(2);
+    expect(deps.service.fail).not.toHaveBeenCalled();
   });
 
   it('consumes an exact media command grant and never executes it twice on receipt replay', async () => {

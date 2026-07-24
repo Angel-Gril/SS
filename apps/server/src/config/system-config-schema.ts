@@ -96,6 +96,7 @@ export const SystemConfigSchema = {
   ai_image_base_url: z.string().default(''),
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),
+  ai_image_generation_cost_cents: z.number().int().min(0).max(100000).default(0),
   ai_image_prompt: z
     .string()
     .default(
@@ -467,9 +468,9 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     description: '单次 AI 请求超时时间，默认 30000',
   },
   ai_daily_budget_cents: {
-    label: 'AI 全局每日预算（未执行）',
+    label: 'AI 全局每日预算',
     group: 'ai',
-    description: '当前仅保存配置，尚未接入任务费用预留和全局熔断；填写数值不会限制真实 AI 消费',
+    description: '付费文生图创建前执行的全局费用熔断：UTC 当日已结算费用 + 全部历史未决预留最大暴露 + 新任务最大费用；0 会禁止新付费任务',
   },
   ai_user_daily_category_translation_limit: {
     label: '用户每日类目翻译额度',
@@ -533,6 +534,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '生图模型',
     group: 'ai',
     description: 'Provider 模型 ID；自定义模型必须按精确端点、模型、价格和配置版本单独验收',
+  },
+  ai_image_generation_cost_cents: {
+    label: '文生图单张成本（分）',
+    group: 'ai',
+    description: '按已验收价格填写；创建任务时按图片数冻结总成本，0 会禁止付费 Provider 任务',
   },
   ai_image_prompt: {
     label: '旧版生图提示词（兼容）',

@@ -45,6 +45,7 @@ try {
           'feature_ai_media_inpaint',
           'feature_source_listing_web_media',
           'feature_source_listing_extension_workbench',
+          'feature_source_ozon_publisher_v2',
           'ai_image_generation_enabled',
           'ai_image_provider',
           'feature_image_translate',

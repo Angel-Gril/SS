@@ -6,6 +6,7 @@ import {
   createAiImageTranslationWorkflowFingerprint,
   createAiImageEditWorkflowFingerprint,
   createAiMediaWorkflowFingerprint,
+  normalizeAiMediaProviderExecutionConfig,
   normalizeAiImageTranslationOptions,
   normalizeAiMediaWorkflowReferences,
   type AiMediaWorkflowRecord,
@@ -42,6 +43,10 @@ import {
   AI_IMAGE_BILLED_JOB_STATUSES,
   aiImageReservedQuotaWhere,
 } from '../services/ai-image-quota.js';
+import {
+  lockGlobalAiCostBudgetInTransaction,
+  reserveGlobalAiCostBudgetInTransaction,
+} from '../services/ai-cost-budget.js';
 
 function costReservationIdempotencyKey(jobId: string) {
   return `${jobId}:cost:reserve`;
@@ -429,7 +434,14 @@ function replayImageEditWorkflow(existing: any, input: CreateAiImageEditWorkflow
   };
 }
 
-async function assertImageEditDailyQuota(tx: any, ownerUserId: string, dailyLimit: number) {
+async function assertImageGenerationDailyQuota(
+  tx: any,
+  ownerUserId: string,
+  dailyLimit: number,
+  requestedUnits: number,
+  errorCode: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED' | 'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+  label: string,
+) {
   if (dailyLimit <= 0) return;
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
@@ -453,9 +465,9 @@ async function assertImageEditDailyQuota(tx: any, ownerUserId: string, dailyLimi
     }),
   ]);
   const used = Number(active._sum.requestedImageCount || 0) + Number(completed._sum.billedUnits || 0);
-  if (used + 1 > dailyLimit) {
-    throw Object.assign(new Error(`AI image edit daily quota exceeded (${used}/${dailyLimit})`), {
-      code: 'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+  if (used + requestedUnits > dailyLimit) {
+    throw Object.assign(new Error(`${label} daily quota exceeded (${used}/${dailyLimit})`), {
+      code: errorCode,
       used,
       limit: dailyLimit,
     });
@@ -480,9 +492,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
   constructor(private readonly prisma: PrismaClient) {}
 
   async createImageToImage(input: CreateAiMediaWorkflowInput) {
+    const references = normalizeAiMediaWorkflowReferences(input);
+    const execution = normalizeAiMediaProviderExecutionConfig(input, {
+      provider: AI_MEDIA_WORKFLOW_PROVIDER,
+      model: AI_MEDIA_WORKFLOW_MODEL,
+    }, { count: input.count, width: input.width, height: input.height });
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-      const references = normalizeAiMediaWorkflowReferences(input);
+      if (execution.paid) await lockGlobalAiCostBudgetInTransaction(tx);
       const existingBeforeAuthority = typeof tx.aiMediaWorkflow?.findUnique === 'function'
         ? await tx.aiMediaWorkflow.findUnique({
           where: { ai_media_workflow_owner_idempotency: {
@@ -559,6 +576,20 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           ? { referenceAssetSha256: assets.map((asset) => asset.sha256) }
           : { sourceAssetSha256: primaryAsset.sha256 }),
       });
+      await assertImageGenerationDailyQuota(
+        tx,
+        input.ownerUserId,
+        input.dailyLimit,
+        input.count,
+        'AI_IMAGE_GENERATION_QUOTA_EXCEEDED',
+        'AI image generation',
+      );
+      if (execution.paid) {
+        await reserveGlobalAiCostBudgetInTransaction(tx, {
+          limit: execution.globalDailyBudgetCents,
+          requestedMaximumCostMinor: execution.estimatedCostCents,
+        }, { alreadyLocked: true });
+      }
       const workflow = await tx.aiMediaWorkflow.create({ data: {
         ownerUserId: input.ownerUserId,
         actorUserId: input.actorUserId,
@@ -594,8 +625,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         workflowId: workflow.id,
         workflowAttempt: 1,
         status: 'QUEUED',
-        provider: AI_MEDIA_WORKFLOW_PROVIDER,
-        model: AI_MEDIA_WORKFLOW_MODEL,
+        provider: execution.provider,
+        model: execution.model,
         prompt: input.prompt,
         negativePrompt: input.negativePrompt,
         requestedImageCount: input.count,
@@ -610,7 +641,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           ordinal,
           sha256: asset.sha256,
         })),
-        estimatedCostCents: 0,
+        operationConfig: execution.providerRuntimeContract || undefined,
+        estimatedCostCents: execution.estimatedCostCents,
       } });
       await reserveAiCostInTransaction(tx, {
         ownerUserId: input.ownerUserId,
@@ -619,12 +651,12 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         jobId: job.id,
         idempotencyKey: costReservationIdempotencyKey(job.id),
         requestFingerprint: fingerprint,
-        provider: AI_MEDIA_WORKFLOW_PROVIDER,
-        model: AI_MEDIA_WORKFLOW_MODEL,
+        provider: execution.provider,
+        model: execution.model,
         operation: 'IMAGE_TO_IMAGE',
         currency: 'USD',
-        estimatedCostMinor: 0,
-        maximumCostMinor: 0,
+        estimatedCostMinor: execution.estimatedCostCents,
+        maximumCostMinor: execution.estimatedCostCents,
       });
       await tx.aiMediaWorkflowEvent.create({ data: eventData({
         workflowId: workflow.id, ownerUserId: input.ownerUserId, actorUserId: input.actorUserId,
@@ -653,6 +685,10 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
   }
 
   async createImageEdit(input: CreateAiImageEditWorkflowInput) {
+    const execution = normalizeAiMediaProviderExecutionConfig(input, {
+      provider: AI_IMAGE_EDIT_PROVIDER,
+      model: AI_IMAGE_EDIT_MODEL,
+    }, { count: 1, width: input.width, height: input.height });
     const sourceAssetId = input.sourceAssetId.trim();
     const maskAssetId = input.operation === 'INPAINT' ? String(input.maskAssetId || '').trim() : '';
     const assetIds = [sourceAssetId, ...(maskAssetId ? [maskAssetId] : [])];
@@ -674,6 +710,11 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     const assertAssets = (source: FrozenEditAsset | undefined, mask: FrozenEditAsset | null | undefined) => {
       if (!validFrozenEditAsset(source, 'SOURCE_ORIGINAL')) {
         throw Object.assign(new Error('Owned immutable source asset not found'), { code: 'SOURCE_ASSET_NOT_FOUND' });
+      }
+      if (source!.width !== input.width || source!.height !== input.height) {
+        throw Object.assign(new Error('Source image dimensions changed before the edit was frozen'), {
+          code: 'STALE_MEDIA_WORKFLOW',
+        });
       }
       if (input.operation === 'INPAINT') {
         if (!validFrozenEditAsset(mask || undefined, 'EDIT_MASK')) {
@@ -716,6 +757,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
 
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        if (execution.paid) await lockGlobalAiCostBudgetInTransaction(tx);
         const existingBeforeAuthority = await tx.aiMediaWorkflow.findUnique({
           where: { ai_media_workflow_owner_idempotency: {
             ownerUserId: input.ownerUserId,
@@ -762,7 +804,24 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           }
         }
         const fingerprint = editRequestFingerprint(input, source, mask);
-        await assertImageEditDailyQuota(tx, input.ownerUserId, input.dailyLimit);
+        await assertImageGenerationDailyQuota(
+          tx,
+          input.ownerUserId,
+          input.dailyLimit,
+          1,
+          'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+          'AI image edit',
+        );
+        const frozenExecution = normalizeAiMediaProviderExecutionConfig(input, {
+          provider: AI_IMAGE_EDIT_PROVIDER,
+          model: AI_IMAGE_EDIT_MODEL,
+        }, { count: 1, width: Number(source.width), height: Number(source.height) });
+        if (frozenExecution.paid) {
+          await reserveGlobalAiCostBudgetInTransaction(tx, {
+            limit: frozenExecution.globalDailyBudgetCents,
+            requestedMaximumCostMinor: frozenExecution.estimatedCostCents,
+          }, { alreadyLocked: true });
+        }
 
         const workflow = await tx.aiMediaWorkflow.create({ data: {
           ownerUserId: input.ownerUserId,
@@ -811,6 +870,9 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
             maskAssetSha256: mask.sha256,
             maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
           } : {}),
+          ...(frozenExecution.providerRuntimeContract ? {
+            providerRuntime: frozenExecution.providerRuntimeContract,
+          } : {}),
         };
         const job = await tx.aiImageJob.create({ data: {
           ownerUserId: input.ownerUserId,
@@ -819,8 +881,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           workflowId: workflow.id,
           workflowAttempt: 1,
           status: 'QUEUED',
-          provider: AI_IMAGE_EDIT_PROVIDER,
-          model: AI_IMAGE_EDIT_MODEL,
+          provider: frozenExecution.provider,
+          model: frozenExecution.model,
           prompt: input.prompt,
           negativePrompt: input.negativePrompt,
           resolvedPrompt: input.resolvedPrompt,
@@ -843,7 +905,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           height: source.height,
           maxAttempts: 1,
           idempotencyKey: `${input.idempotencyKey}:attempt:1`,
-          estimatedCostCents: 0,
+          estimatedCostCents: frozenExecution.estimatedCostCents,
         } });
         await reserveAiCostInTransaction(tx, {
           ownerUserId: input.ownerUserId,
@@ -852,12 +914,12 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           jobId: job.id,
           idempotencyKey: costReservationIdempotencyKey(job.id),
           requestFingerprint: fingerprint,
-          provider: AI_IMAGE_EDIT_PROVIDER,
-          model: AI_IMAGE_EDIT_MODEL,
+          provider: frozenExecution.provider,
+          model: frozenExecution.model,
           operation: input.operation,
           currency: 'USD',
-          estimatedCostMinor: 0,
-          maximumCostMinor: 0,
+          estimatedCostMinor: frozenExecution.estimatedCostCents,
+          maximumCostMinor: frozenExecution.estimatedCostCents,
         });
         await tx.aiMediaWorkflowEvent.create({ data: eventData({
           workflowId: workflow.id,
@@ -899,12 +961,15 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
   }) {
     const sourceAssetId = input.sourceAssetId.trim();
     const references = [{ assetId: sourceAssetId }];
+    const estimatedCostCents = Math.max(0, Math.round(input.estimatedCostCents || 0));
+    const paid = input.provider !== 'fake';
     const fingerprintForSha = (sourceAssetSha256: string | null | undefined) => aiMediaPayloadHash({
       request: createAiImageTranslationWorkflowFingerprint({ ...input, sourceAssetId, options: input.options }),
       sourceAssetSha256,
     });
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        if (paid) await lockGlobalAiCostBudgetInTransaction(tx);
         const existingBeforeContext = await tx.aiMediaWorkflow.findUnique({
           where: { ai_media_workflow_owner_idempotency: {
             ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
@@ -990,6 +1055,12 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
             });
           }
         }
+        if (paid) {
+          await reserveGlobalAiCostBudgetInTransaction(tx, {
+            limit: Number(input.globalDailyBudgetCents ?? 0),
+            requestedMaximumCostMinor: estimatedCostCents,
+          }, { alreadyLocked: true });
+        }
         const workflow = await tx.aiMediaWorkflow.create({ data: {
           ownerUserId: input.ownerUserId,
           actorUserId: input.actorUserId,
@@ -1048,7 +1119,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           idempotencyKey: `${input.idempotencyKey}:attempt:1`,
           requestFingerprint: fingerprint,
           inputAssets: [{ assetId: asset.id, role: 'REFERENCE', ordinal: 0, sha256: asset.sha256 }],
-          estimatedCostCents: Math.max(0, Math.round(input.estimatedCostCents || 0)),
+          estimatedCostCents,
         } });
         await reserveAiCostInTransaction(tx, {
           ownerUserId: input.ownerUserId,
@@ -1061,8 +1132,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           model: input.model,
           operation: 'IMAGE_TRANSLATE',
           currency: 'USD',
-          estimatedCostMinor: Math.max(0, Math.round(input.estimatedCostCents || 0)),
-          maximumCostMinor: Math.max(0, Math.round(input.estimatedCostCents || 0)),
+          estimatedCostMinor: estimatedCostCents,
+          maximumCostMinor: estimatedCostCents,
         });
         await tx.aiMediaWorkflowEvent.create({ data: eventData({
           workflowId: workflow.id,
@@ -1268,6 +1339,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     expectedRevision: number;
     idempotencyKey: string;
     dailyLimit?: number;
+    globalDailyBudgetCents?: number;
   }) {
     const eventKey = `${input.id}:retry:${input.idempotencyKey}`;
     try {
@@ -1314,6 +1386,21 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           return null;
         }
         const estimatedCostCents = Math.max(0, Number(previous.estimatedCostCents || 0));
+        const paid = previous.provider !== 'fake';
+        if (paid) {
+          await lockGlobalAiCostBudgetInTransaction(tx);
+          try {
+            await reserveGlobalAiCostBudgetInTransaction(tx, {
+              limit: Number(input.globalDailyBudgetCents ?? 0),
+              requestedMaximumCostMinor: estimatedCostCents,
+            }, { alreadyLocked: true });
+          } catch (error: any) {
+            if (error?.code === 'BUDGET_EXCEEDED') throw error;
+            throw Object.assign(new Error(error instanceof Error
+              ? error.message
+              : 'Global AI budget is unavailable'), { code: 'BUDGET_EXCEEDED' });
+          }
+        }
         if (previous.operation === 'IMAGE_TRANSLATE') {
           if (!Number.isSafeInteger(input.dailyLimit) || Number(input.dailyLimit) < 0) {
             throw Object.assign(new Error('Image translation retry quota is not available'), {
@@ -1321,13 +1408,21 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
             });
           }
         }
-        if (previous.operation === 'FULL_EDIT' || previous.operation === 'INPAINT') {
+        if (['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(String(previous.operation))) {
           if (!Number.isSafeInteger(input.dailyLimit) || Number(input.dailyLimit) < 0) {
-            throw Object.assign(new Error('AI image edit retry quota is not available'), {
-              code: 'AI_IMAGE_EDIT_QUOTA_UNAVAILABLE',
+            throw Object.assign(new Error('AI image generation retry quota is not available'), {
+              code: 'AI_IMAGE_GENERATION_QUOTA_UNAVAILABLE',
             });
           }
-          await assertImageEditDailyQuota(tx, input.ownerUserId, Number(input.dailyLimit));
+          const edit = previous.operation === 'FULL_EDIT' || previous.operation === 'INPAINT';
+          await assertImageGenerationDailyQuota(
+            tx,
+            input.ownerUserId,
+            Number(input.dailyLimit),
+            Number(previous.requestedImageCount || 1),
+            edit ? 'AI_IMAGE_EDIT_QUOTA_EXCEEDED' : 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED',
+            edit ? 'AI image edit' : 'AI image generation',
+          );
         }
         if (previous.operation === 'IMAGE_TRANSLATE' && Number(input.dailyLimit) > 0) {
           const dayStart = new Date();

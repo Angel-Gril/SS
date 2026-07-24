@@ -61,6 +61,7 @@ async function createSucceededCandidateFixture(database: PrismaClient, suffix: s
   const workflowService = createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(database));
   const created = await workflowService.createImageEdit({
     ownerUserId, actorUserId: ownerUserId, operation: 'FULL_EDIT', sourceAssetId,
+    width: 2, height: 2,
     prompt: 'Create a race candidate', negativePrompt: null,
     resolvedPrompt: 'Frozen race prompt', resolvedNegativePrompt: 'Preserve identity',
     templateKey: 'full-image-edit.base', templateReleaseId: `edit-race-release-${suffix}`,
@@ -326,6 +327,7 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
     const created = await workflowService.createImageEdit({
       ownerUserId, actorUserId: ownerUserId, operation: 'INPAINT',
       sourceAssetId, maskAssetId, maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+      width: 2, height: 2,
       prompt: 'Remove the label', negativePrompt: null,
       resolvedPrompt: 'Frozen remove-label prompt', resolvedNegativePrompt: 'Preserve product identity',
       templateKey: 'inpaint.base', templateReleaseId: `edit-release-${suffix}`,
@@ -382,6 +384,7 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
     const chained = await workflowService.createImageEdit({
       ownerUserId, actorUserId: ownerUserId, operation: 'FULL_EDIT',
       sourceAssetId: final.id,
+      width: 2, height: 2,
       prompt: 'Polish the approved candidate', negativePrompt: null,
       resolvedPrompt: 'Frozen chained edit prompt', resolvedNegativePrompt: 'Preserve product identity',
       templateKey: 'full-image-edit.base', templateReleaseId: `edit-chain-release-${suffix}`,
@@ -451,6 +454,7 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
     const chainedInpaint = await workflowService.createImageEdit({
       ownerUserId, actorUserId: ownerUserId, operation: 'INPAINT',
       sourceAssetId: final.id, maskAssetId: candidateMaskAssetId,
+      width: 2, height: 2,
       maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
       prompt: 'Remove one mark from the approved candidate', negativePrompt: null,
       resolvedPrompt: 'Frozen chained inpaint prompt', resolvedNegativePrompt: 'Preserve product identity',

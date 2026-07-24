@@ -16,7 +16,20 @@ const AI_IMAGE_SUITE_GENERATION_QUEUE_TASK_NAME = 'generate-suite-slot';
 const AI_IMAGE_SUITE_GENERATION_LEASE_MS = 60_000;
 const AI_IMAGE_SUITE_GENERATION_RECOVERY_PAGE_SIZE = 100;
 const AI_IMAGE_SUITE_GENERATION_RECOVERY_INTERVAL_MS = 30_000;
+const AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_MS = 120_000;
+const AI_IMAGE_SUITE_GENERATION_RECOVERY_HEARTBEAT_MS = 30_000;
+export const AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_KEY =
+  'lease:ai-image-suite-generation:recovery:v1';
 const MAX_ID_LENGTH = 200;
+
+const RENEW_RECOVERY_LEASE_SCRIPT = [
+  "if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end",
+  "return redis.call('pexpire', KEYS[1], ARGV[2])",
+].join('\n');
+const RELEASE_RECOVERY_LEASE_SCRIPT = [
+  "if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end",
+  "return redis.call('del', KEYS[1])",
+].join('\n');
 
 export const AI_IMAGE_SUITE_GENERATION_QUEUE_JOB_OPTIONS = {
   attempts: 2,
@@ -39,6 +52,7 @@ export type AiImageSuiteGenerationExecutionClaim =
     kind: 'ready';
     provider: string;
     providerFacing: boolean;
+    evidenceLevel?: 'local-test' | 'sandbox-verified' | null;
     executionToken: string;
   };
 
@@ -90,7 +104,8 @@ export type AiImageSuiteGenerationWorkerErrorCode =
   | 'AI_MEDIA_SUITE_GENERATION_INVALID_FRONTIER'
   | 'AI_MEDIA_SUITE_GENERATION_LEASE_BUSY'
   | 'AI_MEDIA_SUITE_GENERATION_QUEUE_UNAVAILABLE'
-  | 'AI_MEDIA_SUITE_GENERATION_RECOVERY_CURSOR_LOOP';
+  | 'AI_MEDIA_SUITE_GENERATION_RECOVERY_CURSOR_LOOP'
+  | 'AI_MEDIA_SUITE_GENERATION_RECOVERY_LEASE_LOST';
 
 export class AiImageSuiteGenerationWorkerError extends Error {
   constructor(
@@ -127,7 +142,42 @@ interface RecoveryOverrides {
   coordinator: AiImageSuiteGenerationCoordinator;
   enqueue?: (payload: AiImageSuiteGenerationQueuePayload) => Promise<void>;
   pageSize?: number;
+  assertLeaseOwned?: () => Promise<void>;
 }
+
+export interface AiImageSuiteGenerationRecoveryLease {
+  acquire(token: string): Promise<boolean>;
+  renew(token: string): Promise<boolean>;
+  release(token: string): Promise<void>;
+}
+
+export interface AiImageSuiteGenerationRecoveryRedis {
+  set(
+    key: string,
+    token: string,
+    expiryMode: 'PX',
+    ttlMs: number,
+    condition: 'NX',
+  ): Promise<unknown>;
+  eval(
+    script: string,
+    keyCount: 1,
+    key: string,
+    ...args: Array<string | number>
+  ): Promise<unknown>;
+}
+
+interface RecoveryRunnerOverrides extends RecoveryOverrides {
+  lease?: AiImageSuiteGenerationRecoveryLease;
+  createLeaseToken?: () => string;
+  heartbeatMs?: number;
+  onLeaseReleaseError?: (error: unknown) => void;
+}
+
+export type AiImageSuiteGenerationRecoveryRunResult =
+  | 'completed'
+  | 'skipped-local'
+  | 'skipped-distributed';
 
 export const aiImageSuiteGenerationQueue: Queue | null = redisDisabled
   ? null
@@ -218,6 +268,65 @@ async function releaseSuiteLease(suiteId: string, token: string): Promise<void> 
   );
 }
 
+function recoveryLeaseToken(value: string): string {
+  if (typeof value !== 'string'
+    || !value
+    || value !== value.trim()
+    || value.length > MAX_ID_LENGTH) {
+    throw new TypeError('AI image suite generation recovery lease token is invalid');
+  }
+  return value;
+}
+
+export function createRedisAiImageSuiteGenerationRecoveryLease(options: {
+  redis: AiImageSuiteGenerationRecoveryRedis;
+  disabled?: boolean;
+}): AiImageSuiteGenerationRecoveryLease {
+  return {
+    async acquire(value: string): Promise<boolean> {
+      const token = recoveryLeaseToken(value);
+      if (options.disabled) return true;
+      const result = await options.redis.set(
+        AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_KEY,
+        token,
+        'PX',
+        AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_MS,
+        'NX',
+      );
+      if (result === 'OK') return true;
+      if (result == null) return false;
+      throw new Error('AI image suite generation recovery lease returned an invalid acquire result');
+    },
+    async renew(value: string): Promise<boolean> {
+      const token = recoveryLeaseToken(value);
+      if (options.disabled) return true;
+      const result = await options.redis.eval(
+        RENEW_RECOVERY_LEASE_SCRIPT,
+        1,
+        AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_KEY,
+        token,
+        AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_MS,
+      );
+      return Number(result) === 1;
+    },
+    async release(value: string): Promise<void> {
+      const token = recoveryLeaseToken(value);
+      if (options.disabled) return;
+      await options.redis.eval(
+        RELEASE_RECOVERY_LEASE_SCRIPT,
+        1,
+        AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_KEY,
+        token,
+      );
+    },
+  };
+}
+
+const aiImageSuiteGenerationRecoveryLease = createRedisAiImageSuiteGenerationRecoveryLease({
+  redis,
+  disabled: redisDisabled,
+});
+
 function duplicateQueueJob(error: unknown): boolean {
   return /job.*(?:already )?exists/iu.test(error instanceof Error ? error.message : String(error));
 }
@@ -274,13 +383,13 @@ function runtimeFailure(
   claim: Extract<AiImageSuiteGenerationExecutionClaim, { kind: 'ready' }>,
   nodeEnv: string | undefined,
 ): AiImageSuiteGenerationRuntimeFailure | null {
-  if (claim.provider !== 'fake') {
+  if (claim.provider !== 'fake' && claim.evidenceLevel !== 'sandbox-verified') {
     return {
       code: 'AI_MEDIA_SUITE_PAID_PROVIDER_NOT_VERIFIED',
       message: 'Paid AI image suite generation requires sandbox-verified Provider evidence',
     };
   }
-  if (nodeEnv === 'production') {
+  if (claim.provider === 'fake' && nodeEnv === 'production') {
     return {
       code: 'AI_MEDIA_SUITE_FAKE_PROVIDER_PRODUCTION_BLOCKED',
       message: 'The fake AI image suite Provider is disabled in production',
@@ -378,10 +487,18 @@ export async function enqueueRecoverableAiImageSuiteGenerationJobs(
   let cursor: string | undefined;
 
   while (true) {
+    await overrides.assertLeaseOwned?.();
     const page = await overrides.coordinator.scanRecoverable({ cursor, limit: pageSize });
-    for (const value of page.items) await enqueue(normalizePayload(value));
+    await overrides.assertLeaseOwned?.();
+    for (const value of page.items) {
+      await overrides.assertLeaseOwned?.();
+      await enqueue(normalizePayload(value));
+    }
 
-    if (!page.nextCursor) return;
+    if (!page.nextCursor) {
+      await overrides.assertLeaseOwned?.();
+      return;
+    }
     const nextCursor = exactId(page.nextCursor, 'recovery cursor');
     if (seenCursors.has(nextCursor)) {
       throw new AiImageSuiteGenerationWorkerError(
@@ -392,6 +509,86 @@ export async function enqueueRecoverableAiImageSuiteGenerationJobs(
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
+}
+
+function recoveryLeaseLost(): AiImageSuiteGenerationWorkerError {
+  return new AiImageSuiteGenerationWorkerError(
+    'AI_MEDIA_SUITE_GENERATION_RECOVERY_LEASE_LOST',
+    'AI image suite generation recovery lease ownership was lost',
+  );
+}
+
+export function createAiImageSuiteGenerationRecoveryRunner(
+  overrides: RecoveryRunnerOverrides,
+): () => Promise<AiImageSuiteGenerationRecoveryRunResult> {
+  const heartbeatMs = overrides.heartbeatMs
+    ?? AI_IMAGE_SUITE_GENERATION_RECOVERY_HEARTBEAT_MS;
+  if (!Number.isSafeInteger(heartbeatMs)
+    || heartbeatMs < 100
+    || heartbeatMs >= AI_IMAGE_SUITE_GENERATION_RECOVERY_LEASE_MS) {
+    throw new TypeError('AI image suite generation recovery heartbeat is invalid');
+  }
+  const lease = overrides.lease || aiImageSuiteGenerationRecoveryLease;
+  const createLeaseToken = overrides.createLeaseToken || randomUUID;
+  const onLeaseReleaseError = overrides.onLeaseReleaseError || ((error: unknown) => {
+    console.error('[ai-image-suite] recovery lease release failed:', error);
+  });
+  let inFlight = false;
+
+  return async () => {
+    if (inFlight) return 'skipped-local';
+    inFlight = true;
+    let acquired = false;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let token = '';
+    let renewalFailure: AiImageSuiteGenerationWorkerError | null = null;
+    let renewalChain: Promise<void> = Promise.resolve();
+    try {
+      token = recoveryLeaseToken(createLeaseToken());
+      acquired = await lease.acquire(token);
+      if (!acquired) return 'skipped-distributed';
+
+      const queueRenewal = () => {
+        renewalChain = renewalChain.then(async () => {
+          if (renewalFailure) return;
+          try {
+            if (!await lease.renew(token)) renewalFailure = recoveryLeaseLost();
+          } catch {
+            renewalFailure = recoveryLeaseLost();
+          }
+        });
+        return renewalChain;
+      };
+      const assertLeaseOwned = async () => {
+        await renewalChain;
+        if (renewalFailure) throw renewalFailure;
+      };
+
+      heartbeat = setInterval(() => void queueRenewal(), heartbeatMs);
+      heartbeat.unref?.();
+      await enqueueRecoverableAiImageSuiteGenerationJobs({
+        coordinator: overrides.coordinator,
+        enqueue: overrides.enqueue,
+        pageSize: overrides.pageSize,
+        assertLeaseOwned,
+      });
+      await queueRenewal();
+      await assertLeaseOwned();
+      return 'completed';
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      await renewalChain;
+      if (acquired) {
+        try {
+          await lease.release(token);
+        } catch (error) {
+          // The token-safe TTL lease can expire without deleting a replacement owner.
+          onLeaseReleaseError(error);
+        }
+      }
+      inFlight = false;
+    }
+  };
 }
 
 export function startAiImageSuiteGenerationWorker(
@@ -432,7 +629,8 @@ export function startAiImageSuiteGenerationWorker(
     AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS,
   );
   heartbeatTimer.unref();
-  const recover = () => enqueueRecoverableAiImageSuiteGenerationJobs({ coordinator }).catch((error) => {
+  const runRecovery = createAiImageSuiteGenerationRecoveryRunner({ coordinator });
+  const recover = () => runRecovery().catch((error) => {
     console.error('[ai-image-suite] recovery scan failed:', error);
   });
   void recover();

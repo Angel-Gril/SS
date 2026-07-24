@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   AiImageJobError,
@@ -10,6 +11,36 @@ import {
   type AiImageJobRecord,
   type AiImageJobRepository,
 } from '../services/ai-image-jobs.js';
+
+const sourcePng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=',
+  'base64',
+);
+const sourceJpeg = Buffer.from('ffd8ffe000104a4649460001ffd9', 'hex');
+
+function sha256(buffer: Buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function frozenReference(input: {
+  assetId: string;
+  ordinal: number;
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+}) {
+  return {
+    assetId: input.assetId,
+    role: 'REFERENCE' as const,
+    ordinal: input.ordinal,
+    url: `https://cdn.example/${input.assetId}`,
+    mimeType: input.mimeType,
+    sha256: sha256(input.buffer),
+    sizeBytes: input.buffer.length,
+    storageBackend: 'oss',
+    storageKey: `ai-input/${input.assetId}`,
+    kind: 'SOURCE_ORIGINAL' as const,
+  };
+}
 
 function job(overrides: Partial<AiImageJobRecord> = {}): AiImageJobRecord {
   return {
@@ -378,38 +409,147 @@ describe('AI image job foundation', () => {
     }));
   });
 
-  it('passes frozen IMAGE_TO_IMAGE references to the provider in request order', async () => {
+  it('loads frozen IMAGE_TO_IMAGE references and passes trusted bytes in ordinal order', async () => {
     const inputAssets = [
-      {
-        assetId: 'asset-source-2', role: 'REFERENCE' as const, ordinal: 0,
-        url: 'https://cdn.example/source-2.png', mimeType: 'image/png', sha256: 'b'.repeat(64),
-      },
-      {
-        assetId: 'asset-source-1', role: 'REFERENCE' as const, ordinal: 1,
-        url: 'https://cdn.example/source-1.png', mimeType: 'image/png', sha256: 'a'.repeat(64),
-      },
+      frozenReference({ assetId: 'asset-source-2', ordinal: 1, buffer: sourceJpeg, mimeType: 'image/jpeg' }),
+      frozenReference({ assetId: 'asset-source-1', ordinal: 0, buffer: sourcePng, mimeType: 'image/png' }),
     ];
     const state = repository(job({ operation: 'IMAGE_TO_IMAGE', inputAssets }));
     const provider = createFakeAiImageProvider({
       images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
     });
     const generate = vi.spyOn(provider, 'generate');
+    const loadInputBuffer = vi.fn(async (
+      asset: NonNullable<AiImageJobRecord['inputAssets']>[number],
+    ) => (
+      asset.assetId === 'asset-source-1' ? sourcePng : sourceJpeg
+    ));
     await runAiImageJob('job-1', 1, {
       repository: state.repo,
       provider,
+      loadInputBuffer,
       uploadBuffer: vi.fn(async () => ({ url: '/generated.png', backend: 'local', key: 'generated.png' })),
     });
+    expect(loadInputBuffer.mock.calls.map(([asset]) => asset.assetId)).toEqual([
+      'asset-source-1',
+      'asset-source-2',
+    ]);
     expect(generate).toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'IMAGE_TO_IMAGE', inputAssets,
+      operation: 'IMAGE_TO_IMAGE',
+      inputAssets: [inputAssets[1], inputAssets[0]],
+      inputImages: [
+        { buffer: sourcePng, mimeType: 'image/png' },
+        { buffer: sourceJpeg, mimeType: 'image/jpeg' },
+      ],
     }));
+  });
+
+  it('does not read input bytes for TEXT_TO_IMAGE jobs', async () => {
+    const state = repository();
+    const provider = createFakeAiImageProvider({
+      images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+    });
+    const loadInputBuffer = vi.fn(async () => { throw new Error('must not read'); });
+
+    await runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      loadInputBuffer,
+      uploadBuffer: vi.fn(async () => ({ url: '/generated.png', backend: 'local', key: 'generated.png' })),
+    });
+
+    expect(loadInputBuffer).not.toHaveBeenCalled();
+  });
+
+  it('fails IMAGE_TO_IMAGE before dispatch when no trusted input loader is installed', async () => {
+    const inputAssets = [
+      frozenReference({ assetId: 'asset-source-1', ordinal: 0, buffer: sourcePng, mimeType: 'image/png' }),
+    ];
+    const state = repository(job({
+      provider: 'openai-images', model: 'gpt-image-1', operation: 'IMAGE_TO_IMAGE', inputAssets,
+    }));
+    const provider = { name: 'openai-images', generate: vi.fn(async () => ({ images: [] })) };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+    })).rejects.toMatchObject({ code: 'INVALID_MEDIA_INPUT' });
+
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(state.repo.recordProviderDispatchStarted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'size',
+      frozenBuffer: sourcePng,
+      loadedBuffer: Buffer.concat([sourcePng, Buffer.from([0])]),
+      mimeType: 'image/png' as const,
+    },
+    {
+      name: 'hash',
+      frozenBuffer: sourcePng,
+      loadedBuffer: Buffer.concat([sourcePng.subarray(0, -1), Buffer.from([sourcePng.at(-1)! ^ 0xff])]),
+      mimeType: 'image/png' as const,
+    },
+    {
+      name: 'MIME',
+      frozenBuffer: sourcePng,
+      loadedBuffer: sourcePng,
+      mimeType: 'image/jpeg' as const,
+    },
+  ])('fails IMAGE_TO_IMAGE before Provider dispatch on a frozen $name mismatch', async ({
+    frozenBuffer, loadedBuffer, mimeType,
+  }) => {
+    const inputAssets = [
+      frozenReference({ assetId: 'asset-source-1', ordinal: 0, buffer: frozenBuffer, mimeType }),
+    ];
+    const state = repository(job({
+      provider: 'openai-images', model: 'gpt-image-1', operation: 'IMAGE_TO_IMAGE', inputAssets,
+    }));
+    const provider = { name: 'openai-images', generate: vi.fn(async () => ({ images: [] })) };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      loadInputBuffer: vi.fn(async () => loadedBuffer),
+      uploadBuffer: vi.fn(),
+    })).rejects.toMatchObject({ code: 'FROZEN_INPUT_MISMATCH' });
+
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(state.repo.recordProviderDispatchStarted).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate frozen IMAGE_TO_IMAGE references before reading storage', async () => {
+    const reference = frozenReference({
+      assetId: 'asset-source-1', ordinal: 0, buffer: sourcePng, mimeType: 'image/png',
+    });
+    const state = repository(job({
+      provider: 'openai-images', model: 'gpt-image-1',
+      operation: 'IMAGE_TO_IMAGE',
+      inputAssets: [reference, { ...reference, ordinal: 1 }],
+    }));
+    const provider = { name: 'openai-images', generate: vi.fn(async () => ({ images: [] })) };
+    const loadInputBuffer = vi.fn(async () => sourcePng);
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      loadInputBuffer,
+      uploadBuffer: vi.fn(),
+    })).rejects.toMatchObject({ code: 'INVALID_MEDIA_INPUT' });
+
+    expect(loadInputBuffer).not.toHaveBeenCalled();
+    expect(provider.generate).not.toHaveBeenCalled();
   });
 
   it('rejects an unsupported paid-provider operation before provider submission', async () => {
     const state = repository(job({
-      provider: 'openai-images', model: 'gpt-image-1', operation: 'IMAGE_TO_IMAGE',
+      provider: 'dashscope-wanx', model: 'wanx-v1', operation: 'IMAGE_TO_IMAGE',
       inputAssets: [{ assetId: 'asset-1', role: 'REFERENCE', url: 'https://cdn.example/source.png' }],
     }));
-    const provider = { name: 'openai-images', generate: vi.fn() };
+    const provider = { name: 'dashscope-wanx', generate: vi.fn() };
 
     await expect(runAiImageJob('job-1', 1, {
       repository: state.repo,

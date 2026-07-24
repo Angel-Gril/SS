@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import {
+  loadAiMediaSuiteTriggerRows,
+  validateAiMediaSuiteTriggerRows,
+} from './ai-media-suite-post-migration-contract.mjs';
 
 const EXECUTION_MIGRATION = '20260720120000_add_ai_media_suite_execution';
 const PLAN_ACTIVITY_MIGRATION = '20260720130000_enforce_ai_media_suite_plan_activity';
@@ -48,6 +52,10 @@ const PROVIDER_RECONCILIATION_IDENTITY_MIGRATION = '20260721128000_normalize_ai_
 const PROVIDER_RECONCILIATION_ANOMALY_MIGRATION = '20260721129000_allow_ai_provider_reconciliation_anomalies';
 const PROVIDER_RECONCILIATION_LEASE_INDEX_MIGRATION = '20260721130000_index_ai_provider_reconciliation_leases';
 const PROVIDER_RECONCILIATION_DEADLINE_MIGRATION = '20260721131000_extend_ai_provider_reconciliation_backfill_deadlines';
+const EXTENSION_MEDIA_REVIEW_MIGRATION = '20260722100000_add_extension_media_review_apply_operations';
+const PAID_SUITE_EXECUTION_MIGRATION = '20260724140000_enable_paid_ai_image_suite_execution';
+const GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION = '20260724141000_index_global_ai_cost_settlements';
+const GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION = '20260724142000_index_global_ai_cost_reservations';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -58,8 +66,12 @@ if (!baseDatabaseUrl) throw new Error('DATABASE_URL is required');
 
 const schema = `ai_media_test_upgrade_${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
 const invalidSchema = `ai_media_test_upgrade_invalid_${new Date().toISOString().replace(/\D/gu, '').slice(0, 14)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+const foreignFunctionSchema = `${schema}_foreign`;
 if (!TEST_SCHEMA_PATTERN.test(schema)) throw new Error('Unsafe AI media upgrade test schema name');
 if (!TEST_SCHEMA_PATTERN.test(invalidSchema)) throw new Error('Unsafe invalid AI media upgrade test schema name');
+if (!TEST_SCHEMA_PATTERN.test(foreignFunctionSchema)) {
+  throw new Error('Unsafe foreign-function AI media upgrade test schema name');
+}
 
 const testUrl = new URL(baseDatabaseUrl);
 testUrl.searchParams.set('schema', schema);
@@ -180,6 +192,10 @@ function prepareHistoricalMigrations() {
   const providerReconciliationDeadlineIndex = names.indexOf(
     PROVIDER_RECONCILIATION_DEADLINE_MIGRATION,
   );
+  const extensionMediaReviewIndex = names.indexOf(EXTENSION_MEDIA_REVIEW_MIGRATION);
+  const paidSuiteExecutionIndex = names.indexOf(PAID_SUITE_EXECUTION_MIGRATION);
+  const globalSettlementBudgetIndex = names.indexOf(GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION);
+  const globalReservationBudgetIndex = names.indexOf(GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -252,6 +268,18 @@ function prepareHistoricalMigrations() {
       `${EDIT_OUTPUT_GUARD_MIGRATION} through ${PROVIDER_RECONCILIATION_DEADLINE_MIGRATION} must be one unique consecutive migration block`,
     );
   }
+  if (extensionMediaReviewIndex !== providerReconciliationDeadlineIndex + 1
+    || paidSuiteExecutionIndex !== extensionMediaReviewIndex + 1
+    || globalSettlementBudgetIndex !== paidSuiteExecutionIndex + 1
+    || globalReservationBudgetIndex !== globalSettlementBudgetIndex + 1
+    || names.filter((name) => name === EXTENSION_MEDIA_REVIEW_MIGRATION).length !== 1
+    || names.filter((name) => name === PAID_SUITE_EXECUTION_MIGRATION).length !== 1
+    || names.filter((name) => name === GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION).length !== 1) {
+    throw new Error(
+      `${EXTENSION_MEDIA_REVIEW_MIGRATION} through ${GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION} must be one unique consecutive migration block`,
+    );
+  }
 
   mkdirSync(join(tempPrismaRoot, 'migrations'), { recursive: true });
   copyFileSync(join(prismaRoot, 'schema.prisma'), tempSchemaPath);
@@ -296,6 +324,10 @@ function prepareHistoricalMigrations() {
     providerReconciliationAnomalyIndex,
     providerReconciliationLeaseIndexIndex,
     providerReconciliationDeadlineIndex,
+    extensionMediaReviewIndex,
+    paidSuiteExecutionIndex,
+    globalSettlementBudgetIndex,
+    globalReservationBudgetIndex,
   };
 }
 
@@ -767,53 +799,127 @@ async function dropAiProviderReconciliationCompatibilityColumns(client) {
   }
 }
 
-async function loadAndValidateMaterializedFixture(client) {
+async function loadAndValidateMaterializedFixtures(client) {
   const suites = await client.$queryRawUnsafe(`
     SELECT "id", "owner_user_id", "actor_user_id"
     FROM "ai_media_suites"
     WHERE "revision" = 4 AND "status" = 'PLANNED'
     ORDER BY "id"
   `);
-  if (!Array.isArray(suites) || suites.length !== 1) {
-    throw new Error(`Expected exactly one revision-4 materialized suite, found ${suites?.length ?? 0}`);
+  if (!Array.isArray(suites) || suites.length !== 2) {
+    throw new Error(`Expected exactly two revision-4 materialized suites, found ${suites?.length ?? 0}`);
   }
-  const fixture = suites[0];
-  await client.$queryRawUnsafe(
-    'SELECT assert_ai_media_suite_materialized_graph($1::text, $2::text)::text AS "result"',
-    fixture.id,
-    fixture.owner_user_id,
-  );
-  await client.$queryRawUnsafe(
-    'SELECT assert_ai_media_suite_materialized_authority($1::text, $2::text)::text AS "result"',
-    fixture.id,
-    fixture.owner_user_id,
-  );
-  const counts = await client.$queryRawUnsafe(`
-    SELECT
-      (SELECT count(*)::int FROM "ai_media_suite_slots" WHERE "suite_id" = $1) AS "slots",
-      (SELECT count(*)::int FROM "ai_media_workflows" workflow
-        JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = workflow."id"
-        WHERE slot."suite_id" = $1) AS "workflows",
-      (SELECT count(*)::int FROM "ai_image_jobs" job
-        JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = job."workflow_id"
-        WHERE slot."suite_id" = $1) AS "jobs",
-      (SELECT count(*)::int FROM "ai_cost_reservations" reservation
-        JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = reservation."workflow_id"
-        WHERE slot."suite_id" = $1) AS "reservations"
-  `, fixture.id);
-  const graphCounts = counts[0];
-  if (!graphCounts
-    || Number(graphCounts.slots) < 1
-    || Number(graphCounts.slots) !== Number(graphCounts.workflows)
-    || Number(graphCounts.slots) !== Number(graphCounts.jobs)
-    || Number(graphCounts.slots) !== Number(graphCounts.reservations)) {
-    throw new Error('Revision-4 populated fixture child graph is incomplete');
+  for (const fixture of suites) {
+    await client.$queryRawUnsafe(
+      'SELECT assert_ai_media_suite_materialized_graph($1::text, $2::text)::text AS "result"',
+      fixture.id,
+      fixture.owner_user_id,
+    );
+    await client.$queryRawUnsafe(
+      'SELECT assert_ai_media_suite_materialized_authority($1::text, $2::text)::text AS "result"',
+      fixture.id,
+      fixture.owner_user_id,
+    );
+    const counts = await client.$queryRawUnsafe(`
+      SELECT
+        (SELECT count(*)::int FROM "ai_media_suite_slots" WHERE "suite_id" = $1) AS "slots",
+        (SELECT count(*)::int FROM "ai_media_workflows" workflow
+          JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = workflow."id"
+          WHERE slot."suite_id" = $1) AS "workflows",
+        (SELECT count(*)::int FROM "ai_image_jobs" job
+          JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = job."workflow_id"
+          WHERE slot."suite_id" = $1) AS "jobs",
+        (SELECT count(*)::int FROM "ai_cost_reservations" reservation
+          JOIN "ai_media_suite_slots" slot ON slot."child_workflow_id" = reservation."workflow_id"
+          WHERE slot."suite_id" = $1) AS "reservations"
+    `, fixture.id);
+    const graphCounts = counts[0];
+    if (!graphCounts
+      || Number(graphCounts.slots) < 1
+      || Number(graphCounts.slots) !== Number(graphCounts.workflows)
+      || Number(graphCounts.slots) !== Number(graphCounts.jobs)
+      || Number(graphCounts.slots) !== Number(graphCounts.reservations)) {
+      throw new Error('Revision-4 populated fixture child graph is incomplete');
+    }
   }
-  return {
+  return suites.map((fixture) => ({
     suiteId: String(fixture.id),
     ownerUserId: String(fixture.owner_user_id),
     actorUserId: String(fixture.actor_user_id),
-  };
+  }));
+}
+
+async function validateLegacyFakeSuiteOutputUpgrade(client, fixture, expectedBackfilled) {
+  const rows = await client.$queryRawUnsafe(`
+    SELECT
+      asset."id" AS "assetId",
+      asset."source_capture_snapshot_id" AS "assetSnapshotId",
+      asset."metadata"->>'version' AS "metadataVersion",
+      asset."metadata"->>'suiteId' AS "metadataSuiteId",
+      asset."metadata"->>'slotId' AS "metadataSlotId",
+      asset."metadata"->>'attempt' AS "metadataAttempt",
+      suite."source_capture_snapshot_id" AS "suiteSnapshotId",
+      suite."provider" AS "provider",
+      suite."status" AS "suiteStatus",
+      suite."item_count" AS "itemCount",
+      slot."id" AS "slotId",
+      slot."attempt" AS "slotAttempt"
+    FROM "ai_media_suites" suite
+    JOIN "ai_media_suite_slots" slot
+      ON slot."suite_id" = suite."id"
+     AND slot."owner_user_id" = suite."owner_user_id"
+    JOIN "ai_media_workflows" workflow
+      ON workflow."id" = slot."child_workflow_id"
+     AND workflow."owner_user_id" = slot."owner_user_id"
+    JOIN "ai_image_jobs" job
+      ON job."workflow_id" = workflow."id"
+     AND job."owner_user_id" = workflow."owner_user_id"
+     AND job."workflow_attempt" = slot."attempt"
+    JOIN "media_assets" asset
+      ON asset."ai_image_job_id" = job."id"
+     AND asset."owner_user_id" = job."owner_user_id"
+    WHERE suite."id" = $1
+      AND suite."owner_user_id" = $2
+      AND asset."kind" = 'AI_GENERATED'
+    ORDER BY slot."ordinal"
+  `, fixture.suiteId, fixture.ownerUserId);
+  const itemCount = Number(rows[0]?.itemCount || 0);
+  if (itemCount < 1 || rows.length !== itemCount
+    || rows.some((row) => row.provider !== 'fake'
+      || row.suiteStatus !== 'SUCCEEDED'
+      || row.metadataVersion !== 'ai-image-suite-output/v1'
+      || row.metadataSuiteId !== fixture.suiteId
+      || row.metadataSlotId !== row.slotId
+      || Number(row.metadataAttempt) !== Number(row.slotAttempt)
+      || (expectedBackfilled
+        ? row.assetSnapshotId !== row.suiteSnapshotId
+        : row.assetSnapshotId !== null))) {
+    throw new Error(
+      expectedBackfilled
+        ? 'Legacy fake suite outputs were not backfilled to the exact suite capture snapshot'
+        : 'Legacy fake suite seed does not match the legal pre-upgrade missing-snapshot shape',
+    );
+  }
+  await client.$queryRawUnsafe(
+    'SELECT assert_ai_media_suite_execution_graph($1::text, $2::text)::text AS "result"',
+    fixture.suiteId,
+    fixture.ownerUserId,
+  );
+  if (expectedBackfilled) {
+    const triggers = await client.$queryRawUnsafe(`
+      SELECT trigger_state.tgname AS "name", trigger_state.tgenabled AS "enabled"
+      FROM pg_trigger trigger_state
+      WHERE trigger_state.tgrelid = 'media_assets'::regclass
+        AND trigger_state.tgname IN (
+          'media_assets_referenced_identity_immutable',
+          'media_assets_suite_child_identity_protected'
+        )
+      ORDER BY trigger_state.tgname
+    `);
+    if (triggers.length !== 2 || triggers.some((trigger) => trigger.enabled !== 'O')) {
+      throw new Error('AI media asset identity triggers were not restored after legacy backfill');
+    }
+  }
 }
 
 async function restoreExactHistoricalSchema(client) {
@@ -1341,6 +1447,151 @@ async function validateAiProviderReconciliationSchema(client, deadlineFixture) {
   }
 }
 
+async function validateGlobalAiBudgetIndexes(client) {
+  const [indexes, migrations] = await Promise.all([
+    client.$queryRawUnsafe(`
+      SELECT
+        index_class.relname AS "name",
+        table_class.relname AS "tableName",
+        access_method.amname AS "method",
+        index_state.indisunique AS "unique",
+        index_state.indisvalid AS "valid",
+        index_state.indisready AS "ready",
+        index_state.indnkeyatts::int AS "keyCount",
+        index_state.indnatts::int AS "attributeCount",
+        pg_get_expr(index_state.indpred, index_state.indrelid) AS "predicate",
+        ARRAY(
+          SELECT attribute_state.attname
+          FROM unnest(index_state.indkey::smallint[]) WITH ORDINALITY AS key_state(attnum, ordinal)
+          JOIN pg_attribute attribute_state
+            ON attribute_state.attrelid = index_state.indrelid
+           AND attribute_state.attnum = key_state.attnum
+          ORDER BY key_state.ordinal
+        ) AS "columns"
+      FROM pg_index index_state
+      JOIN pg_class index_class ON index_class.oid = index_state.indexrelid
+      JOIN pg_class table_class ON table_class.oid = index_state.indrelid
+      JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+      JOIN pg_am access_method ON access_method.oid = index_class.relam
+      WHERE table_namespace.nspname = current_schema()
+        AND index_class.relname IN (
+          'ai_cost_settlements_global_budget_idx',
+          'ai_cost_reservations_global_budget_idx'
+        )
+      ORDER BY index_class.relname
+    `),
+    client.$queryRawUnsafe(`
+      SELECT migration_name AS "name", finished_at AS "finishedAt", rolled_back_at AS "rolledBackAt"
+      FROM "_prisma_migrations"
+      WHERE migration_name IN ($1, $2)
+      ORDER BY migration_name
+    `, GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION, GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION),
+  ]);
+  const expected = new Map([
+    ['ai_cost_reservations_global_budget_idx', {
+      tableName: 'ai_cost_reservations',
+      columns: ['status', 'maximum_cost_minor'],
+    }],
+    ['ai_cost_settlements_global_budget_idx', {
+      tableName: 'ai_cost_settlements',
+      columns: ['kind', 'created_at', 'actual_cost_minor'],
+    }],
+  ]);
+  if (indexes.length !== expected.size) {
+    throw new Error('Global AI budget indexes are missing');
+  }
+  for (const index of indexes) {
+    const definition = expected.get(index.name);
+    if (!definition
+      || index.tableName !== definition.tableName
+      || index.method !== 'btree'
+      || index.unique !== false
+      || index.valid !== true
+      || index.ready !== true
+      || index.predicate !== null
+      || index.keyCount !== definition.columns.length
+      || index.attributeCount !== definition.columns.length
+      || JSON.stringify(index.columns) !== JSON.stringify(definition.columns)) {
+      throw new Error(`Global AI budget index definition is invalid: ${index.name}`);
+    }
+  }
+  if (migrations.length !== 2
+    || migrations.some((migration) => !(migration.finishedAt instanceof Date) || migration.rolledBackAt !== null)) {
+    throw new Error('Global AI budget index migrations are not fully applied');
+  }
+}
+
+async function validatePostMigrationTriggerFiringGuard(client) {
+  validateAiMediaSuiteTriggerRows(await loadAiMediaSuiteTriggerRows(client));
+  const triggerName = 'ai_media_workflows_suite_selected_output_protected';
+  const restoreTrigger = async () => {
+    await client.$executeRawUnsafe(`
+      DROP TRIGGER IF EXISTS "${triggerName}" ON "ai_media_workflows"
+    `);
+    await client.$executeRawUnsafe(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE UPDATE OF "selected_output_asset_id", "review_status" ON "ai_media_workflows"
+      FOR EACH ROW EXECUTE FUNCTION protect_ai_media_suite_selected_output()
+    `);
+  };
+  await client.$executeRawUnsafe(`
+    DROP TRIGGER "${triggerName}" ON "ai_media_workflows"
+  `);
+  await client.$executeRawUnsafe(`
+    CREATE TRIGGER "${triggerName}"
+    AFTER UPDATE OF "selected_output_asset_id", "review_status" ON "ai_media_workflows"
+    FOR EACH ROW EXECUTE FUNCTION protect_ai_media_suite_selected_output()
+  `);
+  let rejectedError;
+  try {
+    validateAiMediaSuiteTriggerRows(await loadAiMediaSuiteTriggerRows(client));
+  } catch (error) {
+    rejectedError = error;
+  } finally {
+    await restoreTrigger();
+  }
+  if (!(rejectedError instanceof Error)
+    || !rejectedError.message.includes('wrong firing contract')) {
+    throw new Error('Post-migration guard accepted a trigger with the wrong firing contract');
+  }
+  validateAiMediaSuiteTriggerRows(await loadAiMediaSuiteTriggerRows(client));
+
+  await client.$executeRawUnsafe(`CREATE SCHEMA "${foreignFunctionSchema}"`);
+  let foreignBindingRejectedError;
+  try {
+    await client.$executeRawUnsafe(`
+      CREATE FUNCTION "${foreignFunctionSchema}".protect_ai_media_suite_selected_output()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        RETURN NEW;
+      END;
+      $function$
+    `);
+    await client.$executeRawUnsafe(`
+      DROP TRIGGER "${triggerName}" ON "ai_media_workflows"
+    `);
+    await client.$executeRawUnsafe(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE UPDATE OF "selected_output_asset_id", "review_status" ON "ai_media_workflows"
+      FOR EACH ROW EXECUTE FUNCTION
+        "${foreignFunctionSchema}".protect_ai_media_suite_selected_output()
+    `);
+    validateAiMediaSuiteTriggerRows(await loadAiMediaSuiteTriggerRows(client));
+  } catch (error) {
+    foreignBindingRejectedError = error;
+  } finally {
+    await restoreTrigger();
+    await client.$executeRawUnsafe(`DROP SCHEMA "${foreignFunctionSchema}" CASCADE`);
+  }
+  if (!(foreignBindingRejectedError instanceof Error)
+    || !foreignBindingRejectedError.message.includes('wrong pg_proc binding')) {
+    throw new Error('Post-migration guard accepted a trigger bound to a foreign-schema function');
+  }
+  validateAiMediaSuiteTriggerRows(await loadAiMediaSuiteTriggerRows(client));
+}
+
 const selectedFixtureTests = [
   'allows one serializable claim and exact replay under concurrent requests',
   'rejects cross-authority and forged reference bindings without leaving partial rows',
@@ -1364,17 +1615,19 @@ try {
   fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
   await fixtureClient.$connect();
   await addCurrentClientCompatibilityColumns(fixtureClient);
-  run([
-    'exec', 'vitest', 'run', '--no-file-parallelism',
-    'src/__tests__/ai-image-suite.postgres.integration.test.ts',
-    '--testNamePattern', selectedFixtureTests,
-  ], {
-    DATABASE_URL: testUrl.toString(),
-    AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),
-    RUN_AI_MEDIA_POSTGRES_TESTS: '1',
-  });
+  for (let fixtureIndex = 0; fixtureIndex < 2; fixtureIndex += 1) {
+    run([
+      'exec', 'vitest', 'run', '--no-file-parallelism',
+      'src/__tests__/ai-image-suite.postgres.integration.test.ts',
+      '--testNamePattern', selectedFixtureTests,
+    ], {
+      DATABASE_URL: testUrl.toString(),
+      AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),
+      RUN_AI_MEDIA_POSTGRES_TESTS: '1',
+    });
+  }
 
-  const fixture = await loadAndValidateMaterializedFixture(fixtureClient);
+  const [legacySuiteFixture, fixture] = await loadAndValidateMaterializedFixtures(fixtureClient);
   await restoreExactHistoricalSchema(fixtureClient);
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
@@ -1542,10 +1795,52 @@ try {
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
 
-  if (migrationStages.providerReconciliationWorkflowIndexIndex < migrationStages.names.length - 1) {
+  addHistoricalMigrationRange(
+    migrationStages.names,
+    migrationStages.providerReconciliationWorkflowIndexIndex + 1,
+    migrationStages.paidSuiteExecutionIndex - 1,
+  );
+  run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
+    DATABASE_URL: testUrl.toString(),
+  });
+
+  run([
+    'exec', 'vitest', 'run', '--no-file-parallelism',
+    'src/__tests__/ai-image-suite-populated-upgrade.postgres.integration.test.ts',
+  ], {
+    DATABASE_URL: testUrl.toString(),
+    AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),
+    AI_MEDIA_LEGACY_SUITE_ID: legacySuiteFixture.suiteId,
+    AI_MEDIA_LEGACY_OWNER_USER_ID: legacySuiteFixture.ownerUserId,
+    AI_MEDIA_LEGACY_ACTOR_USER_ID: legacySuiteFixture.actorUserId,
+    RUN_AI_MEDIA_LEGACY_SUCCESS_SEED_TESTS: '1',
+  });
+
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  await validateLegacyFakeSuiteOutputUpgrade(fixtureClient, legacySuiteFixture, false);
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
+
+  addHistoricalMigrationRange(
+    migrationStages.names,
+    migrationStages.paidSuiteExecutionIndex,
+    migrationStages.paidSuiteExecutionIndex,
+  );
+  run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
+    DATABASE_URL: testUrl.toString(),
+  });
+
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  await validateLegacyFakeSuiteOutputUpgrade(fixtureClient, legacySuiteFixture, true);
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
+
+  if (migrationStages.paidSuiteExecutionIndex < migrationStages.names.length - 1) {
     addHistoricalMigrationRange(
       migrationStages.names,
-      migrationStages.providerReconciliationWorkflowIndexIndex + 1,
+      migrationStages.paidSuiteExecutionIndex + 1,
       migrationStages.names.length - 1,
     );
     run(['exec', 'prisma', 'migrate', 'deploy', '--schema', tempSchemaPath], {
@@ -1555,9 +1850,12 @@ try {
 
   fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
   await fixtureClient.$connect();
+  await validateLegacyFakeSuiteOutputUpgrade(fixtureClient, legacySuiteFixture, true);
   await validateWorkflowHistoryIndexes(fixtureClient);
   await validateListingDraftApplicationLedger(fixtureClient);
   await validateAiProviderReconciliationSchema(fixtureClient, providerDeadlineFixture);
+  await validateGlobalAiBudgetIndexes(fixtureClient);
+  await validatePostMigrationTriggerFiringGuard(fixtureClient);
   await fixtureClient.$disconnect();
   fixtureClient = undefined;
 
@@ -1594,6 +1892,11 @@ try {
     await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${invalidSchema}" CASCADE`);
   } catch (error) {
     cleanupErrors.push(labeledCleanupError(`drop schema ${invalidSchema}`, error));
+  }
+  try {
+    await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${foreignFunctionSchema}" CASCADE`);
+  } catch (error) {
+    cleanupErrors.push(labeledCleanupError(`drop schema ${foreignFunctionSchema}`, error));
   }
   try {
     await admin.$disconnect();

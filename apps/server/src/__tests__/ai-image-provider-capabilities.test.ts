@@ -19,13 +19,26 @@ describe('AI image provider capability matrix', () => {
       evidenceLevel: 'adapter-characterized',
     });
     expect(resolveAiImageProviderCapability('dashscope-wanx', 'legacy-wanx')?.model).toBe('*');
-    expect(resolveAiImageProviderCapability('openai-images', 'gpt-image-1')?.operations).toEqual([
-      'TEXT_TO_IMAGE',
-    ]);
+    expect(resolveAiImageProviderCapability('openai-images', 'gpt-image-1')).toMatchObject({
+      operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+      maxReferences: 16,
+      supportsMask: true,
+      inputTransport: 'multipart',
+      evidenceLevel: 'adapter-characterized',
+    });
     expect(
       supportsAiMediaOperation('dashscope-wanx', 'wanx2.1-t2i-turbo', 'IMAGE_TO_IMAGE', 1),
     ).toBe(false);
-    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 1)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 2)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 2)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 2, 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 0)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 17)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 1, 1)).toBe(false);
+    expect(resolveAiImageProviderCapability('openai-images', 'unverified-model')).toMatchObject({
+      model: '*', operations: ['TEXT_TO_IMAGE'], inputTransport: 'none', supportsMask: false,
+      evidenceLevel: 'adapter-characterized',
+    });
     expect(resolveAiImageProviderCapability('dashscope-qwen-mt-image', 'qwen-mt-image')).toMatchObject({
       operations: ['IMAGE_TRANSLATE'], maxReferences: 1, inputTransport: 'public_url',
       evidenceLevel: 'adapter-characterized',
@@ -125,11 +138,10 @@ describe('AI image provider capability matrix', () => {
     expect(supportsAiMediaOperation('fake', 'test', 'FULL_EDIT', 1, 0)).toBe(false);
   });
 
-  it('keeps every real provider fail-closed for edit and inpaint', () => {
+  it('keeps real providers without a characterized multipart adapter fail-closed for edit and inpaint', () => {
     for (const [provider, model] of [
       ['dashscope-wanx', 'wanx2.1-t2i-turbo'],
       ['dashscope-qwen-mt-image', 'qwen-mt-image'],
-      ['openai-images', 'gpt-image-1'],
     ] as const) {
       expect(supportsAiMediaOperation(provider, model, 'FULL_EDIT', 1, 0)).toBe(false);
       expect(supportsAiMediaOperation(provider, model, 'INPAINT', 1, 1)).toBe(false);
@@ -140,14 +152,18 @@ describe('AI image provider capability matrix', () => {
     expect(() =>
       assertAiMediaCapability({ provider: 'unknown', model: 'x', operation: 'TEXT_TO_IMAGE' }),
     ).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_PROVIDER_MODEL' }));
-    expect(() =>
-      assertAiMediaCapability({
-        provider: 'openai-images',
-        model: 'gpt-image-1',
-        operation: 'IMAGE_TO_IMAGE',
-        inputCount: 1,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }));
+    expect(() => assertAiMediaCapability({
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      operation: 'IMAGE_TO_IMAGE',
+      inputCount: 1,
+    })).not.toThrow();
+    expect(() => assertAiMediaCapability({
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      operation: 'IMAGE_TO_IMAGE',
+      inputCount: 0,
+    })).toThrow(expect.objectContaining({ code: 'INVALID_MEDIA_INPUT' }));
     expect(() =>
       assertAiMediaCapability({
         provider: 'fake',

@@ -5,6 +5,11 @@ import {
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
 } from './ai-prompt-templates.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
+import { buildAiImageGenerationQuote } from './ai-image-generation-quote.js';
+import {
+  AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
+  type AiImageProviderRuntimeContract,
+} from './ai-image-provider-runtime-contract.js';
 
 /**
  * Creation is deliberately a separate command contract from the B1 cancel/retry
@@ -63,6 +68,7 @@ export interface ExtensionMediaTranslationSettings {
   model: string;
   dailyLimit: number;
   estimatedCostCents: number;
+  globalDailyBudgetCents?: number;
 }
 
 export interface ExtensionMediaTranslationReadiness {
@@ -96,6 +102,8 @@ export interface ExtensionMediaStandaloneExistingWorkflow
   maskAssetId?: string | null;
   prompt?: string | null;
   negativePrompt?: string | null;
+  estimatedCostCents?: number | null;
+  providerRuntimeContract?: AiImageProviderRuntimeContract | null;
 }
 
 export class ExtensionMediaWorkflowLaunchError extends Error {
@@ -650,6 +658,7 @@ export function createExtensionMediaTranslationLauncher(options: {
       model: settings.model,
       dailyLimit: settings.dailyLimit,
       estimatedCostCents: settings.estimatedCostCents,
+      globalDailyBudgetCents: settings.globalDailyBudgetCents,
       prompt: '',
       resolvedPrompt: resolved.resolvedPrompt,
       resolvedNegativePrompt: resolved.resolvedNegativePrompt,
@@ -722,23 +731,233 @@ interface ExtensionMediaStandaloneReadiness {
   reason: string;
   testOnly?: boolean;
   operation?: string;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  costPerImageCents?: number;
+  globalDailyBudgetCents?: number;
+  evidenceLevel?: string;
+}
+
+interface ExtensionMediaStandaloneProviderConfig {
+  paid: boolean;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  costPerImageCents: number;
+  globalDailyBudgetCents: number;
 }
 
 function standaloneReadinessError(readiness: ExtensionMediaStandaloneReadiness): ExtensionMediaWorkflowLaunchError {
   if (readiness.reasonCode === 'STORAGE_NOT_READY') {
     return new ExtensionMediaWorkflowLaunchError('MEDIA_STORAGE_NOT_READY', readiness.reason);
   }
-  if (readiness.reasonCode === 'PROVIDER_NOT_READY' || readiness.testOnly !== true) {
-    return new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_NOT_ALLOWED', readiness.reason);
-  }
   if (!readiness.enabled || readiness.reasonCode === 'AI_MEDIA_OPERATION_DISABLED') {
     return new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_DISABLED', readiness.reason);
+  }
+  if (readiness.reasonCode === 'PROVIDER_NOT_READY') {
+    return new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_NOT_ALLOWED', readiness.reason);
   }
   return new ExtensionMediaWorkflowLaunchError('MEDIA_CAPABILITY_UNAVAILABLE', readiness.reason);
 }
 
+function standaloneFakeModel(operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT'): string {
+  return operation === 'IMAGE_TO_IMAGE' ? 'fake-image-to-image-v1' : 'fake-image-edit-v1';
+}
+
+function providerConfigError(message: string): never {
+  throw new ExtensionMediaWorkflowLaunchError('MEDIA_PROVIDER_NOT_ALLOWED', message);
+}
+
+function normalizedProviderText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveStandaloneProviderConfig(input: {
+  readiness: ExtensionMediaStandaloneReadiness;
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
+  production: boolean;
+}): ExtensionMediaStandaloneProviderConfig {
+  const { readiness, operation, production } = input;
+  if (!readiness.ready || !readiness.enabled) throw standaloneReadinessError(readiness);
+  const testOnly = readiness.testOnly === true;
+  const provider = normalizedProviderText(readiness.provider) || (testOnly ? 'fake' : '');
+  if (provider === 'fake') {
+    const model = standaloneFakeModel(operation);
+    if (!testOnly || production) {
+      providerConfigError('The fake AI image Provider is test-only and disabled in production');
+    }
+    if (readiness.model !== undefined && normalizedProviderText(readiness.model) !== model) {
+      providerConfigError('The fake AI image Provider model configuration is invalid');
+    }
+    return {
+      paid: false,
+      provider,
+      model,
+      baseUrl: '',
+      costPerImageCents: 0,
+      globalDailyBudgetCents: 0,
+    };
+  }
+  const model = normalizedProviderText(readiness.model);
+  const baseUrl = normalizedProviderText(readiness.baseUrl);
+  const costPerImageCents = Number(readiness.costPerImageCents);
+  const globalDailyBudgetCents = Number(readiness.globalDailyBudgetCents);
+  if (testOnly
+    || !provider
+    || !model
+    || !baseUrl
+    || readiness.evidenceLevel !== 'sandbox-verified'
+    || !Number.isSafeInteger(costPerImageCents)
+    || costPerImageCents < 1
+    || !Number.isSafeInteger(globalDailyBudgetCents)
+    || globalDailyBudgetCents < 1) {
+    providerConfigError('Paid AI image Provider readiness is incomplete or unverified');
+  }
+  return {
+    paid: true,
+    provider,
+    model,
+    baseUrl,
+    costPerImageCents,
+    globalDailyBudgetCents,
+  };
+}
+
+function buildStandalonePaidExecution(
+  providerConfig: ExtensionMediaStandaloneProviderConfig,
+  request: { count: number; width: number; height: number },
+) {
+  if (!providerConfig.paid) return {};
+  try {
+    const quote = buildAiImageGenerationQuote(providerConfig, request);
+    if (!quote.operationConfig) providerConfigError('Paid AI image Provider quote is incomplete');
+    return {
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      estimatedCostCents: quote.estimatedCostCents,
+      globalDailyBudgetCents: providerConfig.globalDailyBudgetCents,
+      providerRuntimeContract: quote.operationConfig,
+    };
+  } catch (error) {
+    if (error instanceof ExtensionMediaWorkflowLaunchError) throw error;
+    providerConfigError(error instanceof Error ? error.message : 'Paid AI image Provider quote is invalid');
+  }
+}
+
 function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+interface ExtensionMediaStandaloneFrozenProvider {
+  paid: boolean;
+  provider: string;
+  model: string;
+  estimatedCostCents: number;
+  providerRuntimeContract: AiImageProviderRuntimeContract | null;
+}
+
+function standaloneIdempotencyConflict(): never {
+  throw new ExtensionMediaWorkflowLaunchError(
+    'MEDIA_CREATE_IDEMPOTENCY_CONFLICT',
+    'Media creation intent is bound to another operation or draft context',
+  );
+}
+
+function frozenStandaloneProvider(
+  candidate: ExtensionMediaStandaloneExistingWorkflow,
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+): ExtensionMediaStandaloneFrozenProvider {
+  const provider = normalizedProviderText(candidate.provider);
+  const model = normalizedProviderText(candidate.model);
+  if (provider === 'fake') {
+    if (model !== standaloneFakeModel(operation)
+      || (candidate.estimatedCostCents != null && candidate.estimatedCostCents !== 0)
+      || candidate.providerRuntimeContract != null) {
+      standaloneIdempotencyConflict();
+    }
+    return {
+      paid: false,
+      provider,
+      model,
+      estimatedCostCents: 0,
+      providerRuntimeContract: null,
+    };
+  }
+  const runtime = candidate.providerRuntimeContract;
+  const estimatedCostCents = Number(candidate.estimatedCostCents);
+  if (!provider
+    || !model
+    || !runtime
+    || runtime.contractVersion !== AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION
+    || runtime.provider !== provider
+    || runtime.model !== model
+    || !/^[a-f0-9]{64}$/u.test(runtime.baseUrlSha256)
+    || !Number.isSafeInteger(runtime.unitCostCents)
+    || runtime.unitCostCents < 1
+    || runtime.imageCount !== 1
+    || !Number.isSafeInteger(runtime.width)
+    || runtime.width < 1
+    || !Number.isSafeInteger(runtime.height)
+    || runtime.height < 1
+    || !Number.isSafeInteger(runtime.maximumCostCents)
+    || runtime.maximumCostCents !== runtime.unitCostCents
+    || estimatedCostCents !== runtime.maximumCostCents
+    || (operation === 'IMAGE_TO_IMAGE' && (runtime.width !== 1024 || runtime.height !== 1024))) {
+    standaloneIdempotencyConflict();
+  }
+  return {
+    paid: true,
+    provider,
+    model,
+    estimatedCostCents,
+    providerRuntimeContract: runtime,
+  };
+}
+
+function sameProviderRuntimeContract(
+  left: AiImageProviderRuntimeContract,
+  right: AiImageProviderRuntimeContract,
+): boolean {
+  return left.contractVersion === right.contractVersion
+    && left.provider === right.provider
+    && left.model === right.model
+    && left.baseUrlSha256 === right.baseUrlSha256
+    && left.unitCostCents === right.unitCostCents
+    && left.imageCount === right.imageCount
+    && left.width === right.width
+    && left.height === right.height
+    && left.maximumCostCents === right.maximumCostCents;
+}
+
+function assertStandaloneProviderStillAuthorized(
+  frozen: ExtensionMediaStandaloneFrozenProvider,
+  active: ExtensionMediaStandaloneProviderConfig,
+): void {
+  if (frozen.provider !== active.provider || frozen.model !== active.model || frozen.paid !== active.paid) {
+    throw new ExtensionMediaWorkflowLaunchError(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider configuration changed',
+    );
+  }
+  if (!frozen.paid) return;
+  const runtime = frozen.providerRuntimeContract!;
+  const activeExecution = buildStandalonePaidExecution(active, {
+    count: runtime.imageCount,
+    width: runtime.width,
+    height: runtime.height,
+  }) as {
+    estimatedCostCents?: number;
+    providerRuntimeContract?: AiImageProviderRuntimeContract | null;
+  };
+  if (activeExecution.estimatedCostCents !== frozen.estimatedCostCents
+    || !activeExecution.providerRuntimeContract
+    || !sameProviderRuntimeContract(activeExecution.providerRuntimeContract, runtime)) {
+    throw new ExtensionMediaWorkflowLaunchError(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider configuration changed',
+    );
+  }
 }
 
 export function createExtensionMediaWorkflowLauncher(options: {
@@ -760,7 +979,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
     draftRevision: number;
     draftVersion: number;
     role: 'GENERAL' | 'EDIT';
-  }): Promise<{ id: string }>;
+  }): Promise<{ id: string; width: number; height: number }>;
   getReadiness(
     operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
   ): Promise<ExtensionMediaStandaloneReadiness>;
@@ -794,13 +1013,6 @@ export function createExtensionMediaWorkflowLauncher(options: {
     if (!command) {
       throw new ExtensionMediaWorkflowLaunchError('MEDIA_CREATE_INVALID', 'Media creation command is invalid');
     }
-    if (options.production ?? process.env.NODE_ENV === 'production') {
-      throw new ExtensionMediaWorkflowLaunchError(
-        'MEDIA_PROVIDER_NOT_ALLOWED',
-        'Extension standalone media creation is fake-only and disabled in production',
-      );
-    }
-
     const ensureReadiness = async () => {
       let readiness: ExtensionMediaStandaloneReadiness;
       try {
@@ -811,8 +1023,11 @@ export function createExtensionMediaWorkflowLauncher(options: {
           'Media capability is temporarily unavailable',
         );
       }
-      if (!readiness.ready || readiness.testOnly !== true) throw standaloneReadinessError(readiness);
-      return readiness;
+      return resolveStandaloneProviderConfig({
+        readiness,
+        operation: command.operation,
+        production: options.production ?? process.env.NODE_ENV === 'production',
+      });
     };
     const enqueueFor = command.operation === 'IMAGE_TO_IMAGE'
       ? options.enqueueGeneration
@@ -860,7 +1075,6 @@ export function createExtensionMediaWorkflowLauncher(options: {
         || (candidate.sourceMediaKey ? [candidate.sourceMediaKey] : []);
       if (candidate.ownerUserId !== input.ownerUserId
         || candidate.operation !== command.operation
-        || candidate.provider !== 'fake'
         || candidate.contextType !== 'listing-draft'
         || candidate.contextId !== input.listingWorkflowId
         || candidate.contextDraftRevision !== command.draftRevision
@@ -871,11 +1085,9 @@ export function createExtensionMediaWorkflowLauncher(options: {
         || String(candidate.negativePrompt || '') !== command.negativePrompt
         || (command.operation === 'INPAINT' && candidate.maskAssetId !== command.maskAssetId)
         || (command.operation !== 'INPAINT' && candidate.maskAssetId != null)) {
-        throw new ExtensionMediaWorkflowLaunchError(
-          'MEDIA_CREATE_IDEMPOTENCY_CONFLICT',
-          'Media creation intent is bound to another operation or draft context',
-        );
+        standaloneIdempotencyConflict();
       }
+      return frozenStandaloneProvider(candidate, command.operation);
     };
     const resultFor = (candidate: ExtensionMediaStandaloneExistingWorkflow) => ({
       workflowId: candidate.id,
@@ -898,10 +1110,11 @@ export function createExtensionMediaWorkflowLauncher(options: {
       return resultFor(authoritative);
     };
     const replayExisting = async (candidate: ExtensionMediaStandaloneExistingWorkflow) => {
-      assertMatchingWorkflow(candidate);
+      const frozenProvider = assertMatchingWorkflow(candidate);
       assertReplayableWorkflowStatus(candidate.status, 'media workflow');
       if (candidate.status === 'QUEUED') {
-        await ensureReadiness();
+        const activeProvider = await ensureReadiness();
+        assertStandaloneProviderStillAuthorized(frozenProvider, activeProvider);
         if (!candidate.jobId) {
           throw new ExtensionMediaWorkflowLaunchError(
             'MEDIA_QUEUE_UNAVAILABLE',
@@ -916,7 +1129,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
 
     const existing = await loadExisting();
     if (existing) return replayExisting(existing);
-    await ensureReadiness();
+    const providerConfig = await ensureReadiness();
 
     let context: ExtensionMediaTranslationLaunchContext | null;
     try {
@@ -948,7 +1161,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
       );
     }
 
-    let sources: Array<{ id: string }>;
+    let sources: Array<{ id: string; width: number; height: number }>;
     try {
       sources = await Promise.all(command.sourceMediaKeys.map((sourceMediaKey) => (
         options.internalizeSource({
@@ -977,7 +1190,11 @@ export function createExtensionMediaWorkflowLauncher(options: {
         'Source image storage is temporarily unavailable',
       );
     }
-    if (sources.some((source) => !source?.id)) {
+    if (sources.some((source) => !source?.id
+      || !Number.isSafeInteger(source.width)
+      || source.width < 1
+      || !Number.isSafeInteger(source.height)
+      || source.height < 1)) {
       throw new ExtensionMediaWorkflowLaunchError(
         'MEDIA_CREATE_CONTEXT_STALE',
         'The listing draft or source image changed; refresh before creating a task',
@@ -993,6 +1210,18 @@ export function createExtensionMediaWorkflowLauncher(options: {
     let created;
     try {
       if (command.operation === 'IMAGE_TO_IMAGE') {
+        const dailyLimit = await options.getEditDailyLimit();
+        if (!Number.isSafeInteger(dailyLimit) || dailyLimit < 0) {
+          throw new ExtensionMediaWorkflowLaunchError(
+            'MEDIA_QUOTA_UNAVAILABLE',
+            'Image generation quota configuration is invalid',
+          );
+        }
+        const providerExecution = buildStandalonePaidExecution(providerConfig, {
+          count: 1,
+          width: 1024,
+          height: 1024,
+        });
         created = await options.workflowService.createImageToImage({
           ownerUserId: input.ownerUserId,
           actorUserId: input.actorUserId,
@@ -1002,6 +1231,8 @@ export function createExtensionMediaWorkflowLauncher(options: {
           count: 1,
           width: 1024,
           height: 1024,
+          dailyLimit,
+          ...providerExecution,
           idempotencyKey: command.workflowOperationKey,
           context: workflowContext,
         });
@@ -1052,11 +1283,19 @@ export function createExtensionMediaWorkflowLauncher(options: {
             'Image edit quota configuration is invalid',
           );
         }
+        const source = sources[0]!;
+        const providerExecution = buildStandalonePaidExecution(providerConfig, {
+          count: 1,
+          width: source.width,
+          height: source.height,
+        });
         created = await options.workflowService.createImageEdit({
           ownerUserId: input.ownerUserId,
           actorUserId: input.actorUserId,
           operation: command.operation,
-          sourceAssetId: sources[0]!.id,
+          sourceAssetId: source.id,
+          width: source.width,
+          height: source.height,
           ...(command.operation === 'INPAINT' ? {
             maskAssetId: command.maskAssetId,
             maskSemantics: command.maskSemantics,
@@ -1070,6 +1309,7 @@ export function createExtensionMediaWorkflowLauncher(options: {
           templateChecksum: resolved.checksum,
           templateSnapshot: resolved.snapshot,
           dailyLimit,
+          ...providerExecution,
           idempotencyKey: command.workflowOperationKey,
           context: workflowContext,
         });

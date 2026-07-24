@@ -3,6 +3,7 @@ import {
   createExtensionMediaWorkflowCommandExecutor,
   ExtensionMediaWorkflowCommandError,
 } from '../services/extension-media-workflow-commands.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 function workflow(overrides: Record<string, unknown> = {}) {
   return {
@@ -16,6 +17,33 @@ function workflow(overrides: Record<string, unknown> = {}) {
     jobs: [{ provider: 'fake' }],
     ...overrides,
   } as any;
+}
+
+function paidJob(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'job-1', operation: 'IMAGE_TO_IMAGE',
+    provider: 'openai-images', model: 'gpt-image-1',
+    requestedImageCount: 1, width: 1024, height: 1024, estimatedCostCents: 7,
+    operationConfig: createAiImageProviderRuntimeContract({
+      provider: 'openai-images', model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1', costPerImageCents: 7,
+    }, { count: 1, width: 1024, height: 1024 }),
+    ...overrides,
+  };
+}
+
+function paidWorkflow(overrides: Record<string, unknown> = {}) {
+  return workflow({ operation: 'IMAGE_TO_IMAGE', jobs: [paidJob()], ...overrides });
+}
+
+function paidReadiness(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: true, ready: true, testOnly: false, evidenceLevel: 'sandbox-verified',
+    provider: 'openai-images', model: 'gpt-image-1',
+    baseUrl: 'https://api.openai.com/v1', costPerImageCents: 7,
+    globalDailyBudgetCents: 100,
+    ...overrides,
+  };
 }
 
 function input(action: 'CANCEL' | 'RETRY') {
@@ -36,6 +64,7 @@ function setup(current = workflow(), options: {
   retryReady?: boolean;
   retryProvider?: string;
   retryModel?: string;
+  retryReadiness?: Record<string, unknown>;
 } = {}) {
   const get = vi.fn(async () => current);
   const cancel = vi.fn(async () => workflow({ status: 'CANCELLED', revision: 4 }));
@@ -51,6 +80,7 @@ function setup(current = workflow(), options: {
     ready: options.retryReady !== false,
     ...(options.retryProvider ? { provider: options.retryProvider } : {}),
     ...(options.retryModel ? { model: options.retryModel } : {}),
+    ...(options.retryReadiness || {}),
   }));
   const launchWorkflow = vi.fn(async () => ({
     workflowId: 'media-v2-1', action: 'CREATE_WORKFLOW' as const,
@@ -126,6 +156,66 @@ describe('extension media workflow commands', () => {
     expect(state.enqueueTranslation).not.toHaveBeenCalled();
   });
 
+  it('retries an authorized paid standalone workflow with frozen cost and both budgets', async () => {
+    const state = setup(paidWorkflow(), {
+      production: true,
+      retryReadiness: paidReadiness(),
+    });
+    await expect(state.execute(input('RETRY'))).resolves.toMatchObject({
+      workflowId: 'media-1', action: 'RETRY', status: 'QUEUED', revision: 4,
+    });
+    expect(state.retry).toHaveBeenCalledWith({
+      id: 'media-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 3, idempotencyKey: 'media-command-operation-1',
+      dailyLimit: 4, globalDailyBudgetCents: 100,
+    });
+    expect(state.enqueueGeneration).toHaveBeenCalledWith('job-2');
+  });
+
+  it.each([
+    ['endpoint', paidReadiness({ baseUrl: 'https://images.example.com/v1' }), paidJob()],
+    ['unit price', paidReadiness({ costPerImageCents: 8 }), paidJob()],
+    ['request shape', paidReadiness(), paidJob({ width: 512 })],
+  ])('rejects a paid retry when the frozen %s contract changed', async (_label, readiness, job) => {
+    const state = setup(paidWorkflow({ jobs: [job] }), { retryReadiness: readiness });
+    await expect(state.execute(input('RETRY'))).rejects.toMatchObject({
+      code: 'MEDIA_PROVIDER_CONFIG_CHANGED',
+    });
+    expect(state.retry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a paid retry after the capability is revoked', async () => {
+    const state = setup(paidWorkflow(), {
+      retryReadiness: paidReadiness({ enabled: false, ready: false }),
+    });
+    await expect(state.execute(input('RETRY'))).rejects.toMatchObject({
+      code: 'MEDIA_CAPABILITY_UNAVAILABLE',
+    });
+    expect(state.retry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a paid retry when the global budget is missing', async () => {
+    const readiness = paidReadiness({ globalDailyBudgetCents: undefined });
+    const state = setup(paidWorkflow(), { retryReadiness: readiness });
+    await expect(state.execute(input('RETRY'))).rejects.toMatchObject({
+      code: 'MEDIA_CAPABILITY_UNAVAILABLE',
+    });
+    expect(state.retry).not.toHaveBeenCalled();
+  });
+
+  it('maps a paid retry global budget rejection to a stable command error', async () => {
+    const state = setup(paidWorkflow(), { retryReadiness: paidReadiness() });
+    state.retry.mockRejectedValueOnce(Object.assign(
+      new Error('Global daily AI budget exceeded'),
+      { code: 'BUDGET_EXCEEDED' },
+    ));
+    await expect(state.execute(input('RETRY'))).rejects.toEqual(
+      expect.objectContaining<Partial<ExtensionMediaWorkflowCommandError>>({
+        code: 'BUDGET_EXCEEDED',
+      }),
+    );
+  });
+
   it.each(['IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE', 'FULL_EDIT', 'INPAINT'])(
     'keeps a failed fake %s workflow dark when an environment is production',
     async (operation) => {
@@ -181,7 +271,7 @@ describe('extension media workflow commands', () => {
   );
 
   it.each([
-    ['paid provider', workflow({ jobs: [{ provider: 'dashscope-qwen-mt-image' }] }), {}, 'MEDIA_PROVIDER_NOT_ALLOWED'],
+    ['unverified paid provider', workflow({ jobs: [{ provider: 'dashscope-qwen-mt-image' }] }), {}, 'MEDIA_CAPABILITY_UNAVAILABLE'],
     ['stale draft', workflow({ contextDraftVersion: 6 }), {}, 'MEDIA_COMMAND_CONTEXT_STALE'],
     ['suite child', workflow({ suiteId: 'suite-1' }), {}, 'MEDIA_COMMAND_CONTEXT_STALE'],
   ])('fails closed for %s', async (_label, current, options, code) => {
@@ -191,6 +281,15 @@ describe('extension media workflow commands', () => {
     );
     expect(state.retry).not.toHaveBeenCalled();
     expect(state.enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('rejects Provider endpoint fields supplied by a retry client', async () => {
+    const state = setup();
+    await expect(state.execute({
+      ...input('RETRY'),
+      command: { ...input('RETRY').command, provider: 'fake', baseUrl: 'https://client.invalid' },
+    })).rejects.toMatchObject({ code: 'MEDIA_COMMAND_INVALID' });
+    expect(state.get).not.toHaveBeenCalled();
   });
 
   it('marks a durable retry failed before returning a queue failure receipt', async () => {

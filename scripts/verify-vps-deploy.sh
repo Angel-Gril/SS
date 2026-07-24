@@ -21,6 +21,7 @@ VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_NEXT_P
 VERIFY_EXPECT_EXTENSION_AUTH_MODE="${VERIFY_EXPECT_EXTENSION_AUTH_MODE:-compat}"
 VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"
 VERIFY_EXPECT_LOCAL_POSTGRES="${VERIFY_EXPECT_LOCAL_POSTGRES:-true}"
+VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT="${VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT:-20m}"
 
 FAILURES=0
 WARNINGS=0
@@ -49,6 +50,16 @@ validate_boolean_setting() {
       return 1
       ;;
   esac
+}
+
+validate_duration_setting() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" =~ ^[1-9][0-9]*[smh]$ ]]; then
+    return 0
+  fi
+  echo "[verify-vps] ERROR: $name must be a positive duration ending in s, m, or h" >&2
+  return 1
 }
 
 validate_origin_mode() {
@@ -152,6 +163,9 @@ if ! validate_origin_mode "$VERIFY_ORIGIN_MODE"; then
   exit 1
 fi
 if ! validate_boolean_setting VERIFY_EXPECT_LOCAL_POSTGRES "$VERIFY_EXPECT_LOCAL_POSTGRES"; then
+  exit 1
+fi
+if ! validate_duration_setting VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT "$VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT"; then
   exit 1
 fi
 if ! load_direct_hostnames; then
@@ -717,6 +731,28 @@ check_ai_media_dark_rollout() {
   fail "AI Media dark-rollout verification failed"
 }
 
+check_ai_media_suite_post_migration_guard() {
+  local verifier="${DEPLOY_DIR}/apps/server/scripts/verify-ai-media-suite-post-migration.mjs"
+  if [ ! -r "$verifier" ]; then
+    fail "AI media suite post-migration DB guard is missing or unreadable: $verifier"
+    return
+  fi
+  local output
+  if output=$(
+    cd "${DEPLOY_DIR}/apps/server"
+    set -a
+    # shellcheck disable=SC1091
+    . "../../${ENV_FILE}"
+    set +a
+    timeout --signal=TERM --kill-after=30s "$VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT" \
+      node scripts/verify-ai-media-suite-post-migration.mjs 2>&1
+  ); then
+    printf '%s\n' "$output"
+  else
+    fail "AI media suite post-migration DB guard failed: ${output:-no output}"
+  fi
+}
+
 check_recent_logs() {
   local service="$1"
   if journalctl -u "$service" --since "$LOG_SINCE" --no-pager | grep -Eiq 'fatal|exception|unhandled|panic'; then
@@ -816,6 +852,7 @@ require_command curl
 require_command ss
 require_command nginx
 require_command systemctl
+require_command timeout
 
 if [ -f "${DEPLOY_DIR}/DEPLOYED_COMMIT" ]; then
   pass "DEPLOYED_COMMIT=$(cat "${DEPLOY_DIR}/DEPLOYED_COMMIT")"
@@ -850,6 +887,7 @@ load_backup_config
 check_cron
 check_backup_status
 check_prisma_migrations
+check_ai_media_suite_post_migration_guard
 check_ai_media_dark_rollout
 check_logistics_rollout_expectations
 check_no_restore_temp_db

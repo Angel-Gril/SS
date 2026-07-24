@@ -43,6 +43,10 @@ import {
   type AiImageEditStorageReadiness,
 } from '../services/ai-image-edit-storage.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
+import {
+  assertAiImageProviderRuntimeContract,
+} from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
   AI_MEDIA_INPAINT_TEMPLATE_KEY,
@@ -276,8 +280,10 @@ interface AiImageRouteSettings {
   enabled: boolean;
   provider: string;
   model: string;
+  baseUrl?: string;
   dailyLimit: number;
   estimatedCostCents: number;
+  globalDailyBudgetCents?: number;
 }
 
 interface AiImageTranslationRouteSettings {
@@ -286,6 +292,7 @@ interface AiImageTranslationRouteSettings {
   model: string;
   dailyLimit: number;
   estimatedCostCents: number;
+  globalDailyBudgetCents: number;
 }
 
 interface AiImageEditRouteSettings {
@@ -293,6 +300,11 @@ interface AiImageEditRouteSettings {
   fullEditEnabled: boolean;
   inpaintEnabled: boolean;
   dailyLimit: number;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  estimatedCostCents: number;
+  globalDailyBudgetCents: number;
 }
 
 type EditMaskUploadLimitCheck = { allowed: true } | { allowed: false; reason: string };
@@ -316,7 +328,12 @@ interface AiImageRouteOptions {
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
   getTranslationStorageReadiness?: () => Promise<AiImageTranslationStorageReadiness>;
   getEditSettings?: () => Promise<AiImageEditRouteSettings>;
+  getGlobalDailyBudgetCents?: () => Promise<number>;
   getEditStorageReadiness?: () => Promise<AiImageEditStorageReadiness>;
+  getOwnedAssetDimensions?: (
+    ownerUserId: string,
+    assetId: string,
+  ) => Promise<{ width: number; height: number } | null>;
   getSourceListingWebMediaEnabled?: () => Promise<boolean>;
   sourceWorkflowFeatureFlags?: SourceWorkflowFeatureFlagEvaluator;
   production?: boolean;
@@ -373,6 +390,8 @@ function sendError(reply: any, error: unknown) {
         ? 409
         : error.code === 'IMAGE_TRANSLATION_QUOTA_EXCEEDED'
           || error.code === 'AI_IMAGE_EDIT_QUOTA_EXCEEDED'
+          || error.code === 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED'
+          || error.code === 'BUDGET_EXCEEDED'
           ? 429
         : error.code === 'AI_MEDIA_OPERATION_DISABLED'
           || error.code === 'AI_MEDIA_WORKFLOW_DISABLED'
@@ -427,6 +446,7 @@ function sendError(reply: any, error: unknown) {
         || error.code === 'APPLICATION_MUTATION_REQUIRED'
         ? 409
       : error.code === 'QUOTA_EXCEEDED'
+          || error.code === 'BUDGET_EXCEEDED'
           || error.code === 'EDIT_RESOURCE_QUOTA_EXCEEDED'
           ? 429
           : error.code === 'PROVIDER_DISABLED'
@@ -556,7 +576,15 @@ export function resolveAiImageTranslationReadiness(
 }
 
 export function resolveAiImageToImageReadiness(
-  options: { enabled?: boolean; workflowEnabled?: boolean; production?: boolean } = {},
+  options: {
+    enabled?: boolean;
+    workflowEnabled?: boolean;
+    production?: boolean;
+    provider?: string;
+    model?: string;
+    estimatedCostCents?: number;
+    storageReadiness?: AiImageEditStorageReadiness;
+  } = {},
 ): AiImageOperationReadiness {
   if (options.workflowEnabled === false) {
     return {
@@ -574,13 +602,68 @@ export function resolveAiImageToImageReadiness(
       reason: 'AI image-to-image is disabled',
     };
   }
-  if (options.production ?? process.env.NODE_ENV === 'production') {
+  const provider = options.provider || 'fake';
+  const model = provider === 'fake'
+    ? 'fake-image-to-image-v1'
+    : options.model || '';
+  const capability = resolveAiImageProviderCapability(provider, model);
+  if (!capability?.operations.includes('IMAGE_TO_IMAGE')) {
     return {
       enabled: true,
       ready: false,
       reasonCode: 'PROVIDER_NOT_READY',
-      reason: 'AI image-to-image provider is not available in production yet',
+      reason: 'AI image-to-image Provider/model is not supported',
+    };
+  }
+  if (provider === 'fake') {
+    if (options.production ?? process.env.NODE_ENV === 'production') {
+      return {
+        enabled: true,
+        ready: false,
+        reasonCode: 'PROVIDER_NOT_READY',
+        reason: 'The fake image-to-image Provider is test-only',
+        testOnly: true,
+      };
+    }
+    if (options.storageReadiness && !options.storageReadiness.ready) {
+      return {
+        enabled: true,
+        ready: false,
+        reasonCode: 'STORAGE_NOT_READY',
+        reason: options.storageReadiness.reason,
+        testOnly: true,
+      };
+    }
+    return {
+      enabled: true,
+      ready: true,
+      reasonCode: 'READY',
+      reason: 'AI image-to-image workflow is ready',
       testOnly: true,
+    };
+  }
+  if (capability.evidenceLevel !== 'sandbox-verified') {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image-to-image Provider has not passed its sandbox capability gate',
+    };
+  }
+  if (!Number.isSafeInteger(options.estimatedCostCents) || Number(options.estimatedCostCents) < 1) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'A verified positive image-to-image cost is required before paid dispatch',
+    };
+  }
+  if (!options.storageReadiness?.ready) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+      reason: options.storageReadiness?.reason || 'AI image-to-image requires owned local or OSS storage',
     };
   }
   return {
@@ -588,13 +671,18 @@ export function resolveAiImageToImageReadiness(
     ready: true,
     reasonCode: 'READY',
     reason: 'AI image-to-image workflow is ready',
-    testOnly: true,
   };
 }
 
 export function resolveAiImageEditReadiness(
   operation: 'FULL_EDIT' | 'INPAINT',
-  settings: { fullEditEnabled: boolean; inpaintEnabled: boolean },
+  settings: {
+    fullEditEnabled: boolean;
+    inpaintEnabled: boolean;
+    provider?: string;
+    model?: string;
+    estimatedCostCents?: number;
+  },
   options: {
     workflowEnabled?: boolean;
     production?: boolean;
@@ -621,22 +709,54 @@ export function resolveAiImageEditReadiness(
       testOnly: true,
     };
   }
+  const provider = settings.provider || 'fake';
+  const model = provider === 'fake'
+    ? 'fake-image-edit-v1'
+    : settings.model || '';
+  const capability = resolveAiImageProviderCapability(provider, model);
+  if (!capability?.operations.includes(operation)) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image edit Provider/model is not supported',
+    };
+  }
+  if (provider === 'fake' && (options.production ?? process.env.NODE_ENV === 'production')) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'The fake image edit Provider is test-only',
+      testOnly: true,
+    };
+  }
+  if (provider !== 'fake' && capability.evidenceLevel !== 'sandbox-verified') {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image edit Provider has not passed its sandbox capability gate',
+    };
+  }
+  if (provider !== 'fake' && (
+    !Number.isSafeInteger(settings.estimatedCostCents)
+    || Number(settings.estimatedCostCents) < 1
+  )) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'A verified positive image edit cost is required before paid dispatch',
+    };
+  }
   if (options.storageReadiness && !options.storageReadiness.ready) {
     return {
       enabled: true,
       ready: false,
       reasonCode: 'STORAGE_NOT_READY',
       reason: options.storageReadiness.reason,
-      testOnly: true,
-    };
-  }
-  if (options.production ?? process.env.NODE_ENV === 'production') {
-    return {
-      enabled: true,
-      ready: false,
-      reasonCode: 'PROVIDER_NOT_READY',
-      reason: 'Manual image edit has not passed its production Provider gate',
-      testOnly: true,
+      ...(provider === 'fake' ? { testOnly: true } : {}),
     };
   }
   return {
@@ -644,7 +764,7 @@ export function resolveAiImageEditReadiness(
     ready: true,
     reasonCode: 'READY',
     reason: operation === 'FULL_EDIT' ? 'Full-image edit is ready' : 'Masked inpaint is ready',
-    testOnly: true,
+    ...(provider === 'fake' ? { testOnly: true } : {}),
   };
 }
 
@@ -793,6 +913,49 @@ function assertStandaloneWorkflow(workflow: { suiteId?: string | null }): void {
   }
 }
 
+function retryProviderConfigMatches(
+  job: Record<string, unknown> | undefined,
+  operation: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+  settings: AiImageEditRouteSettings,
+): boolean {
+  if (!job) return false;
+  const provider = String(job.provider || '');
+  const model = String(job.model || '');
+  const count = Number(job.requestedImageCount || 0);
+  const width = Number(job.width || 0);
+  const height = Number(job.height || 0);
+  const estimatedCostCents = Number(job.estimatedCostCents || 0);
+  const activeModel = settings.provider === 'fake'
+    ? operation === 'IMAGE_TO_IMAGE' ? 'fake-image-to-image-v1' : 'fake-image-edit-v1'
+    : settings.model;
+  if (provider !== settings.provider || model !== activeModel) return false;
+  if (provider === 'fake') {
+    return estimatedCostCents === 0 && count === 1 && width > 0 && height > 0;
+  }
+  const operationConfig = job.operationConfig;
+  const runtime = operation === 'IMAGE_TO_IMAGE'
+    ? operationConfig
+    : operationConfig && typeof operationConfig === 'object' && !Array.isArray(operationConfig)
+      ? (operationConfig as Record<string, unknown>).providerRuntime
+      : null;
+  try {
+    assertAiImageProviderRuntimeContract(runtime, {
+      provider: settings.provider,
+      model: settings.model,
+      baseUrl: settings.baseUrl,
+      costPerImageCents: settings.estimatedCostCents,
+    }, {
+      count,
+      width,
+      height,
+      estimatedCostCents,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function publicJob(job: Record<string, unknown>, workflow?: Record<string, unknown>) {
   const {
     resolvedPrompt: _resolvedPrompt,
@@ -919,9 +1082,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const getSettings = options.getSettings || (async () => ({
     enabled: await getConfig('ai_image_generation_enabled'),
     provider: await getConfig('ai_image_provider'),
+    baseUrl: await getConfig('ai_image_base_url'),
     model: await getConfig('ai_image_model'),
     dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
-    estimatedCostCents: 0,
+    estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
+    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
   }));
   const getTranslationSettings = options.getTranslationSettings || (async () => ({
     enabled: await getConfig('feature_image_translate'),
@@ -929,6 +1094,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     model: await getConfig('ai_image_translation_model'),
     dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
     estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
+    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
   }));
   const getTranslationStorageReadiness = options.getTranslationStorageReadiness || (async () => {
     try {
@@ -946,7 +1112,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     fullEditEnabled: await getConfig('feature_ai_media_full_edit'),
     inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
     dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
+    provider: await getConfig('ai_image_provider'),
+    model: await getConfig('ai_image_model'),
+    baseUrl: await getConfig('ai_image_base_url'),
+    estimatedCostCents: await getConfig('ai_image_generation_cost_cents'),
+    globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
   }));
+  const getGlobalDailyBudgetCents = options.getGlobalDailyBudgetCents
+    || (async () => getConfig('ai_daily_budget_cents'));
   const getEditStorageReadiness = options.getEditStorageReadiness || (async () => {
     try {
       return resolveAiImageEditStorageReadiness(await getRuntimeConfigForStorage());
@@ -956,6 +1129,21 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         reason: 'AI image edit storage readiness could not be verified',
       };
     }
+  });
+  const getOwnedAssetDimensions = options.getOwnedAssetDimensions || (async (
+    ownerUserId: string,
+    assetId: string,
+  ) => {
+    const asset = await (prisma as any).mediaAsset.findFirst({
+      where: { id: assetId, ownerUserId },
+      select: { width: true, height: true },
+    });
+    return Number.isSafeInteger(asset?.width)
+      && Number(asset.width) > 0
+      && Number.isSafeInteger(asset?.height)
+      && Number(asset.height) > 0
+      ? { width: Number(asset.width), height: Number(asset.height) }
+      : null;
   });
   const featureFlags = options.sourceWorkflowFeatureFlags || sourceWorkflowFeatureFlags;
   const getSourceListingWebMediaDecision = async (ownerUserId: string) => {
@@ -1143,6 +1331,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       enabled: editSettings.imageToImageEnabled,
       workflowEnabled,
       production,
+      provider: editSettings.provider,
+      model: editSettings.model,
+      estimatedCostCents: editSettings.estimatedCostCents,
+      storageReadiness: editStorageReadiness,
     });
     const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, {
       workflowEnabled,
@@ -1209,6 +1401,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           msg: 'AI media workflow is disabled',
         });
       }
+      const quote = buildAiImageGenerationQuote({
+        provider: settings.provider,
+        model: settings.model,
+        baseUrl: settings.baseUrl || '',
+        costPerImageCents: settings.estimatedCostCents,
+      }, {
+        count: parsed.data.count,
+        width: parsed.data.width,
+        height: parsed.data.height,
+      });
       const resolved = await resolvePrompt({
         templateKey: DEFAULT_TEMPLATE_KEY,
         userPrompt: parsed.data.prompt,
@@ -1234,13 +1436,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         templateChecksum: resolved.checksum,
         templateSnapshot: resolved.snapshot,
         requestFingerprint: fingerprint,
+        operationConfig: quote.operationConfig,
         provider: settings.provider,
         model: settings.model,
         count: parsed.data.count,
         width: parsed.data.width,
         height: parsed.data.height,
-        estimatedCostCents: settings.estimatedCostCents,
-      }, repository, settings.dailyLimit);
+        estimatedCostCents: quote.estimatedCostCents,
+      }, repository, settings.dailyLimit, settings.provider === 'fake'
+        ? undefined
+        : settings.globalDailyBudgetCents ?? 0);
       if (!result.replayed) {
         try {
           await enqueue(result.job.id);
@@ -1538,6 +1743,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           model: translationSettings.model,
           dailyLimit: translationSettings.dailyLimit,
           estimatedCostCents: translationSettings.estimatedCostCents,
+          globalDailyBudgetCents: translationSettings.globalDailyBudgetCents,
           idempotencyKey: parsed.data.idempotencyKey,
           context: parsed.data.context,
         });
@@ -1555,6 +1761,32 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         }
+        const dimensions = await getOwnedAssetDimensions(
+          ids.ownerUserId,
+          parsed.data.sourceAssetId,
+        );
+        if (!dimensions) {
+          return reply.status(404).send({
+            code: 'SOURCE_ASSET_NOT_FOUND',
+            msg: 'Owned source image dimensions were not found',
+          });
+        }
+        let providerExecution: Record<string, unknown> = {};
+        if (editSettings.provider !== 'fake') {
+          const quote = buildAiImageGenerationQuote({
+            provider: editSettings.provider,
+            model: editSettings.model,
+            baseUrl: editSettings.baseUrl,
+            costPerImageCents: editSettings.estimatedCostCents,
+          }, { count: 1, ...dimensions });
+          providerExecution = {
+            provider: editSettings.provider,
+            model: editSettings.model,
+            estimatedCostCents: quote.estimatedCostCents,
+            globalDailyBudgetCents: editSettings.globalDailyBudgetCents,
+            providerRuntimeContract: quote.operationConfig,
+          };
+        }
         const templateKey = parsed.data.operation === 'FULL_EDIT'
           ? AI_MEDIA_FULL_EDIT_TEMPLATE_KEY
           : AI_MEDIA_INPAINT_TEMPLATE_KEY;
@@ -1569,6 +1801,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           ...ids,
           operation: parsed.data.operation,
           sourceAssetId: parsed.data.sourceAssetId,
+          width: dimensions.width,
+          height: dimensions.height,
           ...(parsed.data.operation === 'INPAINT' ? {
             maskAssetId: parsed.data.maskAssetId,
             maskSemantics: parsed.data.maskSemantics,
@@ -1582,18 +1816,46 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           templateChecksum: resolved.checksum,
           templateSnapshot: resolved.snapshot,
           dailyLimit: editSettings.dailyLimit,
+          ...providerExecution,
           idempotencyKey: parsed.data.idempotencyKey,
           context: parsed.data.context,
         });
         enqueueOperation = enqueueEdit;
       } else {
-        const editSettings = await getEditSettings();
+        const [editSettings, editStorageReadiness] = await Promise.all([
+          getEditSettings(),
+          getEditStorageReadiness(),
+        ]);
         const readiness = resolveAiImageToImageReadiness({
           enabled: editSettings.imageToImageEnabled,
           production,
+          provider: editSettings.provider,
+          model: editSettings.model,
+          estimatedCostCents: editSettings.estimatedCostCents,
+          storageReadiness: editStorageReadiness,
         });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
+        let providerExecution: Record<string, unknown> = {};
+        if (editSettings.provider !== 'fake') {
+          const quote = buildAiImageGenerationQuote({
+            provider: editSettings.provider,
+            model: editSettings.model,
+            baseUrl: editSettings.baseUrl,
+            costPerImageCents: editSettings.estimatedCostCents,
+          }, {
+            count: parsed.data.count,
+            width: parsed.data.width,
+            height: parsed.data.height,
+          });
+          providerExecution = {
+            provider: editSettings.provider,
+            model: editSettings.model,
+            estimatedCostCents: quote.estimatedCostCents,
+            globalDailyBudgetCents: editSettings.globalDailyBudgetCents,
+            providerRuntimeContract: quote.operationConfig,
+          };
         }
         created = await mediaWorkflowService.createImageToImage({
           ...ids,
@@ -1604,6 +1866,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           count: parsed.data.count,
           width: parsed.data.width,
           height: parsed.data.height,
+          dailyLimit: editSettings.dailyLimit,
+          ...providerExecution,
           idempotencyKey: parsed.data.idempotencyKey,
           context: parsed.data.context,
         });
@@ -1778,6 +2042,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       let retryEnqueue: (jobId: string) => Promise<void> = enqueue;
       let translationRetryDailyLimit: number | undefined;
       let editRetryDailyLimit: number | undefined;
+      let retryGlobalDailyBudgetCents: number | undefined;
       if ((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE') {
         const [translationSettings, translationStorageReadiness] = await Promise.all([
           getTranslationSettings(),
@@ -1815,6 +2080,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             msg: 'AI image translation cost configuration changed; create a new workflow',
           });
         }
+        if (frozenProvider !== 'fake') {
+          retryGlobalDailyBudgetCents = await getGlobalDailyBudgetCents();
+        }
         retryEnqueue = enqueueTranslation;
       } else if (['FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))) {
         const operation = existingWorkflow.operation as 'FULL_EDIT' | 'INPAINT';
@@ -1831,15 +2099,47 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         }
+        const latestJob = Array.isArray(existingWorkflow.jobs)
+          ? existingWorkflow.jobs.at(-1) as unknown as Record<string, unknown> | undefined
+          : undefined;
+        if (!retryProviderConfigMatches(latestJob, operation, editSettings)) {
+          return reply.status(409).send({
+            code: 'PROVIDER_CONFIG_CHANGED',
+            msg: 'AI image edit Provider endpoint, model, price, or request shape changed; create a new workflow',
+          });
+        }
+        if (editSettings.provider !== 'fake') {
+          retryGlobalDailyBudgetCents = editSettings.globalDailyBudgetCents;
+        }
         retryEnqueue = enqueueEdit;
       } else {
-        const editSettings = await getEditSettings();
+        const [editSettings, editStorageReadiness] = await Promise.all([
+          getEditSettings(),
+          getEditStorageReadiness(),
+        ]);
         const readiness = resolveAiImageToImageReadiness({
           enabled: editSettings.imageToImageEnabled,
           production,
+          provider: editSettings.provider,
+          model: editSettings.model,
+          estimatedCostCents: editSettings.estimatedCostCents,
+          storageReadiness: editStorageReadiness,
         });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
+        editRetryDailyLimit = editSettings.dailyLimit;
+        const latestJob = Array.isArray(existingWorkflow.jobs)
+          ? existingWorkflow.jobs.at(-1) as unknown as Record<string, unknown> | undefined
+          : undefined;
+        if (!retryProviderConfigMatches(latestJob, 'IMAGE_TO_IMAGE', editSettings)) {
+          return reply.status(409).send({
+            code: 'PROVIDER_CONFIG_CHANGED',
+            msg: 'AI image Provider endpoint, model, price, or request shape changed; create a new workflow',
+          });
+        }
+        if (editSettings.provider !== 'fake') {
+          retryGlobalDailyBudgetCents = editSettings.globalDailyBudgetCents;
         }
       }
       const result = await mediaWorkflowService.retry({
@@ -1848,9 +2148,12 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         ...parsed.data,
         ...((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE'
           ? { dailyLimit: translationRetryDailyLimit }
-          : ['FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))
+          : ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))
             ? { dailyLimit: editRetryDailyLimit }
           : {}),
+        ...(retryGlobalDailyBudgetCents == null
+          ? {}
+          : { globalDailyBudgetCents: retryGlobalDailyBudgetCents }),
       });
       if (!result.replayed) {
         try {

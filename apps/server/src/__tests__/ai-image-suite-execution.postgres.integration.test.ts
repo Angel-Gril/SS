@@ -648,14 +648,30 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL execution state machine', (
       });
     });
 
+    const runningSlot = await client.aiMediaSuiteSlot.findUniqueOrThrow({
+      where: { id: slotIds[0] },
+    });
+    const renewedLeaseExpiresAt = new Date(
+      (runningSlot.executionLeaseExpiresAt?.getTime() || Date.now()) + 5 * 60_000,
+    );
+    await expect(client.aiMediaSuiteSlot.update({
+      where: { id: slotIds[0] },
+      data: {
+        executionClaimToken: runningSlot.executionClaimToken,
+        executionLeaseExpiresAt: renewedLeaseExpiresAt,
+      },
+    })).resolves.toMatchObject({
+      executionClaimToken: runningSlot.executionClaimToken,
+      executionLeaseExpiresAt: renewedLeaseExpiresAt,
+    });
+
     await expect(client.aiMediaSuiteSlot.update({
       where: { id: slotIds[0] },
       data: {
         executionClaimToken: digest(`replacement-claim-0-${suffix}`),
-        executionLeaseExpiresAt: new Date(Date.now() + 10 * 60_000),
-        revision: { increment: 1 },
+        executionLeaseExpiresAt: new Date(renewedLeaseExpiresAt.getTime() + 5 * 60_000),
       },
-    })).rejects.toThrow(/claim cannot be renewed or replaced/u);
+    })).rejects.toThrow(/lease renewal must preserve a live claim|slot revision must advance by one/u);
 
     await client.$transaction(async (tx: any) => {
       await tx.aiCostSettlement.create({ data: {
@@ -681,6 +697,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL execution state machine', (
         ownerUserId,
         aiImageJobId: jobIds[0],
         kind: 'AI_GENERATED',
+        sourceCaptureSnapshotId: snapshotId,
         url: `https://storage.example/${suffix}/hero.png`,
         storageBackend: 'local',
         storageKey: `${suffix}/hero.png`,
@@ -689,6 +706,10 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL execution state machine', (
         width: 900,
         height: 1200,
         sha256: 'c'.repeat(64),
+        metadata: {
+          version: 'ai-image-suite-output/v1',
+          sourceCaptureSnapshotId: snapshotId,
+        },
       } });
       await tx.aiMediaWorkflow.update({ where: { id: workflowIds[0] }, data: {
         status: 'SUCCEEDED', reviewStatus: 'PENDING', completedAt: new Date(),

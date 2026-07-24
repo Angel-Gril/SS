@@ -176,6 +176,10 @@ function authorityFixture() {
       sha256: assetSha256,
       url: 'https://cdn.example/owner-1/product.png',
       mimeType: 'image/png',
+      storageBackend: 'local',
+      storageKey: 'source-product.png',
+      sizeBytes: 1024,
+      sourceCaptureSnapshotId: 'snapshot-1',
       width: 900,
       height: 1200,
     },
@@ -220,6 +224,7 @@ function authorityFixture() {
     model: 'fake-image-suite-v1',
     providerConfigHash,
     pricingVersion: 'fake-suite-pricing/v1',
+    concurrencyLimit: 2,
     itemCount: 1,
     estimatedCostCents: 7,
     maximumCostCents: 11,
@@ -253,13 +258,63 @@ function authorityFixture() {
   return { suite, slot, prompt, promptSet, events };
 }
 
+function paidProviderRuntime() {
+  return {
+    providerConfig: {
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      providerConfigHash,
+      pricingVersion: 'openai-images-test/v1',
+      estimatedCostPerImageCents: 7,
+      maximumCostPerImageCents: 11,
+      concurrencyLimit: 2,
+    },
+    providerRuntime: {
+      contractVersion: 'ai-image-provider-runtime/v1' as const,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrlSha256: '9'.repeat(64),
+      unitCostCents: 11,
+      imageCount: 1,
+      width: 1024,
+      height: 1536,
+      maximumCostCents: 11,
+    },
+    capability: {
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      evidenceLevel: 'sandbox-verified' as const,
+      inputTransport: 'multipart' as const,
+      resultMode: 'sync' as const,
+      maxReferences: 16,
+    },
+    configured: true,
+    executionReady: true,
+    testOnly: false,
+    reasonCode: 'READY' as const,
+    reason: 'test runtime ready',
+  };
+}
+
 function clientFixture(options: {
   stale?: boolean;
   transactionFailure?: 'P2002' | 'P2034';
   activePlanConflict?: boolean;
+  paid?: boolean;
+  activeQuotaUnits?: number;
+  billedQuotaUnits?: number;
+  settledCostCents?: number;
+  pendingMaximumCostCents?: number;
 } = {}) {
   const authority = authorityFixture();
   const { suite, slot, events } = authority;
+  if (options.paid) {
+    suite.provider = 'openai-images';
+    suite.model = 'gpt-image-1';
+    suite.pricingVersion = 'openai-images-test/v1';
+    suite.promptSet.provider = suite.provider;
+    suite.promptSet.model = suite.model;
+  }
   const eventByKey = new Map<string, any>();
   const latest = {
     id: options.stale ? 'snapshot-2' : 'snapshot-1',
@@ -347,12 +402,20 @@ function clientFixture(options: {
       }),
     },
     aiImageJob: {
+      aggregate: vi.fn(async ({ _sum }: any) => (
+        'requestedImageCount' in _sum
+          ? { _sum: { requestedImageCount: options.activeQuotaUnits || 0 } }
+          : { _sum: { billedUnits: options.billedQuotaUnits || 0 } }
+      )),
       create: vi.fn(async ({ data }: any) => {
         job = { id: 'job-1', ...data };
         return job;
       }),
     },
     aiCostReservation: {
+      aggregate: vi.fn(async () => ({
+        _sum: { maximumCostMinor: options.pendingMaximumCostCents || 0 },
+      })),
       findUnique: vi.fn(async ({ where }: any) => {
         const key = where.ai_cost_reservation_owner_idempotency;
         return reservation
@@ -366,6 +429,11 @@ function clientFixture(options: {
         reservation = { id: 'reservation-1', ...data };
         return reservation;
       }),
+    },
+    aiCostSettlement: {
+      aggregate: vi.fn(async () => ({
+        _sum: { actualCostMinor: options.settledCostCents || 0 },
+      })),
     },
     aiMediaWorkflowEvent: {
       create: vi.fn(async ({ data }: any) => {
@@ -405,6 +473,7 @@ function clientFixture(options: {
         return event;
       }),
     },
+    $queryRawUnsafe: vi.fn(async () => [{ locked: 1 }]),
   };
   let failOnce = options.transactionFailure;
   const client: any = {
@@ -656,4 +725,164 @@ describe('Prisma AI image suite materialization repository', () => {
       expect(fixture.tx.aiMediaSuiteEvent.create).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('atomically admits a paid suite against active+billed quota and global maximum exposure', async () => {
+    const fixture = clientFixture({
+      paid: true,
+      activeQuotaUnits: 1,
+      billedQuotaUnits: 1,
+      settledCostCents: 20,
+      pendingMaximumCostCents: 10,
+    });
+    const getCostControls = vi.fn(async () => ({
+      dailyLimit: 3,
+      globalDailyBudgetCents: 41,
+    }));
+    const getProviderRuntime = vi.fn(async () => paidProviderRuntime());
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls,
+      getProviderRuntime,
+    });
+
+    await expect(repository.materialize(input)).resolves.toMatchObject({
+      kind: 'committed',
+      childCount: 1,
+    });
+
+    expect(getCostControls).toHaveBeenCalledWith('owner-1');
+    expect(getProviderRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1',
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      itemCount: 1,
+      estimatedCostCents: 7,
+      maximumCostCents: 11,
+    }));
+    expect(fixture.tx.$queryRawUnsafe).toHaveBeenCalledOnce();
+    expect(fixture.tx.aiImageJob.aggregate).toHaveBeenCalledTimes(2);
+    expect(fixture.tx.aiCostSettlement.aggregate).toHaveBeenCalledOnce();
+    expect(fixture.tx.aiCostReservation.aggregate).toHaveBeenCalledOnce();
+    expect(fixture.tx.aiCostReservation.create).toHaveBeenCalledOnce();
+    expect(fixture.tx.aiImageJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        inputAssets: [{
+          assetId: 'asset-1',
+          role: 'REFERENCE',
+          ordinal: 0,
+          sha256: assetSha256,
+          mimeType: 'image/png',
+          width: 900,
+          height: 1200,
+          storageBackend: 'local',
+          storageKey: 'source-product.png',
+          sizeBytes: 1024,
+          kind: 'SOURCE_ORIGINAL',
+          sourceCaptureSnapshotId: 'snapshot-1',
+        }],
+        operationConfig: expect.objectContaining({
+          version: 'ai-image-suite-child-operation/v2',
+          providerRuntime: expect.objectContaining({
+            provider: 'openai-images',
+            model: 'gpt-image-1',
+            width: 1024,
+            height: 1536,
+          }),
+          providerRequest: { count: 1, width: 1024, height: 1536 },
+          finalOutput: expect.objectContaining({
+            width: 900,
+            height: 1200,
+            fit: 'contain',
+            format: 'png',
+          }),
+        }),
+      }),
+    });
+  });
+
+  it('fails paid materialization closed before policy or writes when runtime evidence is unavailable', async () => {
+    const fixture = clientFixture({ paid: true });
+    const getCostControls = vi.fn(async () => ({ dailyLimit: 5, globalDailyBudgetCents: 100 }));
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls,
+      getProviderRuntime: async () => ({
+        ...paidProviderRuntime(),
+        executionReady: false,
+        testOnly: true,
+        reasonCode: 'PROVIDER_EVIDENCE_UNVERIFIED',
+      }),
+    });
+
+    await expect(repository.materialize(input)).resolves.toEqual({
+      kind: 'provider-runtime-unavailable',
+    });
+    expect(getCostControls).not.toHaveBeenCalled();
+    expectNoWrites(fixture);
+  });
+
+  it('rejects paid materialization at the daily active+billed quota before creating orphan rows', async () => {
+    const fixture = clientFixture({
+      paid: true,
+      activeQuotaUnits: 1,
+      billedQuotaUnits: 1,
+    });
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls: async () => ({ dailyLimit: 2, globalDailyBudgetCents: 100 }),
+      getProviderRuntime: async () => paidProviderRuntime(),
+    });
+
+    await expect(repository.materialize(input)).resolves.toEqual({
+      kind: 'quota-exceeded',
+      used: 2,
+      requested: 1,
+      limit: 2,
+    });
+
+    expectNoWrites(fixture);
+    expect(fixture.tx.aiCostSettlement.aggregate).not.toHaveBeenCalled();
+    expect(fixture.tx.aiCostReservation.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('rejects paid materialization at the global maximum exposure before creating orphan rows', async () => {
+    const fixture = clientFixture({
+      paid: true,
+      settledCostCents: 20,
+      pendingMaximumCostCents: 10,
+    });
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls: async () => ({ dailyLimit: 5, globalDailyBudgetCents: 40 }),
+      getProviderRuntime: async () => paidProviderRuntime(),
+    });
+
+    await expect(repository.materialize(input)).resolves.toEqual({
+      kind: 'budget-exceeded',
+      settledCostCents: 20,
+      pendingMaximumCostCents: 10,
+      requestedMaximumCostCents: 11,
+      limit: 40,
+    });
+
+    expectNoWrites(fixture);
+  });
+
+  it('replays a paid materialization without rechecking policy or double-reserving cost', async () => {
+    const fixture = clientFixture({ paid: true });
+    const getCostControls = vi.fn(async () => ({ dailyLimit: 5, globalDailyBudgetCents: 20 }));
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client, {
+      getCostControls,
+      getProviderRuntime: async () => paidProviderRuntime(),
+    });
+
+    await expect(repository.materialize(input)).resolves.toMatchObject({ kind: 'committed' });
+    getCostControls.mockRejectedValueOnce(new Error('policy unavailable after commit'));
+    await expect(repository.materialize(input)).resolves.toMatchObject({
+      kind: 'existing',
+      suiteId: 'suite-1',
+    });
+
+    expect(getCostControls).toHaveBeenCalledTimes(1);
+    expect(fixture.tx.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect(fixture.tx.aiCostReservation.create).toHaveBeenCalledTimes(1);
+    expect(fixture.tx.aiMediaWorkflow.create).toHaveBeenCalledTimes(1);
+    expect(fixture.tx.aiImageJob.create).toHaveBeenCalledTimes(1);
+  });
 });

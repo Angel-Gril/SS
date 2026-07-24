@@ -10,6 +10,7 @@ import {
   type CreateAiMediaWorkflowInput,
   type CreateAiImageTranslationWorkflowInput,
 } from '../services/ai-media-workflows.js';
+import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
 
 const workflow: AiMediaWorkflowRecord = {
   id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
@@ -43,9 +44,16 @@ function repository(overrides: Partial<AiMediaWorkflowRepository> = {}): AiMedia
 const createInput: CreateAiMediaWorkflowInput = {
   ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
   prompt: 'Keep the product unchanged', negativePrompt: null, count: 1,
-  width: 1024, height: 1024, idempotencyKey: 'workflow-idem-1',
+  width: 1024, height: 1024, dailyLimit: 0, idempotencyKey: 'workflow-idem-1',
   context: { type: 'collect', id: 'goods-1' },
 };
+
+const paidProviderRuntime = createAiImageProviderRuntimeContract({
+  provider: 'openai-images',
+  model: 'gpt-image-1',
+  baseUrl: 'https://api.openai.com/v1',
+  costPerImageCents: 7,
+}, { count: 1, width: 1024, height: 1024 });
 
 describe('AI media workflow service', () => {
   it('paginates history with a cursor bound to the owner and context', async () => {
@@ -172,6 +180,87 @@ describe('AI media workflow service', () => {
     expect(repo.createImageToImage).toHaveBeenCalledWith(createInput);
   });
 
+  it('fails closed before persistence when a paid IMAGE_TO_IMAGE capability is not sandbox verified', async () => {
+    const repo = repository();
+    await expect(createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      estimatedCostCents: 7,
+      globalDailyBudgetCents: 100,
+      providerRuntimeContract: paidProviderRuntime,
+    } as CreateAiMediaWorkflowInput)).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)(
+    'fails closed before persistence when a paid %s capability is not sandbox verified',
+    async (operation) => {
+      const createImageEdit = vi.fn();
+      const repo = repository({ createImageEdit });
+      await expect(createAiMediaWorkflowService(repo).createImageEdit({
+        ownerUserId: 'owner-1', actorUserId: 'actor-1', operation,
+        sourceAssetId: 'asset-1', width: 1024, height: 1024,
+        ...(operation === 'INPAINT' ? {
+          maskAssetId: 'mask-1', maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1' as const,
+        } : {}),
+        prompt: 'Edit the product', negativePrompt: null,
+        resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: '',
+        templateKey: operation === 'FULL_EDIT' ? 'full-image-edit.base' : 'inpaint.base',
+        templateReleaseId: 'release-1', templateChecksum: 'a'.repeat(64),
+        templateSnapshot: { sequence: 1 }, dailyLimit: 10,
+        provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+        globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime,
+        idempotencyKey: `paid-${operation.toLowerCase()}-1`,
+        context: { type: 'collect', id: 'goods-1' },
+      })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+      expect(createImageEdit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a malformed paid runtime contract before persistence', async () => {
+    const repo = repository();
+    await expect(createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100,
+      providerRuntimeContract: { ...paidProviderRuntime, maximumCostCents: 8 },
+    } as CreateAiMediaWorkflowInput)).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
+
+  it('maps repository budget rejection to a stable workflow error', async () => {
+    const repo = repository({
+      createImageToImage: vi.fn(async () => {
+        throw Object.assign(new Error('Global daily AI budget exceeded'), { code: 'BUDGET_EXCEEDED' });
+      }),
+    });
+    const error = await createAiMediaWorkflowService(repo).createImageToImage(createInput)
+      .catch((caught) => caught);
+    expect(error).toBeInstanceOf(AiMediaWorkflowError);
+    expect(error).toMatchObject({ code: 'BUDGET_EXCEEDED' });
+  });
+
+  it('maps IMAGE_TO_IMAGE create quota exhaustion to a stable workflow error', async () => {
+    const repo = repository({
+      createImageToImage: vi.fn(async () => {
+        throw Object.assign(new Error('AI image generation daily quota exceeded (5/5)'), {
+          code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED',
+          used: 5,
+          limit: 5,
+        });
+      }),
+    });
+
+    const error = await createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput,
+      dailyLimit: 5,
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AiMediaWorkflowError);
+    expect(error).toMatchObject({ code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED' });
+  });
+
   it('normalizes and freezes IMAGE_TRANSLATE policy/options before persistence', async () => {
     const repo = repository();
     const input: CreateAiImageTranslationWorkflowInput = {
@@ -270,6 +359,21 @@ describe('AI media workflow service', () => {
     })).rejects.toMatchObject({ code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED' });
   });
 
+  it('maps IMAGE_TO_IMAGE retry quota exhaustion to a stable workflow error', async () => {
+    const service = createAiMediaWorkflowService(repository({
+      retryOwned: vi.fn(async () => {
+        throw Object.assign(new Error('AI image generation daily quota exceeded (5/5)'), {
+          code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED',
+        });
+      }),
+    }));
+
+    await expect(service.retry({
+      id: workflow.id, ownerUserId: workflow.ownerUserId, actorUserId: 'actor-1',
+      expectedRevision: 1, idempotencyKey: 'image-to-image-retry-quota', dailyLimit: 5,
+    })).rejects.toMatchObject({ code: 'AI_IMAGE_GENERATION_QUOTA_EXCEEDED' });
+  });
+
   it('maps a stale retry source snapshot to a stable workflow error', async () => {
     const service = createAiMediaWorkflowService(repository({
       retryOwned: vi.fn(async () => {
@@ -314,6 +418,19 @@ describe('AI media workflow service', () => {
         context: { ...listingContext, [key]: value },
       }));
     }
+    const paid = {
+      ...createInput,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime,
+    } as CreateAiMediaWorkflowInput;
+    expect(createAiMediaWorkflowFingerprint(paid)).not.toBe(createAiMediaWorkflowFingerprint({
+      ...paid, estimatedCostCents: 8,
+      providerRuntimeContract: { ...paidProviderRuntime, unitCostCents: 8, maximumCostCents: 8 },
+    } as CreateAiMediaWorkflowInput));
+    expect(createAiMediaWorkflowFingerprint(paid)).not.toBe(createAiMediaWorkflowFingerprint({
+      ...paid, model: 'gpt-image-2',
+      providerRuntimeContract: { ...paidProviderRuntime, model: 'gpt-image-2' },
+    } as CreateAiMediaWorkflowInput));
   });
 
   it('binds translation idempotency to the complete prompt snapshot', () => {
@@ -351,6 +468,17 @@ describe('AI media workflow service', () => {
     expect(createAiImageEditWorkflowFingerprint(base)).not.toBe(createAiImageEditWorkflowFingerprint({
       ...base, context: { ...base.context, draftVersion: 3 },
     }));
+    const paid = {
+      ...base,
+      provider: 'openai-images', model: 'gpt-image-1', estimatedCostCents: 7,
+      globalDailyBudgetCents: 100, providerRuntimeContract: paidProviderRuntime,
+    };
+    expect(createAiImageEditWorkflowFingerprint(paid)).not.toBe(
+      createAiImageEditWorkflowFingerprint({
+        ...paid, estimatedCostCents: 8,
+        providerRuntimeContract: { ...paidProviderRuntime, unitCostCents: 8, maximumCostCents: 8 },
+      }),
+    );
   });
 
   it('returns NOT_FOUND instead of exposing another owner workflow', async () => {

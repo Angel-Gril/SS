@@ -148,11 +148,12 @@ export interface AiImageSuiteRecord {
   previewHash: string;
   provider: string;
   model: string;
+  providerConfigHash: string;
   pricingVersion: string;
   itemCount: number;
   estimatedCostCents: number;
   maximumCostCents: number;
-  concurrencyLimit?: number;
+  concurrencyLimit: number;
   cancelRequestedAt?: Date | null;
   completedAt?: Date | null;
   slots: Array<Record<string, unknown>>;

@@ -32,11 +32,8 @@ import {
   type AiImageSuiteExecutionService,
   type AiImageSuiteExecutionSummary,
 } from '../services/ai-image-suite-execution.js';
-import {
-  AI_IMAGE_SUITE_MODEL,
-  AI_IMAGE_SUITE_PROVIDER,
-  resolveAiImageProviderCapability,
-} from '../services/ai-image-provider-capabilities.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { createProviderFreeAiImageSuiteConfig } from '../services/ai-image-suite-provider-runtime.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
 import {
   AiImageSuiteCandidateError,
@@ -163,29 +160,7 @@ function actor(request: FastifyRequest) {
   };
 }
 
-function providerFreeConfig(): AiImageSuiteProviderConfig {
-  const provider = AI_IMAGE_SUITE_PROVIDER;
-  const model = AI_IMAGE_SUITE_MODEL;
-  const pricingVersion = 'provider-free-zero/v1';
-  const providerConfigHash = createHash('sha256').update(JSON.stringify({
-    version: 'ai-image-suite-runtime/v1',
-    provider,
-    model,
-    pricingVersion,
-    estimatedCostPerImageCents: 0,
-    maximumCostPerImageCents: 0,
-    concurrencyLimit: 2,
-  })).digest('hex');
-  return {
-    provider,
-    model,
-    providerConfigHash,
-    pricingVersion,
-    estimatedCostPerImageCents: 0,
-    maximumCostPerImageCents: 0,
-    concurrencyLimit: 2,
-  };
-}
+export { createProviderFreeAiImageSuiteConfig } from '../services/ai-image-suite-provider-runtime.js';
 
 function publicPreview(preview: AiImageSuitePreview) {
   return {
@@ -662,7 +637,8 @@ export async function aiImageSuiteRoutes(
   const useMutationLedger = Boolean(options.applicationService || !options.candidateService);
   const authHook = options.authenticate || authenticate;
   const production = options.production ?? process.env.NODE_ENV === 'production';
-  const getProviderConfig = options.getProviderConfig || (async () => providerFreeConfig());
+  const getProviderConfig = options.getProviderConfig
+    || (async () => createProviderFreeAiImageSuiteConfig());
   const getOperationalReadiness = async (
     ownerUserId: string,
     providerConfig: AiImageSuiteProviderConfig,
@@ -888,13 +864,22 @@ export async function aiImageSuiteRoutes(
         providerConfig.provider,
         providerConfig.model,
       );
-      if (production && capability?.evidenceLevel !== 'sandbox-verified') {
+      const providerExecutionVerified = capability?.evidenceLevel === 'sandbox-verified';
+      const localFakeExecution = !production && providerConfig.provider === 'fake';
+      if (!providerExecutionVerified && !localFakeExecution) {
         return reply.status(503).send({
           code: 'AI_MEDIA_SUITE_PROVIDER_NOT_READY',
           msg: 'The AI image suite provider is not sandbox verified',
         });
       }
-      const storageReadiness = (await getOperationalReadiness(ids.ownerUserId, providerConfig)).storage;
+      const operational = await getOperationalReadiness(ids.ownerUserId, providerConfig);
+      if (!operational.queueReady || !operational.runtimeReady) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_SUITE_RUNTIME_NOT_READY',
+          msg: 'The AI image suite queue or worker runtime is not ready',
+        });
+      }
+      const storageReadiness = operational.storage;
       if (!storageReadiness.ready) {
         return reply.status(503).send({
           code: 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY',

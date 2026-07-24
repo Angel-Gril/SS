@@ -10,10 +10,12 @@ import {
   runAiImageEditJob,
 } from '../services/ai-image-edit.js';
 import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
-import type {
-  AiImageJobRecord,
-  AiImageJobRepository,
-  AiImageProvider,
+import {
+  AiImageJobError,
+  type AiImageProviderRequest,
+  type AiImageJobRecord,
+  type AiImageJobRepository,
+  type AiImageProvider,
 } from '../services/ai-image-jobs.js';
 import {
   createAiImageEditWorkflowFingerprint,
@@ -93,6 +95,22 @@ function memoryRepository(initial: AiImageJobRecord) {
       };
     }),
     markCancelled: vi.fn(async () => { current = { ...current, status: 'CANCELLED' }; }),
+    markSubmissionUncertain: vi.fn(async (_id, data) => {
+      current = {
+        ...current,
+        status: 'FAILED',
+        attemptCount: data.attemptCount,
+        errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+        errorMessage: data.errorMessage,
+      };
+    }),
+    recordProviderDispatchStarted: vi.fn(async (_id, providerDispatchedAt) => {
+      current = { ...current, providerDispatchedAt };
+      return true;
+    }),
+    recordProviderJobId: vi.fn(async (_id, providerJobId) => {
+      current = { ...current, providerJobId };
+    }),
     recordProviderOutput: vi.fn(async (_id, asset) => {
       rawAssets.push(asset as unknown as Record<string, unknown>);
       return { id: 'raw-asset-1', ...asset };
@@ -294,6 +312,149 @@ describe('AI image manual edit lifecycle', () => {
     });
   });
 
+  it('passes trusted source bytes and an inverted-alpha OpenAI mask to a paid inpaint Provider', async () => {
+    const source = await rgbaPng(2, 2, [
+      10, 20, 30, 255, 40, 50, 60, 255,
+      70, 80, 90, 255, 100, 110, 120, 255,
+    ]);
+    const candidate = await rgbaPng(2, 2, new Array(16).fill(200));
+    const mask = await maskPng(2, 2, [0, 255, 128, 0]);
+    const job = editJob({ operation: 'INPAINT', source, mask });
+    job.provider = 'openai-images';
+    job.model = 'gpt-image-1';
+    job.estimatedCostCents = 7;
+    const state = memoryRepository(job);
+    let request: AiImageProviderRequest | null = null;
+    const selectedProvider: AiImageProvider = {
+      name: 'openai-images',
+      generate: vi.fn(async (input) => {
+        request = input;
+        return {
+          images: [{ buffer: candidate, mimeType: 'image/png' }],
+          actualCostCents: 7,
+        };
+      }),
+    };
+
+    await expect(runAiImageEditJob('edit-job-1', 1, {
+      repository: state.repository,
+      provider: selectedProvider,
+      loadInputBuffer: vi.fn(async (asset) => asset.role === 'MASK' ? mask : source),
+      uploadBuffer: vi.fn(async (_buffer, filename) => ({
+        url: `/uploads/${filename}`, backend: 'local', key: filename,
+      })),
+    })).resolves.toBe('completed');
+
+    expect(state.repository.recordProviderDispatchStarted).toHaveBeenCalledOnce();
+    expect(request).toMatchObject({
+      inputImages: [{ buffer: source, mimeType: 'image/png' }],
+      mask: { mimeType: 'image/png' },
+    });
+    const openAiMask = await sharp(request!.mask!.buffer).ensureAlpha().raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(openAiMask.info).toMatchObject({ width: 2, height: 2, channels: 4 });
+    expect([0, 1, 2, 3].map((pixel) => openAiMask.data[pixel * 4 + 3])).toEqual([
+      255, 0, 127, 255,
+    ]);
+    expect(state.completions[0]).toMatchObject({
+      providerJobId: null,
+      providerResultReceivedWithoutIdentity: true,
+      actualCostCents: 7,
+      billedUnits: 1,
+    });
+  });
+
+  it('persists paid Provider acceptance before storage and retains reconciliation evidence on failure', async () => {
+    const source = await rgbaPng(2, 2, new Array(16).fill(10));
+    const candidate = await rgbaPng(2, 2, new Array(16).fill(210));
+    const job = editJob({ operation: 'FULL_EDIT', source });
+    job.provider = 'openai-images';
+    job.model = 'gpt-image-1';
+    job.estimatedCostCents = 7;
+    const state = memoryRepository(job);
+    const selectedProvider: AiImageProvider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => ({
+        images: [{ buffer: candidate, mimeType: 'image/png' }],
+        providerJobId: 'openai-request-1',
+        actualCostCents: 7,
+      })),
+    };
+
+    await expect(runAiImageEditJob('edit-job-1', 1, {
+      repository: state.repository,
+      provider: selectedProvider,
+      loadInputBuffer: vi.fn(async () => source),
+      uploadBuffer: vi.fn(async () => { throw new Error('storage unavailable after acceptance'); }),
+    })).rejects.toThrow('storage unavailable after acceptance');
+
+    expect(state.repository.recordProviderJobId).toHaveBeenCalledWith(
+      'edit-job-1', 'openai-request-1', expect.any(Date),
+    );
+    expect(state.repository.markFailed).toHaveBeenCalledWith('edit-job-1', expect.objectContaining({
+      providerJobId: 'openai-request-1',
+      providerAcceptedAt: expect.any(Date),
+    }));
+    expect(state.repository.markSubmissionUncertain).not.toHaveBeenCalled();
+  });
+
+  it('quarantines a paid synchronous result without identity when storage fails', async () => {
+    const source = await rgbaPng(2, 2, new Array(16).fill(10));
+    const candidate = await rgbaPng(2, 2, new Array(16).fill(210));
+    const job = editJob({ operation: 'FULL_EDIT', source });
+    job.provider = 'openai-images';
+    job.model = 'gpt-image-1';
+    job.estimatedCostCents = 7;
+    const state = memoryRepository(job);
+
+    await expect(runAiImageEditJob('edit-job-1', 1, {
+      repository: state.repository,
+      provider: {
+        name: 'openai-images',
+        generate: vi.fn(async () => ({
+          images: [{ buffer: candidate, mimeType: 'image/png' }], actualCostCents: 7,
+        })),
+      },
+      loadInputBuffer: vi.fn(async () => source),
+      uploadBuffer: vi.fn(async () => { throw new Error('storage unavailable without identity'); }),
+    })).rejects.toThrow('storage unavailable without identity');
+
+    expect(state.repository.markSubmissionUncertain).toHaveBeenCalledWith(
+      'edit-job-1',
+      expect.objectContaining({ providerSubmissionUncertain: true, attemptCount: 1 }),
+    );
+    expect(state.repository.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('marks a definite paid Provider rejection without quarantining the reservation', async () => {
+    const source = await rgbaPng(2, 2, new Array(16).fill(10));
+    const job = editJob({ operation: 'FULL_EDIT', source });
+    job.provider = 'openai-images';
+    job.model = 'gpt-image-1';
+    job.estimatedCostCents = 7;
+    const state = memoryRepository(job);
+    const rejected = Object.assign(
+      new AiImageJobError('PROVIDER_REQUEST_FAILED', 'Provider rejected the edit (HTTP 400)'),
+      { providerSubmissionRejected: true },
+    );
+
+    await expect(runAiImageEditJob('edit-job-1', 1, {
+      repository: state.repository,
+      provider: {
+        name: 'openai-images',
+        generate: vi.fn(async () => { throw rejected; }),
+      },
+      loadInputBuffer: vi.fn(async () => source),
+      uploadBuffer: vi.fn(),
+    })).rejects.toBe(rejected);
+
+    expect(state.repository.markFailed).toHaveBeenCalledWith('edit-job-1', expect.objectContaining({
+      errorCode: 'PROVIDER_REQUEST_FAILED',
+      providerSubmissionRejected: true,
+    }));
+    expect(state.repository.markSubmissionUncertain).not.toHaveBeenCalled();
+  });
+
   it('rejects stale frozen source bytes before provider submission', async () => {
     const source = await rgbaPng(2, 2, new Array(16).fill(10));
     const changed = await rgbaPng(2, 2, new Array(16).fill(11));
@@ -420,7 +581,8 @@ describe('AI image manual edit workflow contract', () => {
   }) satisfies AiMediaWorkflowRepository;
   const fullEdit: CreateAiImageEditWorkflowInput = {
     ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
-    sourceAssetId: 'source-asset-1', prompt: 'Remove the printed label', negativePrompt: null,
+    sourceAssetId: 'source-asset-1', width: 2, height: 2,
+    prompt: 'Remove the printed label', negativePrompt: null,
     resolvedPrompt: 'Frozen full edit prompt', resolvedNegativePrompt: 'Frozen constraints',
     templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
     templateChecksum: 'a'.repeat(64), templateSnapshot: { sequence: 1 },
