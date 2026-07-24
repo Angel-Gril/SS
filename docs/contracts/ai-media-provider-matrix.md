@@ -38,6 +38,17 @@ One explicitly confirmed local request characterized the configured custom OpenA
 
 This is a transport smoke, not `sandbox-verified` capability evidence. Actual price, repeated success rate, quality corpus thresholds, image-to-image, edits, masks, async tasks and image translation remain unverified and disabled.
 
+## Controlled DashScope Translation A/B (2026-07-24)
+
+One controlled synthetic `en` to `ru` A/B exercised the official DashScope `qwen-mt-image` adapter while every production entry point remained dark. The reviewed semantic request inputs used the same source bytes, language pair, model, adapter and domain context; the terminology glossary was the only changed translation input.
+
+- Without a glossary, the model changed the meaning of the product and capacity labels.
+- With exact product terminology, the output used the correct Russian product and capacity wording while preserving the reviewed layout.
+- Both reports still recorded `actualCostCents: null`; quoted and maximum audit fields are not settled billing evidence.
+- This A/B covered `en` to `ru` only. The production-equivalent Chinese marketplace `zh` to `ru` path, category terminology, representative quality corpus and settled charge remain unverified.
+
+The result demonstrates that glossary control is required for this tested sample. It does not promote `dashscope-qwen-mt-image` beyond `adapter characterized`, does not satisfy Unit 0B, and does not authorize tenant or production dispatch. The translation feature and paid Provider path must remain dark until the missing `zh` to `ru`, quality and billing evidence passes review.
+
 ## Listing-Copy Prompt Foundation
 
 `listing-copy.title` and `listing-copy.description` use versioned Prompt revisions with template-specific variable schemas. Their non-editable safety prefix requires supplied source facts and confirmed attributes, prohibits invented claims, and labels the output as `listing_copy_candidate`.

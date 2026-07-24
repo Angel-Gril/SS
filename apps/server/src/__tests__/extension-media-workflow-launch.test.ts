@@ -71,6 +71,10 @@ function setup(options: {
   createError?: Error;
   createdSuiteId?: string;
   createdStatus?: string;
+  category?: { categoryId: number; typeId: number };
+  categoryGlossaryJson?: string;
+  estimatedCostCents?: number;
+  promptError?: Error;
 } = {}) {
   const createImageTranslation = vi.fn(async () => {
     if (options.createError) throw options.createError;
@@ -88,16 +92,20 @@ function setup(options: {
     supplyGoodsId: 'goods-1', snapshotId: 'snapshot-1',
     revision: 11, draftVersion: 7,
     sourceMediaKeys: options.sourceMediaKeys || ['media-main-1'],
+    ...(options.category ? { category: options.category } : {}),
   }));
   const internalizeSource = vi.fn(async () => ({ id: 'source-asset-1' }));
-  const resolvePrompt = vi.fn(async () => ({
-    templateKey: 'image-translation.base',
-    release: { id: 'release-1' },
-    checksum: 'b'.repeat(64),
-    snapshot: { version: 1 },
-    resolvedPrompt: 'Translate visible Chinese copy to Russian.',
-    resolvedNegativePrompt: 'Keep numbers and product identity.',
-  }));
+  const resolvePrompt = vi.fn(async () => {
+    if (options.promptError) throw options.promptError;
+    return {
+      templateKey: 'image-translation.base',
+      release: { id: 'release-1' },
+      checksum: 'b'.repeat(64),
+      snapshot: { version: 1 },
+      resolvedPrompt: 'Translate visible Chinese copy to Russian.',
+      resolvedNegativePrompt: 'Keep numbers and product identity.',
+    };
+  });
   const enqueue = vi.fn(async () => undefined);
   const markEnqueueFailed = vi.fn(async () => true);
   const loadExisting = vi.fn(async (): Promise<ExtensionMediaTranslationExistingWorkflow | null> => {
@@ -114,8 +122,9 @@ function setup(options: {
       provider: options.provider || 'fake',
       model: options.model || 'fake-translation-v1',
       dailyLimit: 5,
-      estimatedCostCents: 0,
+      estimatedCostCents: options.estimatedCostCents ?? 0,
       globalDailyBudgetCents: 100,
+      categoryGlossaryJson: options.categoryGlossaryJson || '',
     })),
     getStorageReadiness: vi.fn(async () => ({
       ready: options.storageReady !== false,
@@ -411,6 +420,101 @@ describe('extension media translation launch', () => {
     expect(state.enqueue).toHaveBeenCalledWith('job-created-1');
   });
 
+  it('passes the exact trusted category and type glossary terms into translation creation', async () => {
+    const configuredTerms = [
+      { src: '杯子', tgt: 'кружка' },
+      { src: '容量', tgt: 'объём' },
+    ];
+    const resolvedTerms = [
+      { src: '容量', tgt: 'объём' },
+      { src: '杯子', tgt: 'кружка' },
+    ];
+    const state = setup({
+      category: { categoryId: 1, typeId: 1 },
+      categoryGlossaryJson: JSON.stringify({
+        version: 1,
+        profiles: [{
+          sourceLanguage: 'zh', targetLanguage: 'ru', categoryId: 1, typeId: 1,
+          terms: configuredTerms,
+        }],
+      }),
+    });
+
+    await expect(state.launch(input())).resolves.toMatchObject({
+      action: 'CREATE_TRANSLATION', status: 'QUEUED', replayed: false,
+    });
+    expect(state.resolvePrompt).toHaveBeenCalledWith(expect.objectContaining({
+      variables: expect.objectContaining({ terminologyJson: JSON.stringify({ terms: resolvedTerms }) }),
+    }));
+    expect(state.createImageTranslation).toHaveBeenCalledWith(expect.objectContaining({
+      sourceLanguage: 'zh', targetLanguage: 'ru', terminologies: resolvedTerms,
+    }));
+  });
+
+  it.each([
+    ['empty category glossary', {
+      category: { categoryId: 1, typeId: 1 },
+      categoryGlossaryJson: '{"version":1,"profiles":[]}',
+    }],
+    ['missing trusted category', {
+      categoryGlossaryJson: JSON.stringify({
+        version: 1,
+        profiles: [{
+          sourceLanguage: 'zh', targetLanguage: 'ru',
+          terms: [{ src: '杯子', tgt: 'кружка' }],
+        }],
+      }),
+    }],
+  ] as const)('blocks a paid translation with %s before create or queue', async (_label, glossary) => {
+    const state = setup({
+      provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image', estimatedCostCents: 5,
+      ...glossary,
+    });
+
+    await expect(state.launch(input())).rejects.toEqual(expect.objectContaining({
+      code: 'IMAGE_TRANSLATION_GLOSSARY_NOT_READY',
+    }));
+    expect(state.loadContext).toHaveBeenCalledTimes(1);
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.resolvePrompt).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('keeps the paid provider dark after the trusted category glossary is ready', async () => {
+    const state = setup({
+      provider: 'dashscope-qwen-mt-image', model: 'qwen-mt-image', estimatedCostCents: 5,
+      category: { categoryId: 1, typeId: 1 },
+      categoryGlossaryJson: JSON.stringify({
+        version: 1,
+        profiles: [{
+          sourceLanguage: 'zh', targetLanguage: 'ru', categoryId: 1, typeId: 1,
+          terms: [{ src: '杯子', tgt: 'кружка' }],
+        }],
+      }),
+    });
+
+    await expect(state.launch(input())).rejects.toEqual(expect.objectContaining({
+      code: 'MEDIA_PROVIDER_NOT_ALLOWED',
+    }));
+    expect(state.loadContext).toHaveBeenCalledTimes(1);
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unavailable translation prompt before internalizing the source image', async () => {
+    const state = setup({ promptError: new Error('compiled prompt exceeds limit') });
+
+    await expect(state.launch(input())).rejects.toEqual(expect.objectContaining({
+      code: 'MEDIA_PROMPT_UNAVAILABLE',
+    }));
+    expect(state.resolvePrompt).toHaveBeenCalledTimes(1);
+    expect(state.internalizeSource).not.toHaveBeenCalled();
+    expect(state.createImageTranslation).not.toHaveBeenCalled();
+    expect(state.enqueue).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['provider', 'dashscope-qwen-mt-image'],
     ['model', 'client-model'],
@@ -428,7 +532,6 @@ describe('extension media translation launch', () => {
 
   it.each([
     ['production fake', { production: true }, 'MEDIA_PROVIDER_NOT_ALLOWED'],
-    ['paid provider', { provider: 'dashscope-qwen-mt-image' }, 'MEDIA_PROVIDER_NOT_ALLOWED'],
     ['storage unavailable', { storageReady: false }, 'MEDIA_STORAGE_NOT_READY'],
   ])('fails closed for %s before internalizing the image', async (_label, options, code) => {
     const state = setup(options);

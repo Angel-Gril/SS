@@ -32,6 +32,19 @@ assert.match(source, /ai_image_translation_provider/);
 assert.match(source, /ai_image_translation_base_url/);
 assert.match(source, /ai_image_translation_api_key/);
 assert.match(source, /ai_image_translation_model/);
+assert.match(source, /ai_image_translation_category_glossary_json/);
+assert.match(
+  source,
+  /const AI_IMAGE_TRANSLATION_PROVIDER_KEYS = \[[\s\S]*?'ai_image_translation_category_glossary_json'[\s\S]*?\];/,
+);
+assert.match(source, /cfg=\{configs\.ai_image_translation_category_glossary_json\}/);
+assert.match(source, /function ConfigTextarea/);
+assert.match(source, /<textarea/);
+assert.match(source, /JSON 格式：<code>version<\/code> 固定为 1/);
+assert.match(source, /profiles/);
+assert.match(source, /扩展 1688 图片翻译固定使用/);
+assert.match(source, /"sourceLanguage": "zh"/);
+assert.doesNotMatch(source, /"src": "ceramic mug"/);
 assert.match(source, /DashScope · qwen-mt-image/);
 assert.match(source, /沙箱证据通过前不会发起付费请求/);
 assert.doesNotMatch(source, /cfg=\{configs\.ai_image_prompt\}/);
@@ -51,6 +64,9 @@ assert.match(source, /密钥已保存；留空表示保留原密钥/);
 
 assert.match(configSchema, /label: 'AI 文生图'/);
 assert.match(configSchema, /label: '图片翻译服务来源'/);
+assert.match(configSchema, /ai_image_translation_category_glossary_json/);
+assert.match(configSchema, /label: '图片翻译品类术语表（JSON）'/);
+assert.match(configSchema, /AI_IMAGE_TRANSLATION_GLOSSARY_DEFAULT_JSON/);
 assert.match(configSchema, /label: 'AI 全局每日预算'/);
 assert.match(configSchema, /付费文生图创建前执行的全局费用熔断/);
 assert.match(configSchema, /label: '文生图单张成本（分）'/);

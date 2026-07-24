@@ -85,6 +85,37 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('ai_image_translation_api_key')).resolves.toBe('translation-secret-token');
   });
 
+  it('stores only strictly valid category glossary JSON for image translation', async () => {
+    const { getConfig, setConfig } = await import('../config/system-config-schema.js');
+    const validGlossary = JSON.stringify({
+      version: 1,
+      profiles: [{
+        sourceLanguage: 'en',
+        targetLanguage: 'ru',
+        categoryId: 123,
+        terms: [{ src: 'ceramic mug', tgt: 'керамическая кружка' }],
+      }],
+    });
+
+    await expect(getConfig('ai_image_translation_category_glossary_json'))
+      .resolves.toBe('{"version":1,"profiles":[]}');
+
+    await setConfig('ai_image_translation_category_glossary_json', validGlossary);
+    expect(configStore.get('ai_image_translation_category_glossary_json')).toBe(validGlossary);
+    await expect(getConfig('ai_image_translation_category_glossary_json')).resolves.toBe(validGlossary);
+
+    await expect(setConfig('ai_image_translation_category_glossary_json', '{bad json'))
+      .rejects.toThrow();
+    await expect(setConfig(
+      'ai_image_translation_category_glossary_json',
+      '{"version":1,"profiles":[],"unexpected":true}',
+    )).rejects.toThrow();
+    await expect(setConfig(
+      'ai_image_translation_category_glossary_json',
+      '{"version":1,"profiles":[{"sourceLanguage":"en","targetLanguage":"ru","typeId":7,"terms":[]}]}',
+    )).rejects.toThrow(/typeId requires categoryId/u);
+  });
+
   it('encrypts Aliyun SMS credentials and marks both fields as sensitive', async () => {
     const { getConfig, setConfig, SystemConfigMeta } = await import('../config/system-config-schema.js');
 

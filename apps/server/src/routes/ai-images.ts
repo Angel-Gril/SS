@@ -38,6 +38,7 @@ import {
   resolveAiImageTranslationStorageReadiness,
   type AiImageTranslationStorageReadiness,
 } from '../services/ai-image-translation-storage.js';
+import { resolveAiImageTranslationGlossary } from '../services/ai-image-translation-glossary.js';
 import {
   resolveAiImageEditStorageReadiness,
   type AiImageEditStorageReadiness,
@@ -293,6 +294,7 @@ interface AiImageTranslationRouteSettings {
   dailyLimit: number;
   estimatedCostCents: number;
   globalDailyBudgetCents: number;
+  categoryGlossaryJson: string;
 }
 
 interface AiImageEditRouteSettings {
@@ -326,6 +328,10 @@ interface AiImageRouteOptions {
   authenticate?: (request: FastifyRequest, reply: any) => Promise<unknown>;
   getSettings?: () => Promise<AiImageRouteSettings>;
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
+  getTranslationCategory?: (input: {
+    ownerUserId: string;
+    context: z.infer<typeof workflowContextSchema>;
+  }) => Promise<{ categoryId: number; typeId: number } | null>;
   getTranslationStorageReadiness?: () => Promise<AiImageTranslationStorageReadiness>;
   getEditSettings?: () => Promise<AiImageEditRouteSettings>;
   getGlobalDailyBudgetCents?: () => Promise<number>;
@@ -474,15 +480,6 @@ function decodePngDataUrl(value: string) {
     throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Edit mask base64 payload is invalid');
   }
   return buffer;
-}
-
-function canonicalTranslationTerminologies(terms: Array<{ src: string; tgt: string }>) {
-  const bySource = new Map<string, { src: string; tgt: string }>();
-  for (const term of terms) {
-    const key = term.src.toLocaleLowerCase();
-    if (!bySource.has(key)) bySource.set(key, { src: term.src.trim(), tgt: term.tgt.trim() });
-  }
-  return [...bySource.values()];
 }
 
 export function resolveAiImageTranslationReadiness(
@@ -1095,7 +1092,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
     estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
     globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
+    categoryGlossaryJson: await getConfig('ai_image_translation_category_glossary_json'),
   }));
+  const getTranslationCategory = options.getTranslationCategory || (async () => null);
   const getTranslationStorageReadiness = options.getTranslationStorageReadiness || (async () => {
     try {
       const storage = await getRuntimeConfigForStorage();
@@ -1710,7 +1709,31 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         }
         const sourceLanguage = parsed.data.sourceLanguage.toLowerCase();
         const targetLanguage = parsed.data.targetLanguage.toLowerCase();
-        const terminologies = canonicalTranslationTerminologies(parsed.data.terminologies);
+        const category = parsed.data.context.type === 'listing-draft'
+          ? await getTranslationCategory({ ownerUserId: ids.ownerUserId, context: parsed.data.context })
+          : null;
+        let glossary;
+        try {
+          glossary = resolveAiImageTranslationGlossary({
+            config: translationSettings.categoryGlossaryJson,
+            sourceLanguage,
+            targetLanguage,
+            ...(category || {}),
+            explicitTerms: parsed.data.terminologies,
+          });
+        } catch {
+          return reply.status(503).send({
+            code: 'IMAGE_TRANSLATION_GLOSSARY_INVALID',
+            msg: 'AI image translation glossary configuration is invalid',
+          });
+        }
+        const terminologies = glossary.terms;
+        if (translationSettings.provider !== 'fake' && terminologies.length === 0) {
+          return reply.status(503).send({
+            code: 'IMAGE_TRANSLATION_GLOSSARY_NOT_READY',
+            msg: 'A trusted image translation glossary is required before paid dispatch',
+          });
+        }
         const resolved = await resolveTranslationPrompt({
           templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
           variables: {

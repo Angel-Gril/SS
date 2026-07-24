@@ -2211,6 +2211,7 @@ const AI_IMAGE_TRANSLATION_PROVIDER_KEYS = [
   'ai_image_translation_base_url',
   'ai_image_translation_api_key',
   'ai_image_translation_model',
+  'ai_image_translation_category_glossary_json',
 ];
 
 const AI_LIMIT_KEYS = [
@@ -2682,6 +2683,27 @@ function AiSettingsPanel({
                   setValue={setValue}
                   placeholder="填写图片翻译 API Key"
                 />
+              </div>
+              <div className="space-y-2">
+                <ConfigTextarea
+                  cfg={configs.ai_image_translation_category_glossary_json}
+                  editing={editing}
+                  setValue={setValue}
+                  rows={12}
+                  placeholder={'{"version":1,"profiles":[]}'}
+                />
+                <p className="text-xs text-muted-foreground">
+                  JSON 格式：<code>version</code> 固定为 1；<code>profiles</code> 中每项填写
+                  <code> sourceLanguage</code>、<code>targetLanguage</code>、可选的正整数
+                  <code> categoryId</code>/<code>typeId</code>，以及最多 50 组
+                  <code> terms</code>。填写 <code>typeId</code> 时必须同时填写
+                  <code> categoryId</code>；不填品类 ID 表示该语言对的全局术语。
+                  扩展 1688 图片翻译固定使用 <code>zh</code> → <code>ru</code>；
+                  <code> en</code> → <code>ru</code> 仅是已完成的受控验收语言对。
+                </p>
+                <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-muted-foreground">
+                  {'{\n  "version": 1,\n  "profiles": [\n    {\n      "sourceLanguage": "zh",\n      "targetLanguage": "ru",\n      "categoryId": 123,\n      "terms": [{ "src": "中文术语", "tgt": "Русский термин" }]\n    }\n  ]\n}'}
+                </pre>
               </div>
             </section>
 
@@ -3505,6 +3527,39 @@ function ConfigInput({
         value={editing[cfg.key] || ''}
         onChange={(event) => setValue(cfg.key, event.target.value)}
         placeholder={placeholder || cfg.description || ''}
+      />
+    </div>
+  );
+}
+
+function ConfigTextarea({
+  cfg,
+  editing,
+  setValue,
+  placeholder,
+  rows = 8,
+}: {
+  cfg?: SystemConfig;
+  editing: Record<string, string>;
+  setValue: (key: string, value: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  if (!cfg) return null;
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div>
+        <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+        <code className="ml-2 break-all text-[11px] text-muted-foreground">{cfg.key}</code>
+      </div>
+      {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
+      <textarea
+        className="flex min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+        value={editing[cfg.key] || ''}
+        onChange={(event) => setValue(cfg.key, event.target.value)}
+        placeholder={placeholder || cfg.description || ''}
+        rows={rows}
+        spellCheck={false}
       />
     </div>
   );

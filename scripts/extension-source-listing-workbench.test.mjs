@@ -9,6 +9,7 @@ const worker = fs.readFileSync(`${root}/background/service-worker.js`, 'utf8');
 const panel = fs.readFileSync(`${root}/content/source-costing-panel.js`, 'utf8');
 const popup = fs.readFileSync(`${root}/pages/popup.js`, 'utf8');
 const policy = fs.readFileSync(`${root}/shared/message-security/runtime-message-policy.js`, 'utf8');
+const serverEntry = fs.readFileSync('apps/server/src/index.ts', 'utf8');
 const sessionPath = `${root}/shared/erp-adapter/source-workflow-device-session.js`;
 const clientPath = `${root}/shared/erp-adapter/listing-workflow-client.js`;
 const confirmationContractPath = `${root}/shared/erp-adapter/source-media-confirmation.js`;
@@ -127,6 +128,20 @@ assert.match(popup, /ss-erp:source-listing-workbench-status/);
 assert.doesNotMatch(
   [worker, panel, fs.readFileSync(sessionPath, 'utf8'), fs.readFileSync(clientPath, 'utf8')].join('\n'),
   /legacyAccountToken|accountBearerToken|accountAccessToken|ozonApiKey|dashscopeApiKey/i,
+);
+const translationContextLoader = serverEntry.slice(
+  serverEntry.indexOf('const loadExtensionMediaTranslationContext = async'),
+  serverEntry.indexOf('const loadExtensionAiImageSuiteState = async'),
+);
+assert.match(translationContextLoader, /resolveTrustedAiImageTranslationCategory\(draft\)/u);
+assert.equal(
+  serverEntry.match(/resolveTrustedAiImageTranslationCategory\(draft\)/gu)?.length,
+  2,
+  'extension and Web translation wiring must both reject stale listing categories',
+);
+assert.match(
+  serverEntry,
+  /createExtensionMediaTranslationLauncher\(\{[\s\S]*?loadContext:\s*loadExtensionMediaTranslationContext/u,
 );
 
 const sessionSource = fs.readFileSync(sessionPath, 'utf8');

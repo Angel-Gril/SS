@@ -63,10 +63,12 @@ async function build(
   editStorageReady = true,
   editStorageBackend: 'oss' | 'local' | 'ozon-cdn' = 'oss',
   existingWorkflowOperation: AiMediaWorkflowRecord['operation'] = 'IMAGE_TO_IMAGE',
+  translationCategoryGlossaryJson = '{"version":1,"profiles":[]}',
+  translationCategory: { categoryId: number; typeId: number } | null = null,
 ) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
-    createImageTranslation: vi.fn(async () => ({
+    createImageTranslation: vi.fn(async (_input: any) => ({
       workflow: { ...workflow, operation: 'IMAGE_TRANSLATE' as const }, jobId: 'job-translation-1', replayed: false,
     })),
     createImageEdit: vi.fn(async (input: any) => ({
@@ -251,7 +253,9 @@ async function build(
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
       dailyLimit: 20, estimatedCostCents: 0, globalDailyBudgetCents: 100,
+      categoryGlossaryJson: translationCategoryGlossaryJson,
     }),
+    getTranslationCategory: async () => translationCategory,
     resolveTranslationPrompt: async () => ({
       templateKey: 'image-translation.base',
       release: { id: 'translation-release-1', revisionId: 'translation-revision-1', sequence: 1 },
@@ -1100,6 +1104,68 @@ describe('AI media workflow routes', () => {
       templateKey: 'image-translation.base', templateReleaseId: 'translation-release-1',
     }));
     expect(enqueueTranslation).toHaveBeenCalledWith('job-translation-1');
+  });
+
+  it('merges the configured language-pair glossary before freezing a Web translation workflow', async () => {
+    const glossaryJson = JSON.stringify({
+      version: 1,
+      profiles: [{
+        sourceLanguage: 'zh',
+        targetLanguage: 'ru',
+        terms: [
+          { src: '容量', tgt: 'Объём' },
+          { src: '材质', tgt: 'Материал' },
+        ],
+      }],
+    });
+    const { app, mediaWorkflowService } = await build(
+      true, 'owner-1', true, 'fake', true, false, true, 'oss', true,
+      false, false, 5, true, true, true, 'oss', 'IMAGE_TO_IMAGE', glossaryJson,
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1',
+      sourceLanguage: 'zh', targetLanguage: 'ru',
+      terminologies: [
+        { src: '容量', tgt: 'Вместимость' },
+        { src: '颜色', tgt: 'Цвет' },
+      ],
+      idempotencyKey: 'translation-glossary-merge', context: { type: 'collect', id: 'goods-1' },
+    } });
+
+    expect(response.statusCode).toBe(202);
+    const input = vi.mocked(mediaWorkflowService.createImageTranslation).mock.calls[0]?.[0] as any;
+    expect(input.terminologies).toHaveLength(3);
+    expect(input.terminologies).toEqual(expect.arrayContaining([
+      { src: '容量', tgt: 'Вместимость' },
+      { src: '材质', tgt: 'Материал' },
+      { src: '颜色', tgt: 'Цвет' },
+    ]));
+    expect(input.terminologies).not.toContainEqual({ src: '容量', tgt: 'Объём' });
+  });
+
+  it('uses the trusted listing category to resolve an exact Web translation glossary', async () => {
+    const glossaryJson = JSON.stringify({
+      version: 1,
+      profiles: [{
+        sourceLanguage: 'zh', targetLanguage: 'ru', categoryId: 10, typeId: 20,
+        terms: [{ src: '陶瓷杯', tgt: 'Керамическая кружка' }],
+      }],
+    });
+    const { app, mediaWorkflowService } = await build(
+      true, 'owner-1', true, 'fake', true, false, true, 'oss', true,
+      false, false, 5, true, true, true, 'oss', 'IMAGE_TO_IMAGE', glossaryJson,
+      { categoryId: 10, typeId: 20 },
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1',
+      idempotencyKey: 'translation-category-glossary',
+      context: { type: 'listing-draft', id: 'draft-1', revision: 7, draftVersion: 3 },
+    } });
+
+    expect(response.statusCode).toBe(202);
+    expect(mediaWorkflowService.createImageTranslation).toHaveBeenCalledWith(expect.objectContaining({
+      terminologies: [{ src: '陶瓷杯', tgt: 'Керамическая кружка' }],
+    }));
   });
 
   it('does not create a translation workflow while its operation gate is disabled', async () => {

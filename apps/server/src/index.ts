@@ -205,6 +205,7 @@ import {
   resolveExtensionMediaTranslationReadiness,
 } from './services/extension-media-workflow-launch.js';
 import { resolveAiImageTranslationStorageReadiness } from './services/ai-image-translation-storage.js';
+import { resolveTrustedAiImageTranslationCategory } from './services/ai-image-translation-glossary.js';
 import { resolveAiImageEditStorageReadiness } from './services/ai-image-edit-storage.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './services/ai-image-compositor.js';
 import { createAiImageEditMask } from './services/ai-image-edit.js';
@@ -1026,6 +1027,7 @@ if (isExtensionDeviceAuthEnabled()) {
         { expectedRevision: draftRevision, expectedDraftVersion: draftVersion },
       );
       if (draft.revision !== draftRevision || draft.draftVersion !== draftVersion) return null;
+      const trustedCategory = resolveTrustedAiImageTranslationCategory(draft);
       return {
         id: draft.id,
         ownerUserId: draft.ownerUserId,
@@ -1037,6 +1039,7 @@ if (isExtensionDeviceAuthEnabled()) {
         sourceMediaKeys: [...new Set(context.inputs
           .map((item) => String(item.sourceMediaKey || '').trim())
           .filter(Boolean))].slice(0, 50),
+        ...(trustedCategory ? { category: trustedCategory } : {}),
       };
     } catch (error) {
       if (error instanceof SourceListingWorkflowError) {
@@ -1283,6 +1286,7 @@ if (isExtensionDeviceAuthEnabled()) {
     dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
     estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
     globalDailyBudgetCents: await getConfig('ai_daily_budget_cents'),
+    categoryGlossaryJson: await getConfig('ai_image_translation_category_glossary_json'),
   });
   const getExtensionMediaTranslationStorageReadiness = async () => {
     try {
@@ -1970,40 +1974,28 @@ if (isExtensionDeviceAuthEnabled()) {
       revision,
       draftVersion,
     }) => {
-      const draft = await sourceListingWorkflowService.getDraft({
-        draftId: listingWorkflowId,
-        ownerUserId,
-      });
-      if (draft.shopId !== shopId
-        || draft.supplyGoodsId !== supplyGoodsId
-        || draft.sourceCaptureSnapshotId !== snapshotId
-        || draft.revision !== revision
-        || draft.draftVersion !== draftVersion) return null;
-      const context = await extensionMediaContextService.loadListingDraft(
+      const context = await loadExtensionMediaTranslationContext({
         ownerUserId,
         listingWorkflowId,
-        { expectedRevision: revision, expectedDraftVersion: draftVersion },
-      );
-      return {
-        id: draft.id,
-        ownerUserId: draft.ownerUserId,
-        shopId: draft.shopId,
-        supplyGoodsId: draft.supplyGoodsId,
-        snapshotId: draft.sourceCaptureSnapshotId,
-        revision: draft.revision,
-        draftVersion: draft.draftVersion,
-        sourceMediaKeys: [...new Set(context.inputs
-          .map((item) => String(item.sourceMediaKey || '').trim())
-          .filter(Boolean))].slice(0, 50),
-      };
+        draftRevision: revision,
+        draftVersion,
+      });
+      if (!context
+        || context.shopId !== shopId
+        || context.supplyGoodsId !== supplyGoodsId
+        || context.snapshotId !== snapshotId) return null;
+      return context;
     },
     getCapability: async ({ workflowDecision }) => {
-      const [enabled, provider, model, dailyLimit, estimatedCostCents, storage] = await Promise.all([
+      const [
+        enabled, provider, model, dailyLimit, estimatedCostCents, categoryGlossaryJson, storage,
+      ] = await Promise.all([
         getConfig('feature_image_translate'),
         getConfig('ai_image_translation_provider'),
         getConfig('ai_image_translation_model'),
         getConfig('ai_user_daily_image_translation_limit'),
         getConfig('ai_image_translation_cost_cents'),
+        getConfig('ai_image_translation_category_glossary_json'),
         getRuntimeConfigForStorage().then(resolveAiImageTranslationStorageReadiness),
       ]);
       const readiness = resolveExtensionMediaTranslationReadiness({
@@ -2013,6 +2005,7 @@ if (isExtensionDeviceAuthEnabled()) {
           model,
           dailyLimit,
           estimatedCostCents,
+          categoryGlossaryJson,
         },
         production: process.env.NODE_ENV === 'production',
         storageReadiness: storage,
@@ -2039,6 +2032,7 @@ if (isExtensionDeviceAuthEnabled()) {
         translationModel,
         translationDailyLimit,
         translationEstimatedCostCents,
+        translationCategoryGlossaryJson,
         imageProvider,
         configuredImageModel,
         imageEstimatedCostCents,
@@ -2052,6 +2046,7 @@ if (isExtensionDeviceAuthEnabled()) {
         getConfig('ai_image_translation_model'),
         getConfig('ai_user_daily_image_translation_limit'),
         getConfig('ai_image_translation_cost_cents'),
+        getConfig('ai_image_translation_category_glossary_json'),
         getConfig('ai_image_provider'),
         getConfig('ai_image_model'),
         getConfig('ai_image_generation_cost_cents'),
@@ -2095,6 +2090,7 @@ if (isExtensionDeviceAuthEnabled()) {
           model: translationModel,
           dailyLimit: translationDailyLimit,
           estimatedCostCents: translationEstimatedCostCents,
+          categoryGlossaryJson: translationCategoryGlossaryJson,
         },
         production,
         storageReadiness: resolveAiImageTranslationStorageReadiness(runtimeConfig),
@@ -2436,6 +2432,29 @@ await app.register(sourceCandidateRoutes, { prefix: '/api/source-candidates' });
 await app.register(aiImageRoutes, {
   prefix: '/api/ai-images',
   resolvePrompt: resolveActiveAiPrompt,
+  getTranslationCategory: async ({ ownerUserId, context }: {
+    ownerUserId: string;
+    context:
+      | { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null }
+      | {
+        type: 'listing-draft'; id: string; revision: number; draftVersion: number;
+        skuKey?: string | null; slotKey?: string | null;
+      };
+  }) => {
+    if (context.type !== 'listing-draft') return null;
+    try {
+      const draft = await sourceListingWorkflowService.getDraft({
+        draftId: context.id,
+        ownerUserId,
+      });
+      if (draft.revision !== context.revision || draft.draftVersion !== context.draftVersion) return null;
+      return resolveTrustedAiImageTranslationCategory(draft);
+    } catch (error) {
+      if (error instanceof SourceListingWorkflowError
+        && error.code === 'OZON_LISTING_DRAFT_NOT_FOUND') return null;
+      throw error;
+    }
+  },
 });
 const aiImageSuiteExecutionRepository = new PrismaAiImageSuiteExecutionRepository(prisma, {
   runtimeReady: aiImageSuiteRuntimeReady,

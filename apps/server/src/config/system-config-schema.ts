@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { decrypt, encrypt } from '../lib/crypto.js';
+import {
+  AI_IMAGE_TRANSLATION_GLOSSARY_DEFAULT_JSON,
+  aiImageTranslationGlossaryStringSchema,
+} from '../services/ai-image-translation-glossary.js';
 
 const sourceOzonPublisherEntrypointStage = z.enum(['off', 'shadow', 'v2']);
 
@@ -109,6 +113,8 @@ export const SystemConfigSchema = {
   ai_image_translation_base_url: z.string().default(''),
   ai_image_translation_api_key: z.string().default(''),
   ai_image_translation_model: z.string().default('qwen-mt-image'),
+  ai_image_translation_category_glossary_json: aiImageTranslationGlossaryStringSchema
+    .default(AI_IMAGE_TRANSLATION_GLOSSARY_DEFAULT_JSON),
   ai_image_translation_cost_cents: z.number().int().min(0).max(100000).default(0),
   ai_user_daily_image_translation_limit: z.number().int().min(0).max(100000).default(20),
 
@@ -571,6 +577,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '图片翻译模型',
     group: 'ai',
     description: '默认 qwen-mt-image；模型能力需先通过 Unit 0B 验证',
+  },
+  ai_image_translation_category_glossary_json: {
+    label: '图片翻译品类术语表（JSON）',
+    group: 'ai',
+    description: '按源语言、目标语言和可选 Ozon categoryId/typeId 配置术语；保存时执行严格 JSON 校验',
   },
   ai_image_translation_cost_cents: {
     label: '图片翻译单张成本（分）',

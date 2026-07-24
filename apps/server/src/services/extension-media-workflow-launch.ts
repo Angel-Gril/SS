@@ -10,6 +10,7 @@ import {
   AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
   type AiImageProviderRuntimeContract,
 } from './ai-image-provider-runtime-contract.js';
+import { resolveAiImageTranslationGlossary } from './ai-image-translation-glossary.js';
 
 /**
  * Creation is deliberately a separate command contract from the B1 cancel/retry
@@ -60,6 +61,7 @@ export interface ExtensionMediaTranslationLaunchContext {
   revision: number;
   draftVersion: number;
   sourceMediaKeys: string[];
+  category?: { categoryId: number; typeId: number };
 }
 
 export interface ExtensionMediaTranslationSettings {
@@ -69,6 +71,7 @@ export interface ExtensionMediaTranslationSettings {
   dailyLimit: number;
   estimatedCostCents: number;
   globalDailyBudgetCents?: number;
+  categoryGlossaryJson: string;
 }
 
 export interface ExtensionMediaTranslationReadiness {
@@ -427,18 +430,13 @@ export function createExtensionMediaTranslationLauncher(options: {
         );
       }
     };
-    const ensureReadiness = async () => {
+    const loadReadiness = async () => {
       try {
         const settings = await options.getSettings();
         const storageReadiness = options.getStorageReadiness
           ? await options.getStorageReadiness()
           : undefined;
-        assertFakeTranslationSettings(
-          settings,
-          options.production ?? process.env.NODE_ENV === 'production',
-          storageReadiness,
-        );
-        return settings;
+        return { settings, storageReadiness };
       } catch (error) {
         if (error instanceof ExtensionMediaWorkflowLaunchError) throw error;
         throw new ExtensionMediaWorkflowLaunchError(
@@ -446,6 +444,18 @@ export function createExtensionMediaTranslationLauncher(options: {
           'Image translation capability is temporarily unavailable',
         );
       }
+    };
+    const assertReadiness = (readiness: Awaited<ReturnType<typeof loadReadiness>>) => {
+      assertFakeTranslationSettings(
+        readiness.settings,
+        options.production ?? process.env.NODE_ENV === 'production',
+        readiness.storageReadiness,
+      );
+    };
+    const ensureReadiness = async () => {
+      const readiness = await loadReadiness();
+      assertReadiness(readiness);
+      return readiness.settings;
     };
     const markEnqueueFailed = async (jobId: string) => {
       try {
@@ -533,7 +543,12 @@ export function createExtensionMediaTranslationLauncher(options: {
     };
     if (existing) return replayExisting(existing);
 
-    const settings = await ensureReadiness();
+    const readiness = await loadReadiness();
+    const settings = readiness.settings;
+    const requiresPaidGlossary = settings.enabled
+      && settings.provider !== 'disabled'
+      && settings.provider !== 'fake';
+    if (!requiresPaidGlossary) assertReadiness(readiness);
 
     let context: ExtensionMediaTranslationLaunchContext | null;
     try {
@@ -565,6 +580,72 @@ export function createExtensionMediaTranslationLauncher(options: {
         'The listing draft or source image changed; refresh before creating a task',
       );
     }
+
+    let terminologies: Array<{ src: string; tgt: string }> = [];
+    try {
+      terminologies = resolveAiImageTranslationGlossary({
+        config: settings.categoryGlossaryJson,
+        sourceLanguage: 'zh',
+        targetLanguage: 'ru',
+        categoryId: context.category?.categoryId,
+        typeId: context.category?.typeId,
+      }).terms;
+    } catch {
+      if (requiresPaidGlossary) {
+        throw new ExtensionMediaWorkflowLaunchError(
+          'IMAGE_TRANSLATION_GLOSSARY_NOT_READY',
+          'The trusted listing category translation glossary is unavailable',
+        );
+      }
+    }
+    if (requiresPaidGlossary && (!context.category || terminologies.length === 0)) {
+      throw new ExtensionMediaWorkflowLaunchError(
+        'IMAGE_TRANSLATION_GLOSSARY_NOT_READY',
+        'The trusted listing category translation glossary is not ready',
+      );
+    }
+    if (requiresPaidGlossary) assertReadiness(readiness);
+
+    let resolved: Awaited<ReturnType<typeof options.resolvePrompt>>;
+    try {
+      resolved = await options.resolvePrompt({
+        templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+        variables: {
+          sourceLanguage: 'zh',
+          targetLanguage: 'ru',
+          userInstructions: '',
+          terminologyJson: JSON.stringify({ terms: terminologies }),
+          platformConstraints: '',
+        },
+      });
+    } catch (error) {
+      if (error instanceof ExtensionMediaWorkflowLaunchError) throw error;
+      throw new ExtensionMediaWorkflowLaunchError(
+        'MEDIA_PROMPT_UNAVAILABLE',
+        'Image translation prompt configuration is temporarily unavailable',
+      );
+    }
+    if (!resolved
+      || typeof resolved.resolvedPrompt !== 'string'
+      || typeof resolved.resolvedNegativePrompt !== 'string'
+      || typeof resolved.templateKey !== 'string'
+      || !resolved.templateKey.trim()
+      || !resolved.release?.id
+      || !/^[a-f0-9]{64}$/u.test(String(resolved.checksum || ''))
+      || !resolved.snapshot
+      || typeof resolved.snapshot !== 'object'
+      || Array.isArray(resolved.snapshot)) {
+      throw new ExtensionMediaWorkflowLaunchError(
+        'MEDIA_PROMPT_UNAVAILABLE',
+        'Image translation prompt configuration is invalid',
+      );
+    }
+    const providerPolicy = [
+      resolved.resolvedPrompt.trim(),
+      resolved.resolvedNegativePrompt.trim()
+        ? `Frozen terminology and platform constraints:\n${resolved.resolvedNegativePrompt.trim()}`
+        : '',
+    ].filter(Boolean).join('\n\n');
 
     // Internalization is intentionally after all gates and context checks. It
     // may download a public source image and write an owned asset, but never
@@ -603,46 +684,6 @@ export function createExtensionMediaTranslationLauncher(options: {
       );
     }
 
-    let resolved: Awaited<ReturnType<typeof options.resolvePrompt>>;
-    try {
-      resolved = await options.resolvePrompt({
-        templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
-        variables: {
-          sourceLanguage: 'zh',
-          targetLanguage: 'ru',
-          userInstructions: '',
-          terminologyJson: JSON.stringify({ terms: [] }),
-          platformConstraints: '',
-        },
-      });
-    } catch (error) {
-      if (error instanceof ExtensionMediaWorkflowLaunchError) throw error;
-      throw new ExtensionMediaWorkflowLaunchError(
-        'MEDIA_PROMPT_UNAVAILABLE',
-        'Image translation prompt configuration is temporarily unavailable',
-      );
-    }
-    if (!resolved
-      || typeof resolved.resolvedPrompt !== 'string'
-      || typeof resolved.resolvedNegativePrompt !== 'string'
-      || typeof resolved.templateKey !== 'string'
-      || !resolved.templateKey.trim()
-      || !resolved.release?.id
-      || !/^[a-f0-9]{64}$/u.test(String(resolved.checksum || ''))
-      || !resolved.snapshot
-      || typeof resolved.snapshot !== 'object'
-      || Array.isArray(resolved.snapshot)) {
-      throw new ExtensionMediaWorkflowLaunchError(
-        'MEDIA_PROMPT_UNAVAILABLE',
-        'Image translation prompt configuration is invalid',
-      );
-    }
-    const providerPolicy = [
-      resolved.resolvedPrompt.trim(),
-      resolved.resolvedNegativePrompt.trim()
-        ? `Frozen terminology and platform constraints:\n${resolved.resolvedNegativePrompt.trim()}`
-        : '',
-    ].filter(Boolean).join('\n\n');
     let created;
     try {
       created = await options.workflowService.createImageTranslation({
@@ -652,7 +693,7 @@ export function createExtensionMediaTranslationLauncher(options: {
       sourceLanguage: 'zh',
       targetLanguage: 'ru',
       domainHint: providerPolicy,
-      terminologies: [],
+      terminologies,
       imageSegment: false,
       provider: settings.provider,
       model: settings.model,

@@ -194,6 +194,17 @@ pnpm --filter server sandbox:ai-image-translation:single
 
 Unset the confirmation, API key, and source URL after exit. Inspect the submit report, result image, immutable intent, and private recovery journal under `tmp/ai-image-translation-sandbox/`. Do not resubmit when polling or download is incomplete.
 
+### Recorded Quality Observation (2026-07-24)
+
+A controlled synthetic `en` to `ru` A/B completed against the official `qwen-mt-image` lane. The reviewed semantic request inputs kept the source bytes, language pair, model, adapter and domain context fixed; only the terminology glossary changed.
+
+- The no-glossary result mistranslated the product and capacity labels.
+- The glossary-constrained result used the correct Russian product and capacity wording and retained the reviewed layout.
+- The reports retained `actualCostCents: null`, so this run did not close the billing evidence gate.
+- No production-equivalent `zh` to `ru` marketplace image and category glossary has passed the same review.
+
+Treat this as a narrow quality observation, not capability promotion. `dashscope-qwen-mt-image` remains `adapter characterized`, Unit 0B remains open, and all production translation switches remain dark. Before promotion, run a separately approved `zh` to `ru` acceptance corpus with trusted category terminology, reconcile the settled charge, and review Russian readability, Chinese-text residue, layout preservation and product identity. Never reuse the earlier Operation IDs or repeat either paid request.
+
 ### `RECONCILE` With GET Only
 
 Use reconciliation only for an existing translation Operation ID whose submit report is `RECONCILIATION_REQUIRED`. It loads the original immutable intent and private recovery journal. The network guard permits task polling and result download GETs but blocks a new submit POST.
