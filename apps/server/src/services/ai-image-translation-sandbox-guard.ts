@@ -424,12 +424,15 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
   validateUrl: (url: string) => Promise<string>;
   fetch: FetchLike;
   now?: () => number;
+  /** Convert raw Provider evidence into the exact URL authorized for download. */
+  toResultDownloadUrl: (rawResultUrl: string) => string;
   onProviderTaskId?: (providerTaskId: string) => Promise<void>;
-  onResultUrl?: (resultUrl: string) => Promise<void>;
+  /** Persist the unmodified canonical Provider URL as private recovery evidence. */
+  onRawResultUrl?: (rawResultUrl: string) => Promise<void>;
   mode?: 'SUBMIT' | 'RECONCILE';
   recovery?: {
     providerTaskId: string;
-    resultUrl?: string | null;
+    rawResultUrl?: string | null;
   };
 }) {
   const endpoints = validateContract(input.contract);
@@ -439,22 +442,25 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
   if (mode === 'RECONCILE' && (!recoveredTaskId || recoveredTaskId.length > 500)) {
     throw new Error('The translation sandbox reconciliation task identity is invalid');
   }
-  const recoveredResultUrl = input.recovery?.resultUrl
-    ? new URL(input.recovery.resultUrl).toString()
+  const recoveredRawResultUrl = input.recovery?.rawResultUrl
+    ? new URL(input.recovery.rawResultUrl).toString()
+    : null;
+  const recoveredResultDownloadUrl = recoveredRawResultUrl
+    ? new URL(input.toResultDownloadUrl(recoveredRawResultUrl)).toString()
     : null;
   let submitClaimed = mode === 'RECONCILE';
   let submitRequests = 0;
   let pollRequests = 0;
   let resultDownloads = 0;
-  let state: AiImageTranslationSandboxState = recoveredResultUrl
+  let state: AiImageTranslationSandboxState = recoveredResultDownloadUrl
     ? 'RESULT_READY'
     : mode === 'RECONCILE' ? 'ACCEPTED' : 'READY';
   let acceptedAt: number | null = mode === 'RECONCILE' ? now() : null;
   let providerTaskId: string | null = mode === 'RECONCILE' ? recoveredTaskId : null;
-  let resultUrl: string | null = recoveredResultUrl;
+  let resultDownloadUrl: string | null = recoveredResultDownloadUrl;
   const providerRequestIdHashes: string[] = [];
   let imageCount: number | null = null;
-  const maximumResultDownloads = mode === 'RECONCILE' && recoveredResultUrl ? 2 : 1;
+  const maximumResultDownloads = mode === 'RECONCILE' && recoveredResultDownloadUrl ? 2 : 1;
 
   function requireReconciliation() {
     state = 'RECONCILIATION_REQUIRED';
@@ -530,7 +536,7 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
     const normalizedUrl = new URL(rawUrl).toString();
     const expectedTaskUrl = `${endpoints.taskEndpointBase}/${encodeURIComponent(providerTaskId)}`;
     if (normalizedUrl === expectedTaskUrl) {
-      if (resultUrl || ['FAILED', 'SUCCEEDED'].includes(state)) {
+      if (resultDownloadUrl || ['FAILED', 'SUCCEEDED'].includes(state)) {
         throw new Error('The translation sandbox blocked polling after a terminal task response');
       }
       if (pollRequests >= input.contract.maxPollRequests || now() - acceptedAt >= input.contract.maxPollDurationMs) {
@@ -567,8 +573,13 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
         } else {
           try {
             const canonicalResultUrl = new URL(candidate).toString();
-            await input.onResultUrl?.(canonicalResultUrl);
-            resultUrl = canonicalResultUrl;
+            await input.onRawResultUrl?.(canonicalResultUrl);
+            const normalizedResultUrl = new URL(input.toResultDownloadUrl(canonicalResultUrl)).toString();
+            const safeResultUrl = await input.validateUrl(normalizedResultUrl);
+            if (new URL(safeResultUrl).toString() !== normalizedResultUrl) {
+              throw new Error('The translation sandbox blocked an unexpected normalized result URL');
+            }
+            resultDownloadUrl = normalizedResultUrl;
             state = 'RESULT_READY';
           } catch {
             requireReconciliation();
@@ -580,14 +591,14 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
       return response;
     }
 
-    if (!resultUrl || normalizedUrl !== resultUrl) {
+    if (!resultDownloadUrl || normalizedUrl !== resultDownloadUrl) {
       throw new Error('The translation sandbox blocked a non-task or unexpected result URL');
     }
     if (resultDownloads >= maximumResultDownloads) {
       throw new Error('The translation sandbox blocked a duplicate result download');
     }
     const safeUrl = await input.validateUrl(rawUrl);
-    if (new URL(safeUrl).toString() !== resultUrl) {
+    if (new URL(safeUrl).toString() !== resultDownloadUrl) {
       throw new Error('The translation sandbox blocked an unexpected result download URL');
     }
     resultDownloads += 1;
@@ -609,13 +620,13 @@ export function createAiImageTranslationSandboxFetchGuard(input: {
     resumePollingAfterResultFailure: () => {
       if (
         mode !== 'RECONCILE'
-        || !resultUrl
+        || !resultDownloadUrl
         || !['RECONCILIATION_REQUIRED', 'SUCCEEDED'].includes(state)
         || resultDownloads !== 1
       ) {
         throw new Error('The translation sandbox cannot resume polling from this recovery state');
       }
-      resultUrl = null;
+      resultDownloadUrl = null;
       acceptedAt = now();
       state = 'ACCEPTED';
     },

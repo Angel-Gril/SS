@@ -18,7 +18,12 @@ describe('DashScope qwen-mt-image adapter', () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(response({ output: { task_id: 'task-1', task_status: 'PENDING' }, request_id: 'req-1' }))
       .mockResolvedValueOnce(response({ output: { task_status: 'RUNNING' } }))
-      .mockResolvedValueOnce(response({ output: { task_status: 'SUCCEEDED', image_url: 'https://result.example/translated.png' } }))
+      .mockResolvedValueOnce(response({
+        output: {
+          task_status: 'SUCCEEDED',
+          image_url: 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?signature=opaque',
+        },
+      }))
       .mockResolvedValueOnce(new Response(png, { status: 200, headers: { 'content-type': 'image/png' } }));
     const accepted = vi.fn(async () => undefined);
     const provider = createDashScopeImageTranslationProvider({
@@ -44,6 +49,9 @@ describe('DashScope qwen-mt-image adapter', () => {
       image: { mimeType: 'image/png', buffer: png },
     });
     expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(fetcher.mock.calls[3]?.[0]).toBe(
+      'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?signature=opaque',
+    );
     const submitInit = fetcher.mock.calls[0]?.[1] as RequestInit;
     expect(submitInit.headers).toMatchObject({
       Authorization: 'Bearer secret',
@@ -73,6 +81,35 @@ describe('DashScope qwen-mt-image adapter', () => {
       sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'safe', terminologies: [], imageSegment: false,
     }, async () => undefined)).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['third-party host', 'http://result.example/translated.png'],
+    ['official-host lookalike', 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com.evil.test/translated.png'],
+    ['non-DashScope OSS host', 'http://bucket.oss-cn-beijing.aliyuncs.com/translated.png'],
+    ['embedded credentials', 'http://user:pass@dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png'],
+    ['custom port', 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com:8080/translated.png'],
+  ])('rejects a %s HTTP result URL instead of weakening the HTTPS policy', async (_label, resultUrl) => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ output: { task_id: 'task-third-party-http' } }))
+      .mockResolvedValueOnce(response({
+        output: {
+          task_status: 'SUCCEEDED',
+          image_url: resultUrl,
+        },
+      }));
+    const provider = createDashScopeImageTranslationProvider({
+      baseUrl: 'https://dashscope.example/api/v1', apiKey: 'secret', model: 'qwen-mt-image', fetch: fetcher,
+    });
+    const submitted = await provider.submit({
+      model: 'qwen-mt-image', imageUrl: 'https://owned.example/source.png',
+      sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'safe', terminologies: [], imageSegment: false,
+    }, async () => undefined);
+
+    await expect(provider.poll(submitted.providerJobId)).rejects.toMatchObject({
+      code: 'INVALID_PROVIDER_URL',
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed for a successful task without a usable image URL', async () => {

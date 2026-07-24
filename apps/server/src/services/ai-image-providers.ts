@@ -272,6 +272,34 @@ function validateProviderUrl(rawUrl: string): string {
   return parsed.toString();
 }
 
+const DASHSCOPE_OSS_RESULT_HOST_PATTERN = /^dashscope(?:-[a-z0-9-]+)?\.oss-[a-z0-9-]+\.aliyuncs\.com$/u;
+
+/**
+ * DashScope may return a temporary OSS result URL with an http scheme even
+ * though the same object is available over TLS. Upgrade only the narrowly
+ * characterized official DashScope OSS host shape; every other non-HTTPS URL
+ * still reaches validateProviderUrl and is rejected.
+ */
+export function normalizeDashScopeImageResultUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+  if (
+    parsed.protocol === 'http:'
+    && !parsed.username
+    && !parsed.password
+    && !parsed.port
+    && DASHSCOPE_OSS_RESULT_HOST_PATTERN.test(parsed.hostname.toLowerCase())
+  ) {
+    parsed.protocol = 'https:';
+    return parsed.toString();
+  }
+  return rawUrl;
+}
+
 export async function validateAiImageProviderUrl(
   rawUrl: string,
   resolver: (hostname: string) => Promise<Array<{ address: string }>> = (hostname) => lookup(hostname, { all: true }),
@@ -875,7 +903,11 @@ export function createDashScopeImageTranslationProvider(
         );
       }
       try {
-        const image = await downloadImage(fetcher, resultUrl, timeoutMs);
+        const image = await downloadImage(
+          fetcher,
+          normalizeDashScopeImageResultUrl(resultUrl),
+          timeoutMs,
+        );
         return {
           status: 'SUCCEEDED' as const,
           providerStatus: 'SUCCEEDED' as const,

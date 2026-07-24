@@ -15,6 +15,7 @@ import { Agent, fetch as undiciFetch, interceptors } from 'undici';
 import sharp from 'sharp';
 import {
   createDashScopeImageTranslationProvider,
+  normalizeDashScopeImageResultUrl,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
 import {
@@ -33,6 +34,7 @@ const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const FULL_GIT_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+const LANGUAGE_PATTERN = /^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/u;
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type DnsResolver = (hostname: string) => Promise<Array<{ address: string }>>;
@@ -105,7 +107,7 @@ function normalizeDashScopeApiBase(rawValue: string) {
 
 function normalizedLanguage(value: string, field: string) {
   const language = value.trim().toLowerCase();
-  if (!/^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/u.test(language)) {
+  if (!LANGUAGE_PATTERN.test(language)) {
     throw Object.assign(new Error(`${field} is invalid`), { code: 'SANDBOX_CONFIG_INVALID' });
   }
   return language;
@@ -424,7 +426,6 @@ function parseStoredIntent(value: unknown, expected: {
   operationId: string;
   endpointSha256: string;
   credentialRevision: string;
-  adapterRevision: string;
 }): StoredTranslationIntent {
   const intent = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Partial<StoredTranslationIntent>
@@ -436,13 +437,14 @@ function parseStoredIntent(value: unknown, expected: {
     ? request.sourceEvidence as Partial<SourceVerification>
     : {};
   if (
-    intent.operationId !== expected.operationId
+    intent.schemaVersion !== 2
+    || intent.operationId !== expected.operationId
     || intent.state !== 'SUBMITTING'
     || intent.provider !== 'dashscope-qwen-mt-image'
     || intent.model !== 'qwen-mt-image'
     || intent.endpointSha256 !== expected.endpointSha256
     || intent.credentialRevision !== expected.credentialRevision
-    || intent.adapterRevision !== expected.adapterRevision
+    || !FULL_GIT_OID_PATTERN.test(String(intent.adapterRevision || ''))
     || request.operation !== 'IMAGE_TRANSLATE'
     || !SHA256_PATTERN.test(String(request.sourceSha256 || ''))
     || !SHA256_PATTERN.test(String(request.sourceUrlSha256 || ''))
@@ -460,6 +462,11 @@ function parseStoredIntent(value: unknown, expected: {
     || typeof source.cacheControlImmutable !== 'boolean'
     || !SHA256_PATTERN.test(String(request.domainHintSha256 || ''))
     || !SHA256_PATTERN.test(String(request.terminologiesSha256 || ''))
+    || typeof request.sourceLanguage !== 'string'
+    || typeof request.targetLanguage !== 'string'
+    || !LANGUAGE_PATTERN.test(request.sourceLanguage)
+    || !LANGUAGE_PATTERN.test(request.targetLanguage)
+    || request.sourceLanguage === request.targetLanguage
     || request.imageSegment !== false
     || !Number.isSafeInteger(request.maxPollRequests)
     || Number(request.maxPollRequests) <= 0
@@ -569,7 +576,7 @@ async function runReconciliation(input: {
   model: 'qwen-mt-image';
   operationId: string;
   credentialRevision: string;
-  adapterRevision: string;
+  reconciliationAdapterRevision: string;
   reconciliationId: string;
 }) {
   const root = input.options.repositoryRoot
@@ -587,7 +594,6 @@ async function runReconciliation(input: {
       operationId: input.operationId,
       endpointSha256,
       credentialRevision: input.credentialRevision,
-      adapterRevision: input.adapterRevision,
     },
   );
   const declaredSourceSha = requiredEnvironment(
@@ -615,6 +621,8 @@ async function runReconciliation(input: {
     operationId: input.operationId,
     reconciliationId: input.reconciliationId,
     state: 'RECONCILING',
+    submissionAdapterRevision: intent.adapterRevision,
+    reconciliationAdapterRevision: input.reconciliationAdapterRevision,
     providerTaskIdHash: sha256(recovery.providerTaskId),
     resultUrlHash: recovery.resultUrl ? sha256(recovery.resultUrl) : null,
     createdAt: new Date(input.now()).toISOString(),
@@ -635,30 +643,77 @@ async function runReconciliation(input: {
     maxPollRequests: Math.min(intent.request.maxPollRequests, MAX_POLL_REQUESTS),
     maxPollDurationMs: Math.min(intent.request.maxPollDurationMs, MAX_POLL_DURATION_MS),
   };
+  const reportPath = resolve(
+    outputDirectory,
+    `${input.operationId}.${input.reconciliationId}.reconcile.report.json`,
+  );
+  const startedAt = input.now();
   const transport = createPinnedTransport(input.options);
   try {
-    await transport.validateUrl(input.apiBase);
-    let recoveredResultUrl = recovery.resultUrl;
-    if (recoveredResultUrl) {
-      const safeResultUrl = await transport.validateUrl(recoveredResultUrl);
-      if (safeResultUrl !== recoveredResultUrl) {
-        throw Object.assign(new Error('Translation recovery result URL changed during validation'), {
-          code: 'SANDBOX_RECOVERY_INVALID',
-        });
+    try {
+      await transport.validateUrl(input.apiBase);
+    } catch (error) {
+      const report = {
+        schemaVersion: 2,
+        operationId: input.operationId,
+        reconciliationId: input.reconciliationId,
+        mode: 'RECONCILE',
+        state: 'RECONCILIATION_REQUIRED',
+        provider: 'dashscope-qwen-mt-image',
+        model: input.model,
+        operation: 'IMAGE_TRANSLATE',
+        endpointSha256,
+        credentialRevision: input.credentialRevision,
+        adapterRevision: input.reconciliationAdapterRevision,
+        submissionAdapterRevision: intent.adapterRevision,
+        reconciliationAdapterRevision: input.reconciliationAdapterRevision,
+        sourceSha256: intent.request.sourceSha256,
+        sourceUrlSha256: intent.request.sourceUrlSha256,
+        source: intent.request.sourceEvidence,
+        submitRequests: 0,
+        pollRequests: 0,
+        resultDownloads: 0,
+        providerTaskIdHash: sha256(recovery.providerTaskId),
+        providerRequestIdHashes: [],
+        usage: {},
+        failureCode: safeFailureCode(error),
+        actualCostCents: null,
+        quotedCostCents: intent.quotedCostCents,
+        maximumCostCents: intent.maximumCostCents,
+        elapsedMs: input.now() - startedAt,
+        intentPath,
+      };
+      await atomicWritePrivateJson(reportPath, report);
+      process.stderr.write(`${JSON.stringify({ ...report, reportPath }, null, 2)}\n`);
+      throw error;
+    }
+    let recoveredResultDownloadUrl: string | null = null;
+    if (recovery.resultUrl) {
+      try {
+        const normalizedResultUrl = normalizeDashScopeImageResultUrl(recovery.resultUrl);
+        const safeResultUrl = await transport.validateUrl(normalizedResultUrl);
+        if (safeResultUrl !== normalizedResultUrl) {
+          throw new Error('Translation recovery result URL changed during validation');
+        }
+        recoveredResultDownloadUrl = safeResultUrl;
+      } catch {
+        // A result URL is only a download hint. Preserve its raw private
+        // evidence, but fall back to the durable task ID instead of letting an
+        // expired or rejected hint strand a GET-only reconciliation.
       }
-      recoveredResultUrl = safeResultUrl;
     }
     const guard = createAiImageTranslationSandboxFetchGuard({
       contract,
       validateUrl: transport.validateUrl,
       fetch: transport.fetch,
       now: input.now,
+      toResultDownloadUrl: normalizeDashScopeImageResultUrl,
       mode: 'RECONCILE',
       recovery: {
         providerTaskId: recovery.providerTaskId,
-        resultUrl: recoveredResultUrl,
+        rawResultUrl: recoveredResultDownloadUrl ? recovery.resultUrl : null,
       },
-      onResultUrl: (resultUrl) => appendRecoveryEvent(recoveryPath, {
+      onRawResultUrl: (resultUrl) => appendRecoveryEvent(recoveryPath, {
         schemaVersion: 1,
         operationId: input.operationId,
         event: 'RESULT_URL',
@@ -674,17 +729,12 @@ async function runReconciliation(input: {
       timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
       costPerImageCents: 0,
     });
-    const reportPath = resolve(
-      outputDirectory,
-      `${input.operationId}.${input.reconciliationId}.reconcile.report.json`,
-    );
-    const startedAt = input.now();
     let reportWritten = false;
     try {
       let image: { buffer: Buffer; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' } | null = null;
-      if (recoveredResultUrl) {
+      if (recoveredResultDownloadUrl) {
         try {
-          image = await responseImage(await guard.fetch(recoveredResultUrl, {
+          image = await responseImage(await guard.fetch(recoveredResultDownloadUrl, {
             method: 'GET',
             signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
           }));
@@ -762,7 +812,9 @@ async function runReconciliation(input: {
         operation: 'IMAGE_TRANSLATE',
         endpointSha256,
         credentialRevision: input.credentialRevision,
-        adapterRevision: input.adapterRevision,
+        adapterRevision: input.reconciliationAdapterRevision,
+        submissionAdapterRevision: intent.adapterRevision,
+        reconciliationAdapterRevision: input.reconciliationAdapterRevision,
         sourceSha256: intent.request.sourceSha256,
         sourceUrlSha256: intent.request.sourceUrlSha256,
         sourceLanguage: intent.request.sourceLanguage,
@@ -808,7 +860,9 @@ async function runReconciliation(input: {
           operation: 'IMAGE_TRANSLATE',
           endpointSha256,
           credentialRevision: input.credentialRevision,
-          adapterRevision: input.adapterRevision,
+          adapterRevision: input.reconciliationAdapterRevision,
+          submissionAdapterRevision: intent.adapterRevision,
+          reconciliationAdapterRevision: input.reconciliationAdapterRevision,
           sourceSha256: intent.request.sourceSha256,
           sourceUrlSha256: intent.request.sourceUrlSha256,
           source: intent.request.sourceEvidence,
@@ -933,7 +987,7 @@ export async function runAiImageTranslationSingleSubmit(
       model,
       operationId,
       credentialRevision,
-      adapterRevision,
+      reconciliationAdapterRevision: adapterRevision,
       reconciliationId,
     });
   }
@@ -1044,6 +1098,7 @@ export async function runAiImageTranslationSingleSubmit(
       validateUrl: transport.validateUrl,
       fetch: transport.fetch,
       now,
+      toResultDownloadUrl: normalizeDashScopeImageResultUrl,
       onProviderTaskId: (providerTaskId) => appendRecoveryEvent(recoveryPath, {
         schemaVersion: 1,
         operationId,
@@ -1051,7 +1106,7 @@ export async function runAiImageTranslationSingleSubmit(
         providerTaskId,
         recordedAt: new Date(now()).toISOString(),
       }),
-      onResultUrl: (resultUrl) => appendRecoveryEvent(recoveryPath, {
+      onRawResultUrl: (resultUrl) => appendRecoveryEvent(recoveryPath, {
         schemaVersion: 1,
         operationId,
         event: 'RESULT_URL',

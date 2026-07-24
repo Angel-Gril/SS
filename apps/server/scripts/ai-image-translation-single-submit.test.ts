@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runAiImageTranslationSingleSubmit } from './ai-image-translation-single-submit.js';
 
 const directories: string[] = [];
+const SUBMISSION_ADAPTER_REVISION = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+const RECONCILIATION_ADAPTER_REVISION = 'f3606b9d431896f6f7780e1d570f0992e7dc5efd';
 
 function sha256(value: Buffer | string) {
   return createHash('sha256').update(value).digest('hex');
@@ -24,6 +26,7 @@ function environment(input: {
   sourceSha256: string;
   baseUrl?: string;
   expectedHost?: string;
+  adapterRevision?: string;
 }): NodeJS.ProcessEnv {
   return {
     NODE_ENV: 'sandbox',
@@ -35,7 +38,7 @@ function environment(input: {
     AI_IMAGE_TRANSLATION_SANDBOX_MODEL: 'qwen-mt-image',
     AI_IMAGE_TRANSLATION_SANDBOX_OPERATION_ID: input.operationId,
     AI_IMAGE_TRANSLATION_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-translation-0001',
-    AI_IMAGE_SANDBOX_ADAPTER_REVISION: '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3',
+    AI_IMAGE_SANDBOX_ADAPTER_REVISION: input.adapterRevision || SUBMISSION_ADAPTER_REVISION,
     AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_PATH: input.sourcePath,
     AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_SHA256: input.sourceSha256,
     AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_URL: 'https://assets.example/source.png?opaque=secret',
@@ -45,6 +48,30 @@ function environment(input: {
     AI_IMAGE_TRANSLATION_SANDBOX_TERMINOLOGIES_JSON: '[]',
     AI_IMAGE_TRANSLATION_SANDBOX_QUOTED_COST_CENTS: '5',
     AI_IMAGE_TRANSLATION_SANDBOX_MAX_COST_CENTS: '10',
+  };
+}
+
+function reconciliationEnvironment(input: {
+  submitEnvironment: NodeJS.ProcessEnv;
+  reconciliationId: string;
+  adapterRevision?: string;
+}): NodeJS.ProcessEnv {
+  const original = input.submitEnvironment;
+  return {
+    NODE_ENV: 'sandbox',
+    AI_IMAGE_TRANSLATION_SANDBOX_MODE: 'RECONCILE',
+    AI_IMAGE_TRANSLATION_SANDBOX_BASE_URL: original.AI_IMAGE_TRANSLATION_SANDBOX_BASE_URL,
+    AI_IMAGE_TRANSLATION_SANDBOX_EXPECTED_HOST: original.AI_IMAGE_TRANSLATION_SANDBOX_EXPECTED_HOST,
+    AI_IMAGE_TRANSLATION_SANDBOX_API_KEY: original.AI_IMAGE_TRANSLATION_SANDBOX_API_KEY,
+    AI_IMAGE_TRANSLATION_SANDBOX_MODEL: original.AI_IMAGE_TRANSLATION_SANDBOX_MODEL,
+    AI_IMAGE_TRANSLATION_SANDBOX_OPERATION_ID: original.AI_IMAGE_TRANSLATION_SANDBOX_OPERATION_ID,
+    AI_IMAGE_TRANSLATION_SANDBOX_RECONCILIATION_ID: input.reconciliationId,
+    AI_IMAGE_TRANSLATION_SANDBOX_CREDENTIAL_REVISION:
+      original.AI_IMAGE_TRANSLATION_SANDBOX_CREDENTIAL_REVISION,
+    AI_IMAGE_SANDBOX_ADAPTER_REVISION:
+      input.adapterRevision || original.AI_IMAGE_SANDBOX_ADAPTER_REVISION,
+    AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_SHA256:
+      original.AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_SHA256,
   };
 }
 
@@ -176,7 +203,8 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     const sourcePath = join(path, 'source.png');
     await writeFile(sourcePath, source);
     const operationId = 'translation-submit-success-0001';
-    const resultUrl = 'https://results.example/translated.png?opaque=result-secret';
+    const resultUrl = 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?opaque=result-secret';
+    const resultDownloadUrl = 'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?opaque=result-secret';
     const calls: Array<{ url: string; method: string }> = [];
     const fetch = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
       const url = request instanceof Request ? request.url : String(request);
@@ -241,9 +269,16 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     });
     expect(report + intent).not.toContain('https://assets.example');
     expect(report + intent).not.toContain(resultUrl);
+    expect(report + intent).not.toContain(resultDownloadUrl);
     expect(report + intent).not.toContain('sandbox-secret-never-report');
     expect(journal).toContain('raw-provider-task-1');
     expect(journal).toContain(resultUrl);
+    expect(journal).not.toContain(resultDownloadUrl);
+    expect(journal.trim().split(/\r?\n/u).map((line) => JSON.parse(line))
+      .filter((event) => event.event === 'RESULT_URL').map((event) => event.resultUrl))
+      .toEqual([resultUrl]);
+    expect(calls).toContainEqual({ url: resultDownloadUrl, method: 'GET' });
+    expect(calls).not.toContainEqual({ url: resultUrl, method: 'GET' });
     if (process.platform !== 'win32') {
       expect((await stat(path)).mode & 0o777).toBe(0o700);
       expect((await stat(join(path, `${operationId}.submit.report.json`))).mode & 0o777).toBe(0o600);
@@ -268,8 +303,10 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     }).jpeg().toBuffer();
     const sourcePath = join(path, 'source.png');
     await writeFile(sourcePath, source);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${SUBMISSION_ADAPTER_REVISION}\n`);
     const operationId = 'translation-reconcile-success-0001';
-    const staleResultUrl = 'https://results.example/stale.png?opaque=expired-secret';
+    const staleResultUrl = 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com/stale.png?opaque=expired-secret';
+    const staleResultDownloadUrl = 'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/stale.png?opaque=expired-secret';
     const submitEnvironment = environment({ operationId, sourcePath, sourceSha256: sha256(source) });
     const submitCalls: Array<{ url: string; method: string }> = [];
     const submitFetch = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
@@ -305,6 +342,7 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     await expect(runAiImageTranslationSingleSubmit({
       environment: submitEnvironment,
       outputDirectory: path,
+      repositoryRoot: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
       fetch: submitFetch,
       now: () => 2_000,
@@ -318,14 +356,16 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     expect(journalBefore).toContain('raw-recovery-task-1');
     expect(journalBefore).toContain(staleResultUrl);
     const intentsBefore = await readdir(join(path, 'intents'));
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${RECONCILIATION_ADAPTER_REVISION}\n`);
 
-    const resultUrl = 'https://results.example/reconciled.png?opaque=result-secret';
+    const resultUrl = 'http://dashscope-a718.oss-cn-beijing.aliyuncs.com/reconciled.png?opaque=result-secret';
+    const resultDownloadUrl = 'https://dashscope-a718.oss-cn-beijing.aliyuncs.com/reconciled.png?opaque=result-secret';
     const reconcileCalls: Array<{ url: string; method: string }> = [];
     const reconcileFetch = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
       const url = request instanceof Request ? request.url : String(request);
       const method = String(init?.method || (request instanceof Request ? request.method : 'GET')).toUpperCase();
       reconcileCalls.push({ url, method });
-      if (url === staleResultUrl) {
+      if (url === staleResultDownloadUrl) {
         return new Response(mislabeledResult, {
           status: 200,
           headers: { 'content-type': 'image/png' },
@@ -345,13 +385,13 @@ describe('single-submit DashScope image translation sandbox runner', () => {
     });
 
     await expect(runAiImageTranslationSingleSubmit({
-      environment: {
-        ...submitEnvironment,
-        AI_IMAGE_TRANSLATION_SANDBOX_MODE: 'RECONCILE',
-        AI_IMAGE_TRANSLATION_SANDBOX_RECONCILIATION_ID: 'reconcile-attempt-0001',
-        AI_IMAGE_TRANSLATION_SANDBOX_CONFIRM: '',
-      },
+      environment: reconciliationEnvironment({
+        submitEnvironment,
+        reconciliationId: 'reconcile-attempt-0001',
+        adapterRevision: RECONCILIATION_ADAPTER_REVISION,
+      }),
       outputDirectory: path,
+      repositoryRoot: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
       fetch: reconcileFetch,
       now: () => 3_000,
@@ -364,31 +404,212 @@ describe('single-submit DashScope image translation sandbox runner', () => {
       resultDownloads: 2,
     });
 
-    expect(reconcileCalls.every((call) => call.method === 'GET')).toBe(true);
-    expect(reconcileCalls).toHaveLength(3);
+    expect(reconcileCalls).toEqual([
+      { url: staleResultDownloadUrl, method: 'GET' },
+      { url: 'https://dashscope.aliyuncs.com/api/v1/tasks/raw-recovery-task-1', method: 'GET' },
+      { url: resultDownloadUrl, method: 'GET' },
+    ]);
     expect(await readdir(join(path, 'intents'))).toEqual(intentsBefore);
     expect(await readFile(submitReportPath, 'utf8')).toBe(submitReportBefore);
     const reconcileReport = await readFile(
       join(path, `${operationId}.reconcile-attempt-0001.reconcile.report.json`),
       'utf8',
     );
+    const reconciliationIntent = JSON.parse(await readFile(
+      join(path, 'reconciliations', `${operationId}.reconcile-attempt-0001.intent.json`),
+      'utf8',
+    ));
+    expect(JSON.parse(reconcileReport)).toMatchObject({
+      adapterRevision: RECONCILIATION_ADAPTER_REVISION,
+      submissionAdapterRevision: SUBMISSION_ADAPTER_REVISION,
+      reconciliationAdapterRevision: RECONCILIATION_ADAPTER_REVISION,
+    });
+    expect(reconciliationIntent).toMatchObject({
+      submissionAdapterRevision: SUBMISSION_ADAPTER_REVISION,
+      reconciliationAdapterRevision: RECONCILIATION_ADAPTER_REVISION,
+    });
     expect(reconcileReport).not.toContain(resultUrl);
+    expect(reconcileReport).not.toContain(resultDownloadUrl);
     expect(reconcileReport).not.toContain('raw-recovery-task-1');
     const journal = await readFile(journalPath, 'utf8');
     expect(journal).toContain(resultUrl);
+    expect(journal).not.toContain(resultDownloadUrl);
+    expect(journal.trim().split(/\r?\n/u).map((line) => JSON.parse(line))
+      .filter((event) => event.event === 'RESULT_URL').map((event) => event.resultUrl))
+      .toEqual([staleResultUrl, resultUrl]);
 
     const replayFetch = vi.fn();
     await expect(runAiImageTranslationSingleSubmit({
-      environment: {
-        ...submitEnvironment,
-        AI_IMAGE_TRANSLATION_SANDBOX_MODE: 'RECONCILE',
-        AI_IMAGE_TRANSLATION_SANDBOX_RECONCILIATION_ID: 'reconcile-attempt-0001',
-        AI_IMAGE_TRANSLATION_SANDBOX_CONFIRM: '',
-      },
+      environment: reconciliationEnvironment({
+        submitEnvironment,
+        reconciliationId: 'reconcile-attempt-0001',
+        adapterRevision: RECONCILIATION_ADAPTER_REVISION,
+      }),
       outputDirectory: path,
+      repositoryRoot: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
       fetch: replayFetch,
     })).rejects.toMatchObject({ code: 'EEXIST' });
     expect(replayFetch).not.toHaveBeenCalled();
+  });
+
+  it('skips non-official HTTP recovery evidence and continues exact GET-only task polling', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-translation-runner-'));
+    directories.push(path);
+    const source = await image({ r: 255, g: 255, b: 255 });
+    const result = await image({ r: 220, g: 220, b: 220 });
+    const sourcePath = join(path, 'source.png');
+    await writeFile(sourcePath, source);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${SUBMISSION_ADAPTER_REVISION}\n`);
+    const operationId = 'translation-hostile-recovery-0001';
+    const hostileResultUrl = 'http://result.example/translated.png?opaque=result-secret';
+    const submitEnvironment = environment({ operationId, sourcePath, sourceSha256: sha256(source) });
+    const submitCalls: Array<{ url: string; method: string }> = [];
+    const submitFetch = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
+      const url = request instanceof Request ? request.url : String(request);
+      const method = String(init?.method || (request instanceof Request ? request.method : 'GET')).toUpperCase();
+      submitCalls.push({ url, method });
+      if (url.startsWith('https://assets.example/')) {
+        return new Response(source, {
+          status: 200,
+          headers: {
+            'content-type': 'image/png',
+            'content-length': String(source.byteLength),
+            'cache-control': 'public, max-age=31536000, immutable',
+          },
+        });
+      }
+      if (method === 'POST') {
+        return new Response(JSON.stringify({
+          output: { task_id: 'raw-hostile-task-1', task_status: 'PENDING' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.includes('/tasks/')) {
+        return new Response(JSON.stringify({
+          output: { task_status: 'SUCCEEDED', image_url: hostileResultUrl },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error('unexpected transport request');
+    });
+
+    await expect(runAiImageTranslationSingleSubmit({
+      environment: submitEnvironment,
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch: submitFetch,
+      now: () => 4_000,
+      delay: async () => undefined,
+    })).rejects.toMatchObject({ providerJobId: 'raw-hostile-task-1' });
+
+    expect(submitCalls).not.toContainEqual({ url: hostileResultUrl, method: 'GET' });
+    const journalPath = join(path, 'recovery', `${operationId}.recovery.jsonl`);
+    const intentPath = join(path, 'intents', `${operationId}.intent.json`);
+    const journalBefore = await readFile(journalPath, 'utf8');
+    const intentBefore = await readFile(intentPath, 'utf8');
+    expect(journalBefore).toContain(hostileResultUrl);
+
+    const recoveredResultUrl = 'http://dashscope-a719.oss-cn-beijing.aliyuncs.com/recovered.png?opaque=fresh-secret';
+    const recoveredResultDownloadUrl = 'https://dashscope-a719.oss-cn-beijing.aliyuncs.com/recovered.png?opaque=fresh-secret';
+    const reconcileCalls: Array<{ url: string; method: string }> = [];
+    const reconcileFetch = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
+      const url = request instanceof Request ? request.url : String(request);
+      const method = String(init?.method || (request instanceof Request ? request.method : 'GET')).toUpperCase();
+      reconcileCalls.push({ url, method });
+      if (url.includes('/tasks/')) {
+        return new Response(JSON.stringify({
+          output: { task_status: 'SUCCEEDED', image_url: recoveredResultUrl },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url === recoveredResultDownloadUrl) {
+        return new Response(result, {
+          status: 200,
+          headers: { 'content-type': 'image/png', 'content-length': String(result.byteLength) },
+        });
+      }
+      throw new Error('unexpected reconcile transport request');
+    });
+    await expect(runAiImageTranslationSingleSubmit({
+      environment: reconciliationEnvironment({
+        submitEnvironment,
+        reconciliationId: 'hostile-reconcile-attempt-0001',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch: reconcileFetch,
+      now: () => 5_000,
+      delay: async () => undefined,
+    })).resolves.toMatchObject({
+      state: 'SUCCEEDED',
+      submitRequests: 0,
+      pollRequests: 1,
+      resultDownloads: 1,
+    });
+
+    expect(reconcileCalls).toEqual([
+      { url: 'https://dashscope.aliyuncs.com/api/v1/tasks/raw-hostile-task-1', method: 'GET' },
+      { url: recoveredResultDownloadUrl, method: 'GET' },
+    ]);
+    expect(reconcileCalls).not.toContainEqual({ url: hostileResultUrl, method: 'GET' });
+    const journalAfter = await readFile(journalPath, 'utf8');
+    expect(journalAfter).toContain(hostileResultUrl);
+    expect(journalAfter).toContain(recoveredResultUrl);
+    expect(journalAfter).not.toContain(recoveredResultDownloadUrl);
+    expect(await readFile(intentPath, 'utf8')).toBe(intentBefore);
+    const reconciliationIntent = await readFile(
+      join(path, 'reconciliations', `${operationId}.hostile-reconcile-attempt-0001.intent.json`),
+      'utf8',
+    );
+    expect(reconciliationIntent).not.toContain(hostileResultUrl);
+    expect(reconciliationIntent).not.toContain(recoveredResultUrl);
+
+    const preflightFetch = vi.fn();
+    await expect(runAiImageTranslationSingleSubmit({
+      environment: reconciliationEnvironment({
+        submitEnvironment,
+        reconciliationId: 'dns-preflight-attempt-0001',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => {
+        throw Object.assign(new Error('DNS validation unavailable'), { code: 'DNS_VALIDATION_FAILED' });
+      },
+      fetch: preflightFetch,
+      now: () => 6_000,
+      delay: async () => undefined,
+    })).rejects.toMatchObject({ code: 'DNS_VALIDATION_FAILED' });
+
+    expect(preflightFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(
+      join(path, `${operationId}.dns-preflight-attempt-0001.reconcile.report.json`),
+      'utf8',
+    ))).toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      failureCode: 'DNS_VALIDATION_FAILED',
+      submitRequests: 0,
+      pollRequests: 0,
+      resultDownloads: 0,
+    });
+
+    const invalidIntent = JSON.parse(intentBefore);
+    invalidIntent.schemaVersion = 3;
+    await writeFile(intentPath, `${JSON.stringify(invalidIntent, null, 2)}\n`);
+    const invalidIntentFetch = vi.fn();
+    await expect(runAiImageTranslationSingleSubmit({
+      environment: reconciliationEnvironment({
+        submitEnvironment,
+        reconciliationId: 'invalid-intent-attempt-0001',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch: invalidIntentFetch,
+      now: () => 7_000,
+      delay: async () => undefined,
+    })).rejects.toMatchObject({ code: 'SANDBOX_INTENT_INVALID' });
+    expect(invalidIntentFetch).not.toHaveBeenCalled();
+    expect(await readdir(join(path, 'reconciliations')))
+      .not.toContain(`${operationId}.invalid-intent-attempt-0001.intent.json`);
   });
 });

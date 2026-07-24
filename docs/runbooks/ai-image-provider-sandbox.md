@@ -211,10 +211,14 @@ Set exactly these variables for a reconciliation attempt:
 | `AI_IMAGE_TRANSLATION_SANDBOX_OPERATION_ID`        | The original Operation ID; never a replacement ID        |
 | `AI_IMAGE_TRANSLATION_SANDBOX_RECONCILIATION_ID`   | New one-use ID for this read-only reconciliation attempt |
 | `AI_IMAGE_TRANSLATION_SANDBOX_CREDENTIAL_REVISION` | Must match the original intent                           |
-| `AI_IMAGE_SANDBOX_ADAPTER_REVISION`                | Must match the original intent and deployed CLI          |
+| `AI_IMAGE_SANDBOX_ADAPTER_REVISION`                | Full Git SHA of the currently deployed reconciliation CLI; must equal `DEPLOYED_COMMIT` |
 | `AI_IMAGE_TRANSLATION_SANDBOX_SOURCE_SHA256`       | Must match the original source digest                    |
 
 Do not set the paid `SUBMIT` confirmation. Quoted and maximum costs, language, terminology, and source URL evidence remain bound by the original intent. Source path, raw source URL, language, terminology, and cost variables are not read in `RECONCILE`; do not set replacements for them.
+
+The immutable intent retains the SHA of the code that performed the original submit. A later deployment may safely reconcile that task: the runner validates the stored SHA as `submissionAdapterRevision`, independently requires the current `AI_IMAGE_SANDBOX_ADAPTER_REVISION` to equal `DEPLOYED_COMMIT`, and records the latter as `reconciliationAdapterRevision` (and the backward-compatible `adapterRevision`) in the reconciliation evidence. Do not copy the old submit SHA into the current environment after a deployment.
+
+The raw result URL in the private journal is only a download hint. If it is expired or fails the current HTTPS/host/DNS policy, reconciliation preserves that raw evidence, sends no request to the rejected URL, and continues bounded GET-only polling through the durable Provider task ID. This fallback never authorizes another submit POST.
 
 Run:
 

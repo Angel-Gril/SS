@@ -7,10 +7,12 @@ import {
   claimAiImageTranslationSandboxOperation,
   createAiImageTranslationSandboxFetchGuard,
 } from '../services/ai-image-translation-sandbox-guard.js';
+import { normalizeDashScopeImageResultUrl } from '../services/ai-image-providers.js';
 
 const sourceUrl = 'https://source.example/sandbox/source.png?token=opaque';
 const domainHint = 'Translate only visible marketplace copy.';
 const terminologies = [{ src: 'ceramic mug', tgt: 'керамическая кружка' }];
+const identityResultUrl = (url: string) => url;
 
 function sha256(value: string) {
   return createHash('sha256').update(value).digest('hex');
@@ -258,7 +260,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       }));
     const validateUrl = vi.fn(async (url: string) => new URL(url).toString());
     const guarded = createAiImageTranslationSandboxFetchGuard({
-      contract: contract(), validateUrl, fetch: fetcher,
+      contract: contract(), validateUrl, fetch: fetcher, toResultDownloadUrl: identityResultUrl,
     });
 
     await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
@@ -281,7 +283,77 @@ describe('single-submit DashScope image translation sandbox guard', () => {
     });
     expect(fetcher).toHaveBeenCalledTimes(4);
     expect(fetcher.mock.calls.every((call) => call[1]?.redirect === 'error')).toBe(true);
-    expect(validateUrl).toHaveBeenCalledTimes(4);
+    expect(validateUrl).toHaveBeenCalledTimes(5);
+  });
+
+  it('records the raw official OSS result URL but permits only its normalized HTTPS download', async () => {
+    const rawResultUrl = 'http://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?signature=opaque';
+    const downloadUrl = 'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/translated.png?signature=opaque';
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { task_id: 'task-http-result' } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: { task_status: 'SUCCEEDED', image_url: rawResultUrl },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response('image-bytes', {
+        status: 200, headers: { 'content-type': 'image/png' },
+      }));
+    const validateUrl = vi.fn(async (url: string) => new URL(url).toString());
+    const onRawResultUrl = vi.fn(async () => undefined);
+    const guarded = createAiImageTranslationSandboxFetchGuard({
+      contract: contract(),
+      validateUrl,
+      fetch: fetcher,
+      toResultDownloadUrl: normalizeDashScopeImageResultUrl,
+      onRawResultUrl,
+    });
+
+    await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
+    await guarded.fetch('https://dashscope.example/api/v1/tasks/task-http-result', { method: 'GET' });
+    await expect(guarded.fetch(rawResultUrl, { method: 'GET' }))
+      .rejects.toThrow('unexpected result URL');
+    await guarded.fetch(downloadUrl, { method: 'GET' });
+
+    expect(onRawResultUrl).toHaveBeenCalledWith(rawResultUrl);
+    expect(fetcher.mock.calls[2]?.[0]).toBe(downloadUrl);
+    expect(validateUrl).not.toHaveBeenCalledWith(rawResultUrl);
+    expect(guarded.getResultDownloads()).toBe(1);
+    expect(guarded.getEvidence()).toMatchObject({ state: 'SUCCEEDED' });
+  });
+
+  it('persists third-party HTTP result evidence but rejects it before any download', async () => {
+    const rawResultUrl = 'http://result.example/translated.png?signature=opaque';
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { task_id: 'task-http-rejected' } }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: { task_status: 'SUCCEEDED', image_url: rawResultUrl },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const validateUrl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:') throw new Error('HTTPS is required');
+      return parsed.toString();
+    });
+    const onRawResultUrl = vi.fn(async () => undefined);
+    const guarded = createAiImageTranslationSandboxFetchGuard({
+      contract: contract(),
+      validateUrl,
+      fetch: fetcher,
+      toResultDownloadUrl: normalizeDashScopeImageResultUrl,
+      onRawResultUrl,
+    });
+
+    await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
+    await guarded.fetch('https://dashscope.example/api/v1/tasks/task-http-rejected', { method: 'GET' });
+    await expect(guarded.fetch(rawResultUrl, { method: 'GET' }))
+      .rejects.toThrow('unexpected result URL');
+
+    expect(onRawResultUrl).toHaveBeenCalledWith(rawResultUrl);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(guarded.getResultDownloads()).toBe(0);
+    expect(guarded.getEvidence()).toMatchObject({ state: 'RECONCILIATION_REQUIRED' });
   });
 
   it.each([
@@ -300,6 +372,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       contract: contract(),
       validateUrl: async (url) => new URL(url).toString(),
       fetch: fetcher,
+      toResultDownloadUrl: identityResultUrl,
     });
 
     await expect(guarded.fetch(contract().submitEndpoint, {
@@ -321,6 +394,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       contract: contract({ maxPollRequests: 1 }),
       validateUrl: async (url) => new URL(url).toString(),
       fetch: fetcher,
+      toResultDownloadUrl: identityResultUrl,
     });
     await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
     await expect(guarded.fetch(
@@ -345,6 +419,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       contract: contract(),
       validateUrl: async (url) => new URL(url).toString(),
       fetch: fetcher,
+      toResultDownloadUrl: identityResultUrl,
       now: () => now,
     });
     await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
@@ -376,6 +451,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       contract: contract(),
       validateUrl: async (url) => new URL(url).toString(),
       fetch: fetcher,
+      toResultDownloadUrl: identityResultUrl,
     });
     await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
 
@@ -413,6 +489,7 @@ describe('single-submit DashScope image translation sandbox guard', () => {
       contract: contract(),
       validateUrl: async (url) => new URL(url).toString(),
       fetch: fetcher,
+      toResultDownloadUrl: identityResultUrl,
     });
 
     await guarded.fetch(contract().submitEndpoint, { method: 'POST', body: submitBody() });
