@@ -64,7 +64,13 @@ if [ -n "$SSH_KEY" ]; then
   SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
 fi
 
-COMMIT_HASH="${1:-$(git rev-parse --short HEAD)}"
+DEPLOY_REF="${1:-HEAD}"
+if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
+  fail "deployment ref is not a commit: $DEPLOY_REF"
+fi
+if [[ ! "$COMMIT_HASH" =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]]; then
+  fail "deployment ref did not resolve to a full commit OID: $DEPLOY_REF"
+fi
 TARBALL="build/ss-erp-app-$COMMIT_HASH.tar.gz"
 
 shell_escape() {
@@ -151,6 +157,28 @@ tar -xzf "/tmp/$TARBALL" -C "$NEXT_DIR" --strip-components=1
 rm -f "/tmp/$TARBALL"
 
 cp -p "$APP_DIR/$ENV_FILE_NAME" "$NEXT_DIR/$ENV_FILE_NAME"
+
+# Sandbox evidence must survive the app-dir swap without entering a public
+# static-file tree. Existing shared evidence wins on name collisions.
+mkdir -p "$NEXT_DIR/tmp"
+for sandbox_dir in ai-image-sandbox ai-image-translation-sandbox; do
+  current_sandbox_dir="$APP_DIR/tmp/$sandbox_dir"
+  shared_sandbox_dir="$DEPLOY_BASE/shared/$sandbox_dir"
+  mkdir -p "$shared_sandbox_dir"
+
+  if [ -d "$current_sandbox_dir" ]; then
+    current_sandbox_target="$(readlink -f "$current_sandbox_dir")"
+    shared_sandbox_target="$(readlink -f "$shared_sandbox_dir")"
+    if [ "$current_sandbox_target" != "$shared_sandbox_target" ]; then
+      cp -a -n "$current_sandbox_dir/." "$shared_sandbox_dir/"
+    fi
+  fi
+  chmod 0700 "$shared_sandbox_dir"
+
+  rm -rf "$NEXT_DIR/tmp/$sandbox_dir"
+  ln -s "$shared_sandbox_dir" "$NEXT_DIR/tmp/$sandbox_dir"
+done
+
 mkdir -p "$NEXT_DIR/apps/server/public"
 for runtime_dir in uploads watermarked resized tmp; do
   mkdir -p "$DEPLOY_BASE/shared/$runtime_dir"

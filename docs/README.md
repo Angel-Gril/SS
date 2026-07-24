@@ -20,6 +20,11 @@
 - [上线优化计划](LAUNCH-OPTIMIZATION-PLAN.md)
 - [上线检查清单](launch-checklist.md)
 
+运维验收手册：
+
+- [AI 图片 Provider 单次付费 Sandbox 验收](runbooks/ai-image-provider-sandbox.md)
+- [Ozon 来源商品 Sandbox 探针](runbooks/ozon-source-listing-sandbox.md)
+
 归档文档：
 
 - [历史文档归档](archive/)

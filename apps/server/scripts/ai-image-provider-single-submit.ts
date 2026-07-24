@@ -1,31 +1,255 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  access,
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+} from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, fetch as undiciFetch, interceptors } from 'undici';
 import sharp from 'sharp';
 import {
+  createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
   normalizeOpenAiImagesApiBase,
+  type OpenAiImageEditInput,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
 import {
   claimAiImageSandboxOperation,
+  createAiImageSandboxEditFetchGuard,
   createAiImageSandboxFetchGuard,
+  type AiImageSandboxEditOperation,
 } from '../src/services/ai-image-sandbox-guard.js';
 
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
-const FIXED_PROMPT = [
-  'Create one square marketplace product image of a plain white ceramic mug.',
-  'Use a neutral light-gray studio background, realistic lighting, and no visible text, logo, watermark, or extra object.',
-].join(' ');
-const pinnedDns = new Map<string, Array<{ address: string; family: 4 | 6; ttl: number }>>();
+type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
+const EDIT_OPERATIONS = new Set<AiImageSandboxEditOperation>([
+  'IMAGE_TO_IMAGE',
+  'FULL_EDIT',
+  'INPAINT',
+]);
+const SANDBOX_OPERATIONS = new Set<AiImageSandboxOperation>([
+  'TEXT_TO_IMAGE',
+  ...EDIT_OPERATIONS,
+]);
+const FIXED_PROMPTS: Record<AiImageSandboxOperation, string> = {
+  TEXT_TO_IMAGE: [
+    'Create one square marketplace product image of a plain white ceramic mug.',
+    'Use a neutral light-gray studio background, realistic lighting, and no visible text, logo, watermark, or extra object.',
+  ].join(' '),
+  IMAGE_TO_IMAGE: [
+    'Use the supplied source image as the only visual reference.',
+    'Preserve the primary product identity, shape, colors, and proportions.',
+    'Create one square marketplace hero image on a clearly visible soft warm-beige studio background.',
+    'Do not add visible text, logos, watermarks, or extra objects.',
+  ].join(' '),
+  FULL_EDIT: [
+    'Restyle the complete supplied product image as a clean square marketplace hero image.',
+    'Preserve the primary product identity, shape, colors, and proportions.',
+    'Use realistic studio lighting and a neutral light-gray background.',
+    'Do not add visible text, logos, watermarks, or extra objects.',
+  ].join(' '),
+  INPAINT: [
+    'Modify only the transparent mask region of the supplied product image.',
+    'Fill that region with a soft light-blue studio background that matches the existing lighting.',
+    'Preserve every unmasked product detail and do not add text, logos, watermarks, or extra objects.',
+  ].join(' '),
+};
+const OUTPUT_SIZE = '1024x1024';
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type DnsResolver = (hostname: string) => Promise<Array<{ address: string }>>;
 
-function requiredEnvironment(name: string) {
-  const value = String(process.env[name] || '').trim();
-  if (!value) throw new Error(`${name} is required`);
+export interface AiImageProviderSingleSubmitOptions {
+  environment?: NodeJS.ProcessEnv;
+  outputDirectory?: string;
+  repositoryRoot?: string;
+  resolveDns?: DnsResolver;
+  fetch?: FetchLike;
+}
+
+const FULL_GIT_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+
+function requiredEnvironment(name: string, environment: NodeJS.ProcessEnv) {
+  const value = String(environment[name] || '').trim();
+  if (!value) {
+    throw Object.assign(new Error(`${name} is required`), { code: 'SANDBOX_CONFIG_INVALID' });
+  }
   return value;
+}
+
+function optionalEnvironment(name: string, environment: NodeJS.ProcessEnv) {
+  return String(environment[name] || '').trim();
+}
+
+function requiredSha256(name: string, environment: NodeJS.ProcessEnv) {
+  const value = requiredEnvironment(name, environment).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(`${name} must be a lowercase SHA-256 digest`);
+  return value;
+}
+
+function requiredAdapterRevision(environment: NodeJS.ProcessEnv) {
+  const value = requiredEnvironment('AI_IMAGE_SANDBOX_ADAPTER_REVISION', environment).toLowerCase();
+  if (!FULL_GIT_OID_PATTERN.test(value)) {
+    throw Object.assign(
+      new Error('AI_IMAGE_SANDBOX_ADAPTER_REVISION must be a full Git object ID'),
+      { code: 'SANDBOX_ADAPTER_REVISION_INVALID' },
+    );
+  }
+  return value;
+}
+
+function sha256(value: Buffer | string) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+async function tolerateWindowsMode(operation: () => Promise<unknown>) {
+  try {
+    await operation();
+  } catch (error: any) {
+    if (process.platform === 'win32' && ['EINVAL', 'ENOSYS', 'EPERM'].includes(String(error?.code))) return;
+    throw error;
+  }
+}
+
+async function syncDirectory(path: string) {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(path, 'r');
+    await handle.sync();
+  } catch (error: any) {
+    if (
+      process.platform === 'win32'
+      && ['EACCES', 'EINVAL', 'EISDIR', 'ENOSYS', 'EPERM'].includes(String(error?.code))
+    ) return;
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function ensurePrivateDirectory(path: string) {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  await tolerateWindowsMode(() => chmod(path, 0o700));
+  await syncDirectory(path);
+  const parent = dirname(path);
+  if (parent !== path) await syncDirectory(parent);
+}
+
+async function writePrivateFile(path: string, value: string | Buffer) {
+  await ensurePrivateDirectory(dirname(path));
+  const handle = await open(path, 'wx', 0o600);
+  try {
+    await handle.writeFile(value);
+    await tolerateWindowsMode(() => handle.chmod(0o600));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(dirname(path));
+}
+
+async function atomicWritePrivateJson(path: string, value: unknown) {
+  await ensurePrivateDirectory(dirname(path));
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const lockPath = `${path}.lock`;
+  const lock = await open(lockPath, 'wx', 0o600);
+  try {
+    await tolerateWindowsMode(() => chmod(lockPath, 0o600));
+    const handle = await open(temporaryPath, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await tolerateWindowsMode(() => chmod(temporaryPath, 0o600));
+    try {
+      await access(path);
+      throw Object.assign(new Error('Sandbox report already exists'), { code: 'EEXIST' });
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    await rename(temporaryPath, path);
+    await tolerateWindowsMode(() => chmod(path, 0o600));
+    await syncDirectory(dirname(path));
+  } finally {
+    await lock.close();
+    await unlink(lockPath).catch(() => undefined);
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
+function safeFailureCode(error: unknown) {
+  const value = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+  return value.toUpperCase().replace(/[^A-Z0-9_.-]/g, '').slice(0, 80) || 'SANDBOX_FAILED';
+}
+
+function failureRequestIdHash(error: unknown, fallback: string | null) {
+  const value = error && typeof error === 'object' && 'providerJobId' in error
+    ? String((error as { providerJobId?: unknown }).providerJobId || '').trim()
+    : '';
+  return value && value.length <= 500 ? sha256(value) : fallback;
+}
+
+async function loadPinnedImage(input: {
+  pathEnvironment: string;
+  shaEnvironment: string;
+  requirePng?: boolean;
+  environment: NodeJS.ProcessEnv;
+  repositoryRoot: string;
+}) {
+  const path = resolve(
+    input.repositoryRoot,
+    requiredEnvironment(input.pathEnvironment, input.environment),
+  );
+  const expectedSha256 = requiredSha256(input.shaEnvironment, input.environment);
+  const buffer = await readFile(path);
+  const actualSha256 = sha256(buffer);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`${input.pathEnvironment} does not match ${input.shaEnvironment}`);
+  }
+  const metadata = await sharp(buffer).metadata();
+  const mimeType = metadata.format === 'png' ? 'image/png'
+    : metadata.format === 'jpeg' ? 'image/jpeg'
+      : metadata.format === 'webp' ? 'image/webp' : null;
+  if (!mimeType || (input.requirePng && mimeType !== 'image/png')) {
+    throw new Error(input.requirePng
+      ? `${input.pathEnvironment} must contain a PNG image`
+      : `${input.pathEnvironment} must contain a PNG, JPEG, or WebP image`);
+  }
+  if (!metadata.width || !metadata.height) {
+    throw new Error(`${input.pathEnvironment} has invalid image dimensions`);
+  }
+  return {
+    image: { buffer, mimeType } as OpenAiImageEditInput,
+    sha256: actualSha256,
+    width: metadata.width,
+    height: metadata.height,
+  };
+}
+
+async function assertMeaningfulInpaintMask(
+  value: Awaited<ReturnType<typeof loadPinnedImage>>,
+) {
+  const metadata = await sharp(value.image.buffer).metadata();
+  if (!metadata.hasAlpha) throw new Error('The INPAINT mask must contain an alpha channel');
+  const alpha = await sharp(value.image.buffer).extractChannel('alpha').raw().toBuffer();
+  let hasTransparent = false;
+  let hasOpaque = false;
+  for (const pixel of alpha) {
+    if (pixel === 0) hasTransparent = true;
+    if (pixel === 255) hasOpaque = true;
+    if (hasTransparent && hasOpaque) return;
+  }
+  throw new Error('The INPAINT mask must contain both transparent and opaque regions');
 }
 
 async function resolvePublicDns(hostname: string) {
@@ -50,50 +274,133 @@ async function resolvePublicDns(hostname: string) {
   }
   if (!records.length) throw new Error('Public DNS lookup returned no address');
   const unique = [...new Map(records.map((record) => [record.family + ':' + record.address, record])).values()];
-  pinnedDns.set(hostname.toLowerCase(), unique);
   return unique.map(({ address }) => ({ address }));
 }
 
-async function main() {
-  if (process.env.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
+export async function runAiImageProviderSingleSubmit(
+  options: AiImageProviderSingleSubmitOptions = {},
+) {
+  const environment = options.environment || process.env;
+  const repositoryRoot = options.repositoryRoot
+    || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  if (environment.NODE_ENV !== 'sandbox') {
+    throw new Error('NODE_ENV must equal sandbox for the single-submit AI image sandbox');
+  }
+  if (environment.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
     throw new Error(`AI_IMAGE_SANDBOX_CONFIRM must equal ${CONFIRMATION}`);
   }
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('The single-submit AI image sandbox cannot run in production');
-  }
 
-  const baseUrl = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL');
-  const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY');
-  const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL');
-  const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID');
-  const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST').toLowerCase();
+  const baseUrl = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
+  const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
+  const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL', environment);
+  const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
+  const credentialRevision = requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment);
+  const adapterRevision = requiredAdapterRevision(environment);
+  try {
+    const deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
+      .trim()
+      .toLowerCase();
+    if (!FULL_GIT_OID_PATTERN.test(deployedRevision) || deployedRevision !== adapterRevision) {
+      throw Object.assign(new Error('Adapter revision does not match DEPLOYED_COMMIT'), {
+        code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
+      });
+    }
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const operationValue = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION', environment);
+  if (!SANDBOX_OPERATIONS.has(operationValue as AiImageSandboxOperation)) {
+    throw new Error('AI_IMAGE_SANDBOX_OPERATION is unsupported');
+  }
+  const operation = operationValue as AiImageSandboxOperation;
+  const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
   const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
   const parsedBaseUrl = new URL(apiBase);
   if (isIP(parsedBaseUrl.hostname) !== 0) throw new Error('AI_IMAGE_SANDBOX_BASE_URL must use a DNS hostname');
   if (parsedBaseUrl.hostname.toLowerCase() !== expectedHost) {
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
   }
-  await validateAiImageProviderUrl(apiBase, resolvePublicDns);
+  const sourcePath = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_PATH', environment);
+  const sourceSha = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_SHA256', environment);
+  const maskPath = optionalEnvironment('AI_IMAGE_SANDBOX_MASK_PATH', environment);
+  const maskSha = optionalEnvironment('AI_IMAGE_SANDBOX_MASK_SHA256', environment);
+  let source: Awaited<ReturnType<typeof loadPinnedImage>> | null = null;
+  let mask: Awaited<ReturnType<typeof loadPinnedImage>> | null = null;
+  if (operation === 'TEXT_TO_IMAGE') {
+    if (sourcePath || sourceSha || maskPath || maskSha) {
+      throw new Error('TEXT_TO_IMAGE must not configure sandbox source or mask files');
+    }
+  } else {
+    if (!sourcePath || !sourceSha) {
+      throw new Error(`${operation} requires AI_IMAGE_SANDBOX_SOURCE_PATH and AI_IMAGE_SANDBOX_SOURCE_SHA256`);
+    }
+    source = await loadPinnedImage({
+      pathEnvironment: 'AI_IMAGE_SANDBOX_SOURCE_PATH',
+      shaEnvironment: 'AI_IMAGE_SANDBOX_SOURCE_SHA256',
+      environment,
+      repositoryRoot,
+    });
+  }
+  if (operation === 'INPAINT' && source) {
+    if (!maskPath || !maskSha) {
+      throw new Error('INPAINT requires AI_IMAGE_SANDBOX_MASK_PATH and AI_IMAGE_SANDBOX_MASK_SHA256');
+    }
+    mask = await loadPinnedImage({
+      pathEnvironment: 'AI_IMAGE_SANDBOX_MASK_PATH',
+      shaEnvironment: 'AI_IMAGE_SANDBOX_MASK_SHA256',
+      requirePng: true,
+      environment,
+      repositoryRoot,
+    });
+    await assertMeaningfulInpaintMask(mask);
+    if (mask.width !== source.width || mask.height !== source.height) {
+      throw new Error('The INPAINT mask dimensions must match the pinned source image');
+    }
+  } else if (maskPath || maskSha) {
+    throw new Error(`${operation} must not configure a sandbox mask`);
+  }
+  const pinnedDns = new Map<string, Array<{ address: string; family: 4 | 6; ttl: number }>>();
+  const baseDnsResolver = options.resolveDns || resolvePublicDns;
+  const dnsResolver: DnsResolver = async (hostname) => {
+    const records = await baseDnsResolver(hostname);
+    const pinned = records.map((record) => {
+      const family = isIP(record.address);
+      if (family !== 4 && family !== 6) throw new Error('DNS resolver returned an invalid address');
+      return { address: record.address, family, ttl: 60 } as const;
+    });
+    pinnedDns.set(hostname.toLowerCase(), pinned);
+    return records;
+  };
+  await validateAiImageProviderUrl(apiBase, dnsResolver);
   const startedAt = Date.now();
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-  const outputDirectory = resolve(root, 'tmp/ai-image-sandbox');
+  const outputDirectory = options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
+  await ensurePrivateDirectory(outputDirectory);
+  const endpoint = new URL(`${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`).toString();
+  const endpointSha256 = sha256(endpoint);
+  const prompt = FIXED_PROMPTS[operation];
+  const sourceSha256 = source ? [source.sha256] : [];
+  const maskSha256 = mask?.sha256 || null;
   const requestContract = {
-    operation: 'TEXT_TO_IMAGE',
-    endpoint: `${apiBase}/images/generations`,
+    operation,
+    endpoint,
     n: 1,
     width: 1024,
     height: 1024,
-    size: '1024x1024',
-    promptSha256: createHash('sha256').update(FIXED_PROMPT).digest('hex'),
+    size: OUTPUT_SIZE,
+    promptSha256: sha256(prompt),
+    sourceSha256,
+    maskSha256,
   };
   const claim = await claimAiImageSandboxOperation({
     directory: resolve(outputDirectory, 'intents'),
     operationId,
-    providerEndpoint: apiBase,
+    endpointSha256,
     model,
+    credentialRevision,
+    adapterRevision,
     request: requestContract,
-    quotedCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS'),
-    maximumCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_MAX_COST_CENTS'),
+    quotedCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', environment),
+    maximumCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_MAX_COST_CENTS', environment),
   });
 
   const pinnedDispatcher = new Agent().compose(interceptors.dns({
@@ -107,43 +414,70 @@ async function main() {
       callback(null, records);
     },
   }));
-  const fetchOnce = createAiImageSandboxFetchGuard({
-    contract: {
-      endpoint: `${apiBase}/images/generations`,
-      model,
-      promptSha256: requestContract.promptSha256,
-      size: '1024x1024',
-      n: 1,
-    },
-    validateUrl: (url) => validateAiImageProviderUrl(url, resolvePublicDns),
-    fetch: ((input, init) => undiciFetch(input as any, {
+  const guardedTransport = {
+    validateUrl: (url: string) => validateAiImageProviderUrl(url, dnsResolver),
+    fetch: options.fetch || ((input, init) => undiciFetch(input as any, {
       ...(init as any),
       dispatcher: pinnedDispatcher,
     })) as typeof globalThis.fetch,
-  });
+  };
+  const fetchOnce = operation === 'TEXT_TO_IMAGE'
+    ? createAiImageSandboxFetchGuard({
+      contract: {
+        endpoint,
+        model,
+        promptSha256: requestContract.promptSha256,
+        size: OUTPUT_SIZE,
+        n: 1,
+      },
+      ...guardedTransport,
+    })
+    : createAiImageSandboxEditFetchGuard({
+      contract: {
+        endpoint,
+        operation,
+        model,
+        promptSha256: requestContract.promptSha256,
+        size: OUTPUT_SIZE,
+        n: 1,
+        sourceSha256: requestContract.sourceSha256,
+        maskSha256: requestContract.maskSha256,
+      },
+      ...guardedTransport,
+    });
 
-  const provider = createOpenAiImagesProvider({
-    baseUrl,
-    apiKey,
-    model,
-    fetch: fetchOnce.fetch,
-    timeoutMs: 180_000,
-    costPerImageCents: 0,
-  });
+  const reportPath = resolve(outputDirectory, `${operationId}.report.json`);
+  let reportWritten = false;
   let result;
   try {
-    result = await provider.generate({
-      operation: 'TEXT_TO_IMAGE',
-      prompt: FIXED_PROMPT,
-      negativePrompt: null,
-      count: 1,
-      width: 1024,
-      height: 1024,
-      model,
-    });
-  } finally {
-    await pinnedDispatcher.close();
-  }
+    if (operation === 'TEXT_TO_IMAGE') {
+      const provider = createOpenAiImagesProvider({
+        baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,
+      });
+      result = await provider.generate({
+        operation,
+        prompt,
+        negativePrompt: null,
+        count: 1,
+        width: 1024,
+        height: 1024,
+        model,
+      });
+    } else {
+      const provider = createOpenAiImageEditProvider({
+        baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,
+      });
+      result = await provider.edit({
+        operation,
+        prompt,
+        negativePrompt: null,
+        width: 1024,
+        height: 1024,
+        model,
+        images: [source!.image],
+        mask: mask?.image || null,
+      });
+    }
   const createRequests = fetchOnce.getCreateRequests();
   if (createRequests !== 1) throw new Error(`Expected exactly one create request, received ${createRequests}`);
   if (result.images.length !== 1) throw new Error(`Expected exactly one image, received ${result.images.length}`);
@@ -155,28 +489,35 @@ async function main() {
   }
   const extension = image.mimeType === 'image/jpeg' ? 'jpg'
     : image.mimeType === 'image/webp' ? 'webp' : 'png';
-  await mkdir(outputDirectory, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const imagePath = resolve(outputDirectory, `${stamp}.${extension}`);
-  const reportPath = resolve(outputDirectory, `${stamp}.json`);
-  await writeFile(imagePath, image.buffer, { flag: 'wx' });
+  await writePrivateFile(imagePath, image.buffer);
 
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     operationId,
+    state: 'SUCCEEDED',
+    operation,
+    credentialRevision,
+    adapterRevision,
     provider: 'custom-openai-compatible',
     model,
-    endpointPath: '/v1/images/generations',
+    endpointSha256,
+    promptSha256: requestContract.promptSha256,
+    sourceSha256: requestContract.sourceSha256,
+    maskSha256: requestContract.maskSha256,
+    requestedSize: OUTPUT_SIZE,
     createRequests,
     imageCount: 1,
     mimeType: image.mimeType,
     width: metadata.width,
     height: metadata.height,
     bytes: image.buffer.byteLength,
-    sha256: createHash('sha256').update(image.buffer).digest('hex'),
+    sha256: sha256(image.buffer),
     providerRequestIdHash: result.providerJobId
-      ? createHash('sha256').update(result.providerJobId).digest('hex')
+      ? sha256(result.providerJobId)
       : null,
+    usage: null,
     elapsedMs: Date.now() - startedAt,
     actualCostCents: null,
     quotedCostCents: claim.intent.quotedCostCents,
@@ -184,11 +525,62 @@ async function main() {
     intentPath: claim.intentPath,
     imagePath,
   };
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+  await atomicWritePrivateJson(reportPath, report);
+  reportWritten = true;
   process.stdout.write(`${JSON.stringify({ ...report, reportPath }, null, 2)}\n`);
+  return report;
+  } catch (error) {
+    if (!reportWritten) {
+      const createRequests = fetchOnce.getCreateRequests();
+      const evidence = fetchOnce.getEvidence();
+      const report = {
+        schemaVersion: 2,
+        operationId,
+        state: createRequests === 0
+          ? 'PRE_DISPATCH_FAILED'
+          : evidence.state === 'REJECTED'
+            ? 'REJECTED'
+            : 'RECONCILIATION_REQUIRED',
+        provider: 'custom-openai-compatible',
+        model,
+        operation,
+        endpointSha256,
+        credentialRevision,
+        adapterRevision,
+        promptSha256: requestContract.promptSha256,
+        sourceSha256: requestContract.sourceSha256,
+        maskSha256: requestContract.maskSha256,
+        requestedSize: OUTPUT_SIZE,
+        createRequests,
+        providerRequestIdHash: failureRequestIdHash(error, evidence.providerRequestIdHash),
+        usage: null,
+        failureCode: safeFailureCode(error),
+        actualCostCents: null,
+        quotedCostCents: claim.intent.quotedCostCents,
+        maximumCostCents: claim.intent.maximumCostCents,
+        elapsedMs: Date.now() - startedAt,
+        intentPath: claim.intentPath,
+      };
+      await atomicWritePrivateJson(reportPath, report);
+    }
+    throw error;
+  } finally {
+    await pinnedDispatcher.close();
+  }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+const isDirectRun = process.argv[1]
+  ? resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
+if (isDirectRun) {
+  runAiImageProviderSingleSubmit().catch((error) => {
+    process.stderr.write(`${JSON.stringify({
+      schemaVersion: 1,
+      event: 'SANDBOX_COMMAND_FAILED',
+      failureCode: safeFailureCode(error),
+    })}\n`);
+    process.stderr.write('AI image sandbox failed.\n');
+    process.exitCode = 1;
+  });
+}

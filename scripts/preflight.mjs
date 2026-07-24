@@ -69,13 +69,14 @@ const steps = [
     args: ['scripts/ai-image-single-submit-contract.test.mjs'],
   },
   {
-    name: 'single-submit AI image sandbox typecheck',
+    name: 'single-submit DashScope image translation sandbox contract',
+    command: 'node',
+    args: ['scripts/ai-image-translation-single-submit-contract.test.mjs'],
+  },
+  {
+    name: 'single-submit AI image sandbox strict typecheck',
     command: 'pnpm',
-    args: [
-      '--filter', 'server', 'exec', 'tsc', '--noEmit', '--target', 'ES2022',
-      '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-      '--skipLibCheck', 'scripts/ai-image-provider-single-submit.ts',
-    ],
+    args: ['--filter', 'server', 'exec', 'tsc', '--noEmit', '-p', 'tsconfig.sandbox.json'],
   },
   {
     name: 'AI media evaluation policy contract',

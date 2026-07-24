@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist-sandbox",
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "scripts/ai-image-provider-single-submit.ts",
+    "scripts/ai-image-provider-single-submit.test.ts",
+    "scripts/ai-image-translation-single-submit.ts",
+    "scripts/ai-image-translation-single-submit.test.ts",
+    "src/services/ai-image-sandbox-guard.ts",
+    "src/services/ai-image-translation-sandbox-guard.ts"
+  ],
+  "exclude": ["node_modules", "dist", "dist-sandbox"]
+}

@@ -24,7 +24,8 @@
     "db:generate": "prisma generate",
     "smoke:live": "node scripts/live-smoke.mjs",
     "smoke:remote": "node scripts/remote-smoke.mjs",
-    "sandbox:ai-image:single": "tsx scripts/ai-image-provider-single-submit.ts"
+    "sandbox:ai-image:single": "tsx scripts/ai-image-provider-single-submit.ts",
+    "sandbox:ai-image-translation:single": "tsx scripts/ai-image-translation-single-submit.ts"
   },
   "dependencies": {
     "@alicloud/credentials": "^2.4.5",
