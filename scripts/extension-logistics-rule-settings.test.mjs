@@ -6,6 +6,8 @@ import vm from 'node:vm';
 const html = fs.readFileSync('extensions/ss-erp/pages/settings.html', 'utf8');
 const source = fs.readFileSync('extensions/ss-erp/pages/settings.js', 'utf8');
 const workerSource = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+const collectWorkerSource = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const policySource = fs.readFileSync('extensions/ss-erp/shared/message-security/runtime-message-policy.js', 'utf8');
 
 test('settings exposes device pairing, scoped assignment selection, sync, and revoke controls', () => {
   for (const id of [
@@ -26,16 +28,41 @@ test('settings exposes device pairing, scoped assignment selection, sync, and re
 
 test('settings delegates secrets to the background runtime and never stores device tokens', () => {
   for (const type of [
-    'ss-erp:logistics-device-claim',
-    'ss-erp:logistics-device-status',
+    'ss-erp:extension-device-claim',
+    'ss-erp:extension-device-status',
+    'ss-erp:extension-device-clear',
     'ss-erp:logistics-rules-sync',
-    'ss-erp:logistics-device-clear',
   ]) {
     assert.ok(source.includes("type: '" + type + "'"), type + ' must be sent');
   }
   assert.equal(source.includes('ss-erp:extension-device:credential:v1'), false);
   assert.equal(source.includes('refreshToken'), false);
   assert.equal(source.includes('accessToken'), false);
+});
+
+test('settings reconciles the legacy form with an active scoped device session', () => {
+  assert.match(source, /ss-erp:extension-device-status/);
+  assert.match(source, /refreshPairedDeviceStatus/);
+  assert.match(source, /status\.endpoint/);
+  assert.match(source, /status\.deploymentId/);
+  assert.match(source, /defaults\.erpApiBaseUrl \|\| defaults\.erpBaseUrl/);
+  assert.match(source, /设备已连接/);
+  assert.match(source, /设备授权已失效，请重新配对/);
+  assert.match(source, /尚未完成设备配对/);
+  assert.match(source, /设备已连接，但暂时无法读取授权店铺/);
+  assert.match(html, /id="logisticsFeatureControls"/);
+  assert.match(html, /扩展设备配对/);
+  assert.match(html, /解除本机配对/);
+  assert.match(source, /logisticsFeatureControls\.hidden = !logisticsDistributionEnabled/);
+  assert.match(policySource, /'ss-erp:extension-device-clear'/);
+  assert.match(workerSource, /message\.type === 'ss-erp:extension-device-clear'/);
+  assert.match(source, /本机设备配对已清除/);
+  assert.match(workerSource, /SS_ERP_EXTENSION_DEVICE_SHOPS/);
+  assert.match(workerSource, /\/api\/extension-device\/shops/);
+  assert.match(workerSource, /operation\.accessToken/);
+  assert.match(collectWorkerSource, /deviceShopReader/);
+  assert.match(collectWorkerSource, /!deviceResult \|\| deviceResult\.errorCode !== 'device_unpaired'/);
+  assert.match(fs.readFileSync('apps/server/src/routes/extension-device.ts', 'utf8'), /app\.get\('\/shops'/);
 });
 
 test('settings runtime messages settle after a bounded timeout when Chrome drops the callback', async () => {

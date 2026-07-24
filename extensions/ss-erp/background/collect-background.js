@@ -5515,7 +5515,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, data: testResults };
       }
       case "spb-self-hosted:get-ozon-shops": {
-        // 从 ERP 获取用户的 OZON 店铺列表
+        // Prefer the scoped device session created by the new pairing flow.
+        // The legacy account-equivalent token is intentionally optional and
+        // may be empty even when the device is fully ACTIVE.
+        const deviceShopReader = globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS;
+        if (typeof deviceShopReader === 'function') {
+          let deviceResult;
+          try {
+            deviceResult = await deviceShopReader();
+          } catch (error) {
+            deviceResult = {
+              ok: false,
+              errorCode: 'device_shop_read_failed',
+              error: normalizeErrorMessage(error) || '设备店铺读取失败',
+            };
+          }
+          if (deviceResult && deviceResult.ok) return deviceResult;
+          // Once the new reader is present, do not let a legacy account token
+          // bypass a paired device's shop grants. Legacy is allowed only when
+          // the device is explicitly unpaired (or on an old package with no
+          // reader at all).
+          if (!deviceResult || deviceResult.errorCode !== 'device_unpaired') {
+            return deviceResult || {
+              ok: false,
+              errorCode: 'device_shop_read_failed',
+              error: '设备店铺读取失败',
+            };
+          }
+        }
+
+        // Compatibility fallback for older packages or an explicitly supplied
+        // legacy token. This path is not used by a healthy scoped pairing.
         const shopConn = await getStoredErpConnection();
         const shopBaseUrl = shopConn.baseUrl;
         const shopToken = shopConn.token;

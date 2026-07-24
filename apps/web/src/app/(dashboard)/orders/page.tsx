@@ -144,6 +144,27 @@ function formatCompactDate(value: string | Date): string {
   }).format(d);
 }
 
+/**
+ * Sum the CNY item prices captured with the order. This is the historical
+ * product-price view, not a replacement for the order's financial total.
+ */
+function getCnyOrderItemTotal(items: unknown): number | null {
+  if (!Array.isArray(items)) return null;
+  let total = 0;
+  let found = false;
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const currency = String(row.currency_code ?? row.currency ?? '').trim().toUpperCase();
+    const price = Number(row.price);
+    const quantity = Number(row.quantity ?? 1);
+    if (currency !== 'CNY' || !Number.isFinite(price) || !Number.isFinite(quantity)) continue;
+    total += price * quantity;
+    found = true;
+  }
+  return found ? Math.round(total * 100) / 100 : null;
+}
+
 function ProductImagePreview({ items }: { items: any[] }) {
   const [hover, setHover] = useState(false);
   if (!items || items.length === 0) return <span className="text-muted-foreground">-</span>;
@@ -669,7 +690,9 @@ export default function OrdersPage() {
                   </TableHead>
                   <TableHead className="whitespace-nowrap">订单 / 店铺</TableHead>
                   <TableHead className="whitespace-nowrap">商品信息</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">金额</TableHead>
+                  <TableHead className="whitespace-nowrap text-right" title="订单同步时的成交总额；商品栏中的单价保留商品自身币种">
+                    订单成交额
+                  </TableHead>
                   <TableHead className="whitespace-nowrap">状态</TableHead>
                   <TableHead className="whitespace-nowrap">个人标记</TableHead>
                   <TableHead className="whitespace-nowrap">服务标签</TableHead>
@@ -740,9 +763,15 @@ export default function OrdersPage() {
                       <TableCell className="whitespace-nowrap px-2.5 py-2 text-right tabular-nums font-medium">
                         {(() => {
                           const f = formatOrderAmount(order.totalAmount, order.currency, order.totalAmountCny);
+                          const itemTotalCny = getCnyOrderItemTotal(order.items);
                           return (
                             <div className="space-y-0.5 leading-5" title={f.isApprox ? `原币 ${f.original}（估算汇率）` : `原币 ${f.original}`}>
                               <div>{f.display}</div>
+                              {itemTotalCny != null && order.currency !== 'CNY' ? (
+                                <div className="text-[11px] text-muted-foreground font-normal">
+                                  下单商品价 {formatCurrency(itemTotalCny, 'CNY')}
+                                </div>
+                              ) : null}
                               {order.currency !== 'CNY' ? (
                                 <div className="text-[11px] text-muted-foreground font-normal">
                                   {f.isApprox ? '≈ ' : ''}{f.original}
@@ -1143,12 +1172,18 @@ function OrderDetailDialog({ orderId, onClose }: {
                 <span className="ml-1.5">{detail.shop?.name}</span>
               </div>
               <div>
-                <span className="text-muted-foreground">金额：</span>
+                <span className="text-muted-foreground">订单成交额：</span>
                 {(() => {
                   const f = formatOrderAmount(detail.totalAmount, detail.currency, detail.totalAmountCny);
+                  const itemTotalCny = getCnyOrderItemTotal(detail.items);
                   return (
                     <span className="font-medium" title={`原币 ${f.original}${f.isApprox ? '（估算汇率）' : ''}`}>
-                      {f.display}
+                      <span>{f.display}</span>
+                      {itemTotalCny != null && detail.currency !== 'CNY' ? (
+                        <span className="ml-2 text-xs text-muted-foreground font-normal">
+                          下单商品价 {formatCurrency(itemTotalCny, 'CNY')}
+                        </span>
+                      ) : null}
                       {detail.currency !== 'CNY' ? (
                         <span className="ml-1 text-xs text-muted-foreground font-normal">
                           ({f.isApprox ? '≈ ' : ''}{f.original})
@@ -1231,7 +1266,9 @@ function OrderDetailDialog({ orderId, onClose }: {
                           {it.offer_id && <div className="text-muted-foreground">{it.offer_id}</div>}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{it.quantity ?? 1}</TableCell>
-                        <TableCell className="text-right tabular-nums">{it.price ? `${it.price} ${detail.currency}` : '-'}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {it.price ? `${it.price} ${it.currency_code || it.currency || detail.currency}` : '-'}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1424,11 +1461,15 @@ function ShipOrderDialog({ order, onClose, onSuccess }: {
             <div className="text-sm space-y-1">
               <div><span className="text-muted-foreground">订单号：</span><span className="font-mono">{order.postingNumber || order.platformOrderId}</span></div>
               <div><span className="text-muted-foreground">店铺：</span>{order.shop.name}</div>
-              <div><span className="text-muted-foreground">金额：</span>{(() => {
+              <div><span className="text-muted-foreground">订单成交额：</span>{(() => {
                 const f = formatOrderAmount(order.totalAmount, order.currency, order.totalAmountCny);
+                const itemTotalCny = getCnyOrderItemTotal(order.items);
                 return (
                   <span title={`原币 ${f.original}${f.isApprox ? '（估算汇率）' : ''}`}>
                     {f.display}
+                    {itemTotalCny != null && order.currency !== 'CNY' ? (
+                      <span className="ml-2 text-xs text-muted-foreground">下单商品价 {formatCurrency(itemTotalCny, 'CNY')}</span>
+                    ) : null}
                     {order.currency !== 'CNY' ? <span className="ml-1 text-xs text-muted-foreground">({f.isApprox ? '≈ ' : ''}{f.original})</span> : null}
                   </span>
                 );

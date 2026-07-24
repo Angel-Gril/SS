@@ -202,7 +202,7 @@
         <div class="panel-head">
           <div>
             <h2>ERP 连接配置</h2>
-            <p class="subtitle">连接松鼠跨境 ERP，支持商品采集推送。</p>
+            <p class="subtitle">优先使用安全的设备配对；旧版兼容 Token 仅用于尚未迁移的写回功能。</p>
           </div>
           <button id="testErpBtn" class="btn btn-muted" type="button">测试连接</button>
         </div>
@@ -213,15 +213,15 @@
             <small style="font-weight:400;color:#94a3b8;">填写已部署的 ERP 服务地址。</small>
           </label>
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
-            <span>扩展 Token</span>
-            <input id="erpTokenInput" type="text" placeholder="从 ERP 采集页获取的 30 天 Token" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
-            <small style="font-weight:400;color:#94a3b8;">在 ERP → 一键上货 → SKU采集跟卖 → 获取扩展Token</small>
+            <span>旧版兼容 Token（按功能需要）</span>
+            <input id="erpTokenInput" type="text" placeholder="设备配对后无需填写" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">设备配对负责安全读取授权店铺；旧版经营分析、旧版采集和部分写回功能仍需此 Token。</small>
           </label>
         </div>
         <div id="erpStatus" class="status compact" style="margin-top:12px;"></div>
         <div id="logisticsDistributionFeatureSection">
         <div style="margin-top:18px;padding-top:18px;border-top:1px solid rgba(100,116,139,0.2);display:flex;flex-direction:column;gap:12px;">
-          <h3 style="margin:0;color:#0f172a;font-size:14px;">物流规则设备配对</h3>
+          <h3 style="margin:0;color:#0f172a;font-size:14px;">扩展设备配对</h3>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
             <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
               <span>部署标识</span>
@@ -238,8 +238,11 @@
           </div>
           <div class="actions">
             <button id="pairLogisticsDeviceBtn" class="btn btn-primary" type="button">配对设备</button>
-            <button id="revokeLogisticsDeviceBtn" class="btn btn-muted" type="button">解除配对</button>
+            <button id="revokeLogisticsDeviceBtn" class="btn btn-muted" type="button">解除本机配对</button>
           </div>
+        </div>
+        <div id="logisticsDistributionStatus" class="status compact"></div>
+        <div id="logisticsFeatureControls">
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
             <span>物流作用域</span>
             <select id="logisticsAssignmentSelect" style="height:38px;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:0 10px;font-size:13px;font-weight:600;">
@@ -249,8 +252,6 @@
           <div class="actions">
             <button id="syncPublishedLogisticsBtn" class="btn btn-secondary" type="button">同步已发布规则</button>
           </div>
-        </div>
-        <div id="logisticsDistributionStatus" class="status compact"></div>
         <div style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(100,116,139,0.2);">
           <h3 style="margin:0 0 10px;color:#0f172a;font-size:14px;">店铺与仓库验证</h3>
           <div id="logisticsBindingProbeStatus" class="status compact"></div>
@@ -266,6 +267,7 @@
             <button id="retryLogisticsCaptureBtn" class="btn btn-muted" type="button">重试</button>
             <button id="cancelLogisticsCaptureBtn" class="btn btn-muted" type="button" disabled>取消任务</button>
           </div>
+        </div>
         </div>
         </div>
       </article>

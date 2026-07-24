@@ -11,6 +11,7 @@
     'ozon-calculator:sync-captured-official',
     'ozon-calculator:update-fee-settings',
     'ozon-calculator:clear-captured-har',
+    'ss-erp:extension-device-clear',
     'ss-erp:logistics-device-claim',
     'ss-erp:logistics-device-clear',
     'ss-erp:logistics-device-status',

@@ -176,6 +176,15 @@ test('runtime message policy preserves only each trusted surface required workfl
     'ss-erp:logistics-device-claim', settings, extensionId,
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-clear', settings, extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-clear', erp, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-clear', source, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
     'ozon-calc:get-captured-har', settings, extensionId,
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(

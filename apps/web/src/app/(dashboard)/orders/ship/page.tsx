@@ -330,7 +330,7 @@ export default function ShipOrdersPage() {
                 <TableHead>包裹号</TableHead>
                 <TableHead>店铺</TableHead>
                 <TableHead>商品信息</TableHead>
-                <TableHead>金额</TableHead>
+                <TableHead title="订单同步时的成交总额">订单成交额</TableHead>
                 <TableHead>时间</TableHead>
                 <TableHead>物流</TableHead>
                 <TableHead className="text-right">操作</TableHead>
@@ -529,6 +529,7 @@ export default function ShipOrdersPage() {
                                   const img = it.primary_image || it.image;
                                   const qty = Number(it.quantity) || 1;
                                   const price = Number(it.price) || 0;
+                                  const itemCurrency = String(it.currency_code || it.currency || order.currency).toUpperCase();
                                   const sourceUrl = it.sku ? `https://www.ozon.ru/product/${it.sku}` : null;
                                   return (
                                     <tr key={idx} className="border-t">
@@ -546,8 +547,8 @@ export default function ShipOrdersPage() {
                                         {it.sku && <div>SKU {it.sku}</div>}
                                       </td>
                                       <td className="p-2 text-right">{qty}</td>
-                                      <td className="p-2 text-right">{formatCurrency(String(price), order.currency)}</td>
-                                      <td className="p-2 text-right font-medium">{formatCurrency(String(price * qty), order.currency)}</td>
+                                      <td className="p-2 text-right">{formatCurrency(String(price), itemCurrency)}</td>
+                                      <td className="p-2 text-right font-medium">{formatCurrency(String(price * qty), itemCurrency)}</td>
                                       <td className="p-2 text-center">
                                         {sourceUrl && (
                                           <a href={sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center text-muted-foreground hover:text-primary" title="查看 Ozon 商品页">

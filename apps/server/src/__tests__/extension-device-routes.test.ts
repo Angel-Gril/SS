@@ -239,4 +239,62 @@ describe('extension device routes', () => {
     expect(managementRepository.cancelPairingCode).not.toHaveBeenCalled();
     expect(managementRepository.revokeSession).not.toHaveBeenCalled();
   });
+
+  it('lists only shops granted to the authenticated device', async () => {
+    const deps = dependencies();
+    const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1', 'shop-2'],
+      };
+    });
+    const listAuthorizedShops = vi.fn(async (input: { ownerUserId: string; shopIds: string[] }) => [{
+      id: input.shopIds[0]!,
+      platform: 'OZON',
+      name: 'BINI',
+      status: 'ACTIVE',
+    }]);
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateDevice,
+      shopRepository: { listAuthorizedShops },
+    } as any);
+
+    const response = await app.inject({ method: 'GET', url: '/shops' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toContain('no-store');
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: [{ id: 'shop-1', platform: 'OZON', name: 'BINI' }],
+    });
+    expect(response.json().data[0]).not.toHaveProperty('balance');
+    expect(response.json().data[0]).not.toHaveProperty('productCount');
+    expect(listAuthorizedShops).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      shopIds: ['shop-1', 'shop-2'],
+    });
+  });
+
+  it('rejects a malformed device context on the shop read surface', async () => {
+    const deps = dependencies();
+    const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = { ownerUserId: 'owner-1', actorUserId: 'staff-1', allowedShopIds: ['shop-1'] };
+    });
+    const listAuthorizedShops = vi.fn(async () => []);
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateDevice,
+      shopRepository: { listAuthorizedShops },
+    } as any);
+
+    const response = await app.inject({ method: 'GET', url: '/shops' });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ errorCode: 'invalid_device_context' });
+    expect(listAuthorizedShops).not.toHaveBeenCalled();
+  });
 });

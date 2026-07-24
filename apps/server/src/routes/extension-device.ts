@@ -37,9 +37,30 @@ export interface ExtensionDeviceManagementRepository {
   }): Promise<boolean>;
 }
 
+export interface ExtensionDeviceAuthorizedShop {
+  id: string;
+  platform: string;
+  name: string;
+  status: string;
+}
+
+export interface ExtensionDeviceShopRepository {
+  listAuthorizedShops(input: {
+    ownerUserId: string;
+    shopIds: string[];
+  }): Promise<ExtensionDeviceAuthorizedShop[]>;
+}
+
 export interface ExtensionDeviceRoutesOptions {
   sessionService: Pick<ExtensionDeviceSessionService, 'createPairingCode' | 'claimPairingCode' | 'refresh'>;
   managementRepository: ExtensionDeviceManagementRepository;
+  /**
+   * Optional device-authenticated read surface used by the extension after
+   * pairing. Keeping it opt-in preserves the account-only route contract in
+   * deployments that have not enabled scoped device auth.
+   */
+  authenticateDevice?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+  shopRepository?: ExtensionDeviceShopRepository;
   authenticateAccount?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -115,11 +136,61 @@ function ownerAccountContext(request: FastifyRequest, reply: FastifyReply) {
   }
   return account;
 }
+
+function deviceContext(request: FastifyRequest): {
+  ownerUserId: string;
+  actorUserId: string;
+  allowedShopIds: string[];
+} | null {
+  const device = (request as any).device as {
+    ownerUserId?: unknown;
+    actorUserId?: unknown;
+    allowedShopIds?: unknown;
+  } | undefined;
+  if (!device
+    || typeof device.ownerUserId !== 'string'
+    || typeof device.actorUserId !== 'string'
+    || device.actorUserId !== device.ownerUserId
+    || !Array.isArray(device.allowedShopIds)) {
+    return null;
+  }
+  const allowedShopIds = [...new Set(device.allowedShopIds
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))];
+  return {
+    ownerUserId: device.ownerUserId,
+    actorUserId: device.actorUserId,
+    allowedShopIds,
+  };
+}
 export async function extensionDeviceRoutes(
   app: FastifyInstance,
   options: ExtensionDeviceRoutesOptions,
 ) {
   const authenticateAccount = options.authenticateAccount || authenticate;
+
+  // A paired extension must not fall back to a tenant account token just to
+  // populate its shop selector. This read-only endpoint is explicitly scoped
+  // to the shop grants carried by the live device authorization.
+  if (options.authenticateDevice && options.shopRepository) {
+    app.get('/shops', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
+      const device = deviceContext(request);
+      if (!device) {
+        return reply.status(401).send({
+          code: 0,
+          errorCode: 'invalid_device_context',
+          msg: '无效的设备令牌',
+        });
+      }
+      const data = await options.shopRepository!.listAuthorizedShops({
+        ownerUserId: device.ownerUserId,
+        shopIds: device.allowedShopIds,
+      });
+      reply.header('Cache-Control', 'no-store');
+      return reply.send({ code: 1, msg: 'ok', data });
+    });
+  }
 
   app.post('/pairing-codes', { preHandler: [authenticateAccount] }, async (request, reply) => {
     const parsed = pairingSchema.safeParse(request.body);

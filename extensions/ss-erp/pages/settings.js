@@ -5,8 +5,14 @@
     logisticsDistributionFeature && logisticsDistributionFeature.enabled === true
   );
   var logisticsDistributionFeatureSection = document.getElementById('logisticsDistributionFeatureSection');
+  var logisticsFeatureControls = document.getElementById('logisticsFeatureControls');
   if (logisticsDistributionFeatureSection) {
-    logisticsDistributionFeatureSection.hidden = !logisticsDistributionEnabled;
+    // Device pairing is a general ERP connection primitive and remains
+    // available even while logistics rule distribution is dark.
+    logisticsDistributionFeatureSection.hidden = false;
+  }
+  if (logisticsFeatureControls) {
+    logisticsFeatureControls.hidden = !logisticsDistributionEnabled;
   }
   var sellerCountNode = document.getElementById('sellerCount');
   var officialCountNode = document.getElementById('officialCount');
@@ -951,13 +957,108 @@
   var currentLogisticsCaptureTaskId = '';
   var logisticsDeviceIdKey = 'ss-erp:logistics-device-id';
   var logisticsDeploymentKey = 'ss-erp:logistics-deployment-id';
+  var pairedDeviceStatus = null;
+  var pairedDeviceStatusPromise = Promise.resolve(null);
 
   function defaultErpBaseUrl() {
     var defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS;
-    return String(defaults && defaults.erpBaseUrl || '').trim().replace(/\/+$/, '');
+    // Device pairing and API calls must target the packaged API origin. The
+    // Web origin (app.ss-erp.*) may be a separate frontend host and is only a
+    // display/navigation target.
+    return String(defaults && (defaults.erpApiBaseUrl || defaults.erpBaseUrl) || '')
+      .trim().replace(/\/+$/, '');
+  }
+
+  function normalizeErpConnectionBaseUrl(value) {
+    var raw = String(value || '').trim().replace(/\/+$/, '');
+    if (!raw) return '';
+    try {
+      var parsed = new URL(raw);
+      parsed.pathname = parsed.pathname.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString().replace(/\/+$/, '');
+    } catch (_error) {
+      return raw.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+    }
+  }
+
+  function endpointHost(value) {
+    var normalized = normalizeErpConnectionBaseUrl(value);
+    if (!normalized) return '';
+    try {
+      return new URL(normalized).host;
+    } catch (_error) {
+      return normalized.replace(/^https?:\/\//, '');
+    }
+  }
+
+  function readPairedDeviceStatus() {
+    return sendMessage({ type: 'ss-erp:extension-device-status', verify: true }).then(function (response) {
+      if (!response || !response.ok || !response.data || typeof response.data !== 'object') {
+        return null;
+      }
+      return response.data;
+    }).catch(function () {
+      return null;
+    });
+  }
+
+  function applyPairedDeviceStatus(status, options) {
+    if (!status || status.state !== 'paired') return false;
+    pairedDeviceStatus = status;
+    var endpoint = normalizeErpConnectionBaseUrl(status.endpoint);
+    if (endpoint) {
+      if (erpUrlInput) erpUrlInput.value = endpoint;
+      // Persist only the public endpoint. Device access/refresh credentials
+      // remain owned by the service worker and are never copied into this
+      // page's legacy form storage.
+      chrome.storage.local.get(['ss_erp_connection', 'ozon-calc:erp-token'], function (stored) {
+        var legacy = stored.ss_erp_connection || {};
+        var token = String(stored['ozon-calc:erp-token'] || legacy.token || '').trim();
+        chrome.storage.local.set({
+          ss_erp_connection: { baseUrl: endpoint, token: token },
+          'ozon-calc:erp-endpoint': endpoint + '/api/collect',
+        });
+      });
+    }
+    if (status.deploymentId && logisticsDeploymentInput) {
+      logisticsDeploymentInput.value = String(status.deploymentId);
+      chrome.storage.local.set({ [logisticsDeploymentKey]: String(status.deploymentId) });
+    }
+    if (erpTokenInput && !erpTokenInput.value) {
+      erpTokenInput.placeholder = '已使用安全设备授权，无需填写旧 Token';
+    }
+    if (!options || options.showStatus !== false) {
+      var host = endpointHost(endpoint);
+      setStatus(erpStatusNode, '设备已连接（授权店铺读取可用）' + (host ? ' · ' + host : ''), '');
+      setStatus(
+        logisticsDistributionStatus,
+        '已配对' + (status.deploymentId ? ' · ' + String(status.deploymentId) : ''),
+        '',
+      );
+    }
+    return true;
+  }
+
+  function refreshPairedDeviceStatus(options) {
+    pairedDeviceStatusPromise = readPairedDeviceStatus().then(function (status) {
+      pairedDeviceStatus = status;
+      if (status && status.state === 'paired') {
+        applyPairedDeviceStatus(status, options);
+      } else if (status && status.state === 'unreachable' && (!options || options.showStatus !== false)) {
+        setStatus(erpStatusNode, '设备授权暂时无法验证，请检查 ERP 网络', 'warn');
+      }
+      return status;
+    });
+    return pairedDeviceStatusPromise;
   }
 
   function loadErpConfig() {
+    // Start device reconciliation before reading the legacy form. The status
+    // promise is shared with the shop selector below, so a paired device is
+    // reflected consistently even when the old token fields are empty.
+    var statusPromise = refreshPairedDeviceStatus({ showStatus: true });
     chrome.storage.local.get(['ss_erp_connection', 'ozon-calc:erp-endpoint', 'ozon-calc:erp-token'], function (data) {
       var conn = data.ss_erp_connection || {};
       if (!conn.baseUrl && data['ozon-calc:erp-endpoint']) {
@@ -975,6 +1076,9 @@
         if (defaultBaseUrl) erpUrlInput.placeholder = defaultBaseUrl;
       }
       if (erpTokenInput && conn.token) erpTokenInput.value = conn.token;
+      statusPromise.then(function (status) {
+        if (status && status.state === 'paired') applyPairedDeviceStatus(status);
+      });
     });
   }
 
@@ -1028,10 +1132,17 @@
       if (logisticsDeploymentInput && stored[logisticsDeploymentKey]) {
         logisticsDeploymentInput.value = stored[logisticsDeploymentKey];
       }
-      sendMessage({ type: 'ss-erp:logistics-device-status' }).then(function (response) {
-        var state = response && response.ok && response.data;
+      pairedDeviceStatusPromise.then(function (state) {
+        pairedDeviceStatus = state || null;
         if (!state || state.state !== 'paired') {
-          setStatus(logisticsDistributionStatus, '设备未配对', 'warn');
+          var stateMessage = state && state.state === 'authorization_required'
+            ? '已检测到扩展，等待设备配对'
+            : state && state.state === 'invalid'
+              ? '设备授权已失效，请重新配对'
+              : state && state.state === 'unreachable'
+                ? '设备授权暂时无法验证'
+                : '设备未配对';
+          setStatus(logisticsDistributionStatus, stateMessage, state && state.state === 'invalid' ? 'error' : 'warn');
           return;
         }
         if (logisticsDeploymentInput) logisticsDeploymentInput.value = state.deploymentId || '';
@@ -1058,7 +1169,7 @@
     setStatus(logisticsDistributionStatus, '正在配对设备...', 'warn');
     return ensureLogisticsDeviceId().then(function (deviceId) {
       return sendMessage({
-        type: 'ss-erp:logistics-device-claim',
+        type: 'ss-erp:extension-device-claim',
         baseUrl: baseUrl,
         code: code,
         deploymentId: deploymentId,
@@ -1072,8 +1183,14 @@
       }
       chrome.storage.local.set({ [logisticsDeploymentKey]: deploymentId });
       if (logisticsPairingCodeInput) logisticsPairingCodeInput.value = '';
-      setStatus(logisticsDistributionStatus, '设备配对成功', 'success');
-      return true;
+      // The background claim stores the scoped credential; read the
+      // authoritative status back so the ERP endpoint/deployment fields and
+      // the general connection indicator stay in sync with one-click pairing.
+      return refreshPairedDeviceStatus({ showStatus: true }).then(function (status) {
+        if (status && status.state === 'paired') applyPairedDeviceStatus(status);
+        setStatus(logisticsDistributionStatus, '设备配对成功', 'success');
+        return true;
+      });
     }).catch(function () {
       setStatus(logisticsDistributionStatus, '设备配对失败', 'error');
       return false;
@@ -1134,14 +1251,23 @@
   }
 
   function revokeLogisticsDevice() {
-    return sendMessage({ type: 'ss-erp:logistics-device-clear' }).then(function (response) {
+    return sendMessage({ type: 'ss-erp:extension-device-clear' }).then(function (response) {
       if (!response || !response.ok) {
         setStatus(logisticsDistributionStatus, '解除配对失败', 'error');
         return false;
       }
+      pairedDeviceStatus = null;
+      if (logisticsDeploymentInput) logisticsDeploymentInput.value = '';
+      if (logisticsPairingCodeInput) logisticsPairingCodeInput.value = '';
+      chrome.storage.local.remove([logisticsDeploymentKey]);
       renderLogisticsAssignments([], '');
-      setStatus(logisticsDistributionStatus, '设备已解除配对', 'warn');
-      return true;
+      return refreshPairedDeviceStatus({ showStatus: false }).then(function () {
+        setStatus(erpStatusNode, '本机设备配对已清除；可重新配对或使用兼容 Token', 'warn');
+        setStatus(logisticsDistributionStatus, '本机设备配对已清除', 'warn');
+        loadLogisticsDistributionStatus();
+        loadAnalyticsShops();
+        return true;
+      });
     });
   }
 
@@ -1301,28 +1427,51 @@
 
   on(testErpBtn, 'click', function () {
     var conn = saveErpConfig();
-    if (!conn.baseUrl || !conn.token) {
-      if (erpStatusNode) erpStatusNode.textContent = '请填写 ERP 地址和 Token';
-      return;
-    }
-    if (erpStatusNode) erpStatusNode.textContent = '连接中...';
-    fetch(conn.baseUrl + '/api/user/me', {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + conn.token },
-    })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      if (d.code === 1 && d.data) {
-        erpStatusNode.textContent = '连接成功: ' + (d.data.nickname || d.data.phone);
-        erpStatusNode.style.color = '#16a34a';
-      } else {
-        erpStatusNode.textContent = '连接失败: ' + (d.msg || '未知错误');
-        erpStatusNode.style.color = '#dc2626';
+    setStatus(erpStatusNode, '正在检测 ERP 连接...', 'warn');
+    refreshPairedDeviceStatus({ showStatus: false }).then(function (status) {
+      if (status && status.state === 'paired') {
+        applyPairedDeviceStatus(status, { showStatus: false });
+        setStatus(
+          erpStatusNode,
+          '设备已连接（授权店铺读取可用）' + (endpointHost(status.endpoint) ? ' · ' + endpointHost(status.endpoint) : ''),
+          '',
+        );
+        return;
       }
-    })
-    .catch(function (err) {
-      erpStatusNode.textContent = '无法连接: ' + err.message;
-      erpStatusNode.style.color = '#dc2626';
+      if (status && status.state === 'unreachable') {
+        setStatus(erpStatusNode, '设备授权暂时无法验证，请检查 ERP 网络', 'warn');
+        return;
+      }
+      if (status && status.state === 'invalid') {
+        setStatus(erpStatusNode, '设备授权已失效，请重新配对', 'error');
+        return;
+      }
+      if (status && status.state === 'authorization_required') {
+        setStatus(erpStatusNode, '扩展已检测到 ERP，但尚未完成设备配对', 'warn');
+        return;
+      }
+      if (!conn.baseUrl || !conn.token) {
+        setStatus(erpStatusNode, '请填写 ERP 地址和 Token', 'error');
+        return;
+      }
+      fetch(normalizeErpConnectionBaseUrl(conn.baseUrl) + '/api/user/me', {
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer ' + conn.token },
+      })
+      .then(function (r) {
+        return r.json().then(function (data) { return { response: r, data: data }; });
+      })
+      .then(function (result) {
+        var d = result.data;
+        if (result.response.ok && d.code === 1 && d.data) {
+          setStatus(erpStatusNode, '兼容 Token 连接成功: ' + (d.data.nickname || d.data.phone), '');
+        } else {
+          setStatus(erpStatusNode, '兼容 Token 连接失败: ' + (d.msg || '未知错误'), 'error');
+        }
+      })
+      .catch(function (err) {
+        setStatus(erpStatusNode, '兼容 Token 无法连接: ' + err.message, 'error');
+      });
     });
   });
 
@@ -1336,8 +1485,8 @@
   on(retryLogisticsCaptureBtn, 'click', function () { runLogisticsCapture('ss-erp:logistics-capture-retry'); });
   on(cancelLogisticsCaptureBtn, 'click', cancelLogisticsCapture);
   loadErpConfig();
-  if (logisticsDistributionEnabled) {
   loadLogisticsDistributionStatus();
+  if (logisticsDistributionEnabled) {
   loadLogisticsBindingProbeStatus();
   loadLogisticsCaptureStatus();
   window.setInterval(loadLogisticsCaptureStatus, 5000);
@@ -1361,10 +1510,22 @@
   }
 
   function loadAnalyticsShops() {
-    sendMessage({ type: 'spb-self-hosted:get-ozon-shops' }).then(function (response) {
+    pairedDeviceStatusPromise.catch(function () { return null; }).then(function () {
+      return sendMessage({ type: 'spb-self-hosted:get-ozon-shops' });
+    }).then(function (response) {
       if (!analyticsShopSelect) return;
       if (!response || !response.ok) {
-        analyticsShopSelect.innerHTML = '<option value="">获取失败，请先配置 ERP 连接</option>';
+        var statusName = pairedDeviceStatus && pairedDeviceStatus.state;
+        var message = statusName === 'paired'
+          ? '设备已连接，但暂时无法读取授权店铺'
+          : statusName === 'authorization_required'
+            ? '扩展已检测到 ERP，请先完成设备配对'
+            : statusName === 'invalid'
+              ? '设备授权已失效，请重新配对'
+              : statusName === 'unreachable'
+                ? '设备授权暂时无法验证'
+                : '获取失败，请先配置 ERP 连接';
+        analyticsShopSelect.innerHTML = '<option value="">' + message + '</option>';
         return;
       }
       var shops = response.data || [];

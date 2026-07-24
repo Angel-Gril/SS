@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
@@ -200,6 +201,79 @@ function toValidDate(value: string | Date | null | undefined): Date | null {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;
+}
+
+/**
+ * Escape a user supplied value used in a PostgreSQL ILIKE pattern.
+ * `%`, `_` and `\` are pattern characters and must be treated literally for
+ * order searches (the UI presents this as a normal substring search).
+ */
+function escapePostgresLike(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+type OrderItemSearchField = 'all' | 'sku' | 'product';
+
+/**
+ * Resolve order ids whose JSON item array contains a matching SKU/offer/name.
+ *
+ * Prisma's PostgreSQL JSON path filter does not support the `$[*]` wildcard
+ * used by the previous implementation.  It consequently generated a query
+ * that could never match an item in an array.  Use PostgreSQL's native
+ * jsonb_array_elements instead, while keeping all user input parameterized by
+ * Prisma's tagged SQL builder.
+ */
+async function findOrderIdsByItemSearch(
+  shopIds: string[],
+  term: string,
+  searchField: OrderItemSearchField,
+): Promise<string[]> {
+  if (shopIds.length === 0 || !term) return [];
+
+  const pattern = `%${escapePostgresLike(term)}%`;
+  const predicates: Prisma.Sql[] = [];
+
+  if (searchField === 'all' || searchField === 'sku') {
+    // Ozon calls the seller's article `offer_id`; users commonly refer to it
+    // as the article/货号, so both fields belong to the SKU search scope.
+    predicates.push(
+      Prisma.sql`item ->> 'sku' ILIKE ${pattern} ESCAPE '\\'`,
+      Prisma.sql`item ->> 'offer_id' ILIKE ${pattern} ESCAPE '\\'`,
+    );
+  }
+  if (searchField === 'all' || searchField === 'product') {
+    predicates.push(Prisma.sql`item ->> 'name' ILIKE ${pattern} ESCAPE '\\'`);
+  }
+  if (predicates.length === 0) return [];
+
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT DISTINCT o."id"
+    FROM "orders" AS o
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE
+        WHEN jsonb_typeof(o."items") = 'array' THEN o."items"
+        ELSE '[]'::jsonb
+      END
+    ) AS item
+    WHERE o."shop_id" IN (${Prisma.join(shopIds)})
+      AND (${Prisma.join(predicates, ' OR ')})
+  `);
+
+  return rows.map((row) => String(row.id)).filter(Boolean);
+}
+
+/** Restrict an existing id filter instead of replacing it. */
+function restrictOrderIds(where: Record<string, unknown>, ids: string[]): void {
+  const current = where.id;
+  if (current && typeof current === 'object' && !Array.isArray(current)) {
+    const currentIn = (current as { in?: unknown }).in;
+    if (Array.isArray(currentIn)) {
+      const allowed = new Set(ids);
+      where.id = { in: currentIn.map(String).filter((id) => allowed.has(id)) };
+      return;
+    }
+  }
+  where.id = { in: ids };
 }
 
 export async function orderRoutes(app: FastifyInstance) {
@@ -414,7 +488,8 @@ export async function orderRoutes(app: FastifyInstance) {
     if (query.search) {
       const term = query.search.trim();
       const ci = { contains: term, mode: 'insensitive' as const };
-      switch (query.searchField || 'all') {
+      const searchField = query.searchField || 'all';
+      switch (searchField) {
         case 'posting':
           where.OR = [
             { postingNumber: ci },
@@ -434,15 +509,18 @@ export async function orderRoutes(app: FastifyInstance) {
           ];
           break;
         case 'sku':
-        case 'product':
-          where.items = { array_contains: [{}] };
-          where.OR = [
-            { items: { path: ['$[*].sku'], string_contains: term } as any },
-            { items: { path: ['$[*].offer_id'], string_contains: term } as any },
-            { items: { path: ['$[*].name'], string_contains: term } as any },
-          ];
+        case 'product': {
+          const itemIds = await findOrderIdsByItemSearch(shopIds, term, searchField);
+          // Item fields live in a JSON array. Resolve matching ids with a
+          // native JSONB query, then let Prisma apply the remaining filters.
+          where.id = { in: itemIds };
           break;
-        default:
+        }
+        default: {
+          // `all` includes the scalar order fields and the item fields shown
+          // in the search placeholder. Item matches are represented as an
+          // additional OR branch so scalar matches are not accidentally lost.
+          const itemIds = await findOrderIdsByItemSearch(shopIds, term, 'all');
           where.OR = [
             { postingNumber: ci },
             { platformOrderId: ci },
@@ -450,7 +528,10 @@ export async function orderRoutes(app: FastifyInstance) {
             { domesticTrackingNumber: ci },
             { internationalTrackingNumber: ci },
             { purchaseOrderId: ci },
+            { id: { in: itemIds } },
           ];
+          break;
+        }
       }
     }
 
@@ -485,7 +566,7 @@ export async function orderRoutes(app: FastifyInstance) {
           deliveredAt: true,
         },
       });
-      where.id = { in: filterOrderIdsByShipmentUrgency(candidateOrders, query.shipmentUrgency, now) };
+      restrictOrderIds(where, filterOrderIdsByShipmentUrgency(candidateOrders, query.shipmentUrgency, now));
     }
 
     if (query.startDate || query.endDate) {
@@ -524,7 +605,7 @@ export async function orderRoutes(app: FastifyInstance) {
         warehouseLogs,
         query.fulfillmentStage,
       );
-      where.id = { in: matchingOrderIds };
+      restrictOrderIds(where, matchingOrderIds);
     }
 
     const [total, rows] = await Promise.all([

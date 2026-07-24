@@ -546,6 +546,66 @@ async function readExtensionDeviceStatus(verify) {
   };
 }
 
+// Read-only shop metadata for extension pages. The legacy settings page used
+// `/api/shops` with the old account-equivalent token, which is intentionally
+// empty after a scoped device pairing. Keep the device token inside the
+// service worker and call the device-scoped endpoint instead.
+async function readExtensionDeviceOzonShops() {
+  const credentials = getLogisticsDeviceCredentials();
+  const stored = await credentials.getStatus();
+  if (!stored || stored.state !== 'paired') {
+    return { ok: false, errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+
+  let operation;
+  try {
+    operation = await credentials.beginOperation();
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'device_unreachable',
+      error: error && error.message ? error.message : '设备授权验证失败',
+    };
+  }
+  if (!operation || operation.state !== 'paired' || !operation.accessToken) {
+    return { ok: false, errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+
+  let response;
+  try {
+    response = await fetch(operation.baseUrl + '/api/extension-device/shops', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + operation.accessToken,
+      },
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'device_unreachable',
+      error: error && error.message ? error.message : '设备店铺读取失败',
+    };
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body || body.code !== 1 || !Array.isArray(body.data)) {
+    return {
+      ok: false,
+      errorCode: body && body.errorCode || (response.status === 404 ? 'device_shop_route_unavailable' : 'device_shop_read_failed'),
+      error: body && (body.msg || body.error) || '设备店铺读取失败',
+    };
+  }
+  return {
+    ok: true,
+    authMode: 'device',
+    data: body.data.filter((shop) => String(shop && shop.platform || '').toUpperCase() === 'OZON'),
+  };
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS = readExtensionDeviceOzonShops;
+
 async function claimExtensionDeviceFromErp(message, sender) {
   const baseUrl = trustedErpDeviceBaseUrl(message.baseUrl, sender);
   const credentials = getLogisticsDeviceCredentials();
@@ -3853,6 +3913,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'ss-erp:extension-device-claim') {
     Promise.resolve().then(() => enqueueExtensionDeviceClaim(message, sender)).then((deviceStatus) => {
+      sendResponse({ ok: true, data: deviceStatus });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:extension-device-clear') {
+    Promise.resolve().then(() => {
+      // This message is settings-page-only in the runtime policy. Keep the
+      // sender assertion here as a second boundary before deleting the
+      // service-worker-owned credential.
+      assertTrustedErpDeviceSender(sender);
+      return getLogisticsDeviceCredentials().clear();
+    }).then((deviceStatus) => {
       sendResponse({ ok: true, data: deviceStatus });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
