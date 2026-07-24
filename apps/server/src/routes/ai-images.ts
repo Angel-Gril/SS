@@ -44,6 +44,7 @@ import {
   type AiImageEditStorageReadiness,
 } from '../services/ai-image-edit-storage.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { isOpenAiCompatibleImageEditSizeSupported } from '../services/ai-image-providers.js';
 import { buildAiImageGenerationQuote } from '../services/ai-image-generation-quote.js';
 import {
   assertAiImageProviderRuntimeContract,
@@ -276,6 +277,17 @@ const listingDraftEditMaskSchema = editMaskSchema.extend({
   revision: z.number().int().min(1),
   draftVersion: z.number().int().min(1),
 });
+
+export function isPaidAiImageEditCanvasSupported(provider: string, width: number, height: number): boolean {
+  return provider === 'fake' || isOpenAiCompatibleImageEditSizeSupported(width, height);
+}
+
+function unsupportedPaidEditCanvas(reply: any, width: number, height: number) {
+  return reply.status(422).send({
+    code: 'UNSUPPORTED_PROVIDER_EDIT_DIMENSIONS',
+    msg: `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${width}x${height}. Resize or pad the source and mask before submitting; no paid quota was reserved.`,
+  });
+}
 
 interface AiImageRouteSettings {
   enabled: boolean;
@@ -929,6 +941,10 @@ function retryProviderConfigMatches(
   if (provider === 'fake') {
     return estimatedCostCents === 0 && count === 1 && width > 0 && height > 0;
   }
+  // A paid edit must be rejected before retry reserves quota or budget when
+  // its historical canvas could never be accepted by the Provider adapter.
+  // This protects legacy jobs created before the create-time canvas guard.
+  if (!isOpenAiCompatibleImageEditSizeSupported(width, height)) return false;
   const operationConfig = job.operationConfig;
   const runtime = operation === 'IMAGE_TO_IMAGE'
     ? operationConfig
@@ -1794,6 +1810,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             msg: 'Owned source image dimensions were not found',
           });
         }
+        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, dimensions.width, dimensions.height)) {
+          return unsupportedPaidEditCanvas(reply, dimensions.width, dimensions.height);
+        }
         let providerExecution: Record<string, unknown> = {};
         if (editSettings.provider !== 'fake') {
           const quote = buildAiImageGenerationQuote({
@@ -1859,6 +1878,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
+        if (!isPaidAiImageEditCanvasSupported(editSettings.provider, parsed.data.width, parsed.data.height)) {
+          return unsupportedPaidEditCanvas(reply, parsed.data.width, parsed.data.height);
         }
         let providerExecution: Record<string, unknown> = {};
         if (editSettings.provider !== 'fake') {
@@ -2125,6 +2147,13 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         const latestJob = Array.isArray(existingWorkflow.jobs)
           ? existingWorkflow.jobs.at(-1) as unknown as Record<string, unknown> | undefined
           : undefined;
+        if (String(latestJob?.provider || '') !== 'fake') {
+          const width = Number(latestJob?.width || 0);
+          const height = Number(latestJob?.height || 0);
+          if (!isOpenAiCompatibleImageEditSizeSupported(width, height)) {
+            return unsupportedPaidEditCanvas(reply, width, height);
+          }
+        }
         if (!retryProviderConfigMatches(latestJob, operation, editSettings)) {
           return reply.status(409).send({
             code: 'PROVIDER_CONFIG_CHANGED',
@@ -2155,6 +2184,13 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         const latestJob = Array.isArray(existingWorkflow.jobs)
           ? existingWorkflow.jobs.at(-1) as unknown as Record<string, unknown> | undefined
           : undefined;
+        if (String(latestJob?.provider || '') !== 'fake') {
+          const width = Number(latestJob?.width || 0);
+          const height = Number(latestJob?.height || 0);
+          if (!isOpenAiCompatibleImageEditSizeSupported(width, height)) {
+            return unsupportedPaidEditCanvas(reply, width, height);
+          }
+        }
         if (!retryProviderConfigMatches(latestJob, 'IMAGE_TO_IMAGE', editSettings)) {
           return reply.status(409).send({
             code: 'PROVIDER_CONFIG_CHANGED',

@@ -6,6 +6,7 @@ import {
 } from './ai-prompt-templates.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from './ai-image-compositor.js';
 import { buildAiImageGenerationQuote } from './ai-image-generation-quote.js';
+import { isOpenAiCompatibleImageEditSizeSupported } from './ai-image-providers.js';
 import {
   AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
   type AiImageProviderRuntimeContract,
@@ -1325,6 +1326,12 @@ export function createExtensionMediaWorkflowLauncher(options: {
           );
         }
         const source = sources[0]!;
+        if (providerConfig.paid && !isOpenAiCompatibleImageEditSizeSupported(source.width, source.height)) {
+          throw new ExtensionMediaWorkflowLaunchError(
+            'MEDIA_PROVIDER_NOT_ALLOWED',
+            `Paid image edits require a supported Provider canvas (1024x1024, 1024x1536, or 1536x1024); received ${source.width}x${source.height}. Resize or pad the source and mask before submitting`,
+          );
+        }
         const providerExecution = buildStandalonePaidExecution(providerConfig, {
           count: 1,
           width: source.width,

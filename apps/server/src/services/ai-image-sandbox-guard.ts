@@ -209,13 +209,21 @@ export async function claimAiImageSandboxOperation(input: {
 
   await ensurePrivateDirectory(input.directory);
   const intentPath = resolve(input.directory, `${operationId}.intent.json`);
-  const { endpoint: _rawEndpoint, ...requestEvidence } = input.request;
+  const { endpoint: _rawEndpoint, ...requestFingerprintEvidence } = input.request;
+  const persistedRequestKeys = new Set([
+    'operation', 'requestProfile', 'n', 'width', 'height', 'size', 'promptSha256',
+    'sourceSha256', 'sourceDimensions', 'maskSha256', 'maskDimensions',
+  ]);
+  const persistedRequestEvidence = Object.fromEntries(
+    Object.entries(requestFingerprintEvidence)
+      .filter(([key]) => persistedRequestKeys.has(key)),
+  );
   const canonicalRequestFingerprint = createHash('sha256').update(canonicalJson({
     endpointSha256,
     model: input.model,
     credentialRevision,
     adapterRevision,
-    request: requestEvidence,
+    request: requestFingerprintEvidence,
   })).digest('hex');
   const intent = {
     schemaVersion: 2,
@@ -226,6 +234,7 @@ export async function claimAiImageSandboxOperation(input: {
     credentialRevision,
     adapterRevision,
     requestFingerprint: canonicalRequestFingerprint,
+    request: persistedRequestEvidence,
     quotedCostCents,
     maximumCostCents,
     createdAt: new Date().toISOString(),
@@ -418,11 +427,13 @@ export function createAiImageSandboxEditFetchGuard(input: {
         throw new Error('The single-submit edit sandbox requires a multipart edit body');
       }
       const form = init.body;
-      const allowedKeys = new Set(['model', 'prompt', 'n', 'size', 'image[]', 'mask']);
+      const allowedKeys = new Set(['model', 'prompt', 'n', 'size', 'image', 'image[]', 'mask']);
       const keys: string[] = [];
       form.forEach((_value, key) => keys.push(key));
       const prompt = exactFormString(form, 'prompt');
-      const sources = form.getAll('image[]');
+      const sourceField = input.contract.sourceSha256.length === 1 ? 'image' : 'image[]';
+      const alternateSourceField = sourceField === 'image' ? 'image[]' : 'image';
+      const sources = form.getAll(sourceField);
       const masks = form.getAll('mask');
       const sourceHashes = await Promise.all(sources.map(blobSha256));
       const sourceMimeMatches = await Promise.all(sources.map(blobMatchesDeclaredImageMime));
@@ -444,6 +455,7 @@ export function createAiImageSandboxEditFetchGuard(input: {
         && sourceHashes.every((hash, index) => hash === input.contract.sourceSha256[index]);
       if (
         keys.some((key) => !allowedKeys.has(key))
+        || form.has(alternateSourceField)
         || exactFormString(form, 'model') !== input.contract.model
         || exactFormString(form, 'n') !== String(input.contract.n)
         || exactFormString(form, 'size') !== input.contract.size

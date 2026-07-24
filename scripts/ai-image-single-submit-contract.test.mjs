@@ -24,6 +24,9 @@ assert.match(source, /AI_IMAGE_SANDBOX_OPERATION_ID/u);
 assert.match(source, /AI_IMAGE_SANDBOX_CREDENTIAL_REVISION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_ADAPTER_REVISION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_OPERATION/u);
+assert.match(source, /AI_IMAGE_SANDBOX_REQUEST_PROFILE/u);
+assert.match(source, /OPENAI_SQUARE_SINGLE_V1/u);
+assert.match(source, /OZON_PORTRAIT_SINGLE_V1/u);
 assert.match(source, /IMAGE_TO_IMAGE/u);
 assert.match(source, /FULL_EDIT/u);
 assert.match(source, /INPAINT/u);
@@ -56,6 +59,8 @@ assert.match(source, /syncDirectory\(dirname\(path\)\)/u);
 assert.match(source, /repositoryRoot\?:\s*string/u);
 assert.match(source, /FULL_GIT_OID_PATTERN/u);
 assert.match(source, /DEPLOYED_COMMIT/u);
+assert.match(source, /git', \['rev-parse', '--verify', 'HEAD'\]/u);
+assert.match(source, /--porcelain=v1/u);
 assert.match(source, /SANDBOX_COMMAND_FAILED/u);
 assert.match(source, /open\(path,\s*'wx',\s*0o600\)/u);
 assert.match(source, /\.report\.json/u);
@@ -111,6 +116,7 @@ const invalidOperation = spawnSync(
       AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'test-revision-0001',
       AI_IMAGE_SANDBOX_ADAPTER_REVISION: '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3',
       AI_IMAGE_SANDBOX_OPERATION: 'UPSCALE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
     },
   },
 );
@@ -134,6 +140,7 @@ const textGenerationOperation = spawnSync(
       AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'test-revision-0001',
       AI_IMAGE_SANDBOX_ADAPTER_REVISION: '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3',
       AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
       AI_IMAGE_SANDBOX_EXPECTED_HOST: '',
       AI_IMAGE_SANDBOX_SOURCE_PATH: '',
       AI_IMAGE_SANDBOX_SOURCE_SHA256: '',

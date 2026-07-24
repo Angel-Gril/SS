@@ -84,6 +84,7 @@ async function setup() {
         'title',
         input.prompts.title.resolved.resolvedPrompt,
         input.prompts.title.resolved.resolvedNegativePrompt,
+        input.prompts.title.registryAuthority,
       )
       : null;
     const descriptionRequest = input.prompts.description
@@ -91,6 +92,7 @@ async function setup() {
         'description',
         input.prompts.description.resolved.resolvedPrompt,
         input.prompts.description.resolved.resolvedNegativePrompt,
+        input.prompts.description.registryAuthority,
       )
       : null;
     return ({
@@ -162,6 +164,10 @@ describe('source listing AI copy', () => {
       },
     }));
     const generationInput = generateContent.mock.calls[0]![0];
+    expect(generationInput.prompts.title!.registryAuthority).toMatchObject({
+      templateKey: 'listing-copy.title',
+      promptTemplate: 'Facts: {{source_facts_json}}',
+    });
     expect(generationInput.prompts.description!.variables.confirmedAttributesJson).toContain('Хлопок');
     expect(generationInput.prompts.description!.variables.confirmedAttributesJson).not.toContain('ignore unreviewed');
 
@@ -184,7 +190,10 @@ describe('source listing AI copy', () => {
         },
       },
     });
-    expect(result.candidate.generation?.title?.frozenRequest?.userPrompt).toContain('resolved prompt 1');
+    expect(result.candidate.generation?.title?.frozenRequest?.systemPrompt).toContain('Facts: {{source_facts_json}}');
+    expect(result.candidate.generation?.title?.frozenRequest?.userPrompt).toContain('Untrusted marketplace data');
+    expect(result.candidate.generation?.title?.frozenRequest?.userPrompt).toContain('source_facts_json');
+    expect(result.candidate.generation?.title?.frozenRequest?.userPrompt).not.toContain('resolved prompt 1');
     expect(result.candidate.generation?.title?.variablesHash).toMatch(/^[a-f0-9]{64}$/);
     expect(result.candidate.generation?.title?.outputHash).toMatch(/^[a-f0-9]{64}$/);
     expect(result.candidate.generation?.description?.outputHash).toBe(createHash('sha256').update(
@@ -366,9 +375,11 @@ describe('source listing AI copy', () => {
     });
 
     expect(first.candidate.generation?.title?.sequence).toBe(1);
-    expect(first.candidate.generation?.title?.frozenRequest?.userPrompt).toContain('resolved prompt 1');
+    expect(first.candidate.generation?.title?.revisionId).toBe('listing-copy.title-revision-1');
+    expect(first.candidate.generation?.title?.frozenRequest?.systemPrompt).toContain('Facts: {{source_facts_json}}');
     expect(second.candidate.generation?.title?.sequence).toBe(2);
-    expect(second.candidate.generation?.title?.frozenRequest?.userPrompt).toContain('resolved prompt 2');
+    expect(second.candidate.generation?.title?.revisionId).toBe('listing-copy.title-revision-2');
+    expect(second.candidate.generation?.title?.frozenRequest?.systemPrompt).toContain('Facts: {{source_facts_json}}');
   });
 
   it('keeps an approved description when applying a title-only generated candidate', async () => {
@@ -487,6 +498,7 @@ describe('source listing AI copy', () => {
         'title',
         input.prompts.title!.resolved.resolvedPrompt,
         input.prompts.title!.resolved.resolvedNegativePrompt,
+        input.prompts.title!.registryAuthority,
       );
       return {
         ok: true as const,

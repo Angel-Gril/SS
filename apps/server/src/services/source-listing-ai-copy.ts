@@ -18,6 +18,7 @@ import {
   hashProductContentPrompt,
   type ProductContentDraftResult,
   type ProductContentField,
+  type ProductContentRegistryPromptAuthority,
 } from './product-content-ai.js';
 import {
   hasTrustedSourceEvidence,
@@ -48,6 +49,7 @@ export interface SourceListingAiCopyPrompt {
   templateKey: 'listing-copy.title' | 'listing-copy.description';
   resolved: ResolvedTemplate;
   variables: Record<string, string>;
+  registryAuthority: ProductContentRegistryPromptAuthority;
 }
 
 export interface SourceListingAiCopySnapshot {
@@ -279,11 +281,13 @@ function provenanceForField(input: {
     field,
     prompt.resolved.resolvedPrompt,
     prompt.resolved.resolvedNegativePrompt,
+    prompt.registryAuthority,
   );
   const compiled = compileProductContentRequest(
     field,
     prompt.resolved.resolvedPrompt,
     prompt.resolved.resolvedNegativePrompt,
+    prompt.registryAuthority,
   );
   if (draft.promptHash !== expectedPromptHash
     || draft.promptHash !== compiled.promptHash
@@ -447,7 +451,17 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
           field, sourceFactsJson, confirmedAttributesJson, categoryName, userInstructions,
         });
         const resolved = await options.resolveTemplate({ templateKey, variables });
-        prompts[field] = { templateKey, variables, resolved };
+        prompts[field] = {
+          templateKey,
+          variables,
+          resolved,
+          registryAuthority: {
+            templateKey,
+            promptTemplate: resolved.snapshot.promptTemplate,
+            negativePromptTemplate: resolved.snapshot.negativePromptTemplate,
+            variables,
+          },
+        };
       }
 
       const generated = await options.generateContent({

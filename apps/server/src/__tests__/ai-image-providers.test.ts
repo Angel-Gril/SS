@@ -3,6 +3,7 @@ import {
   createDashScopeWanxProvider,
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
+  isOpenAiCompatibleImageEditSizeSupported,
   testAiImageProviderConnection,
   validateAiImageProviderUrl,
 } from '../services/ai-image-providers.js';
@@ -19,6 +20,16 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
 }
 
 describe('AI image provider adapters', () => {
+  it.each([
+    [1024, 1024, true],
+    [1024, 1536, true],
+    [1536, 1024, true],
+    [900, 1200, false],
+    [1024, 1365, false],
+  ])('classifies OpenAI-compatible edit canvas %dx%d as %s before quota reservation', (width, height, supported) => {
+    expect(isOpenAiCompatibleImageEditSizeSupported(width, height)).toBe(supported);
+  });
+
   it('submits a FULL_EDIT as one OpenAI multipart image edit and decodes its b64 result', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(json({
       id: 'edit-response-1',
@@ -62,8 +73,9 @@ describe('AI image provider adapters', () => {
     expect(form.get('prompt')).toBe('Place the product in a bright studio\n\nAvoid: text, watermark');
     expect(form.get('n')).toBe('1');
     expect(form.get('size')).toBe('1024x1024');
-    expect(form.getAll('image[]')).toHaveLength(1);
-    expect(form.get('image[]')).toMatchObject({ name: 'image-1.png', type: 'image/png', size: png.length });
+    expect(form.getAll('image')).toHaveLength(1);
+    expect(form.get('image')).toMatchObject({ name: 'image-1.png', type: 'image/png', size: png.length });
+    expect(form.has('image[]')).toBe(false);
     expect(form.has('mask')).toBe(false);
   });
 

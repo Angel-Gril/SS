@@ -73,7 +73,16 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_OPENAI_EDIT_INPUT_IMAGES = 16;
 export const MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES = 50 * 1024 * 1024;
-const OPENAI_EDIT_SIZES = new Set(['1024x1024', '1024x1536', '1536x1024']);
+export const OPENAI_COMPATIBLE_IMAGE_EDIT_SIZES = Object.freeze([
+  '1024x1024', '1024x1536', '1536x1024',
+]);
+const OPENAI_EDIT_SIZES = new Set(OPENAI_COMPATIBLE_IMAGE_EDIT_SIZES);
+
+export function isOpenAiCompatibleImageEditSizeSupported(width: number, height: number): boolean {
+  return Number.isSafeInteger(width)
+    && Number.isSafeInteger(height)
+    && OPENAI_EDIT_SIZES.has(`${width}x${height}`);
+}
 
 class BeforeProviderDispatchError extends Error {
   constructor(public readonly original: unknown) {
@@ -439,7 +448,7 @@ function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
     throw invalidOpenAiEditInput(`OpenAI image edit accepts at most ${MAX_OPENAI_EDIT_INPUT_IMAGES} source images`);
   }
   const size = `${request.width}x${request.height}`;
-  if (!OPENAI_EDIT_SIZES.has(size)) {
+  if (!isOpenAiCompatibleImageEditSizeSupported(request.width, request.height)) {
     throw invalidOpenAiEditInput('OpenAI image edit output size is not supported');
   }
   if (request.operation === 'INPAINT' && !request.mask) {
@@ -673,10 +682,11 @@ export function createOpenAiImageEditProvider(
       );
       form.append('n', '1');
       form.append('size', validated.size);
+      const imageFieldName = request.images.length === 1 ? 'image' : 'image[]';
       request.images.forEach((image, index) => {
         const mimeType = validated.imageMimeTypes[index]!;
         form.append(
-          'image[]',
+          imageFieldName,
           new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
           `image-${index + 1}.${extensionForMime(mimeType)}`,
         );

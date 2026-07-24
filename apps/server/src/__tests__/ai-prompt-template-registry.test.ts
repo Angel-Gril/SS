@@ -4,6 +4,7 @@ import {
   AI_MEDIA_EDIT_SAFETY_POLICY,
   AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
   AI_PROMPT_SAFETY_POLICY,
+  AiPromptTemplateService,
   InMemoryAiPromptTemplateStore,
 } from '../services/ai-prompt-templates.js';
 import {
@@ -187,6 +188,16 @@ describe('AI prompt template registry', () => {
     expect(description.variableSchema.prompt).toEqual(expect.arrayContaining([
       expect.objectContaining({ inputKey: 'confirmedAttributesJson', requiredForTest: true }),
     ]));
+    expect(title.activeRevision?.promptTemplate).toContain('Russian buyer search intent');
+    expect(title.activeRevision?.promptTemplate).toContain('keyword stuffing');
+    expect(title.activeRevision?.promptTemplate).toContain(
+      'Return only the compact JSON object required by the corresponding output contract.',
+    );
+    expect(description.activeRevision?.promptTemplate).toContain('opening product summary');
+    expect(description.activeRevision?.promptTemplate).toContain('distinct factual angle');
+    expect(description.activeRevision?.promptTemplate).toContain(
+      'Return only the compact JSON object required by the corresponding output contract.',
+    );
   });
 
   it.each([
@@ -229,7 +240,235 @@ describe('AI prompt template registry', () => {
     });
     expect(resolved.resolvedPrompt).toContain(AI_MEDIA_EDIT_SAFETY_POLICY);
     expect(resolved.resolvedPrompt).toContain(userPrompt);
+    expect(resolved.resolvedPrompt).toContain('product count, geometry, proportions, color, material');
+    if (templateKey === AI_MEDIA_INPAINT_TEMPLATE_KEY) {
+      expect(resolved.resolvedPrompt).toContain('seamless transition at the mask boundary');
+    }
     expect(resolved.resolvedNegativePrompt).toContain('watermarks');
+  });
+
+  it('upgrades an active system bootstrap release without overwriting a later admin release', async () => {
+    const store = new InMemoryAiPromptTemplateStore();
+    const domain = new AiPromptTemplateService(store);
+    const now = new Date().toISOString();
+    await store.ensureTemplate({
+      key: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      label: '商品标题候选',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const legacy = await domain.createDraft({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: `bootstrap:${LISTING_COPY_TITLE_TEMPLATE_KEY}:legacy`,
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      promptTemplate: [
+        'Create one concise Ozon listing title in {{target_language}} for category {{ozon_category_name}}.',
+        'Use only facts present in this JSON:',
+        '{{source_facts_json}}',
+        'Operator instructions (may be empty):',
+        '{{user_instructions}}',
+        'Return only the candidate title. Do not add commentary.',
+      ].join('\n'),
+      negativePromptTemplate: 'Never use unsupported claims.\n{{forbidden_claims}}',
+    });
+    const legacyRun = await domain.recordTestRun({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: legacy.id,
+      status: 'PASS',
+    });
+    await domain.publish({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: legacy.id,
+      testRunId: legacyRun.id,
+      expectedSequence: 0,
+    });
+
+    const upgradedRegistry = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const upgraded = await upgradedRegistry.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    expect(upgraded.release.sequence).toBe(2);
+    expect(upgraded.resolvedPrompt).toContain('Russian buyer search intent');
+
+    const custom = await upgradedRegistry.createRevision({
+      actorUserId: 'admin-1',
+      key: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      promptTemplate: [
+        'Admin-owned Russian title rules for {{ozon_category_name}} in {{target_language}}.',
+        '{{source_facts_json}}',
+        '{{user_instructions}}',
+      ].join('\n'),
+      negativePromptTemplate: 'Admin exclusions: {{forbidden_claims}}',
+    });
+    const customRun = await upgradedRegistry.testRevision({
+      actorUserId: 'admin-1',
+      revisionId: custom.id,
+      sampleInput: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    await upgradedRegistry.publishRevision({
+      actorUserId: 'admin-1',
+      key: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      revisionId: custom.id,
+      testRunId: customRun.testRunId,
+      expectedSequence: 2,
+    });
+
+    const restartedRegistry = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const preserved = await restartedRegistry.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    expect(preserved.release.sequence).toBe(3);
+    expect(preserved.resolvedPrompt).toContain('Admin-owned Russian title rules');
+  });
+
+  it('reactivates a historical published bootstrap revision through a monotonic rollback', async () => {
+    const store = new InMemoryAiPromptTemplateStore();
+    const firstRegistry = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const first = await firstRegistry.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    const domain = new AiPromptTemplateService(store);
+    const intermediate = await domain.createDraft({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: `bootstrap:${LISTING_COPY_TITLE_TEMPLATE_KEY}:intermediate`,
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      promptTemplate: `${first.snapshot.promptTemplate}\nIntermediate bootstrap rules.`,
+      negativePromptTemplate: first.snapshot.negativePromptTemplate,
+    });
+    const intermediateRun = await domain.recordTestRun({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: intermediate.id,
+      status: 'PASS',
+    });
+    await domain.publish({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: intermediate.id,
+      testRunId: intermediateRun.id,
+      expectedSequence: 1,
+    });
+
+    const restartedRegistry = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const reactivated = await restartedRegistry.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    const releases = await store.listReleases(LISTING_COPY_TITLE_TEMPLATE_KEY);
+    const revisions = await store.listRevisions(LISTING_COPY_TITLE_TEMPLATE_KEY);
+
+    expect(reactivated.release).toEqual({
+      id: expect.any(String),
+      revisionId: first.release.revisionId,
+      sequence: 3,
+    });
+    expect(releases.map(({ sequence, revisionId, action }) => ({ sequence, revisionId, action }))).toEqual([
+      { sequence: 1, revisionId: first.release.revisionId, action: 'PUBLISH' },
+      { sequence: 2, revisionId: intermediate.id, action: 'PUBLISH' },
+      { sequence: 3, revisionId: first.release.revisionId, action: 'ROLLBACK' },
+    ]);
+    expect(revisions).toHaveLength(2);
+  });
+
+  it('does not oscillate when a mixed-version process sees a newer bootstrap revision', async () => {
+    const store = new InMemoryAiPromptTemplateStore();
+    const firstRegistry = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const first = await firstRegistry.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    expect(first.release.revisionId).toMatch(/^bootstrap-v2:/u);
+
+    const activeRevision = await store.getRevision(first.release.revisionId);
+    expect(activeRevision).not.toBeNull();
+    const legacyBinaryWouldTreatAsSystemManaged = Boolean(
+      first.release.revisionId.startsWith(`bootstrap:${LISTING_COPY_TITLE_TEMPLATE_KEY}:`),
+    );
+    expect(legacyBinaryWouldTreatAsSystemManaged).toBe(false);
+
+    const domain = new AiPromptTemplateService(store);
+    const newerRevision = await domain.createDraft({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: `bootstrap-v2:${LISTING_COPY_TITLE_TEMPLATE_KEY}:different`,
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      promptTemplate: `${activeRevision!.promptTemplate}\nNewer process marker.`,
+      negativePromptTemplate: activeRevision!.negativePromptTemplate,
+    });
+    const newerRun = await domain.recordTestRun({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: newerRevision.id,
+      status: 'PASS',
+    });
+    await domain.publish({
+      actorUserId: 'system:ai-prompt-bootstrap',
+      revisionId: newerRevision.id,
+      testRunId: newerRun.id,
+      expectedSequence: 1,
+    });
+
+    const restarted = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => ''),
+    });
+    const resolved = await restarted.resolveTemplate({
+      templateKey: LISTING_COPY_TITLE_TEMPLATE_KEY,
+      variables: {
+        sourceFactsJson: '{"title":"杯子"}',
+        ozonCategoryName: 'Кружки',
+        targetLanguage: 'Russian',
+        userInstructions: '',
+        forbiddenClaims: '',
+      },
+    });
+    expect(resolved.release.sequence).toBe(2);
+    expect(resolved.release.revisionId).toBe(newerRevision.id);
+    expect((await store.listReleases(LISTING_COPY_TITLE_TEMPLATE_KEY))).toHaveLength(2);
   });
 
   it('bootstraps structured planning templates only with frozen consumer contracts', async () => {

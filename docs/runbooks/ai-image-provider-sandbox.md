@@ -54,7 +54,7 @@ Never delete an intent or `.fingerprints` claim to make a request runnable again
 Set both revisions from authoritative records:
 
 - `credentialRevision` is a non-secret version label for the exact injected credential. Use a secret-manager version, controlled configuration revision, or key-rotation revision. Do not use the secret itself, its prefix, or a secret hash as the label.
-- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. On a packaged deployment the CLI also rejects a value that does not equal `DEPLOYED_COMMIT`. Do not use a planned or local-only commit.
+- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. The CLI requires it to equal `DEPLOYED_COMMIT`, or the actual Git `HEAD` only when the deployment marker is absent and the tracked worktree is clean. If neither code identity is available, the probe fails closed. Do not use a planned or local-only commit.
 
 Record the Provider account, pricing revision, currency, model, quoted charge, balance or usage counter, and observation time immediately before the call. Repeat the observation after the Provider has settled the charge.
 
@@ -94,7 +94,14 @@ Supported operations are:
 | `FULL_EDIT`      | `/v1/images/edits`       | One pinned PNG, JPEG, or WebP source                                          |
 | `INPAINT`        | `/v1/images/edits`       | One pinned source and a same-size PNG mask with transparent and opaque pixels |
 
-Prompts, requested count (`1`), and requested size (`1024x1024`) are fixed in the CLI. A Provider may return a different valid size; record that as a compatibility result, not automatic acceptance.
+Prompts and requested count (`1`) are fixed in the CLI. The required request profile freezes the request dimensions and the single-reference multipart shape:
+
+| Request profile                  | Requested size | Intended evidence scope                                      |
+| -------------------------------- | -------------- | ------------------------------------------------------------ |
+| `OPENAI_SQUARE_SINGLE_V1`        | `1024x1024`    | Square generation or one-source edit compatibility           |
+| `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
+
+Neither profile proves multi-reference compatibility. A Provider may return a different valid size; record that as a compatibility result, not automatic acceptance. Any promoted capability must be limited to the exact tested profile, operation, endpoint digest, model, adapter revision, credential revision, and verified reference count.
 
 ### Complete Environment Contract
 
@@ -109,6 +116,7 @@ Inject secrets without echoing them or retaining them in shell history. Use plac
 | `AI_IMAGE_SANDBOX_API_KEY`             | Secret injected for this process only                                                   |
 | `AI_IMAGE_SANDBOX_MODEL`               | Exact third-party model identifier under test                                           |
 | `AI_IMAGE_SANDBOX_OPERATION`           | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`                            |
+| `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | `OPENAI_SQUARE_SINGLE_V1` or `OZON_PORTRAIT_SINGLE_V1`                                 |
 | `AI_IMAGE_SANDBOX_OPERATION_ID`        | New one-use Operation ID                                                                |
 | `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION` | Non-secret revision of the injected key                                                 |
 | `AI_IMAGE_SANDBOX_ADAPTER_REVISION`    | Exact deployed Git commit SHA                                                           |
@@ -135,7 +143,7 @@ Relative source and mask paths are resolved from the repository/deployed app roo
    ```
 
 5. Unset the confirmation and API key immediately after the process exits.
-6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under `tmp/ai-image-sandbox/intents/`, and the returned image. Verify image count, MIME type, dimensions, byte length, SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product changes.
+6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under `tmp/ai-image-sandbox/intents/`, and the returned image. Verify request profile, source/mask dimensions and digests, image count, MIME type, output dimensions, byte length, SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product changes.
 7. Take the settled billing snapshot and run the dark-state verifier again.
 
 This lane has no automated reconciliation mode. If its report is `RECONCILIATION_REQUIRED`, use only the relay dashboard, billing ledger, request logs, or Provider support to resolve the original request. Do not call the submit command again.

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import {
   access,
   chmod,
@@ -11,6 +12,7 @@ import {
 import { isIP } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { Agent, fetch as undiciFetch, interceptors } from 'undici';
 import sharp from 'sharp';
 import {
@@ -28,7 +30,17 @@ import {
 } from '../src/services/ai-image-sandbox-guard.js';
 
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
+const execFileAsync = promisify(execFile);
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
+const REQUEST_PROFILES = Object.freeze({
+  OPENAI_SQUARE_SINGLE_V1: Object.freeze({ width: 1024, height: 1024, format: 'square' }),
+  OZON_PORTRAIT_SINGLE_V1: Object.freeze({
+    width: 1024,
+    height: 1536,
+    format: 'vertical 2:3 Provider canvas; compose crop-safe for final 3:4 normalization',
+  }),
+});
+type AiImageSandboxRequestProfile = keyof typeof REQUEST_PROFILES;
 const EDIT_OPERATIONS = new Set<AiImageSandboxEditOperation>([
   'IMAGE_TO_IMAGE',
   'FULL_EDIT',
@@ -38,30 +50,32 @@ const SANDBOX_OPERATIONS = new Set<AiImageSandboxOperation>([
   'TEXT_TO_IMAGE',
   ...EDIT_OPERATIONS,
 ]);
-const FIXED_PROMPTS: Record<AiImageSandboxOperation, string> = {
-  TEXT_TO_IMAGE: [
-    'Create one square marketplace product image of a plain white ceramic mug.',
+function fixedPrompt(
+  operation: AiImageSandboxOperation,
+  profile: (typeof REQUEST_PROFILES)[AiImageSandboxRequestProfile],
+): string {
+  if (operation === 'TEXT_TO_IMAGE') return [
+    `Create one ${profile.format} marketplace product image of a plain white ceramic mug.`,
     'Use a neutral light-gray studio background, realistic lighting, and no visible text, logo, watermark, or extra object.',
-  ].join(' '),
-  IMAGE_TO_IMAGE: [
+  ].join(' ');
+  if (operation === 'IMAGE_TO_IMAGE') return [
     'Use the supplied source image as the only visual reference.',
     'Preserve the primary product identity, shape, colors, and proportions.',
-    'Create one square marketplace hero image on a clearly visible soft warm-beige studio background.',
+    `Create one ${profile.format} marketplace hero image on a clearly visible soft warm-beige studio background.`,
     'Do not add visible text, logos, watermarks, or extra objects.',
-  ].join(' '),
-  FULL_EDIT: [
-    'Restyle the complete supplied product image as a clean square marketplace hero image.',
+  ].join(' ');
+  if (operation === 'FULL_EDIT') return [
+    `Restyle the complete supplied product image as a clean ${profile.format} marketplace hero image.`,
     'Preserve the primary product identity, shape, colors, and proportions.',
     'Use realistic studio lighting and a neutral light-gray background.',
     'Do not add visible text, logos, watermarks, or extra objects.',
-  ].join(' '),
-  INPAINT: [
+  ].join(' ');
+  return [
     'Modify only the transparent mask region of the supplied product image.',
     'Fill that region with a soft light-blue studio background that matches the existing lighting.',
     'Preserve every unmasked product detail and do not add text, logos, watermarks, or extra objects.',
-  ].join(' '),
-};
-const OUTPUT_SIZE = '1024x1024';
+  ].join(' ');
+}
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type DnsResolver = (hostname: string) => Promise<Array<{ address: string }>>;
 
@@ -102,6 +116,49 @@ function requiredAdapterRevision(environment: NodeJS.ProcessEnv) {
     );
   }
   return value;
+}
+
+export async function resolveAiImageSandboxRepositoryRevision(repositoryRoot: string): Promise<string> {
+  try {
+    const deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
+      .trim()
+      .toLowerCase();
+    if (!FULL_GIT_OID_PATTERN.test(deployedRevision)) throw new Error('DEPLOYED_COMMIT is invalid');
+    return deployedRevision;
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  let revision = '';
+  try {
+    const result = await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: repositoryRoot,
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    revision = result.stdout.trim().toLowerCase();
+  } catch {
+    // Report one stable sandbox-domain error below.
+  }
+  if (FULL_GIT_OID_PATTERN.test(revision)) {
+    try {
+      const status = await execFileAsync(
+        'git',
+        ['status', '--porcelain=v1', '--untracked-files=no'],
+        { cwd: repositoryRoot, windowsHide: true, timeout: 10_000 },
+      );
+      if (status.stdout.trim()) {
+        throw Object.assign(new Error('The sandbox repository has tracked worktree changes'), {
+          code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
+        });
+      }
+      return revision;
+    } catch (error: any) {
+      if (error?.code === 'SANDBOX_ADAPTER_WORKTREE_DIRTY') throw error;
+    }
+  }
+  throw Object.assign(new Error('The sandbox could not bind the adapter to deployed code'), {
+    code: 'SANDBOX_ADAPTER_REVISION_UNAVAILABLE',
+  });
 }
 
 function sha256(value: Buffer | string) {
@@ -296,23 +353,26 @@ export async function runAiImageProviderSingleSubmit(
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
   const credentialRevision = requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment);
   const adapterRevision = requiredAdapterRevision(environment);
-  try {
-    const deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
-      .trim()
-      .toLowerCase();
-    if (!FULL_GIT_OID_PATTERN.test(deployedRevision) || deployedRevision !== adapterRevision) {
-      throw Object.assign(new Error('Adapter revision does not match DEPLOYED_COMMIT'), {
-        code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
-      });
-    }
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
+  const repositoryRevision = await resolveAiImageSandboxRepositoryRevision(repositoryRoot);
+  if (repositoryRevision !== adapterRevision) {
+    throw Object.assign(new Error('Adapter revision does not match the deployed code'), {
+      code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
+    });
   }
   const operationValue = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION', environment);
   if (!SANDBOX_OPERATIONS.has(operationValue as AiImageSandboxOperation)) {
     throw new Error('AI_IMAGE_SANDBOX_OPERATION is unsupported');
   }
   const operation = operationValue as AiImageSandboxOperation;
+  const requestProfileValue = requiredEnvironment('AI_IMAGE_SANDBOX_REQUEST_PROFILE', environment);
+  if (!Object.hasOwn(REQUEST_PROFILES, requestProfileValue)) {
+    throw Object.assign(new Error('AI_IMAGE_SANDBOX_REQUEST_PROFILE is unsupported'), {
+      code: 'SANDBOX_REQUEST_PROFILE_INVALID',
+    });
+  }
+  const requestProfile = requestProfileValue as AiImageSandboxRequestProfile;
+  const profile = REQUEST_PROFILES[requestProfile];
+  const outputSize = `${profile.width}x${profile.height}`;
   const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
   const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
   const parsedBaseUrl = new URL(apiBase);
@@ -377,19 +437,22 @@ export async function runAiImageProviderSingleSubmit(
   await ensurePrivateDirectory(outputDirectory);
   const endpoint = new URL(`${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`).toString();
   const endpointSha256 = sha256(endpoint);
-  const prompt = FIXED_PROMPTS[operation];
+  const prompt = fixedPrompt(operation, profile);
   const sourceSha256 = source ? [source.sha256] : [];
   const maskSha256 = mask?.sha256 || null;
   const requestContract = {
     operation,
+    requestProfile,
     endpoint,
     n: 1,
-    width: 1024,
-    height: 1024,
-    size: OUTPUT_SIZE,
+    width: profile.width,
+    height: profile.height,
+    size: outputSize,
     promptSha256: sha256(prompt),
     sourceSha256,
+    sourceDimensions: source ? [{ width: source.width, height: source.height }] : [],
     maskSha256,
+    maskDimensions: mask ? { width: mask.width, height: mask.height } : null,
   };
   const claim = await claimAiImageSandboxOperation({
     directory: resolve(outputDirectory, 'intents'),
@@ -427,7 +490,7 @@ export async function runAiImageProviderSingleSubmit(
         endpoint,
         model,
         promptSha256: requestContract.promptSha256,
-        size: OUTPUT_SIZE,
+        size: outputSize,
         n: 1,
       },
       ...guardedTransport,
@@ -438,7 +501,7 @@ export async function runAiImageProviderSingleSubmit(
         operation,
         model,
         promptSha256: requestContract.promptSha256,
-        size: OUTPUT_SIZE,
+        size: outputSize,
         n: 1,
         sourceSha256: requestContract.sourceSha256,
         maskSha256: requestContract.maskSha256,
@@ -459,8 +522,8 @@ export async function runAiImageProviderSingleSubmit(
         prompt,
         negativePrompt: null,
         count: 1,
-        width: 1024,
-        height: 1024,
+        width: profile.width,
+        height: profile.height,
         model,
       });
     } else {
@@ -471,8 +534,8 @@ export async function runAiImageProviderSingleSubmit(
         operation,
         prompt,
         negativePrompt: null,
-        width: 1024,
-        height: 1024,
+        width: profile.width,
+        height: profile.height,
         model,
         images: [source!.image],
         mask: mask?.image || null,
@@ -498,6 +561,7 @@ export async function runAiImageProviderSingleSubmit(
     operationId,
     state: 'SUCCEEDED',
     operation,
+    requestProfile,
     credentialRevision,
     adapterRevision,
     provider: 'custom-openai-compatible',
@@ -506,7 +570,7 @@ export async function runAiImageProviderSingleSubmit(
     promptSha256: requestContract.promptSha256,
     sourceSha256: requestContract.sourceSha256,
     maskSha256: requestContract.maskSha256,
-    requestedSize: OUTPUT_SIZE,
+    requestedSize: outputSize,
     createRequests,
     imageCount: 1,
     mimeType: image.mimeType,
@@ -544,13 +608,14 @@ export async function runAiImageProviderSingleSubmit(
         provider: 'custom-openai-compatible',
         model,
         operation,
+        requestProfile,
         endpointSha256,
         credentialRevision,
         adapterRevision,
         promptSha256: requestContract.promptSha256,
         sourceSha256: requestContract.sourceSha256,
         maskSha256: requestContract.maskSha256,
-        requestedSize: OUTPUT_SIZE,
+        requestedSize: outputSize,
         createRequests,
         providerRequestIdHash: failureRequestIdHash(error, evidence.providerRequestIdHash),
         usage: null,

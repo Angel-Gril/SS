@@ -6,6 +6,7 @@ import {
   AI_MEDIA_INPAINT_TEMPLATE_KEY,
   AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
   AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+  AI_PROMPT_SAFETY_POLICY,
   AiPromptTemplateService,
   InMemoryAiPromptTemplateStore,
   checksumAiPromptRevision,
@@ -15,7 +16,7 @@ import {
 
 const ACTOR_ID = 'admin-1';
 const TEMPLATE_KEY = 'text-to-image.base';
-const SAFETY_POLICY = "Preserve the product's identity. Do not invent product facts, certifications, logos, or visible claims.";
+const SAFETY_POLICY = AI_PROMPT_SAFETY_POLICY;
 
 function revision(overrides: Record<string, unknown> = {}) {
   return {
@@ -114,6 +115,8 @@ describe('AI prompt templates', () => {
     });
 
     expect(rendered.resolvedPrompt).toContain(SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('intrinsic product, brand, label, and packaging print');
+    expect(rendered.resolvedPrompt).toContain('external promotional overlays');
     expect(rendered.resolvedPrompt).toContain('Replace the product with a different branded item');
   });
 
@@ -179,6 +182,7 @@ describe('AI prompt templates', () => {
     });
     expect(rendered.outputMode).toBe('media_candidate');
     expect(rendered.resolvedPrompt).toContain(AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('intrinsic product, brand, label, and packaging print');
     expect(rendered.resolvedPrompt).toContain('{"goal":"sku_hero"}');
     expect(rendered.resolvedNegativePrompt).toContain('preserve_product_identity');
   });
@@ -209,6 +213,7 @@ describe('AI prompt templates', () => {
     });
     expect(rendered.outputMode).toBe('media_candidate');
     expect(rendered.resolvedPrompt).toContain(AI_MEDIA_EDIT_SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('intrinsic product, brand, label, and packaging print');
     expect(rendered.resolvedPrompt).toContain('Change only the background lighting');
     expect(rendered.resolvedNegativePrompt).toContain('logos');
   });

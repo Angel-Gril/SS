@@ -31,6 +31,8 @@ function input(path: string, operationId = 'sandbox-operation-0001') {
       n: 1,
       width: 1024,
       height: 1024,
+      apiKey: 'must-never-be-persisted',
+      rawResponse: { authorization: 'must-never-be-persisted' },
     },
     quotedCostCents: 10,
     maximumCostCents: 20,
@@ -58,6 +60,7 @@ describe('single-submit AI image sandbox guard', () => {
     });
     expect(stored).not.toContain('Authorization');
     expect(stored).not.toContain('apiKey');
+    expect(stored).not.toContain('must-never-be-persisted');
     expect(stored).not.toContain('https://relay.example');
     if (process.platform !== 'win32') {
       expect((await stat(path)).mode & 0o777).toBe(0o700);
@@ -207,7 +210,7 @@ describe('single-submit AI image sandbox guard', () => {
     form.append('prompt', prompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image[]', new Blob([source], { type: 'image/png' }), 'source.png');
+    form.append('image', new Blob([source], { type: 'image/png' }), 'source.png');
 
     await guarded.fetch('https://relay.example/v1/images/edits', { method: 'POST', body: form });
     await expect(guarded.fetch('https://relay.example/v1/images/edits', { method: 'POST', body: form }))
@@ -243,7 +246,7 @@ describe('single-submit AI image sandbox guard', () => {
     form.append('prompt', prompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image[]', new Blob([source], { type: 'image/png' }), 'source.png');
+    form.append('image', new Blob([source], { type: 'image/png' }), 'source.png');
     form.append('mask', new Blob([disguisedJpeg], { type: 'image/png' }), 'mask.png');
 
     await expect(guarded.fetch('https://relay.example/v1/images/edits', { method: 'POST', body: form }))
@@ -273,7 +276,7 @@ describe('single-submit AI image sandbox guard', () => {
     form.append('prompt', prompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image[]', new Blob([disguisedJpeg], { type: 'image/png' }), 'source.png');
+    form.append('image', new Blob([disguisedJpeg], { type: 'image/png' }), 'source.png');
 
     await expect(guarded.fetch('https://relay.example/v1/images/edits', { method: 'POST', body: form }))
       .rejects.toThrow('unexpected multipart contract');
@@ -306,7 +309,7 @@ describe('single-submit AI image sandbox guard', () => {
     form.append('prompt', prompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image[]', new Blob([source], { type: 'image/png' }), 'source.png');
+    form.append('image', new Blob([source], { type: 'image/png' }), 'source.png');
 
     await expect(guarded.fetch('https://relay.example/v1/images/edits', { method: 'POST', body: form }))
       .rejects.toThrow('connection ended after dispatch');

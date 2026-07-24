@@ -1,6 +1,6 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
-import { aiImageRoutes } from '../routes/ai-images.js';
+import { aiImageRoutes, isPaidAiImageEditCanvasSupported } from '../routes/ai-images.js';
 import type { AiImageJobRecord, AiImageJobRepository } from '../services/ai-image-jobs.js';
 
 const baseJob: AiImageJobRecord = {
@@ -72,6 +72,15 @@ async function buildApp(
 }
 
 describe('AI image job routes', () => {
+  it.each([
+    ['fake', 900, 1200, true],
+    ['custom', 1024, 1536, true],
+    ['custom', 900, 1200, false],
+    ['openai-images', 1024, 1365, false],
+  ])('checks paid edit canvas support before quota work (%s %dx%d)', (provider, width, height, supported) => {
+    expect(isPaidAiImageEditCanvasSupported(provider, width, height)).toBe(supported);
+  });
+
   it('creates and enqueues a new owner-scoped job', async () => {
     const { app, repository, enqueue } = await buildApp();
     const response = await app.inject({ method: 'POST', url: '/jobs', payload: { prompt: 'photo', count: 1, width: 1024, height: 1024, idempotencyKey: 'idem-0001' } });

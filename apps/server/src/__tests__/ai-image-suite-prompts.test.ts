@@ -221,7 +221,13 @@ describe('AI image suite prompt freeze', () => {
 
     const heroVariables = batch.items[0]!.variables;
     expect(JSON.parse(String(heroVariables.slotSpecJson))).toMatchObject({
-      version: 'ozon-image-slot-policy/v1', goal: 'sku_hero', visibleTextPolicy: 'NO_VISIBLE_TEXT',
+      version: 'ozon-image-slot-policy/v1',
+      goal: 'sku_hero',
+      visibleTextPolicy: 'NO_VISIBLE_TEXT',
+      compositionGuidance: expect.arrayContaining([
+        expect.stringContaining('single SKU'),
+        expect.stringContaining('70-85%'),
+      ]),
     });
     expect(JSON.parse(String(heroVariables.verifiedFactsJson)).facts).toEqual([
       expect.objectContaining({ path: '/material', value: 'steel' }),
@@ -236,6 +242,11 @@ describe('AI image suite prompt freeze', () => {
     expect(JSON.stringify(heroVariables)).not.toContain('asset-1');
     expect(JSON.stringify(heroVariables)).not.toContain(sha('a'));
 
+    const sceneSlot = JSON.parse(String(batch.items[1]!.variables.slotSpecJson));
+    expect(sceneSlot.compositionGuidance).toEqual(expect.arrayContaining([
+      expect.stringContaining('realistic use context'),
+      expect.stringContaining('primary subject'),
+    ]));
     const sceneFacts = JSON.parse(String(batch.items[1]!.variables.verifiedFactsJson)).facts;
     expect(sceneFacts).toEqual([expect.objectContaining({ path: '/material', value: 'steel' })]);
 
@@ -245,10 +256,138 @@ describe('AI image suite prompt freeze', () => {
     expect(committed.prompts.map((prompt) => prompt.templateReleaseId)).toEqual(['release-7', 'release-7']);
     expect(committed.prompts.every((prompt) => (
       prompt.resolvedPrompt.includes('Preserve the exact product')
+      && prompt.resolvedPrompt.includes('Russian Cyrillic')
+      && prompt.resolvedPrompt.includes('thumbnail')
       && !prompt.resolvedNegativePrompt.includes('Preserve the exact product')
       && prompt.resolvedNegativePrompt.includes('altered product identity')
+      && prompt.resolvedNegativePrompt.includes('source-language promotional overlays')
     ))).toBe(true);
     expect(JSON.stringify(committed)).not.toContain('https://source.example');
+  });
+
+  it('uses neutral no-claim compositions when a sensitive gallery goal has no relevant fact', async () => {
+    const sensitiveGoals = ['function', 'fitment', 'spec', 'package'] as const;
+    const sensitiveSlots = sensitiveGoals.map((goal, ordinal) => slot({
+      id: `slot-${goal}`,
+      ordinal,
+      slotKey: `sku:sku-1:${goal}`,
+      goal,
+      ownershipLevel: 'sku',
+      ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'],
+      factEvidenceIds: ['fact-title'],
+    }));
+    const repo = repository({
+      loadAuthority: vi.fn(async () => ({
+        kind: 'ready' as const,
+        authority: authority({
+          slots: sensitiveSlots,
+          planPayload: {
+            compatibilityGroups: [],
+            verifiedFacts: [{
+              path: '/facts/title',
+              value: 'White ceramic mug',
+              evidenceIds: ['fact-title'],
+            }],
+          },
+        }),
+      })),
+    });
+    const resolver = templateResolver();
+
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: resolver }).freeze(request);
+
+    const batch = vi.mocked(resolver.resolveTemplateBatch).mock.calls[0]![0];
+    expect(batch.items).toHaveLength(sensitiveGoals.length);
+    for (const [index, goal] of sensitiveGoals.entries()) {
+      const slotSpec = JSON.parse(String(batch.items[index]!.variables.slotSpecJson));
+      expect(slotSpec).toMatchObject({ goal, goalEvidenceStatus: 'NEUTRAL_FALLBACK' });
+      expect(slotSpec.compositionGuidance.join(' ')).toMatch(/no verified .* fact/i);
+      expect(slotSpec.compositionGuidance.join(' ')).toMatch(/no .* claim|do not .* claim/i);
+    }
+  });
+
+  it('keeps the fact-bound function composition when a relevant verified attribute exists', async () => {
+    const functionSlot = slot({
+      id: 'slot-function',
+      ordinal: 0,
+      slotKey: 'sku:sku-1:function',
+      goal: 'function',
+      ownershipLevel: 'sku',
+      ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'],
+      factEvidenceIds: ['fact-function-name', 'fact-function-value'],
+    });
+    const repo = repository({
+      loadAuthority: vi.fn(async () => ({
+        kind: 'ready' as const,
+        authority: authority({
+          slots: [functionSlot],
+          planPayload: {
+            compatibilityGroups: [],
+            verifiedFacts: [{
+              path: '/skus/sku-1/attributes/0',
+              value: { name: '功能', value: '一键开盖' },
+              evidenceIds: ['fact-function-name', 'fact-function-value'],
+              skuKeys: ['sku-1'],
+            }],
+          },
+        }),
+      })),
+    });
+    const resolver = templateResolver();
+
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: resolver }).freeze(request);
+
+    const batch = vi.mocked(resolver.resolveTemplateBatch).mock.calls[0]![0];
+    const slotSpec = JSON.parse(String(batch.items[0]!.variables.slotSpecJson));
+    expect(slotSpec).toMatchObject({ goal: 'function', goalEvidenceStatus: 'VERIFIED_FACTS' });
+    expect(slotSpec.compositionGuidance).toEqual(expect.arrayContaining([
+      expect.stringContaining('verified function'),
+    ]));
+  });
+
+  it.each([
+    null,
+    '',
+    { name: '功能', value: null },
+    { name: '功能', value: '' },
+    false,
+  ])('does not treat an empty sensitive fact value as verified evidence (%j)', async (value) => {
+    const functionSlot = slot({
+      id: 'slot-function-empty',
+      ordinal: 0,
+      slotKey: 'sku:sku-1:function-empty',
+      goal: 'function',
+      ownershipLevel: 'sku',
+      ownershipKey: 'sku-1',
+      candidateIds: ['candidate-1'],
+      factEvidenceIds: ['fact-function-empty'],
+    });
+    const repo = repository({
+      loadAuthority: vi.fn(async () => ({
+        kind: 'ready' as const,
+        authority: authority({
+          slots: [functionSlot],
+          planPayload: {
+            compatibilityGroups: [],
+            verifiedFacts: [{
+              path: '/skus/sku-1/attributes/0/功能',
+              value,
+              evidenceIds: ['fact-function-empty'],
+              skuKeys: ['sku-1'],
+            }],
+          },
+        }),
+      })),
+    });
+    const resolver = templateResolver();
+
+    await createAiImageSuitePromptService({ repository: repo, templateResolver: resolver }).freeze(request);
+
+    const batch = vi.mocked(resolver.resolveTemplateBatch).mock.calls[0]![0];
+    const slotSpec = JSON.parse(String(batch.items[0]!.variables.slotSpecJson));
+    expect(slotSpec).toMatchObject({ goalEvidenceStatus: 'NEUTRAL_FALLBACK' });
   });
 
   it('returns exact response-loss replay before loading mutable source or resolving templates', async () => {

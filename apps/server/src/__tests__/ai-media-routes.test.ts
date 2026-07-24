@@ -822,6 +822,67 @@ describe('AI media workflow routes', () => {
     expect(enqueueEdit).not.toHaveBeenCalled();
   });
 
+  it.each(['FULL_EDIT', 'INPAINT'] as const)(
+    'rejects a historical paid %s retry with an unsupported canvas before quota or enqueue side effects',
+    async (operation) => {
+      const { app, mediaWorkflowService, enqueueEdit } = await build(
+        true, 'owner-1', false, 'fake', true, false, true, 'oss', true,
+        true, true,
+      );
+      mediaWorkflowService.get.mockResolvedValueOnce({
+        ...workflow,
+        operation,
+        jobs: [{
+          ...workflow.jobs![0],
+          operation,
+          provider: 'custom',
+          model: 'gpt-image-1',
+          width: 900,
+          height: 1200,
+          estimatedCostCents: 5,
+        }],
+      });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/workflows/workflow-1/retry',
+        payload: { expectedRevision: 1, idempotencyKey: `legacy-paid-${operation.toLowerCase()}` },
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json()).toMatchObject({ code: 'UNSUPPORTED_PROVIDER_EDIT_DIMENSIONS' });
+      expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+      expect(enqueueEdit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a historical paid image-to-image retry with an unsupported canvas before quota or enqueue side effects', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'IMAGE_TO_IMAGE',
+      jobs: [{
+        ...workflow.jobs![0],
+        provider: 'custom',
+        model: 'gpt-image-1',
+        width: 900,
+        height: 1200,
+        estimatedCostCents: 5,
+      }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 1, idempotencyKey: 'legacy-paid-image-to-image' },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: 'UNSUPPORTED_PROVIDER_EDIT_DIMENSIONS' });
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('authenticates edit-mask requests before parsing their large JSON body', async () => {
     const app = Fastify();
     const rateCheck = vi.fn(async () => ({ allowed: true as const }));

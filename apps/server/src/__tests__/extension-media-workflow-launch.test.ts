@@ -835,8 +835,9 @@ describe('extension standalone media launch', () => {
     expect(state.enqueueGeneration).toHaveBeenCalledWith('generation-job-1');
   });
 
-  it('freezes a paid full-image edit quote against the internalized source dimensions', async () => {
+  it('freezes a paid full-image edit quote against a supported internalized source canvas', async () => {
     const state = setupV2({ production: true, readiness: paidStandaloneReadiness });
+    state.internalizeSource.mockResolvedValue({ id: 'source-asset-1', width: 1024, height: 1536 });
 
     await expect(state.launch(input({ command: v2Command('FULL_EDIT') }))).resolves.toMatchObject({
       action: 'CREATE_WORKFLOW', operation: 'FULL_EDIT', status: 'QUEUED', replayed: false,
@@ -844,8 +845,8 @@ describe('extension standalone media launch', () => {
     expect(state.createImageEdit).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'FULL_EDIT',
       sourceAssetId: 'source-asset-1',
-      width: 640,
-      height: 480,
+       width: 1024,
+       height: 1536,
       provider: 'openai-images',
       model: 'gpt-image-1',
       estimatedCostCents: 9,
@@ -855,12 +856,22 @@ describe('extension standalone media launch', () => {
         model: 'gpt-image-1',
         unitCostCents: 9,
         imageCount: 1,
-        width: 640,
-        height: 480,
+         width: 1024,
+         height: 1536,
         maximumCostCents: 9,
       }),
     }));
     expect(state.enqueueEdit).toHaveBeenCalledWith('edit-job-1');
+  });
+
+  it('rejects an unsupported paid full-image edit canvas before quote or workflow creation', async () => {
+    const state = setupV2({ production: true, readiness: paidStandaloneReadiness });
+
+    await expect(state.launch(input({ command: v2Command('FULL_EDIT') }))).rejects.toEqual(
+      expect.objectContaining({ code: 'MEDIA_PROVIDER_NOT_ALLOWED' }),
+    );
+    expect(state.createImageEdit).not.toHaveBeenCalled();
+    expect(state.enqueueEdit).not.toHaveBeenCalled();
   });
 
   it.each([

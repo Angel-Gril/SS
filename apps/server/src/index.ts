@@ -482,6 +482,7 @@ const sourceListingAiCopyService = createSourceListingAiCopyService({
         return [field, {
           resolvedPrompt: prompt.resolved.resolvedPrompt,
           resolvedNegativePrompt: prompt.resolved.resolvedNegativePrompt,
+          registryAuthority: prompt.registryAuthority,
         }];
       })),
     });

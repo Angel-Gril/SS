@@ -16,7 +16,7 @@ Wildcard model entries exist only to avoid breaking historical text-to-image job
 
 ## Required Evidence Before Enabling A Capability
 
-- Exact provider and model request shape, including input transport and size limits.
+- Exact provider, normalized endpoint digest, model, request profile, request shape, input transport, size, and verified reference-count limits.
 - Result form and maximum fetch/poll window; temporary URLs must be internalized immediately.
 - Cancellation and retry behavior, including accepted-but-unrecorded reconciliation.
 - Measured cost or a bounded reservation estimate.
@@ -35,8 +35,9 @@ One explicitly confirmed local request characterized the configured custom OpenA
 - local visual inspection confirmed one nonblank, text-free studio product image;
 - the image and sanitized local report remain under ignored `tmp/`; API credentials and the raw response were not persisted.
 - the reusable sandbox now claims an immutable operation intent, fingerprints the complete normalized API Base, verifies the exact endpoint plus prompt hash/size/allowed body fields, pins the validated public DNS records for the actual connection, and rejects a second POST across retries.
+- the current sandbox profiles distinguish `1024x1024` square from a `1024x1536` (2:3) Provider portrait canvas that is normalized crop-safe to the final 3:4 Ozon slot, and single-image multipart fields from unverified multi-reference requests.
 
-This is a transport smoke, not `sandbox-verified` capability evidence. Actual price, repeated success rate, quality corpus thresholds, image-to-image, edits, masks, async tasks and image translation remain unverified and disabled.
+This is a transport smoke, not `sandbox-verified` capability evidence. It used a different model from the current international configuration. Actual price, repeated success rate, Ozon portrait quality, image-to-image, edits, masks, async tasks and image translation remain unverified and disabled.
 
 ## Controlled DashScope Translation A/B (2026-07-24)
 
@@ -51,7 +52,7 @@ The result demonstrates that glossary control is required for this tested sample
 
 ## Listing-Copy Prompt Foundation
 
-`listing-copy.title` and `listing-copy.description` use versioned Prompt revisions with template-specific variable schemas. Their non-editable safety prefix requires supplied source facts and confirmed attributes, prohibits invented claims, and labels the output as `listing_copy_candidate`.
+`listing-copy.title` and `listing-copy.description` use versioned Prompt revisions with template-specific variable schemas. Their non-editable safety prefix requires supplied source facts and confirmed attributes, prohibits invented claims, and labels the output as `listing_copy_candidate`. Managed system bootstrap releases upgrade to the current richer Ozon defaults, while any administrator-published release remains authoritative and is never replaced by bootstrap reconciliation.
 
 Fact JSON is parsed as an object, recursively checked for sensitive transport/account fields, bounded by UTF-8 bytes, depth and node count, then serialized deterministically before template rendering. Text variables and the combined variable set have separate byte limits. Admin preview, PASS testing and runtime resolution all enforce the final compiled Prompt limits. The frozen resolution snapshot records the candidate-only output mode and variable-schema version.
 
