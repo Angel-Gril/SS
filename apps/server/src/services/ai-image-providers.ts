@@ -71,6 +71,9 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_MODEL_CATALOG_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_MODEL_CATALOG_ENTRIES = 10_000;
+const MAX_PROVIDER_MODEL_ID_LENGTH = 500;
 const MAX_OPENAI_EDIT_INPUT_IMAGES = 16;
 export const MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES = 50 * 1024 * 1024;
 export const OPENAI_COMPATIBLE_IMAGE_EDIT_SIZES = Object.freeze([
@@ -123,6 +126,35 @@ export function normalizeOpenAiImagesApiBase(baseUrl: string) {
   }
   parsed.pathname = /\/v1$/i.test(path) ? path : `${path}/v1`;
   return withoutTrailingSlash(parsed.toString());
+}
+
+export function isOfficialOpenAiImagesApiBase(baseUrl: string): boolean {
+  try {
+    return normalizeOpenAiImagesApiBase(baseUrl) === 'https://api.openai.com/v1';
+  } catch {
+    return false;
+  }
+}
+
+export function aiImageCredentialEndpointIdentity(provider: string, baseUrl: string): string | null {
+  if (provider === 'openai-images' || provider === 'custom') {
+    if (provider === 'custom' && !baseUrl.trim()) return null;
+    try {
+      return `openai-compatible:${normalizeOpenAiImagesApiBase(baseUrl)}`;
+    } catch {
+      return null;
+    }
+  }
+  if (provider === 'dashscope-wanx') {
+    try {
+      const parsed = new URL(dashScopeApiBase(baseUrl));
+      if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+      return `dashscope:${withoutTrailingSlash(parsed.toString())}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function delay(ms: number) {
@@ -374,9 +406,9 @@ async function readBodyWithLimit(response: Response, maxBytes: number): Promise<
   return Buffer.concat(chunks, total);
 }
 
-async function readJson(response: Response): Promise<any> {
+async function readJson(response: Response, maxBytes = MAX_JSON_BYTES): Promise<any> {
   try {
-    const raw = await readBodyWithLimit(response, MAX_JSON_BYTES);
+    const raw = await readBodyWithLimit(response, maxBytes);
     return raw.length ? JSON.parse(raw.toString('utf8')) : null;
   } catch (error) {
     if (error instanceof AiImageJobError) throw error;
@@ -391,18 +423,19 @@ async function requestJson(
   url: string,
   init: RequestInit,
   timeoutMs: number,
+  maxJsonBytes = MAX_JSON_BYTES,
 ) {
   return fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
     if (!response.ok) {
       let body: any = null;
       try {
-        body = await readJson(response);
+        body = await readJson(response, maxJsonBytes);
       } catch {
         // HTTP status remains authoritative when an error body is malformed or oversized.
       }
       throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
     }
-    return readJson(response);
+    return readJson(response, maxJsonBytes);
   });
 }
 
@@ -937,6 +970,14 @@ export function createDashScopeImageTranslationProvider(
 export async function testAiImageProviderConnection(config: AiImageConnectionConfig): Promise<AiImageConnectionResult> {
   const fetcher = config.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, config.timeoutMs || 10_000);
+  const configuredModel = config.model.trim();
+  if (!config.apiKey.trim() || config.model !== configuredModel || !configuredModel
+    || configuredModel.length > MAX_PROVIDER_MODEL_ID_LENGTH) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_CONFIG',
+      'AI image provider API key and a valid model are required',
+    );
+  }
   let url: string;
   let label: string;
   if (config.provider === 'openai-images' || config.provider === 'custom') {
@@ -946,8 +987,14 @@ export async function testAiImageProviderConnection(config: AiImageConnectionCon
         'Custom OpenAI-compatible image provider requires an explicit base URL',
       );
     }
+    if (config.provider === 'openai-images' && !isOfficialOpenAiImagesApiBase(config.baseUrl)) {
+      throw new AiImageJobError(
+        'INVALID_PROVIDER_CONFIG',
+        'OpenAI Images requires the official https://api.openai.com/v1 API base; use custom for relays',
+      );
+    }
     label = config.provider === 'custom' ? 'OpenAI-compatible Images' : 'OpenAI Images';
-    url = `${normalizeOpenAiImagesApiBase(config.baseUrl)}/models/${encodeURIComponent(config.model)}`;
+    url = `${normalizeOpenAiImagesApiBase(config.baseUrl)}/models`;
   } else if (config.provider === 'dashscope-wanx') {
     validateProviderUrl(dashScopeApiBase(config.baseUrl));
     if (!config.apiKey.trim() || !config.model.trim()) {
@@ -958,15 +1005,36 @@ export async function testAiImageProviderConnection(config: AiImageConnectionCon
   } else {
     throw new AiImageJobError('PROVIDER_DISABLED', 'AI image provider does not support a no-cost connection test');
   }
-  await requestJson(label, fetcher, config.apiKey, url, {
+  const catalog = await requestJson(label, fetcher, config.apiKey, url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${config.apiKey}` },
-  }, timeoutMs);
+  }, timeoutMs, MAX_MODEL_CATALOG_JSON_BYTES);
+  const models = Array.isArray(catalog?.data) ? catalog.data : [];
+  if (models.length > MAX_MODEL_CATALOG_ENTRIES) {
+    throw new AiImageJobError(
+      'PROVIDER_RESPONSE_TOO_LARGE',
+      'AI image provider model catalog contains too many entries',
+    );
+  }
+  const listed = models.some((entry: unknown) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const model = entry as Record<string, unknown>;
+    const identifier = typeof model.id === 'string'
+      ? model.id
+      : typeof model.model === 'string' ? model.model : '';
+    return identifier.length <= MAX_PROVIDER_MODEL_ID_LENGTH && identifier === configuredModel;
+  });
+  if (!configuredModel || catalog?.error || !listed) {
+    throw new AiImageJobError(
+      'UNSUPPORTED_PROVIDER_MODEL',
+      `${label} did not list the configured image model`,
+    );
+  }
   return {
     ok: true,
     provider: config.provider,
-    model: config.model,
+    model: configuredModel,
     verification: 'remote',
-    detail: `${label} authentication and model access verified`,
+    detail: `${label} authentication and model catalog access verified; generation and editing remain unverified`,
   };
 }

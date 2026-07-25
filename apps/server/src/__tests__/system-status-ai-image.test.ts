@@ -19,6 +19,14 @@ vi.mock('../config/system-config-schema.js', () => ({
 
 vi.mock('../services/ai-image-providers.js', () => ({
   testAiImageProviderConnection: mocks.testConnection,
+  aiImageCredentialEndpointIdentity: (provider: string, baseUrl: string) => {
+    if (provider === 'openai-images' || provider === 'custom') {
+      return `openai-compatible:${String(baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')}`;
+    }
+    return provider === 'dashscope-wanx'
+      ? `dashscope:${String(baseUrl).replace(/\/+$/, '')}`
+      : null;
+  },
 }));
 
 import { systemStatusRoutes } from '../routes/system-status.js';
@@ -114,6 +122,59 @@ describe('system status AI image connection test', () => {
       apiKey: 'sk-saved-provider-key',
     }));
     expect(response.body).not.toContain('sk-saved-provider-key');
+  });
+
+  it.each(['', 'sk-s***-key'])(
+    'never forwards the saved secret to a newly submitted endpoint for placeholder %j',
+    async (apiKey) => {
+      mocks.savedConfig.set('ai_image_provider', 'custom');
+      mocks.savedConfig.set('ai_image_base_url', 'https://saved-relay.example/v1');
+      mocks.savedConfig.set('ai_image_api_key', 'sk-saved-provider-key');
+      mocks.savedConfig.set('ai_image_model', 'image-model-v2');
+      const app = await createApp();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/test/ai-image',
+        payload: {
+          provider: 'custom',
+          baseUrl: 'https://new-relay.example/v1',
+          apiKey,
+          model: 'image-model-v2',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 0 });
+      expect(response.body).toContain('Base URL');
+      expect(response.body).not.toContain('sk-saved-provider-key');
+      expect(mocks.testConnection).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reuses the saved secret when only the compatible Provider label is corrected', async () => {
+    mocks.savedConfig.set('ai_image_provider', 'openai-images');
+    mocks.savedConfig.set('ai_image_base_url', 'https://images.example.test/v1');
+    mocks.savedConfig.set('ai_image_api_key', 'sk-saved-provider-key');
+    mocks.savedConfig.set('ai_image_model', 'image-model-v2');
+    const app = await createApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test/ai-image',
+      payload: {
+        provider: 'custom',
+        baseUrl: 'https://images.example.test/v1',
+        apiKey: '',
+        model: 'image-model-v2',
+      },
+    });
+
+    expect(response.json()).toMatchObject({ code: 1 });
+    expect(mocks.testConnection).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'custom',
+      apiKey: 'sk-saved-provider-key',
+    }));
   });
 
   it('rejects legacy extension tokens before loading or forwarding saved credentials', async () => {

@@ -39,6 +39,17 @@ One explicitly confirmed local request characterized the configured custom OpenA
 
 This is a transport smoke, not `sandbox-verified` capability evidence. It used a different model from the current international configuration. Actual price, repeated success rate, Ozon portrait quality, image-to-image, edits, masks, async tasks and image translation remain unverified and disabled.
 
+## Configured International Relay Observation (2026-07-24 to 2026-07-25)
+
+The current international third-party OpenAI-compatible relay and exact model `gpt-image-2` were checked while every production entry point remained dark.
+
+- One bounded `TEXT_TO_IMAGE` request returned one nonblank PNG (`1254x1254`, 1,382,065 bytes). Its private schema-v1 evidence records one create request and a stable output hash, but `actualCostCents` is still `null`; it is not sufficient for capability promotion.
+- `IMAGE_TO_IMAGE` was definitely rejected with HTTP 400 on both the earlier adapter and commit `9e62d86809a138fb8c8b26c08af119f6af5b5ee4`. The current request used the corrected single-image multipart field (`image`, not `image[]`) and the frozen `OPENAI_SQUARE_SINGLE_V1` profile.
+- Because `FULL_EDIT` and `INPAINT` use the same rejected `/images/edits` transport, no additional paid requests were sent. Neither operation is supported by current evidence.
+- The relay's model catalog lists `gpt-image-2`, but its model-detail route returns an HTTP-200 `model_not_found` envelope. Connection checks now validate the exact model against `/models` and explicitly state that catalog access does not verify generation or editing.
+
+The current relay is therefore a text-to-image-only candidate. Reference generation, full-image editing, masked inpaint, suite execution, tenant rollout and billing settlement remain blocked. Do not add a `sandbox-verified` registry entry or enable a production feature flag for this host/model until a compatible edit-capable model or endpoint passes a separately bounded acceptance.
+
 ## Controlled DashScope Translation A/B (2026-07-24)
 
 One controlled synthetic `en` to `ru` A/B exercised the official DashScope `qwen-mt-image` adapter while every production entry point remained dark. The reviewed semantic request inputs used the same source bytes, language pair, model, adapter and domain context; the terminology glossary was the only changed translation input.

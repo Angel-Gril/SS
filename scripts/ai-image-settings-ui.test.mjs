@@ -24,6 +24,14 @@ assert.match(source, /value: 'dashscope-wanx'/);
 assert.match(source, /value: 'openai-images'/);
 assert.match(source, /阿里云百炼 · 通义万相/);
 assert.match(source, /OpenAI Images/);
+assert.match(source, /isOfficialOpenAiImagesBaseUrl/);
+assert.match(source, /imageProviderEndpointMismatch/);
+assert.match(source, /normalized\.includes\('\?'\)/);
+assert.match(source, /normalized\.includes\('#'\)/);
+assert.match(source, /!parsed\.port/);
+assert.match(source, /normalizedPath === '' \|\| normalizedPath === '\/v1'/);
+assert.match(source, /当前 Base URL 是第三方中转/);
+assert.match(source, /切换为自定义网关/);
 
 assert.match(source, /ai_image_base_url/);
 assert.match(source, /ai_image_api_key/);

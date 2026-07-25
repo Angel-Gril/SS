@@ -2249,6 +2249,23 @@ const AI_IMAGE_PROVIDER_PRESETS = [
   },
 ] as const;
 
+function isOfficialOpenAiImagesBaseUrl(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized || normalized.includes('?') || normalized.includes('#')) return false;
+  try {
+    const parsed = new URL(normalized);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+    return parsed.protocol === 'https:'
+      && parsed.hostname.toLowerCase() === 'api.openai.com'
+      && !parsed.port
+      && !parsed.username
+      && !parsed.password
+      && (normalizedPath === '' || normalizedPath === '/v1');
+  } catch {
+    return false;
+  }
+}
+
 const AI_IMAGE_TRANSLATION_PROVIDER_PRESETS = [
   {
     value: 'disabled',
@@ -2310,8 +2327,12 @@ function AiSettingsPanel({
     (editing.ai_base_url || '').trim() &&
     (editing.ai_api_key || '').trim() &&
     (editing.ai_model || '').trim();
+  const imageProviderEndpointMismatch = imageProvider === 'openai-images'
+    && Boolean((editing.ai_image_base_url || '').trim())
+    && !isOfficialOpenAiImagesBaseUrl(editing.ai_image_base_url || '');
   const imageProviderReady =
     imageProvider !== 'disabled' &&
+    !imageProviderEndpointMismatch &&
     Boolean((editing.ai_image_base_url || '').trim()) &&
     Boolean((editing.ai_image_api_key || '').trim()) &&
     Boolean((editing.ai_image_model || '').trim());
@@ -2338,6 +2359,11 @@ function AiSettingsPanel({
       ai_image_base_url: nextProvider.baseUrl,
       ai_image_model: nextProvider.model,
     });
+  }
+
+  function switchImageProviderToCustomGateway() {
+    setImageTestResult(null);
+    setEditing({ ...editing, ai_image_provider: 'custom' });
   }
 
   function selectTranslationProvider(
@@ -2379,7 +2405,7 @@ function AiSettingsPanel({
       setImageTestResult({ ok: res.code === 1, message, fingerprint: testedFingerprint });
       toast({
         title: res.code === 1
-          ? configOnly ? '配置格式有效，凭据尚未验证' : '鉴权与模型访问正常'
+          ? configOnly ? '配置格式有效，凭据尚未验证' : '鉴权与模型目录正常'
           : '供应商配置检查失败',
         description: message,
         ...(res.code === 1 ? {} : { variant: 'destructive' as const }),
@@ -2519,7 +2545,7 @@ function AiSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">AI 生图基础平台</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    此处保存供应商参数。OpenAI-compatible 会检查鉴权与模型访问；DashScope
+                    此处保存供应商参数。OpenAI-compatible 只检查鉴权与模型目录，不验证生图或改图；DashScope
                     当前只校验配置格式。真实 Provider 的生产任务仍受精确模型、成本、租户和
                     费用门禁限制；检查通过不会自动开启工作流。
                   </p>
@@ -2549,7 +2575,7 @@ function AiSettingsPanel({
                   <Button
                     size="sm"
                     onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
-                    disabled={savingKey !== null}
+                    disabled={savingKey !== null || imageProviderEndpointMismatch}
                   >
                     {savingKey === 'group:AI 生图服务' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2579,6 +2605,26 @@ function AiSettingsPanel({
                   </button>
                 ))}
               </div>
+
+              {imageProviderEndpointMismatch && (
+                <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-950 md:flex-row md:items-center md:justify-between">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p className="text-xs leading-5">
+                      当前 Base URL 是第三方中转，不能标记为官方 OpenAI Images。
+                      请切换为自定义网关；现有域名、模型和密钥会保留。
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={switchImageProviderToCustomGateway}
+                  >
+                    切换为自定义网关
+                  </Button>
+                </div>
+              )}
 
               <div className="grid gap-3 md:grid-cols-2">
                 <ConfigInput

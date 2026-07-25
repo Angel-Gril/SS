@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  aiImageCredentialEndpointIdentity,
   createDashScopeWanxProvider,
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
@@ -20,6 +21,12 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
 }
 
 describe('AI image provider adapters', () => {
+  it('does not assign an endpoint identity to an empty custom Provider URL', () => {
+    expect(aiImageCredentialEndpointIdentity('custom', '')).toBeNull();
+    expect(aiImageCredentialEndpointIdentity('openai-images', ''))
+      .toBe('openai-compatible:https://api.openai.com/v1');
+  });
+
   it.each([
     [1024, 1024, true],
     [1024, 1536, true],
@@ -848,10 +855,12 @@ describe('AI image provider adapters', () => {
   });
 
   it('tests authentication and model access without creating an image', async () => {
-    const fetch = vi.fn().mockResolvedValue(json({ id: 'gpt-image-1' }));
+    const fetch = vi.fn().mockResolvedValue(json({
+      object: 'list', data: [{ id: 'gpt-image-1', object: 'model' }],
+    }));
 
     const result = await testAiImageProviderConnection({
-      provider: 'openai-images', baseUrl: 'https://api.openai.example/v1',
+      provider: 'openai-images', baseUrl: 'https://api.openai.com/v1',
       apiKey: 'secret', model: 'gpt-image-1', fetch, timeoutMs: 1000,
     });
 
@@ -860,13 +869,35 @@ describe('AI image provider adapters', () => {
     }));
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith(
-      'https://api.openai.example/v1/models/gpt-image-1',
+      'https://api.openai.com/v1/models',
       expect.objectContaining({ method: 'GET' }),
     );
   });
 
+  it('rejects a relay mislabeled as official OpenAI before sending credentials', async () => {
+    const fetch = vi.fn();
+
+    await expect(testAiImageProviderConnection({
+      provider: 'openai-images', baseUrl: 'https://relay.example/v1',
+      apiKey: 'secret', model: 'gpt-image-1', fetch, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'INVALID_PROVIDER_CONFIG' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a noncanonical model name before checking the catalog', async () => {
+    const fetch = vi.fn();
+
+    await expect(testAiImageProviderConnection({
+      provider: 'custom', baseUrl: 'https://relay.example/v1',
+      apiKey: 'secret', model: ' gpt-image-1 ', fetch, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'INVALID_PROVIDER_CONFIG' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('normalizes a custom OpenAI-compatible root URL through /v1 without creating an image', async () => {
-    const fetch = vi.fn().mockResolvedValue(json({ id: 'custom-image-model' }));
+    const fetch = vi.fn().mockResolvedValue(json({
+      object: 'list', data: [{ id: 'custom-image-model', object: 'model' }],
+    }));
 
     const result = await testAiImageProviderConnection({
       provider: 'custom', baseUrl: 'https://relay.example',
@@ -878,9 +909,49 @@ describe('AI image provider adapters', () => {
     }));
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith(
-      'https://relay.example/v1/models/custom-image-model',
+      'https://relay.example/v1/models',
       expect.objectContaining({ method: 'GET' }),
     );
+  });
+
+  it('rejects a provider that wraps model_not_found in an HTTP 200 response', async () => {
+    const fetch = vi.fn().mockResolvedValue(json({
+      error: {
+        type: 'invalid_request_error', code: 'model_not_found',
+        message: "The model 'missing-image-model' does not exist",
+      },
+    }));
+
+    await expect(testAiImageProviderConnection({
+      provider: 'custom', baseUrl: 'https://relay.example',
+      apiKey: 'secret', model: 'missing-image-model', fetch, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'UNSUPPORTED_PROVIDER_MODEL' });
+  });
+
+  it('rejects a successful model catalog response that omits the configured model', async () => {
+    const fetch = vi.fn().mockResolvedValue(json({
+      object: 'list', data: [{ id: 'other-image-model', object: 'model' }],
+    }));
+
+    await expect(testAiImageProviderConnection({
+      provider: 'custom', baseUrl: 'https://relay.example',
+      apiKey: 'secret', model: 'missing-image-model', fetch, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'UNSUPPORTED_PROVIDER_MODEL' });
+  });
+
+  it('bounds model catalog responses independently from image job JSON', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{"data":[]}', {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(3 * 1024 * 1024),
+      },
+    }));
+
+    await expect(testAiImageProviderConnection({
+      provider: 'custom', baseUrl: 'https://relay.example',
+      apiKey: 'secret', model: 'custom-image-model', fetch, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'PROVIDER_RESPONSE_TOO_LARGE' });
   });
 
   it('rejects a custom provider without an explicit base URL before sending credentials', async () => {

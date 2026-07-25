@@ -19,7 +19,10 @@ import {
   SMS_QUOTA_HASH_TAG,
 } from '../lib/sms/send-quota.js';
 import { getBackupRuntimeConfig, testBackupRemoteStorage } from '../services/backup.service.js';
-import { testAiImageProviderConnection } from '../services/ai-image-providers.js';
+import {
+  aiImageCredentialEndpointIdentity,
+  testAiImageProviderConnection,
+} from '../services/ai-image-providers.js';
 import {
   classifyObjectStorageProbeFailure,
   inferObjectStorageProvider,
@@ -853,7 +856,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     const submittedProvider = typeof body.provider === 'string' ? body.provider.trim() : '';
     const provider = submittedProvider || savedProvider;
     const baseUrl = Object.hasOwn(body, 'baseUrl') ? String(body.baseUrl || '').trim() : savedBaseUrl;
-    const model = Object.hasOwn(body, 'model') ? String(body.model || '').trim() : savedModel;
+    const model = Object.hasOwn(body, 'model') ? String(body.model || '') : savedModel;
     const submittedApiKey = Object.hasOwn(body, 'apiKey') ? String(body.apiKey || '').trim() : '';
     const maskedApiKey = (
       submittedApiKey.length >= 4
@@ -862,10 +865,25 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         || (Boolean(savedApiKey) && submittedApiKey === maskedSecretValue(savedApiKey))
       )
     );
-    const apiKey = submittedApiKey && !maskedApiKey ? submittedApiKey : savedApiKey;
+    const submittedEndpoint = aiImageCredentialEndpointIdentity(provider, baseUrl);
+    const savedEndpoint = aiImageCredentialEndpointIdentity(savedProvider, savedBaseUrl);
+    const canReuseSavedApiKey = Boolean(
+      savedApiKey
+      && submittedEndpoint
+      && submittedEndpoint === savedEndpoint,
+    );
+    const apiKey = submittedApiKey && !maskedApiKey
+      ? submittedApiKey
+      : canReuseSavedApiKey ? savedApiKey : '';
 
     if (provider === 'disabled') {
       return reply.send({ code: 0, msg: 'AI 生图供应商已禁用，未执行连接测试' });
+    }
+    if (!apiKey && savedApiKey && (maskedApiKey || !submittedApiKey) && !canReuseSavedApiKey) {
+      return reply.send({
+        code: 0,
+        msg: 'AI 生图 Base URL 已变化；为避免向新端点泄露旧密钥，请重新输入 API Key',
+      });
     }
     const missing = [
       !apiKey && 'API Key',

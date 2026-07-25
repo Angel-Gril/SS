@@ -19,6 +19,10 @@ import {
   isSensitiveConfigKey,
 } from '../config/system-config-schema.js';
 import { createPrismaAiUsageStore, normalizeAiUsageDate } from '../services/ai-usage.js';
+import {
+  aiImageCredentialEndpointIdentity,
+  isOfficialOpenAiImagesApiBase,
+} from '../services/ai-image-providers.js';
 import { getRuntimeMode } from '../adapters/runtime-config.js';
 import {
   AUTH_PROVIDER_PREFLIGHT_KEYS,
@@ -57,6 +61,13 @@ const PROTECTED_OZON_PUBLISHER_STAGE_KEYS = new Set<string>([
   'source_ozon_publisher_browser_one_click_stage',
   'source_ozon_publisher_extension_adapter_stage',
 ] as const satisfies readonly SystemConfigKey[]);
+
+const AI_IMAGE_PROVIDER_CONFIG_KEYS = new Set<SystemConfigKey>([
+  'ai_image_provider',
+  'ai_image_base_url',
+  'ai_image_api_key',
+  'ai_image_model',
+]);
 
 const SECRET_FIELDS: string[] = [];
 
@@ -294,8 +305,12 @@ async function applyConfigMutations(
   client: Pick<typeof prisma, 'systemConfig'>,
   inputs: readonly ConfigMutationInput[],
 ) {
+  const lookupKeys = new Set<SystemConfigKey>(inputs.map((item) => item.key));
+  if (inputs.some((item) => AI_IMAGE_PROVIDER_CONFIG_KEYS.has(item.key))) {
+    AI_IMAGE_PROVIDER_CONFIG_KEYS.forEach((key) => lookupKeys.add(key));
+  }
   const existingRows = await client.systemConfig.findMany({
-    where: { key: { in: inputs.map((item) => item.key) } },
+    where: { key: { in: [...lookupKeys] } },
   });
   const existingByKey = new Map(existingRows.map((row) => [row.key, row]));
   const prepared = inputs.map((item) => {
@@ -350,6 +365,68 @@ async function applyConfigMutations(
       : item.expectedRevision !== 0)
     .map((item) => item.key);
   if (staleKeys.length > 0) throw new SystemConfigRevisionConflictError(staleKeys);
+
+  if (changed.some((item) => AI_IMAGE_PROVIDER_CONFIG_KEYS.has(item.key))) {
+    const existingValue = (key: SystemConfigKey) => {
+      const row = existingByKey.get(key);
+      if (!row) return String(getDefaultValue(key));
+      try {
+        return decryptConfigValueStrict(key, row.value);
+      } catch {
+        throw new SystemConfigMutationError(
+          409,
+          'system_config_ai_image_config_unreadable',
+          'AI 生图配置无法解密，请刷新后重新输入供应商参数和 API Key',
+        );
+      }
+    };
+    const nextValue = (key: SystemConfigKey) => prepared.find((item) => item.key === key)?.displayValue
+      ?? existingValue(key);
+    const previousProvider = existingValue('ai_image_provider');
+    const previousBaseUrl = existingValue('ai_image_base_url');
+    const previousApiKey = existingValue('ai_image_api_key');
+    const nextProvider = nextValue('ai_image_provider');
+    const nextBaseUrl = nextValue('ai_image_base_url');
+    const nextModel = nextValue('ai_image_model');
+    if (nextProvider === 'custom' && !nextBaseUrl.trim()) {
+      throw new SystemConfigMutationError(
+        422,
+        'system_config_ai_image_provider_endpoint_mismatch',
+        '自定义 OpenAI-compatible 网关必须填写明确的 Base URL',
+      );
+    }
+    if (nextProvider === 'openai-images' && !isOfficialOpenAiImagesApiBase(nextBaseUrl)) {
+      throw new SystemConfigMutationError(
+        422,
+        'system_config_ai_image_provider_endpoint_mismatch',
+        'OpenAI Images 只允许官方 https://api.openai.com/v1；第三方中转请选择自定义网关',
+      );
+    }
+    if (nextProvider !== 'disabled'
+      && (nextModel !== nextModel.trim() || !nextModel.trim() || nextModel.length > 500)) {
+      throw new SystemConfigMutationError(
+        422,
+        'system_config_ai_image_model_invalid',
+        'AI 生图模型必须是 1-500 字符且不能包含首尾空格',
+      );
+    }
+    const nextEndpoint = aiImageCredentialEndpointIdentity(nextProvider, nextBaseUrl);
+    const previousEndpoint = aiImageCredentialEndpointIdentity(previousProvider, previousBaseUrl);
+    const apiKeyInput = inputs.find((item) => item.key === 'ai_image_api_key');
+    const apiKeyExplicitlyReentered = Boolean(
+      apiKeyInput && !isMaskedSecretPlaceholder(apiKeyInput.value),
+    );
+    if (nextProvider !== 'disabled'
+      && previousApiKey
+      && nextEndpoint !== previousEndpoint
+      && !apiKeyExplicitlyReentered) {
+      throw new SystemConfigMutationError(
+        422,
+        'system_config_ai_image_api_key_reentry_required',
+        'AI 生图 Base URL 已变化，请重新输入 API Key，旧密钥不会自动绑定到新端点',
+      );
+    }
+  }
 
   const preflightFailure = await preflightAuthProviderMutation(
     new Map(changed.map((item) => [item.key, item.displayValue] as const)),

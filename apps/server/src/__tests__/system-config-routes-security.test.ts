@@ -593,6 +593,149 @@ describe('SystemConfig route mutation security', () => {
     await app.close();
   });
 
+  it('rejects rebinding a masked AI image secret to a different endpoint', async () => {
+    state.rows.set('ai_image_provider', {
+      key: 'ai_image_provider', value: 'custom', revision: 2,
+    });
+    state.rows.set('ai_image_base_url', {
+      key: 'ai_image_base_url', value: 'https://old-relay.example/v1', revision: 3,
+    });
+    state.rows.set('ai_image_api_key', {
+      key: 'ai_image_api_key', value: 'sk-saved-provider-key', revision: 4,
+    });
+    state.rows.set('ai_image_model', {
+      key: 'ai_image_model', value: 'image-model-v2', revision: 1,
+    });
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'ai_image_provider', value: 'custom', expectedRevision: 2 },
+          { key: 'ai_image_base_url', value: 'https://new-relay.example/v1', expectedRevision: 3 },
+          { key: 'ai_image_api_key', value: 'sk-s***-key', expectedRevision: 4 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      errorCode: 'system_config_ai_image_api_key_reentry_required',
+    });
+    expect(state.rows.get('ai_image_base_url')?.value).toBe('https://old-relay.example/v1');
+    expect(state.rows.get('ai_image_api_key')?.value).toBe('sk-saved-provider-key');
+    await app.close();
+  });
+
+  it('allows correcting only the compatible Provider label without re-entering the secret', async () => {
+    state.rows.set('ai_image_provider', {
+      key: 'ai_image_provider', value: 'openai-images', revision: 2,
+    });
+    state.rows.set('ai_image_base_url', {
+      key: 'ai_image_base_url', value: 'https://relay.example/v1', revision: 3,
+    });
+    state.rows.set('ai_image_api_key', {
+      key: 'ai_image_api_key', value: 'sk-saved-provider-key', revision: 4,
+    });
+    state.rows.set('ai_image_model', {
+      key: 'ai_image_model', value: 'image-model-v2', revision: 1,
+    });
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'ai_image_provider', value: 'custom', expectedRevision: 2 },
+          { key: 'ai_image_base_url', value: 'https://relay.example/v1', expectedRevision: 3 },
+          { key: 'ai_image_api_key', value: 'sk-s***-key', expectedRevision: 4 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(state.rows.get('ai_image_provider')?.value).toBe('custom');
+    const { decryptConfigValue } = await import('../config/system-config-schema.js');
+    expect(decryptConfigValue(
+      'ai_image_api_key',
+      String(state.rows.get('ai_image_api_key')?.value),
+    )).toBe('sk-saved-provider-key');
+    await app.close();
+  });
+
+  it('rejects a third-party endpoint labeled as official OpenAI', async () => {
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'ai_image_provider', value: 'openai-images', expectedRevision: 0 },
+          { key: 'ai_image_base_url', value: 'https://relay.example/v1', expectedRevision: 0 },
+          { key: 'ai_image_api_key', value: 'sk-new-provider-key', expectedRevision: 0 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      errorCode: 'system_config_ai_image_provider_endpoint_mismatch',
+    });
+    expect(state.rows.has('ai_image_provider')).toBe(false);
+    await app.close();
+  });
+
+  it('rejects a custom Provider without an explicit Base URL', async () => {
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'ai_image_provider', value: 'custom', expectedRevision: 0 },
+          { key: 'ai_image_base_url', value: '', expectedRevision: 0 },
+          { key: 'ai_image_api_key', value: 'sk-new-provider-key', expectedRevision: 0 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      errorCode: 'system_config_ai_image_provider_endpoint_mismatch',
+    });
+    expect(state.rows.has('ai_image_provider')).toBe(false);
+    await app.close();
+  });
+
+  it('rejects an active AI image model with surrounding whitespace', async () => {
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'ai_image_provider', value: 'custom', expectedRevision: 0 },
+          { key: 'ai_image_base_url', value: 'https://relay.example/v1', expectedRevision: 0 },
+          { key: 'ai_image_api_key', value: 'sk-new-provider-key', expectedRevision: 0 },
+          { key: 'ai_image_model', value: ' gpt-image-1 ', expectedRevision: 0 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({
+      errorCode: 'system_config_ai_image_model_invalid',
+    });
+    expect(state.rows.has('ai_image_provider')).toBe(false);
+    await app.close();
+  });
+
   it('fails closed when an active Turnstile secret cannot be decrypted', async () => {
     vi.stubEnv('RUNTIME_MODE', 'cloud');
     state.rows.set('auth_human_challenge_provider', {

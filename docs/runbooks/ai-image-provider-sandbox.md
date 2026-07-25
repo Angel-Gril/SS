@@ -148,6 +148,12 @@ Relative source and mask paths are resolved from the repository/deployed app roo
 
 This lane has no automated reconciliation mode. If its report is `RECONCILIATION_REQUIRED`, use only the relay dashboard, billing ledger, request logs, or Provider support to resolve the original request. Do not call the submit command again.
 
+### Recorded International Relay Observation (2026-07-25)
+
+The configured international relay/model produced one earlier text-to-image result, but the evidence did not reconcile settled billing. Two independently claimed `IMAGE_TO_IMAGE` requests were definitely rejected with HTTP 400; the second used the current single-image multipart field and frozen square request profile. `FULL_EDIT` and `INPAINT` were not dispatched because they share the rejected edits transport.
+
+Treat this exact relay/model as text-to-image-only and still unverified for production. Model-catalog access is not generation acceptance, and generation acceptance is not edit acceptance. Do not repeat the rejected requests or enable reference generation, full edit, inpaint, suites, or tenant rollout unless the operator selects an edit-capable endpoint/model and completes a new bounded acceptance.
+
 ## DashScope `qwen-mt-image` Translation Probe
 
 This lane accepts only the default-port official origin `https://dashscope.aliyuncs.com` (optionally with the exact `/api/v1` path) and the exact `qwen-mt-image` model. Custom ports, path prefixes, credentials, queries, and fragments are rejected. The CLI normalizes the base to `/api/v1`, pins public DNS, submits once to the official image-synthesis service, and polls a bounded task endpoint.

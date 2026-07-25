@@ -164,6 +164,11 @@ const steps = [
     args: ['scripts/extension-source-media-standalone.test.mjs'],
   },
   {
+    name: 'AI image settings UI contract',
+    command: 'node',
+    args: ['scripts/ai-image-settings-ui.test.mjs'],
+  },
+  {
     name: 'extension media mask editor contract',
     command: 'node',
     args: ['scripts/extension-media-mask-editor.test.mjs'],
