@@ -70,6 +70,73 @@
     ];
   }
 
+  var IMAGE_WORKFLOW_DEFINITIONS = Object.freeze([
+      {
+        mode: 'TRANSLATE_ONLY',
+        label: '仅图片翻译',
+        description: '识别商品图文字并翻译为俄文',
+        kind: 'translation',
+        target: 'TRANSLATE_ONLY',
+        operations: ['IMAGE_TRANSLATE'],
+      },
+      {
+        mode: 'AI_MAIN_TRANSLATE',
+        label: 'AI 主图 + 翻译',
+        description: '先生成主图候选，再处理图片文案',
+        kind: 'suite',
+        target: 'AI_SUITE',
+        operations: ['IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE'],
+      },
+      {
+        mode: 'AI_SUITE',
+        label: 'AI 套图',
+        description: '按审核计划生成主图与详情图套组',
+        kind: 'suite',
+        target: 'AI_SUITE',
+        operations: ['IMAGE_TO_IMAGE'],
+      },
+      {
+        mode: 'IMAGE_TO_IMAGE',
+        label: '参考图生图',
+        description: '选择 1–4 张参考图生成新候选',
+        kind: 'editor',
+        target: 'MEDIA_EDITOR',
+        operation: 'IMAGE_TO_IMAGE',
+        operations: ['IMAGE_TO_IMAGE'],
+      },
+      {
+        mode: 'FULL_EDIT',
+        label: '全图编辑',
+        description: '使用提示词调整整张商品图',
+        kind: 'editor',
+        target: 'MEDIA_EDITOR',
+        operation: 'FULL_EDIT',
+        operations: ['FULL_EDIT'],
+      },
+      {
+        mode: 'INPAINT',
+        label: '局部重绘',
+        description: '绘制遮罩后只修改指定区域',
+        kind: 'editor',
+        target: 'MEDIA_EDITOR',
+        operation: 'INPAINT',
+        operations: ['INPAINT'],
+      },
+    ].map(function (definition) {
+      definition.operations = Object.freeze(definition.operations.slice());
+      return Object.freeze(definition);
+    }));
+
+  function imageWorkflowDefinitions() {
+    return IMAGE_WORKFLOW_DEFINITIONS;
+  }
+
+  function imageWorkflowDefinition(mode) {
+    return IMAGE_WORKFLOW_DEFINITIONS.find(function (definition) {
+      return definition.mode === mode;
+    }) || null;
+  }
+
   function mediaCapabilityReason(definition, capability) {
     var label = definition && definition.label || '媒体操作';
     var reasonCode = String(capability && capability.reasonCode || '').trim();
@@ -94,28 +161,208 @@
     return label + '当前不可用，请在 ERP 管理后台查看能力状态。';
   }
 
-  function renderWorkbenchAvailability(container, result) {
-    var heading = element('div', 'ss-erp-source-workbench-heading');
-    heading.appendChild(element('strong', '', 'ERP 商品工作流'));
-    heading.appendChild(element('span', 'is-stale', '尚未就绪'));
-    container.appendChild(heading);
+  function workbenchAvailabilityMessage(result) {
     var scopeLabels = {
       'listing:review': '商品工作台审核',
       'media:execute': 'AI 媒体执行',
       'listing:write': '商品草稿编辑',
       'capture:write': '来源商品采集',
     };
-    var message = result.state === 'unpaired'
+    return result && result.state === 'unpaired'
       ? '扩展尚未连接 ERP，请先完成扩展连接。'
-      : result.state === 'scope_required'
+      : result && result.state === 'loading'
+        ? '正在读取 ERP 商品工作流与 AI 媒体能力。'
+      : result && result.state === 'scope_required'
         ? '设备缺少“' + (scopeLabels[result.scope] || result.scope || '所需功能')
           + '”权限，请在 ERP 扩展连接中更新授权。'
-      : result.state === 'disabled'
-        ? '扩展工作台未开放，请在管理员后台开启扩展工作台及当前账号发布策略。'
-        : result.reason === 'source_handoff_mismatch'
-          ? '当前商品尚未进入 ERP 工作流，请先采集货源到 ERP。'
-          : 'ERP 商品工作流状态暂不可用，请检查扩展连接后重试。';
-    container.appendChild(element('p', 'ss-erp-source-workbench-empty', message));
+        : result && result.state === 'disabled'
+          ? '扩展工作台未开放，请在管理员后台开启扩展工作台及当前账号发布策略。'
+          : result && result.reason === 'source_handoff_mismatch'
+            ? '当前商品尚未进入 ERP 工作流，请先采集货源到 ERP。'
+            : result && result.reason === 'source_product_id_missing'
+              ? '当前页面未提取到稳定的商品 ID，暂不能创建 ERP 图片工作流。'
+              : result && result.reason === 'source_product_unavailable'
+                ? '当前页面商品读取失败，刷新商品页后可重新尝试 AI 图片处理。'
+            : 'ERP 商品工作流状态暂不可用，请检查扩展连接后重试。';
+  }
+
+  function aiImageSuiteWorkflowReadiness(listing, options) {
+    if (!options || typeof options.onLoadAiImageSuite !== 'function') {
+      return { ready: false, reason: 'AI 套图状态读取功能当前不可用。' };
+    }
+    if (options.aiImageSuiteError) {
+      return { ready: false, reason: 'AI 套图状态读取失败，请重新读取。' };
+    }
+    if (options.aiImageSuiteLoading === true || options.aiImageSuite == null) {
+      return { ready: false, reason: '正在读取 AI 套图计划与执行权限。' };
+    }
+    var result = aiImageSuiteResult(options.aiImageSuite);
+    if (!result || result.state !== 'ready' || !result.projection) {
+      return { ready: false, reason: 'AI 套图服务当前未开放。' };
+    }
+    var projection = result.projection;
+    var context = projection.context || {};
+    if (context.listingWorkflowId !== listing.id
+      || context.shopId !== listing.shopId
+      || context.draftRevision !== listing.revision
+      || context.draftVersion !== listing.draftVersion) {
+      return { ready: false, reason: 'AI 套图计划对应的草稿版本已更新，请重新读取。' };
+    }
+    if (!projection.plan) {
+      return { ready: false, reason: '请先在 Web ERP 创建并审核 AI 主图或套图计划。' };
+    }
+    return { ready: true, reason: '可以查看已审核计划', readyLabel: '可查看计划' };
+  }
+
+  function workflowReadiness(definition, result, listing, options) {
+    if (!result || result.state !== 'ready' || !result.status) {
+      return { ready: false, reason: workbenchAvailabilityMessage(result || {}) };
+    }
+    if (!listing) {
+      return { ready: false, reason: '请先在 ERP 创建或选择店铺草稿。' };
+    }
+    if (definition.mode === 'AI_MAIN_TRANSLATE') {
+      return {
+        ready: false,
+        reason: '组合流程尚未开放；当前请先生成 AI 主图，再单独执行图片翻译。',
+      };
+    }
+    if (definition.mode === 'AI_SUITE') {
+      return aiImageSuiteWorkflowReadiness(listing, options);
+    }
+    var launch = options && options.launch;
+    var operations = launch && launch.contractVersion === 2 && launch.operations;
+    if (!operations) {
+      return {
+        ready: false,
+        reason: launch ? workbenchAvailabilityMessage(launch) : 'AI 媒体能力状态暂不可用，请刷新后重试。',
+      };
+    }
+    for (var index = 0; index < definition.operations.length; index += 1) {
+      var operation = definition.operations[index];
+      var capability = operations[operation];
+      if (!capability || capability.ready !== true) {
+        return {
+          ready: false,
+          reason: mediaCapabilityReason(
+            mediaOperationDefinitions().find(function (item) {
+              return item.operation === operation;
+            }) || { label: definition.label },
+            capability,
+          ),
+        };
+      }
+      if (operation === 'IMAGE_TRANSLATE' && capability.testOnly !== true) {
+        return { ready: false, reason: '扩展内真实图片翻译尚未开放，请在 ERP 图片工作台执行。' };
+      }
+    }
+    var context = launch.context;
+    if (!context
+      || context.id !== listing.id
+      || context.shopId !== listing.shopId
+      || context.revision !== listing.revision
+      || context.draftVersion !== listing.draftVersion) {
+      return { ready: false, reason: '当前草稿的 AI 媒体状态已更新，请刷新后重试。' };
+    }
+    var allowedSourceKeys = new Set((context.sourceInputs || []).map(function (item) {
+      return item && item.sourceMediaKey;
+    }).filter(Boolean));
+    var hasSourceInput = (Array.isArray(options && options.sourceInputs)
+      ? options.sourceInputs
+      : []).some(function (item) {
+      return item && allowedSourceKeys.has(item.sourceMediaKey);
+    });
+    if (!hasSourceInput) {
+      return { ready: false, reason: '当前草稿没有可用于该流程的来源图片。' };
+    }
+    return { ready: true, reason: '可以开始配置' };
+  }
+
+  function renderImageWorkflowOverview(container, result, listing, options) {
+    var wrapper = element('section', 'ss-erp-source-workbench-workflows');
+    wrapper.setAttribute('data-role', 'ai-image-workflows');
+    var heading = element('div', 'ss-erp-source-workbench-workflow-heading');
+    var title = element('div');
+    title.appendChild(element('strong', '', 'AI 图片处理'));
+    title.appendChild(element(
+      'span',
+      '',
+      '采集 → 店铺草稿 → 选择流程 → 生成 → 审核应用',
+    ));
+    heading.appendChild(title);
+    heading.appendChild(element('b', '', '6 种流程'));
+    wrapper.appendChild(heading);
+
+    var grid = element('div', 'ss-erp-source-workbench-workflow-grid');
+    imageWorkflowDefinitions().forEach(function (definition) {
+      var readiness = workflowReadiness(definition, result, listing, options);
+      var button = element(
+        'button',
+        'ss-erp-source-workbench-workflow' + (readiness.ready ? ' is-ready' : ' is-blocked'),
+      );
+      button.type = 'button';
+      button.disabled = !readiness.ready
+        || !options || typeof options.onSelectMediaWorkflow !== 'function';
+      button.title = readiness.reason;
+      button.setAttribute('data-workflow-mode', definition.mode);
+      button.appendChild(element('strong', '', definition.label));
+      button.appendChild(element('span', '', definition.description));
+      button.appendChild(element(
+        'em',
+        '',
+        readiness.ready ? readiness.readyLabel || '可配置' : readiness.reason,
+      ));
+      button.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || button.disabled) return;
+        options.onSelectMediaWorkflow(definition.mode);
+      });
+      grid.appendChild(button);
+    });
+    wrapper.appendChild(grid);
+
+    if (result && result.reason === 'source_handoff_mismatch'
+      && options && typeof options.onCollectForMedia === 'function') {
+      var collect = element(
+        'button',
+        'ss-erp-source-workbench-workflow-primary',
+        '采集货源并继续',
+      );
+      collect.type = 'button';
+      collect.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || collect.disabled) return;
+        options.onCollectForMedia();
+      });
+      wrapper.appendChild(collect);
+    } else if (result && result.state === 'ready' && result.status && !listing
+      && Array.isArray(result.status.listing && result.status.listing.items)
+      && result.status.listing.items.length === 0
+      && options && typeof options.onOpenWorkflowForMedia === 'function') {
+      var open = element(
+        'button',
+        'ss-erp-source-workbench-workflow-primary',
+        '打开 ERP 创建草稿',
+      );
+      open.type = 'button';
+      open.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || open.disabled) return;
+        options.onOpenWorkflowForMedia();
+      });
+      wrapper.appendChild(open);
+    }
+    container.appendChild(wrapper);
+  }
+
+  function renderWorkbenchAvailability(container, result, options) {
+    var heading = element('div', 'ss-erp-source-workbench-heading');
+    heading.appendChild(element('strong', '', 'ERP 商品工作流'));
+    heading.appendChild(element('span', 'is-stale', '尚未就绪'));
+    container.appendChild(heading);
+    container.appendChild(element(
+      'p',
+      'ss-erp-source-workbench-empty',
+      workbenchAvailabilityMessage(result),
+    ));
+    renderImageWorkflowOverview(container, result, null, options || null);
   }
 
   function renderMediaLaunchStatus(container, listing, options) {
@@ -123,6 +370,7 @@
     if (!listing || !launch || launch.state === 'ready') return;
     var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create');
     drawer.open = true;
+    drawer.setAttribute('data-workflow-target', 'CAPABILITY_STATUS');
     drawer.appendChild(element('summary', '', 'AI 修图与生图'));
     var operations = launch.contractVersion === 2 && launch.operations;
     if (operations) {
@@ -187,6 +435,7 @@
 
     var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create');
     drawer.open = true;
+    drawer.setAttribute('data-workflow-target', 'TRANSLATE_ONLY');
     drawer.appendChild(element('summary', '', '图片翻译（测试）'));
     var controls = element('div', 'ss-erp-source-workbench-create-controls');
     var select = element('select', 'ss-erp-source-workbench-source-select');
@@ -702,6 +951,7 @@
       'details',
       'ss-erp-source-workbench-drawer ss-erp-source-workbench-create ss-erp-source-workbench-history',
     );
+    drawer.setAttribute('data-workflow-target', 'AI_SUITE');
     drawer.open = options.aiImageSuiteOpen !== false;
     drawer.appendChild(element('summary', '', 'AI 主图 / AI 套图'));
     drawer.addEventListener('toggle', function (event) {
@@ -965,6 +1215,7 @@
     }
 
     var drawer = element('details', 'ss-erp-source-workbench-drawer ss-erp-source-workbench-create ss-erp-source-workbench-media-create');
+    drawer.setAttribute('data-workflow-target', 'MEDIA_EDITOR');
     drawer.open = options.mediaCreateOpen === true;
     drawer.addEventListener('toggle', function (event) {
       if (!event || event.isTrusted !== true
@@ -1280,6 +1531,7 @@
 
     if (!listing) {
       stopAiImageSuitePolling(container);
+      renderImageWorkflowOverview(container, { state: 'ready', status: status }, null, options);
       container.appendChild(element(
         'p',
         'ss-erp-source-workbench-empty',
@@ -1290,6 +1542,8 @@
       renderMediaTask(container, status, mediaItems, options);
       return;
     }
+
+    renderImageWorkflowOverview(container, { state: 'ready', status: status }, listing, options);
 
     var metrics = element('div', 'ss-erp-source-workbench-metrics');
     var stage = element('div', 'ss-erp-source-workbench-metric');
@@ -1326,13 +1580,14 @@
     clear(container);
     if (!result) {
       stopAiImageSuitePolling(container);
-      container.hidden = true;
+      container.hidden = false;
+      renderWorkbenchAvailability(container, { state: 'loading' }, options || null);
       return;
     }
     container.hidden = false;
     if (result.state !== 'ready' || !result.status) {
       stopAiImageSuitePolling(container);
-      renderWorkbenchAvailability(container, result);
+      renderWorkbenchAvailability(container, result, options || null);
       return;
     }
     renderReady(container, result.status, options || null);
@@ -1340,5 +1595,7 @@
 
   root.SS_ERP_SOURCE_LISTING_WORKBENCH = {
     render: render,
+    getImageWorkflowDefinition: imageWorkflowDefinition,
+    getImageWorkflowDefinitions: function () { return IMAGE_WORKFLOW_DEFINITIONS.slice(); },
   };
 })(window);

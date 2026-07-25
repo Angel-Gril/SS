@@ -105,6 +105,15 @@ assert.match(policy, /SOURCE_MEDIA_CONFIRM_PREPARE_TYPES/);
 assert.match(policy, /SOURCE_MEDIA_CONFIRM_PAGE_TYPES/);
 assert.match(panel, /data-role=["']source-listing-workbench["']/);
 assert.match(panel, /SS_ERP_SOURCE_LISTING_WORKBENCH/);
+assert.match(panel, /ss-erp-source-media-fab/u);
+assert.match(panel, /focusSourceMediaWorkbench/u);
+assert.match(panel, /focus:\s*['"]media['"]/u);
+assert.match(panel, /preservePendingFocus\s*=\s*state\.pendingSourceWorkbenchFocus/u);
+assert.match(panel, /state\.pendingSourceWorkbenchFocus\s*=\s*preservePendingFocus/u);
+assert.match(panel, /aria-controls/u);
+assert.match(panel, /aria-expanded/u);
+assert.match(panel, /reclampPanelPosition/u);
+assert.match(panel, /panelTrigger/u);
 assert.match(panel, /sourceWorkbenchRequestSeq/);
 assert.match(panel, /SS_ERP_SOURCE_AI_IMAGE_SUITE_CONTROLLER/);
 assert.match(panel, /sourceWorkbenchAiImageSuiteController\.execute/);
@@ -1789,6 +1798,26 @@ const viewContext = {
   },
 };
 vm.runInNewContext(viewSource, viewContext, { filename: viewPath });
+const imageWorkflowRegistry = viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH
+  .getImageWorkflowDefinitions();
+assert.deepEqual(
+  JSON.parse(JSON.stringify(imageWorkflowRegistry.map((definition) => [
+    definition.mode, definition.kind, definition.target, definition.operation || null,
+  ]))),
+  [
+    ['TRANSLATE_ONLY', 'translation', 'TRANSLATE_ONLY', null],
+    ['AI_MAIN_TRANSLATE', 'suite', 'AI_SUITE', null],
+    ['AI_SUITE', 'suite', 'AI_SUITE', null],
+    ['IMAGE_TO_IMAGE', 'editor', 'MEDIA_EDITOR', 'IMAGE_TO_IMAGE'],
+    ['FULL_EDIT', 'editor', 'MEDIA_EDITOR', 'FULL_EDIT'],
+    ['INPAINT', 'editor', 'MEDIA_EDITOR', 'INPAINT'],
+  ],
+);
+assert.ok(imageWorkflowRegistry.every((definition) => (
+  Object.isFrozen(definition) && Object.isFrozen(definition.operations)
+)));
+assert.match(panel, /getImageWorkflowDefinition/u);
+assert.doesNotMatch(panel, /\[\s*'TRANSLATE_ONLY',\s*'AI_MAIN_TRANSLATE',\s*'AI_SUITE'/u);
 function renderedText(node) {
   return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join(' ');
 }
@@ -1802,13 +1831,42 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(unpairedContainer, {
 });
 assert.equal(unpairedContainer.hidden, false);
 assert.match(renderedText(unpairedContainer), /扩展尚未连接 ERP/u);
+assert.match(renderedText(unpairedContainer), /AI 图片处理/u);
+for (const label of [
+  '仅图片翻译', 'AI 主图 + 翻译', 'AI 套图', '参考图生图', '全图编辑', '局部重绘',
+]) {
+  assert.ok(renderedText(unpairedContainer).includes(label));
+}
+
+const loadingContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(loadingContainer, null);
+assert.equal(loadingContainer.hidden, false);
+assert.match(renderedText(loadingContainer), /正在读取 ERP 商品工作流/u);
+assert.match(renderedText(loadingContainer), /AI 图片处理/u);
+
+const missingProductIdContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(missingProductIdContainer, {
+  state: 'unavailable', reason: 'source_product_id_missing',
+});
+assert.match(renderedText(missingProductIdContainer), /未提取到稳定的商品 ID/u);
+assert.match(renderedText(missingProductIdContainer), /AI 图片处理/u);
 
 const notCollectedContainer = new TestNode('section');
+const collectForMediaEvents = [];
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(notCollectedContainer, {
   state: 'unavailable', reason: 'source_handoff_mismatch',
+}, {
+  onCollectForMedia() { collectForMediaEvents.push('collect'); },
 });
 assert.equal(notCollectedContainer.hidden, false);
 assert.match(renderedText(notCollectedContainer), /先采集货源到 ERP/u);
+const collectForMediaButton = renderedNodes(notCollectedContainer)
+  .find((node) => node.textContent === '采集货源并继续');
+assert.ok(collectForMediaButton);
+collectForMediaButton.listeners.click({ isTrusted: false });
+assert.deepEqual(collectForMediaEvents, []);
+collectForMediaButton.listeners.click({ isTrusted: true });
+assert.deepEqual(collectForMediaEvents, ['collect']);
 
 const disabledContainer = new TestNode('section');
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(disabledContainer, {
@@ -1831,6 +1889,7 @@ for (const [scope, label] of [
 }
 
 const container = new TestNode('section');
+const openWorkflowEvents = [];
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(container, {
   state: 'ready',
   status: {
@@ -1850,13 +1909,23 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(container, {
       ],
     },
   },
+}, {
+  onOpenWorkflowForMedia() { openWorkflowEvents.push('open'); },
 });
 const rendered = renderedText(container);
 assert.equal(container.hidden, false);
 assert.match(rendered, /Web ERP 的采集详情中使用 AI 图片工作台/u);
 assert.match(rendered, /扩展内处理需先创建店铺草稿/u);
+assert.match(rendered, /AI 图片处理/u);
 assert.match(rendered, /图片翻译 · 等待审核/u);
 assert.doesNotMatch(rendered, /已取消|CANCELLED|PENDING/u);
+const openWorkflowForMediaButton = renderedNodes(container)
+  .find((node) => node.textContent === '打开 ERP 创建草稿');
+assert.ok(openWorkflowForMediaButton);
+openWorkflowForMediaButton.listeners.click({ isTrusted: false });
+assert.deepEqual(openWorkflowEvents, []);
+openWorkflowForMediaButton.listeners.click({ isTrusted: true });
+assert.deepEqual(openWorkflowEvents, ['open']);
 
 const createContainer = new TestNode('section');
 const createEvents = [];
@@ -1946,6 +2015,11 @@ assert.match(renderedText(providerBlockedContainer), /参考生图：Provider �
 assert.match(renderedText(providerBlockedContainer), /全图编辑：Provider 尚未完成生产验证/u);
 assert.match(renderedText(providerBlockedContainer), /局部重绘：需要可用的对象存储/u);
 assert.doesNotMatch(renderedText(providerBlockedContainer), /sandbox|not allowed|incompatible/u);
+const providerBlockedReference = renderedNodes(providerBlockedContainer)
+  .find((node) => node.attributes['data-workflow-mode'] === 'IMAGE_TO_IMAGE');
+assert.ok(providerBlockedReference);
+assert.match(renderedText(providerBlockedReference), /Provider 尚未完成生产验证/u);
+assert.doesNotMatch(renderedText(providerBlockedReference), /草稿.*已更新/u);
 
 const suiteReloadContainer = new TestNode('section');
 const suiteReloadEvents = [];
@@ -1983,6 +2057,7 @@ assert.deepEqual(suiteReloadErrors, ['手动重读失败']);
 
 const suiteStartContainer = new TestNode('section');
 const suiteStartEvents = [];
+const suiteWorkflowEvents = [];
 let finishSuiteStart;
 const pendingSuiteStart = new Promise((resolve) => { finishSuiteStart = resolve; });
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteStartContainer, {
@@ -2000,13 +2075,35 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(suiteStartContainer, {
   },
 }, {
   selectedListingWorkflowId: 'listing-1',
+  launch: {
+    state: 'ready',
+    contractVersion: 2,
+    operations: {
+      IMAGE_TO_IMAGE: {
+        enabled: false, ready: false, reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      },
+    },
+    context: {
+      id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+      sourceInputs: [],
+    },
+  },
   aiImageSuite: { state: 'ready', projection: aiImageSuiteProjectionFixture() },
+  onLoadAiImageSuite() {},
+  onSelectMediaWorkflow(mode) { suiteWorkflowEvents.push(mode); },
   onAiImageSuiteCommand(payload) {
     suiteStartEvents.push(payload);
     return pendingSuiteStart;
   },
 });
 const suiteStartText = renderedText(suiteStartContainer);
+const suiteWorkflowButton = renderedNodes(suiteStartContainer)
+  .find((node) => node.attributes['data-workflow-mode'] === 'AI_SUITE');
+assert.ok(suiteWorkflowButton);
+assert.equal(suiteWorkflowButton.disabled, false);
+assert.match(renderedText(suiteWorkflowButton), /可查看计划/u);
+suiteWorkflowButton.listeners.click({ isTrusted: true });
+assert.deepEqual(suiteWorkflowEvents, ['AI_SUITE']);
 assert.match(suiteStartText, /AI 主图 \/ AI 套图/u);
 assert.match(suiteStartText, /待生成 2 张/u);
 assert.match(suiteStartText, /预计费用 US\$0\.18 · 最高费用 US\$0\.24/u);
@@ -2312,9 +2409,11 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(multiListingContainer,
   sourceInputs: [{ sourceMediaKey: 'media-1', label: '主图 1' }],
   selectedListingWorkflowId: '',
   onSelectListing(id) { selectedListings.push(id); },
+  onOpenWorkflowForMedia() { throw new Error('must select an existing listing instead'); },
   onCreateTranslation() { throw new Error('must not create before selecting listing'); },
 });
 assert.match(renderedText(multiListingContainer), /请选择店铺草稿/u);
+assert.doesNotMatch(renderedText(multiListingContainer), /打开 ERP 创建草稿/u);
 const listingSelect = multiListingContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
   .find((node) => node.tag === 'select' && node.attributes['aria-label'] === '选择店铺草稿');

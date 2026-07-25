@@ -21,6 +21,28 @@
   box-shadow: 0 16px 42px rgba(234, 88, 12, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
 }
 
+#ss-erp-source-media-fab {
+  position: fixed;
+  right: 16px;
+  top: calc(50% + 62px);
+  z-index: 2147482990;
+  width: 50px;
+  height: 50px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  color: #fff;
+  box-shadow: 0 12px 30px rgba(15, 118, 110, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.35) inset;
+  cursor: pointer;
+  font: 850 13px/1 "Aptos", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+#ss-erp-source-media-fab:hover {
+  transform: scale(1.04);
+  box-shadow: 0 16px 42px rgba(15, 118, 110, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
+}
+
 #ss-erp-source-costing-panel {
   position: fixed;
   right: 16px;
@@ -46,6 +68,22 @@
 #ss-erp-source-costing-panel.open {
   display: flex;
   animation: ss-erp-source-panel-in 0.18s ease-out;
+}
+
+#ss-erp-source-costing-panel:focus-visible,
+#ss-erp-source-costing-panel [data-role="source-listing-workbench"]:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+
+#ss-erp-source-costing-panel.media-focus {
+  width: min(860px, calc(100vw - 24px));
+}
+
+#ss-erp-source-costing-panel.media-focus [data-role="source-listing-workbench"] {
+  order: -1;
+  border-color: rgba(15, 118, 110, 0.35);
+  box-shadow: 0 12px 32px rgba(15, 118, 110, 0.1);
 }
 
 @keyframes ss-erp-source-panel-in {
@@ -74,11 +112,12 @@
 .ss-erp-source-mark {
   display: grid;
   place-items: center;
-  width: 24px;
+  width: 34px;
   height: 24px;
   border-radius: 6px;
   background: linear-gradient(135deg, #ea580c, #f97316);
   color: #fff;
+  font-size: 9px;
   font-weight: 900;
   box-shadow: 0 6px 14px rgba(234, 88, 12, 0.22);
 }
@@ -363,12 +402,22 @@
 }
 
 @media (max-width: 480px) {
+  #ss-erp-source-costing-fab,
+  #ss-erp-source-media-fab {
+    right: 10px;
+  }
+
   #ss-erp-source-costing-panel {
     inset: 8px;
     width: auto;
     max-width: none;
     height: auto;
     max-height: calc(100vh - 16px);
+  }
+
+
+  #ss-erp-source-costing-panel.media-focus {
+    width: auto;
   }
 
   .ss-erp-source-actions {

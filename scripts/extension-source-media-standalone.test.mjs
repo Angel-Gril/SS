@@ -358,6 +358,7 @@ assert.equal(typeof api?.createClient, 'function');
   const draftChangeMetadata = [];
   const editorOpens = [];
   const drawerOpenChanges = [];
+  const workflowSelections = [];
   const createDraft = {
     operation: 'IMAGE_TO_IMAGE',
     sourceMediaKeys: ['main-image'],
@@ -373,9 +374,45 @@ assert.equal(typeof api?.createClient, 'function');
       draftChangeMetadata.push(metadata === undefined ? null : plain(metadata));
     },
     onMediaCreateOpenChange(value) { drawerOpenChanges.push(value); },
+    onSelectMediaWorkflow(value) { workflowSelections.push(value); },
     onOpenMediaEditor(value) { editorOpens.push(plain(value)); },
   });
 
+  assert.match(renderedText(container), /AI 图片处理/u);
+  const suiteWorkflow = nodes(container)
+    .find((node) => node.attributes['data-workflow-mode'] === 'AI_SUITE');
+  assert.ok(suiteWorkflow);
+  assert.equal(suiteWorkflow.disabled, true);
+  assert.match(renderedText(suiteWorkflow), /状态读取功能当前不可用/u);
+  const referenceWorkflow = nodes(container)
+    .find((node) => node.attributes['data-workflow-mode'] === 'IMAGE_TO_IMAGE');
+  assert.ok(referenceWorkflow);
+  assert.equal(referenceWorkflow.disabled, false);
+  referenceWorkflow.listeners.click({ isTrusted: false });
+  assert.deepEqual(workflowSelections, []);
+  referenceWorkflow.listeners.click({ isTrusted: true });
+  assert.deepEqual(workflowSelections, ['IMAGE_TO_IMAGE']);
+  const combinedWorkflow = nodes(container)
+    .find((node) => node.attributes['data-workflow-mode'] === 'AI_MAIN_TRANSLATE');
+  assert.ok(combinedWorkflow);
+  assert.equal(combinedWorkflow.disabled, true);
+  assert.match(renderedText(combinedWorkflow), /组合流程尚未开放/u);
+
+  const noSourceContainer = new TestNode('section');
+  viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(noSourceContainer, result, {
+    launch,
+    sourceInputs: [],
+    selectedListingWorkflowId: 'listing-1',
+    onMediaCreateDraftChange() {},
+    onSelectMediaWorkflow() {},
+  });
+  for (const mode of ['TRANSLATE_ONLY', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+    const workflow = nodes(noSourceContainer)
+      .find((node) => node.attributes['data-workflow-mode'] === mode);
+    assert.ok(workflow);
+    assert.equal(workflow.disabled, true);
+    assert.match(renderedText(workflow), /没有可用于该流程的来源图片/u);
+  }
   assert.match(renderedText(container), /AI 修图与生图/u);
   for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
   assert.ok(nodes(container).find((node) => node.attributes['data-media-operation'] === operation));

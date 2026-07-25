@@ -3,6 +3,7 @@
 
   var PANEL_ID = 'ss-erp-source-costing-panel';
   var FAB_ID = 'ss-erp-source-costing-fab';
+  var MEDIA_FAB_ID = 'ss-erp-source-media-fab';
   var PANEL_POSITION_KEY = 'ss-erp:source-costing-panel-position';
   var SourceCosting = window.SS_ERP_SOURCE_COSTING_CORE;
   if (!SourceCosting) return;
@@ -60,6 +61,9 @@
       sourceMediaKeys: []
     },
     sourceWorkbenchMediaCreateOpen: false,
+    sourceWorkbenchFocusMode: '',
+    pendingSourceWorkbenchFocus: false,
+    panelTrigger: null,
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
@@ -182,13 +186,26 @@
     fab.type = 'button';
     fab.textContent = '算';
     fab.title = 'Ozon 计算器 · ' + platformLabel() + ' 货源核价';
+    fab.setAttribute('aria-controls', PANEL_ID);
+    fab.setAttribute('aria-expanded', 'false');
+
+    var mediaFab = document.createElement('button');
+    mediaFab.id = MEDIA_FAB_ID;
+    mediaFab.type = 'button';
+    mediaFab.textContent = 'AI';
+    mediaFab.title = 'SS ERP AI 图片处理工作台';
+    mediaFab.setAttribute('aria-controls', PANEL_ID);
+    mediaFab.setAttribute('aria-expanded', 'false');
 
     var panel = document.createElement('aside');
     panel.id = PANEL_ID;
+    panel.tabIndex = -1;
+    panel.setAttribute('role', 'region');
+    panel.setAttribute('aria-label', 'SS ERP 商品与图片工作台');
     panel.innerHTML = [
       '<div class="ss-erp-source-head">',
-      '  <div class="ss-erp-source-mark">算</div>',
-      '  <div class="ss-erp-source-title"><strong>ozon计算器</strong><span data-role="context-title">' + escapeHtml(platformLabel()) + '货源核价 · 读取关联...</span></div>',
+      '  <div class="ss-erp-source-mark">ERP</div>',
+      '  <div class="ss-erp-source-title"><strong>SS ERP 商品与图片工作台</strong><span data-role="context-title">' + escapeHtml(platformLabel()) + '货源核价 · 读取关联...</span></div>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" title="刷新">↻</button>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" title="收起">×</button>',
       '</div>',
@@ -210,16 +227,20 @@
     renderLoadingContent(panel);
 
     document.documentElement.appendChild(fab);
+    document.documentElement.appendChild(mediaFab);
     document.documentElement.appendChild(panel);
     restorePanelPosition(panel);
     bindPanelDrag(panel);
 
     fab.addEventListener('click', function () {
-      if (panel.classList.contains('open')) {
+      if (panel.classList.contains('open') && !panel.classList.contains('media-focus')) {
         closePanel(panel);
       } else {
-        openPanel(panel);
+        openPanel(panel, { focus: 'costing', trigger: fab });
       }
+    });
+    mediaFab.addEventListener('click', function () {
+      openPanel(panel, { focus: 'media', trigger: mediaFab });
     });
     panel.querySelector('[data-action="close"]').addEventListener('click', function () {
       closePanel(panel);
@@ -230,23 +251,76 @@
     panel.querySelector('[data-action="run-costing"]').addEventListener('click', runCosting);
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
     panel.querySelector('[data-action="open-source-workflow"]').addEventListener('click', openSourceWorkflow);
+    panel.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closePanel(panel);
+    });
+    window.addEventListener('resize', function () {
+      if (panel.classList.contains('open')) reclampPanelPosition(panel);
+    });
   }
 
-  function openPanel(panel) {
+  function setPanelExpanded(expanded) {
+    [FAB_ID, MEDIA_FAB_ID].forEach(function (id) {
+      var trigger = document.getElementById(id);
+      if (trigger) trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+  }
+
+  function reclampPanelPosition(panel) {
+    if (!panel) return;
+    if (window.innerWidth <= 480) {
+      panel.style.removeProperty('left');
+      panel.style.removeProperty('right');
+      panel.style.removeProperty('top');
+      return;
+    }
+    if (!panel.style.left) return;
+    var rect = panel.getBoundingClientRect();
+    setPanelPosition(panel, rect.left, rect.top);
+  }
+
+  function openPanel(panel, options) {
     panel = panel || document.getElementById(PANEL_ID);
     if (!panel) return;
+    options = options || {};
+    state.panelTrigger = options.trigger || state.panelTrigger;
+    if (options.focus === 'media') {
+      panel.classList.add('media-focus');
+      state.pendingSourceWorkbenchFocus = true;
+    } else {
+      panel.classList.remove('media-focus');
+      state.pendingSourceWorkbenchFocus = false;
+    }
     panel.classList.add('open');
+    setPanelExpanded(true);
+    reclampPanelPosition(panel);
     state.opened = true;
+    if (typeof panel.focus === 'function') panel.focus({ preventScroll: true });
     ensureLoaded();
     startAutoRefresh();
+    if (options.focus === 'media') {
+      window.setTimeout(function () {
+        if (focusSourceMediaWorkbench(panel, state.sourceWorkbenchFocusMode)) {
+          state.pendingSourceWorkbenchFocus = false;
+        }
+      }, 0);
+    }
   }
 
   function closePanel(panel) {
     panel = panel || document.getElementById(PANEL_ID);
     if (!panel) return;
     panel.classList.remove('open');
+    setPanelExpanded(false);
     state.opened = false;
     stopAutoRefresh();
+    var trigger = state.panelTrigger;
+    state.panelTrigger = null;
+    if (trigger && typeof trigger.focus === 'function') {
+      window.setTimeout(function () { trigger.focus({ preventScroll: true }); }, 0);
+    }
   }
 
   function ensureLoaded(options) {
@@ -353,6 +427,7 @@
   }
 
   function invalidateSourceWorkflowState() {
+    var preservePendingFocus = state.pendingSourceWorkbenchFocus;
     state.sourceWorkflowHandoff = null;
     state.sourceWorkbenchStatus = null;
     state.sourceWorkbenchLaunch = null;
@@ -375,6 +450,55 @@
       sourceMediaKeys: []
     };
     state.sourceWorkbenchMediaCreateOpen = false;
+    state.sourceWorkbenchFocusMode = '';
+    state.pendingSourceWorkbenchFocus = preservePendingFocus;
+  }
+
+  function sourceMediaWorkflowDefinition(mode) {
+    var workbench = window.SS_ERP_SOURCE_LISTING_WORKBENCH;
+    if (!workbench || typeof workbench.getImageWorkflowDefinition !== 'function') return null;
+    return workbench.getImageWorkflowDefinition(mode);
+  }
+
+  function sourceMediaWorkflowTarget(mode) {
+    var definition = sourceMediaWorkflowDefinition(mode);
+    return definition && definition.target || '';
+  }
+
+  function focusSourceMediaWorkbench(panel, mode) {
+    panel = panel || document.getElementById(PANEL_ID);
+    if (!panel) return false;
+    var workbench = panel.querySelector('[data-role="source-listing-workbench"]');
+    if (!workbench || workbench.hidden) return false;
+    var targetName = sourceMediaWorkflowTarget(mode);
+    var target = targetName
+      ? workbench.querySelector('[data-workflow-target="' + targetName + '"]')
+      : workbench.querySelector('[data-role="ai-image-workflows"]');
+    target = target || workbench;
+    if (target.tagName && String(target.tagName).toLowerCase() === 'details') target.open = true;
+    if (typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (typeof target.setAttribute === 'function') target.setAttribute('tabindex', '-1');
+    if (typeof target.focus === 'function') target.focus({ preventScroll: true });
+    return true;
+  }
+
+  function selectSourceMediaWorkflow(mode) {
+    var definition = sourceMediaWorkflowDefinition(mode);
+    if (!definition) return;
+    state.sourceWorkbenchFocusMode = definition.mode;
+    state.pendingSourceWorkbenchFocus = true;
+    if (definition.kind === 'suite') {
+      state.sourceWorkbenchAiImageSuiteOpen = true;
+    } else if (definition.kind === 'editor' && definition.operation) {
+      state.sourceWorkbenchMediaCreateDraft = {
+        operation: definition.operation,
+        sourceMediaKeys: state.sourceWorkbenchMediaCreateDraft.sourceMediaKeys || []
+      };
+      state.sourceWorkbenchMediaCreateOpen = true;
+    }
+    renderContent();
   }
 
   function resetSourceProductForPage(pageKey) {
@@ -453,6 +577,10 @@
         return;
       }
       resetSourceProductForPage(requestPageKey);
+      state.sourceWorkbenchStatus = {
+        state: 'unavailable',
+        reason: 'source_product_unavailable',
+      };
       renderContent();
       setStatus((response && response.error) || '读取当前 ' + platformLabel() + ' 商品失败', 'fail');
     } finally {
@@ -481,7 +609,10 @@
     options = options || {};
     var sourceProductId = currentSourceProductId();
     if (!sourceProductId || sourceProductId.length > 200) {
-      state.sourceWorkbenchStatus = null;
+      state.sourceWorkbenchStatus = {
+        state: 'unavailable',
+        reason: 'source_product_id_missing',
+      };
       state.sourceWorkbenchLaunch = null;
       state.sourceWorkbenchListingId = '';
       state.sourceWorkbenchHistory = null;
@@ -997,6 +1128,15 @@
           onMediaCreateOpenChange: function (open) {
             state.sourceWorkbenchMediaCreateOpen = open === true;
           },
+          onCollectForMedia: function () {
+            void collectForMediaWorkflow();
+          },
+          onOpenWorkflowForMedia: function () {
+            void openSourceWorkflow();
+          },
+          onSelectMediaWorkflow: function (mode) {
+            selectSourceMediaWorkflow(mode);
+          },
           onOpenMediaEditor: function (draft) {
             void openSourceWorkbenchMediaEditor(draft);
           },
@@ -1035,6 +1175,10 @@
         }
       );
     }
+    if (state.pendingSourceWorkbenchFocus
+      && focusSourceMediaWorkbench(panel, state.sourceWorkbenchFocusMode)) {
+      state.pendingSourceWorkbenchFocus = false;
+    }
 
     if (costNode) costNode.textContent = cost > 0 ? ('¥ ' + formatMoney(cost)) : '--';
     if (inputCard) inputCard.innerHTML = buildInputCardHtml();
@@ -1069,7 +1213,16 @@
     if (sourceCard) {
       sourceCard.innerHTML = '<div class="ss-erp-source-loading"><b>读取当前 ' + escapeHtml(platformLabel()) + ' 商品</b><span>正在提取标题、SKU、价格、运费和商品素材。</span></div>';
     }
-    if (sourceWorkbench) sourceWorkbench.hidden = true;
+    if (sourceWorkbench && window.SS_ERP_SOURCE_LISTING_WORKBENCH
+      && typeof window.SS_ERP_SOURCE_LISTING_WORKBENCH.render === 'function') {
+      window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(
+        sourceWorkbench,
+        { state: 'loading' },
+        null,
+      );
+    } else if (sourceWorkbench) {
+      sourceWorkbench.hidden = true;
+    }
     if (inputCard) {
       inputCard.innerHTML = '<div class="ss-erp-source-loading compact"><b>核价输入准备中</b><span>读取完成后可调整重量、尺寸、汇率和佣金。</span></div>';
     }
@@ -1266,10 +1419,10 @@
   }
 
   async function collectToErp() {
-    if (state.busy) return;
+    if (state.busy) return false;
     if (!state.product) {
       setStatus('当前 ' + platformLabel() + ' 商品还未读取完成。', 'fail');
-      return;
+      return false;
     }
     state.busy = true;
     invalidateSourceWorkflowState();
@@ -1286,11 +1439,23 @@
       state.sourceWorkbenchLastRefreshAt = 0;
       await refreshSourceWorkbenchStatus({ force: true });
       setStatus('已采集当前 ' + platformLabel() + ' 货源到 ERP。', 'ok');
+      return true;
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
+      return false;
     } finally {
       state.busy = false;
       renderContent();
+    }
+  }
+
+  async function collectForMediaWorkflow() {
+    var collected = await collectToErp();
+    if (!collected) return;
+    if (state.sourceWorkflowHandoff) {
+      await openSourceWorkflow();
+    } else {
+      setStatus('货源已采集，请在 ERP 创建店铺草稿后返回继续图片处理。', 'ok');
     }
   }
 
