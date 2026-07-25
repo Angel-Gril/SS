@@ -159,6 +159,26 @@ const steps = [
     args: ['scripts/extension-source-listing-workbench.test.mjs'],
   },
   {
+    name: 'extension dual-mode AI image workbench contract',
+    command: 'node',
+    args: ['scripts/extension-ai-image-workbench-contract.test.mjs'],
+  },
+  {
+    name: 'extension BYOK profile/session secret contract',
+    command: 'node',
+    args: ['scripts/extension-byok-profile-store.test.mjs'],
+  },
+  {
+    name: 'extension BYOK exact-origin permission contract',
+    command: 'node',
+    args: ['scripts/extension-byok-permission-broker.test.mjs'],
+  },
+  {
+    name: 'extension runtime message authorization contract',
+    command: 'node',
+    args: ['scripts/extension-runtime-message-authorization.test.mjs'],
+  },
+  {
     name: 'extension standalone media workflow contract',
     command: 'node',
     args: ['scripts/extension-source-media-standalone.test.mjs'],

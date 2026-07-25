@@ -236,7 +236,13 @@ import { createOzonPublisherEntrypointParityObserver } from './services/ozon-pub
 import { createPrismaOzonPublisherRolloutRecorder } from './services/ozon-publisher-rollout-recorder.js';
 import { createOzonPublisherParityObservationService } from './services/ozon-publisher-parity-observations.js';
 import { createPrismaOzonPublisherParityObservationRepository } from './services/ozon-publisher-parity-prisma.js';
-import { getConfig } from './config/system-config-schema.js';
+import { getConfig, getStrictConfig } from './config/system-config-schema.js';
+import {
+  createExtensionByokPolicyEvaluator,
+} from './services/extension-byok-policy.js';
+import {
+  createExtensionByokSystemConfigPolicyLoader,
+} from './services/extension-byok-admin-controls.js';
 import { generateProductContentDraft } from './services/product-content-ai.js';
 import { generateAiText } from './services/ai-text.js';
 import { createPrismaAiTranslationCacheStore } from './services/ai-translation-cache.js';
@@ -1800,6 +1806,14 @@ if (isExtensionDeviceAuthEnabled()) {
       },
     },
   });
+  // BYOK command grants must use the same server-owned SystemConfig policy
+  // that drives admin controls.  The extension cannot supply or override this
+  // readiness decision; a missing/invalid config remains fail-closed.
+  const extensionByokPolicyEvaluator = createExtensionByokPolicyEvaluator({
+    loadPolicy: createExtensionByokSystemConfigPolicyLoader({
+      readConfig: (key) => getStrictConfig(key),
+    }),
+  });
   await app.register(extensionCommandGrantRoutes, {
     prefix: '/api/extension-device',
     service: createExtensionCommandGrantService({
@@ -1814,6 +1828,7 @@ if (isExtensionDeviceAuthEnabled()) {
       featureFlags: sourceWorkflowFeatureFlags,
       getMediaWorkflowDecision: getAiMediaRolloutDecision,
       getAiImageSuiteEnabled: async () => getConfig('feature_ai_media_suite'),
+      getByokReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
       production: process.env.NODE_ENV === 'production',
       loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
         where: { id: shopId, userId: ownerUserId },

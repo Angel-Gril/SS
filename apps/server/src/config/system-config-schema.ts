@@ -5,6 +5,10 @@ import {
   AI_IMAGE_TRANSLATION_GLOSSARY_DEFAULT_JSON,
   aiImageTranslationGlossaryStringSchema,
 } from '../services/ai-image-translation-glossary.js';
+import {
+  DEFAULT_EXTENSION_BYOK_ADMIN_POLICY_JSON,
+  extensionByokAdminPolicyStringSchema,
+} from '../services/extension-byok-admin-controls.js';
 
 const sourceOzonPublisherEntrypointStage = z.enum(['off', 'shadow', 'v2']);
 
@@ -39,6 +43,10 @@ export const SystemConfigSchema = {
   feature_oss_upload: z.boolean().default(true),
   feature_ozon_cdn_fallback: z.boolean().default(true),
   feature_extension_list_overlay: z.boolean().default(true),
+  feature_extension_hosted_ai: z.boolean().default(false),
+  feature_extension_byok_ai: z.boolean().default(false),
+  feature_extension_byok_ingest: z.boolean().default(false),
+  feature_extension_byok_publish: z.boolean().default(false),
   feature_new_listing_flow: z.boolean().default(false),
   feature_announcement_popup: z.boolean().default(true),
   feature_sms_register: z.boolean().default(true),
@@ -65,6 +73,8 @@ export const SystemConfigSchema = {
   feature_source_listing_web_media: z.boolean().default(false),
   feature_source_listing_extension_workbench: z.boolean().default(false),
   source_workflow_rollout_policy: z.string().max(100000).default('{}'),
+  extension_byok_admin_policy: extensionByokAdminPolicyStringSchema
+    .default(DEFAULT_EXTENSION_BYOK_ADMIN_POLICY_JSON),
 
   // ─── ai / translation ───
   ai_provider: z.enum(['disabled', 'custom']).default('disabled'),
@@ -300,6 +310,26 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'feature',
     description: '浏览器扩展在 OZON 商品列表页显示覆盖层',
   },
+  feature_extension_hosted_ai: {
+    label: '扩展托管 AI',
+    group: 'ai',
+    description: '允许扩展创建 ERP 托管计费的 AI 图片任务；默认关闭，仍受 Provider、费用和租户门禁约束',
+  },
+  feature_extension_byok_ai: {
+    label: '扩展 BYOK 生图',
+    group: 'ai',
+    description: '允许扩展使用用户会话中的 API Key 调用已授权 Provider；默认关闭',
+  },
+  feature_extension_byok_ingest: {
+    label: '扩展 BYOK 结果接收',
+    group: 'ai',
+    description: '允许将用户审核通过的 BYOK 图片交给 ERP 校验、标准化、存储并绑定草稿；默认关闭',
+  },
+  feature_extension_byok_publish: {
+    label: '扩展 BYOK 上架发布',
+    group: 'ai',
+    description: '允许已接收并绑定草稿的 BYOK 图片进入现有 ERP/Ozon 发布流程；默认关闭',
+  },
   feature_new_listing_flow: {
     label: '新版上架流程',
     group: 'feature',
@@ -429,6 +459,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '来源工作流发布策略',
     group: 'feature',
     description: '按 owner、shop、device 和 platform 控制 off、pilot 或 global；采集使用 stage，草稿工作流使用 listingStage',
+  },
+  extension_byok_admin_policy: {
+    label: '扩展 BYOK 管理策略',
+    group: 'ai',
+    description: '严格 JSON：发布模式、owner/shop/device 试点范围、允许的 Provider 来源/操作和最大并发；不允许保存密钥',
   },
 
   ai_provider: {

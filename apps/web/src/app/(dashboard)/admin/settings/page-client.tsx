@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
 import { deploymentHosts, deploymentOrigin } from '@/lib/deployment-hosts';
 import { AiPromptTemplateEditor } from '@/components/admin/ai-prompt-template-editor';
+import { ExtensionAiAdminControls } from '@/components/admin/extension-ai-admin-controls';
 import { api } from '@/lib/api';
 import {
   ALIYUN_OSS_REGIONS,
@@ -224,6 +225,11 @@ const REQUIRED_CONFIG_KEYS = [
   'upload_oss_provider',
   'ai_provider',
   'ai_image_provider',
+  'feature_extension_hosted_ai',
+  'feature_extension_byok_ai',
+  'feature_extension_byok_ingest',
+  'feature_extension_byok_publish',
+  'extension_byok_admin_policy',
   'listing_task_refresh_interval_ms',
   'listing_task_refresh_batch_size',
   'listing_task_refresh_concurrency',
@@ -2436,6 +2442,14 @@ function AiSettingsPanel({
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
           </summary>
           <CardContent className="space-y-6 border-t pt-5">
+            <ExtensionAiAdminControls
+              configs={configs}
+              editing={editing}
+              setValue={setValue}
+              savingKey={savingKey}
+              saveConfigs={saveConfigs}
+            />
+
             <section className="rounded-md border bg-muted/20 p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>

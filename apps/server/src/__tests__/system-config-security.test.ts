@@ -85,6 +85,54 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('ai_image_translation_api_key')).resolves.toBe('translation-secret-token');
   });
 
+  it('keeps extension hosted and BYOK controls independently default-off', async () => {
+    const { getConfig, setConfig, SystemConfigMeta } = await import('../config/system-config-schema.js');
+
+    await expect(getConfig('feature_extension_hosted_ai')).resolves.toBe(false);
+    await expect(getConfig('feature_extension_byok_ai')).resolves.toBe(false);
+    await expect(getConfig('feature_extension_byok_ingest')).resolves.toBe(false);
+    await expect(getConfig('feature_extension_byok_publish')).resolves.toBe(false);
+    await expect(getConfig('extension_byok_admin_policy')).resolves.toBe(
+      '{"contractVersion":"extension-byok-admin-policy/v1","revision":0,"mode":"off","ownerUserIds":[],"shopIds":[],"deviceSessionIds":[],"allowedOrigins":[],"allowedOperations":[],"maxConcurrency":1}',
+    );
+    expect(SystemConfigMeta.feature_extension_hosted_ai).toMatchObject({ group: 'ai' });
+    expect(SystemConfigMeta.feature_extension_byok_ai).toMatchObject({ group: 'ai' });
+
+    await setConfig('feature_extension_byok_ai', true);
+    await setConfig('feature_extension_byok_ingest', true);
+    await expect(getConfig('feature_extension_byok_ai')).resolves.toBe(true);
+    await expect(getConfig('feature_extension_byok_ingest')).resolves.toBe(true);
+  });
+
+  it('accepts only strict non-secret BYOK admin policy JSON', async () => {
+    const { setConfig } = await import('../config/system-config-schema.js');
+    const valid = JSON.stringify({
+      contractVersion: 'extension-byok-admin-policy/v1',
+      revision: 2,
+      mode: 'pilot',
+      ownerUserIds: ['owner-1'],
+      shopIds: ['shop-1'],
+      deviceSessionIds: ['device-1'],
+      allowedOrigins: ['https://provider.example'],
+      allowedOperations: ['TEXT_TO_IMAGE'],
+      maxConcurrency: 1,
+    });
+    await expect(setConfig('extension_byok_admin_policy', valid)).resolves.toBeUndefined();
+    await expect(setConfig('extension_byok_admin_policy', '{bad json')).rejects.toThrow();
+    await expect(setConfig(
+      'extension_byok_admin_policy',
+      valid.replace('"maxConcurrency":1', '"maxConcurrency":1,"apiKey":"sk-secret"'),
+    )).rejects.toThrow();
+    await expect(setConfig(
+      'extension_byok_admin_policy',
+      valid.replace('https://provider.example', 'http://provider.example'),
+    )).rejects.toThrow();
+    await expect(setConfig(
+      'extension_byok_admin_policy',
+      valid.replace('"TEXT_TO_IMAGE"', '"UNKNOWN"'),
+    )).rejects.toThrow();
+  });
+
   it('stores only strictly valid category glossary JSON for image translation', async () => {
     const { getConfig, setConfig } = await import('../config/system-config-schema.js');
     const validGlossary = JSON.stringify({

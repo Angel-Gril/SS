@@ -1,0 +1,4 @@
+interface:
+  display_name: "SS ERP Dual AI Workbench"
+  short_description: "Develop hosted and BYOK extension image workflows"
+  default_prompt: "Use $develop-dual-mode-ai-workbench to continue the next active SS ERP extension task safely."

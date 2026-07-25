@@ -29,6 +29,10 @@ import {
   parseExtensionAiImageSuiteExecuteCommand,
   parseExtensionAiImageSuiteReviewCommand,
 } from '../services/extension-ai-image-suite.js';
+import {
+  createByokMediaIngestCommandResolver,
+  type ByokMediaIngestCommandResolverOptions,
+} from '../services/extension-byok-media-ingest-grant.js';
 
 interface MediaWorkflowRolloutDecision {
   enabled: boolean;
@@ -70,6 +74,7 @@ export interface SourceWorkflowCommandResolverOptions {
   featureFlags: SourceWorkflowFeatureFlagEvaluator;
   getMediaWorkflowDecision?: (ownerUserId: string) => Promise<MediaWorkflowRolloutDecision>;
   getAiImageSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
+  getByokReadiness?: ByokMediaIngestCommandResolverOptions['getReadiness'];
   production?: boolean;
   loadShop(input: {
     shopId: string;
@@ -197,6 +202,14 @@ function mediaProviderAllowed(
 export function createSourceWorkflowCommandResolver(
   options: SourceWorkflowCommandResolverOptions,
 ) {
+  const byokMediaIngestResolver = options.getByokReadiness && options.loadDraft
+    ? createByokMediaIngestCommandResolver({
+      loadShop: options.loadShop,
+      loadDraft: options.loadDraft,
+      getReadiness: options.getByokReadiness,
+    })
+    : null;
+
   return async (input: ExtensionCommandResolutionInput): Promise<ExtensionCommandResolution> => {
     if (input.operation === 'SOURCE_CAPTURE') {
       if (input.shopId || input.workflowId || input.draftVersion != null) {
@@ -226,6 +239,13 @@ export function createSourceWorkflowCommandResolver(
         draftVersion: null,
         command: parsed.data,
       };
+    }
+    if (input.operation === 'BYOK_MEDIA_INGEST') {
+      if (!byokMediaIngestResolver) return { kind: 'unavailable' };
+      return byokMediaIngestResolver({
+        ...input,
+        operation: 'BYOK_MEDIA_INGEST',
+      });
     }
     const suiteCommandVersion = typeof input.command?.version === 'string'
       ? input.command.version

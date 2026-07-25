@@ -34,6 +34,7 @@ export const EXTENSION_COMMAND_OPERATIONS = [
   'MEDIA_EXECUTE',
   'MEDIA_REVIEW',
   'MEDIA_APPLY',
+  'BYOK_MEDIA_INGEST',
   'OZON_PUBLISH',
 ] as const;
 
@@ -44,6 +45,7 @@ export const EXTENSION_COMMAND_SCOPE_BY_OPERATION = {
   MEDIA_EXECUTE: 'media:execute',
   MEDIA_REVIEW: 'listing:review',
   MEDIA_APPLY: 'listing:write',
+  BYOK_MEDIA_INGEST: 'byok:media:ingest',
   OZON_PUBLISH: 'listing:publish',
 } as const;
 
@@ -280,6 +282,20 @@ function normalizeBinding(input: ExtensionCommandBinding): ExtensionCommandBindi
       'COMMAND_BINDING_INVALID',
       400,
       'Ozon publish commands require a workflow and draft version',
+    );
+  }
+  if (operation === 'BYOK_MEDIA_INGEST' && !shopId) {
+    throw new ExtensionCommandGrantError(
+      'COMMAND_SHOP_REQUIRED',
+      400,
+      'BYOK media ingest commands require a shop binding',
+    );
+  }
+  if (operation === 'BYOK_MEDIA_INGEST' && (!workflowId || draftVersion == null)) {
+    throw new ExtensionCommandGrantError(
+      'COMMAND_BINDING_INVALID',
+      400,
+      'BYOK media ingest commands require a workflow and draft version',
     );
   }
   return {

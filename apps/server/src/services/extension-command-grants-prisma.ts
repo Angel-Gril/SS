@@ -165,6 +165,7 @@ export async function consumeExtensionCommandGrantInTransaction(
     binding: ExtensionCommandBinding;
     receiptId: string;
     now: Date;
+    requireLiveAuthorizationForPendingReplay?: boolean;
   },
 ): Promise<ExtensionCommandConsumeResult> {
   const grantRows = await tx.$queryRawUnsafe<any[]>(
@@ -229,7 +230,12 @@ export async function consumeExtensionCommandGrantInTransaction(
      WHERE "grant_id" = $1`,
     stored.id,
   );
-  if (receiptRows[0]) return { kind: 'replay', receipt: receiptFromRow(receiptRows[0]) };
+  const existingReceipt = receiptRows[0] ? receiptFromRow(receiptRows[0]) : null;
+  const pendingReplayRequiresLiveAuthorization = existingReceipt?.status === 'PENDING'
+    && input.requireLiveAuthorizationForPendingReplay === true;
+  if (existingReceipt && !pendingReplayRequiresLiveAuthorization) {
+    return { kind: 'replay', receipt: existingReceipt };
+  }
   if (stored.tokenId !== input.binding.tokenId) return { kind: 'mismatch' };
   if (stored.revokedAt) return { kind: 'revoked' };
   if (stored.expiresAt.getTime() <= input.now.getTime()) return { kind: 'expired' };
@@ -255,10 +261,13 @@ export async function consumeExtensionCommandGrantInTransaction(
     const baseAllowed = shop
       && shop.shopGrantStatus === 'ACTIVE'
       && shop.shopOwnerUserId === stored.ownerUserId;
-    const publishAllowed = stored.operation !== 'OZON_PUBLISH'
+    const activeOzonRequired = ['OZON_PUBLISH', 'BYOK_MEDIA_INGEST'].includes(stored.operation);
+    const shopContextAllowed = !activeOzonRequired
       || (shop?.shopStatus === 'ACTIVE' && shop.platform === 'OZON');
-    if (!baseAllowed || !publishAllowed) return { kind: 'shop_denied' };
+    if (!baseAllowed || !shopContextAllowed) return { kind: 'shop_denied' };
   }
+
+  if (existingReceipt) return { kind: 'replay', receipt: existingReceipt };
 
   const consumed = await tx.$queryRawUnsafe<Array<{ id: string }>>(
     `UPDATE "extension_command_grants"

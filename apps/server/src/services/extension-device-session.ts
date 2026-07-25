@@ -20,6 +20,7 @@ export const EXTENSION_DEVICE_SCOPES = [
   'listing:write',
   'listing:review',
   'media:execute',
+  'byok:media:ingest',
   'listing:publish',
 ] as const;
 

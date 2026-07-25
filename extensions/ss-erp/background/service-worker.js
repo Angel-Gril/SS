@@ -1,5 +1,8 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
+try { importScripts('../shared/message-security/runtime-message-authorization.js'); } catch (e) { console.warn('[SS ERP] runtime message authorization load error:', e); }
+try { importScripts('../shared/byok/profile-schema.js'); } catch (e) { console.warn('[SS ERP] BYOK profile schema load error:', e); }
+try { importScripts('../shared/byok/profile-store.js'); } catch (e) { console.warn('[SS ERP] BYOK profile store load error:', e); }
 try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
 try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch (e) { console.warn('[SS ERP] device connection state load error:', e); }
 try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
@@ -3544,6 +3547,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!runtimeMessagePolicy.isAllowedRuntimeMessageSender(message.type, sender, chrome.runtime.id)) {
     sendResponse({ ok: false, error: '不允许的扩展消息来源' });
     return false;
+  }
+
+  // New BYOK/workbench messages must pass the dedicated authorization
+  // dispatcher.  Keeping this branch before the legacy handlers prevents a
+  // future handler from accidentally inheriting the broad legacy sender matrix
+  // or echoing a secret-bearing response.  Phase 1 intentionally registers no
+  // Provider handlers/readiness verifier yet, so dark requests receive a
+  // deterministic HANDLER_UNAVAILABLE/READINESS_UNAVAILABLE response.
+  const runtimeAuthorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  if (runtimeAuthorization
+    && typeof runtimeAuthorization.isNewRuntimeMessageType === 'function'
+    && runtimeAuthorization.isNewRuntimeMessageType(message.type)) {
+    Promise.resolve(runtimeAuthorization.dispatchAuthorizedRuntimeMessage({
+      runtimeId: chrome.runtime.id,
+      sender,
+      message,
+      sendResponse,
+      handlers: globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {},
+      verifyReadinessHandle: globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER,
+      forbiddenResponseValues: globalThis.SS_ERP_BYOK_RESPONSE_SECRET_VALUES,
+    })).catch(() => {
+      try {
+        sendResponse({
+          ok: false,
+          errorCode: 'SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION_FAILED',
+          error: '扩展请求未通过安全校验',
+        });
+      } catch (_error) {
+        // The channel may already have been closed; there is nothing else to do.
+      }
+    });
+    return true;
   }
   if (message.type === SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE) {
     Promise.resolve().then(async () => {

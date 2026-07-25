@@ -219,6 +219,11 @@ const manifestPath = path.join(outDir, 'manifest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 manifest.version = buildVersion;
 
+// Arbitrary BYOK Provider access is optional. The settings page asks Chrome for
+// one exact canonical origin after ERP allowlist approval and a trusted gesture.
+// Never move this wildcard into mandatory host_permissions.
+manifest.optional_host_permissions = ['https://*/*'];
+
 const CLOUD_HOST_PERMISSIONS = unique([
   'https://ss-erp.com/*',
   'https://*.ss-erp.com/*',

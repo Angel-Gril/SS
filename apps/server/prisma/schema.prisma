@@ -136,6 +136,7 @@ enum ExtensionCommandOperation {
   MEDIA_EXECUTE
   MEDIA_REVIEW
   MEDIA_APPLY
+  BYOK_MEDIA_INGEST
   OZON_PUBLISH
 }
 
@@ -456,6 +457,8 @@ model User {
   extensionSessionsAsOwner            ExtensionDeviceSession[]               @relation("ExtensionSessionOwner")
   extensionSecurityEventsAsActor      ExtensionDeviceSecurityEvent[]         @relation("ExtensionSecurityEventActor")
   ownedExtensionCommandGrants         ExtensionCommandGrant[]                @relation("ExtensionCommandGrantOwner")
+  ownedExtensionByokMediaProvenance   ExtensionByokMediaProvenance[]          @relation("ExtensionByokMediaProvenanceOwner")
+  extensionByokMediaProvenanceAsActor ExtensionByokMediaProvenance[]          @relation("ExtensionByokMediaProvenanceActor")
   ownedSourceCaptureSubjects          SourceCaptureSubject[]                 @relation("SourceCaptureSubjectOwner")
   sourceCaptureSnapshotsAsActor       SourceCaptureSnapshot[]                @relation("SourceCaptureSnapshotActor")
   ownedSourceOzonCategoryMappings     SourceOzonCategoryMapping[]            @relation("SourceOzonCategoryMappingOwner")
@@ -564,6 +567,7 @@ model Shop {
   sourceListingWorkflows        SourceListingWorkflow[]
   sourceListingPublishIntents   SourceListingPublishIntent[]
   ozonPublishAttempts           OzonPublishAttempt[]
+  extensionByokMediaProvenance  ExtensionByokMediaProvenance[]
 
   @@unique([id, userId])
   @@index([userId])
@@ -956,6 +960,7 @@ model SourceListingWorkflow {
   publishIntents                 SourceListingPublishIntent[]
   ozonPublishAttempts            OzonPublishAttempt[]
   aiMediaApplicationMutations    AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationTarget")
+  extensionByokMediaProvenance   ExtensionByokMediaProvenance[]
 
   @@unique([id, ownerUserId], map: "source_listing_workflow_owner_key")
   @@unique([id, currentRevision], map: "source_listing_workflow_current_pointer_key")
@@ -998,6 +1003,7 @@ model SourceListingDraftVersion {
   aiMediaContextWorkflows AiMediaWorkflow[]            @relation("AiMediaWorkflowListingDraftContext")
   aiMediaMutationsBefore  AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationBefore")
   aiMediaMutationsAfter   AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationAfter")
+  extensionByokMediaProvenance ExtensionByokMediaProvenance[]
 
   @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
   @@unique([workflowId, revision, ownerUserId, draftVersion], map: "source_listing_draft_ai_media_context_key")
@@ -1044,6 +1050,7 @@ model SourceListingPublishIntent {
   actor          User                      @relation("SourceListingPublishIntentActor", fields: [actorUserId], references: [id], onDelete: Restrict)
   owner          User                      @relation("SourceListingPublishIntentOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
   publishAttempt OzonPublishAttempt?
+  extensionByokMediaProvenance ExtensionByokMediaProvenance[]
   createdAt      DateTime                  @default(now()) @map("created_at")
 
   @@unique([ownerUserId, idempotencyKey], map: "source_listing_publish_intent_idempotency_key")
@@ -2954,6 +2961,7 @@ model MediaAsset {
   applicationMutations    AiMediaApplicationMutation[]
   listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]
+  extensionByokMediaProvenance     ExtensionByokMediaProvenance[]
 
   @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend], map: "media_asset_source_capture_storage_key")
   @@unique([id, ownerUserId], name: "media_asset_id_owner", map: "media_asset_id_owner")
@@ -3981,6 +3989,7 @@ model ExtensionDeviceSession {
   claimedLogisticsCaptureTasks LogisticsCaptureTask[]
   commandGrants                ExtensionCommandGrant[]
   sourceCaptureSnapshots       SourceCaptureSnapshot[]
+  byokMediaProvenance          ExtensionByokMediaProvenance[]
 
   @@unique([id, ownerUserId])
   @@index([ownerUserId, status, expiresAt])
@@ -4029,9 +4038,66 @@ model ExtensionCommandReceipt {
   recoveryNotBefore   DateTime?                     @map("recovery_not_before")
   createdAt           DateTime                      @default(now()) @map("created_at")
   completedAt         DateTime?                     @map("completed_at")
+  byokMediaProvenance ExtensionByokMediaProvenance[]
 
   @@index([status, createdAt])
   @@map("extension_command_receipts")
+}
+
+model ExtensionByokMediaProvenance {
+  id                      String                      @id @default(cuid())
+  contractVersion         String                      @map("contract_version") @db.VarChar(80)
+  executionMode           String                      @default("BYOK") @map("execution_mode") @db.VarChar(20)
+  ownerUserId             String                      @map("owner_user_id")
+  owner                   User                        @relation("ExtensionByokMediaProvenanceOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId             String                      @map("actor_user_id")
+  actor                   User                        @relation("ExtensionByokMediaProvenanceActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  deviceSessionId         String                      @map("device_session_id")
+  deviceSession           ExtensionDeviceSession      @relation(fields: [deviceSessionId], references: [id], onDelete: Restrict)
+  shopId                  String                      @map("shop_id")
+  shop                    Shop                        @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  workflowId              String                      @map("workflow_id")
+  workflow                SourceListingWorkflow       @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  draftRevision           Int                         @map("draft_revision")
+  draftVersion            Int                         @map("draft_version")
+  draft                   SourceListingDraftVersion   @relation(fields: [workflowId, draftRevision, ownerUserId, draftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction)
+  skuKey                  String                      @map("sku_key") @db.VarChar(1024)
+  slotKey                 String                      @map("slot_key") @db.VarChar(1024)
+  endpointOriginSha256    String                      @map("endpoint_origin_sha256") @db.Char(64)
+  model                   String                      @db.VarChar(200)
+  operation               AiMediaOperation
+  providerRequestIdSha256 String?                     @map("provider_request_id_sha256") @db.Char(64)
+  promptSha256            String                      @map("prompt_sha256") @db.Char(64)
+  negativePromptSha256    String?                     @map("negative_prompt_sha256") @db.Char(64)
+  sourceSha256            String?                     @map("source_sha256") @db.Char(64)
+  referenceSha256s        String[]                    @default([]) @map("reference_sha256s")
+  maskSha256              String?                     @map("mask_sha256") @db.Char(64)
+  resultSha256            String                      @map("result_sha256") @db.Char(64)
+  assetId                 String                      @map("asset_id")
+  asset                   MediaAsset                  @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  resultMimeType          String                      @map("result_mime_type") @db.VarChar(32)
+  resultWidth             Int                         @map("result_width")
+  resultHeight            Int                         @map("result_height")
+  idempotencyKey          String                      @map("idempotency_key") @db.VarChar(200)
+  requestHash             String                      @map("request_hash") @db.Char(64)
+  publishIntentId         String?                     @map("publish_intent_id")
+  publishIntent           SourceListingPublishIntent? @relation(fields: [publishIntentId], references: [id], onDelete: Restrict)
+  publishReceiptId        String?                     @map("publish_receipt_id")
+  publishReceipt          ExtensionCommandReceipt?    @relation(fields: [publishReceiptId], references: [id], onDelete: Restrict)
+  erpAiChargeCents        Int                         @default(0) @map("erp_ai_charge_cents")
+  createdAt               DateTime                    @default(now()) @map("created_at")
+  updatedAt               DateTime                    @updatedAt @map("updated_at")
+
+  @@unique([ownerUserId, idempotencyKey], name: "extension_byok_media_provenance_owner_idempotency", map: "extension_byok_media_provenance_owner_idempotency_key")
+  @@unique([assetId, ownerUserId], name: "extension_byok_media_provenance_asset_owner", map: "extension_byok_media_provenance_asset_owner_key")
+  @@index([ownerUserId, createdAt], map: "extension_byok_media_provenance_owner_created_idx")
+  @@index([deviceSessionId, createdAt], map: "extension_byok_media_provenance_device_created_idx")
+  @@index([shopId, createdAt], map: "extension_byok_media_provenance_shop_created_idx")
+  @@index([workflowId, draftVersion, draftRevision], map: "extension_byok_media_provenance_draft_idx")
+  @@index([resultSha256], map: "extension_byok_media_provenance_result_idx")
+  @@index([publishIntentId], map: "extension_byok_media_provenance_publish_intent_idx")
+  @@index([publishReceiptId], map: "extension_byok_media_provenance_publish_receipt_idx")
+  @@map("extension_byok_media_provenance")
 }
 
 model ExtensionDeviceRefreshFamily {

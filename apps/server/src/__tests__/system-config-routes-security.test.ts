@@ -229,6 +229,23 @@ describe('SystemConfig route mutation security', () => {
     expect(state.rows.get('feature_turnstile_login')).toMatchObject({ value: 'false', revision: 0 });
   });
 
+  it('seeds every extension AI capability off with a closed BYOK policy', async () => {
+    await seedSystemConfig();
+
+    for (const key of [
+      'feature_extension_hosted_ai',
+      'feature_extension_byok_ai',
+      'feature_extension_byok_ingest',
+      'feature_extension_byok_publish',
+    ]) {
+      expect(state.rows.get(key)).toMatchObject({ value: 'false', revision: 0 });
+    }
+    expect(state.rows.get('extension_byok_admin_policy')).toMatchObject({
+      value: '{"contractVersion":"extension-byok-admin-policy/v1","revision":0,"mode":"off","ownerUserIds":[],"shopIds":[],"deviceSessionIds":[],"allowedOrigins":[],"allowedOperations":[],"maxConcurrency":1}',
+      revision: 0,
+    });
+  });
+
   it('preserves the existing super-admin authorization check ahead of the session gate', async () => {
     state.isSuperAdmin = false;
     const app = await appFor('legacy_extension');
@@ -563,6 +580,44 @@ describe('SystemConfig route mutation security', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 0, errorCode: 'system_config_invalid_value' });
     expect(db.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rejects a secret-bearing BYOK policy without enabling any BYOK capability', async () => {
+    state.rows.set('feature_extension_byok_ai', {
+      key: 'feature_extension_byok_ai', value: 'false', revision: 0,
+    });
+    state.rows.set('extension_byok_admin_policy', {
+      key: 'extension_byok_admin_policy',
+      value: '{"contractVersion":"extension-byok-admin-policy/v1","revision":0,"mode":"off","ownerUserIds":[],"shopIds":[],"deviceSessionIds":[],"allowedOrigins":[],"allowedOperations":[],"maxConcurrency":1}',
+      revision: 0,
+    });
+    const app = await appFor('account_session');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/batch',
+      payload: {
+        items: [
+          { key: 'feature_extension_byok_ai', value: 'true', expectedRevision: 0 },
+          {
+            key: 'extension_byok_admin_policy',
+            value: '{"contractVersion":"extension-byok-admin-policy/v1","revision":1,"mode":"global","ownerUserIds":[],"shopIds":[],"deviceSessionIds":[],"allowedOrigins":["https://provider.example"],"allowedOperations":["TEXT_TO_IMAGE"],"maxConcurrency":1,"apiKey":"sk-secret"}',
+            expectedRevision: 0,
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      code: 0,
+      errorCode: 'system_config_invalid_value',
+    });
+    expect(JSON.stringify(response.json())).not.toContain('sk-secret');
+    expect(state.rows.get('feature_extension_byok_ai')).toMatchObject({ value: 'false', revision: 0 });
+    expect(state.rows.get('extension_byok_admin_policy')).toMatchObject({ revision: 0 });
+    expect(audit).not.toHaveBeenCalled();
     await app.close();
   });
 

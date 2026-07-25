@@ -12,3 +12,4 @@ export * from './ozon-extension-sync-status';
 export * from './ozon-logistics-rules';
 export * from './ozon-logistics-validation';
 export * from './ozon-listing-draft';
+export * from './ai-image-workbench-contract';

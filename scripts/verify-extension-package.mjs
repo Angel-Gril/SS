@@ -239,10 +239,18 @@ const requiredAdapters = [
 
 const requiredSecurityModules = [
   'shared/message-security/runtime-message-policy.js',
+  'shared/message-security/runtime-message-authorization.js',
+  'shared/byok/profile-schema.js',
+  'shared/byok/profile-store.js',
+];
+
+const requiredByokModules = [
+  'shared/byok/permission-broker.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
 for (const modulePath of requiredSecurityModules) fileExists(modulePath, `security module ${modulePath}`);
+for (const modulePath of requiredByokModules) fileExists(modulePath, `BYOK module ${modulePath}`);
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
 for (const adapter of requiredAdapters) {
@@ -289,6 +297,7 @@ if (externalMatches.some((item) => item.includes('120.55.61.146'))) {
 }
 
 const hostPermissions = manifest.host_permissions || [];
+const optionalHostPermissions = manifest.optional_host_permissions || [];
 const contentMatches = (manifest.content_scripts || []).flatMap((script) => script.matches || []);
 const webResourceMatches = (manifest.web_accessible_resources || []).flatMap((group) => group.matches || []);
 const broadPermissionChecks = [
@@ -298,6 +307,11 @@ const broadPermissionChecks = [
   [hostPermissions, 'file:///*', 'host_permissions contains file:///*; keep only for local/offline package'],
 ];
 
+function isArbitraryHttpHostPermission(pattern) {
+  if (pattern === '<all_urls>') return true;
+  return /^(?:\*|https?):\/\/\*(?::(?:\*|\d+))?\/.*$/iu.test(String(pattern || ''));
+}
+
 for (const [values, blockedValue, message] of broadPermissionChecks) {
   if (!values.includes(blockedValue)) continue;
   if (packageTarget === 'cloud') fail(`cloud package ${message}`);
@@ -305,6 +319,27 @@ for (const [values, blockedValue, message] of broadPermissionChecks) {
 }
 
 if (packageTarget === 'cloud') {
+  const mandatoryArbitraryProviderPermission = hostPermissions.find(isArbitraryHttpHostPermission);
+  if (mandatoryArbitraryProviderPermission) {
+    fail(`cloud package grants arbitrary Provider access as mandatory: ${mandatoryArbitraryProviderPermission}`);
+  } else {
+    pass('cloud package has no mandatory arbitrary Provider host access');
+  }
+
+  if (optionalHostPermissions.length === 1 && optionalHostPermissions[0] === 'https://*/*') {
+    pass('cloud package declares HTTPS Provider access only as an optional host permission');
+  } else {
+    fail('cloud package optional Provider host permission must be exactly https://*/*');
+  }
+
+  const arbitraryPageMatch = [...contentMatches, ...webResourceMatches]
+    .find(isArbitraryHttpHostPermission);
+  if (arbitraryPageMatch) {
+    fail(`cloud package contains arbitrary wildcard page access: ${arbitraryPageMatch}`);
+  } else {
+    pass('cloud package has no arbitrary wildcard content/resource match');
+  }
+
   const allPermissionValues = [...externalMatches, ...hostPermissions, ...contentMatches, ...webResourceMatches];
   const localPermission = allPermissionValues.find((item) => (
     item.includes('localhost') || item.includes('127.0.0.1') || item.includes('120.55.61.146')

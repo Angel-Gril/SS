@@ -186,6 +186,9 @@ describe('extension command grant routes', () => {
     expect(commandRegistration).toBeGreaterThan(deviceStart);
     expect(commandRegistration).toBeLessThan(logisticsStart);
     expect(index).toContain('resolveExtensionCommandGrantSecret');
+    expect(index).toContain('createExtensionByokSystemConfigPolicyLoader');
+    expect(index).toContain('readConfig: (key) => getStrictConfig(key)');
+    expect(index).toContain('getByokReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input)');
     expect(index.match(/getMediaWorkflowDecision: getAiMediaRolloutDecision/gu)).toHaveLength(3);
   });
 
