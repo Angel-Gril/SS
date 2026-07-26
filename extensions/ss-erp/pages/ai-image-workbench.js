@@ -500,8 +500,11 @@
   function renderControls() {
     var ready = profileCanGenerate(selectedProfileRow()) && readinessIsCurrent();
     var promptReady = String(nodes.promptInput.value || '').normalize('NFKC').trim().length > 0;
-    var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome;
-    nodes.profileSelect.disabled = state.busy || Boolean(state.candidate) || !profileRows().length;
+    var editTaskLocked = document.body && document.body.dataset
+      && document.body.dataset.editTaskLocked === 'true';
+    var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome || editTaskLocked;
+    nodes.profileSelect.disabled = state.busy || Boolean(state.candidate)
+      || !profileRows().length || editTaskLocked;
     nodes.promptInput.disabled = locked;
     nodes.negativePromptInput.disabled = locked;
     nodes.sizeSelect.disabled = locked;
@@ -1055,7 +1058,12 @@
   }
 
   nodes.profileSelect.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || state.busy || state.candidate) return;
+    if (!event || event.isTrusted !== true || state.busy || state.candidate
+      || document.body && document.body.dataset
+        && document.body.dataset.editTaskLocked === 'true') {
+      nodes.profileSelect.value = state.selectedProfileId;
+      return;
+    }
     state.selectedProfileId = String(nodes.profileSelect.value || '');
     state.readiness = null;
     void refreshReadiness({ lifecycleEpoch: state.lifecycleEpoch });

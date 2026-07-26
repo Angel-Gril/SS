@@ -14,7 +14,7 @@
         <div>
           <p class="eyebrow">扩展独立工作区</p>
           <h1 id="pageTitle">AI 图片工作台</h1>
-          <p class="page-subtitle">单图 BYOK 安全验收版</p>
+          <p class="page-subtitle">BYOK 生成、参考图与编辑工作区</p>
         </div>
       </div>
       <div class="header-actions">
@@ -73,6 +73,96 @@
           <p id="profileSummary" class="field-hint">正在检查会话密钥、来源权限和能力证据</p>
         </div>
 
+        <fieldset id="operationSwitch" class="operation-switch" aria-describedby="operationReason">
+          <legend>图片操作</legend>
+          <label class="operation-option is-selected" data-operation-option="TEXT_TO_IMAGE">
+            <input id="operationTextToImage" type="radio" name="imageOperation" value="TEXT_TO_IMAGE" checked />
+            <span><strong>文生图</strong><small data-operation-reason="TEXT_TO_IMAGE">使用文字生成候选图</small></span>
+          </label>
+          <label class="operation-option" data-operation-option="IMAGE_TO_IMAGE">
+            <input id="operationImageToImage" type="radio" name="imageOperation" value="IMAGE_TO_IMAGE" />
+            <span><strong>参考图</strong><small data-operation-reason="IMAGE_TO_IMAGE">正在读取能力证据</small></span>
+          </label>
+          <label class="operation-option" data-operation-option="FULL_EDIT">
+            <input id="operationFullEdit" type="radio" name="imageOperation" value="FULL_EDIT" />
+            <span><strong>整图编辑</strong><small data-operation-reason="FULL_EDIT">正在读取能力证据</small></span>
+          </label>
+          <label class="operation-option" data-operation-option="INPAINT">
+            <input id="operationInpaint" type="radio" name="imageOperation" value="INPAINT" />
+            <span><strong>局部重绘</strong><small data-operation-reason="INPAINT">正在读取能力证据</small></span>
+          </label>
+        </fieldset>
+        <p id="operationReason" class="operation-reason" role="status" aria-live="polite">
+          文生图能力将沿用当前单图审核与发布流程。
+        </p>
+        <div id="restartRecovery" class="restart-recovery" role="alert" hidden>
+          <label for="restartChargeConfirmation">
+            <input id="restartChargeConfirmation" type="checkbox" />
+            <span>我确认上一次 Provider 请求可能已经扣费，仍要重置本地编辑会话</span>
+          </label>
+          <button id="restartAcknowledgeButton" class="button button-danger" type="button" disabled>
+            确认并重置
+          </button>
+        </div>
+
+        <section id="editInputPanel" class="edit-input-panel" aria-labelledby="editInputTitle" hidden>
+          <div class="edit-input-heading">
+            <div>
+              <p class="section-kicker">编辑素材</p>
+              <h3 id="editInputTitle">选择来源图片</h3>
+            </div>
+            <span id="editMediaCount" class="media-count">0 / 4</span>
+          </div>
+
+          <div id="referenceInputGroup" class="edit-media-group" hidden>
+            <fieldset class="reference-scope">
+              <legend>参考图应用范围</legend>
+              <label><input id="referenceScopeGlobal" type="radio" name="referenceScope" value="GLOBAL" checked />本次会话</label>
+              <label><input id="referenceScopeSlot" type="radio" name="referenceScope" value="SLOT" />当前槽位</label>
+            </fieldset>
+            <label class="file-input-label" for="referenceFiles">添加 1-4 张参考图</label>
+            <input id="referenceFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+            <p class="field-hint">当前槽位存在参考图时会覆盖本次会话的默认参考图。</p>
+            <ul id="referenceList" class="media-handle-list" aria-label="已选参考图"></ul>
+          </div>
+
+          <div id="sourceInputGroup" class="edit-media-group" hidden>
+            <label class="file-input-label" for="sourceFile">选择一张待编辑图片</label>
+            <input id="sourceFile" type="file" accept="image/png,image/jpeg,image/webp" />
+            <div id="sourceStage" class="source-stage" hidden>
+              <img id="editSourceImage" alt="待编辑来源图片" />
+              <canvas
+                id="editMaskCanvas"
+                aria-label="局部重绘遮罩。方向键移动光标，空格或回车应用当前工具"
+                aria-describedby="maskKeyboardHelp"
+                tabindex="0"
+                hidden
+              ></canvas>
+            </div>
+            <p id="sourceMeta" class="field-hint">尚未选择来源图片</p>
+            <p id="maskKeyboardHelp" class="sr-only">
+              使用方向键移动遮罩光标，使用空格或回车在当前位置应用画笔或橡皮。
+            </p>
+          </div>
+
+          <div id="maskTools" class="mask-tools" hidden>
+            <div class="mask-toolbar" role="group" aria-label="局部重绘遮罩工具">
+              <button id="maskPaintButton" class="tool-button is-active" type="button" aria-pressed="true">画笔</button>
+              <button id="maskEraseButton" class="tool-button" type="button" aria-pressed="false">橡皮</button>
+              <label for="maskBrushSize">笔刷</label>
+              <input id="maskBrushSize" type="range" min="1" max="100" value="24" />
+              <output id="maskBrushValue" for="maskBrushSize">24 px</output>
+              <button id="maskUndoButton" class="button button-secondary button-compact" type="button" disabled>撤销</button>
+              <button id="maskRedoButton" class="button button-secondary button-compact" type="button" disabled>重做</button>
+              <button id="maskClearButton" class="button button-secondary button-compact" type="button" disabled>清空</button>
+            </div>
+            <dl class="mask-summary">
+              <div><dt>重绘像素</dt><dd id="maskEditPixels">0</dd></div>
+              <div><dt>保留像素</dt><dd id="maskPreservedPixels">0</dd></div>
+            </dl>
+          </div>
+        </section>
+
         <div class="field-group">
           <label for="promptInput">生成提示词</label>
           <textarea
@@ -105,6 +195,9 @@
           </div>
           <button id="generateButton" class="button button-primary" type="button" disabled>
             生成候选图
+          </button>
+          <button id="runEditButton" class="button button-primary" type="button" disabled hidden>
+            创建编辑候选
           </button>
         </div>
       </section>
@@ -181,6 +274,39 @@
         </section>
       </section>
 
+      <section id="editResultPanel" class="result-panel edit-result-panel" aria-labelledby="editResultTitle" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">当前槽位</p>
+            <h2 id="editResultTitle">编辑候选备选</h2>
+          </div>
+          <span
+            id="editResultStatus"
+            class="state-badge state-pending"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >等待任务</span>
+        </div>
+        <div id="editSelectedPreview" class="edit-selected-preview" hidden>
+          <div class="edit-selected-media">
+            <img id="editSelectedImage" alt="当前选中的编辑候选图" hidden />
+          </div>
+          <p id="editSelectedMeta">等待安全预览</p>
+        </div>
+        <ol id="editAlternatives" class="alternative-list" aria-label="当前槽位候选备选"></ol>
+        <p id="editResultNotice" class="review-note" role="status" aria-live="polite">
+          编辑结果仅保留在扩展临时存储；本阶段不会接收至 ERP 或发布。
+        </p>
+        <label id="regenerateConfirmationRow" class="publish-confirmation" for="regenerateChargeConfirmation">
+          <input id="regenerateChargeConfirmation" type="checkbox" />
+          <span>我确认再生成可能由外部 Provider 再次扣费</span>
+        </label>
+        <div class="review-actions">
+          <button id="regenerateEditButton" class="button button-secondary" type="button" disabled>重新生成当前槽位</button>
+        </div>
+      </section>
+
       <section id="emptyResult" class="empty-result" aria-label="工作台安全说明">
         <p class="section-kicker">当前边界</p>
         <h2>生成、预览、审核、接收、发布</h2>
@@ -195,7 +321,11 @@
   </main>
 
   <noscript><p class="no-script">需要启用 JavaScript 才能使用 AI 图片工作台。</p></noscript>
+  <script src="../shared/ai-media/image-mask-core.js"></script>
+  <script src="../shared/ai-media/image-mask-layout.js"></script>
+  <script src="../shared/ai-media/image-mask-canvas.js"></script>
   <script src="../shared/byok/workbench-client.js"></script>
   <script src="./ai-image-workbench.js"></script>
+  <script src="./ai-image-workbench-edit.js"></script>
 </body>
 </html>

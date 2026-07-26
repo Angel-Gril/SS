@@ -50,7 +50,23 @@ const readiness = {
   expiresAt: '2026-07-26T10:05:00.000Z',
 };
 const resultId = 'br_' + 'b'.repeat(48);
+const mediaHandle = 'mh_' + '1'.repeat(48);
 const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
+const editSnapshot = {
+  contractVersion: 'extension-byok-workbench-edit-controller/v1', executionMode: 'BYOK',
+  slotKey: 'sku:sku-1:hero', profileId: null, operation: null,
+  references: {
+    sessionGlobalCount: 0, slotOverrideActive: false,
+    slotOverrideCount: null, effectiveCount: 0,
+  },
+  operationAvailability: [],
+  scheduler: {
+    state: 'READY', activeCount: 0, queuedCount: 0,
+    pauseRequested: false, effectiveConcurrency: null,
+  },
+  slot: { revision: 0, attemptIds: [], selectedAttemptId: null, selectedCandidateId: null },
+  alternatives: [],
+};
 const ingestReceipt = {
   contractVersion: 'extension-byok-generated-asset-ingest-client/v1', replayed: false,
   receiptId: 'receipt-1', assetId: 'asset-1', provenanceId: 'provenance-1',
@@ -92,6 +108,32 @@ const responses = new Map([
   [api.MESSAGE_TYPES.REVIEW_RESULT, { ok: true, data: { resultId, reviewState: 'APPROVED' } }],
   [api.MESSAGE_TYPES.INGEST, { ok: true, data: boundResult }],
   [api.MESSAGE_TYPES.RECOVER_INGEST, { ok: true, data: boundResult }],
+  [api.MESSAGE_TYPES.EDIT_MEDIA_PREPARE, {
+    ok: true,
+    data: {
+      contractVersion: 'extension-byok-workbench-media-channel/v1',
+      channelName: 'ss-erp:byok-media-upload:' + '2'.repeat(48),
+      uploadTicket: 'ut_' + '3'.repeat(48), purpose: 'REFERENCE',
+      expiresAt: '2026-07-26T10:00:15.000Z',
+    },
+  }],
+  [api.MESSAGE_TYPES.EDIT_MEDIA_RELEASE, { ok: true, data: { released: true } }],
+  [api.MESSAGE_TYPES.EDIT_STATE, { ok: true, data: editSnapshot }],
+  [api.MESSAGE_TYPES.EDIT_REFERENCES, { ok: true, data: editSnapshot }],
+  [api.MESSAGE_TYPES.EDIT_START, { ok: true, data: editSnapshot }],
+  [api.MESSAGE_TYPES.EDIT_SELECT, { ok: true, data: editSnapshot }],
+  [api.MESSAGE_TYPES.EDIT_REGENERATE, { ok: true, data: editSnapshot }],
+  [api.MESSAGE_TYPES.EDIT_PREVIEW, {
+    ok: true,
+    data: {
+      contractVersion: 'extension-byok-workbench-preview-channel/v1',
+      channelName: 'ss-erp:byok-preview:' + 'd'.repeat(48),
+      previewTicket: 'pt_' + 'e'.repeat(48),
+      expiresAt: '2026-07-26T10:00:15.000Z',
+      metadata: { mimeType: 'image/png', byteLength: blob.size, sha256: 'c'.repeat(64) },
+    },
+  }],
+  [api.MESSAGE_TYPES.EDIT_CLEANUP, { ok: true, data: { cleaned: true } }],
 ]);
 const runtime = {
   lastError: null,
@@ -152,6 +194,64 @@ assert.deepEqual(JSON.parse(JSON.stringify(recoveredIngest)), boundResult);
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getPublishPreview())), publishPreview);
 assert.equal((await client.confirmPublish('9'.repeat(64))).receiptId, 'publish-receipt-1');
 assert.equal((await client.recoverPublish()).state, 'SUCCEEDED');
+
+const uploadChannelName = responses.get(api.MESSAGE_TYPES.EDIT_MEDIA_PREPARE).data.channelName;
+FakeBroadcastChannel.hooks.set(uploadChannelName, (page, value) => {
+  assert.equal(value.image instanceof Blob, true);
+  page.onmessage({
+    data: {
+      contractVersion: 'extension-byok-workbench-media-channel/v1', type: 'ACCEPTED',
+      uploadTicket: 'ut_' + '3'.repeat(48), mediaHandle, purpose: 'REFERENCE',
+      metadata: {
+        mimeType: blob.type, byteLength: blob.size, width: 1, height: 1,
+        sha256: '4'.repeat(64),
+      },
+    },
+  });
+});
+assert.equal((await client.uploadEditMedia('REFERENCE', blob)).mediaHandle, mediaHandle);
+assert.equal((await client.releaseEditMedia(mediaHandle, 'REFERENCE')).released, true);
+assert.deepEqual(JSON.parse(JSON.stringify(await client.setEditReferences({
+  scope: 'SESSION_GLOBAL', handles: [mediaHandle],
+}))), editSnapshot);
+assert.deepEqual(JSON.parse(JSON.stringify(await client.getEditState())), editSnapshot);
+const editCommand = {
+  profileId: 'profile-1', operation: 'IMAGE_TO_IMAGE',
+  prompt: 'Preserve product identity', negativePrompt: null, size: '1024x1024',
+  sourceHandle: null, maskHandle: null,
+};
+assert.deepEqual(JSON.parse(JSON.stringify(await client.startEdit(editCommand))), editSnapshot);
+assert.deepEqual(JSON.parse(JSON.stringify(
+  await client.selectEditAlternative('attempt-000001'),
+)), editSnapshot);
+assert.deepEqual(JSON.parse(JSON.stringify(await client.regenerateEdit({
+  ...editCommand,
+  expectedSlotRevision: 1,
+  chargeAcknowledgement: {
+    warningVersion: 'external-provider-charge/v1', confirmed: true,
+  },
+}))), editSnapshot);
+const editPreview = await client.openEditPreview(resultId);
+editPreview.revoke();
+assert.equal((await client.cleanupEditSession()).cleaned, true);
+assert.equal((await client.acknowledgeEditRestart()).cleaned, true);
+
+FakeBroadcastChannel.hooks.set(uploadChannelName, (page) => {
+  page.onmessage({
+    data: {
+      contractVersion: 'extension-byok-workbench-media-channel/v1', type: 'ACCEPTED',
+      uploadTicket: 'ut_' + '3'.repeat(48), mediaHandle, purpose: 'REFERENCE',
+      metadata: {
+        mimeType: blob.type, byteLength: blob.size, width: 0, height: 1,
+        sha256: '4'.repeat(64),
+      },
+    },
+  });
+});
+await assert.rejects(
+  client.uploadEditMedia('REFERENCE', blob),
+  (error) => error && error.code === 'SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED',
+);
 assert.deepEqual(JSON.parse(JSON.stringify(
   messages.find((message) => message.type === api.MESSAGE_TYPES.INGEST),
 )), {
@@ -183,6 +283,19 @@ assert.equal(messages.some((message) => JSON.stringify(message).includes('apiKey
 assert.equal(messages.some((message) => JSON.stringify(message).includes('base64')), false);
 assert.equal(messages.some((message) => JSON.stringify(message).includes('blob:extension-preview')), false);
 assert.equal(messages.some((message) => JSON.stringify(message).includes('imageBytes')), false);
+assert.equal(messages.some((message) => Object.values(message).some((value) => value instanceof Blob)), false,
+  'Blob bytes travel only over the one-use BroadcastChannel');
+assert.deepEqual(JSON.parse(JSON.stringify(
+  messages.filter((message) => message.type === api.MESSAGE_TYPES.EDIT_CLEANUP)
+    .map((message) => message.payload),
+)), [
+  {},
+  {
+    restartAcknowledgement: {
+      warningVersion: 'external-provider-charge/v1', confirmed: true,
+    },
+  },
+]);
 assert.deepEqual(JSON.parse(JSON.stringify(
   messages.find((message) => message.type === api.MESSAGE_TYPES.GET_PUBLIC_STATE),
 )), {

@@ -1,0 +1,502 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+const root = 'extensions/ss-erp';
+const html = readFileSync(`${root}/pages/ai-image-workbench.html`, 'utf8');
+const css = readFileSync(`${root}/pages/ai-image-workbench.css`, 'utf8');
+const source = readFileSync(`${root}/pages/ai-image-workbench-edit.js`, 'utf8');
+
+for (const id of [
+  'operationSwitch', 'operationImageToImage', 'operationFullEdit', 'operationInpaint',
+  'referenceScopeGlobal', 'referenceScopeSlot', 'referenceFiles', 'sourceFile',
+  'editMaskCanvas', 'maskPaintButton', 'maskEraseButton', 'maskUndoButton',
+  'maskRedoButton', 'editAlternatives', 'regenerateChargeConfirmation',
+  'regenerateEditButton', 'restartRecovery', 'restartChargeConfirmation',
+  'restartAcknowledgeButton',
+]) {
+  assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
+}
+assert.match(html, /image-mask-core\.js[\s\S]*image-mask-layout\.js[\s\S]*image-mask-canvas\.js/u);
+assert.match(html, /ai-image-workbench-edit\.js/u);
+assert.match(html, /当前槽位存在参考图时会覆盖本次会话/u);
+assert.match(html, /外部 Provider 再次扣费/u);
+assert.match(css, /\.operation-switch/u);
+assert.match(css, /\.source-stage canvas[\s\S]*touch-action:\s*none/u);
+assert.match(css, /\.alternative-button\.is-selected/u);
+assert.match(css, /\.edit-selected-media\s*\{[\s\S]*aspect-ratio:\s*1/u);
+assert.match(css, /\.alternative-button img\s*\{[\s\S]*display:\s*block/u);
+assert.match(css, /input:focus-visible[\s\S]*canvas:focus-visible/u);
+assert.match(css, /--focus:\s*#96370e/u);
+assert.match(css, /#editResultNotice\.is-error/u);
+assert.match(html, /id="editMaskCanvas"[\s\S]*tabindex="0"/u);
+assert.match(html, /class="mask-toolbar" role="group"/u);
+assert.doesNotMatch(html, /class="mask-toolbar" role="toolbar"/u);
+assert.match(html, /id="editResultStatus"[\s\S]*aria-live="polite"/u);
+assert.match(css, /@media\s*\(max-width:\s*520px\)/u);
+assert.doesNotMatch(source, /innerHTML|localStorage|storage\.local|storage\.sync|data:image|readAsDataURL/u);
+assert.match(source, /event\.isTrusted\s*!==\s*true/u);
+assert.match(source, /effectiveReferences/u);
+assert.match(source, /state\.references\.SLOT\.length\s*\?/u);
+assert.match(source, /maskCanvasApi\.sourcePoint/u);
+assert.match(source, /maskCanvasApi\.exportPng/u);
+assert.match(source, /selectEditAlternative/u);
+assert.match(source, /warningVersion:\s*'external-provider-charge\/v1'/u);
+assert.match(source, /state\s*===\s*'EXPIRED'/u);
+
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  add(...values) { values.forEach((value) => this.values.add(value)); }
+  remove(...values) { values.forEach((value) => this.values.delete(value)); }
+  toggle(value, force) {
+    if (force === true) this.values.add(value);
+    else if (force === false) this.values.delete(value);
+    else if (this.values.has(value)) this.values.delete(value);
+    else this.values.add(value);
+  }
+  contains(value) { return this.values.has(value); }
+}
+
+class FakeNode {
+  constructor(id, tagName = 'div') {
+    this.id = id;
+    this.tagName = tagName.toUpperCase();
+    this.textContent = '';
+    this.value = '';
+    this.checked = false;
+    this.disabled = false;
+    this.hidden = false;
+    this.files = [];
+    this.children = [];
+    this.listeners = new Map();
+    this.attributes = {};
+    this.classList = new FakeClassList();
+    this.style = {};
+    this.src = '';
+    this.width = 100;
+    this.height = 100;
+    this.capturedPointerId = null;
+  }
+  addEventListener(type, listener) {
+    const values = this.listeners.get(type) || [];
+    values.push(listener);
+    this.listeners.set(type, values);
+  }
+  dispatch(type, event = {}) {
+    for (const listener of this.listeners.get(type) || []) {
+      listener({ target: this, isTrusted: true, ...event });
+    }
+  }
+  appendChild(child) { this.children.push(child); return child; }
+  replaceChildren(...children) { this.children = children; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; if (name === 'src') this.src = ''; }
+  getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; }
+  getContext() {
+    return {
+      save() {}, restore() {}, beginPath() {}, arc() {}, fill() {}, stroke() {},
+      moveTo() {}, lineTo() {}, clearRect() {}, fillRect() {}, getImageData() {
+        return { data: new Uint8ClampedArray(100 * 100 * 4) };
+      },
+    };
+  }
+  setPointerCapture(id) { this.capturedPointerId = id; }
+  hasPointerCapture(id) { return this.capturedPointerId === id; }
+  releasePointerCapture(id) { if (this.capturedPointerId === id) this.capturedPointerId = null; }
+  focus() { this.focused = true; }
+}
+
+const ids = [
+  'generationTitle', 'profileSelect', 'promptInput', 'negativePromptInput', 'sizeSelect',
+  'generateButton', 'runEditButton', 'editInputPanel', 'operationReason',
+  'restartRecovery', 'restartChargeConfirmation', 'restartAcknowledgeButton',
+  'operationTextToImage', 'operationImageToImage', 'operationFullEdit', 'operationInpaint',
+  'referenceInputGroup', 'sourceInputGroup', 'referenceScopeGlobal', 'referenceScopeSlot',
+  'referenceFiles', 'referenceList', 'editMediaCount', 'sourceFile', 'sourceStage',
+  'editSourceImage', 'sourceMeta', 'editMaskCanvas', 'maskTools', 'maskPaintButton',
+  'maskEraseButton', 'maskBrushSize', 'maskBrushValue', 'maskUndoButton', 'maskRedoButton',
+  'maskClearButton', 'maskEditPixels', 'maskPreservedPixels', 'editResultPanel',
+  'editResultStatus', 'editSelectedPreview', 'editSelectedImage', 'editSelectedMeta',
+  'editAlternatives', 'editResultNotice', 'regenerateConfirmationRow',
+  'regenerateChargeConfirmation', 'regenerateEditButton', 'refreshButton',
+];
+const nodes = Object.fromEntries(ids.map((id) => [id, new FakeNode(id,
+  id.startsWith('operation') || id.startsWith('referenceScope')
+    || id === 'regenerateChargeConfirmation' || id === 'restartChargeConfirmation' ? 'input'
+      : id.endsWith('Button') ? 'button'
+        : id === 'profileSelect' || id === 'sizeSelect' ? 'select'
+          : id === 'promptInput' || id === 'negativePromptInput' ? 'textarea'
+            : id.includes('Canvas') ? 'canvas' : id.includes('Image') ? 'img' : 'div')],
+));
+nodes.profileSelect.value = 'profile-1';
+nodes.promptInput.value = 'Preserve the exact product and improve the catalog composition';
+nodes.sizeSelect.value = '1024x1024';
+nodes.operationTextToImage.checked = true;
+nodes.operationTextToImage.value = 'TEXT_TO_IMAGE';
+nodes.operationImageToImage.value = 'IMAGE_TO_IMAGE';
+nodes.operationFullEdit.value = 'FULL_EDIT';
+nodes.operationInpaint.value = 'INPAINT';
+nodes.referenceScopeGlobal.checked = true;
+nodes.maskBrushSize.value = '24';
+
+const optionNodes = Object.fromEntries([
+  'TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT',
+].map((operation) => [operation, new FakeNode(`option-${operation}`, 'label')]));
+const reasonNodes = Object.fromEntries(Object.keys(optionNodes)
+  .map((operation) => [operation, new FakeNode(`reason-${operation}`, 'small')]));
+const body = new FakeNode('body', 'body');
+body.dataset = {};
+let objectUrlCounter = 0;
+const revokedUrls = [];
+const calls = [];
+let mediaCounter = 0;
+const referenceOutcomes = [];
+let nextEditStateError = null;
+
+function clientFailure(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+const profileRow = {
+  profile: {
+    id: 'profile-1', name: 'Relay', baseUrl: 'https://relay.example/v1',
+    model: 'edit-model-v1',
+    allowedOperations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+    preferences: {},
+  },
+  hasKey: true,
+  permissionState: 'GRANTED',
+  textToImageEvidence: {
+    operation: 'TEXT_TO_IMAGE', requestMode: 'json', policyRevision: '734',
+    verifiedAt: '2026-07-27T09:00:00.000Z', expiresAt: '2099-07-27T10:00:00.000Z',
+  },
+  capabilityEvidence: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].map((operation) => ({
+    operation, requestMode: 'multipart', policyRevision: '734',
+    verifiedAt: '2026-07-27T09:00:00.000Z', expiresAt: '2099-07-27T10:00:00.000Z',
+  })),
+};
+const emptySnapshot = {
+  contractVersion: 'extension-byok-workbench-edit-controller/v1', executionMode: 'BYOK',
+  slotKey: 'sku:sku-1:hero', profileId: null, operation: null,
+  references: {
+    sessionGlobalCount: 0, slotOverrideActive: false,
+    slotOverrideCount: null, effectiveCount: 0,
+  },
+  operationAvailability: [],
+  scheduler: {
+    state: 'READY', activeCount: 0, queuedCount: 0,
+    pauseRequested: false, effectiveConcurrency: null,
+  },
+  slot: { revision: 0, attemptIds: [], selectedAttemptId: null, selectedCandidateId: null },
+  alternatives: [],
+};
+const candidateId = `br_${'a'.repeat(48)}`;
+const reviewSnapshot = (selected = false) => ({
+  ...emptySnapshot,
+  profileId: 'profile-1', operation: 'IMAGE_TO_IMAGE',
+  scheduler: { ...emptySnapshot.scheduler, state: 'REVIEW', effectiveConcurrency: 1 },
+  slot: {
+    revision: selected ? 4 : 3, attemptIds: ['attempt-000001'],
+    selectedAttemptId: selected ? 'attempt-000001' : null,
+    selectedCandidateId: selected ? candidateId : null,
+  },
+  alternatives: [{
+    attemptId: 'attempt-000001', generation: 1, operation: 'IMAGE_TO_IMAGE',
+    state: 'CANDIDATE_READY', candidateId, errorCode: null, selected,
+    externalChargePossible: false, retryRisk: null,
+  }],
+});
+
+const client = {
+  async getPublicState() { calls.push(['public-state']); return { profiles: [profileRow] }; },
+  async getEditState() {
+    calls.push(['edit-state']);
+    if (nextEditStateError) {
+      const error = nextEditStateError;
+      nextEditStateError = null;
+      throw error;
+    }
+    return emptySnapshot;
+  },
+  async uploadEditMedia(purpose, blob) {
+    calls.push(['upload', purpose, blob]);
+    mediaCounter += 1;
+    return {
+      mediaHandle: `mh_${String(mediaCounter).padStart(48, '0')}`,
+      purpose,
+      metadata: {
+        mimeType: blob.type, byteLength: blob.size,
+        width: 100,
+        height: purpose === 'SOURCE' ? 300 : 100,
+        sha256: String(mediaCounter).repeat(64).slice(0, 64),
+      },
+    };
+  },
+  async releaseEditMedia(handle, purpose) { calls.push(['release', handle, purpose]); return { released: true }; },
+  async setEditReferences(value) {
+    calls.push(['references', value]);
+    const outcome = referenceOutcomes.shift();
+    if (outcome) throw outcome;
+    return emptySnapshot;
+  },
+  async startEdit(value) { calls.push(['start', value]); return reviewSnapshot(false); },
+  async selectEditAlternative(attemptId) {
+    calls.push(['select', attemptId]);
+    return reviewSnapshot(true);
+  },
+  async regenerateEdit(value) { calls.push(['regenerate', value]); return reviewSnapshot(true); },
+  async openEditPreview(id) {
+    calls.push(['preview', id]);
+    return { objectUrl: 'blob:preview', metadata: {}, revoke() { revokedUrls.push('blob:preview'); } };
+  },
+  async cleanupEditSession() { calls.push(['cleanup']); return {}; },
+  async acknowledgeEditRestart() { calls.push(['acknowledge-restart']); return {}; },
+};
+
+const maskState = { strokes: [], redo: [] };
+const mask = {
+  beginStroke(input) { maskState.active = input; return true; },
+  extendStroke() { return true; },
+  endStroke() { if (maskState.active) maskState.strokes.push(maskState.active); maskState.active = null; return true; },
+  cancelStroke() { maskState.active = null; },
+  undo() { const row = maskState.strokes.pop(); if (row) maskState.redo.push(row); },
+  redo() { const row = maskState.redo.pop(); if (row) maskState.strokes.push(row); },
+  clear() { maskState.strokes = []; },
+  commands() { return maskState.strokes.map(() => ({ mode: 'paint', brushSize: 0.1, points: [{ x: 0.5, y: 0.5 }] })); },
+  state() {
+    return {
+      canUndo: maskState.strokes.length > 0, canRedo: maskState.redo.length > 0,
+      strokeCount: maskState.strokes.length, budgetExhausted: false,
+    };
+  },
+};
+
+const windowListeners = new Map();
+const runtimeListeners = [];
+const context = {
+  Array, Blob, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String,
+  Uint8Array, Uint8ClampedArray,
+  document: {
+    body,
+    getElementById(id) { return nodes[id] || null; },
+    querySelector(selector) {
+      const option = selector.match(/^\[data-operation-option="([A-Z_]+)"\]$/u);
+      if (option) return optionNodes[option[1]];
+      const reason = selector.match(/^\[data-operation-reason="([A-Z_]+)"\]$/u);
+      return reason ? reasonNodes[reason[1]] : null;
+    },
+    createElement(tagName) { return new FakeNode('', tagName); },
+  },
+  chrome: { runtime: { onMessage: { addListener(listener) { runtimeListeners.push(listener); } } } },
+  URL: {
+    createObjectURL() { objectUrlCounter += 1; return `blob:local-${objectUrlCounter}`; },
+    revokeObjectURL(value) { revokedUrls.push(value); },
+  },
+  setTimeout(callback) { queueMicrotask(callback); return ++objectUrlCounter; },
+  clearTimeout() {},
+  queueMicrotask,
+};
+context.window = context;
+context.globalThis = context;
+context.addEventListener = (type, listener) => {
+  const values = windowListeners.get(type) || [];
+  values.push(listener);
+  windowListeners.set(type, values);
+};
+context.SS_ERP_BYOK_WORKBENCH_CLIENT = {
+  DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
+  createClient() { return client; },
+};
+context.SS_ERP_IMAGE_MASK_CORE = { createMask() { return mask; } };
+context.SS_ERP_IMAGE_MASK_CANVAS = {
+  sourcePoint(input) {
+    return {
+      x: input.clientX * input.sourceWidth / input.rect.width,
+      y: input.clientY * input.sourceHeight / input.rect.height,
+    };
+  },
+  renderCommands() {},
+  measure() {
+    return maskState.strokes.length
+      ? { partial: true, editPixelCount: 100, preservedPixelCount: 9900 }
+      : { partial: false, editPixelCount: 0, preservedPixelCount: 10000 };
+  },
+  async exportPng() {
+    calls.push(['export-mask']);
+    return { blob: new Blob(['mask'], { type: 'image/png' }) };
+  },
+};
+
+vm.runInNewContext(source, context, { filename: `${root}/pages/ai-image-workbench-edit.js` });
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+await tick();
+await tick();
+
+assert.equal(nodes.operationImageToImage.disabled, false);
+assert.match(reasonNodes.IMAGE_TO_IMAGE.textContent, /证据有效/u);
+
+nodes.operationTextToImage.checked = false;
+nodes.operationImageToImage.checked = true;
+nodes.operationImageToImage.dispatch('change');
+assert.equal(body.classList.contains('is-edit-operation'), true);
+assert.equal(nodes.referenceInputGroup.hidden, false);
+assert.match(nodes.operationReason.textContent, /1-4 张参考图/u);
+
+const globalReference = new Blob(['global'], { type: 'image/png' });
+referenceOutcomes.push(clientFailure('SS_ERP_BYOK_EDIT_INPUT_INVALID'));
+nodes.referenceFiles.files = [globalReference];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === `mh_${'1'.padStart(48, '0')}`), true,
+  'a definitive reference sync failure releases the uncommitted handle');
+assert.equal(nodes.referenceList.children.length, 0);
+
+referenceOutcomes.push(
+  clientFailure('SS_ERP_BYOK_WORKBENCH_RUNTIME_TIMEOUT'),
+  clientFailure('SS_ERP_BYOK_WORKBENCH_RUNTIME_TIMEOUT'),
+);
+nodes.referenceFiles.files = [globalReference];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+await tick();
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === `mh_${'2'.padStart(48, '0')}`), false,
+  'an ambiguous sync retains the handle because the background may have committed it');
+assert.match(nodes.operationReason.textContent, /同步结果未知/u);
+assert.equal(nodes.runEditButton.disabled, true);
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(nodes.runEditButton.disabled, false,
+  'refresh retries the exact reference target and clears the dispatch block');
+
+referenceOutcomes.push(
+  clientFailure('SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED'),
+  clientFailure('SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED'),
+);
+nodes.referenceList.children[0].children[2].dispatch('click');
+await tick();
+await tick();
+await tick();
+assert.equal(nodes.referenceList.children.length, 1);
+assert.match(nodes.referenceList.children[0].children[2].attributes['aria-label'], /第 1 张/u);
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === `mh_${'2'.padStart(48, '0')}`), false,
+  'an ambiguously removed handle remains retained until reconciliation');
+assert.equal(nodes.runEditButton.disabled, true);
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(nodes.referenceList.children.length, 0);
+assert.equal(nodes.referenceFiles.focused, true);
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === `mh_${'2'.padStart(48, '0')}`), true,
+  'a confirmed removal releases the handle only after background state commits');
+
+nodes.referenceFiles.files = [globalReference];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+assert.deepEqual(JSON.parse(JSON.stringify(calls.filter((row) => row[0] === 'references').at(-1)[1])), {
+  scope: 'SESSION_GLOBAL', handles: [`mh_${'3'.padStart(48, '0')}`],
+});
+assert.equal(nodes.runEditButton.disabled, false);
+
+nodes.referenceScopeGlobal.checked = false;
+nodes.referenceScopeSlot.checked = true;
+nodes.referenceScopeSlot.dispatch('change');
+nodes.referenceFiles.files = [new Blob(['slot'], { type: 'image/webp' })];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+assert.deepEqual(JSON.parse(JSON.stringify(
+  calls.filter((row) => row[0] === 'references').at(-1)[1],
+)), {
+  scope: 'SLOT', handles: [`mh_${'4'.padStart(48, '0')}`],
+});
+
+nodes.runEditButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'start').length, 1);
+assert.equal(calls.filter((row) => row[0] === 'select').length, 1,
+  'the first reviewable alternative is selected without discarding other attempts');
+assert.equal(nodes.editAlternatives.children.length, 1);
+assert.equal(nodes.editSelectedPreview.hidden, false,
+  'the selected preview frame reserves space as soon as alternatives exist');
+const stableAlternativeRow = nodes.editAlternatives.children[0];
+assert.equal(stableAlternativeRow.children[0].children[0].classList.contains('alternative-media'), true);
+assert.equal(body.dataset.editTaskLocked, 'true');
+assert.equal(nodes.profileSelect.disabled, true);
+assert.equal(nodes.operationInpaint.disabled, true);
+nodes.profileSelect.value = 'profile-other';
+nodes.profileSelect.dispatch('change');
+assert.equal(nodes.profileSelect.value, 'profile-1',
+  'a started task freezes its Provider profile');
+
+nodes.regenerateChargeConfirmation.checked = true;
+nodes.regenerateChargeConfirmation.dispatch('change');
+assert.equal(nodes.regenerateEditButton.disabled, false);
+nodes.regenerateEditButton.dispatch('click');
+await tick();
+assert.equal(nodes.editAlternatives.children[0], stableAlternativeRow,
+  'selection and preview updates preserve the focused alternative DOM node');
+const regenerated = calls.find((row) => row[0] === 'regenerate')[1];
+assert.deepEqual(JSON.parse(JSON.stringify(regenerated.chargeAcknowledgement)), {
+  warningVersion: 'external-provider-charge/v1', confirmed: true,
+});
+
+nextEditStateError = clientFailure('SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(nodes.restartRecovery.hidden, false);
+assert.equal(nodes.restartAcknowledgeButton.disabled, true);
+nodes.restartChargeConfirmation.checked = true;
+nodes.restartChargeConfirmation.dispatch('change');
+assert.equal(nodes.restartAcknowledgeButton.disabled, false);
+nodes.restartAcknowledgeButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(calls.some((row) => row[0] === 'acknowledge-restart'), true);
+assert.equal(nodes.restartRecovery.hidden, true);
+assert.equal(body.dataset.editTaskLocked, 'false');
+
+nodes.operationImageToImage.checked = false;
+nodes.operationInpaint.checked = true;
+nodes.operationInpaint.dispatch('change');
+nodes.sourceFile.files = [new Blob(['source'], { type: 'image/png' })];
+nodes.sourceFile.dispatch('change');
+await tick();
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'upload').at(-1)[1], 'SOURCE');
+assert.equal(nodes.sourceStage.style.width, 'min(100%, 140px)');
+nodes.editMaskCanvas.dispatch('focus');
+nodes.editMaskCanvas.dispatch('keydown', { key: 'ArrowRight', preventDefault() {} });
+nodes.editMaskCanvas.dispatch('keydown', { key: 'Enter', preventDefault() {} });
+assert.equal(maskState.strokes.length, 1,
+  'keyboard users can position and apply the current mask tool');
+nodes.editMaskCanvas.dispatch('pointerdown', {
+  pointerId: 7, button: 0, isPrimary: true, clientX: 20, clientY: 20,
+});
+nodes.editMaskCanvas.dispatch('pointerup', {
+  pointerId: 7, button: 0, isPrimary: true, clientX: 30, clientY: 30,
+});
+assert.equal(nodes.maskUndoButton.disabled, false);
+assert.equal(nodes.maskEditPixels.textContent, '100');
+assert.equal(nodes.editAlternatives.children.length, 0,
+  'restart acknowledgement clears stale candidate DOM nodes');
+
+profileRow.profile.allowedOperations = ['TEXT_TO_IMAGE'];
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(nodes.operationInpaint.disabled, true);
+assert.match(reasonNodes.INPAINT.textContent, /当前档案未启用/u);
+
+for (const listener of windowListeners.get('pagehide') || []) listener({});
+assert.ok(revokedUrls.includes('blob:preview'));
+console.log('PASS extension BYOK edit workbench UI');

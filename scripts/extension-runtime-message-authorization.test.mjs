@@ -82,7 +82,7 @@ function readinessBinding(api, overrides = {}) {
 }
 
 function verifiedReadiness(api, binding, overrides = {}) {
-  return {
+  const value = {
     contractVersion: api.READINESS_VERIFICATION_VERSION,
     authenticated: true,
     handleId: 'readiness-1',
@@ -90,6 +90,11 @@ function verifiedReadiness(api, binding, overrides = {}) {
     binding,
     ...overrides,
   };
+  Object.defineProperty(value, 'concurrencyAuthority', {
+    value: Object.freeze({ policyRevision: binding.policyRevision, maxConcurrency: 1 }),
+    enumerable: false,
+  });
+  return value;
 }
 
 test('adds closed workbench and Provider-settings sender matrices without widening legacy pages', () => {
@@ -396,6 +401,9 @@ test('requires an authenticated exact ERP readiness binding for Provider actions
   assert.equal(allowed.allowed, true);
   assert.equal(allowed.readiness.handleId, 'readiness-1');
   assert.equal(allowed.readiness.binding.operation, 'TEXT_TO_IMAGE');
+  assert.deepEqual(JSON.parse(JSON.stringify(allowed.readiness.concurrencyAuthority)), {
+    policyRevision: binding.policyRevision, maxConcurrency: 1,
+  });
   assert.equal(JSON.stringify(allowed).includes('opaque-erp-readiness-handle'), false);
 
   const mismatch = await api.authorizeRuntimeMessage({

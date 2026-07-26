@@ -100,6 +100,46 @@ assert.throws(
   /RESULT_INVALID/u,
 );
 
+let editRandomByte = 24;
+const editVault = api.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(value) { value.fill(editRandomByte++); return value; },
+});
+const editCases = [
+  {
+    operation: 'IMAGE_TO_IMAGE', requestMode: 'multipart',
+    sourceSha256: null, referenceSha256s: ['1'.repeat(64), '2'.repeat(64)], maskSha256: null,
+  },
+  {
+    operation: 'FULL_EDIT', requestMode: 'multipart',
+    sourceSha256: '3'.repeat(64), referenceSha256s: [], maskSha256: null,
+  },
+  {
+    operation: 'INPAINT', requestMode: 'async',
+    sourceSha256: '4'.repeat(64), referenceSha256s: [], maskSha256: '5'.repeat(64),
+  },
+];
+for (const [index, edit] of editCases.entries()) {
+  const storedEdit = editVault.put(result({
+    ...edit,
+    idempotencyKey: `provider-edit-${index}`,
+    requestHash: String(index + 1).repeat(64),
+    providerTaskIdSha256: edit.requestMode === 'async' ? '6'.repeat(64) : null,
+  }), binding({ operation: edit.operation }), authority());
+  const retainedEdit = editVault.getForBackground(storedEdit.resultId);
+  assert.equal(storedEdit.operation, edit.operation);
+  assert.equal(storedEdit.requestMode, edit.requestMode);
+  assert.equal(retainedEdit.sourceSha256, edit.sourceSha256);
+  assert.deepEqual([...retainedEdit.referenceSha256s], edit.referenceSha256s);
+  assert.equal(retainedEdit.maskSha256, edit.maskSha256);
+  assert.equal('blob' in storedEdit.image, false);
+}
+assert.throws(() => editVault.put(result({
+  operation: 'INPAINT', requestMode: 'multipart', idempotencyKey: 'provider-edit-invalid',
+  sourceSha256: '4'.repeat(64), referenceSha256s: [], maskSha256: null,
+}), binding({ operation: 'INPAINT' }), authority()), /RESULT_INVALID/u);
+editVault.clear();
+
 assert.throws(() => vault.getApprovedForBackground(stored.resultId), /APPROVAL_REQUIRED/u);
 const approved = vault.approve(stored.resultId, binding());
 assert.equal(approved.reviewState, 'APPROVED');

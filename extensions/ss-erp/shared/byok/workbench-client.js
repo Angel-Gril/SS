@@ -3,6 +3,8 @@
 
   var CONTRACT_VERSION = 'extension-byok-workbench-client/v1';
   var PREVIEW_VERSION = 'extension-byok-workbench-preview-channel/v1';
+  var MEDIA_CHANNEL_VERSION = 'extension-byok-workbench-media-channel/v1';
+  var EDIT_CONTROLLER_VERSION = 'extension-byok-workbench-edit-controller/v1';
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
   var PROVIDER_TIMEOUT_MS = 130 * 1000;
   var INGEST_TIMEOUT_MS = 130 * 1000;
@@ -17,6 +19,15 @@
     INGEST: 'ss-erp:ai-image-workbench-ingest',
     RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
     PUBLISH: 'ss-erp:ai-image-workbench-publish',
+    EDIT_MEDIA_PREPARE: 'ss-erp:ai-image-workbench-edit-media-prepare',
+    EDIT_MEDIA_RELEASE: 'ss-erp:ai-image-workbench-edit-media-release',
+    EDIT_STATE: 'ss-erp:ai-image-workbench-edit-state',
+    EDIT_REFERENCES: 'ss-erp:ai-image-workbench-edit-references',
+    EDIT_START: 'ss-erp:ai-image-workbench-edit-start',
+    EDIT_SELECT: 'ss-erp:ai-image-workbench-edit-select',
+    EDIT_REGENERATE: 'ss-erp:ai-image-workbench-edit-regenerate',
+    EDIT_PREVIEW: 'ss-erp:ai-image-workbench-edit-preview',
+    EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',
   });
 
   function clientError(code) {
@@ -70,6 +81,75 @@
     if (dimensions.some(function (item) { return item < 1 || item > 4096; })
       || dimensions[0] * dimensions[1] > 4096 * 4096) {
       throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    return normalized;
+  }
+
+  function mediaPurpose(value) {
+    if (!['REFERENCE', 'SOURCE', 'MASK'].includes(value)) {
+      throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    return value;
+  }
+
+  function mediaHandle(value) {
+    var result = text(value, 4, 128, 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    if (!/^mh_[a-f0-9]{48}$/u.test(result)) {
+      throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    return result;
+  }
+
+  function attemptId(value) {
+    var result = text(value, 4, 128, 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    if (!/^attempt-\d{6}$/u.test(result)) {
+      throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    return result;
+  }
+
+  function editCommand(value, regeneration) {
+    var baseKeys = [
+      'profileId', 'operation', 'prompt', 'negativePrompt', 'size', 'sourceHandle',
+      'maskHandle',
+    ];
+    var keys = regeneration
+      ? baseKeys.concat(['expectedSlotRevision', 'chargeAcknowledgement'])
+      : baseKeys;
+    if (!exactKeys(value, keys)
+      || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(value.operation)) {
+      throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    var source = value.sourceHandle === null ? null : mediaHandle(value.sourceHandle);
+    var mask = value.maskHandle === null ? null : mediaHandle(value.maskHandle);
+    if ((value.operation === 'IMAGE_TO_IMAGE' && (source !== null || mask !== null))
+      || (value.operation === 'FULL_EDIT' && (source === null || mask !== null))
+      || (value.operation === 'INPAINT' && (source === null || mask === null))) {
+      throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+    }
+    var normalized = {
+      profileId: profileId(value.profileId),
+      operation: value.operation,
+      prompt: text(value.prompt, 1, 8000, 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID'),
+      negativePrompt: value.negativePrompt == null || value.negativePrompt === ''
+        ? null
+        : text(value.negativePrompt, 1, 4000, 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID'),
+      size: size(value.size),
+      sourceHandle: source,
+      maskHandle: mask,
+    };
+    if (regeneration) {
+      if (!Number.isSafeInteger(value.expectedSlotRevision) || value.expectedSlotRevision < 1
+        || !exactKeys(value.chargeAcknowledgement, ['warningVersion', 'confirmed'])
+        || value.chargeAcknowledgement.warningVersion !== 'external-provider-charge/v1'
+        || value.chargeAcknowledgement.confirmed !== true) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      normalized.expectedSlotRevision = value.expectedSlotRevision;
+      normalized.chargeAcknowledgement = {
+        warningVersion: 'external-provider-charge/v1',
+        confirmed: true,
+      };
     }
     return normalized;
   }
@@ -242,27 +322,92 @@
       };
     }
 
-    return Object.freeze({
-      getPublicState: function () {
-        return send(MESSAGE_TYPES.GET_PUBLIC_STATE, {});
-      },
-      getReadiness: function (profileIdValue) {
-        return send(MESSAGE_TYPES.GET_READINESS, { profileId: profileId(profileIdValue) })
-          .then(readiness);
-      },
-      generate: function (value) {
-        var input = normalizeGenerate(value);
-        return send(MESSAGE_TYPES.EXECUTE_PROVIDER, {
-          profileId: input.profileId,
-          prompt: input.prompt,
-          negativePrompt: input.negativePrompt,
-          size: input.size,
-          idempotencyKey: input.idempotencyKey,
-        }, input.readiness, PROVIDER_TIMEOUT_MS);
-      },
-      openPreview: async function (resultIdValue) {
-        var id = resultId(resultIdValue);
-        var prepared = previewTicket(await send(MESSAGE_TYPES.OPEN_PREVIEW, { resultId: id }));
+    function mediaTicket(value, expectedPurpose) {
+      if (!exactKeys(value, [
+        'contractVersion', 'channelName', 'uploadTicket', 'purpose', 'expiresAt',
+      ]) || value.contractVersion !== MEDIA_CHANNEL_VERSION
+        || value.purpose !== expectedPurpose) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_INVALID');
+      }
+      var channelName = text(
+        value.channelName,
+        1,
+        128,
+        'SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_INVALID',
+      );
+      var uploadTicket = text(
+        value.uploadTicket,
+        4,
+        128,
+        'SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_INVALID',
+      );
+      var expiresAt = text(
+        value.expiresAt,
+        20,
+        64,
+        'SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_INVALID',
+      );
+      var current = new Date(now()).getTime();
+      var expires = Date.parse(expiresAt);
+      if (!/^ss-erp:byok-media-upload:[a-f0-9]{48}$/u.test(channelName)
+        || !/^ut_[a-f0-9]{48}$/u.test(uploadTicket)
+        || !Number.isFinite(current) || !Number.isFinite(expires)
+        || expires <= current || expires - current > 30 * 1000) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_INVALID');
+      }
+      return {
+        channelName: channelName,
+        uploadTicket: uploadTicket,
+        purpose: expectedPurpose,
+        expiresAt: expiresAt,
+      };
+    }
+
+    function mediaMetadata(value, purpose, sourceBlob) {
+      if (!exactKeys(value, ['mimeType', 'byteLength', 'width', 'height', 'sha256'])) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED');
+      }
+      var allowedMimeTypes = purpose === 'MASK'
+        ? ['image/png']
+        : ['image/png', 'image/jpeg', 'image/webp'];
+      if (!allowedMimeTypes.includes(value.mimeType)
+        || value.mimeType !== sourceBlob.type
+        || !Number.isSafeInteger(value.byteLength) || value.byteLength !== sourceBlob.size
+        || value.byteLength < 1 || value.byteLength > 20 * 1024 * 1024
+        || !Number.isSafeInteger(value.width) || value.width < 1 || value.width > 4096
+        || !Number.isSafeInteger(value.height) || value.height < 1 || value.height > 4096
+        || !Number.isSafeInteger(value.width * value.height)
+        || value.width * value.height > 4096 * 4096
+        || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(value.sha256)) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED');
+      }
+      return Object.freeze({
+        mimeType: value.mimeType,
+        byteLength: value.byteLength,
+        width: value.width,
+        height: value.height,
+        sha256: value.sha256,
+      });
+    }
+
+    function editSnapshot(value) {
+      var keys = [
+        'contractVersion', 'executionMode', 'slotKey', 'profileId', 'operation',
+        'references', 'operationAvailability', 'scheduler', 'slot', 'alternatives',
+      ];
+      if (!exactKeys(value, keys)
+        || value.contractVersion !== EDIT_CONTROLLER_VERSION
+        || value.executionMode !== 'BYOK'
+        || !isRecord(value.references) || !isRecord(value.scheduler) || !isRecord(value.slot)
+        || !Array.isArray(value.operationAvailability) || !Array.isArray(value.alternatives)) {
+        throw clientError('SS_ERP_BYOK_WORKBENCH_EDIT_STATE_INVALID');
+      }
+      return value;
+    }
+
+    function openPreviewWithType(messageType, resultIdValue) {
+      var id = resultId(resultIdValue);
+      return send(messageType, { resultId: id }).then(previewTicket).then(function (prepared) {
         return new Promise(function (resolve, reject) {
           var channel = new Channel(prepared.channelName);
           var settled = false;
@@ -316,6 +461,117 @@
             fail();
           }
         });
+      });
+    }
+
+    function uploadEditMedia(purposeValue, blob) {
+      var purpose;
+      try {
+        purpose = mediaPurpose(purposeValue);
+        if (typeof Blob === 'undefined' || !(blob instanceof Blob)
+          || !Number.isSafeInteger(blob.size) || blob.size < 1 || blob.size > 20 * 1024 * 1024) {
+          throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+        }
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return send(MESSAGE_TYPES.EDIT_MEDIA_PREPARE, { purpose: purpose })
+        .then(function (value) { return mediaTicket(value, purpose); })
+        .then(function (prepared) {
+          return new Promise(function (resolve, reject) {
+            var channel = new Channel(prepared.channelName);
+            var settled = false;
+            var timer = setTimeout(function () {
+              if (settled) return;
+              settled = true;
+              channel.close();
+              reject(clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_TICKET_EXPIRED'));
+            }, Math.max(1, Date.parse(prepared.expiresAt) - new Date(now()).getTime()));
+            function finish(callback, value) {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              channel.close();
+              callback(value);
+            }
+            channel.onmessage = function (event) {
+              var message = event && event.data;
+              if (!isRecord(message) || message.contractVersion !== MEDIA_CHANNEL_VERSION
+                || message.uploadTicket !== prepared.uploadTicket) {
+                finish(reject, clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED'));
+                return;
+              }
+              if (message.type === 'REJECTED') {
+                if (!exactKeys(message, [
+                  'contractVersion', 'type', 'uploadTicket', 'errorCode',
+                ])) {
+                  finish(reject, clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED'));
+                  return;
+                }
+                var errorCode = typeof message.errorCode === 'string'
+                  && /^[A-Z][A-Z0-9_]{0,99}$/u.test(message.errorCode)
+                  ? message.errorCode
+                  : 'SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED';
+                finish(reject, clientError(errorCode));
+                return;
+              }
+              if (!exactKeys(message, [
+                'contractVersion', 'type', 'uploadTicket', 'mediaHandle', 'purpose', 'metadata',
+              ]) || message.type !== 'ACCEPTED' || message.purpose !== purpose
+                || !isRecord(message.metadata)) {
+                finish(reject, clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED'));
+                return;
+              }
+              var handle;
+              var metadata;
+              try {
+                handle = mediaHandle(message.mediaHandle);
+                metadata = mediaMetadata(message.metadata, purpose, blob);
+              } catch (error) {
+                finish(reject, error);
+                return;
+              }
+              finish(resolve, Object.freeze({
+                mediaHandle: handle,
+                purpose: purpose,
+                metadata: metadata,
+              }));
+            };
+            try {
+              channel.postMessage({
+                contractVersion: MEDIA_CHANNEL_VERSION,
+                type: 'UPLOAD',
+                uploadTicket: prepared.uploadTicket,
+                purpose: purpose,
+                image: blob,
+              });
+            } catch (_error) {
+              finish(reject, clientError('SS_ERP_BYOK_WORKBENCH_MEDIA_REJECTED'));
+            }
+          });
+        });
+    }
+
+    return Object.freeze({
+      getPublicState: function () {
+        return send(MESSAGE_TYPES.GET_PUBLIC_STATE, {});
+      },
+      getReadiness: function (profileIdValue) {
+        return send(MESSAGE_TYPES.GET_READINESS, { profileId: profileId(profileIdValue) })
+          .then(readiness);
+      },
+      generate: function (value) {
+        var input = normalizeGenerate(value);
+        return send(MESSAGE_TYPES.EXECUTE_PROVIDER, {
+          profileId: input.profileId,
+          prompt: input.prompt,
+          negativePrompt: input.negativePrompt,
+          size: input.size,
+          idempotencyKey: input.idempotencyKey,
+        }, input.readiness, PROVIDER_TIMEOUT_MS);
+      },
+      openPreview: function (resultIdValue) {
+        return openPreviewWithType(MESSAGE_TYPES.OPEN_PREVIEW, resultIdValue);
       },
       reviewResult: function (resultIdValue, decision) {
         if (decision !== 'APPROVE' && decision !== 'REJECT') {
@@ -374,6 +630,86 @@
           null,
           PUBLISH_TIMEOUT_MS,
         );
+      },
+      uploadEditMedia: uploadEditMedia,
+      releaseEditMedia: function (mediaHandleValue, purposeValue) {
+        try {
+          return send(MESSAGE_TYPES.EDIT_MEDIA_RELEASE, {
+            mediaHandle: mediaHandle(mediaHandleValue),
+            purpose: mediaPurpose(purposeValue),
+          });
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      setEditReferences: function (value) {
+        try {
+          if (!isRecord(value) || !['SESSION_GLOBAL', 'SLOT'].includes(value.scope)
+            || !Object.prototype.hasOwnProperty.call(value, 'handles')
+            || Object.keys(value).some(function (key) {
+              return !['scope', 'handles'].includes(key);
+            })) {
+            throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+          }
+          var handles = value.handles === null
+            ? null
+            : Array.isArray(value.handles)
+              ? value.handles.map(mediaHandle)
+              : null;
+          if ((value.handles !== null && !Array.isArray(value.handles))
+            || (value.scope === 'SESSION_GLOBAL' && handles === null)
+            || (handles && handles.length > 4)
+            || (handles && new Set(handles).size !== handles.length)) {
+            throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+          }
+          return send(MESSAGE_TYPES.EDIT_REFERENCES, {
+            scope: value.scope,
+            handles: handles,
+          }).then(editSnapshot);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      getEditState: function () {
+        return send(MESSAGE_TYPES.EDIT_STATE, {}).then(editSnapshot);
+      },
+      startEdit: function (value) {
+        try {
+          return send(MESSAGE_TYPES.EDIT_START, editCommand(value, false)).then(editSnapshot);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      selectEditAlternative: function (attemptIdValue) {
+        try {
+          return send(MESSAGE_TYPES.EDIT_SELECT, {
+            attemptId: attemptId(attemptIdValue),
+          }).then(editSnapshot);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      regenerateEdit: function (value) {
+        try {
+          return send(MESSAGE_TYPES.EDIT_REGENERATE, editCommand(value, true))
+            .then(editSnapshot);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      openEditPreview: function (resultIdValue) {
+        return openPreviewWithType(MESSAGE_TYPES.EDIT_PREVIEW, resultIdValue);
+      },
+      cleanupEditSession: function () {
+        return send(MESSAGE_TYPES.EDIT_CLEANUP, {});
+      },
+      acknowledgeEditRestart: function () {
+        return send(MESSAGE_TYPES.EDIT_CLEANUP, {
+          restartAcknowledgement: {
+            warningVersion: 'external-provider-charge/v1',
+            confirmed: true,
+          },
+        });
       },
     });
   }

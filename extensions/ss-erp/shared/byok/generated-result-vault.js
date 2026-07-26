@@ -7,6 +7,7 @@
   var MAX_RESULT_BYTES = 20 * 1024 * 1024;
   var DEFAULT_TTL_MS = 10 * 60 * 1000;
   var MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+  var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
   var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
   var BINDING_KEYS = [
@@ -37,6 +38,40 @@
     var normalized = text(value, 64);
     if (!/^[a-f0-9]{64}$/u.test(normalized)) throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
     return normalized;
+  }
+
+  function nullableSha256(value) {
+    return value == null ? null : sha256(value);
+  }
+
+  function normalizedEditHashes(result, operation) {
+    if (operation === 'TEXT_TO_IMAGE') {
+      if (result.sourceSha256 !== undefined || result.referenceSha256s !== undefined
+        || result.maskSha256 !== undefined) {
+        throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+      }
+      return { sourceSha256: null, referenceSha256s: [], maskSha256: null };
+    }
+    if (!Array.isArray(result.referenceSha256s)) {
+      throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+    }
+    var references = result.referenceSha256s.map(sha256);
+    var sourceSha256 = nullableSha256(result.sourceSha256);
+    var maskSha256 = nullableSha256(result.maskSha256);
+    if ((operation === 'IMAGE_TO_IMAGE'
+      && (sourceSha256 !== null || maskSha256 !== null
+        || references.length < 1 || references.length > 4))
+      || (operation === 'FULL_EDIT'
+        && (!sourceSha256 || maskSha256 !== null || references.length !== 0))
+      || (operation === 'INPAINT'
+        && (!sourceSha256 || !maskSha256 || references.length !== 0))) {
+      throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+    }
+    return {
+      sourceSha256: sourceSha256,
+      referenceSha256s: references,
+      maskSha256: maskSha256,
+    };
   }
 
   function positiveInteger(value, maximum) {
@@ -230,8 +265,11 @@
       var binding = normalizeBinding(bindingValue);
       var lifecycleAuthority = normalizeLifecycleAuthority(lifecycleAuthorityValue);
       if (!result || typeof result !== 'object' || !binding || typeof binding !== 'object'
-        || result.outcome !== 'SUCCEEDED' || result.operation !== 'TEXT_TO_IMAGE'
-        || result.requestMode !== 'json' || binding.operation !== result.operation
+        || result.outcome !== 'SUCCEEDED' || !OPERATIONS.includes(result.operation)
+        || (result.operation === 'TEXT_TO_IMAGE'
+          ? result.requestMode !== 'json'
+          : !['multipart', 'async'].includes(result.requestMode))
+        || binding.operation !== result.operation
         || binding.providerOrigin !== result.providerOrigin || binding.model !== result.model
         || binding.policyRevision !== result.policyRevision
         || typeof Blob === 'undefined' || !(result.image && result.image.blob instanceof Blob)) {
@@ -244,9 +282,10 @@
         || result.image.blob.size !== byteLength) {
         throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
       }
+      var editHashes = normalizedEditHashes(result, result.operation);
       return {
-        operation: 'TEXT_TO_IMAGE',
-        requestMode: 'json',
+        operation: result.operation,
+        requestMode: result.requestMode,
         profileId: text(result.profileId, 128),
         providerOrigin: text(result.providerOrigin, 300),
         model: text(result.model, 200),
@@ -259,6 +298,12 @@
         providerRequestIdSha256: result.providerRequestIdSha256 == null
           ? null
           : sha256(result.providerRequestIdSha256),
+        providerTaskIdSha256: result.providerTaskIdSha256 == null
+          ? null
+          : sha256(result.providerTaskIdSha256),
+        sourceSha256: editHashes.sourceSha256,
+        referenceSha256s: editHashes.referenceSha256s,
+        maskSha256: editHashes.maskSha256,
         acceptedAt: new Date(text(result.acceptedAt, 64)).toISOString(),
         mimeType: mimeType,
         byteLength: byteLength,

@@ -81,6 +81,10 @@ const verification = cache.consume({
 });
 assert.equal(verification.contractVersion, api.VERIFICATION_VERSION);
 assert.equal(verification.handleId, issued.readinessHandle);
+assert.deepEqual(JSON.parse(JSON.stringify(verification.concurrencyAuthority)), {
+  policyRevision: '734', maxConcurrency: 2,
+});
+assert.equal(JSON.stringify(verification).includes('concurrencyAuthority'), false);
 await assert.rejects(
   async () => cache.consume({ handle: issued.readinessHandle, expectedBinding: issued.readinessBinding }),
   /UNAVAILABLE/u,

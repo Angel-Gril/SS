@@ -39,6 +39,15 @@ const MESSAGE_TYPES = {
   INGEST: 'ingest',
   RECOVER_INGEST: 'recover-ingest',
   PUBLISH: 'publish',
+  EDIT_MEDIA_PREPARE: 'edit-media-prepare',
+  EDIT_MEDIA_RELEASE: 'edit-media-release',
+  EDIT_STATE: 'edit-state',
+  EDIT_REFERENCES: 'edit-references',
+  EDIT_START: 'edit-start',
+  EDIT_SELECT: 'edit-select',
+  EDIT_REGENERATE: 'edit-regenerate',
+  EDIT_PREVIEW: 'edit-preview',
+  EDIT_CLEANUP: 'edit-cleanup',
 };
 const launchContext = {
   contractVersion: 'extension-byok-workbench-launch-context/v1',
@@ -49,13 +58,23 @@ const launchContext = {
   assignmentOrdinal: 2,
 };
 const binding = {
-  contractVersion: 'extension-byok-readiness-binding/v2',
   ownerUserId: 'owner-1', deviceSessionId: 'session-1',
   ...launchContext,
   contractVersion: 'extension-byok-readiness-binding/v2',
   providerOrigin: 'https://relay.example', model: 'image-model-v1',
   operation: 'TEXT_TO_IMAGE', policyRevision: 'policy-7',
 };
+function authorizationFor(bindingValue = binding) {
+  const readiness = {
+    binding: bindingValue,
+    expiresAt: '2026-07-26T10:10:00.000Z',
+  };
+  Object.defineProperty(readiness, 'concurrencyAuthority', {
+    value: Object.freeze({ policyRevision: bindingValue.policyRevision, maxConcurrency: 1 }),
+    enumerable: false,
+  });
+  return { readiness };
+}
 const sender = { tabId: 77, documentId: 'document-1', frameId: 0 };
 const resultId = 'br_' + 'a'.repeat(48);
 const ingestRequestHash = '1'.repeat(64);
@@ -242,18 +261,32 @@ const launchClient = {
 };
 const profile = {
   id: 'profile-1', name: 'Relay', baseUrl: 'https://relay.example/v1',
-  model: 'image-model-v1', allowedOperations: ['TEXT_TO_IMAGE'], preferences: {},
+  model: 'image-model-v1',
+  allowedOperations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+  preferences: {},
 };
 const evidence = {
   contractVersion: 'extension-byok-capability-evidence/v1', operation: 'TEXT_TO_IMAGE',
   requestMode: 'json', policyRevision: 'policy-7',
   verifiedAt: '2026-07-26T09:00:00.000Z', expiresAt: '2026-07-27T09:00:00.000Z',
 };
+const editEvidence = {
+  contractVersion: 'extension-byok-capability-evidence/v1', operation: 'IMAGE_TO_IMAGE',
+  requestMode: 'multipart', policyRevision: 'policy-7',
+  verifiedAt: '2026-07-26T09:00:00.000Z', expiresAt: '2026-07-27T09:00:00.000Z',
+};
+const asyncEvidence = {
+  ...editEvidence,
+  operation: 'FULL_EDIT',
+  requestMode: 'async',
+};
 const profileStore = {
   async listPublicProfiles() { return [profile]; },
   async getProfile(id) { return id === profile.id ? profile : null; },
   async getPublicState(id) {
-    return id === profile.id ? { profile, hasKey: true, evidence: [evidence] } : null;
+    return id === profile.id
+      ? { profile, hasKey: true, evidence: [evidence, editEvidence, asyncEvidence] }
+      : null;
   },
 };
 const permissionBroker = {
@@ -321,7 +354,7 @@ const authorityGuard = {
   },
   async commitGeneratedResult({ vault: selectedVault }) { return selectedVault.put(); },
   matchesVaultAuthority(candidate, expectedBinding) {
-    return candidate === vaultEntry && expectedBinding === binding;
+    return candidate === vaultEntry && expectedBinding === candidate.binding;
   },
 };
 const previewBroker = {
@@ -382,10 +415,126 @@ const publishCoordinator = {
   async getState(input) { calls.push(['publish-state', input]); return publishState; },
 };
 
+const emptyEditSnapshot = {
+  contractVersion: 'extension-byok-workbench-edit-controller/v1',
+  executionMode: 'BYOK', slotKey: launchContext.slotKey, profileId: null, operation: null,
+  references: {
+    sessionGlobalCount: 0, slotOverrideActive: false,
+    slotOverrideCount: null, effectiveCount: 0,
+  },
+  operationAvailability: [],
+  scheduler: {
+    state: 'READY', activeCount: 0, queuedCount: 0,
+    pauseRequested: false, effectiveConcurrency: null,
+  },
+  slot: { revision: 0, attemptIds: [], selectedAttemptId: null, selectedCandidateId: null },
+  alternatives: [],
+};
+let editSnapshot = emptyEditSnapshot;
+let editCleanupUnresolved = false;
+let editControllerPresent = false;
+const editController = {
+  open(owner) { calls.push(['edit-open', owner]); editControllerPresent = true; return editSnapshot; },
+  setReferences(owner, input) { calls.push(['edit-references', owner, input]); return editSnapshot; },
+  async start(owner, input) { calls.push(['edit-start', owner, input]); return editSnapshot; },
+  async regenerate(owner, input) { calls.push(['edit-regenerate', owner, input]); return editSnapshot; },
+  selectAlternative(owner, input) { calls.push(['edit-select', owner, input]); return editSnapshot; },
+  getSnapshot(owner) {
+    calls.push(['edit-state', owner]);
+    if (!editControllerPresent) {
+      throw Object.assign(new Error('stale edit owner'), { code: 'SS_ERP_BYOK_EDIT_OWNER_STALE' });
+    }
+    return editSnapshot;
+  },
+  cleanup(owner) {
+    calls.push(['edit-cleanup', owner]);
+    editSnapshot = emptyEditSnapshot;
+    editControllerPresent = false;
+    return {
+      cleaned: true,
+      releasedResultCount: 0,
+      externalChargeUnresolved: editCleanupUnresolved,
+    };
+  },
+  cleanupByTab(tabId) {
+    calls.push(['edit-cleanup-tab', tabId]);
+    editSnapshot = emptyEditSnapshot;
+    const cleaned = editControllerPresent;
+    editControllerPresent = false;
+    return {
+      cleaned,
+      releasedResultCount: 0,
+      externalChargeUnresolved: editCleanupUnresolved,
+    };
+  },
+};
+const editMediaStore = {
+  prepare(owner, purpose) {
+    calls.push(['edit-media-prepare', owner, purpose]);
+    return { contractVersion: 'media/v1', channelName: 'upload', uploadTicket: 'ticket' };
+  },
+  release(owner, mediaHandle, purpose) {
+    calls.push(['edit-media-release', owner, mediaHandle, purpose]);
+    return true;
+  },
+};
+let editEpochActive = false;
+const editEpochGuard = {
+  async assertCurrent(_owner, options) {
+    calls.push(['edit-epoch-assert', Boolean(options && options.requireActive)]);
+    if (options && options.requireActive && !editEpochActive) {
+      throw Object.assign(new Error('missing'), { code: 'SS_ERP_BYOK_EDIT_EPOCH_REQUIRED' });
+    }
+    return { state: editEpochActive ? 'CURRENT' : 'EMPTY' };
+  },
+  async begin() {
+    if (editEpochActive) {
+      throw Object.assign(new Error('restart acknowledgement required'), {
+        code: 'SS_ERP_BYOK_EDIT_WORKER_RESTARTED', outcome: 'UNKNOWN_OUTCOME',
+      });
+    }
+    const created = true;
+    editEpochActive = true;
+    calls.push(['edit-epoch-begin', created]);
+    return { state: 'CURRENT', created };
+  },
+  async clear() { calls.push(['edit-epoch-clear']); editEpochActive = false; return true; },
+  async clearByTab(tabId) {
+    calls.push(['edit-epoch-clear-tab', tabId]);
+    editEpochActive = false;
+    return true;
+  },
+  async acknowledge(_owner, acknowledgement) {
+    calls.push(['edit-epoch-acknowledge', acknowledgement]);
+    editEpochActive = false;
+    return { clearedCount: 1 };
+  },
+};
+const providerSemaphore = {
+  async acquire(value) {
+    calls.push(['provider-semaphore-acquire', value]);
+    let released = false;
+    return Object.freeze({
+      release() {
+        if (released) return false;
+        released = true;
+        calls.push(['provider-semaphore-release', value.ownerToken]);
+        return true;
+      },
+    });
+  },
+  cancelOwner(ownerToken) {
+    calls.push(['provider-semaphore-cancel', ownerToken]);
+    return 0;
+  },
+};
+
 const dispatcher = api.createDispatcher({
   messageTypes: MESSAGE_TYPES,
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
   providerClient, vault, authorityGuard, previewBroker, ingestClient, publishCoordinator,
+  editController, editMediaStore, editEpochGuard,
+  providerSemaphore,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
 });
 
@@ -405,7 +554,154 @@ assert.equal(stateResponse.data.executionMode, 'BYOK');
 assert.equal(stateResponse.data.generationOutcome, null);
 assert.equal(stateResponse.data.profiles[0].hasKey, true);
 assert.equal(stateResponse.data.profiles[0].permissionState, 'GRANTED');
+assert.deepEqual(JSON.parse(JSON.stringify(stateResponse.data.profiles[0].capabilityEvidence)), [
+  {
+    operation: 'IMAGE_TO_IMAGE', requestMode: 'multipart', policyRevision: 'policy-7',
+    verifiedAt: '2026-07-26T09:00:00.000Z', expiresAt: '2026-07-27T09:00:00.000Z',
+  },
+]);
 assert.equal(JSON.stringify(stateResponse).includes('apiKey'), false);
+
+const editOwnerProjection = {
+  tabId: 77,
+  documentId: 'document-1',
+  context: launchContext,
+};
+const stateEdit = await dispatcher.handlers[MESSAGE_TYPES.EDIT_STATE]({ payload: {}, sender });
+assert.equal(stateEdit.ok, true);
+assert.deepEqual(JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'edit-open')[1])),
+  editOwnerProjection);
+const preparedEditMedia = await dispatcher.handlers[MESSAGE_TYPES.EDIT_MEDIA_PREPARE]({
+  payload: { purpose: 'REFERENCE' }, sender,
+});
+assert.equal(preparedEditMedia.ok, true);
+assert.equal(calls.some((row) => row[0] === 'edit-media-prepare'
+  && row[2] === 'REFERENCE'), true);
+const mediaHandle = `mh_${'7'.repeat(48)}`;
+const releasedEditMedia = await dispatcher.handlers[MESSAGE_TYPES.EDIT_MEDIA_RELEASE]({
+  payload: { mediaHandle, purpose: 'REFERENCE' }, sender,
+});
+assert.deepEqual(JSON.parse(JSON.stringify(releasedEditMedia.data)), { released: true });
+const referencesEdit = await dispatcher.handlers[MESSAGE_TYPES.EDIT_REFERENCES]({
+  payload: { scope: 'SLOT', handles: [mediaHandle] }, sender,
+});
+assert.equal(referencesEdit.ok, true);
+assert.deepEqual(JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'edit-references')[2])), {
+  scope: 'SLOT', slotKey: launchContext.slotKey, handles: [mediaHandle],
+});
+
+editCleanupUnresolved = true;
+editSnapshot = {
+  ...emptyEditSnapshot,
+  profileId: 'profile-1',
+  operation: 'FULL_EDIT',
+  scheduler: { ...emptyEditSnapshot.scheduler, state: 'RUNNING', activeCount: 1 },
+  slot: { ...emptyEditSnapshot.slot, revision: 1, attemptIds: ['attempt-000001'] },
+  alternatives: [{
+    attemptId: 'attempt-000001', generation: 1, operation: 'FULL_EDIT',
+    state: 'SUBMITTING', candidateId: null, errorCode: null, selected: false,
+    externalChargePossible: false, retryRisk: null,
+  }],
+};
+const editCommand = {
+  profileId: 'profile-1', operation: 'FULL_EDIT', prompt: 'Improve composition',
+  negativePrompt: null, size: '1024x1024', sourceHandle: mediaHandle, maskHandle: null,
+};
+assert.equal((await dispatcher.handlers[MESSAGE_TYPES.EDIT_START]({
+  payload: editCommand, sender,
+})).ok, true);
+const generatedBeforeEditConflict = calls.filter((row) => row[0] === 'generate').length;
+const textWhileEditActive = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
+  payload: {
+    profileId: 'profile-1', prompt: 'Must not overlap an active edit',
+    negativePrompt: null, size: '1024x1024', idempotencyKey: 'generate-edit-conflict',
+  },
+  sender,
+  authorization: authorizationFor(),
+});
+assert.equal(textWhileEditActive.ok, false);
+assert.equal(textWhileEditActive.errorCode, 'SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+assert.equal(calls.filter((row) => row[0] === 'generate').length, generatedBeforeEditConflict);
+const epochClearCount = calls.filter((row) => row[0] === 'edit-epoch-clear').length;
+const unresolvedCleanup = await dispatcher.handlers[MESSAGE_TYPES.EDIT_CLEANUP]({
+  payload: {}, sender,
+});
+assert.equal(unresolvedCleanup.data.externalChargeUnresolved, true);
+assert.equal(calls.filter((row) => row[0] === 'edit-epoch-clear').length, epochClearCount,
+  'active Provider work must retain its epoch marker on page cleanup');
+assert.equal(editEpochActive, true);
+const retainedState = await dispatcher.handlers[MESSAGE_TYPES.EDIT_STATE]({ payload: {}, sender });
+assert.equal(retainedState.ok, false);
+assert.equal(retainedState.errorCode, 'SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+const editStartsBeforeRetainedMarker = calls.filter((row) => row[0] === 'edit-start').length;
+const sameDocumentRestart = await dispatcher.handlers[MESSAGE_TYPES.EDIT_START]({
+  payload: editCommand, sender,
+});
+assert.equal(sameDocumentRestart.ok, false);
+assert.equal(sameDocumentRestart.errorCode, 'SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+assert.equal(calls.filter((row) => row[0] === 'edit-start').length, editStartsBeforeRetainedMarker);
+const acknowledgedRestart = await dispatcher.handlers[MESSAGE_TYPES.EDIT_CLEANUP]({
+  payload: {
+    restartAcknowledgement: {
+      warningVersion: 'external-provider-charge/v1', confirmed: true,
+    },
+  },
+  sender,
+});
+assert.equal(acknowledgedRestart.ok, true);
+assert.equal(acknowledgedRestart.data.restartAcknowledged, true);
+assert.equal(editEpochActive, false);
+
+editCleanupUnresolved = false;
+editSnapshot = {
+  ...emptyEditSnapshot,
+  profileId: 'profile-1',
+  operation: 'IMAGE_TO_IMAGE',
+  scheduler: { ...emptyEditSnapshot.scheduler, state: 'REVIEW', effectiveConcurrency: 1 },
+  slot: {
+    revision: 3, attemptIds: ['attempt-000002'], selectedAttemptId: null,
+    selectedCandidateId: null,
+  },
+  alternatives: [{
+    attemptId: 'attempt-000002', generation: 1, operation: 'IMAGE_TO_IMAGE',
+    state: 'CANDIDATE_READY', candidateId: resultId, errorCode: null, selected: false,
+    externalChargePossible: false, retryRisk: null,
+  }],
+};
+assert.equal((await dispatcher.handlers[MESSAGE_TYPES.EDIT_START]({
+  payload: { ...editCommand, operation: 'IMAGE_TO_IMAGE', sourceHandle: null }, sender,
+})).ok, true);
+assert.equal((await dispatcher.handlers[MESSAGE_TYPES.EDIT_SELECT]({
+  payload: { attemptId: 'attempt-000002' }, sender,
+})).ok, true);
+assert.equal((await dispatcher.handlers[MESSAGE_TYPES.EDIT_REGENERATE]({
+  payload: {
+    ...editCommand,
+    operation: 'IMAGE_TO_IMAGE',
+    sourceHandle: null,
+    expectedSlotRevision: 3,
+    chargeAcknowledgement: {
+      warningVersion: 'external-provider-charge/v1', confirmed: true,
+    },
+  },
+  sender,
+})).ok, true);
+const textVaultEntry = entry;
+vaultEntry = {
+  ...entry,
+  binding: { ...binding, operation: 'IMAGE_TO_IMAGE' },
+};
+const editPreview = await dispatcher.handlers[MESSAGE_TYPES.EDIT_PREVIEW]({
+  payload: { resultId }, sender,
+});
+assert.equal(editPreview.ok, true);
+assert.equal(editPreview.data.channelName, 'channel');
+vaultEntry = textVaultEntry;
+const settledCleanup = await dispatcher.handlers[MESSAGE_TYPES.EDIT_CLEANUP]({
+  payload: {}, sender,
+});
+assert.equal(settledCleanup.data.externalChargeUnresolved, false);
+assert.equal(editEpochActive, false);
 
 const readinessResponse = await dispatcher.handlers[MESSAGE_TYPES.GET_READINESS]({
   payload: { profileId: 'profile-1' }, sender,
@@ -427,7 +723,7 @@ const executeResponse = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER
     negativePrompt: null, size: '1024x1024', idempotencyKey: 'generate-1',
   },
   sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 assert.equal(executeResponse.ok, true);
 assert.equal(executeResponse.data.resultId, resultId);
@@ -797,7 +1093,7 @@ const denied = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
     size: '1024x1024', idempotencyKey: 'generate-2',
   },
   sender,
-  authorization: { readiness: { binding: rejectedBinding } },
+  authorization: authorizationFor(rejectedBinding),
 });
 assert.equal(denied.ok, false);
 assert.equal(denied.errorCode, 'SS_ERP_BYOK_WORKBENCH_CONTEXT_MISMATCH');
@@ -813,16 +1109,24 @@ const firstConcurrent = dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
     negativePrompt: null, size: '1024x1024', idempotencyKey: 'generate-concurrent-1',
   },
   sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
-await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+const editStartsBeforeTextConflict = calls.filter((row) => row[0] === 'edit-start').length;
+const editWhileTextActive = await dispatcher.handlers[MESSAGE_TYPES.EDIT_START]({
+  payload: editCommand,
+  sender,
+});
+assert.equal(editWhileTextActive.ok, false);
+assert.equal(editWhileTextActive.errorCode, 'SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+assert.equal(calls.filter((row) => row[0] === 'edit-start').length, editStartsBeforeTextConflict);
 const conflictingConcurrent = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
   payload: {
     profileId: 'profile-1', prompt: 'Different payload with the same key',
     negativePrompt: null, size: '1024x1024', idempotencyKey: 'generate-concurrent-1',
   },
   sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 assert.equal(conflictingConcurrent.ok, false);
 assert.equal(
@@ -860,12 +1164,12 @@ ingestGate = { promise: new Promise((resolve) => { releaseIngestGate = resolve; 
 const ingestCallsBeforeConcurrency = calls.filter((row) => row[0] === 'ingest').length;
 const firstConcurrentIngest = dispatcher.handlers[MESSAGE_TYPES.INGEST]({
   payload: { resultId }, sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 await new Promise((resolve) => setImmediate(resolve));
 const secondConcurrentIngest = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
   payload: { resultId }, sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 assert.equal(secondConcurrentIngest.ok, false);
 assert.equal(secondConcurrentIngest.errorCode, 'SS_ERP_BYOK_WORKBENCH_REVIEW_IN_PROGRESS');
@@ -894,7 +1198,7 @@ const unknown = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
     size: '1024x1024', idempotencyKey: 'generate-3',
   },
   sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 assert.equal(unknown.ok, false);
 assert.equal(unknown.errorCode, 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME');
@@ -908,7 +1212,7 @@ const blockedRetry = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
     size: '1024x1024', idempotencyKey: 'generate-4',
   },
   sender,
-  authorization: { readiness: { binding } },
+  authorization: authorizationFor(),
 });
 assert.equal(blockedRetry.ok, false);
 assert.equal(blockedRetry.errorCode, 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');

@@ -3,8 +3,6 @@
 
   var MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1';
   var MAX_PREVIEW_PIXELS = 1_500_000;
-  var MASK_PROBE_EDGE = 160;
-  var MAX_EXPORT_SCAN_PIXELS = 1_000_000;
   var OPERATIONS = {
     IMAGE_TO_IMAGE: {
       title: '参考图生图',
@@ -25,6 +23,7 @@
   var nonce = new URLSearchParams(window.location.hash.slice(1)).get('nonce') || '';
   var maskApi = window.SS_ERP_IMAGE_MASK_CORE;
   var layoutApi = window.SS_ERP_IMAGE_MASK_LAYOUT;
+  var canvasApi = window.SS_ERP_IMAGE_MASK_CANVAS;
   var editorTitle = document.getElementById('editorTitle');
   var sourceMeta = document.getElementById('sourceMeta');
   var maskTools = document.getElementById('maskTools');
@@ -195,93 +194,27 @@
 
   function sourcePoint(event) {
     var rect = maskCanvas.getBoundingClientRect();
-    if (!source || !rect.width || !rect.height) throw new Error('遮罩画布尺寸不可用');
-    return {
-      x: (event.clientX - rect.left) * source.width / rect.width,
-      y: (event.clientY - rect.top) * source.height / rect.height,
-    };
-  }
-
-  function drawMaskStroke(context, stroke, width, height, color) {
-    if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) return;
-    var lineWidth = Math.max(1, stroke.brushSize * Math.min(width, height));
-    context.save();
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-    context.lineWidth = lineWidth;
-    context.strokeStyle = color;
-    context.fillStyle = color;
-    if (stroke.points.length === 1) {
-      context.beginPath();
-      context.arc(
-        stroke.points[0].x * width,
-        stroke.points[0].y * height,
-        lineWidth / 2,
-        0,
-        Math.PI * 2,
-      );
-      context.fill();
-    } else {
-      context.beginPath();
-      context.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
-      for (var index = 1; index < stroke.points.length; index += 1) {
-        context.lineTo(stroke.points[index].x * width, stroke.points[index].y * height);
-      }
-      context.stroke();
+    if (!source || !canvasApi || typeof canvasApi.sourcePoint !== 'function') {
+      throw new Error('遮罩画布尺寸不可用');
     }
-    context.restore();
-  }
-
-  function renderMaskCommands(context, width, height, commands, exportMode) {
-    context.globalCompositeOperation = 'source-over';
-    if (exportMode) {
-      context.fillStyle = '#000000';
-      context.fillRect(0, 0, width, height);
-    } else {
-      context.clearRect(0, 0, width, height);
-    }
-    commands.forEach(function (stroke) {
-      context.globalCompositeOperation = !exportMode && stroke.mode === 'erase'
-        ? 'destination-out'
-        : 'source-over';
-      drawMaskStroke(
-        context,
-        stroke,
-        width,
-        height,
-        exportMode
-          ? (stroke.mode === 'paint' ? '#ffffff' : '#000000')
-          : 'rgba(220, 38, 38, 0.48)',
-      );
+    return canvasApi.sourcePoint({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      rect: rect,
+      sourceWidth: source.width,
+      sourceHeight: source.height,
     });
-    context.globalCompositeOperation = 'source-over';
-  }
-
-  function exportedMaskIsPartial(context, width, height) {
-    var rowsPerRead = Math.max(1, Math.floor(MAX_EXPORT_SCAN_PIXELS / width));
-    var hasEditPixel = false;
-    var hasPreservedPixel = false;
-    for (var y = 0; y < height; y += rowsPerRead) {
-      var rows = Math.min(rowsPerRead, height - y);
-      var pixels = context.getImageData(0, y, width, rows).data;
-      for (var index = 0; index < pixels.length; index += 4) {
-        if (pixels[index] > 0) hasEditPixel = true;
-        else hasPreservedPixel = true;
-        if (hasEditPixel && hasPreservedPixel) return true;
-      }
-    }
-    return false;
   }
 
   function drawMaskPreviewNow() {
     if (!mask || !source || !previewContext) return;
-    renderMaskCommands(
-      previewContext,
-      maskCanvas.width,
-      maskCanvas.height,
-      mask.commands(true),
-      false,
-    );
+    canvasApi.renderCommands({
+      context: previewContext,
+      width: maskCanvas.width,
+      height: maskCanvas.height,
+      commands: mask.commands(true),
+      mode: 'OVERLAY',
+    });
   }
 
   function renderMaskPreview() {
@@ -297,31 +230,16 @@
       maskPreviewState = { partial: false, editPixelCount: 0, preservedPixelCount: 0 };
       return;
     }
-    var scale = Math.min(MASK_PROBE_EDGE / source.width, MASK_PROBE_EDGE / source.height, 1);
-    var width = Math.max(1, Math.round(source.width * scale));
-    var height = Math.max(1, Math.round(source.height * scale));
-    var probe = document.createElement('canvas');
-    probe.width = width;
-    probe.height = height;
-    var context = probe.getContext('2d', { willReadFrequently: true });
-    if (!context) {
+    try {
+      maskPreviewState = canvasApi.measure({
+        document: document,
+        width: source.width,
+        height: source.height,
+        commands: mask.commands(false),
+      });
+    } catch (_error) {
       maskPreviewState = { partial: false, editPixelCount: 0, preservedPixelCount: source.width * source.height };
-      return;
     }
-    renderMaskCommands(context, width, height, mask.commands(false), false);
-    var pixels = context.getImageData(0, 0, width, height).data;
-    var selected = 0;
-    for (var index = 3; index < pixels.length; index += 4) {
-      if (pixels[index] > 0) selected += 1;
-    }
-    var probePixels = width * height;
-    var sourcePixels = source.width * source.height;
-    var estimatedSelected = Math.round(sourcePixels * selected / probePixels);
-    maskPreviewState = {
-      partial: selected > 0 && selected < probePixels,
-      editPixelCount: estimatedSelected,
-      preservedPixelCount: sourcePixels - estimatedSelected,
-    };
   }
 
   function resizeMaskStage() {
@@ -407,7 +325,10 @@
     } else {
       if (!previewContext || !maskApi || typeof maskApi.createMask !== 'function'
         || !layoutApi || typeof layoutApi.fitStage !== 'function'
-        || typeof layoutApi.fitPreviewBitmap !== 'function') {
+        || typeof layoutApi.fitPreviewBitmap !== 'function'
+        || !canvasApi || typeof canvasApi.renderCommands !== 'function'
+        || typeof canvasApi.measure !== 'function'
+        || typeof canvasApi.exportPng !== 'function') {
         throw new Error('遮罩编辑模块不可用');
       }
       source = value.source;
@@ -457,39 +378,17 @@
   }
 
   function exportMaskDataUrl() {
-    return new Promise(function (resolve, reject) {
-      if (!mask || !source || !maskPreviewState.partial) {
-        reject(new Error('遮罩必须同时包含重绘和保留区域'));
-        return;
-      }
-      var exportCanvas = document.createElement('canvas');
-      exportCanvas.width = source.width;
-      exportCanvas.height = source.height;
-      var exportContext = exportCanvas.getContext('2d', { willReadFrequently: true });
-      if (!exportContext) {
-        reject(new Error('浏览器无法创建遮罩画布'));
-        return;
-      }
-      renderMaskCommands(
-        exportContext,
-        source.width,
-        source.height,
-        mask.commands(false),
-        true,
-      );
-      if (!exportedMaskIsPartial(exportContext, source.width, source.height)) {
-        reject(new Error('遮罩必须同时包含重绘和保留区域'));
-        return;
-      }
-      exportCanvas.toBlob(function (blob) {
-        if (!blob) {
-          reject(new Error('遮罩 PNG 生成失败'));
-          return;
-        }
-        if (blob.size > source.maxMaskBytes) {
-          reject(new Error('遮罩 PNG 超过服务器大小限制'));
-          return;
-        }
+    if (!mask || !source || !maskPreviewState.partial) {
+      return Promise.reject(new Error('遮罩必须同时包含重绘和保留区域'));
+    }
+    return canvasApi.exportPng({
+      document: document,
+      width: source.width,
+      height: source.height,
+      commands: mask.commands(false),
+      maxBytes: source.maxMaskBytes,
+    }).then(function (exported) {
+      return new Promise(function (resolve, reject) {
         var reader = new FileReader();
         reader.addEventListener('load', function () {
           if (typeof reader.result !== 'string') {
@@ -501,8 +400,16 @@
         reader.addEventListener('error', function () {
           reject(new Error('遮罩 PNG 读取失败'));
         }, { once: true });
-        reader.readAsDataURL(blob);
-      }, 'image/png');
+        reader.readAsDataURL(exported.blob);
+      });
+    }).catch(function (error) {
+      if (error && error.code === 'SS_ERP_IMAGE_MASK_PARTIAL_REQUIRED') {
+        throw new Error('遮罩必须同时包含重绘和保留区域');
+      }
+      if (error && error.code === 'SS_ERP_IMAGE_MASK_TOO_LARGE') {
+        throw new Error('遮罩 PNG 超过服务器大小限制');
+      }
+      throw new Error('遮罩 PNG 生成失败');
     });
   }
 

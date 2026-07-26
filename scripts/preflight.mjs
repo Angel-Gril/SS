@@ -294,6 +294,41 @@ const steps = [
     args: ['scripts/extension-byok-workbench-runtime-handler.test.mjs'],
   },
   {
+    name: 'extension BYOK one-use workbench media channel contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-media-channel.test.mjs'],
+  },
+  {
+    name: 'extension BYOK shared Provider semaphore contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-provider-semaphore.test.mjs'],
+  },
+  {
+    name: 'extension BYOK edit workbench media store contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-edit-media-store.test.mjs'],
+  },
+  {
+    name: 'extension BYOK edit worker epoch guard contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-edit-epoch-guard.test.mjs'],
+  },
+  {
+    name: 'extension BYOK edit workbench controller contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-edit-controller.test.mjs'],
+  },
+  {
+    name: 'extension BYOK edit workbench wiring contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-edit-wiring.test.mjs'],
+  },
+  {
+    name: 'extension BYOK edit workbench UI contract',
+    command: 'node',
+    args: ['scripts/extension-byok-edit-workbench-ui.test.mjs'],
+  },
+  {
     name: 'extension BYOK listing publish coordinator contract',
     command: 'node',
     args: ['scripts/extension-byok-listing-publish-coordinator.test.mjs'],

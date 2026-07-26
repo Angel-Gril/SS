@@ -35,37 +35,36 @@ credential storage, or direct Ozon calls.
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
-- [ ] Phase 3: Edit operations and batch engine (3/5 tasks) [details](./phase-3-edits-batch-engine.md)
+- [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 23/37 tasks complete (62%).
+Overall: 24/37 tasks complete (65%).
 
 ## Current Status
 
-Phase 3 is in progress with `EXT-04B`, `EXT-06`, and `EXT-07` complete. The extension now has bounded
-reference generation, full-image edit, and same-size PNG-mask inpaint plus a fact-bound,
-versioned SKU/slot Prompt planner. The planner creates conservative compatibility-group detail
-slots, binds Prompt overrides and references to stable hashes, rejects fabricated or untrusted
-facts through a required ERP authority verifier, and stays within the server/job-engine slot
-limits. The media job engine now binds server and runner concurrency caps, serializes uncertain
-recovery, preserves selected alternatives against capacity eviction, and pauses queued Provider
-work under atomic vault backpressure. `UI-03` is the next dependency-ready task. All new flags
-and administrator policy remain default-off; no real Provider request, ERP AI charge, Ozon
-write, production mutation, or VPS deployment occurred.
+Phase 3 is in progress with `EXT-04B`, `EXT-06`, `EXT-07`, and `UI-03` complete. The extension
+workbench now exposes bounded global/per-slot references, full-image editing, same-size PNG-mask
+inpaint, keyboard mask controls, stable alternative review, and charge-aware regeneration. Blob
+media stays on one-use channels, API keys and Provider calls remain background-only, text and
+edit paths share authenticated concurrency, and worker restart cannot erase an unresolved
+external-charge marker. Real Chrome responsive, geometry, keyboard, focus, and async-preview QA
+passed after fixing the selected-preview layout shift. `QA-02` is the next dependency-ready task,
+but it requires newly approved edit-capable endpoint/model credentials and explicit cost approval;
+the previously rejected paid requests must not be repeated implicitly. All new flags and
+administrator policy remain default-off; no real Provider request, ERP AI charge, Ozon write,
+production mutation, or VPS deployment occurred.
 
 ## Next Steps
 
-1. Build `UI-03` against the completed edit adapter and job-engine contracts: global/per-slot
-   references, full edit, mask drawing, alternatives, regeneration, and concrete disabled
-   reasons for unsupported operations.
-2. Run `QA-02` only after `UI-03` passes fixture integration and review; keep exact
-   Provider/model/operation evidence separate for text generation, reference edit, full edit,
-   inpaint, and async mode.
-3. Keep production flags off and do not run a real paid Provider sandbox implicitly. Complete
-   long-batch retained-result lifecycle semantics with `BYOK-01`, where the coordinator and UI
-   can keep `expiresAt` truthful together.
+1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
+   revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
+   recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
+2. When approved, test text generation, reference generation, full edit, inpaint, and async mode
+   separately and keep capability evidence exact to endpoint, model, operation, and request mode.
+3. Keep production flags off after sandbox evidence. Complete long-batch retained-result lifecycle
+   semantics with `BYOK-01`, where the coordinator and UI can keep `expiresAt` truthful together.
 
 ## Cross-Conversation Protocol
 

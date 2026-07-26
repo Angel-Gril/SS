@@ -1,6 +1,6 @@
 # Phase 3: Edit Operations and Batch Engine
 
-Progress: 3/5 tasks.
+Progress: 4/5 tasks.
 
 ## Tasks
 
@@ -13,7 +13,7 @@ Progress: 3/5 tasks.
 - [x] `EXT-07` Build fact-bound Prompt/SKU slot planner (`P1`, `M`). Acceptance: SKU hero
   and distinct detail roles, overrides, up to four references, stable hash/version, and no
   fabricated product facts.
-- [ ] `UI-03` Integrate references/full edit/inpaint (`P1`, `L`). Acceptance: users select
+- [x] `UI-03` Integrate references/full edit/inpaint (`P1`, `L`). Acceptance: users select
   global/per-slot references, edit whole image, draw compatible mask, review alternatives,
   and regenerate a slot; unsupported operations show a concrete disabled reason.
 - [ ] `QA-02` Verify exact Provider sandbox capabilities (`P1`, `L`). Acceptance: configured
@@ -85,3 +85,26 @@ Progress: 3/5 tasks.
   tests passed `13/13`; vault/cache/readiness tests, lint, workspace typecheck, server tests,
   preflight, cloud/local builds, and package verification passed. No real Provider request,
   ERP AI charge, Ozon write, production mutation, VPS deployment, or default-on flag occurred.
+- `UI-03` adds global and per-slot reference selection, whole-image editing, keyboard and
+  pointer mask drawing, stable alternative review, per-slot regeneration, and concrete
+  operation-disabled reasons to the extension-origin workbench. Source, reference, mask, and
+  preview bytes cross page/background boundaries only through one-use `BroadcastChannel`
+  tickets; normal runtime messages contain opaque handles and redacted metadata only.
+- Text generation and editing are mutually exclusive in the background. Both paths share one
+  authenticated device semaphore, unresolved external-charge markers survive worker restart,
+  and reset/regeneration requires the exact `external-provider-charge/v1` acknowledgement.
+  Ambiguous reference synchronization retains bytes and blocks dispatch until the exact target
+  is reconciled.
+- UI-03 focused tests passed `68/68`. The legacy text-to-image vertical fixture was updated to
+  prove the existing path uses and releases the shared Provider semaphore without weakening
+  runtime dependency checks. Repository lint, workspace typecheck, `3861` server tests,
+  preflight, cloud/local builds, and source/cloud/local package verification passed; package
+  verification reported `354/358/354` passes with `0` failures.
+- Real Chrome `150.0.7871.46` QA passed at `390x844`, `768x900`, `1024x768`, and `1440x900`:
+  horizontal overflow and offending elements were zero, portrait image/canvas delta was `0px`,
+  landscape delta was at most `0.671875px`, keyboard mask drawing worked, and asynchronous
+  alternatives preserved focus and DOM identity. A discovered `481px` selected-preview shift
+  and `5px` thumbnail shift were fixed with reserved preview geometry and stable block-level
+  media; repeat measurements were `0px` position and size change. No external request occurred.
+- No real Provider request, external charge, ERP ingest, Ozon write, production flag change,
+  production mutation, VPS deployment, or `.context/` staging occurred during `UI-03`.

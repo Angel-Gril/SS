@@ -49,6 +49,15 @@
       INGEST: 'ss-erp:ai-image-workbench-ingest',
       RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
       PUBLISH: 'ss-erp:ai-image-workbench-publish',
+      EDIT_MEDIA_PREPARE: 'ss-erp:ai-image-workbench-edit-media-prepare',
+      EDIT_MEDIA_RELEASE: 'ss-erp:ai-image-workbench-edit-media-release',
+      EDIT_STATE: 'ss-erp:ai-image-workbench-edit-state',
+      EDIT_REFERENCES: 'ss-erp:ai-image-workbench-edit-references',
+      EDIT_START: 'ss-erp:ai-image-workbench-edit-start',
+      EDIT_SELECT: 'ss-erp:ai-image-workbench-edit-select',
+      EDIT_REGENERATE: 'ss-erp:ai-image-workbench-edit-regenerate',
+      EDIT_PREVIEW: 'ss-erp:ai-image-workbench-edit-preview',
+      EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',
     }),
   });
 
@@ -651,11 +660,32 @@
     if (!sameBinding(binding, expectedBinding)) {
       throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_MISMATCH');
     }
-    return {
+    var concurrency = value.concurrencyAuthority;
+    if (!isRecord(concurrency)
+      || Object.keys(concurrency).length !== 2
+      || !Object.keys(concurrency).every(function (key) {
+        return ['policyRevision', 'maxConcurrency'].includes(key);
+      })
+      || concurrency.policyRevision !== binding.policyRevision
+      || !Number.isSafeInteger(concurrency.maxConcurrency)
+      || concurrency.maxConcurrency < 1 || concurrency.maxConcurrency > 4) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+    }
+    var normalized = {
       handleId: handleId,
       expiresAt: new Date(expires).toISOString(),
       binding: binding,
     };
+    Object.defineProperty(normalized, 'concurrencyAuthority', {
+      value: Object.freeze({
+        policyRevision: binding.policyRevision,
+        maxConcurrency: concurrency.maxConcurrency,
+      }),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    return Object.freeze(normalized);
   }
 
   async function authorizeRuntimeMessage(input) {

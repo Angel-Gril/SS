@@ -803,16 +803,19 @@ vm.runInNewContext(clientSource, clientContext, { filename: clientPath });
   const htmlPath = `${extensionRoot}/pages/media-editor.html`;
   const cssPath = `${extensionRoot}/pages/media-editor.css`;
   const pagePath = `${extensionRoot}/pages/media-editor.js`;
-  for (const path of [htmlPath, cssPath, pagePath]) {
+  const canvasPath = `${extensionRoot}/shared/ai-media/image-mask-canvas.js`;
+  for (const path of [htmlPath, cssPath, pagePath, canvasPath]) {
     assert.ok(fs.existsSync(path), `extension media editor asset should exist: ${path}`);
   }
   const html = fs.readFileSync(htmlPath, 'utf8');
   const css = fs.readFileSync(cssPath, 'utf8');
   const page = fs.readFileSync(pagePath, 'utf8');
+  const canvas = fs.readFileSync(canvasPath, 'utf8');
+  const maskRuntime = `${page}\n${canvas}`;
   assert.match(html, /media-editor\.css/u);
   assert.match(
     html,
-    /shared\/ai-media\/image-mask-core\.js[\s\S]*shared\/ai-media\/image-mask-layout\.js[\s\S]*media-editor\.js/u,
+    /shared\/ai-media\/image-mask-core\.js[\s\S]*shared\/ai-media\/image-mask-layout\.js[\s\S]*shared\/ai-media\/image-mask-canvas\.js[\s\S]*media-editor\.js/u,
   );
   assert.doesNotMatch(html, /<script(?!\s+src=)[^>]*>/iu);
   for (const id of [
@@ -846,17 +849,45 @@ vm.runInNewContext(clientSource, clientContext, { filename: clientPath });
   assert.match(page, /mask\.redo\(\)/u);
   assert.match(page, /mask\.clear\(\)/u);
   assert.match(page, /MAX_PREVIEW_PIXELS\s*=\s*1_500_000/u);
-  assert.match(page, /MAX_EXPORT_SCAN_PIXELS\s*=\s*1_000_000/u);
+  assert.match(canvas, /MAX_SCAN_PIXELS\s*=\s*1_000_000/u);
+  assert.match(canvas, /MAX_PIXELS\s*=\s*12\s*\*\s*1000\s*\*\s*1000/u);
+  assert.match(canvas, /pixelCount\s*>\s*MAX_PIXELS/u);
+  const canvasContext = { Error, Math, Number, Object, Promise };
+  canvasContext.globalThis = canvasContext;
+  vm.runInNewContext(canvas, canvasContext, { filename: canvasPath });
+  const canvasApi = canvasContext.SS_ERP_IMAGE_MASK_CANVAS;
+  let oversizedCanvasAllocations = 0;
+  const oversizedInput = {
+    width: 4000,
+    height: 3001,
+    commands: [],
+    document: {
+      createElement() {
+        oversizedCanvasAllocations += 1;
+        throw new Error('oversized canvas must not be allocated');
+      },
+    },
+  };
+  assert.throws(
+    () => canvasApi.measure(oversizedInput),
+    /SS_ERP_IMAGE_MASK_MEASURE_INVALID/u,
+  );
+  await assert.rejects(
+    canvasApi.exportPng({ ...oversizedInput, maxBytes: 1024 }),
+    /SS_ERP_IMAGE_MASK_EXPORT_INVALID/u,
+  );
+  assert.equal(oversizedCanvasAllocations, 0);
   assert.match(page, /fitPreviewBitmap/u);
   assert.match(page, /mask\.commands\(true\)/u);
   assert.match(page, /requestAnimationFrame/u);
-  assert.match(page, /exportCanvas\.width\s*=\s*source\.width/u);
-  assert.match(page, /exportCanvas\.height\s*=\s*source\.height/u);
-  assert.match(page, /toBlob\([\s\S]*?\},\s*['"]image\/png['"]/u);
+  assert.match(page, /canvasApi\.exportPng/u);
+  assert.match(canvas, /canvas\.width\s*=\s*width/u);
+  assert.match(canvas, /canvas\.height\s*=\s*height/u);
+  assert.match(canvas, /toBlob\([\s\S]*?\},\s*['"]image\/png['"]/u);
   assert.match(page, /Math\.min\(window\.devicePixelRatio\s*\|\|\s*1,\s*2\)/u);
   assert.doesNotMatch(page, /mask\.pixels\(\)|mask\.rgba\(\)|createImageData/u);
-  assert.match(page, /getImageData\(0,\s*y,\s*width,\s*rows\)/u);
-  assert.doesNotMatch(page, /getImageData\(0,\s*0,\s*source\.width,\s*source\.height\)/u);
+  assert.match(canvas, /getImageData\(0,\s*y,\s*width,\s*rows\)/u);
+  assert.doesNotMatch(maskRuntime, /getImageData\(0,\s*0,\s*source\.width,\s*source\.height\)/u);
   assert.match(page, /beforeunload/u);
   assert.match(page, /window\.confirm/u);
   assert.match(page, /event\.isTrusted\s*!==\s*true/u);

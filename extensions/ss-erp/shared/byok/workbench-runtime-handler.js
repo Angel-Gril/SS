@@ -5,6 +5,7 @@
   var PUBLIC_STATE_VERSION = 'extension-byok-workbench-public-state/v1';
   var OPERATION = 'TEXT_TO_IMAGE';
   var REQUEST_MODE = 'json';
+  var EDIT_OPERATIONS = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
   var CONTEXT_KEYS = [
     'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId',
     'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'skuKey', 'slotKey',
@@ -150,6 +151,27 @@
     };
   }
 
+  function editOwner(sender, session) {
+    if (!isRecord(sender) || !Number.isSafeInteger(sender.tabId) || sender.tabId < 0
+      || typeof sender.documentId !== 'string' || !sender.documentId
+      || !session || !isRecord(session.context)) {
+      throw handlerError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+    }
+    return {
+      tabId: sender.tabId,
+      documentId: sender.documentId,
+      context: session.context,
+    };
+  }
+
+  function providerOwnerToken(sender) {
+    if (!isRecord(sender) || !Number.isSafeInteger(sender.tabId) || sender.tabId < 0
+      || typeof sender.documentId !== 'string' || !sender.documentId) {
+      throw handlerError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+    }
+    return 'workbench-tab:' + sender.tabId + ':document:' + sender.documentId;
+  }
+
   function createDispatcher(options) {
     var config = options || {};
     var messageTypes = config.messageTypes;
@@ -159,6 +181,8 @@
     var requiredTypes = [
       'GET_PUBLIC_STATE', 'GET_READINESS', 'EXECUTE_PROVIDER', 'OPEN_PREVIEW',
       'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST', 'PUBLISH',
+      'EDIT_MEDIA_PREPARE', 'EDIT_MEDIA_RELEASE', 'EDIT_STATE', 'EDIT_REFERENCES',
+      'EDIT_START', 'EDIT_SELECT', 'EDIT_REGENERATE', 'EDIT_PREVIEW', 'EDIT_CLEANUP',
     ];
     var typeValues = requiredTypes.map(function (name) {
       return text(
@@ -218,6 +242,24 @@
     var matchesVaultAuthority = requiredMethod(config.authorityGuard, 'matchesVaultAuthority');
     var openPreview = requiredMethod(config.previewBroker, 'open');
     var releasePreviewResult = requiredMethod(config.previewBroker, 'releaseResult');
+    var editController = config.editController;
+    var openEdit = requiredMethod(editController, 'open');
+    var setEditReferences = requiredMethod(editController, 'setReferences');
+    var startEdit = requiredMethod(editController, 'start');
+    var regenerateEdit = requiredMethod(editController, 'regenerate');
+    var selectEditAlternative = requiredMethod(editController, 'selectAlternative');
+    var getEditSnapshot = requiredMethod(editController, 'getSnapshot');
+    var cleanupEdit = requiredMethod(editController, 'cleanup');
+    var cleanupEditByTab = requiredMethod(editController, 'cleanupByTab');
+    var prepareEditMedia = requiredMethod(config.editMediaStore, 'prepare');
+    var releaseEditMedia = requiredMethod(config.editMediaStore, 'release');
+    var assertEditEpoch = requiredMethod(config.editEpochGuard, 'assertCurrent');
+    var beginEditEpoch = requiredMethod(config.editEpochGuard, 'begin');
+    var clearEditEpoch = requiredMethod(config.editEpochGuard, 'clear');
+    var clearEditEpochByTab = requiredMethod(config.editEpochGuard, 'clearByTab');
+    var acknowledgeEditEpoch = requiredMethod(config.editEpochGuard, 'acknowledge');
+    var acquireProviderLease = requiredMethod(config.providerSemaphore, 'acquire');
+    var cancelProviderOwner = requiredMethod(config.providerSemaphore, 'cancelOwner');
     var now = typeof config.now === 'function' ? config.now : function () { return new Date(); };
     var randomValues = typeof config.randomValues === 'function'
       ? config.randomValues
@@ -227,6 +269,7 @@
     if (!randomValues) throw handlerError('SS_ERP_BYOK_WORKBENCH_DEPENDENCY_UNAVAILABLE');
     var reviewLocks = new Set();
     var publishLocks = new Set();
+    var modeTransitionLocks = new Map();
 
     function currentMillis() {
       var value = new Date(now()).getTime();
@@ -236,9 +279,54 @@
       return value;
     }
 
+    async function withModeTransitionLock(sender, operation) {
+      var token = providerOwnerToken(sender);
+      var previous = modeTransitionLocks.get(token) || Promise.resolve();
+      var unlock;
+      var current = new Promise(function (resolve) { unlock = resolve; });
+      var tail = previous.then(function () { return current; });
+      modeTransitionLocks.set(token, tail);
+      await previous;
+      try {
+        return await operation();
+      } finally {
+        unlock();
+        if (modeTransitionLocks.get(token) === tail) modeTransitionLocks.delete(token);
+      }
+    }
+
+    function executionAuthority(owner, readiness) {
+      var binding = readiness && readiness.binding;
+      var concurrency = readiness && readiness.concurrencyAuthority;
+      if (!isRecord(binding) || !isRecord(concurrency)
+        || concurrency.policyRevision !== binding.policyRevision
+        || !Number.isSafeInteger(concurrency.maxConcurrency)
+        || concurrency.maxConcurrency < 1 || concurrency.maxConcurrency > 4
+        || typeof readiness.expiresAt !== 'string') {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_READINESS_INVALID');
+      }
+      return {
+        ownerToken: providerOwnerToken(owner),
+        ownerUserId: binding.ownerUserId,
+        deviceSessionId: binding.deviceSessionId,
+        policyRevision: concurrency.policyRevision,
+        maxConcurrency: concurrency.maxConcurrency,
+        expiresAt: readiness.expiresAt,
+      };
+    }
+
     function releaseTemporaryResult(id) {
       try { releasePreviewResult(id); } catch (_error) {}
       try { return Boolean(releaseVaultResult(id)); } catch (_error) { return false; }
+    }
+
+    async function cleanupEditTab(tabId) {
+      var result = null;
+      try { result = cleanupEditByTab(tabId); } catch (_error) {}
+      if (result && result.cleaned === true && result.externalChargeUnresolved !== true) {
+        try { await clearEditEpochByTab(tabId); } catch (_error) {}
+      }
+      return result;
     }
 
     function newIngestIdempotencyKey() {
@@ -277,7 +365,16 @@
 
     async function removeSession(session) {
       if (!session) return false;
+      if (typeof session.workbenchDocumentId === 'string' && session.workbenchDocumentId) {
+        try {
+          cancelProviderOwner(providerOwnerToken({
+            tabId: session.workbenchTabId,
+            documentId: session.workbenchDocumentId,
+          }));
+        } catch (_error) {}
+      }
       var removed = await takeByTab(session.workbenchTabId);
+      await cleanupEditTab(session.workbenchTabId);
       var result = removed && removed.result;
       if (result && result.resultId) releaseTemporaryResult(result.resultId);
       return Boolean(removed);
@@ -294,6 +391,10 @@
           ? error.discardedResultId
           : null;
         if (discardedResultId) releaseTemporaryResult(discardedResultId);
+        if (sender && Number.isSafeInteger(sender.tabId) && sender.tabId >= 0) {
+          try { cancelProviderOwner(providerOwnerToken(sender)); } catch (_error) {}
+          await cleanupEditTab(sender.tabId);
+        }
         throw error;
       }
       // Ingest recovery and publishing use the source revision as immutable
@@ -376,8 +477,13 @@
       };
     }
 
-    function evidenceProjection(value, current) {
-      if (!isRecord(value) || value.operation !== OPERATION || value.requestMode !== REQUEST_MODE) {
+    function evidenceProjection(value, current, expectedOperation) {
+      var operation = expectedOperation || value && value.operation;
+      var validRequestMode = operation === OPERATION
+        ? value && value.requestMode === REQUEST_MODE
+        : EDIT_OPERATIONS.includes(operation)
+          && value && value.requestMode === 'multipart';
+      if (!isRecord(value) || value.operation !== operation || !validRequestMode) {
         return null;
       }
       var expiresAt = typeof value.expiresAt === 'string' ? Date.parse(value.expiresAt) : NaN;
@@ -387,8 +493,8 @@
         return null;
       }
       return Object.freeze({
-        operation: OPERATION,
-        requestMode: REQUEST_MODE,
+        operation: operation,
+        requestMode: value.requestMode,
         policyRevision: value.policyRevision,
         verifiedAt: new Date(verifiedAt).toISOString(),
         expiresAt: new Date(expiresAt).toISOString(),
@@ -415,14 +521,19 @@
         } catch (_error) {
           permissionState = 'UNAVAILABLE';
         }
-        var evidence = (Array.isArray(state && state.evidence) ? state.evidence : [])
+        var projectedEvidence = (Array.isArray(state && state.evidence) ? state.evidence : [])
           .map(function (row) { return evidenceProjection(row, current); })
-          .find(Boolean) || null;
+          .filter(Boolean);
+        var evidence = projectedEvidence
+          .find(function (row) { return row.operation === OPERATION; }) || null;
         return Object.freeze({
           profile: selected,
           hasKey: Boolean(state && state.hasKey),
           permissionState: permissionState,
           textToImageEvidence: evidence,
+          capabilityEvidence: Object.freeze(projectedEvidence.filter(function (row) {
+            return EDIT_OPERATIONS.includes(row.operation);
+          })),
         });
       }));
     }
@@ -445,7 +556,7 @@
       }
       var current = currentMillis();
       var evidence = (Array.isArray(state.evidence) ? state.evidence : [])
-        .map(function (row) { return evidenceProjection(row, current); })
+        .map(function (row) { return evidenceProjection(row, current, OPERATION); })
         .find(function (row) {
           return row && row.policyRevision === readiness.readinessBinding.policyRevision;
         });
@@ -463,6 +574,19 @@
       }
       var authority = await captureAuthority(entry.binding);
       if (!matchesVaultAuthority(entry, entry.binding, authority)) {
+        throw handlerError('SS_ERP_BYOK_DEVICE_AUTHORITY_STALE');
+      }
+      return authority;
+    }
+
+    async function assertEditEntryAuthority(entry, context) {
+      var binding = entry && entry.binding;
+      if (!isRecord(binding) || !EDIT_OPERATIONS.includes(binding.operation)
+        || CONTEXT_KEYS.some(function (key) { return binding[key] !== context[key]; })) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_CONTEXT_MISMATCH');
+      }
+      var authority = await captureAuthority(binding);
+      if (!matchesVaultAuthority(entry, binding, authority)) {
         throw handlerError('SS_ERP_BYOK_DEVICE_AUTHORITY_STALE');
       }
       return authority;
@@ -531,6 +655,155 @@
       };
     });
 
+    handlers[messageTypes.EDIT_MEDIA_PREPARE] = guarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['purpose'])
+        || !['REFERENCE', 'SOURCE', 'MASK'].includes(input.purpose)) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      await assertEditEpoch(owner);
+      openEdit(owner);
+      return prepareEditMedia(owner, input.purpose);
+    });
+
+    handlers[messageTypes.EDIT_MEDIA_RELEASE] = guarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['mediaHandle', 'purpose'])
+        || !['REFERENCE', 'SOURCE', 'MASK'].includes(input.purpose)) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimSession(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      return { released: Boolean(releaseEditMedia(owner, input.mediaHandle, input.purpose)) };
+    });
+
+    handlers[messageTypes.EDIT_STATE] = guarded(async function (handlerContext) {
+      if (!exactKeys(handlerContext.payload || {}, [])) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      var epoch = await assertEditEpoch(owner);
+      if (!epoch || epoch.state === 'EMPTY') openEdit(owner);
+      try {
+        return getEditSnapshot(owner);
+      } catch (error) {
+        if (epoch && epoch.state === 'CURRENT') {
+          throw handlerError('SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+        }
+        throw error;
+      }
+    });
+
+    handlers[messageTypes.EDIT_REFERENCES] = guarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['scope', 'handles'])
+        || !['SESSION_GLOBAL', 'SLOT'].includes(input.scope)
+        || (input.handles !== null && !Array.isArray(input.handles))) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      await assertEditEpoch(owner);
+      openEdit(owner);
+      return setEditReferences(owner, input.scope === 'SLOT'
+        ? { scope: 'SLOT', slotKey: session.context.slotKey, handles: input.handles }
+        : { scope: 'SESSION_GLOBAL', handles: input.handles });
+    });
+
+    handlers[messageTypes.EDIT_START] = guarded(async function (handlerContext) {
+      var transition = await withModeTransitionLock(handlerContext.sender, async function () {
+        var session = await claimLive(handlerContext.sender);
+        if (session.operation || session.result) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+        }
+        var owner = editOwner(handlerContext.sender, session);
+        openEdit(owner);
+        return { owner: owner, epoch: await beginEditEpoch(owner) };
+      });
+      try {
+        return await startEdit(transition.owner, handlerContext.payload || {});
+      } catch (error) {
+        if (transition.epoch && transition.epoch.created === true) {
+          try { await clearEditEpoch(transition.owner); } catch (_error) {}
+        }
+        throw error;
+      }
+    });
+
+    handlers[messageTypes.EDIT_SELECT] = guarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['attemptId'])) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      await assertEditEpoch(owner, { requireActive: true });
+      openEdit(owner);
+      return selectEditAlternative(owner, input);
+    });
+
+    handlers[messageTypes.EDIT_REGENERATE] = guarded(async function (handlerContext) {
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      await assertEditEpoch(owner, { requireActive: true });
+      openEdit(owner);
+      return regenerateEdit(owner, handlerContext.payload || {});
+    });
+
+    handlers[messageTypes.EDIT_PREVIEW] = guarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['resultId'])) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var id = resultId(input.resultId);
+      var session = await claimLive(handlerContext.sender);
+      var owner = editOwner(handlerContext.sender, session);
+      await assertEditEpoch(owner, { requireActive: true });
+      openEdit(owner);
+      var snapshot = getEditSnapshot(owner);
+      if (!snapshot.alternatives.some(function (candidate) {
+        return candidate.candidateId === id && candidate.state === 'CANDIDATE_READY';
+      })) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_NOT_FOUND');
+      }
+      var entry = getVaultEntry(id);
+      await assertEditEntryAuthority(entry, session.context);
+      return openPreview(entry);
+    });
+
+    handlers[messageTypes.EDIT_CLEANUP] = guarded(async function (handlerContext) {
+      return withModeTransitionLock(handlerContext.sender, async function () {
+        var input = handlerContext.payload || {};
+        var acknowledgement = exactKeys(input, ['restartAcknowledgement'])
+          ? input.restartAcknowledgement
+          : null;
+        if (!exactKeys(input, []) && !acknowledgement) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+        }
+        var session = await claimSession(handlerContext.sender);
+        var owner = editOwner(handlerContext.sender, session);
+        if (acknowledgement) {
+          var reset = await cleanupEditTab(owner.tabId);
+          var acknowledged = await acknowledgeEditEpoch(owner, acknowledgement);
+          return {
+            cleaned: Boolean(reset && reset.cleaned),
+            releasedResultCount: reset && reset.releasedResultCount || 0,
+            externalChargeUnresolved: Boolean(reset && reset.externalChargeUnresolved),
+            restartAcknowledged: true,
+            clearedEpochCount: acknowledged.clearedCount,
+          };
+        }
+        var cleaned = cleanupEdit(owner);
+        if (cleaned.cleaned === true && cleaned.externalChargeUnresolved !== true) {
+          await clearEditEpoch(owner);
+        }
+        return cleaned;
+      });
+    });
+
     handlers[messageTypes.GET_READINESS] = guarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['profileId'])) {
@@ -548,22 +821,44 @@
     });
 
     handlers[messageTypes.EXECUTE_PROVIDER] = guarded(async function (handlerContext) {
-      var session = await claimLive(handlerContext.sender);
-      var binding = handlerContext.authorization && handlerContext.authorization.readiness
-        && handlerContext.authorization.readiness.binding;
-      if (!bindingMatchesContext(binding, session.context)) {
-        throw handlerError('SS_ERP_BYOK_WORKBENCH_CONTEXT_MISMATCH');
-      }
-      var input = handlerContext.payload || {};
-      if (session.result) {
-        var replay = await readSessionResult(session, handlerContext.sender);
-        if (replay && replay.idempotencyKey === input.idempotencyKey) return replay;
-        throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_PENDING');
-      }
-      await beginOperation(handlerContext.sender, input.idempotencyKey);
+      var readiness = handlerContext.authorization && handlerContext.authorization.readiness;
+      var transition = await withModeTransitionLock(handlerContext.sender, async function () {
+        var session = await claimLive(handlerContext.sender);
+        var owner = editOwner(handlerContext.sender, session);
+        var epoch = await assertEditEpoch(owner);
+        if (epoch && epoch.state !== 'EMPTY') {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT');
+        }
+        var binding = readiness && readiness.binding;
+        if (!bindingMatchesContext(binding, session.context)) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_CONTEXT_MISMATCH');
+        }
+        var input = handlerContext.payload || {};
+        if (session.result) {
+          var replay = await readSessionResult(session, handlerContext.sender);
+          if (replay && replay.idempotencyKey === input.idempotencyKey) {
+            return { replay: replay };
+          }
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_PENDING');
+        }
+        await beginOperation(handlerContext.sender, input.idempotencyKey);
+        return { binding: binding, input: input, owner: owner };
+      });
+      if (transition.replay) return transition.replay;
+      var binding = transition.binding;
+      var input = transition.input;
       var generated;
       try {
-        generated = await generate({ ...input, readinessBinding: binding });
+        var providerLease;
+        try {
+          providerLease = await acquireProviderLease(executionAuthority(
+            transition.owner,
+            readiness,
+          ));
+          generated = await generate({ ...input, readinessBinding: binding });
+        } finally {
+          if (providerLease) providerLease.release();
+        }
         var authority = await captureAuthority(binding);
         var committed;
         try {
@@ -900,8 +1195,17 @@
 
     async function removeTab(value) {
       if (!Number.isSafeInteger(value) || value < 0) return false;
+      await cleanupEditTab(value);
       var session = await takeByTab(value);
       if (!session) return false;
+      if (typeof session.workbenchDocumentId === 'string' && session.workbenchDocumentId) {
+        try {
+          cancelProviderOwner(providerOwnerToken({
+            tabId: session.workbenchTabId,
+            documentId: session.workbenchDocumentId,
+          }));
+        } catch (_error) {}
+      }
       if (session.result && session.result.resultId) {
         releaseTemporaryResult(session.result.resultId);
       }

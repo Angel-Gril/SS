@@ -145,7 +145,6 @@ function launchContext(overrides = {}) {
 
 function readinessBinding(overrides = {}) {
   return {
-    contractVersion: 'extension-byok-readiness-binding/v2',
     ownerUserId: 'owner-1',
     deviceSessionId: 'device-session-1',
     ...launchContext(),
@@ -710,6 +709,15 @@ const MESSAGE_TYPES = {
   INGEST: 'qa01-ingest',
   RECOVER_INGEST: 'qa01-recover-ingest',
   PUBLISH: 'qa01-publish',
+  EDIT_MEDIA_PREPARE: 'qa01-edit-media-prepare',
+  EDIT_MEDIA_RELEASE: 'qa01-edit-media-release',
+  EDIT_STATE: 'qa01-edit-state',
+  EDIT_REFERENCES: 'qa01-edit-references',
+  EDIT_START: 'qa01-edit-start',
+  EDIT_SELECT: 'qa01-edit-select',
+  EDIT_REGENERATE: 'qa01-edit-regenerate',
+  EDIT_PREVIEW: 'qa01-edit-preview',
+  EDIT_CLEANUP: 'qa01-edit-cleanup',
 };
 const sender = { tabId: 77, documentId: 'workbench-document-1', frameId: 0 };
 
@@ -747,6 +755,79 @@ const sessionManager = createSessionManager(sourceContext);
 const authorityGuard = createAuthorityGuard(vault, binding);
 const previewTickets = [];
 const runtimeResponses = [];
+const editSnapshot = {
+  contractVersion: 'extension-byok-workbench-edit-controller/v1',
+  executionMode: 'BYOK',
+  slotKey: sourceContext.slotKey,
+  profileId: null,
+  operation: null,
+  references: {
+    sessionGlobalCount: 0,
+    slotOverrideActive: false,
+    slotOverrideCount: null,
+    effectiveCount: 0,
+  },
+  operationAvailability: [],
+  scheduler: {
+    state: 'READY', activeCount: 0, queuedCount: 0,
+    pauseRequested: false, effectiveConcurrency: null,
+  },
+  slot: { revision: 0, attemptIds: [], selectedAttemptId: null, selectedCandidateId: null },
+  alternatives: [],
+};
+const editController = {
+  open() { return editSnapshot; },
+  setReferences() { return editSnapshot; },
+  async start() { return editSnapshot; },
+  async regenerate() { return editSnapshot; },
+  selectAlternative() { return editSnapshot; },
+  getSnapshot() { return editSnapshot; },
+  cleanup() {
+    return { cleaned: false, releasedResultCount: 0, externalChargeUnresolved: false };
+  },
+  cleanupByTab() {
+    return { cleaned: false, releasedResultCount: 0, externalChargeUnresolved: false };
+  },
+};
+const editMediaStore = {
+  prepare() { throw new Error('edit media is outside the text-to-image fixture'); },
+  release() { return false; },
+};
+const editEpochGuard = {
+  async assertCurrent() { return { state: 'EMPTY' }; },
+  async begin() { throw new Error('edit start is outside the text-to-image fixture'); },
+  async clear() { return false; },
+  async clearByTab() { return false; },
+  async acknowledge() { return { clearedCount: 0 }; },
+};
+const providerSemaphoreCalls = [];
+const providerSemaphore = {
+  async acquire(value) {
+    providerSemaphoreCalls.push(['acquire', plain(value)]);
+    assert.equal(value.ownerUserId, binding.ownerUserId);
+    assert.equal(value.deviceSessionId, binding.deviceSessionId);
+    assert.equal(value.policyRevision, binding.policyRevision);
+    assert.equal(value.maxConcurrency, 1);
+    let released = false;
+    return {
+      release() {
+        if (released) return false;
+        released = true;
+        providerSemaphoreCalls.push(['release']);
+        return true;
+      },
+    };
+  },
+  cancelOwner() { return 0; },
+};
+const authorizedReadiness = {
+  binding,
+  expiresAt: '2026-07-26T10:05:00.000Z',
+};
+Object.defineProperty(authorizedReadiness, 'concurrencyAuthority', {
+  value: Object.freeze({ policyRevision: binding.policyRevision, maxConcurrency: 1 }),
+  enumerable: false,
+});
 const dispatcher = runtimeApi.createDispatcher({
   messageTypes: MESSAGE_TYPES,
   sessionManager,
@@ -780,6 +861,10 @@ const dispatcher = runtimeApi.createDispatcher({
   },
   ingestClient,
   publishCoordinator,
+  editController,
+  editMediaStore,
+  editEpochGuard,
+  providerSemaphore,
   now: () => NOW,
   randomValues(bytes) { bytes.fill(8); return bytes; },
 });
@@ -806,11 +891,12 @@ const generated = await runtime(MESSAGE_TYPES.EXECUTE_PROVIDER, {
   negativePrompt: null,
   size: '1024x1024',
   idempotencyKey: 'qa01-provider-generate-1',
-}, { readiness: { binding } });
+}, { readiness: authorizedReadiness });
 assert.equal(generated.ok, true);
 assert.match(generated.data.resultId, /^br_[a-f0-9]{48}$/u);
 assert.equal(generated.data.reviewState, 'CANDIDATE_READY');
 assert.equal(providerCalls.length, 1);
+assert.deepEqual(providerSemaphoreCalls.map((row) => row[0]), ['acquire', 'release']);
 
 const previewed = await runtime(MESSAGE_TYPES.OPEN_PREVIEW, {
   resultId: generated.data.resultId,

@@ -237,13 +237,23 @@
         throw cacheError('SS_ERP_BYOK_READINESS_UNAVAILABLE');
       }
       verified.set(handle, entry);
-      return {
+      var verification = {
         contractVersion: VERIFICATION_VERSION,
         authenticated: true,
         handleId: handle,
         expiresAt: entry.expiresAt,
         binding: entry.binding,
       };
+      Object.defineProperty(verification, 'concurrencyAuthority', {
+        value: Object.freeze({
+          policyRevision: entry.binding.policyRevision,
+          maxConcurrency: entry.decision.maxConcurrency,
+        }),
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+      return Object.freeze(verification);
     }
 
     function createPermissionBridge(verification) {

@@ -203,6 +203,7 @@ async function testEditorRuntimeBehavior() {
   for (const relativePath of [
     'shared/ai-media/image-mask-core.js',
     'shared/ai-media/image-mask-layout.js',
+    'shared/ai-media/image-mask-canvas.js',
     'pages/media-editor.js',
   ]) {
     const path = `${extensionRoot}/${relativePath}`;

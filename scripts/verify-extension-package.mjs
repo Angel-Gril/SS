@@ -263,9 +263,15 @@ const requiredByokModules = [
   'shared/byok/image-edit-client.js',
   'shared/byok/media-job-engine.js',
   'shared/byok/prompt-plan.js',
+  'shared/byok/generated-result-vault.js',
   'shared/byok/workbench-launch-client.js',
   'shared/byok/workbench-launch-session.js',
   'shared/byok/workbench-preview-channel.js',
+  'shared/byok/workbench-provider-semaphore.js',
+  'shared/byok/workbench-media-channel.js',
+  'shared/byok/workbench-edit-media-store.js',
+  'shared/byok/workbench-edit-epoch-guard.js',
+  'shared/byok/workbench-edit-controller.js',
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
@@ -279,6 +285,7 @@ const requiredByokPages = [
   'pages/ai-image-workbench.html',
   'pages/ai-image-workbench.css',
   'pages/ai-image-workbench.js',
+  'pages/ai-image-workbench-edit.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
@@ -306,9 +313,16 @@ for (const modulePath of [
   'shared/byok/image-edit-adapters.js',
   'shared/byok/image-edit-probe-media.js',
   'shared/byok/image-edit-client.js',
+  'shared/byok/generated-result-vault.js',
+  'shared/byok/media-job-engine.js',
   'shared/byok/workbench-launch-client.js',
   'shared/byok/workbench-launch-session.js',
   'shared/byok/workbench-preview-channel.js',
+  'shared/byok/workbench-provider-semaphore.js',
+  'shared/byok/workbench-media-channel.js',
+  'shared/byok/workbench-edit-media-store.js',
+  'shared/byok/workbench-edit-epoch-guard.js',
+  'shared/byok/workbench-edit-controller.js',
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
 ]) {
@@ -322,8 +336,12 @@ const workbenchLaunchHtmlText = readFileSync(
   relToAbs('pages/ai-image-workbench-launch.html'),
   'utf8',
 );
-if (workbenchHtmlText.includes('../shared/byok/workbench-client.js')
+if (workbenchHtmlText.includes('../shared/ai-media/image-mask-core.js')
+  && workbenchHtmlText.includes('../shared/ai-media/image-mask-layout.js')
+  && workbenchHtmlText.includes('../shared/ai-media/image-mask-canvas.js')
+  && workbenchHtmlText.includes('../shared/byok/workbench-client.js')
   && workbenchHtmlText.includes('./ai-image-workbench.js')
+  && workbenchHtmlText.includes('./ai-image-workbench-edit.js')
   && workbenchHtmlText.includes('./ai-image-workbench.css')) {
   pass('BYOK workbench page references packaged client, controller, and styles');
 } else {
