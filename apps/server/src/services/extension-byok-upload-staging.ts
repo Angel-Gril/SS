@@ -54,9 +54,19 @@ export interface BeginExtensionByokUploadStagingInput {
 }
 
 export type BeginExtensionByokUploadStagingResult = {
-  kind: 'created';
+  kind: 'created' | 'reopened' | 'active';
   staging: ExtensionByokUploadStagingRecord;
 };
+
+export class ExtensionByokUploadStagingError extends Error {
+  readonly code = 'BYOK_INGEST_STAGING_CONFLICT';
+  readonly statusCode = 409;
+
+  constructor(message = 'EXTENSION_BYOK_UPLOAD_STAGING_IDENTITY_CONFLICT') {
+    super(message);
+    this.name = 'ExtensionByokUploadStagingError';
+  }
+}
 
 export interface ExtensionByokUploadStorageReference {
   assetId: string;
@@ -115,6 +125,24 @@ function boundedError(error: unknown): string {
     return code < 32 || code === 127 ? ' ' : character;
   }).join('');
   return printable.slice(0, 500) || 'cleanup failed';
+}
+
+function exactStagingIdentity(
+  staging: ExtensionByokUploadStagingRecord,
+  input: BeginExtensionByokUploadStagingInput,
+): boolean {
+  return staging.id === input.id
+    && staging.ownerUserId === input.ownerUserId
+    && staging.deviceSessionId === input.deviceSessionId
+    && staging.assetId === input.assetId
+    && staging.requestHash === input.requestHash
+    && staging.storageBackend === input.storageBackend
+    && staging.storageNamespaceId === input.storageNamespaceId
+    && staging.storageKey === input.storageKey;
+}
+
+function stagingConflict(): never {
+  throw new ExtensionByokUploadStagingError();
 }
 
 export async function commitExtensionByokUploadStagingInTransaction(
@@ -179,6 +207,7 @@ export function createPrismaExtensionByokUploadStagingStore(
              "storage_backend", "storage_namespace_id", "storage_key", "status", "expires_at",
              "created_at", "updated_at")
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $10)
+           ON CONFLICT DO NOTHING
            RETURNING ${STAGING_COLUMNS}`,
           input.id,
           input.ownerUserId,
@@ -191,8 +220,44 @@ export function createPrismaExtensionByokUploadStagingStore(
           expiresAt,
           input.now,
         );
-        if (!inserted[0]) throw new Error('EXTENSION_BYOK_UPLOAD_STAGING_INSERT_FAILED');
-        return { kind: 'created', staging: record(inserted[0]) };
+        if (inserted[0]) return { kind: 'created', staging: record(inserted[0]) };
+
+        const existingRows = await tx.$queryRawUnsafe<any[]>(
+          `SELECT ${STAGING_COLUMNS}
+           FROM "extension_byok_upload_staging"
+           WHERE "id" = $1
+           FOR UPDATE`,
+          input.id,
+        );
+        if (!existingRows[0]) return stagingConflict();
+        const existing = record(existingRows[0]);
+        if (!exactStagingIdentity(existing, input)) return stagingConflict();
+        if (existing.status !== 'CLEANED') {
+          if (!['PENDING', 'CLEANING', 'COMMITTED'].includes(existing.status)) {
+            return stagingConflict();
+          }
+          return { kind: 'active', staging: existing };
+        }
+
+        const reopened = await tx.$queryRawUnsafe<any[]>(
+          `UPDATE "extension_byok_upload_staging"
+           SET "status" = 'PENDING',
+               "expires_at" = $2,
+               "cleanup_lease_token" = NULL,
+               "cleanup_lease_until" = NULL,
+               "cleanup_attempt_count" = 0,
+               "last_error" = NULL,
+               "committed_at" = NULL,
+               "cleaned_at" = NULL,
+               "updated_at" = $3
+           WHERE "id" = $1 AND "status" = 'CLEANED'
+           RETURNING ${STAGING_COLUMNS}`,
+          input.id,
+          expiresAt,
+          input.now,
+        );
+        if (!reopened[0]) return stagingConflict();
+        return { kind: 'reopened', staging: record(reopened[0]) };
       });
     },
 

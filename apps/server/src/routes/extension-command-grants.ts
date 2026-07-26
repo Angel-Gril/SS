@@ -31,6 +31,7 @@ import {
 } from '../services/extension-ai-image-suite.js';
 import {
   createByokMediaIngestCommandResolver,
+  EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
   type ByokMediaIngestCommandResolverOptions,
 } from '../services/extension-byok-media-ingest-grant.js';
 
@@ -1002,6 +1003,7 @@ export async function extensionCommandGrantRoutes(
       command: resolution.command,
     };
     try {
+      const requestHash = hashExtensionCommandRequest(envelope);
       const issued = await options.service.issue({
         sessionId: device.sessionId,
         tokenId: device.tokenId,
@@ -1011,7 +1013,7 @@ export async function extensionCommandGrantRoutes(
         workflowId: resolution.workflowId,
         draftVersion: resolution.draftVersion,
         idempotencyKey: parsed.data.idempotencyKey,
-        requestHash: hashExtensionCommandRequest(envelope),
+        requestHash,
       });
       reply.header('Cache-Control', 'no-store');
       return reply.status(201).send({
@@ -1021,6 +1023,9 @@ export async function extensionCommandGrantRoutes(
           grantId: issued.grantId,
           grantToken: issued.token,
           expiresAt: issued.expiresAt,
+          ...(parsed.data.operation === EXTENSION_BYOK_MEDIA_INGEST_OPERATION
+            ? { requestHash }
+            : {}),
         },
       });
     } catch (caught) {

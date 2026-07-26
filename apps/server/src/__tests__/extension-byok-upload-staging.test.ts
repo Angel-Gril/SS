@@ -91,6 +91,110 @@ describe('extension BYOK upload staging', () => {
     expect(calls[0]).toContain('"storage_namespace_id"');
   });
 
+  it('returns an exact active lease instead of inserting a second PENDING attempt', async () => {
+    let current: ExtensionByokUploadStagingRecord | null = null;
+    let insertCount = 0;
+    const tx = {
+      async $queryRawUnsafe<T>(sql: string, ...values: unknown[]): Promise<T> {
+        if (sql.includes('INSERT INTO "extension_byok_upload_staging"')) {
+          insertCount += 1;
+          if (current) return [] as T;
+          current = staging({
+            id: String(values[0]),
+            status: 'PENDING',
+            expiresAt: values[8] as Date,
+            createdAt: values[9] as Date,
+            updatedAt: values[9] as Date,
+          });
+          return [current] as T;
+        }
+        if (sql.includes('FROM "extension_byok_upload_staging"')) return [current] as T;
+        throw new Error(`unexpected SQL: ${sql}`);
+      },
+    };
+    const client = {
+      ...tx,
+      async $transaction<T>(action: (value: typeof tx) => Promise<T>) { return action(tx); },
+    };
+    const store = createPrismaExtensionByokUploadStagingStore(client as never);
+    const attempt = {
+      id: 'byok_deterministic_asset', ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      assetId: 'asset-1', requestHash: 'a'.repeat(64), storageBackend: 'local' as const,
+      storageNamespaceId: '1'.repeat(64), storageKey: 'attempt-one.png', now: NOW,
+    };
+
+    await expect(store.beginAttempt(attempt)).resolves.toMatchObject({ kind: 'created' });
+    await expect(store.beginAttempt(attempt)).resolves.toMatchObject({
+      kind: 'active',
+      staging: { id: 'byok_deterministic_asset', status: 'PENDING' },
+    });
+    expect(insertCount).toBe(2);
+  });
+
+  it('reopens only an exact CLEANED lease with a fresh expiry', async () => {
+    const cleaned = staging({
+      id: 'byok_deterministic_asset',
+      status: 'CLEANED',
+      cleanedAt: new Date(NOW.getTime() - 60_000),
+    });
+    const calls: string[] = [];
+    const tx = {
+      async $queryRawUnsafe<T>(sql: string, ...values: unknown[]): Promise<T> {
+        calls.push(sql);
+        if (sql.includes('INSERT INTO "extension_byok_upload_staging"')) return [] as T;
+        if (sql.includes('FROM "extension_byok_upload_staging"')) return [cleaned] as T;
+        if (sql.includes('SET "status" = \'PENDING\'')) {
+          return [{
+            ...cleaned,
+            status: 'PENDING',
+            expiresAt: values[1] as Date,
+            cleanedAt: null,
+            updatedAt: values[2] as Date,
+          }] as T;
+        }
+        throw new Error(`unexpected SQL: ${sql}`);
+      },
+    };
+    const client = {
+      ...tx,
+      async $transaction<T>(action: (value: typeof tx) => Promise<T>) { return action(tx); },
+    };
+    const store = createPrismaExtensionByokUploadStagingStore(client as never);
+
+    await expect(store.beginAttempt({
+      id: cleaned.id, ownerUserId: cleaned.ownerUserId, deviceSessionId: cleaned.deviceSessionId,
+      assetId: cleaned.assetId, requestHash: cleaned.requestHash,
+      storageBackend: cleaned.storageBackend, storageNamespaceId: cleaned.storageNamespaceId,
+      storageKey: cleaned.storageKey, now: NOW,
+    })).resolves.toMatchObject({
+      kind: 'reopened',
+      staging: { status: 'PENDING', cleanedAt: null },
+    });
+    expect(calls.some((sql) => sql.includes('AND "status" = \'CLEANED\''))).toBe(true);
+  });
+
+  it('fails closed when a deterministic lease collides with changed identity or storage', async () => {
+    const existing = staging({ id: 'byok_deterministic_asset', status: 'PENDING' });
+    const tx = {
+      async $queryRawUnsafe<T>(sql: string): Promise<T> {
+        if (sql.includes('INSERT INTO "extension_byok_upload_staging"')) return [] as T;
+        return [existing] as T;
+      },
+    };
+    const client = {
+      ...tx,
+      async $transaction<T>(action: (value: typeof tx) => Promise<T>) { return action(tx); },
+    };
+    const store = createPrismaExtensionByokUploadStagingStore(client as never);
+
+    await expect(store.beginAttempt({
+      id: existing.id, ownerUserId: existing.ownerUserId, deviceSessionId: existing.deviceSessionId,
+      assetId: existing.assetId, requestHash: existing.requestHash,
+      storageBackend: existing.storageBackend, storageNamespaceId: existing.storageNamespaceId,
+      storageKey: 'changed.png', now: NOW,
+    })).rejects.toThrow('EXTENSION_BYOK_UPLOAD_STAGING_IDENTITY_CONFLICT');
+  });
+
   it('retargets a pending cleanup row to the actual uploaded key before compensation', async () => {
     let observedSql = '';
     const client = {

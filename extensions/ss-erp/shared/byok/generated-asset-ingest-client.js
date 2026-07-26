@@ -4,9 +4,25 @@
   var CONTRACT_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
   var COMMAND_VERSION = 'byok-media-ingest/v1';
   var MANIFEST_VERSION = 'extension-byok-media-ingest-request/v1';
+  var workbenchContract = global.SS_ERP_AI_IMAGE_WORKBENCH_CONTRACT;
+  var statusContract = workbenchContract && workbenchContract.BYOK_INGEST_STATUS;
+  var byokRoutes = workbenchContract && workbenchContract.ROUTES
+    && workbenchContract.ROUTES.BYOK;
+  if (!statusContract || !statusContract.states || !byokRoutes
+    || typeof statusContract.contractVersion !== 'string'
+    || typeof statusContract.requestHashPattern !== 'string'
+    || typeof byokRoutes.ingest !== 'string'
+    || typeof byokRoutes.ingestStatus !== 'string') {
+    throw new TypeError('BYOK ingest status contract is unavailable');
+  }
+  var STATUS_VERSION = statusContract.contractVersion;
+  var STATUS_STATES = statusContract.states;
+  var REQUEST_HASH_PATTERN = new RegExp(statusContract.requestHashPattern, 'u');
   var COMMAND_GRANT_PATH = '/api/extension-device/command-grants';
-  var INGEST_PATH = '/api/extension-device/byok-media/ingest';
+  var INGEST_PATH = byokRoutes.ingest;
+  var INGEST_STATUS_PATH = byokRoutes.ingestStatus;
   var OPERATION = 'BYOK_MEDIA_INGEST';
+  var MAX_OPERATION_COUNT = 100;
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
   var AUTHORITY_KEYS = [
     'lifecycleAuthority', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
@@ -89,8 +105,14 @@
       'skuKey', 'slotKey', 'assignmentMode', 'replaceConfirmed', 'assignmentOrdinal',
       'idempotencyKey',
     ];
-    if (Object.keys(value).length !== keys.length
-      || Object.keys(value).some(function (key) { return !keys.includes(key); })) {
+    var inputKeys = Object.keys(value);
+    if ((inputKeys.length !== keys.length && inputKeys.length !== keys.length + 1)
+      || inputKeys.some(function (key) { return !keys.includes(key) && key !== 'requestHash'; })
+      || (inputKeys.length === keys.length + 1 && !inputKeys.includes('requestHash'))) {
+      throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
+    }
+    var requestHash = value.requestHash == null ? null : String(value.requestHash || '');
+    if (requestHash !== null && !REQUEST_HASH_PATTERN.test(requestHash)) {
       throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
     }
     if (!['APPEND', 'REPLACE'].includes(value.assignmentMode)
@@ -116,6 +138,7 @@
       replaceConfirmed: value.replaceConfirmed,
       assignmentOrdinal: assignmentOrdinal(value.assignmentOrdinal),
       idempotencyKey: text(value.idempotencyKey, 16, 200),
+      requestHash: requestHash,
     };
   }
 
@@ -129,7 +152,7 @@
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/u, '');
   }
 
-  function fingerprint(input, result, authority) {
+  function identityFingerprint(input, authority) {
     return JSON.stringify({
       resultId: input.resultId,
       shopId: input.shopId,
@@ -141,12 +164,18 @@
       assignmentMode: input.assignmentMode,
       replaceConfirmed: input.replaceConfirmed,
       assignmentOrdinal: input.assignmentOrdinal,
-      resultSha256: result.sha256,
-      requestHash: result.requestHash,
       lifecycleEpoch: authority.lifecycleAuthority.epoch,
       ownerUserId: authority.ownerUserId,
       deviceSessionId: authority.deviceSessionId,
       policyRevision: authority.policyRevision,
+    });
+  }
+
+  function fingerprint(input, result, authority) {
+    return JSON.stringify({
+      identity: identityFingerprint(input, authority),
+      resultSha256: result.sha256,
+      requestHash: result.requestHash,
     });
   }
 
@@ -161,6 +190,29 @@
       throw new TypeError('BYOK ingest client dependencies are unavailable');
     }
     var operations = new Map();
+
+    function purgeOperation(idempotencyKey, entry) {
+      if (operations.get(idempotencyKey) !== entry || entry.promise) return false;
+      operations.delete(idempotencyKey);
+      entry.grantToken = null;
+      entry.requestHash = null;
+      entry.requestHashCommitted = false;
+      entry.result = null;
+      entry.resultPublic = null;
+      return true;
+    }
+
+    function reserveOperationSlot() {
+      if (operations.size < MAX_OPERATION_COUNT) return;
+      for (const pair of operations.entries()) {
+        var entry = pair[1];
+        if (!entry.promise && ['SUCCEEDED', 'FAILED_FINAL'].includes(entry.status)) {
+          purgeOperation(pair[0], entry);
+          if (operations.size < MAX_OPERATION_COUNT) return;
+        }
+      }
+      throw ingestError('SS_ERP_BYOK_INGEST_CAPACITY_EXCEEDED', 'FAILED_RETRYABLE');
+    }
 
     async function assertAuthorityCurrent(authority) {
       var current = false;
@@ -189,6 +241,10 @@
         || binding.draftRevision !== authority.draftRevision
         || binding.draftVersion !== input.draftVersion
         || binding.draftVersion !== authority.draftVersion
+        || binding.skuKey !== input.skuKey
+        || binding.slotKey !== input.slotKey
+        || binding.assignmentMode !== input.assignmentMode
+        || binding.assignmentOrdinal !== input.assignmentOrdinal
         || binding.policyRevision !== authority.policyRevision
         || binding.operation !== result.operation
         || binding.providerOrigin !== result.providerOrigin
@@ -231,23 +287,70 @@
     }
 
     async function issueGrant(entry) {
-      var response = await transport.post(COMMAND_GRANT_PATH, {
-        operation: OPERATION,
-        shopId: entry.input.shopId,
-        workflowId: entry.input.workflowId,
-        draftVersion: entry.input.draftVersion,
-        idempotencyKey: entry.input.idempotencyKey,
-        command: entry.command,
-      }, { requiredScope: 'byok:media:ingest' });
+      var response;
+      try {
+        response = await transport.post(COMMAND_GRANT_PATH, {
+          operation: OPERATION,
+          shopId: entry.input.shopId,
+          workflowId: entry.input.workflowId,
+          draftVersion: entry.input.draftVersion,
+          idempotencyKey: entry.input.idempotencyKey,
+          command: entry.command,
+        }, { requiredScope: 'byok:media:ingest' });
+      } catch (_error) {
+        throw ingestError('SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE', 'FAILED_RETRYABLE');
+      }
       var data = response && response.body && response.body.data;
-      if (!response || response.state !== 'response' || response.status !== 201
-        || !isRecord(response.body) || response.body.code !== 1 || !isRecord(data)
-        || !/^[A-Za-z0-9_-]{43,4096}$/u.test(String(data.grantToken || ''))) {
-        throw ingestError('SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE', 'FAILED_RETRYABLE', {
-          status: response && response.status || null,
+      var status = Number(response && response.status) || null;
+      if (response && (['scope_required', 'authorization_required', 'unpaired']
+        .includes(response.state)
+        || (response.state === 'http_error' && status !== 429
+          && status !== null && status >= 400 && status < 500))) {
+        throw ingestError('SS_ERP_BYOK_INGEST_GRANT_REJECTED', 'FAILED_FINAL', {
+          status: status,
+          errorCode: response.body && response.body.errorCode || null,
         });
       }
+      if (!response || (response.state === 'http_error'
+        && (status === 429 || (status !== null && status >= 500)))) {
+        throw ingestError('SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE', 'FAILED_RETRYABLE', {
+          status: status,
+        });
+      }
+      if (response.state !== 'response' || response.status !== 201
+        || !isRecord(response.body) || response.body.code !== 1 || !isRecord(data)
+        || !/^[A-Za-z0-9_-]{43,4096}$/u.test(String(data.grantToken || ''))
+        || !REQUEST_HASH_PATTERN.test(String(data.requestHash || ''))) {
+        throw ingestError('SS_ERP_BYOK_INGEST_GRANT_RESPONSE_INVALID', 'FAILED_FINAL', {
+          status: status,
+        });
+      }
+      if (entry.requestHash !== null && entry.requestHash !== data.requestHash) {
+        throw ingestError('SS_ERP_BYOK_INGEST_REQUEST_HASH_MISMATCH', 'FAILED_FINAL');
+      }
       entry.grantToken = data.grantToken;
+      if (entry.requestHash === null) {
+        entry.requestHash = data.requestHash;
+        entry.requestHashCommitted = false;
+      }
+    }
+
+    async function commitRequestHash(entry, commitIngestRequestHash) {
+      if (entry.requestHashCommitted === true) return;
+      if (!REQUEST_HASH_PATTERN.test(String(entry.requestHash || ''))) {
+        throw ingestError('SS_ERP_BYOK_INGEST_REQUEST_HASH_REQUIRED', 'FAILED_FINAL');
+      }
+      if (typeof commitIngestRequestHash === 'function') {
+        try {
+          await commitIngestRequestHash(entry.requestHash);
+        } catch (_error) {
+          throw ingestError(
+            'SS_ERP_BYOK_INGEST_REQUEST_HASH_COMMIT_FAILED',
+            'FAILED_RETRYABLE',
+          );
+        }
+      }
+      entry.requestHashCommitted = true;
     }
 
     function parseSuccess(response, input) {
@@ -272,11 +375,35 @@
         || !/^[a-f0-9]{64}$/u.test(String(data.assignmentSha256 || ''))
         || data.skuKey !== input.skuKey
         || data.slotKey !== input.slotKey) {
-        if (response && ['http_error', 'scope_required', 'authorization_required'].includes(response.state)) {
+        var state = response && response.state;
+        var status = Number(response && response.status) || null;
+        var errorCode = response && response.body && response.body.errorCode || null;
+        if (['scope_required', 'authorization_required', 'unpaired'].includes(state)) {
           throw ingestError('SS_ERP_BYOK_INGEST_REJECTED', 'FAILED_FINAL', {
-            status: response.status || null,
-            errorCode: response.body && response.body.errorCode || null,
+            status: status,
+            errorCode: errorCode,
           });
+        }
+        if (state === 'http_error') {
+          if (errorCode === 'byok_ingest_receipt_pending'
+            || status === 429 || (status !== null && status >= 500)) {
+            throw ingestError('SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME', 'UNKNOWN_OUTCOME', {
+              status: status,
+              errorCode: errorCode,
+            });
+          }
+          var retryableGrant = (status === 401 && errorCode === 'byok_ingest_grant_required')
+            || (status === 404 && errorCode === 'byok_ingest_grant_not_found')
+            || (status === 410 && errorCode === 'byok_ingest_grant_expired');
+          var rejected = ingestError(
+            retryableGrant
+              ? 'SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE'
+              : 'SS_ERP_BYOK_INGEST_REJECTED',
+            retryableGrant ? 'FAILED_RETRYABLE' : 'FAILED_FINAL',
+            { status: status, errorCode: errorCode },
+          );
+          rejected.resetGrant = retryableGrant;
+          throw rejected;
         }
         throw ingestError('SS_ERP_BYOK_INGEST_RESPONSE_INVALID', 'UNKNOWN_OUTCOME');
       }
@@ -301,10 +428,31 @@
       };
     }
 
-    async function dispatch(entry) {
+    async function commitAccepted(entry, commitAcceptedResult) {
+      if (typeof commitAcceptedResult === 'function') {
+        try {
+          await commitAcceptedResult(entry.resultPublic);
+        } catch (_error) {
+          entry.status = 'ACCEPTED_PENDING_COMMIT';
+          entry.errorCode = 'SS_ERP_BYOK_INGEST_RECEIPT_COMMIT_FAILED';
+          throw ingestError(
+            'SS_ERP_BYOK_INGEST_RECEIPT_COMMIT_FAILED',
+            'FAILED_RETRYABLE',
+          );
+        }
+      }
+      entry.status = 'SUCCEEDED';
+      entry.errorCode = null;
+      entry.grantToken = null;
+      try { vault.release(entry.input.resultId); } catch (_error) {}
+      return entry.resultPublic;
+    }
+
+    async function dispatch(entry, commitAcceptedResult, commitIngestRequestHash) {
       try {
         await assertAuthorityCurrent(entry.authority);
         if (!entry.grantToken) await issueGrant(entry);
+        await commitRequestHash(entry, commitIngestRequestHash);
         await assertAuthorityCurrent(entry.authority);
         var manifest = {
           contractVersion: MANIFEST_VERSION,
@@ -323,12 +471,11 @@
           commandGrant: entry.grantToken,
         });
         var accepted = parseSuccess(response, entry.input);
-        entry.status = 'SUCCEEDED';
+        entry.status = 'ACCEPTED_PENDING_COMMIT';
         entry.resultPublic = accepted;
-        entry.grantToken = null;
-        vault.release(entry.input.resultId);
-        return accepted;
+        return await commitAccepted(entry, commitAcceptedResult);
       } catch (error) {
+        if (entry.status === 'ACCEPTED_PENDING_COMMIT') throw error;
         var safeError = error && error.code
           ? error
           : ingestError(
@@ -337,48 +484,251 @@
           );
         entry.status = safeError.outcome || (entry.binaryDispatched ? 'UNKNOWN_OUTCOME' : 'FAILED_RETRYABLE');
         entry.errorCode = safeError.code;
-        if (entry.status === 'FAILED_FINAL') entry.grantToken = null;
+        if (entry.status === 'FAILED_FINAL' || safeError.resetGrant === true) {
+          entry.grantToken = null;
+        }
         throw safeError;
       } finally {
         entry.promise = null;
+        if (entry.discardRequested) purgeOperation(entry.input.idempotencyKey, entry);
       }
     }
 
-    async function ingest(value, runtimeAuthorityValue) {
+    async function ingest(
+      value,
+      runtimeAuthorityValue,
+      commitAcceptedResult,
+      commitIngestRequestHash
+    ) {
       var input = normalizeInput(value);
       var authority = normalizeRuntimeAuthority(runtimeAuthorityValue);
+      if ((commitAcceptedResult !== undefined && typeof commitAcceptedResult !== 'function')
+        || (commitIngestRequestHash !== undefined
+          && typeof commitIngestRequestHash !== 'function')) {
+        throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID', 'FAILED_FINAL');
+      }
       await assertAuthorityCurrent(authority);
-      var result = resultForInput(input, authority);
-      var requestFingerprint = fingerprint(input, result, authority);
+      var requestIdentityFingerprint = identityFingerprint(input, authority);
       var existing = operations.get(input.idempotencyKey);
       if (existing) {
-        if (existing.fingerprint !== requestFingerprint) {
+        if (existing.identityFingerprint !== requestIdentityFingerprint) {
           throw ingestError('SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT', 'FAILED_FINAL');
         }
         if (existing.status === 'SUCCEEDED') return existing.resultPublic;
         if (existing.promise) return existing.promise;
+        if (existing.status === 'ACCEPTED_PENDING_COMMIT') {
+          existing.promise = commitAccepted(existing, commitAcceptedResult)
+            .finally(function () { existing.promise = null; });
+          return existing.promise;
+        }
+        if (existing.status === 'FAILED_FINAL') {
+          throw ingestError(existing.errorCode || 'SS_ERP_BYOK_INGEST_REJECTED', 'FAILED_FINAL');
+        }
+        if (input.requestHash !== null && existing.requestHash !== null
+          && input.requestHash !== existing.requestHash) {
+          throw ingestError('SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT', 'FAILED_FINAL');
+        }
+        var replayResult = resultForInput(input, authority);
+        var replayFingerprint = fingerprint(input, replayResult, authority);
+        if (existing.fingerprint !== null && existing.fingerprint !== replayFingerprint) {
+          throw ingestError('SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT', 'FAILED_FINAL');
+        }
+        if (existing.result === null) {
+          existing.result = replayResult;
+          existing.command = buildCommand(input, replayResult);
+          existing.fingerprint = replayFingerprint;
+        }
+        if (existing.requestHash === null && input.requestHash !== null) {
+          existing.requestHash = input.requestHash;
+          existing.requestHashCommitted = true;
+        }
         // A repeated user action is an explicit retry of the idempotent ERP
         // ingest endpoint; it reuses the same grant and never repeats Provider work.
         existing.binaryDispatched = false;
-        existing.promise = dispatch(existing);
+        existing.promise = dispatch(
+          existing,
+          commitAcceptedResult,
+          commitIngestRequestHash,
+        );
         return existing.promise;
       }
+      var result = resultForInput(input, authority);
+      var requestFingerprint = fingerprint(input, result, authority);
+      reserveOperationSlot();
       var entry = {
         input: input,
         result: result,
         authority: authority,
         command: buildCommand(input, result),
+        identityFingerprint: requestIdentityFingerprint,
         fingerprint: requestFingerprint,
         status: 'PREPARING',
         errorCode: null,
         binaryDispatched: false,
         grantToken: null,
+        requestHash: input.requestHash,
+        requestHashCommitted: input.requestHash !== null,
         resultPublic: null,
         promise: null,
+        discardRequested: false,
       };
       operations.set(input.idempotencyKey, entry);
-      entry.promise = dispatch(entry);
+      entry.promise = dispatch(entry, commitAcceptedResult, commitIngestRequestHash);
       return entry.promise;
+    }
+
+    function statusRequest(input) {
+      return {
+        contractVersion: STATUS_VERSION,
+        shopId: input.shopId,
+        workflowId: input.workflowId,
+        draftRevision: input.draftRevision,
+        draftVersion: input.draftVersion,
+        skuKey: input.skuKey,
+        slotKey: input.slotKey,
+        assignmentOrdinal: input.assignmentOrdinal,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+      };
+    }
+
+    async function recover(value, runtimeAuthorityValue, commitAcceptedResult) {
+      var input = normalizeInput(value);
+      var authority = normalizeRuntimeAuthority(runtimeAuthorityValue);
+      if (commitAcceptedResult !== undefined && typeof commitAcceptedResult !== 'function') {
+        throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID', 'FAILED_FINAL');
+      }
+      if (input.requestHash === null) {
+        throw ingestError('SS_ERP_BYOK_INGEST_REQUEST_HASH_REQUIRED', 'FAILED_FINAL');
+      }
+      await assertAuthorityCurrent(authority);
+      var requestIdentityFingerprint = identityFingerprint(input, authority);
+      var entry = operations.get(input.idempotencyKey);
+      if (entry && entry.identityFingerprint !== requestIdentityFingerprint) {
+        throw ingestError('SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT', 'FAILED_FINAL');
+      }
+      if (entry && entry.requestHash !== null && entry.requestHash !== input.requestHash) {
+        throw ingestError('SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT', 'FAILED_FINAL');
+      }
+      if (entry && entry.promise) return entry.promise;
+      if (entry && ['ACCEPTED_PENDING_COMMIT', 'SUCCEEDED'].includes(entry.status)
+        && entry.resultPublic) {
+        entry.promise = commitAccepted(entry, commitAcceptedResult)
+          .finally(function () { entry.promise = null; });
+        return entry.promise;
+      }
+      if (!entry) {
+        reserveOperationSlot();
+        entry = {
+          input: input,
+          result: null,
+          authority: authority,
+          command: null,
+          identityFingerprint: requestIdentityFingerprint,
+          fingerprint: null,
+          status: 'RECOVERING',
+          errorCode: null,
+          binaryDispatched: true,
+          grantToken: null,
+          requestHash: input.requestHash,
+          requestHashCommitted: true,
+          resultPublic: null,
+          promise: null,
+          discardRequested: false,
+        };
+        operations.set(input.idempotencyKey, entry);
+      } else if (entry.requestHash === null) {
+        entry.requestHash = input.requestHash;
+        entry.requestHashCommitted = true;
+      }
+      entry.promise = (async function () {
+        try {
+          await assertAuthorityCurrent(authority);
+          var response = await transport.post(
+            INGEST_STATUS_PATH,
+            statusRequest(input),
+            { requiredScope: 'byok:media:ingest' },
+          );
+          var statusData = response && response.body && response.body.data;
+          if (response && response.state === 'response' && response.status === 202
+            && isRecord(response.body) && response.body.code === 1
+            && isRecord(statusData)
+            && [STATUS_STATES.pending, STATUS_STATES.notCommitted].includes(statusData.state)) {
+            var pendingError = ingestError(
+              statusData.state === STATUS_STATES.notCommitted
+                ? 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED'
+                : 'SS_ERP_BYOK_INGEST_RECEIPT_PENDING',
+              'UNKNOWN_OUTCOME',
+            );
+            if (statusData.state === STATUS_STATES.notCommitted) pendingError.resetGrant = true;
+            throw pendingError;
+          }
+          if (response && response.state === 'http_error' && response.status === 404
+            && response.body && response.body.errorCode === 'byok_ingest_status_not_found') {
+            throw ingestError('SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND', 'FAILED_FINAL');
+          }
+          if (response && response.state === 'http_error' && response.status === 404) {
+            throw ingestError('SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE', 'UNKNOWN_OUTCOME');
+          }
+          if (response && response.state === 'http_error'
+            && (response.status === 429 || response.status >= 500)) {
+            throw ingestError('SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE', 'UNKNOWN_OUTCOME');
+          }
+          if (response && response.state === 'http_error'
+            && response.body && response.body.errorCode === 'byok_ingest_status_failed') {
+            throw ingestError('SS_ERP_BYOK_INGEST_RECEIPT_FAILED', 'FAILED_FINAL', {
+              status: response.status || null,
+            });
+          }
+          if (!statusData || statusData.state !== STATUS_STATES.succeeded) {
+            if (response && ['http_error', 'scope_required', 'authorization_required', 'unpaired']
+              .includes(response.state)) {
+              throw ingestError('SS_ERP_BYOK_INGEST_RECOVERY_REJECTED', 'FAILED_FINAL', {
+                status: response.status || null,
+                errorCode: response.body && response.body.errorCode || null,
+              });
+            }
+            throw ingestError('SS_ERP_BYOK_INGEST_RESPONSE_INVALID', 'UNKNOWN_OUTCOME');
+          }
+          var accepted = parseSuccess(response, input);
+          entry.status = 'ACCEPTED_PENDING_COMMIT';
+          entry.errorCode = null;
+          entry.resultPublic = accepted;
+          return await commitAccepted(entry, commitAcceptedResult);
+        } catch (error) {
+          if (entry.status === 'ACCEPTED_PENDING_COMMIT') throw error;
+          var safeError = error && error.code
+            ? error
+            : ingestError('SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE', 'UNKNOWN_OUTCOME');
+          entry.status = safeError.outcome || 'UNKNOWN_OUTCOME';
+          entry.errorCode = safeError.code;
+          if (entry.status === 'FAILED_FINAL' || safeError.resetGrant === true) {
+            entry.grantToken = null;
+          }
+          if (safeError.code === 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND') {
+            entry.discardRequested = true;
+          }
+          throw safeError;
+        } finally {
+          entry.promise = null;
+          if (entry.discardRequested) purgeOperation(entry.input.idempotencyKey, entry);
+        }
+      }());
+      return entry.promise;
+    }
+
+    function discardResult(resultIdValue) {
+      var normalizedResultId = text(resultIdValue, 4, 128);
+      var discarded = 0;
+      operations.forEach(function (entry, idempotencyKey) {
+        if (entry.input.resultId !== normalizedResultId) return;
+        if (entry.promise) {
+          entry.discardRequested = true;
+          return;
+        }
+        if (purgeOperation(idempotencyKey, entry)) discarded += 1;
+      });
+      return discarded;
     }
 
     function getOperationState(idempotencyKeyValue) {
@@ -392,11 +742,17 @@
         status: entry.status,
         errorCode: entry.errorCode,
         hasGrant: Boolean(entry.grantToken),
+        dispatched: entry.binaryDispatched === true,
         result: entry.resultPublic,
       };
     }
 
-    return Object.freeze({ ingest: ingest, getOperationState: getOperationState });
+    return Object.freeze({
+      ingest: ingest,
+      recover: recover,
+      discardResult: discardResult,
+      getOperationState: getOperationState,
+    });
   }
 
   global.SS_ERP_BYOK_GENERATED_ASSET_INGEST_CLIENT = Object.freeze({

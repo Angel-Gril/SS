@@ -103,6 +103,19 @@
     }) && binding.operation === OPERATION;
   }
 
+  function ingestAuthorityProjection(value) {
+    if (!isRecord(value)) throw handlerError('SS_ERP_BYOK_DEVICE_AUTHORITY_STALE');
+    return {
+      ownerUserId: value.ownerUserId,
+      deviceSessionId: value.deviceSessionId,
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+      policyRevision: value.policyRevision,
+    };
+  }
+
   function readinessRequest(profileIdValue, context) {
     return {
       profileId: profileIdValue,
@@ -145,7 +158,7 @@
     }
     var requiredTypes = [
       'GET_PUBLIC_STATE', 'GET_READINESS', 'EXECUTE_PROVIDER', 'OPEN_PREVIEW',
-      'REVIEW_RESULT',
+      'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST',
     ];
     var typeValues = requiredTypes.map(function (name) {
       return text(
@@ -165,6 +178,10 @@
     var clearOperation = requiredMethod(sessionManager, 'clearOperation');
     var attachResult = requiredMethod(sessionManager, 'attachResult');
     var setReviewState = requiredMethod(sessionManager, 'setReviewState');
+    var beginIngest = requiredMethod(sessionManager, 'beginIngest');
+    var setIngestRequestHash = requiredMethod(sessionManager, 'setIngestRequestHash');
+    var resetIngest = requiredMethod(sessionManager, 'resetIngest');
+    var setIngestResult = requiredMethod(sessionManager, 'setIngestResult');
     var clearResult = requiredMethod(sessionManager, 'clearResult');
     var takeByTab = requiredMethod(sessionManager, 'takeByTab');
     var sameContext = requiredMethod(sessionManager, 'sameContext');
@@ -181,6 +198,10 @@
     var commitResult = requiredMethod(config.providerClient, 'commitResult');
     var releaseProviderResult = requiredMethod(config.providerClient, 'releaseResult');
     var getOperationState = requiredMethod(config.providerClient, 'getOperationState');
+    var ingestApprovedResult = requiredMethod(config.ingestClient, 'ingest');
+    var recoverIngestResult = requiredMethod(config.ingestClient, 'recover');
+    var discardIngestResult = requiredMethod(config.ingestClient, 'discardResult');
+    var getIngestOperationState = requiredMethod(config.ingestClient, 'getOperationState');
     var vault = config.vault;
     var getVaultEntry = requiredMethod(vault, 'getForBackground');
     var getPublicResult = requiredMethod(vault, 'getPublic');
@@ -194,6 +215,12 @@
     var openPreview = requiredMethod(config.previewBroker, 'open');
     var releasePreviewResult = requiredMethod(config.previewBroker, 'releaseResult');
     var now = typeof config.now === 'function' ? config.now : function () { return new Date(); };
+    var randomValues = typeof config.randomValues === 'function'
+      ? config.randomValues
+      : global.crypto && typeof global.crypto.getRandomValues === 'function'
+        ? global.crypto.getRandomValues.bind(global.crypto)
+        : null;
+    if (!randomValues) throw handlerError('SS_ERP_BYOK_WORKBENCH_DEPENDENCY_UNAVAILABLE');
     var reviewLocks = new Set();
 
     function currentMillis() {
@@ -207,6 +234,40 @@
     function releaseTemporaryResult(id) {
       try { releasePreviewResult(id); } catch (_error) {}
       try { return Boolean(releaseVaultResult(id)); } catch (_error) { return false; }
+    }
+
+    function newIngestIdempotencyKey() {
+      var bytes = new Uint8Array(24);
+      randomValues(bytes);
+      return 'wb_ingest_' + Array.from(bytes).map(function (value) {
+        return value.toString(16).padStart(2, '0');
+      }).join('');
+    }
+
+    async function settleIngestFailure(sender, id, idempotencyKey, error) {
+      var operationState = null;
+      try { operationState = getIngestOperationState(idempotencyKey); } catch (_stateError) {}
+      var grantAbsent = Boolean(error
+        && error.code === 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND');
+      var retryable = grantAbsent
+        || Boolean(error && error.resetGrant === true)
+        || Boolean(operationState && operationState.dispatched === false);
+      if (retryable) {
+        try {
+          await resetIngest(sender, id, idempotencyKey);
+          try { discardIngestResult(id); } catch (_discardError) {}
+          return true;
+        } catch (_resetError) {
+          return false;
+        }
+      }
+      var terminal = Boolean(error && error.outcome === 'FAILED_FINAL')
+        || Boolean(operationState && operationState.status === 'FAILED_FINAL');
+      if (!terminal) return false;
+      try { await clearResult(sender, id); } catch (_clearError) {}
+      try { discardIngestResult(id); } catch (_discardError) {}
+      releaseTemporaryResult(id);
+      return true;
     }
 
     async function removeSession(session) {
@@ -230,6 +291,20 @@
         if (discardedResultId) releaseTemporaryResult(discardedResultId);
         throw error;
       }
+      // Ingest recovery and publishing use the source revision as immutable
+      // provenance after the server has advanced the draft. They still require
+      // the exact live owner/device authority on every message.
+      if (session.result
+        && ['INGESTING', 'BOUND'].includes(session.result.deliveryState)
+        && isRecord(session.result.ingestAuthority)) {
+        try {
+          await captureAuthority(session.result.ingestAuthority);
+        } catch (error) {
+          await removeSession(session).catch(function () {});
+          throw error;
+        }
+        return session;
+      }
       var resolved;
       try {
         resolved = await resolveLaunch(launchRequest(session.context));
@@ -246,8 +321,23 @@
 
     async function readSessionResult(session, sender) {
       if (!session.result) return null;
+      if (session.result.deliveryState === 'BOUND' && isRecord(session.result.ingest)) {
+        return {
+          resultId: session.result.resultId,
+          reviewState: 'APPROVED',
+          deliveryState: 'BOUND',
+          ingest: session.result.ingest,
+        };
+      }
+      if (session.result.deliveryState === 'INGESTING') {
+        return {
+          resultId: session.result.resultId,
+          reviewState: 'APPROVED',
+          deliveryState: 'INGESTING',
+        };
+      }
       try {
-        return getPublicResult(session.result.resultId);
+        return { ...getPublicResult(session.result.resultId), deliveryState: 'NOT_INGESTED' };
       } catch (_error) {
         try { await clearResult(sender, session.result.resultId); } catch (_clearError) {}
         try { releasePreviewResult(session.result.resultId); } catch (_previewError) {}
@@ -379,9 +469,13 @@
         profiles: await publicProfileStates(),
         result: result,
         generationOutcome: session.operation ? 'UNKNOWN_OUTCOME' : null,
-        deliveryState: result && result.reviewState === 'APPROVED'
-          ? 'NOT_INGESTED'
-          : 'NOT_READY',
+        deliveryState: result && result.deliveryState === 'BOUND'
+          ? 'BOUND'
+          : result && result.deliveryState === 'INGESTING'
+            ? 'INGESTING'
+          : result && result.reviewState === 'APPROVED'
+            ? 'NOT_INGESTED'
+            : 'NOT_READY',
       };
     });
 
@@ -503,7 +597,11 @@
         if (!session.result || session.result.resultId !== id) {
           throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_NOT_FOUND');
         }
-        if (session.result.reviewState !== 'CANDIDATE_READY') {
+        if (['INGESTING', 'BOUND'].includes(session.result.deliveryState)) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
+        }
+        if (!['CANDIDATE_READY', 'APPROVED'].includes(session.result.reviewState)
+          || (input.decision === 'APPROVE' && session.result.reviewState !== 'CANDIDATE_READY')) {
           throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
         }
         var entry = getVaultEntry(id);
@@ -517,6 +615,202 @@
         releasePreviewResult(id);
         await clearResult(handlerContext.sender, id);
         return rejected;
+      });
+    });
+
+    handlers[messageTypes.INGEST] = guarded(function (handlerContext) {
+      return withReviewLock(handlerContext.sender, async function () {
+        var input = handlerContext.payload || {};
+        if (!exactKeys(input, ['resultId'])) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+        }
+        var id = resultId(input.resultId);
+        var session = await claimLive(handlerContext.sender);
+        if (!session.result || session.result.resultId !== id
+          || session.result.reviewState !== 'APPROVED') {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
+        }
+        if (session.result.deliveryState === 'BOUND' && isRecord(session.result.ingest)) {
+          return {
+            resultId: id,
+            reviewState: 'APPROVED',
+            deliveryState: 'BOUND',
+            ingest: session.result.ingest,
+          };
+        }
+        if (session.result.deliveryState === 'INGESTING') {
+          throw handlerError('SS_ERP_BYOK_INGEST_RECOVERY_REQUIRED');
+        }
+        if (session.result.deliveryState && session.result.deliveryState !== 'NOT_INGESTED') {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
+        }
+        var ingestIdempotencyKey = newIngestIdempotencyKey();
+        var approvedEntry = getVaultEntry(id);
+        var authority = await assertEntryAuthority(approvedEntry, session.context);
+        var sessionAuthority = ingestAuthorityProjection(authority);
+        await beginIngest(handlerContext.sender, id, ingestIdempotencyKey, sessionAuthority);
+        var committedSession = null;
+        var ingestInput = {
+          resultId: id,
+          shopId: session.context.shopId,
+          workflowId: session.context.workflowId,
+          draftRevision: session.context.draftRevision,
+          draftVersion: session.context.draftVersion,
+          skuKey: session.context.skuKey,
+          slotKey: session.context.slotKey,
+          assignmentMode: session.context.assignmentMode,
+          replaceConfirmed: session.context.assignmentMode === 'REPLACE',
+          assignmentOrdinal: session.context.assignmentOrdinal,
+          idempotencyKey: ingestIdempotencyKey,
+          requestHash: session.result.ingestRequestHash,
+        };
+        var accepted;
+        try {
+          accepted = await ingestApprovedResult(ingestInput, authority, async function (receipt) {
+            committedSession = await setIngestResult(
+              handlerContext.sender,
+              id,
+              ingestIdempotencyKey,
+              sessionAuthority,
+              receipt,
+            );
+          }, async function (requestHash) {
+            await setIngestRequestHash(
+              handlerContext.sender,
+              id,
+              ingestIdempotencyKey,
+              requestHash,
+            );
+          });
+        } catch (error) {
+          await settleIngestFailure(handlerContext.sender, id, ingestIdempotencyKey, error);
+          throw error;
+        }
+        if (!committedSession) {
+          committedSession = await setIngestResult(
+            handlerContext.sender,
+            id,
+            ingestIdempotencyKey,
+            sessionAuthority,
+            accepted,
+          );
+        }
+        releasePreviewResult(id);
+        return {
+          resultId: id,
+          reviewState: 'APPROVED',
+          deliveryState: 'BOUND',
+          ingest: committedSession.result.ingest,
+        };
+      });
+    });
+
+    handlers[messageTypes.RECOVER_INGEST] = guarded(function (handlerContext) {
+      return withReviewLock(handlerContext.sender, async function () {
+        var input = handlerContext.payload || {};
+        if (!exactKeys(input, ['resultId'])) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+        }
+        var id = resultId(input.resultId);
+        var session = await claimLive(handlerContext.sender);
+        if (!session.result || session.result.resultId !== id
+          || session.result.reviewState !== 'APPROVED') {
+          throw handlerError('SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE');
+        }
+        if (session.result.deliveryState === 'BOUND' && isRecord(session.result.ingest)) {
+          return {
+            resultId: id,
+            reviewState: 'APPROVED',
+            deliveryState: 'BOUND',
+            ingest: session.result.ingest,
+          };
+        }
+        if (session.result.deliveryState !== 'INGESTING'
+          || !isRecord(session.result.ingestAuthority)) {
+          throw handlerError('SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE');
+        }
+        var ingestIdempotencyKey = session.result.ingestIdempotencyKey;
+        var authority = await captureAuthority(session.result.ingestAuthority);
+        var sessionAuthority = ingestAuthorityProjection(authority);
+        var committedSession = null;
+        var ingestInput = {
+          resultId: id,
+          shopId: session.context.shopId,
+          workflowId: session.context.workflowId,
+          draftRevision: session.context.draftRevision,
+          draftVersion: session.context.draftVersion,
+          skuKey: session.context.skuKey,
+          slotKey: session.context.slotKey,
+          assignmentMode: session.context.assignmentMode,
+          replaceConfirmed: session.context.assignmentMode === 'REPLACE',
+          assignmentOrdinal: session.context.assignmentOrdinal,
+          idempotencyKey: ingestIdempotencyKey,
+          requestHash: session.result.ingestRequestHash,
+        };
+        var commitRecoveredReceipt = async function (receipt) {
+          committedSession = await setIngestResult(
+            handlerContext.sender,
+            id,
+            ingestIdempotencyKey,
+            sessionAuthority,
+            receipt,
+          );
+        };
+        var accepted;
+        try {
+          accepted = await recoverIngestResult(
+            ingestInput,
+            authority,
+            commitRecoveredReceipt,
+          );
+        } catch (error) {
+          if (!error || error.code !== 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED') {
+            await settleIngestFailure(handlerContext.sender, id, ingestIdempotencyKey, error);
+            throw error;
+          }
+          // The user explicitly requested recovery and the server proved that
+          // no receipt exists yet. Reuse the same Blob, grant, and idempotency
+          // identity when they are still available in this worker.
+          try {
+            var retryEntry = getVaultEntry(id);
+            await assertEntryAuthority(retryEntry, session.context);
+          } catch (_vaultError) {
+            await clearResult(handlerContext.sender, id).catch(function () {});
+            releasePreviewResult(id);
+            throw handlerError('SS_ERP_BYOK_WORKBENCH_RESULT_NOT_FOUND');
+          }
+          try {
+            accepted = await ingestApprovedResult(
+              ingestInput,
+              authority,
+              commitRecoveredReceipt,
+            );
+          } catch (retryError) {
+            await settleIngestFailure(
+              handlerContext.sender,
+              id,
+              ingestIdempotencyKey,
+              retryError,
+            );
+            throw retryError;
+          }
+        }
+        if (!committedSession) {
+          committedSession = await setIngestResult(
+            handlerContext.sender,
+            id,
+            ingestIdempotencyKey,
+            sessionAuthority,
+            accepted,
+          );
+        }
+        releasePreviewResult(id);
+        return {
+          resultId: id,
+          reviewState: 'APPROVED',
+          deliveryState: 'BOUND',
+          ingest: committedSession.result.ingest,
+        };
       });
     });
 

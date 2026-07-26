@@ -38,8 +38,20 @@ import {
   type CommitExtensionByokGeneratedAssetInput,
   type CommitExtensionByokGeneratedAssetResult,
 } from '../repositories/extension-byok-generated-asset-commit-prisma.js';
-import type { ExtensionByokUploadStagingStore } from '../services/extension-byok-upload-staging.js';
+import {
+  ExtensionByokUploadStagingError,
+  type ExtensionByokUploadStagingStore,
+} from '../services/extension-byok-upload-staging.js';
 import type { ExtensionByokIngestRateLimiter } from '../services/extension-byok-ingest-rate-limit.js';
+import {
+  ExtensionByokMediaIngestStatusRequestError,
+  parseExtensionByokMediaIngestStatusRequest,
+  type ExtensionByokMediaIngestStatusLookupInput,
+} from '../services/extension-byok-media-ingest-status.js';
+import {
+  ExtensionByokMediaIngestStatusRepositoryError,
+  type ExtensionByokMediaIngestStatusResult,
+} from '../repositories/extension-byok-media-ingest-status-repository.js';
 
 interface ExtensionByokMediaDevice {
   sessionId: string;
@@ -66,8 +78,11 @@ interface PreparedExtensionByokMediaRequest {
   command: ExtensionByokMediaIngestResolvedCommand;
   binding: ExtensionCommandBinding;
   tokenDigest: string;
-  now: Date;
-  grantInspection: Extract<ExtensionCommandInspectResult, { kind: 'allowed' | 'replay' }>;
+  ingestIdentityInput: Parameters<typeof deriveByokGeneratedAssetIdentity>[0];
+  existing: ByokGeneratedAssetRecord | null;
+  storage: OwnedImageStorageBackend | null;
+  stagingId: string | null;
+  stagedStorageKey: string | null;
 }
 
 export interface ExtensionByokMediaRoutesOptions {
@@ -99,12 +114,16 @@ export interface ExtensionByokMediaRoutesOptions {
   commit(
     input: CommitExtensionByokGeneratedAssetInput,
   ): Promise<CommitExtensionByokGeneratedAssetResult>;
+  findIngestStatus(
+    input: ExtensionByokMediaIngestStatusLookupInput,
+  ): Promise<ExtensionByokMediaIngestStatusResult>;
   now?: () => Date;
   createReceiptId?: () => string;
 }
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 const RAW_IMAGE_BODY_LIMIT = AI_IMAGE_WORKBENCH_LIMITS.maxResultBytes;
+const INGEST_STATUS_BODY_LIMIT = 16 * 1024;
 export const EXTENSION_BYOK_MEDIA_INGEST_RATE_LIMIT_PER_MINUTE = 10;
 
 function routeError(
@@ -244,6 +263,64 @@ export async function extensionByokMediaRoutes(
 
   const preparedRequests = new WeakMap<FastifyRequest, PreparedExtensionByokMediaRequest>();
 
+  app.post('/ingest-status', {
+    bodyLimit: INGEST_STATUS_BODY_LIMIT,
+    onRequest: [options.authenticateDevice],
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const device = deviceContext(request);
+    if (!device) {
+      return routeError(reply, 403, 'byok_ingest_status_scope_denied', '设备缺少 BYOK 图片接收权限');
+    }
+    let parsed;
+    try {
+      parsed = parseExtensionByokMediaIngestStatusRequest(request.body);
+    } catch (error) {
+      if (error instanceof ExtensionByokMediaIngestStatusRequestError) {
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 图片接收状态请求无效');
+      }
+      throw error;
+    }
+    if (!device.allowedShopIds.includes(parsed.shopId)) {
+      return routeError(reply, 403, 'byok_ingest_status_shop_denied', '设备无权访问该店铺');
+    }
+
+    try {
+      const result = await options.findIngestStatus({
+        ...parsed,
+        sessionId: device.sessionId,
+        ownerUserId: device.ownerUserId,
+      });
+      if (result.kind === 'not_found') {
+        return routeError(reply, 404, 'byok_ingest_status_not_found', 'BYOK 图片接收记录不存在');
+      }
+      if (result.kind === 'failed') {
+        return routeError(reply, 409, 'byok_ingest_status_failed', '此前的 BYOK 图片接收已失败');
+      }
+      if (result.kind === 'not_committed') {
+        return reply.status(202).send({ code: 1, data: { state: 'NOT_COMMITTED' } });
+      }
+      if (result.kind === 'pending') {
+        return reply.status(202).send({ code: 1, data: { state: 'PENDING' } });
+      }
+      return reply.send({
+        code: 1,
+        data: {
+          state: 'SUCCEEDED',
+          replayed: true,
+          receiptId: result.receiptId,
+          ...result.receipt,
+        },
+      });
+    } catch (error) {
+      if (error instanceof ExtensionByokMediaIngestStatusRepositoryError) {
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 图片接收状态不匹配');
+      }
+      request.log.error({ err: error }, 'extension BYOK media ingest status failed');
+      return routeError(reply, 503, 'byok_ingest_status_unavailable', 'BYOK 图片接收状态暂不可用');
+    }
+  });
+
   app.post('/ingest', {
     bodyLimit: RAW_IMAGE_BODY_LIMIT,
     onRequest: [options.authenticateDevice],
@@ -365,8 +442,72 @@ export async function extensionByokMediaRoutes(
       if (grantInspection.kind === 'replay' && grantInspection.receipt.status !== 'SUCCEEDED') {
         return stop(409, 'byok_ingest_receipt_failed', '此前的 BYOK 图片接收已失败');
       }
+      if (grantInspection.kind === 'replay') {
+        return stop(409, 'byok_ingest_receipt_pending', 'BYOK 图片接收结果需要恢复');
+      }
+
+      const ingestIdentityInput = {
+        ownerUserId: device.ownerUserId,
+        sourceCaptureSnapshotId: command.authority.sourceCaptureSnapshotId,
+        idempotencyKey: manifest.idempotencyKey,
+        requestHash: binding.requestHash,
+        expectedProviderResultSha256: command.resultSha256,
+        declaredMimeType: command.resultMimeType,
+        declaredSizeBytes: command.resultSizeBytes,
+      };
+      let existing: ByokGeneratedAssetRecord | null;
+      let storage: OwnedImageStorageBackend | null = null;
+      let stagingId: string | null = null;
+      let stagedStorageKey: string | null = null;
+      try {
+        const identity = deriveByokGeneratedAssetIdentity(ingestIdentityInput);
+        existing = await options.findStoredAsset({
+          assetId: identity.assetId,
+          ownerUserId: identity.ownerUserId,
+        });
+        if (!existing) {
+          storage = await options.getStorage();
+          stagingId = identity.assetId;
+          const filename = byokGeneratedAssetUploadFilename(identity.assetId, command.resultMimeType);
+          stagedStorageKey = deriveOwnedImageStorageKey(storage.backendType, filename, {
+            category: 'ai-generated',
+            ownerId: identity.ownerUserId,
+            idempotencyKey: byokGeneratedAssetStorageIdempotencyKey(stagingId),
+          });
+          const lease = await options.stagingStore.beginAttempt({
+            id: stagingId,
+            ownerUserId: identity.ownerUserId,
+            deviceSessionId: device.sessionId,
+            assetId: identity.assetId,
+            requestHash: binding.requestHash,
+            storageBackend: storage.backendType,
+            storageNamespaceId: storage.namespaceId,
+            storageKey: stagedStorageKey,
+            now,
+          });
+          if (lease.kind === 'active') {
+            return stop(409, 'byok_ingest_receipt_pending', 'BYOK 图片接收正在处理中');
+          }
+        }
+      } catch (error) {
+        if (error instanceof ByokGeneratedAssetIngestError
+          || error instanceof ExtensionByokUploadStagingError) {
+          return stop(error.statusCode, error.code.toLowerCase(), error.message);
+        }
+        request.log.error({ err: error }, 'extension BYOK media staging lease failed');
+        return stop(503, 'byok_ingest_staging_unavailable', 'BYOK 图片接收暂不可用');
+      }
       preparedRequests.set(request, {
-        device, manifest, command, binding, tokenDigest, now, grantInspection,
+        device,
+        manifest,
+        command,
+        binding,
+        tokenDigest,
+        ingestIdentityInput,
+        existing,
+        storage,
+        stagingId,
+        stagedStorageKey,
       });
       return payload;
     }],
@@ -378,63 +519,23 @@ export async function extensionByokMediaRoutes(
       return routeError(reply, 500, 'byok_ingest_authorization_missing', 'BYOK 图片接收授权上下文缺失');
     }
     const {
-      device, manifest, command, binding, tokenDigest, now, grantInspection,
+      device, command, binding, tokenDigest, ingestIdentityInput,
+      existing, storage, stagingId, stagedStorageKey,
     } = preparedRequest;
     if (!Buffer.isBuffer(request.body) || request.body.length < 1) {
+      if (stagingId) {
+        await options.stagingStore.markImmediateCleaned({
+          id: stagingId,
+          now: (options.now || (() => new Date()))(),
+        }).catch(() => undefined);
+      }
       return routeError(reply, 400, 'byok_ingest_image_required', '缺少图片字节');
     }
     const currentTime = options.now || (() => new Date());
 
     try {
-      const ingestIdentityInput = {
-        ownerUserId: device.ownerUserId,
-        sourceCaptureSnapshotId: command.authority.sourceCaptureSnapshotId,
-        idempotencyKey: manifest.idempotencyKey,
-        requestHash: binding.requestHash,
-        expectedProviderResultSha256: command.resultSha256,
-        declaredMimeType: command.resultMimeType,
-        declaredSizeBytes: command.resultSizeBytes,
-      };
-      const identity = deriveByokGeneratedAssetIdentity(ingestIdentityInput);
-      const existing = await options.findStoredAsset({
-        assetId: identity.assetId,
-        ownerUserId: identity.ownerUserId,
-      });
-      if (grantInspection.kind === 'replay' && !existing) {
-        return routeError(
-          reply,
-          409,
-          'byok_ingest_replay_asset_missing',
-          'BYOK 图片接收记录与已存储资源不一致',
-        );
-      }
       const receiptId = (options.createReceiptId || randomUUID)();
-      let storage: OwnedImageStorageBackend | null = null;
       let uploaded: Awaited<ReturnType<typeof uploadPreparedByokGeneratedAsset>> | null = null;
-      let stagingId: string | null = null;
-      let stagedStorageKey: string | null = null;
-      if (!existing) {
-        storage = await options.getStorage();
-        stagingId = receiptId;
-        const filename = byokGeneratedAssetUploadFilename(identity.assetId, command.resultMimeType);
-        const storageKey = deriveOwnedImageStorageKey(storage.backendType, filename, {
-          category: 'ai-generated',
-          ownerId: identity.ownerUserId,
-          idempotencyKey: byokGeneratedAssetStorageIdempotencyKey(stagingId),
-        });
-        await options.stagingStore.beginAttempt({
-          id: stagingId,
-          ownerUserId: identity.ownerUserId,
-          deviceSessionId: device.sessionId,
-          assetId: identity.assetId,
-          requestHash: binding.requestHash,
-          storageBackend: storage.backendType,
-          storageNamespaceId: storage.namespaceId,
-          storageKey,
-          now,
-        });
-        stagedStorageKey = storageKey;
-      }
       let prepared;
       try {
         prepared = await prepareByokGeneratedAsset({
@@ -457,7 +558,7 @@ export async function extensionByokMediaRoutes(
         uploaded = await uploadPreparedByokGeneratedAsset(prepared, storage!, stagingId!);
         const recorded = await options.stagingStore.recordUploadedObject({
           id: stagingId!,
-          ownerUserId: identity.ownerUserId,
+          ownerUserId: ingestIdentityInput.ownerUserId,
           deviceSessionId: device.sessionId,
           storageBackend: storage!.backendType,
           storageNamespaceId: storage!.namespaceId,

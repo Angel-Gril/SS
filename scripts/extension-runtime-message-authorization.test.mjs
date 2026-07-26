@@ -103,6 +103,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const execute = api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER;
   const preview = api.MESSAGE_TYPES.WORKBENCH.OPEN_PREVIEW;
   const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
+  const recoverIngest = api.MESSAGE_TYPES.WORKBENCH.RECOVER_INGEST;
 
   for (const type of [
     setupContext,
@@ -114,6 +115,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     execute,
     preview,
     review,
+    recoverIngest,
   ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
   }
@@ -167,6 +169,40 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     assert.equal(policy.isAllowedRuntimeMessageSender(setKey, extensionSender(path), extensionId), false);
     assert.equal(policy.isAllowedRuntimeMessageSender(execute, extensionSender(path), extensionId), false);
   }
+});
+
+test('allows receipt-only ingest recovery from the exact workbench without a stale draft readiness handle', async () => {
+  const { api } = loadApi();
+  let verificationCalls = 0;
+  const decision = await api.authorizeRuntimeMessage({
+    runtimeId: extensionId,
+    sender: extensionSender('/pages/ai-image-workbench.html'),
+    message: {
+      type: api.MESSAGE_TYPES.WORKBENCH.RECOVER_INGEST,
+      payload: { resultId: 'br_' + 'a'.repeat(48) },
+    },
+    async verifyReadinessHandle() { verificationCalls += 1; },
+  });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.readiness, null);
+  assert.equal(verificationCalls, 0);
+});
+
+test('allows approved Blob ingest to rely on its dedicated server grant instead of generation readiness', async () => {
+  const { api } = loadApi();
+  let verificationCalls = 0;
+  const decision = await api.authorizeRuntimeMessage({
+    runtimeId: extensionId,
+    sender: extensionSender('/pages/ai-image-workbench.html'),
+    message: {
+      type: api.MESSAGE_TYPES.WORKBENCH.INGEST,
+      payload: { resultId: 'br_' + 'b'.repeat(48) },
+    },
+    async verifyReadinessHandle() { verificationCalls += 1; },
+  });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.readiness, null);
+  assert.equal(verificationCalls, 0);
 });
 
 test('denies content scripts, externally connected pages and inconsistent extension senders', () => {
@@ -274,6 +310,26 @@ test('permits one exact settings-to-background key request without returning or 
     assert.equal(rejected.allowed, false);
     assert.equal(rejected.code, 'SS_ERP_RUNTIME_MESSAGE_SECRET_FORBIDDEN');
     assert.equal(JSON.stringify(rejected).includes(secret), false);
+  }
+});
+
+test('rejects byte-like arrays and encoded image bodies before a workbench handler runs', async () => {
+  const { api } = loadApi();
+  for (const payload of [
+    { chunks: [0x89, 0x50, 0x4e, 0x47, ...new Array(128).fill(0)] },
+    { opaque: `iVBORw0KGgoAAAANSUhEUg${'A'.repeat(2048)}` },
+    { nested: { opaque: `/9j/${'A'.repeat(2048)}` } },
+  ]) {
+    const rejected = await api.authorizeRuntimeMessage({
+      runtimeId: extensionId,
+      sender: extensionSender('/pages/ai-image-workbench.html'),
+      message: {
+        type: api.MESSAGE_TYPES.WORKBENCH.GET_PUBLIC_STATE,
+        payload,
+      },
+    });
+    assert.equal(rejected.allowed, false);
+    assert.equal(rejected.code, 'SS_ERP_RUNTIME_MESSAGE_BINARY_FORBIDDEN');
   }
 });
 

@@ -1,4 +1,5 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
+try { importScripts('../shared/contracts/ai-image-workbench-v1.js'); } catch (e) { console.warn('[SS ERP] AI image workbench contract load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-authorization.js'); } catch (e) { console.warn('[SS ERP] runtime message authorization load error:', e); }
 try { importScripts('../shared/byok/profile-schema.js'); } catch (e) { console.warn('[SS ERP] BYOK profile schema load error:', e); }
@@ -369,7 +370,7 @@ function clearCachedByokGeneratedResults() {
   if (byokGeneratedResultVault) byokGeneratedResultVault.clear();
   if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
   if (byokWorkbenchSessionManager) {
-    void byokWorkbenchSessionManager.clear().catch(function () {});
+    void byokWorkbenchSessionManager.clearProviderState().catch(function () {});
   }
 }
 
@@ -404,11 +405,15 @@ function notifyByokDeviceSessionInvalidated(reason) {
 async function clearByokDeviceSessionState(input) {
   getByokReadinessHandleCache().clear();
   getByokGeneratedResultVault().clear();
+  if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
   try {
-    await Promise.all([
+    const outcomes = await Promise.allSettled([
       getByokProfileStore().disconnectDevice(),
       getByokPermissionBroker().clearSessionConsent(),
+      getByokWorkbenchSessionManager().clearProviderState(),
     ]);
+    const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
   } finally {
     notifyByokDeviceSessionInvalidated(input && input.reason);
   }
@@ -921,7 +926,13 @@ function getByokGeneratedResultVault() {
   if (!api || typeof api.createVault !== 'function') {
     throw new Error('BYOK generated result vault is unavailable');
   }
-  byokGeneratedResultVault = api.createVault({ now: () => new Date() });
+  byokGeneratedResultVault = api.createVault({
+    now: () => new Date(),
+    onDiscardedResult: (resultId) => {
+      try { byokGeneratedAssetIngestClient?.discardResult(resultId); } catch (_error) {}
+      try { byokWorkbenchPreviewBroker?.releaseResult(resultId); } catch (_error) {}
+    },
+  });
   return byokGeneratedResultVault;
 }
 
@@ -974,6 +985,11 @@ function getByokWorkbenchSessionManager() {
     tabs: chrome.tabs,
     runtime: chrome.runtime,
     now: () => Date.now(),
+    onDiscardedResult: (resultId) => {
+      try { byokGeneratedResultVault?.release(resultId); } catch (_error) {}
+      try { byokGeneratedAssetIngestClient?.discardResult(resultId); } catch (_error) {}
+      try { byokWorkbenchPreviewBroker?.releaseResult(resultId); } catch (_error) {}
+    },
   });
   return byokWorkbenchSessionManager;
 }
@@ -1008,6 +1024,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     permissionBroker: getByokPermissionBroker(),
     readinessClient: getByokReadinessClient(),
     providerClient: getByokTextToImageClient(),
+    ingestClient: getByokGeneratedAssetIngestClient(),
     vault: getByokGeneratedResultVault(),
     authorityGuard: getByokRuntimeAuthorityGuard(),
     previewBroker: getByokWorkbenchPreviewBroker(),
@@ -1016,41 +1033,16 @@ function getByokWorkbenchRuntimeDispatcher() {
   return byokWorkbenchRuntimeDispatcher;
 }
 
-function byokRuntimeError(error) {
-  const candidate = error && typeof error === 'object' ? String(error.code || '') : '';
-  return {
-    ok: false,
-    errorCode: /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidate)
-      ? candidate
-      : 'SS_ERP_BYOK_OPERATION_FAILED',
-    error: 'BYOK operation failed',
-  };
-}
-
 function installByokReadinessRuntime() {
   const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
   if (!authorization || !authorization.MESSAGE_TYPES) return;
   const previousHandlers = globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {};
   const providerSettingsDispatcher = getByokProviderSettingsDispatcher();
   const workbenchDispatcher = getByokWorkbenchRuntimeDispatcher();
-  const ingestHandler = async ({ payload, authorization: runtimeDecision }) => {
-    try {
-      const authority = await getByokRuntimeAuthorityGuard().capture(
-        runtimeDecision.readiness.binding,
-      );
-      return {
-        ok: true,
-        data: await getByokGeneratedAssetIngestClient().ingest(payload, authority),
-      };
-    } catch (error) {
-      return byokRuntimeError(error);
-    }
-  };
   globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS = Object.freeze({
     ...previousHandlers,
     ...providerSettingsDispatcher.handlers,
     ...workbenchDispatcher.handlers,
-    [authorization.MESSAGE_TYPES.WORKBENCH.INGEST]: ingestHandler,
   });
   globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
     getByokReadinessHandleCache().consume(input)

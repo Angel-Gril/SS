@@ -209,6 +209,7 @@ describe('extension command grant routes', () => {
       code: 1,
       data: { grantId: 'grant-1', grantToken: 'g'.repeat(43) },
     });
+    expect(response.json().data).not.toHaveProperty('requestHash');
     expect(resolveCommand).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1',
       sessionId: 'session-1',
@@ -234,6 +235,37 @@ describe('extension command grant routes', () => {
       idempotencyKey: 'publish-workflow-1-v7',
       requestHash: hashExtensionCommandRequest(normalizedEnvelope),
     });
+  });
+
+  it('exposes the exact request hash only when issuing or replaying a BYOK ingest grant', async () => {
+    const deps = await buildApp({
+      device: { scopes: ['byok:media:ingest'] },
+    });
+    const payload = {
+      operation: 'BYOK_MEDIA_INGEST',
+      shopId: 'shop-1',
+      workflowId: 'workflow-1',
+      draftVersion: 7,
+      idempotencyKey: 'byok-media-ingest-grant-0001',
+      command: { schemaVersion: 'extension-byok-media-ingest-command/v1' },
+    };
+    const expectedHash = hashExtensionCommandRequest({
+      operation: 'BYOK_MEDIA_INGEST',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: payload.command,
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await deps.app.inject({ method: 'POST', url: '/command-grants', payload });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: {
+          grantId: 'grant-1', grantToken: 'g'.repeat(43), requestHash: expectedHash,
+        },
+      });
+      expect(JSON.stringify(response.json())).not.toMatch(/tokenDigest|ownerUserId|sessionId|secret/iu);
+    }
   });
 
   it('consumes an Ozon publish grant once and completes an immutable receipt', async () => {

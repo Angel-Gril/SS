@@ -150,6 +150,9 @@ import { createPrismaByokGeneratedAssetRepository } from './repositories/byok-ge
 import {
   createPrismaExtensionByokGeneratedAssetCommitter,
 } from './repositories/extension-byok-generated-asset-commit-prisma.js';
+import {
+  createPrismaExtensionByokMediaIngestStatusRepository,
+} from './repositories/extension-byok-media-ingest-status-repository.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import {
   createAiImageSuiteReferenceService,
@@ -2057,6 +2060,7 @@ if (isExtensionDeviceAuthEnabled()) {
   };
   await app.register(extensionCommandGrantRoutes, extensionCommandRoutesOptions);
   const byokGeneratedAssetRepository = createPrismaByokGeneratedAssetRepository(prisma);
+  const byokMediaIngestStatusRepository = createPrismaExtensionByokMediaIngestStatusRepository(prisma);
   const byokUploadStagingStore = createPrismaExtensionByokUploadStagingStore(prisma as never);
   const byokIngestRateLimiter = createPrismaExtensionByokIngestRateLimiter(prisma as never);
   await app.register(extensionByokMediaRoutes, {
@@ -2074,6 +2078,7 @@ if (isExtensionDeviceAuthEnabled()) {
     getStorage: getOwnedImageStorageBackend,
     findStoredAsset: (input) => byokGeneratedAssetRepository.findById(input),
     commit: createPrismaExtensionByokGeneratedAssetCommitter(prisma),
+    findIngestStatus: (input) => byokMediaIngestStatusRepository.findStatus(input),
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',

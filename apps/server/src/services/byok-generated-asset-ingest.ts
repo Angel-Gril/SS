@@ -106,6 +106,11 @@ export interface ByokGeneratedAssetIngestInput {
 
 export type ByokGeneratedAssetIdentityInput = Omit<ByokGeneratedAssetIngestInput, 'source'>;
 
+export interface ByokGeneratedAssetIdInput {
+  ownerUserId: string;
+  idempotencyKey: string;
+}
+
 export interface ByokGeneratedAssetMetadata {
   ingestContractVersion: typeof BYOK_GENERATED_ASSET_INGEST_VERSION;
   normalizerVersion: typeof BYOK_GENERATED_ASSET_NORMALIZER_VERSION;
@@ -519,18 +524,9 @@ export async function normalizeByokGeneratedImage(
   };
 }
 
-export function deriveByokGeneratedAssetIdentity(input: ByokGeneratedAssetIdentityInput) {
+function deriveByokGeneratedAssetKeyIdentity(input: ByokGeneratedAssetIdInput) {
   const ownerUserId = exactIdentifier(input.ownerUserId, 'ownerUserId', 1, 200);
-  const sourceCaptureSnapshotId = exactIdentifier(
-    input.sourceCaptureSnapshotId,
-    'sourceCaptureSnapshotId',
-    1,
-    200,
-  );
   const idempotencyKey = exactIdentifier(input.idempotencyKey, 'idempotencyKey', 16, 200);
-  if (!isSha256(input.requestHash) || !isSha256(input.expectedProviderResultSha256)) {
-    fail('BYOK_IMAGE_INPUT_INVALID', 400, 'Image request hashes are invalid');
-  }
   const idempotencyKeySha256 = sha256(idempotencyKey);
   const assetDigest = sha256([
     BYOK_GENERATED_ASSET_INGEST_VERSION,
@@ -539,13 +535,37 @@ export function deriveByokGeneratedAssetIdentity(input: ByokGeneratedAssetIdenti
   ].join('\u0000'));
   return {
     ownerUserId,
-    sourceCaptureSnapshotId,
     idempotencyKey,
     idempotencyKeySha256,
-    requestHash: input.requestHash,
-    providerResultSha256: input.expectedProviderResultSha256,
     assetId: `byok_${assetDigest.slice(0, 48)}`,
     sourceMediaKey: `extension-byok:${assetDigest}`,
+  };
+}
+
+export function deriveByokGeneratedAssetId(input: ByokGeneratedAssetIdInput): string {
+  return deriveByokGeneratedAssetKeyIdentity(input).assetId;
+}
+
+export function deriveByokGeneratedAssetIdentity(input: ByokGeneratedAssetIdentityInput) {
+  const keyIdentity = deriveByokGeneratedAssetKeyIdentity(input);
+  const sourceCaptureSnapshotId = exactIdentifier(
+    input.sourceCaptureSnapshotId,
+    'sourceCaptureSnapshotId',
+    1,
+    200,
+  );
+  if (!isSha256(input.requestHash) || !isSha256(input.expectedProviderResultSha256)) {
+    fail('BYOK_IMAGE_INPUT_INVALID', 400, 'Image request hashes are invalid');
+  }
+  return {
+    ownerUserId: keyIdentity.ownerUserId,
+    sourceCaptureSnapshotId,
+    idempotencyKey: keyIdentity.idempotencyKey,
+    idempotencyKeySha256: keyIdentity.idempotencyKeySha256,
+    requestHash: input.requestHash,
+    providerResultSha256: input.expectedProviderResultSha256,
+    assetId: keyIdentity.assetId,
+    sourceMediaKey: keyIdentity.sourceMediaKey,
   };
 }
 

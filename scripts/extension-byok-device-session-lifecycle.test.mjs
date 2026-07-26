@@ -194,6 +194,19 @@ test('drops a Provider result when device authority changes while generation is 
 
 test('central service-worker cleanup clears all device-scoped BYOK authority and notifies pages', () => {
   const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, 'utf8');
+  const cachedCleanupStart = serviceWorkerSource.indexOf('function clearCachedByokGeneratedResults()');
+  const cachedCleanupEnd = serviceWorkerSource.indexOf(
+    '\nfunction isLogisticsDistributionFeatureEnabled()',
+    cachedCleanupStart,
+  );
+  assert.notEqual(cachedCleanupStart, -1);
+  assert.notEqual(cachedCleanupEnd, -1);
+  const cachedCleanupSource = serviceWorkerSource.slice(cachedCleanupStart, cachedCleanupEnd);
+  assert.match(cachedCleanupSource, /byokWorkbenchSessionManager\.clearProviderState\(\)/u);
+  assert.doesNotMatch(cachedCleanupSource, /byokWorkbenchSessionManager\.clear\(\)/u);
+  assert.match(serviceWorkerSource, /onCredentialAuthorityChanged: clearCachedByokGeneratedResults/u);
+  assert.match(serviceWorkerSource, /onConsentRevoked: clearCachedByokGeneratedResults/u);
+
   const cleanupStart = serviceWorkerSource.indexOf('async function clearByokDeviceSessionState(input)');
   const cleanupEnd = serviceWorkerSource.indexOf('\nfunction logisticsDistributionDisabledResult()', cleanupStart);
   assert.notEqual(cleanupStart, -1);
@@ -201,6 +214,8 @@ test('central service-worker cleanup clears all device-scoped BYOK authority and
   const cleanupSource = serviceWorkerSource.slice(cleanupStart, cleanupEnd);
   assert.match(cleanupSource, /getByokReadinessHandleCache\(\)\.clear\(\)/u);
   assert.match(cleanupSource, /getByokGeneratedResultVault\(\)\.clear\(\)/u);
+  assert.match(cleanupSource, /getByokWorkbenchSessionManager\(\)\.clearProviderState\(\)/u);
+  assert.match(cleanupSource, /byokWorkbenchPreviewBroker\.clear\(\)/u);
   assert.match(cleanupSource, /getByokProfileStore\(\)\.disconnectDevice\(\)/u);
   assert.match(cleanupSource, /getByokPermissionBroker\(\)\.clearSessionConsent\(\)/u);
   assert.match(cleanupSource, /notifyByokDeviceSessionInvalidated\(input && input\.reason\)/u);
@@ -222,7 +237,13 @@ test('central service-worker cleanup clears all device-scoped BYOK authority and
   assert.match(workbenchRuntimeSource, /committed\s*=\s*await commitResult\(/u);
   assert.match(
     serviceWorkerSource,
-    /getByokGeneratedAssetIngestClient\(\)\.ingest\(payload, authority\)/u,
+    /ingestClient:\s*getByokGeneratedAssetIngestClient\(\)/u,
+  );
+  assert.match(workbenchRuntimeSource, /handlers\[messageTypes\.INGEST\]/u);
+  assert.match(workbenchRuntimeSource, /setIngestResult\(/u);
+  assert.doesNotMatch(
+    serviceWorkerSource,
+    /const ingestHandler\s*=|WORKBENCH\.INGEST\]:\s*ingestHandler/u,
   );
 });
 

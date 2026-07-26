@@ -20,6 +20,12 @@ import {
   EXTENSION_BYOK_MEDIA_INGEST_RECEIPT_VERSION,
   ExtensionByokGeneratedAssetCommitError,
 } from '../repositories/extension-byok-generated-asset-commit-prisma.js';
+import {
+  EXTENSION_BYOK_MEDIA_INGEST_STATUS_VERSION,
+} from '../services/extension-byok-media-ingest-status.js';
+import {
+  ExtensionByokMediaIngestStatusRepositoryError,
+} from '../repositories/extension-byok-media-ingest-status-repository.js';
 
 function hash(value: Buffer | string) {
   return createHash('sha256').update(value).digest('hex');
@@ -132,6 +138,7 @@ async function build(input: {
   stagingStore?: any;
   storage?: MemoryOwnedStorage;
   authRejected?: boolean;
+  ingestStatusImpl?: (value: any) => Promise<any>;
 } = {}) {
   const storage = input.storage || new MemoryOwnedStorage();
   const commit = vi.fn(async (value: any) => {
@@ -180,6 +187,9 @@ async function build(input: {
   });
   const inspectGrant = vi.fn(async () => input.grantInspection
     || ({ kind: input.grantInspectionKind || 'allowed' } as const));
+  const findIngestStatus = vi.fn(async (value: any) => input.ingestStatusImpl
+    ? input.ingestStatusImpl(value)
+    : { kind: 'not_found' as const });
   const ingestRateLimiter = {
     consume: vi.fn(async () => input.rateAllowed === false
       ? { kind: 'rate_limited' as const, limit: 10, retryAt: new Date(), occurredAt: new Date() }
@@ -233,11 +243,13 @@ async function build(input: {
     getStorage: async () => storage,
     findStoredAsset: input.findStoredAsset || (async () => null),
     commit,
+    findIngestStatus,
     now: input.now || (() => new Date('2026-07-25T14:00:00.000Z')),
     createReceiptId: input.createReceiptId || (() => 'receipt-1'),
   });
   return {
-    app, storage, commit, resolveCommand, inspectGrant, ingestRateLimiter, parserSpy, stagingStore,
+    app, storage, commit, resolveCommand, inspectGrant, findIngestStatus,
+    ingestRateLimiter, parserSpy, stagingStore,
   };
 }
 
@@ -249,6 +261,158 @@ function headers(bytes: Buffer, overrides: Record<string, string> = {}) {
     ...overrides,
   };
 }
+
+function statusRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    contractVersion: EXTENSION_BYOK_MEDIA_INGEST_STATUS_VERSION,
+    shopId: 'shop-1',
+    workflowId: 'workflow-1',
+    draftRevision: 3,
+    draftVersion: 4,
+    skuKey: 'sku-1',
+    slotKey: 'sku:sku-1:hero',
+    assignmentOrdinal: 0,
+    idempotencyKey: 'byok-route-ingest-0001',
+    requestHash: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+describe('extension BYOK generated media ingest status route', () => {
+  it('returns the exact successful public receipt without revalidating the advanced draft', async () => {
+    const { app, findIngestStatus, resolveCommand } = await build({
+      ingestStatusImpl: async () => ({
+        kind: 'succeeded',
+        receiptId: 'receipt-1',
+        receipt: {
+          assetId: 'asset-1', provenanceId: 'provenance-1',
+          normalizedSha256: 'a'.repeat(64), mimeType: 'image/webp', width: 1200, height: 1200,
+          sourceDraftRevision: 3, sourceDraftVersion: 4,
+          boundDraftRevision: 4, boundDraftVersion: 5,
+          skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 0,
+          assignmentSha256: 'b'.repeat(64),
+        },
+      }),
+    });
+    const response = await app.inject({ method: 'POST', url: '/ingest-status', payload: statusRequest() });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        state: 'SUCCEEDED', replayed: true, receiptId: 'receipt-1',
+        assetId: 'asset-1', provenanceId: 'provenance-1',
+        normalizedSha256: 'a'.repeat(64), mimeType: 'image/webp', width: 1200, height: 1200,
+        sourceDraftRevision: 3, sourceDraftVersion: 4,
+        boundDraftRevision: 4, boundDraftVersion: 5,
+        skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 0,
+        assignmentSha256: 'b'.repeat(64),
+      },
+    });
+    expect(findIngestStatus).toHaveBeenCalledWith({
+      ...statusRequest(), sessionId: 'session-1', ownerUserId: 'owner-1',
+    });
+    expect(resolveCommand).not.toHaveBeenCalled();
+    expect(JSON.stringify(response.json())).not.toMatch(/grant|token|requestHash|secret/iu);
+    await app.close();
+  });
+
+  it.each([
+    ['pending', { kind: 'pending', receiptId: 'receipt-1' }, 'PENDING'],
+    ['not committed', { kind: 'not_committed' }, 'NOT_COMMITTED'],
+  ])('returns 202 for %s recovery state', async (_label, repositoryResult, state) => {
+    const { app } = await build({ ingestStatusImpl: async () => repositoryResult });
+    const response = await app.inject({ method: 'POST', url: '/ingest-status', payload: statusRequest() });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ code: 1, data: { state } });
+    await app.close();
+  });
+
+  it.each([
+    ['not found', { kind: 'not_found' }, 404, 'byok_ingest_status_not_found'],
+    ['failed', { kind: 'failed', receiptId: 'receipt-1' }, 409, 'byok_ingest_status_failed'],
+  ])('fails closed when the status is %s', async (_label, repositoryResult, statusCode, errorCode) => {
+    const { app } = await build({ ingestStatusImpl: async () => repositoryResult });
+    const response = await app.inject({ method: 'POST', url: '/ingest-status', payload: statusRequest() });
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toMatchObject({ code: 0, errorCode });
+    await app.close();
+  });
+
+  it('rejects malformed, cross-shop, and unauthorized requests before repository access', async () => {
+    const unauthenticated = await build({ authRejected: true });
+    const unauthenticatedResponse = await unauthenticated.app.inject({
+      method: 'POST', url: '/ingest-status', payload: statusRequest(),
+    });
+    expect(unauthenticatedResponse.statusCode).toBe(401);
+    expect(unauthenticated.findIngestStatus).not.toHaveBeenCalled();
+    await unauthenticated.app.close();
+
+    const malformed = await build();
+    const malformedResponse = await malformed.app.inject({
+      method: 'POST', url: '/ingest-status',
+      payload: statusRequest({ unexpected: true }),
+    });
+    expect(malformedResponse.statusCode).toBe(400);
+    expect(malformed.findIngestStatus).not.toHaveBeenCalled();
+    await malformed.app.close();
+
+    const crossShop = await build();
+    const crossShopResponse = await crossShop.app.inject({
+      method: 'POST', url: '/ingest-status', payload: statusRequest({ shopId: 'shop-other' }),
+    });
+    expect(crossShopResponse.statusCode).toBe(403);
+    expect(crossShop.findIngestStatus).not.toHaveBeenCalled();
+    await crossShop.app.close();
+
+    const unauthorized = await build({ scopes: ['capture:write'] });
+    const unauthorizedResponse = await unauthorized.app.inject({
+      method: 'POST', url: '/ingest-status', payload: statusRequest(),
+    });
+    expect(unauthorizedResponse.statusCode).toBe(403);
+    expect(unauthorized.findIngestStatus).not.toHaveBeenCalled();
+    await unauthorized.app.close();
+  });
+
+  it('maps repository conflicts and outages without exposing stored receipt data', async () => {
+    const conflict = await build({
+      ingestStatusImpl: async () => {
+        throw new ExtensionByokMediaIngestStatusRepositoryError(
+          'BYOK_INGEST_STATUS_CONFLICT', 409, 'stored requestHash conflicts',
+        );
+      },
+    });
+    const conflictResponse = await conflict.app.inject({
+      method: 'POST', url: '/ingest-status', payload: statusRequest(),
+    });
+    expect(conflictResponse.statusCode).toBe(409);
+    expect(conflictResponse.json()).toEqual({
+      code: 0, errorCode: 'byok_ingest_status_conflict', msg: 'BYOK 图片接收状态不匹配',
+    });
+    expect(JSON.stringify(conflictResponse.json())).not.toContain('requestHash');
+    await conflict.app.close();
+
+    const unavailable = await build({ ingestStatusImpl: async () => { throw new Error('db down'); } });
+    const unavailableResponse = await unavailable.app.inject({
+      method: 'POST', url: '/ingest-status', payload: statusRequest(),
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toMatchObject({ errorCode: 'byok_ingest_status_unavailable' });
+    await unavailable.app.close();
+  });
+
+  it('caps status recovery JSON bodies at 16 KiB', async () => {
+    const { app, findIngestStatus } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ingest-status',
+      payload: { ...statusRequest(), padding: 'x'.repeat(17 * 1024) },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(findIngestStatus).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
 
 describe('extension BYOK generated media ingest route', () => {
   it('rejects unauthenticated traffic before invoking the image body parser', async () => {
@@ -451,7 +615,7 @@ describe('extension BYOK generated media ingest route', () => {
     await app.close();
   });
 
-  it('rejects a successful replay with no deterministic stored asset before decode or upload', async () => {
+  it('directs a successful grant replay to receipt recovery before decode or upload', async () => {
     const bytes = Buffer.from('not-an-image');
     const { app, storage, commit, ingestRateLimiter, stagingStore } = await build({
       grantInspection: { kind: 'replay', receipt: { status: 'SUCCEEDED' } },
@@ -459,7 +623,7 @@ describe('extension BYOK generated media ingest route', () => {
     });
     const response = await app.inject({ method: 'POST', url: '/ingest', headers: headers(bytes), payload: bytes });
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ errorCode: 'byok_ingest_replay_asset_missing' });
+    expect(response.json()).toMatchObject({ errorCode: 'byok_ingest_receipt_pending' });
     expect(ingestRateLimiter.consume).toHaveBeenCalledOnce();
     expect(stagingStore.beginAttempt).not.toHaveBeenCalled();
     expect(storage.uploads).toHaveLength(0);
@@ -500,7 +664,7 @@ describe('extension BYOK generated media ingest route', () => {
     });
     expect(response.statusCode).toBe(503);
     expect(stagingStore.recordUploadedObject).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'receipt-1',
+      id: expect.stringMatching(/^byok_[a-f0-9]{48}$/u),
       expectedStorageKey: expect.not.stringMatching(/^provider-returned\.png$/u),
       actualStorageKey: 'provider-returned.png',
       storageNamespaceId: storage.namespaceId,
@@ -531,79 +695,56 @@ describe('extension BYOK generated media ingest route', () => {
     expect(storage.uploads).toHaveLength(1);
     expect(storage.deletes).toEqual([storage.uploads[0]!.result]);
     expect(stagingStore.markImmediateCleaned).toHaveBeenCalledWith({
-      id: 'receipt-1', now: times[2],
+      id: expect.stringMatching(/^byok_[a-f0-9]{48}$/u), now: times[2],
     });
     await app.close();
   });
 
-  it('keeps the barrier winner and deletes only the attempt-unique losing upload', async () => {
+  it('returns pending from an active deterministic lease before a second parse or upload', async () => {
     const bytes = await png();
-    let receiptSequence = 0;
-    let commitSequence = 0;
-    let releaseSecond!: () => void;
-    let releaseWinner!: () => void;
-    const secondEntered = new Promise<void>((resolve) => { releaseSecond = resolve; });
-    const winnerCommitted = new Promise<void>((resolve) => { releaseWinner = resolve; });
-    let winner: any;
-    const resultFor = (value: any, replayed: boolean, asset: any, receiptId: string) => ({
-      replayed,
-      receiptId,
-      receipt: {
-        contractVersion: EXTENSION_BYOK_MEDIA_INGEST_RECEIPT_VERSION,
-        requestHash: value.binding.requestHash,
-        assetId: asset.id,
-        provenanceId: 'provenance-winner',
-        normalizedSha256: asset.sha256,
-        mimeType: asset.mimeType,
-        width: asset.width,
-        height: asset.height,
-        workflowId: 'workflow-1',
-        draftRevision: 3,
-        draftVersion: 4,
-        boundDraftRevision: 4,
-        boundDraftVersion: 5,
-        skuKey: 'sku-1',
-        slotKey: 'sku:sku-1:hero',
-        assignmentOrdinal: 0,
-        assignmentSha256: 'e'.repeat(64),
-        policyRevision: 7,
-      },
-      asset,
-    });
-    const { app, storage } = await build({
-      createReceiptId: () => `receipt-${++receiptSequence}`,
-      commitImpl: async (value) => {
-        commitSequence += 1;
-        if (commitSequence === 1) {
-          await secondEntered;
-          winner = resultFor(value, false, value.asset, value.receiptId);
-          releaseWinner();
-          return winner;
-        }
-        releaseSecond();
-        await winnerCommitted;
-        return resultFor(value, true, winner.asset, winner.receiptId);
-      },
-    });
+    let leaseCount = 0;
+    const stagingStore = {
+      beginAttempt: vi.fn(async (value: any) => ({
+        kind: ++leaseCount === 1 ? 'created' : 'active',
+        staging: value,
+      })),
+      recordUploadedObject: vi.fn(async () => true),
+      markImmediateCleaned: vi.fn(async () => true),
+      markImmediateCleanupFailed: vi.fn(async () => true),
+    };
+    const { app, storage, commit, parserSpy } = await build({ stagingStore });
     const [first, second] = await Promise.all([
       app.inject({ method: 'POST', url: '/ingest', headers: headers(bytes), payload: bytes }),
       app.inject({ method: 'POST', url: '/ingest', headers: headers(bytes), payload: bytes }),
     ]);
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    expect(storage.uploads).toHaveLength(2);
-    expect(storage.uploads[0]!.result.objectKey).not.toBe(storage.uploads[1]!.result.objectKey);
-    expect(storage.deletes).toEqual([storage.uploads[1]!.result]);
-    const responses = [first.json().data, second.json().data];
-    const winners = responses.filter((response) => response.replayed === false);
-    const replays = responses.filter((response) => response.replayed === true);
-    expect(winners).toHaveLength(1);
-    expect(replays).toHaveLength(1);
-    expect(replays[0]).toMatchObject({
-      receiptId: winners[0]!.receiptId,
-      assetId: winners[0]!.assetId,
-      normalizedSha256: winners[0]!.normalizedSha256,
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    const pending = [first, second].find((response) => response.statusCode === 409)!;
+    expect(pending.json()).toMatchObject({ errorCode: 'byok_ingest_receipt_pending' });
+    expect(stagingStore.beginAttempt).toHaveBeenCalledTimes(2);
+    expect(parserSpy).toHaveBeenCalledOnce();
+    expect(storage.uploads).toHaveLength(1);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(stagingStore.beginAttempt.mock.calls[0]![0].id)
+      .toBe(stagingStore.beginAttempt.mock.calls[1]![0].id);
+    await app.close();
+  });
+
+  it('continues parsing and upload when an exact CLEANED lease is reopened', async () => {
+    const bytes = await png();
+    const stagingStore = {
+      beginAttempt: vi.fn(async (value: any) => ({ kind: 'reopened', staging: value })),
+      recordUploadedObject: vi.fn(async () => true),
+      markImmediateCleaned: vi.fn(async () => true),
+      markImmediateCleanupFailed: vi.fn(async () => true),
+    };
+    const { app, storage, commit, parserSpy } = await build({ stagingStore });
+    const response = await app.inject({
+      method: 'POST', url: '/ingest', headers: headers(bytes), payload: bytes,
     });
+    expect(response.statusCode).toBe(200);
+    expect(parserSpy).toHaveBeenCalledOnce();
+    expect(storage.uploads).toHaveLength(1);
+    expect(commit).toHaveBeenCalledOnce();
     await app.close();
   });
 });

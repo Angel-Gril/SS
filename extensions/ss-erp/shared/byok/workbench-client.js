@@ -5,12 +5,16 @@
   var PREVIEW_VERSION = 'extension-byok-workbench-preview-channel/v1';
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
   var PROVIDER_TIMEOUT_MS = 130 * 1000;
+  var INGEST_TIMEOUT_MS = 130 * 1000;
+  var DEVICE_INVALIDATED_MESSAGE = 'ss-erp:byok-device-session-invalidated';
   var MESSAGE_TYPES = Object.freeze({
     GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
     GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
     EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
     OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
     REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
+    INGEST: 'ss-erp:ai-image-workbench-ingest',
+    RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
   });
 
   function clientError(code) {
@@ -126,6 +130,8 @@
 
     function send(type, payload, readinessValue, operationTimeoutMs) {
       var message = { type: type, payload: payload || {} };
+      var ingestOutcomeUnknown = type === MESSAGE_TYPES.INGEST
+        || type === MESSAGE_TYPES.RECOVER_INGEST;
       if (readinessValue) {
         var normalized = readiness(readinessValue);
         message.readinessHandle = normalized.readinessHandle;
@@ -136,9 +142,13 @@
         var timer = setTimeout(function () {
           if (settled) return;
           settled = true;
-          reject(clientError(type === MESSAGE_TYPES.EXECUTE_PROVIDER
-            ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
-            : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_TIMEOUT'));
+          reject(clientError(
+            type === MESSAGE_TYPES.EXECUTE_PROVIDER
+              ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
+              : ingestOutcomeUnknown
+                ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_TIMEOUT',
+          ));
         }, operationTimeoutMs || timeoutMs);
         function finish(callback, value) {
           if (settled) return;
@@ -149,9 +159,13 @@
         try {
           runtime.sendMessage(message, function (response) {
             if (runtime.lastError) {
-              finish(reject, clientError(type === MESSAGE_TYPES.EXECUTE_PROVIDER
-                ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
-                : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED'));
+              finish(reject, clientError(
+                type === MESSAGE_TYPES.EXECUTE_PROVIDER
+                  ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
+                  : ingestOutcomeUnknown
+                    ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                    : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED',
+              ));
               return;
             }
             if (!isRecord(response) || response.ok !== true
@@ -159,16 +173,22 @@
               var code = isRecord(response) && typeof response.errorCode === 'string'
                 && /^[A-Z][A-Z0-9_]{0,99}$/u.test(response.errorCode)
                 ? response.errorCode
-                : 'SS_ERP_BYOK_WORKBENCH_OPERATION_FAILED';
+                : ingestOutcomeUnknown
+                  ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                  : 'SS_ERP_BYOK_WORKBENCH_OPERATION_FAILED';
               finish(reject, clientError(code));
               return;
             }
             finish(resolve, response.data);
           });
         } catch (_error) {
-          finish(reject, clientError(type === MESSAGE_TYPES.EXECUTE_PROVIDER
-            ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
-            : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED'));
+          finish(reject, clientError(
+            type === MESSAGE_TYPES.EXECUTE_PROVIDER
+              ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
+              : ingestOutcomeUnknown
+                ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED',
+          ));
         }
       });
     }
@@ -294,11 +314,28 @@
           decision: decision,
         });
       },
+      ingestApproved: function (resultIdValue) {
+        return send(
+          MESSAGE_TYPES.INGEST,
+          { resultId: resultId(resultIdValue) },
+          null,
+          INGEST_TIMEOUT_MS,
+        );
+      },
+      recoverApprovedIngest: function (resultIdValue) {
+        return send(
+          MESSAGE_TYPES.RECOVER_INGEST,
+          { resultId: resultId(resultIdValue) },
+          null,
+          INGEST_TIMEOUT_MS,
+        );
+      },
     });
   }
 
   global.SS_ERP_BYOK_WORKBENCH_CLIENT = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
+    DEVICE_INVALIDATED_MESSAGE: DEVICE_INVALIDATED_MESSAGE,
     MESSAGE_TYPES: MESSAGE_TYPES,
     createClient: createClient,
   });

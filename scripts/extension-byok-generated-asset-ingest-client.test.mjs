@@ -6,9 +6,21 @@ const modulePath = 'extensions/ss-erp/shared/byok/generated-asset-ingest-client.
 const source = readFileSync(modulePath, 'utf8');
 const context = { Array, Blob, Boolean, Error, JSON, Map, Number, Object, String, TextEncoder, Uint8Array, btoa };
 context.globalThis = context;
+vm.runInNewContext(
+  readFileSync('extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js', 'utf8'),
+  context,
+  { filename: 'extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js' },
+);
+vm.runInNewContext(
+  readFileSync('extensions/ss-erp/shared/byok/generated-result-vault.js', 'utf8'),
+  context,
+  { filename: 'extensions/ss-erp/shared/byok/generated-result-vault.js' },
+);
 vm.runInNewContext(source, context, { filename: modulePath });
 const api = context.SS_ERP_BYOK_GENERATED_ASSET_INGEST_CLIENT;
+const vaultApi = context.SS_ERP_BYOK_GENERATED_RESULT_VAULT;
 const blob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' });
+const ingestRequestHash = '1'.repeat(64);
 const internal = {
   resultId: 'br_result_1', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
   profileId: 'profile-1', providerOrigin: 'https://relay.example', model: 'image-model-v1',
@@ -19,8 +31,13 @@ const internal = {
   sha256: 'd'.repeat(64), blob,
   lifecycleEpoch: 7,
   binding: {
+    contractVersion: 'extension-byok-readiness-binding/v2',
     ownerUserId: 'owner-1', deviceSessionId: 'session-1',
     shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+    sourcePlatform: '1688', sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentMode: 'APPEND',
+    assignmentOrdinal: 0,
     providerOrigin: 'https://relay.example', model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE', policyRevision: '734',
   },
@@ -65,15 +82,27 @@ function successData(overrides = {}) {
 
 const calls = [];
 let released = 0;
+let persistedIngestRequestHash = null;
 const transport = {
   async post(path, body, options) {
     calls.push({ kind: 'grant', path, body, options });
     return {
       state: 'response', status: 201,
-      body: { code: 1, data: { grantId: 'grant-1', grantToken: 'g'.repeat(43), expiresAt: 'later' } },
+      body: {
+        code: 1,
+        data: {
+          grantId: 'grant-1', grantToken: 'g'.repeat(43),
+          requestHash: ingestRequestHash, expiresAt: 'later',
+        },
+      },
     };
   },
   async postBytes(path, body, options) {
+    assert.equal(
+      persistedIngestRequestHash,
+      ingestRequestHash,
+      'the exact grant request hash must persist before binary dispatch',
+    );
     calls.push({ kind: 'bytes', path, body, options });
     return {
       state: 'response', status: 200,
@@ -99,7 +128,12 @@ const input = {
   assignmentMode: 'APPEND', replaceConfirmed: false, assignmentOrdinal: 0,
   idempotencyKey: 'byok-ingest-operation-1',
 };
-const accepted = await client.ingest(input, runtimeAuthority());
+const accepted = await client.ingest(
+  input,
+  runtimeAuthority(),
+  undefined,
+  async (requestHash) => { persistedIngestRequestHash = requestHash; },
+);
 assert.deepEqual(JSON.parse(JSON.stringify(accepted)), {
   contractVersion: 'extension-byok-generated-asset-ingest-client/v1',
   replayed: false,
@@ -160,6 +194,137 @@ await assert.rejects(
 );
 assert.equal(calls.length, 2, 'fingerprint conflicts must fail before issuing another grant');
 
+for (const [name, bindingOverrides] of Object.entries({
+  sku: { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero' },
+  slot: { slotKey: 'sku:sku-1:detail' },
+  mode: { assignmentMode: 'REPLACE' },
+  ordinal: { assignmentOrdinal: 1 },
+})) {
+  const mismatchVault = {
+    getApprovedForBackground() {
+      return { ...internal, binding: { ...internal.binding, ...bindingOverrides } };
+    },
+    release() { throw new Error('mismatched binding must not release'); },
+  };
+  const mismatchClient = api.createClient({
+    transport: {
+      async post() { throw new Error('mismatched binding must not request a grant'); },
+      async postBytes() { throw new Error('mismatched binding must not upload'); },
+    },
+    vault: mismatchVault,
+    isAuthorityCurrent: currentAuthority,
+  });
+  await assert.rejects(
+    mismatchClient.ingest({
+      ...input,
+      idempotencyKey: `byok-ingest-binding-${name}`,
+    }, runtimeAuthority()),
+    (error) => error && error.code === 'SS_ERP_BYOK_INGEST_BINDING_MISMATCH',
+    `${name} must remain bound to the approved vault result`,
+  );
+}
+
+const realVault = vaultApi.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(bytes) { bytes.fill(0x44); },
+});
+const realPublic = realVault.put({
+  outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
+  profileId: internal.profileId, providerOrigin: internal.providerOrigin, model: internal.model,
+  policyRevision: internal.policyRevision, idempotencyKey: internal.idempotencyKey,
+  requestHash: internal.requestHash, promptHash: internal.promptHash,
+  negativePromptHash: internal.negativePromptHash, endpointHash: internal.endpointHash,
+  providerRequestIdSha256: internal.providerRequestIdSha256,
+  acceptedAt: internal.acceptedAt,
+  image: { blob, mimeType: internal.mimeType, byteLength: blob.size, sha256: internal.sha256 },
+}, internal.binding, {
+  contractVersion: 'extension-byok-device-session-lifecycle/v1', epoch: 7,
+});
+realVault.approve(realPublic.resultId, internal.binding);
+let realGrantCalls = 0;
+let realUploadCalls = 0;
+const realClient = api.createClient({
+  vault: realVault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    async post() {
+      realGrantCalls += 1;
+      return {
+        state: 'response', status: 201,
+        body: { code: 1, data: { grantToken: 'r'.repeat(43), requestHash: ingestRequestHash } },
+      };
+    },
+    async postBytes() {
+      realUploadCalls += 1;
+      return { state: 'response', status: 200, body: { code: 1, data: successData() } };
+    },
+  },
+});
+const realInput = { ...input, resultId: realPublic.resultId, idempotencyKey: 'byok-real-replay-0001' };
+const realAccepted = await realClient.ingest(realInput, runtimeAuthority());
+assert.equal(realVault.size(), 0, 'successful ingest must remove the real Blob from the vault');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await realClient.ingest(realInput, runtimeAuthority()))),
+  JSON.parse(JSON.stringify(realAccepted)),
+  'successful replay must use the saved receipt after the real vault entry was released',
+);
+assert.equal(realGrantCalls, 1);
+assert.equal(realUploadCalls, 1);
+
+const pendingPublic = realVault.put({
+  outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
+  profileId: internal.profileId, providerOrigin: internal.providerOrigin, model: internal.model,
+  policyRevision: internal.policyRevision, idempotencyKey: 'provider-pending-commit-1',
+  requestHash: '2'.repeat(64), promptHash: internal.promptHash,
+  negativePromptHash: internal.negativePromptHash, endpointHash: internal.endpointHash,
+  providerRequestIdSha256: internal.providerRequestIdSha256,
+  acceptedAt: internal.acceptedAt,
+  image: { blob, mimeType: internal.mimeType, byteLength: blob.size, sha256: internal.sha256 },
+}, internal.binding, {
+  contractVersion: 'extension-byok-device-session-lifecycle/v1', epoch: 7,
+});
+realVault.approve(pendingPublic.resultId, internal.binding);
+let pendingUploads = 0;
+const pendingClient = api.createClient({
+  vault: realVault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    async post() {
+      return {
+        state: 'response', status: 201,
+        body: { code: 1, data: { grantToken: 'p'.repeat(43), requestHash: ingestRequestHash } },
+      };
+    },
+    async postBytes() {
+      pendingUploads += 1;
+      return { state: 'response', status: 200, body: { code: 1, data: successData() } };
+    },
+  },
+});
+const pendingInput = {
+  ...input,
+  resultId: pendingPublic.resultId,
+  idempotencyKey: 'byok-receipt-pending-0001',
+};
+await assert.rejects(
+  pendingClient.ingest(pendingInput, runtimeAuthority(), async () => {
+    throw new Error('session storage temporarily unavailable');
+  }),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_RECEIPT_COMMIT_FAILED'
+    && error.outcome === 'FAILED_RETRYABLE',
+);
+assert.equal(realVault.size(), 1, 'receipt commit failure must retain the approved Blob');
+let committedReceipt = null;
+const recoveredPending = await pendingClient.ingest(
+  pendingInput,
+  runtimeAuthority(),
+  async (receipt) => { committedReceipt = receipt; },
+);
+assert.equal(committedReceipt.receiptId, recoveredPending.receiptId);
+assert.equal(realVault.size(), 0);
+assert.equal(pendingUploads, 1, 'receipt commit retry must not upload the image a second time');
+
 const invalidInputs = [
   { ...input, idempotencyKey: 'byok-ingest-invalid-01', assignmentMode: 'INSERT' },
   { ...input, idempotencyKey: 'byok-ingest-invalid-02', replaceConfirmed: true },
@@ -209,6 +374,316 @@ await retryClient.ingest(
   runtimeAuthority(),
 );
 assert.equal(unknownCalls, 2);
+
+let pendingReplayCalls = 0;
+const pendingReplayClient = api.createClient({
+  vault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    post: transport.post,
+    async postBytes() {
+      pendingReplayCalls += 1;
+      if (pendingReplayCalls === 1) throw new Error('response lost after dispatch');
+      if (pendingReplayCalls === 2) {
+        return {
+          state: 'http_error', status: 409,
+          body: { code: 0, errorCode: 'byok_ingest_receipt_pending' },
+        };
+      }
+      return { state: 'response', status: 200, body: { code: 1, data: successData() } };
+    },
+  },
+});
+const pendingReplayInput = { ...input, idempotencyKey: 'byok-ingest-pending-replay-1' };
+await assert.rejects(
+  pendingReplayClient.ingest(pendingReplayInput, runtimeAuthority()),
+  (error) => error && error.outcome === 'UNKNOWN_OUTCOME',
+);
+await assert.rejects(
+  pendingReplayClient.ingest(pendingReplayInput, runtimeAuthority()),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+    && error.outcome === 'UNKNOWN_OUTCOME',
+  'a server-side PENDING receipt must remain recoverable with the same key',
+);
+assert.equal(
+  pendingReplayClient.getOperationState(pendingReplayInput.idempotencyKey).status,
+  'UNKNOWN_OUTCOME',
+);
+await pendingReplayClient.ingest(pendingReplayInput, runtimeAuthority());
+assert.equal(pendingReplayCalls, 3);
+
+let recoveryChecks = 0;
+let recoveredReceipt = null;
+const recoveryClient = api.createClient({
+  vault: {
+    getApprovedForBackground() { throw new Error('recovery must not require lost Blob bytes'); },
+    release() { return false; },
+  },
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    async post(path, body) {
+      assert.equal(path, '/api/extension-device/byok-media/ingest-status');
+      assert.equal(body.requestHash, ingestRequestHash);
+      recoveryChecks += 1;
+      if (recoveryChecks === 1) {
+        return {
+          state: 'response', status: 202,
+          body: { code: 1, data: { state: 'PENDING' } },
+        };
+      }
+      if (recoveryChecks === 2) {
+        return {
+          state: 'response', status: 202,
+          body: { code: 1, data: { state: 'NOT_COMMITTED' } },
+        };
+      }
+      return {
+        state: 'response', status: 200,
+        body: { code: 1, data: { state: 'SUCCEEDED', ...successData({ replayed: true }) } },
+      };
+    },
+    async postBytes() { throw new Error('receipt recovery must not upload bytes'); },
+  },
+});
+const recoveryInput = {
+  ...input,
+  idempotencyKey: 'byok-ingest-recovery-0001',
+  requestHash: ingestRequestHash,
+};
+await assert.rejects(
+  recoveryClient.recover(
+    { ...recoveryInput, requestHash: null },
+    runtimeAuthority(),
+  ),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_REQUEST_HASH_REQUIRED'
+    && error.outcome === 'FAILED_FINAL',
+);
+await assert.rejects(
+  recoveryClient.recover(recoveryInput, runtimeAuthority()),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_RECEIPT_PENDING'
+    && error.outcome === 'UNKNOWN_OUTCOME',
+);
+await assert.rejects(
+  recoveryClient.recover(recoveryInput, runtimeAuthority()),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED'
+    && error.outcome === 'UNKNOWN_OUTCOME',
+);
+const recovered = await recoveryClient.recover(
+  recoveryInput,
+  runtimeAuthority(),
+  async (receipt) => { recoveredReceipt = receipt; },
+);
+assert.equal(recoveredReceipt.receiptId, recovered.receiptId);
+assert.equal(recovered.replayed, true);
+assert.equal(recoveryChecks, 3);
+assert.equal(
+  recoveryClient.getOperationState(recoveryInput.idempotencyKey).status,
+  'SUCCEEDED',
+);
+
+let regrantCalls = 0;
+let regrantUploads = 0;
+const regrantTokens = ['q'.repeat(43), 'r'.repeat(43)];
+const regrantClient = api.createClient({
+  vault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    async post(path) {
+      if (path === '/api/extension-device/byok-media/ingest-status') {
+        return {
+          state: 'response', status: 202,
+          body: { code: 1, data: { state: 'NOT_COMMITTED' } },
+        };
+      }
+      const grantToken = regrantTokens[regrantCalls];
+      regrantCalls += 1;
+      return {
+        state: 'response', status: 201,
+        body: { code: 1, data: { grantToken, requestHash: ingestRequestHash } },
+      };
+    },
+    async postBytes(_path, _body, options) {
+      regrantUploads += 1;
+      if (regrantUploads === 1) throw new Error('first upload response was lost');
+      assert.equal(options.commandGrant, regrantTokens[1], 'retry must use a newly signed grant');
+      return { state: 'response', status: 200, body: { code: 1, data: successData() } };
+    },
+  },
+});
+const regrantInput = { ...input, idempotencyKey: 'byok-ingest-regrant-0001' };
+await assert.rejects(
+  regrantClient.ingest(regrantInput, runtimeAuthority()),
+  (error) => error && error.outcome === 'UNKNOWN_OUTCOME',
+);
+assert.equal(regrantClient.getOperationState(regrantInput.idempotencyKey).hasGrant, true);
+await assert.rejects(
+  regrantClient.recover(
+    { ...regrantInput, requestHash: ingestRequestHash },
+    runtimeAuthority(),
+  ),
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED',
+);
+assert.equal(
+  regrantClient.getOperationState(regrantInput.idempotencyKey).hasGrant,
+  false,
+  'authoritative NOT_COMMITTED must retire the old command grant before byte resend',
+);
+await regrantClient.ingest(
+  { ...regrantInput, requestHash: ingestRequestHash },
+  runtimeAuthority(),
+);
+assert.equal(regrantCalls, 2);
+assert.equal(regrantUploads, 2);
+
+for (const [name, response, code] of [
+  [
+    'not found',
+    { state: 'http_error', status: 404, body: { code: 0, errorCode: 'byok_ingest_status_not_found' } },
+    'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND',
+  ],
+  [
+    'failed',
+    { state: 'http_error', status: 409, body: { code: 0, errorCode: 'byok_ingest_status_failed' } },
+    'SS_ERP_BYOK_INGEST_RECEIPT_FAILED',
+  ],
+]) {
+  const terminalClient = api.createClient({
+    vault,
+    isAuthorityCurrent: currentAuthority,
+    transport: {
+      async post() { return response; },
+      async postBytes() { throw new Error(name + ' recovery must not upload'); },
+    },
+  });
+  const terminalInput = {
+    ...recoveryInput,
+    idempotencyKey: 'byok-ingest-terminal-' + name.replace(' ', '-'),
+  };
+  await assert.rejects(
+    terminalClient.recover(terminalInput, runtimeAuthority()),
+    (error) => error && error.code === code && error.outcome === 'FAILED_FINAL',
+  );
+  if (name === 'not found') {
+    assert.equal(
+      terminalClient.getOperationState(terminalInput.idempotencyKey),
+      null,
+      'an exact authenticated status 404 must clear the retired client operation',
+    );
+  } else {
+    assert.equal(terminalClient.getOperationState(terminalInput.idempotencyKey).status, 'FAILED_FINAL');
+  }
+}
+
+const proxyNotFoundClient = api.createClient({
+  vault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    async post() {
+      return { state: 'http_error', status: 404, body: { code: 0, errorCode: 'route_not_found' } };
+    },
+    async postBytes() { throw new Error('non-authoritative recovery 404 must not upload'); },
+  },
+});
+await assert.rejects(
+  proxyNotFoundClient.recover({
+    ...recoveryInput,
+    idempotencyKey: 'byok-ingest-proxy-status-not-found',
+  }, runtimeAuthority()),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE'
+    && error.outcome === 'UNKNOWN_OUTCOME',
+  'only the exact authenticated status error may prove that no grant exists',
+);
+
+for (const status of [400, 403, 404]) {
+  let binaryCalls = 0;
+  const deniedGrantClient = api.createClient({
+    vault,
+    isAuthorityCurrent: currentAuthority,
+    transport: {
+      async post() {
+        return { state: 'http_error', status, body: { code: 0, errorCode: 'grant_denied' } };
+      },
+      async postBytes() { binaryCalls += 1; },
+    },
+  });
+  await assert.rejects(
+    deniedGrantClient.ingest({
+      ...input,
+      idempotencyKey: 'byok-ingest-grant-denied-' + status,
+    }, runtimeAuthority()),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_INGEST_GRANT_REJECTED'
+      && error.outcome === 'FAILED_FINAL',
+  );
+  assert.equal(binaryCalls, 0);
+}
+
+for (const [status, errorCode, suffix] of [
+  [401, 'byok_ingest_grant_required', 'required'],
+  [410, 'byok_ingest_grant_expired', 'expired'],
+]) {
+  const refreshableGrantClient = api.createClient({
+    vault,
+    isAuthorityCurrent: currentAuthority,
+    transport: {
+      async post() {
+        return {
+          state: 'response', status: 201,
+          body: {
+            code: 1,
+            data: { grantToken: 'x'.repeat(43), requestHash: ingestRequestHash },
+          },
+        };
+      },
+      async postBytes() {
+        return { state: 'http_error', status, body: { code: 0, errorCode } };
+      },
+    },
+  });
+  const refreshableGrantInput = {
+    ...input,
+    idempotencyKey: 'byok-ingest-refresh-grant-' + suffix,
+  };
+  await assert.rejects(
+    refreshableGrantClient.ingest(refreshableGrantInput, runtimeAuthority()),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE'
+      && error.outcome === 'FAILED_RETRYABLE'
+      && error.resetGrant === true,
+  );
+  assert.equal(
+    refreshableGrantClient.getOperationState(refreshableGrantInput.idempotencyKey).hasGrant,
+    false,
+    'a missing or expired command grant must retire only the grant token',
+  );
+}
+
+let discardedUploadCalls = 0;
+const discardedClient = api.createClient({
+  vault,
+  isAuthorityCurrent: currentAuthority,
+  transport: {
+    post: transport.post,
+    async postBytes() {
+      discardedUploadCalls += 1;
+      throw new Error('connection lost');
+    },
+  },
+});
+const discardedInput = { ...input, idempotencyKey: 'byok-ingest-discarded-0001' };
+await assert.rejects(
+  discardedClient.ingest(discardedInput, runtimeAuthority()),
+  (error) => error && error.outcome === 'UNKNOWN_OUTCOME',
+);
+assert.equal(discardedClient.getOperationState(discardedInput.idempotencyKey).hasGrant, true);
+assert.equal(discardedClient.discardResult(internal.resultId), 1);
+assert.equal(discardedClient.getOperationState(discardedInput.idempotencyKey), null);
+assert.equal(discardedUploadCalls, 1);
 
 const invalidResponses = [
   { sourceDraftRevision: 2 },
@@ -302,7 +777,7 @@ const staleClient = api.createClient({
       liveEpoch = false;
       return {
         state: 'response', status: 201,
-        body: { code: 1, data: { grantToken: 'h'.repeat(43) } },
+        body: { code: 1, data: { grantToken: 'h'.repeat(43), requestHash: ingestRequestHash } },
       };
     },
     async postBytes() { staleBinaryCalls += 1; throw new Error('must not upload'); },

@@ -5,9 +5,11 @@ import vm from 'node:vm';
 const contractPath = 'extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js';
 assert.equal(fs.existsSync(contractPath), true, `${contractPath} should exist`);
 
-const context = { window: {} };
+const context = {};
+context.window = context;
+context.globalThis = context;
 vm.runInNewContext(fs.readFileSync(contractPath, 'utf8'), context, { filename: contractPath });
-const contract = context.window.SS_ERP_AI_IMAGE_WORKBENCH_CONTRACT;
+const contract = context.SS_ERP_AI_IMAGE_WORKBENCH_CONTRACT;
 assert.ok(contract, 'browser contract should expose a single namespace');
 
 assert.equal(contract.CONTRACT_VERSION, 'ai-image-workbench/v1');
@@ -37,7 +39,16 @@ assert.equal(
   '/api/extension-device/media-workflows/execute',
 );
 assert.equal(contract.ROUTES.BYOK.ingest, '/api/extension-device/byok-media/ingest');
+assert.equal(
+  contract.ROUTES.BYOK.ingestStatus,
+  '/api/extension-device/byok-media/ingest-status',
+);
 assert.notEqual(contract.ROUTES.ERP_HOSTED.execute, contract.ROUTES.BYOK.ingest);
+assert.deepEqual(JSON.parse(JSON.stringify(contract.BYOK_INGEST_STATUS)), {
+  contractVersion: 'extension-byok-media-ingest-status/v1',
+  requestHashPattern: '^[a-f0-9]{64}$',
+  states: { notCommitted: 'NOT_COMMITTED', pending: 'PENDING', succeeded: 'SUCCEEDED' },
+});
 assert.equal(contract.COMMANDS.ERP_HOSTED.execute, 'MEDIA_EXECUTE');
 assert.equal(contract.COMMANDS.BYOK.execute, 'BYOK_PROVIDER_EXECUTE');
 assert.equal(contract.COMMANDS.BYOK.ingest, 'BYOK_MEDIA_INGEST');

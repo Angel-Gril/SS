@@ -139,8 +139,15 @@
     var now = options && options.now || function () { return new Date(); };
     var randomValues = options && options.randomValues
       || function (bytes) { return global.crypto.getRandomValues(bytes); };
+    var scheduleTimeout = options && options.setTimeout
+      || (typeof global.setTimeout === 'function' ? global.setTimeout.bind(global) : null);
+    var cancelTimeout = options && options.clearTimeout
+      || (typeof global.clearTimeout === 'function' ? global.clearTimeout.bind(global) : null);
+    var onDiscardedResult = options && options.onDiscardedResult;
     var ttlMs = Number(options && options.ttlMs) || DEFAULT_TTL_MS;
-    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > DEFAULT_TTL_MS) {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > DEFAULT_TTL_MS
+      || Boolean(scheduleTimeout) !== Boolean(cancelTimeout)
+      || (onDiscardedResult !== undefined && typeof onDiscardedResult !== 'function')) {
       throw vaultError('SS_ERP_BYOK_RESULT_VAULT_INVALID');
     }
     var entries = new Map();
@@ -157,12 +164,34 @@
       var entry = entries.get(resultId);
       if (!entry) return false;
       entries.delete(resultId);
+      if (entry.expiryTimer !== null && cancelTimeout) {
+        try { cancelTimeout(entry.expiryTimer); } catch (_error) {}
+      }
+      entry.expiryTimer = null;
       if (operationIndex.get(entry.idempotencyKey) === resultId) {
         operationIndex.delete(entry.idempotencyKey);
       }
       totalBytes -= entry.byteLength;
       entry.blob = null;
+      if (onDiscardedResult) {
+        try { onDiscardedResult(entry.resultId); } catch (_error) {}
+      }
       return true;
+    }
+
+    function scheduleExpiry(entry) {
+      if (!scheduleTimeout) return;
+      var delay = Math.max(1, entry.expiresAtMillis - currentMillis());
+      entry.expiryTimer = scheduleTimeout(function () {
+        entry.expiryTimer = null;
+        var remaining;
+        try { remaining = entry.expiresAtMillis - currentMillis(); } catch (_error) { remaining = 0; }
+        if (remaining > 0) {
+          scheduleExpiry(entry);
+          return;
+        }
+        remove(entry.resultId);
+      }, delay);
     }
 
     function prune(current) {
@@ -247,10 +276,12 @@
         resultId: resultId,
         expiresAtMillis: expiresAtMillis,
         expiresAt: new Date(expiresAtMillis).toISOString(),
+        expiryTimer: null,
       };
       entries.set(resultId, entry);
       operationIndex.set(entry.idempotencyKey, resultId);
       totalBytes += entry.byteLength;
+      scheduleExpiry(entry);
       return publicResult(entry);
     }
 
@@ -297,7 +328,7 @@
     function reject(resultIdValue, bindingValue) {
       var entry = getForBackground(resultIdValue);
       assertExactBinding(entry, bindingValue);
-      if (entry.reviewState !== 'CANDIDATE_READY') {
+      if (!['CANDIDATE_READY', 'APPROVED'].includes(entry.reviewState)) {
         throw vaultError('SS_ERP_BYOK_RESULT_REVIEW_INVALID');
       }
       remove(entry.resultId);

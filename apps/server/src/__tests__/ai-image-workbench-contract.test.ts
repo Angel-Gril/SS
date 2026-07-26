@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AI_IMAGE_WORKBENCH_COMMANDS,
+  AI_IMAGE_WORKBENCH_BYOK_INGEST_STATUS_CONTRACT,
   AI_IMAGE_WORKBENCH_CONTRACT_VERSION,
   AI_IMAGE_WORKBENCH_EXECUTION_MODES,
   AI_IMAGE_WORKBENCH_GLOBAL_STATES,
@@ -33,6 +34,14 @@ describe('AI image workbench v1 contract', () => {
     expect(AI_IMAGE_WORKBENCH_ROUTES.BYOK.ingest).toBe(
       '/api/extension-device/byok-media/ingest',
     );
+    expect(AI_IMAGE_WORKBENCH_ROUTES.BYOK.ingestStatus).toBe(
+      '/api/extension-device/byok-media/ingest-status',
+    );
+    expect(AI_IMAGE_WORKBENCH_BYOK_INGEST_STATUS_CONTRACT).toEqual({
+      contractVersion: 'extension-byok-media-ingest-status/v1',
+      requestHashPattern: '^[a-f0-9]{64}$',
+      states: { notCommitted: 'NOT_COMMITTED', pending: 'PENDING', succeeded: 'SUCCEEDED' },
+    });
     expect(AI_IMAGE_WORKBENCH_ROUTES.ERP_HOSTED.execute)
       .not.toBe(AI_IMAGE_WORKBENCH_ROUTES.BYOK.ingest);
     expect(AI_IMAGE_WORKBENCH_COMMANDS.ERP_HOSTED.execute).toBe('MEDIA_EXECUTE');

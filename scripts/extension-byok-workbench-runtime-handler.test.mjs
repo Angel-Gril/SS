@@ -3,8 +3,23 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const modulePath = 'extensions/ss-erp/shared/byok/workbench-runtime-handler.js';
+const serviceWorkerSource = readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+assert.match(
+  serviceWorkerSource,
+  /ingestClient:\s*getByokGeneratedAssetIngestClient\(\)/u,
+  'the workbench dispatcher must own ingest session orchestration',
+);
+assert.doesNotMatch(
+  serviceWorkerSource,
+  /const ingestHandler\s*=|WORKBENCH\.INGEST\]:\s*ingestHandler/u,
+  'a standalone ingest handler must not bypass the live workbench session',
+);
+let randomByte = 1;
 const context = {
-  Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String,
+  Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
+  crypto: {
+    getRandomValues(bytes) { bytes.fill(randomByte); randomByte += 1; return bytes; },
+  },
 };
 context.globalThis = context;
 vm.runInNewContext(readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
@@ -16,6 +31,8 @@ const MESSAGE_TYPES = {
   EXECUTE_PROVIDER: 'execute',
   OPEN_PREVIEW: 'preview',
   REVIEW_RESULT: 'review',
+  INGEST: 'ingest',
+  RECOVER_INGEST: 'recover-ingest',
 };
 const launchContext = {
   contractVersion: 'extension-byok-workbench-launch-context/v1',
@@ -35,6 +52,7 @@ const binding = {
 };
 const sender = { tabId: 77, documentId: 'document-1', frameId: 0 };
 const resultId = 'br_' + 'a'.repeat(48);
+const ingestRequestHash = '1'.repeat(64);
 const publicResult = {
   contractVersion: 'extension-byok-result-vault/v1', resultId,
   outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
@@ -49,6 +67,15 @@ const entry = {
   binding,
   lifecycleEpoch: 1,
   blob: { opaque: true }, mimeType: 'image/png', byteLength: 4, sha256: 'd'.repeat(64),
+};
+const ingestReceipt = {
+  contractVersion: 'extension-byok-generated-asset-ingest-client/v1', replayed: false,
+  receiptId: 'receipt-1', assetId: 'asset-1', provenanceId: 'provenance-1',
+  normalizedSha256: 'e'.repeat(64), mimeType: 'image/png', width: 1024, height: 1024,
+  sourceDraftRevision: 3, sourceDraftVersion: 4,
+  boundDraftRevision: 4, boundDraftVersion: 5,
+  assignmentOrdinal: 2, assignmentSha256: 'f'.repeat(64),
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
 };
 
 let session = {
@@ -92,14 +119,100 @@ const sessionManager = {
         code: 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT',
       });
     }
-    session = { ...session, operation: null, result };
+    session = {
+      ...session,
+      operation: null,
+      result: {
+        ...result,
+        deliveryState: 'NOT_INGESTED',
+        ingestIdempotencyKey: null,
+        ingestRequestHash: null,
+        ingestAuthority: null,
+        ingest: null,
+      },
+    };
     calls.push(['attach', result, idempotencyKey]);
     return session;
   },
   async setReviewState(_sender, id, state) {
     if (reviewGate) await reviewGate.promise;
-    session = { ...session, result: { resultId: id, reviewState: state } };
+    session = { ...session, result: { ...session.result, resultId: id, reviewState: state } };
     calls.push(['review-state', state]);
+    return session;
+  },
+  async beginIngest(_sender, id, idempotencyKey, authority) {
+    assert.equal('lifecycleAuthority' in authority, false);
+    if (!session.result || session.result.resultId !== id
+      || session.result.reviewState !== 'APPROVED') {
+      throw Object.assign(new Error('conflict'), {
+        code: 'SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_CONFLICT',
+      });
+    }
+    session = {
+      ...session,
+      result: {
+        ...session.result,
+        deliveryState: 'INGESTING',
+        ingestIdempotencyKey: idempotencyKey,
+        ingestRequestHash: null,
+        ingestAuthority: authority,
+        ingest: null,
+      },
+    };
+    calls.push(['ingest-begin', id, idempotencyKey, authority]);
+    return session;
+  },
+  async setIngestRequestHash(_sender, id, idempotencyKey, requestHash) {
+    if (!session.result || session.result.resultId !== id
+      || session.result.deliveryState !== 'INGESTING'
+      || session.result.ingestIdempotencyKey !== idempotencyKey) throw new Error('conflict');
+    session = {
+      ...session,
+      result: { ...session.result, ingestRequestHash: requestHash },
+    };
+    calls.push(['ingest-request-hash', id, idempotencyKey, requestHash]);
+    return session;
+  },
+  async resetIngest(_sender, id, idempotencyKey) {
+    if (!session.result || session.result.resultId !== id
+      || session.result.ingestIdempotencyKey !== idempotencyKey) throw new Error('conflict');
+    session = {
+      ...session,
+      result: {
+        resultId: id, reviewState: 'APPROVED', deliveryState: 'NOT_INGESTED',
+        ingestIdempotencyKey: null, ingestRequestHash: null, ingestAuthority: null, ingest: null,
+      },
+    };
+    return session;
+  },
+  async setIngestResult(_sender, id, idempotencyKey, authority, ingest) {
+    assert.equal('lifecycleAuthority' in authority, false);
+    if (!session.result || session.result.resultId !== id
+      || session.result.reviewState !== 'APPROVED'
+      || !/^[a-f0-9]{64}$/u.test(String(session.result.ingestRequestHash || ''))) {
+      throw Object.assign(new Error('conflict'), {
+        code: 'SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_CONFLICT',
+      });
+    }
+    if (session.result.deliveryState === 'BOUND') {
+      if (session.result.ingestIdempotencyKey !== idempotencyKey) {
+        throw Object.assign(new Error('conflict'), {
+          code: 'SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_CONFLICT',
+        });
+      }
+      return session;
+    }
+    session = {
+      ...session,
+      result: {
+        ...session.result,
+        deliveryState: 'BOUND',
+        ingestIdempotencyKey: idempotencyKey,
+        ingestAuthority: authority,
+        ingest,
+      },
+    };
+    calls.push(['ingest-state', id, idempotencyKey, ingest]);
     return session;
   },
   async clearResult(_sender, id) {
@@ -114,10 +227,11 @@ const sessionManager = {
     return previous;
   },
 };
+let resolvedLaunchContext = launchContext;
 const launchClient = {
   async resolve(value) {
     calls.push(['resolve', value]);
-    return launchContext;
+    return resolvedLaunchContext;
   },
 };
 const profile = {
@@ -176,7 +290,7 @@ const vault = {
     return { ...publicResult, reviewState: 'APPROVED', reviewedAt: '2026-07-26T10:01:00.000Z' };
   },
   reject() {
-    if (!vaultEntry || vaultEntry.reviewState !== 'CANDIDATE_READY') {
+    if (!vaultEntry || !['CANDIDATE_READY', 'APPROVED'].includes(vaultEntry.reviewState)) {
       throw Object.assign(new Error('invalid review'), {
         code: 'SS_ERP_BYOK_RESULT_REVIEW_INVALID',
       });
@@ -187,7 +301,18 @@ const vault = {
   release(id) { calls.push(['release-vault', id]); vaultEntry = null; return true; },
 };
 const authorityGuard = {
-  async capture() { return { lifecycleAuthority: { epoch: 1 } }; },
+  async capture(candidate = binding) {
+    return {
+      lifecycleAuthority: { epoch: 1 },
+      ownerUserId: candidate.ownerUserId,
+      deviceSessionId: candidate.deviceSessionId,
+      shopId: candidate.shopId,
+      workflowId: candidate.workflowId,
+      draftRevision: candidate.draftRevision,
+      draftVersion: candidate.draftVersion,
+      policyRevision: candidate.policyRevision,
+    };
+  },
   async commitGeneratedResult({ vault: selectedVault }) { return selectedVault.put(); },
   matchesVaultAuthority(candidate, expectedBinding) {
     return candidate === vaultEntry && expectedBinding === binding;
@@ -200,11 +325,36 @@ const previewBroker = {
   },
   releaseResult(id) { calls.push(['release-preview', id]); return 1; },
 };
+let ingestGate = null;
+let ingestFailure = null;
+let ingestRecoveryFailure = null;
+let ingestOperationState = { dispatched: true, status: 'UNKNOWN_OUTCOME' };
+const ingestClient = {
+  async ingest(input, authority, commitAccepted, commitRequestHash) {
+    calls.push(['ingest', input, authority]);
+    if (commitRequestHash) await commitRequestHash(ingestRequestHash);
+    if (ingestGate) await ingestGate.promise;
+    if (ingestFailure) throw ingestFailure;
+    if (commitAccepted) await commitAccepted(ingestReceipt);
+    calls.push(['release-vault', input.resultId]);
+    vaultEntry = null;
+    return ingestReceipt;
+  },
+  async recover(input, authority, commitAccepted) {
+    calls.push(['ingest-recover', input, authority]);
+    assert.equal(input.requestHash, ingestRequestHash);
+    if (ingestRecoveryFailure) throw ingestRecoveryFailure;
+    if (commitAccepted) await commitAccepted({ ...ingestReceipt, replayed: true });
+    return { ...ingestReceipt, replayed: true };
+  },
+  discardResult(id) { calls.push(['discard-ingest', id]); return 1; },
+  getOperationState() { return ingestOperationState; },
+};
 
 const dispatcher = api.createDispatcher({
   messageTypes: MESSAGE_TYPES,
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
-  providerClient, vault, authorityGuard, previewBroker,
+  providerClient, vault, authorityGuard, previewBroker, ingestClient,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
 });
 
@@ -251,7 +401,8 @@ const executeResponse = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER
 assert.equal(executeResponse.ok, true);
 assert.equal(executeResponse.data.resultId, resultId);
 assert.deepEqual(JSON.parse(JSON.stringify(session.result)), {
-  resultId, reviewState: 'CANDIDATE_READY',
+  resultId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED',
+  ingestIdempotencyKey: null, ingestRequestHash: null, ingestAuthority: null, ingest: null,
 });
 assert.equal(session.operation, null);
 
@@ -267,13 +418,300 @@ const approved = await dispatcher.handlers[MESSAGE_TYPES.REVIEW_RESULT]({
 assert.equal(approved.ok, true);
 assert.equal(approved.data.reviewState, 'APPROVED');
 assert.equal(approved.data.deliveryState, 'NOT_INGESTED');
+const ingested = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(ingested.ok, true);
+assert.equal(ingested.data.deliveryState, 'BOUND');
+assert.equal(ingested.data.ingest.receiptId, 'receipt-1');
+assert.equal(session.result.deliveryState, 'BOUND');
+assert.equal(session.result.ingestRequestHash, ingestRequestHash);
+assert.equal(session.result.ingest.boundDraftVersion, 5);
+assert.equal(session.result.ingestAuthority.deviceSessionId, 'session-1');
+assert.equal(vaultEntry, null, 'session receipt must commit before successful Blob release');
+assert.equal(calls.some((row) => row[0] === 'release-preview' && row[1] === resultId), true);
+const ingestCall = calls.find((row) => row[0] === 'ingest');
+const initialIngestIdempotencyKey = ingestCall[1].idempotencyKey;
+assert.match(initialIngestIdempotencyKey, /^wb_ingest_[a-f0-9]{48}$/u);
+assert.deepEqual(JSON.parse(JSON.stringify(ingestCall[1])), {
+  resultId, shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentMode: 'APPEND',
+  replaceConfirmed: false, assignmentOrdinal: 2,
+  idempotencyKey: initialIngestIdempotencyKey,
+  requestHash: null,
+});
+const ingestReplay = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.deepEqual(JSON.parse(JSON.stringify(ingestReplay.data)), JSON.parse(JSON.stringify(ingested.data)));
+assert.equal(calls.filter((row) => row[0] === 'ingest').length, 1);
+const recoverBound = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(recoverBound.data)),
+  JSON.parse(JSON.stringify(ingested.data)),
+  'BOUND recovery must replay the exact persisted receipt without another status request',
+);
+assert.equal(calls.filter((row) => row[0] === 'ingest-recover').length, 0);
+resolvedLaunchContext = {
+  ...launchContext,
+  draftRevision: 4,
+  draftVersion: 5,
+  assignmentOrdinal: 3,
+};
+const boundState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({ payload: {}, sender });
+assert.equal(boundState.data.deliveryState, 'BOUND');
+assert.equal(boundState.data.result.ingest.assetId, 'asset-1');
+resolvedLaunchContext = launchContext;
+
+session = {
+  ...session,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+    ingestIdempotencyKey: initialIngestIdempotencyKey,
+    ingestRequestHash,
+    ingestAuthority: {
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4, policyRevision: 'policy-7',
+    },
+    ingest: null,
+  },
+};
+resolvedLaunchContext = { ...launchContext, draftRevision: 4, draftVersion: 5 };
+const resolvesBeforeRecovery = calls.filter((row) => row[0] === 'resolve').length;
+const recoveredIngest = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(recoveredIngest.ok, true);
+assert.equal(recoveredIngest.data.deliveryState, 'BOUND');
+assert.equal(recoveredIngest.data.ingest.replayed, true);
+assert.equal(session.result.deliveryState, 'BOUND');
+assert.equal(
+  calls.filter((row) => row[0] === 'resolve').length,
+  resolvesBeforeRecovery,
+  'receipt recovery must not reject the immutable source context after the draft advanced',
+);
+assert.equal(calls.filter((row) => row[0] === 'ingest-recover').length, 1);
+resolvedLaunchContext = launchContext;
+
+session = {
+  ...session,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+    ingestIdempotencyKey: initialIngestIdempotencyKey,
+    ingestRequestHash,
+    ingestAuthority: {
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4, policyRevision: 'policy-7',
+    },
+    ingest: null,
+  },
+};
+vaultEntry = { ...entry, reviewState: 'APPROVED' };
+ingestRecoveryFailure = Object.assign(new Error('not committed'), {
+  code: 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED',
+});
+const uploadsBeforeNotCommittedRecovery = calls.filter((row) => row[0] === 'ingest').length;
+const resumedIngest = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(resumedIngest.ok, true);
+assert.equal(session.result.deliveryState, 'BOUND');
+assert.equal(
+  calls.filter((row) => row[0] === 'ingest').length,
+  uploadsBeforeNotCommittedRecovery + 1,
+  'a user recovery action may resend the same Blob only after NOT_COMMITTED is authoritative',
+);
+ingestRecoveryFailure = null;
+
+session = {
+  ...session,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+    ingestIdempotencyKey: initialIngestIdempotencyKey,
+    ingestRequestHash,
+    ingestAuthority: {
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4, policyRevision: 'policy-7',
+    },
+    ingest: null,
+  },
+};
+vaultEntry = { ...entry, reviewState: 'APPROVED' };
+ingestRecoveryFailure = Object.assign(new Error('no authenticated grant exists'), {
+  code: 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND',
+  outcome: 'FAILED_FINAL',
+});
+ingestOperationState = null;
+const discardsBeforeAbsentReceipt = calls.filter((row) => row[0] === 'discard-ingest').length;
+const absentReceipt = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(absentReceipt.ok, false);
+assert.equal(absentReceipt.errorCode, 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND');
+assert.equal(session.result.deliveryState, 'NOT_INGESTED');
+assert.equal(
+  calls.filter((row) => row[0] === 'discard-ingest').length,
+  discardsBeforeAbsentReceipt + 1,
+  'a resettable terminal recovery must purge its retired client operation',
+);
+ingestRecoveryFailure = null;
+const retryAfterAbsentReceipt = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(retryAfterAbsentReceipt.ok, true);
+const retriedIngestCall = calls.filter((row) => row[0] === 'ingest').at(-1);
+assert.match(retriedIngestCall[1].idempotencyKey, /^wb_ingest_[a-f0-9]{48}$/u);
+assert.notEqual(
+  retriedIngestCall[1].idempotencyKey,
+  initialIngestIdempotencyKey,
+  'a proven absent grant must retry with a fresh idempotency identity',
+);
+
+session = {
+  ...session,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+    ingestIdempotencyKey: initialIngestIdempotencyKey,
+    ingestRequestHash,
+    ingestAuthority: {
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4, policyRevision: 'policy-7',
+    },
+    ingest: null,
+  },
+};
+vaultEntry = { ...entry, reviewState: 'APPROVED' };
+ingestRecoveryFailure = Object.assign(new Error('failed'), {
+  code: 'SS_ERP_BYOK_INGEST_RECEIPT_FAILED',
+  outcome: 'FAILED_FINAL',
+});
+ingestOperationState = { dispatched: true, status: 'FAILED_FINAL' };
+const terminalRecovery = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(terminalRecovery.ok, false);
+assert.equal(terminalRecovery.errorCode, 'SS_ERP_BYOK_INGEST_RECEIPT_FAILED');
+assert.equal(session.result, null, 'an immutable FAILED receipt must remove the candidate');
+assert.equal(vaultEntry, null, 'an immutable FAILED receipt must release temporary bytes');
+assert.equal(
+  calls.some((row) => row[0] === 'discard-ingest' && row[1] === resultId),
+  true,
+  'terminal candidate cleanup must also purge the ingest operation',
+);
+
+session = {
+  ...session,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+    ingestIdempotencyKey: initialIngestIdempotencyKey,
+    ingestRequestHash,
+    ingestAuthority: {
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4, policyRevision: 'policy-7',
+    },
+    ingest: null,
+  },
+};
+vaultEntry = null;
+ingestRecoveryFailure = Object.assign(new Error('not committed'), {
+  code: 'SS_ERP_BYOK_INGEST_RECEIPT_NOT_COMMITTED',
+  outcome: 'UNKNOWN_OUTCOME',
+});
+ingestOperationState = { dispatched: true, status: 'UNKNOWN_OUTCOME' };
+const uploadsBeforeEmptyVaultRecovery = calls.filter((row) => row[0] === 'ingest').length;
+const emptyVaultRecovery = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(emptyVaultRecovery.ok, false);
+assert.equal(session.result, null, 'restart recovery without Blob bytes must exit to a clear state');
+assert.equal(calls.filter((row) => row[0] === 'ingest').length, uploadsBeforeEmptyVaultRecovery);
+ingestRecoveryFailure = null;
+ingestOperationState = { dispatched: true, status: 'UNKNOWN_OUTCOME' };
+
+session = {
+  context: launchContext, sourceTabId: 12, sourceDocumentId: 'source-document-1',
+  workbenchTabId: 77, workbenchDocumentId: 'document-1', operation: null,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'NOT_INGESTED',
+    ingestIdempotencyKey: null, ingestRequestHash: null, ingestAuthority: null, ingest: null,
+  },
+};
+vaultEntry = { ...entry, reviewState: 'APPROVED' };
+ingestFailure = Object.assign(new Error('grant disappeared before upload'), {
+  code: 'SS_ERP_BYOK_INGEST_GRANT_UNAVAILABLE',
+  outcome: 'FAILED_RETRYABLE',
+  resetGrant: true,
+});
+ingestOperationState = { dispatched: true, status: 'FAILED_RETRYABLE' };
+const discardsBeforeAbsentGrant = calls.filter((row) => row[0] === 'discard-ingest').length;
+const absentGrant = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(absentGrant.ok, false);
+assert.equal(session.result.deliveryState, 'NOT_INGESTED');
+assert.notEqual(vaultEntry, null, 'a retryable grant failure must preserve the approved candidate');
+assert.equal(
+  calls.filter((row) => row[0] === 'discard-ingest').length,
+  discardsBeforeAbsentGrant + 1,
+  'resetting a retryable grant failure must purge its old client operation',
+);
+const absentGrantKey = calls.filter((row) => row[0] === 'ingest').at(-1)[1].idempotencyKey;
+
+ingestFailure = Object.assign(new Error('grant was rejected before binary dispatch'), {
+  code: 'SS_ERP_BYOK_INGEST_GRANT_REJECTED',
+  outcome: 'FAILED_FINAL',
+});
+ingestOperationState = { dispatched: false, status: 'FAILED_FINAL' };
+const discardsBeforePreBinaryFinal = calls.filter((row) => row[0] === 'discard-ingest').length;
+const preBinaryFinal = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(preBinaryFinal.ok, false);
+assert.equal(session.result.deliveryState, 'NOT_INGESTED');
+assert.notEqual(vaultEntry, null, 'pre-binary terminal denial must preserve the approved candidate');
+assert.equal(
+  calls.filter((row) => row[0] === 'discard-ingest').length,
+  discardsBeforePreBinaryFinal + 1,
+);
+const preBinaryFinalKey = calls.filter((row) => row[0] === 'ingest').at(-1)[1].idempotencyKey;
+assert.notEqual(preBinaryFinalKey, absentGrantKey);
+
+ingestFailure = null;
+ingestOperationState = { dispatched: true, status: 'UNKNOWN_OUTCOME' };
+const retriedPreBinary = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+});
+assert.equal(retriedPreBinary.ok, true);
+const retriedPreBinaryKey = calls.filter((row) => row[0] === 'ingest').at(-1)[1].idempotencyKey;
+assert.notEqual(
+  retriedPreBinaryKey,
+  preBinaryFinalKey,
+  'a reset pre-binary terminal failure must retry with a fresh idempotency identity',
+);
+
+session = {
+  context: launchContext, sourceTabId: 12, sourceDocumentId: 'source-document-1',
+  workbenchTabId: 77, workbenchDocumentId: 'document-1', operation: null,
+  result: {
+    resultId, reviewState: 'APPROVED', deliveryState: 'NOT_INGESTED',
+    ingestIdempotencyKey: null, ingestRequestHash: null, ingestAuthority: null, ingest: null,
+  },
+};
+vaultEntry = { ...entry, reviewState: 'APPROVED' };
 const rejectApproved = await dispatcher.handlers[MESSAGE_TYPES.REVIEW_RESULT]({
   payload: { resultId, decision: 'REJECT' }, sender,
 });
-assert.equal(rejectApproved.ok, false);
-assert.equal(rejectApproved.errorCode, 'SS_ERP_BYOK_WORKBENCH_RESULT_REVIEW_INVALID');
-assert.equal(session.result.reviewState, 'APPROVED');
-assert.equal(vaultEntry.reviewState, 'APPROVED');
+assert.equal(rejectApproved.ok, true);
+assert.equal(rejectApproved.data.reviewState, 'REJECTED');
+assert.equal(session.result, null);
+assert.equal(vaultEntry, null);
 
 const removed = await dispatcher.removeTab(77);
 assert.equal(removed, true);
@@ -349,6 +787,29 @@ const completedApproval = await concurrentApproval;
 assert.equal(completedApproval.ok, true);
 assert.equal(session.result.reviewState, 'APPROVED');
 assert.equal(vaultEntry.reviewState, 'APPROVED');
+
+let releaseIngestGate;
+ingestGate = { promise: new Promise((resolve) => { releaseIngestGate = resolve; }) };
+const ingestCallsBeforeConcurrency = calls.filter((row) => row[0] === 'ingest').length;
+const firstConcurrentIngest = dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+  authorization: { readiness: { binding } },
+});
+await new Promise((resolve) => setImmediate(resolve));
+const secondConcurrentIngest = await dispatcher.handlers[MESSAGE_TYPES.INGEST]({
+  payload: { resultId }, sender,
+  authorization: { readiness: { binding } },
+});
+assert.equal(secondConcurrentIngest.ok, false);
+assert.equal(secondConcurrentIngest.errorCode, 'SS_ERP_BYOK_WORKBENCH_REVIEW_IN_PROGRESS');
+assert.equal(
+  calls.filter((row) => row[0] === 'ingest').length,
+  ingestCallsBeforeConcurrency + 1,
+  'the shared result lock must allow only one binary ingest',
+);
+releaseIngestGate();
+ingestGate = null;
+assert.equal((await firstConcurrentIngest).data.deliveryState, 'BOUND');
 
 session = {
   context: launchContext, sourceTabId: 12, sourceDocumentId: 'source-document-1',

@@ -11,6 +11,7 @@ import {
   BYOK_GENERATED_ASSET_INGEST_VERSION,
   BYOK_GENERATED_ASSET_NORMALIZER_VERSION,
   createByokGeneratedAssetIngestService,
+  deriveByokGeneratedAssetId,
   normalizeByokGeneratedImage,
   prepareByokGeneratedAsset,
   readBoundedByokImageInput,
@@ -371,6 +372,10 @@ describe('BYOK generated asset normalization and ingest', () => {
       providerResultSha256: rawHash(source),
       normalized: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) },
     });
+    expect(prepared.assetId).toBe(deriveByokGeneratedAssetId({
+      ownerUserId: 'owner-1',
+      idempotencyKey: 'byok-ingest-test-0001',
+    }));
   });
 
   it('uses a typed error with a safe status code', () => {

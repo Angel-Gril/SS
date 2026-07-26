@@ -118,7 +118,7 @@
           <span id="resultStatus" class="state-badge state-pending">等待结果</span>
         </div>
 
-        <figure class="preview-frame">
+        <figure id="previewFrame" class="preview-frame">
           <img
             id="previewImage"
             alt="AI 生成候选图预览"
@@ -128,7 +128,7 @@
         </figure>
 
         <p class="review-note">
-          先检查商品主体、文字、比例和事实一致性。批准只代表允许进入下一步，不会直接写入 ERP 或 Ozon。
+          先检查商品主体、文字、比例和事实一致性。批准后仍需单独点击接收并绑定 ERP；不会直接写入 Ozon。
         </p>
 
         <div class="review-actions">
@@ -137,17 +137,18 @@
         </div>
 
         <div id="approvedNotice" class="approved-notice" role="status" hidden>
-          已批准但尚未上传 ERP。媒体接收与草稿绑定将在下一阶段启用；当前不能发布。
+          已批准但尚未上传 ERP。点击“接收并绑定 ERP”后，服务端会规范化图片并创建精确草稿版本；当前不能发布。
         </div>
       </section>
 
       <section id="emptyResult" class="empty-result" aria-label="工作台安全说明">
         <p class="section-kicker">当前边界</p>
-        <h2>生成、预览、审核</h2>
+        <h2>生成、预览、审核、接收</h2>
         <ul>
           <li>密钥只在扩展后台的当前浏览器会话中使用。</li>
           <li>图片 Blob 通过一次性通道进入此页面，不进入普通消息历史。</li>
-          <li>批准后仍需 ERP 规范化、存储和精确草稿绑定，当前尚未开放。</li>
+          <li>只有明确批准的图片才能通过专用二进制通道进入 ERP 规范化、存储和精确草稿绑定。</li>
+          <li>Ozon 发布仍保持关闭，后续必须再次确认。</li>
         </ul>
       </section>
     </div>

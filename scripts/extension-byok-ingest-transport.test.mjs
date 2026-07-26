@@ -79,6 +79,25 @@ assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.redirect, 'error');
 
+const statusPayload = {
+  contractVersion: 'extension-byok-media-ingest-status/v1',
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 0,
+  idempotencyKey: 'byok-ingest-status-0001',
+};
+const statusResult = await transport.post(
+  '/api/extension-device/byok-media/ingest-status',
+  statusPayload,
+  { requiredScope: 'byok:media:ingest' },
+);
+assert.equal(statusResult.state, 'response');
+assert.equal(requests.length, 2);
+assert.equal(requests[1].url, 'https://erp.example/api/extension-device/byok-media/ingest-status');
+assert.equal(requests[1].init.body, JSON.stringify(statusPayload));
+assert.equal(requests[1].init.headers['X-SS-ERP-Command-Grant'], undefined);
+assert.equal(requests[1].init.credentials, 'omit');
+assert.equal(requests[1].init.cache, 'no-store');
+
 let forbiddenFetches = 0;
 const guarded = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
   credentials: credentials(),
@@ -138,5 +157,105 @@ assert.deepEqual(
   },
   'a policy/shop denial must not be mislabeled as a missing Chrome device scope',
 );
+
+let grantRequiredCredentialClears = 0;
+const grantRequiredTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: {
+    ...credentials(),
+    async clearIfCurrent() { grantRequiredCredentialClears += 1; return true; },
+  },
+  fetchImpl: async () => response(401, {
+    code: 0,
+    errorCode: 'byok_ingest_grant_required',
+  }),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await grantRequiredTransport.postBytes(
+    '/api/extension-device/byok-media/ingest',
+    image,
+    { contentType: 'image/png', manifest, commandGrant: 'g'.repeat(43) },
+  ))),
+  {
+    state: 'http_error',
+    status: 401,
+    body: { code: 0, errorCode: 'byok_ingest_grant_required' },
+  },
+);
+assert.equal(grantRequiredCredentialClears, 0, 'missing grant must not revoke device credentials');
+
+let grantExpiryCredentialClears = 0;
+const grantExpiryTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: {
+    ...credentials(),
+    async clearIfCurrent() { grantExpiryCredentialClears += 1; return true; },
+  },
+  fetchImpl: async () => response(410, {
+    code: 0,
+    errorCode: 'byok_ingest_grant_expired',
+  }),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await grantExpiryTransport.postBytes(
+    '/api/extension-device/byok-media/ingest',
+    image,
+    { contentType: 'image/png', manifest, commandGrant: 'g'.repeat(43) },
+  ))),
+  {
+    state: 'http_error',
+    status: 410,
+    body: { code: 0, errorCode: 'byok_ingest_grant_expired' },
+  },
+);
+assert.equal(grantExpiryCredentialClears, 0, 'grant expiry must not revoke device credentials');
+
+let deviceRevocationCredentialClears = 0;
+const deviceRevocationTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: {
+    ...credentials(),
+    async clearIfCurrent(_operation, reason) {
+      deviceRevocationCredentialClears += 1;
+      assert.equal(reason.status, 410);
+      assert.equal(reason.reason, 'source_workbench_authorization_revoked');
+      return true;
+    },
+  },
+  fetchImpl: async () => response(410, {
+    code: 0,
+    errorCode: 'device_shop_revoked',
+  }),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await deviceRevocationTransport.postBytes(
+    '/api/extension-device/byok-media/ingest',
+    image,
+    { contentType: 'image/png', manifest, commandGrant: 'g'.repeat(43) },
+  ))),
+  { state: 'authorization_required', status: 410 },
+);
+assert.equal(deviceRevocationCredentialClears, 1, 'device revocation must still clear credentials');
+
+const deviceSessionInvalidTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: {
+    ...credentials(),
+    async clearIfCurrent(_operation, reason) {
+      deviceRevocationCredentialClears += 1;
+      assert.equal(reason.status, 401);
+      return true;
+    },
+  },
+  fetchImpl: async () => response(401, {
+    code: 0,
+    errorCode: 'byok_ingest_session_invalid',
+  }),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await deviceSessionInvalidTransport.postBytes(
+    '/api/extension-device/byok-media/ingest',
+    image,
+    { contentType: 'image/png', manifest, commandGrant: 'g'.repeat(43) },
+  ))),
+  { state: 'authorization_required', status: 401 },
+);
+assert.equal(deviceRevocationCredentialClears, 2, 'invalid device sessions must clear credentials');
 
 console.log('extension BYOK ingest transport tests passed');

@@ -51,6 +51,18 @@ const readiness = {
 };
 const resultId = 'br_' + 'b'.repeat(48);
 const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
+const ingestReceipt = {
+  contractVersion: 'extension-byok-generated-asset-ingest-client/v1', replayed: false,
+  receiptId: 'receipt-1', assetId: 'asset-1', provenanceId: 'provenance-1',
+  normalizedSha256: 'f'.repeat(64), mimeType: 'image/png', width: 1024, height: 1024,
+  sourceDraftRevision: 3, sourceDraftVersion: 4,
+  boundDraftRevision: 4, boundDraftVersion: 5,
+  assignmentOrdinal: 0, assignmentSha256: '1'.repeat(64),
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
+const boundResult = {
+  resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+};
 const messages = [];
 const responses = new Map([
   [api.MESSAGE_TYPES.GET_PUBLIC_STATE, { ok: true, data: { mode: 'BYOK' } }],
@@ -70,6 +82,8 @@ const responses = new Map([
     },
   }],
   [api.MESSAGE_TYPES.REVIEW_RESULT, { ok: true, data: { resultId, reviewState: 'APPROVED' } }],
+  [api.MESSAGE_TYPES.INGEST, { ok: true, data: boundResult }],
+  [api.MESSAGE_TYPES.RECOVER_INGEST, { ok: true, data: boundResult }],
 ]);
 const runtime = {
   lastError: null,
@@ -119,9 +133,27 @@ assert.deepEqual(revoked, ['blob:extension-preview-1']);
 
 const approved = await client.reviewResult(resultId, 'APPROVE');
 assert.equal(approved.reviewState, 'APPROVED');
+const ingested = await client.ingestApproved(resultId);
+assert.deepEqual(JSON.parse(JSON.stringify(ingested)), boundResult);
+const recoveredIngest = await client.recoverApprovedIngest(resultId);
+assert.deepEqual(JSON.parse(JSON.stringify(recoveredIngest)), boundResult);
+assert.deepEqual(JSON.parse(JSON.stringify(
+  messages.find((message) => message.type === api.MESSAGE_TYPES.INGEST),
+)), {
+  type: 'ss-erp:ai-image-workbench-ingest',
+  payload: { resultId },
+});
+assert.deepEqual(JSON.parse(JSON.stringify(
+  messages.find((message) => message.type === api.MESSAGE_TYPES.RECOVER_INGEST),
+)), {
+  type: 'ss-erp:ai-image-workbench-ingest-recover',
+  payload: { resultId },
+});
+assert.equal(api.DEVICE_INVALIDATED_MESSAGE, 'ss-erp:byok-device-session-invalidated');
 assert.equal(messages.some((message) => JSON.stringify(message).includes('apiKey')), false);
 assert.equal(messages.some((message) => JSON.stringify(message).includes('base64')), false);
 assert.equal(messages.some((message) => JSON.stringify(message).includes('blob:extension-preview')), false);
+assert.equal(messages.some((message) => JSON.stringify(message).includes('imageBytes')), false);
 assert.deepEqual(JSON.parse(JSON.stringify(
   messages.find((message) => message.type === api.MESSAGE_TYPES.GET_PUBLIC_STATE),
 )), {
@@ -135,5 +167,82 @@ for (const invalid of [
 ]) {
   await assert.rejects(async () => client.generate(invalid), /INPUT_INVALID/u);
 }
+
+function loadClientWithRuntime(runtimeValue, timers) {
+  const isolated = {
+    Array, Blob, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String,
+    clearTimeout: timers.clearTimeout,
+    setTimeout: timers.setTimeout,
+  };
+  isolated.globalThis = isolated;
+  vm.runInNewContext(readFileSync(modulePath, 'utf8'), isolated, { filename: modulePath });
+  return isolated.SS_ERP_BYOK_WORKBENCH_CLIENT.createClient({
+    runtime: runtimeValue,
+    BroadcastChannel: FakeBroadcastChannel,
+    URL: urlApi,
+    now: () => new Date('2026-07-26T10:00:00.000Z'),
+    timeoutMs: 1000,
+  });
+}
+
+const recoveryTimers = [];
+const recoveryClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage() {},
+}, {
+  setTimeout(callback, delay) {
+    recoveryTimers.push({ callback, delay });
+    return recoveryTimers.length;
+  },
+  clearTimeout() {},
+});
+const timedOutRecovery = recoveryClient.recoverApprovedIngest(resultId);
+assert.equal(recoveryTimers[0].delay, 130_000, 'receipt recovery shares the full ingest timeout');
+recoveryTimers[0].callback();
+await assert.rejects(
+  timedOutRecovery,
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+);
+
+const lastErrorRuntime = {
+  lastError: null,
+  sendMessage(_message, callback) {
+    this.lastError = { message: 'worker response channel closed' };
+    callback(undefined);
+    this.lastError = null;
+  },
+};
+const lastErrorClient = loadClientWithRuntime(lastErrorRuntime, {
+  setTimeout() { return 1; },
+  clearTimeout() {},
+});
+await assert.rejects(
+  lastErrorClient.recoverApprovedIngest(resultId),
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+);
+
+const missingResponseClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage(_message, callback) { callback(undefined); },
+}, {
+  setTimeout() { return 1; },
+  clearTimeout() {},
+});
+await assert.rejects(
+  missingResponseClient.recoverApprovedIngest(resultId),
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+);
+
+const throwingClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage() { throw new Error('runtime unavailable'); },
+}, {
+  setTimeout() { return 1; },
+  clearTimeout() {},
+});
+await assert.rejects(
+  throwingClient.recoverApprovedIngest(resultId),
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+);
 
 console.log('extension BYOK workbench client tests passed');

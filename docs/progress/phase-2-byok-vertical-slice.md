@@ -1,6 +1,6 @@
 # Phase 2: Secure Single-Image BYOK Vertical Slice
 
-Progress: 7/10 tasks.
+Progress: 8/10 tasks.
 
 ## Tasks
 
@@ -25,7 +25,7 @@ Progress: 7/10 tasks.
 - [x] `UI-02A` Build minimal original single-image workbench (`P0`, `L`). Acceptance: a
   trusted launch binds exact product/shop/draft; user can select BYOK, edit Prompt, generate,
   observe truthful state, reject, or accept; injected UI remains a compact launcher.
-- [ ] `INT-01` Add background asset ingest client (`P0`, `L`). Acceptance: accepted Blob
+- [x] `INT-01` Add background asset ingest client (`P0`, `L`). Acceptance: accepted Blob
   bytes use dedicated grant/hash/idempotency without normal message history or persistent
   bytes; temporary data clears on reject, expiry, and success.
 - [ ] `INT-02` Bridge accepted result to current publisher (`P0`, `L`). Acceptance: final
@@ -109,5 +109,22 @@ Progress: 7/10 tasks.
   asserting one upload winner plus one replay without depending on Promise arrival order and by
   giving the native ESM child-process case a 15-second outer test budget. Their focused suites and
   the complete preflight then passed.
+- `INT-01` now moves approved Blob bytes only inside the background worker through the dedicated
+  raw ingest transport. It durably commits the exact request hash before binary dispatch, obtains
+  the device-scoped command grant, and binds the normalized ERP-owned asset to the exact draft,
+  SKU, slot, and ordinal without placing base64 or bytes in runtime messages or persistent storage.
+- Receipt recovery is authoritative across page reload and MV3 restart. `PENDING` and unknown
+  outcomes remain status-only; `NOT_COMMITTED` retires the old grant and renews it before the same
+  bytes may be resent; exact authenticated `NOT_FOUND` purges the retired operation and uses a new
+  random idempotency identity; immutable `FAILED` clears the candidate, preview, Blob, and client
+  operation. Pre-binary final failures preserve the approved candidate and purge their operation.
+- Upload staging status now derives the same owner/idempotency asset ID as ingest and requires the
+  exact staging ID, asset ID, owner, device session, request hash, and active state, preventing two
+  different idempotency keys with the same request hash from colliding. Grant-level binary 401/410
+  errors no longer clear valid device credentials, while real device-session revocation still does.
+- Final `INT-01` verification passed 10 focused extension suites, 162 directly affected server
+  tests, workspace lint/typecheck, full preflight, and the full server suite (3,840 passed and 164
+  skipped). Rebuilt Cloud verification passed 303 checks with zero warnings; Local passed 299 with
+  its two expected offline-package permission warnings. Final correctness review found no blocker.
 - All BYOK flags and the administrator policy remain default-off. No real Provider request,
   ERP AI charge, production mutation, Ozon write, or VPS deployment occurred in this phase.

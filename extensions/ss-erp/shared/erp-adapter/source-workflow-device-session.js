@@ -11,6 +11,7 @@
   var MEDIA_EDIT_SOURCE_PATH = '/api/extension-device/source-workbench/media-edit-source';
   var MEDIA_EDIT_MASK_PATH = '/api/extension-device/source-workbench/media-edit-mask';
   var BYOK_MEDIA_INGEST_PATH = '/api/extension-device/byok-media/ingest';
+  var BYOK_MEDIA_INGEST_STATUS_PATH = '/api/extension-device/byok-media/ingest-status';
   var BYOK_READINESS_PATH = '/api/extension-device/byok-media/readiness';
   var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([
     MEDIA_EDIT_SOURCE_PATH,
@@ -33,6 +34,7 @@
       MEDIA_EDIT_SOURCE_PATH,
       MEDIA_EDIT_MASK_PATH,
       BYOK_MEDIA_INGEST_PATH,
+      BYOK_MEDIA_INGEST_STATUS_PATH,
       BYOK_READINESS_PATH,
     ]);
     var allowed = method === 'GET'
@@ -246,6 +248,17 @@
           });
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
+          }
+          if ((response.status === 401 || response.status === 410) && binaryRequest) {
+            var grantErrorBody = null;
+            try { grantErrorBody = await readJsonResponse(response); } catch {}
+            if (grantErrorBody && [
+              'byok_ingest_grant_required',
+              'byok_ingest_grant_expired',
+              'byok_ingest_grant_revoked',
+            ].includes(grantErrorBody.errorCode)) {
+              return { state: 'http_error', status: response.status, body: grantErrorBody };
+            }
           }
           if (response.status === 401 || response.status === 410) {
             if (typeof credentials.clearIfCurrent === 'function') {

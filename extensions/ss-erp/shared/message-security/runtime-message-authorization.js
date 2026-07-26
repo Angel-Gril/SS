@@ -47,6 +47,7 @@
       OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
       REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
       INGEST: 'ss-erp:ai-image-workbench-ingest',
+      RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
       PUBLISH: 'ss-erp:ai-image-workbench-publish',
     }),
   });
@@ -67,7 +68,6 @@
     MESSAGE_TYPES.PROVIDER_SETTINGS.TEST_CAPABILITY,
     MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
     MESSAGE_TYPES.WORKBENCH.RECOVER_PROVIDER,
-    MESSAGE_TYPES.WORKBENCH.INGEST,
     MESSAGE_TYPES.WORKBENCH.PUBLISH,
   ]);
   var DRAFT_BOUND_TYPES = new Set([
@@ -379,6 +379,9 @@
   function assertSafeString(value, forbiddenValues) {
     if (typeof value !== 'string') return;
     if (value.length > MAX_STRING_LENGTH) throw authError('SS_ERP_RUNTIME_MESSAGE_PAYLOAD_INVALID');
+    if (/^(?:iVBORw0KGgo|\/9j\/|UklGR)[a-z0-9+/_=-]{128,}$/iu.test(value)) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_BINARY_FORBIDDEN');
+    }
     if (/^data:(?:image|audio|video)\/[^;]+;base64,/iu.test(value)
       || /\bbearer\s+[a-z0-9._~+/=-]{8,}/iu.test(value)
       || /\b(?:sk|rk)[-_][a-z0-9._-]{12,}/iu.test(value)
@@ -410,6 +413,11 @@
     state.nodes += 1;
     if (Array.isArray(value)) {
       if (value.length > MAX_NODES) throw authError('SS_ERP_RUNTIME_MESSAGE_PAYLOAD_INVALID');
+      if (value.length >= 4 && value.every(function (item) {
+        return Number.isInteger(item) && item >= 0 && item <= 255;
+      })) {
+        throw authError('SS_ERP_RUNTIME_MESSAGE_BINARY_FORBIDDEN');
+      }
       state.depth += 1;
       value.forEach(function (item) {
         inspectPublicValue(item, state, forbiddenValues, responseMode);

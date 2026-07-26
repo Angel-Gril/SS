@@ -10,9 +10,19 @@ vm.runInNewContext(source, context, { filename: modulePath });
 const api = context.SS_ERP_BYOK_GENERATED_RESULT_VAULT;
 let now = new Date('2026-07-25T15:00:00.000Z');
 let randomByte = 1;
+let nextTimerId = 1;
+const timers = new Map();
+const discardedResults = [];
 const vault = api.createVault({
   now: () => now,
   randomValues(bytes) { bytes.fill(randomByte++); return bytes; },
+  setTimeout(callback, delay) {
+    const id = nextTimerId++;
+    timers.set(id, { callback, delay });
+    return id;
+  },
+  clearTimeout(id) { timers.delete(id); },
+  onDiscardedResult(resultId) { discardedResults.push(resultId); },
 });
 
 const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
@@ -95,7 +105,19 @@ const approved = vault.approve(stored.resultId, binding());
 assert.equal(approved.reviewState, 'APPROVED');
 assert.equal(approved.reviewedAt, '2026-07-25T15:00:00.000Z');
 assert.equal(vault.getApprovedForBackground(stored.resultId).blob, blob);
-assert.throws(() => vault.reject(stored.resultId, binding()), /REVIEW_INVALID/u);
+const approvedRejected = vault.put(
+  result({ idempotencyKey: 'provider-generate-approved-reject' }),
+  binding(),
+  authority(),
+);
+vault.approve(approvedRejected.resultId, binding());
+assert.deepEqual(
+  JSON.parse(JSON.stringify(vault.reject(approvedRejected.resultId, binding()))),
+  { resultId: approvedRejected.resultId, reviewState: 'REJECTED' },
+  'an approved but not ingested result remains explicitly discardable',
+);
+assert.throws(() => vault.getForBackground(approvedRejected.resultId), /NOT_FOUND/u);
+assert.ok(discardedResults.includes(approvedRejected.resultId));
 assert.throws(
   () => vault.put(
     result({ idempotencyKey: 'provider-generate-context' }),
@@ -105,7 +127,14 @@ assert.throws(
   /RESULT_INVALID/u,
 );
 
+const expiringEntry = vault.getForBackground(stored.resultId);
 now = new Date('2026-07-25T15:10:00.001Z');
+for (const [id, timer] of [...timers]) {
+  timers.delete(id);
+  timer.callback();
+}
+assert.equal(expiringEntry.blob, null, 'TTL callback must release Blob bytes without a later vault read');
+assert.ok(discardedResults.includes(stored.resultId), 'TTL cleanup must notify dependent ingest state');
 assert.throws(() => vault.getForBackground(stored.resultId), /NOT_FOUND/u);
 assert.equal(vault.totalBytes(), 0);
 

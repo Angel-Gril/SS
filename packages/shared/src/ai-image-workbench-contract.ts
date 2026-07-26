@@ -69,6 +69,16 @@ export const AI_IMAGE_WORKBENCH_UNKNOWN_OUTCOME_POLICY = Object.freeze({
   recoveryRequirement: 'PROVIDER_LOOKUP_OR_STABLE_IDEMPOTENCY',
 } as const);
 
+export const AI_IMAGE_WORKBENCH_BYOK_INGEST_STATUS_CONTRACT = Object.freeze({
+  contractVersion: 'extension-byok-media-ingest-status/v1' as const,
+  requestHashPattern: '^[a-f0-9]{64}$' as const,
+  states: Object.freeze({
+    notCommitted: 'NOT_COMMITTED' as const,
+    pending: 'PENDING' as const,
+    succeeded: 'SUCCEEDED' as const,
+  }),
+});
+
 export type AiImageWorkbenchProviderOutcome =
   | 'SUCCEEDED'
   | 'FAILED_RETRYABLE'
@@ -140,6 +150,7 @@ export const AI_IMAGE_WORKBENCH_ROUTES = Object.freeze({
   BYOK: Object.freeze({
     readiness: '/api/extension-device/byok-media/readiness',
     ingest: '/api/extension-device/byok-media/ingest',
+    ingestStatus: '/api/extension-device/byok-media/ingest-status',
     publish: '/api/extension-device/ozon-publish/execute',
   }),
 } as const);

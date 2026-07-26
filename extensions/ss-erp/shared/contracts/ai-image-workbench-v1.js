@@ -29,6 +29,15 @@
     automaticRetryAllowed: false,
     recoveryRequirement: 'PROVIDER_LOOKUP_OR_STABLE_IDEMPOTENCY',
   });
+  var BYOK_INGEST_STATUS = Object.freeze({
+    contractVersion: 'extension-byok-media-ingest-status/v1',
+    requestHashPattern: '^[a-f0-9]{64}$',
+    states: Object.freeze({
+      notCommitted: 'NOT_COMMITTED',
+      pending: 'PENDING',
+      succeeded: 'SUCCEEDED',
+    }),
+  });
 
   function frozenList(values) {
     return Object.freeze(values.slice());
@@ -80,6 +89,7 @@
     BYOK: Object.freeze({
       readiness: '/api/extension-device/byok-media/readiness',
       ingest: '/api/extension-device/byok-media/ingest',
+      ingestStatus: '/api/extension-device/byok-media/ingest-status',
       publish: '/api/extension-device/ozon-publish/execute',
     }),
   });
@@ -242,6 +252,7 @@
     SLOT_STATES: SLOT_STATES,
     LIMITS: LIMITS,
     UNKNOWN_OUTCOME_POLICY: UNKNOWN_OUTCOME_POLICY,
+    BYOK_INGEST_STATUS: BYOK_INGEST_STATUS,
     ROUTES: ROUTES,
     COMMANDS: COMMANDS,
     ContractError: ContractError,
@@ -252,4 +263,4 @@
     resolveProviderOutcome: resolveProviderOutcome,
     assertPublicPayload: assertPublicPayload,
   });
-})(window);
+})(typeof globalThis !== 'undefined' ? globalThis : window);

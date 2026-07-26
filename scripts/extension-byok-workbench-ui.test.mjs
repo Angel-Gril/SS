@@ -30,6 +30,7 @@ assert.match(html, /id=["']negativePromptInput["'][^>]*maxlength=["']4000["']/u)
 assert.match(html, /id=["']generateButton["']/u);
 assert.match(html, /id=["']rejectButton["']/u);
 assert.match(html, /id=["']approveButton["']/u);
+assert.match(html, /接收并绑定 ERP/u);
 assert.match(html, /href=["']\.\/ai-provider-settings\.html["'][^>]*target=["']_blank["']/u);
 assert.match(html, /id=["']contextKicker["']/u);
 assert.match(html, /id=["']contextBadge["']/u);
@@ -43,6 +44,9 @@ assert.match(css, /prefers-reduced-motion/u);
 assert.doesNotMatch(pageSource, /innerHTML|localStorage|storage\.local|storage\.sync|apiKey/u);
 assert.match(pageSource, /event\.isTrusted\s*!==\s*true/u);
 assert.match(pageSource, /preview\.revoke\(\)/u);
+assert.doesNotMatch(pageSource, /只查询同一幂等回执|不会重新生成或重复上传/u);
+assert.match(pageSource, /先核对[^。]*回执[^。]*没有活动[^。]*同一图片字节/u);
+assert.match(pageSource, /接收身份不可重用[^。]*候选图已清除[^。]*重新生成/u);
 assert.match(verifierSource, /pages\/ai-image-workbench\.html/u);
 assert.match(verifierSource, /shared\/byok\/workbench-runtime-handler\.js/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-ui\.test\.mjs/u);
@@ -91,7 +95,7 @@ const ids = [
   'contextKicker', 'contextBadge',
   'executionModeByok', 'executionModeHosted', 'profileSelect', 'profileSummary',
   'promptInput', 'negativePromptInput', 'sizeSelect', 'generateButton',
-  'resultPanel', 'previewImage', 'previewMeta', 'resultStatus', 'rejectButton',
+  'resultPanel', 'previewFrame', 'previewImage', 'previewMeta', 'resultStatus', 'rejectButton',
   'approveButton', 'approvedNotice', 'refreshButton',
   'emptyResult',
 ];
@@ -149,6 +153,16 @@ const readiness = {
   expiresAt: '2099-07-26T10:10:00.000Z',
 };
 const resultId = 'br_' + 'b'.repeat(48);
+const candidateExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+const ingestReceipt = {
+  contractVersion: 'extension-byok-generated-asset-ingest-client/v1', replayed: false,
+  receiptId: 'receipt-1', assetId: 'asset-1', provenanceId: 'provenance-1',
+  normalizedSha256: 'd'.repeat(64), mimeType: 'image/png', width: 1024, height: 1024,
+  sourceDraftRevision: 3, sourceDraftVersion: 4,
+  boundDraftRevision: 4, boundDraftVersion: 5,
+  assignmentOrdinal: 2, assignmentSha256: 'e'.repeat(64),
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
 const calls = [];
 let revokeCount = 0;
 let generateMode = 'unknown';
@@ -174,6 +188,7 @@ const client = {
     }
     return {
       resultId, reviewState: 'CANDIDATE_READY',
+      expiresAt: candidateExpiresAt,
       image: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
     };
   },
@@ -196,9 +211,26 @@ const client = {
       ? { resultId: id, reviewState: 'APPROVED', deliveryState: 'NOT_INGESTED' }
       : { resultId: id, reviewState: 'REJECTED' };
   },
+  async ingestApproved(id) {
+    calls.push(['ingest', id]);
+    return {
+      resultId: id,
+      reviewState: 'APPROVED',
+      deliveryState: 'BOUND',
+      ingest: ingestReceipt,
+    };
+  },
+  async recoverApprovedIngest(id) {
+    calls.push(['recover-ingest', id]);
+    return {
+      resultId: id, reviewState: 'APPROVED', deliveryState: 'BOUND',
+      ingest: { ...ingestReceipt, replayed: true },
+    };
+  },
 };
 let randomByte = 1;
 const windowListeners = {};
+const runtimeMessageListeners = [];
 const context = {
   Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
   document: {
@@ -208,14 +240,23 @@ const context = {
   crypto: {
     getRandomValues(bytes) { bytes.fill(randomByte++); return bytes; },
   },
-  chrome: { runtime: {} },
+  chrome: {
+    runtime: {
+      onMessage: {
+        addListener(listener) { runtimeMessageListeners.push(listener); },
+      },
+    },
+  },
   setTimeout,
   clearTimeout,
 };
 context.window = context;
 context.globalThis = context;
 context.addEventListener = (type, listener) => { windowListeners[type] = listener; };
-context.SS_ERP_BYOK_WORKBENCH_CLIENT = { createClient() { return client; } };
+context.SS_ERP_BYOK_WORKBENCH_CLIENT = {
+  DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
+  createClient() { return client; },
+};
 
 vm.runInNewContext(pageSource, context, { filename: pagePath });
 await new Promise((resolve) => setImmediate(resolve));
@@ -232,6 +273,7 @@ assert.equal(nodes.contextBadge.textContent, '精确草稿');
 
 publicState.result = {
   resultId, reviewState: 'CANDIDATE_READY',
+  expiresAt: candidateExpiresAt,
   image: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
 };
 previewMode = 'error';
@@ -311,6 +353,67 @@ assert.deepEqual(calls.filter((row) => row[0] === 'review').at(-1).slice(1), [re
 assert.equal(nodes.approvedNotice.hidden, false);
 assert.match(nodes.resultStatus.textContent, /已批准.*尚未上传 ERP/u);
 assert.equal(nodes.generateButton.disabled, true);
+assert.equal(nodes.approveButton.disabled, false, 'approved result can advance to ERP ingest');
+assert.match(nodes.approveButton.textContent, /接收.*ERP/u);
+const readinessCallsBeforeIngest = calls.filter((row) => row[0] === 'readiness').length;
+nodes.approveButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(
+  calls.filter((row) => row[0] === 'readiness').length,
+  readinessCallsBeforeIngest,
+  'ingest uses its dedicated server grant instead of generation readiness',
+);
+const ingestCall = calls.find((row) => row[0] === 'ingest');
+assert.equal(ingestCall[1], resultId);
+assert.match(nodes.resultStatus.textContent, /已绑定 ERP/u);
+assert.match(nodes.approvedNotice.textContent, /receipt-1.*v5/u);
+assert.equal(nodes.approveButton.disabled, true);
+assert.equal(nodes.previewFrame.hidden, true, 'released Blob preview is hidden after binding');
+
+publicState.result = {
+  resultId, reviewState: 'APPROVED', deliveryState: 'INGESTING',
+};
+nodes.refreshButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+assert.match(nodes.approveButton.textContent, /核对.*回执/u);
+assert.equal(nodes.rejectButton.disabled, true, 'unknown ingest outcome cannot be deleted blindly');
+nodes.approveButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(calls.filter((row) => row[0] === 'recover-ingest').length, 1);
+assert.match(nodes.resultStatus.textContent, /已绑定 ERP/u);
+
+const revokeBeforeExpiry = revokeCount;
+publicState.result = {
+  resultId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED',
+  expiresAt: new Date(Date.now() + 20).toISOString(),
+  image: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
+};
+nodes.refreshButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert.equal(nodes.resultPanel.hidden, true);
+assert.ok(revokeCount > revokeBeforeExpiry, 'candidate expiry must revoke the page object URL');
+assert.match(nodes.pageStatus.textContent, /已过期/u);
+
+publicState.result = {
+  resultId, reviewState: 'CANDIDATE_READY', deliveryState: 'NOT_INGESTED',
+  expiresAt: candidateExpiresAt,
+  image: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
+};
+nodes.refreshButton.listeners.click({ isTrusted: true });
+await new Promise((resolve) => setImmediate(resolve));
+await new Promise((resolve) => setImmediate(resolve));
+const revokeBeforeInvalidation = revokeCount;
+assert.equal(nodes.previewImage.src, 'blob:workbench-preview');
+assert.equal(runtimeMessageListeners.length, 1);
+runtimeMessageListeners[0]({ type: 'ss-erp:byok-device-session-invalidated' });
+assert.equal(nodes.resultPanel.hidden, true);
+assert.equal(nodes.contextKicker.textContent, '服务器绑定不可用');
+assert.ok(revokeCount > revokeBeforeInvalidation, 'device invalidation must revoke the page object URL');
+assert.match(nodes.pageStatus.textContent, /设备会话已变化/u);
 
 stateMode = 'error';
 nodes.refreshButton.listeners.click({ isTrusted: true });
@@ -327,5 +430,339 @@ windowListeners.pagehide();
 assert.ok(revokeCount >= 1);
 assert.equal(JSON.stringify(calls).includes('apiKey'), false);
 assert.equal(JSON.stringify(calls).includes('base64'), false);
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushAsync(turns = 4) {
+  for (let index = 0; index < turns; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function cloneValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isolatedPublicState(result = null) {
+  const value = cloneValue(publicState);
+  value.result = result;
+  value.generationOutcome = null;
+  value.deliveryState = result?.deliveryState || 'NOT_READY';
+  return value;
+}
+
+function isolatedCandidate(reviewState = 'CANDIDATE_READY', deliveryState = 'NOT_INGESTED') {
+  return {
+    resultId,
+    reviewState,
+    deliveryState,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    image: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
+  };
+}
+
+function createManualTimers() {
+  let nextId = 1;
+  const callbacks = new Map();
+  return {
+    setTimeout(callback) {
+      const id = nextId;
+      nextId += 1;
+      callbacks.set(id, callback);
+      return id;
+    },
+    clearTimeout(id) { callbacks.delete(id); },
+    runAll() {
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      pending.forEach((callback) => callback());
+    },
+  };
+}
+
+function createPageHarness(options = {}) {
+  const harnessNodes = Object.fromEntries(ids.map((id) => [id, new TestNode(
+    id,
+    id === 'profileSelect' || id === 'sizeSelect' ? 'select'
+      : id === 'promptInput' || id === 'negativePromptInput' ? 'textarea'
+        : id.endsWith('Button') ? 'button'
+          : id === 'previewImage' ? 'img' : 'div',
+  )]));
+  harnessNodes.promptInput.value = 'Create a clean catalog hero image';
+  harnessNodes.sizeSelect.value = '1024x1024';
+  harnessNodes.executionModeByok.checked = true;
+  harnessNodes.executionModeHosted.disabled = true;
+
+  const authoritative = options.authoritative || { value: isolatedPublicState() };
+  const harnessCalls = [];
+  let harnessRevokeCount = 0;
+  const operations = {
+    getPublicState: options.getPublicState || (() => authoritative.value),
+    getReadiness: options.getReadiness || (() => readiness),
+    generate: options.generate || (() => isolatedCandidate()),
+    openPreview: options.openPreview || (() => ({
+      objectUrl: 'blob:isolated-preview',
+      metadata: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
+      revoke() { harnessRevokeCount += 1; },
+    })),
+    reviewResult: options.reviewResult || ((id, decision) => ({
+      resultId: id,
+      reviewState: decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+      ...(decision === 'APPROVE' ? { deliveryState: 'NOT_INGESTED' } : {}),
+    })),
+    ingestApproved: options.ingestApproved || ((id) => ({
+      resultId: id, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    })),
+    recoverApprovedIngest: options.recoverApprovedIngest || ((id) => ({
+      resultId: id, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    })),
+  };
+  const harnessClient = {
+    async getPublicState() { harnessCalls.push(['state']); return operations.getPublicState(); },
+    async getReadiness(profileId) {
+      harnessCalls.push(['readiness', profileId]);
+      return operations.getReadiness(profileId);
+    },
+    async generate(input) { harnessCalls.push(['generate', input]); return operations.generate(input); },
+    async openPreview(id) { harnessCalls.push(['preview', id]); return operations.openPreview(id); },
+    async reviewResult(id, decision) {
+      harnessCalls.push(['review', id, decision]);
+      return operations.reviewResult(id, decision);
+    },
+    async ingestApproved(id) { harnessCalls.push(['ingest', id]); return operations.ingestApproved(id); },
+    async recoverApprovedIngest(id) {
+      harnessCalls.push(['recover-ingest', id]);
+      return operations.recoverApprovedIngest(id);
+    },
+  };
+  const harnessWindowListeners = {};
+  const harnessRuntimeListeners = [];
+  const timerApi = options.timers || createManualTimers();
+  let harnessRandomByte = 32;
+  const harnessContext = {
+    Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
+    document: {
+      getElementById(id) { return harnessNodes[id] || null; },
+      createElement(tagName) { return new TestNode('', tagName); },
+    },
+    crypto: {
+      getRandomValues(bytes) { bytes.fill(harnessRandomByte++); return bytes; },
+    },
+    chrome: {
+      runtime: {
+        onMessage: {
+          addListener(listener) { harnessRuntimeListeners.push(listener); },
+        },
+      },
+    },
+    setTimeout: timerApi.setTimeout.bind(timerApi),
+    clearTimeout: timerApi.clearTimeout.bind(timerApi),
+  };
+  harnessContext.window = harnessContext;
+  harnessContext.globalThis = harnessContext;
+  harnessContext.addEventListener = (type, listener) => { harnessWindowListeners[type] = listener; };
+  harnessContext.SS_ERP_BYOK_WORKBENCH_CLIENT = {
+    DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
+    createClient() { return harnessClient; },
+  };
+  vm.runInNewContext(pageSource, harnessContext, { filename: pagePath });
+  return {
+    authoritative,
+    calls: harnessCalls,
+    nodes: harnessNodes,
+    runtimeListeners: harnessRuntimeListeners,
+    windowListeners: harnessWindowListeners,
+    get revokeCount() { return harnessRevokeCount; },
+  };
+}
+
+{
+  const lateState = createDeferred();
+  const harness = createPageHarness({ getPublicState: () => lateState.promise });
+  harness.runtimeListeners[0]({ type: 'ss-erp:byok-device-session-invalidated' });
+  lateState.resolve(isolatedPublicState());
+  await flushAsync();
+  assert.equal(harness.nodes.contextSource.textContent, '设备已断开');
+  assert.match(harness.nodes.pageStatus.textContent, /设备会话已变化/u);
+  assert.equal(harness.calls.filter((row) => row[0] === 'readiness').length, 0,
+    'a stale state load must not start readiness after invalidation');
+}
+
+{
+  const lateReadiness = createDeferred();
+  const harness = createPageHarness({ getReadiness: () => lateReadiness.promise });
+  await flushAsync();
+  assert.equal(harness.calls.filter((row) => row[0] === 'readiness').length, 1);
+  harness.runtimeListeners[0]({ type: 'ss-erp:byok-device-session-invalidated' });
+  const invalidatedStatus = harness.nodes.pageStatus.textContent;
+  lateReadiness.resolve(readiness);
+  await flushAsync();
+  assert.equal(harness.nodes.pageStatus.textContent, invalidatedStatus,
+    'late readiness must not overwrite disconnected UI');
+}
+
+{
+  const lateIngest = createDeferred();
+  const authoritative = { value: isolatedPublicState(isolatedCandidate('APPROVED')) };
+  const harness = createPageHarness({ authoritative, ingestApproved: () => lateIngest.promise });
+  await flushAsync();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(1);
+  harness.runtimeListeners[0]({ type: 'ss-erp:byok-device-session-invalidated' });
+  lateIngest.resolve({
+    resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+  });
+  await flushAsync();
+  assert.equal(harness.nodes.resultPanel.hidden, true);
+  assert.equal(harness.nodes.contextSource.textContent, '设备已断开');
+  assert.match(harness.nodes.pageStatus.textContent, /设备会话已变化/u,
+    'late ingest must not overwrite disconnected UI');
+}
+
+{
+  const latePreview = createDeferred();
+  let latePreviewRevokes = 0;
+  const authoritative = { value: isolatedPublicState(isolatedCandidate()) };
+  const harness = createPageHarness({ authoritative, openPreview: () => latePreview.promise });
+  await flushAsync(1);
+  harness.windowListeners.pagehide();
+  const hiddenStatus = harness.nodes.pageStatus.textContent;
+  latePreview.resolve({
+    objectUrl: 'blob:late-pagehide-preview',
+    metadata: { mimeType: 'image/png', byteLength: 1234, sha256: 'c'.repeat(64) },
+    revoke() { latePreviewRevokes += 1; },
+  });
+  await flushAsync();
+  assert.equal(latePreviewRevokes, 1, 'a preview arriving after pagehide is revoked');
+  assert.equal(harness.nodes.pageStatus.textContent, hiddenStatus,
+    'a preview arriving after pagehide must not mutate page state');
+}
+
+{
+  const timers = createManualTimers();
+  const lateReview = createDeferred();
+  const authoritative = { value: isolatedPublicState(isolatedCandidate()) };
+  const harness = createPageHarness({
+    authoritative,
+    timers,
+    reviewResult: () => lateReview.promise,
+  });
+  await flushAsync();
+  harness.nodes.previewImage.listeners.load();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(1);
+  timers.runAll();
+  assert.equal(harness.nodes.resultPanel.hidden, false,
+    'preview expiry must not clear a candidate while review is unresolved');
+  authoritative.value.result = null;
+  lateReview.resolve({ resultId, reviewState: 'APPROVED', deliveryState: 'NOT_INGESTED' });
+  await flushAsync(8);
+  assert.ok(harness.calls.filter((row) => row[0] === 'state').length >= 2,
+    'expiry during review reloads authoritative state after review settles');
+  assert.equal(harness.nodes.resultPanel.hidden, true);
+}
+
+{
+  const timers = createManualTimers();
+  const lateIngest = createDeferred();
+  const authoritative = { value: isolatedPublicState(isolatedCandidate('APPROVED')) };
+  const harness = createPageHarness({
+    authoritative,
+    timers,
+    ingestApproved: () => lateIngest.promise,
+  });
+  await flushAsync();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(1);
+  timers.runAll();
+  assert.equal(harness.nodes.resultPanel.hidden, false,
+    'preview expiry must not clear a candidate while ingest is unresolved');
+  authoritative.value.result = {
+    resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+  };
+  lateIngest.resolve(authoritative.value.result);
+  await flushAsync(8);
+  assert.ok(harness.calls.filter((row) => row[0] === 'state').length >= 2,
+    'expiry during ingest reloads authoritative state after ingest settles');
+  assert.match(harness.nodes.resultStatus.textContent, /已绑定 ERP/u);
+}
+
+for (const terminalCode of [
+  'SS_ERP_BYOK_INGEST_RECOVERY_REJECTED',
+  'SS_ERP_BYOK_INGEST_RECEIPT_NOT_FOUND',
+  'SS_ERP_BYOK_INGEST_REQUEST_HASH_REQUIRED',
+]) {
+  const authoritative = {
+    value: isolatedPublicState(isolatedCandidate('APPROVED', 'INGESTING')),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    recoverApprovedIngest: () => {
+      authoritative.value.result = isolatedCandidate('APPROVED', 'NOT_INGESTED');
+      throw Object.assign(new Error('terminal recovery rejection'), {
+        code: terminalCode,
+      });
+    },
+  });
+  await flushAsync();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(8);
+  assert.ok(harness.calls.filter((row) => row[0] === 'state').length >= 2,
+    `${terminalCode} reloads the background-reset public state`);
+  assert.match(harness.nodes.approveButton.textContent, /接收并绑定 ERP/u);
+  assert.equal(harness.nodes.rejectButton.disabled, false);
+}
+
+{
+  const authoritative = {
+    value: isolatedPublicState(isolatedCandidate('APPROVED', 'INGESTING')),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    recoverApprovedIngest: () => {
+      authoritative.value.result = null;
+      throw Object.assign(new Error('immutable failed receipt'), {
+        code: 'SS_ERP_BYOK_INGEST_RECEIPT_FAILED',
+      });
+    },
+  });
+  await flushAsync();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(8);
+  assert.ok(harness.calls.filter((row) => row[0] === 'state').length >= 2,
+    'an immutable failed receipt reloads the cleared authoritative state');
+  assert.equal(harness.nodes.resultPanel.hidden, true,
+    'an immutable failed receipt must not expose another receive action');
+}
+
+for (const transientCode of [
+  'SS_ERP_BYOK_INGEST_RECEIPT_PENDING',
+  'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+]) {
+  const authoritative = {
+    value: isolatedPublicState(isolatedCandidate('APPROVED', 'INGESTING')),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    recoverApprovedIngest: () => {
+      throw Object.assign(new Error('transient recovery state'), { code: transientCode });
+    },
+  });
+  await flushAsync();
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync();
+  assert.equal(harness.calls.filter((row) => row[0] === 'state').length, 1,
+    `${transientCode} must preserve INGESTING without an implicit retry`);
+  assert.match(harness.nodes.approveButton.textContent, /核对 ERP 回执/u);
+  assert.match(harness.nodes.resultStatus.textContent, /等待 ERP 回执/u);
+}
 
 console.log('extension BYOK workbench UI tests passed');
