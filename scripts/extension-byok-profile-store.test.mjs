@@ -529,6 +529,32 @@ test('removes evidence for operations removed from a profile without clearing it
   assert.equal(api.sessionStorage.value(api.schema.SESSION_EVIDENCE_STORAGE_KEY), undefined);
 });
 
+test('keeps capability evidence isolated by operation and request mode', async () => {
+  const api = loadApi();
+  await api.store.saveProfile(profile({
+    allowedOperations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+  }));
+  await api.store.setApiKey('relay-profile-1', 'sk-session-secret-sentinel');
+  const expected = [
+    ['TEXT_TO_IMAGE', 'json'],
+    ['IMAGE_TO_IMAGE', 'multipart'],
+    ['FULL_EDIT', 'multipart'],
+    ['INPAINT', 'multipart'],
+  ];
+  for (const [operation, requestMode] of expected) {
+    await setEvidenceForCurrentCredential(api, 'relay-profile-1', evidence({
+      operation,
+      requestMode,
+    }));
+  }
+  const state = await api.store.getPublicState('relay-profile-1');
+  assert.deepEqual(
+    state.evidence.map((item) => [item.operation, item.requestMode]),
+    expected,
+  );
+  assert.equal(JSON.stringify(state).includes('sk-session-secret-sentinel'), false);
+});
+
 test('does not accept capability evidence without a matching session key', async () => {
   const api = loadApi();
   await api.store.saveProfile(profile());

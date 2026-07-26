@@ -211,8 +211,8 @@ function loadDispatcher(overrides = {}) {
       return {
         contractVersion: 'extension-byok-capability/v1',
         profileId: value.profileId,
-        operation: 'TEXT_TO_IMAGE',
-        requestMode: 'json',
+        operation: value.operation,
+        requestMode: value.operation === 'TEXT_TO_IMAGE' ? 'json' : 'multipart',
         policyRevision: '17',
         providerRequestId: secret,
         evidence: {
@@ -626,7 +626,7 @@ test('requires an explicit shop for readiness and returns a projected one-use en
   );
 });
 
-test('probes only implemented operations with the authorized readiness binding and redacts evidence', async () => {
+test('routes every implemented operation through exact capability evidence and redacts it', async () => {
   const { dispatcher, calls } = loadDispatcher();
   const authorization = { readiness: { binding: readinessBinding() } };
   const response = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
@@ -651,6 +651,7 @@ test('probes only implemented operations with the authorized readiness binding a
   });
   const probe = calls.find((call) => call.method === 'probe');
   assert.equal(probe.value.profileId, 'relay-profile-1');
+  assert.equal(probe.value.operation, 'TEXT_TO_IMAGE');
   assert.equal(probe.value.idempotencyKey, 'probe-text-to-image-1');
   assert.equal(probe.value.size, '1024x1024');
   assert.deepEqual(probe.value.readinessBinding, readinessBinding());
@@ -658,7 +659,7 @@ test('probes only implemented operations with the authorized readiness binding a
   assert.equal(probe.value.prompt.length > 0, true);
   assert.equal(JSON.stringify(response).includes(secret), false);
 
-  const unsupported = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
+  const fullEdit = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
     payload: {
       profileId: 'relay-profile-1',
       operation: 'FULL_EDIT',
@@ -666,9 +667,22 @@ test('probes only implemented operations with the authorized readiness binding a
     },
     authorization: { readiness: { binding: readinessBinding({ operation: 'FULL_EDIT' }) } },
   });
-  assert.equal(unsupported.ok, false);
-  assert.equal(unsupported.errorCode, 'SS_ERP_BYOK_PROVIDER_OPERATION_UNSUPPORTED');
-  assert.equal(calls.filter((call) => call.method === 'probe').length, 1);
+  assert.deepEqual(plain(fullEdit), {
+    ok: true,
+    data: {
+      contractVersion: 'extension-byok-capability/v1',
+      profileId: 'relay-profile-1',
+      operation: 'FULL_EDIT',
+      requestMode: 'multipart',
+      policyRevision: '17',
+      verifiedAt: '2026-07-25T12:00:00.000Z',
+      expiresAt: '2026-07-26T12:00:00.000Z',
+    },
+  });
+  const editProbe = calls.filter((call) => call.method === 'probe')[1];
+  assert.equal(editProbe.value.operation, 'FULL_EDIT');
+  assert.deepEqual(editProbe.value.readinessBinding, readinessBinding({ operation: 'FULL_EDIT' }));
+  assert.equal(calls.filter((call) => call.method === 'probe').length, 2);
 });
 
 test('maps dependency failures to stable codes without reflecting secret-bearing messages', async () => {

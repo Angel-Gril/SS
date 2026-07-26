@@ -1,10 +1,10 @@
 # Phase 3: Edit Operations and Batch Engine
 
-Progress: 0/5 tasks.
+Progress: 1/5 tasks.
 
 ## Tasks
 
-- [ ] `EXT-04B` Add reference/full-edit/inpaint adapters (`P1`, `L`). Acceptance: bounded
+- [x] `EXT-04B` Add reference/full-edit/inpaint adapters (`P1`, `L`). Acceptance: bounded
   multipart `/images/edits`, references, PNG mask, URL/base64, and explicit async contracts
   work; invalid source/mask dimensions make zero calls; relay dialects remain separate.
 - [ ] `EXT-06` Build bounded media job engine (`P1`, `L`). Acceptance: capped concurrency,
@@ -31,3 +31,21 @@ Progress: 0/5 tasks.
 
 - Provider retry can incur an external charge and must never be described as free.
 - Text-to-image success alone is insufficient evidence for any edit operation.
+- `EXT-04B` uses a strict OpenAI-compatible synchronous multipart adapter for production
+  wiring and keeps the explicit asynchronous task dialect isolated as a fixture-only adapter.
+  Reference generation accepts one to four bounded images; full edit accepts exactly one
+  source; inpaint accepts one source plus a same-size PNG mask converted from the internal
+  white-edit convention to Provider alpha semantics.
+- Input and output PNG/JPEG/WebP bytes are inspected for MIME, magic, dimensions, pixels,
+  animation, and byte limits. Multipart requests have a 50 MiB aggregate limit, malformed or
+  oversized streamed responses fail closed, and result URLs never receive Provider
+  Authorization.
+- Provider permission and credential revision are revalidated before every authenticated
+  async poll, before result materialization, and before result acceptance. A dispatched
+  timeout remains `UNKNOWN_OUTCOME`, preserves accepted request/task hashes, and cannot be
+  blindly resubmitted under the same idempotency key.
+- Focused edit/profile/settings/runtime tests passed `106/106`; repository lint, workspace
+  typecheck, preflight, cloud/local extension builds, and package verification passed. Package
+  verification reported `323` passes, `0` failures, and the two existing local-package
+  permission warnings. No real Provider request, ERP AI charge, Ozon write, production
+  mutation, VPS deployment, or default-on flag occurred.

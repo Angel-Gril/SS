@@ -2,8 +2,13 @@
   'use strict';
 
   var CONTRACT_VERSION = 'extension-byok-provider-settings-handler/v1';
-  var TEXT_TO_IMAGE = 'TEXT_TO_IMAGE';
   var CAPABILITY_PROMPT = 'A neutral catalog product test image on a plain white background. No text.';
+  var REQUEST_MODE_BY_OPERATION = Object.freeze({
+    TEXT_TO_IMAGE: 'json',
+    IMAGE_TO_IMAGE: 'multipart',
+    FULL_EDIT: 'multipart',
+    INPAINT: 'multipart',
+  });
   var MAX_PERMISSION_FINALIZATIONS = 64;
   var DEVICE_STATES = [
     'paired',
@@ -275,7 +280,7 @@
     };
     if (result.profileId !== expected.profileId
       || result.operation !== expected.operation
-      || result.requestMode !== 'json'
+      || result.requestMode !== expected.requestMode
       || result.policyRevision !== expected.policyRevision) {
       throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_OUTPUT_INVALID');
     }
@@ -644,9 +649,6 @@
       var id = profileId(input.profileId);
       var requestedOperation = operation(input.operation, schema);
       var idempotencyKey = profileId(input.idempotencyKey);
-      if (requestedOperation !== TEXT_TO_IMAGE) {
-        throw handlerError('SS_ERP_BYOK_PROVIDER_OPERATION_UNSUPPORTED');
-      }
       var binding = context && context.authorization && context.authorization.readiness
         && context.authorization.readiness.binding;
       var selected = await loadProfile(id);
@@ -658,6 +660,7 @@
       }
       var result = await probe({
         profileId: id,
+        operation: requestedOperation,
         prompt: CAPABILITY_PROMPT,
         negativePrompt: null,
         size: selected.preferences.defaultSize,
@@ -667,6 +670,7 @@
       return projectProbe(result, {
         profileId: id,
         operation: requestedOperation,
+        requestMode: REQUEST_MODE_BY_OPERATION[requestedOperation],
         policyRevision: binding.policyRevision,
       }, schema);
     });

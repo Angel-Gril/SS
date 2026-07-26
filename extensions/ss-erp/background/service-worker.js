@@ -10,6 +10,11 @@ try { importScripts('../shared/byok/permission-broker.js'); } catch (e) { consol
 try { importScripts('../shared/byok/readiness-handle-cache.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness cache load error:', e); }
 try { importScripts('../shared/byok/readiness-client.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness client load error:', e); }
 try { importScripts('../shared/byok/text-to-image-client.js'); } catch (e) { console.warn('[SS ERP] BYOK text-to-image client load error:', e); }
+try { importScripts('../shared/byok/image-input-inspector.js'); } catch (e) { console.warn('[SS ERP] BYOK image input inspector load error:', e); }
+try { importScripts('../shared/byok/image-mask-transform.js'); } catch (e) { console.warn('[SS ERP] BYOK image mask transform load error:', e); }
+try { importScripts('../shared/byok/image-edit-adapters.js'); } catch (e) { console.warn('[SS ERP] BYOK image edit adapters load error:', e); }
+try { importScripts('../shared/byok/image-edit-probe-media.js'); } catch (e) { console.warn('[SS ERP] BYOK image edit probe media load error:', e); }
+try { importScripts('../shared/byok/image-edit-client.js'); } catch (e) { console.warn('[SS ERP] BYOK image edit client load error:', e); }
 try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
 try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
@@ -350,6 +355,8 @@ let byokReadinessClient = null;
 let byokDeviceTransport = null;
 let byokPermissionBroker = null;
 let byokTextToImageClient = null;
+let byokImageEditClient = null;
+let byokCapabilityClient = null;
 let byokProviderSettingsDispatcher = null;
 let byokGeneratedResultVault = null;
 let byokGeneratedAssetIngestClient = null;
@@ -887,6 +894,59 @@ function getByokTextToImageClient() {
   return byokTextToImageClient;
 }
 
+function getByokImageEditClient() {
+  if (byokImageEditClient) return byokImageEditClient;
+  const clientApi = globalThis.SS_ERP_BYOK_IMAGE_EDIT_CLIENT;
+  const inspectorApi = globalThis.SS_ERP_BYOK_IMAGE_INPUT_INSPECTOR;
+  const maskApi = globalThis.SS_ERP_BYOK_IMAGE_MASK_TRANSFORM;
+  const adapterApi = globalThis.SS_ERP_BYOK_IMAGE_EDIT_ADAPTERS;
+  const probeApi = globalThis.SS_ERP_BYOK_IMAGE_EDIT_PROBE_MEDIA;
+  if (!clientApi || typeof clientApi.createClient !== 'function'
+    || !inspectorApi || typeof inspectorApi.inspectImageBlob !== 'function'
+    || !maskApi || typeof maskApi.createTransformer !== 'function'
+    || !adapterApi || !adapterApi.OPENAI_MULTIPART_SYNC
+    || !probeApi || typeof probeApi.createFactory !== 'function'
+    || typeof globalThis.createImageBitmap !== 'function'
+    || typeof globalThis.OffscreenCanvas !== 'function') {
+    throw new Error('BYOK image edit client is unavailable');
+  }
+  const maskTransformer = maskApi.createTransformer({
+    createImageBitmap: (blob) => globalThis.createImageBitmap(blob),
+    OffscreenCanvas: globalThis.OffscreenCanvas,
+  });
+  const probeMediaFactory = probeApi.createFactory({
+    OffscreenCanvas: globalThis.OffscreenCanvas,
+  });
+  byokImageEditClient = clientApi.createClient({
+    profileStore: getByokProfileStore(),
+    permissionBroker: getByokPermissionBroker(),
+    imageInputInspector: inspectorApi,
+    maskTransformer,
+    probeMediaFactory,
+    adapter: adapterApi.OPENAI_MULTIPART_SYNC,
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    authorizeResultOrigin: async () => false,
+    decodeImage: (blob) => globalThis.createImageBitmap(blob),
+    crypto: globalThis.crypto,
+    now: () => new Date(),
+  });
+  return byokImageEditClient;
+}
+
+function getByokCapabilityClient() {
+  if (byokCapabilityClient) return byokCapabilityClient;
+  byokCapabilityClient = Object.freeze({
+    probe(input) {
+      if (input && input.operation === 'TEXT_TO_IMAGE') {
+        const { operation: _operation, ...textToImageInput } = input;
+        return getByokTextToImageClient().probe(textToImageInput);
+      }
+      return getByokImageEditClient().probe(input);
+    },
+  });
+  return byokCapabilityClient;
+}
+
 function getByokProviderSettingsDispatcher() {
   if (byokProviderSettingsDispatcher) return byokProviderSettingsDispatcher;
   const api = globalThis.SS_ERP_BYOK_PROVIDER_SETTINGS_HANDLER;
@@ -903,7 +963,7 @@ function getByokProviderSettingsDispatcher() {
     profileStore: getByokProfileStore(),
     permissionBroker: getByokPermissionBroker(),
     readinessClient: getByokReadinessClient(),
-    capabilityClient: getByokTextToImageClient(),
+    capabilityClient: getByokCapabilityClient(),
     preparePermissionReadiness: (verification) => {
       const bridge = getByokReadinessHandleCache().createPermissionBridge(verification);
       bridge.consume(

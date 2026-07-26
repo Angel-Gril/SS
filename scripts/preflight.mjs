@@ -214,6 +214,36 @@ const steps = [
     args: ['scripts/extension-byok-text-to-image-client.test.mjs'],
   },
   {
+    name: 'extension BYOK image input inspector contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-input-inspector.test.mjs'],
+  },
+  {
+    name: 'extension BYOK image mask transform contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-mask-transform.test.mjs'],
+  },
+  {
+    name: 'extension BYOK image edit adapter contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-edit-adapters.test.mjs'],
+  },
+  {
+    name: 'extension BYOK image edit probe media contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-edit-probe-media.test.mjs'],
+  },
+  {
+    name: 'extension BYOK image edit client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-edit-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK image edit wiring contract',
+    command: 'node',
+    args: ['scripts/extension-byok-image-edit-wiring.test.mjs'],
+  },
+  {
     name: 'extension BYOK generated result vault contract',
     command: 'node',
     args: ['scripts/extension-byok-generated-result-vault.test.mjs'],

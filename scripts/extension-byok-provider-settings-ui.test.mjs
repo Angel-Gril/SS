@@ -99,13 +99,13 @@ class FixtureElement {
   }
 }
 
-function profile(id, name = id) {
+function profile(id, name = id, allowedOperations = ['TEXT_TO_IMAGE']) {
   return {
     id,
     name,
     baseUrl: `https://${id}.example/v1`,
     model: 'image-model-v1',
-    allowedOperations: ['TEXT_TO_IMAGE'],
+    allowedOperations,
     preferences: {
       defaultSize: '1024x1024',
       quality: 'auto',
@@ -459,8 +459,14 @@ test('keeps secrets out of page state and requests permission directly in the tr
   assert.match(permissionHandler, /client\.requestPermissionFromGesture\(\{[\s\S]*?event:\s*event/u);
   assert.doesNotMatch(permissionHandler.split('client.requestPermissionFromGesture')[0], /\bawait\b|\.then\s*\(/u);
   assert.doesNotMatch(page, /MESSAGE_TYPES\.REQUEST_PERMISSION|runtime\.sendMessage/u);
-  assert.match(page, /IMPLEMENTED_OPERATIONS\s*=\s*new Set\(\['TEXT_TO_IMAGE'\]\)/u);
-  assert.match(page, /Provider 编辑适配将在下一阶段开放/u);
+  assert.match(
+    page,
+    /IMPLEMENTED_OPERATIONS\s*=\s*new Set\(OPERATIONS\)/u,
+  );
+  assert.match(page, /IMAGE_TO_IMAGE:\s*'multipart'/u);
+  assert.match(page, /FULL_EDIT:\s*'multipart'/u);
+  assert.match(page, /INPAINT:\s*'multipart'/u);
+  assert.doesNotMatch(page, /Provider 编辑适配将在下一阶段开放/u);
 });
 
 test('keeps the key surface inert when page dependencies fail before Enter is pressed', () => {
@@ -614,20 +620,27 @@ test('accepts capability evidence only for the live policy, mode, operation and 
     assert.equal(harness.nodes.capabilitySummary.textContent, '0 项有效证据', label);
   }
 
-  const disallowed = createPageHarness({
+  const editEvidence = { ...validEvidence, operation: 'IMAGE_TO_IMAGE', requestMode: 'multipart' };
+  const editProfile = profile(
+    'relay-profile-1',
+    'relay-profile-1',
+    ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'],
+  );
+  const editReady = createPageHarness({
+    profiles: [editProfile],
     profileState: {
-      profile: profile('relay-profile-1'),
+      profile: editProfile,
       hasKey: true,
-      evidence: [{ ...validEvidence, operation: 'IMAGE_TO_IMAGE' }],
+      evidence: [editEvidence],
     },
   });
   await settle();
   assert.equal(
-    disallowed.capabilityRows.get('IMAGE_TO_IMAGE')
+    editReady.capabilityRows.get('IMAGE_TO_IMAGE')
       .fields['[data-role="capability-status"]'].textContent,
-    '未开放',
+    '已验证',
   );
-  assert.equal(disallowed.nodes.capabilitySummary.textContent, '0 项有效证据');
+  assert.equal(editReady.nodes.capabilitySummary.textContent, '1 项有效证据');
 });
 
 test('requires explicit confirmation before dirty profile state is replaced', async () => {

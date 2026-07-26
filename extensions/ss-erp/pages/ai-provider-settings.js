@@ -2,9 +2,12 @@
   'use strict';
 
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
-  var IMPLEMENTED_OPERATIONS = new Set(['TEXT_TO_IMAGE']);
+  var IMPLEMENTED_OPERATIONS = new Set(OPERATIONS);
   var OPERATION_REQUEST_MODES = Object.freeze({
     TEXT_TO_IMAGE: 'json',
+    IMAGE_TO_IMAGE: 'multipart',
+    FULL_EDIT: 'multipart',
+    INPAINT: 'multipart',
   });
   var OPERATION_LABELS = Object.freeze({
     TEXT_TO_IMAGE: '文生图',
@@ -338,7 +341,7 @@
     if (!profile) return '请先保存 Provider 档案';
     if (state.dirty) return '请先保存档案修改';
     if (!profile.allowedOperations.includes(operation)) return '当前档案未启用此能力';
-    if (!IMPLEMENTED_OPERATIONS.has(operation)) return 'Provider 编辑适配将在下一阶段开放';
+    if (!IMPLEMENTED_OPERATIONS.has(operation)) return '当前扩展版本尚未实现此能力';
     if (!hasKey) return '请先加载当前会话 API Key';
     if (!granted) return '请先授权精确 Provider 来源';
     if (!state.selectedShopId) return '请选择 ERP 授权店铺';
@@ -374,7 +377,7 @@
         expiresNode.textContent = '无有效证据';
       } else {
         setBadge(statusNode, '未验证', 'pending');
-        requestModeNode.textContent = 'json';
+        requestModeNode.textContent = OPERATION_REQUEST_MODES[operation] || '待适配';
         verifiedNode.textContent = '尚未验证';
         expiresNode.textContent = '无有效证据';
       }
@@ -410,7 +413,7 @@
     );
     var reason = '请先保存 Provider 档案';
     if (profile && state.dirty) reason = '请先保存档案修改';
-    else if (profile && !permissionOperation(profile)) reason = '当前档案仅启用了尚未开放的编辑能力';
+    else if (profile && !permissionOperation(profile)) reason = '当前档案没有可验证的 Provider 能力';
     else if (profile && !state.selectedShopId) reason = '请选择 ERP 授权店铺';
     else if (profile && !granted && !state.permissionReadiness) reason = '正在校验管理员策略';
     else if (profile && !granted) reason = '管理员策略已允许，可申请精确来源权限';
