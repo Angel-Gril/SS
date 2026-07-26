@@ -162,6 +162,7 @@
       allowed: true,
       providerOrigin: true,
       policyRevision: true,
+      maxConcurrency: true,
     }, 'SS_ERP_BYOK_PERMISSION_DECISION_INVALID');
     if (value.allowed !== true) {
       throw permissionError('SS_ERP_BYOK_PERMISSION_NOT_ALLOWED', 'ERP has not allowlisted this Provider origin');
@@ -184,6 +185,15 @@
         200,
         'SS_ERP_BYOK_PERMISSION_DECISION_INVALID',
         'ERP policy revision',
+      );
+    }
+    if (value.maxConcurrency !== undefined
+      && (!Number.isSafeInteger(value.maxConcurrency)
+        || value.maxConcurrency < 1
+        || value.maxConcurrency > 4)) {
+      throw permissionError(
+        'SS_ERP_BYOK_PERMISSION_DECISION_INVALID',
+        'ERP Provider concurrency limit is invalid',
       );
     }
     return {

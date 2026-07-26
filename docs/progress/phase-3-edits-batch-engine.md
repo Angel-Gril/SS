@@ -1,16 +1,16 @@
 # Phase 3: Edit Operations and Batch Engine
 
-Progress: 1/5 tasks.
+Progress: 3/5 tasks.
 
 ## Tasks
 
 - [x] `EXT-04B` Add reference/full-edit/inpaint adapters (`P1`, `L`). Acceptance: bounded
   multipart `/images/edits`, references, PNG mask, URL/base64, and explicit async contracts
   work; invalid source/mask dimensions make zero calls; relay dialects remain separate.
-- [ ] `EXT-06` Build bounded media job engine (`P1`, `L`). Acceptance: capped concurrency,
+- [x] `EXT-06` Build bounded media job engine (`P1`, `L`). Acceptance: capped concurrency,
   pause-after-active, continue, cancel queued, retry/regenerate, alternate preservation, and
   unknown-outcome handling have deterministic tests.
-- [ ] `EXT-07` Build fact-bound Prompt/SKU slot planner (`P1`, `M`). Acceptance: SKU hero
+- [x] `EXT-07` Build fact-bound Prompt/SKU slot planner (`P1`, `M`). Acceptance: SKU hero
   and distinct detail roles, overrides, up to four references, stable hash/version, and no
   fabricated product facts.
 - [ ] `UI-03` Integrate references/full edit/inpaint (`P1`, `L`). Acceptance: users select
@@ -49,3 +49,39 @@ Progress: 1/5 tasks.
   verification reported `323` passes, `0` failures, and the two existing local-package
   permission warnings. No real Provider request, ERP AI charge, Ozon write, production
   mutation, VPS deployment, or default-on flag occurred.
+- `EXT-07` creates stable versioned plans for one hero per selected SKU and distinct detail
+  roles per conservative compatibility group. Prompts quote verified facts as inert data,
+  preserve explicit negative guidance, bind every user override and ordered reference set to
+  per-slot hashes, and cap plans at `50` selected SKUs, `500` slots, and four references per
+  slot.
+- Source facts, compatibility groups, and the closed hashed reference catalog are bound to a
+  computed authority hash that must be approved again by an injected trusted ERP verifier on
+  create, revise, and integrity verification. Evidence identifiers reject URL- and
+  secret-like values. Production wiring must inject that verifier from the extension
+  background or another trusted controller; the test echo verifier is fixture-only and must
+  never be accepted from a page or runtime payload.
+- Prompt planner tests passed `13/13`, including forged/revoked authority, recomputed-hash
+  Prompt tampering, incompatible SKU references, missing-fact non-fabrication, closed nested
+  objects, stable canonical hashes, and plan-size limits. No Provider request or production
+  mutation occurred.
+- `EXT-06` provides deterministic FIFO scheduling with effective concurrency capped by the
+  requested value, authenticated server readiness authority, actual runner/Provider limit,
+  and shared contract. Readiness attestation is now strict `v3`; its frozen, non-enumerable
+  concurrency authority remains available only to a background coordinator while page
+  projections keep the previous public shape.
+- Pause-after-active, continue, queued cancellation, per-slot retry/regenerate fencing,
+  immutable intent hashes, actual Provider request hashes, opaque dispatch references,
+  distinct `WAITING` and `UNKNOWN_OUTCOME` states, trusted lookup recovery, stable-idempotency
+  recovery, duplicate-charge confirmation, and concurrent recovery serialization are covered
+  by deterministic tests. Once an async Provider accepts work, an unproved later error cannot
+  be downgraded to an ordinary retryable failure.
+- Selected and approved result bytes are protected from capacity eviction. The `16`-entry /
+  `50 MiB` vault plans evictions atomically, applies backpressure without partial alternate
+  loss, and automatically pauses new Provider scheduling when full. Its existing ten-minute
+  hard TTL remains unchanged so the current single-image UI and public `expiresAt` stay
+  truthful. A retained-until-switch/reject/ingest lifecycle for batches longer than that TTL
+  is explicitly deferred to `BYOK-01` with the batch coordinator and matching UI state.
+- Media job engine tests passed `20/20`; readiness/policy tests passed `22/22`; permission
+  tests passed `13/13`; vault/cache/readiness tests, lint, workspace typecheck, server tests,
+  preflight, cloud/local builds, and package verification passed. No real Provider request,
+  ERP AI charge, Ozon write, production mutation, VPS deployment, or default-on flag occurred.

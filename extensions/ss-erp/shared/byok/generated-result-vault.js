@@ -160,14 +160,22 @@
       return value;
     }
 
-    function remove(resultId) {
-      var entry = entries.get(resultId);
-      if (!entry) return false;
-      entries.delete(resultId);
+    function isCapacityRetained(entry) {
+      return entry.selectionPinned || entry.reviewState === 'APPROVED';
+    }
+
+    function cancelExpiry(entry) {
       if (entry.expiryTimer !== null && cancelTimeout) {
         try { cancelTimeout(entry.expiryTimer); } catch (_error) {}
       }
       entry.expiryTimer = null;
+    }
+
+    function remove(resultId) {
+      var entry = entries.get(resultId);
+      if (!entry) return false;
+      entries.delete(resultId);
+      cancelExpiry(entry);
       if (operationIndex.get(entry.idempotencyKey) === resultId) {
         operationIndex.delete(entry.idempotencyKey);
       }
@@ -198,6 +206,24 @@
       entries.forEach(function (entry) {
         if (entry.expiresAtMillis <= current) remove(entry.resultId);
       });
+    }
+
+    function planEvictions(incomingBytes) {
+      var candidates = [];
+      var reclaimedBytes = 0;
+      entries.forEach(function (entry) {
+        var countFits = entries.size - candidates.length + 1 <= MAX_ENTRIES;
+        var bytesFit = totalBytes - reclaimedBytes + incomingBytes <= MAX_TOTAL_BYTES;
+        if ((!countFits || !bytesFit) && !isCapacityRetained(entry)) {
+          candidates.push(entry.resultId);
+          reclaimedBytes += entry.byteLength;
+        }
+      });
+      if (entries.size - candidates.length + 1 > MAX_ENTRIES
+        || totalBytes - reclaimedBytes + incomingBytes > MAX_TOTAL_BYTES) {
+        throw vaultError('SS_ERP_BYOK_RESULT_VAULT_FULL');
+      }
+      return candidates;
     }
 
     function normalize(result, bindingValue, lifecycleAuthorityValue) {
@@ -240,6 +266,7 @@
         blob: result.image.blob,
         reviewState: 'CANDIDATE_READY',
         reviewedAt: null,
+        selectionPinned: false,
         lifecycleEpoch: lifecycleAuthority.epoch,
         binding: binding,
         authorityFingerprint: JSON.stringify({
@@ -263,13 +290,9 @@
         }
         return publicResult(existing);
       }
-      while (entries.size >= MAX_ENTRIES || totalBytes + normalized.byteLength > MAX_TOTAL_BYTES) {
-        var oldest = entries.keys().next().value;
-        if (!oldest) throw vaultError('SS_ERP_BYOK_RESULT_VAULT_FULL');
-        remove(oldest);
-      }
       var resultId = createId(randomValues);
       if (entries.has(resultId)) throw vaultError('SS_ERP_BYOK_RESULT_ID_COLLISION');
+      planEvictions(normalized.byteLength).forEach(remove);
       var expiresAtMillis = current + ttlMs;
       var entry = {
         ...normalized,
@@ -304,6 +327,22 @@
       var resultId = operationIndex.get(text(idempotencyKeyValue, 200));
       if (!resultId) throw vaultError('SS_ERP_BYOK_RESULT_NOT_FOUND');
       return getPublic(resultId);
+    }
+
+    function pinSelection(resultIdValue) {
+      var entry = getForBackground(resultIdValue);
+      entry.selectionPinned = true;
+      return true;
+    }
+
+    function unpinSelection(resultIdValue) {
+      var current = currentMillis();
+      prune(current);
+      var resultId = text(resultIdValue, 128);
+      var entry = entries.get(resultId);
+      if (!entry || !entry.blob) return false;
+      entry.selectionPinned = false;
+      return true;
     }
 
     function assertExactBinding(entry, bindingValue) {
@@ -353,6 +392,8 @@
       getPublic: getPublic,
       getPublicByOperation: getPublicByOperation,
       getApprovedForBackground: getApprovedForBackground,
+      pinSelection: pinSelection,
+      unpinSelection: unpinSelection,
       approve: approve,
       reject: reject,
       release: function (resultId) { return remove(text(resultId, 128)); },

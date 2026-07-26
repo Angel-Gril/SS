@@ -261,6 +261,8 @@ const requiredByokModules = [
   'shared/byok/image-edit-adapters.js',
   'shared/byok/image-edit-probe-media.js',
   'shared/byok/image-edit-client.js',
+  'shared/byok/media-job-engine.js',
+  'shared/byok/prompt-plan.js',
   'shared/byok/workbench-launch-client.js',
   'shared/byok/workbench-launch-session.js',
   'shared/byok/workbench-preview-channel.js',

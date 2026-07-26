@@ -1,7 +1,7 @@
 (function exposeByokReadinessHandleCache(global) {
   'use strict';
 
-  var ATTESTATION_VERSION = 'extension-byok-readiness-attestation/v2';
+  var ATTESTATION_VERSION = 'extension-byok-readiness-attestation/v3';
   var BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var VERIFICATION_VERSION = 'extension-byok-readiness-verification/v2';
   var MAX_TTL_MS = 10 * 60 * 1000;
@@ -180,11 +180,16 @@
       }
       var binding = normalizeBinding(attestation.binding);
       var decision = attestation.decision;
-      if (!exactKeys(decision, ['allowed', 'providerOrigin', 'policyRevision'])
+      if (!exactKeys(decision, [
+        'allowed', 'providerOrigin', 'policyRevision', 'maxConcurrency',
+      ])
         || decision.allowed !== true
         || providerOrigin(decision.providerOrigin) !== binding.providerOrigin
         || !Number.isSafeInteger(decision.policyRevision)
         || decision.policyRevision < 0
+        || !Number.isSafeInteger(decision.maxConcurrency)
+        || decision.maxConcurrency < 1
+        || decision.maxConcurrency > 4
         || String(decision.policyRevision) !== binding.policyRevision) {
         throw cacheError('SS_ERP_BYOK_READINESS_INVALID');
       }
@@ -199,15 +204,26 @@
           allowed: true,
           providerOrigin: binding.providerOrigin,
           policyRevision: decision.policyRevision,
+          maxConcurrency: decision.maxConcurrency,
         }),
         expiresAt: new Date(expiresAtMillis).toISOString(),
         expiresAtMillis: expiresAtMillis,
       });
-      return Object.freeze({
+      var issued = {
         readinessHandle: handle,
         readinessBinding: binding,
         expiresAt: new Date(expiresAtMillis).toISOString(),
+      };
+      Object.defineProperty(issued, 'concurrencyAuthority', {
+        value: Object.freeze({
+          policyRevision: binding.policyRevision,
+          maxConcurrency: decision.maxConcurrency,
+        }),
+        enumerable: false,
+        configurable: false,
+        writable: false,
       });
+      return Object.freeze(issued);
     }
 
     function consume(input) {

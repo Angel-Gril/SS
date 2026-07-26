@@ -244,6 +244,16 @@ const steps = [
     args: ['scripts/extension-byok-image-edit-wiring.test.mjs'],
   },
   {
+    name: 'extension BYOK media job engine contract',
+    command: 'node',
+    args: ['scripts/extension-byok-media-job-engine.test.mjs'],
+  },
+  {
+    name: 'extension BYOK Prompt plan contract',
+    command: 'node',
+    args: ['scripts/extension-byok-prompt-plan.test.mjs'],
+  },
+  {
     name: 'extension BYOK generated result vault contract',
     command: 'node',
     args: ['scripts/extension-byok-generated-result-vault.test.mjs'],

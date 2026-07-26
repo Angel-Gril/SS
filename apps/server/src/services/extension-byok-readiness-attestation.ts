@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared';
 import {
   canonicalizeExtensionByokProviderOrigin,
   EXTENSION_BYOK_OPERATIONS,
@@ -9,7 +10,7 @@ import {
 export const EXTENSION_BYOK_READINESS_REQUEST_VERSION =
   'extension-byok-readiness-request/v2' as const;
 export const EXTENSION_BYOK_READINESS_ATTESTATION_VERSION =
-  'extension-byok-readiness-attestation/v2' as const;
+  'extension-byok-readiness-attestation/v3' as const;
 export const EXTENSION_BYOK_READINESS_BINDING_VERSION =
   'extension-byok-readiness-binding/v2' as const;
 export const EXTENSION_BYOK_READINESS_TTL_MS = 5 * 60 * 1000;
@@ -108,6 +109,7 @@ export interface ExtensionByokReadinessAttestation {
     allowed: true;
     providerOrigin: string;
     policyRevision: number;
+    maxConcurrency: number;
   };
 }
 
@@ -157,6 +159,9 @@ export function createExtensionByokReadinessAttestation(input: {
     || decision.contractVersion !== EXTENSION_BYOK_READINESS_VERSION
     || !Number.isSafeInteger(decision.policyRevision)
     || Number(decision.policyRevision) < 0
+    || !Number.isSafeInteger(decision.maxConcurrency)
+    || decision.maxConcurrency < 1
+    || decision.maxConcurrency > AI_IMAGE_WORKBENCH_LIMITS.maxConcurrency
     || !['pilot', 'global'].includes(decision.mode)
     || decision.context.ownerUserId !== input.ownerUserId
     || decision.context.deviceSessionId !== input.deviceSessionId
@@ -200,6 +205,7 @@ export function createExtensionByokReadinessAttestation(input: {
       allowed: true,
       providerOrigin: input.request.providerOrigin,
       policyRevision: Number(decision.policyRevision),
+      maxConcurrency: decision.maxConcurrency,
     },
   };
 }

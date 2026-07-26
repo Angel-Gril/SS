@@ -35,34 +35,37 @@ credential storage, or direct Ozon calls.
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
-- [ ] Phase 3: Edit operations and batch engine (1/5 tasks) [details](./phase-3-edits-batch-engine.md)
+- [ ] Phase 3: Edit operations and batch engine (3/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 21/37 tasks complete (57%).
+Overall: 23/37 tasks complete (62%).
 
 ## Current Status
 
-Phase 3 is in progress with `EXT-04B` complete. The extension now has bounded reference generation,
-full-image edit, and same-size PNG-mask inpaint through a strict synchronous OpenAI-compatible
-multipart adapter. Input and Provider result media are inspected, operation-specific capability
-evidence remains exact to multipart mode, permission and credential authority are revalidated
-around every post-submit network/acceptance boundary, and uncertain submissions retain request/task
-hashes without blind retry. The explicit async dialect remains separate and is not selected by
-production wiring. The next dependency-ready tasks are `EXT-06` and `EXT-07`, which can proceed in
-parallel. All new flags and administrator policy remain default-off; no real Provider request, ERP
-AI charge, Ozon write, production mutation, or VPS deployment occurred.
+Phase 3 is in progress with `EXT-04B`, `EXT-06`, and `EXT-07` complete. The extension now has bounded
+reference generation, full-image edit, and same-size PNG-mask inpaint plus a fact-bound,
+versioned SKU/slot Prompt planner. The planner creates conservative compatibility-group detail
+slots, binds Prompt overrides and references to stable hashes, rejects fabricated or untrusted
+facts through a required ERP authority verifier, and stays within the server/job-engine slot
+limits. The media job engine now binds server and runner concurrency caps, serializes uncertain
+recovery, preserves selected alternatives against capacity eviction, and pauses queued Provider
+work under atomic vault backpressure. `UI-03` is the next dependency-ready task. All new flags
+and administrator policy remain default-off; no real Provider request, ERP AI charge, Ozon
+write, production mutation, or VPS deployment occurred.
 
 ## Next Steps
 
-1. Build `EXT-06` as a deterministic bounded media job engine with pause-after-active,
-   continue, queued cancellation, retry/regenerate, alternate preservation, and explicit
-   unknown-outcome handling.
-2. Build `EXT-07` in parallel as a fact-bound SKU/slot Prompt planner with stable plan hashes,
-   distinct hero/detail roles, overrides, and up to four references.
-3. Keep `UI-03` pending until the edit adapter and job-engine contracts are both available; do
-   not enable production flags or run a real paid Provider sandbox implicitly.
+1. Build `UI-03` against the completed edit adapter and job-engine contracts: global/per-slot
+   references, full edit, mask drawing, alternatives, regeneration, and concrete disabled
+   reasons for unsupported operations.
+2. Run `QA-02` only after `UI-03` passes fixture integration and review; keep exact
+   Provider/model/operation evidence separate for text generation, reference edit, full edit,
+   inpaint, and async mode.
+3. Keep production flags off and do not run a real paid Provider sandbox implicitly. Complete
+   long-batch retained-result lifecycle semantics with `BYOK-01`, where the coordinator and UI
+   can keep `expiresAt` truthful together.
 
 ## Cross-Conversation Protocol
 

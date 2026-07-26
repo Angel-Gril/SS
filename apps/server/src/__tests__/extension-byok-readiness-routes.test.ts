@@ -146,6 +146,7 @@ describe('extension BYOK readiness attestation route', () => {
           allowed: true,
           providerOrigin: 'https://relay.example',
           policyRevision: 734,
+          maxConcurrency: 1,
         },
       },
     });
@@ -174,6 +175,7 @@ describe('extension BYOK readiness attestation route', () => {
         },
         expected: 409,
       },
+      { options: { readiness: decision({ maxConcurrency: 0 }) }, expected: 409 },
     ];
     for (const item of cases) {
       const { app } = await build(item.options);

@@ -109,6 +109,7 @@ function decision(overrides = {}) {
     allowed: true,
     providerOrigin: 'https://relay.example',
     policyRevision: 7,
+    maxConcurrency: 2,
     ...overrides,
   };
 }
@@ -428,6 +429,15 @@ test('rejects forged, missing, mismatched, or disallowed trust before any Chrome
       endpoint: 'https://relay.example/v1',
       readinessHandle: 'readiness-token',
       readinessBinding: { providerOrigin: 'https://relay.example', decision: decision({ providerOrigin: 'https://other.example' }) },
+      trustedGesture: broker.createTrustedGestureToken(new TestEvent(true)),
+    },
+    {
+      endpoint: 'https://relay.example/v1',
+      readinessHandle: 'readiness-token',
+      readinessBinding: {
+        providerOrigin: 'https://relay.example',
+        decision: decision({ maxConcurrency: 0 }),
+      },
       trustedGesture: broker.createTrustedGestureToken(new TestEvent(true)),
     },
     {

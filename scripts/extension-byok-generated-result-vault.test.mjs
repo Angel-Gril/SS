@@ -151,4 +151,127 @@ assert.equal(vault.release(released.resultId), false);
 assert.equal(vault.totalBytes(), 0);
 vault.clear();
 
+const retainedDiscards = [];
+let retainedRandomByte = 32;
+const retainedVault = api.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(value) { value.fill(retainedRandomByte++); return value; },
+  onDiscardedResult(resultId) { retainedDiscards.push(resultId); },
+});
+const retained = [];
+for (let index = 0; index < 16; index += 1) {
+  const marker = index.toString(16);
+  retained.push(retainedVault.put(result({
+    idempotencyKey: `provider-retained-${index}`,
+    requestHash: marker.repeat(64),
+    promptHash: marker.repeat(64),
+    image: { ...result().image, sha256: marker.repeat(64) },
+  }), binding(), authority()));
+}
+retainedVault.pinSelection(retained[0].resultId);
+retainedVault.approve(retained[1].resultId, binding());
+const overflow = retainedVault.put(result({
+  idempotencyKey: 'provider-retained-overflow',
+  requestHash: 'f'.repeat(64),
+  promptHash: 'f'.repeat(64),
+  image: { ...result().image, sha256: 'f'.repeat(64) },
+}), binding(), authority());
+assert.equal(retainedVault.getForBackground(retained[0].resultId).selectionPinned, true);
+assert.equal(retainedVault.getPublic(retained[1].resultId).reviewState, 'APPROVED');
+assert.throws(() => retainedVault.getForBackground(retained[2].resultId), /NOT_FOUND/u);
+assert.ok(retainedDiscards.includes(retained[2].resultId));
+
+for (const item of [...retained.slice(3), overflow]) {
+  retainedVault.pinSelection(item.resultId);
+}
+assert.throws(
+  () => retainedVault.put(result({
+    idempotencyKey: 'provider-retained-backpressure',
+    requestHash: 'e'.repeat(64),
+    promptHash: 'e'.repeat(64),
+    image: { ...result().image, sha256: 'e'.repeat(64) },
+  }), binding(), authority()),
+  /VAULT_FULL/u,
+  'a full vault must apply backpressure instead of silently evicting selected or approved bytes',
+);
+assert.equal(retainedVault.size(), 16);
+assert.equal(retainedVault.unpinSelection(retained[0].resultId), true);
+const afterRelease = retainedVault.put(result({
+  idempotencyKey: 'provider-retained-after-release',
+  requestHash: 'd'.repeat(64),
+  promptHash: 'd'.repeat(64),
+  image: { ...result().image, sha256: 'd'.repeat(64) },
+}), binding(), authority());
+assert.match(afterRelease.resultId, /^br_[a-f0-9]{48}$/u);
+assert.throws(() => retainedVault.getForBackground(retained[0].resultId), /NOT_FOUND/u);
+assert.equal(retainedVault.getPublic(retained[1].resultId).reviewState, 'APPROVED');
+retainedVault.clear();
+
+let selectionNow = new Date('2026-07-25T15:00:00.000Z');
+let selectionRandomByte = 80;
+const selectionVault = api.createVault({
+  now: () => selectionNow,
+  randomValues(value) { value.fill(selectionRandomByte++); return value; },
+});
+const selection = selectionVault.put(result({
+  idempotencyKey: 'provider-selection-ttl',
+}), binding(), authority());
+selectionVault.pinSelection(selection.resultId);
+selectionNow = new Date('2026-07-25T15:20:00.000Z');
+assert.equal(
+  selectionVault.size(),
+  0,
+  'selection pin prevents capacity eviction but preserves the public hard TTL contract',
+);
+assert.equal(selectionVault.unpinSelection(selection.resultId), false);
+
+const MIB = 1024 * 1024;
+function largeImage(mebibytes, marker) {
+  const largeBlob = new Blob([new Uint8Array(mebibytes * MIB)], { type: 'image/png' });
+  return {
+    blob: largeBlob,
+    mimeType: 'image/png',
+    byteLength: largeBlob.size,
+    sha256: marker.repeat(64),
+  };
+}
+const atomicDiscards = [];
+let atomicRandomByte = 100;
+const atomicVault = api.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(value) { value.fill(atomicRandomByte++); return value; },
+  onDiscardedResult(resultId) { atomicDiscards.push(resultId); },
+});
+const atomicApproved = atomicVault.put(result({
+  idempotencyKey: 'provider-atomic-approved',
+  requestHash: 'a'.repeat(64),
+  image: largeImage(20, 'a'),
+}), binding(), authority());
+atomicVault.approve(atomicApproved.resultId, binding());
+const atomicSelected = atomicVault.put(result({
+  idempotencyKey: 'provider-atomic-selected',
+  requestHash: 'b'.repeat(64),
+  image: largeImage(20, 'b'),
+}), binding(), authority());
+atomicVault.pinSelection(atomicSelected.resultId);
+const atomicAlternate = atomicVault.put(result({
+  idempotencyKey: 'provider-atomic-alternate',
+  requestHash: 'c'.repeat(64),
+  image: largeImage(1, 'c'),
+}), binding(), authority());
+const atomicBytesBefore = atomicVault.totalBytes();
+assert.throws(
+  () => atomicVault.put(result({
+    idempotencyKey: 'provider-atomic-overflow',
+    requestHash: 'd'.repeat(64),
+    image: largeImage(20, 'd'),
+  }), binding(), authority()),
+  /VAULT_FULL/u,
+);
+assert.equal(atomicVault.size(), 3);
+assert.equal(atomicVault.totalBytes(), atomicBytesBefore);
+assert.equal(atomicVault.getForBackground(atomicAlternate.resultId).byteLength, MIB);
+assert.deepEqual(atomicDiscards, [], 'a rejected put must not partially evict old alternates');
+atomicVault.clear();
+
 console.log('extension BYOK generated result vault tests passed');

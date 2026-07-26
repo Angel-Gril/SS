@@ -12,11 +12,11 @@ const api = context.SS_ERP_BYOK_READINESS_CLIENT;
 const posts = [];
 const issued = [];
 const attestation = {
-  contractVersion: 'extension-byok-readiness-attestation/v2',
+  contractVersion: 'extension-byok-readiness-attestation/v3',
   authenticated: true,
   expiresAt: '2026-07-25T15:05:00.000Z',
   binding: { contractVersion: 'extension-byok-readiness-binding/v2' },
-  decision: { allowed: true },
+  decision: { allowed: true, maxConcurrency: 2 },
 };
 const client = api.createClient({
   transport: {
@@ -41,7 +41,12 @@ const client = api.createClient({
   handleCache: {
     issue(value) {
       issued.push(value);
-      return { readinessHandle: 'rh_1', readinessBinding: { providerOrigin: 'https://relay.example' } };
+      return {
+        readinessHandle: 'rh_1',
+        readinessBinding: { providerOrigin: 'https://relay.example' },
+        expiresAt: value.expiresAt,
+        concurrencyAuthority: { policyRevision: '734', maxConcurrency: 2 },
+      };
     },
   },
 });
@@ -55,6 +60,7 @@ const result = await client.getReadiness({
   operation: 'TEXT_TO_IMAGE',
 });
 assert.equal(result.readinessHandle, 'rh_1');
+assert.deepEqual(result.concurrencyAuthority, { policyRevision: '734', maxConcurrency: 2 });
 assert.deepEqual(JSON.parse(JSON.stringify(posts)), [{
   path: api.READINESS_PATH,
   body: {

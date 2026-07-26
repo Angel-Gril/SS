@@ -50,13 +50,28 @@ function attestation(overrides = {}) {
     authenticated: true,
     expiresAt: new Date(now.getTime() + (5 * 60 * 1000)).toISOString(),
     binding: binding(),
-    decision: { allowed: true, providerOrigin: 'https://relay.example', policyRevision: 734 },
+    decision: {
+      allowed: true,
+      providerOrigin: 'https://relay.example',
+      policyRevision: 734,
+      maxConcurrency: 2,
+    },
     ...overrides,
   };
 }
 
 const issued = cache.issue(attestation());
 assert.match(issued.readinessHandle, /^rh_[a-f0-9]{48}$/u);
+assert.equal(Object.isFrozen(issued.concurrencyAuthority), true);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(issued.concurrencyAuthority)),
+  { policyRevision: '734', maxConcurrency: 2 },
+);
+assert.equal(
+  JSON.stringify(issued).includes('concurrencyAuthority'),
+  false,
+  'server concurrency authority stays background-only across runtime serialization',
+);
 assert.equal(cache.size(), 1);
 const verification = cache.consume({
   handle: issued.readinessHandle,
@@ -78,7 +93,12 @@ assert.deepEqual(
     issued.readinessBinding,
     'https://relay.example',
   ))),
-  { allowed: true, providerOrigin: 'https://relay.example', policyRevision: 734 },
+  {
+    allowed: true,
+    providerOrigin: 'https://relay.example',
+    policyRevision: 734,
+    maxConcurrency: 2,
+  },
 );
 assert.throws(
   () => bridge.consume(issued.readinessHandle, issued.readinessBinding, 'https://relay.example'),
@@ -113,7 +133,22 @@ assert.equal(cache.size(), 0);
 
 for (const invalid of [
   attestation({ authenticated: false }),
-  attestation({ decision: { allowed: true, providerOrigin: 'https://other.example', policyRevision: 734 } }),
+  attestation({
+    decision: {
+      allowed: true,
+      providerOrigin: 'https://other.example',
+      policyRevision: 734,
+      maxConcurrency: 2,
+    },
+  }),
+  attestation({
+    decision: {
+      allowed: true,
+      providerOrigin: 'https://relay.example',
+      policyRevision: 734,
+      maxConcurrency: 0,
+    },
+  }),
   attestation({ binding: binding({ policyRevision: '735' }) }),
   attestation({ binding: binding({ workflowId: 'workflow-1' }) }),
 ]) {
