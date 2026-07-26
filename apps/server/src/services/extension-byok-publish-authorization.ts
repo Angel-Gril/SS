@@ -230,10 +230,10 @@ export function createExtensionByokPublishAuthorizer(options: {
       const deviceSessionIds = [provenanceDeviceSessionId];
       if (input.requestingDeviceSessionId) {
         const requestingDeviceSessionId = exactIdentifier(input.requestingDeviceSessionId);
-        await requireLiveDevice(requestingDeviceSessionId, 'listing:publish');
         if (requestingDeviceSessionId !== provenanceDeviceSessionId) {
-          deviceSessionIds.push(requestingDeviceSessionId);
+          denied('DEVICE_NOT_ALLOWED');
         }
+        await requireLiveDevice(requestingDeviceSessionId, 'listing:publish');
       }
       for (const deviceSessionId of deviceSessionIds) {
         const decision = await evaluate.evaluate({

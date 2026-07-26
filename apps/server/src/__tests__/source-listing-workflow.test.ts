@@ -687,8 +687,10 @@ describe('source listing workflow', () => {
     });
     expect(first.idempotent).toBe(false);
     expect(first.intent.payloadHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.draft.publishTaskIds).toEqual([first.intent.id]);
     expect(replay).toMatchObject({ idempotent: true, intent: first.intent });
     expect(replay.draft.revision).toBe(first.draft.revision);
+    expect(replay.draft.publishTaskIds).toEqual([first.intent.id]);
     const changed = await service.setMediaAssignments({
       draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: 'owner-a',
       expectedRevision: first.draft.revision,

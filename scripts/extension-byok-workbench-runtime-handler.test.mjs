@@ -9,6 +9,11 @@ assert.match(
   /ingestClient:\s*getByokGeneratedAssetIngestClient\(\)/u,
   'the workbench dispatcher must own ingest session orchestration',
 );
+assert.match(
+  serviceWorkerSource,
+  /publishCoordinator:\s*getByokListingPublishCoordinator\(\)/u,
+  'the workbench dispatcher must own the server-side publish bridge',
+);
 assert.doesNotMatch(
   serviceWorkerSource,
   /const ingestHandler\s*=|WORKBENCH\.INGEST\]:\s*ingestHandler/u,
@@ -33,6 +38,7 @@ const MESSAGE_TYPES = {
   REVIEW_RESULT: 'review',
   INGEST: 'ingest',
   RECOVER_INGEST: 'recover-ingest',
+  PUBLISH: 'publish',
 };
 const launchContext = {
   contractVersion: 'extension-byok-workbench-launch-context/v1',
@@ -350,11 +356,36 @@ const ingestClient = {
   discardResult(id) { calls.push(['discard-ingest', id]); return 1; },
   getOperationState() { return ingestOperationState; },
 };
+const publishPreview = {
+  contractVersion: 'extension-byok-listing-publish-preview/v1',
+  previewHash: '9'.repeat(64),
+  shop: { id: 'shop-1', name: 'Ozon Primary' },
+  draft: { workflowId: 'workflow-1', revision: 4, draftVersion: 5 },
+  selectedSkuKeys: ['sku-1'],
+  media: [{
+    ordinal: 0, scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+    assetId: 'asset-1', source: 'GENERATED',
+  }],
+};
+let publishState = null;
+const publishCoordinator = {
+  async preview(input) { calls.push(['publish-preview', input]); return publishPreview; },
+  async confirm(input) {
+    calls.push(['publish-confirm', input]);
+    publishState = { state: 'SUCCEEDED', receiptId: 'publish-receipt-1', replayed: false };
+    return publishState;
+  },
+  async recover(input) {
+    calls.push(['publish-recover', input]);
+    return { ...publishState, replayed: true };
+  },
+  async getState(input) { calls.push(['publish-state', input]); return publishState; },
+};
 
 const dispatcher = api.createDispatcher({
   messageTypes: MESSAGE_TYPES,
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
-  providerClient, vault, authorityGuard, previewBroker, ingestClient,
+  providerClient, vault, authorityGuard, previewBroker, ingestClient, publishCoordinator,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
 });
 
@@ -463,6 +494,42 @@ resolvedLaunchContext = {
 const boundState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({ payload: {}, sender });
 assert.equal(boundState.data.deliveryState, 'BOUND');
 assert.equal(boundState.data.result.ingest.assetId, 'asset-1');
+assert.equal(boundState.data.publish, null);
+const previewedPublish = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'PREVIEW' }, sender,
+});
+assert.equal(previewedPublish.ok, true);
+assert.equal(previewedPublish.data.previewHash, '9'.repeat(64));
+const publishBinding = {
+  shopId: 'shop-1', workflowId: 'workflow-1',
+  sourceDraftRevision: 3, sourceDraftVersion: 4,
+  boundDraftRevision: 4, boundDraftVersion: 5,
+  assetId: 'asset-1', provenanceId: 'provenance-1', normalizedSha256: 'e'.repeat(64),
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 2,
+  assignmentSha256: 'f'.repeat(64),
+};
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'publish-preview')[1])),
+  publishBinding,
+);
+const confirmedPublish = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'CONFIRM', previewHash: '9'.repeat(64) }, sender,
+});
+assert.equal(confirmedPublish.ok, true);
+assert.equal(confirmedPublish.data.receiptId, 'publish-receipt-1');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'publish-confirm')[1])),
+  { ...publishBinding, previewHash: '9'.repeat(64) },
+);
+const recoveredPublish = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'RECOVER' }, sender,
+});
+assert.equal(recoveredPublish.ok, true);
+assert.equal(recoveredPublish.data.replayed, true);
+const publishedState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
+  payload: {}, sender,
+});
+assert.equal(publishedState.data.publish.receiptId, 'publish-receipt-1');
 resolvedLaunchContext = launchContext;
 
 session = {

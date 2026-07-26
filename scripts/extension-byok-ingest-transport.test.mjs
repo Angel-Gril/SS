@@ -97,6 +97,95 @@ assert.equal(requests[1].init.body, JSON.stringify(statusPayload));
 assert.equal(requests[1].init.headers['X-SS-ERP-Command-Grant'], undefined);
 assert.equal(requests[1].init.credentials, 'omit');
 assert.equal(requests[1].init.cache, 'no-store');
+assert.equal(requests[1].init.redirect, 'error');
+
+const publishRequests = [];
+const publishTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['listing:publish']),
+  fetchImpl: async (url, init) => {
+    publishRequests.push({ url, init });
+    return response(202, {
+      code: 1,
+      data: { receipt: { id: 'publish-receipt-1', status: 'SUCCEEDED' }, replay: false },
+    });
+  },
+});
+const publishPayload = {
+  shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 5,
+  idempotencyKey: 'wb_publish_' + 'a'.repeat(48),
+  command: {
+    schemaVersion: 'ozon-publish-command/v1', draftRevision: 5,
+    publishIntentId: 'publish-intent-1', selectedSkuKeys: ['sku-1'],
+  },
+};
+const published = await publishTransport.post(
+  '/api/extension-device/ozon-publish/execute',
+  publishPayload,
+  { requiredScope: 'listing:publish', commandGrant: 'p'.repeat(43) },
+);
+assert.equal(published.state, 'response');
+assert.equal(publishRequests.length, 1);
+assert.equal(publishRequests[0].url, 'https://erp.example/api/extension-device/ozon-publish/execute');
+assert.equal(publishRequests[0].init.headers['X-SS-ERP-Command-Grant'], 'p'.repeat(43));
+assert.equal(publishRequests[0].init.credentials, 'omit');
+assert.equal(publishRequests[0].init.redirect, 'error');
+
+for (const path of [
+  '/api/extension-device/byok-publish/preview',
+  '/api/extension-device/byok-publish/prepare',
+  '/api/extension-device/byok-publish/status',
+]) {
+  const routeResult = await publishTransport.post(
+    path,
+    { contractVersion: 'extension-byok-listing-publish/v1' },
+    { requiredScope: 'listing:publish' },
+  );
+  assert.equal(routeResult.state, 'response');
+}
+
+const largeSkuKeys = Array.from({ length: 500 }, (_unused, index) => (
+  `sku-${String(index).padStart(3, '0')}-` + 'x'.repeat(280)
+));
+const largePublishPayload = {
+  ...publishPayload,
+  command: { ...publishPayload.command, selectedSkuKeys: largeSkuKeys },
+};
+assert.ok(new TextEncoder().encode(JSON.stringify(largePublishPayload)).byteLength > 64 * 1024);
+assert.equal((await publishTransport.post(
+  '/api/extension-device/ozon-publish/execute',
+  largePublishPayload,
+  { requiredScope: 'listing:publish', commandGrant: 'p'.repeat(43) },
+)).state, 'response', 'a contract-valid large publish envelope must pass the publish-only bound');
+
+const largePreviewTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['listing:publish']),
+  fetchImpl: async () => response(200, {
+    code: 1,
+    data: { preview: 'x'.repeat(600 * 1024) },
+  }),
+});
+assert.equal((await largePreviewTransport.post(
+  '/api/extension-device/byok-publish/preview',
+  { contractVersion: 'extension-byok-listing-publish/v1' },
+  { requiredScope: 'listing:publish' },
+)).state, 'response', 'a bounded large publish preview must pass the preview-only response limit');
+
+const defaultResponseTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(),
+  fetchImpl: async () => response(200, {
+    code: 1,
+    data: { payload: 'x'.repeat(600 * 1024) },
+  }),
+});
+await assert.rejects(
+  defaultResponseTransport.post(
+    '/api/extension-device/byok-media/ingest-status',
+    statusPayload,
+    { requiredScope: 'byok:media:ingest' },
+  ),
+  /response is too large/u,
+  'non-publish responses retain the default 512 KiB bound',
+);
 
 let forbiddenFetches = 0;
 const guarded = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
@@ -207,6 +296,31 @@ assert.deepEqual(
   },
 );
 assert.equal(grantExpiryCredentialClears, 0, 'grant expiry must not revoke device credentials');
+
+let publishGrantCredentialClears = 0;
+const publishGrantExpiredTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: {
+    ...credentials(['listing:publish']),
+    async clearIfCurrent() { publishGrantCredentialClears += 1; return true; },
+  },
+  fetchImpl: async () => response(410, {
+    code: 0,
+    errorCode: 'COMMAND_GRANT_EXPIRED',
+  }),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await publishGrantExpiredTransport.post(
+    '/api/extension-device/ozon-publish/execute',
+    publishPayload,
+    { requiredScope: 'listing:publish', commandGrant: 'p'.repeat(43) },
+  ))),
+  {
+    state: 'http_error',
+    status: 410,
+    body: { code: 0, errorCode: 'COMMAND_GRANT_EXPIRED' },
+  },
+);
+assert.equal(publishGrantCredentialClears, 0, 'publish grant expiry must not revoke device credentials');
 
 let deviceRevocationCredentialClears = 0;
 const deviceRevocationTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({

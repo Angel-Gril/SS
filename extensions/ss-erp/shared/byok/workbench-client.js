@@ -6,6 +6,7 @@
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
   var PROVIDER_TIMEOUT_MS = 130 * 1000;
   var INGEST_TIMEOUT_MS = 130 * 1000;
+  var PUBLISH_TIMEOUT_MS = 130 * 1000;
   var DEVICE_INVALIDATED_MESSAGE = 'ss-erp:byok-device-session-invalidated';
   var MESSAGE_TYPES = Object.freeze({
     GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
@@ -15,6 +16,7 @@
     REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
     INGEST: 'ss-erp:ai-image-workbench-ingest',
     RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
+    PUBLISH: 'ss-erp:ai-image-workbench-publish',
   });
 
   function clientError(code) {
@@ -132,6 +134,8 @@
       var message = { type: type, payload: payload || {} };
       var ingestOutcomeUnknown = type === MESSAGE_TYPES.INGEST
         || type === MESSAGE_TYPES.RECOVER_INGEST;
+      var publishOutcomeUnknown = type === MESSAGE_TYPES.PUBLISH
+        && payload && payload.action !== 'PREVIEW';
       if (readinessValue) {
         var normalized = readiness(readinessValue);
         message.readinessHandle = normalized.readinessHandle;
@@ -147,6 +151,8 @@
               ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
               : ingestOutcomeUnknown
                 ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                : publishOutcomeUnknown
+                  ? 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME'
                 : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_TIMEOUT',
           ));
         }, operationTimeoutMs || timeoutMs);
@@ -164,6 +170,8 @@
                   ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
                   : ingestOutcomeUnknown
                     ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                    : publishOutcomeUnknown
+                      ? 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME'
                     : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED',
               ));
               return;
@@ -175,6 +183,8 @@
                 ? response.errorCode
                 : ingestOutcomeUnknown
                   ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                  : publishOutcomeUnknown
+                    ? 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME'
                   : 'SS_ERP_BYOK_WORKBENCH_OPERATION_FAILED';
               finish(reject, clientError(code));
               return;
@@ -187,6 +197,8 @@
               ? 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
               : ingestOutcomeUnknown
                 ? 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME'
+                : publishOutcomeUnknown
+                  ? 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME'
                 : 'SS_ERP_BYOK_WORKBENCH_RUNTIME_FAILED',
           ));
         }
@@ -328,6 +340,39 @@
           { resultId: resultId(resultIdValue) },
           null,
           INGEST_TIMEOUT_MS,
+        );
+      },
+      getPublishPreview: function () {
+        return send(MESSAGE_TYPES.PUBLISH, { action: 'PREVIEW' });
+      },
+      confirmPublish: function (previewHashValue) {
+        var previewHash;
+        try {
+          previewHash = text(
+            previewHashValue,
+            64,
+            64,
+            'SS_ERP_BYOK_PUBLISH_INPUT_INVALID',
+          );
+          if (!/^[a-f0-9]{64}$/u.test(previewHash)) {
+            throw clientError('SS_ERP_BYOK_PUBLISH_INPUT_INVALID');
+          }
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        return send(
+          MESSAGE_TYPES.PUBLISH,
+          { action: 'CONFIRM', previewHash: previewHash },
+          null,
+          PUBLISH_TIMEOUT_MS,
+        );
+      },
+      recoverPublish: function () {
+        return send(
+          MESSAGE_TYPES.PUBLISH,
+          { action: 'RECOVER' },
+          null,
+          PUBLISH_TIMEOUT_MS,
         );
       },
     });

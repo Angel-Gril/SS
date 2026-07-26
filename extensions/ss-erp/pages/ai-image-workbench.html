@@ -137,18 +137,58 @@
         </div>
 
         <div id="approvedNotice" class="approved-notice" role="status" hidden>
-          已批准但尚未上传 ERP。点击“接收并绑定 ERP”后，服务端会规范化图片并创建精确草稿版本；当前不能发布。
+          已批准但尚未上传 ERP。点击“接收并绑定 ERP”后，服务端会规范化图片并创建精确草稿版本。
         </div>
+
+        <section id="publishPanel" class="publish-panel" aria-labelledby="publishTitle" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">最终发布确认</p>
+              <h2 id="publishTitle">Ozon 发布清单</h2>
+            </div>
+            <span id="publishStatus" class="state-badge state-pending">正在读取</span>
+          </div>
+
+          <dl class="publish-summary">
+            <div><dt>Ozon 店铺</dt><dd id="publishShop">待读取</dd></div>
+            <div><dt>绑定草稿</dt><dd id="publishDraft">待读取</dd></div>
+            <div><dt>SKU 顺序</dt><dd id="publishSkuOrder">待读取</dd></div>
+          </dl>
+
+          <div class="publish-media-heading">
+            <h3>图片顺序</h3>
+            <span>按此顺序提交</span>
+          </div>
+          <ol id="publishMediaList" class="publish-media-list"></ol>
+
+          <p id="publishNotice" class="publish-notice" role="status" aria-live="polite">
+            正在读取 ERP 权威发布预览。
+          </p>
+
+          <label id="publishConfirmationRow" class="publish-confirmation" for="publishConfirmation">
+            <input id="publishConfirmation" type="checkbox" />
+            <span>我已核对店铺、草稿版本、SKU 和图片顺序</span>
+          </label>
+
+          <div class="publish-actions">
+            <button id="publishRecoverButton" class="button button-secondary" type="button" hidden>
+              核对发布结果
+            </button>
+            <button id="publishConfirmButton" class="button button-primary" type="button" disabled>
+              确认提交 Ozon
+            </button>
+          </div>
+        </section>
       </section>
 
       <section id="emptyResult" class="empty-result" aria-label="工作台安全说明">
         <p class="section-kicker">当前边界</p>
-        <h2>生成、预览、审核、接收</h2>
+        <h2>生成、预览、审核、接收、发布</h2>
         <ul>
           <li>密钥只在扩展后台的当前浏览器会话中使用。</li>
           <li>图片 Blob 通过一次性通道进入此页面，不进入普通消息历史。</li>
           <li>只有明确批准的图片才能通过专用二进制通道进入 ERP 规范化、存储和精确草稿绑定。</li>
-          <li>Ozon 发布仍保持关闭，后续必须再次确认。</li>
+          <li>发布前会显示 ERP 权威店铺、草稿、SKU 与图片顺序，并要求单独确认。</li>
         </ul>
       </section>
     </div>

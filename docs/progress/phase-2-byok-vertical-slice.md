@@ -1,6 +1,6 @@
 # Phase 2: Secure Single-Image BYOK Vertical Slice
 
-Progress: 8/10 tasks.
+Progress: 10/10 tasks.
 
 ## Tasks
 
@@ -28,10 +28,10 @@ Progress: 8/10 tasks.
 - [x] `INT-01` Add background asset ingest client (`P0`, `L`). Acceptance: accepted Blob
   bytes use dedicated grant/hash/idempotency without normal message history or persistent
   bytes; temporary data clears on reject, expiry, and success.
-- [ ] `INT-02` Bridge accepted result to current publisher (`P0`, `L`). Acceptance: final
+- [x] `INT-02` Bridge accepted result to current publisher (`P0`, `L`). Acceptance: final
   shop/draft/SKU/order preview and confirmation use existing publish intent, grant, receipt,
   and recovery; duplicate/reload/timeout yields at most one receipt; no Ozon key/direct call.
-- [ ] `QA-01` Prove fixture-based vertical closure (`P0`, `XL`). Acceptance: fake Provider
+- [x] `QA-01` Prove fixture-based vertical closure (`P0`, `XL`). Acceptance: fake Provider
   covers generation through publish; secret/private-host/redirect/bomb/malformed image/
   revocation/cross-shop/stale/duplicate/unknown tests pass; BYOK AI cost rows equal zero.
 
@@ -86,9 +86,9 @@ Progress: 8/10 tasks.
   3,800 full server tests, all 140 PostgreSQL migrations plus the populated historical upgrade,
   workspace lint/typecheck, preflight, and rebuilt cloud/local package verification. Cloud
   verification completed with zero warnings; local retained its two expected packaging warnings.
-- Remaining non-blocking Phase 2 debt: terminal upload-staging rows need a retention/prune path;
-  publish intent/receipt provenance linking belongs to `INT-02`; and the 100-entry session
-  dispatch-tombstone limit needs workbench capacity guidance before a production pilot.
+- Remaining non-blocking Phase 2 debt: terminal upload-staging rows need a retention/prune path,
+  and the 100-entry session dispatch-tombstone limit needs workbench capacity guidance before a
+  production pilot.
 - `UI-02A` now launches only from an exact supported source-product page, re-resolves the latest
   source snapshot and server-authoritative empty SKU hero slot before every operation, and keeps
   product/draft/Provider context out of the URL. The standalone extension page supports one BYOK
@@ -126,5 +126,30 @@ Progress: 8/10 tasks.
   tests, workspace lint/typecheck, full preflight, and the full server suite (3,840 passed and 164
   skipped). Rebuilt Cloud verification passed 303 checks with zero warnings; Local passed 299 with
   its two expected offline-package permission warnings. Final correctness review found no blocker.
+- `INT-02` now presents the exact current shop, draft, selected SKU set, and ordered media before
+  confirmation, records one existing publish intent, and executes only through the existing
+  `OZON_PUBLISH` grant, receipt, publisher, and reconciliation boundary. The extension stores only
+  the bounded operation identity needed for recovery; it contains no Ozon credentials and makes no
+  direct Seller API request.
+- Publish recovery now preserves `PREPARED`, `SUBMITTING`, and `UNKNOWN` attempts as `PENDING`, maps
+  only durable `SUBMITTED` attempts to success and durable `REJECTED` attempts to failure, and
+  recovers a persisted attempt after publisher acknowledgement loss. The command envelope's
+  idempotency key reaches the publisher unchanged, so double-click, reload, timeout, and recovery
+  cannot create a second publish intent, grant, receipt, or Ozon submission.
+- Preview and confirmation bind the latest revalidated draft revision while retaining exact ingest
+  provenance. The preview hash also commits the publish revision, and publish requires the same live
+  device session to hold both the original ingest authority and current `listing:publish` scope.
+- `QA-01` now includes a fixture-only generate-to-publish closure covering the fake Provider,
+  background-only secret sentinel, private host, redirect, response bomb, malformed image,
+  revocation, cross-shop and stale context, duplicate confirmation, and unknown outcome. A real
+  PostgreSQL vertical test runs all migrations and connects ingest, provenance, revalidation,
+  Fastify preview/prepare/status, command grants, receipts, and publish recovery while replacing
+  only the Ozon executor; it proves one linked receipt and zero BYOK AI reservations or settlements.
+- Final Phase 2 verification passed 134 focused server tests, the extension publish coordinator,
+  runtime recovery, and vertical fixture suites, all 140 PostgreSQL migrations, workspace lint and
+  typecheck, the full server suite (3,861 passed and 165 skipped), full preflight, Cloud/Local
+  package builds, and extension package verification (303 passes, zero failures, with the two
+  expected local/offline permission warnings). Final scope, secret, flag, and diff review found no
+  release blocker.
 - All BYOK flags and the administrator policy remain default-off. No real Provider request,
   ERP AI charge, production mutation, Ozon write, or VPS deployment occurred in this phase.

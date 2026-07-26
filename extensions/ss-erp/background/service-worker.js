@@ -13,6 +13,7 @@ try { importScripts('../shared/byok/text-to-image-client.js'); } catch (e) { con
 try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
 try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
+try { importScripts('../shared/byok/listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] BYOK publish coordinator load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
@@ -352,6 +353,7 @@ let byokTextToImageClient = null;
 let byokProviderSettingsDispatcher = null;
 let byokGeneratedResultVault = null;
 let byokGeneratedAssetIngestClient = null;
+let byokListingPublishCoordinator = null;
 let byokRuntimeAuthorityGuard = null;
 let byokWorkbenchLaunchClient = null;
 let byokWorkbenchSessionManager = null;
@@ -411,6 +413,7 @@ async function clearByokDeviceSessionState(input) {
       getByokProfileStore().disconnectDevice(),
       getByokPermissionBroker().clearSessionConsent(),
       getByokWorkbenchSessionManager().clearProviderState(),
+      getByokListingPublishCoordinator().clear(),
     ]);
     const failed = outcomes.find((outcome) => outcome.status === 'rejected');
     if (failed) throw failed.reason;
@@ -964,6 +967,21 @@ function getByokGeneratedAssetIngestClient() {
   return byokGeneratedAssetIngestClient;
 }
 
+function getByokListingPublishCoordinator() {
+  if (byokListingPublishCoordinator) return byokListingPublishCoordinator;
+  const api = globalThis.SS_ERP_BYOK_LISTING_PUBLISH_COORDINATOR;
+  if (!api || typeof api.createCoordinator !== 'function') {
+    throw new Error('BYOK listing publish coordinator is unavailable');
+  }
+  byokListingPublishCoordinator = api.createCoordinator({
+    transport: getByokDeviceTransport(),
+    store: chrome.storage.session,
+    crypto: globalThis.crypto,
+    now: () => Date.now(),
+  });
+  return byokListingPublishCoordinator;
+}
+
 function getByokWorkbenchLaunchClient() {
   if (byokWorkbenchLaunchClient) return byokWorkbenchLaunchClient;
   const api = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_CLIENT;
@@ -1025,6 +1043,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     readinessClient: getByokReadinessClient(),
     providerClient: getByokTextToImageClient(),
     ingestClient: getByokGeneratedAssetIngestClient(),
+    publishCoordinator: getByokListingPublishCoordinator(),
     vault: getByokGeneratedResultVault(),
     authorityGuard: getByokRuntimeAuthorityGuard(),
     previewBroker: getByokWorkbenchPreviewBroker(),
@@ -3975,8 +3994,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // dispatcher.  Keeping this branch before the legacy handlers prevents a
   // future handler from accidentally inheriting the broad legacy sender matrix
   // or echoing a secret-bearing response.  Phase 1 intentionally registers no
-  // The single-image BYOK path is installed here; edit, batch, and publish
-  // handlers remain dark until their own gates pass.
+  // The single-image BYOK path and its server-owned publish bridge are installed
+  // here; edit and batch handlers remain dark until their own gates pass.
   const runtimeAuthorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
   if (runtimeAuthorization
     && typeof runtimeAuthorization.isNewRuntimeMessageType === 'function'

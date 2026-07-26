@@ -254,9 +254,19 @@ const steps = [
     args: ['scripts/extension-byok-workbench-runtime-handler.test.mjs'],
   },
   {
+    name: 'extension BYOK listing publish coordinator contract',
+    command: 'node',
+    args: ['scripts/extension-byok-listing-publish-coordinator.test.mjs'],
+  },
+  {
     name: 'extension BYOK workbench UI contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-ui.test.mjs'],
+  },
+  {
+    name: 'extension BYOK text-to-image vertical fixture',
+    command: 'node',
+    args: ['scripts/extension-byok-text-to-image-vertical-fixture.test.mjs'],
   },
   {
     name: 'extension runtime message authorization contract',

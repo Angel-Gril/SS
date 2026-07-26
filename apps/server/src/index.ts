@@ -118,6 +118,7 @@ import {
   type ExtensionCommandGrantRoutesOptions,
 } from './routes/extension-command-grants.js';
 import { extensionByokMediaRoutes } from './routes/extension-byok-media.js';
+import { extensionByokPublishRoutes } from './routes/extension-byok-publish.js';
 import { extensionByokReadinessRoutes } from './routes/extension-byok-readiness.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
@@ -237,12 +238,23 @@ import {
 } from './services/ozon-category-catalog.js';
 import type { OzonClient, OzonImportItem } from './services/ozon-client.js';
 import { createOzonListingPublisher } from './services/ozon-listing-publisher.js';
+import { createExtensionOzonPublishExecutor } from './services/extension-ozon-publish-execution.js';
 import {
   createExtensionByokPublishAuthorizer,
 } from './services/extension-byok-publish-authorization.js';
 import {
   createPrismaExtensionByokPublishProvenanceReader,
+  PrismaExtensionByokMediaProvenanceRepository,
 } from './repositories/extension-byok-media-provenance-repository.js';
+import {
+  createPrismaExtensionByokPublishStatusRepository,
+} from './repositories/extension-byok-publish-status-repository.js';
+import {
+  createExtensionByokMediaProvenanceService,
+} from './services/extension-byok-media-provenance.js';
+import {
+  createExtensionByokListingPublishService,
+} from './services/extension-byok-listing-publish.js';
 import { createPrismaOzonPublishAttemptRepository } from './services/ozon-publish-attempt-prisma.js';
 import {
   createOzonListingProductionCompileAdapter,
@@ -880,6 +892,10 @@ const sourceOzonListingPublisher = createOzonListingPublisher({
   },
   workerId: `ozon-publish-submit:${sourceOzonPublisherInstanceId}:${process.pid}`,
   warn: (message, error) => app.log.warn({ err: error }, message),
+});
+const executeExtensionOzonPublish = createExtensionOzonPublishExecutor({
+  publisher: sourceOzonListingPublisher,
+  attempts: sourceOzonPublishAttemptRepository,
 });
 const extensionDeviceRepository = isExtensionDeviceAuthEnabled()
   ? createPrismaExtensionDeviceSessionRepository()
@@ -2037,20 +2053,21 @@ if (isExtensionDeviceAuthEnabled()) {
       },
     }),
     executeOzonPublish: async ({
-      deviceSessionId, ownerUserId, actorUserId, workflowId, command,
+      deviceSessionId, ownerUserId, actorUserId, workflowId, idempotencyKey, command,
     }) => {
       const commandRow = command as { draftRevision?: unknown; publishIntentId?: unknown };
       const expectedRevision = Number(commandRow.draftRevision);
-      const idempotencyKey = String(commandRow.publishIntentId || '').trim();
-      if (!Number.isSafeInteger(expectedRevision) || !idempotencyKey) {
+      const publishIntentId = String(commandRow.publishIntentId || '').trim();
+      if (!Number.isSafeInteger(expectedRevision) || !idempotencyKey || !publishIntentId) {
         throw new Error('Ozon publish command identity is invalid');
       }
-      return sourceOzonListingPublisher.publish({
+      return executeExtensionOzonPublish({
         draftId: workflowId,
         ownerUserId,
         actorUserId,
         expectedRevision,
         idempotencyKey,
+        publishIntentId,
         requestingDeviceSessionId: deviceSessionId,
       });
     },
@@ -2059,6 +2076,103 @@ if (isExtensionDeviceAuthEnabled()) {
     executeMediaApplyCommand: executeExtensionMediaOrSuiteApply,
   };
   await app.register(extensionCommandGrantRoutes, extensionCommandRoutesOptions);
+  const extensionByokPublishProvenanceRepository =
+    new PrismaExtensionByokMediaProvenanceRepository(prisma);
+  const extensionByokPublishProvenanceService = createExtensionByokMediaProvenanceService(
+    extensionByokPublishProvenanceRepository,
+  );
+  const extensionByokPublishStatusRepository =
+    createPrismaExtensionByokPublishStatusRepository(prisma);
+  const loadExtensionByokAcceptedPublishProvenance = async ({
+    provenanceId,
+    ownerUserId,
+  }: {
+    provenanceId: string;
+    ownerUserId: string;
+  }) => {
+    const row = await prisma.extensionByokMediaProvenance.findFirst({
+      where: { id: provenanceId, ownerUserId },
+      select: {
+        id: true,
+        executionMode: true,
+        ownerUserId: true,
+        actorUserId: true,
+        deviceSessionId: true,
+        shopId: true,
+        workflowId: true,
+        draftRevision: true,
+        draftVersion: true,
+        boundDraftRevision: true,
+        boundDraftVersion: true,
+        skuKey: true,
+        slotKey: true,
+        assignmentOrdinal: true,
+        assignmentSha256: true,
+        operation: true,
+        assetId: true,
+        publishIntentId: true,
+        publishReceiptId: true,
+        erpAiChargeCents: true,
+        resultSha256: true,
+        asset: { select: { sha256: true } },
+      },
+    });
+    const normalizedSha256 = row?.asset.sha256;
+    if (!row
+      || row.executionMode !== 'BYOK'
+      || !normalizedSha256
+      || normalizedSha256 !== row.resultSha256) return null;
+    return {
+      id: row.id,
+      executionMode: 'BYOK' as const,
+      ownerUserId: row.ownerUserId,
+      actorUserId: row.actorUserId,
+      deviceSessionId: row.deviceSessionId,
+      shopId: row.shopId,
+      workflowId: row.workflowId,
+      draftRevision: row.draftRevision,
+      draftVersion: row.draftVersion,
+      boundDraftRevision: row.boundDraftRevision,
+      boundDraftVersion: row.boundDraftVersion,
+      skuKey: row.skuKey,
+      slotKey: row.slotKey,
+      assignmentOrdinal: row.assignmentOrdinal,
+      assignmentSha256: row.assignmentSha256,
+      operation: String(row.operation),
+      assetId: row.assetId,
+      normalizedSha256,
+      publishIntentId: row.publishIntentId,
+      publishReceiptId: row.publishReceiptId,
+      erpAiChargeCents: row.erpAiChargeCents,
+    };
+  };
+  await app.register(extensionByokPublishRoutes, {
+    prefix: '/api/extension-device/byok-publish',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:publish'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    service: createExtensionByokListingPublishService({
+      loadDraft: async ({ workflowId, ownerUserId }) => {
+        try {
+          return await sourceListingWorkflowService.getDraft({
+            draftId: workflowId,
+            ownerUserId,
+          });
+        } catch (error) {
+          if (error instanceof SourceListingWorkflowError
+            && error.code === 'OZON_LISTING_DRAFT_NOT_FOUND') return null;
+          throw error;
+        }
+      },
+      loadAcceptedProvenance: loadExtensionByokAcceptedPublishProvenance,
+      authorizePublish: extensionByokPublishAuthorizer,
+      recordPublishIntent: (input) => sourceListingWorkflowService.recordPublishIntent(input),
+      findPublishStatus: (input) => extensionByokPublishStatusRepository.findStatus(input),
+      linkPublish: (input) => extensionByokPublishProvenanceService.linkPublish(input),
+    }),
+  });
   const byokGeneratedAssetRepository = createPrismaByokGeneratedAssetRepository(prisma);
   const byokMediaIngestStatusRepository = createPrismaExtensionByokMediaIngestStatusRepository(prisma);
   const byokUploadStagingStore = createPrismaExtensionByokUploadStagingStore(prisma as never);

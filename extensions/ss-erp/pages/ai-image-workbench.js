@@ -33,6 +33,17 @@
     rejectButton: byId('rejectButton'),
     approveButton: byId('approveButton'),
     approvedNotice: byId('approvedNotice'),
+    publishPanel: byId('publishPanel'),
+    publishStatus: byId('publishStatus'),
+    publishShop: byId('publishShop'),
+    publishDraft: byId('publishDraft'),
+    publishSkuOrder: byId('publishSkuOrder'),
+    publishMediaList: byId('publishMediaList'),
+    publishNotice: byId('publishNotice'),
+    publishConfirmationRow: byId('publishConfirmationRow'),
+    publishConfirmation: byId('publishConfirmation'),
+    publishConfirmButton: byId('publishConfirmButton'),
+    publishRecoverButton: byId('publishRecoverButton'),
     refreshButton: byId('refreshButton'),
   };
 
@@ -59,12 +70,37 @@
     previewExpiryTimer: null,
     busy: false,
     unknownOutcome: false,
+    publishPreview: null,
+    publishState: null,
     lifecycleEpoch: 0,
     authoritativeReloadPending: false,
   };
+  var PUBLISH_CONTRACT_VERSION = 'extension-byok-listing-publish/v1';
+  var PUBLISH_RECOVERY_STATES = [
+    'CONFIRMED', 'PREPARING', 'PREPARED', 'DISPATCHING',
+    'OUTCOME_UNRESOLVED', 'NOT_COMMITTED', 'PENDING',
+  ];
+  var PUBLISH_STATES = PUBLISH_RECOVERY_STATES.concat(['SUCCEEDED', 'FAILED']);
 
   function isRecord(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function exactKeys(value, keys) {
+    return isRecord(value)
+      && Object.keys(value).length === keys.length
+      && Object.keys(value).every(function (key) { return keys.includes(key); });
+  }
+
+  function isCanonicalText(value, minimum, maximum) {
+    if (typeof value !== 'string') return false;
+    var normalized = value.normalize('NFKC').trim();
+    return normalized === value && normalized.length >= minimum && normalized.length <= maximum
+      && !/[\u0000-\u001f\u007f]/u.test(normalized);
+  }
+
+  function isSha256(value) {
+    return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
   }
 
   function lifecycleIsCurrent(lifecycleEpoch) {
@@ -110,6 +146,17 @@
       SS_ERP_BYOK_INGEST_REQUEST_HASH_REQUIRED: '本地缺少精确接收身份；正在重新核对候选图状态。',
       SS_ERP_BYOK_INGEST_RECOVERY_UNAVAILABLE: 'ERP 回执暂时无法核对，请稍后重试。',
       SS_ERP_BYOK_INGEST_RECOVERY_REJECTED: 'ERP 已终止本次接收恢复；正在重新核对候选图状态。',
+      SS_ERP_BYOK_PUBLISH_PREVIEW_UNAVAILABLE: 'ERP 发布预览暂时不可用，请刷新后重试。',
+      SS_ERP_BYOK_PUBLISH_PREVIEW_REJECTED: 'ERP 拒绝了当前发布预览，草稿可能已变化。',
+      SS_ERP_BYOK_PUBLISH_RESPONSE_INVALID: 'ERP 发布预览未通过完整性校验，已阻止提交。',
+      SS_ERP_BYOK_PUBLISH_CONFIRMATION_REQUIRED: '发布预览已变化，请重新核对后确认。',
+      SS_ERP_BYOK_PUBLISH_IN_PROGRESS: '同一发布操作正在处理，请等待当前结果。',
+      SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME: '发布结果暂时未知；请核对同一发布身份，不要创建新的提交。',
+      SS_ERP_BYOK_PUBLISH_RECOVERY_UNAVAILABLE: '同一发布结果暂时无法核对，请稍后重试。',
+      SS_ERP_BYOK_PUBLISH_OPERATION_NOT_FOUND: '未找到可恢复的发布身份，请刷新权威预览。',
+      SS_ERP_BYOK_PUBLISH_IDEMPOTENCY_CONFLICT: '发布上下文与已保存身份不一致，已阻止提交。',
+      SS_ERP_BYOK_PUBLISH_STATE_INVALID: '本地发布恢复状态无效，已阻止提交。',
+      SS_ERP_BYOK_PUBLISH_RESULT_NOT_BOUND: '当前图片尚未完成 ERP 草稿绑定，不能发布。',
     };
     return labels[code] || '工作台操作失败，请刷新状态后重试。';
   }
@@ -209,6 +256,247 @@
     nodes.profileSummary.textContent = parts.join(' · ');
   }
 
+  function positiveInteger(value) {
+    return Number.isSafeInteger(value) && value > 0;
+  }
+
+  function publishStateMatchesBoundResult(value) {
+    var context = state.publicState && state.publicState.context;
+    var ingest = state.candidate && state.candidate.ingest;
+    return isRecord(context) && isRecord(ingest)
+      && value.shopId === context.shopId
+      && value.workflowId === context.workflowId
+      && value.boundDraftRevision === ingest.boundDraftRevision
+      && value.boundDraftVersion === ingest.boundDraftVersion;
+  }
+
+  function normalizePublishState(value) {
+    var keys = [
+      'contractVersion', 'state', 'shopId', 'workflowId', 'boundDraftRevision',
+      'boundDraftVersion', 'previewHash', 'receiptId', 'failureCode',
+    ];
+    if (!exactKeys(value, keys)
+      || value.contractVersion !== PUBLISH_CONTRACT_VERSION
+      || !PUBLISH_STATES.includes(value.state)
+      || !isCanonicalText(value.shopId, 1, 200)
+      || !isCanonicalText(value.workflowId, 1, 200)
+      || !positiveInteger(value.boundDraftRevision)
+      || !positiveInteger(value.boundDraftVersion)
+      || !isSha256(value.previewHash)
+      || !publishStateMatchesBoundResult(value)
+      || (value.receiptId !== null && !isCanonicalText(value.receiptId, 1, 200))
+      || (value.failureCode !== null
+        && (typeof value.failureCode !== 'string'
+          || !/^[A-Z][A-Z0-9_]{0,99}$/u.test(value.failureCode)))) {
+      throw new Error('publish_state_invalid');
+    }
+    if ((value.state === 'NOT_COMMITTED'
+      && (value.receiptId !== null || value.failureCode !== null))
+      || (['PENDING', 'SUCCEEDED'].includes(value.state)
+        && (value.receiptId === null || value.failureCode !== null))
+      || (value.state === 'FAILED' && value.failureCode === null)) {
+      throw new Error('publish_state_invalid');
+    }
+    return { ...value };
+  }
+
+  function normalizePublishPreview(value) {
+    var keys = [
+      'contractVersion', 'previewHash', 'shopId', 'workflowId',
+      'sourceDraftRevision', 'sourceDraftVersion', 'boundDraftRevision',
+      'boundDraftVersion', 'assetId', 'provenanceId', 'normalizedSha256',
+      'skuKey', 'slotKey', 'assignmentOrdinal', 'assignmentSha256',
+      'selectedSkuKeys', 'orderedMedia',
+    ];
+    var context = state.publicState && state.publicState.context;
+    var ingest = state.candidate && state.candidate.ingest;
+    if (!exactKeys(value, keys)
+      || value.contractVersion !== PUBLISH_CONTRACT_VERSION
+      || !isRecord(context) || !isRecord(ingest)
+      || !isSha256(value.previewHash)
+      || value.shopId !== context.shopId
+      || value.workflowId !== context.workflowId
+      || value.sourceDraftRevision !== ingest.sourceDraftRevision
+      || value.sourceDraftVersion !== ingest.sourceDraftVersion
+      || value.boundDraftRevision !== ingest.boundDraftRevision
+      || value.boundDraftVersion !== ingest.boundDraftVersion
+      || value.assetId !== ingest.assetId
+      || value.provenanceId !== ingest.provenanceId
+      || value.normalizedSha256 !== ingest.normalizedSha256
+      || value.skuKey !== ingest.skuKey
+      || value.slotKey !== ingest.slotKey
+      || value.assignmentOrdinal !== ingest.assignmentOrdinal
+      || value.assignmentSha256 !== ingest.assignmentSha256
+      || !Array.isArray(value.selectedSkuKeys)
+      || value.selectedSkuKeys.length < 1 || value.selectedSkuKeys.length > 500
+      || new Set(value.selectedSkuKeys).size !== value.selectedSkuKeys.length
+      || value.selectedSkuKeys.some(function (skuKey) {
+        return !isCanonicalText(skuKey, 1, 500);
+      })
+      || !value.selectedSkuKeys.includes(value.skuKey)
+      || !Array.isArray(value.orderedMedia)
+      || value.orderedMedia.length < 1 || value.orderedMedia.length > 500
+      || value.assignmentOrdinal >= value.orderedMedia.length) {
+      throw new Error('publish_preview_invalid');
+    }
+    var slots = new Set();
+    var assets = new Set();
+    var selected = new Set(value.selectedSkuKeys);
+    var media = value.orderedMedia.map(function (item, index) {
+      if (!exactKeys(item, ['ordinal', 'scope', 'skuKey', 'slotKey', 'assetId', 'source'])
+        || item.ordinal !== index
+        || !['PRODUCT', 'SKU'].includes(item.scope)
+        || !['SOURCE', 'REVIEWED', 'GENERATED', 'TRANSLATED', 'EDITED'].includes(item.source)
+        || !isCanonicalText(item.slotKey, 1, 200)
+        || !isCanonicalText(item.assetId, 1, 500)
+        || slots.has(item.slotKey) || assets.has(item.assetId)
+        || (item.scope === 'PRODUCT' && item.skuKey !== null)
+        || (item.scope === 'SKU'
+          && (!isCanonicalText(item.skuKey, 1, 500) || !selected.has(item.skuKey)))) {
+        throw new Error('publish_preview_invalid');
+      }
+      slots.add(item.slotKey);
+      assets.add(item.assetId);
+      return { ...item };
+    });
+    var target = media[value.assignmentOrdinal];
+    if (!target || target.scope !== 'SKU' || target.skuKey !== value.skuKey
+      || target.slotKey !== value.slotKey || target.assetId !== value.assetId
+      || target.source !== 'GENERATED') {
+      throw new Error('publish_preview_invalid');
+    }
+    return {
+      ...value,
+      selectedSkuKeys: [...value.selectedSkuKeys],
+      orderedMedia: media,
+    };
+  }
+
+  function setPublishStatus(message, tone) {
+    nodes.publishStatus.textContent = message;
+    ['state-pending', 'state-ready', 'state-success', 'state-warning', 'state-error']
+      .forEach(function (name) { nodes.publishStatus.classList.remove(name); });
+    nodes.publishStatus.classList.add('state-' + tone);
+  }
+
+  function clearPublishView() {
+    state.publishPreview = null;
+    state.publishState = null;
+    nodes.publishPanel.hidden = true;
+    nodes.publishShop.textContent = '待读取';
+    nodes.publishDraft.textContent = '待读取';
+    nodes.publishSkuOrder.textContent = '待读取';
+    nodes.publishMediaList.replaceChildren();
+    nodes.publishNotice.textContent = '正在读取 ERP 权威发布预览。';
+    nodes.publishConfirmation.checked = false;
+    nodes.publishConfirmationRow.hidden = false;
+    nodes.publishRecoverButton.hidden = true;
+    nodes.publishConfirmButton.disabled = true;
+    setPublishStatus('正在读取', 'pending');
+  }
+
+  function renderPublishPreview(preview) {
+    state.publishPreview = preview;
+    nodes.publishPanel.hidden = false;
+    nodes.publishShop.textContent = preview.shopId;
+    nodes.publishDraft.textContent = preview.workflowId
+      + ' · r' + preview.boundDraftRevision + ' · v' + preview.boundDraftVersion;
+    nodes.publishSkuOrder.textContent = preview.selectedSkuKeys.join(' -> ');
+    var rows = preview.orderedMedia.map(function (item) {
+      var row = document.createElement('li');
+      row.classList.add('publish-media-item');
+      if (item.assetId === preview.assetId
+        && item.slotKey === preview.slotKey
+        && item.ordinal === preview.assignmentOrdinal) {
+        row.classList.add('is-bound-asset');
+      }
+      var scope = item.scope === 'SKU' ? 'SKU ' + item.skuKey : '商品';
+      row.textContent = String(item.ordinal + 1).padStart(2, '0')
+        + ' · ' + scope + ' · ' + item.slotKey + ' · ' + item.assetId;
+      return row;
+    });
+    nodes.publishMediaList.replaceChildren.apply(nodes.publishMediaList, rows);
+  }
+
+  function renderPublishControls() {
+    var hasPreview = Boolean(state.publishPreview);
+    var recoverable = Boolean(state.publishState
+      && PUBLISH_RECOVERY_STATES.includes(state.publishState.state));
+    var awaitingConfirmation = hasPreview && state.publishState === null;
+    nodes.publishConfirmationRow.hidden = !awaitingConfirmation;
+    nodes.publishRecoverButton.hidden = !recoverable;
+    nodes.publishRecoverButton.disabled = state.busy || !recoverable;
+    nodes.publishConfirmButton.disabled = state.busy || !awaitingConfirmation
+      || nodes.publishConfirmation.checked !== true;
+  }
+
+  function renderPublishState(value) {
+    state.publishState = value;
+    nodes.publishPanel.hidden = false;
+    if (!value) {
+      setPublishStatus('等待确认', 'warning');
+      nodes.publishNotice.textContent = '核对清单后勾选确认，再提交到 Ozon。';
+    } else if (value.state === 'SUCCEEDED') {
+      setPublishStatus('已提交', 'success');
+      nodes.publishNotice.textContent = 'ERP 发布回执 ' + value.receiptId + ' 已成功完成。';
+    } else if (value.state === 'FAILED') {
+      setPublishStatus('提交失败', 'error');
+      nodes.publishNotice.textContent = 'ERP 已确认失败：' + value.failureCode
+        + (value.receiptId ? ' · 回执 ' + value.receiptId : '');
+    } else if (value.state === 'PENDING') {
+      setPublishStatus('尚未形成终态', 'pending');
+      nodes.publishNotice.textContent = 'ERP 回执 ' + value.receiptId
+        + ' 可能仍在处理或等待对账；只核对并恢复同一发布身份。';
+    } else if (value.state === 'NOT_COMMITTED') {
+      setPublishStatus('等待恢复', 'warning');
+      nodes.publishNotice.textContent = 'ERP 已确认尚未提交；恢复将继续同一发布身份。';
+    } else {
+      setPublishStatus('结果未知', 'warning');
+      nodes.publishNotice.textContent = '发布结果尚未确认；请只恢复同一发布身份，不要创建第二次提交。';
+    }
+    renderPublishControls();
+  }
+
+  function renderPublishFallback(candidate, publishState) {
+    var context = state.publicState && state.publicState.context;
+    var ingest = candidate && candidate.ingest;
+    nodes.publishPanel.hidden = false;
+    nodes.publishShop.textContent = publishState ? publishState.shopId : context.shopId;
+    nodes.publishDraft.textContent = (publishState ? publishState.workflowId : context.workflowId)
+      + ' · r' + ingest.boundDraftRevision + ' · v' + ingest.boundDraftVersion;
+    nodes.publishSkuOrder.textContent = ingest.skuKey;
+    nodes.publishMediaList.replaceChildren();
+  }
+
+  async function loadPublishPanel(candidate, lifecycleEpoch) {
+    clearPublishView();
+    var authoritative = state.publicState && state.publicState.publish;
+    if (authoritative !== null && authoritative !== undefined) {
+      state.publishState = normalizePublishState(authoritative);
+      renderPublishFallback(candidate, state.publishState);
+      renderPublishState(state.publishState);
+    }
+    try {
+      var preview = await client.getPublishPreview();
+      if (!lifecycleIsCurrent(lifecycleEpoch) || state.candidate !== candidate) return false;
+      preview = normalizePublishPreview(preview);
+      renderPublishPreview(preview);
+      renderPublishState(state.publishState);
+      return true;
+    } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch) || state.candidate !== candidate) return false;
+      renderPublishFallback(candidate, state.publishState);
+      if (state.publishState) {
+        renderPublishState(state.publishState);
+      } else {
+        setPublishStatus('预览不可用', 'error');
+        nodes.publishNotice.textContent = errorLabel(error);
+        renderPublishControls();
+      }
+      return false;
+    }
+  }
+
   function renderControls() {
     var ready = profileCanGenerate(selectedProfileRow()) && readinessIsCurrent();
     var promptReady = String(nodes.promptInput.value || '').normalize('NFKC').trim().length > 0;
@@ -236,6 +524,7 @@
       || (candidateReady && state.previewReadyResultId !== state.candidate.resultId)
       || (!candidateReady && !approved && !ingesting);
     renderProfileSummary();
+    renderPublishControls();
   }
 
   function revokePreview() {
@@ -256,6 +545,7 @@
   function clearResultView() {
     revokePreview();
     state.candidate = null;
+    clearPublishView();
     nodes.resultPanel.hidden = true;
     nodes.emptyResult.hidden = false;
     nodes.previewFrame.hidden = false;
@@ -294,11 +584,14 @@
         + ' · 已绑定草稿 v' + candidate.ingest.boundDraftVersion
         + ' · 资源 ' + candidate.ingest.assetId;
       setResultStatus('已绑定 ERP', 'success');
-      setStatus('图片已绑定 ERP 草稿；Ozon 发布仍未执行。', 'success');
+      setStatus('图片已绑定 ERP 草稿。请核对下方权威发布清单。', 'success');
+      await loadPublishPanel(candidate, lifecycleEpoch);
+      if (!lifecycleIsCurrent(lifecycleEpoch) || state.candidate !== candidate) return false;
       renderControls();
       return true;
     }
     if (candidate && candidate.deliveryState === 'INGESTING') {
+      clearPublishView();
       revokePreview();
       state.candidate = candidate;
       nodes.resultPanel.hidden = false;
@@ -311,6 +604,7 @@
       renderControls();
       return true;
     }
+    clearPublishView();
     revokePreview();
     var previewEpoch = state.previewEpoch;
     var expiresAt = candidate && typeof candidate.expiresAt === 'string'
@@ -615,7 +909,7 @@
       }
       await showCandidate(bound, lifecycleEpoch);
       if (!lifecycleIsCurrent(lifecycleEpoch)) return;
-      setStatus('图片已由 ERP 规范化、存储并绑定到新草稿；Ozon 发布仍未执行。', 'success');
+      setStatus('图片已由 ERP 规范化、存储并绑定到新草稿。请核对发布清单。', 'success');
     } catch (error) {
       if (!lifecycleIsCurrent(lifecycleEpoch)) return;
       if (error && [
@@ -654,7 +948,7 @@
       }
       await showCandidate(bound, lifecycleEpoch);
       if (!lifecycleIsCurrent(lifecycleEpoch)) return;
-      setStatus('已恢复 ERP 接收回执；图片已绑定草稿，Ozon 发布仍未执行。', 'success');
+      setStatus('已恢复 ERP 接收回执；图片已绑定草稿。请核对发布清单。', 'success');
     } catch (error) {
       if (!lifecycleIsCurrent(lifecycleEpoch)) return;
       if (error && [
@@ -667,6 +961,93 @@
       ].includes(error.code)) {
         state.authoritativeReloadPending = true;
       }
+      setStatus(errorLabel(error), 'warning');
+    } finally {
+      finishBusyOperation(lifecycleEpoch);
+    }
+  }
+
+  function unresolvedPublishState() {
+    var preview = state.publishPreview;
+    if (!preview) return null;
+    return {
+      contractVersion: PUBLISH_CONTRACT_VERSION,
+      state: 'OUTCOME_UNRESOLVED',
+      shopId: preview.shopId,
+      workflowId: preview.workflowId,
+      boundDraftRevision: preview.boundDraftRevision,
+      boundDraftVersion: preview.boundDraftVersion,
+      previewHash: preview.previewHash,
+      receiptId: null,
+      failureCode: null,
+    };
+  }
+
+  async function confirmListingPublish() {
+    if (state.busy || !state.publishPreview || state.publishState
+      || nodes.publishConfirmation.checked !== true) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    state.busy = true;
+    renderControls();
+    setPublishStatus('正在提交', 'pending');
+    nodes.publishNotice.textContent = 'ERP 正在创建同一发布意图、授权和回执。';
+    try {
+      var result = await client.confirmPublish(state.publishPreview.previewHash);
+      if (!lifecycleIsCurrent(lifecycleEpoch)) return;
+      result = normalizePublishState(result);
+      renderPublishState(result);
+      var failed = result.state === 'FAILED';
+      setStatus(
+        result.state === 'SUCCEEDED'
+          ? 'Ozon 发布已由 ERP 成功完成。'
+          : failed
+            ? 'Ozon 发布已由 ERP 确认失败：' + result.failureCode
+            : 'Ozon 发布已进入 ERP 回执恢复流程。',
+        result.state === 'SUCCEEDED' ? 'success' : failed ? 'error' : 'warning',
+      );
+    } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch)) return;
+      if (error && error.code === 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME') {
+        var unresolved = unresolvedPublishState();
+        if (unresolved) renderPublishState(unresolved);
+        setStatus(errorLabel(error), 'warning');
+      } else {
+        nodes.publishConfirmation.checked = false;
+        renderPublishState(null);
+        nodes.publishNotice.textContent = errorLabel(error);
+        setStatus(errorLabel(error), 'error');
+      }
+    } finally {
+      finishBusyOperation(lifecycleEpoch);
+    }
+  }
+
+  async function recoverListingPublish() {
+    if (state.busy || !state.publishState
+      || !PUBLISH_RECOVERY_STATES.includes(state.publishState.state)) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    state.busy = true;
+    renderControls();
+    setPublishStatus('正在核对', 'pending');
+    nodes.publishNotice.textContent = '正在核对并恢复同一 ERP 发布回执。';
+    try {
+      var result = await client.recoverPublish();
+      if (!lifecycleIsCurrent(lifecycleEpoch)) return;
+      result = normalizePublishState(result);
+      renderPublishState(result);
+      var failed = result.state === 'FAILED';
+      setStatus(
+        result.state === 'SUCCEEDED'
+          ? '已确认 Ozon 发布成功。'
+          : failed
+            ? 'ERP 已确认 Ozon 发布失败：' + result.failureCode
+            : 'ERP 发布回执仍需继续核对。',
+        result.state === 'SUCCEEDED' ? 'success' : failed ? 'error' : 'warning',
+      );
+    } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch)) return;
+      var unresolved = unresolvedPublishState();
+      if (unresolved) renderPublishState(unresolved);
       setStatus(errorLabel(error), 'warning');
     } finally {
       finishBusyOperation(lifecycleEpoch);
@@ -721,6 +1102,18 @@
       return;
     }
     void reviewCandidate('APPROVE');
+  });
+  nodes.publishConfirmation.addEventListener('change', function (event) {
+    if (!event || event.isTrusted !== true || state.busy) return;
+    renderPublishControls();
+  });
+  nodes.publishConfirmButton.addEventListener('click', function (event) {
+    if (!event || event.isTrusted !== true || nodes.publishConfirmButton.disabled) return;
+    void confirmListingPublish();
+  });
+  nodes.publishRecoverButton.addEventListener('click', function (event) {
+    if (!event || event.isTrusted !== true || nodes.publishRecoverButton.disabled) return;
+    void recoverListingPublish();
   });
   nodes.refreshButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || nodes.refreshButton.disabled) return;

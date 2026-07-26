@@ -158,7 +158,7 @@
     }
     var requiredTypes = [
       'GET_PUBLIC_STATE', 'GET_READINESS', 'EXECUTE_PROVIDER', 'OPEN_PREVIEW',
-      'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST',
+      'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST', 'PUBLISH',
     ];
     var typeValues = requiredTypes.map(function (name) {
       return text(
@@ -202,6 +202,10 @@
     var recoverIngestResult = requiredMethod(config.ingestClient, 'recover');
     var discardIngestResult = requiredMethod(config.ingestClient, 'discardResult');
     var getIngestOperationState = requiredMethod(config.ingestClient, 'getOperationState');
+    var previewPublish = requiredMethod(config.publishCoordinator, 'preview');
+    var confirmPublish = requiredMethod(config.publishCoordinator, 'confirm');
+    var recoverPublish = requiredMethod(config.publishCoordinator, 'recover');
+    var getPublishState = requiredMethod(config.publishCoordinator, 'getState');
     var vault = config.vault;
     var getVaultEntry = requiredMethod(vault, 'getForBackground');
     var getPublicResult = requiredMethod(vault, 'getPublic');
@@ -222,6 +226,7 @@
         : null;
     if (!randomValues) throw handlerError('SS_ERP_BYOK_WORKBENCH_DEPENDENCY_UNAVAILABLE');
     var reviewLocks = new Set();
+    var publishLocks = new Set();
 
     function currentMillis() {
       var value = new Date(now()).getTime();
@@ -345,6 +350,32 @@
       }
     }
 
+    function publishInput(session) {
+      var result = session && session.result;
+      var ingest = result && result.ingest;
+      var context = session && session.context;
+      if (!isRecord(context) || !isRecord(ingest)
+        || result.reviewState !== 'APPROVED'
+        || result.deliveryState !== 'BOUND') {
+        throw handlerError('SS_ERP_BYOK_PUBLISH_RESULT_NOT_BOUND');
+      }
+      return {
+        shopId: context.shopId,
+        workflowId: context.workflowId,
+        sourceDraftRevision: ingest.sourceDraftRevision,
+        sourceDraftVersion: ingest.sourceDraftVersion,
+        boundDraftRevision: ingest.boundDraftRevision,
+        boundDraftVersion: ingest.boundDraftVersion,
+        assetId: ingest.assetId,
+        provenanceId: ingest.provenanceId,
+        normalizedSha256: ingest.normalizedSha256,
+        skuKey: ingest.skuKey,
+        slotKey: ingest.slotKey,
+        assignmentOrdinal: ingest.assignmentOrdinal,
+        assignmentSha256: ingest.assignmentSha256,
+      };
+    }
+
     function evidenceProjection(value, current) {
       if (!isRecord(value) || value.operation !== OPERATION || value.requestMode !== REQUEST_MODE) {
         return null;
@@ -454,6 +485,23 @@
       }
     }
 
+    async function withPublishLock(sender, operation) {
+      var tab = sender && sender.tabId;
+      if (!Number.isSafeInteger(tab) || tab < 0) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+      }
+      var key = String(tab);
+      if (publishLocks.has(key)) {
+        throw handlerError('SS_ERP_BYOK_PUBLISH_IN_PROGRESS');
+      }
+      publishLocks.add(key);
+      try {
+        return await operation();
+      } finally {
+        publishLocks.delete(key);
+      }
+    }
+
     var handlers = {};
 
     handlers[messageTypes.GET_PUBLIC_STATE] = guarded(async function (handlerContext) {
@@ -462,12 +510,16 @@
       }
       var session = await claimLive(handlerContext.sender);
       var result = await readSessionResult(session, handlerContext.sender);
+      var publish = result && result.deliveryState === 'BOUND'
+        ? await getPublishState(publishInput(session))
+        : null;
       return {
         contractVersion: PUBLIC_STATE_VERSION,
         executionMode: 'BYOK',
         context: session.context,
         profiles: await publicProfileStates(),
         result: result,
+        publish: publish,
         generationOutcome: session.operation ? 'UNKNOWN_OUTCOME' : null,
         deliveryState: result && result.deliveryState === 'BOUND'
           ? 'BOUND'
@@ -811,6 +863,28 @@
           deliveryState: 'BOUND',
           ingest: committedSession.result.ingest,
         };
+      });
+    });
+
+    handlers[messageTypes.PUBLISH] = guarded(function (handlerContext) {
+      return withPublishLock(handlerContext.sender, async function () {
+        var input = handlerContext.payload || {};
+        var action = input.action;
+        var expectedKeys = action === 'CONFIRM'
+          ? ['action', 'previewHash']
+          : ['action'];
+        if (!exactKeys(input, expectedKeys)
+          || !['PREVIEW', 'CONFIRM', 'RECOVER'].includes(action)
+          || (action === 'CONFIRM'
+            && (typeof input.previewHash !== 'string'
+              || !/^[a-f0-9]{64}$/u.test(input.previewHash)))) {
+          throw handlerError('SS_ERP_BYOK_PUBLISH_INPUT_INVALID');
+        }
+        var session = await claimLive(handlerContext.sender);
+        var bound = publishInput(session);
+        if (action === 'PREVIEW') return previewPublish(bound);
+        if (action === 'RECOVER') return recoverPublish(bound);
+        return confirmPublish({ ...bound, previewHash: input.previewHash });
       });
     });
 

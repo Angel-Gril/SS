@@ -49,6 +49,7 @@ try {
     'src/__tests__/ai-media-translation-budget.postgres.integration.test.ts',
     'src/__tests__/ai-image-workbench-billing-separation.postgres.integration.test.ts',
     'src/__tests__/extension-byok-media-provenance.postgres.integration.test.ts',
+    'src/__tests__/extension-byok-publish-vertical.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),
     AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),

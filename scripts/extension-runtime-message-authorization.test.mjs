@@ -104,6 +104,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const preview = api.MESSAGE_TYPES.WORKBENCH.OPEN_PREVIEW;
   const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
   const recoverIngest = api.MESSAGE_TYPES.WORKBENCH.RECOVER_INGEST;
+  const publish = api.MESSAGE_TYPES.WORKBENCH.PUBLISH;
 
   for (const type of [
     setupContext,
@@ -116,6 +117,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     preview,
     review,
     recoverIngest,
+    publish,
   ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
   }
@@ -151,6 +153,11 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     execute,
+    extensionSender('/pages/ai-image-workbench.html'),
+    extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    publish,
     extensionSender('/pages/ai-image-workbench.html'),
     extensionId,
   ), true);
@@ -202,6 +209,26 @@ test('allows approved Blob ingest to rely on its dedicated server grant instead 
   });
   assert.equal(decision.allowed, true);
   assert.equal(decision.readiness, null);
+  assert.equal(verificationCalls, 0);
+});
+
+test('allows publish preview and confirmation to rely on the exact live server publish grant', async () => {
+  const { api } = loadApi();
+  let verificationCalls = 0;
+  for (const payload of [
+    { action: 'PREVIEW' },
+    { action: 'CONFIRM', previewHash: 'a'.repeat(64) },
+    { action: 'RECOVER' },
+  ]) {
+    const decision = await api.authorizeRuntimeMessage({
+      runtimeId: extensionId,
+      sender: extensionSender('/pages/ai-image-workbench.html'),
+      message: { type: api.MESSAGE_TYPES.WORKBENCH.PUBLISH, payload },
+      async verifyReadinessHandle() { verificationCalls += 1; },
+    });
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.readiness, null);
+  }
   assert.equal(verificationCalls, 0);
 });
 
@@ -333,7 +360,7 @@ test('rejects byte-like arrays and encoded image bodies before a workbench handl
   }
 });
 
-test('requires an authenticated exact ERP readiness binding for Provider and publish actions', async () => {
+test('requires an authenticated exact ERP readiness binding for Provider actions', async () => {
   const { api } = loadApi();
   const binding = readinessBinding(api);
   const message = {
@@ -620,7 +647,7 @@ test('ships the authorization module as a background-only security boundary', ()
   );
   assert.match(serviceWorkerSource, /SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE/u);
   assert.match(serviceWorkerSource, /chrome\.tabs\.onRemoved\.addListener/u);
-  assert.match(serviceWorkerSource, /edit, batch, and publish[\s\S]*remain dark/u);
+  assert.match(serviceWorkerSource, /publish bridge[\s\S]*edit and batch handlers remain dark/u);
   assert.match(
     verifierSource,
     /requiredSecurityModules[\s\S]*shared\/message-security\/runtime-message-authorization\.js/u,

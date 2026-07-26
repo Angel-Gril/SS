@@ -34,6 +34,11 @@ import {
   EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
   type ByokMediaIngestCommandResolverOptions,
 } from '../services/extension-byok-media-ingest-grant.js';
+import {
+  OZON_PUBLISH_ATTEMPT_STATES,
+  type OzonPublishAttemptRecord,
+  type OzonPublishAttemptState,
+} from '../services/ozon-publish-attempts.js';
 
 interface MediaWorkflowRolloutDecision {
   enabled: boolean;
@@ -854,8 +859,9 @@ export interface ExtensionCommandGrantRoutesOptions {
     shopId: string;
     workflowId: string;
     draftVersion: number;
+    idempotencyKey: string;
     command: Record<string, unknown>;
-  }): Promise<unknown>;
+  }): Promise<Pick<OzonPublishAttemptRecord, 'state' | 'lastErrorCode'>>;
   executeMediaWorkflowCommand?(input: {
     ownerUserId: string;
     actorUserId: string;
@@ -1091,7 +1097,21 @@ export async function extensionCommandGrantRoutes(
         requestHash: hashExtensionCommandRequest(envelope),
         token,
       });
-      if (authorized.kind === 'replay') {
+      let receipt = authorized.receipt;
+      let recovering = false;
+      if (authorized.kind === 'replay' && authorized.receipt.status === 'PENDING') {
+        const recovery = await options.service.claimPendingRecovery({
+          receiptId: authorized.receipt.id,
+        });
+        if (recovery.kind !== 'acquired') {
+          return reply.status(202).send({
+            code: 1,
+            data: { receipt: recovery.receipt, replay: true },
+          });
+        }
+        receipt = recovery.receipt;
+        recovering = true;
+      } else if (authorized.kind === 'replay') {
         return reply.send({ code: 1, data: { receipt: authorized.receipt, replay: true } });
       }
       try {
@@ -1102,14 +1122,47 @@ export async function extensionCommandGrantRoutes(
           shopId: parsed.data.shopId,
           workflowId: parsed.data.workflowId,
           draftVersion: parsed.data.draftVersion,
+          idempotencyKey: parsed.data.idempotencyKey,
           command: parsed.data.command,
         });
         if (result === undefined) {
-          await options.service.fail({ receiptId: authorized.receipt.id, failureCode: 'PUBLISH_EXECUTOR_UNAVAILABLE' });
+          await options.service.fail({ receiptId: receipt.id, failureCode: 'PUBLISH_EXECUTOR_UNAVAILABLE' });
           return error(reply, 503, 'publish_executor_unavailable', 'Ozon 发布执行器暂不可用');
         }
-        const receipt = await options.service.complete({ receiptId: authorized.receipt.id, result });
-        return reply.status(202).send({ code: 1, data: { receipt, replay: false } });
+        const attemptState = String((result as { state?: unknown }).state || '');
+        if (!OZON_PUBLISH_ATTEMPT_STATES.includes(attemptState as OzonPublishAttemptState)) {
+          throw Object.assign(new Error('Ozon publish executor returned an invalid state'), {
+            code: 'PUBLISH_RESULT_INVALID',
+          });
+        }
+        if (attemptState === 'REJECTED') {
+          const candidateCode = String(result.lastErrorCode || '');
+          const failureCode = /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidateCode)
+            ? candidateCode
+            : 'OZON_SUBMIT_REJECTED';
+          const failedReceipt = await options.service.fail({
+            receiptId: receipt.id,
+            failureCode,
+            result: null,
+          });
+          return reply.status(409).send({
+            code: 0,
+            errorCode: 'publish_failed',
+            msg: 'Ozon 发布执行失败',
+            data: { receipt: failedReceipt },
+          });
+        }
+        if (attemptState !== 'SUBMITTED') {
+          return reply.status(202).send({
+            code: 1,
+            data: { receipt, replay: recovering },
+          });
+        }
+        const completed = await options.service.complete({ receiptId: receipt.id, result });
+        return reply.status(recovering ? 200 : 202).send({
+          code: 1,
+          data: { receipt: completed, replay: recovering },
+        });
       } catch (caught) {
         const candidateCode = caught && typeof caught === 'object'
           ? String((caught as { code?: unknown }).code || '')
@@ -1117,12 +1170,17 @@ export async function extensionCommandGrantRoutes(
         const failureCode = /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidateCode)
           ? candidateCode
           : 'PUBLISH_FAILED';
-        const receipt = await options.service.fail({
-          receiptId: authorized.receipt.id,
+        const failedReceipt = await options.service.fail({
+          receiptId: receipt.id,
           failureCode,
           result: null,
         });
-        return reply.status(409).send({ code: 0, errorCode: 'publish_failed', msg: 'Ozon 发布执行失败', data: { receipt } });
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'publish_failed',
+          msg: 'Ozon 发布执行失败',
+          data: { receipt: failedReceipt },
+        });
       }
     } catch (caught) {
       if (!(caught instanceof ExtensionCommandGrantError)) throw caught;

@@ -107,7 +107,7 @@ function input(overrides: Record<string, unknown> = {}) {
     shopId: 'shop-1',
     workflowId: 'draft-1',
     assignments: [{ assetId: 'asset-byok' }],
-    requestingDeviceSessionId: 'device-publisher',
+    requestingDeviceSessionId: 'device-origin',
     ...overrides,
   } as any;
 }
@@ -149,14 +149,14 @@ describe('extension BYOK publish authorization', () => {
     expect(loadPolicy).toHaveBeenCalledTimes(1);
   });
 
-  it('requires ingest scope on the provenance device and publish scope on the requesting device', async () => {
-    for (const [sessionId, scopes] of [
-      ['device-origin', ['listing:publish']],
-      ['device-publisher', ['byok:media:ingest']],
+  it('requires both ingest and publish scope on the provenance device', async () => {
+    for (const scopes of [
+      ['listing:publish'],
+      ['byok:media:ingest'],
     ] as const) {
       const authorize = createExtensionByokPublishAuthorizer(dependencies({
-        loadDeviceAuthorization: async ({ sessionId: current }: { sessionId: string }) => (
-          deviceAuthorization(current, current === sessionId ? { scopes: [...scopes] } : {})
+        loadDeviceAuthorization: async ({ sessionId }: { sessionId: string }) => (
+          deviceAuthorization(sessionId, { scopes: [...scopes] })
         ),
       }));
       await expect(authorize(input())).rejects.toMatchObject({
@@ -164,6 +164,17 @@ describe('extension BYOK publish authorization', () => {
         reasonCode: 'DEVICE_NOT_ALLOWED',
       });
     }
+  });
+
+  it('rejects publishing from a different device than the accepted BYOK provenance', async () => {
+    const authorize = createExtensionByokPublishAuthorizer(dependencies());
+
+    await expect(authorize(input({ requestingDeviceSessionId: 'device-publisher' })))
+      .rejects.toMatchObject({
+        code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+        reasonCode: 'DEVICE_NOT_ALLOWED',
+        statusCode: 409,
+      });
   });
 
   it('propagates a missing publish scope from the cached same-device authorization', async () => {
@@ -214,7 +225,6 @@ describe('extension BYOK publish authorization', () => {
     ['origin device', { deviceSessionIds: ['device-publisher'] }, {}, {}, 'DEVICE_NOT_ALLOWED'],
     ['operation', { allowedOperations: ['FULL_EDIT'] }, {}, {}, 'OPERATION_NOT_ALLOWED'],
     ['origin', { allowedOrigins: ['https://other.example'] }, {}, {}, 'ORIGIN_NOT_ALLOWED'],
-    ['publishing device', { deviceSessionIds: ['device-origin'] }, {}, {}, 'DEVICE_NOT_ALLOWED'],
   ] as const)(
     'rejects a pilot policy that does not match the exact %s',
     async (_label, policyPatch, provenancePatch, inputPatch, reasonCode) => {

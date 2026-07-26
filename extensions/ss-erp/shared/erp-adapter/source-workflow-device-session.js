@@ -5,6 +5,8 @@
   var DEFAULT_MASK_REQUEST_TIMEOUT_MS = 60000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
+  var MAX_PUBLISH_RESPONSE_BYTES = 4 * 1024 * 1024;
+  var MAX_PUBLISH_REQUEST_BYTES = 1 * 1024 * 1024;
   var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
   var MAX_BYOK_INGEST_REQUEST_BYTES = 20 * 1024 * 1024;
   var MAX_BYOK_INGEST_MANIFEST_CHARACTERS = Math.ceil(16 * 1024 * 4 / 3) + 8;
@@ -13,6 +15,14 @@
   var BYOK_MEDIA_INGEST_PATH = '/api/extension-device/byok-media/ingest';
   var BYOK_MEDIA_INGEST_STATUS_PATH = '/api/extension-device/byok-media/ingest-status';
   var BYOK_READINESS_PATH = '/api/extension-device/byok-media/readiness';
+  var BYOK_PUBLISH_PREVIEW_PATH = '/api/extension-device/byok-publish/preview';
+  var BYOK_PUBLISH_PREPARE_PATH = '/api/extension-device/byok-publish/prepare';
+  var BYOK_PUBLISH_STATUS_PATH = '/api/extension-device/byok-publish/status';
+  var OZON_PUBLISH_EXECUTE_PATH = '/api/extension-device/ozon-publish/execute';
+  var LARGE_PUBLISH_REQUEST_PATHS = new Set([
+    '/api/extension-device/command-grants',
+    OZON_PUBLISH_EXECUTE_PATH,
+  ]);
   var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([
     MEDIA_EDIT_SOURCE_PATH,
     MEDIA_EDIT_MASK_PATH,
@@ -36,6 +46,10 @@
       BYOK_MEDIA_INGEST_PATH,
       BYOK_MEDIA_INGEST_STATUS_PATH,
       BYOK_READINESS_PATH,
+      BYOK_PUBLISH_PREVIEW_PATH,
+      BYOK_PUBLISH_PREPARE_PATH,
+      BYOK_PUBLISH_STATUS_PATH,
+      OZON_PUBLISH_EXECUTE_PATH,
     ]);
     var allowed = method === 'GET'
       ? path.startsWith('/api/extension-device/source-workbench/')
@@ -96,9 +110,12 @@
     };
   }
 
-  async function readJsonResponse(response) {
+  async function readJsonResponse(response, maximumBytes) {
+    var byteLimit = Number.isSafeInteger(maximumBytes) && maximumBytes > 0
+      ? maximumBytes
+      : MAX_RESPONSE_BYTES;
     var contentLength = Number(responseHeader(response, 'content-length'));
-    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+    if (Number.isFinite(contentLength) && contentLength > byteLimit) {
       throw new Error('source workbench response is too large');
     }
 
@@ -113,7 +130,7 @@
           if (part.done) break;
           var chunk = part.value instanceof Uint8Array ? part.value : new Uint8Array(part.value || []);
           total += chunk.byteLength;
-          if (total > MAX_RESPONSE_BYTES) {
+          if (total > byteLimit) {
             if (typeof reader.cancel === 'function') await reader.cancel();
             throw new Error('source workbench response is too large');
           }
@@ -135,7 +152,7 @@
       throw new Error('source workbench response body is unavailable');
     }
     var text = await response.text();
-    if (byteLength(text) > MAX_RESPONSE_BYTES) {
+    if (byteLength(text) > byteLimit) {
       throw new Error('source workbench response is too large');
     }
     return JSON.parse(text);
@@ -186,9 +203,12 @@
             throw new TypeError('source workbench command body is invalid');
           }
           requestBody = JSON.stringify(bodyValue);
+          var publishRequest = commandOptions
+            && commandOptions.requiredScope === 'listing:publish'
+            && LARGE_PUBLISH_REQUEST_PATHS.has(path);
           var maximumRequestBytes = path === MEDIA_EDIT_MASK_PATH
             ? MAX_MEDIA_EDIT_MASK_REQUEST_BYTES
-            : MAX_COMMAND_REQUEST_BYTES;
+            : publishRequest ? MAX_PUBLISH_REQUEST_BYTES : MAX_COMMAND_REQUEST_BYTES;
           if (byteLength(requestBody) > maximumRequestBytes) {
             throw new Error('source workbench command is too large');
           }
@@ -212,6 +232,7 @@
             ? 'byok:media:ingest'
             : requestedScope === 'listing:review'
             || requestedScope === 'listing:write'
+            || requestedScope === 'listing:publish'
             || requestedScope === 'media:execute'
             || requestedScope === 'byok:media:ingest'
             ? requestedScope
@@ -243,21 +264,47 @@
             ...(requestBody == null ? {} : { body: requestBody }),
             credentials: 'omit',
             cache: 'no-store',
-            ...(binaryRequest ? { redirect: 'error' } : {}),
+            redirect: 'error',
             signal: controller.signal,
           });
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
           }
+          var maximumResponseBytes = path === BYOK_PUBLISH_PREVIEW_PATH
+            ? MAX_PUBLISH_RESPONSE_BYTES
+            : MAX_RESPONSE_BYTES;
           if ((response.status === 401 || response.status === 410) && binaryRequest) {
             var grantErrorBody = null;
-            try { grantErrorBody = await readJsonResponse(response); } catch {}
+            try { grantErrorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
             if (grantErrorBody && [
               'byok_ingest_grant_required',
               'byok_ingest_grant_expired',
               'byok_ingest_grant_revoked',
             ].includes(grantErrorBody.errorCode)) {
               return { state: 'http_error', status: response.status, body: grantErrorBody };
+            }
+          }
+          if ((response.status === 401 || response.status === 404 || response.status === 410)
+            && path === OZON_PUBLISH_EXECUTE_PATH) {
+            var publishGrantErrorBody = null;
+            try {
+              publishGrantErrorBody = await readJsonResponse(response, maximumResponseBytes);
+            } catch {}
+            var publishGrantErrorCode = String(
+              publishGrantErrorBody && publishGrantErrorBody.errorCode || '',
+            );
+            if (publishGrantErrorBody
+              && (publishGrantErrorCode === 'command_grant_required'
+                || [
+                  'COMMAND_GRANT_NOT_FOUND',
+                  'COMMAND_GRANT_EXPIRED',
+                  'COMMAND_GRANT_REVOKED',
+                ].includes(publishGrantErrorCode.toUpperCase()))) {
+              return {
+                state: 'http_error',
+                status: response.status,
+                body: publishGrantErrorBody,
+              };
             }
           }
           if (response.status === 401 || response.status === 410) {
@@ -276,10 +323,10 @@
           if (method === 'GET' && response.status === 404) return { state: 'not_found' };
           if (!response.ok) {
             var errorBody = null;
-            try { errorBody = await readJsonResponse(response); } catch {}
+            try { errorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
             return { state: 'http_error', status: response.status, body: errorBody };
           }
-          var responseBody = await readJsonResponse(response);
+          var responseBody = await readJsonResponse(response, maximumResponseBytes);
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
           }

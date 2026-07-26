@@ -63,6 +63,14 @@ const ingestReceipt = {
 const boundResult = {
   resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
 };
+const publishPreview = {
+  contractVersion: 'extension-byok-listing-publish-preview/v1',
+  previewHash: '9'.repeat(64),
+  shop: { id: 'shop-1', name: 'Ozon Primary' },
+  draft: { workflowId: 'workflow-1', revision: 4, draftVersion: 5 },
+  selectedSkuKeys: ['sku-1'],
+  media: [],
+};
 const messages = [];
 const responses = new Map([
   [api.MESSAGE_TYPES.GET_PUBLIC_STATE, { ok: true, data: { mode: 'BYOK' } }],
@@ -89,7 +97,11 @@ const runtime = {
   lastError: null,
   sendMessage(message, callback) {
     messages.push(message);
-    queueMicrotask(() => callback(responses.get(message.type)));
+    queueMicrotask(() => callback(message.type === api.MESSAGE_TYPES.PUBLISH
+      ? { ok: true, data: message.payload.action === 'PREVIEW'
+        ? publishPreview
+        : { state: 'SUCCEEDED', receiptId: 'publish-receipt-1', replayed: false } }
+      : responses.get(message.type)));
   },
 };
 const client = api.createClient({
@@ -137,6 +149,9 @@ const ingested = await client.ingestApproved(resultId);
 assert.deepEqual(JSON.parse(JSON.stringify(ingested)), boundResult);
 const recoveredIngest = await client.recoverApprovedIngest(resultId);
 assert.deepEqual(JSON.parse(JSON.stringify(recoveredIngest)), boundResult);
+assert.deepEqual(JSON.parse(JSON.stringify(await client.getPublishPreview())), publishPreview);
+assert.equal((await client.confirmPublish('9'.repeat(64))).receiptId, 'publish-receipt-1');
+assert.equal((await client.recoverPublish()).state, 'SUCCEEDED');
 assert.deepEqual(JSON.parse(JSON.stringify(
   messages.find((message) => message.type === api.MESSAGE_TYPES.INGEST),
 )), {
@@ -149,6 +164,20 @@ assert.deepEqual(JSON.parse(JSON.stringify(
   type: 'ss-erp:ai-image-workbench-ingest-recover',
   payload: { resultId },
 });
+assert.deepEqual(
+  JSON.parse(JSON.stringify(messages.filter((message) => (
+    message.type === api.MESSAGE_TYPES.PUBLISH
+  )).map((message) => message.payload))),
+  [
+    { action: 'PREVIEW' },
+    { action: 'CONFIRM', previewHash: '9'.repeat(64) },
+    { action: 'RECOVER' },
+  ],
+);
+await assert.rejects(
+  client.confirmPublish('not-a-hash'),
+  (error) => error && error.code === 'SS_ERP_BYOK_PUBLISH_INPUT_INVALID',
+);
 assert.equal(api.DEVICE_INVALIDATED_MESSAGE, 'ss-erp:byok-device-session-invalidated');
 assert.equal(messages.some((message) => JSON.stringify(message).includes('apiKey')), false);
 assert.equal(messages.some((message) => JSON.stringify(message).includes('base64')), false);

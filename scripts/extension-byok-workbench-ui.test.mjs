@@ -31,6 +31,11 @@ assert.match(html, /id=["']generateButton["']/u);
 assert.match(html, /id=["']rejectButton["']/u);
 assert.match(html, /id=["']approveButton["']/u);
 assert.match(html, /接收并绑定 ERP/u);
+assert.match(html, /id=["']publishPanel["']/u);
+assert.match(html, /id=["']publishMediaList["']/u);
+assert.match(html, /id=["']publishConfirmation["'][^>]*type=["']checkbox["']/u);
+assert.match(html, /id=["']publishConfirmButton["']/u);
+assert.match(html, /id=["']publishRecoverButton["']/u);
 assert.match(html, /href=["']\.\/ai-provider-settings\.html["'][^>]*target=["']_blank["']/u);
 assert.match(html, /id=["']contextKicker["']/u);
 assert.match(html, /id=["']contextBadge["']/u);
@@ -47,6 +52,10 @@ assert.match(pageSource, /preview\.revoke\(\)/u);
 assert.doesNotMatch(pageSource, /只查询同一幂等回执|不会重新生成或重复上传/u);
 assert.match(pageSource, /先核对[^。]*回执[^。]*没有活动[^。]*同一图片字节/u);
 assert.match(pageSource, /接收身份不可重用[^。]*候选图已清除[^。]*重新生成/u);
+assert.match(pageSource, /getPublishPreview\(\)/u);
+assert.match(pageSource, /confirmPublish\(state\.publishPreview\.previewHash\)/u);
+assert.match(pageSource, /recoverPublish\(\)/u);
+assert.doesNotMatch(html + pageSource, /Ozon 发布仍保持关闭|当前不能发布/u);
 assert.match(verifierSource, /pages\/ai-image-workbench\.html/u);
 assert.match(verifierSource, /shared\/byok\/workbench-runtime-handler\.js/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-ui\.test\.mjs/u);
@@ -97,6 +106,9 @@ const ids = [
   'promptInput', 'negativePromptInput', 'sizeSelect', 'generateButton',
   'resultPanel', 'previewFrame', 'previewImage', 'previewMeta', 'resultStatus', 'rejectButton',
   'approveButton', 'approvedNotice', 'refreshButton',
+  'publishPanel', 'publishStatus', 'publishShop', 'publishDraft', 'publishSkuOrder',
+  'publishMediaList', 'publishNotice', 'publishConfirmationRow', 'publishConfirmation',
+  'publishConfirmButton', 'publishRecoverButton',
   'emptyResult',
 ];
 const nodes = Object.fromEntries(ids.map((id) => [id, new TestNode(
@@ -135,6 +147,7 @@ const publicState = {
     },
   }],
   result: null,
+  publish: null,
   generationOutcome: null,
   deliveryState: 'NOT_READY',
 };
@@ -162,6 +175,32 @@ const ingestReceipt = {
   boundDraftRevision: 4, boundDraftVersion: 5,
   assignmentOrdinal: 2, assignmentSha256: 'e'.repeat(64),
   skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
+const publishPreview = {
+  contractVersion: 'extension-byok-listing-publish/v1',
+  previewHash: '9'.repeat(64),
+  shopId: 'shop-1', workflowId: 'workflow-1',
+  sourceDraftRevision: 3, sourceDraftVersion: 4,
+  boundDraftRevision: 4, boundDraftVersion: 5,
+  assetId: 'asset-1', provenanceId: 'provenance-1',
+  normalizedSha256: 'd'.repeat(64),
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 2,
+  assignmentSha256: 'e'.repeat(64),
+  selectedSkuKeys: ['sku-2', 'sku-1'],
+  orderedMedia: [
+    {
+      ordinal: 0, scope: 'PRODUCT', skuKey: null, slotKey: 'product:hero',
+      assetId: 'asset-source', source: 'SOURCE',
+    },
+    {
+      ordinal: 1, scope: 'SKU', skuKey: 'sku-2', slotKey: 'sku:sku-2:hero',
+      assetId: 'asset-sku-2', source: 'REVIEWED',
+    },
+    {
+      ordinal: 2, scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+      assetId: 'asset-1', source: 'GENERATED',
+    },
+  ],
 };
 const calls = [];
 let revokeCount = 0;
@@ -226,6 +265,24 @@ const client = {
       resultId: id, reviewState: 'APPROVED', deliveryState: 'BOUND',
       ingest: { ...ingestReceipt, replayed: true },
     };
+  },
+  async getPublishPreview() {
+    calls.push(['publish-preview']);
+    return publishPreview;
+  },
+  async confirmPublish(previewHash) {
+    calls.push(['publish-confirm', previewHash]);
+    publicState.publish = {
+      contractVersion: 'extension-byok-listing-publish/v1',
+      state: 'SUCCEEDED', shopId: 'shop-1', workflowId: 'workflow-1',
+      boundDraftRevision: 4, boundDraftVersion: 5,
+      previewHash: '9'.repeat(64), receiptId: 'publish-receipt-1', failureCode: null,
+    };
+    return publicState.publish;
+  },
+  async recoverPublish() {
+    calls.push(['publish-recover']);
+    return publicState.publish;
   },
 };
 let randomByte = 1;
@@ -524,6 +581,19 @@ function createPageHarness(options = {}) {
     recoverApprovedIngest: options.recoverApprovedIngest || ((id) => ({
       resultId: id, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
     })),
+    getPublishPreview: options.getPublishPreview || (() => publishPreview),
+    confirmPublish: options.confirmPublish || (() => ({
+      contractVersion: 'extension-byok-listing-publish/v1',
+      state: 'SUCCEEDED', shopId: 'shop-1', workflowId: 'workflow-1',
+      boundDraftRevision: 4, boundDraftVersion: 5,
+      previewHash: '9'.repeat(64), receiptId: 'publish-receipt-1', failureCode: null,
+    })),
+    recoverPublish: options.recoverPublish || (() => ({
+      contractVersion: 'extension-byok-listing-publish/v1',
+      state: 'SUCCEEDED', shopId: 'shop-1', workflowId: 'workflow-1',
+      boundDraftRevision: 4, boundDraftVersion: 5,
+      previewHash: '9'.repeat(64), receiptId: 'publish-receipt-1', failureCode: null,
+    })),
   };
   const harnessClient = {
     async getPublicState() { harnessCalls.push(['state']); return operations.getPublicState(); },
@@ -541,6 +611,18 @@ function createPageHarness(options = {}) {
     async recoverApprovedIngest(id) {
       harnessCalls.push(['recover-ingest', id]);
       return operations.recoverApprovedIngest(id);
+    },
+    async getPublishPreview() {
+      harnessCalls.push(['publish-preview']);
+      return operations.getPublishPreview();
+    },
+    async confirmPublish(previewHash) {
+      harnessCalls.push(['publish-confirm', previewHash]);
+      return operations.confirmPublish(previewHash);
+    },
+    async recoverPublish() {
+      harnessCalls.push(['publish-recover']);
+      return operations.recoverPublish();
     },
   };
   const harnessWindowListeners = {};
@@ -763,6 +845,144 @@ for (const transientCode of [
     `${transientCode} must preserve INGESTING without an implicit retry`);
   assert.match(harness.nodes.approveButton.textContent, /核对 ERP 回执/u);
   assert.match(harness.nodes.resultStatus.textContent, /等待 ERP 回执/u);
+}
+
+{
+  const confirmation = createDeferred();
+  const authoritative = {
+    value: isolatedPublicState({
+      resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    }),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    confirmPublish: () => confirmation.promise,
+  });
+  await flushAsync(8);
+  assert.equal(harness.calls.filter((row) => row[0] === 'publish-preview').length, 1);
+  assert.equal(harness.nodes.publishPanel.hidden, false);
+  assert.equal(harness.nodes.publishShop.textContent, 'shop-1');
+  assert.match(harness.nodes.publishDraft.textContent, /workflow-1.*r4.*v5/u);
+  assert.equal(harness.nodes.publishSkuOrder.textContent, 'sku-2 -> sku-1');
+  assert.equal(harness.nodes.publishMediaList.children.length, 3);
+  assert.equal(
+    harness.nodes.publishMediaList.children[2].classList.values.has('is-bound-asset'),
+    true,
+    'the newly bound BYOK asset is highlighted in the authoritative media order',
+  );
+  assert.equal(harness.nodes.publishConfirmButton.disabled, true,
+    'publish requires a separate explicit confirmation');
+  harness.nodes.publishConfirmation.checked = true;
+  harness.nodes.publishConfirmation.listeners.change({ isTrusted: true });
+  assert.equal(harness.nodes.publishConfirmButton.disabled, false);
+  harness.nodes.publishConfirmButton.listeners.click({ isTrusted: false });
+  await flushAsync(1);
+  assert.equal(harness.calls.filter((row) => row[0] === 'publish-confirm').length, 0);
+  harness.nodes.publishConfirmButton.listeners.click({ isTrusted: true });
+  harness.nodes.publishConfirmButton.listeners.click({ isTrusted: true });
+  await flushAsync(1);
+  assert.equal(harness.calls.filter((row) => row[0] === 'publish-confirm').length, 1,
+    'double-click must share the page operation lock');
+  confirmation.resolve({
+    contractVersion: 'extension-byok-listing-publish/v1',
+    state: 'SUCCEEDED', shopId: 'shop-1', workflowId: 'workflow-1',
+    boundDraftRevision: 4, boundDraftVersion: 5,
+    previewHash: '9'.repeat(64), receiptId: 'publish-receipt-1', failureCode: null,
+  });
+  await flushAsync(8);
+  assert.match(harness.nodes.publishStatus.textContent, /已提交/u);
+  assert.match(harness.nodes.publishNotice.textContent, /publish-receipt-1/u);
+  assert.equal(harness.nodes.publishRecoverButton.hidden, true);
+  assert.equal(harness.nodes.publishConfirmButton.disabled, true);
+}
+
+{
+  const recovery = createDeferred();
+  const authoritative = {
+    value: isolatedPublicState({
+      resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    }),
+  };
+  authoritative.value.publish = {
+    contractVersion: 'extension-byok-listing-publish/v1',
+    state: 'PENDING', shopId: 'shop-1', workflowId: 'workflow-1',
+    boundDraftRevision: 4, boundDraftVersion: 5,
+    previewHash: '9'.repeat(64), receiptId: 'publish-receipt-pending', failureCode: null,
+  };
+  const harness = createPageHarness({
+    authoritative,
+    recoverPublish: () => recovery.promise,
+  });
+  await flushAsync(8);
+  assert.match(harness.nodes.publishStatus.textContent, /尚未形成终态/u);
+  assert.match(harness.nodes.publishNotice.textContent, /处理或等待对账/u);
+  assert.equal(harness.nodes.publishConfirmationRow.hidden, true);
+  assert.equal(harness.nodes.publishRecoverButton.hidden, false);
+  harness.nodes.publishRecoverButton.listeners.click({ isTrusted: true });
+  harness.nodes.publishRecoverButton.listeners.click({ isTrusted: true });
+  await flushAsync(1);
+  assert.equal(harness.calls.filter((row) => row[0] === 'publish-recover').length, 1,
+    'PENDING recovery must also be single-flight');
+  recovery.resolve({
+    contractVersion: 'extension-byok-listing-publish/v1',
+    state: 'SUCCEEDED', shopId: 'shop-1', workflowId: 'workflow-1',
+    boundDraftRevision: 4, boundDraftVersion: 5,
+    previewHash: '9'.repeat(64), receiptId: 'publish-receipt-pending', failureCode: null,
+  });
+  await flushAsync(8);
+  assert.match(harness.nodes.publishStatus.textContent, /已提交/u);
+}
+
+{
+  const authoritative = {
+    value: isolatedPublicState({
+      resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    }),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    confirmPublish: () => {
+      throw Object.assign(new Error('unknown publish outcome'), {
+        code: 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME',
+      });
+    },
+  });
+  await flushAsync(8);
+  harness.nodes.publishConfirmation.checked = true;
+  harness.nodes.publishConfirmation.listeners.change({ isTrusted: true });
+  harness.nodes.publishConfirmButton.listeners.click({ isTrusted: true });
+  await flushAsync(8);
+  assert.match(harness.nodes.publishStatus.textContent, /结果未知/u);
+  assert.equal(harness.nodes.publishRecoverButton.hidden, false);
+  assert.match(harness.nodes.publishNotice.textContent, /同一发布身份/u);
+}
+
+{
+  const authoritative = {
+    value: isolatedPublicState({
+      resultId, reviewState: 'APPROVED', deliveryState: 'BOUND', ingest: ingestReceipt,
+    }),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    confirmPublish: () => ({
+      contractVersion: 'extension-byok-listing-publish/v1',
+      state: 'FAILED', shopId: 'shop-1', workflowId: 'workflow-1',
+      boundDraftRevision: 4, boundDraftVersion: 5,
+      previewHash: '9'.repeat(64), receiptId: 'publish-receipt-failed',
+      failureCode: 'OZON_IMPORT_REJECTED',
+    }),
+  });
+  await flushAsync(8);
+  harness.nodes.publishConfirmation.checked = true;
+  harness.nodes.publishConfirmation.listeners.change({ isTrusted: true });
+  harness.nodes.publishConfirmButton.listeners.click({ isTrusted: true });
+  await flushAsync(8);
+  assert.match(harness.nodes.publishStatus.textContent, /提交失败/u);
+  assert.match(harness.nodes.publishNotice.textContent, /OZON_IMPORT_REJECTED/u);
+  assert.match(harness.nodes.pageStatus.textContent, /确认失败.*OZON_IMPORT_REJECTED/u);
+  assert.doesNotMatch(harness.nodes.pageStatus.textContent, /恢复流程|继续核对/u);
+  assert.equal(harness.nodes.publishRecoverButton.hidden, true);
 }
 
 console.log('extension BYOK workbench UI tests passed');

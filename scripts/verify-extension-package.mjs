@@ -260,6 +260,7 @@ const requiredByokModules = [
   'shared/byok/workbench-launch-session.js',
   'shared/byok/workbench-preview-channel.js',
   'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
 ];
 
@@ -297,6 +298,7 @@ for (const modulePath of [
   'shared/byok/workbench-launch-session.js',
   'shared/byok/workbench-preview-channel.js',
   'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/listing-publish-coordinator.js',
 ]) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);

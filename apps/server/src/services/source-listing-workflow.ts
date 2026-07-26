@@ -1072,6 +1072,7 @@ export function createSourceListingWorkflowService(options: {
         actorUserId: input.actorUserId,
         createdAt: timestamp(),
       };
+      draft.publishTaskIds = normalizedTaskIds([...draft.publishTaskIds, intent.id]);
       try {
         return await options.repository.recordPublishIntent({
           ...input,

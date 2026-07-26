@@ -34,38 +34,35 @@ credential storage, or direct Ozon calls.
 
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
-- [ ] Phase 2: Secure single-image BYOK vertical slice (8/10 tasks) [details](./phase-2-byok-vertical-slice.md)
+- [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (0/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 18/37 tasks complete (49%).
+Overall: 20/37 tasks complete (54%).
 
 ## Current Status
 
-Phase 2 is active. `SRV-04` through `SRV-06`, `EXT-04A`, `EXT-05`, `UI-01`, `UI-02A`, and `INT-01`
-are complete:
-hostile Provider output is normalized, stored, and atomically bound to the exact draft
-assignment; database-enforced execution modes keep BYOK at zero ERP AI cost while paid hosted
-work requires an exact reservation and charge settlement; the focused Provider page now keeps
-session keys background-only and binds permission/evidence to the exact live policy. The minimal
-workbench now launches from the exact source product, binds the latest snapshot and one
-server-selected SKU hero slot, preserves unresolved Provider outcomes across reloads, and supports
-truthful single-result preview, reject, approval, ERP normalization, storage, and exact draft/SKU
-binding without publish. The background-only ingest path now durably persists request identity,
-uses exact staging leases, recovers receipts across reload and worker restart, renews expired grants
-only after authoritative `NOT_COMMITTED`, and removes terminal candidates without exposing bytes in
-runtime messages or persistent storage. The next active task is `INT-02`; all new flags remain
-default-off and no real Provider call, production mutation, or deployment is authorized until the
-remaining fixture gates pass.
+Phase 2 is complete. The secure single-image BYOK path now closes from a background-only Provider
+request through hostile-image normalization, zero-charge provenance, exact draft/SKU/slot binding,
+revalidation, explicit ordered publish preview, the existing publish intent and `OZON_PUBLISH`
+grant, one durable receipt, and authoritative recovery. Duplicate confirmation, reload, timeout,
+publisher acknowledgement loss, stale drafts, revoked/cross-shop devices, hostile Provider output,
+and unknown outcomes fail closed or reconcile without a second Ozon submission. Fixture and real
+PostgreSQL vertical tests prove the closure while replacing only external Provider/Ozon effects.
+The next dependency-ready task is Phase 3 `EXT-04B`. All new flags and administrator policy remain
+default-off; no real Provider request, ERP AI charge, Ozon write, production mutation, or VPS
+deployment occurred.
 
 ## Next Steps
 
-1. Complete `INT-02` through the existing publish intent, grant, receipt, and recovery path.
-2. Complete `QA-01` with fake Provider, hostile-image,
-   secret-sentinel, stale-draft, idempotency, and zero-ERP-charge gates. Keep all flags dark.
-3. After Phase 2 closure, start `EXT-04B` only against fixture and sandbox-approved edit operations.
+1. Start `EXT-04B` with bounded reference generation, full-image edit, and PNG-mask inpaint
+   adapters against fixtures only.
+2. Keep capability evidence exact to endpoint, model, operation, and request mode; do not infer
+   edit support from the completed text-to-image path.
+3. After the edit adapters pass their fixture gates, continue to `EXT-06` and `EXT-07` without
+   enabling production flags or running a real paid Provider sandbox implicitly.
 
 ## Cross-Conversation Protocol
 

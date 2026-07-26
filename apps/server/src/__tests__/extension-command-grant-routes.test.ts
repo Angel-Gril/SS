@@ -58,7 +58,11 @@ function dependencies(options: {
   const fail = vi.fn(async ({ receiptId, failureCode }: { receiptId: string; failureCode: string }) => ({
     id: receiptId, status: 'FAILED', result: null, failureCode,
   }));
-  const executeOzonPublish = vi.fn(async () => ({ attemptId: 'attempt-1', state: 'SUBMITTED' }));
+  const executeOzonPublish = vi.fn(async (): Promise<{
+    attemptId: string;
+    state: 'PREPARED' | 'SUBMITTING' | 'SUBMITTED' | 'UNKNOWN' | 'REJECTED';
+    lastErrorCode?: string | null;
+  }> => ({ attemptId: 'attempt-1', state: 'SUBMITTED' }));
   const executeMediaWorkflowCommand = vi.fn(async (_input: Record<string, unknown>): Promise<{
     workflowId: string;
     action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
@@ -283,6 +287,7 @@ describe('extension command grant routes', () => {
     expect(response.json()).toMatchObject({ code: 1, data: { receipt: { status: 'SUCCEEDED' } } });
     expect(executeOzonPublish).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1', workflowId: 'workflow-1',
+      idempotencyKey: 'publish-workflow-1-v7',
     }));
     expect(service.authorize).toHaveBeenCalledTimes(1);
     expect(service.complete).toHaveBeenCalledWith(expect.objectContaining({ receiptId: 'receipt-1' }));
@@ -307,6 +312,132 @@ describe('extension command grant routes', () => {
     expect(deps.executeOzonPublish).not.toHaveBeenCalled();
     expect(deps.service.complete).not.toHaveBeenCalled();
   });
+
+  it('recovers a pending Ozon receipt through the idempotent publisher after the recovery lease', async () => {
+    const deps = await buildApp();
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    const response = await deps.app.inject({
+      method: 'POST', url: '/ozon-publish/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey: 'publish-workflow-1-v7', command: { action: 'submit' },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { replay: true, receipt: { id: 'receipt-1', status: 'SUCCEEDED' } },
+    });
+    expect(deps.service.claimPendingRecovery).toHaveBeenCalledWith({ receiptId: 'receipt-1' });
+    expect(deps.executeOzonPublish).toHaveBeenCalledTimes(1);
+    expect(deps.service.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an acquired recovery receipt pending when the publisher outcome is still unknown', async () => {
+    const deps = await buildApp();
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    deps.executeOzonPublish.mockResolvedValueOnce({ attemptId: 'attempt-1', state: 'UNKNOWN' });
+
+    const response = await deps.app.inject({
+      method: 'POST', url: '/ozon-publish/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey: 'publish-workflow-1-v7', command: { action: 'submit' },
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { replay: true, receipt: { id: 'receipt-1', status: 'PENDING' } },
+    });
+    expect(deps.service.complete).not.toHaveBeenCalled();
+    expect(deps.service.fail).not.toHaveBeenCalled();
+  });
+
+  it.each(['PREPARED', 'SUBMITTING', 'UNKNOWN'] as const)(
+    'keeps the command receipt pending while the Ozon attempt is %s',
+    async (state) => {
+      const deps = await buildApp();
+      deps.executeOzonPublish.mockResolvedValueOnce({ attemptId: 'attempt-1', state });
+
+      const response = await deps.app.inject({
+        method: 'POST', url: '/ozon-publish/execute',
+        headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+        payload: {
+          shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+          idempotencyKey: 'publish-workflow-1-v7', command: { action: 'submit' },
+        },
+      });
+
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { replay: false, receipt: { id: 'receipt-1', status: 'PENDING' } },
+      });
+      expect(deps.service.complete).not.toHaveBeenCalled();
+      expect(deps.service.fail).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails the command receipt when Ozon rejects the publish attempt', async () => {
+    const deps = await buildApp();
+    deps.executeOzonPublish.mockResolvedValueOnce({
+      attemptId: 'attempt-1', state: 'REJECTED', lastErrorCode: 'OZON_IMPORT_REJECTED',
+    });
+
+    const response = await deps.app.inject({
+      method: 'POST', url: '/ozon-publish/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+      payload: {
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey: 'publish-workflow-1-v7', command: { action: 'submit' },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: 0,
+      errorCode: 'publish_failed',
+      data: { receipt: { status: 'FAILED', failureCode: 'OZON_IMPORT_REJECTED' } },
+    });
+    expect(deps.service.complete).not.toHaveBeenCalled();
+    expect(deps.service.fail).toHaveBeenCalledWith({
+      receiptId: 'receipt-1', failureCode: 'OZON_IMPORT_REJECTED', result: null,
+    });
+  });
+
+  it.each([null, '429'])(
+    'uses a stable failure code when a rejected attempt has invalid code %s',
+    async (lastErrorCode) => {
+      const deps = await buildApp();
+      deps.executeOzonPublish.mockResolvedValueOnce({
+        attemptId: 'attempt-1', state: 'REJECTED', lastErrorCode,
+      });
+
+      const response = await deps.app.inject({
+        method: 'POST', url: '/ozon-publish/execute',
+        headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) },
+        payload: {
+          shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+          idempotencyKey: 'publish-workflow-1-v7', command: { action: 'submit' },
+        },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(deps.service.fail).toHaveBeenCalledWith({
+        receiptId: 'receipt-1', failureCode: 'OZON_SUBMIT_REJECTED', result: null,
+      });
+    },
+  );
 
   it('recovers MEDIA_EXECUTE after the process exits between authorization and execution', async () => {
     const deps = await buildApp();
