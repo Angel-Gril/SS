@@ -74,6 +74,10 @@
   }
 
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
+  var WORKSPACE_RUNTIME_VERSION = 'extension-byok-workbench-workspace-runtime/v1';
+  var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
+  var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
+  var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
   var OPERATION_LABELS = {
     TEXT_TO_IMAGE: '文生图',
     IMAGE_TO_IMAGE: '参考图生成',
@@ -102,6 +106,7 @@
     keyboardCursor: { x: 0.5, y: 0.5 },
     canvasFocused: false,
     restartBlocked: false,
+    editDispatchPending: false,
     referenceSyncPending: null,
   };
 
@@ -185,7 +190,127 @@
     if (!error || error.code !== 'SS_ERP_BYOK_EDIT_WORKER_RESTARTED') return false;
     state.restartBlocked = true;
     renderControls();
+    emitWorkspaceRestartUnknownOutcome();
     return true;
+  }
+
+  var LIFECYCLE_STALE_CODE = 'SS_ERP_BYOK_EDIT_LIFECYCLE_STALE';
+
+  function lifecycleIsCurrent(lifecycleEpoch) {
+    return state.lifecycleEpoch === lifecycleEpoch;
+  }
+
+  function lifecycleStaleError() {
+    var error = new Error('edit workbench lifecycle is stale');
+    error.code = LIFECYCLE_STALE_CODE;
+    return error;
+  }
+
+  function assertLifecycleCurrent(lifecycleEpoch) {
+    if (!lifecycleIsCurrent(lifecycleEpoch)) throw lifecycleStaleError();
+  }
+
+  function isLifecycleStaleError(error) {
+    return Boolean(error) && error.code === LIFECYCLE_STALE_CODE;
+  }
+
+  async function releaseUploadedMedia(uploaded, purpose) {
+    if (!uploaded || typeof uploaded.mediaHandle !== 'string') return;
+    try { await client.releaseEditMedia(uploaded.mediaHandle, purpose); } catch {}
+  }
+
+  function dispatchWorkspaceEvent(type, detail) {
+    if (typeof global.CustomEvent !== 'function'
+      || !global.document || typeof global.document.dispatchEvent !== 'function') return false;
+    global.document.dispatchEvent(new global.CustomEvent(type, { detail: detail }));
+    return true;
+  }
+
+  function emitWorkspaceRestartUnknownOutcome() {
+    var context = state.publicState && state.publicState.context;
+    var workspaceEvents = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
+    if (!context || typeof context.slotKey !== 'string'
+      || !workspaceEvents || typeof workspaceEvents.nextRuntimeRevision !== 'function') {
+      return false;
+    }
+    return dispatchWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
+      contractVersion: WORKSPACE_RUNTIME_VERSION,
+      revision: workspaceEvents.nextRuntimeRevision(),
+      task: {
+        schedulerState: 'FAILED',
+        disabledReason: 'PROVIDER_OUTCOME_RECONCILIATION_REQUIRED',
+      },
+      libraryItems: [],
+      slots: [{
+        slotKey: context.slotKey,
+        status: 'UNKNOWN_OUTCOME',
+        alternatives: [{
+          attemptId: 'edit-worker-restart-unknown',
+          state: 'UNKNOWN_OUTCOME',
+          mediaId: null,
+          errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+        }],
+        selectedAttemptId: null,
+      }],
+    });
+  }
+
+  function emitWorkspaceRuntime(snapshot) {
+    var context = state.publicState && state.publicState.context;
+    if (!snapshot || !snapshot.operation || !context || snapshot.slotKey !== context.slotKey) {
+      dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+      return false;
+    }
+    var allowedSchedulers = ['READY', 'RUNNING', 'PAUSING', 'PAUSED', 'REVIEW', 'CANCELLED', 'FAILED'];
+    var schedulerState = snapshot.scheduler && allowedSchedulers.includes(snapshot.scheduler.state)
+      ? snapshot.scheduler.state : 'READY';
+    var alternatives = Array.isArray(snapshot.alternatives) ? snapshot.alternatives.map(function (item) {
+      return {
+        attemptId: item.attemptId,
+        state: item.state,
+        mediaId: item.candidateId || null,
+        errorCode: item.errorCode || null,
+      };
+    }) : [];
+    var selectedAttemptId = snapshot.slot && snapshot.slot.selectedAttemptId || null;
+    var selected = alternatives.find(function (item) { return item.attemptId === selectedAttemptId; });
+    var last = alternatives[alternatives.length - 1];
+    var status = selected ? selected.state : last ? last.state : 'EMPTY';
+    var seenMediaIds = new Set();
+    var libraryItems = alternatives.filter(function (item) {
+      if (!item.mediaId || seenMediaIds.has(item.mediaId)) return false;
+      seenMediaIds.add(item.mediaId);
+      return true;
+    }).map(function (item, index) {
+      return {
+        mediaId: item.mediaId,
+        sourceType: 'GENERATED',
+        label: '编辑候选 ' + (index + 1),
+        secondaryLabel: item.state,
+        skuKeys: [context.skuKey],
+        referenceEligible: false,
+      };
+    });
+    var workspaceEvents = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
+    if (!workspaceEvents || typeof workspaceEvents.nextRuntimeRevision !== 'function') {
+      dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+      return false;
+    }
+    return dispatchWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
+      contractVersion: WORKSPACE_RUNTIME_VERSION,
+      revision: workspaceEvents.nextRuntimeRevision(),
+      task: {
+        schedulerState: schedulerState,
+        disabledReason: 'BATCH_COORDINATOR_NOT_READY',
+      },
+      libraryItems: libraryItems,
+      slots: [{
+        slotKey: snapshot.slotKey,
+        status: status,
+        alternatives: alternatives,
+        selectedAttemptId: selectedAttemptId,
+      }],
+    });
   }
 
   function normalizedPrompt() {
@@ -411,6 +536,7 @@
       renderAlternatives();
     }).catch(function () {
       state.previewLoads.delete(candidateId);
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
       setNotice('候选图仍保留在后台，但安全预览暂时不可用。', 'error');
     });
   }
@@ -500,7 +626,11 @@
   function renderControls() {
     var editing = state.operation !== 'TEXT_TO_IMAGE';
     var started = Boolean(state.snapshot && state.snapshot.operation);
-    document.body.dataset.editTaskLocked = started || state.restartBlocked ? 'true' : 'false';
+    var editTaskState = state.restartBlocked ? 'UNKNOWN_OUTCOME'
+      : state.editDispatchPending ? 'SUBMITTING'
+        : started ? 'STARTED' : 'IDLE';
+    document.body.dataset.editTaskState = editTaskState;
+    document.body.dataset.editTaskLocked = editTaskState === 'IDLE' ? 'false' : 'true';
     document.body.classList.toggle('is-edit-operation', editing);
     nodes.generateButton.hidden = editing;
     nodes.runEditButton.hidden = !editing;
@@ -547,11 +677,18 @@
   }
 
   function renderSnapshot(snapshot) {
+    if (state.restartBlocked) {
+      emitWorkspaceRestartUnknownOutcome();
+      setNotice(errorLabel({ code: 'SS_ERP_BYOK_EDIT_WORKER_RESTARTED' }), 'error');
+      renderControls();
+      return false;
+    }
     state.snapshot = snapshot;
     if (snapshot && snapshot.operation) {
       state.operation = snapshot.operation;
       nodes.profileSelect.value = snapshot.profileId;
     }
+    emitWorkspaceRuntime(snapshot);
     var scheduler = snapshot && snapshot.scheduler ? snapshot.scheduler.state : 'READY';
     var alternatives = snapshot && Array.isArray(snapshot.alternatives) ? snapshot.alternatives : [];
     var last = alternatives[alternatives.length - 1];
@@ -581,6 +718,7 @@
     renderControls();
     if (scheduler === 'RUNNING') schedulePoll();
     if (scheduler === 'REVIEW') scheduleDefaultSelection(snapshot);
+    return true;
   }
 
   function schedulePoll() {
@@ -595,9 +733,13 @@
 
   async function refreshEditState() {
     if (!integrationAvailable()) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
     try {
-      renderSnapshot(await client.getEditState());
+      var snapshot = await client.getEditState();
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!renderSnapshot(snapshot)) return;
     } catch (error) {
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
       captureRestartBlock(error);
       setNotice(errorLabel(error), 'error');
     }
@@ -606,7 +748,8 @@
   async function loadCapabilities() {
     var lifecycleEpoch = state.lifecycleEpoch;
     try {
-      if (state.referenceSyncPending) await reconcileReferenceSync();
+      if (state.referenceSyncPending) await reconcileReferenceSync(lifecycleEpoch);
+      assertLifecycleCurrent(lifecycleEpoch);
       var loaded = await client.getPublicState();
       if (state.lifecycleEpoch !== lifecycleEpoch) return;
       state.publicState = loaded;
@@ -626,7 +769,8 @@
     ].includes(error.code);
   }
 
-  async function sendReferenceTarget(scope, items) {
+  async function sendReferenceTarget(scope, items, lifecycleEpoch) {
+    assertLifecycleCurrent(lifecycleEpoch);
     var input = {
       scope: scope === 'GLOBAL' ? 'SESSION_GLOBAL' : 'SLOT',
       handles: scope === 'SLOT' && !items.length
@@ -634,32 +778,46 @@
         : items.map(function (item) { return item.mediaHandle; }),
     };
     try {
-      return await client.setEditReferences(input);
+      var result = await client.setEditReferences(input);
+      assertLifecycleCurrent(lifecycleEpoch);
+      return result;
     } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch) || isLifecycleStaleError(error)) {
+        throw lifecycleStaleError();
+      }
       if (!referenceSyncAmbiguous(error)) throw error;
-      return client.setEditReferences(input);
+      var retried = await client.setEditReferences(input);
+      assertLifecycleCurrent(lifecycleEpoch);
+      return retried;
     }
   }
 
   async function releaseReferenceItems(items) {
     for (var index = 0; index < items.length; index += 1) {
+      if (items[index].objectUrl) global.URL.revokeObjectURL(items[index].objectUrl);
       try { await client.releaseEditMedia(items[index].mediaHandle, 'REFERENCE'); } catch {}
-      global.URL.revokeObjectURL(items[index].objectUrl);
     }
   }
 
-  async function commitReferenceTransaction(transaction) {
+  async function commitReferenceTransaction(transaction, lifecycleEpoch) {
+    assertLifecycleCurrent(lifecycleEpoch);
     state.references[transaction.scope] = transaction.targetItems;
     state.referenceSyncPending = null;
     await releaseReferenceItems(transaction.removedItems);
+    assertLifecycleCurrent(lifecycleEpoch);
   }
 
-  async function applyReferenceTransaction(transaction) {
+  async function applyReferenceTransaction(transaction, lifecycleEpoch) {
     try {
-      await sendReferenceTarget(transaction.scope, transaction.targetItems);
-      await commitReferenceTransaction(transaction);
+      await sendReferenceTarget(transaction.scope, transaction.targetItems, lifecycleEpoch);
+      assertLifecycleCurrent(lifecycleEpoch);
+      await commitReferenceTransaction(transaction, lifecycleEpoch);
       return true;
     } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch) || isLifecycleStaleError(error)) {
+        await releaseReferenceItems(transaction.addedItems);
+        throw lifecycleStaleError();
+      }
       if (referenceSyncAmbiguous(error)) {
         state.referenceSyncPending = transaction;
         state.references[transaction.scope] = transaction.displayItems;
@@ -670,15 +828,18 @@
     }
   }
 
-  async function reconcileReferenceSync() {
+  async function reconcileReferenceSync(lifecycleEpoch) {
+    assertLifecycleCurrent(lifecycleEpoch);
     var transaction = state.referenceSyncPending;
     if (!transaction) return false;
-    await sendReferenceTarget(transaction.scope, transaction.targetItems);
-    await commitReferenceTransaction(transaction);
+    await sendReferenceTarget(transaction.scope, transaction.targetItems, lifecycleEpoch);
+    assertLifecycleCurrent(lifecycleEpoch);
+    await commitReferenceTransaction(transaction, lifecycleEpoch);
     return true;
   }
 
   async function addReferences(files) {
+    var lifecycleEpoch = state.lifecycleEpoch;
     var scope = selectedReferenceScope();
     var current = state.references[scope];
     var selected = Array.from(files || []);
@@ -694,6 +855,10 @@
       for (var index = 0; index < selected.length; index += 1) {
         var file = selected[index];
         var uploaded = await client.uploadEditMedia('REFERENCE', file);
+        if (!lifecycleIsCurrent(lifecycleEpoch)) {
+          await releaseUploadedMedia(uploaded, 'REFERENCE');
+          throw lifecycleStaleError();
+        }
         added.push({
           mediaHandle: uploaded.mediaHandle,
           metadata: uploaded.metadata,
@@ -709,21 +874,26 @@
         displayItems: target,
         addedItems: added,
         removedItems: [],
-      });
+      }, lifecycleEpoch);
+      assertLifecycleCurrent(lifecycleEpoch);
       setNotice('参考图已通过一次性内存通道交给扩展后台。', '');
     } catch (error) {
       if (!transactionAttempted) await releaseReferenceItems(added);
+      if (!lifecycleIsCurrent(lifecycleEpoch) || isLifecycleStaleError(error)) return;
       setNotice(referenceSyncAmbiguous(error)
         ? '参考图同步结果未知；句柄仍安全保留，请刷新后再执行 Provider 任务。'
         : errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      nodes.referenceFiles.value = '';
-      renderControls();
+      if (lifecycleIsCurrent(lifecycleEpoch)) {
+        state.busy = false;
+        nodes.referenceFiles.value = '';
+        renderControls();
+      }
     }
   }
 
   async function removeReference(scope, mediaHandle) {
+    var lifecycleEpoch = state.lifecycleEpoch;
     var items = state.references[scope];
     var index = items.findIndex(function (item) { return item.mediaHandle === mediaHandle; });
     if (index < 0) return;
@@ -736,26 +906,37 @@
         displayItems: items,
         addedItems: [],
         removedItems: [items[index]],
-      });
+      }, lifecycleEpoch);
+      assertLifecycleCurrent(lifecycleEpoch);
     } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch) || isLifecycleStaleError(error)) return;
       setNotice(referenceSyncAmbiguous(error)
         ? '参考图移除结果未知；原句柄仍保留，请刷新后再执行 Provider 任务。'
         : errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      renderControls();
-      if (typeof nodes.referenceFiles.focus === 'function') nodes.referenceFiles.focus();
+      if (lifecycleIsCurrent(lifecycleEpoch)) {
+        state.busy = false;
+        renderControls();
+        if (typeof nodes.referenceFiles.focus === 'function') nodes.referenceFiles.focus();
+      }
     }
   }
 
   async function chooseSource(file) {
     if (!file) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
     state.busy = true;
     renderControls();
     var uploaded = null;
     var objectUrl = null;
+    var committed = false;
     try {
       uploaded = await client.uploadEditMedia('SOURCE', file);
+      if (!lifecycleIsCurrent(lifecycleEpoch)) {
+        await releaseUploadedMedia(uploaded, 'SOURCE');
+        uploaded = null;
+        throw lifecycleStaleError();
+      }
       objectUrl = global.URL.createObjectURL(file);
       var nextMask = maskCore.createMask({
         width: uploaded.metadata.width,
@@ -774,6 +955,7 @@
       state.maskHandle = null;
       state.maskVersion += 1;
       state.maskUploadedVersion = -1;
+      committed = true;
       var cleanupFailed = false;
       if (previousSource) {
         try {
@@ -782,6 +964,7 @@
           cleanupFailed = true;
         }
         global.URL.revokeObjectURL(previousSource.objectUrl);
+        assertLifecycleCurrent(lifecycleEpoch);
       }
       if (previousMaskHandle) {
         try {
@@ -789,24 +972,30 @@
         } catch {
           cleanupFailed = true;
         }
+        assertLifecycleCurrent(lifecycleEpoch);
       }
+      assertLifecycleCurrent(lifecycleEpoch);
       setNotice(cleanupFailed
         ? '新来源图已生效；旧临时素材将在会话结束时统一清理。'
         : '来源图片已通过安全检查并保留在扩展后台内存中。', '');
     } catch (error) {
-      if (uploaded) {
-        try { await client.releaseEditMedia(uploaded.mediaHandle, 'SOURCE'); } catch {}
+      if (uploaded && !committed) {
+        await releaseUploadedMedia(uploaded, 'SOURCE');
       }
-      if (objectUrl) global.URL.revokeObjectURL(objectUrl);
+      if (objectUrl && !committed) global.URL.revokeObjectURL(objectUrl);
+      if (!lifecycleIsCurrent(lifecycleEpoch) || isLifecycleStaleError(error)) return;
       setNotice(errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      nodes.sourceFile.value = '';
-      renderControls();
+      if (lifecycleIsCurrent(lifecycleEpoch)) {
+        state.busy = false;
+        nodes.sourceFile.value = '';
+        renderControls();
+      }
     }
   }
 
-  async function ensureMaskHandle() {
+  async function ensureMaskHandle(lifecycleEpoch) {
+    assertLifecycleCurrent(lifecycleEpoch);
     if (state.operation !== 'INPAINT') return null;
     if (state.maskHandle && state.maskUploadedVersion === state.maskVersion) {
       return state.maskHandle.mediaHandle;
@@ -818,7 +1007,12 @@
       commands: state.mask.commands(false),
       maxBytes: 20 * 1024 * 1024,
     });
+    assertLifecycleCurrent(lifecycleEpoch);
     var uploaded = await client.uploadEditMedia('MASK', exported.blob);
+    if (!lifecycleIsCurrent(lifecycleEpoch)) {
+      await releaseUploadedMedia(uploaded, 'MASK');
+      throw lifecycleStaleError();
+    }
     var previous = state.maskHandle;
     state.maskHandle = uploaded;
     state.maskUploadedVersion = state.maskVersion;
@@ -826,9 +1020,13 @@
       try {
         await client.releaseEditMedia(previous.mediaHandle, 'MASK');
       } catch {
-        setNotice('新遮罩已生效；旧临时遮罩将在会话结束时统一清理。', '');
+        if (lifecycleIsCurrent(lifecycleEpoch)) {
+          setNotice('新遮罩已生效；旧临时遮罩将在会话结束时统一清理。', '');
+        }
       }
+      assertLifecycleCurrent(lifecycleEpoch);
     }
+    assertLifecycleCurrent(lifecycleEpoch);
     return uploaded.mediaHandle;
   }
 
@@ -848,32 +1046,55 @@
     var reason = operationInputReason();
     if (reason || state.busy) return;
     state.busy = true;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    var workspaceDispatchLocked = false;
     renderControls();
     try {
-      var maskHandle = await ensureMaskHandle();
-      renderSnapshot(await client.startEdit(commandInput(maskHandle)));
+      var maskHandle = await ensureMaskHandle(lifecycleEpoch);
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      state.editDispatchPending = true;
+      workspaceDispatchLocked = true;
+      renderControls();
+      dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+      var snapshot = await client.startEdit(commandInput(maskHandle));
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!renderSnapshot(snapshot)) return;
       setNotice('编辑任务已交给扩展后台；超时后不会自动重复提交。', '');
     } catch (error) {
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
       captureRestartBlock(error);
       setNotice(errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      renderControls();
+      if (state.lifecycleEpoch === lifecycleEpoch) {
+        state.editDispatchPending = false;
+        state.busy = false;
+        renderControls();
+        if (workspaceDispatchLocked) {
+          dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+          if (state.restartBlocked) emitWorkspaceRestartUnknownOutcome();
+        }
+      }
     }
   }
 
   async function selectAlternative(attemptId) {
     if (state.busy) return;
     state.busy = true;
+    var lifecycleEpoch = state.lifecycleEpoch;
     renderControls();
     try {
-      renderSnapshot(await client.selectEditAlternative(attemptId));
+      var snapshot = await client.selectEditAlternative(attemptId);
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!renderSnapshot(snapshot)) return;
     } catch (error) {
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
       captureRestartBlock(error);
       setNotice(errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      renderControls();
+      if (state.lifecycleEpoch === lifecycleEpoch) {
+        state.busy = false;
+        renderControls();
+      }
     }
   }
 
@@ -881,25 +1102,32 @@
     if (state.busy || !state.snapshot || !state.snapshot.slot
       || nodes.regenerateChargeConfirmation.checked !== true) return;
     state.busy = true;
+    var lifecycleEpoch = state.lifecycleEpoch;
     renderControls();
     try {
-      var maskHandle = await ensureMaskHandle();
-      renderSnapshot(await client.regenerateEdit({
+      var maskHandle = await ensureMaskHandle(lifecycleEpoch);
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      var snapshot = await client.regenerateEdit({
         ...commandInput(maskHandle),
         expectedSlotRevision: state.snapshot.slot.revision,
         chargeAcknowledgement: {
           warningVersion: 'external-provider-charge/v1',
           confirmed: true,
         },
-      }));
+      });
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!renderSnapshot(snapshot)) return;
       nodes.regenerateChargeConfirmation.checked = false;
       setNotice('已创建新的槽位备选；原先选择仍会保留。', '');
     } catch (error) {
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
       captureRestartBlock(error);
       setNotice(errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      renderControls();
+      if (state.lifecycleEpoch === lifecycleEpoch) {
+        state.busy = false;
+        renderControls();
+      }
     }
   }
 
@@ -907,10 +1135,15 @@
     if (state.busy || !state.restartBlocked
       || nodes.restartChargeConfirmation.checked !== true) return;
     state.busy = true;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    var activeEpoch = lifecycleEpoch;
     renderControls();
     try {
       await client.acknowledgeEditRestart();
+      if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      dispatchWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
       state.lifecycleEpoch += 1;
+      activeEpoch = state.lifecycleEpoch;
       if (state.pollTimer !== null) global.clearTimeout(state.pollTimer);
       if (state.autoSelectTimer !== null) global.clearTimeout(state.autoSelectTimer);
       state.pollTimer = null;
@@ -927,12 +1160,17 @@
       state.restartBlocked = false;
       nodes.restartChargeConfirmation.checked = false;
       await loadCapabilities();
+      if (state.lifecycleEpoch !== activeEpoch) return;
+      dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
       setNotice('本地编辑会话已重置；系统不会自动重交上一次请求。', '');
     } catch (error) {
+      if (state.lifecycleEpoch !== activeEpoch) return;
       setNotice(errorLabel(error), 'error');
     } finally {
-      state.busy = false;
-      renderControls();
+      if (state.lifecycleEpoch === activeEpoch) {
+        state.busy = false;
+        renderControls();
+      }
     }
   }
 
@@ -1153,23 +1391,53 @@
       void client.cleanupEditSession().catch(function () {});
     }
     releaseLocalUrls();
+    state.snapshot = null;
+    state.publicState = null;
+    state.busy = false;
+    state.editDispatchPending = false;
+    state.references = { GLOBAL: [], SLOT: [] };
+    state.referenceSyncPending = null;
+    state.source = null;
+    state.mask = null;
+    state.maskHandle = null;
+    state.maskVersion = 0;
+    state.maskUploadedVersion = -1;
+    state.restartBlocked = false;
+    state.activePointerId = null;
+    nodes.referenceFiles.value = '';
+    nodes.sourceFile.value = '';
+    dispatchWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
+    renderControls();
   });
   if (global.chrome && global.chrome.runtime && global.chrome.runtime.onMessage
     && typeof global.chrome.runtime.onMessage.addListener === 'function') {
     global.chrome.runtime.onMessage.addListener(function (message) {
       if (!message || message.type !== clientApi.DEVICE_INVALIDATED_MESSAGE) return;
       state.lifecycleEpoch += 1;
+      if (state.pollTimer !== null) global.clearTimeout(state.pollTimer);
+      if (state.autoSelectTimer !== null) global.clearTimeout(state.autoSelectTimer);
+      state.pollTimer = null;
+      state.autoSelectTimer = null;
       releaseLocalUrls();
       if (typeof client.cleanupEditSession === 'function') {
         void client.cleanupEditSession().catch(function () {});
       }
       state.snapshot = null;
       state.publicState = null;
+      state.busy = false;
+      state.editDispatchPending = false;
       state.references = { GLOBAL: [], SLOT: [] };
       state.referenceSyncPending = null;
       state.source = null;
       state.mask = null;
       state.maskHandle = null;
+      state.maskVersion = 0;
+      state.maskUploadedVersion = -1;
+      state.restartBlocked = false;
+      state.activePointerId = null;
+      nodes.referenceFiles.value = '';
+      nodes.sourceFile.value = '';
+      dispatchWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
       setNotice('设备会话已变化；编辑素材与临时结果已清除。', 'error');
       renderControls();
     });

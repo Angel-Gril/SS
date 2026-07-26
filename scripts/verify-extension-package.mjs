@@ -121,6 +121,38 @@ function parseHtmlLocalRefs(htmlRelPath) {
   return refs;
 }
 
+function parseHtmlScriptSources(htmlText) {
+  const sources = [];
+  const regex = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/giu;
+  let match;
+  while ((match = regex.exec(htmlText))) sources.push(match[1]);
+  return sources;
+}
+
+function checkScriptLoadOrder(actualSources, requiredSources, label) {
+  let previousIndex = -1;
+  let previousSource = '';
+  let valid = true;
+
+  for (const source of requiredSources) {
+    const index = actualSources.indexOf(source);
+    if (index === -1) {
+      fail(`${label} missing script: ${source}`);
+      valid = false;
+      continue;
+    }
+    if (index <= previousIndex) {
+      fail(`${label} script order invalid: ${previousSource} must load before ${source}`);
+      valid = false;
+    }
+    previousIndex = Math.max(previousIndex, index);
+    previousSource = source;
+  }
+
+  if (valid) pass(`${label} scripts load in dependency order`);
+  return valid;
+}
+
 function checkSyntax(jsFiles) {
   for (const relPath of jsFiles) {
     const abs = relToAbs(relPath);
@@ -250,6 +282,10 @@ const requiredSecurityModules = [
   'shared/byok/profile-store.js',
 ];
 
+const requiredSharedContracts = [
+  'shared/contracts/ai-image-workbench-v1.js',
+];
+
 const requiredByokModules = [
   'shared/byok/device-session-lifecycle.js',
   'shared/byok/permission-broker.js',
@@ -272,6 +308,7 @@ const requiredByokModules = [
   'shared/byok/workbench-edit-media-store.js',
   'shared/byok/workbench-edit-epoch-guard.js',
   'shared/byok/workbench-edit-controller.js',
+  'shared/byok/workbench-workspace-state.js',
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
@@ -286,10 +323,12 @@ const requiredByokPages = [
   'pages/ai-image-workbench.css',
   'pages/ai-image-workbench.js',
   'pages/ai-image-workbench-edit.js',
+  'pages/ai-image-workbench-workspace.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
 for (const modulePath of requiredSecurityModules) fileExists(modulePath, `security module ${modulePath}`);
+for (const contractPath of requiredSharedContracts) fileExists(contractPath, `shared contract ${contractPath}`);
 for (const modulePath of requiredByokModules) fileExists(modulePath, `BYOK module ${modulePath}`);
 for (const pagePath of requiredByokPages) fileExists(pagePath, `BYOK page ${pagePath}`);
 
@@ -336,17 +375,33 @@ const workbenchLaunchHtmlText = readFileSync(
   relToAbs('pages/ai-image-workbench-launch.html'),
   'utf8',
 );
-if (workbenchHtmlText.includes('../shared/ai-media/image-mask-core.js')
-  && workbenchHtmlText.includes('../shared/ai-media/image-mask-layout.js')
-  && workbenchHtmlText.includes('../shared/ai-media/image-mask-canvas.js')
-  && workbenchHtmlText.includes('../shared/byok/workbench-client.js')
-  && workbenchHtmlText.includes('./ai-image-workbench.js')
-  && workbenchHtmlText.includes('./ai-image-workbench-edit.js')
+const requiredWorkbenchScripts = [
+  '../shared/ai-media/image-mask-core.js',
+  '../shared/ai-media/image-mask-layout.js',
+  '../shared/ai-media/image-mask-canvas.js',
+  '../shared/contracts/ai-image-workbench-v1.js',
+  '../shared/byok/workbench-workspace-state.js',
+  '../shared/byok/workbench-client.js',
+  './ai-image-workbench-workspace.js',
+  './ai-image-workbench.js',
+  './ai-image-workbench-edit.js',
+];
+const orderedWorkbenchScripts = [
+  '../shared/contracts/ai-image-workbench-v1.js',
+  '../shared/byok/workbench-workspace-state.js',
+  '../shared/byok/workbench-client.js',
+  './ai-image-workbench-workspace.js',
+  './ai-image-workbench.js',
+  './ai-image-workbench-edit.js',
+];
+const workbenchScriptSources = parseHtmlScriptSources(workbenchHtmlText);
+if (requiredWorkbenchScripts.every((source) => workbenchScriptSources.includes(source))
   && workbenchHtmlText.includes('./ai-image-workbench.css')) {
   pass('BYOK workbench page references packaged client, controller, and styles');
 } else {
   fail('BYOK workbench page references are incomplete');
 }
+checkScriptLoadOrder(workbenchScriptSources, orderedWorkbenchScripts, 'BYOK workbench page');
 if (!/<script(?:\s|>)/iu.test(workbenchLaunchHtmlText)
   && !/[?#](?:source|product|workflow|shop|draft|sku|slot|key)=/iu.test(workbenchLaunchHtmlText)) {
   pass('BYOK workbench launch placeholder is inert and context-free');

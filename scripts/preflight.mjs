@@ -329,6 +329,21 @@ const steps = [
     args: ['scripts/extension-byok-edit-workbench-ui.test.mjs'],
   },
   {
+    name: 'extension BYOK workspace state contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-workspace-state.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workspace UI contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-workspace-ui.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench package verifier contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-package-verifier.test.mjs'],
+  },
+  {
     name: 'extension BYOK listing publish coordinator contract',
     command: 'node',
     args: ['scripts/extension-byok-listing-publish-coordinator.test.mjs'],

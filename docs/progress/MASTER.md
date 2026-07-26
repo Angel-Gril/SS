@@ -36,35 +36,35 @@ credential storage, or direct Ozon calls.
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
-- [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
+- [ ] Phase 4: Complete dual-mode workbench (1/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 24/37 tasks complete (65%).
+Overall: 25/37 tasks complete (68%).
 
 ## Current Status
 
-Phase 3 is in progress with `EXT-04B`, `EXT-06`, `EXT-07`, and `UI-03` complete. The extension
-workbench now exposes bounded global/per-slot references, full-image editing, same-size PNG-mask
-inpaint, keyboard mask controls, stable alternative review, and charge-aware regeneration. Blob
-media stays on one-use channels, API keys and Provider calls remain background-only, text and
-edit paths share authenticated concurrency, and worker restart cannot erase an unresolved
-external-charge marker. Real Chrome responsive, geometry, keyboard, focus, and async-preview QA
-passed after fixing the selected-preview layout shift. `QA-02` is the next dependency-ready task,
-but it requires newly approved edit-capable endpoint/model credentials and explicit cost approval;
-the previously rejected paid requests must not be repeated implicitly. All new flags and
-administrator policy remain default-off; no real Provider request, ERP AI charge, Ozon write,
-production mutation, or VPS deployment occurred.
+Phase 4 is in progress with `UI-04` complete. The extension-origin workbench now provides the
+original two-pane SKU/media shell: persistent exact context, immutable execution mode after
+dispatch, keyboard SKU and source navigation, bounded references, ordered hero/detail slots,
+Prompt editing, alternatives, and a responsive task dock. Bootstrap/runtime projections are
+pure-data, revisioned, atomic, cross-SKU safe, and truthfully show pending dispatch as
+`SUBMITTING`. Device/page invalidation fences delayed edit media uploads and clears local handles.
+Real Chrome responsive, 200% zoom-equivalent, overflow, sticky-dock, and keyboard checks passed.
+`UI-05`, `HOST-01`, and `BYOK-01` are now dependency-ready in their respective Phase 4 lanes.
+`QA-02` remains blocked until exact paid Provider approval is recorded. All new flags and
+administrator policy remain default-off; no real Provider request, ERP AI charge, ERP ingest,
+Ozon write, production mutation, or VPS deployment occurred.
 
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
+1. Continue Lane A with `UI-05`: connect truthful task progress, pause/continue/cancel, review,
+   regeneration, keyboard ordering, missing/stale checks, and publish summary to the workspace.
+2. Start `HOST-01` and `BYOK-01` in separate owners now that `UI-04` is stable; keep hosted
+   reservation/review and BYOK zero-ERP-generation-charge paths distinct until convergence.
+3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
-2. When approved, test text generation, reference generation, full edit, inpaint, and async mode
-   separately and keep capability evidence exact to endpoint, model, operation, and request mode.
-3. Keep production flags off after sandbox evidence. Complete long-batch retained-result lifecycle
-   semantics with `BYOK-01`, where the coordinator and UI can keep `expiresAt` truthful together.
 
 ## Cross-Conversation Protocol
 

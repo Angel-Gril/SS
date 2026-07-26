@@ -55,7 +55,7 @@
       URL: global.URL,
       now: function () { return new Date(); },
     });
-  } catch (_error) {
+  } catch {
     return;
   }
 
@@ -74,6 +74,7 @@
     publishState: null,
     lifecycleEpoch: 0,
     authoritativeReloadPending: false,
+    generationDispatchPending: false,
   };
   var PUBLISH_CONTRACT_VERSION = 'extension-byok-listing-publish/v1';
   var PUBLISH_RECOVERY_STATES = [
@@ -81,6 +82,13 @@
     'OUTCOME_UNRESOLVED', 'NOT_COMMITTED', 'PENDING',
   ];
   var PUBLISH_STATES = PUBLISH_RECOVERY_STATES.concat(['SUCCEEDED', 'FAILED']);
+  var WORKSPACE_CONTRACT_VERSION = 'extension-byok-workbench-workspace-state/v1';
+  var WORKSPACE_ACTION_VERSION = 'extension-byok-workbench-workspace-action/v1';
+  var WORKSPACE_RUNTIME_VERSION = 'extension-byok-workbench-workspace-runtime/v1';
+  var WORKSPACE_BOOTSTRAP_EVENT = 'ss-erp:workspace-bootstrap';
+  var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
+  var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
+  var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
 
   function isRecord(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -96,11 +104,127 @@
     if (typeof value !== 'string') return false;
     var normalized = value.normalize('NFKC').trim();
     return normalized === value && normalized.length >= minimum && normalized.length <= maximum
+      // Control characters are never valid in public workbench identifiers.
+      // eslint-disable-next-line no-control-regex
       && !/[\u0000-\u001f\u007f]/u.test(normalized);
   }
 
   function isSha256(value) {
     return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+  }
+
+  function workspaceText(value, maximum) {
+    return String(value || '').normalize('NFKC')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/gu, ' ')
+      .trim()
+      .slice(0, maximum);
+  }
+
+  function workspaceCandidateState(candidate) {
+    if (!candidate) return null;
+    if (candidate.deliveryState === 'BOUND') return 'BOUND';
+    if (candidate.deliveryState === 'INGESTING') return 'INGESTING';
+    if (candidate.reviewState === 'APPROVED') return 'APPROVED';
+    return 'CANDIDATE_READY';
+  }
+
+  function emitWorkspaceEvent(type, detail) {
+    if (typeof global.CustomEvent !== 'function'
+      || !global.document || typeof global.document.dispatchEvent !== 'function') return false;
+    global.document.dispatchEvent(new global.CustomEvent(type, { detail: detail }));
+    return true;
+  }
+
+  function emitWorkspaceBootstrap(candidate, forceDispatched) {
+    var context = state.publicState && state.publicState.context;
+    if (!isRecord(context)) return false;
+    var editTaskLocked = document.body && document.body.dataset
+      && document.body.dataset.editTaskLocked === 'true';
+    var editTaskState = document.body && document.body.dataset
+      ? document.body.dataset.editTaskState : '';
+    var editOutcomeUnknown = editTaskState === 'UNKNOWN_OUTCOME';
+    var candidateState = workspaceCandidateState(candidate);
+    var pendingAttemptId = !candidate && !state.unknownOutcome
+      ? editOutcomeUnknown
+        ? 'edit-worker-restart-unknown'
+        : forceDispatched
+          ? 'single-dispatch-pending'
+          : editTaskLocked ? 'edit-dispatch-pending' : null
+      : null;
+    var attemptId = candidate && typeof candidate.resultId === 'string'
+      ? 'single:' + candidate.resultId : pendingAttemptId;
+    var libraryItems = candidate ? [{
+      mediaId: candidate.resultId,
+      sourceType: 'GENERATED',
+      label: '当前单图候选',
+      secondaryLabel: candidateState,
+      skuKeys: [context.skuKey],
+      referenceEligible: false,
+    }] : [];
+    var alternatives = candidate || pendingAttemptId ? [{
+      attemptId: attemptId,
+      state: candidate ? candidateState
+        : editOutcomeUnknown ? 'UNKNOWN_OUTCOME' : 'SUBMITTING',
+      mediaId: candidate ? candidate.resultId : null,
+      errorCode: editOutcomeUnknown ? 'PROVIDER_OUTCOME_UNKNOWN' : null,
+    }] : [];
+    return emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, {
+      contractVersion: WORKSPACE_CONTRACT_VERSION,
+      executionMode: 'BYOK',
+      dispatched: Boolean(
+        forceDispatched || candidate || state.unknownOutcome || editTaskLocked,
+      ),
+      selectedSkuKey: context.skuKey,
+      selectedSlotKey: context.slotKey,
+      globalReferenceIds: [],
+      libraryItems: libraryItems,
+      skus: [{
+        skuKey: context.skuKey,
+        label: context.skuKey,
+        slots: [{
+          slotKey: context.slotKey,
+          role: /(?:^|:)hero$/iu.test(context.slotKey) ? 'HERO' : 'DETAIL',
+          prompt: workspaceText(nodes.promptInput.value, 8000),
+          negativePrompt: workspaceText(nodes.negativePromptInput.value, 4000),
+          referenceIds: null,
+          alternatives: alternatives,
+          selectedAttemptId: candidate ? attemptId : null,
+        }],
+      }],
+    });
+  }
+
+  function emitWorkspaceUnknownOutcome() {
+    var context = state.publicState && state.publicState.context;
+    var events = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
+    if (!isRecord(context) || !events || typeof events.nextRuntimeRevision !== 'function') {
+      return false;
+    }
+    return emitWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
+      contractVersion: WORKSPACE_RUNTIME_VERSION,
+      revision: events.nextRuntimeRevision(),
+      task: {
+        schedulerState: 'FAILED',
+        disabledReason: 'PROVIDER_OUTCOME_RECONCILIATION_REQUIRED',
+      },
+      libraryItems: [],
+      slots: [{
+        slotKey: context.slotKey,
+        status: 'UNKNOWN_OUTCOME',
+        alternatives: [{
+          attemptId: 'single-unknown-outcome',
+          state: 'UNKNOWN_OUTCOME',
+          mediaId: null,
+          errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+        }],
+        selectedAttemptId: null,
+      }],
+    });
+  }
+
+  function clearWorkspaceView() {
+    emitWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
   }
 
   function lifecycleIsCurrent(lifecycleEpoch) {
@@ -567,6 +691,7 @@
       return;
     }
     clearResultView();
+    emitWorkspaceBootstrap(null);
     setStatus('候选图已过期并从页面临时预览中清除。', 'warning');
     renderControls();
   }
@@ -579,6 +704,7 @@
     if (candidate && candidate.deliveryState === 'BOUND' && isRecord(candidate.ingest)) {
       revokePreview();
       state.candidate = candidate;
+      emitWorkspaceBootstrap(candidate);
       nodes.resultPanel.hidden = false;
       nodes.emptyResult.hidden = true;
       nodes.previewFrame.hidden = true;
@@ -597,6 +723,7 @@
       clearPublishView();
       revokePreview();
       state.candidate = candidate;
+      emitWorkspaceBootstrap(candidate);
       nodes.resultPanel.hidden = false;
       nodes.emptyResult.hidden = true;
       nodes.previewFrame.hidden = true;
@@ -616,10 +743,12 @@
     var current = Date.now();
     if (!Number.isFinite(expiresAt) || expiresAt <= current) {
       clearResultView();
+      emitWorkspaceBootstrap(null);
       setStatus('候选图已过期并从页面临时预览中清除。', 'warning');
       return false;
     }
     state.candidate = candidate;
+    emitWorkspaceBootstrap(candidate);
     nodes.resultPanel.hidden = false;
     nodes.emptyResult.hidden = true;
     nodes.previewFrame.hidden = false;
@@ -636,7 +765,7 @@
     var preview;
     try {
       preview = await client.openPreview(candidate.resultId);
-    } catch (_error) {
+    } catch {
       if (lifecycleIsCurrent(lifecycleEpoch)
         && previewEpoch === state.previewEpoch && state.candidate
         && state.candidate.resultId === candidate.resultId) {
@@ -662,6 +791,7 @@
     if (remainingPreviewLifetime <= 0) {
       preview.revoke();
       clearResultView();
+      emitWorkspaceBootstrap(null);
       setStatus('候选图已过期并从页面临时预览中清除。', 'warning');
       return false;
     }
@@ -734,7 +864,7 @@
         if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
       }
       return true;
-    } catch (_error) {
+    } catch {
       return false;
     }
   }
@@ -759,8 +889,10 @@
         || (next.result && next.generationOutcome !== null)) {
         throw new Error('state_invalid');
       }
+      var priorUnknownOutcome = state.unknownOutcome;
       state.publicState = next;
       state.unknownOutcome = next.generationOutcome === 'UNKNOWN_OUTCOME';
+      if (priorUnknownOutcome && !state.unknownOutcome) clearWorkspaceView();
       renderContext(next.context);
       renderProfileOptions();
       if (next.result && isRecord(next.result)) {
@@ -771,7 +903,9 @@
         }
       } else {
         clearResultView();
+        emitWorkspaceBootstrap(null);
         if (state.unknownOutcome) {
+          emitWorkspaceUnknownOutcome();
           setStatus('Provider 请求结果仍未知；刷新只会核对状态，不会重新提交或产生第二次扣费。', 'warning');
         }
       }
@@ -782,6 +916,7 @@
       state.readiness = null;
       state.authoritativeReloadPending = false;
       clearResultView();
+      clearWorkspaceView();
       clearContextView('不可用', true);
       setStatus(errorLabel(error), 'error');
       throw error;
@@ -809,8 +944,13 @@
       var ready = await refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
       if (!lifecycleIsCurrent(lifecycleEpoch) || state.selectedProfileId !== profileId || !ready) return;
     }
+    prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
+    negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
+    if (!prompt || state.candidate || state.unknownOutcome) return;
     state.busy = true;
+    state.generationDispatchPending = true;
     renderControls();
+    emitWorkspaceBootstrap(null, true);
     setStatus('Provider 正在生成候选图。请求超时后不会自动重试。', '');
     try {
       var candidate = await client.generate({
@@ -837,9 +977,14 @@
       state.readiness = null;
       if (error && error.code === 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME') {
         state.unknownOutcome = true;
+        emitWorkspaceBootstrap(null);
+        emitWorkspaceUnknownOutcome();
+      } else {
+        emitWorkspaceBootstrap(null);
       }
       setStatus(errorLabel(error), state.unknownOutcome ? 'warning' : 'error');
     } finally {
+      if (lifecycleIsCurrent(lifecycleEpoch)) state.generationDispatchPending = false;
       finishBusyOperation(lifecycleEpoch);
     }
   }
@@ -872,8 +1017,10 @@
         nodes.approvedNotice.textContent = '候选图已批准。点击“接收并绑定 ERP”后，图片才会进入服务端规范化和精确草稿绑定。';
         setResultStatus('已批准 · 尚未上传 ERP', 'success');
         setStatus('候选图已批准但尚未接收。请确认后点击“接收并绑定 ERP”。', 'warning');
+        emitWorkspaceBootstrap(state.candidate);
       } else {
         clearResultView();
+        emitWorkspaceBootstrap(null);
         setStatus('候选图已驳回并从扩展临时存储中删除。', 'success');
         await refreshReadiness({ quiet: true, lifecycleEpoch: lifecycleEpoch });
         if (!lifecycleIsCurrent(lifecycleEpoch)) return;
@@ -1070,6 +1217,33 @@
   });
   nodes.promptInput.addEventListener('input', renderControls);
   nodes.negativePromptInput.addEventListener('input', renderControls);
+  if (document && typeof document.addEventListener === 'function') {
+    document.addEventListener('ss-erp:workspace-action', function (event) {
+      var detail = event && event.detail;
+      var context = state.publicState && state.publicState.context;
+      var editTaskLocked = document.body && document.body.dataset
+        && document.body.dataset.editTaskLocked === 'true';
+      if (!exactKeys(detail, [
+        'contractVersion', 'action', 'revision', 'executionMode', 'skuKey', 'slotKey',
+        'mediaId', 'attemptId', 'libraryKind', 'direction', 'prompt', 'negativePrompt',
+      ]) || detail.contractVersion !== WORKSPACE_ACTION_VERSION
+        || detail.action !== 'SAVE_PROMPT' || detail.executionMode !== 'BYOK'
+        || !Number.isSafeInteger(detail.revision) || detail.revision < 0
+        || !isRecord(context) || detail.slotKey !== context.slotKey
+        || state.generationDispatchPending || state.candidate
+        || state.unknownOutcome || editTaskLocked
+        || typeof detail.prompt !== 'string' || detail.prompt.length > 8000
+        || typeof detail.negativePrompt !== 'string' || detail.negativePrompt.length > 4000
+        || workspaceText(detail.prompt, 8000) !== detail.prompt
+        || workspaceText(detail.negativePrompt, 4000) !== detail.negativePrompt) return;
+      nodes.promptInput.value = detail.prompt;
+      nodes.negativePromptInput.value = detail.negativePrompt;
+      renderControls();
+    });
+    document.addEventListener(WORKSPACE_REFRESH_EVENT, function () {
+      emitWorkspaceBootstrap(state.candidate);
+    });
+  }
   nodes.sizeSelect.addEventListener('change', renderControls);
   nodes.previewImage.addEventListener('load', function () {
     if (!state.preview || !state.candidate
@@ -1135,7 +1309,9 @@
   global.addEventListener('pagehide', function () {
     state.lifecycleEpoch += 1;
     state.authoritativeReloadPending = false;
+    state.generationDispatchPending = false;
     revokePreview();
+    clearWorkspaceView();
   });
   if (global.chrome && global.chrome.runtime && global.chrome.runtime.onMessage
     && typeof global.chrome.runtime.onMessage.addListener === 'function') {
@@ -1146,8 +1322,10 @@
       state.readiness = null;
       state.unknownOutcome = false;
       state.busy = false;
+      state.generationDispatchPending = false;
       state.authoritativeReloadPending = false;
       clearResultView();
+      clearWorkspaceView();
       clearContextView('设备已断开', true);
       setStatus('扩展设备会话已变化，请重新连接后从来源商品页打开工作台。', 'warning');
       renderControls();

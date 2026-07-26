@@ -43,7 +43,90 @@
       </dl>
     </section>
 
-    <div class="workbench-grid">
+    <section id="workspaceShell" class="workspace-shell" aria-labelledby="workspaceTitle" aria-busy="true">
+      <aside class="workspace-rail" aria-labelledby="workspaceSkuTitle">
+        <div class="workspace-rail-heading">
+          <p class="section-kicker">商品范围</p>
+          <h2 id="workspaceSkuTitle">SKU</h2>
+        </div>
+        <div
+          id="workspaceModeSummary"
+          class="workspace-mode-summary"
+          role="group"
+          aria-label="工作区执行方式"
+        ></div>
+        <ul
+          id="workspaceSkuList"
+          class="workspace-sku-list"
+          role="listbox"
+          aria-label="工作区 SKU"
+        ></ul>
+      </aside>
+
+      <div class="workspace-main">
+        <section class="workspace-organizer" aria-labelledby="workspaceTitle">
+          <div class="workspace-organizer-heading">
+            <div>
+              <p class="section-kicker">商品媒体编排</p>
+              <h2 id="workspaceTitle">素材、槽位与提示词</h2>
+            </div>
+            <span class="state-badge state-warning">批量执行待接通</span>
+          </div>
+
+          <div class="workspace-library-heading">
+            <h3>素材库</h3>
+            <div
+              id="workspaceLibraryTabs"
+              class="workspace-library-tabs"
+              role="tablist"
+              aria-label="素材来源"
+            ></div>
+          </div>
+
+          <div class="workspace-board">
+            <section class="workspace-library-pane" aria-labelledby="workspaceLibraryTitle">
+              <div class="workspace-pane-heading">
+                <h3 id="workspaceLibraryTitle">可用素材</h3>
+                <span>选择后设为参考图</span>
+              </div>
+              <ul id="workspaceLibraryList" class="workspace-library-list" aria-live="polite"></ul>
+            </section>
+
+            <section class="workspace-slot-pane" aria-labelledby="workspaceSlotTitle">
+              <div class="workspace-pane-heading">
+                <h3 id="workspaceSlotTitle">工作区图片顺序</h3>
+                <span>本地草稿，发布前仍需统一核对</span>
+              </div>
+              <ol id="workspaceSlotList" class="workspace-slot-list" aria-live="polite"></ol>
+            </section>
+
+            <section
+              id="workspacePromptInspector"
+              class="workspace-prompt-inspector"
+              aria-labelledby="workspacePromptTitle"
+            >
+              <div class="workspace-pane-heading">
+                <h3 id="workspacePromptTitle">槽位提示词</h3>
+                <span>仅保存当前工作区草稿</span>
+              </div>
+              <p id="workspaceReferenceSummary" class="workspace-reference-summary">
+                选择槽位后查看参考图范围。
+              </p>
+              <label for="workspacePromptInput">正向提示词</label>
+              <textarea id="workspacePromptInput" maxlength="8000" rows="6" disabled></textarea>
+              <label for="workspaceNegativePromptInput">负面提示词</label>
+              <textarea id="workspaceNegativePromptInput" maxlength="4000" rows="3" disabled></textarea>
+              <button
+                id="workspaceSavePromptButton"
+                class="button button-secondary"
+                type="button"
+                disabled
+              >保存槽位提示词</button>
+            </section>
+          </div>
+        </section>
+
+        <div class="workbench-grid">
       <section class="control-panel" aria-labelledby="generationTitle">
         <div class="section-heading">
           <div>
@@ -317,14 +400,32 @@
           <li>发布前会显示 ERP 权威店铺、草稿、SKU 与图片顺序，并要求单独确认。</li>
         </ul>
       </section>
-    </div>
+      <aside
+        id="workspaceTaskDock"
+        class="workspace-task-dock"
+        aria-labelledby="workspaceTaskTitle"
+      >
+        <div>
+          <p class="section-kicker">任务坞</p>
+          <h2 id="workspaceTaskTitle">当前计划</h2>
+        </div>
+        <p id="workspaceTaskSummary" class="workspace-task-summary" role="status" aria-live="polite">
+          正在读取槽位和任务状态。
+        </p>
+      </aside>
+        </div>
+      </div>
+    </section>
   </main>
 
   <noscript><p class="no-script">需要启用 JavaScript 才能使用 AI 图片工作台。</p></noscript>
   <script src="../shared/ai-media/image-mask-core.js"></script>
   <script src="../shared/ai-media/image-mask-layout.js"></script>
   <script src="../shared/ai-media/image-mask-canvas.js"></script>
+  <script src="../shared/contracts/ai-image-workbench-v1.js"></script>
+  <script src="../shared/byok/workbench-workspace-state.js"></script>
   <script src="../shared/byok/workbench-client.js"></script>
+  <script src="./ai-image-workbench-workspace.js"></script>
   <script src="./ai-image-workbench.js"></script>
   <script src="./ai-image-workbench-edit.js"></script>
 </body>

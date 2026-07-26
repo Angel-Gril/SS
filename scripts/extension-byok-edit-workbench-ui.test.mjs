@@ -43,6 +43,25 @@ assert.match(source, /maskCanvasApi\.exportPng/u);
 assert.match(source, /selectEditAlternative/u);
 assert.match(source, /warningVersion:\s*'external-provider-charge\/v1'/u);
 assert.match(source, /state\s*===\s*'EXPIRED'/u);
+assert.match(source, /var lifecycleEpoch = state\.lifecycleEpoch;[\s\S]*client\.getEditState\(\)/u);
+assert.match(source, /client\.startEdit\([\s\S]*state\.lifecycleEpoch !== lifecycleEpoch/u);
+assert.match(source, /client\.selectEditAlternative\([\s\S]*state\.lifecycleEpoch !== lifecycleEpoch/u);
+assert.match(source, /client\.regenerateEdit\([\s\S]*state\.lifecycleEpoch !== lifecycleEpoch/u);
+assert.match(
+  source,
+  /uploadEditMedia\('REFERENCE', file\);[\s\S]{0,400}lifecycleIsCurrent\(lifecycleEpoch\)/u,
+  'REFERENCE uploads must fence late lifecycle results before creating public page state',
+);
+assert.match(
+  source,
+  /ensureMaskHandle\(lifecycleEpoch\)[\s\S]*uploadEditMedia\('MASK', exported\.blob\);[\s\S]{0,400}releaseUploadedMedia\(uploaded, 'MASK'\)/u,
+  'MASK uploads must release a handle that arrives after lifecycle invalidation',
+);
+assert.match(
+  source,
+  /sendReferenceTarget\(scope, items, lifecycleEpoch\)[\s\S]*setEditReferences\(input\);[\s\S]{0,300}assertLifecycleCurrent\(lifecycleEpoch\)/u,
+  'reference transactions must validate lifecycle after background acknowledgement',
+);
 
 class FakeClassList {
   constructor() { this.values = new Set(); }
@@ -148,10 +167,27 @@ const body = new FakeNode('body', 'body');
 body.dataset = {};
 let objectUrlCounter = 0;
 const revokedUrls = [];
+const createdUrls = [];
 const calls = [];
 let mediaCounter = 0;
 const referenceOutcomes = [];
+const deferredUploads = new Map();
 let nextEditStateError = null;
+let deferredEditState = null;
+let deferredStartEdit = null;
+let nextStartEditError = null;
+let nextStartEditSnapshot = null;
+const editStateOutcomes = [];
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolveValue, rejectValue) => {
+    resolve = resolveValue;
+    reject = rejectValue;
+  });
+  return { promise, resolve, reject };
+}
 
 function clientFailure(code) {
   return Object.assign(new Error(code), { code });
@@ -206,11 +242,39 @@ const reviewSnapshot = (selected = false) => ({
     externalChargePossible: false, retryRisk: null,
   }],
 });
+const runningSnapshot = () => ({
+  ...emptySnapshot,
+  profileId: 'profile-1', operation: 'IMAGE_TO_IMAGE',
+  scheduler: {
+    ...emptySnapshot.scheduler,
+    state: 'RUNNING', activeCount: 1, effectiveConcurrency: 1,
+  },
+  slot: {
+    revision: 1, attemptIds: ['attempt-running-0001'],
+    selectedAttemptId: null, selectedCandidateId: null,
+  },
+  alternatives: [{
+    attemptId: 'attempt-running-0001', generation: 1, operation: 'IMAGE_TO_IMAGE',
+    state: 'WAITING', candidateId: null, errorCode: null, selected: false,
+    externalChargePossible: true, retryRisk: null,
+  }],
+});
 
 const client = {
-  async getPublicState() { calls.push(['public-state']); return { profiles: [profileRow] }; },
+  async getPublicState() {
+    calls.push(['public-state']);
+    return {
+      profiles: [profileRow],
+      context: { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
+    };
+  },
   async getEditState() {
     calls.push(['edit-state']);
+    const queued = editStateOutcomes.shift();
+    if (queued?.error) throw queued.error;
+    if (queued?.promise) return queued.promise;
+    if (queued && 'value' in queued) return queued.value;
+    if (deferredEditState) return deferredEditState.promise;
     if (nextEditStateError) {
       const error = nextEditStateError;
       nextEditStateError = null;
@@ -220,6 +284,11 @@ const client = {
   },
   async uploadEditMedia(purpose, blob) {
     calls.push(['upload', purpose, blob]);
+    const deferred = deferredUploads.get(purpose);
+    if (deferred) {
+      deferredUploads.delete(purpose);
+      return deferred.promise;
+    }
     mediaCounter += 1;
     return {
       mediaHandle: `mh_${String(mediaCounter).padStart(48, '0')}`,
@@ -239,7 +308,20 @@ const client = {
     if (outcome) throw outcome;
     return emptySnapshot;
   },
-  async startEdit(value) { calls.push(['start', value]); return reviewSnapshot(false); },
+  async startEdit(value) {
+    calls.push(['start', value]);
+    if (nextStartEditError) {
+      const error = nextStartEditError;
+      nextStartEditError = null;
+      throw error;
+    }
+    if (nextStartEditSnapshot) {
+      const snapshot = nextStartEditSnapshot;
+      nextStartEditSnapshot = null;
+      return snapshot;
+    }
+    return deferredStartEdit ? deferredStartEdit.promise : reviewSnapshot(false);
+  },
   async selectEditAlternative(attemptId) {
     calls.push(['select', attemptId]);
     return reviewSnapshot(true);
@@ -273,9 +355,13 @@ const mask = {
 
 const windowListeners = new Map();
 const runtimeListeners = [];
+const documentEvents = [];
 const context = {
   Array, Blob, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String,
   Uint8Array, Uint8ClampedArray,
+  CustomEvent: class CustomEvent {
+    constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
+  },
   document: {
     body,
     getElementById(id) { return nodes[id] || null; },
@@ -286,10 +372,16 @@ const context = {
       return reason ? reasonNodes[reason[1]] : null;
     },
     createElement(tagName) { return new FakeNode('', tagName); },
+    dispatchEvent(event) { documentEvents.push(event); return true; },
   },
   chrome: { runtime: { onMessage: { addListener(listener) { runtimeListeners.push(listener); } } } },
   URL: {
-    createObjectURL() { objectUrlCounter += 1; return `blob:local-${objectUrlCounter}`; },
+    createObjectURL() {
+      objectUrlCounter += 1;
+      const value = `blob:local-${objectUrlCounter}`;
+      createdUrls.push(value);
+      return value;
+    },
     revokeObjectURL(value) { revokedUrls.push(value); },
   },
   setTimeout(callback) { queueMicrotask(callback); return ++objectUrlCounter; },
@@ -307,6 +399,13 @@ context.SS_ERP_BYOK_WORKBENCH_CLIENT = {
   DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
   createClient() { return client; },
 };
+let workspaceRuntimeRevision = 0;
+context.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
+  nextRuntimeRevision() {
+    workspaceRuntimeRevision += 1;
+    return workspaceRuntimeRevision;
+  },
+});
 context.SS_ERP_IMAGE_MASK_CORE = { createMask() { return mask; } };
 context.SS_ERP_IMAGE_MASK_CANVAS = {
   sourcePoint(input) {
@@ -329,6 +428,23 @@ context.SS_ERP_IMAGE_MASK_CANVAS = {
 
 vm.runInNewContext(source, context, { filename: `${root}/pages/ai-image-workbench-edit.js` });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+function assertRestartUnknownRuntime(eventOffset, message) {
+  const event = documentEvents.slice(eventOffset).findLast(
+    (candidate) => candidate.type === 'ss-erp:workspace-runtime',
+  );
+  assert.ok(event, message);
+  assert.equal(event.detail.task.schedulerState, 'FAILED');
+  assert.equal(
+    event.detail.task.disabledReason,
+    'PROVIDER_OUTCOME_RECONCILIATION_REQUIRED',
+  );
+  assert.equal(event.detail.slots[0].status, 'UNKNOWN_OUTCOME');
+  assert.equal(event.detail.slots[0].alternatives[0].state, 'UNKNOWN_OUTCOME');
+  assert.equal(event.detail.slots[0].alternatives[0].mediaId, null);
+  assert.equal(event.detail.slots[0].alternatives[0].errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+}
+
 await tick();
 await tick();
 
@@ -418,7 +534,16 @@ assert.deepEqual(JSON.parse(JSON.stringify(
   scope: 'SLOT', handles: [`mh_${'4'.padStart(48, '0')}`],
 });
 
+const dispatchRefreshOffset = documentEvents.length;
+deferredStartEdit = createDeferred();
 nodes.runEditButton.dispatch('click');
+await tick();
+assert.equal(body.dataset.editTaskLocked, 'true');
+assert.ok(documentEvents.slice(dispatchRefreshOffset).some(
+  (event) => event.type === 'ss-erp:workspace-refresh-request',
+), 'the workspace freezes before the edit Provider request settles');
+deferredStartEdit.resolve(reviewSnapshot(false));
+deferredStartEdit = null;
 await tick();
 await tick();
 assert.equal(calls.filter((row) => row[0] === 'start').length, 1);
@@ -449,11 +574,31 @@ assert.deepEqual(JSON.parse(JSON.stringify(regenerated.chargeAcknowledgement)), 
   warningVersion: 'external-provider-charge/v1', confirmed: true,
 });
 
-nextEditStateError = clientFailure('SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+const refreshRestartOffset = documentEvents.length;
+const lateNormalState = createDeferred();
+editStateOutcomes.push(
+  { promise: lateNormalState.promise },
+  { error: clientFailure('SS_ERP_BYOK_EDIT_WORKER_RESTARTED') },
+);
+nodes.refreshButton.dispatch('click');
 nodes.refreshButton.dispatch('click');
 await tick();
 await tick();
 assert.equal(nodes.restartRecovery.hidden, false);
+assert.equal(body.dataset.editTaskState, 'UNKNOWN_OUTCOME');
+assertRestartUnknownRuntime(
+  refreshRestartOffset,
+  'a restart discovered while reading edit state projects an unknown Provider outcome',
+);
+lateNormalState.resolve(reviewSnapshot(true));
+await tick();
+await tick();
+assert.equal(body.dataset.editTaskState, 'UNKNOWN_OUTCOME');
+assertRestartUnknownRuntime(
+  refreshRestartOffset,
+  'a normal snapshot issued before restart detection cannot overwrite the unknown outcome',
+);
+assert.match(nodes.editResultNotice.textContent, /上一次请求结果可能未知/u);
 assert.equal(nodes.restartAcknowledgeButton.disabled, true);
 nodes.restartChargeConfirmation.checked = true;
 nodes.restartChargeConfirmation.dispatch('change');
@@ -464,6 +609,56 @@ await tick();
 assert.equal(calls.some((row) => row[0] === 'acknowledge-restart'), true);
 assert.equal(nodes.restartRecovery.hidden, true);
 assert.equal(body.dataset.editTaskLocked, 'false');
+const resetClearIndex = documentEvents.findIndex((event) => event.type === 'ss-erp:workspace-clear');
+const resetRefreshIndex = documentEvents.findIndex((event, index) => (
+  index > resetClearIndex && event.type === 'ss-erp:workspace-refresh-request'
+));
+assert.ok(resetClearIndex >= 0 && resetRefreshIndex > resetClearIndex,
+  'an explicit edit reset clears retained runtime before requesting a fresh bootstrap');
+
+nodes.referenceFiles.files = [globalReference];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+const pollingRestartOffset = documentEvents.length;
+nextStartEditSnapshot = runningSnapshot();
+nextEditStateError = clientFailure('SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+nodes.runEditButton.dispatch('click');
+await tick();
+await tick();
+await tick();
+assert.equal(nodes.restartRecovery.hidden, false);
+assert.equal(body.dataset.editTaskState, 'UNKNOWN_OUTCOME');
+assertRestartUnknownRuntime(
+  pollingRestartOffset,
+  'a worker restart discovered by scheduled polling replaces stale RUNNING state',
+);
+nodes.restartChargeConfirmation.checked = true;
+nodes.restartChargeConfirmation.dispatch('change');
+nodes.restartAcknowledgeButton.dispatch('click');
+await tick();
+await tick();
+
+nodes.referenceFiles.files = [globalReference];
+nodes.referenceFiles.dispatch('change');
+await tick();
+await tick();
+const startRestartOffset = documentEvents.length;
+nextStartEditError = clientFailure('SS_ERP_BYOK_EDIT_WORKER_RESTARTED');
+nodes.runEditButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(nodes.restartRecovery.hidden, false);
+assert.equal(body.dataset.editTaskState, 'UNKNOWN_OUTCOME');
+assertRestartUnknownRuntime(
+  startRestartOffset,
+  'a worker restart returned by startEdit never remains projected as SUBMITTING',
+);
+nodes.restartChargeConfirmation.checked = true;
+nodes.restartChargeConfirmation.dispatch('change');
+nodes.restartAcknowledgeButton.dispatch('click');
+await tick();
+await tick();
 
 nodes.operationImageToImage.checked = false;
 nodes.operationInpaint.checked = true;
@@ -497,6 +692,76 @@ await tick();
 assert.equal(nodes.operationInpaint.disabled, true);
 assert.match(reasonNodes.INPAINT.textContent, /当前档案未启用/u);
 
+const runtimeEventsBeforeLateState = documentEvents.filter(
+  (event) => event.type === 'ss-erp:workspace-runtime',
+).length;
+deferredEditState = createDeferred();
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+const deferredSourceUpload = createDeferred();
+const lateSourceHandle = `mh_${'8'.repeat(48)}`;
+const createdUrlsBeforeLateSource = createdUrls.length;
+deferredUploads.set('SOURCE', deferredSourceUpload);
+nodes.sourceFile.files = [new Blob(['late-source'], { type: 'image/png' })];
+nodes.sourceFile.dispatch('change');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'upload').at(-1)[1], 'SOURCE');
+runtimeListeners[0]({ type: 'ss-erp:byok-device-session-invalidated' });
+const invalidationClearIndex = documentEvents.findLastIndex(
+  (event) => event.type === 'ss-erp:workspace-clear',
+);
+deferredSourceUpload.resolve({
+  mediaHandle: lateSourceHandle,
+  purpose: 'SOURCE',
+  metadata: {
+    mimeType: 'image/png', byteLength: 11, width: 100, height: 300,
+    sha256: '8'.repeat(64),
+  },
+});
+deferredEditState.resolve(reviewSnapshot(true));
+await tick();
+await tick();
+assert.equal(body.dataset.editTaskLocked, 'false');
+assert.equal(nodes.editAlternatives.children.length, 0);
+assert.equal(nodes.sourceStage.hidden, true,
+  'a SOURCE upload arriving after invalidation cannot restore source UI');
+assert.equal(createdUrls.length, createdUrlsBeforeLateSource,
+  'a stale SOURCE upload cannot create an object URL after invalidation');
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === lateSourceHandle && row[2] === 'SOURCE'), true,
+'a stale SOURCE upload handle is released after invalidation');
+assert.equal(documentEvents.filter(
+  (event) => event.type === 'ss-erp:workspace-runtime',
+).length, runtimeEventsBeforeLateState,
+'a getEditState response arriving after device invalidation cannot restore workspace runtime');
+assert.ok(invalidationClearIndex >= 0, 'device invalidation clears retained workspace projection');
+assert.match(nodes.editResultNotice.textContent, /设备会话已变化/u);
+
+const deferredReferenceUpload = createDeferred();
+const lateReferenceHandle = `mh_${'9'.repeat(48)}`;
+const createdUrlsBeforePagehide = createdUrls.length;
+deferredUploads.set('REFERENCE', deferredReferenceUpload);
+nodes.referenceFiles.files = [new Blob(['late-reference'], { type: 'image/webp' })];
+nodes.referenceFiles.dispatch('change');
+await tick();
 for (const listener of windowListeners.get('pagehide') || []) listener({});
+deferredReferenceUpload.resolve({
+  mediaHandle: lateReferenceHandle,
+  purpose: 'REFERENCE',
+  metadata: {
+    mimeType: 'image/webp', byteLength: 14, width: 100, height: 100,
+    sha256: '9'.repeat(64),
+  },
+});
+await tick();
+await tick();
+assert.equal(createdUrls.length, createdUrlsBeforePagehide,
+  'a REFERENCE upload arriving after pagehide cannot create an object URL');
+assert.equal(nodes.referenceList.children.length, 0,
+  'a REFERENCE upload arriving after pagehide cannot restore reference UI');
+assert.equal(calls.some((row) => row[0] === 'release'
+  && row[1] === lateReferenceHandle && row[2] === 'REFERENCE'), true,
+'a stale REFERENCE upload handle is released after pagehide');
 assert.ok(revokedUrls.includes('blob:preview'));
 console.log('PASS extension BYOK edit workbench UI');

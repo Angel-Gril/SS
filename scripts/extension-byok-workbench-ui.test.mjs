@@ -7,8 +7,12 @@ const htmlPath = `${root}/pages/ai-image-workbench.html`;
 const launchPath = `${root}/pages/ai-image-workbench-launch.html`;
 const cssPath = `${root}/pages/ai-image-workbench.css`;
 const pagePath = `${root}/pages/ai-image-workbench.js`;
+const workspaceStatePath = `${root}/shared/byok/workbench-workspace-state.js`;
+const workspacePagePath = `${root}/pages/ai-image-workbench-workspace.js`;
 
-for (const path of [htmlPath, launchPath, cssPath, pagePath]) {
+for (const path of [
+  htmlPath, launchPath, cssPath, pagePath, workspaceStatePath, workspacePagePath,
+]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
 }
 
@@ -21,7 +25,28 @@ const preflightSource = fs.readFileSync('scripts/preflight.mjs', 'utf8');
 
 assert.match(html, /ai-image-workbench\.css/u);
 assert.match(html, /shared\/byok\/workbench-client\.js/u);
+assert.match(html, /shared\/contracts\/ai-image-workbench-v1\.js/u);
+assert.match(html, /shared\/byok\/workbench-workspace-state\.js/u);
+assert.match(html, /ai-image-workbench-workspace\.js/u);
+assert.ok(
+  html.indexOf('shared/contracts/ai-image-workbench-v1.js')
+    < html.indexOf('shared/byok/workbench-workspace-state.js'),
+  'the shared contract must load before workspace state',
+);
+assert.ok(
+  html.indexOf('shared/byok/workbench-workspace-state.js')
+    < html.indexOf('ai-image-workbench-workspace.js'),
+  'workspace state must load before the page controller',
+);
 assert.match(html, /ai-image-workbench\.js/u);
+for (const id of [
+  'workspaceShell', 'workspaceModeSummary', 'workspaceSkuList', 'workspaceLibraryTabs',
+  'workspaceLibraryList', 'workspaceSlotList', 'workspacePromptInspector',
+  'workspacePromptInput', 'workspaceNegativePromptInput', 'workspaceSavePromptButton',
+  'workspaceReferenceSummary', 'workspaceTaskDock', 'workspaceTaskSummary',
+]) {
+  assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
+}
 assert.match(html, /id=["']executionModeByok["'][^>]*checked/u);
 assert.match(html, /id=["']executionModeHosted["'][^>]*disabled/u);
 assert.match(html, /id=["']profileSelect["']/u);
@@ -45,6 +70,14 @@ assert.doesNotMatch(html, /<script[^>]*>\s*[^<]/iu, 'workbench page must not use
 assert.doesNotMatch(html, /https?:\/\//iu, 'workbench page must not load remote assets');
 assert.doesNotMatch(launchHtml, /<script|product-|workflow-|api[_ -]?key/iu);
 assert.match(css, /@media\s*\(max-width:\s*720px\)/u);
+assert.match(css, /\.workspace-shell\s*\{[\s\S]*grid-template-columns/u);
+assert.match(css, /\.workspace-task-dock\s*\{[\s\S]*position:\s*sticky/u);
+assert.match(css, /@media\s*\(max-width:\s*1120px\)/u);
+assert.match(css, /\.workspace-task-dock\s*\{[\s\S]*grid-column:\s*3/u);
+assert.match(
+  css,
+  /@media\s*\(max-width:\s*720px\)[\s\S]*\.workspace-task-dock\s*\{[\s\S]*position:\s*static/u,
+);
 assert.match(css, /prefers-reduced-motion/u);
 assert.doesNotMatch(pageSource, /innerHTML|localStorage|storage\.local|storage\.sync|apiKey/u);
 assert.match(pageSource, /event\.isTrusted\s*!==\s*true/u);
@@ -60,6 +93,8 @@ assert.match(verifierSource, /pages\/ai-image-workbench\.html/u);
 assert.match(verifierSource, /shared\/byok\/workbench-runtime-handler\.js/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-ui\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-runtime-handler\.test\.mjs/u);
+assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-state\.test\.mjs/u);
+assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-ui\.test\.mjs/u);
 
 class TestNode {
   constructor(id, tagName = 'div') {
@@ -627,13 +662,33 @@ function createPageHarness(options = {}) {
   };
   const harnessWindowListeners = {};
   const harnessRuntimeListeners = [];
+  const harnessDocumentListeners = new Map();
+  const harnessDocumentEvents = [];
+  const harnessBody = new TestNode('body', 'body');
+  harnessBody.dataset.editTaskLocked = options.editTaskLocked ? 'true' : 'false';
+  harnessBody.dataset.editTaskState = options.editTaskState
+    || (options.editTaskLocked ? 'SUBMITTING' : 'IDLE');
   const timerApi = options.timers || createManualTimers();
   let harnessRandomByte = 32;
   const harnessContext = {
     Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
     document: {
+      body: harnessBody,
       getElementById(id) { return harnessNodes[id] || null; },
       createElement(tagName) { return new TestNode('', tagName); },
+      addEventListener(type, listener) {
+        const values = harnessDocumentListeners.get(type) || [];
+        values.push(listener);
+        harnessDocumentListeners.set(type, values);
+      },
+      dispatchEvent(event) {
+        harnessDocumentEvents.push(event);
+        for (const listener of harnessDocumentListeners.get(event.type) || []) listener(event);
+        return true;
+      },
+    },
+    CustomEvent: class CustomEvent {
+      constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
     },
     crypto: {
       getRandomValues(bytes) { bytes.fill(harnessRandomByte++); return bytes; },
@@ -655,6 +710,13 @@ function createPageHarness(options = {}) {
     DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
     createClient() { return harnessClient; },
   };
+  let workspaceRuntimeRevision = 0;
+  harnessContext.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
+    nextRuntimeRevision() {
+      workspaceRuntimeRevision += 1;
+      return workspaceRuntimeRevision;
+    },
+  });
   vm.runInNewContext(pageSource, harnessContext, { filename: pagePath });
   return {
     authoritative,
@@ -662,8 +724,208 @@ function createPageHarness(options = {}) {
     nodes: harnessNodes,
     runtimeListeners: harnessRuntimeListeners,
     windowListeners: harnessWindowListeners,
+    documentEvents: harnessDocumentEvents,
+    dispatchDocument(type, detail) {
+      harnessContext.document.dispatchEvent(new harnessContext.CustomEvent(type, { detail }));
+    },
     get revokeCount() { return harnessRevokeCount; },
   };
+}
+
+{
+  const authoritative = { value: isolatedPublicState() };
+  authoritative.value.generationOutcome = 'UNKNOWN_OUTCOME';
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  const runtime = harness.documentEvents.find((event) => (
+    event.type === 'ss-erp:workspace-runtime'
+  ));
+  assert.ok(runtime, 'an unknown single-image outcome must project into the task dock');
+  assert.equal(runtime.detail.task.schedulerState, 'FAILED');
+  assert.equal(runtime.detail.slots[0].status, 'UNKNOWN_OUTCOME');
+  assert.equal(runtime.detail.slots[0].alternatives[0].state, 'UNKNOWN_OUTCOME');
+  assert.equal(runtime.detail.slots[0].alternatives[0].mediaId, null);
+  assert.notEqual(runtime.detail.task.schedulerState, 'READY');
+}
+
+{
+  const dispatched = createDeferred();
+  const harness = createPageHarness({ generate: () => dispatched.promise });
+  await flushAsync(8);
+  const eventOffset = harness.documentEvents.length;
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  const frozenBootstrap = harness.documentEvents.slice(eventOffset).findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  assert.equal(frozenBootstrap?.detail.dispatched, true,
+    'the Prompt freezes before the Provider dispatch can settle');
+  const originalPrompt = harness.nodes.promptInput.value;
+  harness.dispatchDocument('ss-erp:workspace-action', {
+    contractVersion: 'extension-byok-workbench-workspace-action/v1',
+    action: 'SAVE_PROMPT',
+    revision: 2,
+    executionMode: 'BYOK',
+    skuKey: null,
+    slotKey: publicState.context.slotKey,
+    mediaId: null,
+    attemptId: null,
+    libraryKind: null,
+    direction: null,
+    prompt: 'This late Prompt must not replace the dispatched input.',
+    negativePrompt: '',
+  });
+  assert.equal(harness.nodes.promptInput.value, originalPrompt);
+  dispatched.reject(new Error('definitive Provider rejection'));
+  await flushAsync(4);
+  const releasedBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  assert.equal(releasedBootstrap.detail.dispatched, false,
+    'a definitive pre-result failure restores Prompt editing');
+}
+
+{
+  const refreshedReadiness = createDeferred();
+  const dispatched = createDeferred();
+  const initialReadiness = cloneValue(readiness);
+  const nextReadiness = {
+    ...cloneValue(readiness),
+    readinessHandle: 'rh_' + 'c'.repeat(48),
+  };
+  let readinessCallCount = 0;
+  const harness = createPageHarness({
+    getReadiness() {
+      readinessCallCount += 1;
+      return readinessCallCount === 1 ? initialReadiness : refreshedReadiness.promise;
+    },
+    generate: () => dispatched.promise,
+  });
+  await flushAsync(8);
+  initialReadiness.expiresAt = '2000-01-01T00:00:00.000Z';
+  harness.nodes.promptInput.value = 'Prompt A before delayed readiness';
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  harness.dispatchDocument('ss-erp:workspace-action', {
+    contractVersion: 'extension-byok-workbench-workspace-action/v1',
+    action: 'SAVE_PROMPT',
+    revision: 2,
+    executionMode: 'BYOK',
+    skuKey: null,
+    slotKey: publicState.context.slotKey,
+    mediaId: null,
+    attemptId: null,
+    libraryKind: null,
+    direction: null,
+    prompt: 'Prompt B saved while readiness is pending',
+    negativePrompt: 'no watermark',
+  });
+  refreshedReadiness.resolve(nextReadiness);
+  await flushAsync(4);
+  const generateCall = harness.calls.findLast((row) => row[0] === 'generate');
+  assert.equal(generateCall?.[1].prompt, 'Prompt B saved while readiness is pending');
+  assert.equal(generateCall?.[1].negativePrompt, 'no watermark');
+  const pendingBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap' && event.detail.dispatched === true
+  ));
+  const pendingSlot = pendingBootstrap?.detail.skus[0].slots[0];
+  assert.equal(pendingSlot?.prompt, 'Prompt B saved while readiness is pending');
+  assert.equal(pendingSlot?.alternatives[0].state, 'SUBMITTING');
+  assert.equal(pendingSlot?.alternatives[0].mediaId, null);
+  assert.doesNotMatch(JSON.stringify(pendingBootstrap?.detail), /"READY"/u);
+  dispatched.reject(new Error('definitive Provider rejection'));
+  await flushAsync(4);
+}
+
+{
+  const harness = createPageHarness({ editTaskLocked: true });
+  await flushAsync(8);
+  const pendingBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  const pendingSlot = pendingBootstrap?.detail.skus[0].slots[0];
+  assert.equal(pendingBootstrap?.detail.dispatched, true);
+  assert.equal(pendingSlot?.alternatives[0].state, 'SUBMITTING');
+  assert.equal(pendingSlot?.alternatives[0].mediaId, null);
+  assert.equal(harness.nodes.promptInput.disabled, true);
+  assert.equal(harness.nodes.profileSelect.disabled, true);
+}
+
+{
+  const harness = createPageHarness({
+    editTaskLocked: true,
+    editTaskState: 'UNKNOWN_OUTCOME',
+  });
+  await flushAsync(8);
+  const unknownBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  const unknownSlot = unknownBootstrap?.detail.skus[0].slots[0];
+  assert.equal(unknownBootstrap?.detail.dispatched, true);
+  assert.equal(unknownSlot?.alternatives[0].state, 'UNKNOWN_OUTCOME');
+  assert.equal(unknownSlot?.alternatives[0].mediaId, null);
+  assert.equal(unknownSlot?.alternatives[0].errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+  assert.doesNotMatch(JSON.stringify(unknownBootstrap?.detail), /"SUBMITTING"|"READY"/u);
+}
+
+{
+  const harness = createPageHarness();
+  await flushAsync(8);
+  const bootstrap = harness.documentEvents.find((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  assert.ok(bootstrap, 'the authoritative single-slot state bootstraps the workspace shell');
+  assert.deepEqual(Object.keys(bootstrap.detail).sort(), [
+    'contractVersion', 'dispatched', 'executionMode', 'globalReferenceIds', 'libraryItems',
+    'selectedSkuKey', 'selectedSlotKey', 'skus',
+  ].sort());
+  assert.equal(bootstrap.detail.executionMode, 'BYOK');
+  assert.equal(bootstrap.detail.selectedSkuKey, publicState.context.skuKey);
+  assert.equal(bootstrap.detail.selectedSlotKey, publicState.context.slotKey);
+  assert.equal(bootstrap.detail.skus.length, 1);
+  assert.equal(bootstrap.detail.skus[0].slots.length, 1);
+  assert.equal(JSON.stringify(bootstrap.detail).includes('apiKey'), false);
+  assert.equal(JSON.stringify(bootstrap.detail).includes('https://'), false);
+
+  harness.dispatchDocument('ss-erp:workspace-action', {
+    contractVersion: 'extension-byok-workbench-workspace-action/v1',
+    action: 'SAVE_PROMPT',
+    revision: 2,
+    executionMode: 'BYOK',
+    skuKey: null,
+    slotKey: publicState.context.slotKey,
+    mediaId: null,
+    attemptId: null,
+    libraryKind: null,
+    direction: null,
+    prompt: 'Keep the verified product centered on a neutral background.',
+    negativePrompt: 'watermark, invented labels',
+  });
+  assert.equal(
+    harness.nodes.promptInput.value,
+    'Keep the verified product centered on a neutral background.',
+  );
+  assert.equal(harness.nodes.negativePromptInput.value, 'watermark, invented labels');
+
+  harness.dispatchDocument('ss-erp:workspace-action', {
+    contractVersion: 'extension-byok-workbench-workspace-action/v1',
+    action: 'SAVE_PROMPT',
+    revision: 3,
+    executionMode: 'BYOK',
+    skuKey: null,
+    slotKey: 'different-slot',
+    mediaId: null,
+    attemptId: null,
+    libraryKind: null,
+    direction: null,
+    prompt: 'This must not replace the current prompt.',
+    negativePrompt: '',
+  });
+  assert.equal(
+    harness.nodes.promptInput.value,
+    'Keep the verified product centered on a neutral background.',
+    'a workspace action for another slot cannot mutate the exact single-slot form',
+  );
 }
 
 {
