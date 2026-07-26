@@ -183,7 +183,7 @@ describe('AliyunSmsProvider', () => {
       ['--import', 'tsx', '--input-type=module', '--eval', script],
       { cwd: process.cwd(), timeout: 10_000 },
     )).resolves.toMatchObject({ stderr: '' });
-  });
+  }, 15_000);
 
   it('returns the provider error without treating a non-OK response as sent', async () => {
     const sendSms = vi.fn<AliyunSmsClient['sendSms']>(async (_request) => ({
