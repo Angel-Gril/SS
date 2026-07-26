@@ -6,6 +6,8 @@
   var gestureTokens = typeof WeakMap === 'function' ? new WeakMap() : new Map();
   var gestureEvents = typeof WeakSet === 'function' ? new WeakSet() : new Set();
   var GESTURE_TOKEN_TTL_MS = 10 * 1000;
+  var SESSION_CONSENT_STORAGE_KEY = 'ss-erp:byok:provider-consent:v1';
+  var SESSION_CONSENT_EPOCH_STORAGE_KEY = 'ss-erp:byok:provider-consent-epoch:v1';
 
   function permissionError(code, message) {
     var result = new Error(message || code);
@@ -142,6 +144,17 @@
 
   function permissionPattern(origin) {
     return origin + '/*';
+  }
+
+  function resolveSessionStorage(value) {
+    if (!value || typeof value.get !== 'function'
+      || typeof value.set !== 'function' || typeof value.remove !== 'function') {
+      throw permissionError(
+        'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+        'Provider consent session storage is unavailable',
+      );
+    }
+    return value;
   }
 
   function normalizeDecision(value, expectedOrigin) {
@@ -321,10 +334,145 @@
 
   function createBroker(options) {
     var permissions = resolvePermissionsApi(options && options.permissions);
+    var consentAuthority = options && options.consentAuthority || 'BACKGROUND';
+    if (!['BACKGROUND', 'REQUEST_ONLY'].includes(consentAuthority)) {
+      throw permissionError('SS_ERP_BYOK_PERMISSION_INPUT_INVALID', 'Provider consent authority is invalid');
+    }
+    var sessionStorage = consentAuthority === 'BACKGROUND'
+      ? resolveSessionStorage(options && options.sessionStorage)
+      : null;
+    var onConsentRevoked = options && options.onConsentRevoked;
+    if (onConsentRevoked !== undefined && typeof onConsentRevoked !== 'function') {
+      throw permissionError(
+        'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+        'Provider consent invalidation callback is unavailable',
+      );
+    }
     // This object is captured when the broker is created in the background
     // worker.  It is never accepted from request input, where a page could
     // replace an ordinary allowlistDecision object.
     var readinessBridge = options && options.readinessBridge;
+    var consentWriteQueue = Promise.resolve();
+
+    function enqueueConsentOperation(operation) {
+      var next = consentWriteQueue.catch(function () {}).then(operation);
+      consentWriteQueue = next.catch(function () {});
+      return next;
+    }
+
+    function invalidateConsent(origin, reason) {
+      if (typeof onConsentRevoked === 'function') {
+        onConsentRevoked({ origin: origin, reason: reason });
+      }
+    }
+
+    function assertBackgroundAuthority() {
+      if (consentAuthority !== 'BACKGROUND') {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+          'Provider consent is owned by the background authority',
+        );
+      }
+    }
+
+    async function readConsentState() {
+      assertBackgroundAuthority();
+      var stored = await sessionStorage.get([
+        SESSION_CONSENT_STORAGE_KEY,
+        SESSION_CONSENT_EPOCH_STORAGE_KEY,
+      ]);
+      var rawEpoch = stored && stored[SESSION_CONSENT_EPOCH_STORAGE_KEY];
+      var epoch = rawEpoch === undefined ? 0 : rawEpoch;
+      if (!Number.isSafeInteger(epoch) || epoch < 0) {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+          'Provider consent epoch is invalid',
+        );
+      }
+      var raw = stored && stored[SESSION_CONSENT_STORAGE_KEY];
+      var result = Object.create(null);
+      if (raw === undefined) return { epoch: epoch, consents: result };
+      if (!isRecord(raw)) {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+          'Provider consent state is invalid',
+        );
+      }
+      Object.keys(raw).forEach(function (candidate) {
+        try {
+          var origin = canonicalizeOrigin(candidate);
+          var value = raw[candidate];
+          if (origin !== candidate
+            || (value !== true && (!Number.isSafeInteger(value) || value < 0))) {
+            throw new Error('invalid consent row');
+          }
+          if (value === epoch || (epoch === 0 && value === true)) result[origin] = true;
+        } catch {
+          throw permissionError(
+            'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+            'Provider consent state is invalid',
+          );
+        }
+      });
+      return { epoch: epoch, consents: result };
+    }
+
+    async function writeConsentState(state) {
+      var raw = Object.create(null);
+      Object.keys(state.consents).forEach(function (origin) {
+        if (state.consents[origin] === true) raw[origin] = state.epoch;
+      });
+      if (Object.keys(raw).length) {
+        await sessionStorage.set({
+          [SESSION_CONSENT_EPOCH_STORAGE_KEY]: state.epoch,
+          [SESSION_CONSENT_STORAGE_KEY]: raw,
+        });
+      } else {
+        await sessionStorage.set({ [SESSION_CONSENT_EPOCH_STORAGE_KEY]: state.epoch });
+        await sessionStorage.remove([SESSION_CONSENT_STORAGE_KEY]);
+      }
+    }
+
+    function nextConsentEpoch(epoch) {
+      if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch >= Number.MAX_SAFE_INTEGER) {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+          'Provider consent epoch cannot advance',
+        );
+      }
+      return epoch + 1;
+    }
+
+    function captureConsentEpoch() {
+      assertBackgroundAuthority();
+      return consentWriteQueue.catch(function () {}).then(async function () {
+        return (await readConsentState()).epoch;
+      });
+    }
+
+    function finalizeOriginConsent(endpoint, expectedEpoch) {
+      assertBackgroundAuthority();
+      var origin = canonicalizeOrigin(endpoint);
+      if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0) {
+        throw permissionError('SS_ERP_BYOK_PERMISSION_CONSENT_STALE', 'Provider consent ticket is stale');
+      }
+      return enqueueConsentOperation(async function () {
+        var state = await readConsentState();
+        if (state.epoch !== expectedEpoch) {
+          throw permissionError('SS_ERP_BYOK_PERMISSION_CONSENT_STALE', 'Provider consent ticket is stale');
+        }
+        var status = await containsOrigin(origin);
+        if (!status || status.granted !== true || status.origin !== origin) {
+          throw permissionError(
+            'SS_ERP_BYOK_PERMISSION_REQUIRED',
+            'Exact Provider origin permission is required',
+          );
+        }
+        state.consents[origin] = true;
+        await writeConsentState(state);
+        return { origin: origin, pattern: permissionPattern(origin), granted: true };
+      });
+    }
 
     async function containsOrigin(endpoint) {
       var origin = canonicalizeOrigin(endpoint);
@@ -363,11 +511,15 @@
       // to transient user activation; awaiting contains() first can move this
       // call outside the trusted click task. Requesting an already-granted exact
       // origin is idempotent and resolves true without broadening access.
+      var epochPromise = consentAuthority === 'BACKGROUND' ? captureConsentEpoch() : null;
       var granted = await callPermissionMethod(
         permissions,
         'request',
         { origins: [pattern] },
       );
+      if (granted && consentAuthority === 'BACKGROUND') {
+        await finalizeOriginConsent(origin, await epochPromise);
+      }
       return {
         origin: origin,
         pattern: pattern,
@@ -377,32 +529,99 @@
     }
 
     async function hasOriginPermission(endpoint) {
-      return containsOrigin(endpoint);
+      assertBackgroundAuthority();
+      await consentWriteQueue.catch(function () {});
+      var status = await containsOrigin(endpoint);
+      var state = await readConsentState();
+      return {
+        origin: status.origin,
+        pattern: status.pattern,
+        granted: status.granted === true && state.consents[status.origin] === true,
+      };
+    }
+
+    function commitWithOriginPermission(endpoint, commit) {
+      assertBackgroundAuthority();
+      if (typeof commit !== 'function') {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_INPUT_INVALID',
+          'Provider permission commit is invalid',
+        );
+      }
+      var origin = canonicalizeOrigin(endpoint);
+      return enqueueConsentOperation(async function () {
+        var status = await containsOrigin(origin);
+        var state = await readConsentState();
+        if (!status || status.granted !== true || state.consents[origin] !== true) {
+          throw permissionError(
+            'SS_ERP_BYOK_PERMISSION_REQUIRED',
+            'Exact Provider origin permission is required',
+          );
+        }
+        return commit();
+      });
     }
 
     async function removeOriginPermission(endpoint) {
+      assertBackgroundAuthority();
       var origin = canonicalizeOrigin(endpoint);
       var pattern = permissionPattern(origin);
-      var removed = await callPermissionMethod(
-        permissions,
-        'remove',
-        { origins: [pattern] },
-      );
-      return { origin: origin, pattern: pattern, removed: Boolean(removed) };
+      var consentRemoved = await enqueueConsentOperation(async function () {
+        var state = await readConsentState();
+        var removed = state.consents[origin] === true;
+        if (removed) invalidateConsent(origin, 'consent_revoked');
+        delete state.consents[origin];
+        state.epoch = nextConsentEpoch(state.epoch);
+        await writeConsentState(state);
+        return removed;
+      });
+      var chromeRemoved = false;
+      try {
+        chromeRemoved = await callPermissionMethod(
+          permissions,
+          'remove',
+          { origins: [pattern] },
+        );
+      } catch (_error) {
+        // App-owned consent is the execution boundary even for mandatory hosts.
+      }
+      return {
+        origin: origin,
+        pattern: pattern,
+        removed: consentRemoved || Boolean(chromeRemoved),
+      };
+    }
+
+    async function clearSessionConsent() {
+      assertBackgroundAuthority();
+      return enqueueConsentOperation(async function () {
+        var state = await readConsentState();
+        if (Object.keys(state.consents).length) invalidateConsent(null, 'session_consent_cleared');
+        state.epoch = nextConsentEpoch(state.epoch);
+        await sessionStorage.set({ [SESSION_CONSENT_EPOCH_STORAGE_KEY]: state.epoch });
+        await sessionStorage.remove([SESSION_CONSENT_STORAGE_KEY]);
+        return { cleared: true, epoch: state.epoch };
+      });
     }
 
     return Object.freeze({
       createTrustedGestureToken: createTrustedGestureToken,
       canonicalizeOrigin: canonicalizeOrigin,
       containsOrigin: containsOrigin,
+      captureConsentEpoch: captureConsentEpoch,
+      finalizeOriginConsent: finalizeOriginConsent,
       hasOriginPermission: hasOriginPermission,
+      commitWithOriginPermission: commitWithOriginPermission,
       requestOriginPermission: requestOriginPermission,
       removeOriginPermission: removeOriginPermission,
+      clearSessionConsent: clearSessionConsent,
     });
   }
 
   global.SS_ERP_BYOK_PERMISSION_BROKER = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
+    SESSION_CONSENT_STORAGE_KEY: SESSION_CONSENT_STORAGE_KEY,
+    SESSION_CONSENT_EPOCH_STORAGE_KEY: SESSION_CONSENT_EPOCH_STORAGE_KEY,
     canonicalizeOrigin: canonicalizeOrigin,
     createBroker: createBroker,
     createTrustedGestureToken: createTrustedGestureToken,

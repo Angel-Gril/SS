@@ -56,6 +56,12 @@ const EXTENSION_MEDIA_REVIEW_MIGRATION = '20260722100000_add_extension_media_rev
 const PAID_SUITE_EXECUTION_MIGRATION = '20260724140000_enable_paid_ai_image_suite_execution';
 const GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION = '20260724141000_index_global_ai_cost_settlements';
 const GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION = '20260724142000_index_global_ai_cost_reservations';
+const BYOK_PROVENANCE_MIGRATION = '20260725100000_add_extension_byok_media_provenance';
+const BYOK_INGEST_GRANT_MIGRATION = '20260725103000_add_extension_byok_media_ingest_grant';
+const BYOK_INGEST_GRANT_BINDING_MIGRATION = '20260725104000_bind_extension_byok_media_ingest_grants';
+const BYOK_DRAFT_BINDING_MIGRATION = '20260725105000_bind_extension_byok_media_to_listing_draft';
+const BYOK_BILLING_SEPARATION_MIGRATION = '20260725110000_enforce_extension_ai_billing_separation';
+const BYOK_UPLOAD_STAGING_MIGRATION = '20260725112000_add_extension_byok_upload_staging';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -196,6 +202,7 @@ function prepareHistoricalMigrations() {
   const paidSuiteExecutionIndex = names.indexOf(PAID_SUITE_EXECUTION_MIGRATION);
   const globalSettlementBudgetIndex = names.indexOf(GLOBAL_SETTLEMENT_BUDGET_INDEX_MIGRATION);
   const globalReservationBudgetIndex = names.indexOf(GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION);
+  const byokProvenanceIndex = names.indexOf(BYOK_PROVENANCE_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -279,6 +286,20 @@ function prepareHistoricalMigrations() {
     throw new Error(
       `${EXTENSION_MEDIA_REVIEW_MIGRATION} through ${GLOBAL_RESERVATION_BUDGET_INDEX_MIGRATION} must be one unique consecutive migration block`,
     );
+  }
+  const expectedByokMigrations = [
+    BYOK_PROVENANCE_MIGRATION,
+    BYOK_INGEST_GRANT_MIGRATION,
+    BYOK_INGEST_GRANT_BINDING_MIGRATION,
+    BYOK_DRAFT_BINDING_MIGRATION,
+    BYOK_BILLING_SEPARATION_MIGRATION,
+    BYOK_UPLOAD_STAGING_MIGRATION,
+  ];
+  if (byokProvenanceIndex < 0
+    || JSON.stringify(names.slice(byokProvenanceIndex, byokProvenanceIndex + expectedByokMigrations.length))
+      !== JSON.stringify(expectedByokMigrations)
+    || expectedByokMigrations.some((name) => names.filter((candidate) => candidate === name).length !== 1)) {
+    throw new Error('Extension BYOK migrations must be one unique consecutive upgrade block');
   }
 
   mkdirSync(join(tempPrismaRoot, 'migrations'), { recursive: true });
@@ -736,8 +757,32 @@ async function addCurrentClientCompatibilityColumns(client) {
       ADD COLUMN "execution_claim_token" CHAR(64),
       ADD COLUMN "execution_lease_expires_at" TIMESTAMP(3)
   `);
+  await addAiImageExecutionModeCompatibilityColumn(client);
   await addAiMediaContextCompatibilityColumns(client);
   await addAiProviderReconciliationCompatibilityColumns(client);
+}
+
+async function addAiImageExecutionModeCompatibilityColumn(client) {
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_image_jobs"
+      ADD COLUMN "execution_mode" VARCHAR(20) NOT NULL DEFAULT 'ERP_HOSTED'
+  `);
+}
+
+async function dropAiImageExecutionModeCompatibilityColumn(client) {
+  await client.$executeRawUnsafe(`
+    ALTER TABLE "ai_image_jobs" DROP COLUMN "execution_mode"
+  `);
+  const rows = await client.$queryRawUnsafe(`
+    SELECT count(*)::int AS "count"
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'ai_image_jobs'
+      AND column_name = 'execution_mode'
+  `);
+  if (Number(rows[0]?.count) !== 0) {
+    throw new Error('Temporary AI image execution mode column was not removed before SRV-06 migration');
+  }
 }
 
 async function dropAiMediaContextCompatibilityColumns(client) {
@@ -1678,6 +1723,7 @@ try {
     datasources: { db: { url: invalidTestUrl.toString() } },
   });
   await invalidFixtureClient.$connect();
+  await addAiImageExecutionModeCompatibilityColumn(invalidFixtureClient);
   await addAiMediaContextCompatibilityColumns(invalidFixtureClient);
   await addAiProviderReconciliationCompatibilityColumns(invalidFixtureClient);
   const invalidOrigin = await seedLegacySuccessfulEditFixture(invalidFixtureClient, {
@@ -1838,6 +1884,11 @@ try {
   fixtureClient = undefined;
 
   if (migrationStages.paidSuiteExecutionIndex < migrationStages.names.length - 1) {
+    fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+    await fixtureClient.$connect();
+    await dropAiImageExecutionModeCompatibilityColumn(fixtureClient);
+    await fixtureClient.$disconnect();
+    fixtureClient = undefined;
     addHistoricalMigrationRange(
       migrationStages.names,
       migrationStages.paidSuiteExecutionIndex + 1,

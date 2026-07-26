@@ -56,6 +56,7 @@ export interface ExtensionCommandResolutionInput {
   shopId: string | null;
   workflowId: string | null;
   draftVersion: number | null;
+  purpose?: 'issue' | 'execute';
   idempotencyKey?: string;
   command: Record<string, unknown>;
 }
@@ -75,6 +76,13 @@ export interface SourceWorkflowCommandResolverOptions {
   getMediaWorkflowDecision?: (ownerUserId: string) => Promise<MediaWorkflowRolloutDecision>;
   getAiImageSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
   getByokReadiness?: ByokMediaIngestCommandResolverOptions['getReadiness'];
+  authorizeByokPublish?(input: {
+    ownerUserId: string;
+    shopId: string;
+    workflowId: string;
+    assignments: Array<{ assetId: string }>;
+    requestingDeviceSessionId: string;
+  }): Promise<unknown>;
   production?: boolean;
   loadShop(input: {
     shopId: string;
@@ -99,6 +107,7 @@ export interface SourceWorkflowCommandResolverOptions {
     publishTaskIds: string[];
     supplyGoodsId?: string;
     sourceCaptureSnapshotId?: string;
+    media?: { assignments: Array<{ assetId: string }> };
   } | null>;
   loadMediaWorkflow?(input: {
     workflowId: string;
@@ -205,7 +214,19 @@ export function createSourceWorkflowCommandResolver(
   const byokMediaIngestResolver = options.getByokReadiness && options.loadDraft
     ? createByokMediaIngestCommandResolver({
       loadShop: options.loadShop,
-      loadDraft: options.loadDraft,
+      loadDraft: async (input) => {
+        const draft = await options.loadDraft!(input);
+        if (!draft?.sourceCaptureSnapshotId) return null;
+        return {
+          id: draft.id,
+          ownerUserId: draft.ownerUserId,
+          shopId: draft.shopId,
+          draftVersion: draft.draftVersion,
+          revision: draft.revision,
+          sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
+          selectedSkuKeys: draft.selectedSkuKeys,
+        };
+      },
       getReadiness: options.getByokReadiness,
     })
     : null;
@@ -762,6 +783,23 @@ export function createSourceWorkflowCommandResolver(
       return rollout.legacyAllowed ? { kind: 'unavailable' } : { kind: 'rollout_unavailable' };
     }
 
+    if (options.authorizeByokPublish) {
+      const assignments = draft.media?.assignments;
+      if (!Array.isArray(assignments)) return { kind: 'rollout_unavailable' };
+      try {
+        await options.authorizeByokPublish({
+          ownerUserId: input.ownerUserId,
+          shopId: draft.shopId,
+          workflowId: draft.id,
+          assignments,
+          requestingDeviceSessionId: input.sessionId,
+        });
+      } catch (error) {
+        const statusCode = Number((error as { statusCode?: unknown } | null)?.statusCode);
+        return statusCode >= 500 ? { kind: 'rollout_unavailable' } : { kind: 'unavailable' };
+      }
+    }
+
     return {
       kind: 'allowed',
       shopId: shop.id,
@@ -809,6 +847,7 @@ export interface ExtensionCommandGrantRoutesOptions {
   authenticateDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   resolveCommand(input: ExtensionCommandResolutionInput): Promise<ExtensionCommandResolution>;
   executeOzonPublish?(input: {
+    deviceSessionId: string;
     ownerUserId: string;
     actorUserId: string;
     shopId: string;
@@ -1052,6 +1091,7 @@ export async function extensionCommandGrantRoutes(
       }
       try {
         const result = await options.executeOzonPublish?.({
+          deviceSessionId: device.sessionId,
           ownerUserId: device.ownerUserId,
           actorUserId: device.actorUserId,
           shopId: parsed.data.shopId,

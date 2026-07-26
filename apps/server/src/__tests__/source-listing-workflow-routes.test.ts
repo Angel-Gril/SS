@@ -105,6 +105,7 @@ function build(service: Partial<SourceListingWorkflowServiceLike>, options: {
   aiCopyWorkflow?: any;
   evaluateAiCopyCapability?: any;
   publisher?: SourceListingPublisherLike;
+  authorizeByokPublish?: (input: any) => Promise<unknown>;
   featureFlags?: any;
 } = {}) {
   const app = Fastify();
@@ -136,6 +137,9 @@ function build(service: Partial<SourceListingWorkflowServiceLike>, options: {
       enabled: true, reason: 'tenant_allowed', revision: 'test',
     })),
     publisher: options.publisher,
+    authorizeByokPublish: options.authorizeByokPublish || vi.fn(async () => ({
+      byokAssetIds: [], policyRevision: null,
+    })),
     featureFlags: options.featureFlags || { evaluate: vi.fn(async () => ({
       enabled,
       legacyAllowed: options.legacyAllowed ?? (!enabled || listingStage === 'shadow_write' || listingStage === 'dual_read'),
@@ -899,6 +903,45 @@ describe('source listing workflow routes', () => {
     expect((await failing.app.inject({ method: 'GET', url: '/draft-1' })).json()).toMatchObject({ errorCode: 'source_listing_workflow_failed', msg: '来源商品工作流请求失败' });
     await failing.app.close();
   });
+
+  it.each(['publish-intent', 'publish-attempts'] as const)(
+    'rejects BYOK media at the web %s boundary before publish mutation',
+    async (endpoint) => {
+      const current = readinessDraft({ stage: 'READY_TO_PUBLISH', revision: 2 });
+      const service = {
+        getDraft: vi.fn(async () => current),
+        recordPublishIntent: vi.fn(),
+      };
+      const publisher = { publish: vi.fn(), getAttempt: vi.fn() } as any;
+      const authorizeByokPublish = vi.fn(async () => {
+        throw Object.assign(new Error('BYOK publish is disabled'), {
+          code: 'EXTENSION_BYOK_PUBLISH_DISABLED', statusCode: 409,
+        });
+      });
+      const { app } = build(service, { publisher, authorizeByokPublish });
+      await app.ready();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/draft-1/${endpoint}`,
+        payload: { expectedRevision: 2, idempotencyKey: 'publish-attempt-1' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        errorCode: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+      });
+      expect(authorizeByokPublish).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1',
+        shopId: 'shop-1',
+        workflowId: 'draft-1',
+        assignments: current.media.assignments,
+      });
+      expect(service.recordPublishIntent).not.toHaveBeenCalled();
+      expect(publisher.publish).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
 
   it('submits an owner-only V2 publish attempt through the authoritative publisher', async () => {
     const service = { getDraft: vi.fn(async () => draft()) };

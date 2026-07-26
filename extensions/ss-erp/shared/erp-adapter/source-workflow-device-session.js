@@ -6,9 +6,18 @@
   var MAX_RESPONSE_BYTES = 512 * 1024;
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
   var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
+  var MAX_BYOK_INGEST_REQUEST_BYTES = 20 * 1024 * 1024;
+  var MAX_BYOK_INGEST_MANIFEST_CHARACTERS = Math.ceil(16 * 1024 * 4 / 3) + 8;
   var MEDIA_EDIT_SOURCE_PATH = '/api/extension-device/source-workbench/media-edit-source';
   var MEDIA_EDIT_MASK_PATH = '/api/extension-device/source-workbench/media-edit-mask';
-  var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([MEDIA_EDIT_SOURCE_PATH, MEDIA_EDIT_MASK_PATH]);
+  var BYOK_MEDIA_INGEST_PATH = '/api/extension-device/byok-media/ingest';
+  var BYOK_READINESS_PATH = '/api/extension-device/byok-media/readiness';
+  var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([
+    MEDIA_EDIT_SOURCE_PATH,
+    MEDIA_EDIT_MASK_PATH,
+    BYOK_MEDIA_INGEST_PATH,
+  ]);
+  var BYOK_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
   function requiredText(value, label) {
     var normalized = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -23,6 +32,8 @@
       '/api/extension-device/media-workflows/execute',
       MEDIA_EDIT_SOURCE_PATH,
       MEDIA_EDIT_MASK_PATH,
+      BYOK_MEDIA_INGEST_PATH,
+      BYOK_READINESS_PATH,
     ]);
     var allowed = method === 'GET'
       ? path.startsWith('/api/extension-device/source-workbench/')
@@ -48,6 +59,39 @@
 
   function byteLength(value) {
     return new TextEncoder().encode(value).byteLength;
+  }
+
+  function byokBinaryRequest(blobValue, commandOptions, path) {
+    if (path !== BYOK_MEDIA_INGEST_PATH
+      || typeof Blob === 'undefined'
+      || !(blobValue instanceof Blob)
+      || !Number.isSafeInteger(blobValue.size)
+      || blobValue.size < 1
+      || blobValue.size > MAX_BYOK_INGEST_REQUEST_BYTES) {
+      throw new TypeError('BYOK ingest image Blob is invalid');
+    }
+    var contentType = requiredText(commandOptions && commandOptions.contentType, 'contentType')
+      .toLowerCase();
+    if (!BYOK_IMAGE_MIME_TYPES.has(contentType)
+      || (blobValue.type && blobValue.type.toLowerCase() !== contentType)) {
+      throw new TypeError('BYOK ingest image MIME is invalid');
+    }
+    var manifest = String(commandOptions && commandOptions.manifest || '').trim();
+    if (!manifest
+      || manifest.length > MAX_BYOK_INGEST_MANIFEST_CHARACTERS
+      || !/^[A-Za-z0-9_-]+$/.test(manifest)) {
+      throw new TypeError('BYOK ingest manifest is invalid');
+    }
+    var commandGrant = String(commandOptions && commandOptions.commandGrant || '').trim();
+    if (!/^[A-Za-z0-9_-]{43,4096}$/.test(commandGrant)) {
+      throw new TypeError('BYOK ingest command grant is invalid');
+    }
+    return {
+      body: blobValue,
+      contentType: contentType,
+      manifest: manifest,
+      commandGrant: commandGrant,
+    };
   }
 
   async function readJsonResponse(response) {
@@ -118,17 +162,24 @@
 
     return {
       async get(pathValue, requestOptions) {
-        return send('GET', pathValue, null, requestOptions || null);
+        return send('GET', pathValue, null, requestOptions || null, 'none');
       },
       async post(pathValue, bodyValue, commandOptions) {
-        return send('POST', pathValue, bodyValue, commandOptions || null);
+        return send('POST', pathValue, bodyValue, commandOptions || null, 'json');
+      },
+      async postBytes(pathValue, blobValue, commandOptions) {
+        return send('POST', pathValue, blobValue, commandOptions || null, 'byok-bytes');
       },
     };
 
-    async function send(method, pathValue, bodyValue, commandOptions) {
+    async function send(method, pathValue, bodyValue, commandOptions, bodyMode) {
         var path = requestPath(pathValue, method);
         var requestBody = null;
-        if (method === 'POST') {
+        var binaryRequest = null;
+        if (bodyMode === 'byok-bytes') {
+          binaryRequest = byokBinaryRequest(bodyValue, commandOptions, path);
+          requestBody = binaryRequest.body;
+        } else if (method === 'POST') {
           if (!bodyValue || typeof bodyValue !== 'object' || Array.isArray(bodyValue)) {
             throw new TypeError('source workbench command body is invalid');
           }
@@ -155,9 +206,12 @@
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
           var requestedScope = commandOptions && commandOptions.requiredScope;
-          var requiredScope = requestedScope === 'listing:review'
+          var requiredScope = bodyMode === 'byok-bytes'
+            ? 'byok:media:ingest'
+            : requestedScope === 'listing:review'
             || requestedScope === 'listing:write'
             || requestedScope === 'media:execute'
+            || requestedScope === 'byok:media:ingest'
             ? requestedScope
             : method === 'GET' ? 'listing:review' : 'media:execute';
           if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {
@@ -170,9 +224,14 @@
             Authorization: 'Bearer ' + accessToken,
           };
           if (method === 'POST') {
-            headers['Content-Type'] = 'application/json';
-            var commandGrant = String(commandOptions && commandOptions.commandGrant || '').trim();
+            headers['Content-Type'] = binaryRequest ? binaryRequest.contentType : 'application/json';
+            var commandGrant = binaryRequest
+              ? binaryRequest.commandGrant
+              : String(commandOptions && commandOptions.commandGrant || '').trim();
             if (commandGrant) headers['X-SS-ERP-Command-Grant'] = commandGrant;
+            if (binaryRequest) {
+              headers['X-SS-ERP-BYOK-Ingest-Manifest'] = binaryRequest.manifest;
+            }
           }
           var response = await fetchImpl(baseUrl + path, {
             method: method,
@@ -182,6 +241,7 @@
             ...(requestBody == null ? {} : { body: requestBody }),
             credentials: 'omit',
             cache: 'no-store',
+            ...(binaryRequest ? { redirect: 'error' } : {}),
             signal: controller.signal,
           });
           if (!await operationCurrent(operation)) {
@@ -197,7 +257,9 @@
             }
             return { state: 'authorization_required', status: response.status };
           }
-          if (response.status === 403) return { state: 'scope_required', scope: requiredScope };
+          if (response.status === 403 && !binaryRequest) {
+            return { state: 'scope_required', scope: requiredScope };
+          }
           if (method === 'GET' && response.status === 404) return { state: 'not_found' };
           if (!response.ok) {
             var errorBody = null;

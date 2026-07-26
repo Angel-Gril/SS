@@ -1,0 +1,226 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+import vm from 'node:vm';
+
+const modulePath = 'extensions/ss-erp/shared/byok/device-session-lifecycle.js';
+const authorityModulePath = 'extensions/ss-erp/shared/byok/runtime-authority.js';
+const serviceWorkerPath = 'extensions/ss-erp/background/service-worker.js';
+const profileStorePath = 'extensions/ss-erp/shared/byok/profile-store.js';
+const source = fs.readFileSync(modulePath, 'utf8');
+const authoritySource = fs.readFileSync(authorityModulePath, 'utf8');
+
+function loadLifecycle() {
+  const context = { Error, Object, Promise };
+  context.globalThis = context;
+  vm.runInNewContext(source, context, { filename: modulePath });
+  return context.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE;
+}
+
+function createFixture() {
+  const calls = [];
+  let clearIfCurrentResult = true;
+  const credentials = {
+    async claim(input) { calls.push(['claim', input]); return { state: 'paired' }; },
+    async clear() { calls.push(['clear']); return { state: 'unpaired' }; },
+    async clearIfCurrent(operation, reason) {
+      calls.push(['clearIfCurrent', operation, reason]);
+      return clearIfCurrentResult;
+    },
+    async getAccessToken() { return 'token'; },
+    async getStatus() { return { state: 'paired' }; },
+    async getConnection() { return { baseUrl: 'https://erp.example' }; },
+    async beginOperation() { return { state: 'paired' }; },
+    async isOperationCurrent() { return true; },
+  };
+  const lifecycle = loadLifecycle().createLifecycle({
+    credentials,
+    async clearByokState(input) { calls.push(['clearByokState', input.reason]); },
+  });
+  return {
+    lifecycle,
+    calls,
+    setClearIfCurrentResult(value) { clearIfCurrentResult = value; },
+  };
+}
+
+test('clears BYOK session authority before every new device claim', async () => {
+  const fixture = createFixture();
+  await fixture.lifecycle.claim({ code: 'pairing-code' });
+  assert.deepEqual(fixture.calls, [
+    ['clearByokState', 'device_claim'],
+    ['claim', { code: 'pairing-code' }],
+  ]);
+});
+
+test('clears BYOK state for explicit disconnect and live revocation only when authority changed', async () => {
+  const fixture = createFixture();
+  await fixture.lifecycle.clear();
+  assert.deepEqual(fixture.calls.slice(0, 2), [
+    ['clear'],
+    ['clearByokState', 'device_clear'],
+  ]);
+  fixture.calls.length = 0;
+  await fixture.lifecycle.clearIfCurrent({ epoch: 1 }, { status: 401 });
+  assert.deepEqual(fixture.calls, [
+    ['clearIfCurrent', { epoch: 1 }, { status: 401 }],
+    ['clearByokState', 'device_authority_revoked'],
+  ]);
+  fixture.calls.length = 0;
+  fixture.setClearIfCurrentResult(false);
+  await fixture.lifecycle.clearIfCurrent({ epoch: 2 }, { status: 410 });
+  assert.deepEqual(fixture.calls, [
+    ['clearIfCurrent', { epoch: 2 }, { status: 410 }],
+  ]);
+});
+
+test('attempts BYOK cleanup even when credential clear fails', async () => {
+  const calls = [];
+  const credentials = {
+    async claim() {},
+    async clear() { calls.push('clear'); throw new Error('credential clear failed'); },
+    async clearIfCurrent() { return false; },
+    async getAccessToken() {},
+    async getStatus() {},
+    async getConnection() {},
+    async beginOperation() {},
+    async isOperationCurrent() {},
+  };
+  const lifecycle = loadLifecycle().createLifecycle({
+    credentials,
+    async clearByokState() { calls.push('clearByokState'); },
+  });
+  await assert.rejects(lifecycle.clear(), /credential clear failed/u);
+  assert.deepEqual(calls, ['clear', 'clearByokState']);
+});
+
+test('fails a new claim closed when old BYOK session cleanup fails', async () => {
+  const calls = [];
+  const credentials = {
+    async claim() { calls.push('claim'); },
+    async clear() {},
+    async clearIfCurrent() { return false; },
+    async getAccessToken() {},
+    async getStatus() {},
+    async getConnection() {},
+    async beginOperation() {},
+    async isOperationCurrent() {},
+  };
+  const lifecycle = loadLifecycle().createLifecycle({
+    credentials,
+    async clearByokState(input) {
+      calls.push(['clearByokState', input.reason]);
+      throw new Error('old BYOK state was not cleared');
+    },
+  });
+  await assert.rejects(
+    lifecycle.claim({ code: 'new-pairing-code' }),
+    /old BYOK state was not cleared/u,
+  );
+  assert.deepEqual(calls, [['clearByokState', 'device_claim']]);
+});
+
+test('detects credential revocation performed inside beginOperation and invalidates the lifecycle epoch', async () => {
+  const calls = [];
+  let paired = true;
+  const credentials = {
+    async claim() {},
+    async clear() { paired = false; },
+    async clearIfCurrent() { return false; },
+    async getAccessToken() {},
+    async getStatus() { return { state: paired ? 'paired' : 'unpaired' }; },
+    async getConnection() {},
+    async beginOperation() {
+      paired = false;
+      throw new Error('refresh credential revoked');
+    },
+    async isOperationCurrent() { return paired; },
+  };
+  const lifecycle = loadLifecycle().createLifecycle({
+    credentials,
+    async clearByokState(input) { calls.push(input.reason); },
+  });
+  const captured = lifecycle.captureAuthority();
+  await assert.rejects(lifecycle.beginOperation(), /refresh credential revoked/u);
+  assert.deepEqual(calls, ['device_authority_revoked']);
+  assert.equal(lifecycle.isAuthorityCurrent(captured), false);
+});
+
+test('drops a Provider result when device authority changes while generation is running', async () => {
+  let epoch = 4;
+  let paired = true;
+  const credentials = {
+    captureAuthority() {
+      return {
+        contractVersion: 'extension-byok-device-session-lifecycle/v1',
+        epoch,
+      };
+    },
+    isAuthorityCurrent(snapshot) { return snapshot && snapshot.epoch === epoch; },
+    async getStatus() {
+      return paired
+        ? { state: 'paired', ownerUserId: 'owner-1', sessionId: 'session-1' }
+        : { state: 'unpaired' };
+    },
+  };
+  const context = { Error, Number, Object, Promise };
+  context.globalThis = context;
+  vm.runInNewContext(authoritySource, context, { filename: authorityModulePath });
+  const guard = context.SS_ERP_BYOK_RUNTIME_AUTHORITY.createGuard({ credentials });
+  const binding = {
+    ownerUserId: 'owner-1', deviceSessionId: 'session-1', shopId: 'shop-1',
+    workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4, policyRevision: '734',
+  };
+  const authority = await guard.capture(binding);
+  let finishGeneration;
+  const generation = new Promise((resolve) => { finishGeneration = resolve; });
+  let vaultWrites = 0;
+  const commit = (async () => guard.commitGeneratedResult({
+    authority,
+    binding,
+    generated: await generation,
+    vault: { put() { vaultWrites += 1; return {}; } },
+  }))();
+  epoch += 1;
+  paired = false;
+  finishGeneration({ outcome: 'SUCCEEDED' });
+  await assert.rejects(
+    commit,
+    (error) => error && error.code === 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+  );
+  assert.equal(vaultWrites, 0);
+});
+
+test('central service-worker cleanup clears all device-scoped BYOK authority and notifies pages', () => {
+  const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, 'utf8');
+  const cleanupStart = serviceWorkerSource.indexOf('async function clearByokDeviceSessionState(input)');
+  const cleanupEnd = serviceWorkerSource.indexOf('\nfunction logisticsDistributionDisabledResult()', cleanupStart);
+  assert.notEqual(cleanupStart, -1);
+  assert.notEqual(cleanupEnd, -1);
+  const cleanupSource = serviceWorkerSource.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanupSource, /getByokReadinessHandleCache\(\)\.clear\(\)/u);
+  assert.match(cleanupSource, /getByokGeneratedResultVault\(\)\.clear\(\)/u);
+  assert.match(cleanupSource, /getByokProfileStore\(\)\.disconnectDevice\(\)/u);
+  assert.match(cleanupSource, /getByokPermissionBroker\(\)\.clearSessionConsent\(\)/u);
+  assert.match(cleanupSource, /notifyByokDeviceSessionInvalidated\(input && input\.reason\)/u);
+
+  const profileStoreSource = fs.readFileSync(profileStorePath, 'utf8');
+  assert.match(
+    profileStoreSource,
+    /async function disconnectDevice\(\) \{\s*return clearSession\(\);\s*\}/u,
+  );
+  assert.match(profileStoreSource, /schema\.SESSION_SECRETS_STORAGE_KEY/u);
+  assert.match(profileStoreSource, /schema\.SESSION_EVIDENCE_STORAGE_KEY/u);
+  assert.match(serviceWorkerSource, /authorityGuard\.capture\(binding\)/u);
+  assert.match(
+    serviceWorkerSource,
+    /authorityGuard\.commitGeneratedResult\(\{/u,
+  );
+  assert.match(serviceWorkerSource, /client\.commitResult\(/u);
+  assert.match(
+    serviceWorkerSource,
+    /getByokGeneratedAssetIngestClient\(\)\.ingest\(payload, authority\)/u,
+  );
+});
+
+console.log('PASS extension BYOK device-session lifecycle contract');

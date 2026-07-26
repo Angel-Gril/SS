@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>AI Provider 设置 - SS ERP</title>
+  <link rel="stylesheet" href="./ai-provider-settings.css" />
+</head>
+<body>
+  <main class="provider-page" aria-labelledby="pageTitle">
+    <header class="page-header">
+      <div class="page-heading">
+        <a class="back-link" href="./settings.html" aria-label="返回扩展设置">
+          <span class="button-icon" aria-hidden="true">←</span>
+          <span>扩展设置</span>
+        </a>
+        <div class="title-row">
+          <span class="brand-mark" aria-hidden="true">SS</span>
+          <div>
+            <p class="eyebrow">AI 图片工作台</p>
+            <h1 id="pageTitle">自带 Provider</h1>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button
+          id="refreshPageBtn"
+          class="button button-secondary"
+          type="button"
+          aria-label="刷新状态"
+        >
+          <span class="button-icon" aria-hidden="true">↻</span>
+          <span>刷新状态</span>
+        </button>
+      </div>
+    </header>
+
+    <div
+      id="pageStatus"
+      class="page-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >正在读取 Provider 配置...</div>
+
+    <section class="readiness-band" aria-labelledby="readinessTitle">
+      <div class="readiness-heading">
+        <div>
+          <p class="section-kicker">ERP 管理策略</p>
+          <h2 id="readinessTitle">运行许可</h2>
+        </div>
+        <span id="readinessSummary" class="state-badge state-pending">待读取</span>
+      </div>
+
+      <div class="shop-context">
+        <label for="shopSelect">测试店铺</label>
+        <select id="shopSelect" class="select-control" aria-describedby="shopStatus" disabled>
+          <option value="">正在读取...</option>
+        </select>
+        <span id="shopStatus" role="status">正在读取可用店铺</span>
+      </div>
+
+      <dl class="readiness-grid">
+        <div class="readiness-item">
+          <dt>当前能力</dt>
+          <dd id="generationPolicyState">待读取</dd>
+        </div>
+        <div class="readiness-item">
+          <dt>媒体接收</dt>
+          <dd id="ingestPolicyState">工作台中检查</dd>
+        </div>
+        <div class="readiness-item">
+          <dt>草稿发布</dt>
+          <dd id="publishPolicyState">发布前检查</dd>
+        </div>
+        <div class="readiness-item">
+          <dt>策略版本</dt>
+          <dd id="policyRevision">待读取</dd>
+        </div>
+      </dl>
+    </section>
+
+    <div class="settings-workspace">
+      <aside class="profile-rail" aria-labelledby="profilesTitle">
+        <div class="rail-heading">
+          <div>
+            <p class="section-kicker">本机配置</p>
+            <h2 id="profilesTitle">Provider 档案</h2>
+          </div>
+          <button
+            id="newProfileBtn"
+            class="icon-button"
+            type="button"
+            title="新建 Provider 档案"
+            aria-label="新建 Provider 档案"
+          >
+            <span aria-hidden="true">+</span>
+          </button>
+        </div>
+
+        <label class="field-label" for="profileSelect">当前档案</label>
+        <select id="profileSelect" class="select-control" aria-describedby="profileStateSummary">
+          <option value="">正在读取...</option>
+        </select>
+
+        <p id="profileStateSummary" class="rail-summary">尚未选择 Provider 档案</p>
+
+        <div class="rail-actions">
+          <button id="deleteProfileBtn" class="button button-danger-quiet" type="button" disabled>
+            <span class="button-icon" aria-hidden="true">×</span>
+            <span>删除档案</span>
+          </button>
+        </div>
+      </aside>
+
+      <div class="settings-content">
+        <section class="settings-section" aria-labelledby="profileEditorTitle">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">连接参数</p>
+              <h2 id="profileEditorTitle">档案配置</h2>
+            </div>
+            <span id="profileDirtyState" class="state-badge state-neutral">未修改</span>
+          </div>
+
+          <form id="profileForm" novalidate>
+            <div class="form-grid">
+              <div class="field-group field-span-two">
+                <label for="profileNameInput">档案名称</label>
+                <input
+                  id="profileNameInput"
+                  name="profileName"
+                  type="text"
+                  maxlength="80"
+                  autocomplete="off"
+                  placeholder="例如：团队图片模型"
+                  required
+                />
+              </div>
+
+              <div class="field-group">
+                <label for="baseUrlInput">Provider Endpoint</label>
+                <input
+                  id="baseUrlInput"
+                  name="baseUrl"
+                  type="url"
+                  inputmode="url"
+                  maxlength="300"
+                  autocomplete="url"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="https://api.example.com/v1"
+                  aria-describedby="endpointConstraint"
+                  required
+                />
+                <span id="endpointConstraint" class="field-hint">仅允许管理员批准的公开 HTTPS 地址</span>
+              </div>
+
+              <div class="field-group">
+                <label for="modelInput">模型</label>
+                <input
+                  id="modelInput"
+                  name="model"
+                  type="text"
+                  maxlength="200"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="模型标识"
+                  required
+                />
+              </div>
+            </div>
+
+            <fieldset class="operation-fieldset">
+              <legend>档案允许的能力</legend>
+              <div class="operation-options">
+                <label class="check-option">
+                  <input type="checkbox" name="allowedOperations" value="TEXT_TO_IMAGE" checked />
+                  <span>文生图</span>
+                </label>
+                <label class="check-option">
+                  <input type="checkbox" name="allowedOperations" value="IMAGE_TO_IMAGE" />
+                  <span>参考图生成</span>
+                </label>
+                <label class="check-option">
+                  <input type="checkbox" name="allowedOperations" value="FULL_EDIT" />
+                  <span>全图编辑</span>
+                </label>
+                <label class="check-option">
+                  <input type="checkbox" name="allowedOperations" value="INPAINT" />
+                  <span>局部重绘</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="form-actions">
+              <button id="saveProfileBtn" class="button button-primary" type="submit">
+                <span class="button-icon" aria-hidden="true">✓</span>
+                <span>保存档案</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="settings-section split-section" aria-label="密钥与来源权限">
+          <div class="split-pane" aria-labelledby="sessionKeyTitle">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-kicker">仅当前会话</p>
+                <h2 id="sessionKeyTitle">API Key</h2>
+              </div>
+              <span id="keyStatus" class="state-badge state-neutral" role="status">未加载</span>
+            </div>
+
+            <div id="sessionKeyForm" role="group" aria-labelledby="sessionKeyTitle">
+              <div class="field-group">
+                <label for="apiKeyInput">Provider API Key</label>
+                <input
+                  id="apiKeyInput"
+                  type="password"
+                  maxlength="4096"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="输入后加载到当前会话"
+                  aria-describedby="keySessionNote"
+                  required
+                />
+                <span id="keySessionNote" class="field-hint">提交后输入框会清空，密钥不会回显</span>
+              </div>
+
+              <div class="form-actions form-actions-start">
+                <button id="setSessionKeyBtn" class="button button-primary" type="button" disabled>
+                  <span class="button-icon" aria-hidden="true">→</span>
+                  <span>加载密钥</span>
+                </button>
+                <button id="clearSessionKeyBtn" class="button button-secondary" type="button" disabled>
+                  <span class="button-icon" aria-hidden="true">×</span>
+                  <span>清除会话密钥</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="split-pane" aria-labelledby="permissionTitle">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-kicker">浏览器权限</p>
+                <h2 id="permissionTitle">精确来源</h2>
+              </div>
+              <span id="permissionStatus" class="state-badge state-pending" role="status">待读取</span>
+            </div>
+
+            <dl class="origin-summary">
+              <div>
+                <dt>请求来源</dt>
+                <dd id="providerOrigin">尚未确定</dd>
+              </div>
+            </dl>
+
+            <p class="privacy-note">
+              <span class="notice-icon" aria-hidden="true">i</span>
+              <span>Prompt 与所选图片会发送到该来源，费用由对应 Provider 账户承担。</span>
+            </p>
+
+            <div class="form-actions form-actions-start">
+              <button
+                id="requestPermissionBtn"
+                class="button button-primary"
+                type="button"
+                aria-describedby="permissionReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">+</span>
+                <span>授权此来源</span>
+              </button>
+              <button
+                id="revokePermissionBtn"
+                class="button button-secondary"
+                type="button"
+                aria-describedby="permissionReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">×</span>
+                <span>撤销权限</span>
+              </button>
+            </div>
+            <p id="permissionReason" class="action-reason">正在校验档案与管理员策略</p>
+          </div>
+        </section>
+
+        <section class="settings-section capability-section" aria-labelledby="capabilitiesTitle">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">独立验证</p>
+              <h2 id="capabilitiesTitle">模型能力证据</h2>
+            </div>
+            <span id="capabilitySummary" class="state-badge state-pending">0 项有效证据</span>
+          </div>
+
+          <div class="capability-table" id="capabilityRows" role="list" aria-label="Provider 模型能力">
+            <article class="capability-row" data-operation="TEXT_TO_IMAGE" role="listitem">
+              <div class="capability-name">
+                <span class="operation-icon" aria-hidden="true">T</span>
+                <div>
+                  <h3>文生图</h3>
+                  <code>TEXT_TO_IMAGE</code>
+                </div>
+              </div>
+              <dl class="evidence-fields">
+                <div>
+                  <dt>请求模式</dt>
+                  <dd data-field="request-mode">待读取</dd>
+                </div>
+                <div>
+                  <dt>验证时间</dt>
+                  <dd data-field="verified-at">尚未验证</dd>
+                </div>
+                <div>
+                  <dt>有效期</dt>
+                  <dd data-field="expires-at">无有效证据</dd>
+                </div>
+              </dl>
+              <div class="capability-state">
+                <span class="state-badge state-pending" data-role="capability-status">待读取</span>
+                <p id="textToImageReason" data-role="capability-reason">正在校验配置与管理员策略</p>
+              </div>
+              <button
+                class="button button-secondary capability-action"
+                type="button"
+                data-action="test-capability"
+                aria-describedby="textToImageReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">↻</span>
+                <span>验证</span>
+              </button>
+            </article>
+
+            <article class="capability-row" data-operation="IMAGE_TO_IMAGE" role="listitem">
+              <div class="capability-name">
+                <span class="operation-icon" aria-hidden="true">R</span>
+                <div>
+                  <h3>参考图生成</h3>
+                  <code>IMAGE_TO_IMAGE</code>
+                </div>
+              </div>
+              <dl class="evidence-fields">
+                <div>
+                  <dt>请求模式</dt>
+                  <dd data-field="request-mode">待读取</dd>
+                </div>
+                <div>
+                  <dt>验证时间</dt>
+                  <dd data-field="verified-at">尚未验证</dd>
+                </div>
+                <div>
+                  <dt>有效期</dt>
+                  <dd data-field="expires-at">无有效证据</dd>
+                </div>
+              </dl>
+              <div class="capability-state">
+                <span class="state-badge state-pending" data-role="capability-status">待读取</span>
+                <p id="imageToImageReason" data-role="capability-reason">正在校验配置与管理员策略</p>
+              </div>
+              <button
+                class="button button-secondary capability-action"
+                type="button"
+                data-action="test-capability"
+                aria-describedby="imageToImageReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">↻</span>
+                <span>验证</span>
+              </button>
+            </article>
+
+            <article class="capability-row" data-operation="FULL_EDIT" role="listitem">
+              <div class="capability-name">
+                <span class="operation-icon" aria-hidden="true">E</span>
+                <div>
+                  <h3>全图编辑</h3>
+                  <code>FULL_EDIT</code>
+                </div>
+              </div>
+              <dl class="evidence-fields">
+                <div>
+                  <dt>请求模式</dt>
+                  <dd data-field="request-mode">待读取</dd>
+                </div>
+                <div>
+                  <dt>验证时间</dt>
+                  <dd data-field="verified-at">尚未验证</dd>
+                </div>
+                <div>
+                  <dt>有效期</dt>
+                  <dd data-field="expires-at">无有效证据</dd>
+                </div>
+              </dl>
+              <div class="capability-state">
+                <span class="state-badge state-pending" data-role="capability-status">待读取</span>
+                <p id="fullEditReason" data-role="capability-reason">正在校验配置与管理员策略</p>
+              </div>
+              <button
+                class="button button-secondary capability-action"
+                type="button"
+                data-action="test-capability"
+                aria-describedby="fullEditReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">↻</span>
+                <span>验证</span>
+              </button>
+            </article>
+
+            <article class="capability-row" data-operation="INPAINT" role="listitem">
+              <div class="capability-name">
+                <span class="operation-icon" aria-hidden="true">M</span>
+                <div>
+                  <h3>局部重绘</h3>
+                  <code>INPAINT</code>
+                </div>
+              </div>
+              <dl class="evidence-fields">
+                <div>
+                  <dt>请求模式</dt>
+                  <dd data-field="request-mode">待读取</dd>
+                </div>
+                <div>
+                  <dt>验证时间</dt>
+                  <dd data-field="verified-at">尚未验证</dd>
+                </div>
+                <div>
+                  <dt>有效期</dt>
+                  <dd data-field="expires-at">无有效证据</dd>
+                </div>
+              </dl>
+              <div class="capability-state">
+                <span class="state-badge state-pending" data-role="capability-status">待读取</span>
+                <p id="inpaintReason" data-role="capability-reason">正在校验配置与管理员策略</p>
+              </div>
+              <button
+                class="button button-secondary capability-action"
+                type="button"
+                data-action="test-capability"
+                aria-describedby="inpaintReason"
+                disabled
+              >
+                <span class="button-icon" aria-hidden="true">↻</span>
+                <span>验证</span>
+              </button>
+            </article>
+          </div>
+
+          <div
+            id="capabilityLiveRegion"
+            class="visually-hidden"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <noscript>
+    <p class="no-script">需要启用 JavaScript 才能管理 Provider 配置。</p>
+  </noscript>
+  <script src="../shared/byok/permission-broker.js"></script>
+  <script src="../shared/byok/permission-readiness-bridge.js"></script>
+  <script src="../shared/byok/provider-settings-client.js"></script>
+  <script src="./ai-provider-settings.js"></script>
+</body>
+</html>

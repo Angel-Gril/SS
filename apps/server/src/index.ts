@@ -115,7 +115,10 @@ import { extensionDeviceRoutes } from './routes/extension-device.js';
 import {
   createSourceWorkflowCommandResolver,
   extensionCommandGrantRoutes,
+  type ExtensionCommandGrantRoutesOptions,
 } from './routes/extension-command-grants.js';
+import { extensionByokMediaRoutes } from './routes/extension-byok-media.js';
+import { extensionByokReadinessRoutes } from './routes/extension-byok-readiness.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
 import {
@@ -142,7 +145,11 @@ import {
 } from './services/source-workflow-ozon-client.js';
 import { createSourceListingMediaImportService } from './services/source-listing-media-import.js';
 import { createPrismaSourceListingMediaImportStore } from './services/source-listing-media-import-prisma.js';
-import { getStorageBackend } from './services/image-storage.js';
+import { getOwnedImageStorageBackend, getStorageBackend } from './services/image-storage.js';
+import { createPrismaByokGeneratedAssetRepository } from './repositories/byok-generated-asset-repository.js';
+import {
+  createPrismaExtensionByokGeneratedAssetCommitter,
+} from './repositories/extension-byok-generated-asset-commit-prisma.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import {
   createAiImageSuiteReferenceService,
@@ -227,6 +234,12 @@ import {
 } from './services/ozon-category-catalog.js';
 import type { OzonClient, OzonImportItem } from './services/ozon-client.js';
 import { createOzonListingPublisher } from './services/ozon-listing-publisher.js';
+import {
+  createExtensionByokPublishAuthorizer,
+} from './services/extension-byok-publish-authorization.js';
+import {
+  createPrismaExtensionByokPublishProvenanceReader,
+} from './repositories/extension-byok-media-provenance-repository.js';
 import { createPrismaOzonPublishAttemptRepository } from './services/ozon-publish-attempt-prisma.js';
 import {
   createOzonListingProductionCompileAdapter,
@@ -236,12 +249,13 @@ import { createOzonPublisherEntrypointParityObserver } from './services/ozon-pub
 import { createPrismaOzonPublisherRolloutRecorder } from './services/ozon-publisher-rollout-recorder.js';
 import { createOzonPublisherParityObservationService } from './services/ozon-publisher-parity-observations.js';
 import { createPrismaOzonPublisherParityObservationRepository } from './services/ozon-publisher-parity-prisma.js';
-import { getConfig, getStrictConfig } from './config/system-config-schema.js';
+import { getConfig, getStrictConfigSnapshot } from './config/system-config-schema.js';
 import {
   createExtensionByokPolicyEvaluator,
 } from './services/extension-byok-policy.js';
 import {
   createExtensionByokSystemConfigPolicyLoader,
+  EXTENSION_BYOK_CONFIG_KEYS,
 } from './services/extension-byok-admin-controls.js';
 import { generateProductContentDraft } from './services/product-content-ai.js';
 import { generateAiText } from './services/ai-text.js';
@@ -253,11 +267,15 @@ import { createExtensionDeviceSessionService } from './services/extension-device
 import { createPrismaExtensionDeviceSessionRepository } from './services/extension-device-session-prisma.js';
 import {
   createExtensionCommandGrantService,
+  digestExtensionCommandGrantToken,
   resolveExtensionCommandGrantSecret,
 } from './services/extension-command-grants.js';
 import {
   createPrismaExtensionCommandGrantStore,
 } from './services/extension-command-grants-prisma.js';
+import { inspectByokMediaIngestGrant } from './services/extension-byok-media-ingest-grant.js';
+import { createPrismaExtensionByokUploadStagingStore } from './services/extension-byok-upload-staging.js';
+import { createPrismaExtensionByokIngestRateLimiter } from './services/extension-byok-ingest-rate-limit.js';
 import {
   authenticateExtensionDevice,
   isExtensionDeviceAuthEnabled,
@@ -835,10 +853,21 @@ const sourceOzonPublisherEntrypointParityObserver = createOzonPublisherEntrypoin
 const sourceOzonPublisherInstanceId = String(
   process.env.INSTANCE_ID || process.env.HOSTNAME || process.env.COMPUTERNAME || 'server',
 ).normalize('NFKC').trim().slice(0, 80) || 'server';
+const loadExtensionByokPolicy = createExtensionByokSystemConfigPolicyLoader({
+  readSnapshot: () => getStrictConfigSnapshot(EXTENSION_BYOK_CONFIG_KEYS),
+});
+const extensionByokPolicyEvaluator = createExtensionByokPolicyEvaluator({
+  loadPolicy: loadExtensionByokPolicy,
+});
+const extensionByokPublishAuthorizer = createExtensionByokPublishAuthorizer({
+  loadPolicy: loadExtensionByokPolicy,
+  ...createPrismaExtensionByokPublishProvenanceReader(prisma),
+});
 const sourceOzonListingPublisher = createOzonListingPublisher({
   workflow: sourceListingWorkflowService,
   attempts: sourceOzonPublishAttemptRepository,
   compile: sourceOzonListingProductionCompile,
+  authorizeDraftMediaPublish: extensionByokPublishAuthorizer,
   submitImportOnce: async ({ ownerUserId, shopId, requestPayload }) => {
     if (!Array.isArray(requestPayload.items)) {
       throw new Error('Persisted Ozon publish request has no item array');
@@ -1806,15 +1835,29 @@ if (isExtensionDeviceAuthEnabled()) {
       },
     },
   });
-  // BYOK command grants must use the same server-owned SystemConfig policy
-  // that drives admin controls.  The extension cannot supply or override this
-  // readiness decision; a missing/invalid config remains fail-closed.
-  const extensionByokPolicyEvaluator = createExtensionByokPolicyEvaluator({
-    loadPolicy: createExtensionByokSystemConfigPolicyLoader({
-      readConfig: (key) => getStrictConfig(key),
-    }),
+  const loadExtensionCommandShop = ({ shopId, ownerUserId }: {
+    shopId: string;
+    ownerUserId: string;
+  }) => prisma.shop.findFirst({
+    where: { id: shopId, userId: ownerUserId },
+    select: { id: true, userId: true, platform: true, status: true },
   });
-  await app.register(extensionCommandGrantRoutes, {
+  const loadExtensionCommandDraft = ({ workflowId, ownerUserId }: {
+    workflowId: string;
+    ownerUserId: string;
+  }) => sourceListingWorkflowService.getDraft({ draftId: workflowId, ownerUserId });
+  await app.register(extensionByokReadinessRoutes, {
+    prefix: '/api/extension-device/byok-media',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['byok:media:ingest'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    loadShop: loadExtensionCommandShop,
+    loadDraft: loadExtensionCommandDraft,
+    getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
+  });
+  const extensionCommandRoutesOptions: ExtensionCommandGrantRoutesOptions & { prefix: string } = {
     prefix: '/api/extension-device',
     service: createExtensionCommandGrantService({
       store: createPrismaExtensionCommandGrantStore({ client: prisma }),
@@ -1829,15 +1872,10 @@ if (isExtensionDeviceAuthEnabled()) {
       getMediaWorkflowDecision: getAiMediaRolloutDecision,
       getAiImageSuiteEnabled: async () => getConfig('feature_ai_media_suite'),
       getByokReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
+      authorizeByokPublish: extensionByokPublishAuthorizer,
       production: process.env.NODE_ENV === 'production',
-      loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
-        where: { id: shopId, userId: ownerUserId },
-        select: { id: true, userId: true, platform: true, status: true },
-      }),
-      loadDraft: ({ workflowId, ownerUserId }) => sourceListingWorkflowService.getDraft({
-        draftId: workflowId,
-        ownerUserId,
-      }),
+      loadShop: loadExtensionCommandShop,
+      loadDraft: loadExtensionCommandDraft,
       loadMediaWorkflow: async ({ workflowId, ownerUserId }) => {
         const row = await prisma.aiMediaWorkflow.findFirst({
           where: { id: workflowId, ownerUserId },
@@ -1955,7 +1993,9 @@ if (isExtensionDeviceAuthEnabled()) {
           : null;
       },
     }),
-    executeOzonPublish: async ({ ownerUserId, actorUserId, workflowId, command }) => {
+    executeOzonPublish: async ({
+      deviceSessionId, ownerUserId, actorUserId, workflowId, command,
+    }) => {
       const commandRow = command as { draftRevision?: unknown; publishIntentId?: unknown };
       const expectedRevision = Number(commandRow.draftRevision);
       const idempotencyKey = String(commandRow.publishIntentId || '').trim();
@@ -1968,11 +2008,32 @@ if (isExtensionDeviceAuthEnabled()) {
         actorUserId,
         expectedRevision,
         idempotencyKey,
+        requestingDeviceSessionId: deviceSessionId,
       });
     },
     executeMediaWorkflowCommand: executeExtensionMediaOrSuiteCommand,
     executeMediaReviewCommand: executeExtensionMediaOrSuiteReview,
     executeMediaApplyCommand: executeExtensionMediaOrSuiteApply,
+  };
+  await app.register(extensionCommandGrantRoutes, extensionCommandRoutesOptions);
+  const byokGeneratedAssetRepository = createPrismaByokGeneratedAssetRepository(prisma);
+  const byokUploadStagingStore = createPrismaExtensionByokUploadStagingStore(prisma as never);
+  const byokIngestRateLimiter = createPrismaExtensionByokIngestRateLimiter(prisma as never);
+  await app.register(extensionByokMediaRoutes, {
+    prefix: '/api/extension-device/byok-media',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['byok:media:ingest'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    resolveCommand: extensionCommandRoutesOptions.resolveCommand,
+    digestGrantToken: (token) => digestExtensionCommandGrantToken(extensionCommandGrantSecret, token),
+    inspectGrant: (input) => inspectByokMediaIngestGrant(prisma as never, input),
+    ingestRateLimiter: byokIngestRateLimiter,
+    stagingStore: byokUploadStagingStore,
+    getStorage: getOwnedImageStorageBackend,
+    findStoredAsset: (input) => byokGeneratedAssetRepository.findById(input),
+    commit: createPrismaExtensionByokGeneratedAssetCommitter(prisma),
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',
@@ -2399,6 +2460,7 @@ await app.register(sourceListingWorkflowRoutes, {
   attributeWorkflow: sourceListingWorkflowAttributeService,
   mediaWorkflow: sourceListingMediaImportService,
   aiCopyWorkflow: sourceListingAiCopyService,
+  authorizeByokPublish: extensionByokPublishAuthorizer,
   publisher: sourceOzonListingPublisher,
 });
 await app.register(noticeRoutes, { prefix: '/api/notices' });
@@ -2652,6 +2714,7 @@ if (RUN_WORKERS) {
     { startListingTaskRefreshWorker },
     { startOzonPublishReconciliationWorker },
     { startAiProviderReconciliationWorker },
+    { startExtensionByokUploadCleanupWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
@@ -2661,6 +2724,7 @@ if (RUN_WORKERS) {
     import('./workers/listing-task-refresh.js'),
     import('./workers/ozon-publish-reconciliation.js'),
     import('./workers/ai-provider-reconciliation.js'),
+    import('./workers/extension-byok-upload-cleanup.js'),
   ]);
 
   startWarehouseCommandPollWorker();
@@ -2704,6 +2768,7 @@ if (RUN_WORKERS) {
       error: (message, details) => app.log.error({ err: details }, message),
     },
   });
+  startExtensionByokUploadCleanupWorker();
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

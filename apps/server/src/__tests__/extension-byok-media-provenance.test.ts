@@ -16,6 +16,7 @@ const HASH = {
   mask: '1'.repeat(64),
   result: '2'.repeat(64),
   request: '3'.repeat(64),
+  assignment: '4'.repeat(64),
 };
 
 function validInput(overrides: Record<string, unknown> = {}) {
@@ -29,8 +30,13 @@ function validInput(overrides: Record<string, unknown> = {}) {
     workflowId: 'workflow-1',
     draftRevision: 4,
     draftVersion: 2,
+    boundDraftRevision: 5,
+    boundDraftVersion: 3,
     skuKey: 'sku:blue-mug',
     slotKey: 'sku:blue-mug:hero:0',
+    assignmentOrdinal: 0,
+    assignmentSha256: HASH.assignment,
+    policyRevision: 7,
     endpointOriginSha256: HASH.endpoint,
     model: 'relay-image-edit-v2',
     operation: 'INPAINT',
@@ -164,6 +170,9 @@ describe('extension BYOK media provenance', () => {
     ['raw origin instead of its hash', { endpointOriginSha256: 'https://relay.example' }],
     ['oversized dimensions', { resultWidth: 4097 }],
     ['receipt without intent', { publishReceiptId: 'receipt-1' }],
+    ['non-successor bound revision', { boundDraftRevision: 6 }],
+    ['negative policy revision', { policyRevision: -1 }],
+    ['invalid assignment ordinal', { assignmentOrdinal: 500 }],
     ['text-to-image with a source', {
       operation: 'TEXT_TO_IMAGE',
       sourceSha256: HASH.source,

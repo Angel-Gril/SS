@@ -15,6 +15,9 @@ import {
 import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-draft.js';
 import { hashOzonListingPublishState } from '../services/source-listing-workflow.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
+import type {
+  ExtensionByokPublishAuthorizationInput,
+} from '../services/extension-byok-publish-authorization.js';
 
 function draft(overrides: Partial<OzonListingDraft> = {}): OzonListingDraft {
   return {
@@ -82,6 +85,9 @@ function build(options: {
   prepared?: OzonPublishAttemptRecord;
   existing?: OzonPublishAttemptRecord | null;
   claim?: OzonPublishLeaseClaim | null;
+  authorizeDraftMediaPublish?: (
+    input: ExtensionByokPublishAuthorizationInput,
+  ) => Promise<unknown>;
 } = {}) {
   const current = draft();
   const prepared = options.prepared || attempt({ draftStateHash: hashOzonListingPublishState(current) });
@@ -129,15 +135,22 @@ function build(options: {
   };
   const compile = vi.fn(async () => compilation(current));
   const submitImportOnce = vi.fn(options.submit || (async () => ({ result: { task_id: 123 } })));
+  const authorizeDraftMediaPublish = options.authorizeDraftMediaPublish || vi.fn(async (
+    _input: ExtensionByokPublishAuthorizationInput,
+  ) => ({ byokAssetIds: [], policyRevision: null }));
   const publisher = createOzonListingPublisher({
     workflow,
     attempts: repository,
     compile,
     submitImportOnce,
+    authorizeDraftMediaPublish,
     workerId: 'api-1',
     leaseMs: 60_000,
   });
-  return { publisher, workflow, repository, compile, submitImportOnce, current };
+  return {
+    publisher, workflow, repository, compile, submitImportOnce,
+    authorizeDraftMediaPublish, current,
+  };
 }
 
 const publishInput = {
@@ -146,6 +159,51 @@ const publishInput = {
 };
 
 describe('Ozon listing publisher', () => {
+  it('blocks BYOK media before recording intent when the live publish policy denies it', async () => {
+    const denied = Object.assign(new Error('BYOK publish is disabled'), {
+      code: 'EXTENSION_BYOK_PUBLISH_DISABLED', statusCode: 409,
+    });
+    const authorizeDraftMediaPublish = vi.fn(async (
+      _input: ExtensionByokPublishAuthorizationInput,
+    ): Promise<unknown> => { throw denied; });
+    const built = build({ authorizeDraftMediaPublish });
+
+    await expect(built.publisher.publish({
+      ...publishInput,
+      requestingDeviceSessionId: 'device-publisher',
+    })).rejects.toBe(denied);
+    expect(authorizeDraftMediaPublish).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      workflowId: 'draft-1',
+      assignments: [],
+      requestingDeviceSessionId: 'device-publisher',
+    });
+    expect(built.workflow.recordPublishIntent).not.toHaveBeenCalled();
+    expect(built.compile).not.toHaveBeenCalled();
+    expect(built.repository.claimSubmission).not.toHaveBeenCalled();
+    expect(built.submitImportOnce).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the live BYOK policy immediately before claiming an Ozon submission', async () => {
+    const denied = Object.assign(new Error('BYOK publish was disabled'), {
+      code: 'EXTENSION_BYOK_PUBLISH_DISABLED', statusCode: 409,
+    });
+    const authorizeDraftMediaPublish = vi.fn(async (
+      _input: ExtensionByokPublishAuthorizationInput,
+    ): Promise<unknown> => undefined)
+      .mockResolvedValueOnce({ byokAssetIds: ['asset-byok'], policyRevision: 17 })
+      .mockRejectedValueOnce(denied);
+    const built = build({ authorizeDraftMediaPublish });
+
+    await expect(built.publisher.publish(publishInput)).rejects.toBe(denied);
+    expect(authorizeDraftMediaPublish).toHaveBeenCalledTimes(2);
+    expect(built.workflow.recordPublishIntent).toHaveBeenCalledTimes(1);
+    expect(built.repository.prepare).toHaveBeenCalledTimes(1);
+    expect(built.repository.claimSubmission).not.toHaveBeenCalled();
+    expect(built.submitImportOnce).not.toHaveBeenCalled();
+  });
+
   it('persists the frozen request and SUBMITTING lease before one external call', async () => {
     const { publisher, workflow, repository, submitImportOnce, current } = build();
 
@@ -329,6 +387,7 @@ describe('Ozon listing publisher', () => {
       attempts,
       compile,
       submitImportOnce,
+      authorizeDraftMediaPublish: async () => undefined,
       workerId: 'api-replay',
       leaseMs: 60_000,
     });
@@ -431,6 +490,7 @@ describe('Ozon listing publisher', () => {
       attempts: built.repository,
       compile: built.compile,
       submitImportOnce: built.submitImportOnce,
+      authorizeDraftMediaPublish: built.authorizeDraftMediaPublish,
       workerId: 'api-1',
       leaseMs: 60_000,
       warn,
@@ -471,6 +531,7 @@ describe('Ozon listing publisher', () => {
       attempts: built.repository,
       compile: built.compile,
       submitImportOnce: built.submitImportOnce,
+      authorizeDraftMediaPublish: built.authorizeDraftMediaPublish,
       workerId: 'api-1',
       leaseMs: 60_000,
       acknowledgementRecoveryAttempts: 3,
@@ -501,6 +562,7 @@ describe('Ozon listing publisher', () => {
       attempts: built.repository,
       compile: built.compile,
       submitImportOnce: built.submitImportOnce,
+      authorizeDraftMediaPublish: built.authorizeDraftMediaPublish,
       workerId: 'api-1',
       leaseMs: 60_000,
       warn,

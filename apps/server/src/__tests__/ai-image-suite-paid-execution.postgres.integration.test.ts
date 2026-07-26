@@ -640,6 +640,21 @@ describe.skipIf(!enabled)('paid AI image suite PostgreSQL evidence contract', ()
 
   it('rejects a final output forged against a different raw Provider result', async () => {
     await expect(client.$transaction(async (tx: any) => {
+      await tx.aiCostSettlement.create({ data: {
+        id: `suite_paid_forged_charge_${suffix}`,
+        reservationId: paid.reservationId,
+        ownerUserId,
+        actorUserId: ownerUserId,
+        kind: 'CHARGE',
+        idempotencyKey: `${paid.reservationId}:forged-charge`,
+        requestFingerprint,
+        actualCostMinor: paid.costCents,
+        billedUnits: 1,
+      } });
+      await tx.aiCostReservation.update({ where: { id: paid.reservationId }, data: {
+        status: 'SETTLED',
+        settledAt: new Date(),
+      } });
       await tx.aiImageJob.update({ where: { id: paid.jobId }, data: {
         status: 'SUCCEEDED',
         progress: 100,

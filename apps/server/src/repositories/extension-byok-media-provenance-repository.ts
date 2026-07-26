@@ -7,6 +7,11 @@ import type {
   ExtensionByokMediaProvenanceRecord,
   ExtensionByokMediaProvenanceRepository,
 } from '../services/extension-byok-media-provenance.js';
+import type {
+  ExtensionByokPublishAssetInspection,
+  ExtensionByokPublishDeviceAuthorization,
+  ExtensionByokPublishProvenance,
+} from '../services/extension-byok-publish-authorization.js';
 
 function isUniqueConflict(error: unknown): boolean {
   return String((error as { code?: unknown } | null)?.code || '') === 'P2002';
@@ -28,8 +33,13 @@ function provenanceRecord(row: any): ExtensionByokMediaProvenanceRecord {
     workflowId: String(row.workflowId),
     draftRevision: Number(row.draftRevision),
     draftVersion: Number(row.draftVersion),
+    boundDraftRevision: Number(row.boundDraftRevision),
+    boundDraftVersion: Number(row.boundDraftVersion),
     skuKey: String(row.skuKey),
     slotKey: String(row.slotKey),
+    assignmentOrdinal: Number(row.assignmentOrdinal),
+    assignmentSha256: String(row.assignmentSha256),
+    policyRevision: Number(row.policyRevision),
     endpointOriginSha256: String(row.endpointOriginSha256),
     model: String(row.model),
     operation: row.operation,
@@ -72,8 +82,13 @@ function rowMatchesCreateInput(row: any, input: ExtensionByokMediaProvenanceCrea
     && String(row.workflowId) === input.workflowId
     && Number(row.draftRevision) === input.draftRevision
     && Number(row.draftVersion) === input.draftVersion
+    && Number(row.boundDraftRevision) === input.boundDraftRevision
+    && Number(row.boundDraftVersion) === input.boundDraftVersion
     && String(row.skuKey) === input.skuKey
     && String(row.slotKey) === input.slotKey
+    && Number(row.assignmentOrdinal) === input.assignmentOrdinal
+    && String(row.assignmentSha256) === input.assignmentSha256
+    && Number(row.policyRevision) === input.policyRevision
     && String(row.endpointOriginSha256) === input.endpointOriginSha256
     && String(row.model) === input.model
     && String(row.operation) === input.operation
@@ -195,4 +210,143 @@ implements ExtensionByokMediaProvenanceRepository {
       provenance: provenanceRecord(winner),
     };
   }
+}
+
+export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaClient) {
+  function metadataRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  function isByokMarkedAsset(row: any): boolean {
+    const metadata = metadataRecord(row.metadata);
+    return String(row.id || '').startsWith('byok_')
+      || String(row.sourceMediaKey || '').startsWith('extension-byok:')
+      || metadata.generatedAssetSource === 'EXTENSION_BYOK'
+      || metadata.executionMode === 'BYOK'
+      || metadata.outputRole === 'BYOK_ACCEPTED';
+  }
+
+  function publishProvenance(row: any): ExtensionByokPublishProvenance {
+    return {
+      assetId: String(row.assetId),
+      ownerUserId: String(row.ownerUserId),
+      shopId: String(row.shopId),
+      workflowId: String(row.workflowId),
+      deviceSessionId: String(row.deviceSessionId),
+      endpointOriginSha256: String(row.endpointOriginSha256),
+      operation: row.operation,
+    };
+  }
+
+  return {
+    async inspectDraftAssets(input: {
+      ownerUserId: string;
+      shopId: string;
+      workflowId: string;
+      assetIds: string[];
+    }): Promise<ExtensionByokPublishAssetInspection[]> {
+      if (!input.assetIds.length) return [];
+      const rows = await (prisma as any).mediaAsset.findMany({
+        where: {
+          ownerUserId: input.ownerUserId,
+          id: { in: input.assetIds },
+        },
+        select: {
+          id: true,
+          ownerUserId: true,
+          sourceMediaKey: true,
+          metadata: true,
+          extensionByokMediaProvenance: {
+            where: {
+              executionMode: 'BYOK',
+              ownerUserId: input.ownerUserId,
+              shopId: input.shopId,
+              workflowId: input.workflowId,
+            },
+            select: {
+              assetId: true,
+              ownerUserId: true,
+              shopId: true,
+              workflowId: true,
+              deviceSessionId: true,
+              endpointOriginSha256: true,
+              operation: true,
+            },
+          },
+        },
+      });
+      return rows.map((row: any) => {
+        const provenanceRows = Array.isArray(row.extensionByokMediaProvenance)
+          ? row.extensionByokMediaProvenance
+          : [];
+        if (provenanceRows.length > 1) {
+          throw new Error('BYOK publish provenance identity is ambiguous');
+        }
+        return {
+          assetId: String(row.id),
+          byokMarked: isByokMarkedAsset(row),
+          provenance: provenanceRows[0] ? publishProvenance(provenanceRows[0]) : null,
+        };
+      });
+    },
+
+    async loadDeviceAuthorization(input: {
+      sessionId: string;
+      ownerUserId: string;
+      shopId: string;
+    }): Promise<ExtensionByokPublishDeviceAuthorization | null> {
+      const session = await (prisma as any).extensionDeviceSession.findUnique({
+        where: { id: input.sessionId },
+        select: {
+          id: true,
+          scopes: true,
+          status: true,
+          expiresAt: true,
+          revokedAt: true,
+          ownerUserId: true,
+          actorUserId: true,
+          owner: { select: { status: true, role: true } },
+          actor: { select: { status: true, role: true, parentId: true } },
+          shopGrants: {
+            where: { shopId: input.shopId },
+            select: {
+              status: true,
+              shop: { select: { id: true, userId: true, status: true, platform: true } },
+            },
+          },
+        },
+      });
+      if (!session) return null;
+      const grants = Array.isArray(session.shopGrants) ? session.shopGrants : [];
+      if (grants.length > 1) throw new Error('BYOK publish device shop grant is ambiguous');
+      const grant = grants[0] || null;
+      return {
+        sessionId: String(session.id),
+        scopes: Array.isArray(session.scopes) ? session.scopes.map(String) : [],
+        status: String(session.status),
+        expiresAt: session.expiresAt instanceof Date
+          ? session.expiresAt
+          : new Date(session.expiresAt),
+        revokedAt: session.revokedAt == null
+          ? null
+          : session.revokedAt instanceof Date
+            ? session.revokedAt
+            : new Date(session.revokedAt),
+        ownerUserId: String(session.ownerUserId),
+        actorUserId: String(session.actorUserId),
+        ownerStatus: String(session.owner?.status || ''),
+        actorStatus: String(session.actor?.status || ''),
+        ownerRole: String(session.owner?.role || ''),
+        actorRole: String(session.actor?.role || ''),
+        actorParentId: session.actor?.parentId == null ? null : String(session.actor.parentId),
+        shopGrantStatus: grant ? String(grant.status) : null,
+        shopId: grant?.shop ? String(grant.shop.id) : null,
+        shopOwnerUserId: grant?.shop ? String(grant.shop.userId) : null,
+        shopStatus: grant?.shop ? String(grant.shop.status) : null,
+        shopPlatform: grant?.shop ? String(grant.shop.platform) : null,
+      };
+    },
+  };
 }

@@ -1,5 +1,5 @@
-import { readFile } from 'fs/promises';
-import { basename } from 'path';
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { basename, join, resolve } from 'path';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { prisma } from '../lib/prisma.js';
 
@@ -59,6 +59,14 @@ export interface ImageStorageBackend {
     options?: ImageUploadOptions,
   ): Promise<ImageUploadResult>;
   getPresignedPutUrl?(input: PresignedUploadInput): Promise<PresignedUploadResult>;
+  deleteUploaded?(result: ImageUploadResult): Promise<void>;
+}
+
+export interface OwnedImageStorageBackend extends ImageStorageBackend {
+  readonly backendType: 'oss' | 'local';
+  /** SHA-256 identity of the physical bucket/root without credentials. */
+  readonly namespaceId: string;
+  deleteUploaded(result: ImageUploadResult): Promise<void>;
 }
 
 // ─── OZON CDN 上传（利用 seller 登录态） ───
@@ -342,11 +350,20 @@ interface OssConfig {
   pathPrefix?: string;
 }
 
-class OssBackend implements ImageStorageBackend {
+class OssBackend implements OwnedImageStorageBackend {
+  readonly backendType = 'oss' as const;
+  readonly namespaceId: string;
   private config: OssConfig;
 
   constructor(config: OssConfig) {
     this.config = config;
+    this.namespaceId = ownedStorageNamespaceId({
+      backend: 'oss',
+      endpoint: config.endpoint,
+      bucket: config.bucket,
+      region: config.region,
+      pathPrefix: config.pathPrefix,
+    });
   }
 
   async upload(filePath: string): Promise<ImageUploadResult> {
@@ -381,7 +398,7 @@ class OssBackend implements ImageStorageBackend {
     const category = options?.category || 'raw';
     const userId = options?.ownerId || null;
     const objectKey = options?.idempotencyKey
-      ? generateIdempotentObjectKey(userId, category, ext, options.idempotencyKey)
+      ? deriveOwnedImageStorageKey('oss', filename, options)
       : generateObjectKey(userId, category, ext);
     const mime = mimeType || guessMime(filename);
 
@@ -450,6 +467,34 @@ class OssBackend implements ImageStorageBackend {
     };
   }
 
+  async deleteUploaded(result: ImageUploadResult): Promise<void> {
+    const objectKey = String(result.objectKey || result.key || '').trim();
+    if (!objectKey || result.backend !== 'oss') {
+      throw new Error('OSS cleanup requires the exact uploaded object key');
+    }
+    const { DeleteObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
+    const endpoint = this.config.endpoint.startsWith('http')
+      ? this.config.endpoint
+      : `https://${this.config.endpoint}`;
+    const client = new S3Client({
+      endpoint,
+      region: this.config.region || 'auto',
+      credentials: {
+        accessKeyId: this.config.accessKeyId,
+        secretAccessKey: this.config.accessKeySecret,
+      },
+      forcePathStyle: endpoint.includes('localhost') || endpoint.includes('minio'),
+    });
+    try {
+      await client.send(new DeleteObjectCommand({
+        Bucket: this.config.bucket,
+        Key: objectKey,
+      }));
+    } finally {
+      client.destroy();
+    }
+  }
+
   private getPublicObjectUrl(objectKey: string): string {
     if (this.config.cdnDomain) {
       const domain = this.config.cdnDomain.replace(/\/+$/, '');
@@ -463,13 +508,16 @@ class OssBackend implements ImageStorageBackend {
 
 // ─── 本地静态服务（开发测试用） ───
 
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
 import { createHash } from 'crypto';
 
 const LOCAL_UPLOAD_DIR = join(process.cwd(), 'public', 'uploads');
 
-class LocalBackend implements ImageStorageBackend {
+class LocalBackend implements OwnedImageStorageBackend {
+  readonly backendType = 'local' as const;
+  readonly namespaceId = ownedStorageNamespaceId({
+    backend: 'local',
+    uploadRoot: resolve(LOCAL_UPLOAD_DIR),
+  });
   private baseUrl: string;
 
   constructor(baseUrl: string) {
@@ -492,11 +540,26 @@ class LocalBackend implements ImageStorageBackend {
     const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
     const storedName = options?.idempotencyKey
-      ? `${createHash('sha256').update(`${options.ownerId || 'shared'}:${options.category || 'raw'}:${options.idempotencyKey}`).digest('hex').slice(0, 32)}.${ext}`
+      ? deriveOwnedImageStorageKey('local', filename, options)
       : `${Date.now()}_${hash}.${ext}`;
     await writeFile(join(LOCAL_UPLOAD_DIR, storedName), buffer);
     const url = `${this.baseUrl}/uploads/${storedName}`;
     return { url, filename: storedName, backend: 'local' };
+  }
+
+  async deleteUploaded(result: ImageUploadResult): Promise<void> {
+    if (result.backend !== 'local' || basename(result.filename) !== result.filename) {
+      throw new Error('Local cleanup requires the exact uploaded filename');
+    }
+    const root = resolve(LOCAL_UPLOAD_DIR);
+    const target = resolve(join(root, result.filename));
+    if (target !== join(root, result.filename)
+      || (!target.startsWith(`${root}/`) && !target.startsWith(`${root}\\`))) {
+      throw new Error('Local cleanup target escaped the upload root');
+    }
+    await unlink(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
   }
 }
 
@@ -725,6 +788,78 @@ function generateObjectKey(
 
 function sanitizeObjectSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^\.+/, '').slice(0, 80);
+}
+
+/**
+ * Returns only ERP-owned storage suitable for generated assets.  Calling this
+ * helper can never fall back to the seller's Ozon CDN, because BYOK bytes must
+ * be normalized, auditable, and compensatable before they enter a draft.
+ */
+export async function getOwnedImageStorageBackend(): Promise<OwnedImageStorageBackend> {
+  const rc = await getRuntimeConfigForStorage();
+  if (rc.imageStorage === 'local') return new LocalBackend(rc.localBaseUrl);
+  if (rc.imageStorage === 'oss') return buildOssBackend();
+  throw new Error('Generated assets require ERP-owned local or OSS/R2 storage');
+}
+
+export async function getOwnedImageStorageBackendByType(
+  backend: OwnedImageStorageBackend['backendType'],
+): Promise<OwnedImageStorageBackend> {
+  const rc = await getRuntimeConfigForStorage();
+  if (backend === 'local') return new LocalBackend(rc.localBaseUrl);
+  if (backend === 'oss') return buildOssBackend();
+  throw new Error('Unsupported ERP-owned image storage backend');
+}
+
+export function ownedStorageNamespaceId(input:
+  | {
+    backend: 'oss';
+    endpoint: string;
+    bucket: string;
+    region?: string;
+    pathPrefix?: string;
+  }
+  | { backend: 'local'; uploadRoot: string }): string {
+  const identity = input.backend === 'local'
+    ? {
+      version: 1,
+      backend: input.backend,
+      uploadRoot: resolve(input.uploadRoot),
+    }
+    : {
+      version: 1,
+      backend: input.backend,
+      endpoint: (input.endpoint.startsWith('http')
+        ? input.endpoint
+        : `https://${input.endpoint}`).replace(/\/+$/u, '').toLowerCase(),
+      bucket: input.bucket.normalize('NFKC').trim(),
+      region: (input.region || 'auto').normalize('NFKC').trim().toLowerCase(),
+      pathPrefix: (input.pathPrefix || '').normalize('NFKC').trim().replace(/^\/+|\/+$/gu, ''),
+    };
+  return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+
+export function deriveOwnedImageStorageKey(
+  backend: OwnedImageStorageBackend['backendType'],
+  filename: string,
+  options: ImageUploadOptions,
+): string {
+  const idempotencyKey = String(options.idempotencyKey || '').trim();
+  if (!idempotencyKey) throw new Error('Owned image storage key requires an idempotency key');
+  const ext = filename.split('.').pop() || 'jpg';
+  if (backend === 'oss') {
+    return generateIdempotentObjectKey(
+      options.ownerId || null,
+      options.category || 'raw',
+      ext,
+      idempotencyKey,
+    );
+  }
+  const safeExt = sanitizeObjectSegment(ext.toLowerCase().replace(/^\.+/, '')) || 'jpg';
+  return `${createHash('sha256')
+    .update(`${options.ownerId || 'shared'}:${options.category || 'raw'}:${idempotencyKey}`)
+    .digest('hex')
+    .slice(0, 32)}.${safeExt}`;
 }
 
 function generateIdempotentObjectKey(

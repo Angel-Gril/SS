@@ -12,6 +12,7 @@ import {
   type ExtensionCommandGrantRecord,
   type ExtensionCommandGrantStore,
   type ExtensionCommandIssueResult,
+  type ExtensionCommandInspectResult,
   type ExtensionCommandReceipt,
   type ExtensionCommandRecoveryClaimResult,
   type ExtensionCommandRevokeResult,
@@ -158,16 +159,22 @@ export async function runExtensionCommandSerializableTransaction<T>(
 
 const runSerializable = runExtensionCommandSerializableTransaction;
 
-export async function consumeExtensionCommandGrantInTransaction(
+type GrantAuthorizationResult =
+  | { kind: 'allowed'; grant: ExtensionCommandGrantRecord }
+  | Exclude<ExtensionCommandConsumeResult, { kind: 'execute' }>;
+
+async function inspectGrantAuthorization(
   tx: ExtensionCommandTransactionClient,
   input: {
     tokenDigest: string;
     binding: ExtensionCommandBinding;
-    receiptId: string;
     now: Date;
     requireLiveAuthorizationForPendingReplay?: boolean;
   },
-): Promise<ExtensionCommandConsumeResult> {
+  lockRows: boolean,
+): Promise<GrantAuthorizationResult> {
+  const grantLock = lockRows ? 'FOR UPDATE OF g, s, owner_account, actor_account' : '';
+  const shopLock = lockRows ? 'FOR UPDATE OF sg, sh' : '';
   const grantRows = await tx.$queryRawUnsafe<any[]>(
     `SELECT
        g."id",
@@ -202,7 +209,7 @@ export async function consumeExtensionCommandGrantInTransaction(
      JOIN "users" owner_account ON owner_account."id" = s."owner_user_id"
      JOIN "users" actor_account ON actor_account."id" = s."actor_user_id"
      WHERE g."token_digest" = $1
-     FOR UPDATE OF g, s, owner_account, actor_account`,
+     ${grantLock}`,
     input.tokenDigest,
   );
   const raw = grantRows[0];
@@ -253,7 +260,7 @@ export async function consumeExtensionCommandGrantInTransaction(
        FROM "extension_device_shop_grants" sg
        JOIN "shops" sh ON sh."id" = sg."shop_id"
        WHERE sg."session_id" = $1 AND sg."shop_id" = $2
-       FOR UPDATE OF sg, sh`,
+       ${shopLock}`,
       stored.sessionId,
       stored.shopId,
     );
@@ -268,6 +275,35 @@ export async function consumeExtensionCommandGrantInTransaction(
   }
 
   if (existingReceipt) return { kind: 'replay', receipt: existingReceipt };
+  return { kind: 'allowed', grant: stored };
+}
+
+export async function inspectExtensionCommandGrant(
+  client: ExtensionCommandTransactionClient,
+  input: {
+    tokenDigest: string;
+    binding: ExtensionCommandBinding;
+    now: Date;
+    requireLiveAuthorizationForPendingReplay?: boolean;
+  },
+): Promise<ExtensionCommandInspectResult> {
+  const result = await inspectGrantAuthorization(client, input, false);
+  return result.kind === 'allowed' ? { kind: 'allowed' } : result;
+}
+
+export async function consumeExtensionCommandGrantInTransaction(
+  tx: ExtensionCommandTransactionClient,
+  input: {
+    tokenDigest: string;
+    binding: ExtensionCommandBinding;
+    receiptId: string;
+    now: Date;
+    requireLiveAuthorizationForPendingReplay?: boolean;
+  },
+): Promise<ExtensionCommandConsumeResult> {
+  const authorization = await inspectGrantAuthorization(tx, input, true);
+  if (authorization.kind !== 'allowed') return authorization;
+  const stored = authorization.grant;
 
   const consumed = await tx.$queryRawUnsafe<Array<{ id: string }>>(
     `UPDATE "extension_command_grants"

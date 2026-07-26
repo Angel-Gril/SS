@@ -285,6 +285,15 @@ const CLOUD_WEB_RESOURCE_MATCHES = [
   'https://2.taobao.com/*',
 ];
 
+const LOCAL_HOST_PERMISSIONS = unique([
+  ...CLOUD_HOST_PERMISSIONS,
+  'file:///*',
+  'http://localhost/*',
+  'https://localhost/*',
+  'http://127.0.0.1/*',
+  'https://127.0.0.1/*',
+]);
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -332,6 +341,7 @@ if (target === 'cloud') {
 } else {
   manifest.name = `${manifest.name} (Local)`;
   manifest.short_name = 'SS ERP Local';
+  manifest.host_permissions = LOCAL_HOST_PERMISSIONS;
 }
 
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

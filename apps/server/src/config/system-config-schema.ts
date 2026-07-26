@@ -1267,6 +1267,33 @@ export async function getStrictConfig<K extends SystemConfigKey>(key: K): Promis
   return schema.parse(coerceConfigValue(key, decryptConfigValueStrict(key, record.value))) as SystemConfigValue<K>;
 }
 
+/**
+ * Reads a security-sensitive group with one database statement so callers do
+ * not compose a policy from rows observed at different instants.
+ */
+export async function getStrictConfigSnapshot<const Keys extends readonly SystemConfigKey[]>(
+  keys: Keys,
+): Promise<{ [Key in Keys[number]]: SystemConfigValue<Key> }> {
+  const uniqueKeys = [...new Set<SystemConfigKey>(keys)];
+  if (!uniqueKeys.length || uniqueKeys.length !== keys.length) {
+    throw new Error('[SystemConfig] strict snapshot keys must be unique and non-empty');
+  }
+  const records = await prisma.systemConfig.findMany({
+    where: { key: { in: uniqueKeys } },
+    select: { key: true, value: true },
+  });
+  const values = new Map(records.map((record) => [record.key, record.value]));
+  const snapshot: Partial<Record<SystemConfigKey, unknown>> = {};
+  for (const key of uniqueKeys) {
+    const schema = SystemConfigSchema[key];
+    const raw = values.get(key);
+    snapshot[key] = raw == null
+      ? schema.parse(undefined)
+      : schema.parse(coerceConfigValue(key, decryptConfigValueStrict(key, raw)));
+  }
+  return snapshot as { [Key in Keys[number]]: SystemConfigValue<Key> };
+}
+
 export async function setConfig<K extends SystemConfigKey>(
   key: K,
   value: SystemConfigValue<K>,

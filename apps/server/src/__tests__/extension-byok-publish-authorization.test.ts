@@ -1,0 +1,309 @@
+import { createHash } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createExtensionByokPublishAuthorizer,
+  type ExtensionByokPublishAssetInspection,
+  type ExtensionByokPublishDeviceAuthorization,
+  type ExtensionByokPublishProvenance,
+} from '../services/extension-byok-publish-authorization.js';
+import {
+  EXTENSION_BYOK_POLICY_VERSION,
+  type ExtensionByokPolicySnapshot,
+} from '../services/extension-byok-policy.js';
+
+const providerOrigin = 'https://provider.example';
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function policy(
+  overrides: Partial<ExtensionByokPolicySnapshot> = {},
+): ExtensionByokPolicySnapshot {
+  return {
+    contractVersion: EXTENSION_BYOK_POLICY_VERSION,
+    revision: 17,
+    mode: 'pilot',
+    generationEnabled: true,
+    ingestEnabled: true,
+    publishEnabled: true,
+    ownerUserIds: ['owner-1'],
+    shopIds: ['shop-1'],
+    deviceSessionIds: ['device-origin', 'device-publisher'],
+    allowedOrigins: [providerOrigin],
+    allowedOperations: ['TEXT_TO_IMAGE'],
+    maxConcurrency: 1,
+    ...overrides,
+  };
+}
+
+function provenance(
+  overrides: Partial<ExtensionByokPublishProvenance> = {},
+): ExtensionByokPublishProvenance {
+  return {
+    assetId: 'asset-byok',
+    ownerUserId: 'owner-1',
+    shopId: 'shop-1',
+    workflowId: 'draft-1',
+    deviceSessionId: 'device-origin',
+    endpointOriginSha256: sha256(providerOrigin),
+    operation: 'TEXT_TO_IMAGE',
+    ...overrides,
+  };
+}
+
+function inspection(
+  overrides: Partial<ExtensionByokPublishAssetInspection> = {},
+): ExtensionByokPublishAssetInspection {
+  return {
+    assetId: 'asset-byok',
+    byokMarked: true,
+    provenance: provenance(),
+    ...overrides,
+  };
+}
+
+function deviceAuthorization(
+  sessionId: string,
+  overrides: Partial<ExtensionByokPublishDeviceAuthorization> = {},
+): ExtensionByokPublishDeviceAuthorization {
+  return {
+    sessionId,
+    scopes: ['byok:media:ingest', 'listing:publish'],
+    status: 'ACTIVE',
+    expiresAt: new Date('2026-07-27T00:00:00.000Z'),
+    revokedAt: null,
+    ownerUserId: 'owner-1',
+    actorUserId: 'owner-1',
+    ownerStatus: 'ACTIVE',
+    actorStatus: 'ACTIVE',
+    ownerRole: 'USER',
+    actorRole: 'USER',
+    actorParentId: null,
+    shopGrantStatus: 'ACTIVE',
+    shopId: 'shop-1',
+    shopOwnerUserId: 'owner-1',
+    shopStatus: 'ACTIVE',
+    shopPlatform: 'OZON',
+    ...overrides,
+  };
+}
+
+function dependencies(overrides: Record<string, unknown> = {}) {
+  return {
+    loadPolicy: async () => policy(),
+    inspectDraftAssets: async () => [inspection()],
+    loadDeviceAuthorization: async ({ sessionId }: { sessionId: string }) => (
+      deviceAuthorization(sessionId)
+    ),
+    now: () => new Date('2026-07-26T00:00:00.000Z'),
+    ...overrides,
+  } as any;
+}
+
+function input(overrides: Record<string, unknown> = {}) {
+  return {
+    ownerUserId: 'owner-1',
+    shopId: 'shop-1',
+    workflowId: 'draft-1',
+    assignments: [{ assetId: 'asset-byok' }],
+    requestingDeviceSessionId: 'device-publisher',
+    ...overrides,
+  } as any;
+}
+
+describe('extension BYOK publish authorization', () => {
+  it('preserves non-BYOK publishing without consulting the BYOK policy', async () => {
+    const loadPolicy = vi.fn(async () => { throw new Error('config unavailable'); });
+    const inspectDraftAssets = vi.fn(async () => [inspection({
+      byokMarked: false,
+      provenance: null,
+    })]);
+    const loadDeviceAuthorization = vi.fn();
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadPolicy, inspectDraftAssets, loadDeviceAuthorization,
+    }));
+
+    await expect(authorize(input())).resolves.toEqual({
+      byokAssetIds: [],
+      policyRevision: null,
+    });
+    expect(inspectDraftAssets).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      workflowId: 'draft-1',
+      assetIds: ['asset-byok'],
+    });
+    expect(loadPolicy).not.toHaveBeenCalled();
+    expect(loadDeviceAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('allows every selected BYOK asset only under one matching live policy snapshot', async () => {
+    const loadPolicy = vi.fn(async () => policy());
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({ loadPolicy }));
+
+    await expect(authorize(input())).resolves.toEqual({
+      byokAssetIds: ['asset-byok'],
+      policyRevision: 17,
+    });
+    expect(loadPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires ingest scope on the provenance device and publish scope on the requesting device', async () => {
+    for (const [sessionId, scopes] of [
+      ['device-origin', ['listing:publish']],
+      ['device-publisher', ['byok:media:ingest']],
+    ] as const) {
+      const authorize = createExtensionByokPublishAuthorizer(dependencies({
+        loadDeviceAuthorization: async ({ sessionId: current }: { sessionId: string }) => (
+          deviceAuthorization(current, current === sessionId ? { scopes: [...scopes] } : {})
+        ),
+      }));
+      await expect(authorize(input())).rejects.toMatchObject({
+        code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+        reasonCode: 'DEVICE_NOT_ALLOWED',
+      });
+    }
+  });
+
+  it('propagates a missing publish scope from the cached same-device authorization', async () => {
+    const loadDeviceAuthorization = vi.fn(async ({ sessionId }: { sessionId: string }) => (
+      deviceAuthorization(sessionId, { scopes: ['byok:media:ingest'] })
+    ));
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadDeviceAuthorization,
+    }));
+
+    await expect(authorize(input({ requestingDeviceSessionId: 'device-origin' })))
+      .rejects.toMatchObject({
+        code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+        reasonCode: 'DEVICE_NOT_ALLOWED',
+        statusCode: 409,
+      });
+    expect(loadDeviceAuthorization).toHaveBeenCalledOnce();
+  });
+
+  it('propagates an unavailable live-device lookup before policy evaluation can continue', async () => {
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadDeviceAuthorization: async () => { throw new Error('database unavailable'); },
+    }));
+
+    await expect(authorize(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_POLICY_UNAVAILABLE',
+      reasonCode: 'PROVENANCE_UNAVAILABLE',
+      statusCode: 503,
+    });
+  });
+
+  it('fails closed when the independent BYOK publish flag is disabled', async () => {
+    const authorize = createExtensionByokPublishAuthorizer({
+      ...dependencies(),
+      loadPolicy: async () => policy({ publishEnabled: false }),
+    });
+
+    await expect(authorize(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+      reasonCode: 'PUBLISH_DISABLED',
+      statusCode: 409,
+    });
+  });
+
+  it.each([
+    ['owner', { ownerUserIds: ['owner-2'] }, {}, {}, 'OWNER_NOT_ALLOWED'],
+    ['shop', { shopIds: ['shop-2'] }, {}, {}, 'SHOP_NOT_ALLOWED'],
+    ['origin device', { deviceSessionIds: ['device-publisher'] }, {}, {}, 'DEVICE_NOT_ALLOWED'],
+    ['operation', { allowedOperations: ['FULL_EDIT'] }, {}, {}, 'OPERATION_NOT_ALLOWED'],
+    ['origin', { allowedOrigins: ['https://other.example'] }, {}, {}, 'ORIGIN_NOT_ALLOWED'],
+    ['publishing device', { deviceSessionIds: ['device-origin'] }, {}, {}, 'DEVICE_NOT_ALLOWED'],
+  ] as const)(
+    'rejects a pilot policy that does not match the exact %s',
+    async (_label, policyPatch, provenancePatch, inputPatch, reasonCode) => {
+      const authorize = createExtensionByokPublishAuthorizer({
+        ...dependencies(),
+        loadPolicy: async () => policy(
+          policyPatch as unknown as Partial<ExtensionByokPolicySnapshot>,
+        ),
+        inspectDraftAssets: async () => [inspection({
+          provenance: provenance(provenancePatch),
+        })],
+      });
+
+      await expect(authorize(input(inputPatch))).rejects.toMatchObject({
+        code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+        reasonCode,
+        statusCode: 409,
+      });
+    },
+  );
+
+  it('fails closed when policy or provenance lookup is unavailable', async () => {
+    const unavailablePolicy = createExtensionByokPublishAuthorizer({
+      ...dependencies(),
+      loadPolicy: async () => { throw new Error('config unavailable'); },
+    });
+    await expect(unavailablePolicy(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_POLICY_UNAVAILABLE',
+      statusCode: 503,
+    });
+
+    const unavailableProvenance = createExtensionByokPublishAuthorizer({
+      ...dependencies(),
+      inspectDraftAssets: async () => { throw new Error('database unavailable'); },
+    });
+    await expect(unavailableProvenance(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_POLICY_UNAVAILABLE',
+      statusCode: 503,
+    });
+
+    const incompleteInspection = createExtensionByokPublishAuthorizer({
+      ...dependencies(),
+      inspectDraftAssets: async () => [],
+    });
+    await expect(incompleteInspection(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_POLICY_UNAVAILABLE',
+      reasonCode: 'PROVENANCE_UNAVAILABLE',
+      statusCode: 503,
+    });
+  });
+
+  it('fails closed when a MediaAsset is marked EXTENSION_BYOK without provenance', async () => {
+    const loadPolicy = vi.fn(async () => policy());
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadPolicy,
+      inspectDraftAssets: async () => [inspection({ provenance: null })],
+    }));
+
+    await expect(authorize(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_POLICY_UNAVAILABLE',
+      reasonCode: 'PROVENANCE_UNAVAILABLE',
+      statusCode: 503,
+    });
+    expect(loadPolicy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['revoked', { status: 'REVOKED', revokedAt: new Date('2026-07-25T00:00:00.000Z') }],
+    ['expired', { expiresAt: new Date('2026-07-25T23:59:59.000Z') }],
+    ['revoked shop grant', { shopGrantStatus: 'REVOKED' }],
+    ['transferred shop', { shopOwnerUserId: 'owner-2' }],
+  ] as const)(
+    'blocks a Web publish in global mode when the provenance device is %s',
+    async (_label, devicePatch) => {
+      const authorize = createExtensionByokPublishAuthorizer(dependencies({
+        loadPolicy: async () => policy({
+          mode: 'global', ownerUserIds: [], shopIds: [], deviceSessionIds: [],
+        }),
+        loadDeviceAuthorization: async ({ sessionId }: { sessionId: string }) => (
+          deviceAuthorization(sessionId, devicePatch)
+        ),
+      }));
+
+      await expect(authorize(input({ requestingDeviceSessionId: undefined })))
+        .rejects.toMatchObject({
+          code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+          reasonCode: 'DEVICE_NOT_ALLOWED',
+          statusCode: 409,
+        });
+    },
+  );
+});

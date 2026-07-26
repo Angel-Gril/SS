@@ -727,6 +727,7 @@ describe('1688 Capture V2 to immutable Ozon publish attempt minimum closure', ()
       attempts,
       compile,
       submitImportOnce,
+      authorizeDraftMediaPublish: async () => undefined,
       workerId: 'unit6b-api-1',
       leaseMs: 60_000,
     });
@@ -818,6 +819,7 @@ describe('1688 Capture V2 to immutable Ozon publish attempt minimum closure', ()
       attempts,
       compile: reloadCompile,
       submitImportOnce: reloadSubmit,
+      authorizeDraftMediaPublish: async () => undefined,
       workerId: 'unit6b-api-2',
       leaseMs: 60_000,
     });

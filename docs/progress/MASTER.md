@@ -34,32 +34,32 @@ credential storage, or direct Ozon calls.
 
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
-- [ ] Phase 2: Secure single-image BYOK vertical slice (0/10 tasks) [details](./phase-2-byok-vertical-slice.md)
+- [ ] Phase 2: Secure single-image BYOK vertical slice (6/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (0/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 10/37 tasks complete (27%).
+Overall: 16/37 tasks complete (43%).
 
 ## Current Status
 
-Phase 1 security foundation is complete. `SRV-01` through `SRV-03`, `EXT-01` through
-`EXT-03`, and `REL-01` passed their focused contracts and milestone gates. The server
-command-grant route now uses a strict SystemConfig-backed BYOK readiness evaluator, while
-the extension dispatcher and future workbench handlers remain dark. The next dependency
-ready work is the Phase 2 single-image BYOK vertical slice; all new flags remain
-default-off and no real Provider call, production mutation, or deployment is authorized
-until its fixture and billing gates pass.
+Phase 2 is active. `SRV-04` through `SRV-06`, `EXT-04A`, `EXT-05`, and `UI-01` are complete:
+hostile Provider output is normalized, stored, and atomically bound to the exact draft
+assignment; database-enforced execution modes keep BYOK at zero ERP AI cost while paid hosted
+work requires an exact reservation and charge settlement; the focused Provider page now keeps
+session keys background-only and binds permission/evidence to the exact live policy. The final
+foundation review closed restart replay, cross-context consent, pre-authentication buffering,
+storage cleanup, live publish-scope, and provenance gaps. `INT-01` transport exists but remains
+incomplete until reject and expiry cleanup are finished. The next active task is `UI-02A`; all
+new flags remain default-off and no real Provider call, production mutation, or deployment is
+authorized until the remaining fixture gates pass.
 
 ## Next Steps
 
-1. Start Phase 2 with `SRV-04` hostile-image normalization/ingest and `SRV-05` exact
-   draft binding; keep the dedicated BYOK grant as the only admission path.
-2. Implement `EXT-04A`/`EXT-05` background-only text-to-image and exact capability evidence,
-   then build `UI-01`/`UI-02A` against fixtures. Add the authenticated readiness-handle
-   endpoint/adapter as part of that vertical slice before requesting any Provider permission.
-3. Complete `SRV-06`, `INT-01`, `INT-02`, and `QA-01` with fake Provider, hostile-image,
+1. Build `UI-02A` against the completed readiness/evidence/background fixtures.
+2. Finish `INT-01` rejection/expiry cleanup and accepted-result binding after `UI-02A`.
+3. Complete `INT-02` and `QA-01` with fake Provider, hostile-image,
    secret-sentinel, stale-draft, idempotency, and zero-ERP-charge gates. Keep all flags dark.
 
 ## Cross-Conversation Protocol

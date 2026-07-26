@@ -1003,7 +1003,8 @@ model SourceListingDraftVersion {
   aiMediaContextWorkflows AiMediaWorkflow[]            @relation("AiMediaWorkflowListingDraftContext")
   aiMediaMutationsBefore  AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationBefore")
   aiMediaMutationsAfter   AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationAfter")
-  extensionByokMediaProvenance ExtensionByokMediaProvenance[]
+  extensionByokMediaProvenance ExtensionByokMediaProvenance[] @relation("ExtensionByokMediaSourceDraft")
+  extensionByokMediaBindings   ExtensionByokMediaProvenance[] @relation("ExtensionByokMediaBoundDraft")
 
   @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
   @@unique([workflowId, revision, ownerUserId, draftVersion], map: "source_listing_draft_ai_media_context_key")
@@ -2855,6 +2856,7 @@ model AiPromptRelease {
 
 model AiImageJob {
   id                     String           @id @default(cuid())
+  executionMode          String           @default("ERP_HOSTED") @map("execution_mode") @db.VarChar(20)
   ownerUserId            String           @map("owner_user_id")
   actorUserId            String?          @map("actor_user_id")
   owner                  User             @relation("AiImageJobOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
@@ -3990,6 +3992,8 @@ model ExtensionDeviceSession {
   commandGrants                ExtensionCommandGrant[]
   sourceCaptureSnapshots       SourceCaptureSnapshot[]
   byokMediaProvenance          ExtensionByokMediaProvenance[]
+  byokUploadStaging            ExtensionByokUploadStaging[]
+  byokIngestRateEvents         ExtensionByokIngestRateEvent[]
 
   @@unique([id, ownerUserId])
   @@index([ownerUserId, status, expiresAt])
@@ -4060,9 +4064,15 @@ model ExtensionByokMediaProvenance {
   workflow                SourceListingWorkflow       @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
   draftRevision           Int                         @map("draft_revision")
   draftVersion            Int                         @map("draft_version")
-  draft                   SourceListingDraftVersion   @relation(fields: [workflowId, draftRevision, ownerUserId, draftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction)
+  draft                   SourceListingDraftVersion   @relation("ExtensionByokMediaSourceDraft", fields: [workflowId, draftRevision, ownerUserId, draftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction)
+  boundDraftRevision      Int                         @map("bound_draft_revision")
+  boundDraftVersion       Int                         @map("bound_draft_version")
+  boundDraft              SourceListingDraftVersion   @relation("ExtensionByokMediaBoundDraft", fields: [workflowId, boundDraftRevision, ownerUserId, boundDraftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction)
   skuKey                  String                      @map("sku_key") @db.VarChar(1024)
   slotKey                 String                      @map("slot_key") @db.VarChar(1024)
+  assignmentOrdinal       Int                         @map("assignment_ordinal")
+  assignmentSha256        String                      @map("assignment_sha256") @db.Char(64)
+  policyRevision          Int                         @map("policy_revision")
   endpointOriginSha256    String                      @map("endpoint_origin_sha256") @db.Char(64)
   model                   String                      @db.VarChar(200)
   operation               AiMediaOperation
@@ -4094,10 +4104,48 @@ model ExtensionByokMediaProvenance {
   @@index([deviceSessionId, createdAt], map: "extension_byok_media_provenance_device_created_idx")
   @@index([shopId, createdAt], map: "extension_byok_media_provenance_shop_created_idx")
   @@index([workflowId, draftVersion, draftRevision], map: "extension_byok_media_provenance_draft_idx")
+  @@index([workflowId, boundDraftVersion, boundDraftRevision], map: "extension_byok_media_provenance_bound_draft_idx")
   @@index([resultSha256], map: "extension_byok_media_provenance_result_idx")
   @@index([publishIntentId], map: "extension_byok_media_provenance_publish_intent_idx")
   @@index([publishReceiptId], map: "extension_byok_media_provenance_publish_receipt_idx")
   @@map("extension_byok_media_provenance")
+}
+
+model ExtensionByokUploadStaging {
+  id                  String   @id @db.VarChar(64)
+  ownerUserId         String   @map("owner_user_id")
+  deviceSessionId     String   @map("device_session_id")
+  deviceSession       ExtensionDeviceSession @relation(fields: [deviceSessionId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  assetId             String   @map("asset_id")
+  requestHash         String   @map("request_hash") @db.Char(64)
+  storageBackend      String   @map("storage_backend") @db.VarChar(16)
+  storageNamespaceId  String   @map("storage_namespace_id") @db.Char(64)
+  storageKey          String   @map("storage_key") @db.VarChar(2000)
+  status              String   @default("PENDING") @db.VarChar(16)
+  expiresAt           DateTime @map("expires_at")
+  cleanupLeaseToken   String?  @map("cleanup_lease_token") @db.VarChar(64)
+  cleanupLeaseUntil   DateTime? @map("cleanup_lease_until")
+  cleanupAttemptCount Int      @default(0) @map("cleanup_attempt_count")
+  lastError           String?  @map("last_error") @db.VarChar(500)
+  committedAt         DateTime? @map("committed_at")
+  cleanedAt           DateTime? @map("cleaned_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([storageBackend, storageNamespaceId, storageKey], map: "extension_byok_upload_staging_storage_key")
+  @@index([status, expiresAt, cleanupLeaseUntil], map: "extension_byok_upload_staging_cleanup_idx")
+  @@map("extension_byok_upload_staging")
+}
+
+model ExtensionByokIngestRateEvent {
+  id              String   @id @db.VarChar(64)
+  ownerUserId     String   @map("owner_user_id")
+  deviceSessionId String   @map("device_session_id")
+  deviceSession   ExtensionDeviceSession @relation(fields: [deviceSessionId, ownerUserId], references: [id, ownerUserId], onDelete: Cascade, onUpdate: NoAction)
+  occurredAt      DateTime @default(now()) @map("occurred_at")
+
+  @@index([deviceSessionId, occurredAt], map: "extension_byok_ingest_rate_event_window_idx")
+  @@map("extension_byok_ingest_rate_events")
 }
 
 model ExtensionDeviceRefreshFamily {

@@ -39,6 +39,7 @@ async function routeApp() {
     })) } as any,
     ownership: { assertOwnedTarget: vi.fn() },
     categoryValidator: { validate: vi.fn() },
+    authorizeByokPublish: vi.fn(async () => undefined),
     attributeWorkflow: attributeWorkflow as any,
   });
   await app.ready();

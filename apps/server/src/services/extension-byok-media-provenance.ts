@@ -55,7 +55,8 @@ function boundedIdentifier(maximum: number) {
 const sha256Schema = z.string().regex(SHA256_PATTERN);
 const nullableSha256Schema = sha256Schema.nullable();
 const identifierSchema = boundedIdentifier(200);
-const slotIdentitySchema = boundedIdentifier(1024);
+const skuIdentitySchema = boundedIdentifier(500);
+const slotIdentitySchema = boundedIdentifier(200);
 
 const createInputSchema = z.object({
   contractVersion: z.literal(EXTENSION_BYOK_MEDIA_PROVENANCE_VERSION),
@@ -67,8 +68,13 @@ const createInputSchema = z.object({
   workflowId: identifierSchema,
   draftRevision: z.number().int().positive(),
   draftVersion: z.number().int().positive(),
-  skuKey: slotIdentitySchema,
+  boundDraftRevision: z.number().int().positive(),
+  boundDraftVersion: z.number().int().positive(),
+  skuKey: skuIdentitySchema,
   slotKey: slotIdentitySchema,
+  assignmentOrdinal: z.number().int().min(0).max(499),
+  assignmentSha256: sha256Schema,
+  policyRevision: z.number().int().nonnegative(),
   endpointOriginSha256: sha256Schema,
   model: boundedIdentifier(200),
   operation: z.enum(EXTENSION_BYOK_MEDIA_PROVENANCE_OPERATIONS),
@@ -91,6 +97,14 @@ const createInputSchema = z.object({
   publishReceiptId: identifierSchema.nullable(),
   erpAiChargeCents: z.literal(0),
 }).strict().superRefine((input, context) => {
+  if (input.boundDraftRevision !== input.draftRevision + 1
+    || input.boundDraftVersion !== input.draftVersion + 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['boundDraftRevision'],
+      message: 'bound draft must be the immediate media-binding successor',
+    });
+  }
   if (input.resultWidth * input.resultHeight > AI_IMAGE_WORKBENCH_LIMITS.maxPixels) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

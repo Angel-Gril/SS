@@ -25,6 +25,7 @@
 
   var MESSAGE_TYPES = Object.freeze({
     PROVIDER_SETTINGS: Object.freeze({
+      GET_SETUP_CONTEXT: 'ss-erp:byok-provider-setup-context',
       LIST_PROFILES: 'ss-erp:byok-provider-profiles-list',
       GET_PROFILE_STATE: 'ss-erp:byok-provider-profile-state',
       SAVE_PROFILE: 'ss-erp:byok-provider-profile-save',
@@ -32,9 +33,11 @@
       SET_SESSION_KEY: 'ss-erp:byok-provider-session-key-set',
       CLEAR_SESSION_KEY: 'ss-erp:byok-provider-session-key-clear',
       PERMISSION_STATUS: 'ss-erp:byok-provider-permission-status',
+      PREPARE_PERMISSION: 'ss-erp:byok-provider-permission-prepare',
       REQUEST_PERMISSION: 'ss-erp:byok-provider-permission-request',
       REVOKE_PERMISSION: 'ss-erp:byok-provider-permission-revoke',
       TEST_CAPABILITY: 'ss-erp:byok-provider-capability-test',
+      GET_READINESS: 'ss-erp:byok-provider-readiness',
     }),
     WORKBENCH: Object.freeze({
       GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
@@ -58,7 +61,7 @@
     MESSAGE_TYPES.PROVIDER_SETTINGS.SET_SESSION_KEY,
   ]);
   var READINESS_REQUIRED_TYPES = new Set([
-    MESSAGE_TYPES.PROVIDER_SETTINGS.REQUEST_PERMISSION,
+    MESSAGE_TYPES.PROVIDER_SETTINGS.PREPARE_PERMISSION,
     MESSAGE_TYPES.PROVIDER_SETTINGS.TEST_CAPABILITY,
     MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
     MESSAGE_TYPES.WORKBENCH.RECOVER_PROVIDER,
@@ -72,7 +75,7 @@
     MESSAGE_TYPES.WORKBENCH.PUBLISH,
   ]);
   var PROVIDER_BOUND_TYPES = new Set([
-    MESSAGE_TYPES.PROVIDER_SETTINGS.REQUEST_PERMISSION,
+    MESSAGE_TYPES.PROVIDER_SETTINGS.PREPARE_PERMISSION,
     MESSAGE_TYPES.PROVIDER_SETTINGS.TEST_CAPABILITY,
     MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
     MESSAGE_TYPES.WORKBENCH.RECOVER_PROVIDER,

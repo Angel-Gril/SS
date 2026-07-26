@@ -42,10 +42,23 @@ function command(overrides: Record<string, unknown> = {}) {
     schemaVersion: EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION,
     providerOrigin: 'https://images.example.com',
     providerOperation: 'IMAGE_TO_IMAGE',
+    requestMode: 'multipart',
+    model: 'image-model-v1',
+    providerRequestIdSha256: HASH,
+    promptSha256: HASH,
+    negativePromptSha256: null,
     draftRevision: 11,
     skuKey: 'sku-1',
-    slotKey: 'sku-1:hero:0',
+    slotKey: 'sku:sku-1:hero:0',
+    assignmentOrdinal: 0,
+    assignmentMode: 'APPEND',
+    replaceConfirmed: false,
     resultSha256: HASH,
+    resultMimeType: 'image/png',
+    resultSizeBytes: 1024,
+    sourceSha256: null,
+    referenceSha256s: [HASH],
+    maskSha256: null,
     ...overrides,
   };
 }
@@ -114,6 +127,17 @@ describe('BYOK media ingest command grant', () => {
       .toThrow(/invalid/i);
     expect(() => parseByokMediaIngestCommand({ ...command(), resultSha256: 'not-a-hash' }))
       .toThrow(/invalid/i);
+    expect(() => parseByokMediaIngestCommand({ ...command(), assignmentOrdinal: -1 }))
+      .toThrow(/invalid/i);
+    expect(() => parseByokMediaIngestCommand({ ...command(), assignmentMode: 'REPLACE' }))
+      .toThrow(/invalid/i);
+    expect(() => parseByokMediaIngestCommand({
+      ...command(), assignmentMode: 'REPLACE', replaceConfirmed: true,
+    })).not.toThrow();
+    expect(() => parseByokMediaIngestCommand({ ...command(), slotKey: 'sku:sku-2:hero:0' }))
+      .toThrow(/invalid/i);
+    expect(() => parseByokMediaIngestCommand({ ...command(), providerResultUrl: 'https://evil.example/result.png' }))
+      .toThrow(/invalid/i);
   });
 
   it('resolves only the live owner/shop/workflow/draft and authenticated BYOK readiness', async () => {
@@ -123,6 +147,7 @@ describe('BYOK media ingest command grant', () => {
     const loadDraft = vi.fn(async () => ({
       id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
       draftVersion: 7, revision: 11,
+      sourceCaptureSnapshotId: 'snapshot-1', selectedSkuKeys: ['sku-1'],
     }));
     const getReadiness = vi.fn(async (input: ByokReadinessInput) => readiness({
       context: {
@@ -144,6 +169,7 @@ describe('BYOK media ingest command grant', () => {
       command: {
         ...command(),
         readiness: { contractVersion: 'extension-byok-readiness/v1', policyRevision: 7 },
+        authority: { sourceCaptureSnapshotId: 'snapshot-1' },
       },
     });
     expect(getReadiness).toHaveBeenCalledWith(expect.objectContaining({
@@ -156,6 +182,21 @@ describe('BYOK media ingest command grant', () => {
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 8,
       command: command(),
     })).resolves.toMatchObject({ kind: 'stale' });
+
+    loadDraft.mockResolvedValueOnce({
+      id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      draftVersion: 8, revision: 12,
+      sourceCaptureSnapshotId: 'snapshot-1', selectedSkuKeys: ['sku-1'],
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1',
+      operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      purpose: 'execute', command: command(),
+    })).resolves.toMatchObject({
+      kind: 'allowed', workflowId: 'workflow-1', draftVersion: 7,
+      command: { draftRevision: 11, authority: { sourceCaptureSnapshotId: 'snapshot-1' } },
+    });
 
     getReadiness.mockResolvedValueOnce(readiness({
       capabilities: {
@@ -187,7 +228,10 @@ describe('BYOK media ingest command grant', () => {
   ] as const)('fails closed for %s readiness evidence', async (_label, evidence) => {
     const resolve = createByokMediaIngestCommandResolver({
       loadShop: async () => ({ id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE' }),
-      loadDraft: async () => ({ id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1', draftVersion: 7, revision: 11 }),
+      loadDraft: async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1', draftVersion: 7, revision: 11,
+        sourceCaptureSnapshotId: 'snapshot-1', selectedSkuKeys: ['sku-1'],
+      }),
       getReadiness: async () => evidence as any,
     });
     await expect(resolve({

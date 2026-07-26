@@ -201,9 +201,15 @@ for (const resourceGroup of manifest.web_accessible_resources || []) {
   }
 }
 
-for (const html of [...referenced].filter((item) => item.endsWith('.html'))) {
+const htmlQueue = [...referenced].filter((item) => item.endsWith('.html'));
+for (let index = 0; index < htmlQueue.length; index += 1) {
+  const html = htmlQueue[index];
+  if (htmlReferenced.has(html)) continue;
   addUnique(htmlReferenced, html);
-  for (const ref of parseHtmlLocalRefs(html)) addUnique(referenced, ref);
+  for (const ref of parseHtmlLocalRefs(html)) {
+    if (!referenced.has(ref) && ref.endsWith('.html')) htmlQueue.push(ref);
+    addUnique(referenced, ref);
+  }
 }
 
 const importQueue = [...jsReferenced];
@@ -245,7 +251,11 @@ const requiredSecurityModules = [
 ];
 
 const requiredByokModules = [
+  'shared/byok/device-session-lifecycle.js',
   'shared/byok/permission-broker.js',
+  'shared/byok/permission-readiness-bridge.js',
+  'shared/byok/provider-settings-client.js',
+  'shared/byok/provider-settings-handler.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
@@ -259,6 +269,15 @@ for (const adapter of requiredAdapters) {
   else fail(`service worker does not import ${adapter}`);
 }
 for (const modulePath of requiredSecurityModules) {
+  const relFromBackground = `../${modulePath}`;
+  if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
+  else fail(`service worker does not import ${modulePath}`);
+}
+for (const modulePath of [
+  'shared/byok/device-session-lifecycle.js',
+  'shared/byok/permission-broker.js',
+  'shared/byok/provider-settings-handler.js',
+]) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);

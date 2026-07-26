@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
   EXTENSION_BYOK_OPERATIONS,
@@ -10,6 +11,7 @@ import {
 } from './extension-byok-policy.js';
 
 export const EXTENSION_BYOK_ADMIN_POLICY_VERSION = 'extension-byok-admin-policy/v1' as const;
+const POSTGRES_INTEGER_CARDINALITY = 2_147_483_648;
 
 export interface ExtensionByokAdminPolicy {
   contractVersion: typeof EXTENSION_BYOK_ADMIN_POLICY_VERSION;
@@ -201,36 +203,46 @@ export function composeExtensionByokPolicyFromAdminControls(input: {
     return invalidAdminPolicy();
   }
   const adminPolicy = parseExtensionByokAdminPolicy(input.adminPolicy);
+  const revisionHash = createHash('sha256').update(JSON.stringify({
+    generationEnabled: input.generationEnabled,
+    ingestEnabled: input.ingestEnabled,
+    publishEnabled: input.publishEnabled,
+    adminPolicy,
+  })).digest('hex');
+  // The revision is persisted in a PostgreSQL INTEGER provenance column.
+  // Keep the deterministic hash-derived identity inside its non-negative range.
+  const compositeRevision = Number.parseInt(revisionHash.slice(0, 8), 16)
+    % POSTGRES_INTEGER_CARDINALITY;
   return parseExtensionByokPolicy({
     ...adminPolicy,
     contractVersion: EXTENSION_BYOK_POLICY_VERSION,
+    revision: compositeRevision,
     generationEnabled: input.generationEnabled,
     ingestEnabled: input.ingestEnabled,
     publishEnabled: input.publishEnabled,
   });
 }
 
-type ExtensionByokConfigKey =
-  | 'feature_extension_byok_ai'
-  | 'feature_extension_byok_ingest'
-  | 'feature_extension_byok_publish'
-  | 'extension_byok_admin_policy';
+export const EXTENSION_BYOK_CONFIG_KEYS = [
+  'feature_extension_byok_ai',
+  'feature_extension_byok_ingest',
+  'feature_extension_byok_publish',
+  'extension_byok_admin_policy',
+] as const;
+
+type ExtensionByokConfigKey = typeof EXTENSION_BYOK_CONFIG_KEYS[number];
+type ExtensionByokConfigSnapshot = Record<ExtensionByokConfigKey, unknown>;
 
 export function createExtensionByokSystemConfigPolicyLoader(options: {
-  readConfig(key: ExtensionByokConfigKey): Promise<unknown>;
+  readSnapshot(): Promise<ExtensionByokConfigSnapshot>;
 }) {
   return async (): Promise<ExtensionByokPolicySnapshot> => {
-    const [generationEnabled, ingestEnabled, publishEnabled, adminPolicy] = await Promise.all([
-      options.readConfig('feature_extension_byok_ai'),
-      options.readConfig('feature_extension_byok_ingest'),
-      options.readConfig('feature_extension_byok_publish'),
-      options.readConfig('extension_byok_admin_policy'),
-    ]);
+    const snapshot = await options.readSnapshot();
     return composeExtensionByokPolicyFromAdminControls({
-      generationEnabled: generationEnabled as boolean,
-      ingestEnabled: ingestEnabled as boolean,
-      publishEnabled: publishEnabled as boolean,
-      adminPolicy,
+      generationEnabled: snapshot.feature_extension_byok_ai as boolean,
+      ingestEnabled: snapshot.feature_extension_byok_ingest as boolean,
+      publishEnabled: snapshot.feature_extension_byok_publish as boolean,
+      adminPolicy: snapshot.extension_byok_admin_policy,
     });
   };
 }

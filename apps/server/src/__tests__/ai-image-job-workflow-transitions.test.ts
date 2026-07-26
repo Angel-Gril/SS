@@ -115,6 +115,40 @@ describe('AI image workflow child terminal transitions', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('locks and rejects a non-running completion before cost settlement or job mutation', async () => {
+    const updateMany = vi.fn();
+    const reservationLookup = vi.fn();
+    const tx = {
+      $queryRawUnsafe: vi.fn(async () => [{ id: 'job-1' }]),
+      aiImageJob: {
+        findUnique: vi.fn(async () => ({
+          id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+          workflowId: null, operation: 'TEXT_TO_IMAGE', status: 'QUEUED',
+          providerJobId: null, costReservationId: 'reservation-1',
+        })),
+        updateMany,
+      },
+      aiCostReservation: { findUnique: reservationLookup },
+    };
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await repository.complete('job-1', {
+      providerJobId: null,
+      actualCostCents: 7,
+      billedUnits: 1,
+      assets: [],
+    });
+
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('FOR UPDATE'),
+      'job-1',
+    );
+    expect(reservationLookup).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('inherits the frozen source snapshot onto a final edit candidate with one input read', async () => {
     const job = {
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',

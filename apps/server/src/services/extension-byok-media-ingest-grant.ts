@@ -8,11 +8,13 @@ import {
 } from './extension-byok-policy.js';
 import {
   consumeExtensionCommandGrantInTransaction,
+  inspectExtensionCommandGrant,
   type ExtensionCommandTransactionClient,
 } from './extension-command-grants-prisma.js';
 import type {
   ExtensionCommandBinding,
   ExtensionCommandConsumeResult,
+  ExtensionCommandInspectResult,
 } from './extension-command-grants.js';
 
 /**
@@ -25,18 +27,94 @@ export const EXTENSION_BYOK_MEDIA_INGEST_SCOPE = 'byok:media:ingest' as const;
 export const EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION = 'byok-media-ingest/v1' as const;
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-const boundedIdentity = z.string().trim().min(1).max(1024);
+const hasControlCharacter = (value: string) => [...value].some((character) => {
+  const codePoint = character.codePointAt(0) || 0;
+  return codePoint <= 31 || codePoint === 127;
+});
+const safeIdentity = (maximum: number) => z.string().min(1).max(maximum)
+  .refine((value) => value === value.normalize('NFKC').trim())
+  .refine((value) => !hasControlCharacter(value))
+  .refine((value) => !/[?#]/u.test(value))
+  .refine((value) => !/(?:https?|ftp|data):/iu.test(value))
+  .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value))
+  .refine((value) => !/^(?:sk-|rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)[A-Za-z0-9_-]+/iu.test(value));
+const boundedModel = z.string().trim().min(1).max(200)
+  .refine((value) => !hasControlCharacter(value))
+  .refine((value) => !/(?:https?|ftp):\/\//iu.test(value))
+  .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value));
 
 const commandSchema = z.object({
   schemaVersion: z.literal(EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION),
   providerOrigin: z.string().trim().min(1).max(2048),
   providerOperation: z.enum(EXTENSION_BYOK_OPERATIONS),
+  requestMode: z.enum(['json', 'multipart']),
+  model: boundedModel,
+  providerRequestIdSha256: sha256.nullable(),
+  promptSha256: sha256,
+  negativePromptSha256: sha256.nullable(),
   draftRevision: z.number().int().positive(),
-  skuKey: boundedIdentity,
-  slotKey: boundedIdentity,
+  skuKey: safeIdentity(500),
+  slotKey: safeIdentity(200),
+  assignmentOrdinal: z.number().int().min(0).max(499),
+  assignmentMode: z.enum(['APPEND', 'REPLACE']),
+  replaceConfirmed: z.boolean(),
   resultSha256: sha256,
-  sourceSha256: sha256.nullable().optional(),
-}).strict();
+  resultMimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+  resultSizeBytes: z.number().int().positive().max(20 * 1024 * 1024),
+  sourceSha256: sha256.nullable(),
+  referenceSha256s: z.array(sha256).max(4)
+    .refine((values) => new Set(values).size === values.length),
+  maskSha256: sha256.nullable(),
+}).strict().superRefine((input, context) => {
+  const invalid = (message: string) => context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ['providerOperation'],
+    message,
+  });
+  if (input.providerOperation === 'TEXT_TO_IMAGE'
+    && (input.requestMode !== 'json'
+      || input.sourceSha256 !== null
+      || input.referenceSha256s.length !== 0
+      || input.maskSha256 !== null)) {
+    invalid('TEXT_TO_IMAGE provenance is inconsistent');
+  }
+  if (input.providerOperation === 'IMAGE_TO_IMAGE'
+    && (input.requestMode !== 'multipart'
+      || input.sourceSha256 !== null
+      || input.referenceSha256s.length < 1
+      || input.maskSha256 !== null)) {
+    invalid('IMAGE_TO_IMAGE provenance is inconsistent');
+  }
+  if (input.providerOperation === 'FULL_EDIT'
+    && (input.requestMode !== 'multipart'
+      || input.sourceSha256 === null
+      || input.maskSha256 !== null)) {
+    invalid('FULL_EDIT provenance is inconsistent');
+  }
+  if (input.providerOperation === 'INPAINT'
+    && (input.requestMode !== 'multipart'
+      || input.sourceSha256 === null
+      || input.maskSha256 === null)) {
+    invalid('INPAINT provenance is inconsistent');
+  }
+  if (input.skuKey !== input.skuKey.normalize('NFKC')
+    || input.slotKey !== input.slotKey.normalize('NFKC')
+    || !input.slotKey.startsWith(`sku:${input.skuKey}:`)
+    || input.slotKey.length <= `sku:${input.skuKey}:`.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['slotKey'],
+      message: 'SKU media slot authority is inconsistent',
+    });
+  }
+  if ((input.assignmentMode === 'REPLACE') !== input.replaceConfirmed) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['replaceConfirmed'],
+      message: 'Media replacement confirmation is inconsistent',
+    });
+  }
+});
 
 export type ExtensionByokMediaIngestCommand = z.infer<typeof commandSchema> & {
   providerOrigin: string;
@@ -46,6 +124,9 @@ export type ExtensionByokMediaIngestResolvedCommand = ExtensionByokMediaIngestCo
   readiness: {
     contractVersion: typeof EXTENSION_BYOK_READINESS_VERSION;
     policyRevision: number;
+  };
+  authority: {
+    sourceCaptureSnapshotId: string;
   };
 };
 
@@ -85,6 +166,7 @@ export interface ByokMediaIngestCommandResolverInput {
   shopId: string | null;
   workflowId: string | null;
   draftVersion: number | null;
+  purpose?: 'issue' | 'execute';
   command: Record<string, unknown>;
 }
 
@@ -111,6 +193,8 @@ interface DraftRow {
   shopId: string;
   draftVersion: number;
   revision: number;
+  sourceCaptureSnapshotId: string;
+  selectedSkuKeys: string[];
 }
 
 export interface ByokReadinessInput {
@@ -199,10 +283,16 @@ export function createByokMediaIngestCommandResolver(
       || !draft
       || draft.id !== input.workflowId
       || draft.ownerUserId !== input.ownerUserId
-      || draft.shopId !== input.shopId) {
+      || draft.shopId !== input.shopId
+      || typeof draft.sourceCaptureSnapshotId !== 'string'
+      || !draft.sourceCaptureSnapshotId
+      || !Array.isArray(draft.selectedSkuKeys)
+      || !draft.selectedSkuKeys.includes(parsed.skuKey)) {
       return { kind: 'forbidden' };
     }
-    if (draft.draftVersion !== input.draftVersion || draft.revision !== parsed.draftRevision) {
+    const staleDraft = draft.draftVersion !== input.draftVersion
+      || draft.revision !== parsed.draftRevision;
+    if (staleDraft && input.purpose !== 'execute') {
       return { kind: 'stale' };
     }
 
@@ -226,12 +316,19 @@ export function createByokMediaIngestCommandResolver(
       kind: 'allowed',
       shopId: shop.id,
       workflowId: draft.id,
-      draftVersion: draft.draftVersion,
+      // Execution may be recovering an already-successful receipt whose own
+      // binding advanced the current draft. Preserve the granted source
+      // version so the transaction can distinguish an exact replay from a
+      // genuinely stale unconsumed grant without weakening issuance.
+      draftVersion: staleDraft ? input.draftVersion : draft.draftVersion,
       command: {
         ...parsed,
         readiness: {
           contractVersion: EXTENSION_BYOK_READINESS_VERSION,
           policyRevision,
+        },
+        authority: {
+          sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
         },
       },
     };
@@ -260,6 +357,26 @@ export async function consumeByokMediaIngestGrantInTransaction(
     return { kind: 'mismatch' };
   }
   return consumeExtensionCommandGrantInTransaction(tx, {
+    ...input,
+    requireLiveAuthorizationForPendingReplay: true,
+  });
+}
+
+export async function inspectByokMediaIngestGrant(
+  client: ExtensionCommandTransactionClient,
+  input: {
+    tokenDigest: string;
+    binding: ExtensionCommandBinding;
+    now: Date;
+  },
+): Promise<ExtensionCommandInspectResult> {
+  if (input.binding.operation !== EXTENSION_BYOK_MEDIA_INGEST_OPERATION
+    || !input.binding.shopId
+    || !input.binding.workflowId
+    || input.binding.draftVersion == null) {
+    return { kind: 'mismatch' };
+  }
+  return inspectExtensionCommandGrant(client, {
     ...input,
     requireLiveAuthorizationForPendingReplay: true,
   });

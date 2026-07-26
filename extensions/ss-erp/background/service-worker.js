@@ -3,6 +3,15 @@ try { importScripts('../shared/message-security/runtime-message-policy.js'); } c
 try { importScripts('../shared/message-security/runtime-message-authorization.js'); } catch (e) { console.warn('[SS ERP] runtime message authorization load error:', e); }
 try { importScripts('../shared/byok/profile-schema.js'); } catch (e) { console.warn('[SS ERP] BYOK profile schema load error:', e); }
 try { importScripts('../shared/byok/profile-store.js'); } catch (e) { console.warn('[SS ERP] BYOK profile store load error:', e); }
+try { importScripts('../shared/byok/device-session-lifecycle.js'); } catch (e) { console.warn('[SS ERP] BYOK device lifecycle load error:', e); }
+try { importScripts('../shared/byok/runtime-authority.js'); } catch (e) { console.warn('[SS ERP] BYOK runtime authority load error:', e); }
+try { importScripts('../shared/byok/permission-broker.js'); } catch (e) { console.warn('[SS ERP] BYOK permission broker load error:', e); }
+try { importScripts('../shared/byok/readiness-handle-cache.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness cache load error:', e); }
+try { importScripts('../shared/byok/readiness-client.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness client load error:', e); }
+try { importScripts('../shared/byok/text-to-image-client.js'); } catch (e) { console.warn('[SS ERP] BYOK text-to-image client load error:', e); }
+try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
+try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
+try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
 try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
 try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch (e) { console.warn('[SS ERP] device connection state load error:', e); }
 try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
@@ -327,6 +336,16 @@ let logisticsBindingProbeRuntime = null;
 let logisticsBindingProbeMessageHandler = null;
 let sourceCaptureSubmitter = null;
 let sourceListingWorkflowClient = null;
+let byokProfileStore = null;
+let byokReadinessHandleCache = null;
+let byokReadinessClient = null;
+let byokDeviceTransport = null;
+let byokPermissionBroker = null;
+let byokTextToImageClient = null;
+let byokProviderSettingsDispatcher = null;
+let byokGeneratedResultVault = null;
+let byokGeneratedAssetIngestClient = null;
+let byokRuntimeAuthorityGuard = null;
 let sourceTranslationIntentWriteQueue = Promise.resolve();
 let sourceMediaMutationIntentStore = null;
 let sourceMediaConfirmationCoordinator = null;
@@ -335,6 +354,10 @@ const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
 const SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES = 1;
+
+function clearCachedByokGeneratedResults() {
+  if (byokGeneratedResultVault) byokGeneratedResultVault.clear();
+}
 
 function isLogisticsDistributionFeatureEnabled() {
   const feature = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_FEATURE;
@@ -345,6 +368,36 @@ function disableLogisticsDistributionAlarms() {
   if (!chrome.alarms || typeof chrome.alarms.clear !== 'function') return;
   chrome.alarms.clear(SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME);
   chrome.alarms.clear(SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME);
+}
+
+function notifyByokDeviceSessionInvalidated(reason) {
+  const lifecycle = globalThis.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE;
+  if (!lifecycle || !lifecycle.INVALIDATED_MESSAGE
+    || !chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') return;
+  try {
+    chrome.runtime.sendMessage({
+      type: lifecycle.INVALIDATED_MESSAGE,
+      reason: String(reason || 'device_session_changed'),
+    }, () => {
+      // Reading lastError prevents an expected no-listener case from being logged.
+      void chrome.runtime.lastError;
+    });
+  } catch (_error) {
+    // No extension page is required to be open during a device-session change.
+  }
+}
+
+async function clearByokDeviceSessionState(input) {
+  getByokReadinessHandleCache().clear();
+  getByokGeneratedResultVault().clear();
+  try {
+    await Promise.all([
+      getByokProfileStore().disconnectDevice(),
+      getByokPermissionBroker().clearSessionConsent(),
+    ]);
+  } finally {
+    notifyByokDeviceSessionInvalidated(input && input.reason);
+  }
 }
 
 function logisticsDistributionDisabledResult() {
@@ -362,12 +415,20 @@ function getLogisticsDeviceCredentials() {
   if (defaults.target === 'cloud' && !expectedBaseUrl) {
     throw new Error('云端扩展安装包缺少受信任的 ERP API 地址');
   }
-  logisticsDeviceCredentials = api.createManager({
+  const credentials = api.createManager({
     localStorage: chrome.storage.local,
     fetchImpl: globalThis.fetch.bind(globalThis),
     now: () => new Date(),
     requestTimeoutMs: 6000,
     ...(expectedBaseUrl ? { expectedBaseUrl } : {}),
+  });
+  const lifecycle = globalThis.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE;
+  if (!lifecycle || typeof lifecycle.createLifecycle !== 'function') {
+    throw new Error('BYOK device lifecycle is unavailable');
+  }
+  logisticsDeviceCredentials = lifecycle.createLifecycle({
+    credentials,
+    clearByokState: clearByokDeviceSessionState,
   });
   return logisticsDeviceCredentials;
 }
@@ -713,6 +774,271 @@ function getSourceListingWorkflowClient() {
   });
   return sourceListingWorkflowClient;
 }
+
+function getByokProfileStore() {
+  if (byokProfileStore) return byokProfileStore;
+  const api = globalThis.SS_ERP_BYOK_PROFILE_STORE;
+  if (!api || typeof api.createStore !== 'function') {
+    throw new Error('BYOK Provider profile store is unavailable');
+  }
+  byokProfileStore = api.createStore({
+    localStorage: chrome.storage.local,
+    sessionStorage: chrome.storage.session,
+    now: () => new Date(),
+    onCredentialAuthorityChanged: clearCachedByokGeneratedResults,
+  });
+  return byokProfileStore;
+}
+
+function getByokReadinessHandleCache() {
+  if (byokReadinessHandleCache) return byokReadinessHandleCache;
+  const api = globalThis.SS_ERP_BYOK_READINESS_HANDLE_CACHE;
+  if (!api || typeof api.createCache !== 'function') {
+    throw new Error('BYOK readiness cache is unavailable');
+  }
+  byokReadinessHandleCache = api.createCache({ now: () => new Date() });
+  return byokReadinessHandleCache;
+}
+
+function getByokDeviceTransport() {
+  if (byokDeviceTransport) return byokDeviceTransport;
+  const sessionApi = globalThis.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION;
+  if (!sessionApi || typeof sessionApi.createTransport !== 'function') {
+    throw new Error('BYOK ERP device transport is unavailable');
+  }
+  const credentials = getLogisticsDeviceCredentials();
+  const byokCredentials = {
+    beginOperation: (...args) => credentials.beginOperation(...args),
+    isOperationCurrent: (...args) => credentials.isOperationCurrent(...args),
+    clearIfCurrent: (...args) => credentials.clearIfCurrent(...args),
+  };
+  byokDeviceTransport = sessionApi.createTransport({
+    credentials: byokCredentials,
+    fetchImpl: globalThis.fetch.bind(globalThis),
+  });
+  return byokDeviceTransport;
+}
+
+function getByokReadinessClient() {
+  if (byokReadinessClient) return byokReadinessClient;
+  const api = globalThis.SS_ERP_BYOK_READINESS_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK readiness client is unavailable');
+  }
+  byokReadinessClient = api.createClient({
+    transport: getByokDeviceTransport(),
+    profileStore: getByokProfileStore(),
+    handleCache: getByokReadinessHandleCache(),
+  });
+  return byokReadinessClient;
+}
+
+function getByokPermissionBroker() {
+  if (byokPermissionBroker) return byokPermissionBroker;
+  const api = globalThis.SS_ERP_BYOK_PERMISSION_BROKER;
+  if (!api || typeof api.createBroker !== 'function') {
+    throw new Error('BYOK permission broker is unavailable');
+  }
+  byokPermissionBroker = api.createBroker({
+    permissions: chrome.permissions,
+    sessionStorage: chrome.storage.session,
+    consentAuthority: 'BACKGROUND',
+    onConsentRevoked: clearCachedByokGeneratedResults,
+  });
+  return byokPermissionBroker;
+}
+
+function getByokTextToImageClient() {
+  if (byokTextToImageClient) return byokTextToImageClient;
+  const api = globalThis.SS_ERP_BYOK_TEXT_TO_IMAGE_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK text-to-image client is unavailable');
+  }
+  byokTextToImageClient = api.createClient({
+    profileStore: getByokProfileStore(),
+    permissionBroker: getByokPermissionBroker(),
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    authorizeResultOrigin: async () => false,
+    crypto: globalThis.crypto,
+    now: () => new Date(),
+  });
+  return byokTextToImageClient;
+}
+
+function getByokProviderSettingsDispatcher() {
+  if (byokProviderSettingsDispatcher) return byokProviderSettingsDispatcher;
+  const api = globalThis.SS_ERP_BYOK_PROVIDER_SETTINGS_HANDLER;
+  const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  const profileSchema = globalThis.SS_ERP_BYOK_PROFILE_SCHEMA;
+  if (!api || typeof api.createDispatcher !== 'function'
+    || !authorization || !authorization.MESSAGE_TYPES
+    || !profileSchema) {
+    throw new Error('BYOK Provider settings dispatcher is unavailable');
+  }
+  byokProviderSettingsDispatcher = api.createDispatcher({
+    messageTypes: authorization.MESSAGE_TYPES.PROVIDER_SETTINGS,
+    profileSchema,
+    profileStore: getByokProfileStore(),
+    permissionBroker: getByokPermissionBroker(),
+    readinessClient: getByokReadinessClient(),
+    capabilityClient: getByokTextToImageClient(),
+    preparePermissionReadiness: (verification) => {
+      const bridge = getByokReadinessHandleCache().createPermissionBridge(verification);
+      bridge.consume(
+        verification.handleId,
+        verification.binding,
+        verification.binding.providerOrigin,
+      );
+      return {
+        readinessHandle: verification.handleId,
+        readinessBinding: verification.binding,
+        expiresAt: verification.expiresAt,
+      };
+    },
+    readDeviceStatus: () => readExtensionDeviceStatusAfterClaims(true),
+    listShops: () => readExtensionDeviceOzonShops(),
+  });
+  return byokProviderSettingsDispatcher;
+}
+
+function getByokGeneratedResultVault() {
+  if (byokGeneratedResultVault) return byokGeneratedResultVault;
+  const api = globalThis.SS_ERP_BYOK_GENERATED_RESULT_VAULT;
+  if (!api || typeof api.createVault !== 'function') {
+    throw new Error('BYOK generated result vault is unavailable');
+  }
+  byokGeneratedResultVault = api.createVault({ now: () => new Date() });
+  return byokGeneratedResultVault;
+}
+
+function getByokRuntimeAuthorityGuard() {
+  if (byokRuntimeAuthorityGuard) return byokRuntimeAuthorityGuard;
+  const api = globalThis.SS_ERP_BYOK_RUNTIME_AUTHORITY;
+  if (!api || typeof api.createGuard !== 'function') {
+    throw new Error('BYOK runtime authority guard is unavailable');
+  }
+  byokRuntimeAuthorityGuard = api.createGuard({
+    credentials: getLogisticsDeviceCredentials(),
+  });
+  return byokRuntimeAuthorityGuard;
+}
+
+function getByokGeneratedAssetIngestClient() {
+  if (byokGeneratedAssetIngestClient) return byokGeneratedAssetIngestClient;
+  const api = globalThis.SS_ERP_BYOK_GENERATED_ASSET_INGEST_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK generated asset ingest client is unavailable');
+  }
+  byokGeneratedAssetIngestClient = api.createClient({
+    transport: getByokDeviceTransport(),
+    vault: getByokGeneratedResultVault(),
+    isAuthorityCurrent: (authority) => (
+      getLogisticsDeviceCredentials().isAuthorityCurrent(authority)
+    ),
+  });
+  return byokGeneratedAssetIngestClient;
+}
+
+function byokRuntimeError(error) {
+  const candidate = error && typeof error === 'object' ? String(error.code || '') : '';
+  return {
+    ok: false,
+    errorCode: /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidate)
+      ? candidate
+      : 'SS_ERP_BYOK_OPERATION_FAILED',
+    error: 'BYOK operation failed',
+  };
+}
+
+function installByokReadinessRuntime() {
+  const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  if (!authorization || !authorization.MESSAGE_TYPES) return;
+  const previousHandlers = globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {};
+  const providerSettingsDispatcher = getByokProviderSettingsDispatcher();
+  const readinessHandler = async ({ payload }) => ({
+    ok: true,
+    data: await getByokReadinessClient().getReadiness(payload),
+  });
+  const executeProviderHandler = async ({ payload, authorization: runtimeDecision }) => {
+    const client = getByokTextToImageClient();
+    const vault = getByokGeneratedResultVault();
+    try {
+      const binding = runtimeDecision.readiness.binding;
+      const authorityGuard = getByokRuntimeAuthorityGuard();
+      const authority = await authorityGuard.capture(binding);
+      const generated = await client.generate({
+        ...payload,
+        readinessBinding: binding,
+      });
+      try {
+        return {
+          ok: true,
+          data: await client.commitResult(
+            generated.idempotencyKey,
+            generated.requestHash,
+            (currentGenerated) => authorityGuard.commitGeneratedResult({
+              authority,
+              binding,
+              generated: currentGenerated,
+              vault,
+            }),
+          ),
+        };
+      } finally {
+        client.releaseResult(generated.idempotencyKey, generated.requestHash);
+      }
+    } catch (error) {
+      if (error && error.code === 'SS_ERP_BYOK_PROVIDER_RESULT_RELEASED') {
+        try {
+          const state = client.getOperationState(payload && payload.idempotencyKey);
+          const replay = vault.getPublicByOperation(payload && payload.idempotencyKey);
+          const entry = vault.getForBackground(replay.resultId);
+          const binding = runtimeDecision.readiness.binding;
+          const authorityGuard = getByokRuntimeAuthorityGuard();
+          const authority = await authorityGuard.capture(binding);
+          if (state && state.requestHash === replay.requestHash
+            && authorityGuard.matchesVaultAuthority(entry, binding, authority)) {
+            return { ok: true, data: replay };
+          }
+        } catch (replayError) {
+          return byokRuntimeError(replayError);
+        }
+      }
+      return byokRuntimeError(error);
+    }
+  };
+  const ingestHandler = async ({ payload, authorization: runtimeDecision }) => {
+    try {
+      const authority = await getByokRuntimeAuthorityGuard().capture(
+        runtimeDecision.readiness.binding,
+      );
+      return {
+        ok: true,
+        data: await getByokGeneratedAssetIngestClient().ingest(payload, authority),
+      };
+    } catch (error) {
+      return byokRuntimeError(error);
+    }
+  };
+  globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS = Object.freeze({
+    ...previousHandlers,
+    ...providerSettingsDispatcher.handlers,
+    [authorization.MESSAGE_TYPES.WORKBENCH.GET_READINESS]: readinessHandler,
+    [authorization.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER]: executeProviderHandler,
+    [authorization.MESSAGE_TYPES.WORKBENCH.INGEST]: ingestHandler,
+  });
+  globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
+    getByokReadinessHandleCache().consume(input)
+  );
+  globalThis.SS_ERP_BYOK_RESPONSE_SECRET_VALUES = async ({ payload }) => {
+    const profileId = payload && typeof payload.profileId === 'string' ? payload.profileId : '';
+    if (!profileId) return [];
+    const apiKey = await getByokProfileStore().readSecretForBackground(profileId);
+    return apiKey ? [apiKey] : [];
+  };
+}
+
+installByokReadinessRuntime();
 
 function sourceWorkflowHandoffText(value, maxLength) {
   const text = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -3553,8 +3879,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // dispatcher.  Keeping this branch before the legacy handlers prevents a
   // future handler from accidentally inheriting the broad legacy sender matrix
   // or echoing a secret-bearing response.  Phase 1 intentionally registers no
-  // Provider handlers/readiness verifier yet, so dark requests receive a
-  // deterministic HANDLER_UNAVAILABLE/READINESS_UNAVAILABLE response.
+  // The single-image BYOK path is installed here; edit, batch, and publish
+  // handlers remain dark until their own gates pass.
   const runtimeAuthorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
   if (runtimeAuthorization
     && typeof runtimeAuthorization.isNewRuntimeMessageType === 'function'

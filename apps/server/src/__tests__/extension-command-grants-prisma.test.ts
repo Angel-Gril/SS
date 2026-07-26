@@ -3,7 +3,10 @@ import type {
   ExtensionCommandBinding,
   ExtensionCommandGrantRecord,
 } from '../services/extension-command-grants.js';
-import { createPrismaExtensionCommandGrantStore } from '../services/extension-command-grants-prisma.js';
+import {
+  createPrismaExtensionCommandGrantStore,
+  inspectExtensionCommandGrant,
+} from '../services/extension-command-grants-prisma.js';
 
 const NOW = new Date('2026-07-14T08:00:00.000Z');
 const LATER = new Date('2026-07-14T08:02:00.000Z');
@@ -90,6 +93,24 @@ class ScriptedClient {
 }
 
 describe('Prisma extension command grant store', () => {
+  it('shares live grant checks in a read-only inspection without acquiring mutation locks', async () => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "extension_command_grants" g')) {
+        return [grantRow({ expiresAt: new Date(NOW.getTime() - 1) })];
+      }
+      if (sql.includes('FROM "extension_command_receipts"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+
+    await expect(inspectExtensionCommandGrant(client, {
+      tokenDigest: 'b'.repeat(64),
+      binding: binding(),
+      now: NOW,
+    })).resolves.toEqual({ kind: 'expired' });
+    expect(client.calls.every(({ sql }) => !sql.includes('FOR UPDATE'))).toBe(true);
+    expect(client.calls.every(({ sql }) => !/^\s*(UPDATE|INSERT)/u.test(sql))).toBe(true);
+  });
+
   it('locks the session and caps outstanding grants before inserting', async () => {
     const client = new ScriptedClient((sql) => {
       if (sql.includes('FROM "extension_device_sessions"') && sql.includes('FOR UPDATE')) {

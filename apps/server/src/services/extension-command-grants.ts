@@ -109,6 +109,10 @@ export type ExtensionCommandConsumeResult =
   | { kind: 'scope_denied' }
   | { kind: 'shop_denied' };
 
+export type ExtensionCommandInspectResult =
+  | { kind: 'allowed' }
+  | Exclude<ExtensionCommandConsumeResult, { kind: 'execute' }>;
+
 export type ExtensionCommandIssueResult =
   | { kind: 'issued'; grant: ExtensionCommandGrantRecord }
   | { kind: 'renewed'; grant: ExtensionCommandGrantRecord }

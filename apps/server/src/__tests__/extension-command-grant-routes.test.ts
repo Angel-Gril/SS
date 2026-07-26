@@ -187,8 +187,10 @@ describe('extension command grant routes', () => {
     expect(commandRegistration).toBeLessThan(logisticsStart);
     expect(index).toContain('resolveExtensionCommandGrantSecret');
     expect(index).toContain('createExtensionByokSystemConfigPolicyLoader');
-    expect(index).toContain('readConfig: (key) => getStrictConfig(key)');
+    expect(index).toContain('readSnapshot: () => getStrictConfigSnapshot(EXTENSION_BYOK_CONFIG_KEYS)');
     expect(index).toContain('getByokReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input)');
+    expect(index).toContain('resolveCommand: extensionCommandRoutesOptions.resolveCommand');
+    expect(index).toContain("prefix: '/api/extension-device/byok-media'");
     expect(index.match(/getMediaWorkflowDecision: getAiMediaRolloutDecision/gu)).toHaveLength(3);
   });
 
@@ -940,6 +942,46 @@ describe('extension command grant routes', () => {
       shopId: 'shop-1',
       platform: 'OZON',
       deviceSessionId: 'session-1',
+    });
+  });
+
+  it('fails closed before issuing an Ozon grant when BYOK publish policy denies the draft', async () => {
+    const authorizeByokPublish = vi.fn(async () => {
+      throw Object.assign(new Error('BYOK publish is disabled'), {
+        code: 'EXTENSION_BYOK_PUBLISH_DISABLED', statusCode: 409,
+      });
+    });
+    const resolve = createSourceWorkflowCommandResolver({
+      featureFlags: { evaluate: vi.fn(async () => ({
+        enabled: true, legacyAllowed: false, captureStage: null,
+        reason: 'pilot_match' as const, revision: 'pilot-1',
+      })) },
+      loadShop: vi.fn(async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      })),
+      loadDraft: vi.fn(async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, stage: 'PUBLISH_INTENT_RECORDED',
+        selectedSkuKeys: ['sku-1'], publishTaskIds: ['intent-1'],
+        media: { assignments: [{ assetId: 'asset-byok' }] },
+      })),
+      authorizeByokPublish,
+    });
+
+    await expect(resolve({
+      sessionId: 'session-publisher', ownerUserId: 'owner-1', operation: 'OZON_PUBLISH',
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      command: {
+        schemaVersion: 'ozon-publish-command/v1', draftRevision: 11,
+        publishIntentId: 'intent-1', selectedSkuKeys: ['sku-1'],
+      },
+    })).resolves.toEqual({ kind: 'unavailable' });
+    expect(authorizeByokPublish).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      workflowId: 'workflow-1',
+      assignments: [{ assetId: 'asset-byok' }],
+      requestingDeviceSessionId: 'session-publisher',
     });
   });
 

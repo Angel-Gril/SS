@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   EXTENSION_BYOK_ADMIN_POLICY_VERSION,
   DEFAULT_EXTENSION_BYOK_ADMIN_POLICY_JSON,
@@ -62,7 +62,6 @@ describe('extension BYOK administrator controls', () => {
     });
     expect(result).toMatchObject({
       contractVersion: EXTENSION_BYOK_POLICY_VERSION,
-      revision: 4,
       mode: 'pilot',
       generationEnabled: false,
       ingestEnabled: true,
@@ -70,46 +69,72 @@ describe('extension BYOK administrator controls', () => {
       allowedOperations: ['IMAGE_TO_IMAGE'],
       maxConcurrency: 2,
     });
+    expect(Number.isSafeInteger(result.revision)).toBe(true);
+    expect(result.revision).toBeGreaterThanOrEqual(0);
+    expect(result.revision).toBeLessThanOrEqual(2_147_483_647);
+    const changedFlag = composeExtensionByokPolicyFromAdminControls({
+      generationEnabled: true,
+      ingestEnabled: true,
+      publishEnabled: false,
+      adminPolicy: {
+        contractVersion: EXTENSION_BYOK_ADMIN_POLICY_VERSION,
+        revision: 4,
+        mode: 'pilot',
+        ownerUserIds: ['owner-1'],
+        shopIds: ['shop-1'],
+        deviceSessionIds: ['device-1'],
+        allowedOrigins: ['https://provider.example'],
+        allowedOperations: ['IMAGE_TO_IMAGE'],
+        maxConcurrency: 2,
+      },
+    });
+    expect(changedFlag.revision).not.toBe(result.revision);
     expect(JSON.stringify(result)).not.toMatch(/api.?key|authorization|secret|token/iu);
   });
 
   it('fails closed when the system-config policy cannot be read or parsed', async () => {
     const loader = createExtensionByokSystemConfigPolicyLoader({
-      readConfig: async (key) => {
-        if (key === 'extension_byok_admin_policy') return '{bad json';
-        return false;
-      },
+      readSnapshot: async () => ({
+        feature_extension_byok_ai: false,
+        feature_extension_byok_ingest: false,
+        feature_extension_byok_publish: false,
+        extension_byok_admin_policy: '{bad json',
+      }),
     });
     await expect(loader()).rejects.toMatchObject({ code: 'EXTENSION_BYOK_ADMIN_POLICY_INVALID' });
   });
 
-  it('loads independent capability switches without changing the admin policy identity', async () => {
+  it('loads one atomic snapshot and derives identity from every capability switch', async () => {
+    const readSnapshot = vi.fn(async () => ({
+      feature_extension_byok_ai: false,
+      feature_extension_byok_ingest: true,
+      feature_extension_byok_publish: false,
+      extension_byok_admin_policy: JSON.stringify({
+        contractVersion: EXTENSION_BYOK_ADMIN_POLICY_VERSION,
+        revision: 12,
+        mode: 'global',
+        ownerUserIds: [],
+        shopIds: [],
+        deviceSessionIds: [],
+        allowedOrigins: ['https://provider.example'],
+        allowedOperations: ['TEXT_TO_IMAGE'],
+        maxConcurrency: 3,
+      }),
+    }));
     const loader = createExtensionByokSystemConfigPolicyLoader({
-      readConfig: async (key) => {
-        if (key === 'extension_byok_admin_policy') {
-          return JSON.stringify({
-            contractVersion: EXTENSION_BYOK_ADMIN_POLICY_VERSION,
-            revision: 12,
-            mode: 'global',
-            ownerUserIds: [],
-            shopIds: [],
-            deviceSessionIds: [],
-            allowedOrigins: ['https://provider.example'],
-            allowedOperations: ['TEXT_TO_IMAGE'],
-            maxConcurrency: 3,
-          });
-        }
-        return key === 'feature_extension_byok_ingest';
-      },
+      readSnapshot,
     });
-    await expect(loader()).resolves.toMatchObject({
+    const result = await loader();
+    expect(result).toMatchObject({
       contractVersion: EXTENSION_BYOK_POLICY_VERSION,
-      revision: 12,
       generationEnabled: false,
       ingestEnabled: true,
       publishEnabled: false,
       maxConcurrency: 3,
     });
+    expect(Number.isSafeInteger(result.revision)).toBe(true);
+    expect(result.revision).toBeLessThanOrEqual(2_147_483_647);
+    expect(readSnapshot).toHaveBeenCalledOnce();
   });
 
   it('does not enable hosted AI when its config reader fails', async () => {

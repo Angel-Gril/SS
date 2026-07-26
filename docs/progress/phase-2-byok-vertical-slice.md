@@ -1,26 +1,27 @@
 # Phase 2: Secure Single-Image BYOK Vertical Slice
 
-Progress: 0/10 tasks.
+Progress: 6/10 tasks.
 
 ## Tasks
 
-- [ ] `SRV-04` Build hostile-image normalization/ingest (`P0`, `XL`). Acceptance: bounded
+- [x] `SRV-04` Build hostile-image normalization/ingest (`P0`, `XL`). Acceptance: bounded
   verified single-frame PNG/JPEG/WebP input is decoded, metadata-stripped, re-encoded, hashed,
   and stored through existing storage; replay returns the same asset.
-- [ ] `SRV-05` Bind ingested media to exact draft revision (`P0`, `L`). Acceptance: owner,
+- [x] `SRV-05` Bind ingested media to exact draft revision (`P0`, `L`). Acceptance: owner,
   shop, workflow, revision, draft version, SKU, slot, hash, and order are atomic; stale state
   has no partial write; arbitrary external URLs are rejected.
-- [ ] `SRV-06` Enforce billing separation (`P0`, `M`). Acceptance: BYOK never creates ERP
+- [x] `SRV-06` Enforce billing separation (`P0`, `M`). Acceptance: BYOK never creates ERP
   AI cost rows; hosted paid work still requires reservation/settlement; forged modes fail.
-- [ ] `EXT-04A` Add background text-to-image client (`P0`, `L`). Acceptance: only the
+- [x] `EXT-04A` Add background text-to-image client (`P0`, `L`). Acceptance: only the
   background calls `/images/generations`; cookies/redirects are disabled; response bounds,
   URL/base64 handling, no-auth output download, timeout, and unknown outcome are tested.
-- [ ] `EXT-05` Store exact capability evidence (`P0`, `M`). Acceptance: evidence binds
+- [x] `EXT-05` Store exact capability evidence (`P0`, `M`). Acceptance: evidence binds
   endpoint, model, operation, request mode, policy revision, and time; changes invalidate it;
   text-to-image success does not unlock edits.
-- [ ] `UI-01` Build focused Provider settings page (`P1`, `L`). Acceptance: profile,
-  endpoint/model, permission, session key, and per-operation probes work; key input clears and
-  cannot be revealed; there is no remember-key control.
+- [x] `UI-01` Build focused Provider settings page (`P1`, `L`). Acceptance: profile,
+  endpoint/model, permission, session key, and every currently implemented operation probe
+  work; deferred edit/inpaint operations remain explicitly closed until `EXT-04B`; key input
+  clears and cannot be revealed; there is no remember-key control.
 - [ ] `UI-02A` Build minimal original single-image workbench (`P0`, `L`). Acceptance: a
   trusted launch binds exact product/shop/draft; user can select BYOK, edit Prompt, generate,
   observe truthful state, reject, or accept; injected UI remains a compact launcher.
@@ -46,3 +47,47 @@ Progress: 0/10 tasks.
 
 - Initial runtime is synchronous text-to-image with concurrency `1` and dark flags.
 - Real Provider sandbox testing starts only after all `QA-01` gates pass.
+- `SRV-04` now exposes the device-scoped raw PNG/JPEG/WebP ingest route, re-evaluates the
+  same live command resolver used at grant issuance, normalizes hostile bytes, uses only
+  ERP-owned local/OSS/R2 storage, and commits asset/provenance/receipt atomically.
+- `EXT-04A` now runs only in the background worker with exact-origin permission, bounded
+  Provider/result reads, no-auth result download, unknown-outcome handling, and an in-memory
+  Blob vault; runtime responses contain only redacted hashes and identifiers.
+- `EXT-05` now requires endpoint/model/operation/request-mode/policy-revision evidence before
+  generation. A dedicated probe records 24-hour evidence and immediately releases probe bytes.
+  Authenticated readiness attestations become maximum-ten-minute, one-use in-memory handles.
+- `SRV-05` now commits grant consumption, normalized ERP-owned media, the immediate immutable
+  draft successor, exact SKU/slot/order binding, zero-charge provenance, and receipt completion
+  in one serializable transaction. PostgreSQL verifies the source/bound draft transition and
+  allows later publish intent binding only while the exact assignment remains present.
+- `SRV-06` fixes hosted jobs to `ERP_HOSTED` and BYOK provenance to `BYOK` at the database
+  boundary. Paid dispatch requires the exact live `RESERVED` reservation, and paid success
+  requires its matching append-only charge settlement. PostgreSQL tests prove a forged BYOK
+  label cannot bypass hosted billing and exact BYOK replay creates zero cost rows.
+- `UI-01` now provides named profiles, session-only key loading, exact-origin grant/revoke,
+  device/shop readiness, and exact text-to-image capability evidence. Prepared permission
+  tickets are globally one-use, stale async tickets are discarded, device-session changes
+  clear every redacted secret/evidence state, and expired or policy-mismatched evidence is not
+  shown as valid. Edit and inpaint probes remain visibly disabled because their Provider
+  adapters belong to Phase 3 `EXT-04B`.
+- UI fixture QA passed at 1280px and 390px with no horizontal overflow or console errors. The
+  trusted click requested only `https://relay.example/*`; a secret sentinel was absent from
+  DOM, URL, local storage, and session storage after the key field cleared.
+- Final foundation review made upload cleanup durable against returned-key and storage-namespace
+  drift, records every authorized ingest request in a database-time per-device limiter before
+  body parsing, and requires live `byok:media:ingest`/`listing:publish` scopes at publish time.
+- Normal Provider dispatch now writes a bounded session tombstone before POST, fails corrupt
+  tombstone state closed, and cannot repeat the same request after an MV3 worker restart.
+  Successful Provider request IDs are reduced to SHA-256 before vault, ingest, or provenance.
+- Provider consent is committed only by the background authority. Page grants require a real
+  trusted click, then a one-use ticket, live ERP readiness, exact Chrome permission, and consent
+  epoch; concurrent grants merge and device cleanup wins over late page finalization.
+- Final verification passed 117 extension BYOK/runtime tests, 184 focused server BYOK tests,
+  3,800 full server tests, all 140 PostgreSQL migrations plus the populated historical upgrade,
+  workspace lint/typecheck, preflight, and rebuilt cloud/local package verification. Cloud
+  verification completed with zero warnings; local retained its two expected packaging warnings.
+- Remaining non-blocking Phase 2 debt: terminal upload-staging rows need a retention/prune path;
+  publish intent/receipt provenance linking belongs to `INT-02`; and the 100-entry session
+  dispatch-tombstone limit needs workbench capacity guidance before a production pilot.
+- All BYOK flags and the administrator policy remain default-off. No real Provider request,
+  ERP AI charge, production mutation, Ozon write, or VPS deployment occurred in this phase.

@@ -819,6 +819,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           }
         }
         const created = await tx.aiImageJob.create({ data: {
+          executionMode: 'ERP_HOSTED',
           ownerUserId: input.ownerUserId,
           actorUserId: input.actorUserId,
           status: 'QUEUED',
@@ -1173,6 +1174,13 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       });
     }
     const mismatch = await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+      if (typeof tx.$queryRawUnsafe === 'function') {
+        const locked = await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "ai_image_jobs" WHERE "id" = $1 FOR UPDATE',
+          id,
+        ) as Array<{ id: string }>;
+        if (!locked[0]) return false;
+      }
       const persisted = await tx.aiImageJob.findUnique({ where: { id } });
       if (!persisted) return false;
       const binding = data.providerJobId
@@ -1194,6 +1202,7 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         await finalizeJobCost(tx, job, 'FAILED');
         return false;
       }
+      if (job.status !== 'RUNNING') return false;
       if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation))) {
         const providerOutputCount = await tx.mediaAsset.count({
           where: { aiImageJobId: id, ownerUserId: job.ownerUserId, kind: 'AI_PROVIDER_OUTPUT' },
@@ -1209,15 +1218,15 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         }
       }
       const providerJobId = job.providerJobId;
+      await finalizeJobCost(tx, job, 'COMPLETED', {
+        actualCostCents: data.actualCostCents,
+        billedUnits: data.billedUnits,
+      });
       const completed = await tx.aiImageJob.updateMany({
         where: { id, status: 'RUNNING' },
         data: { status: 'SUCCEEDED', progress: 100, providerJobId, actualCostCents: data.actualCostCents, billedUnits: data.billedUnits, completedAt: new Date(), errorCode: null, errorMessage: null },
       });
       if (completed.count !== 1) return false;
-      await finalizeJobCost(tx, job, 'COMPLETED', {
-        actualCostCents: data.actualCostCents,
-        billedUnits: data.billedUnits,
-      });
       const inputs = job.workflowId
         ? await tx.aiMediaWorkflowInput.findMany({
           where: { workflowId: job.workflowId },

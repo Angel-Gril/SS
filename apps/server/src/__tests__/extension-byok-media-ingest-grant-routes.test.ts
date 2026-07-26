@@ -18,10 +18,23 @@ function command() {
     schemaVersion: EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION,
     providerOrigin: 'https://images.example.com',
     providerOperation: 'IMAGE_TO_IMAGE',
+    requestMode: 'multipart',
+    model: 'image-model-v1',
+    providerRequestIdSha256: HASH,
+    promptSha256: HASH,
+    negativePromptSha256: null,
     draftRevision: 11,
     skuKey: 'sku-1',
-    slotKey: 'sku-1:hero:0',
+    slotKey: 'sku:sku-1:hero:0',
+    assignmentOrdinal: 0,
+    assignmentMode: 'APPEND',
+    replaceConfirmed: false,
     resultSha256: HASH,
+    resultMimeType: 'image/png',
+    resultSizeBytes: 1024,
+    sourceSha256: null,
+    referenceSha256s: [HASH],
+    maskSha256: null,
   };
 }
 
@@ -47,6 +60,7 @@ function resolvedCommand() {
   return {
     ...command(),
     readiness: { contractVersion: 'extension-byok-readiness/v1', policyRevision: 4 },
+    authority: { sourceCaptureSnapshotId: 'snapshot-1' },
   };
 }
 
@@ -76,7 +90,8 @@ async function build(options: { scopes?: string[] } = {}) {
       loadShop: async () => ({ id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE' }),
       loadDraft: async () => ({
         id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1', draftVersion: 7, revision: 11,
-        stage: 'DRAFT', selectedSkuKeys: [], publishTaskIds: [],
+        stage: 'DRAFT', selectedSkuKeys: ['sku-1'], publishTaskIds: [],
+        sourceCaptureSnapshotId: 'snapshot-1',
       }),
       getByokReadiness: async () => readiness(),
     }),

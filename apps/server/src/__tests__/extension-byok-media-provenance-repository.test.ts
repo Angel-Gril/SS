@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PrismaExtensionByokMediaProvenanceRepository } from '../repositories/extension-byok-media-provenance-repository.js';
+import {
+  createPrismaExtensionByokPublishProvenanceReader,
+  PrismaExtensionByokMediaProvenanceRepository,
+} from '../repositories/extension-byok-media-provenance-repository.js';
 import {
   EXTENSION_BYOK_MEDIA_PROVENANCE_VERSION,
   type ExtensionByokMediaProvenanceCreateInput,
@@ -16,8 +19,13 @@ function input(overrides: Partial<ExtensionByokMediaProvenanceCreateInput> = {})
     workflowId: 'workflow-1',
     draftRevision: 2,
     draftVersion: 1,
+    boundDraftRevision: 3,
+    boundDraftVersion: 2,
     skuKey: 'sku-1',
     slotKey: 'sku:sku-1:hero:0',
+    assignmentOrdinal: 0,
+    assignmentSha256: 'e'.repeat(64),
+    policyRevision: 7,
     endpointOriginSha256: 'a'.repeat(64),
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',
@@ -52,6 +60,101 @@ function row(overrides: Record<string, unknown> = {}) {
 }
 
 describe('Prisma extension BYOK media provenance repository', () => {
+  it('inspects selected MediaAsset BYOK markers together with exact draft provenance', async () => {
+    const findMany = vi.fn(async () => [{
+      id: 'byok_asset-1',
+      ownerUserId: 'owner-1',
+      sourceMediaKey: 'extension-byok:digest-1',
+      metadata: { generatedAssetSource: 'EXTENSION_BYOK' },
+      extensionByokMediaProvenance: [input({ assetId: 'byok_asset-1' })],
+    }, {
+      id: 'asset-source',
+      ownerUserId: 'owner-1',
+      sourceMediaKey: 'source:1',
+      metadata: { generatedAssetSource: 'SOURCE_CAPTURE' },
+      extensionByokMediaProvenance: [],
+    }]);
+    const reader = createPrismaExtensionByokPublishProvenanceReader({
+      mediaAsset: { findMany },
+    } as never);
+
+    await expect(reader.inspectDraftAssets({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      workflowId: 'workflow-1',
+      assetIds: ['byok_asset-1', 'asset-source'],
+    })).resolves.toEqual([expect.objectContaining({
+      assetId: 'byok_asset-1',
+      byokMarked: true,
+      provenance: expect.objectContaining({
+        assetId: 'byok_asset-1',
+        deviceSessionId: 'session-1',
+        operation: 'TEXT_TO_IMAGE',
+      }),
+    }), {
+      assetId: 'asset-source',
+      byokMarked: false,
+      provenance: null,
+    }]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        ownerUserId: 'owner-1',
+        id: { in: ['byok_asset-1', 'asset-source'] },
+      },
+      select: expect.objectContaining({
+        metadata: true,
+        extensionByokMediaProvenance: expect.objectContaining({
+          where: expect.objectContaining({
+            executionMode: 'BYOK',
+            ownerUserId: 'owner-1',
+            shopId: 'shop-1',
+            workflowId: 'workflow-1',
+          }),
+        }),
+      }),
+    }));
+  });
+
+  it('loads the live session, account, exact shop grant, and shop ownership boundary', async () => {
+    const findUnique = vi.fn(async () => ({
+      id: 'session-1',
+      status: 'ACTIVE',
+      expiresAt: new Date('2026-07-27T00:00:00.000Z'),
+      revokedAt: null,
+      ownerUserId: 'owner-1',
+      actorUserId: 'owner-1',
+      owner: { status: 'ACTIVE', role: 'USER' },
+      actor: { status: 'ACTIVE', role: 'USER', parentId: null },
+      shopGrants: [{
+        status: 'ACTIVE',
+        shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'OZON' },
+      }],
+    }));
+    const reader = createPrismaExtensionByokPublishProvenanceReader({
+      extensionDeviceSession: { findUnique },
+    } as never);
+
+    await expect(reader.loadDeviceAuthorization({
+      sessionId: 'session-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+    })).resolves.toMatchObject({
+      sessionId: 'session-1',
+      status: 'ACTIVE',
+      ownerUserId: 'owner-1',
+      actorUserId: 'owner-1',
+      shopGrantStatus: 'ACTIVE',
+      shopId: 'shop-1',
+      shopOwnerUserId: 'owner-1',
+      shopStatus: 'ACTIVE',
+      shopPlatform: 'OZON',
+    });
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'session-1' },
+      select: expect.objectContaining({
+        shopGrants: expect.objectContaining({ where: { shopId: 'shop-1' } }),
+      }),
+    }));
+  });
+
   it('creates only the closed non-secret persistence shape', async () => {
     const create = vi.fn(async ({ data }: any) => row(data));
     const client = {

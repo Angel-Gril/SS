@@ -33,17 +33,21 @@ describePostgres('AI cost ledger PostgreSQL state machine', () => {
       id: ownerUserId, phone: `reconcile_${suffix}`, passwordHash: 'integration-test',
     } });
     await client!.aiImageJob.create({ data: {
-      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'FAILED',
+      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'RUNNING',
       operation: 'IMAGE_TO_IMAGE', provider: 'openai', model: 'gpt-image-1',
       prompt: 'admin reconciliation integration', width: 1024, height: 1024,
-      requestFingerprint: fingerprint, errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
-      providerDispatchedAt: new Date(),
+      requestFingerprint: fingerprint, estimatedCostCents: 10,
     } });
     const reserved = await reserveAiCost(client! as any, {
       ownerUserId, actorUserId: ownerUserId, jobId, idempotencyKey: `reserve-${suffix}`,
       requestFingerprint: fingerprint, provider: 'openai', model: 'gpt-image-1',
       operation: 'IMAGE_TO_IMAGE', estimatedCostMinor: 10, maximumCostMinor: 20,
     });
+    await client!.aiImageJob.update({ where: { id: jobId }, data: {
+      status: 'FAILED',
+      errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+      providerDispatchedAt: new Date(),
+    } });
     await markAiCostSubmissionUncertain(client! as any, {
       reservationId: reserved.reservation.id, ownerUserId, actorUserId: ownerUserId,
       idempotencyKey: `uncertain-${suffix}`, requestFingerprint: fingerprint,
@@ -94,17 +98,21 @@ describePostgres('AI cost ledger PostgreSQL state machine', () => {
       id: ownerUserId, phone: `replay_${suffix}`, passwordHash: 'integration-test',
     } });
     await client!.aiImageJob.create({ data: {
-      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'FAILED',
+      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'RUNNING',
       operation: 'IMAGE_TO_IMAGE', provider: 'openai', model: 'gpt-image-1',
       prompt: 'admin reconciliation replay', width: 1024, height: 1024,
-      requestFingerprint: fingerprint, errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
-      providerDispatchedAt: new Date(),
+      requestFingerprint: fingerprint, estimatedCostCents: 10,
     } });
     const reserved = await reserveAiCost(client! as any, {
       ownerUserId, actorUserId: ownerUserId, jobId, idempotencyKey: `reserve-${suffix}`,
       requestFingerprint: fingerprint, provider: 'openai', model: 'gpt-image-1',
       operation: 'IMAGE_TO_IMAGE', estimatedCostMinor: 10, maximumCostMinor: 20,
     });
+    await client!.aiImageJob.update({ where: { id: jobId }, data: {
+      status: 'FAILED',
+      errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+      providerDispatchedAt: new Date(),
+    } });
     await markAiCostSubmissionUncertain(client! as any, {
       reservationId: reserved.reservation.id, ownerUserId, actorUserId: ownerUserId,
       idempotencyKey: `uncertain-${suffix}`, requestFingerprint: fingerprint,

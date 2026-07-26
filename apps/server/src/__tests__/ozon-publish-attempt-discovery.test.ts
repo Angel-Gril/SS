@@ -54,6 +54,7 @@ describe('Ozon publish attempt discovery contract', () => {
       attempts: repository,
       compile: async () => { throw new Error('unused'); },
       submitImportOnce: async () => { throw new Error('unused'); },
+      authorizeDraftMediaPublish: async () => undefined,
       workerId: 'publisher-discovery-test',
       leaseMs: 60_000,
     });

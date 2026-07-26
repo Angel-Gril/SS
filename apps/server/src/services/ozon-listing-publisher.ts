@@ -18,6 +18,9 @@ import {
   hashOzonListingPublishState,
   type SourceListingWorkflowService,
 } from './source-listing-workflow.js';
+import type {
+  ExtensionByokPublishAuthorizationInput,
+} from './extension-byok-publish-authorization.js';
 
 export interface CompiledOzonListingPublishRequest {
   publisherContractVersion: string;
@@ -148,6 +151,9 @@ export function createOzonListingPublisher(options: {
     requestPayload: Record<string, OzonPublishJson>;
     attempt: OzonPublishAttemptRecord;
   }): Promise<unknown>;
+  authorizeDraftMediaPublish(
+    input: ExtensionByokPublishAuthorizationInput,
+  ): Promise<unknown>;
   workerId: string;
   leaseMs?: number;
   acknowledgementRecoveryAttempts?: number;
@@ -243,6 +249,7 @@ export function createOzonListingPublisher(options: {
       actorUserId: string;
       expectedRevision: number;
       idempotencyKey: string;
+      requestingDeviceSessionId?: string;
     }): Promise<OzonPublishAttemptRecord> {
       if (!input.ownerUserId || input.actorUserId !== input.ownerUserId) {
         throw new OzonListingPublisherError(
@@ -258,8 +265,24 @@ export function createOzonListingPublisher(options: {
           'OZON_PUBLISH_DRAFT_NOT_FOUND', 'Listing draft was not found', 404,
         );
       }
+      const authorizationInput = {
+        ownerUserId: input.ownerUserId,
+        shopId: current.shopId,
+        workflowId: current.id,
+        assignments: current.media.assignments,
+        ...(input.requestingDeviceSessionId
+          ? { requestingDeviceSessionId: input.requestingDeviceSessionId }
+          : {}),
+      };
+      await options.authorizeDraftMediaPublish(authorizationInput);
       const draftStateHash = hashOzonListingPublishState(current);
-      const frozen = await options.workflow.recordPublishIntent(input);
+      const frozen = await options.workflow.recordPublishIntent({
+        draftId: input.draftId,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        expectedRevision: input.expectedRevision,
+        idempotencyKey: input.idempotencyKey,
+      });
       if (frozen.intent.payloadHash !== draftStateHash) {
         throw new OzonListingPublisherError(
           'OZON_PUBLISH_COMPILE_STALE', 'Publish intent does not match the compiled draft state', 409,
@@ -295,6 +318,11 @@ export function createOzonListingPublisher(options: {
       });
       if (prepared.attempt.state !== 'PREPARED') return prepared.attempt;
       const preparedAttempt: OzonPublishAttemptRecord = prepared.attempt;
+
+      await options.authorizeDraftMediaPublish({
+        ...authorizationInput,
+        assignments: frozen.draft.media.assignments,
+      });
 
       const claim = await options.attempts.claimSubmission({
         attemptId: preparedAttempt.id,

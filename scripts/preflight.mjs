@@ -169,9 +169,64 @@ const steps = [
     args: ['scripts/extension-byok-profile-store.test.mjs'],
   },
   {
+    name: 'extension BYOK device-session lifecycle contract',
+    command: 'node',
+    args: ['scripts/extension-byok-device-session-lifecycle.test.mjs'],
+  },
+  {
     name: 'extension BYOK exact-origin permission contract',
     command: 'node',
     args: ['scripts/extension-byok-permission-broker.test.mjs'],
+  },
+  {
+    name: 'extension BYOK permission readiness bridge contract',
+    command: 'node',
+    args: ['scripts/extension-byok-permission-readiness-bridge.test.mjs'],
+  },
+  {
+    name: 'extension BYOK Provider settings client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-provider-settings-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK Provider settings background handler contract',
+    command: 'node',
+    args: ['scripts/extension-byok-provider-settings-handler.test.mjs'],
+  },
+  {
+    name: 'extension BYOK Provider settings UI contract',
+    command: 'node',
+    args: ['scripts/extension-byok-provider-settings-ui.test.mjs'],
+  },
+  {
+    name: 'extension BYOK readiness handle cache contract',
+    command: 'node',
+    args: ['scripts/extension-byok-readiness-handle-cache.test.mjs'],
+  },
+  {
+    name: 'extension BYOK readiness client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-readiness-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK text-to-image client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-text-to-image-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK generated result vault contract',
+    command: 'node',
+    args: ['scripts/extension-byok-generated-result-vault.test.mjs'],
+  },
+  {
+    name: 'extension BYOK generated asset ingest client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-generated-asset-ingest-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK binary ingest transport contract',
+    command: 'node',
+    args: ['scripts/extension-byok-ingest-transport.test.mjs'],
   },
   {
     name: 'extension runtime message authorization contract',

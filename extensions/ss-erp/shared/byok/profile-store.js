@@ -17,6 +17,10 @@
   var HostArray = global.Array || Array;
   var HostObject = global.Object || Object;
   var HostJSON = global.JSON || JSON;
+  var UNCERTAIN_PROBE_CONTRACT_VERSION = 'extension-byok-uncertain-probe/v1';
+  var PROVIDER_DISPATCH_CONTRACT_VERSION = 'extension-byok-provider-dispatch/v1';
+  var MAX_UNCERTAIN_PROBES_PER_PROFILE = 12;
+  var MAX_PROVIDER_DISPATCHES = 100;
 
   function storeError(code, message) {
     var result = new Error(message || code);
@@ -149,10 +153,12 @@
         if (!isRecord(entry)
           || typeof entry.profileIdentity !== 'string'
           || !entry.profileIdentity
-          || entry.profileIdentity.length > 500) return;
+          || entry.profileIdentity.length > 500
+          || !credentialRevision(entry.credentialRevision)) return;
         result[id] = {
           profileIdentity: entry.profileIdentity,
           apiKey: normalizeApiKey(entry.apiKey),
+          credentialRevision: entry.credentialRevision,
         };
       } catch {
         // Invalid/corrupt secrets are not returned and are removed on the next write.
@@ -175,20 +181,191 @@
           if (!isRecord(candidate)) return;
           var identity = typeof candidate.profileIdentity === 'string'
             ? candidate.profileIdentity : '';
-          if (!identity || !schema.isEvidenceCurrent(candidate, currentTime)) return;
+          var revision = credentialRevision(candidate.credentialRevision);
+          var projected = externalEvidence(candidate);
+          if (!identity || !revision || !schema.isEvidenceCurrent(projected, currentTime)) return;
           var operationKey = String(candidate.operation || '') + '\u0000' + String(candidate.requestMode || '');
-          byIdentity[operationKey] = clone(candidate);
+          byIdentity[operationKey] = Object.assign({}, clone(projected), {
+            credentialRevision: revision,
+          });
         } catch {
           // Invalid evidence is stale by definition.
         }
       });
       var bounded = hostArray();
       Object.keys(byIdentity).forEach(function (entry) {
-        bounded.push(externalEvidence(byIdentity[entry]));
+        bounded.push(byIdentity[entry]);
       });
       if (bounded.length) result[id] = bounded;
     });
     return result;
+  }
+
+  function normalizeProbeInput(value) {
+    var keys = [
+      'profileIdentity', 'operation', 'requestMode', 'policyRevision',
+      'idempotencyKey', 'requestHash',
+    ];
+    if (!isRecord(value) || Object.keys(value).length !== keys.length
+      || Object.keys(value).some(function (key) { return !keys.includes(key); })
+      || typeof value.profileIdentity !== 'string'
+      || !value.profileIdentity || value.profileIdentity.length > 500
+      || !schema.OPERATIONS.includes(value.operation)
+      || !schema.REQUEST_MODES.includes(value.requestMode)
+      || typeof value.policyRevision !== 'string'
+      || !value.policyRevision || value.policyRevision.length > 200
+      || /[\u0000-\u001f\u007f]/u.test(value.policyRevision)
+      || !profileId(value.idempotencyKey)
+      || profileId(value.idempotencyKey) !== value.idempotencyKey
+      || typeof value.requestHash !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(value.requestHash)) {
+      throw storeError(
+        'SS_ERP_BYOK_CAPABILITY_PROBE_INVALID',
+        'Provider capability probe identity is invalid',
+      );
+    }
+    return {
+      profileIdentity: value.profileIdentity,
+      operation: value.operation,
+      requestMode: value.requestMode,
+      policyRevision: value.policyRevision,
+      idempotencyKey: value.idempotencyKey,
+      requestHash: value.requestHash,
+    };
+  }
+
+  function normalizeUncertainProbeMap(raw) {
+    var result = Object.create(null);
+    if (!isRecord(raw)) return result;
+    Object.keys(raw).forEach(function (key) {
+      var id = profileId(key);
+      if (!id) return;
+      var rows = Array.isArray(raw[key]) ? raw[key] : [];
+      var byAuthority = Object.create(null);
+      rows.forEach(function (candidate) {
+        try {
+          if (!isRecord(candidate)
+            || candidate.contractVersion !== UNCERTAIN_PROBE_CONTRACT_VERSION
+            || !['PENDING', 'UNKNOWN_OUTCOME'].includes(candidate.state)) return;
+          var input = normalizeProbeInput({
+            profileIdentity: candidate.profileIdentity,
+            operation: candidate.operation,
+            requestMode: candidate.requestMode,
+            policyRevision: candidate.policyRevision,
+            idempotencyKey: candidate.idempotencyKey,
+            requestHash: candidate.requestHash,
+          });
+          var revision = credentialRevision(candidate.credentialRevision);
+          if (!revision) return;
+          var authorityKey = input.profileIdentity + '\u0001' + revision + '\u0001'
+            + input.operation + '\u0001' + input.requestMode;
+          var existing = byAuthority[authorityKey];
+          if (!existing || candidate.state === 'UNKNOWN_OUTCOME') {
+            byAuthority[authorityKey] = Object.assign({}, input, {
+              contractVersion: UNCERTAIN_PROBE_CONTRACT_VERSION,
+              credentialRevision: revision,
+              state: candidate.state,
+            });
+          }
+        } catch {
+          // Corrupt guards cannot grant permission to retry a Provider POST.
+        }
+      });
+      var normalized = Object.keys(byAuthority).map(function (authorityKey) {
+        return byAuthority[authorityKey];
+      }).slice(0, MAX_UNCERTAIN_PROBES_PER_PROFILE);
+      if (normalized.length) result[id] = normalized;
+    });
+    return result;
+  }
+
+  function normalizeProviderDispatchInput(value) {
+    var keys = ['profileIdentity', 'operation', 'requestMode', 'idempotencyKey', 'requestHash'];
+    if (!isRecord(value) || Object.keys(value).length !== keys.length
+      || Object.keys(value).some(function (key) { return !keys.includes(key); })
+      || typeof value.profileIdentity !== 'string'
+      || !value.profileIdentity || value.profileIdentity.length > 500
+      || !schema.OPERATIONS.includes(value.operation)
+      || !schema.REQUEST_MODES.includes(value.requestMode)
+      || !profileId(value.idempotencyKey)
+      || profileId(value.idempotencyKey) !== value.idempotencyKey
+      || typeof value.requestHash !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(value.requestHash)) {
+      throw storeError(
+        'SS_ERP_BYOK_PROVIDER_DISPATCH_GUARD_INVALID',
+        'Provider dispatch identity is invalid',
+      );
+    }
+    return {
+      profileIdentity: value.profileIdentity,
+      operation: value.operation,
+      requestMode: value.requestMode,
+      idempotencyKey: value.idempotencyKey,
+      requestHash: value.requestHash,
+    };
+  }
+
+  function normalizeProviderDispatchMap(raw) {
+    var result = Object.create(null);
+    var corrupt = false;
+    if (raw === undefined) return { values: result, corrupt: false };
+    if (!isRecord(raw)) return { values: result, corrupt: true };
+    if (!Object.keys(raw).length) return { values: result, corrupt: true };
+    var total = 0;
+    Object.keys(raw).forEach(function (key) {
+      if (total >= MAX_PROVIDER_DISPATCHES) {
+        corrupt = true;
+        return;
+      }
+      var id = profileId(key);
+      if (!id || !Array.isArray(raw[key]) || !raw[key].length) {
+        corrupt = true;
+        return;
+      }
+      var rows = hostArray();
+      raw[key].forEach(function (candidate) {
+        if (total >= MAX_PROVIDER_DISPATCHES) {
+          corrupt = true;
+          return;
+        }
+        try {
+          if (!isRecord(candidate)
+            || candidate.contractVersion !== PROVIDER_DISPATCH_CONTRACT_VERSION) {
+            corrupt = true;
+            return;
+          }
+          var input = normalizeProviderDispatchInput({
+            profileIdentity: candidate.profileIdentity,
+            operation: candidate.operation,
+            requestMode: candidate.requestMode,
+            idempotencyKey: candidate.idempotencyKey,
+            requestHash: candidate.requestHash,
+          });
+          var revision = credentialRevision(candidate.credentialRevision);
+          if (!revision) {
+            corrupt = true;
+            return;
+          }
+          if (rows.some(function (row) {
+            return row.credentialRevision === revision
+              && row.idempotencyKey === input.idempotencyKey;
+          })) {
+            corrupt = true;
+            return;
+          }
+          rows.push(Object.assign({}, input, {
+            contractVersion: PROVIDER_DISPATCH_CONTRACT_VERSION,
+            credentialRevision: revision,
+          }));
+          total += 1;
+        } catch {
+          corrupt = true;
+        }
+      });
+      if (rows.length) result[id] = rows;
+      else corrupt = true;
+    });
+    return { values: result, corrupt: corrupt };
   }
 
   function findProfile(profiles, id) {
@@ -217,17 +394,131 @@
   function matchingSecret(entry, identity) {
     return isRecord(entry)
       && entry.profileIdentity === identity
-      && typeof entry.apiKey === 'string';
+      && typeof entry.apiKey === 'string'
+      && typeof entry.credentialRevision === 'string'
+      && /^[a-f0-9]{64}$/u.test(entry.credentialRevision);
+  }
+
+  function credentialRevision(value) {
+    return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value) ? value : '';
+  }
+
+  function unknownProbeError(replayed) {
+    var error = storeError(
+      'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME',
+      'A Provider capability probe has an unknown outcome',
+    );
+    error.outcome = 'UNKNOWN_OUTCOME';
+    error.automaticRetryAllowed = false;
+    error.replayed = replayed === true;
+    return error;
+  }
+
+  function unknownProviderDispatchError(replayed) {
+    var error = storeError(
+      'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME',
+      'A Provider generation dispatch already exists in this browser session',
+    );
+    error.outcome = 'UNKNOWN_OUTCOME';
+    error.automaticRetryAllowed = false;
+    error.replayed = replayed === true;
+    return error;
+  }
+
+  function providerDispatchConflictError() {
+    var error = storeError(
+      'SS_ERP_BYOK_PROVIDER_IDEMPOTENCY_CONFLICT',
+      'The Provider idempotency key is bound to a different request',
+    );
+    error.outcome = 'FAILED_FINAL';
+    error.automaticRetryAllowed = false;
+    return error;
+  }
+
+  function providerDispatchLimitError() {
+    var error = storeError(
+      'SS_ERP_BYOK_PROVIDER_DISPATCH_LIMIT',
+      'The browser session Provider dispatch limit has been reached',
+    );
+    error.outcome = 'FAILED_RETRYABLE';
+    return error;
+  }
+
+  function sameProbeAuthority(row, input, revision) {
+    return isRecord(row)
+      && row.profileIdentity === input.profileIdentity
+      && row.credentialRevision === revision
+      && row.operation === input.operation
+      && row.requestMode === input.requestMode;
+  }
+
+  function sameProbeRequest(row, input, revision) {
+    return sameProbeAuthority(row, input, revision)
+      && row.idempotencyKey === input.idempotencyKey
+      && row.policyRevision === input.policyRevision
+      && row.requestHash === input.requestHash;
   }
 
   function createStore(options) {
     var localStorage = options && options.localStorage;
     var sessionStorage = options && options.sessionStorage;
+    var onCredentialAuthorityChanged = options && options.onCredentialAuthorityChanged;
+    if (onCredentialAuthorityChanged !== undefined
+      && typeof onCredentialAuthorityChanged !== 'function') {
+      throw storeError(
+        'SS_ERP_BYOK_CREDENTIAL_INVALIDATION_UNAVAILABLE',
+        'Generated-result invalidation is unavailable',
+      );
+    }
     var now = options && typeof options.now === 'function' ? options.now : function () { return new Date(); };
+    var randomValues = options && typeof options.randomValues === 'function'
+      ? options.randomValues
+      : function (bytes) {
+          if (!global.crypto || typeof global.crypto.getRandomValues !== 'function') {
+            throw storeError(
+              'SS_ERP_BYOK_CREDENTIAL_REVISION_UNAVAILABLE',
+              'Secure credential revision generation is unavailable',
+            );
+          }
+          return global.crypto.getRandomValues(bytes);
+        };
     assertStorage(localStorage, 'SS_ERP_BYOK_LOCAL_STORAGE_UNAVAILABLE');
     // Do not eagerly require session storage: metadata can still be read when Chrome
     // has not exposed the session area, but every secret/evidence operation fails closed.
     var writeQueue = Promise.resolve();
+    var sessionGeneration = 0;
+
+    function invalidateCredentialAuthority(reason, id) {
+      if (typeof onCredentialAuthorityChanged !== 'function') return;
+      try {
+        var result = onCredentialAuthorityChanged({ reason: reason, profileId: id || null });
+        if (result && typeof result.then === 'function') {
+          throw new Error('credential invalidation must be synchronous');
+        }
+      } catch (_error) {
+        throw storeError(
+          'SS_ERP_BYOK_CREDENTIAL_INVALIDATION_UNAVAILABLE',
+          'Generated results could not be invalidated',
+        );
+      }
+    }
+
+    function createCredentialRevision() {
+      var bytes = new Uint8Array(32);
+      randomValues(bytes);
+      return Array.from(bytes).map(function (byte) {
+        return byte.toString(16).padStart(2, '0');
+      }).join('');
+    }
+
+    function assertSessionGeneration(expected) {
+      if (expected !== sessionGeneration) {
+        throw storeError(
+          'SS_ERP_BYOK_SESSION_INVALIDATED',
+          'The BYOK browser session changed before the operation completed',
+        );
+      }
+    }
 
     function enqueue(operation) {
       var next = writeQueue.then(operation, operation);
@@ -253,8 +544,13 @@
       var stored = await storage.get([
         schema.SESSION_SECRETS_STORAGE_KEY,
         schema.SESSION_EVIDENCE_STORAGE_KEY,
+        schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY,
+        schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY,
       ]);
       var currentTime = nowDate(now);
+      var providerDispatchState = normalizeProviderDispatchMap(
+        stored && stored[schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY],
+      );
       return {
         storage: storage,
         secrets: normalizeSecretMap(stored && stored[schema.SESSION_SECRETS_STORAGE_KEY]),
@@ -262,31 +558,64 @@
           stored && stored[schema.SESSION_EVIDENCE_STORAGE_KEY],
           currentTime,
         ),
+        uncertainProbes: normalizeUncertainProbeMap(
+          stored && stored[schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY],
+        ),
+        providerDispatches: providerDispatchState.values,
+        providerDispatchesCorrupt: providerDispatchState.corrupt,
         currentTime: currentTime,
       };
     }
 
-    async function writeSessionMaps(maps) {
+    async function writeSessionMaps(maps, expectedGeneration) {
+      assertSessionGeneration(expectedGeneration);
+      if (maps.providerDispatchesCorrupt === true) {
+        throw unknownProviderDispatchError(true);
+      }
       var patch = {};
       if (maps.secrets && Object.keys(maps.secrets).length) {
         patch[schema.SESSION_SECRETS_STORAGE_KEY] = maps.secrets;
       } else {
         await maps.storage.remove([schema.SESSION_SECRETS_STORAGE_KEY]);
+        assertSessionGeneration(expectedGeneration);
       }
       if (maps.evidence && Object.keys(maps.evidence).length) {
         patch[schema.SESSION_EVIDENCE_STORAGE_KEY] = maps.evidence;
       } else {
         await maps.storage.remove([schema.SESSION_EVIDENCE_STORAGE_KEY]);
+        assertSessionGeneration(expectedGeneration);
       }
-      if (Object.keys(patch).length) await maps.storage.set(patch);
+      if (maps.uncertainProbes && Object.keys(maps.uncertainProbes).length) {
+        patch[schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY] = maps.uncertainProbes;
+      } else {
+        await maps.storage.remove([schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY]);
+        assertSessionGeneration(expectedGeneration);
+      }
+      if (maps.providerDispatches && Object.keys(maps.providerDispatches).length) {
+        patch[schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY] = maps.providerDispatches;
+      } else {
+        await maps.storage.remove([schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY]);
+        assertSessionGeneration(expectedGeneration);
+      }
+      if (Object.keys(patch).length) {
+        assertSessionGeneration(expectedGeneration);
+        await maps.storage.set(patch);
+        assertSessionGeneration(expectedGeneration);
+      }
     }
 
     async function saveProfile(input) {
+      var expectedGeneration = sessionGeneration;
       return enqueue(async function () {
         var next = schema.publicProfile(input);
         var profiles = await readProfiles();
         var previous = findProfile(profiles, next.id);
         var changedBinding = Boolean(previous && !sameBinding(previous, next));
+        var removedOperations = previous
+          ? previous.allowedOperations.filter(function (operation) {
+              return !next.allowedOperations.includes(operation);
+            })
+          : [];
         var replaced = false;
         var nextProfiles = profiles.map(function (candidate) {
           if (candidate.id !== next.id) return candidate;
@@ -297,11 +626,27 @@
         if (nextProfiles.length > schema.MAX_PROFILE_COUNT) {
           throw storeError('SS_ERP_BYOK_PROFILE_LIMIT', 'Too many Provider profiles');
         }
-        if (changedBinding) {
+        if (changedBinding || removedOperations.length) {
+          invalidateCredentialAuthority('profile_authority_changed', next.id);
           var maps = await readSessionMaps();
-          delete maps.secrets[next.id];
-          delete maps.evidence[next.id];
-          await writeSessionMaps(maps);
+          if (changedBinding) {
+            delete maps.secrets[next.id];
+            delete maps.evidence[next.id];
+            delete maps.uncertainProbes[next.id];
+            delete maps.providerDispatches[next.id];
+          } else {
+            var remainingEvidence = (maps.evidence[next.id] || []).filter(function (candidate) {
+              return !removedOperations.includes(candidate.operation);
+            });
+            if (remainingEvidence.length) maps.evidence[next.id] = remainingEvidence;
+            else delete maps.evidence[next.id];
+            var remainingDispatches = (maps.providerDispatches[next.id] || []).filter(function (candidate) {
+              return !removedOperations.includes(candidate.operation);
+            });
+            if (remainingDispatches.length) maps.providerDispatches[next.id] = remainingDispatches;
+            else delete maps.providerDispatches[next.id];
+          }
+          await writeSessionMaps(maps, expectedGeneration);
         }
         // Clear session-bound authority before committing the new binding. If the
         // metadata write then fails, the old profile merely requires key re-entry;
@@ -340,20 +685,32 @@
         throw error;
       }
       var identity = schema.profileIdentity(profile);
-      var hasKey = matchingSecret(maps.secrets[profile.id], identity);
+      var secret = maps.secrets[profile.id];
+      var hasKey = matchingSecret(secret, identity);
       var evidence = (maps.evidence[profile.id] || []).filter(function (candidate) {
+        if (!hasKey || candidate.credentialRevision !== secret.credentialRevision) return false;
         try {
-          return schema.normalizeEvidence(candidate, identity, maps.currentTime);
+          var normalized = schema.normalizeEvidence(
+            externalEvidence(candidate),
+            identity,
+            maps.currentTime,
+          );
+          return profile.allowedOperations.includes(normalized.operation);
         } catch {
           return false;
         }
       }).map(function (candidate) {
-        return externalEvidence(schema.normalizeEvidence(candidate, identity, maps.currentTime));
+        return externalEvidence(schema.normalizeEvidence(
+          externalEvidence(candidate),
+          identity,
+          maps.currentTime,
+        ));
       });
       return publicState(profile, hasKey, hasKey ? evidence : []);
     }
 
     async function setApiKey(id, value) {
+      var expectedGeneration = sessionGeneration;
       return enqueue(async function () {
         var normalizedId = profileId(id);
         // Check the secret boundary before any metadata lookup.  A missing session
@@ -364,20 +721,21 @@
           throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         }
         var key = normalizeApiKey(value);
+        invalidateCredentialAuthority('session_key_set', normalizedId);
         var maps = await readSessionMaps();
         maps.storage = session;
         var identity = schema.profileIdentity(profile);
-        var previous = maps.secrets[normalizedId];
         maps.secrets[normalizedId] = {
           profileIdentity: identity,
           apiKey: key,
+          credentialRevision: createCredentialRevision(),
         };
-        // A capability probe is evidence for a particular credential context.  A
-        // changed key must be probed again even when endpoint/model stay the same.
-        if (!matchingSecret(previous, identity) || previous.apiKey !== key) {
-          delete maps.evidence[normalizedId];
-        }
-        await writeSessionMaps(maps);
+        // Every key load establishes a fresh credential authority, even if the
+        // opaque bytes happen to be equal to the previous value.
+        delete maps.evidence[normalizedId];
+        delete maps.uncertainProbes[normalizedId];
+        delete maps.providerDispatches[normalizedId];
+        await writeSessionMaps(maps, expectedGeneration);
         var result = hostObject();
         result.profileId = normalizedId;
         result.hasKey = true;
@@ -386,25 +744,311 @@
     }
 
     async function readSecretForBackground(id) {
-      var normalizedId = profileId(id);
-      if (!normalizedId) return null;
-      var profile = await getProfile(normalizedId);
-      if (!profile) return null;
-      var maps = await readSessionMaps();
-      var identity = schema.profileIdentity(profile);
-      var entry = maps.secrets[normalizedId];
-      return matchingSecret(entry, identity) ? entry.apiKey : null;
+      var snapshot = await getCredentialSnapshotForBackground(id);
+      return snapshot ? snapshot.apiKey : null;
     }
 
-    async function setCapabilityEvidence(id, input) {
+    async function getCredentialSnapshotForBackground(id) {
+      var expectedGeneration = sessionGeneration;
       return enqueue(async function () {
         var normalizedId = profileId(id);
+        if (!normalizedId) return null;
+        var profile = await getProfile(normalizedId);
+        if (!profile) return null;
+        var maps = await readSessionMaps();
+        var identity = schema.profileIdentity(profile);
+        var secret = maps.secrets[normalizedId];
+        var evidence = hostArray();
+        var hasSecret = matchingSecret(secret, identity);
+        if (hasSecret) {
+          (maps.evidence[normalizedId] || []).forEach(function (candidate) {
+            if (candidate.credentialRevision !== secret.credentialRevision) return;
+            try {
+              var normalized = schema.normalizeEvidence(
+                externalEvidence(candidate),
+                identity,
+                maps.currentTime,
+              );
+              if (profile.allowedOperations.includes(normalized.operation)) {
+                evidence.push(externalEvidence(normalized));
+              }
+            } catch {
+              // Evidence from another profile/key authority is not current.
+            }
+          });
+        }
+        assertSessionGeneration(expectedGeneration);
+        var result = hostObject();
+        result.profile = externalProfile(profile);
+        result.apiKey = hasSecret ? secret.apiKey : null;
+        result.credentialRevision = hasSecret ? secret.credentialRevision : null;
+        result.evidence = evidence;
+        return result;
+      });
+    }
+
+    async function assertCredentialRevisionForBackground(
+      id,
+      expectedProfileIdentity,
+      expectedCredentialRevision,
+    ) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!normalizedId || typeof expectedProfileIdentity !== 'string' || !expectedRevision) {
+          throw storeError('SS_ERP_BYOK_CREDENTIAL_AUTHORITY_STALE');
+        }
+        var profile = await getProfile(normalizedId);
+        var maps = await readSessionMaps();
+        var identity = profile && schema.profileIdentity(profile);
+        var secret = maps.secrets[normalizedId];
+        assertSessionGeneration(expectedGeneration);
+        if (!profile || identity !== expectedProfileIdentity
+          || !matchingSecret(secret, identity)
+          || secret.credentialRevision !== expectedRevision) {
+          throw storeError(
+            'SS_ERP_BYOK_CREDENTIAL_AUTHORITY_STALE',
+            'Provider credential changed before the result was accepted',
+          );
+        }
+        var result = hostObject();
+        result.current = true;
+        return result;
+      });
+    }
+
+    async function commitWithCredentialRevisionForBackground(
+      id,
+      expectedProfileIdentity,
+      expectedCredentialRevision,
+      commit,
+    ) {
+      if (typeof commit !== 'function') {
+        throw storeError('SS_ERP_BYOK_CREDENTIAL_AUTHORITY_STALE');
+      }
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        var profile = normalizedId ? await getProfile(normalizedId) : null;
+        var maps = await readSessionMaps();
+        var identity = profile && schema.profileIdentity(profile);
+        var secret = maps.secrets[normalizedId];
+        assertSessionGeneration(expectedGeneration);
+        if (!profile || identity !== expectedProfileIdentity
+          || !matchingSecret(secret, identity)
+          || secret.credentialRevision !== expectedRevision) {
+          throw storeError(
+            'SS_ERP_BYOK_CREDENTIAL_AUTHORITY_STALE',
+            'Provider credential changed before the result was committed',
+          );
+        }
+        return commit();
+      });
+    }
+
+    async function beginProviderDispatch(id, inputValue, expectedCredentialRevision) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var input = normalizeProviderDispatchInput(inputValue);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!normalizedId || !expectedRevision) {
+          throw storeError('SS_ERP_BYOK_PROVIDER_DISPATCH_GUARD_INVALID');
+        }
+        var profile = await getProfile(normalizedId);
+        if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
+        var maps = await readSessionMaps();
+        if (maps.providerDispatchesCorrupt) throw unknownProviderDispatchError(true);
+        var identity = schema.profileIdentity(profile);
+        var secret = maps.secrets[normalizedId];
+        if (input.profileIdentity !== identity
+          || !matchingSecret(secret, identity)
+          || secret.credentialRevision !== expectedRevision
+          || !profile.allowedOperations.includes(input.operation)) {
+          throw storeError(
+            'SS_ERP_BYOK_PROVIDER_DISPATCH_GUARD_INVALID',
+            'Provider dispatch credential context is stale',
+          );
+        }
+        var rows = maps.providerDispatches[normalizedId] || [];
+        var existing = rows.find(function (candidate) {
+          return candidate.profileIdentity === identity
+            && candidate.credentialRevision === expectedRevision
+            && candidate.idempotencyKey === input.idempotencyKey;
+        });
+        if (existing) {
+          if (existing.operation !== input.operation
+            || existing.requestMode !== input.requestMode
+            || existing.requestHash !== input.requestHash) {
+            throw providerDispatchConflictError();
+          }
+          throw unknownProviderDispatchError(true);
+        }
+        var total = Object.keys(maps.providerDispatches).reduce(function (count, profileKey) {
+          return count + (maps.providerDispatches[profileKey] || []).length;
+        }, 0);
+        if (total >= MAX_PROVIDER_DISPATCHES) throw providerDispatchLimitError();
+        rows.push(Object.assign({}, input, {
+          contractVersion: PROVIDER_DISPATCH_CONTRACT_VERSION,
+          credentialRevision: expectedRevision,
+        }));
+        maps.providerDispatches[normalizedId] = rows;
+        await writeSessionMaps(maps, expectedGeneration);
+        var result = hostObject();
+        result.started = true;
+        return result;
+      });
+    }
+
+    function requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision) {
+      var identity = schema.profileIdentity(profile);
+      var secret = maps.secrets[normalizedId];
+      if (input.profileIdentity !== identity
+        || !matchingSecret(secret, identity)
+        || secret.credentialRevision !== expectedRevision
+        || !profile.allowedOperations.includes(input.operation)) {
+        throw storeError(
+          'SS_ERP_BYOK_CAPABILITY_PROBE_INVALID',
+          'Provider capability probe credential context is stale',
+        );
+      }
+    }
+
+    async function beginCapabilityProbe(id, inputValue, expectedCredentialRevision) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var input = normalizeProbeInput(inputValue);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!normalizedId || !expectedRevision) {
+          throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+        }
+        var profile = await getProfile(normalizedId);
+        if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
+        var maps = await readSessionMaps();
+        requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
+        var rows = maps.uncertainProbes[normalizedId] || [];
+        if (rows.some(function (candidate) {
+          return sameProbeAuthority(candidate, input, expectedRevision);
+        })) {
+          throw unknownProbeError(true);
+        }
+        var currentEvidence = (maps.evidence[normalizedId] || []).find(function (candidate) {
+          return candidate.credentialRevision === expectedRevision
+            && candidate.operation === input.operation
+            && candidate.requestMode === input.requestMode
+            && candidate.policyRevision === input.policyRevision;
+        });
+        if (currentEvidence) {
+          try {
+            var replayedEvidence = schema.normalizeEvidence(
+              externalEvidence(currentEvidence),
+              input.profileIdentity,
+              maps.currentTime,
+            );
+            var replay = hostObject();
+            replay.started = false;
+            replay.replayed = true;
+            replay.evidence = externalEvidence(replayedEvidence);
+            return replay;
+          } catch {
+            // Invalid or expired evidence does not authorize skipping a probe.
+          }
+        }
+        rows.push(Object.assign({}, input, {
+          contractVersion: UNCERTAIN_PROBE_CONTRACT_VERSION,
+          credentialRevision: expectedRevision,
+          state: 'PENDING',
+        }));
+        maps.uncertainProbes[normalizedId] = rows.slice(-MAX_UNCERTAIN_PROBES_PER_PROFILE);
+        await writeSessionMaps(maps, expectedGeneration);
+        var result = hostObject();
+        result.started = true;
+        return result;
+      });
+    }
+
+    async function markCapabilityProbeUncertain(id, inputValue, expectedCredentialRevision) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var input = normalizeProbeInput(inputValue);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!normalizedId || !expectedRevision) {
+          throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+        }
+        var profile = await getProfile(normalizedId);
+        if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
+        var maps = await readSessionMaps();
+        requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
+        var found = false;
+        var rows = (maps.uncertainProbes[normalizedId] || []).map(function (candidate) {
+          if (!sameProbeRequest(candidate, input, expectedRevision)) return candidate;
+          found = true;
+          return Object.assign({}, candidate, { state: 'UNKNOWN_OUTCOME' });
+        });
+        if (!found) throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+        maps.uncertainProbes[normalizedId] = rows;
+        await writeSessionMaps(maps, expectedGeneration);
+        var result = hostObject();
+        result.recorded = true;
+        return result;
+      });
+    }
+
+    async function discardPendingCapabilityProbe(id, inputValue, expectedCredentialRevision) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var input = normalizeProbeInput(inputValue);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!normalizedId || !expectedRevision) {
+          throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+        }
+        var profile = await getProfile(normalizedId);
+        if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
+        var maps = await readSessionMaps();
+        requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
+        var rows = maps.uncertainProbes[normalizedId] || [];
+        var matched = rows.find(function (candidate) {
+          return sameProbeRequest(candidate, input, expectedRevision);
+        });
+        if (matched && matched.state === 'UNKNOWN_OUTCOME') throw unknownProbeError(true);
+        var remaining = rows.filter(function (candidate) {
+          return !sameProbeRequest(candidate, input, expectedRevision);
+        });
+        if (remaining.length) maps.uncertainProbes[normalizedId] = remaining;
+        else delete maps.uncertainProbes[normalizedId];
+        await writeSessionMaps(maps, expectedGeneration);
+        var result = hostObject();
+        result.cleared = Boolean(matched);
+        return result;
+      });
+    }
+
+    async function setCapabilityEvidence(
+      id,
+      input,
+      expectedCredentialRevision,
+      completedProbeValue,
+    ) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        var expectedRevision = credentialRevision(expectedCredentialRevision);
+        if (!expectedRevision) {
+          throw storeError('SS_ERP_BYOK_CAPABILITY_EVIDENCE_INVALID', 'Provider credential revision is missing');
+        }
         assertSessionStorage(sessionStorage);
         var profile = await getProfile(normalizedId);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         var maps = await readSessionMaps();
         var identity = schema.profileIdentity(profile);
-        if (!matchingSecret(maps.secrets[normalizedId], identity)) {
+        var secret = maps.secrets[normalizedId];
+        if (!matchingSecret(secret, identity)
+          || secret.credentialRevision !== expectedRevision) {
           throw storeError('SS_ERP_BYOK_CAPABILITY_EVIDENCE_INVALID', 'Provider credential context is missing');
         }
         var evidence = schema.normalizeEvidence(input, identity, maps.currentTime);
@@ -414,22 +1058,78 @@
         var rows = (maps.evidence[normalizedId] || []).filter(function (candidate) {
           return candidate.operation !== evidence.operation || candidate.requestMode !== evidence.requestMode;
         });
-        rows.push(evidence);
+        rows.push(Object.assign({}, evidence, { credentialRevision: expectedRevision }));
         maps.evidence[normalizedId] = rows;
-        await writeSessionMaps(maps);
+        if (completedProbeValue !== undefined) {
+          var completedProbe = normalizeProbeInput(completedProbeValue);
+          if (completedProbe.profileIdentity !== identity
+            || completedProbe.operation !== evidence.operation
+            || completedProbe.requestMode !== evidence.requestMode
+            || completedProbe.policyRevision !== evidence.policyRevision) {
+            throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+          }
+          var probeRows = maps.uncertainProbes[normalizedId] || [];
+          var pending = probeRows.find(function (candidate) {
+            return sameProbeRequest(candidate, completedProbe, expectedRevision);
+          });
+          if (!pending || pending.state !== 'PENDING') {
+            if (pending && pending.state === 'UNKNOWN_OUTCOME') throw unknownProbeError(true);
+            throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
+          }
+          var remainingProbes = probeRows.filter(function (candidate) {
+            return !sameProbeRequest(candidate, completedProbe, expectedRevision);
+          });
+          if (remainingProbes.length) maps.uncertainProbes[normalizedId] = remainingProbes;
+          else delete maps.uncertainProbes[normalizedId];
+        }
+        await writeSessionMaps(maps, expectedGeneration);
         return externalEvidence(evidence);
       });
     }
 
     async function clearSession() {
+      sessionGeneration += 1;
       return enqueue(async function () {
+        invalidateCredentialAuthority('session_cleared', null);
         var storage = assertSessionStorage(sessionStorage);
         await storage.remove([
           schema.SESSION_SECRETS_STORAGE_KEY,
           schema.SESSION_EVIDENCE_STORAGE_KEY,
+          schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY,
+          schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY,
         ]);
         var result = hostObject();
         result.cleared = true;
+        return result;
+      });
+    }
+
+    async function clearApiKey(id) {
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var normalizedId = profileId(id);
+        assertSessionStorage(sessionStorage);
+        var profile = normalizedId ? await getProfile(normalizedId) : null;
+        if (!profile) {
+          throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
+        }
+        invalidateCredentialAuthority('session_key_cleared', normalizedId);
+        var maps = await readSessionMaps();
+        var cleared = Boolean(
+          maps.secrets[normalizedId]
+          || maps.evidence[normalizedId]
+          || maps.uncertainProbes[normalizedId]
+          || maps.providerDispatches[normalizedId],
+        );
+        delete maps.secrets[normalizedId];
+        delete maps.evidence[normalizedId];
+        delete maps.uncertainProbes[normalizedId];
+        delete maps.providerDispatches[normalizedId];
+        await writeSessionMaps(maps, expectedGeneration);
+        var result = hostObject();
+        result.profileId = normalizedId;
+        result.hasKey = false;
+        result.cleared = cleared;
         return result;
       });
     }
@@ -439,6 +1139,7 @@
     }
 
     async function deleteProfile(id) {
+      var expectedGeneration = sessionGeneration;
       return enqueue(async function () {
         var normalizedId = profileId(id);
         if (!normalizedId) {
@@ -448,10 +1149,15 @@
         }
         var profiles = await readProfiles();
         var next = profiles.filter(function (candidate) { return candidate.id !== normalizedId; });
+        if (next.length !== profiles.length) {
+          invalidateCredentialAuthority('profile_deleted', normalizedId);
+        }
         var maps = await readSessionMaps();
         delete maps.secrets[normalizedId];
         delete maps.evidence[normalizedId];
-        await writeSessionMaps(maps);
+        delete maps.uncertainProbes[normalizedId];
+        delete maps.providerDispatches[normalizedId];
+        await writeSessionMaps(maps, expectedGeneration);
         if (next.length !== profiles.length) await writeProfiles(next);
         var result = hostObject();
         result.deleted = next.length !== profiles.length;
@@ -471,7 +1177,15 @@
       getPublicState: getPublicState,
       setApiKey: setApiKey,
       readSecretForBackground: readSecretForBackground,
+      getCredentialSnapshotForBackground: getCredentialSnapshotForBackground,
+      assertCredentialRevisionForBackground: assertCredentialRevisionForBackground,
+      commitWithCredentialRevisionForBackground: commitWithCredentialRevisionForBackground,
+      beginProviderDispatch: beginProviderDispatch,
+      beginCapabilityProbe: beginCapabilityProbe,
+      markCapabilityProbeUncertain: markCapabilityProbeUncertain,
+      discardPendingCapabilityProbe: discardPendingCapabilityProbe,
       setCapabilityEvidence: setCapabilityEvidence,
+      clearApiKey: clearApiKey,
       clearSession: clearSession,
       disconnectDevice: disconnectDevice,
       deleteProfile: deleteProfile,

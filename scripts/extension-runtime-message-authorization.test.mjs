@@ -87,13 +87,29 @@ function verifiedReadiness(api, binding, overrides = {}) {
 test('adds closed workbench and Provider-settings sender matrices without widening legacy pages', () => {
   const { api, policy } = loadApi();
   const settingsList = api.MESSAGE_TYPES.PROVIDER_SETTINGS.LIST_PROFILES;
+  const setupContext = api.MESSAGE_TYPES.PROVIDER_SETTINGS.GET_SETUP_CONTEXT;
+  const preparePermission = api.MESSAGE_TYPES.PROVIDER_SETTINGS.PREPARE_PERMISSION;
   const setKey = api.MESSAGE_TYPES.PROVIDER_SETTINGS.SET_SESSION_KEY;
+  const settingsReadiness = api.MESSAGE_TYPES.PROVIDER_SETTINGS.GET_READINESS;
   const workbenchState = api.MESSAGE_TYPES.WORKBENCH.GET_PUBLIC_STATE;
   const execute = api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER;
 
-  for (const type of [settingsList, setKey, workbenchState, execute]) {
+  for (const type of [
+    setupContext,
+    settingsList,
+    setKey,
+    settingsReadiness,
+    preparePermission,
+    workbenchState,
+    execute,
+  ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
   }
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    setupContext,
+    extensionSender('/pages/ai-provider-settings.html'),
+    extensionId,
+  ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     settingsList,
     extensionSender('/pages/ai-provider-settings.html'),
@@ -101,6 +117,16 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     setKey,
+    extensionSender('/pages/ai-provider-settings.html'),
+    extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    settingsReadiness,
+    extensionSender('/pages/ai-provider-settings.html'),
+    extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    preparePermission,
     extensionSender('/pages/ai-provider-settings.html'),
     extensionId,
   ), true);
@@ -464,7 +490,15 @@ test('ships the authorization module as a background-only security boundary', ()
     serviceWorkerSource,
     /forbiddenResponseValues:\s*globalThis\.SS_ERP_BYOK_RESPONSE_SECRET_VALUES/u,
   );
-  assert.match(serviceWorkerSource, /HANDLER_UNAVAILABLE|READINESS_UNAVAILABLE/u);
+  assert.match(serviceWorkerSource, /shared\/byok\/readiness-handle-cache\.js/u);
+  assert.match(serviceWorkerSource, /shared\/byok\/readiness-client\.js/u);
+  assert.match(serviceWorkerSource, /shared\/byok\/provider-settings-handler\.js/u);
+  assert.match(serviceWorkerSource, /installByokReadinessRuntime/u);
+  assert.match(
+    serviceWorkerSource,
+    /providerSettingsDispatcher\.handlers[\s\S]*MESSAGE_TYPES\.WORKBENCH\.GET_READINESS/u,
+  );
+  assert.match(serviceWorkerSource, /edit, batch, and publish[\s\S]*remain dark/u);
   assert.match(
     verifierSource,
     /requiredSecurityModules[\s\S]*shared\/message-security\/runtime-message-authorization\.js/u,

@@ -26,6 +26,9 @@ import {
   sourceWorkflowFeatureFlags,
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
+import type {
+  ExtensionByokPublishAuthorizationInput,
+} from '../services/extension-byok-publish-authorization.js';
 import { findSourceWorkflowOzonCredentialsUnavailableError } from '../services/source-workflow-ozon-client.js';
 import type {
   SourceListingWorkflowTargetContext,
@@ -191,6 +194,9 @@ export interface SourceListingWorkflowRouteOptions {
   mediaWorkflow?: SourceListingWorkflowMediaService;
   aiCopyWorkflow?: Pick<SourceListingAiCopyService, 'generate'>;
   evaluateAiCopyCapability?: typeof getAiListingCopyCapability;
+  authorizeByokPublish(
+    input: ExtensionByokPublishAuthorizationInput,
+  ): Promise<unknown>;
   publisher?: SourceListingPublisherLike;
 }
 
@@ -1248,6 +1254,12 @@ export async function sourceListingWorkflowRoutes(app: FastifyInstance, options:
       const draft = await options.service.getDraft({ draftId, ownerUserId });
       if (!draft) return reply.status(404).send({ code: 0, errorCode: 'source_listing_workflow_not_found', msg: '工作流不存在' });
       await requireInteractiveWriteFeature(flags, ownerUserId, draft.shopId);
+      await options.authorizeByokPublish({
+        ownerUserId,
+        shopId: draft.shopId,
+        workflowId: draft.id,
+        assignments: draft.media?.assignments || [],
+      });
       if (!options.service.recordPublishIntent) throw Object.assign(new Error('发布意图服务不可用'), { code: 'source_listing_workflow_unavailable', statusCode: 503 });
       const result = await options.service.recordPublishIntent({ draftId, ownerUserId, actorUserId, ...parsed.data });
       return reply.send({ code: 1, data: result, publishSubmitted: false });
@@ -1276,6 +1288,12 @@ export async function sourceListingWorkflowRoutes(app: FastifyInstance, options:
         return reply.status(404).send({ code: 0, errorCode: 'source_listing_workflow_not_found', msg: '工作流不存在' });
       }
       await requireV2PublisherFeature(flags, ownerUserId, draft.shopId);
+      await options.authorizeByokPublish({
+        ownerUserId,
+        shopId: draft.shopId,
+        workflowId: draft.id,
+        assignments: draft.media?.assignments || [],
+      });
       if (!options.publisher) {
         throw Object.assign(new Error('Ozon V2 发布服务不可用'), {
           code: 'source_ozon_publisher_unavailable', statusCode: 503,
