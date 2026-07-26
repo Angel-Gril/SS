@@ -229,6 +229,36 @@ const steps = [
     args: ['scripts/extension-byok-ingest-transport.test.mjs'],
   },
   {
+    name: 'extension BYOK workbench launch client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-launch-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK tab-bound workbench session contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-launch-session.test.mjs'],
+  },
+  {
+    name: 'extension BYOK one-time workbench preview contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-preview-channel.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench page client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench runtime handler contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-runtime-handler.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench UI contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-ui.test.mjs'],
+  },
+  {
     name: 'extension runtime message authorization contract',
     command: 'node',
     args: ['scripts/extension-runtime-message-authorization.test.mjs'],

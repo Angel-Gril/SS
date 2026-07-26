@@ -5,7 +5,7 @@
   if (!schema) throw new Error('SS_ERP_BYOK_PROFILE_SCHEMA is required');
 
   var CONTRACT_VERSION = 'extension-byok-text-to-image/v1';
-  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v1';
+  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var OPERATION = 'TEXT_TO_IMAGE';
   var REQUEST_MODE = 'json';
   var MAX_PROMPT_CHARACTERS = 8000;
@@ -28,6 +28,14 @@
     'workflowId',
     'draftRevision',
     'draftVersion',
+    'sourcePlatform',
+    'sourceProductId',
+    'sourceCaptureSnapshotId',
+    'supplyGoodsId',
+    'skuKey',
+    'slotKey',
+    'assignmentMode',
+    'assignmentOrdinal',
     'providerOrigin',
     'model',
     'operation',
@@ -81,6 +89,19 @@
       throw clientError('SS_ERP_BYOK_PROVIDER_INPUT_INVALID', label + ' is invalid', 'FAILED_RETRYABLE');
     }
     return result;
+  }
+
+  function canonicalText(value, maximum, label) {
+    if (typeof value !== 'string' || !value || value.length > maximum
+      || value !== value.normalize('NFKC').trim()
+      || /[\u0000-\u001f\u007f]/u.test(value)) {
+      throw clientError(
+        'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
+        label + ' is invalid',
+        'FAILED_RETRYABLE',
+      );
+    }
+    return value;
   }
 
   function promptText(value, maximum, label, nullable) {
@@ -154,7 +175,7 @@
     };
   }
 
-  function normalizedReadiness(value, permissionBroker) {
+  function normalizedReadiness(value, permissionBroker, requireDraftContext) {
     assertClosedRecord(value, READINESS_KEYS, 'SS_ERP_BYOK_PROVIDER_READINESS_INVALID');
     if (Object.keys(value).length !== READINESS_KEYS.length
       || value.contractVersion !== READINESS_BINDING_VERSION) {
@@ -185,6 +206,45 @@
         'Authenticated BYOK readiness is invalid',
         'FAILED_RETRYABLE',
       );
+    }
+    canonicalText(value.ownerUserId, 200, 'ownerUserId');
+    canonicalText(value.deviceSessionId, 200, 'deviceSessionId');
+    canonicalText(value.shopId, 200, 'shopId');
+    var draftValues = [
+      value.workflowId, value.draftRevision, value.draftVersion, value.sourcePlatform,
+      value.sourceProductId, value.sourceCaptureSnapshotId, value.supplyGoodsId,
+      value.skuKey, value.slotKey, value.assignmentMode, value.assignmentOrdinal,
+    ];
+    var hasDraftContext = draftValues.every(function (item) { return item !== null; });
+    if ((!hasDraftContext && !draftValues.every(function (item) { return item === null; }))
+      || (requireDraftContext === true && !hasDraftContext)) {
+      throw clientError(
+        'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
+        'Authenticated BYOK draft readiness is invalid',
+        'FAILED_RETRYABLE',
+      );
+    }
+    if (hasDraftContext) {
+      var skuKey = canonicalText(value.skuKey, 500, 'skuKey');
+      var slotKey = canonicalText(value.slotKey, 200, 'slotKey');
+      if (!['1688', 'pdd', 'taobao', 'tmall'].includes(value.sourcePlatform)
+        || canonicalText(value.sourceProductId, 200, 'sourceProductId') !== value.sourceProductId
+        || canonicalText(value.sourceCaptureSnapshotId, 200, 'sourceCaptureSnapshotId')
+          !== value.sourceCaptureSnapshotId
+        || canonicalText(value.supplyGoodsId, 200, 'supplyGoodsId') !== value.supplyGoodsId
+        || canonicalText(value.workflowId, 200, 'workflowId') !== value.workflowId
+        || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 1
+        || !Number.isSafeInteger(value.draftVersion) || value.draftVersion < 1
+        || value.assignmentMode !== 'APPEND'
+        || !Number.isSafeInteger(value.assignmentOrdinal) || value.assignmentOrdinal < 0
+        || value.assignmentOrdinal > 499
+        || slotKey !== 'sku:' + skuKey + ':hero') {
+        throw clientError(
+          'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
+          'Authenticated BYOK draft readiness is invalid',
+          'FAILED_RETRYABLE',
+        );
+      }
     }
     return {
       providerOrigin: providerOrigin,
@@ -700,7 +760,11 @@
         );
       }
       var endpoint = generationsEndpoint(selectedProfile.baseUrl, permissionBroker);
-      var binding = normalizedReadiness(input.readinessBinding, permissionBroker);
+      var binding = normalizedReadiness(
+        input.readinessBinding,
+        permissionBroker,
+        requireCapabilityEvidence === true,
+      );
       if (binding.providerOrigin !== endpoint.providerOrigin
         || binding.model !== selectedProfile.model || binding.operation !== OPERATION) {
         throw clientError(

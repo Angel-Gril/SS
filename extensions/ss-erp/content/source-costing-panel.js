@@ -67,6 +67,7 @@
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
+    sourceWorkbenchByokOpening: false,
     refreshTimer: null,
     lastCostSignature: '',
     lastProductSignature: ''
@@ -444,6 +445,7 @@
     state.sourceWorkbenchRequestSeq += 1;
     state.sourceWorkbenchCommandKey = '';
     state.sourceWorkbenchCreateKey = '';
+    state.sourceWorkbenchByokOpening = false;
     resetSourceWorkbenchAiImageSuite();
     state.sourceWorkbenchMediaCreateDraft = {
       operation: 'IMAGE_TO_IMAGE',
@@ -804,6 +806,39 @@
     }) || null;
   }
 
+  async function openSourceWorkbenchByok(listing) {
+    var current = currentSourceWorkbenchListing();
+    var sourceProductId = currentSourceProductId();
+    var handoff = state.sourceWorkflowHandoff;
+    if (state.sourceWorkbenchByokOpening
+      || !listing || !current || listing.id !== current.id
+      || !sourceProductId || sourceProductId.length > 200
+      || !handoff || handoff.sourceProductId !== sourceProductId
+      || handoff.platform !== SOURCE_PLATFORM
+      || state.sourcePageKey !== currentSourcePageKey()) return;
+    state.sourceWorkbenchByokOpening = true;
+    renderContent();
+    setStatus('正在安全打开 BYOK 单图工作台...', '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:source-listing-workbench-byok-open',
+        platform: SOURCE_PLATFORM,
+        sourceProductId: sourceProductId,
+        listingWorkflowId: current.id
+      });
+      if (!response || !response.ok || !response.result
+        || response.result.state !== 'workbench_opened') {
+        throw new Error(response && response.error || 'BYOK 工作台打开失败');
+      }
+      setStatus('BYOK 单图工作台已在独立标签页打开。', 'ok');
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      state.sourceWorkbenchByokOpening = false;
+      renderContent();
+    }
+  }
+
   function sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId) {
     return {
       sourceProductId: sourceProductId,
@@ -1093,6 +1128,11 @@
           aiImageSuiteError: state.sourceWorkbenchAiImageSuiteError,
           aiImageSuiteBusyKey: state.sourceWorkbenchAiImageSuiteBusyKey,
           aiImageSuiteOpen: state.sourceWorkbenchAiImageSuiteOpen,
+          byokWorkbenchAvailable: Boolean(state.sourceWorkflowHandoff),
+          byokWorkbenchBusy: state.sourceWorkbenchByokOpening,
+          onOpenByokWorkbench: function (listing) {
+            void openSourceWorkbenchByok(listing);
+          },
           onLoadAiImageSuite: function (metadata) {
             return loadSourceWorkbenchAiImageSuite(metadata);
           },

@@ -594,8 +594,16 @@ describe('extension BYOK generated media ingest route', () => {
     expect(storage.uploads).toHaveLength(2);
     expect(storage.uploads[0]!.result.objectKey).not.toBe(storage.uploads[1]!.result.objectKey);
     expect(storage.deletes).toEqual([storage.uploads[1]!.result]);
-    expect(first.json().data).toMatchObject({ replayed: false, receiptId: 'receipt-1' });
-    expect(second.json().data).toMatchObject({ replayed: true, receiptId: 'receipt-1' });
+    const responses = [first.json().data, second.json().data];
+    const winners = responses.filter((response) => response.replayed === false);
+    const replays = responses.filter((response) => response.replayed === true);
+    expect(winners).toHaveLength(1);
+    expect(replays).toHaveLength(1);
+    expect(replays[0]).toMatchObject({
+      receiptId: winners[0]!.receiptId,
+      assetId: winners[0]!.assetId,
+      normalizedSha256: winners[0]!.normalizedSha256,
+    });
     await app.close();
   });
 });

@@ -1,7 +1,7 @@
 (function exposeByokReadinessClient(global) {
   'use strict';
 
-  var REQUEST_VERSION = 'extension-byok-readiness-request/v1';
+  var REQUEST_VERSION = 'extension-byok-readiness-request/v2';
   var READINESS_PATH = '/api/extension-device/byok-media/readiness';
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
 
@@ -29,9 +29,21 @@
     return value == null ? null : text(value, 200);
   }
 
+  function nullableSkuKey(value) {
+    return value == null ? null : text(value, 500);
+  }
+
   function nullablePositiveInteger(value) {
     if (value == null) return null;
     if (!Number.isSafeInteger(value) || value < 1) {
+      throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
+    }
+    return value;
+  }
+
+  function nullableAssignmentOrdinal(value) {
+    if (value == null) return null;
+    if (!Number.isSafeInteger(value) || value < 0 || value > 499) {
       throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
     }
     return value;
@@ -41,6 +53,8 @@
     if (!isRecord(value)) throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
     var allowedKeys = [
       'profileId', 'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'operation',
+      'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId',
+      'skuKey', 'slotKey', 'assignmentMode', 'assignmentOrdinal',
     ];
     if (Object.keys(value).some(function (key) { return !allowedKeys.includes(key); })) {
       throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
@@ -52,8 +66,27 @@
     var workflowId = nullableText(value.workflowId);
     var draftRevision = nullablePositiveInteger(value.draftRevision);
     var draftVersion = nullablePositiveInteger(value.draftVersion);
-    if ([workflowId, draftRevision, draftVersion].some(function (item) { return item === null; })
-      && [workflowId, draftRevision, draftVersion].some(function (item) { return item !== null; })) {
+    var sourcePlatform = value.sourcePlatform == null ? null : text(value.sourcePlatform, 16);
+    var sourceProductId = nullableText(value.sourceProductId);
+    var sourceCaptureSnapshotId = nullableText(value.sourceCaptureSnapshotId);
+    var supplyGoodsId = nullableText(value.supplyGoodsId);
+    var skuKey = nullableSkuKey(value.skuKey);
+    var slotKey = nullableText(value.slotKey);
+    var assignmentMode = value.assignmentMode == null ? null : text(value.assignmentMode, 16);
+    var assignmentOrdinal = nullableAssignmentOrdinal(value.assignmentOrdinal);
+    var draftContext = [
+      workflowId, draftRevision, draftVersion, sourcePlatform, sourceProductId,
+      sourceCaptureSnapshotId, supplyGoodsId, skuKey, slotKey, assignmentMode,
+      assignmentOrdinal,
+    ];
+    if (draftContext.some(function (item) { return item === null; })
+      && draftContext.some(function (item) { return item !== null; })) {
+      throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
+    }
+    if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
+      || assignmentMode !== 'APPEND'
+      || !slotKey.startsWith('sku:' + skuKey + ':')
+      || slotKey !== 'sku:' + skuKey + ':hero')) {
       throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
     }
     return {
@@ -62,6 +95,14 @@
       workflowId: workflowId,
       draftRevision: draftRevision,
       draftVersion: draftVersion,
+      sourcePlatform: sourcePlatform,
+      sourceProductId: sourceProductId,
+      sourceCaptureSnapshotId: sourceCaptureSnapshotId,
+      supplyGoodsId: supplyGoodsId,
+      skuKey: skuKey,
+      slotKey: slotKey,
+      assignmentMode: assignmentMode,
+      assignmentOrdinal: assignmentOrdinal,
       operation: operation,
     };
   }
@@ -94,6 +135,14 @@
           workflowId: input.workflowId,
           draftRevision: input.draftRevision,
           draftVersion: input.draftVersion,
+          sourcePlatform: input.sourcePlatform,
+          sourceProductId: input.sourceProductId,
+          sourceCaptureSnapshotId: input.sourceCaptureSnapshotId,
+          supplyGoodsId: input.supplyGoodsId,
+          skuKey: input.skuKey,
+          slotKey: input.slotKey,
+          assignmentMode: input.assignmentMode,
+          assignmentOrdinal: input.assignmentOrdinal,
           providerOrigin: providerOrigin,
           model: text(profile.model, 200),
           operation: input.operation,

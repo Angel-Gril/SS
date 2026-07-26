@@ -256,11 +256,27 @@ const requiredByokModules = [
   'shared/byok/permission-readiness-bridge.js',
   'shared/byok/provider-settings-client.js',
   'shared/byok/provider-settings-handler.js',
+  'shared/byok/workbench-launch-client.js',
+  'shared/byok/workbench-launch-session.js',
+  'shared/byok/workbench-preview-channel.js',
+  'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/workbench-client.js',
+];
+
+const requiredByokPages = [
+  'pages/ai-provider-settings.html',
+  'pages/ai-provider-settings.css',
+  'pages/ai-provider-settings.js',
+  'pages/ai-image-workbench-launch.html',
+  'pages/ai-image-workbench.html',
+  'pages/ai-image-workbench.css',
+  'pages/ai-image-workbench.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
 for (const modulePath of requiredSecurityModules) fileExists(modulePath, `security module ${modulePath}`);
 for (const modulePath of requiredByokModules) fileExists(modulePath, `BYOK module ${modulePath}`);
+for (const pagePath of requiredByokPages) fileExists(pagePath, `BYOK page ${pagePath}`);
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
 for (const adapter of requiredAdapters) {
@@ -277,10 +293,33 @@ for (const modulePath of [
   'shared/byok/device-session-lifecycle.js',
   'shared/byok/permission-broker.js',
   'shared/byok/provider-settings-handler.js',
+  'shared/byok/workbench-launch-client.js',
+  'shared/byok/workbench-launch-session.js',
+  'shared/byok/workbench-preview-channel.js',
+  'shared/byok/workbench-runtime-handler.js',
 ]) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);
+}
+
+const workbenchHtmlText = readFileSync(relToAbs('pages/ai-image-workbench.html'), 'utf8');
+const workbenchLaunchHtmlText = readFileSync(
+  relToAbs('pages/ai-image-workbench-launch.html'),
+  'utf8',
+);
+if (workbenchHtmlText.includes('../shared/byok/workbench-client.js')
+  && workbenchHtmlText.includes('./ai-image-workbench.js')
+  && workbenchHtmlText.includes('./ai-image-workbench.css')) {
+  pass('BYOK workbench page references packaged client, controller, and styles');
+} else {
+  fail('BYOK workbench page references are incomplete');
+}
+if (!/<script(?:\s|>)/iu.test(workbenchLaunchHtmlText)
+  && !/[?#](?:source|product|workflow|shop|draft|sku|slot|key)=/iu.test(workbenchLaunchHtmlText)) {
+  pass('BYOK workbench launch placeholder is inert and context-free');
+} else {
+  fail('BYOK workbench launch placeholder must remain inert and context-free');
 }
 
 const cloudText = readFileSync(relToAbs('shared/adapters/cloud-adapter.js'), 'utf8');

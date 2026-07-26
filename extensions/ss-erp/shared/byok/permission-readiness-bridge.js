@@ -2,14 +2,17 @@
   'use strict';
 
   var CONTRACT_VERSION = 'extension-byok-permission-readiness-bridge/v1';
-  var BINDING_VERSION = 'extension-byok-readiness-binding/v1';
+  var BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var MAX_TTL_MS = 10 * 60 * 1000;
   var MAX_CONSUMED_HANDLES = 512;
   var consumedHandles = new Map();
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
   var BINDING_KEYS = [
     'contractVersion', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
-    'draftRevision', 'draftVersion', 'providerOrigin', 'model', 'operation', 'policyRevision',
+    'draftRevision', 'draftVersion', 'sourcePlatform', 'sourceProductId',
+    'sourceCaptureSnapshotId', 'supplyGoodsId', 'skuKey', 'slotKey',
+    'assignmentMode', 'assignmentOrdinal', 'providerOrigin', 'model', 'operation',
+    'policyRevision',
   ];
 
   function bridgeError(code) {
@@ -83,7 +86,15 @@
       || binding.model !== exactText(profile.model, 200)
       || binding.workflowId !== null
       || binding.draftRevision !== null
-      || binding.draftVersion !== null) {
+      || binding.draftVersion !== null
+      || binding.sourcePlatform !== null
+      || binding.sourceProductId !== null
+      || binding.sourceCaptureSnapshotId !== null
+      || binding.supplyGoodsId !== null
+      || binding.skuKey !== null
+      || binding.slotKey !== null
+      || binding.assignmentMode !== null
+      || binding.assignmentOrdinal !== null) {
       throw bridgeError('SS_ERP_BYOK_PERMISSION_READINESS_MISMATCH');
     }
     var origin = permissionApi.canonicalizeOrigin(profile.baseUrl);

@@ -96,6 +96,10 @@
     'ss-erp:source-listing-workbench-ai-image-suite-command',
   ]);
 
+  var SOURCE_BYOK_WORKBENCH_TYPES = setOf([
+    'ss-erp:source-listing-workbench-byok-open',
+  ]);
+
   var OZON_PAGE_TYPES = setOf([
     'ss-erp:ozon-company-id-captured',
     'ss-erp:collect-product',
@@ -259,6 +263,7 @@
     SOURCE_MEDIA_EDITOR_PAGE_TYPES,
     SOURCE_PAGE_TYPES,
     SOURCE_AI_IMAGE_SUITE_TYPES,
+    SOURCE_BYOK_WORKBENCH_TYPES,
     OZON_PAGE_TYPES,
     GENERAL_EXTENSION_TYPES,
     SELF_HOSTED_TYPES,
@@ -381,20 +386,25 @@
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
-      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType);
+      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+      && !SOURCE_BYOK_WORKBENCH_TYPES.has(messageType);
     if (kind === 'config_import') return CONFIG_IMPORT_TYPES.has(messageType);
     if (kind === 'extension') return !SETTINGS_ONLY_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PAGE_TYPES.has(messageType)
       && !SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_OPEN_TYPES.has(messageType)
       && !SOURCE_MEDIA_EDITOR_PAGE_TYPES.has(messageType)
-      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType);
+      && !SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+      && !SOURCE_BYOK_WORKBENCH_TYPES.has(messageType);
     if (kind === 'erp') return ERP_BRIDGE_TYPES.has(messageType);
     if (kind === 'official') return OFFICIAL_PAGE_TYPES.has(messageType);
     if (kind === 'ozon') return OZON_PAGE_TYPES.has(messageType);
     if (kind === 'source') {
-      if (SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)) {
-        return isSourceProductPageUrl(parseSenderUrl(sender));
+      if (SOURCE_AI_IMAGE_SUITE_TYPES.has(messageType)
+        || SOURCE_BYOK_WORKBENCH_TYPES.has(messageType)) {
+        var sourceUrl = parseSenderUrl(sender);
+        return isSourceProductPageUrl(sourceUrl)
+          && (!SOURCE_BYOK_WORKBENCH_TYPES.has(messageType) || !sourceUrl.hash);
       }
       return SOURCE_PAGE_TYPES.has(messageType)
         || SOURCE_MEDIA_CONFIRM_PREPARE_TYPES.has(messageType)

@@ -1846,6 +1846,46 @@ if (isExtensionDeviceAuthEnabled()) {
     workflowId: string;
     ownerUserId: string;
   }) => sourceListingWorkflowService.getDraft({ draftId: workflowId, ownerUserId });
+  const loadExtensionByokWorkbenchDraft = async ({ workflowId, ownerUserId }: {
+    workflowId: string;
+    ownerUserId: string;
+  }) => {
+    let draft;
+    try {
+      draft = await sourceListingWorkflowService.getDraft({ draftId: workflowId, ownerUserId });
+    } catch (error) {
+      if (error instanceof SourceListingWorkflowError
+        && error.code === 'OZON_LISTING_DRAFT_NOT_FOUND') return null;
+      throw error;
+    }
+    const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
+      where: {
+        id: draft.sourceCaptureSnapshotId,
+        subject: { ownerUserId },
+      },
+      select: {
+        id: true,
+        subject: {
+          select: {
+            sourcePlatform: true,
+            sourceProductId: true,
+            snapshots: {
+              orderBy: { version: 'desc' },
+              take: 1,
+              select: { id: true },
+            },
+          },
+        },
+      },
+    });
+    if (!snapshot || snapshot.id !== draft.sourceCaptureSnapshotId) return null;
+    return {
+      ...draft,
+      sourceCaptureCurrent: snapshot.subject.snapshots[0]?.id === snapshot.id,
+      sourcePlatform: snapshot.subject.sourcePlatform,
+      sourceProductId: snapshot.subject.sourceProductId,
+    };
+  };
   await app.register(extensionByokReadinessRoutes, {
     prefix: '/api/extension-device/byok-media',
     authenticateDevice: authenticateExtensionDevice({
@@ -1854,7 +1894,7 @@ if (isExtensionDeviceAuthEnabled()) {
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
     loadShop: loadExtensionCommandShop,
-    loadDraft: loadExtensionCommandDraft,
+    loadDraft: loadExtensionByokWorkbenchDraft,
     getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
   });
   const extensionCommandRoutesOptions: ExtensionCommandGrantRoutesOptions & { prefix: string } = {

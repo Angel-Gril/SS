@@ -7,11 +7,11 @@ import {
 } from './extension-byok-policy.js';
 
 export const EXTENSION_BYOK_READINESS_REQUEST_VERSION =
-  'extension-byok-readiness-request/v1' as const;
+  'extension-byok-readiness-request/v2' as const;
 export const EXTENSION_BYOK_READINESS_ATTESTATION_VERSION =
-  'extension-byok-readiness-attestation/v1' as const;
+  'extension-byok-readiness-attestation/v2' as const;
 export const EXTENSION_BYOK_READINESS_BINDING_VERSION =
-  'extension-byok-readiness-binding/v1' as const;
+  'extension-byok-readiness-binding/v2' as const;
 export const EXTENSION_BYOK_READINESS_TTL_MS = 5 * 60 * 1000;
 export const EXTENSION_BYOK_READINESS_MAX_TTL_MS = 10 * 60 * 1000;
 
@@ -27,6 +27,11 @@ const identifier = z.string().min(1).max(200)
   .refine((value) => !hasControlCharacter(value))
   .refine((value) => !/(?:https?|ftp):\/\//iu.test(value))
   .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value));
+const skuIdentifier = z.string().min(1).max(500)
+  .refine((value) => value === value.normalize('NFKC').trim())
+  .refine((value) => !hasControlCharacter(value))
+  .refine((value) => !/[?#]/u.test(value))
+  .refine((value) => !/(?:https?|ftp|data):/iu.test(value));
 
 const requestSchema = z.object({
   contractVersion: z.literal(EXTENSION_BYOK_READINESS_REQUEST_VERSION),
@@ -34,11 +39,31 @@ const requestSchema = z.object({
   workflowId: identifier.nullable(),
   draftRevision: z.number().int().positive().nullable(),
   draftVersion: z.number().int().positive().nullable(),
+  sourcePlatform: z.enum(['1688', 'pdd', 'taobao', 'tmall']).nullable(),
+  sourceProductId: identifier.nullable(),
+  sourceCaptureSnapshotId: identifier.nullable(),
+  supplyGoodsId: identifier.nullable(),
+  skuKey: skuIdentifier.nullable(),
+  slotKey: identifier.nullable(),
+  assignmentMode: z.literal('APPEND').nullable(),
+  assignmentOrdinal: z.number().int().min(0).max(499).nullable(),
   providerOrigin: z.string().min(1).max(2048),
   model: identifier,
   operation: z.enum(EXTENSION_BYOK_OPERATIONS),
 }).strict().superRefine((value, context) => {
-  const draftValues = [value.workflowId, value.draftRevision, value.draftVersion];
+  const draftValues = [
+    value.workflowId,
+    value.draftRevision,
+    value.draftVersion,
+    value.sourcePlatform,
+    value.sourceProductId,
+    value.sourceCaptureSnapshotId,
+    value.supplyGoodsId,
+    value.skuKey,
+    value.slotKey,
+    value.assignmentMode,
+    value.assignmentOrdinal,
+  ];
   if (!draftValues.every((item) => item === null) && !draftValues.every((item) => item !== null)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -60,6 +85,14 @@ export interface ExtensionByokReadinessBinding {
   workflowId: string | null;
   draftRevision: number | null;
   draftVersion: number | null;
+  sourcePlatform: '1688' | 'pdd' | 'taobao' | 'tmall' | null;
+  sourceProductId: string | null;
+  sourceCaptureSnapshotId: string | null;
+  supplyGoodsId: string | null;
+  skuKey: string | null;
+  slotKey: string | null;
+  assignmentMode: 'APPEND' | null;
+  assignmentOrdinal: number | null;
   providerOrigin: string;
   model: string;
   operation: typeof EXTENSION_BYOK_OPERATIONS[number];
@@ -145,6 +178,14 @@ export function createExtensionByokReadinessAttestation(input: {
     workflowId: input.request.workflowId,
     draftRevision: input.request.draftRevision,
     draftVersion: input.request.draftVersion,
+    sourcePlatform: input.request.sourcePlatform,
+    sourceProductId: input.request.sourceProductId,
+    sourceCaptureSnapshotId: input.request.sourceCaptureSnapshotId,
+    supplyGoodsId: input.request.supplyGoodsId,
+    skuKey: input.request.skuKey,
+    slotKey: input.request.slotKey,
+    assignmentMode: input.request.assignmentMode,
+    assignmentOrdinal: input.request.assignmentOrdinal,
     providerOrigin: input.request.providerOrigin,
     model: input.request.model,
     operation: input.request.operation,

@@ -85,7 +85,7 @@ const transport = {
   },
 };
 const vault = {
-  getForBackground(id) {
+  getApprovedForBackground(id) {
     if (id !== internal.resultId) throw new Error('missing');
     return internal;
   },

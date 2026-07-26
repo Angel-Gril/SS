@@ -1,6 +1,6 @@
 # Phase 2: Secure Single-Image BYOK Vertical Slice
 
-Progress: 6/10 tasks.
+Progress: 7/10 tasks.
 
 ## Tasks
 
@@ -22,7 +22,7 @@ Progress: 6/10 tasks.
   endpoint/model, permission, session key, and every currently implemented operation probe
   work; deferred edit/inpaint operations remain explicitly closed until `EXT-04B`; key input
   clears and cannot be revealed; there is no remember-key control.
-- [ ] `UI-02A` Build minimal original single-image workbench (`P0`, `L`). Acceptance: a
+- [x] `UI-02A` Build minimal original single-image workbench (`P0`, `L`). Acceptance: a
   trusted launch binds exact product/shop/draft; user can select BYOK, edit Prompt, generate,
   observe truthful state, reject, or accept; injected UI remains a compact launcher.
 - [ ] `INT-01` Add background asset ingest client (`P0`, `L`). Acceptance: accepted Blob
@@ -89,5 +89,25 @@ Progress: 6/10 tasks.
 - Remaining non-blocking Phase 2 debt: terminal upload-staging rows need a retention/prune path;
   publish intent/receipt provenance linking belongs to `INT-02`; and the 100-entry session
   dispatch-tombstone limit needs workbench capacity guidance before a production pilot.
+- `UI-02A` now launches only from an exact supported source-product page, re-resolves the latest
+  source snapshot and server-authoritative empty SKU hero slot before every operation, and keeps
+  product/draft/Provider context out of the URL. The standalone extension page supports one BYOK
+  text-to-image request, one-use Blob preview, reject, and local approval while truthfully keeping
+  ERP ingest, draft binding, hosted execution, and publishing closed.
+- Workbench sessions bind tab and document identity in `chrome.storage.session`. An unresolved
+  Provider outcome survives refresh and worker restart without exposing its idempotency key, blocks
+  another paid request, and is cleared only by authoritative result attachment or a proven
+  pre-dispatch failure. Concurrent generate/review attempts, stale preview events, malformed review
+  responses, document replacement, stale captures, and the unrepresentable 500th append ordinal
+  fail closed with temporary bytes released where available. Claim and Provider dispatch renew a
+  live sliding lease, so a near-expiry paid request can still attach its result while an already
+  expired session cannot be revived.
+- Final `UI-02A` verification passed 58 focused extension tests, 7 readiness route tests, server
+  typecheck, full preflight (3,968 server tests: 3,804 passed and 164 skipped), rebuilt cloud/local
+  packages, and package verification. Cloud completed with zero warnings; local retained its two
+  expected offline-package permission warnings. Two first-pass timing flakes were hardened by
+  asserting one upload winner plus one replay without depending on Promise arrival order and by
+  giving the native ESM child-process case a 15-second outer test budget. Their focused suites and
+  the complete preflight then passed.
 - All BYOK flags and the administrator policy remain default-off. No real Provider request,
   ERP AI charge, production mutation, Ozon write, or VPS deployment occurred in this phase.

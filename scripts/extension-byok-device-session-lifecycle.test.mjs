@@ -7,6 +7,7 @@ const modulePath = 'extensions/ss-erp/shared/byok/device-session-lifecycle.js';
 const authorityModulePath = 'extensions/ss-erp/shared/byok/runtime-authority.js';
 const serviceWorkerPath = 'extensions/ss-erp/background/service-worker.js';
 const profileStorePath = 'extensions/ss-erp/shared/byok/profile-store.js';
+const workbenchRuntimePath = 'extensions/ss-erp/shared/byok/workbench-runtime-handler.js';
 const source = fs.readFileSync(modulePath, 'utf8');
 const authoritySource = fs.readFileSync(authorityModulePath, 'utf8');
 
@@ -205,18 +206,20 @@ test('central service-worker cleanup clears all device-scoped BYOK authority and
   assert.match(cleanupSource, /notifyByokDeviceSessionInvalidated\(input && input\.reason\)/u);
 
   const profileStoreSource = fs.readFileSync(profileStorePath, 'utf8');
+  const workbenchRuntimeSource = fs.readFileSync(workbenchRuntimePath, 'utf8');
   assert.match(
     profileStoreSource,
     /async function disconnectDevice\(\) \{\s*return clearSession\(\);\s*\}/u,
   );
   assert.match(profileStoreSource, /schema\.SESSION_SECRETS_STORAGE_KEY/u);
   assert.match(profileStoreSource, /schema\.SESSION_EVIDENCE_STORAGE_KEY/u);
-  assert.match(serviceWorkerSource, /authorityGuard\.capture\(binding\)/u);
+  assert.match(serviceWorkerSource, /shared\/byok\/workbench-runtime-handler\.js/u);
+  assert.match(workbenchRuntimeSource, /captureAuthority\(binding\)/u);
   assert.match(
-    serviceWorkerSource,
-    /authorityGuard\.commitGeneratedResult\(\{/u,
+    workbenchRuntimeSource,
+    /commitGeneratedResult\(\{/u,
   );
-  assert.match(serviceWorkerSource, /client\.commitResult\(/u);
+  assert.match(workbenchRuntimeSource, /committed\s*=\s*await commitResult\(/u);
   assert.match(
     serviceWorkerSource,
     /getByokGeneratedAssetIngestClient\(\)\.ingest\(payload, authority\)/u,

@@ -153,6 +153,60 @@
   font-weight: 800;
 }
 
+.ss-erp-source-workbench-byok-launcher {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 9px 0;
+  border: 1px solid rgba(180, 83, 9, 0.28);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fff7ed, #ffffff 72%);
+  padding: 9px 10px;
+}
+
+.ss-erp-source-workbench-byok-copy {
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-byok-copy strong,
+.ss-erp-source-workbench-byok-copy span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ss-erp-source-workbench-byok-copy strong {
+  color: #9a3412;
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-byok-copy span {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.ss-erp-source-workbench-byok-button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid #c2410c;
+  border-radius: 7px;
+  background: #c2410c;
+  color: #fff;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ss-erp-source-workbench-byok-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .ss-erp-source-workbench-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -594,6 +648,15 @@
 }
 
 @media (max-width: 520px) {
+  .ss-erp-source-workbench-byok-launcher {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ss-erp-source-workbench-byok-button {
+    width: 100%;
+  }
+
   .ss-erp-source-workbench-workflow-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

@@ -52,6 +52,15 @@ assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-command/);
+assert.match(worker, /ss-erp:source-listing-workbench-byok-open/);
+assert.match(worker, /openAuthoritativeSourceByokWorkbench/);
+assert.match(panel, /ss-erp:source-listing-workbench-byok-open/);
+assert.match(panel, /onOpenByokWorkbench/);
+assert.doesNotMatch(
+  panel,
+  /type:\s*['"]ss-erp:source-listing-workbench-byok-open['"][\s\S]{0,500}(?:skuKey|slotKey|assignmentOrdinal)/u,
+  'source launcher must not select its own SKU, slot, or ordinal',
+);
 assert.match(worker, /loadAuthoritativeSourceAiImageSuiteProjection/);
 assert.match(worker, /executeAuthoritativeSourceAiImageSuiteCommand/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
@@ -2620,6 +2629,39 @@ assert.equal(commands.length, 0, 'scripted page clicks must not execute extensio
 retryButton.listeners.click({ isTrusted: true });
 assert.equal(commands.length, 1);
 assert.equal(commands[0].action, 'RETRY');
+
+const byokLauncherContainer = new TestNode('section');
+const byokLaunchEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(byokLauncherContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 2, mediaAssignmentCount: 1,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  byokWorkbenchAvailable: true,
+  byokWorkbenchBusy: false,
+  onOpenByokWorkbench(listing) { byokLaunchEvents.push(listing.id); },
+});
+const byokNodes = byokLauncherContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
+const byokLauncher = byokNodes.find((node) => node.attributes['data-role'] === 'byok-workbench-launcher');
+const byokButton = byokNodes.find((node) => node.textContent === '打开 BYOK 工作台');
+assert.ok(byokLauncher, 'source panel should render a compact BYOK launcher');
+assert.ok(byokButton);
+assert.equal(byokNodes.some((node) => node.tag === 'textarea'), false);
+byokButton.listeners.click({ isTrusted: false });
+assert.deepEqual(byokLaunchEvents, []);
+byokButton.listeners.click({ isTrusted: true });
+assert.deepEqual(byokLaunchEvents, ['listing-1']);
 
 const confirmHtml = fs.readFileSync(confirmHtmlPath, 'utf8');
 const confirmLaunchHtml = fs.readFileSync(confirmLaunchPath, 'utf8');

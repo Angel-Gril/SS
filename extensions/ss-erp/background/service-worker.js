@@ -12,6 +12,10 @@ try { importScripts('../shared/byok/text-to-image-client.js'); } catch (e) { con
 try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
 try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
+try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
+try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
+try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
+try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
 try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
 try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch (e) { console.warn('[SS ERP] device connection state load error:', e); }
 try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
@@ -74,6 +78,8 @@ const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite';
 const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite-command';
+const SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE =
+  'ss-erp:source-listing-workbench-byok-open';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-prepare';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_READ_MESSAGE =
@@ -346,6 +352,10 @@ let byokProviderSettingsDispatcher = null;
 let byokGeneratedResultVault = null;
 let byokGeneratedAssetIngestClient = null;
 let byokRuntimeAuthorityGuard = null;
+let byokWorkbenchLaunchClient = null;
+let byokWorkbenchSessionManager = null;
+let byokWorkbenchPreviewBroker = null;
+let byokWorkbenchRuntimeDispatcher = null;
 let sourceTranslationIntentWriteQueue = Promise.resolve();
 let sourceMediaMutationIntentStore = null;
 let sourceMediaConfirmationCoordinator = null;
@@ -357,6 +367,10 @@ const SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES = 1;
 
 function clearCachedByokGeneratedResults() {
   if (byokGeneratedResultVault) byokGeneratedResultVault.clear();
+  if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
+  if (byokWorkbenchSessionManager) {
+    void byokWorkbenchSessionManager.clear().catch(function () {});
+  }
 }
 
 function isLogisticsDistributionFeatureEnabled() {
@@ -939,6 +953,69 @@ function getByokGeneratedAssetIngestClient() {
   return byokGeneratedAssetIngestClient;
 }
 
+function getByokWorkbenchLaunchClient() {
+  if (byokWorkbenchLaunchClient) return byokWorkbenchLaunchClient;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK workbench launch client is unavailable');
+  }
+  byokWorkbenchLaunchClient = api.createClient({ transport: getByokDeviceTransport() });
+  return byokWorkbenchLaunchClient;
+}
+
+function getByokWorkbenchSessionManager() {
+  if (byokWorkbenchSessionManager) return byokWorkbenchSessionManager;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION;
+  if (!api || typeof api.createManager !== 'function') {
+    throw new Error('BYOK workbench session manager is unavailable');
+  }
+  byokWorkbenchSessionManager = api.createManager({
+    sessionStorage: chrome.storage.session,
+    tabs: chrome.tabs,
+    runtime: chrome.runtime,
+    now: () => Date.now(),
+  });
+  return byokWorkbenchSessionManager;
+}
+
+function getByokWorkbenchPreviewBroker() {
+  if (byokWorkbenchPreviewBroker) return byokWorkbenchPreviewBroker;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_PREVIEW_CHANNEL;
+  if (!api || typeof api.createBroker !== 'function') {
+    throw new Error('BYOK workbench preview channel is unavailable');
+  }
+  byokWorkbenchPreviewBroker = api.createBroker({
+    BroadcastChannel: globalThis.BroadcastChannel,
+    crypto: globalThis.crypto,
+    now: () => new Date(),
+  });
+  return byokWorkbenchPreviewBroker;
+}
+
+function getByokWorkbenchRuntimeDispatcher() {
+  if (byokWorkbenchRuntimeDispatcher) return byokWorkbenchRuntimeDispatcher;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_RUNTIME_HANDLER;
+  const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  if (!api || typeof api.createDispatcher !== 'function'
+    || !authorization || !authorization.MESSAGE_TYPES?.WORKBENCH) {
+    throw new Error('BYOK workbench runtime dispatcher is unavailable');
+  }
+  byokWorkbenchRuntimeDispatcher = api.createDispatcher({
+    messageTypes: authorization.MESSAGE_TYPES.WORKBENCH,
+    sessionManager: getByokWorkbenchSessionManager(),
+    launchClient: getByokWorkbenchLaunchClient(),
+    profileStore: getByokProfileStore(),
+    permissionBroker: getByokPermissionBroker(),
+    readinessClient: getByokReadinessClient(),
+    providerClient: getByokTextToImageClient(),
+    vault: getByokGeneratedResultVault(),
+    authorityGuard: getByokRuntimeAuthorityGuard(),
+    previewBroker: getByokWorkbenchPreviewBroker(),
+    now: () => new Date(),
+  });
+  return byokWorkbenchRuntimeDispatcher;
+}
+
 function byokRuntimeError(error) {
   const candidate = error && typeof error === 'object' ? String(error.code || '') : '';
   return {
@@ -955,58 +1032,7 @@ function installByokReadinessRuntime() {
   if (!authorization || !authorization.MESSAGE_TYPES) return;
   const previousHandlers = globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {};
   const providerSettingsDispatcher = getByokProviderSettingsDispatcher();
-  const readinessHandler = async ({ payload }) => ({
-    ok: true,
-    data: await getByokReadinessClient().getReadiness(payload),
-  });
-  const executeProviderHandler = async ({ payload, authorization: runtimeDecision }) => {
-    const client = getByokTextToImageClient();
-    const vault = getByokGeneratedResultVault();
-    try {
-      const binding = runtimeDecision.readiness.binding;
-      const authorityGuard = getByokRuntimeAuthorityGuard();
-      const authority = await authorityGuard.capture(binding);
-      const generated = await client.generate({
-        ...payload,
-        readinessBinding: binding,
-      });
-      try {
-        return {
-          ok: true,
-          data: await client.commitResult(
-            generated.idempotencyKey,
-            generated.requestHash,
-            (currentGenerated) => authorityGuard.commitGeneratedResult({
-              authority,
-              binding,
-              generated: currentGenerated,
-              vault,
-            }),
-          ),
-        };
-      } finally {
-        client.releaseResult(generated.idempotencyKey, generated.requestHash);
-      }
-    } catch (error) {
-      if (error && error.code === 'SS_ERP_BYOK_PROVIDER_RESULT_RELEASED') {
-        try {
-          const state = client.getOperationState(payload && payload.idempotencyKey);
-          const replay = vault.getPublicByOperation(payload && payload.idempotencyKey);
-          const entry = vault.getForBackground(replay.resultId);
-          const binding = runtimeDecision.readiness.binding;
-          const authorityGuard = getByokRuntimeAuthorityGuard();
-          const authority = await authorityGuard.capture(binding);
-          if (state && state.requestHash === replay.requestHash
-            && authorityGuard.matchesVaultAuthority(entry, binding, authority)) {
-            return { ok: true, data: replay };
-          }
-        } catch (replayError) {
-          return byokRuntimeError(replayError);
-        }
-      }
-      return byokRuntimeError(error);
-    }
-  };
+  const workbenchDispatcher = getByokWorkbenchRuntimeDispatcher();
   const ingestHandler = async ({ payload, authorization: runtimeDecision }) => {
     try {
       const authority = await getByokRuntimeAuthorityGuard().capture(
@@ -1023,8 +1049,7 @@ function installByokReadinessRuntime() {
   globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS = Object.freeze({
     ...previousHandlers,
     ...providerSettingsDispatcher.handlers,
-    [authorization.MESSAGE_TYPES.WORKBENCH.GET_READINESS]: readinessHandler,
-    [authorization.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER]: executeProviderHandler,
+    ...workbenchDispatcher.handlers,
     [authorization.MESSAGE_TYPES.WORKBENCH.INGEST]: ingestHandler,
   });
   globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
@@ -1386,6 +1411,85 @@ function currentSourceListingContext(result, requestedListingWorkflowId) {
     revision: item.revision,
     draftVersion: item.draftVersion,
   };
+}
+
+function sourceByokWorkbenchSenderIdentity(sender, platform, sourceProductId) {
+  if (!sender || sender.frameId !== 0
+    || !Number.isSafeInteger(sender.tab?.id) || sender.tab.id < 0
+    || typeof sender.documentId !== 'string' || !sender.documentId
+    || sender.documentId !== sender.documentId.normalize('NFKC').trim()
+    || sender.documentId.length > 200) return null;
+  let parsed;
+  try {
+    parsed = new URL(sender.url || sender.documentUrl || '');
+  } catch (_error) {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hash) return null;
+  const hostname = parsed.hostname.toLowerCase();
+  let pageProductId = '';
+  if (platform === '1688' && (hostname === '1688.com' || hostname.endsWith('.1688.com'))) {
+    const match = parsed.pathname.match(/^\/offer\/([^/]+)\.html$/u);
+    if (match) {
+      try { pageProductId = decodeURIComponent(match[1]); } catch (_error) { return null; }
+    }
+  } else if (platform === 'pdd' && (
+    hostname === 'pinduoduo.com' || hostname.endsWith('.pinduoduo.com')
+    || hostname === 'yangkeduo.com' || hostname.endsWith('.yangkeduo.com')
+  ) && parsed.pathname === '/goods.html') {
+    pageProductId = parsed.searchParams.get('goods_id') || '';
+  } else if (platform === 'taobao' && hostname === 'item.taobao.com'
+    && parsed.pathname === '/item.htm') {
+    pageProductId = parsed.searchParams.get('id') || '';
+  } else if (platform === 'tmall' && hostname === 'detail.tmall.com'
+    && parsed.pathname === '/item.htm') {
+    pageProductId = parsed.searchParams.get('id') || '';
+  }
+  if (!pageProductId || pageProductId.normalize('NFKC').trim() !== sourceProductId) return null;
+  return {
+    tabId: sender.tab.id,
+    documentId: sender.documentId,
+    frameId: 0,
+  };
+}
+
+async function openAuthoritativeSourceByokWorkbench(message, sender) {
+  if (!message || Object.keys(message).length !== 4
+    || !['type', 'platform', 'sourceProductId', 'listingWorkflowId'].every(
+      (key) => Object.prototype.hasOwnProperty.call(message, key),
+    )) {
+    throw new Error('BYOK 工作台启动请求无效');
+  }
+  const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
+  const platform = sourceWorkflowPlatform(message.platform);
+  const requestedListingWorkflowId = sourceWorkflowHandoffText(message.listingWorkflowId, 200);
+  const sourceSender = sourceByokWorkbenchSenderIdentity(sender, platform, sourceProductId);
+  if (!sourceProductId || !platform || !requestedListingWorkflowId || !sourceSender) {
+    throw new Error('BYOK 工作台只能从当前货源商品页启动');
+  }
+  const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+  if (!handoff || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+    throw new Error('ERP 来源商品记录已变化，请重新采集后再试');
+  }
+  const current = await getSourceListingWorkflowClient().getStatus({
+    snapshotId: handoff.snapshotId,
+    supplyGoodsId: handoff.supplyGoodsId,
+  });
+  const listing = currentSourceListingContext(current, requestedListingWorkflowId);
+  if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
+  return getByokWorkbenchRuntimeDispatcher().openFromSource({
+    request: {
+      sourcePlatform: platform,
+      sourceProductId,
+      sourceCaptureSnapshotId: handoff.snapshotId,
+      supplyGoodsId: handoff.supplyGoodsId,
+      shopId: listing.shopId,
+      workflowId: listing.listingWorkflowId,
+      draftRevision: listing.revision,
+      draftVersion: listing.draftVersion,
+    },
+    sourceSender,
+  });
 }
 
 async function loadAuthoritativeSourceAiImageSuiteProjection(message) {
@@ -3931,6 +4035,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE) {
+    Promise.resolve(openAuthoritativeSourceByokWorkbench(message, sender)).then((result) => {
+      sendResponse({ ok: true, result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === 'ss-erp:source-listing-workbench-status') {
     Promise.resolve().then(async () => {
       const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
@@ -5613,3 +5726,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+if (chrome.tabs?.onRemoved?.addListener) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    Promise.resolve().then(() => (
+      getByokWorkbenchRuntimeDispatcher().removeTab(tabId)
+    )).catch(() => {});
+  });
+}

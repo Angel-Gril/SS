@@ -1,14 +1,17 @@
 (function exposeByokReadinessHandleCache(global) {
   'use strict';
 
-  var ATTESTATION_VERSION = 'extension-byok-readiness-attestation/v1';
-  var BINDING_VERSION = 'extension-byok-readiness-binding/v1';
-  var VERIFICATION_VERSION = 'extension-byok-readiness-verification/v1';
+  var ATTESTATION_VERSION = 'extension-byok-readiness-attestation/v2';
+  var BINDING_VERSION = 'extension-byok-readiness-binding/v2';
+  var VERIFICATION_VERSION = 'extension-byok-readiness-verification/v2';
   var MAX_TTL_MS = 10 * 60 * 1000;
   var MAX_ENTRIES = 64;
   var BINDING_KEYS = [
     'contractVersion', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
-    'draftRevision', 'draftVersion', 'providerOrigin', 'model', 'operation', 'policyRevision',
+    'draftRevision', 'draftVersion', 'sourcePlatform', 'sourceProductId',
+    'sourceCaptureSnapshotId', 'supplyGoodsId', 'skuKey', 'slotKey',
+    'assignmentMode', 'assignmentOrdinal', 'providerOrigin', 'model', 'operation',
+    'policyRevision',
   ];
 
   function cacheError(code) {
@@ -49,6 +52,14 @@
     return value;
   }
 
+  function nullableOrdinal(value) {
+    if (value === null) return null;
+    if (!Number.isSafeInteger(value) || value < 0 || value > 499) {
+      throw cacheError('SS_ERP_BYOK_READINESS_INVALID');
+    }
+    return value;
+  }
+
   function providerOrigin(value) {
     var parsed;
     try {
@@ -70,8 +81,26 @@
     var workflowId = nullableText(value.workflowId);
     var draftRevision = nullablePositiveInteger(value.draftRevision);
     var draftVersion = nullablePositiveInteger(value.draftVersion);
-    if ([workflowId, draftRevision, draftVersion].some(function (item) { return item === null; })
-      && [workflowId, draftRevision, draftVersion].some(function (item) { return item !== null; })) {
+    var sourcePlatform = nullableText(value.sourcePlatform);
+    var sourceProductId = nullableText(value.sourceProductId);
+    var sourceCaptureSnapshotId = nullableText(value.sourceCaptureSnapshotId);
+    var supplyGoodsId = nullableText(value.supplyGoodsId);
+    var skuKey = value.skuKey === null ? null : text(value.skuKey, 500);
+    var slotKey = nullableText(value.slotKey);
+    var assignmentMode = nullableText(value.assignmentMode);
+    var assignmentOrdinal = nullableOrdinal(value.assignmentOrdinal);
+    var draftContext = [
+      workflowId, draftRevision, draftVersion, sourcePlatform, sourceProductId,
+      sourceCaptureSnapshotId, supplyGoodsId, skuKey, slotKey, assignmentMode,
+      assignmentOrdinal,
+    ];
+    if (draftContext.some(function (item) { return item === null; })
+      && draftContext.some(function (item) { return item !== null; })) {
+      throw cacheError('SS_ERP_BYOK_READINESS_INVALID');
+    }
+    if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
+      || assignmentMode !== 'APPEND'
+      || slotKey !== 'sku:' + skuKey + ':hero')) {
       throw cacheError('SS_ERP_BYOK_READINESS_INVALID');
     }
     var operation = text(value.operation, 64);
@@ -86,6 +115,14 @@
       workflowId: workflowId,
       draftRevision: draftRevision,
       draftVersion: draftVersion,
+      sourcePlatform: sourcePlatform,
+      sourceProductId: sourceProductId,
+      sourceCaptureSnapshotId: sourceCaptureSnapshotId,
+      supplyGoodsId: supplyGoodsId,
+      skuKey: skuKey,
+      slotKey: slotKey,
+      assignmentMode: assignmentMode,
+      assignmentOrdinal: assignmentOrdinal,
       providerOrigin: providerOrigin(value.providerOrigin),
       model: text(value.model, 200),
       operation: operation,

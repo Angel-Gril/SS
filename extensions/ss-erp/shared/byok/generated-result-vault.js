@@ -7,11 +7,14 @@
   var MAX_RESULT_BYTES = 20 * 1024 * 1024;
   var DEFAULT_TTL_MS = 10 * 60 * 1000;
   var MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v1';
+  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
   var BINDING_KEYS = [
     'contractVersion', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
-    'draftRevision', 'draftVersion', 'providerOrigin', 'model', 'operation', 'policyRevision',
+    'draftRevision', 'draftVersion', 'sourcePlatform', 'sourceProductId',
+    'sourceCaptureSnapshotId', 'supplyGoodsId', 'skuKey', 'slotKey',
+    'assignmentMode', 'assignmentOrdinal', 'providerOrigin', 'model', 'operation',
+    'policyRevision',
   ];
 
   function vaultError(code) {
@@ -43,6 +46,13 @@
     return value;
   }
 
+  function assignmentOrdinal(value) {
+    if (!Number.isSafeInteger(value) || value < 0 || value > 499) {
+      throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+    }
+    return value;
+  }
+
   function exactKeys(value, keys) {
     return value && typeof value === 'object' && !Array.isArray(value)
       && Object.keys(value).length === keys.length
@@ -54,6 +64,13 @@
       || value.contractVersion !== READINESS_BINDING_VERSION) {
       throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
     }
+    var skuKey = text(value.skuKey, 500);
+    var slotKey = text(value.slotKey, 200);
+    if (!['1688', 'pdd', 'taobao', 'tmall'].includes(value.sourcePlatform)
+      || value.assignmentMode !== 'APPEND'
+      || slotKey !== 'sku:' + skuKey + ':hero') {
+      throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+    }
     return Object.freeze({
       contractVersion: READINESS_BINDING_VERSION,
       ownerUserId: text(value.ownerUserId, 200),
@@ -62,6 +79,14 @@
       workflowId: text(value.workflowId, 200),
       draftRevision: positiveInteger(value.draftRevision, Number.MAX_SAFE_INTEGER),
       draftVersion: positiveInteger(value.draftVersion, Number.MAX_SAFE_INTEGER),
+      sourcePlatform: text(value.sourcePlatform, 16),
+      sourceProductId: text(value.sourceProductId, 200),
+      sourceCaptureSnapshotId: text(value.sourceCaptureSnapshotId, 200),
+      supplyGoodsId: text(value.supplyGoodsId, 200),
+      skuKey: skuKey,
+      slotKey: slotKey,
+      assignmentMode: 'APPEND',
+      assignmentOrdinal: assignmentOrdinal(value.assignmentOrdinal),
       providerOrigin: text(value.providerOrigin, 300),
       model: text(value.model, 200),
       operation: text(value.operation, 64),
@@ -99,6 +124,8 @@
       requestHash: entry.requestHash,
       promptHash: entry.promptHash,
       acceptedAt: entry.acceptedAt,
+      reviewState: entry.reviewState,
+      reviewedAt: entry.reviewedAt,
       expiresAt: entry.expiresAt,
       image: Object.freeze({
         mimeType: entry.mimeType,
@@ -182,6 +209,8 @@
         byteLength: byteLength,
         sha256: sha256(result.image.sha256),
         blob: result.image.blob,
+        reviewState: 'CANDIDATE_READY',
+        reviewedAt: null,
         lifecycleEpoch: lifecycleAuthority.epoch,
         binding: binding,
         authorityFingerprint: JSON.stringify({
@@ -246,6 +275,43 @@
       return getPublic(resultId);
     }
 
+    function assertExactBinding(entry, bindingValue) {
+      var binding = normalizeBinding(bindingValue);
+      if (!BINDING_KEYS.every(function (key) { return entry.binding[key] === binding[key]; })) {
+        throw vaultError('SS_ERP_BYOK_RESULT_AUTHORITY_MISMATCH');
+      }
+    }
+
+    function approve(resultIdValue, bindingValue) {
+      var entry = getForBackground(resultIdValue);
+      assertExactBinding(entry, bindingValue);
+      if (entry.reviewState === 'APPROVED') return publicResult(entry);
+      if (entry.reviewState !== 'CANDIDATE_READY') {
+        throw vaultError('SS_ERP_BYOK_RESULT_REVIEW_INVALID');
+      }
+      entry.reviewState = 'APPROVED';
+      entry.reviewedAt = new Date(currentMillis()).toISOString();
+      return publicResult(entry);
+    }
+
+    function reject(resultIdValue, bindingValue) {
+      var entry = getForBackground(resultIdValue);
+      assertExactBinding(entry, bindingValue);
+      if (entry.reviewState !== 'CANDIDATE_READY') {
+        throw vaultError('SS_ERP_BYOK_RESULT_REVIEW_INVALID');
+      }
+      remove(entry.resultId);
+      return Object.freeze({ resultId: entry.resultId, reviewState: 'REJECTED' });
+    }
+
+    function getApprovedForBackground(resultIdValue) {
+      var entry = getForBackground(resultIdValue);
+      if (entry.reviewState !== 'APPROVED' || !entry.reviewedAt) {
+        throw vaultError('SS_ERP_BYOK_RESULT_APPROVAL_REQUIRED');
+      }
+      return entry;
+    }
+
     function clear() {
       Array.from(entries.keys()).forEach(remove);
     }
@@ -255,6 +321,9 @@
       getForBackground: getForBackground,
       getPublic: getPublic,
       getPublicByOperation: getPublicByOperation,
+      getApprovedForBackground: getApprovedForBackground,
+      approve: approve,
+      reject: reject,
       release: function (resultId) { return remove(text(resultId, 128)); },
       clear: clear,
       size: function () { prune(currentMillis()); return entries.size; },

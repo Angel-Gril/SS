@@ -44,13 +44,21 @@ function profile(overrides = {}) {
 
 function readinessBinding(overrides = {}) {
   return {
-    contractVersion: 'extension-byok-readiness-binding/v1',
+    contractVersion: 'extension-byok-readiness-binding/v2',
     ownerUserId: 'owner-1',
     deviceSessionId: 'device-session-1',
     shopId: 'shop-1',
     workflowId: null,
     draftRevision: null,
     draftVersion: null,
+    sourcePlatform: null,
+    sourceProductId: null,
+    sourceCaptureSnapshotId: null,
+    supplyGoodsId: null,
+    skuKey: null,
+    slotKey: null,
+    assignmentMode: null,
+    assignmentOrdinal: null,
     providerOrigin: 'https://relay.example',
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',

@@ -21,6 +21,14 @@
     'workflowId',
     'draftRevision',
     'draftVersion',
+    'sourcePlatform',
+    'sourceProductId',
+    'sourceCaptureSnapshotId',
+    'supplyGoodsId',
+    'skuKey',
+    'slotKey',
+    'assignmentMode',
+    'assignmentOrdinal',
     'providerOrigin',
     'model',
     'operation',
@@ -224,6 +232,15 @@
     result.workflowId = nullableText(value.workflowId, 200);
     result.draftRevision = nullablePositiveInteger(value.draftRevision);
     result.draftVersion = nullablePositiveInteger(value.draftVersion);
+    [
+      'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId',
+      'skuKey', 'slotKey', 'assignmentMode', 'assignmentOrdinal',
+    ].forEach(function (key) {
+      if (value[key] !== null) {
+        throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_OUTPUT_INVALID');
+      }
+      result[key] = null;
+    });
     result.providerOrigin = text(value.providerOrigin, 300);
     result.model = text(value.model, 200);
     result.operation = operation(value.operation, schema);

@@ -70,6 +70,14 @@
         && stored.workflowId === binding.workflowId
         && stored.draftRevision === binding.draftRevision
         && stored.draftVersion === binding.draftVersion
+        && stored.sourcePlatform === binding.sourcePlatform
+        && stored.sourceProductId === binding.sourceProductId
+        && stored.sourceCaptureSnapshotId === binding.sourceCaptureSnapshotId
+        && stored.supplyGoodsId === binding.supplyGoodsId
+        && stored.skuKey === binding.skuKey
+        && stored.slotKey === binding.slotKey
+        && stored.assignmentMode === binding.assignmentMode
+        && stored.assignmentOrdinal === binding.assignmentOrdinal
         && stored.providerOrigin === binding.providerOrigin
         && stored.model === binding.model
         && stored.operation === binding.operation

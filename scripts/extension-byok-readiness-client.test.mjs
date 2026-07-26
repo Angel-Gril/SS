@@ -12,10 +12,10 @@ const api = context.SS_ERP_BYOK_READINESS_CLIENT;
 const posts = [];
 const issued = [];
 const attestation = {
-  contractVersion: 'extension-byok-readiness-attestation/v1',
+  contractVersion: 'extension-byok-readiness-attestation/v2',
   authenticated: true,
   expiresAt: '2026-07-25T15:05:00.000Z',
-  binding: { contractVersion: 'extension-byok-readiness-binding/v1' },
+  binding: { contractVersion: 'extension-byok-readiness-binding/v2' },
   decision: { allowed: true },
 };
 const client = api.createClient({
@@ -63,6 +63,14 @@ assert.deepEqual(JSON.parse(JSON.stringify(posts)), [{
     workflowId: null,
     draftRevision: null,
     draftVersion: null,
+    sourcePlatform: null,
+    sourceProductId: null,
+    sourceCaptureSnapshotId: null,
+    supplyGoodsId: null,
+    skuKey: null,
+    slotKey: null,
+    assignmentMode: null,
+    assignmentOrdinal: null,
     providerOrigin: 'https://relay.example',
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',

@@ -9,8 +9,8 @@
   }
 
   var CONTRACT_VERSION = 'extension-runtime-message-authorization/v1';
-  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v1';
-  var READINESS_VERIFICATION_VERSION = 'extension-byok-readiness-verification/v1';
+  var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
+  var READINESS_VERIFICATION_VERSION = 'extension-byok-readiness-verification/v2';
   var MAX_ID_LENGTH = 200;
   var MAX_HANDLE_LENGTH = 4096;
   var MAX_STRING_LENGTH = 65536;
@@ -44,6 +44,8 @@
       GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
       EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
       RECOVER_PROVIDER: 'ss-erp:ai-image-workbench-provider-recover',
+      OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
+      REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
       INGEST: 'ss-erp:ai-image-workbench-ingest',
       PUBLISH: 'ss-erp:ai-image-workbench-publish',
     }),
@@ -129,6 +131,14 @@
     'workflowId',
     'draftRevision',
     'draftVersion',
+    'sourcePlatform',
+    'sourceProductId',
+    'sourceCaptureSnapshotId',
+    'supplyGoodsId',
+    'skuKey',
+    'slotKey',
+    'assignmentMode',
+    'assignmentOrdinal',
     'providerOrigin',
     'model',
     'operation',
@@ -310,6 +320,18 @@
     return null;
   }
 
+  function internalSenderIdentity(sender) {
+    var tabId = Number(sender && sender.tab && sender.tab.id);
+    var documentId = sender && typeof sender.documentId === 'string'
+      ? sender.documentId.normalize('NFKC').trim()
+      : '';
+    return Object.freeze({
+      tabId: Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : null,
+      documentId: documentId && documentId.length <= MAX_ID_LENGTH ? documentId : null,
+      frameId: Number.isSafeInteger(sender && sender.frameId) ? sender.frameId : null,
+    });
+  }
+
   function descriptorFor(type) {
     if (MESSAGE_TYPES.PROVIDER_SETTINGS && PROVIDER_SETTINGS_TYPES.has(type)) {
       return {
@@ -448,6 +470,21 @@
     return value;
   }
 
+  function normalizeNullableText(value, maximum) {
+    if (value === null) return null;
+    var normalized = text(value, maximum);
+    if (normalized !== value) throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+    return normalized;
+  }
+
+  function normalizeAssignmentOrdinal(value) {
+    if (value === null) return null;
+    if (!Number.isSafeInteger(value) || value < 0 || value > 499) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+    }
+    return value;
+  }
+
   function normalizeBinding(value) {
     if (!isRecord(value)) throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
     var allowed = new Set(BINDING_KEYS);
@@ -464,14 +501,47 @@
     var providerOrigin = value.providerOrigin === null ? null : normalizeOrigin(value.providerOrigin);
     var model = value.model === null ? null : text(value.model, MAX_ID_LENGTH);
     if (model !== null) assertSafeString(model, []);
+    var workflowId = normalizeNullableId(value.workflowId);
+    var draftRevision = normalizePositiveInteger(value.draftRevision);
+    var draftVersion = normalizePositiveInteger(value.draftVersion);
+    var sourcePlatform = normalizeNullableText(value.sourcePlatform, 16);
+    var sourceProductId = normalizeNullableText(value.sourceProductId, 200);
+    var sourceCaptureSnapshotId = normalizeNullableText(value.sourceCaptureSnapshotId, 200);
+    var supplyGoodsId = normalizeNullableText(value.supplyGoodsId, 200);
+    var skuKey = normalizeNullableText(value.skuKey, 500);
+    var slotKey = normalizeNullableText(value.slotKey, 200);
+    var assignmentMode = normalizeNullableText(value.assignmentMode, 16);
+    var assignmentOrdinal = normalizeAssignmentOrdinal(value.assignmentOrdinal);
+    var draftContext = [
+      workflowId, draftRevision, draftVersion, sourcePlatform, sourceProductId,
+      sourceCaptureSnapshotId, supplyGoodsId, skuKey, slotKey, assignmentMode,
+      assignmentOrdinal,
+    ];
+    if (draftContext.some(function (item) { return item === null; })
+      && draftContext.some(function (item) { return item !== null; })) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+    }
+    if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
+      || assignmentMode !== 'APPEND'
+      || slotKey !== 'sku:' + skuKey + ':hero')) {
+      throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+    }
     return {
       contractVersion: READINESS_BINDING_VERSION,
       ownerUserId: normalizeProfileId(value.ownerUserId),
       deviceSessionId: normalizeProfileId(value.deviceSessionId),
       shopId: normalizeNullableId(value.shopId),
-      workflowId: normalizeNullableId(value.workflowId),
-      draftRevision: normalizePositiveInteger(value.draftRevision),
-      draftVersion: normalizePositiveInteger(value.draftVersion),
+      workflowId: workflowId,
+      draftRevision: draftRevision,
+      draftVersion: draftVersion,
+      sourcePlatform: sourcePlatform,
+      sourceProductId: sourceProductId,
+      sourceCaptureSnapshotId: sourceCaptureSnapshotId,
+      supplyGoodsId: supplyGoodsId,
+      skuKey: skuKey,
+      slotKey: slotKey,
+      assignmentMode: assignmentMode,
+      assignmentOrdinal: assignmentOrdinal,
       providerOrigin: providerOrigin,
       model: model,
       operation: operation,
@@ -498,7 +568,12 @@
 
   function comparePayloadBinding(payload, binding) {
     if (!isRecord(payload)) return;
-    ['shopId', 'workflowId', 'draftRevision', 'draftVersion', 'providerOrigin', 'model', 'operation']
+    [
+      'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'sourcePlatform',
+      'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId', 'skuKey',
+      'slotKey', 'assignmentMode', 'assignmentOrdinal', 'providerOrigin', 'model',
+      'operation',
+    ]
       .forEach(function (key) {
         if (payload[key] === undefined || payload[key] === null) return;
         if (binding[key] !== payload[key]) {
@@ -766,6 +841,7 @@
     }
     var context = {
       authorization: decision,
+      sender: internalSenderIdentity(input.sender),
     };
     if (decision.secretRequest) {
       context.readSecretPayload = secretPayloadReader(input.message);

@@ -19,9 +19,13 @@ const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 const blob = new Blob([bytes], { type: 'image/png' });
 function binding(overrides = {}) {
   return {
-    contractVersion: 'extension-byok-readiness-binding/v1',
+    contractVersion: 'extension-byok-readiness-binding/v2',
     ownerUserId: 'owner-1', deviceSessionId: 'session-1', shopId: 'shop-1',
     workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+    sourcePlatform: '1688', sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+    assignmentMode: 'APPEND', assignmentOrdinal: 0,
     providerOrigin: 'https://relay.example', model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE', policyRevision: '734', ...overrides,
   };
@@ -50,6 +54,8 @@ function authority(overrides = {}) {
 const stored = vault.put(result(), binding(), authority());
 assert.match(stored.resultId, /^br_[a-f0-9]{48}$/u);
 assert.equal(stored.image.sha256, 'd'.repeat(64));
+assert.equal(stored.reviewState, 'CANDIDATE_READY');
+assert.equal(stored.reviewedAt, null);
 assert.equal('blob' in stored.image, false);
 assert.equal('profileIdentity' in stored, false);
 assert.equal('providerOrigin' in stored, false);
@@ -83,6 +89,13 @@ assert.throws(
   () => vault.put(result({ idempotencyKey: 'provider-generate-context' }), binding(), authority({ epoch: -1 })),
   /RESULT_INVALID/u,
 );
+
+assert.throws(() => vault.getApprovedForBackground(stored.resultId), /APPROVAL_REQUIRED/u);
+const approved = vault.approve(stored.resultId, binding());
+assert.equal(approved.reviewState, 'APPROVED');
+assert.equal(approved.reviewedAt, '2026-07-25T15:00:00.000Z');
+assert.equal(vault.getApprovedForBackground(stored.resultId).blob, blob);
+assert.throws(() => vault.reject(stored.resultId, binding()), /REVIEW_INVALID/u);
 assert.throws(
   () => vault.put(
     result({ idempotencyKey: 'provider-generate-context' }),
@@ -101,7 +114,10 @@ const released = vault.put(
   binding(),
   authority(),
 );
-assert.equal(vault.release(released.resultId), true);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(vault.reject(released.resultId, binding()))),
+  { resultId: released.resultId, reviewState: 'REJECTED' },
+);
 assert.equal(vault.release(released.resultId), false);
 assert.equal(vault.totalBytes(), 0);
 vault.clear();

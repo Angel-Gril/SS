@@ -34,32 +34,36 @@ credential storage, or direct Ozon calls.
 
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
-- [ ] Phase 2: Secure single-image BYOK vertical slice (6/10 tasks) [details](./phase-2-byok-vertical-slice.md)
+- [ ] Phase 2: Secure single-image BYOK vertical slice (7/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (0/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [ ] Phase 4: Complete dual-mode workbench (0/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 16/37 tasks complete (43%).
+Overall: 17/37 tasks complete (46%).
 
 ## Current Status
 
-Phase 2 is active. `SRV-04` through `SRV-06`, `EXT-04A`, `EXT-05`, and `UI-01` are complete:
+Phase 2 is active. `SRV-04` through `SRV-06`, `EXT-04A`, `EXT-05`, `UI-01`, and `UI-02A` are complete:
 hostile Provider output is normalized, stored, and atomically bound to the exact draft
 assignment; database-enforced execution modes keep BYOK at zero ERP AI cost while paid hosted
 work requires an exact reservation and charge settlement; the focused Provider page now keeps
-session keys background-only and binds permission/evidence to the exact live policy. The final
-foundation review closed restart replay, cross-context consent, pre-authentication buffering,
-storage cleanup, live publish-scope, and provenance gaps. `INT-01` transport exists but remains
-incomplete until reject and expiry cleanup are finished. The next active task is `UI-02A`; all
-new flags remain default-off and no real Provider call, production mutation, or deployment is
-authorized until the remaining fixture gates pass.
+session keys background-only and binds permission/evidence to the exact live policy. The minimal
+workbench now launches from the exact source product, binds the latest snapshot and one
+server-selected SKU hero slot, preserves unresolved Provider outcomes across reloads, and supports
+truthful single-result preview/reject/approval without ingest or publish. The final foundation and
+workbench reviews closed restart replay, cross-context consent, pre-authentication buffering,
+storage cleanup, live publish-scope, provenance, stale-preview, concurrent-review, and
+document-replacement gaps. `INT-01` transport exists but remains incomplete until reject and expiry
+cleanup are finished. The next active task is `INT-01`; all new flags remain default-off and no
+real Provider call, production mutation, or deployment is authorized until the remaining fixture
+gates pass.
 
 ## Next Steps
 
-1. Build `UI-02A` against the completed readiness/evidence/background fixtures.
-2. Finish `INT-01` rejection/expiry cleanup and accepted-result binding after `UI-02A`.
-3. Complete `INT-02` and `QA-01` with fake Provider, hostile-image,
+1. Finish `INT-01` rejection/expiry cleanup and accepted-result binding on the completed workbench.
+2. Complete `INT-02` through the existing publish intent, grant, receipt, and recovery path.
+3. Complete `QA-01` with fake Provider, hostile-image,
    secret-sentinel, stale-draft, idempotency, and zero-ERP-charge gates. Keep all flags dark.
 
 ## Cross-Conversation Protocol

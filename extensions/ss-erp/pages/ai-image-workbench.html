@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>AI 图片工作台 - SS ERP</title>
+  <link rel="stylesheet" href="./ai-image-workbench.css" />
+</head>
+<body>
+  <main class="workbench-page" aria-labelledby="pageTitle">
+    <header class="page-header">
+      <div class="title-row">
+        <span class="brand-mark" aria-hidden="true">SS</span>
+        <div>
+          <p class="eyebrow">扩展独立工作区</p>
+          <h1 id="pageTitle">AI 图片工作台</h1>
+          <p class="page-subtitle">单图 BYOK 安全验收版</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <a class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">Provider 设置</a>
+        <button id="refreshButton" class="button button-secondary" type="button">刷新状态</button>
+      </div>
+    </header>
+
+    <div id="pageStatus" class="page-status" role="status" aria-live="polite">
+      正在验证工作台会话...
+    </div>
+
+    <section class="context-band" aria-labelledby="contextTitle">
+      <div class="section-heading">
+        <div>
+          <p id="contextKicker" class="section-kicker">服务器绑定待确认</p>
+          <h2 id="contextTitle">本次目标</h2>
+        </div>
+        <span id="contextBadge" class="state-badge state-pending">正在验证</span>
+      </div>
+      <dl class="context-grid">
+        <div><dt>来源商品</dt><dd id="contextSource">待读取</dd></div>
+        <div><dt>Ozon 店铺</dt><dd id="contextShop">待读取</dd></div>
+        <div><dt>草稿版本</dt><dd id="contextDraft">待读取</dd></div>
+        <div><dt>目标槽位</dt><dd id="contextSku">待读取</dd></div>
+      </dl>
+    </section>
+
+    <div class="workbench-grid">
+      <section class="control-panel" aria-labelledby="generationTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">生成配置</p>
+            <h2 id="generationTitle">生成一张候选图</h2>
+          </div>
+          <span class="state-badge state-warning">不会直接上架</span>
+        </div>
+
+        <fieldset class="mode-switch">
+          <legend>执行方式</legend>
+          <label class="mode-option is-selected">
+            <input id="executionModeByok" type="radio" name="executionMode" value="BYOK" checked />
+            <span><strong>自带 API</strong><small>费用由您的 Provider 账户承担</small></span>
+          </label>
+          <label class="mode-option is-disabled">
+            <input id="executionModeHosted" type="radio" name="executionMode" value="ERP_HOSTED" disabled />
+            <span><strong>ERP 托管计费</strong><small>将在后续完整工作台阶段开放</small></span>
+          </label>
+        </fieldset>
+
+        <div class="field-group">
+          <label for="profileSelect">Provider 档案</label>
+          <select id="profileSelect" aria-describedby="profileSummary" disabled>
+            <option value="">正在读取...</option>
+          </select>
+          <p id="profileSummary" class="field-hint">正在检查会话密钥、来源权限和能力证据</p>
+        </div>
+
+        <div class="field-group">
+          <label for="promptInput">生成提示词</label>
+          <textarea
+            id="promptInput"
+            maxlength="8000"
+            rows="7"
+            placeholder="只描述已知商品事实、构图、背景和光线；不要填写未确认的材质、尺寸或认证。"
+          ></textarea>
+          <p class="field-hint">提示词会发送到所选 Provider。请仅提交您有权处理的内容。</p>
+        </div>
+
+        <div class="field-group">
+          <label for="negativePromptInput">负面提示词（可选）</label>
+          <textarea
+            id="negativePromptInput"
+            maxlength="4000"
+            rows="3"
+            placeholder="例如：水印、额外文字、变形、低清晰度"
+          ></textarea>
+        </div>
+
+        <div class="generation-footer">
+          <div class="field-group size-field">
+            <label for="sizeSelect">图片尺寸</label>
+            <select id="sizeSelect">
+              <option value="1024x1024">1024 × 1024</option>
+              <option value="1024x1536">1024 × 1536</option>
+              <option value="1536x1024">1536 × 1024</option>
+            </select>
+          </div>
+          <button id="generateButton" class="button button-primary" type="button" disabled>
+            生成候选图
+          </button>
+        </div>
+      </section>
+
+      <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">本地审核</p>
+            <h2 id="resultTitle">Provider 候选结果</h2>
+          </div>
+          <span id="resultStatus" class="state-badge state-pending">等待结果</span>
+        </div>
+
+        <figure class="preview-frame">
+          <img
+            id="previewImage"
+            alt="AI 生成候选图预览"
+            referrerpolicy="no-referrer"
+          />
+          <figcaption id="previewMeta">等待安全预览</figcaption>
+        </figure>
+
+        <p class="review-note">
+          先检查商品主体、文字、比例和事实一致性。批准只代表允许进入下一步，不会直接写入 ERP 或 Ozon。
+        </p>
+
+        <div class="review-actions">
+          <button id="rejectButton" class="button button-danger" type="button" disabled>驳回并删除</button>
+          <button id="approveButton" class="button button-primary" type="button" disabled>批准候选图</button>
+        </div>
+
+        <div id="approvedNotice" class="approved-notice" role="status" hidden>
+          已批准但尚未上传 ERP。媒体接收与草稿绑定将在下一阶段启用；当前不能发布。
+        </div>
+      </section>
+
+      <section id="emptyResult" class="empty-result" aria-label="工作台安全说明">
+        <p class="section-kicker">当前边界</p>
+        <h2>生成、预览、审核</h2>
+        <ul>
+          <li>密钥只在扩展后台的当前浏览器会话中使用。</li>
+          <li>图片 Blob 通过一次性通道进入此页面，不进入普通消息历史。</li>
+          <li>批准后仍需 ERP 规范化、存储和精确草稿绑定，当前尚未开放。</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+
+  <noscript><p class="no-script">需要启用 JavaScript 才能使用 AI 图片工作台。</p></noscript>
+  <script src="../shared/byok/workbench-client.js"></script>
+  <script src="./ai-image-workbench.js"></script>
+</body>
+</html>

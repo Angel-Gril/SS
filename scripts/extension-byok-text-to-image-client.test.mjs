@@ -54,19 +54,44 @@ function profile(overrides = {}) {
 
 function readiness(overrides = {}) {
   return {
-    contractVersion: 'extension-byok-readiness-binding/v1',
+    contractVersion: 'extension-byok-readiness-binding/v2',
     ownerUserId: 'owner-1',
     deviceSessionId: 'device-session-1',
     shopId: 'shop-1',
     workflowId: 'workflow-1',
     draftRevision: 3,
     draftVersion: 4,
+    sourcePlatform: '1688',
+    sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1',
+    slotKey: 'sku:sku-1:hero',
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: 0,
     providerOrigin: 'https://relay.example',
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',
     policyRevision: 'policy-7',
     ...overrides,
   };
+}
+
+function shopReadiness(overrides = {}) {
+  return readiness({
+    workflowId: null,
+    draftRevision: null,
+    draftVersion: null,
+    sourcePlatform: null,
+    sourceProductId: null,
+    sourceCaptureSnapshotId: null,
+    supplyGoodsId: null,
+    skuKey: null,
+    slotKey: null,
+    assignmentMode: null,
+    assignmentOrdinal: null,
+    ...overrides,
+  });
 }
 
 function request(overrides = {}) {
@@ -417,6 +442,33 @@ test('probe creates exact short-lived evidence and releases its test image witho
   );
   assert.equal(client.getOperationState('probe-text-to-image-1').image.retained, false);
   assert.equal(JSON.stringify(result).includes('provider-probe-1'), false);
+});
+
+test('accepts shop-only readiness for capability probes but never for normal generation', async () => {
+  let fetchCalls = 0;
+  const { client } = loadClient({
+    evidence: [],
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const probed = await client.probe(request({
+    idempotencyKey: 'probe-shop-readiness-1',
+    readinessBinding: shopReadiness(),
+  }));
+  assert.equal(probed.operation, 'TEXT_TO_IMAGE');
+  assert.equal(fetchCalls, 1);
+  await assert.rejects(
+    client.generate(request({
+      idempotencyKey: 'generate-shop-readiness-1',
+      readinessBinding: shopReadiness(),
+    })),
+    (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
+  );
+  assert.equal(fetchCalls, 1);
 });
 
 test('downloads an independently allowed URL without Provider Authorization or cookies', async () => {

@@ -7,6 +7,10 @@ import {
   EXTENSION_BYOK_READINESS_REQUEST_VERSION,
   EXTENSION_BYOK_READINESS_TTL_MS,
 } from '../services/extension-byok-readiness-attestation.js';
+import {
+  EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
+  EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+} from '../services/extension-byok-workbench-launch.js';
 
 const NOW = new Date('2026-07-25T15:00:00.000Z');
 
@@ -17,6 +21,14 @@ function request(overrides: Record<string, unknown> = {}) {
     workflowId: 'workflow-1',
     draftRevision: 3,
     draftVersion: 4,
+    sourcePlatform: '1688',
+    sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1',
+    slotKey: 'sku:sku-1:hero',
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: 1,
     providerOrigin: 'https://relay.example',
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',
@@ -49,6 +61,8 @@ function decision(overrides: Record<string, unknown> = {}) {
 async function build(options: {
   scopes?: string[];
   draftRevision?: number;
+  sourceCaptureCurrent?: boolean;
+  assignmentCount?: number;
   readiness?: ReturnType<typeof decision>;
 } = {}) {
   const getReadiness = vi.fn(async () => options.readiness || decision());
@@ -69,6 +83,25 @@ async function build(options: {
     loadDraft: async () => ({
       id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
       revision: options.draftRevision ?? 3, draftVersion: 4,
+      supplyGoodsId: 'goods-1', sourceCaptureSnapshotId: 'snapshot-1',
+      sourceCaptureCurrent: options.sourceCaptureCurrent ?? true,
+      sourcePlatform: '1688', sourceProductId: 'product-1',
+      selectedSkuKeys: ['sku-1', 'sku-2'],
+      media: {
+        assignments: options.assignmentCount === undefined
+          ? [{
+            scope: 'SKU', skuKey: 'sku-2', slotKey: 'sku:sku-2:source',
+            assetId: 'asset-1', source: 'SOURCE',
+          }]
+          : Array.from({ length: options.assignmentCount }, (_, index) => ({
+            scope: 'SKU' as const,
+            skuKey: `occupied-${index}`,
+            slotKey: `sku:occupied-${index}:source`,
+            assetId: `asset-${index}`,
+            source: 'SOURCE' as const,
+          })),
+      },
+      stage: 'MEDIA', runState: 'DRAFT',
     }),
     getReadiness,
     now: () => NOW,
@@ -96,6 +129,14 @@ describe('extension BYOK readiness attestation route', () => {
           workflowId: 'workflow-1',
           draftRevision: 3,
           draftVersion: 4,
+          sourcePlatform: '1688',
+          sourceProductId: 'product-1',
+          sourceCaptureSnapshotId: 'snapshot-1',
+          supplyGoodsId: 'goods-1',
+          skuKey: 'sku-1',
+          slotKey: 'sku:sku-1:hero',
+          assignmentMode: 'APPEND',
+          assignmentOrdinal: 1,
           providerOrigin: 'https://relay.example',
           model: 'image-model-v1',
           operation: 'TEXT_TO_IMAGE',
@@ -148,11 +189,26 @@ describe('extension BYOK readiness attestation route', () => {
     const settings = await app.inject({
       method: 'POST',
       url: '/readiness',
-      payload: request({ workflowId: null, draftRevision: null, draftVersion: null }),
+      payload: request({
+        workflowId: null,
+        draftRevision: null,
+        draftVersion: null,
+        sourcePlatform: null,
+        sourceProductId: null,
+        sourceCaptureSnapshotId: null,
+        supplyGoodsId: null,
+        skuKey: null,
+        slotKey: null,
+        assignmentMode: null,
+        assignmentOrdinal: null,
+      }),
     });
     expect(settings.statusCode).toBe(200);
     expect(settings.json().data.binding).toMatchObject({
       workflowId: null, draftRevision: null, draftVersion: null,
+      sourcePlatform: null, sourceProductId: null, sourceCaptureSnapshotId: null,
+      supplyGoodsId: null, skuKey: null, slotKey: null,
+      assignmentMode: null, assignmentOrdinal: null,
     });
     const partial = await app.inject({
       method: 'POST',
@@ -160,6 +216,102 @@ describe('extension BYOK readiness attestation route', () => {
       payload: request({ workflowId: null }),
     });
     expect(partial.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('resolves one exact empty SKU hero target without trusting a browser-selected slot', async () => {
+    const { app } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workbench-launch',
+      payload: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+        sourcePlatform: '1688',
+        sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1',
+        supplyGoodsId: 'goods-1',
+        shopId: 'shop-1',
+        workflowId: 'workflow-1',
+        draftRevision: 3,
+        draftVersion: 4,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
+        sourcePlatform: '1688',
+        sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1',
+        supplyGoodsId: 'goods-1',
+        shopId: 'shop-1',
+        workflowId: 'workflow-1',
+        draftRevision: 3,
+        draftVersion: 4,
+        skuKey: 'sku-1',
+        slotKey: 'sku:sku-1:hero',
+        assignmentMode: 'APPEND',
+        assignmentOrdinal: 1,
+      },
+    });
+    await app.close();
+  });
+
+  it('rejects a readiness target that is not the exact live launch target', async () => {
+    const { app } = await build();
+    const cases: Array<{ overrides: Record<string, unknown>; expectedStatus: number }> = [
+      { overrides: { sourceProductId: 'other-product' }, expectedStatus: 409 },
+      { overrides: { sourceCaptureSnapshotId: 'snapshot-2' }, expectedStatus: 409 },
+      { overrides: { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero' }, expectedStatus: 409 },
+      { overrides: { slotKey: 'sku:sku-1:detail' }, expectedStatus: 409 },
+      { overrides: { assignmentMode: 'REPLACE' }, expectedStatus: 400 },
+      { overrides: { assignmentOrdinal: 0 }, expectedStatus: 409 },
+    ];
+    for (const { overrides, expectedStatus } of cases) {
+      const response = await app.inject({
+        method: 'POST', url: '/readiness', payload: request(overrides),
+      });
+      expect(response.statusCode).toBe(expectedStatus);
+    }
+    await app.close();
+  });
+
+  it('rejects launch and readiness after a newer source capture supersedes the bound snapshot', async () => {
+    const { app } = await build({ sourceCaptureCurrent: false });
+    const launch = await app.inject({
+      method: 'POST',
+      url: '/workbench-launch',
+      payload: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+      },
+    });
+    expect(launch.statusCode).toBe(409);
+    const readiness = await app.inject({
+      method: 'POST', url: '/readiness', payload: request(),
+    });
+    expect(readiness.statusCode).toBe(409);
+    await app.close();
+  });
+
+  it('rejects launch when 500 assignments leave no representable append ordinal', async () => {
+    const { app } = await build({ assignmentCount: 500 });
+    const launch = await app.inject({
+      method: 'POST',
+      url: '/workbench-launch',
+      payload: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+      },
+    });
+    expect(launch.statusCode).toBe(409);
+    expect(launch.json().errorCode).toBe('byok_workbench_launch_slot_unavailable');
     await app.close();
   });
 });

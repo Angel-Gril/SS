@@ -155,7 +155,8 @@
     var vault = options && options.vault;
     var isAuthorityCurrent = options && options.isAuthorityCurrent;
     if (!transport || typeof transport.post !== 'function' || typeof transport.postBytes !== 'function'
-      || !vault || typeof vault.getForBackground !== 'function' || typeof vault.release !== 'function'
+      || !vault || typeof vault.getApprovedForBackground !== 'function'
+      || typeof vault.release !== 'function'
       || typeof isAuthorityCurrent !== 'function') {
       throw new TypeError('BYOK ingest client dependencies are unavailable');
     }
@@ -174,7 +175,7 @@
     }
 
     function resultForInput(input, authority) {
-      var result = vault.getForBackground(input.resultId);
+      var result = vault.getApprovedForBackground(input.resultId);
       var binding = result.binding;
       if (!binding
         || result.lifecycleEpoch !== authority.lifecycleAuthority.epoch

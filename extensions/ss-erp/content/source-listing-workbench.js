@@ -352,6 +352,34 @@
     container.appendChild(wrapper);
   }
 
+  function renderByokWorkbenchLauncher(container, listing, options) {
+    if (!listing || !options || options.byokWorkbenchAvailable !== true
+      || typeof options.onOpenByokWorkbench !== 'function') return;
+    var launcher = element('section', 'ss-erp-source-workbench-byok-launcher');
+    launcher.setAttribute('data-role', 'byok-workbench-launcher');
+    var copy = element('div', 'ss-erp-source-workbench-byok-copy');
+    copy.appendChild(element('strong', '', '自带 API · 单图工作台'));
+    copy.appendChild(element(
+      'span',
+      '',
+      '使用当前会话 Provider 生成，结果先在扩展中审核，不会直接上传或上架。',
+    ));
+    var button = element(
+      'button',
+      'ss-erp-source-workbench-byok-button',
+      options.byokWorkbenchBusy === true ? '正在打开...' : '打开 BYOK 工作台',
+    );
+    button.type = 'button';
+    button.disabled = options.byokWorkbenchBusy === true;
+    button.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || button.disabled) return;
+      options.onOpenByokWorkbench(listing);
+    });
+    launcher.appendChild(copy);
+    launcher.appendChild(button);
+    container.appendChild(launcher);
+  }
+
   function renderWorkbenchAvailability(container, result, options) {
     var heading = element('div', 'ss-erp-source-workbench-heading');
     heading.appendChild(element('strong', '', 'ERP 商品工作流'));
@@ -1544,6 +1572,7 @@
     }
 
     renderImageWorkflowOverview(container, { state: 'ready', status: status }, listing, options);
+    renderByokWorkbenchLauncher(container, listing, options);
 
     var metrics = element('div', 'ss-erp-source-workbench-metrics');
     var stage = element('div', 'ss-erp-source-workbench-metric');

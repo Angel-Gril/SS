@@ -65,6 +65,14 @@ function readinessBinding(api, overrides = {}) {
     workflowId: 'workflow-1',
     draftRevision: 4,
     draftVersion: 2,
+    sourcePlatform: '1688',
+    sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1',
+    slotKey: 'sku:sku-1:hero',
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: 0,
     providerOrigin: 'https://relay.example',
     model: 'image-model-v1',
     operation: 'TEXT_TO_IMAGE',
@@ -93,6 +101,8 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const settingsReadiness = api.MESSAGE_TYPES.PROVIDER_SETTINGS.GET_READINESS;
   const workbenchState = api.MESSAGE_TYPES.WORKBENCH.GET_PUBLIC_STATE;
   const execute = api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER;
+  const preview = api.MESSAGE_TYPES.WORKBENCH.OPEN_PREVIEW;
+  const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
 
   for (const type of [
     setupContext,
@@ -102,6 +112,8 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     preparePermission,
     workbenchState,
     execute,
+    preview,
+    review,
   ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
   }
@@ -177,6 +189,38 @@ test('denies content scripts, externally connected pages and inconsistent extens
   ]) {
     assert.equal(policy.isAllowedRuntimeMessageSender(setKey, sender, extensionId), false);
     assert.equal(policy.isAllowedRuntimeMessageSender(execute, sender, extensionId), false);
+  }
+});
+
+test('allows the BYOK launcher only from an exact supported source-product page', () => {
+  const { policy } = loadApi();
+  const type = 'ss-erp:source-listing-workbench-byok-open';
+  const sourceSender = (url) => ({
+    id: extensionId,
+    url,
+    documentUrl: url,
+    origin: new URL(url).origin,
+    frameId: 0,
+    tab: { id: 12, url },
+    documentId: 'source-document-1',
+  });
+  assert.equal(policy.isKnownRuntimeMessageType(type), true);
+  for (const url of [
+    'https://detail.1688.com/offer/123.html',
+    'https://mobile.yangkeduo.com/goods.html?goods_id=456',
+    'https://item.taobao.com/item.htm?id=789',
+    'https://detail.tmall.com/item.htm?id=987',
+  ]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sourceSender(url), extensionId), true);
+  }
+  for (const sender of [
+    sourceSender('https://s.1688.com/selloffer/offer_search.htm'),
+    sourceSender('https://www.taobao.com/'),
+    sourceSender('https://detail.1688.com/offer/123.html#changed'),
+    extensionSender('/pages/ai-image-workbench.html'),
+    { id: extensionId, url: 'https://app.ss-erp.com/products' },
+  ]) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, sender, extensionId), false);
   }
 });
 
@@ -464,6 +508,25 @@ test('dispatcher authorizes before invoking handlers and sanitizes handler respo
   });
   assert.equal(guardedResponses[0].errorCode, 'SS_ERP_RUNTIME_RESPONSE_SECRET');
   assert.equal(JSON.stringify(guardedResponses).includes(opaqueSecret), false);
+
+  const senderResponses = [];
+  await api.dispatchAuthorizedRuntimeMessage({
+    runtimeId: extensionId,
+    sender: extensionSender('/pages/ai-image-workbench.html', {
+      tab: { id: 77, url: `chrome-extension://${extensionId}/pages/ai-image-workbench.html` },
+      documentId: 'workbench-document-1',
+    }),
+    message: { type: publicType, payload: {} },
+    handlers: {
+      [publicType]: async ({ sender }) => ({ ok: true, data: sender }),
+    },
+    sendResponse(value) { senderResponses.push(value); },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(senderResponses[0].data)), {
+    tabId: 77,
+    documentId: 'workbench-document-1',
+    frameId: 0,
+  });
 });
 
 test('ships the authorization module as a background-only security boundary', () => {
@@ -493,11 +556,14 @@ test('ships the authorization module as a background-only security boundary', ()
   assert.match(serviceWorkerSource, /shared\/byok\/readiness-handle-cache\.js/u);
   assert.match(serviceWorkerSource, /shared\/byok\/readiness-client\.js/u);
   assert.match(serviceWorkerSource, /shared\/byok\/provider-settings-handler\.js/u);
+  assert.match(serviceWorkerSource, /shared\/byok\/workbench-runtime-handler\.js/u);
   assert.match(serviceWorkerSource, /installByokReadinessRuntime/u);
   assert.match(
     serviceWorkerSource,
-    /providerSettingsDispatcher\.handlers[\s\S]*MESSAGE_TYPES\.WORKBENCH\.GET_READINESS/u,
+    /providerSettingsDispatcher\.handlers[\s\S]*workbenchDispatcher\.handlers/u,
   );
+  assert.match(serviceWorkerSource, /SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE/u);
+  assert.match(serviceWorkerSource, /chrome\.tabs\.onRemoved\.addListener/u);
   assert.match(serviceWorkerSource, /edit, batch, and publish[\s\S]*remain dark/u);
   assert.match(
     verifierSource,
