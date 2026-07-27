@@ -646,8 +646,8 @@ dispatchDocument('ss-erp:workspace-runtime', blueDetailReviewProjection(3, {
 const focusedAlternative = actionNode(
   nodes.workspacePromptInspector, 'select-alternative', 'attemptId', 'attempt-blue-detail',
 );
-assert.equal(focusedAlternative.disabled, true);
-assert.match(focusedAlternative.title, /预览通道尚未接入/u);
+assert.equal(focusedAlternative.disabled, false);
+assert.match(focusedAlternative.title, /一次性安全通道/u);
 assert.equal(focusedAlternative.attributes['aria-pressed'], 'true');
 const alternateCandidate = actionNode(
   nodes.workspacePromptInspector,
@@ -667,21 +667,33 @@ assert.ok(rejectAlternative);
 assert.notEqual(keepAlternative, rejectAlternative);
 assert.equal(keepAlternative.disabled, true);
 assert.equal(rejectAlternative.disabled, true);
-assert.match(keepAlternative.title, /预览通道尚未接入/u);
-assert.match(rejectAlternative.title, /预览通道尚未接入/u);
+assert.match(keepAlternative.title, /一次性安全通道/u);
+assert.match(rejectAlternative.title, /一次性安全通道/u);
 assert.ok(descendants(nodes.workspacePromptInspector).some((node) => (
   node.className === 'workspace-alternative-reason'
-    && /预览通道尚未接入/u.test(node.textContent)
+    && /一次性安全通道/u.test(node.textContent)
 )));
+alternateCandidate.dispatch('click');
+const previewAction = emittedActions.findLast((action) => action.action === 'PREVIEW_ATTEMPT');
+assert.equal(previewAction.slotKey, 'blue:detail');
+assert.equal(previewAction.attemptId, 'attempt-blue-detail-alt');
+dispatchDocument('ss-erp:workspace-preview-state', {
+  contractVersion: 'extension-byok-workbench-preview-state/v1',
+  slotKey: 'blue:detail',
+  attemptId: 'attempt-blue-detail-alt',
+  ready: true,
+});
+assert.equal(keepAlternative.disabled, false);
+assert.equal(rejectAlternative.disabled, false);
 const intentCountBeforePreviewClicks = emittedIntents.length;
 const actionCountBeforePreviewClicks = emittedActions.length;
 for (const control of [focusedAlternative, alternateCandidate, keepAlternative, rejectAlternative]) {
-  control.dispatch('click');
+  control.dispatch('click', { isTrusted: false });
 }
 assert.equal(emittedIntents.length, intentCountBeforePreviewClicks,
-  'invisible candidates cannot emit selection or review intents');
+  'untrusted candidate controls cannot emit review intents');
 assert.equal(emittedActions.length, actionCountBeforePreviewClicks,
-  'disabled candidate preview cannot emit an optimistic local action');
+  'untrusted candidate controls cannot open a preview');
 assert.equal(focusedAlternative.attributes['aria-pressed'], 'true');
 assert.equal(alternateCandidate.attributes['aria-pressed'], 'false');
 

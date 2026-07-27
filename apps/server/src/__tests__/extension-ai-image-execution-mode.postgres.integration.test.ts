@@ -6,6 +6,8 @@ import {
   type ExtensionHostedAiImagePlanBindingPrismaClient,
 } from '../services/extension-hosted-ai-image-plan-binding-prisma.js';
 import { createExtensionHostedAiImagePlanBindingRecord } from '../services/extension-hosted-ai-image-plan.js';
+import { createPrismaExtensionByokExecutionIntentRepository } from '../services/extension-byok-execution-intent-prisma.js';
+import type { ExtensionByokExecutionIntentRecord } from '../services/extension-byok-execution-intent.js';
 import { createPrismaSourceListingWorkflowRepository } from '../services/source-listing-workflow-prisma.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 
@@ -47,7 +49,7 @@ interface ModeFixture {
   suiteRequestFingerprint: string;
   suitePreviewHash: string;
   providerConfigHash: string;
-  provenance: Parameters<PrismaClient['extensionByokMediaProvenance']['create']>[0]['data'];
+  executionIntent: Record<string, unknown>;
 }
 
 async function seedModeFixture(
@@ -150,7 +152,7 @@ async function seedModeFixture(
     sha256: resultSha256,
     metadata: { executionMode: 'BYOK' },
   } });
-  const boundDraft = await listing.setMediaAssignments({
+  await listing.setMediaAssignments({
     draftId: sourceDraft.id,
     ownerUserId,
     actorUserId: ownerUserId,
@@ -319,37 +321,32 @@ async function seedModeFixture(
     suiteRequestFingerprint: digest(`${prefix}:suite-request`),
     suitePreviewHash: digest(`${prefix}:suite-preview`),
     providerConfigHash: digest(`${prefix}:provider-config`),
-    provenance: {
-      id: `${prefix}_provenance`,
-      contractVersion: 'extension-byok-media-provenance/v1',
+    executionIntent: {
+      id: `${prefix}_execution_intent`,
+      contractVersion: 'extension-byok-execution-intent/v1',
       executionMode: 'BYOK',
       ownerUserId,
       actorUserId: ownerUserId,
       deviceSessionId,
       shopId,
-      workflowId: sourceDraft.id,
+      listingWorkflowId: sourceDraft.id,
       draftRevision: sourceDraft.revision,
       draftVersion: sourceDraft.draftVersion,
-      boundDraftRevision: boundDraft.revision,
-      boundDraftVersion: boundDraft.draftVersion,
+      sourceCaptureSnapshotId: snapshotId,
+      supplyGoodsId: goodsId,
       skuKey: 'sku-1',
       slotKey: 'sku:sku-1:hero',
+      assignmentMode: 'APPEND',
       assignmentOrdinal: 0,
-      assignmentSha256: digest(`${prefix}:assignment`),
       policyRevision: 1,
-      endpointOriginSha256: digest('https://provider.example'),
+      providerOriginSha256: digest('https://provider.example'),
       model: 'image-model-v1',
       operation: 'TEXT_TO_IMAGE',
-      promptSha256: digest(`${prefix}:prompt`),
-      referenceSha256s: [],
-      resultSha256,
-      assetId,
-      resultMimeType: 'image/png',
-      resultWidth: 10,
-      resultHeight: 10,
-      idempotencyKey: `${prefix}_byok_key`,
+      requestMode: 'json',
+      providerIdempotencyKey: `${prefix}_provider_attempt`,
+      providerRequestHash: digest(`${prefix}:provider-request`),
       requestHash: digest(`${prefix}:byok-request`),
-      erpAiChargeCents: 0,
+      outcome: 'PENDING',
     },
   };
 }
@@ -417,9 +414,9 @@ async function insertHostedSuite(
   }, { isolationLevel: 'Serializable' });
 }
 
-async function insertByokProvenance(client: PrismaClient, fixture: ModeFixture) {
+async function insertByokIntent(client: PrismaClient, fixture: ModeFixture) {
   return client.$transaction(async (tx) => {
-    await tx.extensionByokMediaProvenance.create({ data: fixture.provenance });
+    await (tx as any).extensionByokExecutionIntent.create({ data: fixture.executionIntent });
   }, { isolationLevel: 'Serializable' });
 }
 
@@ -448,9 +445,6 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
     client = new PrismaClient({ datasourceUrl: databaseUrl });
     await client.$connect();
     await client.$executeRawUnsafe(
-      'ALTER TABLE "extension_byok_media_provenance" DISABLE TRIGGER "extension_byok_media_provenance_authority"',
-    );
-    await client.$executeRawUnsafe(
       'ALTER TABLE "ai_media_suite_events" DISABLE TRIGGER "ai_media_suite_claim_event_slot_set"',
     );
   }, 30_000);
@@ -458,19 +452,16 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
   afterAll(async () => {
     if (client) {
       await client.$executeRawUnsafe(
-        'ALTER TABLE "extension_byok_media_provenance" ENABLE TRIGGER "extension_byok_media_provenance_authority"',
-      ).catch(() => undefined);
-      await client.$executeRawUnsafe(
         'ALTER TABLE "ai_media_suite_events" ENABLE TRIGGER "ai_media_suite_claim_event_slot_set"',
       ).catch(() => undefined);
       await client.$disconnect();
     }
   });
 
-  it('rejects BYOK provenance after the exact hosted suite claims the draft', async () => {
+  it('rejects a BYOK intent after the exact hosted suite claims the draft', async () => {
     const fixture = await seedModeFixture(client, 'hosted_first');
     await expect(insertHostedSuite(client, fixture)).resolves.toBeUndefined();
-    await expect(insertByokProvenance(client, fixture)).rejects.toThrow(
+    await expect(insertByokIntent(client, fixture)).rejects.toThrow(
       /execution mode|ERP-hosted suite/iu,
     );
   }, 30_000);
@@ -501,12 +492,68 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
       fixture.listingWorkflowId,
     );
     expect(rows[0]?.count).toBe(0);
-    await expect(insertByokProvenance(client, fixture)).resolves.toBeUndefined();
+    await expect(insertByokIntent(client, fixture)).resolves.toBeUndefined();
   }, 30_000);
 
-  it('rejects a hosted suite after BYOK provenance claims the exact draft', async () => {
+  it('rolls back a new draft mode claim when the Provider key belongs to another intent', async () => {
+    const fixture = await seedModeFixture(client, 'provider_key_conflict');
+    await expect(insertByokIntent(client, fixture)).resolves.toBeUndefined();
+    const existing = fixture.executionIntent as Record<string, any>;
+    await client.extensionDeviceShopGrant.create({ data: {
+      sessionId: existing.deviceSessionId,
+      shopId: fixture.shopId,
+      status: 'ACTIVE',
+      grantedAt: new Date(),
+    } });
+    const workflow = await client.sourceListingWorkflow.findUniqueOrThrow({
+      where: { id: fixture.listingWorkflowId },
+      select: { currentRevision: true, currentDraftVersion: true },
+    });
+    const now = new Date();
+    const conflicting: ExtensionByokExecutionIntentRecord = {
+      ...(existing as ExtensionByokExecutionIntentRecord),
+      id: `${existing.id}_conflict`,
+      draftRevision: workflow.currentRevision,
+      draftVersion: workflow.currentDraftVersion,
+      assignmentOrdinal: 1,
+      requestHash: digest(`${existing.id}:conflicting-request`),
+      providerRequestIdSha256: null,
+      resultSha256: null,
+      outcomeUpdatedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const repository = createPrismaExtensionByokExecutionIntentRepository(client as never);
+    await expect(repository.claim(conflicting)).resolves.toEqual({
+      kind: 'idempotency_conflict',
+    });
+
+    const lockCount = await client.$queryRawUnsafe<Array<{ count: number }>>(
+      `SELECT COUNT(*)::int AS "count"
+       FROM "extension_ai_image_execution_mode_locks"
+       WHERE "owner_user_id" = $1 AND "listing_workflow_id" = $2
+         AND "draft_revision" = $3 AND "draft_version" = $4`,
+      fixture.ownerUserId,
+      fixture.listingWorkflowId,
+      workflow.currentRevision,
+      workflow.currentDraftVersion,
+    );
+    expect(lockCount[0]?.count).toBe(0);
+    await expect(client.$queryRawUnsafe(
+      `SELECT claim_extension_ai_image_execution_mode(
+         $1, $2, $3, $4::INTEGER, $5::INTEGER, 'ERP_HOSTED'::TEXT
+       )::TEXT AS "claimed"`,
+      fixture.ownerUserId,
+      fixture.shopId,
+      fixture.listingWorkflowId,
+      workflow.currentRevision,
+      workflow.currentDraftVersion,
+    )).resolves.toBeDefined();
+  }, 30_000);
+
+  it('rejects a hosted suite after the pre-dispatch BYOK intent claims the exact draft', async () => {
     const fixture = await seedModeFixture(client, 'byok_first');
-    await expect(insertByokProvenance(client, fixture)).resolves.toBeUndefined();
+    await expect(insertByokIntent(client, fixture)).resolves.toBeUndefined();
     await expect(insertHostedSuite(client, fixture)).rejects.toThrow(
       /execution mode|BYOK media/iu,
     );
@@ -551,7 +598,7 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
       await gateReady;
       pending = Promise.allSettled([
         insertHostedSuite(hosted, fixture),
-        insertByokProvenance(byok, fixture),
+        insertByokIntent(byok, fixture),
       ]);
       expect(await waitForLockWaiters(client, applicationNames)).toBe(2);
       releaseGate();
@@ -566,11 +613,11 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
 
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-    const [suiteCount, provenanceCount, locks] = await Promise.all([
+    const [suiteCount, intentCount, locks] = await Promise.all([
       client.aiMediaSuite.count({ where: { id: fixture.suiteId } }),
-      client.extensionByokMediaProvenance.count({
-        where: { id: String((fixture.provenance as { id: string }).id) },
-      }),
+      (client as any).extensionByokExecutionIntent.count({
+        where: { id: String(fixture.executionIntent.id) },
+      }) as Promise<number>,
       client.$queryRawUnsafe<Array<{ executionMode: string }>>(
         `SELECT "execution_mode" AS "executionMode"
          FROM "extension_ai_image_execution_mode_locks"
@@ -582,7 +629,7 @@ describePostgres('extension AI image execution mode PostgreSQL exclusion', () =>
         fixture.draftVersion,
       ),
     ]);
-    expect(suiteCount + provenanceCount).toBe(1);
+    expect(suiteCount + intentCount).toBe(1);
     expect(locks).toHaveLength(1);
     expect(locks[0]?.executionMode).toBe(suiteCount === 1 ? 'ERP_HOSTED' : 'BYOK');
   }, 30_000);

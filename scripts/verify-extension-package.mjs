@@ -5,9 +5,24 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
-const extensionDir = path.resolve(process.env.EXTENSION_DIR || 'extensions/ss-erp');
-const strict = process.env.STRICT_EXTENSION_CHECK === '1';
-const requestedTarget = process.env.EXTENSION_TARGET;
+const cliArgs = process.argv.slice(2);
+
+function readCliOption(name) {
+  const index = cliArgs.indexOf(name);
+  if (index === -1) return '';
+  const value = cliArgs[index + 1];
+  if (!value || value.startsWith('--')) {
+    console.error(`FAIL ${name} requires a value`);
+    process.exit(1);
+  }
+  return value;
+}
+
+const extensionDir = path.resolve(
+  readCliOption('--dir') || process.env.EXTENSION_DIR || 'extensions/ss-erp',
+);
+const strict = cliArgs.includes('--strict') || process.env.STRICT_EXTENSION_CHECK === '1';
+const requestedTarget = readCliOption('--target') || process.env.EXTENSION_TARGET;
 const failures = [];
 const warnings = [];
 const passes = [];
@@ -177,6 +192,90 @@ function checkDangerousCode(files) {
   pass('dangerous code pattern scan complete');
 }
 
+const sensitivePackageExtensions = new Set([
+  '.jks', '.key', '.keystore', '.p12', '.pem', '.pfx',
+]);
+const sensitivePackageBasenames = new Set([
+  'credentials',
+  'credentials.json',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+  'id_rsa',
+  'secrets',
+  'secrets.json',
+  'service-account.json',
+  'service_account.json',
+]);
+const packagedCredentialPatterns = [
+  {
+    label: 'OpenAI-compatible API key',
+    pattern: /(?:^|[^a-z0-9_-])(sk-[a-z0-9_-]{20,})(?=$|[^a-z0-9_-])/giu,
+  },
+  {
+    label: 'Provider API key',
+    pattern: /(?:^|[^a-z0-9_-])((?:rk-|xai-)[a-z0-9_-]{20,}|(?:gsk_|hf_|r8_|ghp_)[a-z0-9_]{20,}|github_pat_[a-z0-9_]{20,})(?=$|[^a-z0-9_-])/giu,
+  },
+  {
+    label: 'AWS access key',
+    pattern: /(?:^|[^A-Z0-9])((?:AKIA|ASIA)[A-Z0-9]{16})(?=$|[^A-Z0-9])/gu,
+  },
+  {
+    label: 'Aliyun access key',
+    pattern: /(?:^|[^a-z0-9])((?:LTAI|AKID)[a-z0-9]{12,})(?=$|[^a-z0-9])/giu,
+  },
+  {
+    label: 'Google API key',
+    pattern: /(?:^|[^a-z0-9_-])(AIza[a-z0-9_-]{30,})(?=$|[^a-z0-9_-])/giu,
+  },
+  {
+    label: 'Slack token',
+    pattern: /(?:^|[^a-z0-9-])(xox[baprs]-[a-z0-9-]{16,})(?=$|[^a-z0-9-])/giu,
+  },
+  {
+    label: 'JWT credential',
+    pattern: /(?:^|[^a-z0-9_-])(eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,})(?=$|[^a-z0-9_-])/giu,
+  },
+  {
+    label: 'private key material',
+    pattern: /(-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----)/gu,
+  },
+];
+
+function isSensitivePackageFilename(relPath) {
+  const basename = path.posix.basename(relPath).toLowerCase();
+  if (basename === '.env' || basename.startsWith('.env.')) return true;
+  if (sensitivePackageBasenames.has(basename)) return true;
+  return sensitivePackageExtensions.has(path.posix.extname(basename));
+}
+
+function isExplicitSyntheticCredential(value) {
+  const normalized = String(value || '').toLowerCase();
+  return /^(?:sk-|rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|xox[baprs]-)(?:test|fixture|example|dummy|fake|placeholder|redacted|qa\d*)[-_]/u.test(normalized)
+    || /(?:^|[-_])(?:secret[-_])?(?:sentinel|never[-_]real|not[-_]a[-_]real[-_]key)(?:$|[-_])/u.test(normalized)
+    || normalized === 'akiaiosfodnn7example';
+}
+
+function checkPackagedSecrets(files) {
+  for (const abs of files) {
+    const relPath = path.relative(extensionDir, abs).replaceAll(path.sep, '/');
+    if (isSensitivePackageFilename(relPath)) {
+      fail(`sensitive file is not allowed: ${relPath}`);
+    }
+
+    const text = readFileSync(abs).toString('utf8');
+    for (const { label, pattern } of packagedCredentialPatterns) {
+      for (const match of text.matchAll(pattern)) {
+        if (!isExplicitSyntheticCredential(match[1])) {
+          fail(`${label} found in ${relPath}`);
+          break;
+        }
+      }
+    }
+  }
+  pass('packaged secret and sensitive filename scan complete');
+}
+
 const manifestPath = path.join(extensionDir, 'manifest.json');
 if (!existsSync(manifestPath)) {
   console.error(`FAIL manifest missing: ${manifestPath}`);
@@ -266,6 +365,7 @@ const allJsFiles = allFiles
 
 checkSyntax(allJsFiles);
 checkDangerousCode(allFiles.filter((file) => /\.(?:js|html)$/i.test(file)));
+checkPackagedSecrets(allFiles);
 
 const requiredAdapters = [
   'shared/adapters/runtime-config.js',
@@ -284,6 +384,18 @@ const requiredSecurityModules = [
 
 const requiredSharedContracts = [
   'shared/contracts/ai-image-workbench-v1.js',
+];
+
+const requiredByokBatchBackgroundModules = [
+  'shared/byok/execution-intent-client.js',
+  'shared/byok/execution-batch-client.js',
+  'shared/byok/execution-intent-claim-broker.js',
+  'shared/byok/workbench-batch-provider-executor.js',
+  'shared/byok/workbench-batch-coordinator.js',
+  'shared/byok/generated-asset-batch-ingest-client.js',
+  'shared/byok/workbench-batch-launch-client.js',
+  'shared/byok/workbench-batch-registry.js',
+  'shared/byok/workbench-batch-runtime-handler.js',
 ];
 
 const requiredByokModules = [
@@ -312,6 +424,32 @@ const requiredByokModules = [
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
+  'shared/byok/workbench-batch-client.js',
+  ...requiredByokBatchBackgroundModules,
+];
+
+const requiredByokBackgroundModules = [
+  'shared/byok/device-session-lifecycle.js',
+  'shared/byok/permission-broker.js',
+  'shared/byok/provider-settings-handler.js',
+  'shared/byok/image-input-inspector.js',
+  'shared/byok/image-mask-transform.js',
+  'shared/byok/image-edit-adapters.js',
+  'shared/byok/image-edit-probe-media.js',
+  'shared/byok/image-edit-client.js',
+  'shared/byok/generated-result-vault.js',
+  'shared/byok/media-job-engine.js',
+  'shared/byok/workbench-launch-client.js',
+  'shared/byok/workbench-launch-session.js',
+  'shared/byok/workbench-preview-channel.js',
+  'shared/byok/workbench-provider-semaphore.js',
+  'shared/byok/workbench-media-channel.js',
+  'shared/byok/workbench-edit-media-store.js',
+  'shared/byok/workbench-edit-epoch-guard.js',
+  'shared/byok/workbench-edit-controller.js',
+  'shared/byok/workbench-runtime-handler.js',
+  'shared/byok/listing-publish-coordinator.js',
+  ...requiredByokBatchBackgroundModules,
 ];
 
 const requiredHostedBackgroundModules = [
@@ -339,6 +477,7 @@ const requiredByokPages = [
   'pages/ai-image-workbench.js',
   'pages/ai-image-workbench-edit.js',
   'pages/ai-image-workbench-workspace.js',
+  'pages/ai-image-workbench-batch.js',
 ];
 
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
@@ -364,32 +503,16 @@ for (const modulePath of requiredSecurityModules) {
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);
 }
-for (const modulePath of [
-  'shared/byok/device-session-lifecycle.js',
-  'shared/byok/permission-broker.js',
-  'shared/byok/provider-settings-handler.js',
-  'shared/byok/image-input-inspector.js',
-  'shared/byok/image-mask-transform.js',
-  'shared/byok/image-edit-adapters.js',
-  'shared/byok/image-edit-probe-media.js',
-  'shared/byok/image-edit-client.js',
-  'shared/byok/generated-result-vault.js',
-  'shared/byok/media-job-engine.js',
-  'shared/byok/workbench-launch-client.js',
-  'shared/byok/workbench-launch-session.js',
-  'shared/byok/workbench-preview-channel.js',
-  'shared/byok/workbench-provider-semaphore.js',
-  'shared/byok/workbench-media-channel.js',
-  'shared/byok/workbench-edit-media-store.js',
-  'shared/byok/workbench-edit-epoch-guard.js',
-  'shared/byok/workbench-edit-controller.js',
-  'shared/byok/workbench-runtime-handler.js',
-  'shared/byok/listing-publish-coordinator.js',
-]) {
+for (const modulePath of requiredByokBackgroundModules) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);
 }
+checkScriptLoadOrder(
+  parseImportScripts(manifest.background?.service_worker || ''),
+  requiredByokBatchBackgroundModules,
+  'BYOK batch service worker',
+);
 for (const modulePath of requiredHostedBackgroundModules) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
@@ -447,7 +570,9 @@ const requiredWorkbenchScripts = [
   '../shared/contracts/ai-image-workbench-v1.js',
   '../shared/byok/workbench-workspace-state.js',
   '../shared/byok/workbench-client.js',
+  '../shared/byok/workbench-batch-client.js',
   './ai-image-workbench-workspace.js',
+  './ai-image-workbench-batch.js',
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
 ];
@@ -455,7 +580,9 @@ const orderedWorkbenchScripts = [
   '../shared/contracts/ai-image-workbench-v1.js',
   '../shared/byok/workbench-workspace-state.js',
   '../shared/byok/workbench-client.js',
+  '../shared/byok/workbench-batch-client.js',
   './ai-image-workbench-workspace.js',
+  './ai-image-workbench-batch.js',
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
 ];
@@ -467,11 +594,13 @@ const requiredHostedWorkbenchScripts = [
 ];
 const orderedHostedWorkbenchScripts = [
   '../shared/byok/workbench-client.js',
+  '../shared/byok/workbench-batch-client.js',
   '../shared/hosted/ai-image-suite-workbench-runtime-client.js',
   '../shared/hosted/ai-image-suite-candidate-preview-consumer.js',
   '../shared/hosted/ai-image-suite-workspace-projection.js',
   './ai-image-workbench-workspace.js',
   './ai-image-workbench-hosted.js',
+  './ai-image-workbench-batch.js',
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
 ];

@@ -32,6 +32,7 @@ import {
 } from '../services/byok-listing-media-binding.js';
 import { commitExtensionByokUploadStagingInTransaction } from '../services/extension-byok-upload-staging.js';
 import { isExtensionAiImageExecutionModeConflict } from '../services/extension-ai-image-execution-mode.js';
+import { requireExactExtensionByokExecutionIntentInTransaction } from './extension-byok-generated-asset-commit-shared.js';
 
 export const EXTENSION_BYOK_MEDIA_INGEST_RECEIPT_VERSION =
   'extension-byok-media-ingest-receipt/v1' as const;
@@ -51,6 +52,10 @@ export type ExtensionByokGeneratedAssetCommitErrorCode =
   | 'BYOK_INGEST_SLOT_CONFLICT'
   | 'BYOK_INGEST_ORDER_CONFLICT'
   | 'BYOK_INGEST_MODE_CONFLICT'
+  | 'BYOK_INGEST_EXECUTION_INTENT_NOT_FOUND'
+  | 'BYOK_INGEST_EXECUTION_INTENT_MISMATCH'
+  | 'BYOK_INGEST_EXECUTION_INTENT_OUTCOME_PENDING'
+  | 'BYOK_INGEST_EXECUTION_INTENT_ALREADY_USED'
   | 'BYOK_INGEST_ASSET_CONFLICT'
   | 'BYOK_INGEST_STAGING_CONFLICT';
 
@@ -250,6 +255,14 @@ export function createPrismaExtensionByokGeneratedAssetCommitter(
       }
       if (consumed.kind !== 'execute') return mapGrantFailure(consumed.kind);
 
+      await requireExactExtensionByokExecutionIntentInTransaction(rawTx, {
+        binding: input.binding,
+        actorUserId: input.actorUserId,
+        command: input.command,
+        expectedExecutionBatchItemId: null,
+        reject: commitError,
+      });
+
       const tx = rawTx as TransactionWithMedia;
       const assetRepository = createPrismaByokGeneratedAssetRepository(tx as never);
       const storedAsset = await assetRepository.createOrReplay(input.asset);
@@ -325,6 +338,7 @@ export function createPrismaExtensionByokGeneratedAssetCommitter(
         resultHeight: input.asset.height,
         idempotencyKey: input.binding.idempotencyKey,
         requestHash: input.binding.requestHash,
+        executionIntentId: input.command.executionIntentId,
         publishIntentId: null,
         publishReceiptId: null,
         erpAiChargeCents: 0,

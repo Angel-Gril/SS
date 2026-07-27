@@ -20,11 +20,13 @@
     "smoke:remote": "pnpm --filter server smoke:remote",
     "generate:source-capture-contract": "node scripts/generate-source-capture-contract.mjs",
     "check:source-capture-contract": "node scripts/generate-source-capture-contract.mjs --check",
-    "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
-    "build:extension:local": "node scripts/build-extension-package.mjs local",
+    "build:extension:cloud": "node scripts/build-extension-package.mjs cloud && pnpm verify:extension:cloud",
+    "build:extension:local": "node scripts/build-extension-package.mjs local && pnpm verify:extension:local",
     "package:extension:cloud": "node scripts/package-extension-package.mjs cloud",
     "package:extension:local": "node scripts/package-extension-package.mjs local",
     "verify:extension": "node scripts/verify-extension-package.mjs",
+    "verify:extension:cloud": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-cloud --target cloud --strict",
+    "verify:extension:local": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-local --target local",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
   },
   "devDependencies": {

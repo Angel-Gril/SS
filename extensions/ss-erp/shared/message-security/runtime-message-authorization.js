@@ -17,6 +17,7 @@
   var MAX_DEPTH = 12;
   var MAX_NODES = 4096;
   var MAX_READINESS_TTL_MS = 10 * 60 * 1000;
+  var SHARED_DETAIL_ROLES = Object.freeze(['SCENE', 'DETAIL', 'SPEC', 'PACKAGING']);
 
   var SENDER_SURFACES = Object.freeze({
     WORKBENCH: 'ai_image_workbench',
@@ -58,6 +59,13 @@
       EDIT_REGENERATE: 'ss-erp:ai-image-workbench-edit-regenerate',
       EDIT_PREVIEW: 'ss-erp:ai-image-workbench-edit-preview',
       EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',
+      BATCH_STATE: 'ss-erp:ai-image-workbench-batch-state',
+      BATCH_START: 'ss-erp:ai-image-workbench-batch-start',
+      BATCH_COMMAND: 'ss-erp:ai-image-workbench-batch-command',
+      BATCH_PREVIEW: 'ss-erp:ai-image-workbench-batch-preview',
+      BATCH_INGEST: 'ss-erp:ai-image-workbench-batch-ingest',
+      BATCH_RECOVER: 'ss-erp:ai-image-workbench-batch-ingest-recover',
+      BATCH_CLEAR: 'ss-erp:ai-image-workbench-batch-clear',
     }),
     HOSTED_WORKBENCH: Object.freeze({
       GET_MODE_LOCK: 'SS_ERP_HOSTED_WORKBENCH_GET_MODE_LOCK',
@@ -516,6 +524,13 @@
     return value;
   }
 
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+  }
+
   function normalizeBinding(value) {
     if (!isRecord(value)) throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
     var allowed = new Set(BINDING_KEYS);
@@ -554,7 +569,7 @@
     }
     if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
       || assignmentMode !== 'APPEND'
-      || slotKey !== 'sku:' + skuKey + ':hero')) {
+      || !isSupportedSlotKey(skuKey, slotKey))) {
       throw authError('SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
     }
     return {

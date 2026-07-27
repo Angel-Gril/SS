@@ -6,6 +6,7 @@
   var VERIFICATION_VERSION = 'extension-byok-readiness-verification/v2';
   var MAX_TTL_MS = 10 * 60 * 1000;
   var MAX_ENTRIES = 64;
+  var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
   var BINDING_KEYS = [
     'contractVersion', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
     'draftRevision', 'draftVersion', 'sourcePlatform', 'sourceProductId',
@@ -60,6 +61,13 @@
     return value;
   }
 
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+  }
+
   function providerOrigin(value) {
     var parsed;
     try {
@@ -100,7 +108,7 @@
     }
     if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
       || assignmentMode !== 'APPEND'
-      || slotKey !== 'sku:' + skuKey + ':hero')) {
+      || !isSupportedSlotKey(skuKey, slotKey))) {
       throw cacheError('SS_ERP_BYOK_READINESS_INVALID');
     }
     var operation = text(value.operation, 64);

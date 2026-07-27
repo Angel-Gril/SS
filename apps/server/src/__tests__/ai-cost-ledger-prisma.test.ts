@@ -42,7 +42,9 @@ const reconciliationQueueMigration = readFileSync(
 describe('AI cost ledger persistence contract', () => {
   it('stores one reservation per job and append-only idempotent settlements', () => {
     expect(schema).toContain('model AiCostReservation {');
-    expect(schema).toContain('jobId                    String                  @unique');
+    expect(schema).toMatch(
+      /model AiCostReservation \{[\s\S]*?\n\s+jobId\s+String\s+@unique(?:\([^\n]*\))?/u,
+    );
     expect(schema).toContain('@@unique([ownerUserId, idempotencyKey]');
     expect(schema).toContain('model AiCostSettlement {');
     expect(schema).toContain('@@unique([reservationId, idempotencyKey]');
@@ -76,7 +78,7 @@ describe('AI cost ledger persistence contract', () => {
     expect(uncertainLifecycleMigration).not.toMatch(/VALIDATE CONSTRAINT/u);
     expect(uncertainValidationMigration).toMatch(/VALIDATE CONSTRAINT "ai_cost_settlements_identity_check"/u);
     expect(uncertainValidationMigration).toMatch(/VALIDATE CONSTRAINT "ai_cost_reservations_lifecycle_check"/u);
-    expect(schema).toContain('providerDispatchedAt   DateTime?');
+    expect(schema).toMatch(/\n\s+providerDispatchedAt\s+DateTime\?/u);
     expect(dispatchMigration).toMatch(/ADD COLUMN "provider_dispatched_at" TIMESTAMP\(3\)/u);
     expect(dispatchMigration).toMatch(/UPDATE "ai_image_jobs"/u);
     expect(dispatchMigration).toMatch(/status" IN \('RUNNING', 'RETRYING', 'CANCEL_REQUESTED'\)/u);

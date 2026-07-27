@@ -257,7 +257,9 @@
     var hostedController = global.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER;
     return Boolean(hostedController
       && typeof hostedController.isByokExecutionAllowed === 'function'
-      && hostedController.isByokExecutionAllowed());
+      && hostedController.isByokExecutionAllowed()
+      && !(document.body && document.body.dataset
+        && document.body.dataset.byokBatchLocked === 'true'));
   }
 
   function assertByokExecutionAllowed() {
@@ -405,6 +407,8 @@
   function renderOperationOptions() {
     var taskLocked = state.restartBlocked || Boolean(state.snapshot && state.snapshot.operation);
     var hostedBlocked = !hostedByokExecutionAllowed();
+    var batchBlocked = document.body && document.body.dataset
+      && document.body.dataset.byokBatchLocked === 'true';
     OPERATIONS.forEach(function (operation) {
       var input = byId('operation' + ({
         TEXT_TO_IMAGE: 'TextToImage', IMAGE_TO_IMAGE: 'ImageToImage',
@@ -417,7 +421,8 @@
       input.checked = state.operation === operation;
       option.classList.toggle('is-selected', state.operation === operation);
       option.classList.toggle('is-disabled', hostedBlocked || !capability.enabled);
-      reason.textContent = hostedBlocked ? '正在核对 ERP 托管任务状态'
+      reason.textContent = batchBlocked ? 'BYOK 批次正在执行，编辑入口已锁定'
+        : hostedBlocked ? '正在核对 ERP 托管任务状态'
         : taskLocked ? '当前任务已锁定操作与 Provider' : capability.reason;
     });
   }
@@ -1313,6 +1318,7 @@
 
   if (document && typeof document.addEventListener === 'function') {
     document.addEventListener(WORKSPACE_REFRESH_EVENT, renderControls);
+    document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
   }
 
   [nodes.operationTextToImage, nodes.operationImageToImage,

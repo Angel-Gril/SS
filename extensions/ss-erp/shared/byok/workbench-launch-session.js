@@ -4,10 +4,19 @@
   var CONTRACT_VERSION = 'extension-byok-workbench-launch-session/v1';
   var CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
   var STORAGE_KEY = 'ss-erp:byok:workbench-launch-sessions:v1';
+  var DOCUMENT_FENCE_STORAGE_KEY = 'ss-erp:byok:workbench-document-fences:v1';
+  var BATCH_RECOVERY_STORAGE_KEY = 'ss-erp:byok:workbench-batch-recoveries:v1';
   var DEFAULT_TTL_MS = 10 * 60 * 1000;
   var MAX_TTL_MS = 15 * 60 * 1000;
   var DEFAULT_LIMIT = 8;
+  var MAX_RETIRED_DOCUMENTS = 32;
   var INGEST_CONTRACT_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
+  var BATCH_RECOVERY_VERSION = 'extension-byok-workbench-batch-recovery/v1';
+  var SUCCESSOR_RECOVERY_VERSION = 'extension-byok-workbench-successor-recovery/v1';
+  var BATCH_RECOVERY_PHASES = ['PREPARING', 'RESERVED', 'DISPATCHING'];
+  var BATCH_RECOVERY_OPERATIONS = [
+    'TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT',
+  ];
   var CONTEXT_KEYS = [
     'contractVersion', 'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId',
     'supplyGoodsId', 'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'skuKey',
@@ -31,6 +40,22 @@
     'sourceDraftVersion', 'boundDraftRevision', 'boundDraftVersion',
     'assignmentOrdinal', 'assignmentSha256', 'skuKey', 'slotKey',
   ];
+  var BATCH_RECOVERY_KEYS = [
+    'contractVersion', 'phase', 'reservationIdempotencyKey', 'executionBatchId',
+    'context', 'slots', 'successorRecovery',
+  ];
+  var LEGACY_BATCH_RECOVERY_KEYS = BATCH_RECOVERY_KEYS.filter(function (key) {
+    return key !== 'successorRecovery';
+  });
+  var BATCH_RECOVERY_CONTEXT_KEYS = [
+    'shopId', 'workflowId', 'draftRevision', 'draftVersion',
+  ];
+  var BATCH_RECOVERY_SLOT_KEYS = ['skuKey', 'slotKey', 'operation'];
+  var SUCCESSOR_RECOVERY_KEYS = [
+    'contractVersion', 'state', 'itemIndex', 'assignmentOrdinal', 'predecessorIntentId',
+    'predecessorGeneration', 'requestMode', 'providerIdempotencyKey',
+    'providerRequestHash',
+  ];
 
   function sessionError(code) {
     var error = new Error(code);
@@ -51,10 +76,18 @@
   function exactText(value, maximum, code) {
     if (typeof value !== 'string' || !value || value.length > maximum
       || value !== value.normalize('NFKC').trim()
+      // eslint-disable-next-line no-control-regex
       || /[\u0000-\u001f\u007f]/u.test(value)) {
       throw sessionError(code);
     }
     return value;
+  }
+
+  function secretShapedIdentifier(value) {
+    return /^(?:sk-[a-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|LTAI[a-zA-Z0-9]{12,}|AKID[a-zA-Z0-9]{12,})$/iu
+      .test(value)
+      || /^Bearer\s+\S+/iu.test(value)
+      || /^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/u.test(value);
   }
 
   function tabId(value, code) {
@@ -70,6 +103,14 @@
   function sha256(value, code) {
     var normalized = exactText(value, 64, code);
     if (!/^[a-f0-9]{64}$/u.test(normalized)) throw sessionError(code);
+    return normalized;
+  }
+
+  function recoveryIdentifier(value, minimum, maximum, code) {
+    var normalized = exactText(value, maximum, code);
+    if (normalized.length < minimum
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u.test(normalized)
+      || secretShapedIdentifier(normalized)) throw sessionError(code);
     return normalized;
   }
 
@@ -108,7 +149,7 @@
 
   function sameContext(left, right) {
     var normalized;
-    try { normalized = normalizeContext(right); } catch (_error) { return false; }
+    try { normalized = normalizeContext(right); } catch { return false; }
     return CONTEXT_KEYS.every(function (key) { return left[key] === normalized[key]; });
   }
 
@@ -259,10 +300,114 @@
     });
   }
 
-  function normalizeOperation(value) {
+  function normalizeSuccessorRecovery(value, context, slots) {
+    if (value === null || value === undefined) return null;
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID';
+    if (!exactKeys(value, SUCCESSOR_RECOVERY_KEYS)
+      || value.contractVersion !== SUCCESSOR_RECOVERY_VERSION
+      || !['CLAIMING', 'HANDOFF_STARTED'].includes(value.state)
+      || !Number.isSafeInteger(value.itemIndex) || value.itemIndex < 0
+      || value.itemIndex >= slots.length
+      || !Number.isSafeInteger(value.assignmentOrdinal)
+      || value.assignmentOrdinal < 0 || value.assignmentOrdinal > 499
+      || !Number.isSafeInteger(value.predecessorGeneration)
+      || value.predecessorGeneration < 1 || value.predecessorGeneration > 499) {
+      throw sessionError(code);
+    }
+    var slot = slots[value.itemIndex];
+    var requestMode = exactText(value.requestMode, 16, code);
+    if (requestMode !== (slot.operation === 'TEXT_TO_IMAGE' ? 'json' : 'multipart')) {
+      throw sessionError(code);
+    }
+    return Object.freeze({
+      contractVersion: SUCCESSOR_RECOVERY_VERSION,
+      state: value.state,
+      itemIndex: value.itemIndex,
+      assignmentOrdinal: value.assignmentOrdinal,
+      predecessorIntentId: recoveryIdentifier(value.predecessorIntentId, 1, 200, code),
+      predecessorGeneration: value.predecessorGeneration,
+      requestMode: requestMode,
+      providerIdempotencyKey: recoveryIdentifier(
+        value.providerIdempotencyKey, 16, 200, code,
+      ),
+      providerRequestHash: sha256(value.providerRequestHash, code),
+    });
+  }
+
+  function normalizeBatchRecovery(value, context) {
+    if (value === null || value === undefined) return null;
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID';
+    var legacy = exactKeys(value, LEGACY_BATCH_RECOVERY_KEYS);
+    if (!legacy && !exactKeys(value, BATCH_RECOVERY_KEYS)
+      || value.contractVersion !== BATCH_RECOVERY_VERSION
+      || !BATCH_RECOVERY_PHASES.includes(value.phase)
+      || !exactKeys(value.context, BATCH_RECOVERY_CONTEXT_KEYS)
+      || !Array.isArray(value.slots) || value.slots.length < 1 || value.slots.length > 4) {
+      throw sessionError(code);
+    }
+    var recoveryContext = Object.freeze({
+      shopId: exactText(value.context.shopId, 200, code),
+      workflowId: exactText(value.context.workflowId, 200, code),
+      draftRevision: positiveInteger(value.context.draftRevision, code),
+      draftVersion: positiveInteger(value.context.draftVersion, code),
+    });
+    if (!context || recoveryContext.shopId !== context.shopId
+      || recoveryContext.workflowId !== context.workflowId
+      || recoveryContext.draftRevision !== context.draftRevision
+      || recoveryContext.draftVersion !== context.draftVersion) {
+      throw sessionError(code);
+    }
+    var slots = value.slots.map(function (slot) {
+      if (!exactKeys(slot, BATCH_RECOVERY_SLOT_KEYS)
+        || !BATCH_RECOVERY_OPERATIONS.includes(slot.operation)) throw sessionError(code);
+      var skuKey = exactText(slot.skuKey, 500, code);
+      var slotKey = exactText(slot.slotKey, 200, code);
+      var hero = slotKey === 'sku:' + skuKey + ':hero';
+      var shared = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'].some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+      if (!hero && (!shared || skuKey !== context.skuKey)) throw sessionError(code);
+      return Object.freeze({ skuKey: skuKey, slotKey: slotKey, operation: slot.operation });
+    });
+    if (new Set(slots.map(function (slot) { return slot.slotKey; })).size !== slots.length) {
+      throw sessionError(code);
+    }
+    var executionBatchId = value.executionBatchId === null
+      ? null
+      : exactText(value.executionBatchId, 200, code);
+    var reservationIdempotencyKey = exactText(value.reservationIdempotencyKey, 200, code);
+    if (!/^byok-reservation:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      .test(reservationIdempotencyKey)) throw sessionError(code);
+    if (executionBatchId !== null && secretShapedIdentifier(executionBatchId)) {
+      throw sessionError(code);
+    }
+    if ((value.phase === 'PREPARING') !== (executionBatchId === null)) {
+      throw sessionError(code);
+    }
+    var successorRecovery = normalizeSuccessorRecovery(
+      legacy ? null : value.successorRecovery, context, slots,
+    );
+    if (successorRecovery !== null && value.phase !== 'DISPATCHING') {
+      throw sessionError(code);
+    }
+    return Object.freeze({
+      contractVersion: BATCH_RECOVERY_VERSION,
+      phase: value.phase,
+      reservationIdempotencyKey: reservationIdempotencyKey,
+      executionBatchId: executionBatchId,
+      context: recoveryContext,
+      slots: Object.freeze(slots),
+      successorRecovery: successorRecovery,
+    });
+  }
+
+  function normalizeOperation(value, context) {
     if (value === null) return null;
-    if (!exactKeys(value, ['idempotencyKey', 'state'])
-      || value.state !== 'OUTCOME_UNRESOLVED') {
+    var legacy = exactKeys(value, ['idempotencyKey', 'state']);
+    if (!legacy && !exactKeys(value, ['idempotencyKey', 'state', 'recovery'])) {
+      throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID');
+    }
+    if (value.state !== 'OUTCOME_UNRESOLVED') {
       throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID');
     }
     var idempotencyKey = exactText(
@@ -273,7 +418,14 @@
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u.test(idempotencyKey)) {
       throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID');
     }
-    return Object.freeze({ idempotencyKey: idempotencyKey, state: 'OUTCOME_UNRESOLVED' });
+    if (secretShapedIdentifier(idempotencyKey)) {
+      throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID');
+    }
+    return Object.freeze({
+      idempotencyKey: idempotencyKey,
+      state: 'OUTCOME_UNRESOLVED',
+      recovery: normalizeBatchRecovery(legacy ? null : value.recovery, context),
+    });
   }
 
   function normalizeSession(value, current, ttlMs) {
@@ -282,18 +434,22 @@
       var createdAt = Number(value.createdAt);
       var expiresAt = Number(value.expiresAt);
       if (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(expiresAt)
-        || expiresAt <= current || createdAt > current + 60 * 1000
+        || createdAt > current + 60 * 1000
         || expiresAt <= createdAt || expiresAt - createdAt > ttlMs) return null;
       var workbenchDocumentId = value.workbenchDocumentId === null
         ? null
         : exactText(value.workbenchDocumentId, 200, 'SS_ERP_BYOK_WORKBENCH_SESSION_INVALID');
       var context = normalizeContext(value.context);
       var result = normalizeResult(value.result);
+      var operation = normalizeOperation(value.operation, context);
       if (result && ['INGESTING', 'BOUND'].includes(result.deliveryState)) {
-        try { normalizeIngestAuthority(result.ingestAuthority, context); } catch (_error) { return null; }
+        try { normalizeIngestAuthority(result.ingestAuthority, context); } catch { return null; }
       }
       if (result && result.deliveryState === 'BOUND'
         && !ingestMatchesContext(result.ingest, context)) return null;
+      var protectedState = operation !== null
+        || Boolean(result && ['INGESTING', 'BOUND'].includes(result.deliveryState));
+      if (!protectedState && expiresAt <= current) return null;
       return Object.freeze({
         contractVersion: CONTRACT_VERSION,
         context: context,
@@ -305,12 +461,36 @@
         ),
         workbenchTabId: tabId(value.workbenchTabId, 'SS_ERP_BYOK_WORKBENCH_SESSION_INVALID'),
         workbenchDocumentId: workbenchDocumentId,
-        operation: normalizeOperation(value.operation),
+        operation: operation,
         result: result,
         createdAt: createdAt,
         expiresAt: expiresAt,
       });
-    } catch (_error) {
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeDocumentFence(value, session) {
+    if (!session) return null;
+    var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_INVALID';
+    if (!exactKeys(value, ['currentDocumentId', 'retiredDocumentIds'])
+      || !Array.isArray(value.retiredDocumentIds)
+      || value.retiredDocumentIds.length > MAX_RETIRED_DOCUMENTS) return null;
+    try {
+      var currentDocumentId = exactText(value.currentDocumentId, 200, code);
+      var retiredDocumentIds = value.retiredDocumentIds.map(function (documentId) {
+        return exactText(documentId, 200, code);
+      });
+      if ((session.workbenchDocumentId !== null
+        && currentDocumentId !== session.workbenchDocumentId)
+        || new Set(retiredDocumentIds).size !== retiredDocumentIds.length
+        || retiredDocumentIds.includes(currentDocumentId)) return null;
+      return Object.freeze({
+        currentDocumentId: currentDocumentId,
+        retiredDocumentIds: Object.freeze(retiredDocumentIds),
+      });
+    } catch {
       return null;
     }
   }
@@ -374,50 +554,150 @@
     function discardResult(value) {
       var candidate = value && value.result && value.result.resultId;
       if (typeof candidate !== 'string' || !/^br_[a-f0-9]{48}$/u.test(candidate)) return;
-      try { onDiscardedResult(candidate); } catch (_error) {}
+      try { onDiscardedResult(candidate); } catch {}
     }
 
-    async function loadRecords(current) {
-      var stored = await storage.get([STORAGE_KEY]);
+    async function loadState(current) {
+      var stored = await storage.get([
+        STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+      ]);
       var raw = stored && stored[STORAGE_KEY];
       var records = isRecord(raw) ? raw : {};
+      var rawFences = stored && stored[DOCUMENT_FENCE_STORAGE_KEY];
+      var rawRecoveries = stored && stored[BATCH_RECOVERY_STORAGE_KEY];
       var valid = {};
+      var fences = {};
       Object.keys(records).forEach(function (key) {
         var session = normalizeSession(records[key], current, ttlMs);
-        if (session && String(session.workbenchTabId) === key) valid[key] = session;
-        else discardResult(records[key]);
+        if (session && String(session.workbenchTabId) === key) {
+          if (session.operation && isRecord(rawRecoveries)
+            && Object.prototype.hasOwnProperty.call(rawRecoveries, key)) {
+            var recovery = null;
+            var envelope = rawRecoveries[key];
+            try {
+              if (exactKeys(envelope, ['operationIdempotencyKey', 'recovery'])
+                && envelope.operationIdempotencyKey === session.operation.idempotencyKey) {
+                recovery = normalizeBatchRecovery(envelope.recovery, session.context);
+              }
+            } catch {}
+            session = Object.freeze({
+              ...session,
+              operation: Object.freeze({ ...session.operation, recovery: recovery }),
+            });
+          }
+          var fence = normalizeDocumentFence(isRecord(rawFences) ? rawFences[key] : null, session);
+          if (fence) {
+            fences[key] = fence;
+            if (session.workbenchDocumentId === null) {
+              session = Object.freeze({
+                ...session,
+                workbenchDocumentId: fence.currentDocumentId,
+              });
+            }
+          }
+          else if (session.workbenchDocumentId !== null) {
+            fences[key] = {
+              currentDocumentId: session.workbenchDocumentId,
+              retiredDocumentIds: [],
+            };
+          }
+          valid[key] = session;
+        } else discardResult(records[key]);
       });
-      return valid;
+      return { records: valid, fences: fences };
     }
 
-    async function storeRecords(records) {
+    async function storeState(records, fences) {
       if (!Object.keys(records).length) {
-        await storage.remove([STORAGE_KEY]);
+        await storage.remove([
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+        ]);
         return;
       }
-      await storage.set({ [STORAGE_KEY]: records });
+      var serializedRecords = {};
+      var recoveries = {};
+      Object.keys(records).forEach(function (key) {
+        var session = records[key];
+        if (session.operation) {
+          var legacyCurrent = currentMillis();
+          serializedRecords[key] = {
+            ...session,
+            // A previous package can claim this tab after a rollback reload
+            // without deleting the unresolved two-field operation as stale.
+            workbenchDocumentId: null,
+            operation: {
+              idempotencyKey: session.operation.idempotencyKey,
+              state: session.operation.state,
+            },
+            createdAt: legacyCurrent,
+            expiresAt: legacyCurrent + ttlMs,
+          };
+        } else serializedRecords[key] = session;
+        if (session.operation && session.operation.recovery) {
+          recoveries[key] = {
+            operationIdempotencyKey: session.operation.idempotencyKey,
+            recovery: session.operation.recovery,
+          };
+        }
+      });
+      await storage.set({
+        [STORAGE_KEY]: serializedRecords,
+        [DOCUMENT_FENCE_STORAGE_KEY]: fences,
+        [BATCH_RECOVERY_STORAGE_KEY]: recoveries,
+      });
     }
 
     async function mutateForSender(sender, operation, mutationOptions) {
       var identity = senderIdentity(sender);
       return enqueue(async function () {
         var current = currentMillis();
-        var records = await loadRecords(current);
-        var session = records[String(identity.tabId)];
+        var state = await loadState(current);
+        var records = state.records;
+        var fences = state.fences;
+        var key = String(identity.tabId);
+        var session = records[key];
         if (!session) {
-          await storeRecords(records);
+          await storeState(records, fences);
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_NOT_FOUND');
         }
         if (session.workbenchDocumentId !== null
           && session.workbenchDocumentId !== identity.documentId) {
-          if (mutationOptions && mutationOptions.allowDeliveryRebind === true
-            && session.result
-            && ['INGESTING', 'BOUND'].includes(session.result.deliveryState)) {
+          var protectedOperation = Boolean(
+            session.operation && session.operation.state === 'OUTCOME_UNRESOLVED',
+          );
+          var protectedDelivery = Boolean(
+            session.result && ['INGESTING', 'BOUND'].includes(session.result.deliveryState),
+          );
+          var fence = fences[key] || {
+            currentDocumentId: session.workbenchDocumentId,
+            retiredDocumentIds: [],
+          };
+          var retiredDocument = fence.retiredDocumentIds.includes(identity.documentId);
+          if (mutationOptions && mutationOptions.allowDocumentRebind === true
+            && (protectedOperation || protectedDelivery)) {
+            if (retiredDocument || fence.retiredDocumentIds.length >= MAX_RETIRED_DOCUMENTS) {
+              await storeState(records, fences);
+              throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+            }
+            fences[key] = {
+              currentDocumentId: identity.documentId,
+              retiredDocumentIds: fence.retiredDocumentIds.concat([
+                fence.currentDocumentId,
+              ]),
+            };
+          } else if (mutationOptions && mutationOptions.allowDeliveryRebind === true
+            && protectedDelivery && retiredDocument
+            && fence.retiredDocumentIds[fence.retiredDocumentIds.length - 1]
+              === identity.documentId) {
             // A completion started by the previous document may finish after a
             // reload, but it must not take ownership back from the live page.
+          } else if (retiredDocument || protectedOperation || protectedDelivery) {
+            await storeState(records, fences);
+            throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
           } else {
-            delete records[String(identity.tabId)];
-            await storeRecords(records);
+            delete records[key];
+            delete fences[key];
+            await storeState(records, fences);
             discardResult(session);
             var denied = sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
             if (session.result && session.result.resultId) {
@@ -429,8 +709,14 @@
         var next = operation(session, identity, current);
         var normalized = normalizeSession(next, current, ttlMs);
         if (!normalized) throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_INVALID');
-        records[String(identity.tabId)] = normalized;
-        await storeRecords(records);
+        records[key] = normalized;
+        if (normalized.workbenchDocumentId !== null && !fences[key]) {
+          fences[key] = {
+            currentDocumentId: normalized.workbenchDocumentId,
+            retiredDocumentIds: [],
+          };
+        }
+        await storeState(records, fences);
         return normalized;
       });
     }
@@ -458,13 +744,24 @@
         );
         await enqueue(async function () {
           var current = currentMillis();
-          var records = await loadRecords(current);
+          var state = await loadState(current);
+          var records = state.records;
+          var fences = state.fences;
           var ordered = Object.values(records).sort(function (left, right) {
             return left.createdAt - right.createdAt || left.workbenchTabId - right.workbenchTabId;
           });
           while (ordered.length >= limit) {
-            var discarded = ordered.shift();
+            var discardIndex = ordered.findIndex(function (candidate) {
+              return !candidate.operation
+                && !(candidate.result
+                  && ['INGESTING', 'BOUND'].includes(candidate.result.deliveryState));
+            });
+            if (discardIndex < 0) {
+              throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_CAPACITY_EXCEEDED');
+            }
+            var discarded = ordered.splice(discardIndex, 1)[0];
             delete records[String(discarded.workbenchTabId)];
+            delete fences[String(discarded.workbenchTabId)];
             discardResult(discarded);
           }
           records[String(workbenchTabId)] = {
@@ -479,7 +776,7 @@
             createdAt: current,
             expiresAt: current + ttlMs,
           };
-          await storeRecords(records);
+          await storeState(records, fences);
         });
         await tabs.update(workbenchTabId, {
           url: runtime.getURL('pages/ai-image-workbench.html'),
@@ -489,12 +786,13 @@
       } catch (error) {
         if (Number.isSafeInteger(workbenchTabId)) {
           await enqueue(async function () {
-            var records = await loadRecords(currentMillis());
-            delete records[String(workbenchTabId)];
-            await storeRecords(records);
+            var state = await loadState(currentMillis());
+            delete state.records[String(workbenchTabId)];
+            delete state.fences[String(workbenchTabId)];
+            await storeState(state.records, state.fences);
           }).catch(function () {});
           if (typeof tabs.remove === 'function') {
-            try { await tabs.remove(workbenchTabId); } catch (_removeError) {}
+            try { await tabs.remove(workbenchTabId); } catch {}
           }
         }
         throw error;
@@ -504,15 +802,16 @@
     function claim(sender) {
       return mutateForSender(sender, function (session, identity, current) {
         return renewLease({ ...session, workbenchDocumentId: identity.documentId }, current);
-      }, { allowDeliveryRebind: true });
+      }, { allowDocumentRebind: true });
     }
 
-    function beginOperation(sender, idempotencyKeyValue) {
-      var operation = normalizeOperation({
-        idempotencyKey: idempotencyKeyValue,
-        state: 'OUTCOME_UNRESOLVED',
-      });
+    function beginOperation(sender, idempotencyKeyValue, recoveryValue) {
       return mutateForSender(sender, function (session, _identity, current) {
+        var operation = normalizeOperation({
+          idempotencyKey: idempotencyKeyValue,
+          state: 'OUTCOME_UNRESOLVED',
+          recovery: recoveryValue === undefined ? null : recoveryValue,
+        }, session.context);
         if (session.result) {
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
         }
@@ -523,17 +822,65 @@
       });
     }
 
+    function updateOperationRecovery(sender, idempotencyKeyValue, recoveryValue) {
+      return mutateForSender(sender, function (session) {
+        if (!session.operation || session.operation.idempotencyKey !== idempotencyKeyValue) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
+        }
+        var recovery = normalizeBatchRecovery(recoveryValue, session.context);
+        var previous = session.operation.recovery;
+        var sameBase = previous && recovery
+          && JSON.stringify(previous.context) === JSON.stringify(recovery.context)
+          && JSON.stringify(previous.slots) === JSON.stringify(recovery.slots)
+          && previous.reservationIdempotencyKey === recovery.reservationIdempotencyKey;
+        var samePhaseTransition = sameBase && (
+          JSON.stringify(previous) === JSON.stringify(recovery)
+          || (previous.phase === 'PREPARING' && previous.executionBatchId === null
+            && previous.successorRecovery === null
+            && recovery.phase === 'RESERVED' && recovery.executionBatchId !== null
+            && recovery.successorRecovery === null)
+          || (previous.phase === 'RESERVED' && previous.successorRecovery === null
+            && recovery.phase === 'DISPATCHING'
+            && previous.executionBatchId === recovery.executionBatchId
+            && recovery.successorRecovery === null)
+        );
+        var successorTransition = sameBase
+          && previous.phase === 'DISPATCHING' && recovery.phase === 'DISPATCHING'
+          && previous.executionBatchId === recovery.executionBatchId
+          && (
+            JSON.stringify(previous.successorRecovery)
+              === JSON.stringify(recovery.successorRecovery)
+            || (previous.successorRecovery === null && recovery.successorRecovery !== null
+              && recovery.successorRecovery.state === 'CLAIMING')
+            || (previous.successorRecovery !== null && recovery.successorRecovery !== null
+              && previous.successorRecovery.state === 'CLAIMING'
+              && recovery.successorRecovery.state === 'HANDOFF_STARTED'
+              && JSON.stringify({ ...previous.successorRecovery, state: 'HANDOFF_STARTED' })
+                === JSON.stringify(recovery.successorRecovery))
+            || (previous.successorRecovery !== null && recovery.successorRecovery === null)
+          );
+        if (!previous || !recovery
+          || JSON.stringify(previous.context) !== JSON.stringify(recovery.context)
+          || JSON.stringify(previous.slots) !== JSON.stringify(recovery.slots)
+          || previous.reservationIdempotencyKey !== recovery.reservationIdempotencyKey
+          || !(samePhaseTransition || successorTransition)) {
+          throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
+        }
+        return { ...session, operation: { ...session.operation, recovery: recovery } };
+      });
+    }
+
     function clearOperation(sender, idempotencyKeyValue) {
       var operation = normalizeOperation({
         idempotencyKey: idempotencyKeyValue,
         state: 'OUTCOME_UNRESOLVED',
-      });
-      return mutateForSender(sender, function (session) {
+      }, null);
+      return mutateForSender(sender, function (session, _identity, current) {
         if (!session.operation
           || session.operation.idempotencyKey !== operation.idempotencyKey) {
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
         }
-        return { ...session, operation: null };
+        return renewLease({ ...session, operation: null }, current);
       });
     }
 
@@ -546,7 +893,7 @@
       if (!normalizedResult || normalizedResult.reviewState !== 'CANDIDATE_READY') {
         return Promise.reject(sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_INVALID'));
       }
-      return mutateForSender(sender, function (session) {
+      return mutateForSender(sender, function (session, _identity, current) {
         if (session.result && session.result.resultId !== normalizedResult.resultId) {
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_RESULT_CONFLICT');
         }
@@ -555,7 +902,7 @@
           || session.operation.idempotencyKey !== operation.idempotencyKey) {
           throw sessionError('SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
         }
-        return { ...session, operation: null, result: normalizedResult };
+        return renewLease({ ...session, operation: null, result: normalizedResult }, current);
       });
     }
 
@@ -768,14 +1115,39 @@
     function takeByTab(value) {
       var id = tabId(value, 'SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
       return enqueue(async function () {
-        var records = await loadRecords(currentMillis());
+        var state = await loadState(currentMillis());
+        var records = state.records;
         var session = records[String(id)] || null;
         if (!session) {
-          await storeRecords(records);
+          await storeState(records, state.fences);
           return null;
         }
         delete records[String(id)];
-        await storeRecords(records);
+        delete state.fences[String(id)];
+        await storeState(records, state.fences);
+        return session;
+      });
+    }
+
+    function takeByTabIfIdle(value) {
+      var id = tabId(value, 'SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED');
+      return enqueue(async function () {
+        var state = await loadState(currentMillis());
+        var records = state.records;
+        var session = records[String(id)] || null;
+        if (!session) {
+          await storeState(records, state.fences);
+          return null;
+        }
+        if (session.operation
+          || (session.result
+            && ['INGESTING', 'BOUND'].includes(session.result.deliveryState))) {
+          await storeState(records, state.fences);
+          return null;
+        }
+        delete records[String(id)];
+        delete state.fences[String(id)];
+        await storeState(records, state.fences);
         return session;
       });
     }
@@ -792,13 +1164,16 @@
         var stored = await storage.get([STORAGE_KEY]);
         var raw = stored && stored[STORAGE_KEY];
         if (isRecord(raw)) Object.keys(raw).forEach(function (key) { discardResult(raw[key]); });
-        await storage.remove([STORAGE_KEY]);
+        await storage.remove([
+          STORAGE_KEY, DOCUMENT_FENCE_STORAGE_KEY, BATCH_RECOVERY_STORAGE_KEY,
+        ]);
       });
     }
 
     function clearProviderState() {
       return enqueue(async function () {
-        var records = await loadRecords(currentMillis());
+        var state = await loadState(currentMillis());
+        var records = state.records;
         var preservedResultIds = [];
         Object.keys(records).forEach(function (key) {
           var session = records[key];
@@ -808,9 +1183,9 @@
             return;
           }
           if (session.result) discardResult(session);
-          records[key] = { ...session, operation: null, result: null };
+          records[key] = { ...session, result: null };
         });
-        await storeRecords(records);
+        await storeState(records, state.fences);
         return Object.freeze({
           preservedResultIds: Object.freeze(preservedResultIds),
         });
@@ -821,6 +1196,7 @@
       open: open,
       claim: claim,
       beginOperation: beginOperation,
+      updateOperationRecovery: updateOperationRecovery,
       clearOperation: clearOperation,
       attachResult: attachResult,
       setReviewState: setReviewState,
@@ -831,6 +1207,7 @@
       clearResult: clearResult,
       removeByTab: removeByTab,
       takeByTab: takeByTab,
+      takeByTabIfIdle: takeByTabIfIdle,
       clearProviderState: clearProviderState,
       clear: clear,
       sameContext: sameContext,
@@ -840,7 +1217,10 @@
   global.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     CONTEXT_VERSION: CONTEXT_VERSION,
+    BATCH_RECOVERY_VERSION: BATCH_RECOVERY_VERSION,
+    SUCCESSOR_RECOVERY_VERSION: SUCCESSOR_RECOVERY_VERSION,
     STORAGE_KEY: STORAGE_KEY,
+    BATCH_RECOVERY_STORAGE_KEY: BATCH_RECOVERY_STORAGE_KEY,
     DEFAULT_TTL_MS: DEFAULT_TTL_MS,
     createManager: createManager,
     normalizeContext: normalizeContext,

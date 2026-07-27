@@ -89,6 +89,9 @@
   var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
+  var WORKSPACE_AUTHORITATIVE_RELOAD_EVENT = 'ss-erp:workspace-authoritative-reload';
+  var WORKSPACE_AUTHORITATIVE_RELOAD_VERSION =
+    'extension-byok-workbench-authoritative-reload/v1';
   var WORKSPACE_BOUND_INGEST_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
   var WORKSPACE_BOUND_INGEST_KEYS = Object.freeze([
     'contractVersion', 'replayed', 'receiptId', 'assetId', 'provenanceId',
@@ -206,6 +209,14 @@
     return Boolean(hostedController
       && typeof hostedController.isByokExecutionAllowed === 'function'
       && hostedController.isByokExecutionAllowed());
+  }
+
+  function batchPageController() {
+    var controller = global.SS_ERP_BYOK_WORKBENCH_BATCH_PAGE_CONTROLLER;
+    return controller && typeof controller.isAvailable === 'function'
+      && typeof controller.isLocked === 'function'
+      && typeof controller.startFromPage === 'function'
+      ? controller : null;
   }
 
   function emitWorkspaceBootstrap(candidate, forceDispatched) {
@@ -724,14 +735,19 @@
     var editTaskLocked = document.body && document.body.dataset
       && document.body.dataset.editTaskLocked === 'true';
     var hostedBlocked = !hostedByokExecutionAllowed();
+    var batchController = batchPageController();
+    var batchLocked = Boolean(batchController && batchController.isLocked());
     var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome
-      || editTaskLocked || hostedBlocked;
+      || editTaskLocked || hostedBlocked || batchLocked;
     nodes.profileSelect.disabled = hostedBlocked || state.busy || Boolean(state.candidate)
       || !profileRows().length || editTaskLocked;
     nodes.promptInput.disabled = locked;
     nodes.negativePromptInput.disabled = locked;
     nodes.sizeSelect.disabled = locked;
     nodes.generateButton.disabled = locked || !ready || !promptReady;
+    if (batchController && typeof batchController.syncGenerateControl === 'function') {
+      batchController.syncGenerateControl({ baseDisabled: nodes.generateButton.disabled });
+    }
     nodes.refreshButton.disabled = state.busy;
     var candidateReady = Boolean(state.candidate
       && state.candidate.reviewState === 'CANDIDATE_READY');
@@ -1311,6 +1327,7 @@
   nodes.profileSelect.addEventListener('change', function (event) {
     if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
       || state.busy || state.candidate
+      || batchPageController() && batchPageController().isLocked()
       || document.body && document.body.dataset
         && document.body.dataset.editTaskLocked === 'true') {
       nodes.profileSelect.value = state.selectedProfileId;
@@ -1354,6 +1371,25 @@
       }
       emitWorkspaceBootstrap(state.candidate);
     });
+    document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
+    document.addEventListener(WORKSPACE_AUTHORITATIVE_RELOAD_EVENT, function (event) {
+      var detail = event && event.detail;
+      var context = state.publicState && state.publicState.context;
+      if (!exactKeys(detail, [
+        'contractVersion', 'boundDraftRevision', 'boundDraftVersion',
+      ]) || detail.contractVersion !== WORKSPACE_AUTHORITATIVE_RELOAD_VERSION
+        || !positiveInteger(detail.boundDraftRevision)
+        || !positiveInteger(detail.boundDraftVersion)
+        || !isRecord(context)
+        || detail.boundDraftRevision !== context.draftRevision + 1
+        || detail.boundDraftVersion !== context.draftVersion + 1) return;
+      state.readiness = null;
+      if (state.busy) {
+        state.authoritativeReloadPending = true;
+        return;
+      }
+      void reloadAuthoritativeState(state.lifecycleEpoch);
+    });
   }
   nodes.sizeSelect.addEventListener('change', renderControls);
   nodes.previewImage.addEventListener('load', function () {
@@ -1378,6 +1414,14 @@
   });
   nodes.generateButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || nodes.generateButton.disabled) return;
+    var batchController = batchPageController();
+    if (batchController && batchController.isAvailable()) {
+      void batchController.startFromPage().catch(function (error) {
+        setStatus(errorLabel(error), 'error');
+        renderControls();
+      });
+      return;
+    }
     void generateCandidate();
   });
   nodes.rejectButton.addEventListener('click', function (event) {

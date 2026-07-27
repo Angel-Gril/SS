@@ -215,6 +215,34 @@ describePostgres('extension BYOK media provenance PostgreSQL hardening', () => {
     const promptSha256 = '5'.repeat(64);
     const idempotencyKey = `byok-provenance-${suffix}`;
     const requestHash = 'f'.repeat(64);
+    const executionIntentId = `byok_intent_${suffix}`;
+    const providerIdempotencyKey = `provider-attempt-${suffix}`;
+    const providerRequestHash = '6'.repeat(64);
+    const executionIntentRequestHash = '7'.repeat(64);
+    await client.$executeRawUnsafe(`
+      INSERT INTO "extension_byok_execution_intents" (
+        "id", "contract_version", "execution_mode", "owner_user_id", "actor_user_id",
+        "device_session_id", "shop_id", "listing_workflow_id", "draft_revision",
+        "draft_version", "source_capture_snapshot_id", "supply_goods_id", "sku_key",
+        "slot_key", "assignment_mode", "assignment_ordinal", "policy_revision",
+        "provider_origin_sha256", "model", "operation", "request_mode",
+        "provider_idempotency_key", "provider_request_hash", "request_hash", "outcome",
+        "created_at", "updated_at"
+      ) VALUES (
+        $1, 'extension-byok-execution-intent/v1', 'BYOK', $2, $2, $3, $4, $5, $6,
+        $7, $8, $9, 'sku-1', 'sku:sku-1:hero', 'APPEND', 0, 7, $10,
+        'image-model-v1', 'TEXT_TO_IMAGE', 'json', $11, $12, $13, 'PENDING', $14, $14
+      )
+    `, executionIntentId, ownerUserId, sessionId, shopId, sourceDraft.id,
+    sourceDraft.revision, sourceDraft.draftVersion, snapshotId, goodsId,
+    endpointOriginSha256, providerIdempotencyKey, providerRequestHash,
+    executionIntentRequestHash, now);
+    await client.$executeRawUnsafe(`
+      UPDATE "extension_byok_execution_intents"
+      SET "outcome" = 'SUCCEEDED', "result_sha256" = $2,
+          "outcome_updated_at" = $3, "updated_at" = $3
+      WHERE "id" = $1 AND "outcome" = 'PENDING'
+    `, executionIntentId, resultSha256, now);
     await client.$executeRawUnsafe(`
       INSERT INTO "extension_byok_media_provenance" (
         "id", "contract_version", "execution_mode", "owner_user_id", "actor_user_id",
@@ -224,20 +252,20 @@ describePostgres('extension BYOK media provenance PostgreSQL hardening', () => {
         "endpoint_origin_sha256", "model", "operation", "provider_request_id_sha256",
         "prompt_sha256", "negative_prompt_sha256", "source_sha256", "reference_sha256s",
         "mask_sha256", "result_sha256", "asset_id", "result_mime_type", "result_width",
-        "result_height", "idempotency_key", "request_hash", "publish_intent_id",
+        "result_height", "idempotency_key", "request_hash", "execution_intent_id", "publish_intent_id",
         "publish_receipt_id", "erp_ai_charge_cents", "created_at", "updated_at"
       ) VALUES (
         $1, 'extension-byok-media-provenance/v1', 'BYOK', $2, $2, $3, $4, $5, $6, $7,
         $8, $9, 'sku-1', 'sku:sku-1:hero', 0, $10, 7, $11, 'image-model-v1',
         'TEXT_TO_IMAGE', NULL, $12, NULL, NULL, ARRAY[]::text[], NULL, $13, $14,
-        'image/png', 10, 10, $15, $16, NULL, NULL, 0, $17, $17
+        'image/png', 10, 10, $15, $16, $18, NULL, NULL, 0, $17, $17
       )
     `,
     provenanceId, ownerUserId, sessionId, shopId, sourceDraft.id,
     sourceDraft.revision, sourceDraft.draftVersion,
     boundDraft.revision, boundDraft.draftVersion, assignmentSha256, endpointOriginSha256,
     promptSha256, resultSha256, assetId,
-    idempotencyKey, requestHash, now);
+    idempotencyKey, requestHash, now, executionIntentId);
 
     const replay = await new PrismaExtensionByokMediaProvenanceRepository(client).createOrReplay({
       contractVersion: 'extension-byok-media-provenance/v1',
@@ -272,6 +300,7 @@ describePostgres('extension BYOK media provenance PostgreSQL hardening', () => {
       resultHeight: 10,
       idempotencyKey,
       requestHash,
+      executionIntentId,
       publishIntentId: null,
       publishReceiptId: null,
       erpAiChargeCents: 0,

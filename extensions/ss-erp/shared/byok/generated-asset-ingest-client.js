@@ -24,6 +24,7 @@
   var OPERATION = 'BYOK_MEDIA_INGEST';
   var MAX_OPERATION_COUNT = 100;
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
+  var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
   var AUTHORITY_KEYS = [
     'lifecycleAuthority', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
     'draftRevision', 'draftVersion', 'policyRevision',
@@ -67,6 +68,13 @@
       throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
     }
     return value;
+  }
+
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
   }
 
   function exactKeys(value, keys) {
@@ -115,15 +123,12 @@
     if (requestHash !== null && !REQUEST_HASH_PATTERN.test(requestHash)) {
       throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
     }
-    if (!['APPEND', 'REPLACE'].includes(value.assignmentMode)
-      || typeof value.replaceConfirmed !== 'boolean'
-      || value.replaceConfirmed !== (value.assignmentMode === 'REPLACE')) {
+    if (value.assignmentMode !== 'APPEND' || value.replaceConfirmed !== false) {
       throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
     }
     var skuKey = text(value.skuKey, 1, 500);
     var slotKey = text(value.slotKey, 1, 200);
-    if (!slotKey.startsWith('sku:' + skuKey + ':')
-      || slotKey.length <= ('sku:' + skuKey + ':').length) {
+    if (!isSupportedSlotKey(skuKey, slotKey)) {
       throw ingestError('SS_ERP_BYOK_INGEST_INPUT_INVALID');
     }
     return {
@@ -134,8 +139,8 @@
       draftVersion: positiveInteger(value.draftVersion),
       skuKey: skuKey,
       slotKey: slotKey,
-      assignmentMode: value.assignmentMode,
-      replaceConfirmed: value.replaceConfirmed,
+      assignmentMode: 'APPEND',
+      replaceConfirmed: false,
       assignmentOrdinal: assignmentOrdinal(value.assignmentOrdinal),
       idempotencyKey: text(value.idempotencyKey, 16, 200),
       requestHash: requestHash,
@@ -250,8 +255,13 @@
         || binding.providerOrigin !== result.providerOrigin
         || binding.model !== result.model
         || binding.policyRevision !== result.policyRevision
-        || result.operation !== 'TEXT_TO_IMAGE'
-        || result.requestMode !== 'json'
+        || !['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(result.operation)
+        || (result.operation === 'TEXT_TO_IMAGE'
+          ? result.requestMode !== 'json'
+          : result.requestMode !== 'multipart')
+        || typeof result.executionIntentId !== 'string'
+        || !result.executionIntentId
+        || result.executionIntentId.length > 200
         || (result.providerRequestIdSha256 !== null
           && !/^[a-f0-9]{64}$/u.test(String(result.providerRequestIdSha256 || '')))
         || typeof Blob === 'undefined'
@@ -268,6 +278,9 @@
         providerOperation: result.operation,
         requestMode: result.requestMode,
         model: result.model,
+        executionIntentId: result.executionIntentId,
+        providerIdempotencyKey: result.idempotencyKey,
+        providerRequestHash: result.requestHash,
         providerRequestIdSha256: result.providerRequestIdSha256,
         promptSha256: result.promptHash,
         negativePromptSha256: result.negativePromptHash,
@@ -280,9 +293,9 @@
         resultSha256: result.sha256,
         resultMimeType: result.mimeType,
         resultSizeBytes: result.byteLength,
-        sourceSha256: null,
-        referenceSha256s: [],
-        maskSha256: null,
+        sourceSha256: result.sourceSha256,
+        referenceSha256s: result.referenceSha256s.slice(),
+        maskSha256: result.maskSha256,
       };
     }
 

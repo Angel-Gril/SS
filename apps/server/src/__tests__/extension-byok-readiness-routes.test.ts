@@ -8,6 +8,7 @@ import {
   EXTENSION_BYOK_READINESS_TTL_MS,
 } from '../services/extension-byok-readiness-attestation.js';
 import {
+  EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION,
   EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
 } from '../services/extension-byok-workbench-launch.js';
@@ -63,6 +64,8 @@ async function build(options: {
   draftRevision?: number;
   sourceCaptureCurrent?: boolean;
   assignmentCount?: number;
+  assignments?: unknown[];
+  selectedSkuKeys?: string[];
   readiness?: ReturnType<typeof decision>;
 } = {}) {
   const getReadiness = vi.fn(async () => options.readiness || decision());
@@ -86,9 +89,9 @@ async function build(options: {
       supplyGoodsId: 'goods-1', sourceCaptureSnapshotId: 'snapshot-1',
       sourceCaptureCurrent: options.sourceCaptureCurrent ?? true,
       sourcePlatform: '1688', sourceProductId: 'product-1',
-      selectedSkuKeys: ['sku-1', 'sku-2'],
+      selectedSkuKeys: options.selectedSkuKeys || ['sku-1', 'sku-2'],
       media: {
-        assignments: options.assignmentCount === undefined
+        assignments: options.assignments || (options.assignmentCount === undefined
           ? [{
             scope: 'SKU', skuKey: 'sku-2', slotKey: 'sku:sku-2:source',
             assetId: 'asset-1', source: 'SOURCE',
@@ -99,7 +102,7 @@ async function build(options: {
             slotKey: `sku:occupied-${index}:source`,
             assetId: `asset-${index}`,
             source: 'SOURCE' as const,
-          })),
+          }))),
       },
       stage: 'MEDIA', runState: 'DRAFT',
     }),
@@ -157,6 +160,16 @@ describe('extension BYOK readiness attestation route', () => {
       providerOrigin: 'https://relay.example',
       operation: 'TEXT_TO_IMAGE',
     });
+    await app.close();
+  });
+
+  it('rejects a secret-shaped model before policy evaluation or attestation', async () => {
+    const { app, getReadiness } = await build();
+    const response = await app.inject({
+      method: 'POST', url: '/readiness', payload: request({ model: 'sk-secret-model-value' }),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(getReadiness).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -261,13 +274,80 @@ describe('extension BYOK readiness attestation route', () => {
     await app.close();
   });
 
-  it('rejects a readiness target that is not the exact live launch target', async () => {
+  it('returns all server-authorized batch slots with one contiguous append base', async () => {
+    const { app } = await build({
+      assignments: [{
+        scope: 'PRODUCT', slotKey: 'shared:detail:SCENE',
+        assetId: 'asset-scene', source: 'GENERATED',
+      }],
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workbench-batch-launch',
+      payload: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION,
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+        anchorSkuKey: 'sku-1',
+        firstAssignmentOrdinal: 1,
+        targets: [
+          { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
+          { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero' },
+          { skuKey: 'sku-1', slotKey: 'shared:detail:DETAIL' },
+          { skuKey: 'sku-1', slotKey: 'shared:detail:SPEC' },
+          { skuKey: 'sku-1', slotKey: 'shared:detail:PACKAGING' },
+        ],
+      },
+    });
+    expect(response.body).not.toContain('providerOrigin');
+    await app.close();
+  });
+
+  it('accepts an exact empty selected-SKU hero or shared detail target', async () => {
+    const { app } = await build();
+    for (const target of [
+      { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero' },
+      { skuKey: 'sku-1', slotKey: 'shared:detail:SCENE' },
+      { skuKey: 'sku-1', slotKey: 'shared:detail:DETAIL' },
+      { skuKey: 'sku-1', slotKey: 'shared:detail:SPEC' },
+      { skuKey: 'sku-1', slotKey: 'shared:detail:PACKAGING' },
+    ]) {
+      const response = await app.inject({
+        method: 'POST', url: '/readiness', payload: request(target),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.binding).toMatchObject({
+        ...target,
+        assignmentMode: 'APPEND',
+        assignmentOrdinal: 1,
+      });
+    }
+    await app.close();
+  });
+
+  it('rejects stale identity, unsupported target shapes, stale order, and a wrong shared anchor', async () => {
     const { app } = await build();
     const cases: Array<{ overrides: Record<string, unknown>; expectedStatus: number }> = [
       { overrides: { sourceProductId: 'other-product' }, expectedStatus: 409 },
       { overrides: { sourceCaptureSnapshotId: 'snapshot-2' }, expectedStatus: 409 },
-      { overrides: { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero' }, expectedStatus: 409 },
+      { overrides: { skuKey: 'sku-2', slotKey: 'sku:sku-1:hero' }, expectedStatus: 409 },
+      { overrides: { skuKey: 'sku-3', slotKey: 'sku:sku-3:hero' }, expectedStatus: 409 },
       { overrides: { slotKey: 'sku:sku-1:detail' }, expectedStatus: 409 },
+      { overrides: { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' }, expectedStatus: 409 },
+      { overrides: { slotKey: 'shared:detail:OTHER' }, expectedStatus: 409 },
+      { overrides: { slotKey: 'group:all:detail:SCENE' }, expectedStatus: 409 },
       { overrides: { assignmentMode: 'REPLACE' }, expectedStatus: 400 },
       { overrides: { assignmentOrdinal: 0 }, expectedStatus: 409 },
     ];
@@ -277,6 +357,22 @@ describe('extension BYOK readiness attestation route', () => {
       });
       expect(response.statusCode).toBe(expectedStatus);
     }
+    await app.close();
+  });
+
+  it('rejects an occupied shared detail target', async () => {
+    const { app } = await build({
+      assignments: [{
+        scope: 'PRODUCT', slotKey: 'shared:detail:SCENE',
+        assetId: 'asset-scene', source: 'GENERATED',
+      }],
+    });
+    const response = await app.inject({
+      method: 'POST', url: '/readiness',
+      payload: request({ slotKey: 'shared:detail:SCENE' }),
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().errorCode).toBe('byok_readiness_target_stale');
     await app.close();
   });
 

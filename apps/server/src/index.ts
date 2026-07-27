@@ -120,6 +120,9 @@ import {
 import { extensionByokMediaRoutes } from './routes/extension-byok-media.js';
 import { extensionByokPublishRoutes } from './routes/extension-byok-publish.js';
 import { extensionByokReadinessRoutes } from './routes/extension-byok-readiness.js';
+import { extensionByokExecutionIntentRoutes } from './routes/extension-byok-execution-intent.js';
+import { extensionByokExecutionBatchRoutes } from './routes/extension-byok-execution-batch.js';
+import { extensionByokMediaBatchRoutes } from './routes/extension-byok-media-batch.js';
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { extensionSourceWorkbenchRoutes } from './routes/extension-source-workbench.js';
 import {
@@ -190,8 +193,14 @@ import {
   createPrismaExtensionByokGeneratedAssetCommitter,
 } from './repositories/extension-byok-generated-asset-commit-prisma.js';
 import {
+  createPrismaExtensionByokGeneratedAssetBatchCommitter,
+} from './repositories/extension-byok-generated-asset-batch-commit-prisma.js';
+import {
   createPrismaExtensionByokMediaIngestStatusRepository,
 } from './repositories/extension-byok-media-ingest-status-repository.js';
+import {
+  createPrismaExtensionByokMediaBatchIngestStatusRepository,
+} from './repositories/extension-byok-media-batch-ingest-status-repository.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import {
   createAiImageSuiteReferenceService,
@@ -333,6 +342,10 @@ import {
 import { inspectByokMediaIngestGrant } from './services/extension-byok-media-ingest-grant.js';
 import { createPrismaExtensionByokUploadStagingStore } from './services/extension-byok-upload-staging.js';
 import { createPrismaExtensionByokIngestRateLimiter } from './services/extension-byok-ingest-rate-limit.js';
+import { createExtensionByokExecutionIntentService } from './services/extension-byok-execution-intent.js';
+import { createPrismaExtensionByokExecutionIntentRepository } from './services/extension-byok-execution-intent-prisma.js';
+import { createExtensionByokExecutionBatchService } from './services/extension-byok-execution-batch.js';
+import { createPrismaExtensionByokExecutionBatchRepository } from './services/extension-byok-execution-batch-prisma.js';
 import {
   authenticateExtensionDevice,
   isExtensionDeviceAuthEnabled,
@@ -2219,6 +2232,34 @@ if (isExtensionDeviceAuthEnabled()) {
     loadDraft: loadExtensionByokWorkbenchDraft,
     getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
   });
+  await app.register(extensionByokExecutionIntentRoutes, {
+    prefix: '/api/extension-device/byok-media',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['byok:media:ingest'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    service: createExtensionByokExecutionIntentService({
+      loadShop: loadExtensionCommandShop,
+      loadDraft: loadExtensionByokWorkbenchDraft,
+      evaluatePolicy: (input) => extensionByokPolicyEvaluator.evaluate(input),
+      repository: createPrismaExtensionByokExecutionIntentRepository(prisma),
+    }),
+  });
+  await app.register(extensionByokExecutionBatchRoutes, {
+    prefix: '/api/extension-device/byok-media',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['byok:media:ingest'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    service: createExtensionByokExecutionBatchService({
+      loadShop: loadExtensionCommandShop,
+      loadDraft: loadExtensionByokWorkbenchDraft,
+      evaluatePolicy: (input) => extensionByokPolicyEvaluator.evaluate(input),
+      repository: createPrismaExtensionByokExecutionBatchRepository(prisma as never),
+    }),
+  });
   const extensionCommandRoutesOptions: ExtensionCommandGrantRoutesOptions & { prefix: string } = {
     prefix: '/api/extension-device',
     service: createExtensionCommandGrantService({
@@ -2484,6 +2525,8 @@ if (isExtensionDeviceAuthEnabled()) {
   });
   const byokGeneratedAssetRepository = createPrismaByokGeneratedAssetRepository(prisma);
   const byokMediaIngestStatusRepository = createPrismaExtensionByokMediaIngestStatusRepository(prisma);
+  const byokMediaBatchIngestStatusRepository =
+    createPrismaExtensionByokMediaBatchIngestStatusRepository(prisma);
   const byokUploadStagingStore = createPrismaExtensionByokUploadStagingStore(prisma as never);
   const byokIngestRateLimiter = createPrismaExtensionByokIngestRateLimiter(prisma as never);
   await app.register(extensionByokMediaRoutes, {
@@ -2502,6 +2545,23 @@ if (isExtensionDeviceAuthEnabled()) {
     findStoredAsset: (input) => byokGeneratedAssetRepository.findById(input),
     commit: createPrismaExtensionByokGeneratedAssetCommitter(prisma),
     findIngestStatus: (input) => byokMediaIngestStatusRepository.findStatus(input),
+  });
+  await app.register(extensionByokMediaBatchRoutes, {
+    prefix: '/api/extension-device/byok-media',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['byok:media:ingest'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    resolveCommand: extensionCommandRoutesOptions.resolveCommand,
+    digestGrantToken: (token) => digestExtensionCommandGrantToken(extensionCommandGrantSecret, token),
+    inspectGrant: (input) => inspectByokMediaIngestGrant(prisma as never, input),
+    ingestRateLimiter: byokIngestRateLimiter,
+    stagingStore: byokUploadStagingStore,
+    getStorage: getOwnedImageStorageBackend,
+    findStoredAsset: (input) => byokGeneratedAssetRepository.findById(input),
+    commit: createPrismaExtensionByokGeneratedAssetBatchCommitter(prisma as never),
+    findBatchStatus: (input) => byokMediaBatchIngestStatusRepository.findStatus(input),
   });
   await app.register(extensionSourceCaptureRoutes, {
     prefix: '/api/extension-device',

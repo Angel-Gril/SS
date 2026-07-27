@@ -269,6 +269,47 @@
           <p id="profileSummary" class="field-hint">正在检查会话密钥、来源权限和能力证据</p>
         </div>
 
+        <section class="batch-control" aria-labelledby="batchControlTitle">
+          <div class="workspace-pane-heading">
+            <div>
+              <h3 id="batchControlTitle">批量槽位</h3>
+              <p id="batchStatus" class="field-hint" role="status" aria-live="polite">
+                等待当前草稿和槽位上下文
+              </p>
+            </div>
+            <span id="batchStateBadge" class="state-badge state-pending">等待上下文</span>
+          </div>
+          <fieldset class="batch-slot-fieldset">
+            <legend>本次生成槽位（1–4 个）</legend>
+            <div id="batchSlotSelection" class="batch-slot-selection"></div>
+          </fieldset>
+          <label class="batch-concurrency" for="batchConcurrency">
+            <span>并发任务</span>
+            <select id="batchConcurrency" disabled>
+              <option value="1">1</option>
+            </select>
+          </label>
+          <div class="batch-actions" role="group" aria-label="批次接收与恢复">
+            <button id="batchAcceptButton" class="button button-primary" type="button" disabled>
+              接收已保留图片
+            </button>
+            <button id="batchRecoverButton" class="button button-secondary" type="button" hidden disabled>
+              核对接收回执
+            </button>
+            <button id="batchClearButton" class="button button-secondary" type="button" hidden disabled>
+              清理已结束批次
+            </button>
+          </div>
+          <ul id="batchRecoveryList" class="batch-recovery-list" hidden></ul>
+          <figure id="batchPreviewPanel" class="batch-preview" hidden>
+            <img id="batchPreviewImage" alt="当前批次候选图预览" />
+            <figcaption id="batchPreviewMeta">选择候选后通过一次性通道读取预览</figcaption>
+            <button id="batchPreviewCloseButton" class="button button-secondary button-compact" type="button">
+              关闭预览
+            </button>
+          </figure>
+        </section>
+
         <fieldset id="operationSwitch" class="operation-switch" aria-describedby="operationReason">
           <legend>图片操作</legend>
           <label class="operation-option is-selected" data-operation-option="TEXT_TO_IMAGE">
@@ -585,11 +626,13 @@
   <script src="../shared/contracts/ai-image-workbench-v1.js"></script>
   <script src="../shared/byok/workbench-workspace-state.js"></script>
   <script src="../shared/byok/workbench-client.js"></script>
+  <script src="../shared/byok/workbench-batch-client.js"></script>
   <script src="../shared/hosted/ai-image-suite-workbench-runtime-client.js"></script>
   <script src="../shared/hosted/ai-image-suite-candidate-preview-consumer.js"></script>
   <script src="../shared/hosted/ai-image-suite-workspace-projection.js"></script>
   <script src="./ai-image-workbench-workspace.js"></script>
   <script src="./ai-image-workbench-hosted.js"></script>
+  <script src="./ai-image-workbench-batch.js"></script>
   <script src="./ai-image-workbench.js"></script>
   <script src="./ai-image-workbench-edit.js"></script>
 </body>

@@ -69,6 +69,9 @@ async function fixture() {
     providerOperation: 'TEXT_TO_IMAGE',
     requestMode: 'json',
     model: 'image-model-v1',
+    executionIntentId: 'intent-1',
+    providerIdempotencyKey: 'provider-attempt-0001',
+    providerRequestHash: hash('provider-request-body-1'),
     providerRequestIdSha256: hash('provider-request-1'),
     promptSha256: hash('safe prompt'),
     negativePromptSha256: null,
@@ -142,6 +145,7 @@ class FakeDatabase {
   workflowEvents: unknown[] = [];
   media = new Map<string, any>();
   provenance = new Map<string, any>();
+  executionIntent: any;
 
   readonly tx = {
     $queryRawUnsafe: async <T>(sql: string, ...params: unknown[]): Promise<T> => {
@@ -154,6 +158,9 @@ class FakeDatabase {
           shopGrantStatus: 'ACTIVE', shopOwnerUserId: 'owner-1',
           shopStatus: 'ACTIVE', platform: 'OZON',
         }] as T;
+      }
+      if (sql.includes('FROM "extension_byok_execution_intents" intent')) {
+        return (this.executionIntent ? [this.executionIntent] : []) as T;
       }
       if (sql.includes('UPDATE "extension_command_grants"') && sql.includes('"consumed_at"')) {
         this.grant.consumedAt = params[0] as Date;
@@ -216,7 +223,35 @@ class FakeDatabase {
     extensionByokMediaProvenance: {} as any,
   };
 
-  constructor() {
+  constructor(command: ExtensionByokMediaIngestResolvedCommand) {
+    this.executionIntent = {
+      id: command.executionIntentId,
+      contract_version: 'extension-byok-execution-intent/v1',
+      execution_mode: 'BYOK',
+      owner_user_id: 'owner-1',
+      actor_user_id: 'owner-1',
+      device_session_id: 'session-1',
+      shop_id: 'shop-1',
+      listing_workflow_id: 'workflow-1',
+      draft_revision: command.draftRevision,
+      draft_version: binding().draftVersion,
+      source_capture_snapshot_id: command.authority.sourceCaptureSnapshotId,
+      sku_key: command.skuKey,
+      slot_key: command.slotKey,
+      assignment_mode: 'APPEND',
+      assignment_ordinal: command.assignmentOrdinal,
+      policy_revision: command.readiness.policyRevision,
+      provider_origin_sha256: hash(command.providerOrigin),
+      model: command.model,
+      operation: command.providerOperation,
+      request_mode: command.requestMode,
+      provider_idempotency_key: command.providerIdempotencyKey,
+      provider_request_hash: command.providerRequestHash,
+      provider_request_id_sha256: command.providerRequestIdSha256,
+      result_sha256: command.resultSha256,
+      outcome: 'SUCCEEDED',
+      provenanceId: null,
+    };
     this.tx.mediaAsset = {
       findUnique: async ({ where }: any) => this.media.get(where.id) || null,
       create: async ({ data }: any) => {
@@ -278,7 +313,7 @@ class FakeDatabase {
 describe('Prisma BYOK generated asset atomic commit', () => {
   it('consumes one exact grant and atomically creates asset, zero-charge provenance, and receipt', async () => {
     const data = await fixture();
-    const database = new FakeDatabase();
+    const database = new FakeDatabase(data.command);
     const commit = createPrismaExtensionByokGeneratedAssetCommitter(database as never);
     const result = await commit({
       binding: binding(),
@@ -321,6 +356,7 @@ describe('Prisma BYOK generated asset atomic commit', () => {
       assignmentOrdinal: 0,
       assignmentSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
       policyRevision: 7,
+      executionIntentId: 'intent-1',
     });
     expect(database.draft).toMatchObject({ revision: 4, draftVersion: 5 });
     expect(database.draft.media.assignments).toEqual([expect.objectContaining({
@@ -349,7 +385,7 @@ describe('Prisma BYOK generated asset atomic commit', () => {
 
   it('rolls back the consumed grant and every row when draft authority changes', async () => {
     const data = await fixture();
-    const database = new FakeDatabase();
+    const database = new FakeDatabase(data.command);
     database.draft.revision = 4;
     const commit = createPrismaExtensionByokGeneratedAssetCommitter(database as never);
     await expect(commit({
@@ -368,6 +404,59 @@ describe('Prisma BYOK generated asset atomic commit', () => {
     expect(database.provenance).toHaveLength(0);
     expect(database.draft.revision).toBe(4);
     expect(database.draft.media.assignments).toHaveLength(0);
+  });
+
+  it('rolls back before asset mutation when the exact Provider outcome is unresolved', async () => {
+    const data = await fixture();
+    const database = new FakeDatabase(data.command);
+    database.executionIntent.outcome = 'UNKNOWN_OUTCOME';
+    database.executionIntent.result_sha256 = null;
+    const commit = createPrismaExtensionByokGeneratedAssetCommitter(database as never);
+
+    await expect(commit({
+      binding: binding(),
+      tokenDigest: 'd'.repeat(64),
+      receiptId: 'receipt-1',
+      actorUserId: 'owner-1',
+      now: NOW,
+      command: data.command,
+      asset: data.asset,
+      stagingId: null,
+    })).rejects.toMatchObject({
+      code: 'BYOK_INGEST_EXECUTION_INTENT_OUTCOME_PENDING',
+      statusCode: 409,
+    });
+    expect(database.grant.consumedAt).toBeNull();
+    expect(database.media).toHaveLength(0);
+    expect(database.provenance).toHaveLength(0);
+  });
+
+  it('rejects a replace command that does not match the pre-dispatch append intent', async () => {
+    const data = await fixture();
+    const command: ExtensionByokMediaIngestResolvedCommand = {
+      ...data.command,
+      assignmentMode: 'REPLACE',
+      replaceConfirmed: true,
+    };
+    const database = new FakeDatabase(data.command);
+    const commit = createPrismaExtensionByokGeneratedAssetCommitter(database as never);
+
+    await expect(commit({
+      binding: binding(),
+      tokenDigest: 'd'.repeat(64),
+      receiptId: 'receipt-1',
+      actorUserId: 'owner-1',
+      now: NOW,
+      command,
+      asset: data.asset,
+      stagingId: null,
+    })).rejects.toMatchObject({
+      code: 'BYOK_INGEST_EXECUTION_INTENT_MISMATCH',
+      statusCode: 409,
+    });
+    expect(database.grant.consumedAt).toBeNull();
+    expect(database.media).toHaveLength(0);
+    expect(database.provenance).toHaveLength(0);
   });
 
   it('maps the database execution-mode fence to a definite BYOK conflict', async () => {

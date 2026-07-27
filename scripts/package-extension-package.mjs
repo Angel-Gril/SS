@@ -18,6 +18,20 @@ const build = spawnSync(process.execPath, ['scripts/build-extension-package.mjs'
 if (build.status !== 0) process.exit(build.status || 1);
 
 const dir = path.join(outRoot, `ss-erp-${target}`);
+const verifyArgs = [
+  'scripts/verify-extension-package.mjs',
+  '--dir',
+  dir,
+  '--target',
+  target,
+];
+if (target === 'cloud') verifyArgs.push('--strict');
+const verification = spawnSync(process.execPath, verifyArgs, {
+  stdio: 'inherit',
+  env: process.env,
+});
+if (verification.status !== 0) process.exit(verification.status || 1);
+
 const manifest = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
 const sourceVersion = manifest.version || '0.0.0';
 

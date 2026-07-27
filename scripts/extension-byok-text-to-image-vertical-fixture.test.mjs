@@ -262,6 +262,34 @@ function createProviderClient(options = {}) {
   const fetchImpl = options.fetchImpl || (async () => providerJson({
     data: [{ b64_json: Buffer.from(PNG_BYTES).toString('base64') }],
   }));
+  const executionIntentClient = options.executionIntentClient || {
+    async claim(input) {
+      return {
+        contractVersion: 'extension-byok-execution-intent/v1',
+        intentId: `intent-${input.providerIdempotencyKey}`,
+        replayed: false,
+        executionMode: 'BYOK',
+        outcome: 'PENDING',
+        providerIdempotencyKey: input.providerIdempotencyKey,
+        providerRequestHash: input.providerRequestHash,
+        context: {
+          shopId: input.readinessBinding.shopId,
+          workflowId: input.readinessBinding.workflowId,
+          draftRevision: input.readinessBinding.draftRevision,
+          draftVersion: input.readinessBinding.draftVersion,
+          skuKey: input.readinessBinding.skuKey,
+          slotKey: input.readinessBinding.slotKey,
+        },
+      };
+    },
+    async reportOutcome(input) {
+      return {
+        contractVersion: 'extension-byok-execution-intent-outcome/v1',
+        replayed: false,
+        ...input,
+      };
+    },
+  };
   return {
     profileStore,
     permissionBroker,
@@ -272,6 +300,7 @@ function createProviderClient(options = {}) {
       timeoutMs: 2_000,
       crypto: webcrypto,
       now: () => NOW,
+      executionIntentClient,
     }),
   };
 }
@@ -643,6 +672,15 @@ function createSessionManager(initialContext) {
       return session;
     },
     async takeByTab() {
+      const previous = session;
+      session = null;
+      return previous;
+    },
+    async takeByTabIfIdle() {
+      if (session?.operation
+        || (session?.result && ['INGESTING', 'BOUND'].includes(session.result.deliveryState))) {
+        return null;
+      }
       const previous = session;
       session = null;
       return previous;

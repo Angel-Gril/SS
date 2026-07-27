@@ -4,8 +4,11 @@ export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION =
   'extension-byok-workbench-launch-request/v1' as const;
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION =
   'extension-byok-workbench-launch-context/v1' as const;
+export const EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION =
+  'extension-byok-workbench-batch-launch-context/v1' as const;
 
 const SOURCE_PLATFORMS = ['1688', 'pdd', 'taobao', 'tmall'] as const;
+const SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'] as const;
 const MAX_ASSIGNMENTS = 500;
 
 function hasControlCharacter(value: string): boolean {
@@ -51,6 +54,26 @@ export interface ExtensionByokWorkbenchLaunchContext {
   assignmentMode: 'APPEND';
   assignmentOrdinal: number;
 }
+
+export interface ExtensionByokWorkbenchBatchLaunchContext {
+  contractVersion: typeof EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION;
+  sourcePlatform: typeof SOURCE_PLATFORMS[number];
+  sourceProductId: string;
+  sourceCaptureSnapshotId: string;
+  supplyGoodsId: string;
+  shopId: string;
+  workflowId: string;
+  draftRevision: number;
+  draftVersion: number;
+  anchorSkuKey: string;
+  firstAssignmentOrdinal: number;
+  targets: Array<{ skuKey: string; slotKey: string }>;
+}
+
+export type ExtensionByokWorkbenchSlotTarget = Pick<
+  ExtensionByokWorkbenchLaunchContext,
+  'skuKey' | 'slotKey' | 'assignmentMode' | 'assignmentOrdinal'
+>;
 
 export interface ExtensionByokWorkbenchDraft {
   id: string;
@@ -168,11 +191,11 @@ function assertDraftIdentity(
   }
 }
 
-export function resolveExtensionByokWorkbenchLaunchContext(input: {
+function resolveDraftMediaAuthority(input: {
   ownerUserId: string;
   request: ExtensionByokWorkbenchLaunchRequest;
   draft: ExtensionByokWorkbenchDraft;
-}): ExtensionByokWorkbenchLaunchContext {
+}) {
   const { ownerUserId, request, draft } = input;
   assertDraftIdentity(ownerUserId, request, draft);
   if (!Array.isArray(draft.selectedSkuKeys)
@@ -183,7 +206,9 @@ export function resolveExtensionByokWorkbenchLaunchContext(input: {
   const skuKeys = draft.selectedSkuKeys.map((value) => canonicalIdentifier(value, 500));
   if (skuKeys.some((value) => value === null)
     || new Set(skuKeys).size !== skuKeys.length
-    || !draft.media || typeof draft.media !== 'object') {
+    || !draft.media
+    || typeof draft.media !== 'object'
+    || Array.isArray(draft.media)) {
     return fail('BYOK_WORKBENCH_LAUNCH_CONTEXT_STALE', 409, 'Listing SKU authority is invalid');
   }
   const assignments = draft.media.assignments;
@@ -195,10 +220,70 @@ export function resolveExtensionByokWorkbenchLaunchContext(input: {
       'No representable append ordinal is available for the first BYOK workbench release',
     );
   }
-  const skuKey = skuKeys.find((candidate): candidate is string => {
+  return {
+    skuKeys: skuKeys as string[],
+    assignments,
+    occupiedSlots,
+  };
+}
+
+export function resolveExtensionByokWorkbenchSlotTarget(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequest;
+  draft: ExtensionByokWorkbenchDraft;
+  target: ExtensionByokWorkbenchSlotTarget;
+}): ExtensionByokWorkbenchSlotTarget {
+  const authority = resolveDraftMediaAuthority(input);
+  const skuKey = canonicalIdentifier(input.target?.skuKey, 500);
+  const slotKey = canonicalIdentifier(input.target?.slotKey, 200);
+  if (!skuKey
+    || !slotKey
+    || input.target?.assignmentMode !== 'APPEND'
+    || !Number.isSafeInteger(input.target?.assignmentOrdinal)
+    || input.target.assignmentOrdinal !== authority.assignments.length) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_CONTEXT_STALE',
+      409,
+      'BYOK workbench slot target changed',
+    );
+  }
+  const isSkuHero = authority.skuKeys.includes(skuKey)
+    && slotKey === `sku:${skuKey}:hero`;
+  const isSharedDetail = skuKey === authority.skuKeys[0]
+    && SHARED_DETAIL_ROLES.some((role) => slotKey === `shared:detail:${role}`);
+  if (!isSkuHero && !isSharedDetail) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_CONTEXT_STALE',
+      409,
+      'BYOK workbench slot target is outside the current listing authority',
+    );
+  }
+  if (authority.occupiedSlots.has(slotKey)) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'The exact BYOK workbench slot is no longer empty',
+    );
+  }
+  return {
+    skuKey,
+    slotKey,
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: input.target.assignmentOrdinal,
+  };
+}
+
+export function resolveExtensionByokWorkbenchLaunchContext(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequest;
+  draft: ExtensionByokWorkbenchDraft;
+}): ExtensionByokWorkbenchLaunchContext {
+  const { request } = input;
+  const authority = resolveDraftMediaAuthority(input);
+  const skuKey = authority.skuKeys.find((candidate) => {
     if (!candidate) return false;
     const slotKey = `sku:${candidate}:hero`;
-    return slotKey.length <= 200 && !occupiedSlots.has(slotKey);
+    return slotKey.length <= 200 && !authority.occupiedSlots.has(slotKey);
   });
   if (!skuKey) {
     return fail(
@@ -220,7 +305,46 @@ export function resolveExtensionByokWorkbenchLaunchContext(input: {
     skuKey,
     slotKey: `sku:${skuKey}:hero`,
     assignmentMode: 'APPEND',
-    assignmentOrdinal: assignments.length,
+    assignmentOrdinal: authority.assignments.length,
+  };
+}
+
+export function resolveExtensionByokWorkbenchBatchLaunchContext(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequest;
+  draft: ExtensionByokWorkbenchDraft;
+}): ExtensionByokWorkbenchBatchLaunchContext {
+  const { request } = input;
+  const authority = resolveDraftMediaAuthority(input);
+  const anchorSkuKey = authority.skuKeys[0]!;
+  const targets = [
+    ...authority.skuKeys.map((skuKey) => ({ skuKey, slotKey: `sku:${skuKey}:hero` })),
+    ...SHARED_DETAIL_ROLES.map((role) => ({
+      skuKey: anchorSkuKey,
+      slotKey: `shared:detail:${role}`,
+    })),
+  ].filter((target) => target.slotKey.length <= 200
+    && !authority.occupiedSlots.has(target.slotKey));
+  if (targets.length === 0) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'No empty BYOK batch slot is available',
+    );
+  }
+  return {
+    contractVersion: EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION,
+    sourcePlatform: request.sourcePlatform,
+    sourceProductId: request.sourceProductId,
+    sourceCaptureSnapshotId: request.sourceCaptureSnapshotId,
+    supplyGoodsId: request.supplyGoodsId,
+    shopId: request.shopId,
+    workflowId: request.workflowId,
+    draftRevision: request.draftRevision,
+    draftVersion: request.draftVersion,
+    anchorSkuKey,
+    firstAssignmentOrdinal: authority.assignments.length,
+    targets,
   };
 }
 

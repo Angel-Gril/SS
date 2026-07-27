@@ -269,6 +269,21 @@ const steps = [
     args: ['scripts/extension-byok-readiness-client.test.mjs'],
   },
   {
+    name: 'extension BYOK execution intent client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-execution-intent-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK execution batch client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-execution-batch-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK execution intent claim broker contract',
+    command: 'node',
+    args: ['scripts/extension-byok-execution-intent-claim-broker.test.mjs'],
+  },
+  {
     name: 'extension BYOK text-to-image client contract',
     command: 'node',
     args: ['scripts/extension-byok-text-to-image-client.test.mjs'],
@@ -324,6 +339,11 @@ const steps = [
     args: ['scripts/extension-byok-generated-asset-ingest-client.test.mjs'],
   },
   {
+    name: 'extension BYOK generated asset batch ingest client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-generated-asset-batch-ingest-client.test.mjs'],
+  },
+  {
     name: 'extension BYOK binary ingest transport contract',
     command: 'node',
     args: ['scripts/extension-byok-ingest-transport.test.mjs'],
@@ -332,6 +352,11 @@ const steps = [
     name: 'extension BYOK workbench launch client contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-launch-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch launch client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-launch-client.test.mjs'],
   },
   {
     name: 'extension BYOK tab-bound workbench session contract',
@@ -352,6 +377,46 @@ const steps = [
     name: 'extension BYOK workbench runtime handler contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-runtime-handler.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch Provider executor contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-provider-executor.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch coordinator contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-coordinator.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch registry contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-registry.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch runtime handler contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-runtime-handler.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch page client contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-client.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch page controller contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-page-controller.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch recovery UI contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-recovery-ui.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch service-worker wiring contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-service-worker-wiring.test.mjs'],
   },
   {
     name: 'extension BYOK one-use workbench media channel contract',
@@ -417,6 +482,11 @@ const steps = [
     name: 'extension BYOK text-to-image vertical fixture',
     command: 'node',
     args: ['scripts/extension-byok-text-to-image-vertical-fixture.test.mjs'],
+  },
+  {
+    name: 'extension BYOK batch vertical fixture',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-vertical-fixture.test.mjs'],
   },
   {
     name: 'extension runtime message authorization contract',

@@ -30,6 +30,30 @@ const launchContext = {
   skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
   assignmentMode: 'APPEND', assignmentOrdinal: 0,
 };
+const batchRecoveryPreparing = {
+  contractVersion: 'extension-byok-workbench-batch-recovery/v1',
+  phase: 'PREPARING',
+  reservationIdempotencyKey: 'byok-reservation:00000000-0000-4000-8000-000000000001',
+  executionBatchId: null,
+  context: {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  },
+  slots: [
+    { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', operation: 'TEXT_TO_IMAGE' },
+    { skuKey: 'sku-1', slotKey: 'shared:detail:DETAIL', operation: 'FULL_EDIT' },
+  ],
+};
+const successorRecovery = {
+  contractVersion: 'extension-byok-workbench-successor-recovery/v1',
+  state: 'CLAIMING',
+  itemIndex: 0,
+  assignmentOrdinal: 0,
+  predecessorIntentId: 'intent-1',
+  predecessorGeneration: 1,
+  requestMode: 'json',
+  providerIdempotencyKey: 'byok-provider:00000000-0000-4000-8000-000000000002',
+  providerRequestHash: 'a'.repeat(64),
+};
 let now = Date.parse('2026-07-26T09:00:00.000Z');
 const storage = storageArea();
 const created = [];
@@ -78,6 +102,7 @@ const unresolved = await manager.beginOperation(sender, 'generate-unresolved-1')
 assert.deepEqual(JSON.parse(JSON.stringify(unresolved.operation)), {
   idempotencyKey: 'generate-unresolved-1',
   state: 'OUTCOME_UNRESOLVED',
+  recovery: null,
 });
 const restoredManager = api.createManager({
   sessionStorage: storage,
@@ -102,11 +127,204 @@ await assert.rejects(
 );
 const operationCleared = await restoredManager.clearOperation(sender, 'generate-unresolved-1');
 assert.equal(operationCleared.operation, null);
+await assert.rejects(
+  restoredManager.beginOperation(sender, 'sk-' + 'a'.repeat(24)),
+  /SESSION_OPERATION_INVALID/u,
+  'a credential-shaped operation identity is rejected before persistence',
+);
+
+const batchUnresolved = await restoredManager.beginOperation(
+  sender,
+  'byok_batch_recovery_1',
+  batchRecoveryPreparing,
+);
+assert.equal(batchUnresolved.operation.recovery.phase, 'PREPARING');
+assert.equal(batchUnresolved.operation.recovery.executionBatchId, null);
+assert.equal(JSON.stringify(batchUnresolved.operation).includes('prompt'), false);
+assert.equal(JSON.stringify(batchUnresolved.operation).includes('apiKey'), false);
+const batchReloadSender = { ...sender, documentId: 'workbench-document-batch-reload' };
+const reboundBatch = await restoredManager.claim(batchReloadSender);
+assert.equal(reboundBatch.workbenchDocumentId, batchReloadSender.documentId);
+assert.equal(reboundBatch.operation.recovery.phase, 'PREPARING');
+assert.deepEqual(
+  Object.keys(storage.values[api.STORAGE_KEY]['77'].operation).sort(),
+  ['idempotencyKey', 'state'],
+  'the legacy v1 session record must remain readable by the previous extension version',
+);
+assert.equal(
+  storage.values[api.STORAGE_KEY]['77'].workbenchDocumentId,
+  null,
+  'the previous package may bind its new reload document without consuming the unresolved lock',
+);
+assert.equal(
+  storage.values[api.STORAGE_KEY]['77'].expiresAt,
+  now + api.DEFAULT_TTL_MS,
+  'the rollback-readable base record receives a current legacy lease',
+);
+assert.equal(
+  storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'].recovery.phase,
+  'PREPARING',
+  'new recovery state must live outside the rollback-compatible v1 session record',
+);
+await assert.rejects(
+  restoredManager.claim(sender),
+  /SESSION_SENDER_DENIED/u,
+  'a retired document cannot reclaim a protected operation',
+);
+await assert.rejects(
+  restoredManager.clearOperation(sender, 'byok_batch_recovery_1'),
+  /SESSION_SENDER_DENIED/u,
+  'a retired document cannot clear the protected operation',
+);
+await assert.rejects(
+  restoredManager.updateOperationRecovery(sender, 'byok_batch_recovery_1', {
+    ...batchRecoveryPreparing,
+    phase: 'RESERVED',
+    executionBatchId: 'execution-batch-retired',
+  }),
+  /SESSION_SENDER_DENIED/u,
+  'a retired document cannot update the protected recovery descriptor',
+);
+now += api.DEFAULT_TTL_MS + 1;
+assert.equal(
+  (await restoredManager.claim(batchReloadSender)).operation.recovery.phase,
+  'PREPARING',
+  'an unresolved operation survives the normal session TTL',
+);
+const reservedRecovery = {
+  ...batchRecoveryPreparing,
+  phase: 'RESERVED',
+  executionBatchId: 'execution-batch-1',
+};
+const batchReserved = await restoredManager.updateOperationRecovery(
+  batchReloadSender,
+  'byok_batch_recovery_1',
+  reservedRecovery,
+);
+assert.equal(batchReserved.operation.recovery.executionBatchId, 'execution-batch-1');
+const batchDispatching = await restoredManager.updateOperationRecovery(
+  batchReloadSender,
+  'byok_batch_recovery_1',
+  { ...reservedRecovery, phase: 'DISPATCHING' },
+);
+assert.equal(batchDispatching.operation.recovery.phase, 'DISPATCHING');
+const batchSuccessorClaiming = await restoredManager.updateOperationRecovery(
+  batchReloadSender,
+  'byok_batch_recovery_1',
+  { ...reservedRecovery, phase: 'DISPATCHING', successorRecovery },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(batchSuccessorClaiming.operation.recovery.successorRecovery)),
+  successorRecovery,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(
+    storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'].recovery.successorRecovery,
+  )),
+  successorRecovery,
+  'the non-secret successor recovery evidence survives session persistence',
+);
+const persistedSuccessorEvidence = JSON.stringify(
+  storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'].recovery.successorRecovery,
+);
+for (const forbidden of ['https', 'providerOrigin', 'model', 'prompt', 'apiKey']) {
+  assert.equal(persistedSuccessorEvidence.includes(forbidden), false);
+}
+await assert.rejects(
+  restoredManager.updateOperationRecovery(batchReloadSender, 'byok_batch_recovery_1', {
+    ...reservedRecovery,
+    phase: 'DISPATCHING',
+    successorRecovery: { ...successorRecovery, predecessorIntentId: 'intent-other' },
+  }),
+  /SESSION_OPERATION_CONFLICT/u,
+  'an in-flight successor sidecar cannot be replaced with different evidence',
+);
+await assert.rejects(
+  restoredManager.updateOperationRecovery(batchReloadSender, 'byok_batch_recovery_1', {
+    ...reservedRecovery,
+    phase: 'DISPATCHING',
+    successorRecovery: {
+      ...successorRecovery,
+      providerIdempotencyKey: 'sk-' + 'c'.repeat(24),
+    },
+  }),
+  /SESSION_OPERATION_INVALID/u,
+  'credential-shaped successor evidence is rejected before persistence',
+);
+const batchSuccessorHandoff = await restoredManager.updateOperationRecovery(
+  batchReloadSender,
+  'byok_batch_recovery_1',
+  {
+    ...reservedRecovery,
+    phase: 'DISPATCHING',
+    successorRecovery: { ...successorRecovery, state: 'HANDOFF_STARTED' },
+  },
+);
+assert.equal(batchSuccessorHandoff.operation.recovery.successorRecovery.state, 'HANDOFF_STARTED');
+const batchSuccessorResolved = await restoredManager.updateOperationRecovery(
+  batchReloadSender,
+  'byok_batch_recovery_1',
+  { ...reservedRecovery, phase: 'DISPATCHING', successorRecovery: null },
+);
+assert.equal(batchSuccessorResolved.operation.recovery.successorRecovery, null);
+await assert.rejects(
+  restoredManager.updateOperationRecovery(batchReloadSender, 'byok_batch_recovery_1', {
+    ...reservedRecovery, phase: 'DISPATCHING',
+    executionBatchId: 'execution-batch-other',
+  }),
+  /SESSION_OPERATION_CONFLICT/u,
+);
+await assert.rejects(
+  restoredManager.updateOperationRecovery(batchReloadSender, 'byok_batch_recovery_1', {
+    ...reservedRecovery,
+    phase: 'DISPATCHING',
+    executionBatchId: 'sk-' + 'b'.repeat(24),
+  }),
+  /SESSION_OPERATION_INVALID/u,
+  'a credential-shaped server batch identity is rejected before persistence',
+);
+assert.equal(
+  await restoredManager.takeByTabIfIdle(77),
+  null,
+  'tab cleanup must not delete a persisted batch whose Provider outcome may be unresolved',
+);
+assert.equal(
+  (await restoredManager.claim(batchReloadSender)).operation.recovery.phase,
+  'DISPATCHING',
+);
+await restoredManager.clearOperation(batchReloadSender, 'byok_batch_recovery_1');
+assert.equal(
+  Object.hasOwn(storage.values[api.BATCH_RECOVERY_STORAGE_KEY], '77'),
+  false,
+  'clearing the operation also clears its separate recovery descriptor',
+);
+
+await restoredManager.beginOperation(batchReloadSender, 'replacement-operation');
+storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'] = {
+  operationIdempotencyKey: 'byok_batch_recovery_1',
+  recovery: batchRecoveryPreparing,
+};
+const staleRecoveryManager = api.createManager({
+  sessionStorage: storage,
+  tabs: {
+    async create(value) { created.push(value); return { id: 77 }; },
+    async update(id, value) { updated.push({ id, value }); return { id }; },
+    async remove(id) { removed.push(id); },
+  },
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => now,
+});
+assert.equal(
+  (await staleRecoveryManager.claim(batchReloadSender)).operation.recovery,
+  null,
+  'a stale sidecar cannot attach another operation\'s batch recovery identity',
+);
+await staleRecoveryManager.clearOperation(batchReloadSender, 'replacement-operation');
 
 now += api.DEFAULT_TTL_MS - 1;
-await restoredManager.beginOperation(sender, 'generate-success-1');
+await restoredManager.beginOperation(batchReloadSender, 'generate-success-1');
 now += 2 * 60 * 1000;
-const candidate = await restoredManager.attachResult(sender, {
+const candidate = await restoredManager.attachResult(batchReloadSender, {
   resultId: 'br_' + 'a'.repeat(48),
   reviewState: 'CANDIDATE_READY',
 }, 'generate-success-1');
@@ -114,13 +332,17 @@ assert.equal(candidate.result.reviewState, 'CANDIDATE_READY');
 assert.equal(candidate.operation, null);
 await assert.rejects(
   restoredManager.attachResult(
-    sender,
+    batchReloadSender,
     { resultId: 'br_' + 'b'.repeat(48), reviewState: 'CANDIDATE_READY' },
     'generate-success-1',
   ),
   /SESSION_RESULT_CONFLICT/u,
 );
-const approved = await restoredManager.setReviewState(sender, candidate.result.resultId, 'APPROVED');
+const approved = await restoredManager.setReviewState(
+  batchReloadSender,
+  candidate.result.resultId,
+  'APPROVED',
+);
 assert.equal(approved.result.reviewState, 'APPROVED');
 const ingestAuthority = {
   ownerUserId: 'owner-1', deviceSessionId: 'session-1',
@@ -129,7 +351,7 @@ const ingestAuthority = {
 };
 const ingestRequestHash = '3'.repeat(64);
 const ingesting = await restoredManager.beginIngest(
-  sender,
+  batchReloadSender,
   candidate.result.resultId,
   'wb_ingest_' + 'a'.repeat(48),
   ingestAuthority,
@@ -162,7 +384,7 @@ const reloadedDeliverySender = { ...sender, documentId: 'reloaded-delivery-docum
 const reboundIngesting = await restoredManager.claim(reloadedDeliverySender);
 assert.equal(reboundIngesting.workbenchDocumentId, 'reloaded-delivery-document');
 const hashedIngesting = await restoredManager.setIngestRequestHash(
-  sender,
+  batchReloadSender,
   candidate.result.resultId,
   'wb_ingest_' + 'a'.repeat(48),
   ingestRequestHash,
@@ -174,7 +396,7 @@ assert.equal(
   'a late old-document commit must not rebind the session back to the old document',
 );
 const bound = await restoredManager.setIngestResult(
-  sender,
+  batchReloadSender,
   candidate.result.resultId,
   'wb_ingest_' + 'a'.repeat(48),
   ingestAuthority,
@@ -188,7 +410,7 @@ assert.equal(bound.result.ingest.receiptId, 'receipt-1');
 assert.equal(bound.result.ingest.boundDraftVersion, 5);
 assert.deepEqual(
   JSON.parse(JSON.stringify(await restoredManager.setIngestResult(
-    sender,
+    batchReloadSender,
     candidate.result.resultId,
     'wb_ingest_' + 'a'.repeat(48),
     ingestAuthority,
@@ -196,6 +418,15 @@ assert.deepEqual(
   ))),
   JSON.parse(JSON.stringify(bound)),
   'the exact bound receipt must replay without changing session state',
+);
+await assert.rejects(
+  restoredManager.clearResult(batchReloadSender, candidate.result.resultId),
+  /SESSION_SENDER_DENIED/u,
+  'a retired document cannot delete a bound result owned by the current document',
+);
+assert.equal(
+  (await restoredManager.claim(reloadedDeliverySender)).result.deliveryState,
+  'BOUND',
 );
 const reboundSender = { ...sender, documentId: 'reloaded-bound-document' };
 const rebound = await restoredManager.claim(reboundSender);
@@ -322,9 +553,70 @@ assert.deepEqual(
 );
 const cleanedRecords = cleanupStorage.values[sessionStorageKey];
 assert.equal(cleanedRecords['91'].result, null);
-assert.equal(cleanedRecords['92'].operation, null);
+assert.equal(cleanedRecords['92'].operation.state, 'OUTCOME_UNRESOLVED');
+assert.deepEqual(
+  Object.keys(cleanedRecords['92'].operation).sort(),
+  ['idempotencyKey', 'state'],
+);
 assert.equal(cleanedRecords['93'].result.deliveryState, 'INGESTING');
 assert.equal(cleanedRecords['94'].result.deliveryState, 'BOUND');
 assert.deepEqual(cleanupDiscarded, [candidateResultId]);
+
+const capacityStorage = storageArea();
+const capacityKey = api.STORAGE_KEY;
+const expiredCreatedAt = now - api.DEFAULT_TTL_MS - 1;
+const expiredExpiresAt = now - 1;
+capacityStorage.values[capacityKey] = {
+  101: {
+    ...persistedSession(101, null, {
+      idempotencyKey: 'protected-operation', state: 'OUTCOME_UNRESOLVED',
+    }),
+    createdAt: expiredCreatedAt,
+    expiresAt: expiredExpiresAt,
+  },
+  102: {
+    ...persistedSession(102, {
+      resultId: ingestingResultId,
+      reviewState: 'APPROVED', deliveryState: 'INGESTING',
+      ingestIdempotencyKey: 'wb_ingest_' + '7'.repeat(48),
+      ingestRequestHash, ingestAuthority, ingest: null,
+    }),
+    createdAt: expiredCreatedAt,
+    expiresAt: expiredExpiresAt,
+  },
+  103: {
+    ...persistedSession(103, {
+      resultId: boundResultId,
+      reviewState: 'APPROVED', deliveryState: 'BOUND',
+      ingestIdempotencyKey: 'wb_ingest_' + '8'.repeat(48),
+      ingestRequestHash, ingestAuthority, ingest: ingestReceipt,
+    }),
+    createdAt: expiredCreatedAt,
+    expiresAt: expiredExpiresAt,
+  },
+};
+const capacityRemoved = [];
+const capacityManager = api.createManager({
+  sessionStorage: capacityStorage,
+  tabs: {
+    async create() { return { id: 104 }; },
+    async update() { throw new Error('capacity rejection must happen before navigation'); },
+    async remove(id) { capacityRemoved.push(id); },
+  },
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => now,
+  limit: 3,
+});
+await assert.rejects(
+  capacityManager.open({
+    context: launchContext,
+    sourceTabId: 12,
+    sourceDocumentId: 'capacity-source-document',
+  }),
+  /SESSION_CAPACITY_EXCEEDED/u,
+  'capacity pressure must never evict unresolved, ingesting, or bound state',
+);
+assert.deepEqual(Object.keys(capacityStorage.values[capacityKey]).sort(), ['101', '102', '103']);
+assert.deepEqual(capacityRemoved, [104]);
 
 console.log('extension BYOK workbench launch session tests passed');

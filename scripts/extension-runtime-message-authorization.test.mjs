@@ -110,6 +110,15 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
   const recoverIngest = api.MESSAGE_TYPES.WORKBENCH.RECOVER_INGEST;
   const publish = api.MESSAGE_TYPES.WORKBENCH.PUBLISH;
+  const batchTypes = [
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_STATE,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_START,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_COMMAND,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_PREVIEW,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_INGEST,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_RECOVER,
+    api.MESSAGE_TYPES.WORKBENCH.BATCH_CLEAR,
+  ];
   const hostedTypes = Object.values(api.MESSAGE_TYPES.HOSTED_WORKBENCH);
 
   for (const type of [
@@ -124,6 +133,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     review,
     recoverIngest,
     publish,
+    ...batchTypes,
     ...hostedTypes,
   ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
@@ -191,6 +201,23 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     extensionSender('/pages/ai-image-workbench.html'),
     extensionId,
   ), true);
+  for (const type of batchTypes) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(
+      type,
+      extensionSender('/pages/ai-image-workbench.html'),
+      extensionId,
+    ), true);
+    assert.equal(policy.isAllowedRuntimeMessageSender(
+      type,
+      extensionSender('/pages/ai-provider-settings.html'),
+      extensionId,
+    ), false);
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, {
+      id: extensionId,
+      url: 'https://detail.1688.com/offer/1.html',
+      tab: { url: 'https://detail.1688.com/offer/1.html' },
+    }, extensionId), false);
+  }
 
   assert.equal(policy.isAllowedRuntimeMessageSender(
     execute,
@@ -468,6 +495,74 @@ test('requires an authenticated exact ERP readiness binding for Provider actions
   assert.equal(tooLong.code, 'SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
 });
 
+test('authorizes only selected-SKU hero and the four exact shared-detail readiness slots', async () => {
+  const { api } = loadApi();
+  const allowedSlots = [
+    'sku:sku-selected:hero',
+    'shared:detail:SCENE',
+    'shared:detail:DETAIL',
+    'shared:detail:SPEC',
+    'shared:detail:PACKAGING',
+  ];
+  let verificationCalls = 0;
+  for (const [index, slotKey] of allowedSlots.entries()) {
+    const binding = readinessBinding(api, {
+      skuKey: 'sku-selected',
+      slotKey,
+      assignmentOrdinal: index,
+    });
+    const decision = await api.authorizeRuntimeMessage({
+      runtimeId: extensionId,
+      sender: extensionSender('/pages/ai-image-workbench.html'),
+      message: {
+        type: api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
+        payload: { profileId: 'relay-profile-1' },
+        readinessHandle: `readiness-slot-${index + 1}`,
+        readinessBinding: binding,
+      },
+      now: () => new Date('2026-07-25T12:00:00.000Z'),
+      async verifyReadinessHandle(input) {
+        verificationCalls += 1;
+        return verifiedReadiness(api, input.expectedBinding);
+      },
+    });
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.readiness.binding.slotKey, slotKey);
+  }
+  assert.equal(verificationCalls, allowedSlots.length);
+
+  for (const [index, bindingOverrides] of [
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-other:hero' },
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-selected:detail:1' },
+    { skuKey: 'sku-selected', slotKey: 'group:visual-1:detail:SCENE' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:FUNCTION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SPECIFICATION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:scene' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE:extra' },
+    {
+      skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE', assignmentMode: 'REPLACE',
+    },
+  ].entries()) {
+    const decision = await api.authorizeRuntimeMessage({
+      runtimeId: extensionId,
+      sender: extensionSender('/pages/ai-image-workbench.html'),
+      message: {
+        type: api.MESSAGE_TYPES.WORKBENCH.EXECUTE_PROVIDER,
+        payload: { profileId: 'relay-profile-1' },
+        readinessHandle: `invalid-readiness-slot-${index + 1}`,
+        readinessBinding: readinessBinding(api, bindingOverrides),
+      },
+      async verifyReadinessHandle() {
+        verificationCalls += 1;
+        throw new Error('invalid slot must fail before readiness verification');
+      },
+    });
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.code, 'SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID');
+  }
+  assert.equal(verificationCalls, allowedSlots.length);
+});
+
 test('rejects private, localhost and metadata Provider origins before readiness verification', async () => {
   const { api } = loadApi();
   let verificationCalls = 0;
@@ -676,11 +771,11 @@ test('ships the authorization module as a background-only security boundary', ()
   assert.match(serviceWorkerSource, /installByokReadinessRuntime/u);
   assert.match(
     serviceWorkerSource,
-    /providerSettingsDispatcher\.handlers[\s\S]*workbenchDispatcher\.handlers/u,
+    /providerSettingsDispatcher\.handlers[\s\S]*workbenchDispatcher\.handlers[\s\S]*batchWorkbenchDispatcher\.handlers/u,
   );
   assert.match(serviceWorkerSource, /SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE/u);
   assert.match(serviceWorkerSource, /chrome\.tabs\.onRemoved\.addListener/u);
-  assert.match(serviceWorkerSource, /publish bridge[\s\S]*edit and batch handlers remain dark/u);
+  assert.doesNotMatch(serviceWorkerSource, /edit and batch handlers remain dark/u);
   assert.match(
     verifierSource,
     /requiredSecurityModules[\s\S]*shared\/message-security\/runtime-message-authorization\.js/u,

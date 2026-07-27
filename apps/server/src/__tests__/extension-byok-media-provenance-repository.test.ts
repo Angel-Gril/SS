@@ -42,6 +42,7 @@ function input(overrides: Partial<ExtensionByokMediaProvenanceCreateInput> = {})
     resultHeight: 1024,
     idempotencyKey: 'byok-ingest:workflow-1:sku-1:hero:0:attempt:1',
     requestHash: 'd'.repeat(64),
+    executionIntentId: 'intent-1',
     publishIntentId: null,
     publishReceiptId: null,
     erpAiChargeCents: 0,
@@ -261,5 +262,36 @@ describe('Prisma extension BYOK media provenance repository', () => {
       publishIntentId: 'intent-2',
       publishReceiptId: 'receipt-1',
     })).resolves.toEqual({ kind: 'conflict' });
+  });
+
+  it('links a legacy provenance row without fabricating an execution intent identity', async () => {
+    const before = row({ executionIntentId: null });
+    const after = row({
+      executionIntentId: null,
+      publishIntentId: 'intent-legacy',
+      publishReceiptId: 'receipt-legacy',
+    });
+    const repository = new PrismaExtensionByokMediaProvenanceRepository({
+      extensionByokMediaProvenance: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce(before)
+          .mockResolvedValueOnce(after),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+    } as never);
+
+    await expect(repository.linkPublish({
+      provenanceId: 'provenance-1',
+      ownerUserId: 'owner-1',
+      publishIntentId: 'intent-legacy',
+      publishReceiptId: 'receipt-legacy',
+    })).resolves.toMatchObject({
+      kind: 'linked',
+      provenance: {
+        executionIntentId: null,
+        publishIntentId: 'intent-legacy',
+        publishReceiptId: 'receipt-legacy',
+      },
+    });
   });
 });

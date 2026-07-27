@@ -58,6 +58,7 @@ function provenanceRecord(row: any): ExtensionByokMediaProvenanceRecord {
     resultHeight: Number(row.resultHeight),
     idempotencyKey: String(row.idempotencyKey),
     requestHash: String(row.requestHash),
+    executionIntentId: optionalString(row.executionIntentId),
     publishIntentId: optionalString(row.publishIntentId),
     publishReceiptId: optionalString(row.publishReceiptId),
     erpAiChargeCents: Number(row.erpAiChargeCents) as 0,
@@ -105,6 +106,7 @@ function rowMatchesCreateInput(row: any, input: ExtensionByokMediaProvenanceCrea
     && Number(row.resultHeight) === input.resultHeight
     && String(row.idempotencyKey) === input.idempotencyKey
     && String(row.requestHash) === input.requestHash
+    && String(row.executionIntentId) === input.executionIntentId
     && optionalString(row.publishIntentId) === input.publishIntentId
     && optionalString(row.publishReceiptId) === input.publishReceiptId
     && Number(row.erpAiChargeCents) === 0;

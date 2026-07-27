@@ -44,12 +44,15 @@ function command(overrides: Record<string, unknown> = {}) {
     providerOperation: 'IMAGE_TO_IMAGE',
     requestMode: 'multipart',
     model: 'image-model-v1',
+    executionIntentId: 'intent-1',
+    providerIdempotencyKey: 'provider-attempt-0001',
+    providerRequestHash: 'b'.repeat(64),
     providerRequestIdSha256: HASH,
     promptSha256: HASH,
     negativePromptSha256: null,
     draftRevision: 11,
     skuKey: 'sku-1',
-    slotKey: 'sku:sku-1:hero:0',
+    slotKey: 'sku:sku-1:hero',
     assignmentOrdinal: 0,
     assignmentMode: 'APPEND',
     replaceConfirmed: false,
@@ -134,7 +137,7 @@ describe('BYOK media ingest command grant', () => {
     expect(() => parseByokMediaIngestCommand({
       ...command(), assignmentMode: 'REPLACE', replaceConfirmed: true,
     })).not.toThrow();
-    expect(() => parseByokMediaIngestCommand({ ...command(), slotKey: 'sku:sku-2:hero:0' }))
+    expect(() => parseByokMediaIngestCommand({ ...command(), slotKey: 'sku:sku-2:hero' }))
       .toThrow(/invalid/i);
     expect(() => parseByokMediaIngestCommand({ ...command(), providerResultUrl: 'https://evil.example/result.png' }))
       .toThrow(/invalid/i);
@@ -163,6 +166,7 @@ describe('BYOK media ingest command grant', () => {
     await expect(resolve({
       sessionId: 'session-1', ownerUserId: 'owner-1', operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'byok-ingest-workflow-1-v7',
       command: command(),
     })).resolves.toMatchObject({
       kind: 'allowed', shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
@@ -180,6 +184,7 @@ describe('BYOK media ingest command grant', () => {
     await expect(resolve({
       sessionId: 'session-1', ownerUserId: 'owner-1', operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 8,
+      idempotencyKey: 'byok-ingest-workflow-1-v7',
       command: command(),
     })).resolves.toMatchObject({ kind: 'stale' });
 
@@ -192,7 +197,7 @@ describe('BYOK media ingest command grant', () => {
       sessionId: 'session-1', ownerUserId: 'owner-1',
       operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
-      purpose: 'execute', command: command(),
+      idempotencyKey: 'byok-ingest-workflow-1-v7', purpose: 'execute', command: command(),
     })).resolves.toMatchObject({
       kind: 'allowed', workflowId: 'workflow-1', draftVersion: 7,
       command: { draftRevision: 11, authority: { sourceCaptureSnapshotId: 'snapshot-1' } },
@@ -208,6 +213,7 @@ describe('BYOK media ingest command grant', () => {
     await expect(resolve({
       sessionId: 'session-1', ownerUserId: 'owner-1', operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
       shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'byok-ingest-workflow-1-v7',
       command: command(),
     })).resolves.toMatchObject({ kind: 'unavailable' });
   });
@@ -236,8 +242,25 @@ describe('BYOK media ingest command grant', () => {
     });
     await expect(resolve({
       sessionId: 'session-1', ownerUserId: 'owner-1', operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
-      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7, command: command(),
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'byok-ingest-workflow-1-v7', command: command(),
     })).resolves.toMatchObject({ kind: 'unavailable' });
+  });
+
+  it('rejects a credential-shaped grant idempotency key before authority lookup', async () => {
+    const loadShop = vi.fn();
+    const resolve = createByokMediaIngestCommandResolver({
+      loadShop,
+      loadDraft: vi.fn(),
+      getReadiness: vi.fn(),
+    });
+    await expect(resolve({
+      sessionId: 'session-1', ownerUserId: 'owner-1',
+      operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'sk-project-secret-123456', command: command(),
+    })).resolves.toEqual({ kind: 'forbidden' });
+    expect(loadShop).not.toHaveBeenCalled();
   });
 
   it.each([

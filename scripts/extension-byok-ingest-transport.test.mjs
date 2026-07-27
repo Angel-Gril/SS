@@ -10,6 +10,7 @@ const context = {
   Blob,
   Boolean,
   Error,
+  FormData,
   JSON,
   Math,
   Number,
@@ -98,6 +99,72 @@ assert.equal(requests[1].init.headers['X-SS-ERP-Command-Grant'], undefined);
 assert.equal(requests[1].init.credentials, 'omit');
 assert.equal(requests[1].init.cache, 'no-store');
 assert.equal(requests[1].init.redirect, 'error');
+
+const executionIntentClaimPayload = {
+  contractVersion: 'extension-byok-execution-intent-claim-request/v1',
+};
+await transport.post(
+  '/api/extension-device/byok-media/execution-intents',
+  executionIntentClaimPayload,
+  { requiredScope: 'byok:media:ingest' },
+);
+const executionIntentOutcomePayload = {
+  contractVersion: 'extension-byok-execution-intent-outcome-request/v1',
+};
+await transport.post(
+  '/api/extension-device/byok-media/execution-intents/intent-1/outcome',
+  executionIntentOutcomePayload,
+  { requiredScope: 'byok:media:ingest' },
+);
+assert.equal(requests.length, 4);
+assert.equal(
+  requests[2].url,
+  'https://erp.example/api/extension-device/byok-media/execution-intents',
+);
+assert.equal(requests[2].init.body, JSON.stringify(executionIntentClaimPayload));
+assert.equal(
+  requests[3].url,
+  'https://erp.example/api/extension-device/byok-media/execution-intents/intent-1/outcome',
+);
+assert.equal(requests[3].init.body, JSON.stringify(executionIntentOutcomePayload));
+
+const batchManifest = {
+  contractVersion: 'extension-byok-media-batch-ingest-manifest/v1',
+  operation: 'BYOK_MEDIA_INGEST',
+  executionBatchId: 'execution-batch-1',
+  shopId: 'shop-1',
+  workflowId: 'workflow-1',
+  draftVersion: 4,
+  idempotencyKey: 'byok-batch-ingest-0001',
+  command: {
+    schemaVersion: 'byok-media-ingest-batch/v1',
+    executionBatchId: 'execution-batch-1',
+    items: [
+      { resultMimeType: 'image/png', resultSizeBytes: image.size },
+      { resultMimeType: 'image/png', resultSizeBytes: image.size },
+    ],
+  },
+};
+const batchForm = new FormData();
+batchForm.append('manifest', JSON.stringify(batchManifest));
+batchForm.append('image-0', image, 'image-0.png');
+batchForm.append('image-1', image, 'image-1.png');
+const batchResult = await transport.postMultipart(
+  '/api/extension-device/byok-media/batch-ingest',
+  batchForm,
+  { requiredScope: 'byok:media:ingest', commandGrant: 'b'.repeat(43) },
+);
+assert.equal(batchResult.state, 'response');
+assert.equal(requests.length, 5);
+assert.equal(
+  requests[4].url,
+  'https://erp.example/api/extension-device/byok-media/batch-ingest',
+);
+assert.equal(requests[4].init.body, batchForm);
+assert.equal(requests[4].init.headers['Content-Type'], undefined);
+assert.equal(requests[4].init.headers['X-SS-ERP-Command-Grant'], 'b'.repeat(43));
+assert.equal(requests[4].init.credentials, 'omit');
+assert.equal(requests[4].init.redirect, 'error');
 
 const publishRequests = [];
 const publishTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
@@ -371,5 +438,59 @@ assert.deepEqual(
   { state: 'authorization_required', status: 401 },
 );
 assert.equal(deviceRevocationCredentialClears, 2, 'invalid device sessions must clear credentials');
+
+const batchRouteRequests = [];
+const batchRouteTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(),
+  fetchImpl: async (url, init) => {
+    batchRouteRequests.push({ url, init });
+    return response(200, { code: 1, data: {} });
+  },
+});
+for (const path of [
+  '/api/extension-device/byok-media/workbench-launch',
+  '/api/extension-device/byok-media/workbench-batch-launch',
+  '/api/extension-device/byok-media/execution-batches',
+  '/api/extension-device/byok-media/execution-batches/batch-1/items/3/attempts',
+  '/api/extension-device/byok-media/execution-batches/batch-1/cancel',
+  '/api/extension-device/byok-media/batch-ingest-status',
+]) {
+  await batchRouteTransport.post(path, { contractVersion: 'fixture/v1' }, {
+    requiredScope: 'byok:media:ingest',
+  });
+}
+assert.equal(batchRouteRequests.length, 6);
+for (const path of [
+  '/api/extension-device/byok-media/execution-batches/batch-1',
+  '/api/extension-device/byok-media/execution-batches/by-idempotency/reservation-key-0001',
+  '/api/extension-device/byok-media/execution-batches/by-idempotency/%E6%89%B9%E6%AC%A1-1',
+]) {
+  await batchRouteTransport.get(path, { requiredScope: 'byok:media:ingest' });
+}
+assert.equal(batchRouteRequests.length, 9);
+for (const invalidPath of [
+  '/api/extension-device/byok-media/execution-batches/batch-1/items/4/attempts',
+  '/api/extension-device/byok-media/execution-batches/batch-1/items/0/attempts?secret=1',
+  '/api/extension-device/byok-media/execution-batches/batch/extra/cancel',
+]) {
+  await assert.rejects(
+    batchRouteTransport.post(invalidPath, { contractVersion: 'fixture/v1' }, {
+      requiredScope: 'byok:media:ingest',
+    }),
+    /path is invalid/u,
+  );
+}
+for (const invalidPath of [
+  '/api/extension-device/byok-media/execution-batches/batch/extra',
+  '/api/extension-device/byok-media/execution-batches/by-idempotency/',
+  '/api/extension-device/byok-media/execution-batches/by-idempotency/key?secret=1',
+  '/api/extension-device/byok-media/execution-batches/%2Fadmin',
+]) {
+  await assert.rejects(
+    batchRouteTransport.get(invalidPath, { requiredScope: 'byok:media:ingest' }),
+    /path is invalid/u,
+  );
+}
+assert.equal(batchRouteRequests.length, 9);
 
 console.log('extension BYOK ingest transport tests passed');

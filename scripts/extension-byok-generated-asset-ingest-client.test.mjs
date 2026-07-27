@@ -25,8 +25,10 @@ const internal = {
   resultId: 'br_result_1', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
   profileId: 'profile-1', providerOrigin: 'https://relay.example', model: 'image-model-v1',
   policyRevision: '734', idempotencyKey: 'provider-generate-1', requestHash: 'a'.repeat(64),
+  executionIntentId: 'intent-1',
   promptHash: 'b'.repeat(64), negativePromptHash: null, endpointHash: 'c'.repeat(64),
   providerRequestIdSha256: '9'.repeat(64),
+  sourceSha256: null, referenceSha256s: [], maskSha256: null,
   acceptedAt: '2026-07-25T15:00:00.000Z', mimeType: 'image/png', byteLength: 4,
   sha256: 'd'.repeat(64), blob,
   lifecycleEpoch: 7,
@@ -159,7 +161,9 @@ assert.equal(calls[0].path, '/api/extension-device/command-grants');
 assert.deepEqual(JSON.parse(JSON.stringify(calls[0].body.command)), {
   schemaVersion: 'byok-media-ingest/v1',
   providerOrigin: 'https://relay.example', providerOperation: 'TEXT_TO_IMAGE', requestMode: 'json',
-  model: 'image-model-v1', providerRequestIdSha256: '9'.repeat(64),
+  model: 'image-model-v1', executionIntentId: 'intent-1',
+  providerIdempotencyKey: 'provider-generate-1', providerRequestHash: 'a'.repeat(64),
+  providerRequestIdSha256: '9'.repeat(64),
   promptSha256: 'b'.repeat(64), negativePromptSha256: null,
   draftRevision: 3, skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
   assignmentMode: 'APPEND', replaceConfirmed: false, assignmentOrdinal: 0,
@@ -179,13 +183,83 @@ assert.deepEqual(
   'successful replay must not issue another grant or upload',
 );
 assert.equal(calls.length, 2);
+
+for (const [index, role] of ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'].entries()) {
+  const slotKey = `shared:detail:${role}`;
+  const assignmentOrdinal = index + 1;
+  const resultId = `br_result_shared_${role.toLowerCase()}`;
+  const sharedInternal = {
+    ...internal,
+    resultId,
+    idempotencyKey: `provider-shared-${role.toLowerCase()}-1`,
+    executionIntentId: `intent-shared-${role.toLowerCase()}`,
+    binding: {
+      ...internal.binding,
+      slotKey,
+      assignmentOrdinal,
+    },
+  };
+  let sharedGrantCalls = 0;
+  let sharedUploadCalls = 0;
+  const sharedClient = api.createClient({
+    transport: {
+      async post() {
+        sharedGrantCalls += 1;
+        return {
+          state: 'response', status: 201,
+          body: {
+            code: 1,
+            data: {
+              grantId: `grant-shared-${index}`,
+              grantToken: 'h'.repeat(43),
+              requestHash: ingestRequestHash,
+              expiresAt: 'later',
+            },
+          },
+        };
+      },
+      async postBytes() {
+        sharedUploadCalls += 1;
+        return {
+          state: 'response', status: 200,
+          body: {
+            code: 1,
+            data: successData({ slotKey, assignmentOrdinal }),
+          },
+        };
+      },
+    },
+    vault: {
+      getApprovedForBackground(id) {
+        assert.equal(id, resultId);
+        return sharedInternal;
+      },
+      release(id) {
+        assert.equal(id, resultId);
+        return true;
+      },
+    },
+    isAuthorityCurrent: currentAuthority,
+  });
+  const sharedReceipt = await sharedClient.ingest({
+    ...input,
+    resultId,
+    slotKey,
+    assignmentOrdinal,
+    idempotencyKey: `byok-ingest-shared-${role.toLowerCase()}`,
+  }, runtimeAuthority());
+  assert.equal(sharedReceipt.slotKey, slotKey);
+  assert.equal(sharedGrantCalls, 1);
+  assert.equal(sharedUploadCalls, 1);
+}
+
 await assert.rejects(
   client.ingest(
     { ...input, assignmentMode: 'REPLACE', replaceConfirmed: true },
     runtimeAuthority(),
   ),
-  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_IDEMPOTENCY_CONFLICT',
-  'assignment mode and confirmation must participate in the idempotency fingerprint',
+  (error) => error && error.code === 'SS_ERP_BYOK_INGEST_INPUT_INVALID',
+  'REPLACE must fail closed before idempotency or transport work',
 );
 await assert.rejects(
   client.ingest({ ...input, assignmentOrdinal: 499 }, runtimeAuthority()),
@@ -232,6 +306,7 @@ const realPublic = realVault.put({
   outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
   profileId: internal.profileId, providerOrigin: internal.providerOrigin, model: internal.model,
   policyRevision: internal.policyRevision, idempotencyKey: internal.idempotencyKey,
+  executionIntentId: internal.executionIntentId,
   requestHash: internal.requestHash, promptHash: internal.promptHash,
   negativePromptHash: internal.negativePromptHash, endpointHash: internal.endpointHash,
   providerRequestIdSha256: internal.providerRequestIdSha256,
@@ -275,6 +350,7 @@ const pendingPublic = realVault.put({
   outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
   profileId: internal.profileId, providerOrigin: internal.providerOrigin, model: internal.model,
   policyRevision: internal.policyRevision, idempotencyKey: 'provider-pending-commit-1',
+  executionIntentId: 'intent-pending-commit-1',
   requestHash: '2'.repeat(64), promptHash: internal.promptHash,
   negativePromptHash: internal.negativePromptHash, endpointHash: internal.endpointHash,
   providerRequestIdSha256: internal.providerRequestIdSha256,
@@ -338,6 +414,19 @@ const invalidInputs = [
   { ...input, idempotencyKey: 'byok-ingest-invalid-05', assignmentOrdinal: 500 },
   { ...input, idempotencyKey: 'byok-ingest-invalid-06', assignmentOrdinal: 1.5 },
   { ...input, idempotencyKey: 'byok-ingest-invalid-07', slotKey: 'sku:sku-2:hero' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-08', slotKey: 'sku:sku-1:detail:1' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-09', slotKey: 'group:visual-1:detail:SCENE' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-10', slotKey: 'shared:detail:FUNCTION' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-11', slotKey: 'shared:detail:SPECIFICATION' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-12', slotKey: 'shared:detail:scene' },
+  { ...input, idempotencyKey: 'byok-ingest-invalid-13', slotKey: 'shared:detail:SCENE:extra' },
+  {
+    ...input,
+    idempotencyKey: 'byok-ingest-invalid-14',
+    slotKey: 'shared:detail:SCENE',
+    assignmentMode: 'REPLACE',
+    replaceConfirmed: true,
+  },
   Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'assignmentMode')),
   { ...input, unexpectedAssignmentField: true },
 ];

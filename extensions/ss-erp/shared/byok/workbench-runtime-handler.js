@@ -207,7 +207,7 @@
     var resetIngest = requiredMethod(sessionManager, 'resetIngest');
     var setIngestResult = requiredMethod(sessionManager, 'setIngestResult');
     var clearResult = requiredMethod(sessionManager, 'clearResult');
-    var takeByTab = requiredMethod(sessionManager, 'takeByTab');
+    var takeByTabIfIdle = requiredMethod(sessionManager, 'takeByTabIfIdle');
     var sameContext = requiredMethod(sessionManager, 'sameContext');
     var resolveLaunch = requiredMethod(config.launchClient, 'resolve');
     var listProfiles = config.profileStore
@@ -373,7 +373,7 @@
           }));
         } catch (_error) {}
       }
-      var removed = await takeByTab(session.workbenchTabId);
+      var removed = await takeByTabIfIdle(session.workbenchTabId);
       await cleanupEditTab(session.workbenchTabId);
       var result = removed && removed.result;
       if (result && result.resultId) releaseTemporaryResult(result.resultId);
@@ -1196,7 +1196,7 @@
     async function removeTab(value) {
       if (!Number.isSafeInteger(value) || value < 0) return false;
       await cleanupEditTab(value);
-      var session = await takeByTab(value);
+      var session = await takeByTabIfIdle(value);
       if (!session) return false;
       if (typeof session.workbenchDocumentId === 'string' && session.workbenchDocumentId) {
         try {

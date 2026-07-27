@@ -141,6 +141,42 @@ function readiness(operation, overrides = {}) {
   };
 }
 
+function executionIntentReceipt(input, overrides = {}) {
+  const binding = input.readinessBinding;
+  return {
+    contractVersion: 'extension-byok-execution-intent/v1',
+    intentId: `intent-${input.providerIdempotencyKey}`,
+    replayed: false,
+    executionMode: 'BYOK',
+    outcome: 'PENDING',
+    providerIdempotencyKey: input.providerIdempotencyKey,
+    providerRequestHash: input.providerRequestHash,
+    context: {
+      shopId: binding.shopId,
+      workflowId: binding.workflowId,
+      draftRevision: binding.draftRevision,
+      draftVersion: binding.draftVersion,
+      skuKey: binding.skuKey,
+      slotKey: binding.slotKey,
+    },
+    ...overrides,
+  };
+}
+
+function executionIntentOutcomeReceipt(input, overrides = {}) {
+  return {
+    contractVersion: 'extension-byok-execution-intent-outcome/v1',
+    intentId: input.intentId,
+    replayed: false,
+    outcome: input.outcome,
+    providerIdempotencyKey: input.providerIdempotencyKey,
+    providerRequestHash: input.providerRequestHash,
+    providerRequestIdSha256: input.providerRequestIdSha256,
+    resultSha256: input.resultSha256,
+    ...overrides,
+  };
+}
+
 function evidence(operation, requestMode = 'multipart', overrides = {}) {
   return {
     contractVersion: 'extension-byok-capability/v1',
@@ -246,6 +282,7 @@ function loadClient(options = {}) {
 
   const requestMode = adapter.requestMode;
   const storeCalls = [];
+  const executionIntentCalls = [];
   let credentialReads = 0;
   let dispatches = 0;
   const currentEvidence = options.evidence === undefined
@@ -306,6 +343,18 @@ function loadClient(options = {}) {
   };
   Object.assign(profileStore, options.profileStoreOverrides || {});
 
+  const executionIntentClient = {
+    async claim(value) {
+      executionIntentCalls.push({ method: 'claim', value: plain(value) });
+      return executionIntentReceipt(value);
+    },
+    async reportOutcome(value) {
+      executionIntentCalls.push({ method: 'reportOutcome', value: plain(value) });
+      return executionIntentOutcomeReceipt(value);
+    },
+  };
+  Object.assign(executionIntentClient, options.executionIntentClientOverrides || {});
+
   const permissionStorage = createStorage();
   const consent = { 'https://relay.example': true };
   for (const origin of options.additionalConsentOrigins || []) consent[origin] = true;
@@ -319,6 +368,7 @@ function loadClient(options = {}) {
   });
   const client = context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT.createClient({
     profileStore,
+    executionIntentClient,
     permissionBroker,
     imageInputInspector: context.SS_ERP_BYOK_IMAGE_INPUT_INSPECTOR,
     maskTransformer: {
@@ -345,6 +395,7 @@ function loadClient(options = {}) {
     client,
     permissionBroker,
     profileStore,
+    executionIntentCalls,
     storeCalls,
     get credentialReads() { return credentialReads; },
     get dispatches() { return dispatches; },
@@ -354,6 +405,117 @@ function loadClient(options = {}) {
 function formKeys(form) {
   return [...new Set([...form.keys()])].sort();
 }
+
+test('prepares an opaque edit request without credential, claim, persistence, or network I/O', async () => {
+  let fetchCalls = 0;
+  let permissionChecks = 0;
+  const loaded = loadClient({
+    evidence: [evidence('FULL_EDIT')],
+    permissions: {
+      async contains() { permissionChecks += 1; return true; },
+      async request() { throw new Error('must not request permission'); },
+      async remove() { return false; },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({ data: [{ b64_json: Buffer.from(outputPng).toString('base64') }] });
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'provider-prepared-edit-0001',
+  });
+
+  const prepared = await loaded.client.prepareDispatch(input);
+
+  assert.deepEqual(Object.keys(prepared).sort(), [
+    'contractVersion',
+    'operation',
+    'preparedRequestHandle',
+    'providerIdempotencyKey',
+    'providerRequestHash',
+    'requestMode',
+  ]);
+  assert.equal(prepared.contractVersion, 'extension-byok-prepared-provider-request/v1');
+  assert.equal(prepared.operation, 'FULL_EDIT');
+  assert.equal(prepared.requestMode, 'multipart');
+  assert.equal(prepared.providerIdempotencyKey, input.idempotencyKey);
+  assert.match(prepared.providerRequestHash, /^[a-f0-9]{64}$/u);
+  assert.match(prepared.preparedRequestHandle, /^[a-zA-Z0-9:_-]{20,200}$/u);
+  assert.equal(JSON.stringify(prepared).includes(input.prompt), false);
+  assert.equal(JSON.stringify(prepared).includes('relay.example'), false);
+  assert.equal(fetchCalls, 0);
+  assert.equal(permissionChecks, 0);
+  assert.equal(loaded.credentialReads, 0);
+  assert.equal(loaded.dispatches, 0);
+  assert.deepEqual(loaded.executionIntentCalls, []);
+
+  const result = await loaded.client.dispatchPrepared(prepared.preparedRequestHandle);
+  assert.equal(result.requestHash, prepared.providerRequestHash);
+  assert.equal(fetchCalls, 1);
+  assert.equal(permissionChecks > 0, true);
+  assert.equal(loaded.credentialReads, 1);
+  assert.equal(loaded.dispatches, 1);
+  assert.deepEqual(
+    loaded.executionIntentCalls.map((call) => call.method),
+    ['claim', 'reportOutcome'],
+  );
+  assert.equal(
+    loaded.executionIntentCalls[0].value.providerRequestHash,
+    prepared.providerRequestHash,
+  );
+  await assert.rejects(
+    loaded.client.dispatchPrepared(prepared.preparedRequestHandle),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_CONSUMED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false,
+  );
+  assert.equal(fetchCalls, 1);
+});
+
+test('rejects forged or released edit preparation handles without Provider I/O', async () => {
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    evidence: [evidence('FULL_EDIT')],
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('must not dispatch');
+    },
+  });
+  await assert.rejects(
+    loaded.client.prepareDispatch({
+      ...editRequest('FULL_EDIT', { idempotencyKey: 'provider-forged-hash-edit-0001' }),
+      providerRequestHash: 'f'.repeat(64),
+    }),
+    (error) => error && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_INPUT_INVALID',
+  );
+  const prepared = await loaded.client.prepareDispatch(editRequest('FULL_EDIT', {
+    idempotencyKey: 'provider-prepared-release-edit-0001',
+  }));
+  assert.deepEqual(plain(loaded.client.releasePrepared(prepared.preparedRequestHandle)), {
+    released: true,
+  });
+  assert.deepEqual(plain(loaded.client.releasePrepared(prepared.preparedRequestHandle)), {
+    released: false,
+  });
+  for (const forged of [
+    prepared,
+    'byok-prepared:00000000-0000-4000-8000-000000000000',
+    prepared.preparedRequestHandle,
+  ]) {
+    await assert.rejects(
+      loaded.client.dispatchPrepared(forged),
+      (error) => error && [
+        'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_INVALID',
+        'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_UNAVAILABLE',
+      ].includes(error.code),
+    );
+  }
+  assert.equal(fetchCalls, 0);
+  assert.equal(loaded.credentialReads, 0);
+  assert.equal(loaded.dispatches, 0);
+  assert.deepEqual(loaded.executionIntentCalls, []);
+});
 
 test('uses exact OpenAI multipart fields for reference, full-edit, and inpaint operations', async () => {
   const cases = [
@@ -428,6 +590,329 @@ test('uses exact OpenAI multipart fields for reference, full-edit, and inpaint o
       assert.equal(form.has('mask'), false);
     }
   }
+});
+
+test('claims an exact execution intent before Provider dispatch and reports the successful result', async () => {
+  const events = [];
+  let claimInput;
+  let outcomeInput;
+  const loaded = loadClient({
+    executionIntentClientOverrides: {
+      async claim(input) {
+        events.push('claim');
+        claimInput = plain(input);
+        return executionIntentReceipt(input);
+      },
+      async reportOutcome(input) {
+        events.push('reportOutcome');
+        outcomeInput = plain(input);
+        return executionIntentOutcomeReceipt(input);
+      },
+    },
+    fetchImpl: async () => {
+      events.push('providerPost');
+      return jsonResponse({
+        id: 'edit-execution-intent-provider-request-1',
+        data: [{ b64_json: Buffer.from(outputPng).toString('base64') }],
+      });
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-execution-intent-success-0001',
+  });
+  const result = await loaded.client.edit(input);
+
+  assert.deepEqual(events, ['claim', 'providerPost', 'reportOutcome']);
+  assert.deepEqual(claimInput, {
+    readinessBinding: readiness('FULL_EDIT'),
+    requestMode: 'multipart',
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: result.requestHash,
+  });
+  assert.equal(result.executionIntentId, `intent-${input.idempotencyKey}`);
+  assert.deepEqual(outcomeInput, {
+    intentId: result.executionIntentId,
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: result.requestHash,
+    outcome: 'SUCCEEDED',
+    providerRequestIdSha256: sha256Text('edit-execution-intent-provider-request-1'),
+    resultSha256: result.image.sha256,
+  });
+  assert.equal(
+    loaded.client.getOperationState(input.idempotencyKey).executionIntentId,
+    result.executionIntentId,
+  );
+});
+
+test('stops without dispatch when execution intent claim fails', async () => {
+  let fetchCalls = 0;
+  const claimError = Object.assign(new Error('execution intent denied'), {
+    code: 'SS_ERP_BYOK_EXECUTION_INTENT_REJECTED',
+  });
+  const loaded = loadClient({
+    executionIntentClientOverrides: {
+      async claim() { throw claimError; },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Provider fetch must not run');
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-execution-intent-denied-0001',
+  });
+
+  await assert.rejects(loaded.client.edit(input), (error) => error === claimError);
+  assert.equal(fetchCalls, 0);
+  assert.equal(loaded.dispatches, 0);
+  assert.equal(loaded.storeCalls.some((call) => call.method === 'beginProviderDispatch'), false);
+  assert.equal(loaded.client.getOperationState(input.idempotencyKey), null);
+});
+
+test('reports a claimed edit intent FAILED_FINAL before deleting a tombstone setup failure', async () => {
+  const events = [];
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    profileStoreOverrides: {
+      async beginProviderDispatch() {
+        events.push('dispatch-tombstone');
+        throw new Error('session storage write failed');
+      },
+    },
+    executionIntentClientOverrides: {
+      async claim(input) {
+        events.push('claim');
+        return executionIntentReceipt(input, { intentId: 'intent-edit-tombstone-1' });
+      },
+      async reportOutcome(input) {
+        events.push(['report', plain(input)]);
+        return executionIntentOutcomeReceipt(input);
+      },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Provider fetch must not run');
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-dispatch-tombstone-failed-0001',
+  });
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_DISPATCH_GUARD_UNAVAILABLE'
+      && error.outcome === 'FAILED_RETRYABLE',
+  );
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(events.slice(0, 2), ['claim', 'dispatch-tombstone']);
+  assert.deepEqual(events[2], ['report', {
+    intentId: 'intent-edit-tombstone-1',
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: events[2][1].providerRequestHash,
+    outcome: 'FAILED_FINAL',
+    providerRequestIdSha256: null,
+    resultSha256: null,
+  }]);
+  assert.equal(loaded.client.getOperationState(input.idempotencyKey), null);
+});
+
+test('keeps a claimed undispatched edit intent absorbing when FAILED_FINAL cannot be confirmed', async () => {
+  let claimCount = 0;
+  let reportCount = 0;
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    profileStoreOverrides: {
+      async beginProviderDispatch() { throw new Error('session storage write failed'); },
+    },
+    executionIntentClientOverrides: {
+      async claim(input) {
+        claimCount += 1;
+        return executionIntentReceipt(input, { intentId: 'intent-edit-unresolved-1' });
+      },
+      async reportOutcome() {
+        reportCount += 1;
+        throw new Error('execution outcome service unavailable');
+      },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Provider fetch must not run');
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-dispatch-outcome-unresolved-0001',
+  });
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false
+      && error.replayed !== true,
+  );
+  const state = loaded.client.getOperationState(input.idempotencyKey);
+  assert.equal(state.status, 'UNKNOWN_OUTCOME');
+  assert.equal(state.outcome, 'UNKNOWN_OUTCOME');
+  assert.equal(state.dispatched, false);
+  assert.equal(state.responseReceived, false);
+  assert.equal(state.executionIntentId, 'intent-edit-unresolved-1');
+  assert.equal(state.errorCode, 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED');
+  assert.equal(state.automaticRetryAllowed, false);
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false
+      && error.replayed === true,
+  );
+  assert.equal(claimCount, 1);
+  assert.equal(reportCount, 1);
+  assert.equal(fetchCalls, 0);
+});
+
+test('does not finalize an edit intent when the dispatch tombstone says POST may have occurred', async () => {
+  let claimCount = 0;
+  let reportCount = 0;
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    profileStoreOverrides: {
+      async beginProviderDispatch() {
+        throw Object.assign(new Error('prior dispatch is uncertain'), {
+          code: 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME',
+        });
+      },
+    },
+    executionIntentClientOverrides: {
+      async claim(input) {
+        claimCount += 1;
+        return executionIntentReceipt(input, { intentId: 'intent-edit-prior-unknown-1' });
+      },
+      async reportOutcome(input) {
+        reportCount += 1;
+        return executionIntentOutcomeReceipt(input);
+      },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('Provider fetch must not run');
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-prior-dispatch-unknown-0001',
+  });
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_UNKNOWN_OUTCOME'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false,
+  );
+  assert.equal(claimCount, 1);
+  assert.equal(reportCount, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(loaded.client.getOperationState(input.idempotencyKey), null);
+});
+
+test('never re-dispatches a persisted edit intent after local dispatch state is lost', async () => {
+  for (const persistedOutcome of ['PENDING', 'SUCCEEDED', 'FAILED_FINAL', 'UNKNOWN_OUTCOME']) {
+    let fetchCalls = 0;
+    let reportCalls = 0;
+    const loaded = loadClient({
+      executionIntentClientOverrides: {
+        async claim(input) {
+          return executionIntentReceipt(input, {
+            replayed: true,
+            outcome: persistedOutcome,
+          });
+        },
+        async reportOutcome() { reportCalls += 1; },
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error('a replayed edit intent must never reach Provider fetch');
+      },
+    });
+    const input = editRequest('FULL_EDIT', {
+      idempotencyKey: `edit-replayed-${persistedOutcome.toLowerCase()}-0001`,
+    });
+    await assert.rejects(
+      loaded.client.edit(input),
+      (error) => error
+        && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_REPLAY_BLOCKED'
+        && error.outcome === (persistedOutcome === 'FAILED_FINAL'
+          ? 'FAILED_FINAL' : 'UNKNOWN_OUTCOME')
+        && error.automaticRetryAllowed === false
+        && error.replayed === true
+        && error.persistedOutcome === persistedOutcome,
+    );
+    assert.equal(fetchCalls, 0, persistedOutcome);
+    assert.equal(reportCalls, 0, persistedOutcome);
+    assert.equal(loaded.dispatches, 0, persistedOutcome);
+    assert.equal(
+      loaded.storeCalls.some((call) => call.method === 'beginProviderDispatch'),
+      false,
+      persistedOutcome,
+    );
+  }
+});
+
+test('turns an unrecorded successful Provider result into an absorbing unknown outcome', async () => {
+  const reportedOutcomes = [];
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    executionIntentClientOverrides: {
+      async reportOutcome(input) {
+        reportedOutcomes.push(input.outcome);
+        if (input.outcome === 'SUCCEEDED') throw new Error('outcome service unavailable');
+        return executionIntentOutcomeReceipt(input);
+      },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({ data: [{ b64_json: Buffer.from(outputPng).toString('base64') }] });
+    },
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-execution-intent-outcome-unknown-0001',
+  });
+
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_UNKNOWN_OUTCOME'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false,
+  );
+  await assert.rejects(loaded.client.edit(input), (error) => error && error.replayed === true);
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(reportedOutcomes, ['SUCCEEDED', 'UNKNOWN_OUTCOME']);
+});
+
+test('keeps a terminal Provider failure when best-effort outcome reporting is unavailable', async () => {
+  const reportedOutcomes = [];
+  const loaded = loadClient({
+    executionIntentClientOverrides: {
+      async reportOutcome(input) {
+        reportedOutcomes.push(input.outcome);
+        throw new Error('outcome service unavailable');
+      },
+    },
+    fetchImpl: async () => jsonResponse({ error: { code: 'content_rejected' } }, { status: 400 }),
+  });
+  const input = editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-execution-intent-terminal-report-failure-0001',
+  });
+
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_IMAGE_EDIT_HTTP_FAILED'
+      && error.outcome === 'FAILED_FINAL'
+      && error.status === 400,
+  );
+  await assert.rejects(loaded.client.edit(input), (error) => error && error.replayed === true);
+  assert.deepEqual(reportedOutcomes, ['FAILED_FINAL']);
 });
 
 test('rejects source and mask contract violations before key access, dispatch persistence, or fetch', async () => {
@@ -522,6 +1007,7 @@ test('requires operation-specific multipart evidence and records the exact probe
   assert.equal(stored.value.operation, 'INPAINT');
   assert.equal(stored.value.requestMode, 'multipart');
   assert.equal(probed.client.getOperationState('probe-inpaint-multipart-0001').image.retained, false);
+  assert.deepEqual(probed.executionIntentCalls, []);
 });
 
 test('creates background-only synthetic media when a capability probe has no image payload', async () => {
@@ -797,6 +1283,18 @@ test('marks a dispatched timeout unknown and replays it without a second POST', 
   assert.equal(fetchCalls, 1);
   assert.equal(loaded.dispatches, 1);
   assert.equal(loaded.client.getOperationState(input.idempotencyKey).status, 'UNKNOWN_OUTCOME');
+  assert.deepEqual(loaded.executionIntentCalls.map((call) => call.method), [
+    'claim',
+    'reportOutcome',
+  ]);
+  assert.deepEqual(loaded.executionIntentCalls[1].value, {
+    intentId: `intent-${input.idempotencyKey}`,
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: loaded.client.getOperationState(input.idempotencyKey).requestHash,
+    outcome: 'UNKNOWN_OUTCOME',
+    providerRequestIdSha256: null,
+    resultSha256: null,
+  });
 });
 
 test('keeps standard sync and explicit async task adapters isolated without a second POST', async () => {
@@ -853,12 +1351,19 @@ test('keeps standard sync and explicit async task adapters isolated without a se
       });
     },
   });
+  const asyncPrepared = await asyncClient.client.prepareDispatch(editRequest('FULL_EDIT', {
+    idempotencyKey: 'explicit-async-prepared-edit-0001',
+  }));
+  assert.equal(asyncPrepared.requestMode, 'multipart');
+  assert.deepEqual(asyncClient.executionIntentCalls, []);
+  assert.equal(asyncClient.client.releasePrepared(asyncPrepared.preparedRequestHandle).released, true);
   const result = await asyncClient.client.edit(editRequest('FULL_EDIT', {
     idempotencyKey: 'explicit-async-edit-0001',
   }));
   assert.equal(result.outcome, 'SUCCEEDED');
   assert.equal(result.requestMode, 'async');
   assert.equal(result.image.source, 'b64_json');
+  assert.equal(asyncClient.executionIntentCalls[0].value.requestMode, 'multipart');
   assert.equal(asyncCalls.filter((call) => call.init.method === 'POST').length, 1);
   assert.equal(asyncCalls.filter((call) => call.init.method === 'GET').length, 2);
   assert.equal(asyncCalls[0].url, 'https://relay.example/v1/images/edits');
@@ -953,6 +1458,12 @@ test('normalizes explicit async failed and cancelled terminal states without ret
       (error) => error && error.replayed === true,
     );
     assert.equal(fetchCalls, 2);
+    assert.deepEqual(loaded.executionIntentCalls.map((call) => call.method), [
+      'claim',
+      'reportOutcome',
+    ]);
+    assert.equal(loaded.executionIntentCalls[1].value.outcome, 'FAILED_FINAL');
+    assert.equal(loaded.executionIntentCalls[1].value.resultSha256, null);
   }
 });
 

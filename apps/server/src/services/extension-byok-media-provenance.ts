@@ -29,7 +29,7 @@ function containsControlCharacter(value: string): boolean {
  * covert secret or URL storage surface even though the table only stores
  * metadata and hashes.
  */
-function containsSecretBearingIdentifier(value: string): boolean {
+export function containsSecretBearingIdentifier(value: string): boolean {
   const lower = value.toLowerCase();
   return value.includes('?')
     || value.includes('#')
@@ -93,6 +93,7 @@ const createInputSchema = z.object({
   resultHeight: z.number().int().positive().max(AI_IMAGE_WORKBENCH_LIMITS.maxDimension),
   idempotencyKey: boundedIdentifier(200).refine((value) => value.length >= 16),
   requestHash: sha256Schema,
+  executionIntentId: identifierSchema,
   publishIntentId: identifierSchema.nullable(),
   publishReceiptId: identifierSchema.nullable(),
   erpAiChargeCents: z.literal(0),
@@ -167,12 +168,15 @@ const linkPublishInputSchema = z.object({
 export type ExtensionByokMediaProvenanceCreateInput = z.infer<typeof createInputSchema>;
 export type ExtensionByokMediaProvenanceLinkPublishInput = z.infer<typeof linkPublishInputSchema>;
 
-export interface ExtensionByokMediaProvenanceRecord
-  extends ExtensionByokMediaProvenanceCreateInput {
+export type ExtensionByokMediaProvenanceRecord = Omit<
+  ExtensionByokMediaProvenanceCreateInput,
+  'executionIntentId'
+> & {
   id: string;
+  executionIntentId: string | null;
   createdAt: Date;
   updatedAt: Date;
-}
+};
 
 export type ExtensionByokMediaProvenanceCreateResult =
   | { kind: 'created' | 'replayed'; provenance: ExtensionByokMediaProvenanceRecord }

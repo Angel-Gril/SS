@@ -44,6 +44,23 @@ function binding(overrides = {}) {
   };
 }
 
+function draftBinding(slotKey, overrides = {}) {
+  return binding({
+    workflowId: 'workflow-1',
+    draftRevision: 3,
+    draftVersion: 4,
+    sourcePlatform: '1688',
+    sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1',
+    slotKey,
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: 0,
+    ...overrides,
+  });
+}
+
 function attestation(overrides = {}) {
   return {
     contractVersion: api.ATTESTATION_VERSION,
@@ -111,6 +128,22 @@ assert.throws(
 );
 assert.equal(cache.size(), 0);
 
+for (const slotKey of [
+  'sku:sku-1:hero',
+  'shared:detail:SCENE',
+  'shared:detail:DETAIL',
+  'shared:detail:SPEC',
+  'shared:detail:PACKAGING',
+]) {
+  const slotAttestation = cache.issue(attestation({ binding: draftBinding(slotKey) }));
+  const slotVerification = cache.consume({
+    handle: slotAttestation.readinessHandle,
+    expectedBinding: slotAttestation.readinessBinding,
+  });
+  assert.equal(slotVerification.binding.slotKey, slotKey);
+  cache.clear();
+}
+
 const mismatch = cache.issue(attestation());
 assert.throws(
   () => cache.consume({
@@ -155,6 +188,15 @@ for (const invalid of [
   }),
   attestation({ binding: binding({ policyRevision: '735' }) }),
   attestation({ binding: binding({ workflowId: 'workflow-1' }) }),
+  attestation({ binding: draftBinding('sku:sku-1:detail:1') }),
+  attestation({ binding: draftBinding('group:visual-1:detail:SCENE') }),
+  attestation({ binding: draftBinding('shared:detail:FUNCTION') }),
+  attestation({ binding: draftBinding('shared:detail:SPECIFICATION') }),
+  attestation({ binding: draftBinding('shared:detail:scene') }),
+  attestation({ binding: draftBinding('shared:detail:SCENE:extra') }),
+  attestation({
+    binding: draftBinding('shared:detail:SCENE', { assignmentMode: 'REPLACE' }),
+  }),
 ]) {
   assert.throws(() => cache.issue(invalid), /INVALID/u);
 }

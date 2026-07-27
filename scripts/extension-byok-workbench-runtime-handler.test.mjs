@@ -251,6 +251,16 @@ const sessionManager = {
     session = null;
     return previous;
   },
+  async takeByTabIfIdle(id) {
+    calls.push(['take-tab-if-idle', id]);
+    if (session?.operation
+      || (session?.result && ['INGESTING', 'BOUND'].includes(session.result.deliveryState))) {
+      return null;
+    }
+    const previous = session;
+    session = null;
+    return previous;
+  },
 };
 let resolvedLaunchContext = launchContext;
 const launchClient = {
@@ -1076,6 +1086,26 @@ assert.equal(rejectApproved.data.reviewState, 'REJECTED');
 assert.equal(session.result, null);
 assert.equal(vaultEntry, null);
 
+session = {
+  ...session,
+  operation: { idempotencyKey: 'byok_batch_unresolved_1', state: 'OUTCOME_UNRESOLVED' },
+};
+resolvedLaunchContext = { ...launchContext, draftRevision: 4 };
+const staleBatchSession = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
+  payload: {}, sender,
+});
+assert.equal(staleBatchSession.ok, false);
+assert.equal(staleBatchSession.errorCode, 'SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE');
+assert.equal(
+  session.operation.state,
+  'OUTCOME_UNRESOLVED',
+  'legacy context cleanup must retain a possibly charged batch operation',
+);
+resolvedLaunchContext = launchContext;
+const blockedRemoval = await dispatcher.removeTab(77);
+assert.equal(blockedRemoval, false);
+assert.equal(session.operation.state, 'OUTCOME_UNRESOLVED');
+session = { ...session, operation: null };
 const removed = await dispatcher.removeTab(77);
 assert.equal(removed, true);
 assert.equal(calls.some((row) => row[0] === 'release-vault' && row[1] === resultId), true);

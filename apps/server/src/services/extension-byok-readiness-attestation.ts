@@ -6,6 +6,7 @@ import {
   EXTENSION_BYOK_READINESS_VERSION,
   type ExtensionByokReadinessDecision,
 } from './extension-byok-policy.js';
+import { containsSecretBearingIdentifier } from './extension-byok-media-provenance.js';
 
 export const EXTENSION_BYOK_READINESS_REQUEST_VERSION =
   'extension-byok-readiness-request/v2' as const;
@@ -26,13 +27,11 @@ function hasControlCharacter(value: string): boolean {
 const identifier = z.string().min(1).max(200)
   .refine((value) => value === value.normalize('NFKC').trim())
   .refine((value) => !hasControlCharacter(value))
-  .refine((value) => !/(?:https?|ftp):\/\//iu.test(value))
-  .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value));
+  .refine((value) => !containsSecretBearingIdentifier(value));
 const skuIdentifier = z.string().min(1).max(500)
   .refine((value) => value === value.normalize('NFKC').trim())
   .refine((value) => !hasControlCharacter(value))
-  .refine((value) => !/[?#]/u.test(value))
-  .refine((value) => !/(?:https?|ftp|data):/iu.test(value));
+  .refine((value) => !containsSecretBearingIdentifier(value));
 
 const requestSchema = z.object({
   contractVersion: z.literal(EXTENSION_BYOK_READINESS_REQUEST_VERSION),

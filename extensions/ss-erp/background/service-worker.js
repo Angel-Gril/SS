@@ -9,6 +9,9 @@ try { importScripts('../shared/byok/runtime-authority.js'); } catch (e) { consol
 try { importScripts('../shared/byok/permission-broker.js'); } catch (e) { console.warn('[SS ERP] BYOK permission broker load error:', e); }
 try { importScripts('../shared/byok/readiness-handle-cache.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness cache load error:', e); }
 try { importScripts('../shared/byok/readiness-client.js'); } catch (e) { console.warn('[SS ERP] BYOK readiness client load error:', e); }
+try { importScripts('../shared/byok/execution-intent-client.js'); } catch (e) { console.warn('[SS ERP] BYOK execution intent client load error:', e); }
+try { importScripts('../shared/byok/execution-batch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK execution batch client load error:', e); }
+try { importScripts('../shared/byok/execution-intent-claim-broker.js'); } catch (e) { console.warn('[SS ERP] BYOK execution intent broker load error:', e); }
 try { importScripts('../shared/byok/text-to-image-client.js'); } catch (e) { console.warn('[SS ERP] BYOK text-to-image client load error:', e); }
 try { importScripts('../shared/byok/image-input-inspector.js'); } catch (e) { console.warn('[SS ERP] BYOK image input inspector load error:', e); }
 try { importScripts('../shared/byok/image-mask-transform.js'); } catch (e) { console.warn('[SS ERP] BYOK image mask transform load error:', e); }
@@ -16,6 +19,8 @@ try { importScripts('../shared/byok/image-edit-adapters.js'); } catch (e) { cons
 try { importScripts('../shared/byok/image-edit-probe-media.js'); } catch (e) { console.warn('[SS ERP] BYOK image edit probe media load error:', e); }
 try { importScripts('../shared/byok/image-edit-client.js'); } catch (e) { console.warn('[SS ERP] BYOK image edit client load error:', e); }
 try { importScripts('../shared/byok/media-job-engine.js'); } catch (e) { console.warn('[SS ERP] BYOK media job engine load error:', e); }
+try { importScripts('../shared/byok/workbench-batch-provider-executor.js'); } catch (e) { console.warn('[SS ERP] BYOK batch Provider executor load error:', e); }
+try { importScripts('../shared/byok/workbench-batch-coordinator.js'); } catch (e) { console.warn('[SS ERP] BYOK batch coordinator load error:', e); }
 try { importScripts('../shared/byok/workbench-provider-semaphore.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench Provider semaphore load error:', e); }
 try { importScripts('../shared/byok/workbench-media-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench media channel load error:', e); }
 try { importScripts('../shared/byok/workbench-edit-media-store.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench edit media store load error:', e); }
@@ -24,11 +29,15 @@ try { importScripts('../shared/byok/workbench-edit-controller.js'); } catch (e) 
 try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
 try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
+try { importScripts('../shared/byok/generated-asset-batch-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch ingest client load error:', e); }
 try { importScripts('../shared/byok/listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] BYOK publish coordinator load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
+try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
 try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
+try { importScripts('../shared/byok/workbench-batch-registry.js'); } catch (e) { console.warn('[SS ERP] BYOK batch registry load error:', e); }
+try { importScripts('../shared/byok/workbench-batch-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK batch runtime handler load error:', e); }
 try { importScripts('../shared/erp-adapter/deployment-defaults.js'); } catch (e) { console.warn('[SS ERP] deployment defaults load error:', e); }
 try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch (e) { console.warn('[SS ERP] device connection state load error:', e); }
 try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
@@ -373,6 +382,9 @@ let sourceListingWorkflowClient = null;
 let byokProfileStore = null;
 let byokReadinessHandleCache = null;
 let byokReadinessClient = null;
+let byokExecutionIntentClient = null;
+let byokExecutionBatchClient = null;
+let byokExecutionIntentClaimBroker = null;
 let byokDeviceTransport = null;
 let byokPermissionBroker = null;
 let byokTextToImageClient = null;
@@ -381,12 +393,16 @@ let byokCapabilityClient = null;
 let byokProviderSettingsDispatcher = null;
 let byokGeneratedResultVault = null;
 let byokGeneratedAssetIngestClient = null;
+let byokGeneratedAssetBatchIngestClient = null;
 let byokListingPublishCoordinator = null;
 let byokRuntimeAuthorityGuard = null;
 let byokWorkbenchLaunchClient = null;
+let byokWorkbenchBatchLaunchClient = null;
 let byokWorkbenchSessionManager = null;
 let byokWorkbenchPreviewBroker = null;
 let byokWorkbenchRuntimeDispatcher = null;
+let byokWorkbenchBatchRegistry = null;
+let byokWorkbenchBatchRuntimeDispatcher = null;
 let byokWorkbenchMediaBroker = null;
 let byokWorkbenchEditMediaStore = null;
 let byokWorkbenchEditEpochGuard = null;
@@ -403,8 +419,14 @@ const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
 const SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES = 1;
+const SS_ERP_BYOK_BATCH_LIFECYCLE_PORT_NAME =
+  'ss-erp:ai-image-workbench-batch-lifecycle';
 
 function clearCachedByokGeneratedResults() {
+  if (byokWorkbenchBatchRegistry) {
+    void Promise.resolve(byokWorkbenchBatchRegistry.clearAll('provider_state_changed'))
+      .catch(function () {});
+  }
   if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
   if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
   if (byokWorkbenchEditEpochGuard) byokWorkbenchEditEpochGuard.rotate();
@@ -456,6 +478,11 @@ function notifyByokDeviceSessionInvalidated(reason) {
 async function clearByokDeviceSessionState(input) {
   clearHostedAiImageSuiteRuntime(input && input.reason);
   getByokReadinessHandleCache().clear();
+  if (byokWorkbenchBatchRegistry) {
+    await Promise.resolve(byokWorkbenchBatchRegistry.clearAll(
+      String(input && input.reason || 'device_session_changed').slice(0, 100),
+    )).catch(function () {});
+  }
   if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
   if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
   if (byokWorkbenchEditEpochGuard) byokWorkbenchEditEpochGuard.rotate();
@@ -999,6 +1026,38 @@ function getByokReadinessClient() {
   return byokReadinessClient;
 }
 
+function getByokExecutionIntentClient() {
+  if (byokExecutionIntentClient) return byokExecutionIntentClient;
+  const api = globalThis.SS_ERP_BYOK_EXECUTION_INTENT_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK execution intent client is unavailable');
+  }
+  byokExecutionIntentClient = api.createClient({ transport: getByokDeviceTransport() });
+  return byokExecutionIntentClient;
+}
+
+function getByokExecutionBatchClient() {
+  if (byokExecutionBatchClient) return byokExecutionBatchClient;
+  const api = globalThis.SS_ERP_BYOK_EXECUTION_BATCH_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK execution batch client is unavailable');
+  }
+  byokExecutionBatchClient = api.createClient({ transport: getByokDeviceTransport() });
+  return byokExecutionBatchClient;
+}
+
+function getByokExecutionIntentClaimBroker() {
+  if (byokExecutionIntentClaimBroker) return byokExecutionIntentClaimBroker;
+  const api = globalThis.SS_ERP_BYOK_EXECUTION_INTENT_CLAIM_BROKER;
+  if (!api || typeof api.createBroker !== 'function') {
+    throw new Error('BYOK execution intent claim broker is unavailable');
+  }
+  byokExecutionIntentClaimBroker = api.createBroker({
+    fallback: getByokExecutionIntentClient(),
+  });
+  return byokExecutionIntentClaimBroker;
+}
+
 function getByokPermissionBroker() {
   if (byokPermissionBroker) return byokPermissionBroker;
   const api = globalThis.SS_ERP_BYOK_PERMISSION_BROKER;
@@ -1027,6 +1086,7 @@ function getByokTextToImageClient() {
     authorizeResultOrigin: async () => false,
     crypto: globalThis.crypto,
     now: () => new Date(),
+    executionIntentClient: getByokExecutionIntentClaimBroker(),
   });
   return byokTextToImageClient;
 }
@@ -1066,6 +1126,7 @@ function getByokImageEditClient() {
     decodeImage: (blob) => globalThis.createImageBitmap(blob),
     crypto: globalThis.crypto,
     now: () => new Date(),
+    executionIntentClient: getByokExecutionIntentClaimBroker(),
   });
   return byokImageEditClient;
 }
@@ -1164,6 +1225,22 @@ function getByokGeneratedAssetIngestClient() {
   return byokGeneratedAssetIngestClient;
 }
 
+function getByokGeneratedAssetBatchIngestClient() {
+  if (byokGeneratedAssetBatchIngestClient) return byokGeneratedAssetBatchIngestClient;
+  const api = globalThis.SS_ERP_BYOK_GENERATED_ASSET_BATCH_INGEST_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK generated asset batch ingest client is unavailable');
+  }
+  byokGeneratedAssetBatchIngestClient = api.createClient({
+    transport: getByokDeviceTransport(),
+    vault: getByokGeneratedResultVault(),
+    isAuthorityCurrent: (authority) => (
+      getLogisticsDeviceCredentials().isAuthorityCurrent(authority)
+    ),
+  });
+  return byokGeneratedAssetBatchIngestClient;
+}
+
 function getByokListingPublishCoordinator() {
   if (byokListingPublishCoordinator) return byokListingPublishCoordinator;
   const api = globalThis.SS_ERP_BYOK_LISTING_PUBLISH_COORDINATOR;
@@ -1187,6 +1264,16 @@ function getByokWorkbenchLaunchClient() {
   }
   byokWorkbenchLaunchClient = api.createClient({ transport: getByokDeviceTransport() });
   return byokWorkbenchLaunchClient;
+}
+
+function getByokWorkbenchBatchLaunchClient() {
+  if (byokWorkbenchBatchLaunchClient) return byokWorkbenchBatchLaunchClient;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_LAUNCH_CLIENT;
+  if (!api || typeof api.createClient !== 'function') {
+    throw new Error('BYOK workbench batch launch client is unavailable');
+  }
+  byokWorkbenchBatchLaunchClient = api.createClient({ transport: getByokDeviceTransport() });
+  return byokWorkbenchBatchLaunchClient;
 }
 
 function getByokWorkbenchSessionManager() {
@@ -1300,6 +1387,93 @@ function getByokWorkbenchEditEpochGuard() {
   return byokWorkbenchEditEpochGuard;
 }
 
+function createByokWorkbenchBatchCoordinator(options) {
+  const coordinatorApi = globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_COORDINATOR;
+  const providerExecutorApi = globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_PROVIDER_EXECUTOR;
+  const mediaJobEngine = globalThis.SS_ERP_BYOK_MEDIA_JOB_ENGINE;
+  if (!coordinatorApi || typeof coordinatorApi.createCoordinator !== 'function'
+    || !providerExecutorApi || typeof providerExecutorApi.createExecutor !== 'function'
+    || !mediaJobEngine || typeof mediaJobEngine.createEngine !== 'function') {
+    throw new Error('BYOK workbench batch coordinator is unavailable');
+  }
+  const concurrencyAuthority = options.concurrencyAuthority;
+  const providerExecutor = providerExecutorApi.createExecutor({
+    textClient: getByokTextToImageClient(),
+    editClient: getByokImageEditClient(),
+    authorityGuard: getByokRuntimeAuthorityGuard(),
+    vault: getByokGeneratedResultVault(),
+    providerSemaphore: getByokWorkbenchProviderSemaphore(),
+    ownerToken: 'byok-batch:' + globalThis.crypto.randomUUID(),
+    concurrencyAuthority,
+  });
+  return coordinatorApi.createCoordinator({
+    mediaJobEngine,
+    providerExecutor,
+    resultVault: getByokGeneratedResultVault(),
+    atomicBatchIngest: getByokGeneratedAssetBatchIngestClient(),
+    requestedConcurrency: options.requestedConcurrency,
+    concurrencyAuthority,
+    runnerMaxConcurrency: coordinatorApi.MAX_SELECTED_SLOTS,
+    resolveDispatchInput: options.resolveDispatchInput,
+    resolveRecovery: options.resolveRecovery,
+  });
+}
+
+function getByokWorkbenchBatchRegistry() {
+  if (byokWorkbenchBatchRegistry) return byokWorkbenchBatchRegistry;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_REGISTRY;
+  if (!api || typeof api.createRegistry !== 'function') {
+    throw new Error('BYOK workbench batch registry is unavailable');
+  }
+  byokWorkbenchBatchRegistry = api.createRegistry({
+    sessionManager: getByokWorkbenchSessionManager(),
+    batchLaunchClient: getByokWorkbenchBatchLaunchClient(),
+    readinessClient: getByokReadinessClient(),
+    executionBatchClient: getByokExecutionBatchClient(),
+    claimBroker: getByokExecutionIntentClaimBroker(),
+    textClient: getByokTextToImageClient(),
+    editClient: getByokImageEditClient(),
+    authorityGuard: getByokRuntimeAuthorityGuard(),
+    createCoordinator: createByokWorkbenchBatchCoordinator,
+    resolveProviderInput: async () => Object.freeze({}),
+    resolveRecovery: async () => {
+      const error = new Error('Trusted Provider lookup is unavailable');
+      error.code = 'SS_ERP_BYOK_BATCH_PROVIDER_LOOKUP_UNAVAILABLE';
+      error.outcome = 'UNKNOWN_OUTCOME';
+      error.automaticRetryAllowed = false;
+      throw error;
+    },
+    resultVault: getByokGeneratedResultVault(),
+    previewBroker: getByokWorkbenchPreviewBroker(),
+    crypto: globalThis.crypto,
+  });
+  return byokWorkbenchBatchRegistry;
+}
+
+function getByokWorkbenchBatchRuntimeDispatcher() {
+  if (byokWorkbenchBatchRuntimeDispatcher) return byokWorkbenchBatchRuntimeDispatcher;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_BATCH_RUNTIME_HANDLER;
+  const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  const workbenchTypes = authorization && authorization.MESSAGE_TYPES
+    && authorization.MESSAGE_TYPES.WORKBENCH;
+  if (!api || typeof api.createDispatcher !== 'function' || !workbenchTypes) {
+    throw new Error('BYOK workbench batch runtime dispatcher is unavailable');
+  }
+  byokWorkbenchBatchRuntimeDispatcher = api.createDispatcher({
+    messageTypes: {
+      BATCH_STATE: workbenchTypes.BATCH_STATE,
+      BATCH_START: workbenchTypes.BATCH_START,
+      BATCH_COMMAND: workbenchTypes.BATCH_COMMAND,
+      BATCH_PREVIEW: workbenchTypes.BATCH_PREVIEW,
+      BATCH_INGEST: workbenchTypes.BATCH_INGEST,
+      BATCH_RECOVER: workbenchTypes.BATCH_RECOVER,
+      BATCH_CLEAR: workbenchTypes.BATCH_CLEAR,
+    },
+    registry: getByokWorkbenchBatchRegistry(),
+  });
+  return byokWorkbenchBatchRuntimeDispatcher;
+}
+
 function getByokWorkbenchRuntimeDispatcher() {
   if (byokWorkbenchRuntimeDispatcher) return byokWorkbenchRuntimeDispatcher;
   const api = globalThis.SS_ERP_BYOK_WORKBENCH_RUNTIME_HANDLER;
@@ -1336,18 +1510,25 @@ function installByokReadinessRuntime() {
   const previousHandlers = globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {};
   const providerSettingsDispatcher = getByokProviderSettingsDispatcher();
   const workbenchDispatcher = getByokWorkbenchRuntimeDispatcher();
+  const batchWorkbenchDispatcher = getByokWorkbenchBatchRuntimeDispatcher();
   const hostedWorkbenchDispatcher = getHostedAiImageSuiteRuntimeDispatcher();
   globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS = Object.freeze({
     ...previousHandlers,
     ...providerSettingsDispatcher.handlers,
     ...workbenchDispatcher.handlers,
+    ...batchWorkbenchDispatcher.handlers,
     ...hostedWorkbenchDispatcher.handlers,
   });
   globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
     getByokReadinessHandleCache().consume(input)
   );
   globalThis.SS_ERP_BYOK_RESPONSE_SECRET_VALUES = async ({ payload }) => {
-    const profileId = payload && typeof payload.profileId === 'string' ? payload.profileId : '';
+    const profileId = payload && typeof payload.profileId === 'string'
+      ? payload.profileId
+      : payload && payload.startRequest
+        && typeof payload.startRequest.profileId === 'string'
+        ? payload.startRequest.profileId
+        : '';
     if (!profileId) return [];
     const apiKey = await getByokProfileStore().readSecretForBackground(profileId);
     return apiKey ? [apiKey] : [];
@@ -4274,8 +4455,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // dispatcher.  Keeping this branch before the legacy handlers prevents a
   // future handler from accidentally inheriting the broad legacy sender matrix
   // or echoing a secret-bearing response.  Phase 1 intentionally registers no
-  // The single-image BYOK path and its server-owned publish bridge are installed
-  // here; edit and batch handlers remain dark until their own gates pass.
+  // Single-image, edit, batch, and server-owned publish handlers all pass through
+  // the same sender, payload, and response authorization boundary.
   const runtimeAuthorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
   if (runtimeAuthorization
     && typeof runtimeAuthorization.isNewRuntimeMessageType === 'function'
@@ -6018,10 +6199,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+if (chrome.runtime?.onConnect?.addListener) {
+  chrome.runtime.onConnect.addListener((port) => {
+    if (!port || port.name !== SS_ERP_BYOK_BATCH_LIFECYCLE_PORT_NAME) return;
+    const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+    const sender = port.sender;
+    const tabId = Number(sender?.tab?.id);
+    const documentId = typeof sender?.documentId === 'string'
+      ? sender.documentId.normalize('NFKC').trim()
+      : '';
+    const trusted = authorization
+      && typeof authorization.senderSurface === 'function'
+      && authorization.senderSurface(sender, chrome.runtime.id)
+        === authorization.SENDER_SURFACES?.WORKBENCH
+      && Number.isSafeInteger(tabId) && tabId >= 0
+      && documentId.length > 0 && documentId.length <= 200;
+    if (!trusted) {
+      try { port.disconnect(); } catch {}
+      return;
+    }
+    const owner = Object.freeze({ tabId, documentId });
+    port.onDisconnect.addListener(() => {
+      if (!byokWorkbenchBatchRegistry) return;
+      void Promise.resolve(byokWorkbenchBatchRegistry.clear(owner)).catch(() => {});
+    });
+  });
+}
+
 if (chrome.tabs?.onRemoved?.addListener) {
   chrome.tabs.onRemoved.addListener((tabId) => {
     Promise.allSettled([
       Promise.resolve().then(() => getByokWorkbenchRuntimeDispatcher().removeTab(tabId)),
+      Promise.resolve().then(() => getByokWorkbenchBatchRegistry().removeTab(tabId)),
       Promise.resolve().then(() => getHostedAiImageSuiteClientRegistry().removeTab(tabId)),
     ]).catch(() => {});
   });

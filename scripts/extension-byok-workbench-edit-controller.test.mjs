@@ -255,6 +255,7 @@ function createFixture(options = {}) {
         providerOrigin: input.readinessBinding.providerOrigin,
         model: input.readinessBinding.model,
         policyRevision: input.readinessBinding.policyRevision,
+        executionIntentId: `intent-${editCalls.length}`,
         idempotencyKey: input.idempotencyKey,
         requestHash,
         promptHash: 'b'.repeat(64),
@@ -379,6 +380,62 @@ function createFixture(options = {}) {
     advance(ms) { current += ms; },
   };
 }
+
+test('accepts only selected-SKU hero and the four exact shared-detail edit slots', async () => {
+  const fixture = createFixture({ useRealVault: true });
+  const allowedSlots = [
+    'sku:sku-selected:hero',
+    'shared:detail:SCENE',
+    'shared:detail:DETAIL',
+    'shared:detail:SPEC',
+    'shared:detail:PACKAGING',
+  ];
+  for (const [index, slotKey] of allowedSlots.entries()) {
+    const trustedOwner = owner({
+      tabId: 200 + index,
+      documentId: `document-slot-${index + 1}`,
+      context: {
+        skuKey: 'sku-selected',
+        slotKey,
+        assignmentOrdinal: index,
+      },
+    });
+    fixture.controller.open(trustedOwner);
+    await fixture.controller.start(trustedOwner, command('FULL_EDIT'));
+    const snapshot = await fixture.controller.whenSettled(trustedOwner);
+    assert.equal(snapshot.slotKey, slotKey);
+    assert.equal(snapshot.alternatives[0].state, 'CANDIDATE_READY');
+  }
+  assert.deepEqual(fixture.readinessCalls.map((item) => item.slotKey), allowedSlots);
+  assert.deepEqual(
+    fixture.editCalls.map((item) => item.readinessBinding.slotKey),
+    allowedSlots,
+  );
+
+  for (const [index, context] of [
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-other:hero' },
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-selected:detail:1' },
+    { skuKey: 'sku-selected', slotKey: 'group:visual-1:detail:SCENE' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:FUNCTION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SPECIFICATION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:scene' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE:extra' },
+    {
+      skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE', assignmentMode: 'REPLACE',
+    },
+  ].entries()) {
+    assert.throws(
+      () => fixture.controller.open(owner({
+        tabId: 300 + index,
+        documentId: `document-invalid-slot-${index + 1}`,
+        context,
+      })),
+      (error) => error && error.code === 'SS_ERP_BYOK_EDIT_OWNER_INVALID',
+    );
+  }
+  assert.equal(fixture.readinessCalls.length, allowedSlots.length);
+  assert.equal(fixture.editCalls.length, allowedSlots.length);
+});
 
 test('uses trusted operation readiness, runner concurrency one, and global/slot precedence', async () => {
   const fixture = createFixture();

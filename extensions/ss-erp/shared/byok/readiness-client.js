@@ -4,6 +4,7 @@
   var REQUEST_VERSION = 'extension-byok-readiness-request/v2';
   var READINESS_PATH = '/api/extension-device/byok-media/readiness';
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
+  var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
 
   function clientError(code) {
     var error = new Error(code);
@@ -49,6 +50,13 @@
     return value;
   }
 
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+  }
+
   function requestInput(value) {
     if (!isRecord(value)) throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
     var allowedKeys = [
@@ -85,8 +93,7 @@
     }
     if (workflowId !== null && (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
       || assignmentMode !== 'APPEND'
-      || !slotKey.startsWith('sku:' + skuKey + ':')
-      || slotKey !== 'sku:' + skuKey + ':hero')) {
+      || !isSupportedSlotKey(skuKey, slotKey))) {
       throw clientError('SS_ERP_BYOK_READINESS_REQUEST_INVALID');
     }
     return {

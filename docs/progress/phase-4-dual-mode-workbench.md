@@ -1,6 +1,6 @@
 # Phase 4: Complete Dual-Mode Workbench
 
-Progress: 3/5 tasks.
+Progress: 4/5 tasks.
 
 ## Tasks
 
@@ -13,7 +13,7 @@ Progress: 3/5 tasks.
 - [x] `HOST-01` Adapt full ERP-hosted workflow (`P0`, `XL`). Acceptance: extension plan,
   ERP validation/quote, maximum-cost confirmation, queue/storage, candidate review, approved
   draft apply, retry cost confirmation, and publish all work; hosted never uses BYOK ingest.
-- [ ] `BYOK-01` Connect batch BYOK review/ingest/binding (`P0`, `XL`). Acceptance: selected
+- [x] `BYOK-01` Connect batch BYOK review/ingest/binding (`P0`, `XL`). Acceptance: selected
   slots run in background; local review determines ingest; publish-selected outputs are
   normalized/stored/hashed/bound; ERP AI charge is zero; retry warns of Provider charges.
 - [ ] `UI-06` Add compact auto-bound source launcher (`P1`, `M`). Acceptance: valid device
@@ -102,3 +102,32 @@ Progress: 3/5 tasks.
   intent must bind the exact device/shop/workflow/draft/SKU/slot, endpoint hash, model, operation,
   request mode, Provider idempotency key, and request hash; unknown outcomes remain absorbing, and
   ingest must require that same intent.
+- 2026-07-28: `BYOK-01` completed the background batch path from exact execution reservation through
+  serial Provider dispatch, local keep/reject/regenerate review, one-use previews, selected-byte
+  atomic ingest, normalization, hashing, provenance, and exact draft/SKU/slot binding. BYOK records
+  ERP generation charge `0`, creates no ERP AI cost reservation, and never calls Ozon directly.
+- Every Provider POST now follows a persisted device/shop/workflow/draft/slot execution intent.
+  Reservation replay, lost responses, page close, device invalidation, worker restart, predecessor
+  retry, and `UNKNOWN_OUTCOME` remain fail closed. A URL/model/Prompt/profile/API-key-free successor
+  sidecar recovers a proven `CLAIMING` orphan; `HANDOFF_STARTED` stays lookup-only and is never
+  terminalized or retried without authoritative reconciliation.
+- Server recovery reads the provenance-bound successful intent for a `BOUND` batch, while open and
+  cancelled batches read the latest attempt. Idempotency lookup binds owner, actor, and device so
+  cross-device probes return the same not-found result. Multipart aggregate bytes are enforced in
+  the chunk loop, and legacy provenance rows retain a real nullable execution-intent identity.
+- Package release gates now verify cloud and local build directories, reject sensitive filenames
+  and credential/private-key shapes without echoing values, enforce batch import order, and verify
+  before writing a ZIP. Cloud/local packages `1.0.264` contain byte-identical batch, recovery,
+  transport, page, and service-worker modules from the reviewed source.
+- Final gates passed: lint with only 20 existing warnings, workspace typecheck, 4,239 server tests,
+  preflight, 142 fresh PostgreSQL migrations plus 95 integration tests, and source/cloud/local
+  package verification. Cloud strict reported 440 passes with no warning or failure; source/local
+  each reported 436 passes with only the two existing offline-permission warnings. Real Chromium
+  QA passed desktop, mobile, 200% zoom, forced-colors, and reduced-motion checks with four slots and
+  three recovery states. No real Provider request, charge, ERP ingest, Ozon write, production flag
+  change, VPS access, deployment, or production mutation occurred.
+- Rollback constraint: the base launch-session record remains readable by the previous two-field
+  `v1` parser and new batch/successor state stays in the recovery sidecar. An exact old extension
+  cannot protect the new recovery lifecycle indefinitely after its normal TTL. Do not downgrade
+  while a BYOK batch is pending; drain it first or use a rollback package that includes the new
+  launch-session and Registry recovery layer.

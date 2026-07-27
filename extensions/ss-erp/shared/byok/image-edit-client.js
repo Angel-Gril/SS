@@ -9,8 +9,10 @@
   if (!adaptersApi) throw new Error('SS_ERP_BYOK_IMAGE_EDIT_ADAPTERS is required');
 
   var CONTRACT_VERSION = 'extension-byok-image-edit/v1';
+  var PREPARED_REQUEST_CONTRACT_VERSION = 'extension-byok-prepared-provider-request/v1';
   var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var EDIT_OPERATIONS = Object.freeze(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']);
+  var EXECUTION_INTENT_REQUEST_MODE = 'multipart';
   var INTERNAL_MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1';
   var MAX_PROMPT_CHARACTERS = 8000;
   var MAX_NEGATIVE_PROMPT_CHARACTERS = 4000;
@@ -20,6 +22,8 @@
   var MAX_PIXELS = MAX_DIMENSION * MAX_DIMENSION;
   var MAX_RESULT_URL_CHARACTERS = 8192;
   var MAX_OPERATION_COUNT = 100;
+  var MAX_PREPARED_REQUEST_COUNT = 16;
+  var MAX_CONSUMED_PREPARED_HANDLE_COUNT = 100;
   var DEFAULT_TIMEOUT_MS = 120000;
   var DEFAULT_POLL_INTERVAL_MS = 1000;
   var CAPABILITY_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -513,8 +517,27 @@
     );
   }
 
+  function undispatchedIntentOutcomeUnresolved(setupError, reportError) {
+    return clientError(
+      'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED',
+      'The undispatched BYOK edit intent outcome could not be confirmed',
+      'UNKNOWN_OUTCOME',
+      {
+        automaticRetryAllowed: false,
+        providerRequestIdSha256: null,
+        providerTaskIdSha256: null,
+        causeCode: reportError && typeof reportError.code === 'string'
+          ? String(reportError.code).slice(0, 100)
+          : setupError && typeof setupError.code === 'string'
+            ? String(setupError.code).slice(0, 100)
+            : 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNAVAILABLE',
+      },
+    );
+  }
+
   function createClient(options) {
     var profileStore = options && options.profileStore;
+    var executionIntentClient = options && options.executionIntentClient;
     var permissionBroker = options && options.permissionBroker;
     var inspector = options && options.imageInputInspector || defaultInspector;
     var maskTransformer = options && options.maskTransformer;
@@ -546,6 +569,10 @@
       'markCapabilityProbeUncertain', 'discardPendingCapabilityProbe',
     ].some(function (method) { return typeof profileStore[method] !== 'function'; })) {
       throw new TypeError('BYOK background profile store is required');
+    }
+    if (!executionIntentClient || typeof executionIntentClient.claim !== 'function'
+      || typeof executionIntentClient.reportOutcome !== 'function') {
+      throw new TypeError('BYOK execution intent client is required');
     }
     if (!permissionBroker || typeof permissionBroker.canonicalizeOrigin !== 'function'
       || typeof permissionBroker.hasOriginPermission !== 'function'
@@ -579,7 +606,45 @@
     }
 
     var operations = new Map();
+    var preparedRequests = new Map();
+    var consumedPreparedHandles = new Set();
+    var preparingRequestCount = 0;
     var activeOperationKey = null;
+
+    function preparedRequestError(code, message, outcome) {
+      return clientError(code, message, outcome, { automaticRetryAllowed: false });
+    }
+
+    function newPreparedRequestHandle() {
+      if (!cryptoImpl || typeof cryptoImpl.randomUUID !== 'function') {
+        throw preparedRequestError(
+          'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_UNAVAILABLE',
+          'Secure Provider edit preparation is unavailable',
+          'FAILED_FINAL',
+        );
+      }
+      return 'byok-prepared:' + cryptoImpl.randomUUID();
+    }
+
+    function normalizedPreparedRequestHandle(value) {
+      if (typeof value !== 'string'
+        || !/^byok-prepared:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+          .test(value)) {
+        throw preparedRequestError(
+          'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_INVALID',
+          'Prepared Provider edit handle is invalid',
+          'FAILED_FINAL',
+        );
+      }
+      return value;
+    }
+
+    function rememberConsumedPreparedHandle(handle) {
+      consumedPreparedHandles.add(handle);
+      while (consumedPreparedHandles.size > MAX_CONSUMED_PREPARED_HANDLE_COUNT) {
+        consumedPreparedHandles.delete(consumedPreparedHandles.values().next().value);
+      }
+    }
 
     async function inspectBlob(blob, allowedMimeTypes) {
       try {
@@ -816,6 +881,95 @@
       };
     }
 
+    function executionIntentId(receipt, prepared) {
+      var binding = prepared.binding;
+      var context = receipt && receipt.context;
+      if (!isRecord(receipt)
+        || receipt.contractVersion !== 'extension-byok-execution-intent/v1'
+        || receipt.executionMode !== 'BYOK'
+        || typeof receipt.replayed !== 'boolean'
+        || !['PENDING', 'SUCCEEDED', 'FAILED_FINAL', 'UNKNOWN_OUTCOME'].includes(receipt.outcome)
+        || receipt.providerIdempotencyKey !== prepared.input.idempotencyKey
+        || receipt.providerRequestHash !== prepared.requestHash
+        || !isRecord(context)
+        || context.shopId !== binding.shopId
+        || context.workflowId !== binding.workflowId
+        || context.draftRevision !== binding.draftRevision
+        || context.draftVersion !== binding.draftVersion
+        || context.skuKey !== binding.skuKey
+        || context.slotKey !== binding.slotKey) {
+        throw clientError(
+          'SS_ERP_BYOK_IMAGE_EDIT_DISPATCH_GUARD_UNAVAILABLE',
+          'BYOK execution intent could not be verified',
+          'FAILED_RETRYABLE',
+        );
+      }
+      try { return normalizedId(receipt.intentId, 'executionIntentId'); } catch {
+        throw clientError(
+          'SS_ERP_BYOK_IMAGE_EDIT_DISPATCH_GUARD_UNAVAILABLE',
+          'BYOK execution intent could not be verified',
+          'FAILED_RETRYABLE',
+        );
+      }
+    }
+
+    async function claimExecutionIntent(entry, prepared) {
+      var receipt = await executionIntentClient.claim({
+        readinessBinding: prepared.binding,
+        requestMode: EXECUTION_INTENT_REQUEST_MODE,
+        providerIdempotencyKey: prepared.input.idempotencyKey,
+        providerRequestHash: prepared.requestHash,
+      });
+      var intentId = executionIntentId(receipt, prepared);
+      if (receipt.replayed === true || receipt.outcome !== 'PENDING') {
+        throw clientError(
+          'SS_ERP_BYOK_EXECUTION_INTENT_REPLAY_BLOCKED',
+          'A persisted Provider attempt cannot be submitted again automatically',
+          receipt.outcome === 'FAILED_FINAL' ? 'FAILED_FINAL' : 'UNKNOWN_OUTCOME',
+          {
+            automaticRetryAllowed: false,
+            replayed: receipt.replayed === true,
+            persistedOutcome: receipt.outcome,
+          },
+        );
+      }
+      entry.executionIntentId = intentId;
+    }
+
+    async function reportExecutionIntentOutcome(
+      entry,
+      prepared,
+      outcome,
+      providerRequestIdSha256,
+      resultSha256,
+    ) {
+      var requestIdHash = safeSha256(providerRequestIdSha256);
+      var resultHash = outcome === 'SUCCEEDED' ? safeSha256(resultSha256) : null;
+      var receipt = await executionIntentClient.reportOutcome({
+        intentId: entry.executionIntentId,
+        providerIdempotencyKey: prepared.input.idempotencyKey,
+        providerRequestHash: prepared.requestHash,
+        outcome: outcome,
+        providerRequestIdSha256: requestIdHash,
+        resultSha256: resultHash,
+      });
+      if (!isRecord(receipt)
+        || receipt.contractVersion !== 'extension-byok-execution-intent-outcome/v1'
+        || receipt.intentId !== entry.executionIntentId
+        || typeof receipt.replayed !== 'boolean'
+        || receipt.outcome !== outcome
+        || receipt.providerIdempotencyKey !== prepared.input.idempotencyKey
+        || receipt.providerRequestHash !== prepared.requestHash
+        || receipt.providerRequestIdSha256 !== requestIdHash
+        || receipt.resultSha256 !== resultHash) {
+        throw clientError(
+          'SS_ERP_BYOK_IMAGE_EDIT_DISPATCH_GUARD_UNAVAILABLE',
+          'BYOK execution outcome could not be verified',
+          'FAILED_RETRYABLE',
+        );
+      }
+    }
+
     async function persistDispatch(entry, prepared) {
       try {
         await profileStore.beginProviderDispatch(
@@ -1025,6 +1179,7 @@
         }
         entry.capabilityProbeClaimed = true;
       } else {
+        await claimExecutionIntent(entry, prepared);
         await persistDispatch(entry, prepared);
       }
       var apiKey = credential.apiKey;
@@ -1150,7 +1305,7 @@
       await assertResultAuthority(entry, prepared, requestIdHash, taskIdHash);
       var acceptedAt = new Date(now());
       if (!Number.isFinite(acceptedAt.getTime())) acceptedAt = new Date();
-      return {
+      var result = {
         contractVersion: CONTRACT_VERSION,
         outcome: 'SUCCEEDED',
         operation: prepared.input.operation,
@@ -1161,6 +1316,7 @@
         providerOrigin: prepared.endpoint.providerOrigin,
         model: prepared.profile.model,
         policyRevision: prepared.binding.policyRevision,
+        executionIntentId: entry.executionIntentId,
         idempotencyKey: prepared.input.idempotencyKey,
         requestHash: prepared.requestHash,
         promptHash: prepared.promptHash,
@@ -1182,10 +1338,23 @@
           resultUrlHash: image.resultUrlHash,
         },
       };
+      if (!entry.capabilityProbe) {
+        try {
+          await reportExecutionIntentOutcome(
+            entry,
+            prepared,
+            'SUCCEEDED',
+            requestIdHash,
+            resultHash,
+          );
+        } catch (error) {
+          throw unknownOutcome(error, requestIdHash, taskIdHash);
+        }
+      }
+      return result;
     }
 
-    async function run(value, requireEvidence, capabilityProbe) {
-      var prepared = await prepare(value, requireEvidence);
+    async function runPrepared(prepared, capabilityProbe) {
       var idempotencyKey = prepared.input.idempotencyKey;
       var existing = operations.get(idempotencyKey);
       if (existing) {
@@ -1219,6 +1388,7 @@
         profileId: null,
         profileIdentity: null,
         providerBaseUrl: null,
+        executionIntentId: null,
         capabilityProbe: capabilityProbe,
         capabilityProbeClaimed: false,
         capabilityProbeIdentity: null,
@@ -1250,10 +1420,41 @@
                 );
               } catch {}
             }
+            if (!entry.capabilityProbe && entry.executionIntentId
+              && (!error || error.outcome !== 'UNKNOWN_OUTCOME')) {
+              try {
+                await reportExecutionIntentOutcome(
+                  entry,
+                  prepared,
+                  'FAILED_FINAL',
+                  null,
+                  null,
+                );
+              } catch (reportError) {
+                var unresolved = undispatchedIntentOutcomeUnresolved(error, reportError);
+                entry.status = unresolved.outcome;
+                entry.outcome = unresolved.outcome;
+                entry.error = snapshotError(unresolved);
+                throw replayError(entry.error, false);
+              }
+            }
             operations.delete(idempotencyKey);
             throw error;
           }
           var safeError = error && error.outcome ? error : unknownOutcome(error, null, null);
+          if (!entry.capabilityProbe && entry.executionIntentId
+            && (safeError.outcome === 'FAILED_FINAL'
+              || safeError.outcome === 'UNKNOWN_OUTCOME')) {
+            try {
+              await reportExecutionIntentOutcome(
+                entry,
+                prepared,
+                safeError.outcome,
+                safeError.providerRequestIdSha256,
+                null,
+              );
+            } catch {}
+          }
           entry.status = safeError.outcome;
           entry.outcome = safeError.outcome;
           entry.error = snapshotError(safeError);
@@ -1276,6 +1477,64 @@
         }
       })();
       return entry.promise;
+    }
+
+    async function run(value, requireEvidence, capabilityProbe) {
+      return runPrepared(await prepare(value, requireEvidence), capabilityProbe);
+    }
+
+    async function prepareDispatch(value) {
+      if (preparedRequests.size + preparingRequestCount >= MAX_PREPARED_REQUEST_COUNT) throw clientError(
+        'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_LIMIT',
+        'Too many Provider edit requests are waiting for reservation',
+        'FAILED_RETRYABLE',
+      );
+      preparingRequestCount += 1;
+      try {
+        var prepared = await prepare(value, true);
+        var handle = newPreparedRequestHandle();
+        while (preparedRequests.has(handle) || consumedPreparedHandles.has(handle)) {
+          handle = newPreparedRequestHandle();
+        }
+        preparedRequests.set(handle, prepared);
+        return Object.freeze({
+          contractVersion: PREPARED_REQUEST_CONTRACT_VERSION,
+          preparedRequestHandle: handle,
+          operation: prepared.input.operation,
+          requestMode: EXECUTION_INTENT_REQUEST_MODE,
+          providerIdempotencyKey: prepared.input.idempotencyKey,
+          providerRequestHash: prepared.requestHash,
+        });
+      } finally {
+        preparingRequestCount -= 1;
+      }
+    }
+
+    async function dispatchPrepared(value) {
+      var handle = normalizedPreparedRequestHandle(value);
+      if (consumedPreparedHandles.has(handle)) {
+        throw preparedRequestError(
+          'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_CONSUMED',
+          'Prepared Provider edit was already consumed',
+          'UNKNOWN_OUTCOME',
+        );
+      }
+      var prepared = preparedRequests.get(handle);
+      if (!prepared) {
+        throw preparedRequestError(
+          'SS_ERP_BYOK_IMAGE_EDIT_PREPARED_REQUEST_UNAVAILABLE',
+          'Prepared Provider edit is unavailable',
+          'FAILED_FINAL',
+        );
+      }
+      preparedRequests.delete(handle);
+      rememberConsumedPreparedHandle(handle);
+      return runPrepared(prepared, false);
+    }
+
+    function releasePrepared(value) {
+      var handle = normalizedPreparedRequestHandle(value);
+      return { released: preparedRequests.delete(handle) };
     }
 
     async function edit(value) {
@@ -1317,6 +1576,7 @@
         contractVersion: CONTRACT_VERSION,
         idempotencyKey: idempotencyKey,
         requestHash: entry.requestHash,
+        executionIntentId: entry.executionIntentId,
         status: entry.status,
         outcome: entry.outcome,
         dispatched: entry.dispatched,
@@ -1428,6 +1688,9 @@
 
     return Object.freeze({
       edit: edit,
+      prepareDispatch: prepareDispatch,
+      dispatchPrepared: dispatchPrepared,
+      releasePrepared: releasePrepared,
       probe: probe,
       commitResult: commitResult,
       getOperationState: getOperationState,
@@ -1437,6 +1700,7 @@
 
   global.SS_ERP_BYOK_IMAGE_EDIT_CLIENT = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
+    PREPARED_REQUEST_CONTRACT_VERSION: PREPARED_REQUEST_CONTRACT_VERSION,
     EDIT_OPERATIONS: EDIT_OPERATIONS,
     createClient: createClient,
   });

@@ -25,8 +25,11 @@ function writeManifest(dir, version) {
   );
 }
 
-writeManifest(sourceDir, '1.0.19');
-fs.writeFileSync(path.join(sourceDir, 'background.js'), 'console.log("test");\n');
+fs.cpSync(path.resolve('extensions/ss-erp'), sourceDir, { recursive: true });
+const sourceManifestPath = path.join(sourceDir, 'manifest.json');
+const sourceTemplateManifest = JSON.parse(fs.readFileSync(sourceManifestPath, 'utf8'));
+sourceTemplateManifest.version = '1.0.19';
+fs.writeFileSync(sourceManifestPath, `${JSON.stringify(sourceTemplateManifest, null, 2)}\n`);
 writeManifest(path.join(previousBuildRoot, 'ss-erp-cloud'), '1.0.22');
 fs.writeFileSync(path.join(previousBuildRoot, 'ss-erp-cloud-1.0.22.zip'), 'previous zip\n');
 writeManifest(path.join(previousBuildRoot, 'ss-erp-local'), '1.0.22');

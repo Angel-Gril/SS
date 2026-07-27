@@ -8,6 +8,7 @@
   var DEFAULT_TTL_MS = 10 * 60 * 1000;
   var MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
+  var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
   var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
   var BINDING_KEYS = [
@@ -94,6 +95,13 @@
       && Object.keys(value).every(function (key) { return keys.includes(key); });
   }
 
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+  }
+
   function normalizeBinding(value) {
     if (!exactKeys(value, BINDING_KEYS)
       || value.contractVersion !== READINESS_BINDING_VERSION) {
@@ -103,7 +111,7 @@
     var slotKey = text(value.slotKey, 200);
     if (!['1688', 'pdd', 'taobao', 'tmall'].includes(value.sourcePlatform)
       || value.assignmentMode !== 'APPEND'
-      || slotKey !== 'sku:' + skuKey + ':hero') {
+      || !isSupportedSlotKey(skuKey, slotKey)) {
       throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
     }
     return Object.freeze({
@@ -290,6 +298,7 @@
         providerOrigin: text(result.providerOrigin, 300),
         model: text(result.model, 200),
         policyRevision: text(result.policyRevision, 200),
+        executionIntentId: text(result.executionIntentId, 200),
         idempotencyKey: text(result.idempotencyKey, 200),
         requestHash: sha256(result.requestHash),
         promptHash: sha256(result.promptHash),

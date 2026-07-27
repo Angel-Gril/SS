@@ -9,13 +9,23 @@
   var MAX_PUBLISH_REQUEST_BYTES = 1 * 1024 * 1024;
   var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
   var MAX_BYOK_INGEST_REQUEST_BYTES = 20 * 1024 * 1024;
+  var MAX_BYOK_BATCH_INGEST_REQUEST_BYTES = 50 * 1024 * 1024;
+  var MAX_BYOK_BATCH_MANIFEST_BYTES = 64 * 1024;
   var MAX_HOSTED_PREVIEW_RESPONSE_BYTES = 20 * 1024 * 1024;
   var MAX_BYOK_INGEST_MANIFEST_CHARACTERS = Math.ceil(16 * 1024 * 4 / 3) + 8;
   var MEDIA_EDIT_SOURCE_PATH = '/api/extension-device/source-workbench/media-edit-source';
   var MEDIA_EDIT_MASK_PATH = '/api/extension-device/source-workbench/media-edit-mask';
   var BYOK_MEDIA_INGEST_PATH = '/api/extension-device/byok-media/ingest';
   var BYOK_MEDIA_INGEST_STATUS_PATH = '/api/extension-device/byok-media/ingest-status';
+  var BYOK_MEDIA_BATCH_INGEST_PATH = '/api/extension-device/byok-media/batch-ingest';
+  var BYOK_MEDIA_BATCH_INGEST_STATUS_PATH =
+    '/api/extension-device/byok-media/batch-ingest-status';
   var BYOK_READINESS_PATH = '/api/extension-device/byok-media/readiness';
+  var BYOK_WORKBENCH_LAUNCH_PATH = '/api/extension-device/byok-media/workbench-launch';
+  var BYOK_WORKBENCH_BATCH_LAUNCH_PATH =
+    '/api/extension-device/byok-media/workbench-batch-launch';
+  var BYOK_EXECUTION_INTENT_PATH = '/api/extension-device/byok-media/execution-intents';
+  var BYOK_EXECUTION_BATCH_PATH = '/api/extension-device/byok-media/execution-batches';
   var BYOK_PUBLISH_PREVIEW_PATH = '/api/extension-device/byok-publish/preview';
   var BYOK_PUBLISH_PREPARE_PATH = '/api/extension-device/byok-publish/prepare';
   var BYOK_PUBLISH_STATUS_PATH = '/api/extension-device/byok-publish/status';
@@ -34,6 +44,7 @@
     MEDIA_EDIT_SOURCE_PATH,
     MEDIA_EDIT_MASK_PATH,
     BYOK_MEDIA_INGEST_PATH,
+    BYOK_MEDIA_BATCH_INGEST_PATH,
     HOSTED_PREVIEW_CONSUME_PATH,
   ]);
   var BYOK_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -65,7 +76,13 @@
       MEDIA_EDIT_MASK_PATH,
       BYOK_MEDIA_INGEST_PATH,
       BYOK_MEDIA_INGEST_STATUS_PATH,
+      BYOK_MEDIA_BATCH_INGEST_PATH,
+      BYOK_MEDIA_BATCH_INGEST_STATUS_PATH,
       BYOK_READINESS_PATH,
+      BYOK_WORKBENCH_LAUNCH_PATH,
+      BYOK_WORKBENCH_BATCH_LAUNCH_PATH,
+      BYOK_EXECUTION_INTENT_PATH,
+      BYOK_EXECUTION_BATCH_PATH,
       BYOK_PUBLISH_PREVIEW_PATH,
       BYOK_PUBLISH_PREPARE_PATH,
       BYOK_PUBLISH_STATUS_PATH,
@@ -91,19 +108,73 @@
         return false;
       }
     }
-    function allowedPostPath(candidate) {
-      return commandPaths.has(candidate) || hostedPlanReviewPath(candidate);
+    function byokExecutionIntentOutcomePath(candidate) {
+      var prefix = BYOK_EXECUTION_INTENT_PATH + '/';
+      var suffix = '/outcome';
+      if (!candidate.startsWith(prefix) || !candidate.endsWith(suffix)) return false;
+      var encodedIntentId = candidate.slice(prefix.length, -suffix.length);
+      if (!encodedIntentId || encodedIntentId.includes('/')) return false;
+      try {
+        var intentId = decodeURIComponent(encodedIntentId);
+        return intentId.length > 0 && intentId.length <= 200
+          && intentId === intentId.normalize('NFKC').trim()
+          && !intentId.includes('/') && !intentId.includes('\\')
+          && encodeURIComponent(intentId) === encodedIntentId;
+      } catch {
+        return false;
+      }
     }
-    var allowed = method === 'GET'
-      ? path.startsWith('/api/extension-device/source-workbench/')
-      : allowedPostPath(path);
+    function exactEncodedIdentifier(value) {
+      if (!value || value.includes('/')) return false;
+      try {
+        var decoded = decodeURIComponent(value);
+        return decoded.length > 0 && decoded.length <= 200
+          && decoded === decoded.normalize('NFKC').trim()
+          && !decoded.includes('/') && !decoded.includes('\\')
+          && encodeURIComponent(decoded) === value;
+      } catch {
+        return false;
+      }
+    }
+    function byokExecutionBatchMutationPath(candidate) {
+      var prefix = BYOK_EXECUTION_BATCH_PATH + '/';
+      if (!candidate.startsWith(prefix)) return false;
+      var remainder = candidate.slice(prefix.length);
+      var cancelSuffix = '/cancel';
+      if (remainder.endsWith(cancelSuffix)) {
+        return exactEncodedIdentifier(remainder.slice(0, -cancelSuffix.length));
+      }
+      var match = /^([^/]+)\/items\/([0-3])\/attempts$/u.exec(remainder);
+      return Boolean(match && exactEncodedIdentifier(match[1]));
+    }
+    function byokExecutionBatchReadPath(candidate) {
+      var prefix = BYOK_EXECUTION_BATCH_PATH + '/';
+      if (!candidate.startsWith(prefix)) return false;
+      var remainder = candidate.slice(prefix.length);
+      var idempotencyPrefix = 'by-idempotency/';
+      if (remainder.startsWith(idempotencyPrefix)) {
+        return exactEncodedIdentifier(remainder.slice(idempotencyPrefix.length));
+      }
+      return exactEncodedIdentifier(remainder);
+    }
+    function allowedGetPath(candidate) {
+      return candidate.startsWith('/api/extension-device/source-workbench/')
+        || byokExecutionBatchReadPath(candidate);
+    }
+    function allowedPostPath(candidate) {
+      return commandPaths.has(candidate)
+        || hostedPlanReviewPath(candidate)
+        || byokExecutionIntentOutcomePath(candidate)
+        || byokExecutionBatchMutationPath(candidate);
+    }
+    var allowed = method === 'GET' ? allowedGetPath(path) : allowedPostPath(path);
     if (!allowed) {
       throw new TypeError('source workbench path is invalid');
     }
     var parsed = new URL(path, 'https://ss-erp.invalid');
     if (parsed.origin !== 'https://ss-erp.invalid'
       || (method === 'GET'
-        ? !parsed.pathname.startsWith('/api/extension-device/source-workbench/')
+        ? !allowedGetPath(parsed.pathname)
         : !allowedPostPath(parsed.pathname) || parsed.search)) {
       throw new TypeError('source workbench path is invalid');
     }
@@ -151,6 +222,63 @@
       manifest: manifest,
       commandGrant: commandGrant,
     };
+  }
+
+  function byokBatchMultipartRequest(formValue, commandOptions, path) {
+    if (path !== BYOK_MEDIA_BATCH_INGEST_PATH
+      || typeof FormData === 'undefined'
+      || !(formValue instanceof FormData)) {
+      throw new TypeError('BYOK batch ingest form is invalid');
+    }
+    var entries = Array.from(formValue.entries());
+    if (entries.length < 2 || entries.length > 5
+      || entries[0][0] !== 'manifest' || typeof entries[0][1] !== 'string') {
+      throw new TypeError('BYOK batch ingest form is invalid');
+    }
+    var manifestText = entries[0][1];
+    if (byteLength(manifestText) < 1 || byteLength(manifestText) > MAX_BYOK_BATCH_MANIFEST_BYTES) {
+      throw new TypeError('BYOK batch ingest manifest is invalid');
+    }
+    var manifest;
+    try { manifest = JSON.parse(manifestText); } catch {
+      throw new TypeError('BYOK batch ingest manifest is invalid');
+    }
+    var items = manifest && manifest.command && manifest.command.items;
+    if (manifest.contractVersion !== 'extension-byok-media-batch-ingest-manifest/v1'
+      || manifest.operation !== 'BYOK_MEDIA_INGEST'
+      || typeof manifest.executionBatchId !== 'string'
+      || manifest.executionBatchId !== manifest.executionBatchId.normalize('NFKC').trim()
+      || manifest.executionBatchId.length < 1 || manifest.executionBatchId.length > 200
+      || !manifest.command || manifest.command.executionBatchId !== manifest.executionBatchId
+      || !Array.isArray(items)
+      || items.length !== entries.length - 1
+      || items.length < 1 || items.length > 4) {
+      throw new TypeError('BYOK batch ingest manifest is invalid');
+    }
+    var totalBytes = 0;
+    for (var index = 0; index < items.length; index += 1) {
+      var entry = entries[index + 1];
+      var blob = entry[1];
+      var item = items[index];
+      if (entry[0] !== 'image-' + index
+        || typeof Blob === 'undefined' || !(blob instanceof Blob)
+        || !Number.isSafeInteger(blob.size) || blob.size < 1
+        || blob.size > MAX_BYOK_INGEST_REQUEST_BYTES
+        || !BYOK_IMAGE_MIME_TYPES.has(blob.type)
+        || !item || item.resultMimeType !== blob.type
+        || item.resultSizeBytes !== blob.size) {
+        throw new TypeError('BYOK batch ingest image is invalid');
+      }
+      totalBytes += blob.size;
+    }
+    if (totalBytes > MAX_BYOK_BATCH_INGEST_REQUEST_BYTES) {
+      throw new TypeError('BYOK batch ingest images are too large');
+    }
+    var commandGrant = String(commandOptions && commandOptions.commandGrant || '').trim();
+    if (!/^[A-Za-z0-9_-]{43,4096}$/.test(commandGrant)) {
+      throw new TypeError('BYOK batch ingest command grant is invalid');
+    }
+    return { body: formValue, commandGrant: commandGrant };
   }
 
   async function readJsonResponse(response, maximumBytes) {
@@ -286,6 +414,9 @@
       async postBytes(pathValue, blobValue, commandOptions) {
         return send('POST', pathValue, blobValue, commandOptions || null, 'byok-bytes');
       },
+      async postMultipart(pathValue, formValue, commandOptions) {
+        return send('POST', pathValue, formValue, commandOptions || null, 'byok-multipart');
+      },
       async postRaw(pathValue, bodyValue, commandOptions) {
         return send('POST', pathValue, bodyValue, commandOptions || null, 'hosted-preview');
       },
@@ -297,6 +428,9 @@
         var binaryRequest = null;
         if (bodyMode === 'byok-bytes') {
           binaryRequest = byokBinaryRequest(bodyValue, commandOptions, path);
+          requestBody = binaryRequest.body;
+        } else if (bodyMode === 'byok-multipart') {
+          binaryRequest = byokBatchMultipartRequest(bodyValue, commandOptions, path);
           requestBody = binaryRequest.body;
         } else if (method === 'POST') {
           if (bodyMode === 'hosted-preview' && path !== HOSTED_PREVIEW_CONSUME_PATH) {
@@ -351,7 +485,7 @@
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
           var requestedScope = commandOptions && commandOptions.requiredScope;
-          var requiredScope = bodyMode === 'byok-bytes'
+          var requiredScope = bodyMode === 'byok-bytes' || bodyMode === 'byok-multipart'
             ? 'byok:media:ingest'
             : requestedScope === 'listing:review'
             || requestedScope === 'listing:write'
@@ -370,12 +504,13 @@
             Authorization: 'Bearer ' + accessToken,
           };
           if (method === 'POST') {
-            headers['Content-Type'] = binaryRequest ? binaryRequest.contentType : 'application/json';
+            if (!binaryRequest) headers['Content-Type'] = 'application/json';
+            else if (binaryRequest.contentType) headers['Content-Type'] = binaryRequest.contentType;
             var commandGrant = binaryRequest
               ? binaryRequest.commandGrant
               : String(commandOptions && commandOptions.commandGrant || '').trim();
             if (commandGrant) headers['X-SS-ERP-Command-Grant'] = commandGrant;
-            if (binaryRequest) {
+            if (binaryRequest && binaryRequest.manifest) {
               headers['X-SS-ERP-BYOK-Ingest-Manifest'] = binaryRequest.manifest;
             }
           }

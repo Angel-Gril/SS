@@ -11,6 +11,8 @@
   var ACTION_EVENT = 'ss-erp:workspace-action';
   var INTENT_EVENT = 'ss-erp:workspace-intent';
   var INTENT_OUTCOME_EVENT = 'ss-erp:workspace-intent-outcome';
+  var PREVIEW_STATE_EVENT = 'ss-erp:workspace-preview-state';
+  var PREVIEW_STATE_VERSION = 'extension-byok-workbench-preview-state/v1';
   var ACTION_CONTRACT_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var LIBRARY_KINDS = Object.freeze(['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
   var EXECUTION_MODES = Object.freeze(['ERP_HOSTED', 'BYOK']);
@@ -72,6 +74,7 @@
   var unsubscribe = null;
   var retainedRuntime = null;
   var pendingIntent = null;
+  var previewReadyAttempt = null;
   var lastPublishAnnouncementKey = null;
   var runtimeRevisionClock = 0;
 
@@ -583,7 +586,7 @@
       ATTEMPT_NOT_REVIEWABLE: '该候选当前不可审核',
       ATTEMPT_ALREADY_SELECTED: '该候选已经保留',
       SLOT_REVISION_UNAVAILABLE: '尚未收到可信的槽位版本，操作已关闭',
-      PREVIEW_CHANNEL_NOT_READY: '候选预览通道尚未接入',
+      CANDIDATE_PREVIEW_REQUIRED: '请先通过一次性安全通道打开该候选预览',
       SLOT_NOT_EXECUTED: '当前槽位尚未执行',
       SLOT_EXECUTION_ACTIVE: '当前槽位仍在处理',
       ATTEMPT_LIMIT_REACHED: '候选数量已达到上限',
@@ -1108,6 +1111,14 @@
     var meta = global.document.createElement('span');
     button.appendChild(label);
     button.appendChild(meta);
+    button.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || button.disabled) return;
+      emitAction('PREVIEW_ATTEMPT', {
+        skuKey: slot.skuKey,
+        slotKey: slot.slotKey,
+        attemptId: alternative.attemptId,
+      });
+    });
     var actions = global.document.createElement('div');
     actions.className = 'workspace-alternative-actions';
     actions.setAttribute('role', 'group');
@@ -1158,9 +1169,18 @@
       createAlternativeGroup,
       function (group, slot) {
         group.hidden = slot.slotKey !== snapshot.selectedSlotKey;
-        var reviewReason = 'PREVIEW_CHANNEL_NOT_READY';
+        var previewCurrent = previewReadyAttempt
+          && previewReadyAttempt.slotKey === slot.slotKey
+          && slot.alternatives.some(function (alternative) {
+            return alternative.attemptId === previewReadyAttempt.attemptId
+              && alternative.state === 'CANDIDATE_READY' && alternative.mediaId !== null;
+          });
+        if (!previewCurrent && previewReadyAttempt
+          && previewReadyAttempt.slotKey === slot.slotKey) previewReadyAttempt = null;
+        var reviewReason = previewCurrent ? null : 'CANDIDATE_PREVIEW_REQUIRED';
         group._workspace.reason.hidden = false;
-        group._workspace.reason.textContent = humanDisabledReason(reviewReason);
+        group._workspace.reason.textContent = reviewReason
+          ? humanDisabledReason(reviewReason) : '当前候选预览已验证，可以审核。';
         reconcile(
           group._workspace.list,
           group._workspace.alternatives,
@@ -1169,19 +1189,30 @@
           function (alternative) { return createAlternativeRow(slot, alternative); },
           function (row, alternative, index) {
             var selected = alternative.attemptId === slot.selectedAttemptId;
+            var previewable = !runtimeFault && !bootstrapFault
+              && alternative.state === 'CANDIDATE_READY'
+              && alternative.mediaId !== null;
+            var previewReady = previewable && previewReadyAttempt
+              && previewReadyAttempt.slotKey === slot.slotKey
+              && previewReadyAttempt.attemptId === alternative.attemptId;
             row._workspace.label.textContent = '候选 ' + (index + 1);
             row._workspace.meta.textContent = humanStatus(alternative.state)
               + (alternative.errorCode ? ' · ' + alternative.errorCode : '');
-            row._workspace.button.disabled = true;
-            row._workspace.button.title = humanDisabledReason('PREVIEW_CHANNEL_NOT_READY');
+            row._workspace.button.disabled = !previewable || Boolean(pendingIntent);
+            row._workspace.button.title = row._workspace.button.disabled
+              ? humanDisabledReason(pendingIntent ? 'ACTION_IN_FLIGHT' : 'ATTEMPT_NOT_REVIEWABLE')
+              : '通过一次性安全通道打开候选预览';
             row._workspace.button.setAttribute(
               'aria-label', '候选 ' + (index + 1) + '，' + humanStatus(alternative.state)
-                + '，候选预览通道尚未接入',
+                + (row._workspace.button.disabled ? '，不可预览' : '，打开安全预览'),
             );
             row._workspace.button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-            row._workspace.keepButton.disabled = true;
-            row._workspace.rejectButton.disabled = true;
-            var keepDisabledTitle = humanDisabledReason(reviewReason);
+            row._workspace.keepButton.disabled = !previewReady || selected
+              || Boolean(pendingIntent);
+            row._workspace.rejectButton.disabled = !previewReady || Boolean(pendingIntent);
+            var keepDisabledTitle = humanDisabledReason(pendingIntent
+              ? 'ACTION_IN_FLIGHT'
+              : selected ? 'ATTEMPT_ALREADY_SELECTED' : reviewReason);
             var rejectDisabledTitle = keepDisabledTitle;
             row._workspace.keepButton.title = keepDisabledTitle;
             row._workspace.rejectButton.title = rejectDisabledTitle;
@@ -1527,6 +1558,7 @@
   }
 
   function bootstrap(detail) {
+    previewReadyAttempt = null;
     if (!isPureData(detail)) {
       stopWorkspaceSubscription();
       retainedRuntime = null;
@@ -1652,6 +1684,16 @@
     try {
       workspace.applyRuntimeProjection(detail);
       snapshot = workspace.getSnapshot();
+      if (previewReadyAttempt) {
+        var previewSlot = snapshot.slots.find(function (slot) {
+          return slot.slotKey === previewReadyAttempt.slotKey;
+        });
+        var previewAlternative = previewSlot && previewSlot.alternatives.find(function (item) {
+          return item.attemptId === previewReadyAttempt.attemptId;
+        });
+        if (!previewAlternative || previewAlternative.state !== 'CANDIDATE_READY'
+          || previewAlternative.mediaId === null) previewReadyAttempt = null;
+      }
       var acknowledgedIntent = pendingIntent
         && detail.revision > pendingIntent.expectedRuntimeRevision
         && intentPostconditionMet(pendingIntent, snapshot)
@@ -1713,6 +1755,7 @@
     lastActionError = null;
     retainedRuntime = null;
     pendingIntent = null;
+    previewReadyAttempt = null;
     lastPublishAnnouncementKey = null;
     selectedLibraryKind = LIBRARY_KINDS[0];
     clearCache(skuNodes);
@@ -1829,6 +1872,28 @@
   });
   global.document.addEventListener(INTENT_OUTCOME_EVENT, function (event) {
     applyIntentOutcome(event.detail);
+  });
+  global.document.addEventListener(PREVIEW_STATE_EVENT, function (event) {
+    var detail = event && event.detail;
+    if (!exactKeys(detail, ['contractVersion', 'slotKey', 'attemptId', 'ready'])
+      || detail.contractVersion !== PREVIEW_STATE_VERSION
+      || typeof detail.ready !== 'boolean' || !snapshot) return;
+    var slot = snapshot.slots.find(function (candidate) {
+      return candidate.slotKey === detail.slotKey;
+    });
+    var alternative = slot && slot.alternatives.find(function (candidate) {
+      return candidate.attemptId === detail.attemptId;
+    });
+    if (detail.ready === true && (!alternative
+      || alternative.state !== 'CANDIDATE_READY' || alternative.mediaId === null)) return;
+    if (detail.ready) {
+      previewReadyAttempt = { slotKey: detail.slotKey, attemptId: detail.attemptId };
+    } else if (previewReadyAttempt
+      && previewReadyAttempt.slotKey === detail.slotKey
+      && previewReadyAttempt.attemptId === detail.attemptId) {
+      previewReadyAttempt = null;
+    }
+    render();
   });
   global.document.addEventListener(CLEAR_EVENT, function () {
     clearWorkspace();

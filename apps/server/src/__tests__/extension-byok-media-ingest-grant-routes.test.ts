@@ -20,12 +20,15 @@ function command() {
     providerOperation: 'IMAGE_TO_IMAGE',
     requestMode: 'multipart',
     model: 'image-model-v1',
+    executionIntentId: 'intent-1',
+    providerIdempotencyKey: 'provider-attempt-0001',
+    providerRequestHash: 'b'.repeat(64),
     providerRequestIdSha256: HASH,
     promptSha256: HASH,
     negativePromptSha256: null,
     draftRevision: 11,
     skuKey: 'sku-1',
-    slotKey: 'sku:sku-1:hero:0',
+    slotKey: 'sku:sku-1:hero',
     assignmentOrdinal: 0,
     assignmentMode: 'APPEND',
     replaceConfirmed: false,
@@ -135,6 +138,23 @@ describe('BYOK media ingest command grant route', () => {
         command: resolvedCommand(),
       }),
     }));
+    await app.close();
+  });
+
+  it('rejects a secret-shaped model before issuing a grant', async () => {
+    const { app, issue } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/command-grants',
+      payload: {
+        operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
+        shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+        idempotencyKey: 'byok-ingest-route-operation-1',
+        command: { ...command(), model: 'sk-secret-model-value' },
+      },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(issue).not.toHaveBeenCalled();
     await app.close();
   });
 });

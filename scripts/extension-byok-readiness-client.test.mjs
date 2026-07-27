@@ -85,15 +85,59 @@ assert.deepEqual(JSON.parse(JSON.stringify(posts)), [{
 }]);
 assert.equal(issued[0], attestation);
 
+function draftRequest(slotKey, overrides = {}) {
+  return {
+    profileId: 'profile-1',
+    shopId: 'shop-1',
+    workflowId: 'workflow-1',
+    draftRevision: 3,
+    draftVersion: 4,
+    sourcePlatform: '1688',
+    sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1',
+    skuKey: 'sku-1',
+    slotKey,
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: 0,
+    operation: 'TEXT_TO_IMAGE',
+    ...overrides,
+  };
+}
+
+for (const slotKey of [
+  'sku:sku-1:hero',
+  'shared:detail:SCENE',
+  'shared:detail:DETAIL',
+  'shared:detail:SPEC',
+  'shared:detail:PACKAGING',
+]) {
+  await client.getReadiness(draftRequest(slotKey));
+  assert.equal(posts.at(-1).body.slotKey, slotKey);
+  assert.equal(posts.at(-1).body.assignmentMode, 'APPEND');
+}
+const validPostCount = posts.length;
+
 for (const invalid of [
   { profileId: 'profile-1', shopId: 'shop-1', workflowId: null, draftRevision: 1, draftVersion: null, operation: 'TEXT_TO_IMAGE' },
   { profileId: 'profile-1', shopId: 'shop-1', workflowId: null, draftRevision: null, draftVersion: null, operation: 'INPAINT' },
   { profileId: 'missing', shopId: 'shop-1', workflowId: null, draftRevision: null, draftVersion: null, operation: 'TEXT_TO_IMAGE' },
   { profileId: 'profile-1', shopId: 'shop-1', workflowId: null, draftRevision: null, draftVersion: null, operation: 'TEXT_TO_IMAGE', providerOrigin: 'https://evil.example' },
+  draftRequest('sku:sku-1:detail:1'),
+  draftRequest('group:visual-1:detail:SCENE'),
+  draftRequest('shared:detail:FUNCTION'),
+  draftRequest('shared:detail:SPECIFICATION'),
+  draftRequest('shared:detail:scene'),
+  draftRequest('shared:detail:SCENE:extra'),
+  draftRequest('shared:detail:SCENE', { assignmentMode: 'REPLACE' }),
 ]) {
   await assert.rejects(client.getReadiness(invalid), Error);
 }
-assert.equal(posts.length, 1, 'invalid or page-injected Provider authority must fail before ERP I/O');
+assert.equal(
+  posts.length,
+  validPostCount,
+  'invalid or page-injected Provider authority must fail before ERP I/O',
+);
 
 let cleared = 0;
 const unpaired = api.createClient({

@@ -45,6 +45,7 @@ function result(overrides = {}) {
     outcome: 'SUCCEEDED', operation: 'TEXT_TO_IMAGE', requestMode: 'json',
     profileId: 'profile-1', profileIdentity: 'https://relay.example/v1\u0000image-model-v1',
     providerOrigin: 'https://relay.example', model: 'image-model-v1', policyRevision: '734',
+    executionIntentId: 'intent-1',
     idempotencyKey: 'provider-generate-0001', requestHash: 'a'.repeat(64),
     promptHash: 'b'.repeat(64), negativePromptHash: null, endpointHash: 'c'.repeat(64),
     providerRequestIdSha256: 'f'.repeat(64),
@@ -99,6 +100,54 @@ assert.throws(
   () => vault.put(result({ idempotencyKey: 'provider-generate-context' }), binding(), authority({ epoch: -1 })),
   /RESULT_INVALID/u,
 );
+
+let slotRandomByte = 12;
+const slotVault = api.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(value) { value.fill(slotRandomByte++); return value; },
+});
+for (const [index, slotKey] of [
+  'sku:sku-selected:hero',
+  'shared:detail:SCENE',
+  'shared:detail:DETAIL',
+  'shared:detail:SPEC',
+  'shared:detail:PACKAGING',
+].entries()) {
+  const exactBinding = binding({
+    skuKey: 'sku-selected',
+    slotKey,
+    assignmentOrdinal: index,
+  });
+  const marker = String(index + 1);
+  const candidate = slotVault.put(result({
+    executionIntentId: `intent-slot-${index + 1}`,
+    idempotencyKey: `provider-slot-${index + 1}-0001`,
+    requestHash: marker.repeat(64),
+    image: { ...result().image, sha256: String(index + 5).repeat(64) },
+  }), exactBinding, authority());
+  slotVault.approve(candidate.resultId, exactBinding);
+  const approvedSlot = slotVault.getApprovedForBackground(candidate.resultId);
+  assert.equal(approvedSlot.binding.slotKey, slotKey);
+  assert.equal(approvedSlot.reviewState, 'APPROVED');
+}
+for (const [index, invalidBinding] of [
+  binding({ skuKey: 'sku-selected', slotKey: 'sku:sku-other:hero' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'sku:sku-selected:detail:1' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'group:visual-1:detail:SCENE' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'shared:detail:FUNCTION' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'shared:detail:SPECIFICATION' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'shared:detail:scene' }),
+  binding({ skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE:extra' }),
+  binding({
+    skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE', assignmentMode: 'REPLACE',
+  }),
+].entries()) {
+  assert.throws(() => slotVault.put(result({
+    executionIntentId: `intent-invalid-slot-${index + 1}`,
+    idempotencyKey: `provider-invalid-slot-${index + 1}`,
+  }), invalidBinding, authority()), /RESULT_INVALID/u);
+}
+slotVault.clear();
 
 let editRandomByte = 24;
 const editVault = api.createVault({

@@ -6,6 +6,7 @@
   var BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var INTERNAL_MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1';
   var OPERATIONS = Object.freeze(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']);
+  var SHARED_DETAIL_ROLES = Object.freeze(['SCENE', 'DETAIL', 'SPEC', 'PACKAGING']);
   var MIME_TYPES = Object.freeze(['image/png', 'image/jpeg', 'image/webp']);
   var MEDIA_PURPOSES = Object.freeze({
     IMAGE_TO_IMAGE_REFERENCE: 'IMAGE_TO_IMAGE_REFERENCE',
@@ -82,6 +83,13 @@
     return value;
   }
 
+  function isSupportedSlotKey(skuKey, slotKey) {
+    return slotKey === 'sku:' + skuKey + ':hero'
+      || SHARED_DETAIL_ROLES.some(function (role) {
+        return slotKey === 'shared:detail:' + role;
+      });
+  }
+
   function normalizeContext(value) {
     var code = 'SS_ERP_BYOK_EDIT_OWNER_INVALID';
     if (!exactKeys(value, CONTEXT_KEYS) || value.contractVersion !== CONTEXT_VERSION) {
@@ -92,7 +100,7 @@
     var slotKey = canonicalText(value.slotKey, 200, code);
     if (!['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePlatform)
       || value.assignmentMode !== 'APPEND'
-      || slotKey !== 'sku:' + skuKey + ':hero'
+      || !isSupportedSlotKey(skuKey, slotKey)
       || !Number.isSafeInteger(value.assignmentOrdinal)
       || value.assignmentOrdinal < 0 || value.assignmentOrdinal > 499) {
       throw controllerError(code, 'FAILED_FINAL');

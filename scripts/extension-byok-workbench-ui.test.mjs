@@ -10,10 +10,12 @@ const pagePath = `${root}/pages/ai-image-workbench.js`;
 const workspaceStatePath = `${root}/shared/byok/workbench-workspace-state.js`;
 const workspacePagePath = `${root}/pages/ai-image-workbench-workspace.js`;
 const hostedPagePath = `${root}/pages/ai-image-workbench-hosted.js`;
+const batchClientPath = `${root}/shared/byok/workbench-batch-client.js`;
+const batchPagePath = `${root}/pages/ai-image-workbench-batch.js`;
 
 for (const path of [
   htmlPath, launchPath, cssPath, pagePath, workspaceStatePath, workspacePagePath,
-  hostedPagePath,
+  hostedPagePath, batchClientPath, batchPagePath,
 ]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
 }
@@ -22,11 +24,13 @@ const html = fs.readFileSync(htmlPath, 'utf8');
 const launchHtml = fs.readFileSync(launchPath, 'utf8');
 const css = fs.readFileSync(cssPath, 'utf8');
 const pageSource = fs.readFileSync(pagePath, 'utf8');
+const batchPageSource = fs.readFileSync(batchPagePath, 'utf8');
 const verifierSource = fs.readFileSync('scripts/verify-extension-package.mjs', 'utf8');
 const preflightSource = fs.readFileSync('scripts/preflight.mjs', 'utf8');
 
 assert.match(html, /ai-image-workbench\.css/u);
 assert.match(html, /shared\/byok\/workbench-client\.js/u);
+assert.match(html, /shared\/byok\/workbench-batch-client\.js/u);
 assert.match(html, /shared\/contracts\/ai-image-workbench-v1\.js/u);
 assert.match(html, /shared\/byok\/workbench-workspace-state\.js/u);
 assert.match(html, /ai-image-workbench-workspace\.js/u);
@@ -40,6 +44,10 @@ assert.ok(
   'the fail-closed hosted authority controller must load before BYOK page startup',
 );
 assert.ok(
+  html.indexOf('./ai-image-workbench-batch.js') < html.indexOf('./ai-image-workbench.js'),
+  'the BYOK batch page controller must load before the legacy page delegate',
+);
+assert.ok(
   html.indexOf('shared/byok/workbench-workspace-state.js')
     < html.indexOf('ai-image-workbench-workspace.js'),
   'workspace state must load before the page controller',
@@ -50,6 +58,9 @@ for (const id of [
   'workspaceLibraryList', 'workspaceSlotList', 'workspacePromptInspector',
   'workspacePromptInput', 'workspaceNegativePromptInput', 'workspaceSavePromptButton',
   'workspaceReferenceSummary', 'workspaceTaskDock', 'workspaceTaskSummary',
+  'batchStatus', 'batchStateBadge', 'batchSlotSelection', 'batchConcurrency',
+  'batchAcceptButton', 'batchRecoverButton', 'batchClearButton', 'batchRecoveryList',
+  'batchPreviewPanel', 'batchPreviewImage', 'batchPreviewMeta', 'batchPreviewCloseButton',
 ]) {
   assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
 }
@@ -59,6 +70,10 @@ assert.match(html, /id=["']profileSelect["']/u);
 assert.match(html, /id=["']promptInput["'][^>]*maxlength=["']8000["']/u);
 assert.match(html, /id=["']negativePromptInput["'][^>]*maxlength=["']4000["']/u);
 assert.match(html, /id=["']generateButton["']/u);
+assert.match(
+  html,
+  /<select\s+id=["']batchConcurrency["']\s+disabled>\s*<option\s+value=["']1["']>1<\/option>\s*<\/select>/u,
+);
 assert.match(html, /id=["']rejectButton["']/u);
 assert.match(html, /id=["']approveButton["']/u);
 assert.match(html, /接收并绑定 ERP/u);
@@ -87,6 +102,7 @@ assert.match(
 assert.match(css, /prefers-reduced-motion/u);
 assert.doesNotMatch(pageSource, /innerHTML|localStorage|storage\.local|storage\.sync|apiKey/u);
 assert.match(pageSource, /event\.isTrusted\s*!==\s*true/u);
+assert.match(batchPageSource, /nodes\.concurrency\.disabled\s*=\s*true/u);
 assert.match(pageSource, /preview\.revoke\(\)/u);
 assert.doesNotMatch(pageSource, /只查询同一幂等回执|不会重新生成或重复上传/u);
 assert.match(pageSource, /先核对[^。]*回执[^。]*没有活动[^。]*同一图片字节/u);
@@ -101,6 +117,8 @@ assert.match(preflightSource, /scripts\/extension-byok-workbench-ui\.test\.mjs/u
 assert.match(preflightSource, /scripts\/extension-byok-workbench-runtime-handler\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-state\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-ui\.test\.mjs/u);
+assert.match(preflightSource, /scripts\/extension-byok-workbench-batch-client\.test\.mjs/u);
+assert.match(preflightSource, /scripts\/extension-byok-workbench-batch-page-controller\.test\.mjs/u);
 
 class TestNode {
   constructor(id, tagName = 'div') {
@@ -728,6 +746,9 @@ function createPageHarness(options = {}) {
     isByokExecutionAllowed() { return true; },
     async refresh() { return true; },
   };
+  if (options.batchController) {
+    harnessContext.SS_ERP_BYOK_WORKBENCH_BATCH_PAGE_CONTROLLER = options.batchController;
+  }
   let workspaceRuntimeRevision = 0;
   harnessContext.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
     nextRuntimeRevision() {
@@ -1491,6 +1512,43 @@ for (const transientCode of [
   assert.match(harness.nodes.pageStatus.textContent, /确认失败.*OZON_IMPORT_REJECTED/u);
   assert.doesNotMatch(harness.nodes.pageStatus.textContent, /恢复流程|继续核对/u);
   assert.equal(harness.nodes.publishRecoverButton.hidden, true);
+}
+
+{
+  let batchStarts = 0;
+  const harness = createPageHarness({
+    batchController: {
+      isAvailable() { return true; },
+      isLocked() { return false; },
+      syncGenerateControl() { return true; },
+      async startFromPage() { batchStarts += 1; return true; },
+    },
+  });
+  await flushAsync(8);
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(batchStarts, 1, 'the visible generate command delegates to the batch controller');
+  assert.equal(harness.calls.some((row) => row[0] === 'generate'), false,
+    'the legacy Provider path cannot run beside an available batch controller');
+}
+
+{
+  const authoritative = { value: isolatedPublicState() };
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  const next = isolatedPublicState();
+  next.context.draftRevision = 4;
+  next.context.draftVersion = 5;
+  authoritative.value = next;
+  harness.dispatchDocument('ss-erp:workspace-authoritative-reload', {
+    contractVersion: 'extension-byok-workbench-authoritative-reload/v1',
+    boundDraftRevision: 4,
+    boundDraftVersion: 5,
+  });
+  await flushAsync(8);
+  assert.equal(harness.calls.filter((row) => row[0] === 'state').length >= 2, true);
+  assert.match(harness.nodes.contextDraft.textContent, /r4.*v5/u,
+    'batch ingest success must reload the authoritative bound draft');
 }
 
 console.log('extension BYOK workbench UI tests passed');

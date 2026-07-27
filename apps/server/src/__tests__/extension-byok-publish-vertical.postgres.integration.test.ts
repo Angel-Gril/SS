@@ -112,6 +112,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     const snapshotId = `byok_publish_snapshot_${suffix}`;
     const sourceAssetId = `source_publish_asset_${suffix}`;
     const byokAssetId = `byok_publish_asset_${suffix}`;
+    const executionIntentId = `byok_publish_intent_${suffix}`;
     const resultSha256 = 'a'.repeat(64);
     const now = new Date();
 
@@ -232,6 +233,9 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       providerOperation: 'TEXT_TO_IMAGE',
       requestMode: 'json',
       model: 'fixture-image-model',
+      executionIntentId,
+      providerIdempotencyKey: 'provider-attempt-0001',
+      providerRequestHash: 'd'.repeat(64),
       providerRequestIdSha256: null,
       promptSha256: 'e'.repeat(64),
       negativePromptSha256: null,
@@ -250,6 +254,42 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       readiness: { contractVersion: 'extension-byok-readiness/v1', policyRevision: 7 },
       authority: { sourceCaptureSnapshotId: snapshotId },
     };
+    await client.extensionByokExecutionIntent.create({
+      data: {
+        id: executionIntentId,
+        contractVersion: 'extension-byok-execution-intent/v1',
+        executionMode: 'BYOK',
+        ownerUserId,
+        actorUserId: ownerUserId,
+        deviceSessionId: claimed.session.id,
+        shopId,
+        listingWorkflowId: created.id,
+        draftRevision: ingestCommand.draftRevision,
+        draftVersion: readyBeforeIngest.draftVersion,
+        sourceCaptureSnapshotId: snapshotId,
+        supplyGoodsId: goodsId,
+        skuKey: ingestCommand.skuKey,
+        slotKey: ingestCommand.slotKey,
+        assignmentMode: ingestCommand.assignmentMode,
+        assignmentOrdinal: ingestCommand.assignmentOrdinal,
+        policyRevision: ingestCommand.readiness.policyRevision,
+        providerOriginSha256: sha256(ingestCommand.providerOrigin),
+        model: ingestCommand.model,
+        operation: ingestCommand.providerOperation,
+        requestMode: ingestCommand.requestMode,
+        providerIdempotencyKey: ingestCommand.providerIdempotencyKey,
+        providerRequestHash: ingestCommand.providerRequestHash,
+        requestHash: sha256(`${executionIntentId}:request`),
+      },
+    });
+    await client.extensionByokExecutionIntent.update({
+      where: { id: executionIntentId },
+      data: {
+        outcome: 'SUCCEEDED',
+        resultSha256,
+        outcomeUpdatedAt: new Date(),
+      },
+    });
     const ingestIdempotencyKey = `byok-ingest-${suffix}`;
     const ingestRequestHash = hashExtensionCommandRequest({
       operation: 'BYOK_MEDIA_INGEST', shopId, workflowId: created.id,

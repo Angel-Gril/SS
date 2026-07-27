@@ -27,6 +27,8 @@ function command(
   return {
     schemaVersion: 'byok-media-ingest/v1', providerOrigin: 'https://relay.example',
     providerOperation: 'TEXT_TO_IMAGE', requestMode: 'json', model: 'image-model-v1',
+    executionIntentId: 'intent-1', providerIdempotencyKey: 'provider-attempt-0001',
+    providerRequestHash: 'c'.repeat(64),
     providerRequestIdSha256: null, promptSha256: 'd'.repeat(64), negativePromptSha256: null,
     draftRevision: 3, skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
     assignmentOrdinal: 1, assignmentMode: 'APPEND', replaceConfirmed: false,
@@ -123,6 +125,25 @@ describe('BYOK listing media binding', () => {
     });
   });
 
+  it('binds a shared detail result as a product assignment using the first SKU as anchor', () => {
+    const current = draft();
+    current.selectedSkuKeys = ['sku-1', 'sku-2'];
+    const result = planByokGeneratedAssetListingBinding(current, input({
+      command: { skuKey: 'sku-1', slotKey: 'shared:detail:SCENE' },
+    }));
+    expect(result.assignment).toEqual({
+      scope: 'PRODUCT',
+      slotKey: 'shared:detail:SCENE',
+      assetId: 'byok_asset_1',
+      source: 'GENERATED',
+    });
+    expect(result.draft.media.assignments.at(-1)).toEqual(result.assignment);
+    expect(result.draft.auditEvents.at(-1)?.details).toMatchObject({
+      skuKey: 'sku-1',
+      slotKey: 'shared:detail:SCENE',
+    });
+  });
+
   it('replaces only the exact occupied slot at its frozen ordinal with explicit confirmation', () => {
     const occupied = assignment({
       slotKey: 'sku:sku-1:hero', assetId: 'source-hero',
@@ -139,6 +160,7 @@ describe('BYOK listing media binding', () => {
     ['stale revision', input({ command: { draftRevision: 2 } })],
     ['cross-shop binding', input({ binding: { shopId: 'shop-2' } })],
     ['cross-SKU slot', input({ command: { slotKey: 'sku:sku-2:hero' } })],
+    ['stale append order', input({ command: { assignmentOrdinal: 0 } })],
     ['out-of-range order', input({ command: { assignmentOrdinal: 2 } })],
     ['forged Provider hash', input({ command: { resultSha256: '9'.repeat(64) } })],
     ['external source URL', input({ asset: { sourceUrl: 'https://evil.example/result.png' } as any })],
@@ -161,6 +183,28 @@ describe('BYOK listing media binding', () => {
     expect(() => planByokGeneratedAssetListingBinding(occupied, input({
       command: { assignmentOrdinal: 1, assignmentMode: 'REPLACE', replaceConfirmed: true },
     }))).toThrow(/frozen slot and order/i);
+  });
+
+  it('rejects occupied shared detail, group-subset detail, and a wrong shared anchor', () => {
+    const occupied = draft([{
+      scope: 'PRODUCT',
+      slotKey: 'shared:detail:SCENE',
+      assetId: 'source-scene',
+      source: 'SOURCE',
+    }]);
+    expect(() => planByokGeneratedAssetListingBinding(occupied, input({
+      command: { slotKey: 'shared:detail:SCENE' },
+    }))).toThrow(/empty exact slot/i);
+
+    expect(() => planByokGeneratedAssetListingBinding(draft(), input({
+      command: { slotKey: 'group:all:detail:SCENE' },
+    }))).toThrow(/slot/i);
+
+    const wrongAnchor = draft();
+    wrongAnchor.selectedSkuKeys = ['sku-1', 'sku-2'];
+    expect(() => planByokGeneratedAssetListingBinding(wrongAnchor, input({
+      command: { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' },
+    }))).toThrow(/anchor/i);
   });
 
   it('rejects hidden URL fields already persisted in a draft assignment', () => {

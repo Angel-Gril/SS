@@ -16,6 +16,13 @@ import { OzonListingDraftRepositoryError } from './ozon-listing-draft.js';
 export const BYOK_LISTING_MEDIA_BINDING_VERSION =
   'byok-listing-media-binding/v1' as const;
 
+const SHARED_DETAIL_SLOT_KEYS = new Set([
+  'shared:detail:SCENE',
+  'shared:detail:DETAIL',
+  'shared:detail:SPEC',
+  'shared:detail:PACKAGING',
+]);
+
 export type ByokListingMediaBindingErrorCode =
   | 'BYOK_LISTING_BINDING_INPUT_INVALID'
   | 'BYOK_LISTING_BINDING_DRAFT_STALE'
@@ -165,7 +172,7 @@ function normalizedAssignments(draft: OzonListingDraft): OzonListingDraftMediaAs
 function assertDraftAuthority(
   draft: OzonListingDraft,
   input: BindByokGeneratedAssetToListingDraftInput,
-): void {
+): 'PRODUCT' | 'SKU' {
   const { binding, command } = input;
   if (!binding.shopId
     || !binding.workflowId
@@ -183,10 +190,18 @@ function assertDraftAuthority(
     || draft.runState === 'PERMANENT_FAILURE') {
     fail('BYOK_LISTING_BINDING_DRAFT_STALE', 409, 'The listing draft changed before BYOK binding');
   }
-  const prefix = `sku:${command.skuKey}:`;
-  if (!command.slotKey.startsWith(prefix) || command.slotKey.length <= prefix.length) {
-    fail('BYOK_LISTING_BINDING_INPUT_INVALID', 400, 'BYOK slot does not belong to the selected SKU');
+  if (command.slotKey === `sku:${command.skuKey}:hero`) return 'SKU';
+  if (SHARED_DETAIL_SLOT_KEYS.has(command.slotKey)) {
+    if (draft.selectedSkuKeys[0] !== command.skuKey) {
+      fail(
+        'BYOK_LISTING_BINDING_INPUT_INVALID',
+        400,
+        'BYOK shared detail anchor is not the first selected SKU',
+      );
+    }
+    return 'PRODUCT';
   }
+  return fail('BYOK_LISTING_BINDING_INPUT_INVALID', 400, 'BYOK slot target is unsupported');
 }
 
 function assertAssetAuthority(
@@ -225,12 +240,9 @@ function sourceForOperation(
 
 function assignmentMatches(
   assignment: OzonListingDraftMediaAssignment,
-  skuKey: string,
   slotKey: string,
 ): boolean {
-  return assignment.scope === 'SKU'
-    && assignment.skuKey === skuKey
-    && assignment.slotKey === slotKey;
+  return assignment.slotKey === slotKey;
 }
 
 function plannedAssignments(
@@ -240,7 +252,7 @@ function plannedAssignments(
 ): OzonListingDraftMediaAssignment[] {
   const { command, asset } = input;
   const existingIndex = current.findIndex((value) => (
-    assignmentMatches(value, command.skuKey, command.slotKey)
+    assignmentMatches(value, command.slotKey)
   ));
   const duplicateAssetIndex = current.findIndex((value) => value.assetId === asset.id);
   if (duplicateAssetIndex >= 0 && duplicateAssetIndex !== existingIndex) {
@@ -250,12 +262,10 @@ function plannedAssignments(
     if (command.replaceConfirmed || existingIndex >= 0) {
       fail('BYOK_LISTING_BINDING_SLOT_CONFLICT', 409, 'BYOK append requires an empty exact slot');
     }
-    if (current.length >= 500 || command.assignmentOrdinal > current.length) {
+    if (current.length >= 500 || command.assignmentOrdinal !== current.length) {
       fail('BYOK_LISTING_BINDING_ORDER_CONFLICT', 409, 'BYOK assignment ordinal is out of range');
     }
-    const next = [...current];
-    next.splice(command.assignmentOrdinal, 0, assignment);
-    return next;
+    return [...current, assignment];
   }
   if (!command.replaceConfirmed
     || existingIndex < 0
@@ -280,7 +290,7 @@ export function planByokGeneratedAssetListingBinding(
   draft: OzonListingDraft,
   input: BindByokGeneratedAssetToListingDraftInput,
 ): ByokListingMediaBindingResult {
-  assertDraftAuthority(draft, input);
+  const assignmentScope = assertDraftAuthority(draft, input);
   assertAssetAuthority(input);
   if (input.actorUserId !== input.binding.ownerUserId) {
     fail('BYOK_LISTING_BINDING_INPUT_INVALID', 403, 'BYOK binding actor is not the device owner');
@@ -294,13 +304,14 @@ export function planByokGeneratedAssetListingBinding(
     fail('BYOK_LISTING_BINDING_DRAFT_STALE', 409, 'Listing draft mutation state is invalid');
   }
   const current = normalizedAssignments(draft);
-  const assignment: OzonListingDraftMediaAssignment = {
-    scope: 'SKU',
-    skuKey: input.command.skuKey,
+  const assignmentBase = {
     slotKey: input.command.slotKey,
     assetId: input.asset.id,
     source: sourceForOperation(input.command.providerOperation),
   };
+  const assignment: OzonListingDraftMediaAssignment = assignmentScope === 'PRODUCT'
+    ? { scope: 'PRODUCT', ...assignmentBase }
+    : { scope: 'SKU', skuKey: input.command.skuKey, ...assignmentBase };
   const assignments = plannedAssignments(current, input, assignment);
   const sourceDraftRevision = draft.revision;
   const sourceDraftVersion = draft.draftVersion;

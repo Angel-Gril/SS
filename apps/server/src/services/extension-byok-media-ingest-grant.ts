@@ -16,6 +16,7 @@ import type {
   ExtensionCommandConsumeResult,
   ExtensionCommandInspectResult,
 } from './extension-command-grants.js';
+import { containsSecretBearingIdentifier } from './extension-byok-media-provenance.js';
 
 /**
  * This is an authorization operation, not an AI Provider operation.  The
@@ -25,6 +26,15 @@ import type {
 export const EXTENSION_BYOK_MEDIA_INGEST_OPERATION = 'BYOK_MEDIA_INGEST' as const;
 export const EXTENSION_BYOK_MEDIA_INGEST_SCOPE = 'byok:media:ingest' as const;
 export const EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION = 'byok-media-ingest/v1' as const;
+export const EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION =
+  'byok-media-ingest-batch/v1' as const;
+
+const SHARED_DETAIL_SLOT_KEYS = new Set([
+  'shared:detail:SCENE',
+  'shared:detail:DETAIL',
+  'shared:detail:SPEC',
+  'shared:detail:PACKAGING',
+]);
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const hasControlCharacter = (value: string) => [...value].some((character) => {
@@ -40,8 +50,8 @@ const safeIdentity = (maximum: number) => z.string().min(1).max(maximum)
   .refine((value) => !/^(?:sk-|rk-|xai-|gsk_|hf_|r8_|ghp_|github_pat_|AIza|AKIA|ASIA)[A-Za-z0-9_-]+/iu.test(value));
 const boundedModel = z.string().trim().min(1).max(200)
   .refine((value) => !hasControlCharacter(value))
-  .refine((value) => !/(?:https?|ftp):\/\//iu.test(value))
-  .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value));
+  .refine((value) => !containsSecretBearingIdentifier(value));
+const grantIdempotencyKey = safeIdentity(200).refine((value) => value.length >= 16);
 
 const commandSchema = z.object({
   schemaVersion: z.literal(EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION),
@@ -49,6 +59,9 @@ const commandSchema = z.object({
   providerOperation: z.enum(EXTENSION_BYOK_OPERATIONS),
   requestMode: z.enum(['json', 'multipart']),
   model: boundedModel,
+  executionIntentId: safeIdentity(200),
+  providerIdempotencyKey: safeIdentity(200).refine((value) => value.length >= 16),
+  providerRequestHash: sha256,
   providerRequestIdSha256: sha256.nullable(),
   promptSha256: sha256,
   negativePromptSha256: sha256.nullable(),
@@ -97,10 +110,11 @@ const commandSchema = z.object({
       || input.maskSha256 === null)) {
     invalid('INPAINT provenance is inconsistent');
   }
+  const supportedSlot = input.slotKey === `sku:${input.skuKey}:hero`
+    || SHARED_DETAIL_SLOT_KEYS.has(input.slotKey);
   if (input.skuKey !== input.skuKey.normalize('NFKC')
     || input.slotKey !== input.slotKey.normalize('NFKC')
-    || !input.slotKey.startsWith(`sku:${input.skuKey}:`)
-    || input.slotKey.length <= `sku:${input.skuKey}:`.length) {
+    || !supportedSlot) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['slotKey'],
@@ -116,6 +130,42 @@ const commandSchema = z.object({
   }
 });
 
+const batchCommandSchema = z.object({
+  schemaVersion: z.literal(EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION),
+  executionBatchId: safeIdentity(200),
+  items: z.array(commandSchema).min(1).max(4),
+}).strict().superRefine((input, context) => {
+  const first = input.items[0]!;
+  const uniqueFields: Array<keyof typeof first> = [
+    'executionIntentId',
+    'providerIdempotencyKey',
+    'providerRequestHash',
+    'resultSha256',
+    'slotKey',
+  ];
+  for (const field of uniqueFields) {
+    if (new Set(input.items.map((item) => item[field])).size !== input.items.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['items'],
+        message: `Batch ${field} values must be unique`,
+      });
+    }
+  }
+  input.items.forEach((item, index) => {
+    if (item.draftRevision !== first.draftRevision
+      || item.assignmentMode !== 'APPEND'
+      || item.replaceConfirmed
+      || item.assignmentOrdinal !== first.assignmentOrdinal + index) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['items', index],
+        message: 'Batch items must be one ordered append against the same draft',
+      });
+    }
+  });
+});
+
 export type ExtensionByokMediaIngestCommand = z.infer<typeof commandSchema> & {
   providerOrigin: string;
 };
@@ -129,6 +179,26 @@ export type ExtensionByokMediaIngestResolvedCommand = ExtensionByokMediaIngestCo
     sourceCaptureSnapshotId: string;
   };
 };
+
+export interface ExtensionByokMediaBatchIngestCommand extends Record<string, unknown> {
+  schemaVersion: typeof EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION;
+  executionBatchId: string;
+  items: ExtensionByokMediaIngestCommand[];
+}
+
+export interface ExtensionByokMediaBatchIngestResolvedCommand extends Record<string, unknown> {
+  schemaVersion: typeof EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION;
+  executionBatchId: string;
+  items: ExtensionByokMediaIngestResolvedCommand[];
+}
+
+export type ExtensionByokMediaIngestCommandEnvelope =
+  | ExtensionByokMediaIngestCommand
+  | ExtensionByokMediaBatchIngestCommand;
+
+export type ExtensionByokMediaIngestResolvedCommandEnvelope =
+  | ExtensionByokMediaIngestResolvedCommand
+  | ExtensionByokMediaBatchIngestResolvedCommand;
 
 export class ExtensionByokMediaIngestGrantError extends Error {
   constructor(
@@ -159,6 +229,22 @@ export function parseByokMediaIngestCommand(input: unknown): ExtensionByokMediaI
   return { ...parsed.data, providerOrigin };
 }
 
+export function parseByokMediaIngestCommandEnvelope(
+  input: unknown,
+): ExtensionByokMediaIngestCommandEnvelope {
+  if ((input as { schemaVersion?: unknown } | null)?.schemaVersion
+    === EXTENSION_BYOK_MEDIA_INGEST_COMMAND_VERSION) {
+    return parseByokMediaIngestCommand(input);
+  }
+  const parsed = batchCommandSchema.safeParse(input);
+  if (!parsed.success) return invalidCommand();
+  return {
+    schemaVersion: EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION,
+    executionBatchId: parsed.data.executionBatchId,
+    items: parsed.data.items.map((item) => parseByokMediaIngestCommand(item)),
+  };
+}
+
 export interface ByokMediaIngestCommandResolverInput {
   sessionId: string;
   ownerUserId: string;
@@ -166,6 +252,7 @@ export interface ByokMediaIngestCommandResolverInput {
   shopId: string | null;
   workflowId: string | null;
   draftVersion: number | null;
+  idempotencyKey?: string;
   purpose?: 'issue' | 'execute';
   command: Record<string, unknown>;
 }
@@ -176,7 +263,7 @@ export type ByokMediaIngestCommandResolution =
     shopId: string;
     workflowId: string;
     draftVersion: number;
-    command: ExtensionByokMediaIngestResolvedCommand;
+    command: ExtensionByokMediaIngestResolvedCommandEnvelope;
   }
   | { kind: 'forbidden' | 'stale' | 'unavailable' | 'rollout_unavailable' };
 
@@ -253,13 +340,14 @@ export function createByokMediaIngestCommandResolver(
     if (input.operation !== EXTENSION_BYOK_MEDIA_INGEST_OPERATION
       || !input.shopId
       || !input.workflowId
-      || input.draftVersion == null) {
+      || input.draftVersion == null
+      || !grantIdempotencyKey.safeParse(input.idempotencyKey).success) {
       return { kind: 'forbidden' };
     }
 
-    let parsed: ExtensionByokMediaIngestCommand;
+    let parsed: ExtensionByokMediaIngestCommandEnvelope;
     try {
-      parsed = parseByokMediaIngestCommand(input.command);
+      parsed = parseByokMediaIngestCommandEnvelope(input.command);
     } catch {
       return { kind: 'forbidden' };
     }
@@ -275,6 +363,10 @@ export function createByokMediaIngestCommandResolver(
       return { kind: 'rollout_unavailable' };
     }
 
+    const commands = parsed.schemaVersion === EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION
+      ? parsed.items
+      : [parsed];
+    const sourceDraftRevision = commands[0]!.draftRevision;
     if (!shop
       || shop.id !== input.shopId
       || shop.userId !== input.ownerUserId
@@ -287,30 +379,62 @@ export function createByokMediaIngestCommandResolver(
       || typeof draft.sourceCaptureSnapshotId !== 'string'
       || !draft.sourceCaptureSnapshotId
       || !Array.isArray(draft.selectedSkuKeys)
-      || !draft.selectedSkuKeys.includes(parsed.skuKey)) {
+      || commands.some((command) => (
+        !draft!.selectedSkuKeys.includes(command.skuKey)
+        || (command.slotKey !== `sku:${command.skuKey}:hero`
+          && (!SHARED_DETAIL_SLOT_KEYS.has(command.slotKey)
+            || command.skuKey !== draft!.selectedSkuKeys[0]))
+      ))) {
       return { kind: 'forbidden' };
     }
     const staleDraft = draft.draftVersion !== input.draftVersion
-      || draft.revision !== parsed.draftRevision;
+      || draft.revision !== sourceDraftRevision;
     if (staleDraft && input.purpose !== 'execute') {
       return { kind: 'stale' };
     }
 
-    const readinessInput: ByokReadinessInput = {
-      ownerUserId: input.ownerUserId,
-      shopId: shop.id,
-      deviceSessionId: input.sessionId,
-      providerOrigin: parsed.providerOrigin,
-      operation: parsed.providerOperation,
-    };
-    let readiness: ExtensionByokReadinessDecision | null;
-    try {
-      readiness = await options.getReadiness(readinessInput);
-    } catch {
-      return { kind: 'rollout_unavailable' };
+    const resolvedCommands: ExtensionByokMediaIngestResolvedCommand[] = [];
+    const readinessCache = new Map<string, ExtensionByokReadinessDecision>();
+    for (const command of commands) {
+      const readinessInput: ByokReadinessInput = {
+        ownerUserId: input.ownerUserId,
+        shopId: shop.id,
+        deviceSessionId: input.sessionId,
+        providerOrigin: command.providerOrigin,
+        operation: command.providerOperation,
+      };
+      const cacheKey = `${command.providerOrigin}\n${command.providerOperation}`;
+      let readiness = readinessCache.get(cacheKey) || null;
+      if (!readiness) {
+        try {
+          readiness = await options.getReadiness(readinessInput);
+        } catch {
+          return { kind: 'rollout_unavailable' };
+        }
+        if (!readiness || !readinessIsAllowed(readiness, readinessInput)) {
+          return { kind: 'unavailable' };
+        }
+        readinessCache.set(cacheKey, readiness);
+      }
+      if (!readiness) return { kind: 'unavailable' };
+      resolvedCommands.push({
+        ...command,
+        readiness: {
+          contractVersion: EXTENSION_BYOK_READINESS_VERSION,
+          policyRevision: Number(readiness.policyRevision),
+        },
+        authority: { sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId },
+      });
     }
-    if (!readinessIsAllowed(readiness, readinessInput)) return { kind: 'unavailable' };
-    const policyRevision = Number(readiness!.policyRevision);
+
+    const resolvedCommand: ExtensionByokMediaIngestResolvedCommandEnvelope =
+      parsed.schemaVersion === EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION
+        ? {
+          schemaVersion: EXTENSION_BYOK_MEDIA_BATCH_INGEST_COMMAND_VERSION,
+          executionBatchId: parsed.executionBatchId,
+          items: resolvedCommands,
+        }
+        : resolvedCommands[0]!;
 
     return {
       kind: 'allowed',
@@ -321,16 +445,7 @@ export function createByokMediaIngestCommandResolver(
       // version so the transaction can distinguish an exact replay from a
       // genuinely stale unconsumed grant without weakening issuance.
       draftVersion: staleDraft ? input.draftVersion : draft.draftVersion,
-      command: {
-        ...parsed,
-        readiness: {
-          contractVersion: EXTENSION_BYOK_READINESS_VERSION,
-          policyRevision,
-        },
-        authority: {
-          sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
-        },
-      },
+      command: resolvedCommand,
     };
   };
 }

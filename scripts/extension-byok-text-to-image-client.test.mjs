@@ -164,7 +164,58 @@ function createStorage(initial = {}) {
   };
 }
 
-function loadPersistentClient({ localStorage, sessionStorage, fetchImpl, timeoutMs = 15 }) {
+function createExecutionIntentHarness(overrides = {}) {
+  const calls = [];
+  let sequence = 0;
+  const client = overrides.executionIntentClient || {
+    async claim(input) {
+      calls.push({ method: 'claim', input: plain(input) });
+      if (overrides.executionIntentClaimError) throw overrides.executionIntentClaimError;
+      sequence += 1;
+      const binding = input.readinessBinding;
+      return {
+        contractVersion: 'extension-byok-execution-intent/v1',
+        intentId: overrides.executionIntentId || `intent-${sequence}`,
+        replayed: false,
+        executionMode: 'BYOK',
+        outcome: 'PENDING',
+        providerIdempotencyKey: input.providerIdempotencyKey,
+        providerRequestHash: input.providerRequestHash,
+        context: {
+          shopId: binding.shopId,
+          workflowId: binding.workflowId,
+          draftRevision: binding.draftRevision,
+          draftVersion: binding.draftVersion,
+          skuKey: binding.skuKey,
+          slotKey: binding.slotKey,
+        },
+      };
+    },
+    async reportOutcome(input) {
+      calls.push({ method: 'reportOutcome', input: plain(input) });
+      if (overrides.executionIntentReportError) throw overrides.executionIntentReportError;
+      return {
+        contractVersion: 'extension-byok-execution-intent-outcome/v1',
+        intentId: input.intentId,
+        replayed: false,
+        outcome: input.outcome,
+        providerIdempotencyKey: input.providerIdempotencyKey,
+        providerRequestHash: input.providerRequestHash,
+        providerRequestIdSha256: input.providerRequestIdSha256,
+        resultSha256: input.resultSha256,
+      };
+    },
+  };
+  return { client, calls };
+}
+
+function loadPersistentClient({
+  localStorage,
+  sessionStorage,
+  fetchImpl,
+  timeoutMs = 15,
+  executionIntentClient,
+}) {
   const context = {
     AbortController, Array, ArrayBuffer, Blob, Boolean, Date, DOMException, Error, Event,
     JSON, Map, Math, Number, Object, Promise, Response, Set, String, TextDecoder, TextEncoder,
@@ -189,12 +240,15 @@ function loadPersistentClient({ localStorage, sessionStorage, fetchImpl, timeout
     permissions: createPermissions(),
     sessionStorage,
   });
+  const executionIntent = createExecutionIntentHarness({ executionIntentClient });
   return {
     schema: context.SS_ERP_BYOK_PROFILE_SCHEMA,
     store,
+    executionIntentCalls: executionIntent.calls,
     client: context.SS_ERP_BYOK_TEXT_TO_IMAGE_CLIENT.createClient({
       profileStore: store,
       permissionBroker,
+      executionIntentClient: executionIntent.client,
       fetchImpl,
       timeoutMs,
       crypto: webcrypto,
@@ -339,9 +393,11 @@ function loadClient(options = {}) {
     sessionStorage: permissionSessionStorage,
     readinessBridge: options.permissionReadinessBridge,
   });
+  const executionIntent = createExecutionIntentHarness(options);
   const client = context.SS_ERP_BYOK_TEXT_TO_IMAGE_CLIENT.createClient({
     profileStore,
     permissionBroker,
+    executionIntentClient: executionIntent.client,
     fetchImpl: options.fetchImpl,
     authorizeResultOrigin: options.authorizeResultOrigin,
     timeoutMs: options.timeoutMs,
@@ -354,6 +410,7 @@ function loadClient(options = {}) {
     permissionBroker,
     TestEvent,
     storeCalls,
+    executionIntentCalls: executionIntent.calls,
     rotateCredential() {
       credentialRevision = '2'.repeat(64);
       currentApiKey = 'sk-rotated-secret-sentinel';
@@ -364,6 +421,326 @@ function loadClient(options = {}) {
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
+
+test('prepares an opaque text request without credential, claim, persistence, or network I/O', async () => {
+  let fetchCalls = 0;
+  let permissionChecks = 0;
+  const loaded = loadClient({
+    permissions: {
+      async contains() { permissionChecks += 1; return true; },
+      async request() { throw new Error('must not request permission'); },
+      async remove() { return false; },
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({
+        id: 'provider-prepared-text-1',
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const input = request({ idempotencyKey: 'provider-prepared-text-0001' });
+
+  const prepared = await loaded.client.prepareDispatch(input);
+
+  assert.deepEqual(Object.keys(prepared).sort(), [
+    'contractVersion',
+    'operation',
+    'preparedRequestHandle',
+    'providerIdempotencyKey',
+    'providerRequestHash',
+    'requestMode',
+  ]);
+  assert.equal(prepared.contractVersion, 'extension-byok-prepared-provider-request/v1');
+  assert.equal(prepared.operation, 'TEXT_TO_IMAGE');
+  assert.equal(prepared.requestMode, 'json');
+  assert.equal(prepared.providerIdempotencyKey, input.idempotencyKey);
+  assert.match(prepared.providerRequestHash, /^[a-f0-9]{64}$/u);
+  assert.match(prepared.preparedRequestHandle, /^[a-zA-Z0-9:_-]{20,200}$/u);
+  assert.equal(JSON.stringify(prepared).includes(input.prompt), false);
+  assert.equal(JSON.stringify(prepared).includes('relay.example'), false);
+  assert.equal(fetchCalls, 0);
+  assert.equal(permissionChecks, 0);
+  assert.deepEqual(loaded.executionIntentCalls, []);
+  assert.equal(
+    loaded.storeCalls.some((call) => [
+      'getCredentialSnapshotForBackground', 'beginProviderDispatch',
+    ].includes(call.method)),
+    false,
+  );
+
+  const result = await loaded.client.dispatchPrepared(prepared.preparedRequestHandle);
+  assert.equal(result.requestHash, prepared.providerRequestHash);
+  assert.equal(fetchCalls, 1);
+  assert.equal(permissionChecks > 0, true);
+  assert.deepEqual(
+    loaded.executionIntentCalls.map((call) => call.method),
+    ['claim', 'reportOutcome'],
+  );
+  assert.equal(
+    loaded.executionIntentCalls[0].input.providerRequestHash,
+    prepared.providerRequestHash,
+  );
+  await assert.rejects(
+    loaded.client.dispatchPrepared(prepared.preparedRequestHandle),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_PROVIDER_PREPARED_REQUEST_CONSUMED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false,
+  );
+  assert.equal(fetchCalls, 1);
+});
+
+test('rejects forged or released text preparation handles without Provider I/O', async () => {
+  let fetchCalls = 0;
+  const loaded = loadClient({
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('must not dispatch');
+    },
+  });
+  await assert.rejects(
+    loaded.client.prepareDispatch(request({
+      idempotencyKey: 'provider-forged-hash-text-0001',
+      providerRequestHash: 'f'.repeat(64),
+    })),
+    (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
+  );
+  const prepared = await loaded.client.prepareDispatch(request({
+    idempotencyKey: 'provider-prepared-release-text-0001',
+  }));
+  assert.deepEqual(plain(loaded.client.releasePrepared(prepared.preparedRequestHandle)), {
+    released: true,
+  });
+  assert.deepEqual(plain(loaded.client.releasePrepared(prepared.preparedRequestHandle)), {
+    released: false,
+  });
+  for (const forged of [
+    prepared,
+    'byok-prepared:00000000-0000-4000-8000-000000000000',
+    prepared.preparedRequestHandle,
+  ]) {
+    await assert.rejects(
+      loaded.client.dispatchPrepared(forged),
+      (error) => error && [
+        'SS_ERP_BYOK_PROVIDER_PREPARED_REQUEST_INVALID',
+        'SS_ERP_BYOK_PROVIDER_PREPARED_REQUEST_UNAVAILABLE',
+      ].includes(error.code),
+    );
+  }
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(loaded.executionIntentCalls, []);
+});
+
+test('claims the exact draft intent before Provider POST and reports success before release', async () => {
+  const events = [];
+  let claimed;
+  let reported;
+  const executionIntentClient = {
+    async claim(input) {
+      events.push('claim');
+      claimed = plain(input);
+      return {
+        contractVersion: 'extension-byok-execution-intent/v1',
+        intentId: 'intent-text-success-1',
+        replayed: false,
+        executionMode: 'BYOK',
+        outcome: 'PENDING',
+        providerIdempotencyKey: input.providerIdempotencyKey,
+        providerRequestHash: input.providerRequestHash,
+        context: {
+          shopId: input.readinessBinding.shopId,
+          workflowId: input.readinessBinding.workflowId,
+          draftRevision: input.readinessBinding.draftRevision,
+          draftVersion: input.readinessBinding.draftVersion,
+          skuKey: input.readinessBinding.skuKey,
+          slotKey: input.readinessBinding.slotKey,
+        },
+      };
+    },
+    async reportOutcome(input) {
+      events.push(`report:${input.outcome}`);
+      reported = plain(input);
+      return {
+        contractVersion: 'extension-byok-execution-intent-outcome/v1',
+        intentId: input.intentId,
+        replayed: false,
+        outcome: input.outcome,
+        providerIdempotencyKey: input.providerIdempotencyKey,
+        providerRequestHash: input.providerRequestHash,
+        providerRequestIdSha256: input.providerRequestIdSha256,
+        resultSha256: input.resultSha256,
+      };
+    },
+  };
+  const { client } = loadClient({
+    executionIntentClient,
+    fetchImpl: async () => {
+      events.push('fetch');
+      return jsonResponse({
+        id: 'provider-intent-success-1',
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const input = request({ idempotencyKey: 'provider-attempt-0001' });
+  const result = await client.generate(input);
+  events.push('returned');
+
+  assert.deepEqual(events, ['claim', 'fetch', 'report:SUCCEEDED', 'returned']);
+  assert.deepEqual(claimed, {
+    readinessBinding: readiness(),
+    requestMode: 'json',
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: result.requestHash,
+  });
+  assert.equal(result.executionIntentId, 'intent-text-success-1');
+  assert.deepEqual(reported, {
+    intentId: 'intent-text-success-1',
+    providerIdempotencyKey: input.idempotencyKey,
+    providerRequestHash: result.requestHash,
+    outcome: 'SUCCEEDED',
+    providerRequestIdSha256: sha256Text('provider-intent-success-1'),
+    resultSha256: createHash('sha256').update(pngBytes).digest('hex'),
+  });
+  assert.equal(client.getOperationState(input.idempotencyKey).executionIntentId, 'intent-text-success-1');
+});
+
+test('fails a rejected intent claim before dispatch and removes the undispatched entry', async () => {
+  let rejectClaim;
+  let fetchCalls = 0;
+  const intentError = Object.assign(new Error('intent unavailable'), {
+    code: 'SS_ERP_BYOK_EXECUTION_INTENT_UNAVAILABLE',
+    outcome: 'FAILED_RETRYABLE',
+  });
+  const executionIntentClient = {
+    async claim() {
+      return new Promise((_resolve, reject) => { rejectClaim = reject; });
+    },
+    async reportOutcome() {
+      throw new Error('must not report an unclaimed operation');
+    },
+  };
+  const { client, storeCalls } = loadClient({
+    executionIntentClient,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('must not dispatch');
+    },
+  });
+  const input = request({ idempotencyKey: 'provider-attempt-claim-fail-0001' });
+  const pending = client.generate(input);
+  const rejected = assert.rejects(
+    pending,
+    (error) => error === intentError,
+  );
+  while (!rejectClaim) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.getOperationState(input.idempotencyKey).dispatched, false);
+  assert.equal(fetchCalls, 0);
+  assert.equal(storeCalls.some((call) => call.method === 'beginProviderDispatch'), false);
+  rejectClaim(intentError);
+  await rejected;
+  assert.equal(client.getOperationState(input.idempotencyKey), null);
+  assert.equal(fetchCalls, 0);
+});
+
+test('never re-dispatches a persisted execution intent after local dispatch state is lost', async () => {
+  for (const persistedOutcome of ['PENDING', 'SUCCEEDED', 'FAILED_FINAL', 'UNKNOWN_OUTCOME']) {
+    let fetchCalls = 0;
+    let reportCalls = 0;
+    const executionIntentClient = {
+      async claim(input) {
+        const binding = input.readinessBinding;
+        return {
+          contractVersion: 'extension-byok-execution-intent/v1',
+          intentId: `intent-replayed-${persistedOutcome.toLowerCase()}`,
+          replayed: true,
+          executionMode: 'BYOK',
+          outcome: persistedOutcome,
+          providerIdempotencyKey: input.providerIdempotencyKey,
+          providerRequestHash: input.providerRequestHash,
+          context: {
+            shopId: binding.shopId,
+            workflowId: binding.workflowId,
+            draftRevision: binding.draftRevision,
+            draftVersion: binding.draftVersion,
+            skuKey: binding.skuKey,
+            slotKey: binding.slotKey,
+          },
+        };
+      },
+      async reportOutcome() { reportCalls += 1; },
+    };
+    const loaded = loadClient({
+      executionIntentClient,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error('a replayed execution intent must never reach Provider fetch');
+      },
+    });
+    const input = request({
+      idempotencyKey: `provider-replayed-${persistedOutcome.toLowerCase()}-0001`,
+    });
+    await assert.rejects(
+      loaded.client.generate(input),
+      (error) => error
+        && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_REPLAY_BLOCKED'
+        && error.outcome === (persistedOutcome === 'FAILED_FINAL'
+          ? 'FAILED_FINAL' : 'UNKNOWN_OUTCOME')
+        && error.automaticRetryAllowed === false
+        && error.replayed === true
+        && error.persistedOutcome === persistedOutcome,
+    );
+    assert.equal(fetchCalls, 0, persistedOutcome);
+    assert.equal(reportCalls, 0, persistedOutcome);
+    assert.equal(
+      loaded.storeCalls.some((call) => call.method === 'beginProviderDispatch'),
+      false,
+      persistedOutcome,
+    );
+  }
+});
+
+test('turns an uncertain success-outcome report into an absorbing unknown result', async () => {
+  let fetchCalls = 0;
+  const reportError = Object.assign(new Error('outcome response lost'), {
+    code: 'SS_ERP_BYOK_EXECUTION_INTENT_CLIENT_UNAVAILABLE',
+    outcome: 'FAILED_RETRYABLE',
+  });
+  const loaded = loadClient({
+    executionIntentReportError: reportError,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({
+        id: 'provider-outcome-report-lost-1',
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const input = request({ idempotencyKey: 'provider-attempt-report-lost-0001' });
+  await assert.rejects(
+    loaded.client.generate(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false
+      && error.providerRequestIdSha256 === sha256Text('provider-outcome-report-lost-1'),
+  );
+  await assert.rejects(
+    loaded.client.generate(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME'
+      && error.replayed === true,
+  );
+  assert.equal(fetchCalls, 1);
+  assert.deepEqual(
+    loaded.executionIntentCalls
+      .filter((call) => call.method === 'reportOutcome')
+      .map((call) => call.input.outcome),
+    ['SUCCEEDED', 'UNKNOWN_OUTCOME'],
+  );
+  assert.equal(loaded.client.getOperationState(input.idempotencyKey).image, null);
+});
 
 test('sends one background-owned generations request and decodes bounded b64_json', async () => {
   const calls = [];
@@ -414,9 +791,9 @@ test('sends one background-owned generations request and decodes bounded b64_jso
   assert.equal('blob' in state.image, false);
 });
 
-test('probe creates exact short-lived evidence and releases its test image without prior evidence', async () => {
+test('probe creates exact short-lived evidence without claiming or reporting a draft intent', async () => {
   let fetchCalls = 0;
-  const { client, storeCalls } = loadClient({
+  const { client, storeCalls, executionIntentCalls } = loadClient({
     evidence: [],
     fetchImpl: async () => {
       fetchCalls += 1;
@@ -442,6 +819,7 @@ test('probe creates exact short-lived evidence and releases its test image witho
   );
   assert.equal(client.getOperationState('probe-text-to-image-1').image.retained, false);
   assert.equal(JSON.stringify(result).includes('provider-probe-1'), false);
+  assert.deepEqual(executionIntentCalls, []);
 });
 
 test('accepts shop-only readiness for capability probes but never for normal generation', async () => {
@@ -469,6 +847,59 @@ test('accepts shop-only readiness for capability probes but never for normal gen
     (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
   );
   assert.equal(fetchCalls, 1);
+});
+
+test('accepts only selected-SKU hero and the four exact shared-detail slots', async () => {
+  let fetchCalls = 0;
+  const { client } = loadClient({
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const allowedSlots = [
+    'sku:sku-selected:hero',
+    'shared:detail:SCENE',
+    'shared:detail:DETAIL',
+    'shared:detail:SPEC',
+    'shared:detail:PACKAGING',
+  ];
+  for (const [index, slotKey] of allowedSlots.entries()) {
+    const result = await client.generate(request({
+      idempotencyKey: `generate-slot-${index + 1}`,
+      readinessBinding: readiness({
+        skuKey: 'sku-selected',
+        slotKey,
+        assignmentOrdinal: index,
+      }),
+    }));
+    assert.equal(result.outcome, 'SUCCEEDED');
+  }
+  assert.equal(fetchCalls, allowedSlots.length);
+
+  for (const [index, readinessOverrides] of [
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-other:hero' },
+    { skuKey: 'sku-selected', slotKey: 'sku:sku-selected:detail:1' },
+    { skuKey: 'sku-selected', slotKey: 'group:visual-1:detail:SCENE' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:FUNCTION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SPECIFICATION' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:scene' },
+    { skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE:extra' },
+    {
+      skuKey: 'sku-selected', slotKey: 'shared:detail:SCENE', assignmentMode: 'REPLACE',
+    },
+  ].entries()) {
+    await assert.rejects(
+      client.generate(request({
+        idempotencyKey: `generate-invalid-slot-${index + 1}`,
+        readinessBinding: readiness(readinessOverrides),
+      })),
+      (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_READINESS_INVALID',
+    );
+  }
+  assert.equal(fetchCalls, allowedSlots.length, 'invalid slots must fail before Provider fetch');
 });
 
 test('downloads an independently allowed URL without Provider Authorization or cookies', async () => {
@@ -800,7 +1231,7 @@ test('classifies a dispatched timeout as unknown and never blindly posts it agai
     callCount += 1;
     return new Promise(() => {});
   };
-  const { client } = loadClient({ fetchImpl, timeoutMs: 15 });
+  const { client, executionIntentCalls } = loadClient({ fetchImpl, timeoutMs: 15 });
   const input = request({ idempotencyKey: 'timeout-1' });
   await assert.rejects(
     client.generate(input),
@@ -818,6 +1249,11 @@ test('classifies a dispatched timeout as unknown and never blindly posts it agai
   assert.equal(callCount, 1);
   assert.equal(client.getOperationState('timeout-1').outcome, 'UNKNOWN_OUTCOME');
   assert.equal(client.getOperationState('timeout-1').automaticRetryAllowed, false);
+  assert.deepEqual(
+    executionIntentCalls.map((call) => [call.method, call.input.outcome || null]),
+    [['claim', null], ['reportOutcome', 'UNKNOWN_OUTCOME']],
+  );
+  assert.equal(executionIntentCalls[1].input.resultSha256, null);
 });
 
 test('persists normal-generation dispatch before POST and blocks restart replay or hash conflict', async () => {
@@ -871,7 +1307,7 @@ test('persists normal-generation dispatch before POST and blocks restart replay 
 test('fails retryably without network when the pre-dispatch tombstone cannot persist', async () => {
   let postCount = 0;
   const persistenceError = new Error('session storage write failed');
-  const { client } = loadClient({
+  const { client, executionIntentCalls } = loadClient({
     dispatchPersistenceError: persistenceError,
     fetchImpl: async () => {
       postCount += 1;
@@ -884,6 +1320,95 @@ test('fails retryably without network when the pre-dispatch tombstone cannot per
       && error.code === 'SS_ERP_BYOK_PROVIDER_DISPATCH_GUARD_UNAVAILABLE'
       && error.outcome === 'FAILED_RETRYABLE',
   );
+  assert.equal(postCount, 0);
+  assert.deepEqual(
+    executionIntentCalls.map((call) => [call.method, call.input.outcome || null]),
+    [['claim', null], ['reportOutcome', 'FAILED_FINAL']],
+  );
+  assert.deepEqual(executionIntentCalls[1].input, {
+    intentId: 'intent-1',
+    providerIdempotencyKey: 'dispatch-persistence-failed-1',
+    providerRequestHash: executionIntentCalls[0].input.providerRequestHash,
+    outcome: 'FAILED_FINAL',
+    providerRequestIdSha256: null,
+    resultSha256: null,
+  });
+  assert.equal(client.getOperationState('dispatch-persistence-failed-1'), null);
+});
+
+test('keeps a claimed undispatched text intent absorbing when FAILED_FINAL cannot be confirmed', async () => {
+  let postCount = 0;
+  let claimCount = 0;
+  let reportCount = 0;
+  const persistenceError = new Error('session storage write failed');
+  const { client } = loadClient({
+    dispatchPersistenceError: persistenceError,
+    executionIntentClient: {
+      async claim(input) {
+        claimCount += 1;
+        const binding = input.readinessBinding;
+        return {
+          contractVersion: 'extension-byok-execution-intent/v1',
+          intentId: 'intent-unresolved-text-1',
+          replayed: false,
+          executionMode: 'BYOK',
+          outcome: 'PENDING',
+          providerIdempotencyKey: input.providerIdempotencyKey,
+          providerRequestHash: input.providerRequestHash,
+          context: {
+            shopId: binding.shopId,
+            workflowId: binding.workflowId,
+            draftRevision: binding.draftRevision,
+            draftVersion: binding.draftVersion,
+            skuKey: binding.skuKey,
+            slotKey: binding.slotKey,
+          },
+        };
+      },
+      async reportOutcome() {
+        reportCount += 1;
+        throw new Error('execution outcome service unavailable');
+      },
+    },
+    fetchImpl: async () => {
+      postCount += 1;
+      throw new Error('must not dispatch');
+    },
+  });
+  const input = request({ idempotencyKey: 'dispatch-outcome-unresolved-text-1' });
+  await assert.rejects(
+    client.generate(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false
+      && error.replayed !== true,
+  );
+  assert.deepEqual(plain(client.getOperationState(input.idempotencyKey)), {
+    contractVersion: 'extension-byok-text-to-image/v1',
+    idempotencyKey: input.idempotencyKey,
+    requestHash: client.getOperationState(input.idempotencyKey).requestHash,
+    status: 'UNKNOWN_OUTCOME',
+    outcome: 'UNKNOWN_OUTCOME',
+    dispatched: false,
+    responseReceived: false,
+    errorCode: 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED',
+    automaticRetryAllowed: false,
+    providerHttpStatus: null,
+    executionIntentId: 'intent-unresolved-text-1',
+    providerRequestIdSha256: null,
+    image: null,
+  });
+  await assert.rejects(
+    client.generate(input),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_EXECUTION_INTENT_OUTCOME_UNRESOLVED'
+      && error.outcome === 'UNKNOWN_OUTCOME'
+      && error.automaticRetryAllowed === false
+      && error.replayed === true,
+  );
+  assert.equal(claimCount, 1);
+  assert.equal(reportCount, 1);
   assert.equal(postCount, 0);
 });
 
@@ -918,6 +1443,11 @@ test('fails malformed persisted normal-dispatch state closed before Provider net
       && error.automaticRetryAllowed === false,
   );
   assert.equal(postCount, 0);
+  assert.deepEqual(
+    loaded.executionIntentCalls.map((call) => call.method),
+    ['claim'],
+    'a possibly dispatched request must not be reported FAILED_FINAL',
+  );
 });
 
 test('persists an uncertain probe across MV3 client/store recreation and blocks a new probe id', async () => {
@@ -1154,7 +1684,7 @@ test('maps bounded HTTP failures without reading or echoing a hostile response b
   for (const status of [400, 429, 503]) {
     let calls = 0;
     const secretBody = 'sk-hostile-provider-response-secret';
-    const { client } = loadClient({
+    const { client, executionIntentCalls } = loadClient({
       fetchImpl: async () => {
         calls += 1;
         return new Response(secretBody.repeat(1000), { status });
@@ -1171,6 +1701,11 @@ test('maps bounded HTTP failures without reading or echoing a hostile response b
     );
     await assert.rejects(client.generate(input), (error) => error && error.replayed === true);
     assert.equal(calls, 1);
+    const reported = executionIntentCalls.filter((call) => call.method === 'reportOutcome');
+    assert.deepEqual(reported.map((call) => call.input.outcome), status === 400
+      ? ['FAILED_FINAL']
+      : []);
+    if (reported[0]) assert.equal(reported[0].input.resultSha256, null);
   }
 });
 

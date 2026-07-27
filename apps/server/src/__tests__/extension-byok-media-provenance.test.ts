@@ -53,6 +53,7 @@ function validInput(overrides: Record<string, unknown> = {}) {
     resultHeight: 1024,
     idempotencyKey: 'byok-ingest:workflow-1:sku:blue-mug:hero:0:attempt:1',
     requestHash: HASH.request,
+    executionIntentId: 'intent-1',
     publishIntentId: null,
     publishReceiptId: null,
     erpAiChargeCents: 0,

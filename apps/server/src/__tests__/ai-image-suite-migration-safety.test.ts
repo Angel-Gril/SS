@@ -164,8 +164,8 @@ describe('AI image suite migration safety', () => {
   });
 
   it('exposes the tenant-bound Prisma inverse relations and reference model', () => {
-    expect(schema).toContain('aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]');
-    expect(schema).toContain('referenceAssets         AiMediaSuiteReferenceAsset[]');
+    expect(schema).toMatch(/\baiMediaSuiteReferences\s+AiMediaSuiteReferenceAsset\[\]/u);
+    expect(schema).toMatch(/\breferenceAssets\s+AiMediaSuiteReferenceAsset\[\]/u);
     expect(schema).toContain('model AiMediaSuiteReferenceAsset {');
     expect(schema).toMatch(/@@unique\(\[ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend\].*media_asset_source_capture_storage_key/u);
     expect(schema).toMatch(/suite\s+AiMediaSuite\s+@relation\(fields: \[suiteId, ownerUserId\], references: \[id, ownerUserId\]/u);
