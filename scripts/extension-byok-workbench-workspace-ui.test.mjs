@@ -89,6 +89,8 @@ class FakeNode {
 
   setAttribute(name, value) { this.attributes[name] = String(value); }
 
+  removeAttribute(name) { delete this.attributes[name]; }
+
   appendChild(child) {
     const movedFocusedSubtree = child.parentNode === this && activeDocument
       && [child, ...descendants(child)].includes(activeDocument.activeElement);
@@ -217,6 +219,11 @@ context.globalThis = context;
 vm.runInNewContext(fs.readFileSync(contractPath, 'utf8'), context, { filename: contractPath });
 vm.runInNewContext(fs.readFileSync(statePath, 'utf8'), context, { filename: statePath });
 vm.runInNewContext(controllerSource, context, { filename: controllerPath });
+
+assert.equal(nodes.workspaceTaskProgress.hidden, true);
+assert.equal(nodes.workspaceTaskProgress.attributes.role, undefined);
+assert.equal(nodes.workspaceTaskProgress.attributes['aria-valuenow'], undefined);
+assert.equal(nodes.workspaceTaskProgress.attributes['aria-valuemax'], undefined);
 
 function libraryItem(mediaId, sourceType, overrides = {}) {
   return {
@@ -886,6 +893,7 @@ nodes.workspacePauseButton.dispatch('click');
 assert.equal(emittedIntents.length, actionCountBeforeUntrustedPause);
 assert.match(nodes.workspaceTaskSummary.textContent, /无法创建安全的操作标识/u);
 context.crypto.randomUUID = workingRandomUUID;
+nodes.workspacePauseButton.focus();
 nodes.workspacePauseButton.dispatch('click');
 assertActionIntent(emittedIntents.at(-1), {
   action: 'PAUSE_AFTER_CURRENT',
@@ -895,6 +903,8 @@ assertActionIntent(emittedIntents.at(-1), {
   attemptId: null,
 });
 assert.equal(nodes.workspacePauseButton.disabled, true);
+assert.equal(document.activeElement, nodes.workspacePauseButton,
+  'the trusted click keeps focus on the pending control until acknowledgement');
 assert.match(nodes.workspacePauseButton.title, /等待.*确认/u);
 const intentCountWhilePausePending = emittedIntents.length;
 queuedCancel.dispatch('click');
@@ -908,6 +918,8 @@ dispatchDocument('ss-erp:workspace-runtime', activeTaskProjection(pausingRevisio
 assert.equal(nodes.workspacePauseButton.disabled, true);
 assert.match(nodes.workspacePauseButton.title, /当前任务完成后暂停/u);
 assert.equal(nodes.workspaceContinueButton.disabled, false);
+assert.equal(document.activeElement, nodes.workspaceContinueButton,
+  'acknowledgement moves focus away from the now-disabled pause control');
 queuedCancel.dispatch('click');
 assertActionIntent(emittedIntents.at(-1), {
   action: 'CANCEL_QUEUED',

@@ -334,10 +334,25 @@
     return false;
   }
 
+  function isIntentOrigin(node, intent) {
+    if (!node || !intent) return false;
+    if (intent.action === 'PAUSE_AFTER_CURRENT') return node === nodes.pauseButton;
+    if (intent.action === 'CONTINUE') return node === nodes.continueButton;
+    if (intent.action === 'REGENERATE_SLOT') return node === nodes.regenerateButton;
+    var action = node.dataset && node.dataset.workspaceAction;
+    var actionMatches = (intent.action === 'CANCEL_QUEUED' && action === 'cancel-queued')
+      || (intent.action === 'KEEP_ATTEMPT' && action === 'keep-attempt')
+      || (intent.action === 'REJECT_ATTEMPT' && action === 'reject-attempt');
+    return actionMatches
+      && node.dataset.slotKey === (intent.slotKey || undefined)
+      && node.dataset.attemptId === (intent.attemptId || undefined);
+  }
+
   function restoreIntentFocus(intent) {
     if (!intent) return;
     var active = global.document.activeElement;
-    if (active && active !== global.document.body) return;
+    if (active && active !== global.document.body && active.isConnected !== false
+      && (!isIntentOrigin(active, intent) || !active.disabled)) return;
     if (intent.action === 'CANCEL_QUEUED') {
       var queuedControls = Array.from(queuedAttemptNodes.values()).map(function (row) {
         return row._workspace.cancelButton;
@@ -1220,8 +1235,18 @@
     var value = task ? task.selectedSlots : 0;
     var maximum = task ? task.totalSlots : 0;
     nodes.taskProgress.textContent = value + ' / ' + maximum + ' 个槽位已保留候选';
-    nodes.taskProgress.setAttribute('aria-valuenow', String(value));
-    nodes.taskProgress.setAttribute('aria-valuemax', String(maximum));
+    nodes.taskProgress.hidden = maximum <= 0;
+    if (maximum > 0) {
+      nodes.taskProgress.setAttribute('role', 'progressbar');
+      nodes.taskProgress.setAttribute('aria-valuemin', '0');
+      nodes.taskProgress.setAttribute('aria-valuenow', String(value));
+      nodes.taskProgress.setAttribute('aria-valuemax', String(maximum));
+    } else {
+      nodes.taskProgress.removeAttribute('role');
+      nodes.taskProgress.removeAttribute('aria-valuemin');
+      nodes.taskProgress.removeAttribute('aria-valuenow');
+      nodes.taskProgress.removeAttribute('aria-valuemax');
+    }
     if (nodes.taskProgress.style && typeof nodes.taskProgress.style.setProperty === 'function') {
       nodes.taskProgress.style.setProperty(
         '--workspace-progress',
@@ -1666,9 +1691,7 @@
     promptDisabledReasonNode.textContent = '';
     nodes.referenceSummary.textContent = '等待工作区数据';
     nodes.taskSummary.textContent = '等待任务数据';
-    nodes.taskProgress.textContent = '0 / 0 个槽位已保留候选';
-    nodes.taskProgress.setAttribute('aria-valuenow', '0');
-    nodes.taskProgress.setAttribute('aria-valuemax', '0');
+    renderTaskProgress();
     nodes.pauseButton.disabled = true;
     nodes.continueButton.disabled = true;
     nodes.taskControlReason.textContent = '';
