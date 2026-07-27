@@ -360,6 +360,7 @@
       SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED: '工作台页面已重新加载；为保护上下文，请从来源商品页重新打开。',
       SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE: 'ERP 草稿或目标槽位已变化，请从来源商品页重新打开。',
       SS_ERP_BYOK_WORKBENCH_CONTEXT_MISMATCH: '工作台上下文不一致，已阻止执行。',
+      SS_ERP_BYOK_DEVICE_AUTHORITY_STALE: '设备连接或商品审核权限已失效，请重新连接扩展后再试。',
       SS_ERP_BYOK_PROVIDER_KEY_REQUIRED: '当前档案没有可用的会话密钥，请先到 Provider 设置页加载。',
       SS_ERP_BYOK_PROVIDER_PERMISSION_REQUIRED: '当前档案尚未获得精确 Provider 来源权限。',
       SS_ERP_BYOK_PROVIDER_CAPABILITY_REQUIRED: '当前模型缺少与管理员策略一致的文生图验证证据。',

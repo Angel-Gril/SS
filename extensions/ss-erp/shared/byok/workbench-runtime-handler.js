@@ -1,7 +1,8 @@
 (function exposeByokWorkbenchRuntimeHandler(global) {
   'use strict';
 
-  var CONTRACT_VERSION = 'extension-byok-workbench-runtime-handler/v1';
+  var CONTRACT_VERSION = 'extension-byok-workbench-runtime-handler/v2';
+  var LAUNCH_DECISION_VERSION = 'extension-byok-workbench-launch-decision/v2';
   var PUBLIC_STATE_VERSION = 'extension-byok-workbench-public-state/v1';
   var OPERATION = 'TEXT_TO_IMAGE';
   var REQUEST_MODE = 'json';
@@ -85,7 +86,7 @@
     };
   }
 
-  function launchRequest(context) {
+  function launchRequest(context, preferredSkuKey, selectionKind) {
     return {
       sourcePlatform: context.sourcePlatform,
       sourceProductId: context.sourceProductId,
@@ -95,7 +96,30 @@
       workflowId: context.workflowId,
       draftRevision: context.draftRevision,
       draftVersion: context.draftVersion,
+      preferredSkuKey: preferredSkuKey,
+      selectionKind: selectionKind,
     };
+  }
+
+  function readyLaunchContext(value) {
+    return isRecord(value)
+      && exactKeys(value, ['contractVersion', 'state', 'context'])
+      && value.contractVersion === LAUNCH_DECISION_VERSION
+      && value.state === 'READY'
+      && isRecord(value.context)
+      ? value.context
+      : null;
+  }
+
+  function choiceRequiredLaunch(value) {
+    return isRecord(value)
+      && exactKeys(value, ['contractVersion', 'state', 'binding', 'skuKeys'])
+      && value.contractVersion === LAUNCH_DECISION_VERSION
+      && value.state === 'CHOICE_REQUIRED'
+      && isRecord(value.binding)
+      && Array.isArray(value.skuKeys)
+      ? value
+      : null;
   }
 
   function bindingMatchesContext(binding, context) {
@@ -210,6 +234,18 @@
     var takeByTabIfIdle = requiredMethod(sessionManager, 'takeByTabIfIdle');
     var sameContext = requiredMethod(sessionManager, 'sameContext');
     var resolveLaunch = requiredMethod(config.launchClient, 'resolve');
+    var assertSourceCurrent = requiredMethod(config, 'assertSourceCurrent');
+
+    async function sourceRemainsCurrent(value) {
+      try {
+        await assertSourceCurrent(value);
+        return true;
+      } catch (error) {
+        if (Number(error && error.status) === 409
+          || (error && error.code === 'SS_ERP_BYOK_WORKBENCH_SOURCE_STALE')) return false;
+        throw error;
+      }
+    }
     var listProfiles = config.profileStore
       && typeof config.profileStore.listPublicProfiles === 'function'
       ? config.profileStore.listPublicProfiles.bind(config.profileStore)
@@ -413,12 +449,17 @@
       }
       var resolved;
       try {
-        resolved = await resolveLaunch(launchRequest(session.context));
+        var decision = await resolveLaunch(launchRequest(
+          session.context,
+          session.context.skuKey,
+          'EXPLICIT',
+        ));
+        resolved = readyLaunchContext(decision);
       } catch (error) {
         if (error && Number(error.status) === 409) await removeSession(session);
         throw error;
       }
-      if (!sameContext(session.context, resolved)) {
+      if (!resolved || !sameContext(session.context, resolved)) {
         await removeSession(session);
         throw handlerError('SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE');
       }
@@ -1185,7 +1226,36 @@
 
     async function openFromSource(value) {
       var sender = sourceSender(value && value.sourceSender);
-      var context = await resolveLaunch(value && value.request);
+      var sourceSelectionKey = value && value.sourceSelectionKey === null
+        ? null
+        : text(
+          value && value.sourceSelectionKey,
+          500,
+          'SS_ERP_BYOK_WORKBENCH_LAUNCH_SENDER_DENIED',
+        );
+      var decision = await resolveLaunch(value && value.request);
+      var choice = choiceRequiredLaunch(decision);
+      if (choice) {
+        var choiceSourceCurrent = await sourceRemainsCurrent({
+          sourceSender: sender,
+          request: value && value.request,
+          sourceSelectionKey: sourceSelectionKey,
+        });
+        if (!choiceSourceCurrent) return Object.freeze({ state: 'stale' });
+        return Object.freeze({
+          state: 'choice_required',
+          binding: choice.binding,
+          skuKeys: choice.skuKeys,
+        });
+      }
+      var context = readyLaunchContext(decision);
+      if (!context) throw handlerError('SS_ERP_BYOK_WORKBENCH_LAUNCH_RESPONSE_INVALID');
+      var readySourceCurrent = await sourceRemainsCurrent({
+        sourceSender: sender,
+        request: value && value.request,
+        sourceSelectionKey: sourceSelectionKey,
+      });
+      if (!readySourceCurrent) return Object.freeze({ state: 'stale' });
       return openSession({
         context: context,
         sourceTabId: sender.tabId,

@@ -1532,6 +1532,33 @@ for (const transientCode of [
     'the legacy Provider path cannot run beside an available batch controller');
 }
 
+for (const [errorCode, expectedLabel] of [
+  [
+    'SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE',
+    /ERP 草稿或目标槽位已变化.*来源商品页重新打开/u,
+  ],
+  [
+    'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    /设备连接或商品审核权限已失效.*重新连接/u,
+  ],
+]) {
+  const harness = createPageHarness({
+    batchController: {
+      isAvailable() { return true; },
+      isLocked() { return false; },
+      syncGenerateControl() { return true; },
+      async startFromPage() {
+        throw Object.assign(new Error('redacted batch launch failure'), { code: errorCode });
+      },
+    },
+  });
+  await flushAsync(8);
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.match(harness.nodes.pageStatus.textContent, expectedLabel);
+  assert.doesNotMatch(harness.nodes.pageStatus.textContent, /redacted batch launch failure/u);
+}
+
 {
   const authoritative = { value: isolatedPublicState() };
   const harness = createPageHarness({ authoritative });

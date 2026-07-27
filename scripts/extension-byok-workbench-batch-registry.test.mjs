@@ -5,6 +5,8 @@ import vm from 'node:vm';
 
 const registryPath = 'extensions/ss-erp/shared/byok/workbench-batch-registry.js';
 const brokerPath = 'extensions/ss-erp/shared/byok/execution-intent-claim-broker.js';
+const runtimeHandlerPath =
+  'extensions/ss-erp/shared/byok/workbench-batch-runtime-handler.js';
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -115,7 +117,13 @@ function createHarness(options = {}) {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(brokerPath, 'utf8'), context, { filename: brokerPath });
   vm.runInNewContext(source, context, { filename: registryPath });
+  vm.runInNewContext(
+    readFileSync(runtimeHandlerPath, 'utf8'),
+    context,
+    { filename: runtimeHandlerPath },
+  );
   const api = context.SS_ERP_BYOK_WORKBENCH_BATCH_REGISTRY;
+  const runtimeApi = context.SS_ERP_BYOK_WORKBENCH_BATCH_RUNTIME_HANDLER;
 
   let operation = options.initialOperation ? plain(options.initialOperation) : null;
   let clearFailuresRemaining = options.clearFailureOnce ? 1 : 0;
@@ -160,12 +168,15 @@ function createHarness(options = {}) {
     },
   };
 
-  const batchLaunchClient = {
+  const batchLaunchClient = options.batchLaunchClient || {
     async resolve(value) {
       events.push(['launch', plain(value)]);
+      const bindingValue = { ...value };
+      delete bindingValue.preferredSkuKey;
+      delete bindingValue.selectionKind;
       return {
         contractVersion: 'extension-byok-workbench-batch-launch-context/v1',
-        ...value,
+        ...bindingValue,
         anchorSkuKey: 'sku-1', firstAssignmentOrdinal: 17,
         targets: [
           { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
@@ -465,7 +476,7 @@ function createHarness(options = {}) {
     } },
   });
   return {
-    api, registry, events, prepared, released, readiness, reported, fallbackClaims,
+    api, runtimeApi, registry, events, prepared, released, readiness, reported, fallbackClaims,
     claimBroker, executionBatchClient, sessionManager,
     get operation() { return operation; },
     get serverBatch() { return serverBatch; },
@@ -476,6 +487,116 @@ function createHarness(options = {}) {
   };
 }
 
+function rejectingBatchLaunchClient({ state, status = null, errorCode = null }) {
+  return {
+    async resolve() {
+      throw Object.assign(new Error('batch launch unavailable'), {
+        code: 'SS_ERP_BYOK_WORKBENCH_BATCH_LAUNCH_UNAVAILABLE',
+        state,
+        status,
+        errorCode,
+      });
+    },
+  };
+}
+
+test('maps only trusted batch launch transport states and never exposes ERP error codes', async () => {
+  const cases = [
+    {
+      state: 'http_error', status: 409, errorCode: 'server_context_detail',
+      expected: 'SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE',
+    },
+    {
+      state: 'http_error', status: 403, errorCode: 'server_scope_detail',
+      expected: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    },
+    {
+      state: 'scope_required', errorCode: 'server_scope_detail',
+      expected: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    },
+    {
+      state: 'authorization_required', status: 410, errorCode: 'server_revocation_detail',
+      expected: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    },
+    {
+      state: 'unpaired', errorCode: 'server_pairing_detail',
+      expected: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    },
+    {
+      state: 'http_error', status: 500,
+      errorCode: 'SS_ERP_BYOK_PROVIDER_KEY_REQUIRED',
+      expected: 'SS_ERP_BYOK_WORKBENCH_BATCH_LAUNCH_UNAVAILABLE',
+    },
+    {
+      state: 'transport_error', status: 409,
+      errorCode: 'SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE',
+      expected: 'SS_ERP_BYOK_WORKBENCH_BATCH_LAUNCH_UNAVAILABLE',
+    },
+  ];
+  for (const value of cases) {
+    const harness = createHarness({
+      batchLaunchClient: rejectingBatchLaunchClient(value),
+    });
+    await assert.rejects(
+      harness.registry.start(owner(), pageStart()),
+      (error) => error?.code === value.expected
+        && error?.code !== value.errorCode
+        && !Object.hasOwn(error, 'errorCode'),
+    );
+    assert.equal(harness.operation, null, `${value.state}/${value.status} releases start lock`);
+    assert.equal(harness.events.some((event) => event[0] === 'readiness'), false);
+    assert.equal(harness.events.some((event) => event[0] === 'reserve'), false);
+  }
+});
+
+test('returns stable batch launch recovery semantics through the runtime dispatcher', async () => {
+  const messageTypes = Object.freeze({
+    BATCH_STATE: 'batch-state',
+    BATCH_START: 'batch-start',
+    BATCH_COMMAND: 'batch-command',
+    BATCH_PREVIEW: 'batch-preview',
+    BATCH_INGEST: 'batch-ingest',
+    BATCH_RECOVER: 'batch-recover',
+    BATCH_CLEAR: 'batch-clear',
+  });
+  for (const value of [
+    {
+      state: 'http_error', status: 409, errorCode: 'private_server_context_message',
+      expected: 'SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE',
+    },
+    {
+      state: 'scope_required', errorCode: 'private_server_scope_message',
+      expected: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+    },
+  ]) {
+    const harness = createHarness({
+      batchLaunchClient: rejectingBatchLaunchClient(value),
+    });
+    const dispatcher = harness.runtimeApi.createDispatcher({
+      messageTypes,
+      registry: harness.registry,
+    });
+    const response = await dispatcher.handlers[messageTypes.BATCH_START]({
+      sender: owner(),
+      payload: {
+        contractVersion: harness.runtimeApi.REQUEST_VERSION,
+        startRequest: {
+          ...pageStart(),
+          contractVersion: 'extension-byok-workbench-batch-user-start/v1',
+        },
+      },
+    });
+    assert.deepEqual(plain(response), {
+      ok: false,
+      errorCode: value.expected,
+      error: 'BYOK batch workbench operation failed',
+      outcome: 'FAILED_FINAL',
+      automaticRetryAllowed: false,
+    });
+    assert.equal(JSON.stringify(response).includes(value.errorCode), false);
+  }
+});
+
 test('prepares every slot, reserves once, expands minimal intents, then starts coordinator', async () => {
   const harness = createHarness();
   const result = await harness.registry.start(owner(), pageStart());
@@ -483,6 +604,13 @@ test('prepares every slot, reserves once, expands minimal intents, then starts c
   assert.equal(Object.hasOwn(result, 'binding'), false);
   assertSanitizedProjection(result);
   assert.equal(harness.prepared.length, 2);
+  assert.deepEqual(harness.events.find((event) => event[0] === 'launch')[1], {
+    sourcePlatform: '1688', sourceProductId: 'source-1',
+    sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 7, draftVersion: 11,
+    preferredSkuKey: 'sku-1',
+    selectionKind: 'EXPLICIT',
+  });
   assert.equal(harness.events.filter((event) => event[0] === 'reserve').length, 1);
   const operationBegin = harness.events.find((event) => event[0] === 'operation-begin');
   const reservation = harness.events.find((event) => event[0] === 'reserve');

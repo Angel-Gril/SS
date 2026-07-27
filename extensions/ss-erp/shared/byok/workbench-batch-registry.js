@@ -64,6 +64,20 @@
       && Object.keys(value).every(function (key) { return keys.includes(key); });
   }
 
+  function normalizeBatchLaunchFailure(error) {
+    var genericCode = 'SS_ERP_BYOK_WORKBENCH_BATCH_LAUNCH_UNAVAILABLE';
+    if (!isRecord(error) || error.code !== genericCode) return error;
+    var state = typeof error.state === 'string' ? error.state : '';
+    if (state === 'http_error' && error.status === 409) {
+      return registryError('SS_ERP_BYOK_WORKBENCH_CONTEXT_STALE');
+    }
+    if (state === 'http_error' && error.status === 403
+      || ['unpaired', 'scope_required', 'authorization_required'].includes(state)) {
+      return registryError('SS_ERP_BYOK_DEVICE_AUTHORITY_STALE');
+    }
+    return registryError(genericCode);
+  }
+
   function hasControlCharacter(value) {
     for (var index = 0; index < value.length; index += 1) {
       var code = value.charCodeAt(index);
@@ -443,19 +457,26 @@
       workflowId: context.workflowId,
       draftRevision: context.draftRevision,
       draftVersion: context.draftVersion,
+      preferredSkuKey: context.skuKey,
+      selectionKind: 'EXPLICIT',
     };
   }
 
   function normalizeLaunch(value, session, slots) {
     var code = 'SS_ERP_BYOK_BATCH_REGISTRY_LAUNCH_INVALID';
     var request = launchRequest(session.context);
-    if (!isRecord(value) || value.contractVersion
+    var authorityKeys = Object.keys(request).filter(function (key) {
+      return key !== 'preferredSkuKey' && key !== 'selectionKind';
+    });
+    if (!exactKeys(value, [
+      'contractVersion', ...authorityKeys, 'anchorSkuKey', 'firstAssignmentOrdinal', 'targets',
+    ]) || value.contractVersion
       !== 'extension-byok-workbench-batch-launch-context/v1'
       || value.anchorSkuKey !== session.context.skuKey
       || !Number.isSafeInteger(value.firstAssignmentOrdinal)
       || value.firstAssignmentOrdinal < 0 || value.firstAssignmentOrdinal > 499
-      || !Array.isArray(value.targets) || value.targets.length < 1
-      || Object.keys(request).some(function (key) { return value[key] !== request[key]; })) fail(code);
+      || !Array.isArray(value.targets) || value.targets.length < 1 || value.targets.length > 500
+      || authorityKeys.some(function (key) { return value[key] !== request[key]; })) fail(code);
     var targets = value.targets.map(function (target) {
       if (!exactKeys(target, ['skuKey', 'slotKey'])) fail(code);
       return {
@@ -1460,11 +1481,15 @@
         if (JSON.stringify(initialSession.context) !== JSON.stringify(lockedSession.context)) {
           fail('SS_ERP_BYOK_BATCH_REGISTRY_SESSION_STALE');
         }
-        entry.launch = normalizeLaunch(
-          await batchLaunchClient.resolve(launchRequest(lockedSession.context)),
-          lockedSession,
-          startRequest.slots,
-        );
+        try {
+          entry.launch = normalizeLaunch(
+            await batchLaunchClient.resolve(launchRequest(lockedSession.context)),
+            lockedSession,
+            startRequest.slots,
+          );
+        } catch (error) {
+          throw normalizeBatchLaunchFailure(error);
+        }
         for (let index = 0; index < startRequest.slots.length; index += 1) {
           var slot = startRequest.slots[index];
           var readinessRequest = expectedReadinessRequest(

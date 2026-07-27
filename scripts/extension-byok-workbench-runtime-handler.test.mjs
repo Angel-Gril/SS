@@ -57,6 +57,31 @@ const launchContext = {
   skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentMode: 'APPEND',
   assignmentOrdinal: 2,
 };
+const launchBinding = Object.freeze({
+  sourcePlatform: launchContext.sourcePlatform,
+  sourceProductId: launchContext.sourceProductId,
+  sourceCaptureSnapshotId: launchContext.sourceCaptureSnapshotId,
+  supplyGoodsId: launchContext.supplyGoodsId,
+  shopId: launchContext.shopId,
+  workflowId: launchContext.workflowId,
+  draftRevision: launchContext.draftRevision,
+  draftVersion: launchContext.draftVersion,
+});
+function readyLaunchDecision(contextValue = launchContext) {
+  return {
+    contractVersion: 'extension-byok-workbench-launch-decision/v2',
+    state: 'READY',
+    context: contextValue,
+  };
+}
+function choiceLaunchDecision() {
+  return {
+    contractVersion: 'extension-byok-workbench-launch-decision/v2',
+    state: 'CHOICE_REQUIRED',
+    binding: launchBinding,
+    skuKeys: ['sku-1', 'sku-2'],
+  };
+}
 const binding = {
   ownerUserId: 'owner-1', deviceSessionId: 'session-1',
   ...launchContext,
@@ -262,13 +287,25 @@ const sessionManager = {
     return previous;
   },
 };
-let resolvedLaunchContext = launchContext;
+let resolvedLaunchDecision = readyLaunchDecision();
+let sourceCurrentFailure = null;
+let liveSourceSelectionKey = null;
 const launchClient = {
   async resolve(value) {
     calls.push(['resolve', value]);
-    return resolvedLaunchContext;
+    return resolvedLaunchDecision;
   },
 };
+async function assertSourceCurrent(value) {
+  calls.push(['source-current', value]);
+  if (sourceCurrentFailure) throw sourceCurrentFailure;
+  if (value.sourceSelectionKey !== liveSourceSelectionKey) {
+    throw Object.assign(new Error('source SKU changed'), {
+      code: 'SS_ERP_BYOK_WORKBENCH_SOURCE_STALE',
+      status: 409,
+    });
+  }
+}
 const profile = {
   id: 'profile-1', name: 'Relay', baseUrl: 'https://relay.example/v1',
   model: 'image-model-v1',
@@ -539,27 +576,70 @@ const providerSemaphore = {
   },
 };
 
-const dispatcher = api.createDispatcher({
+const dispatcherOptions = {
   messageTypes: MESSAGE_TYPES,
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
   providerClient, vault, authorityGuard, previewBroker, ingestClient, publishCoordinator,
   editController, editMediaStore, editEpochGuard,
   providerSemaphore,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
-});
+};
+assert.throws(
+  () => api.createDispatcher(dispatcherOptions),
+  (error) => error?.code === 'SS_ERP_BYOK_WORKBENCH_DEPENDENCY_UNAVAILABLE',
+  'source currency validation must be a fail-closed runtime dependency',
+);
+const dispatcher = api.createDispatcher({ ...dispatcherOptions, assertSourceCurrent });
 
-const opened = await dispatcher.openFromSource({
+resolvedLaunchDecision = choiceLaunchDecision();
+const choiceRequired = await dispatcher.openFromSource({
   request: {
     sourcePlatform: '1688', sourceProductId: 'product-1',
     sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
     shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+    preferredSkuKey: null,
+    selectionKind: 'HINT',
   },
   sourceSender: { tabId: 12, documentId: 'source-document-1', frameId: 0 },
+  sourceSelectionKey: null,
+});
+assert.deepEqual(JSON.parse(JSON.stringify(choiceRequired)), {
+  state: 'choice_required', binding: launchBinding, skuKeys: ['sku-1', 'sku-2'],
+});
+assert.equal(calls.filter((row) => row[0] === 'open').length, 0,
+  'ambiguous context must never open a workbench session');
+
+resolvedLaunchDecision = readyLaunchDecision();
+liveSourceSelectionKey = 'sku-2';
+const opensBeforeStaleSource = calls.filter((row) => row[0] === 'open').length;
+const staleSource = await dispatcher.openFromSource({
+  request: { ...launchBinding, preferredSkuKey: 'sku-1', selectionKind: 'HINT' },
+  sourceSender: { tabId: 12, documentId: 'source-document-1', frameId: 0 },
+  sourceSelectionKey: 'sku-1',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(staleSource)), { state: 'stale' });
+assert.equal(
+  calls.filter((row) => row[0] === 'open').length,
+  opensBeforeStaleSource,
+  'a same-URL source SKU switch must never open a workbench session',
+);
+liveSourceSelectionKey = 'sku-1';
+const opened = await dispatcher.openFromSource({
+  request: { ...launchBinding, preferredSkuKey: 'sku-1', selectionKind: 'HINT' },
+  sourceSender: { tabId: 12, documentId: 'source-document-1', frameId: 0 },
+  sourceSelectionKey: 'sku-1',
 });
 assert.deepEqual(JSON.parse(JSON.stringify(opened)), { state: 'workbench_opened', tabId: 77 });
 
 const stateResponse = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({ payload: {}, sender });
 assert.equal(stateResponse.ok, true);
+assert.deepEqual(JSON.parse(JSON.stringify(
+  calls.filter((row) => row[0] === 'resolve').at(-1)[1],
+)), {
+  ...launchBinding,
+  preferredSkuKey: 'sku-1',
+  selectionKind: 'EXPLICIT',
+});
 assert.equal(stateResponse.data.executionMode, 'BYOK');
 assert.equal(stateResponse.data.generationOutcome, null);
 assert.equal(stateResponse.data.profiles[0].hasKey, true);
@@ -791,12 +871,12 @@ assert.deepEqual(
   'BOUND recovery must replay the exact persisted receipt without another status request',
 );
 assert.equal(calls.filter((row) => row[0] === 'ingest-recover').length, 0);
-resolvedLaunchContext = {
+resolvedLaunchDecision = readyLaunchDecision({
   ...launchContext,
   draftRevision: 4,
   draftVersion: 5,
   assignmentOrdinal: 3,
-};
+});
 const boundState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({ payload: {}, sender });
 assert.equal(boundState.data.deliveryState, 'BOUND');
 assert.equal(boundState.data.result.ingest.assetId, 'asset-1');
@@ -836,7 +916,7 @@ const publishedState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]
   payload: {}, sender,
 });
 assert.equal(publishedState.data.publish.receiptId, 'publish-receipt-1');
-resolvedLaunchContext = launchContext;
+resolvedLaunchDecision = readyLaunchDecision();
 
 session = {
   ...session,
@@ -852,7 +932,9 @@ session = {
     ingest: null,
   },
 };
-resolvedLaunchContext = { ...launchContext, draftRevision: 4, draftVersion: 5 };
+resolvedLaunchDecision = readyLaunchDecision({
+  ...launchContext, draftRevision: 4, draftVersion: 5,
+});
 const resolvesBeforeRecovery = calls.filter((row) => row[0] === 'resolve').length;
 const recoveredIngest = await dispatcher.handlers[MESSAGE_TYPES.RECOVER_INGEST]({
   payload: { resultId }, sender,
@@ -867,7 +949,7 @@ assert.equal(
   'receipt recovery must not reject the immutable source context after the draft advanced',
 );
 assert.equal(calls.filter((row) => row[0] === 'ingest-recover').length, 1);
-resolvedLaunchContext = launchContext;
+resolvedLaunchDecision = readyLaunchDecision();
 
 session = {
   ...session,
@@ -1090,7 +1172,7 @@ session = {
   ...session,
   operation: { idempotencyKey: 'byok_batch_unresolved_1', state: 'OUTCOME_UNRESOLVED' },
 };
-resolvedLaunchContext = { ...launchContext, draftRevision: 4 };
+resolvedLaunchDecision = choiceLaunchDecision();
 const staleBatchSession = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
   payload: {}, sender,
 });
@@ -1101,7 +1183,7 @@ assert.equal(
   'OUTCOME_UNRESOLVED',
   'legacy context cleanup must retain a possibly charged batch operation',
 );
-resolvedLaunchContext = launchContext;
+resolvedLaunchDecision = readyLaunchDecision();
 const blockedRemoval = await dispatcher.removeTab(77);
 assert.equal(blockedRemoval, false);
 assert.equal(session.operation.state, 'OUTCOME_UNRESOLVED');

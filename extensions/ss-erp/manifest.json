@@ -195,6 +195,7 @@
         "shared/currency/fx-rates.js",
         "shared/source-costing/panel-core.js",
         "shared/source-costing/ai-image-suite-controller.js",
+        "shared/source-costing/ai-workbench-launch-context.js",
         "content/source-listing-workbench.js",
         "content/source-costing-panel.js"
       ],

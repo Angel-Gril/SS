@@ -192,13 +192,6 @@ function assertDraftAuthority(
   }
   if (command.slotKey === `sku:${command.skuKey}:hero`) return 'SKU';
   if (SHARED_DETAIL_SLOT_KEYS.has(command.slotKey)) {
-    if (draft.selectedSkuKeys[0] !== command.skuKey) {
-      fail(
-        'BYOK_LISTING_BINDING_INPUT_INVALID',
-        400,
-        'BYOK shared detail anchor is not the first selected SKU',
-      );
-    }
     return 'PRODUCT';
   }
   return fail('BYOK_LISTING_BINDING_INPUT_INVALID', 400, 'BYOK slot target is unsupported');

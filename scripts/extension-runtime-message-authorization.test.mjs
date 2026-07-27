@@ -312,9 +312,9 @@ test('denies content scripts, externally connected pages and inconsistent extens
   }
 });
 
-test('allows the BYOK launcher only from an exact supported source-product page', () => {
+test('allows the unified AI workbench launcher only from an exact supported source-product page', () => {
   const { policy } = loadApi();
-  const type = 'ss-erp:source-listing-workbench-byok-open';
+  const type = 'ss-erp:source-ai-workbench-open';
   const sourceSender = (url) => ({
     id: extensionId,
     url,
@@ -773,7 +773,7 @@ test('ships the authorization module as a background-only security boundary', ()
     serviceWorkerSource,
     /providerSettingsDispatcher\.handlers[\s\S]*workbenchDispatcher\.handlers[\s\S]*batchWorkbenchDispatcher\.handlers/u,
   );
-  assert.match(serviceWorkerSource, /SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE/u);
+  assert.match(serviceWorkerSource, /SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE/u);
   assert.match(serviceWorkerSource, /chrome\.tabs\.onRemoved\.addListener/u);
   assert.doesNotMatch(serviceWorkerSource, /edit and batch handlers remain dark/u);
   assert.match(

@@ -619,4 +619,191 @@ await assert.rejects(
 assert.deepEqual(Object.keys(capacityStorage.values[capacityKey]).sort(), ['101', '102', '103']);
 assert.deepEqual(capacityRemoved, [104]);
 
+function reusableTabs(firstTabId) {
+  let nextTabId = firstTabId;
+  const live = new Map();
+  const createdTabs = [];
+  const readTabs = [];
+  const updatedTabs = [];
+  return {
+    createdTabs,
+    readTabs,
+    updatedTabs,
+    close(tabId) { live.delete(tabId); },
+    navigate(tabId, url) {
+      const tab = live.get(tabId);
+      if (!tab) throw new Error('test tab is not live');
+      live.set(tabId, { ...tab, url });
+    },
+    api: {
+      async create(value) {
+        const id = nextTabId++;
+        createdTabs.push({ id, value });
+        live.set(id, { id, url: value.url });
+        return { id, url: value.url };
+      },
+      async get(id) {
+        readTabs.push(id);
+        const tab = live.get(id);
+        if (!tab) throw new Error('No tab with id: ' + id);
+        return { ...tab };
+      },
+      async update(id, value) {
+        const tab = live.get(id);
+        if (!tab) throw new Error('No tab with id: ' + id);
+        updatedTabs.push({ id, value });
+        const updated = { ...tab, ...value, id };
+        live.set(id, updated);
+        return { ...updated };
+      },
+      async remove(id) { live.delete(id); },
+    },
+  };
+}
+
+const reuseStorage = storageArea();
+const reuseTabs = reusableTabs(201);
+const reuseManager = api.createManager({
+  sessionStorage: reuseStorage,
+  tabs: reuseTabs.api,
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => now,
+});
+const exactLaunch = {
+  context: launchContext,
+  sourceTabId: 12,
+  sourceDocumentId: 'source-document-reuse',
+};
+const concurrentOpen = await Promise.all([
+  reuseManager.open(exactLaunch),
+  reuseManager.open(exactLaunch),
+]);
+assert.deepEqual(
+  concurrentOpen.map((value) => JSON.parse(JSON.stringify(value))),
+  [
+    { state: 'workbench_opened', tabId: 201 },
+    { state: 'workbench_focused', tabId: 201 },
+  ],
+  'concurrent exact-context opens reuse one workbench tab',
+);
+assert.equal(reuseTabs.createdTabs.length, 1, 'a double click creates one workbench tab');
+assert.equal(
+  reuseTabs.updatedTabs.filter((entry) => Object.hasOwn(entry.value, 'url')).length,
+  1,
+  'an exact-context reuse focuses without navigating the workbench again',
+);
+
+const reuseSender = { tabId: 201, documentId: 'workbench-document-reuse', frameId: 0 };
+await reuseManager.claim(reuseSender);
+await reuseManager.beginOperation(reuseSender, 'pending-reuse-operation');
+await reuseManager.open(exactLaunch);
+assert.equal(reuseTabs.createdTabs.length, 1, 'an unresolved operation reopens by focusing');
+assert.equal(
+  (await reuseManager.claim(reuseSender)).operation.idempotencyKey,
+  'pending-reuse-operation',
+  'focusing an existing tab preserves its unresolved operation',
+);
+const pendingReuseResult = await reuseManager.attachResult(reuseSender, {
+  resultId: 'br_' + '9'.repeat(48),
+  reviewState: 'CANDIDATE_READY',
+}, 'pending-reuse-operation');
+await reuseManager.open(exactLaunch);
+assert.equal(reuseTabs.createdTabs.length, 1, 'a pending result reopens by focusing');
+assert.equal(
+  (await reuseManager.claim(reuseSender)).result.resultId,
+  pendingReuseResult.result.resultId,
+  'focusing an existing tab preserves its pending result',
+);
+
+const changedContexts = [
+  { ...launchContext, draftRevision: launchContext.draftRevision + 1 },
+  { ...launchContext, draftVersion: launchContext.draftVersion + 1 },
+  {
+    ...launchContext,
+    skuKey: 'sku-2',
+    slotKey: 'sku:sku-2:hero',
+  },
+];
+for (const changedContext of changedContexts) {
+  await reuseManager.open({ ...exactLaunch, context: changedContext });
+}
+await reuseManager.open({ ...exactLaunch, sourceTabId: exactLaunch.sourceTabId + 1 });
+await reuseManager.open({ ...exactLaunch, sourceDocumentId: 'source-document-reuse-other' });
+assert.equal(
+  reuseTabs.createdTabs.length,
+  6,
+  'draft, SKU, source tab, and source document changes require distinct workbench sessions',
+);
+
+const replacementStorage = storageArea();
+const replacementTabs = reusableTabs(301);
+const replacementManager = api.createManager({
+  sessionStorage: replacementStorage,
+  tabs: replacementTabs.api,
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => now,
+});
+const replacementLaunch = {
+  context: launchContext,
+  sourceTabId: 44,
+  sourceDocumentId: 'source-document-replacement',
+};
+const originalReplacement = await replacementManager.open(replacementLaunch);
+const originalReplacementSender = {
+  tabId: originalReplacement.tabId,
+  documentId: 'workbench-document-replacement-original',
+  frameId: 0,
+};
+await replacementManager.claim(originalReplacementSender);
+await replacementManager.beginOperation(originalReplacementSender, 'replacement-operation');
+replacementTabs.close(originalReplacement.tabId);
+const replacedMissing = await replacementManager.open(replacementLaunch);
+assert.equal(replacedMissing.tabId, 302, 'a missing workbench tab is replaced');
+assert.deepEqual(
+  Object.keys(replacementStorage.values[api.STORAGE_KEY]),
+  ['302'],
+  'the missing tab session key is replaced atomically',
+);
+const replacementSender = {
+  tabId: replacedMissing.tabId,
+  documentId: 'workbench-document-replacement-new',
+  frameId: 0,
+};
+assert.equal(
+  (await replacementManager.claim(replacementSender)).operation.idempotencyKey,
+  'replacement-operation',
+  'replacing a missing tab preserves unresolved recovery state',
+);
+await replacementManager.clearOperation(replacementSender, 'replacement-operation');
+await replacementManager.beginOperation(replacementSender, 'replacement-result-operation');
+const replacementResult = await replacementManager.attachResult(replacementSender, {
+  resultId: 'br_' + 'd'.repeat(48),
+  reviewState: 'CANDIDATE_READY',
+}, 'replacement-result-operation');
+replacementTabs.navigate(replacedMissing.tabId, 'https://example.invalid/not-the-workbench');
+const replacedInvalid = await replacementManager.open(replacementLaunch);
+assert.equal(replacedInvalid.tabId, 303, 'a navigated-away workbench tab is replaced');
+assert.deepEqual(Object.keys(replacementStorage.values[api.STORAGE_KEY]), ['303']);
+assert.equal(
+  (await replacementManager.claim({
+    tabId: replacedInvalid.tabId,
+    documentId: 'workbench-document-replacement-final',
+    frameId: 0,
+  })).result.resultId,
+  replacementResult.result.resultId,
+  'replacing an invalid tab preserves its pending result',
+);
+
+for (const entry of [
+  ...reuseTabs.createdTabs.map((item) => item.value),
+  ...reuseTabs.updatedTabs.map((item) => item.value),
+  ...replacementTabs.createdTabs.map((item) => item.value),
+  ...replacementTabs.updatedTabs.map((item) => item.value),
+]) {
+  if (!entry.url) continue;
+  const parsed = new URL(entry.url);
+  assert.equal(parsed.search, '', 'workbench URLs never carry launch context in a query');
+  assert.equal(parsed.hash, '', 'workbench URLs never carry launch context in a fragment');
+}
+
 console.log('extension BYOK workbench launch session tests passed');

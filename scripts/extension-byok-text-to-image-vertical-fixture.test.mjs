@@ -869,7 +869,18 @@ Object.defineProperty(authorizedReadiness, 'concurrencyAuthority', {
 const dispatcher = runtimeApi.createDispatcher({
   messageTypes: MESSAGE_TYPES,
   sessionManager,
-  launchClient: { async resolve() { return sourceContext; } },
+  launchClient: {
+    async resolve() {
+      return {
+        contractVersion: 'extension-byok-workbench-launch-decision/v2',
+        state: 'READY',
+        context: sourceContext,
+      };
+    },
+  },
+  async assertSourceCurrent() {
+    throw new Error('source launch is outside the text-to-image fixture');
+  },
   profileStore: providerFixture.profileStore,
   permissionBroker: providerFixture.permissionBroker,
   readinessClient: {

@@ -721,6 +721,43 @@
       });
     }
 
+    async function focusExisting(session, launchUrl, workbenchUrl) {
+      var update = { active: true };
+      if (typeof tabs.get === 'function') {
+        var existing;
+        try { existing = await tabs.get(session.workbenchTabId); } catch { return false; }
+        if (!isRecord(existing) || existing.id !== session.workbenchTabId) return false;
+        var effectiveUrl = typeof existing.pendingUrl === 'string' && existing.pendingUrl
+          ? existing.pendingUrl
+          : existing.url;
+        if (typeof effectiveUrl === 'string' && effectiveUrl
+          && effectiveUrl !== launchUrl && effectiveUrl !== workbenchUrl) return false;
+        if (effectiveUrl === launchUrl) update.url = workbenchUrl;
+      }
+      try {
+        await tabs.update(session.workbenchTabId, update);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function exactLaunchMatch(session, context, sourceTabId, sourceDocumentId) {
+      return session.sourceTabId === sourceTabId
+        && session.sourceDocumentId === sourceDocumentId
+        && sameContext(session.context, context);
+    }
+
+    function replacementSession(session, workbenchTabId, current) {
+      return {
+        ...session,
+        workbenchTabId: workbenchTabId,
+        workbenchDocumentId: null,
+        createdAt: current,
+        expiresAt: current + ttlMs,
+      };
+    }
+
     async function open(value) {
       var context = normalizeContext(value && value.context);
       var sourceTabId = tabId(
@@ -732,21 +769,43 @@
         200,
         'SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID',
       );
-      var created = await tabs.create({
-        url: runtime.getURL('pages/ai-image-workbench-launch.html'),
-        active: true,
-      });
-      var workbenchTabId;
-      try {
-        workbenchTabId = tabId(
-          created && created.id,
-          'SS_ERP_BYOK_WORKBENCH_SESSION_OPEN_FAILED',
-        );
-        await enqueue(async function () {
-          var current = currentMillis();
-          var state = await loadState(current);
-          var records = state.records;
-          var fences = state.fences;
+      var launchUrl = runtime.getURL('pages/ai-image-workbench-launch.html');
+      var workbenchUrl = runtime.getURL('pages/ai-image-workbench.html');
+      return enqueue(async function () {
+        var current = currentMillis();
+        var state = await loadState(current);
+        var records = state.records;
+        var fences = state.fences;
+        var originalRecords = { ...records };
+        var originalFences = { ...fences };
+        var matching = Object.values(records)
+          .filter(function (session) {
+            return exactLaunchMatch(session, context, sourceTabId, sourceDocumentId);
+          })
+          .sort(function (left, right) {
+            return right.createdAt - left.createdAt
+              || right.workbenchTabId - left.workbenchTabId;
+          })[0] || null;
+        if (matching && await focusExisting(matching, launchUrl, workbenchUrl)) {
+          records[String(matching.workbenchTabId)] = renewLease(matching, current);
+          await storeState(records, fences);
+          return Object.freeze({ state: 'workbench_focused', tabId: matching.workbenchTabId });
+        }
+
+        if (matching) {
+          delete records[String(matching.workbenchTabId)];
+          delete fences[String(matching.workbenchTabId)];
+        }
+
+        var created;
+        var workbenchTabId;
+        var discardedSessions = [];
+        try {
+          created = await tabs.create({ url: launchUrl, active: true });
+          workbenchTabId = tabId(
+            created && created.id,
+            'SS_ERP_BYOK_WORKBENCH_SESSION_OPEN_FAILED',
+          );
           var ordered = Object.values(records).sort(function (left, right) {
             return left.createdAt - right.createdAt || left.workbenchTabId - right.workbenchTabId;
           });
@@ -762,41 +821,35 @@
             var discarded = ordered.splice(discardIndex, 1)[0];
             delete records[String(discarded.workbenchTabId)];
             delete fences[String(discarded.workbenchTabId)];
-            discardResult(discarded);
+            discardedSessions.push(discarded);
           }
-          records[String(workbenchTabId)] = {
-            contractVersion: CONTRACT_VERSION,
-            context: context,
-            sourceTabId: sourceTabId,
-            sourceDocumentId: sourceDocumentId,
-            workbenchTabId: workbenchTabId,
-            workbenchDocumentId: null,
-            operation: null,
-            result: null,
-            createdAt: current,
-            expiresAt: current + ttlMs,
-          };
+          var nextSession = matching
+            ? replacementSession(matching, workbenchTabId, current)
+            : {
+              contractVersion: CONTRACT_VERSION,
+              context: context,
+              sourceTabId: sourceTabId,
+              sourceDocumentId: sourceDocumentId,
+              workbenchTabId: workbenchTabId,
+              workbenchDocumentId: null,
+              operation: null,
+              result: null,
+              createdAt: current,
+              expiresAt: current + ttlMs,
+            };
+          records[String(workbenchTabId)] = nextSession;
           await storeState(records, fences);
-        });
-        await tabs.update(workbenchTabId, {
-          url: runtime.getURL('pages/ai-image-workbench.html'),
-          active: true,
-        });
-        return Object.freeze({ state: 'workbench_opened', tabId: workbenchTabId });
-      } catch (error) {
-        if (Number.isSafeInteger(workbenchTabId)) {
-          await enqueue(async function () {
-            var state = await loadState(currentMillis());
-            delete state.records[String(workbenchTabId)];
-            delete state.fences[String(workbenchTabId)];
-            await storeState(state.records, state.fences);
-          }).catch(function () {});
-          if (typeof tabs.remove === 'function') {
+          await tabs.update(workbenchTabId, { url: workbenchUrl, active: true });
+          discardedSessions.forEach(discardResult);
+          return Object.freeze({ state: 'workbench_opened', tabId: workbenchTabId });
+        } catch (error) {
+          try { await storeState(originalRecords, originalFences); } catch {}
+          if (Number.isSafeInteger(workbenchTabId) && typeof tabs.remove === 'function') {
             try { await tabs.remove(workbenchTabId); } catch {}
           }
+          throw error;
         }
-        throw error;
-      }
+      });
     }
 
     function claim(sender) {

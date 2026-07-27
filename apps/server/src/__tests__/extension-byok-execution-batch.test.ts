@@ -286,6 +286,30 @@ describe('extension BYOK execution batch reservation', () => {
     expect(repository.claimBatch).toHaveBeenCalledOnce();
   });
 
+  it('reserves a batch with an explicitly selected non-first SKU shared-detail anchor', async () => {
+    const { service, repository } = build();
+    const secondHero = item(1, {
+      binding: { ...item(1).binding, assignmentOrdinal: 0 },
+    });
+    const firstHero = item(0, {
+      binding: { ...item(0).binding, assignmentOrdinal: 1 },
+    });
+    const sharedDetail = item(2, {
+      binding: { ...item(2).binding, skuKey: 'sku-2', assignmentOrdinal: 2 },
+    });
+
+    await expect(service.claim(input({
+      items: [secondHero, firstHero, sharedDetail],
+    }))).resolves.toMatchObject({
+      intents: [
+        { skuKey: 'sku-2', slotKey: 'sku:sku-2:hero', assignmentOrdinal: 0 },
+        { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 1 },
+        { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE', assignmentOrdinal: 2 },
+      ],
+    });
+    expect(repository.claimBatch).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['model', () => item(0, {
       binding: { ...item(0).binding, model: 'sk-secret-model-value' },
@@ -328,8 +352,8 @@ describe('extension BYOK execution batch reservation', () => {
     ['duplicate slot', [item(0), item(1, {
       binding: { ...item(1).binding, skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
     })]],
-    ['wrong shared anchor', [item(0), item(2, {
-      binding: { ...item(2).binding, skuKey: 'sku-2', assignmentOrdinal: 1 },
+    ['unselected shared anchor', [item(0), item(2, {
+      binding: { ...item(2).binding, skuKey: 'sku-3', assignmentOrdinal: 1 },
     })]],
     ['mixed draft', [item(0), item(1, {
       binding: { ...item(1).binding, workflowId: 'workflow-2' },

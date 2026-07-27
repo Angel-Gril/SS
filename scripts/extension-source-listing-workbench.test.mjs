@@ -7,6 +7,8 @@ const root = 'extensions/ss-erp';
 const manifest = JSON.parse(fs.readFileSync(`${root}/manifest.json`, 'utf8'));
 const worker = fs.readFileSync(`${root}/background/service-worker.js`, 'utf8');
 const panel = fs.readFileSync(`${root}/content/source-costing-panel.js`, 'utf8');
+const panelCss = fs.readFileSync(`${root}/content/source-costing-panel.css`, 'utf8');
+const viewCss = fs.readFileSync(`${root}/content/source-listing-workbench.css`, 'utf8');
 const popup = fs.readFileSync(`${root}/pages/popup.js`, 'utf8');
 const policy = fs.readFileSync(`${root}/shared/message-security/runtime-message-policy.js`, 'utf8');
 const serverEntry = fs.readFileSync('apps/server/src/index.ts', 'utf8');
@@ -16,8 +18,10 @@ const confirmationContractPath = `${root}/shared/erp-adapter/source-media-confir
 const confirmationCoordinatorPath = `${root}/shared/erp-adapter/source-media-confirmation-coordinator.js`;
 const mutationIntentPath = `${root}/shared/erp-adapter/source-media-mutation-intent.js`;
 const suiteControllerPath = `${root}/shared/source-costing/ai-image-suite-controller.js`;
+const launchContextPath = `${root}/shared/source-costing/ai-workbench-launch-context.js`;
 const viewPath = `${root}/content/source-listing-workbench.js`;
 const cssPath = `${root}/content/source-listing-workbench.css`;
+const panelCssPath = `${root}/content/source-costing-panel.css`;
 const confirmHtmlPath = `${root}/pages/media-confirm.html`;
 const confirmCssPath = `${root}/pages/media-confirm.css`;
 const confirmPagePath = `${root}/pages/media-confirm.js`;
@@ -25,7 +29,7 @@ const confirmLaunchPath = `${root}/pages/media-confirm-launch.html`;
 
 for (const path of [
   sessionPath, clientPath, confirmationContractPath, confirmationCoordinatorPath,
-  mutationIntentPath, suiteControllerPath, viewPath, cssPath,
+  mutationIntentPath, suiteControllerPath, launchContextPath, viewPath, cssPath, panelCssPath,
   confirmHtmlPath, confirmCssPath, confirmPagePath, confirmLaunchPath,
 ]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
@@ -38,10 +42,26 @@ const sourceEntry = manifest.content_scripts.find((entry) => (
 assert.ok(sourceEntry, 'source costing content-script entry should exist');
 assert.ok(sourceEntry.js.includes('content/source-listing-workbench.js'));
 assert.ok(sourceEntry.js.includes('shared/source-costing/ai-image-suite-controller.js'));
+assert.ok(sourceEntry.js.includes('shared/source-costing/ai-workbench-launch-context.js'));
 assert.ok(sourceEntry.js.indexOf('shared/source-costing/ai-image-suite-controller.js')
+  < sourceEntry.js.indexOf('content/source-costing-panel.js'));
+assert.ok(sourceEntry.js.indexOf('shared/source-costing/ai-workbench-launch-context.js')
   < sourceEntry.js.indexOf('content/source-costing-panel.js'));
 assert.ok(sourceEntry.js.indexOf('content/source-listing-workbench.js') < sourceEntry.js.indexOf('content/source-costing-panel.js'));
 assert.ok(sourceEntry.css.includes('content/source-listing-workbench.css'));
+assert.ok(sourceEntry.css.includes('content/source-costing-panel.css'));
+assert.match(viewCss, /\.ss-erp-source-workbench-ai-button,[\s\S]{0,180}min-height:\s*44px/u);
+assert.match(viewCss, /\.ss-erp-source-workbench-ai-select\s*\{[\s\S]{0,160}min-height:\s*44px/u);
+assert.match(viewCss, /\.ss-erp-source-workbench-listing-select\s*\{[\s\S]{0,160}min-height:\s*44px/u);
+assert.match(viewCss, /@media \(forced-colors:\s*active\)[\s\S]*\.ss-erp-source-workbench-listing-select/u);
+assert.match(panelCss, /\.ss-erp-source-icon-btn\s*\{[\s\S]{0,100}width:\s*44px;[\s\S]{0,60}height:\s*44px/u);
+assert.match(panelCss, /\.ss-erp-source-actions button\s*\{[\s\S]{0,100}min-height:\s*44px/u);
+assert.match(panelCss, /\.ss-erp-source-input input\s*\{[\s\S]{0,120}height:\s*44px/u);
+assert.match(panelCss, /#ss-erp-source-costing-panel \*,[\s\S]{0,160}box-sizing:\s*border-box/u);
+assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-picker\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
+assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-copy\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
+assert.match(panelCss, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*#ss-erp-source-costing-panel\.open,[\s\S]*animation:\s*none/u);
+assert.match(panelCss, /@media \(forced-colors:\s*active\)[\s\S]*\.ss-erp-source-actions button/u);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-workflow-device-session\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/listing-workflow-client\.js['"]\)/);
 assert.match(worker, /importScripts\(['"]\.\.\/shared\/erp-adapter\/source-media-confirmation\.js['"]\)/);
@@ -52,14 +72,23 @@ assert.match(worker, /ss-erp:source-listing-workbench-media-history/);
 assert.match(worker, /ss-erp:source-listing-workbench-media-command/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite/);
 assert.match(worker, /ss-erp:source-listing-workbench-ai-image-suite-command/);
-assert.match(worker, /ss-erp:source-listing-workbench-byok-open/);
-assert.match(worker, /openAuthoritativeSourceByokWorkbench/);
-assert.match(panel, /ss-erp:source-listing-workbench-byok-open/);
-assert.match(panel, /onOpenByokWorkbench/);
+assert.match(worker, /ss-erp:source-ai-workbench-open/);
+assert.match(
+  worker,
+  /assertSourceCurrent:\s*assertSourceAiWorkbenchPageCurrent/u,
+  'the production runtime dispatcher must inject exact source currency validation',
+);
+assert.match(worker, /openAuthoritativeSourceAiWorkbench/);
+assert.match(panel, /ss-erp:source-ai-workbench-open/);
+assert.match(panel, /onOpenAiWorkbench/);
+assert.match(panel, /preferredSkuKey/u);
+assert.match(panel, /sourceSelectionKey:\s*sourceSelectionKey/u);
+assert.match(worker, /createLiveSelectionVerifier/u);
+assert.match(worker, /chrome\.tabs\.sendMessage/u);
 assert.doesNotMatch(
   panel,
-  /type:\s*['"]ss-erp:source-listing-workbench-byok-open['"][\s\S]{0,500}(?:skuKey|slotKey|assignmentOrdinal)/u,
-  'source launcher must not select its own SKU, slot, or ordinal',
+  /type:\s*['"]ss-erp:source-ai-workbench-open['"][\s\S]{0,700}(?:slotKey|assignmentOrdinal)/u,
+  'source launcher must never select its own slot or ordinal',
 );
 assert.match(worker, /loadAuthoritativeSourceAiImageSuiteProjection/);
 assert.match(worker, /executeAuthoritativeSourceAiImageSuiteCommand/);
@@ -1797,6 +1826,315 @@ await assert.rejects(
   /superseded/u,
 );
 
+const launchContextSource = fs.readFileSync(launchContextPath, 'utf8');
+const launchContextVm = { window: {} };
+vm.runInNewContext(launchContextSource, launchContextVm, { filename: launchContextPath });
+const launchContext = launchContextVm.window.SS_ERP_SOURCE_AI_WORKBENCH_LAUNCH_CONTEXT;
+assert.ok(launchContext);
+const skuProduct = {
+  selectedSku: { skuId: 'source-blue' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [
+      { key: 'sku-red', sourceSkuId: 'source-red', specText: '红色' },
+      { key: 'sku-blue', sourceSkuId: 'source-blue', specText: '蓝色' },
+    ],
+  },
+};
+assert.equal(launchContext.derivePreferredSkuKey(skuProduct), 'sku-blue');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: 42 },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [{ key: 'sku-42', sourceSkuId: '42', specText: '42 号' }],
+  },
+}), 'sku-42', 'numeric marketplace SKU IDs use an exact string identity match');
+assert.equal(launchContext.derivePreferredSkuKey({
+  ...skuProduct,
+  captureV2: { ...skuProduct.captureV2, facts: { selectedSkuKey: 'sku-red' } },
+}), 'sku-red', 'contract-selected SKU takes precedence when it belongs to the capture');
+assert.equal(launchContext.derivePreferredSkuKey({
+  ...skuProduct,
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [
+      { key: 'sku-red', sourceSkuId: 'source-blue', specText: '红色' },
+      { key: 'sku-blue', sourceSkuId: 'source-blue', specText: '蓝色' },
+    ],
+  },
+}), null, 'ambiguous source SKU IDs must never be guessed');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { name: '蓝色' },
+  captureV2: skuProduct.captureV2,
+}), null, 'display names are not SKU authority');
+
+assert.equal(
+  typeof launchContext.createLiveSelectionVerifier,
+  'function',
+  'the shared launch context must expose the exact-document live selection verifier',
+);
+let liveSelectionProduct = {
+  ...skuProduct,
+  captureV2: {
+    ...skuProduct.captureV2,
+    sourceIdentity: { platform: '1688', productId: 'offer-1' },
+  },
+};
+const liveSelectionCalls = [];
+const verifyLiveSelection = launchContext.createLiveSelectionVerifier({
+  async sendMessage(tabId, message, options) {
+    liveSelectionCalls.push({ tabId, message, options });
+    return { ok: true, data: liveSelectionProduct };
+  },
+});
+const liveSelectionWitness = {
+  sourceSender: { tabId: 12, documentId: 'source-document-1' },
+  sourceProductId: 'offer-1',
+  sourceSelectionKey: 'sku-blue',
+};
+await verifyLiveSelection(liveSelectionWitness);
+assert.deepEqual(JSON.parse(JSON.stringify(liveSelectionCalls)), [{
+  tabId: 12,
+  message: { type: 'spb-self-hosted:collect-product' },
+  options: { frameId: 0, documentId: 'source-document-1' },
+}]);
+liveSelectionProduct = {
+  ...liveSelectionProduct,
+  selectedSku: { skuId: 'source-red' },
+};
+let guardedSessionOpenCalls = 0;
+await assert.rejects(
+  async () => {
+    await verifyLiveSelection(liveSelectionWitness);
+    guardedSessionOpenCalls += 1;
+  },
+  (error) => error?.code === 'SS_ERP_BYOK_WORKBENCH_SOURCE_STALE'
+    && error?.status === 409,
+  'a same-document marketplace SKU switch must invalidate the original witness',
+);
+assert.equal(guardedSessionOpenCalls, 0, 'a changed live SKU must never reach session.open');
+liveSelectionProduct = {
+  ...liveSelectionProduct,
+  selectedSku: { skuId: 'source-blue' },
+  captureV2: {
+    ...liveSelectionProduct.captureV2,
+    sourceIdentity: { platform: '1688', productId: 'offer-2' },
+  },
+};
+await assert.rejects(
+  verifyLiveSelection(liveSelectionWitness),
+  (error) => error?.code === 'SS_ERP_BYOK_WORKBENCH_SOURCE_STALE'
+    && error?.status === 409,
+  'a changed live product identity must invalidate the original witness',
+);
+
+const normalizedChoice = launchContext.normalizeChoice({
+  state: 'choice_required',
+  binding: {
+    sourcePlatform: '1688', sourceProductId: 'offer-1', sourceCaptureSnapshotId: 'snapshot-1',
+    supplyGoodsId: 'goods-1', shopId: 'shop-1', workflowId: 'listing-1',
+    draftRevision: 11, draftVersion: 7,
+  },
+  skuKeys: ['sku-red', 'sku-blue'],
+}, {
+  sourcePlatform: '1688', sourceProductId: 'offer-1', sourceCaptureSnapshotId: 'snapshot-1',
+  supplyGoodsId: 'goods-1', shopId: 'shop-1', workflowId: 'listing-1',
+  draftRevision: 11, draftVersion: 7,
+});
+assert.deepEqual(JSON.parse(JSON.stringify(normalizedChoice.skuKeys)), ['sku-red', 'sku-blue']);
+const normalizedSingleChoice = launchContext.normalizeChoice({
+  state: 'choice_required',
+  binding: normalizedChoice.binding,
+  skuKeys: ['sku-blue'],
+}, normalizedChoice.binding);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(normalizedSingleChoice.skuKeys)),
+  ['sku-blue'],
+  'a rejected SKU hint may still require an explicit choice from one authoritative candidate',
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(launchContext.buildSkuOptions(normalizedChoice, skuProduct))),
+  [
+    { skuKey: 'sku-red', label: '红色' },
+    { skuKey: 'sku-blue', label: '蓝色' },
+  ],
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(launchContext.buildSkuOptions(normalizedChoice, {
+    captureV2: {
+      skus: [
+        { key: 'sku-red', sourceSkuId: 'source-red', specText: '同款' },
+        { key: 'sku-blue', sourceSkuId: 'source-blue', specText: '同款' },
+      ],
+    },
+  }))),
+  [
+    { skuKey: 'sku-red', label: '同款 · sku-red' },
+    { skuKey: 'sku-blue', label: '同款 · sku-blue' },
+  ],
+  'duplicate display labels must remain explicitly distinguishable',
+);
+assert.equal(launchContext.normalizeChoice({
+  ...normalizedChoice,
+  binding: { ...normalizedChoice.binding, draftVersion: 8 },
+}, normalizedChoice.binding), null, 'stale choice bindings must be rejected');
+
+function createSourcePanelBehaviorHarness() {
+  const bootstrapPattern = /\n  renderShell\(\);\r?\n  bindSourceMediaConfirmationNotifications\(\);/u;
+  assert.match(panel, bootstrapPattern, 'panel behavior harness requires the production bootstrap boundary');
+  let harnessSource = panel.replace(bootstrapPattern, [
+    '',
+    '  if (!window.__SS_ERP_SKIP_PANEL_BOOTSTRAP__) {',
+    '    renderShell();',
+    '    bindSourceMediaConfirmationNotifications();',
+    '  }',
+  ].join('\n'));
+  const closeIndex = harnessSource.lastIndexOf('\n}());');
+  assert.notEqual(closeIndex, -1, 'panel behavior harness requires the module closure');
+  harnessSource = `${harnessSource.slice(0, closeIndex)}
+  window.__SS_ERP_SOURCE_PANEL_TEST__ = {
+    state: state,
+    startAutoRefresh: startAutoRefresh,
+    sourceWorkbenchHasActiveInteraction: sourceWorkbenchHasActiveInteraction,
+    selectSourceAiWorkbenchSku: selectSourceAiWorkbenchSku,
+    restoreSourceAiWorkbenchFocus: restoreSourceAiWorkbenchFocus,
+    refreshProductOnly: refreshProductOnly,
+    setRenderContent: function (next) { renderContent = next; },
+    setCollectCurrentSourceProduct: function (next) { collectCurrentSourceProduct = next; },
+    setRefreshSourceWorkbenchStatus: function (next) { refreshSourceWorkbenchStatus = next; },
+    setHydrateInputs: function (next) { hydrateInputs = next; },
+    setTryAutoCosting: function (next) { tryAutoCosting = next; },
+    setRefreshProductOnly: function (next) { refreshProductOnly = next; }
+  };${harnessSource.slice(closeIndex)}`;
+
+  const intervalCallbacks = [];
+  const timeoutCallbacks = [];
+  const focusCalls = [];
+  const workbenchControl = { role: 'workbench-control' };
+  const workbenchNode = {
+    contains(node) { return node === workbenchControl; },
+  };
+  const panelNode = {
+    querySelector(selector) {
+      return selector === '[data-role="source-listing-workbench"]' ? workbenchNode : null;
+    },
+  };
+  const focusTarget = {
+    focus(options) { focusCalls.push(options); },
+  };
+  const document = {
+    activeElement: null,
+    getElementById(id) { return id === 'ss-erp-source-costing-panel' ? panelNode : null; },
+    querySelector(selector) {
+      return selector === '#ss-erp-source-costing-panel [data-role="ai-workbench-open"]'
+        ? focusTarget : null;
+    },
+  };
+  const sourceCosting = {
+    detectSourcePlatform() { return '1688'; },
+    buildProductSignature(product) { return JSON.stringify(product || null); },
+  };
+  const panelWindow = {
+    __SS_ERP_SKIP_PANEL_BOOTSTRAP__: true,
+    SS_ERP_SOURCE_COSTING_CORE: sourceCosting,
+    SS_ERP_SOURCE_AI_WORKBENCH_LAUNCH_CONTEXT: {},
+    SS_ERP_SOURCE_AI_IMAGE_SUITE_CONTROLLER: {
+      createController() { return {}; },
+    },
+    setInterval(callback, delay) {
+      const timer = { callback, delay };
+      intervalCallbacks.push(timer);
+      return timer;
+    },
+    clearInterval() {},
+    setTimeout(callback, delay) {
+      const timer = { callback, delay };
+      timeoutCallbacks.push(timer);
+      return timer;
+    },
+  };
+  const location = {
+    href: 'https://detail.1688.com/offer/123.html',
+    hostname: 'detail.1688.com',
+  };
+  vm.runInNewContext(harnessSource, {
+    Array, Boolean, Date, Error, JSON, Map, Number, Object, Promise, Set, String, URL,
+    document, location, window: panelWindow,
+  }, { filename: `${root}/content/source-costing-panel.behavior-harness.js` });
+  return {
+    document,
+    focusCalls,
+    hooks: panelWindow.__SS_ERP_SOURCE_PANEL_TEST__,
+    intervalCallbacks,
+    location,
+    sourceCosting,
+    timeoutCallbacks,
+    workbenchControl,
+  };
+}
+
+const panelHarness = createSourcePanelBehaviorHarness();
+const unchangedProduct = {
+  productId: 'offer-123',
+  title: 'Same product',
+  captureV2: { sourceProductId: 'offer-123' },
+};
+let unchangedRenderCount = 0;
+let unchangedHydrateCount = 0;
+let unchangedAutoCostCount = 0;
+const unchangedStatusReads = [];
+panelHarness.hooks.state.sourcePageKey = panelHarness.location.href;
+panelHarness.hooks.state.product = unchangedProduct;
+panelHarness.hooks.state.lastProductSignature = panelHarness.sourceCosting
+  .buildProductSignature(unchangedProduct);
+panelHarness.hooks.setRenderContent(() => { unchangedRenderCount += 1; });
+panelHarness.hooks.setHydrateInputs(() => { unchangedHydrateCount += 1; });
+panelHarness.hooks.setTryAutoCosting(() => { unchangedAutoCostCount += 1; });
+panelHarness.hooks.setCollectCurrentSourceProduct(async () => ({
+  ok: true,
+  data: JSON.parse(JSON.stringify(unchangedProduct)),
+}));
+panelHarness.hooks.setRefreshSourceWorkbenchStatus((options) => {
+  unchangedStatusReads.push({ ...options });
+});
+await panelHarness.hooks.refreshProductOnly({ auto: true });
+assert.equal(unchangedRenderCount, 0, 'an unchanged product poll must not rebuild the panel DOM');
+assert.equal(unchangedHydrateCount, 0, 'an unchanged product poll must not rehydrate inputs');
+assert.equal(unchangedAutoCostCount, 0, 'an unchanged product poll must not rerun costing');
+assert.deepEqual(unchangedStatusReads, [{ force: false, maxAgeMs: 5000 }]);
+
+let selectionRenderCount = 0;
+panelHarness.hooks.setRenderContent(() => { selectionRenderCount += 1; });
+panelHarness.hooks.state.sourceAiWorkbenchState = 'choice_required';
+panelHarness.hooks.state.sourceAiWorkbenchSkuOptions = [{ skuKey: 'sku-blue', label: 'Blue' }];
+panelHarness.hooks.selectSourceAiWorkbenchSku('sku-blue');
+assert.equal(selectionRenderCount, 1);
+assert.equal(panelHarness.hooks.state.sourceAiWorkbenchSelectedSkuKey, 'sku-blue');
+assert.equal(panelHarness.hooks.state.sourceAiWorkbenchFocusTarget, 'open');
+panelHarness.hooks.restoreSourceAiWorkbenchFocus();
+assert.equal(panelHarness.timeoutCallbacks.length, 1);
+panelHarness.timeoutCallbacks[0].callback();
+assert.equal(panelHarness.focusCalls.length, 1);
+assert.equal(panelHarness.focusCalls[0].preventScroll, true);
+
+let automaticRefreshCount = 0;
+panelHarness.hooks.setRefreshProductOnly(() => { automaticRefreshCount += 1; });
+panelHarness.hooks.state.opened = true;
+panelHarness.hooks.state.sourceAiWorkbenchOpening = false;
+panelHarness.hooks.state.sourceAiWorkbenchState = 'idle';
+panelHarness.hooks.startAutoRefresh();
+assert.equal(panelHarness.intervalCallbacks.length, 1);
+panelHarness.document.activeElement = panelHarness.workbenchControl;
+panelHarness.intervalCallbacks[0].callback();
+assert.equal(
+  automaticRefreshCount,
+  0,
+  'automatic refresh must pause while a source workbench control owns focus',
+);
+panelHarness.document.activeElement = { role: 'outside-workbench' };
+panelHarness.intervalCallbacks[0].callback();
+assert.equal(automaticRefreshCount, 1, 'automatic refresh resumes after focus leaves the workbench');
+
 class TestNode {
   constructor(tag) {
     this.tag = tag;
@@ -2434,6 +2772,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(multiListingContainer,
         { id: 'listing-a', shopId: 'shop-a', revision: 1, draftVersion: 1 },
         { id: 'listing-b', shopId: 'shop-b', revision: 2, draftVersion: 3 },
       ],
+      truncated: true,
     },
     media: { actionableCount: 0, items: [] },
   },
@@ -2446,6 +2785,11 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(multiListingContainer,
   onCreateTranslation() { throw new Error('must not create before selecting listing'); },
 });
 assert.match(renderedText(multiListingContainer), /请选择店铺草稿/u);
+assert.match(
+  renderedText(multiListingContainer),
+  /草稿列表已截断，请在 ERP 查看全部草稿/u,
+  'a bounded draft response must disclose that more choices exist in ERP',
+);
 assert.doesNotMatch(renderedText(multiListingContainer), /打开 ERP 创建草稿/u);
 const listingSelect = multiListingContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; })
@@ -2654,9 +2998,10 @@ retryButton.listeners.click({ isTrusted: true });
 assert.equal(commands.length, 1);
 assert.equal(commands[0].action, 'RETRY');
 
-const byokLauncherContainer = new TestNode('section');
-const byokLaunchEvents = [];
-viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(byokLauncherContainer, {
+const aiLauncherContainer = new TestNode('section');
+const aiLaunchEvents = [];
+const aiSkuEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(aiLauncherContainer, {
   state: 'ready',
   status: {
     snapshot: { current: true },
@@ -2671,21 +3016,231 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(byokLauncherContainer,
   },
 }, {
   selectedListingWorkflowId: 'listing-1',
-  byokWorkbenchAvailable: true,
-  byokWorkbenchBusy: false,
-  onOpenByokWorkbench(listing) { byokLaunchEvents.push(listing.id); },
+  aiWorkbenchAvailable: true,
+  aiWorkbenchBusy: false,
+  aiWorkbenchState: 'choice_required',
+  aiWorkbenchSkuOptions: [
+    { skuKey: 'sku-red', label: '红色' },
+    { skuKey: 'sku-blue', label: '蓝色' },
+  ],
+  selectedAiWorkbenchSkuKey: '',
+  onSelectAiWorkbenchSku(skuKey) { aiSkuEvents.push(skuKey); },
+  onOpenAiWorkbench(listing) { aiLaunchEvents.push(listing.id); },
 });
-const byokNodes = byokLauncherContainer.children
+const aiNodes = aiLauncherContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
-const byokLauncher = byokNodes.find((node) => node.attributes['data-role'] === 'byok-workbench-launcher');
-const byokButton = byokNodes.find((node) => node.textContent === '打开 BYOK 工作台');
-assert.ok(byokLauncher, 'source panel should render a compact BYOK launcher');
-assert.ok(byokButton);
-assert.equal(byokNodes.some((node) => node.tag === 'textarea'), false);
-byokButton.listeners.click({ isTrusted: false });
-assert.deepEqual(byokLaunchEvents, []);
-byokButton.listeners.click({ isTrusted: true });
-assert.deepEqual(byokLaunchEvents, ['listing-1']);
+const aiLauncher = aiNodes.find((node) => node.attributes['data-role'] === 'ai-workbench-launcher');
+const aiButton = aiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+const aiSkuSelect = aiNodes.find((node) => node.attributes['aria-label'] === '选择 AI 图片工作台 SKU');
+assert.ok(aiLauncher, 'source panel should render one compact unified AI launcher');
+assert.ok(aiButton);
+assert.ok(aiSkuSelect);
+assert.equal(aiButton.disabled, true, 'ambiguous SKU context requires an explicit choice');
+assert.equal(aiNodes.some((node) => node.tag === 'textarea'), false);
+aiSkuSelect.value = 'sku-blue';
+aiSkuSelect.listeners.change({ isTrusted: false });
+assert.deepEqual(aiSkuEvents, []);
+aiSkuSelect.listeners.change({ isTrusted: true });
+assert.deepEqual(aiSkuEvents, ['sku-blue']);
+aiButton.listeners.click({ isTrusted: true });
+assert.deepEqual(aiLaunchEvents, [], 'disabled ambiguous launcher must not open a workbench');
+
+const selectedAiLauncherContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(selectedAiLauncherContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 2, mediaAssignmentCount: 1,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiWorkbenchAvailable: true,
+  aiWorkbenchBusy: false,
+  aiWorkbenchState: 'choice_required',
+  aiWorkbenchSkuOptions: [
+    { skuKey: 'sku-red', label: '红色' },
+    { skuKey: 'sku-blue', label: '蓝色' },
+  ],
+  selectedAiWorkbenchSkuKey: 'sku-blue',
+  onSelectAiWorkbenchSku(skuKey) { aiSkuEvents.push(skuKey); },
+  onOpenAiWorkbench(listing) { aiLaunchEvents.push(listing.id); },
+});
+const selectedAiNodes = selectedAiLauncherContainer.children
+  .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
+const selectedAiButton = selectedAiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+assert.equal(selectedAiButton.disabled, false);
+selectedAiButton.listeners.click({ isTrusted: false });
+assert.deepEqual(aiLaunchEvents, []);
+selectedAiButton.listeners.click({ isTrusted: true });
+assert.deepEqual(aiLaunchEvents, ['listing-1']);
+
+const singleChoiceEvents = [];
+const singleChoiceContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(singleChoiceContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 1,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiWorkbenchAvailable: true,
+  aiWorkbenchBusy: false,
+  aiWorkbenchState: 'choice_required',
+  aiWorkbenchSkuOptions: [{ skuKey: 'sku-blue', label: '蓝色' }],
+  selectedAiWorkbenchSkuKey: '',
+  onSelectAiWorkbenchSku(skuKey) { singleChoiceEvents.push(['select', skuKey]); },
+  onOpenAiWorkbench(listing) { singleChoiceEvents.push(['open', listing.id]); },
+});
+const singleChoiceNodes = renderedNodes(singleChoiceContainer);
+const singleChoiceSelect = singleChoiceNodes.find((node) => (
+  node.attributes['data-role'] === 'ai-workbench-sku-select'
+));
+const singleChoiceButton = singleChoiceNodes.find((node) => (
+  node.attributes['data-role'] === 'ai-workbench-open'
+));
+assert.ok(singleChoiceSelect, 'one authoritative fallback SKU must remain explicitly selectable');
+assert.equal(singleChoiceButton.disabled, true);
+singleChoiceSelect.value = 'sku-blue';
+singleChoiceSelect.listeners.change({ isTrusted: true });
+assert.deepEqual(singleChoiceEvents, [['select', 'sku-blue']]);
+
+const recoveredSingleChoiceContainer = new TestNode('section');
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(recoveredSingleChoiceContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 1, mediaAssignmentCount: 1,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiWorkbenchAvailable: true,
+  aiWorkbenchBusy: false,
+  aiWorkbenchState: 'choice_required',
+  aiWorkbenchSkuOptions: [{ skuKey: 'sku-blue', label: '蓝色' }],
+  selectedAiWorkbenchSkuKey: 'sku-blue',
+  onSelectAiWorkbenchSku(skuKey) { singleChoiceEvents.push(['select', skuKey]); },
+  onOpenAiWorkbench(listing) { singleChoiceEvents.push(['open', listing.id]); },
+});
+const recoveredSingleChoiceButton = renderedNodes(recoveredSingleChoiceContainer).find((node) => (
+  node.attributes['data-role'] === 'ai-workbench-open'
+));
+assert.equal(recoveredSingleChoiceButton.disabled, false);
+recoveredSingleChoiceButton.listeners.click({ isTrusted: true });
+assert.deepEqual(singleChoiceEvents, [['select', 'sku-blue'], ['open', 'listing-1']]);
+
+function renderBusyAiLauncher(state) {
+  const busyContainer = new TestNode('section');
+  const selectionEvents = [];
+  viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(busyContainer, {
+    state: 'ready',
+    status: {
+      snapshot: { current: true },
+      listing: {
+        items: [
+          { id: 'listing-1', shopId: 'shop-1', revision: 11, draftVersion: 7 },
+          { id: 'listing-2', shopId: 'shop-2', revision: 2, draftVersion: 3 },
+        ],
+        truncated: false,
+      },
+      media: { actionableCount: 0, items: [] },
+    },
+  }, {
+    selectedListingWorkflowId: 'listing-1',
+    aiWorkbenchAvailable: true,
+    aiWorkbenchBusy: true,
+    aiWorkbenchState: state,
+    aiWorkbenchSkuOptions: [{ skuKey: 'sku-blue', label: '蓝色' }],
+    selectedAiWorkbenchSkuKey: 'sku-blue',
+    onSelectListing(id) { selectionEvents.push(['listing', id]); },
+    onSelectAiWorkbenchSku(skuKey) { selectionEvents.push(['sku', skuKey]); },
+    onOpenAiWorkbench() {},
+  });
+  return { nodes: renderedNodes(busyContainer), selectionEvents };
+}
+
+const openingLauncher = renderBusyAiLauncher('choice_required');
+const openingDraftSelect = openingLauncher.nodes.find((node) => (
+  node.attributes['aria-label'] === '选择店铺草稿'
+));
+const openingSkuSelect = openingLauncher.nodes.find((node) => (
+  node.attributes['data-role'] === 'ai-workbench-sku-select'
+));
+assert.equal(openingDraftSelect.disabled, true, 'opening locks the exact draft choice');
+assert.equal(openingSkuSelect.disabled, true, 'opening locks the exact SKU choice');
+openingDraftSelect.value = 'listing-2';
+openingDraftSelect.listeners.change({ isTrusted: true });
+openingSkuSelect.value = 'sku-blue';
+openingSkuSelect.listeners.change({ isTrusted: true });
+assert.deepEqual(openingLauncher.selectionEvents, [], 'busy launch selectors ignore late changes');
+
+const refreshingLauncher = renderBusyAiLauncher('refreshing');
+const refreshingDraftSelect = refreshingLauncher.nodes.find((node) => (
+  node.attributes['aria-label'] === '选择店铺草稿'
+));
+assert.equal(refreshingDraftSelect.disabled, true, 'context refresh locks the exact draft choice');
+assert.equal(
+  refreshingLauncher.nodes.some((node) => (
+    node.attributes['data-role'] === 'ai-workbench-sku-select'
+  )),
+  false,
+  'context refresh clears the stale SKU choice instead of leaving it interactive',
+);
+
+const staleAiLauncherContainer = new TestNode('section');
+const aiRefreshEvents = [];
+viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(staleAiLauncherContainer, {
+  state: 'ready',
+  status: {
+    snapshot: { current: true },
+    listing: {
+      items: [{
+        id: 'listing-1', shopId: 'shop-1', revision: 12, draftVersion: 8,
+        stage: 'MEDIA_REVIEW', selectedSkuCount: 2, mediaAssignmentCount: 1,
+        blockerCount: 0, warningCount: 0, blockers: [],
+      }],
+    },
+    media: { actionableCount: 0, items: [] },
+  },
+}, {
+  selectedListingWorkflowId: 'listing-1',
+  aiWorkbenchAvailable: true,
+  aiWorkbenchState: 'stale',
+  aiWorkbenchMessage: '商品或草稿已变化，请刷新后重新选择。',
+  onOpenAiWorkbench() { aiLaunchEvents.push('stale'); },
+  onRefreshAiWorkbench() { aiRefreshEvents.push('refresh'); },
+});
+const staleAiNodes = renderedNodes(staleAiLauncherContainer);
+const staleAiButton = staleAiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+const staleAiMessage = staleAiNodes.find((node) => node.attributes.role === 'alert');
+const staleAiRefresh = staleAiNodes.find((node) => node.textContent === '刷新上下文');
+assert.equal(staleAiButton.disabled, true);
+assert.match(staleAiMessage.textContent, /草稿已变化/u);
+staleAiRefresh.listeners.click({ isTrusted: false });
+assert.deepEqual(aiRefreshEvents, []);
+staleAiRefresh.listeners.click({ isTrusted: true });
+assert.deepEqual(aiRefreshEvents, ['refresh']);
 
 const confirmHtml = fs.readFileSync(confirmHtmlPath, 'utf8');
 const confirmLaunchHtml = fs.readFileSync(confirmLaunchPath, 'utf8');

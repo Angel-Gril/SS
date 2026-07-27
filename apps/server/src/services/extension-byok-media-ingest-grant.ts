@@ -382,8 +382,7 @@ export function createByokMediaIngestCommandResolver(
       || commands.some((command) => (
         !draft!.selectedSkuKeys.includes(command.skuKey)
         || (command.slotKey !== `sku:${command.skuKey}:hero`
-          && (!SHARED_DETAIL_SLOT_KEYS.has(command.slotKey)
-            || command.skuKey !== draft!.selectedSkuKeys[0]))
+          && !SHARED_DETAIL_SLOT_KEYS.has(command.slotKey))
       ))) {
       return { kind: 'forbidden' };
     }

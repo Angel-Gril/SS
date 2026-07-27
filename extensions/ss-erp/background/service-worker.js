@@ -43,6 +43,7 @@ try { importScripts('../shared/erp-adapter/device-connection-state.js'); } catch
 try { importScripts('../shared/erp-adapter/device-claim-queue.js'); } catch (e) { console.warn('[SS ERP] device claim queue load error:', e); }
 try { importScripts('../shared/currency/price-currency.js'); } catch (e) { console.warn('[SS ERP] price-currency load error:', e); }
 try { importScripts('../shared/contracts/source-product-capture-v2.js'); } catch (e) { console.warn('[SS ERP] source capture V2 contract load error:', e); }
+try { importScripts('../shared/source-costing/ai-workbench-launch-context.js'); } catch (e) { console.warn('[SS ERP] source AI workbench launch context load error:', e); }
 try { importScripts('../shared/source-capture/source-capture-submit.js'); } catch (e) { console.warn('[SS ERP] source capture V2 submit helper load error:', e); }
 try { importScripts('../shared/ozon/variant-spec.js'); } catch (e) { console.warn('[SS ERP] ozon variant spec load error:', e); }
 try { importScripts('../shared/ozon/collection-policy.js'); } catch (e) { console.warn('[SS ERP] ozon collection policy load error:', e); }
@@ -100,8 +101,7 @@ const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite';
 const SS_ERP_SOURCE_WORKBENCH_AI_IMAGE_SUITE_COMMAND_MESSAGE =
   'ss-erp:source-listing-workbench-ai-image-suite-command';
-const SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE =
-  'ss-erp:source-listing-workbench-byok-open';
+const SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE = 'ss-erp:source-ai-workbench-open';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_PREPARE_MESSAGE =
   'ss-erp:source-listing-workbench-media-confirm-prepare';
 const SS_ERP_SOURCE_WORKBENCH_MEDIA_CONFIRM_READ_MESSAGE =
@@ -1486,6 +1486,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     messageTypes: authorization.MESSAGE_TYPES.WORKBENCH,
     sessionManager: getByokWorkbenchSessionManager(),
     launchClient: getByokWorkbenchLaunchClient(),
+    assertSourceCurrent: assertSourceAiWorkbenchPageCurrent,
     profileStore: getByokProfileStore(),
     permissionBroker: getByokPermissionBroker(),
     readinessClient: getByokReadinessClient(),
@@ -1885,7 +1886,7 @@ function currentSourceListingContext(result, requestedListingWorkflowId) {
   };
 }
 
-function sourceByokWorkbenchSenderIdentity(sender, platform, sourceProductId) {
+function sourceAiWorkbenchSenderIdentity(sender, platform, sourceProductId) {
   if (!sender || sender.frameId !== 0
     || !Number.isSafeInteger(sender.tab?.id) || sender.tab.id < 0
     || typeof sender.documentId !== 'string' || !sender.documentId
@@ -1925,32 +1926,116 @@ function sourceByokWorkbenchSenderIdentity(sender, platform, sourceProductId) {
   };
 }
 
-async function openAuthoritativeSourceByokWorkbench(message, sender) {
-  if (!message || Object.keys(message).length !== 4
-    || !['type', 'platform', 'sourceProductId', 'listingWorkflowId'].every(
+async function assertSourceAiWorkbenchPageCurrent(value) {
+  const sourceSender = value && value.sourceSender;
+  const request = value && value.request;
+  let tab;
+  try {
+    tab = await chrome.tabs.get(sourceSender && sourceSender.tabId);
+  } catch (_error) {
+    tab = null;
+  }
+  const url = tab && (tab.pendingUrl || tab.url);
+  const identity = sourceAiWorkbenchSenderIdentity({
+    frameId: 0,
+    documentId: sourceSender && sourceSender.documentId,
+    url,
+    tab: { id: tab && tab.id, url },
+  }, request && request.sourcePlatform, request && request.sourceProductId);
+  if (!identity || identity.tabId !== sourceSender.tabId
+    || identity.documentId !== sourceSender.documentId) {
+    const error = new Error('AI 图片工作台来源页面已变化');
+    error.status = 409;
+    throw error;
+  }
+  const launchContext = globalThis.SS_ERP_SOURCE_AI_WORKBENCH_LAUNCH_CONTEXT;
+  if (!launchContext || typeof launchContext.createLiveSelectionVerifier !== 'function') {
+    throw new Error('AI 图片工作台来源选择验证不可用');
+  }
+  const verifyLiveSelection = launchContext.createLiveSelectionVerifier({
+    sendMessage: (tabId, message, options) => chrome.tabs.sendMessage(
+      tabId,
+      message,
+      options,
+    ),
+  });
+  await verifyLiveSelection({
+    sourceSender,
+    sourceProductId: request && request.sourceProductId,
+    sourceSelectionKey: value && value.sourceSelectionKey,
+  });
+}
+
+const SOURCE_AI_WORKBENCH_BINDING_KEYS = [
+  'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId', 'supplyGoodsId',
+  'shopId', 'workflowId', 'draftRevision', 'draftVersion',
+];
+
+function sourceAiWorkbenchChoiceBinding(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).length !== SOURCE_AI_WORKBENCH_BINDING_KEYS.length
+    || !SOURCE_AI_WORKBENCH_BINDING_KEYS.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+    return null;
+  }
+  const binding = {
+    sourcePlatform: sourceWorkflowPlatform(value.sourcePlatform),
+    sourceProductId: sourceWorkflowHandoffText(value.sourceProductId, 200),
+    sourceCaptureSnapshotId: sourceWorkflowHandoffText(value.sourceCaptureSnapshotId, 200),
+    supplyGoodsId: sourceWorkflowHandoffText(value.supplyGoodsId, 200),
+    shopId: sourceWorkflowHandoffText(value.shopId, 200),
+    workflowId: sourceWorkflowHandoffText(value.workflowId, 200),
+    draftRevision: value.draftRevision,
+    draftVersion: value.draftVersion,
+  };
+  return Object.values(binding).every(Boolean)
+    && Number.isSafeInteger(binding.draftRevision) && binding.draftRevision > 0
+    && Number.isSafeInteger(binding.draftVersion) && binding.draftVersion > 0
+    ? binding : null;
+}
+
+async function openAuthoritativeSourceAiWorkbench(message, sender) {
+  if (!message || Object.keys(message).length !== 7
+    || ![
+      'type', 'platform', 'sourceProductId', 'listingWorkflowId', 'preferredSkuKey', 'choiceBinding',
+      'sourceSelectionKey',
+    ].every(
       (key) => Object.prototype.hasOwnProperty.call(message, key),
     )) {
-    throw new Error('BYOK 工作台启动请求无效');
+    throw new Error('AI 图片工作台启动请求无效');
   }
   const sourceProductId = sourceWorkflowHandoffText(message.sourceProductId, 200);
   const platform = sourceWorkflowPlatform(message.platform);
   const requestedListingWorkflowId = sourceWorkflowHandoffText(message.listingWorkflowId, 200);
-  const sourceSender = sourceByokWorkbenchSenderIdentity(sender, platform, sourceProductId);
-  if (!sourceProductId || !platform || !requestedListingWorkflowId || !sourceSender) {
-    throw new Error('BYOK 工作台只能从当前货源商品页启动');
+  const preferredSkuKey = message.preferredSkuKey === null
+    ? null : sourceWorkflowHandoffText(message.preferredSkuKey, 500);
+  const choiceBinding = message.choiceBinding === null
+    ? null : sourceAiWorkbenchChoiceBinding(message.choiceBinding);
+  const sourceSelectionKey = message.sourceSelectionKey === null
+    ? null : sourceWorkflowHandoffText(message.sourceSelectionKey, 500);
+  const sourceSender = sourceAiWorkbenchSenderIdentity(sender, platform, sourceProductId);
+  if (!sourceProductId || !platform || !requestedListingWorkflowId || !sourceSender
+    || (message.preferredSkuKey !== null && !preferredSkuKey)
+    || (message.choiceBinding !== null && !choiceBinding)
+    || (message.sourceSelectionKey !== null && !sourceSelectionKey)
+    || (!choiceBinding && preferredSkuKey !== sourceSelectionKey)
+    || (choiceBinding && !preferredSkuKey)) {
+    throw new Error('AI 图片工作台只能从当前货源商品页启动');
   }
-  const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
-  if (!handoff || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
-    throw new Error('ERP 来源商品记录已变化，请重新采集后再试');
-  }
-  const current = await getSourceListingWorkflowClient().getStatus({
-    snapshotId: handoff.snapshotId,
-    supplyGoodsId: handoff.supplyGoodsId,
-  });
-  const listing = currentSourceListingContext(current, requestedListingWorkflowId);
-  if (!listing) throw new Error('ERP 商品草稿状态已变化，请刷新后重试');
-  return getByokWorkbenchRuntimeDispatcher().openFromSource({
-    request: {
+  try {
+    const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
+    if (!handoff || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
+      return { state: 'stale' };
+    }
+    const current = await getSourceListingWorkflowClient().getStatus({
+      snapshotId: handoff.snapshotId,
+      supplyGoodsId: handoff.supplyGoodsId,
+    });
+    if (current && ['unpaired', 'scope_required', 'authorization_required'].includes(current.state)) {
+      return { state: 'unavailable', reason: 'device_session_unavailable' };
+    }
+    const listing = currentSourceListingContext(current, requestedListingWorkflowId);
+    if (!listing) return { state: 'stale' };
+    const currentBinding = {
       sourcePlatform: platform,
       sourceProductId,
       sourceCaptureSnapshotId: handoff.snapshotId,
@@ -1959,9 +2044,29 @@ async function openAuthoritativeSourceByokWorkbench(message, sender) {
       workflowId: listing.listingWorkflowId,
       draftRevision: listing.revision,
       draftVersion: listing.draftVersion,
-    },
-    sourceSender,
-  });
+    };
+    if (choiceBinding && SOURCE_AI_WORKBENCH_BINDING_KEYS.some(
+      (key) => choiceBinding[key] !== currentBinding[key],
+    )) return { state: 'stale' };
+    return await getByokWorkbenchRuntimeDispatcher().openFromSource({
+      request: {
+        ...currentBinding,
+        preferredSkuKey,
+        selectionKind: choiceBinding ? 'EXPLICIT' : 'HINT',
+      },
+      sourceSender,
+      sourceSelectionKey,
+    });
+  } catch (error) {
+    if (Number(error && error.status) === 409) return { state: 'stale' };
+    if (Number(error && error.status) === 403
+      || ['unpaired', 'scope_required', 'authorization_required'].includes(
+        String(error && error.state || '')
+      )) {
+      return { state: 'unavailable', reason: 'device_session_unavailable' };
+    }
+    throw error;
+  }
 }
 
 async function loadAuthoritativeSourceAiImageSuiteProjection(message) {
@@ -4507,8 +4612,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === SS_ERP_SOURCE_WORKBENCH_BYOK_OPEN_MESSAGE) {
-    Promise.resolve(openAuthoritativeSourceByokWorkbench(message, sender)).then((result) => {
+  if (message.type === SS_ERP_SOURCE_AI_WORKBENCH_OPEN_MESSAGE) {
+    Promise.resolve(openAuthoritativeSourceAiWorkbench(message, sender)).then((result) => {
       sendResponse({ ok: true, result });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

@@ -218,6 +218,45 @@ describe('BYOK media ingest command grant', () => {
     })).resolves.toMatchObject({ kind: 'unavailable' });
   });
 
+  it('accepts a shared detail anchored to any exact selected SKU and rejects an unselected anchor', async () => {
+    const resolve = createByokMediaIngestCommandResolver({
+      loadShop: async () => ({
+        id: 'shop-1', userId: 'owner-1', platform: 'OZON', status: 'ACTIVE',
+      }),
+      loadDraft: async () => ({
+        id: 'workflow-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+        draftVersion: 7, revision: 11, sourceCaptureSnapshotId: 'snapshot-1',
+        selectedSkuKeys: ['sku-1', 'sku-2'],
+      }),
+      getReadiness: async (input) => readiness({
+        context: {
+          ownerUserId: input.ownerUserId,
+          shopId: input.shopId,
+          deviceSessionId: input.deviceSessionId,
+          providerOrigin: input.providerOrigin,
+          operation: input.operation,
+        },
+      }),
+    });
+    const requestInput = {
+      sessionId: 'session-1', ownerUserId: 'owner-1',
+      operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
+      shopId: 'shop-1', workflowId: 'workflow-1', draftVersion: 7,
+      idempotencyKey: 'byok-ingest-workflow-1-v7',
+    } as const;
+    await expect(resolve({
+      ...requestInput,
+      command: command({ skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' }),
+    })).resolves.toMatchObject({
+      kind: 'allowed',
+      command: { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' },
+    });
+    await expect(resolve({
+      ...requestInput,
+      command: command({ skuKey: 'sku-3', slotKey: 'shared:detail:SCENE' }),
+    })).resolves.toMatchObject({ kind: 'forbidden' });
+  });
+
   it.each([
     ['missing policy revision', readiness({ policyRevision: null })],
     ['wrong contract', readiness({ contractVersion: 'other/v1' })],

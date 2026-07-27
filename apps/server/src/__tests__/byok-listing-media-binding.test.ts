@@ -125,11 +125,11 @@ describe('BYOK listing media binding', () => {
     });
   });
 
-  it('binds a shared detail result as a product assignment using the first SKU as anchor', () => {
+  it('binds a shared detail result as a product assignment using an exact selected SKU anchor', () => {
     const current = draft();
     current.selectedSkuKeys = ['sku-1', 'sku-2'];
     const result = planByokGeneratedAssetListingBinding(current, input({
-      command: { skuKey: 'sku-1', slotKey: 'shared:detail:SCENE' },
+      command: { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' },
     }));
     expect(result.assignment).toEqual({
       scope: 'PRODUCT',
@@ -139,7 +139,7 @@ describe('BYOK listing media binding', () => {
     });
     expect(result.draft.media.assignments.at(-1)).toEqual(result.assignment);
     expect(result.draft.auditEvents.at(-1)?.details).toMatchObject({
-      skuKey: 'sku-1',
+      skuKey: 'sku-2',
       slotKey: 'shared:detail:SCENE',
     });
   });
@@ -185,7 +185,7 @@ describe('BYOK listing media binding', () => {
     }))).toThrow(/frozen slot and order/i);
   });
 
-  it('rejects occupied shared detail, group-subset detail, and a wrong shared anchor', () => {
+  it('rejects occupied shared detail, group-subset detail, and an unselected shared anchor', () => {
     const occupied = draft([{
       scope: 'PRODUCT',
       slotKey: 'shared:detail:SCENE',
@@ -200,11 +200,11 @@ describe('BYOK listing media binding', () => {
       command: { slotKey: 'group:all:detail:SCENE' },
     }))).toThrow(/slot/i);
 
-    const wrongAnchor = draft();
-    wrongAnchor.selectedSkuKeys = ['sku-1', 'sku-2'];
-    expect(() => planByokGeneratedAssetListingBinding(wrongAnchor, input({
-      command: { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' },
-    }))).toThrow(/anchor/i);
+    const unselectedAnchor = draft();
+    unselectedAnchor.selectedSkuKeys = ['sku-1', 'sku-2'];
+    expect(() => planByokGeneratedAssetListingBinding(unselectedAnchor, input({
+      command: { skuKey: 'sku-3', slotKey: 'shared:detail:SCENE' },
+    }))).toThrow(/changed/i);
   });
 
   it('rejects hidden URL fields already persisted in a draft assignment', () => {

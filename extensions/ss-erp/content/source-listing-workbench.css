@@ -142,7 +142,7 @@
 
 .ss-erp-source-workbench-workflow-primary {
   width: 100%;
-  min-height: 34px;
+  min-height: 44px;
   margin-top: 8px;
   border: 1px solid #0f766e;
   border-radius: 7px;
@@ -153,47 +153,51 @@
   font-weight: 800;
 }
 
-.ss-erp-source-workbench-byok-launcher {
+.ss-erp-source-workbench-ai-launcher {
   display: flex;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   margin: 9px 0;
-  border: 1px solid rgba(180, 83, 9, 0.28);
-  border-radius: 8px;
-  background: linear-gradient(135deg, #fff7ed, #ffffff 72%);
+  border: 1px solid #a7b4c2;
+  border-radius: 7px;
+  background: #fff;
   padding: 9px 10px;
+  max-width: 100%;
 }
 
-.ss-erp-source-workbench-byok-copy {
+.ss-erp-source-workbench-ai-copy {
+  flex: 1 1 150px;
   min-width: 0;
 }
 
-.ss-erp-source-workbench-byok-copy strong,
-.ss-erp-source-workbench-byok-copy span {
+.ss-erp-source-workbench-ai-copy strong,
+.ss-erp-source-workbench-ai-copy span {
   display: block;
   overflow-wrap: anywhere;
 }
 
-.ss-erp-source-workbench-byok-copy strong {
-  color: #9a3412;
+.ss-erp-source-workbench-ai-copy strong {
+  color: #172033;
   font-size: 11px;
 }
 
-.ss-erp-source-workbench-byok-copy span {
+.ss-erp-source-workbench-ai-copy span {
   margin-top: 2px;
   color: #64748b;
   font-size: 9px;
   line-height: 1.45;
 }
 
-.ss-erp-source-workbench-byok-button {
-  min-height: 32px;
+.ss-erp-source-workbench-ai-button,
+.ss-erp-source-workbench-ai-refresh {
+  min-height: 44px;
   flex: 0 0 auto;
-  border: 1px solid #c2410c;
+  border: 1px solid #0f766e;
   border-radius: 7px;
-  background: #c2410c;
+  background: #0f766e;
   color: #fff;
   padding: 0 10px;
   cursor: pointer;
@@ -202,9 +206,51 @@
   white-space: nowrap;
 }
 
-.ss-erp-source-workbench-byok-button:disabled {
+.ss-erp-source-workbench-ai-refresh {
+  border-color: #64748b;
+  background: #fff;
+  color: #334155;
+}
+
+.ss-erp-source-workbench-ai-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.ss-erp-source-workbench-ai-button:focus-visible,
+.ss-erp-source-workbench-ai-refresh:focus-visible,
+.ss-erp-source-workbench-ai-select:focus-visible,
+.ss-erp-source-workbench-listing-select:focus-visible {
+  outline: 3px solid #0e7490;
+  outline-offset: 2px;
+}
+
+.ss-erp-source-workbench-ai-picker {
+  display: grid;
+  flex: 1 1 180px;
+  min-width: 0;
+  gap: 3px;
+  color: #475569;
+  font-size: 10px;
+}
+
+.ss-erp-source-workbench-ai-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid #64748b;
+  border-radius: 4px;
+  background: #fff;
+  color: #172033;
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-ai-state {
+  flex: 1 0 100%;
+  margin: 0;
+  color: #9f1239;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .ss-erp-source-workbench-metrics {
@@ -215,6 +261,13 @@
 
 .ss-erp-source-workbench-listing-picker {
   margin: 8px 0 10px;
+}
+
+.ss-erp-source-workbench-listing-note {
+  margin: 5px 0 0;
+  color: #9f1239;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .ss-erp-source-workbench-listing-picker label {
@@ -228,7 +281,7 @@
 .ss-erp-source-workbench-listing-select {
   flex: 1 1 auto;
   min-width: 0;
-  height: 30px;
+  min-height: 44px;
   border: 1px solid #94a3b8;
   border-radius: 4px;
   background: #fff;
@@ -648,13 +701,26 @@
 }
 
 @media (max-width: 520px) {
-  .ss-erp-source-workbench-byok-launcher {
+  .ss-erp-source-workbench-ai-launcher {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .ss-erp-source-workbench-byok-button {
+  .ss-erp-source-workbench-ai-button,
+  .ss-erp-source-workbench-ai-refresh {
     width: 100%;
+  }
+
+  .ss-erp-source-workbench-ai-picker {
+    flex: 0 0 auto;
+  }
+
+  .ss-erp-source-workbench-ai-copy {
+    flex: 0 0 auto;
+  }
+
+  .ss-erp-source-workbench-ai-select {
+    height: 44px;
   }
 
   .ss-erp-source-workbench-workflow-grid {
@@ -686,5 +752,25 @@
 
   .ss-erp-source-workbench-source-gallery {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ss-erp-source-workbench-workflow.is-ready:hover {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ss-erp-source-workbench-ai-launcher,
+  .ss-erp-source-workbench-ai-button,
+  .ss-erp-source-workbench-ai-refresh,
+  .ss-erp-source-workbench-ai-select,
+  .ss-erp-source-workbench-listing-select {
+    border-color: ButtonText;
+  }
+
+  .ss-erp-source-workbench-ai-button:disabled {
+    color: GrayText;
   }
 }

@@ -6,7 +6,8 @@
   var MEDIA_FAB_ID = 'ss-erp-source-media-fab';
   var PANEL_POSITION_KEY = 'ss-erp:source-costing-panel-position';
   var SourceCosting = window.SS_ERP_SOURCE_COSTING_CORE;
-  if (!SourceCosting) return;
+  var AiWorkbenchLaunchContext = window.SS_ERP_SOURCE_AI_WORKBENCH_LAUNCH_CONTEXT;
+  if (!SourceCosting || !AiWorkbenchLaunchContext) return;
   var SOURCE_PLATFORM = SourceCosting.detectSourcePlatform(location.href, location.hostname);
   var state = {
     context: null,
@@ -67,7 +68,13 @@
     productRequestSeq: 0,
     sourcePageKey: '',
     openingSourceWorkflow: false,
-    sourceWorkbenchByokOpening: false,
+    sourceAiWorkbenchOpening: false,
+    sourceAiWorkbenchState: 'idle',
+    sourceAiWorkbenchChoice: null,
+    sourceAiWorkbenchSkuOptions: [],
+    sourceAiWorkbenchSelectedSkuKey: '',
+    sourceAiWorkbenchRequestSeq: 0,
+    sourceAiWorkbenchFocusTarget: '',
     refreshTimer: null,
     lastCostSignature: '',
     lastProductSignature: ''
@@ -195,6 +202,7 @@
     mediaFab.type = 'button';
     mediaFab.textContent = 'AI';
     mediaFab.title = 'SS ERP AI 图片处理工作台';
+    mediaFab.setAttribute('aria-label', '打开 SS ERP AI 图片工作台');
     mediaFab.setAttribute('aria-controls', PANEL_ID);
     mediaFab.setAttribute('aria-expanded', 'false');
 
@@ -222,7 +230,7 @@
       '    <button type="button" class="secondary" data-action="collect-erp" title="采集当前货源商品到 ERP">采集货源到ERP</button>',
       '    <button type="button" class="secondary" data-action="open-source-workflow" title="打开已保存的 ERP 来源商品" hidden>打开 ERP 继续</button>',
       '  </div>',
-      '  <div class="ss-erp-source-status" data-role="status"></div>',
+      '  <div class="ss-erp-source-status" data-role="status" role="status" aria-live="polite" aria-atomic="true"></div>',
       '</div>'
     ].join('');
     renderLoadingContent(panel);
@@ -337,9 +345,19 @@
   function startAutoRefresh() {
     if (state.refreshTimer) return;
     state.refreshTimer = window.setInterval(function () {
-      if (!state.opened) return;
+      if (!state.opened || state.sourceAiWorkbenchOpening
+        || state.sourceAiWorkbenchState === 'refreshing'
+        || sourceWorkbenchHasActiveInteraction()) return;
       refreshProductOnly({ auto: true });
     }, 1000);
+  }
+
+  function sourceWorkbenchHasActiveInteraction() {
+    var panel = document.getElementById(PANEL_ID);
+    var workbench = panel && panel.querySelector('[data-role="source-listing-workbench"]');
+    var active = document.activeElement;
+    return Boolean(workbench && active && typeof workbench.contains === 'function'
+      && workbench.contains(active));
   }
 
   function stopAutoRefresh() {
@@ -445,7 +463,13 @@
     state.sourceWorkbenchRequestSeq += 1;
     state.sourceWorkbenchCommandKey = '';
     state.sourceWorkbenchCreateKey = '';
-    state.sourceWorkbenchByokOpening = false;
+    state.sourceAiWorkbenchOpening = false;
+    state.sourceAiWorkbenchState = 'idle';
+    state.sourceAiWorkbenchChoice = null;
+    state.sourceAiWorkbenchSkuOptions = [];
+    state.sourceAiWorkbenchSelectedSkuKey = '';
+    state.sourceAiWorkbenchRequestSeq += 1;
+    state.sourceAiWorkbenchFocusTarget = '';
     resetSourceWorkbenchAiImageSuite();
     state.sourceWorkbenchMediaCreateDraft = {
       operation: 'IMAGE_TO_IMAGE',
@@ -569,8 +593,10 @@
         }
         state.product = nextProduct;
         state.lastProductSignature = nextSignature;
-        hydrateInputs();
-        renderContent();
+        if (changed || options.force) {
+          hydrateInputs();
+          renderContent();
+        }
         void refreshSourceWorkbenchStatus({
           force: Boolean(changed || options.force),
           maxAgeMs: 5000,
@@ -625,6 +651,7 @@
       state.sourceWorkbenchLastRefreshAt = 0;
       state.sourceWorkbenchLoadingProductId = '';
       state.sourceWorkbenchRequestSeq += 1;
+      resetSourceAiWorkbenchChoice('idle');
       resetSourceWorkbenchAiImageSuite();
       renderContent();
       return;
@@ -671,6 +698,7 @@
         state.sourceWorkbenchHistoryError = '';
         state.sourceWorkbenchHistoryRequestSeq += 1;
         state.sourceWorkbenchHistoryOpen = false;
+        resetSourceAiWorkbenchChoice('idle');
         resetSourceWorkbenchAiImageSuite();
       }
       var selectedListing = listings.find(function (item) {
@@ -688,6 +716,7 @@
         state.sourceWorkbenchHistoryOpen = false;
       }
       if (selectedListing) {
+        syncSourceAiWorkbenchChoice(selectedListing, sourceProductId);
         sourceWorkbenchAiImageSuiteController.syncBinding(
           sourceWorkbenchAiImageSuiteBinding(selectedListing, sourceProductId)
         );
@@ -806,35 +835,156 @@
     }) || null;
   }
 
-  async function openSourceWorkbenchByok(listing) {
+  function sourceAiWorkbenchBinding(listing, sourceProductId) {
+    var handoff = state.sourceWorkflowHandoff;
+    if (!listing || !handoff || !sourceProductId) return null;
+    return {
+      sourcePlatform: SOURCE_PLATFORM,
+      sourceProductId: sourceProductId,
+      sourceCaptureSnapshotId: handoff.snapshotId,
+      supplyGoodsId: handoff.supplyGoodsId,
+      shopId: listing.shopId,
+      workflowId: listing.id,
+      draftRevision: listing.revision,
+      draftVersion: listing.draftVersion
+    };
+  }
+
+  function resetSourceAiWorkbenchChoice(nextState) {
+    state.sourceAiWorkbenchState = nextState || 'idle';
+    state.sourceAiWorkbenchChoice = null;
+    state.sourceAiWorkbenchSkuOptions = [];
+    state.sourceAiWorkbenchSelectedSkuKey = '';
+  }
+
+  function syncSourceAiWorkbenchChoice(listing, sourceProductId) {
+    if (!state.sourceAiWorkbenchChoice) return;
+    var expected = sourceAiWorkbenchBinding(listing, sourceProductId);
+    var choice = expected && AiWorkbenchLaunchContext.normalizeChoice(
+      state.sourceAiWorkbenchChoice,
+      expected
+    );
+    if (!choice) resetSourceAiWorkbenchChoice('idle');
+  }
+
+  function selectSourceAiWorkbenchSku(skuKey) {
+    if (state.sourceAiWorkbenchOpening || state.sourceAiWorkbenchState === 'refreshing') return;
+    var selected = String(skuKey || '').normalize('NFKC').trim();
+    if (!state.sourceAiWorkbenchSkuOptions.some(function (item) {
+      return item && item.skuKey === selected;
+    })) selected = '';
+    state.sourceAiWorkbenchSelectedSkuKey = selected;
+    state.sourceAiWorkbenchFocusTarget = selected ? 'open' : 'sku-select';
+    renderContent();
+  }
+
+  async function refreshSourceAiWorkbenchContext() {
+    var requestSeq = ++state.sourceAiWorkbenchRequestSeq;
+    resetSourceAiWorkbenchChoice('refreshing');
+    state.sourceWorkbenchLastRefreshAt = 0;
+    setStatus('正在刷新 AI 图片工作台上下文...', '');
+    renderContent();
+    try {
+      await refreshSourceWorkbenchStatus({ force: true });
+    } finally {
+      if (requestSeq === state.sourceAiWorkbenchRequestSeq
+        && state.sourceAiWorkbenchState === 'refreshing') {
+        resetSourceAiWorkbenchChoice('idle');
+        state.sourceAiWorkbenchFocusTarget = 'open';
+        renderContent();
+      }
+    }
+  }
+
+  async function openSourceAiWorkbench(listing) {
     var current = currentSourceWorkbenchListing();
     var sourceProductId = currentSourceProductId();
     var handoff = state.sourceWorkflowHandoff;
-    if (state.sourceWorkbenchByokOpening
+    if (state.sourceAiWorkbenchOpening
       || !listing || !current || listing.id !== current.id
       || !sourceProductId || sourceProductId.length > 200
       || !handoff || handoff.sourceProductId !== sourceProductId
       || handoff.platform !== SOURCE_PLATFORM
       || state.sourcePageKey !== currentSourcePageKey()) return;
-    state.sourceWorkbenchByokOpening = true;
+    var binding = sourceAiWorkbenchBinding(current, sourceProductId);
+    if (!binding) return;
+    var explicitSkuKey = state.sourceAiWorkbenchState === 'choice_required'
+      ? state.sourceAiWorkbenchSelectedSkuKey : '';
+    var choiceBinding = state.sourceAiWorkbenchState === 'choice_required'
+      && state.sourceAiWorkbenchChoice
+      ? state.sourceAiWorkbenchChoice.binding : null;
+    if (state.sourceAiWorkbenchState === 'choice_required'
+      && (!explicitSkuKey || !choiceBinding)) return;
+    var sourceSelectionKey = AiWorkbenchLaunchContext.derivePreferredSkuKey(state.product) || null;
+    var preferredSkuKey = explicitSkuKey || sourceSelectionKey;
+    var requestSeq = ++state.sourceAiWorkbenchRequestSeq;
+    var pageKey = currentSourcePageKey();
+    state.sourceAiWorkbenchOpening = true;
     renderContent();
-    setStatus('正在安全打开 BYOK 单图工作台...', '');
+    setStatus('正在打开 AI 图片工作台...', '');
     try {
       var response = await sendRuntimeMessage({
-        type: 'ss-erp:source-listing-workbench-byok-open',
+        type: 'ss-erp:source-ai-workbench-open',
         platform: SOURCE_PLATFORM,
         sourceProductId: sourceProductId,
-        listingWorkflowId: current.id
+        listingWorkflowId: current.id,
+        preferredSkuKey: preferredSkuKey,
+        choiceBinding: choiceBinding,
+        sourceSelectionKey: sourceSelectionKey
       });
-      if (!response || !response.ok || !response.result
-        || response.result.state !== 'workbench_opened') {
-        throw new Error(response && response.error || 'BYOK 工作台打开失败');
+      var latest = currentSourceWorkbenchListing();
+      var latestBinding = sourceAiWorkbenchBinding(latest, currentSourceProductId());
+      if (requestSeq !== state.sourceAiWorkbenchRequestSeq
+        || pageKey !== currentSourcePageKey()
+        || !latestBinding
+        || Object.keys(binding).some(function (key) { return latestBinding[key] !== binding[key]; })) {
+        return;
       }
-      setStatus('BYOK 单图工作台已在独立标签页打开。', 'ok');
+      if (!response || !response.ok || !response.result
+        || !['workbench_opened', 'workbench_focused', 'choice_required', 'stale', 'unavailable'].includes(
+          response.result.state
+        )) {
+        throw new Error(response && response.error || 'AI 图片工作台打开失败');
+      }
+      if (response.result.state === 'choice_required') {
+        var choice = AiWorkbenchLaunchContext.normalizeChoice(response.result, binding);
+        if (!choice) throw new Error('AI 图片工作台 SKU 选择上下文无效');
+        state.sourceAiWorkbenchState = 'choice_required';
+        state.sourceAiWorkbenchChoice = choice;
+        state.sourceAiWorkbenchSkuOptions = AiWorkbenchLaunchContext.buildSkuOptions(
+          choice,
+          state.product
+        );
+        state.sourceAiWorkbenchSelectedSkuKey = '';
+        state.sourceAiWorkbenchFocusTarget = 'sku-select';
+        setStatus('请选择要处理的 SKU。', '');
+        return;
+      }
+      if (response.result.state === 'stale') {
+        resetSourceAiWorkbenchChoice('stale');
+        state.sourceAiWorkbenchFocusTarget = 'refresh';
+        setStatus('商品或草稿已变化，请刷新后重新选择。', 'fail');
+        return;
+      }
+      if (response.result.state === 'unavailable') {
+        resetSourceAiWorkbenchChoice('unavailable');
+        state.sourceAiWorkbenchFocusTarget = 'refresh';
+        setStatus('扩展设备会话不可用，请在扩展设置中检查 ERP 连接。', 'fail');
+        return;
+      }
+      resetSourceAiWorkbenchChoice('idle');
+      setStatus(
+        response.result.state === 'workbench_focused'
+          ? '已切换到当前 AI 图片工作台。'
+          : 'AI 图片工作台已在独立标签页打开。',
+        'ok'
+      );
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
-      state.sourceWorkbenchByokOpening = false;
+      if (requestSeq === state.sourceAiWorkbenchRequestSeq) {
+        state.sourceAiWorkbenchOpening = false;
+      }
       renderContent();
     }
   }
@@ -1128,10 +1278,23 @@
           aiImageSuiteError: state.sourceWorkbenchAiImageSuiteError,
           aiImageSuiteBusyKey: state.sourceWorkbenchAiImageSuiteBusyKey,
           aiImageSuiteOpen: state.sourceWorkbenchAiImageSuiteOpen,
-          byokWorkbenchAvailable: Boolean(state.sourceWorkflowHandoff),
-          byokWorkbenchBusy: state.sourceWorkbenchByokOpening,
-          onOpenByokWorkbench: function (listing) {
-            void openSourceWorkbenchByok(listing);
+          aiWorkbenchAvailable: Boolean(state.sourceWorkflowHandoff),
+          aiWorkbenchBusy: state.sourceAiWorkbenchOpening
+            || state.sourceAiWorkbenchState === 'refreshing',
+          aiWorkbenchState: state.sourceAiWorkbenchState,
+          aiWorkbenchMessage: state.sourceAiWorkbenchState === 'stale'
+            ? '商品或草稿已变化，请刷新后重新选择。'
+            : state.sourceAiWorkbenchState === 'unavailable'
+              ? '扩展设备会话不可用，请检查 ERP 连接。'
+            : '',
+          aiWorkbenchSkuOptions: state.sourceAiWorkbenchSkuOptions,
+          selectedAiWorkbenchSkuKey: state.sourceAiWorkbenchSelectedSkuKey,
+          onSelectAiWorkbenchSku: selectSourceAiWorkbenchSku,
+          onOpenAiWorkbench: function (listing) {
+            void openSourceAiWorkbench(listing);
+          },
+          onRefreshAiWorkbench: function () {
+            void refreshSourceAiWorkbenchContext();
           },
           onLoadAiImageSuite: function (metadata) {
             return loadSourceWorkbenchAiImageSuite(metadata);
@@ -1181,7 +1344,10 @@
             void openSourceWorkbenchMediaEditor(draft);
           },
           onSelectListing: function (listingWorkflowId) {
+            if (state.sourceAiWorkbenchOpening
+              || state.sourceAiWorkbenchState === 'refreshing') return;
             state.sourceWorkbenchListingId = String(listingWorkflowId || '');
+            resetSourceAiWorkbenchChoice('idle');
             state.sourceWorkbenchMediaCreateDraft = {
               operation: 'IMAGE_TO_IMAGE',
               sourceMediaKeys: []
@@ -1233,6 +1399,19 @@
       openWorkflowButton.hidden = !state.sourceWorkflowHandoff;
       openWorkflowButton.disabled = !state.sourceWorkflowHandoff || state.openingSourceWorkflow;
     }
+    restoreSourceAiWorkbenchFocus();
+  }
+
+  function restoreSourceAiWorkbenchFocus() {
+    var target = state.sourceAiWorkbenchFocusTarget;
+    if (!target) return;
+    state.sourceAiWorkbenchFocusTarget = '';
+    window.setTimeout(function () {
+      var node = document.querySelector(
+        '#' + PANEL_ID + ' [data-role="ai-workbench-' + target + '"]'
+      );
+      if (node && typeof node.focus === 'function') node.focus({ preventScroll: true });
+    }, 0);
   }
 
   function renderLoadingContent(panel) {

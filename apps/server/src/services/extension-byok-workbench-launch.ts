@@ -1,7 +1,12 @@
 import { z } from 'zod';
+import { containsSecretBearingIdentifier } from './extension-byok-media-provenance.js';
 
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION =
   'extension-byok-workbench-launch-request/v1' as const;
+export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2 =
+  'extension-byok-workbench-launch-request/v2' as const;
+export const EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION =
+  'extension-byok-workbench-launch-decision/v2' as const;
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION =
   'extension-byok-workbench-launch-context/v1' as const;
 export const EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION =
@@ -23,10 +28,9 @@ const identifier = (maximum: number) => z.string().min(1).max(maximum)
   .refine((value) => !hasControlCharacter(value))
   .refine((value) => !/[?#]/u.test(value))
   .refine((value) => !/(?:https?|ftp|data):/iu.test(value))
-  .refine((value) => !/(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]/iu.test(value));
+  .refine((value) => !containsSecretBearingIdentifier(value));
 
-const launchRequestSchema = z.object({
-  contractVersion: z.literal(EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION),
+const launchAuthoritySchema = z.object({
   sourcePlatform: z.enum(SOURCE_PLATFORMS),
   sourceProductId: identifier(200),
   sourceCaptureSnapshotId: identifier(200),
@@ -35,9 +39,34 @@ const launchRequestSchema = z.object({
   workflowId: identifier(200),
   draftRevision: z.number().int().positive(),
   draftVersion: z.number().int().positive(),
-}).strict();
+});
+
+const launchRequestSchema = z.discriminatedUnion('contractVersion', [
+  launchAuthoritySchema.extend({
+    contractVersion: z.literal(EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION),
+  }).strict(),
+  launchAuthoritySchema.extend({
+    contractVersion: z.literal(EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2),
+    preferredSkuKey: identifier(500).nullable(),
+    selectionKind: z.enum(['HINT', 'EXPLICIT']),
+  }).strict(),
+]);
 
 export type ExtensionByokWorkbenchLaunchRequest = z.infer<typeof launchRequestSchema>;
+export type ExtensionByokWorkbenchLaunchRequestV1 = Extract<
+  ExtensionByokWorkbenchLaunchRequest,
+  { contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION }
+>;
+export type ExtensionByokWorkbenchLaunchRequestV2 = Extract<
+  ExtensionByokWorkbenchLaunchRequest,
+  { contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2 }
+>;
+
+export type ExtensionByokWorkbenchLaunchBinding = Pick<
+  ExtensionByokWorkbenchLaunchRequest,
+  | 'sourcePlatform' | 'sourceProductId' | 'sourceCaptureSnapshotId' | 'supplyGoodsId'
+  | 'shopId' | 'workflowId' | 'draftRevision' | 'draftVersion'
+>;
 
 export interface ExtensionByokWorkbenchLaunchContext {
   contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION;
@@ -54,6 +83,19 @@ export interface ExtensionByokWorkbenchLaunchContext {
   assignmentMode: 'APPEND';
   assignmentOrdinal: number;
 }
+
+export type ExtensionByokWorkbenchLaunchDecision =
+  | {
+    contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION;
+    state: 'READY';
+    context: ExtensionByokWorkbenchLaunchContext;
+  }
+  | {
+    contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION;
+    state: 'CHOICE_REQUIRED';
+    binding: ExtensionByokWorkbenchLaunchBinding;
+    skuKeys: string[];
+  };
 
 export interface ExtensionByokWorkbenchBatchLaunchContext {
   contractVersion: typeof EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION;
@@ -227,6 +269,43 @@ function resolveDraftMediaAuthority(input: {
   };
 }
 
+function emptySkuHeroKeys(authority: ReturnType<typeof resolveDraftMediaAuthority>): string[] {
+  return authority.skuKeys.filter((skuKey) => {
+    const slotKey = `sku:${skuKey}:hero`;
+    return slotKey.length <= 200 && !authority.occupiedSlots.has(slotKey);
+  });
+}
+
+function launchBinding(
+  request: ExtensionByokWorkbenchLaunchRequest,
+): ExtensionByokWorkbenchLaunchBinding {
+  return {
+    sourcePlatform: request.sourcePlatform,
+    sourceProductId: request.sourceProductId,
+    sourceCaptureSnapshotId: request.sourceCaptureSnapshotId,
+    supplyGoodsId: request.supplyGoodsId,
+    shopId: request.shopId,
+    workflowId: request.workflowId,
+    draftRevision: request.draftRevision,
+    draftVersion: request.draftVersion,
+  };
+}
+
+function launchContext(
+  request: ExtensionByokWorkbenchLaunchRequest,
+  skuKey: string,
+  assignmentOrdinal: number,
+): ExtensionByokWorkbenchLaunchContext {
+  return {
+    contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
+    ...launchBinding(request),
+    skuKey,
+    slotKey: `sku:${skuKey}:hero`,
+    assignmentMode: 'APPEND',
+    assignmentOrdinal,
+  };
+}
+
 export function resolveExtensionByokWorkbenchSlotTarget(input: {
   ownerUserId: string;
   request: ExtensionByokWorkbenchLaunchRequest;
@@ -249,7 +328,7 @@ export function resolveExtensionByokWorkbenchSlotTarget(input: {
   }
   const isSkuHero = authority.skuKeys.includes(skuKey)
     && slotKey === `sku:${skuKey}:hero`;
-  const isSharedDetail = skuKey === authority.skuKeys[0]
+  const isSharedDetail = authority.skuKeys.includes(skuKey)
     && SHARED_DETAIL_ROLES.some((role) => slotKey === `shared:detail:${role}`);
   if (!isSkuHero && !isSharedDetail) {
     return fail(
@@ -275,37 +354,76 @@ export function resolveExtensionByokWorkbenchSlotTarget(input: {
 
 export function resolveExtensionByokWorkbenchLaunchContext(input: {
   ownerUserId: string;
-  request: ExtensionByokWorkbenchLaunchRequest;
+  request: ExtensionByokWorkbenchLaunchRequestV1;
   draft: ExtensionByokWorkbenchDraft;
 }): ExtensionByokWorkbenchLaunchContext {
   const { request } = input;
   const authority = resolveDraftMediaAuthority(input);
-  const skuKey = authority.skuKeys.find((candidate) => {
-    if (!candidate) return false;
-    const slotKey = `sku:${candidate}:hero`;
-    return slotKey.length <= 200 && !authority.occupiedSlots.has(slotKey);
-  });
-  if (!skuKey) {
+  const candidates = emptySkuHeroKeys(authority);
+  if (authority.skuKeys.length !== 1 || candidates.length !== 1) {
     return fail(
       'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
       409,
-      'No empty SKU hero slot is available for the first BYOK workbench release',
+      authority.skuKeys.length !== 1
+        ? 'An explicit SKU choice is required'
+        : candidates.length === 0
+        ? 'No empty SKU hero slot is available'
+        : 'An explicit SKU choice is required',
     );
   }
+  return launchContext(request, candidates[0]!, authority.assignments.length);
+}
+
+export function resolveExtensionByokWorkbenchLaunchDecision(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequestV2;
+  draft: ExtensionByokWorkbenchDraft;
+}): ExtensionByokWorkbenchLaunchDecision {
+  const { request } = input;
+  const authority = resolveDraftMediaAuthority(input);
+  const candidates = emptySkuHeroKeys(authority);
+  if (request.preferredSkuKey !== null) {
+    if (authority.skuKeys.includes(request.preferredSkuKey)
+      && candidates.includes(request.preferredSkuKey)) {
+      return {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION,
+        state: 'READY',
+        context: launchContext(request, request.preferredSkuKey, authority.assignments.length),
+      };
+    }
+    if (request.selectionKind === 'EXPLICIT') {
+      return fail(
+        'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+        409,
+        'The preferred SKU hero is not available',
+      );
+    }
+  } else if (request.selectionKind === 'EXPLICIT') {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_REQUEST_INVALID',
+      400,
+      'An explicit SKU selection is required',
+    );
+  }
+  if (candidates.length === 0) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'No empty SKU hero slot is available',
+    );
+  }
+  if (candidates.length === 1 && request.preferredSkuKey === null) {
+    return {
+      contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION,
+      state: 'READY',
+      context: launchContext(request, candidates[0]!, authority.assignments.length),
+    };
+  }
   return {
-    contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
-    sourcePlatform: request.sourcePlatform,
-    sourceProductId: request.sourceProductId,
-    sourceCaptureSnapshotId: request.sourceCaptureSnapshotId,
-    supplyGoodsId: request.supplyGoodsId,
-    shopId: request.shopId,
-    workflowId: request.workflowId,
-    draftRevision: request.draftRevision,
-    draftVersion: request.draftVersion,
-    skuKey,
-    slotKey: `sku:${skuKey}:hero`,
-    assignmentMode: 'APPEND',
-    assignmentOrdinal: authority.assignments.length,
+    contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION,
+    state: 'CHOICE_REQUIRED',
+    binding: launchBinding(request),
+    skuKeys: candidates,
   };
 }
 
@@ -316,15 +434,41 @@ export function resolveExtensionByokWorkbenchBatchLaunchContext(input: {
 }): ExtensionByokWorkbenchBatchLaunchContext {
   const { request } = input;
   const authority = resolveDraftMediaAuthority(input);
-  const anchorSkuKey = authority.skuKeys[0]!;
+  if (request.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION
+    && authority.skuKeys.length !== 1) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'An explicit batch anchor SKU is required',
+    );
+  }
+  const candidates = emptySkuHeroKeys(authority);
+  const anchorSkuKey = request.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
+    ? request.preferredSkuKey
+    : authority.skuKeys[0]!;
+  if (request.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
+    && (request.selectionKind !== 'EXPLICIT'
+      || !anchorSkuKey
+      || !authority.skuKeys.includes(anchorSkuKey)
+      || !candidates.includes(anchorSkuKey))) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'An exact empty batch anchor SKU is required',
+    );
+  }
+  const orderedSkuKeys = request.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
+    ? [anchorSkuKey!, ...authority.skuKeys.filter((skuKey) => skuKey !== anchorSkuKey)]
+    : authority.skuKeys;
   const targets = [
-    ...authority.skuKeys.map((skuKey) => ({ skuKey, slotKey: `sku:${skuKey}:hero` })),
+    ...orderedSkuKeys.map((skuKey) => ({ skuKey, slotKey: `sku:${skuKey}:hero` })),
     ...SHARED_DETAIL_ROLES.map((role) => ({
-      skuKey: anchorSkuKey,
+      skuKey: anchorSkuKey!,
       slotKey: `shared:detail:${role}`,
     })),
   ].filter((target) => target.slotKey.length <= 200
-    && !authority.occupiedSlots.has(target.slotKey));
+    && !authority.occupiedSlots.has(target.slotKey))
+    .slice(0, MAX_ASSIGNMENTS - authority.assignments.length);
   if (targets.length === 0) {
     return fail(
       'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
@@ -342,7 +486,7 @@ export function resolveExtensionByokWorkbenchBatchLaunchContext(input: {
     workflowId: request.workflowId,
     draftRevision: request.draftRevision,
     draftVersion: request.draftVersion,
-    anchorSkuKey,
+    anchorSkuKey: anchorSkuKey!,
     firstAssignmentOrdinal: authority.assignments.length,
     targets,
   };

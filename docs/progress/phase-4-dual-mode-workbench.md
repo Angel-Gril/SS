@@ -1,6 +1,6 @@
 # Phase 4: Complete Dual-Mode Workbench
 
-Progress: 4/5 tasks.
+Progress: 5/5 tasks.
 
 ## Tasks
 
@@ -16,7 +16,7 @@ Progress: 4/5 tasks.
 - [x] `BYOK-01` Connect batch BYOK review/ingest/binding (`P0`, `XL`). Acceptance: selected
   slots run in background; local review determines ingest; publish-selected outputs are
   normalized/stored/hashed/bound; ERP AI charge is zero; retry warns of Provider charges.
-- [ ] `UI-06` Add compact auto-bound source launcher (`P1`, `M`). Acceptance: valid device
+- [x] `UI-06` Add compact auto-bound source launcher (`P1`, `M`). Acceptance: valid device
   session avoids manual pairing; exact source/shop/draft/SKU context prefills; ambiguous or
   stale context requires explicit choice.
 
@@ -131,3 +131,29 @@ Progress: 4/5 tasks.
   cannot protect the new recovery lifecycle indefinitely after its normal TTL. Do not downgrade
   while a BYOK batch is pending; drain it first or use a rollback package that includes the new
   launch-session and Registry recovery layer.
+- 2026-07-28: `UI-06` completed the compact unified `AI Image Workbench` launcher on the existing
+  source panel. A valid extension device session now opens or focuses one exact-context workbench
+  without manual pairing. Launch v2 binds the source product, capture snapshot, supply goods,
+  owner-authorized shop, listing draft revision/version, and either a selected SKU hint or an
+  explicit choice. Multiple eligible SKU heroes require a revision-bound choice; duplicate labels,
+  truncated draft lists, stale contexts, and unavailable device authority remain explicit states.
+- The source launch message carries a separate live SKU witness. Immediately before any session is
+  opened, the background worker re-collects the exact original top-frame document by
+  `tabId`/`frameId`/`documentId` and compares both product identity and the derived selected SKU.
+  Same-URL SKU switches therefore return stale and never reach `session.open`. The validator is a
+  required runtime dependency, with negative construction and production wiring tests.
+- Legacy v1 launch and batch requests now fail closed for every multi-SKU draft instead of guessing
+  a first or uniquely empty SKU. Single-SKU v1 compatibility remains, including batch detail-only
+  continuation after its HERO is occupied. Launch uses `listing:review`; BYOK readiness, Provider
+  execution, and ingest retain the separate `byok:media:ingest` authority. Trusted batch launch 409
+  and 403 states map to stable stale-context and device-reconnect errors without reflecting server
+  error text.
+- Real Chromium QA passed at 1440x900, 1024x768, 768x900, 390x844, and 720x450, including keyboard
+  selection/focus return, busy locking, reduced motion, forced colors, mobile overflow, and 44px
+  outer controls. Final gates passed: lint with only 20 existing warnings, workspace typecheck,
+  4,257 server tests with 188 skipped, preflight, focused server authority tests 105/105, source and
+  local verification 438 passes with only two existing offline-permission warnings, and cloud strict
+  verification 442 passes with no warning or failure. Fresh cloud/local build `1.0.264` contains the
+  reviewed live-witness and launch modules. All feature flags remain default-off; no real Provider
+  request or charge, ERP ingest, Ozon write, production flag change, VPS access, deployment, or
+  production mutation occurred.

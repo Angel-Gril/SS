@@ -194,6 +194,23 @@ describe('BYOK reviewed batch ingest grant', () => {
         item(0),
         item(1, { slotKey: 'shared:detail:SCENE' }),
       ]),
+    })).resolves.toMatchObject({
+      kind: 'allowed',
+      command: { items: [{ skuKey: 'sku-1' }, { skuKey: 'sku-2', slotKey: 'shared:detail:SCENE' }] },
+    });
+
+    await expect(resolve({
+      sessionId: 'session-1',
+      ownerUserId: 'owner-1',
+      operation: EXTENSION_BYOK_MEDIA_INGEST_OPERATION,
+      shopId: 'shop-1',
+      workflowId: 'workflow-1',
+      draftVersion: 7,
+      idempotencyKey: 'byok-batch-ingest-0001',
+      command: batch([
+        item(0),
+        item(1, { skuKey: 'sku-3', slotKey: 'shared:detail:SCENE' }),
+      ]),
     })).resolves.toEqual({ kind: 'forbidden' });
   });
 });

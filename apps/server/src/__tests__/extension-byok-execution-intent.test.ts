@@ -192,9 +192,29 @@ describe('extension BYOK execution intent', () => {
     expect(repository.claim).toHaveBeenCalledOnce();
   });
 
+  it('claims a shared detail attempt using an explicitly selected non-first SKU anchor', async () => {
+    const current = draft();
+    current.selectedSkuKeys = ['sku-1', 'sku-2'];
+    const { service, repository } = build({ draft: current });
+    const result = await service.claim(input({
+      binding: {
+        ...input().binding,
+        skuKey: 'sku-2',
+        slotKey: 'shared:detail:SCENE',
+      },
+    }));
+    expect(result.intent).toMatchObject({
+      skuKey: 'sku-2',
+      slotKey: 'shared:detail:SCENE',
+      assignmentMode: 'APPEND',
+      assignmentOrdinal: 0,
+    });
+    expect(repository.claim).toHaveBeenCalledOnce();
+  });
+
   it.each([
-    ['wrong shared anchor', {
-      skuKey: 'sku-2', slotKey: 'shared:detail:SCENE', assignmentOrdinal: 0,
+    ['unselected shared anchor', {
+      skuKey: 'sku-3', slotKey: 'shared:detail:SCENE', assignmentOrdinal: 0,
     }],
     ['group-subset detail', {
       skuKey: 'sku-1', slotKey: 'group:all:detail:SCENE', assignmentOrdinal: 0,

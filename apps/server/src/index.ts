@@ -2228,6 +2228,11 @@ if (isExtensionDeviceAuthEnabled()) {
       requiredScopes: ['byok:media:ingest'],
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
+    authenticateLaunchDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['listing:review'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
     loadShop: loadExtensionCommandShop,
     loadDraft: loadExtensionByokWorkbenchDraft,
     getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),

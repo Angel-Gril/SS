@@ -352,31 +352,94 @@
     container.appendChild(wrapper);
   }
 
-  function renderByokWorkbenchLauncher(container, listing, options) {
-    if (!listing || !options || options.byokWorkbenchAvailable !== true
-      || typeof options.onOpenByokWorkbench !== 'function') return;
-    var launcher = element('section', 'ss-erp-source-workbench-byok-launcher');
-    launcher.setAttribute('data-role', 'byok-workbench-launcher');
-    var copy = element('div', 'ss-erp-source-workbench-byok-copy');
-    copy.appendChild(element('strong', '', '自带 API · 单图工作台'));
-    copy.appendChild(element(
-      'span',
-      '',
-      '使用当前会话 Provider 生成，结果先在扩展中审核，不会直接上传或上架。',
-    ));
+  function renderAiWorkbenchLauncher(container, listing, options) {
+    if (!listing || !options || options.aiWorkbenchAvailable !== true
+      || typeof options.onOpenAiWorkbench !== 'function') return;
+    var launcher = element('section', 'ss-erp-source-workbench-ai-launcher');
+    launcher.setAttribute('data-role', 'ai-workbench-launcher');
+    launcher.setAttribute('aria-label', 'AI 图片工作台启动');
+    var copy = element('div', 'ss-erp-source-workbench-ai-copy');
+    copy.appendChild(element('strong', '', 'AI 图片工作台'));
+    copy.appendChild(element('span', '', '当前商品 · 店铺 ' + (listing.shopId || '-')));
+    launcher.appendChild(copy);
+
+    var state = String(options.aiWorkbenchState || 'idle');
+    var skuOptions = Array.isArray(options.aiWorkbenchSkuOptions)
+      ? options.aiWorkbenchSkuOptions.filter(function (item) {
+        return item && typeof item.skuKey === 'string' && item.skuKey;
+      }).slice(0, 500)
+      : [];
+    var selectedSkuKey = String(options.selectedAiWorkbenchSkuKey || '');
+    if (state === 'choice_required' && skuOptions.length >= 1) {
+      var picker = element('label', 'ss-erp-source-workbench-ai-picker', '处理 SKU');
+      var select = element('select', 'ss-erp-source-workbench-ai-select');
+      select.setAttribute('aria-label', '选择 AI 图片工作台 SKU');
+      select.setAttribute('data-role', 'ai-workbench-sku-select');
+      select.disabled = options.aiWorkbenchBusy === true;
+      var placeholder = element('option', '', '请选择 SKU');
+      placeholder.value = '';
+      select.appendChild(placeholder);
+      skuOptions.forEach(function (item) {
+        var option = element('option', '', String(item.label || item.skuKey));
+        option.value = item.skuKey;
+        option.selected = item.skuKey === selectedSkuKey;
+        select.appendChild(option);
+      });
+      select.value = skuOptions.some(function (item) { return item.skuKey === selectedSkuKey; })
+        ? selectedSkuKey : '';
+      select.addEventListener('change', function (event) {
+        if (!event || event.isTrusted !== true || select.disabled
+          || typeof options.onSelectAiWorkbenchSku !== 'function') return;
+        options.onSelectAiWorkbenchSku(select.value);
+      });
+      picker.appendChild(select);
+      launcher.appendChild(picker);
+    }
+
+    if (state === 'stale' || state === 'unavailable') {
+      var stateMessage = element(
+        'p',
+        'ss-erp-source-workbench-ai-state is-stale',
+        options.aiWorkbenchMessage || (state === 'stale'
+          ? '商品或草稿已变化，请刷新后重新选择。'
+          : '扩展设备会话不可用，请检查 ERP 连接。'),
+      );
+      stateMessage.setAttribute('role', 'alert');
+      launcher.appendChild(stateMessage);
+    }
+
     var button = element(
       'button',
-      'ss-erp-source-workbench-byok-button',
-      options.byokWorkbenchBusy === true ? '正在打开...' : '打开 BYOK 工作台',
+      'ss-erp-source-workbench-ai-button',
+      state === 'refreshing'
+        ? '正在刷新...'
+        : options.aiWorkbenchBusy === true ? '正在打开...' : '打开 AI 图片工作台',
     );
     button.type = 'button';
-    button.disabled = options.byokWorkbenchBusy === true;
+    button.setAttribute('data-role', 'ai-workbench-open');
+    button.disabled = options.aiWorkbenchBusy === true
+      || state === 'stale'
+      || state === 'unavailable'
+      || (state === 'choice_required' && !skuOptions.some(function (item) {
+        return item.skuKey === selectedSkuKey;
+      }));
     button.addEventListener('click', function (event) {
       if (!event || event.isTrusted !== true || button.disabled) return;
-      options.onOpenByokWorkbench(listing);
+      options.onOpenAiWorkbench(listing);
     });
-    launcher.appendChild(copy);
     launcher.appendChild(button);
+
+    if ((state === 'stale' || state === 'unavailable')
+      && typeof options.onRefreshAiWorkbench === 'function') {
+      var refresh = element('button', 'ss-erp-source-workbench-ai-refresh', '刷新上下文');
+      refresh.type = 'button';
+      refresh.setAttribute('data-role', 'ai-workbench-refresh');
+      refresh.addEventListener('click', function (event) {
+        if (!event || event.isTrusted !== true || refresh.disabled) return;
+        options.onRefreshAiWorkbench();
+      });
+      launcher.appendChild(refresh);
+    }
     container.appendChild(launcher);
   }
 
@@ -1325,30 +1388,42 @@
     container.appendChild(drawer);
   }
 
-  function renderListingSelector(container, listings, options) {
+  function renderListingSelector(container, listings, options, truncated) {
     if (!Array.isArray(listings) || listings.length <= 1
       || !options || typeof options.onSelectListing !== 'function') return;
     var wrapper = element('div', 'ss-erp-source-workbench-listing-picker');
     var label = element('label', '', '店铺草稿');
     var select = element('select', 'ss-erp-source-workbench-listing-select');
     select.setAttribute('aria-label', '选择店铺草稿');
+    select.disabled = options.aiWorkbenchBusy === true;
     var selectedId = String(options.selectedListingWorkflowId || '');
     var placeholder = element('option', '', '请选择店铺草稿');
     placeholder.value = '';
     select.appendChild(placeholder);
-    listings.slice(0, 10).forEach(function (listing, index) {
+    listings.slice(0, 10).forEach(function (listing) {
       if (!listing || !listing.id) return;
-      var option = element('option', '', '店铺 ' + (listing.shopId || '-') + ' · 草稿 ' + (index + 1));
+      var option = element(
+        'option',
+        '',
+        '店铺 ' + (listing.shopId || '-') + ' · 草稿 ' + String(listing.id),
+      );
       option.value = listing.id;
       option.selected = listing.id === selectedId;
       select.appendChild(option);
     });
     select.addEventListener('change', function (event) {
-      if (!event || event.isTrusted !== true) return;
+      if (!event || event.isTrusted !== true || select.disabled) return;
       options.onSelectListing(select.value);
     });
     label.appendChild(select);
     wrapper.appendChild(label);
+    if (truncated === true) {
+      wrapper.appendChild(element(
+        'p',
+        'ss-erp-source-workbench-listing-note',
+        '草稿列表已截断，请在 ERP 查看全部草稿。',
+      ));
+    }
     container.appendChild(wrapper);
   }
 
@@ -1555,7 +1630,7 @@
     ));
     container.appendChild(heading);
 
-    renderListingSelector(container, listings, options);
+    renderListingSelector(container, listings, options, status.listing.truncated === true);
 
     if (!listing) {
       stopAiImageSuitePolling(container);
@@ -1572,7 +1647,7 @@
     }
 
     renderImageWorkflowOverview(container, { state: 'ready', status: status }, listing, options);
-    renderByokWorkbenchLauncher(container, listing, options);
+    renderAiWorkbenchLauncher(container, listing, options);
 
     var metrics = element('div', 'ss-erp-source-workbench-metrics');
     var stage = element('div', 'ss-erp-source-workbench-metric');

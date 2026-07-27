@@ -65,6 +65,13 @@
   backdrop-filter: blur(18px);
 }
 
+#ss-erp-source-costing-panel,
+#ss-erp-source-costing-panel *,
+#ss-erp-source-costing-panel *::before,
+#ss-erp-source-costing-panel *::after {
+  box-sizing: border-box;
+}
+
 #ss-erp-source-costing-panel.open {
   display: flex;
   animation: ss-erp-source-panel-in 0.18s ease-out;
@@ -144,8 +151,8 @@
 }
 
 .ss-erp-source-icon-btn {
-  width: 26px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
   border: 0;
   border-radius: 8px;
   background: rgba(234, 88, 12, 0.08);
@@ -162,6 +169,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 10px;
+}
+
+.ss-erp-source-body > * {
+  min-width: 0;
 }
 
 .ss-erp-source-body::-webkit-scrollbar {
@@ -271,7 +282,7 @@
 }
 
 .ss-erp-source-actions button {
-  min-height: 42px;
+  min-height: 44px;
   border: 1px solid #fb923c;
   border-radius: 12px;
   background: #fff;
@@ -334,7 +345,7 @@
 .ss-erp-source-input input {
   width: 100%;
   min-width: 0;
-  height: 34px;
+  height: 44px;
   border: 1px solid rgba(30, 41, 59, 0.14);
   border-radius: 7px;
   padding: 0 7px;
@@ -347,6 +358,14 @@
 .ss-erp-source-input input:focus {
   border-color: #ea580c;
   box-shadow: 0 0 0 2px rgba(234, 88, 12, 0.12);
+}
+
+.ss-erp-source-icon-btn:focus-visible,
+.ss-erp-source-actions button:focus-visible,
+.ss-erp-source-input input:focus-visible,
+.ss-erp-source-check input:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
 }
 
 .ss-erp-source-check {
@@ -422,5 +441,29 @@
 
   .ss-erp-source-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #ss-erp-source-costing-fab,
+  #ss-erp-source-media-fab {
+    transition: none;
+  }
+
+  #ss-erp-source-costing-panel.open,
+  .ss-erp-source-loading::after {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ss-erp-source-icon-btn,
+  .ss-erp-source-actions button,
+  .ss-erp-source-input input {
+    border: 1px solid ButtonText;
+  }
+
+  .ss-erp-source-actions button:disabled {
+    color: GrayText;
   }
 }

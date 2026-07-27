@@ -7,10 +7,12 @@ import {
 } from '../services/extension-byok-readiness-attestation.js';
 import {
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+  EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2,
   ExtensionByokWorkbenchLaunchError,
   parseExtensionByokWorkbenchLaunchRequest,
   resolveExtensionByokWorkbenchBatchLaunchContext,
   resolveExtensionByokWorkbenchLaunchContext,
+  resolveExtensionByokWorkbenchLaunchDecision,
   resolveExtensionByokWorkbenchSlotTarget,
   type ExtensionByokWorkbenchDraft,
 } from '../services/extension-byok-workbench-launch.js';
@@ -25,6 +27,7 @@ interface ReadinessDevice {
 
 export interface ExtensionByokReadinessRoutesOptions {
   authenticateDevice(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
+  authenticateLaunchDevice?(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
   loadShop(input: { shopId: string; ownerUserId: string }): Promise<{
     id: string;
     userId: string;
@@ -49,14 +52,17 @@ function routeError(reply: FastifyReply, status: number, code: string, message: 
   return reply.status(status).send({ code: 0, errorCode: code, msg: message });
 }
 
-function deviceContext(request: FastifyRequest): ReadinessDevice | null {
+function deviceContext(
+  request: FastifyRequest,
+  requiredScope: 'listing:review' | 'byok:media:ingest',
+): ReadinessDevice | null {
   const value = (request as any).device as Partial<ReadinessDevice> | undefined;
   if (!value
     || typeof value.sessionId !== 'string'
     || typeof value.ownerUserId !== 'string'
     || value.actorUserId !== value.ownerUserId
     || !Array.isArray(value.scopes)
-    || !value.scopes.includes('byok:media:ingest')
+    || !value.scopes.includes(requiredScope)
     || !Array.isArray(value.allowedShopIds)) return null;
   return value as ReadinessDevice;
 }
@@ -65,16 +71,17 @@ export async function extensionByokReadinessRoutes(
   app: FastifyInstance,
   options: ExtensionByokReadinessRoutesOptions,
 ) {
-  app.post('/workbench-launch', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
+  const authenticateLaunchDevice = options.authenticateLaunchDevice || options.authenticateDevice;
+  app.post('/workbench-launch', { preHandler: [authenticateLaunchDevice] }, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    const device = deviceContext(request);
-    if (!device) return routeError(reply, 403, 'byok_readiness_scope_denied', '设备缺少 BYOK 权限');
+    const device = deviceContext(request, 'listing:review');
+    if (!device) return routeError(reply, 403, 'byok_readiness_scope_denied', '设备缺少商品审核权限');
     let parsed;
     try {
       parsed = parseExtensionByokWorkbenchLaunchRequest(request.body);
     } catch (error) {
       if (error instanceof ExtensionByokWorkbenchLaunchError) {
-        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 工作台启动请求无效');
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'AI 图片工作台启动请求无效');
       }
       throw error;
     }
@@ -91,38 +98,44 @@ export async function extensionByokReadinessRoutes(
         || shop.userId !== device.ownerUserId
         || shop.platform !== 'OZON'
         || shop.status !== 'ACTIVE') {
-        return routeError(reply, 403, 'byok_readiness_shop_denied', '店铺不可用于 BYOK');
+        return routeError(reply, 403, 'byok_readiness_shop_denied', '店铺不可用于 AI 图片工作台');
       }
       if (!draft) {
         return routeError(reply, 409, 'byok_workbench_launch_context_stale', '商品草稿已变化');
       }
-      const context = resolveExtensionByokWorkbenchLaunchContext({
-        ownerUserId: device.ownerUserId,
-        request: parsed,
-        draft,
-      });
-      return reply.send({ code: 1, data: context });
+      const data = parsed.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
+        ? resolveExtensionByokWorkbenchLaunchDecision({
+          ownerUserId: device.ownerUserId,
+          request: parsed,
+          draft,
+        })
+        : resolveExtensionByokWorkbenchLaunchContext({
+          ownerUserId: device.ownerUserId,
+          request: parsed,
+          draft,
+        });
+      return reply.send({ code: 1, data });
     } catch (error) {
       if (error instanceof ExtensionByokWorkbenchLaunchError) {
-        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 工作台上下文已变化');
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'AI 图片工作台上下文已变化');
       }
       request.log.error({ err: error }, 'extension BYOK workbench launch failed');
-      return routeError(reply, 503, 'byok_workbench_launch_unavailable', 'BYOK 工作台暂不可用');
+      return routeError(reply, 503, 'byok_workbench_launch_unavailable', 'AI 图片工作台暂不可用');
     }
   });
 
   app.post('/workbench-batch-launch', {
-    preHandler: [options.authenticateDevice],
+    preHandler: [authenticateLaunchDevice],
   }, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    const device = deviceContext(request);
-    if (!device) return routeError(reply, 403, 'byok_readiness_scope_denied', '设备缺少 BYOK 权限');
+    const device = deviceContext(request, 'listing:review');
+    if (!device) return routeError(reply, 403, 'byok_readiness_scope_denied', '设备缺少商品审核权限');
     let parsed;
     try {
       parsed = parseExtensionByokWorkbenchLaunchRequest(request.body);
     } catch (error) {
       if (error instanceof ExtensionByokWorkbenchLaunchError) {
-        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 工作台请求无效');
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'AI 图片工作台请求无效');
       }
       throw error;
     }
@@ -136,7 +149,7 @@ export async function extensionByokReadinessRoutes(
       ]);
       if (!shop || shop.id !== parsed.shopId || shop.userId !== device.ownerUserId
         || shop.platform !== 'OZON' || shop.status !== 'ACTIVE') {
-        return routeError(reply, 403, 'byok_readiness_shop_denied', '店铺不可用于 BYOK');
+        return routeError(reply, 403, 'byok_readiness_shop_denied', '店铺不可用于 AI 图片工作台');
       }
       if (!draft) {
         return routeError(reply, 409, 'byok_workbench_launch_context_stale', '商品草稿已变化');
@@ -149,16 +162,16 @@ export async function extensionByokReadinessRoutes(
       return reply.send({ code: 1, data: context });
     } catch (error) {
       if (error instanceof ExtensionByokWorkbenchLaunchError) {
-        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'BYOK 工作台上下文已变化');
+        return routeError(reply, error.statusCode, error.code.toLowerCase(), 'AI 图片工作台上下文已变化');
       }
       request.log.error({ err: error }, 'extension BYOK workbench batch launch failed');
-      return routeError(reply, 503, 'byok_workbench_launch_unavailable', 'BYOK 工作台暂不可用');
+      return routeError(reply, 503, 'byok_workbench_launch_unavailable', 'AI 图片工作台暂不可用');
     }
   });
 
   app.post('/readiness', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    const device = deviceContext(request);
+    const device = deviceContext(request, 'byok:media:ingest');
     if (!device) return routeError(reply, 403, 'byok_readiness_scope_denied', '设备缺少 BYOK 权限');
     let parsed;
     try {
