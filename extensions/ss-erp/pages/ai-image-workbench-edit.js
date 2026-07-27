@@ -253,6 +253,20 @@
     return true;
   }
 
+  function hostedByokExecutionAllowed() {
+    var hostedController = global.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER;
+    return Boolean(hostedController
+      && typeof hostedController.isByokExecutionAllowed === 'function'
+      && hostedController.isByokExecutionAllowed());
+  }
+
+  function assertByokExecutionAllowed() {
+    if (hostedByokExecutionAllowed()) return;
+    var error = new Error('BYOK execution is locked by hosted authority');
+    error.code = 'SS_ERP_BYOK_WORKBENCH_MODE_CONFLICT';
+    throw error;
+  }
+
   function emitWorkspaceRestartUnknownOutcome() {
     var context = state.publicState && state.publicState.context;
     var binding = workspaceBinding(context);
@@ -390,6 +404,7 @@
 
   function renderOperationOptions() {
     var taskLocked = state.restartBlocked || Boolean(state.snapshot && state.snapshot.operation);
+    var hostedBlocked = !hostedByokExecutionAllowed();
     OPERATIONS.forEach(function (operation) {
       var input = byId('operation' + ({
         TEXT_TO_IMAGE: 'TextToImage', IMAGE_TO_IMAGE: 'ImageToImage',
@@ -398,26 +413,29 @@
       var option = document.querySelector('[data-operation-option="' + operation + '"]');
       var reason = document.querySelector('[data-operation-reason="' + operation + '"]');
       var capability = operationCapability(operation);
-      input.disabled = taskLocked || !capability.enabled;
+      input.disabled = hostedBlocked || taskLocked || !capability.enabled;
       input.checked = state.operation === operation;
       option.classList.toggle('is-selected', state.operation === operation);
-      option.classList.toggle('is-disabled', !capability.enabled);
-      reason.textContent = taskLocked ? '当前任务已锁定操作与 Provider' : capability.reason;
+      option.classList.toggle('is-disabled', hostedBlocked || !capability.enabled);
+      reason.textContent = hostedBlocked ? '正在核对 ERP 托管任务状态'
+        : taskLocked ? '当前任务已锁定操作与 Provider' : capability.reason;
     });
   }
 
   function updateMaskToolbar() {
     var current = state.mask ? state.mask.state() : null;
+    var hostedBlocked = !hostedByokExecutionAllowed();
     nodes.maskPaintButton.classList.toggle('is-active', state.maskTool === 'paint');
     nodes.maskEraseButton.classList.toggle('is-active', state.maskTool === 'erase');
     nodes.maskPaintButton.setAttribute('aria-pressed', state.maskTool === 'paint' ? 'true' : 'false');
     nodes.maskEraseButton.setAttribute('aria-pressed', state.maskTool === 'erase' ? 'true' : 'false');
-    nodes.maskUndoButton.disabled = state.busy || !current || !current.canUndo;
-    nodes.maskRedoButton.disabled = state.busy || !current || !current.canRedo;
-    nodes.maskClearButton.disabled = state.busy || !current || !current.strokeCount;
-    nodes.maskPaintButton.disabled = state.busy || !current || current.budgetExhausted;
-    nodes.maskEraseButton.disabled = state.busy || !current || current.budgetExhausted;
-    nodes.maskBrushSize.disabled = state.busy || !current || current.budgetExhausted;
+    nodes.maskUndoButton.disabled = hostedBlocked || state.busy || !current || !current.canUndo;
+    nodes.maskRedoButton.disabled = hostedBlocked || state.busy || !current || !current.canRedo;
+    nodes.maskClearButton.disabled = hostedBlocked || state.busy || !current || !current.strokeCount;
+    nodes.maskPaintButton.disabled = hostedBlocked || state.busy || !current || current.budgetExhausted;
+    nodes.maskEraseButton.disabled = hostedBlocked || state.busy || !current || current.budgetExhausted;
+    nodes.maskBrushSize.disabled = hostedBlocked || state.busy
+      || !current || current.budgetExhausted;
     nodes.maskBrushValue.value = Math.round(Number(nodes.maskBrushSize.value)) + ' px';
     nodes.maskBrushValue.textContent = nodes.maskBrushValue.value;
     var metrics = maskMetrics();
@@ -480,6 +498,7 @@
 
   function renderReferences() {
     var scope = selectedReferenceScope();
+    var hostedBlocked = !hostedByokExecutionAllowed();
     var items = state.references[scope];
     var rows = items.map(function (item, itemIndex) {
       var row = document.createElement('li');
@@ -497,7 +516,7 @@
       remove.title = '移除此参考图';
       remove.setAttribute('aria-label', '移除第 ' + (itemIndex + 1) + ' 张'
         + (scope === 'SLOT' ? '当前槽位' : '会话默认') + '参考图');
-      remove.disabled = state.busy || Boolean(state.referenceSyncPending);
+      remove.disabled = hostedBlocked || state.busy || Boolean(state.referenceSyncPending);
       remove.addEventListener('click', function (event) {
         if (!event || event.isTrusted !== true || state.busy) return;
         void removeReference(scope, item.mediaHandle);
@@ -615,7 +634,8 @@
       var row = record.row;
       var button = record.button;
       button.classList.toggle('is-selected', alternative.selected === true);
-      button.disabled = state.busy || alternative.state !== 'CANDIDATE_READY';
+      button.disabled = !hostedByokExecutionAllowed()
+        || state.busy || alternative.state !== 'CANDIDATE_READY';
       button.setAttribute('aria-pressed', alternative.selected === true ? 'true' : 'false');
       var preview = alternative.candidateId && state.previews.get(alternative.candidateId);
       if (preview) {
@@ -663,6 +683,7 @@
 
   function renderControls() {
     var editing = state.operation !== 'TEXT_TO_IMAGE';
+    var hostedBlocked = !hostedByokExecutionAllowed();
     var started = Boolean(state.snapshot && state.snapshot.operation);
     var editTaskState = state.restartBlocked ? 'UNKNOWN_OUTCOME'
       : state.editDispatchPending ? 'SUBMITTING'
@@ -695,21 +716,26 @@
     var running = Boolean(state.snapshot && state.snapshot.scheduler
       && ['RUNNING', 'PAUSING'].includes(state.snapshot.scheduler.state));
     nodes.restartRecovery.hidden = !state.restartBlocked;
-    nodes.restartChargeConfirmation.disabled = state.busy || !state.restartBlocked;
-    nodes.restartAcknowledgeButton.disabled = state.busy || !state.restartBlocked
+    nodes.restartChargeConfirmation.disabled = hostedBlocked || state.busy || !state.restartBlocked;
+    nodes.restartAcknowledgeButton.disabled = hostedBlocked || state.busy || !state.restartBlocked
       || nodes.restartChargeConfirmation.checked !== true;
     var profiles = state.publicState && Array.isArray(state.publicState.profiles)
       ? state.publicState.profiles : [];
-    nodes.profileSelect.disabled = state.busy || started || state.restartBlocked || !profiles.length;
-    nodes.runEditButton.disabled = !editing || state.busy || started || Boolean(reason);
-    nodes.referenceFiles.disabled = state.busy || running || state.restartBlocked
+    nodes.profileSelect.disabled = hostedBlocked || state.busy || started
+      || state.restartBlocked || !profiles.length;
+    nodes.runEditButton.disabled = hostedBlocked || !editing || state.busy
+      || started || Boolean(reason);
+    nodes.referenceScopeGlobal.disabled = hostedBlocked || state.busy || running;
+    nodes.referenceScopeSlot.disabled = hostedBlocked || state.busy || running;
+    nodes.referenceFiles.disabled = hostedBlocked || state.busy || running || state.restartBlocked
       || Boolean(state.referenceSyncPending);
-    nodes.sourceFile.disabled = state.busy || running || state.restartBlocked;
+    nodes.sourceFile.disabled = hostedBlocked || state.busy || running || state.restartBlocked;
     var hasSlotHistory = Boolean(state.snapshot && state.snapshot.slot
       && state.snapshot.slot.revision > 0 && state.snapshot.alternatives
       && state.snapshot.alternatives.length > 0);
     nodes.regenerateConfirmationRow.hidden = !hasSlotHistory;
-    nodes.regenerateEditButton.disabled = state.busy || running || !hasSlotHistory
+    nodes.regenerateChargeConfirmation.disabled = hostedBlocked || state.busy || !hasSlotHistory;
+    nodes.regenerateEditButton.disabled = hostedBlocked || state.busy || running || !hasSlotHistory
       || nodes.regenerateChargeConfirmation.checked !== true;
     renderAlternatives();
   }
@@ -809,6 +835,7 @@
 
   async function sendReferenceTarget(scope, items, lifecycleEpoch) {
     assertLifecycleCurrent(lifecycleEpoch);
+    assertByokExecutionAllowed();
     var input = {
       scope: scope === 'GLOBAL' ? 'SESSION_GLOBAL' : 'SLOT',
       handles: scope === 'SLOT' && !items.length
@@ -824,6 +851,7 @@
         throw lifecycleStaleError();
       }
       if (!referenceSyncAmbiguous(error)) throw error;
+      assertByokExecutionAllowed();
       var retried = await client.setEditReferences(input);
       assertLifecycleCurrent(lifecycleEpoch);
       return retried;
@@ -877,6 +905,7 @@
   }
 
   async function addReferences(files) {
+    if (!hostedByokExecutionAllowed()) return;
     var lifecycleEpoch = state.lifecycleEpoch;
     var scope = selectedReferenceScope();
     var current = state.references[scope];
@@ -892,6 +921,7 @@
     try {
       for (var index = 0; index < selected.length; index += 1) {
         var file = selected[index];
+        assertByokExecutionAllowed();
         var uploaded = await client.uploadEditMedia('REFERENCE', file);
         if (!lifecycleIsCurrent(lifecycleEpoch)) {
           await releaseUploadedMedia(uploaded, 'REFERENCE');
@@ -931,6 +961,7 @@
   }
 
   async function removeReference(scope, mediaHandle) {
+    if (!hostedByokExecutionAllowed()) return;
     var lifecycleEpoch = state.lifecycleEpoch;
     var items = state.references[scope];
     var index = items.findIndex(function (item) { return item.mediaHandle === mediaHandle; });
@@ -961,7 +992,7 @@
   }
 
   async function chooseSource(file) {
-    if (!file) return;
+    if (!hostedByokExecutionAllowed() || !file) return;
     var lifecycleEpoch = state.lifecycleEpoch;
     state.busy = true;
     renderControls();
@@ -969,6 +1000,7 @@
     var objectUrl = null;
     var committed = false;
     try {
+      assertByokExecutionAllowed();
       uploaded = await client.uploadEditMedia('SOURCE', file);
       if (!lifecycleIsCurrent(lifecycleEpoch)) {
         await releaseUploadedMedia(uploaded, 'SOURCE');
@@ -1034,6 +1066,7 @@
 
   async function ensureMaskHandle(lifecycleEpoch) {
     assertLifecycleCurrent(lifecycleEpoch);
+    assertByokExecutionAllowed();
     if (state.operation !== 'INPAINT') return null;
     if (state.maskHandle && state.maskUploadedVersion === state.maskVersion) {
       return state.maskHandle.mediaHandle;
@@ -1046,6 +1079,7 @@
       maxBytes: 20 * 1024 * 1024,
     });
     assertLifecycleCurrent(lifecycleEpoch);
+    assertByokExecutionAllowed();
     var uploaded = await client.uploadEditMedia('MASK', exported.blob);
     if (!lifecycleIsCurrent(lifecycleEpoch)) {
       await releaseUploadedMedia(uploaded, 'MASK');
@@ -1082,7 +1116,7 @@
 
   async function startEdit() {
     var reason = operationInputReason();
-    if (reason || state.busy) return;
+    if (!hostedByokExecutionAllowed() || reason || state.busy) return;
     state.busy = true;
     var lifecycleEpoch = state.lifecycleEpoch;
     var workspaceDispatchLocked = false;
@@ -1090,6 +1124,7 @@
     try {
       var maskHandle = await ensureMaskHandle(lifecycleEpoch);
       if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!hostedByokExecutionAllowed()) return;
       state.editDispatchPending = true;
       workspaceDispatchLocked = true;
       renderControls();
@@ -1116,7 +1151,7 @@
   }
 
   async function selectAlternative(attemptId) {
-    if (state.busy) return;
+    if (!hostedByokExecutionAllowed() || state.busy) return;
     state.busy = true;
     var lifecycleEpoch = state.lifecycleEpoch;
     renderControls();
@@ -1137,7 +1172,7 @@
   }
 
   async function regenerate() {
-    if (state.busy || !state.snapshot || !state.snapshot.slot
+    if (!hostedByokExecutionAllowed() || state.busy || !state.snapshot || !state.snapshot.slot
       || nodes.regenerateChargeConfirmation.checked !== true) return;
     state.busy = true;
     var lifecycleEpoch = state.lifecycleEpoch;
@@ -1145,6 +1180,7 @@
     try {
       var maskHandle = await ensureMaskHandle(lifecycleEpoch);
       if (state.lifecycleEpoch !== lifecycleEpoch) return;
+      if (!hostedByokExecutionAllowed()) return;
       var snapshot = await client.regenerateEdit({
         ...commandInput(maskHandle),
         expectedSlotRevision: state.snapshot.slot.revision,
@@ -1170,7 +1206,7 @@
   }
 
   async function acknowledgeRestart() {
-    if (state.busy || !state.restartBlocked
+    if (!hostedByokExecutionAllowed() || state.busy || !state.restartBlocked
       || nodes.restartChargeConfirmation.checked !== true) return;
     state.busy = true;
     var lifecycleEpoch = state.lifecycleEpoch;
@@ -1233,7 +1269,8 @@
   }
 
   function handleMaskKeyboard(event) {
-    if (!event || event.isTrusted !== true || state.busy || !state.mask) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || state.busy || !state.mask) return;
     var key = event.key;
     var movement = event.shiftKey ? 0.1 : 0.02;
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(key)) {
@@ -1264,13 +1301,18 @@
   }
 
   function setOperation(operation) {
-    if (state.restartBlocked || state.snapshot && state.snapshot.operation
+    if (!hostedByokExecutionAllowed()
+      || state.restartBlocked || state.snapshot && state.snapshot.operation
       || !OPERATIONS.includes(operation) || !operationCapability(operation).enabled) {
       renderControls();
       return;
     }
     state.operation = operation;
     renderControls();
+  }
+
+  if (document && typeof document.addEventListener === 'function') {
+    document.addEventListener(WORKSPACE_REFRESH_EVENT, renderControls);
   }
 
   [nodes.operationTextToImage, nodes.operationImageToImage,
@@ -1281,7 +1323,10 @@
     });
   });
   nodes.profileSelect.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()) {
+      renderControls();
+      return;
+    }
     if (state.restartBlocked || state.snapshot && state.snapshot.operation) {
       if (state.snapshot && state.snapshot.profileId) {
         nodes.profileSelect.value = state.snapshot.profileId;
@@ -1296,11 +1341,11 @@
   nodes.referenceScopeGlobal.addEventListener('change', renderReferences);
   nodes.referenceScopeSlot.addEventListener('change', renderReferences);
   nodes.referenceFiles.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || state.busy) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed() || state.busy) return;
     void addReferences(nodes.referenceFiles.files);
   });
   nodes.sourceFile.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || state.busy) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed() || state.busy) return;
     void chooseSource(nodes.sourceFile.files && nodes.sourceFile.files[0]);
   });
   nodes.runEditButton.addEventListener('click', function (event) {
@@ -1324,39 +1369,45 @@
     void acknowledgeRestart();
   });
   nodes.maskPaintButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.maskPaintButton.disabled) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || nodes.maskPaintButton.disabled) return;
     state.maskTool = 'paint';
     updateMaskToolbar();
   });
   nodes.maskEraseButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.maskEraseButton.disabled) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || nodes.maskEraseButton.disabled) return;
     state.maskTool = 'erase';
     updateMaskToolbar();
   });
   nodes.maskBrushSize.addEventListener('input', updateMaskToolbar);
   nodes.maskUndoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.maskUndoButton.disabled) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || nodes.maskUndoButton.disabled) return;
     state.mask.undo();
     state.maskVersion += 1;
     drawMask();
     renderControls();
   });
   nodes.maskRedoButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.maskRedoButton.disabled) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || nodes.maskRedoButton.disabled) return;
     state.mask.redo();
     state.maskVersion += 1;
     drawMask();
     renderControls();
   });
   nodes.maskClearButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.maskClearButton.disabled) return;
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || nodes.maskClearButton.disabled) return;
     state.mask.clear();
     state.maskVersion += 1;
     drawMask();
     renderControls();
   });
   nodes.editMaskCanvas.addEventListener('pointerdown', function (event) {
-    if (!event || event.isTrusted !== true || state.busy || !state.mask
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || state.busy || !state.mask
       || event.button !== 0 || event.isPrimary === false || state.activePointerId !== null) return;
     var point = pointerPoint(event);
     if (!state.mask.beginStroke({

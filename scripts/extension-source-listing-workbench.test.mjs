@@ -899,7 +899,11 @@ function aiImageSuiteProjectionFixture() {
       id: 'plan-1', versionId: 'plan-version-1', revision: 3, status: 'APPROVED', skuKey: null,
       preview: {
         hash: 'a'.repeat(64), pricingVersion: 'pricing-v1', itemCount: 2,
-        estimatedCostCents: 18, maximumCostCents: 24, slots: [],
+        estimatedCostCents: 18, maximumCostCents: 24, slots: [{
+          ordinal: 0, slotKey: 'sku:sku-1:hero', goal: '商品主图',
+          ownership: { level: 'sku', key: 'sku-1' }, applicableSkuKeys: ['sku-1'],
+          estimatedCostCents: 9, maximumCostCents: 12,
+        }],
       },
       allowedActions: ['START'],
       commands: {
@@ -957,7 +961,8 @@ function currentSuiteProjectionFixture(action) {
   projection.plan.commands = {};
   const slot = {
     id: 'slot-1', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: '商品主图',
-    ownership: { level: 'sku', key: 'sku-1' }, status: 'FAILED', attempt: 1,
+    ownership: { level: 'sku', key: 'sku-1' }, applicableSkuKeys: ['sku-1'],
+    status: 'FAILED', attempt: 1,
     revision: 3, estimatedCostCents: 9, maximumCostCents: 12,
     workflowId: null, workflowRevision: null, reviewStatus: 'NOT_READY', output: null,
     application: null, allowedActions: ['RETRY_SLOT'],
@@ -1008,6 +1013,25 @@ function currentSuiteProjectionFixture(action) {
 }
 
 const suiteIntentContract = context.SS_ERP_LISTING_WORKFLOW_CLIENT;
+const missingPlanMembership = aiImageSuiteProjectionFixture();
+delete missingPlanMembership.plan.preview.slots[0].applicableSkuKeys;
+assert.throws(
+  () => suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: missingPlanMembership,
+    action: 'START',
+  }),
+  /AI image suite projection is invalid/u,
+);
+const crossSkuSuiteMembership = currentSuiteProjectionFixture('RETRY_SLOT');
+crossSkuSuiteMembership.suite.slots[0].applicableSkuKeys = ['sku-other'];
+assert.throws(
+  () => suiteIntentContract.createAiImageSuiteIntentWitness({
+    projection: crossSkuSuiteMembership,
+    action: 'RETRY_SLOT',
+    slotId: 'slot-1',
+  }),
+  /AI image suite projection is invalid/u,
+);
 const startIntentWitness = suiteIntentContract.createAiImageSuiteIntentWitness({
   projection: suiteProjection,
   action: 'START',

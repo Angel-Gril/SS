@@ -12,6 +12,52 @@
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   }
 
+  function mutationBoundaryError(code, message, outcome, requestDispatched) {
+    var error = new Error(message);
+    error.name = 'ExtensionListingWorkflowMutationError';
+    error.code = code;
+    error.outcome = outcome;
+    error.requestDispatched = requestDispatched;
+    if (outcome === 'UNKNOWN_OUTCOME') error.automaticRetryAllowed = false;
+    return error;
+  }
+
+  function mutationNotSubmitted(message) {
+    return mutationBoundaryError(
+      'SS_ERP_LISTING_WORKFLOW_MUTATION_NOT_SUBMITTED',
+      message,
+      'NOT_SUBMITTED',
+      false,
+    );
+  }
+
+  function mutationUnknown(message) {
+    return mutationBoundaryError(
+      'SS_ERP_LISTING_WORKFLOW_MUTATION_UNKNOWN_OUTCOME',
+      message,
+      'UNKNOWN_OUTCOME',
+      true,
+    );
+  }
+
+  function requestOutcomeUnknown(error) {
+    return Boolean(error && typeof error === 'object'
+      && (error.requestDispatched === true || error.outcome === 'UNKNOWN_OUTCOME'));
+  }
+
+  function mutationResponseProvesRejection(response) {
+    if (!response || typeof response !== 'object') return false;
+    if (['unpaired', 'scope_required', 'authorization_required'].includes(response.state)) {
+      return true;
+    }
+    if (response.state === 'http_error'
+      && Number.isSafeInteger(response.status)
+      && response.status >= 500) return false;
+    var body = response.state === 'response' || response.state === 'http_error'
+      ? record(response.body) : null;
+    return Boolean(body && body.code === 0);
+  }
+
   function text(value, maximum, nullable) {
     if (value == null && nullable) return true;
     return typeof value === 'string' && value.length > 0 && value.length <= maximum;
@@ -246,6 +292,17 @@
     return prefix + bytesToHex(new Uint8Array(digest));
   }
 
+  function validFailedCommandReceipt(executedData, receipt) {
+    return exactKeys(executedData, ['replay', 'receipt'])
+      && typeof executedData.replay === 'boolean'
+      && exactKeys(receipt, ['id', 'status', 'result', 'failureCode'])
+      && text(receipt.id, 200)
+      && receipt.status === 'FAILED'
+      && receipt.result === null
+      && typeof receipt.failureCode === 'string'
+      && /^[A-Z][A-Z0-9_]{0,99}$/u.test(receipt.failureCode);
+  }
+
   async function executeGrantedMediaMutation(
     transport,
     operation,
@@ -254,29 +311,54 @@
     failureSubject,
   ) {
     var subject = text(failureSubject, 100) ? failureSubject : 'media mutation';
-    var issued = await transport.post('/api/extension-device/command-grants', {
-      operation: operation,
-      ...envelope,
-    }, { requiredScope: requiredScope });
+    var issued;
+    try {
+      issued = await transport.post('/api/extension-device/command-grants', {
+        operation: operation,
+        ...envelope,
+      }, { requiredScope: requiredScope });
+    } catch {
+      throw mutationNotSubmitted(subject + ' command grant was not issued');
+    }
     var issuedBody = issued && issued.state === 'response' ? record(issued.body) : null;
     var issuedData = issuedBody && issuedBody.code === 1 ? record(issuedBody.data) : null;
     if (!issuedData || !text(issuedData.grantToken, 1000)) {
-      throw new Error(subject + ' command grant was not issued');
+      throw mutationNotSubmitted(subject + ' command grant was not issued');
     }
     var executeEnvelope = operation === 'MEDIA_EXECUTE'
       ? envelope
       : { operation: operation, ...envelope };
-    var executed = await transport.post(
-      '/api/extension-device/media-workflows/execute',
-      executeEnvelope,
-      { commandGrant: issuedData.grantToken, requiredScope: requiredScope },
-    );
+    var executed;
+    try {
+      executed = await transport.post(
+        '/api/extension-device/media-workflows/execute',
+        executeEnvelope,
+        { commandGrant: issuedData.grantToken, requiredScope: requiredScope },
+      );
+    } catch (error) {
+      if (requestOutcomeUnknown(error)) {
+        throw mutationUnknown(subject + ' command outcome is unknown');
+      }
+      throw mutationNotSubmitted(subject + ' command was not submitted');
+    }
     var executedBody = executed && executed.state === 'response' ? record(executed.body) : null;
     var executedData = executedBody && executedBody.code === 1 ? record(executedBody.data) : null;
     var receipt = executedData ? record(executedData.receipt) : null;
     var result = receipt ? record(receipt.result) : null;
-    if (!receipt || receipt.status !== 'SUCCEEDED' || !result) {
+    if (!receipt) {
+      if (mutationResponseProvesRejection(executed)) {
+        throw new Error(subject + ' command did not complete');
+      }
+      throw mutationUnknown(subject + ' command response is ambiguous');
+    }
+    if (receipt.status === 'FAILED') {
+      if (!validFailedCommandReceipt(executedData, receipt)) {
+        throw mutationUnknown(subject + ' command failure response is ambiguous');
+      }
       throw new Error(subject + ' command did not complete');
+    }
+    if (receipt.status !== 'SUCCEEDED' || !result) {
+      throw mutationUnknown(subject + ' command response is ambiguous');
     }
     return { executedData: executedData, receipt: receipt, result: result };
   }
@@ -328,7 +410,7 @@
       if (parsed.protocol === 'https:') return !local && !privateIpv4 && !ipv6Literal;
       return parsed.protocol === 'http:'
         && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1');
-    } catch (_error) {
+    } catch {
       return false;
     }
   }
@@ -461,7 +543,7 @@
         || parsed.hostname === '[::1]' || parsed.hostname === '::1';
       return !parsed.username && !parsed.password && !parsed.hash
         && (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && local));
-    } catch (_error) {
+    } catch {
       return false;
     }
   }
@@ -612,11 +694,26 @@
       && commandKeys.every(function (action) { return value.includes(action); });
   }
 
+  function validApplicableSkuKeys(value, ownership) {
+    if (!Array.isArray(value)
+      || value.length < 1
+      || value.length > 500
+      || !value.every(function (skuKey) { return text(skuKey, 500); })
+      || new Set(value).size !== value.length
+      || value.some(function (skuKey, index) {
+        return index > 0 && value[index - 1] >= skuKey;
+      })) return false;
+    return ownership.level === 'sku'
+      ? value.length === 1 && value[0] === ownership.key
+      : ownership.level === 'compatibility_group';
+  }
+
   function validPlanSlot(value) {
     var slot = record(value);
     var ownership = slot && record(slot.ownership);
     return exactKeys(slot, [
-      'ordinal', 'slotKey', 'goal', 'ownership', 'estimatedCostCents', 'maximumCostCents',
+      'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
+      'estimatedCostCents', 'maximumCostCents',
     ])
       && Number.isSafeInteger(slot.ordinal) && slot.ordinal >= 0
       && text(slot.slotKey, 500)
@@ -624,6 +721,7 @@
       && exactKeys(ownership, ['level', 'key'])
       && ['sku', 'compatibility_group'].includes(ownership.level)
       && text(ownership.key, 500)
+      && validApplicableSkuKeys(slot.applicableSkuKeys, ownership)
       && boundedSuiteCost(slot.estimatedCostCents, false)
       && boundedSuiteCost(slot.maximumCostCents, false)
       && slot.maximumCostCents >= slot.estimatedCostCents;
@@ -738,7 +836,8 @@
     var ownership = slot && record(slot.ownership);
     var commands = slot && record(slot.commands);
     if (!exactKeys(slot, [
-      'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'status', 'attempt', 'revision',
+      'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
+      'status', 'attempt', 'revision',
       'estimatedCostCents', 'maximumCostCents', 'workflowId', 'workflowRevision',
       'reviewStatus', 'output', 'application', 'allowedActions', 'commands',
     ])
@@ -749,6 +848,7 @@
       || !exactKeys(ownership, ['level', 'key'])
       || !['sku', 'compatibility_group'].includes(ownership.level)
       || !text(ownership.key, 500)
+      || !validApplicableSkuKeys(slot.applicableSkuKeys, ownership)
       || !AI_IMAGE_SUITE_SLOT_STATUSES.includes(slot.status)
       || !Number.isSafeInteger(slot.attempt) || slot.attempt < 0
       || !Number.isSafeInteger(slot.revision) || slot.revision < 1
@@ -1158,7 +1258,7 @@
           'AI image suite',
         );
         if (!validSuiteCommandResult(completed.result, built)) {
-          throw new Error('AI image suite command result is invalid');
+          throw mutationUnknown('AI image suite command result is invalid');
         }
         return {
           state: 'completed',

@@ -9,6 +9,7 @@
   var MAX_PUBLISH_REQUEST_BYTES = 1 * 1024 * 1024;
   var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
   var MAX_BYOK_INGEST_REQUEST_BYTES = 20 * 1024 * 1024;
+  var MAX_HOSTED_PREVIEW_RESPONSE_BYTES = 20 * 1024 * 1024;
   var MAX_BYOK_INGEST_MANIFEST_CHARACTERS = Math.ceil(16 * 1024 * 4 / 3) + 8;
   var MEDIA_EDIT_SOURCE_PATH = '/api/extension-device/source-workbench/media-edit-source';
   var MEDIA_EDIT_MASK_PATH = '/api/extension-device/source-workbench/media-edit-mask';
@@ -19,6 +20,12 @@
   var BYOK_PUBLISH_PREPARE_PATH = '/api/extension-device/byok-publish/prepare';
   var BYOK_PUBLISH_STATUS_PATH = '/api/extension-device/byok-publish/status';
   var OZON_PUBLISH_EXECUTE_PATH = '/api/extension-device/ozon-publish/execute';
+  var HOSTED_PLAN_PATH = '/api/extension-device/source-workbench/plans';
+  var HOSTED_LISTING_ASSIGNMENT_PATH =
+    '/api/extension-device/source-workbench/ai-image-suite/listing-assignments';
+  var HOSTED_PREVIEW_PATH =
+    '/api/extension-device/source-workbench/ai-image-suite/candidate-preview';
+  var HOSTED_PREVIEW_CONSUME_PATH = HOSTED_PREVIEW_PATH + '/consume';
   var LARGE_PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
     OZON_PUBLISH_EXECUTE_PATH,
@@ -27,8 +34,21 @@
     MEDIA_EDIT_SOURCE_PATH,
     MEDIA_EDIT_MASK_PATH,
     BYOK_MEDIA_INGEST_PATH,
+    HOSTED_PREVIEW_CONSUME_PATH,
   ]);
   var BYOK_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+  function requestFailure(message, requestDispatched) {
+    var error = new Error(message);
+    error.name = 'ExtensionSourceWorkflowRequestError';
+    error.code = requestDispatched
+      ? 'SS_ERP_SOURCE_WORKFLOW_REQUEST_OUTCOME_UNKNOWN'
+      : 'SS_ERP_SOURCE_WORKFLOW_REQUEST_NOT_SUBMITTED';
+    error.outcome = requestDispatched ? 'UNKNOWN_OUTCOME' : 'NOT_SUBMITTED';
+    error.requestDispatched = requestDispatched;
+    if (requestDispatched) error.automaticRetryAllowed = false;
+    return error;
+  }
 
   function requiredText(value, label) {
     var normalized = String(value == null ? '' : value).normalize('NFKC').trim();
@@ -50,10 +70,33 @@
       BYOK_PUBLISH_PREPARE_PATH,
       BYOK_PUBLISH_STATUS_PATH,
       OZON_PUBLISH_EXECUTE_PATH,
+      HOSTED_PLAN_PATH,
+      HOSTED_LISTING_ASSIGNMENT_PATH,
+      HOSTED_PREVIEW_PATH,
+      HOSTED_PREVIEW_CONSUME_PATH,
     ]);
+    function hostedPlanReviewPath(candidate) {
+      var prefix = HOSTED_PLAN_PATH + '/';
+      var suffix = '/review';
+      if (!candidate.startsWith(prefix) || !candidate.endsWith(suffix)) return false;
+      var encodedPlanId = candidate.slice(prefix.length, -suffix.length);
+      if (!encodedPlanId || encodedPlanId.includes('/')) return false;
+      try {
+        var planId = decodeURIComponent(encodedPlanId);
+        return planId.length > 0 && planId.length <= 200
+          && planId === planId.normalize('NFKC').trim()
+          && !planId.includes('/') && !planId.includes('\\')
+          && encodeURIComponent(planId) === encodedPlanId;
+      } catch {
+        return false;
+      }
+    }
+    function allowedPostPath(candidate) {
+      return commandPaths.has(candidate) || hostedPlanReviewPath(candidate);
+    }
     var allowed = method === 'GET'
       ? path.startsWith('/api/extension-device/source-workbench/')
-      : commandPaths.has(path);
+      : allowedPostPath(path);
     if (!allowed) {
       throw new TypeError('source workbench path is invalid');
     }
@@ -61,7 +104,7 @@
     if (parsed.origin !== 'https://ss-erp.invalid'
       || (method === 'GET'
         ? !parsed.pathname.startsWith('/api/extension-device/source-workbench/')
-        : !commandPaths.has(parsed.pathname) || parsed.search)) {
+        : !allowedPostPath(parsed.pathname) || parsed.search)) {
       throw new TypeError('source workbench path is invalid');
     }
     return parsed.pathname + parsed.search;
@@ -158,6 +201,60 @@
     return JSON.parse(text);
   }
 
+  async function readBinaryResponse(response, maximumBytes) {
+    var rawLength = responseHeader(response, 'content-length');
+    if (typeof rawLength !== 'string' || !/^[1-9]\d{0,8}$/.test(rawLength)) {
+      throw new Error('source workbench binary response length is invalid');
+    }
+    var declaredLength = Number(rawLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maximumBytes) {
+      throw new Error('source workbench binary response is too large');
+    }
+    var body = response && response.body;
+    if (body && typeof body.getReader === 'function') {
+      var reader = body.getReader();
+      var chunks = [];
+      var total = 0;
+      try {
+        while (true) {
+          var part = await reader.read();
+          if (!part || part.done) break;
+          if (!(part.value instanceof Uint8Array)) {
+            if (typeof reader.cancel === 'function') await reader.cancel();
+            throw new Error('source workbench binary response is invalid');
+          }
+          total += part.value.byteLength;
+          if (total > declaredLength || total > maximumBytes) {
+            if (typeof reader.cancel === 'function') await reader.cancel();
+            throw new Error('source workbench binary response is too large');
+          }
+          chunks.push(part.value);
+        }
+      } finally {
+        if (typeof reader.releaseLock === 'function') reader.releaseLock();
+      }
+      if (total !== declaredLength) {
+        throw new Error('source workbench binary response length changed');
+      }
+      var result = new Uint8Array(total);
+      var offset = 0;
+      chunks.forEach(function (chunk) {
+        result.set(chunk, offset);
+        offset += chunk.byteLength;
+      });
+      return result;
+    }
+    if (!response || typeof response.arrayBuffer !== 'function') {
+      throw new Error('source workbench binary response body is unavailable');
+    }
+    var buffer = await response.arrayBuffer();
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== declaredLength
+      || buffer.byteLength > maximumBytes) {
+      throw new Error('source workbench binary response length changed');
+    }
+    return new Uint8Array(buffer);
+  }
+
   function createTransport(options) {
     var credentials = options && options.credentials;
     var fetchImpl = options && options.fetchImpl;
@@ -189,6 +286,9 @@
       async postBytes(pathValue, blobValue, commandOptions) {
         return send('POST', pathValue, blobValue, commandOptions || null, 'byok-bytes');
       },
+      async postRaw(pathValue, bodyValue, commandOptions) {
+        return send('POST', pathValue, bodyValue, commandOptions || null, 'hosted-preview');
+      },
     };
 
     async function send(method, pathValue, bodyValue, commandOptions, bodyMode) {
@@ -199,6 +299,9 @@
           binaryRequest = byokBinaryRequest(bodyValue, commandOptions, path);
           requestBody = binaryRequest.body;
         } else if (method === 'POST') {
+          if (bodyMode === 'hosted-preview' && path !== HOSTED_PREVIEW_CONSUME_PATH) {
+            throw new TypeError('hosted preview response path is invalid');
+          }
           if (!bodyValue || typeof bodyValue !== 'object' || Array.isArray(bodyValue)) {
             throw new TypeError('source workbench command body is invalid');
           }
@@ -214,10 +317,30 @@
           }
         }
         var controller = new AbortController();
+        var externalSignal = bodyMode === 'hosted-preview'
+          ? commandOptions && commandOptions.signal
+          : null;
+        var externallyAborted = false;
+        var abortFromExternal = null;
+        if (externalSignal !== null && externalSignal !== undefined) {
+          if (typeof externalSignal !== 'object'
+            || typeof externalSignal.aborted !== 'boolean'
+            || typeof externalSignal.addEventListener !== 'function'
+            || typeof externalSignal.removeEventListener !== 'function') {
+            throw new TypeError('hosted preview abort signal is invalid');
+          }
+          abortFromExternal = function () {
+            externallyAborted = true;
+            controller.abort();
+          };
+          if (externalSignal.aborted) abortFromExternal();
+          else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+        }
         var timeoutId;
         var timeoutMs = MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
           ? maskRequestTimeoutMs
           : requestTimeoutMs;
+        var requestDispatched = false;
         var timeout = new Promise(function (_resolve, reject) {
           timeoutId = setTimeout(function () {
             controller.abort();
@@ -243,7 +366,7 @@
           var accessToken = requiredText(operation.accessToken, 'device access token');
           var baseUrl = requiredText(operation.baseUrl, 'baseUrl').replace(/\/+$/, '');
           var headers = {
-            Accept: 'application/json',
+            Accept: bodyMode === 'hosted-preview' ? 'image/png' : 'application/json',
             Authorization: 'Bearer ' + accessToken,
           };
           if (method === 'POST') {
@@ -256,6 +379,7 @@
               headers['X-SS-ERP-BYOK-Ingest-Manifest'] = binaryRequest.manifest;
             }
           }
+          requestDispatched = true;
           var response = await fetchImpl(baseUrl + path, {
             method: method,
             headers: {
@@ -272,7 +396,9 @@
           }
           var maximumResponseBytes = path === BYOK_PUBLISH_PREVIEW_PATH
             ? MAX_PUBLISH_RESPONSE_BYTES
-            : MAX_RESPONSE_BYTES;
+            : bodyMode === 'hosted-preview'
+              ? MAX_HOSTED_PREVIEW_RESPONSE_BYTES
+              : MAX_RESPONSE_BYTES;
           if ((response.status === 401 || response.status === 410) && binaryRequest) {
             var grantErrorBody = null;
             try { grantErrorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
@@ -326,6 +452,31 @@
             try { errorBody = await readJsonResponse(response, maximumResponseBytes); } catch {}
             return { state: 'http_error', status: response.status, body: errorBody };
           }
+          if (bodyMode === 'hosted-preview') {
+            var previewBytes = await readBinaryResponse(
+              response,
+              MAX_HOSTED_PREVIEW_RESPONSE_BYTES,
+            );
+            if (!await operationCurrent(operation)) {
+              throw new Error('device credential operation superseded');
+            }
+            var immutableBytes = previewBytes.slice();
+            return {
+              state: 'raw_response',
+              status: response.status,
+              response: Object.freeze({
+                ok: true,
+                status: response.status,
+                headers: response.headers,
+                arrayBuffer: async function () {
+                  return immutableBytes.buffer.slice(
+                    immutableBytes.byteOffset,
+                    immutableBytes.byteOffset + immutableBytes.byteLength,
+                  );
+                },
+              }),
+            };
+          }
           var responseBody = await readJsonResponse(response, maximumResponseBytes);
           if (!await operationCurrent(operation)) {
             throw new Error('device credential operation superseded');
@@ -335,10 +486,24 @@
         try {
           return await Promise.race([request, timeout]);
         } catch (error) {
-          if (controller.signal.aborted) throw new Error('source workbench request timed out');
-          throw error;
+          if (controller.signal.aborted) {
+            throw requestFailure(
+              externallyAborted
+                ? 'source workbench request aborted'
+                : 'source workbench request timed out',
+              requestDispatched,
+            );
+          }
+          throw requestFailure(
+            error && typeof error.message === 'string'
+              ? error.message : 'source workbench request failed',
+            requestDispatched,
+          );
         } finally {
           clearTimeout(timeoutId);
+          if (externalSignal && abortFromExternal) {
+            try { externalSignal.removeEventListener('abort', abortFromExternal); } catch {}
+          }
         }
     }
   }

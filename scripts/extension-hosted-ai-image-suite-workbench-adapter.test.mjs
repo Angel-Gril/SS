@@ -44,10 +44,12 @@ function projectionFixture() {
         slots: [{
           ordinal: 0, slotKey: 'sku:sku-1:hero', goal: '商品主图',
           ownership: { level: 'sku', key: 'sku-1' },
+          applicableSkuKeys: ['sku-1'],
           estimatedCostCents: 9, maximumCostCents: 12,
         }, {
           ordinal: 1, slotKey: 'sku:sku-1:detail-1', goal: '商品细节图',
           ownership: { level: 'sku', key: 'sku-1' },
+          applicableSkuKeys: ['sku-1'],
           estimatedCostCents: 9, maximumCostCents: 12,
         }],
       },
@@ -78,7 +80,8 @@ function currentSuiteFixture() {
     },
     slots: [{
       id: 'slot-review', ordinal: 0, slotKey: 'sku:sku-1:hero', goal: '商品主图',
-      ownership: { level: 'sku', key: 'sku-1' }, status: 'SUCCEEDED', attempt: 1,
+      ownership: { level: 'sku', key: 'sku-1' }, applicableSkuKeys: ['sku-1'],
+      status: 'SUCCEEDED', attempt: 1,
       revision: 5, estimatedCostCents: 9, maximumCostCents: 12,
       workflowId: 'child-workflow-1', workflowRevision: 4, reviewStatus: 'PENDING',
       output: {
@@ -96,7 +99,8 @@ function currentSuiteFixture() {
       },
     }, {
       id: 'slot-retry', ordinal: 1, slotKey: 'sku:sku-1:detail-1', goal: '商品细节图',
-      ownership: { level: 'sku', key: 'sku-1' }, status: 'FAILED', attempt: 1,
+      ownership: { level: 'sku', key: 'sku-1' }, applicableSkuKeys: ['sku-1'],
+      status: 'FAILED', attempt: 1,
       revision: 3, estimatedCostCents: 9, maximumCostCents: 12,
       workflowId: null, workflowRevision: null, reviewStatus: 'NOT_READY', output: null,
       application: null,
@@ -147,6 +151,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(planned.quote)), {
 });
 assert.equal(planned.plan.startIntent.action, 'START');
 assert.equal(planned.plan.startIntent.commandTemplate.acceptedMaximumCostCents, 24);
+assert.deepEqual(JSON.parse(JSON.stringify(planned.plan.slots[0].applicableSkuKeys)), ['sku-1']);
 assert.equal(planned.suite, null);
 assert.equal(Object.isFrozen(planned), true);
 
@@ -177,6 +182,18 @@ assert.deepEqual(JSON.parse(JSON.stringify(approved.applyPolicy)), {
 });
 assert.equal(Object.isFrozen(approved.suite.slots[0].applyIntent), true);
 
+const grouped = projectionFixture();
+grouped.plan.preview.slots[1].slotKey = 'group:visual-shared:gallery:1';
+grouped.plan.preview.slots[1].ownership = {
+  level: 'compatibility_group', key: 'visual-shared',
+};
+grouped.plan.preview.slots[1].applicableSkuKeys = ['sku-1', 'sku-2'];
+const groupedProjected = adapter.project(grouped);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(groupedProjected.plan.slots[1].applicableSkuKeys)),
+  ['sku-1', 'sku-2'],
+);
+
 const empty = projectionFixture();
 empty.commandAuthority = null;
 empty.plan = null;
@@ -192,6 +209,13 @@ for (const mutate of [
   (value) => { value.applyPolicy.writesStoreDraft = true; },
   (value) => { value.suite.slots[0].output.url = 'http://metadata.internal/latest'; },
   (value) => { value.suite.slots[0].prompt = 'must not be accepted'; },
+  (value) => { value.suite.slots[0].applicableSkuKeys = ['sku-other']; },
+  (value) => {
+    value.plan.preview.slots[1].ownership = {
+      level: 'compatibility_group', key: 'visual-shared',
+    };
+    value.plan.preview.slots[1].applicableSkuKeys = ['sku-2', 'sku-1'];
+  },
 ]) {
   const invalid = currentSuiteFixture();
   mutate(invalid);

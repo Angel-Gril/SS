@@ -94,6 +94,13 @@ body.is-edit-operation #emptyResult {
   display: none !important;
 }
 
+body.is-hosted-mode #byokControlPanel,
+body.is-hosted-mode #resultPanel,
+body.is-hosted-mode #editResultPanel,
+body.is-hosted-mode #emptyResult {
+  display: none !important;
+}
+
 h1,
 h2,
 p,
@@ -259,6 +266,141 @@ h2 {
 .empty-result {
   border: 1px solid var(--line);
   background: var(--surface);
+}
+
+.hosted-control-panel {
+  grid-column: 1 / span 2;
+  min-width: 0;
+}
+
+.hosted-status {
+  min-height: 38px;
+  margin-top: 16px;
+  border-left: 3px solid var(--info);
+  background: var(--info-soft);
+  padding: 9px 11px;
+  color: #244b73;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.hosted-plan-summary,
+.hosted-quote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+  border-block: 1px solid var(--line);
+}
+
+.hosted-plan-summary > div,
+.hosted-quote-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.hosted-plan-summary > div:first-child,
+.hosted-quote-grid > div:first-child {
+  padding-left: 0;
+}
+
+.hosted-plan-summary > div + div,
+.hosted-quote-grid > div + div {
+  border-left: 1px solid var(--line);
+}
+
+.hosted-plan-summary dt,
+.hosted-quote-grid dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.hosted-plan-summary dd,
+.hosted-quote-grid dd {
+  margin-top: 3px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.hosted-plan-actions,
+.hosted-suite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.hosted-quote-panel,
+.hosted-slot-section {
+  margin-top: 18px;
+  border-top: 1px solid var(--line-strong);
+  padding-top: 16px;
+}
+
+.hosted-quote-panel > .button {
+  margin-top: 12px;
+}
+
+.hosted-slot-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.hosted-slot-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  padding: 10px 11px;
+}
+
+.hosted-slot-copy,
+.hosted-slot-copy strong,
+.hosted-slot-copy span {
+  display: block;
+  min-width: 0;
+}
+
+.hosted-slot-copy strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.hosted-slot-copy span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.hosted-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.hosted-slot-actions .button {
+  min-height: 36px;
+  padding: 7px 9px;
+  font-size: 10px;
+}
+
+.hosted-preview-panel {
+  min-height: 300px;
+}
+
+.hosted-preview-panel .button {
+  margin: 8px;
+  justify-self: end;
 }
 
 .context-band {
@@ -1752,6 +1894,10 @@ h2 {
     grid-column: 1;
   }
 
+  .hosted-control-panel {
+    grid-column: 1;
+  }
+
   .workspace-task-dock {
     grid-column: 2;
   }
@@ -1881,6 +2027,24 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .hosted-plan-summary,
+  .hosted-quote-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hosted-plan-summary > div,
+  .hosted-plan-summary > div:first-child,
+  .hosted-quote-grid > div,
+  .hosted-quote-grid > div:first-child {
+    padding: 7px 0;
+  }
+
+  .hosted-plan-summary > div + div,
+  .hosted-quote-grid > div + div {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
   .publish-summary > div,
   .publish-summary > div:first-child {
     padding: 7px 0;
@@ -1958,6 +2122,17 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .hosted-slot-item {
+    grid-template-columns: 1fr;
+  }
+
+  .hosted-plan-actions,
+  .hosted-suite-actions,
+  .hosted-slot-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .workspace-slot-actions {
     grid-template-columns: repeat(3, minmax(44px, 1fr));
   }
@@ -1965,9 +2140,17 @@ h2 {
   .workspace-slot-list [data-workspace-action="set-main-slot"],
   .workspace-slot-list [data-workspace-action="move-slot-up"],
   .workspace-slot-list [data-workspace-action="move-slot-down"],
+  .workspace-library-tabs [data-workspace-action="select-library-tab"],
+  .workspace-library-list [data-workspace-action="toggle-global-reference"],
+  .workspace-library-list [data-workspace-action="toggle-slot-reference"],
   .workspace-alternative-actions button,
   .workspace-queued-attempt button,
   .workspace-task-actions .button,
+  .header-actions .button,
+  .generation-footer .button,
+  .hosted-plan-actions .button,
+  .hosted-suite-actions .button,
+  .hosted-slot-actions .button,
   #workspaceSavePromptButton,
   #workspaceRegenerateButton {
     min-height: 44px;

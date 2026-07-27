@@ -14,7 +14,7 @@
         <div>
           <p class="eyebrow">扩展独立工作区</p>
           <h1 id="pageTitle">AI 图片工作台</h1>
-          <p class="page-subtitle">BYOK 生成、参考图与编辑工作区</p>
+          <p class="page-subtitle">ERP 托管与自带 API 图片工作区</p>
         </div>
       </div>
       <div class="header-actions">
@@ -70,7 +70,7 @@
               <p class="section-kicker">商品媒体编排</p>
               <h2 id="workspaceTitle">素材、槽位与提示词</h2>
             </div>
-            <span class="state-badge state-warning">批量执行待接通</span>
+            <span id="workspaceConnectionBadge" class="state-badge state-warning">正在检查执行通道</span>
           </div>
 
           <div class="workspace-library-heading">
@@ -150,7 +150,97 @@
         </section>
 
         <div class="workbench-grid">
-      <section class="control-panel" aria-labelledby="generationTitle">
+      <section
+        id="hostedControlPanel"
+        class="control-panel hosted-control-panel"
+        aria-labelledby="hostedControlTitle"
+        hidden
+      >
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">ERP 托管执行</p>
+            <h2 id="hostedControlTitle">计划、费用与候选审核</h2>
+          </div>
+          <span id="hostedStateBadge" class="state-badge state-pending">正在读取</span>
+        </div>
+
+        <p id="hostedStatus" class="hosted-status" role="status" aria-live="polite">
+          正在验证托管功能与当前草稿绑定。
+        </p>
+
+        <dl class="hosted-plan-summary">
+          <div><dt>计划</dt><dd id="hostedPlanSummary">尚未创建</dd></div>
+          <div><dt>审核</dt><dd id="hostedReviewSummary">待读取</dd></div>
+          <div><dt>任务</dt><dd id="hostedSuiteSummary">尚未启动</dd></div>
+        </dl>
+
+        <div class="hosted-plan-actions" role="group" aria-label="托管计划操作">
+          <button id="hostedCreatePlanButton" class="button button-secondary" type="button" disabled>
+            创建计划
+          </button>
+          <button id="hostedApprovePlanButton" class="button button-primary" type="button" disabled>
+            批准计划
+          </button>
+          <button id="hostedRejectPlanButton" class="button button-danger" type="button" disabled>
+            驳回计划
+          </button>
+        </div>
+
+        <section id="hostedQuotePanel" class="hosted-quote-panel" aria-labelledby="hostedQuoteTitle" hidden>
+          <div class="workspace-pane-heading">
+            <h3 id="hostedQuoteTitle">ERP 权威报价</h3>
+            <span id="hostedPricingVersion">待读取</span>
+          </div>
+          <dl class="hosted-quote-grid">
+            <div><dt>图片数</dt><dd id="hostedQuoteItems">0</dd></div>
+            <div><dt>预计费用</dt><dd id="hostedEstimatedCost">¥0.00</dd></div>
+            <div><dt>最高费用</dt><dd id="hostedMaximumCost">¥0.00</dd></div>
+          </dl>
+          <label class="publish-confirmation" for="hostedCostConfirmation">
+            <input id="hostedCostConfirmation" type="checkbox" disabled />
+            <span id="hostedCostConfirmationLabel">我确认本次最高费用</span>
+          </label>
+          <button id="hostedStartButton" class="button button-primary" type="button" disabled>
+            确认费用并启动
+          </button>
+        </section>
+
+        <div class="hosted-suite-actions" role="group" aria-label="托管任务操作">
+          <button id="hostedContinueButton" class="button button-secondary" type="button" disabled>
+            继续任务
+          </button>
+          <button id="hostedCancelButton" class="button button-danger" type="button" disabled>
+            取消任务
+          </button>
+        </div>
+
+        <section class="hosted-slot-section" aria-labelledby="hostedSlotTitle">
+          <div class="workspace-pane-heading">
+            <h3 id="hostedSlotTitle">计划槽位与候选</h3>
+            <span>每个动作都会重新读取 ERP 权威状态</span>
+          </div>
+          <ol id="hostedSlotList" class="hosted-slot-list"></ol>
+        </section>
+
+        <figure id="hostedPreviewPanel" class="preview-frame hosted-preview-panel" hidden>
+          <img id="hostedPreviewImage" alt="ERP 托管候选图预览" />
+          <figcaption id="hostedPreviewMeta">等待一次性安全预览</figcaption>
+          <button id="hostedPreviewCloseButton" class="button button-secondary button-compact" type="button">
+            关闭预览
+          </button>
+        </figure>
+
+        <p id="hostedAssignmentNotice" class="publish-notice" role="status" aria-live="polite">
+          全部候选完成审核后可一次写入 ERP 草稿；发布不会自动执行。
+        </p>
+        <div class="hosted-plan-actions">
+          <button id="hostedAssignApprovedButton" class="button button-primary" type="button" disabled>
+            写入全部已批准结果
+          </button>
+        </div>
+      </section>
+
+      <section id="byokControlPanel" class="control-panel" aria-labelledby="generationTitle">
         <div class="section-heading">
           <div>
             <p class="section-kicker">生成配置</p>
@@ -159,15 +249,15 @@
           <span class="state-badge state-warning">不会直接上架</span>
         </div>
 
-        <fieldset class="mode-switch">
+        <fieldset class="mode-switch" hidden aria-hidden="true">
           <legend>执行方式</legend>
           <label class="mode-option is-selected">
             <input id="executionModeByok" type="radio" name="executionMode" value="BYOK" checked />
             <span><strong>自带 API</strong><small>费用由您的 Provider 账户承担</small></span>
           </label>
-          <label class="mode-option is-disabled">
+          <label id="hostedModeOption" class="mode-option is-disabled">
             <input id="executionModeHosted" type="radio" name="executionMode" value="ERP_HOSTED" disabled />
-            <span><strong>ERP 托管计费</strong><small>将在后续完整工作台阶段开放</small></span>
+            <span><strong>ERP 托管计费</strong><small>需通过当前草稿的计划与费用验证</small></span>
           </label>
         </fieldset>
 
@@ -495,7 +585,11 @@
   <script src="../shared/contracts/ai-image-workbench-v1.js"></script>
   <script src="../shared/byok/workbench-workspace-state.js"></script>
   <script src="../shared/byok/workbench-client.js"></script>
+  <script src="../shared/hosted/ai-image-suite-workbench-runtime-client.js"></script>
+  <script src="../shared/hosted/ai-image-suite-candidate-preview-consumer.js"></script>
+  <script src="../shared/hosted/ai-image-suite-workspace-projection.js"></script>
   <script src="./ai-image-workbench-workspace.js"></script>
+  <script src="./ai-image-workbench-hosted.js"></script>
   <script src="./ai-image-workbench.js"></script>
   <script src="./ai-image-workbench-edit.js"></script>
 </body>

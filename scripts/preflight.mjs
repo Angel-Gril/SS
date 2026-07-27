@@ -164,6 +164,66 @@ const steps = [
     args: ['scripts/extension-ai-image-workbench-contract.test.mjs'],
   },
   {
+    name: 'extension hosted AI image suite workbench adapter contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workbench-adapter.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image transport contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-transport.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image candidate preview bridge contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-candidate-preview-bridge.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image workbench client contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workbench-client.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image workbench client registry contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workbench-client-registry.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image runtime dispatcher contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workbench-runtime-dispatcher.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image service worker contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-service-worker.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image runtime page client contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workbench-runtime-client.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image candidate preview consumer contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-candidate-preview-consumer.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image workspace projection contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-workspace-projection.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image workbench controller contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-workbench-controller.test.mjs'],
+  },
+  {
+    name: 'extension hosted AI image package verifier contract',
+    command: 'node',
+    args: ['scripts/extension-hosted-ai-image-suite-package-verifier.test.mjs'],
+  },
+  {
     name: 'extension BYOK profile/session secret contract',
     command: 'node',
     args: ['scripts/extension-byok-profile-store.test.mjs'],

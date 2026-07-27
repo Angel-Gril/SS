@@ -80,6 +80,9 @@
     'slotKey', 'role', 'prompt', 'negativePrompt', 'referenceIds', 'alternatives',
     'selectedAttemptId',
   ]);
+  var SCOPED_SLOT_KEYS = Object.freeze(
+    SLOT_KEYS.concat(['assignmentScope', 'applicableSkuKeys']),
+  );
   var ALTERNATIVE_KEYS = Object.freeze([
     'attemptId', 'state', 'mediaId', 'errorCode',
   ]);
@@ -407,9 +410,34 @@
     return alternatives.length > 0 ? alternatives[alternatives.length - 1].state : 'EMPTY';
   }
 
-  function normalizeInitialSlot(value, skuKey, mediaById) {
-    if (!exactKeys(value, SLOT_KEYS)) invalid('workspace slot is invalid');
+  function normalizeInitialSlot(value, skuKey, mediaById, knownSkuKeys) {
+    var scopeDeclared = exactKeys(value, SCOPED_SLOT_KEYS);
+    if (!exactKeys(value, SLOT_KEYS) && !scopeDeclared) invalid('workspace slot is invalid');
     if (!SLOT_ROLES.includes(value.role)) invalid('slot role is invalid');
+    var assignmentScope = 'SKU';
+    var applicableSkuKeys = [skuKey];
+    if (scopeDeclared) {
+      if (!['SKU', 'PRODUCT'].includes(value.assignmentScope)
+        || !Array.isArray(value.applicableSkuKeys)
+        || value.applicableSkuKeys.length < 1
+        || value.applicableSkuKeys.length > LIMITS.maxSkus) {
+        invalid('workspace slot assignment scope is invalid');
+      }
+      applicableSkuKeys = value.applicableSkuKeys.map(function (member) {
+        return contextKey(member, 500, 'applicable SKU key');
+      });
+      if (new Set(applicableSkuKeys).size !== applicableSkuKeys.length
+        || applicableSkuKeys.some(function (member, index) {
+          return !knownSkuKeys.has(member)
+            || index > 0 && applicableSkuKeys[index - 1] >= member;
+        })
+        || value.assignmentScope === 'SKU'
+          && (applicableSkuKeys.length !== 1 || applicableSkuKeys[0] !== skuKey)
+        || value.assignmentScope === 'PRODUCT' && !applicableSkuKeys.includes(skuKey)) {
+        invalid('workspace slot applicable SKUs are invalid');
+      }
+      assignmentScope = value.assignmentScope;
+    }
     var alternatives = normalizeAlternatives(value.alternatives, mediaById, skuKey);
     var selectedAttemptId = normalizeSelectedAttempt(value.selectedAttemptId, alternatives);
     var referenceOverrideIds = value.referenceIds === null
@@ -432,6 +460,9 @@
       status: derivedSlotStatus(alternatives, selectedAttemptId),
       slotRevision: null,
       promptFrozen: alternatives.length > 0,
+      scopeDeclared: scopeDeclared,
+      assignmentScope: assignmentScope,
+      applicableSkuKeys: applicableSkuKeys,
     };
   }
 
@@ -441,6 +472,7 @@
       if (!isRecord(item) || typeof item.skuKey !== 'string') invalid('SKU is invalid');
       return contextKey(item.skuKey, 500, 'SKU key');
     }), 'SKU keys');
+    var knownSkuKeys = new Set(normalizedSkuKeys);
     var totalSlots = 0;
     var allSlotKeys = [];
     var allAttemptIds = [];
@@ -451,7 +483,7 @@
         invalid('SKU is invalid');
       }
       var slots = item.slots.map(function (slot) {
-        return normalizeInitialSlot(slot, normalizedSkuKeys[index], mediaById);
+        return normalizeInitialSlot(slot, normalizedSkuKeys[index], mediaById, knownSkuKeys);
       });
       if (slots.filter(function (slot) { return slot.role === 'HERO'; }).length !== 1) {
         invalid('each SKU must have exactly one HERO slot');
@@ -983,7 +1015,7 @@
           var promptDecision = promptEditDecision(slot);
           var regeneration = regenerateDecision(slot);
           var publishMedia = publishMediaDecision(slot);
-          publicSlots.push({
+          var publicSlot = {
             slotKey: slot.slotKey,
             skuKey: sku.skuKey,
             position: position,
@@ -1039,7 +1071,12 @@
             regenerateDisabledReason: regeneration.reason,
             publishMediaEligible: publishMedia.eligible,
             publishMediaDisabledReason: publishMedia.reason,
-          });
+          };
+          if (slot.scopeDeclared) {
+            publicSlot.assignmentScope = slot.assignmentScope;
+            publicSlot.applicableSkuKeys = slot.applicableSkuKeys.slice();
+          }
+          publicSlots.push(publicSlot);
         });
       });
       var modeDisabledReasons = {

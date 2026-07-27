@@ -20,6 +20,7 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const commandEnvelopeSchema = z.object({
   ownerUserId: exactIdentifier,
   actorUserId: exactIdentifier,
+  deviceSessionId: exactIdentifier,
   shopId: exactIdentifier,
   listingWorkflowId: exactIdentifier,
   draftVersion: revision,
@@ -29,6 +30,7 @@ const commandEnvelopeSchema = z.object({
 
 export interface ExtensionAiImageSuiteCommandAuthority {
   ownerUserId: string;
+  deviceSessionId: string;
   snapshotId: string;
   supplyGoodsId: string;
   shopId: string;
@@ -39,6 +41,7 @@ export interface ExtensionAiImageSuiteCommandAuthority {
 
 export interface ExtensionAiImageSuiteAuthorityLoadInput {
   ownerUserId: string;
+  deviceSessionId: string;
   snapshotId: string;
   supplyGoodsId: string;
   shopId: string;
@@ -64,6 +67,7 @@ export interface ExtensionAiImageSuiteCommandLoaders {
 export interface ExtensionAiImageSuiteActionContext {
   ownerUserId: string;
   actorUserId: string;
+  deviceSessionId: string;
   snapshotId: string;
   supplyGoodsId: string;
   shopId: string;
@@ -176,6 +180,7 @@ export type ExtensionAiImageSuiteCommandErrorCode =
   | 'AI_IMAGE_SUITE_COMMAND_ACTION_NOT_ALLOWED'
   | 'AI_IMAGE_SUITE_COMMAND_PRICING_CHANGED'
   | 'AI_IMAGE_SUITE_COMMAND_IDEMPOTENCY_MISMATCH'
+  | 'AI_IMAGE_SUITE_COMMAND_MODE_CONFLICT'
   | 'AI_IMAGE_SUITE_COMMAND_STATE_UNAVAILABLE';
 
 export class ExtensionAiImageSuiteCommandError extends Error {
@@ -248,6 +253,7 @@ function authorityInput(
 ): ExtensionAiImageSuiteAuthorityLoadInput {
   return {
     ownerUserId: envelope.ownerUserId,
+    deviceSessionId: envelope.deviceSessionId,
     snapshotId: command.snapshotId,
     supplyGoodsId: command.supplyGoodsId,
     shopId: envelope.shopId,
@@ -266,6 +272,9 @@ function assertAuthority(
   }
   if (current.ownerUserId !== expected.ownerUserId) {
     fail('AI_IMAGE_SUITE_COMMAND_FORBIDDEN', 403, 'AI image suite authority owner changed');
+  }
+  if (current.deviceSessionId !== expected.deviceSessionId) {
+    fail('AI_IMAGE_SUITE_COMMAND_FORBIDDEN', 403, 'AI image suite device authority changed');
   }
   if (current.shopId !== expected.shopId) {
     fail('AI_IMAGE_SUITE_COMMAND_FORBIDDEN', 403, 'AI image suite shop authority changed');
@@ -537,6 +546,7 @@ function actionContext(
   return {
     ownerUserId: envelope.ownerUserId,
     actorUserId: envelope.actorUserId,
+    deviceSessionId: envelope.deviceSessionId,
     snapshotId: command.snapshotId,
     supplyGoodsId: command.supplyGoodsId,
     shopId: envelope.shopId,

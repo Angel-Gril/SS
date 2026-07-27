@@ -110,6 +110,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
   const review = api.MESSAGE_TYPES.WORKBENCH.REVIEW_RESULT;
   const recoverIngest = api.MESSAGE_TYPES.WORKBENCH.RECOVER_INGEST;
   const publish = api.MESSAGE_TYPES.WORKBENCH.PUBLISH;
+  const hostedTypes = Object.values(api.MESSAGE_TYPES.HOSTED_WORKBENCH);
 
   for (const type of [
     setupContext,
@@ -123,6 +124,7 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     review,
     recoverIngest,
     publish,
+    ...hostedTypes,
   ]) {
     assert.equal(policy.isKnownRuntimeMessageType(type), true);
   }
@@ -161,6 +163,29 @@ test('adds closed workbench and Provider-settings sender matrices without wideni
     extensionSender('/pages/ai-image-workbench.html'),
     extensionId,
   ), true);
+  for (const type of hostedTypes) {
+    assert.equal(policy.isAllowedRuntimeMessageSender(
+      type,
+      extensionSender('/pages/ai-image-workbench.html'),
+      extensionId,
+    ), true);
+    for (const path of [
+      '/pages/ai-provider-settings.html',
+      '/pages/settings.html',
+      '/pages/media-editor.html',
+    ]) {
+      assert.equal(policy.isAllowedRuntimeMessageSender(
+        type,
+        extensionSender(path),
+        extensionId,
+      ), false);
+    }
+    assert.equal(policy.isAllowedRuntimeMessageSender(type, {
+      id: extensionId,
+      url: 'https://detail.1688.com/offer/1.html',
+      tab: { url: 'https://detail.1688.com/offer/1.html' },
+    }, extensionId), false);
+  }
   assert.equal(policy.isAllowedRuntimeMessageSender(
     publish,
     extensionSender('/pages/ai-image-workbench.html'),

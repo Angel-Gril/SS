@@ -314,6 +314,21 @@ const requiredByokModules = [
   'shared/byok/workbench-client.js',
 ];
 
+const requiredHostedBackgroundModules = [
+  'shared/hosted/ai-image-suite-workbench-adapter.js',
+  'shared/hosted/ai-image-suite-candidate-preview-bridge.js',
+  'shared/hosted/ai-image-suite-workbench-client.js',
+  'shared/hosted/ai-image-suite-workbench-client-registry.js',
+  'shared/hosted/ai-image-suite-workbench-runtime-dispatcher.js',
+];
+
+const requiredHostedPageModules = [
+  'shared/hosted/ai-image-suite-workbench-runtime-client.js',
+  'shared/hosted/ai-image-suite-candidate-preview-consumer.js',
+  'shared/hosted/ai-image-suite-workspace-projection.js',
+  'pages/ai-image-workbench-hosted.js',
+];
+
 const requiredByokPages = [
   'pages/ai-provider-settings.html',
   'pages/ai-provider-settings.css',
@@ -331,6 +346,12 @@ for (const modulePath of requiredSecurityModules) fileExists(modulePath, `securi
 for (const contractPath of requiredSharedContracts) fileExists(contractPath, `shared contract ${contractPath}`);
 for (const modulePath of requiredByokModules) fileExists(modulePath, `BYOK module ${modulePath}`);
 for (const pagePath of requiredByokPages) fileExists(pagePath, `BYOK page ${pagePath}`);
+for (const modulePath of requiredHostedBackgroundModules) {
+  fileExists(modulePath, `hosted background module ${modulePath}`);
+}
+for (const modulePath of requiredHostedPageModules) {
+  fileExists(modulePath, `hosted page module ${modulePath}`);
+}
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
 for (const adapter of requiredAdapters) {
@@ -369,6 +390,50 @@ for (const modulePath of [
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);
 }
+for (const modulePath of requiredHostedBackgroundModules) {
+  const relFromBackground = `../${modulePath}`;
+  if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
+  else fail(`service worker does not import ${modulePath}`);
+}
+checkScriptLoadOrder(
+  parseImportScripts(manifest.background?.service_worker || ''),
+  requiredHostedBackgroundModules,
+  'ERP-hosted service worker',
+);
+
+const hostedPreviewWired = [
+  'function getHostedAiImageSuitePreviewBridge()',
+  'SS_ERP_HOSTED_AI_IMAGE_SUITE_CANDIDATE_PREVIEW_BRIDGE',
+  'hostedAiImageSuitePreviewBridge = api.createBridge({',
+  'transport.post(',
+  'transport.postRaw(',
+  "result.state !== 'raw_response'",
+  'hostedAiImageSuitePreviewBridge.clear()',
+].every((token) => swText.includes(token));
+if (hostedPreviewWired) pass('service worker hosted preview wiring is complete');
+else fail('service worker hosted preview wiring is incomplete');
+
+const hostedRegistryWired = [
+  'function getHostedAiImageSuiteClientRegistry()',
+  'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT_REGISTRY',
+  'hostedAiImageSuiteClientRegistry = api.createRegistry({',
+  'return createHostedAiImageSuiteWorkbenchClient();',
+  'getHostedAiImageSuiteClientRegistry().getClient(sender, binding)',
+  'hostedAiImageSuiteClientRegistry.clearAll(',
+  'getHostedAiImageSuiteClientRegistry().removeTab(tabId)',
+].every((token) => swText.includes(token));
+if (hostedRegistryWired) pass('service worker hosted registry wiring is complete');
+else fail('service worker hosted registry wiring is incomplete');
+
+const hostedDispatcherWired = [
+  'function getHostedAiImageSuiteRuntimeDispatcher()',
+  'SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_DISPATCHER',
+  'authorization.MESSAGE_TYPES.HOSTED_WORKBENCH',
+  'hostedAiImageSuiteRuntimeDispatcher = api.createDispatcher({',
+  '...hostedWorkbenchDispatcher.handlers,',
+].every((token) => swText.includes(token));
+if (hostedDispatcherWired) pass('service worker hosted dispatcher wiring is complete');
+else fail('service worker hosted dispatcher wiring is incomplete');
 
 const workbenchHtmlText = readFileSync(relToAbs('pages/ai-image-workbench.html'), 'utf8');
 const workbenchLaunchHtmlText = readFileSync(
@@ -394,6 +459,22 @@ const orderedWorkbenchScripts = [
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
 ];
+const requiredHostedWorkbenchScripts = [
+  '../shared/hosted/ai-image-suite-workbench-runtime-client.js',
+  '../shared/hosted/ai-image-suite-candidate-preview-consumer.js',
+  '../shared/hosted/ai-image-suite-workspace-projection.js',
+  './ai-image-workbench-hosted.js',
+];
+const orderedHostedWorkbenchScripts = [
+  '../shared/byok/workbench-client.js',
+  '../shared/hosted/ai-image-suite-workbench-runtime-client.js',
+  '../shared/hosted/ai-image-suite-candidate-preview-consumer.js',
+  '../shared/hosted/ai-image-suite-workspace-projection.js',
+  './ai-image-workbench-workspace.js',
+  './ai-image-workbench-hosted.js',
+  './ai-image-workbench.js',
+  './ai-image-workbench-edit.js',
+];
 const workbenchScriptSources = parseHtmlScriptSources(workbenchHtmlText);
 if (requiredWorkbenchScripts.every((source) => workbenchScriptSources.includes(source))
   && workbenchHtmlText.includes('./ai-image-workbench.css')) {
@@ -402,6 +483,16 @@ if (requiredWorkbenchScripts.every((source) => workbenchScriptSources.includes(s
   fail('BYOK workbench page references are incomplete');
 }
 checkScriptLoadOrder(workbenchScriptSources, orderedWorkbenchScripts, 'BYOK workbench page');
+if (requiredHostedWorkbenchScripts.every((source) => workbenchScriptSources.includes(source))) {
+  pass('ERP-hosted workbench page references packaged runtime, preview, projection, and controller');
+} else {
+  fail('ERP-hosted workbench page references are incomplete');
+}
+checkScriptLoadOrder(
+  workbenchScriptSources,
+  orderedHostedWorkbenchScripts,
+  'ERP-hosted workbench page',
+);
 if (!/<script(?:\s|>)/iu.test(workbenchLaunchHtmlText)
   && !/[?#](?:source|product|workflow|shop|draft|sku|slot|key)=/iu.test(workbenchLaunchHtmlText)) {
   pass('BYOK workbench launch placeholder is inert and context-free');

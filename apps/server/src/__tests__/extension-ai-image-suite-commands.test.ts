@@ -32,6 +32,7 @@ const commandAuthority = {
 
 const authority = {
   ownerUserId: 'owner-1',
+  deviceSessionId: 'session-1',
   ...context,
 };
 const targetUpdatedAt = '2026-07-24T00:00:00.000Z';
@@ -201,6 +202,7 @@ function suiteProjection(overrides: Record<string, unknown> = {}) {
 function envelope(command: Record<string, unknown>) {
   return {
     ownerUserId: 'owner-1', actorUserId: 'owner-1',
+    deviceSessionId: 'session-1',
     shopId: 'shop-1', listingWorkflowId: 'listing-1', draftVersion: 7,
     idempotencyKey: deriveExtensionAiImageSuiteIdempotencyKey(command),
     command,
@@ -286,9 +288,11 @@ describe('extension AI image suite execute command executor', () => {
       suiteId: 'suite-1', status: 'PLANNED', revision: 1, replayed: false,
       provider: 'must-not-leak', prompt: 'must-not-leak', apiKey: 'must-not-leak',
     }));
+    const loadAuthority = vi.fn(async () => authority);
+    const loadProjection = vi.fn(async () => startProjection());
     const execute = createExtensionAiImageSuiteExecuteCommandExecutor({
-      loadAuthority: vi.fn(async () => authority),
-      loadProjection: vi.fn(async () => startProjection()),
+      loadAuthority,
+      loadProjection,
       start,
       continue: vi.fn(), cancel: vi.fn(), retry: vi.fn(),
     });
@@ -302,6 +306,7 @@ describe('extension AI image suite execute command executor', () => {
     expect(JSON.stringify(result)).not.toContain('must-not-leak');
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      deviceSessionId: 'session-1',
       snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
       shopId: 'shop-1', listingWorkflowId: 'listing-1',
       draftRevision: 11, draftVersion: 7,
@@ -310,6 +315,25 @@ describe('extension AI image suite execute command executor', () => {
       estimatedCostCents: 18, maximumCostCents: 24,
       operationKey: deriveExtensionAiImageSuiteIdempotencyKey(command),
     }));
+    expect(loadAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1',
+    }));
+    expect(loadProjection).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', deviceSessionId: 'session-1', action: 'START',
+    }));
+  });
+
+  it('rejects a projection reload resolved for another owner device session', async () => {
+    const execute = createExtensionAiImageSuiteExecuteCommandExecutor({
+      loadAuthority: vi.fn(async () => ({ ...authority, deviceSessionId: 'session-2' })),
+      loadProjection: vi.fn(async () => startProjection()),
+      start: vi.fn(), continue: vi.fn(), cancel: vi.fn(), retry: vi.fn(),
+    });
+
+    await expect(execute(envelope(startCommand()))).rejects.toMatchObject({
+      code: 'AI_IMAGE_SUITE_COMMAND_FORBIDDEN',
+      statusCode: 403,
+    });
   });
 
   it('continues only the exact projected suite revision', async () => {

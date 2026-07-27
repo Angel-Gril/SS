@@ -201,7 +201,21 @@
     return true;
   }
 
+  function hostedByokExecutionAllowed() {
+    var hostedController = global.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER;
+    return Boolean(hostedController
+      && typeof hostedController.isByokExecutionAllowed === 'function'
+      && hostedController.isByokExecutionAllowed());
+  }
+
   function emitWorkspaceBootstrap(candidate, forceDispatched) {
+    var hostedController = global.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER;
+    if (!hostedByokExecutionAllowed()) {
+      if (hostedController && typeof hostedController.refresh === 'function') {
+        void Promise.resolve(hostedController.refresh()).catch(function () {});
+      }
+      return false;
+    }
     var context = state.publicState && state.publicState.context;
     var binding = verifiedBoundWorkspaceBinding(candidate, context);
     if (!binding || !workspaceContextIsCanonical(context)) {
@@ -238,7 +252,7 @@
       mediaId: candidate ? candidate.resultId : null,
       errorCode: editOutcomeUnknown ? 'PROVIDER_OUTCOME_UNKNOWN' : null,
     }] : [];
-    return emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, {
+    var detail = {
       contractVersion: WORKSPACE_CONTRACT_VERSION,
       binding: binding,
       executionMode: 'BYOK',
@@ -262,7 +276,12 @@
           selectedAttemptId: candidate ? attemptId : null,
         }],
       }],
-    });
+    };
+    if (hostedController && typeof hostedController.isAvailable === 'function'
+      && hostedController.isAvailable()) {
+      detail.availableExecutionModes = ['BYOK', 'ERP_HOSTED'];
+    }
+    return emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, detail);
   }
 
   function emitWorkspaceUnknownOutcome() {
@@ -619,14 +638,16 @@
   }
 
   function renderPublishControls() {
+    var hostedBlocked = !hostedByokExecutionAllowed();
     var hasPreview = Boolean(state.publishPreview);
     var recoverable = Boolean(state.publishState
       && PUBLISH_RECOVERY_STATES.includes(state.publishState.state));
     var awaitingConfirmation = hasPreview && state.publishState === null;
     nodes.publishConfirmationRow.hidden = !awaitingConfirmation;
+    nodes.publishConfirmation.disabled = hostedBlocked || state.busy || !awaitingConfirmation;
     nodes.publishRecoverButton.hidden = !recoverable;
-    nodes.publishRecoverButton.disabled = state.busy || !recoverable;
-    nodes.publishConfirmButton.disabled = state.busy || !awaitingConfirmation
+    nodes.publishRecoverButton.disabled = hostedBlocked || state.busy || !recoverable;
+    nodes.publishConfirmButton.disabled = hostedBlocked || state.busy || !awaitingConfirmation
       || nodes.publishConfirmation.checked !== true;
   }
 
@@ -702,8 +723,10 @@
     var promptReady = String(nodes.promptInput.value || '').normalize('NFKC').trim().length > 0;
     var editTaskLocked = document.body && document.body.dataset
       && document.body.dataset.editTaskLocked === 'true';
-    var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome || editTaskLocked;
-    nodes.profileSelect.disabled = state.busy || Boolean(state.candidate)
+    var hostedBlocked = !hostedByokExecutionAllowed();
+    var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome
+      || editTaskLocked || hostedBlocked;
+    nodes.profileSelect.disabled = hostedBlocked || state.busy || Boolean(state.candidate)
       || !profileRows().length || editTaskLocked;
     nodes.promptInput.disabled = locked;
     nodes.negativePromptInput.disabled = locked;
@@ -718,12 +741,13 @@
     var ingesting = Boolean(state.candidate
       && state.candidate.deliveryState === 'INGESTING');
     var bound = Boolean(state.candidate && state.candidate.deliveryState === 'BOUND');
-    nodes.rejectButton.disabled = state.busy || (!candidateReady && !approved) || ingesting || bound;
+    nodes.rejectButton.disabled = hostedBlocked || state.busy
+      || (!candidateReady && !approved) || ingesting || bound;
     nodes.rejectButton.textContent = approved ? '删除临时图' : '驳回并删除';
     nodes.approveButton.textContent = bound
       ? '已绑定 ERP' : ingesting
         ? '核对 ERP 回执' : approved ? '接收并绑定 ERP' : '批准候选图';
-    nodes.approveButton.disabled = state.busy || bound
+    nodes.approveButton.disabled = hostedBlocked || state.busy || bound
       || (candidateReady && state.previewReadyResultId !== state.candidate.resultId)
       || (!candidateReady && !approved && !ingesting);
     renderProfileSummary();
@@ -1015,14 +1039,16 @@
     var profileId = state.selectedProfileId;
     var prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
     var negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
-    if (!prompt || state.busy || state.candidate || state.unknownOutcome) return;
+    if (!prompt || state.busy || state.candidate || state.unknownOutcome
+      || !hostedByokExecutionAllowed()) return;
     if (!readinessIsCurrent()) {
       var ready = await refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
       if (!lifecycleIsCurrent(lifecycleEpoch) || state.selectedProfileId !== profileId || !ready) return;
     }
     prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
     negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
-    if (!prompt || state.candidate || state.unknownOutcome) return;
+    if (!prompt || state.candidate || state.unknownOutcome
+      || !hostedByokExecutionAllowed()) return;
     state.busy = true;
     state.generationDispatchPending = true;
     renderControls();
@@ -1066,7 +1092,7 @@
   }
 
   async function reviewCandidate(decision) {
-    if (state.busy || !state.candidate
+    if (!hostedByokExecutionAllowed() || state.busy || !state.candidate
       || !['CANDIDATE_READY', 'APPROVED'].includes(state.candidate.reviewState)
       || (decision === 'APPROVE' && state.candidate.reviewState !== 'CANDIDATE_READY')) return;
     var lifecycleEpoch = state.lifecycleEpoch;
@@ -1110,7 +1136,8 @@
   }
 
   async function ingestApprovedCandidate() {
-    if (state.busy || !state.candidate || state.candidate.reviewState !== 'APPROVED'
+    if (!hostedByokExecutionAllowed() || state.busy || !state.candidate
+      || state.candidate.reviewState !== 'APPROVED'
       || state.candidate.deliveryState === 'BOUND') return;
     var lifecycleEpoch = state.lifecycleEpoch;
     var candidateId = state.candidate.resultId;
@@ -1158,7 +1185,8 @@
   }
 
   async function recoverIngestCandidate() {
-    if (state.busy || !state.candidate || state.candidate.deliveryState !== 'INGESTING') return;
+    if (!hostedByokExecutionAllowed() || state.busy || !state.candidate
+      || state.candidate.deliveryState !== 'INGESTING') return;
     var lifecycleEpoch = state.lifecycleEpoch;
     var candidateId = state.candidate.resultId;
     state.busy = true;
@@ -1210,7 +1238,7 @@
   }
 
   async function confirmListingPublish() {
-    if (state.busy || !state.publishPreview || state.publishState
+    if (!hostedByokExecutionAllowed() || state.busy || !state.publishPreview || state.publishState
       || nodes.publishConfirmation.checked !== true) return;
     var lifecycleEpoch = state.lifecycleEpoch;
     state.busy = true;
@@ -1249,7 +1277,7 @@
   }
 
   async function recoverListingPublish() {
-    if (state.busy || !state.publishState
+    if (!hostedByokExecutionAllowed() || state.busy || !state.publishState
       || !PUBLISH_RECOVERY_STATES.includes(state.publishState.state)) return;
     var lifecycleEpoch = state.lifecycleEpoch;
     state.busy = true;
@@ -1281,7 +1309,8 @@
   }
 
   nodes.profileSelect.addEventListener('change', function (event) {
-    if (!event || event.isTrusted !== true || state.busy || state.candidate
+    if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
+      || state.busy || state.candidate
       || document.body && document.body.dataset
         && document.body.dataset.editTaskLocked === 'true') {
       nodes.profileSelect.value = state.selectedProfileId;
@@ -1306,6 +1335,7 @@
         || detail.action !== 'SAVE_PROMPT' || detail.executionMode !== 'BYOK'
         || !Number.isSafeInteger(detail.revision) || detail.revision < 0
         || !isRecord(context) || detail.slotKey !== context.slotKey
+        || !hostedByokExecutionAllowed()
         || state.generationDispatchPending || state.candidate
         || state.unknownOutcome || editTaskLocked
         || typeof detail.prompt !== 'string' || detail.prompt.length > 8000
@@ -1317,6 +1347,11 @@
       renderControls();
     });
     document.addEventListener(WORKSPACE_REFRESH_EVENT, function () {
+      renderControls();
+      if (!hostedByokExecutionAllowed()) {
+        clearWorkspaceView();
+        return;
+      }
       emitWorkspaceBootstrap(state.candidate);
     });
   }

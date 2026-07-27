@@ -1,6 +1,6 @@
 # Phase 4: Complete Dual-Mode Workbench
 
-Progress: 2/5 tasks.
+Progress: 3/5 tasks.
 
 ## Tasks
 
@@ -10,7 +10,7 @@ Progress: 2/5 tasks.
 - [x] `UI-05` Add task/review/order/recovery UX (`P1`, `L`). Acceptance: progress, pause,
   continue, cancel queued, keep/reject, regenerate, choose main, reorder, missing/stale checks,
   and publish summary reflect real state; drag has keyboard alternatives.
-- [ ] `HOST-01` Adapt full ERP-hosted workflow (`P0`, `XL`). Acceptance: extension plan,
+- [x] `HOST-01` Adapt full ERP-hosted workflow (`P0`, `XL`). Acceptance: extension plan,
   ERP validation/quote, maximum-cost confirmation, queue/storage, candidate review, approved
   draft apply, retry cost confirmation, and publish all work; hosted never uses BYOK ingest.
 - [ ] `BYOK-01` Connect batch BYOK review/ingest/binding (`P0`, `XL`). Acceptance: selected
@@ -77,3 +77,28 @@ Progress: 2/5 tasks.
   verification passed; cloud strict reported 364 passes with no warning or failure. No Provider
   request, ERP ingest, Ozon write, production flag change, VPS deployment, or production mutation
   occurred.
+- 2026-07-27: `HOST-01` completed the exact-device ERP-hosted path from fact-bound plan creation and
+  validation through quote/maximum-cost confirmation, paid suite execution, one-use stored candidate
+  preview, review, retry with renewed cost confirmation, and exact listing-draft assignment. Hosted
+  assignment requires the complete plan/suite/slot/workflow/job/reservation/settlement graph and never
+  calls the BYOK ingest route. Ambiguous transport outcomes remain absorbing and cannot be blindly
+  retried.
+- A database execution-mode lock now serializes `ERP_HOSTED` and `BYOK` ownership for each exact
+  owner/workflow/draft revision/version. Hosted suite creation claims `ERP_HOSTED`; BYOK ingest claims
+  `BYOK`; same-mode replay is idempotent and cross-mode races fail closed. Existing hosted suites may
+  recover their exact-device plan/projection/preview while only `feature_extension_hosted_ai` is off,
+  but every hosted mutation remains disabled. `NO_SUITE` performs no hosted plan read and remains
+  eligible for BYOK.
+- Final HOST-01 gates passed: lint with only 20 existing warnings, workspace typecheck, 4,085 server
+  tests, preflight, 141 fresh PostgreSQL migrations plus 83 database integration tests, focused Hosted
+  tests 159/159, controller and Chromium responsive/forced-color/reduced-motion checks, and final
+  source/cloud/local package verification. Cloud passed 398 checks with no warning; source/local each
+  passed 394 checks with only the two existing offline-permission warnings. All flags remain
+  default-off; no Provider request, charge, ERP ingest, Ozon write, production change, deployment, or
+  VPS access occurred.
+- `BYOK-01` has a P0 release gate: the extension must persist and receive an exact BYOK execution
+  intent before every Provider POST. Claiming mode only during accepted-result ingest is too late
+  because another device could start Hosted after the external Provider has charged. The persisted
+  intent must bind the exact device/shop/workflow/draft/SKU/slot, endpoint hash, model, operation,
+  request mode, Provider idempotency key, and request hash; unknown outcomes remain absorbing, and
+  ingest must require that same intent.

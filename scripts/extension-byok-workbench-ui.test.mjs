@@ -9,9 +9,11 @@ const cssPath = `${root}/pages/ai-image-workbench.css`;
 const pagePath = `${root}/pages/ai-image-workbench.js`;
 const workspaceStatePath = `${root}/shared/byok/workbench-workspace-state.js`;
 const workspacePagePath = `${root}/pages/ai-image-workbench-workspace.js`;
+const hostedPagePath = `${root}/pages/ai-image-workbench-hosted.js`;
 
 for (const path of [
   htmlPath, launchPath, cssPath, pagePath, workspaceStatePath, workspacePagePath,
+  hostedPagePath,
 ]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
 }
@@ -32,6 +34,10 @@ assert.ok(
   html.indexOf('shared/contracts/ai-image-workbench-v1.js')
     < html.indexOf('shared/byok/workbench-workspace-state.js'),
   'the shared contract must load before workspace state',
+);
+assert.ok(
+  html.indexOf('./ai-image-workbench-hosted.js') < html.indexOf('./ai-image-workbench.js'),
+  'the fail-closed hosted authority controller must load before BYOK page startup',
 );
 assert.ok(
   html.indexOf('shared/byok/workbench-workspace-state.js')
@@ -348,6 +354,12 @@ context.addEventListener = (type, listener) => { windowListeners[type] = listene
 context.SS_ERP_BYOK_WORKBENCH_CLIENT = {
   DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
   createClient() { return client; },
+};
+context.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER = {
+  isActive() { return false; },
+  isAvailable() { return true; },
+  isByokExecutionAllowed() { return true; },
+  async refresh() { return true; },
 };
 
 vm.runInNewContext(pageSource, context, { filename: pagePath });
@@ -710,6 +722,12 @@ function createPageHarness(options = {}) {
     DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
     createClient() { return harnessClient; },
   };
+  harnessContext.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER = options.hostedController || {
+    isActive() { return false; },
+    isAvailable() { return true; },
+    isByokExecutionAllowed() { return true; },
+    async refresh() { return true; },
+  };
   let workspaceRuntimeRevision = 0;
   harnessContext.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
     nextRuntimeRevision() {
@@ -730,6 +748,154 @@ function createPageHarness(options = {}) {
     },
     get revokeCount() { return harnessRevokeCount; },
   };
+}
+
+{
+  let hostedAllowed = false;
+  let hostedActive = false;
+  let hostedRefreshCount = 0;
+  const harness = createPageHarness({
+    hostedController: {
+      isActive() { return hostedActive; },
+      isAvailable() { return hostedAllowed; },
+      isByokExecutionAllowed() { return hostedAllowed && !hostedActive; },
+      async refresh() { hostedRefreshCount += 1; return hostedAllowed; },
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.nodes.generateButton.disabled, true,
+    'BYOK generation stays disabled while hosted authority is pending');
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      && event.detail.executionMode === 'BYOK'
+  )), false, 'a faster BYOK state callback cannot publish before hosted authority resolves');
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(harness.calls.some((row) => row[0] === 'generate'), false);
+  assert.ok(hostedRefreshCount >= 1);
+
+  hostedAllowed = true;
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(harness.nodes.generateButton.disabled, false);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      && event.detail.executionMode === 'BYOK'
+      && event.detail.dispatched === false
+  )), true, 'an explicit no-suite authority decision releases the BYOK bootstrap');
+}
+
+{
+  const harness = createPageHarness({
+    hostedController: {
+      isActive() { return true; },
+      isAvailable() { return true; },
+      isByokExecutionAllowed() { return false; },
+      async refresh() { return true; },
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.nodes.generateButton.disabled, true);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      && event.detail.executionMode === 'BYOK'
+  )), false, 'an already-resolved hosted suite never exposes a BYOK-ready bootstrap');
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      && event.detail.executionMode === 'BYOK'
+  )), false);
+}
+
+{
+  let hostedAllowed = true;
+  const authoritative = { value: isolatedPublicState(isolatedCandidate()) };
+  const harness = createPageHarness({
+    authoritative,
+    hostedController: {
+      isActive() { return !hostedAllowed; },
+      isAvailable() { return true; },
+      isByokExecutionAllowed() { return hostedAllowed; },
+      async refresh() { return hostedAllowed; },
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.nodes.rejectButton.disabled, false);
+  hostedAllowed = false;
+  harness.nodes.rejectButton.listeners.click({ isTrusted: true });
+  await flushAsync(4);
+  assert.equal(harness.calls.some((row) => row[0] === 'review'), false,
+    'a stale enabled review button cannot mutate after Hosted takes the mode lock');
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(harness.nodes.rejectButton.disabled, true);
+}
+
+for (const deliveryState of ['NOT_INGESTED', 'INGESTING']) {
+  let hostedAllowed = true;
+  const authoritative = {
+    value: isolatedPublicState(isolatedCandidate('APPROVED', deliveryState)),
+  };
+  const harness = createPageHarness({
+    authoritative,
+    hostedController: {
+      isActive() { return !hostedAllowed; },
+      isAvailable() { return true; },
+      isByokExecutionAllowed() { return hostedAllowed; },
+      async refresh() { return hostedAllowed; },
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.nodes.approveButton.disabled, false);
+  hostedAllowed = false;
+  harness.nodes.approveButton.listeners.click({ isTrusted: true });
+  await flushAsync(4);
+  assert.equal(harness.calls.some((row) => (
+    row[0] === (deliveryState === 'INGESTING' ? 'recover-ingest' : 'ingest')
+  )), false, 'stale ingest controls cannot bypass the Hosted authority lock');
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(harness.nodes.approveButton.disabled, true);
+}
+
+for (const recovery of [false, true]) {
+  let hostedAllowed = true;
+  const bound = {
+    ...isolatedCandidate('APPROVED', 'BOUND'),
+    ingest: cloneValue(ingestReceipt),
+  };
+  const authoritative = { value: isolatedPublicState(bound) };
+  if (recovery) {
+    authoritative.value.publish = {
+      contractVersion: 'extension-byok-listing-publish/v1',
+      state: 'OUTCOME_UNRESOLVED', shopId: 'shop-1', workflowId: 'workflow-1',
+      boundDraftRevision: 4, boundDraftVersion: 5,
+      previewHash: '9'.repeat(64), receiptId: null, failureCode: null,
+    };
+  }
+  const harness = createPageHarness({
+    authoritative,
+    hostedController: {
+      isActive() { return !hostedAllowed; },
+      isAvailable() { return true; },
+      isByokExecutionAllowed() { return hostedAllowed; },
+      async refresh() { return hostedAllowed; },
+    },
+  });
+  await flushAsync(10);
+  if (!recovery) {
+    harness.nodes.publishConfirmation.checked = true;
+    harness.nodes.publishConfirmation.listeners.change({ isTrusted: true });
+    assert.equal(harness.nodes.publishConfirmButton.disabled, false);
+  } else {
+    assert.equal(harness.nodes.publishRecoverButton.disabled, false);
+  }
+  hostedAllowed = false;
+  const button = recovery ? harness.nodes.publishRecoverButton : harness.nodes.publishConfirmButton;
+  button.listeners.click({ isTrusted: true });
+  await flushAsync(4);
+  assert.equal(harness.calls.some((row) => (
+    row[0] === (recovery ? 'publish-recover' : 'publish-confirm')
+  )), false, 'stale publish controls cannot bypass the Hosted authority lock');
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(button.disabled, true);
 }
 
 {
@@ -879,9 +1045,11 @@ function createPageHarness(options = {}) {
   ));
   assert.ok(bootstrap, 'the authoritative single-slot state bootstraps the workspace shell');
   assert.deepEqual(Object.keys(bootstrap.detail).sort(), [
-    'binding', 'contractVersion', 'dispatched', 'executionMode', 'globalReferenceIds',
+    'availableExecutionModes', 'binding', 'contractVersion', 'dispatched',
+    'executionMode', 'globalReferenceIds',
     'libraryItems', 'selectedSkuKey', 'selectedSlotKey', 'skus',
   ].sort());
+  assert.deepEqual(cloneValue(bootstrap.detail.availableExecutionModes), ['BYOK', 'ERP_HOSTED']);
   assert.deepEqual(cloneValue(bootstrap.detail.binding), {
     shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
   });

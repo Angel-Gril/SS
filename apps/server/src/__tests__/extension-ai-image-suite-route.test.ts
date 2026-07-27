@@ -16,11 +16,29 @@ function state() {
       id: 'plan-1', revision: 3, reviewStatus: 'APPROVED', staleAt: null,
       contextType: 'collect', contextId: 'goods-1',
       currentVersionId: 'plan-version-1', approvedVersionId: 'plan-version-1', skuKey: null,
-      approvedVersion: { id: 'plan-version-1', sourceCaptureSnapshotId: 'snapshot-1' },
+      approvedVersion: {
+        id: 'plan-version-1',
+        sourceCaptureSnapshotId: 'snapshot-1',
+        planPayload: {
+          slots: [{
+            slotKey: 'sku:sku-1:hero',
+            ownership: { level: 'sku', key: 'sku-1' },
+          }],
+          compatibilityGroups: [],
+        },
+      },
       preview: {
         planId: 'plan-1', planVersionId: 'plan-version-1', planRevision: 3,
         previewHash: 'a'.repeat(64), pricingVersion: 'pricing-v1', itemCount: 1,
-        estimatedCostCents: 9, maximumCostCents: 12, slots: [],
+        estimatedCostCents: 9, maximumCostCents: 12,
+        slots: [{
+          ordinal: 0,
+          slotKey: 'sku:sku-1:hero',
+          goal: 'HERO',
+          ownership: { level: 'sku', key: 'sku-1' },
+          estimatedCostCents: 9,
+          maximumCostCents: 12,
+        }],
       },
     },
     suite: null,
@@ -78,6 +96,7 @@ describe('extension AI image suite route', () => {
       });
       expect(fixture.loadState).toHaveBeenCalledWith({
         ownerUserId: 'owner-1',
+        deviceSessionId: 'session-1',
         snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1', shopId: 'shop-1',
         listingWorkflowId: 'listing-1', draftRevision: 11, draftVersion: 7,
       });

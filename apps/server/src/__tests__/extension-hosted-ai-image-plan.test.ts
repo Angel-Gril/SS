@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createExtensionHostedAiImagePlanBindingRecord,
   createExtensionHostedAiImagePlanService,
   ExtensionHostedAiImagePlanError,
   type ExtensionHostedAiImagePlanAuthority,
@@ -126,6 +127,13 @@ function setup(input: {
   plan?: AiMediaPlanRecord;
 } = {}) {
   const currentPlan = input.plan ?? plan();
+  const seededBinding = createExtensionHostedAiImagePlanBindingRecord({
+    planId: currentPlan.id,
+    identity,
+    binding,
+    selectedSkuKeys: ['sku-1', 'sku-2'],
+    candidateMediaKeys: ['media-1', 'media-2'],
+  });
   const planning = {
     createRuleBased: vi.fn(async () => ({ plan: currentPlan, replayed: false })),
     getWithSourceStatus: vi.fn(async () => ({ plan: currentPlan, sourceCurrent: true })),
@@ -146,15 +154,30 @@ function setup(input: {
     enabled: input.enabled ?? true,
     revision: 19,
   }));
+  const bindings = {
+    bind: vi.fn(async (record: typeof seededBinding) => {
+      if (record.bindingHash === seededBinding.bindingHash) {
+        return { kind: 'replayed' as const, record: seededBinding };
+      }
+      return { kind: 'conflict' as const };
+    }),
+    get: vi.fn(async ({ planId }: { ownerUserId: string; planId: string }) => (
+      planId === seededBinding.planId ? seededBinding : null
+    )),
+    find: vi.fn(async (): Promise<typeof seededBinding | null> => seededBinding),
+  };
   return {
     service: createExtensionHostedAiImagePlanService({
       planning,
+      bindings,
       loadAuthority,
       evaluatePolicy,
     }),
     planning,
     loadAuthority,
     evaluatePolicy,
+    bindings,
+    seededBinding,
   };
 }
 
@@ -183,6 +206,17 @@ describe('extension hosted AI image plan service', () => {
       selectedSkuKeys: ['sku-1', 'sku-2'],
       candidateMediaKeys: ['media-1', 'media-2'],
     });
+    expect(fixture.bindings.bind).toHaveBeenCalledWith(expect.objectContaining({
+      planId: 'plan-1',
+      ownerUserId: 'owner-1',
+      deviceSessionId: 'session-1',
+      shopId: 'shop-1',
+      listingWorkflowId: 'listing-1',
+      draftRevision: 11,
+      draftVersion: 7,
+      authorityHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      bindingHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    }));
     expect(result).toMatchObject({
       replayed: false,
       data: {
@@ -204,6 +238,49 @@ describe('extension hosted AI image plan service', () => {
     });
     const serialized = JSON.stringify(result);
     expect(serialized).not.toMatch(/must-not-leak|https?:|provider|model|pricing|maximumCost|compiledPrompt/u);
+  });
+
+  it('keeps the paid authority identity device-independent while access stays device-bound', () => {
+    const first = createExtensionHostedAiImagePlanBindingRecord({
+      planId: 'plan-1',
+      identity,
+      binding,
+      selectedSkuKeys: ['sku-1', 'sku-2'],
+      candidateMediaKeys: ['media-1', 'media-2'],
+    });
+    const second = createExtensionHostedAiImagePlanBindingRecord({
+      planId: 'plan-2',
+      identity: { ...identity, deviceSessionId: 'session-2' },
+      binding,
+      selectedSkuKeys: ['sku-1', 'sku-2'],
+      candidateMediaKeys: ['media-1', 'media-2'],
+    });
+
+    expect(second.authorityHash).toBe(first.authorityHash);
+    expect(second.bindingHash).not.toBe(first.bindingHash);
+  });
+
+  it('reuses one initial plan identity across devices and client operation keys', async () => {
+    const fixture = setup();
+
+    await expect(fixture.service.create({
+      identity,
+      binding,
+      idempotencyKey: 'client-create-operation-1',
+    })).resolves.toMatchObject({ data: { plan: { id: 'plan-1' } } });
+    await expect(fixture.service.create({
+      identity: { ...identity, deviceSessionId: 'session-2' },
+      binding,
+      idempotencyKey: 'different-client-operation-2',
+    })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
+
+    const createCalls = fixture.planning.createRuleBased.mock.calls as unknown as Array<[
+      { idempotencyKey: string },
+    ]>;
+    const firstKey = createCalls[0]?.[0].idempotencyKey;
+    const secondKey = createCalls[1]?.[0].idempotencyKey;
+    expect(secondKey).toBe(firstKey);
+    expect(fixture.bindings.bind).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -269,6 +346,30 @@ describe('extension hosted AI image plan service', () => {
       note: null,
     })).rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
     expect(fixture.planning.review).not.toHaveBeenCalled();
+  });
+
+  it('requires the persisted plan binding to match the exact device and listing draft', async () => {
+    const fixture = setup();
+    fixture.bindings.get.mockResolvedValueOnce({
+      ...fixture.seededBinding,
+      deviceSessionId: 'session-other',
+    });
+
+    await expect(fixture.service.get({ identity, binding, planId: 'plan-1' }))
+      .rejects.toMatchObject({ code: 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE' });
+    expect(fixture.planning.getWithSourceStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt an unbound collect-context plan as the current listing plan', async () => {
+    const fixture = setup();
+    fixture.bindings.find.mockResolvedValueOnce(null);
+
+    await expect(fixture.service.getCurrent({ identity, binding })).resolves.toMatchObject({
+      replayed: false,
+      data: { context: binding, plan: null },
+    });
+    expect(fixture.planning.getWithSourceStatus).not.toHaveBeenCalled();
+    expect(fixture.planning.getCurrentByContext).not.toHaveBeenCalled();
   });
 
   it('reviews only an exact current plan using a server-derived device/draft operation key', async () => {

@@ -359,8 +359,10 @@ const mask = {
 };
 
 const windowListeners = new Map();
+const documentListeners = new Map();
 const runtimeListeners = [];
 const documentEvents = [];
+let hostedByokExecutionAllowed = true;
 const context = {
   Array, Blob, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String,
   Uint8Array, Uint8ClampedArray,
@@ -377,7 +379,16 @@ const context = {
       return reason ? reasonNodes[reason[1]] : null;
     },
     createElement(tagName) { return new FakeNode('', tagName); },
-    dispatchEvent(event) { documentEvents.push(event); return true; },
+    addEventListener(type, listener) {
+      const values = documentListeners.get(type) || [];
+      values.push(listener);
+      documentListeners.set(type, values);
+    },
+    dispatchEvent(event) {
+      documentEvents.push(event);
+      for (const listener of documentListeners.get(event.type) || []) listener(event);
+      return true;
+    },
   },
   chrome: { runtime: { onMessage: { addListener(listener) { runtimeListeners.push(listener); } } } },
   URL: {
@@ -403,6 +414,9 @@ context.addEventListener = (type, listener) => {
 context.SS_ERP_BYOK_WORKBENCH_CLIENT = {
   DEVICE_INVALIDATED_MESSAGE: 'ss-erp:byok-device-session-invalidated',
   createClient() { return client; },
+};
+context.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER = {
+  isByokExecutionAllowed() { return hostedByokExecutionAllowed; },
 };
 let workspaceRuntimeRevision = 0;
 context.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
@@ -529,6 +543,23 @@ assert.deepEqual(JSON.parse(JSON.stringify(calls.filter((row) => row[0] === 'ref
 });
 assert.equal(nodes.runEditButton.disabled, false);
 
+hostedByokExecutionAllowed = false;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
+assert.equal(nodes.runEditButton.disabled, true,
+  'Hosted authority pending or locked disables BYOK edit before submission');
+assert.equal(nodes.profileSelect.disabled, true);
+assert.equal(nodes.referenceFiles.disabled, true);
+assert.equal(nodes.sourceFile.disabled, true);
+assert.equal(nodes.operationImageToImage.disabled, true);
+const startsBeforeHostedLockClick = calls.filter((row) => row[0] === 'start').length;
+nodes.runEditButton.dispatch('click');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'start').length, startsBeforeHostedLockClick);
+hostedByokExecutionAllowed = true;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
+assert.equal(nodes.runEditButton.disabled, false,
+  'an explicit NO_SUITE authority refresh re-enables BYOK edit');
+
 nodes.referenceScopeGlobal.checked = false;
 nodes.referenceScopeSlot.checked = true;
 nodes.referenceScopeSlot.dispatch('change');
@@ -581,6 +612,17 @@ assert.equal(nodes.profileSelect.value, 'profile-1',
 nodes.regenerateChargeConfirmation.checked = true;
 nodes.regenerateChargeConfirmation.dispatch('change');
 assert.equal(nodes.regenerateEditButton.disabled, false);
+hostedByokExecutionAllowed = false;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
+assert.equal(nodes.regenerateEditButton.disabled, true);
+const regeneratesBeforeHostedLockClick = calls.filter((row) => row[0] === 'regenerate').length;
+nodes.regenerateEditButton.dispatch('click');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'regenerate').length,
+  regeneratesBeforeHostedLockClick);
+hostedByokExecutionAllowed = true;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
+assert.equal(nodes.regenerateEditButton.disabled, false);
 nodes.regenerateEditButton.dispatch('click');
 await tick();
 assert.equal(nodes.editAlternatives.children[0], stableAlternativeRow,
@@ -618,6 +660,19 @@ assert.match(nodes.editResultNotice.textContent, /上一次请求结果可能未
 assert.equal(nodes.restartAcknowledgeButton.disabled, true);
 nodes.restartChargeConfirmation.checked = true;
 nodes.restartChargeConfirmation.dispatch('change');
+assert.equal(nodes.restartAcknowledgeButton.disabled, false);
+hostedByokExecutionAllowed = false;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
+assert.equal(nodes.restartAcknowledgeButton.disabled, true);
+const acknowledgementsBeforeHostedLockClick = calls.filter((row) => (
+  row[0] === 'acknowledge-restart'
+)).length;
+nodes.restartAcknowledgeButton.dispatch('click');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'acknowledge-restart').length,
+  acknowledgementsBeforeHostedLockClick);
+hostedByokExecutionAllowed = true;
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
 assert.equal(nodes.restartAcknowledgeButton.disabled, false);
 nodes.restartAcknowledgeButton.dispatch('click');
 await tick();

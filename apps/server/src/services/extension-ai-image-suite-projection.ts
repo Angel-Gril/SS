@@ -104,7 +104,118 @@ function sameBinding(left: ExtensionAiImageSuiteBinding, right: ExtensionAiImage
     && left.draftVersion === right.draftVersion;
 }
 
-function safePlanSlot(value: unknown) {
+interface ApprovedPlanSlotMembership {
+  slots: Map<string, { level: 'sku' | 'compatibility_group'; key: string }>;
+  groups: Map<string, string[]>;
+}
+
+function compareIdentifiers(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function approvedPlanSlotMembership(version: Record<string, unknown>): ApprovedPlanSlotMembership | null {
+  const payload = record(version.planPayload);
+  if (!payload) return null;
+  if (!Array.isArray(payload.slots)
+    || payload.slots.length > 500
+    || !Array.isArray(payload.compatibilityGroups)
+    || payload.compatibilityGroups.length > 500) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT',
+      409,
+      'Approved plan membership authority is invalid',
+    );
+  }
+  const slots = new Map<string, { level: 'sku' | 'compatibility_group'; key: string }>();
+  const selectedSkuKeys = new Set<string>();
+  for (const slotValue of payload.slots) {
+    const slot = record(slotValue);
+    const ownership = record(slot?.ownership);
+    const level = ownership?.level === 'sku' || ownership?.level === 'compatibility_group'
+      ? ownership.level
+      : null;
+    if (!slot || !ownership || !level) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Approved plan slot membership is invalid',
+      );
+    }
+    const slotKey = identifier(slot.slotKey, 'approved slotKey', 500);
+    const key = identifier(ownership.key, 'approved ownership.key', 500);
+    if (slots.has(slotKey)) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Approved plan slot membership is ambiguous',
+      );
+    }
+    slots.set(slotKey, { level, key });
+    if (level === 'sku') selectedSkuKeys.add(key);
+  }
+  const groups = new Map<string, string[]>();
+  const memberGroups = new Map<string, string>();
+  for (const groupValue of payload.compatibilityGroups) {
+    const group = record(groupValue);
+    if (!group || !Array.isArray(group.skuKeys)
+      || group.skuKeys.length < 1
+      || group.skuKeys.length > 500) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Approved compatibility group is invalid',
+      );
+    }
+    const groupKey = identifier(group.groupKey, 'compatibility group key', 500);
+    const members = group.skuKeys.map((value) => (
+      identifier(value, 'compatibility group member', 500)
+    ));
+    if (groups.has(groupKey)
+      || new Set(members).size !== members.length
+      || members.some((skuKey) => !selectedSkuKeys.has(skuKey))) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Approved compatibility group crosses selected SKU authority',
+      );
+    }
+    for (const skuKey of members) {
+      const existing = memberGroups.get(skuKey);
+      if (existing && existing !== groupKey) {
+        throw new ExtensionAiImageSuiteProjectionError(
+          'STALE_CONTEXT', 409, 'Approved compatibility group membership is ambiguous',
+        );
+      }
+      memberGroups.set(skuKey, groupKey);
+    }
+    groups.set(groupKey, [...members].sort(compareIdentifiers));
+  }
+  for (const ownership of slots.values()) {
+    if (ownership.level === 'compatibility_group' && !groups.has(ownership.key)) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Approved plan references an unknown compatibility group',
+      );
+    }
+  }
+  return { slots, groups };
+}
+
+function applicableSkuKeysForPlanSlot(input: {
+  membership: ApprovedPlanSlotMembership | null;
+  slotKey: string;
+  ownership: { level: 'sku' | 'compatibility_group'; key: string };
+}): string[] {
+  const approvedOwnership = input.membership?.slots.get(input.slotKey);
+  if (input.membership && (!approvedOwnership
+    || approvedOwnership.level !== input.ownership.level
+    || approvedOwnership.key !== input.ownership.key)) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Projected slot no longer matches approved plan ownership',
+    );
+  }
+  if (input.ownership.level === 'sku') return [input.ownership.key];
+  const members = input.membership?.groups.get(input.ownership.key);
+  if (!members || members.length < 1) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Compatibility group membership is unavailable',
+    );
+  }
+  return [...members];
+}
+
+function safePlanSlot(value: unknown, membership: ApprovedPlanSlotMembership | null) {
   const slot = record(value);
   const ownership = record(slot?.ownership);
   if (!slot || !ownership) return null;
@@ -112,8 +223,16 @@ function safePlanSlot(value: unknown) {
     ? ownership.level
     : null;
   if (!level) return null;
+  let projected: {
+    ordinal: number;
+    slotKey: string;
+    goal: string;
+    ownership: { level: 'sku' | 'compatibility_group'; key: string };
+    estimatedCostCents: number;
+    maximumCostCents: number;
+  };
   try {
-    return {
+    projected = {
       ordinal: Number.isSafeInteger(slot.ordinal) && Number(slot.ordinal) >= 0
         ? Number(slot.ordinal)
         : 0,
@@ -130,6 +249,14 @@ function safePlanSlot(value: unknown) {
     if (error instanceof ExtensionAiImageSuiteProjectionError) return null;
     throw error;
   }
+  return {
+    ...projected,
+    applicableSkuKeys: applicableSkuKeysForPlanSlot({
+      membership,
+      slotKey: projected.slotKey,
+      ownership: projected.ownership,
+    }),
+  };
 }
 
 function approvedPlanProjection(planValue: unknown, binding: ExtensionAiImageSuiteBinding) {
@@ -175,9 +302,10 @@ function approvedPlanProjection(planValue: unknown, binding: ExtensionAiImageSui
       'Approved plan pricing changed',
     );
   }
+  const membership = approvedPlanSlotMembership(version);
   const slots = Array.isArray(preview.slots)
     ? preview.slots.slice(0, 500).flatMap((slot) => {
-      const projected = safePlanSlot(slot);
+      const projected = safePlanSlot(slot, membership);
       return projected ? [projected] : [];
     })
     : [];
@@ -196,6 +324,20 @@ function approvedPlanProjection(planValue: unknown, binding: ExtensionAiImageSui
       slots,
     },
   };
+}
+
+function supportsProductWideCompatibilityGroups(
+  approved: NonNullable<ReturnType<typeof approvedPlanProjection>>,
+): boolean {
+  const selectedSkuKeys = [...new Set(approved.preview.slots.flatMap((slot) => (
+    slot.ownership.level === 'sku' ? [slot.ownership.key] : []
+  )))].sort(compareIdentifiers);
+  if (selectedSkuKeys.length < 1) return false;
+  return approved.preview.slots.every((slot) => (
+    slot.ownership.level !== 'compatibility_group'
+      || slot.applicableSkuKeys.length === selectedSkuKeys.length
+        && slot.applicableSkuKeys.every((skuKey, index) => skuKey === selectedSkuKeys[index])
+  ));
 }
 
 const suiteStatuses = new Set([
@@ -356,6 +498,7 @@ function suiteProjection(input: {
   allowInsecureLocal: boolean;
   targetUpdatedAt: string | null;
   executionReady: boolean;
+  productScopeSupported: boolean;
 }) {
   const suite = record(input.value);
   if (!suite) return null;
@@ -394,6 +537,12 @@ function suiteProjection(input: {
   if (canExecute && revision >= 4 && ['PLANNED', 'QUEUED', 'RUNNING'].includes(status)) {
     suiteCommands.CANCEL = { suiteId: id, expectedSuiteRevision: revision };
   }
+  const approvedSlots = new Map(input.approved.preview.slots.map((slot) => [slot.slotKey, slot]));
+  if (approvedSlots.size !== input.approved.preview.slots.length) {
+    throw new ExtensionAiImageSuiteProjectionError(
+      'STALE_CONTEXT', 409, 'Approved plan slot authority is ambiguous',
+    );
+  }
   const slots = Array.isArray(suite.slots) ? suite.slots.slice(0, 500).map((slotValue) => {
     const slot = record(slotValue);
     if (!slot) {
@@ -408,6 +557,22 @@ function suiteProjection(input: {
       : null;
     if (!slotStatus || !ownershipLevel) {
       throw new ExtensionAiImageSuiteProjectionError('STALE_CONTEXT', 409, 'Suite slot state is invalid');
+    }
+    const slotOrdinal = Number.isSafeInteger(slot.ordinal) && Number(slot.ordinal) >= 0
+      ? Number(slot.ordinal)
+      : 0;
+    const slotKey = identifier(slot.slotKey, 'slotKey', 500);
+    const goal = identifier(slot.goal, 'goal', 200);
+    const ownershipKey = identifier(slot.ownershipKey, 'ownershipKey', 500);
+    const approvedSlot = approvedSlots.get(slotKey);
+    if (!approvedSlot
+      || approvedSlot.ordinal !== slotOrdinal
+      || approvedSlot.goal !== goal
+      || approvedSlot.ownership.level !== ownershipLevel
+      || approvedSlot.ownership.key !== ownershipKey) {
+      throw new ExtensionAiImageSuiteProjectionError(
+        'STALE_CONTEXT', 409, 'Suite slot no longer matches approved plan authority',
+      );
     }
     const slotRevision = positiveInteger(slot.revision, 'slotRevision');
     const slotAttempt = nonNegativeInteger(slot.attempt, 'slot attempt');
@@ -469,6 +634,7 @@ function suiteProjection(input: {
       };
     }
     if (input.scopes.includes('listing:write')
+      && input.productScopeSupported
       && slotStatus === 'SUCCEEDED'
       && workflow?.status === 'SUCCEEDED'
       && reviewStatus === 'APPROVED'
@@ -494,13 +660,14 @@ function suiteProjection(input: {
     }
     return {
       id: slotId,
-      ordinal: Number.isSafeInteger(slot.ordinal) && Number(slot.ordinal) >= 0 ? Number(slot.ordinal) : 0,
-      slotKey: identifier(slot.slotKey, 'slotKey', 500),
-      goal: identifier(slot.goal, 'goal', 200),
+      ordinal: slotOrdinal,
+      slotKey,
+      goal,
       ownership: {
         level: ownershipLevel,
-        key: identifier(slot.ownershipKey, 'ownershipKey', 500),
+        key: ownershipKey,
       },
+      applicableSkuKeys: [...approvedSlot.applicableSkuKeys],
       status: slotStatus,
       attempt: slotAttempt,
       revision: slotRevision,
@@ -572,8 +739,10 @@ export function projectExtensionAiImageSuite(input: {
     skuKey: approved.skuKey,
   };
   const canExecute = input.scopes.includes('media:execute');
+  const productScopeSupported = supportsProductWideCompatibilityGroups(approved);
   const canStart = canExecute
     && input.state.executionReady === true
+    && productScopeSupported
     && input.state.suite == null;
   const origins = new Set(input.trustedPreviewOrigins.flatMap((value) => {
     const origin = trustedOrigin(value, input.allowInsecureLocalPreview === true);
@@ -588,7 +757,8 @@ export function projectExtensionAiImageSuite(input: {
     origins,
     allowInsecureLocal: input.allowInsecureLocalPreview === true,
     targetUpdatedAt: canonicalTimestamp(input.state.targetUpdatedAt),
-    executionReady: input.state.executionReady === true,
+    executionReady: input.state.executionReady === true && productScopeSupported,
+    productScopeSupported,
   });
   return {
     contractVersion: EXTENSION_AI_IMAGE_SUITE_PROJECTION_VERSION,

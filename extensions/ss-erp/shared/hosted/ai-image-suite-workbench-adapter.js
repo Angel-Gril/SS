@@ -68,6 +68,20 @@
       && text(value.key, 500);
   }
 
+  function applicableSkuKeys(value, slotOwnership) {
+    if (!Array.isArray(value)
+      || value.length < 1
+      || value.length > MAX_ITEMS
+      || !value.every(function (skuKey) { return text(skuKey, 500); })
+      || new Set(value).size !== value.length
+      || value.some(function (skuKey, index) {
+        return index > 0 && value[index - 1] >= skuKey;
+      })) return false;
+    return slotOwnership.level === 'sku'
+      ? value.length === 1 && value[0] === slotOwnership.key
+      : slotOwnership.level === 'compatibility_group';
+  }
+
   function validBinding(value) {
     return exactKeys(value, [
       'snapshotId', 'supplyGoodsId', 'shopId', 'listingWorkflowId',
@@ -110,12 +124,14 @@
   function validPlanSlot(value) {
     var slot = record(value);
     return exactKeys(slot, [
-      'ordinal', 'slotKey', 'goal', 'ownership', 'estimatedCostCents', 'maximumCostCents',
+      'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
+      'estimatedCostCents', 'maximumCostCents',
     ])
       && nonNegativeInteger(slot.ordinal)
       && text(slot.slotKey, 500)
       && text(slot.goal, 200)
       && ownership(slot.ownership)
+      && applicableSkuKeys(slot.applicableSkuKeys, slot.ownership)
       && cost(slot.estimatedCostCents, false)
       && cost(slot.maximumCostCents, false)
       && slot.maximumCostCents >= slot.estimatedCostCents;
@@ -239,7 +255,8 @@
     var slot = record(value);
     var commands = slot && record(slot.commands);
     if (!exactKeys(slot, [
-      'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'status', 'attempt', 'revision',
+      'id', 'ordinal', 'slotKey', 'goal', 'ownership', 'applicableSkuKeys',
+      'status', 'attempt', 'revision',
       'estimatedCostCents', 'maximumCostCents', 'workflowId', 'workflowRevision',
       'reviewStatus', 'output', 'application', 'allowedActions', 'commands',
     ])
@@ -248,6 +265,7 @@
       || !text(slot.slotKey, 500)
       || !text(slot.goal, 200)
       || !ownership(slot.ownership)
+      || !applicableSkuKeys(slot.applicableSkuKeys, slot.ownership)
       || !SLOT_STATUSES.includes(slot.status)
       || !nonNegativeInteger(slot.attempt)
       || !positiveInteger(slot.revision)
@@ -295,6 +313,18 @@
       || new Set(suite.slots.map(function (slot) { return slot.id; })).size !== suite.slots.length
       || new Set(suite.slots.map(function (slot) { return slot.slotKey; })).size !== suite.slots.length
       || !suite.slots.every(function (slot) { return validSuiteSlot(slot, suite); })) return false;
+    var planSlots = new Map(plan.preview.slots.map(function (slot) {
+      return [slot.slotKey, slot];
+    }));
+    if (!suite.slots.every(function (slot) {
+      var planSlot = planSlots.get(slot.slotKey);
+      return Boolean(planSlot)
+        && slot.ordinal === planSlot.ordinal
+        && slot.goal === planSlot.goal
+        && slot.ownership.level === planSlot.ownership.level
+        && slot.ownership.key === planSlot.ownership.key
+        && JSON.stringify(slot.applicableSkuKeys) === JSON.stringify(planSlot.applicableSkuKeys);
+    })) return false;
     return Object.keys(commands).every(function (action) {
       return exactKeys(commands[action], ['suiteId', 'expectedSuiteRevision'])
         && commands[action].suiteId === suite.id
@@ -371,6 +401,7 @@
           slotKey: slot.slotKey,
           goal: slot.goal,
           ownership: clone(slot.ownership),
+          applicableSkuKeys: clone(slot.applicableSkuKeys),
           estimatedCostCents: slot.estimatedCostCents,
           maximumCostCents: slot.maximumCostCents,
         };
@@ -413,6 +444,7 @@
       slotKey: slot.slotKey,
       goal: slot.goal,
       ownership: clone(slot.ownership),
+      applicableSkuKeys: clone(slot.applicableSkuKeys),
       status: slot.status,
       attempt: slot.attempt,
       revision: slot.revision,

@@ -513,6 +513,33 @@
     return role === 'HERO' ? '主图' : '详情图';
   }
 
+  function boundedSkuKeys(values, maximum) {
+    if (!Array.isArray(values)) return '';
+    var keys = values.filter(function (value) {
+      return typeof value === 'string' && value.length > 0;
+    }).slice(0, 50);
+    var visible = [];
+    for (var index = 0; index < keys.length; index += 1) {
+      var candidate = visible.concat(keys[index]).join(', ');
+      var remaining = keys.length - index - 1;
+      var suffix = remaining > 0 ? ' +' + remaining : '';
+      if (candidate.length + suffix.length > maximum) break;
+      visible.push(keys[index]);
+    }
+    var hidden = keys.length - visible.length;
+    return visible.join(', ') + (hidden > 0 ? ' +' + hidden : '');
+  }
+
+  function slotScopeText(slot) {
+    if (!slot || slot.assignmentScope !== 'PRODUCT') return '';
+    var members = boundedSkuKeys(slot.applicableSkuKeys, 140);
+    var unsupported = snapshot && Array.isArray(snapshot.skus)
+      && Array.isArray(slot.applicableSkuKeys)
+      && slot.applicableSkuKeys.length < snapshot.skus.length;
+    return '商品共享 · SKU ' + members
+      + (unsupported ? ' · 当前草稿不支持部分 SKU 共享' : '');
+  }
+
   function humanStatus(status) {
     return {
       EMPTY: '待生成',
@@ -575,6 +602,8 @@
       NO_MEDIA_SLOTS: '当前工作区没有可发布的图片槽位',
       ORDER_LOCKED_WHILE_ACTIVE: '任务仍在处理或排队，暂不能调整图片顺序',
       ACTION_IN_FLIGHT: '正在等待任务协调器确认上一项操作',
+      HOSTED_GROUP_SCOPE_UNSUPPORTED: '当前草稿不支持仅覆盖部分 SKU 的商品共享槽位',
+      HOSTED_CONTINUE_UNAVAILABLE: '当前托管任务不可继续',
     }[reason] || reason;
   }
 
@@ -1013,8 +1042,11 @@
         var orderingLocked = snapshot.taskSummary.activeAttempts > 0
           || snapshot.taskSummary.queuedAttempts > 0;
         row._workspace.title.textContent = (index + 1) + '. ' + humanRole(slot.role);
+        var scopeText = slotScopeText(slot);
         row._workspace.meta.textContent = humanStatus(slot.status)
-          + (slot.isMain ? ' · 主图' : '');
+          + (slot.isMain ? ' · 主图' : '')
+          + (scopeText ? ' · ' + scopeText : '');
+        row._workspace.selectButton.title = scopeText;
         row._workspace.selectButton.disabled = Boolean(runtimeFault);
         row._workspace.selectButton.setAttribute('aria-current', selected ? 'true' : 'false');
         row._workspace.mainButton.disabled = Boolean(runtimeFault || orderingLocked);

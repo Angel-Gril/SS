@@ -64,6 +64,34 @@ export interface ExtensionHostedAiImagePlanPolicyDecision {
   deviceSessionId: string;
 }
 
+export interface ExtensionHostedAiImagePlanBindingRecord
+  extends ExtensionHostedAiImagePlanBinding {
+  planId: string;
+  ownerUserId: string;
+  deviceSessionId: string;
+  selectedSkuHash: string;
+  candidateMediaHash: string;
+  authorityHash: string;
+  bindingHash: string;
+}
+
+export interface ExtensionHostedAiImagePlanBindingStore {
+  bind(record: ExtensionHostedAiImagePlanBindingRecord): Promise<
+    | { kind: 'bound' | 'replayed'; record: ExtensionHostedAiImagePlanBindingRecord }
+    | { kind: 'conflict' }
+  >;
+  get(input: {
+    ownerUserId: string;
+    planId: string;
+  }): Promise<ExtensionHostedAiImagePlanBindingRecord | null>;
+  find(input: Omit<
+    ExtensionHostedAiImagePlanBindingRecord,
+    'planId' | 'authorityHash' | 'bindingHash'
+  >): Promise<
+    ExtensionHostedAiImagePlanBindingRecord | null
+  >;
+}
+
 export interface ExtensionHostedAiImagePlanningPort {
   createRuleBased(input: CreateRuleBasedAiMediaPlanningInput): Promise<{
     plan: AiMediaPlanRecord;
@@ -86,6 +114,7 @@ export interface ExtensionHostedAiImagePlanningPort {
 
 export interface ExtensionHostedAiImagePlanServiceOptions {
   planning: ExtensionHostedAiImagePlanningPort;
+  bindings: ExtensionHostedAiImagePlanBindingStore;
   loadAuthority(input: {
     ownerUserId: string;
     listingWorkflowId: string;
@@ -223,6 +252,60 @@ function canonical(value: unknown): unknown {
 
 function operationHash(value: unknown) {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+}
+
+function valuesHash(values: readonly string[]) {
+  return operationHash([...values]);
+}
+
+function planAuthorityHash(input: {
+  identity: ExtensionHostedAiImagePlanIdentity;
+  binding: ExtensionHostedAiImagePlanBinding;
+  selectedSkuKeys: string[];
+  candidateMediaKeys: string[];
+}) {
+  return operationHash({
+    ownerUserId: input.identity.ownerUserId,
+    ...input.binding,
+    selectedSkuHash: valuesHash(input.selectedSkuKeys),
+    candidateMediaHash: valuesHash(input.candidateMediaKeys),
+  });
+}
+
+export function createExtensionHostedAiImagePlanBindingRecord(input: {
+  planId: string;
+  identity: ExtensionHostedAiImagePlanIdentity;
+  binding: ExtensionHostedAiImagePlanBinding;
+  selectedSkuKeys: string[];
+  candidateMediaKeys: string[];
+}): ExtensionHostedAiImagePlanBindingRecord {
+  const authority = {
+    ownerUserId: input.identity.ownerUserId,
+    ...input.binding,
+    selectedSkuHash: valuesHash(input.selectedSkuKeys),
+    candidateMediaHash: valuesHash(input.candidateMediaKeys),
+  };
+  const value = {
+    planId: input.planId,
+    deviceSessionId: input.identity.deviceSessionId,
+    ...authority,
+    authorityHash: planAuthorityHash(input),
+  };
+  return { ...value, bindingHash: operationHash(value) };
+}
+
+function sameBindingRecord(
+  left: ExtensionHostedAiImagePlanBindingRecord,
+  right: ExtensionHostedAiImagePlanBindingRecord,
+) {
+  return left.planId === right.planId
+    && left.ownerUserId === right.ownerUserId
+    && left.deviceSessionId === right.deviceSessionId
+    && sameBinding(left, right)
+    && left.selectedSkuHash === right.selectedSkuHash
+    && left.candidateMediaHash === right.candidateMediaHash
+    && left.authorityHash === right.authorityHash
+    && left.bindingHash === right.bindingHash;
 }
 
 function inputSnapshotIdentity(version: AiMediaPlanVersionRecord) {
@@ -458,6 +541,38 @@ export function createExtensionHostedAiImagePlanService(
     };
   }
 
+  function expectedBindingRecord(
+    authorized: Awaited<ReturnType<typeof authorize>>,
+    planId: string,
+  ) {
+    return createExtensionHostedAiImagePlanBindingRecord({
+      planId,
+      identity: authorized.identity,
+      binding: authorized.binding,
+      selectedSkuKeys: authorized.selectedSkuKeys,
+      candidateMediaKeys: authorized.candidateMediaKeys,
+    });
+  }
+
+  async function requireBoundPlan(
+    authorized: Awaited<ReturnType<typeof authorize>>,
+    planId: string,
+  ) {
+    const expected = expectedBindingRecord(authorized, planId);
+    const stored = await options.bindings.get({
+      ownerUserId: authorized.identity.ownerUserId,
+      planId,
+    });
+    if (!stored || !sameBindingRecord(stored, expected)) {
+      return error(
+        'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
+        409,
+        'Hosted plan is not bound to this device and listing draft',
+      );
+    }
+    return stored;
+  }
+
   return {
     async create(request: CreateRequest) {
       const authorized = await authorize(request);
@@ -472,16 +587,27 @@ export function createExtensionHostedAiImagePlanService(
         sourceCaptureSnapshotId: authorized.binding.snapshotId,
         context: { type: 'collect', id: authorized.binding.supplyGoodsId },
         idempotencyKey: operationHash({
-          action: 'CREATE',
-          clientKey,
-          identity: authorized.identity,
-          binding: authorized.binding,
-          selectedSkuKeys: authorized.selectedSkuKeys,
-          candidateMediaKeys: authorized.candidateMediaKeys,
+          action: 'CREATE_INITIAL_HOSTED_PLAN',
+          contractVersion: EXTENSION_HOSTED_AI_IMAGE_PLAN_VERSION,
+          authorityHash: planAuthorityHash({
+            identity: authorized.identity,
+            binding: authorized.binding,
+            selectedSkuKeys: authorized.selectedSkuKeys,
+            candidateMediaKeys: authorized.candidateMediaKeys,
+          }),
         }),
         selectedSkuKeys: authorized.selectedSkuKeys,
         candidateMediaKeys: authorized.candidateMediaKeys,
       });
+      const expectedBinding = expectedBindingRecord(authorized, created.plan.id);
+      const bound = await options.bindings.bind(expectedBinding);
+      if (bound.kind === 'conflict' || !sameBindingRecord(bound.record, expectedBinding)) {
+        return error(
+          'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
+          409,
+          'Hosted plan binding conflicts with another listing draft',
+        );
+      }
       assertPlanCurrent(
         created.plan,
         authorized.authority,
@@ -501,6 +627,7 @@ export function createExtensionHostedAiImagePlanService(
     async get(request: GetRequest) {
       const authorized = await authorize(request);
       const planId = identifier(request.planId, 'planId');
+      await requireBoundPlan(authorized, planId);
       const loaded = await options.planning.getWithSourceStatus(
         planId,
         authorized.identity.ownerUserId,
@@ -526,9 +653,26 @@ export function createExtensionHostedAiImagePlanService(
 
     async getCurrent(request: BoundRequest) {
       const authorized = await authorize(request);
-      const loaded = await options.planning.getCurrentByContext(
+      const match = await options.bindings.find({
+        ownerUserId: authorized.identity.ownerUserId,
+        deviceSessionId: authorized.identity.deviceSessionId,
+        ...authorized.binding,
+        selectedSkuHash: valuesHash(authorized.selectedSkuKeys),
+        candidateMediaHash: valuesHash(authorized.candidateMediaKeys),
+      });
+      if (!match) {
+        return response(
+          authorized.policyRevision,
+          authorized.binding,
+          null,
+          null,
+          false,
+        );
+      }
+      await requireBoundPlan(authorized, match.planId);
+      const loaded = await options.planning.getWithSourceStatus(
+        match.planId,
         authorized.identity.ownerUserId,
-        { type: 'collect', id: authorized.binding.supplyGoodsId },
       );
       if (loaded.plan) {
         assertPlanCurrent(
@@ -551,6 +695,7 @@ export function createExtensionHostedAiImagePlanService(
     async review(request: ReviewRequest) {
       const authorized = await authorize(request);
       const planId = identifier(request.planId, 'planId');
+      await requireBoundPlan(authorized, planId);
       const expectedRevision = positiveInteger(request.expectedRevision, 'expectedRevision');
       const clientKey = identifier(request.operationKey, 'operationKey', 128);
       if (clientKey.length < 8

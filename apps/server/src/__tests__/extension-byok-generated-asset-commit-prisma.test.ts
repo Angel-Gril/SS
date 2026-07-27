@@ -369,4 +369,34 @@ describe('Prisma BYOK generated asset atomic commit', () => {
     expect(database.draft.revision).toBe(4);
     expect(database.draft.media.assignments).toHaveLength(0);
   });
+
+  it('maps the database execution-mode fence to a definite BYOK conflict', async () => {
+    const data = await fixture();
+    const database = {
+      async $transaction() {
+        throw {
+          code: 'P2010',
+          meta: {
+            code: '23514',
+            message: 'violates constraint extension_ai_image_execution_mode_exclusive',
+          },
+        };
+      },
+    };
+    const commit = createPrismaExtensionByokGeneratedAssetCommitter(database as never);
+
+    await expect(commit({
+      binding: binding(),
+      tokenDigest: 'd'.repeat(64),
+      receiptId: 'receipt-1',
+      actorUserId: 'owner-1',
+      now: NOW,
+      command: data.command,
+      asset: data.asset,
+      stagingId: null,
+    })).rejects.toMatchObject({
+      code: 'BYOK_INGEST_MODE_CONFLICT',
+      statusCode: 409,
+    });
+  });
 });

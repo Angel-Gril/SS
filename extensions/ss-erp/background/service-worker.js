@@ -306,6 +306,21 @@ try { importScripts('../shared/erp-adapter/source-workflow-device-session.js'); 
 try { importScripts('../shared/erp-adapter/listing-workflow-client.js'); } catch (error) {
   console.warn('[SS ERP] listing workflow client module failed to load', error);
 }
+try { importScripts('../shared/hosted/ai-image-suite-workbench-adapter.js'); } catch (error) {
+  console.warn('[SS ERP] hosted AI image suite workbench adapter failed to load', error);
+}
+try { importScripts('../shared/hosted/ai-image-suite-candidate-preview-bridge.js'); } catch (error) {
+  console.warn('[SS ERP] hosted AI image suite preview bridge failed to load', error);
+}
+try { importScripts('../shared/hosted/ai-image-suite-workbench-client.js'); } catch (error) {
+  console.warn('[SS ERP] hosted AI image suite workbench client failed to load', error);
+}
+try { importScripts('../shared/hosted/ai-image-suite-workbench-client-registry.js'); } catch (error) {
+  console.warn('[SS ERP] hosted AI image suite client registry failed to load', error);
+}
+try { importScripts('../shared/hosted/ai-image-suite-workbench-runtime-dispatcher.js'); } catch (error) {
+  console.warn('[SS ERP] hosted AI image suite runtime dispatcher failed to load', error);
+}
 try { importScripts('../shared/erp-adapter/source-media-mutation-intent.js'); } catch (error) {
   console.warn('[SS ERP] source media mutation intent module failed to load', error);
 }
@@ -377,6 +392,9 @@ let byokWorkbenchEditMediaStore = null;
 let byokWorkbenchEditEpochGuard = null;
 let byokWorkbenchEditController = null;
 let byokWorkbenchProviderSemaphore = null;
+let hostedAiImageSuitePreviewBridge = null;
+let hostedAiImageSuiteClientRegistry = null;
+let hostedAiImageSuiteRuntimeDispatcher = null;
 let sourceTranslationIntentWriteQueue = Promise.resolve();
 let sourceMediaMutationIntentStore = null;
 let sourceMediaConfirmationCoordinator = null;
@@ -396,6 +414,15 @@ function clearCachedByokGeneratedResults() {
   if (byokWorkbenchSessionManager) {
     void byokWorkbenchSessionManager.clearProviderState().catch(function () {});
   }
+}
+
+function clearHostedAiImageSuiteRuntime(reason) {
+  if (hostedAiImageSuiteClientRegistry) {
+    hostedAiImageSuiteClientRegistry.clearAll(
+      String(reason || 'device_session_changed').slice(0, 100),
+    );
+  }
+  if (hostedAiImageSuitePreviewBridge) hostedAiImageSuitePreviewBridge.clear();
 }
 
 function isLogisticsDistributionFeatureEnabled() {
@@ -427,6 +454,7 @@ function notifyByokDeviceSessionInvalidated(reason) {
 }
 
 async function clearByokDeviceSessionState(input) {
+  clearHostedAiImageSuiteRuntime(input && input.reason);
   getByokReadinessHandleCache().clear();
   if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
   if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
@@ -867,6 +895,96 @@ function getByokDeviceTransport() {
   return byokDeviceTransport;
 }
 
+function getHostedAiImageSuitePreviewBridge() {
+  if (hostedAiImageSuitePreviewBridge) return hostedAiImageSuitePreviewBridge;
+  const api = globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_CANDIDATE_PREVIEW_BRIDGE;
+  if (!api || typeof api.createBridge !== 'function') {
+    throw new Error('Hosted AI image suite preview bridge is unavailable');
+  }
+  const transport = getByokDeviceTransport();
+  const previewPath =
+    '/api/extension-device/source-workbench/ai-image-suite/candidate-preview';
+  hostedAiImageSuitePreviewBridge = api.createBridge({
+    async issuePreview(input) {
+      const result = await transport.post(
+        previewPath,
+        { binding: input.binding },
+        { requiredScope: 'listing:review' },
+      );
+      if (!result || result.state !== 'response'
+        || !result.body || result.body.code !== 1 || !result.body.data) {
+        throw new Error('Hosted AI image suite preview issue failed');
+      }
+      return result.body.data;
+    },
+    async consumePreview(input) {
+      const result = await transport.postRaw(
+        previewPath + '/consume',
+        { binding: input.binding, token: input.token },
+        { requiredScope: 'listing:review', signal: input.signal },
+      );
+      if (!result || result.state !== 'raw_response' || !result.response) {
+        throw new Error('Hosted AI image suite preview consume failed');
+      }
+      return result.response;
+    },
+    BroadcastChannel: globalThis.BroadcastChannel,
+    Blob: globalThis.Blob,
+    AbortController: globalThis.AbortController,
+    crypto: globalThis.crypto,
+    now: () => new Date(),
+  });
+  return hostedAiImageSuitePreviewBridge;
+}
+
+function createHostedAiImageSuiteWorkbenchClient() {
+  const clientApi = globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT;
+  const adapterApi = globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_ADAPTER;
+  const listingApi = globalThis.SS_ERP_LISTING_WORKFLOW_CLIENT;
+  if (!clientApi || typeof clientApi.createClient !== 'function'
+    || !adapterApi || typeof adapterApi.createAdapter !== 'function'
+    || !listingApi || typeof listingApi.createAiImageSuiteIntentWitness !== 'function') {
+    throw new Error('Hosted AI image suite workbench client is unavailable');
+  }
+  return clientApi.createClient({
+    transport: getByokDeviceTransport(),
+    listingClient: getSourceListingWorkflowClient(),
+    adapter: adapterApi.createAdapter({ intentContract: listingApi }),
+    previewBridge: getHostedAiImageSuitePreviewBridge(),
+  });
+}
+
+function getHostedAiImageSuiteClientRegistry() {
+  if (hostedAiImageSuiteClientRegistry) return hostedAiImageSuiteClientRegistry;
+  const api = globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_CLIENT_REGISTRY;
+  if (!api || typeof api.createRegistry !== 'function') {
+    throw new Error('Hosted AI image suite client registry is unavailable');
+  }
+  hostedAiImageSuiteClientRegistry = api.createRegistry({
+    createClient() {
+      return createHostedAiImageSuiteWorkbenchClient();
+    },
+  });
+  return hostedAiImageSuiteClientRegistry;
+}
+
+function getHostedAiImageSuiteRuntimeDispatcher() {
+  if (hostedAiImageSuiteRuntimeDispatcher) return hostedAiImageSuiteRuntimeDispatcher;
+  const api = globalThis.SS_ERP_HOSTED_AI_IMAGE_SUITE_WORKBENCH_RUNTIME_DISPATCHER;
+  const authorization = globalThis.SS_ERP_RUNTIME_MESSAGE_AUTHORIZATION;
+  if (!api || typeof api.createDispatcher !== 'function'
+    || !authorization || !authorization.MESSAGE_TYPES?.HOSTED_WORKBENCH) {
+    throw new Error('Hosted AI image suite runtime dispatcher is unavailable');
+  }
+  hostedAiImageSuiteRuntimeDispatcher = api.createDispatcher({
+    messageTypes: authorization.MESSAGE_TYPES.HOSTED_WORKBENCH,
+    getClient(sender, binding) {
+      return getHostedAiImageSuiteClientRegistry().getClient(sender, binding);
+    },
+  });
+  return hostedAiImageSuiteRuntimeDispatcher;
+}
+
 function getByokReadinessClient() {
   if (byokReadinessClient) return byokReadinessClient;
   const api = globalThis.SS_ERP_BYOK_READINESS_CLIENT;
@@ -1218,10 +1336,12 @@ function installByokReadinessRuntime() {
   const previousHandlers = globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS || {};
   const providerSettingsDispatcher = getByokProviderSettingsDispatcher();
   const workbenchDispatcher = getByokWorkbenchRuntimeDispatcher();
+  const hostedWorkbenchDispatcher = getHostedAiImageSuiteRuntimeDispatcher();
   globalThis.SS_ERP_BYOK_RUNTIME_MESSAGE_HANDLERS = Object.freeze({
     ...previousHandlers,
     ...providerSettingsDispatcher.handlers,
     ...workbenchDispatcher.handlers,
+    ...hostedWorkbenchDispatcher.handlers,
   });
   globalThis.SS_ERP_BYOK_READINESS_HANDLE_VERIFIER = (input) => (
     getByokReadinessHandleCache().consume(input)
@@ -5900,8 +6020,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 if (chrome.tabs?.onRemoved?.addListener) {
   chrome.tabs.onRemoved.addListener((tabId) => {
-    Promise.resolve().then(() => (
-      getByokWorkbenchRuntimeDispatcher().removeTab(tabId)
-    )).catch(() => {});
+    Promise.allSettled([
+      Promise.resolve().then(() => getByokWorkbenchRuntimeDispatcher().removeTab(tabId)),
+      Promise.resolve().then(() => getHostedAiImageSuiteClientRegistry().removeTab(tabId)),
+    ]).catch(() => {});
   });
 }

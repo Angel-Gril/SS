@@ -36,34 +36,38 @@ credential storage, or direct Ozon calls.
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
-- [ ] Phase 4: Complete dual-mode workbench (2/5 tasks) [details](./phase-4-dual-mode-workbench.md)
+- [ ] Phase 4: Complete dual-mode workbench (3/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 26/37 tasks complete (70%).
+Overall: 27/37 tasks complete (73%).
 
 ## Current Status
 
-Phase 4 is in progress with `UI-04` and `UI-05` complete. The extension-origin workbench now adds
-truthful progress, pause/continue/cancel intents, charge-confirmed regeneration, deterministic
-main/keyboard ordering, recovery checks, and a read-only publish summary to the two-pane SKU/media
-shell. Bootstrap, runtime, publish, action, and outcome messages bind the exact shop/workflow/draft;
-slot revisions and unique command IDs prevent stale projections and delayed acknowledgements from
-confirming newer work. Candidate review stays explicitly closed until `HOST-01` or `BYOK-01`
-connects a real one-use preview consumer. Chromium responsive, 200% zoom-equivalent, forced-color,
-overflow, sticky-dock, and touch-target checks passed, as did all full regression and package gates.
-`HOST-01` and `BYOK-01` are dependency-ready in parallel; `UI-06` waits for both. `QA-02` remains
-blocked until exact paid Provider approval is recorded. All flags remain default-off; no real
-Provider request, ERP AI charge, ERP ingest, Ozon write, production mutation, or VPS deployment
-occurred.
+Phase 4 is in progress with `UI-04`, `UI-05`, and `HOST-01` complete. The extension-origin Hosted
+path now creates an exact fact-bound plan, validates and quotes it, requires maximum-cost
+confirmation, executes the paid suite, exposes one-use stored candidate previews, records review,
+requires renewed cost confirmation for retry, and assigns approved media to the exact listing draft.
+Database locks serialize `ERP_HOSTED` and `BYOK` ownership per owner/workflow/draft revision/version;
+Hosted assignment proves the full reservation/settlement graph and never uses BYOK ingest. Existing
+same-device suites retain read-only recovery when only the Hosted feature flag is off, while every
+mutation remains denied. Final lint, typecheck, 4,085 server tests, preflight, 141 fresh PostgreSQL
+migrations plus 83 integration tests, Chromium QA, and source/cloud/local package gates passed.
+`BYOK-01` is now active with a P0 release gate: an exact persisted BYOK execution intent must claim
+the mode before every external Provider POST, and accepted-result ingest must require that same
+intent. `UI-06` waits for `BYOK-01`; `QA-02` remains blocked until exact paid Provider approval is
+recorded. All flags remain default-off; no real Provider request, charge, ERP ingest, Ozon write,
+production mutation, VPS access, or deployment occurred.
 
 ## Next Steps
 
-1. Start `HOST-01`: connect the fact-bound hosted plan, quote/maximum-cost confirmation, queue,
-   stored candidate preview/review, approved draft apply, and renewed-cost retry path.
-2. Start `BYOK-01` in a separate owner: connect batch background jobs, the one-use candidate
-   preview consumer, local review, selected-byte ingest/binding, and zero ERP generation charge.
-3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
+1. Complete the `BYOK-01` pre-dispatch fence: persist an exact device/draft/slot/Provider attempt and
+   claim `BYOK` mode before each Provider POST; keep replay and `UNKNOWN_OUTCOME` semantics absorbing.
+2. Connect BYOK batch background jobs, one-use local preview/review, selected-byte ingest, exact
+   intent/provenance/draft binding, retry charge warnings, and zero ERP generation charge.
+3. Complete `UI-06` only after the Hosted and BYOK coordinators both provide truthful automatic
+   source context binding and recovery behavior.
+4. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
 

@@ -863,6 +863,7 @@ export interface ExtensionCommandGrantRoutesOptions {
     command: Record<string, unknown>;
   }): Promise<Pick<OzonPublishAttemptRecord, 'state' | 'lastErrorCode'>>;
   executeMediaWorkflowCommand?(input: {
+    deviceSessionId: string;
     ownerUserId: string;
     actorUserId: string;
     shopId: string;
@@ -872,6 +873,7 @@ export interface ExtensionCommandGrantRoutesOptions {
     command: Record<string, unknown>;
   }): Promise<Record<string, unknown>>;
   executeMediaReviewCommand?(input: {
+    deviceSessionId: string;
     ownerUserId: string;
     actorUserId: string;
     shopId: string;
@@ -881,6 +883,7 @@ export interface ExtensionCommandGrantRoutesOptions {
     command: Record<string, unknown>;
   }): Promise<Record<string, unknown>>;
   executeMediaApplyCommand?(input: {
+    deviceSessionId: string;
     ownerUserId: string;
     actorUserId: string;
     shopId: string;
@@ -928,8 +931,9 @@ const mediaCommandUnavailableCodes = new Set([
 ]);
 
 const mediaCommandRecoveryRequiredCodes = new Set([
-  // The application may already be committed when its result projection is
+  // The business mutation may already be committed when its result projection is
   // temporarily unavailable. Preserve PENDING so exact ledger recovery can run.
+  'AI_IMAGE_SUITE_COMMAND_STATE_UNAVAILABLE',
   'MEDIA_APPLY_STATE_UNAVAILABLE',
 ]);
 
@@ -1268,6 +1272,7 @@ export async function extensionCommandGrantRoutes(
       let result: Record<string, unknown> | undefined;
       try {
         const executorInput = {
+          deviceSessionId: device.sessionId,
           ownerUserId: device.ownerUserId,
           actorUserId: device.actorUserId,
           shopId: parsed.data.shopId,

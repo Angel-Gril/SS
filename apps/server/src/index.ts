@@ -128,7 +128,45 @@ import {
 } from './routes/extension-media-launch.js';
 import { extensionMediaEditRoutes } from './routes/extension-media-edit.js';
 import { extensionAiImageSuiteRoutes } from './routes/extension-ai-image-suite.js';
+import {
+  extensionHostedAiImageModeLockRoutes,
+} from './routes/extension-hosted-ai-image-mode-lock.js';
+import { extensionHostedAiImagePlanRoutes } from './routes/extension-hosted-ai-image-plan.js';
+import {
+  extensionHostedCandidatePreviewRoutes,
+} from './routes/extension-hosted-ai-image-suite-candidate-preview.js';
+import {
+  extensionHostedAiImageListingAssignmentRoutes,
+} from './routes/extension-hosted-ai-image-listing-assignment.js';
 import { projectExtensionAiImageSuite } from './services/extension-ai-image-suite-projection.js';
+import {
+  createExtensionHostedAiImagePlanBindingRecord,
+  createExtensionHostedAiImagePlanService,
+} from './services/extension-hosted-ai-image-plan.js';
+import {
+  createPrismaExtensionHostedAiImagePlanBindingStore,
+} from './services/extension-hosted-ai-image-plan-binding-prisma.js';
+import {
+  createPrismaExtensionHostedAiImageAuthorityLoader,
+} from './services/extension-hosted-ai-image-authority-prisma.js';
+import {
+  createExtensionHostedAiImageModeLockService,
+} from './services/extension-hosted-ai-image-mode-lock.js';
+import {
+  createPrismaExtensionHostedAiImageModeLockLoader,
+} from './services/extension-hosted-ai-image-mode-lock-prisma.js';
+import {
+  createExtensionHostedCandidatePreviewService,
+} from './services/extension-hosted-ai-image-suite-candidate-preview.js';
+import {
+  createHostedSuiteListingDraftAssignmentService,
+} from './services/hosted-suite-listing-draft-assignment.js';
+import {
+  createPrismaHostedSuiteListingDraftAssignmentRepository,
+} from './services/hosted-suite-listing-draft-assignment-prisma.js';
+import {
+  createExtensionHostedAiImagePolicyEvaluator,
+} from './services/extension-hosted-ai-image-policy.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
 import { getAiMediaRolloutDecision } from './services/ai-media-rollout.js';
 import {
@@ -184,6 +222,8 @@ import type { SourceProductProfile } from './services/source-product-profile.js'
 import { buildSourceListingAttributeSourceContext } from './services/source-listing-workflow-source-context.js';
 import { createSourceCaptureService } from './services/source-capture.js';
 import { createPrismaSourceCaptureRepository } from './services/source-capture-prisma.js';
+import { PrismaAiMediaPlanningRepository } from './repositories/ai-media-planning-repository.js';
+import { createAiMediaPlanningService } from './services/ai-media-planning.js';
 import { createSourceCaptureViewService } from './services/source-capture-view.js';
 import { createExtensionSourceWorkbenchService } from './services/extension-source-workbench.js';
 import { PrismaAiMediaWorkflowRepository } from './repositories/ai-media-workflow-repository.js';
@@ -203,7 +243,9 @@ import {
   createExtensionAiImageSuiteApplyCommandExecutor,
   createExtensionAiImageSuiteExecuteCommandExecutor,
   createExtensionAiImageSuiteReviewCommandExecutor,
+  ExtensionAiImageSuiteCommandError,
 } from './services/extension-ai-image-suite-commands.js';
+import { isExtensionAiImageExecutionModeConflict } from './services/extension-ai-image-execution-mode.js';
 import {
   EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION,
   EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION,
@@ -973,6 +1015,172 @@ if (isExtensionDeviceAuthEnabled()) {
   const extensionAiImageSuiteService = createAiImageSuiteService(
     new PrismaAiImageSuiteRepository(prisma),
   );
+  const extensionHostedAiImagePlanBindings =
+    createPrismaExtensionHostedAiImagePlanBindingStore(prisma);
+  const extensionHostedAiImageAuthority =
+    createPrismaExtensionHostedAiImageAuthorityLoader(prisma);
+  const extensionHostedAiImageModeLockLoader =
+    createPrismaExtensionHostedAiImageModeLockLoader(prisma);
+  const evaluateExtensionHostedAiImagePolicy =
+    createExtensionHostedAiImagePolicyEvaluator();
+  const extensionHostedAiImageModeLockService =
+    createExtensionHostedAiImageModeLockService({
+      loadAuthority: (input) => extensionHostedAiImageAuthority.loadPlanAuthority(input),
+      hasHostedSuite: (input) => extensionHostedAiImageModeLockLoader.hasHostedSuite(input),
+      evaluatePolicy: evaluateExtensionHostedAiImagePolicy,
+    });
+  const findExtensionHostedAiImageRecoveryBinding = async (
+    input: Parameters<typeof extensionHostedAiImageModeLockService.get>[0],
+  ) => {
+    const authority = await extensionHostedAiImageAuthority.loadPlanAuthority({
+      ownerUserId: input.identity.ownerUserId,
+      listingWorkflowId: input.binding.listingWorkflowId,
+    });
+    if (!authority
+      || authority.ownerUserId !== input.identity.ownerUserId
+      || authority.snapshotId !== input.binding.snapshotId
+      || authority.supplyGoodsId !== input.binding.supplyGoodsId
+      || authority.shopId !== input.binding.shopId
+      || authority.listingWorkflowId !== input.binding.listingWorkflowId
+      || authority.draftRevision !== input.binding.draftRevision
+      || authority.draftVersion !== input.binding.draftVersion
+      || authority.sourceCaptureCurrent !== true
+      || authority.workflowStatus !== 'ACTIVE'
+      || authority.draftStage !== 'MEDIA_REVIEW') return null;
+    const lookupRecord = createExtensionHostedAiImagePlanBindingRecord({
+      planId: 'hosted-plan-binding-recovery-lookup',
+      identity: input.identity,
+      binding: input.binding,
+      selectedSkuKeys: [...authority.selectedSkuKeys].sort(),
+      candidateMediaKeys: [...authority.candidateMediaKeys].sort(),
+    });
+    const {
+      planId: _lookupPlanId,
+      authorityHash: _lookupAuthorityHash,
+      bindingHash: _lookupBindingHash,
+      ...bindingLookup
+    } = lookupRecord;
+    return extensionHostedAiImagePlanBindings.find(bindingLookup);
+  };
+  const loadExtensionHostedAiImageReadPolicy = async (
+    input: Parameters<typeof extensionHostedAiImageModeLockService.get>[0],
+  ) => {
+    const modeLock = await extensionHostedAiImageModeLockService.get(input);
+    if (modeLock.hostedExecutionEnabled) {
+      return { readEnabled: true, writeEnabled: true };
+    }
+    if (modeLock.state !== 'HAS_SUITE') {
+      return { readEnabled: false, writeEnabled: false };
+    }
+    const hostedFeatureEnabled = await getConfig('feature_extension_hosted_ai');
+    if (hostedFeatureEnabled !== false) {
+      return { readEnabled: false, writeEnabled: false };
+    }
+    const recoveryBinding = await findExtensionHostedAiImageRecoveryBinding(input);
+    const currentSuite = recoveryBinding
+      ? await extensionAiImageSuiteService.getCurrentByPlan(
+        recoveryBinding.planId,
+        input.identity.ownerUserId,
+      )
+      : null;
+    return {
+      readEnabled: Boolean(currentSuite),
+      writeEnabled: false,
+    };
+  };
+  const extensionHostedAiImagePlanningService =
+    createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(prisma));
+  const extensionHostedAiImagePlanService = createExtensionHostedAiImagePlanService({
+    planning: extensionHostedAiImagePlanningService,
+    bindings: extensionHostedAiImagePlanBindings,
+    loadAuthority: (input) => extensionHostedAiImageAuthority.loadPlanAuthority(input),
+    evaluatePolicy: evaluateExtensionHostedAiImagePolicy,
+  });
+  const extensionHostedAiImageReadPlanCore = createExtensionHostedAiImagePlanService({
+    planning: extensionHostedAiImagePlanningService,
+    bindings: extensionHostedAiImagePlanBindings,
+    loadAuthority: (input) => extensionHostedAiImageAuthority.loadPlanAuthority(input),
+    evaluatePolicy: async (input) => {
+      const decision = await evaluateExtensionHostedAiImagePolicy(input);
+      if (!decision
+        || typeof decision.enabled !== 'boolean'
+        || !Number.isSafeInteger(decision.revision)
+        || decision.revision < 1
+        || decision.ownerUserId !== input.ownerUserId
+        || decision.shopId !== input.shopId
+        || decision.deviceSessionId !== input.deviceSessionId) {
+        throw new Error('Hosted AI image read policy is unavailable');
+      }
+      return decision.enabled ? decision : { ...decision, enabled: true };
+    },
+  });
+  const extensionHostedAiImageReadPlanService = {
+    get: extensionHostedAiImageReadPlanCore.get,
+    getCurrent: extensionHostedAiImageReadPlanCore.getCurrent,
+  };
+  const extensionHostedAiImagePlanRouteService = {
+    create: (input: Parameters<typeof extensionHostedAiImagePlanService.create>[0]) => (
+      extensionHostedAiImagePlanService.create(input)
+    ),
+    get: async (input: Parameters<typeof extensionHostedAiImagePlanService.get>[0]) => {
+      const readPolicy = await loadExtensionHostedAiImageReadPolicy({
+        identity: input.identity,
+        binding: input.binding,
+      });
+      return readPolicy.readEnabled && !readPolicy.writeEnabled
+        ? extensionHostedAiImageReadPlanService.get(input)
+        : extensionHostedAiImagePlanService.get(input);
+    },
+    getCurrent: async (input: Parameters<typeof extensionHostedAiImagePlanService.getCurrent>[0]) => {
+      const readPolicy = await loadExtensionHostedAiImageReadPolicy({
+        identity: input.identity,
+        binding: input.binding,
+      });
+      return readPolicy.readEnabled && !readPolicy.writeEnabled
+        ? extensionHostedAiImageReadPlanService.getCurrent(input)
+        : extensionHostedAiImagePlanService.getCurrent(input);
+    },
+    review: (input: Parameters<typeof extensionHostedAiImagePlanService.review>[0]) => (
+      extensionHostedAiImagePlanService.review(input)
+    ),
+  };
+  const extensionHostedCandidatePreviewService = createExtensionHostedCandidatePreviewService({
+    loadCurrentCandidate: async (input) => {
+      const readPolicy = await loadExtensionHostedAiImageReadPolicy({
+        identity: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.ownerUserId,
+          deviceSessionId: input.deviceSessionId,
+        },
+        binding: {
+          snapshotId: input.binding.snapshotId,
+          supplyGoodsId: input.binding.supplyGoodsId,
+          shopId: input.binding.shopId,
+          listingWorkflowId: input.binding.listingWorkflowId,
+          draftRevision: input.binding.draftRevision,
+          draftVersion: input.binding.draftVersion,
+        },
+      });
+      return readPolicy.readEnabled
+        ? extensionHostedAiImageAuthority.loadCandidateAuthority(input)
+        : null;
+    },
+  });
+  const extensionHostedListingAssignmentCore =
+    createHostedSuiteListingDraftAssignmentService(
+      createPrismaHostedSuiteListingDraftAssignmentRepository(prisma as never),
+    );
+  const extensionHostedListingAssignmentService = {
+    assign: async (input: Parameters<typeof extensionHostedListingAssignmentCore.assign>[0]) => {
+      const decision = await evaluateExtensionHostedAiImagePolicy({
+        ownerUserId: input.ownerUserId,
+        shopId: input.shopId,
+        deviceSessionId: input.deviceSessionId,
+      });
+      if (!decision.enabled) throw new Error('Hosted listing assignment policy is disabled');
+      return extensionHostedListingAssignmentCore.assign(input);
+    },
+  };
   const extensionMediaContextService = createAiMediaContextService(prisma);
   const extensionMediaJobRepository = new PrismaAiImageJobRepository(prisma);
   const loadExtensionMediaTranslationExistingWorkflow = async ({
@@ -1109,6 +1317,7 @@ if (isExtensionDeviceAuthEnabled()) {
   };
   const loadExtensionAiImageSuiteState = async (input: {
     ownerUserId: string;
+    deviceSessionId: string;
     snapshotId: string;
     supplyGoodsId: string;
     shopId: string;
@@ -1116,42 +1325,104 @@ if (isExtensionDeviceAuthEnabled()) {
     draftRevision: number;
     draftVersion: number;
   }) => {
-    const context = await loadExtensionMediaTranslationContext({
-      ownerUserId: input.ownerUserId,
-      listingWorkflowId: input.listingWorkflowId,
-      draftRevision: input.draftRevision,
-      draftVersion: input.draftVersion,
-    });
-    if (!context
+    const [context, readPolicy, planAuthority] = await Promise.all([
+      loadExtensionMediaTranslationContext({
+        ownerUserId: input.ownerUserId,
+        listingWorkflowId: input.listingWorkflowId,
+        draftRevision: input.draftRevision,
+        draftVersion: input.draftVersion,
+      }),
+      loadExtensionHostedAiImageReadPolicy({
+        identity: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.ownerUserId,
+          deviceSessionId: input.deviceSessionId,
+        },
+        binding: {
+          snapshotId: input.snapshotId,
+          supplyGoodsId: input.supplyGoodsId,
+          shopId: input.shopId,
+          listingWorkflowId: input.listingWorkflowId,
+          draftRevision: input.draftRevision,
+          draftVersion: input.draftVersion,
+        },
+      }),
+      extensionHostedAiImageAuthority.loadPlanAuthority({
+        ownerUserId: input.ownerUserId,
+        listingWorkflowId: input.listingWorkflowId,
+      }),
+    ]);
+    if (!readPolicy.readEnabled || !context || !planAuthority
       || context.snapshotId !== input.snapshotId
       || context.supplyGoodsId !== input.supplyGoodsId
-      || context.shopId !== input.shopId) return null;
-    const [plan, target] = await Promise.all([prisma.aiMediaPlan.findFirst({
-      where: {
+      || context.shopId !== input.shopId
+      || planAuthority.ownerUserId !== input.ownerUserId
+      || planAuthority.snapshotId !== input.snapshotId
+      || planAuthority.supplyGoodsId !== input.supplyGoodsId
+      || planAuthority.shopId !== input.shopId
+      || planAuthority.listingWorkflowId !== input.listingWorkflowId
+      || planAuthority.draftRevision !== input.draftRevision
+      || planAuthority.draftVersion !== input.draftVersion) return null;
+    const lookupRecord = createExtensionHostedAiImagePlanBindingRecord({
+      planId: 'hosted-plan-binding-lookup',
+      identity: {
         ownerUserId: input.ownerUserId,
-        contextType: 'collect',
-        contextId: input.supplyGoodsId,
-        reviewStatus: 'APPROVED',
-        staleAt: null,
-        approvedVersion: { is: { sourceCaptureSnapshotId: input.snapshotId } },
+        actorUserId: input.ownerUserId,
+        deviceSessionId: input.deviceSessionId,
       },
-      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-      select: {
-        id: true,
-        revision: true,
-        contextType: true,
-        contextId: true,
-        reviewStatus: true,
-        staleAt: true,
-        currentVersionId: true,
-        approvedVersionId: true,
-        approvedVersion: { select: { id: true, sourceCaptureSnapshotId: true } },
+      binding: {
+        snapshotId: input.snapshotId,
+        supplyGoodsId: input.supplyGoodsId,
+        shopId: input.shopId,
+        listingWorkflowId: input.listingWorkflowId,
+        draftRevision: input.draftRevision,
+        draftVersion: input.draftVersion,
       },
-    }), prisma.supplyGoods.findFirst({
-      where: { id: input.supplyGoodsId, userId: input.ownerUserId },
-      select: { updatedAt: true },
-    })]);
+      selectedSkuKeys: [...planAuthority.selectedSkuKeys].sort(),
+      candidateMediaKeys: [...planAuthority.candidateMediaKeys].sort(),
+    });
+    const {
+      planId: _lookupPlanId,
+      authorityHash: _lookupAuthorityHash,
+      bindingHash: _lookupBindingHash,
+      ...bindingLookup
+    } = lookupRecord;
+    const storedBinding = await extensionHostedAiImagePlanBindings.find(bindingLookup);
+    const planPromise = storedBinding
+      ? prisma.aiMediaPlan.findFirst({
+        where: {
+          id: storedBinding.planId,
+          ownerUserId: input.ownerUserId,
+          contextType: 'collect',
+          contextId: input.supplyGoodsId,
+          reviewStatus: 'APPROVED',
+          staleAt: null,
+          approvedVersion: { is: { sourceCaptureSnapshotId: input.snapshotId } },
+        },
+        select: {
+          id: true,
+          revision: true,
+          contextType: true,
+          contextId: true,
+          reviewStatus: true,
+          staleAt: true,
+          currentVersionId: true,
+          approvedVersionId: true,
+          approvedVersion: {
+            select: { id: true, sourceCaptureSnapshotId: true, planPayload: true },
+          },
+        },
+      })
+      : Promise.resolve(null);
+    const [plan, target] = await Promise.all([
+      planPromise,
+      prisma.supplyGoods.findFirst({
+        where: { id: input.supplyGoodsId, userId: input.ownerUserId },
+        select: { updatedAt: true },
+      }),
+    ]);
     const authority = {
+      deviceSessionId: input.deviceSessionId,
       snapshotId: input.snapshotId,
       supplyGoodsId: input.supplyGoodsId,
       shopId: input.shopId,
@@ -1167,10 +1438,11 @@ if (isExtensionDeviceAuthEnabled()) {
         targetUpdatedAt: target?.updatedAt.toISOString() || null,
       };
     }
-    const [providerRuntime, currentSuite] = await Promise.all([
-      getAiImageSuiteProviderRuntime(),
-      extensionAiImageSuiteService.getCurrentByPlan(plan.id, input.ownerUserId),
-    ]);
+    const currentSuite = await extensionAiImageSuiteService.getCurrentByPlan(
+      plan.id,
+      input.ownerUserId,
+    );
+    const providerRuntime = currentSuite ? null : await getAiImageSuiteProviderRuntime();
     const preview = currentSuite
       ? {
         version: 'ai-image-suite-preview/v1',
@@ -1203,7 +1475,7 @@ if (isExtensionDeviceAuthEnabled()) {
           };
         }),
       }
-      : providerRuntime.providerConfig
+      : providerRuntime?.providerConfig
         ? await extensionAiImageSuiteService.preview({
           ownerUserId: input.ownerUserId,
           actorUserId: input.ownerUserId,
@@ -1234,6 +1506,15 @@ if (isExtensionDeviceAuthEnabled()) {
         };
       }),
     } : null;
+    if (!readPolicy.writeEnabled) {
+      return {
+        authority,
+        plan: { ...plan, skuKey: null, preview },
+        suite,
+        targetUpdatedAt: target?.updatedAt.toISOString() || null,
+        executionReady: false,
+      };
+    }
     const [authorization, operational, storageRuntime] = await Promise.all([
       getAiImageSuiteDispatchAuthorization(input.ownerUserId),
       probeAiImageSuiteRuntime({
@@ -1244,8 +1525,8 @@ if (isExtensionDeviceAuthEnabled()) {
     ]);
     const frozenRuntimeReady = currentSuite
       ? await aiImageSuiteRuntimeReady(currentSuite)
-      : providerRuntime.executionReady;
-    const providerName = currentSuite?.provider || providerRuntime.providerConfig?.provider;
+      : providerRuntime?.executionReady === true;
+    const providerName = currentSuite?.provider || providerRuntime?.providerConfig?.provider;
     const storageReady = providerName === 'fake'
       ? ['local', 'oss'].includes(storageRuntime.imageStorage)
       : storageRuntime.imageStorage === 'oss' && Boolean(storageRuntime.oss);
@@ -1254,7 +1535,8 @@ if (isExtensionDeviceAuthEnabled()) {
       plan: { ...plan, skuKey: null, preview },
       suite,
       targetUpdatedAt: target?.updatedAt.toISOString() || null,
-      executionReady: authorization.enabled
+      executionReady: readPolicy.writeEnabled
+        && authorization.enabled
         && operational.queueReady
         && operational.workerReady
         && frozenRuntimeReady
@@ -1603,30 +1885,49 @@ if (isExtensionDeviceAuthEnabled()) {
   const extensionAiImageSuiteCommandLoaders = (scopes: string[]) => ({
     loadAuthority: async (input: Parameters<typeof loadExtensionAiImageSuiteState>[0]) => {
       const state = await loadExtensionAiImageSuiteState(input);
-      return state ? { ownerUserId: input.ownerUserId, ...state.authority } : null;
+      return state ? {
+        ownerUserId: input.ownerUserId,
+        ...state.authority,
+      } : null;
     },
     loadProjection: async (input: Parameters<typeof loadExtensionAiImageSuiteState>[0]) => (
       loadExtensionAiImageSuiteProjection(input, scopes)
     ),
   });
-  const assertExtensionAiImageSuiteWriteEnabled = async (ownerUserId: string) => {
-    const authorization = await getAiImageSuiteDispatchAuthorization(ownerUserId);
-    if (!authorization.enabled) throw new Error(authorization.reason);
+  const assertExtensionAiImageSuiteWriteEnabled = async (input: {
+    ownerUserId: string;
+    shopId: string;
+    deviceSessionId: string;
+  }) => {
+    const decision = await evaluateExtensionHostedAiImagePolicy(input);
+    if (!decision.enabled) throw new Error('Hosted AI image suite policy is disabled');
   };
   const executeExtensionAiImageSuiteCommand = createExtensionAiImageSuiteExecuteCommandExecutor({
     ...extensionAiImageSuiteCommandLoaders(['listing:review', 'media:execute']),
     start: async (input) => {
-      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       const providerRuntime = await requireAiImageSuiteExecutionRuntime();
-      const result = await extensionAiImageSuiteService.claim({
-        ownerUserId: input.ownerUserId,
-        actorUserId: input.actorUserId,
-        planId: input.planId,
-        expectedPlanRevision: input.planRevision,
-        idempotencyKey: input.operationKey,
-        expectedPreviewHash: input.expectedPreviewHash,
-        providerConfig: providerRuntime.providerConfig!,
-      });
+      let result;
+      try {
+        result = await extensionAiImageSuiteService.claim({
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          planId: input.planId,
+          expectedPlanRevision: input.planRevision,
+          idempotencyKey: input.operationKey,
+          expectedPreviewHash: input.expectedPreviewHash,
+          providerConfig: providerRuntime.providerConfig!,
+        });
+      } catch (error) {
+        if (isExtensionAiImageExecutionModeConflict(error)) {
+          throw new ExtensionAiImageSuiteCommandError(
+            'AI_IMAGE_SUITE_COMMAND_MODE_CONFLICT',
+            409,
+            'This listing draft already started BYOK image execution',
+          );
+        }
+        throw error;
+      }
       return {
         suiteId: result.suite.id,
         status: result.suite.status,
@@ -1635,7 +1936,7 @@ if (isExtensionDeviceAuthEnabled()) {
       };
     },
     continue: async (input) => {
-      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       await requireAiImageSuiteExecutionRuntime();
       let suite = await extensionAiImageSuiteService.get(input.suiteId, input.ownerUserId);
       if (suite.revision !== input.expectedSuiteRevision) {
@@ -1704,6 +2005,7 @@ if (isExtensionDeviceAuthEnabled()) {
       };
     },
     cancel: async (input) => {
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       const result = await commitExtensionAiImageSuiteWithFrontierRecovery(
         input.suiteId,
         () => extensionAiImageSuiteExecutionService.cancel({
@@ -1722,7 +2024,7 @@ if (isExtensionDeviceAuthEnabled()) {
       };
     },
     retry: async (input) => {
-      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       await requireAiImageSuiteExecutionRuntime();
       const result = await commitExtensionAiImageSuiteWithFrontierRecovery(
         input.suiteId,
@@ -1746,7 +2048,7 @@ if (isExtensionDeviceAuthEnabled()) {
   const executeExtensionAiImageSuiteReview = createExtensionAiImageSuiteReviewCommandExecutor({
     ...extensionAiImageSuiteCommandLoaders(['listing:review']),
     review: async (input) => {
-      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       const result = await extensionAiImageSuiteCandidateService.review({
         suiteId: input.suiteId,
         slotId: input.slotId,
@@ -1771,7 +2073,7 @@ if (isExtensionDeviceAuthEnabled()) {
   const executeExtensionAiImageSuiteApply = createExtensionAiImageSuiteApplyCommandExecutor({
     ...extensionAiImageSuiteCommandLoaders(['listing:review', 'listing:write']),
     apply: async (input) => {
-      await assertExtensionAiImageSuiteWriteEnabled(input.ownerUserId);
+      await assertExtensionAiImageSuiteWriteEnabled(input);
       const result = await extensionAiImageSuiteCandidateService.apply({
         suiteId: input.suiteId,
         slotId: input.slotId,
@@ -1791,26 +2093,27 @@ if (isExtensionDeviceAuthEnabled()) {
       };
     },
   });
-  const executeExtensionMediaOrSuiteCommand = async (input: Parameters<
-    typeof executeExtensionMediaWorkflowCommand
-  >[0]) => (
+  type ExtensionMediaExecutorInput = Parameters<NonNullable<
+    ExtensionCommandGrantRoutesOptions['executeMediaWorkflowCommand']
+  >>[0];
+  const legacyMediaExecutorInput = (input: ExtensionMediaExecutorInput) => {
+    const { deviceSessionId: _deviceSessionId, ...legacyInput } = input;
+    return legacyInput;
+  };
+  const executeExtensionMediaOrSuiteCommand = async (input: ExtensionMediaExecutorInput) => (
     input.command.version === EXTENSION_AI_IMAGE_SUITE_EXECUTE_COMMAND_VERSION
       ? executeExtensionAiImageSuiteCommand(input)
-      : executeExtensionMediaWorkflowCommand(input)
+      : executeExtensionMediaWorkflowCommand(legacyMediaExecutorInput(input))
   );
-  const executeExtensionMediaOrSuiteReview = async (input: Parameters<
-    typeof executeExtensionMediaReviewCommand
-  >[0]) => (
+  const executeExtensionMediaOrSuiteReview = async (input: ExtensionMediaExecutorInput) => (
     input.command.version === EXTENSION_AI_IMAGE_SUITE_REVIEW_COMMAND_VERSION
       ? executeExtensionAiImageSuiteReview(input)
-      : executeExtensionMediaReviewCommand(input)
+      : executeExtensionMediaReviewCommand(legacyMediaExecutorInput(input))
   );
-  const executeExtensionMediaOrSuiteApply = async (input: Parameters<
-    typeof executeExtensionMediaApplyCommand
-  >[0]) => (
+  const executeExtensionMediaOrSuiteApply = async (input: ExtensionMediaExecutorInput) => (
     input.command.version === EXTENSION_AI_IMAGE_SUITE_APPLY_COMMAND_VERSION
       ? executeExtensionAiImageSuiteApply(input)
-      : executeExtensionMediaApplyCommand(input)
+      : executeExtensionMediaApplyCommand(legacyMediaExecutorInput(input))
   );
   sourceCaptureService = createSourceCaptureService({
     repository: createPrismaSourceCaptureRepository({
@@ -1929,7 +2232,13 @@ if (isExtensionDeviceAuthEnabled()) {
     resolveCommand: createSourceWorkflowCommandResolver({
       featureFlags: sourceWorkflowFeatureFlags,
       getMediaWorkflowDecision: getAiMediaRolloutDecision,
-      getAiImageSuiteEnabled: async () => getConfig('feature_ai_media_suite'),
+      getAiImageSuiteEnabled: async (ownerUserId) => {
+        const [hostedEnabled, authorization] = await Promise.all([
+          getConfig('feature_extension_hosted_ai'),
+          getAiImageSuiteDispatchAuthorization(ownerUserId),
+        ]);
+        return hostedEnabled && authorization.enabled;
+      },
       getByokReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
       authorizeByokPublish: extensionByokPublishAuthorizer,
       production: process.env.NODE_ENV === 'production',
@@ -2407,6 +2716,30 @@ if (isExtensionDeviceAuthEnabled()) {
     loadState: loadExtensionAiImageSuiteState,
     loadTrustedPreviewOrigins: loadExtensionAiImageSuitePreviewOrigins,
     allowInsecureLocalPreview: process.env.NODE_ENV !== 'production',
+  });
+  const authenticateExtensionHostedAiImageDevice = authenticateExtensionDevice({
+    config: extensionDeviceAuthConfig,
+    loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+  });
+  await app.register(extensionHostedAiImageModeLockRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    authenticateDevice: authenticateExtensionHostedAiImageDevice,
+    service: extensionHostedAiImageModeLockService,
+  });
+  await app.register(extensionHostedAiImagePlanRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    authenticateDevice: authenticateExtensionHostedAiImageDevice,
+    service: extensionHostedAiImagePlanRouteService,
+  });
+  await app.register(extensionHostedCandidatePreviewRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    authenticateDevice: authenticateExtensionHostedAiImageDevice,
+    service: extensionHostedCandidatePreviewService,
+  });
+  await app.register(extensionHostedAiImageListingAssignmentRoutes, {
+    prefix: '/api/extension-device/source-workbench',
+    authenticateDevice: authenticateExtensionHostedAiImageDevice,
+    service: extensionHostedListingAssignmentService,
   });
   await app.register(extensionMediaEditRoutes, {
     prefix: '/api/extension-device/source-workbench',

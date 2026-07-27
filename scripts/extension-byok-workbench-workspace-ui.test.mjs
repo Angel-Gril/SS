@@ -35,6 +35,22 @@ assert.match(cssSource, /@media\s*\(max-width:\s*1120px\)/u);
 assert.match(cssSource, /\.workspace-task-dock\s*\{[\s\S]*grid-column:\s*3;/u);
 assert.match(cssSource, /@media\s*\(max-width:\s*720px\)[\s\S]*\.workspace-task-dock\s*\{[\s\S]*position:\s*static;/u);
 assert.match(cssSource, /@media\s*\(max-width:\s*900px\)[\s\S]*\.workspace-board\s*\{\s*grid-template-columns:\s*repeat\(2,/u);
+const mobileCss = cssSource.slice(
+  cssSource.indexOf('@media (max-width: 520px)'),
+  cssSource.indexOf('@media (prefers-reduced-motion: reduce)'),
+);
+for (const selector of [
+  '.workspace-library-tabs [data-workspace-action="select-library-tab"]',
+  '.workspace-library-list [data-workspace-action="toggle-global-reference"]',
+  '.workspace-library-list [data-workspace-action="toggle-slot-reference"]',
+  '.header-actions .button',
+  '.generation-footer .button',
+  '.hosted-plan-actions .button',
+  '.hosted-slot-actions .button',
+]) {
+  assert.ok(mobileCss.includes(selector), `${selector} must retain the mobile touch target`);
+}
+assert.match(mobileCss, /min-height:\s*44px;/u);
 assert.doesNotMatch(
   controllerSource,
   /innerHTML|\bfetch\s*\(|chrome\.storage|localStorage|sessionStorage/iu,
@@ -817,6 +833,26 @@ nodes.workspaceRegenerateButton.dispatch('click');
 assert.equal(emittedIntents.length, unknownActionCount,
   'UNKNOWN_OUTCOME cannot use ordinary regeneration');
 assert.match(nodes.workspacePublishSummary.textContent, /结果待核对/u);
+dispatchDocument('ss-erp:workspace-clear', null);
+
+const scopedRedSku = sku('red');
+scopedRedSku.slots[1] = slot('red:detail', 'DETAIL', {
+  assignmentScope: 'PRODUCT',
+  applicableSkuKeys: ['blue', 'red'],
+});
+dispatchDocument('ss-erp:workspace-bootstrap', bootstrapInput({
+  executionMode: 'ERP_HOSTED',
+  availableExecutionModes: ['ERP_HOSTED', 'BYOK'],
+  selectedSkuKey: 'red',
+  selectedSlotKey: 'red:detail',
+  skus: [scopedRedSku, sku('blue'), sku('green')],
+}));
+const sharedProductSlot = actionNode(
+  nodes.workspaceSlotList, 'select-slot', 'slotKey', 'red:detail',
+);
+assert.match(sharedProductSlot.children[1].textContent, /商品共享.*SKU blue, red/u);
+assert.match(sharedProductSlot.children[1].textContent, /不支持部分 SKU 共享/u);
+assert.match(sharedProductSlot.title, /商品共享.*SKU blue, red/u);
 dispatchDocument('ss-erp:workspace-clear', null);
 
 dispatchDocument('ss-erp:workspace-bootstrap', bootstrapInput({

@@ -63,14 +63,9 @@ function dependencies(options: {
     state: 'PREPARED' | 'SUBMITTING' | 'SUBMITTED' | 'UNKNOWN' | 'REJECTED';
     lastErrorCode?: string | null;
   }> => ({ attemptId: 'attempt-1', state: 'SUBMITTED' }));
-  const executeMediaWorkflowCommand = vi.fn(async (_input: Record<string, unknown>): Promise<{
-    workflowId: string;
-    action: 'CANCEL' | 'RETRY' | 'CREATE_TRANSLATION';
-    operation?: 'IMAGE_TRANSLATE';
-    status: string;
-    revision: number;
-    replayed?: boolean;
-  }> => ({
+  const executeMediaWorkflowCommand = vi.fn(async (
+    _input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => ({
     workflowId: 'media-1', action: 'CANCEL', status: 'CANCELLED', revision: 4,
   }));
   const executeMediaReviewCommand = vi.fn(async () => ({
@@ -554,6 +549,7 @@ describe('extension command grant routes', () => {
       data: { replay: false, receipt: { status: 'SUCCEEDED' } },
     });
     expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledWith({
+      deviceSessionId: 'session-1',
       ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1',
       listingWorkflowId: 'workflow-1', draftVersion: 7,
       idempotencyKey: 'media-command-operation-1', command: mediaCommand(),
@@ -616,6 +612,7 @@ describe('extension command grant routes', () => {
       } } },
     });
     expect(deps.executeMediaWorkflowCommand).toHaveBeenCalledWith({
+      deviceSessionId: 'session-1',
       ownerUserId: 'owner-1', actorUserId: 'owner-1', shopId: 'shop-1',
       listingWorkflowId: 'workflow-1', draftVersion: 7,
       idempotencyKey: 'extension-media-create-attempt-1', command,
@@ -746,6 +743,62 @@ describe('extension command grant routes', () => {
     });
     expect(deps.service.fail).not.toHaveBeenCalled();
     expect(deps.service.complete).not.toHaveBeenCalled();
+  });
+
+  it('keeps a committed AI image suite action recoverable when its result projection is unavailable', async () => {
+    const deps = await buildApp();
+    const committedOperationKeys = new Set<string>();
+    let businessWrites = 0;
+    deps.executeMediaWorkflowCommand.mockImplementation(async (input: any) => {
+      const operationKey = input.idempotencyKey;
+      const replayed = committedOperationKeys.has(operationKey);
+      if (!replayed) {
+        committedOperationKeys.add(operationKey);
+        businessWrites += 1;
+        throw Object.assign(new Error('suite result projection unavailable after commit'), {
+          code: 'AI_IMAGE_SUITE_COMMAND_STATE_UNAVAILABLE',
+        });
+      }
+      return {
+        action: 'START', suiteId: 'suite-1', status: 'QUEUED', revision: 1, replayed: true,
+      };
+    });
+    const payload = mediaPayload({ idempotencyKey: 'hosted-suite-start-operation-1' });
+
+    const first = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(first.statusCode).toBe(503);
+    expect(first.json()).toMatchObject({
+      code: 0,
+      errorCode: 'media_command_unavailable',
+      data: { receipt: { status: 'PENDING' } },
+    });
+    expect(businessWrites).toBe(1);
+    expect(deps.service.fail).not.toHaveBeenCalled();
+    expect(deps.service.complete).not.toHaveBeenCalled();
+
+    deps.service.authorize.mockResolvedValueOnce({
+      kind: 'replay',
+      receipt: { id: 'receipt-1', status: 'PENDING', result: null, failureCode: null },
+    });
+    const recovered = await deps.app.inject({
+      method: 'POST', url: '/media-workflows/execute',
+      headers: { 'x-ss-erp-command-grant': 'g'.repeat(43) }, payload,
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      code: 1,
+      data: {
+        replay: true,
+        receipt: { status: 'SUCCEEDED', result: { suiteId: 'suite-1', replayed: true } },
+      },
+    });
+    expect(businessWrites).toBe(1);
+    expect(deps.service.claimPendingRecovery).toHaveBeenCalledTimes(1);
+    expect(deps.service.complete).toHaveBeenCalledTimes(1);
+    expect(deps.service.fail).not.toHaveBeenCalled();
   });
 
   it('does not execute a concurrent PENDING media recovery without the receipt lease', async () => {

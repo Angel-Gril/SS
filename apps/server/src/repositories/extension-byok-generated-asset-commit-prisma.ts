@@ -31,6 +31,7 @@ import {
   ByokListingMediaBindingError,
 } from '../services/byok-listing-media-binding.js';
 import { commitExtensionByokUploadStagingInTransaction } from '../services/extension-byok-upload-staging.js';
+import { isExtensionAiImageExecutionModeConflict } from '../services/extension-ai-image-execution-mode.js';
 
 export const EXTENSION_BYOK_MEDIA_INGEST_RECEIPT_VERSION =
   'extension-byok-media-ingest-receipt/v1' as const;
@@ -49,6 +50,7 @@ export type ExtensionByokGeneratedAssetCommitErrorCode =
   | 'BYOK_INGEST_DRAFT_STALE'
   | 'BYOK_INGEST_SLOT_CONFLICT'
   | 'BYOK_INGEST_ORDER_CONFLICT'
+  | 'BYOK_INGEST_MODE_CONFLICT'
   | 'BYOK_INGEST_ASSET_CONFLICT'
   | 'BYOK_INGEST_STAGING_CONFLICT';
 
@@ -214,8 +216,9 @@ export function createPrismaExtensionByokGeneratedAssetCommitter(
 ) {
   return async (
     input: CommitExtensionByokGeneratedAssetInput,
-  ): Promise<CommitExtensionByokGeneratedAssetResult> => (
-    runExtensionCommandSerializableTransaction(client, async (rawTx) => {
+  ): Promise<CommitExtensionByokGeneratedAssetResult> => {
+    try {
+      return await runExtensionCommandSerializableTransaction(client, async (rawTx) => {
       const consumed = await consumeByokMediaIngestGrantInTransaction(rawTx, {
         tokenDigest: input.tokenDigest,
         binding: input.binding,
@@ -353,6 +356,16 @@ export function createPrismaExtensionByokGeneratedAssetCommitter(
         receipt,
         asset: storedAsset.asset,
       };
-    })
-  );
+      });
+    } catch (error) {
+      if (isExtensionAiImageExecutionModeConflict(error)) {
+        commitError(
+          'BYOK_INGEST_MODE_CONFLICT',
+          409,
+          'This listing draft already started ERP-hosted image execution',
+        );
+      }
+      throw error;
+    }
+  };
 }

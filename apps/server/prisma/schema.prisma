@@ -438,6 +438,9 @@ model User {
   createdAiMediaApplicationMutations   AiMediaApplicationMutation[]           @relation("AiMediaApplicationMutationActor")
   ownedAiMediaListingDraftMutations    AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationOwner")
   createdAiMediaListingDraftMutations  AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationActor")
+  ownedExtensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentOwner")
+  createdExtensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentActor")
+  extensionAiImageExecutionModeLocks ExtensionAiImageExecutionModeLock[] @relation("ExtensionAiImageExecutionModeLockOwner")
   ownedAiMediaSuitePromptSets           AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetOwner")
   createdAiMediaSuitePromptSets         AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetActor")
   mediaAssets                         MediaAsset[]
@@ -568,6 +571,8 @@ model Shop {
   sourceListingPublishIntents   SourceListingPublishIntent[]
   ozonPublishAttempts           OzonPublishAttempt[]
   extensionByokMediaProvenance  ExtensionByokMediaProvenance[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[]
+  extensionAiImageExecutionModeLocks ExtensionAiImageExecutionModeLock[] @relation("ExtensionAiImageExecutionModeLockShop")
 
   @@unique([id, userId])
   @@index([userId])
@@ -961,6 +966,8 @@ model SourceListingWorkflow {
   ozonPublishAttempts            OzonPublishAttempt[]
   aiMediaApplicationMutations    AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationTarget")
   extensionByokMediaProvenance   ExtensionByokMediaProvenance[]
+  extensionHostedAiImagePlanBindings ExtensionHostedAiImagePlanBinding[]
+  extensionHostedListingAssignments  ExtensionHostedAiImageListingAssignment[]
 
   @@unique([id, ownerUserId], map: "source_listing_workflow_owner_key")
   @@unique([id, currentRevision], map: "source_listing_workflow_current_pointer_key")
@@ -1005,6 +1012,9 @@ model SourceListingDraftVersion {
   aiMediaMutationsAfter   AiMediaListingDraftApplicationMutation[] @relation("AiMediaListingDraftMutationAfter")
   extensionByokMediaProvenance ExtensionByokMediaProvenance[] @relation("ExtensionByokMediaSourceDraft")
   extensionByokMediaBindings   ExtensionByokMediaProvenance[] @relation("ExtensionByokMediaBoundDraft")
+  extensionHostedAssignmentsFrom ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentSourceDraft")
+  extensionHostedAssignmentsTo   ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentBoundDraft")
+  extensionAiImageExecutionModeLocks ExtensionAiImageExecutionModeLock[] @relation("ExtensionAiImageExecutionModeLockDraft")
 
   @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
   @@unique([workflowId, revision, ownerUserId, draftVersion], map: "source_listing_draft_ai_media_context_key")
@@ -2920,6 +2930,7 @@ model AiImageJob {
   applicationMutations   AiMediaApplicationMutation[]
   listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   costReservation        AiCostReservation?
+  extensionHostedListingAssignments        ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentJob")
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
   @@unique([id, ownerUserId], name: "ai_image_job_id_owner", map: "ai_image_job_id_owner")
@@ -2964,6 +2975,7 @@ model MediaAsset {
   listingDraftApplicationMutations AiMediaListingDraftApplicationMutation[]
   aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]
   extensionByokMediaProvenance     ExtensionByokMediaProvenance[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[]
 
   @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend], map: "media_asset_source_capture_storage_key")
   @@unique([id, ownerUserId], name: "media_asset_id_owner", map: "media_asset_id_owner")
@@ -3011,6 +3023,7 @@ model AiMediaWorkflow {
   lineage               MediaAssetLineage[]
   costReservations      AiCostReservation[]
   suiteSlot             AiMediaSuiteSlot?    @relation("AiMediaSuiteSlotWorkflow")
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentChildWorkflow")
 
   @@unique([id, ownerUserId], name: "ai_media_workflow_id_owner", map: "ai_media_workflow_id_owner")
   @@unique([ownerUserId, idempotencyKey], name: "ai_media_workflow_owner_idempotency", map: "ai_media_workflow_owner_idempotency")
@@ -3224,6 +3237,8 @@ model AiMediaPlan {
   versions                AiMediaPlanVersion[] @relation("AiMediaPlanVersions")
   events                  AiMediaPlanEvent[]
   suites                  AiMediaSuite[]
+  extensionHostedBindings           ExtensionHostedAiImagePlanBinding[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentPlan")
 
   @@unique([id, ownerUserId], name: "ai_media_plan_id_owner", map: "ai_media_plan_id_owner_key")
   @@unique([id, ownerUserId, sourceSubjectId], name: "ai_media_plan_identity", map: "ai_media_plan_identity_key")
@@ -3232,6 +3247,116 @@ model AiMediaPlan {
   @@index([sourceSubjectId, updatedAt], map: "ai_media_plan_subject_updated_idx")
   @@index([contextType, contextId, updatedAt], map: "ai_media_plan_context_updated_idx")
   @@map("ai_media_plans")
+}
+
+model ExtensionHostedAiImagePlanBinding {
+  id                      String                @id @default(cuid())
+  planId                  String                @map("plan_id")
+  ownerUserId             String                @map("owner_user_id")
+  plan                    AiMediaPlan           @relation(fields: [planId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  deviceSessionId         String                @map("device_session_id")
+  shopId                  String                @map("shop_id")
+  listingWorkflowId       String                @map("listing_workflow_id")
+  listingWorkflow         SourceListingWorkflow @relation(fields: [listingWorkflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  sourceCaptureSnapshotId String                @map("source_capture_snapshot_id")
+  supplyGoodsId           String                @map("supply_goods_id")
+  draftRevision           Int                   @map("draft_revision")
+  draftVersion            Int                   @map("draft_version")
+  selectedSkuHash         String                @map("selected_sku_hash") @db.Char(64)
+  candidateMediaHash      String                @map("candidate_media_hash") @db.Char(64)
+  authorityHash           String                @map("authority_hash") @db.Char(64)
+  bindingHash             String                @map("binding_hash") @db.Char(64)
+  createdAt               DateTime              @default(now()) @map("created_at")
+  updatedAt               DateTime              @updatedAt @map("updated_at")
+
+  @@unique([planId, ownerUserId], name: "extension_hosted_ai_plan_binding_plan_owner", map: "extension_hosted_ai_plan_binding_plan_owner_key")
+  @@unique([ownerUserId, authorityHash], name: "extension_hosted_ai_plan_binding_owner_authority", map: "extension_hosted_ai_plan_binding_owner_authority_key")
+  @@unique([ownerUserId, bindingHash], name: "extension_hosted_ai_plan_binding_owner_hash", map: "extension_hosted_ai_plan_binding_owner_hash_key")
+  @@index([ownerUserId, deviceSessionId, listingWorkflowId, draftRevision, draftVersion], map: "extension_hosted_ai_plan_binding_context_idx")
+  @@index([listingWorkflowId, draftRevision, draftVersion], map: "extension_hosted_ai_plan_binding_draft_idx")
+  @@map("extension_hosted_ai_image_plan_bindings")
+}
+
+model ExtensionAiImageExecutionModeLock {
+  ownerUserId       String                    @map("owner_user_id")
+  owner             User                      @relation("ExtensionAiImageExecutionModeLockOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shopId            String                    @map("shop_id")
+  shop              Shop                      @relation("ExtensionAiImageExecutionModeLockShop", fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  listingWorkflowId String                    @map("listing_workflow_id")
+  draftRevision     Int                       @map("draft_revision")
+  draftVersion      Int                       @map("draft_version")
+  draft             SourceListingDraftVersion @relation("ExtensionAiImageExecutionModeLockDraft", fields: [listingWorkflowId, draftRevision, ownerUserId, draftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction)
+  executionMode     String                    @map("execution_mode") @db.VarChar(20)
+  createdAt         DateTime                  @default(now()) @map("created_at")
+
+  @@id([ownerUserId, listingWorkflowId, draftRevision, draftVersion], map: "extension_ai_image_execution_mode_locks_pkey")
+  @@index([shopId, createdAt], map: "extension_ai_image_execution_mode_lock_shop_idx")
+  @@map("extension_ai_image_execution_mode_locks")
+}
+
+model ExtensionHostedAiImageListingAssignment {
+  assignmentId            String                    @id @map("assignment_id") @db.VarChar(100)
+  contractVersion         String                    @map("contract_version") @db.VarChar(100)
+  executionMode           String                    @default("ERP_HOSTED") @map("execution_mode") @db.VarChar(20)
+  batchId                 String                    @map("batch_id") @db.VarChar(100)
+  batchItemOrdinal        Int                       @map("batch_item_ordinal")
+  idempotencyKey          String                    @map("idempotency_key") @db.VarChar(200)
+  requestHash             String                    @map("request_hash") @db.Char(64)
+  authorityHash           String                    @map("authority_hash") @db.Char(64)
+  ownerUserId             String                    @map("owner_user_id")
+  owner                   User                      @relation("ExtensionHostedListingAssignmentOwner", fields: [ownerUserId], references: [id], onDelete: Restrict, map: "extension_hosted_listing_assignment_owner_fkey")
+  actorUserId             String                    @map("actor_user_id")
+  actor                   User                      @relation("ExtensionHostedListingAssignmentActor", fields: [actorUserId], references: [id], onDelete: Restrict, map: "extension_hosted_listing_assignment_actor_fkey")
+  deviceSessionId         String                    @map("device_session_id")
+  deviceSession           ExtensionDeviceSession    @relation(fields: [deviceSessionId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, onUpdate: NoAction, map: "extension_hosted_listing_assignment_device_owner_fkey")
+  shopId                  String                    @map("shop_id")
+  shop                    Shop                      @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict, map: "extension_hosted_listing_assignment_shop_owner_fkey")
+  listingWorkflowId       String                    @map("listing_workflow_id")
+  listingWorkflow         SourceListingWorkflow     @relation(fields: [listingWorkflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_workflow_owner_fkey")
+  sourceDraftRevision     Int                       @map("source_draft_revision")
+  sourceDraftVersion      Int                       @map("source_draft_version")
+  sourceDraft             SourceListingDraftVersion @relation("ExtensionHostedListingAssignmentSourceDraft", fields: [listingWorkflowId, sourceDraftRevision, ownerUserId, sourceDraftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction, map: "extension_hosted_listing_assignment_source_draft_fkey")
+  boundDraftRevision      Int                       @map("bound_draft_revision")
+  boundDraftVersion       Int                       @map("bound_draft_version")
+  boundDraft              SourceListingDraftVersion @relation("ExtensionHostedListingAssignmentBoundDraft", fields: [listingWorkflowId, boundDraftRevision, ownerUserId, boundDraftVersion], references: [workflowId, revision, ownerUserId, draftVersion], onDelete: Restrict, onUpdate: NoAction, map: "extension_hosted_listing_assignment_bound_draft_fkey")
+  sourceCaptureSnapshotId String                    @map("source_capture_snapshot_id")
+  assignmentScope         String                    @map("assignment_scope") @db.VarChar(20)
+  skuKey                  String                    @map("sku_key") @db.VarChar(500)
+  slotKey                 String                    @map("slot_key") @db.VarChar(1024)
+  assignmentOrdinal       Int                       @map("assignment_ordinal")
+  assetId                 String                    @map("asset_id")
+  asset                   MediaAsset                @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_asset_owner_fkey")
+  assetSha256             String                    @map("asset_sha256") @db.Char(64)
+  assignmentSha256        String                    @map("assignment_sha256") @db.Char(64)
+  planId                  String                    @map("plan_id")
+  plan                    AiMediaPlan               @relation("ExtensionHostedListingAssignmentPlan", fields: [planId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_plan_owner_fkey")
+  planVersionId           String                    @map("plan_version_id")
+  planVersion             AiMediaPlanVersion        @relation("ExtensionHostedListingAssignmentPlanVersion", fields: [planVersionId, planId, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_plan_version_fkey")
+  planRevision            Int                       @map("plan_revision")
+  suiteId                 String                    @map("suite_id")
+  suite                   AiMediaSuite              @relation("ExtensionHostedListingAssignmentSuite", fields: [suiteId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_suite_owner_fkey")
+  suiteSlotId             String                    @map("suite_slot_id")
+  suiteSlot               AiMediaSuiteSlot          @relation("ExtensionHostedListingAssignmentSuiteSlot", fields: [suiteSlotId, suiteId, ownerUserId], references: [id, suiteId, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_suite_slot_fkey")
+  childWorkflowId         String                    @map("child_workflow_id")
+  childWorkflow           AiMediaWorkflow           @relation("ExtensionHostedListingAssignmentChildWorkflow", fields: [childWorkflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_child_workflow_fkey")
+  jobId                   String                    @map("job_id")
+  job                     AiImageJob                @relation("ExtensionHostedListingAssignmentJob", fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_job_owner_fkey")
+  reservationId           String                    @map("reservation_id")
+  reservation             AiCostReservation         @relation("ExtensionHostedListingAssignmentReservation", fields: [reservationId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "extension_hosted_listing_assignment_reservation_owner_fkey")
+  settlementId            String                    @map("settlement_id")
+  settlement              AiCostSettlement          @relation("ExtensionHostedListingAssignmentSettlement", fields: [settlementId], references: [id], onDelete: Restrict, map: "extension_hosted_listing_assignment_settlement_fkey")
+  createdAt               DateTime                  @default(now()) @map("created_at")
+
+  @@unique([ownerUserId, idempotencyKey, batchItemOrdinal], map: "extension_hosted_listing_assignment_owner_idempotency_item_key")
+  @@unique([ownerUserId, batchId, batchItemOrdinal], map: "extension_hosted_listing_assignment_owner_batch_item_key")
+  @@unique([assetId, ownerUserId], map: "extension_hosted_listing_assignment_asset_owner_key")
+  @@unique([jobId, ownerUserId], map: "extension_hosted_listing_assignment_job_owner_key")
+  @@unique([listingWorkflowId, boundDraftRevision, assignmentOrdinal], map: "extension_hosted_listing_assignment_bound_revision_ordinal_key")
+  @@index([ownerUserId, deviceSessionId, createdAt], map: "extension_hosted_listing_assignment_device_idx")
+  @@index([ownerUserId, batchId], map: "extension_hosted_listing_assignment_batch_idx")
+  @@index([listingWorkflowId, sourceDraftRevision, sourceDraftVersion], map: "extension_hosted_listing_assignment_source_draft_idx")
+  @@index([planId, suiteId, suiteSlotId], map: "extension_hosted_listing_assignment_suite_idx")
+  @@map("extension_hosted_ai_image_listing_assignments")
 }
 
 model AiMediaPlanningRun {
@@ -3326,6 +3451,7 @@ model AiMediaPlanVersion {
   createdAt               DateTime              @default(now()) @map("created_at")
   events                  AiMediaPlanEvent[]
   suites                  AiMediaSuite[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentPlanVersion")
 
   @@unique([id, planId, ownerUserId], name: "ai_media_plan_version_identity", map: "ai_media_plan_version_identity_key")
   @@unique([planningRunId, planId, ownerUserId], map: "ai_media_plan_version_run_key")
@@ -3378,6 +3504,7 @@ model AiMediaSuite {
   referenceAssets         AiMediaSuiteReferenceAsset[]
   promptSet               AiMediaSuitePromptSet?
   slotPrompts             AiMediaSuiteSlotPrompt[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentSuite")
 
   @@unique([id, ownerUserId], name: "ai_media_suite_id_owner", map: "ai_media_suite_id_owner_key")
   @@unique([ownerUserId, idempotencyKey], name: "ai_media_suite_owner_idempotency", map: "ai_media_suite_owner_idempotency_key")
@@ -3448,6 +3575,7 @@ model AiMediaSuiteSlot {
   errorMessage          String?                 @map("error_message") @db.VarChar(2000)
   createdAt             DateTime                @default(now()) @map("created_at")
   updatedAt             DateTime                @updatedAt @map("updated_at")
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentSuiteSlot")
 
   @@unique([suiteId, ordinal], map: "ai_media_suite_slot_ordinal_key")
   @@unique([suiteId, slotKey], map: "ai_media_suite_slot_key")
@@ -3647,6 +3775,7 @@ model AiCostReservation {
   createdAt                DateTime                @default(now()) @map("created_at")
   updatedAt                DateTime                @updatedAt @map("updated_at")
   settlements              AiCostSettlement[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentReservation")
 
   @@unique([id, ownerUserId], name: "ai_cost_reservation_id_owner", map: "ai_cost_reservations_id_owner_key")
   @@unique([jobId, ownerUserId], name: "ai_cost_reservation_job_owner", map: "ai_cost_reservation_job_owner_key")
@@ -3672,6 +3801,7 @@ model AiCostSettlement {
   billedUnits        Int                  @default(0) @map("billed_units")
   reason             String?              @db.VarChar(500)
   createdAt          DateTime             @default(now()) @map("created_at")
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[] @relation("ExtensionHostedListingAssignmentSettlement")
 
   @@unique([reservationId, idempotencyKey], name: "ai_cost_settlement_reservation_idempotency", map: "ai_cost_settlement_reservation_idempotency")
   @@index([ownerUserId, createdAt], map: "ai_cost_settlements_owner_created_idx")
@@ -3994,6 +4124,7 @@ model ExtensionDeviceSession {
   byokMediaProvenance          ExtensionByokMediaProvenance[]
   byokUploadStaging            ExtensionByokUploadStaging[]
   byokIngestRateEvents         ExtensionByokIngestRateEvent[]
+  extensionHostedListingAssignments ExtensionHostedAiImageListingAssignment[]
 
   @@unique([id, ownerUserId])
   @@index([ownerUserId, status, expiresAt])

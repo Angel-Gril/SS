@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   projectExtensionAiImageSuite,
 } from '../services/extension-ai-image-suite-projection.js';
+import { createRuleBasedImagePromptPlan } from '../services/ai-image-prompt-plan.js';
 
 const binding = {
   snapshotId: 'snapshot-1',
@@ -35,6 +36,16 @@ function approvedPlanState() {
       approvedVersion: {
         id: 'plan-version-1',
         sourceCaptureSnapshotId: 'snapshot-1',
+        planPayload: {
+          compatibilityGroups: [],
+          slots: [{
+            slotKey: 'sku:sku-1:hero',
+            ownership: { level: 'sku', key: 'sku-1' },
+          }, {
+            slotKey: 'sku:sku-1:detail-1',
+            ownership: { level: 'sku', key: 'sku-1' },
+          }],
+        },
       },
       preview: {
         planId: 'plan-1',
@@ -56,6 +67,13 @@ function approvedPlanState() {
           maximumCostCents: 12,
           references: [{ source: { url: 'https://external.example/source.jpg' } }],
           resolvedPrompt: 'must-not-leak slot prompt',
+        }, {
+          ordinal: 1,
+          slotKey: 'sku:sku-1:detail-1',
+          goal: '商品细节图',
+          ownership: { level: 'sku', key: 'sku-1' },
+          estimatedCostCents: 9,
+          maximumCostCents: 12,
         }],
       },
     },
@@ -165,6 +183,65 @@ function currentSuiteState() {
   return state;
 }
 
+function ruleBasedCompatibilityGroupState() {
+  const planPayload = createRuleBasedImagePromptPlan({
+    skus: [{
+      skuKey: 'sku-red',
+      attributes: [{ key: 'color', value: 'red', identityImpact: 'color' }],
+    }, {
+      skuKey: 'sku-blue',
+      attributes: [{ key: 'color', value: 'blue', identityImpact: 'color' }],
+    }],
+    images: [],
+    verifiedFacts: [],
+    galleryGoals: ['scene'],
+  });
+  const state = approvedPlanState() as any;
+  const previewSlots = planPayload.slots.map((slot, ordinal) => ({
+    ordinal,
+    slotKey: slot.slotKey,
+    goal: slot.goal,
+    ownership: { ...slot.ownership },
+    estimatedCostCents: 6,
+    maximumCostCents: 8,
+  }));
+  state.plan.approvedVersion.planPayload = planPayload;
+  state.plan.preview.itemCount = previewSlots.length;
+  state.plan.preview.estimatedCostCents = previewSlots.length * 6;
+  state.plan.preview.maximumCostCents = previewSlots.length * 8;
+  state.plan.preview.slots = previewSlots;
+  state.suite = {
+    id: 'suite-rule-based',
+    planId: 'plan-1',
+    planVersionId: 'plan-version-1',
+    status: 'PLANNED',
+    revision: 1,
+    previewHash: 'a'.repeat(64),
+    pricingVersion: 'pricing-2026-07-24',
+    itemCount: previewSlots.length,
+    estimatedCostCents: previewSlots.length * 6,
+    maximumCostCents: previewSlots.length * 8,
+    provider: 'fake',
+    model: 'fake-image-suite-v1',
+    slots: previewSlots.map((slot, index) => ({
+      id: `slot-rule-${index + 1}`,
+      ordinal: slot.ordinal,
+      slotKey: slot.slotKey,
+      goal: slot.goal,
+      ownershipLevel: slot.ownership.level,
+      ownershipKey: slot.ownership.key,
+      status: 'PLANNED',
+      attempt: 0,
+      revision: 1,
+      estimatedCostCents: slot.estimatedCostCents,
+      maximumCostCents: slot.maximumCostCents,
+      childWorkflowId: null,
+      childWorkflow: null,
+    })),
+  };
+  return { planPayload, state };
+}
+
 describe('extension AI image suite projection', () => {
   it('projects only safe approved-plan fields and START command confirmation data', () => {
     const result = projectExtensionAiImageSuite({
@@ -210,6 +287,15 @@ describe('extension AI image suite projection', () => {
             slotKey: 'sku:sku-1:hero',
             goal: '商品主图',
             ownership: { level: 'sku', key: 'sku-1' },
+            applicableSkuKeys: ['sku-1'],
+            estimatedCostCents: 9,
+            maximumCostCents: 12,
+          }, {
+            ordinal: 1,
+            slotKey: 'sku:sku-1:detail-1',
+            goal: '商品细节图',
+            ownership: { level: 'sku', key: 'sku-1' },
+            applicableSkuKeys: ['sku-1'],
             estimatedCostCents: 9,
             maximumCostCents: 12,
           }],
@@ -261,6 +347,7 @@ describe('extension AI image suite projection', () => {
         slotKey: 'sku:sku-1:hero',
         goal: '商品主图',
         ownership: { level: 'sku', key: 'sku-1' },
+        applicableSkuKeys: ['sku-1'],
         status: 'SUCCEEDED',
         attempt: 1,
         revision: 5,
@@ -297,6 +384,7 @@ describe('extension AI image suite projection', () => {
         slotKey: 'sku:sku-1:detail-1',
         goal: '商品细节图',
         ownership: { level: 'sku', key: 'sku-1' },
+        applicableSkuKeys: ['sku-1'],
         status: 'FAILED',
         attempt: 1,
         revision: 3,
@@ -325,6 +413,92 @@ describe('extension AI image suite projection', () => {
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('projects exact sorted members for a real rule-based compatibility-group plan', () => {
+    const { planPayload, state } = ruleBasedCompatibilityGroupState();
+    const group = planPayload.compatibilityGroups.find((entry) => entry.skuKeys.length === 2)!;
+    const groupSlot = planPayload.slots.find((slot) => (
+      slot.ownership.level === 'compatibility_group'
+      && slot.ownership.key === group.groupKey
+    ))!;
+
+    const result = projectExtensionAiImageSuite({
+      requested: binding,
+      state,
+      ownerUserId: 'owner-1',
+      scopes: [],
+      trustedPreviewOrigins: ['https://erp.example'],
+    });
+
+    expect(group.skuKeys).toEqual(['sku-blue', 'sku-red']);
+    expect(result.plan?.preview.slots.find((slot) => slot.slotKey === groupSlot.slotKey))
+      .toMatchObject({
+        ownership: { level: 'compatibility_group', key: group.groupKey },
+        applicableSkuKeys: ['sku-blue', 'sku-red'],
+      });
+    expect(result.suite?.slots.find((slot) => slot.slotKey === groupSlot.slotKey))
+      .toMatchObject({
+        ownership: { level: 'compatibility_group', key: group.groupKey },
+        applicableSkuKeys: ['sku-blue', 'sku-red'],
+      });
+    expect(result.plan?.preview.slots.filter((slot) => slot.ownership.level === 'sku'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ applicableSkuKeys: ['sku-blue'] }),
+        expect.objectContaining({ applicableSkuKeys: ['sku-red'] }),
+      ]));
+  });
+
+  it('withholds paid and apply commands when a shared group covers only some selected SKUs', () => {
+    const { state } = ruleBasedCompatibilityGroupState();
+    state.plan.approvedVersion.planPayload.compatibilityGroups[0].skuKeys = ['sku-red'];
+    state.executionReady = true;
+    state.suite = null;
+
+    const beforeStart = projectExtensionAiImageSuite({
+      requested: binding,
+      state,
+      ownerUserId: 'owner-1',
+      scopes: ['media:execute', 'listing:review', 'listing:write'],
+      trustedPreviewOrigins: ['https://erp.example'],
+    });
+    expect(beforeStart.plan?.allowedActions).toEqual([]);
+    expect(beforeStart.plan?.commands).toEqual({});
+
+    const existing = ruleBasedCompatibilityGroupState().state;
+    existing.plan.approvedVersion.planPayload.compatibilityGroups[0].skuKeys = ['sku-red'];
+    existing.executionReady = true;
+    const projected = projectExtensionAiImageSuite({
+      requested: binding,
+      state: existing,
+      ownerUserId: 'owner-1',
+      scopes: ['media:execute', 'listing:review', 'listing:write'],
+      trustedPreviewOrigins: ['https://erp.example'],
+    });
+    expect(projected.suite?.allowedActions).not.toContain('CONTINUE');
+    expect(projected.suite?.slots.every((slot) => (
+      !slot.allowedActions.includes('RETRY_SLOT') && !slot.allowedActions.includes('APPLY_SLOT')
+    ))).toBe(true);
+  });
+
+  it.each([
+    ['empty group', (state: any) => {
+      state.plan.approvedVersion.planPayload.compatibilityGroups[0].skuKeys = [];
+    }],
+    ['member outside selected SKUs', (state: any) => {
+      state.plan.approvedVersion.planPayload.compatibilityGroups[0].skuKeys.push('sku-outside');
+    }],
+  ])('rejects malformed compatibility membership: %s', (_label, mutate) => {
+    const { state } = ruleBasedCompatibilityGroupState();
+    mutate(state);
+
+    expect(() => projectExtensionAiImageSuite({
+      requested: binding,
+      state,
+      ownerUserId: 'owner-1',
+      scopes: [],
+      trustedPreviewOrigins: ['https://erp.example'],
+    })).toThrow(expect.objectContaining({ code: 'STALE_CONTEXT', statusCode: 409 }));
   });
 
   it('allows only ERP source-product append after approval and never claims store-draft writes', () => {

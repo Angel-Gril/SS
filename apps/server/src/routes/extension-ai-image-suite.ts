@@ -28,6 +28,7 @@ export interface ExtensionAiImageSuiteRoutesOptions {
   authenticateDevice(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
   loadState(input: {
     ownerUserId: string;
+    deviceSessionId: string;
     snapshotId: string;
     supplyGoodsId: string;
     shopId: string;
@@ -80,6 +81,7 @@ export async function extensionAiImageSuiteRoutes(
     reply.header('Cache-Control', 'no-store');
     const loaderInput = {
       ownerUserId: device.ownerUserId,
+      deviceSessionId: device.sessionId,
       ...parsed.data,
     };
     try {
