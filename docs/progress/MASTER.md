@@ -36,32 +36,33 @@ credential storage, or direct Ozon calls.
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
-- [ ] Phase 4: Complete dual-mode workbench (1/5 tasks) [details](./phase-4-dual-mode-workbench.md)
+- [ ] Phase 4: Complete dual-mode workbench (2/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 25/37 tasks complete (68%).
+Overall: 26/37 tasks complete (70%).
 
 ## Current Status
 
-Phase 4 is in progress with `UI-04` complete. The extension-origin workbench now provides the
-original two-pane SKU/media shell: persistent exact context, immutable execution mode after
-dispatch, keyboard SKU and source navigation, bounded references, ordered hero/detail slots,
-Prompt editing, alternatives, and a responsive task dock. Bootstrap/runtime projections are
-pure-data, revisioned, atomic, cross-SKU safe, and truthfully show pending dispatch as
-`SUBMITTING`. Device/page invalidation fences delayed edit media uploads and clears local handles.
-Real Chrome responsive, 200% zoom-equivalent, overflow, sticky-dock, and keyboard checks passed.
-`UI-05`, `HOST-01`, and `BYOK-01` are now dependency-ready in their respective Phase 4 lanes.
-`QA-02` remains blocked until exact paid Provider approval is recorded. All new flags and
-administrator policy remain default-off; no real Provider request, ERP AI charge, ERP ingest,
-Ozon write, production mutation, or VPS deployment occurred.
+Phase 4 is in progress with `UI-04` and `UI-05` complete. The extension-origin workbench now adds
+truthful progress, pause/continue/cancel intents, charge-confirmed regeneration, deterministic
+main/keyboard ordering, recovery checks, and a read-only publish summary to the two-pane SKU/media
+shell. Bootstrap, runtime, publish, action, and outcome messages bind the exact shop/workflow/draft;
+slot revisions and unique command IDs prevent stale projections and delayed acknowledgements from
+confirming newer work. Candidate review stays explicitly closed until `HOST-01` or `BYOK-01`
+connects a real one-use preview consumer. Chromium responsive, 200% zoom-equivalent, forced-color,
+overflow, sticky-dock, and touch-target checks passed, as did all full regression and package gates.
+`HOST-01` and `BYOK-01` are dependency-ready in parallel; `UI-06` waits for both. `QA-02` remains
+blocked until exact paid Provider approval is recorded. All flags remain default-off; no real
+Provider request, ERP AI charge, ERP ingest, Ozon write, production mutation, or VPS deployment
+occurred.
 
 ## Next Steps
 
-1. Continue Lane A with `UI-05`: connect truthful task progress, pause/continue/cancel, review,
-   regeneration, keyboard ordering, missing/stale checks, and publish summary to the workspace.
-2. Start `HOST-01` and `BYOK-01` in separate owners now that `UI-04` is stable; keep hosted
-   reservation/review and BYOK zero-ERP-generation-charge paths distinct until convergence.
+1. Start `HOST-01`: connect the fact-bound hosted plan, quote/maximum-cost confirmation, queue,
+   stored candidate preview/review, approved draft apply, and renewed-cost retry path.
+2. Start `BYOK-01` in a separate owner: connect batch background jobs, the one-use candidate
+   preview consumer, local review, selected-byte ingest/binding, and zero ERP generation charge.
 3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.

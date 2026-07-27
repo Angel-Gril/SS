@@ -6,11 +6,22 @@
 
   var BOOTSTRAP_EVENT = 'ss-erp:workspace-bootstrap';
   var RUNTIME_EVENT = 'ss-erp:workspace-runtime';
+  var PUBLISH_PROJECTION_EVENT = 'ss-erp:workspace-publish-projection';
   var CLEAR_EVENT = 'ss-erp:workspace-clear';
   var ACTION_EVENT = 'ss-erp:workspace-action';
+  var INTENT_EVENT = 'ss-erp:workspace-intent';
+  var INTENT_OUTCOME_EVENT = 'ss-erp:workspace-intent-outcome';
   var ACTION_CONTRACT_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var LIBRARY_KINDS = Object.freeze(['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
   var EXECUTION_MODES = Object.freeze(['ERP_HOSTED', 'BYOK']);
+  var BINDING_KEYS = Object.freeze([
+    'shopId', 'workflowId', 'draftRevision', 'draftVersion',
+  ]);
+  var INTENT_OUTCOME_KEYS = Object.freeze([
+    'contractVersion', 'binding', 'action', 'commandId',
+    'expectedWorkspaceRevision', 'expectedRuntimeRevision', 'expectedSlotRevision',
+    'slotKey', 'attemptId', 'status', 'errorCode',
+  ]);
   var MAX_PURE_DATA_NODES = 20000;
   var MAX_PURE_DATA_DEPTH = 24;
 
@@ -31,6 +42,16 @@
     referenceSummary: byId('workspaceReferenceSummary'),
     taskDock: byId('workspaceTaskDock'),
     taskSummary: byId('workspaceTaskSummary'),
+    taskProgress: byId('workspaceTaskProgress'),
+    pauseButton: byId('workspacePauseButton'),
+    continueButton: byId('workspaceContinueButton'),
+    taskControlReason: byId('workspaceTaskControlReason'),
+    queuedAttempts: byId('workspaceQueuedAttempts'),
+    publishSummary: byId('workspacePublishSummary'),
+    chargeAcknowledgement: byId('workspaceChargeAcknowledgement'),
+    regenerateButton: byId('workspaceRegenerateButton'),
+    regenerateReason: byId('workspaceRegenerateReason'),
+    orderAnnouncement: byId('workspaceOrderAnnouncement'),
     modeSummary: byId('workspaceModeSummary'),
   };
   var contextBand = typeof global.document.querySelector === 'function'
@@ -42,12 +63,15 @@
   var snapshot = null;
   var selectedLibraryKind = LIBRARY_KINDS[0];
   var runtimeFault = null;
+  var publishFault = null;
   var bootstrapFault = null;
   var promptSlotKey = null;
   var promptDirty = false;
   var lastActionError = null;
   var unsubscribe = null;
   var retainedRuntime = null;
+  var pendingIntent = null;
+  var lastPublishAnnouncementKey = null;
   var runtimeRevisionClock = 0;
 
   global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS = Object.freeze({
@@ -66,13 +90,17 @@
   var slotNodes = new Map();
   var modeNodes = new Map();
   var alternativeGroupNodes = new Map();
+  var queuedAttemptNodes = new Map();
   var modeReasonNode = global.document.createElement('p');
   var libraryEmptyNode = global.document.createElement('li');
+  var queuedEmptyNode = global.document.createElement('li');
   var promptDisabledReasonNode = global.document.createElement('p');
   modeReasonNode.className = 'workspace-mode-reason';
   modeReasonNode.setAttribute('role', 'status');
   libraryEmptyNode.className = 'workspace-library-empty';
   libraryEmptyNode.setAttribute('role', 'status');
+  queuedEmptyNode.className = 'workspace-queued-empty';
+  queuedEmptyNode.textContent = '无排队任务';
   promptDisabledReasonNode.className = 'workspace-prompt-disabled-reason';
   promptDisabledReasonNode.setAttribute('role', 'status');
   nodes.promptInspector.insertBefore(promptDisabledReasonNode, nodes.promptInput);
@@ -176,8 +204,23 @@
     return clone;
   }
 
+  function exactKeys(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    var actual = Object.keys(value);
+    return actual.length === keys.length && keys.every(function (key) {
+      return Object.prototype.hasOwnProperty.call(value, key);
+    });
+  }
+
+  function sameBinding(left, right) {
+    return exactKeys(left, BINDING_KEYS) && exactKeys(right, BINDING_KEYS)
+      && BINDING_KEYS.every(function (key) { return left[key] === right[key]; });
+  }
+
   function mergeRuntimeProjection(previous, current) {
-    if (!previous) return clonePureData(current);
+    if (!previous || !sameBinding(previous.binding, current.binding)) {
+      return clonePureData(current);
+    }
     function mergeRows(left, right, key) {
       var rows = left.map(clonePureData);
       right.forEach(function (item) {
@@ -191,6 +234,7 @@
     }
     return {
       contractVersion: current.contractVersion,
+      binding: clonePureData(current.binding),
       revision: current.revision,
       task: clonePureData(current.task),
       libraryItems: mergeRows(previous.libraryItems, current.libraryItems, 'mediaId'),
@@ -223,6 +267,182 @@
     global.document.dispatchEvent(new global.CustomEvent(ACTION_EVENT, {
       detail: actionDetail(action, values),
     }));
+  }
+
+  function emitIntent(intent, commandId) {
+    if (!isPureData(intent)
+      || intent.contractVersion !== workspaceStateApi.ACTION_INTENT_CONTRACT_VERSION
+      || intent.commandId !== commandId
+      || !snapshot || !sameBinding(intent.binding, snapshot.binding)
+      || typeof global.CustomEvent !== 'function'
+      || typeof global.document.dispatchEvent !== 'function') return false;
+    var targetSlot = snapshot && intent.slotKey
+      ? snapshot.slots.find(function (slot) { return slot.slotKey === intent.slotKey; })
+      : null;
+    pendingIntent = {
+      binding: clonePureData(intent.binding),
+      commandId: intent.commandId,
+      expectedWorkspaceRevision: intent.expectedWorkspaceRevision,
+      expectedRuntimeRevision: intent.expectedRuntimeRevision,
+      expectedSlotRevision: intent.expectedSlotRevision,
+      action: intent.action,
+      slotKey: intent.slotKey,
+      attemptId: intent.attemptId,
+      priorAttemptIds: targetSlot
+        ? targetSlot.alternatives.map(function (alternative) { return alternative.attemptId; })
+        : [],
+    };
+    global.document.dispatchEvent(new global.CustomEvent(INTENT_EVENT, {
+      detail: intent,
+    }));
+    render();
+    return true;
+  }
+
+  function createAndEmitIntent(method, args) {
+    if (!workspace || !snapshot || bootstrapFault || runtimeFault || pendingIntent
+      || typeof workspace[method] !== 'function') return false;
+    try {
+      if (!global.crypto || typeof global.crypto.randomUUID !== 'function') {
+        throw new TypeError('无法创建安全的操作标识，操作已关闭');
+      }
+      var commandId = global.crypto.randomUUID();
+      if (typeof commandId !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+          .test(commandId)) {
+        throw new TypeError('无法创建安全的操作标识，操作已关闭');
+      }
+      var intentArgs = (args || []).concat([commandId]);
+      var intent = workspace[method].apply(workspace, intentArgs);
+      lastActionError = null;
+      return emitIntent(intent, commandId);
+    } catch (error) {
+      lastActionError = error && error.reason
+        ? humanDisabledReason(error.reason)
+        : error && typeof error.message === 'string'
+          ? error.message : '工作区操作被拒绝';
+      render();
+      return false;
+    }
+  }
+
+  function focusNode(node) {
+    if (node && typeof node.focus === 'function') {
+      node.focus();
+      return true;
+    }
+    return false;
+  }
+
+  function restoreIntentFocus(intent) {
+    if (!intent) return;
+    var active = global.document.activeElement;
+    if (active && active !== global.document.body) return;
+    if (intent.action === 'CANCEL_QUEUED') {
+      var queuedControls = Array.from(queuedAttemptNodes.values()).map(function (row) {
+        return row._workspace.cancelButton;
+      });
+      var nextQueued = queuedControls.find(function (button) { return !button.disabled; });
+      if (focusNode(nextQueued)) return;
+    }
+    if (intent.slotKey) {
+      var group = alternativeGroupNodes.get(intent.slotKey);
+      var alternativeRow = group && intent.attemptId
+        ? group._workspace.alternatives.get(intent.attemptId) : null;
+      if (alternativeRow && !alternativeRow._workspace.button.disabled
+        && focusNode(alternativeRow._workspace.button)) return;
+      var slotRow = slotNodes.get(intent.slotKey);
+      if (slotRow && focusNode(slotRow._workspace.selectButton)) return;
+    }
+    if (intent.action === 'PAUSE_AFTER_CURRENT' && !nodes.continueButton.disabled
+      && focusNode(nodes.continueButton)) return;
+    if (intent.action === 'CONTINUE' && !nodes.pauseButton.disabled
+      && focusNode(nodes.pauseButton)) return;
+    focusNode(nodes.taskDock);
+  }
+
+  function intentPostconditionMet(intent, nextSnapshot) {
+    if (!intent || !nextSnapshot || !sameBinding(intent.binding, nextSnapshot.binding)
+      || !Number.isSafeInteger(nextSnapshot.runtimeRevision)
+      || nextSnapshot.runtimeRevision <= intent.expectedRuntimeRevision) return false;
+    var taskState = nextSnapshot.taskSummary.schedulerState;
+    if (intent.action === 'PAUSE_AFTER_CURRENT') {
+      return taskState === 'PAUSING' || taskState === 'PAUSED';
+    }
+    if (intent.action === 'CONTINUE') {
+      return taskState !== 'PAUSING' && taskState !== 'PAUSED';
+    }
+    var slot = intent.slotKey && nextSnapshot.slots.find(function (candidate) {
+      return candidate.slotKey === intent.slotKey;
+    });
+    if (!slot) return false;
+    if (!Number.isSafeInteger(intent.expectedSlotRevision)
+      || !Number.isSafeInteger(slot.slotRevision)
+      || slot.slotRevision <= intent.expectedSlotRevision) return false;
+    var attempt = intent.attemptId && slot.alternatives.find(function (candidate) {
+      return candidate.attemptId === intent.attemptId;
+    });
+    if (intent.action === 'CANCEL_QUEUED') {
+      return !attempt || attempt.state === 'CANCELLED';
+    }
+    if (intent.action === 'KEEP_ATTEMPT') {
+      return slot.selectedAttemptId === intent.attemptId && Boolean(attempt
+        && ['CANDIDATE_READY', 'APPROVED', 'INGESTING', 'INGESTED', 'BOUND']
+          .includes(attempt.state));
+    }
+    if (intent.action === 'REJECT_ATTEMPT') {
+      return Boolean(attempt && attempt.state === 'REJECTED');
+    }
+    if (intent.action === 'REGENERATE_SLOT') {
+      return slot.alternatives.some(function (candidate) {
+        return !intent.priorAttemptIds.includes(candidate.attemptId);
+      });
+    }
+    return false;
+  }
+
+  function matchesPendingIntentOutcome(detail) {
+    if (!pendingIntent || !snapshot || !isPureData(detail)
+      || !exactKeys(detail, INTENT_OUTCOME_KEYS)
+      || detail.contractVersion !== workspaceStateApi.ACTION_OUTCOME_CONTRACT_VERSION
+      || !['APPLIED', 'REJECTED'].includes(detail.status)
+      || (detail.status === 'APPLIED' && detail.errorCode !== null)
+      || (detail.status === 'REJECTED'
+        && (typeof detail.errorCode !== 'string'
+          || !/^[A-Z][A-Z0-9_]{0,199}$/u.test(detail.errorCode)))
+      || !sameBinding(detail.binding, pendingIntent.binding)
+      || !sameBinding(detail.binding, snapshot.binding)) return false;
+    return detail.action === pendingIntent.action
+      && detail.commandId === pendingIntent.commandId
+      && detail.expectedWorkspaceRevision === pendingIntent.expectedWorkspaceRevision
+      && detail.expectedRuntimeRevision === pendingIntent.expectedRuntimeRevision
+      && detail.expectedSlotRevision === pendingIntent.expectedSlotRevision
+      && detail.slotKey === pendingIntent.slotKey
+      && detail.attemptId === pendingIntent.attemptId;
+  }
+
+  function rejectedIntentMessage(errorCode) {
+    var reason = humanDisabledReason(errorCode);
+    return reason === errorCode
+      ? '操作被拒绝：' + errorCode
+      : '操作被拒绝：' + reason + '（' + errorCode + '）';
+  }
+
+  function applyIntentOutcome(detail) {
+    if (!matchesPendingIntentOutcome(detail)) return;
+    var resolvedIntent = pendingIntent;
+    if (detail.status === 'REJECTED') {
+      pendingIntent = null;
+      lastActionError = rejectedIntentMessage(detail.errorCode);
+      render();
+      restoreIntentFocus(resolvedIntent);
+      return;
+    }
+    if (!intentPostconditionMet(resolvedIntent, snapshot)) return;
+    pendingIntent = null;
+    lastActionError = null;
+    render();
+    restoreIntentFocus(resolvedIntent);
   }
 
   function selectedSlot() {
@@ -303,6 +523,36 @@
     return {
       BATCH_COORDINATOR_NOT_READY: '批量任务协调器尚未接入此工作台',
       HOSTED_ADAPTER_NOT_READY: 'ERP 托管执行尚未接入此工作台',
+      PUBLISH_COORDINATOR_NOT_READY: '发布协调器尚未接入',
+      BATCH_PUBLISH_COORDINATOR_NOT_READY: '批量发布协调器尚未接入',
+      TASK_NOT_RUNNING: '当前没有可暂停的运行任务',
+      PAUSE_ALREADY_REQUESTED: '已请求在当前任务完成后暂停',
+      TASK_ALREADY_PAUSED: '任务已经暂停',
+      TASK_NOT_PAUSED: '任务当前未暂停',
+      NO_QUEUED_ATTEMPTS: '当前没有排队任务',
+      ATTEMPT_NOT_QUEUED: '该任务已不在排队状态',
+      ATTEMPT_NOT_REVIEWABLE: '该候选当前不可审核',
+      ATTEMPT_ALREADY_SELECTED: '该候选已经保留',
+      SLOT_REVISION_UNAVAILABLE: '尚未收到可信的槽位版本，操作已关闭',
+      PREVIEW_CHANNEL_NOT_READY: '候选预览通道尚未接入',
+      SLOT_NOT_EXECUTED: '当前槽位尚未执行',
+      SLOT_EXECUTION_ACTIVE: '当前槽位仍在处理',
+      ATTEMPT_LIMIT_REACHED: '候选数量已达到上限',
+      UNKNOWN_OUTCOME_REQUIRES_RECOVERY: 'Provider 结果待核对，不能普通重试',
+      PROVIDER_OUTCOME_RECONCILIATION_REQUIRED: 'Provider 结果待核对，需要先完成安全恢复',
+      DRAFT_STATUS_UNKNOWN: '草稿状态待确认',
+      DRAFT_STALE: '草稿已过期，需要重新核对',
+      MISSING_SELECTION: '存在尚未保留候选的槽位',
+      RESULT_NOT_BOUND: '存在尚未绑定到 ERP 草稿的结果',
+      UNKNOWN_OUTCOME: '存在 Provider 结果待核对的槽位',
+      RESULT_EXPIRED: '存在已过期的结果',
+      RESULT_REJECTED: '存在仅有已驳回结果的槽位',
+      MEDIA_REBIND_REQUIRED: '媒体结果变化，需要重新绑定并生成发布预览',
+      ORDER_REBIND_REQUIRED: '图片顺序或主图已变化，需要重新绑定发布顺序',
+      PUBLISH_BASIS_STALE: '工作区或任务版本已变化，需要重新生成发布预览',
+      NO_MEDIA_SLOTS: '当前工作区没有可发布的图片槽位',
+      ORDER_LOCKED_WHILE_ACTIVE: '任务仍在处理或排队，暂不能调整图片顺序',
+      ACTION_IN_FLIGHT: '正在等待任务协调器确认上一项操作',
     }[reason] || reason;
   }
 
@@ -617,15 +867,18 @@
     row.className = 'workspace-slot-item';
     var selectButton = createButton('', 'select-slot', { slotKey: slot.slotKey });
     selectButton.className = 'workspace-slot-select';
-    selectButton.setAttribute('role', 'option');
     var title = global.document.createElement('strong');
     var meta = global.document.createElement('span');
     selectButton.appendChild(title);
     selectButton.appendChild(meta);
     var actions = global.document.createElement('div');
     actions.className = 'workspace-slot-actions';
-    var upButton = createButton('上移', 'move-slot-up', { slotKey: slot.slotKey });
-    var downButton = createButton('下移', 'move-slot-down', { slotKey: slot.slotKey });
+    actions.setAttribute('role', 'group');
+    actions.setAttribute('aria-label', '槽位编排操作');
+    var mainButton = createButton('主图', 'set-main-slot', { slotKey: slot.slotKey });
+    var upButton = createButton('↑', 'move-slot-up', { slotKey: slot.slotKey });
+    var downButton = createButton('↓', 'move-slot-down', { slotKey: slot.slotKey });
+    mainButton.setAttribute('aria-label', '设为主图 ' + slot.slotKey);
     upButton.setAttribute('aria-label', '上移 ' + slot.slotKey);
     downButton.setAttribute('aria-label', '下移 ' + slot.slotKey);
     selectButton.addEventListener('click', function (event) {
@@ -633,8 +886,34 @@
       if (blockDirtyPromptNavigation()) return;
       callWorkspace('selectSlot', [slot.slotKey], 'SELECT_SLOT', { slotKey: slot.slotKey });
     });
+    selectButton.addEventListener('keydown', function (event) {
+      if (!trustedActivation(event) || selectButton.disabled
+        || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      if (blockDirtyPromptNavigation()) return;
+      if (snapshot.taskSummary.activeAttempts > 0
+        || snapshot.taskSummary.queuedAttempts > 0) {
+        lastActionError = humanDisabledReason('ORDER_LOCKED_WHILE_ACTIVE');
+        renderTaskSummary();
+        return;
+      }
+      if (callWorkspace('moveSlotByKeyboard', [slot.slotKey, event.key], 'MOVE_SLOT', {
+        slotKey: slot.slotKey,
+        direction: event.key,
+      })) {
+        announceSlotOrder(slot.slotKey);
+        focusSlotAction(slot.slotKey, 'selectButton');
+      }
+    });
+    mainButton.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || mainButton.disabled) return;
+      if (callWorkspace('setMainSlot', [slot.slotKey], 'SET_MAIN_SLOT', {
+        slotKey: slot.slotKey,
+      })) focusSlotAction(slot.slotKey, 'mainButton');
+    });
     upButton.addEventListener('click', function (event) {
       if (!trustedActivation(event) || upButton.disabled) return;
+      if (blockDirtyPromptNavigation()) return;
       if (snapshot.selectedSlotKey !== slot.slotKey
         && !callWorkspace('selectSlot', [slot.slotKey], 'SELECT_SLOT', {
           slotKey: slot.slotKey,
@@ -643,9 +922,12 @@
         slotKey: slot.slotKey,
         direction: 'UP',
       });
+      announceSlotOrder(slot.slotKey);
+      focusSlotAction(slot.slotKey, 'upButton');
     });
     downButton.addEventListener('click', function (event) {
       if (!trustedActivation(event) || downButton.disabled) return;
+      if (blockDirtyPromptNavigation()) return;
       if (snapshot.selectedSlotKey !== slot.slotKey
         && !callWorkspace('selectSlot', [slot.slotKey], 'SELECT_SLOT', {
           slotKey: slot.slotKey,
@@ -654,7 +936,10 @@
         slotKey: slot.slotKey,
         direction: 'DOWN',
       });
+      announceSlotOrder(slot.slotKey);
+      focusSlotAction(slot.slotKey, 'downButton');
     });
+    actions.appendChild(mainButton);
     actions.appendChild(upButton);
     actions.appendChild(downButton);
     row.appendChild(selectButton);
@@ -663,10 +948,30 @@
       selectButton: selectButton,
       title: title,
       meta: meta,
+      mainButton: mainButton,
       upButton: upButton,
       downButton: downButton,
     };
     return row;
+  }
+
+  function focusSlotAction(slotKey, name) {
+    var row = slotNodes.get(slotKey);
+    var control = row && row._workspace && row._workspace[name];
+    if (control && typeof control.focus === 'function') control.focus();
+  }
+
+  function announceSlotOrder(slotKey) {
+    if (!snapshot || !nodes.orderAnnouncement) return;
+    var slot = snapshot.slots.find(function (candidate) {
+      return candidate.slotKey === slotKey;
+    });
+    var sku = slot && snapshot.skus.find(function (candidate) {
+      return candidate.skuKey === slot.skuKey;
+    });
+    if (!slot || !sku) return;
+    nodes.orderAnnouncement.textContent = slot.slotKey + ' 已移至第 '
+      + (slot.position + 1) + ' 位，共 ' + sku.slotKeys.length + ' 张';
   }
 
   function renderSlots() {
@@ -681,22 +986,35 @@
       createSlotRow,
       function (row, slot, index) {
         var selected = slot.slotKey === snapshot.selectedSlotKey;
+        var orderingLocked = snapshot.taskSummary.activeAttempts > 0
+          || snapshot.taskSummary.queuedAttempts > 0;
         row._workspace.title.textContent = (index + 1) + '. ' + humanRole(slot.role);
         row._workspace.meta.textContent = humanStatus(slot.status)
           + (slot.isMain ? ' · 主图' : '');
         row._workspace.selectButton.disabled = Boolean(runtimeFault);
         row._workspace.selectButton.setAttribute('aria-current', selected ? 'true' : 'false');
-        row._workspace.selectButton.setAttribute('aria-selected', selected ? 'true' : 'false');
-        row._workspace.upButton.disabled = true;
-        row._workspace.downButton.disabled = true;
-        row._workspace.upButton.title = '槽位排序将在审核排序阶段开放';
-        row._workspace.downButton.title = '槽位排序将在审核排序阶段开放';
+        row._workspace.mainButton.disabled = Boolean(runtimeFault || orderingLocked);
+        row._workspace.mainButton.setAttribute('aria-pressed', slot.isMain ? 'true' : 'false');
+        row._workspace.mainButton.title = orderingLocked
+          ? humanDisabledReason('ORDER_LOCKED_WHILE_ACTIVE')
+          : slot.isMain ? '当前槽位已是主图' : '设为当前 SKU 主图';
+        row._workspace.upButton.disabled = Boolean(
+          runtimeFault || orderingLocked || index === 0,
+        );
+        row._workspace.downButton.disabled = Boolean(
+          runtimeFault || orderingLocked || index === slots.length - 1,
+        );
+        row._workspace.upButton.title = orderingLocked
+          ? humanDisabledReason('ORDER_LOCKED_WHILE_ACTIVE')
+          : index === 0 ? '已经是第一张' : '向前移动一位';
+        row._workspace.downButton.title = orderingLocked
+          ? humanDisabledReason('ORDER_LOCKED_WHILE_ACTIVE')
+          : index === slots.length - 1 ? '已经是最后一张' : '向后移动一位';
         row.classList.toggle('is-selected', selected);
         row.classList.toggle('is-main', slot.isMain);
       },
     );
     nodes.slotList.setAttribute('aria-label', '图片槽位顺序');
-    nodes.slotList.setAttribute('role', 'listbox');
   }
 
   function createAlternativeGroup(slot) {
@@ -711,16 +1029,20 @@
     list.setAttribute('aria-label', '候选结果');
     var reason = global.document.createElement('p');
     reason.className = 'workspace-alternative-reason';
-    reason.textContent = '候选选择将在统一审核阶段接通';
+    reason.id = 'workspaceAlternativeReason-' + slot.slotKey;
+    reason.setAttribute('role', 'status');
+    reason.setAttribute('aria-live', 'polite');
+    reason.textContent = '';
     group.appendChild(heading);
     group.appendChild(reason);
     group.appendChild(list);
-    group._workspace = { list: list, alternatives: new Map() };
+    group._workspace = { list: list, reason: reason, alternatives: new Map() };
     return group;
   }
 
   function createAlternativeRow(slot, alternative) {
     var row = global.document.createElement('li');
+    row.className = 'workspace-alternative-item';
     var button = createButton('', 'select-alternative', {
       slotKey: slot.slotKey,
       attemptId: alternative.attemptId,
@@ -730,8 +1052,43 @@
     var meta = global.document.createElement('span');
     button.appendChild(label);
     button.appendChild(meta);
+    var actions = global.document.createElement('div');
+    actions.className = 'workspace-alternative-actions';
+    actions.setAttribute('role', 'group');
+    actions.setAttribute('aria-label', '候选审核操作');
+    var keepButton = createButton('保留此图', 'keep-attempt', {
+      slotKey: slot.slotKey,
+      attemptId: alternative.attemptId,
+    });
+    var rejectButton = createButton('驳回', 'reject-attempt', {
+      slotKey: slot.slotKey,
+      attemptId: alternative.attemptId,
+    });
+    keepButton.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || keepButton.disabled) return;
+      createAndEmitIntent('createKeepAttemptIntent', [
+        slot.slotKey,
+        alternative.attemptId,
+      ]);
+    });
+    rejectButton.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || rejectButton.disabled) return;
+      createAndEmitIntent('createRejectAttemptIntent', [
+        slot.slotKey,
+        alternative.attemptId,
+      ]);
+    });
+    actions.appendChild(keepButton);
+    actions.appendChild(rejectButton);
     row.appendChild(button);
-    row._workspace = { button: button, label: label, meta: meta };
+    row.appendChild(actions);
+    row._workspace = {
+      button: button,
+      label: label,
+      meta: meta,
+      keepButton: keepButton,
+      rejectButton: rejectButton,
+    };
     return row;
   }
 
@@ -745,6 +1102,9 @@
       createAlternativeGroup,
       function (group, slot) {
         group.hidden = slot.slotKey !== snapshot.selectedSlotKey;
+        var reviewReason = 'PREVIEW_CHANNEL_NOT_READY';
+        group._workspace.reason.hidden = false;
+        group._workspace.reason.textContent = humanDisabledReason(reviewReason);
         reconcile(
           group._workspace.list,
           group._workspace.alternatives,
@@ -757,11 +1117,34 @@
             row._workspace.meta.textContent = humanStatus(alternative.state)
               + (alternative.errorCode ? ' · ' + alternative.errorCode : '');
             row._workspace.button.disabled = true;
-            row._workspace.button.title = '候选选择将在统一审核阶段接通';
+            row._workspace.button.title = humanDisabledReason('PREVIEW_CHANNEL_NOT_READY');
             row._workspace.button.setAttribute(
-              'aria-label', '候选 ' + (index + 1) + '，候选选择将在统一审核阶段接通',
+              'aria-label', '候选 ' + (index + 1) + '，' + humanStatus(alternative.state)
+                + '，候选预览通道尚未接入',
             );
             row._workspace.button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+            row._workspace.keepButton.disabled = true;
+            row._workspace.rejectButton.disabled = true;
+            var keepDisabledTitle = humanDisabledReason(reviewReason);
+            var rejectDisabledTitle = keepDisabledTitle;
+            row._workspace.keepButton.title = keepDisabledTitle;
+            row._workspace.rejectButton.title = rejectDisabledTitle;
+            row._workspace.keepButton.setAttribute(
+              'aria-label', '保留候选 ' + (index + 1) + '，' + humanStatus(alternative.state)
+                + (row._workspace.keepButton.disabled
+                  ? '，不可用：' + keepDisabledTitle : ''),
+            );
+            row._workspace.rejectButton.setAttribute(
+              'aria-label', '驳回候选 ' + (index + 1) + '，' + humanStatus(alternative.state)
+                + (row._workspace.rejectButton.disabled
+                  ? '，不可用：' + rejectDisabledTitle : ''),
+            );
+            row._workspace.keepButton.setAttribute(
+              'aria-describedby', group._workspace.reason.id,
+            );
+            row._workspace.rejectButton.setAttribute(
+              'aria-describedby', group._workspace.reason.id,
+            );
             row.classList.toggle('is-selected', selected);
           },
         );
@@ -778,6 +1161,7 @@
       promptSlotKey = slot ? slot.slotKey : null;
       promptDirty = false;
     }
+    if (slotChanged) nodes.chargeAcknowledgement.checked = false;
     var disabled = !slot || Boolean(runtimeFault) || slot.promptEditable !== true;
     var reasonLabels = {
       SLOT_EXECUTION_FROZEN: '当前槽位任务已派发，提示词不可修改',
@@ -793,6 +1177,26 @@
     nodes.negativePromptInput.disabled = disabled;
     nodes.savePromptButton.disabled = disabled || !promptDirty;
     renderAlternativeGroups();
+    renderRegenerateControl(slot);
+  }
+
+  function renderRegenerateControl(slot) {
+    var reason = !slot
+      ? '请先选择槽位'
+      : pendingIntent
+        ? 'ACTION_IN_FLIGHT'
+        : slot.regenerateDisabledReason;
+    var available = Boolean(slot && slot.regenerateAvailable && !runtimeFault && !pendingIntent);
+    nodes.chargeAcknowledgement.disabled = !available;
+    nodes.regenerateButton.disabled = !available
+      || nodes.chargeAcknowledgement.checked !== true;
+    nodes.regenerateButton.title = reason ? humanDisabledReason(reason) : '';
+    nodes.regenerateButton.setAttribute(
+      'aria-label',
+      '重新生成当前槽位' + (reason ? '，不可用：' + humanDisabledReason(reason) : ''),
+    );
+    nodes.regenerateReason.hidden = !reason;
+    nodes.regenerateReason.textContent = reason ? humanDisabledReason(reason) : '';
   }
 
   function renderReferenceSummary() {
@@ -809,6 +1213,173 @@
     }
     nodes.referenceSummary.textContent = (slot.referenceSource === 'GLOBAL'
       ? '继承全局参考图 ' : '当前槽位参考图 ') + slot.referenceIds.length + ' 张';
+  }
+
+  function renderTaskProgress() {
+    var task = snapshot && snapshot.taskSummary;
+    var value = task ? task.selectedSlots : 0;
+    var maximum = task ? task.totalSlots : 0;
+    nodes.taskProgress.textContent = value + ' / ' + maximum + ' 个槽位已保留候选';
+    nodes.taskProgress.setAttribute('aria-valuenow', String(value));
+    nodes.taskProgress.setAttribute('aria-valuemax', String(maximum));
+    if (nodes.taskProgress.style && typeof nodes.taskProgress.style.setProperty === 'function') {
+      nodes.taskProgress.style.setProperty(
+        '--workspace-progress',
+        maximum > 0 ? Math.round((value / maximum) * 100) + '%' : '0%',
+      );
+    }
+  }
+
+  function renderTaskControls() {
+    var controls = snapshot && snapshot.taskControls;
+    var pause = controls && controls.pauseAfterCurrent;
+    var resume = controls && controls.continue;
+    nodes.pauseButton.disabled = !pause || !pause.enabled || Boolean(
+      runtimeFault || pendingIntent,
+    );
+    nodes.continueButton.disabled = !resume || !resume.enabled || Boolean(
+      runtimeFault || pendingIntent,
+    );
+    var reason = pendingIntent
+      ? 'ACTION_IN_FLIGHT'
+      : pause && !pause.enabled && resume && !resume.enabled
+        ? snapshot.taskSummary.disabledReason
+          || pause.disabledReason
+          || resume.disabledReason
+        : null;
+    nodes.taskControlReason.hidden = !reason;
+    nodes.taskControlReason.textContent = reason ? humanDisabledReason(reason) : '';
+    nodes.pauseButton.title = nodes.pauseButton.disabled && pause
+      ? humanDisabledReason(pendingIntent ? 'ACTION_IN_FLIGHT' : pause.disabledReason) : '';
+    nodes.continueButton.title = nodes.continueButton.disabled && resume
+      ? humanDisabledReason(pendingIntent ? 'ACTION_IN_FLIGHT' : resume.disabledReason) : '';
+    nodes.pauseButton.setAttribute(
+      'aria-label',
+      '当前任务完成后暂停' + (nodes.pauseButton.title ? '，不可用：' + nodes.pauseButton.title : ''),
+    );
+    nodes.continueButton.setAttribute(
+      'aria-label',
+      '继续任务' + (nodes.continueButton.title ? '，不可用：' + nodes.continueButton.title : ''),
+    );
+  }
+
+  function createQueuedAttemptRow(item) {
+    var row = global.document.createElement('li');
+    row.className = 'workspace-queued-attempt';
+    var label = global.document.createElement('span');
+    var cancelButton = createButton('取消排队', 'cancel-queued', {
+      slotKey: item.slotKey,
+      attemptId: item.attemptId,
+    });
+    cancelButton.setAttribute(
+      'aria-label', '取消排队 ' + item.slotKey + '，任务 ' + item.attemptId,
+    );
+    cancelButton.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || cancelButton.disabled) return;
+      createAndEmitIntent('createCancelQueuedIntent', [item.attemptId]);
+    });
+    row.appendChild(label);
+    row.appendChild(cancelButton);
+    row._workspace = { label: label, cancelButton: cancelButton };
+    return row;
+  }
+
+  function renderQueuedAttempts() {
+    var rows = [];
+    if (snapshot) snapshot.slots.forEach(function (slot) {
+      slot.alternatives.forEach(function (alternative) {
+        if (alternative.state === 'QUEUED') rows.push({
+          slotKey: slot.slotKey,
+          attemptId: alternative.attemptId,
+        });
+      });
+    });
+    var cancelControl = snapshot && snapshot.taskControls.cancelQueued;
+    reconcile(
+      nodes.queuedAttempts,
+      queuedAttemptNodes,
+      rows,
+      function (item) { return item.attemptId; },
+      createQueuedAttemptRow,
+      function (row, item) {
+        row._workspace.label.textContent = item.slotKey + ' · ' + item.attemptId;
+        row._workspace.cancelButton.disabled = Boolean(
+          runtimeFault || pendingIntent || !cancelControl || !cancelControl.enabled
+            || !cancelControl.attemptIds.includes(item.attemptId),
+        );
+        row._workspace.cancelButton.title = row._workspace.cancelButton.disabled
+          ? humanDisabledReason(pendingIntent
+            ? 'ACTION_IN_FLIGHT'
+            : cancelControl && cancelControl.disabledReason || 'ATTEMPT_NOT_QUEUED')
+          : '只取消尚未提交给 Provider 的排队任务';
+        row._workspace.cancelButton.setAttribute(
+          'aria-describedby', 'workspaceTaskControlReason',
+        );
+      },
+    );
+    queuedEmptyNode.hidden = rows.length > 0;
+    nodes.queuedAttempts.appendChild(queuedEmptyNode);
+  }
+
+  function renderPublishSummary() {
+    if (publishFault) {
+      nodes.publishSummary.textContent = publishFault;
+      lastPublishAnnouncementKey = null;
+      nodes.publishSummary.setAttribute('data-state', 'INVALID');
+      nodes.publishSummary.setAttribute('data-eligible', 'false');
+      nodes.publishSummary.setAttribute('role', 'alert');
+      return;
+    }
+    var summary = snapshot && snapshot.publishSummary;
+    if (!summary) {
+      nodes.publishSummary.textContent = '正在检查草稿与媒体绑定。';
+      return;
+    }
+    var draftLabel = summary.draftState === 'CURRENT'
+      ? '当前版本'
+      : summary.draftState === 'STALE' ? '已过期' : '待确认';
+    var lines = [
+      '草稿状态：' + draftLabel,
+      '可发布媒体：' + summary.readySlots + ' / ' + summary.totalSlots,
+    ];
+    if (summary.missingSlots) lines.push(summary.missingSlots + ' 个槽位待补齐');
+    if (summary.unboundSlots) lines.push(summary.unboundSlots + ' 个结果尚未绑定');
+    if (summary.unknownOutcomeSlots) {
+      lines.push(summary.unknownOutcomeSlots + ' 个结果待核对');
+    }
+    if (summary.expiredSlots) lines.push(summary.expiredSlots + ' 个结果已过期');
+    if (summary.rejectedSlots) {
+      lines.push(summary.rejectedSlots + ' 个槽位仅有已驳回结果');
+    }
+    if (summary.orderedMedia.length > 0) {
+      var orderBasisStale = summary.blockerCodes.includes('PUBLISH_BASIS_STALE')
+        || summary.blockerCodes.includes('ORDER_REBIND_REQUIRED');
+      lines.push((orderBasisStale ? '当前顺序（待重新核对）：' : '已核对顺序：')
+        + summary.orderedMedia.map(function (item) {
+        return item.skuKey + ' / ' + item.slotKey + (item.role === 'HERO' ? '（主图）' : '');
+        }).join('；'));
+    }
+    if (summary.eligible) {
+      lines.push('图片顺序和主图已通过当前发布投影核对。');
+    } else {
+      lines.push('发布已阻止：' + summary.blockerCodes.map(humanDisabledReason).join('；'));
+    }
+    var nextText = lines.join('\n');
+    var nextState = summary.eligible
+      ? 'READY' : summary.draftState === 'STALE' ? 'STALE' : 'BLOCKED';
+    var announcementKey = nextState + '|' + nextText;
+    if (lastPublishAnnouncementKey !== announcementKey) {
+      nodes.publishSummary.textContent = nextText;
+      lastPublishAnnouncementKey = announcementKey;
+    }
+    nodes.publishSummary.setAttribute(
+      'data-state',
+      nextState,
+    );
+    nodes.publishSummary.setAttribute('data-eligible', summary.eligible ? 'true' : 'false');
+    nodes.publishSummary.setAttribute(
+      'role', summary.draftState === 'STALE' ? 'alert' : 'status',
+    );
   }
 
   function renderTaskSummary() {
@@ -857,6 +1428,10 @@
     renderPromptInspector();
     renderReferenceSummary();
     renderTaskSummary();
+    renderTaskProgress();
+    renderTaskControls();
+    renderQueuedAttempts();
+    renderPublishSummary();
     nodes.taskDock.hidden = false;
     syncTaskDockStickyOffset();
   }
@@ -883,15 +1458,18 @@
     if (!isPureData(detail)) {
       stopWorkspaceSubscription();
       retainedRuntime = null;
+      pendingIntent = null;
       bootstrapFault = '工作区启动数据无效';
       runtimeFault = null;
+      publishFault = null;
       workspace = null;
       snapshot = null;
       render();
       return;
     }
     var nextWorkspace;
-    var replayFault = false;
+    var runtimeReplayFault = false;
+    var priorBinding = snapshot && snapshot.binding;
     var priorSelectedSkuKey = snapshot && snapshot.selectedSkuKey;
     var priorSelectedSlotKey = snapshot && snapshot.selectedSlotKey;
     var priorSlot = selectedSlot();
@@ -907,12 +1485,18 @@
         || typeof nextWorkspace.applyRuntimeProjection !== 'function') {
         throw new TypeError('workspace state controller is unavailable');
       }
+      var bootstrapSnapshot = nextWorkspace.getSnapshot();
+      if (!isPureData(bootstrapSnapshot)) throw new TypeError('workspace snapshot is invalid');
       if (retainedRuntime) {
-        try {
-          nextWorkspace.applyRuntimeProjection(retainedRuntime);
-        } catch {
+        if (!sameBinding(retainedRuntime.binding, bootstrapSnapshot.binding)) {
           retainedRuntime = null;
-          replayFault = true;
+        } else {
+          try {
+            nextWorkspace.applyRuntimeProjection(retainedRuntime);
+          } catch {
+            retainedRuntime = null;
+            runtimeReplayFault = true;
+          }
         }
       }
       var nextSnapshot = nextWorkspace.getSnapshot();
@@ -921,11 +1505,14 @@
       stopWorkspaceSubscription();
       workspace = nextWorkspace;
       snapshot = nextSnapshot;
+      if (!sameBinding(priorBinding, nextSnapshot.binding)) pendingIntent = null;
       preserveDirtyPrompt = preserveDirtyPrompt
+        && sameBinding(priorBinding, nextSnapshot.binding)
         && priorSelectedSkuKey === nextSnapshot.selectedSkuKey
         && priorSelectedSlotKey === nextSnapshot.selectedSlotKey;
       bootstrapFault = null;
-      runtimeFault = replayFault ? '运行时任务数据无效，已停止候选操作' : null;
+      runtimeFault = runtimeReplayFault ? '运行时任务数据无效，已停止候选操作' : null;
+      publishFault = null;
       lastActionError = preserveDirtyPrompt ? '请先保存当前槽位提示词' : null;
       promptSlotKey = preserveDirtyPrompt ? nextSnapshot.selectedSlotKey : null;
       promptDirty = preserveDirtyPrompt;
@@ -953,8 +1540,10 @@
     } catch {
       stopWorkspaceSubscription();
       retainedRuntime = null;
+      pendingIntent = null;
       bootstrapFault = '工作区启动数据无效';
       runtimeFault = null;
+      publishFault = null;
       workspace = null;
       snapshot = null;
       render();
@@ -965,16 +1554,18 @@
   function applyRuntime(detail) {
     if (!workspace || bootstrapFault) {
       if (!isPureData(detail) || !detail
+        || !exactKeys(detail.binding, BINDING_KEYS)
         || !Number.isSafeInteger(detail.revision) || detail.revision < 1) return;
-      if (!retainedRuntime || detail.revision > retainedRuntime.revision) {
-        if (retainedRuntime && Array.isArray(retainedRuntime.libraryItems)
+      if (!retainedRuntime || !sameBinding(retainedRuntime.binding, detail.binding)) {
+        retainedRuntime = clonePureData(detail);
+      } else if (detail.revision > retainedRuntime.revision) {
+        if (Array.isArray(retainedRuntime.libraryItems)
           && Array.isArray(retainedRuntime.slots) && Array.isArray(detail.libraryItems)
           && Array.isArray(detail.slots)) {
           retainedRuntime = mergeRuntimeProjection(retainedRuntime, detail);
         } else {
           retainedRuntime = clonePureData(detail);
         }
-        runtimeRevisionClock = Math.max(runtimeRevisionClock, detail.revision);
       }
       return;
     }
@@ -983,18 +1574,52 @@
       render();
       return;
     }
+    if (!snapshot || !sameBinding(detail.binding, snapshot.binding)) return;
     if (snapshot && Number.isSafeInteger(snapshot.runtimeRevision)
       && detail.revision <= snapshot.runtimeRevision) return;
     try {
       workspace.applyRuntimeProjection(detail);
       snapshot = workspace.getSnapshot();
+      var acknowledgedIntent = pendingIntent
+        && detail.revision > pendingIntent.expectedRuntimeRevision
+        && intentPostconditionMet(pendingIntent, snapshot)
+        ? pendingIntent : null;
+      if (acknowledgedIntent) pendingIntent = null;
       runtimeRevisionClock = Math.max(runtimeRevisionClock, snapshot.runtimeRevision);
       retainedRuntime = mergeRuntimeProjection(retainedRuntime, detail);
       runtimeFault = null;
       lastActionError = null;
       render();
+      restoreIntentFocus(acknowledgedIntent);
     } catch {
       runtimeFault = '运行时任务数据无效，已停止候选操作';
+      render();
+    }
+  }
+
+  function applyPublishProjection(detail) {
+    if (!workspace || bootstrapFault) return;
+    if (!isPureData(detail) || !detail) {
+      publishFault = '发布核对数据无效，已阻止发布';
+      render();
+      return;
+    }
+    if (!snapshot || !sameBinding(detail.binding, snapshot.binding)) return;
+    if (detail.contractVersion !== workspaceStateApi.PUBLISH_PROJECTION_CONTRACT_VERSION
+      || !Number.isSafeInteger(detail.revision) || detail.revision < 1) {
+      publishFault = '发布核对数据无效，已阻止发布';
+      render();
+      return;
+    }
+    if (snapshot && Number.isSafeInteger(snapshot.publishRevision)
+      && detail.revision <= snapshot.publishRevision) return;
+    try {
+      workspace.applyPublishProjection(detail);
+      snapshot = workspace.getSnapshot();
+      publishFault = null;
+      render();
+    } catch {
+      publishFault = '发布核对数据无效，已阻止发布';
       render();
     }
   }
@@ -1009,17 +1634,21 @@
     workspace = null;
     snapshot = null;
     runtimeFault = null;
+    publishFault = null;
     bootstrapFault = null;
     promptSlotKey = null;
     promptDirty = false;
     lastActionError = null;
     retainedRuntime = null;
+    pendingIntent = null;
+    lastPublishAnnouncementKey = null;
     selectedLibraryKind = LIBRARY_KINDS[0];
     clearCache(skuNodes);
     clearCache(libraryTabNodes);
     clearCache(libraryItemNodes);
     clearCache(slotNodes);
     clearCache(modeNodes);
+    clearCache(queuedAttemptNodes);
     alternativeGroupNodes.forEach(function (group) {
       clearCache(group._workspace.alternatives);
       removeNode(group);
@@ -1027,6 +1656,7 @@
     alternativeGroupNodes.clear();
     removeNode(modeReasonNode);
     removeNode(libraryEmptyNode);
+    removeNode(queuedEmptyNode);
     nodes.promptInput.value = '';
     nodes.negativePromptInput.value = '';
     nodes.promptInput.disabled = true;
@@ -1036,6 +1666,18 @@
     promptDisabledReasonNode.textContent = '';
     nodes.referenceSummary.textContent = '等待工作区数据';
     nodes.taskSummary.textContent = '等待任务数据';
+    nodes.taskProgress.textContent = '0 / 0 个槽位已保留候选';
+    nodes.taskProgress.setAttribute('aria-valuenow', '0');
+    nodes.taskProgress.setAttribute('aria-valuemax', '0');
+    nodes.pauseButton.disabled = true;
+    nodes.continueButton.disabled = true;
+    nodes.taskControlReason.textContent = '';
+    nodes.publishSummary.textContent = '正在检查草稿与媒体绑定。';
+    nodes.chargeAcknowledgement.checked = false;
+    nodes.chargeAcknowledgement.disabled = true;
+    nodes.regenerateButton.disabled = true;
+    nodes.regenerateReason.textContent = '';
+    nodes.orderAnnouncement.textContent = '';
     nodes.shell.setAttribute('aria-busy', 'true');
     nodes.shell.setAttribute('aria-disabled', 'true');
     nodes.shell.setAttribute('data-runtime-state', 'CLEARED');
@@ -1056,6 +1698,30 @@
   }
   nodes.promptInput.addEventListener('input', handlePromptInput);
   nodes.negativePromptInput.addEventListener('input', handlePromptInput);
+  nodes.chargeAcknowledgement.addEventListener('change', function (event) {
+    if (!trustedActivation(event)) return;
+    renderRegenerateControl(selectedSlot());
+  });
+  nodes.regenerateButton.addEventListener('click', function (event) {
+    if (!trustedActivation(event) || nodes.regenerateButton.disabled) return;
+    var slot = selectedSlot();
+    if (!slot) return;
+    if (createAndEmitIntent('createRegenerateIntent', [slot.slotKey, {
+      warningVersion: workspaceStateApi.EXTERNAL_CHARGE_WARNING_VERSION,
+      confirmed: nodes.chargeAcknowledgement.checked === true,
+    }])) {
+      nodes.chargeAcknowledgement.checked = false;
+      renderRegenerateControl(slot);
+    }
+  });
+  nodes.pauseButton.addEventListener('click', function (event) {
+    if (!trustedActivation(event) || nodes.pauseButton.disabled) return;
+    createAndEmitIntent('createPauseAfterCurrentIntent', []);
+  });
+  nodes.continueButton.addEventListener('click', function (event) {
+    if (!trustedActivation(event) || nodes.continueButton.disabled) return;
+    createAndEmitIntent('createContinueIntent', []);
+  });
   setActionData(nodes.savePromptButton, 'save-prompt', {});
   nodes.savePromptButton.addEventListener('click', function (event) {
     if (!trustedActivation(event) || nodes.savePromptButton.disabled
@@ -1085,6 +1751,12 @@
   });
   global.document.addEventListener(RUNTIME_EVENT, function (event) {
     applyRuntime(event.detail);
+  });
+  global.document.addEventListener(PUBLISH_PROJECTION_EVENT, function (event) {
+    applyPublishProjection(event.detail);
+  });
+  global.document.addEventListener(INTENT_OUTCOME_EVENT, function (event) {
+    applyIntentOutcome(event.detail);
   });
   global.document.addEventListener(CLEAR_EVENT, function () {
     clearWorkspace();

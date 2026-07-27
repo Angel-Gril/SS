@@ -50,6 +50,16 @@ function slot(slotKey, role, overrides = {}) {
   };
 }
 
+function binding(overrides = {}) {
+  return {
+    shopId: 'shop-primary',
+    workflowId: 'workflow-primary',
+    draftRevision: 7,
+    draftVersion: 11,
+    ...overrides,
+  };
+}
+
 function sku(skuKey, overrides = {}) {
   return {
     skuKey,
@@ -65,6 +75,7 @@ function sku(skuKey, overrides = {}) {
 function input(overrides = {}) {
   return {
     contractVersion: 'extension-byok-workbench-workspace-state/v1',
+    binding: binding(),
     executionMode: 'BYOK',
     dispatched: false,
     selectedSkuKey: 'sku-red',
@@ -81,6 +92,21 @@ function input(overrides = {}) {
   };
 }
 
+function publishProjection(api, workspace, revision, overrides = {}) {
+  const basis = workspace.getSnapshot().publishBasis;
+  return {
+    contractVersion: api.PUBLISH_PROJECTION_CONTRACT_VERSION,
+    revision,
+    expectedWorkspaceRevision: basis.expectedWorkspaceRevision,
+    expectedRuntimeRevision: basis.expectedRuntimeRevision,
+    binding: plain(basis.binding),
+    draftState: 'CURRENT',
+    disabledReason: null,
+    orderedMedia: plain(basis.orderedMedia),
+    ...overrides,
+  };
+}
+
 function assertDeepFrozen(value, seen = new Set()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return;
   seen.add(value);
@@ -92,15 +118,21 @@ test('creates a stable closed v1 snapshot with four media sources and no invente
   const api = loadApi();
   assert.equal(api.CONTRACT_VERSION, 'extension-byok-workbench-workspace-state/v1');
   assert.equal(api.RUNTIME_CONTRACT_VERSION, 'extension-byok-workbench-workspace-runtime/v1');
+  assert.equal(
+    api.ACTION_OUTCOME_CONTRACT_VERSION,
+    'extension-byok-workbench-action-outcome/v1',
+  );
   assert.deepEqual(Array.from(api.MEDIA_SOURCE_TYPES), ['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
 
   const workspace = api.createWorkspace(input());
   const snapshot = workspace.getSnapshot();
   assert.deepEqual(Object.keys(snapshot), [
     'contractVersion', 'runtimeContractVersion', 'revision', 'runtimeRevision',
+    'publishProjectionContractVersion', 'publishRevision', 'publishBasis', 'binding',
     'executionMode', 'executionModeFrozen', 'modeDisabledReasons', 'selectedSkuKey',
     'selectedSlotKey', 'globalReferenceIds', 'globalReferencesEditable',
     'globalReferencesDisabledReason', 'libraryItems', 'skus', 'slots', 'taskSummary',
+    'taskControls', 'publishSummary',
   ]);
   assert.deepEqual(Object.keys(snapshot.libraryItems[0]), [
     'mediaId', 'sourceType', 'label', 'secondaryLabel', 'skuKeys', 'referenceEligible',
@@ -114,6 +146,9 @@ test('creates a stable closed v1 snapshot with four media sources and no invente
     'negativePrompt', 'promptEditable', 'promptDisabledReason', 'referenceSource',
     'referenceIds', 'referenceOverrideIds', 'referencesEditable',
     'referencesDisabledReason', 'alternatives', 'selectedAttemptId',
+    'slotRevision',
+    'regenerateAvailable', 'regenerateDisabledReason', 'publishMediaEligible',
+    'publishMediaDisabledReason',
   ]);
   assert.deepEqual(Object.keys(snapshot.taskSummary), [
     'schedulerState', 'disabledReason', 'totalSlots', 'selectedSlots', 'missingSlots',
@@ -132,6 +167,33 @@ test('creates a stable closed v1 snapshot with four media sources and no invente
   });
   assert.equal(snapshot.selectedSkuKey, 'sku-red');
   assert.equal(snapshot.taskSummary.disabledReason, 'BATCH_COORDINATOR_NOT_READY');
+  assert.deepEqual(Object.keys(snapshot.taskControls), [
+    'pauseAfterCurrent', 'continue', 'cancelQueued',
+  ]);
+  assert.deepEqual(plain(snapshot.taskControls), {
+    pauseAfterCurrent: { enabled: false, disabledReason: 'BATCH_COORDINATOR_NOT_READY' },
+    continue: { enabled: false, disabledReason: 'BATCH_COORDINATOR_NOT_READY' },
+    cancelQueued: {
+      enabled: false,
+      disabledReason: 'BATCH_COORDINATOR_NOT_READY',
+      attemptIds: [],
+    },
+  });
+  assert.equal(snapshot.publishRevision, 0);
+  assert.deepEqual(Object.keys(snapshot.publishBasis), [
+    'expectedWorkspaceRevision', 'expectedRuntimeRevision', 'binding', 'orderedMedia',
+  ]);
+  assert.equal(snapshot.publishBasis.expectedWorkspaceRevision, snapshot.revision);
+  assert.equal(snapshot.publishBasis.expectedRuntimeRevision, snapshot.runtimeRevision);
+  assert.deepEqual(plain(snapshot.publishBasis.binding), binding());
+  assert.deepEqual(plain(snapshot.publishBasis.orderedMedia), []);
+  assert.deepEqual(plain(snapshot.binding), binding());
+  assertDeepFrozen(snapshot.binding);
+  assert.equal(snapshot.publishSummary.draftState, 'UNKNOWN');
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.deepEqual(plain(snapshot.publishSummary.blockerCodes), [
+    'PUBLISH_COORDINATOR_NOT_READY', 'DRAFT_STATUS_UNKNOWN', 'MISSING_SELECTION',
+  ]);
   assert.equal(snapshot.selectedSlotKey, 'sku-red:hero');
   assert.deepEqual(plain(snapshot.skus.map((row) => row.skuKey)), ['sku-red', 'sku-blue']);
   assert.deepEqual(plain(snapshot.slots.map((row) => row.slotKey)), [
@@ -153,8 +215,18 @@ test('creates a stable closed v1 snapshot with four media sources and no invente
 
 test('rejects unknown fields, URL-bearing text, ineligible references, and invalid limits', () => {
   const api = loadApi();
+  const { binding: omittedBinding, ...withoutBinding } = input();
+  assert.ok(omittedBinding);
   const invalidInputs = [
+    withoutBinding,
     { ...input(), arbitrary: true },
+    input({ binding: { ...binding(), arbitrary: true } }),
+    input({ binding: binding({ shopId: ' shop-primary' }) }),
+    input({ binding: binding({ shopId: 'https://shop.example' }) }),
+    input({ binding: binding({ workflowId: 'ｗorkflow-primary' }) }),
+    input({ binding: binding({ draftRevision: 0 }) }),
+    input({ binding: binding({ draftVersion: 1.5 }) }),
+    input({ binding: binding({ draftVersion: Number.MAX_SAFE_INTEGER + 1 }) }),
     input({ libraryItems: [{ ...libraryItem('one', 'CAPTURED'), previewUrl: 'https://x.test/a' }] }),
     input({ libraryItems: [libraryItem('one', 'CAPTURED', { label: 'https://x.test/a' })] }),
     input({
@@ -222,13 +294,30 @@ test('supports keyboard SKU selection and preserves the last selected slot per S
 });
 
 test('keeps one main slot per SKU and moves the selected slot deterministically', () => {
-  const workspace = loadApi().createWorkspace(input());
+  const api = loadApi();
+  assert.throws(
+    () => api.createWorkspace(input({
+      skus: [sku('sku-red', {
+        slots: [
+          slot('sku-red:detail-1', 'DETAIL'),
+          slot('sku-red:hero', 'HERO'),
+        ],
+      })],
+    })),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+
+  const workspace = api.createWorkspace(input());
   workspace.selectSlot('sku-red:detail-1');
   let snapshot = workspace.setMainSlot('sku-red:detail-1');
   const red = snapshot.slots.filter((row) => row.skuKey === 'sku-red');
   assert.equal(red.filter((row) => row.isMain).length, 1);
   assert.equal(red.find((row) => row.isMain).slotKey, 'sku-red:detail-1');
   assert.equal(snapshot.skus[0].mainSlotKey, 'sku-red:detail-1');
+  assert.deepEqual(plain(snapshot.skus[0].slotKeys), [
+    'sku-red:detail-1', 'sku-red:hero',
+  ]);
+  assert.deepEqual(plain(red.map((row) => row.role)), ['HERO', 'DETAIL']);
 
   snapshot = workspace.moveSelectedSlotUp();
   assert.deepEqual(plain(snapshot.skus[0].slotKeys), ['sku-red:detail-1', 'sku-red:hero']);
@@ -236,9 +325,15 @@ test('keeps one main slot per SKU and moves the selected slot deterministically'
     plain(workspace.moveSelectedSlotUp().skus[0].slotKeys),
     ['sku-red:detail-1', 'sku-red:hero'],
   );
+  snapshot = workspace.moveSelectedSlotDown();
   assert.deepEqual(
-    plain(workspace.moveSelectedSlotDown().skus[0].slotKeys),
+    plain(snapshot.skus[0].slotKeys),
     ['sku-red:hero', 'sku-red:detail-1'],
+  );
+  assert.equal(snapshot.skus[0].mainSlotKey, 'sku-red:hero');
+  assert.deepEqual(
+    plain(snapshot.slots.filter((row) => row.skuKey === 'sku-red').map((row) => row.role)),
+    ['HERO', 'DETAIL'],
   );
 });
 
@@ -340,6 +435,7 @@ test('rejects generated alternatives outside the target slot SKU in all mutation
   assert.throws(
     () => runtime.applyRuntimeProjection({
       contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
       revision: 1,
       task: { schedulerState: 'REVIEW', disabledReason: null },
       libraryItems: [generatedRed],
@@ -398,6 +494,7 @@ test('requires generated media to enumerate every compatible target SKU explicit
   assert.throws(
     () => runtime.applyRuntimeProjection({
       contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
       revision: 1,
       task: { schedulerState: 'REVIEW', disabledReason: null },
       libraryItems: [unscoped],
@@ -436,6 +533,7 @@ test('freezes global and dispatched-slot reference selection with explicit reaso
   const workspace = api.createWorkspace(input());
   const active = workspace.applyRuntimeProjection({
     contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
     revision: 1,
     task: { schedulerState: 'RUNNING', disabledReason: null },
     libraryItems: [],
@@ -498,6 +596,7 @@ test('keeps the SKU scope of an existing generated media ID immutable', () => {
   assert.throws(
     () => runtime.applyRuntimeProjection({
       contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
       revision: 1,
       task: { schedulerState: 'REVIEW', disabledReason: null },
       libraryItems: [broadened],
@@ -529,6 +628,7 @@ test('binds runtime slot status exactly to the selected attempt state', () => {
   });
   const projection = {
     contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
     revision: 1,
     task: { schedulerState: 'RUNNING', disabledReason: null },
     libraryItems: [candidate],
@@ -562,6 +662,7 @@ test('keeps runtime scheduler state consistent with the full projected attempt s
   function projection(schedulerState, attemptState) {
     return {
       contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
       revision: 1,
       task: { schedulerState, disabledReason: null },
       libraryItems: [],
@@ -605,6 +706,7 @@ test('accepts canonical Unicode context keys while runtime identifiers stay stri
   function unicodeInput(skuKey, slotKey) {
     return {
       contractVersion: api.CONTRACT_VERSION,
+      binding: binding(),
       executionMode: 'BYOK',
       dispatched: false,
       selectedSkuKey: skuKey,
@@ -689,6 +791,7 @@ test('exposes Prompt editability and rejects optimistic writes after execution s
   const active = api.createWorkspace(input());
   const activeSnapshot = active.applyRuntimeProjection({
     contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
     revision: 1,
     task: { schedulerState: 'RUNNING', disabledReason: null },
     libraryItems: [],
@@ -712,6 +815,7 @@ test('exposes Prompt editability and rejects optimistic writes after execution s
   const unknown = api.createWorkspace(input());
   const unknownSnapshot = unknown.applyRuntimeProjection({
     contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
     revision: 1,
     task: { schedulerState: 'FAILED', disabledReason: null },
     libraryItems: [],
@@ -732,6 +836,7 @@ test('exposes Prompt editability and rejects optimistic writes after execution s
   assert.throws(
     () => unknownWithMedia.applyRuntimeProjection({
       contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
       revision: 1,
       task: { schedulerState: 'FAILED', disabledReason: null },
       libraryItems: [libraryItem('unknown-result', 'GENERATED', { skuKeys: ['sku-red'] })],
@@ -753,6 +858,7 @@ test('applies a closed runtime projection atomically and rejects stale or partia
   const before = workspace.getSnapshot();
   const runtime = {
     contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
     revision: 4,
     task: { schedulerState: 'REVIEW', disabledReason: null },
     libraryItems: [libraryItem('runtime-result', 'GENERATED', { skuKeys: ['sku-red'] })],
@@ -783,6 +889,75 @@ test('applies a closed runtime projection atomically and rejects stale or partia
   assert.equal(workspace.getSnapshot().runtimeRevision, 4);
 });
 
+test('rejects cross-shop and old-draft events without advancing any projection revision', () => {
+  const api = loadApi();
+  const currentBinding = binding({ draftVersion: 12 });
+  const workspace = api.createWorkspace(input({ binding: currentBinding }));
+  const runtime = {
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: currentBinding,
+    revision: 1,
+    task: { schedulerState: 'READY', disabledReason: null },
+    libraryItems: [],
+    slots: [],
+  };
+  for (const mismatchedBinding of [
+    binding({ shopId: 'shop-other', draftVersion: 12 }),
+    binding({ workflowId: 'workflow-other', draftVersion: 12 }),
+    binding({ draftRevision: 8, draftVersion: 12 }),
+    binding({ draftVersion: 11 }),
+  ]) {
+    assert.throws(
+      () => workspace.applyRuntimeProjection({
+        ...runtime,
+        revision: 99,
+        binding: mismatchedBinding,
+      }),
+      (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_BINDING_MISMATCH',
+    );
+    assert.equal(workspace.getSnapshot().runtimeRevision, 0);
+  }
+
+  const { binding: removedRuntimeBinding, ...runtimeWithoutBinding } = runtime;
+  assert.ok(removedRuntimeBinding);
+  assert.throws(
+    () => workspace.applyRuntimeProjection(runtimeWithoutBinding),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.throws(
+    () => workspace.applyRuntimeProjection({
+      ...runtime,
+      binding: { ...currentBinding, unexpected: true },
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+
+  const publish = publishProjection(api, workspace, 1);
+  const { binding: removedPublishBinding, ...publishWithoutBinding } = publish;
+  assert.ok(removedPublishBinding);
+  assert.throws(
+    () => workspace.applyPublishProjection(publishWithoutBinding),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.throws(
+    () => workspace.applyPublishProjection({
+      ...publish,
+      binding: { ...currentBinding, unexpected: true },
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.throws(
+    () => workspace.applyPublishProjection({
+      ...publish,
+      revision: 99,
+      binding: binding({ draftVersion: 11 }),
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_BINDING_MISMATCH',
+  );
+  assert.equal(workspace.getSnapshot().publishRevision, 0);
+  assert.deepEqual(plain(workspace.getSnapshot().binding), currentBinding);
+});
+
 test('public projections never retain Blob-like, key, URL, or arbitrary fields', () => {
   const api = loadApi();
   const workspace = api.createWorkspace(input());
@@ -802,4 +977,759 @@ test('public projections never retain Blob-like, key, URL, or arbitrary fields',
     }),
     (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
   );
+});
+
+test('projects truthful task controls and emits revision-fenced local intents only', () => {
+  const api = loadApi();
+  const blocked = api.createWorkspace(input());
+  const blockedSnapshot = blocked.setAlternatives('sku-red:hero', [
+    alternative('attempt-blocked-control', 'QUEUED', null),
+  ], null);
+  assert.equal(blockedSnapshot.taskControls.pauseAfterCurrent.enabled, false);
+  assert.equal(
+    blockedSnapshot.taskControls.cancelQueued.disabledReason,
+    'BATCH_COORDINATOR_NOT_READY',
+  );
+  assert.throws(
+    () => blocked.createPauseAfterCurrentIntent('command-blocked-pause'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'BATCH_COORDINATOR_NOT_READY',
+  );
+  assert.throws(
+    () => blocked.createCancelQueuedIntent(
+      'attempt-blocked-control', 'command-blocked-cancel',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'BATCH_COORDINATOR_NOT_READY',
+  );
+
+  const workspace = api.createWorkspace(input());
+  const running = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'RUNNING', disabledReason: null },
+    libraryItems: [],
+    slots: [
+      {
+        slotKey: 'sku-red:hero',
+        status: 'WAITING',
+        alternatives: [alternative('attempt-active-control', 'WAITING', null)],
+        selectedAttemptId: null,
+        slotRevision: 7,
+      },
+      {
+        slotKey: 'sku-red:detail-1',
+        status: 'QUEUED',
+        alternatives: [alternative('attempt-queued-control', 'QUEUED', null)],
+        selectedAttemptId: null,
+        slotRevision: 11,
+      },
+    ],
+  });
+  assert.deepEqual(plain(running.taskControls), {
+    pauseAfterCurrent: { enabled: true, disabledReason: null },
+    continue: { enabled: false, disabledReason: 'TASK_NOT_PAUSED' },
+    cancelQueued: {
+      enabled: true,
+      disabledReason: null,
+      attemptIds: ['attempt-queued-control'],
+    },
+  });
+
+  const before = workspace.getSnapshot();
+  assert.deepEqual(plain(workspace.createPauseAfterCurrentIntent('command-pause-01')), {
+    contractVersion: api.ACTION_INTENT_CONTRACT_VERSION,
+    binding: binding(),
+    action: 'PAUSE_AFTER_CURRENT',
+    commandId: 'command-pause-01',
+    expectedWorkspaceRevision: before.revision,
+    expectedRuntimeRevision: 1,
+    expectedSlotRevision: null,
+    slotKey: null,
+    attemptId: null,
+    externalChargeAcknowledgement: null,
+  });
+  const boundPauseIntent = workspace.createPauseAfterCurrentIntent('command-pause-01');
+  assertDeepFrozen(boundPauseIntent);
+  assert.deepEqual(plain(boundPauseIntent.binding), binding());
+  const secondPauseIntent = workspace.createPauseAfterCurrentIntent('command-pause-02');
+  assert.equal(secondPauseIntent.expectedWorkspaceRevision,
+    boundPauseIntent.expectedWorkspaceRevision);
+  assert.equal(secondPauseIntent.expectedRuntimeRevision,
+    boundPauseIntent.expectedRuntimeRevision);
+  assert.notDeepEqual(plain(secondPauseIntent), plain(boundPauseIntent));
+  for (const invalidCommandId of [
+    undefined,
+    null,
+    '命令-01',
+    'https://command.example',
+    ' command-01',
+    'a'.repeat(201),
+  ]) {
+    assert.throws(
+      () => workspace.createPauseAfterCurrentIntent(invalidCommandId),
+      (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+    );
+  }
+  assert.deepEqual(plain(workspace.createCancelQueuedIntent(
+    'attempt-queued-control', 'command-cancel-01',
+  )), {
+    contractVersion: api.ACTION_INTENT_CONTRACT_VERSION,
+    binding: binding(),
+    action: 'CANCEL_QUEUED',
+    commandId: 'command-cancel-01',
+    expectedWorkspaceRevision: before.revision,
+    expectedRuntimeRevision: 1,
+    expectedSlotRevision: 11,
+    slotKey: 'sku-red:detail-1',
+    attemptId: 'attempt-queued-control',
+    externalChargeAcknowledgement: null,
+  });
+  assert.equal(workspace.getSnapshot().revision, before.revision);
+  assert.throws(
+    () => workspace.createCancelQueuedIntent(
+      'attempt-active-control', 'command-cancel-active',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'ATTEMPT_NOT_QUEUED',
+  );
+
+  const pausing = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 2,
+    task: { schedulerState: 'PAUSING', disabledReason: null },
+    libraryItems: [],
+    slots: [],
+  });
+  assert.equal(pausing.taskControls.continue.enabled, true);
+  assert.equal(workspace.createContinueIntent('command-continue-01').action, 'CONTINUE');
+  assert.throws(
+    () => workspace.createPauseAfterCurrentIntent('command-pause-repeat'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'PAUSE_ALREADY_REQUESTED',
+  );
+});
+
+test('accepts legacy runtime slots but requires a trusted positive slot revision for slot intents', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input());
+  workspace.upsertLibraryItem(libraryItem('legacy-slot-result', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  const legacySlot = {
+    slotKey: 'sku-red:hero',
+    status: 'CANDIDATE_READY',
+    alternatives: [alternative(
+      'attempt-legacy-slot', 'CANDIDATE_READY', 'legacy-slot-result',
+    )],
+    selectedAttemptId: null,
+  };
+  let snapshot = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [legacySlot],
+  });
+  let hero = snapshot.slots.find((row) => row.slotKey === 'sku-red:hero');
+  assert.equal(hero.slotRevision, null);
+  assert.equal(hero.alternatives[0].keepAvailable, false);
+  assert.equal(hero.alternatives[0].keepDisabledReason, 'SLOT_REVISION_UNAVAILABLE');
+  assert.equal(hero.regenerateAvailable, false);
+  assert.equal(hero.regenerateDisabledReason, 'SLOT_REVISION_UNAVAILABLE');
+  assert.throws(
+    () => workspace.createKeepAttemptIntent(
+      'sku-red:hero', 'attempt-legacy-slot', 'command-legacy-keep-blocked',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'SLOT_REVISION_UNAVAILABLE',
+  );
+
+  snapshot = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 2,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [{ ...legacySlot, slotRevision: 41 }],
+  });
+  hero = snapshot.slots.find((row) => row.slotKey === 'sku-red:hero');
+  assert.equal(hero.slotRevision, 41);
+  assert.equal(hero.alternatives[0].keepAvailable, true);
+  assert.equal(
+    workspace.createKeepAttemptIntent(
+      'sku-red:hero', 'attempt-legacy-slot', 'command-legacy-keep',
+    )
+      .expectedSlotRevision,
+    41,
+  );
+
+  assert.throws(
+    () => workspace.applyRuntimeProjection({
+      contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
+      revision: 3,
+      task: { schedulerState: 'REVIEW', disabledReason: null },
+      libraryItems: [],
+      slots: [{ ...legacySlot, slotRevision: 40 }],
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.equal(workspace.getSnapshot().runtimeRevision, 2);
+
+  assert.throws(
+    () => workspace.applyRuntimeProjection({
+      contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
+      revision: 3,
+      task: { schedulerState: 'REVIEW', disabledReason: null },
+      libraryItems: [],
+      slots: [{
+        ...legacySlot,
+        selectedAttemptId: 'attempt-legacy-slot',
+        slotRevision: 41,
+      }],
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_SLOT_REVISION_REUSED',
+  );
+  assert.equal(workspace.getSnapshot().runtimeRevision, 2);
+
+  assert.throws(
+    () => workspace.applyRuntimeProjection({
+      contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
+      revision: 3,
+      task: { schedulerState: 'FAILED', disabledReason: null },
+      libraryItems: [],
+      slots: [{
+        ...legacySlot,
+        status: 'UNKNOWN_OUTCOME',
+        alternatives: [
+          ...legacySlot.alternatives,
+          alternative('attempt-same-revision-unknown', 'UNKNOWN_OUTCOME', null),
+        ],
+        slotRevision: 41,
+      }],
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_SLOT_REVISION_REUSED',
+  );
+  assert.equal(workspace.getSnapshot().runtimeRevision, 2);
+
+  snapshot = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 3,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [legacySlot],
+  });
+  assert.equal(snapshot.slots.find((row) => row.slotKey === 'sku-red:hero').slotRevision, null);
+  assert.throws(
+    () => workspace.createRejectAttemptIntent(
+      'sku-red:hero', 'attempt-legacy-slot', 'command-legacy-reject',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'SLOT_REVISION_UNAVAILABLE',
+  );
+
+  for (const slotRevision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const closed = api.createWorkspace(input({
+      libraryItems: [...input().libraryItems, libraryItem('invalid-revision-result', 'GENERATED', {
+        skuKeys: ['sku-red'],
+      })],
+    }));
+    assert.throws(
+      () => closed.applyRuntimeProjection({
+        contractVersion: api.RUNTIME_CONTRACT_VERSION,
+        binding: binding(),
+        revision: 1,
+        task: { schedulerState: 'REVIEW', disabledReason: null },
+        libraryItems: [],
+        slots: [{
+          slotKey: 'sku-red:hero',
+          status: 'CANDIDATE_READY',
+          alternatives: [alternative(
+            'attempt-invalid-revision', 'CANDIDATE_READY', 'invalid-revision-result',
+          )],
+          selectedAttemptId: null,
+          slotRevision,
+        }],
+      }),
+      (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+    );
+    assert.equal(closed.getSnapshot().runtimeRevision, 0);
+  }
+});
+
+test('creates keep and reject intents only for reviewable candidates without optimistic mutation', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input());
+  workspace.upsertLibraryItem(libraryItem('review-red-one', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  workspace.upsertLibraryItem(libraryItem('review-red-two', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  const staged = workspace.setAlternatives('sku-red:hero', [
+    alternative('attempt-review-one', 'CANDIDATE_READY', 'review-red-one'),
+    alternative('attempt-review-two', 'CANDIDATE_READY', 'review-red-two'),
+  ], null);
+  assert.equal(staged.slots[0].alternatives[0].keepAvailable, false);
+  assert.equal(
+    staged.slots[0].alternatives[0].keepDisabledReason,
+    'BATCH_COORDINATOR_NOT_READY',
+  );
+  assert.equal(
+    staged.slots[0].alternatives[0].reviewDisabledReason,
+    'BATCH_COORDINATOR_NOT_READY',
+  );
+  assert.throws(
+    () => workspace.createKeepAttemptIntent(
+      'sku-red:hero', 'attempt-review-one', 'command-review-blocked',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'BATCH_COORDINATOR_NOT_READY',
+  );
+  const review = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'CANDIDATE_READY',
+      alternatives: [
+        alternative('attempt-review-one', 'CANDIDATE_READY', 'review-red-one'),
+        alternative('attempt-review-two', 'CANDIDATE_READY', 'review-red-two'),
+      ],
+      selectedAttemptId: null,
+      slotRevision: 21,
+    }],
+  });
+  const projected = review.slots[0].alternatives;
+  assert.deepEqual(Object.keys(projected[0]), [
+    'attemptId', 'state', 'mediaId', 'errorCode', 'selected', 'keepAvailable',
+    'keepDisabledReason', 'rejectAvailable', 'rejectDisabledReason',
+    'reviewDisabledReason',
+  ]);
+  assert.equal(projected[0].keepAvailable, true);
+  assert.equal(projected[0].rejectAvailable, true);
+
+  const revision = review.revision;
+  const keep = workspace.createKeepAttemptIntent(
+    'sku-red:hero', 'attempt-review-two', 'command-review-keep',
+  );
+  const reject = workspace.createRejectAttemptIntent(
+    'sku-red:hero', 'attempt-review-one', 'command-review-reject',
+  );
+  assert.equal(keep.action, 'KEEP_ATTEMPT');
+  assert.equal(keep.slotKey, 'sku-red:hero');
+  assert.equal(keep.attemptId, 'attempt-review-two');
+  assert.equal(keep.expectedSlotRevision, 21);
+  assert.equal(reject.action, 'REJECT_ATTEMPT');
+  assert.equal(workspace.getSnapshot().revision, revision);
+  assert.equal(workspace.getSnapshot().slots[0].selectedAttemptId, null);
+
+  const selected = workspace.selectAttempt('sku-red:hero', 'attempt-review-two');
+  const selectedAlternative = selected.slots[0].alternatives.find(
+    (item) => item.attemptId === 'attempt-review-two',
+  );
+  assert.equal(selectedAlternative.keepAvailable, false);
+  assert.equal(selectedAlternative.keepDisabledReason, 'ATTEMPT_ALREADY_SELECTED');
+  assert.equal(selectedAlternative.rejectAvailable, true);
+  assert.equal(selectedAlternative.rejectDisabledReason, null);
+  assert.equal(selectedAlternative.reviewDisabledReason, null);
+  assert.throws(
+    () => workspace.createKeepAttemptIntent(
+      'sku-red:hero', 'attempt-review-two', 'command-review-selected',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'ATTEMPT_ALREADY_SELECTED',
+  );
+
+  workspace.setAlternatives('sku-red:hero', [
+    alternative('attempt-review-one', 'REJECTED', 'review-red-one'),
+  ], null);
+  workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 2,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'REJECTED',
+      alternatives: [alternative('attempt-review-one', 'REJECTED', 'review-red-one')],
+      selectedAttemptId: null,
+      slotRevision: 22,
+    }],
+  });
+  assert.throws(
+    () => workspace.createKeepAttemptIntent(
+      'sku-red:hero', 'attempt-review-one', 'command-review-final',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'ATTEMPT_NOT_REVIEWABLE',
+  );
+});
+
+test('requires the current external-charge acknowledgement for slot regeneration intents', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input());
+  workspace.upsertLibraryItem(libraryItem('regenerate-red', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  const staged = workspace.setAlternatives('sku-red:hero', [
+    alternative('attempt-regenerate', 'CANDIDATE_READY', 'regenerate-red'),
+  ], 'attempt-regenerate');
+  assert.equal(staged.slots[0].regenerateAvailable, false);
+  assert.equal(staged.slots[0].regenerateDisabledReason, 'BATCH_COORDINATOR_NOT_READY');
+  assert.throws(
+    () => workspace.createRegenerateIntent('sku-red:hero', {
+      warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION,
+      confirmed: true,
+    }, 'command-regenerate-blocked'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'BATCH_COORDINATOR_NOT_READY',
+  );
+  const review = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'CANDIDATE_READY',
+      alternatives: [
+        alternative('attempt-regenerate', 'CANDIDATE_READY', 'regenerate-red'),
+      ],
+      selectedAttemptId: 'attempt-regenerate',
+      slotRevision: 31,
+    }],
+  });
+  assert.equal(review.slots[0].regenerateAvailable, true);
+  assert.equal(review.slots[0].regenerateDisabledReason, null);
+
+  for (const invalidAcknowledgement of [
+    undefined,
+    null,
+    { warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION, confirmed: false },
+    { warningVersion: 'external-provider-charge/v0', confirmed: true },
+    { warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION, confirmed: true, extra: true },
+  ]) {
+    assert.throws(
+      () => workspace.createRegenerateIntent(
+        'sku-red:hero', invalidAcknowledgement, 'command-regenerate-invalid-ack',
+      ),
+      (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_CHARGE_ACKNOWLEDGEMENT_REQUIRED',
+    );
+  }
+
+  const before = workspace.getSnapshot();
+  assert.deepEqual(plain(workspace.createRegenerateIntent('sku-red:hero', {
+    warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION,
+    confirmed: true,
+  }, 'command-regenerate-01')), {
+    contractVersion: api.ACTION_INTENT_CONTRACT_VERSION,
+    binding: binding(),
+    action: 'REGENERATE_SLOT',
+    commandId: 'command-regenerate-01',
+    expectedWorkspaceRevision: before.revision,
+    expectedRuntimeRevision: before.runtimeRevision,
+    expectedSlotRevision: 31,
+    slotKey: 'sku-red:hero',
+    attemptId: null,
+    externalChargeAcknowledgement: {
+      warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION,
+      confirmed: true,
+    },
+  });
+
+  const unknown = api.createWorkspace(input());
+  unknown.setAlternatives('sku-red:hero', [
+    alternative('attempt-regenerate-unknown', 'UNKNOWN_OUTCOME', null),
+  ], null);
+  unknown.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'FAILED', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'UNKNOWN_OUTCOME',
+      alternatives: [alternative('attempt-regenerate-unknown', 'UNKNOWN_OUTCOME', null)],
+      selectedAttemptId: null,
+      slotRevision: 32,
+    }],
+  });
+  assert.equal(unknown.getSnapshot().slots[0].regenerateAvailable, false);
+  assert.equal(
+    unknown.getSnapshot().slots[0].regenerateDisabledReason,
+    'UNKNOWN_OUTCOME_REQUIRES_RECOVERY',
+  );
+  assert.throws(
+    () => unknown.createRegenerateIntent('sku-red:hero', {
+      warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION,
+      confirmed: true,
+    }, 'command-regenerate-unknown'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
+      && error.reason === 'UNKNOWN_OUTCOME_REQUIRES_RECOVERY',
+  );
+});
+
+test('offers deterministic keyboard slot ordering while preserving one explicit main slot', () => {
+  const workspace = loadApi().createWorkspace(input());
+  let snapshot = workspace.moveSlotByKeyboard('sku-red:detail-1', 'Home');
+  assert.deepEqual(plain(snapshot.skus[0].slotKeys), [
+    'sku-red:detail-1', 'sku-red:hero',
+  ]);
+  assert.equal(snapshot.selectedSlotKey, 'sku-red:detail-1');
+  assert.deepEqual(
+    plain(snapshot.slots.filter((row) => row.skuKey === 'sku-red').map((row) => row.role)),
+    ['HERO', 'DETAIL'],
+  );
+  snapshot = workspace.setMainSlot('sku-red:detail-1');
+  assert.equal(snapshot.skus[0].mainSlotKey, 'sku-red:detail-1');
+  assert.equal(snapshot.slots.filter((row) => row.skuKey === 'sku-red' && row.isMain).length, 1);
+  assert.deepEqual(
+    plain(workspace.moveSlotByKeyboard('sku-red:detail-1', 'End').skus[0].slotKeys),
+    ['sku-red:hero', 'sku-red:detail-1'],
+  );
+  assert.equal(workspace.getSnapshot().skus[0].mainSlotKey, 'sku-red:hero');
+  assert.deepEqual(
+    plain(workspace.moveSlotByKeyboard('sku-red:detail-1', 'ArrowUp').skus[0].slotKeys),
+    ['sku-red:detail-1', 'sku-red:hero'],
+  );
+  assert.throws(
+    () => workspace.moveSlotByKeyboard('sku-red:detail-1', 'PageDown'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_SELECTION_INVALID',
+  );
+});
+
+test('fails publish eligibility closed for unknown, stale, missing, expired, and unbound media', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input());
+  workspace.upsertLibraryItem(libraryItem('publish-bound-red', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  workspace.setAlternatives('sku-red:hero', [
+    alternative('attempt-publish-bound', 'BOUND', 'publish-bound-red'),
+  ], 'attempt-publish-bound');
+  workspace.setAlternatives('sku-blue:hero', [
+    alternative('attempt-publish-unknown', 'UNKNOWN_OUTCOME', null),
+  ], null);
+  workspace.setAlternatives('sku-blue:detail-1', [
+    alternative('attempt-publish-expired', 'EXPIRED', null),
+  ], null);
+  const current = workspace.applyPublishProjection(publishProjection(api, workspace, 1));
+  assert.equal(current.publishSummary.eligible, false);
+  assert.equal(current.publishSummary.readySlots, 1);
+  assert.deepEqual(plain(current.publishSummary.orderedMedia), []);
+  assert.deepEqual(plain(current.publishBasis.orderedMedia), []);
+  assert.deepEqual(plain(current.publishSummary.missingSlotKeys), ['sku-red:detail-1']);
+  assert.deepEqual(plain(current.publishSummary.unknownOutcomeSlotKeys), ['sku-blue:hero']);
+  assert.deepEqual(plain(current.publishSummary.expiredSlotKeys), ['sku-blue:detail-1']);
+  assert.deepEqual(plain(current.publishSummary.unboundSlotKeys), []);
+  assert.deepEqual(plain(current.publishSummary.blockerCodes), [
+    'MISSING_SELECTION', 'UNKNOWN_OUTCOME', 'RESULT_EXPIRED',
+  ]);
+  assert.equal(
+    current.slots.find((row) => row.slotKey === 'sku-blue:hero').publishMediaDisabledReason,
+    'UNKNOWN_OUTCOME',
+  );
+
+  const stale = workspace.applyPublishProjection(publishProjection(api, workspace, 2, {
+    draftState: 'STALE',
+  }));
+  assert.equal(stale.publishSummary.eligible, false);
+  assert.equal(stale.publishSummary.blockerCodes[0], 'DRAFT_STALE');
+  assert.throws(
+    () => workspace.applyPublishProjection(publishProjection(api, workspace, 2)),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_PUBLISH_STALE',
+  );
+  assert.throws(
+    () => workspace.applyPublishProjection({
+      ...publishProjection(api, workspace, 3),
+      extra: true,
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.equal(workspace.getSnapshot().publishRevision, 2);
+});
+
+test('keeps unknown outcomes absorbing and never lets a selected bound attempt mask them', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input());
+  workspace.upsertLibraryItem(libraryItem('bound-before-unknown', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  const bound = alternative('attempt-bound-before-unknown', 'BOUND', 'bound-before-unknown');
+  const unknown = alternative('attempt-absorbing-unknown', 'UNKNOWN_OUTCOME', null);
+  let snapshot = workspace.setAlternatives(
+    'sku-red:hero', [bound, unknown], 'attempt-bound-before-unknown',
+  );
+  let hero = snapshot.slots.find((row) => row.slotKey === 'sku-red:hero');
+  assert.equal(hero.status, 'UNKNOWN_OUTCOME');
+  assert.equal(hero.publishMediaEligible, false);
+  assert.equal(hero.publishMediaDisabledReason, 'UNKNOWN_OUTCOME');
+  assert.equal(snapshot.taskSummary.schedulerState, 'FAILED');
+
+  assert.throws(
+    () => workspace.setAlternatives(
+      'sku-red:hero', [bound], 'attempt-bound-before-unknown',
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_UNKNOWN_OUTCOME_LOCKED',
+  );
+  assert.throws(
+    () => workspace.applyRuntimeProjection({
+      contractVersion: api.RUNTIME_CONTRACT_VERSION,
+      binding: binding(),
+      revision: 1,
+      task: { schedulerState: 'REVIEW', disabledReason: null },
+      libraryItems: [],
+      slots: [{
+        slotKey: 'sku-red:hero',
+        status: 'BOUND',
+        alternatives: [bound],
+        selectedAttemptId: 'attempt-bound-before-unknown',
+        slotRevision: 51,
+      }],
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_UNKNOWN_OUTCOME_LOCKED',
+  );
+  assert.equal(workspace.getSnapshot().runtimeRevision, 0);
+
+  snapshot = workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'FAILED', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'UNKNOWN_OUTCOME',
+      alternatives: [bound, unknown],
+      selectedAttemptId: 'attempt-bound-before-unknown',
+      slotRevision: 52,
+    }],
+  });
+  hero = snapshot.slots.find((row) => row.slotKey === 'sku-red:hero');
+  assert.equal(hero.status, 'UNKNOWN_OUTCOME');
+  assert.equal(hero.regenerateDisabledReason, 'UNKNOWN_OUTCOME_REQUIRES_RECOVERY');
+  snapshot = workspace.applyPublishProjection(publishProjection(api, workspace, 1));
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.ok(snapshot.publishSummary.blockerCodes.includes('UNKNOWN_OUTCOME'));
+});
+
+test('never marks an empty workspace as publish eligible', () => {
+  const api = loadApi();
+  const empty = api.createWorkspace(input({
+    selectedSkuKey: null,
+    selectedSlotKey: null,
+    globalReferenceIds: ['captured-main'],
+    libraryItems: [libraryItem('captured-main', 'CAPTURED')],
+    skus: [],
+  }));
+  const snapshot = empty.applyPublishProjection(publishProjection(api, empty, 1));
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.deepEqual(plain(snapshot.publishSummary.orderedMedia), []);
+  assert.ok(snapshot.publishSummary.blockerCodes.includes('NO_MEDIA_SLOTS'));
+});
+
+test('publishes a deterministic ordered summary only for current bound selections', () => {
+  const api = loadApi();
+  const generated = [
+    libraryItem('publish-red-hero', 'GENERATED', { skuKeys: ['sku-red'] }),
+    libraryItem('publish-red-detail', 'GENERATED', { skuKeys: ['sku-red'] }),
+  ];
+  const ready = api.createWorkspace(input({
+    dispatched: true,
+    libraryItems: [...input().libraryItems, ...generated],
+    skus: [sku('sku-red', {
+      slots: [
+        slot('sku-red:hero', 'HERO', {
+          alternatives: [alternative('attempt-ready-hero', 'BOUND', 'publish-red-hero')],
+          selectedAttemptId: 'attempt-ready-hero',
+        }),
+        slot('sku-red:detail-1', 'DETAIL', {
+          alternatives: [alternative(
+            'attempt-ready-detail', 'BOUND', 'publish-red-detail',
+          )],
+          selectedAttemptId: 'attempt-ready-detail',
+        }),
+      ],
+    })],
+  }));
+  const firstProjection = publishProjection(api, ready, 1);
+  let snapshot = ready.applyPublishProjection(firstProjection);
+  assert.equal(snapshot.publishSummary.eligible, true);
+  assert.equal(snapshot.publishSummary.readySlots, 2);
+  assert.deepEqual(plain(snapshot.publishSummary.orderedMedia), [
+    {
+      skuKey: 'sku-red', slotKey: 'sku-red:hero', position: 0, role: 'HERO',
+      attemptId: 'attempt-ready-hero', mediaId: 'publish-red-hero',
+    },
+    {
+      skuKey: 'sku-red', slotKey: 'sku-red:detail-1', position: 1, role: 'DETAIL',
+      attemptId: 'attempt-ready-detail', mediaId: 'publish-red-detail',
+    },
+  ]);
+  snapshot = ready.selectSlot('sku-red:detail-1');
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.ok(snapshot.publishSummary.blockerCodes.includes('PUBLISH_BASIS_STALE'));
+  snapshot = ready.applyPublishProjection(publishProjection(api, ready, 2));
+  assert.equal(snapshot.publishSummary.eligible, true);
+  snapshot = ready.moveSlotByKeyboard('sku-red:detail-1', 'Home');
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.equal(snapshot.publishSummary.draftState, 'UNKNOWN');
+  assert.equal(snapshot.publishSummary.blockerCodes[0], 'ORDER_REBIND_REQUIRED');
+  assert.throws(
+    () => ready.applyPublishProjection({ ...firstProjection, revision: 99 }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_PUBLISH_BASIS_STALE',
+  );
+  const currentProjection = publishProjection(api, ready, 99);
+  assert.throws(
+    () => ready.applyPublishProjection({
+      ...currentProjection,
+      orderedMedia: firstProjection.orderedMedia,
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_PUBLISH_BASIS_STALE',
+  );
+  assert.throws(
+    () => ready.applyPublishProjection({
+      ...currentProjection,
+      orderedMedia: currentProjection.orderedMedia.map((row, index) => (
+        index === 0 ? { ...row, extra: true } : row
+      )),
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_INPUT_INVALID',
+  );
+  assert.equal(ready.getSnapshot().publishRevision, 2);
+  snapshot = ready.applyPublishProjection(publishProjection(api, ready, 3));
+  assert.equal(snapshot.publishSummary.eligible, true);
+  assert.deepEqual(plain(snapshot.publishSummary.orderedMedia.map((row) => row.slotKey)), [
+    'sku-red:detail-1', 'sku-red:hero',
+  ]);
+  assert.equal(snapshot.publishSummary.orderedMedia[0].role, 'HERO');
+  snapshot = ready.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [],
+  });
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.equal(snapshot.publishSummary.blockerCodes[0], 'PUBLISH_BASIS_STALE');
+  snapshot = ready.applyPublishProjection(publishProjection(api, ready, 4));
+  assert.equal(snapshot.publishSummary.eligible, true);
+  snapshot = ready.setMainSlot('sku-red:hero');
+  assert.equal(snapshot.publishSummary.eligible, false);
+  assert.equal(snapshot.publishSummary.blockerCodes[0], 'ORDER_REBIND_REQUIRED');
 });

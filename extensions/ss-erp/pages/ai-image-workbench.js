@@ -89,6 +89,13 @@
   var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
+  var WORKSPACE_BOUND_INGEST_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
+  var WORKSPACE_BOUND_INGEST_KEYS = Object.freeze([
+    'contractVersion', 'replayed', 'receiptId', 'assetId', 'provenanceId',
+    'normalizedSha256', 'mimeType', 'width', 'height', 'sourceDraftRevision',
+    'sourceDraftVersion', 'boundDraftRevision', 'boundDraftVersion',
+    'assignmentOrdinal', 'assignmentSha256', 'skuKey', 'slotKey',
+  ]);
 
   function isRecord(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -107,6 +114,64 @@
       // Control characters are never valid in public workbench identifiers.
       // eslint-disable-next-line no-control-regex
       && !/[\u0000-\u001f\u007f]/u.test(normalized);
+  }
+
+  function workspaceBinding(value) {
+    if (!isRecord(value)
+      || !isCanonicalText(value.shopId, 1, 200)
+      || !isCanonicalText(value.workflowId, 1, 200)
+      || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 1
+      || !Number.isSafeInteger(value.draftVersion) || value.draftVersion < 1) return null;
+    return {
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+    };
+  }
+
+  function verifiedBoundWorkspaceBinding(candidate, context) {
+    var sourceBinding = workspaceBinding(context);
+    if (!sourceBinding) return null;
+    if (!candidate || candidate.deliveryState !== 'BOUND') return sourceBinding;
+    var ingest = candidate.ingest;
+    if (candidate.reviewState !== 'APPROVED'
+      || typeof candidate.resultId !== 'string'
+      || !/^br_[a-f0-9]{48}$/u.test(candidate.resultId)
+      || !exactKeys(ingest, WORKSPACE_BOUND_INGEST_KEYS)
+      || ingest.contractVersion !== WORKSPACE_BOUND_INGEST_VERSION
+      || typeof ingest.replayed !== 'boolean'
+      || !isCanonicalText(ingest.receiptId, 1, 200)
+      || !isCanonicalText(ingest.assetId, 1, 200)
+      || !isCanonicalText(ingest.provenanceId, 1, 200)
+      || !isSha256(ingest.normalizedSha256)
+      || !['image/png', 'image/jpeg', 'image/webp'].includes(ingest.mimeType)
+      || !Number.isSafeInteger(ingest.width) || ingest.width < 1
+      || !Number.isSafeInteger(ingest.height) || ingest.height < 1
+      || context.assignmentMode !== 'APPEND'
+      || !Number.isSafeInteger(context.assignmentOrdinal)
+      || context.assignmentOrdinal < 0 || context.assignmentOrdinal > 499
+      || ingest.sourceDraftRevision !== context.draftRevision
+      || ingest.sourceDraftVersion !== context.draftVersion
+      || ingest.boundDraftRevision !== ingest.sourceDraftRevision + 1
+      || ingest.boundDraftVersion !== ingest.sourceDraftVersion + 1
+      || ingest.assignmentOrdinal !== context.assignmentOrdinal
+      || ingest.skuKey !== context.skuKey
+      || ingest.slotKey !== context.slotKey
+      || !isSha256(ingest.assignmentSha256)) return null;
+    return {
+      shopId: sourceBinding.shopId,
+      workflowId: sourceBinding.workflowId,
+      draftRevision: ingest.boundDraftRevision,
+      draftVersion: ingest.boundDraftVersion,
+    };
+  }
+
+  function workspaceContextIsCanonical(value) {
+    return isRecord(value)
+      && isCanonicalText(value.skuKey, 1, 500)
+      && isCanonicalText(value.slotKey, 1, 200)
+      && value.slotKey === 'sku:' + value.skuKey + ':hero';
   }
 
   function isSha256(value) {
@@ -138,7 +203,11 @@
 
   function emitWorkspaceBootstrap(candidate, forceDispatched) {
     var context = state.publicState && state.publicState.context;
-    if (!isRecord(context)) return false;
+    var binding = verifiedBoundWorkspaceBinding(candidate, context);
+    if (!binding || !workspaceContextIsCanonical(context)) {
+      emitWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
+      return false;
+    }
     var editTaskLocked = document.body && document.body.dataset
       && document.body.dataset.editTaskLocked === 'true';
     var editTaskState = document.body && document.body.dataset
@@ -171,6 +240,7 @@
     }] : [];
     return emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, {
       contractVersion: WORKSPACE_CONTRACT_VERSION,
+      binding: binding,
       executionMode: 'BYOK',
       dispatched: Boolean(
         forceDispatched || candidate || state.unknownOutcome || editTaskLocked,
@@ -184,7 +254,7 @@
         label: context.skuKey,
         slots: [{
           slotKey: context.slotKey,
-          role: /(?:^|:)hero$/iu.test(context.slotKey) ? 'HERO' : 'DETAIL',
+          role: 'HERO',
           prompt: workspaceText(nodes.promptInput.value, 8000),
           negativePrompt: workspaceText(nodes.negativePromptInput.value, 4000),
           referenceIds: null,
@@ -197,12 +267,18 @@
 
   function emitWorkspaceUnknownOutcome() {
     var context = state.publicState && state.publicState.context;
+    var binding = workspaceBinding(context);
     var events = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
-    if (!isRecord(context) || !events || typeof events.nextRuntimeRevision !== 'function') {
+    if (!binding || !workspaceContextIsCanonical(context)) {
+      emitWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
+      return false;
+    }
+    if (!events || typeof events.nextRuntimeRevision !== 'function') {
       return false;
     }
     return emitWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
       contractVersion: WORKSPACE_RUNTIME_VERSION,
+      binding: binding,
       revision: events.nextRuntimeRevision(),
       task: {
         schedulerState: 'FAILED',

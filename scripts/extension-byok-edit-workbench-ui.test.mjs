@@ -260,12 +260,17 @@ const runningSnapshot = () => ({
   }],
 });
 
+let publicContext = {
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
+
 const client = {
   async getPublicState() {
     calls.push(['public-state']);
     return {
       profiles: [profileRow],
-      context: { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
+      context: { ...publicContext },
     };
   },
   async getEditState() {
@@ -443,6 +448,9 @@ function assertRestartUnknownRuntime(eventOffset, message) {
   assert.equal(event.detail.slots[0].alternatives[0].state, 'UNKNOWN_OUTCOME');
   assert.equal(event.detail.slots[0].alternatives[0].mediaId, null);
   assert.equal(event.detail.slots[0].alternatives[0].errorCode, 'PROVIDER_OUTCOME_UNKNOWN');
+  assert.deepEqual(JSON.parse(JSON.stringify(event.detail.binding)), {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  });
 }
 
 await tick();
@@ -549,6 +557,14 @@ await tick();
 assert.equal(calls.filter((row) => row[0] === 'start').length, 1);
 assert.equal(calls.filter((row) => row[0] === 'select').length, 1,
   'the first reviewable alternative is selected without discarding other attempts');
+const selectedWorkspaceRuntime = documentEvents.filter(
+  (event) => event.type === 'ss-erp:workspace-runtime',
+).at(-1);
+assert.equal(selectedWorkspaceRuntime.detail.slots[0].slotRevision, 4,
+  'workspace slot intents receive the media engine revision instead of a polling revision');
+assert.deepEqual(JSON.parse(JSON.stringify(selectedWorkspaceRuntime.detail.binding)), {
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+});
 assert.equal(nodes.editAlternatives.children.length, 1);
 assert.equal(nodes.editSelectedPreview.hidden, false,
   'the selected preview frame reserves space as soon as alternatives exist');
@@ -737,6 +753,33 @@ assert.equal(documentEvents.filter(
 'a getEditState response arriving after device invalidation cannot restore workspace runtime');
 assert.ok(invalidationClearIndex >= 0, 'device invalidation clears retained workspace projection');
 assert.match(nodes.editResultNotice.textContent, /设备会话已变化/u);
+
+const invalidBindingEventOffset = documentEvents.length;
+publicContext = {
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
+editStateOutcomes.push({ value: reviewSnapshot(true) });
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
+assert.equal(documentEvents.slice(invalidBindingEventOffset).some(
+  (event) => event.type === 'ss-erp:workspace-runtime',
+), false, 'an incomplete edit draft binding never produces runtime state');
+assert.equal(documentEvents.slice(invalidBindingEventOffset).some(
+  (event) => event.type === 'ss-erp:workspace-clear',
+), true, 'an incomplete edit draft binding clears retained workspace state');
+assert.equal(documentEvents.slice(invalidBindingEventOffset).some(
+  (event) => event.type === 'ss-erp:workspace-refresh-request',
+), true, 'an incomplete edit draft binding requests an authoritative refresh');
+publicContext = {
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+};
+deferredEditState = null;
+nodes.refreshButton.dispatch('click');
+await tick();
+await tick();
 
 const deferredReferenceUpload = createDeferred();
 const lateReferenceHandle = `mh_${'9'.repeat(48)}`;

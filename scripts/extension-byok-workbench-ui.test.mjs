@@ -745,6 +745,9 @@ function createPageHarness(options = {}) {
   assert.equal(runtime.detail.slots[0].status, 'UNKNOWN_OUTCOME');
   assert.equal(runtime.detail.slots[0].alternatives[0].state, 'UNKNOWN_OUTCOME');
   assert.equal(runtime.detail.slots[0].alternatives[0].mediaId, null);
+  assert.deepEqual(cloneValue(runtime.detail.binding), {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  });
   assert.notEqual(runtime.detail.task.schedulerState, 'READY');
 }
 
@@ -876,9 +879,12 @@ function createPageHarness(options = {}) {
   ));
   assert.ok(bootstrap, 'the authoritative single-slot state bootstraps the workspace shell');
   assert.deepEqual(Object.keys(bootstrap.detail).sort(), [
-    'contractVersion', 'dispatched', 'executionMode', 'globalReferenceIds', 'libraryItems',
-    'selectedSkuKey', 'selectedSlotKey', 'skus',
+    'binding', 'contractVersion', 'dispatched', 'executionMode', 'globalReferenceIds',
+    'libraryItems', 'selectedSkuKey', 'selectedSlotKey', 'skus',
   ].sort());
+  assert.deepEqual(cloneValue(bootstrap.detail.binding), {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  });
   assert.equal(bootstrap.detail.executionMode, 'BYOK');
   assert.equal(bootstrap.detail.selectedSkuKey, publicState.context.skuKey);
   assert.equal(bootstrap.detail.selectedSlotKey, publicState.context.slotKey);
@@ -926,6 +932,34 @@ function createPageHarness(options = {}) {
     'Keep the verified product centered on a neutral background.',
     'a workspace action for another slot cannot mutate the exact single-slot form',
   );
+}
+
+{
+  const authoritative = { value: isolatedPublicState() };
+  delete authoritative.value.context.draftVersion;
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      || event.type === 'ss-erp:workspace-runtime'
+  )), false, 'an incomplete draft binding never produces workspace state');
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-clear'
+  )), true, 'an incomplete draft binding clears any retained workspace state');
+}
+
+{
+  const authoritative = { value: isolatedPublicState() };
+  authoritative.value.context.slotKey = 'sku:sku-1:detail';
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      || event.type === 'ss-erp:workspace-runtime'
+  )), false, 'a non-canonical detail launch cannot synthesize a hero-only workspace');
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-clear'
+  )), true, 'a non-canonical detail launch clears any retained workspace state');
 }
 
 {
@@ -1110,6 +1144,24 @@ for (const transientCode of [
 }
 
 {
+  const authoritative = {
+    value: isolatedPublicState(isolatedCandidate()),
+  };
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  const candidateBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  assert.deepEqual(cloneValue(candidateBootstrap?.detail.binding), {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  }, 'a candidate without an ingest receipt remains bound to the source draft');
+  assert.equal(
+    candidateBootstrap?.detail.skus[0].slots[0].alternatives[0].state,
+    'CANDIDATE_READY',
+  );
+}
+
+{
   const confirmation = createDeferred();
   const authoritative = {
     value: isolatedPublicState({
@@ -1121,6 +1173,13 @@ for (const transientCode of [
     confirmPublish: () => confirmation.promise,
   });
   await flushAsync(8);
+  const boundBootstrap = harness.documentEvents.findLast((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  ));
+  assert.deepEqual(cloneValue(boundBootstrap?.detail.binding), {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 4, draftVersion: 5,
+  }, 'a verified BOUND receipt moves the workspace binding to the bound draft');
+  assert.equal(boundBootstrap?.detail.skus[0].slots[0].alternatives[0].state, 'BOUND');
   assert.equal(harness.calls.filter((row) => row[0] === 'publish-preview').length, 1);
   assert.equal(harness.nodes.publishPanel.hidden, false);
   assert.equal(harness.nodes.publishShop.textContent, 'shop-1');
@@ -1156,6 +1215,25 @@ for (const transientCode of [
   assert.match(harness.nodes.publishNotice.textContent, /publish-receipt-1/u);
   assert.equal(harness.nodes.publishRecoverButton.hidden, true);
   assert.equal(harness.nodes.publishConfirmButton.disabled, true);
+}
+
+{
+  const authoritative = {
+    value: isolatedPublicState({
+      resultId,
+      reviewState: 'APPROVED',
+      deliveryState: 'BOUND',
+      ingest: { ...ingestReceipt, normalizedSha256: 'not-a-sha256' },
+    }),
+  };
+  const harness = createPageHarness({ authoritative });
+  await flushAsync(8);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  )), false, 'an unverified BOUND receipt cannot produce workspace state');
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-clear'
+  )), true, 'an unverified BOUND receipt clears any retained workspace binding');
 }
 
 {

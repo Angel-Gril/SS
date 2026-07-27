@@ -8,12 +8,24 @@
 
   var CONTRACT_VERSION = 'extension-byok-workbench-workspace-state/v1';
   var RUNTIME_CONTRACT_VERSION = 'extension-byok-workbench-workspace-runtime/v1';
+  var ACTION_INTENT_CONTRACT_VERSION = 'extension-byok-workbench-action-intent/v1';
+  var ACTION_OUTCOME_CONTRACT_VERSION = 'extension-byok-workbench-action-outcome/v1';
+  var PUBLISH_PROJECTION_CONTRACT_VERSION =
+    'extension-byok-workbench-publish-projection/v1';
+  var EXTERNAL_CHARGE_WARNING_VERSION = 'external-provider-charge/v1';
   var DEFAULT_DISABLED_REASON = 'BATCH_COORDINATOR_NOT_READY';
+  var DEFAULT_PUBLISH_DISABLED_REASON = 'PUBLISH_COORDINATOR_NOT_READY';
   var MEDIA_SOURCE_TYPES = Object.freeze(['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
   var SLOT_ROLES = Object.freeze(['HERO', 'DETAIL']);
   var KEYBOARD_SELECTION_KEYS = Object.freeze([
     'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'Home', 'End',
   ]);
+  var KEYBOARD_SLOT_ORDER_KEYS = Object.freeze(['ArrowUp', 'ArrowDown', 'Home', 'End']);
+  var ACTION_INTENTS = Object.freeze([
+    'PAUSE_AFTER_CURRENT', 'CONTINUE', 'CANCEL_QUEUED', 'KEEP_ATTEMPT',
+    'REJECT_ATTEMPT', 'REGENERATE_SLOT',
+  ]);
+  var PUBLISH_DRAFT_STATES = Object.freeze(['CURRENT', 'STALE', 'UNKNOWN']);
   var ALTERNATIVE_STATES = Object.freeze([
     'QUEUED', 'SUBMITTING', 'WAITING', 'CANDIDATE_READY', 'APPROVED', 'REJECTED',
     'INGESTING', 'INGESTED', 'BOUND', 'FAILED_RETRYABLE', 'FAILED_FINAL',
@@ -50,8 +62,11 @@
   });
 
   var INPUT_KEYS = Object.freeze([
-    'contractVersion', 'executionMode', 'dispatched', 'selectedSkuKey',
+    'contractVersion', 'binding', 'executionMode', 'dispatched', 'selectedSkuKey',
     'selectedSlotKey', 'globalReferenceIds', 'libraryItems', 'skus',
+  ]);
+  var BINDING_KEYS = Object.freeze([
+    'shopId', 'workflowId', 'draftRevision', 'draftVersion',
   ]);
   var LIBRARY_ITEM_KEYS = Object.freeze([
     'mediaId', 'sourceType', 'label', 'secondaryLabel', 'skuKeys', 'referenceEligible',
@@ -65,13 +80,24 @@
     'attemptId', 'state', 'mediaId', 'errorCode',
   ]);
   var RUNTIME_KEYS = Object.freeze([
-    'contractVersion', 'revision', 'task', 'libraryItems', 'slots',
+    'contractVersion', 'binding', 'revision', 'task', 'libraryItems', 'slots',
   ]);
   var RUNTIME_TASK_KEYS = Object.freeze(['schedulerState', 'disabledReason']);
   var RUNTIME_SLOT_KEYS = Object.freeze([
     'slotKey', 'status', 'alternatives', 'selectedAttemptId',
   ]);
+  var RUNTIME_SLOT_REVISION_KEYS = Object.freeze([
+    'slotKey', 'status', 'alternatives', 'selectedAttemptId', 'slotRevision',
+  ]);
   var PROMPT_UPDATE_KEYS = Object.freeze(['prompt', 'negativePrompt']);
+  var CHARGE_ACKNOWLEDGEMENT_KEYS = Object.freeze(['warningVersion', 'confirmed']);
+  var PUBLISH_PROJECTION_KEYS = Object.freeze([
+    'contractVersion', 'binding', 'revision', 'expectedWorkspaceRevision',
+    'expectedRuntimeRevision', 'draftState', 'disabledReason', 'orderedMedia',
+  ]);
+  var PUBLISH_MEDIA_ROW_KEYS = Object.freeze([
+    'skuKey', 'slotKey', 'position', 'role', 'attemptId', 'mediaId',
+  ]);
 
   function workspaceError(code, message) {
     var error = new Error(message || code);
@@ -86,6 +112,15 @@
 
   function selectionInvalid(message) {
     throw workspaceError('SS_ERP_BYOK_WORKSPACE_SELECTION_INVALID', message);
+  }
+
+  function actionUnavailable(reason, message) {
+    var error = workspaceError(
+      'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE',
+      message || 'workspace action is unavailable for the current state',
+    );
+    error.reason = reason;
+    throw error;
   }
 
   function referenceLocked(reason) {
@@ -156,6 +191,49 @@
 
   function nullableContextKey(value, maximum, label) {
     return value === null ? null : contextKey(value, maximum, label);
+  }
+
+  function normalizeBinding(value) {
+    if (!exactKeys(value, BINDING_KEYS)
+      || !Number.isSafeInteger(value.draftRevision)
+      || value.draftRevision < 1
+      || !Number.isSafeInteger(value.draftVersion)
+      || value.draftVersion < 1) {
+      invalid('workspace binding is invalid');
+    }
+    return {
+      shopId: contextKey(value.shopId, 200, 'binding shop ID'),
+      workflowId: contextKey(value.workflowId, 200, 'binding workflow ID'),
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+    };
+  }
+
+  function sameBinding(left, right) {
+    return left.shopId === right.shopId
+      && left.workflowId === right.workflowId
+      && left.draftRevision === right.draftRevision
+      && left.draftVersion === right.draftVersion;
+  }
+
+  function cloneBinding(value) {
+    return {
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+    };
+  }
+
+  function requireMatchingBinding(expected, value) {
+    var actual = normalizeBinding(value);
+    if (!sameBinding(expected, actual)) {
+      throw workspaceError(
+        'SS_ERP_BYOK_WORKSPACE_BINDING_MISMATCH',
+        'workspace event binding does not match the active draft',
+      );
+    }
+    return actual;
   }
 
   function unique(values, label) {
@@ -291,6 +369,17 @@
       && alternative.mediaId !== null;
   }
 
+  function sameAlternatives(left, right) {
+    return left.length === right.length && left.every(function (alternative, index) {
+      var candidate = right[index];
+      return candidate
+        && alternative.attemptId === candidate.attemptId
+        && alternative.state === candidate.state
+        && alternative.mediaId === candidate.mediaId
+        && alternative.errorCode === candidate.errorCode;
+    });
+  }
+
   function normalizeSelectedAttempt(value, alternatives) {
     var selectedAttemptId = nullableIdentifier(value, 200, 'selected attempt ID');
     if (selectedAttemptId === null) return null;
@@ -302,6 +391,9 @@
   }
 
   function derivedSlotStatus(alternatives, selectedAttemptId) {
+    if (alternatives.some(function (alternative) {
+      return alternative.state === 'UNKNOWN_OUTCOME';
+    })) return 'UNKNOWN_OUTCOME';
     if (selectedAttemptId !== null) {
       var selected = alternatives.find(function (item) {
         return item.attemptId === selectedAttemptId;
@@ -334,6 +426,7 @@
       alternatives: alternatives,
       selectedAttemptId: selectedAttemptId,
       status: derivedSlotStatus(alternatives, selectedAttemptId),
+      slotRevision: null,
       promptFrozen: alternatives.length > 0,
     };
   }
@@ -346,6 +439,7 @@
     }), 'SKU keys');
     var totalSlots = 0;
     var allSlotKeys = [];
+    var allAttemptIds = [];
     var totalAlternatives = 0;
     var skus = value.map(function (item, index) {
       if (!exactKeys(item, SKU_KEYS) || item.skuKey !== normalizedSkuKeys[index]
@@ -358,11 +452,19 @@
       if (slots.filter(function (slot) { return slot.role === 'HERO'; }).length !== 1) {
         invalid('each SKU must have exactly one HERO slot');
       }
+      if (slots[0].role !== 'HERO') {
+        invalid('the first SKU slot must be the HERO slot');
+      }
       totalSlots += slots.length;
       totalAlternatives += slots.reduce(function (sum, slot) {
         return sum + slot.alternatives.length;
       }, 0);
-      slots.forEach(function (slot) { allSlotKeys.push(slot.slotKey); });
+      slots.forEach(function (slot) {
+        allSlotKeys.push(slot.slotKey);
+        slot.alternatives.forEach(function (alternative) {
+          allAttemptIds.push(alternative.attemptId);
+        });
+      });
       return {
         skuKey: normalizedSkuKeys[index],
         label: text(item.label, 1, 200, 'SKU label'),
@@ -373,6 +475,7 @@
       invalid('workspace limits are exceeded');
     }
     unique(allSlotKeys, 'slot keys');
+    unique(allAttemptIds, 'alternative attempt IDs');
     return skus;
   }
 
@@ -390,6 +493,7 @@
     if (states.some(function (state) {
       return ['QUEUED', 'SUBMITTING', 'WAITING', 'INGESTING'].includes(state);
     })) return 'RUNNING';
+    if (states.includes('UNKNOWN_OUTCOME')) return 'FAILED';
     if (states.some(function (state) {
       return SELECTABLE_ALTERNATIVE_STATES.includes(state) || state === 'REJECTED';
     })) return 'REVIEW';
@@ -397,7 +501,7 @@
       return 'CANCELLED';
     }
     if (states.some(function (state) {
-      return ['FAILED_RETRYABLE', 'FAILED_FINAL', 'UNKNOWN_OUTCOME', 'EXPIRED'].includes(state);
+      return ['FAILED_RETRYABLE', 'FAILED_FINAL', 'EXPIRED'].includes(state);
     })) return 'FAILED';
     return 'READY';
   }
@@ -425,6 +529,7 @@
       || typeof input.dispatched !== 'boolean') {
       invalid('workspace input is invalid');
     }
+    var binding = normalizeBinding(input.binding);
     var executionMode;
     try { executionMode = workbench.parseExecutionMode(input.executionMode); } catch {
       invalid('execution mode is invalid');
@@ -486,8 +591,15 @@
     }
 
     var state = {
+      binding: binding,
       revision: 1,
       runtimeRevision: 0,
+      publishRevision: 0,
+      publishDraftState: 'UNKNOWN',
+      publishDisabledReason: DEFAULT_PUBLISH_DISABLED_REASON,
+      publishOrderedMedia: [],
+      publishBasisWorkspaceRevision: null,
+      publishBasisRuntimeRevision: null,
       executionMode: executionMode,
       dispatched: input.dispatched,
       selectedSkuKey: selectedSkuKey,
@@ -525,6 +637,249 @@
         return { editable: false, reason: 'SLOT_EXECUTION_FROZEN' };
       }
       return { editable: true, reason: null };
+    }
+
+    function regenerateDecision(slot) {
+      if (state.disabledReason !== null) {
+        return { available: false, reason: state.disabledReason };
+      }
+      if (slot.alternatives.length === 0) {
+        return { available: false, reason: 'SLOT_NOT_EXECUTED' };
+      }
+      if (slot.alternatives.some(function (alternative) {
+        return alternative.state === 'UNKNOWN_OUTCOME';
+      })) {
+        return { available: false, reason: 'UNKNOWN_OUTCOME_REQUIRES_RECOVERY' };
+      }
+      if (slot.alternatives.some(function (alternative) {
+        return ACTIVE_ALTERNATIVE_STATES.includes(alternative.state);
+      })) {
+        return { available: false, reason: 'SLOT_EXECUTION_ACTIVE' };
+      }
+      if (!Number.isSafeInteger(slot.slotRevision) || slot.slotRevision < 1) {
+        return { available: false, reason: 'SLOT_REVISION_UNAVAILABLE' };
+      }
+      var totalAttempts = state.skus.reduce(function (total, sku) {
+        return total + sku.slots.reduce(function (skuTotal, candidate) {
+          return skuTotal + candidate.alternatives.length;
+        }, 0);
+      }, 0);
+      if (slot.alternatives.length >= LIMITS.maxAlternativesPerSlot
+        || totalAttempts >= LIMITS.maxAlternatives) {
+        return { available: false, reason: 'ATTEMPT_LIMIT_REACHED' };
+      }
+      return { available: true, reason: null };
+    }
+
+    function publishMediaDecision(slot) {
+      var selected = slot.selectedAttemptId === null ? null : slot.alternatives.find(
+        function (alternative) { return alternative.attemptId === slot.selectedAttemptId; },
+      );
+      if (slot.alternatives.some(function (alternative) {
+        return alternative.state === 'UNKNOWN_OUTCOME';
+      })) return { eligible: false, reason: 'UNKNOWN_OUTCOME', selected: selected };
+      if (selected && selected.state === 'BOUND' && selected.mediaId !== null) {
+        return { eligible: true, reason: null, selected: selected };
+      }
+      if (selected) {
+        return { eligible: false, reason: 'RESULT_NOT_BOUND', selected: selected };
+      }
+      if (slot.alternatives.some(function (alternative) {
+        return alternative.state === 'EXPIRED';
+      })) return { eligible: false, reason: 'RESULT_EXPIRED', selected: null };
+      if (slot.alternatives.length > 0 && slot.alternatives.every(function (alternative) {
+        return alternative.state === 'REJECTED';
+      })) return { eligible: false, reason: 'RESULT_REJECTED', selected: null };
+      return { eligible: false, reason: 'MISSING_SELECTION', selected: null };
+    }
+
+    function taskControlDecision(action) {
+      if (state.disabledReason !== null) {
+        return { enabled: false, reason: state.disabledReason };
+      }
+      if (action === 'PAUSE_AFTER_CURRENT') {
+        if (state.schedulerState === 'RUNNING') return { enabled: true, reason: null };
+        if (state.schedulerState === 'PAUSING') {
+          return { enabled: false, reason: 'PAUSE_ALREADY_REQUESTED' };
+        }
+        if (state.schedulerState === 'PAUSED') {
+          return { enabled: false, reason: 'TASK_ALREADY_PAUSED' };
+        }
+        return { enabled: false, reason: 'TASK_NOT_RUNNING' };
+      }
+      if (action === 'CONTINUE') {
+        if (state.schedulerState === 'PAUSED' || state.schedulerState === 'PAUSING') {
+          return { enabled: true, reason: null };
+        }
+        return { enabled: false, reason: 'TASK_NOT_PAUSED' };
+      }
+      invalid('workspace action is invalid');
+    }
+
+    function queuedAttempts() {
+      var queued = [];
+      state.skus.forEach(function (sku) {
+        sku.slots.forEach(function (slot) {
+          slot.alternatives.forEach(function (alternative) {
+            if (alternative.state === 'QUEUED') queued.push({
+              attemptId: alternative.attemptId,
+              slotKey: slot.slotKey,
+              slot: slot,
+            });
+          });
+        });
+      });
+      return queued;
+    }
+
+    function buildTaskControls() {
+      var pause = taskControlDecision('PAUSE_AFTER_CURRENT');
+      var resume = taskControlDecision('CONTINUE');
+      var queued = queuedAttempts();
+      var cancellable = queued.filter(function (item) {
+        return Number.isSafeInteger(item.slot.slotRevision) && item.slot.slotRevision > 0;
+      });
+      var cancelEnabled = state.disabledReason === null && cancellable.length > 0;
+      var cancelDisabledReason = state.disabledReason;
+      if (cancelDisabledReason === null && queued.length === 0) {
+        cancelDisabledReason = 'NO_QUEUED_ATTEMPTS';
+      } else if (cancelDisabledReason === null && cancellable.length === 0) {
+        cancelDisabledReason = 'SLOT_REVISION_UNAVAILABLE';
+      }
+      return {
+        pauseAfterCurrent: { enabled: pause.enabled, disabledReason: pause.reason },
+        continue: { enabled: resume.enabled, disabledReason: resume.reason },
+        cancelQueued: {
+          enabled: cancelEnabled,
+          disabledReason: cancelEnabled ? null : cancelDisabledReason,
+          attemptIds: cancellable.map(function (item) { return item.attemptId; }),
+        },
+      };
+    }
+
+    function appendUnique(values, value) {
+      if (!values.includes(value)) values.push(value);
+    }
+
+    function orderedPublishMedia(slots) {
+      var rows = slots.filter(function (slot) { return slot.publishMediaEligible; })
+        .map(function (slot) {
+          var selected = slot.alternatives.find(function (alternative) {
+            return alternative.attemptId === slot.selectedAttemptId;
+          });
+          return {
+            skuKey: slot.skuKey,
+            slotKey: slot.slotKey,
+            position: slot.position,
+            role: slot.role,
+            attemptId: selected.attemptId,
+            mediaId: selected.mediaId,
+          };
+        });
+      return slots.length > 0 && rows.length === slots.length ? rows : [];
+    }
+
+    function samePublishMedia(left, right) {
+      return left.length === right.length && left.every(function (row, index) {
+        var candidate = right[index];
+        return candidate
+          && row.skuKey === candidate.skuKey
+          && row.slotKey === candidate.slotKey
+          && row.position === candidate.position
+          && row.role === candidate.role
+          && row.attemptId === candidate.attemptId
+          && row.mediaId === candidate.mediaId;
+      });
+    }
+
+    function normalizePublishMedia(value) {
+      if (!Array.isArray(value) || value.length > LIMITS.maxSlots) {
+        invalid('publish ordered media is invalid');
+      }
+      var rows = value.map(function (row) {
+        if (!exactKeys(row, PUBLISH_MEDIA_ROW_KEYS)
+          || !Number.isSafeInteger(row.position)
+          || row.position < 0
+          || !SLOT_ROLES.includes(row.role)) {
+          invalid('publish ordered media row is invalid');
+        }
+        return {
+          skuKey: contextKey(row.skuKey, 500, 'publish SKU key'),
+          slotKey: contextKey(row.slotKey, 200, 'publish slot key'),
+          position: row.position,
+          role: row.role,
+          attemptId: identifier(row.attemptId, 200, 'publish attempt ID'),
+          mediaId: identifier(row.mediaId, 200, 'publish media ID'),
+        };
+      });
+      unique(rows.map(function (row) { return row.slotKey; }), 'publish slot keys');
+      unique(rows.map(function (row) { return row.attemptId; }), 'publish attempt IDs');
+      if (rows.length > 0 && rows[0].role !== 'HERO') {
+        invalid('publish ordered media must begin with a HERO slot');
+      }
+      return rows;
+    }
+
+    function buildPublishSummary(slots) {
+      var blockerCodes = [];
+      var missingSlotKeys = [];
+      var unboundSlotKeys = [];
+      var unknownOutcomeSlotKeys = [];
+      var expiredSlotKeys = [];
+      var rejectedSlotKeys = [];
+      var orderedMedia = orderedPublishMedia(slots);
+      var readySlotCount = slots.filter(function (slot) {
+        return slot.publishMediaEligible;
+      }).length;
+      if (state.publishDisabledReason !== null) {
+        appendUnique(blockerCodes, state.publishDisabledReason);
+      }
+      if (state.publishDraftState === 'UNKNOWN') {
+        appendUnique(blockerCodes, 'DRAFT_STATUS_UNKNOWN');
+      } else if (state.publishDraftState === 'STALE') {
+        appendUnique(blockerCodes, 'DRAFT_STALE');
+      }
+      if (slots.length === 0) appendUnique(blockerCodes, 'NO_MEDIA_SLOTS');
+      if (state.publishRevision > 0
+        && (state.publishBasisWorkspaceRevision !== state.revision
+          || state.publishBasisRuntimeRevision !== state.runtimeRevision
+          || !samePublishMedia(state.publishOrderedMedia, orderedMedia))) {
+        appendUnique(blockerCodes, 'PUBLISH_BASIS_STALE');
+      }
+      slots.forEach(function (slot) {
+        if (slot.publishMediaEligible) return;
+        appendUnique(blockerCodes, slot.publishMediaDisabledReason);
+        if (slot.publishMediaDisabledReason === 'UNKNOWN_OUTCOME') {
+          unknownOutcomeSlotKeys.push(slot.slotKey);
+        } else if (slot.publishMediaDisabledReason === 'RESULT_EXPIRED') {
+          expiredSlotKeys.push(slot.slotKey);
+        } else if (slot.publishMediaDisabledReason === 'RESULT_REJECTED') {
+          rejectedSlotKeys.push(slot.slotKey);
+        } else if (slot.publishMediaDisabledReason === 'RESULT_NOT_BOUND') {
+          unboundSlotKeys.push(slot.slotKey);
+        } else {
+          missingSlotKeys.push(slot.slotKey);
+        }
+      });
+      return {
+        draftState: state.publishDraftState,
+        disabledReason: state.publishDisabledReason,
+        eligible: blockerCodes.length === 0 && orderedMedia.length === slots.length,
+        blockerCodes: blockerCodes,
+        totalSlots: slots.length,
+        readySlots: readySlotCount,
+        missingSlots: missingSlotKeys.length,
+        unboundSlots: unboundSlotKeys.length,
+        unknownOutcomeSlots: unknownOutcomeSlotKeys.length,
+        expiredSlots: expiredSlotKeys.length,
+        rejectedSlots: rejectedSlotKeys.length,
+        missingSlotKeys: missingSlotKeys,
+        unboundSlotKeys: unboundSlotKeys,
+        unknownOutcomeSlotKeys: unknownOutcomeSlotKeys,
+        expiredSlotKeys: expiredSlotKeys,
+        rejectedSlotKeys: rejectedSlotKeys,
+        orderedMedia: orderedMedia,
+      };
     }
 
     function buildTaskSummary(slots) {
@@ -601,6 +956,8 @@
             ? state.globalReferenceIds
             : slot.referenceOverrideIds;
           var promptDecision = promptEditDecision(slot);
+          var regeneration = regenerateDecision(slot);
+          var publishMedia = publishMediaDecision(slot);
           publicSlots.push({
             slotKey: slot.slotKey,
             skuKey: sku.skuKey,
@@ -621,14 +978,42 @@
             referencesEditable: promptDecision.editable,
             referencesDisabledReason: promptDecision.reason,
             alternatives: slot.alternatives.map(function (alternative) {
+              var candidateReady = alternative.state === 'CANDIDATE_READY';
+              var reviewDisabledReason = state.disabledReason;
+              if (reviewDisabledReason === null && slot.alternatives.some(
+                function (candidate) { return candidate.state === 'UNKNOWN_OUTCOME'; },
+              )) reviewDisabledReason = 'UNKNOWN_OUTCOME_REQUIRES_RECOVERY';
+              if (reviewDisabledReason === null && !candidateReady) {
+                reviewDisabledReason = 'ATTEMPT_NOT_REVIEWABLE';
+              }
+              if (reviewDisabledReason === null
+                && (!Number.isSafeInteger(slot.slotRevision) || slot.slotRevision < 1)) {
+                reviewDisabledReason = 'SLOT_REVISION_UNAVAILABLE';
+              }
+              var keepDisabledReason = reviewDisabledReason;
+              if (keepDisabledReason === null
+                && alternative.attemptId === slot.selectedAttemptId) {
+                keepDisabledReason = 'ATTEMPT_ALREADY_SELECTED';
+              }
               return {
                 attemptId: alternative.attemptId,
                 state: alternative.state,
                 mediaId: alternative.mediaId,
                 errorCode: alternative.errorCode,
+                selected: alternative.attemptId === slot.selectedAttemptId,
+                keepAvailable: keepDisabledReason === null,
+                keepDisabledReason: keepDisabledReason,
+                rejectAvailable: reviewDisabledReason === null,
+                rejectDisabledReason: reviewDisabledReason,
+                reviewDisabledReason: reviewDisabledReason,
               };
             }),
             selectedAttemptId: slot.selectedAttemptId,
+            slotRevision: slot.slotRevision,
+            regenerateAvailable: regeneration.available,
+            regenerateDisabledReason: regeneration.reason,
+            publishMediaEligible: publishMedia.eligible,
+            publishMediaDisabledReason: publishMedia.reason,
           });
         });
       });
@@ -636,11 +1021,21 @@
         ERP_HOSTED: 'HOSTED_ADAPTER_NOT_READY',
         BYOK: null,
       };
+      var currentOrderedMedia = orderedPublishMedia(publicSlots);
       var snapshot = {
         contractVersion: CONTRACT_VERSION,
         runtimeContractVersion: RUNTIME_CONTRACT_VERSION,
         revision: state.revision,
         runtimeRevision: state.runtimeRevision,
+        publishProjectionContractVersion: PUBLISH_PROJECTION_CONTRACT_VERSION,
+        publishRevision: state.publishRevision,
+        publishBasis: {
+          expectedWorkspaceRevision: state.revision,
+          expectedRuntimeRevision: state.runtimeRevision,
+          binding: cloneBinding(state.binding),
+          orderedMedia: currentOrderedMedia,
+        },
+        binding: cloneBinding(state.binding),
         executionMode: state.executionMode,
         executionModeFrozen: state.dispatched,
         modeDisabledReasons: modeDisabledReasons,
@@ -655,6 +1050,8 @@
         skus: publicSkus,
         slots: publicSlots,
         taskSummary: buildTaskSummary(publicSlots),
+        taskControls: buildTaskControls(),
+        publishSummary: buildPublishSummary(publicSlots),
       };
       workbench.assertPublicPayload(snapshot);
       return deepFreeze(snapshot);
@@ -674,6 +1071,12 @@
       return getSnapshot();
     }
 
+    function invalidatePublishProjection(reason) {
+      if (state.publishRevision === 0) return;
+      state.publishDraftState = 'UNKNOWN';
+      state.publishDisabledReason = reason;
+    }
+
     function currentMediaById() {
       return libraryMap(state.libraryItems);
     }
@@ -683,6 +1086,174 @@
       var slot = findSlot(state.skus, slotKey);
       if (!slot) selectionInvalid('slot is unavailable');
       return slot;
+    }
+
+    function requireAttempt(slot, attemptIdValue) {
+      var attemptId = identifier(attemptIdValue, 200, 'attempt ID');
+      var alternative = slot.alternatives.find(function (candidate) {
+        return candidate.attemptId === attemptId;
+      });
+      if (!alternative) selectionInvalid('attempt is unavailable');
+      return alternative;
+    }
+
+    function requireUnknownOutcomesRetained(slot, alternatives) {
+      var unknownAttemptIds = slot.alternatives.filter(function (alternative) {
+        return alternative.state === 'UNKNOWN_OUTCOME';
+      }).map(function (alternative) { return alternative.attemptId; });
+      var retained = unknownAttemptIds.every(function (attemptId) {
+        return alternatives.some(function (alternative) {
+          return alternative.attemptId === attemptId
+            && alternative.state === 'UNKNOWN_OUTCOME';
+        });
+      });
+      if (!retained) {
+        throw workspaceError(
+          'SS_ERP_BYOK_WORKSPACE_UNKNOWN_OUTCOME_LOCKED',
+          'unknown Provider outcomes require an explicit recovery path',
+        );
+      }
+    }
+
+    function findAttempt(attemptIdValue) {
+      var attemptId = identifier(attemptIdValue, 200, 'attempt ID');
+      for (var skuIndex = 0; skuIndex < state.skus.length; skuIndex += 1) {
+        for (var slotIndex = 0; slotIndex < state.skus[skuIndex].slots.length; slotIndex += 1) {
+          var slot = state.skus[skuIndex].slots[slotIndex];
+          var alternative = slot.alternatives.find(function (candidate) {
+            return candidate.attemptId === attemptId;
+          });
+          if (alternative) return { slot: slot, alternative: alternative };
+        }
+      }
+      return null;
+    }
+
+    function createActionIntent(
+      action,
+      slotKey,
+      attemptId,
+      expectedSlotRevision,
+      acknowledgement,
+      commandIdValue,
+    ) {
+      if (!ACTION_INTENTS.includes(action)) invalid('workspace action is invalid');
+      var commandId = identifier(commandIdValue, 200, 'workspace command ID');
+      var intent = {
+        contractVersion: ACTION_INTENT_CONTRACT_VERSION,
+        binding: cloneBinding(state.binding),
+        action: action,
+        commandId: commandId,
+        expectedWorkspaceRevision: state.revision,
+        expectedRuntimeRevision: state.runtimeRevision,
+        expectedSlotRevision: expectedSlotRevision,
+        slotKey: slotKey,
+        attemptId: attemptId,
+        externalChargeAcknowledgement: acknowledgement,
+      };
+      workbench.assertPublicPayload(intent);
+      return deepFreeze(intent);
+    }
+
+    function createPauseAfterCurrentIntent(commandIdValue) {
+      var decision = taskControlDecision('PAUSE_AFTER_CURRENT');
+      if (!decision.enabled) actionUnavailable(decision.reason);
+      return createActionIntent(
+        'PAUSE_AFTER_CURRENT', null, null, null, null, commandIdValue,
+      );
+    }
+
+    function createContinueIntent(commandIdValue) {
+      var decision = taskControlDecision('CONTINUE');
+      if (!decision.enabled) actionUnavailable(decision.reason);
+      return createActionIntent('CONTINUE', null, null, null, null, commandIdValue);
+    }
+
+    function createCancelQueuedIntent(attemptIdValue, commandIdValue) {
+      if (state.disabledReason !== null) actionUnavailable(state.disabledReason);
+      var match = findAttempt(attemptIdValue);
+      if (!match || match.alternative.state !== 'QUEUED') {
+        actionUnavailable('ATTEMPT_NOT_QUEUED');
+      }
+      if (!Number.isSafeInteger(match.slot.slotRevision) || match.slot.slotRevision < 1) {
+        actionUnavailable('SLOT_REVISION_UNAVAILABLE');
+      }
+      return createActionIntent(
+        'CANCEL_QUEUED',
+        match.slot.slotKey,
+        match.alternative.attemptId,
+        match.slot.slotRevision,
+        null,
+        commandIdValue,
+      );
+    }
+
+    function createReviewIntent(action, slotKeyValue, attemptIdValue, commandIdValue) {
+      if (state.disabledReason !== null) actionUnavailable(state.disabledReason);
+      var slot = requireSlot(slotKeyValue);
+      var alternative = requireAttempt(slot, attemptIdValue);
+      if (slot.alternatives.some(function (candidate) {
+        return candidate.state === 'UNKNOWN_OUTCOME';
+      })) actionUnavailable('UNKNOWN_OUTCOME_REQUIRES_RECOVERY');
+      if (alternative.state !== 'CANDIDATE_READY' || alternative.mediaId === null) {
+        actionUnavailable('ATTEMPT_NOT_REVIEWABLE');
+      }
+      if (!Number.isSafeInteger(slot.slotRevision) || slot.slotRevision < 1) {
+        actionUnavailable('SLOT_REVISION_UNAVAILABLE');
+      }
+      if (action === 'KEEP_ATTEMPT' && slot.selectedAttemptId === alternative.attemptId) {
+        actionUnavailable('ATTEMPT_ALREADY_SELECTED');
+      }
+      return createActionIntent(
+        action,
+        slot.slotKey,
+        alternative.attemptId,
+        slot.slotRevision,
+        null,
+        commandIdValue,
+      );
+    }
+
+    function createKeepAttemptIntent(slotKeyValue, attemptIdValue, commandIdValue) {
+      return createReviewIntent(
+        'KEEP_ATTEMPT', slotKeyValue, attemptIdValue, commandIdValue,
+      );
+    }
+
+    function createRejectAttemptIntent(slotKeyValue, attemptIdValue, commandIdValue) {
+      return createReviewIntent(
+        'REJECT_ATTEMPT', slotKeyValue, attemptIdValue, commandIdValue,
+      );
+    }
+
+    function normalizeChargeAcknowledgement(value) {
+      if (!exactKeys(value, CHARGE_ACKNOWLEDGEMENT_KEYS)
+        || value.warningVersion !== EXTERNAL_CHARGE_WARNING_VERSION
+        || value.confirmed !== true) {
+        throw workspaceError(
+          'SS_ERP_BYOK_WORKSPACE_CHARGE_ACKNOWLEDGEMENT_REQUIRED',
+          'the current external Provider charge warning must be confirmed',
+        );
+      }
+      return {
+        warningVersion: EXTERNAL_CHARGE_WARNING_VERSION,
+        confirmed: true,
+      };
+    }
+
+    function createRegenerateIntent(slotKeyValue, acknowledgementValue, commandIdValue) {
+      var slot = requireSlot(slotKeyValue);
+      var decision = regenerateDecision(slot);
+      if (!decision.available) actionUnavailable(decision.reason);
+      var acknowledgement = normalizeChargeAcknowledgement(acknowledgementValue);
+      return createActionIntent(
+        'REGENERATE_SLOT',
+        slot.slotKey,
+        null,
+        slot.slotRevision,
+        acknowledgement,
+        commandIdValue,
+      );
     }
 
     function setExecutionMode(requestedMode) {
@@ -840,23 +1411,33 @@
         currentMediaById(),
         slot.skuKey,
       );
+      requireUnknownOutcomesRetained(slot, alternatives);
       var selectedAttemptId = normalizeSelectedAttempt(selectedAttemptIdValue, alternatives);
       var total = alternatives.length;
+      var attemptIds = alternatives.map(function (alternative) { return alternative.attemptId; });
       state.skus.forEach(function (sku) {
         sku.slots.forEach(function (candidate) {
-          if (candidate !== slot) total += candidate.alternatives.length;
+          if (candidate !== slot) {
+            total += candidate.alternatives.length;
+            candidate.alternatives.forEach(function (alternative) {
+              attemptIds.push(alternative.attemptId);
+            });
+          }
         });
       });
       if (total > LIMITS.maxAlternatives) invalid('workspace alternative limit is exceeded');
+      unique(attemptIds, 'alternative attempt IDs');
       slot.alternatives = alternatives;
       slot.selectedAttemptId = selectedAttemptId;
       slot.status = derivedSlotStatus(alternatives, selectedAttemptId);
+      slot.slotRevision = null;
       if (alternatives.length > 0) {
         slot.promptFrozen = true;
         state.dispatched = true;
       }
       state.schedulerState = deriveSchedulerState(state.skus);
       state.disabledReason = DEFAULT_DISABLED_REASON;
+      invalidatePublishProjection('MEDIA_REBIND_REQUIRED');
       return changed();
     }
 
@@ -870,16 +1451,25 @@
       if (slot.selectedAttemptId === attemptId) return getSnapshot();
       slot.selectedAttemptId = attemptId;
       slot.status = alternative.state;
+      invalidatePublishProjection('MEDIA_REBIND_REQUIRED');
       return changed();
+    }
+
+    function alignSlotRolesToOrder(sku) {
+      sku.slots.forEach(function (candidate, index) {
+        candidate.role = index === 0 ? 'HERO' : 'DETAIL';
+      });
     }
 
     function setMainSlot(slotKeyValue) {
       var slot = requireSlot(slotKeyValue);
-      if (slot.role === 'HERO') return getSnapshot();
       var sku = state.skus.find(function (item) { return item.skuKey === slot.skuKey; });
-      sku.slots.forEach(function (candidate) {
-        candidate.role = candidate === slot ? 'HERO' : 'DETAIL';
-      });
+      var index = sku.slots.findIndex(function (candidate) { return candidate === slot; });
+      if (index === 0) return getSnapshot();
+      sku.slots.splice(index, 1);
+      sku.slots.unshift(slot);
+      alignSlotRolesToOrder(sku);
+      invalidatePublishProjection('ORDER_REBIND_REQUIRED');
       return changed();
     }
 
@@ -896,7 +1486,36 @@
       var selected = sku.slots[index];
       sku.slots.splice(index, 1);
       sku.slots.splice(nextIndex, 0, selected);
+      alignSlotRolesToOrder(sku);
+      invalidatePublishProjection('ORDER_REBIND_REQUIRED');
       return changed();
+    }
+
+    function moveSlotByKeyboard(slotKeyValue, key) {
+      if (!KEYBOARD_SLOT_ORDER_KEYS.includes(key)) {
+        selectionInvalid('keyboard slot ordering is invalid');
+      }
+      var slot = requireSlot(slotKeyValue);
+      var sku = state.skus.find(function (item) { return item.skuKey === slot.skuKey; });
+      var index = sku.slots.findIndex(function (candidate) { return candidate === slot; });
+      var nextIndex = index;
+      if (key === 'Home') nextIndex = 0;
+      else if (key === 'End') nextIndex = sku.slots.length - 1;
+      else if (key === 'ArrowUp') nextIndex = Math.max(0, index - 1);
+      else nextIndex = Math.min(sku.slots.length - 1, index + 1);
+      var selectionChanged = state.selectedSlotKey !== slot.slotKey
+        || state.selectedSkuKey !== slot.skuKey;
+      state.selectedSkuKey = slot.skuKey;
+      state.selectedSlotKey = slot.slotKey;
+      selectedSlotBySku.set(slot.skuKey, slot.slotKey);
+      if (nextIndex !== index) {
+        sku.slots.splice(index, 1);
+        sku.slots.splice(nextIndex, 0, slot);
+        alignSlotRolesToOrder(sku);
+        invalidatePublishProjection('ORDER_REBIND_REQUIRED');
+        return changed();
+      }
+      return selectionChanged ? changed() : getSnapshot();
     }
 
     function upsertLibraryItem(value) {
@@ -959,6 +1578,7 @@
         || !Number.isSafeInteger(value.revision) || value.revision < 1) {
         invalid('runtime projection is invalid');
       }
+      requireMatchingBinding(state.binding, value.binding);
       if (value.revision <= state.runtimeRevision) {
         throw workspaceError(
           'SS_ERP_BYOK_WORKSPACE_RUNTIME_STALE',
@@ -1040,13 +1660,22 @@
 
       var runtimeSlotKeys = [];
       var patches = value.slots.map(function (runtimeSlot) {
-        if (!exactKeys(runtimeSlot, RUNTIME_SLOT_KEYS)
+        var hasSlotRevision = exactKeys(runtimeSlot, RUNTIME_SLOT_REVISION_KEYS);
+        if (!(exactKeys(runtimeSlot, RUNTIME_SLOT_KEYS) || hasSlotRevision)
           || !SLOT_STATUSES.includes(runtimeSlot.status)) {
           invalid('runtime slot projection is invalid');
+        }
+        if (hasSlotRevision && (!Number.isSafeInteger(runtimeSlot.slotRevision)
+          || runtimeSlot.slotRevision < 1)) {
+          invalid('runtime slot revision is invalid');
         }
         var slotKey = contextKey(runtimeSlot.slotKey, 200, 'runtime slot key');
         var targetSlot = findSlot(state.skus, slotKey);
         if (!targetSlot) invalid('runtime slot is unavailable');
+        if (hasSlotRevision && targetSlot.slotRevision !== null
+          && runtimeSlot.slotRevision < targetSlot.slotRevision) {
+          invalid('runtime slot revision is stale');
+        }
         runtimeSlotKeys.push(slotKey);
         var alternatives = normalizeAlternatives(
           runtimeSlot.alternatives,
@@ -1057,19 +1686,31 @@
           runtimeSlot.selectedAttemptId,
           alternatives,
         );
+        requireUnknownOutcomesRetained(targetSlot, alternatives);
         if (runtimeSlot.status !== derivedSlotStatus(alternatives, selectedAttemptId)) {
           invalid('runtime slot status does not match the selected attempt');
+        }
+        if (hasSlotRevision && targetSlot.slotRevision === runtimeSlot.slotRevision
+          && (targetSlot.status !== runtimeSlot.status
+            || targetSlot.selectedAttemptId !== selectedAttemptId
+            || !sameAlternatives(targetSlot.alternatives, alternatives))) {
+          throw workspaceError(
+            'SS_ERP_BYOK_WORKSPACE_SLOT_REVISION_REUSED',
+            'runtime slot revision cannot describe different slot state',
+          );
         }
         return {
           slotKey: slotKey,
           status: runtimeSlot.status,
           alternatives: alternatives,
           selectedAttemptId: selectedAttemptId,
+          slotRevision: hasSlotRevision ? runtimeSlot.slotRevision : null,
         };
       });
       unique(runtimeSlotKeys, 'runtime slot keys');
       var projectedAlternativeCount = 0;
       var projectedAlternativeStates = [];
+      var projectedAttemptIds = [];
       state.skus.forEach(function (sku) {
         sku.slots.forEach(function (slot) {
           var patch = patches.find(function (candidate) {
@@ -1078,6 +1719,7 @@
           var projectedAlternatives = patch ? patch.alternatives : slot.alternatives;
           projectedAlternativeCount += projectedAlternatives.length;
           projectedAlternatives.forEach(function (alternative) {
+            projectedAttemptIds.push(alternative.attemptId);
             projectedAlternativeStates.push(alternative.state);
             if (alternative.mediaId === null) return;
             var item = nextMediaById.get(alternative.mediaId);
@@ -1090,6 +1732,7 @@
       if (projectedAlternativeCount > LIMITS.maxAlternatives) {
         invalid('workspace alternative limit is exceeded');
       }
+      unique(projectedAttemptIds, 'projected alternative attempt IDs');
       if (!allowedRuntimeSchedulerStates(projectedAlternativeStates)
         .includes(value.task.schedulerState)) {
         invalid('runtime scheduler state contradicts projected attempts');
@@ -1101,6 +1744,7 @@
         slot.status = patch.status;
         slot.alternatives = patch.alternatives;
         slot.selectedAttemptId = patch.selectedAttemptId;
+        slot.slotRevision = patch.slotRevision;
         if (patch.alternatives.length > 0) slot.promptFrozen = true;
       });
       state.schedulerState = value.task.schedulerState;
@@ -1110,6 +1754,52 @@
         || patches.some(function (patch) { return patch.alternatives.length > 0; })) {
         state.dispatched = true;
       }
+      if (state.publishRevision > 0) {
+        invalidatePublishProjection(
+          patches.length > 0 ? 'MEDIA_REBIND_REQUIRED' : 'PUBLISH_BASIS_STALE',
+        );
+      }
+      return changed();
+    }
+
+    function applyPublishProjection(value) {
+      if (!exactKeys(value, PUBLISH_PROJECTION_KEYS)
+        || value.contractVersion !== PUBLISH_PROJECTION_CONTRACT_VERSION
+        || !Number.isSafeInteger(value.revision)
+        || value.revision < 1
+        || !Number.isSafeInteger(value.expectedWorkspaceRevision)
+        || value.expectedWorkspaceRevision < 1
+        || !Number.isSafeInteger(value.expectedRuntimeRevision)
+        || value.expectedRuntimeRevision < 0
+        || !PUBLISH_DRAFT_STATES.includes(value.draftState)) {
+        invalid('publish projection is invalid');
+      }
+      requireMatchingBinding(state.binding, value.binding);
+      var orderedMedia = normalizePublishMedia(value.orderedMedia);
+      if (value.revision <= state.publishRevision) {
+        throw workspaceError(
+          'SS_ERP_BYOK_WORKSPACE_PUBLISH_STALE',
+          'publish projection revision is stale',
+        );
+      }
+      var current = getSnapshot().publishBasis;
+      if (value.expectedWorkspaceRevision !== current.expectedWorkspaceRevision
+        || value.expectedRuntimeRevision !== current.expectedRuntimeRevision
+        || !samePublishMedia(orderedMedia, current.orderedMedia)) {
+        throw workspaceError(
+          'SS_ERP_BYOK_WORKSPACE_PUBLISH_BASIS_STALE',
+          'publish projection does not match the current workspace basis',
+        );
+      }
+      var disabledReason = value.disabledReason === null
+        ? null
+        : identifier(value.disabledReason, 200, 'publish disabled reason');
+      state.publishRevision = value.revision;
+      state.publishDraftState = value.draftState;
+      state.publishDisabledReason = disabledReason;
+      state.publishOrderedMedia = orderedMedia;
+      state.publishBasisWorkspaceRevision = state.revision + 1;
+      state.publishBasisRuntimeRevision = state.runtimeRevision;
       return changed();
     }
 
@@ -1130,6 +1820,12 @@
       subscribe: subscribe,
       setExecutionMode: setExecutionMode,
       markDispatched: markDispatched,
+      createPauseAfterCurrentIntent: createPauseAfterCurrentIntent,
+      createContinueIntent: createContinueIntent,
+      createCancelQueuedIntent: createCancelQueuedIntent,
+      createKeepAttemptIntent: createKeepAttemptIntent,
+      createRejectAttemptIntent: createRejectAttemptIntent,
+      createRegenerateIntent: createRegenerateIntent,
       selectSku: selectSku,
       selectSkuByKeyboard: selectSkuByKeyboard,
       selectSlot: selectSlot,
@@ -1141,19 +1837,28 @@
       setMainSlot: setMainSlot,
       moveSelectedSlotUp: function () { return moveSelectedSlot(-1); },
       moveSelectedSlotDown: function () { return moveSelectedSlot(1); },
+      moveSlotByKeyboard: moveSlotByKeyboard,
       upsertLibraryItem: upsertLibraryItem,
       applyRuntimeProjection: applyRuntimeProjection,
+      applyPublishProjection: applyPublishProjection,
     });
   }
 
   global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_STATE = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     RUNTIME_CONTRACT_VERSION: RUNTIME_CONTRACT_VERSION,
+    ACTION_INTENT_CONTRACT_VERSION: ACTION_INTENT_CONTRACT_VERSION,
+    ACTION_OUTCOME_CONTRACT_VERSION: ACTION_OUTCOME_CONTRACT_VERSION,
+    PUBLISH_PROJECTION_CONTRACT_VERSION: PUBLISH_PROJECTION_CONTRACT_VERSION,
+    EXTERNAL_CHARGE_WARNING_VERSION: EXTERNAL_CHARGE_WARNING_VERSION,
     MEDIA_SOURCE_TYPES: MEDIA_SOURCE_TYPES,
     SLOT_ROLES: SLOT_ROLES,
     ALTERNATIVE_STATES: ALTERNATIVE_STATES,
     TASK_STATES: TASK_STATES,
     KEYBOARD_SELECTION_KEYS: KEYBOARD_SELECTION_KEYS,
+    KEYBOARD_SLOT_ORDER_KEYS: KEYBOARD_SLOT_ORDER_KEYS,
+    ACTION_INTENTS: ACTION_INTENTS,
+    PUBLISH_DRAFT_STATES: PUBLISH_DRAFT_STATES,
     PROMPT_DISABLED_REASONS: PROMPT_DISABLED_REASONS,
     REFERENCE_DISABLED_REASONS: REFERENCE_DISABLED_REASONS,
     LIMITS: LIMITS,

@@ -97,7 +97,7 @@
                 <h3 id="workspaceSlotTitle">工作区图片顺序</h3>
                 <span>本地草稿，发布前仍需统一核对</span>
               </div>
-              <ol id="workspaceSlotList" class="workspace-slot-list" aria-live="polite"></ol>
+              <ol id="workspaceSlotList" class="workspace-slot-list"></ol>
             </section>
 
             <section
@@ -122,6 +122,29 @@
                 type="button"
                 disabled
               >保存槽位提示词</button>
+              <div class="workspace-regenerate-control">
+                <label for="workspaceChargeAcknowledgement">
+                  <input
+                    id="workspaceChargeAcknowledgement"
+                    type="checkbox"
+                    aria-describedby="workspaceRegenerateReason"
+                  />
+                  <span>我确认重新生成可能由外部 Provider 再次扣费</span>
+                </label>
+                <button
+                  id="workspaceRegenerateButton"
+                  class="button button-secondary"
+                  type="button"
+                  aria-describedby="workspaceRegenerateReason"
+                  disabled
+                >重新生成当前槽位</button>
+                <p
+                  id="workspaceRegenerateReason"
+                  class="workspace-control-reason"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </div>
             </section>
           </div>
         </section>
@@ -404,7 +427,9 @@
         id="workspaceTaskDock"
         class="workspace-task-dock"
         aria-labelledby="workspaceTaskTitle"
+        tabindex="-1"
       >
+        <p id="workspaceOrderAnnouncement" class="sr-only" role="status" aria-live="polite"></p>
         <div>
           <p class="section-kicker">任务坞</p>
           <h2 id="workspaceTaskTitle">当前计划</h2>
@@ -412,6 +437,54 @@
         <p id="workspaceTaskSummary" class="workspace-task-summary" role="status" aria-live="polite">
           正在读取槽位和任务状态。
         </p>
+        <div
+          id="workspaceTaskProgress"
+          class="workspace-task-progress"
+          role="progressbar"
+          aria-label="工作区槽位审核进度"
+          aria-valuemin="0"
+          aria-valuenow="0"
+          aria-valuemax="0"
+        >0 / 0</div>
+        <div class="workspace-task-actions" role="group" aria-label="任务调度操作">
+          <button
+            id="workspacePauseButton"
+            class="button button-secondary"
+            type="button"
+            aria-describedby="workspaceTaskControlReason"
+            disabled
+          >
+            当前任务完成后暂停
+          </button>
+          <button
+            id="workspaceContinueButton"
+            class="button button-secondary"
+            type="button"
+            aria-describedby="workspaceTaskControlReason"
+            disabled
+          >
+            继续任务
+          </button>
+        </div>
+        <p
+          id="workspaceTaskControlReason"
+          class="workspace-control-reason"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <section class="workspace-queued-section" aria-labelledby="workspaceQueuedTitle">
+          <h3 id="workspaceQueuedTitle">排队任务</h3>
+          <ul id="workspaceQueuedAttempts" class="workspace-queued-attempts"></ul>
+        </section>
+        <section class="workspace-publish-section" aria-labelledby="workspacePublishTitle">
+          <h3 id="workspacePublishTitle">发布前核对</h3>
+          <div
+            id="workspacePublishSummary"
+            class="workspace-publish-summary"
+            role="status"
+            aria-live="polite"
+          >正在检查草稿与媒体绑定。</div>
+        </section>
       </aside>
         </div>
       </div>

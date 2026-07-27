@@ -1,13 +1,13 @@
 # Phase 4: Complete Dual-Mode Workbench
 
-Progress: 1/5 tasks.
+Progress: 2/5 tasks.
 
 ## Tasks
 
 - [x] `UI-04` Build original two-pane SKU/media workbench (`P1`, `XL`). Acceptance: context
   header, mode selector, SKU rail, source/reference library, hero/detail slots, Prompt
   inspector, alternatives, and task dock work without copied reference code/assets/copy.
-- [ ] `UI-05` Add task/review/order/recovery UX (`P1`, `L`). Acceptance: progress, pause,
+- [x] `UI-05` Add task/review/order/recovery UX (`P1`, `L`). Acceptance: progress, pause,
   continue, cancel queued, keep/reject, regenerate, choose main, reorder, missing/stale checks,
   and publish summary reflect real state; drag has keyboard alternatives.
 - [ ] `HOST-01` Adapt full ERP-hosted workflow (`P0`, `XL`). Acceptance: extension plan,
@@ -54,3 +54,26 @@ Progress: 1/5 tasks.
   zero warnings, and zero failures. Local/source retain only the two existing offline permission
   warnings. `QA-02` remains blocked pending explicit paid Provider approval; no Provider charge,
   ERP ingest, Ozon write, production flag change, VPS deployment, or production mutation occurred.
+- 2026-07-27: `UI-05` completed task progress, pause-after-current/continue, queued cancellation,
+  review intent controls, charge-confirmed regeneration, deterministic main/keyboard ordering,
+  missing/stale/unknown/expired/unbound recovery summaries, and a read-only publish projection.
+  UI actions remain revision-fenced intents; no success is applied optimistically.
+- Workspace bootstrap, runtime, publish projection, action intent, and outcome acknowledgements now
+  carry the exact `shopId`, `workflowId`, `draftRevision`, and `draftVersion` binding. Slot actions
+  require a newer trusted slot revision, publish projections require the exact current workspace,
+  runtime, and ordered-media basis, and every command uses a unique UUID so a delayed rejection
+  cannot clear a later retry. A `BOUND` candidate moves to the receipt's bound-draft binding only
+  after the full ingest receipt matches the source context; invalid receipts clear the workspace.
+  `UNKNOWN_OUTCOME` remains absorbing and position zero is always the SKU HERO slot.
+- Candidate view/keep/reject controls fail closed with `PREVIEW_CHANNEL_NOT_READY` until the
+  hosted or BYOK coordinator supplies a real one-use preview consumer. Coordinator rejections can
+  explicitly unlock pending UI through an exact command outcome; cross-draft and cross-shop late
+  events are ignored. Non-canonical detail-only launch data is rejected rather than fabricating a
+  HERO slot; full detail launch remains owned by `BYOK-01` plus `UI-06`.
+- Real Chromium checks passed at 1440x900, 390x844, a 720x450 200%-zoom equivalent, and forced
+  colors/reduced motion. There was no horizontal overflow or task-dock overlap, and mobile controls
+  met the 44px target. State tests passed 27/27 and media-engine tests 20/20. Full lint, workspace
+  typecheck, 3,861 server tests, preflight, both extension builds, and source/cloud/local package
+  verification passed; cloud strict reported 364 passes with no warning or failure. No Provider
+  request, ERP ingest, Ozon write, production flag change, VPS deployment, or production mutation
+  occurred.

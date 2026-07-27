@@ -110,6 +110,33 @@
     referenceSyncPending: null,
   };
 
+  function workspaceBinding(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || typeof value.shopId !== 'string'
+      || value.shopId !== value.shopId.normalize('NFKC').trim()
+      || value.shopId.length < 1 || value.shopId.length > 200
+      || typeof value.workflowId !== 'string'
+      || value.workflowId !== value.workflowId.normalize('NFKC').trim()
+      || value.workflowId.length < 1 || value.workflowId.length > 200
+      // Workspace binding identifiers must never carry control characters.
+      // eslint-disable-next-line no-control-regex
+      || /[\u0000-\u001f\u007f]/u.test(value.shopId + value.workflowId)
+      || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 1
+      || !Number.isSafeInteger(value.draftVersion) || value.draftVersion < 1) return null;
+    return {
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+    };
+  }
+
+  function rejectUnboundWorkspaceProjection() {
+    dispatchWorkspaceEvent(WORKSPACE_CLEAR_EVENT, null);
+    dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+    return false;
+  }
+
   function currentProfile() {
     var rows = state.publicState && Array.isArray(state.publicState.profiles)
       ? state.publicState.profiles : [];
@@ -228,13 +255,16 @@
 
   function emitWorkspaceRestartUnknownOutcome() {
     var context = state.publicState && state.publicState.context;
+    var binding = workspaceBinding(context);
     var workspaceEvents = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
+    if (!binding) return rejectUnboundWorkspaceProjection();
     if (!context || typeof context.slotKey !== 'string'
       || !workspaceEvents || typeof workspaceEvents.nextRuntimeRevision !== 'function') {
       return false;
     }
     return dispatchWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
       contractVersion: WORKSPACE_RUNTIME_VERSION,
+      binding: binding,
       revision: workspaceEvents.nextRuntimeRevision(),
       task: {
         schedulerState: 'FAILED',
@@ -257,6 +287,8 @@
 
   function emitWorkspaceRuntime(snapshot) {
     var context = state.publicState && state.publicState.context;
+    var binding = workspaceBinding(context);
+    if (!binding) return rejectUnboundWorkspaceProjection();
     if (!snapshot || !snapshot.operation || !context || snapshot.slotKey !== context.slotKey) {
       dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
       return false;
@@ -296,20 +328,26 @@
       dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
       return false;
     }
+    var runtimeSlot = {
+      slotKey: snapshot.slotKey,
+      status: status,
+      alternatives: alternatives,
+      selectedAttemptId: selectedAttemptId,
+    };
+    if (snapshot.slot && Number.isSafeInteger(snapshot.slot.revision)
+      && snapshot.slot.revision > 0) {
+      runtimeSlot.slotRevision = snapshot.slot.revision;
+    }
     return dispatchWorkspaceEvent(WORKSPACE_RUNTIME_EVENT, {
       contractVersion: WORKSPACE_RUNTIME_VERSION,
+      binding: binding,
       revision: workspaceEvents.nextRuntimeRevision(),
       task: {
         schedulerState: schedulerState,
         disabledReason: 'BATCH_COORDINATOR_NOT_READY',
       },
       libraryItems: libraryItems,
-      slots: [{
-        slotKey: snapshot.slotKey,
-        status: status,
-        alternatives: alternatives,
-        selectedAttemptId: selectedAttemptId,
-      }],
+      slots: [runtimeSlot],
     });
   }
 
