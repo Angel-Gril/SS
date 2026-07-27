@@ -13,6 +13,7 @@
   var PUBLISH_PROJECTION_CONTRACT_VERSION =
     'extension-byok-workbench-publish-projection/v1';
   var EXTERNAL_CHARGE_WARNING_VERSION = 'external-provider-charge/v1';
+  var ERP_HOSTED_CHARGE_WARNING_VERSION = 'erp-hosted-additional-cost/v1';
   var DEFAULT_DISABLED_REASON = 'BATCH_COORDINATOR_NOT_READY';
   var DEFAULT_PUBLISH_DISABLED_REASON = 'PUBLISH_COORDINATOR_NOT_READY';
   var MEDIA_SOURCE_TYPES = Object.freeze(['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
@@ -65,6 +66,9 @@
     'contractVersion', 'binding', 'executionMode', 'dispatched', 'selectedSkuKey',
     'selectedSlotKey', 'globalReferenceIds', 'libraryItems', 'skus',
   ]);
+  var CONNECTED_MODE_INPUT_KEYS = Object.freeze(
+    INPUT_KEYS.concat(['availableExecutionModes']),
+  );
   var BINDING_KEYS = Object.freeze([
     'shopId', 'workflowId', 'draftRevision', 'draftVersion',
   ]);
@@ -479,6 +483,21 @@
     return skus;
   }
 
+  function normalizeAvailableExecutionModes(value) {
+    if (!Array.isArray(value) || value.length < 1 || value.length > 2) {
+      invalid('available execution modes are invalid');
+    }
+    var modes = value.map(function (mode) {
+      try { return workbench.parseExecutionMode(mode); } catch {
+        invalid('available execution mode is invalid');
+      }
+    });
+    if (new Set(modes).size !== modes.length) {
+      invalid('available execution modes contain duplicates');
+    }
+    return modes;
+  }
+
   function findSlot(skus, slotKey) {
     for (var index = 0; index < skus.length; index += 1) {
       var slot = skus[index].slots.find(function (candidate) {
@@ -525,7 +544,9 @@
   }
 
   function createWorkspace(input) {
-    if (!exactKeys(input, INPUT_KEYS) || input.contractVersion !== CONTRACT_VERSION
+    var hasConnectedModes = exactKeys(input, CONNECTED_MODE_INPUT_KEYS);
+    if ((!exactKeys(input, INPUT_KEYS) && !hasConnectedModes)
+      || input.contractVersion !== CONTRACT_VERSION
       || typeof input.dispatched !== 'boolean') {
       invalid('workspace input is invalid');
     }
@@ -534,10 +555,13 @@
     try { executionMode = workbench.parseExecutionMode(input.executionMode); } catch {
       invalid('execution mode is invalid');
     }
-    if (executionMode !== 'BYOK') {
+    var availableExecutionModes = hasConnectedModes
+      ? normalizeAvailableExecutionModes(input.availableExecutionModes)
+      : ['BYOK'];
+    if (!availableExecutionModes.includes(executionMode)) {
       throw workspaceError(
         'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
-        'ERP-hosted execution is unavailable until the hosted adapter is connected',
+        'the requested execution adapter is not connected',
       );
     }
 
@@ -601,6 +625,7 @@
       publishBasisWorkspaceRevision: null,
       publishBasisRuntimeRevision: null,
       executionMode: executionMode,
+      availableExecutionModes: availableExecutionModes,
       dispatched: input.dispatched,
       selectedSkuKey: selectedSkuKey,
       selectedSlotKey: selectedSlotKey,
@@ -1018,8 +1043,10 @@
         });
       });
       var modeDisabledReasons = {
-        ERP_HOSTED: 'HOSTED_ADAPTER_NOT_READY',
-        BYOK: null,
+        ERP_HOSTED: state.availableExecutionModes.includes('ERP_HOSTED')
+          ? null : 'HOSTED_ADAPTER_NOT_READY',
+        BYOK: state.availableExecutionModes.includes('BYOK')
+          ? null : 'BYOK_ADAPTER_NOT_READY',
       };
       var currentOrderedMedia = orderedPublishMedia(publicSlots);
       var snapshot = {
@@ -1227,8 +1254,11 @@
     }
 
     function normalizeChargeAcknowledgement(value) {
+      var warningVersion = state.executionMode === 'ERP_HOSTED'
+        ? ERP_HOSTED_CHARGE_WARNING_VERSION
+        : EXTERNAL_CHARGE_WARNING_VERSION;
       if (!exactKeys(value, CHARGE_ACKNOWLEDGEMENT_KEYS)
-        || value.warningVersion !== EXTERNAL_CHARGE_WARNING_VERSION
+        || value.warningVersion !== warningVersion
         || value.confirmed !== true) {
         throw workspaceError(
           'SS_ERP_BYOK_WORKSPACE_CHARGE_ACKNOWLEDGEMENT_REQUIRED',
@@ -1236,7 +1266,7 @@
         );
       }
       return {
-        warningVersion: EXTERNAL_CHARGE_WARNING_VERSION,
+        warningVersion: warningVersion,
         confirmed: true,
       };
     }
@@ -1268,10 +1298,12 @@
             'execution mode is locked after dispatch',
           );
         }
-        throw workspaceError(
-          'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
-          'ERP-hosted execution is unavailable until the hosted adapter is connected',
-        );
+        if (!state.availableExecutionModes.includes(parsedMode)) {
+          throw workspaceError(
+            'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
+            'the requested execution adapter is not connected',
+          );
+        }
       }
       var mode;
       try {
@@ -1851,6 +1883,7 @@
     ACTION_OUTCOME_CONTRACT_VERSION: ACTION_OUTCOME_CONTRACT_VERSION,
     PUBLISH_PROJECTION_CONTRACT_VERSION: PUBLISH_PROJECTION_CONTRACT_VERSION,
     EXTERNAL_CHARGE_WARNING_VERSION: EXTERNAL_CHARGE_WARNING_VERSION,
+    ERP_HOSTED_CHARGE_WARNING_VERSION: ERP_HOSTED_CHARGE_WARNING_VERSION,
     MEDIA_SOURCE_TYPES: MEDIA_SOURCE_TYPES,
     SLOT_ROLES: SLOT_ROLES,
     ALTERNATIVE_STATES: ALTERNATIVE_STATES,

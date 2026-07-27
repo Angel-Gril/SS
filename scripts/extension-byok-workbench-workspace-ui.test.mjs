@@ -158,6 +158,7 @@ const ids = [
   'workspacePauseButton', 'workspaceContinueButton', 'workspaceTaskControlReason',
   'workspaceQueuedAttempts',
   'workspacePublishSummary', 'workspaceChargeAcknowledgement',
+  'workspaceChargeAcknowledgementLabel',
   'workspaceRegenerateButton', 'workspaceRegenerateReason', 'workspaceOrderAnnouncement',
   'workspaceModeSummary',
 ];
@@ -816,6 +817,21 @@ nodes.workspaceRegenerateButton.dispatch('click');
 assert.equal(emittedIntents.length, unknownActionCount,
   'UNKNOWN_OUTCOME cannot use ordinary regeneration');
 assert.match(nodes.workspacePublishSummary.textContent, /结果待核对/u);
+dispatchDocument('ss-erp:workspace-clear', null);
+
+dispatchDocument('ss-erp:workspace-bootstrap', bootstrapInput({
+  executionMode: 'ERP_HOSTED',
+  availableExecutionModes: ['ERP_HOSTED', 'BYOK'],
+}));
+const connectedHostedMode = actionNode(
+  nodes.workspaceModeSummary, 'select-mode', 'executionMode', 'ERP_HOSTED',
+);
+const connectedByokMode = actionNode(
+  nodes.workspaceModeSummary, 'select-mode', 'executionMode', 'BYOK',
+);
+assert.equal(connectedHostedMode.disabled, false);
+assert.equal(connectedByokMode.disabled, false);
+assert.match(nodes.workspaceChargeAcknowledgementLabel.textContent, /ERP.*最高追加费用/u);
 dispatchDocument('ss-erp:workspace-clear', null);
 
 dispatchDocument('ss-erp:workspace-bootstrap', bootstrapInput({ dispatched: true }));

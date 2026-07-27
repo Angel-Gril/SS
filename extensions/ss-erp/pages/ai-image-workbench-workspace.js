@@ -49,6 +49,7 @@
     queuedAttempts: byId('workspaceQueuedAttempts'),
     publishSummary: byId('workspacePublishSummary'),
     chargeAcknowledgement: byId('workspaceChargeAcknowledgement'),
+    chargeAcknowledgementLabel: byId('workspaceChargeAcknowledgementLabel'),
     regenerateButton: byId('workspaceRegenerateButton'),
     regenerateReason: byId('workspaceRegenerateReason'),
     orderAnnouncement: byId('workspaceOrderAnnouncement'),
@@ -493,6 +494,12 @@
     return mode === 'ERP_HOSTED' ? 'ERP 托管' : '自带 API';
   }
 
+  function modeDisabledMessage(reason) {
+    if (reason === 'HOSTED_ADAPTER_NOT_READY') return '托管执行尚未接入此工作台';
+    if (reason === 'BYOK_ADAPTER_NOT_READY') return '自带 API 执行尚未接入此工作台';
+    return reason ? '执行方式当前不可用' : '';
+  }
+
   function humanLibraryKind(kind) {
     return {
       CAPTURED: '采集素材',
@@ -590,26 +597,28 @@
       function (button, mode) {
         var reason = snapshot && snapshot.modeDisabledReasons
           ? snapshot.modeDisabledReasons[mode] : null;
-        var integrationUnavailable = mode === 'ERP_HOSTED';
         var selected = Boolean(snapshot && snapshot.executionMode === mode);
         button.disabled = !snapshot || Boolean(
-          integrationUnavailable || snapshot.executionModeFrozen || reason || runtimeFault,
+          snapshot.executionModeFrozen || reason || runtimeFault,
         );
         button.setAttribute('aria-checked', selected ? 'true' : 'false');
-        button.setAttribute('aria-label', integrationUnavailable
-          ? humanMode(mode) + '，不可切换：托管执行尚未接入此工作台'
-          : reason
-            ? humanMode(mode) + '，不可切换：执行方式已冻结'
-            : humanMode(mode));
-        button.title = integrationUnavailable
-          ? '托管执行尚未接入此工作台'
-          : reason ? '任务已派发，执行方式不可切换' : '';
+        var unavailable = modeDisabledMessage(reason);
+        var disabledMessage = unavailable || (snapshot && snapshot.executionModeFrozen
+          ? '任务已派发，执行方式不可切换' : '');
+        button.setAttribute('aria-label', disabledMessage
+          ? humanMode(mode) + '，不可切换：' + disabledMessage
+          : humanMode(mode));
+        button.title = disabledMessage;
         button.classList.toggle('is-selected', selected);
       },
     );
     modeReasonNode.textContent = snapshot && snapshot.executionModeFrozen
       ? '任务已派发，执行方式已冻结'
-      : 'ERP 托管执行尚未接入此工作台';
+      : snapshot && snapshot.modeDisabledReasons.ERP_HOSTED
+        ? 'ERP 托管执行尚未接入此工作台'
+        : snapshot && snapshot.modeDisabledReasons.BYOK
+          ? '自带 API 执行尚未接入此工作台'
+          : '任务派发前可切换执行方式';
     nodes.modeSummary.appendChild(modeReasonNode);
     nodes.modeSummary.setAttribute('role', 'radiogroup');
     nodes.modeSummary.setAttribute('aria-label', '执行方式');
@@ -1202,6 +1211,12 @@
         ? 'ACTION_IN_FLIGHT'
         : slot.regenerateDisabledReason;
     var available = Boolean(slot && slot.regenerateAvailable && !runtimeFault && !pendingIntent);
+    if (nodes.chargeAcknowledgementLabel) {
+      nodes.chargeAcknowledgementLabel.textContent = snapshot
+        && snapshot.executionMode === 'ERP_HOSTED'
+        ? '我确认 ERP 托管本次最高追加费用'
+        : '我确认重新生成可能由外部 Provider 再次扣费';
+    }
     nodes.chargeAcknowledgement.disabled = !available;
     nodes.regenerateButton.disabled = !available
       || nodes.chargeAcknowledgement.checked !== true;
@@ -1730,7 +1745,9 @@
     var slot = selectedSlot();
     if (!slot) return;
     if (createAndEmitIntent('createRegenerateIntent', [slot.slotKey, {
-      warningVersion: workspaceStateApi.EXTERNAL_CHARGE_WARNING_VERSION,
+      warningVersion: snapshot && snapshot.executionMode === 'ERP_HOSTED'
+        ? workspaceStateApi.ERP_HOSTED_CHARGE_WARNING_VERSION
+        : workspaceStateApi.EXTERNAL_CHARGE_WARNING_VERSION,
       confirmed: nodes.chargeAcknowledgement.checked === true,
     }])) {
       nodes.chargeAcknowledgement.checked = false;

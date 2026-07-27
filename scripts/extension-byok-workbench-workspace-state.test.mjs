@@ -227,6 +227,9 @@ test('rejects unknown fields, URL-bearing text, ineligible references, and inval
     input({ binding: binding({ draftRevision: 0 }) }),
     input({ binding: binding({ draftVersion: 1.5 }) }),
     input({ binding: binding({ draftVersion: Number.MAX_SAFE_INTEGER + 1 }) }),
+    input({ availableExecutionModes: [] }),
+    input({ availableExecutionModes: ['BYOK', 'BYOK'] }),
+    input({ availableExecutionModes: ['BYOK', 'UNKNOWN'] }),
     input({ libraryItems: [{ ...libraryItem('one', 'CAPTURED'), previewUrl: 'https://x.test/a' }] }),
     input({ libraryItems: [libraryItem('one', 'CAPTURED', { label: 'https://x.test/a' })] }),
     input({
@@ -273,6 +276,42 @@ test('fails closed for the pending hosted adapter and freezes mode after dispatc
   assert.equal(workspace.setExecutionMode('BYOK').executionMode, 'BYOK');
   assert.throws(
     () => loadApi().createWorkspace(input({ executionMode: 'ERP_HOSTED' })),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
+  );
+  assert.throws(
+    () => loadApi().createWorkspace(input({ availableExecutionModes: ['ERP_HOSTED'] })),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
+  );
+});
+
+test('allows only explicitly connected execution modes and locks the selected mode after dispatch', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input({
+    availableExecutionModes: ['BYOK', 'ERP_HOSTED'],
+  }));
+  assert.deepEqual(plain(workspace.getSnapshot().modeDisabledReasons), {
+    ERP_HOSTED: null,
+    BYOK: null,
+  });
+  assert.equal(workspace.setExecutionMode('ERP_HOSTED').executionMode, 'ERP_HOSTED');
+  assert.equal(workspace.setExecutionMode('BYOK').executionMode, 'BYOK');
+  assert.equal(workspace.setExecutionMode('ERP_HOSTED').executionMode, 'ERP_HOSTED');
+  workspace.markDispatched();
+  assert.throws(
+    () => workspace.setExecutionMode('BYOK'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_MODE_LOCKED',
+  );
+
+  const hosted = api.createWorkspace(input({
+    executionMode: 'ERP_HOSTED',
+    availableExecutionModes: ['ERP_HOSTED'],
+  }));
+  assert.deepEqual(plain(hosted.getSnapshot().modeDisabledReasons), {
+    ERP_HOSTED: null,
+    BYOK: 'BYOK_ADAPTER_NOT_READY',
+  });
+  assert.throws(
+    () => hosted.setExecutionMode('BYOK'),
     (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_MODE_UNAVAILABLE',
   );
 });
@@ -1481,6 +1520,48 @@ test('requires the current external-charge acknowledgement for slot regeneration
     (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_ACTION_UNAVAILABLE'
       && error.reason === 'UNKNOWN_OUTCOME_REQUIRES_RECOVERY',
   );
+});
+
+test('requires the ERP-hosted cost warning for hosted slot regeneration', () => {
+  const api = loadApi();
+  const workspace = api.createWorkspace(input({
+    executionMode: 'ERP_HOSTED',
+    availableExecutionModes: ['ERP_HOSTED', 'BYOK'],
+  }));
+  workspace.upsertLibraryItem(libraryItem('hosted-regenerate-red', 'GENERATED', {
+    skuKeys: ['sku-red'],
+  }));
+  workspace.applyRuntimeProjection({
+    contractVersion: api.RUNTIME_CONTRACT_VERSION,
+    binding: binding(),
+    revision: 1,
+    task: { schedulerState: 'REVIEW', disabledReason: null },
+    libraryItems: [],
+    slots: [{
+      slotKey: 'sku-red:hero',
+      status: 'CANDIDATE_READY',
+      alternatives: [
+        alternative('attempt-hosted-regenerate', 'CANDIDATE_READY', 'hosted-regenerate-red'),
+      ],
+      selectedAttemptId: 'attempt-hosted-regenerate',
+      slotRevision: 41,
+    }],
+  });
+  assert.throws(
+    () => workspace.createRegenerateIntent('sku-red:hero', {
+      warningVersion: api.EXTERNAL_CHARGE_WARNING_VERSION,
+      confirmed: true,
+    }, 'command-hosted-wrong-warning'),
+    (error) => error?.code === 'SS_ERP_BYOK_WORKSPACE_CHARGE_ACKNOWLEDGEMENT_REQUIRED',
+  );
+  const intent = workspace.createRegenerateIntent('sku-red:hero', {
+    warningVersion: api.ERP_HOSTED_CHARGE_WARNING_VERSION,
+    confirmed: true,
+  }, 'command-hosted-regenerate');
+  assert.deepEqual(plain(intent.externalChargeAcknowledgement), {
+    warningVersion: api.ERP_HOSTED_CHARGE_WARNING_VERSION,
+    confirmed: true,
+  });
 });
 
 test('offers deterministic keyboard slot ordering while preserving one explicit main slot', () => {
