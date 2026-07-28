@@ -152,7 +152,7 @@ fieldset {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 8px;
-  background: var(--brand);
+  background: var(--brand-strong);
   color: #ffffff;
   font-size: 13px;
   font-weight: 800;
