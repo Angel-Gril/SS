@@ -37,33 +37,34 @@ credential storage, or direct Ozon calls.
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
-- [ ] Phase 5: Publishing closure and product quality (2/4 tasks) [details](./phase-5-publish-quality.md)
+- [ ] Phase 5: Publishing closure and product quality (3/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 31/37 tasks complete (84%).
+Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-`QA-03` is complete with a final 100/100 real-Chrome accessibility and responsive score. The
-unpacked extension passed 1440x900, 1024x768, 768x900, 390x844, native 200% zoom, keyboard-only
-navigation, live status, mobile touch targets, reduced motion, forced colors, stable media frames,
-WCAG AA contrast, secret-field, and page/service-worker console checks. Two contrast findings were
-fixed, and a third regression now preserves visible same-slot focus when reordering disables the
-original move control. The dedicated regression is included in preflight. Lint (existing warnings
-only), workspace typecheck, full preflight, and fresh source/cloud/local package gates passed.
-`DOC-01` is the next dependency-ready task. `QA-04` remains blocked until exact paid `QA-02`
-Provider evidence exists. All flags remain default-off; no real Provider request, charge, ERP
-ingest, Ozon write, production mutation, VPS access, or deployment occurred.
+`DOC-01` is complete. The indexed extension AI image workbench guide now gives administrators and
+users one accurate source for `ERP_HOSTED` versus `BYOK`, default-off feature flags, strict pilot
+policy JSON, session-only Keys, persistent non-secret profile data, exact-origin permissions,
+operation-specific capability evidence, external/ERP billing, Provider data disclosure,
+`UNKNOWN_OUTCOME` recovery, ERP ingest/draft binding, and one-receipt Ozon publishing. Stale
+development/deployment descriptions were corrected, and a documentation contract now protects the
+required boundaries in preflight. Focused tests and full preflight passed. No implementation task is
+dependency-ready until the exact paid `QA-02` Provider sandbox is explicitly approved and recorded;
+`QA-04` and release remain downstream of that evidence. All flags remain default-off; no real
+Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment
+occurred.
 
 ## Next Steps
 
-1. Complete `DOC-01` for user/admin setup, hosted versus BYOK charges, session-key privacy,
-   per-operation validation, Provider data disclosure, unknown-outcome recovery, draft review, and
-   ERP-owned publishing.
-2. Run `QA-04` only after the exact paid `QA-02` evidence exists.
-3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
+1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
+2. After a single approved `QA-02` request, reconcile the settled Provider bill and record exact
+   endpoint/model/operation/request-mode evidence before promoting any capability.
+3. Run `QA-04` only after the exact paid `QA-02` evidence exists; then proceed to the owner/shop/
+   device pilot and release gates.
 4. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

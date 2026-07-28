@@ -1,6 +1,6 @@
 # Phase 5: Publishing Closure and Product Quality
 
-Progress: 2/4 tasks.
+Progress: 3/4 tasks.
 
 ## Tasks
 
@@ -15,7 +15,7 @@ Progress: 2/4 tasks.
   sentinel, endpoint, permission, hostile image, stale/revoked, billing, idempotency,
   one-receipt, remote-code, cloud/local package, lint, typecheck, tests, preflight, builds, and
   verifier pass.
-- [ ] `DOC-01` Document setup, charges, permissions, recovery, and privacy (`P1`, `M`).
+- [x] `DOC-01` Document setup, charges, permissions, recovery, and privacy (`P1`, `M`).
   Acceptance: docs distinguish hosted/external charges, session keys, capability probes, data
   sent to Provider, retry risk, draft review, and ERP-owned publishing.
 
@@ -41,8 +41,9 @@ Progress: 2/4 tasks.
   recovery without asset mappings falls back to an authoritative draft reload.
 - Confirmation requires a trusted checkbox action. Double-clicks coalesce, timeout/reload recovery
   reuses one draft-version-bound idempotency identity, a `PENDING` receipt is never redispatched, and
-  only an authoritative `NOT_COMMITTED` result permits same-identity dispatch. Session storage never
-  retains grants, Provider secrets, Ozon credentials, binary media, or raw Prompts.
+  only an authoritative `NOT_COMMITTED` result permits same-identity dispatch. Publish recovery
+  session records never retain grants, Provider secrets, Ozon credentials, binary media, or raw
+  Prompts; BYOK API Keys remain separately scoped to `chrome.storage.session`.
 - Verification passed: lint (existing warnings only), workspace typecheck, 4,268 server tests,
   preflight, focused Hosted/BYOK/controller/vertical tests, cloud package `449/0/0`, local/source
   package `445/2/0` (expected local permission warnings), and `git diff --check`.
@@ -59,3 +60,15 @@ Progress: 2/4 tasks.
   `445` checks with zero failures, source/local verifier `445/2/0` (expected local warnings), cloud
   verifier `449/0/0`, and `git diff --check`. No real Provider request, charge, ERP ingest, Ozon
   write, production mutation, VPS access, or deployment occurred.
+- `DOC-01` adds one indexed user/admin guide for both execution modes. It documents default-off
+  hosted/BYOK generation, ingest, and publish controls; the strict pilot JSON policy; session Key
+  and persistent non-secret profile behavior; per-operation capability validation; exact-origin
+  Chrome permissions; external versus ERP charges; data sent to Provider; candidate review, ERP
+  normalization/binding, one-receipt Ozon publishing; and `UNKNOWN_OUTCOME` recovery without blind
+  retry. It also corrects stale extension/deployment descriptions and distinguishes the historical
+  AI Media dark verifier from the separate extension flags.
+- The documentation contract is wired into preflight so links, flags, policy version, operations,
+  privacy, billing, recovery, and default-off language cannot silently disappear. Focused docs,
+  BYOK admin settings, Provider settings UI, and workspace UI tests passed; full preflight passed
+  `445` checks with zero failures and expected source verifier warnings only. No real Provider
+  request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment occurred.

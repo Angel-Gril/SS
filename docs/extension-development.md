@@ -130,7 +130,12 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 pnpm verify:extension
 ```
 
-扩展端 AI 图片工作台已在开发/测试环境实现参考图生图、整图编辑、局部重绘 Mask 编辑、任务历史、审核与 `APPLY_APPEND` 回填。Prompt 只存在于扩展编辑器页面内存中，并在提交时发送到服务端；`chrome.storage.session` 只保存有界的临时授权、来源身份、草稿版本和恢复元数据，不保存 Prompt。Provider/模型/密钥仍只在服务端。这不代表生产能力已开启：真实 Provider 执行仍显式关闭，生产环境会 fail closed。专项验证：
+扩展端 AI 图片工作台现支持两条明确隔离的路径：`ERP_HOSTED` 由 ERP 服务端执行并计费，
+`BYOK` 由扩展后台使用用户当前会话的 API Key 调用 Provider，再把用户审核通过的结果交给
+ERP 规范化、绑定草稿并通过既有发布链路提交。旧的“Provider/模型/密钥都只在服务端”说明
+只适用于 `ERP_HOSTED`，不适用于 BYOK。完整的用户、管理员、费用、权限、隐私和恢复边界
+见[扩展 AI 图片工作台操作指南](extension-ai-image-workbench.md)。这不代表生产能力已开启：
+所有开关默认关闭，真实 Provider、费用验收和 Ozon 写入仍必须按受控试点门禁执行。专项验证：
 
 ```bash
 node scripts/extension-source-media-standalone.test.mjs

@@ -15,6 +15,7 @@
 - [前端通用组件](common-components-guide.md)
 - [TanStack Query 指南](tanstack-query-guide.md)
 - [扩展开发与整合计划](extension-development.md)
+- [扩展 AI 图片工作台操作指南](extension-ai-image-workbench.md)
 - [Git 工作流](git-workflow.md)
 - [充值与支付](payment-recharge.md)
 - [上线优化计划](LAUNCH-OPTIMIZATION-PLAN.md)

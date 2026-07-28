@@ -96,7 +96,7 @@ MIGRATION_TIMEOUT=20m
 
 ## AI Media 暗态发布门禁
 
-Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1/H2/H3a/H3b 已完成历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已增加对“已经被 Provider 接收”的异步图片翻译任务进行只查询、不重提的结果核对。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 增加 history/updates keyset 索引；`1690`/`1700` 及 `21120000` 至 `21123000` 建立 collect/listing-draft 应用账本；`21124000` 至 `21131000` 建立 Provider 结果核对状态、租约、事件和积压恢复索引。应用版本回滚不得回退这些数据库约束、账本、审计事件或有效索引。扩展端直接一至四参考图生图、整图编辑、局部重绘和 Mask 编辑器已完成开发与契约测试但仍保持暗态；真实 Provider 新任务提交、planned-suite 扩展编排和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
+Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1/H2/H3a/H3b 已完成历史恢复及 collect/listing-draft 应用账本，Unit 10A-H4 已增加对“已经被 Provider 接收”的异步图片翻译任务进行只查询、不重提的结果核对。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 增加 history/updates keyset 索引；`1690`/`1700` 及 `21120000` 至 `21123000` 建立 collect/listing-draft 应用账本；`21124000` 至 `21131000` 建立 Provider 结果核对状态、租约、事件和积压恢复索引。应用版本回滚不得回退这些数据库约束、账本、审计事件或有效索引。扩展双模式工作台、planned-suite、BYOK 审核/接收和统一发布协调已完成代码与本地 Chrome QA，但准确付费 Provider 的 `QA-02`、生产等价质量、试点和真实 Ozon 验收仍未完成。用户与管理员操作边界见[扩展 AI 图片工作台操作指南](extension-ai-image-workbench.md)。未经批准时以下历史 AI Media 状态必须为 `false` 或 absent：
 
 Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirmed REPLACE、不可变账本及前向补偿 ROLLBACK。`20260721120000` 至 `20260721123000` 建立并加固 owner/actor/snapshot/operation/projection authority；生产能力响应必须保持 `listingDraftApplyEnabled=false`，只读历史和既有 rollback 仍可用。
 
@@ -105,6 +105,17 @@ Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirm
 - `feature_ai_media_full_edit`
 - `feature_ai_media_inpaint`
 - `feature_source_listing_web_media`
+
+双模式扩展还有独立的默认关闭门禁；未经批准的 pilot 前保持：
+
+- `feature_extension_hosted_ai=false`
+- `feature_extension_byok_ai=false`
+- `feature_extension_byok_ingest=false`
+- `feature_extension_byok_publish=false`
+- `extension_byok_admin_policy` 的 `mode` 为 `off`
+
+`verify-ai-media-dark.sh` 验证的是历史 AI Media 门禁，不代替以上扩展策略核对。部署人员必须
+同时保存并复核管理员配置快照，不能因为脚本通过就推断扩展双模式已获准启用。
 
 `ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
 
