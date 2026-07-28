@@ -1,6 +1,6 @@
 # Phase 5: Publishing Closure and Product Quality
 
-Progress: 1/4 tasks.
+Progress: 2/4 tasks.
 
 ## Tasks
 
@@ -8,7 +8,7 @@ Progress: 1/4 tasks.
   modes use one current draft compiler, validation, publish grant, receipt, queue, and
   reconciliation; local-only/rejected/unknown/stale/unbound slots cannot publish; recovery
   never creates a second submission.
-- [ ] `QA-03` Complete accessibility/responsive Chrome QA (`P0`, `L`). Acceptance: target
+- [x] `QA-03` Complete accessibility/responsive Chrome QA (`P0`, `L`). Acceptance: target
   desktop/mobile viewports have no overlap/clipping; keyboard, focus, live status, 200% zoom,
   reduced motion, stable media dimensions, contrast, screenshot, and DOM checks pass.
 - [ ] `QA-04` Run full security/billing/auth/package regression (`P0`, `XL`). Acceptance:
@@ -46,3 +46,16 @@ Progress: 1/4 tasks.
 - Verification passed: lint (existing warnings only), workspace typecheck, 4,268 server tests,
   preflight, focused Hosted/BYOK/controller/vertical tests, cloud package `449/0/0`, local/source
   package `445/2/0` (expected local permission warnings), and `git diff --check`.
+- `QA-03` passed in a real unpacked Playwright Chromium extension at 1440x900, 1024x768,
+  768x900, 390x844, and native 200% tab zoom. Root and coherent-element overflow, mobile touch
+  targets, keyboard SKU/library navigation, focus visibility, live announcements, reduced motion,
+  forced colors, stable 1:1 media dimensions, workbench/Provider contrast, secret-field state, and
+  page/service-worker console checks all passed. The final QA health score is 100/100.
+- Three medium accessibility findings were closed: the workbench muted token and Provider brand
+  background now pass WCAG AA, and slot reordering now returns focus to the same slot's available
+  opposite-direction control (or its selector) when Chrome rejects focus on a newly disabled
+  button. The focus behavior has a dedicated red/green regression wired into preflight.
+- Final `QA-03` gates passed: lint (existing warnings only), workspace typecheck, full preflight
+  `445` checks with zero failures, source/local verifier `445/2/0` (expected local warnings), cloud
+  verifier `449/0/0`, and `git diff --check`. No real Provider request, charge, ERP ingest, Ozon
+  write, production mutation, VPS access, or deployment occurred.

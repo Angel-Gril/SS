@@ -1016,7 +1016,19 @@
   function focusSlotAction(slotKey, name) {
     var row = slotNodes.get(slotKey);
     var control = row && row._workspace && row._workspace[name];
-    if (control && typeof control.focus === 'function') control.focus();
+    if (control && typeof control.focus === 'function') {
+      control.focus();
+      if (global.document.activeElement === control) return;
+    }
+    var fallbackNames = name === 'downButton'
+      ? ['upButton', 'selectButton']
+      : name === 'upButton' ? ['downButton', 'selectButton'] : [];
+    fallbackNames.some(function (fallbackName) {
+      var fallback = row && row._workspace && row._workspace[fallbackName];
+      if (!fallback || fallback.disabled || typeof fallback.focus !== 'function') return false;
+      fallback.focus();
+      return global.document.activeElement === fallback;
+    });
   }
 
   function announceSlotOrder(slotKey) {

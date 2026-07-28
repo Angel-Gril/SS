@@ -464,6 +464,11 @@ const steps = [
     args: ['scripts/extension-byok-workbench-workspace-ui.test.mjs'],
   },
   {
+    name: 'extension BYOK workspace slot focus regression',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-workspace-focus.regression-1.test.mjs'],
+  },
+  {
     name: 'extension BYOK workbench package verifier contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-package-verifier.test.mjs'],

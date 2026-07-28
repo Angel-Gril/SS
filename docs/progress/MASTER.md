@@ -37,33 +37,30 @@ credential storage, or direct Ozon calls.
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
-- [ ] Phase 5: Publishing closure and product quality (1/4 tasks) [details](./phase-5-publish-quality.md)
+- [ ] Phase 5: Publishing closure and product quality (2/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 30/37 tasks complete (81%).
+Overall: 31/37 tasks complete (84%).
 
 ## Current Status
 
-`INT-03` is complete. Hosted and BYOK assets now converge only after ERP binding on one ordered-media
-preview and publish coordinator. The server re-reads the current draft, validates exact slot/asset
-order and readiness, records the existing publish intent, and continues through the established
-`OZON_PUBLISH` grant, receipt, executor, and reconciliation path. Trusted confirmation, stable
-draft-version idempotency, one-receipt recovery, and explicit `NOT_COMMITTED` proof prevent duplicate
-submission; `PENDING` is status-only. Local, rejected, unknown, expired, stale, reordered, and unbound
-media cannot publish. Hosted assignment and BYOK batch ingest project receipt-bound assets into the
-same publish UI without retaining raw Prompts, secrets, binaries, grants, or Ozon credentials.
-Lint, workspace typecheck, 4,268 server tests, preflight, focused vertical fixtures, and fresh
-source/cloud/local package gates passed. `QA-03` is the next dependency-ready task. `QA-02` remains
-blocked until exact paid Provider approval is recorded. All flags remain default-off; no real
-Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment
-occurred.
+`QA-03` is complete with a final 100/100 real-Chrome accessibility and responsive score. The
+unpacked extension passed 1440x900, 1024x768, 768x900, 390x844, native 200% zoom, keyboard-only
+navigation, live status, mobile touch targets, reduced motion, forced colors, stable media frames,
+WCAG AA contrast, secret-field, and page/service-worker console checks. Two contrast findings were
+fixed, and a third regression now preserves visible same-slot focus when reordering disables the
+original move control. The dedicated regression is included in preflight. Lint (existing warnings
+only), workspace typecheck, full preflight, and fresh source/cloud/local package gates passed.
+`DOC-01` is the next dependency-ready task. `QA-04` remains blocked until exact paid `QA-02`
+Provider evidence exists. All flags remain default-off; no real Provider request, charge, ERP
+ingest, Ozon write, production mutation, VPS access, or deployment occurred.
 
 ## Next Steps
 
-1. Run the full accessibility/responsive `QA-03` gate against the unified publish controls at every
-   target viewport, keyboard/focus state, 200% zoom, reduced motion, and forced-color mode.
-2. Complete `DOC-01` after `QA-03` stabilizes user-visible setup, validation, charges, recovery, and
-   privacy language. Run `QA-04` only after the exact paid `QA-02` evidence exists.
+1. Complete `DOC-01` for user/admin setup, hosted versus BYOK charges, session-key privacy,
+   per-operation validation, Provider data disclosure, unknown-outcome recovery, draft review, and
+   ERP-owned publishing.
+2. Run `QA-04` only after the exact paid `QA-02` evidence exists.
 3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
