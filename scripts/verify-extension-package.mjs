@@ -467,6 +467,11 @@ const requiredHostedPageModules = [
   'pages/ai-image-workbench-hosted.js',
 ];
 
+const requiredUnifiedPublishModules = [
+  'shared/publish/workbench-listing-publish-coordinator.js',
+  'pages/ai-image-workbench-publish.js',
+];
+
 const requiredByokPages = [
   'pages/ai-provider-settings.html',
   'pages/ai-provider-settings.css',
@@ -490,6 +495,9 @@ for (const modulePath of requiredHostedBackgroundModules) {
 }
 for (const modulePath of requiredHostedPageModules) {
   fileExists(modulePath, `hosted page module ${modulePath}`);
+}
+for (const modulePath of requiredUnifiedPublishModules) {
+  fileExists(modulePath, `unified publish module ${modulePath}`);
 }
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
@@ -517,6 +525,11 @@ for (const modulePath of requiredHostedBackgroundModules) {
   const relFromBackground = `../${modulePath}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
   else fail(`service worker does not import ${modulePath}`);
+}
+if (swText.includes('../shared/publish/workbench-listing-publish-coordinator.js')) {
+  pass('service worker imports the unified workbench publish coordinator');
+} else {
+  fail('service worker does not import the unified workbench publish coordinator');
 }
 checkScriptLoadOrder(
   parseImportScripts(manifest.background?.service_worker || ''),
@@ -558,6 +571,15 @@ const hostedDispatcherWired = [
 if (hostedDispatcherWired) pass('service worker hosted dispatcher wiring is complete');
 else fail('service worker hosted dispatcher wiring is incomplete');
 
+const unifiedPublishWired = [
+  'function getWorkbenchListingPublishCoordinator()',
+  'SS_ERP_WORKBENCH_LISTING_PUBLISH_COORDINATOR',
+  'workbenchPublishCoordinator: getWorkbenchListingPublishCoordinator()',
+  'getWorkbenchListingPublishCoordinator().clear()',
+].every((token) => swText.includes(token));
+if (unifiedPublishWired) pass('service worker unified publish wiring is complete');
+else fail('service worker unified publish wiring is incomplete');
+
 const workbenchHtmlText = readFileSync(relToAbs('pages/ai-image-workbench.html'), 'utf8');
 const workbenchLaunchHtmlText = readFileSync(
   relToAbs('pages/ai-image-workbench-launch.html'),
@@ -572,6 +594,7 @@ const requiredWorkbenchScripts = [
   '../shared/byok/workbench-client.js',
   '../shared/byok/workbench-batch-client.js',
   './ai-image-workbench-workspace.js',
+  './ai-image-workbench-publish.js',
   './ai-image-workbench-batch.js',
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
@@ -582,6 +605,7 @@ const orderedWorkbenchScripts = [
   '../shared/byok/workbench-client.js',
   '../shared/byok/workbench-batch-client.js',
   './ai-image-workbench-workspace.js',
+  './ai-image-workbench-publish.js',
   './ai-image-workbench-batch.js',
   './ai-image-workbench.js',
   './ai-image-workbench-edit.js',
@@ -599,6 +623,7 @@ const orderedHostedWorkbenchScripts = [
   '../shared/hosted/ai-image-suite-candidate-preview-consumer.js',
   '../shared/hosted/ai-image-suite-workspace-projection.js',
   './ai-image-workbench-workspace.js',
+  './ai-image-workbench-publish.js',
   './ai-image-workbench-hosted.js',
   './ai-image-workbench-batch.js',
   './ai-image-workbench.js',

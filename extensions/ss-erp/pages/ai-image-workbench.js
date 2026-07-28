@@ -703,6 +703,7 @@
 
   async function loadPublishPanel(candidate, lifecycleEpoch) {
     clearPublishView();
+    if (global.SS_ERP_UNIFIED_WORKBENCH_PUBLISH_ACTIVE === true) return false;
     var authoritative = state.publicState && state.publicState.publish;
     if (authoritative !== null && authoritative !== undefined) {
       state.publishState = normalizePublishState(authoritative);

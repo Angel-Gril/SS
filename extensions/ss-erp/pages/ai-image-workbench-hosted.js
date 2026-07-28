@@ -603,6 +603,66 @@
     if (!state.active) emit(WORKSPACE_REFRESH_EVENT, null);
   }
 
+  function publishAssignedWorkspace(result, assignedSlots) {
+    if (!state.mapper || typeof state.mapper.createBootstrap !== 'function'
+      || !Array.isArray(result && result.assignments)
+      || result.assignments.length !== assignedSlots.length) {
+      throw controllerError('SS_ERP_HOSTED_WORKBENCH_ASSIGNMENT_RESPONSE_INVALID');
+    }
+    var base = clone(state.mapper.createBootstrap());
+    var assignments = new Map();
+    result.assignments.forEach(function (assignment, index) {
+      var slot = assignedSlots[index];
+      if (!assignment || !slot || assignment.slotKey !== slot.slotKey
+        || assignment.assetId !== slot.output.assetId
+        || assignments.has(assignment.slotKey)) {
+        throw controllerError('SS_ERP_HOSTED_WORKBENCH_ASSIGNMENT_RESPONSE_INVALID');
+      }
+      assignments.set(assignment.slotKey, assignment);
+    });
+    base.binding = {
+      shopId: result.shopId,
+      workflowId: result.listingWorkflowId,
+      draftRevision: result.boundDraftRevision,
+      draftVersion: result.boundDraftVersion,
+    };
+    base.executionMode = 'ERP_HOSTED';
+    base.availableExecutionModes = ['ERP_HOSTED', 'BYOK'];
+    base.dispatched = true;
+    base.libraryItems = [];
+    base.skus.forEach(function (sku) {
+      sku.slots.forEach(function (workspaceSlot) {
+        var assignment = assignments.get(workspaceSlot.slotKey);
+        if (!assignment) return;
+        var sourceSlot = assignedSlots.find(function (candidate) {
+          return candidate.slotKey === workspaceSlot.slotKey;
+        });
+        var attemptId = 'hosted:' + sourceSlot.id + ':' + sourceSlot.attempt;
+        workspaceSlot.alternatives = [{
+          attemptId: attemptId,
+          state: 'BOUND',
+          mediaId: assignment.assetId,
+          errorCode: null,
+        }];
+        workspaceSlot.selectedAttemptId = attemptId;
+        base.libraryItems.push({
+          mediaId: assignment.assetId,
+          sourceType: 'GENERATED',
+          label: sourceSlot.goal,
+          secondaryLabel: '已写入 ERP 草稿',
+          skuKeys: Array.isArray(workspaceSlot.applicableSkuKeys)
+            ? workspaceSlot.applicableSkuKeys.slice() : [sku.skuKey],
+          referenceEligible: false,
+        });
+      });
+    });
+    if (base.libraryItems.length !== result.assignments.length) {
+      throw controllerError('SS_ERP_HOSTED_WORKBENCH_ASSIGNMENT_RESPONSE_INVALID');
+    }
+    emit(WORKSPACE_BOOTSTRAP_EVENT, deepFreeze(base));
+    return true;
+  }
+
   function nextRuntimeRevision() {
     var events = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
     if (!events || typeof events.nextRuntimeRevision !== 'function') {
@@ -1261,13 +1321,13 @@
         skuKey: state.launch.skuKey,
         assignmentOrdinal: ordinal + result.assignments.length,
       };
+      publishAssignedWorkspace(result, slots);
       state.assignmentOperation = null;
       state.authorityEpoch += 1;
       state.available = false;
       state.mapper = null;
       state.projection = null;
       revokePreview();
-      emit(WORKSPACE_CLEAR_EVENT, null);
       setStatus('已批准候选已原子写入草稿，等待新的权威草稿版本重新校验。', 'warning');
       clearRuntimeClient();
       return true;

@@ -147,7 +147,8 @@ function createHarness(options = {}) {
     },
     async ingest(value) {
       calls.push(['ingest', value]);
-      return projection({
+      if (typeof options.ingest === 'function') return options.ingest(value);
+      const committed = projection({
         revision: 5,
         ingest: {
           state: 'SUCCEEDED',
@@ -157,9 +158,26 @@ function createHarness(options = {}) {
           boundDraftVersion: 12,
           erpGenerationChargeCents: 0,
           rebootstrapRequired: true,
+          assignments: [{
+            slotKey: 'sku:sku-1:hero',
+            skuKey: 'sku-1',
+            assignmentOrdinal: 0,
+            attemptId: 'attempt-1',
+            resultId: `br_${'a'.repeat(48)}`,
+            assetId: 'asset-1',
+            provenanceId: 'provenance-1',
+            executionIntentId: 'execution-intent-1',
+            mimeType: 'image/png',
+            width: 1024,
+            height: 1024,
+          }],
           errorCode: null,
         },
       });
+      committed.slots[0].selectedAttemptId = 'attempt-1';
+      committed.slots[0].selectedResultId = `br_${'a'.repeat(48)}`;
+      committed.slots[0].attempts[0].reviewState = 'KEPT';
+      return committed;
     },
     async recover(value) { calls.push(['recover', value]); return projection(); },
     async clear() {
@@ -305,9 +323,17 @@ function batchError(code, outcome = 'UNKNOWN_OUTCOME') {
   });
   await controller.ingest();
   assert.equal(calls.some((call) => call[0] === 'clear'), true);
-  assert.ok(emitted.some((event) => event.type === 'ss-erp:workspace-authoritative-reload'
-    && event.detail.boundDraftRevision === 8
-    && event.detail.boundDraftVersion === 12));
+  const publishBootstrap = emitted.find((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+      && event.detail.binding.draftRevision === 8
+      && event.detail.binding.draftVersion === 12
+  ));
+  assert.ok(publishBootstrap);
+  assert.equal(publishBootstrap.detail.executionMode, 'BYOK');
+  assert.equal(publishBootstrap.detail.skus[0].slots[0].alternatives[0].mediaId, 'asset-1');
+  assert.equal(emitted.some((event) => (
+    event.type === 'ss-erp:workspace-authoritative-reload'
+  )), false);
   assert.equal(controller.getView().erpGenerationChargeCents, 0);
 }
 
@@ -332,8 +358,47 @@ function batchError(code, outcome = 'UNKNOWN_OUTCOME') {
   await assert.doesNotReject(controller.ingest());
   assert.equal(controller.getView().active, false);
   assert.equal(emitted.filter((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  )).length, 1, 'a lost cleanup response must not suppress the receipt-bound workspace');
+}
+
+{
+  const { controller, emitted } = createHarness({
+    async ingest() {
+      return projection({
+        revision: 1,
+        scheduler: null,
+        slots: [],
+        ingest: {
+          state: 'SUCCEEDED', idempotencyKey: null, replayed: true, receiptId: null,
+          boundDraftRevision: 8, boundDraftVersion: 12,
+          erpGenerationChargeCents: 0, rebootstrapRequired: true,
+          assignments: [], errorCode: null,
+        },
+      });
+    },
+  });
+  controller.bootstrap(bootstrap());
+  await controller.start({ profileId: 'profile-1', size: '1024x1024' });
+  await controller.handleWorkspaceIntent({
+    contractVersion: 'extension-byok-workbench-action-intent/v1',
+    binding: bootstrap().binding,
+    action: 'KEEP_ATTEMPT',
+    commandId: uuid(102),
+    expectedWorkspaceRevision: 3,
+    expectedRuntimeRevision: 1,
+    expectedSlotRevision: 2,
+    slotKey: 'sku:sku-1:hero',
+    attemptId: 'attempt-1',
+    externalChargeAcknowledgement: null,
+  });
+  await assert.doesNotReject(controller.ingest());
+  assert.equal(emitted.filter((event) => (
     event.type === 'ss-erp:workspace-authoritative-reload'
-  )).length, 1, 'a lost cleanup response must not suppress the committed draft reload');
+      && event.detail.boundDraftRevision === 8
+      && event.detail.boundDraftVersion === 12
+  )).length, 1, 'restart recovery without receipt assets must request authoritative reload');
+  assert.equal(emitted.some((event) => event.type === 'ss-erp:workspace-bootstrap'), false);
 }
 
 {

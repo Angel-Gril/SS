@@ -196,6 +196,60 @@
     };
   }
 
+  function workspacePublishRequest(value) {
+    var code = 'SS_ERP_WORKBENCH_PUBLISH_INPUT_INVALID';
+    if (!exactKeys(value, ['executionMode', 'binding', 'selectedMedia'])
+      || !['ERP_HOSTED', 'BYOK'].includes(value.executionMode)
+      || !exactKeys(value.binding, ['shopId', 'workflowId', 'draftRevision', 'draftVersion'])
+      || !Number.isSafeInteger(value.binding.draftRevision) || value.binding.draftRevision < 1
+      || !Number.isSafeInteger(value.binding.draftVersion) || value.binding.draftVersion < 1
+      || !Array.isArray(value.selectedMedia)
+      || value.selectedMedia.length < 1 || value.selectedMedia.length > 500) {
+      throw clientError(code);
+    }
+    var slots = new Set();
+    var assets = new Set();
+    var rows = value.selectedMedia.map(function (row) {
+      if (!exactKeys(row, ['scope', 'skuKey', 'slotKey', 'assetId'])
+        || !['PRODUCT', 'SKU'].includes(row.scope)
+        || (row.scope === 'PRODUCT' && row.skuKey !== null)
+        || (row.scope === 'SKU' && typeof row.skuKey !== 'string')) {
+        throw clientError(code);
+      }
+      var skuKey = row.scope === 'PRODUCT'
+        ? null : text(row.skuKey, 1, 500, code);
+      var slotKey = text(row.slotKey, 1, 200, code);
+      var assetId = text(row.assetId, 1, 500, code);
+      if (slots.has(slotKey) || assets.has(assetId)) throw clientError(code);
+      slots.add(slotKey);
+      assets.add(assetId);
+      return {
+        scope: row.scope,
+        skuKey: skuKey,
+        slotKey: slotKey,
+        assetId: assetId,
+      };
+    });
+    return {
+      executionMode: value.executionMode,
+      binding: {
+        shopId: text(value.binding.shopId, 1, 200, code),
+        workflowId: text(value.binding.workflowId, 1, 200, code),
+        draftRevision: value.binding.draftRevision,
+        draftVersion: value.binding.draftVersion,
+      },
+      selectedMedia: rows,
+    };
+  }
+
+  function publishPreviewHash(value) {
+    var normalized = text(value, 64, 64, 'SS_ERP_WORKBENCH_PUBLISH_INPUT_INVALID');
+    if (!/^[a-f0-9]{64}$/u.test(normalized)) {
+      throw clientError('SS_ERP_WORKBENCH_PUBLISH_INPUT_INVALID');
+    }
+    return normalized;
+  }
+
   function createClient(options) {
     var runtime = options && options.runtime || global.chrome && global.chrome.runtime;
     var Channel = options && options.BroadcastChannel || global.BroadcastChannel;
@@ -215,7 +269,8 @@
       var ingestOutcomeUnknown = type === MESSAGE_TYPES.INGEST
         || type === MESSAGE_TYPES.RECOVER_INGEST;
       var publishOutcomeUnknown = type === MESSAGE_TYPES.PUBLISH
-        && payload && payload.action !== 'PREVIEW';
+        && payload && ['CONFIRM', 'RECOVER', 'WORKSPACE_CONFIRM', 'WORKSPACE_RECOVER']
+          .includes(payload.action);
       if (readinessValue) {
         var normalized = readiness(readinessValue);
         message.readinessHandle = normalized.readinessHandle;
@@ -630,6 +685,60 @@
           null,
           PUBLISH_TIMEOUT_MS,
         );
+      },
+      getWorkspacePublishPreview: function (value) {
+        try {
+          return send(MESSAGE_TYPES.PUBLISH, {
+            action: 'WORKSPACE_PREVIEW',
+            request: workspacePublishRequest(value),
+          });
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      getWorkspacePublishState: function (value) {
+        try {
+          return send(MESSAGE_TYPES.PUBLISH, {
+            action: 'WORKSPACE_STATE',
+            request: workspacePublishRequest(value),
+          });
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      confirmWorkspacePublish: function (value, previewHashValue) {
+        try {
+          return send(
+            MESSAGE_TYPES.PUBLISH,
+            {
+              action: 'WORKSPACE_CONFIRM',
+              request: workspacePublishRequest(value),
+              previewHash: publishPreviewHash(previewHashValue),
+            },
+            null,
+            PUBLISH_TIMEOUT_MS,
+          );
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      recoverWorkspacePublish: function (value) {
+        try {
+          return send(
+            MESSAGE_TYPES.PUBLISH,
+            {
+              action: 'WORKSPACE_RECOVER',
+              request: workspacePublishRequest(value),
+            },
+            null,
+            PUBLISH_TIMEOUT_MS,
+          );
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      },
+      getActiveWorkspacePublish: function () {
+        return send(MESSAGE_TYPES.PUBLISH, { action: 'WORKSPACE_ACTIVE' });
       },
       uploadEditMedia: uploadEditMedia,
       releaseEditMedia: function (mediaHandleValue, purposeValue) {

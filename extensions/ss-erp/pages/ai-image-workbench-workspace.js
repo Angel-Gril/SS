@@ -7,6 +7,8 @@
   var BOOTSTRAP_EVENT = 'ss-erp:workspace-bootstrap';
   var RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var PUBLISH_PROJECTION_EVENT = 'ss-erp:workspace-publish-projection';
+  var STATE_EVENT = 'ss-erp:workspace-state';
+  var STATE_CLEAR_EVENT = 'ss-erp:workspace-state-clear';
   var CLEAR_EVENT = 'ss-erp:workspace-clear';
   var ACTION_EVENT = 'ss-erp:workspace-action';
   var INTENT_EVENT = 'ss-erp:workspace-intent';
@@ -1539,6 +1541,13 @@
     syncTaskDockStickyOffset();
   }
 
+  function emitWorkspaceState(detail) {
+    if (!global.document || typeof global.document.dispatchEvent !== 'function'
+      || typeof global.CustomEvent !== 'function') return false;
+    global.document.dispatchEvent(new global.CustomEvent(STATE_EVENT, { detail: detail }));
+    return true;
+  }
+
   function syncTaskDockStickyOffset() {
     if (!contextBand || !nodes.taskDock.style
       || typeof nodes.taskDock.style.setProperty !== 'function'
@@ -1633,6 +1642,7 @@
           }
           snapshot = next;
           render();
+          emitWorkspaceState(snapshot);
         }) : null;
       render();
       if (preserveDirtyPrompt && dirtyPromptFocused
@@ -1796,6 +1806,11 @@
     nodes.shell.setAttribute('data-runtime-state', 'CLEARED');
     nodes.shell.hidden = true;
     nodes.taskDock.hidden = true;
+    emitWorkspaceState(null);
+    if (global.document && typeof global.document.dispatchEvent === 'function'
+      && typeof global.CustomEvent === 'function') {
+      global.document.dispatchEvent(new global.CustomEvent(STATE_CLEAR_EVENT, { detail: null }));
+    }
   }
 
   function handlePromptInput() {

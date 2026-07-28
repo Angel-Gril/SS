@@ -458,12 +458,25 @@ function harness(options = {}) {
   const mapper = {
     createBootstrap() {
       calls.push(['mapper-bootstrap']);
+      const sourceSlots = currentProjection.plan?.slots || [];
       return deepFreeze({
         contractVersion: 'extension-byok-workbench-workspace-state/v1',
         binding: workspaceBinding(currentLaunch), executionMode: 'ERP_HOSTED',
         availableExecutionModes: ['ERP_HOSTED', 'BYOK'], dispatched: false,
         selectedSkuKey: currentLaunch.skuKey, selectedSlotKey: currentLaunch.slotKey,
-        globalReferenceIds: [], libraryItems: [], skus: [],
+        globalReferenceIds: [], libraryItems: [], skus: [{
+          skuKey: 'sku-red', label: 'SKU red', slots: sourceSlots.map((slot, index) => ({
+            slotKey: slot.slotKey,
+            role: index === 0 ? 'HERO' : 'DETAIL',
+            prompt: slot.goal,
+            negativePrompt: '',
+            referenceIds: [],
+            alternatives: [],
+            selectedAttemptId: null,
+            assignmentScope: 'SKU',
+            applicableSkuKeys: ['sku-red'],
+          })),
+        }],
       });
     },
     projectRuntime(value) {
@@ -1193,7 +1206,16 @@ assert.match(source, /ASSIGNMENT_UNKNOWN_OUTCOME|EXECUTION_UNKNOWN_OUTCOME/u);
   );
   assert.equal(test.controller.isAvailable(), false);
   assert.equal(test.controller.isActive(), true);
-  assert.equal(test.workspaceEvents.some((row) => row[0] === 'clear'), true);
+  assert.equal(test.workspaceEvents.some((row) => row[0] === 'clear'), false);
+  const publishBootstrap = test.workspaceEvents.filter((row) => row[0] === 'bootstrap').at(-1)[1];
+  assert.equal(publishBootstrap.binding.draftRevision, 12);
+  assert.equal(publishBootstrap.binding.draftVersion, 8);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(publishBootstrap.skus[0].slots.map((slot) => (
+      slot.alternatives[0].mediaId
+    )))),
+    ['asset-slot-1', 'asset-slot-2'],
+  );
   assert.match(test.nodes.hostedAssignmentNotice.textContent, /重新校验/u);
   assert.equal(
     await test.controller.refresh(),

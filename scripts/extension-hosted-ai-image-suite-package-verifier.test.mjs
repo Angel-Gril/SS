@@ -30,6 +30,8 @@ const requiredFocusedTests = [
   'extension-hosted-ai-image-suite-workspace-projection.test.mjs',
   'extension-hosted-ai-image-workbench-controller.test.mjs',
   'extension-hosted-ai-image-suite-package-verifier.test.mjs',
+  'extension-workbench-listing-publish-coordinator.test.mjs',
+  'extension-ai-image-workbench-publish-controller.test.mjs',
 ];
 
 const verifierSource = readFileSync(verifierPath, 'utf8');
@@ -41,7 +43,7 @@ const workbenchHtml = readFileSync(
 
 assert.match(
   workbenchHtml,
-  /ai-image-workbench-workspace\.js[\s\S]*ai-image-workbench-hosted\.js[\s\S]*ai-image-workbench\.js[\s\S]*ai-image-workbench-edit\.js/u,
+  /ai-image-workbench-workspace\.js[\s\S]*ai-image-workbench-publish\.js[\s\S]*ai-image-workbench-hosted\.js[\s\S]*ai-image-workbench\.js[\s\S]*ai-image-workbench-edit\.js/u,
   'Hosted authority arbitration must load before either BYOK page controller',
 );
 
@@ -55,6 +57,8 @@ for (const modulePath of [
   'shared/hosted/ai-image-suite-candidate-preview-consumer.js',
   'shared/hosted/ai-image-suite-workspace-projection.js',
   'pages/ai-image-workbench-hosted.js',
+  'shared/publish/workbench-listing-publish-coordinator.js',
+  'pages/ai-image-workbench-publish.js',
 ]) {
   assert.ok(verifierSource.includes(modulePath), `verifier must require ${modulePath}`);
 }

@@ -903,7 +903,31 @@ test('composes the BYOK batch page through serial Provider review and atomic zer
     fakeErp.calls.some((call) => /ai-(?:image|media).*cost|reservation|settlement/iu.test(call.path)),
     false,
   );
-  assert.ok(emitted.some((event) => event.type === 'ss-erp:workspace-authoritative-reload'));
+  const publishBootstrap = emitted.find((event) => event.type === 'ss-erp:workspace-bootstrap');
+  assert.ok(publishBootstrap, 'the receipt must project one bound publish workspace');
+  assert.deepEqual(publishBootstrap.detail.binding, {
+    shopId: SHOP_ID,
+    workflowId: WORKFLOW_ID,
+    draftRevision: ingested.ingest.boundDraftRevision,
+    draftVersion: ingested.ingest.boundDraftVersion,
+  });
+  assert.equal(publishBootstrap.detail.executionMode, 'BYOK');
+  assert.deepEqual(
+    publishBootstrap.detail.skus.flatMap((sku) => sku.slots).map((slot) => ({
+      slotKey: slot.slotKey,
+      assetId: slot.alternatives[0].mediaId,
+      state: slot.alternatives[0].state,
+    })),
+    ingested.ingest.assignments.map((assignment) => ({
+      slotKey: assignment.slotKey,
+      assetId: assignment.assetId,
+      state: 'BOUND',
+    })),
+  );
+  assert.equal(
+    emitted.some((event) => event.type === 'ss-erp:workspace-authoritative-reload'),
+    false,
+  );
 
   const forbidden = [
     API_KEY,

@@ -87,6 +87,31 @@ const publishPreview = {
   selectedSkuKeys: ['sku-1'],
   media: [],
 };
+const workspacePublishRequest = {
+  executionMode: 'ERP_HOSTED',
+  binding: {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 6, draftVersion: 7,
+  },
+  selectedMedia: [{
+    scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'asset-1',
+  }],
+};
+const workspacePublishPreview = {
+  contractVersion: 'extension-workbench-listing-publish/v1',
+  executionMode: 'ERP_HOSTED',
+  shopId: 'shop-1', workflowId: 'workflow-1',
+  basisDraftRevision: 6, basisDraftVersion: 7,
+  currentDraftRevision: 6, currentDraftVersion: 7,
+  selectedMedia: workspacePublishRequest.selectedMedia,
+  previewHash: '8'.repeat(64), selectedSkuKeys: ['sku-1'], orderedMedia: [],
+};
+const workspacePublishState = {
+  contractVersion: 'extension-workbench-listing-publish/v1',
+  request: workspacePublishRequest,
+  state: 'SUCCEEDED', executionMode: 'ERP_HOSTED', shopId: 'shop-1',
+  workflowId: 'workflow-1', currentDraftRevision: 6, currentDraftVersion: 7,
+  previewHash: '8'.repeat(64), receiptId: 'publish-receipt-2', failureCode: null,
+};
 const messages = [];
 const responses = new Map([
   [api.MESSAGE_TYPES.GET_PUBLIC_STATE, { ok: true, data: { mode: 'BYOK' } }],
@@ -142,7 +167,11 @@ const runtime = {
     queueMicrotask(() => callback(message.type === api.MESSAGE_TYPES.PUBLISH
       ? { ok: true, data: message.payload.action === 'PREVIEW'
         ? publishPreview
-        : { state: 'SUCCEEDED', receiptId: 'publish-receipt-1', replayed: false } }
+        : message.payload.action === 'WORKSPACE_PREVIEW'
+          ? workspacePublishPreview
+          : message.payload.action.startsWith('WORKSPACE_')
+            ? workspacePublishState
+            : { state: 'SUCCEEDED', receiptId: 'publish-receipt-1', replayed: false } }
       : responses.get(message.type)));
   },
 };
@@ -194,6 +223,39 @@ assert.deepEqual(JSON.parse(JSON.stringify(recoveredIngest)), boundResult);
 assert.deepEqual(JSON.parse(JSON.stringify(await client.getPublishPreview())), publishPreview);
 assert.equal((await client.confirmPublish('9'.repeat(64))).receiptId, 'publish-receipt-1');
 assert.equal((await client.recoverPublish()).state, 'SUCCEEDED');
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await client.getWorkspacePublishPreview(workspacePublishRequest))),
+  workspacePublishPreview,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await client.getWorkspacePublishState(workspacePublishRequest))),
+  workspacePublishState,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await client.confirmWorkspacePublish(
+    workspacePublishRequest,
+    '8'.repeat(64),
+  ))),
+  workspacePublishState,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await client.recoverWorkspacePublish(workspacePublishRequest))),
+  workspacePublishState,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await client.getActiveWorkspacePublish())),
+  workspacePublishState,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(messages.filter((message) => (
+    message.type === api.MESSAGE_TYPES.PUBLISH
+      && String(message.payload.action).startsWith('WORKSPACE_')
+  )).map((message) => message.payload.action))),
+  [
+    'WORKSPACE_PREVIEW', 'WORKSPACE_STATE', 'WORKSPACE_CONFIRM',
+    'WORKSPACE_RECOVER', 'WORKSPACE_ACTIVE',
+  ],
+);
 
 const uploadChannelName = responses.get(api.MESSAGE_TYPES.EDIT_MEDIA_PREPARE).data.channelName;
 FakeBroadcastChannel.hooks.set(uploadChannelName, (page, value) => {
@@ -267,6 +329,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(
 assert.deepEqual(
   JSON.parse(JSON.stringify(messages.filter((message) => (
     message.type === api.MESSAGE_TYPES.PUBLISH
+      && ['PREVIEW', 'CONFIRM', 'RECOVER'].includes(message.payload.action)
   )).map((message) => message.payload))),
   [
     { action: 'PREVIEW' },

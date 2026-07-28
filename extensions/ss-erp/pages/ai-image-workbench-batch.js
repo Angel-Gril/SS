@@ -467,6 +467,91 @@
       workspaceRevision += 1;
     }
 
+    function emitBoundPublishWorkspace(ingest) {
+      var code = 'SS_ERP_BYOK_BATCH_PAGE_RESPONSE_INVALID';
+      if (!bootstrapState || !Array.isArray(ingest.assignments)
+        || ingest.assignments.length < 1) fail(code);
+      var expected = projection.slots.filter(function (slot) {
+        return slot.selectedAttemptId !== null && slot.selectedResultId !== null;
+      });
+      if (expected.length !== ingest.assignments.length) fail(code);
+      var allSkuKeys = [...new Set(bootstrapState.slots.map(function (slot) {
+        return slot.skuKey;
+      }))].sort();
+      var groups = new Map();
+      var libraryItems = [];
+      var seenSlots = new Set();
+      var seenAssets = new Set();
+      ingest.assignments.slice().sort(function (left, right) {
+        return left.assignmentOrdinal - right.assignmentOrdinal;
+      }).forEach(function (assignment) {
+        var source = bootstrapState.slots.find(function (slot) {
+          return slot.slotKey === assignment.slotKey && slot.skuKey === assignment.skuKey;
+        });
+        var selected = expected.find(function (slot) {
+          return slot.slotKey === assignment.slotKey && slot.skuKey === assignment.skuKey;
+        });
+        if (!source || !selected
+          || selected.assignmentOrdinal !== assignment.assignmentOrdinal
+          || selected.selectedAttemptId !== assignment.attemptId
+          || selected.selectedResultId !== assignment.resultId
+          || seenSlots.has(assignment.slotKey) || seenAssets.has(assignment.assetId)
+          || !/^br_[a-f0-9]{48}$/u.test(assignment.resultId)
+          || !identifier(assignment.assetId, 1, 200, code)) fail(code);
+        seenSlots.add(assignment.slotKey);
+        seenAssets.add(assignment.assetId);
+        var shared = assignment.slotKey.startsWith('shared:detail:');
+        var group = groups.get(source.skuKey);
+        if (!group) {
+          group = { skuKey: source.skuKey, label: source.skuLabel, slots: [] };
+          groups.set(source.skuKey, group);
+        }
+        group.slots.push({
+          slotKey: source.slotKey,
+          role: source.role,
+          prompt: '',
+          negativePrompt: '',
+          referenceIds: null,
+          alternatives: [{
+            attemptId: assignment.attemptId,
+            state: 'BOUND',
+            mediaId: assignment.assetId,
+            errorCode: null,
+          }],
+          selectedAttemptId: assignment.attemptId,
+          assignmentScope: shared ? 'PRODUCT' : 'SKU',
+          applicableSkuKeys: shared ? allSkuKeys : [source.skuKey],
+        });
+        libraryItems.push({
+          mediaId: assignment.assetId,
+          sourceType: 'GENERATED',
+          label: source.slotKey,
+          secondaryLabel: '已写入 ERP 草稿',
+          skuKeys: shared ? allSkuKeys : [source.skuKey],
+          referenceEligible: false,
+        });
+      });
+      var skus = [...groups.values()];
+      if (!skus.length) fail(code);
+      emit('ss-erp:workspace-bootstrap', deepFreeze({
+        contractVersion: WORKSPACE_VERSION,
+        binding: {
+          shopId: bootstrapState.binding.shopId,
+          workflowId: bootstrapState.binding.workflowId,
+          draftRevision: ingest.boundDraftRevision,
+          draftVersion: ingest.boundDraftVersion,
+        },
+        executionMode: 'BYOK',
+        availableExecutionModes: ['ERP_HOSTED', 'BYOK'],
+        dispatched: true,
+        selectedSkuKey: skus[0].skuKey,
+        selectedSlotKey: skus[0].slots[0].slotKey,
+        globalReferenceIds: [],
+        libraryItems: libraryItems,
+        skus: skus,
+      }));
+    }
+
     async function handleProjection(value) {
       projection = normalizeProjection(value);
       lastErrorCode = null;
@@ -486,11 +571,19 @@
         started = false;
         releasePreview();
         reloadEmitted = true;
-        emit('ss-erp:workspace-authoritative-reload', deepFreeze({
-          contractVersion: 'extension-byok-workbench-authoritative-reload/v1',
-          boundDraftRevision: boundDraftRevision,
-          boundDraftVersion: boundDraftVersion,
-        }));
+        if (Array.isArray(ingest.assignments) && ingest.assignments.length > 0) {
+          emitBoundPublishWorkspace({
+            ...ingest,
+            boundDraftRevision: boundDraftRevision,
+            boundDraftVersion: boundDraftVersion,
+          });
+        } else {
+          emit('ss-erp:workspace-authoritative-reload', deepFreeze({
+            contractVersion: 'extension-byok-workbench-authoritative-reload/v1',
+            boundDraftRevision: boundDraftRevision,
+            boundDraftVersion: boundDraftVersion,
+          }));
+        }
       }
       return projection;
     }

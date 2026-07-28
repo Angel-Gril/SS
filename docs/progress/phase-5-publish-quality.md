@@ -1,10 +1,10 @@
 # Phase 5: Publishing Closure and Product Quality
 
-Progress: 0/4 tasks.
+Progress: 1/4 tasks.
 
 ## Tasks
 
-- [ ] `INT-03` Unify ordered media/Ozon publish semantics (`P0`, `L`). Acceptance: both
+- [x] `INT-03` Unify ordered media/Ozon publish semantics (`P0`, `L`). Acceptance: both
   modes use one current draft compiler, validation, publish grant, receipt, queue, and
   reconciliation; local-only/rejected/unknown/stale/unbound slots cannot publish; recovery
   never creates a second submission.
@@ -30,3 +30,19 @@ Progress: 0/4 tasks.
 ## Notes
 
 - No rollout begins if any secret, billing, stale-draft, or one-receipt invariant fails.
+- `INT-03` converges `ERP_HOSTED` and `BYOK` on one device-scoped publish contract. The server
+  re-reads the current draft, validates the complete authoritative media order, records the existing
+  publish intent, and returns the unchanged `OZON_PUBLISH` command envelope used by the established
+  grant, receipt, executor, and reconciliation path. Mixed hosted/BYOK drafts link all matching BYOK
+  provenance rows to the same receipt.
+- Only exact `BOUND` workspace slots can request a preview. Local, rejected, unknown, expired,
+  stale, reordered, or unbound selections fail closed before intent creation. Hosted assignment and
+  BYOK atomic ingest now project receipt-bound asset IDs into the same publish workspace; restart
+  recovery without asset mappings falls back to an authoritative draft reload.
+- Confirmation requires a trusted checkbox action. Double-clicks coalesce, timeout/reload recovery
+  reuses one draft-version-bound idempotency identity, a `PENDING` receipt is never redispatched, and
+  only an authoritative `NOT_COMMITTED` result permits same-identity dispatch. Session storage never
+  retains grants, Provider secrets, Ozon credentials, binary media, or raw Prompts.
+- Verification passed: lint (existing warnings only), workspace typecheck, 4,268 server tests,
+  preflight, focused Hosted/BYOK/controller/vertical tests, cloud package `449/0/0`, local/source
+  package `445/2/0` (expected local permission warnings), and `git diff --check`.

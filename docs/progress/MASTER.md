@@ -37,34 +37,33 @@ credential storage, or direct Ozon calls.
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
-- [ ] Phase 5: Publishing closure and product quality (0/4 tasks) [details](./phase-5-publish-quality.md)
+- [ ] Phase 5: Publishing closure and product quality (1/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 29/37 tasks complete (78%).
+Overall: 30/37 tasks complete (81%).
 
 ## Current Status
 
-Phase 4 is complete. Both execution modes use the same exact source/draft authority while preserving
-separate billing and Provider paths. The source page now opens or focuses one unified workbench from
-a valid device session, prefills exact shop/draft/SKU context, requires a revision-bound explicit
-choice when ambiguous, and re-collects the original tab/frame/document immediately before session
-open to reject same-URL product or SKU changes. Legacy v1 launch and batch requests fail closed for
-multi-SKU drafts. BYOK still reserves a persisted execution intent before every external Provider
-POST, runs selected slots serially, reviews attempts locally, and atomically normalizes, stores,
-hashes, proves, and binds only accepted bytes with ERP generation charge `0`. Lost responses, worker
-restart, page/device teardown, successor claims, and unknown outcomes remain absorbing; no blind
-Provider retry or direct Ozon call exists. Final lint, workspace typecheck, 4,257 server tests,
-preflight, Chromium desktop/mobile/zoom/forced-color/reduced-motion QA, and fresh source/cloud/local
-package gates passed. `INT-03` is the next dependency-ready task. `QA-02` remains blocked until exact
-paid Provider approval is recorded. All flags remain default-off; no real Provider request, charge,
-ERP ingest, Ozon write, production mutation, VPS access, or deployment occurred.
+`INT-03` is complete. Hosted and BYOK assets now converge only after ERP binding on one ordered-media
+preview and publish coordinator. The server re-reads the current draft, validates exact slot/asset
+order and readiness, records the existing publish intent, and continues through the established
+`OZON_PUBLISH` grant, receipt, executor, and reconciliation path. Trusted confirmation, stable
+draft-version idempotency, one-receipt recovery, and explicit `NOT_COMMITTED` proof prevent duplicate
+submission; `PENDING` is status-only. Local, rejected, unknown, expired, stale, reordered, and unbound
+media cannot publish. Hosted assignment and BYOK batch ingest project receipt-bound assets into the
+same publish UI without retaining raw Prompts, secrets, binaries, grants, or Ozon credentials.
+Lint, workspace typecheck, 4,268 server tests, preflight, focused vertical fixtures, and fresh
+source/cloud/local package gates passed. `QA-03` is the next dependency-ready task. `QA-02` remains
+blocked until exact paid Provider approval is recorded. All flags remain default-off; no real
+Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment
+occurred.
 
 ## Next Steps
 
-1. Converge both modes on `INT-03` ordered-media and publish semantics without weakening the existing
-   command-grant, receipt, idempotency, or reconciliation path.
-2. After `INT-03`, run the full accessibility/responsive `QA-03` gate and then the complete security
-   and regression `QA-04` gate.
+1. Run the full accessibility/responsive `QA-03` gate against the unified publish controls at every
+   target viewport, keyboard/focus state, 200% zoom, reduced motion, and forced-color mode.
+2. Complete `DOC-01` after `QA-03` stabilizes user-visible setup, validation, charges, recovery, and
+   privacy language. Run `QA-04` only after the exact paid `QA-02` evidence exists.
 3. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
    revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
    recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.

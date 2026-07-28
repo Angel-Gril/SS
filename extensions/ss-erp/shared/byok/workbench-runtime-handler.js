@@ -266,6 +266,15 @@
     var confirmPublish = requiredMethod(config.publishCoordinator, 'confirm');
     var recoverPublish = requiredMethod(config.publishCoordinator, 'recover');
     var getPublishState = requiredMethod(config.publishCoordinator, 'getState');
+    var workspacePublishCoordinator = config.workbenchPublishCoordinator;
+
+    function workspacePublishMethod(name) {
+      if (!workspacePublishCoordinator
+        || typeof workspacePublishCoordinator[name] !== 'function') {
+        throw handlerError('SS_ERP_WORKBENCH_PUBLISH_DEPENDENCY_UNAVAILABLE');
+      }
+      return workspacePublishCoordinator[name].bind(workspacePublishCoordinator);
+    }
     var vault = config.vault;
     var getVaultEntry = requiredMethod(vault, 'getForBackground');
     var getPublicResult = requiredMethod(vault, 'getPublic');
@@ -1206,6 +1215,50 @@
       return withPublishLock(handlerContext.sender, async function () {
         var input = handlerContext.payload || {};
         var action = input.action;
+        var workspaceActions = [
+          'WORKSPACE_PREVIEW', 'WORKSPACE_STATE', 'WORKSPACE_CONFIRM',
+          'WORKSPACE_RECOVER', 'WORKSPACE_ACTIVE',
+        ];
+        if (workspaceActions.includes(action)) {
+          var workspaceKeys = action === 'WORKSPACE_ACTIVE'
+            ? ['action']
+            : action === 'WORKSPACE_CONFIRM'
+              ? ['action', 'request', 'previewHash']
+              : ['action', 'request'];
+          if (!exactKeys(input, workspaceKeys)
+            || (action === 'WORKSPACE_CONFIRM'
+              && (typeof input.previewHash !== 'string'
+                || !/^[a-f0-9]{64}$/u.test(input.previewHash)))) {
+            throw handlerError('SS_ERP_WORKBENCH_PUBLISH_INPUT_INVALID');
+          }
+          var workspaceSession = await claimSession(handlerContext.sender);
+          if (action === 'WORKSPACE_ACTIVE') {
+            return workspacePublishMethod('getActive')({
+              shopId: workspaceSession.context.shopId,
+              workflowId: workspaceSession.context.workflowId,
+            });
+          }
+          var workspaceRequest = input.request;
+          if (!isRecord(workspaceRequest)
+            || !isRecord(workspaceRequest.binding)
+            || workspaceRequest.binding.shopId !== workspaceSession.context.shopId
+            || workspaceRequest.binding.workflowId !== workspaceSession.context.workflowId) {
+            throw handlerError('SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
+          }
+          if (action === 'WORKSPACE_PREVIEW') {
+            return workspacePublishMethod('preview')(workspaceRequest);
+          }
+          if (action === 'WORKSPACE_STATE') {
+            return workspacePublishMethod('getState')(workspaceRequest);
+          }
+          if (action === 'WORKSPACE_RECOVER') {
+            return workspacePublishMethod('recover')(workspaceRequest);
+          }
+          return workspacePublishMethod('confirm')({
+            ...workspaceRequest,
+            previewHash: input.previewHash,
+          });
+        }
         var expectedKeys = action === 'CONFIRM'
           ? ['action', 'previewHash']
           : ['action'];

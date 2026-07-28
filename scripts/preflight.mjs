@@ -474,6 +474,16 @@ const steps = [
     args: ['scripts/extension-byok-listing-publish-coordinator.test.mjs'],
   },
   {
+    name: 'extension unified workbench listing publish coordinator contract',
+    command: 'node',
+    args: ['scripts/extension-workbench-listing-publish-coordinator.test.mjs'],
+  },
+  {
+    name: 'extension AI image workbench publish controller contract',
+    command: 'node',
+    args: ['scripts/extension-ai-image-workbench-publish-controller.test.mjs'],
+  },
+  {
     name: 'extension BYOK workbench UI contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-ui.test.mjs'],

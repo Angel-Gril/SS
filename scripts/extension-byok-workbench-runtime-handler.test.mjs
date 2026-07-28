@@ -14,6 +14,11 @@ assert.match(
   /publishCoordinator:\s*getByokListingPublishCoordinator\(\)/u,
   'the workbench dispatcher must own the server-side publish bridge',
 );
+assert.match(
+  serviceWorkerSource,
+  /workbenchPublishCoordinator:\s*getWorkbenchListingPublishCoordinator\(\)/u,
+  'the workbench dispatcher must own the unified hosted/BYOK publish bridge',
+);
 assert.doesNotMatch(
   serviceWorkerSource,
   /const ingestHandler\s*=|WORKBENCH\.INGEST\]:\s*ingestHandler/u,
@@ -461,6 +466,39 @@ const publishCoordinator = {
   },
   async getState(input) { calls.push(['publish-state', input]); return publishState; },
 };
+const workbenchPublishState = {
+  contractVersion: 'extension-workbench-listing-publish/v1',
+  request: {
+    executionMode: 'ERP_HOSTED',
+    binding: {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 4, draftVersion: 5,
+    },
+    selectedMedia: [{
+      scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'asset-1',
+    }],
+  },
+  state: 'SUCCEEDED', executionMode: 'ERP_HOSTED', shopId: 'shop-1',
+  workflowId: 'workflow-1', currentDraftRevision: 4, currentDraftVersion: 5,
+  previewHash: '8'.repeat(64), receiptId: 'workbench-receipt-1', failureCode: null,
+};
+const workbenchPublishPreview = {
+  contractVersion: 'extension-workbench-listing-publish/v1',
+  executionMode: 'ERP_HOSTED', shopId: 'shop-1', workflowId: 'workflow-1',
+  basisDraftRevision: 4, basisDraftVersion: 5,
+  currentDraftRevision: 4, currentDraftVersion: 5,
+  previewHash: '8'.repeat(64), selectedSkuKeys: ['sku-1'],
+  selectedMedia: [{
+    scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'asset-1',
+  }],
+  orderedMedia: [],
+};
+const workbenchPublishCoordinator = {
+  async preview(input) { calls.push(['workbench-publish-preview', input]); return workbenchPublishPreview; },
+  async confirm(input) { calls.push(['workbench-publish-confirm', input]); return workbenchPublishState; },
+  async recover(input) { calls.push(['workbench-publish-recover', input]); return workbenchPublishState; },
+  async getState(input) { calls.push(['workbench-publish-state', input]); return null; },
+  async getActive(input) { calls.push(['workbench-publish-active', input]); return null; },
+};
 
 const emptyEditSnapshot = {
   contractVersion: 'extension-byok-workbench-edit-controller/v1',
@@ -580,6 +618,7 @@ const dispatcherOptions = {
   messageTypes: MESSAGE_TYPES,
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
   providerClient, vault, authorityGuard, previewBroker, ingestClient, publishCoordinator,
+  workbenchPublishCoordinator,
   editController, editMediaStore, editEpochGuard,
   providerSemaphore,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
@@ -912,6 +951,56 @@ const recoveredPublish = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
 });
 assert.equal(recoveredPublish.ok, true);
 assert.equal(recoveredPublish.data.replayed, true);
+const unifiedRequest = {
+  executionMode: 'ERP_HOSTED',
+  binding: {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 4, draftVersion: 5,
+  },
+  selectedMedia: [{
+    scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'asset-1',
+  }],
+};
+const unifiedPreview = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_PREVIEW', request: unifiedRequest }, sender,
+});
+assert.equal(unifiedPreview.ok, true);
+assert.equal(unifiedPreview.data.previewHash, '8'.repeat(64));
+const unifiedState = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_STATE', request: unifiedRequest }, sender,
+});
+assert.equal(unifiedState.ok, true);
+assert.equal(unifiedState.data, null);
+const unifiedConfirmed = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: {
+    action: 'WORKSPACE_CONFIRM', request: unifiedRequest, previewHash: '8'.repeat(64),
+  },
+  sender,
+});
+assert.equal(unifiedConfirmed.data.receiptId, 'workbench-receipt-1');
+const unifiedRecovered = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_RECOVER', request: unifiedRequest }, sender,
+});
+assert.equal(unifiedRecovered.data.receiptId, 'workbench-receipt-1');
+const unifiedActive = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_ACTIVE' }, sender,
+});
+assert.equal(unifiedActive.data, null);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'workbench-publish-active')[1])),
+  { shopId: 'shop-1', workflowId: 'workflow-1' },
+);
+const forgedUnified = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: {
+    action: 'WORKSPACE_PREVIEW',
+    request: {
+      ...unifiedRequest,
+      binding: { ...unifiedRequest.binding, workflowId: 'workflow-forged' },
+    },
+  },
+  sender,
+});
+assert.equal(forgedUnified.ok, false);
+assert.equal(forgedUnified.errorCode, 'SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
 const publishedState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
   payload: {}, sender,
 });

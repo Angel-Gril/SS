@@ -612,6 +612,49 @@
             role="status"
             aria-live="polite"
           >正在检查草稿与媒体绑定。</div>
+          <div id="workspacePublishControls" class="workspace-publish-controls" hidden>
+            <dl class="workspace-publish-authority">
+              <div><dt>执行方式</dt><dd id="workspacePublishMode">待读取</dd></div>
+              <div><dt>Ozon 店铺</dt><dd id="workspacePublishShop">待读取</dd></div>
+              <div><dt>权威草稿</dt><dd id="workspacePublishDraft">待读取</dd></div>
+              <div><dt>SKU 顺序</dt><dd id="workspacePublishSkus">待读取</dd></div>
+            </dl>
+            <ol id="workspacePublishMedia" class="workspace-publish-media"></ol>
+            <p
+              id="workspacePublishOperationStatus"
+              class="workspace-publish-operation-status"
+              role="status"
+              aria-live="polite"
+            >等待权威发布预览。</p>
+            <label
+              id="workspacePublishConfirmationRow"
+              class="workspace-publish-confirmation"
+              for="workspacePublishConfirmation"
+            >
+              <input id="workspacePublishConfirmation" type="checkbox" />
+              <span>我已核对店铺、当前草稿、SKU 和完整图片顺序</span>
+            </label>
+            <div class="workspace-publish-actions">
+              <button
+                id="workspacePublishRefreshButton"
+                class="button button-secondary"
+                type="button"
+                hidden
+              >重新核对草稿</button>
+              <button
+                id="workspacePublishRecoverButton"
+                class="button button-secondary"
+                type="button"
+                hidden
+              >核对并恢复同一回执</button>
+              <button
+                id="workspacePublishConfirmButton"
+                class="button button-primary"
+                type="button"
+                disabled
+              >确认提交 Ozon</button>
+            </div>
+          </div>
         </section>
       </aside>
         </div>
@@ -631,6 +674,7 @@
   <script src="../shared/hosted/ai-image-suite-candidate-preview-consumer.js"></script>
   <script src="../shared/hosted/ai-image-suite-workspace-projection.js"></script>
   <script src="./ai-image-workbench-workspace.js"></script>
+  <script src="./ai-image-workbench-publish.js"></script>
   <script src="./ai-image-workbench-hosted.js"></script>
   <script src="./ai-image-workbench-batch.js"></script>
   <script src="./ai-image-workbench.js"></script>

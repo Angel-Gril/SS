@@ -12,10 +12,12 @@ const workspacePagePath = `${root}/pages/ai-image-workbench-workspace.js`;
 const hostedPagePath = `${root}/pages/ai-image-workbench-hosted.js`;
 const batchClientPath = `${root}/shared/byok/workbench-batch-client.js`;
 const batchPagePath = `${root}/pages/ai-image-workbench-batch.js`;
+const publishCoordinatorPath = `${root}/shared/publish/workbench-listing-publish-coordinator.js`;
+const publishPagePath = `${root}/pages/ai-image-workbench-publish.js`;
 
 for (const path of [
   htmlPath, launchPath, cssPath, pagePath, workspaceStatePath, workspacePagePath,
-  hostedPagePath, batchClientPath, batchPagePath,
+  hostedPagePath, batchClientPath, batchPagePath, publishCoordinatorPath, publishPagePath,
 ]) {
   assert.equal(fs.existsSync(path), true, `${path} should exist`);
 }
@@ -34,10 +36,18 @@ assert.match(html, /shared\/byok\/workbench-batch-client\.js/u);
 assert.match(html, /shared\/contracts\/ai-image-workbench-v1\.js/u);
 assert.match(html, /shared\/byok\/workbench-workspace-state\.js/u);
 assert.match(html, /ai-image-workbench-workspace\.js/u);
+assert.match(html, /ai-image-workbench-publish\.js/u);
 assert.ok(
   html.indexOf('shared/contracts/ai-image-workbench-v1.js')
     < html.indexOf('shared/byok/workbench-workspace-state.js'),
   'the shared contract must load before workspace state',
+);
+assert.ok(
+  html.indexOf('./ai-image-workbench-workspace.js')
+    < html.indexOf('./ai-image-workbench-publish.js')
+    && html.indexOf('./ai-image-workbench-publish.js')
+      < html.indexOf('./ai-image-workbench-hosted.js'),
+  'the unified publish listener must load before hosted work can emit a bound workspace',
 );
 assert.ok(
   html.indexOf('./ai-image-workbench-hosted.js') < html.indexOf('./ai-image-workbench.js'),
@@ -61,6 +71,11 @@ for (const id of [
   'batchStatus', 'batchStateBadge', 'batchSlotSelection', 'batchConcurrency',
   'batchAcceptButton', 'batchRecoverButton', 'batchClearButton', 'batchRecoveryList',
   'batchPreviewPanel', 'batchPreviewImage', 'batchPreviewMeta', 'batchPreviewCloseButton',
+  'workspacePublishControls', 'workspacePublishMode', 'workspacePublishShop',
+  'workspacePublishDraft', 'workspacePublishSkus', 'workspacePublishMedia',
+  'workspacePublishOperationStatus', 'workspacePublishConfirmationRow',
+  'workspacePublishConfirmation', 'workspacePublishConfirmButton',
+  'workspacePublishRefreshButton', 'workspacePublishRecoverButton',
 ]) {
   assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
 }
@@ -88,6 +103,17 @@ assert.match(html, /id=["']contextBadge["']/u);
 assert.match(html, /已批准但尚未上传 ERP/u);
 assert.doesNotMatch(html, /api[_ -]?key|remember key|记住密钥/iu);
 assert.doesNotMatch(html, /<script[^>]*>\s*[^<]/iu, 'workbench page must not use inline scripts');
+assert.ok(
+  verifierSource.includes('shared/publish/workbench-listing-publish-coordinator.js')
+    && verifierSource.includes('pages/ai-image-workbench-publish.js'),
+  'the package verifier must require both unified publish modules',
+);
+for (const testPath of [
+  'scripts/extension-workbench-listing-publish-coordinator.test.mjs',
+  'scripts/extension-ai-image-workbench-publish-controller.test.mjs',
+]) {
+  assert.ok(preflightSource.includes(testPath), `preflight must run ${testPath}`);
+}
 assert.doesNotMatch(html, /https?:\/\//iu, 'workbench page must not load remote assets');
 assert.doesNotMatch(launchHtml, /<script|product-|workflow-|api[_ -]?key/iu);
 assert.match(css, /@media\s*\(max-width:\s*720px\)/u);

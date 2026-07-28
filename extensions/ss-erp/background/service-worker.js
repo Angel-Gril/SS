@@ -31,6 +31,7 @@ try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { c
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
 try { importScripts('../shared/byok/generated-asset-batch-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch ingest client load error:', e); }
 try { importScripts('../shared/byok/listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] BYOK publish coordinator load error:', e); }
+try { importScripts('../shared/publish/workbench-listing-publish-coordinator.js'); } catch (e) { console.warn('[SS ERP] workbench publish coordinator load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
@@ -395,6 +396,7 @@ let byokGeneratedResultVault = null;
 let byokGeneratedAssetIngestClient = null;
 let byokGeneratedAssetBatchIngestClient = null;
 let byokListingPublishCoordinator = null;
+let workbenchListingPublishCoordinator = null;
 let byokRuntimeAuthorityGuard = null;
 let byokWorkbenchLaunchClient = null;
 let byokWorkbenchBatchLaunchClient = null;
@@ -495,6 +497,7 @@ async function clearByokDeviceSessionState(input) {
       getByokPermissionBroker().clearSessionConsent(),
       getByokWorkbenchSessionManager().clearProviderState(),
       getByokListingPublishCoordinator().clear(),
+      getWorkbenchListingPublishCoordinator().clear(),
     ]);
     const failed = outcomes.find((outcome) => outcome.status === 'rejected');
     if (failed) throw failed.reason;
@@ -1256,6 +1259,21 @@ function getByokListingPublishCoordinator() {
   return byokListingPublishCoordinator;
 }
 
+function getWorkbenchListingPublishCoordinator() {
+  if (workbenchListingPublishCoordinator) return workbenchListingPublishCoordinator;
+  const api = globalThis.SS_ERP_WORKBENCH_LISTING_PUBLISH_COORDINATOR;
+  if (!api || typeof api.createCoordinator !== 'function') {
+    throw new Error('Workbench listing publish coordinator is unavailable');
+  }
+  workbenchListingPublishCoordinator = api.createCoordinator({
+    transport: getByokDeviceTransport(),
+    store: chrome.storage.session,
+    crypto: globalThis.crypto,
+    now: () => Date.now(),
+  });
+  return workbenchListingPublishCoordinator;
+}
+
 function getByokWorkbenchLaunchClient() {
   if (byokWorkbenchLaunchClient) return byokWorkbenchLaunchClient;
   const api = globalThis.SS_ERP_BYOK_WORKBENCH_LAUNCH_CLIENT;
@@ -1493,6 +1511,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     providerClient: getByokTextToImageClient(),
     ingestClient: getByokGeneratedAssetIngestClient(),
     publishCoordinator: getByokListingPublishCoordinator(),
+    workbenchPublishCoordinator: getWorkbenchListingPublishCoordinator(),
     vault: getByokGeneratedResultVault(),
     authorityGuard: getByokRuntimeAuthorityGuard(),
     previewBroker: getByokWorkbenchPreviewBroker(),
