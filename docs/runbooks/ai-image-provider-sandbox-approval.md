@@ -2,7 +2,8 @@
 
 Use this private approval record immediately before one paid international AI image sandbox
 request. It binds the operator's approval to one exact endpoint, model, operation, request profile,
-credential revision, deployed adapter revision, source/mask digest, and maximum cost.
+credential revision, deployed adapter revision, source/mask digest, maximum cost, and short validity
+window.
 
 This record is not a Provider API Key, a production rollout approval, or permission to retry an
 ambiguous request. Never include an API Key, Authorization value, raw Provider response, Ozon
@@ -29,10 +30,11 @@ example value with reviewed evidence; do not leave placeholder brackets.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "approvalId": "qa02-full-edit-20260729-01",
   "statement": "I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST",
   "approvedAt": "2026-07-29T01:00:00.000Z",
+  "expiresAt": "2026-07-29T01:30:00.000Z",
   "approverRef": "owner-review-20260729-01",
   "providerAccountRef": "relay-account-main",
   "pricingRevision": "provider-pricing-20260729",
@@ -64,13 +66,18 @@ Operation-specific fields:
   `maskSha256: null`.
 - `INPAINT`: use `/v1/images/edits`, exactly one source digest, and the exact PNG mask digest.
 - `adapterRevision` must be the full deployed `DEPLOYED_COMMIT`, not a planned or abbreviated SHA.
+- `approvedAt` and `expiresAt` must be canonical UTC ISO-8601 timestamps. The window must be
+  positive and no longer than 60 minutes. A clock at most five minutes behind `approvedAt` is
+  tolerated; the approval is invalid at the exact `expiresAt` instant.
 - Billing references are non-secret identifiers for the private before-call snapshot and the place
   where the settled charge will be reconciled. The quoted/maximum fields are audit evidence, not a
   Provider-side spending limit.
 
 The schema is closed: missing or extra properties fail before DNS resolution, intent creation, or a
-Provider POST. The endpoint, hostname, model, operation, profile, revisions, hashes, and costs must
-match the command environment exactly.
+Provider POST. Save it as pretty two-space JSON with one trailing newline; duplicate keys, invalid
+UTF-8, non-canonical JSON, and files that change during reading are rejected. The endpoint,
+hostname, model, operation, profile, revisions, hashes, and costs must match the command environment
+exactly.
 
 ## Bind The Reviewed File
 
@@ -108,21 +115,25 @@ pnpm --filter server sandbox:ai-image:approval:verify
 
 The command rejects an environment containing `AI_IMAGE_SANDBOX_CONFIRM` or
 `AI_IMAGE_SANDBOX_API_KEY`. It validates the deployed adapter revision, source/mask bytes and hashes,
-closed approval schema, approval-file digest, endpoint/model/operation/profile, credential revision,
-costs, and billing references. It performs no DNS lookup, creates no intent or fingerprint claim,
-and sends no Provider request. Successful output contains sanitized hashes and the approval ID only.
+closed approval schema, approval-file digest, HTTPS endpoint/model/operation/profile, credential
+revision, costs, validity window, and billing references. It performs no DNS lookup, creates no
+intent or fingerprint claim, and sends no Provider request. Successful output contains sanitized
+hashes, the approval ID/window, and the approved quoted/maximum cost.
 
 After this preflight passes, leave the approval file unchanged. Separately review the dark state and
 pre-call bill, inject the API Key for the single submit process, and set the paid confirmation only
-for the exact one approved run.
+for the exact one approved run. The submit path rechecks freshness after DNS, while claiming the
+immutable intent, immediately before Provider execution, and at the guarded POST boundary. If the
+approval expires, stop and review a new exact request; never reuse the expired approval to retry an
+ambiguous request.
 
 ## Retention And Review
 
 Keep the private approval file and its digest with the immutable intent, fingerprint claim,
 sanitized report, source/mask hash evidence, result, and before/settled billing evidence. For
 approval metadata, the sanitized report and intent retain only the approval ID, approval-file
-digest, timestamp, currency, and hashes of operator/account/pricing/billing references; they do not
-copy the raw endpoint or private billing reference values from this file.
+digest, approval/expiry timestamps, currency, and hashes of operator/account/pricing/billing
+references; they do not copy the raw endpoint or private billing reference values from this file.
 
 If the result is `RECONCILIATION_REQUIRED`, retain the same record and resolve the original request
 read-only. Never edit the approval, change the Operation ID, or create a replacement approval to

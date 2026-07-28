@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveAiImageSandboxRepositoryRevision,
   runAiImageProviderSingleSubmit,
+  sanitizeAiImageSandboxGitEnvironment,
 } from './ai-image-provider-single-submit.js';
+import { assertAiImageSandboxApprovalCurrent } from '../src/services/ai-image-sandbox-approval.js';
 
 const directories: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -35,10 +37,11 @@ async function withSandboxApproval(
     ? String(environment.AI_IMAGE_SANDBOX_MASK_SHA256)
     : null;
   const approval = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     approvalId: `approval-${operationId}`,
     statement: APPROVAL_STATEMENT,
-    approvedAt: '2026-07-29T00:00:00.000Z',
+    approvedAt: new Date(Date.now() - 60_000).toISOString(),
+    expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
     approverRef: 'test-owner',
     providerAccountRef: 'test-provider-account',
     pricingRevision: 'test-pricing-r1',
@@ -86,6 +89,69 @@ afterEach(async () => {
 });
 
 describe('single-submit AI image sandbox runner', () => {
+  it('fails closed when the approval freshness assertion receives forged timestamps', () => {
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: 'not-a-timestamp',
+      expiresAt: 'also-not-a-timestamp',
+    }, new Date('2030-01-01T00:00:00.000Z'))).toThrow(expect.objectContaining({
+      code: 'SANDBOX_APPROVAL_SCHEMA_INVALID',
+    }));
+  });
+
+  it('enforces approval validity and clock-skew boundaries', () => {
+    const now = new Date('2030-01-01T00:10:00.000Z');
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T01:00:00.000Z',
+    }, now)).not.toThrow();
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:15:00.000Z',
+      expiresAt: '2030-01-01T01:00:00.000Z',
+    }, now)).not.toThrow();
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:10:00.001Z',
+    }, now)).not.toThrow();
+
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:15:00.001Z',
+      expiresAt: '2030-01-01T01:00:00.000Z',
+    }, now)).toThrow(expect.objectContaining({ code: 'SANDBOX_APPROVAL_NOT_YET_VALID' }));
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:10:00.000Z',
+    }, now)).toThrow(expect.objectContaining({ code: 'SANDBOX_APPROVAL_EXPIRED' }));
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T01:00:00.001Z',
+    }, now)).toThrow(expect.objectContaining({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' }));
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00+00:00',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    }, now)).toThrow(expect.objectContaining({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' }));
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    }, now)).toThrow(expect.objectContaining({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' }));
+    expect(() => assertAiImageSandboxApprovalCurrent({
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    }, new Date(Number.NaN))).toThrow(expect.objectContaining({
+      code: 'SANDBOX_APPROVAL_CONFIG_INVALID',
+    }));
+  });
+
+  it('scrubs paid sandbox secrets from Git child-process environments', () => {
+    const sanitized = sanitizeAiImageSandboxGitEnvironment({
+      PATH: 'test-path',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret',
+      ai_image_sandbox_confirm: 'paid-confirmation',
+      DATABASE_URL: 'postgresql://secret',
+      ALIYUN_ACCESS_KEY_SECRET: 'cloud-secret',
+    });
+    expect(sanitized).toEqual({ PATH: 'test-path' });
+  });
+
   it('binds to a clean Git HEAD when DEPLOYED_COMMIT is absent and ignores untracked evidence', async () => {
     const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-clean-'));
     directories.push(path);
@@ -104,6 +170,59 @@ describe('single-submit AI image sandbox runner', () => {
     await expect(resolveAiImageSandboxRepositoryRevision(path)).rejects.toMatchObject({
       code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
     });
+  });
+
+  it('rejects tracked drift even when DEPLOYED_COMMIT is present', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-marker-dirty-'));
+    directories.push(path);
+    const revision = await initializeGitRepository(path);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    await writeFile(join(path, 'tracked.txt'), 'changed after deployed marker\n');
+
+    await expect(resolveAiImageSandboxRepositoryRevision(path)).rejects.toMatchObject({
+      code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
+    });
+  });
+
+  it('rejects a deployed marker that differs from an available Git HEAD', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-marker-mismatch-'));
+    directories.push(path);
+    await initializeGitRepository(path);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${'b'.repeat(40)}\n`);
+
+    await expect(resolveAiImageSandboxRepositoryRevision(path)).rejects.toMatchObject({
+      code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
+    });
+  });
+
+  it('fails closed when Git status cannot verify a checkout with a deployed marker', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-status-error-'));
+    directories.push(path);
+    const revision = await initializeGitRepository(path);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'rev-parse') return `${revision}\n`;
+      throw Object.assign(new Error('Git status timed out'), { code: 'ETIMEDOUT' });
+    });
+
+    await expect(resolveAiImageSandboxRepositoryRevision(path, runGit)).rejects.toMatchObject({
+      code: 'ETIMEDOUT',
+    });
+  });
+
+  it('fails closed when Git HEAD cannot be verified in a checkout with a deployed marker', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-head-error-'));
+    directories.push(path);
+    const revision = await initializeGitRepository(path);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const runGit = vi.fn(async () => {
+      throw Object.assign(new Error('Git rev-parse failed'), { code: 'EACCES' });
+    });
+
+    await expect(resolveAiImageSandboxRepositoryRevision(path, runGit)).rejects.toMatchObject({
+      code: 'EACCES',
+    });
+    expect(runGit).toHaveBeenCalledTimes(1);
   });
 
   it.each(['ARBITRARY_PROFILE', 'toString', '__proto__'])(
@@ -274,6 +393,8 @@ describe('single-submit AI image sandbox runner', () => {
       operationId,
       operation: 'TEXT_TO_IMAGE',
       requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      quotedCostCents: 10,
+      maximumCostCents: 20,
       approvalEvidence: {
         approvalId: `approval-${operationId}`,
       },
@@ -281,6 +402,89 @@ describe('single-submit AI image sandbox runner', () => {
 
     expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    ['non-HTTPS', 'http://relay.example', 'relay.example'],
+    ['localhost', 'https://localhost', 'localhost'],
+  ])('rejects a %s endpoint in approval preflight before DNS or dispatch', async (
+    _label,
+    baseUrl,
+    expectedHost,
+  ) => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-http-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: baseUrl,
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-http-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: expectedHost,
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toThrow(/must use (?:HTTPS|a public credential-free DNS hostname)/u);
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rechecks approval freshness immediately before reporting preflight success', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-preflight-expiry-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-approval-preflight-expiry-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, {
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    });
+    let clockReads = 0;
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns: vi.fn(),
+      fetch: vi.fn(),
+      now: () => {
+        clockReads += 1;
+        return new Date(clockReads >= 2
+          ? '2030-01-01T00:31:00.000Z'
+          : '2030-01-01T00:10:00.000Z');
+      },
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_EXPIRED' });
+
     await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -318,6 +522,250 @@ describe('single-submit AI image sandbox runner', () => {
       resolveDns,
       fetch,
     })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['VERIFY_APPROVAL', 'SUBMIT'])(
+    'rejects an expired approval in %s mode before DNS, intent, or dispatch', async (mode) => {
+      const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-expired-'));
+      directories.push(path);
+      const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+      await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+      const fetch = vi.fn();
+      const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+      const operationId = `sandbox-approval-expired-${mode.toLowerCase()}`;
+      const environment = await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_MODE: mode,
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+        AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+        ...(mode === 'SUBMIT' ? {
+          AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+          AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        } : {}),
+      }, {
+        schemaVersion: 2,
+        approvedAt: '2020-01-01T00:00:00.000Z',
+        expiresAt: '2020-01-01T01:00:00.000Z',
+      });
+
+      await expect(runAiImageProviderSingleSubmit({
+        environment,
+        repositoryRoot: path,
+        outputDirectory: join(path, 'evidence'),
+        resolveDns,
+        fetch,
+      })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_EXPIRED' });
+
+      expect(resolveDns).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it('rechecks approval expiry at submit after an earlier offline preflight passed', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-recheck-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-approval-recheck-0001';
+    const baseEnvironment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, {
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    });
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const fetch = vi.fn();
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: { ...baseEnvironment, AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL' },
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+      now: () => new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({ event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED' });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: {
+        ...baseEnvironment,
+        AI_IMAGE_SANDBOX_MODE: 'SUBMIT',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      },
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+      now: () => new Date('2030-01-01T00:31:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_EXPIRED' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('blocks intent and dispatch when an approval expires during DNS validation', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-dns-expiry-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-approval-dns-expiry-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'SUBMIT',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, {
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    });
+    let now = new Date('2030-01-01T00:10:00.000Z');
+    const resolveDns = vi.fn(async () => {
+      now = new Date('2030-01-01T00:31:00.000Z');
+      return [{ address: '93.184.216.34' }];
+    });
+    const fetch = vi.fn(async () => {
+      throw new Error('Provider fetch must not run after approval expiry');
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+      now: () => now,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_EXPIRED' });
+
+    expect(resolveDns).toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rechecks approval freshness at the guarded Provider POST boundary', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-post-expiry-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-approval-post-expiry-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'SUBMIT',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, {
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    });
+    let clockReads = 0;
+    const fetch = vi.fn(async () => {
+      throw new Error('Provider fetch must not run after approval expiry');
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+      now: () => {
+        clockReads += 1;
+        return new Date(clockReads >= 4
+          ? '2030-01-01T00:31:00.000Z'
+          : '2030-01-01T00:10:00.000Z');
+      },
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_EXPIRED' });
+
+    expect(fetch).not.toHaveBeenCalled();
+    const report = JSON.parse(await readFile(
+      join(path, 'evidence', `${operationId}.report.json`),
+      'utf8',
+    ));
+    expect(report).toMatchObject({
+      state: 'PRE_DISPATCH_FAILED',
+      createRequests: 0,
+      failureCode: 'SANDBOX_APPROVAL_EXPIRED',
+    });
+  });
+
+  it('rejects an approval validity window longer than 60 minutes before preflight I/O', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-window-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-window-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, {
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T02:00:00.000Z',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+      now: () => new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
 
     expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -389,6 +837,51 @@ describe('single-submit AI image sandbox runner', () => {
       fetch,
     })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
 
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-canonical approval JSON with duplicate keys before DNS or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-duplicate-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-duplicate-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+    const approvalPath = String(environment.AI_IMAGE_SANDBOX_APPROVAL_PATH);
+    const duplicateBytes = Buffer.from(
+      (await readFile(approvalPath, 'utf8')).replace(
+        '  "requestCount": 1,',
+        '  "requestCount": 1,\n  "requestCount": 1,',
+      ),
+      'utf8',
+    );
+    await writeFile(approvalPath, duplicateBytes);
+    environment.AI_IMAGE_SANDBOX_APPROVAL_SHA256 = createHash('sha256')
+      .update(duplicateBytes)
+      .digest('hex');
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 

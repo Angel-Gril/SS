@@ -28,7 +28,10 @@ import {
   createAiImageSandboxFetchGuard,
   type AiImageSandboxEditOperation,
 } from '../src/services/ai-image-sandbox-guard.js';
-import { loadAiImageSandboxApproval } from '../src/services/ai-image-sandbox-approval.js';
+import {
+  assertAiImageSandboxApprovalCurrent,
+  loadAiImageSandboxApproval,
+} from '../src/services/ai-image-sandbox-approval.js';
 
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
 const execFileAsync = promisify(execFile);
@@ -88,9 +91,34 @@ export interface AiImageProviderSingleSubmitOptions {
   repositoryRoot?: string;
   resolveDns?: DnsResolver;
   fetch?: FetchLike;
+  now?: () => Date;
+}
+
+function currentTime(options: AiImageProviderSingleSubmitOptions) {
+  return options.now?.() || new Date();
 }
 
 const FULL_GIT_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+const GIT_CHILD_ENVIRONMENT_ALLOWLIST = new Set([
+  'PATH',
+  'PATHEXT',
+  'SYSTEMROOT',
+  'WINDIR',
+  'COMSPEC',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'TMP',
+  'TEMP',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TERM',
+  'NO_COLOR',
+]);
+type AiImageSandboxGitRunner = (args: string[]) => Promise<string>;
 
 function requiredEnvironment(name: string, environment: NodeJS.ProcessEnv) {
   const value = String(environment[name] || '').trim();
@@ -121,43 +149,81 @@ function requiredAdapterRevision(environment: NodeJS.ProcessEnv) {
   return value;
 }
 
-export async function resolveAiImageSandboxRepositoryRevision(repositoryRoot: string): Promise<string> {
-  try {
-    const deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
-      .trim()
-      .toLowerCase();
-    if (!FULL_GIT_OID_PATTERN.test(deployedRevision)) throw new Error('DEPLOYED_COMMIT is invalid');
-    return deployedRevision;
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  let revision = '';
-  try {
-    const result = await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], {
+export function sanitizeAiImageSandboxGitEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => (
+    GIT_CHILD_ENVIRONMENT_ALLOWLIST.has(name.toUpperCase())
+  )));
+}
+
+function createAiImageSandboxGitRunner(repositoryRoot: string): AiImageSandboxGitRunner {
+  return async (args) => {
+    const result = await execFileAsync('git', [
+      '-c', 'core.hooksPath=',
+      '-c', 'core.fsmonitor=false',
+      '-c', 'submodule.recurse=false',
+      ...args,
+    ], {
       cwd: repositoryRoot,
+      env: sanitizeAiImageSandboxGitEnvironment(),
       windowsHide: true,
       timeout: 10_000,
     });
-    revision = result.stdout.trim().toLowerCase();
-  } catch {
-    // Report one stable sandbox-domain error below.
+    return String(result.stdout);
+  };
+}
+
+async function resolveGitHead(runGit: AiImageSandboxGitRunner) {
+  const revision = (await runGit(['rev-parse', '--verify', 'HEAD'])).trim().toLowerCase();
+  return FULL_GIT_OID_PATTERN.test(revision) ? revision : '';
+}
+
+async function assertGitTrackedWorktreeClean(runGit: AiImageSandboxGitRunner) {
+  const status = await runGit(['status', '--porcelain=v1', '--untracked-files=no']);
+  if (status.trim()) {
+    throw Object.assign(new Error('The sandbox repository has tracked worktree changes'), {
+      code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
+    });
   }
+}
+
+export async function resolveAiImageSandboxRepositoryRevision(
+  repositoryRoot: string,
+  runGit: AiImageSandboxGitRunner = createAiImageSandboxGitRunner(repositoryRoot),
+): Promise<string> {
+  let deployedRevision = '';
+  try {
+    deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
+      .trim()
+      .toLowerCase();
+    if (!FULL_GIT_OID_PATTERN.test(deployedRevision)) throw new Error('DEPLOYED_COMMIT is invalid');
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  let hasGitMetadata = true;
+  try {
+    await access(resolve(repositoryRoot, '.git'));
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+    hasGitMetadata = false;
+  }
+  if (!hasGitMetadata) {
+    if (deployedRevision) return deployedRevision;
+    throw Object.assign(new Error('The sandbox could not bind the adapter to deployed code'), {
+      code: 'SANDBOX_ADAPTER_REVISION_UNAVAILABLE',
+    });
+  }
+  let revision = '';
+  revision = await resolveGitHead(runGit);
   if (FULL_GIT_OID_PATTERN.test(revision)) {
-    try {
-      const status = await execFileAsync(
-        'git',
-        ['status', '--porcelain=v1', '--untracked-files=no'],
-        { cwd: repositoryRoot, windowsHide: true, timeout: 10_000 },
-      );
-      if (status.stdout.trim()) {
-        throw Object.assign(new Error('The sandbox repository has tracked worktree changes'), {
-          code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
-        });
-      }
-      return revision;
-    } catch (error: any) {
-      if (error?.code === 'SANDBOX_ADAPTER_WORKTREE_DIRTY') throw error;
+    if (deployedRevision && revision !== deployedRevision) {
+      throw Object.assign(new Error('DEPLOYED_COMMIT does not match the checked-out Git HEAD'), {
+        code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
+      });
     }
+    await assertGitTrackedWorktreeClean(runGit);
+    return deployedRevision || revision;
   }
   throw Object.assign(new Error('The sandbox could not bind the adapter to deployed code'), {
     code: 'SANDBOX_ADAPTER_REVISION_UNAVAILABLE',
@@ -362,8 +428,16 @@ export async function runAiImageProviderSingleSubmit(
       { code: 'SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV' },
     );
   }
-  if (mode === 'SUBMIT' && environment.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
-    throw new Error(`AI_IMAGE_SANDBOX_CONFIRM must equal ${CONFIRMATION}`);
+  let submitApiKey: string | null = null;
+  if (mode === 'SUBMIT') {
+    if (environment.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
+      throw new Error(`AI_IMAGE_SANDBOX_CONFIRM must equal ${CONFIRMATION}`);
+    }
+    submitApiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
+    if (environment === process.env) {
+      delete process.env.AI_IMAGE_SANDBOX_API_KEY;
+      delete process.env.AI_IMAGE_SANDBOX_CONFIRM;
+    }
   }
 
   const baseUrl = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
@@ -394,6 +468,19 @@ export async function runAiImageProviderSingleSubmit(
   const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
   const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
   const parsedBaseUrl = new URL(apiBase);
+  if (parsedBaseUrl.protocol !== 'https:') {
+    throw new Error('AI_IMAGE_SANDBOX_BASE_URL must use HTTPS');
+  }
+  if (
+    parsedBaseUrl.username
+    || parsedBaseUrl.password
+    || parsedBaseUrl.search
+    || parsedBaseUrl.hash
+    || parsedBaseUrl.hostname.toLowerCase() === 'localhost'
+    || parsedBaseUrl.hostname.toLowerCase().endsWith('.localhost')
+  ) {
+    throw new Error('AI_IMAGE_SANDBOX_BASE_URL must use a public credential-free DNS hostname');
+  }
   if (isIP(parsedBaseUrl.hostname) !== 0) throw new Error('AI_IMAGE_SANDBOX_BASE_URL must use a DNS hostname');
   if (parsedBaseUrl.hostname.toLowerCase() !== expectedHost) {
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
@@ -456,6 +543,7 @@ export async function runAiImageProviderSingleSubmit(
     repositoryRoot,
     approvalPath: requiredEnvironment('AI_IMAGE_SANDBOX_APPROVAL_PATH', environment),
     expectedSha256: requiredSha256('AI_IMAGE_SANDBOX_APPROVAL_SHA256', environment),
+    now: currentTime(options),
     expected: {
       operationId,
       endpoint,
@@ -472,6 +560,7 @@ export async function runAiImageProviderSingleSubmit(
     },
   });
   if (mode === 'VERIFY_APPROVAL') {
+    assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
     const verification = {
       schemaVersion: 1,
       event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
@@ -486,12 +575,14 @@ export async function runAiImageProviderSingleSubmit(
       sourceSha256,
       maskSha256,
       requestedSize: outputSize,
+      quotedCostCents: Number(quotedCostCentsValue),
+      maximumCostCents: Number(maximumCostCentsValue),
       approvalEvidence,
     };
     process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
     return verification;
   }
-  const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
+  const apiKey = submitApiKey!;
   const pinnedDns = new Map<string, Array<{ address: string; family: 4 | 6; ttl: number }>>();
   const baseDnsResolver = options.resolveDns || resolvePublicDns;
   const dnsResolver: DnsResolver = async (hostname) => {
@@ -505,6 +596,7 @@ export async function runAiImageProviderSingleSubmit(
     return records;
   };
   await validateAiImageProviderUrl(apiBase, dnsResolver);
+  assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
   const startedAt = Date.now();
   const outputDirectory = options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
   await ensurePrivateDirectory(outputDirectory);
@@ -533,6 +625,7 @@ export async function runAiImageProviderSingleSubmit(
     request: requestContract,
     quotedCostCents: quotedCostCentsValue,
     maximumCostCents: maximumCostCentsValue,
+    now: currentTime(options),
   });
 
   const pinnedDispatcher = new Agent().compose(interceptors.dns({
@@ -548,6 +641,10 @@ export async function runAiImageProviderSingleSubmit(
   }));
   const guardedTransport = {
     validateUrl: (url: string) => validateAiImageProviderUrl(url, dnsResolver),
+    beforeCreate: () => assertAiImageSandboxApprovalCurrent(
+      approvalEvidence,
+      currentTime(options),
+    ),
     fetch: options.fetch || ((input, init) => undiciFetch(input as any, {
       ...(init as any),
       dispatcher: pinnedDispatcher,
@@ -582,6 +679,7 @@ export async function runAiImageProviderSingleSubmit(
   let reportWritten = false;
   let result;
   try {
+    assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
     if (operation === 'TEXT_TO_IMAGE') {
       const provider = createOpenAiImagesProvider({
         baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,

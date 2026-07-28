@@ -45,7 +45,7 @@ Verify that both links resolve under `/opt/ss-erp/shared` and that the shared di
 
 Create one unique Operation ID for one reviewed request. An Operation ID must be 8-80 characters and match `[A-Za-z0-9][A-Za-z0-9._-]*`. Treat it as permanently consumed once an intent or fingerprint claim exists.
 
-Before dispatch, the CLI writes an immutable `SUBMITTING` intent and a fail-closed request-fingerprint claim. The fingerprint binds the endpoint hash, model, credential revision, adapter revision, operation, fixed prompt, source and mask hashes, and other request fields. The same paid request is rejected even if an operator changes only the Operation ID.
+Before dispatch, the CLI writes an immutable `SUBMITTING` intent and a fail-closed request-fingerprint claim. The replay fingerprint binds only actual Provider transport semantics: endpoint hash, model, image count, requested size, fixed Prompt hash, ordered source hashes, and mask hash. Audit-only labels, approval metadata, credential revision, adapter revision, and source dimensions remain in the intent but cannot create a new replay identity. The same paid request is therefore rejected even if an operator changes only the Operation ID, approval, profile label, credential, or deployment revision.
 
 Never delete an intent or `.fingerprints` claim to make a request runnable again. Never switch to a new Operation ID after a timeout, connection loss, malformed acknowledgement, or other ambiguous outcome. Resolve the original request with read-only evidence.
 
@@ -54,7 +54,7 @@ Never delete an intent or `.fingerprints` claim to make a request runnable again
 Set both revisions from authoritative records:
 
 - `credentialRevision` is a non-secret version label for the exact injected credential. Use a secret-manager version, controlled configuration revision, or key-rotation revision. Do not use the secret itself, its prefix, or a secret hash as the label.
-- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. The CLI requires it to equal `DEPLOYED_COMMIT`, or the actual Git `HEAD` only when the deployment marker is absent and the tracked worktree is clean. If neither code identity is available, the probe fails closed. Do not use a planned or local-only commit.
+- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. When Git metadata is present, `HEAD` must match `DEPLOYED_COMMIT` and the tracked worktree must be clean even if the marker exists. A packaged deployment without Git metadata may use the marker alone. The direct submit process captures and removes its paid confirmation/API Key from `process.env` before Git inspection; Git receives only a minimal OS environment with hooks, fsmonitor, and recursive submodules disabled. Any Git verification error fails closed. If no trustworthy code identity is available, the probe fails closed. Do not use a planned or local-only commit.
 
 Record the Provider account, pricing revision, currency, model, quoted charge, balance or usage counter, and observation time immediately before the call. Repeat the observation after the Provider has settled the charge.
 
@@ -88,7 +88,10 @@ preflight before any paid submit:
 pnpm --filter server sandbox:ai-image:approval:verify
 ```
 
-This command performs no DNS lookup, intent/fingerprint claim, or Provider request.
+This command performs no DNS lookup, intent/fingerprint claim, or Provider request. It rejects a
+non-HTTPS endpoint and reports the approved cost exposure plus the sanitized approval validity
+window. Approval freshness is checked again throughout the submit path and immediately before the
+single Provider POST.
 
 ## International OpenAI-Compatible Probe
 

@@ -1,15 +1,22 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, open, readFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { dirname, resolve } from 'node:path';
+import {
+  assertAiImageSandboxApprovalCurrent,
+  type AiImageSandboxApprovalEvidence,
+} from './ai-image-sandbox-approval.js';
 
 export class AiImageSandboxGuardError extends Error {
   constructor(
     public readonly code:
       | 'INVALID_SANDBOX_BUDGET'
       | 'INVALID_SANDBOX_ADAPTER_REVISION'
+      | 'INVALID_SANDBOX_APPROVAL_EVIDENCE'
       | 'INVALID_SANDBOX_CREDENTIAL_REVISION'
       | 'INVALID_SANDBOX_ENDPOINT'
       | 'INVALID_SANDBOX_OPERATION'
+      | 'INVALID_SANDBOX_REQUEST'
       | 'SANDBOX_OPERATION_EXISTS'
       | 'SANDBOX_REQUEST_REPLAY',
     message: string,
@@ -21,6 +28,40 @@ export class AiImageSandboxGuardError extends Error {
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type SandboxFormEntry = string | Blob;
+
+const APPROVAL_EVIDENCE_KEYS = new Set([
+  'approvalId',
+  'approvalSha256',
+  'approvedAt',
+  'expiresAt',
+  'approverRefSha256',
+  'providerAccountRefSha256',
+  'pricingRevisionSha256',
+  'currency',
+  'preCallBillingSnapshotRefSha256',
+  'billingReconciliationRefSha256',
+]);
+const SANDBOX_REQUEST_KEYS = new Set([
+  'operation',
+  'requestProfile',
+  'endpoint',
+  'n',
+  'width',
+  'height',
+  'size',
+  'promptSha256',
+  'sourceSha256',
+  'sourceDimensions',
+  'maskSha256',
+  'maskDimensions',
+  'approvalEvidence',
+]);
+const SANDBOX_OPERATIONS = new Set([
+  'TEXT_TO_IMAGE',
+  'IMAGE_TO_IMAGE',
+  'FULL_EDIT',
+  'INPAINT',
+]);
 
 export type AiImageSandboxRequestState =
   | 'READY'
@@ -75,6 +116,205 @@ function providerRequestIdHash(response: Response) {
   return value && value.length <= 500
     ? createHash('sha256').update(value).digest('hex')
     : null;
+}
+
+function invalidSandboxRequest(message = 'Sandbox request evidence is invalid'): never {
+  throw new AiImageSandboxGuardError('INVALID_SANDBOX_REQUEST', message);
+}
+
+function sanitizeApprovalEvidence(value: unknown, now: Date): AiImageSandboxApprovalEvidence {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_APPROVAL_EVIDENCE',
+      'Sandbox approval evidence is invalid',
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const shaKeys = [
+    'approvalSha256',
+    'approverRefSha256',
+    'providerAccountRefSha256',
+    'pricingRevisionSha256',
+    'preCallBillingSnapshotRefSha256',
+    'billingReconciliationRefSha256',
+  ];
+  const canonicalTimestamp = (key: 'approvedAt' | 'expiresAt') => {
+    const timestamp = typeof record[key] === 'string' ? record[key] : '';
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString() === timestamp
+      ? timestamp
+      : null;
+  };
+  const approvedAt = canonicalTimestamp('approvedAt');
+  const expiresAt = canonicalTimestamp('expiresAt');
+  if (
+    keys.length !== APPROVAL_EVIDENCE_KEYS.size
+    || keys.some((key) => !APPROVAL_EVIDENCE_KEYS.has(key))
+    || typeof record.approvalId !== 'string'
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u.test(record.approvalId)
+    || shaKeys.some((key) => (
+      typeof record[key] !== 'string' || !/^[a-f0-9]{64}$/u.test(record[key])
+    ))
+    || !approvedAt
+    || !expiresAt
+    || typeof record.currency !== 'string'
+    || !/^[A-Z]{3}$/u.test(record.currency)
+  ) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_APPROVAL_EVIDENCE',
+      'Sandbox approval evidence is invalid',
+    );
+  }
+  const evidence = {
+    approvalId: record.approvalId,
+    approvalSha256: record.approvalSha256,
+    approvedAt,
+    expiresAt,
+    approverRefSha256: record.approverRefSha256,
+    providerAccountRefSha256: record.providerAccountRefSha256,
+    pricingRevisionSha256: record.pricingRevisionSha256,
+    currency: record.currency,
+    preCallBillingSnapshotRefSha256: record.preCallBillingSnapshotRefSha256,
+    billingReconciliationRefSha256: record.billingReconciliationRefSha256,
+  } as AiImageSandboxApprovalEvidence;
+  assertAiImageSandboxApprovalCurrent(evidence, now);
+  return evidence;
+}
+
+function sanitizePositiveDimension(value: unknown) {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function sanitizeDimensions(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2
+    || !Object.hasOwn(record, 'width')
+    || !Object.hasOwn(record, 'height')
+  ) return null;
+  const width = sanitizePositiveDimension(record.width);
+  const height = sanitizePositiveDimension(record.height);
+  return width && height ? { width, height } : null;
+}
+
+function sanitizeSha256Array(value: unknown) {
+  if (
+    !Array.isArray(value)
+    || value.length > 1
+    || value.some((entry) => typeof entry !== 'string' || !/^[a-f0-9]{64}$/u.test(entry))
+  ) return null;
+  return [...value] as string[];
+}
+
+function sanitizeSandboxRequest(value: unknown, now: Date) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalidSandboxRequest();
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    keys.length !== SANDBOX_REQUEST_KEYS.size
+    || keys.some((key) => !SANDBOX_REQUEST_KEYS.has(key))
+  ) invalidSandboxRequest('Sandbox request contains missing or unsupported fields');
+
+  const operation = typeof record.operation === 'string' ? record.operation : '';
+  const requestProfile = typeof record.requestProfile === 'string' ? record.requestProfile : '';
+  const width = sanitizePositiveDimension(record.width);
+  const height = sanitizePositiveDimension(record.height);
+  const sourceSha256 = sanitizeSha256Array(record.sourceSha256);
+  const sourceDimensions = Array.isArray(record.sourceDimensions)
+    ? record.sourceDimensions.map(sanitizeDimensions)
+    : null;
+  const maskSha256 = record.maskSha256 === null
+    ? null
+    : typeof record.maskSha256 === 'string' && /^[a-f0-9]{64}$/u.test(record.maskSha256)
+      ? record.maskSha256
+      : undefined;
+  const maskDimensions = record.maskDimensions === null
+    ? null
+    : sanitizeDimensions(record.maskDimensions);
+  const endpointUrl = (() => {
+    try {
+      return new URL(typeof record.endpoint === 'string' ? record.endpoint : '');
+    } catch {
+      return invalidSandboxRequest('Sandbox request endpoint is invalid');
+    }
+  })();
+  const endpointHostname = endpointUrl.hostname.toLowerCase();
+  if (
+    endpointUrl.protocol !== 'https:'
+    || endpointUrl.username
+    || endpointUrl.password
+    || endpointUrl.search
+    || endpointUrl.hash
+    || !endpointHostname
+    || endpointHostname === 'localhost'
+    || endpointHostname.endsWith('.localhost')
+    || isIP(endpointHostname) !== 0
+  ) invalidSandboxRequest('Sandbox request endpoint must use a public HTTPS DNS hostname');
+  const endpoint = endpointUrl.toString();
+  if (
+    !SANDBOX_OPERATIONS.has(operation)
+    || !/^[A-Z][A-Z0-9_]{0,79}$/u.test(requestProfile)
+    || record.n !== 1
+    || !width
+    || !height
+    || record.size !== `${width}x${height}`
+    || typeof record.promptSha256 !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(record.promptSha256)
+    || !sourceSha256
+    || !sourceDimensions
+    || sourceDimensions.some((entry) => !entry)
+    || sourceDimensions.length !== sourceSha256.length
+    || maskSha256 === undefined
+    || maskDimensions === undefined
+  ) invalidSandboxRequest();
+
+  const isTextToImage = operation === 'TEXT_TO_IMAGE';
+  const isInpaint = operation === 'INPAINT';
+  if (
+    !endpointUrl.pathname.endsWith(isTextToImage ? '/images/generations' : '/images/edits')
+    || (isTextToImage && (
+      sourceSha256.length !== 0
+      || sourceDimensions.length !== 0
+      || maskSha256 !== null
+      || maskDimensions !== null
+    ))
+    || (!isTextToImage && (sourceSha256.length !== 1 || sourceDimensions.length !== 1))
+    || (isInpaint && (
+      maskSha256 === null
+      || maskDimensions === null
+      || maskDimensions.width !== sourceDimensions[0]!.width
+      || maskDimensions.height !== sourceDimensions[0]!.height
+    ))
+    || (!isInpaint && (maskSha256 !== null || maskDimensions !== null))
+  ) invalidSandboxRequest('Sandbox request media evidence does not match its operation');
+
+  const approvalEvidence = sanitizeApprovalEvidence(record.approvalEvidence, now);
+  const audit = {
+    operation,
+    requestProfile,
+    n: 1,
+    width,
+    height,
+    size: record.size,
+    promptSha256: record.promptSha256,
+    sourceSha256,
+    sourceDimensions,
+    maskSha256,
+    maskDimensions,
+  };
+  return {
+    endpoint,
+    fingerprint: {
+      n: 1,
+      size: record.size,
+      promptSha256: record.promptSha256,
+      sourceSha256,
+      maskSha256,
+    },
+    audit: { ...audit, approvalEvidence },
+  };
 }
 
 function canonicalJson(value: unknown): string {
@@ -161,6 +401,7 @@ export async function claimAiImageSandboxOperation(input: {
   request: Record<string, unknown>;
   quotedCostCents: unknown;
   maximumCostCents: unknown;
+  now?: Date;
 }) {
   const operationId = String(input.operationId || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{7,79}$/.test(operationId)) {
@@ -183,15 +424,16 @@ export async function claimAiImageSandboxOperation(input: {
       'Sandbox adapter revision must be a commit SHA',
     );
   }
+  const model = String(input.model || '').trim();
+  if (!model || model.length > 200 || Array.from(model).some((character) => {
+    const codePoint = character.codePointAt(0) || 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  })) invalidSandboxRequest('Sandbox model evidence is invalid');
+  const sanitizedRequest = sanitizeSandboxRequest(input.request, input.now || new Date());
   const endpointSha256 = String(input.endpointSha256 || '').trim().toLowerCase();
-  let canonicalEndpointSha256 = '';
-  try {
-    canonicalEndpointSha256 = createHash('sha256')
-      .update(new URL(String(input.request.endpoint || '')).toString())
-      .digest('hex');
-  } catch {
-    // Invalid endpoint evidence is handled by the same fail-closed branch below.
-  }
+  const canonicalEndpointSha256 = createHash('sha256')
+    .update(sanitizedRequest.endpoint)
+    .digest('hex');
   if (!/^[a-f0-9]{64}$/.test(endpointSha256) || endpointSha256 !== canonicalEndpointSha256) {
     throw new AiImageSandboxGuardError(
       'INVALID_SANDBOX_ENDPOINT',
@@ -209,32 +451,21 @@ export async function claimAiImageSandboxOperation(input: {
 
   await ensurePrivateDirectory(input.directory);
   const intentPath = resolve(input.directory, `${operationId}.intent.json`);
-  const { endpoint: _rawEndpoint, ...requestFingerprintEvidence } = input.request;
-  const persistedRequestKeys = new Set([
-    'operation', 'requestProfile', 'n', 'width', 'height', 'size', 'promptSha256',
-    'sourceSha256', 'sourceDimensions', 'maskSha256', 'maskDimensions', 'approvalEvidence',
-  ]);
-  const persistedRequestEvidence = Object.fromEntries(
-    Object.entries(requestFingerprintEvidence)
-      .filter(([key]) => persistedRequestKeys.has(key)),
-  );
   const canonicalRequestFingerprint = createHash('sha256').update(canonicalJson({
     endpointSha256,
-    model: input.model,
-    credentialRevision,
-    adapterRevision,
-    request: requestFingerprintEvidence,
+    model,
+    request: sanitizedRequest.fingerprint,
   })).digest('hex');
   const intent = {
     schemaVersion: 2,
     operationId,
     state: 'SUBMITTING',
     endpointSha256,
-    model: input.model,
+    model,
     credentialRevision,
     adapterRevision,
     requestFingerprint: canonicalRequestFingerprint,
-    request: persistedRequestEvidence,
+    request: sanitizedRequest.audit,
     quotedCostCents,
     maximumCostCents,
     createdAt: new Date().toISOString(),
@@ -288,7 +519,11 @@ export function createAiImageSandboxFetchGuard(input: {
   contract: AiImageSandboxCreateContract;
   validateUrl: (url: string) => Promise<string>;
   fetch: FetchLike;
+  beforeCreate: () => void | Promise<void>;
 }) {
+  if (typeof input.beforeCreate !== 'function') {
+    throw new Error('The single-submit sandbox requires a pre-create approval check');
+  }
   const expectedEndpoint = new URL(input.contract.endpoint).toString();
   let createRequests = 0;
   let followupGetRequests = 0;
@@ -337,6 +572,7 @@ export function createAiImageSandboxFetchGuard(input: {
       if (createRequests >= 1) {
         throw new Error('The single-submit sandbox blocked a duplicate create request');
       }
+      await input.beforeCreate();
       createRequests += 1;
       state = 'DISPATCHED';
     }
@@ -397,7 +633,11 @@ export function createAiImageSandboxEditFetchGuard(input: {
   contract: AiImageSandboxEditContract;
   validateUrl: (url: string) => Promise<string>;
   fetch: FetchLike;
+  beforeCreate: () => void | Promise<void>;
 }) {
+  if (typeof input.beforeCreate !== 'function') {
+    throw new Error('The single-submit edit sandbox requires a pre-create approval check');
+  }
   const expectedEndpoint = new URL(input.contract.endpoint).toString();
   let createRequests = 0;
   let followupGetRequests = 0;
@@ -469,6 +709,7 @@ export function createAiImageSandboxEditFetchGuard(input: {
       if (createRequests >= 1) {
         throw new Error('The single-submit edit sandbox blocked a duplicate create request');
       }
+      await input.beforeCreate();
       createRequests += 1;
       state = 'DISPATCHED';
     }

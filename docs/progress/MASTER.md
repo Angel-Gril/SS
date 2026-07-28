@@ -44,16 +44,19 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-`DOC-01` is complete. `QA-02` preparation now also binds a private, closed-schema one-request
-approval file to the sandbox intent and request fingerprint. Before DNS resolution or intent
-creation, the CLI verifies the reviewed file digest and exact endpoint/model/operation, request
-profile, credential/deployed adapter revisions, source/mask hashes, quoted/maximum cost, and billing
-evidence references. A dedicated `sandbox:ai-image:approval:verify` command now validates the exact
-request without accepting a paid confirmation or API Key and performs no DNS, intent/fingerprint,
-or Provider operation. Sanitized evidence retains only the approval ID/digest and hashed private
-references. Focused approval/runner/guard tests passed `36/36`; repository lint (existing warnings
-only), workspace typecheck, the static contract, sandbox TypeScript compilation, and full preflight
-also passed. Preflight reported `445` passes and `0` failures. No implementation task is
+`DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema `v2`
+one-request approval with `approvedAt`/`expiresAt`, a positive validity window capped at 60 minutes,
+strict UTF-8/duplicate-key/bounded-file checks, and freshness rechecks after DNS, at the immutable
+claim, before Provider execution, and at both generation/edit POST boundaries. The offline
+`sandbox:ai-image:approval:verify` command rejects submit secrets, non-HTTPS/localhost endpoints,
+and any exact request mismatch while performing no DNS, intent/fingerprint, or Provider operation.
+The request claim is closed to known fields and replay identity binds only actual Provider transport
+semantics, so approval, profile/dimension metadata, credential revision, adapter revision, or a new
+Operation ID cannot authorize the same paid POST again. Git marker/HEAD drift, dirty tracked files,
+and Git inspection errors fail closed; Git receives a minimal secret-free environment with hooks and
+fsmonitor disabled. Focused approval/runner/guard tests passed `66/66`; repository lint (existing
+warnings only), workspace typecheck, the static contract, sandbox TypeScript compilation, and full
+preflight also passed. Preflight reported `445` passes and `0` failures. No implementation task is
 dependency-ready until an edit-capable endpoint/model and the exact paid `QA-02` request are
 explicitly approved; `QA-04` and release remain downstream. All flags remain default-off; no real
 Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, deployment, or
@@ -63,8 +66,9 @@ Provider request, charge, ERP ingest, Ozon write, production mutation, VPS acces
 
 1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private
    [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
-   credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost, and
-   billing evidence path. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
+   credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost,
+   billing evidence path, and an unexpired validity window of at most 60 minutes. Do not repeat the
+   two previously rejected `IMAGE_TO_IMAGE` requests.
 2. After a single approved `QA-02` request, reconcile the settled Provider bill and record exact
    endpoint/model/operation/request-mode evidence before promoting any capability.
 3. Run `QA-04` only after the exact paid `QA-02` evidence exists; then proceed to the owner/shop/

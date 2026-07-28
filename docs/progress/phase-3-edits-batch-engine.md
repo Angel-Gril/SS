@@ -108,19 +108,25 @@ Progress: 4/5 tasks.
   media; repeat measurements were `0px` position and size change. No external request occurred.
 - No real Provider request, external charge, ERP ingest, Ozon write, production flag change,
   production mutation, VPS deployment, or `.context/` staging occurred during `UI-03`.
-- `QA-02` preparation now requires a private closed-schema one-request approval file. Its reviewed
-  SHA-256 is checked before DNS resolution or intent creation, and the endpoint/model/operation,
-  request profile, credential/deployed adapter revisions, source/mask hashes, quoted/maximum cost,
-  and billing evidence references must match the exact command. Only the approval ID, digest,
-  timestamp, currency, and hashed operator/account/pricing/billing references enter the immutable
-  intent and sanitized report. Missing, changed, mismatched, extra-field, or non-private approval
-  files fail before Provider dispatch.
+- `QA-02` preparation now requires a private canonical closed-schema `v2` one-request approval file.
+  Its reviewed SHA-256 is checked before DNS resolution or intent creation, and the exact HTTPS
+  endpoint/model/operation, request profile, credential/deployed adapter revisions, source/mask
+  hashes, quoted/maximum cost, and billing evidence references must match. `approvedAt`/`expiresAt`
+  must be canonical ISO timestamps with a positive validity window no longer than 60 minutes;
+  invalid UTF-8, duplicate keys, unsupported fields, file growth/change, expiry, and excessive
+  future skew fail closed.
 - The operator can now run `sandbox:ai-image:approval:verify` before injecting a Key or paid
   confirmation. It verifies the exact deployed revision, source/mask bytes, approval digest/schema,
-  endpoint/model/operation/profile, revisions, costs, and billing references, but rejects an
-  environment containing either submit secret. The path performs zero DNS lookups, creates no
-  intent/fingerprint, and sends no Provider request.
-- Approval/runner/guard focused tests passed `36/36`; the static single-submit contract, sandbox
+  endpoint/model/operation/profile, revisions, costs, validity window, and billing references, but
+  rejects an environment containing either submit secret. The path performs zero DNS lookups,
+  creates no intent/fingerprint, and sends no Provider request. Freshness is rechecked after DNS,
+  at the immutable claim, before Provider execution, and at both generation/edit POST boundaries.
+- The immutable request schema rejects unknown or secret-bearing fields. Replay identity now binds
+  only Provider transport semantics, so changing approval metadata, profile labels, dimensions,
+  Operation ID, credential revision, or adapter revision cannot authorize the same paid POST again.
+  Git code binding fails closed on marker/HEAD drift, dirty tracked files, or Git errors; Git runs
+  with a minimal environment and hooks/fsmonitor/submodule recursion disabled.
+- Approval/runner/guard focused tests passed `66/66`; the static single-submit contract, sandbox
   TypeScript compilation, repository lint (existing warnings only), workspace typecheck, and full
   preflight passed. Preflight reported `445` passes, `0` failures, and the two expected local-package
   permission warnings. `QA-02` remains open because no edit-capable endpoint/model and no explicitly

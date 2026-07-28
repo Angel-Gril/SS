@@ -2,16 +2,20 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { TextDecoder } from 'node:util';
 
 export const AI_IMAGE_SANDBOX_APPROVAL_STATEMENT =
   'I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST';
 
 const MAX_APPROVAL_BYTES = 32 * 1024;
+const MAX_APPROVAL_VALIDITY_MS = 60 * 60 * 1000;
+const MAX_APPROVAL_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const APPROVAL_KEYS = new Set([
   'schemaVersion',
   'approvalId',
   'statement',
   'approvedAt',
+  'expiresAt',
   'approverRef',
   'providerAccountRef',
   'pricingRevision',
@@ -58,6 +62,7 @@ export interface AiImageSandboxApprovalEvidence {
   approvalId: string;
   approvalSha256: string;
   approvedAt: string;
+  expiresAt: string;
   approverRefSha256: string;
   providerAccountRefSha256: string;
   pricingRevisionSha256: string;
@@ -73,7 +78,9 @@ export class AiImageSandboxApprovalError extends Error {
       | 'SANDBOX_APPROVAL_FILE_UNSAFE'
       | 'SANDBOX_APPROVAL_DIGEST_MISMATCH'
       | 'SANDBOX_APPROVAL_SCHEMA_INVALID'
-      | 'SANDBOX_APPROVAL_MISMATCH',
+      | 'SANDBOX_APPROVAL_MISMATCH'
+      | 'SANDBOX_APPROVAL_EXPIRED'
+      | 'SANDBOX_APPROVAL_NOT_YET_VALID',
     message: string,
   ) {
     super(message);
@@ -139,11 +146,59 @@ function mismatch() {
   );
 }
 
+function canonicalApprovalTimestamp(value: string, field: 'timestamp' | 'expiry') {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      `Sandbox approval ${field} must be canonical ISO-8601`,
+    );
+  }
+  return parsed;
+}
+
+export function assertAiImageSandboxApprovalCurrent(
+  approval: Pick<AiImageSandboxApprovalEvidence, 'approvedAt' | 'expiresAt'>,
+  now = new Date(),
+) {
+  const approvedAtTime = canonicalApprovalTimestamp(approval.approvedAt, 'timestamp');
+  const expiresAtTime = canonicalApprovalTimestamp(approval.expiresAt, 'expiry');
+  if (
+    expiresAtTime <= approvedAtTime
+    || expiresAtTime - approvedAtTime > MAX_APPROVAL_VALIDITY_MS
+  ) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      'Sandbox approval validity window must be positive and no longer than 60 minutes',
+    );
+  }
+  const nowTime = now.getTime();
+  if (!Number.isFinite(nowTime)) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_CONFIG_INVALID',
+      'Sandbox approval clock is invalid',
+    );
+  }
+  if (approvedAtTime > nowTime + MAX_APPROVAL_CLOCK_SKEW_MS) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_NOT_YET_VALID',
+      'Sandbox approval is not valid yet',
+    );
+  }
+  if (expiresAtTime <= nowTime) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_EXPIRED',
+      'Sandbox approval has expired',
+    );
+  }
+}
+
 export async function loadAiImageSandboxApproval(input: {
   repositoryRoot: string;
   approvalPath: string;
   expectedSha256: string;
   expected: AiImageSandboxApprovalExpectedRequest;
+  now?: Date;
 }): Promise<AiImageSandboxApprovalEvidence> {
   const expectedSha256 = String(input.expectedSha256 || '').trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/u.test(expectedSha256)) {
@@ -179,7 +234,25 @@ export async function loadAiImageSandboxApproval(input: {
         'Sandbox approval must not be readable or writable by group or other users',
       );
     }
-    bytes = await handle.readFile();
+    const boundedBytes = Buffer.allocUnsafe(MAX_APPROVAL_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < boundedBytes.byteLength) {
+      const result = await handle.read(
+        boundedBytes,
+        bytesRead,
+        boundedBytes.byteLength - bytesRead,
+        bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    bytes = boundedBytes.subarray(0, bytesRead);
+    if (bytesRead !== metadata.size || bytesRead > MAX_APPROVAL_BYTES) {
+      throw new AiImageSandboxApprovalError(
+        'SANDBOX_APPROVAL_FILE_UNSAFE',
+        'Sandbox approval changed while it was being read',
+      );
+    }
   } finally {
     await handle.close();
   }
@@ -192,15 +265,23 @@ export async function loadAiImageSandboxApproval(input: {
     );
   }
 
+  let approvalText = '';
   let record: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(bytes.toString('utf8')) as unknown;
+    approvalText = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const parsed = JSON.parse(approvalText) as unknown;
     if (!isRecord(parsed)) throw new Error('invalid');
     record = parsed;
   } catch {
     throw new AiImageSandboxApprovalError(
       'SANDBOX_APPROVAL_SCHEMA_INVALID',
       'Sandbox approval must contain one JSON object',
+    );
+  }
+  if (approvalText.replace(/\r\n/gu, '\n') !== `${JSON.stringify(record, null, 2)}\n`) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      'Sandbox approval must use canonical JSON without duplicate keys',
     );
   }
   const keys = Object.keys(record);
@@ -210,7 +291,7 @@ export async function loadAiImageSandboxApproval(input: {
       'Sandbox approval contains missing or unsupported fields',
     );
   }
-  if (record.schemaVersion !== 1 || record.requestCount !== 1) {
+  if (record.schemaVersion !== 2 || record.requestCount !== 1) {
     throw new AiImageSandboxApprovalError(
       'SANDBOX_APPROVAL_SCHEMA_INVALID',
       'Sandbox approval schema or request count is invalid',
@@ -231,13 +312,8 @@ export async function loadAiImageSandboxApproval(input: {
     );
   }
   const approvedAt = requiredString(record, 'approvedAt', 40);
-  const approvedAtTime = Date.parse(approvedAt);
-  if (!Number.isFinite(approvedAtTime) || new Date(approvedAtTime).toISOString() !== approvedAt) {
-    throw new AiImageSandboxApprovalError(
-      'SANDBOX_APPROVAL_SCHEMA_INVALID',
-      'Sandbox approval timestamp must be canonical ISO-8601',
-    );
-  }
+  const expiresAt = requiredString(record, 'expiresAt', 40);
+  assertAiImageSandboxApprovalCurrent({ approvedAt, expiresAt }, input.now);
   const approverRef = requiredString(record, 'approverRef', 128);
   const providerAccountRef = requiredString(record, 'providerAccountRef', 160);
   const pricingRevision = requiredString(record, 'pricingRevision', 160);
@@ -300,6 +376,7 @@ export async function loadAiImageSandboxApproval(input: {
     approvalId,
     approvalSha256,
     approvedAt,
+    expiresAt,
     approverRefSha256: sha256(approverRef),
     providerAccountRefSha256: sha256(providerAccountRef),
     pricingRevisionSha256: sha256(pricingRevision),
