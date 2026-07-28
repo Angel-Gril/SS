@@ -28,6 +28,7 @@ import {
   createAiImageSandboxFetchGuard,
   type AiImageSandboxEditOperation,
 } from '../src/services/ai-image-sandbox-guard.js';
+import { loadAiImageSandboxApproval } from '../src/services/ai-image-sandbox-approval.js';
 
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
 const execFileAsync = promisify(execFile);
@@ -348,7 +349,6 @@ export async function runAiImageProviderSingleSubmit(
   }
 
   const baseUrl = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
-  const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
   const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL', environment);
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
   const credentialRevision = requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment);
@@ -419,6 +419,41 @@ export async function runAiImageProviderSingleSubmit(
   } else if (maskPath || maskSha) {
     throw new Error(`${operation} must not configure a sandbox mask`);
   }
+  const endpoint = new URL(
+    `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+  ).toString();
+  const endpointSha256 = sha256(endpoint);
+  const prompt = fixedPrompt(operation, profile);
+  const sourceSha256 = source ? [source.sha256] : [];
+  const maskSha256 = mask?.sha256 || null;
+  const quotedCostCentsValue = requiredEnvironment(
+    'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS',
+    environment,
+  );
+  const maximumCostCentsValue = requiredEnvironment(
+    'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
+    environment,
+  );
+  const approvalEvidence = await loadAiImageSandboxApproval({
+    repositoryRoot,
+    approvalPath: requiredEnvironment('AI_IMAGE_SANDBOX_APPROVAL_PATH', environment),
+    expectedSha256: requiredSha256('AI_IMAGE_SANDBOX_APPROVAL_SHA256', environment),
+    expected: {
+      operationId,
+      endpoint,
+      expectedHost,
+      model,
+      operation,
+      requestProfile,
+      credentialRevision,
+      adapterRevision,
+      sourceSha256,
+      maskSha256,
+      quotedCostCents: Number(quotedCostCentsValue),
+      maximumCostCents: Number(maximumCostCentsValue),
+    },
+  });
+  const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
   const pinnedDns = new Map<string, Array<{ address: string; family: 4 | 6; ttl: number }>>();
   const baseDnsResolver = options.resolveDns || resolvePublicDns;
   const dnsResolver: DnsResolver = async (hostname) => {
@@ -435,11 +470,6 @@ export async function runAiImageProviderSingleSubmit(
   const startedAt = Date.now();
   const outputDirectory = options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
   await ensurePrivateDirectory(outputDirectory);
-  const endpoint = new URL(`${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`).toString();
-  const endpointSha256 = sha256(endpoint);
-  const prompt = fixedPrompt(operation, profile);
-  const sourceSha256 = source ? [source.sha256] : [];
-  const maskSha256 = mask?.sha256 || null;
   const requestContract = {
     operation,
     requestProfile,
@@ -453,6 +483,7 @@ export async function runAiImageProviderSingleSubmit(
     sourceDimensions: source ? [{ width: source.width, height: source.height }] : [],
     maskSha256,
     maskDimensions: mask ? { width: mask.width, height: mask.height } : null,
+    approvalEvidence,
   };
   const claim = await claimAiImageSandboxOperation({
     directory: resolve(outputDirectory, 'intents'),
@@ -462,8 +493,8 @@ export async function runAiImageProviderSingleSubmit(
     credentialRevision,
     adapterRevision,
     request: requestContract,
-    quotedCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', environment),
-    maximumCostCents: requiredEnvironment('AI_IMAGE_SANDBOX_MAX_COST_CENTS', environment),
+    quotedCostCents: quotedCostCentsValue,
+    maximumCostCents: maximumCostCentsValue,
   });
 
   const pinnedDispatcher = new Agent().compose(interceptors.dns({
@@ -567,6 +598,7 @@ export async function runAiImageProviderSingleSubmit(
     provider: 'custom-openai-compatible',
     model,
     endpointSha256,
+    approvalEvidence,
     promptSha256: requestContract.promptSha256,
     sourceSha256: requestContract.sourceSha256,
     maskSha256: requestContract.maskSha256,
@@ -610,6 +642,7 @@ export async function runAiImageProviderSingleSubmit(
         operation,
         requestProfile,
         endpointSha256,
+        approvalEvidence,
         credentialRevision,
         adapterRevision,
         promptSha256: requestContract.promptSha256,

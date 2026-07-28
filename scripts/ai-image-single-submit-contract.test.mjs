@@ -10,6 +10,15 @@ const guard = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-guard.ts',
   'utf8',
 );
+const approval = fs.readFileSync(
+  'apps/server/src/services/ai-image-sandbox-approval.ts',
+  'utf8',
+);
+const runbook = fs.readFileSync('docs/runbooks/ai-image-provider-sandbox.md', 'utf8');
+const approvalRunbook = fs.readFileSync(
+  'docs/runbooks/ai-image-provider-sandbox-approval.md',
+  'utf8',
+);
 const preflight = fs.readFileSync('scripts/preflight.mjs', 'utf8');
 const sandboxTsconfig = fs.readFileSync('apps/server/tsconfig.sandbox.json', 'utf8');
 
@@ -23,6 +32,9 @@ assert.match(source, /createOpenAiImageEditProvider/u);
 assert.match(source, /AI_IMAGE_SANDBOX_OPERATION_ID/u);
 assert.match(source, /AI_IMAGE_SANDBOX_CREDENTIAL_REVISION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_ADAPTER_REVISION/u);
+assert.match(source, /AI_IMAGE_SANDBOX_APPROVAL_PATH/u);
+assert.match(source, /AI_IMAGE_SANDBOX_APPROVAL_SHA256/u);
+assert.match(source, /loadAiImageSandboxApproval/u);
 assert.match(source, /AI_IMAGE_SANDBOX_OPERATION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_REQUEST_PROFILE/u);
 assert.match(source, /OPENAI_SQUARE_SINGLE_V1/u);
@@ -48,6 +60,7 @@ assert.match(source, /sourceSha256/u);
 assert.match(source, /maskSha256/u);
 assert.match(source, /promptSha256/u);
 assert.match(source, /providerRequestIdHash/u);
+assert.match(source, /approvalEvidence/u);
 assert.match(source, /PRE_DISPATCH_FAILED/u);
 assert.match(source, /REJECTED/u);
 assert.match(source, /RECONCILIATION_REQUIRED/u);
@@ -78,9 +91,27 @@ assert.match(guard, /\.fingerprints/u);
 assert.match(guard, /writeExclusiveDurableFile/u);
 assert.match(guard, /handle\.sync\(\)/u);
 assert.match(guard, /syncDirectory\(dirname\(path\)\)/u);
+assert.match(guard, /'approvalEvidence'/u);
+assert.match(approval, /I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST/u);
+assert.match(approval, /requestCount\s*!==\s*1/u);
+assert.match(approval, /SANDBOX_APPROVAL_DIGEST_MISMATCH/u);
+assert.match(approval, /SANDBOX_APPROVAL_MISMATCH/u);
+assert.match(approval, /O_NOFOLLOW/u);
+assert.match(approval, /metadata\.mode\s*&\s*0o077/u);
+assert.match(approval, /preCallBillingSnapshotRefSha256/u);
+assert.match(approval, /billingReconciliationRefSha256/u);
+assert.match(runbook, /ai-image-provider-sandbox-approval\.md/u);
+assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_PATH/u);
+assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_SHA256/u);
+assert.match(approvalRunbook, /I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST/u);
+assert.match(approvalRunbook, /gpt-image-2-i2i-20260724-200300-01/u);
+assert.match(approvalRunbook, /requestCount/u);
+assert.match(approvalRunbook, /preCallBillingSnapshotRef/u);
+assert.match(approvalRunbook, /billingReconciliationRef/u);
 assert.match(preflight, /tsconfig\.sandbox\.json/u);
 assert.match(sandboxTsconfig, /ai-image-provider-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-approval\.ts/u);
 assert.doesNotMatch(source, /endpointPath/u);
 assert.doesNotMatch(source, /providerEndpoint\s*:/u);
 assert.doesNotMatch(source, /setConfig|uploadBuffer|enqueueAiImageJob/u);

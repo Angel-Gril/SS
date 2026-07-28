@@ -24,6 +24,7 @@
 运维验收手册：
 
 - [AI 图片 Provider 单次付费 Sandbox 验收](runbooks/ai-image-provider-sandbox.md)
+- [QA-02 单次付费请求审批记录](runbooks/ai-image-provider-sandbox-approval.md)
 - [Ozon 来源商品 Sandbox 探针](runbooks/ozon-source-listing-sandbox.md)
 
 归档文档：

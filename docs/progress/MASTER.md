@@ -44,23 +44,25 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-`DOC-01` is complete. The indexed extension AI image workbench guide now gives administrators and
-users one accurate source for `ERP_HOSTED` versus `BYOK`, default-off feature flags, strict pilot
-policy JSON, session-only Keys, persistent non-secret profile data, exact-origin permissions,
-operation-specific capability evidence, external/ERP billing, Provider data disclosure,
-`UNKNOWN_OUTCOME` recovery, ERP ingest/draft binding, and one-receipt Ozon publishing. Stale
-development/deployment descriptions were corrected, and a documentation contract now protects the
-required boundaries in preflight. Focused tests and full preflight passed. No implementation task is
-dependency-ready until the exact paid `QA-02` Provider sandbox is explicitly approved and recorded;
-`QA-04` and release remain downstream of that evidence. All flags remain default-off; no real
-Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment
-occurred.
+`DOC-01` is complete. `QA-02` preparation now also binds a private, closed-schema one-request
+approval file to the sandbox intent and request fingerprint. Before DNS resolution or intent
+creation, the CLI verifies the reviewed file digest and exact endpoint/model/operation, request
+profile, credential/deployed adapter revisions, source/mask hashes, quoted/maximum cost, and billing
+evidence references. Sanitized evidence retains only the approval ID/digest and hashed private
+references. Focused approval/runner/guard tests passed `33/33`; repository lint (existing warnings
+only), workspace typecheck, the static contract, sandbox TypeScript compilation, and full preflight
+also passed. Preflight reported `445` passes and `0` failures. No implementation task is
+dependency-ready until an edit-capable endpoint/model and the exact paid `QA-02` request are
+explicitly approved; `QA-04` and release remain downstream. All flags remain default-off; no real
+Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, deployment, or
+`.context/` staging occurred.
 
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model, exact credential
-   revision, deployed commit, maximum cost, billing evidence path, and explicit approval are
-   recorded. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
+1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private
+   [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
+   credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost, and
+   billing evidence path. Do not repeat the two previously rejected `IMAGE_TO_IMAGE` requests.
 2. After a single approved `QA-02` request, reconcile the settled Provider bill and record exact
    endpoint/model/operation/request-mode evidence before promoting any capability.
 3. Run `QA-04` only after the exact paid `QA-02` evidence exists; then proceed to the owner/shop/

@@ -13,6 +13,62 @@ import {
 
 const directories: string[] = [];
 const execFileAsync = promisify(execFile);
+const APPROVAL_STATEMENT = 'I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST';
+
+async function withSandboxApproval(
+  repositoryRoot: string,
+  environment: NodeJS.ProcessEnv,
+  overrides: Record<string, unknown> = {},
+): Promise<NodeJS.ProcessEnv> {
+  const operationId = String(environment.AI_IMAGE_SANDBOX_OPERATION_ID);
+  const baseUrl = new URL(String(environment.AI_IMAGE_SANDBOX_BASE_URL));
+  const apiBase = baseUrl.pathname === '/' ? new URL('/v1', baseUrl) : baseUrl;
+  const operation = String(environment.AI_IMAGE_SANDBOX_OPERATION);
+  const endpoint = new URL(
+    `images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+    `${apiBase.toString().replace(/\/$/u, '')}/`,
+  ).toString();
+  const sourceSha256 = environment.AI_IMAGE_SANDBOX_SOURCE_SHA256
+    ? [String(environment.AI_IMAGE_SANDBOX_SOURCE_SHA256)]
+    : [];
+  const maskSha256 = environment.AI_IMAGE_SANDBOX_MASK_SHA256
+    ? String(environment.AI_IMAGE_SANDBOX_MASK_SHA256)
+    : null;
+  const approval = {
+    schemaVersion: 1,
+    approvalId: `approval-${operationId}`,
+    statement: APPROVAL_STATEMENT,
+    approvedAt: '2026-07-29T00:00:00.000Z',
+    approverRef: 'test-owner',
+    providerAccountRef: 'test-provider-account',
+    pricingRevision: 'test-pricing-r1',
+    currency: 'USD',
+    preCallBillingSnapshotRef: `billing-before-${operationId}`,
+    billingReconciliationRef: `billing-after-${operationId}`,
+    requestCount: 1,
+    operationId,
+    endpoint,
+    expectedHost: String(environment.AI_IMAGE_SANDBOX_EXPECTED_HOST),
+    model: String(environment.AI_IMAGE_SANDBOX_MODEL),
+    operation,
+    requestProfile: String(environment.AI_IMAGE_SANDBOX_REQUEST_PROFILE),
+    credentialRevision: String(environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION),
+    adapterRevision: String(environment.AI_IMAGE_SANDBOX_ADAPTER_REVISION),
+    sourceSha256,
+    maskSha256,
+    quotedCostCents: Number(environment.AI_IMAGE_SANDBOX_QUOTED_COST_CENTS),
+    maximumCostCents: Number(environment.AI_IMAGE_SANDBOX_MAX_COST_CENTS),
+    ...overrides,
+  };
+  const approvalBytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+  const approvalPath = join(repositoryRoot, `${operationId}.approval.json`);
+  await writeFile(approvalPath, approvalBytes, { mode: 0o600 });
+  return {
+    ...environment,
+    AI_IMAGE_SANDBOX_APPROVAL_PATH: approvalPath,
+    AI_IMAGE_SANDBOX_APPROVAL_SHA256: createHash('sha256').update(approvalBytes).digest('hex'),
+  };
+}
 
 async function initializeGitRepository(path: string): Promise<string> {
   await execFileAsync('git', ['init'], { cwd: path, windowsHide: true });
@@ -91,7 +147,7 @@ describe('single-submit AI image sandbox runner', () => {
     const fetch = vi.fn();
 
     await expect(runAiImageProviderSingleSubmit({
-      environment: {
+      environment: await withSandboxApproval(path, {
         NODE_ENV: 'sandbox',
         AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
         AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
@@ -105,12 +161,150 @@ describe('single-submit AI image sandbox runner', () => {
         AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
         AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
         AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
-      },
+      }),
       repositoryRoot: path,
       outputDirectory: join(path, 'evidence'),
       resolveDns: async () => [{ address: '93.184.216.34' }],
       fetch,
     })).rejects.toMatchObject({ code: 'SANDBOX_ADAPTER_REVISION_MISMATCH' });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an approval packet for a different model before claiming or dispatching', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-mismatch-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, { model: 'different-model' });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_MISMATCH' });
+
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', 'sandbox-approval-mismatch-0001.intent.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('requires a reviewed approval file before DNS resolution or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-required-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+        AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-required-0001',
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+      },
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_CONFIG_INVALID' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed approval file before DNS resolution or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-digest-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-digest-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+    await writeFile(String(environment.AI_IMAGE_SANDBOX_APPROVAL_PATH), '{}\n');
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DIGEST_MISMATCH' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported approval fields so secrets cannot be hidden in the packet', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-closed-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-closed-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    }, { apiKey: 'must-not-be-accepted' });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
 
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -144,7 +338,7 @@ describe('single-submit AI image sandbox runner', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
     const report = await runAiImageProviderSingleSubmit({
-      environment: {
+      environment: await withSandboxApproval(path, {
         NODE_ENV: 'sandbox',
         AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
         AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
@@ -160,7 +354,7 @@ describe('single-submit AI image sandbox runner', () => {
         AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
         AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
         AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
-      },
+      }),
       outputDirectory: path,
       repositoryRoot: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
@@ -173,6 +367,10 @@ describe('single-submit AI image sandbox runner', () => {
       requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
       requestedSize: '1024x1024',
       createRequests: 1,
+      approvalEvidence: {
+        approvalId: `approval-${operationId}`,
+        currency: 'USD',
+      },
     });
     const submittedForm = fetch.mock.calls[0]?.[1]?.body as FormData;
     expect(submittedForm.getAll('image')).toHaveLength(1);
@@ -186,8 +384,18 @@ describe('single-submit AI image sandbox runner', () => {
       endpointSha256: createHash('sha256')
         .update('https://relay.example/v1/images/edits')
         .digest('hex'),
+      request: {
+        approvalEvidence: {
+          approvalId: `approval-${operationId}`,
+          currency: 'USD',
+        },
+      },
     });
     expect(storedReport + storedIntent).not.toContain('https://relay.example');
+    expect(storedReport + storedIntent).not.toContain('test-owner');
+    expect(storedReport + storedIntent).not.toContain('test-provider-account');
+    expect(storedReport + storedIntent).not.toContain(`billing-before-${operationId}`);
+    expect(storedReport + storedIntent).not.toContain(`${operationId}.approval.json`);
     if (process.platform !== 'win32') {
       expect((await stat(path)).mode & 0o777).toBe(0o700);
       expect((await stat(reportPath)).mode & 0o777).toBe(0o600);
@@ -221,7 +429,7 @@ describe('single-submit AI image sandbox runner', () => {
     });
 
     await expect(runAiImageProviderSingleSubmit({
-      environment: {
+      environment: await withSandboxApproval(path, {
         NODE_ENV: 'sandbox',
         AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
         AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
@@ -237,7 +445,7 @@ describe('single-submit AI image sandbox runner', () => {
         AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
         AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
         AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
-      },
+      }),
       outputDirectory: path,
       repositoryRoot: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
@@ -295,7 +503,7 @@ describe('single-submit AI image sandbox runner', () => {
     });
 
     await expect(runAiImageProviderSingleSubmit({
-      environment: {
+      environment: await withSandboxApproval(path, {
         NODE_ENV: 'sandbox',
         AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
         AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
@@ -309,7 +517,7 @@ describe('single-submit AI image sandbox runner', () => {
         AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
         AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
         AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
-      },
+      }),
       repositoryRoot: path,
       outputDirectory: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],
@@ -352,7 +560,7 @@ describe('single-submit AI image sandbox runner', () => {
     const operationId = 'sandbox-portrait-inpaint-0001';
 
     await expect(runAiImageProviderSingleSubmit({
-      environment: {
+      environment: await withSandboxApproval(path, {
         NODE_ENV: 'sandbox',
         AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
         AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
@@ -370,7 +578,7 @@ describe('single-submit AI image sandbox runner', () => {
         AI_IMAGE_SANDBOX_MASK_SHA256: createHash('sha256').update(mask).digest('hex'),
         AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
         AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
-      },
+      }),
       repositoryRoot: path,
       outputDirectory: path,
       resolveDns: async () => [{ address: '93.184.216.34' }],

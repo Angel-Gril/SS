@@ -12,6 +12,7 @@
     "scripts/ai-image-provider-single-submit.test.ts",
     "scripts/ai-image-translation-single-submit.ts",
     "scripts/ai-image-translation-single-submit.test.ts",
+    "src/services/ai-image-sandbox-approval.ts",
     "src/services/ai-image-sandbox-guard.ts",
     "src/services/ai-image-translation-sandbox-guard.ts"
   ],

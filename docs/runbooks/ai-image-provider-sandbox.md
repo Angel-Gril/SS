@@ -107,6 +107,10 @@ Neither profile proves multi-reference compatibility. A Provider may return a di
 
 Inject secrets without echoing them or retaining them in shell history. Use placeholders only in documentation and tickets.
 
+Before setting the paid confirmation, create and review the private
+[one-request approval record](ai-image-provider-sandbox-approval.md). The CLI hashes that file and
+fails before DNS, intent creation, or Provider dispatch when any exact request field differs.
+
 | Variable                               | Requirement                                                                             |
 | -------------------------------------- | --------------------------------------------------------------------------------------- |
 | `NODE_ENV`                             | Must be `sandbox`                                                                       |
@@ -114,6 +118,8 @@ Inject secrets without echoing them or retaining them in shell history. Use plac
 | `AI_IMAGE_SANDBOX_BASE_URL`            | Exact third-party OpenAI-compatible HTTPS base URL                                      |
 | `AI_IMAGE_SANDBOX_EXPECTED_HOST`       | Exact lowercase hostname from the base URL                                              |
 | `AI_IMAGE_SANDBOX_API_KEY`             | Secret injected for this process only                                                   |
+| `AI_IMAGE_SANDBOX_APPROVAL_PATH`       | Private closed-schema approval JSON for this exact one paid request                     |
+| `AI_IMAGE_SANDBOX_APPROVAL_SHA256`     | Lowercase SHA-256 of the final reviewed approval file                                   |
 | `AI_IMAGE_SANDBOX_MODEL`               | Exact third-party model identifier under test                                           |
 | `AI_IMAGE_SANDBOX_OPERATION`           | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`                            |
 | `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | `OPENAI_SQUARE_SINGLE_V1` or `OZON_PORTRAIT_SINGLE_V1`                                 |
@@ -134,8 +140,11 @@ Relative source and mask paths are resolved from the repository/deployed app roo
 ### Submit Once
 
 1. Hash the reviewed source and mask, when applicable, and place their bytes under access-controlled temporary storage.
-2. Take the pre-call billing snapshot and verify the dark state.
-3. Inject the complete environment contract. Set the confirmation only after a second operator or recorded review has checked the endpoint, model, operation, revisions, hashes, and cost evidence.
+2. Take the pre-call billing snapshot, verify the dark state, and finalize the private approval
+   record with its exact billing references.
+3. Hash the unchanged approval file and inject the complete environment contract. Set the
+   confirmation only after a second operator or recorded review has checked the approval digest,
+   endpoint, model, operation, revisions, source/mask hashes, and cost evidence.
 4. Run exactly once from the repository root:
 
    ```bash
@@ -276,6 +285,7 @@ Sandbox directories and files are created with Unix modes `0700` and `0600` wher
 Retain together:
 
 - immutable intent and fingerprint claim;
+- the private one-request approval file and its reviewed SHA-256 digest;
 - sanitized submit or reconciliation report;
 - source and mask SHA-256 evidence;
 - generated result and its SHA-256 until visual review completes;

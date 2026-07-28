@@ -108,3 +108,16 @@ Progress: 4/5 tasks.
   media; repeat measurements were `0px` position and size change. No external request occurred.
 - No real Provider request, external charge, ERP ingest, Ozon write, production flag change,
   production mutation, VPS deployment, or `.context/` staging occurred during `UI-03`.
+- `QA-02` preparation now requires a private closed-schema one-request approval file. Its reviewed
+  SHA-256 is checked before DNS resolution or intent creation, and the endpoint/model/operation,
+  request profile, credential/deployed adapter revisions, source/mask hashes, quoted/maximum cost,
+  and billing evidence references must match the exact command. Only the approval ID, digest,
+  timestamp, currency, and hashed operator/account/pricing/billing references enter the immutable
+  intent and sanitized report. Missing, changed, mismatched, extra-field, or non-private approval
+  files fail before Provider dispatch.
+- Approval/runner/guard focused tests passed `33/33`; the static single-submit contract, sandbox
+  TypeScript compilation, repository lint (existing warnings only), workspace typecheck, and full
+  preflight passed. Preflight reported `445` passes, `0` failures, and the two expected local-package
+  permission warnings. `QA-02` remains open because no edit-capable endpoint/model and no explicitly
+  approved paid request exist. No Provider request, charge, production mutation, VPS access,
+  deployment, or `.context/` staging occurred.

@@ -212,7 +212,7 @@ export async function claimAiImageSandboxOperation(input: {
   const { endpoint: _rawEndpoint, ...requestFingerprintEvidence } = input.request;
   const persistedRequestKeys = new Set([
     'operation', 'requestProfile', 'n', 'width', 'height', 'size', 'promptSha256',
-    'sourceSha256', 'sourceDimensions', 'maskSha256', 'maskDimensions',
+    'sourceSha256', 'sourceDimensions', 'maskSha256', 'maskDimensions', 'approvalEvidence',
   ]);
   const persistedRequestEvidence = Object.fromEntries(
     Object.entries(requestFingerprintEvidence)
