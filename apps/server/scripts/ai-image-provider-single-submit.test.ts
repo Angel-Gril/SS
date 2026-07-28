@@ -240,6 +240,89 @@ describe('single-submit AI image sandbox runner', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('preflights an exact approval without confirmation, API key, DNS, intent, or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-preflight-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const operationId = 'sandbox-approval-preflight-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).resolves.toMatchObject({
+      event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
+      operationId,
+      operation: 'TEXT_TO_IMAGE',
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      approvalEvidence: {
+        approvalId: `approval-${operationId}`,
+      },
+    });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    ['paid confirmation', { AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST' }],
+    ['API key', { AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-must-be-unset' }],
+  ])('rejects %s in the offline approval preflight environment', async (_label, unsafeEnvironment) => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-preflight-safe-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-approval-preflight-safe-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+      ...unsafeEnvironment,
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects a changed approval file before DNS resolution or dispatch', async () => {
     const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-digest-'));
     directories.push(path);

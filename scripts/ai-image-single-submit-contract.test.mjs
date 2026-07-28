@@ -19,6 +19,7 @@ const approvalRunbook = fs.readFileSync(
   'docs/runbooks/ai-image-provider-sandbox-approval.md',
   'utf8',
 );
+const serverPackage = JSON.parse(fs.readFileSync('apps/server/package.json', 'utf8'));
 const preflight = fs.readFileSync('scripts/preflight.mjs', 'utf8');
 const sandboxTsconfig = fs.readFileSync('apps/server/tsconfig.sandbox.json', 'utf8');
 
@@ -35,6 +36,9 @@ assert.match(source, /AI_IMAGE_SANDBOX_ADAPTER_REVISION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_APPROVAL_PATH/u);
 assert.match(source, /AI_IMAGE_SANDBOX_APPROVAL_SHA256/u);
 assert.match(source, /loadAiImageSandboxApproval/u);
+assert.match(source, /VERIFY_APPROVAL/u);
+assert.match(source, /--verify-approval/u);
+assert.match(source, /SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV/u);
 assert.match(source, /AI_IMAGE_SANDBOX_OPERATION/u);
 assert.match(source, /AI_IMAGE_SANDBOX_REQUEST_PROFILE/u);
 assert.match(source, /OPENAI_SQUARE_SINGLE_V1/u);
@@ -108,6 +112,11 @@ assert.match(approvalRunbook, /gpt-image-2-i2i-20260724-200300-01/u);
 assert.match(approvalRunbook, /requestCount/u);
 assert.match(approvalRunbook, /preCallBillingSnapshotRef/u);
 assert.match(approvalRunbook, /billingReconciliationRef/u);
+assert.match(approvalRunbook, /sandbox:ai-image:approval:verify/u);
+assert.equal(
+  serverPackage.scripts['sandbox:ai-image:approval:verify'],
+  'tsx scripts/ai-image-provider-single-submit.ts --verify-approval',
+);
 assert.match(preflight, /tsconfig\.sandbox\.json/u);
 assert.match(sandboxTsconfig, /ai-image-provider-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
@@ -129,6 +138,25 @@ const outsideSandbox = spawnSync(
 assert.notEqual(outsideSandbox.status, 0);
 assert.match(outsideSandbox.stderr, /AI image sandbox failed/u);
 assert.doesNotMatch(outsideSandbox.stderr, /inspect|report/iu);
+
+const unsafeApprovalPreflight = spawnSync(
+  process.execPath,
+  ['--import', 'tsx', 'scripts/ai-image-provider-single-submit.ts', '--verify-approval'],
+  {
+    cwd: 'apps/server',
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_API_KEY: 'preflight-secret-must-not-appear',
+    },
+  },
+);
+assert.notEqual(unsafeApprovalPreflight.status, 0);
+assert.match(unsafeApprovalPreflight.stderr, /SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV/u);
+assert.doesNotMatch(unsafeApprovalPreflight.stderr, /preflight-secret-must-not-appear/u);
+assert.doesNotMatch(unsafeApprovalPreflight.stderr, /I_ACCEPT_ONE_PAID_IMAGE_REQUEST/u);
 
 const invalidOperation = spawnSync(
   process.execPath,

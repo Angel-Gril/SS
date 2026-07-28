@@ -33,6 +33,8 @@ import { loadAiImageSandboxApproval } from '../src/services/ai-image-sandbox-app
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
 const execFileAsync = promisify(execFile);
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
+type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL';
+const SANDBOX_MODES = new Set<AiImageSandboxMode>(['SUBMIT', 'VERIFY_APPROVAL']);
 const REQUEST_PROFILES = Object.freeze({
   OPENAI_SQUARE_SINGLE_V1: Object.freeze({ width: 1024, height: 1024, format: 'square' }),
   OZON_PORTRAIT_SINGLE_V1: Object.freeze({
@@ -344,7 +346,23 @@ export async function runAiImageProviderSingleSubmit(
   if (environment.NODE_ENV !== 'sandbox') {
     throw new Error('NODE_ENV must equal sandbox for the single-submit AI image sandbox');
   }
-  if (environment.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
+  const modeValue = optionalEnvironment('AI_IMAGE_SANDBOX_MODE', environment) || 'SUBMIT';
+  if (!SANDBOX_MODES.has(modeValue as AiImageSandboxMode)) {
+    throw Object.assign(new Error('AI_IMAGE_SANDBOX_MODE is unsupported'), {
+      code: 'SANDBOX_MODE_INVALID',
+    });
+  }
+  const mode = modeValue as AiImageSandboxMode;
+  if (mode === 'VERIFY_APPROVAL' && (
+    optionalEnvironment('AI_IMAGE_SANDBOX_CONFIRM', environment)
+    || optionalEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment)
+  )) {
+    throw Object.assign(
+      new Error('Approval preflight must not receive a paid confirmation or API key'),
+      { code: 'SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV' },
+    );
+  }
+  if (mode === 'SUBMIT' && environment.AI_IMAGE_SANDBOX_CONFIRM !== CONFIRMATION) {
     throw new Error(`AI_IMAGE_SANDBOX_CONFIRM must equal ${CONFIRMATION}`);
   }
 
@@ -453,6 +471,26 @@ export async function runAiImageProviderSingleSubmit(
       maximumCostCents: Number(maximumCostCentsValue),
     },
   });
+  if (mode === 'VERIFY_APPROVAL') {
+    const verification = {
+      schemaVersion: 1,
+      event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
+      operationId,
+      operation,
+      requestProfile,
+      credentialRevision,
+      adapterRevision,
+      provider: 'custom-openai-compatible',
+      model,
+      endpointSha256,
+      sourceSha256,
+      maskSha256,
+      requestedSize: outputSize,
+      approvalEvidence,
+    };
+    process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
+    return verification;
+  }
   const apiKey = requiredEnvironment('AI_IMAGE_SANDBOX_API_KEY', environment);
   const pinnedDns = new Map<string, Array<{ address: string; family: 4 | 6; ttl: number }>>();
   const baseDnsResolver = options.resolveDns || resolvePublicDns;
@@ -672,7 +710,10 @@ const isDirectRun = process.argv[1]
   : false;
 
 if (isDirectRun) {
-  runAiImageProviderSingleSubmit().catch((error) => {
+  const directEnvironment = process.argv.slice(2).includes('--verify-approval')
+    ? { ...process.env, AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL' }
+    : process.env;
+  runAiImageProviderSingleSubmit({ environment: directEnvironment }).catch((error) => {
     process.stderr.write(`${JSON.stringify({
       schemaVersion: 1,
       event: 'SANDBOX_COMMAND_FAILED',

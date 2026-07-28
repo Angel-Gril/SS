@@ -48,8 +48,10 @@ Overall: 32/37 tasks complete (86%).
 approval file to the sandbox intent and request fingerprint. Before DNS resolution or intent
 creation, the CLI verifies the reviewed file digest and exact endpoint/model/operation, request
 profile, credential/deployed adapter revisions, source/mask hashes, quoted/maximum cost, and billing
-evidence references. Sanitized evidence retains only the approval ID/digest and hashed private
-references. Focused approval/runner/guard tests passed `33/33`; repository lint (existing warnings
+evidence references. A dedicated `sandbox:ai-image:approval:verify` command now validates the exact
+request without accepting a paid confirmation or API Key and performs no DNS, intent/fingerprint,
+or Provider operation. Sanitized evidence retains only the approval ID/digest and hashed private
+references. Focused approval/runner/guard tests passed `36/36`; repository lint (existing warnings
 only), workspace typecheck, the static contract, sandbox TypeScript compilation, and full preflight
 also passed. Preflight reported `445` passes and `0` failures. No implementation task is
 dependency-ready until an edit-capable endpoint/model and the exact paid `QA-02` request are

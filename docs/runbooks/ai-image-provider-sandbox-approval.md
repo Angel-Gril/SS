@@ -97,6 +97,25 @@ Set the paid confirmation and API Key only after the approval digest, dark-state
 commit, source/mask hashes, and pre-call billing snapshot have all been reviewed. Then run the
 single-submit command exactly once as described in the main sandbox runbook.
 
+## Offline Exact-Request Preflight
+
+Before setting either the paid confirmation or API Key, keep the complete non-secret international
+request environment and approval path/digest configured, then run:
+
+```bash
+pnpm --filter server sandbox:ai-image:approval:verify
+```
+
+The command rejects an environment containing `AI_IMAGE_SANDBOX_CONFIRM` or
+`AI_IMAGE_SANDBOX_API_KEY`. It validates the deployed adapter revision, source/mask bytes and hashes,
+closed approval schema, approval-file digest, endpoint/model/operation/profile, credential revision,
+costs, and billing references. It performs no DNS lookup, creates no intent or fingerprint claim,
+and sends no Provider request. Successful output contains sanitized hashes and the approval ID only.
+
+After this preflight passes, leave the approval file unchanged. Separately review the dark state and
+pre-call bill, inject the API Key for the single submit process, and set the paid confirmation only
+for the exact one approved run.
+
 ## Retention And Review
 
 Keep the private approval file and its digest with the immutable intent, fingerprint claim,

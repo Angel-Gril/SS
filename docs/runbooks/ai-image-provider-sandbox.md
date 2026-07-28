@@ -81,6 +81,15 @@ git rev-parse HEAD
 
 Do not run a paid probe from an unreviewed or partially deployed worktree.
 
+After the private international approval file is final, run the no-key/no-confirmation exact-request
+preflight before any paid submit:
+
+```bash
+pnpm --filter server sandbox:ai-image:approval:verify
+```
+
+This command performs no DNS lookup, intent/fingerprint claim, or Provider request.
+
 ## International OpenAI-Compatible Probe
 
 This lane accepts an operator-approved third-party endpoint. The configured base URL must use HTTPS, contain a DNS hostname, and contain no credentials, query, fragment, or `/images/generations` or `/images/edits` operation path. The CLI normalizes the base to `/v1`, requires `AI_IMAGE_SANDBOX_EXPECTED_HOST` to equal its hostname, validates public DNS, pins the resolved addresses, and permits one create POST.

@@ -115,7 +115,12 @@ Progress: 4/5 tasks.
   timestamp, currency, and hashed operator/account/pricing/billing references enter the immutable
   intent and sanitized report. Missing, changed, mismatched, extra-field, or non-private approval
   files fail before Provider dispatch.
-- Approval/runner/guard focused tests passed `33/33`; the static single-submit contract, sandbox
+- The operator can now run `sandbox:ai-image:approval:verify` before injecting a Key or paid
+  confirmation. It verifies the exact deployed revision, source/mask bytes, approval digest/schema,
+  endpoint/model/operation/profile, revisions, costs, and billing references, but rejects an
+  environment containing either submit secret. The path performs zero DNS lookups, creates no
+  intent/fingerprint, and sends no Provider request.
+- Approval/runner/guard focused tests passed `36/36`; the static single-submit contract, sandbox
   TypeScript compilation, repository lint (existing warnings only), workspace typecheck, and full
   preflight passed. Preflight reported `445` passes, `0` failures, and the two expected local-package
   permission warnings. `QA-02` remains open because no edit-capable endpoint/model and no explicitly
