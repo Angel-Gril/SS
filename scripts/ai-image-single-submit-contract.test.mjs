@@ -14,9 +14,25 @@ const approval = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'utf8',
 );
+const billingFinalizer = fs.readFileSync(
+  'apps/server/scripts/ai-image-provider-billing-finalize.ts',
+  'utf8',
+);
+const billingSettlement = fs.readFileSync(
+  'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
+  'utf8',
+);
+const codeRevision = fs.readFileSync(
+  'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'utf8',
+);
 const runbook = fs.readFileSync('docs/runbooks/ai-image-provider-sandbox.md', 'utf8');
 const approvalRunbook = fs.readFileSync(
   'docs/runbooks/ai-image-provider-sandbox-approval.md',
+  'utf8',
+);
+const billingRunbook = fs.readFileSync(
+  'docs/runbooks/ai-image-provider-sandbox-billing.md',
   'utf8',
 );
 const serverPackage = JSON.parse(fs.readFileSync('apps/server/package.json', 'utf8'));
@@ -41,9 +57,9 @@ assert.match(source, /--verify-approval/u);
 assert.match(source, /SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV/u);
 assert.match(source, /AI_IMAGE_SANDBOX_BASE_URL must use HTTPS/u);
 assert.match(source, /sanitizeAiImageSandboxGitEnvironment/u);
-assert.match(source, /GIT_CHILD_ENVIRONMENT_ALLOWLIST/u);
-assert.match(source, /core\.hooksPath=/u);
-assert.match(source, /core\.fsmonitor=false/u);
+assert.match(codeRevision, /GIT_CHILD_ENVIRONMENT_ALLOWLIST/u);
+assert.match(codeRevision, /core\.hooksPath=/u);
+assert.match(codeRevision, /core\.fsmonitor=false/u);
 assert.match(source, /delete process\.env\.AI_IMAGE_SANDBOX_API_KEY/u);
 assert.match(source, /delete process\.env\.AI_IMAGE_SANDBOX_CONFIRM/u);
 assert.match(source, /AI_IMAGE_SANDBOX_OPERATION/u);
@@ -71,6 +87,9 @@ assert.match(source, /sourceSha256/u);
 assert.match(source, /maskSha256/u);
 assert.match(source, /promptSha256/u);
 assert.match(source, /providerRequestIdHash/u);
+assert.match(source, /startedAt/u);
+assert.match(source, /completedAt/u);
+assert.match(source, /schemaVersion:\s*3/u);
 assert.match(source, /approvalEvidence/u);
 assert.match(source, /PRE_DISPATCH_FAILED/u);
 assert.match(source, /REJECTED/u);
@@ -82,10 +101,17 @@ assert.match(source, /handle\.sync\(\)/u);
 assert.match(source, /syncDirectory\(dirname\(path\)\)/u);
 assert.match(source, /repositoryRoot\?:\s*string/u);
 assert.match(source, /FULL_GIT_OID_PATTERN/u);
-assert.match(source, /DEPLOYED_COMMIT/u);
-assert.match(source, /runGit\(\['rev-parse', '--verify', 'HEAD'\]\)/u);
-assert.match(source, /--porcelain=v1/u);
-assert.match(source, /DEPLOYED_COMMIT does not match the checked-out Git HEAD/u);
+assert.match(codeRevision, /DEPLOYED_COMMIT/u);
+assert.match(codeRevision, /runGit\(\['rev-parse', '--verify', 'HEAD'\]\)/u);
+assert.match(codeRevision, /--porcelain=v1/u);
+assert.match(codeRevision, /ls-files', '--error-unmatch/u);
+assert.match(codeRevision, /'hash-object'/u);
+assert.match(codeRevision, /`--path=\$\{path\}`/u);
+assert.match(codeRevision, /`\$\{revision\}:\$\{path\}`/u);
+assert.match(codeRevision, /verifiedRevision\s*!==\s*revision/u);
+assert.match(codeRevision, /SANDBOX_ADAPTER_GIT_REQUIRED/u);
+assert.match(source, /requireGitCheckout:\s*true/u);
+assert.match(codeRevision, /DEPLOYED_COMMIT does not match the checked-out Git HEAD/u);
 assert.match(source, /SANDBOX_COMMAND_FAILED/u);
 assert.match(source, /open\(path,\s*'wx',\s*0o600\)/u);
 assert.match(source, /\.report\.json/u);
@@ -99,6 +125,7 @@ assert.match(guard, /promptSha256\s*!==\s*input\.contract\.promptSha256/u);
 assert.match(guard, /body\.size\s*!==\s*input\.contract\.size/u);
 assert.match(guard, /SANDBOX_REQUEST_REPLAY/u);
 assert.match(guard, /canonicalJson/u);
+assert.match(guard, /createAiImageSandboxRequestFingerprint/u);
 assert.match(guard, /\.fingerprints/u);
 assert.match(guard, /writeExclusiveDurableFile/u);
 assert.match(guard, /handle\.sync\(\)/u);
@@ -123,6 +150,31 @@ assert.match(approval, /O_NOFOLLOW/u);
 assert.match(approval, /metadata\.mode\s*&\s*0o077/u);
 assert.match(approval, /preCallBillingSnapshotRefSha256/u);
 assert.match(approval, /billingReconciliationRefSha256/u);
+assert.match(billingFinalizer, /SANDBOX_BILLING_UNSAFE_ENV/u);
+assert.match(billingFinalizer, /AI_IMAGE_TRANSLATION_SANDBOX_API_KEY/u);
+assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
+assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_PATH/u);
+assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_SHA256/u);
+assert.match(billingSettlement, /I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT/u);
+assert.match(billingSettlement, /AI_IMAGE_SANDBOX_BILLING_SETTLED/u);
+assert.match(billingSettlement, /COST_LIMIT_EXCEEDED/u);
+assert.match(billingSettlement, /UNIQUE_ACCOUNT_TIME_WINDOW/u);
+assert.match(billingSettlement, /actualCostCents\s*!==\s*null/u);
+assert.match(billingSettlement, /resolve\(billingDirectory, '\.claims'\)/u);
+assert.match(billingSettlement, /writeExclusiveAtomicFile/u);
+assert.match(billingSettlement, /O_NOFOLLOW/u);
+assert.match(billingSettlement, /canonical JSON without duplicate keys/u);
+assert.match(billingSettlement, /preCallBillingSnapshotPath/u);
+assert.match(billingSettlement, /settledBillingSnapshotPath/u);
+assert.match(billingSettlement, /MAX_BILLING_SNAPSHOT_BYTES/u);
+assert.match(billingSettlement, /MAX_PRECALL_SNAPSHOT_AGE_MS/u);
+assert.match(billingSettlement, /createAiImageSandboxRequestFingerprint/u);
+assert.match(billingSettlement, /modelSha256/u);
+assert.match(billingSettlement, /finalizationAdapterRevision/u);
+assert.match(billingSettlement, /isPathWithin/u);
+assert.match(billingSettlement, /pathMetadata\.isFile/u);
+assert.match(billingSettlement, /sameSnapshotFile/u);
+assert.match(billingSettlement, /incomplete billing claim/u);
 assert.match(runbook, /ai-image-provider-sandbox-approval\.md/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_PATH/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_SHA256/u);
@@ -136,18 +188,39 @@ assert.match(approvalRunbook, /"schemaVersion": 2/u);
 assert.match(approvalRunbook, /"expiresAt":/u);
 assert.match(approvalRunbook, /no longer than 60 minutes/u);
 assert.match(approvalRunbook, /guarded POST boundary/u);
+assert.match(runbook, /ai-image-provider-sandbox-billing\.md/u);
+assert.match(billingRunbook, /sandbox:ai-image:billing:finalize/u);
+assert.match(billingRunbook, /I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT/u);
+assert.match(billingRunbook, /COST_LIMIT_EXCEEDED/u);
+assert.match(billingRunbook, /actualCostCents.*null/u);
+assert.match(billingRunbook, /`schemaVersion: 3` submit report/u);
+assert.match(billingRunbook, /preCallBillingSnapshotPath/u);
+assert.match(billingRunbook, /16 MiB/u);
+assert.match(billingRunbook, /hard links/u);
+assert.match(billingRunbook, /marker-only release archive/u);
 assert.equal(
   serverPackage.scripts['sandbox:ai-image:approval:verify'],
   'tsx scripts/ai-image-provider-single-submit.ts --verify-approval',
+);
+assert.equal(
+  serverPackage.scripts['sandbox:ai-image:billing:finalize'],
+  'tsx scripts/ai-image-provider-billing-finalize.ts',
 );
 assert.match(preflight, /tsconfig\.sandbox\.json/u);
 assert.match(sandboxTsconfig, /ai-image-provider-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-approval\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-provider-billing-finalize\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-billing-settlement\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-code-revision\.ts/u);
 assert.doesNotMatch(source, /endpointPath/u);
 assert.doesNotMatch(source, /providerEndpoint\s*:/u);
 assert.doesNotMatch(source, /setConfig|uploadBuffer|enqueueAiImageJob/u);
 assert.doesNotMatch(source + guard, /gpt-image-2-count|sk-[A-Za-z0-9_.-]{12,}|rawResponse/u);
+assert.doesNotMatch(
+  billingFinalizer + billingSettlement,
+  /undici|validateAiImageProviderUrl|createOpenAiImagesProvider|createOpenAiImageEditProvider|cloudflare-dns|node:(?:http|https|net|tls|dns)/iu,
+);
 
 const outsideSandbox = spawnSync(
   process.execPath,
@@ -180,6 +253,23 @@ assert.notEqual(unsafeApprovalPreflight.status, 0);
 assert.match(unsafeApprovalPreflight.stderr, /SANDBOX_APPROVAL_PREFLIGHT_UNSAFE_ENV/u);
 assert.doesNotMatch(unsafeApprovalPreflight.stderr, /preflight-secret-must-not-appear/u);
 assert.doesNotMatch(unsafeApprovalPreflight.stderr, /I_ACCEPT_ONE_PAID_IMAGE_REQUEST/u);
+
+const unsafeBillingFinalizer = spawnSync(
+  process.execPath,
+  ['--import', 'tsx', 'scripts/ai-image-provider-billing-finalize.ts'],
+  {
+    cwd: 'apps/server',
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_API_KEY: 'billing-secret-must-not-appear',
+    },
+  },
+);
+assert.notEqual(unsafeBillingFinalizer.status, 0);
+assert.match(unsafeBillingFinalizer.stderr, /SANDBOX_BILLING_UNSAFE_ENV/u);
+assert.doesNotMatch(unsafeBillingFinalizer.stderr, /billing-secret-must-not-appear/u);
 
 const invalidOperation = spawnSync(
   process.execPath,

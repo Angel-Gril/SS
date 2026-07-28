@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import {
   access,
   chmod,
@@ -12,7 +11,6 @@ import {
 import { isIP } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { Agent, fetch as undiciFetch, interceptors } from 'undici';
 import sharp from 'sharp';
 import {
@@ -32,9 +30,25 @@ import {
   assertAiImageSandboxApprovalCurrent,
   loadAiImageSandboxApproval,
 } from '../src/services/ai-image-sandbox-approval.js';
+import {
+  AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
+  resolveAiImageSandboxRepositoryRevision,
+  sanitizeAiImageSandboxGitEnvironment,
+} from '../src/services/ai-image-sandbox-code-revision.js';
+
+export {
+  resolveAiImageSandboxRepositoryRevision,
+  sanitizeAiImageSandboxGitEnvironment,
+};
 
 const CONFIRMATION = 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST';
-const execFileAsync = promisify(execFile);
+const SINGLE_SUBMIT_TRACKED_PATHS = [
+  'apps/server/scripts/ai-image-provider-single-submit.ts',
+  'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'apps/server/src/services/ai-image-sandbox-approval.ts',
+  'apps/server/src/services/ai-image-sandbox-guard.ts',
+  'apps/server/src/services/ai-image-providers.ts',
+];
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
 type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL';
 const SANDBOX_MODES = new Set<AiImageSandboxMode>(['SUBMIT', 'VERIFY_APPROVAL']);
@@ -92,33 +106,12 @@ export interface AiImageProviderSingleSubmitOptions {
   resolveDns?: DnsResolver;
   fetch?: FetchLike;
   now?: () => Date;
+  requireGitCheckout?: boolean;
 }
 
 function currentTime(options: AiImageProviderSingleSubmitOptions) {
   return options.now?.() || new Date();
 }
-
-const FULL_GIT_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-const GIT_CHILD_ENVIRONMENT_ALLOWLIST = new Set([
-  'PATH',
-  'PATHEXT',
-  'SYSTEMROOT',
-  'WINDIR',
-  'COMSPEC',
-  'HOME',
-  'USERPROFILE',
-  'HOMEDRIVE',
-  'HOMEPATH',
-  'TMP',
-  'TEMP',
-  'TMPDIR',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'TERM',
-  'NO_COLOR',
-]);
-type AiImageSandboxGitRunner = (args: string[]) => Promise<string>;
 
 function requiredEnvironment(name: string, environment: NodeJS.ProcessEnv) {
   const value = String(environment[name] || '').trim();
@@ -140,94 +133,13 @@ function requiredSha256(name: string, environment: NodeJS.ProcessEnv) {
 
 function requiredAdapterRevision(environment: NodeJS.ProcessEnv) {
   const value = requiredEnvironment('AI_IMAGE_SANDBOX_ADAPTER_REVISION', environment).toLowerCase();
-  if (!FULL_GIT_OID_PATTERN.test(value)) {
+  if (!AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(value)) {
     throw Object.assign(
       new Error('AI_IMAGE_SANDBOX_ADAPTER_REVISION must be a full Git object ID'),
       { code: 'SANDBOX_ADAPTER_REVISION_INVALID' },
     );
   }
   return value;
-}
-
-export function sanitizeAiImageSandboxGitEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([name]) => (
-    GIT_CHILD_ENVIRONMENT_ALLOWLIST.has(name.toUpperCase())
-  )));
-}
-
-function createAiImageSandboxGitRunner(repositoryRoot: string): AiImageSandboxGitRunner {
-  return async (args) => {
-    const result = await execFileAsync('git', [
-      '-c', 'core.hooksPath=',
-      '-c', 'core.fsmonitor=false',
-      '-c', 'submodule.recurse=false',
-      ...args,
-    ], {
-      cwd: repositoryRoot,
-      env: sanitizeAiImageSandboxGitEnvironment(),
-      windowsHide: true,
-      timeout: 10_000,
-    });
-    return String(result.stdout);
-  };
-}
-
-async function resolveGitHead(runGit: AiImageSandboxGitRunner) {
-  const revision = (await runGit(['rev-parse', '--verify', 'HEAD'])).trim().toLowerCase();
-  return FULL_GIT_OID_PATTERN.test(revision) ? revision : '';
-}
-
-async function assertGitTrackedWorktreeClean(runGit: AiImageSandboxGitRunner) {
-  const status = await runGit(['status', '--porcelain=v1', '--untracked-files=no']);
-  if (status.trim()) {
-    throw Object.assign(new Error('The sandbox repository has tracked worktree changes'), {
-      code: 'SANDBOX_ADAPTER_WORKTREE_DIRTY',
-    });
-  }
-}
-
-export async function resolveAiImageSandboxRepositoryRevision(
-  repositoryRoot: string,
-  runGit: AiImageSandboxGitRunner = createAiImageSandboxGitRunner(repositoryRoot),
-): Promise<string> {
-  let deployedRevision = '';
-  try {
-    deployedRevision = (await readFile(resolve(repositoryRoot, 'DEPLOYED_COMMIT'), 'utf8'))
-      .trim()
-      .toLowerCase();
-    if (!FULL_GIT_OID_PATTERN.test(deployedRevision)) throw new Error('DEPLOYED_COMMIT is invalid');
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  let hasGitMetadata = true;
-  try {
-    await access(resolve(repositoryRoot, '.git'));
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-    hasGitMetadata = false;
-  }
-  if (!hasGitMetadata) {
-    if (deployedRevision) return deployedRevision;
-    throw Object.assign(new Error('The sandbox could not bind the adapter to deployed code'), {
-      code: 'SANDBOX_ADAPTER_REVISION_UNAVAILABLE',
-    });
-  }
-  let revision = '';
-  revision = await resolveGitHead(runGit);
-  if (FULL_GIT_OID_PATTERN.test(revision)) {
-    if (deployedRevision && revision !== deployedRevision) {
-      throw Object.assign(new Error('DEPLOYED_COMMIT does not match the checked-out Git HEAD'), {
-        code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
-      });
-    }
-    await assertGitTrackedWorktreeClean(runGit);
-    return deployedRevision || revision;
-  }
-  throw Object.assign(new Error('The sandbox could not bind the adapter to deployed code'), {
-    code: 'SANDBOX_ADAPTER_REVISION_UNAVAILABLE',
-  });
 }
 
 function sha256(value: Buffer | string) {
@@ -445,7 +357,12 @@ export async function runAiImageProviderSingleSubmit(
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
   const credentialRevision = requiredEnvironment('AI_IMAGE_SANDBOX_CREDENTIAL_REVISION', environment);
   const adapterRevision = requiredAdapterRevision(environment);
-  const repositoryRevision = await resolveAiImageSandboxRepositoryRevision(repositoryRoot);
+  const repositoryRevision = await resolveAiImageSandboxRepositoryRevision(
+    repositoryRoot,
+    undefined,
+    SINGLE_SUBMIT_TRACKED_PATHS,
+    options.requireGitCheckout,
+  );
   if (repositoryRevision !== adapterRevision) {
     throw Object.assign(new Error('Adapter revision does not match the deployed code'), {
       code: 'SANDBOX_ADAPTER_REVISION_MISMATCH',
@@ -597,7 +514,6 @@ export async function runAiImageProviderSingleSubmit(
   };
   await validateAiImageProviderUrl(apiBase, dnsResolver);
   assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
-  const startedAt = Date.now();
   const outputDirectory = options.outputDirectory || resolve(repositoryRoot, 'tmp/ai-image-sandbox');
   await ensurePrivateDirectory(outputDirectory);
   const requestContract = {
@@ -627,6 +543,8 @@ export async function runAiImageProviderSingleSubmit(
     maximumCostCents: maximumCostCentsValue,
     now: currentTime(options),
   });
+  const startedAtMs = Math.max(Date.now(), Date.parse(claim.intent.createdAt));
+  const startedAt = new Date(startedAtMs).toISOString();
 
   const pinnedDispatcher = new Agent().compose(interceptors.dns({
     affinity: 4,
@@ -723,8 +641,9 @@ export async function runAiImageProviderSingleSubmit(
   const imagePath = resolve(outputDirectory, `${stamp}.${extension}`);
   await writePrivateFile(imagePath, image.buffer);
 
+  const completedAtMs = Math.max(Date.now(), startedAtMs);
   const report = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     operationId,
     state: 'SUCCEEDED',
     operation,
@@ -750,7 +669,9 @@ export async function runAiImageProviderSingleSubmit(
       ? sha256(result.providerJobId)
       : null,
     usage: null,
-    elapsedMs: Date.now() - startedAt,
+    startedAt,
+    completedAt: new Date(completedAtMs).toISOString(),
+    elapsedMs: completedAtMs - startedAtMs,
     actualCostCents: null,
     quotedCostCents: claim.intent.quotedCostCents,
     maximumCostCents: claim.intent.maximumCostCents,
@@ -765,8 +686,9 @@ export async function runAiImageProviderSingleSubmit(
     if (!reportWritten) {
       const createRequests = fetchOnce.getCreateRequests();
       const evidence = fetchOnce.getEvidence();
+      const completedAtMs = Math.max(Date.now(), startedAtMs);
       const report = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         operationId,
         state: createRequests === 0
           ? 'PRE_DISPATCH_FAILED'
@@ -789,10 +711,12 @@ export async function runAiImageProviderSingleSubmit(
         providerRequestIdHash: failureRequestIdHash(error, evidence.providerRequestIdHash),
         usage: null,
         failureCode: safeFailureCode(error),
+        startedAt,
+        completedAt: new Date(completedAtMs).toISOString(),
         actualCostCents: null,
         quotedCostCents: claim.intent.quotedCostCents,
         maximumCostCents: claim.intent.maximumCostCents,
-        elapsedMs: Date.now() - startedAt,
+        elapsedMs: completedAtMs - startedAtMs,
         intentPath: claim.intentPath,
       };
       await atomicWritePrivateJson(reportPath, report);
@@ -811,7 +735,10 @@ if (isDirectRun) {
   const directEnvironment = process.argv.slice(2).includes('--verify-approval')
     ? { ...process.env, AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL' }
     : process.env;
-  runAiImageProviderSingleSubmit({ environment: directEnvironment }).catch((error) => {
+  runAiImageProviderSingleSubmit({
+    environment: directEnvironment,
+    requireGitCheckout: true,
+  }).catch((error) => {
     process.stderr.write(`${JSON.stringify({
       schemaVersion: 1,
       event: 'SANDBOX_COMMAND_FAILED',

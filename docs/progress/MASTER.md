@@ -53,24 +53,38 @@ and any exact request mismatch while performing no DNS, intent/fingerprint, or P
 The request claim is closed to known fields and replay identity binds only actual Provider transport
 semantics, so approval, profile/dimension metadata, credential revision, adapter revision, or a new
 Operation ID cannot authorize the same paid POST again. Git marker/HEAD drift, dirty tracked files,
-and Git inspection errors fail closed; Git receives a minimal secret-free environment with hooks and
-fsmonitor disabled. Focused approval/runner/guard tests passed `66/66`; repository lint (existing
-warnings only), workspace typecheck, the static contract, sandbox TypeScript compilation, and full
-preflight also passed. Preflight reported `445` passes and `0` failures. No implementation task is
-dependency-ready until an edit-capable endpoint/model and the exact paid `QA-02` request are
-explicitly approved; `QA-04` and release remain downstream. All flags remain default-off; no real
-Provider request, charge, ERP ingest, Ozon write, production mutation, VPS access, deployment, or
-`.context/` staging occurred.
+and Git inspection errors fail closed; in Git checkouts paid executables must also be tracked and
+byte-identical to the bound revision, Git HEAD is re-read after status inspection, and Git receives
+a minimal secret-free environment with hooks and fsmonitor disabled. Official sandbox CLIs reject
+marker-only release archives; VPS execution requires a private checkout of the deployed revision.
+A separate network-free
+`sandbox:ai-image:billing:finalize` command now verifies private before/settled billing snapshot
+bytes, the v2 intent, v3 submit report, recomputed transport fingerprint, approval-time chronology,
+Provider correlation, and all artifact digests before writing one append-only sanitized settlement.
+The original intent/report remain byte-identical with `actualCostCents: null`; exact replay remains
+idempotent across compatible finalizer revisions, over-budget charges are recorded as
+`COST_LIMIT_EXCEEDED`, and settled billing cannot upgrade a `RECONCILIATION_REQUIRED` Provider
+outcome. Snapshot identity uses canonical paths plus bigint device/inode evidence, output creation is
+bound to one private directory identity, and a different finalizer revision can only return an exact
+existing receipt. Focused approval/runner/guard/billing tests passed `95` with one Windows-only POSIX
+boundary test skipped; repository lint (existing warnings only), workspace typecheck, the static
+contract, sandbox TypeScript compilation, and full preflight passed. Preflight reported `445` passes
+and `0` failures. No implementation task is dependency-ready until an edit-capable endpoint/model
+and the exact paid `QA-02` request are explicitly approved; `QA-04` and release remain downstream.
+All flags remain default-off; no real Provider request, charge, ERP ingest, Ozon write, production
+mutation, VPS access, deployment, or `.context/` staging occurred.
 
 ## Next Steps
 
 1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private
    [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
    credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost,
-   billing evidence path, and an unexpired validity window of at most 60 minutes. Do not repeat the
-   two previously rejected `IMAGE_TO_IMAGE` requests.
-2. After a single approved `QA-02` request, reconcile the settled Provider bill and record exact
-   endpoint/model/operation/request-mode evidence before promoting any capability.
+   billing evidence path, and an unexpired validity window of at most 60 minutes. Execute it only
+   from a private clean checkout of the deployed revision; do not repeat the two previously rejected
+   `IMAGE_TO_IMAGE` requests.
+2. After a single approved `QA-02` request, retain private before/settled billing snapshot files,
+   run the append-only billing finalizer, and record exact endpoint/model/operation/request-mode
+   evidence before promoting any capability.
 3. Run `QA-04` only after the exact paid `QA-02` evidence exists; then proceed to the owner/shop/
    device pilot and release gates.
 4. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use

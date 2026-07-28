@@ -328,6 +328,24 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
+export function createAiImageSandboxRequestFingerprint(input: {
+  endpointSha256: string;
+  model: string;
+  request: {
+    n: number;
+    size: string;
+    promptSha256: string;
+    sourceSha256: string[];
+    maskSha256: string | null;
+  };
+}) {
+  return createHash('sha256').update(canonicalJson({
+    endpointSha256: input.endpointSha256,
+    model: input.model,
+    request: input.request,
+  })).digest('hex');
+}
+
 async function setPrivateMode(path: string, mode: number) {
   await chmod(path, mode);
 }
@@ -451,11 +469,11 @@ export async function claimAiImageSandboxOperation(input: {
 
   await ensurePrivateDirectory(input.directory);
   const intentPath = resolve(input.directory, `${operationId}.intent.json`);
-  const canonicalRequestFingerprint = createHash('sha256').update(canonicalJson({
+  const canonicalRequestFingerprint = createAiImageSandboxRequestFingerprint({
     endpointSha256,
     model,
     request: sanitizedRequest.fingerprint,
-  })).digest('hex');
+  });
   const intent = {
     schemaVersion: 2,
     operationId,

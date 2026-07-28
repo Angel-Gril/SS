@@ -132,3 +132,29 @@ Progress: 4/5 tasks.
   permission warnings. `QA-02` remains open because no edit-capable endpoint/model and no explicitly
   approved paid request exist. No Provider request, charge, production mutation, VPS access,
   deployment, or `.context/` staging occurred.
+- Post-call billing is now a separate immutable overlay created only by the network-free
+  `sandbox:ai-image:billing:finalize` command. Submit reports are v3 with absolute start/completion
+  timestamps while their `actualCostCents` remains `null`; the finalizer never edits the v2 intent or
+  v3 report. It derives artifacts from one private evidence root and Operation ID, recomputes the
+  transport fingerprint, verifies private before/settled snapshot bytes and digests, binds the
+  approval and request chronology, and rejects pre-dispatch or cross-artifact evidence.
+- Billing claims are append-only and concurrency-safe. Exact replay returns the first immutable
+  receipt across compatible finalizer revisions; changed decisions conflict. `CHARGED` requires a
+  positive settled cost, `NO_CHARGE` requires zero, over-maximum cost is retained as
+  `COST_LIMIT_EXCEEDED`, and billing settlement never turns `RECONCILIATION_REQUIRED` into success or
+  permits the same request to be retried.
+- Snapshot distinctness is proven with canonical paths and bigint device/inode identities. Output
+  creation rejects linked parents before mutation, retains one verified private directory identity
+  throughout the write, and uses descriptor-relative paths on Linux. A finalizer revision that did
+  not own the claim can only byte-verify and return the existing receipt; it never enters a write
+  path.
+- Git binding now proves each paid CLI/security module in a Git checkout is tracked and
+  byte-identical to the bound revision and rechecks HEAD after worktree inspection. Official CLIs
+  reject marker-only release archives; VPS execution requires a private checkout of the deployed
+  revision. Focused
+  approval/runner/guard/billing tests passed `95` with one Windows-only POSIX mode/symlink test
+  skipped. The static contract, sandbox
+  TypeScript compilation, repository lint (existing warnings only), workspace typecheck, and full
+  preflight passed; preflight reported `445` passes, `0` failures, and the two expected local-package
+  permission warnings. `QA-02` remains open; no real Provider request, charge, production mutation,
+  VPS access, deployment, or `.context/` staging occurred.

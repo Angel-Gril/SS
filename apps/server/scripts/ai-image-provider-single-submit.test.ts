@@ -12,6 +12,10 @@ import {
   sanitizeAiImageSandboxGitEnvironment,
 } from './ai-image-provider-single-submit.js';
 import { assertAiImageSandboxApprovalCurrent } from '../src/services/ai-image-sandbox-approval.js';
+import {
+  AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT,
+  finalizeAiImageSandboxBillingSettlement,
+} from '../src/services/ai-image-sandbox-billing-settlement.js';
 
 const directories: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -158,7 +162,24 @@ describe('single-submit AI image sandbox runner', () => {
     const revision = await initializeGitRepository(path);
     await writeFile(join(path, 'untracked-evidence.txt'), 'not part of the adapter\n');
 
-    await expect(resolveAiImageSandboxRepositoryRevision(path)).resolves.toBe(revision);
+    await expect(resolveAiImageSandboxRepositoryRevision(
+      path,
+      undefined,
+      ['tracked.txt'],
+    )).resolves.toBe(revision);
+  });
+
+  it('rejects marker-only execution when the production CLI requires a Git checkout', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-marker-only-'));
+    directories.push(path);
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${'a'.repeat(40)}\n`);
+
+    await expect(resolveAiImageSandboxRepositoryRevision(
+      path,
+      undefined,
+      [],
+      true,
+    )).rejects.toMatchObject({ code: 'SANDBOX_ADAPTER_GIT_REQUIRED' });
   });
 
   it('rejects a tracked dirty Git fallback before any sandbox request can be claimed', async () => {
@@ -223,6 +244,42 @@ describe('single-submit AI image sandbox runner', () => {
       code: 'EACCES',
     });
     expect(runGit).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an untracked sandbox executable even when the remaining checkout is clean', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-untracked-'));
+    directories.push(path);
+    await initializeGitRepository(path);
+    await writeFile(join(path, 'untracked-finalizer.ts'), 'export {};\n');
+
+    await expect(resolveAiImageSandboxRepositoryRevision(
+      path,
+      undefined,
+      ['untracked-finalizer.ts'],
+    )).rejects.toMatchObject({ code: 'SANDBOX_ADAPTER_FILE_UNTRACKED' });
+  });
+
+  it('rejects a Git HEAD that changes during code verification', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-git-head-race-'));
+    directories.push(path);
+    await initializeGitRepository(path);
+    const firstRevision = 'a'.repeat(40);
+    const secondRevision = 'b'.repeat(40);
+    let headReads = 0;
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'rev-parse') {
+        headReads += 1;
+        return `${headReads === 1 ? firstRevision : secondRevision}\n`;
+      }
+      if (args[0] === 'status') return '';
+      throw new Error(`Unexpected Git command: ${args.join(' ')}`);
+    });
+
+    await expect(resolveAiImageSandboxRepositoryRevision(
+      path,
+      runGit,
+    )).rejects.toMatchObject({ code: 'SANDBOX_ADAPTER_REVISION_MISMATCH' });
+    expect(headReads).toBe(2);
   });
 
   it.each(['ARBITRARY_PROFILE', 'toString', '__proto__'])(
@@ -955,8 +1012,10 @@ describe('single-submit AI image sandbox runner', () => {
     const storedReport = await readFile(reportPath, 'utf8');
     const intentPath = join(path, 'intents', `${operationId}.intent.json`);
     const storedIntent = await readFile(intentPath, 'utf8');
-    expect(JSON.parse(storedReport)).not.toHaveProperty('endpointPath');
-    expect(JSON.parse(storedIntent)).toMatchObject({
+    const parsedReport = JSON.parse(storedReport);
+    const parsedIntent = JSON.parse(storedIntent);
+    expect(parsedReport).not.toHaveProperty('endpointPath');
+    expect(parsedIntent).toMatchObject({
       endpointSha256: createHash('sha256')
         .update('https://relay.example/v1/images/edits')
         .digest('hex'),
@@ -965,6 +1024,81 @@ describe('single-submit AI image sandbox runner', () => {
           approvalId: `approval-${operationId}`,
           currency: 'USD',
         },
+      },
+    });
+    expect(Date.parse(parsedReport.startedAt)).toBeGreaterThanOrEqual(
+      Date.parse(parsedIntent.createdAt),
+    );
+
+    const claimPath = join(
+      path,
+      'intents',
+      '.fingerprints',
+      `${parsedIntent.requestFingerprint}.claim.json`,
+    );
+    const storedClaim = await readFile(claimPath);
+    const preCallObservedAt = new Date(
+      Date.parse(parsedIntent.request.approvalEvidence.approvedAt) - 1_000,
+    ).toISOString();
+    const settledObservedAt = new Date(Date.parse(parsedReport.completedAt) + 1_000).toISOString();
+    const preCallBillingSnapshotPath = join(path, 'billing-before.snapshot');
+    const settledBillingSnapshotPath = join(path, 'billing-settled.snapshot');
+    const preCallBillingSnapshot = Buffer.from('test Provider balance before request\n', 'utf8');
+    const settledBillingSnapshot = Buffer.from('test Provider balance after request\n', 'utf8');
+    await writeFile(preCallBillingSnapshotPath, preCallBillingSnapshot, { mode: 0o600 });
+    await writeFile(settledBillingSnapshotPath, settledBillingSnapshot, { mode: 0o600 });
+    const billingAttestation = {
+      schemaVersion: 1,
+      settlementId: 'sandbox-edit-success-billing-0001',
+      statement: AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT,
+      operationId,
+      preCallObservedAt,
+      settledObservedAt,
+      reconcilerRef: 'test-billing-review',
+      providerAccountRef: 'test-provider-account',
+      pricingRevision: 'test-pricing-r1',
+      currency: 'USD',
+      preCallBillingSnapshotRef: `billing-before-${operationId}`,
+      billingReconciliationRef: `billing-after-${operationId}`,
+      preCallBillingSnapshotPath,
+      settledBillingSnapshotPath,
+      preCallBillingSnapshotSha256: createHash('sha256')
+        .update(preCallBillingSnapshot)
+        .digest('hex'),
+      settledBillingSnapshotSha256: createHash('sha256')
+        .update(settledBillingSnapshot)
+        .digest('hex'),
+      providerBillingEntryRef: 'test-provider-ledger-entry',
+      intentSha256: createHash('sha256').update(storedIntent).digest('hex'),
+      submitReportSha256: createHash('sha256').update(storedReport).digest('hex'),
+      fingerprintClaimSha256: createHash('sha256').update(storedClaim).digest('hex'),
+      requestFingerprint: parsedIntent.requestFingerprint,
+      approvalId: `approval-${operationId}`,
+      approvalSha256: parsedIntent.request.approvalEvidence.approvalSha256,
+      correlationMethod: 'PROVIDER_REQUEST_ID',
+      providerRequestId: 'provider-success-id-1',
+      billingOutcome: 'CHARGED',
+      actualCostCents: 10,
+    };
+    const billingAttestationBytes = Buffer.from(
+      `${JSON.stringify(billingAttestation, null, 2)}\n`,
+      'utf8',
+    );
+    const billingAttestationPath = join(path, `${operationId}.billing.json`);
+    await writeFile(billingAttestationPath, billingAttestationBytes, { mode: 0o600 });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: path,
+      evidenceRoot: path,
+      operationId,
+      settlementPath: billingAttestationPath,
+      settlementSha256: createHash('sha256').update(billingAttestationBytes).digest('hex'),
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date(settledObservedAt),
+    })).resolves.toMatchObject({
+      receipt: {
+        submitState: 'SUCCEEDED',
+        billingOutcome: 'CHARGED',
+        actualCostCents: 10,
       },
     });
     expect(storedReport + storedIntent).not.toContain('https://relay.example');

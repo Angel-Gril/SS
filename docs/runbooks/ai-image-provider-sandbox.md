@@ -54,11 +54,11 @@ Never delete an intent or `.fingerprints` claim to make a request runnable again
 Set both revisions from authoritative records:
 
 - `credentialRevision` is a non-secret version label for the exact injected credential. Use a secret-manager version, controlled configuration revision, or key-rotation revision. Do not use the secret itself, its prefix, or a secret hash as the label.
-- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. When Git metadata is present, `HEAD` must match `DEPLOYED_COMMIT` and the tracked worktree must be clean even if the marker exists. A packaged deployment without Git metadata may use the marker alone. The direct submit process captures and removes its paid confirmation/API Key from `process.env` before Git inspection; Git receives only a minimal OS environment with hooks, fsmonitor, and recursive submodules disabled. Any Git verification error fails closed. If no trustworthy code identity is available, the probe fails closed. Do not use a planned or local-only commit.
+- `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. `HEAD` must match `DEPLOYED_COMMIT`, each paid CLI/security module must be tracked and byte-identical to that revision, the tracked worktree must be clean, and HEAD is verified again after inspection. The official direct CLI rejects a marker-only release archive because it cannot reconstruct Git blob membership. On a VPS, use a private clean checkout of the deployed revision and point its evidence root to the private shared sandbox directory. The direct submit process captures and removes its paid confirmation/API Key from `process.env` before Git inspection; Git receives only a minimal OS environment with hooks, fsmonitor, and recursive submodules disabled. Any Git verification error fails closed. If no trustworthy code identity is available, the probe fails closed. Do not use a planned or local-only commit.
 
 Record the Provider account, pricing revision, currency, model, quoted charge, balance or usage counter, and observation time immediately before the call. Repeat the observation after the Provider has settled the charge.
 
-`*_QUOTED_COST_CENTS` and `*_MAX_COST_CENTS` are positive integer audit fields, with quoted cost less than or equal to maximum cost. They do **not** limit the third-party or Alibaba bill, reserve a production budget, or prove the actual charge. Reports intentionally leave `actualCostCents` as `null`. Configure a Provider-side spending cap separately when one is available.
+`*_QUOTED_COST_CENTS` and `*_MAX_COST_CENTS` are positive integer audit fields, with quoted cost less than or equal to maximum cost. They do **not** limit the third-party or Alibaba bill, reserve a production budget, or prove the actual charge. Submit reports intentionally leave `actualCostCents` as `null`; settled cost is recorded later through the append-only [billing finalizer](ai-image-provider-sandbox-billing.md). Configure a Provider-side spending cap separately when one is available.
 
 Do not promote a capability until the settled Provider bill can be reconciled to the request. When the Provider omits a request ID, correlate the narrow time window, account, endpoint, model, operation, and image count, and record the remaining uncertainty.
 
@@ -165,7 +165,12 @@ Relative source and mask paths are resolved from the repository/deployed app roo
 
 5. Unset the confirmation and API key immediately after the process exits.
 6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under `tmp/ai-image-sandbox/intents/`, and the returned image. Verify request profile, source/mask dimensions and digests, image count, MIME type, output dimensions, byte length, SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product changes.
-7. Take the settled billing snapshot and run the dark-state verifier again.
+7. Save the settled billing snapshot as a private bounded file, create the private closed-schema
+   billing attestation that names and hashes both the before/settled snapshot files, and run
+   `pnpm --filter server sandbox:ai-image:billing:finalize`. The finalizer performs no Provider call,
+   verifies the snapshot bytes, preserves the original intent/report byte-for-byte, and writes one
+   sanitized append-only billing settlement sibling.
+8. Run the dark-state verifier again.
 
 This lane has no automated reconciliation mode. If its report is `RECONCILIATION_REQUIRED`, use only the relay dashboard, billing ledger, request logs, or Provider support to resolve the original request. Do not call the submit command again.
 
