@@ -29,7 +29,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         filesystemFaults.failIntentOpen = false;
         throw Object.assign(new Error('forced intent write failure'), { code: 'EACCES' });
       }
-      if (path.endsWith('/.fingerprints') && filesystemFaults.beforeFingerprintDirectoryOpen) {
+      if (
+        /^\/proc\/self\/fd\/\d+\/\.fingerprints$/u.test(path)
+        && filesystemFaults.beforeFingerprintDirectoryOpen
+      ) {
         const beforeOpen = filesystemFaults.beforeFingerprintDirectoryOpen;
         filesystemFaults.beforeFingerprintDirectoryOpen = null;
         await beforeOpen();

@@ -93,9 +93,12 @@ Focused tests passed `197` with six platform/environment-specific skips; full se
 `4371` with `194` skipped. The static contract, sandbox compilation, repository lint (existing
 warnings only), workspace typecheck, diff check and full preflight passed; preflight reported `445`
 passes, `0` failures and two expected local-package permission warnings. Independent reviews found
-no P0/P1 issue. Phase 3 remains `4/5` and overall progress remains `32/37`: no exact paid `QA-02`
-capability evidence exists yet, all rollout flags remain default-off, and no Provider call, charge,
-production mutation, VPS access, deployment, flag change, or `.context/` staging occurred.
+no P0/P1 issue. An isolated Docker Linux run corrected an over-broad test fault seam and then passed
+the two filesystem/media boundary files `8/8` with runtime networking disabled, including all cases
+skipped on Windows; production code did not require a change. Phase 3 remains `4/5` and overall
+progress remains `32/37`: no exact paid `QA-02` capability evidence exists yet, all rollout flags
+remain default-off, and no Provider call, charge, production mutation, VPS access, deployment, flag
+change, or `.context/` staging occurred.
 
 ## Next Steps
 

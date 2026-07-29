@@ -55,6 +55,18 @@ into the replacement. Either detected change returns `SANDBOX_EVIDENCE_DIRECTORY
 Provider dispatch. Other platforms use canonical paths plus final identity checks under the
 documented local ACL trust boundary and do not claim the same descriptor-relative guarantee.
 
+Run the descriptor and final-entry boundary tests on an actual Linux filesystem before relying on
+that guarantee:
+
+```bash
+pnpm --filter server exec vitest run \
+  src/__tests__/ai-image-sandbox-guard-filesystem.test.ts \
+  src/__tests__/ai-image-sandbox-media.test.ts
+```
+
+A Windows run intentionally skips the `/proc/self/fd`, directory-replacement, and final-entry
+symlink cases; passing only the Windows projection is not Linux execution evidence.
+
 Never delete an intent or `.fingerprints` claim to make a request runnable again. Never switch to a new Operation ID after a timeout, connection loss, malformed acknowledgement, or other ambiguous outcome. Resolve the original request with read-only evidence.
 
 ## Revision And Cost Evidence

@@ -209,3 +209,11 @@ Progress: 4/5 tasks.
   `0` failures and the two expected local-package permission warnings. Independent reviews found no
   P0/P1 issue. `QA-02` remains open at `4/5`, all rollout flags remain default-off, and no Provider
   request, charge, production mutation, VPS access, deployment, or `.context/` staging occurred.
+- The first isolated Linux execution exposed a test-injection defect rather than a production
+  defect: the child-open hook matched an earlier ordinary `.fingerprints` durability open, so the
+  intended post-parent-descriptor swap never occurred. The hook now matches only
+  `/proc/self/fd/<fd>/.fingerprints`. A Docker Linux image built from the clean `8ac06a8` Git archive
+  and supplied only that corrected test file read-only passed both filesystem/media files `8/8`
+  with `--network none`. This provides real Linux coverage for parent replacement, child replacement,
+  orphan fail-closed claims, final-entry symlinks, hostile media and mask semantics. Production code,
+  rollout flags and task counts remain unchanged; no Provider request or external charge occurred.
