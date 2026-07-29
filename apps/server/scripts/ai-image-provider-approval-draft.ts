@@ -8,8 +8,13 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import sharp from 'sharp';
-import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
+import {
+  AiImageSandboxMediaError,
+  assertAiImageSandboxEditMediaLimit,
+  assertMeaningfulAiImageSandboxMask,
+  loadPinnedAiImageSandboxMedia,
+  remainingAiImageSandboxEditMediaBytes,
+} from '../src/services/ai-image-sandbox-media.js';
 import { normalizeOpenAiImagesApiBase } from '../src/services/ai-image-openai-url.js';
 import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
@@ -20,9 +25,6 @@ export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT =
   'DRAFT_REVIEW_REQUIRED_NOT_APPROVED';
 export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_TIMESTAMP = 'REPLACE_DURING_REVIEW';
 
-const MAX_MEDIA_BYTES = AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes;
-const MAX_MEDIA_DIMENSION = AI_IMAGE_WORKBENCH_LIMITS.maxDimension;
-const MAX_MEDIA_PIXELS = AI_IMAGE_WORKBENCH_LIMITS.maxPixels;
 const MAX_SANDBOX_COST_CENTS = 10_000_000;
 const OPERATIONS = new Set<AiImageSandboxApprovalDraftOperation>([
   'TEXT_TO_IMAGE',
@@ -52,6 +54,7 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
+  'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
 
@@ -227,6 +230,7 @@ async function loadPinnedImage(input: {
   pathEnvironment: string;
   shaEnvironment: string;
   requirePng?: boolean;
+  maximumBytes?: number;
   environment: NodeJS.ProcessEnv;
   repositoryRoot: string;
 }) {
@@ -235,112 +239,33 @@ async function loadPinnedImage(input: {
     requiredEnvironment(input.pathEnvironment, input.environment),
   );
   const expectedSha256 = requiredSha256(input.shaEnvironment, input.environment);
-  const flags = constants.O_RDONLY
-    | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
-  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    handle = await open(path, flags);
-  } catch {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      `${input.pathEnvironment} cannot be opened safely`,
-    );
-  }
-  let bytes: Buffer;
-  try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size <= 0 || metadata.size > MAX_MEDIA_BYTES) {
-      throw draftError(
-        'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-        `${input.pathEnvironment} must be a bounded regular file`,
-      );
+    return await loadPinnedAiImageSandboxMedia({
+      path,
+      expectedSha256,
+      label: input.pathEnvironment,
+      requirePng: input.requirePng,
+      maximumBytes: input.maximumBytes,
+    });
+  } catch (error) {
+    if (error instanceof AiImageSandboxMediaError) {
+      throw draftError('SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID', error.message);
     }
-    const boundedBytes = Buffer.allocUnsafe(metadata.size + 1);
-    let bytesRead = 0;
-    while (bytesRead < boundedBytes.byteLength) {
-      const result = await handle.read(
-        boundedBytes,
-        bytesRead,
-        boundedBytes.byteLength - bytesRead,
-        bytesRead,
-      );
-      if (result.bytesRead === 0) break;
-      bytesRead += result.bytesRead;
-    }
-    bytes = boundedBytes.subarray(0, bytesRead);
-    if (bytesRead !== metadata.size) {
-      throw draftError(
-        'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-        `${input.pathEnvironment} changed while it was being read`,
-      );
-    }
-  } finally {
-    await handle.close();
+    throw error;
   }
-  if (sha256(bytes) !== expectedSha256) {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      `${input.pathEnvironment} does not match its pinned digest`,
-    );
-  }
-  let metadata: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
-  try {
-    metadata = await sharp(bytes, { animated: true, limitInputPixels: MAX_MEDIA_PIXELS }).metadata();
-  } catch {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      `${input.pathEnvironment} is not a supported image`,
-    );
-  }
-  const mimeType = metadata.format === 'png' ? 'image/png'
-    : metadata.format === 'jpeg' ? 'image/jpeg'
-      : metadata.format === 'webp' ? 'image/webp'
-        : null;
-  if (
-    !mimeType
-    || (input.requirePng && mimeType !== 'image/png')
-    || !metadata.width
-    || !metadata.height
-    || metadata.width > MAX_MEDIA_DIMENSION
-    || metadata.height > MAX_MEDIA_DIMENSION
-    || metadata.width * metadata.height > MAX_MEDIA_PIXELS
-    || Number(metadata.pages || 1) !== 1
-  ) {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      `${input.pathEnvironment} has unsupported media properties`,
-    );
-  }
-  return {
-    bytes,
-    sha256: expectedSha256,
-    width: metadata.width,
-    height: metadata.height,
-    hasAlpha: Boolean(metadata.hasAlpha),
-  };
 }
 
 async function assertMeaningfulMask(
   mask: Awaited<ReturnType<typeof loadPinnedImage>>,
 ) {
-  if (!mask.hasAlpha) {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      'The INPAINT mask must contain an alpha channel',
-    );
+  try {
+    await assertMeaningfulAiImageSandboxMask(mask);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMediaError) {
+      throw draftError('SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID', error.message);
+    }
+    throw error;
   }
-  const alpha = await sharp(mask.bytes).extractChannel('alpha').raw().toBuffer();
-  let hasTransparent = false;
-  let hasOpaque = false;
-  for (const pixel of alpha) {
-    if (pixel === 0) hasTransparent = true;
-    if (pixel === 255) hasOpaque = true;
-    if (hasTransparent && hasOpaque) return;
-  }
-  throw draftError(
-    'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-    'The INPAINT mask must contain both transparent and opaque regions',
-  );
 }
 
 async function resolveMediaBindings(input: {
@@ -392,14 +317,17 @@ async function resolveMediaBindings(input: {
     pathEnvironment: 'AI_IMAGE_SANDBOX_MASK_PATH',
     shaEnvironment: 'AI_IMAGE_SANDBOX_MASK_SHA256',
     requirePng: true,
+    maximumBytes: remainingAiImageSandboxEditMediaBytes([source]),
     environment: input.environment,
     repositoryRoot: input.repositoryRoot,
   });
-  if (source.bytes.byteLength + mask.bytes.byteLength > MAX_MEDIA_BYTES) {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
-      'The aggregate source and mask bytes exceed the edit request limit',
-    );
+  try {
+    assertAiImageSandboxEditMediaLimit([source, mask]);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMediaError) {
+      throw draftError('SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID', error.message);
+    }
+    throw error;
   }
   await assertMeaningfulMask(mask);
   if (mask.width !== source.width || mask.height !== source.height) {

@@ -61,6 +61,12 @@ sync remain bound to one held parent descriptor, so replacing the visible parent
 the write. A detected parent change fails closed. Other platforms retain canonical path and
 before/after identity checks under the documented local ACL trust boundary.
 
+Draft generation and the later exact-request preflight share one local-only media verifier. It opens
+the final source/mask entry with no-follow semantics where supported, bounds each descriptor read,
+checks the pinned digest, PNG/JPEG/WebP decode, dimensions, pixels, single-page state, and meaningful
+PNG mask alpha, and enforces the aggregate edit limit before reading excess mask bytes. A manually
+assembled approval record cannot bypass these checks.
+
 The generated file deliberately contains these rejection sentinels:
 
 ```text
@@ -174,11 +180,12 @@ pnpm --filter server sandbox:ai-image:approval:verify
 ```
 
 The command rejects an environment containing `AI_IMAGE_SANDBOX_CONFIRM` or
-`AI_IMAGE_SANDBOX_API_KEY`. It validates the deployed adapter revision, source/mask bytes and hashes,
-closed approval schema, approval-file digest, HTTPS endpoint/model/operation/profile, credential
-revision, costs, validity window, and billing references. It performs no DNS lookup, creates no
-intent or fingerprint claim, and sends no Provider request. Successful output contains sanitized
-hashes, the approval ID/window, and the approved quoted/maximum cost.
+`AI_IMAGE_SANDBOX_API_KEY`. It validates the deployed adapter revision, bounded source/mask bytes,
+hashes, MIME, dimensions, pixels, single-page state, aggregate size and mask semantics, closed
+approval schema, approval-file digest, HTTPS endpoint/model/operation/profile, credential revision,
+costs, validity window, and billing references. It performs no DNS lookup, creates no intent or
+fingerprint claim, and sends no Provider request. Successful output contains sanitized hashes, the
+approval ID/window, and the approved quoted/maximum cost.
 
 After this preflight passes, leave the approval file unchanged. Separately review the dark state and
 pre-call bill, inject the API Key for the single submit process, and set the paid confirmation only

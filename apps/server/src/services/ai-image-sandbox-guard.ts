@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, open, readFile } from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
+import { chmod, lstat, mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import {
@@ -17,6 +18,7 @@ export class AiImageSandboxGuardError extends Error {
       | 'INVALID_SANDBOX_ENDPOINT'
       | 'INVALID_SANDBOX_OPERATION'
       | 'INVALID_SANDBOX_REQUEST'
+      | 'SANDBOX_EVIDENCE_DIRECTORY_CHANGED'
       | 'SANDBOX_OPERATION_EXISTS'
       | 'SANDBOX_REQUEST_REPLAY',
     message: string,
@@ -387,11 +389,169 @@ async function ensurePrivateDirectory(path: string) {
   await syncDirectory(dirname(path));
 }
 
-async function writeExclusiveDurableFile(path: string, content: string) {
-  const handle = await open(path, 'wx', 0o600);
+interface PrivateEvidenceDirectory {
+  path: string;
+  canonicalPath: string;
+  device: bigint;
+  inode: bigint;
+  handle: Awaited<ReturnType<typeof open>>;
+}
+
+function samePath(left: string, right: string) {
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function sameFileIdentity(
+  left: { device: bigint; inode: bigint },
+  right: { device: bigint; inode: bigint },
+) {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+function evidenceDirectoryChanged(message: string): never {
+  throw new AiImageSandboxGuardError('SANDBOX_EVIDENCE_DIRECTORY_CHANGED', message);
+}
+
+function assertPrivateEvidenceDirectoryMetadata(metadata: BigIntStats, message: string) {
+  if (
+    !metadata.isDirectory()
+    || metadata.isSymbolicLink()
+    || metadata.dev <= 0n
+    || metadata.ino <= 0n
+    || (process.platform !== 'win32' && (metadata.mode & 0o077n) !== 0n)
+    || (
+      process.platform !== 'win32'
+      && typeof process.getuid === 'function'
+      && metadata.uid !== BigInt(process.getuid())
+    )
+  ) evidenceDirectoryChanged(message);
+}
+
+async function openPrivateEvidenceDirectory(
+  path: string,
+  descriptorParent?: { directory: PrivateEvidenceDirectory; name: string },
+): Promise<PrivateEvidenceDirectory> {
+  const resolvedPath = resolve(path);
+  let canonicalPath: string;
+  let pathMetadata: BigIntStats;
+  try {
+    canonicalPath = await realpath(resolvedPath);
+    pathMetadata = await lstat(resolvedPath, { bigint: true });
+  } catch {
+    evidenceDirectoryChanged('Sandbox evidence directory could not be inspected safely');
+  }
+  assertPrivateEvidenceDirectoryMetadata(
+    pathMetadata,
+    'Sandbox evidence directory is not a private current-user directory',
+  );
+  const flags = constants.O_RDONLY
+    | (process.platform === 'win32' ? 0 : (constants.O_DIRECTORY || 0) | constants.O_NOFOLLOW);
+  const openPath = descriptorParent && process.platform === 'linux'
+    ? privateEvidenceEntryPath(descriptorParent.directory, descriptorParent.name, true)
+    : canonicalPath;
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(openPath, flags);
+  } catch {
+    evidenceDirectoryChanged('Sandbox evidence directory could not be opened safely');
+  }
+  try {
+    const handleMetadata = await handle.stat({ bigint: true });
+    assertPrivateEvidenceDirectoryMetadata(
+      handleMetadata,
+      'Sandbox evidence directory changed while it was opened',
+    );
+    if (!sameFileIdentity(
+      { device: pathMetadata.dev, inode: pathMetadata.ino },
+      { device: handleMetadata.dev, inode: handleMetadata.ino },
+    )) {
+      evidenceDirectoryChanged('Sandbox evidence directory changed while it was opened');
+    }
+    return {
+      path: resolvedPath,
+      canonicalPath,
+      device: pathMetadata.dev,
+      inode: pathMetadata.ino,
+      handle,
+    };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function assertPrivateEvidenceDirectoryStable(directory: PrivateEvidenceDirectory) {
+  let canonicalPath: string;
+  let pathMetadata: BigIntStats;
+  try {
+    canonicalPath = await realpath(directory.path);
+    pathMetadata = await lstat(directory.path, { bigint: true });
+  } catch {
+    evidenceDirectoryChanged('Sandbox evidence directory disappeared during claim creation');
+  }
+  const handleMetadata = await directory.handle.stat({ bigint: true });
+  assertPrivateEvidenceDirectoryMetadata(
+    pathMetadata,
+    'Sandbox evidence directory changed during claim creation',
+  );
+  assertPrivateEvidenceDirectoryMetadata(
+    handleMetadata,
+    'Sandbox evidence directory handle changed during claim creation',
+  );
+  if (
+    !samePath(canonicalPath, directory.canonicalPath)
+    || !sameFileIdentity(directory, { device: pathMetadata.dev, inode: pathMetadata.ino })
+    || !sameFileIdentity(directory, { device: handleMetadata.dev, inode: handleMetadata.ino })
+  ) evidenceDirectoryChanged('Sandbox evidence directory changed during claim creation');
+}
+
+function privateEvidenceEntryPath(
+  directory: PrivateEvidenceDirectory,
+  name: string,
+  allowPrivateDirectory = false,
+) {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(name)
+    && !(allowPrivateDirectory && name === '.fingerprints')
+  ) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_OPERATION',
+      'Sandbox evidence filename is invalid',
+    );
+  }
+  return process.platform === 'linux'
+    ? `/proc/self/fd/${directory.handle.fd}/${name}`
+    : resolve(directory.canonicalPath, name);
+}
+
+async function syncPrivateEvidenceDirectory(directory: PrivateEvidenceDirectory) {
+  try {
+    await directory.handle.sync();
+  } catch (error) {
+    if (!isUnsupportedWindowsDirectorySync(error)) throw error;
+  }
+}
+
+async function writeExclusiveDurableFile(
+  directory: PrivateEvidenceDirectory,
+  name: string,
+  content: string,
+) {
+  const path = privateEvidenceEntryPath(directory, name);
+  const handle = await open(
+    path,
+    constants.O_WRONLY
+      | constants.O_CREAT
+      | constants.O_EXCL
+      | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
+    0o600,
+  );
   let failure: unknown;
   try {
     await handle.writeFile(content, { encoding: 'utf8' });
+    await handle.chmod(0o600);
     await handle.sync();
   } catch (error) {
     failure = error;
@@ -402,7 +562,7 @@ async function writeExclusiveDurableFile(path: string, content: string) {
     failure ??= error;
   }
   try {
-    await syncDirectory(dirname(path));
+    await syncPrivateEvidenceDirectory(directory);
   } catch (error) {
     failure ??= error;
   }
@@ -468,7 +628,8 @@ export async function claimAiImageSandboxOperation(input: {
   }
 
   await ensurePrivateDirectory(input.directory);
-  const intentPath = resolve(input.directory, `${operationId}.intent.json`);
+  const intentName = `${operationId}.intent.json`;
+  const intentPath = resolve(input.directory, intentName);
   const canonicalRequestFingerprint = createAiImageSandboxRequestFingerprint({
     endpointSha256,
     model,
@@ -488,49 +649,69 @@ export async function claimAiImageSandboxOperation(input: {
     maximumCostCents,
     createdAt: new Date().toISOString(),
   };
-  const fingerprintDirectory = resolve(input.directory, '.fingerprints');
-  await ensurePrivateDirectory(fingerprintDirectory);
-  const fingerprintPath = resolve(
-    fingerprintDirectory,
-    `${canonicalRequestFingerprint}.claim.json`,
-  );
+  const fingerprintDirectoryPath = resolve(input.directory, '.fingerprints');
+  await ensurePrivateDirectory(fingerprintDirectoryPath);
+  const intentDirectory = await openPrivateEvidenceDirectory(input.directory);
+  let fingerprintDirectory: PrivateEvidenceDirectory | null = null;
   try {
-    await writeExclusiveDurableFile(fingerprintPath, `${JSON.stringify({
-      schemaVersion: 1,
-      operationId,
-      requestFingerprint: canonicalRequestFingerprint,
-      state: 'CLAIMED_FAIL_CLOSED',
-      createdAt: intent.createdAt,
-    }, null, 2)}\n`);
-  } catch (error: any) {
-    if (error?.code === 'EEXIST') {
-      let existingOperationId = '';
-      try {
-        existingOperationId = String(JSON.parse(await readFile(fingerprintPath, 'utf8'))?.operationId || '');
-      } catch {
-        // A malformed or partially replaced claim remains fail-closed.
+    fingerprintDirectory = await openPrivateEvidenceDirectory(fingerprintDirectoryPath, {
+      directory: intentDirectory,
+      name: '.fingerprints',
+    });
+    const fingerprintName = `${canonicalRequestFingerprint}.claim.json`;
+    const fingerprintPath = privateEvidenceEntryPath(fingerprintDirectory, fingerprintName);
+    try {
+      await writeExclusiveDurableFile(fingerprintDirectory, fingerprintName, `${JSON.stringify({
+        schemaVersion: 1,
+        operationId,
+        requestFingerprint: canonicalRequestFingerprint,
+        state: 'CLAIMED_FAIL_CLOSED',
+        createdAt: intent.createdAt,
+      }, null, 2)}\n`);
+    } catch (error: any) {
+      if (error?.code === 'EEXIST') {
+        let existingOperationId = '';
+        try {
+          existingOperationId = String(
+            JSON.parse(await readFile(fingerprintPath, 'utf8'))?.operationId || '',
+          );
+        } catch {
+          // A malformed or partially replaced claim remains fail-closed.
+        }
+        throw new AiImageSandboxGuardError(
+          existingOperationId === operationId ? 'SANDBOX_OPERATION_EXISTS' : 'SANDBOX_REQUEST_REPLAY',
+          existingOperationId === operationId
+            ? 'Sandbox operation already has an immutable request claim'
+            : 'The same paid sandbox request is already claimed under another operation ID',
+        );
       }
-      throw new AiImageSandboxGuardError(
-        existingOperationId === operationId ? 'SANDBOX_OPERATION_EXISTS' : 'SANDBOX_REQUEST_REPLAY',
-        existingOperationId === operationId
-          ? 'Sandbox operation already has an immutable request claim'
-          : 'The same paid sandbox request is already claimed under another operation ID',
-      );
+      throw error;
     }
-    throw error;
-  }
-  try {
-    await writeExclusiveDurableFile(intentPath, `${JSON.stringify(intent, null, 2)}\n`);
-  } catch (error: any) {
-    if (error?.code === 'EEXIST') {
-      throw new AiImageSandboxGuardError(
-        'SANDBOX_OPERATION_EXISTS',
-        'Sandbox operation already has an immutable intent; inspect it instead of resubmitting',
+    try {
+      await writeExclusiveDurableFile(
+        intentDirectory,
+        intentName,
+        `${JSON.stringify(intent, null, 2)}\n`,
       );
+    } catch (error: any) {
+      if (error?.code === 'EEXIST') {
+        throw new AiImageSandboxGuardError(
+          'SANDBOX_OPERATION_EXISTS',
+          'Sandbox operation already has an immutable intent; inspect it instead of resubmitting',
+        );
+      }
+      throw error;
     }
-    throw error;
+    await assertPrivateEvidenceDirectoryStable(intentDirectory);
+    await assertPrivateEvidenceDirectoryStable(fingerprintDirectory);
+    return { intent, intentPath };
+  } finally {
+    try {
+      await fingerprintDirectory?.handle.close();
+    } finally {
+      await intentDirectory.handle.close();
+    }
   }
-  return { intent, intentPath };
 }
 
 export function createAiImageSandboxFetchGuard(input: {

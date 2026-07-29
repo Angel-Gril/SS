@@ -17,9 +17,12 @@
     "scripts/ai-image-translation-single-submit.ts",
     "scripts/ai-image-translation-single-submit.test.ts",
     "src/services/ai-image-sandbox-approval.ts",
+    "src/services/ai-image-sandbox-media.ts",
     "src/services/ai-image-sandbox-billing-settlement.ts",
     "src/services/ai-image-sandbox-code-revision.ts",
     "src/services/ai-image-sandbox-guard.ts",
+    "src/__tests__/ai-image-sandbox-guard-filesystem.test.ts",
+    "src/__tests__/ai-image-sandbox-media.test.ts",
     "src/services/ai-image-translation-sandbox-guard.ts"
   ],
   "exclude": ["node_modules", "dist", "dist-sandbox"]

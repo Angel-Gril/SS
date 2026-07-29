@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
+import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveAiImageSandboxRepositoryRevision,
@@ -455,6 +456,157 @@ describe('single-submit AI image sandbox runner', () => {
       approvalEvidence: {
         approvalId: `approval-${operationId}`,
       },
+    });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects aggregate inpaint media above the shared limit during offline preflight', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-preflight-media-limit-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const sourcePng = await sharp({
+      create: { width: 2, height: 3, channels: 4, background: '#ffffff' },
+    }).png().toBuffer();
+    const maskPng = await sharp(Buffer.from([
+      255, 255, 255, 0, 255, 255, 255, 255,
+      255, 255, 255, 0, 255, 255, 255, 255,
+      255, 255, 255, 0, 255, 255, 255, 255,
+    ]), { raw: { width: 2, height: 3, channels: 4 } }).png().toBuffer();
+    const source = Buffer.alloc(Math.floor(AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes / 2));
+    const mask = Buffer.alloc(AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes - source.byteLength + 1);
+    sourcePng.copy(source);
+    maskPng.copy(mask);
+    await writeFile(join(path, 'source.png'), source, { mode: 0o600 });
+    await writeFile(join(path, 'mask.png'), mask, { mode: 0o600 });
+    const operationId = 'sandbox-preflight-media-limit-0001';
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'INPAINT',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_SOURCE_PATH: 'source.png',
+      AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
+      AI_IMAGE_SANDBOX_MASK_PATH: 'mask.png',
+      AI_IMAGE_SANDBOX_MASK_SHA256: createHash('sha256').update(mask).digest('hex'),
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects edit media above the shared dimension limit during offline preflight', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-preflight-dimensions-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const source = await sharp({
+      create: {
+        width: AI_IMAGE_WORKBENCH_LIMITS.maxDimension + 1,
+        height: 1,
+        channels: 3,
+        background: '#ffffff',
+      },
+    }).png().toBuffer();
+    await writeFile(join(path, 'source.png'), source, { mode: 0o600 });
+    const operationId = 'sandbox-preflight-dimensions-0001';
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'FULL_EDIT',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_SOURCE_PATH: 'source.png',
+      AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a single edit file above the shared byte limit before hashing or DNS', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-preflight-file-limit-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const sourcePath = join(path, 'source.png');
+    const source = await sharp({
+      create: { width: 2, height: 3, channels: 3, background: '#ffffff' },
+    }).png().toBuffer();
+    await writeFile(sourcePath, source, { mode: 0o600 });
+    await truncate(sourcePath, AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes + 1);
+    const operationId = 'sandbox-preflight-file-limit-0001';
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'FULL_EDIT',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_SOURCE_PATH: 'source.png',
+      AI_IMAGE_SANDBOX_SOURCE_SHA256: 'a'.repeat(64),
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({
+      code: 'SANDBOX_MEDIA_INVALID',
+      message: expect.stringMatching(/bounded regular file/u),
     });
 
     expect(resolveDns).not.toHaveBeenCalled();

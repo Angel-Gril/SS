@@ -192,3 +192,20 @@ Progress: 4/5 tasks.
   permission warnings. Independent review found no P0/P1 issue. `QA-02` remains open and all rollout
   flags remain default-off; no Provider request, charge, production mutation, VPS access,
   deployment, or `.context/` staging occurred.
+- Approval drafting and exact-request preflight now share one no-follow, descriptor-bounded media
+  verifier. It pins SHA-256, verifies PNG/JPEG/WebP decode, dimensions, pixels and single-page state,
+  checks meaningful PNG mask alpha, and rejects an over-limit `INPAINT` mask before reading its
+  bytes. This closes the prior gap where a manually assembled approval could reach preflight without
+  the draft command's full hostile-media checks.
+- Linux paid-request claims now hold both the `intents` and descriptor-relative `.fingerprints`
+  directories through claim, intent, durability sync and final identity verification. Parent or
+  child replacement cannot silently redirect an artifact into a replacement path; the command
+  returns `SANDBOX_EVIDENCE_DIRECTORY_CHANGED` before Provider dispatch. Hostile-media regression
+  tests cover non-images, animated WebP, read-time growth and invalid mask alpha, while Linux-only
+  tests cover final-entry symlinks and independent parent/child replacement. Focused tests passed
+  `197` with six platform/environment-specific skips; full server tests passed `4371` with `194`
+  skipped. The static contract, sandbox TypeScript compilation, repository lint (existing warnings
+  only), workspace typecheck, diff check and full preflight passed; preflight reported `445` passes,
+  `0` failures and the two expected local-package permission warnings. Independent reviews found no
+  P0/P1 issue. `QA-02` remains open at `4/5`, all rollout flags remain default-off, and no Provider
+  request, charge, production mutation, VPS access, deployment, or `.context/` staging occurred.

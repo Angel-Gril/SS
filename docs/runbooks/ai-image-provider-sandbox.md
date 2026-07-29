@@ -47,6 +47,14 @@ Create one unique Operation ID for one reviewed request. An Operation ID must be
 
 Before dispatch, the CLI writes an immutable `SUBMITTING` intent and a fail-closed request-fingerprint claim. The replay fingerprint binds only actual Provider transport semantics: endpoint hash, model, image count, requested size, fixed Prompt hash, ordered source hashes, and mask hash. Audit-only labels, approval metadata, credential revision, adapter revision, and source dimensions remain in the intent but cannot create a new replay identity. The same paid request is therefore rejected even if an operator changes only the Operation ID, approval, profile label, credential, or deployment revision.
 
+On Linux, claim and intent creation pins both the private `intents` and descriptor-relative
+`.fingerprints` directories before either artifact is written. Both writes remain bound to those
+handles through durability sync and final visible-path/handle identity checks. Replacing the parent
+keeps subsequent writes in the held tree; replacing only `.fingerprints` cannot redirect the claim
+into the replacement. Either detected change returns `SANDBOX_EVIDENCE_DIRECTORY_CHANGED` before
+Provider dispatch. Other platforms use canonical paths plus final identity checks under the
+documented local ACL trust boundary and do not claim the same descriptor-relative guarantee.
+
 Never delete an intent or `.fingerprints` claim to make a request runnable again. Never switch to a new Operation ID after a timeout, connection loss, malformed acknowledgement, or other ambiguous outcome. Resolve the original request with read-only evidence.
 
 ## Revision And Cost Evidence
@@ -150,7 +158,7 @@ fails before DNS, intent creation, or Provider dispatch when any exact request f
 | `AI_IMAGE_SANDBOX_MASK_PATH`           | Required only for `INPAINT`                                                             |
 | `AI_IMAGE_SANDBOX_MASK_SHA256`         | Required with mask path; lowercase SHA-256 of the exact PNG bytes                       |
 
-For `TEXT_TO_IMAGE`, leave all source and mask variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI rejects extra conditional variables instead of ignoring them. One source, or the combined `INPAINT` source and mask, must not exceed the shared `50 MiB` edit-request limit; the offline draft rejects an oversized exact request before creating approval evidence.
+For `TEXT_TO_IMAGE`, leave all source and mask variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI rejects extra conditional variables instead of ignoring them. One source, or the combined `INPAINT` source and mask, must not exceed the shared `50 MiB` edit-request limit. The offline draft and exact-request approval preflight use the same bounded media verifier and reject oversized or unsupported media before DNS, intent creation, or Provider dispatch.
 
 Relative source and mask paths are resolved from the repository/deployed app root, even though `pnpm --filter server` executes the package script with `apps/server` as its process working directory.
 

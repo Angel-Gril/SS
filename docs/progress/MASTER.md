@@ -81,18 +81,21 @@ and the exact paid `QA-02` request are explicitly approved; `QA-04` and release 
 All flags remain default-off; no real Provider request, charge, ERP ingest, Ozon write, production
 mutation, VPS access, deployment, or `.context/` staging occurred.
 
-The latest offline hardening binds Linux approval-draft writes and final billing durability syncs to
-held private parent descriptors and rechecks directory identity after sync. Draft and Provider edit
-limits now share the versioned workbench contract, including a `50 MiB` aggregate `INPAINT`
-source-plus-mask limit. Network-free URL/error leaf modules keep draft generation independent of DNS
-and the Provider stack without changing `AiImageJobError` identity. Focused tests passed `158` with
-two platform-specific skips, and full server tests passed `4364` with `190` skipped. The static
-contract, sandbox compilation, repository lint (existing warnings only), workspace typecheck, diff
-check, and full preflight passed; preflight reported `445` passes, `0` failures, and two expected
-local-package permission warnings. Independent review found no P0/P1 issue. Phase 3 remains `4/5`
-and overall progress remains `32/37`: no exact paid `QA-02` capability evidence exists yet, and no
-Provider call, charge, production mutation, VPS access, deployment, flag change, or `.context/`
-staging occurred.
+The latest offline hardening binds Linux approval-draft writes, paid-request claim/intent artifacts,
+and final billing durability syncs to held private directory descriptors with final visible-path and
+handle identity checks. Parent or child replacement cannot silently redirect an artifact into a
+replacement path before Provider dispatch. Approval drafting and exact-request preflight now share
+one no-follow, descriptor-bounded media verifier that pins SHA-256, enforces the shared `50 MiB` edit
+limit before reading excess mask bytes, and verifies MIME, dimensions, pixels, single-page state and
+meaningful PNG mask alpha. Hostile-media tests cover non-images, animated WebP, read-time growth and
+invalid masks; Linux-only tests cover final-entry symlinks and independent parent/child replacement.
+Focused tests passed `197` with six platform/environment-specific skips; full server tests passed
+`4371` with `194` skipped. The static contract, sandbox compilation, repository lint (existing
+warnings only), workspace typecheck, diff check and full preflight passed; preflight reported `445`
+passes, `0` failures and two expected local-package permission warnings. Independent reviews found
+no P0/P1 issue. Phase 3 remains `4/5` and overall progress remains `32/37`: no exact paid `QA-02`
+capability evidence exists yet, all rollout flags remain default-off, and no Provider call, charge,
+production mutation, VPS access, deployment, flag change, or `.context/` staging occurred.
 
 ## Next Steps
 

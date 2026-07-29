@@ -18,6 +18,10 @@ const approvalDraft = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-approval-draft.ts',
   'utf8',
 );
+const sandboxMedia = fs.readFileSync(
+  'apps/server/src/services/ai-image-sandbox-media.ts',
+  'utf8',
+);
 const openAiImageUrl = fs.readFileSync(
   'apps/server/src/services/ai-image-openai-url.ts',
   'utf8',
@@ -132,9 +136,9 @@ assert.match(source, /SANDBOX_COMMAND_FAILED/u);
 assert.match(source, /open\(path,\s*'wx',\s*0o600\)/u);
 assert.match(source, /\.report\.json/u);
 assert.match(source, /clearly visible soft warm-beige studio background/u);
-assert.match(source, /extractChannel\('alpha'\)/u);
-assert.match(source, /hasTransparent/u);
-assert.match(source, /hasOpaque/u);
+assert.match(sandboxMedia, /extractChannel\('alpha'\)/u);
+assert.match(sandboxMedia, /hasTransparent/u);
+assert.match(sandboxMedia, /hasOpaque/u);
 assert.match(guard, /createRequests\s*>=\s*1/u);
 assert.match(guard, /body\.n\s*!==\s*input\.contract\.n/u);
 assert.match(guard, /promptSha256\s*!==\s*input\.contract\.promptSha256/u);
@@ -145,6 +149,10 @@ assert.match(guard, /createAiImageSandboxRequestFingerprint/u);
 assert.match(guard, /\.fingerprints/u);
 assert.match(guard, /writeExclusiveDurableFile/u);
 assert.match(guard, /handle\.sync\(\)/u);
+assert.match(guard, /constants\.O_DIRECTORY/u);
+assert.match(guard, /\/proc\/self\/fd/u);
+assert.match(guard, /assertPrivateEvidenceDirectoryStable/u);
+assert.match(guard, /SANDBOX_EVIDENCE_DIRECTORY_CHANGED/u);
 assert.match(guard, /syncDirectory\(dirname\(path\)\)/u);
 assert.match(guard, /'approvalEvidence'/u);
 assert.match(guard, /SANDBOX_REQUEST_KEYS/u);
@@ -183,10 +191,21 @@ assert.match(approvalDraft, /AI_IMAGE_SANDBOX_MASK_SHA256/u);
 assert.match(approvalDraft, /'generations'\s*:\s*'edits'/u);
 assert.match(approvalDraft, /ai-image-openai-url\.js/u);
 assert.match(approvalDraft, /ai-image-job-error\.ts/u);
+assert.match(approvalDraft, /ai-image-sandbox-media\.ts/u);
 assert.match(approvalDraft, /packages\/shared\/src\/ai-image-workbench-contract\.ts/u);
 assert.match(source, /ai-image-openai-url\.ts/u);
 assert.match(source, /ai-image-job-error\.ts/u);
+assert.match(source, /ai-image-sandbox-media\.ts/u);
 assert.match(source, /packages\/shared\/src\/ai-image-workbench-contract\.ts/u);
+assert.match(sandboxMedia, /constants\.O_NOFOLLOW/u);
+assert.match(sandboxMedia, /AI_IMAGE_WORKBENCH_LIMITS\.maxRequestBytes/u);
+assert.match(sandboxMedia, /AI_IMAGE_WORKBENCH_LIMITS\.maxDimension/u);
+assert.match(sandboxMedia, /AI_IMAGE_WORKBENCH_LIMITS\.maxPixels/u);
+assert.match(sandboxMedia, /animated:\s*true/u);
+assert.match(sandboxMedia, /metadata\.pages/u);
+assert.match(sandboxMedia, /assertAiImageSandboxEditMediaLimit/u);
+assert.match(sandboxMedia, /remainingAiImageSandboxEditMediaBytes/u);
+assert.match(sandboxMedia, /assertMeaningfulAiImageSandboxMask/u);
 assert.match(openAiImageUrl, /normalizeOpenAiImagesApiBase/u);
 assert.match(openAiImageUrl, /AiImageJobError/u);
 assert.match(imageProviders, /from '.\/ai-image-job-error\.js'/u);
@@ -268,9 +287,12 @@ assert.match(sandboxTsconfig, /ai-image-provider-approval-draft\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-provider-approval-draft\.test\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-approval\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-media\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-provider-billing-finalize\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-billing-settlement\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-code-revision\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-guard-filesystem\.test\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-sandbox-media\.test\.ts/u);
 assert.doesNotMatch(source, /endpointPath/u);
 assert.doesNotMatch(source, /providerEndpoint\s*:/u);
 assert.doesNotMatch(source, /setConfig|uploadBuffer|enqueueAiImageJob/u);
@@ -285,7 +307,7 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(approvalDraft, /from ['"].*ai-image-providers\.js/u);
 assert.doesNotMatch(
-  openAiImageUrl + aiImageJobError,
+  openAiImageUrl + aiImageJobError + sandboxMedia,
   /\bfetch\b|\blookup\b|ipaddr|ai-image-(?:providers|jobs)|node:(?:http|https|net|tls|dns)/iu,
 );
 

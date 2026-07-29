@@ -4,7 +4,6 @@ import {
   chmod,
   mkdir,
   open,
-  readFile,
   rename,
   unlink,
 } from 'node:fs/promises';
@@ -17,9 +16,14 @@ import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
   normalizeOpenAiImagesApiBase,
-  type OpenAiImageEditInput,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
+import {
+  assertAiImageSandboxEditMediaLimit,
+  assertMeaningfulAiImageSandboxMask,
+  loadPinnedAiImageSandboxMedia,
+  remainingAiImageSandboxEditMediaBytes,
+} from '../src/services/ai-image-sandbox-media.js';
 import {
   claimAiImageSandboxOperation,
   createAiImageSandboxEditFetchGuard,
@@ -50,6 +54,7 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-providers.ts',
+  'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
@@ -244,6 +249,7 @@ async function loadPinnedImage(input: {
   pathEnvironment: string;
   shaEnvironment: string;
   requirePng?: boolean;
+  maximumBytes?: number;
   environment: NodeJS.ProcessEnv;
   repositoryRoot: string;
 }) {
@@ -252,45 +258,17 @@ async function loadPinnedImage(input: {
     requiredEnvironment(input.pathEnvironment, input.environment),
   );
   const expectedSha256 = requiredSha256(input.shaEnvironment, input.environment);
-  const buffer = await readFile(path);
-  const actualSha256 = sha256(buffer);
-  if (actualSha256 !== expectedSha256) {
-    throw new Error(`${input.pathEnvironment} does not match ${input.shaEnvironment}`);
-  }
-  const metadata = await sharp(buffer).metadata();
-  const mimeType = metadata.format === 'png' ? 'image/png'
-    : metadata.format === 'jpeg' ? 'image/jpeg'
-      : metadata.format === 'webp' ? 'image/webp' : null;
-  if (!mimeType || (input.requirePng && mimeType !== 'image/png')) {
-    throw new Error(input.requirePng
-      ? `${input.pathEnvironment} must contain a PNG image`
-      : `${input.pathEnvironment} must contain a PNG, JPEG, or WebP image`);
-  }
-  if (!metadata.width || !metadata.height) {
-    throw new Error(`${input.pathEnvironment} has invalid image dimensions`);
-  }
+  const media = await loadPinnedAiImageSandboxMedia({
+    path,
+    expectedSha256,
+    label: input.pathEnvironment,
+    requirePng: input.requirePng,
+    maximumBytes: input.maximumBytes,
+  });
   return {
-    image: { buffer, mimeType } as OpenAiImageEditInput,
-    sha256: actualSha256,
-    width: metadata.width,
-    height: metadata.height,
+    ...media,
+    image: { buffer: media.bytes, mimeType: media.mimeType },
   };
-}
-
-async function assertMeaningfulInpaintMask(
-  value: Awaited<ReturnType<typeof loadPinnedImage>>,
-) {
-  const metadata = await sharp(value.image.buffer).metadata();
-  if (!metadata.hasAlpha) throw new Error('The INPAINT mask must contain an alpha channel');
-  const alpha = await sharp(value.image.buffer).extractChannel('alpha').raw().toBuffer();
-  let hasTransparent = false;
-  let hasOpaque = false;
-  for (const pixel of alpha) {
-    if (pixel === 0) hasTransparent = true;
-    if (pixel === 255) hasOpaque = true;
-    if (hasTransparent && hasOpaque) return;
-  }
-  throw new Error('The INPAINT mask must contain both transparent and opaque regions');
 }
 
 async function resolvePublicDns(hostname: string) {
@@ -434,15 +412,22 @@ export async function runAiImageProviderSingleSubmit(
       pathEnvironment: 'AI_IMAGE_SANDBOX_MASK_PATH',
       shaEnvironment: 'AI_IMAGE_SANDBOX_MASK_SHA256',
       requirePng: true,
+      maximumBytes: remainingAiImageSandboxEditMediaBytes([source]),
       environment,
       repositoryRoot,
     });
-    await assertMeaningfulInpaintMask(mask);
+  } else if (maskPath || maskSha) {
+    throw new Error(`${operation} must not configure a sandbox mask`);
+  }
+  assertAiImageSandboxEditMediaLimit([
+    ...(source ? [source] : []),
+    ...(mask ? [mask] : []),
+  ]);
+  if (operation === 'INPAINT' && source && mask) {
+    await assertMeaningfulAiImageSandboxMask(mask);
     if (mask.width !== source.width || mask.height !== source.height) {
       throw new Error('The INPAINT mask dimensions must match the pinned source image');
     }
-  } else if (maskPath || maskSha) {
-    throw new Error(`${operation} must not configure a sandbox mask`);
   }
   const endpoint = new URL(
     `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
