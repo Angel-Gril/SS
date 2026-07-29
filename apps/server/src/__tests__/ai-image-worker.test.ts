@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('../lib/redis.js', () => ({ redisDisabled: true }));
 import {
@@ -237,7 +238,59 @@ describe('AI image BullMQ worker boundary', () => {
     expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-endpoint-changed', {
       attemptCount: 1,
       errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
-      errorMessage: 'Active Provider identity does not match the frozen runtime contract',
+      errorMessage:
+        'The official OpenAI Images provider requires https://api.openai.com/v1; use custom for relays',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('rejects a legacy relay-labeled contract even when the active relay still matches it', async () => {
+    const relayConfig = {
+      provider: 'openai-images', baseUrl: 'https://relay.example/v1', apiKey: 'legacy-secret',
+      model: 'gpt-image-1', costPerImageCents: 7,
+    };
+    const operationConfig = {
+      contractVersion: 'ai-image-provider-runtime/v1',
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrlSha256: createHash('sha256').update(relayConfig.baseUrl).digest('hex'),
+      unitCostCents: 7,
+      imageCount: 1,
+      width: 1024,
+      height: 1024,
+      maximumCostCents: 7,
+    };
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-legacy-relay', ownerUserId: 'owner-1', provider: 'openai-images',
+        model: 'gpt-image-1', status: 'QUEUED', estimatedCostCents: 7,
+        requestedImageCount: 1, width: 1024, height: 1024, operationConfig,
+        costReservation: {
+          status: 'RESERVED', provider: 'openai-images', model: 'gpt-image-1',
+          estimatedCostMinor: 7, maximumCostMinor: 7,
+        },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    };
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageQueueJob('job-legacy-relay', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
+      })),
+      getProviderConfig: vi.fn(async () => relayConfig),
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-legacy-relay', {
+      attemptCount: 1,
+      errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+      errorMessage:
+        'The official OpenAI Images provider requires https://api.openai.com/v1; use custom for relays',
     });
     expect(resolveProvider).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
@@ -298,7 +351,7 @@ describe('AI image BullMQ worker boundary', () => {
   });
   it('quarantines an unclassified paid provider failure when the queue allows one attempt', async () => {
     const providerConfig = {
-      provider: 'openai-images', baseUrl: 'https://api.openai.example/v1',
+      provider: 'openai-images', baseUrl: 'https://api.openai.com/v1',
       apiKey: 'secret', model: 'gpt-image-1', costPerImageCents: 7,
     };
     const job = {

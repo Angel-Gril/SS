@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  isOfficialOpenAiImagesApiBase,
+  normalizeOpenAiImagesApiBase,
+} from './ai-image-openai-url.js';
 
 export const AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION =
   'ai-image-provider-runtime/v1' as const;
@@ -57,6 +61,20 @@ export function canonicalAiImageProviderBaseUrl(providerValue: unknown, baseUrlV
   const provider = requiredText(providerValue, 'provider');
   const raw = String(baseUrlValue || '').trim() || providerDefaultBaseUrl(provider);
   if (!raw) throw new AiImageProviderRuntimeContractError('Provider base URL is required');
+  if (provider === 'openai-images') {
+    let normalized: string;
+    try {
+      normalized = normalizeOpenAiImagesApiBase(raw);
+    } catch {
+      throw new AiImageProviderRuntimeContractError('Official OpenAI Images base URL is invalid');
+    }
+    if (!isOfficialOpenAiImagesApiBase(normalized)) {
+      throw new AiImageProviderRuntimeContractError(
+        'The official OpenAI Images provider requires https://api.openai.com/v1; use custom for relays',
+      );
+    }
+    return normalized;
+  }
   let parsed: URL;
   try {
     parsed = new URL(raw);

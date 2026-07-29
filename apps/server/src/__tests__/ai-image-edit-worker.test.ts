@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -260,6 +261,62 @@ describe('AI image edit worker boundary', () => {
       errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
     }));
     expect(resolveProvider).not.toHaveBeenCalled();
+  });
+
+  it('rejects a legacy relay-labeled edit contract before resolving a Provider', async () => {
+    const requestFingerprint = 'c'.repeat(64);
+    const relayConfig = {
+      provider: 'openai-images', baseUrl: 'https://relay.example/v1', apiKey: 'legacy-secret',
+      model: 'gpt-image-1', costPerImageCents: 7,
+    };
+    const providerRuntime = {
+      contractVersion: 'ai-image-provider-runtime/v1',
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrlSha256: createHash('sha256').update(relayConfig.baseUrl).digest('hex'),
+      unitCostCents: 7,
+      imageCount: 1,
+      width: 1024,
+      height: 1024,
+      maximumCostCents: 7,
+    };
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-legacy-relay-edit', ownerUserId: 'owner-1', status: 'QUEUED',
+        operation: 'FULL_EDIT', provider: 'openai-images', model: 'gpt-image-1',
+        estimatedCostCents: 7, requestedImageCount: 1, width: 1024, height: 1024,
+        requestFingerprint,
+        operationConfig: { policyVersion: 'ai-image-edit-policy/1.0', providerRuntime },
+        costReservation: {
+          id: 'reservation-legacy', status: 'RESERVED', provider: 'openai-images',
+          model: 'gpt-image-1', estimatedCostMinor: 7, maximumCostMinor: 7,
+          requestFingerprint,
+        },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    } as any;
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageEditQueueJob('job-legacy-relay-edit', 1, {
+      repository,
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => relayConfig),
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith(
+      'job-legacy-relay-edit',
+      expect.objectContaining({
+        attemptCount: 1,
+        errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+        errorMessage:
+          'The official OpenAI Images provider requires https://api.openai.com/v1; use custom for relays',
+      }),
+    );
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('persists and rejects queued fake edit jobs in production before resolving or running a Provider', async () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   AiImageProviderRuntimeContractError,
@@ -50,7 +51,55 @@ describe('AI image Provider runtime contract', () => {
       { ...config, baseUrl: 'https://api.openai.com/v1' },
       { count: 1, width: 1024, height: 1024 },
     );
+    const originOnly = createAiImageProviderRuntimeContract(
+      { ...config, baseUrl: 'https://api.openai.com' },
+      { count: 1, width: 1024, height: 1024 },
+    );
     expect(implicit.baseUrlSha256).toBe(explicit.baseUrlSha256);
+    expect(originOnly.baseUrlSha256).toBe(explicit.baseUrlSha256);
+  });
+
+  it('rejects a relay labeled as official OpenAI while preserving explicit custom relays', () => {
+    expect(() => createAiImageProviderRuntimeContract({
+      ...config,
+      baseUrl: 'https://relay.example/v1',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    })).toThrow(/official OpenAI/u);
+
+    expect(createAiImageProviderRuntimeContract({
+      ...config,
+      provider: 'custom',
+      baseUrl: 'https://relay.example/v1',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    })).toMatchObject({
+      provider: 'custom',
+      model: 'gpt-image-1',
+    });
+  });
+
+  it('fails an old v1 bare-origin hash closed after binding the effective official transport', () => {
+    const current = createAiImageProviderRuntimeContract(
+      { ...config, baseUrl: 'https://api.openai.com' },
+      { count: 1, width: 1024, height: 1024 },
+    );
+    const legacyBareOrigin = {
+      ...current,
+      baseUrlSha256: createHash('sha256')
+        .update('https://api.openai.com')
+        .digest('hex'),
+    };
+
+    expect(() => assertAiImageProviderRuntimeContract(
+      legacyBareOrigin,
+      { ...config, baseUrl: 'https://api.openai.com' },
+      { count: 1, width: 1024, height: 1024, estimatedCostCents: 7 },
+    )).toThrow(/identity does not match/u);
   });
 
   it.each([

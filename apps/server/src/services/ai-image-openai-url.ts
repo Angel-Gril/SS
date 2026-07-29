@@ -1,11 +1,13 @@
 import { AiImageJobError } from './ai-image-job-error.js';
 
+export const OFFICIAL_OPENAI_IMAGES_API_BASE = 'https://api.openai.com/v1';
+
 function withoutTrailingSlash(value: string) {
   return value.replace(/\/+$/, '');
 }
 
 export function normalizeOpenAiImagesApiBase(baseUrl: string) {
-  const raw = withoutTrailingSlash(baseUrl || 'https://api.openai.com/v1');
+  const raw = withoutTrailingSlash(baseUrl || OFFICIAL_OPENAI_IMAGES_API_BASE);
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -27,4 +29,12 @@ export function normalizeOpenAiImagesApiBase(baseUrl: string) {
   }
   parsed.pathname = /\/v1$/i.test(path) ? path : `${path}/v1`;
   return withoutTrailingSlash(parsed.toString());
+}
+
+export function isOfficialOpenAiImagesApiBase(baseUrl: string): boolean {
+  try {
+    return normalizeOpenAiImagesApiBase(baseUrl) === OFFICIAL_OPENAI_IMAGES_API_BASE;
+  } catch {
+    return false;
+  }
 }

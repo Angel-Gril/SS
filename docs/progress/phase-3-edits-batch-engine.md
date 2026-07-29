@@ -217,3 +217,28 @@ Progress: 4/5 tasks.
   with `--network none`. This provides real Linux coverage for parent replacement, child replacement,
   orphan fail-closed claims, final-entry symlinks, hostile media and mask semantics. Production code,
   rollout flags and task counts remain unchanged; no Provider request or external charge occurred.
+- A 2026-07-29 sanitized production audit found both VPS deployments at `c98a2e4`. International had
+  the third-party relay persisted under the legacy `openai-images` label with `gpt-image-2`, a
+  configured credential, zero cost, generation off and every AI media/extension rollout flag off;
+  domestic remained disabled without a credential. One bounded authenticated model-catalog GET
+  returned HTTP 200 with only `gpt-image-2`, so there is no untested edit candidate on that account.
+  It made no generations/edits call and incurred no image charge.
+- RED tests then proved a legacy v1 runtime contract could previously pair the same relay URL with
+  the misleading official Provider identity. The network-free runtime contract now permits
+  `openai-images` only for the canonical official API and requires relays to use `custom`.
+  Generation and edit worker regressions manually construct the legacy same-relay contract and prove
+  it fails before Provider resolution; suite readiness also returns `PROVIDER_CONFIG_INVALID` even
+  with injected sandbox evidence. Related focused tests passed `138/138`. `QA-02` remains open and
+  task counts remain `4/5` and `32/37`; a different edit-capable endpoint/model plus explicit
+  one-request approval is still required.
+- Full regression testing exposed one error-classification issue for an existing paid workflow whose
+  active endpoint no longer matched its frozen quote. Quote reconstruction failures in that replay
+  path now remain `MEDIA_PROVIDER_CONFIG_CHANGED` and cannot enqueue work; the focused launch suite
+  passed `83/83`. Repository lint passed with `20` existing warnings and no errors, workspace
+  typecheck passed, full server tests passed `4376` with `194` skipped, and preflight passed `445`
+  checks with no failures and the two expected local-package permission warnings.
+- The official bare origin now canonicalizes to the effective `/v1` transport. A v1 contract frozen
+  by older code from the bare-origin text has the old hash and deliberately fails closed; the
+  operator must reconcile any associated reservation and recreate the work rather than retry it.
+  Common `/v1` contracts retain their hash. All paid media flags remain off, and these gates made no
+  Provider request, charge, production mutation, deployment, flag change, or `.context/` staging.

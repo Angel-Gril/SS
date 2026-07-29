@@ -100,6 +100,25 @@ progress remains `32/37`: no exact paid `QA-02` capability evidence exists yet, 
 remain default-off, and no Provider call, charge, production mutation, VPS access, deployment, flag
 change, or `.context/` staging occurred.
 
+A subsequent sanitized read-only audit found both VPS deployments at `c98a2e4`: international kept
+the third-party relay under a legacy `openai-images` label with model `gpt-image-2`, zero price and
+all AI media/extension flags off, while domestic remained disabled. One bounded authenticated
+`GET /models` returned only that already edit-rejected model and made no generations/edits request.
+The paid runtime contract now independently restricts `openai-images` to the canonical official API
+and requires relays to use `custom`; manually constructed matching legacy v1 generation/edit
+contracts fail before Provider resolution, and suite readiness fails closed even with injected
+sandbox evidence. Focused tests passed `138/138`. Phase 3 remains `4/5` and overall progress remains
+`32/37`: a different edit-capable endpoint/model and explicit one-request approval are still required.
+The final regression run exposed one stable-error mapping issue when an existing paid workflow was
+replayed after its endpoint changed; quote reconstruction failures now remain
+`MEDIA_PROVIDER_CONFIG_CHANGED` and no job is enqueued. Its focused test passed `83/83`. Repository
+lint passed with `20` existing warnings and no errors, workspace typecheck passed, full server tests
+passed `4376` with `194` skipped, and preflight passed `445` checks with no failures and the two
+expected local-extension permission warnings. Bare official origins now bind the effective `/v1`
+transport; a pre-existing v1 contract using the older bare-origin hash fails closed and must be
+recreated rather than retried. No Provider call, charge, production mutation, deployment, flag
+change, or `.context/` staging occurred during these gates.
+
 ## Next Steps
 
 1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private

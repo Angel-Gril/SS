@@ -125,7 +125,7 @@ describe('AI image suite Provider runtime snapshot', () => {
     });
   });
 
-  it('keeps credential presence out of the hash while endpoint and price drift change it', () => {
+  it('keeps credential presence out of the hash while rejecting endpoint drift and hashing price drift', () => {
     const resolver = () => exactCapability('sandbox-verified');
     const first = createAiImageSuiteProviderRuntimeSnapshot(settings(), { resolveCapability: resolver });
     const rotatedKey = createAiImageSuiteProviderRuntimeSnapshot(settings({ apiKey: 'rotated-secret' }), {
@@ -139,8 +139,11 @@ describe('AI image suite Provider runtime snapshot', () => {
       resolveCapability: resolver,
     });
     expect(rotatedKey.providerConfig).toEqual(first.providerConfig);
-    expect(changedEndpoint.providerConfig?.providerConfigHash)
-      .not.toBe(first.providerConfig?.providerConfigHash);
+    expect(changedEndpoint).toMatchObject({
+      providerConfig: null,
+      executionReady: false,
+      reasonCode: 'PROVIDER_CONFIG_INVALID',
+    });
     expect(changedPrice.providerConfig?.providerConfigHash)
       .not.toBe(first.providerConfig?.providerConfigHash);
     expect(changedPrice.providerConfig?.pricingVersion)

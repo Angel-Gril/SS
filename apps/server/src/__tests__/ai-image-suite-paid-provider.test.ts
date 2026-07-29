@@ -246,7 +246,7 @@ describe('AI image suite paid Provider preparation', () => {
       loadSettings: vi.fn(async () => settings({ baseUrl: 'https://images.example.com/v1' })),
       loadInputBuffer,
     }) as any)).rejects.toMatchObject({
-      code: 'SUITE_PROVIDER_RUNTIME_CHANGED',
+      code: 'SUITE_PROVIDER_RUNTIME_UNAVAILABLE',
     });
     expect(loadInputBuffer).not.toHaveBeenCalled();
   });

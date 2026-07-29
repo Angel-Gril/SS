@@ -205,6 +205,19 @@ The configured international relay/model produced one earlier text-to-image resu
 
 Treat this exact relay/model as text-to-image-only and still unverified for production. Model-catalog access is not generation acceptance, and generation acceptance is not edit acceptance. Do not repeat the rejected requests or enable reference generation, full edit, inpaint, suites, or tenant rollout unless the operator selects an edit-capable endpoint/model and completes a new bounded acceptance.
 
+The international database may still contain a legacy `openai-images` selection with a third-party
+Base URL. Current admin validation and paid runtime contracts reject that identity: official OpenAI
+Images is restricted to `https://api.openai.com/v1`, while a relay must be labeled `custom`. Use the
+admin one-click correction only to fix configuration identity; it does not authorize or re-test
+`gpt-image-2`. A 2026-07-29 bounded `/models` check listed only that already rejected model, so a new
+edit sandbox still requires a different endpoint/model rather than another request to the same one.
+
+The runtime identity canonicalizes the bare official origin `https://api.openai.com` to the effective
+`https://api.openai.com/v1` transport. A paid v1 contract frozen by older code from the bare-origin
+text will not match the new hash. Treat it as a closed historical operation: do not retry it, inspect
+and release or reconcile any reservation, then create a fresh quote only after the Provider remains
+authorized. Contracts originally frozen with the normal `/v1` base keep their existing hash.
+
 ## DashScope `qwen-mt-image` Translation Probe
 
 This lane accepts only the default-port official origin `https://dashscope.aliyuncs.com` (optionally with the exact `/api/v1` path) and the exact `qwen-mt-image` model. Custom ports, path prefixes, credentials, queries, and fragments are rejected. The CLI normalizes the base to `/api/v1`, pins public DNS, submits once to the official image-synthesis service, and polls a bounded task endpoint.

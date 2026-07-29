@@ -8,9 +8,15 @@ import type {
   AiImageProviderRequest,
   AiImageProviderResult,
 } from './ai-image-jobs.js';
-import { normalizeOpenAiImagesApiBase } from './ai-image-openai-url.js';
+import {
+  isOfficialOpenAiImagesApiBase,
+  normalizeOpenAiImagesApiBase,
+} from './ai-image-openai-url.js';
 
-export { normalizeOpenAiImagesApiBase } from './ai-image-openai-url.js';
+export {
+  isOfficialOpenAiImagesApiBase,
+  normalizeOpenAiImagesApiBase,
+} from './ai-image-openai-url.js';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -110,14 +116,6 @@ function withoutTrailingSlash(value: string) {
 function dashScopeApiBase(baseUrl: string) {
   const base = withoutTrailingSlash(baseUrl || 'https://dashscope.aliyuncs.com/api/v1');
   return /\/api\/v1$/i.test(base) ? base : `${base}/api/v1`;
-}
-
-export function isOfficialOpenAiImagesApiBase(baseUrl: string): boolean {
-  try {
-    return normalizeOpenAiImagesApiBase(baseUrl) === 'https://api.openai.com/v1';
-  } catch {
-    return false;
-  }
 }
 
 export function aiImageCredentialEndpointIdentity(provider: string, baseUrl: string): string | null {

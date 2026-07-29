@@ -50,6 +50,23 @@ The current international third-party OpenAI-compatible relay and exact model `g
 
 The current relay is therefore a text-to-image-only candidate. Reference generation, full-image editing, masked inpaint, suite execution, tenant rollout and billing settlement remain blocked. Do not add a `sandbox-verified` registry entry or enable a production feature flag for this host/model until a compatible edit-capable model or endpoint passes a separately bounded acceptance.
 
+A sanitized read-only audit on 2026-07-29 found both VPS environments on deployed revision
+`c98a2e42479cd7f67050e31434724df720fec0fc`. International still had the third-party relay stored
+under the legacy `openai-images` label with model `gpt-image-2`, a configured credential, zero price,
+generation disabled, and every AI media/extension rollout flag off. Domestic had no configured image
+Provider or credential. One bounded authenticated `GET /models` on the international relay returned
+HTTP 200 and exactly one model ID, `gpt-image-2`; it exposed no alternate edit-capable candidate and
+performed no generation or edit request. The runtime contract now independently rejects a
+third-party base labeled `openai-images`, including a matching legacy v1 frozen contract, before
+generation/edit Provider resolution. Relays remain valid only under the explicit `custom` identity;
+changing that label does not upgrade the already rejected model's editing capability.
+
+The official bare origin `https://api.openai.com` now canonicalizes to its effective transport base
+`https://api.openai.com/v1`. A pre-existing v1 contract frozen by older code from the bare-origin
+text therefore fails closed and must be recreated; contracts already frozen from the normal `/v1`
+base keep the same endpoint hash. Do not release or silently retry any historical paid reservation
+that fails this check. Reconcile it explicitly before enabling a paid media flag.
+
 ## Controlled DashScope Translation A/B (2026-07-24)
 
 One controlled synthetic `en` to `ru` A/B exercised the official DashScope `qwen-mt-image` adapter while every production entry point remained dark. The reviewed semantic request inputs used the same source bytes, language pair, model, adapter and domain context; the terminology glossary was the only changed translation input.

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { AiImageJobError } from '../services/ai-image-jobs.js';
-import { normalizeOpenAiImagesApiBase } from '../services/ai-image-openai-url.js';
+import {
+  isOfficialOpenAiImagesApiBase,
+  normalizeOpenAiImagesApiBase,
+} from '../services/ai-image-openai-url.js';
 
 describe('OpenAI-compatible image API URL normalization', () => {
   it.each([
@@ -10,6 +13,14 @@ describe('OpenAI-compatible image API URL normalization', () => {
     ['https://relay.example/tenant', 'https://relay.example/tenant/v1'],
   ])('normalizes %s without network I/O', (input, expected) => {
     expect(normalizeOpenAiImagesApiBase(input)).toBe(expected);
+  });
+
+  it('classifies only the canonical official OpenAI Images API base as official', () => {
+    expect(isOfficialOpenAiImagesApiBase('')).toBe(true);
+    expect(isOfficialOpenAiImagesApiBase('https://api.openai.com')).toBe(true);
+    expect(isOfficialOpenAiImagesApiBase('https://api.openai.com/v1/')).toBe(true);
+    expect(isOfficialOpenAiImagesApiBase('https://relay.example/v1')).toBe(false);
+    expect(isOfficialOpenAiImagesApiBase('http://api.openai.com/v1')).toBe(false);
   });
 
   it.each([

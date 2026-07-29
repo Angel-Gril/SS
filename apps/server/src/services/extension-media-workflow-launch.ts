@@ -984,14 +984,22 @@ function assertStandaloneProviderStillAuthorized(
   }
   if (!frozen.paid) return;
   const runtime = frozen.providerRuntimeContract!;
-  const activeExecution = buildStandalonePaidExecution(active, {
-    count: runtime.imageCount,
-    width: runtime.width,
-    height: runtime.height,
-  }) as {
+  let activeExecution: {
     estimatedCostCents?: number;
     providerRuntimeContract?: AiImageProviderRuntimeContract | null;
   };
+  try {
+    activeExecution = buildStandalonePaidExecution(active, {
+      count: runtime.imageCount,
+      width: runtime.width,
+      height: runtime.height,
+    });
+  } catch {
+    throw new ExtensionMediaWorkflowLaunchError(
+      'MEDIA_PROVIDER_CONFIG_CHANGED',
+      'The frozen AI image Provider configuration changed',
+    );
+  }
   if (activeExecution.estimatedCostCents !== frozen.estimatedCostCents
     || !activeExecution.providerRuntimeContract
     || !sameProviderRuntimeContract(activeExecution.providerRuntimeContract, runtime)) {
