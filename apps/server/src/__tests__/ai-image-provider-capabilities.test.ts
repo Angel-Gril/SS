@@ -7,9 +7,11 @@ import {
   AI_IMAGE_PROVIDER_CAPABILITIES,
   AiMediaCapabilityError,
   assertAiMediaCapability,
+  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
   supportsAiMediaOperation,
 } from '../services/ai-image-provider-capabilities.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 
 describe('AI image provider capability matrix', () => {
   it('records only operations implemented by current adapters', () => {
@@ -191,5 +193,66 @@ describe('AI image provider capability matrix', () => {
       );
       if (capability.model === '*') expect(capability.evidenceLevel).not.toBe('sandbox-verified');
     }
+  });
+
+  it('requires endpoint, operation, and request-mode evidence independently', () => {
+    const endpointSha256 = aiImageProviderEndpointSha256(
+      'openai-images',
+      'https://api.openai.com/v1',
+    );
+    const capability = {
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      operations: ['FULL_EDIT', 'INPAINT'],
+      maxReferences: 1,
+      supportsMask: true,
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+      evidenceLevel: 'sandbox-verified',
+      evidence: 'sandbox evidence for one exact operation',
+      sandboxEvidence: [{
+        endpointSha256,
+        operation: 'FULL_EDIT',
+        inputTransport: 'multipart',
+        resultMode: 'sync',
+      }],
+    } as const;
+
+    expect(hasExactAiMediaSandboxEvidence({
+      capability,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1',
+      operation: 'FULL_EDIT',
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+    })).toBe(true);
+    expect(hasExactAiMediaSandboxEvidence({
+      capability,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1',
+      operation: 'INPAINT',
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+    })).toBe(false);
+    expect(hasExactAiMediaSandboxEvidence({
+      capability,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrl: 'https://relay.example/v1',
+      operation: 'FULL_EDIT',
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+    })).toBe(false);
+    expect(hasExactAiMediaSandboxEvidence({
+      capability,
+      provider: 'openai-images',
+      model: 'gpt-image-1',
+      baseUrl: 'https://api.openai.com/v1',
+      operation: 'FULL_EDIT',
+      inputTransport: 'base64',
+      resultMode: 'sync',
+    })).toBe(false);
   });
 });

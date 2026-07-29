@@ -8,7 +8,10 @@ import { redis, redisDisabled } from '../lib/redis.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { getStorageBackend } from '../services/image-storage.js';
-import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import {
+  hasExactAiMediaSandboxEvidence,
+  resolveAiImageProviderCapability,
+} from '../services/ai-image-provider-capabilities.js';
 import {
   isPublicHttpsStorageUrl,
   resolveAiImageTranslationStorageReadiness,
@@ -118,6 +121,7 @@ type TranslationWorkerOverrides = {
   repository?: AiImageJobRepository;
   resolveProvider?: typeof resolveAiImageTranslationProvider;
   getProviderConfig?: typeof getAiImageTranslationProviderRuntimeConfig;
+  resolveCapability?: typeof resolveAiImageProviderCapability;
   getStorageConfig?: typeof getRuntimeConfigForStorage;
   uploadBuffer?: (...args: any[]) => Promise<any>;
   schedulePoll?: (jobId: string, delayMs: number) => Promise<void>;
@@ -275,8 +279,19 @@ async function processClaimedTranslationJob(
     // accepted a task, recovery must keep polling it even if the current
     // capability registry is still dark or has since been tightened.
     if (persisted.provider !== 'fake' && !persisted.providerJobId) {
-      const capability = resolveAiImageProviderCapability(persisted.provider, persisted.model);
-      if (capability?.evidenceLevel !== 'sandbox-verified') {
+      const capability = (overrides.resolveCapability || resolveAiImageProviderCapability)(
+        persisted.provider,
+        persisted.model,
+      );
+      if (!hasExactAiMediaSandboxEvidence({
+        capability,
+        provider: persisted.provider,
+        model: persisted.model,
+        baseUrl: providerConfig.baseUrl,
+        operation: 'IMAGE_TRANSLATE',
+        inputTransport: 'public_url',
+        resultMode: 'async',
+      })) {
         return await failRuntimeGate(
           repository,
           persisted,

@@ -218,6 +218,14 @@ text will not match the new hash. Treat it as a closed historical operation: do 
 and release or reconcile any reservation, then create a fresh quote only after the Provider remains
 authorized. Contracts originally frozen with the normal `/v1` base keep their existing hash.
 
+Do not promote a Provider by changing only `evidenceLevel`. For every operation that will be marked
+`sandbox-verified`, add a reviewed `sandboxEvidence` record with the canonical endpoint SHA-256,
+exact operation, actual input transport, and actual sync/async result mode. The endpoint digest must
+come from the same canonical Provider-base function used by runtime contracts. Evidence is not
+portable between endpoints, operations, multipart/base64/public-URL modes, or sync/async adapters.
+The static Provider contract requires complete bindings for every operation advertised by a verified
+entry, while final dispatch rechecks the single operation actually being executed.
+
 ## DashScope `qwen-mt-image` Translation Probe
 
 This lane accepts only the default-port official origin `https://dashscope.aliyuncs.com` (optionally with the exact `/api/v1` path) and the exact `qwen-mt-image` model. Custom ports, path prefixes, credentials, queries, and fragments are rejected. The CLI normalizes the base to `/api/v1`, pins public DNS, submits once to the official image-synthesis service, and polls a bounded task endpoint.

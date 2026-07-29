@@ -14,7 +14,10 @@ import {
   resolveAiImageEditProvider,
 } from '../workers/ai-image-edit.js';
 import { AI_IMAGE_EDIT_MAX_INPUT_BYTES } from '../services/ai-image-edit.js';
-import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import {
+  aiImageProviderEndpointSha256,
+  createAiImageProviderRuntimeContract,
+} from '../services/ai-image-provider-runtime-contract.js';
 
 const fakeProviderConfig = {
   provider: 'fake', baseUrl: '', apiKey: '', model: 'fake-image-edit-v1',
@@ -131,6 +134,21 @@ describe('AI image edit worker boundary', () => {
       edit: vi.fn(async () => ({ images: [] })),
     }));
     const source = { buffer: Buffer.from('source'), mimeType: 'image/png' as const };
+    const endpointSha256 = aiImageProviderEndpointSha256(
+      'openai-images',
+      paidProviderConfig.baseUrl,
+    );
+    const exactCapability = () => ({
+      provider: 'openai-images', model: 'gpt-image-1', operations: ['FULL_EDIT', 'INPAINT'] as const,
+      maxReferences: 1, supportsMask: true, inputTransport: 'multipart' as const, resultMode: 'sync' as const,
+      evidenceLevel: 'sandbox-verified' as const, evidence: 'test-only evidence',
+      sandboxEvidence: [{
+        endpointSha256,
+        operation: 'FULL_EDIT' as const,
+        inputTransport: 'multipart' as const,
+        resultMode: 'sync' as const,
+      }],
+    });
 
     const disabled = resolveAiImageEditProvider(
       'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig, undefined,
@@ -149,11 +167,7 @@ describe('AI image edit worker boundary', () => {
     const verified = resolveAiImageEditProvider(
       'openai-images', 'gpt-image-1', 'FULL_EDIT', paidProviderConfig, undefined,
       'production', {
-        resolveCapability: () => ({
-          provider: 'openai-images', model: 'gpt-image-1', operations: ['FULL_EDIT', 'INPAINT'],
-          maxReferences: 1, supportsMask: true, inputTransport: 'multipart', resultMode: 'sync',
-          evidenceLevel: 'sandbox-verified', evidence: 'test-only evidence',
-        }),
+        resolveCapability: exactCapability,
         createOpenAiEditProvider: () => ({ name: 'openai-image-edits', edit }),
       },
     );
@@ -164,6 +178,21 @@ describe('AI image edit worker boundary', () => {
     expect(edit).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'FULL_EDIT', images: [source], mask: null,
     }));
+
+    const createInpaintProvider = vi.fn();
+    const inpaint = resolveAiImageEditProvider(
+      'openai-images', 'gpt-image-1', 'INPAINT', paidProviderConfig, undefined,
+      'production', {
+        resolveCapability: exactCapability,
+        createOpenAiEditProvider: createInpaintProvider,
+      },
+    );
+    await expect(inpaint.generate({
+      operation: 'INPAINT', prompt: 'edit', negativePrompt: null,
+      count: 1, width: 1024, height: 1024, model: 'gpt-image-1',
+      inputImages: [source], mask: source,
+    })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED' });
+    expect(createInpaintProvider).not.toHaveBeenCalled();
   });
 
   it('checks the generation master switch, tenant rollout and operation switch together', async () => {

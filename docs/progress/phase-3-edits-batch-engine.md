@@ -242,3 +242,16 @@ Progress: 4/5 tasks.
   operator must reconcile any associated reservation and recreate the work rather than retry it.
   Common `/v1` contracts retain their hash. All paid media flags remain off, and these gates made no
   Provider request, charge, production mutation, deployment, flag change, or `.context/` staging.
+- Capability evidence can no longer authorize a whole provider/model entry by label alone. Exact
+  `sandboxEvidence` records bind canonical endpoint SHA-256, operation, input transport, and result
+  mode. Generation, reference generation, full edit, inpaint, translation, and paid-suite execution
+  check the active request against those fields before Provider dispatch. Text-to-image evidence
+  therefore cannot unlock an edit operation, and evidence from one relay cannot unlock another.
+- The provider foundation contract rejects wildcard, malformed, duplicate, or operation-incomplete
+  verified evidence. Accepted asynchronous translation tasks preserve their poll-only recovery even
+  if the current Registry is later tightened. Focused capability/worker/suite tests passed `87/87`,
+  Server typecheck and the Provider contract passed. Repository lint passed with `20` existing
+  warnings and no errors, workspace typecheck passed, full Server tests passed `4383` with `194`
+  skipped, and preflight passed `445` checks with no failures and the two expected local-package
+  permission warnings. Task counts remain `4/5` and `32/37`, and no Provider call, charge,
+  production mutation, VPS access, deployment, flag change, or `.context/` staging occurred.

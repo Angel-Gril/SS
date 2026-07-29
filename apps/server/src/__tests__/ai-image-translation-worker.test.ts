@@ -3,6 +3,7 @@ import { Job } from 'bullmq';
 import type { AiImageTranslationProvider } from '../services/ai-image-translation.js';
 import { AiImageJobError, type AiImageJobRecord, type AiImageJobRepository } from '../services/ai-image-jobs.js';
 import { AiCostLedgerError } from '../services/ai-cost-ledger.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_TRANSLATION_QUEUE_JOB_OPTIONS,
   aiImageTranslationPollJobId,
@@ -270,6 +271,59 @@ describe('AI image translation worker recovery', () => {
     expect(provider.submit).not.toHaveBeenCalled();
     expect(provider.poll).not.toHaveBeenCalled();
     expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_NOT_READY' });
+  });
+
+  it('fails paid translation before dispatch when sandbox evidence belongs to another endpoint', async () => {
+    const paidJob = {
+      ...job('QUEUED', null),
+      provider: 'dashscope-qwen-mt-image',
+      model: 'qwen-mt-image',
+      estimatedCostCents: 10,
+    };
+    const state = repositoryState(paidJob);
+    const provider: AiImageTranslationProvider = {
+      name: 'dashscope-qwen-mt-image', submit: vi.fn(), poll: vi.fn(),
+    };
+    const resolveProvider = vi.fn(() => provider);
+
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({
+        enabled: true,
+        provider: 'dashscope-qwen-mt-image',
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        apiKey: 'test-only-key',
+        model: 'qwen-mt-image',
+        costPerImageCents: 10,
+      }),
+      resolveCapability: () => ({
+        provider: 'dashscope-qwen-mt-image',
+        model: 'qwen-mt-image',
+        operations: ['IMAGE_TRANSLATE'],
+        maxReferences: 1,
+        supportsMask: false,
+        inputTransport: 'public_url',
+        resultMode: 'async',
+        evidenceLevel: 'sandbox-verified',
+        evidence: 'evidence from a different endpoint',
+        sandboxEvidence: [{
+          endpointSha256: aiImageProviderEndpointSha256(
+            'dashscope-qwen-mt-image',
+            'https://relay.example/api/v1',
+          ),
+          operation: 'IMAGE_TRANSLATE',
+          inputTransport: 'public_url',
+          resultMode: 'async',
+        }],
+      }),
+      resolveProvider,
+      uploadBuffer: vi.fn(),
+      schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).not.toHaveBeenCalled();
   });
 
   it('continues polling an accepted paid task while its capability remains dark', async () => {

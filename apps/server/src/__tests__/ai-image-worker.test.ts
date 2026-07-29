@@ -6,7 +6,10 @@ import {
   processAiImageQueueJob,
   resolveAiImageProvider,
 } from '../workers/ai-image-generation.js';
-import { createAiImageProviderRuntimeContract } from '../services/ai-image-provider-runtime-contract.js';
+import {
+  aiImageProviderEndpointSha256,
+  createAiImageProviderRuntimeContract,
+} from '../services/ai-image-provider-runtime-contract.js';
 
 const allowPaidDispatch = async () => ({
   enabled: true,
@@ -54,6 +57,10 @@ describe('AI image BullMQ worker boundary', () => {
     const generate = vi.fn(async () => generated);
     const edit = vi.fn(async () => edited);
     const inputImages = [{ buffer: Buffer.from('source'), mimeType: 'image/png' as const }];
+    const endpointSha256 = aiImageProviderEndpointSha256(
+      'openai-images',
+      'https://api.openai.com/v1',
+    );
     const provider = resolveAiImageProvider(
       'openai-images',
       {
@@ -67,6 +74,20 @@ describe('AI image BullMQ worker boundary', () => {
           operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'], maxReferences: 16,
           supportsMask: false, inputTransport: 'multipart', resultMode: 'sync',
           evidenceLevel: 'sandbox-verified', evidence: 'test',
+          sandboxEvidence: [
+            {
+              endpointSha256,
+              operation: 'TEXT_TO_IMAGE',
+              inputTransport: 'none',
+              resultMode: 'sync',
+            },
+            {
+              endpointSha256,
+              operation: 'IMAGE_TO_IMAGE',
+              inputTransport: 'multipart',
+              resultMode: 'sync',
+            },
+          ],
         }),
         createOpenAiGenerationProvider: () => ({ name: 'openai-images', generate }),
         createOpenAiEditProvider: () => ({ name: 'openai-image-edits', edit }),
@@ -97,6 +118,47 @@ describe('AI image BullMQ worker boundary', () => {
       images: inputImages,
       mask: null,
     });
+  });
+
+  it('does not let text-to-image sandbox evidence unlock IMAGE_TO_IMAGE dispatch', async () => {
+    const generate = vi.fn(async () => ({ images: [] }));
+    const edit = vi.fn(async () => ({ images: [] }));
+    const endpointSha256 = aiImageProviderEndpointSha256(
+      'openai-images',
+      'https://api.openai.com/v1',
+    );
+    const provider = resolveAiImageProvider(
+      'openai-images',
+      {
+        provider: 'openai-images', baseUrl: 'https://api.openai.com/v1', apiKey: 'secret',
+        model: 'gpt-image-1', costPerImageCents: 7,
+      },
+      undefined,
+      {
+        resolveCapability: () => ({
+          provider: 'openai-images', model: 'gpt-image-1',
+          operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'], maxReferences: 16,
+          supportsMask: false, inputTransport: 'multipart', resultMode: 'sync',
+          evidenceLevel: 'sandbox-verified', evidence: 'text-only sandbox evidence',
+          sandboxEvidence: [{
+            endpointSha256,
+            operation: 'TEXT_TO_IMAGE',
+            inputTransport: 'none',
+            resultMode: 'sync',
+          }],
+        }),
+        createOpenAiGenerationProvider: () => ({ name: 'openai-images', generate }),
+        createOpenAiEditProvider: () => ({ name: 'openai-image-edits', edit }),
+      },
+    );
+
+    await expect(provider.generate({
+      operation: 'IMAGE_TO_IMAGE', prompt: 'keep product', negativePrompt: null,
+      count: 1, width: 1024, height: 1024, model: 'gpt-image-1',
+      inputImages: [{ buffer: Buffer.from('source'), mimeType: 'image/png' }],
+    })).rejects.toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(generate).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
   });
 
   it('fails a queued paid job closed when tenant rollout is revoked before dispatch', async () => {

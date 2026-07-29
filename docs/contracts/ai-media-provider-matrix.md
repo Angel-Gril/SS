@@ -67,6 +67,15 @@ text therefore fails closed and must be recreated; contracts already frozen from
 base keep the same endpoint hash. Do not release or silently retry any historical paid reservation
 that fails this check. Reconcile it explicitly before enabling a paid media flag.
 
+Sandbox capability promotion is now operation-specific. A `sandbox-verified` registry entry must
+carry one or more `sandboxEvidence` bindings containing the canonical `endpointSha256`, exact
+operation, input transport, and result mode. The generation, edit, translation, and paid-suite
+dispatch boundaries compare the active endpoint and request mode against that binding before any
+Provider request. The top-level `evidenceLevel` string alone is not authority, and evidence for
+`TEXT_TO_IMAGE` cannot unlock `IMAGE_TO_IMAGE`, `FULL_EDIT`, `INPAINT`, or `IMAGE_TRANSLATE`.
+The static provider contract also rejects wildcard, malformed, duplicated, or operation-incomplete
+sandbox evidence.
+
 ## Controlled DashScope Translation A/B (2026-07-24)
 
 One controlled synthetic `en` to `ru` A/B exercised the official DashScope `qwen-mt-image` adapter while every production entry point remained dark. The reviewed semantic request inputs used the same source bytes, language pair, model, adapter and domain context; the terminology glossary was the only changed translation input.

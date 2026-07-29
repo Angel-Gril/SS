@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 import {
   AI_IMAGE_SUITE_PROVIDER_REQUEST_HEIGHT,
   AI_IMAGE_SUITE_PROVIDER_REQUEST_WIDTH,
@@ -30,6 +31,17 @@ const exactCapability = (evidenceLevel: AiImageProviderCapability['evidenceLevel
   resultMode: 'sync',
   evidenceLevel,
   evidence: 'test evidence',
+  ...(evidenceLevel === 'sandbox-verified' ? {
+    sandboxEvidence: [{
+      endpointSha256: aiImageProviderEndpointSha256(
+        'openai-images',
+        'https://api.openai.com/v1',
+      ),
+      operation: 'IMAGE_TO_IMAGE' as const,
+      inputTransport: 'multipart' as const,
+      resultMode: 'sync' as const,
+    }],
+  } : {}),
 }) satisfies AiImageProviderCapability;
 
 describe('AI image suite Provider runtime snapshot', () => {
@@ -101,6 +113,27 @@ describe('AI image suite Provider runtime snapshot', () => {
       testOnly: false,
       reasonCode: 'READY',
       capability: { model: 'gpt-image-1', evidenceLevel: 'sandbox-verified' },
+    });
+  });
+
+  it.each([
+    ['endpoint', { endpointSha256: '0'.repeat(64) }],
+    ['operation', { operation: 'FULL_EDIT' as const }],
+    ['input transport', { inputTransport: 'base64' as const }],
+    ['result mode', { resultMode: 'async' as const }],
+  ])('keeps paid suites dark when sandbox evidence has the wrong %s', (_label, change) => {
+    const exact = exactCapability('sandbox-verified');
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(settings(), {
+      resolveCapability: () => ({
+        ...exact,
+        sandboxEvidence: [{ ...exact.sandboxEvidence![0]!, ...change }],
+      }),
+    });
+    expect(snapshot).toMatchObject({
+      configured: true,
+      executionReady: false,
+      reasonCode: 'PROVIDER_EVIDENCE_UNVERIFIED',
+      testOnly: true,
     });
   });
 

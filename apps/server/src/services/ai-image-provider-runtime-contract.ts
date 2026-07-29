@@ -96,7 +96,7 @@ export function canonicalAiImageProviderBaseUrl(providerValue: unknown, baseUrlV
   return normalized;
 }
 
-function baseUrlHash(provider: string, baseUrl: string): string {
+export function aiImageProviderEndpointSha256(provider: string, baseUrl: string): string {
   return createHash('sha256')
     .update(canonicalAiImageProviderBaseUrl(provider, baseUrl))
     .digest('hex');
@@ -124,7 +124,7 @@ export function createAiImageProviderRuntimeContract(
     contractVersion: AI_IMAGE_PROVIDER_RUNTIME_CONTRACT_VERSION,
     provider,
     model,
-    baseUrlSha256: baseUrlHash(provider, identity.baseUrl),
+    baseUrlSha256: aiImageProviderEndpointSha256(provider, identity.baseUrl),
     unitCostCents,
     imageCount,
     width,

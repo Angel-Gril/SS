@@ -11,6 +11,7 @@ import {
 import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
+  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
   type AiImageProviderCapability,
   type AiMediaCapabilityEvidence,
@@ -281,7 +282,15 @@ export function createAiImageSuiteProviderRuntimeSnapshot(
 
   const providerConfig = paidConfig(providerRuntime, concurrencyLimit);
   const credentialConfigured = Boolean(String(rawSettings.apiKey || '').trim());
-  const evidenceReady = capability.evidenceLevel === 'sandbox-verified';
+  const evidenceReady = hasExactAiMediaSandboxEvidence({
+    capability,
+    provider,
+    model,
+    baseUrl: rawSettings.baseUrl,
+    operation: 'IMAGE_TO_IMAGE',
+    inputTransport: 'multipart',
+    resultMode: 'sync',
+  });
   const configured = credentialConfigured;
   const executionReady = configured && evidenceReady;
   const reasonCode = !credentialConfigured

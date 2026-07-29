@@ -119,6 +119,21 @@ transport; a pre-existing v1 contract using the older bare-origin hash fails clo
 recreated rather than retried. No Provider call, charge, production mutation, deployment, flag
 change, or `.context/` staging occurred during these gates.
 
+The remaining `QA-02` promotion path is now structurally bound to exact sandbox evidence rather than
+a provider/model-wide label. Each verified record must match the canonical endpoint SHA-256,
+operation, input transport, and sync/async result mode. Generation, edit, translation, and paid-suite
+dispatch all fail closed on a missing or mismatched binding; accepted asynchronous translation tasks
+still retain their existing poll-only recovery path after registry tightening. A static contract
+prevents future registry entries from being marked `sandbox-verified` without complete per-operation
+bindings. Focused capability/worker/suite tests passed `87/87`, the Server typecheck passed, and the
+Provider foundation contract passed. Repository lint passed with `20` existing warnings and no
+errors, workspace typecheck passed, full Server tests passed `4383` with `194` skipped, and preflight
+passed `445` checks with no failures and the two expected local-extension permission warnings.
+Phase 3 remains `4/5` and overall progress remains `32/37`:
+there is still no different edit-capable endpoint/model or explicitly approved paid request. All
+production flags remain off, and this offline work made no Provider request, charge, production
+mutation, VPS access, deployment, or `.context/` staging.
+
 ## Next Steps
 
 1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private

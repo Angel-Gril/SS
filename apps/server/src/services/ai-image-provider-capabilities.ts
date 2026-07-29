@@ -1,3 +1,5 @@
+import { aiImageProviderEndpointSha256 } from './ai-image-provider-runtime-contract.js';
+
 export type AiMediaOperation =
   | 'TEXT_TO_IMAGE'
   | 'IMAGE_TO_IMAGE'
@@ -8,6 +10,13 @@ export type AiMediaOperation =
 export type AiMediaInputTransport = 'none' | 'public_url' | 'base64' | 'multipart';
 export type AiMediaResultMode = 'sync' | 'async';
 export type AiMediaCapabilityEvidence = 'local-test' | 'adapter-characterized' | 'sandbox-verified';
+
+export interface AiMediaSandboxEvidence {
+  endpointSha256: string;
+  operation: AiMediaOperation;
+  inputTransport: AiMediaInputTransport;
+  resultMode: AiMediaResultMode;
+}
 
 export type AiMediaCapabilityErrorCode =
   | 'UNSUPPORTED_PROVIDER_MODEL'
@@ -24,6 +33,7 @@ export interface AiImageProviderCapability {
   resultMode: AiMediaResultMode;
   evidenceLevel: AiMediaCapabilityEvidence;
   evidence: string;
+  sandboxEvidence?: readonly AiMediaSandboxEvidence[];
 }
 
 export const AI_IMAGE_SUITE_PROVIDER = 'fake';
@@ -156,6 +166,40 @@ export function resolveAiImageProviderCapability(
     ) ||
     null
   );
+}
+
+export function hasExactAiMediaSandboxEvidence(input: {
+  capability: AiImageProviderCapability | null | undefined;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  operation: AiMediaOperation;
+  inputTransport: AiMediaInputTransport;
+  resultMode: AiMediaResultMode;
+}): boolean {
+  const capability = input.capability;
+  if (!capability
+    || capability.evidenceLevel !== 'sandbox-verified'
+    || capability.provider !== input.provider
+    || capability.model !== input.model
+    || capability.model === '*'
+    || !capability.operations.includes(input.operation)
+    || !Array.isArray(capability.sandboxEvidence)) {
+    return false;
+  }
+  let endpointSha256: string;
+  try {
+    endpointSha256 = aiImageProviderEndpointSha256(input.provider, input.baseUrl);
+  } catch {
+    return false;
+  }
+  return capability.sandboxEvidence.some((evidence) => (
+    /^[a-f0-9]{64}$/u.test(evidence.endpointSha256)
+    && evidence.endpointSha256 === endpointSha256
+    && evidence.operation === input.operation
+    && evidence.inputTransport === input.inputTransport
+    && evidence.resultMode === input.resultMode
+  ));
 }
 
 export function supportsAiMediaOperation(

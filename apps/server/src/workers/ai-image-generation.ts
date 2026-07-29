@@ -12,7 +12,10 @@ import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
 } from '../services/ai-image-providers.js';
-import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import {
+  hasExactAiMediaSandboxEvidence,
+  resolveAiImageProviderCapability,
+} from '../services/ai-image-provider-capabilities.js';
 import {
   AiImageProviderRuntimeContractError,
   assertAiImageProviderRuntimeContract,
@@ -113,7 +116,18 @@ export function resolveAiImageProvider(
     return createDisabledAiImageProvider();
   }
   const options = { baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, costPerImageCents: config.costPerImageCents, onProviderJobCreated };
-  if (provider === 'dashscope-wanx') return createDashScopeWanxProvider(options);
+  if (provider === 'dashscope-wanx') {
+    if (!hasExactAiMediaSandboxEvidence({
+      capability,
+      provider,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      operation: 'TEXT_TO_IMAGE',
+      inputTransport: 'none',
+      resultMode: 'async',
+    })) return createDisabledAiImageProvider();
+    return createDashScopeWanxProvider(options);
+  }
   if (provider === 'openai-images') {
     const generation = (
       dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider
@@ -125,6 +139,20 @@ export function resolveAiImageProvider(
       name: 'openai-images',
       async generate(request) {
         const operation = request.operation || 'TEXT_TO_IMAGE';
+        if (!hasExactAiMediaSandboxEvidence({
+          capability,
+          provider,
+          model: config.model,
+          baseUrl: config.baseUrl,
+          operation,
+          inputTransport: operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
+          resultMode: 'sync',
+        })) {
+          throw new AiImageJobError(
+            'PROVIDER_NOT_READY',
+            `OpenAI ${operation} has not passed its exact endpoint and request-mode sandbox gate`,
+          );
+        }
         if (operation === 'TEXT_TO_IMAGE') return generation.generate(request);
         if (operation !== 'IMAGE_TO_IMAGE') {
           throw new AiImageJobError(

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import { aiImageProviderEndpointSha256 } from '../services/ai-image-provider-runtime-contract.js';
 import type {
   OpenAiImageEditProviderOptions,
   OpenAiImageEditRequest,
@@ -78,6 +79,17 @@ function capability(
     resultMode: 'sync',
     evidenceLevel,
     evidence: 'isolated test evidence',
+    ...(evidenceLevel === 'sandbox-verified' ? {
+      sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256(
+          'openai-images',
+          'https://api.openai.com/v1',
+        ),
+        operation: 'IMAGE_TO_IMAGE' as const,
+        inputTransport: 'multipart' as const,
+        resultMode: 'sync' as const,
+      }],
+    } : {}),
     ...overrides,
   };
 }

@@ -18,6 +18,7 @@ import {
   createOpenAiImageEditProvider,
 } from '../services/ai-image-providers.js';
 import {
+  hasExactAiMediaSandboxEvidence,
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
 import {
@@ -249,12 +250,15 @@ export function resolveAiImageEditProvider(
     provider,
     model,
   );
-  if (
-    capability?.provider !== provider
-    || capability.model !== model
-    || capability.evidenceLevel !== 'sandbox-verified'
-    || !capability.operations.includes(operation)
-  ) {
+  if (!hasExactAiMediaSandboxEvidence({
+    capability,
+    provider,
+    model,
+    baseUrl: config.baseUrl,
+    operation,
+    inputTransport: 'multipart',
+    resultMode: 'sync',
+  })) {
     return createDisabledAiImageProvider();
   }
   const editProvider = (

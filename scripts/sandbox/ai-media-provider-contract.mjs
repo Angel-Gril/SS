@@ -62,6 +62,35 @@ for (const entry of capabilities) {
   if (entry.model === '*' && entry.evidenceLevel === 'sandbox-verified') {
     fail(`wildcard model cannot be sandbox verified: ${entry.provider}`);
   }
+  if (entry.evidenceLevel === 'sandbox-verified') {
+    if (!Array.isArray(entry.sandboxEvidence) || entry.sandboxEvidence.length < 1) {
+      fail(`sandbox-verified capability lacks exact evidence bindings: ${entry.provider}:${entry.model}`);
+    } else {
+      const seen = new Set();
+      for (const evidence of entry.sandboxEvidence) {
+        const key = [
+          evidence?.endpointSha256,
+          evidence?.operation,
+          evidence?.inputTransport,
+          evidence?.resultMode,
+        ].join(':');
+        if (!/^[a-f0-9]{64}$/u.test(String(evidence?.endpointSha256 || ''))
+          || !(entry.operations || []).includes(evidence?.operation)
+          || !['none', 'public_url', 'base64', 'multipart'].includes(evidence?.inputTransport)
+          || !['sync', 'async'].includes(evidence?.resultMode)
+          || seen.has(key)) {
+          fail(`sandbox evidence binding is invalid or duplicated: ${entry.provider}:${entry.model}`);
+          break;
+        }
+        seen.add(key);
+      }
+      for (const operation of entry.operations || []) {
+        if (!entry.sandboxEvidence.some((evidence) => evidence?.operation === operation)) {
+          fail(`sandbox-verified capability lacks operation evidence: ${entry.provider}:${entry.model}:${operation}`);
+        }
+      }
+    }
+  }
   const paidDerivedOperations = entry.provider === 'fake'
     ? []
     : (entry.operations || []).filter((operation) => operation !== 'TEXT_TO_IMAGE');
