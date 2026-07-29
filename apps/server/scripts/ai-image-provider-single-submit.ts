@@ -47,7 +47,10 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'apps/server/src/services/ai-image-sandbox-guard.ts',
+  'apps/server/src/services/ai-image-job-error.ts',
+  'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-providers.ts',
+  'packages/shared/src/ai-image-workbench-contract.ts',
 ];
 type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
 type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL';

@@ -4,11 +4,13 @@ import { isIP } from 'node:net';
 import {
   lstat,
   open,
+  realpath,
 } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
-import { normalizeOpenAiImagesApiBase } from '../src/services/ai-image-providers.js';
+import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
+import { normalizeOpenAiImagesApiBase } from '../src/services/ai-image-openai-url.js';
 import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
@@ -18,9 +20,9 @@ export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT =
   'DRAFT_REVIEW_REQUIRED_NOT_APPROVED';
 export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_TIMESTAMP = 'REPLACE_DURING_REVIEW';
 
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
-const MAX_MEDIA_DIMENSION = 4096;
-const MAX_MEDIA_PIXELS = 16_777_216;
+const MAX_MEDIA_BYTES = AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes;
+const MAX_MEDIA_DIMENSION = AI_IMAGE_WORKBENCH_LIMITS.maxDimension;
+const MAX_MEDIA_PIXELS = AI_IMAGE_WORKBENCH_LIMITS.maxPixels;
 const MAX_SANDBOX_COST_CENTS = 10_000_000;
 const OPERATIONS = new Set<AiImageSandboxApprovalDraftOperation>([
   'TEXT_TO_IMAGE',
@@ -48,7 +50,9 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/scripts/ai-image-provider-approval-draft.ts',
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
-  'apps/server/src/services/ai-image-providers.ts',
+  'apps/server/src/services/ai-image-job-error.ts',
+  'apps/server/src/services/ai-image-openai-url.ts',
+  'packages/shared/src/ai-image-workbench-contract.ts',
 ];
 
 type AiImageSandboxApprovalDraftOperation =
@@ -89,6 +93,7 @@ export interface AiImageProviderApprovalDraftOptions {
   repositoryRoot?: string;
   resolveRevision?: typeof resolveAiImageSandboxRepositoryRevision;
   requireGitCheckout?: boolean;
+  beforeDraftWrite?: () => Promise<void>;
 }
 
 function draftError(code: string, message: string) {
@@ -390,6 +395,12 @@ async function resolveMediaBindings(input: {
     environment: input.environment,
     repositoryRoot: input.repositoryRoot,
   });
+  if (source.bytes.byteLength + mask.bytes.byteLength > MAX_MEDIA_BYTES) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
+      'The aggregate source and mask bytes exceed the edit request limit',
+    );
+  }
   await assertMeaningfulMask(mask);
   if (mask.width !== source.width || mask.height !== source.height) {
     throw draftError(
@@ -400,150 +411,263 @@ async function resolveMediaBindings(input: {
   return { sourceSha256: [source.sha256], maskSha256: mask.sha256 };
 }
 
-async function syncDirectory(path: string) {
-  let handle: Awaited<ReturnType<typeof open>> | null = null;
-  try {
-    handle = await open(path, 'r');
-    await handle.sync();
-  } catch (error: any) {
-    if (
-      process.platform === 'win32'
-      && ['EACCES', 'EINVAL', 'EISDIR', 'ENOSYS', 'EPERM'].includes(String(error?.code))
-    ) return;
-    throw error;
-  } finally {
-    await handle?.close().catch(() => undefined);
+interface PrivateDraftDirectory {
+  path: string;
+  canonicalPath: string;
+  device: bigint;
+  inode: bigint;
+  handle: Awaited<ReturnType<typeof open>>;
+}
+
+function samePath(left: string, right: string) {
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function hasStableFileIdentity(device: bigint, inode: bigint) {
+  return device > 0n && inode > 0n;
+}
+
+function sameFileIdentity(
+  left: { device: bigint; inode: bigint },
+  right: { device: bigint; inode: bigint },
+) {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+function assertPrivateDirectoryMetadata(metadata: BigIntStats, message: string) {
+  if (
+    !metadata.isDirectory()
+    || metadata.isSymbolicLink()
+    || !hasStableFileIdentity(metadata.dev, metadata.ino)
+    || (process.platform !== 'win32' && (metadata.mode & 0o077n) !== 0n)
+    || (
+      process.platform !== 'win32'
+      && typeof process.getuid === 'function'
+      && metadata.uid !== BigInt(process.getuid())
+    )
+  ) {
+    throw draftError('SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE', message);
   }
 }
 
-async function inspectPrivateParent(path: string) {
-  let metadata: BigIntStats;
+async function openPrivateDraftDirectory(path: string): Promise<PrivateDraftDirectory> {
+  const resolvedPath = resolve(path);
+  let canonicalPath: string;
+  let pathMetadata: BigIntStats;
   try {
-    metadata = await lstat(path, { bigint: true });
+    canonicalPath = await realpath(resolvedPath);
+    pathMetadata = await lstat(resolvedPath, { bigint: true });
   } catch {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
       'The approval draft parent must already exist as a private directory',
     );
   }
-  if (
-    !metadata.isDirectory()
-    || metadata.isSymbolicLink()
-    || (process.platform !== 'win32' && (metadata.mode & 0o077n) !== 0n)
-  ) {
+  if (!samePath(resolvedPath, canonicalPath)) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
-      'The approval draft parent must be a private non-linked directory',
+      'The approval draft parent must not use linked path components',
     );
   }
-  if (
-    process.platform !== 'win32'
-    && typeof process.getuid === 'function'
-    && metadata.uid !== BigInt(process.getuid())
-  ) {
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
-      'The approval draft parent must be owned by the current user',
-    );
-  }
-  return metadata;
-}
-
-function sameFileIdentity(
-  left: BigIntStats,
-  right: BigIntStats,
-) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-async function writeExclusivePrivateDraft(path: string, bytes: Buffer) {
-  const parent = dirname(path);
-  if (parent === path) {
-    throw draftError('SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE', 'Approval draft path is invalid');
-  }
-  const parentBefore = await inspectPrivateParent(parent);
-  try {
-    await lstat(path);
-    throw draftError(
-      'SANDBOX_APPROVAL_DRAFT_CONFLICT',
-      'An operator-owned approval draft already exists',
-    );
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  const flags = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL
-    | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+  assertPrivateDirectoryMetadata(
+    pathMetadata,
+    'The approval draft parent must be a private current-user directory',
+  );
+  const flags = constants.O_RDONLY
+    | (process.platform === 'win32' ? 0 : (constants.O_DIRECTORY || 0) | constants.O_NOFOLLOW);
   let handle: Awaited<ReturnType<typeof open>>;
-  let writtenMetadata: BigIntStats | null = null;
   try {
-    handle = await open(path, flags, 0o600);
-  } catch (error: any) {
-    if (error?.code === 'EEXIST') {
+    handle = await open(canonicalPath, flags);
+  } catch {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+      'The approval draft parent could not be opened safely',
+    );
+  }
+  try {
+    const handleMetadata = await handle.stat({ bigint: true });
+    assertPrivateDirectoryMetadata(
+      handleMetadata,
+      'The approval draft parent changed while it was opened',
+    );
+    const directory = {
+      path: resolvedPath,
+      canonicalPath,
+      device: pathMetadata.dev,
+      inode: pathMetadata.ino,
+      handle,
+    };
+    if (!sameFileIdentity(directory, {
+      device: handleMetadata.dev,
+      inode: handleMetadata.ino,
+    })) {
       throw draftError(
-        'SANDBOX_APPROVAL_DRAFT_CONFLICT',
-        'An operator-owned approval draft already exists',
+        'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+        'The approval draft parent changed while it was opened',
       );
     }
+    return directory;
+  } catch (error) {
+    await handle.close();
     throw error;
   }
+}
+
+async function assertPrivateDraftDirectoryStable(directory: PrivateDraftDirectory) {
+  let canonicalPath: string;
+  let pathMetadata: BigIntStats;
   try {
-    await handle.writeFile(bytes);
-    if (process.platform !== 'win32') await handle.chmod(0o600);
-    await handle.sync();
-    const metadata = await handle.stat({ bigint: true });
-    if (
-      !metadata.isFile()
-      || metadata.size !== BigInt(bytes.byteLength)
-      || (process.platform !== 'win32' && (metadata.mode & 0o077n) !== 0n)
-    ) {
-      throw draftError(
-        'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
-        'The approval draft was not persisted as one private regular file',
-      );
-    }
-    writtenMetadata = metadata;
-    const persisted = Buffer.allocUnsafe(bytes.byteLength);
-    let bytesRead = 0;
-    while (bytesRead < persisted.byteLength) {
-      const result = await handle.read(
-        persisted,
-        bytesRead,
-        persisted.byteLength - bytesRead,
-        bytesRead,
-      );
-      if (result.bytesRead === 0) break;
-      bytesRead += result.bytesRead;
-    }
-    if (bytesRead !== bytes.byteLength || sha256(persisted) !== sha256(bytes)) {
-      throw draftError(
-        'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
-        'The persisted approval draft does not match its canonical bytes',
-      );
-    }
-  } finally {
-    await handle.close();
+    canonicalPath = await realpath(directory.path);
+    pathMetadata = await lstat(directory.path, { bigint: true });
+  } catch {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+      'The approval draft parent disappeared while the draft was written',
+    );
   }
-  const parentAfter = await inspectPrivateParent(parent);
-  if (!sameFileIdentity(parentBefore, parentAfter)) {
+  const handleMetadata = await directory.handle.stat({ bigint: true });
+  assertPrivateDirectoryMetadata(
+    pathMetadata,
+    'The approval draft parent changed while the draft was written',
+  );
+  assertPrivateDirectoryMetadata(
+    handleMetadata,
+    'The approval draft parent handle changed while the draft was written',
+  );
+  if (
+    !samePath(canonicalPath, directory.canonicalPath)
+    || !sameFileIdentity(directory, { device: pathMetadata.dev, inode: pathMetadata.ino })
+    || !sameFileIdentity(directory, { device: handleMetadata.dev, inode: handleMetadata.ino })
+  ) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
       'The approval draft parent changed while the draft was written',
     );
   }
-  const leafAfter = await lstat(path, { bigint: true });
-  if (
-    !writtenMetadata
-    || !leafAfter.isFile()
-    || leafAfter.isSymbolicLink()
-    || !sameFileIdentity(writtenMetadata, leafAfter)
-    || (process.platform !== 'win32' && (leafAfter.mode & 0o077n) !== 0n)
-  ) {
+}
+
+function privateDraftEntryPath(directory: PrivateDraftDirectory, name: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(name)) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
-      'The approval draft path changed after its private write',
+      'The approval draft filename is invalid',
     );
   }
-  await syncDirectory(parent);
+  return process.platform === 'linux'
+    ? `/proc/self/fd/${directory.handle.fd}/${name}`
+    : resolve(directory.canonicalPath, name);
+}
+
+async function syncPrivateDraftDirectory(directory: PrivateDraftDirectory) {
+  try {
+    await directory.handle.sync();
+  } catch (error: any) {
+    if (
+      process.platform === 'win32'
+      && ['EACCES', 'EINVAL', 'EISDIR', 'ENOSYS', 'EPERM'].includes(String(error?.code))
+    ) return;
+    throw error;
+  }
+}
+
+async function writeExclusivePrivateDraft(
+  path: string,
+  bytes: Buffer,
+  beforeDraftWrite?: () => Promise<void>,
+) {
+  const parent = dirname(path);
+  const name = basename(path);
+  if (parent === path) {
+    throw draftError('SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE', 'Approval draft path is invalid');
+  }
+  const directory = await openPrivateDraftDirectory(parent);
+  const entryPath = privateDraftEntryPath(directory, name);
+  try {
+    try {
+      await lstat(entryPath);
+      throw draftError(
+        'SANDBOX_APPROVAL_DRAFT_CONFLICT',
+        'An operator-owned approval draft already exists',
+      );
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    await beforeDraftWrite?.();
+    const flags = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL
+      | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
+    let handle: Awaited<ReturnType<typeof open>>;
+    let writtenMetadata: BigIntStats | null = null;
+    try {
+      handle = await open(entryPath, flags, 0o600);
+    } catch (error: any) {
+      if (error?.code === 'EEXIST') {
+        throw draftError(
+          'SANDBOX_APPROVAL_DRAFT_CONFLICT',
+          'An operator-owned approval draft already exists',
+        );
+      }
+      throw error;
+    }
+    try {
+      await handle.writeFile(bytes);
+      if (process.platform !== 'win32') await handle.chmod(0o600);
+      await handle.sync();
+      const metadata = await handle.stat({ bigint: true });
+      if (
+        !metadata.isFile()
+        || metadata.size !== BigInt(bytes.byteLength)
+        || (process.platform !== 'win32' && (metadata.mode & 0o077n) !== 0n)
+      ) {
+        throw draftError(
+          'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+          'The approval draft was not persisted as one private regular file',
+        );
+      }
+      writtenMetadata = metadata;
+      const persisted = Buffer.allocUnsafe(bytes.byteLength);
+      let bytesRead = 0;
+      while (bytesRead < persisted.byteLength) {
+        const result = await handle.read(
+          persisted,
+          bytesRead,
+          persisted.byteLength - bytesRead,
+          bytesRead,
+        );
+        if (result.bytesRead === 0) break;
+        bytesRead += result.bytesRead;
+      }
+      if (bytesRead !== bytes.byteLength || sha256(persisted) !== sha256(bytes)) {
+        throw draftError(
+          'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+          'The persisted approval draft does not match its canonical bytes',
+        );
+      }
+    } finally {
+      await handle.close();
+    }
+    const leafAfter = await lstat(entryPath, { bigint: true });
+    if (
+      !writtenMetadata
+      || !leafAfter.isFile()
+      || leafAfter.isSymbolicLink()
+      || !sameFileIdentity(
+        { device: writtenMetadata.dev, inode: writtenMetadata.ino },
+        { device: leafAfter.dev, inode: leafAfter.ino },
+      )
+      || (process.platform !== 'win32' && (leafAfter.mode & 0o077n) !== 0n)
+    ) {
+      throw draftError(
+        'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE',
+        'The approval draft path changed after its private write',
+      );
+    }
+    await syncPrivateDraftDirectory(directory);
+    await assertPrivateDraftDirectoryStable(directory);
+  } finally {
+    await directory.handle.close();
+  }
 }
 
 function safeFailureCode(error: unknown) {
@@ -704,7 +828,7 @@ export async function runAiImageProviderApprovalDraft(
   };
   const bytes = Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, 'utf8');
   const draftSha256 = sha256(bytes);
-  await writeExclusivePrivateDraft(draftPath, bytes);
+  await writeExclusivePrivateDraft(draftPath, bytes, options.beforeDraftWrite);
   const event = {
     schemaVersion: 1,
     event: 'AI_IMAGE_SANDBOX_APPROVAL_DRAFT_CREATED',

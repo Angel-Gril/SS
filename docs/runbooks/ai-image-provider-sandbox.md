@@ -150,7 +150,7 @@ fails before DNS, intent creation, or Provider dispatch when any exact request f
 | `AI_IMAGE_SANDBOX_MASK_PATH`           | Required only for `INPAINT`                                                             |
 | `AI_IMAGE_SANDBOX_MASK_SHA256`         | Required with mask path; lowercase SHA-256 of the exact PNG bytes                       |
 
-For `TEXT_TO_IMAGE`, leave all source and mask variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI rejects extra conditional variables instead of ignoring them.
+For `TEXT_TO_IMAGE`, leave all source and mask variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI rejects extra conditional variables instead of ignoring them. One source, or the combined `INPAINT` source and mask, must not exceed the shared `50 MiB` edit-request limit; the offline draft rejects an oversized exact request before creating approval evidence.
 
 Relative source and mask paths are resolved from the repository/deployed app root, even though `pnpm --filter server` executes the package script with `apps/server` as its process working directory.
 

@@ -175,3 +175,20 @@ Progress: 4/5 tasks.
   open because no edit-capable endpoint/model or explicitly approved paid request exists. No real
   Provider request, charge, production mutation, VPS access, deployment, or `.context/` staging
   occurred.
+- Additional offline hardening keeps Linux approval-draft creation, persisted-byte verification,
+  leaf inspection, and durability sync bound to one held private parent descriptor; a visible parent
+  swap cannot redirect the draft and fails the final identity check. The billing finalizer now also
+  syncs its held output-directory descriptor and rechecks the visible path and descriptor identity
+  after that sync. Non-Linux draft creation retains canonical path and before/after identity checks
+  under the local ACL trust boundary.
+- Draft and Provider edit limits now derive from the versioned shared workbench contract, including
+  the `50 MiB` aggregate source-plus-mask limit for `INPAINT`. OpenAI-compatible URL normalization
+  and `AiImageJobError` identity live in network-free leaf modules, so offline draft generation does
+  not load DNS or the Provider stack while existing imports retain one error constructor identity.
+  Focused draft/URL/Provider/billing/single-submit tests passed `158` with two platform-specific
+  skips; full server tests passed `4364` with `190` skipped. The static contract, sandbox TypeScript
+  compilation, repository lint (existing warnings only), workspace typecheck, diff check, and full
+  preflight passed; preflight reported `445` passes, `0` failures, and the two expected local-package
+  permission warnings. Independent review found no P0/P1 issue. `QA-02` remains open and all rollout
+  flags remain default-off; no Provider request, charge, production mutation, VPS access,
+  deployment, or `.context/` staging occurred.

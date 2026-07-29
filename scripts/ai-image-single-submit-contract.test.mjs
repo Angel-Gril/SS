@@ -18,6 +18,18 @@ const approvalDraft = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-approval-draft.ts',
   'utf8',
 );
+const openAiImageUrl = fs.readFileSync(
+  'apps/server/src/services/ai-image-openai-url.ts',
+  'utf8',
+);
+const aiImageJobError = fs.readFileSync(
+  'apps/server/src/services/ai-image-job-error.ts',
+  'utf8',
+);
+const imageProviders = fs.readFileSync(
+  'apps/server/src/services/ai-image-providers.ts',
+  'utf8',
+);
 const billingFinalizer = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-billing-finalize.ts',
   'utf8',
@@ -160,12 +172,26 @@ assert.match(approvalDraft, /SANDBOX_APPROVAL_DRAFT_UNSAFE_ENV/u);
 assert.match(approvalDraft, /AI_IMAGE_SANDBOX_APPROVAL_DRAFT_CREATED/u);
 assert.match(approvalDraft, /constants\.O_EXCL/u);
 assert.match(approvalDraft, /constants\.O_NOFOLLOW/u);
+assert.match(approvalDraft, /constants\.O_DIRECTORY/u);
+assert.match(approvalDraft, /\/proc\/self\/fd/u);
+assert.match(approvalDraft, /beforeDraftWrite/u);
 assert.match(approvalDraft, /handle\.sync\(\)/u);
-assert.match(approvalDraft, /syncDirectory\(parent\)/u);
+assert.match(approvalDraft, /syncPrivateDraftDirectory/u);
 assert.match(approvalDraft, /requireGitCheckout:\s*true/u);
 assert.match(approvalDraft, /AI_IMAGE_SANDBOX_SOURCE_SHA256/u);
 assert.match(approvalDraft, /AI_IMAGE_SANDBOX_MASK_SHA256/u);
 assert.match(approvalDraft, /'generations'\s*:\s*'edits'/u);
+assert.match(approvalDraft, /ai-image-openai-url\.js/u);
+assert.match(approvalDraft, /ai-image-job-error\.ts/u);
+assert.match(approvalDraft, /packages\/shared\/src\/ai-image-workbench-contract\.ts/u);
+assert.match(source, /ai-image-openai-url\.ts/u);
+assert.match(source, /ai-image-job-error\.ts/u);
+assert.match(source, /packages\/shared\/src\/ai-image-workbench-contract\.ts/u);
+assert.match(openAiImageUrl, /normalizeOpenAiImagesApiBase/u);
+assert.match(openAiImageUrl, /AiImageJobError/u);
+assert.match(imageProviders, /from '.\/ai-image-job-error\.js'/u);
+assert.match(imageProviders, /import type \{[\s\S]*from '.\/ai-image-jobs\.js'/u);
+assert.match(imageProviders, /AI_IMAGE_WORKBENCH_LIMITS\.maxRequestBytes/u);
 assert.match(billingFinalizer, /SANDBOX_BILLING_UNSAFE_ENV/u);
 assert.match(billingFinalizer, /AI_IMAGE_TRANSLATION_SANDBOX_API_KEY/u);
 assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
@@ -191,6 +217,12 @@ assert.match(billingSettlement, /isPathWithin/u);
 assert.match(billingSettlement, /pathMetadata\.isFile/u);
 assert.match(billingSettlement, /sameSnapshotFile/u);
 assert.match(billingSettlement, /incomplete billing claim/u);
+assert.match(billingSettlement, /await directory\.handle\.sync\(\)/u);
+assert.match(
+  billingSettlement,
+  /await directory\.handle\.sync\(\);[\s\S]*await assertPrivateOutputDirectoryStable\(directory\);/u,
+);
+assert.doesNotMatch(billingSettlement, /syncDirectory\(directory\.canonicalPath\)/u);
 assert.match(runbook, /ai-image-provider-sandbox-approval\.md/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_PATH/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_APPROVAL_SHA256/u);
@@ -250,6 +282,11 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   approvalDraft,
   /\bfetch\b|\blookup\b|resolvePublicDns|validateAiImageProviderUrl|cloudflare-dns|claimAiImageSandboxOperation|createAiImageSandboxRequestFingerprint|createOpenAiImagesProvider|createOpenAiImageEditProvider|node:(?:http|https|tls|dns)/iu,
+);
+assert.doesNotMatch(approvalDraft, /from ['"].*ai-image-providers\.js/u);
+assert.doesNotMatch(
+  openAiImageUrl + aiImageJobError,
+  /\bfetch\b|\blookup\b|ipaddr|ai-image-(?:providers|jobs)|node:(?:http|https|net|tls|dns)/iu,
 );
 
 const outsideSandbox = spawnSync(

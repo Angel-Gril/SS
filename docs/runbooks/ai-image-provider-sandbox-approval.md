@@ -35,7 +35,9 @@ The command requires a private, existing parent directory (mode `0700` on Linux)
 verifiable Git checkout of `AI_IMAGE_SANDBOX_ADAPTER_REVISION`, and the same endpoint, model,
 operation/profile, credential revision, source/mask digest, and quoted/maximum cost variables used
 by the submit command. Draft costs must be canonical positive integers no greater than
-`10,000,000` cents, with quote less than or equal to maximum. It additionally requires:
+`10,000,000` cents, with quote less than or equal to maximum. Edit media must use supported bounded
+PNG/JPEG/WebP bytes; for `INPAINT`, source plus mask must not exceed the shared `50 MiB` multipart
+limit. It additionally requires:
 
 | Variable                                                  | Requirement                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -54,7 +56,10 @@ API keys, `AI_IMAGE_SANDBOX_CONFIRM`, `Authorization`, an existing approval path
 Provider secret variables must all be absent. Draft generation reads only pinned local media and
 Git metadata. It performs no DNS lookup or Provider request and creates no request intent or replay
 fingerprint. The output file is created once as mode `0600` on Linux; stdout contains only a
-sanitized event and hashes.
+sanitized event and hashes. Linux creation, persisted-byte verification, leaf checks, and directory
+sync remain bound to one held parent descriptor, so replacing the visible parent path cannot redirect
+the write. A detected parent change fails closed. Other platforms retain canonical path and
+before/after identity checks under the documented local ACL trust boundary.
 
 The generated file deliberately contains these rejection sentinels:
 

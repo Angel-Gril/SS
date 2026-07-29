@@ -1,7 +1,17 @@
 import { createHash } from 'node:crypto';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -75,6 +85,26 @@ async function fixture(operation = 'FULL_EDIT') {
   return { root, privateDirectory, sourcePath, maskPath, draftPath, environment, operationId };
 }
 
+async function resizePinnedMedia(
+  value: Awaited<ReturnType<typeof fixture>>,
+  sourceBytes: number,
+  maskBytes: number,
+) {
+  const source = await readFile(value.sourcePath);
+  const mask = await readFile(value.maskPath);
+  if (sourceBytes < source.byteLength || maskBytes < mask.byteLength) {
+    throw new Error('test media target is too small');
+  }
+  const sizedSource = Buffer.alloc(sourceBytes);
+  const sizedMask = Buffer.alloc(maskBytes);
+  source.copy(sizedSource);
+  mask.copy(sizedMask);
+  await writeFile(value.sourcePath, sizedSource, { mode: 0o600 });
+  await writeFile(value.maskPath, sizedMask, { mode: 0o600 });
+  value.environment.AI_IMAGE_SANDBOX_SOURCE_SHA256 = sha256(sizedSource);
+  value.environment.AI_IMAGE_SANDBOX_MASK_SHA256 = sha256(sizedMask);
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -103,7 +133,11 @@ describe('AI image sandbox approval draft generator', () => {
       undefined,
       expect.arrayContaining([
         'apps/server/scripts/ai-image-provider-approval-draft.ts',
+        'apps/server/src/services/ai-image-sandbox-approval.ts',
         'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+        'apps/server/src/services/ai-image-job-error.ts',
+        'apps/server/src/services/ai-image-openai-url.ts',
+        'packages/shared/src/ai-image-workbench-contract.ts',
       ]),
       undefined,
     );
@@ -329,6 +363,29 @@ describe('AI image sandbox approval draft generator', () => {
     })).rejects.toBeDefined();
   });
 
+  it('enforces the shared 50 MiB aggregate edit-media boundary before writing', async () => {
+    const maximumBytes = 50 * 1024 * 1024;
+    const sourceBytes = Math.floor(maximumBytes / 2);
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+
+    const exact = await fixture('INPAINT');
+    await resizePinnedMedia(exact, sourceBytes, maximumBytes - sourceBytes);
+    await expect(runAiImageProviderApprovalDraft({
+      environment: exact.environment,
+      repositoryRoot: exact.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).resolves.toMatchObject({ draft: { operation: 'INPAINT' } });
+
+    const oversized = await fixture('INPAINT');
+    await resizePinnedMedia(oversized, sourceBytes, maximumBytes - sourceBytes + 1);
+    await expect(runAiImageProviderApprovalDraft({
+      environment: oversized.environment,
+      repositoryRoot: oversized.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID' });
+    await expect(access(oversized.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('never overwrites an existing draft', async () => {
     const value = await fixture();
     const original = Buffer.from('operator-owned existing draft\n', 'utf8');
@@ -352,4 +409,32 @@ describe('AI image sandbox approval draft generator', () => {
     })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE' });
     await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it.skipIf(process.platform !== 'linux')(
+    'pins the private parent descriptor across a path swap',
+    async () => {
+      const value = await fixture();
+      const originalParent = join(value.root, 'private-original');
+      vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+
+      await expect(runAiImageProviderApprovalDraft({
+        environment: value.environment,
+        repositoryRoot: value.root,
+        resolveRevision: vi.fn(async () => adapterRevision),
+        beforeDraftWrite: async () => {
+          await rename(value.privateDirectory, originalParent);
+          await mkdir(value.privateDirectory, { mode: 0o700 });
+        },
+      } as Parameters<typeof runAiImageProviderApprovalDraft>[0] & {
+        beforeDraftWrite: () => Promise<void>;
+      })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_PATH_UNSAFE' });
+
+      await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      const pinnedDraft = JSON.parse(await readFile(
+        join(originalParent, basename(value.draftPath)),
+        'utf8',
+      )) as Record<string, unknown>;
+      expect(pinnedDraft.statement).toBe(AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT);
+    },
+  );
 });

@@ -4,6 +4,9 @@ import {
   assertAiMediaCapability,
   type AiMediaOperation,
 } from './ai-image-provider-capabilities.js';
+import { AiImageJobError } from './ai-image-job-error.js';
+
+export { AiImageJobError } from './ai-image-job-error.js';
 
 export type AiImageJobStatus =
   | 'PENDING'
@@ -219,13 +222,6 @@ export interface ApplyAiImageJobInput {
   mode: 'append' | 'replace';
   targetType: string;
   targetId: string;
-}
-
-export class AiImageJobError extends Error {
-  constructor(public readonly code: string, message: string) {
-    super(message);
-    this.name = 'AiImageJobError';
-  }
 }
 
 function capabilityJobError(error: unknown) {

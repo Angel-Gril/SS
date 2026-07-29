@@ -1,7 +1,16 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
-import { AiImageJobError, type AiImageProvider, type AiImageProviderRequest, type AiImageProviderResult } from './ai-image-jobs.js';
+import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
+import { AiImageJobError } from './ai-image-job-error.js';
+import type {
+  AiImageProvider,
+  AiImageProviderRequest,
+  AiImageProviderResult,
+} from './ai-image-jobs.js';
+import { normalizeOpenAiImagesApiBase } from './ai-image-openai-url.js';
+
+export { normalizeOpenAiImagesApiBase } from './ai-image-openai-url.js';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -75,7 +84,7 @@ const MAX_MODEL_CATALOG_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_MODEL_CATALOG_ENTRIES = 10_000;
 const MAX_PROVIDER_MODEL_ID_LENGTH = 500;
 const MAX_OPENAI_EDIT_INPUT_IMAGES = 16;
-export const MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES = 50 * 1024 * 1024;
+export const MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES = AI_IMAGE_WORKBENCH_LIMITS.maxRequestBytes;
 export const OPENAI_COMPATIBLE_IMAGE_EDIT_SIZES = Object.freeze([
   '1024x1024', '1024x1536', '1536x1024',
 ]);
@@ -101,31 +110,6 @@ function withoutTrailingSlash(value: string) {
 function dashScopeApiBase(baseUrl: string) {
   const base = withoutTrailingSlash(baseUrl || 'https://dashscope.aliyuncs.com/api/v1');
   return /\/api\/v1$/i.test(base) ? base : `${base}/api/v1`;
-}
-
-export function normalizeOpenAiImagesApiBase(baseUrl: string) {
-  const raw = withoutTrailingSlash(baseUrl || 'https://api.openai.com/v1');
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new AiImageJobError('INVALID_PROVIDER_URL', 'OpenAI-compatible API base URL is invalid');
-  }
-  if (parsed.search || parsed.hash || parsed.username || parsed.password) {
-    throw new AiImageJobError(
-      'INVALID_PROVIDER_URL',
-      'OpenAI-compatible API base URL must not contain credentials, query, or fragment',
-    );
-  }
-  const path = parsed.pathname.replace(/\/+$/, '');
-  if (/\/images\/(?:generations|edits|tasks)(?:\/|$)/i.test(path)) {
-    throw new AiImageJobError(
-      'INVALID_PROVIDER_URL',
-      'OpenAI-compatible API base URL must not include an image endpoint path',
-    );
-  }
-  parsed.pathname = /\/v1$/i.test(path) ? path : `${path}/v1`;
-  return withoutTrailingSlash(parsed.toString());
 }
 
 export function isOfficialOpenAiImagesApiBase(baseUrl: string): boolean {

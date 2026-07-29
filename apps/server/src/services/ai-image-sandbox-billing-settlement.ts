@@ -703,7 +703,12 @@ async function writeExclusiveAtomicFile(path: string, bytes: Buffer, allowedRoot
     await link(temporaryPath, finalPath);
     await assertPrivateOutputDirectoryStable(directory);
     await tolerateWindowsMode(() => chmod(finalPath, 0o600));
-    await syncDirectory(directory.canonicalPath);
+    try {
+      await directory.handle.sync();
+    } catch (error) {
+      if (!isUnsupportedWindowsDirectorySync(error)) throw error;
+    }
+    await assertPrivateOutputDirectoryStable(directory);
   } finally {
     await unlink(temporaryPath).catch(() => undefined);
     await directory.handle.close();

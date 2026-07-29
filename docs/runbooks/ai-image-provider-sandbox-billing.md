@@ -130,7 +130,8 @@ finalizer revision fails closed; that revision can only byte-verify a complete e
 never enters the receipt write path. Rerun the original reviewed revision rather than attributing the
 receipt to the wrong code. Output parents must be real private directories beneath the resolved
 evidence root; linked parents are rejected before child creation, and Linux writes remain bound to
-one held directory descriptor.
+one held directory descriptor. The final durability sync also uses that held descriptor instead of
+reopening the visible directory path.
 
 The sanitized settlement stores only hashes (including the model digest), enums, amounts,
 timestamps, and non-secret request metadata. It never stores raw account/billing references, the
