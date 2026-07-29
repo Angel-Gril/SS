@@ -83,6 +83,87 @@ describe('AI image Provider runtime contract', () => {
     });
   });
 
+  it('binds custom relay identity to the same effective v1 API base used for dispatch', () => {
+    const bare = createAiImageProviderRuntimeContract({
+      ...config,
+      provider: 'custom',
+      baseUrl: 'https://relay.example',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+    const explicit = createAiImageProviderRuntimeContract({
+      ...config,
+      provider: 'custom',
+      baseUrl: 'https://relay.example/v1',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+    const prefixed = createAiImageProviderRuntimeContract({
+      ...config,
+      provider: 'custom',
+      baseUrl: 'https://relay.example/openai',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+    const explicitPrefixed = createAiImageProviderRuntimeContract({
+      ...config,
+      provider: 'custom',
+      baseUrl: 'https://relay.example/openai/v1',
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+
+    expect(bare.baseUrlSha256).toBe(explicit.baseUrlSha256);
+    expect(prefixed.baseUrlSha256).toBe(explicitPrefixed.baseUrlSha256);
+  });
+
+  it.each([
+    ['bare origin', 'https://relay.example', 'https://relay.example/v1'],
+    ['custom prefix', 'https://relay.example/openai', 'https://relay.example/openai/v1'],
+  ])('fails a legacy custom %s hash closed while preserving the explicit v1 contract', (
+    _label,
+    legacyBaseUrl,
+    effectiveBaseUrl,
+  ) => {
+    const identity = {
+      ...config,
+      provider: 'custom',
+      baseUrl: legacyBaseUrl,
+    };
+    const current = createAiImageProviderRuntimeContract(identity, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+    const explicit = createAiImageProviderRuntimeContract({
+      ...identity,
+      baseUrl: effectiveBaseUrl,
+    }, {
+      count: 1,
+      width: 1024,
+      height: 1024,
+    });
+    const legacy = {
+      ...current,
+      baseUrlSha256: createHash('sha256').update(legacyBaseUrl).digest('hex'),
+    };
+
+    expect(current).toEqual(explicit);
+    expect(() => assertAiImageProviderRuntimeContract(
+      legacy,
+      identity,
+      { count: 1, width: 1024, height: 1024, estimatedCostCents: 7 },
+    )).toThrow(/identity does not match/u);
+  });
+
   it('fails an old v1 bare-origin hash closed after binding the effective official transport', () => {
     const current = createAiImageProviderRuntimeContract(
       { ...config, baseUrl: 'https://api.openai.com' },

@@ -95,10 +95,11 @@ function intent(
 function report(
   overrides: Record<string, unknown> = {},
   approvalOverrides: Record<string, unknown> = {},
+  schemaVersion: 3 | 4 = 3,
 ) {
   const state = typeof overrides.state === 'string' ? overrides.state : 'SUCCEEDED';
   return {
-    schemaVersion: 3,
+    schemaVersion,
     operationId,
     state,
     operation: 'FULL_EDIT',
@@ -107,7 +108,12 @@ function report(
     adapterRevision: 'a'.repeat(40),
     provider: 'custom-openai-compatible',
     model: 'edit-capable-model',
-    endpointSha256: '3'.repeat(64),
+    ...(schemaVersion === 4 ? {
+      apiBaseSha256: '6'.repeat(64),
+      operationEndpointSha256: '3'.repeat(64),
+    } : {
+      endpointSha256: '3'.repeat(64),
+    }),
     approvalEvidence: approvalEvidence(approvalOverrides),
     promptSha256: '4'.repeat(64),
     sourceSha256: ['5'.repeat(64)],
@@ -201,6 +207,7 @@ async function fixture(input: {
   approvalOverrides?: Record<string, unknown>;
   intentOverrides?: Record<string, unknown>;
   reportOverrides?: Record<string, unknown>;
+  reportSchemaVersion?: 3 | 4;
   claimOverrides?: Record<string, unknown>;
   attestationOverrides?: Record<string, unknown>;
 } = {}) {
@@ -215,7 +222,7 @@ async function fixture(input: {
   );
   const storedReport = await writeCanonicalJson(
     reportPath,
-    report(input.reportOverrides, input.approvalOverrides),
+    report(input.reportOverrides, input.approvalOverrides, input.reportSchemaVersion),
   );
   const storedClaim = await writeCanonicalJson(claimPath, fingerprintClaim(input.claimOverrides));
   const preCallBillingSnapshotPath = join(root, 'private', 'billing-before.snapshot');
@@ -271,8 +278,10 @@ describe('AI image sandbox billing settlement', () => {
 
     expect(result.replayed).toBe(false);
     expect(result.receipt).toMatchObject({
+      schemaVersion: 1,
       event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
       operationId,
+      endpointSha256: '3'.repeat(64),
       submitState: 'SUCCEEDED',
       billingOutcome: 'CHARGED',
       billingGate: 'PASS',
@@ -282,6 +291,8 @@ describe('AI image sandbox billing settlement', () => {
       finalizationAdapterRevision: 'b'.repeat(40),
       sameRequestRetryAllowed: false,
     });
+    expect(result.receipt).not.toHaveProperty('apiBaseSha256');
+    expect(result.receipt).not.toHaveProperty('operationEndpointSha256');
     expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
     expect(await readFile(value.reportPath)).toEqual(value.originalReport);
     const stored = await readFile(result.receiptPath, 'utf8');
@@ -292,6 +303,46 @@ describe('AI image sandbox billing settlement', () => {
     if (process.platform !== 'win32') {
       expect((await stat(result.receiptPath)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('finalizes current v4 reports with explicit API-base and operation-endpoint evidence', async () => {
+    const value = await fixture({ reportSchemaVersion: 4 });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 2,
+      event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
+      apiBaseSha256: '6'.repeat(64),
+      operationEndpointSha256: '3'.repeat(64),
+      submitState: 'SUCCEEDED',
+    });
+    expect(result.receipt).not.toHaveProperty('endpointSha256');
+  });
+
+  it('rejects v4 report hashes that do not bind the claimed operation endpoint', async () => {
+    const value = await fixture({
+      reportSchemaVersion: 4,
+      reportOverrides: { operationEndpointSha256: '7'.repeat(64) },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
   });
 
   it('returns the immutable record for exact replay and conflicts on a changed decision', async () => {

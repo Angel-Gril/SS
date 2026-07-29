@@ -113,10 +113,11 @@ preflight before any paid submit:
 pnpm --filter server sandbox:ai-image:approval:verify
 ```
 
-This command performs no DNS lookup, intent/fingerprint claim, or Provider request. It rejects a
-non-HTTPS endpoint and reports the approved cost exposure plus the sanitized approval validity
-window. Approval freshness is checked again throughout the submit path and immediately before the
-single Provider POST.
+This command performs no DNS lookup, intent/fingerprint claim, or Provider request. Its v2
+verification event reports separate `apiBaseSha256` and `operationEndpointSha256` values, the
+approved cost exposure, and the sanitized approval validity window without exposing either URL. It
+rejects a non-HTTPS endpoint. Approval freshness is checked again throughout the submit path and
+immediately before the single Provider POST.
 
 ## International OpenAI-Compatible Probe
 
@@ -189,7 +190,13 @@ Relative source and mask paths are resolved from the repository/deployed app roo
    ```
 
 5. Unset the confirmation and API key immediately after the process exits.
-6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under `tmp/ai-image-sandbox/intents/`, and the returned image. Verify request profile, source/mask dimensions and digests, image count, MIME type, output dimensions, byte length, SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product changes.
+6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under
+   `tmp/ai-image-sandbox/intents/`, and the returned image. Current direct-submit reports use
+   `schemaVersion: 4`: verify `apiBaseSha256`, `operationEndpointSha256`, request profile,
+   source/mask dimensions and digests, image count, MIME type, output dimensions, byte length,
+   SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product
+   changes. `apiBaseSha256` hashes the normalized Provider API Base; `operationEndpointSha256`
+   hashes the exact `/images/generations` or `/images/edits` POST target.
 7. Save the settled billing snapshot as a private bounded file, create the private closed-schema
    billing attestation that names and hashes both the before/settled snapshot files, and run
    `pnpm --filter server sandbox:ai-image:billing:finalize`. The finalizer performs no Provider call,
@@ -212,19 +219,26 @@ admin one-click correction only to fix configuration identity; it does not autho
 `gpt-image-2`. A 2026-07-29 bounded `/models` check listed only that already rejected model, so a new
 edit sandbox still requires a different endpoint/model rather than another request to the same one.
 
-The runtime identity canonicalizes the bare official origin `https://api.openai.com` to the effective
-`https://api.openai.com/v1` transport. A paid v1 contract frozen by older code from the bare-origin
-text will not match the new hash. Treat it as a closed historical operation: do not retry it, inspect
-and release or reconcile any reservation, then create a fresh quote only after the Provider remains
-authorized. Contracts originally frozen with the normal `/v1` base keep their existing hash.
+The runtime identity canonicalizes the bare official origin `https://api.openai.com` to
+`https://api.openai.com/v1`. It applies the same effective transport rule to `custom` relays: a bare
+origin receives `/v1`, and a custom prefix receives a trailing `/v1`. A paid v1 contract frozen by
+older code from the pre-normalization raw text will not match the new hash. Treat it as a closed
+historical operation: do not retry it, inspect and release or reconcile any reservation, then create
+a fresh quote only after the Provider remains authorized. Contracts originally frozen with their
+effective `/v1` API Base keep their existing hash.
 
 Do not promote a Provider by changing only `evidenceLevel`. For every operation that will be marked
-`sandbox-verified`, add a reviewed `sandboxEvidence` record with the canonical endpoint SHA-256,
-exact operation, actual input transport, and actual sync/async result mode. The endpoint digest must
-come from the same canonical Provider-base function used by runtime contracts. Evidence is not
-portable between endpoints, operations, multipart/base64/public-URL modes, or sync/async adapters.
-The static Provider contract requires complete bindings for every operation advertised by a verified
-entry, while final dispatch rechecks the single operation actually being executed.
+`sandbox-verified`, add a reviewed `sandboxEvidence` record with the report's `apiBaseSha256`, exact
+operation, actual input transport, and actual sync/async result mode. `apiBaseSha256` is the only
+direct-submit field eligible for Registry `sandboxEvidence.endpointSha256`; it hashes the same
+normalized Provider API Base used by runtime contracts. `operationEndpointSha256` instead binds the
+specific guarded POST and must not be copied into the Registry. Historical `schemaVersion: 3`
+reports used the ambiguous name `endpointSha256` for that operation endpoint, so they are still
+eligible for billing finalization but cannot by themselves supply Registry API-base evidence.
+Evidence is not portable between API Bases, operations, multipart/base64/public-URL modes, or
+sync/async adapters. The static Provider contract requires complete bindings for every operation
+advertised by a verified entry, while final dispatch rechecks the single operation actually being
+executed.
 
 ## DashScope `qwen-mt-image` Translation Probe
 

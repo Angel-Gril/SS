@@ -117,6 +117,40 @@ describe('AI image suite Provider runtime snapshot', () => {
   });
 
   it.each([
+    ['bare custom origin', 'https://relay.example', 'https://relay.example/v1'],
+    ['custom path prefix', 'https://relay.example/openai', 'https://relay.example/openai/v1'],
+  ])('accepts exact custom evidence across the canonical %s representation', (
+    _label,
+    configuredBaseUrl,
+    evidenceBaseUrl,
+  ) => {
+    const capability = {
+      ...exactCapability('sandbox-verified'),
+      provider: 'custom',
+      sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256('custom', evidenceBaseUrl),
+        operation: 'IMAGE_TO_IMAGE' as const,
+        inputTransport: 'multipart' as const,
+        resultMode: 'sync' as const,
+      }],
+    } satisfies AiImageProviderCapability;
+    const snapshot = createAiImageSuiteProviderRuntimeSnapshot(settings({
+      provider: 'custom',
+      baseUrl: configuredBaseUrl,
+    }), {
+      resolveCapability: () => capability,
+    });
+
+    expect(snapshot).toMatchObject({
+      configured: true,
+      executionReady: true,
+      testOnly: false,
+      reasonCode: 'READY',
+      providerRuntime: { provider: 'custom' },
+    });
+  });
+
+  it.each([
     ['endpoint', { endpointSha256: '0'.repeat(64) }],
     ['operation', { operation: 'FULL_EDIT' as const }],
     ['input transport', { inputTransport: 'base64' as const }],

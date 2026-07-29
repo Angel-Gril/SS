@@ -280,6 +280,7 @@ function loadDispatcher(overrides = {}) {
   });
   return {
     api: context.SS_ERP_BYOK_PROVIDER_SETTINGS_HANDLER,
+    schema: context.SS_ERP_BYOK_PROFILE_SCHEMA,
     dispatcher,
     calls,
     profileStore,
@@ -289,6 +290,53 @@ function loadDispatcher(overrides = {}) {
     getRequestPermissionCalls: () => requestPermissionCalls,
   };
 }
+
+test('canonicalizes only unambiguous HTTPS DNS API bases without widening the origin', () => {
+  const { schema } = loadDispatcher();
+  assert.equal(schema.canonicalizeEndpoint('https://relay.example'), 'https://relay.example/v1');
+  assert.equal(schema.canonicalizeEndpoint('https://relay.example/'), 'https://relay.example/v1');
+  assert.equal(schema.canonicalizeEndpoint('https://relay.example/v1'), 'https://relay.example/v1');
+  assert.equal(
+    schema.canonicalizeEndpoint('https://relay.example/openai/tenant/'),
+    'https://relay.example/openai/tenant/v1',
+  );
+  assert.equal(
+    new URL(schema.canonicalizeEndpoint('https://relay.example:8443/openai')).origin,
+    'https://relay.example:8443',
+  );
+
+  for (const value of [
+    'https://@relay.example/v1',
+    'https://relay.example/v1?',
+    'https://relay.example/v1#',
+    'https://relay.example/v1/images/generations',
+    'https://relay.example/v1/images/edits',
+    'https://relay.example/v1/images/tasks/task-1',
+    'https://relay.example/v1/%69mages/generations',
+    'https://relay.example/v1/images%2fgenerations',
+    'https://relay.example/v1/%2e%2e/images/edits',
+    'https://relay.example/v1\\images\\edits',
+    'https://relay.example/openai//v1',
+    'https://relay.example/openai/./v1',
+    'https://relay.example/openai/../v1',
+    'https://relay.example/%76%31',
+    'https://relay.example./v1',
+    'https://relay/v1',
+    'https://relay..example/v1',
+    'https://-relay.example/v1',
+    'https://127.0.0.1/v1',
+    'https://127.1/v1',
+    'https://2130706433/v1',
+    'https://0x7f000001/v1',
+    'https://203.0.113.10/v1',
+    'https://[2606:4700:4700::1111]/v1',
+  ]) {
+    assert.throws(
+      () => schema.canonicalizeEndpoint(value),
+      (error) => error && error.code === 'SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID',
+    );
+  }
+});
 
 test('exposes a closed generic handler map without invoking chrome permission requests', async () => {
   const { dispatcher, getRequestPermissionCalls } = loadDispatcher();

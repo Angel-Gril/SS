@@ -121,9 +121,21 @@
     return normalized;
   }
 
-  function normalizeProfiles(raw) {
-    if (!Array.isArray(raw)) return hostArray();
+  function profileAuthorityNeedsMigration(raw, normalized) {
+    if (!isRecord(raw) || typeof raw.baseUrl !== 'string' || typeof raw.model !== 'string') {
+      return true;
+    }
+    var rawIdentity = raw.baseUrl + '\u0000' + raw.model;
+    return raw.baseUrl !== normalized.baseUrl
+      || rawIdentity !== schema.profileIdentity(normalized);
+  }
+
+  function normalizeProfileState(raw) {
     var profiles = hostArray();
+    var authorityMigrations = hostArray();
+    if (!Array.isArray(raw)) {
+      return { profiles: profiles, authorityMigrations: authorityMigrations };
+    }
     var seen = Object.create(null);
     raw.forEach(function (candidate) {
       try {
@@ -131,12 +143,18 @@
         if (!seen[normalized.id]) {
           seen[normalized.id] = true;
           profiles.push(normalized);
+          if (profileAuthorityNeedsMigration(candidate, normalized)) {
+            authorityMigrations.push(normalized.id);
+          }
         }
       } catch {
         // Corrupt local data is discarded rather than being trusted or exposed.
       }
     });
-    return profiles.slice(0, schema.MAX_PROFILE_COUNT);
+    return {
+      profiles: profiles.slice(0, schema.MAX_PROFILE_COUNT),
+      authorityMigrations: authorityMigrations.slice(0, schema.MAX_PROFILE_COUNT),
+    };
   }
 
   function normalizeSecretMap(raw) {
@@ -526,9 +544,9 @@
       return next;
     }
 
-    async function readProfiles() {
+    async function readProfileState() {
       var stored = await localStorage.get([schema.PROFILE_STORAGE_KEY]);
-      return normalizeProfiles(stored && stored[schema.PROFILE_STORAGE_KEY]);
+      return normalizeProfileState(stored && stored[schema.PROFILE_STORAGE_KEY]);
     }
 
     async function writeProfiles(profiles) {
@@ -604,11 +622,40 @@
       }
     }
 
+    async function readProfilesInQueue(expectedGeneration) {
+      var state = await readProfileState();
+      if (!state.authorityMigrations.length) return state.profiles;
+
+      assertSessionGeneration(expectedGeneration);
+      state.authorityMigrations.forEach(function (id) {
+        invalidateCredentialAuthority('profile_authority_changed', id);
+      });
+      var maps = await readSessionMaps();
+      state.authorityMigrations.forEach(function (id) {
+        delete maps.secrets[id];
+        delete maps.evidence[id];
+        delete maps.uncertainProbes[id];
+        delete maps.providerDispatches[id];
+      });
+      await writeSessionMaps(maps, expectedGeneration);
+      assertSessionGeneration(expectedGeneration);
+      // Commit canonical metadata only after all session-bound authority has been
+      // physically removed. A failed cleanup leaves the legacy metadata in place so
+      // every later reader retries this fail-closed migration.
+      await writeProfiles(state.profiles);
+      assertSessionGeneration(expectedGeneration);
+      return state.profiles;
+    }
+
+    async function getProfileInQueue(id, expectedGeneration) {
+      return findProfile(await readProfilesInQueue(expectedGeneration), id);
+    }
+
     async function saveProfile(input) {
       var expectedGeneration = sessionGeneration;
       return enqueue(async function () {
         var next = schema.publicProfile(input);
-        var profiles = await readProfiles();
+        var profiles = await readProfilesInQueue(expectedGeneration);
         var previous = findProfile(profiles, next.id);
         var changedBinding = Boolean(previous && !sameBinding(previous, next));
         var removedOperations = previous
@@ -660,53 +707,64 @@
     }
 
     async function getProfile(id) {
-      return findProfile(await readProfiles(), id);
+      var expectedGeneration = sessionGeneration;
+      return enqueue(function () {
+        return getProfileInQueue(id, expectedGeneration);
+      });
     }
 
     async function listPublicProfiles() {
-      var result = hostArray();
-      (await readProfiles()).forEach(function (profile) { result.push(externalProfile(profile)); });
-      return result;
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var result = hostArray();
+        (await readProfilesInQueue(expectedGeneration)).forEach(function (profile) {
+          result.push(externalProfile(profile));
+        });
+        return result;
+      });
     }
 
     async function getPublicState(id) {
-      var profile = await getProfile(id);
-      if (!profile) return publicState(null, false, []);
-      // A missing session area is represented as an empty redacted state.  No key
-      // operation is silently redirected to local/sync storage.
-      if (!sessionStorage) return publicState(profile, false, []);
-      var maps;
-      try {
-        maps = await readSessionMaps();
-      } catch (error) {
-        if (error && error.code === 'SS_ERP_BYOK_SESSION_STORAGE_UNAVAILABLE') {
-          return publicState(profile, false, []);
-        }
-        throw error;
-      }
-      var identity = schema.profileIdentity(profile);
-      var secret = maps.secrets[profile.id];
-      var hasKey = matchingSecret(secret, identity);
-      var evidence = (maps.evidence[profile.id] || []).filter(function (candidate) {
-        if (!hasKey || candidate.credentialRevision !== secret.credentialRevision) return false;
+      var expectedGeneration = sessionGeneration;
+      return enqueue(async function () {
+        var profile = await getProfileInQueue(id, expectedGeneration);
+        if (!profile) return publicState(null, false, []);
+        // A missing session area is represented as an empty redacted state.  No key
+        // operation is silently redirected to local/sync storage.
+        if (!sessionStorage) return publicState(profile, false, []);
+        var maps;
         try {
-          var normalized = schema.normalizeEvidence(
+          maps = await readSessionMaps();
+        } catch (error) {
+          if (error && error.code === 'SS_ERP_BYOK_SESSION_STORAGE_UNAVAILABLE') {
+            return publicState(profile, false, []);
+          }
+          throw error;
+        }
+        var identity = schema.profileIdentity(profile);
+        var secret = maps.secrets[profile.id];
+        var hasKey = matchingSecret(secret, identity);
+        var evidence = (maps.evidence[profile.id] || []).filter(function (candidate) {
+          if (!hasKey || candidate.credentialRevision !== secret.credentialRevision) return false;
+          try {
+            var normalized = schema.normalizeEvidence(
+              externalEvidence(candidate),
+              identity,
+              maps.currentTime,
+            );
+            return profile.allowedOperations.includes(normalized.operation);
+          } catch {
+            return false;
+          }
+        }).map(function (candidate) {
+          return externalEvidence(schema.normalizeEvidence(
             externalEvidence(candidate),
             identity,
             maps.currentTime,
-          );
-          return profile.allowedOperations.includes(normalized.operation);
-        } catch {
-          return false;
-        }
-      }).map(function (candidate) {
-        return externalEvidence(schema.normalizeEvidence(
-          externalEvidence(candidate),
-          identity,
-          maps.currentTime,
-        ));
+          ));
+        });
+        return publicState(profile, hasKey, hasKey ? evidence : []);
       });
-      return publicState(profile, hasKey, hasKey ? evidence : []);
     }
 
     async function setApiKey(id, value) {
@@ -716,7 +774,9 @@
         // Check the secret boundary before any metadata lookup.  A missing session
         // area must never be disguised as a profile/validation error.
         var session = assertSessionStorage(sessionStorage);
-        var profile = normalizedId ? await getProfile(normalizedId) : null;
+        var profile = normalizedId
+          ? await getProfileInQueue(normalizedId, expectedGeneration)
+          : null;
         if (!profile) {
           throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         }
@@ -753,7 +813,7 @@
       return enqueue(async function () {
         var normalizedId = profileId(id);
         if (!normalizedId) return null;
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) return null;
         var maps = await readSessionMaps();
         var identity = schema.profileIdentity(profile);
@@ -799,7 +859,7 @@
         if (!normalizedId || typeof expectedProfileIdentity !== 'string' || !expectedRevision) {
           throw storeError('SS_ERP_BYOK_CREDENTIAL_AUTHORITY_STALE');
         }
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         var maps = await readSessionMaps();
         var identity = profile && schema.profileIdentity(profile);
         var secret = maps.secrets[normalizedId];
@@ -831,7 +891,9 @@
       return enqueue(async function () {
         var normalizedId = profileId(id);
         var expectedRevision = credentialRevision(expectedCredentialRevision);
-        var profile = normalizedId ? await getProfile(normalizedId) : null;
+        var profile = normalizedId
+          ? await getProfileInQueue(normalizedId, expectedGeneration)
+          : null;
         var maps = await readSessionMaps();
         var identity = profile && schema.profileIdentity(profile);
         var secret = maps.secrets[normalizedId];
@@ -857,7 +919,7 @@
         if (!normalizedId || !expectedRevision) {
           throw storeError('SS_ERP_BYOK_PROVIDER_DISPATCH_GUARD_INVALID');
         }
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
         var maps = await readSessionMaps();
         if (maps.providerDispatchesCorrupt) throw unknownProviderDispatchError(true);
@@ -925,7 +987,7 @@
         if (!normalizedId || !expectedRevision) {
           throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
         }
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
         var maps = await readSessionMaps();
         requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
@@ -979,7 +1041,7 @@
         if (!normalizedId || !expectedRevision) {
           throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
         }
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
         var maps = await readSessionMaps();
         requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
@@ -1007,7 +1069,7 @@
         if (!normalizedId || !expectedRevision) {
           throw storeError('SS_ERP_BYOK_CAPABILITY_PROBE_INVALID');
         }
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND');
         var maps = await readSessionMaps();
         requireCurrentProbeContext(profile, maps, normalizedId, input, expectedRevision);
@@ -1042,7 +1104,7 @@
           throw storeError('SS_ERP_BYOK_CAPABILITY_EVIDENCE_INVALID', 'Provider credential revision is missing');
         }
         assertSessionStorage(sessionStorage);
-        var profile = await getProfile(normalizedId);
+        var profile = await getProfileInQueue(normalizedId, expectedGeneration);
         if (!profile) throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         var maps = await readSessionMaps();
         var identity = schema.profileIdentity(profile);
@@ -1109,7 +1171,9 @@
       return enqueue(async function () {
         var normalizedId = profileId(id);
         assertSessionStorage(sessionStorage);
-        var profile = normalizedId ? await getProfile(normalizedId) : null;
+        var profile = normalizedId
+          ? await getProfileInQueue(normalizedId, expectedGeneration)
+          : null;
         if (!profile) {
           throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         }
@@ -1147,7 +1211,7 @@
           invalidResult.deleted = false;
           return invalidResult;
         }
-        var profiles = await readProfiles();
+        var profiles = await readProfilesInQueue(expectedGeneration);
         var next = profiles.filter(function (candidate) { return candidate.id !== normalizedId; });
         if (next.length !== profiles.length) {
           invalidateCredentialAuthority('profile_deleted', normalizedId);

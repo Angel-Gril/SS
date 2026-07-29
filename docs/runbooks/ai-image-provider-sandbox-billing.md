@@ -1,9 +1,10 @@
 # QA-02 AI Image Sandbox Billing Finalization
 
 Use this offline finalizer only after one paid international image sandbox request has a current
-`schemaVersion: 2` immutable intent, fingerprint claim, and `schemaVersion: 3` submit report. It
-records settled Provider billing as a new sibling artifact; it never edits the original report,
-whose `actualCostCents` intentionally remains `null`.
+`schemaVersion: 2` immutable intent, fingerprint claim, and `schemaVersion: 4` submit report. It
+also retains read compatibility with historical `schemaVersion: 3` reports. It records settled
+Provider billing as a new sibling artifact; it never edits the original report, whose
+`actualCostCents` intentionally remains `null`.
 
 Billing finalization does not change the Provider outcome, authorize a retry, enable a capability,
 activate a feature flag, write a database, or contact the Provider. A
@@ -21,7 +22,10 @@ The finalizer derives these paths from the validated Operation ID and the privat
 
 It does not trust `intentPath`, `imagePath`, or other absolute paths stored in a report. Historical
 timestamp-less v2 reports, `PRE_DISPATCH_FAILED`, a report whose `actualCostCents` was modified, and
-any mismatched intent/report/claim are ineligible. The finalizer recomputes the transport-semantic
+any mismatched intent/report/claim are ineligible. For v4 reports it validates the explicit
+`operationEndpointSha256` against the immutable intent while retaining `apiBaseSha256` as the exact
+Registry-promotion digest. Historical v3 `endpointSha256` is read only as an operation-endpoint
+digest and is never reinterpreted as an API Base. The finalizer recomputes the transport-semantic
 request fingerprint rather than trusting matching values copied among the artifacts.
 
 The evidence root may be the deployment-managed top-level link to the private shared sandbox
@@ -134,9 +138,12 @@ one held directory descriptor. The final durability sync also uses that held des
 reopening the visible directory path.
 
 The sanitized settlement stores only hashes (including the model digest), enums, amounts,
-timestamps, and non-secret request metadata. It never stores raw account/billing references, the
-raw Provider request ID, API keys, Authorization, Provider responses, URLs, free-form reasons, or
-local paths.
+timestamps, and non-secret request metadata. A v4 submit produces a v2 settlement receipt with
+explicit `apiBaseSha256` and `operationEndpointSha256`; a historical v3 submit keeps the byte-stable
+v1 receipt whose `endpointSha256` means the operation endpoint. Only the v2 receipt's
+`apiBaseSha256` may be copied into Registry evidence. The settlement never stores raw
+account/billing references, the raw Provider request ID, API keys, Authorization, Provider
+responses, URLs, free-form reasons, or local paths.
 
 ## Interpret The Result
 

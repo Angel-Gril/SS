@@ -255,3 +255,31 @@ Progress: 4/5 tasks.
   skipped, and preflight passed `445` checks with no failures and the two expected local-package
   permission warnings. Task counts remain `4/5` and `32/37`, and no Provider call, charge,
   production mutation, VPS access, deployment, flag change, or `.context/` staging occurred.
+- The newly supplied custom relay candidate exposed a real bare-Base compatibility gap before any
+  paid call: server runtime identity already used the effective `/v1` transport while extension
+  profiles and older frozen custom contracts could retain the raw origin or prefix. Server and
+  extension now share one strict HTTPS multi-label-DNS API-Base contract, append `/v1` to a bare
+  origin or custom prefix, reject operation paths and ambiguous encodings/separators, and reject IP
+  literals, single-label hosts, trailing dots, userinfo, query/fragment and dot segments. Existing
+  legacy custom runtime hashes fail closed before Provider resolution and must be recreated rather
+  than retried.
+- Extension profile upgrade now performs a serialized fail-closed migration before any public or
+  background use. When canonical identity changes, it invalidates generated-result authority,
+  physically removes that profile's session Key, capability evidence, uncertain probes and Provider
+  dispatches, then writes canonical metadata; cleanup failure exposes neither the migrated profile
+  authority nor a rebound secret. Rollback and concurrent-reader regressions prove old authority
+  cannot revive.
+- Direct sandbox output no longer overloads one endpoint digest. Approval verification is v2 and new
+  submit reports are v4 with explicit `apiBaseSha256` for Registry promotion and
+  `operationEndpointSha256` for the exact guarded POST. Billing finalization reads historical v3
+  reports without reinterpreting their operation-endpoint hash and emits a dual-hash v2 receipt for
+  v4. Intent, fingerprint and replay identity remain unchanged. Combined focused tests passed
+  `246` Server checks with one Windows skip plus `95` extension checks; full Server tests passed
+  `4422` with `194` skipped, lint had `0` errors and `20` existing warnings, workspace typecheck
+  passed, preflight passed `445/0`, and cloud/local package verification passed `449/0/0` and
+  `445/2/0` at build version `1.0.264`. Independent review found no P0/P1 issue.
+- `QA-02` remains open at `4/5` and overall progress remains `32/37`. The candidate endpoint/model
+  has not yet passed an authenticated model-catalog check, exact pricing/currency evidence is still
+  absent, the private DPAPI Key file is not present, and no per-request maximum-cost approval has
+  been finalized. This work made no real Provider POST, charge, production mutation, VPS access,
+  deployment, flag change, or `.context/` staging.

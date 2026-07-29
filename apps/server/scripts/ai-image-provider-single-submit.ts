@@ -429,10 +429,11 @@ export async function runAiImageProviderSingleSubmit(
       throw new Error('The INPAINT mask dimensions must match the pinned source image');
     }
   }
-  const endpoint = new URL(
+  const operationEndpoint = new URL(
     `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
   ).toString();
-  const endpointSha256 = sha256(endpoint);
+  const apiBaseSha256 = sha256(apiBase);
+  const operationEndpointSha256 = sha256(operationEndpoint);
   const prompt = fixedPrompt(operation, profile);
   const sourceSha256 = source ? [source.sha256] : [];
   const maskSha256 = mask?.sha256 || null;
@@ -451,7 +452,7 @@ export async function runAiImageProviderSingleSubmit(
     now: currentTime(options),
     expected: {
       operationId,
-      endpoint,
+      endpoint: operationEndpoint,
       expectedHost,
       model,
       operation,
@@ -467,7 +468,7 @@ export async function runAiImageProviderSingleSubmit(
   if (mode === 'VERIFY_APPROVAL') {
     assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
     const verification = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
       operationId,
       operation,
@@ -476,7 +477,8 @@ export async function runAiImageProviderSingleSubmit(
       adapterRevision,
       provider: 'custom-openai-compatible',
       model,
-      endpointSha256,
+      apiBaseSha256,
+      operationEndpointSha256,
       sourceSha256,
       maskSha256,
       requestedSize: outputSize,
@@ -507,7 +509,7 @@ export async function runAiImageProviderSingleSubmit(
   const requestContract = {
     operation,
     requestProfile,
-    endpoint,
+    endpoint: operationEndpoint,
     n: 1,
     width: profile.width,
     height: profile.height,
@@ -522,7 +524,7 @@ export async function runAiImageProviderSingleSubmit(
   const claim = await claimAiImageSandboxOperation({
     directory: resolve(outputDirectory, 'intents'),
     operationId,
-    endpointSha256,
+    endpointSha256: operationEndpointSha256,
     model,
     credentialRevision,
     adapterRevision,
@@ -559,7 +561,7 @@ export async function runAiImageProviderSingleSubmit(
   const fetchOnce = operation === 'TEXT_TO_IMAGE'
     ? createAiImageSandboxFetchGuard({
       contract: {
-        endpoint,
+        endpoint: operationEndpoint,
         model,
         promptSha256: requestContract.promptSha256,
         size: outputSize,
@@ -569,7 +571,7 @@ export async function runAiImageProviderSingleSubmit(
     })
     : createAiImageSandboxEditFetchGuard({
       contract: {
-        endpoint,
+        endpoint: operationEndpoint,
         operation,
         model,
         promptSha256: requestContract.promptSha256,
@@ -631,7 +633,7 @@ export async function runAiImageProviderSingleSubmit(
 
   const completedAtMs = Math.max(Date.now(), startedAtMs);
   const report = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     operationId,
     state: 'SUCCEEDED',
     operation,
@@ -640,7 +642,8 @@ export async function runAiImageProviderSingleSubmit(
     adapterRevision,
     provider: 'custom-openai-compatible',
     model,
-    endpointSha256,
+    apiBaseSha256,
+    operationEndpointSha256,
     approvalEvidence,
     promptSha256: requestContract.promptSha256,
     sourceSha256: requestContract.sourceSha256,
@@ -676,7 +679,7 @@ export async function runAiImageProviderSingleSubmit(
       const evidence = fetchOnce.getEvidence();
       const completedAtMs = Math.max(Date.now(), startedAtMs);
       const report = {
-        schemaVersion: 3,
+        schemaVersion: 4,
         operationId,
         state: createRequests === 0
           ? 'PRE_DISPATCH_FAILED'
@@ -687,7 +690,8 @@ export async function runAiImageProviderSingleSubmit(
         model,
         operation,
         requestProfile,
-        endpointSha256,
+        apiBaseSha256,
+        operationEndpointSha256,
         approvalEvidence,
         credentialRevision,
         adapterRevision,

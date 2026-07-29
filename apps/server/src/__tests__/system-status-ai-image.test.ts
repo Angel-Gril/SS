@@ -21,7 +21,9 @@ vi.mock('../services/ai-image-providers.js', () => ({
   testAiImageProviderConnection: mocks.testConnection,
   aiImageCredentialEndpointIdentity: (provider: string, baseUrl: string) => {
     if (provider === 'openai-images' || provider === 'custom') {
-      return `openai-compatible:${String(baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')}`;
+      const raw = String(baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+      const normalized = /\/v1$/iu.test(raw) ? raw : `${raw}/v1`;
+      return `openai-compatible:${normalized}`;
     }
     return provider === 'dashscope-wanx'
       ? `dashscope:${String(baseUrl).replace(/\/+$/, '')}`
@@ -122,6 +124,38 @@ describe('system status AI image connection test', () => {
       apiKey: 'sk-saved-provider-key',
     }));
     expect(response.body).not.toContain('sk-saved-provider-key');
+  });
+
+  it.each([
+    ['saved bare origin', 'https://images.example.test', 'https://images.example.test/v1'],
+    ['submitted bare origin', 'https://images.example.test/v1', 'https://images.example.test'],
+  ])('reuses the saved secret across canonical-equivalent endpoints: %s', async (
+    _label,
+    savedBaseUrl,
+    submittedBaseUrl,
+  ) => {
+    mocks.savedConfig.set('ai_image_provider', 'custom');
+    mocks.savedConfig.set('ai_image_base_url', savedBaseUrl);
+    mocks.savedConfig.set('ai_image_api_key', 'sk-saved-provider-key');
+    mocks.savedConfig.set('ai_image_model', 'image-model-v2');
+    const app = await createApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test/ai-image',
+      payload: {
+        provider: 'custom',
+        baseUrl: submittedBaseUrl,
+        apiKey: '',
+        model: 'image-model-v2',
+      },
+    });
+
+    expect(response.json()).toMatchObject({ code: 1 });
+    expect(mocks.testConnection).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: submittedBaseUrl,
+      apiKey: 'sk-saved-provider-key',
+    }));
   });
 
   it.each(['', 'sk-s***-key'])(

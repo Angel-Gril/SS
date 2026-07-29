@@ -75,25 +75,6 @@
     });
   }
 
-  function isPrivateIpv4(hostname) {
-    if (!/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(hostname)) return false;
-    var parts = hostname.split('.').map(Number);
-    if (parts.some(function (part) { return !Number.isInteger(part) || part < 0 || part > 255; })) return true;
-    var first = parts[0];
-    var second = parts[1];
-    return first === 0
-      || first === 10
-      || first === 127
-      || (first === 100 && second >= 64 && second <= 127)
-      || (first === 169 && second === 254)
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || (first === 192 && second === 0)
-      || (first === 198 && (second === 18 || second === 19 || second === 51))
-      || (first === 203 && second === 0)
-      || first >= 224;
-  }
-
   function assertPublicHostname(hostname) {
     var normalized = String(hostname || '').toLowerCase();
     if (!normalized
@@ -110,22 +91,11 @@
       || normalized.endsWith('.home.arpa')) {
       throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint host is not public');
     }
-    // The first release intentionally accepts DNS names and IPv4 literals only.
-    // Supporting IPv6 safely requires complete treatment of mapped, NAT64, and
-    // 6to4 forms; rejecting literals here keeps profile and permission contracts
-    // identical and closes those SSRF aliases.
-    if (normalized.includes(':') || isPrivateIpv4(normalized)) {
+    // Provider permissions are granted by origin. Keep profile endpoints on
+    // canonical multi-label DNS hosts only so IP-literal aliases cannot widen
+    // or obscure that authority.
+    if (normalized.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/u.test(normalized)) {
       throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint host is not public');
-    }
-    // Keep this check identical to the permission/origin contracts.  A
-    // single-label or malformed DNS name may resolve through split-horizon
-    // internal DNS even though it is not a literal private IPv4 address.
-    if (/^\d{1,3}(?:\.\d{1,3}){3}$/u.test(normalized)) {
-      var parts = normalized.split('.').map(Number);
-      if (parts.some(function (part) { return !Number.isInteger(part) || part < 0 || part > 255; })) {
-        throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint host is not public');
-      }
-      return;
     }
     if (!normalized.includes('.')
       || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u.test(normalized)) {
@@ -134,9 +104,24 @@
   }
 
   function canonicalizeEndpoint(value) {
+    var input = text(value, 300, 'baseUrl');
+    var authorityAndPath = input.slice('https://'.length);
+    var pathOffset = authorityAndPath.indexOf('/');
+    var authority = pathOffset < 0 ? authorityAndPath : authorityAndPath.slice(0, pathOffset);
+    var inputPath = pathOffset < 0 ? '' : authorityAndPath.slice(pathOffset);
+    if (!/^https:\/\/[^/]/iu.test(input)
+      || input.includes('%')
+      || input.includes('\\')
+      || input.includes('?')
+      || input.includes('#')
+      || authority.includes('@')
+      || inputPath.includes('//')
+      || inputPath.split('/').some(function (segment) { return segment === '.' || segment === '..'; })) {
+      throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint must be canonical HTTPS');
+    }
     var raw;
     try {
-      raw = new URL(text(value, 300, 'baseUrl'));
+      raw = new URL(input);
     } catch {
       throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint is invalid');
     }
@@ -145,8 +130,18 @@
     }
     assertPublicHostname(raw.hostname);
     var pathname = raw.pathname || '';
+    if (pathname.includes('%') || pathname.includes('\\') || pathname.includes('//')) {
+      throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint path is invalid');
+    }
     while (pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-    if (pathname.length > 240 || pathname.includes('\\')) {
+    if (/\/images\/(?:generations|edits|tasks)(?:\/|$)/iu.test(pathname)) {
+      throw error(
+        'SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID',
+        'Provider endpoint must be an API base, not an image operation path',
+      );
+    }
+    if (!/\/v1$/iu.test(pathname)) pathname += '/v1';
+    if (pathname.length > 240) {
       throw error('SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID', 'Provider endpoint path is invalid');
     }
     return raw.origin + pathname;

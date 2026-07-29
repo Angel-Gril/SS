@@ -447,10 +447,17 @@ describe('single-submit AI image sandbox runner', () => {
       resolveDns,
       fetch,
     })).resolves.toMatchObject({
+      schemaVersion: 2,
       event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
       operationId,
       operation: 'TEXT_TO_IMAGE',
       requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      apiBaseSha256: createHash('sha256')
+        .update('https://relay.example/v1')
+        .digest('hex'),
+      operationEndpointSha256: createHash('sha256')
+        .update('https://relay.example/v1/images/generations')
+        .digest('hex'),
       quotedCostCents: 10,
       maximumCostCents: 20,
       approvalEvidence: {
@@ -650,7 +657,7 @@ describe('single-submit AI image sandbox runner', () => {
       outputDirectory: join(path, 'evidence'),
       resolveDns,
       fetch,
-    })).rejects.toThrow(/must use (?:HTTPS|a public credential-free DNS hostname)/u);
+    })).rejects.toThrow(/must (?:use|be).*(?:HTTPS|public DNS hostname)/u);
     expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -1166,6 +1173,16 @@ describe('single-submit AI image sandbox runner', () => {
     const storedIntent = await readFile(intentPath, 'utf8');
     const parsedReport = JSON.parse(storedReport);
     const parsedIntent = JSON.parse(storedIntent);
+    expect(parsedReport).toMatchObject({
+      schemaVersion: 4,
+      apiBaseSha256: createHash('sha256')
+        .update('https://relay.example/v1')
+        .digest('hex'),
+      operationEndpointSha256: createHash('sha256')
+        .update('https://relay.example/v1/images/edits')
+        .digest('hex'),
+    });
+    expect(parsedReport).not.toHaveProperty('endpointSha256');
     expect(parsedReport).not.toHaveProperty('endpointPath');
     expect(parsedIntent).toMatchObject({
       endpointSha256: createHash('sha256')
@@ -1248,7 +1265,14 @@ describe('single-submit AI image sandbox runner', () => {
       now: new Date(settledObservedAt),
     })).resolves.toMatchObject({
       receipt: {
+        schemaVersion: 2,
         submitState: 'SUCCEEDED',
+        apiBaseSha256: createHash('sha256')
+          .update('https://relay.example/v1')
+          .digest('hex'),
+        operationEndpointSha256: createHash('sha256')
+          .update('https://relay.example/v1/images/edits')
+          .digest('hex'),
         billingOutcome: 'CHARGED',
         actualCostCents: 10,
       },
@@ -1322,10 +1346,14 @@ describe('single-submit AI image sandbox runner', () => {
       'Do not add visible text, logos, watermarks, or extra objects.',
     ].join(' ');
     expect(JSON.parse(stored)).toMatchObject({
+      schemaVersion: 4,
       operationId,
       state: 'RECONCILIATION_REQUIRED',
       operation: 'IMAGE_TO_IMAGE',
-      endpointSha256: createHash('sha256')
+      apiBaseSha256: createHash('sha256')
+        .update('https://relay.example/v1')
+        .digest('hex'),
+      operationEndpointSha256: createHash('sha256')
         .update('https://relay.example/v1/images/edits')
         .digest('hex'),
       credentialRevision: 'admin-config-rev-0002',
@@ -1339,6 +1367,7 @@ describe('single-submit AI image sandbox runner', () => {
       quotedCostCents: 10,
       maximumCostCents: 20,
     });
+    expect(JSON.parse(stored)).not.toHaveProperty('endpointSha256');
     expect(fetch).toHaveBeenCalledOnce();
     expect(stored).not.toContain('sandbox-secret-never-report');
     expect(stored).not.toContain('sensitive upstream response body');

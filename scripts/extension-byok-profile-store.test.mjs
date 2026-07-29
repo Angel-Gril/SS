@@ -143,7 +143,8 @@ async function setEvidenceForCurrentCredential(api, profileId, value) {
 test('canonicalizes only public HTTPS Provider endpoints and rejects secret/SSRF shapes', () => {
   const { schema } = loadApi();
   assert.equal(schema.canonicalizeEndpoint('https://relay.example/v1/'), 'https://relay.example/v1');
-  assert.equal(schema.canonicalizeEndpoint('https://relay.example'), 'https://relay.example');
+  assert.equal(schema.canonicalizeEndpoint('https://relay.example'), 'https://relay.example/v1');
+  assert.equal(schema.canonicalizeEndpoint('https://relay.example/openai/'), 'https://relay.example/openai/v1');
   for (const value of [
     'http://relay.example/v1',
     'https://user:pass@relay.example/v1',
@@ -170,6 +171,8 @@ test('canonicalizes only public HTTPS Provider endpoints and rejects secret/SSRF
     'https://provider.home.arpa/v1',
     'https://provider/v1',
     'https://relay..example/v1',
+    'https://relay.example/v1/images/generations',
+    'https://relay.example/v1/images/edits',
   ]) {
     assert.throws(
       () => schema.canonicalizeEndpoint(value),
@@ -652,4 +655,184 @@ test('never returns a session key or evidence after out-of-band profile identity
   const state = await api.store.getPublicState('relay-profile-1');
   assert.equal(state.hasKey, false);
   assert.deepEqual(state.evidence, []);
+});
+
+test('atomically migrates legacy root and prefixed endpoints before concurrent public or secret use', async () => {
+  const localStorage = createStorage();
+  const sessionStorage = createStorage();
+  const invalidations = [];
+  const rootIdentity = 'https://relay.example\u0000image-model-v1';
+  const prefixIdentity = 'https://prefixed-relay.example/openai\u0000image-model-v1';
+  const rootRevision = '1'.repeat(64);
+  const prefixRevision = '2'.repeat(64);
+  await localStorage.set({
+    'ss-erp:byok:profiles:v1': [
+      profile({ baseUrl: 'https://relay.example' }),
+      profile({
+        id: 'relay-profile-2',
+        name: 'Prefixed relay',
+        baseUrl: 'https://prefixed-relay.example/openai',
+      }),
+    ],
+  });
+  await sessionStorage.set({
+    'ss-erp:byok:session-secrets:v1': {
+      'relay-profile-1': {
+        profileIdentity: rootIdentity,
+        apiKey: 'sk-legacy-root-sentinel',
+        credentialRevision: rootRevision,
+      },
+      'relay-profile-2': {
+        profileIdentity: prefixIdentity,
+        apiKey: 'sk-legacy-prefix-sentinel',
+        credentialRevision: prefixRevision,
+      },
+    },
+    'ss-erp:byok:capability-evidence:v1': {
+      'relay-profile-1': [{ ...evidence({ profileIdentity: rootIdentity }), credentialRevision: rootRevision }],
+      'relay-profile-2': [{ ...evidence({ profileIdentity: prefixIdentity }), credentialRevision: prefixRevision }],
+    },
+    'ss-erp:byok:uncertain-probes:v1': {
+      'relay-profile-1': [{
+        contractVersion: 'extension-byok-uncertain-probe/v1',
+        ...probeGuard(rootIdentity),
+        credentialRevision: rootRevision,
+        state: 'UNKNOWN_OUTCOME',
+      }],
+      'relay-profile-2': [{
+        contractVersion: 'extension-byok-uncertain-probe/v1',
+        ...probeGuard(prefixIdentity, { idempotencyKey: 'probe-persistent-2' }),
+        credentialRevision: prefixRevision,
+        state: 'PENDING',
+      }],
+    },
+    'ss-erp:byok:provider-dispatches:v1': {
+      'relay-profile-1': [{
+        contractVersion: 'extension-byok-provider-dispatch/v1',
+        ...providerDispatch(rootIdentity),
+        credentialRevision: rootRevision,
+      }],
+      'relay-profile-2': [{
+        contractVersion: 'extension-byok-provider-dispatch/v1',
+        ...providerDispatch(prefixIdentity, { idempotencyKey: 'normal-dispatch-2' }),
+        credentialRevision: prefixRevision,
+      }],
+    },
+  });
+  const api = loadApi({
+    localStorage,
+    sessionStorage,
+    onCredentialAuthorityChanged(value) { invalidations.push(clone(value)); },
+  });
+
+  const [profiles, state, secret, snapshot] = await Promise.all([
+    api.store.listPublicProfiles(),
+    api.store.getPublicState('relay-profile-1'),
+    api.store.readSecretForBackground('relay-profile-2'),
+    api.store.getCredentialSnapshotForBackground('relay-profile-1'),
+  ]);
+
+  assert.deepEqual(profiles.map((item) => item.baseUrl), [
+    'https://relay.example/v1',
+    'https://prefixed-relay.example/openai/v1',
+  ]);
+  assert.equal(state.hasKey, false);
+  assert.deepEqual(state.evidence, []);
+  assert.equal(secret, null);
+  assert.equal(snapshot.apiKey, null);
+  assert.equal(snapshot.credentialRevision, null);
+  assert.deepEqual(invalidations, [
+    { reason: 'profile_authority_changed', profileId: 'relay-profile-1' },
+    { reason: 'profile_authority_changed', profileId: 'relay-profile-2' },
+  ]);
+  for (const key of [
+    api.schema.SESSION_SECRETS_STORAGE_KEY,
+    api.schema.SESSION_EVIDENCE_STORAGE_KEY,
+    api.schema.SESSION_UNCERTAIN_PROBES_STORAGE_KEY,
+    api.schema.SESSION_PROVIDER_DISPATCHES_STORAGE_KEY,
+  ]) {
+    assert.equal(sessionStorage.value(key), undefined);
+  }
+  assert.deepEqual(
+    localStorage.value(api.schema.PROFILES_STORAGE_KEY).map((item) => item.baseUrl),
+    ['https://relay.example/v1', 'https://prefixed-relay.example/openai/v1'],
+  );
+});
+
+test('fails legacy endpoint migration closed when session authority cannot be physically cleared', async () => {
+  const localStorage = createStorage();
+  const sessionStorage = createStorage();
+  const invalidations = [];
+  const legacyIdentity = 'https://relay.example\u0000image-model-v1';
+  await localStorage.set({
+    'ss-erp:byok:profiles:v1': [profile({ baseUrl: 'https://relay.example' })],
+  });
+  await sessionStorage.set({
+    'ss-erp:byok:session-secrets:v1': {
+      'relay-profile-1': {
+        profileIdentity: legacyIdentity,
+        apiKey: 'sk-legacy-failure-sentinel',
+        credentialRevision: '3'.repeat(64),
+      },
+    },
+  });
+  const originalRemove = sessionStorage.remove.bind(sessionStorage);
+  sessionStorage.remove = async () => { throw new Error('session cleanup failed'); };
+  const api = loadApi({
+    localStorage,
+    sessionStorage,
+    onCredentialAuthorityChanged(value) { invalidations.push(clone(value)); },
+  });
+
+  await assert.rejects(api.store.getPublicState('relay-profile-1'), /session cleanup failed/);
+  await assert.rejects(api.store.readSecretForBackground('relay-profile-1'), /session cleanup failed/);
+  assert.equal(
+    localStorage.value(api.schema.PROFILES_STORAGE_KEY)[0].baseUrl,
+    'https://relay.example',
+  );
+  assert.equal(
+    sessionStorage.value(api.schema.SESSION_SECRETS_STORAGE_KEY)['relay-profile-1'].apiKey,
+    'sk-legacy-failure-sentinel',
+  );
+  assert.deepEqual(invalidations, [
+    { reason: 'profile_authority_changed', profileId: 'relay-profile-1' },
+    { reason: 'profile_authority_changed', profileId: 'relay-profile-1' },
+  ]);
+
+  sessionStorage.remove = originalRemove;
+  const state = await api.store.getPublicState('relay-profile-1');
+  assert.equal(state.hasKey, false);
+  assert.equal(
+    localStorage.value(api.schema.PROFILES_STORAGE_KEY)[0].baseUrl,
+    'https://relay.example/v1',
+  );
+});
+
+test('does not revive legacy authority after persisted endpoint metadata is rolled back', async () => {
+  const localStorage = createStorage();
+  const sessionStorage = createStorage();
+  const legacyProfile = profile({ baseUrl: 'https://relay.example' });
+  const legacySecret = {
+    profileIdentity: 'https://relay.example\u0000image-model-v1',
+    apiKey: 'sk-legacy-rollback-sentinel',
+    credentialRevision: '4'.repeat(64),
+  };
+  await localStorage.set({ 'ss-erp:byok:profiles:v1': [legacyProfile] });
+  await sessionStorage.set({
+    'ss-erp:byok:session-secrets:v1': { 'relay-profile-1': legacySecret },
+  });
+  let api = loadApi({ localStorage, sessionStorage });
+  assert.equal(await api.store.readSecretForBackground('relay-profile-1'), null);
+
+  await localStorage.set({ 'ss-erp:byok:profiles:v1': [legacyProfile] });
+  await sessionStorage.set({
+    'ss-erp:byok:session-secrets:v1': { 'relay-profile-1': legacySecret },
+  });
+  api = loadApi({ localStorage, sessionStorage });
+  assert.equal(await api.store.readSecretForBackground('relay-profile-1'), null);
+  assert.equal(sessionStorage.value(api.schema.SESSION_SECRETS_STORAGE_KEY), undefined);
+  assert.equal(
+    localStorage.value(api.schema.PROFILES_STORAGE_KEY)[0].baseUrl,
+    'https://relay.example/v1',
+  );
 });

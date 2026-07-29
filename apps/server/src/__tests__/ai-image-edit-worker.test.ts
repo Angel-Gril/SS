@@ -348,6 +348,57 @@ describe('AI image edit worker boundary', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('rejects a legacy custom bare-origin edit hash before resolving a Provider', async () => {
+    const requestFingerprint = 'd'.repeat(64);
+    const relayConfig = {
+      provider: 'custom', baseUrl: 'https://relay.example', apiKey: 'legacy-secret',
+      model: 'relay-image-v2', costPerImageCents: 7,
+    };
+    const current = createAiImageProviderRuntimeContract(relayConfig, {
+      count: 1, width: 1024, height: 1024,
+    });
+    const providerRuntime = {
+      ...current,
+      baseUrlSha256: createHash('sha256').update(relayConfig.baseUrl).digest('hex'),
+    };
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-legacy-custom-edit', ownerUserId: 'owner-1', status: 'QUEUED',
+        operation: 'FULL_EDIT', provider: 'custom', model: 'relay-image-v2',
+        estimatedCostCents: 7, requestedImageCount: 1, width: 1024, height: 1024,
+        requestFingerprint,
+        operationConfig: { policyVersion: 'ai-image-edit-policy/1.0', providerRuntime },
+        costReservation: {
+          id: 'reservation-legacy-custom', status: 'RESERVED', provider: 'custom',
+          model: 'relay-image-v2', estimatedCostMinor: 7, maximumCostMinor: 7,
+          requestFingerprint,
+        },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    } as any;
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageEditQueueJob('job-legacy-custom-edit', 1, {
+      repository,
+      getDispatchAuthorization: allowPaidDispatch,
+      getProviderConfig: vi.fn(async () => relayConfig),
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith(
+      'job-legacy-custom-edit',
+      expect.objectContaining({
+        attemptCount: 1,
+        errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+        errorMessage: 'Active Provider identity does not match the frozen runtime contract',
+      }),
+    );
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('persists and rejects queued fake edit jobs in production before resolving or running a Provider', async () => {
     const repository = {
       getById: vi.fn(async () => ({

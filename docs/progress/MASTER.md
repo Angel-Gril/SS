@@ -134,9 +134,27 @@ there is still no different edit-capable endpoint/model or explicitly approved p
 production flags remain off, and this offline work made no Provider request, charge, production
 mutation, VPS access, deployment, or `.context/` staging.
 
+The supplied custom relay candidate then exposed and closed the remaining preflight identity gaps
+without a paid call. Server and extension now canonicalize a bare origin or custom prefix to its
+effective `/v1` API Base under one strict HTTPS multi-label-DNS/path contract. Existing extension
+profiles migrate serially by invalidating generated results and physically deleting the session Key,
+capability evidence, uncertain probes and Provider dispatches before canonical metadata is exposed;
+legacy custom frozen hashes fail before Provider resolution. New sandbox verification/output uses
+explicit API-base and operation-endpoint hashes (verification v2, submit report v4), while billing
+retains exact historical v3 compatibility and emits a dual-hash v2 receipt for current reports.
+Combined focused tests passed `246` Server checks with one Windows skip and `95` extension checks;
+full Server tests passed `4422` with `194` skipped, lint passed with `20` existing warnings and no
+errors, workspace typecheck passed, preflight passed `445/0`, and cloud/local package verification
+passed `449/0/0` and `445/2/0` at build version `1.0.264`. Independent review found no P0/P1 issue.
+Phase 3 remains `4/5` and overall progress remains `32/37`: the candidate still lacks an authenticated
+model-catalog result, exact price/currency evidence, a private DPAPI Key file and a finalized
+per-request cost authorization. No Provider POST, charge, production mutation, VPS access,
+deployment, flag change, or `.context/` staging occurred.
+
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private
+1. Do not start a paid `QA-02` probe until the supplied candidate endpoint/model passes an
+   authenticated no-generation model-catalog check, exact price/currency evidence is retained, and the private
    [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
    credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost,
    billing evidence path, and an unexpired validity window of at most 60 minutes. The offline draft

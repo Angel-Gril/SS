@@ -75,9 +75,20 @@ export function canonicalAiImageProviderBaseUrl(providerValue: unknown, baseUrlV
     }
     return normalized;
   }
+  const effectiveRaw = provider === 'custom'
+    ? (() => {
+        try {
+          return normalizeOpenAiImagesApiBase(raw);
+        } catch {
+          throw new AiImageProviderRuntimeContractError(
+            'Custom OpenAI-compatible image Provider base URL is invalid',
+          );
+        }
+      })()
+    : raw;
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(effectiveRaw);
   } catch {
     throw new AiImageProviderRuntimeContractError('Provider base URL is invalid');
   }

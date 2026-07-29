@@ -300,6 +300,9 @@ function loadClient(options = {}) {
   vm.runInNewContext(clientSource, context, { filename: clientPath });
 
   const selectedProfile = options.profile || profile();
+  const selectedProfileIdentity = options.profileIdentityOverride !== undefined
+    ? options.profileIdentityOverride
+    : context.SS_ERP_BYOK_PROFILE_SCHEMA.profileIdentity(selectedProfile);
   const storeCalls = [];
   let credentialRevision = options.credentialRevision || '1'.repeat(64);
   let currentApiKey = options.apiKey || 'sk-secret-sentinel';
@@ -315,7 +318,7 @@ function loadClient(options = {}) {
         apiKey: currentApiKey,
         credentialRevision,
         evidence: options.evidence === undefined ? [capabilityEvidence({
-          profileIdentity: `${selectedProfile.baseUrl.replace(/\/+$/u, '')}\u0000${selectedProfile.model}`,
+          profileIdentity: selectedProfileIdentity,
         })] : options.evidence,
       } : null;
     },
@@ -326,7 +329,7 @@ function loadClient(options = {}) {
         expectedProfileIdentity,
         expectedCredentialRevision,
       });
-      const currentIdentity = `${selectedProfile.baseUrl.replace(/\/+$/u, '')}\u0000${selectedProfile.model}`;
+      const currentIdentity = selectedProfileIdentity;
       if (id !== selectedProfile.id || expectedProfileIdentity !== currentIdentity
         || expectedCredentialRevision !== credentialRevision) {
         const error = new Error('credential authority stale');
@@ -791,6 +794,22 @@ test('sends one background-owned generations request and decodes bounded b64_jso
   assert.equal('blob' in state.image, false);
 });
 
+test('normalizes a bare OpenAI-compatible origin to the effective v1 generation endpoint', async () => {
+  const calls = [];
+  const { client } = loadClient({
+    profile: profile({ baseUrl: 'https://relay.example' }),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({ data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }] });
+    },
+  });
+
+  await client.generate(request({ idempotencyKey: 'generate-bare-origin-1' }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://relay.example/v1/images/generations');
+});
+
 test('probe creates exact short-lived evidence without claiming or reporting a draft intent', async () => {
   let fetchCalls = 0;
   const { client, storeCalls, executionIntentCalls } = loadClient({
@@ -1011,6 +1030,7 @@ test('fails before reading the key or dispatch when readiness/profile/permission
         readinessBinding: readiness({ providerOrigin: 'https://provider.internal' }),
       }),
       profile: profile({ baseUrl: 'https://provider.internal/v1' }),
+      profileIdentityOverride: null,
       permissions: createPermissions([]),
       code: 'SS_ERP_BYOK_PROVIDER_PROFILE_INVALID',
     },
@@ -1020,6 +1040,7 @@ test('fails before reading the key or dispatch when readiness/profile/permission
       fetchImpl,
       permissions: item.permissions,
       profile: item.profile,
+      profileIdentityOverride: item.profileIdentityOverride,
     });
     await assert.rejects(
       client.generate(item.input),

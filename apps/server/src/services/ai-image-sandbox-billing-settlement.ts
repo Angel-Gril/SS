@@ -110,7 +110,7 @@ const SETTLEMENT_CLAIM_KEYS = new Set([
   'state',
 ]);
 
-const REPORT_REQUIRED_KEYS = [
+const REPORT_COMMON_REQUIRED_KEYS = [
   'schemaVersion',
   'operationId',
   'state',
@@ -120,7 +120,6 @@ const REPORT_REQUIRED_KEYS = [
   'adapterRevision',
   'provider',
   'model',
-  'endpointSha256',
   'approvalEvidence',
   'promptSha256',
   'sourceSha256',
@@ -138,8 +137,18 @@ const REPORT_REQUIRED_KEYS = [
   'intentPath',
 ];
 
-const REPORT_SUCCESS_KEYS = new Set([
-  ...REPORT_REQUIRED_KEYS,
+const REPORT_V3_REQUIRED_KEYS = [
+  ...REPORT_COMMON_REQUIRED_KEYS,
+  'endpointSha256',
+];
+
+const REPORT_V4_REQUIRED_KEYS = [
+  ...REPORT_COMMON_REQUIRED_KEYS,
+  'apiBaseSha256',
+  'operationEndpointSha256',
+];
+
+const REPORT_SUCCESS_OUTCOME_KEYS = [
   'imageCount',
   'mimeType',
   'width',
@@ -147,12 +156,9 @@ const REPORT_SUCCESS_KEYS = new Set([
   'bytes',
   'sha256',
   'imagePath',
-]);
+];
 
-const REPORT_FAILURE_KEYS = new Set([
-  ...REPORT_REQUIRED_KEYS,
-  'failureCode',
-]);
+const REPORT_FAILURE_OUTCOME_KEYS = ['failureCode'];
 
 const SANDBOX_OPERATIONS = new Set([
   'TEXT_TO_IMAGE',
@@ -1036,16 +1042,28 @@ function parseIntent(record: Record<string, unknown>, operationId: string) {
 }
 
 function parseReport(record: Record<string, unknown>, operationId: string) {
+  const schemaVersion = record.schemaVersion;
   const state = typeof record.state === 'string' ? record.state : '';
-  const expectedKeys = state === 'SUCCEEDED'
-    ? REPORT_SUCCESS_KEYS
-    : ['REJECTED', 'RECONCILIATION_REQUIRED'].includes(state)
-      ? REPORT_FAILURE_KEYS
+  const requiredKeys = schemaVersion === 4
+    ? REPORT_V4_REQUIRED_KEYS
+    : schemaVersion === 3
+      ? REPORT_V3_REQUIRED_KEYS
       : null;
+  const outcomeKeys = state === 'SUCCEEDED'
+    ? REPORT_SUCCESS_OUTCOME_KEYS
+    : ['REJECTED', 'RECONCILIATION_REQUIRED'].includes(state)
+      ? REPORT_FAILURE_OUTCOME_KEYS
+      : null;
+  const expectedKeys = requiredKeys && outcomeKeys
+    ? new Set([...requiredKeys, ...outcomeKeys])
+    : null;
+  const operationEndpointSha256 = schemaVersion === 4
+    ? record.operationEndpointSha256
+    : record.endpointSha256;
+  const apiBaseSha256 = schemaVersion === 4 ? record.apiBaseSha256 : null;
   if (
     !expectedKeys
     || !hasExactKeys(record, expectedKeys)
-    || record.schemaVersion !== 3
     || record.operationId !== operationId
     || record.actualCostCents !== null
     || record.createRequests !== 1
@@ -1054,8 +1072,13 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     || !SANDBOX_OPERATIONS.has(String(record.operation))
     || typeof record.requestProfile !== 'string'
     || !/^[A-Z][A-Z0-9_]{0,79}$/u.test(record.requestProfile)
-    || typeof record.endpointSha256 !== 'string'
-    || !SHA256_PATTERN.test(record.endpointSha256)
+    || typeof operationEndpointSha256 !== 'string'
+    || !SHA256_PATTERN.test(operationEndpointSha256)
+    || (schemaVersion === 4 && (
+      typeof apiBaseSha256 !== 'string'
+      || !SHA256_PATTERN.test(apiBaseSha256)
+      || apiBaseSha256 === operationEndpointSha256
+    ))
     || typeof record.promptSha256 !== 'string'
     || !SHA256_PATTERN.test(record.promptSha256)
     || !Array.isArray(record.sourceSha256)
@@ -1135,7 +1158,17 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
       'Sandbox billing submit outcome evidence is invalid',
     );
   }
-  return { record, approvalEvidence, startedAt, completedAt, model, credentialRevision };
+  return {
+    record,
+    schemaVersion: schemaVersion as 3 | 4,
+    apiBaseSha256: apiBaseSha256 as string | null,
+    operationEndpointSha256,
+    approvalEvidence,
+    startedAt,
+    completedAt,
+    model,
+    credentialRevision,
+  };
 }
 
 function assertArtifactsMatch(input: {
@@ -1190,7 +1223,7 @@ function assertArtifactsMatch(input: {
       !== intent.approvalEvidence.billingReconciliationRefSha256
     || attestation.currency !== intent.approvalEvidence.currency
     || canonicalJson(report.approvalEvidence) !== canonicalJson(intent.approvalEvidence)
-    || reportRecord.endpointSha256 !== intentRecord.endpointSha256
+    || report.operationEndpointSha256 !== intentRecord.endpointSha256
     || reportRecord.model !== intentRecord.model
     || reportRecord.credentialRevision !== intentRecord.credentialRevision
     || reportRecord.adapterRevision !== intentRecord.adapterRevision
@@ -1423,8 +1456,14 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     );
     claimReplayed = true;
   }
+  const endpointEvidence = report.schemaVersion === 4
+    ? {
+        apiBaseSha256: report.apiBaseSha256,
+        operationEndpointSha256: report.operationEndpointSha256,
+      }
+    : { endpointSha256: intent.record.endpointSha256 };
   const receipt = {
-    schemaVersion: 1,
+    schemaVersion: report.schemaVersion === 4 ? 2 : 1,
     event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
     operationId,
     settlementId: attestation.settlementId,
@@ -1436,7 +1475,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     submitState: report.record.state,
     providerOutcomeResolved: report.record.state !== 'RECONCILIATION_REQUIRED',
     sameRequestRetryAllowed: false,
-    endpointSha256: intent.record.endpointSha256,
+    ...endpointEvidence,
     modelSha256: sha256(intent.model),
     operation: intent.request.operation,
     requestProfile: intent.request.requestProfile,

@@ -255,4 +255,43 @@ describe('AI image provider capability matrix', () => {
       resultMode: 'sync',
     })).toBe(false);
   });
+
+  it.each([
+    ['bare custom origin', 'https://relay.example', 'https://relay.example/v1'],
+    ['custom path prefix', 'https://relay.example/openai', 'https://relay.example/openai/v1'],
+  ])('uses the effective API base for exact custom evidence from a %s', (
+    _label,
+    configuredBaseUrl,
+    explicitBaseUrl,
+  ) => {
+    const endpointSha256 = aiImageProviderEndpointSha256('custom', explicitBaseUrl);
+    const capability = {
+      provider: 'custom',
+      model: 'relay-image-v2',
+      operations: ['IMAGE_TO_IMAGE'],
+      maxReferences: 4,
+      supportsMask: false,
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+      evidenceLevel: 'sandbox-verified',
+      evidence: 'exact custom relay evidence',
+      sandboxEvidence: [{
+        endpointSha256,
+        operation: 'IMAGE_TO_IMAGE',
+        inputTransport: 'multipart',
+        resultMode: 'sync',
+      }],
+    } as const;
+
+    expect(aiImageProviderEndpointSha256('custom', configuredBaseUrl)).toBe(endpointSha256);
+    expect(hasExactAiMediaSandboxEvidence({
+      capability,
+      provider: 'custom',
+      model: 'relay-image-v2',
+      baseUrl: configuredBaseUrl,
+      operation: 'IMAGE_TO_IMAGE',
+      inputTransport: 'multipart',
+      resultMode: 'sync',
+    })).toBe(true);
+  });
 });

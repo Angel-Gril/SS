@@ -275,6 +275,7 @@ function loadClient(options = {}) {
   assert.equal(typeof context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT.createClient, 'function');
 
   const selectedProfile = options.profile || profile();
+  const selectedProfileIdentity = context.SS_ERP_BYOK_PROFILE_SCHEMA.profileIdentity(selectedProfile);
   const adapterApi = context.SS_ERP_BYOK_IMAGE_EDIT_ADAPTERS;
   const adapter = options.adapter || adapterApi.OPENAI_MULTIPART_SYNC;
   assert.ok(adapter, 'selected image edit adapter is missing');
@@ -306,7 +307,7 @@ function loadClient(options = {}) {
     async assertCredentialRevisionForBackground(id, expectedIdentity, expectedRevision) {
       storeCalls.push({ method: 'assertCredentialRevisionForBackground', id });
       assert.equal(id, selectedProfile.id);
-      assert.equal(expectedIdentity, `${selectedProfile.baseUrl}\u0000${selectedProfile.model}`);
+      assert.equal(expectedIdentity, selectedProfileIdentity);
       assert.equal(expectedRevision, CREDENTIAL_REVISION);
       return { current: true };
     },
@@ -590,6 +591,24 @@ test('uses exact OpenAI multipart fields for reference, full-edit, and inpaint o
       assert.equal(form.has('mask'), false);
     }
   }
+});
+
+test('normalizes a bare OpenAI-compatible origin to the effective v1 edits endpoint', async () => {
+  const calls = [];
+  const loaded = loadClient({
+    profile: profile({ baseUrl: 'https://relay.example' }),
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({ data: [{ b64_json: Buffer.from(outputPng).toString('base64') }] });
+    },
+  });
+
+  await loaded.client.edit(editRequest('FULL_EDIT', {
+    idempotencyKey: 'edit-bare-origin-0001',
+  }));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://relay.example/v1/images/edits');
 });
 
 test('claims an exact execution intent before Provider dispatch and reports the successful result', async () => {

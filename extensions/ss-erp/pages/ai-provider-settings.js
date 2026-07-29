@@ -89,7 +89,7 @@
     var messages = {
       SS_ERP_BYOK_PROFILE_NOT_FOUND: 'Provider 档案不存在，请刷新后重试。',
       SS_ERP_BYOK_PROFILE_INVALID: '档案参数无效，请检查 Endpoint、模型和能力选择。',
-      SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID: 'Endpoint 必须是公开的 HTTPS 地址，且不能包含查询参数或片段。',
+      SS_ERP_BYOK_PROFILE_ENDPOINT_INVALID: 'Endpoint 必须是公开 HTTPS API Base，不能包含查询参数、片段或 images 操作路径。',
       SS_ERP_BYOK_API_KEY_INVALID: 'API Key 无效，请重新输入。',
       SS_ERP_BYOK_SESSION_STORAGE_UNAVAILABLE: '当前浏览器会话存储不可用，无法安全加载密钥。',
       SS_ERP_BYOK_PROVIDER_SHOPS_UNAVAILABLE: '无法读取设备授权店铺。',

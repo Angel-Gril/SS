@@ -281,21 +281,13 @@ describe('AI image provider adapters', () => {
     );
   });
 
-  it('validates the OpenAI edit target before running the dispatch fence', async () => {
+  it('validates the OpenAI edit target before running the dispatch fence', () => {
     const fetch = vi.fn();
     const beforeProviderDispatch = vi.fn(async () => undefined);
-    const provider = createOpenAiImageEditProvider({
+    expect(() => createOpenAiImageEditProvider({
       baseUrl: 'https://127.0.0.1/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
       beforeProviderDispatch,
-    });
-
-    await expect(provider.edit({
-      operation: 'IMAGE_TO_IMAGE', prompt: 'edit', negativePrompt: null,
-      width: 1024, height: 1536, images: [{ buffer: png, mimeType: 'image/png' }],
-    })).rejects.toMatchObject({
-      code: 'INVALID_PROVIDER_URL',
-      providerSubmissionRejected: true,
-    });
+    })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
 
     expect(beforeProviderDispatch).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
@@ -973,14 +965,11 @@ describe('AI image provider adapters', () => {
     })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
     expect(fetch).not.toHaveBeenCalled();
   });
-  it('rejects insecure provider base URLs before sending credentials', async () => {
+  it('rejects insecure provider base URLs before sending credentials', () => {
     const fetch = vi.fn();
-    const provider = createOpenAiImagesProvider({
+    expect(() => createOpenAiImagesProvider({
       baseUrl: 'http://127.0.0.1:8080/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
-    });
-    await expect(provider.generate({
-      prompt: 'photo', negativePrompt: null, count: 1, width: 1024, height: 1024, model: 'gpt-image-1',
-    })).rejects.toMatchObject({ code: 'INVALID_PROVIDER_URL' });
+    })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
     expect(fetch).not.toHaveBeenCalled();
   });
 

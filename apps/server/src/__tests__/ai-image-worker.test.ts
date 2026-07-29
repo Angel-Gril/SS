@@ -358,6 +358,58 @@ describe('AI image BullMQ worker boundary', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['bare custom origin', 'https://relay.example'],
+    ['custom path prefix', 'https://relay.example/openai'],
+  ])('rejects a legacy raw hash for a %s before Provider resolution', async (
+    _label,
+    baseUrl,
+  ) => {
+    const relayConfig = {
+      provider: 'custom', baseUrl, apiKey: 'legacy-secret',
+      model: 'relay-image-v2', costPerImageCents: 7,
+    };
+    const current = createAiImageProviderRuntimeContract(relayConfig, {
+      count: 1, width: 1024, height: 1024,
+    });
+    const operationConfig = {
+      ...current,
+      baseUrlSha256: createHash('sha256').update(baseUrl).digest('hex'),
+    };
+    const repository = {
+      getById: vi.fn(async () => ({
+        id: 'job-legacy-custom', ownerUserId: 'owner-1', provider: 'custom',
+        model: 'relay-image-v2', status: 'QUEUED', estimatedCostCents: 7,
+        requestedImageCount: 1, width: 1024, height: 1024, operationConfig,
+        costReservation: {
+          status: 'RESERVED', provider: 'custom', model: 'relay-image-v2',
+          estimatedCostMinor: 7, maximumCostMinor: 7,
+        },
+      })),
+      markEnqueueFailed: vi.fn(async () => true),
+    };
+    const resolveProvider = vi.fn();
+    const run = vi.fn();
+
+    await processAiImageQueueJob('job-legacy-custom', 1, {
+      repository: repository as any,
+      getDispatchAuthorization: vi.fn(async () => ({
+        enabled: true, reasonCode: 'tenant_allowed', reason: 'allowed',
+      })),
+      getProviderConfig: vi.fn(async () => relayConfig),
+      resolveProvider,
+      run,
+    });
+
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-legacy-custom', {
+      attemptCount: 1,
+      errorCode: 'PROVIDER_RUNTIME_CONTRACT_MISMATCH',
+      errorMessage: 'Active Provider identity does not match the frozen runtime contract',
+    });
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('keeps an adapter-characterized paid provider disabled until sandbox evidence is promoted', async () => {
     const providerConfig = {
       provider: 'dashscope-wanx', baseUrl: 'https://dashscope.example/api/v1',
