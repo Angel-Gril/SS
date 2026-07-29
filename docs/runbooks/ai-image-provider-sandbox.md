@@ -68,7 +68,7 @@ Run these from the repository root with paid confirmations and API keys unset. T
 
 ```bash
 node --test scripts/ai-image-single-submit-contract.test.mjs scripts/ai-image-translation-single-submit-contract.test.mjs
-pnpm --filter server exec vitest run scripts/ai-image-provider-single-submit.test.ts scripts/ai-image-translation-single-submit.test.ts src/__tests__/ai-image-sandbox-guard.test.ts src/__tests__/ai-image-translation-sandbox-guard.test.ts
+pnpm --filter server exec vitest run scripts/ai-image-provider-approval-draft.test.ts scripts/ai-image-provider-single-submit.test.ts scripts/ai-image-translation-single-submit.test.ts src/__tests__/ai-image-sandbox-guard.test.ts src/__tests__/ai-image-translation-sandbox-guard.test.ts
 pnpm preflight
 ```
 
@@ -80,6 +80,11 @@ git rev-parse HEAD
 ```
 
 Do not run a paid probe from an unreviewed or partially deployed worktree.
+
+The private [approval runbook](ai-image-provider-sandbox-approval.md) includes an optional
+`sandbox:ai-image:approval:draft` command that binds the non-secret request into a private canonical
+file without DNS, intent creation, or Provider access. Its rejection sentinels require a separate
+human review and cannot authorize a request.
 
 After the private international approval file is final, run the no-key/no-confirmation exact-request
 preflight before any paid submit:

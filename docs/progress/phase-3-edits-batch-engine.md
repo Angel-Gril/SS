@@ -158,3 +158,20 @@ Progress: 4/5 tasks.
   preflight passed; preflight reported `445` passes, `0` failures, and the two expected local-package
   permission warnings. `QA-02` remains open; no real Provider request, charge, production mutation,
   VPS access, deployment, or `.context/` staging occurred.
+- A separate `sandbox:ai-image:approval:draft` command now creates one private canonical `v2`
+  near-final record from the exact non-secret endpoint/model/operation/profile, deployed revision,
+  pinned source/mask bytes, billing references, and bounded cost proposal. It rejects API keys,
+  paid confirmation, Authorization, existing approval configuration, unsafe endpoints/media, dirty
+  or unverifiable code, non-private parents, and existing output paths before any write. It performs
+  no DNS, Provider, intent, or fingerprint operation.
+- The draft contains independent non-authority sentinels for `statement`, `approvedAt`, and
+  `expiresAt`; the production approval loader rejects it until a human reviews every bound field and
+  manually replaces only those three values. Writes are exclusive and durable, verify persisted
+  bytes, use private POSIX modes, and recheck bigint parent/leaf identities. Draft/approval/runner/
+  guard/billing focused tests passed `114` with one Windows-only POSIX boundary test skipped; the
+  static contract, sandbox TypeScript compilation, repository lint (existing warnings only),
+  workspace typecheck, full server tests, and preflight passed. Preflight reported `445` passes,
+  `0` failures, and the two expected local-package permission warnings. `QA-02` remains `4/5` and
+  open because no edit-capable endpoint/model or explicitly approved paid request exists. No real
+  Provider request, charge, production mutation, VPS access, deployment, or `.context/` staging
+  occurred.

@@ -22,6 +22,61 @@ gpt-image-2-i2i-20260725064150-03
 Select a genuinely edit-capable endpoint/model first. One approval file authorizes only one of
 `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`; it cannot prove another operation.
 
+## Generate A Non-Approval Draft Offline
+
+After selecting the exact endpoint/model and preparing the non-secret request metadata, an operator
+may generate a near-final private JSON draft instead of assembling the schema by hand:
+
+```bash
+pnpm --filter server sandbox:ai-image:approval:draft
+```
+
+The command requires a private, existing parent directory (mode `0700` on Linux), a clean
+verifiable Git checkout of `AI_IMAGE_SANDBOX_ADAPTER_REVISION`, and the same endpoint, model,
+operation/profile, credential revision, source/mask digest, and quoted/maximum cost variables used
+by the submit command. Draft costs must be canonical positive integers no greater than
+`10,000,000` cents, with quote less than or equal to maximum. It additionally requires:
+
+| Variable                                                  | Requirement                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------- |
+| `AI_IMAGE_SANDBOX_APPROVAL_DRAFT_PATH`                    | New private output path; an existing path is never overwritten      |
+| `AI_IMAGE_SANDBOX_APPROVAL_ID`                            | Proposed unique approval ID                                         |
+| `AI_IMAGE_SANDBOX_OPERATION_ID`                           | New one-use ID for this exact proposed request                       |
+| `AI_IMAGE_SANDBOX_BASE_URL`                               | HTTPS API base without an `/images/generations` or `/images/edits` path |
+| `AI_IMAGE_SANDBOX_APPROVER_REF`                           | Non-secret reference for the future recorded review                 |
+| `AI_IMAGE_SANDBOX_PROVIDER_ACCOUNT_REF`                   | Non-secret Provider account reference                               |
+| `AI_IMAGE_SANDBOX_PRICING_REVISION`                       | Exact pricing evidence revision                                     |
+| `AI_IMAGE_SANDBOX_CURRENCY`                               | Three-letter uppercase currency code                                |
+| `AI_IMAGE_SANDBOX_PRE_CALL_BILLING_SNAPSHOT_REF`          | Non-secret reference for the reviewed before-call bill snapshot     |
+| `AI_IMAGE_SANDBOX_BILLING_RECONCILIATION_REF`             | Non-secret reference for the future settled-bill reconciliation     |
+
+API keys, `AI_IMAGE_SANDBOX_CONFIRM`, `Authorization`, an existing approval path/digest, and common
+Provider secret variables must all be absent. Draft generation reads only pinned local media and
+Git metadata. It performs no DNS lookup or Provider request and creates no request intent or replay
+fingerprint. The output file is created once as mode `0600` on Linux; stdout contains only a
+sanitized event and hashes.
+
+The generated file deliberately contains these rejection sentinels:
+
+```text
+statement: DRAFT_REVIEW_REQUIRED_NOT_APPROVED
+approvedAt: REPLACE_DURING_REVIEW
+expiresAt: REPLACE_DURING_REVIEW
+```
+
+It is not an approval and the submit/preflight loader must reject it. A human approver must review
+every request field against the Provider account, pricing, source/mask bytes, deployed revision,
+dark-state result, and pre-call billing evidence. Only during that review may the approver replace
+`statement` with `I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST`, set distinct canonical UTC
+`approvedAt`/`expiresAt` values with a positive window of at most 60 minutes, and save the canonical
+two-space JSON. Compute a new SHA-256 only after those three manual replacements and the final
+review. These are the only three fields that may be edited in place. If any other bound field is
+wrong, preserve the old draft as rejected evidence, correct the environment, and generate a new
+file at a new `AI_IMAGE_SANDBOX_APPROVAL_DRAFT_PATH`. The final file must still use two-space JSON
+and one trailing newline. Set `AI_IMAGE_SANDBOX_APPROVAL_PATH` and its newly computed
+`AI_IMAGE_SANDBOX_APPROVAL_SHA256` only after that review. Never treat the draft event or its
+pre-review digest as paid-request authority.
+
 ## Private JSON Record
 
 Create the file outside the repository or under the private persistent sandbox evidence root. On

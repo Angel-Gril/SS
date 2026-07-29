@@ -50,6 +50,12 @@ strict UTF-8/duplicate-key/bounded-file checks, and freshness rechecks after DNS
 claim, before Provider execution, and at both generation/edit POST boundaries. The offline
 `sandbox:ai-image:approval:verify` command rejects submit secrets, non-HTTPS/localhost endpoints,
 and any exact request mismatch while performing no DNS, intent/fingerprint, or Provider operation.
+Before human approval, the separate `sandbox:ai-image:approval:draft` command can bind the same
+non-secret request into one exclusive private canonical file. Independent statement/timestamp
+sentinels keep that file impossible for the approval loader to accept until a human reviews every
+field and manually replaces only those three values; the command refuses secrets, paid
+confirmation, existing approval configuration, unsafe media/endpoints/parents, revision drift, and
+overwrites while performing no DNS, Provider, intent, or fingerprint operation.
 The request claim is closed to known fields and replay identity binds only actual Provider transport
 semantics, so approval, profile/dimension metadata, credential revision, adapter revision, or a new
 Operation ID cannot authorize the same paid POST again. Git marker/HEAD drift, dirty tracked files,
@@ -66,8 +72,9 @@ idempotent across compatible finalizer revisions, over-budget charges are record
 `COST_LIMIT_EXCEEDED`, and settled billing cannot upgrade a `RECONCILIATION_REQUIRED` Provider
 outcome. Snapshot identity uses canonical paths plus bigint device/inode evidence, output creation is
 bound to one private directory identity, and a different finalizer revision can only return an exact
-existing receipt. Focused approval/runner/guard/billing tests passed `95` with one Windows-only POSIX
-boundary test skipped; repository lint (existing warnings only), workspace typecheck, the static
+existing receipt. Focused draft/approval/runner/guard/billing tests passed `114` with one
+Windows-only POSIX boundary test skipped; repository lint (existing warnings only), workspace
+typecheck, the static
 contract, sandbox TypeScript compilation, and full preflight passed. Preflight reported `445` passes
 and `0` failures. No implementation task is dependency-ready until an edit-capable endpoint/model
 and the exact paid `QA-02` request are explicitly approved; `QA-04` and release remain downstream.
@@ -79,7 +86,9 @@ mutation, VPS access, deployment, or `.context/` staging occurred.
 1. Do not start a paid `QA-02` probe until an edit-capable endpoint/model is selected and the private
    [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
    credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost,
-   billing evidence path, and an unexpired validity window of at most 60 minutes. Execute it only
+   billing evidence path, and an unexpired validity window of at most 60 minutes. The offline draft
+   command may prepare the non-secret fields, but its rejection sentinels and digest are not
+   approval; a human must complete the documented final review. Execute the paid probe only
    from a private clean checkout of the deployed revision; do not repeat the two previously rejected
    `IMAGE_TO_IMAGE` requests.
 2. After a single approved `QA-02` request, retain private before/settled billing snapshot files,

@@ -14,6 +14,10 @@ const approval = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'utf8',
 );
+const approvalDraft = fs.readFileSync(
+  'apps/server/scripts/ai-image-provider-approval-draft.ts',
+  'utf8',
+);
 const billingFinalizer = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-billing-finalize.ts',
   'utf8',
@@ -150,6 +154,18 @@ assert.match(approval, /O_NOFOLLOW/u);
 assert.match(approval, /metadata\.mode\s*&\s*0o077/u);
 assert.match(approval, /preCallBillingSnapshotRefSha256/u);
 assert.match(approval, /billingReconciliationRefSha256/u);
+assert.match(approvalDraft, /DRAFT_REVIEW_REQUIRED_NOT_APPROVED/u);
+assert.match(approvalDraft, /REPLACE_DURING_REVIEW/u);
+assert.match(approvalDraft, /SANDBOX_APPROVAL_DRAFT_UNSAFE_ENV/u);
+assert.match(approvalDraft, /AI_IMAGE_SANDBOX_APPROVAL_DRAFT_CREATED/u);
+assert.match(approvalDraft, /constants\.O_EXCL/u);
+assert.match(approvalDraft, /constants\.O_NOFOLLOW/u);
+assert.match(approvalDraft, /handle\.sync\(\)/u);
+assert.match(approvalDraft, /syncDirectory\(parent\)/u);
+assert.match(approvalDraft, /requireGitCheckout:\s*true/u);
+assert.match(approvalDraft, /AI_IMAGE_SANDBOX_SOURCE_SHA256/u);
+assert.match(approvalDraft, /AI_IMAGE_SANDBOX_MASK_SHA256/u);
+assert.match(approvalDraft, /'generations'\s*:\s*'edits'/u);
 assert.match(billingFinalizer, /SANDBOX_BILLING_UNSAFE_ENV/u);
 assert.match(billingFinalizer, /AI_IMAGE_TRANSLATION_SANDBOX_API_KEY/u);
 assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
@@ -184,6 +200,10 @@ assert.match(approvalRunbook, /requestCount/u);
 assert.match(approvalRunbook, /preCallBillingSnapshotRef/u);
 assert.match(approvalRunbook, /billingReconciliationRef/u);
 assert.match(approvalRunbook, /sandbox:ai-image:approval:verify/u);
+assert.match(approvalRunbook, /sandbox:ai-image:approval:draft/u);
+assert.match(runbook, /sandbox:ai-image:approval:draft/u);
+assert.match(approvalRunbook, /DRAFT_REVIEW_REQUIRED_NOT_APPROVED/u);
+assert.match(approvalRunbook, /REPLACE_DURING_REVIEW/u);
 assert.match(approvalRunbook, /"schemaVersion": 2/u);
 assert.match(approvalRunbook, /"expiresAt":/u);
 assert.match(approvalRunbook, /no longer than 60 minutes/u);
@@ -199,6 +219,10 @@ assert.match(billingRunbook, /16 MiB/u);
 assert.match(billingRunbook, /hard links/u);
 assert.match(billingRunbook, /marker-only release archive/u);
 assert.equal(
+  serverPackage.scripts['sandbox:ai-image:approval:draft'],
+  'tsx scripts/ai-image-provider-approval-draft.ts',
+);
+assert.equal(
   serverPackage.scripts['sandbox:ai-image:approval:verify'],
   'tsx scripts/ai-image-provider-single-submit.ts --verify-approval',
 );
@@ -208,6 +232,8 @@ assert.equal(
 );
 assert.match(preflight, /tsconfig\.sandbox\.json/u);
 assert.match(sandboxTsconfig, /ai-image-provider-single-submit\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-provider-approval-draft\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-provider-approval-draft\.test\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-approval\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-provider-billing-finalize\.ts/u);
@@ -220,6 +246,10 @@ assert.doesNotMatch(source + guard, /gpt-image-2-count|sk-[A-Za-z0-9_.-]{12,}|ra
 assert.doesNotMatch(
   billingFinalizer + billingSettlement,
   /undici|validateAiImageProviderUrl|createOpenAiImagesProvider|createOpenAiImageEditProvider|cloudflare-dns|node:(?:http|https|net|tls|dns)/iu,
+);
+assert.doesNotMatch(
+  approvalDraft,
+  /\bfetch\b|\blookup\b|resolvePublicDns|validateAiImageProviderUrl|cloudflare-dns|claimAiImageSandboxOperation|createAiImageSandboxRequestFingerprint|createOpenAiImagesProvider|createOpenAiImageEditProvider|node:(?:http|https|tls|dns)/iu,
 );
 
 const outsideSandbox = spawnSync(
@@ -270,6 +300,32 @@ const unsafeBillingFinalizer = spawnSync(
 assert.notEqual(unsafeBillingFinalizer.status, 0);
 assert.match(unsafeBillingFinalizer.stderr, /SANDBOX_BILLING_UNSAFE_ENV/u);
 assert.doesNotMatch(unsafeBillingFinalizer.stderr, /billing-secret-must-not-appear/u);
+
+const approvalDraftBaseEnvironment = { ...process.env };
+delete approvalDraftBaseEnvironment.AI_IMAGE_SANDBOX_API_KEY;
+delete approvalDraftBaseEnvironment.AI_IMAGE_SANDBOX_CONFIRM;
+for (const [name, value] of [
+  ['AI_IMAGE_SANDBOX_API_KEY', 'draft-secret-must-not-appear'],
+  ['AI_IMAGE_SANDBOX_CONFIRM', 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST'],
+]) {
+  const unsafeApprovalDraft = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', 'scripts/ai-image-provider-approval-draft.ts'],
+    {
+      cwd: 'apps/server',
+      encoding: 'utf8',
+      env: {
+        ...approvalDraftBaseEnvironment,
+        NODE_ENV: 'sandbox',
+        [name]: value,
+      },
+    },
+  );
+  assert.notEqual(unsafeApprovalDraft.status, 0);
+  assert.match(unsafeApprovalDraft.stderr, /SANDBOX_APPROVAL_DRAFT_UNSAFE_ENV/u);
+  assert.doesNotMatch(unsafeApprovalDraft.stderr, /draft-secret-must-not-appear/u);
+  assert.doesNotMatch(unsafeApprovalDraft.stderr, /I_ACCEPT_ONE_PAID_IMAGE_REQUEST/u);
+}
 
 const invalidOperation = spawnSync(
   process.execPath,

@@ -8,6 +8,8 @@
     "sourceMap": false
   },
   "include": [
+    "scripts/ai-image-provider-approval-draft.ts",
+    "scripts/ai-image-provider-approval-draft.test.ts",
     "scripts/ai-image-provider-single-submit.ts",
     "scripts/ai-image-provider-single-submit.test.ts",
     "scripts/ai-image-provider-billing-finalize.ts",
