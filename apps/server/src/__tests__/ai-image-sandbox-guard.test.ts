@@ -425,6 +425,10 @@ describe('single-submit AI image sandbox guard', () => {
       'https://relay.example/v1/images/generations',
       'https://cdn.example/result.png',
     ]);
+    expect(guarded.getEvidence()).toMatchObject({
+      state: 'ACCEPTED',
+      providerHttpStatus: 200,
+    });
   });
 
   it('blocks a generation before the Provider POST when the approval recheck fails', async () => {
@@ -495,6 +499,10 @@ describe('single-submit AI image sandbox guard', () => {
       url: 'https://relay.example/v1/images/edits',
       init: expect.objectContaining({ method: 'POST', body: form, redirect: 'error' }),
     }]);
+    expect(guarded.getEvidence()).toMatchObject({
+      state: 'ACCEPTED',
+      providerHttpStatus: 200,
+    });
   });
 
   it('blocks an edit before the Provider POST when the approval recheck fails', async () => {

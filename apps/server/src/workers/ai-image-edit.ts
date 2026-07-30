@@ -238,7 +238,7 @@ export function resolveAiImageEditProvider(
     };
   }
   if (
-    provider !== 'openai-images'
+    (provider !== 'openai-images' && provider !== 'custom')
     || provider !== config.provider
     || model !== config.model
     || !config.apiKey.trim()
@@ -271,7 +271,7 @@ export function resolveAiImageEditProvider(
     onProviderJobCreated,
   });
   return {
-    name: 'openai-images',
+    name: provider,
     async generate(request) {
       if (
         request.operation !== operation

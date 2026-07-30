@@ -334,6 +334,13 @@ function safeFailureCode(error: unknown) {
   return value.toUpperCase().replace(/[^A-Z0-9_.-]/g, '').slice(0, 80) || 'SANDBOX_FAILED';
 }
 
+function isProviderHttpFailureStatus(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 400
+    && value <= 599;
+}
+
 function failureRequestIdHash(error: unknown, fallback: string | null) {
   const value = error && typeof error === 'object' && 'providerJobId' in error
     ? String((error as { providerJobId?: unknown }).providerJobId || '').trim()
@@ -821,6 +828,30 @@ export async function runAiImageProviderSingleSubmit(
         intentPath: claim.intentPath,
       };
       await atomicWritePrivateJson(reportPath, report);
+      if (isProviderHttpFailureStatus(evidence.providerHttpStatus)) {
+        const diagnostic = {
+          schemaVersion: 1,
+          operationId,
+          submitReportSha256: sha256(`${JSON.stringify(report, null, 2)}\n`),
+          providerHttpStatus: evidence.providerHttpStatus,
+        };
+        try {
+          await writePrivateFile(
+            resolve(outputDirectory, `${operationId}.failure-diagnostic.json`),
+            `${JSON.stringify(diagnostic, null, 2)}\n`,
+          );
+        } catch {
+          try {
+            process.stderr.write(`${JSON.stringify({
+              schemaVersion: 1,
+              event: 'SANDBOX_FAILURE_DIAGNOSTIC_WRITE_FAILED',
+              operationId,
+            })}\n`);
+          } catch {
+            // Preserve the authoritative Provider failure even when diagnostics cannot be emitted.
+          }
+        }
+      }
     }
     throw error;
   } finally {

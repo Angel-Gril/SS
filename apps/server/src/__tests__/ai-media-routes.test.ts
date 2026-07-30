@@ -1,6 +1,11 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
-import { aiImageRoutes, resolveAiImageToImageReadiness } from '../routes/ai-images.js';
+import {
+  aiImageRoutes,
+  resolveAiImageEditReadiness,
+  resolveAiImageToImageReadiness,
+} from '../routes/ai-images.js';
+import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import { AiMediaApplicationMutationError } from '../services/ai-media-application-mutations.js';
 import { AiImageJobError } from '../services/ai-image-jobs.js';
 import { AiMediaWorkflowError, type AiMediaWorkflowRecord } from '../services/ai-media-workflows.js';
@@ -26,6 +31,27 @@ const workflow: AiMediaWorkflowRecord = {
     ],
   }], events: [],
 };
+
+const customEditEndpointSha256 =
+  '889271d70d18282b00bbed393fc85cc923bc38817f3aea457379d58f98bd9d3b';
+const otherEditEndpointSha256 =
+  'a3d9c9d847e21f89d3a11ba60f2fcfa16546a2cb9d601c28c67ca7e079171fe2';
+
+function customEditCapability(endpointSha256: string): AiImageProviderCapability {
+  return {
+    provider: 'custom', model: 'relay-image-v2',
+    operations: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'],
+    maxReferences: 4, supportsMask: true,
+    inputTransport: 'multipart', resultMode: 'sync',
+    evidenceLevel: 'sandbox-verified', evidence: 'exact custom edit evidence',
+    sandboxEvidence: ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].map((operation) => ({
+      endpointSha256,
+      operation: operation as 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT',
+      inputTransport: 'multipart' as const,
+      resultMode: 'sync' as const,
+    })),
+  };
+}
 
 function jobRepository() {
   return {
@@ -65,6 +91,18 @@ async function build(
   existingWorkflowOperation: AiMediaWorkflowRecord['operation'] = 'IMAGE_TO_IMAGE',
   translationCategoryGlossaryJson = '{"version":1,"profiles":[]}',
   translationCategory: { categoryId: number; typeId: number } | null = null,
+  editRuntime: {
+    provider?: string;
+    model?: string;
+    baseUrl?: string;
+    estimatedCostCents?: number;
+    globalDailyBudgetCents?: number;
+    dimensions?: { width: number; height: number };
+    resolveProviderCapability?: (
+      provider: string,
+      model: string,
+    ) => AiImageProviderCapability | null;
+  } = {},
 ) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
@@ -217,6 +255,17 @@ async function build(
       },
     };
   });
+  const resolveEditPrompt = vi.fn(async ({ templateKey }: any) => ({
+    templateKey,
+    release: { id: 'edit-release-1', revisionId: 'edit-revision-1', sequence: 1 },
+    checksum: 'b'.repeat(64),
+    snapshot: { templateKey, sequence: 1 },
+    resolvedPrompt: 'Frozen edit prompt',
+    resolvedNegativePrompt: 'Frozen edit constraints',
+  } as any));
+  const getOwnedAssetDimensions = vi.fn(async () => (
+    editRuntime.dimensions || { width: 1000, height: 1000 }
+  ));
   const repository = jobRepository();
   const app = Fastify();
   await app.register(aiImageRoutes, {
@@ -229,11 +278,11 @@ async function build(
       fullEditEnabled,
       inpaintEnabled,
       dailyLimit: editDailyLimit,
-      provider: 'fake',
-      model: 'fake-image-edit-v1',
-      baseUrl: '',
-      estimatedCostCents: 0,
-      globalDailyBudgetCents: 0,
+      provider: editRuntime.provider || 'fake',
+      model: editRuntime.model || 'fake-image-edit-v1',
+      baseUrl: editRuntime.baseUrl || '',
+      estimatedCostCents: editRuntime.estimatedCostCents ?? 0,
+      globalDailyBudgetCents: editRuntime.globalDailyBudgetCents ?? 0,
     }),
     checkEditMaskRequestRate: async () => editMaskRateAllowed
       ? ({ allowed: true })
@@ -248,7 +297,7 @@ async function build(
         ? 'AI image edit storage is ready'
         : 'AI image edit requires owned local or OSS storage',
     }),
-    getOwnedAssetDimensions: async () => ({ width: 1000, height: 1000 }),
+    getOwnedAssetDimensions,
     getTranslationSettings: async () => ({
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
@@ -264,14 +313,8 @@ async function build(
       resolvedPrompt: 'Frozen translation domain policy',
       resolvedNegativePrompt: 'Frozen terminology policy',
     } as any),
-    resolveEditPrompt: async ({ templateKey }: any) => ({
-      templateKey,
-      release: { id: 'edit-release-1', revisionId: 'edit-revision-1', sequence: 1 },
-      checksum: 'b'.repeat(64),
-      snapshot: { templateKey, sequence: 1 },
-      resolvedPrompt: 'Frozen edit prompt',
-      resolvedNegativePrompt: 'Frozen edit constraints',
-    } as any),
+    resolveEditPrompt,
+    resolveProviderCapability: editRuntime.resolveProviderCapability,
     getSourceListingWebMediaEnabled: async () => webMediaEnabled,
     getTranslationStorageReadiness: async () => ({
       ready: translationStorageReady,
@@ -290,6 +333,7 @@ async function build(
   return {
     app, repository, mediaWorkflowService, mediaContextService,
     enqueue, enqueueTranslation, enqueueEdit, applyAssets, createEditMask,
+    resolveEditPrompt, getOwnedAssetDimensions,
     applyWorkflowApplication, listTargetApplications, listWorkflowApplications, rollbackWorkflowApplication,
     applyListingDraftApplication, listListingDraftApplications, rollbackListingDraftApplication,
   };
@@ -1082,6 +1126,101 @@ describe('AI media workflow routes', () => {
       reason: expect.stringMatching(/sandbox/u),
     });
   });
+
+  it('requires an exact custom Base and operation binding for standalone edit readiness', () => {
+    const exactCapability = customEditCapability(customEditEndpointSha256);
+    const mismatchedCapability = customEditCapability(otherEditEndpointSha256);
+    const common = {
+      workflowEnabled: true,
+      production: true,
+      provider: 'custom',
+      model: 'relay-image-v2',
+      baseUrl: 'https://relay.example/v1',
+      estimatedCostCents: 9,
+      storageReadiness: { ready: true, backend: 'oss' as const, reason: 'ready' },
+    };
+
+    expect(resolveAiImageToImageReadiness({
+      ...common,
+      enabled: true,
+      resolveCapability: () => exactCapability,
+    })).toMatchObject({ ready: true, reasonCode: 'READY' });
+    expect(resolveAiImageToImageReadiness({
+      ...common,
+      enabled: true,
+      resolveCapability: () => mismatchedCapability,
+    })).toMatchObject({ ready: false, reasonCode: 'PROVIDER_NOT_READY' });
+
+    for (const operation of ['FULL_EDIT', 'INPAINT'] as const) {
+      const settings = {
+        fullEditEnabled: true,
+        inpaintEnabled: true,
+        provider: common.provider,
+        model: common.model,
+        baseUrl: common.baseUrl,
+        estimatedCostCents: common.estimatedCostCents,
+      };
+      expect(resolveAiImageEditReadiness(operation, settings, {
+        workflowEnabled: true,
+        production: true,
+        storageReadiness: common.storageReadiness,
+        resolveCapability: () => exactCapability,
+      })).toMatchObject({ ready: true, reasonCode: 'READY' });
+      expect(resolveAiImageEditReadiness(operation, settings, {
+        workflowEnabled: true,
+        production: true,
+        storageReadiness: common.storageReadiness,
+        resolveCapability: () => mismatchedCapability,
+      })).toMatchObject({ ready: false, reasonCode: 'PROVIDER_NOT_READY' });
+    }
+  });
+
+  it.each(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'] as const)(
+    'rejects %s with stale custom endpoint evidence before Prompt, reservation, or enqueue',
+    async (operation) => {
+      const result = await build(
+        true, 'owner-1', false, 'fake', true, true, true, 'oss', true,
+        true, true, 5, true, true, true, 'oss', 'IMAGE_TO_IMAGE',
+        '{"version":1,"profiles":[]}', null,
+        {
+          provider: 'custom',
+          model: 'relay-image-v2',
+          baseUrl: 'https://relay.example/v1',
+          estimatedCostCents: 9,
+          globalDailyBudgetCents: 100,
+          dimensions: { width: 1024, height: 1024 },
+          resolveProviderCapability: () => customEditCapability(otherEditEndpointSha256),
+        },
+      );
+      const shared = {
+        operation,
+        sourceAssetId: 'asset-1',
+        idempotencyKey: `stale-custom-${operation.toLowerCase()}`,
+        context: { type: 'collect', id: 'goods-1' },
+      };
+      const payload = operation === 'IMAGE_TO_IMAGE'
+        ? { ...shared, prompt: 'Keep the product', count: 1, width: 1024, height: 1024 }
+        : operation === 'FULL_EDIT'
+          ? { ...shared, userPrompt: 'Replace the background' }
+          : {
+              ...shared,
+              maskAssetId: 'mask-asset-1',
+              maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+              userPrompt: 'Remove the label',
+            };
+
+      const response = await result.app.inject({ method: 'POST', url: '/workflows', payload });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+      expect(result.getOwnedAssetDimensions).not.toHaveBeenCalled();
+      expect(result.resolveEditPrompt).not.toHaveBeenCalled();
+      expect(result.mediaWorkflowService.createImageToImage).not.toHaveBeenCalled();
+      expect(result.mediaWorkflowService.createImageEdit).not.toHaveBeenCalled();
+      expect(result.enqueue).not.toHaveBeenCalled();
+      expect(result.enqueueEdit).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not review or apply historical fake workflow candidates in production', async () => {
     const { app, repository, mediaWorkflowService } = await build(

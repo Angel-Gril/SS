@@ -270,10 +270,10 @@ export async function prepareAiImageSuitePaidProviderExecution(
       'Active AI image suite Provider identity no longer matches the frozen suite',
     );
   }
-  if (settings.provider !== 'openai-images') {
+  if (!['openai-images', 'custom'].includes(settings.provider)) {
     throw new AiImageSuitePaidProviderError(
       'SUITE_PROVIDER_UNSUPPORTED',
-      'Only the exact sandbox-verified OpenAI image edit adapter supports paid suites',
+      'Only an exact sandbox-verified OpenAI-compatible image edit adapter supports paid suites',
     );
   }
   assertOperationConfig(input.job.operationConfig, settings, input.job.estimatedCostCents);

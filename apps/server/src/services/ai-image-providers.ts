@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
+import sharp from 'sharp';
 import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
 import { AiImageJobError } from './ai-image-job-error.js';
 import type {
@@ -448,7 +449,38 @@ function invalidOpenAiEditInput(message: string) {
   return new AiImageJobError('INVALID_MEDIA_INPUT', message);
 }
 
-function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
+async function openAiInpaintDimensions(
+  image: OpenAiImageEditInput,
+  label: string,
+  requiredFormat?: 'png',
+) {
+  try {
+    const metadata = await sharp(image.buffer, {
+      limitInputPixels: AI_IMAGE_WORKBENCH_LIMITS.maxPixels,
+    }).metadata();
+    if (
+      !metadata.format
+      || (requiredFormat && metadata.format !== requiredFormat)
+      || (!requiredFormat && !['png', 'jpeg', 'webp'].includes(metadata.format))
+      || !Number.isSafeInteger(metadata.width)
+      || !Number.isSafeInteger(metadata.height)
+      || !metadata.width
+      || !metadata.height
+    ) {
+      throw invalidOpenAiEditInput(
+        `${label} must be a decodable${requiredFormat ? ' PNG' : ' supported'} image`,
+      );
+    }
+    return { width: metadata.width, height: metadata.height };
+  } catch (error) {
+    if (error instanceof AiImageJobError) throw error;
+    throw invalidOpenAiEditInput(
+      `${label} must be a decodable${requiredFormat ? ' PNG' : ' supported'} image`,
+    );
+  }
+}
+
+async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
   if (
     request.operation !== 'IMAGE_TO_IMAGE'
     && request.operation !== 'FULL_EDIT'
@@ -472,7 +504,6 @@ function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
   if (request.operation !== 'INPAINT' && request.mask) {
     throw invalidOpenAiEditInput('OpenAI image-to-image and full-image edit must not include a mask');
   }
-
   let totalBytes = 0;
   const imageMimeTypes = request.images.map((image) => {
     if (!image || !Buffer.isBuffer(image.buffer) || image.buffer.byteLength < 1) {
@@ -508,6 +539,18 @@ function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
   }
   if (totalBytes > MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES) {
     throw invalidOpenAiEditInput(`OpenAI image edit inputs exceed ${MAX_OPENAI_IMAGE_EDIT_INPUT_BYTES} bytes`);
+  }
+  if (request.operation === 'INPAINT' && request.mask) {
+    const [sourceDimensions, maskDimensions] = await Promise.all([
+      openAiInpaintDimensions(request.images[0]!, 'OpenAI inpaint source'),
+      openAiInpaintDimensions(request.mask, 'OpenAI inpaint mask', 'png'),
+    ]);
+    if (
+      sourceDimensions.width !== maskDimensions.width
+      || sourceDimensions.height !== maskDimensions.height
+    ) {
+      throw invalidOpenAiEditInput('OpenAI inpaint source and mask dimensions must match');
+    }
   }
   return { imageMimeTypes, maskMimeType, size };
 }
@@ -683,9 +726,9 @@ export function createOpenAiImageEditProvider(
   return {
     name: 'openai-image-edits',
     async edit(request: OpenAiImageEditRequest): Promise<AiImageProviderResult> {
-      let validated: ReturnType<typeof validateOpenAiImageEditRequest>;
+      let validated: Awaited<ReturnType<typeof validateOpenAiImageEditRequest>>;
       try {
-        validated = validateOpenAiImageEditRequest(request);
+        validated = await validateOpenAiImageEditRequest(request);
       } catch (error) {
         throw withProviderSubmissionRejected(error);
       }

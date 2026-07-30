@@ -1397,6 +1397,10 @@ describe('single-submit AI image sandbox runner', () => {
       expect(artifact).not.toHaveProperty('quotedCostCents');
       expect(artifact).not.toHaveProperty('maximumCostCents');
     }
+    await expect(readFile(
+      join(path, `${operationId}.failure-diagnostic.json`),
+      'utf8',
+    )).rejects.toMatchObject({ code: 'ENOENT' });
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -1448,7 +1452,140 @@ describe('single-submit AI image sandbox runner', () => {
     expect(stored).not.toHaveProperty('actualCostCents');
     expect(stored).not.toHaveProperty('quotedCostCents');
     expect(stored).not.toHaveProperty('maximumCostCents');
+    await expect(readFile(
+      join(path, `${operationId}.failure-diagnostic.json`),
+      'utf8',
+    )).rejects.toMatchObject({ code: 'ENOENT' });
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [401, 'PROVIDER_AUTH_FAILED', 'REJECTED'],
+    [403, 'PROVIDER_AUTH_FAILED', 'REJECTED'],
+    [500, 'PROVIDER_REQUEST_FAILED', 'RECONCILIATION_REQUIRED'],
+  ] as const)(
+    'writes a report-bound sanitized HTTP %i failure diagnostic without changing report v5',
+    async (providerHttpStatus, failureCode, state) => {
+      const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-http-rejection-'));
+      directories.push(path);
+      const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+      await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+      const operationId = `sandbox-http-rejection-${providerHttpStatus}`;
+      const providerBody = `private provider response ${providerHttpStatus}`;
+      const fetch = vi.fn(async () => new Response(JSON.stringify({
+        error: { code: 'private_code', message: providerBody },
+      }), {
+        status: providerHttpStatus,
+        headers: { 'content-type': 'application/json' },
+      }));
+
+      await expect(runAiImageProviderSingleSubmit({
+        environment: await withSandboxApproval(path, {
+          NODE_ENV: 'sandbox',
+          AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+          AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+          AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+          AI_IMAGE_SANDBOX_MODEL: 'opaque-model-alias',
+          AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+          AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-exact-0003',
+          AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+          AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+          AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+          AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+          AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+          AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+          AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+          AI_IMAGE_SANDBOX_COST_SCALE: '4',
+        }),
+        outputDirectory: path,
+        repositoryRoot: path,
+        resolveDns: async () => [{ address: '93.184.216.34' }],
+        fetch,
+      })).rejects.toMatchObject({ code: failureCode });
+
+      const reportBytes = await readFile(join(path, `${operationId}.report.json`));
+      const report = JSON.parse(reportBytes.toString('utf8'));
+      expect(report).toMatchObject({
+        schemaVersion: 5,
+        state,
+        failureCode,
+      });
+      expect(report).not.toHaveProperty('providerHttpStatus');
+
+      const diagnosticBytes = await readFile(
+        join(path, `${operationId}.failure-diagnostic.json`),
+        'utf8',
+      );
+      expect(JSON.parse(diagnosticBytes)).toEqual({
+        schemaVersion: 1,
+        operationId,
+        submitReportSha256: createHash('sha256').update(reportBytes).digest('hex'),
+        providerHttpStatus,
+      });
+      expect(diagnosticBytes).not.toContain('sandbox-secret-never-report');
+      expect(diagnosticBytes).not.toContain(providerBody);
+      expect(diagnosticBytes).not.toContain('https://relay.example');
+      if (process.platform !== 'win32') {
+        expect((await stat(
+          join(path, `${operationId}.failure-diagnostic.json`),
+        )).mode & 0o777).toBe(0o600);
+      }
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('preserves the Provider failure when an exclusive diagnostic sidecar cannot be written', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-diagnostic-conflict-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-diagnostic-conflict-403';
+    const diagnosticPath = join(path, `${operationId}.failure-diagnostic.json`);
+    const existingDiagnostic = 'pre-existing diagnostic evidence\n';
+    await writeFile(diagnosticPath, existingDiagnostic, { mode: 0o600 });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(
+      (() => true) as typeof process.stderr.write,
+    );
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+      AI_IMAGE_SANDBOX_MODEL: 'opaque-model-alias',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-exact-0004',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+      AI_IMAGE_SANDBOX_COST_SCALE: '4',
+    });
+
+    try {
+      await expect(runAiImageProviderSingleSubmit({
+        environment,
+        outputDirectory: path,
+        repositoryRoot: path,
+        resolveDns: async () => [{ address: '93.184.216.34' }],
+        fetch: async () => new Response('{}', {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        }),
+      })).rejects.toMatchObject({ code: 'PROVIDER_AUTH_FAILED' });
+
+      expect(await readFile(diagnosticPath, 'utf8')).toBe(existingDiagnostic);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
+        'SANDBOX_FAILURE_DIAGNOSTIC_WRITE_FAILED',
+      ));
+      const stderrOutput = stderr.mock.calls.flat().join('');
+      expect(stderrOutput).not.toContain('sandbox-secret-never-report');
+      expect(stderrOutput).not.toContain('https://relay.example');
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('writes endpoint-digest-only success evidence with private file modes', async () => {

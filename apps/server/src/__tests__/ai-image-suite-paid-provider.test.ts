@@ -114,10 +114,12 @@ function frozenAsset(
   };
 }
 
-function validInput(): PrepareAiImageSuitePaidProviderInput {
-  const activeSettings = settings();
+function validInput(
+  activeSettings = settings(),
+  activeCapability = capability(),
+): PrepareAiImageSuitePaidProviderInput {
   const snapshot = createAiImageSuiteProviderRuntimeSnapshot(activeSettings, {
-    resolveCapability: () => capability(),
+    resolveCapability: () => activeCapability,
   });
   if (!snapshot.providerConfig || !snapshot.providerRuntime) {
     throw new Error('test fixture requires a paid Provider runtime');
@@ -250,6 +252,119 @@ describe('AI image suite paid Provider preparation', () => {
     }));
     expect(onProviderAccepted).toHaveBeenCalledWith('provider-request-1', acceptedAt);
     expect(beforeProviderDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('prepares an exact sandbox-verified custom OpenAI-compatible relay', async () => {
+    const activeSettings = settings({
+      provider: 'custom',
+      baseUrl: 'https://relay.example',
+      model: 'relay-image-v2',
+    });
+    const activeCapability = capability('sandbox-verified', {
+      provider: 'custom',
+      model: 'relay-image-v2',
+      operations: ['IMAGE_TO_IMAGE'],
+      sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256('custom', 'https://relay.example/v1'),
+        operation: 'IMAGE_TO_IMAGE',
+        inputTransport: 'multipart',
+        resultMode: 'sync',
+      }],
+    });
+    const input = validInput(activeSettings, activeCapability);
+    const result = {
+      images: [{ buffer: Buffer.from('relay-output'), mimeType: 'image/png' as const }],
+      providerJobId: 'relay-request-1',
+      actualCostCents: 8,
+    };
+    const edit = vi.fn(async () => result);
+    const createOpenAiProvider = vi.fn(() => ({ name: 'openai-image-edits', edit }));
+
+    const prepared = await prepareAiImageSuitePaidProviderExecution(input, paidDependencies({
+      loadSettings: vi.fn(async () => activeSettings),
+      resolveCapability: vi.fn(() => activeCapability),
+      createOpenAiProvider,
+    }) as any);
+
+    await expect(prepared.execute(vi.fn(async () => undefined))).resolves.toEqual(result);
+    expect(input.suite).toMatchObject({ provider: 'custom', model: 'relay-image-v2' });
+    expect(input.job).toMatchObject({ provider: 'custom', model: 'relay-image-v2' });
+    expect(createOpenAiProvider).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: 'https://relay.example',
+      model: 'relay-image-v2',
+      costPerImageCents: 8,
+    }));
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'IMAGE_TO_IMAGE',
+      model: 'relay-image-v2',
+      images: [{ buffer: referencePng, mimeType: 'image/png' }],
+      mask: null,
+    }));
+  });
+
+  it('keeps a custom relay dark without exact sandbox evidence', async () => {
+    const activeSettings = settings({
+      provider: 'custom',
+      baseUrl: 'https://relay.example/v1',
+      model: 'relay-image-v2',
+    });
+    const activeCapability = capability('adapter-characterized', {
+      provider: 'custom',
+      model: 'relay-image-v2',
+      operations: ['IMAGE_TO_IMAGE'],
+    });
+    const loadInputBuffer = vi.fn(async () => referencePng);
+    const createOpenAiProvider = vi.fn();
+
+    await expect(prepareAiImageSuitePaidProviderExecution(
+      validInput(activeSettings, activeCapability),
+      paidDependencies({
+        loadSettings: vi.fn(async () => activeSettings),
+        resolveCapability: vi.fn(() => activeCapability),
+        loadInputBuffer,
+        createOpenAiProvider,
+      }) as any,
+    )).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RUNTIME_UNAVAILABLE' });
+    expect(loadInputBuffer).not.toHaveBeenCalled();
+    expect(createOpenAiProvider).not.toHaveBeenCalled();
+  });
+
+  it('keeps an exact custom relay bound to the frozen suite and job identity', async () => {
+    const activeSettings = settings({
+      provider: 'custom',
+      baseUrl: 'https://relay.example/v1',
+      model: 'relay-image-v2',
+    });
+    const activeCapability = capability('sandbox-verified', {
+      provider: 'custom',
+      model: 'relay-image-v2',
+      operations: ['IMAGE_TO_IMAGE'],
+      sandboxEvidence: [{
+        endpointSha256: aiImageProviderEndpointSha256('custom', 'https://relay.example/v1'),
+        operation: 'IMAGE_TO_IMAGE',
+        inputTransport: 'multipart',
+        resultMode: 'sync',
+      }],
+    });
+    const mutations: Array<(input: PrepareAiImageSuitePaidProviderInput) => void> = [
+      (input) => { input.suite.provider = 'openai-images'; },
+      (input) => { input.job.model = 'other-relay-model'; },
+    ];
+
+    for (const mutate of mutations) {
+      const input = validInput(activeSettings, activeCapability);
+      mutate(input);
+      const loadInputBuffer = vi.fn(async () => referencePng);
+      const createOpenAiProvider = vi.fn();
+      await expect(prepareAiImageSuitePaidProviderExecution(input, paidDependencies({
+        loadSettings: vi.fn(async () => activeSettings),
+        resolveCapability: vi.fn(() => activeCapability),
+        loadInputBuffer,
+        createOpenAiProvider,
+      }) as any)).rejects.toMatchObject({ code: 'SUITE_PROVIDER_RUNTIME_CHANGED' });
+      expect(loadInputBuffer).not.toHaveBeenCalled();
+      expect(createOpenAiProvider).not.toHaveBeenCalled();
+    }
   });
 
   it('fails closed when active endpoint configuration drifts from the frozen suite', async () => {

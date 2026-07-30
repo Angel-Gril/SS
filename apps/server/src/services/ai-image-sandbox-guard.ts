@@ -815,6 +815,7 @@ export function createAiImageSandboxFetchGuard(input: {
   let followupGetRequests = 0;
   let state: AiImageSandboxRequestState = 'READY';
   let requestIdHash: string | null = null;
+  let providerHttpStatus: number | null = null;
   const guardedFetch: FetchLike = async (request, init) => {
     const rawUrl = request instanceof Request ? request.url : String(request);
     const method = String(init?.method || (request instanceof Request ? request.method : 'GET')).toUpperCase();
@@ -865,6 +866,7 @@ export function createAiImageSandboxFetchGuard(input: {
     try {
       const response = await input.fetch(safeUrl, { ...init, redirect: 'error' });
       if (method === 'POST') {
+        providerHttpStatus = response.status;
         requestIdHash = providerRequestIdHash(response);
         state = response.ok
           ? 'ACCEPTED'
@@ -884,7 +886,7 @@ export function createAiImageSandboxFetchGuard(input: {
     fetch: guardedFetch,
     getCreateRequests: () => createRequests,
     getFollowupGetRequests: () => followupGetRequests,
-    getEvidence: () => ({ state, providerRequestIdHash: requestIdHash }),
+    getEvidence: () => ({ state, providerRequestIdHash: requestIdHash, providerHttpStatus }),
   };
 }
 
@@ -929,6 +931,7 @@ export function createAiImageSandboxEditFetchGuard(input: {
   let followupGetRequests = 0;
   let state: AiImageSandboxRequestState = 'READY';
   let requestIdHash: string | null = null;
+  let providerHttpStatus: number | null = null;
   const guardedFetch: FetchLike = async (request, init) => {
     const rawUrl = request instanceof Request ? request.url : String(request);
     const method = String(init?.method || (request instanceof Request ? request.method : 'GET')).toUpperCase();
@@ -1002,6 +1005,7 @@ export function createAiImageSandboxEditFetchGuard(input: {
     try {
       const response = await input.fetch(safeUrl, { ...init, redirect: 'error' });
       if (method === 'POST') {
+        providerHttpStatus = response.status;
         requestIdHash = providerRequestIdHash(response);
         state = response.ok
           ? 'ACCEPTED'
@@ -1021,6 +1025,6 @@ export function createAiImageSandboxEditFetchGuard(input: {
     fetch: guardedFetch,
     getCreateRequests: () => createRequests,
     getFollowupGetRequests: () => followupGetRequests,
-    getEvidence: () => ({ state, providerRequestIdHash: requestIdHash }),
+    getEvidence: () => ({ state, providerRequestIdHash: requestIdHash, providerHttpStatus }),
   };
 }

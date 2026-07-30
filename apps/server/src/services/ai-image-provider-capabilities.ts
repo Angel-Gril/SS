@@ -202,6 +202,17 @@ export function hasExactAiMediaSandboxEvidence(input: {
   ));
 }
 
+function aiMediaReferenceBounds(
+  capability: AiImageProviderCapability,
+  operation: AiMediaOperation,
+) {
+  if (operation === 'TEXT_TO_IMAGE') return { minimum: 0, maximum: 0 };
+  if (operation === 'IMAGE_TO_IMAGE') {
+    return { minimum: 1, maximum: capability.maxReferences };
+  }
+  return { minimum: 1, maximum: 1 };
+}
+
 export function supportsAiMediaOperation(
   provider: string,
   model: string,
@@ -216,13 +227,11 @@ export function supportsAiMediaOperation(
     ? (maskCountOrHasMask ? 1 : 0)
     : maskCountOrHasMask;
   if (!Number.isInteger(maskCount) || maskCount < 0) return false;
-  if (inputCount > capability.maxReferences) return false;
+  const referenceBounds = aiMediaReferenceBounds(capability, operation);
+  if (inputCount < referenceBounds.minimum || inputCount > referenceBounds.maximum) return false;
   if (maskCount > 0 && !capability.supportsMask) return false;
-  if (operation === 'TEXT_TO_IMAGE') return inputCount === 0 && maskCount === 0;
-  if (operation === 'IMAGE_TO_IMAGE') return inputCount >= 1 && maskCount === 0;
-  if (operation === 'IMAGE_TRANSLATE') return inputCount === 1 && maskCount === 0;
-  if (operation === 'FULL_EDIT') return inputCount >= 1 && maskCount === 0;
-  return operation === 'INPAINT' && inputCount >= 1 && maskCount === 1;
+  if (operation === 'INPAINT') return maskCount === 1;
+  return maskCount === 0;
 }
 
 export function assertAiMediaCapability(input: {

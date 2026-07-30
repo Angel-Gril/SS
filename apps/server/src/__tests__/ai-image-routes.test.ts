@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { aiImageRoutes, isPaidAiImageEditCanvasSupported } from '../routes/ai-images.js';
+import type { AiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import type { AiImageJobRecord, AiImageJobRepository } from '../services/ai-image-jobs.js';
 
 const baseJob: AiImageJobRecord = {
@@ -19,6 +20,15 @@ async function buildApp(
     reason: 'tenant_allowed',
     revision: 1,
   },
+  overrides: {
+    model?: string;
+    baseUrl?: string;
+    estimatedCostCents?: number;
+    resolveProviderCapability?: (
+      provider: string,
+      model: string,
+    ) => AiImageProviderCapability | null;
+  } = {},
 ) {
   const repository: AiImageJobRepository = {
     getById: vi.fn(async () => baseJob),
@@ -64,9 +74,17 @@ async function buildApp(
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1', role: 'USER' };
     },
-    getSettings: async () => ({ enabled: true, provider, model: provider === 'fake' ? 'fake-image-v1' : 'wanx-v1', dailyLimit: 5, estimatedCostCents: 4 }),
+    getSettings: async () => ({
+      enabled: true,
+      provider,
+      model: overrides.model || (provider === 'fake' ? 'fake-image-v1' : 'wanx-v1'),
+      baseUrl: overrides.baseUrl,
+      dailyLimit: 5,
+      estimatedCostCents: overrides.estimatedCostCents ?? 4,
+    }),
     getMediaWorkflowDecision: async () => workflowDecision,
     resolvePrompt,
+    resolveProviderCapability: overrides.resolveProviderCapability,
   });
   return { app, repository, enqueue, applyAssets, resolvePrompt };
 }
@@ -87,6 +105,96 @@ describe('AI image job routes', () => {
     expect(response.statusCode).toBe(202);
     expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'owner-1', actorUserId: 'actor-1' }), 5);
     expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('creates a custom Relay job only with exact text-generation sandbox evidence', async () => {
+    const baseUrl = 'https://relay.example/v1';
+    const model = 'relay-image-v2';
+    const endpointSha256 = '889271d70d18282b00bbed393fc85cc923bc38817f3aea457379d58f98bd9d3b';
+    const capability: AiImageProviderCapability = {
+      provider: 'custom', model, operations: ['TEXT_TO_IMAGE'], maxReferences: 0,
+      supportsMask: false, inputTransport: 'none', resultMode: 'sync',
+      evidenceLevel: 'sandbox-verified', evidence: 'exact custom Relay generation evidence',
+      sandboxEvidence: [{
+        endpointSha256,
+        operation: 'TEXT_TO_IMAGE',
+        inputTransport: 'none',
+        resultMode: 'sync',
+      }],
+    };
+    const { app, repository, enqueue } = await buildApp(
+      'owner-1',
+      'custom',
+      { enabled: true, reason: 'tenant_allowed', revision: 1 },
+      {
+        baseUrl,
+        model,
+        estimatedCostCents: 9,
+        resolveProviderCapability: () => capability,
+      },
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/jobs',
+      payload: {
+        prompt: 'studio product photo', count: 1, width: 1024, height: 1024,
+        idempotencyKey: 'idem-custom-relay-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'custom',
+      model,
+      estimatedCostCents: 9,
+      operationConfig: expect.objectContaining({
+        provider: 'custom',
+        model,
+        baseUrlSha256: endpointSha256,
+        maximumCostCents: 9,
+      }),
+    }), 5, 0);
+    expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('rejects a sandbox-verified custom Relay when endpoint evidence is not exact', async () => {
+    const baseUrl = 'https://relay.example/v1';
+    const model = 'relay-image-v2';
+    const capability: AiImageProviderCapability = {
+      provider: 'custom', model, operations: ['TEXT_TO_IMAGE'], maxReferences: 0,
+      supportsMask: false, inputTransport: 'none', resultMode: 'sync',
+      evidenceLevel: 'sandbox-verified', evidence: 'different endpoint evidence',
+      sandboxEvidence: [{
+        endpointSha256: 'a3d9c9d847e21f89d3a11ba60f2fcfa16546a2cb9d601c28c67ca7e079171fe2',
+        operation: 'TEXT_TO_IMAGE',
+        inputTransport: 'none',
+        resultMode: 'sync',
+      }],
+    };
+    const { app, repository, enqueue, resolvePrompt } = await buildApp(
+      'owner-1',
+      'custom',
+      { enabled: true, reason: 'tenant_allowed', revision: 1 },
+      {
+        baseUrl,
+        model,
+        estimatedCostCents: 9,
+        resolveProviderCapability: () => capability,
+      },
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/jobs',
+      payload: { prompt: 'studio product photo', idempotencyKey: 'idem-custom-relay-2' },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(resolvePrompt).not.toHaveBeenCalled();
+    expect(repository.createWithQuota).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('rejects a tenant outside the canonical media rollout before any job side effect', async () => {

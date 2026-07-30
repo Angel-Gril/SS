@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import {
   aiImageCredentialEndpointIdentity,
   createDashScopeWanxProvider,
@@ -12,6 +13,29 @@ import {
 const png = Buffer.from('89504e470d0a1a0a', 'hex');
 const jpeg = Buffer.from('ffd8ff', 'hex');
 const webp = Buffer.from('524946460400000057454250', 'hex');
+
+function sizedPng(width: number, height: number) {
+  return sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  }).png().toBuffer();
+}
+
+function sizedOpaqueImage(format: 'jpeg' | 'webp', width: number, height: number) {
+  const image = sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: { r: 32, g: 64, b: 96 },
+    },
+  });
+  return format === 'jpeg' ? image.jpeg().toBuffer() : image.webp().toBuffer();
+}
 
 function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
@@ -172,6 +196,7 @@ describe('AI image provider adapters', () => {
   });
 
   it('submits an INPAINT mask as a PNG multipart field applied to the first image', async () => {
+    const inpaintPng = await sizedPng(1, 1);
     const fetch = vi.fn().mockResolvedValueOnce(json({
       data: [{ b64_json: png.toString('base64') }],
     }, 200, { 'x-request-id': 'edit-mask-request-1' }));
@@ -187,10 +212,10 @@ describe('AI image provider adapters', () => {
       width: 1536,
       height: 1024,
       images: [
-        { buffer: png, mimeType: 'image/png' },
+        { buffer: inpaintPng, mimeType: 'image/png' },
         { buffer: webp, mimeType: 'image/webp' },
       ],
-      mask: { buffer: png, mimeType: 'image/png' },
+      mask: { buffer: inpaintPng, mimeType: 'image/png' },
     })).resolves.toMatchObject({ providerJobId: 'edit-mask-request-1' });
 
     const form = fetch.mock.calls[0]?.[1]?.body as FormData;
@@ -198,7 +223,65 @@ describe('AI image provider adapters', () => {
     expect(form.getAll('image[]')).toHaveLength(2);
     expect(form.getAll('image[]')[0]).toMatchObject({ name: 'image-1.png', type: 'image/png' });
     expect(form.getAll('image[]')[1]).toMatchObject({ name: 'image-2.webp', type: 'image/webp' });
-    expect(form.get('mask')).toMatchObject({ name: 'mask.png', type: 'image/png', size: png.length });
+    expect(form.get('mask')).toMatchObject({
+      name: 'mask.png', type: 'image/png', size: inpaintPng.length,
+    });
+  });
+
+  it('rejects mismatched INPAINT source and mask dimensions before Provider dispatch', async () => {
+    const fetch = vi.fn();
+    const beforeProviderDispatch = vi.fn(async () => undefined);
+    const provider = createOpenAiImageEditProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      beforeProviderDispatch,
+    });
+
+    await expect(provider.edit({
+      operation: 'INPAINT',
+      prompt: 'Replace only the transparent mask area',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      images: [{ buffer: await sizedPng(2, 2), mimeType: 'image/png' }],
+      mask: { buffer: await sizedPng(1, 1), mimeType: 'image/png' },
+    })).rejects.toMatchObject({
+      code: 'INVALID_MEDIA_INPUT',
+      providerSubmissionRejected: true,
+    });
+    expect(beforeProviderDispatch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['JPEG', 'jpeg', 'image/jpeg'],
+    ['WebP', 'webp', 'image/webp'],
+  ] as const)('accepts a decodable %s INPAINT source with a same-size PNG mask', async (
+    _label,
+    format,
+    mimeType,
+  ) => {
+    const source = await sizedOpaqueImage(format, 2, 2);
+    const mask = await sizedPng(2, 2);
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const provider = createOpenAiImageEditProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+    });
+
+    await expect(provider.edit({
+      operation: 'INPAINT',
+      prompt: 'Replace only the transparent mask area',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      images: [{ buffer: source, mimeType }],
+      mask: { buffer: mask, mimeType: 'image/png' },
+    })).resolves.toMatchObject({ images: [expect.objectContaining({ mimeType: 'image/png' })] });
+
+    const form = fetch.mock.calls[0]?.[1]?.body as FormData;
+    expect(form.get('image')).toMatchObject({ type: mimeType, size: source.length });
+    expect(form.get('mask')).toMatchObject({ type: 'image/png', size: mask.length });
   });
 
   it.each([

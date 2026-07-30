@@ -125,6 +125,7 @@ export interface AiImageProviderResult {
 
 export interface AiImageProvider {
   name: string;
+  assertReady?(request: AiImageProviderRequest): void | Promise<void>;
   generate(request: AiImageProviderRequest): Promise<AiImageProviderResult>;
 }
 
@@ -459,6 +460,18 @@ export async function runAiImageJob(
       ? await loadFrozenImageToImageInputs(job, deps.loadInputBuffer)
       : null;
     const paidProviderInvocation = job.provider !== 'fake' && deps.provider.name !== 'disabled';
+    const providerRequest: AiImageProviderRequest = {
+      operation,
+      prompt: job.resolvedPrompt ?? job.prompt,
+      negativePrompt: job.resolvedNegativePrompt ?? job.negativePrompt,
+      count: job.requestedImageCount,
+      width: job.width,
+      height: job.height,
+      model: job.model,
+      inputAssets: runtimeInputs?.inputAssets,
+      inputImages: runtimeInputs?.inputImages,
+    };
+    await deps.provider.assertReady?.(providerRequest);
     if (paidProviderInvocation && deps.repository.recordProviderDispatchStarted) {
       const dispatchFenced = await deps.repository.recordProviderDispatchStarted(job.id, new Date());
       if (!dispatchFenced) {
@@ -470,17 +483,7 @@ export async function runAiImageJob(
       }
     }
     providerDispatchStarted = paidProviderInvocation;
-    const generated = await deps.provider.generate({
-      operation,
-      prompt: job.resolvedPrompt ?? job.prompt,
-      negativePrompt: job.resolvedNegativePrompt ?? job.negativePrompt,
-      count: job.requestedImageCount,
-      width: job.width,
-      height: job.height,
-      model: job.model,
-      inputAssets: runtimeInputs?.inputAssets,
-      inputImages: runtimeInputs?.inputImages,
-    });
+    const generated = await deps.provider.generate(providerRequest);
     paidProviderResultReceived = job.provider !== 'fake' && deps.provider.name !== 'disabled';
     if (generated.providerJobId) {
       const providerAcceptedAt = new Date();
@@ -558,6 +561,7 @@ export async function runAiImageJob(
         && [
           'UNSUPPORTED_PROVIDER_MODEL',
           'UNSUPPORTED_OPERATION',
+          'PROVIDER_NOT_READY',
           'INVALID_MEDIA_INPUT',
           'FROZEN_INPUT_MISMATCH',
         ].includes(error.code));

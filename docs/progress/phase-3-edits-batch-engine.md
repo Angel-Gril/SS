@@ -414,3 +414,25 @@ Progress: 4/5 tasks.
   bytes. Both VPS dark verifiers and credential scans passed. Do not send `FULL_EDIT` or `INPAINT`
   through the same endpoint/Token/model. Counts remain `4/5` and `32/37`; another edit-capable
   endpoint/credential or explicit Provider-side edit enablement is required.
+- Offline runtime hardening now permits the `custom` OpenAI-compatible adapter only behind exact
+  endpoint/model/operation/transport/result-mode evidence across creation routes, standalone
+  readiness, queued generation/edit workers, extension launch integration and paid suites. The
+  active API Base is included in every readiness call. A queued generation rechecks the exact
+  request before the immutable dispatch fence, so Registry drift with zero network I/O is not
+  recorded as submission-uncertain. No failed Provider/model was added to the Registry or reviewed
+  derived-image allowlist.
+- Reference bounds are operation-specific: text-to-image accepts zero, image-to-image accepts the
+  verified range, and full edit/inpaint accept exactly one source. OpenAI-compatible inpaint decodes
+  the first PNG/JPEG/WebP source and PNG mask under the shared pixel bound and rejects a dimension
+  mismatch before Provider dispatch. Sandbox quality is frozen as `PROVIDER_DEFAULT_OMITTED`.
+  Future HTTP 4xx/5xx failures write an exclusive private v1 status sidecar bound to the unchanged
+  submit-report digest; it contains no body, URL, Provider code or secret and is not consumed by
+  billing.
+- The combined affected matrix passed `371/371`; the static sandbox contract, workspace typecheck,
+  lint (`0` errors; `20` existing Server and one shared warning), full Server suite (`4509` passed,
+  `194` skipped), and full preflight (`445/0` with two expected local-package permission warnings)
+  passed. Independent reviews found no remaining P0/P1/P2. This work made no Provider request or
+  charge, deployment, flag change, ERP media mutation, Ozon write, or `.context/` staging. `QA-02`
+  remains open at `4/5` and overall progress remains `32/37`. After a future custom derived-image
+  model produces accepted operation-specific evidence, its exact reviewed contract must be added to
+  `scripts/sandbox/ai-media-provider-contract.mjs`; it must not be whitelisted beforehand.

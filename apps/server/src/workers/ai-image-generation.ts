@@ -128,31 +128,36 @@ export function resolveAiImageProvider(
     })) return createDisabledAiImageProvider();
     return createDashScopeWanxProvider(options);
   }
-  if (provider === 'openai-images') {
+  if (provider === 'openai-images' || provider === 'custom') {
     const generation = (
       dependencies.createOpenAiGenerationProvider || createOpenAiImagesProvider
     )(options);
     const edit = (
       dependencies.createOpenAiEditProvider || createOpenAiImageEditProvider
     )(options);
+    const assertReady = (request: Parameters<AiImageProvider['generate']>[0]) => {
+      const operation = request.operation || 'TEXT_TO_IMAGE';
+      if (!hasExactAiMediaSandboxEvidence({
+        capability,
+        provider,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        operation,
+        inputTransport: operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
+        resultMode: 'sync',
+      })) {
+        throw new AiImageJobError(
+          'PROVIDER_NOT_READY',
+          `OpenAI ${operation} has not passed its exact endpoint and request-mode sandbox gate`,
+        );
+      }
+    };
     return {
-      name: 'openai-images',
+      name: provider,
+      assertReady,
       async generate(request) {
         const operation = request.operation || 'TEXT_TO_IMAGE';
-        if (!hasExactAiMediaSandboxEvidence({
-          capability,
-          provider,
-          model: config.model,
-          baseUrl: config.baseUrl,
-          operation,
-          inputTransport: operation === 'TEXT_TO_IMAGE' ? 'none' : 'multipart',
-          resultMode: 'sync',
-        })) {
-          throw new AiImageJobError(
-            'PROVIDER_NOT_READY',
-            `OpenAI ${operation} has not passed its exact endpoint and request-mode sandbox gate`,
-          );
-        }
+        assertReady(request);
         if (operation === 'TEXT_TO_IMAGE') return generation.generate(request);
         if (operation !== 'IMAGE_TO_IMAGE') {
           throw new AiImageJobError(

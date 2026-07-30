@@ -17,7 +17,15 @@ following consumed `IMAGE_TO_IMAGE` Operation IDs must never be reused or repeat
 ```text
 gpt-image-2-i2i-20260724-200300-01
 gpt-image-2-i2i-20260725064150-03
+qa02-i2i-20260730-083710-01
+qa02-centos-i2i-20260730-094857-01
 ```
+
+The last operation above definitively rejected `/v1/images/edits` for the tested
+`https://ai.centos.hk/v1` Token and `gpt-image-2` combination and settled with no charge. Do not
+prepare `FULL_EDIT`, `INPAINT`, or another image-to-image approval for that same combination unless
+the Provider first supplies explicit edit-route enablement; use a new Operation ID and approval
+after that external capability change.
 
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for
@@ -27,7 +35,9 @@ single-request maximum. `AI_IMAGE_SANDBOX_PRICING_REVISION` names that policy re
 pricing API synchronization is required. The policy is an internal approval/budget control, not a
 Provider-side hard spending cap, and the finalizer must still reconcile the actual before/after
 meters. A price stated in chat remains planning input until it is entered into and reviewed against
-that policy.
+that policy. Current sandbox profiles bind quality as `PROVIDER_DEFAULT_OMITTED`: the guarded
+request contains no `quality` field. A policy for an explicit quality tier requires a new profile
+and cannot authorize the current transport contract.
 
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.
@@ -48,8 +58,9 @@ by the submit command. New approvals use exact money: one uppercase currency, ca
 integer `amount` values, and one shared `scale` from `0` through `8`. The quote must not exceed the
 maximum, and the maximum must not exceed `100,000` major currency units. Decimal strings and
 floating-point values are never used. Exact-money variables must not be mixed with the legacy
-integer-cents variables. Edit media must use supported bounded PNG/JPEG/WebP bytes; for `INPAINT`,
-source plus mask must not exceed the shared `50 MiB` multipart limit. It additionally requires:
+integer-cents variables. Edit media must use supported bounded PNG/JPEG/WebP bytes. `INPAINT`
+accepts one such source and requires a same-size PNG mask; source plus mask must not exceed the shared `50 MiB`
+multipart limit. It additionally requires:
 
 | Variable                                                  | Requirement                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -153,7 +164,8 @@ Operation-specific fields:
 - `TEXT_TO_IMAGE`: use `/v1/images/generations`, `sourceSha256: []`, and `maskSha256: null`.
 - `IMAGE_TO_IMAGE` or `FULL_EDIT`: use `/v1/images/edits`, exactly one source digest, and
   `maskSha256: null`.
-- `INPAINT`: use `/v1/images/edits`, exactly one source digest, and the exact PNG mask digest.
+- `INPAINT`: use `/v1/images/edits`, exactly one PNG, JPEG, or WebP source digest, and the exact same-size PNG
+  mask digest.
 - `adapterRevision` must be the full deployed `DEPLOYED_COMMIT`, not a planned or abbreviated SHA.
 - `approvedAt` and `expiresAt` must be canonical UTC ISO-8601 timestamps. The window must be
   positive and no longer than 60 minutes. A clock at most five minutes behind `approvedAt` is
@@ -227,7 +239,8 @@ ambiguous request.
 ## Retention And Review
 
 Keep the private approval file and its digest with the immutable intent, fingerprint claim,
-sanitized report, source/mask hash evidence, result, and before/settled billing evidence. For
+sanitized report, its report-bound failure diagnostic sidecar when present, source/mask hash
+evidence, result, and before/settled billing evidence. For
 approval metadata, the sanitized report and intent retain only the approval ID, approval-file
 digest, approval/expiry timestamps, currency, and hashes of operator/account/pricing/billing
 references; they do not copy the raw endpoint or private billing reference values from this file.

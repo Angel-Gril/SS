@@ -284,6 +284,27 @@ generation behavior. `FULL_EDIT` and `INPAINT` must not be sent through the same
 QA-02 still needs another edit-capable endpoint/credential or an explicit Provider-side edit enablement
 followed by a fresh bounded approval sequence. Counts remain Phase 3 `4/5` and overall `32/37`.
 
+The offline follow-up closed the remaining runtime gaps without promoting any failed or unverified
+model. An exact sandbox-verified `custom` OpenAI-compatible profile can now pass generation,
+image-to-image, full-edit, inpaint and paid-suite boundaries only when the active API Base, model,
+operation, multipart/none transport and sync mode all match its operation-specific evidence. Route
+readiness is rechecked before workflow creation and reservation, and queued generation performs the
+same request check before its immutable Provider-dispatch fence; evidence drift therefore cannot be
+misclassified as an uncertain network submission. Reference limits are operation-specific.
+`INPAINT` accepts a decoded PNG/JPEG/WebP source but requires one same-size decoded PNG mask before
+dispatch. Current sandbox quality remains `PROVIDER_DEFAULT_OMITTED`; an explicit quality tier needs
+a new profile and pricing policy.
+
+Future HTTP 4xx/5xx sandbox rejections write one private, exclusive v1 diagnostic sidecar bound to
+the authoritative submit-report SHA-256. It contains only Operation ID and integer HTTP status,
+does not change historical v4/v5 reports or billing semantics, and a sidecar failure cannot replace
+the original Provider result. Focused tests passed `371/371`; the static contract, workspace
+typecheck, lint (`0` errors with `20` existing Server and one shared warning), full Server suite
+(`4509` passed, `194` skipped), and full preflight (`445/0` with two expected local-package warnings)
+passed. Independent reviews found no remaining P0/P1/P2. No real Provider call, charge, deployment,
+flag change, ERP media mutation, Ozon write, or `.context/` staging occurred. Phase 3 remains `4/5`
+and overall progress remains `32/37` because positive edit capability evidence is still absent.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -294,7 +315,10 @@ followed by a fresh bounded approval sequence. Counts remain Phase 3 `4/5` and o
 3. After selecting an actually edit-capable endpoint/model, prepare separate bounded source/mask
    bytes and a private versioned backend policy for each operation. Bind the exact profile, quote
    and one-request maximum; Provider pricing API sync is not required. Obtain a new explicit
-   approval for each paid POST and settle it before the next operation.
+   approval for each paid POST and settle it before the next operation. Only after positive custom
+   derived-image evidence is accepted, add that exact provider/model contract to the reviewed
+   allowlist in `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed
+   candidate.
 4. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
    not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order

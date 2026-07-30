@@ -360,6 +360,34 @@ describe('AI image job foundation', () => {
     expect(state.repo.markRetrying).not.toHaveBeenCalled();
   });
 
+  it('checks paid Provider readiness before recording the dispatch fence', async () => {
+    const state = repository(job({ provider: 'custom', model: 'relay-image-v2' }));
+    const readinessError = new AiImageJobError(
+      'PROVIDER_NOT_READY',
+      'Exact sandbox evidence changed while the job was queued',
+    );
+    const provider = {
+      name: 'custom',
+      assertReady: vi.fn(() => { throw readinessError; }),
+      generate: vi.fn(async () => ({ images: [] })),
+    };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+    })).rejects.toBe(readinessError);
+
+    expect(provider.assertReady).toHaveBeenCalledOnce();
+    expect(state.repo.recordProviderDispatchStarted).not.toHaveBeenCalled();
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(state.repo.markSubmissionUncertain).not.toHaveBeenCalled();
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      errorCode: 'PROVIDER_NOT_READY',
+    }));
+  });
+
   it('passes no-ID paid result evidence into the completion transaction', async () => {
     const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
     const provider = {

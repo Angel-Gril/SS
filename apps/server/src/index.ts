@@ -1713,6 +1713,7 @@ if (isExtensionDeviceAuthEnabled()) {
         production,
         provider: providerName,
         model,
+        baseUrl,
         estimatedCostCents: costPerImageCents,
         storageReadiness,
       });
@@ -1732,6 +1733,7 @@ if (isExtensionDeviceAuthEnabled()) {
       inpaintEnabled,
       provider: providerName,
       model,
+      baseUrl,
       estimatedCostCents: costPerImageCents,
     }, {
       workflowEnabled: true,
@@ -2719,6 +2721,7 @@ if (isExtensionDeviceAuthEnabled()) {
         translationEstimatedCostCents,
         translationCategoryGlossaryJson,
         imageProvider,
+        imageBaseUrl,
         configuredImageModel,
         imageEstimatedCostCents,
         runtimeConfig,
@@ -2733,6 +2736,7 @@ if (isExtensionDeviceAuthEnabled()) {
         getConfig('ai_image_translation_cost_cents'),
         getConfig('ai_image_translation_category_glossary_json'),
         getConfig('ai_image_provider'),
+        getConfig('ai_image_base_url'),
         getConfig('ai_image_model'),
         getConfig('ai_image_generation_cost_cents'),
         getRuntimeConfigForStorage(),
@@ -2748,6 +2752,7 @@ if (isExtensionDeviceAuthEnabled()) {
         production,
         provider: imageProviderName,
         model: imageToImageModel,
+        baseUrl: imageBaseUrl,
         estimatedCostCents: imageEstimatedCostCents,
         storageReadiness: resolveAiImageEditStorageReadiness(runtimeConfig),
       });
@@ -2759,6 +2764,7 @@ if (isExtensionDeviceAuthEnabled()) {
         ...editFlags,
         provider: imageProviderName,
         model: editModel,
+        baseUrl: imageBaseUrl,
         estimatedCostCents: imageEstimatedCostCents,
       };
       const editOptions = {

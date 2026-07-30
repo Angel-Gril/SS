@@ -120,6 +120,71 @@ describe('AI image BullMQ worker boundary', () => {
     });
   });
 
+  it('routes an exact sandbox-verified custom Relay through the OpenAI-compatible adapters', async () => {
+    const config = {
+      provider: 'custom', baseUrl: 'https://relay.example/v1', apiKey: 'relay-secret',
+      model: 'relay-image-v2', costPerImageCents: 9,
+    };
+    const generated = { images: [{ buffer: Buffer.from('generated'), mimeType: 'image/png' as const }] };
+    const edited = { images: [{ buffer: Buffer.from('edited'), mimeType: 'image/png' as const }] };
+    const generate = vi.fn(async () => generated);
+    const edit = vi.fn(async () => edited);
+    const createGeneration = vi.fn(() => ({ name: 'openai-images', generate }));
+    const createEdit = vi.fn(() => ({ name: 'openai-image-edits', edit }));
+    const endpointSha256 = aiImageProviderEndpointSha256('custom', config.baseUrl);
+    const provider = resolveAiImageProvider('custom', config, undefined, {
+      resolveCapability: () => ({
+        provider: 'custom', model: 'relay-image-v2',
+        operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'], maxReferences: 4,
+        supportsMask: false, inputTransport: 'multipart', resultMode: 'sync',
+        evidenceLevel: 'sandbox-verified', evidence: 'exact custom Relay evidence',
+        sandboxEvidence: [
+          {
+            endpointSha256,
+            operation: 'TEXT_TO_IMAGE',
+            inputTransport: 'none',
+            resultMode: 'sync',
+          },
+          {
+            endpointSha256,
+            operation: 'IMAGE_TO_IMAGE',
+            inputTransport: 'multipart',
+            resultMode: 'sync',
+          },
+        ],
+      }),
+      createOpenAiGenerationProvider: createGeneration,
+      createOpenAiEditProvider: createEdit,
+    });
+    const inputImages = [{ buffer: Buffer.from('source'), mimeType: 'image/png' as const }];
+    const textRequest = {
+      operation: 'TEXT_TO_IMAGE' as const,
+      prompt: 'studio photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: config.model,
+    };
+    const editRequest = {
+      operation: 'IMAGE_TO_IMAGE' as const,
+      prompt: 'keep the product', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: config.model, inputImages,
+    };
+
+    expect(provider.name).toBe('custom');
+    await expect(provider.generate(textRequest)).resolves.toBe(generated);
+    await expect(provider.generate(editRequest)).resolves.toBe(edited);
+    const adapterOptions = {
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+      costPerImageCents: config.costPerImageCents,
+    };
+    expect(createGeneration).toHaveBeenCalledWith(expect.objectContaining(adapterOptions));
+    expect(createEdit).toHaveBeenCalledWith(expect.objectContaining(adapterOptions));
+    expect(generate).toHaveBeenCalledWith(textRequest);
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'IMAGE_TO_IMAGE', images: inputImages, mask: null,
+    }));
+  });
+
   it('does not let text-to-image sandbox evidence unlock IMAGE_TO_IMAGE dispatch', async () => {
     const generate = vi.fn(async () => ({ images: [] }));
     const edit = vi.fn(async () => ({ images: [] }));

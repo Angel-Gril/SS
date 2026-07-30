@@ -151,7 +151,7 @@ Supported operations are:
 | `TEXT_TO_IMAGE`  | `/v1/images/generations` | No source or mask variables                                                   |
 | `IMAGE_TO_IMAGE` | `/v1/images/edits`       | One pinned PNG, JPEG, or WebP source                                          |
 | `FULL_EDIT`      | `/v1/images/edits`       | One pinned PNG, JPEG, or WebP source                                          |
-| `INPAINT`        | `/v1/images/edits`       | One pinned source and a same-size PNG mask with transparent and opaque pixels |
+| `INPAINT`        | `/v1/images/edits`       | One PNG, JPEG, or WebP source plus a same-size meaningful PNG mask             |
 
 Prompts and requested count (`1`) are fixed in the CLI. The required request profile freezes the request dimensions and the single-reference multipart shape:
 
@@ -161,6 +161,11 @@ Prompts and requested count (`1`) are fixed in the CLI. The required request pro
 | `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
 
 Neither profile proves multi-reference compatibility. A Provider may return a different valid size; record that as a compatibility result, not automatic acceptance. Any promoted capability must be limited to the exact tested profile, operation, endpoint digest, model, adapter revision, credential revision, and verified reference count.
+
+Both current profiles freeze Provider quality as `PROVIDER_DEFAULT_OMITTED`: the guarded request
+must not contain a `quality` field. The private pricing policy must name that exact omitted/default
+quality state. A future explicit `low`, `medium`, `high`, or `auto` request requires a new versioned
+profile and separately reviewed pricing evidence; it must not reuse these profiles.
 
 ### Complete Environment Contract
 
@@ -228,6 +233,13 @@ Relative source and mask paths are resolved from the repository/deployed app roo
    SHA-256, requested semantics, exact quote/maximum values, and absence of unexpected text, logos,
    watermarks, or product changes. `apiBaseSha256` hashes the normalized Provider API Base;
    `operationEndpointSha256` hashes the exact `/images/generations` or `/images/edits` POST target.
+   For a failed POST that receives an HTTP 4xx/5xx response, current runners also write private
+   `<operation-id>.failure-diagnostic.json`. This versioned, non-authoritative sidecar contains only
+   the Operation ID, the submit-report SHA-256, and the integer HTTP status. It never contains the
+   response body, headers, URL, Provider code, or credential, and the billing finalizer does not
+   consume it. A transport failure without an HTTP response produces no sidecar. Sidecar write
+   failure emits only `SANDBOX_FAILURE_DIAGNOSTIC_WRITE_FAILED` and never replaces the original
+   Provider failure or authoritative report.
 7. Save the settled billing snapshot as a private bounded file, create the private closed-schema
    billing attestation that names and hashes both the before/settled snapshot files, and run
    `pnpm --filter server sandbox:ai-image:billing:finalize`. The finalizer performs no Provider call,
@@ -263,6 +275,25 @@ incompatible. Do not dispatch `FULL_EDIT` or `INPAINT` against it: both share th
 `/images/edits` transport, neither has a separate authorization, and another paid attempt would not
 repair the demonstrated capability gap. Select a different edit-capable endpoint/model and restart
 the bounded approval sequence there.
+
+### Recorded alternate Relay edit rejection (2026-07-30)
+
+The rotated credential for `https://ai.centos.hk/v1` could read its model catalogue and billing
+meters, but the catalogue advertised only generation/openai endpoint types. Under a separate
+approval, operation `qa02-centos-i2i-20260730-094857-01` sent exactly one guarded
+`IMAGE_TO_IMAGE` request using `gpt-image-2`, the accepted mug source, quote `CNY 0.1`, and maximum
+`CNY 1.0`.
+
+The `/v1/images/edits` POST was definitely rejected after `302 ms` with `createRequests=1`, no
+Provider request-ID hash, and `failureCode=PROVIDER_AUTH_FAILED`. That stable code represents HTTP
+401 or 403; the historical v5 report predates the sanitized HTTP-status sidecar, so it cannot
+distinguish the two. Quota, displayed usage, and the Token log were unchanged. Exact receipt v3
+SHA-256 `9d1e5db49dc5b76e7de70e36cad88a7429e426b3e93de4207ad62a46c040e2d2`
+records `NO_CHARGE`, `billingGate=PASS`, and `sameRequestRetryAllowed=false`.
+
+Do not retry that operation or send `FULL_EDIT`/`INPAINT` through the same endpoint, Token, and
+model. Catalogue access proves only credential visibility; Provider-side edit-route entitlement or
+a different edit-capable endpoint/credential is still required.
 
 The international database may still contain a legacy `openai-images` selection with a third-party
 Base URL. Current admin validation and paid runtime contracts reject that identity: official OpenAI
@@ -416,6 +447,7 @@ Retain together:
 - immutable intent and fingerprint claim;
 - the private one-request approval file and its reviewed SHA-256 digest;
 - sanitized submit or reconciliation report;
+- its report-bound failure diagnostic sidecar, when present;
 - source and mask SHA-256 evidence;
 - generated result and its SHA-256 until visual review completes;
 - pre-call and settled billing evidence;

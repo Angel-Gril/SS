@@ -195,6 +195,75 @@ describe('AI image edit worker boundary', () => {
     expect(createInpaintProvider).not.toHaveBeenCalled();
   });
 
+  it('routes exact sandbox-verified custom Relay edits without changing Provider identity', async () => {
+    const config = {
+      provider: 'custom', baseUrl: 'https://relay.example/v1', apiKey: 'relay-secret',
+      model: 'relay-image-v2', costPerImageCents: 9,
+    };
+    const endpointSha256 = aiImageProviderEndpointSha256('custom', config.baseUrl);
+    const resolveCapability = () => ({
+      provider: 'custom', model: config.model,
+      operations: ['FULL_EDIT', 'INPAINT'] as const,
+      maxReferences: 1, supportsMask: true,
+      inputTransport: 'multipart' as const, resultMode: 'sync' as const,
+      evidenceLevel: 'sandbox-verified' as const, evidence: 'exact custom Relay evidence',
+      sandboxEvidence: [
+        {
+          endpointSha256,
+          operation: 'FULL_EDIT' as const,
+          inputTransport: 'multipart' as const,
+          resultMode: 'sync' as const,
+        },
+        {
+          endpointSha256,
+          operation: 'INPAINT' as const,
+          inputTransport: 'multipart' as const,
+          resultMode: 'sync' as const,
+        },
+      ],
+    });
+    const edit = vi.fn(async () => ({
+      images: [{ buffer: Buffer.from('edited'), mimeType: 'image/png' as const }],
+      actualCostCents: 9,
+    }));
+    const createOpenAiEditProvider = vi.fn(() => ({ name: 'openai-image-edits', edit }));
+    const source = { buffer: Buffer.from('source'), mimeType: 'image/png' as const };
+    const mask = { buffer: Buffer.from('mask'), mimeType: 'image/png' as const };
+    const fullEdit = resolveAiImageEditProvider(
+      'custom', config.model, 'FULL_EDIT', config, undefined, 'production',
+      { resolveCapability, createOpenAiEditProvider },
+    );
+    const inpaint = resolveAiImageEditProvider(
+      'custom', config.model, 'INPAINT', config, undefined, 'production',
+      { resolveCapability, createOpenAiEditProvider },
+    );
+
+    expect(fullEdit.name).toBe('custom');
+    expect(inpaint.name).toBe('custom');
+    await expect(fullEdit.generate({
+      operation: 'FULL_EDIT', prompt: 'replace background', negativePrompt: null,
+      count: 1, width: 1024, height: 1024, model: config.model, inputImages: [source],
+    })).resolves.toMatchObject({ actualCostCents: 9 });
+    await expect(inpaint.generate({
+      operation: 'INPAINT', prompt: 'remove label', negativePrompt: null,
+      count: 1, width: 1024, height: 1024, model: config.model,
+      inputImages: [source], mask,
+    })).resolves.toMatchObject({ actualCostCents: 9 });
+    expect(createOpenAiEditProvider).toHaveBeenCalledTimes(2);
+    expect(createOpenAiEditProvider).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+      costPerImageCents: config.costPerImageCents,
+    }));
+    expect(edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      operation: 'FULL_EDIT', images: [source], mask: null,
+    }));
+    expect(edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      operation: 'INPAINT', images: [source], mask,
+    }));
+  });
+
   it('checks the generation master switch, tenant rollout and operation switch together', async () => {
     const values = new Map<string, unknown>([
       ['ai_image_generation_enabled', true],

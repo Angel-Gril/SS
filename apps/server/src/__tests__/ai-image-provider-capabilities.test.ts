@@ -32,8 +32,10 @@ describe('AI image provider capability matrix', () => {
       supportsAiMediaOperation('dashscope-wanx', 'wanx2.1-t2i-turbo', 'IMAGE_TO_IMAGE', 1),
     ).toBe(false);
     expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 2)).toBe(true);
-    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 2)).toBe(true);
-    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 2, 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 2)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 1, 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 2, 1)).toBe(false);
     expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 0)).toBe(false);
     expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 17)).toBe(false);
     expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 1, 1)).toBe(false);
@@ -61,6 +63,20 @@ describe('AI image provider capability matrix', () => {
       'IMAGE_TO_IMAGE',
       5,
     )).toBe(true);
+  });
+
+  it('applies reference bounds per operation for multi-operation providers', () => {
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'TEXT_TO_IMAGE', 0)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'TEXT_TO_IMAGE', 1)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 16)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'IMAGE_TO_IMAGE', 17)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 0)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 2)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 0, 1)).toBe(false);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 1, 1)).toBe(true);
+    expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'INPAINT', 2, 1)).toBe(false);
   });
 
   it('requires the exact reference and mask shape for fake edit operations', () => {
