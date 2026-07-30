@@ -8,6 +8,7 @@ ENV_FILE="${ENV_FILE:-.env.staging}"
 SERVER_DIR="${DEPLOY_DIR}/apps/server"
 ENV_PATH="${DEPLOY_DIR}/${ENV_FILE}"
 POLICY_VERIFIER="${DEPLOY_DIR}/scripts/verify-ai-media-dark-policy.mjs"
+EXTENSION_BYOK_POLICY_VERIFIER="${DEPLOY_DIR}/scripts/verify-extension-byok-rollout-policy.mjs"
 
 if [ ! -d "$SERVER_DIR" ]; then
   echo "FAIL AI Media dark-rollout check: server directory missing: $SERVER_DIR" >&2
@@ -19,6 +20,10 @@ if [ ! -r "$ENV_PATH" ]; then
 fi
 if [ ! -r "$POLICY_VERIFIER" ]; then
   echo "FAIL AI Media dark-rollout check: policy verifier missing or unreadable: $POLICY_VERIFIER" >&2
+  exit 1
+fi
+if [ ! -r "$EXTENSION_BYOK_POLICY_VERIFIER" ]; then
+  echo "FAIL AI Media dark-rollout check: extension BYOK policy verifier missing or unreadable: $EXTENSION_BYOK_POLICY_VERIFIER" >&2
   exit 1
 fi
 
@@ -51,6 +56,11 @@ try {
           'feature_image_translate',
           'ai_image_translation_provider',
           'ai_media_workflow_v2_rollout_policy',
+          'feature_extension_hosted_ai',
+          'feature_extension_byok_ai',
+          'feature_extension_byok_ingest',
+          'feature_extension_byok_publish',
+          'extension_byok_admin_policy',
         ],
       },
     },

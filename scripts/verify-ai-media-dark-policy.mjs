@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { verifyExtensionByokRolloutPolicy } from './verify-extension-byok-rollout-policy.mjs';
 
 function fail(message) {
   throw new Error(message);
@@ -30,6 +31,7 @@ function verifyInactiveProviderChannel(values, enabledKey, providerKey) {
 
 export function verifyAiMediaDarkPolicy(rows) {
   if (!Array.isArray(rows)) fail('SystemConfig query did not return an array');
+  const extensionByok = verifyExtensionByokRolloutPolicy(rows, { expectation: 'off' });
 
   const values = new Map();
   for (const row of rows) {
@@ -62,7 +64,8 @@ export function verifyAiMediaDarkPolicy(rows) {
   if (rawPolicy === undefined) {
     return {
       master, imageToImage, suite, fullEdit, inpaint, webMedia,
-      extensionWorkbench, ozonPublisher, legacyGeneration, imageTranslation, policy: 'absent',
+      extensionWorkbench, ozonPublisher, legacyGeneration, imageTranslation,
+      extensionByok, policy: 'absent',
     };
   }
 
@@ -98,6 +101,7 @@ export function verifyAiMediaDarkPolicy(rows) {
     ozonPublisher,
     legacyGeneration,
     imageTranslation,
+    extensionByok,
     policy: `revision:${policy.revision},tenantIds:0`,
   };
 }
@@ -107,7 +111,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const rows = JSON.parse(process.argv[2] || 'null');
     const result = verifyAiMediaDarkPolicy(rows);
     console.log(
-      `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
+      `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; extensionByok=${result.extensionByok.expectation}; policy=${result.policy})`,
     );
   } catch (error) {
     console.error(

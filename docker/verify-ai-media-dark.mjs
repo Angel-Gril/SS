@@ -17,6 +17,11 @@ const keys = [
   'feature_image_translate',
   'ai_image_translation_provider',
   'ai_media_workflow_v2_rollout_policy',
+  'feature_extension_hosted_ai',
+  'feature_extension_byok_ai',
+  'feature_extension_byok_ingest',
+  'feature_extension_byok_publish',
+  'extension_byok_admin_policy',
 ];
 
 const prisma = new PrismaClient();
@@ -27,7 +32,7 @@ try {
   });
   const result = verifyAiMediaDarkPolicy(rows);
   console.log(
-    `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; policy=${result.policy})`,
+    `PASS AI Media rollout is dark (master=${result.master}; imageToImage=${result.imageToImage}; suite=${result.suite}; fullEdit=${result.fullEdit}; inpaint=${result.inpaint}; webMedia=${result.webMedia}; extensionWorkbench=${result.extensionWorkbench}; ozonPublisher=${result.ozonPublisher}; legacyGeneration=${result.legacyGeneration}; imageTranslation=${result.imageTranslation}; extensionByok=${result.extensionByok.expectation}; policy=${result.policy})`,
   );
 } catch (error) {
   console.error(

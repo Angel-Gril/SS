@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const verifier = 'scripts/verify-ai-media-dark-policy.mjs';
+const extensionByokVerifier = 'scripts/verify-extension-byok-rollout-policy.mjs';
+const aiMediaDarkPolicy = readFileSync(verifier, 'utf8');
+const extensionByokVerifierSource = readFileSync(extensionByokVerifier, 'utf8');
 const verifyAiMediaDark = readFileSync('scripts/verify-ai-media-dark.sh', 'utf8');
 const verifyVpsDeploy = readFileSync('scripts/verify-vps-deploy.sh', 'utf8');
 const verifyDeployReadiness = readFileSync('scripts/verify-deploy-readiness.sh', 'utf8');
@@ -42,13 +45,62 @@ function run(rows) {
   return spawnSync(process.execPath, [verifier, JSON.stringify(rows)], { encoding: 'utf8' });
 }
 
+function runExtensionByok(expectation, rows, expected) {
+  const args = [extensionByokVerifier, expectation, JSON.stringify(rows)];
+  if (expected !== undefined) args.push(JSON.stringify(expected));
+  return spawnSync(process.execPath, args, { encoding: 'utf8' });
+}
+
+const defaultExtensionByokPolicy = {
+  contractVersion: 'extension-byok-admin-policy/v1',
+  revision: 0,
+  mode: 'off',
+  ownerUserIds: [],
+  shopIds: [],
+  deviceSessionIds: [],
+  allowedOrigins: [],
+  allowedOperations: [],
+  maxConcurrency: 1,
+};
+const pilotExpectation = {
+  hostedAiEnabled: false,
+  revision: 17,
+  ownerUserIds: ['owner-pilot-1'],
+  shopIds: ['shop-pilot-1'],
+  deviceSessionIds: ['device-session-pilot-1'],
+  allowedOrigins: ['https://provider.example'],
+  allowedOperations: ['TEXT_TO_IMAGE', 'INPAINT'],
+};
+
+function extensionByokPilotRows(expectation, overrides = {}) {
+  const publishPilot = expectation === 'publish-pilot';
+  const policy = {
+    ...defaultExtensionByokPolicy,
+    revision: pilotExpectation.revision,
+    mode: 'pilot',
+    ownerUserIds: [...pilotExpectation.ownerUserIds],
+    shopIds: [...pilotExpectation.shopIds],
+    deviceSessionIds: [...pilotExpectation.deviceSessionIds],
+    allowedOrigins: [...pilotExpectation.allowedOrigins],
+    allowedOperations: [...pilotExpectation.allowedOperations],
+    ...(overrides.policy || {}),
+  };
+  return [
+    { key: 'feature_extension_hosted_ai', value: 'false' },
+    { key: 'feature_extension_byok_ai', value: 'true' },
+    { key: 'feature_extension_byok_ingest', value: publishPilot ? 'true' : 'false' },
+    { key: 'feature_extension_byok_publish', value: publishPilot ? 'true' : 'false' },
+    { key: 'extension_byok_admin_policy', value: JSON.stringify(policy) },
+  ];
+}
+
 function composeServiceBlock(compose, service) {
-  const match = new RegExp(`^  ${service}:\\s*$`, 'mu').exec(compose);
+  const match = new RegExp(`^ {2}${service}:\\s*$`, 'mu').exec(compose);
   const start = match?.index ?? -1;
   assert.ok(start >= 0, `Compose service is missing: ${service}`);
   const remainder = compose.slice(start);
   const firstLineEnd = remainder.indexOf('\n');
-  const nextService = remainder.slice(firstLineEnd + 1).search(/^  [a-z0-9_-]+:\s*$/mu);
+  const nextService = remainder.slice(firstLineEnd + 1).search(/^ {2}[a-z0-9_-]+:\s*$/mu);
   return nextService >= 0
     ? remainder.slice(0, firstLineEnd + 1 + nextService)
     : remainder;
@@ -77,7 +129,210 @@ for (const rows of [
   const result = run(rows);
   assert.equal(result.status, 0, `safe AI Media rollout should pass: ${result.stderr}`);
   assert.match(result.stdout, /PASS AI Media rollout is dark/u);
-  assert.match(result.stdout, /master=(?:false|absent); imageToImage=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); extensionWorkbench=(?:false|absent); ozonPublisher=(?:false|absent); legacyGeneration=.+; imageTranslation=.+; policy=/u);
+  assert.match(result.stdout, /master=(?:false|absent); imageToImage=(?:false|absent); suite=(?:false|absent); fullEdit=(?:false|absent); inpaint=(?:false|absent); webMedia=(?:false|absent); extensionWorkbench=(?:false|absent); ozonPublisher=(?:false|absent); legacyGeneration=.+; imageTranslation=.+; extensionByok=off; policy=/u);
+}
+
+for (const rows of [
+  [],
+  [
+    { key: 'feature_extension_hosted_ai', value: 'false' },
+    { key: 'feature_extension_byok_ai', value: 'false' },
+    { key: 'feature_extension_byok_ingest', value: 'false' },
+    { key: 'feature_extension_byok_publish', value: 'false' },
+    { key: 'extension_byok_admin_policy', value: JSON.stringify(defaultExtensionByokPolicy) },
+  ],
+]) {
+  const result = runExtensionByok('off', rows);
+  assert.equal(result.status, 0, `extension BYOK off fixture should pass: ${result.stderr}`);
+  assert.match(result.stdout, /PASS Extension BYOK rollout matches off/u);
+}
+
+for (const expectation of ['sandbox-pilot', 'publish-pilot']) {
+  const result = runExtensionByok(
+    expectation,
+    extensionByokPilotRows(expectation),
+    pilotExpectation,
+  );
+  assert.equal(result.status, 0, `${expectation} fixture should pass: ${result.stderr}`);
+  assert.match(result.stdout, new RegExp(`matches ${expectation}`, 'u'));
+}
+
+const hostedPilot = {
+  ...pilotExpectation,
+  hostedAiEnabled: true,
+};
+const hostedPilotRows = extensionByokPilotRows('sandbox-pilot');
+hostedPilotRows[0] = { key: 'feature_extension_hosted_ai', value: 'true' };
+assert.equal(
+  runExtensionByok('sandbox-pilot', hostedPilotRows, hostedPilot).status,
+  0,
+  'pilot hosted AI state may vary only when it is explicitly expected',
+);
+
+for (const rows of [
+  [{ key: 'feature_extension_hosted_ai', value: 'true' }],
+  [{ key: 'feature_extension_byok_ai', value: 'true' }],
+  [{ key: 'feature_extension_byok_ingest', value: 'true' }],
+  [{ key: 'feature_extension_byok_publish', value: 'true' }],
+  [{ key: 'feature_extension_byok_ai', value: ' false ' }],
+  [{ key: 'extension_byok_admin_policy', value: '{bad json' }],
+  [{
+    key: 'extension_byok_admin_policy',
+    value: JSON.stringify({ ...defaultExtensionByokPolicy, revision: 1 }),
+  }],
+  [{
+    key: 'extension_byok_admin_policy',
+    value: JSON.stringify({ ...defaultExtensionByokPolicy, ownerUserIds: ['owner-1'] }),
+  }],
+  [{
+    key: 'extension_byok_admin_policy',
+    value: JSON.stringify({ ...defaultExtensionByokPolicy, maxConcurrency: 2 }),
+  }],
+]) {
+  const result = runExtensionByok('off', rows);
+  assert.notEqual(result.status, 0, 'extension BYOK off expectation must fail closed');
+  assert.match(result.stderr, /FAIL Extension BYOK rollout mismatch/u);
+}
+
+const sandboxRows = extensionByokPilotRows('sandbox-pilot');
+const pilotFailureCases = [
+  ['missing hosted flag', sandboxRows.slice(1), pilotExpectation],
+  [
+    'generation disabled',
+    sandboxRows.map((row) => row.key === 'feature_extension_byok_ai'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+  ],
+  [
+    'sandbox ingest enabled',
+    sandboxRows.map((row) => row.key === 'feature_extension_byok_ingest'
+      ? { ...row, value: 'true' }
+      : row),
+    pilotExpectation,
+  ],
+  [
+    'sandbox publish enabled',
+    sandboxRows.map((row) => row.key === 'feature_extension_byok_publish'
+      ? { ...row, value: 'true' }
+      : row),
+    pilotExpectation,
+  ],
+  [
+    'missing policy',
+    sandboxRows.filter((row) => row.key !== 'extension_byok_admin_policy'),
+    pilotExpectation,
+  ],
+  [
+    'wrong policy contract',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { contractVersion: 'extension-byok-admin-policy/v2' },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'wrong revision',
+    extensionByokPilotRows('sandbox-pilot', { policy: { revision: 18 } }),
+    pilotExpectation,
+  ],
+  [
+    'global policy mode',
+    extensionByokPilotRows('sandbox-pilot', { policy: { mode: 'global' } }),
+    pilotExpectation,
+  ],
+  [
+    'excess concurrency',
+    extensionByokPilotRows('sandbox-pilot', { policy: { maxConcurrency: 2 } }),
+    pilotExpectation,
+  ],
+  [
+    'owner allowlist mismatch',
+    extensionByokPilotRows('sandbox-pilot', { policy: { ownerUserIds: ['owner-pilot-2'] } }),
+    pilotExpectation,
+  ],
+  [
+    'shop allowlist mismatch',
+    extensionByokPilotRows('sandbox-pilot', { policy: { shopIds: ['shop-pilot-2'] } }),
+    pilotExpectation,
+  ],
+  [
+    'device allowlist mismatch',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { deviceSessionIds: ['device-session-pilot-2'] },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'origin allowlist mismatch',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { allowedOrigins: ['https://other-provider.example'] },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'operation allowlist mismatch',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { allowedOperations: ['TEXT_TO_IMAGE'] },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'operation allowlist order mismatch',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { allowedOperations: [...pilotExpectation.allowedOperations].reverse() },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'non-canonical policy origin',
+    extensionByokPilotRows('sandbox-pilot', {
+      policy: { allowedOrigins: ['https://provider.example/v1'] },
+    }),
+    pilotExpectation,
+  ],
+  [
+    'policy with an extra field',
+    extensionByokPilotRows('sandbox-pilot', { policy: { apiKey: 'not-a-secret-value' } }),
+    pilotExpectation,
+  ],
+  [
+    'duplicate config row',
+    [...sandboxRows, { ...sandboxRows[0] }],
+    pilotExpectation,
+  ],
+];
+
+for (const [name, rows, expected] of pilotFailureCases) {
+  const result = runExtensionByok('sandbox-pilot', rows, expected);
+  assert.notEqual(result.status, 0, `${name} must fail closed`);
+  assert.match(result.stderr, /FAIL Extension BYOK rollout mismatch/u);
+}
+
+for (const [name, expectation, rows, expected] of [
+  ['unknown expectation', 'pilot', sandboxRows, pilotExpectation],
+  ['missing pilot expectations', 'sandbox-pilot', sandboxRows, undefined],
+  [
+    'missing explicit hosted expectation',
+    'sandbox-pilot',
+    sandboxRows,
+    Object.fromEntries(Object.entries(pilotExpectation).filter(([key]) => key !== 'hostedAiEnabled')),
+  ],
+  [
+    'empty expected identity list',
+    'sandbox-pilot',
+    sandboxRows,
+    { ...pilotExpectation, ownerUserIds: [] },
+  ],
+  [
+    'non-canonical expected origin',
+    'sandbox-pilot',
+    sandboxRows,
+    { ...pilotExpectation, allowedOrigins: ['https://provider.example/v1'] },
+  ],
+]) {
+  const result = runExtensionByok(expectation, rows, expected);
+  assert.notEqual(result.status, 0, `${name} must fail closed`);
+  assert.match(result.stderr, /FAIL Extension BYOK rollout mismatch/u);
 }
 
 for (const rows of [
@@ -134,6 +389,33 @@ assert.match(
   /verify-ai-media-dark\.sh/u,
   'deploy readiness must assert AI Media remains dark before switching releases',
 );
+assert.match(
+  verifyDeployReadiness,
+  /verify-extension-byok-rollout-policy\.mjs/u,
+  'deploy readiness must require the extension BYOK rollout verifier',
+);
+assert.match(
+  aiMediaDarkPolicy,
+  /verifyExtensionByokRolloutPolicy\(rows, \{ expectation: 'off' \}\)/u,
+  'production AI Media dark verification must fix extension BYOK expectation to off',
+);
+assert.match(
+  extensionByokVerifierSource,
+  /off', 'sandbox-pilot', 'publish-pilot/u,
+  'the fixture verifier must expose only the named rollout expectations',
+);
+assert.match(
+  extensionByokVerifierSource,
+  /pilot expectations require explicit non-empty IDs, origins, and operations/u,
+  'pilot CLI expectations must fail closed without explicit scope lists',
+);
+for (const productionVerifier of [verifyAiMediaDark, composeDarkVerifier]) {
+  assert.doesNotMatch(
+    productionVerifier,
+    /sandbox-pilot|publish-pilot/u,
+    'production dark deployment entrypoints must not accept a pilot expectation',
+  );
+}
 
 for (const entrypoint of deployEntrypoints) {
   const migrationIndex = entrypoint.source.indexOf('npx prisma migrate deploy');
@@ -230,6 +512,7 @@ assert.doesNotMatch(concurrentIndexMigration, /\bBEGIN\b|\bCOMMIT\b|\bSET\b|\bRE
 assert.match(serverDockerfile, /COPY docker\/migrate-and-verify-ai-media-dark\.sh/u);
 assert.match(serverDockerfile, /COPY docker\/verify-ai-media-dark\.mjs/u);
 assert.match(serverDockerfile, /COPY scripts\/verify-ai-media-dark-policy\.mjs/u);
+assert.match(serverDockerfile, /COPY scripts\/verify-extension-byok-rollout-policy\.mjs/u);
 for (const [name, compose] of composeDeployments) {
   assert.match(
     compose,
@@ -329,6 +612,11 @@ for (const key of [
   'feature_image_translate',
   'ai_image_translation_provider',
   'ai_media_workflow_v2_rollout_policy',
+  'feature_extension_hosted_ai',
+  'feature_extension_byok_ai',
+  'feature_extension_byok_ingest',
+  'feature_extension_byok_publish',
+  'extension_byok_admin_policy',
 ]) {
   assert.match(
     verifyAiMediaDark,
@@ -346,6 +634,16 @@ assert.match(
   composeDarkVerifier,
   /ozonPublisher=\$\{result\.ozonPublisher\}/u,
   'Compose AI Media dark PASS output must report the Ozon publisher state',
+);
+assert.match(
+  composeDarkVerifier,
+  /extensionByok=\$\{result\.extensionByok\.expectation\}/u,
+  'Compose AI Media dark PASS output must report the extension BYOK off expectation',
+);
+assert.match(
+  verifyAiMediaDark,
+  /EXTENSION_BYOK_POLICY_VERIFIER/u,
+  'app-dir verification must require the imported extension BYOK verifier',
 );
 for (const [name, source] of [
   ['app-dir', verifyAiMediaDark],

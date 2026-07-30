@@ -33,6 +33,7 @@ COPY docker/verify-ai-media-dark.mjs ./scripts/verify-ai-media-dark.mjs
 COPY apps/server/scripts/ai-media-suite-post-migration-contract.mjs ./scripts/ai-media-suite-post-migration-contract.mjs
 COPY apps/server/scripts/verify-ai-media-suite-post-migration.mjs ./scripts/verify-ai-media-suite-post-migration.mjs
 COPY scripts/verify-ai-media-dark-policy.mjs ./scripts/verify-ai-media-dark-policy.mjs
+COPY scripts/verify-extension-byok-rollout-policy.mjs ./scripts/verify-extension-byok-rollout-policy.mjs
 
 EXPOSE 3001
 CMD ["node", "dist/index.js"]

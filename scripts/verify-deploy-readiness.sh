@@ -92,6 +92,7 @@ check_file "$DEPLOY_DIR/scripts/configure-cloud-r2-env.sh"
 check_file "$DEPLOY_DIR/scripts/verify-vps-deploy.sh"
 check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark.sh"
 check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark-policy.mjs"
+check_file "$DEPLOY_DIR/scripts/verify-extension-byok-rollout-policy.mjs"
 check_file "$DEPLOY_DIR/scripts/verify-backup-restore.sh"
 
 if [ -f "$DEPLOY_DIR/DEPLOYED_COMMIT" ]; then
