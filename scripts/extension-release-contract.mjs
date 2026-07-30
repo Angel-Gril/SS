@@ -112,7 +112,7 @@ export function readExpectedReleaseOrigins(environment) {
     web: environment.EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN,
     admin: environment.EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN,
     api: environment.EXTENSION_RELEASE_EXPECTED_API_ORIGIN,
-    local: environment.EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN,
+    local: environment.EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN || EXTENSION_RELEASE_LOCAL_ORIGIN,
   }, 'formal release expected origins');
 }
 

@@ -85,7 +85,7 @@ assert.match(
 );
 assert.match(
   stagingDeploy,
-  /--expected-local-origin "\$EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN"/u,
+  /--expected-local-origin "\$\{EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http:\/\/127\.0\.0\.1:3001\}"/u,
   'staging release-set verification must bind the independently approved local origin',
 );
 assert.match(

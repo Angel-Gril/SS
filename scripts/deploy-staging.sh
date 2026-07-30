@@ -133,7 +133,7 @@ node scripts/verify-extension-release.mjs \
   --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
   --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
   --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
-  --expected-local-origin "$EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN"
+  --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
 
 # 6. 迁移并重启服务
 echo "[6b/7] Running database migrations..."

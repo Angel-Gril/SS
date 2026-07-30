@@ -25,6 +25,27 @@ export function extensionReleaseSourceMode(repoRoot, sourceDir) {
     : 'EXTERNAL_SOURCE';
 }
 
+export function extensionReleaseGitHead(repoRoot, { spawnGit = spawnSync } = {}) {
+  const gitMetadataPath = path.join(repoRoot, '.git');
+  const metadata = lstatSync(gitMetadataPath, { throwIfNoEntry: false });
+  if (metadata === undefined) return '';
+  if (metadata.isSymbolicLink() || (!metadata.isDirectory() && !metadata.isFile())) {
+    throw new Error('could not resolve the active extension release Git HEAD');
+  }
+  let result;
+  try {
+    result = spawnGit('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+  } catch {
+    throw new Error('could not resolve the active extension release Git HEAD');
+  }
+  const commit = String(result.stdout || '').trim().toLowerCase();
+  if (result.status === 0 && /^[a-f0-9]{40}$/u.test(commit)) return commit;
+  throw new Error('could not resolve the active extension release Git HEAD');
+}
+
 function inputFiles(root, prefix) {
   if (!existsSync(root) || !lstatSync(root).isDirectory()) {
     throw new Error(`extension release source directory is missing: ${root}`);

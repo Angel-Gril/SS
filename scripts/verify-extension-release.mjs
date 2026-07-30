@@ -19,6 +19,7 @@ import {
 } from './extension-release-contract.mjs';
 import {
   assertExtensionReleaseInputsUnchanged,
+  extensionReleaseGitHead,
   extensionReleasePackageInputsSha256,
   extensionReleaseScopedGitStatus,
   extensionReleaseSourceMode,
@@ -64,18 +65,9 @@ function readFileNoFollow(file, label, maxBytes) {
   }
 }
 
-function gitHeadCommit() {
-  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  const commit = String(result.stdout || '').trim().toLowerCase();
-  return result.status === 0 && /^[a-f0-9]{40}$/u.test(commit) ? commit : '';
-}
-
 function currentGitCommit() {
   const deployedCommitPath = path.join(repoRoot, 'DEPLOYED_COMMIT');
-  const activeGitCommit = gitHeadCommit();
+  const activeGitCommit = extensionReleaseGitHead(repoRoot);
   if (existsSync(deployedCommitPath)) {
     const match = readFileNoFollow(deployedCommitPath, 'DEPLOYED_COMMIT', 128).toString('utf8')
       .match(/^([a-f0-9]{40})(?:\r?\n)?$/iu);

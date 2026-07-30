@@ -23,6 +23,7 @@ import {
 } from './extension-release-contract.mjs';
 import {
   assertExtensionReleaseInputsUnchanged,
+  extensionReleaseGitHead,
   extensionReleasePackageInputsSha256,
   extensionReleaseScopedGitStatus,
   extensionReleaseSourceMode,
@@ -129,16 +130,6 @@ function sha256(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
-function gitHead() {
-  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  const commit = String(result.stdout || '').trim().toLowerCase();
-  if (result.status === 0 && /^[a-f0-9]{40}$/u.test(commit)) return commit;
-  return '';
-}
-
 function deployedCommit() {
   const deployedCommitPath = path.join(repoRoot, 'DEPLOYED_COMMIT');
   if (!existsSync(deployedCommitPath)) return undefined;
@@ -155,7 +146,7 @@ function releaseProvenance() {
     throw new Error('formal extension releases must use repository source');
   }
   const archiveCommit = deployedCommit();
-  const repositoryHead = gitHead();
+  const repositoryHead = extensionReleaseGitHead(repoRoot);
   const requireCleanGit = sourceMode === 'REPOSITORY_SOURCE' && repositoryHead !== '';
   const resolved = resolveExtensionReleaseProvenance({
     deployedCommit: archiveCommit,
@@ -267,7 +258,7 @@ try {
   }
 
   const requireCleanGit = resolvedProvenance.requireCleanGit;
-  if (requireCleanGit && gitHead() !== resolvedProvenance.gitCommit) {
+  if (requireCleanGit && extensionReleaseGitHead(repoRoot) !== resolvedProvenance.gitCommit) {
     throw new Error('active Git HEAD changed during extension release packaging');
   }
   assertExtensionReleaseInputsUnchanged({

@@ -7,15 +7,19 @@ import path from 'node:path';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import {
   canonicalExtensionReleaseEvidenceJson,
+  readExpectedReleaseOrigins,
   resolveExtensionReleaseProvenance,
 } from './extension-release-contract.mjs';
+import { extensionReleaseGitHead } from './extension-release-inputs.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-erp-extension-bump-'));
 const sourceDir = path.join(root, 'source');
 const outDir = path.join(root, 'out');
 const previousBuildRoot = path.join(root, 'previous');
 const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const packageReleaseSource = fs.readFileSync('scripts/package-extension-release.mjs', 'utf8');
 const releaseInputsSource = fs.readFileSync('scripts/extension-release-inputs.mjs', 'utf8');
+const verifyReleaseSource = fs.readFileSync('scripts/verify-extension-release.mjs', 'utf8');
 const repositoryManifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
 const expectedOrigins = {
   web: 'https://release-web.fixture.example',
@@ -39,6 +43,80 @@ assert.equal(
   '1.0.264',
   'the canonical release migration floor must not be lower than the latest verified legacy package',
 );
+assert.deepEqual(
+  readExpectedReleaseOrigins({
+    EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN: expectedOrigins.web,
+    EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN: expectedOrigins.admin,
+    EXTENSION_RELEASE_EXPECTED_API_ORIGIN: expectedOrigins.api,
+  }),
+  expectedOrigins,
+  'the fixed local release origin must not require an operator environment migration',
+);
+for (const source of [packageReleaseSource, verifyReleaseSource]) {
+  assert.match(
+    source,
+    /extensionReleaseGitHead\(repoRoot\)/u,
+    'formal packaging and verification must share the fail-closed Git HEAD resolver',
+  );
+}
+assert.match(
+  releaseInputsSource,
+  /lstatSync\(gitMetadataPath, \{ throwIfNoEntry: false \}\)/u,
+  'archive provenance must not inherit Git metadata from an unrelated ancestor checkout',
+);
+assert.match(
+  releaseInputsSource,
+  /could not resolve the active extension release Git HEAD/u,
+  'release provenance must fail closed when an active checkout Git HEAD cannot be resolved',
+);
+
+const ancestorCheckout = path.join(root, 'ancestor-checkout');
+const nestedArchive = path.join(ancestorCheckout, 'nested', 'release-archive');
+fs.mkdirSync(path.join(ancestorCheckout, '.git'), { recursive: true });
+fs.mkdirSync(nestedArchive, { recursive: true });
+let nestedArchiveGitCalls = 0;
+assert.equal(
+  extensionReleaseGitHead(nestedArchive, {
+    spawnGit() {
+      nestedArchiveGitCalls += 1;
+      return { status: 0, stdout: `${'1'.repeat(40)}\n` };
+    },
+  }),
+  '',
+  'an archive nested below another checkout must remain marker-only',
+);
+assert.equal(nestedArchiveGitCalls, 0, 'archive-only provenance must not invoke Git');
+
+const directCheckout = path.join(root, 'direct-checkout');
+fs.mkdirSync(path.join(directCheckout, '.git'), { recursive: true });
+assert.throws(
+  () => extensionReleaseGitHead(directCheckout, {
+    spawnGit: () => ({ status: 1, stdout: '' }),
+  }),
+  /could not resolve the active extension release Git HEAD/u,
+  'a direct checkout must fail closed when Git inspection fails',
+);
+assert.equal(
+  extensionReleaseGitHead(directCheckout, {
+    spawnGit: () => ({ status: 0, stdout: `${'2'.repeat(40)}\n` }),
+  }),
+  '2'.repeat(40),
+  'a direct checkout must accept one canonical full Git HEAD',
+);
+if (process.platform !== 'win32') {
+  const danglingMetadataCheckout = path.join(root, 'dangling-metadata-checkout');
+  fs.mkdirSync(danglingMetadataCheckout, { recursive: true });
+  fs.symlinkSync(
+    path.join(danglingMetadataCheckout, 'missing-git-metadata'),
+    path.join(danglingMetadataCheckout, '.git'),
+    'file',
+  );
+  assert.throws(
+    () => extensionReleaseGitHead(danglingMetadataCheckout),
+    /could not resolve the active extension release Git HEAD/u,
+    'a dangling .git symlink must not be classified as an archive-only release tree',
+  );
+}
 
 function writeManifest(dir, version) {
   fs.mkdirSync(dir, { recursive: true });
