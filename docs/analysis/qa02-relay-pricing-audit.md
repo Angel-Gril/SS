@@ -223,10 +223,20 @@ It does not advertise `/v1/images/edits`. Therefore the public record is neither
 claim nor a cost authorization. Provider pricing synchronization remains unnecessary; any paid
 probe still requires an exact private backend quote and one-request maximum.
 
+The first-party frontend asset
+`https://ai.centos.hk/static/js/index.b91aa80891.js` does contain one generic
+`/v1/images/edits` route constant alongside other gateway routes. The observed asset SHA-256 is
+`8af9a0524dc9724e4c6c96acb5ef93377747103b21710ef6f0ee8100cff0a243`. That proves only that the
+gateway UI knows the route name; it does not bind the route to this account, `gpt-image-2`, or an
+enabled upstream channel. The public evidence therefore justifies a later bounded capability probe
+after credential rotation, but cannot promote edit support by itself.
+
 Raw public status/pricing snapshots and a closed preflight manifest remain outside the repository
 under the private QA-02 evidence root. The manifest SHA-256 is
 `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`; the retained files contain no
-credential. The credential pasted into the conversation is considered exposed and must be revoked
+credential. The separate frontend-route observation SHA-256 is
+`514329392fd9c88cb28f1e95edf010ce19324bef7d7ba681fb2f82af53a9c419`. The credential pasted into
+the conversation is considered exposed and must be revoked
 or rotated. No authenticated request may use it. A replacement credential must be entered through
 a private local DPAPI flow before one bounded authenticated read-only catalogue/account check.
 Until then, `ai.centos.hk` remains only a network-safe, unauthenticated candidate whose edit

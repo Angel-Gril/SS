@@ -381,7 +381,9 @@ Progress: 4/5 tasks.
 - Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists `gpt-image-2` with
   `model_price=0.1` under the site's CNY display configuration, but advertises only
   `/v1/images/generations` for image traffic and does not advertise `/v1/images/edits`. This is not
-  edit-capability evidence or cost authorization. Private preflight manifest SHA-256 is
+  edit-capability evidence or cost authorization. The public frontend has one generic
+  `/v1/images/edits` route constant, but does not bind it to this account, model or upstream
+  channel. Private preflight manifest SHA-256 is
   `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`.
 - The candidate Key pasted into the conversation is considered exposed, was not used, and must be
   revoked or rotated. A replacement must enter through private local DPAPI storage before one

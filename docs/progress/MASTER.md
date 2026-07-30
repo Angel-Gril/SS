@@ -247,7 +247,8 @@ confirmed `/v1/models` is credential-gated and made no redirect or Provider oper
 The candidate's public pricing revision lists `gpt-image-2` with `model_price=0.1` under the site's
 CNY display configuration, but advertises only `/v1/images/generations` for image traffic and does
 not advertise `/v1/images/edits`. This is not edit-capability evidence and is not a maximum-cost
-authorization. Public snapshots and manifest SHA-256
+authorization. Its public frontend contains a generic `/v1/images/edits` route constant, but that
+constant is not bound to this account, model or upstream channel. Public snapshots and manifest SHA-256
 `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4` remain outside Git. The Key
 provided in conversation is treated as exposed; it was not used and must be rotated before a
 private DPAPI-injected, authenticated read-only catalogue/account check. No authenticated request,
