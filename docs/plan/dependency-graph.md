@@ -131,13 +131,13 @@ flowchart TD
   I3 --> D1
 
   subgraph P6[Phase 6 - Pilot and release]
-    R2[REL-02 owner/shop/device pilot] --> R3[REL-03 extension packages]
-    R3 --> R4[REL-04 VPS deploy/canary]
+    R3[REL-03 extension packages] --> R4[REL-04 dark VPS deploy/pre-enable canary]
+    R4 --> R2[REL-02 owner/shop/device pilot/post-enable canary]
   end
 
-  Q3 --> R2
-  Q4 --> R2
-  D1 --> R2
+  Q3 --> R3
+  Q4 --> R3
+  D1 --> R3
 ```
 
 ## Critical Path
@@ -155,7 +155,7 @@ FND-01
 -> HOST-01 and BYOK-01
 -> INT-03
 -> QA-04
--> REL-02/REL-03/REL-04
+-> REL-03/REL-04/REL-02
 ```
 
 ## Merge Ownership Hotspots

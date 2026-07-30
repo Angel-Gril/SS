@@ -149,15 +149,16 @@ proves the trust, storage, billing, draft, and publish boundaries before batch/e
 
 ### Parallel lanes
 
-- Lane A, rollout controls and observability: `REL-02`.
+- Lane A, rollout controls and observability preparation; no pilot flag is enabled.
 - Lane B, exact sandbox evidence: final `QA-02` runs for approved profiles.
-- Deployment is sequential after all gates pass.
+- Release execution is sequential after all gates pass: `REL-03` packages, `REL-04` dark deploy and
+  pre-enable canaries, then `REL-02` sandbox/one-shop pilots and post-enable canaries.
 
 | ID | Task | Priority | Effort | Dependencies | Acceptance criteria |
 | --- | --- | --- | --- | --- | --- |
-| REL-02 | Release through owner/shop/device pilots | P0 | M | QA-03, QA-04, DOC-01 | BYOK generation, ingest, and publish can be disabled independently without affecting hosted mode; first pilot is sandbox-only, then one-shop publish; audit events and receipts are visible; rollback leaves already-stored assets and receipts consistent |
-| REL-03 | Build, sign, distribute, and verify cloud/local extension packages | P0 | M | REL-02 | Both packages contain the same completed feature set with environment-correct ERP endpoints; version increments once; installation/upgrade preserves non-secret profiles but not session keys; package hashes and smoke results are recorded |
-| REL-04 | Deploy server/web changes and run post-deploy canaries | P0 | M | REL-03 | Database backup/migration, API/web/worker restart, readiness, default-off flags, both VPS environments, extension pairing, hosted regression, BYOK fixture ingest, and publish reconciliation checks pass before any pilot flag is enabled |
+| REL-02 | Release through owner/shop/device pilots | P0 | M | REL-04 | Positive BYOK fixture ingest passes; generation, ingest, and publish can be disabled independently without affecting hosted mode; first pilot is sandbox-only, then one-shop publish; audit events and receipts are visible; post-enable canaries and publish reconciliation pass; rollback leaves already-stored assets and receipts consistent |
+| REL-03 | Build, sign, distribute, and verify cloud/local extension packages | P0 | M | QA-03, QA-04, DOC-01 | Both packages contain the same completed feature set with environment-correct ERP endpoints; version increments once; installation/upgrade preserves non-secret profiles but not session keys; package hashes and smoke results are recorded |
+| REL-04 | Deploy server/web changes dark and run pre-enable canaries | P0 | M | REL-03 | Database backup/migration, API/web/worker restart, readiness, default-off flags, both VPS environments, extension pairing, hosted regression, BYOK disabled-path fixture rejection, and publish reconciliation checks pass before any pilot flag is enabled |
 
 ## Deferred Work
 

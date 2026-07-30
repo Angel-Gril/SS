@@ -334,8 +334,10 @@ flag change, ERP media mutation, Ozon write, or `.context/` staging occurred. Co
    candidate.
 4. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
    not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
-5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order
-   through `REL-02`, `REL-03` and `REL-04`.
+5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
+   `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
+   sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
+   during `REL-03` or `REL-04`.
 6. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

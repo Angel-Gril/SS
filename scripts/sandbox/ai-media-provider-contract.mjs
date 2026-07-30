@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { reviewedPaidDerivedCapabilityMatches } from './ai-media-provider-review.mjs';
 
 const root = process.cwd();
 const matrixPath = path.join(root, 'docs/contracts/ai-media-provider-matrix.md');
@@ -14,6 +15,7 @@ const reviewedPaidDerivedCapabilities = new Map([
     resultMode: 'async',
     maxReferences: 1,
     supportsMask: false,
+    sandboxEvidence: null,
   }],
   ['openai-images:gpt-image-1', {
     operations: new Set(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']),
@@ -21,6 +23,7 @@ const reviewedPaidDerivedCapabilities = new Map([
     resultMode: 'sync',
     maxReferences: 16,
     supportsMask: true,
+    sandboxEvidence: null,
   }],
 ]);
 
@@ -98,14 +101,7 @@ for (const entry of capabilities) {
   if (paidDerivedOperations.length && !reviewed) {
     fail(`registry contains an unreviewed paid derived-image provider/model: ${entry.provider}:${entry.model}`);
   }
-  if (reviewed && (
-    paidDerivedOperations.length !== reviewed.operations.size
-    || paidDerivedOperations.some((operation) => !reviewed.operations.has(operation))
-    || entry.inputTransport !== reviewed.inputTransport
-    || entry.resultMode !== reviewed.resultMode
-    || entry.maxReferences !== reviewed.maxReferences
-    || entry.supportsMask !== reviewed.supportsMask
-  )) {
+  if (reviewed && !reviewedPaidDerivedCapabilityMatches(entry, reviewed)) {
     fail(`reviewed paid derived-image capability drifted: ${entry.provider}:${entry.model}`);
   }
   if (
