@@ -238,20 +238,39 @@ must not be attempted against this same endpoint/model.
 Task counts remain Phase 3 `4/5` and overall `32/37`. Full `QA-02` now requires a different
 edit-capable endpoint/model; `QA-04`, `REL-02`, `REL-03` and `REL-04` remain dependency-blocked.
 
+The alternate candidate `https://ai.centos.hk` then passed a no-key public network preflight. Its
+effective API Base is `https://ai.centos.hk/v1`; public resolvers and the international VPS returned
+three Cloudflare public IPv4 addresses, TLS 1.3/SNI/hostname verification passed, and the project
+URL/SSRF validator accepted it from clean checkout `5f6d3dd`. Bounded unauthenticated GET checks
+confirmed `/v1/models` is credential-gated and made no redirect or Provider operation.
+
+The candidate's public pricing revision lists `gpt-image-2` with `model_price=0.1` under the site's
+CNY display configuration, but advertises only `/v1/images/generations` for image traffic and does
+not advertise `/v1/images/edits`. This is not edit-capability evidence and is not a maximum-cost
+authorization. Public snapshots and manifest SHA-256
+`92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4` remain outside Git. The Key
+provided in conversation is treated as exposed; it was not used and must be rotated before a
+private DPAPI-injected, authenticated read-only catalogue/account check. No authenticated request,
+Provider POST, charge, production mutation, deployment, flag change, or `.context/` staging
+occurred. Counts remain `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
-2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. Select a different edit-capable
-   endpoint/model, then prepare separate bounded source/mask bytes and a new private versioned
-   backend policy that binds the exact operation/profile, quote and one-request maximum. Provider
-   pricing API sync is not required. Obtain a new explicit approval for each paid POST and settle
-   each one before the next operation.
-3. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
+2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. For the alternate
+   `ai.centos.hk` candidate, first revoke/rotate the exposed Key and load the replacement only
+   through private local DPAPI storage. Then perform one bounded authenticated read-only catalogue
+   and account/billing check. Do not infer edit support from its public generation-only metadata.
+3. After selecting an actually edit-capable endpoint/model, prepare separate bounded source/mask
+   bytes and a private versioned backend policy for each operation. Bind the exact profile, quote
+   and one-request maximum; Provider pricing API sync is not required. Obtain a new explicit
+   approval for each paid POST and settle it before the next operation.
+4. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
    not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
-4. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order
+5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order
    through `REL-02`, `REL-03` and `REL-04`.
-5. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+6. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol

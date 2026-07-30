@@ -373,3 +373,18 @@ Progress: 4/5 tasks.
   therefore remains `4/5`, overall progress remains `32/37`, and all four downstream tasks remain
   blocked until a different edit-capable endpoint/model completes bounded operation-specific
   acceptance.
+- The alternate candidate `https://ai.centos.hk` passed a no-key public network preflight. Public
+  resolvers and the international VPS returned only Cloudflare public IPv4 addresses, TLS 1.3 and
+  hostname verification passed, its API Base canonicalized to `https://ai.centos.hk/v1`, and the
+  project URL/SSRF validator accepted it from clean checkout `5f6d3dd`. Unauthenticated bounded GET
+  checks made no redirects and confirmed `/v1/models` is credential-gated.
+- Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists `gpt-image-2` with
+  `model_price=0.1` under the site's CNY display configuration, but advertises only
+  `/v1/images/generations` for image traffic and does not advertise `/v1/images/edits`. This is not
+  edit-capability evidence or cost authorization. Private preflight manifest SHA-256 is
+  `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`.
+- The candidate Key pasted into the conversation is considered exposed, was not used, and must be
+  revoked or rotated. A replacement must enter through private local DPAPI storage before one
+  bounded authenticated read-only catalogue/account check. Counts remain `4/5` and `32/37`; this
+  preflight made no authenticated request, Provider POST, charge, production mutation, deployment,
+  flag change or `.context/` staging.

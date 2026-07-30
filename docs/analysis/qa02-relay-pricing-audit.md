@@ -198,3 +198,36 @@ The outcome supplies negative compatibility evidence, not an edit price. The cur
 endpoint/`gpt-image-2-count` pair must be treated as text-to-image-only. Full edit and inpaint share
 the rejected edit transport and should not be dispatched without selecting a different
 edit-capable endpoint/model and beginning a new bounded approval sequence.
+
+## Alternate candidate public preflight
+
+The operator supplied `https://ai.centos.hk` as a different candidate endpoint. Its API Base
+canonicalizes to `https://ai.centos.hk/v1`. Local DNS returned proxy/TUN fake-IP addresses in
+`198.18.0.0/15` and `fdfe::/16`, so those local answers were not treated as Provider evidence.
+Independent lookups from the international VPS and public resolvers `1.1.1.1` and `8.8.8.8`
+returned the same three Cloudflare public IPv4 addresses: `104.26.14.134`, `104.26.15.134`, and
+`172.67.70.185`, with no AAAA or CNAME answer. The repository URL/SSRF validator accepted the
+canonical API Base from clean checkout `5f6d3dd8ccac5e060189bec427400cc06c3a97ec` on that VPS.
+
+TLS 1.3, SNI, and hostname verification passed for all three public addresses. The observed leaf
+certificate covers `*.centos.hk` and `centos.hk`, is issued by Let's Encrypt `YE2`, and is valid
+from `2026-06-20T02:06:57Z` through `2026-09-18T02:06:56Z`. Unauthenticated bounded GET checks made
+no redirects: `/` returned `200`, `/v1` returned the expected JSON `404`, `/v1/models` returned
+`401`, and `/api/status` plus `/api/pricing` returned `200`.
+
+The public pricing response has pricing revision `a42d372ccf0b5dd13ecf71203521f9d2`. Under the
+site's CNY display configuration it lists `gpt-image-2` with `quota_type=1` and
+`model_price=0.1`, but its advertised endpoint metadata includes only
+`image-generation -> POST /v1/images/generations` and `openai -> POST /v1/chat/completions`.
+It does not advertise `/v1/images/edits`. Therefore the public record is neither an edit-capability
+claim nor a cost authorization. Provider pricing synchronization remains unnecessary; any paid
+probe still requires an exact private backend quote and one-request maximum.
+
+Raw public status/pricing snapshots and a closed preflight manifest remain outside the repository
+under the private QA-02 evidence root. The manifest SHA-256 is
+`92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`; the retained files contain no
+credential. The credential pasted into the conversation is considered exposed and must be revoked
+or rotated. No authenticated request may use it. A replacement credential must be entered through
+a private local DPAPI flow before one bounded authenticated read-only catalogue/account check.
+Until then, `ai.centos.hk` remains only a network-safe, unauthenticated candidate whose edit
+capability is unproved.
