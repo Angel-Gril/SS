@@ -30,7 +30,12 @@ for (const releaseControl of [
   'EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN',
   'EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN',
   'EXTENSION_RELEASE_EXPECTED_API_ORIGIN',
+  'EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN',
   'pnpm package:extension',
+  'DEPLOYED_COMMIT',
+  '/api/extensions/latest',
+  'X-Content-SHA256',
+  'signatureStatus=EXTERNAL_REQUIRED',
   'signature.status=EXTERNAL_REQUIRED',
   'verify-extension-byok-rollout-policy.mjs',
 ]) {

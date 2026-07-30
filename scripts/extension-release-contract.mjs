@@ -1,4 +1,4 @@
-const EXPECTED_ORIGIN_KEYS = Object.freeze(['admin', 'api', 'web']);
+const EXPECTED_ORIGIN_KEYS = Object.freeze(['admin', 'api', 'local', 'web']);
 const RELEASE_EVIDENCE_KEYS = Object.freeze([
   'artifacts',
   'checksumFilename',
@@ -16,6 +16,7 @@ const PROVENANCE_KEYS = Object.freeze([
   'sourceMode',
 ]);
 const PUBLIC_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
+export const EXTENSION_RELEASE_LOCAL_ORIGIN = 'http://127.0.0.1:3001';
 
 function fail(message) {
   throw new Error(message);
@@ -95,10 +96,14 @@ export function canonicalPublicHttpsOrigin(value, field = 'origin') {
 
 export function parseExpectedReleaseOrigins(value, field = 'expected origins') {
   const parsed = exactObject(value, EXPECTED_ORIGIN_KEYS, field);
+  if (parsed.local !== EXTENSION_RELEASE_LOCAL_ORIGIN) {
+    fail(`${field}.local must be exactly ${EXTENSION_RELEASE_LOCAL_ORIGIN}`);
+  }
   return {
     web: canonicalPublicHttpsOrigin(parsed.web, `${field}.web`),
     admin: canonicalPublicHttpsOrigin(parsed.admin, `${field}.admin`),
     api: canonicalPublicHttpsOrigin(parsed.api, `${field}.api`),
+    local: EXTENSION_RELEASE_LOCAL_ORIGIN,
   };
 }
 
@@ -107,6 +112,7 @@ export function readExpectedReleaseOrigins(environment) {
     web: environment.EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN,
     admin: environment.EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN,
     api: environment.EXTENSION_RELEASE_EXPECTED_API_ORIGIN,
+    local: environment.EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN,
   }, 'formal release expected origins');
 }
 
@@ -188,7 +194,13 @@ export function resolveExtensionReleaseProvenance(input) {
     ? fullGitCommit(input.deployedCommit, 'DEPLOYED_COMMIT')
     : fullGitCommit(input.gitCommit, 'Git HEAD');
   const commitSource = hasDeployedCommit ? 'DEPLOYED_COMMIT' : 'GIT_HEAD';
-  if (commitSource === 'GIT_HEAD'
+  if (hasDeployedCommit
+    && input.activeGitCommit !== undefined
+    && gitCommit !== fullGitCommit(input.activeGitCommit, 'active Git HEAD')) {
+    fail('DEPLOYED_COMMIT does not match active Git HEAD');
+  }
+  const requireCleanGit = input.requireCleanGit === true || commitSource === 'GIT_HEAD';
+  if (requireCleanGit
     && sourceMode === 'REPOSITORY_SOURCE'
     && String(input.gitStatus || '') !== '') {
     fail('tracked or untracked extension release inputs differ from Git HEAD');

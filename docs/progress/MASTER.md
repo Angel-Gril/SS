@@ -340,6 +340,33 @@ query found no current-run `20260730` test schema. This remains rehearsal eviden
 edit-capable `QA-02` evidence does not exist. `QA-04`, `REL-03`, `REL-04` and `REL-02` therefore stay
 unchecked; Phase 3 remains `4/5`, Phase 5 `3/4`, Phase 6 `0/3`, and overall progress stays `32/37`.
 
+An offline distribution review then found that `/api/extensions/latest` and the target download
+routes could still trust mutable unpacked manifests or reconstruct a ZIP without canonical release
+evidence. The server now serves only one repository-source cloud/local evidence set bound to the
+current full `DEPLOYED_COMMIT`; canonical evidence, checksum, ZIP digest/structure, target manifest
+and file count must agree. Version/SHA-bound URLs prevent `/latest` and download from crossing
+versions, startup metadata is selected once, and only the requested target is verified and cached.
+Missing, mixed, replaced or symlinked artifacts fail closed. Unverified reconstruction requires an
+explicit non-production development option. Staging writes `DEPLOYED_COMMIT` only after API/Worker
+quiescence, requires clean matching Git provenance including ignored source files, and strictly
+verifies the current release set before migration even with `--skip-build`. Canonical evidence now
+also records the independently approved local origin exactly as `http://127.0.0.1:3001`; formal and
+runtime readers both reject symlink artifacts and enforce stored-ZIP CRC, bounded sizes, portable
+paths/collisions and contiguous local records. Mutable discovery responses use `no-store`. This is
+offline hardening, not signing or distribution:
+`signatureStatus=EXTERNAL_REQUIRED` remains explicit, `REL-03` stays open, and counts remain
+Phase 3 `4/5`, Phase 5 `3/4`, Phase 6 `0/3`, overall `32/37`. The operator has paused further paid
+edit-capability testing until a genuinely edit-capable Provider endpoint/model/credential exists;
+no Provider request, charge, VPS access, deployment, production mutation, flag change, ERP media
+mutation, Ozon write or `.context/` staging occurred.
+
+The resulting offline distribution patch passed the focused download matrix (`7` passed with one
+Windows-only symlink case skipped), Server typecheck and targeted lint, deployment/documentation
+contracts, the full Server suite (`4514` passed, `195` skipped), and the coordinated
+package/deployment matrix in `212.7s`; diff check also passed. This verification does not provide an
+external signature, store receipt, clean install/upgrade smoke or distribution, so formal counts and
+release ordering remain unchanged.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -347,9 +374,10 @@ unchecked; Phase 3 remains `4/5`, Phase 5 `3/4`, Phase 6 `0/3`, and overall prog
 2. Do not retry `qa02-centos-i2i-20260730-094857-01` and do not send `FULL_EDIT` or `INPAINT` with
    the same `ai.centos.hk` Token/model. Its catalogue authentication works, but its edit POST was
    definitively rejected by the Provider authentication layer and settled with no charge.
-3. After selecting an actually edit-capable endpoint/model, prepare separate bounded source/mask
-   bytes and a private versioned backend policy for each operation. Bind the exact profile, quote
-   and one-request maximum; Provider pricing API sync is not required. Obtain a new explicit
+3. `QA-02` paid edit testing is operator-paused. After selecting an actually edit-capable
+   endpoint/model, prepare separate bounded source/mask bytes and a private versioned backend
+   policy for each operation. Bind the exact profile, quote and one-request maximum; Provider
+   pricing API sync is not required. Obtain a new explicit
    approval for each paid POST and settle it before the next operation. Only after positive custom
    derived-image evidence is accepted, add that exact provider/model contract to the reviewed
    allowlist in `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed

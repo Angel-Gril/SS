@@ -35,8 +35,8 @@ Progress: 0/3 tasks.
   targets. It increments one shared version, refuses overwrites/concurrent release locks, writes
   durable ZIPs, reopens and verifies ZIP SHA-256/CRC/file counts and portable paths, and retains a
   canonical two-line checksum plus closed-schema release evidence. Independently approved Web,
-  Admin and API HTTPS origins must exactly match deployment defaults and every cloud manifest
-  permission surface.
+  Admin and API HTTPS origins plus the fixed local loopback origin must exactly match deployment
+  defaults and every applicable manifest permission surface.
 - Provenance binds one full 40-character Git commit, source mode and a deterministic digest of all
   extension/package inputs. Inputs and scoped Git state are checked before and after both builds and
   independently recomputed by the release verifier. The source manifest is fixed at the last
@@ -48,3 +48,25 @@ Progress: 0/3 tasks.
   remaining P0/P1/P2. `signature.status=EXTERNAL_REQUIRED` deliberately proves that no real signing
   or store receipt exists yet. No package was signed/distributed, no VPS was changed and no rollout
   flag was enabled, so Phase 6 remains `0/3` and overall progress remains `32/37`.
+- A subsequent offline distribution review found that the public extension download routes still
+  trusted mutable unpacked manifests and could rebuild a ZIP without canonical release evidence.
+  The routes now require one repository-source cloud/local release set whose evidence and checksum
+  are canonical, whose Git commit matches `DEPLOYED_COMMIT`, and whose exact ZIP bytes, central
+  directory, target manifest and file count match the recorded evidence. Version/SHA-bound URLs and
+  one startup metadata selection prevent cross-deploy downloads; each target is verified and cached
+  only when requested. Missing, mixed, replaced or symlinked artifacts fail closed; dynamic
+  reconstruction is available only through an explicit non-production test/development option.
+  Staging writes `DEPLOYED_COMMIT` only after quiescing API/Worker, rejects dirty or mismatched Git
+  provenance (including ignored source files), and always re-verifies the current release set before
+  migration, including with `--skip-build`. Formal evidence also binds the independently approved
+  local endpoint exactly to `http://127.0.0.1:3001`; formal/runtime readers reject symlink artifacts
+  and apply the same stored-ZIP CRC, size, path, collision and contiguous-record checks. Mutable
+  discovery responses are non-cacheable. This closes offline distribution bypasses only: external
+  signatures/receipts, clean install/upgrade smoke and actual distribution remain open, so `REL-03`
+  stays unchecked, Phase 6 stays `0/3`, and overall
+  progress stays `32/37`.
+- Final local verification passed the focused download matrix (`7` passed with one Windows-only
+  symlink case skipped), Server typecheck and targeted lint, the deployment/documentation contracts,
+  the full Server suite (`4514` passed, `195` skipped), and the coordinated package/deployment matrix
+  in `212.7s`. `git diff --check` passed. No Provider, VPS, deployment, signature, distribution,
+  production flag or Ozon operation was invoked.

@@ -86,7 +86,7 @@ bash scripts/deploy-compose.sh
 
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
-三个 systemd 部署脚本都会在切换或重启服务前同时生成 cloud 与 local 扩展 ZIP；cloud 包使用当前站点域名，local 包固定连接本机 ERP。两类包都以当前线上产物和源码 manifest 的较高版本为基线自动递增一次。成功发布同一提交后不要仅为检查产物重复执行部署，否则扩展补丁版本会再次递增；应通过 `/api/extensions/latest` 和两个下载端点验收现有产物。`deploy-staging.sh --skip-build` 会连同扩展打包一起跳过，只用于已经验证过全部构建产物的场景。
+三个 systemd 部署脚本都会在切换或重启服务前同时生成 cloud 与 local 扩展 ZIP；cloud 包使用当前站点域名，local 包固定连接本机 ERP。两类包都以当前线上产物和源码 manifest 的较高版本为基线自动递增一次。成功发布同一提交后不要仅为检查产物重复执行部署，否则扩展补丁版本会再次递增；应通过 `/api/extensions/latest` 和两个下载端点验收现有产物。生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回 404，且不会从 unpacked 目录现场重建。`/latest` 返回的每个下载 URL 都包含不可变 version 与 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh --skip-build` 会跳过编译和扩展打包，但仍会在 migration 前严格复验当前 commit 的双包；缺少预先验证的当前产物时服务保持停止并终止部署。
 
 ```env
 MIGRATION_TIMEOUT=20m
@@ -120,16 +120,17 @@ Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirm
 `verify-extension-byok-rollout-policy.mjs`，并显式传入期望的 hosted 开关、revision、owner、
 shop、device session、Provider origin 和 operations；`maxConcurrency` 必须为 1。
 
-正式扩展发布还要求私有部署 env 明确提供三项独立审批证据，且每项都是不带路径、查询或片段
-的公开 HTTPS origin：
+正式扩展发布还要求私有部署 env 明确提供四项独立审批证据。前三项是不带路径、查询或片段
+的公开 HTTPS origin；local 首版只允许固定 loopback origin：
 
 ```text
 EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN
 EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN
 EXTENSION_RELEASE_EXPECTED_API_ORIGIN
+EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001
 ```
 
-三项值不会从 `EXTENSION_CLOUD_BASE_URL` / `NEXT_PUBLIC_*` 自动推导。`pnpm package:extension`
+四项值不会从 `EXTENSION_CLOUD_BASE_URL` / `NEXT_PUBLIC_*` 自动推导。`pnpm package:extension`
 一次计算版本并生成同版 cloud/local ZIP、SHA-256 清单和 canonical release evidence JSON；
 验证器会解包重验 defaults、manifest permissions、文件数、ZIP SHA/CRC 与完整 commit。Evidence
 中的 `signature.status=EXTERNAL_REQUIRED` 表示仍须完成真实签名/商店回执，不能把本地 JSON

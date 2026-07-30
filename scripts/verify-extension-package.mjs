@@ -31,6 +31,7 @@ const rawExpectedReleaseOrigins = {
   web: readCliOption('--expected-web-origin'),
   admin: readCliOption('--expected-admin-origin'),
   api: readCliOption('--expected-api-origin'),
+  local: readCliOption('--expected-local-origin'),
 };
 const failures = [];
 const warnings = [];
@@ -319,8 +320,8 @@ if (hasAnyExpectedReleaseOrigin) {
       rawExpectedReleaseOrigins,
       'package verifier expected origins',
     );
-    if (packageTarget !== 'cloud') {
-      fail('expected release origins are valid only for the strict cloud package');
+    if (packageTarget !== 'cloud' && packageTarget !== 'local') {
+      fail('expected release origins require a packaged cloud or local target');
     }
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
@@ -749,7 +750,18 @@ function containsExactUniqueSet(values, expected) {
     && expected.every((value) => values.includes(value));
 }
 
-if (expectedReleaseOrigins) {
+if (expectedReleaseOrigins && packageTarget === 'local') {
+  if (deploymentDefaults
+    && deploymentDefaults.web === expectedReleaseOrigins.local
+    && deploymentDefaults.admin === expectedReleaseOrigins.local
+    && deploymentDefaults.api === expectedReleaseOrigins.local) {
+    pass('local deployment defaults exactly match the independently approved loopback origin');
+  } else {
+    fail('local deployment defaults do not match the independently approved loopback origin');
+  }
+}
+
+if (expectedReleaseOrigins && packageTarget === 'cloud') {
   if (deploymentDefaults
     && deploymentDefaults.web === expectedReleaseOrigins.web
     && deploymentDefaults.admin === expectedReleaseOrigins.admin

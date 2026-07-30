@@ -150,16 +150,25 @@ function deployedCommit() {
 
 function releaseProvenance() {
   const sourceMode = extensionReleaseSourceMode(repoRoot, sourceDir);
+  if (sourceMode === 'EXTERNAL_SOURCE'
+    && process.env.EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE !== '1') {
+    throw new Error('formal extension releases must use repository source');
+  }
   const archiveCommit = deployedCommit();
-  return resolveExtensionReleaseProvenance({
+  const repositoryHead = gitHead();
+  const requireCleanGit = sourceMode === 'REPOSITORY_SOURCE' && repositoryHead !== '';
+  const resolved = resolveExtensionReleaseProvenance({
     deployedCommit: archiveCommit,
-    gitCommit: archiveCommit === undefined ? gitHead() : undefined,
+    gitCommit: archiveCommit === undefined ? repositoryHead : undefined,
+    activeGitCommit: repositoryHead || undefined,
     sourceMode,
-    gitStatus: archiveCommit === undefined && sourceMode === 'REPOSITORY_SOURCE'
+    requireCleanGit,
+    gitStatus: requireCleanGit
       ? extensionReleaseScopedGitStatus({ repoRoot, sourceDir })
       : '',
     packageInputsSha256: extensionReleasePackageInputsSha256({ repoRoot, sourceDir }),
   });
+  return { ...resolved, requireCleanGit };
 }
 
 function packagedFileCount(root, subdirectory = '') {
@@ -212,6 +221,12 @@ try {
   lockDescriptor = acquireReleaseLock(lockPath);
   ownsLock = true;
   const expectedOrigins = readExpectedReleaseOrigins(process.env);
+  const configuredLocalOrigin = String(
+    process.env.EXTENSION_LOCAL_BASE_URL || expectedOrigins.local,
+  ).trim();
+  if (configuredLocalOrigin !== expectedOrigins.local) {
+    throw new Error('formal local extension origin does not match its independent approval');
+  }
   const resolvedProvenance = releaseProvenance();
   const gitCommit = resolvedProvenance.gitCommit;
   const version = resolveVersion();
@@ -251,8 +266,10 @@ try {
     fileCounts.set(target, packagedFileCount(path.join(outRoot, `ss-erp-${target}`)));
   }
 
-  const requireCleanGit = resolvedProvenance.provenance.commitSource === 'GIT_HEAD'
-    && resolvedProvenance.provenance.sourceMode === 'REPOSITORY_SOURCE';
+  const requireCleanGit = resolvedProvenance.requireCleanGit;
+  if (requireCleanGit && gitHead() !== resolvedProvenance.gitCommit) {
+    throw new Error('active Git HEAD changed during extension release packaging');
+  }
   assertExtensionReleaseInputsUnchanged({
     expectedSourceMode: resolvedProvenance.provenance.sourceMode,
     actualSourceMode: extensionReleaseSourceMode(repoRoot, sourceDir),
@@ -304,6 +321,8 @@ try {
       expectedOrigins.admin,
       '--expected-api-origin',
       expectedOrigins.api,
+      '--expected-local-origin',
+      expectedOrigins.local,
     ],
     { cwd: repoRoot, stdio: 'inherit', env: process.env },
   );

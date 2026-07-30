@@ -1,7 +1,13 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { readdir, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import {
+  loadVerifiedExtensionReleaseSet,
+  readVerifiedExtensionReleaseArtifact,
+  type VerifiedExtensionReleaseArtifact,
+  type VerifiedExtensionReleaseSet,
+} from '../services/extension-release-set.js';
 
 type ExtensionTarget = 'cloud' | 'local';
 
@@ -18,6 +24,12 @@ interface BuiltManifest {
 interface ExtensionReleaseTarget {
   filename: string;
   downloadUrl: string;
+  sha256?: string;
+}
+
+interface ExtensionDownloadRouteOptions {
+  buildRoot?: string;
+  allowUnverifiedDevelopmentBuild?: boolean;
 }
 
 function findExtensionBuildRoot(): string | null {
@@ -28,28 +40,27 @@ function findExtensionBuildRoot(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) || null;
 }
 
-function getExtensionBuildRoot(): string {
+function getExtensionBuildRoot(configuredRoot?: string): string {
+  if (configuredRoot) return path.resolve(configuredRoot);
   const found = findExtensionBuildRoot();
-  if (!found) {
-    throw new Error('扩展构建目录不存在：build/extensions');
-  }
-  return found;
+  return found || path.resolve(process.cwd(), '../../build/extensions');
 }
 
-function getExtensionBuildDir(target: ExtensionTarget): string {
-  return path.join(getExtensionBuildRoot(), `ss-erp-${target}`);
+function getExtensionBuildDir(buildRoot: string, target: ExtensionTarget): string {
+  return path.join(buildRoot, `ss-erp-${target}`);
 }
 
-async function readOptionalBuiltManifest(target: ExtensionTarget): Promise<BuiltManifest | null> {
-  const buildRoot = findExtensionBuildRoot();
-  if (!buildRoot) return null;
+async function readOptionalBuiltManifest(
+  buildRoot: string,
+  target: ExtensionTarget,
+): Promise<BuiltManifest | null> {
   const manifestPath = path.join(buildRoot, `ss-erp-${target}`, 'manifest.json');
   if (!existsSync(manifestPath)) return null;
   return JSON.parse(await readFile(manifestPath, 'utf8')) as BuiltManifest;
 }
 
-function extensionZipPath(target: ExtensionTarget, version: string): string {
-  return path.join(getExtensionBuildRoot(), `ss-erp-${target}-${version}.zip`);
+function extensionZipPath(buildRoot: string, target: ExtensionTarget, version: string): string {
+  return path.join(buildRoot, `ss-erp-${target}-${version}.zip`);
 }
 
 async function listFiles(root: string, dir = ''): Promise<string[]> {
@@ -68,8 +79,11 @@ async function listFiles(root: string, dir = ''): Promise<string[]> {
   return files;
 }
 
-async function buildExtensionEntries(target: ExtensionTarget): Promise<{ entries: ZipEntry[]; version: string }> {
-  const buildDir = getExtensionBuildDir(target);
+async function buildExtensionEntries(
+  buildRoot: string,
+  target: ExtensionTarget,
+): Promise<{ entries: ZipEntry[]; version: string }> {
+  const buildDir = getExtensionBuildDir(buildRoot, target);
   const manifestPath = path.join(buildDir, 'manifest.json');
   if (!existsSync(manifestPath)) {
     throw new Error(`扩展 ${target} 构建产物不存在，请先运行 pnpm package:extension:${target}`);
@@ -208,9 +222,77 @@ function parseTarget(raw: string): ExtensionTarget | null {
   return raw === 'cloud' || raw === 'local' ? raw : null;
 }
 
-export async function extensionDownloadRoutes(app: FastifyInstance) {
+export async function extensionDownloadRoutes(
+  app: FastifyInstance,
+  options: ExtensionDownloadRouteOptions = {},
+) {
+  const buildRoot = getExtensionBuildRoot(options.buildRoot);
+  const allowDevelopmentFallback = options.allowUnverifiedDevelopmentBuild === true
+    && process.env.NODE_ENV !== 'production';
+  const repositoryRoot = path.dirname(path.dirname(buildRoot));
+  const verifiedRelease: VerifiedExtensionReleaseSet | null = await loadVerifiedExtensionReleaseSet({
+    buildRoot,
+    deployedCommitPath: path.join(repositoryRoot, 'DEPLOYED_COMMIT'),
+    requireDeployedCommit: process.env.NODE_ENV === 'production',
+  }).catch(() => null);
+  const artifactBytes = new Map<ExtensionTarget, Promise<Buffer>>();
+
+  function verifiedDownloadUrl(artifact: VerifiedExtensionReleaseArtifact) {
+    if (!verifiedRelease) throw new Error('verified extension release is unavailable');
+    return `/api/extensions/download/${artifact.target}/${verifiedRelease.version}/${artifact.zipSha256}`;
+  }
+
+  async function sendVerifiedArtifact(target: ExtensionTarget, reply: FastifyReply) {
+    if (!verifiedRelease) {
+      return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
+    }
+    const artifact = verifiedRelease.artifacts[target];
+    let bytesPromise = artifactBytes.get(target);
+    if (!bytesPromise) {
+      bytesPromise = readVerifiedExtensionReleaseArtifact(verifiedRelease, target);
+      artifactBytes.set(target, bytesPromise);
+    }
+    try {
+      const bytes = await bytesPromise;
+      reply.header('Content-Type', 'application/zip');
+      reply.header('Content-Disposition', `attachment; filename="${artifact.filename}"`);
+      reply.header('Content-Length', String(bytes.length));
+      reply.header('Cache-Control', 'private, no-store');
+      reply.header('X-Content-SHA256', artifact.zipSha256);
+      return reply.send(bytes);
+    } catch {
+      return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
+    }
+  }
+
   app.get('/latest', async (_request, reply) => {
-    const cloudManifest = await readOptionalBuiltManifest('cloud');
+    reply.header('Cache-Control', 'private, no-store');
+    if (verifiedRelease) {
+      const targets = Object.fromEntries(
+        (['cloud', 'local'] as const).map((target) => [target, {
+          filename: verifiedRelease.artifacts[target].filename,
+          downloadUrl: verifiedDownloadUrl(verifiedRelease.artifacts[target]),
+          sha256: verifiedRelease.artifacts[target].zipSha256,
+        }]),
+      ) as Record<ExtensionTarget, ExtensionReleaseTarget>;
+      return reply.send({
+        code: 1,
+        data: {
+          version: verifiedRelease.version,
+          gitCommit: verifiedRelease.gitCommit,
+          signatureStatus: verifiedRelease.signatureStatus,
+          targets,
+        },
+      });
+    }
+    if (!allowDevelopmentFallback) {
+      return reply.status(404).send({
+        code: 0,
+        msg: '扩展发布证据不完整或无效',
+      });
+    }
+
+    const cloudManifest = await readOptionalBuiltManifest(buildRoot, 'cloud');
     if (!cloudManifest) {
       return reply.status(404).send({
         code: 0,
@@ -226,7 +308,7 @@ export async function extensionDownloadRoutes(app: FastifyInstance) {
       },
     };
 
-    const localManifest = await readOptionalBuiltManifest('local');
+    const localManifest = await readOptionalBuiltManifest(buildRoot, 'local');
     if (localManifest) {
       const localVersion = localManifest.version || '0.0.0';
       targets.local = {
@@ -244,15 +326,42 @@ export async function extensionDownloadRoutes(app: FastifyInstance) {
     });
   });
 
-  app.get('/download/:target', async (request, reply) => {
-    const target = parseTarget((request.params as { target: string }).target);
+  app.get<{
+    Params: { target: string; version: string; sha256: string };
+  }>('/download/:target/:version/:sha256', async (request, reply) => {
+    const target = parseTarget(request.params.target);
+    if (!target) {
+      return reply.status(400).send({ code: 0, msg: 'target must be cloud or local' });
+    }
+    const artifact = verifiedRelease?.artifacts[target];
+    if (!artifact
+      || request.params.version !== verifiedRelease?.version
+      || request.params.sha256 !== artifact.zipSha256) {
+      return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
+    }
+    return sendVerifiedArtifact(target, reply);
+  });
+
+  app.get<{ Params: { target: string } }>('/download/:target', async (request, reply) => {
+    const target = parseTarget(request.params.target);
     if (!target) {
       return reply.status(400).send({ code: 0, msg: 'target must be cloud or local' });
     }
 
+    if (verifiedRelease) {
+      reply.header('Cache-Control', 'private, no-store');
+      return reply.redirect(verifiedDownloadUrl(verifiedRelease.artifacts[target]));
+    }
+    if (!allowDevelopmentFallback) {
+      return reply.status(404).send({
+        code: 0,
+        msg: '扩展发布证据不完整或无效',
+      });
+    }
+
     let build;
     try {
-      build = await buildExtensionEntries(target);
+      build = await buildExtensionEntries(buildRoot, target);
     } catch (error) {
       return reply.status(404).send({
         code: 0,
@@ -262,7 +371,7 @@ export async function extensionDownloadRoutes(app: FastifyInstance) {
 
     const { entries, version } = build;
     const filename = `ss-erp-${target}-${version}.zip`;
-    const prebuiltZipPath = extensionZipPath(target, version);
+    const prebuiltZipPath = extensionZipPath(buildRoot, target, version);
     const zip = existsSync(prebuiltZipPath) ? await readFile(prebuiltZipPath) : createZip(entries);
 
     reply.header('Content-Type', 'application/zip');

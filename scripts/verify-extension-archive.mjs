@@ -2,13 +2,15 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  existsSync,
+  closeSync,
+  constants,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -21,6 +23,24 @@ const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_ENTRIES = 10_000;
+
+function readArchiveNoFollow(file) {
+  let descriptor = null;
+  try {
+    descriptor = openSync(
+      file,
+      constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
+    );
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) throw new Error(`extension ZIP is missing: ${file}`);
+    if (metadata.size > MAX_ARCHIVE_BYTES) {
+      throw new Error('ZIP size is outside the extension archive limit');
+    }
+    return readFileSync(descriptor);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+  }
+}
 
 function option(name) {
   const index = cliArgs.indexOf(name);
@@ -243,6 +263,7 @@ function main() {
     web: option('--expected-web-origin'),
     admin: option('--expected-admin-origin'),
     api: option('--expected-api-origin'),
+    local: option('--expected-local-origin'),
   };
   const hasAnyExpectedOrigin = Object.values(rawExpectedOrigins).some(Boolean);
   const expectedOrigins = hasAnyExpectedOrigin
@@ -251,9 +272,6 @@ function main() {
   const expectedFileCountValue = option('--expected-file-count');
   const expectedFileCount = expectedFileCountValue ? Number(expectedFileCountValue) : null;
   if (!['cloud', 'local'].includes(target)) throw new Error('--target must be cloud or local');
-  if (expectedOrigins && target !== 'cloud') {
-    throw new Error('expected release origins are valid only for the cloud archive');
-  }
   if (expectedFileCountValue
     && (!/^[1-9][0-9]{0,4}$/u.test(expectedFileCountValue)
       || !Number.isSafeInteger(expectedFileCount)
@@ -264,9 +282,7 @@ function main() {
   if (expectedSha256 && !/^[a-f0-9]{64}$/u.test(expectedSha256)) {
     throw new Error('--expected-sha256 must be 64 lowercase hexadecimal characters');
   }
-  if (!existsSync(zipPath) || !statSync(zipPath).isFile()) throw new Error(`extension ZIP is missing: ${zipPath}`);
-  if (statSync(zipPath).size > MAX_ARCHIVE_BYTES) throw new Error('ZIP size is outside the extension archive limit');
-  const archive = readFileSync(zipPath);
+  const archive = readArchiveNoFollow(zipPath);
   const sha256 = createHash('sha256').update(archive).digest('hex');
   if (expectedSha256 && sha256 !== expectedSha256) {
     throw new Error(`extension ZIP SHA-256 mismatch: expected ${expectedSha256}, received ${sha256}`);
@@ -312,6 +328,8 @@ function main() {
         expectedOrigins.admin,
         '--expected-api-origin',
         expectedOrigins.api,
+        '--expected-local-origin',
+        expectedOrigins.local,
       );
     }
     const verification = spawnSync(process.execPath, verifyArgs, {

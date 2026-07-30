@@ -86,7 +86,26 @@ export function extensionReleaseScopedGitStatus({ repoRoot, sourceDir }) {
     { cwd: repoRoot, encoding: 'utf8' },
   );
   if (result.status !== 0) throw new Error('could not inspect extension release input Git state');
-  return String(result.stdout || '');
+  const ignored = spawnSync(
+    'git',
+    [
+      'ls-files',
+      '--others',
+      '--ignored',
+      '--exclude-standard',
+      '--',
+      sourcePath,
+      ...EXTENSION_RELEASE_CONTROLLED_INPUTS,
+    ],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  if (ignored.status !== 0) throw new Error('could not inspect ignored extension release inputs');
+  const ignoredStatus = String(ignored.stdout || '')
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((file) => `!! ${file}\n`)
+    .join('');
+  return `${String(result.stdout || '')}${ignoredStatus}`;
 }
 
 export function assertExtensionReleaseInputsUnchanged(input) {

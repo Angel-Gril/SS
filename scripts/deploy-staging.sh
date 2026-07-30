@@ -73,6 +73,14 @@ echo "[1/7] Pulling latest code..."
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
 git pull --ff-only origin "$BRANCH"
+if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options "HEAD^{commit}" 2>/dev/null)"; then
+  echo "ERROR: staging HEAD is not a commit" >&2
+  exit 1
+fi
+if [[ ! "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ERROR: staging HEAD did not resolve to a full 40-character commit OID" >&2
+  exit 1
+fi
 
 # 2. 安装依赖
 echo "[2/7] Installing dependencies..."
@@ -103,6 +111,7 @@ if ! sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE"; then
   exit 1
 fi
 SERVICES_QUIESCED=1
+printf '%s\n' "$COMMIT_HASH" > DEPLOYED_COMMIT
 
 # 4. 构建
 if [ "$SKIP_BUILD" = false ]; then
@@ -117,6 +126,14 @@ if [ "$SKIP_BUILD" = false ]; then
 else
   echo "[4-5/7] Skipping build (--skip-build)"
 fi
+
+echo "[5c/7] Verifying current commit extension release set..."
+node scripts/verify-extension-release.mjs \
+  --build-root "$DEPLOY_DIR/build/extensions" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin "$EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN"
 
 # 6. 迁移并重启服务
 echo "[6b/7] Running database migrations..."

@@ -1,5 +1,14 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
@@ -29,34 +38,72 @@ function option(name) {
 function existingFile(value, label, maxBytes) {
   if (!value) throw new Error(`${label} is required`);
   const file = path.resolve(value);
-  if (!existsSync(file) || !statSync(file).isFile()) {
+  if (!existsSync(file)) throw new Error(`${label} is missing: ${file}`);
+  const fileStat = lstatSync(file);
+  if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
     throw new Error(`${label} is missing: ${file}`);
   }
-  if (statSync(file).size > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`);
+  if (fileStat.size > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`);
   return file;
 }
 
-function currentGitCommit() {
-  const deployedCommitPath = path.join(repoRoot, 'DEPLOYED_COMMIT');
-  if (existsSync(deployedCommitPath)) {
-    const match = readFileSync(deployedCommitPath, 'utf8')
-      .match(/^([a-f0-9]{40})(?:\r?\n)?$/iu);
-    if (!match) throw new Error('DEPLOYED_COMMIT must contain one full 40-character Git object ID');
-    return { gitCommit: match[1].toLowerCase(), commitSource: 'DEPLOYED_COMMIT' };
+function readFileNoFollow(file, label, maxBytes) {
+  let descriptor = null;
+  try {
+    descriptor = openSync(
+      file,
+      constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
+    );
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.size > maxBytes) {
+      throw new Error(`${label} is missing or exceeds ${maxBytes} bytes`);
+    }
+    return readFileSync(descriptor);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
   }
+}
+
+function gitHeadCommit() {
   const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
   const commit = String(result.stdout || '').trim().toLowerCase();
-  if (result.status === 0 && /^[a-f0-9]{40}$/u.test(commit)) {
-    return { gitCommit: commit, commitSource: 'GIT_HEAD' };
+  return result.status === 0 && /^[a-f0-9]{40}$/u.test(commit) ? commit : '';
+}
+
+function currentGitCommit() {
+  const deployedCommitPath = path.join(repoRoot, 'DEPLOYED_COMMIT');
+  const activeGitCommit = gitHeadCommit();
+  if (existsSync(deployedCommitPath)) {
+    const match = readFileNoFollow(deployedCommitPath, 'DEPLOYED_COMMIT', 128).toString('utf8')
+      .match(/^([a-f0-9]{40})(?:\r?\n)?$/iu);
+    if (!match) throw new Error('DEPLOYED_COMMIT must contain one full 40-character Git object ID');
+    const gitCommit = match[1].toLowerCase();
+    if (activeGitCommit && activeGitCommit !== gitCommit) {
+      throw new Error('DEPLOYED_COMMIT does not match active Git HEAD');
+    }
+    return {
+      gitCommit,
+      commitSource: 'DEPLOYED_COMMIT',
+      activeGitCheckout: Boolean(activeGitCommit),
+    };
   }
+  if (activeGitCommit) return {
+    gitCommit: activeGitCommit,
+    commitSource: 'GIT_HEAD',
+    activeGitCheckout: true,
+  };
   throw new Error('release Git commit requires Git HEAD or a full 40-character DEPLOYED_COMMIT');
 }
 
 function readCanonicalEvidence(evidencePath) {
-  const text = readFileSync(evidencePath, 'utf8');
+  const text = readFileNoFollow(
+    evidencePath,
+    'extension release evidence',
+    65_536,
+  ).toString('utf8');
   if (text.charCodeAt(0) === 0xfeff || text.includes('\r')) {
     throw new Error('extension release evidence must be canonical UTF-8 with LF line endings');
   }
@@ -77,7 +124,11 @@ function readCanonicalEvidence(evidencePath) {
 }
 
 function readChecksumRecords(checksumPath) {
-  const text = readFileSync(checksumPath, 'utf8');
+  const text = readFileNoFollow(
+    checksumPath,
+    'extension release checksum manifest',
+    4096,
+  ).toString('utf8');
   if (text.charCodeAt(0) === 0xfeff || text.includes('\r')) {
     throw new Error('extension release checksum manifest must be canonical UTF-8 with LF line endings');
   }
@@ -102,9 +153,69 @@ function readChecksumRecords(checksumPath) {
   return records;
 }
 
+function selectCurrentRelease(buildRoot, resolvedCommit) {
+  const root = path.resolve(buildRoot);
+  if (!existsSync(root)) throw new Error(`extension release build root is missing: ${root}`);
+  const rootStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error(`extension release build root is missing: ${root}`);
+  }
+  const names = readdirSync(root).filter((name) => (
+    /^ss-erp-extension-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.release-evidence\.json$/u
+      .test(name)
+  ));
+  if (names.length < 1 || names.length > 256) {
+    throw new Error('extension release build root must contain 1 to 256 evidence candidates');
+  }
+  const matches = names.map((name) => {
+    const evidencePath = existingFile(
+      path.join(root, name),
+      'extension release evidence',
+      65_536,
+    );
+    return { evidencePath, evidence: readCanonicalEvidence(evidencePath) };
+  }).filter(({ evidence }) => (
+    evidence.gitCommit === resolvedCommit.gitCommit
+    && evidence.provenance.commitSource === resolvedCommit.commitSource
+    && evidence.provenance.sourceMode === 'REPOSITORY_SOURCE'
+  ));
+  matches.sort((left, right) => {
+    const leftParts = left.evidence.version.split('.').map(Number);
+    const rightParts = right.evidence.version.split('.').map(Number);
+    for (let index = 0; index < 3; index += 1) {
+      if (leftParts[index] !== rightParts[index]) return rightParts[index] - leftParts[index];
+    }
+    return 0;
+  });
+  const selected = matches[0];
+  if (!selected) throw new Error('no repository-source extension release matches the active commit');
+  return {
+    evidencePath: selected.evidencePath,
+    checksumPath: existingFile(
+      path.join(root, selected.evidence.checksumFilename),
+      'extension release checksum manifest',
+      4096,
+    ),
+  };
+}
+
 function main() {
-  const checksumPath = existingFile(option('--checksum'), 'extension release checksum manifest', 4096);
-  const evidencePath = existingFile(option('--evidence'), 'extension release evidence', 65_536);
+  const resolvedCommit = currentGitCommit();
+  const buildRoot = option('--build-root');
+  if (buildRoot && (option('--checksum') || option('--evidence'))) {
+    throw new Error('--build-root cannot be combined with --checksum or --evidence');
+  }
+  const selected = buildRoot
+    ? selectCurrentRelease(buildRoot, resolvedCommit)
+    : {
+        checksumPath: existingFile(
+          option('--checksum'),
+          'extension release checksum manifest',
+          4096,
+        ),
+        evidencePath: existingFile(option('--evidence'), 'extension release evidence', 65_536),
+      };
+  const { checksumPath, evidencePath } = selected;
   if (path.dirname(checksumPath) !== path.dirname(evidencePath)) {
     throw new Error('extension release checksum and evidence must share one artifact directory');
   }
@@ -112,16 +223,20 @@ function main() {
     web: option('--expected-web-origin'),
     admin: option('--expected-admin-origin'),
     api: option('--expected-api-origin'),
+    local: option('--expected-local-origin'),
   }, 'release verifier expected origins');
   const evidence = readCanonicalEvidence(evidencePath);
-  const resolvedCommit = currentGitCommit();
   if (evidence.gitCommit !== resolvedCommit.gitCommit
     || evidence.provenance.commitSource !== resolvedCommit.commitSource) {
     throw new Error('extension release evidence Git commit does not match active provenance');
   }
   const sourceDir = path.resolve(process.env.EXTENSION_SOURCE_DIR || 'extensions/ss-erp');
   const actualSourceMode = extensionReleaseSourceMode(repoRoot, sourceDir);
-  const requireCleanGit = evidence.provenance.commitSource === 'GIT_HEAD'
+  if (evidence.provenance.sourceMode === 'EXTERNAL_SOURCE'
+    && process.env.EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE !== '1') {
+    throw new Error('formal extension releases must use repository source');
+  }
+  const requireCleanGit = resolvedCommit.activeGitCheckout
     && evidence.provenance.sourceMode === 'REPOSITORY_SOURCE';
   assertExtensionReleaseInputsUnchanged({
     expectedSourceMode: evidence.provenance.sourceMode,
@@ -133,7 +248,7 @@ function main() {
       ? extensionReleaseScopedGitStatus({ repoRoot, sourceDir })
       : '',
   });
-  for (const key of ['web', 'admin', 'api']) {
+  for (const key of ['web', 'admin', 'api', 'local']) {
     if (evidence.expectedOrigins[key] !== expectedOrigins[key]) {
       throw new Error(`extension release evidence ${key} origin does not match explicit expectation`);
     }
@@ -164,16 +279,16 @@ function main() {
       '--expected-file-count',
       String(artifact.fileCount),
     ];
-    if (record.target === 'cloud') {
-      args.push(
-        '--expected-web-origin',
-        expectedOrigins.web,
-        '--expected-admin-origin',
-        expectedOrigins.admin,
-        '--expected-api-origin',
-        expectedOrigins.api,
-      );
-    }
+    args.push(
+      '--expected-web-origin',
+      expectedOrigins.web,
+      '--expected-admin-origin',
+      expectedOrigins.admin,
+      '--expected-api-origin',
+      expectedOrigins.api,
+      '--expected-local-origin',
+      expectedOrigins.local,
+    );
     const verification = spawnSync(process.execPath, args, {
       cwd: repoRoot,
       stdio: 'inherit',

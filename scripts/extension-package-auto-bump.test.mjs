@@ -15,17 +15,24 @@ const sourceDir = path.join(root, 'source');
 const outDir = path.join(root, 'out');
 const previousBuildRoot = path.join(root, 'previous');
 const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const releaseInputsSource = fs.readFileSync('scripts/extension-release-inputs.mjs', 'utf8');
 const repositoryManifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
 const expectedOrigins = {
   web: 'https://release-web.fixture.example',
   admin: 'https://release-admin.fixture.example',
   api: 'https://release-api.fixture.example',
+  local: 'http://127.0.0.1:3001',
 };
 
 assert.equal(
   packageJson.scripts['package:extension'],
   'node scripts/package-extension-release.mjs',
   'the formal release command must coordinate cloud and local packages',
+);
+assert.match(
+  releaseInputsSource,
+  /'ls-files',[\s\S]*'--ignored',[\s\S]*'--exclude-standard'/u,
+  'repository release provenance must reject ignored source files that packaging would copy',
 );
 assert.equal(
   repositoryManifest.version,
@@ -171,6 +178,30 @@ assert.deepEqual(resolveExtensionReleaseProvenance({
 }, 'archive provenance must prefer full DEPLOYED_COMMIT over a parent repository HEAD');
 assert.throws(
   () => resolveExtensionReleaseProvenance({
+    deployedCommit: '1'.repeat(40),
+    activeGitCommit: '1'.repeat(40),
+    sourceMode: 'REPOSITORY_SOURCE',
+    requireCleanGit: true,
+    gitStatus: ' M extensions/ss-erp/manifest.json\n',
+    packageInputsSha256: provenanceDigest,
+  }),
+  /differ from Git HEAD/u,
+  'a Git checkout must reject dirty controlled inputs even when DEPLOYED_COMMIT exists',
+);
+assert.throws(
+  () => resolveExtensionReleaseProvenance({
+    deployedCommit: '1'.repeat(40),
+    activeGitCommit: '2'.repeat(40),
+    sourceMode: 'REPOSITORY_SOURCE',
+    requireCleanGit: true,
+    gitStatus: '',
+    packageInputsSha256: provenanceDigest,
+  }),
+  /does not match active Git HEAD/u,
+  'a Git checkout must not bind package evidence to a stale deployment marker',
+);
+assert.throws(
+  () => resolveExtensionReleaseProvenance({
     gitCommit: '2'.repeat(40),
     sourceMode: 'REPOSITORY_SOURCE',
     gitStatus: '?? extensions/ss-erp/untracked.js\n',
@@ -215,11 +246,31 @@ function packageRelease(outputDirectory = outDir, extraEnvironment = {}) {
       EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN: expectedOrigins.web,
       EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN: expectedOrigins.admin,
       EXTENSION_RELEASE_EXPECTED_API_ORIGIN: expectedOrigins.api,
+      EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN: expectedOrigins.local,
+      EXTENSION_LOCAL_BASE_URL: expectedOrigins.local,
+      EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE: '1',
       ...extraEnvironment,
     },
     maxBuffer: 32 * 1024 * 1024,
   });
 }
+
+const externalDenied = packageRelease(path.join(root, 'external-denied'), {
+  EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE: '',
+});
+assert.notEqual(externalDenied.status, 0);
+assert.match(
+  `${externalDenied.stdout}\n${externalDenied.stderr}`,
+  /formal extension releases must use repository source/u,
+);
+const localOriginDenied = packageRelease(path.join(root, 'local-origin-denied'), {
+  EXTENSION_LOCAL_BASE_URL: 'https://remote-local.example',
+});
+assert.notEqual(localOriginDenied.status, 0);
+assert.match(
+  `${localOriginDenied.stdout}\n${localOriginDenied.stderr}`,
+  /formal local extension origin does not match its independent approval/u,
+);
 
 const lockedOutDir = path.join(root, 'locked-out');
 fs.mkdirSync(lockedOutDir);
@@ -335,6 +386,8 @@ function releaseOriginArgs(origins = expectedOrigins) {
     origins.admin,
     '--expected-api-origin',
     origins.api,
+    '--expected-local-origin',
+    origins.local,
   ];
 }
 
@@ -351,7 +404,11 @@ const verifyRelease = (origins = expectedOrigins) => spawnSync(
   {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, EXTENSION_SOURCE_DIR: sourceDir },
+    env: {
+      ...process.env,
+      EXTENSION_SOURCE_DIR: sourceDir,
+      EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE: '1',
+    },
     maxBuffer: 32 * 1024 * 1024,
   },
 );
@@ -371,6 +428,41 @@ assert.match(
   /package inputs changed after provenance capture/u,
 );
 fs.writeFileSync(sourceManifestPath, sourceManifestBeforeDrift);
+
+if (process.platform !== 'win32') {
+  for (const artifactPath of [evidencePath, checksumPath]) {
+    const realPath = `${artifactPath}.real`;
+    fs.renameSync(artifactPath, realPath);
+    fs.symlinkSync(realPath, artifactPath, 'file');
+    const symlinkVerification = verifyRelease();
+    assert.notEqual(symlinkVerification.status, 0, 'release metadata symlinks must fail closed');
+    fs.rmSync(artifactPath);
+    fs.renameSync(realPath, artifactPath);
+  }
+  for (const target of ['cloud', 'local']) {
+    const zipPath = path.join(outDir, `ss-erp-${target}-1.0.265.zip`);
+    const realPath = `${zipPath}.real`;
+    fs.renameSync(zipPath, realPath);
+    fs.symlinkSync(realPath, zipPath, 'file');
+    const symlinkVerification = spawnSync(
+      process.execPath,
+      [
+        'scripts/verify-extension-archive.mjs',
+        '--zip',
+        zipPath,
+        '--target',
+        target,
+        '--version',
+        '1.0.265',
+        ...releaseOriginArgs(),
+      ],
+      { cwd: process.cwd(), encoding: 'utf8', env: process.env },
+    );
+    assert.notEqual(symlinkVerification.status, 0, 'extension ZIP symlinks must fail closed');
+    fs.rmSync(zipPath);
+    fs.renameSync(realPath, zipPath);
+  }
+}
 
 const cloudDirectory = path.join(outDir, 'ss-erp-cloud');
 const cloudManifestPath = path.join(cloudDirectory, 'manifest.json');
