@@ -20,12 +20,20 @@ import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
+import {
+  AI_IMAGE_SANDBOX_MAX_COST_CENTS,
+  AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+  AiImageSandboxMoneyError,
+  type AiImageSandboxMoney,
+  assertAiImageSandboxMoneyMajorUnitLimit,
+  assertAiImageSandboxMoneyPair,
+  parseAiImageSandboxMoneyIntegers,
+} from '../src/services/ai-image-sandbox-money.js';
 
 export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT =
   'DRAFT_REVIEW_REQUIRED_NOT_APPROVED';
 export const AI_IMAGE_SANDBOX_APPROVAL_DRAFT_TIMESTAMP = 'REPLACE_DURING_REVIEW';
 
-const MAX_SANDBOX_COST_CENTS = 10_000_000;
 const OPERATIONS = new Set<AiImageSandboxApprovalDraftOperation>([
   'TEXT_TO_IMAGE',
   'IMAGE_TO_IMAGE',
@@ -52,6 +60,7 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/scripts/ai-image-provider-approval-draft.ts',
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
@@ -64,8 +73,7 @@ type AiImageSandboxApprovalDraftOperation =
   | 'FULL_EDIT'
   | 'INPAINT';
 
-export interface AiImageSandboxApprovalDraft {
-  schemaVersion: 2;
+interface AiImageSandboxApprovalDraftBase {
   approvalId: string;
   statement: typeof AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT;
   approvedAt: typeof AI_IMAGE_SANDBOX_APPROVAL_DRAFT_TIMESTAMP;
@@ -73,7 +81,6 @@ export interface AiImageSandboxApprovalDraft {
   approverRef: string;
   providerAccountRef: string;
   pricingRevision: string;
-  currency: string;
   preCallBillingSnapshotRef: string;
   billingReconciliationRef: string;
   requestCount: 1;
@@ -87,9 +94,24 @@ export interface AiImageSandboxApprovalDraft {
   adapterRevision: string;
   sourceSha256: string[];
   maskSha256: string | null;
+}
+
+export interface AiImageSandboxApprovalDraftV2 extends AiImageSandboxApprovalDraftBase {
+  schemaVersion: 2;
+  currency: string;
   quotedCostCents: number;
   maximumCostCents: number;
 }
+
+export interface AiImageSandboxApprovalDraftV3 extends AiImageSandboxApprovalDraftBase {
+  schemaVersion: 3;
+  quotedCost: AiImageSandboxMoney;
+  maximumCost: AiImageSandboxMoney;
+}
+
+export type AiImageSandboxApprovalDraft =
+  | AiImageSandboxApprovalDraftV2
+  | AiImageSandboxApprovalDraftV3;
 
 export interface AiImageProviderApprovalDraftOptions {
   environment?: NodeJS.ProcessEnv;
@@ -154,13 +176,65 @@ function requiredCost(name: string, environment: NodeJS.ProcessEnv) {
     );
   }
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value > MAX_SANDBOX_COST_CENTS) {
+  if (!Number.isSafeInteger(value) || value > AI_IMAGE_SANDBOX_MAX_COST_CENTS) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
       `${name} exceeds the sandbox evidence bound`,
     );
   }
   return value;
+}
+
+function hasEnvironment(name: string, environment: NodeJS.ProcessEnv) {
+  return Boolean(String(environment[name] || '').trim());
+}
+
+function exactDraftCosts(environment: NodeJS.ProcessEnv) {
+  const exactNames = [
+    'AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT',
+    'AI_IMAGE_SANDBOX_MAX_COST_AMOUNT',
+    'AI_IMAGE_SANDBOX_COST_SCALE',
+  ];
+  const legacyNames = [
+    'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS',
+    'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
+  ];
+  const hasExact = exactNames.some((name) => hasEnvironment(name, environment));
+  const hasLegacy = legacyNames.some((name) => hasEnvironment(name, environment));
+  if (!hasExact) return null;
+  if (hasLegacy) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'Exact and legacy sandbox cost environment variables must not be mixed',
+    );
+  }
+  try {
+    const currency = requiredEnvironment('AI_IMAGE_SANDBOX_CURRENCY', environment);
+    const scale = requiredEnvironment('AI_IMAGE_SANDBOX_COST_SCALE', environment);
+    const quotedCost = parseAiImageSandboxMoneyIntegers({
+      currency,
+      amount: requiredEnvironment('AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT', environment),
+      scale,
+      field: 'Sandbox quoted cost',
+    });
+    const maximumCost = parseAiImageSandboxMoneyIntegers({
+      currency,
+      amount: requiredEnvironment('AI_IMAGE_SANDBOX_MAX_COST_AMOUNT', environment),
+      scale,
+      field: 'Sandbox maximum cost',
+    });
+    assertAiImageSandboxMoneyPair(quotedCost, maximumCost);
+    assertAiImageSandboxMoneyMajorUnitLimit(
+      maximumCost,
+      AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+    );
+    return { quotedCost, maximumCost };
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw draftError('SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID', error.message);
+    }
+    throw error;
+  }
 }
 
 function sha256(value: Buffer | string) {
@@ -696,9 +770,12 @@ export async function runAiImageProviderApprovalDraft(
     operation,
   });
   const model = requiredBoundedText('AI_IMAGE_SANDBOX_MODEL', environment, 200);
-  const quotedCostCents = requiredCost('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', environment);
-  const maximumCostCents = requiredCost('AI_IMAGE_SANDBOX_MAX_COST_CENTS', environment);
-  if (quotedCostCents > maximumCostCents) {
+  const exactCosts = exactDraftCosts(environment);
+  const legacyCosts = exactCosts ? null : {
+    quotedCostCents: requiredCost('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', environment),
+    maximumCostCents: requiredCost('AI_IMAGE_SANDBOX_MAX_COST_CENTS', environment),
+  };
+  if (legacyCosts && legacyCosts.quotedCostCents > legacyCosts.maximumCostCents) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
       'Quoted sandbox cost exceeds the proposed maximum',
@@ -712,8 +789,7 @@ export async function runAiImageProviderApprovalDraft(
       'Sandbox currency must be an uppercase ISO-style code',
     );
   }
-  const draft: AiImageSandboxApprovalDraft = {
-    schemaVersion: 2,
+  const draftBase: AiImageSandboxApprovalDraftBase = {
     approvalId,
     statement: AI_IMAGE_SANDBOX_APPROVAL_DRAFT_STATEMENT,
     approvedAt: AI_IMAGE_SANDBOX_APPROVAL_DRAFT_TIMESTAMP,
@@ -729,7 +805,6 @@ export async function runAiImageProviderApprovalDraft(
       environment,
       160,
     ),
-    currency,
     preCallBillingSnapshotRef: requiredBoundedText(
       'AI_IMAGE_SANDBOX_PRE_CALL_BILLING_SNAPSHOT_REF',
       environment,
@@ -751,9 +826,21 @@ export async function runAiImageProviderApprovalDraft(
     adapterRevision,
     sourceSha256: media.sourceSha256,
     maskSha256: media.maskSha256,
-    quotedCostCents,
-    maximumCostCents,
   };
+  const draft: AiImageSandboxApprovalDraft = exactCosts
+    ? {
+        schemaVersion: 3,
+        ...draftBase,
+        quotedCost: exactCosts.quotedCost,
+        maximumCost: exactCosts.maximumCost,
+      }
+    : {
+        schemaVersion: 2,
+        ...draftBase,
+        currency,
+        quotedCostCents: legacyCosts!.quotedCostCents,
+        maximumCostCents: legacyCosts!.maximumCostCents,
+      };
   const bytes = Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, 'utf8');
   const draftSha256 = sha256(bytes);
   await writeExclusivePrivateDraft(draftPath, bytes, options.beforeDraftWrite);

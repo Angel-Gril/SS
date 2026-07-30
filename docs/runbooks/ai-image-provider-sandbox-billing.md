@@ -1,10 +1,11 @@
 # QA-02 AI Image Sandbox Billing Finalization
 
-Use this offline finalizer only after one paid international image sandbox request has a current
-`schemaVersion: 2` immutable intent, fingerprint claim, and `schemaVersion: 4` submit report. It
-also retains read compatibility with historical `schemaVersion: 3` reports. It records settled
-Provider billing as a new sibling artifact; it never edits the original report, whose
-`actualCostCents` intentionally remains `null`.
+Use this offline finalizer only after one paid international image sandbox request has a compatible
+immutable evidence generation. A new exact-money request uses a `schemaVersion: 3` intent and
+`schemaVersion: 5` submit report. Legacy cents evidence uses intent v2/report v4, and historical
+report v3 remains readable. The finalizer records settled Provider billing as a new sibling
+artifact; it never edits the original report. Exact reports retain `actualCost: null`, while legacy
+reports retain `actualCostCents: null`.
 
 Billing finalization does not change the Provider outcome, authorize a retry, enable a capability,
 activate a feature flag, write a database, or contact the Provider. A
@@ -21,12 +22,15 @@ The finalizer derives these paths from the validated Operation ID and the privat
 ```
 
 It does not trust `intentPath`, `imagePath`, or other absolute paths stored in a report. Historical
-timestamp-less v2 reports, `PRE_DISPATCH_FAILED`, a report whose `actualCostCents` was modified, and
-any mismatched intent/report/claim are ineligible. For v4 reports it validates the explicit
+timestamp-less v2 reports, `PRE_DISPATCH_FAILED`, a report whose generation-specific actual-cost
+field was modified, and any mismatched intent/report/claim are ineligible. Exact intent v3, report
+v5, and billing attestation v2 must stay together; legacy generations cannot be mixed with them
+even when the numeric amount is equivalent. For v4/v5 reports the finalizer validates the explicit
 `operationEndpointSha256` against the immutable intent while retaining `apiBaseSha256` as the exact
-Registry-promotion digest. Historical v3 `endpointSha256` is read only as an operation-endpoint
-digest and is never reinterpreted as an API Base. The finalizer recomputes the transport-semantic
-request fingerprint rather than trusting matching values copied among the artifacts.
+Registry-promotion digest. Exact v3 intents independently bind that same API Base digest.
+Historical v3 report `endpointSha256` is read only as an operation-endpoint digest and is never
+reinterpreted as an API Base. The finalizer recomputes the transport-semantic request fingerprint
+rather than trusting matching values copied among the artifacts.
 
 The evidence root may be the deployment-managed top-level link to the private shared sandbox
 directory. The finalizer resolves that link once, requires its target to be a private directory, and
@@ -46,7 +50,7 @@ duplicate keys, invalid UTF-8, unsafe modes, file changes, and digest mismatches
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "settlementId": "qa02-full-edit-20260729-billing-01",
   "statement": "I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT",
   "operationId": "qa02-full-edit-20260729-01",
@@ -55,7 +59,6 @@ duplicate keys, invalid UTF-8, unsafe modes, file changes, and digest mismatches
   "reconcilerRef": "billing-review-20260729-01",
   "providerAccountRef": "relay-account-main",
   "pricingRevision": "provider-pricing-20260729",
-  "currency": "USD",
   "preCallBillingSnapshotRef": "private-ledger/qa02-full-edit-before",
   "billingReconciliationRef": "private-ledger/qa02-full-edit-after",
   "preCallBillingSnapshotPath": "/secure/qa02-full-edit-before.png",
@@ -72,13 +75,35 @@ duplicate keys, invalid UTF-8, unsafe modes, file changes, and digest mismatches
   "correlationMethod": "PROVIDER_REQUEST_ID",
   "providerRequestId": "private-provider-request-id",
   "billingOutcome": "CHARGED",
-  "actualCostCents": 10
+  "actualCost": {
+    "currency": "CNY",
+    "amount": 119,
+    "scale": 4
+  },
+  "meterEvidence": {
+    "schemaVersion": 1,
+    "kind": "NEW_API_QUOTA_AND_TOTAL_USAGE_V1",
+    "rawQuotaDelta": 5950,
+    "quotaUnitsPerCurrencyUnit": 500000,
+    "displayTotalUsageDelta": {
+      "amount": 119,
+      "scale": 2
+    },
+    "displayTotalUsageUnitCurrencyScale": 2
+  }
 }
 ```
 
 Rules:
 
-- `CHARGED` requires a positive integer `actualCostCents`; `NO_CHARGE` requires `0`.
+- Exact attestation v2 uses one closed `actualCost` object. `CHARGED` requires a positive amount;
+  `NO_CHARGE` requires zero. Its currency and scale must match the approved exact-money chain.
+- `meterEvidence` must independently prove the same exact cost through both integer raw-quota
+  change and displayed total-usage change. For the example above, `5950 / 500000 = CNY 0.0119`,
+  while displayed usage changed by `1.19` units whose currency scale is `2`. A mismatch in either
+  meter fails closed.
+- Historical attestation v1 with `currency` and `actualCostCents` remains readable only with the
+  matching legacy intent/report generation. Do not convert or mix generations in place.
 - `PROVIDER_REQUEST_ID` requires the raw private request ID, whose SHA-256 must match the submit
   report. The raw ID remains only in this private attestation.
 - `UNIQUE_ACCOUNT_TIME_WINDOW` requires `providerRequestId: null`, a submit report with no request
@@ -138,12 +163,13 @@ one held directory descriptor. The final durability sync also uses that held des
 reopening the visible directory path.
 
 The sanitized settlement stores only hashes (including the model digest), enums, amounts,
-timestamps, and non-secret request metadata. A v4 submit produces a v2 settlement receipt with
-explicit `apiBaseSha256` and `operationEndpointSha256`; a historical v3 submit keeps the byte-stable
-v1 receipt whose `endpointSha256` means the operation endpoint. Only the v2 receipt's
-`apiBaseSha256` may be copied into Registry evidence. The settlement never stores raw
-account/billing references, the raw Provider request ID, API keys, Authorization, Provider
-responses, URLs, free-form reasons, or local paths.
+timestamps, and non-secret request metadata. An exact v5 submit produces a v3 settlement receipt
+with exact `actualCost`, `quotedCost`, and `maximumCost` objects plus explicit `apiBaseSha256` and
+`operationEndpointSha256`. A legacy v4 submit produces a v2 receipt, while a historical v3 submit
+keeps the byte-stable v1 receipt whose `endpointSha256` means the operation endpoint. Only a
+receipt field explicitly named `apiBaseSha256` may be copied into Registry evidence. The settlement
+never stores raw meter deltas, raw account/billing references, the raw Provider request ID, API
+keys, Authorization, Provider responses, URLs, free-form reasons, or local paths.
 
 ## Interpret The Result
 

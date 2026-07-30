@@ -41,8 +41,31 @@ async function withSandboxApproval(
   const maskSha256 = environment.AI_IMAGE_SANDBOX_MASK_SHA256
     ? String(environment.AI_IMAGE_SANDBOX_MASK_SHA256)
     : null;
+  const usesExactMoney = [
+    environment.AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT,
+    environment.AI_IMAGE_SANDBOX_MAX_COST_AMOUNT,
+    environment.AI_IMAGE_SANDBOX_COST_SCALE,
+  ].some((value) => String(value || '').trim());
+  const costFields = usesExactMoney
+    ? {
+        quotedCost: {
+          currency: String(environment.AI_IMAGE_SANDBOX_CURRENCY),
+          amount: Number(environment.AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT),
+          scale: Number(environment.AI_IMAGE_SANDBOX_COST_SCALE),
+        },
+        maximumCost: {
+          currency: String(environment.AI_IMAGE_SANDBOX_CURRENCY),
+          amount: Number(environment.AI_IMAGE_SANDBOX_MAX_COST_AMOUNT),
+          scale: Number(environment.AI_IMAGE_SANDBOX_COST_SCALE),
+        },
+      }
+    : {
+        currency: 'USD',
+        quotedCostCents: Number(environment.AI_IMAGE_SANDBOX_QUOTED_COST_CENTS),
+        maximumCostCents: Number(environment.AI_IMAGE_SANDBOX_MAX_COST_CENTS),
+      };
   const approval = {
-    schemaVersion: 2,
+    schemaVersion: usesExactMoney ? 3 : 2,
     approvalId: `approval-${operationId}`,
     statement: APPROVAL_STATEMENT,
     approvedAt: new Date(Date.now() - 60_000).toISOString(),
@@ -50,7 +73,6 @@ async function withSandboxApproval(
     approverRef: 'test-owner',
     providerAccountRef: 'test-provider-account',
     pricingRevision: 'test-pricing-r1',
-    currency: 'USD',
     preCallBillingSnapshotRef: `billing-before-${operationId}`,
     billingReconciliationRef: `billing-after-${operationId}`,
     requestCount: 1,
@@ -64,8 +86,7 @@ async function withSandboxApproval(
     adapterRevision: String(environment.AI_IMAGE_SANDBOX_ADAPTER_REVISION),
     sourceSha256,
     maskSha256,
-    quotedCostCents: Number(environment.AI_IMAGE_SANDBOX_QUOTED_COST_CENTS),
-    maximumCostCents: Number(environment.AI_IMAGE_SANDBOX_MAX_COST_CENTS),
+    ...costFields,
     ...overrides,
   };
   const approvalBytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
@@ -469,6 +490,209 @@ describe('single-submit AI image sandbox runner', () => {
     expect(fetch).not.toHaveBeenCalled();
     await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps shared currency plus legacy cents on the v2 approval path', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-legacy-currency-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+    const operationId = 'sandbox-legacy-currency-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '10',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '20',
+    });
+
+    const verification = await runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    });
+
+    expect(verification).toMatchObject({
+      schemaVersion: 2,
+      quotedCostCents: 10,
+      maximumCostCents: 20,
+      approvalEvidence: { currency: 'USD' },
+    });
+    expect(verification).not.toHaveProperty('quotedCost');
+    expect(verification).not.toHaveProperty('maximumCost');
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('preflights an exact sub-cent approval without decimal conversion or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-preflight-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const operationId = 'sandbox-exact-preflight-0001';
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+      AI_IMAGE_SANDBOX_COST_SCALE: '4',
+    });
+
+    const verification = await runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    });
+
+    expect(verification).toMatchObject({
+      schemaVersion: 3,
+      event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
+      operationId,
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 1000, scale: 4 },
+    });
+    expect(verification).not.toHaveProperty('quotedCostCents');
+    expect(verification).not.toHaveProperty('maximumCostCents');
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(readFile(join(path, 'evidence', 'intents', `${operationId}.intent.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['01', '1e2', '10.0', '0x10', '10000001'])(
+    'rejects non-canonical or over-limit legacy cents %s before approval or dispatch',
+    async (quotedCostCents) => {
+      const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-legacy-cost-input-'));
+      directories.push(path);
+      const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+      await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+      const fetch = vi.fn();
+      const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+      const environment = await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+        AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+        AI_IMAGE_SANDBOX_OPERATION_ID: `sandbox-legacy-cost-${quotedCostCents.replace(/[^a-z0-9]/giu, 'x')}`,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+        AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: quotedCostCents,
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: quotedCostCents,
+      });
+
+      await expect(runAiImageProviderSingleSubmit({
+        environment,
+        repositoryRoot: path,
+        outputDirectory: join(path, 'evidence'),
+        resolveDns,
+        fetch,
+      })).rejects.toMatchObject({ code: 'SANDBOX_COST_CONFIG_INVALID' });
+      expect(resolveDns).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects mixed exact-money and legacy-cents configuration before approval or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-mixed-cost-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-mixed-cost-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+      AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '1',
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: '10',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_COST_CONFIG_INVALID' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects exact-money configuration above the shared cost ceiling before approval or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-over-cost-limit-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const fetch = vi.fn();
+    const resolveDns = vi.fn(async () => [{ address: '93.184.216.34' }]);
+    const environment = await withSandboxApproval(path, {
+      NODE_ENV: 'sandbox',
+      AI_IMAGE_SANDBOX_MODE: 'VERIFY_APPROVAL',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+      AI_IMAGE_SANDBOX_MODEL: 'approved-model',
+      AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-over-cost-limit-0001',
+      AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-0001',
+      AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+      AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+      AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000000001',
+      AI_IMAGE_SANDBOX_COST_SCALE: '4',
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment,
+      repositoryRoot: path,
+      outputDirectory: join(path, 'evidence'),
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_COST_CONFIG_INVALID' });
+
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('rejects aggregate inpaint media above the shared limit during offline preflight', async () => {
@@ -1099,6 +1323,132 @@ describe('single-submit AI image sandbox runner', () => {
     })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
     expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('writes a v3 intent and v5 report with exact sub-cent money and no cents fields', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-submit-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const result = await sharp({
+      create: { width: 3, height: 3, channels: 3, background: '#eeeeee' },
+    }).png().toBuffer();
+    const operationId = 'sandbox-exact-submit-0001';
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      id: 'provider-exact-submit-id-1',
+      data: [{ b64_json: result.toString('base64') }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const report = await runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'opaque-model-alias',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-exact-0001',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    });
+
+    const storedReport = JSON.parse(await readFile(
+      join(path, `${operationId}.report.json`),
+      'utf8',
+    ));
+    const storedIntent = JSON.parse(await readFile(
+      join(path, 'intents', `${operationId}.intent.json`),
+      'utf8',
+    ));
+    const quotedCost = { currency: 'CNY', amount: 119, scale: 4 };
+    const maximumCost = { currency: 'CNY', amount: 1000, scale: 4 };
+
+    expect(report).toMatchObject({
+      schemaVersion: 5,
+      state: 'SUCCEEDED',
+      actualCost: null,
+      quotedCost,
+      maximumCost,
+    });
+    expect(storedReport).toMatchObject({
+      schemaVersion: 5,
+      actualCost: null,
+      quotedCost,
+      maximumCost,
+    });
+    expect(storedIntent).toMatchObject({
+      schemaVersion: 3,
+      quotedCost,
+      maximumCost,
+    });
+    for (const artifact of [report, storedReport, storedIntent]) {
+      expect(artifact).not.toHaveProperty('actualCostCents');
+      expect(artifact).not.toHaveProperty('quotedCostCents');
+      expect(artifact).not.toHaveProperty('maximumCostCents');
+    }
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps exact money in a v5 reconciliation report after the guarded POST dispatches', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-failure-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const operationId = 'sandbox-exact-failure-0001';
+    const providerError = Object.assign(new Error('private upstream failure'), {
+      code: 'UND_ERR_SOCKET',
+    });
+    const fetch = vi.fn(async () => {
+      throw providerError;
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'opaque-model-alias',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'admin-config-rev-exact-0002',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toBe(providerError);
+
+    const stored = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(stored).toMatchObject({
+      schemaVersion: 5,
+      state: 'RECONCILIATION_REQUIRED',
+      actualCost: null,
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 1000, scale: 4 },
+    });
+    expect(stored).not.toHaveProperty('actualCostCents');
+    expect(stored).not.toHaveProperty('quotedCostCents');
+    expect(stored).not.toHaveProperty('maximumCostCents');
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('writes endpoint-digest-only success evidence with private file modes', async () => {

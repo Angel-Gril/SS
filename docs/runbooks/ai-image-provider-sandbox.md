@@ -78,7 +78,21 @@ Set both revisions from authoritative records:
 
 Record the Provider account, pricing revision, currency, model, quoted charge, balance or usage counter, and observation time immediately before the call. Repeat the observation after the Provider has settled the charge.
 
-`*_QUOTED_COST_CENTS` and `*_MAX_COST_CENTS` are positive integer audit fields, with quoted cost less than or equal to maximum cost. They do **not** limit the third-party or Alibaba bill, reserve a production budget, or prove the actual charge. Submit reports intentionally leave `actualCostCents` as `null`; settled cost is recorded later through the append-only [billing finalizer](ai-image-provider-sandbox-billing.md). Configure a Provider-side spending cap separately when one is available.
+New international approvals use exact money through `AI_IMAGE_SANDBOX_CURRENCY`,
+`AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT`, `AI_IMAGE_SANDBOX_MAX_COST_AMOUNT`, and
+`AI_IMAGE_SANDBOX_COST_SCALE`. Amounts are canonical positive integers and the shared scale is an
+integer from `0` through `8`; for example, `CNY amount=119 scale=4` means `CNY 0.0119`. Quote and
+maximum must use one currency and minimal shared scale, and the maximum is bounded to `100,000`
+major currency units. Do not use floats or mix these variables with legacy cents.
+
+Historical international evidence may still use `AI_IMAGE_SANDBOX_QUOTED_COST_CENTS` and
+`AI_IMAGE_SANDBOX_MAX_COST_CENTS`; the DashScope translation lane continues to use its own integer
+cents variables. These fields are compatibility paths, not the format for a new sub-cent
+international approval. Cost evidence does **not** limit the Provider bill, reserve a production
+budget, or prove the actual charge. Exact submit reports leave `actualCost` as `null`; legacy
+reports leave `actualCostCents` as `null`. Settled cost is recorded later through the append-only
+[billing finalizer](ai-image-provider-sandbox-billing.md). Configure a Provider-side spending cap
+separately when one is available.
 
 Do not promote a capability until the settled Provider bill can be reconciled to the request. When the Provider omits a request ID, correlate the narrow time window, account, endpoint, model, operation, and image count, and record the remaining uncertainty.
 
@@ -113,11 +127,12 @@ preflight before any paid submit:
 pnpm --filter server sandbox:ai-image:approval:verify
 ```
 
-This command performs no DNS lookup, intent/fingerprint claim, or Provider request. Its v2
-verification event reports separate `apiBaseSha256` and `operationEndpointSha256` values, the
-approved cost exposure, and the sanitized approval validity window without exposing either URL. It
-rejects a non-HTTPS endpoint. Approval freshness is checked again throughout the submit path and
-immediately before the single Provider POST.
+This command performs no DNS lookup, intent/fingerprint claim, or Provider request. An exact-money
+approval emits a v3 verification event; a legacy cents approval retains the v2 event. Both report
+separate `apiBaseSha256` and `operationEndpointSha256` values, the approved cost exposure, and the
+sanitized approval validity window without exposing either URL. It rejects a non-HTTPS endpoint.
+Approval freshness is checked again throughout the submit path and immediately before the single
+Provider POST.
 
 ## International OpenAI-Compatible Probe
 
@@ -164,14 +179,23 @@ fails before DNS, intent creation, or Provider dispatch when any exact request f
 | `AI_IMAGE_SANDBOX_OPERATION_ID`        | New one-use Operation ID                                                                |
 | `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION` | Non-secret revision of the injected key                                                 |
 | `AI_IMAGE_SANDBOX_ADAPTER_REVISION`    | Exact deployed Git commit SHA                                                           |
-| `AI_IMAGE_SANDBOX_QUOTED_COST_CENTS`   | Positive integer quote recorded before dispatch                                         |
-| `AI_IMAGE_SANDBOX_MAX_COST_CENTS`      | Positive integer operator-approved exposure; not a Provider limit                       |
+| `AI_IMAGE_SANDBOX_CURRENCY`            | Uppercase three-letter currency for both exact amounts                                  |
+| `AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT`  | Canonical positive integer quote in the shared exact-money scale                        |
+| `AI_IMAGE_SANDBOX_MAX_COST_AMOUNT`     | Canonical positive integer operator-approved maximum; not a Provider limit              |
+| `AI_IMAGE_SANDBOX_COST_SCALE`          | Shared decimal scale from `0` through `8`; must be minimal for the quote/maximum pair    |
 | `AI_IMAGE_SANDBOX_SOURCE_PATH`         | Required only for the three edit operations; absolute or repository-root-relative path  |
 | `AI_IMAGE_SANDBOX_SOURCE_SHA256`       | Required with source path; lowercase SHA-256 of the exact local bytes                   |
 | `AI_IMAGE_SANDBOX_MASK_PATH`           | Required only for `INPAINT`                                                             |
 | `AI_IMAGE_SANDBOX_MASK_SHA256`         | Required with mask path; lowercase SHA-256 of the exact PNG bytes                       |
 
-For `TEXT_TO_IMAGE`, leave all source and mask variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI rejects extra conditional variables instead of ignoring them. One source, or the combined `INPAINT` source and mask, must not exceed the shared `50 MiB` edit-request limit. The offline draft and exact-request approval preflight use the same bounded media verifier and reject oversized or unsupported media before DNS, intent creation, or Provider dispatch.
+For a new international request, set all four exact-money variables and leave both legacy cents
+variables unset. Historical v2 approvals require the two legacy cents variables instead and cannot
+be combined with any exact amount/scale variable. For `TEXT_TO_IMAGE`, leave all source and mask
+variables unset. For `IMAGE_TO_IMAGE` and `FULL_EDIT`, leave both mask variables unset. The CLI
+rejects extra conditional variables instead of ignoring them. One source, or the combined
+`INPAINT` source and mask, must not exceed the shared `50 MiB` edit-request limit. The offline draft
+and exact-request approval preflight use the same bounded media verifier and reject oversized or
+unsupported media before DNS, intent creation, or Provider dispatch.
 
 Relative source and mask paths are resolved from the repository/deployed app root, even though `pnpm --filter server` executes the package script with `apps/server` as its process working directory.
 
@@ -191,12 +215,13 @@ Relative source and mask paths are resolved from the repository/deployed app roo
 
 5. Unset the confirmation and API key immediately after the process exits.
 6. Inspect `tmp/ai-image-sandbox/<operation-id>.report.json`, the immutable intent under
-   `tmp/ai-image-sandbox/intents/`, and the returned image. Current direct-submit reports use
-   `schemaVersion: 4`: verify `apiBaseSha256`, `operationEndpointSha256`, request profile,
+   `tmp/ai-image-sandbox/intents/`, and the returned image. Exact-money requests produce a
+   `schemaVersion: 3` intent and `schemaVersion: 5` submit report; historical cents requests retain
+   intent v2/report v4. Verify `apiBaseSha256`, `operationEndpointSha256`, request profile,
    source/mask dimensions and digests, image count, MIME type, output dimensions, byte length,
-   SHA-256, requested semantics, and absence of unexpected text, logos, watermarks, or product
-   changes. `apiBaseSha256` hashes the normalized Provider API Base; `operationEndpointSha256`
-   hashes the exact `/images/generations` or `/images/edits` POST target.
+   SHA-256, requested semantics, exact quote/maximum values, and absence of unexpected text, logos,
+   watermarks, or product changes. `apiBaseSha256` hashes the normalized Provider API Base;
+   `operationEndpointSha256` hashes the exact `/images/generations` or `/images/edits` POST target.
 7. Save the settled billing snapshot as a private bounded file, create the private closed-schema
    billing attestation that names and hashes both the before/settled snapshot files, and run
    `pnpm --filter server sandbox:ai-image:billing:finalize`. The finalizer performs no Provider call,

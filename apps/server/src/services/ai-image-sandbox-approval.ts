@@ -3,6 +3,15 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
+import {
+  AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+  AiImageSandboxMoneyError,
+  type AiImageSandboxMoney,
+  aiImageSandboxMoneyEquals,
+  assertAiImageSandboxMoneyMajorUnitLimit,
+  assertAiImageSandboxMoneyPair,
+  parseAiImageSandboxMoney,
+} from './ai-image-sandbox-money.js';
 
 export const AI_IMAGE_SANDBOX_APPROVAL_STATEMENT =
   'I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST';
@@ -10,7 +19,7 @@ export const AI_IMAGE_SANDBOX_APPROVAL_STATEMENT =
 const MAX_APPROVAL_BYTES = 32 * 1024;
 const MAX_APPROVAL_VALIDITY_MS = 60 * 60 * 1000;
 const MAX_APPROVAL_CLOCK_SKEW_MS = 5 * 60 * 1000;
-const APPROVAL_KEYS = new Set([
+const APPROVAL_COMMON_KEYS = [
   'schemaVersion',
   'approvalId',
   'statement',
@@ -19,7 +28,6 @@ const APPROVAL_KEYS = new Set([
   'approverRef',
   'providerAccountRef',
   'pricingRevision',
-  'currency',
   'preCallBillingSnapshotRef',
   'billingReconciliationRef',
   'requestCount',
@@ -33,8 +41,17 @@ const APPROVAL_KEYS = new Set([
   'adapterRevision',
   'sourceSha256',
   'maskSha256',
+] as const;
+const APPROVAL_V2_KEYS = new Set([
+  ...APPROVAL_COMMON_KEYS,
+  'currency',
   'quotedCostCents',
   'maximumCostCents',
+]);
+const APPROVAL_V3_KEYS = new Set([
+  ...APPROVAL_COMMON_KEYS,
+  'quotedCost',
+  'maximumCost',
 ]);
 
 type AiImageSandboxApprovalOperation =
@@ -43,7 +60,7 @@ type AiImageSandboxApprovalOperation =
   | 'FULL_EDIT'
   | 'INPAINT';
 
-export interface AiImageSandboxApprovalExpectedRequest {
+interface AiImageSandboxApprovalExpectedRequestBase {
   operationId: string;
   endpoint: string;
   expectedHost: string;
@@ -54,9 +71,24 @@ export interface AiImageSandboxApprovalExpectedRequest {
   adapterRevision: string;
   sourceSha256: string[];
   maskSha256: string | null;
-  quotedCostCents: number;
-  maximumCostCents: number;
 }
+
+type AiImageSandboxApprovalExpectedMoney =
+  | {
+      quotedCost: AiImageSandboxMoney;
+      maximumCost: AiImageSandboxMoney;
+      quotedCostCents?: never;
+      maximumCostCents?: never;
+    }
+  | {
+      quotedCost?: never;
+      maximumCost?: never;
+      quotedCostCents: number;
+      maximumCostCents: number;
+    };
+
+export type AiImageSandboxApprovalExpectedRequest =
+  AiImageSandboxApprovalExpectedRequestBase & AiImageSandboxApprovalExpectedMoney;
 
 export interface AiImageSandboxApprovalEvidence {
   approvalId: string;
@@ -120,6 +152,81 @@ function requiredPositiveInteger(record: Record<string, unknown>, key: string) {
     );
   }
   return Number(value);
+}
+
+function approvalMoney(value: unknown, field: string) {
+  try {
+    return parseAiImageSandboxMoney(value, field);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxApprovalError('SANDBOX_APPROVAL_SCHEMA_INVALID', error.message);
+    }
+    throw error;
+  }
+}
+
+function approvalMoneyPair(
+  quotedCost: AiImageSandboxMoney,
+  maximumCost: AiImageSandboxMoney,
+  options: { requireCanonicalSharedScale?: boolean } = {},
+) {
+  try {
+    assertAiImageSandboxMoneyPair(quotedCost, maximumCost, options);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxApprovalError('SANDBOX_APPROVAL_SCHEMA_INVALID', error.message);
+    }
+    throw error;
+  }
+}
+
+function approvalMoneyLimit(maximumCost: AiImageSandboxMoney) {
+  try {
+    assertAiImageSandboxMoneyMajorUnitLimit(
+      maximumCost,
+      AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+    );
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxApprovalError('SANDBOX_APPROVAL_SCHEMA_INVALID', error.message);
+    }
+    throw error;
+  }
+}
+
+function expectedMoneyPair(
+  expected: AiImageSandboxApprovalExpectedRequest,
+  schemaVersion: 2 | 3,
+  legacyCurrency: string,
+) {
+  if (expected.quotedCost && expected.maximumCost) {
+    if (schemaVersion !== 3) mismatch();
+    const quotedCost = approvalMoney(expected.quotedCost, 'Expected sandbox quoted cost');
+    const maximumCost = approvalMoney(expected.maximumCost, 'Expected sandbox maximum cost');
+    approvalMoneyPair(quotedCost, maximumCost, {
+      requireCanonicalSharedScale: true,
+    });
+    return { quotedCost, maximumCost };
+  }
+  if (
+    schemaVersion !== 2
+    || !Number.isSafeInteger(expected.quotedCostCents)
+    || Number(expected.quotedCostCents) <= 0
+    || !Number.isSafeInteger(expected.maximumCostCents)
+    || Number(expected.maximumCostCents) <= 0
+  ) mismatch();
+  const quotedCost = approvalMoney({
+    currency: legacyCurrency,
+    amount: expected.quotedCostCents,
+    scale: 2,
+  }, 'Expected legacy sandbox quoted cost');
+  const maximumCost = approvalMoney({
+    currency: legacyCurrency,
+    amount: expected.maximumCostCents,
+    scale: 2,
+  }, 'Expected legacy sandbox maximum cost');
+  approvalMoneyPair(quotedCost, maximumCost, { requireCanonicalSharedScale: false });
+  return { quotedCost, maximumCost };
 }
 
 function requiredSha256Array(record: Record<string, unknown>, key: string) {
@@ -284,17 +391,19 @@ export async function loadAiImageSandboxApproval(input: {
       'Sandbox approval must use canonical JSON without duplicate keys',
     );
   }
-  const keys = Object.keys(record);
-  if (keys.length !== APPROVAL_KEYS.size || keys.some((key) => !APPROVAL_KEYS.has(key))) {
-    throw new AiImageSandboxApprovalError(
-      'SANDBOX_APPROVAL_SCHEMA_INVALID',
-      'Sandbox approval contains missing or unsupported fields',
-    );
-  }
-  if (record.schemaVersion !== 2 || record.requestCount !== 1) {
+  const schemaVersion = record.schemaVersion;
+  if ((schemaVersion !== 2 && schemaVersion !== 3) || record.requestCount !== 1) {
     throw new AiImageSandboxApprovalError(
       'SANDBOX_APPROVAL_SCHEMA_INVALID',
       'Sandbox approval schema or request count is invalid',
+    );
+  }
+  const approvalKeys = schemaVersion === 2 ? APPROVAL_V2_KEYS : APPROVAL_V3_KEYS;
+  const keys = Object.keys(record);
+  if (keys.length !== approvalKeys.size || keys.some((key) => !approvalKeys.has(key))) {
+    throw new AiImageSandboxApprovalError(
+      'SANDBOX_APPROVAL_SCHEMA_INVALID',
+      'Sandbox approval contains missing or unsupported fields',
     );
   }
 
@@ -317,13 +426,6 @@ export async function loadAiImageSandboxApproval(input: {
   const approverRef = requiredString(record, 'approverRef', 128);
   const providerAccountRef = requiredString(record, 'providerAccountRef', 160);
   const pricingRevision = requiredString(record, 'pricingRevision', 160);
-  const currency = requiredString(record, 'currency', 3).toUpperCase();
-  if (!/^[A-Z]{3}$/u.test(currency) || currency !== record.currency) {
-    throw new AiImageSandboxApprovalError(
-      'SANDBOX_APPROVAL_SCHEMA_INVALID',
-      'Sandbox approval currency must be an uppercase ISO-style code',
-    );
-  }
   const preCallBillingSnapshotRef = requiredString(record, 'preCallBillingSnapshotRef', 200);
   const billingReconciliationRef = requiredString(record, 'billingReconciliationRef', 200);
   const sourceSha256 = requiredSha256Array(record, 'sourceSha256');
@@ -338,14 +440,36 @@ export async function loadAiImageSandboxApproval(input: {
       'Sandbox approval maskSha256 is invalid',
     );
   }
-  const quotedCostCents = requiredPositiveInteger(record, 'quotedCostCents');
-  const maximumCostCents = requiredPositiveInteger(record, 'maximumCostCents');
-  if (quotedCostCents > maximumCostCents) {
-    throw new AiImageSandboxApprovalError(
-      'SANDBOX_APPROVAL_SCHEMA_INVALID',
-      'Sandbox approval quote exceeds its maximum cost',
-    );
+  let quotedCost: AiImageSandboxMoney;
+  let maximumCost: AiImageSandboxMoney;
+  let currency: string;
+  if (schemaVersion === 2) {
+    currency = requiredString(record, 'currency', 3).toUpperCase();
+    if (!/^[A-Z]{3}$/u.test(currency) || currency !== record.currency) {
+      throw new AiImageSandboxApprovalError(
+        'SANDBOX_APPROVAL_SCHEMA_INVALID',
+        'Sandbox approval currency must be an uppercase ISO-style code',
+      );
+    }
+    quotedCost = approvalMoney({
+      currency,
+      amount: requiredPositiveInteger(record, 'quotedCostCents'),
+      scale: 2,
+    }, 'Legacy sandbox quoted cost');
+    maximumCost = approvalMoney({
+      currency,
+      amount: requiredPositiveInteger(record, 'maximumCostCents'),
+      scale: 2,
+    }, 'Legacy sandbox maximum cost');
+  } else {
+    quotedCost = approvalMoney(record.quotedCost, 'Sandbox quoted cost');
+    maximumCost = approvalMoney(record.maximumCost, 'Sandbox maximum cost');
+    currency = quotedCost.currency;
   }
+  approvalMoneyPair(quotedCost, maximumCost, {
+    requireCanonicalSharedScale: schemaVersion === 3,
+  });
+  approvalMoneyLimit(maximumCost);
   let endpoint = '';
   try {
     endpoint = new URL(requiredString(record, 'endpoint', 2048)).toString();
@@ -357,6 +481,7 @@ export async function loadAiImageSandboxApproval(input: {
   }
 
   const expected = input.expected;
+  const expectedCosts = expectedMoneyPair(expected, schemaVersion, currency);
   if (
     requiredString(record, 'operationId', 80) !== expected.operationId
     || endpoint !== new URL(expected.endpoint).toString()
@@ -368,8 +493,8 @@ export async function loadAiImageSandboxApproval(input: {
     || requiredString(record, 'adapterRevision', 64).toLowerCase() !== expected.adapterRevision
     || !equalStringArrays(sourceSha256, expected.sourceSha256)
     || maskSha256 !== expected.maskSha256
-    || quotedCostCents !== expected.quotedCostCents
-    || maximumCostCents !== expected.maximumCostCents
+    || !aiImageSandboxMoneyEquals(quotedCost, expectedCosts.quotedCost)
+    || !aiImageSandboxMoneyEquals(maximumCost, expectedCosts.maximumCost)
   ) mismatch();
 
   return {

@@ -5,6 +5,16 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { TextDecoder } from 'node:util';
 import { AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN } from './ai-image-sandbox-code-revision.js';
 import { createAiImageSandboxRequestFingerprint } from './ai-image-sandbox-guard.js';
+import {
+  AI_IMAGE_SANDBOX_MONEY_MAX_SCALE,
+  AiImageSandboxMoneyError,
+  type AiImageSandboxMoney,
+  aiImageSandboxPowerOfTen,
+  aiImageSandboxMoneyEquals,
+  assertAiImageSandboxMoneyPair,
+  parseAiImageSandboxDecimal,
+  parseAiImageSandboxMoney,
+} from './ai-image-sandbox-money.js';
 
 export const AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT =
   'I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT';
@@ -21,7 +31,7 @@ const MAX_APPROVAL_WINDOW_MS = 60 * 60 * 1000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u;
 
-const ATTESTATION_KEYS = new Set([
+const ATTESTATION_COMMON_KEYS = [
   'schemaVersion',
   'settlementId',
   'statement',
@@ -31,7 +41,6 @@ const ATTESTATION_KEYS = new Set([
   'reconcilerRef',
   'providerAccountRef',
   'pricingRevision',
-  'currency',
   'preCallBillingSnapshotRef',
   'billingReconciliationRef',
   'preCallBillingSnapshotPath',
@@ -48,10 +57,30 @@ const ATTESTATION_KEYS = new Set([
   'correlationMethod',
   'providerRequestId',
   'billingOutcome',
+] as const;
+
+const ATTESTATION_V1_KEYS = new Set([
+  ...ATTESTATION_COMMON_KEYS,
+  'currency',
   'actualCostCents',
 ]);
 
-const INTENT_KEYS = new Set([
+const ATTESTATION_V2_KEYS = new Set([
+  ...ATTESTATION_COMMON_KEYS,
+  'actualCost',
+  'meterEvidence',
+]);
+
+const METER_EVIDENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'rawQuotaDelta',
+  'quotaUnitsPerCurrencyUnit',
+  'displayTotalUsageDelta',
+  'displayTotalUsageUnitCurrencyScale',
+]);
+
+const INTENT_COMMON_KEYS = [
   'schemaVersion',
   'operationId',
   'state',
@@ -61,9 +90,20 @@ const INTENT_KEYS = new Set([
   'adapterRevision',
   'requestFingerprint',
   'request',
+  'createdAt',
+] as const;
+
+const INTENT_V2_KEYS = new Set([
+  ...INTENT_COMMON_KEYS,
   'quotedCostCents',
   'maximumCostCents',
-  'createdAt',
+]);
+
+const INTENT_V3_KEYS = new Set([
+  ...INTENT_COMMON_KEYS,
+  'apiBaseSha256',
+  'quotedCost',
+  'maximumCost',
 ]);
 
 const REQUEST_KEYS = new Set([
@@ -131,19 +171,43 @@ const REPORT_COMMON_REQUIRED_KEYS = [
   'startedAt',
   'completedAt',
   'elapsedMs',
+] as const;
+
+const REPORT_LEGACY_COST_KEYS = [
   'actualCostCents',
   'quotedCostCents',
   'maximumCostCents',
+] as const;
+
+const REPORT_EXACT_COST_KEYS = [
+  'actualCost',
+  'quotedCost',
+  'maximumCost',
+] as const;
+
+const REPORT_TRAILING_REQUIRED_KEYS = [
   'intentPath',
-];
+] as const;
 
 const REPORT_V3_REQUIRED_KEYS = [
   ...REPORT_COMMON_REQUIRED_KEYS,
+  ...REPORT_LEGACY_COST_KEYS,
+  ...REPORT_TRAILING_REQUIRED_KEYS,
   'endpointSha256',
 ];
 
 const REPORT_V4_REQUIRED_KEYS = [
   ...REPORT_COMMON_REQUIRED_KEYS,
+  ...REPORT_LEGACY_COST_KEYS,
+  ...REPORT_TRAILING_REQUIRED_KEYS,
+  'apiBaseSha256',
+  'operationEndpointSha256',
+];
+
+const REPORT_V5_REQUIRED_KEYS = [
+  ...REPORT_COMMON_REQUIRED_KEYS,
+  ...REPORT_EXACT_COST_KEYS,
+  ...REPORT_TRAILING_REQUIRED_KEYS,
   'apiBaseSha256',
   'operationEndpointSha256',
 ];
@@ -282,6 +346,130 @@ function requiredNonnegativeInteger(
     );
   }
   return Number(value);
+}
+
+function requiredPositiveInteger(
+  record: Record<string, unknown>,
+  key: string,
+  code: AiImageSandboxBillingSettlementError['code'],
+) {
+  const value = requiredNonnegativeInteger(record, key, code);
+  if (value <= 0) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      `Sandbox billing ${key} must be a positive integer`,
+    );
+  }
+  return value;
+}
+
+function exactMoney(
+  value: unknown,
+  field: string,
+  code: AiImageSandboxBillingSettlementError['code'],
+  options: { allowZero?: boolean } = {},
+) {
+  try {
+    return parseAiImageSandboxMoney(value, field, options);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxBillingSettlementError(code, error.message);
+    }
+    throw error;
+  }
+}
+
+function exactMoneyPair(
+  quotedCost: AiImageSandboxMoney,
+  maximumCost: AiImageSandboxMoney,
+  code: AiImageSandboxBillingSettlementError['code'],
+  options: { requireCanonicalSharedScale?: boolean } = {},
+) {
+  try {
+    assertAiImageSandboxMoneyPair(quotedCost, maximumCost, options);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxBillingSettlementError(code, error.message);
+    }
+    throw error;
+  }
+}
+
+function exactDecimal(
+  value: unknown,
+  field: string,
+  code: AiImageSandboxBillingSettlementError['code'],
+) {
+  try {
+    return parseAiImageSandboxDecimal(value, field);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxBillingSettlementError(code, error.message);
+    }
+    throw error;
+  }
+}
+
+function parseMeterEvidence(value: unknown, actualCost: AiImageSandboxMoney) {
+  const code = 'SANDBOX_BILLING_ATTESTATION_INVALID' as const;
+  if (!isRecord(value) || !hasExactKeys(value, METER_EVIDENCE_KEYS)) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox billing meter evidence contains missing or unsupported fields',
+    );
+  }
+  if (
+    value.schemaVersion !== 1
+    || value.kind !== 'NEW_API_QUOTA_AND_TOTAL_USAGE_V1'
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox billing meter evidence schema is invalid',
+    );
+  }
+  const rawQuotaDelta = requiredNonnegativeInteger(value, 'rawQuotaDelta', code);
+  const quotaUnitsPerCurrencyUnit = requiredPositiveInteger(
+    value,
+    'quotaUnitsPerCurrencyUnit',
+    code,
+  );
+  const displayTotalUsageDelta = exactDecimal(
+    value.displayTotalUsageDelta,
+    'displayTotalUsageDelta',
+    code,
+  );
+  const displayTotalUsageUnitCurrencyScale = requiredNonnegativeInteger(
+    value,
+    'displayTotalUsageUnitCurrencyScale',
+    code,
+  );
+  if (displayTotalUsageUnitCurrencyScale > AI_IMAGE_SANDBOX_MONEY_MAX_SCALE) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox billing display usage currency scale is invalid',
+    );
+  }
+
+  const actualAmount = BigInt(actualCost.amount);
+  const actualScaleFactor = aiImageSandboxPowerOfTen(actualCost.scale);
+  const rawQuotaMatches = actualAmount * BigInt(quotaUnitsPerCurrencyUnit)
+    === BigInt(rawQuotaDelta) * actualScaleFactor;
+  const displayUsageMatches = actualAmount
+    * aiImageSandboxPowerOfTen(displayTotalUsageDelta.scale)
+    * aiImageSandboxPowerOfTen(displayTotalUsageUnitCurrencyScale)
+    === BigInt(displayTotalUsageDelta.amount) * actualScaleFactor;
+  if (!rawQuotaMatches || !displayUsageMatches) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox billing meter evidence does not exactly prove actual cost',
+    );
+  }
+  return {
+    rawQuotaDelta,
+    quotaUnitsPerCurrencyUnit,
+    displayTotalUsageDelta,
+    displayTotalUsageUnitCurrencyScale,
+  };
 }
 
 function positiveInteger(value: unknown) {
@@ -838,7 +1026,13 @@ function assertIntentRequest(request: Record<string, unknown>) {
 }
 
 function parseAttestation(record: Record<string, unknown>, now: Date) {
-  if (!hasExactKeys(record, ATTESTATION_KEYS) || record.schemaVersion !== 1) {
+  const schemaVersion = record.schemaVersion;
+  const expectedKeys = schemaVersion === 1
+    ? ATTESTATION_V1_KEYS
+    : schemaVersion === 2
+      ? ATTESTATION_V2_KEYS
+      : null;
+  if (!expectedKeys || !hasExactKeys(record, expectedKeys)) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
       'Sandbox billing attestation contains missing or unsupported fields',
@@ -898,18 +1092,6 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
       'Sandbox billing observation window is invalid',
     );
   }
-  const currency = requiredString(
-    record,
-    'currency',
-    'SANDBOX_BILLING_ATTESTATION_INVALID',
-    3,
-  );
-  if (!/^[A-Z]{3}$/u.test(currency) || currency !== record.currency) {
-    throw new AiImageSandboxBillingSettlementError(
-      'SANDBOX_BILLING_ATTESTATION_INVALID',
-      'Sandbox billing currency is invalid',
-    );
-  }
   const correlationMethod = record.correlationMethod as CorrelationMethod;
   const billingOutcome = record.billingOutcome as BillingOutcome;
   const providerRequestId = record.providerRequestId === null
@@ -917,19 +1099,48 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     : typeof record.providerRequestId === 'string'
       ? requiredString(record, 'providerRequestId', 'SANDBOX_BILLING_ATTESTATION_INVALID', 500)
       : undefined;
-  const actualCostCents = requiredNonnegativeInteger(
-    record,
-    'actualCostCents',
-    'SANDBOX_BILLING_ATTESTATION_INVALID',
-  );
+  let currency: string;
+  let actualCostCents: number | null = null;
+  let actualCost: AiImageSandboxMoney | null = null;
+  let meterEvidence: ReturnType<typeof parseMeterEvidence> | null = null;
+  if (schemaVersion === 1) {
+    currency = requiredString(
+      record,
+      'currency',
+      'SANDBOX_BILLING_ATTESTATION_INVALID',
+      3,
+    );
+    if (!/^[A-Z]{3}$/u.test(currency) || currency !== record.currency) {
+      throw new AiImageSandboxBillingSettlementError(
+        'SANDBOX_BILLING_ATTESTATION_INVALID',
+        'Sandbox billing currency is invalid',
+      );
+    }
+    actualCostCents = requiredNonnegativeInteger(
+      record,
+      'actualCostCents',
+      'SANDBOX_BILLING_ATTESTATION_INVALID',
+    );
+  } else {
+    actualCost = exactMoney(
+      record.actualCost,
+      'Sandbox billing actual cost',
+      'SANDBOX_BILLING_ATTESTATION_INVALID',
+      { allowZero: true },
+    );
+    currency = actualCost.currency;
+    meterEvidence = parseMeterEvidence(record.meterEvidence, actualCost);
+  }
   if (
     !['PROVIDER_REQUEST_ID', 'UNIQUE_ACCOUNT_TIME_WINDOW'].includes(correlationMethod)
     || providerRequestId === undefined
     || (correlationMethod === 'PROVIDER_REQUEST_ID' && !providerRequestId)
     || (correlationMethod === 'UNIQUE_ACCOUNT_TIME_WINDOW' && providerRequestId !== null)
     || !['CHARGED', 'NO_CHARGE'].includes(billingOutcome)
-    || (billingOutcome === 'CHARGED' && actualCostCents <= 0)
-    || (billingOutcome === 'NO_CHARGE' && actualCostCents !== 0)
+    || (schemaVersion === 1 && billingOutcome === 'CHARGED' && Number(actualCostCents) <= 0)
+    || (schemaVersion === 1 && billingOutcome === 'NO_CHARGE' && actualCostCents !== 0)
+    || (schemaVersion === 2 && billingOutcome === 'CHARGED' && actualCost!.amount <= 0)
+    || (schemaVersion === 2 && billingOutcome === 'NO_CHARGE' && actualCost!.amount !== 0)
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -937,6 +1148,8 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     );
   }
   return {
+    schemaVersion: schemaVersion as 1 | 2,
+    generation: schemaVersion === 2 ? 'EXACT' as const : 'LEGACY' as const,
     settlementId,
     operationId,
     preCallObservedAt,
@@ -972,13 +1185,21 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     providerRequestId,
     billingOutcome,
     actualCostCents,
+    actualCost,
+    meterEvidence,
   };
 }
 
 function parseIntent(record: Record<string, unknown>, operationId: string) {
+  const schemaVersion = record.schemaVersion;
+  const expectedKeys = schemaVersion === 2
+    ? INTENT_V2_KEYS
+    : schemaVersion === 3
+      ? INTENT_V3_KEYS
+      : null;
   if (
-    !hasExactKeys(record, INTENT_KEYS)
-    || record.schemaVersion !== 2
+    !expectedKeys
+    || !hasExactKeys(record, expectedKeys)
     || record.operationId !== operationId
     || record.state !== 'SUBMITTING'
     || !isRecord(record.request)
@@ -993,16 +1214,50 @@ function parseIntent(record: Record<string, unknown>, operationId: string) {
   assertIntentRequest(request);
   const approvalEvidence = assertApprovalEvidence(request.approvalEvidence);
   const createdAt = canonicalTimestamp(record, 'createdAt', 'SANDBOX_BILLING_EVIDENCE_INVALID');
-  const quotedCostCents = requiredNonnegativeInteger(
-    record,
-    'quotedCostCents',
-    'SANDBOX_BILLING_EVIDENCE_INVALID',
-  );
-  const maximumCostCents = requiredNonnegativeInteger(
-    record,
-    'maximumCostCents',
-    'SANDBOX_BILLING_EVIDENCE_INVALID',
-  );
+  let quotedCostCents: number | null = null;
+  let maximumCostCents: number | null = null;
+  let quotedCost: AiImageSandboxMoney;
+  let maximumCost: AiImageSandboxMoney;
+  if (schemaVersion === 2) {
+    quotedCostCents = requiredPositiveInteger(
+      record,
+      'quotedCostCents',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    maximumCostCents = requiredPositiveInteger(
+      record,
+      'maximumCostCents',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    quotedCost = {
+      currency: String(approvalEvidence.currency),
+      amount: quotedCostCents,
+      scale: 2,
+    };
+    maximumCost = {
+      currency: String(approvalEvidence.currency),
+      amount: maximumCostCents,
+      scale: 2,
+    };
+    exactMoneyPair(
+      quotedCost,
+      maximumCost,
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+      { requireCanonicalSharedScale: false },
+    );
+  } else {
+    quotedCost = exactMoney(
+      record.quotedCost,
+      'Sandbox billing quoted cost',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    maximumCost = exactMoney(
+      record.maximumCost,
+      'Sandbox billing maximum cost',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    exactMoneyPair(quotedCost, maximumCost, 'SANDBOX_BILLING_EVIDENCE_INVALID');
+  }
   const model = requiredString(record, 'model', 'SANDBOX_BILLING_EVIDENCE_INVALID', 200);
   const credentialRevision = requiredString(
     record,
@@ -1011,11 +1266,15 @@ function parseIntent(record: Record<string, unknown>, operationId: string) {
     128,
   );
   if (
-    quotedCostCents <= 0
-    || maximumCostCents <= 0
-    || quotedCostCents > maximumCostCents
+    quotedCost.currency !== approvalEvidence.currency
+    || maximumCost.currency !== approvalEvidence.currency
     || typeof record.endpointSha256 !== 'string'
     || !SHA256_PATTERN.test(record.endpointSha256)
+    || (schemaVersion === 3 && (
+      typeof record.apiBaseSha256 !== 'string'
+      || !SHA256_PATTERN.test(record.apiBaseSha256)
+      || record.apiBaseSha256 === record.endpointSha256
+    ))
     || model !== record.model
     || credentialRevision !== record.credentialRevision
     || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(credentialRevision)
@@ -1030,12 +1289,16 @@ function parseIntent(record: Record<string, unknown>, operationId: string) {
     );
   }
   return {
+    schemaVersion: schemaVersion as 2 | 3,
+    generation: schemaVersion === 3 ? 'EXACT' as const : 'LEGACY' as const,
     record,
     request,
     approvalEvidence,
     createdAt,
     quotedCostCents,
     maximumCostCents,
+    quotedCost,
+    maximumCost,
     model,
     credentialRevision,
   };
@@ -1044,11 +1307,13 @@ function parseIntent(record: Record<string, unknown>, operationId: string) {
 function parseReport(record: Record<string, unknown>, operationId: string) {
   const schemaVersion = record.schemaVersion;
   const state = typeof record.state === 'string' ? record.state : '';
-  const requiredKeys = schemaVersion === 4
-    ? REPORT_V4_REQUIRED_KEYS
-    : schemaVersion === 3
-      ? REPORT_V3_REQUIRED_KEYS
-      : null;
+  const requiredKeys = schemaVersion === 5
+    ? REPORT_V5_REQUIRED_KEYS
+    : schemaVersion === 4
+      ? REPORT_V4_REQUIRED_KEYS
+      : schemaVersion === 3
+        ? REPORT_V3_REQUIRED_KEYS
+        : null;
   const outcomeKeys = state === 'SUCCEEDED'
     ? REPORT_SUCCESS_OUTCOME_KEYS
     : ['REJECTED', 'RECONCILIATION_REQUIRED'].includes(state)
@@ -1057,15 +1322,17 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
   const expectedKeys = requiredKeys && outcomeKeys
     ? new Set([...requiredKeys, ...outcomeKeys])
     : null;
-  const operationEndpointSha256 = schemaVersion === 4
+  const operationEndpointSha256 = schemaVersion === 4 || schemaVersion === 5
     ? record.operationEndpointSha256
     : record.endpointSha256;
-  const apiBaseSha256 = schemaVersion === 4 ? record.apiBaseSha256 : null;
+  const apiBaseSha256 = schemaVersion === 4 || schemaVersion === 5
+    ? record.apiBaseSha256
+    : null;
   if (
     !expectedKeys
     || !hasExactKeys(record, expectedKeys)
     || record.operationId !== operationId
-    || record.actualCostCents !== null
+    || (schemaVersion === 5 ? record.actualCost !== null : record.actualCostCents !== null)
     || record.createRequests !== 1
     || record.provider !== 'custom-openai-compatible'
     || record.usage !== null
@@ -1074,7 +1341,7 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     || !/^[A-Z][A-Z0-9_]{0,79}$/u.test(record.requestProfile)
     || typeof operationEndpointSha256 !== 'string'
     || !SHA256_PATTERN.test(operationEndpointSha256)
-    || (schemaVersion === 4 && (
+    || ((schemaVersion === 4 || schemaVersion === 5) && (
       typeof apiBaseSha256 !== 'string'
       || !SHA256_PATTERN.test(apiBaseSha256)
       || apiBaseSha256 === operationEndpointSha256
@@ -1108,10 +1375,6 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     || !AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(record.adapterRevision)
     || typeof record.requestedSize !== 'string'
     || !/^\d{1,4}x\d{1,4}$/u.test(record.requestedSize)
-    || !Number.isSafeInteger(record.quotedCostCents)
-    || Number(record.quotedCostCents) <= 0
-    || !Number.isSafeInteger(record.maximumCostCents)
-    || Number(record.maximumCostCents) <= 0
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_EVIDENCE_INVALID',
@@ -1119,6 +1382,59 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     );
   }
   const approvalEvidence = assertApprovalEvidence(record.approvalEvidence);
+  let quotedCostCents: number | null = null;
+  let maximumCostCents: number | null = null;
+  let quotedCost: AiImageSandboxMoney;
+  let maximumCost: AiImageSandboxMoney;
+  if (schemaVersion === 5) {
+    quotedCost = exactMoney(
+      record.quotedCost,
+      'Sandbox billing submit quoted cost',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    maximumCost = exactMoney(
+      record.maximumCost,
+      'Sandbox billing submit maximum cost',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    exactMoneyPair(quotedCost, maximumCost, 'SANDBOX_BILLING_EVIDENCE_INVALID');
+  } else {
+    quotedCostCents = requiredPositiveInteger(
+      record,
+      'quotedCostCents',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    maximumCostCents = requiredPositiveInteger(
+      record,
+      'maximumCostCents',
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+    );
+    quotedCost = {
+      currency: String(approvalEvidence.currency),
+      amount: quotedCostCents,
+      scale: 2,
+    };
+    maximumCost = {
+      currency: String(approvalEvidence.currency),
+      amount: maximumCostCents,
+      scale: 2,
+    };
+    exactMoneyPair(
+      quotedCost,
+      maximumCost,
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+      { requireCanonicalSharedScale: false },
+    );
+  }
+  if (
+    quotedCost.currency !== approvalEvidence.currency
+    || maximumCost.currency !== approvalEvidence.currency
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_EVIDENCE_INVALID',
+      'Sandbox billing submit cost currency is invalid',
+    );
+  }
   const startedAt = canonicalTimestamp(record, 'startedAt', 'SANDBOX_BILLING_EVIDENCE_INVALID');
   const completedAt = canonicalTimestamp(record, 'completedAt', 'SANDBOX_BILLING_EVIDENCE_INVALID');
   const elapsedMs = requiredNonnegativeInteger(record, 'elapsedMs', 'SANDBOX_BILLING_EVIDENCE_INVALID');
@@ -1160,7 +1476,8 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
   }
   return {
     record,
-    schemaVersion: schemaVersion as 3 | 4,
+    schemaVersion: schemaVersion as 3 | 4 | 5,
+    generation: schemaVersion === 5 ? 'EXACT' as const : 'LEGACY' as const,
     apiBaseSha256: apiBaseSha256 as string | null,
     operationEndpointSha256,
     approvalEvidence,
@@ -1168,6 +1485,10 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     completedAt,
     model,
     credentialRevision,
+    quotedCostCents,
+    maximumCostCents,
+    quotedCost,
+    maximumCost,
   };
 }
 
@@ -1181,6 +1502,15 @@ function assertArtifactsMatch(input: {
   const intentRecord = intent.record;
   const reportRecord = report.record;
   const request = intent.request;
+  if (
+    attestation.generation !== intent.generation
+    || intent.generation !== report.generation
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_MISMATCH',
+      'Sandbox billing artifacts mix incompatible evidence generations',
+    );
+  }
   if (!hasExactKeys(claim, FINGERPRINT_CLAIM_KEYS)) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_EVIDENCE_INVALID',
@@ -1222,7 +1552,14 @@ function assertArtifactsMatch(input: {
     || sha256(attestation.billingReconciliationRef)
       !== intent.approvalEvidence.billingReconciliationRefSha256
     || attestation.currency !== intent.approvalEvidence.currency
+    || (attestation.generation === 'EXACT' && (
+      !attestation.actualCost
+      || attestation.actualCost.currency !== intent.maximumCost.currency
+      || attestation.actualCost.scale !== intent.maximumCost.scale
+    ))
     || canonicalJson(report.approvalEvidence) !== canonicalJson(intent.approvalEvidence)
+    || (intent.generation === 'EXACT'
+      && report.apiBaseSha256 !== intentRecord.apiBaseSha256)
     || report.operationEndpointSha256 !== intentRecord.endpointSha256
     || reportRecord.model !== intentRecord.model
     || reportRecord.credentialRevision !== intentRecord.credentialRevision
@@ -1233,8 +1570,8 @@ function assertArtifactsMatch(input: {
     || canonicalJson(reportRecord.sourceSha256) !== canonicalJson(request.sourceSha256)
     || reportRecord.maskSha256 !== request.maskSha256
     || reportRecord.requestedSize !== request.size
-    || reportRecord.quotedCostCents !== intent.quotedCostCents
-    || reportRecord.maximumCostCents !== intent.maximumCostCents
+    || !aiImageSandboxMoneyEquals(report.quotedCost, intent.quotedCost)
+    || !aiImageSandboxMoneyEquals(report.maximumCost, intent.maximumCost)
     || report.startedAt.time < intent.createdAt.time
     || attestation.preCallObservedAt.time > approvedAt
     || approvedAt - attestation.preCallObservedAt.time > MAX_PRECALL_SNAPSHOT_AGE_MS
@@ -1421,9 +1758,13 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
   assertArtifactsMatch({ attestation, intent, report, claim: claimEvidence.record });
 
   const billedUnits = attestation.billingOutcome === 'CHARGED' ? 1 : 0;
-  const billingGate = attestation.actualCostCents > intent.maximumCostCents
-    ? 'COST_LIMIT_EXCEEDED'
-    : 'PASS';
+  const billingGate = attestation.generation === 'EXACT'
+    ? BigInt(attestation.actualCost!.amount) > BigInt(intent.maximumCost.amount)
+      ? 'COST_LIMIT_EXCEEDED'
+      : 'PASS'
+    : Number(attestation.actualCostCents) > Number(intent.maximumCostCents)
+      ? 'COST_LIMIT_EXCEEDED'
+      : 'PASS';
   const billingDirectory = resolve(evidenceRoot, 'billing');
   const claimDirectory = resolve(billingDirectory, '.claims');
   const settlementClaimPath = resolve(claimDirectory, `${operationId}.billing.claim.json`);
@@ -1456,56 +1797,100 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     );
     claimReplayed = true;
   }
-  const endpointEvidence = report.schemaVersion === 4
+  const endpointEvidence = report.schemaVersion === 4 || report.schemaVersion === 5
     ? {
         apiBaseSha256: report.apiBaseSha256,
         operationEndpointSha256: report.operationEndpointSha256,
       }
     : { endpointSha256: intent.record.endpointSha256 };
-  const receipt = {
-    schemaVersion: report.schemaVersion === 4 ? 2 : 1,
-    event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
-    operationId,
-    settlementId: attestation.settlementId,
-    settlementSha256: attestationEvidence.sha256,
-    intentSha256: intentEvidence.sha256,
-    submitReportSha256: reportEvidence.sha256,
-    fingerprintClaimSha256: claimEvidence.sha256,
-    requestFingerprint: attestation.requestFingerprint,
-    submitState: report.record.state,
-    providerOutcomeResolved: report.record.state !== 'RECONCILIATION_REQUIRED',
-    sameRequestRetryAllowed: false,
-    ...endpointEvidence,
-    modelSha256: sha256(intent.model),
-    operation: intent.request.operation,
-    requestProfile: intent.request.requestProfile,
-    promptSha256: intent.request.promptSha256,
-    sourceSha256: intent.request.sourceSha256,
-    maskSha256: intent.request.maskSha256,
-    approvalId: attestation.approvalId,
-    approvalSha256: attestation.approvalSha256,
-    submissionAdapterRevision: intent.record.adapterRevision,
-    finalizationAdapterRevision: receiptFinalizationRevision,
-    correlationMethod: attestation.correlationMethod,
-    providerRequestIdHash: report.record.providerRequestIdHash,
-    currency: attestation.currency,
-    billingOutcome: attestation.billingOutcome,
-    billingGate,
-    actualCostCents: attestation.actualCostCents,
-    billedUnits,
-    quotedCostCents: intent.quotedCostCents,
-    maximumCostCents: intent.maximumCostCents,
-    preCallObservedAt: attestation.preCallObservedAt.value,
-    settledObservedAt: attestation.settledObservedAt.value,
-    reconcilerRefSha256: sha256(attestation.reconcilerRef),
-    providerAccountRefSha256: sha256(attestation.providerAccountRef),
-    pricingRevisionSha256: sha256(attestation.pricingRevision),
-    preCallBillingSnapshotRefSha256: sha256(attestation.preCallBillingSnapshotRef),
-    billingReconciliationRefSha256: sha256(attestation.billingReconciliationRef),
-    providerBillingEntryRefSha256: sha256(attestation.providerBillingEntryRef),
-    preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
-    settledBillingSnapshotSha256: settledSnapshotEvidence.sha256,
-  };
+  const receipt = attestation.generation === 'EXACT'
+    ? {
+        schemaVersion: 3,
+        event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
+        operationId,
+        settlementId: attestation.settlementId,
+        settlementSha256: attestationEvidence.sha256,
+        intentSha256: intentEvidence.sha256,
+        submitReportSha256: reportEvidence.sha256,
+        fingerprintClaimSha256: claimEvidence.sha256,
+        requestFingerprint: attestation.requestFingerprint,
+        submitState: report.record.state,
+        providerOutcomeResolved: report.record.state !== 'RECONCILIATION_REQUIRED',
+        sameRequestRetryAllowed: false,
+        ...endpointEvidence,
+        modelSha256: sha256(intent.model),
+        operation: intent.request.operation,
+        requestProfile: intent.request.requestProfile,
+        promptSha256: intent.request.promptSha256,
+        sourceSha256: intent.request.sourceSha256,
+        maskSha256: intent.request.maskSha256,
+        approvalId: attestation.approvalId,
+        approvalSha256: attestation.approvalSha256,
+        submissionAdapterRevision: intent.record.adapterRevision,
+        finalizationAdapterRevision: receiptFinalizationRevision,
+        correlationMethod: attestation.correlationMethod,
+        providerRequestIdHash: report.record.providerRequestIdHash,
+        billingOutcome: attestation.billingOutcome,
+        billingGate,
+        actualCost: attestation.actualCost!,
+        billedUnits,
+        quotedCost: intent.quotedCost,
+        maximumCost: intent.maximumCost,
+        preCallObservedAt: attestation.preCallObservedAt.value,
+        settledObservedAt: attestation.settledObservedAt.value,
+        reconcilerRefSha256: sha256(attestation.reconcilerRef),
+        providerAccountRefSha256: sha256(attestation.providerAccountRef),
+        pricingRevisionSha256: sha256(attestation.pricingRevision),
+        preCallBillingSnapshotRefSha256: sha256(attestation.preCallBillingSnapshotRef),
+        billingReconciliationRefSha256: sha256(attestation.billingReconciliationRef),
+        providerBillingEntryRefSha256: sha256(attestation.providerBillingEntryRef),
+        preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
+        settledBillingSnapshotSha256: settledSnapshotEvidence.sha256,
+      }
+    : {
+        schemaVersion: report.schemaVersion === 4 ? 2 : 1,
+        event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
+        operationId,
+        settlementId: attestation.settlementId,
+        settlementSha256: attestationEvidence.sha256,
+        intentSha256: intentEvidence.sha256,
+        submitReportSha256: reportEvidence.sha256,
+        fingerprintClaimSha256: claimEvidence.sha256,
+        requestFingerprint: attestation.requestFingerprint,
+        submitState: report.record.state,
+        providerOutcomeResolved: report.record.state !== 'RECONCILIATION_REQUIRED',
+        sameRequestRetryAllowed: false,
+        ...endpointEvidence,
+        modelSha256: sha256(intent.model),
+        operation: intent.request.operation,
+        requestProfile: intent.request.requestProfile,
+        promptSha256: intent.request.promptSha256,
+        sourceSha256: intent.request.sourceSha256,
+        maskSha256: intent.request.maskSha256,
+        approvalId: attestation.approvalId,
+        approvalSha256: attestation.approvalSha256,
+        submissionAdapterRevision: intent.record.adapterRevision,
+        finalizationAdapterRevision: receiptFinalizationRevision,
+        correlationMethod: attestation.correlationMethod,
+        providerRequestIdHash: report.record.providerRequestIdHash,
+        currency: attestation.currency,
+        billingOutcome: attestation.billingOutcome,
+        billingGate,
+        actualCostCents: attestation.actualCostCents!,
+        billedUnits,
+        quotedCostCents: intent.quotedCostCents!,
+        maximumCostCents: intent.maximumCostCents!,
+        preCallObservedAt: attestation.preCallObservedAt.value,
+        settledObservedAt: attestation.settledObservedAt.value,
+        reconcilerRefSha256: sha256(attestation.reconcilerRef),
+        providerAccountRefSha256: sha256(attestation.providerAccountRef),
+        pricingRevisionSha256: sha256(attestation.pricingRevision),
+        preCallBillingSnapshotRefSha256: sha256(attestation.preCallBillingSnapshotRef),
+        billingReconciliationRefSha256: sha256(attestation.billingReconciliationRef),
+        providerBillingEntryRefSha256: sha256(attestation.providerBillingEntryRef),
+        preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
+        settledBillingSnapshotSha256: settledSnapshotEvidence.sha256,
+      };
   const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
   if (claimReplayed && receiptFinalizationRevision !== finalizationAdapterRevision) {
     const receiptReplayed = await readExactPrivateFile(

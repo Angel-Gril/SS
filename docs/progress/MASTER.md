@@ -146,28 +146,45 @@ Combined focused tests passed `246` Server checks with one Windows skip and `95`
 full Server tests passed `4422` with `194` skipped, lint passed with `20` existing warnings and no
 errors, workspace typecheck passed, preflight passed `445/0`, and cloud/local package verification
 passed `449/0/0` and `445/2/0` at build version `1.0.264`. Independent review found no P0/P1 issue.
-Phase 3 remains `4/5` and overall progress remains `32/37`: the candidate still lacks an authenticated
-model-catalog result, exact price/currency evidence, a private DPAPI Key file and a finalized
-per-request cost authorization. No Provider POST, charge, production mutation, VPS access,
-deployment, flag change, or `.context/` staging occurred.
+The candidate then passed a bounded authenticated read-only model-catalog check: HTTP 200 with the
+exact `gpt-image-2-count` alias as the only listed model. Its Key remains in a private DPAPI file
+outside the repository, and raw catalogue/account/billing snapshots remain private. Read-only
+billing checks established the paired quota and displayed-usage meters without a Provider POST.
+
+The international sandbox evidence chain now represents sub-cent prices with closed exact-money
+objects rather than floats: approval v3, intent v3, submit report v5, billing attestation v2 and
+receipt v3 preserve `CNY amount=119 scale=4` exactly. Legacy cents generations remain readable but
+cannot authorize or finalize an exact request. Exact intent/report artifacts bind both API Base and
+operation-endpoint digests, and finalization requires independent raw-quota and displayed-usage
+deltas to prove one actual cost. Focused tests passed `166` with two platform-specific skips; the
+static contract, sandbox compilation, diff check, repository lint (`20` existing warnings, no
+errors), workspace typecheck, full Server tests (`4468` passed, `194` skipped), and a clean full
+preflight rerun passed. Cloud/local/source package verification passed `449/0/0`, `445/2/0`, and
+`445/2/0` at build version `1.0.264`.
+
+Phase 3 remains `4/5` and overall progress remains `32/37`: the exact alias still lacks a retained
+authenticated price/revision artifact for each intended operation and account configuration, and
+no explicit per-request maximum cost has been approved. No Provider POST, charge, production
+mutation, VPS access, deployment, flag change, or `.context/` staging occurred.
 
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until the supplied candidate endpoint/model passes an
-   authenticated no-generation model-catalog check, exact price/currency evidence is retained, and the private
-   [one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) binds the exact
-   credential revision, deployed commit, operation/profile, source/mask hashes, maximum cost,
-   billing evidence path, and an unexpired validity window of at most 60 minutes. The offline draft
-   command may prepare the non-secret fields, but its rejection sentinels and digest are not
-   approval; a human must complete the documented final review. Execute the paid probe only
-   from a private clean checkout of the deployed revision; do not repeat the two previously rejected
+1. Commit, push and dark-deploy the exact-money revision with every AI/Ozon rollout flag still off,
+   then create a private clean checkout of that exact deployed revision for the sandbox CLI.
+2. Do not start a paid `QA-02` probe until an authenticated pricing artifact binds the exact alias,
+   account/group, operation, quality, size, image count, currency and pricing revision, and the
+   operator explicitly approves one maximum cost. Then generate and manually finalize the private
+   [v3 one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) with exact
+   credential/deployed revisions, operation/profile, source/mask hashes, billing references and an
+   unexpired validity window of at most 60 minutes. Do not repeat the two previously rejected
    `IMAGE_TO_IMAGE` requests.
-2. After a single approved `QA-02` request, retain private before/settled billing snapshot files,
-   run the append-only billing finalizer, and record exact endpoint/model/operation/request-mode
-   evidence before promoting any capability.
-3. Run `QA-04` only after the exact paid `QA-02` evidence exists; then proceed to the owner/shop/
-   device pilot and release gates.
-4. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+3. After a single approved request, retain private before/settled billing snapshots, create the v2
+   dual-meter attestation, run the append-only billing finalizer, and record exact
+   endpoint/model/operation/request-mode evidence before promoting that capability. Record async as
+   unsupported unless an explicit task protocol exists; absence does not justify another paid POST.
+4. Run `QA-04` only after exact paid `QA-02` evidence exists; then proceed to owner/shop/device pilot
+   and release gates.
+5. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol

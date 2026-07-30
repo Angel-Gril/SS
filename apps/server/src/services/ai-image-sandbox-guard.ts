@@ -7,6 +7,15 @@ import {
   assertAiImageSandboxApprovalCurrent,
   type AiImageSandboxApprovalEvidence,
 } from './ai-image-sandbox-approval.js';
+import {
+  AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+  AiImageSandboxMoneyError,
+  type AiImageSandboxMoney,
+  assertAiImageSandboxMoneyMajorUnitLimit,
+  assertAiImageSandboxMoneyPair,
+  parseAiImageSandboxLegacyCents,
+  parseAiImageSandboxMoney,
+} from './ai-image-sandbox-money.js';
 
 export class AiImageSandboxGuardError extends Error {
   constructor(
@@ -93,15 +102,33 @@ export interface AiImageSandboxEditContract {
   maskSha256: string | null;
 }
 
-function positiveInteger(value: unknown, field: string) {
-  const number = Number(value);
-  if (!Number.isSafeInteger(number) || number <= 0) {
-    throw new AiImageSandboxGuardError(
-      'INVALID_SANDBOX_BUDGET',
-      `${field} must be a positive integer`,
-    );
+function legacyCents(value: unknown, field: string) {
+  try {
+    return parseAiImageSandboxLegacyCents(value, field);
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxGuardError('INVALID_SANDBOX_BUDGET', error.message);
+    }
+    throw error;
   }
-  return number;
+}
+
+function exactMoneyPair(input: { quotedCost: unknown; maximumCost: unknown }) {
+  try {
+    const quotedCost = parseAiImageSandboxMoney(input.quotedCost, 'Sandbox quoted cost');
+    const maximumCost = parseAiImageSandboxMoney(input.maximumCost, 'Sandbox maximum cost');
+    assertAiImageSandboxMoneyPair(quotedCost, maximumCost);
+    assertAiImageSandboxMoneyMajorUnitLimit(
+      maximumCost,
+      AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+    );
+    return { quotedCost, maximumCost };
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw new AiImageSandboxGuardError('INVALID_SANDBOX_BUDGET', error.message);
+    }
+    throw error;
+  }
 }
 
 function isDefiniteProviderRejection(status: number) {
@@ -569,18 +596,28 @@ async function writeExclusiveDurableFile(
   if (failure) throw failure;
 }
 
-export async function claimAiImageSandboxOperation(input: {
+interface AiImageSandboxOperationClaimBase {
   directory: string;
   operationId: string;
   endpointSha256: string;
+  apiBaseSha256?: string;
   model: string;
   credentialRevision: string;
   adapterRevision: string;
   request: Record<string, unknown>;
-  quotedCostCents: unknown;
-  maximumCostCents: unknown;
   now?: Date;
-}) {
+}
+
+interface AiImageSandboxOperationClaimMoney {
+  quotedCost?: AiImageSandboxMoney;
+  maximumCost?: AiImageSandboxMoney;
+  quotedCostCents?: unknown;
+  maximumCostCents?: unknown;
+}
+
+export async function claimAiImageSandboxOperation(
+  input: AiImageSandboxOperationClaimBase & AiImageSandboxOperationClaimMoney,
+) {
   const operationId = String(input.operationId || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{7,79}$/.test(operationId)) {
     throw new AiImageSandboxGuardError(
@@ -618,12 +655,45 @@ export async function claimAiImageSandboxOperation(input: {
       'Sandbox endpoint evidence must be a SHA-256 digest',
     );
   }
-  const quotedCostCents = positiveInteger(input.quotedCostCents, 'quotedCostCents');
-  const maximumCostCents = positiveInteger(input.maximumCostCents, 'maximumCostCents');
-  if (quotedCostCents > maximumCostCents) {
+  const hasExactMoney = Object.hasOwn(input, 'quotedCost')
+    || Object.hasOwn(input, 'maximumCost');
+  const hasLegacyMoney = Object.hasOwn(input, 'quotedCostCents')
+    || Object.hasOwn(input, 'maximumCostCents');
+  if (hasExactMoney === hasLegacyMoney) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_BUDGET',
+      'Sandbox claim must use exactly one complete cost representation',
+    );
+  }
+  const exactCosts = hasExactMoney
+    ? exactMoneyPair({ quotedCost: input.quotedCost, maximumCost: input.maximumCost })
+    : null;
+  const legacyCosts = hasLegacyMoney
+    ? {
+        quotedCostCents: legacyCents(input.quotedCostCents, 'quotedCostCents'),
+        maximumCostCents: legacyCents(input.maximumCostCents, 'maximumCostCents'),
+      }
+    : null;
+  if (legacyCosts && legacyCosts.quotedCostCents > legacyCosts.maximumCostCents) {
     throw new AiImageSandboxGuardError(
       'INVALID_SANDBOX_BUDGET',
       'Quoted sandbox cost exceeds the confirmed maximum',
+    );
+  }
+  const apiBaseSha256 = exactCosts
+    ? String(input.apiBaseSha256 || '').trim().toLowerCase()
+    : null;
+  if (
+    exactCosts
+    && (
+      !apiBaseSha256
+      || !/^[a-f0-9]{64}$/.test(apiBaseSha256)
+      || apiBaseSha256 === endpointSha256
+    )
+  ) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_ENDPOINT',
+      'Exact sandbox claim must bind a distinct API Base SHA-256 digest',
     );
   }
 
@@ -635,20 +705,37 @@ export async function claimAiImageSandboxOperation(input: {
     model,
     request: sanitizedRequest.fingerprint,
   });
-  const intent = {
-    schemaVersion: 2,
-    operationId,
-    state: 'SUBMITTING',
-    endpointSha256,
-    model,
-    credentialRevision,
-    adapterRevision,
-    requestFingerprint: canonicalRequestFingerprint,
-    request: sanitizedRequest.audit,
-    quotedCostCents,
-    maximumCostCents,
-    createdAt: new Date().toISOString(),
-  };
+  const createdAt = new Date().toISOString();
+  const intent = exactCosts
+    ? {
+        schemaVersion: 3 as const,
+        operationId,
+        state: 'SUBMITTING',
+        endpointSha256,
+        apiBaseSha256: apiBaseSha256!,
+        model,
+        credentialRevision,
+        adapterRevision,
+        requestFingerprint: canonicalRequestFingerprint,
+        request: sanitizedRequest.audit,
+        quotedCost: exactCosts.quotedCost,
+        maximumCost: exactCosts.maximumCost,
+        createdAt,
+      }
+    : {
+        schemaVersion: 2 as const,
+        operationId,
+        state: 'SUBMITTING',
+        endpointSha256,
+        model,
+        credentialRevision,
+        adapterRevision,
+        requestFingerprint: canonicalRequestFingerprint,
+        request: sanitizedRequest.audit,
+        quotedCostCents: legacyCosts!.quotedCostCents,
+        maximumCostCents: legacyCosts!.maximumCostCents,
+        createdAt,
+      };
   const fingerprintDirectoryPath = resolve(input.directory, '.fingerprints');
   await ensurePrivateDirectory(fingerprintDirectoryPath);
   const intentDirectory = await openPrivateEvidenceDirectory(input.directory);

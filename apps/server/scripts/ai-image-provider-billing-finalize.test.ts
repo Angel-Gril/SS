@@ -31,10 +31,10 @@ describe('AI image Provider billing finalizer command', () => {
     const resolveRevision = vi.fn(async () => revision);
     const finalizeBilling = vi.fn(async () => ({
       receipt: {
-        schemaVersion: 1,
+        schemaVersion: 3,
         event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
         operationId: 'sandbox-billing-command-0001',
-        actualCostCents: 10,
+        actualCost: { currency: 'CNY', amount: 119, scale: 4 },
       },
       receiptPath: 'C:\\private\\must-not-be-printed.billing.json',
       replayed: false,
@@ -64,6 +64,7 @@ describe('AI image Provider billing finalizer command', () => {
       [
         'apps/server/scripts/ai-image-provider-billing-finalize.ts',
         'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
+        'apps/server/src/services/ai-image-sandbox-money.ts',
         'apps/server/src/services/ai-image-sandbox-code-revision.ts',
         'apps/server/src/services/ai-image-sandbox-guard.ts',
       ],

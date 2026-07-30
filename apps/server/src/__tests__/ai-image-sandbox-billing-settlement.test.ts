@@ -37,6 +37,8 @@ const requestFingerprint = createAiImageSandboxRequestFingerprint({
 });
 const approvalSha256 = '2'.repeat(64);
 const rawProviderRequestId = 'provider-request-private-0001';
+const exactQuotedCost = { currency: 'CNY', amount: 119, scale: 4 } as const;
+const exactMaximumCost = { currency: 'CNY', amount: 1_000, scale: 4 } as const;
 
 function sha256(value: Buffer | string) {
   return createHash('sha256').update(value).digest('hex');
@@ -92,6 +94,41 @@ function intent(
   };
 }
 
+function exactIntent(
+  overrides: Record<string, unknown> = {},
+  approvalOverrides: Record<string, unknown> = {},
+) {
+  return {
+    schemaVersion: 3,
+    operationId,
+    state: 'SUBMITTING',
+    endpointSha256: '3'.repeat(64),
+    apiBaseSha256: '6'.repeat(64),
+    model: 'edit-capable-model',
+    credentialRevision: 'credential-r1',
+    adapterRevision: 'a'.repeat(40),
+    requestFingerprint,
+    request: {
+      operation: 'FULL_EDIT',
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      n: 1,
+      width: 1024,
+      height: 1024,
+      size: '1024x1024',
+      promptSha256: '4'.repeat(64),
+      sourceSha256: ['5'.repeat(64)],
+      sourceDimensions: [{ width: 1024, height: 1024 }],
+      maskSha256: null,
+      maskDimensions: null,
+      approvalEvidence: approvalEvidence({ currency: 'CNY', ...approvalOverrides }),
+    },
+    quotedCost: exactQuotedCost,
+    maximumCost: exactMaximumCost,
+    createdAt: '2030-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function report(
   overrides: Record<string, unknown> = {},
   approvalOverrides: Record<string, unknown> = {},
@@ -128,6 +165,53 @@ function report(
     actualCostCents: null,
     quotedCostCents: 10,
     maximumCostCents: 20,
+    intentPath: 'C:\\private\\must-not-be-trusted.intent.json',
+    ...(state === 'SUCCEEDED' ? {
+      imageCount: 1,
+      mimeType: 'image/png',
+      width: 1_024,
+      height: 1_024,
+      bytes: 1_024,
+      sha256: 'a'.repeat(64),
+      imagePath: 'C:\\private\\must-not-be-trusted.image.png',
+    } : {
+      failureCode: 'PROVIDER_REJECTED',
+    }),
+    ...overrides,
+  };
+}
+
+function exactReport(
+  overrides: Record<string, unknown> = {},
+  approvalOverrides: Record<string, unknown> = {},
+) {
+  const state = typeof overrides.state === 'string' ? overrides.state : 'SUCCEEDED';
+  return {
+    schemaVersion: 5,
+    operationId,
+    state,
+    operation: 'FULL_EDIT',
+    requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+    credentialRevision: 'credential-r1',
+    adapterRevision: 'a'.repeat(40),
+    provider: 'custom-openai-compatible',
+    model: 'edit-capable-model',
+    apiBaseSha256: '6'.repeat(64),
+    operationEndpointSha256: '3'.repeat(64),
+    approvalEvidence: approvalEvidence({ currency: 'CNY', ...approvalOverrides }),
+    promptSha256: '4'.repeat(64),
+    sourceSha256: ['5'.repeat(64)],
+    maskSha256: null,
+    requestedSize: '1024x1024',
+    createRequests: 1,
+    providerRequestIdHash: sha256(rawProviderRequestId),
+    usage: null,
+    startedAt: '2030-01-01T00:01:00.000Z',
+    completedAt: '2030-01-01T00:02:00.000Z',
+    elapsedMs: 60_000,
+    actualCost: null,
+    quotedCost: exactQuotedCost,
+    maximumCost: exactMaximumCost,
     intentPath: 'C:\\private\\must-not-be-trusted.intent.json',
     ...(state === 'SUCCEEDED' ? {
       imageCount: 1,
@@ -196,6 +280,59 @@ function attestation(input: {
   };
 }
 
+function exactMeterEvidence(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    kind: 'NEW_API_QUOTA_AND_TOTAL_USAGE_V1',
+    rawQuotaDelta: 5_950,
+    quotaUnitsPerCurrencyUnit: 500_000,
+    displayTotalUsageDelta: { amount: 119, scale: 2 },
+    displayTotalUsageUnitCurrencyScale: 2,
+    ...overrides,
+  };
+}
+
+function exactAttestation(input: {
+  intentSha256: string;
+  reportSha256: string;
+  fingerprintClaimSha256: string;
+  preCallBillingSnapshotPath: string;
+  settledBillingSnapshotPath: string;
+  preCallBillingSnapshotSha256: string;
+  settledBillingSnapshotSha256: string;
+}, overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 2,
+    settlementId: 'sandbox-billing-settlement-0001',
+    statement: AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT,
+    operationId,
+    preCallObservedAt: '2029-12-31T23:59:30.000Z',
+    settledObservedAt: '2030-01-01T00:05:00.000Z',
+    reconcilerRef: 'billing-operator-review',
+    providerAccountRef: 'provider-account-main',
+    pricingRevision: 'pricing-r1',
+    preCallBillingSnapshotRef: 'private-ledger/before',
+    billingReconciliationRef: 'private-ledger/after',
+    preCallBillingSnapshotPath: input.preCallBillingSnapshotPath,
+    settledBillingSnapshotPath: input.settledBillingSnapshotPath,
+    preCallBillingSnapshotSha256: input.preCallBillingSnapshotSha256,
+    settledBillingSnapshotSha256: input.settledBillingSnapshotSha256,
+    providerBillingEntryRef: 'private-ledger/entry-0001',
+    intentSha256: input.intentSha256,
+    submitReportSha256: input.reportSha256,
+    fingerprintClaimSha256: input.fingerprintClaimSha256,
+    requestFingerprint,
+    approvalId: `approval-${operationId}`,
+    approvalSha256,
+    correlationMethod: 'PROVIDER_REQUEST_ID',
+    providerRequestId: rawProviderRequestId,
+    billingOutcome: 'CHARGED',
+    actualCost: exactQuotedCost,
+    meterEvidence: exactMeterEvidence(),
+    ...overrides,
+  };
+}
+
 async function writeCanonicalJson(path: string, value: unknown) {
   const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -207,7 +344,9 @@ async function fixture(input: {
   approvalOverrides?: Record<string, unknown>;
   intentOverrides?: Record<string, unknown>;
   reportOverrides?: Record<string, unknown>;
-  reportSchemaVersion?: 3 | 4;
+  intentSchemaVersion?: 2 | 3;
+  reportSchemaVersion?: 3 | 4 | 5;
+  attestationSchemaVersion?: 1 | 2;
   claimOverrides?: Record<string, unknown>;
   attestationOverrides?: Record<string, unknown>;
 } = {}) {
@@ -218,11 +357,15 @@ async function fixture(input: {
   const claimPath = join(root, 'intents', '.fingerprints', `${requestFingerprint}.claim.json`);
   const storedIntent = await writeCanonicalJson(
     intentPath,
-    intent(input.intentOverrides, input.approvalOverrides),
+    input.intentSchemaVersion === 3
+      ? exactIntent(input.intentOverrides, input.approvalOverrides)
+      : intent(input.intentOverrides, input.approvalOverrides),
   );
   const storedReport = await writeCanonicalJson(
     reportPath,
-    report(input.reportOverrides, input.approvalOverrides, input.reportSchemaVersion),
+    input.reportSchemaVersion === 5
+      ? exactReport(input.reportOverrides, input.approvalOverrides)
+      : report(input.reportOverrides, input.approvalOverrides, input.reportSchemaVersion),
   );
   const storedClaim = await writeCanonicalJson(claimPath, fingerprintClaim(input.claimOverrides));
   const preCallBillingSnapshotPath = join(root, 'private', 'billing-before.snapshot');
@@ -233,7 +376,7 @@ async function fixture(input: {
   await writeFile(preCallBillingSnapshotPath, preCallBillingSnapshot, { mode: 0o600 });
   await writeFile(settledBillingSnapshotPath, settledBillingSnapshot, { mode: 0o600 });
   const settlementPath = join(root, 'private', `${operationId}.billing-attestation.json`);
-  const storedSettlement = await writeCanonicalJson(settlementPath, attestation({
+  const attestationInput = {
     intentSha256: storedIntent.sha256,
     reportSha256: storedReport.sha256,
     fingerprintClaimSha256: storedClaim.sha256,
@@ -241,7 +384,13 @@ async function fixture(input: {
     settledBillingSnapshotPath,
     preCallBillingSnapshotSha256: sha256(preCallBillingSnapshot),
     settledBillingSnapshotSha256: sha256(settledBillingSnapshot),
-  }, input.attestationOverrides));
+  };
+  const storedSettlement = await writeCanonicalJson(
+    settlementPath,
+    input.attestationSchemaVersion === 2
+      ? exactAttestation(attestationInput, input.attestationOverrides)
+      : attestation(attestationInput, input.attestationOverrides),
+  );
   return {
     root,
     intentPath,
@@ -326,6 +475,282 @@ describe('AI image sandbox billing settlement', () => {
       submitState: 'SUCCEEDED',
     });
     expect(result.receipt).not.toHaveProperty('endpointSha256');
+  });
+
+  it('finalizes one exact CNY settlement from closed integer meter evidence', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 3,
+      event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
+      apiBaseSha256: '6'.repeat(64),
+      operationEndpointSha256: '3'.repeat(64),
+      submitState: 'SUCCEEDED',
+      billingOutcome: 'CHARGED',
+      billingGate: 'PASS',
+      actualCost: exactQuotedCost,
+      billedUnits: 1,
+      quotedCost: exactQuotedCost,
+      maximumCost: exactMaximumCost,
+      providerRequestIdHash: sha256(rawProviderRequestId),
+    });
+    for (const forbidden of [
+      'currency',
+      'actualCostCents',
+      'quotedCostCents',
+      'maximumCostCents',
+      'meterEvidence',
+      'rawQuotaDelta',
+      'quotaUnitsPerCurrencyUnit',
+      'displayTotalUsageDelta',
+      'displayTotalUsageUnitCurrencyScale',
+      'providerRequestId',
+      'preCallBillingSnapshotPath',
+      'settledBillingSnapshotPath',
+      'providerBillingEntryRef',
+    ]) {
+      expect(result.receipt).not.toHaveProperty(forbidden);
+    }
+    const stored = await readFile(result.receiptPath, 'utf8');
+    expect(stored).not.toContain(rawProviderRequestId);
+    expect(stored).not.toContain('provider-account-main');
+    expect(stored).not.toContain('private-ledger/');
+    expect(stored).not.toContain('C:\\private');
+    expect(stored).not.toContain('rawQuotaDelta');
+    expect(stored).not.toContain('quotaUnitsPerCurrencyUnit');
+    expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
+    expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+  });
+
+  it('rejects an exact report whose API Base digest differs from the immutable intent', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      reportOverrides: { apiBaseSha256: '7'.repeat(64) },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('retains exact v2 no-charge semantics for a rejected request', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      reportOverrides: {
+        state: 'REJECTED',
+        providerRequestIdHash: null,
+        failureCode: 'PROVIDER_REJECTED',
+      },
+      attestationOverrides: {
+        correlationMethod: 'UNIQUE_ACCOUNT_TIME_WINDOW',
+        providerRequestId: null,
+        billingOutcome: 'NO_CHARGE',
+        actualCost: { currency: 'CNY', amount: 0, scale: 4 },
+        meterEvidence: exactMeterEvidence({
+          rawQuotaDelta: 0,
+          displayTotalUsageDelta: { amount: 0, scale: 0 },
+        }),
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({
+      receipt: {
+        schemaVersion: 3,
+        billingOutcome: 'NO_CHARGE',
+        actualCost: { currency: 'CNY', amount: 0, scale: 4 },
+        billedUnits: 0,
+      },
+    });
+  });
+
+  it('records an exact over-maximum charge without rounding it to cents', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      attestationOverrides: {
+        actualCost: { currency: 'CNY', amount: 1_001, scale: 4 },
+        meterEvidence: exactMeterEvidence({
+          rawQuotaDelta: 50_050,
+          displayTotalUsageDelta: { amount: 1_001, scale: 2 },
+        }),
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({
+      receipt: {
+        billingGate: 'COST_LIMIT_EXCEEDED',
+        actualCost: { currency: 'CNY', amount: 1_001, scale: 4 },
+      },
+    });
+  });
+
+  it.each([
+    [2, 5, 2],
+    [3, 4, 2],
+    [3, 5, 1],
+    [2, 4, 2],
+  ] as const)(
+    'rejects cross-generation settlement mix intent v%s / report v%s / attestation v%s',
+    async (intentSchemaVersion, reportSchemaVersion, attestationSchemaVersion) => {
+      const value = await fixture({
+        intentSchemaVersion,
+        reportSchemaVersion,
+        attestationSchemaVersion,
+      });
+
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+    },
+  );
+
+  it('rejects non-exact or open quota and total-usage meter evidence', async () => {
+    const invalidMeterEvidence = [
+      exactMeterEvidence({ rawQuotaDelta: 5_951 }),
+      exactMeterEvidence({ displayTotalUsageDelta: { amount: 120, scale: 2 } }),
+      exactMeterEvidence({ privateBalanceBefore: 12_345 }),
+      exactMeterEvidence({ quotaUnitsPerCurrencyUnit: 500_000.5 }),
+    ];
+
+    for (const meterEvidence of invalidMeterEvidence) {
+      const value = await fixture({
+        intentSchemaVersion: 3,
+        reportSchemaVersion: 5,
+        attestationSchemaVersion: 2,
+        attestationOverrides: { meterEvidence },
+      });
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_ATTESTATION_INVALID' });
+    }
+  });
+
+  it('keeps historical v1/v2 receipts free of exact-money fields', async () => {
+    for (const reportSchemaVersion of [3, 4] as const) {
+      const value = await fixture({ reportSchemaVersion });
+      const result = await finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      });
+
+      expect(result.receipt).toMatchObject({
+        schemaVersion: reportSchemaVersion === 4 ? 2 : 1,
+        currency: 'USD',
+        actualCostCents: 10,
+        quotedCostCents: 10,
+        maximumCostCents: 20,
+      });
+      expect(result.receipt).not.toHaveProperty('actualCost');
+      expect(result.receipt).not.toHaveProperty('quotedCost');
+      expect(result.receipt).not.toHaveProperty('maximumCost');
+      expect(Object.keys(result.receipt)).toEqual([
+        'schemaVersion',
+        'event',
+        'operationId',
+        'settlementId',
+        'settlementSha256',
+        'intentSha256',
+        'submitReportSha256',
+        'fingerprintClaimSha256',
+        'requestFingerprint',
+        'submitState',
+        'providerOutcomeResolved',
+        'sameRequestRetryAllowed',
+        ...(reportSchemaVersion === 4
+          ? ['apiBaseSha256', 'operationEndpointSha256']
+          : ['endpointSha256']),
+        'modelSha256',
+        'operation',
+        'requestProfile',
+        'promptSha256',
+        'sourceSha256',
+        'maskSha256',
+        'approvalId',
+        'approvalSha256',
+        'submissionAdapterRevision',
+        'finalizationAdapterRevision',
+        'correlationMethod',
+        'providerRequestIdHash',
+        'currency',
+        'billingOutcome',
+        'billingGate',
+        'actualCostCents',
+        'billedUnits',
+        'quotedCostCents',
+        'maximumCostCents',
+        'preCallObservedAt',
+        'settledObservedAt',
+        'reconcilerRefSha256',
+        'providerAccountRefSha256',
+        'pricingRevisionSha256',
+        'preCallBillingSnapshotRefSha256',
+        'billingReconciliationRefSha256',
+        'providerBillingEntryRefSha256',
+        'preCallBillingSnapshotSha256',
+        'settledBillingSnapshotSha256',
+      ]);
+      expect(await readFile(result.receiptPath, 'utf8')).toBe(
+        `${JSON.stringify(result.receipt, null, 2)}\n`,
+      );
+    }
   });
 
   it('rejects v4 report hashes that do not bind the claimed operation endpoint', async () => {

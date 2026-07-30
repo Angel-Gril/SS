@@ -278,8 +278,24 @@ Progress: 4/5 tasks.
   `4422` with `194` skipped, lint had `0` errors and `20` existing warnings, workspace typecheck
   passed, preflight passed `445/0`, and cloud/local package verification passed `449/0/0` and
   `445/2/0` at build version `1.0.264`. Independent review found no P0/P1 issue.
-- `QA-02` remains open at `4/5` and overall progress remains `32/37`. The candidate endpoint/model
-  has not yet passed an authenticated model-catalog check, exact pricing/currency evidence is still
-  absent, the private DPAPI Key file is not present, and no per-request maximum-cost approval has
-  been finalized. This work made no real Provider POST, charge, production mutation, VPS access,
-  deployment, flag change, or `.context/` staging.
+- The candidate's authenticated read-only model catalogue returned HTTP 200 and listed only the
+  exact `gpt-image-2-count` alias. The Key is retained only in a private DPAPI file outside the
+  repository, and private catalogue/billing snapshots remain outside Git. Read-only billing checks
+  established the paired quota/usage meters needed for settlement without making a Provider POST.
+- International sandbox costs now use closed exact-money objects (`currency`, integer `amount`,
+  integer `scale`) without changing the ERP production billing domain. New approval v3, intent v3,
+  submit report v5, billing attestation v2 and receipt v3 artifacts preserve `CNY 0.0119` exactly;
+  legacy cents approval/intent/report/attestation/receipt generations remain readable but cannot be
+  mixed with exact evidence. Exact intent/report evidence independently binds the API Base and
+  operation-endpoint hashes, and settlement requires both raw-quota and displayed-usage deltas to
+  prove the same actual cost. Canonical parsing rejects exponent/hex/decimal-string legacy cents,
+  over-limit costs and cross-generation approvals before DNS or dispatch.
+- Focused exact-money tests passed `166` with two platform-specific skips. The static contract,
+  sandbox TypeScript compilation, diff check, repository lint (`20` existing warnings, no errors),
+  workspace typecheck, full Server tests (`4468` passed, `194` skipped), and a clean full preflight
+  rerun passed. Cloud/local/source package verification passed `449/0/0`, `445/2/0`, and `445/2/0`
+  at build version `1.0.264`.
+- `QA-02` remains open at `4/5` and overall progress remains `32/37`. The exact alias still lacks a
+  retained authenticated pricing artifact for each intended operation/account configuration, and
+  the operator has not explicitly approved one maximum cost. This work made no Provider POST,
+  charge, production mutation, VPS access, deployment, flag change, or `.context/` staging.

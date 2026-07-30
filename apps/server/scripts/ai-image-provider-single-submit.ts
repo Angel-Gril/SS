@@ -39,6 +39,15 @@ import {
   resolveAiImageSandboxRepositoryRevision,
   sanitizeAiImageSandboxGitEnvironment,
 } from '../src/services/ai-image-sandbox-code-revision.js';
+import {
+  AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+  AiImageSandboxMoneyError,
+  type AiImageSandboxMoney,
+  assertAiImageSandboxMoneyMajorUnitLimit,
+  assertAiImageSandboxMoneyPair,
+  parseAiImageSandboxLegacyCents,
+  parseAiImageSandboxMoneyIntegers,
+} from '../src/services/ai-image-sandbox-money.js';
 
 export {
   resolveAiImageSandboxRepositoryRevision,
@@ -51,6 +60,7 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-sandbox-approval.ts',
   'apps/server/src/services/ai-image-sandbox-guard.ts',
+  'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-providers.ts',
@@ -131,6 +141,92 @@ function requiredEnvironment(name: string, environment: NodeJS.ProcessEnv) {
 
 function optionalEnvironment(name: string, environment: NodeJS.ProcessEnv) {
   return String(environment[name] || '').trim();
+}
+
+type AiImageSandboxCostConfiguration =
+  | {
+      kind: 'EXACT';
+      quotedCost: AiImageSandboxMoney;
+      maximumCost: AiImageSandboxMoney;
+    }
+  | {
+      kind: 'LEGACY_CENTS';
+      quotedCostCentsValue: string;
+      maximumCostCentsValue: string;
+    };
+
+function sandboxCostConfiguration(
+  environment: NodeJS.ProcessEnv,
+): AiImageSandboxCostConfiguration {
+  const exactMoneyNames = [
+    'AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT',
+    'AI_IMAGE_SANDBOX_MAX_COST_AMOUNT',
+    'AI_IMAGE_SANDBOX_COST_SCALE',
+  ] as const;
+  const legacyNames = [
+    'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS',
+    'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
+  ] as const;
+  const hasExact = exactMoneyNames.some((name) => optionalEnvironment(name, environment));
+  const hasLegacy = legacyNames.some((name) => optionalEnvironment(name, environment));
+  if (hasExact && hasLegacy) {
+    throw Object.assign(
+      new Error('Sandbox cost configuration must not mix exact money and legacy cents'),
+      { code: 'SANDBOX_COST_CONFIG_INVALID' },
+    );
+  }
+  if (!hasExact) {
+    try {
+      const quotedCostCents = parseAiImageSandboxLegacyCents(
+        requiredEnvironment(legacyNames[0], environment),
+        'Sandbox quoted cost cents',
+      );
+      const maximumCostCents = parseAiImageSandboxLegacyCents(
+        requiredEnvironment(legacyNames[1], environment),
+        'Sandbox maximum cost cents',
+      );
+      if (quotedCostCents > maximumCostCents) {
+        throw new AiImageSandboxMoneyError('Sandbox quoted cost exceeds its maximum');
+      }
+      return {
+        kind: 'LEGACY_CENTS',
+        quotedCostCentsValue: String(quotedCostCents),
+        maximumCostCentsValue: String(maximumCostCents),
+      };
+    } catch (error) {
+      if (error instanceof AiImageSandboxMoneyError) {
+        throw Object.assign(new Error(error.message), { code: 'SANDBOX_COST_CONFIG_INVALID' });
+      }
+      throw error;
+    }
+  }
+  try {
+    const currency = requiredEnvironment('AI_IMAGE_SANDBOX_CURRENCY', environment);
+    const scale = requiredEnvironment(exactMoneyNames[2], environment);
+    const quotedCost = parseAiImageSandboxMoneyIntegers({
+      currency,
+      amount: requiredEnvironment(exactMoneyNames[0], environment),
+      scale,
+      field: 'Sandbox quoted cost',
+    });
+    const maximumCost = parseAiImageSandboxMoneyIntegers({
+      currency,
+      amount: requiredEnvironment(exactMoneyNames[1], environment),
+      scale,
+      field: 'Sandbox maximum cost',
+    });
+    assertAiImageSandboxMoneyPair(quotedCost, maximumCost);
+    assertAiImageSandboxMoneyMajorUnitLimit(
+      maximumCost,
+      AI_IMAGE_SANDBOX_MAX_COST_MAJOR_UNITS,
+    );
+    return { kind: 'EXACT', quotedCost, maximumCost };
+  } catch (error) {
+    if (error instanceof AiImageSandboxMoneyError) {
+      throw Object.assign(new Error(error.message), { code: 'SANDBOX_COST_CONFIG_INVALID' });
+    }
+    throw error;
+  }
 }
 
 function requiredSha256(name: string, environment: NodeJS.ProcessEnv) {
@@ -437,14 +533,7 @@ export async function runAiImageProviderSingleSubmit(
   const prompt = fixedPrompt(operation, profile);
   const sourceSha256 = source ? [source.sha256] : [];
   const maskSha256 = mask?.sha256 || null;
-  const quotedCostCentsValue = requiredEnvironment(
-    'AI_IMAGE_SANDBOX_QUOTED_COST_CENTS',
-    environment,
-  );
-  const maximumCostCentsValue = requiredEnvironment(
-    'AI_IMAGE_SANDBOX_MAX_COST_CENTS',
-    environment,
-  );
+  const costs = sandboxCostConfiguration(environment);
   const approvalEvidence = await loadAiImageSandboxApproval({
     repositoryRoot,
     approvalPath: requiredEnvironment('AI_IMAGE_SANDBOX_APPROVAL_PATH', environment),
@@ -461,14 +550,18 @@ export async function runAiImageProviderSingleSubmit(
       adapterRevision,
       sourceSha256,
       maskSha256,
-      quotedCostCents: Number(quotedCostCentsValue),
-      maximumCostCents: Number(maximumCostCentsValue),
+      ...(costs.kind === 'EXACT'
+        ? { quotedCost: costs.quotedCost, maximumCost: costs.maximumCost }
+        : {
+            quotedCostCents: Number(costs.quotedCostCentsValue),
+            maximumCostCents: Number(costs.maximumCostCentsValue),
+          }),
     },
   });
   if (mode === 'VERIFY_APPROVAL') {
     assertAiImageSandboxApprovalCurrent(approvalEvidence, currentTime(options));
     const verification = {
-      schemaVersion: 2,
+      schemaVersion: costs.kind === 'EXACT' ? 3 : 2,
       event: 'AI_IMAGE_SANDBOX_APPROVAL_VERIFIED',
       operationId,
       operation,
@@ -482,8 +575,12 @@ export async function runAiImageProviderSingleSubmit(
       sourceSha256,
       maskSha256,
       requestedSize: outputSize,
-      quotedCostCents: Number(quotedCostCentsValue),
-      maximumCostCents: Number(maximumCostCentsValue),
+      ...(costs.kind === 'EXACT'
+        ? { quotedCost: costs.quotedCost, maximumCost: costs.maximumCost }
+        : {
+            quotedCostCents: Number(costs.quotedCostCentsValue),
+            maximumCostCents: Number(costs.maximumCostCentsValue),
+          }),
       approvalEvidence,
     };
     process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
@@ -525,12 +622,17 @@ export async function runAiImageProviderSingleSubmit(
     directory: resolve(outputDirectory, 'intents'),
     operationId,
     endpointSha256: operationEndpointSha256,
+    ...(costs.kind === 'EXACT' ? { apiBaseSha256 } : {}),
     model,
     credentialRevision,
     adapterRevision,
     request: requestContract,
-    quotedCostCents: quotedCostCentsValue,
-    maximumCostCents: maximumCostCentsValue,
+    ...(costs.kind === 'EXACT'
+      ? { quotedCost: costs.quotedCost, maximumCost: costs.maximumCost }
+      : {
+          quotedCostCents: costs.quotedCostCentsValue,
+          maximumCostCents: costs.maximumCostCentsValue,
+        }),
     now: currentTime(options),
   });
   const startedAtMs = Math.max(Date.now(), Date.parse(claim.intent.createdAt));
@@ -584,6 +686,17 @@ export async function runAiImageProviderSingleSubmit(
     });
 
   const reportPath = resolve(outputDirectory, `${operationId}.report.json`);
+  const reportCosts = claim.intent.schemaVersion === 3
+    ? {
+        actualCost: null,
+        quotedCost: claim.intent.quotedCost,
+        maximumCost: claim.intent.maximumCost,
+      }
+    : {
+        actualCostCents: null,
+        quotedCostCents: claim.intent.quotedCostCents,
+        maximumCostCents: claim.intent.maximumCostCents,
+      };
   let reportWritten = false;
   let result;
   try {
@@ -633,7 +746,7 @@ export async function runAiImageProviderSingleSubmit(
 
   const completedAtMs = Math.max(Date.now(), startedAtMs);
   const report = {
-    schemaVersion: 4,
+    schemaVersion: claim.intent.schemaVersion === 3 ? 5 : 4,
     operationId,
     state: 'SUCCEEDED',
     operation,
@@ -663,9 +776,7 @@ export async function runAiImageProviderSingleSubmit(
     startedAt,
     completedAt: new Date(completedAtMs).toISOString(),
     elapsedMs: completedAtMs - startedAtMs,
-    actualCostCents: null,
-    quotedCostCents: claim.intent.quotedCostCents,
-    maximumCostCents: claim.intent.maximumCostCents,
+    ...reportCosts,
     intentPath: claim.intentPath,
     imagePath,
   };
@@ -679,7 +790,7 @@ export async function runAiImageProviderSingleSubmit(
       const evidence = fetchOnce.getEvidence();
       const completedAtMs = Math.max(Date.now(), startedAtMs);
       const report = {
-        schemaVersion: 4,
+        schemaVersion: claim.intent.schemaVersion === 3 ? 5 : 4,
         operationId,
         state: createRequests === 0
           ? 'PRE_DISPATCH_FAILED'
@@ -705,9 +816,7 @@ export async function runAiImageProviderSingleSubmit(
         failureCode: safeFailureCode(error),
         startedAt,
         completedAt: new Date(completedAtMs).toISOString(),
-        actualCostCents: null,
-        quotedCostCents: claim.intent.quotedCostCents,
-        maximumCostCents: claim.intent.maximumCostCents,
+        ...reportCosts,
         elapsedMs: completedAtMs - startedAtMs,
         intentPath: claim.intentPath,
       };

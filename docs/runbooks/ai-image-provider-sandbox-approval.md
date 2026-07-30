@@ -19,8 +19,15 @@ gpt-image-2-i2i-20260724-200300-01
 gpt-image-2-i2i-20260725064150-03
 ```
 
-Select a genuinely edit-capable endpoint/model first. One approval file authorizes only one of
-`TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`; it cannot prove another operation.
+The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
+authenticated model catalogue, but that does not establish its account-specific price or edit
+coverage. Do not prepare a paid approval until a timestamped authenticated pricing artifact binds
+the exact alias, account/group, operation, quality, size, image count, currency, and pricing
+revision, and the operator explicitly approves the maximum cost for that one request. A price
+stated in chat is planning input, not independent Provider pricing evidence.
+
+One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
+`INPAINT`; it cannot prove another operation.
 
 ## Generate A Non-Approval Draft Offline
 
@@ -34,10 +41,12 @@ pnpm --filter server sandbox:ai-image:approval:draft
 The command requires a private, existing parent directory (mode `0700` on Linux), a clean
 verifiable Git checkout of `AI_IMAGE_SANDBOX_ADAPTER_REVISION`, and the same endpoint, model,
 operation/profile, credential revision, source/mask digest, and quoted/maximum cost variables used
-by the submit command. Draft costs must be canonical positive integers no greater than
-`10,000,000` cents, with quote less than or equal to maximum. Edit media must use supported bounded
-PNG/JPEG/WebP bytes; for `INPAINT`, source plus mask must not exceed the shared `50 MiB` multipart
-limit. It additionally requires:
+by the submit command. New approvals use exact money: one uppercase currency, canonical positive
+integer `amount` values, and one shared `scale` from `0` through `8`. The quote must not exceed the
+maximum, and the maximum must not exceed `100,000` major currency units. Decimal strings and
+floating-point values are never used. Exact-money variables must not be mixed with the legacy
+integer-cents variables. Edit media must use supported bounded PNG/JPEG/WebP bytes; for `INPAINT`,
+source plus mask must not exceed the shared `50 MiB` multipart limit. It additionally requires:
 
 | Variable                                                  | Requirement                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -49,6 +58,9 @@ limit. It additionally requires:
 | `AI_IMAGE_SANDBOX_PROVIDER_ACCOUNT_REF`                   | Non-secret Provider account reference                               |
 | `AI_IMAGE_SANDBOX_PRICING_REVISION`                       | Exact pricing evidence revision                                     |
 | `AI_IMAGE_SANDBOX_CURRENCY`                               | Three-letter uppercase currency code                                |
+| `AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT`                     | Canonical positive integer quote in the shared scale                 |
+| `AI_IMAGE_SANDBOX_MAX_COST_AMOUNT`                        | Canonical positive integer approved maximum in the shared scale      |
+| `AI_IMAGE_SANDBOX_COST_SCALE`                             | Shared decimal scale from `0` through `8`                            |
 | `AI_IMAGE_SANDBOX_PRE_CALL_BILLING_SNAPSHOT_REF`          | Non-secret reference for the reviewed before-call bill snapshot     |
 | `AI_IMAGE_SANDBOX_BILLING_RECONCILIATION_REF`             | Non-secret reference for the future settled-bill reconciliation     |
 
@@ -96,7 +108,7 @@ example value with reviewed evidence; do not leave placeholder brackets.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "approvalId": "qa02-full-edit-20260729-01",
   "statement": "I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST",
   "approvedAt": "2026-07-29T01:00:00.000Z",
@@ -104,7 +116,6 @@ example value with reviewed evidence; do not leave placeholder brackets.
   "approverRef": "owner-review-20260729-01",
   "providerAccountRef": "relay-account-main",
   "pricingRevision": "provider-pricing-20260729",
-  "currency": "USD",
   "preCallBillingSnapshotRef": "private-ledger/qa02-full-edit-before",
   "billingReconciliationRef": "private-ledger/qa02-full-edit-after",
   "requestCount": 1,
@@ -120,8 +131,16 @@ example value with reviewed evidence; do not leave placeholder brackets.
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   ],
   "maskSha256": null,
-  "quotedCostCents": 10,
-  "maximumCostCents": 20
+  "quotedCost": {
+    "currency": "CNY",
+    "amount": 119,
+    "scale": 4
+  },
+  "maximumCost": {
+    "currency": "CNY",
+    "amount": 1000,
+    "scale": 4
+  }
 }
 ```
 
@@ -138,6 +157,13 @@ Operation-specific fields:
 - Billing references are non-secret identifiers for the private before-call snapshot and the place
   where the settled charge will be reconciled. The quoted/maximum fields are audit evidence, not a
   Provider-side spending limit.
+- `amount: 119, scale: 4` means `0.0119` major currency units. Quote and maximum must use the same
+  currency and scale, and that shared scale must be minimal for the pair.
+
+Historical `schemaVersion: 2` approvals with `currency`, `quotedCostCents`, and
+`maximumCostCents` remain readable only with the matching legacy cents environment. A v2 approval
+cannot authorize an exact-money runner even when its numeric value happens to have two decimal
+places. Do not edit a v2 record into v3; generate and review a new v3 draft for a new request.
 
 The schema is closed: missing or extra properties fail before DNS resolution, intent creation, or a
 Provider POST. Save it as pretty two-space JSON with one trailing newline; duplicate keys, invalid

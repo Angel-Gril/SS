@@ -20,6 +20,7 @@ const UNSAFE_ENVIRONMENT_NAMES = new Set([
 const BILLING_FINALIZER_TRACKED_PATHS = [
   'apps/server/scripts/ai-image-provider-billing-finalize.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
+  'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-sandbox-guard.ts',
 ];

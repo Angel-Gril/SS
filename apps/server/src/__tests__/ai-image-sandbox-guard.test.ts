@@ -102,6 +102,65 @@ describe('single-submit AI image sandbox guard', () => {
     }
   });
 
+  it('writes exact money only in a v3 intent while preserving sub-cent precision', async () => {
+    const path = await directory();
+    const exact = input(path, 'sandbox-exact-money-0001');
+    delete exact.quotedCostCents;
+    delete exact.maximumCostCents;
+    exact.apiBaseSha256 = createHash('sha256')
+      .update('https://relay.example/v1')
+      .digest('hex');
+    exact.quotedCost = { currency: 'CNY', amount: 119, scale: 4 };
+    exact.maximumCost = { currency: 'CNY', amount: 1000, scale: 4 };
+
+    const claimed = await claimAiImageSandboxOperation(exact);
+    const intent = JSON.parse(await readFile(claimed.intentPath, 'utf8'));
+
+    expect(intent).toMatchObject({
+      schemaVersion: 3,
+      apiBaseSha256: createHash('sha256')
+        .update('https://relay.example/v1')
+        .digest('hex'),
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 1000, scale: 4 },
+    });
+    expect(intent).not.toHaveProperty('quotedCostCents');
+    expect(intent).not.toHaveProperty('maximumCostCents');
+  });
+
+  it('retains the legacy v2 intent cost shape for historical cents callers', async () => {
+    const path = await directory();
+    const claimed = await claimAiImageSandboxOperation(
+      input(path, 'sandbox-legacy-money-0001'),
+    );
+    const intent = JSON.parse(await readFile(claimed.intentPath, 'utf8'));
+
+    expect(intent).toMatchObject({
+      schemaVersion: 2,
+      quotedCostCents: 10,
+      maximumCostCents: 20,
+    });
+    expect(intent).not.toHaveProperty('quotedCost');
+    expect(intent).not.toHaveProperty('maximumCost');
+  });
+
+  it('rejects an exact claim without a distinct API Base digest', async () => {
+    const path = await directory();
+    const exact = input(path, 'sandbox-exact-api-base-0001');
+    delete exact.quotedCostCents;
+    delete exact.maximumCostCents;
+    exact.quotedCost = { currency: 'CNY', amount: 119, scale: 4 };
+    exact.maximumCost = { currency: 'CNY', amount: 1000, scale: 4 };
+
+    await expect(claimAiImageSandboxOperation(exact)).rejects.toMatchObject({
+      code: 'INVALID_SANDBOX_ENDPOINT',
+    });
+    exact.apiBaseSha256 = exact.endpointSha256;
+    await expect(claimAiImageSandboxOperation(exact)).rejects.toMatchObject({
+      code: 'INVALID_SANDBOX_ENDPOINT',
+    });
+  });
+
   it('allows only one winner across concurrent process-equivalent claims', async () => {
     const path = await directory();
     const results = await Promise.allSettled([
@@ -293,6 +352,17 @@ describe('single-submit AI image sandbox guard', () => {
     })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
     await expect(claimAiImageSandboxOperation({
       ...input(path), quotedCostCents: 0,
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
+    await expect(claimAiImageSandboxOperation({
+      ...input(path),
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 1000, scale: 4 },
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
+    await expect(claimAiImageSandboxOperation({
+      ...input(path), quotedCostCents: '1e2', maximumCostCents: '200',
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
+    await expect(claimAiImageSandboxOperation({
+      ...input(path), quotedCostCents: 10, maximumCostCents: 10_000_001,
     })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
   });
 

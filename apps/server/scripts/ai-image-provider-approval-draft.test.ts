@@ -105,12 +105,344 @@ async function resizePinnedMedia(
   value.environment.AI_IMAGE_SANDBOX_MASK_SHA256 = sha256(sizedMask);
 }
 
+async function completedExactApproval() {
+  const value = await fixture('TEXT_TO_IMAGE');
+  const {
+    AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: _legacyQuote,
+    AI_IMAGE_SANDBOX_MAX_COST_CENTS: _legacyMaximum,
+    ...baseEnvironment
+  } = value.environment;
+  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+  const result = await runAiImageProviderApprovalDraft({
+    environment: {
+      ...baseEnvironment,
+      AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '200',
+      AI_IMAGE_SANDBOX_COST_SCALE: '4',
+    },
+    repositoryRoot: value.root,
+    resolveRevision: vi.fn(async () => adapterRevision),
+  });
+  return {
+    value,
+    approval: {
+      ...result.draft,
+      statement: AI_IMAGE_SANDBOX_APPROVAL_STATEMENT,
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    } as Record<string, unknown>,
+    expected: {
+      operationId: value.operationId,
+      endpoint: 'https://relay.example/v1/images/generations',
+      expectedHost: 'relay.example',
+      model: 'edit-capable-model',
+      operation: 'TEXT_TO_IMAGE' as const,
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      credentialRevision: 'secret-manager-revision-2',
+      adapterRevision,
+      sourceSha256: [],
+      maskSha256: null,
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 200, scale: 4 },
+    },
+  };
+}
+
+async function expectExactApprovalRejected(
+  mutate: (approval: Record<string, unknown>) => void,
+) {
+  const { value, approval, expected } = await completedExactApproval();
+  mutate(approval);
+  const approvalPath = join(value.privateDirectory, 'rejected-exact-money.approval.json');
+  const bytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+  await writeFile(approvalPath, bytes, { mode: 0o600 });
+  await expect(loadAiImageSandboxApproval({
+    repositoryRoot: value.root,
+    approvalPath,
+    expectedSha256: sha256(bytes),
+    expected,
+    now: new Date('2030-01-01T00:10:00.000Z'),
+  })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 describe('AI image sandbox approval draft generator', () => {
+  it('binds an exact sub-cent CNY quote without decimal conversion', async () => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    const {
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: _legacyQuote,
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: _legacyMaximum,
+      ...baseEnvironment
+    } = value.environment;
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+
+    const result = await runAiImageProviderApprovalDraft({
+      environment: {
+        ...baseEnvironment,
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+
+    expect(result.draft).toMatchObject({
+      schemaVersion: 3,
+      quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+      maximumCost: { currency: 'CNY', amount: 119, scale: 4 },
+    });
+  });
+
+  it('verifies an exact v3 sub-cent CNY approval without losing its scale', async () => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    const {
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: _legacyQuote,
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: _legacyMaximum,
+      ...baseEnvironment
+    } = value.environment;
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+    const result = await runAiImageProviderApprovalDraft({
+      environment: {
+        ...baseEnvironment,
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '200',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+    const approval = {
+      ...result.draft,
+      statement: AI_IMAGE_SANDBOX_APPROVAL_STATEMENT,
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    };
+    const approvalPath = join(value.privateDirectory, 'exact-money.approval.json');
+    const approvalBytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+    await writeFile(approvalPath, approvalBytes, { mode: 0o600 });
+
+    await expect(loadAiImageSandboxApproval({
+      repositoryRoot: value.root,
+      approvalPath,
+      expectedSha256: sha256(approvalBytes),
+      expected: {
+        operationId: value.operationId,
+        endpoint: 'https://relay.example/v1/images/generations',
+        expectedHost: 'relay.example',
+        model: 'edit-capable-model',
+        operation: 'TEXT_TO_IMAGE',
+        requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+        credentialRevision: 'secret-manager-revision-2',
+        adapterRevision,
+        sourceSha256: [],
+        maskSha256: null,
+        quotedCost: { currency: 'CNY', amount: 119, scale: 4 },
+        maximumCost: { currency: 'CNY', amount: 200, scale: 4 },
+      },
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({ currency: 'CNY' });
+  });
+
+  it('keeps completed v2 cents approvals exactly readable', async () => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+    const result = await runAiImageProviderApprovalDraft({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+    const approval = {
+      ...result.draft,
+      statement: AI_IMAGE_SANDBOX_APPROVAL_STATEMENT,
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    };
+    const approvalPath = join(value.privateDirectory, 'legacy-v2.approval.json');
+    const bytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+    await writeFile(approvalPath, bytes, { mode: 0o600 });
+
+    await expect(loadAiImageSandboxApproval({
+      repositoryRoot: value.root,
+      approvalPath,
+      expectedSha256: sha256(bytes),
+      expected: {
+        operationId: value.operationId,
+        endpoint: 'https://relay.example/v1/images/generations',
+        expectedHost: 'relay.example',
+        model: 'edit-capable-model',
+        operation: 'TEXT_TO_IMAGE',
+        requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+        credentialRevision: 'secret-manager-revision-2',
+        adapterRevision,
+        sourceSha256: [],
+        maskSha256: null,
+        quotedCostCents: 10,
+        maximumCostCents: 20,
+      },
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({ currency: 'USD' });
+  });
+
+  it('rejects using an exact-money runner with a legacy v2 cents approval', async () => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+    const result = await runAiImageProviderApprovalDraft({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+    const approval = {
+      ...result.draft,
+      statement: AI_IMAGE_SANDBOX_APPROVAL_STATEMENT,
+      approvedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:30:00.000Z',
+    };
+    const approvalPath = join(value.privateDirectory, 'legacy-v2-exact-runner.approval.json');
+    const bytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+    await writeFile(approvalPath, bytes, { mode: 0o600 });
+
+    await expect(loadAiImageSandboxApproval({
+      repositoryRoot: value.root,
+      approvalPath,
+      expectedSha256: sha256(bytes),
+      expected: {
+        operationId: value.operationId,
+        endpoint: 'https://relay.example/v1/images/generations',
+        expectedHost: 'relay.example',
+        model: 'edit-capable-model',
+        operation: 'TEXT_TO_IMAGE',
+        requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+        credentialRevision: 'secret-manager-revision-2',
+        adapterRevision,
+        sourceSha256: [],
+        maskSha256: null,
+        quotedCost: { currency: 'USD', amount: 10, scale: 2 },
+        maximumCost: { currency: 'USD', amount: 20, scale: 2 },
+      },
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_MISMATCH' });
+  });
+
+  it('rejects an exact v3 approval above the shared sandbox cost ceiling', async () => {
+    const { value, approval, expected } = await completedExactApproval();
+    (approval.maximumCost as Record<string, unknown>).amount = 1_000_000_001;
+    expected.maximumCost.amount = 1_000_000_001;
+    const approvalPath = join(value.privateDirectory, 'over-limit-v3.approval.json');
+    const bytes = Buffer.from(`${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+    await writeFile(approvalPath, bytes, { mode: 0o600 });
+
+    await expect(loadAiImageSandboxApproval({
+      repositoryRoot: value.root,
+      approvalPath,
+      expectedSha256: sha256(bytes),
+      expected,
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
+  });
+
+  it('rejects a floating exact amount', async () => {
+    await expectExactApprovalRejected((approval) => {
+      (approval.quotedCost as Record<string, unknown>).amount = 119.5;
+    });
+  });
+
+  it('rejects a negative exact amount', async () => {
+    await expectExactApprovalRejected((approval) => {
+      (approval.quotedCost as Record<string, unknown>).amount = -119;
+    });
+  });
+
+  it('rejects quote and maximum scale mismatch', async () => {
+    await expectExactApprovalRejected((approval) => {
+      (approval.maximumCost as Record<string, unknown>).scale = 3;
+    });
+  });
+
+  it('rejects an exact quote above its maximum', async () => {
+    await expectExactApprovalRejected((approval) => {
+      (approval.quotedCost as Record<string, unknown>).amount = 201;
+    });
+  });
+
+  it('rejects unknown exact-money fields', async () => {
+    await expectExactApprovalRejected((approval) => {
+      (approval.quotedCost as Record<string, unknown>).decimal = '0.0119';
+    });
+  });
+
+  it('rejects a non-canonical exact amount representation', async () => {
+    const { value, approval, expected } = await completedExactApproval();
+    const canonical = `${JSON.stringify(approval, null, 2)}\n`;
+    const nonCanonical = canonical.replace('"amount": 119', '"amount": 1.19e2');
+    expect(nonCanonical).not.toBe(canonical);
+    const approvalPath = join(value.privateDirectory, 'non-canonical-money.approval.json');
+    const bytes = Buffer.from(nonCanonical, 'utf8');
+    await writeFile(approvalPath, bytes, { mode: 0o600 });
+    await expect(loadAiImageSandboxApproval({
+      repositoryRoot: value.root,
+      approvalPath,
+      expectedSha256: sha256(bytes),
+      expected,
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_SCHEMA_INVALID' });
+  });
+
+  it.each([
+    ['floating amount', { AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119.0' }],
+    ['negative amount', { AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '-119' }],
+    ['leading-zero amount', { AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '0119' }],
+    ['floating scale', { AI_IMAGE_SANDBOX_COST_SCALE: '4.0' }],
+  ])('rejects non-canonical exact-money environment input: %s', async (_label, override) => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    const {
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: _legacyQuote,
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: _legacyMaximum,
+      ...baseEnvironment
+    } = value.environment;
+    await expect(runAiImageProviderApprovalDraft({
+      environment: {
+        ...baseEnvironment,
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '200',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+        ...override,
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID' });
+    await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves the existing sandbox maximum-cost bound for exact money', async () => {
+    const value = await fixture('TEXT_TO_IMAGE');
+    const {
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: _legacyQuote,
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: _legacyMaximum,
+      ...baseEnvironment
+    } = value.environment;
+    await expect(runAiImageProviderApprovalDraft({
+      environment: {
+        ...baseEnvironment,
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '119',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '1000000001',
+        AI_IMAGE_SANDBOX_COST_SCALE: '4',
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID' });
+    await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('writes one private canonical draft that the approval loader must reject', async () => {
     const value = await fixture();
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'));
