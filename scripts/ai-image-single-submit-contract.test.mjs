@@ -241,6 +241,13 @@ assert.match(billingSettlement, /I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT/u);
 assert.match(billingSettlement, /AI_IMAGE_SANDBOX_BILLING_SETTLED/u);
 assert.match(billingSettlement, /COST_LIMIT_EXCEEDED/u);
 assert.match(billingSettlement, /UNIQUE_ACCOUNT_TIME_WINDOW/u);
+assert.match(billingSettlement, /PROVIDER_TOKEN_LOG_ENTRY/u);
+assert.match(billingSettlement, /providerTokenLogSnapshotPath/u);
+assert.match(billingSettlement, /providerBillingEntryRequestIdHash/u);
+assert.match(billingSettlement, /providerTokenLogUserId/u);
+assert.match(billingSettlement, /providerTokenLogTokenId/u);
+assert.match(billingSettlement, /PROVIDER_BILLING_ENTRY_CLAIM_KEYS/u);
+assert.match(billingSettlement, /resolve\(billingDirectory, '\.provider-entries'\)/u);
 assert.match(billingSettlement, /actualCostCents\s*!==\s*null/u);
 assert.match(billingSettlement, /REPORT_V3_REQUIRED_KEYS/u);
 assert.match(billingSettlement, /REPORT_V4_REQUIRED_KEYS/u);
@@ -249,7 +256,11 @@ assert.match(billingSettlement, /NEW_API_QUOTA_AND_TOTAL_USAGE_V1/u);
 assert.match(billingSettlement, /rawQuotaDelta/u);
 assert.match(billingSettlement, /displayTotalUsageDelta/u);
 assert.match(billingSettlement, /BigInt\(rawQuotaDelta\)/u);
-assert.match(billingSettlement, /schemaVersion:\s*3/u);
+assert.match(billingSettlement, /ATTESTATION_V3_KEYS/u);
+assert.match(
+  billingSettlement,
+  /schemaVersion:\s*attestation\.schemaVersion\s*===\s*3\s*\?\s*4\s*:\s*3/u,
+);
 assert.match(billingSettlement, /artifacts mix incompatible evidence generations/u);
 assert.match(billingSettlement, /apiBaseSha256/u);
 assert.match(billingSettlement, /operationEndpointSha256/u);
@@ -310,7 +321,9 @@ assert.match(billingRunbook, /COST_LIMIT_EXCEEDED/u);
 assert.match(billingRunbook, /actualCost: null/u);
 assert.match(billingRunbook, /actualCostCents: null/u);
 assert.match(billingRunbook, /`schemaVersion: 5` submit report/u);
-assert.match(billingRunbook, /"schemaVersion": 2/u);
+assert.match(billingRunbook, /"schemaVersion": 3/u);
+assert.match(billingRunbook, /attestation v2/u);
+assert.match(billingRunbook, /PROVIDER_TOKEN_LOG_ENTRY/u);
 assert.match(billingRunbook, /NEW_API_QUOTA_AND_TOTAL_USAGE_V1/u);
 assert.match(billingRunbook, /rawQuotaDelta/u);
 assert.match(billingRunbook, /v3 settlement receipt/u);

@@ -24,6 +24,8 @@ const MAX_INTENT_BYTES = 64 * 1024;
 const MAX_REPORT_BYTES = 128 * 1024;
 const MAX_CLAIM_BYTES = 16 * 1024;
 const MAX_BILLING_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+const MAX_PROVIDER_TOKEN_LOG_ENTRIES = 1_000;
+const MAX_PROVIDER_DURATION_DIFFERENCE_MS = 10_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_CORRELATION_WINDOW_MS = 15 * 60 * 1000;
 const MAX_PRECALL_SNAPSHOT_AGE_MS = 15 * 60 * 1000;
@@ -71,6 +73,14 @@ const ATTESTATION_V2_KEYS = new Set([
   'meterEvidence',
 ]);
 
+const ATTESTATION_V3_KEYS = new Set([
+  ...ATTESTATION_V2_KEYS,
+  'providerTokenLogSnapshotPath',
+  'providerTokenLogSnapshotSha256',
+  'providerTokenLogUserId',
+  'providerTokenLogTokenId',
+]);
+
 const METER_EVIDENCE_KEYS = new Set([
   'schemaVersion',
   'kind',
@@ -78,6 +88,54 @@ const METER_EVIDENCE_KEYS = new Set([
   'quotaUnitsPerCurrencyUnit',
   'displayTotalUsageDelta',
   'displayTotalUsageUnitCurrencyScale',
+]);
+
+const PROVIDER_TOKEN_LOG_SNAPSHOT_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'operationId',
+  'observedAt',
+  'request',
+]);
+
+const PROVIDER_TOKEN_LOG_REQUEST_KEYS = new Set([
+  'name',
+  'method',
+  'uri',
+  'httpStatus',
+  'contentType',
+  'bodySha256',
+  'bodyBase64',
+]);
+
+const PROVIDER_TOKEN_LOG_BODY_KEYS = new Set(['data', 'message', 'success']);
+
+const PROVIDER_TOKEN_LOG_ENTRY_REQUIRED_KEYS = new Set([
+  'id',
+  'user_id',
+  'created_at',
+  'type',
+  'content',
+  'username',
+  'token_name',
+  'model_name',
+  'quota',
+  'prompt_tokens',
+  'completion_tokens',
+  'use_time',
+  'is_stream',
+  'channel',
+  'channel_name',
+  'token_id',
+  'group',
+  'ip',
+  'request_id',
+  'other',
+]);
+
+const PROVIDER_TOKEN_LOG_ENTRY_ALLOWED_KEYS = new Set([
+  ...PROVIDER_TOKEN_LOG_ENTRY_REQUIRED_KEYS,
+  'upstream_request_id',
 ]);
 
 const INTENT_COMMON_KEYS = [
@@ -147,6 +205,18 @@ const SETTLEMENT_CLAIM_KEYS = new Set([
   'operationId',
   'settlementSha256',
   'finalizationAdapterRevision',
+  'state',
+]);
+
+const PROVIDER_BILLING_ENTRY_CLAIM_KEYS = new Set([
+  'schemaVersion',
+  'providerBillingEntryKey',
+  'providerAccountRefSha256',
+  'operationId',
+  'settlementSha256',
+  'requestFingerprint',
+  'submitReportSha256',
+  'providerTokenLogSnapshotSha256',
   'state',
 ]);
 
@@ -232,7 +302,10 @@ const SANDBOX_OPERATIONS = new Set([
 ]);
 
 type BillingOutcome = 'CHARGED' | 'NO_CHARGE';
-type CorrelationMethod = 'PROVIDER_REQUEST_ID' | 'UNIQUE_ACCOUNT_TIME_WINDOW';
+type CorrelationMethod =
+  | 'PROVIDER_REQUEST_ID'
+  | 'UNIQUE_ACCOUNT_TIME_WINDOW'
+  | 'PROVIDER_TOKEN_LOG_ENTRY';
 
 interface PrivateFileEvidence {
   path: string;
@@ -286,6 +359,16 @@ function canonicalJson(value: unknown): string {
 function hasExactKeys(record: Record<string, unknown>, keys: Set<string>) {
   const actual = Object.keys(record);
   return actual.length === keys.size && actual.every((key) => keys.has(key));
+}
+
+function hasRequiredAndAllowedKeys(
+  record: Record<string, unknown>,
+  required: Set<string>,
+  allowed: Set<string>,
+) {
+  const actual = Object.keys(record);
+  return [...required].every((key) => Object.hasOwn(record, key))
+    && actual.every((key) => allowed.has(key));
 }
 
 function requiredString(
@@ -1031,7 +1114,9 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     ? ATTESTATION_V1_KEYS
     : schemaVersion === 2
       ? ATTESTATION_V2_KEYS
-      : null;
+      : schemaVersion === 3
+        ? ATTESTATION_V3_KEYS
+        : null;
   if (!expectedKeys || !hasExactKeys(record, expectedKeys)) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1132,15 +1217,22 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     meterEvidence = parseMeterEvidence(record.meterEvidence, actualCost);
   }
   if (
-    !['PROVIDER_REQUEST_ID', 'UNIQUE_ACCOUNT_TIME_WINDOW'].includes(correlationMethod)
+    ![
+      'PROVIDER_REQUEST_ID',
+      'UNIQUE_ACCOUNT_TIME_WINDOW',
+      'PROVIDER_TOKEN_LOG_ENTRY',
+    ].includes(correlationMethod)
     || providerRequestId === undefined
     || (correlationMethod === 'PROVIDER_REQUEST_ID' && !providerRequestId)
     || (correlationMethod === 'UNIQUE_ACCOUNT_TIME_WINDOW' && providerRequestId !== null)
+    || (correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY' && !providerRequestId)
+    || (schemaVersion === 3 && correlationMethod !== 'PROVIDER_TOKEN_LOG_ENTRY')
+    || (schemaVersion !== 3 && correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY')
     || !['CHARGED', 'NO_CHARGE'].includes(billingOutcome)
     || (schemaVersion === 1 && billingOutcome === 'CHARGED' && Number(actualCostCents) <= 0)
     || (schemaVersion === 1 && billingOutcome === 'NO_CHARGE' && actualCostCents !== 0)
-    || (schemaVersion === 2 && billingOutcome === 'CHARGED' && actualCost!.amount <= 0)
-    || (schemaVersion === 2 && billingOutcome === 'NO_CHARGE' && actualCost!.amount !== 0)
+    || (schemaVersion !== 1 && billingOutcome === 'CHARGED' && actualCost!.amount <= 0)
+    || (schemaVersion !== 1 && billingOutcome === 'NO_CHARGE' && actualCost!.amount !== 0)
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1148,8 +1240,8 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     );
   }
   return {
-    schemaVersion: schemaVersion as 1 | 2,
-    generation: schemaVersion === 2 ? 'EXACT' as const : 'LEGACY' as const,
+    schemaVersion: schemaVersion as 1 | 2 | 3,
+    generation: schemaVersion === 1 ? 'LEGACY' as const : 'EXACT' as const,
     settlementId,
     operationId,
     preCallObservedAt,
@@ -1187,6 +1279,264 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     actualCostCents,
     actualCost,
     meterEvidence,
+    providerTokenLogSnapshotPath: schemaVersion === 3
+      ? requiredString(
+          record,
+          'providerTokenLogSnapshotPath',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+          2_048,
+        )
+      : null,
+    providerTokenLogSnapshotSha256: schemaVersion === 3
+      ? requiredSha256(
+          record,
+          'providerTokenLogSnapshotSha256',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+        )
+      : null,
+    providerTokenLogUserId: schemaVersion === 3
+      ? requiredPositiveInteger(
+          record,
+          'providerTokenLogUserId',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+        )
+      : null,
+    providerTokenLogTokenId: schemaVersion === 3
+      ? requiredPositiveInteger(
+          record,
+          'providerTokenLogTokenId',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+        )
+      : null,
+  };
+}
+
+function parseProviderTokenLogSnapshot(input: {
+  record: Record<string, unknown>;
+  now: Date;
+  attestation: ReturnType<typeof parseAttestation>;
+  intent: ReturnType<typeof parseIntent>;
+  report: ReturnType<typeof parseReport>;
+}) {
+  const code = 'SANDBOX_BILLING_EVIDENCE_INVALID' as const;
+  const { record, now, attestation, intent, report } = input;
+  if (
+    !hasExactKeys(record, PROVIDER_TOKEN_LOG_SNAPSHOT_KEYS)
+    || record.schemaVersion !== 1
+    || record.kind !== 'AI_IMAGE_SANDBOX_PROVIDER_LOG_SNAPSHOT'
+    || record.operationId !== attestation.operationId
+    || !isRecord(record.request)
+    || !hasExactKeys(record.request, PROVIDER_TOKEN_LOG_REQUEST_KEYS)
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox Provider token-log snapshot schema is invalid',
+    );
+  }
+  const observedAt = canonicalTimestamp(record, 'observedAt', code);
+  const request = record.request;
+  const name = requiredString(request, 'name', code, 80);
+  const method = requiredString(request, 'method', code, 10);
+  const uri = requiredString(request, 'uri', code, 2_048);
+  const contentType = requiredString(request, 'contentType', code, 160);
+  const bodySha256 = requiredSha256(request, 'bodySha256', code);
+  const bodyBase64 = requiredString(
+    request,
+    'bodyBase64',
+    code,
+    Math.ceil(MAX_BILLING_SNAPSHOT_BYTES / 3) * 4 + 4,
+  );
+  let logUri: URL;
+  try {
+    logUri = new URL(uri);
+  } catch {
+    throw new AiImageSandboxBillingSettlementError(code, 'Sandbox Provider token-log URI is invalid');
+  }
+  const expectedApiBase = `${logUri.origin}/v1`;
+  if (
+    name !== 'providerTokenLog'
+    || method !== 'GET'
+    || request.httpStatus !== 200
+    || !contentType.toLowerCase().startsWith('application/json')
+    || logUri.protocol !== 'https:'
+    || logUri.username
+    || logUri.password
+    || logUri.pathname !== '/api/log/token'
+    || logUri.search
+    || logUri.hash
+    || intent.generation !== 'EXACT'
+    || intent.record.apiBaseSha256 !== sha256(expectedApiBase)
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_MISMATCH',
+      'Sandbox Provider token-log request does not match the paid API Base',
+    );
+  }
+  let bodyBytes: Buffer;
+  try {
+    bodyBytes = Buffer.from(bodyBase64, 'base64');
+  } catch {
+    throw new AiImageSandboxBillingSettlementError(code, 'Sandbox Provider token-log body is invalid');
+  }
+  if (
+    bodyBytes.byteLength === 0
+    || bodyBytes.byteLength > MAX_BILLING_SNAPSHOT_BYTES
+    || bodyBase64 !== request.bodyBase64
+    || bodyBytes.toString('base64') !== bodyBase64
+    || sha256(bodyBytes) !== bodySha256
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox Provider token-log body digest is invalid',
+    );
+  }
+  let body: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bodyBytes)) as unknown;
+    if (!isRecord(parsed)) throw new Error('invalid');
+    body = parsed;
+  } catch {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox Provider token-log body must contain one UTF-8 JSON object',
+    );
+  }
+  if (
+    !hasExactKeys(body, PROVIDER_TOKEN_LOG_BODY_KEYS)
+    || body.success !== true
+    || typeof body.message !== 'string'
+    || !Array.isArray(body.data)
+    || body.data.length === 0
+    || body.data.length > MAX_PROVIDER_TOKEN_LOG_ENTRIES
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox Provider token-log response schema is invalid',
+    );
+  }
+  const expectedRequestPath = intent.request.operation === 'TEXT_TO_IMAGE'
+    ? '/v1/images/generations'
+    : '/v1/images/edits';
+  const elapsedMs = Number(report.record.elapsedMs);
+  const candidateEntries: Array<{
+    entry: Record<string, unknown>;
+    createdAtSeconds: number;
+    createdAtTime: number;
+    useTime: number;
+    requestPath: string;
+  }> = [];
+  for (const value of body.data) {
+    if (!isRecord(value)) continue;
+    const createdAtSeconds = Number.isSafeInteger(value.created_at)
+      && Number(value.created_at) >= 0
+      ? Number(value.created_at)
+      : null;
+    const useTime = Number.isSafeInteger(value.use_time) && Number(value.use_time) >= 0
+      ? Number(value.use_time)
+      : null;
+    const createdAtTime = createdAtSeconds === null ? null : createdAtSeconds * 1_000;
+    if (
+      value.type !== 2
+      || value.model_name !== intent.model
+      || value.quota !== attestation.meterEvidence!.rawQuotaDelta
+      || createdAtSeconds === null
+      || createdAtTime === null
+      || useTime === null
+      || createdAtTime < report.startedAt.time - 1_000
+      || createdAtTime > report.completedAt.time + 1_000
+      || Math.abs(useTime * 1_000 - elapsedMs) > MAX_PROVIDER_DURATION_DIFFERENCE_MS
+    ) {
+      continue;
+    }
+    let other: Record<string, unknown>;
+    try {
+      const otherText = typeof value.other === 'string' ? value.other : '';
+      if (!otherText || otherText.length > 16 * 1024) throw new Error('invalid');
+      const parsed = JSON.parse(otherText) as unknown;
+      if (!isRecord(parsed)) throw new Error('invalid');
+      other = parsed;
+    } catch {
+      throw new AiImageSandboxBillingSettlementError(
+        code,
+        'Sandbox Provider token-log candidate metadata is invalid',
+      );
+    }
+    const requestPath = requiredString(other, 'request_path', code, 200);
+    if (requestPath === expectedRequestPath) {
+      candidateEntries.push({
+        entry: value,
+        createdAtSeconds,
+        createdAtTime,
+        useTime,
+        requestPath,
+      });
+    }
+  }
+  if (candidateEntries.length !== 1) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_MISMATCH',
+      'Sandbox Provider token-log entry is missing or ambiguous',
+    );
+  }
+  const candidate = candidateEntries[0]!;
+  const entry = candidate.entry;
+  if (!hasRequiredAndAllowedKeys(
+    entry,
+    PROVIDER_TOKEN_LOG_ENTRY_REQUIRED_KEYS,
+    PROVIDER_TOKEN_LOG_ENTRY_ALLOWED_KEYS,
+  )) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox Provider token-log entry schema is invalid',
+    );
+  }
+  requiredPositiveInteger(entry, 'id', code);
+  const userId = requiredPositiveInteger(entry, 'user_id', code);
+  const tokenId = requiredPositiveInteger(entry, 'token_id', code);
+  const createdAtSeconds = requiredNonnegativeInteger(entry, 'created_at', code);
+  const quota = requiredNonnegativeInteger(entry, 'quota', code);
+  const useTime = requiredNonnegativeInteger(entry, 'use_time', code);
+  const model = requiredString(entry, 'model_name', code, 200);
+  const requestId = requiredString(entry, 'request_id', code, 64);
+  let upstreamRequestId: string | null = null;
+  if (Object.hasOwn(entry, 'upstream_request_id')) {
+    upstreamRequestId = requiredString(entry, 'upstream_request_id', code, 128);
+  }
+  const createdAtTime = createdAtSeconds * 1_000;
+  if (
+    entry.type !== 2
+    || requestId !== attestation.providerRequestId
+    || userId !== attestation.providerTokenLogUserId
+    || tokenId !== attestation.providerTokenLogTokenId
+    || model !== intent.model
+    || quota !== attestation.meterEvidence!.rawQuotaDelta
+    || candidate.requestPath !== expectedRequestPath
+    || createdAtSeconds !== candidate.createdAtSeconds
+    || createdAtTime !== candidate.createdAtTime
+    || useTime !== candidate.useTime
+    || createdAtTime < report.startedAt.time - 1_000
+    || createdAtTime > report.completedAt.time + 1_000
+    || Math.abs(useTime * 1_000 - elapsedMs) > MAX_PROVIDER_DURATION_DIFFERENCE_MS
+    || (upstreamRequestId !== null
+      && sha256(upstreamRequestId) !== report.record.providerRequestIdHash)
+    || observedAt.time < report.completedAt.time
+    || observedAt.time < createdAtTime
+    || observedAt.time > now.getTime() + MAX_CLOCK_SKEW_MS
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_MISMATCH',
+      'Sandbox Provider token-log entry does not match the paid request',
+    );
+  }
+  return {
+    observedAt,
+    entryCreatedAt: new Date(createdAtTime).toISOString(),
+    requestIdHash: sha256(requestId),
+    requestIdBridge: upstreamRequestId === null
+      ? 'UNAVAILABLE_UNIQUE_ENTRY' as const
+      : 'UPSTREAM_REQUEST_ID' as const,
+    userId,
+    tokenId,
   };
 }
 
@@ -1600,6 +1950,8 @@ function assertArtifactsMatch(input: {
         || attestation.providerRequestId !== null
         || attestation.settledObservedAt.time - attestation.preCallObservedAt.time
           > MAX_CORRELATION_WINDOW_MS))
+    || (attestation.correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY'
+      && (!providerRequestIdHash || !attestation.providerRequestId))
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_MISMATCH',
@@ -1628,6 +1980,37 @@ function parseSettlementClaim(
     );
   }
   return record.finalizationAdapterRevision;
+}
+
+function assertProviderBillingEntryClaim(
+  record: Record<string, unknown>,
+  expected: {
+    providerBillingEntryKey: string;
+    providerAccountRefSha256: string;
+    operationId: string;
+    settlementSha256: string;
+    requestFingerprint: string;
+    submitReportSha256: string;
+    providerTokenLogSnapshotSha256: string;
+  },
+) {
+  if (
+    !hasExactKeys(record, PROVIDER_BILLING_ENTRY_CLAIM_KEYS)
+    || record.schemaVersion !== 1
+    || record.providerBillingEntryKey !== expected.providerBillingEntryKey
+    || record.providerAccountRefSha256 !== expected.providerAccountRefSha256
+    || record.operationId !== expected.operationId
+    || record.settlementSha256 !== expected.settlementSha256
+    || record.requestFingerprint !== expected.requestFingerprint
+    || record.submitReportSha256 !== expected.submitReportSha256
+    || record.providerTokenLogSnapshotSha256 !== expected.providerTokenLogSnapshotSha256
+    || record.state !== 'PROVIDER_BILLING_ENTRY_CLAIMED'
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_CONFLICT',
+      'Provider billing entry is already claimed by different sandbox evidence',
+    );
+  }
 }
 
 export async function finalizeAiImageSandboxBillingSettlement(input: {
@@ -1755,6 +2138,54 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
       'Sandbox billing evidence digests do not match the attestation',
     );
   }
+  let providerTokenLogEvidence: PrivateJsonEvidence | null = null;
+  let providerTokenLog: ReturnType<typeof parseProviderTokenLogSnapshot> | null = null;
+  let providerBillingEntryKey: string | null = null;
+  if (attestation.schemaVersion === 3) {
+    providerTokenLogEvidence = await loadPrivateCanonicalJson({
+      repositoryRoot: evidenceRoot,
+      path: attestation.providerTokenLogSnapshotPath!,
+      expectedSha256: attestation.providerTokenLogSnapshotSha256!,
+      maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
+      kind: 'evidence',
+      allowedRoot: evidenceRoot,
+    });
+    const providerIdentityAvailable = hasStableFileIdentity(
+      providerTokenLogEvidence.device,
+      providerTokenLogEvidence.inode,
+    );
+    if (
+      !providerIdentityAvailable
+      || samePath(
+        providerTokenLogEvidence.canonicalPath,
+        preCallSnapshotEvidence.canonicalPath,
+      )
+      || samePath(
+        providerTokenLogEvidence.canonicalPath,
+        settledSnapshotEvidence.canonicalPath,
+      )
+      || sameFileIdentity(providerTokenLogEvidence, preCallSnapshotEvidence)
+      || sameFileIdentity(providerTokenLogEvidence, settledSnapshotEvidence)
+    ) {
+      throw new AiImageSandboxBillingSettlementError(
+        'SANDBOX_BILLING_ATTESTATION_INVALID',
+        'Sandbox Provider token-log snapshot must be one distinct private file',
+      );
+    }
+    providerTokenLog = parseProviderTokenLogSnapshot({
+      record: providerTokenLogEvidence.record,
+      now,
+      attestation,
+      intent,
+      report,
+    });
+    providerBillingEntryKey = sha256(canonicalJson({
+      apiBaseSha256: intent.record.apiBaseSha256,
+      providerTokenLogUserId: providerTokenLog.userId,
+      providerTokenLogTokenId: providerTokenLog.tokenId,
+      providerBillingEntryRequestIdHash: providerTokenLog.requestIdHash,
+    }));
+  }
   assertArtifactsMatch({ attestation, intent, report, claim: claimEvidence.record });
 
   const billedUnits = attestation.billingOutcome === 'CHARGED' ? 1 : 0;
@@ -1769,6 +2200,45 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
   const claimDirectory = resolve(billingDirectory, '.claims');
   const settlementClaimPath = resolve(claimDirectory, `${operationId}.billing.claim.json`);
   const receiptPath = resolve(billingDirectory, `${operationId}.billing.settlement.json`);
+  if (attestation.schemaVersion === 3) {
+    const providerEntryClaimDirectory = resolve(billingDirectory, '.provider-entries');
+    const providerEntryClaimPath = resolve(
+      providerEntryClaimDirectory,
+      `${providerBillingEntryKey}.claim.json`,
+    );
+    const providerEntryClaim = {
+      schemaVersion: 1,
+      providerBillingEntryKey: providerBillingEntryKey!,
+      providerAccountRefSha256: sha256(attestation.providerAccountRef),
+      operationId,
+      settlementSha256: attestationEvidence.sha256,
+      requestFingerprint: attestation.requestFingerprint,
+      submitReportSha256: reportEvidence.sha256,
+      providerTokenLogSnapshotSha256: providerTokenLogEvidence!.sha256,
+      state: 'PROVIDER_BILLING_ENTRY_CLAIMED',
+    };
+    const providerEntryClaimBytes = Buffer.from(
+      `${JSON.stringify(providerEntryClaim, null, 2)}\n`,
+      'utf8',
+    );
+    try {
+      await writeExclusiveAtomicFile(
+        providerEntryClaimPath,
+        providerEntryClaimBytes,
+        evidenceRoot,
+      );
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') throw error;
+      const existingProviderEntryClaim = await loadPrivateCanonicalJson({
+        repositoryRoot: evidenceRoot,
+        path: providerEntryClaimPath,
+        maxBytes: MAX_CLAIM_BYTES,
+        kind: 'evidence',
+        allowedRoot: evidenceRoot,
+      });
+      assertProviderBillingEntryClaim(existingProviderEntryClaim.record, providerEntryClaim);
+    }
+  }
   const settlementClaim = {
     schemaVersion: 1,
     operationId,
@@ -1805,7 +2275,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     : { endpointSha256: intent.record.endpointSha256 };
   const receipt = attestation.generation === 'EXACT'
     ? {
-        schemaVersion: 3,
+        schemaVersion: attestation.schemaVersion === 3 ? 4 : 3,
         event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
         operationId,
         settlementId: attestation.settlementId,
@@ -1830,6 +2300,16 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
         finalizationAdapterRevision: receiptFinalizationRevision,
         correlationMethod: attestation.correlationMethod,
         providerRequestIdHash: report.record.providerRequestIdHash,
+        ...(attestation.schemaVersion === 3 ? {
+          providerBillingEntryRequestIdHash: providerTokenLog!.requestIdHash,
+          providerBillingEntryKey: providerBillingEntryKey!,
+          providerRequestIdBridge: providerTokenLog!.requestIdBridge,
+          providerTokenLogAccountSha256: sha256(canonicalJson({
+            userId: providerTokenLog!.userId,
+            tokenId: providerTokenLog!.tokenId,
+          })),
+          providerTokenLogSnapshotSha256: providerTokenLogEvidence!.sha256,
+        } : {}),
         billingOutcome: attestation.billingOutcome,
         billingGate,
         actualCost: attestation.actualCost!,

@@ -37,11 +37,24 @@ const requestFingerprint = createAiImageSandboxRequestFingerprint({
 });
 const approvalSha256 = '2'.repeat(64);
 const rawProviderRequestId = 'provider-request-private-0001';
+const providerBillingRequestId = 'relay-billing-request-private-0001';
+const providerApiBase = 'https://relay.example/v1';
+const providerApiBaseSha256 = sha256(providerApiBase);
 const exactQuotedCost = { currency: 'CNY', amount: 119, scale: 4 } as const;
 const exactMaximumCost = { currency: 'CNY', amount: 1_000, scale: 4 } as const;
 
 function sha256(value: Buffer | string) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(',')}}`;
 }
 
 function approvalEvidence(overrides: Record<string, unknown> = {}) {
@@ -333,6 +346,64 @@ function exactAttestation(input: {
   };
 }
 
+function providerTokenLogEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    user_id: 2,
+    created_at: 1_893_456_120,
+    type: 2,
+    content: 'consume 5950 quota',
+    username: 'private-user',
+    token_name: 'private-token',
+    model_name: 'edit-capable-model',
+    quota: 5_950,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    use_time: 60,
+    is_stream: false,
+    channel: 3,
+    channel_name: '',
+    token_id: 4,
+    group: 'test',
+    ip: '',
+    request_id: providerBillingRequestId,
+    other: JSON.stringify({ request_path: '/v1/images/edits' }),
+    ...overrides,
+  };
+}
+
+function providerTokenLogSnapshot(input: {
+  operationId: string;
+  entryOverrides?: Record<string, unknown>;
+  bodyOverrides?: Record<string, unknown>;
+  requestOverrides?: Record<string, unknown>;
+  snapshotOverrides?: Record<string, unknown>;
+}) {
+  const body = Buffer.from(JSON.stringify({
+    data: [providerTokenLogEntry(input.entryOverrides)],
+    message: '',
+    success: true,
+    ...input.bodyOverrides,
+  }), 'utf8');
+  return {
+    schemaVersion: 1,
+    kind: 'AI_IMAGE_SANDBOX_PROVIDER_LOG_SNAPSHOT',
+    operationId: input.operationId,
+    observedAt: '2030-01-01T00:05:00.000Z',
+    request: {
+      name: 'providerTokenLog',
+      method: 'GET',
+      uri: 'https://relay.example/api/log/token',
+      httpStatus: 200,
+      contentType: 'application/json; charset=utf-8',
+      bodySha256: sha256(body),
+      bodyBase64: body.toString('base64'),
+      ...input.requestOverrides,
+    },
+    ...input.snapshotOverrides,
+  };
+}
+
 async function writeCanonicalJson(path: string, value: unknown) {
   const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -346,9 +417,13 @@ async function fixture(input: {
   reportOverrides?: Record<string, unknown>;
   intentSchemaVersion?: 2 | 3;
   reportSchemaVersion?: 3 | 4 | 5;
-  attestationSchemaVersion?: 1 | 2;
+  attestationSchemaVersion?: 1 | 2 | 3;
   claimOverrides?: Record<string, unknown>;
   attestationOverrides?: Record<string, unknown>;
+  providerLogEntryOverrides?: Record<string, unknown>;
+  providerLogBodyOverrides?: Record<string, unknown>;
+  providerLogRequestOverrides?: Record<string, unknown>;
+  providerLogSnapshotOverrides?: Record<string, unknown>;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-billing-'));
   directories.push(root);
@@ -358,13 +433,23 @@ async function fixture(input: {
   const storedIntent = await writeCanonicalJson(
     intentPath,
     input.intentSchemaVersion === 3
-      ? exactIntent(input.intentOverrides, input.approvalOverrides)
+      ? exactIntent({
+          ...(input.attestationSchemaVersion === 3
+            ? { apiBaseSha256: providerApiBaseSha256 }
+            : {}),
+          ...input.intentOverrides,
+        }, input.approvalOverrides)
       : intent(input.intentOverrides, input.approvalOverrides),
   );
   const storedReport = await writeCanonicalJson(
     reportPath,
     input.reportSchemaVersion === 5
-      ? exactReport(input.reportOverrides, input.approvalOverrides)
+      ? exactReport({
+          ...(input.attestationSchemaVersion === 3
+            ? { apiBaseSha256: providerApiBaseSha256 }
+            : {}),
+          ...input.reportOverrides,
+        }, input.approvalOverrides)
       : report(input.reportOverrides, input.approvalOverrides, input.reportSchemaVersion),
   );
   const storedClaim = await writeCanonicalJson(claimPath, fingerprintClaim(input.claimOverrides));
@@ -375,6 +460,19 @@ async function fixture(input: {
   await mkdir(dirname(preCallBillingSnapshotPath), { recursive: true, mode: 0o700 });
   await writeFile(preCallBillingSnapshotPath, preCallBillingSnapshot, { mode: 0o600 });
   await writeFile(settledBillingSnapshotPath, settledBillingSnapshot, { mode: 0o600 });
+  const providerTokenLogSnapshotPath = join(root, 'private', 'provider-token-log.snapshot.json');
+  const storedProviderTokenLogSnapshot = input.attestationSchemaVersion === 3
+    ? await writeCanonicalJson(
+        providerTokenLogSnapshotPath,
+        providerTokenLogSnapshot({
+          operationId,
+          entryOverrides: input.providerLogEntryOverrides,
+          bodyOverrides: input.providerLogBodyOverrides,
+          requestOverrides: input.providerLogRequestOverrides,
+          snapshotOverrides: input.providerLogSnapshotOverrides,
+        }),
+      )
+    : null;
   const settlementPath = join(root, 'private', `${operationId}.billing-attestation.json`);
   const attestationInput = {
     intentSha256: storedIntent.sha256,
@@ -387,7 +485,18 @@ async function fixture(input: {
   };
   const storedSettlement = await writeCanonicalJson(
     settlementPath,
-    input.attestationSchemaVersion === 2
+    input.attestationSchemaVersion === 3
+      ? exactAttestation(attestationInput, {
+          schemaVersion: 3,
+          correlationMethod: 'PROVIDER_TOKEN_LOG_ENTRY',
+          providerRequestId: providerBillingRequestId,
+          providerTokenLogSnapshotPath,
+          providerTokenLogSnapshotSha256: storedProviderTokenLogSnapshot!.sha256,
+          providerTokenLogUserId: 2,
+          providerTokenLogTokenId: 4,
+          ...input.attestationOverrides,
+        })
+      : input.attestationSchemaVersion === 2
       ? exactAttestation(attestationInput, input.attestationOverrides)
       : attestation(attestationInput, input.attestationOverrides),
   );
@@ -402,6 +511,8 @@ async function fixture(input: {
     settledBillingSnapshotPath,
     preCallBillingSnapshotSha256: sha256(preCallBillingSnapshot),
     settledBillingSnapshotSha256: sha256(settledBillingSnapshot),
+    providerTokenLogSnapshotPath,
+    providerTokenLogSnapshotSha256: storedProviderTokenLogSnapshot?.sha256,
     originalIntent: storedIntent.bytes,
     originalReport: storedReport.bytes,
   };
@@ -535,6 +646,319 @@ describe('AI image sandbox billing settlement', () => {
     expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
     expect(await readFile(value.reportPath)).toEqual(value.originalReport);
   });
+
+  it('finalizes exact billing from one private Provider token-log entry', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 4,
+      correlationMethod: 'PROVIDER_TOKEN_LOG_ENTRY',
+      providerRequestIdHash: sha256(rawProviderRequestId),
+      providerBillingEntryRequestIdHash: sha256(providerBillingRequestId),
+      providerRequestIdBridge: 'UNAVAILABLE_UNIQUE_ENTRY',
+      providerTokenLogSnapshotSha256: value.providerTokenLogSnapshotSha256,
+      actualCost: exactQuotedCost,
+      billingGate: 'PASS',
+    });
+    const stored = await readFile(result.receiptPath, 'utf8');
+    expect(stored).not.toContain(rawProviderRequestId);
+    expect(stored).not.toContain(providerBillingRequestId);
+    expect(stored).not.toContain(value.providerTokenLogSnapshotPath);
+  });
+
+  it.each([
+    ['quota', { providerLogEntryOverrides: { quota: 5_951 } }],
+    ['model', { providerLogEntryOverrides: { model_name: 'other-model' } }],
+    ['request path', {
+      providerLogEntryOverrides: {
+        other: JSON.stringify({ request_path: '/v1/images/generations' }),
+      },
+    }],
+    ['request ID', { providerLogEntryOverrides: { request_id: 'other-request' } }],
+    ['user account', { providerLogEntryOverrides: { user_id: 3 } }],
+    ['API token', { providerLogEntryOverrides: { token_id: 5 } }],
+    ['completion time', { providerLogEntryOverrides: { created_at: 1_893_456_130 } }],
+  ] as const)(
+    'rejects Provider token-log evidence with mismatched %s',
+    async (_field, overrides) => {
+      const value = await fixture({
+        intentSchemaVersion: 3,
+        reportSchemaVersion: 5,
+        attestationSchemaVersion: 3,
+        ...overrides,
+      });
+
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+    },
+  );
+
+  it('requires one unique full-feature Token-log candidate', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      providerLogBodyOverrides: {
+        data: [
+          providerTokenLogEntry(),
+          providerTokenLogEntry({ request_id: 'second-similar-request' }),
+        ],
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('binds an available upstream log request ID to the submit report hash', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      providerLogEntryOverrides: { upstream_request_id: rawProviderRequestId },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({
+      receipt: { providerRequestIdBridge: 'UPSTREAM_REQUEST_ID' },
+    });
+
+    const mismatch = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      providerLogEntryOverrides: { upstream_request_id: 'different-upstream-request' },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: mismatch.root,
+      evidenceRoot: mismatch.root,
+      operationId,
+      settlementPath: mismatch.settlementPath,
+      settlementSha256: mismatch.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('rejects reuse of one Provider billing entry across Operations', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+    });
+    const providerBillingEntryKey = sha256(canonicalJson({
+      apiBaseSha256: providerApiBaseSha256,
+      providerTokenLogUserId: 2,
+      providerTokenLogTokenId: 4,
+      providerBillingEntryRequestIdHash: sha256(providerBillingRequestId),
+    }));
+    await writeCanonicalJson(
+      join(value.root, 'billing', '.provider-entries', `${providerBillingEntryKey}.claim.json`),
+      {
+        schemaVersion: 1,
+        providerBillingEntryKey,
+        providerAccountRefSha256: sha256('provider-account-main'),
+        operationId: 'different-sandbox-operation-0001',
+        settlementSha256: '7'.repeat(64),
+        requestFingerprint: '9'.repeat(64),
+        submitReportSha256: '8'.repeat(64),
+        providerTokenLogSnapshotSha256: value.providerTokenLogSnapshotSha256,
+        state: 'PROVIDER_BILLING_ENTRY_CLAIMED',
+      },
+    );
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_CONFLICT' });
+  });
+
+  it('does not partition one Provider entry by a renamed account reference', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+    });
+    const providerBillingEntryKey = sha256(canonicalJson({
+      apiBaseSha256: providerApiBaseSha256,
+      providerTokenLogUserId: 2,
+      providerTokenLogTokenId: 4,
+      providerBillingEntryRequestIdHash: sha256(providerBillingRequestId),
+    }));
+    await writeCanonicalJson(
+      join(value.root, 'billing', '.provider-entries', `${providerBillingEntryKey}.claim.json`),
+      {
+        schemaVersion: 1,
+        providerBillingEntryKey,
+        providerAccountRefSha256: sha256('renamed-account-label'),
+        operationId,
+        settlementSha256: value.settlementSha256,
+        requestFingerprint,
+        submitReportSha256: sha256(value.originalReport),
+        providerTokenLogSnapshotSha256: value.providerTokenLogSnapshotSha256,
+        state: 'PROVIDER_BILLING_ENTRY_CLAIMED',
+      },
+    );
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_CONFLICT' });
+  });
+
+  it('rejects a changed attestation after an isolated Provider entry claim', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+    });
+    const providerBillingEntryKey = sha256(canonicalJson({
+      apiBaseSha256: providerApiBaseSha256,
+      providerTokenLogUserId: 2,
+      providerTokenLogTokenId: 4,
+      providerBillingEntryRequestIdHash: sha256(providerBillingRequestId),
+    }));
+    await writeCanonicalJson(
+      join(value.root, 'billing', '.provider-entries', `${providerBillingEntryKey}.claim.json`),
+      {
+        schemaVersion: 1,
+        providerBillingEntryKey,
+        providerAccountRefSha256: sha256('provider-account-main'),
+        operationId,
+        settlementSha256: value.settlementSha256,
+        requestFingerprint,
+        submitReportSha256: sha256(value.originalReport),
+        providerTokenLogSnapshotSha256: value.providerTokenLogSnapshotSha256,
+        state: 'PROVIDER_BILLING_ENTRY_CLAIMED',
+      },
+    );
+    const changedAttestation = JSON.parse(
+      await readFile(value.settlementPath, 'utf8'),
+    ) as Record<string, unknown>;
+    changedAttestation.settlementId = 'settlement-after-isolated-provider-claim';
+    const changedPath = join(
+      value.root,
+      'private',
+      'changed-provider-claim.billing-attestation.json',
+    );
+    const changed = await writeCanonicalJson(
+      changedPath,
+      changedAttestation,
+    );
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: changedPath,
+      settlementSha256: changed.sha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_CONFLICT' });
+  });
+
+  it('returns the immutable Token-log receipt across a compatible finalizer revision', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+    });
+    const input = {
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    };
+
+    const first = await finalizeAiImageSandboxBillingSettlement(input);
+    const replay = await finalizeAiImageSandboxBillingSettlement({
+      ...input,
+      finalizationAdapterRevision: 'c'.repeat(40),
+    });
+
+    expect(replay).toMatchObject({ replayed: true, receipt: first.receipt });
+    expect(replay.receipt.finalizationAdapterRevision).toBe('b'.repeat(40));
+  });
+
+  it.each([
+    ['body digest', { providerLogRequestOverrides: { bodySha256: 'f'.repeat(64) } }],
+    ['HTTP method', { providerLogRequestOverrides: { method: 'POST' } }],
+    ['HTTP status', { providerLogRequestOverrides: { httpStatus: 201 } }],
+    ['API origin', {
+      providerLogRequestOverrides: { uri: 'https://other-relay.example/api/log/token' },
+    }],
+    ['duration', { providerLogEntryOverrides: { use_time: 71 } }],
+    ['open snapshot field', { providerLogSnapshotOverrides: { authorization: 'forbidden' } }],
+  ] as const)(
+    'rejects unsafe Provider Token-log %s evidence',
+    async (_field, overrides) => {
+      const value = await fixture({
+        intentSchemaVersion: 3,
+        reportSchemaVersion: 5,
+        attestationSchemaVersion: 3,
+        ...overrides,
+      });
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({
+        code: expect.stringMatching(/^SANDBOX_BILLING_(?:EVIDENCE_INVALID|MISMATCH)$/u),
+      });
+    },
+  );
 
   it('rejects an exact report whose API Base digest differs from the immutable intent', async () => {
     const value = await fixture({
