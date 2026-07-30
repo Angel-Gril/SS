@@ -192,23 +192,48 @@ configuration passed. Its ignored `tmp/ai-image-sandbox` link resolves to the de
 `/opt/ss-erp/shared/ai-image-sandbox` evidence directory. No Key or private account artifact was
 transferred, and no Provider command was run.
 
+The operator subsequently approved exactly one `TEXT_TO_IMAGE` request for
+`gpt-image-2-count`, `1024x1024`, `n=1`, with quote and single-request maximum both exact
+`CNY amount=119 scale=4`. Operation `qa02-t2i-20260730-063129-01` made one Provider POST without a
+retry and returned one visually accepted 1024x1024 PNG. Private before/after meters independently
+proved raw quota delta `5950` and displayed usage delta `1.19`, both equal to `CNY 0.0119`.
+Commit `5f6d3dd8ccac5e060189bec427400cc06c3a97ec` now binds exact settlement to one authenticated
+Relay Token-log entry and globally claims that immutable billing identity. Security review closed
+an isolated-claim recovery gap by also binding the claim to the attestation digest and found no
+remaining P0/P1 issue. Focused tests passed `51` with one Windows skip; lint, static/sandbox
+contracts, workspace typechecks, full preflight (`445/0` with two expected warnings), and the full
+Server suite (`4488` passed, `194` skipped) passed.
+
+The official network-free finalizer ran from a clean deploy-owned private checkout of `5f6d3dd`.
+Its sanitized v4 receipt has SHA-256
+`83ec0e913baefe0cfb5145d983ce48bf237865d0479725354d792c1e8b9b0423` and records `SUCCEEDED`,
+`CHARGED`, `billingGate=PASS`, actual/quoted/maximum `CNY 0.0119`, one billed unit and
+`sameRequestRetryAllowed=false`. Exact replay returned the same receipt bytes. Original
+intent/report hashes remained unchanged, append-only outputs are private, and both VPS dark
+verifiers passed. This was one real Provider charge; it did not switch either production app,
+enable a flag, generate or ingest ERP media, write Ozon, or stage `.context/`.
+
+Phase 3 remains `4/5` and overall progress remains `32/37`. The Relay has no documented or
+configured explicit async task protocol for this alias/profile, so async is recorded unsupported
+without another paid POST. The completed text-to-image evidence does not prove reference edit, full
+edit or inpaint. Each edit operation requires a separate exact backend price/limit record, explicit
+single-request approval and reconciled evidence. `QA-04`, `REL-02`, `REL-03` and `REL-04` remain
+blocked behind full `QA-02` acceptance.
+
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until a private, versioned backend pricing policy binds the
-   exact alias/account reference, operation, quality, size, image count, currency, quote and
-   single-request maximum, and the operator explicitly approves it. Provider pricing API sync is
-   not required. Then generate and manually finalize the private
-   [v3 one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) with exact
-   credential/deployed revisions, operation/profile, source/mask hashes, billing references and an
-   unexpired validity window of at most 60 minutes. Do not repeat the two previously rejected
-   `IMAGE_TO_IMAGE` requests.
-2. After a single approved request, retain private before/settled billing snapshots, create the v2
-   dual-meter attestation, run the append-only billing finalizer, and record exact
-   endpoint/model/operation/request-mode evidence before promoting that capability. Record async as
-   unsupported unless an explicit task protocol exists; absence does not justify another paid POST.
-3. Run `QA-04` only after exact paid `QA-02` evidence exists; then proceed to owner/shop/device pilot
-   and release gates.
-4. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+1. Do not repeat `qa02-t2i-20260730-063129-01`; its request and billing are closed and its receipt
+   explicitly forbids same-request retry.
+2. For reference edit, full edit and inpaint, prepare separate bounded source/mask bytes and a new
+   private versioned backend policy that binds the exact operation/profile, quote and one-request
+   maximum. Provider pricing API sync is not required. Obtain a new explicit approval for each
+   paid POST, then independently retain before/after meters and finalize its append-only receipt.
+   Never reuse the text-to-image authorization or the two previously rejected edit attempts.
+3. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
+   not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
+4. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order
+   through `REL-02`, `REL-03` and `REL-04`.
+5. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol

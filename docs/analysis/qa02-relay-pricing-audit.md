@@ -8,7 +8,8 @@ The public portion of this audit used only unauthenticated first-party `GET`/`HE
 the relay, its documentation site, and its published frontend assets. A later secret-safe
 follow-up used the private credential only for bounded authenticated read-only endpoints. No Key,
 raw account response, or private billing log is stored here. No paid image request or `POST`
-endpoint was used.
+endpoint was used during those pre-call audit steps. The later authorized outcome is recorded in a
+separate section below.
 
 **Verdict: the public and authenticated read-only evidence does not establish the Provider's
 account-specific price for `gpt-image-2-count`, but that missing Provider record does not by itself
@@ -159,3 +160,23 @@ states:
 Until that policy is reviewed and the operator explicitly approves the maximum, QA-02 remains
 blocked. A successful settlement must still prove the actual paired meter deltas; if they exceed
 the approved maximum, retain `COST_LIMIT_EXCEEDED` and do not promote the capability.
+
+## Post-audit text-to-image outcome
+
+After the pre-call audit, the backend retained pricing policy SHA-256
+`27894dfcb1bfd43cd18d1873f3d7484e726fe55bc273b910874ea8d733ea2335`, and the operator explicitly
+approved one `TEXT_TO_IMAGE` request for `gpt-image-2-count`, `1024x1024`, `n=1`, with quote and
+single-request maximum both exact `CNY 0.0119`. The request was submitted once and was not retried.
+It returned one accepted 1024x1024 PNG.
+
+The retained before/after account snapshots showed raw quota delta `5950` and displayed usage delta
+`1.19`. The authenticated Token-log snapshot identified exactly one matching consume entry. The
+network-free finalizer recorded a sanitized v4 receipt with `billingOutcome=CHARGED`,
+`billingGate=PASS`, and actual/quoted/maximum exact `CNY amount=119 scale=4`; its SHA-256 is
+`83ec0e913baefe0cfb5145d983ce48bf237865d0479725354d792c1e8b9b0423`.
+
+This outcome validates the private quote and maximum for that one request. It does not establish a
+Provider-published list price, future price, reference-edit price, full-edit price or inpaint price,
+and it does not authorize another POST. Live Provider pricing synchronization remains unnecessary;
+each later edit operation still requires its own versioned backend price/limit record, explicit
+maximum approval and post-call reconciliation.

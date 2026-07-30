@@ -317,3 +317,36 @@ Progress: 4/5 tasks.
   dependencies were installed and the sandbox TypeScript configuration passed. The ignored checkout
   evidence link resolves to `/opt/ss-erp/shared/ai-image-sandbox`, which remains `deploy:deploy` mode
   `0700`. No Key or private account artifact was transferred, and no Provider command ran.
+- The operator then explicitly approved exactly one `TEXT_TO_IMAGE` request for
+  `gpt-image-2-count`, profile `OPENAI_SQUARE_SINGLE_V1`, `1024x1024`, `n=1`, with both quote and
+  single-request maximum set to exact `CNY amount=119 scale=4` (`CNY 0.0119`). Operation
+  `qa02-t2i-20260730-063129-01` made one Provider POST and was not retried. It completed
+  `SUCCEEDED` with one 1024x1024 PNG (1,085,256 bytes, SHA-256
+  `481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`). Manual review found the
+  requested plain white ceramic mug on a light-gray background with no text, logo, watermark or
+  extra object.
+- Private before/after account snapshots proved a raw quota delta of `5950` and a displayed usage
+  delta of `1.19`; both resolve to exact `CNY 0.0119`. Because the Relay billing-log request ID is
+  distinct from the upstream response ID, finalizer commit
+  `5f6d3dd8ccac5e060189bec427400cc06c3a97ec` added fail-closed attestation v3 correlation to exactly
+  one authenticated Token-log entry plus a globally unique append-only entry claim. Independent
+  security review found and closed an isolated-claim recovery gap by binding that claim to the exact
+  attestation digest. Focused billing tests passed `51` with one Windows skip; lint, the static
+  contract, sandbox/Server typechecks, `git diff --check`, full preflight (`445/0` with two expected
+  local-package warnings), and the full Server suite (`4488` passed, `194` skipped) passed.
+- The official network-free finalizer ran from a clean deploy-owned private checkout of `5f6d3dd`
+  and wrote one sanitized receipt v4 (SHA-256
+  `83ec0e913baefe0cfb5145d983ce48bf237865d0479725354d792c1e8b9b0423`). It records
+  `CHARGED`, `billingGate=PASS`, actual/quoted/maximum `CNY 0.0119`, one billed unit, and
+  `sameRequestRetryAllowed=false`. Its exact replay returned the same bytes with `replayed=true`.
+  Original intent/report bytes stayed unchanged; all three claim/receipt artifacts are
+  `0600 deploy:deploy` and contain no raw request ID, account/Token number, path, meter body or
+  secret. Both VPS dark verifiers passed after settlement. This operation incurred one real
+  Provider charge of `CNY 0.0119` but made no ERP generation, media ingest, Ozon write, production
+  app switch, feature-flag change or `.context/` staging.
+- The Relay exposes no configured or documented explicit async task protocol for this alias/profile,
+  so async is recorded unsupported without another paid POST. `QA-02` remains open at `4/5` and
+  overall progress remains `32/37`: text-to-image evidence cannot authorize reference edit, full
+  edit or inpaint. Each of those three operations still needs its own private versioned price/limit
+  record, bounded input evidence, explicit one-request maximum approval and separately reconciled
+  request. `QA-04`, `REL-02`, `REL-03` and `REL-04` remain dependency-blocked.
