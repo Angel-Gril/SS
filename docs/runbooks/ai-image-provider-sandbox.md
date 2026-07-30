@@ -71,12 +71,17 @@ Never delete an intent or `.fingerprints` claim to make a request runnable again
 
 ## Revision And Cost Evidence
 
-Set both revisions from authoritative records:
+Set revisions from authoritative records:
 
 - `credentialRevision` is a non-secret version label for the exact injected credential. Use a secret-manager version, controlled configuration revision, or key-rotation revision. Do not use the secret itself, its prefix, or a secret hash as the label.
+- `pricingRevision` is a non-secret version label for the backend pricing policy that supplies the
+  exact quote and single-request maximum. It must bind the model alias, operation, quality, size,
+  image count and currency. A live Provider pricing API lookup is not required for this sandbox.
 - `adapterRevision` is the exact commit deployed with the CLI being executed. Use the full 40- or 64-character value from `DEPLOYED_COMMIT` or `git rev-parse HEAD`; abbreviated SHAs are rejected. `HEAD` must match `DEPLOYED_COMMIT`, each paid CLI/security module must be tracked and byte-identical to that revision, the tracked worktree must be clean, and HEAD is verified again after inspection. The official direct CLI rejects a marker-only release archive because it cannot reconstruct Git blob membership. On a VPS, use a private clean checkout of the deployed revision and point its evidence root to the private shared sandbox directory. The direct submit process captures and removes its paid confirmation/API Key from `process.env` before Git inspection; Git receives only a minimal OS environment with hooks, fsmonitor, and recursive submodules disabled. Any Git verification error fails closed. If no trustworthy code identity is available, the probe fails closed. Do not use a planned or local-only commit.
 
-Record the Provider account, pricing revision, currency, model, quoted charge, balance or usage counter, and observation time immediately before the call. Repeat the observation after the Provider has settled the charge.
+Record the Provider account, backend policy revision, currency, model, quoted charge, balance or
+usage counter, and observation time immediately before the call. Repeat the observation after the
+Provider has settled the charge.
 
 New international approvals use exact money through `AI_IMAGE_SANDBOX_CURRENCY`,
 `AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT`, `AI_IMAGE_SANDBOX_MAX_COST_AMOUNT`, and
@@ -88,8 +93,9 @@ major currency units. Do not use floats or mix these variables with legacy cents
 Historical international evidence may still use `AI_IMAGE_SANDBOX_QUOTED_COST_CENTS` and
 `AI_IMAGE_SANDBOX_MAX_COST_CENTS`; the DashScope translation lane continues to use its own integer
 cents variables. These fields are compatibility paths, not the format for a new sub-cent
-international approval. Cost evidence does **not** limit the Provider bill, reserve a production
-budget, or prove the actual charge. Exact submit reports leave `actualCost` as `null`; legacy
+international approval. The quote/maximum fields do **not** limit the Provider bill or prove the
+actual charge; they bind the backend policy and this one-request approval. Exact submit reports
+leave `actualCost` as `null`; legacy
 reports leave `actualCostCents` as `null`. Settled cost is recorded later through the append-only
 [billing finalizer](ai-image-provider-sandbox-billing.md). Configure a Provider-side spending cap
 separately when one is available.

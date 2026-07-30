@@ -295,10 +295,11 @@ Progress: 4/5 tasks.
   workspace typecheck, full Server tests (`4468` passed, `194` skipped), and a clean full preflight
   rerun passed. Cloud/local/source package verification passed `449/0/0`, `445/2/0`, and `445/2/0`
   at build version `1.0.264`.
-- `QA-02` remains open at `4/5` and overall progress remains `32/37`. The exact alias still lacks a
-  retained authenticated pricing artifact for each intended operation/account configuration, and
-  the operator has not explicitly approved one maximum cost. The exact-money implementation made no
-  Provider POST or image charge.
+- `QA-02` remains open at `4/5` and overall progress remains `32/37`. The Provider does not expose
+  a retained account-specific price record for the alias, but QA-02 does not require live Provider
+  pricing sync. A private, versioned backend price/limit policy must bind each exact proposed
+  operation/profile and the operator must explicitly approve one single-request maximum. The
+  exact-money implementation made no Provider POST or image charge.
 - Commit `9e7c8140a17592b76be4b219332f65b58d18cb3f` was pushed and dark-deployed to both app-dir
   VPS targets. International retained a readable approximately 36 MB database backup at
   `/var/backups/ss-erp/ss_erp_20260730_053537.sql.gz`; domestic retained an 8.2 MB backup at

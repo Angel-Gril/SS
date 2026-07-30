@@ -58,7 +58,7 @@ duplicate keys, invalid UTF-8, unsafe modes, file changes, and digest mismatches
   "settledObservedAt": "2026-07-29T01:10:00.000Z",
   "reconcilerRef": "billing-review-20260729-01",
   "providerAccountRef": "relay-account-main",
-  "pricingRevision": "provider-pricing-20260729",
+  "pricingRevision": "qa02-price-policy-20260730-v1",
   "preCallBillingSnapshotRef": "private-ledger/qa02-full-edit-before",
   "billingReconciliationRef": "private-ledger/qa02-full-edit-after",
   "preCallBillingSnapshotPath": "/secure/qa02-full-edit-before.png",

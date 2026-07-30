@@ -20,11 +20,14 @@ gpt-image-2-i2i-20260725064150-03
 ```
 
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
-authenticated model catalogue, but that does not establish its account-specific price or edit
-coverage. Do not prepare a paid approval until a timestamped authenticated pricing artifact binds
-the exact alias, account/group, operation, quality, size, image count, currency, and pricing
-revision, and the operator explicitly approves the maximum cost for that one request. A price
-stated in chat is planning input, not independent Provider pricing evidence.
+authenticated model catalogue, but the catalogue does not need to be a live pricing source for
+this sandbox. Before a paid approval, retain a private, versioned backend pricing policy that binds
+the exact alias/account reference, operation, quality, size, image count, currency, quote, and
+single-request maximum. `AI_IMAGE_SANDBOX_PRICING_REVISION` names that policy revision; no Provider
+pricing API synchronization is required. The policy is an internal approval/budget control, not a
+Provider-side hard spending cap, and the finalizer must still reconcile the actual before/after
+meters. A price stated in chat remains planning input until it is entered into and reviewed against
+that policy.
 
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.
@@ -56,7 +59,7 @@ source plus mask must not exceed the shared `50 MiB` multipart limit. It additio
 | `AI_IMAGE_SANDBOX_BASE_URL`                               | HTTPS API base without an `/images/generations` or `/images/edits` path |
 | `AI_IMAGE_SANDBOX_APPROVER_REF`                           | Non-secret reference for the future recorded review                 |
 | `AI_IMAGE_SANDBOX_PROVIDER_ACCOUNT_REF`                   | Non-secret Provider account reference                               |
-| `AI_IMAGE_SANDBOX_PRICING_REVISION`                       | Exact pricing evidence revision                                     |
+| `AI_IMAGE_SANDBOX_PRICING_REVISION`                       | Version of the backend pricing policy; no live Provider sync required |
 | `AI_IMAGE_SANDBOX_CURRENCY`                               | Three-letter uppercase currency code                                |
 | `AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT`                     | Canonical positive integer quote in the shared scale                 |
 | `AI_IMAGE_SANDBOX_MAX_COST_AMOUNT`                        | Canonical positive integer approved maximum in the shared scale      |
@@ -88,8 +91,9 @@ expiresAt: REPLACE_DURING_REVIEW
 ```
 
 It is not an approval and the submit/preflight loader must reject it. A human approver must review
-every request field against the Provider account, pricing, source/mask bytes, deployed revision,
-dark-state result, and pre-call billing evidence. Only during that review may the approver replace
+every request field against the backend pricing policy, Provider account, source/mask bytes,
+deployed revision, dark-state result, and pre-call billing evidence. Only during that review may the
+approver replace
 `statement` with `I_APPROVE_EXACTLY_ONE_PAID_AI_IMAGE_REQUEST`, set distinct canonical UTC
 `approvedAt`/`expiresAt` values with a positive window of at most 60 minutes, and save the canonical
 two-space JSON. Compute a new SHA-256 only after those three manual replacements and the final
@@ -115,7 +119,7 @@ example value with reviewed evidence; do not leave placeholder brackets.
   "expiresAt": "2026-07-29T01:30:00.000Z",
   "approverRef": "owner-review-20260729-01",
   "providerAccountRef": "relay-account-main",
-  "pricingRevision": "provider-pricing-20260729",
+  "pricingRevision": "qa02-price-policy-20260730-v1",
   "preCallBillingSnapshotRef": "private-ledger/qa02-full-edit-before",
   "billingReconciliationRef": "private-ledger/qa02-full-edit-after",
   "requestCount": 1,

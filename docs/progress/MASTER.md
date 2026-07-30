@@ -162,11 +162,13 @@ errors), workspace typecheck, full Server tests (`4468` passed, `194` skipped), 
 preflight rerun passed. Cloud/local/source package verification passed `449/0/0`, `445/2/0`, and
 `445/2/0` at build version `1.0.264`.
 
-Phase 3 remains `4/5` and overall progress remains `32/37`: the exact alias still lacks a retained
-authenticated price/revision artifact for each intended operation and account configuration, and
-no explicit per-request maximum cost has been approved. The exact-money implementation and
-verification made no Provider POST, image charge, feature-flag change, ERP AI generation, media
-ingest, Ozon write or `.context/` staging.
+Phase 3 remains `4/5` and overall progress remains `32/37`: the Provider does not expose a retained
+account-specific price record for the alias, but QA-02 does not require live Provider pricing sync.
+The selected policy is a private, versioned backend price/limit record bound to the exact alias,
+operation, profile, quality, size, image count and currency. It still needs explicit review and a
+single-request maximum before any POST. The exact-money implementation and verification made no
+Provider POST, image charge, feature-flag change, ERP AI generation, media ingest, Ozon write or
+`.context/` staging.
 
 Commit `9e7c8140a17592b76be4b219332f65b58d18cb3f` was then pushed and dark-deployed to both
 app-dir VPS targets with every AI Media, extension workbench, legacy generation, translation and
@@ -192,9 +194,10 @@ transferred, and no Provider command was run.
 
 ## Next Steps
 
-1. Do not start a paid `QA-02` probe until an authenticated pricing artifact binds the exact alias,
-   account/group, operation, quality, size, image count, currency and pricing revision, and the
-   operator explicitly approves one maximum cost. Then generate and manually finalize the private
+1. Do not start a paid `QA-02` probe until a private, versioned backend pricing policy binds the
+   exact alias/account reference, operation, quality, size, image count, currency, quote and
+   single-request maximum, and the operator explicitly approves it. Provider pricing API sync is
+   not required. Then generate and manually finalize the private
    [v3 one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) with exact
    credential/deployed revisions, operation/profile, source/mask hashes, billing references and an
    unexpired validity window of at most 60 minutes. Do not repeat the two previously rejected

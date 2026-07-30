@@ -51,6 +51,10 @@ const approvalRunbook = fs.readFileSync(
   'docs/runbooks/ai-image-provider-sandbox-approval.md',
   'utf8',
 );
+const pricingAudit = fs.readFileSync(
+  'docs/analysis/qa02-relay-pricing-audit.md',
+  'utf8',
+);
 const billingRunbook = fs.readFileSync(
   'docs/runbooks/ai-image-provider-sandbox-billing.md',
   'utf8',
@@ -291,6 +295,10 @@ assert.match(approvalRunbook, /Historical `schemaVersion: 2` approvals/u);
 assert.match(approvalRunbook, /"expiresAt":/u);
 assert.match(approvalRunbook, /no longer than 60 minutes/u);
 assert.match(approvalRunbook, /guarded POST boundary/u);
+assert.match(approvalRunbook, /versioned backend pricing policy/u);
+assert.match(approvalRunbook, /no Provider\s+pricing API synchronization is required/u);
+assert.doesNotMatch(approvalRunbook, /authenticated pricing artifact binds/u);
+assert.match(pricingAudit, /No Provider pricing synchronization is required/u);
 assert.match(runbook, /ai-image-provider-sandbox-billing\.md/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_MAX_COST_AMOUNT/u);

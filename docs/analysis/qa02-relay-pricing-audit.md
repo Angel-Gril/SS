@@ -10,11 +10,13 @@ follow-up used the private credential only for bounded authenticated read-only e
 raw account response, or private billing log is stored here. No paid image request or `POST`
 endpoint was used.
 
-**Verdict: the public and authenticated read-only evidence is not sufficient to approve a paid
-QA-02 call for `gpt-image-2-count`.** The relay publishes reference prices for the different model
-name `gpt-image-2`, and the account can see the `-count` alias, but no retained pricing artifact
-establishes that the alias has the same price, billing rules, operation coverage, or pricing
-revision.
+**Verdict: the public and authenticated read-only evidence does not establish the Provider's
+account-specific price for `gpt-image-2-count`, but that missing Provider record does not by itself
+block the selected QA-02 policy.** The relay publishes reference prices for the different model
+name `gpt-image-2`, and the account can see the `-count` alias. QA-02 will instead use a private,
+versioned backend pricing policy for one bounded request and will reconcile the actual Provider
+meters afterward. The unknown Provider pricing facts must not be presented as advance proof of the
+charge.
 
 ## First-party evidence
 
@@ -119,37 +121,41 @@ For a charge of `CNY 0.0119`, the expected paired evidence is a raw quota delta 
 displayed total-usage delta of `1.19`; this is a reconciliation expectation, not advance proof of
 the model's price.
 
-The operator supplied `CNY 0.0119 per image` as planning input. No authenticated pricing artifact
-has yet tied that number to the exact alias, account/group, requested operation, quality, size,
-image count, or pricing revision. `/api/pricing` requires a logged-in session plus its user header;
-the API Key alone did not expose the account-specific pricing record.
+The operator supplied `CNY 0.0119 per image` as planning input. `/api/pricing` requires a logged-in
+session plus its user header; the API Key alone did not expose the account-specific pricing record.
+That Provider endpoint is not a prerequisite under the selected policy. Before a paid request, the
+backend/operator must retain a private policy revision that binds the exact alias/account reference,
+operation, quality, size, image count, currency, quote and single-request maximum. The policy must
+be explicitly reviewed and its revision copied into the approval; it does not become a Provider-side
+hard cap, so the paired before/after meter reconciliation remains mandatory.
 
-## Required pricing facts versus available evidence
+## Provider facts versus backend policy controls
 
-| Required QA-02 fact | Public evidence | Status |
+| QA-02 control | Provider evidence / policy source | Status |
 | --- | --- | --- |
 | Exact model identity `gpt-image-2-count` | Authenticated model catalogue lists the exact alias | Present for catalogue visibility only |
-| Exact model-to-upstream/alias mapping | Not published | Missing |
-| Currency | Authenticated billing configuration and public status both use CNY display | Partial; exact alias price still unbound |
-| Generation billing unit | Per image by quality for `gpt-image-2` | Wrong model identity |
-| Reference-image/full-edit/inpaint price | Edits are documented, but no explicit edit price is published | Missing |
-| Size-dependent pricing | Supported sizes are listed; price-size interaction is not specified | Missing |
-| Account/group multiplier | General guide says group multipliers apply; exact applicable group is unavailable publicly | Missing |
-| Pricing effective date/revision | Only HTTP/build timestamps are available | Missing |
-| Binding maximum charge for one request | Cannot be calculated for the exact alias and operation | Missing |
+| Exact model-to-upstream/alias mapping | Not published; exact alias is bound in the backend policy | Policy-controlled; Provider mapping remains unknown |
+| Currency | Authenticated billing configuration and public status both use CNY display | Policy must bind CNY |
+| Generation billing unit | Per image reference exists for `gpt-image-2`, not the alias | Policy supplies the bounded quote; actual meters settle it |
+| Reference-image/full-edit/inpaint price | No explicit Provider price is published | Each operation must be explicitly priced or left unsupported in policy |
+| Size-dependent pricing | Provider interaction is not specified | Policy binds one exact size/profile per request |
+| Account/group multiplier | Exact applicable group is unavailable publicly | Policy binds the account reference and post-call reconciliation catches variance |
+| Pricing effective date/revision | Provider revision unavailable | Backend policy revision is required |
+| Binding maximum charge for one request | Provider cap unavailable | Backend policy and approval must bind the maximum |
 
 ## QA-02 decision
 
 Do not use the `gpt-image-2` reference table as authorization to charge
-`gpt-image-2-count`. Before any paid request, obtain an authenticated, timestamped pricing
-artifact for the exact model and applicable account/group that states:
+`gpt-image-2-count`. No Provider pricing synchronization is required. Before any paid request,
+retain a private, timestamped backend pricing-policy record for the exact proposed request that
+states:
 
-1. the exact model identifier and any alias mapping;
-2. the price and currency for each intended operation;
-3. the effects of `quality`, `size`, and `n`;
-4. whether generation prices also apply to full edit and mask edit;
-5. the pricing effective date or revision;
-6. the resulting maximum charge for the exact proposed request.
+1. the exact model identifier and account reference;
+2. the quote and currency for the selected operation;
+3. the fixed `quality`, `size`, and `n`;
+4. the backend policy revision/effective time;
+5. the resulting single-request maximum charge.
 
-Until those facts are available, QA-02 cost approval remains blocked even if the model is
-present in an authenticated model catalogue.
+Until that policy is reviewed and the operator explicitly approves the maximum, QA-02 remains
+blocked. A successful settlement must still prove the actual paired meter deltas; if they exceed
+the approved maximum, retain `COST_LIMIT_EXCEEDED` and do not promote the capability.
