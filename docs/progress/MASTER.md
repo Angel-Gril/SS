@@ -220,15 +220,33 @@ edit or inpaint. Each edit operation requires a separate exact backend price/lim
 single-request approval and reconciled evidence. `QA-04`, `REL-02`, `REL-03` and `REL-04` remain
 blocked behind full `QA-02` acceptance.
 
+The operator then approved one separate `IMAGE_TO_IMAGE` request for `gpt-image-2-count`, the same
+square profile and the accepted mug source, with quote `CNY 0.0119` and maximum `CNY 1.0000`.
+Policy/source/pre-call snapshot, revision, dark state and official offline approval verification all
+passed. Operation `qa02-i2i-20260730-083710-01` made exactly one `/v1/images/edits` POST and returned
+a definite `REJECTED` v5 report after `155 ms`, with `createRequests=1`, no Provider request-ID hash
+and `PROVIDER_REQUEST_FAILED`. It was not retried.
+
+Both Provider meters had zero delta and the authenticated Token log had no matching consume entry.
+The official finalizer wrote sanitized exact receipt v3 SHA-256
+`c05aaa7e31a545e0be6a5107a7300e30d4d10f2ef634d7472a51dd064f5db855`, recording `NO_CHARGE`,
+`billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`; exact replay returned the
+same bytes. Both VPS remained dark. The alias is therefore directly evidenced as generation-capable
+but incompatible with the Relay's shared edit transport. `FULL_EDIT` and `INPAINT` were not sent and
+must not be attempted against this same endpoint/model.
+
+Task counts remain Phase 3 `4/5` and overall `32/37`. Full `QA-02` now requires a different
+edit-capable endpoint/model; `QA-04`, `REL-02`, `REL-03` and `REL-04` remain dependency-blocked.
+
 ## Next Steps
 
-1. Do not repeat `qa02-t2i-20260730-063129-01`; its request and billing are closed and its receipt
-   explicitly forbids same-request retry.
-2. For reference edit, full edit and inpaint, prepare separate bounded source/mask bytes and a new
-   private versioned backend policy that binds the exact operation/profile, quote and one-request
-   maximum. Provider pricing API sync is not required. Obtain a new explicit approval for each
-   paid POST, then independently retain before/after meters and finalize its append-only receipt.
-   Never reuse the text-to-image authorization or the two previously rejected edit attempts.
+1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
+   billing are closed and their receipts explicitly forbid same-request retry.
+2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. Select a different edit-capable
+   endpoint/model, then prepare separate bounded source/mask bytes and a new private versioned
+   backend policy that binds the exact operation/profile, quote and one-request maximum. Provider
+   pricing API sync is not required. Obtain a new explicit approval for each paid POST and settle
+   each one before the next operation.
 3. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
    not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
 4. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then proceed in order

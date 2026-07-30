@@ -129,6 +129,11 @@ Rules:
   change and displayed total-usage change. For the example above, `5950 / 500000 = CNY 0.0119`,
   while displayed usage changed by `1.19` units whose currency scale is `2`. A mismatch in either
   meter fails closed.
+- For an exact `NO_CHARGE` settlement, `actualCost.amount`, `rawQuotaDelta`, and
+  `displayTotalUsageDelta.amount` must all be zero. The zero display delta must use its canonical
+  minimum decimal form, exactly `{ "amount": 0, "scale": 0 }`; zero with a positive decimal scale
+  is rejected before any settlement claim is written. `actualCost` may retain the approved money
+  scale so the receipt remains generation-compatible with the quote and maximum.
 - Historical attestation v1 with `currency` and `actualCostCents` remains readable only with the
   matching legacy intent/report generation. Do not convert or mix generations in place.
 - `PROVIDER_REQUEST_ID` requires the raw private request ID, whose SHA-256 must match the submit

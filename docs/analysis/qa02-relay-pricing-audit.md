@@ -180,3 +180,21 @@ Provider-published list price, future price, reference-edit price, full-edit pri
 and it does not authorize another POST. Live Provider pricing synchronization remains unnecessary;
 each later edit operation still requires its own versioned backend price/limit record, explicit
 maximum approval and post-call reconciliation.
+
+## Post-audit image-to-image outcome
+
+The operator later authorized one separate `IMAGE_TO_IMAGE` request for the same alias/profile and
+the accepted mug source, with quote `CNY 0.0119` and maximum `CNY 1.0000`. The private policy SHA-256
+was `012c98966d76c55ed7c3874d974396742b4b942d942b1929b5f569d65821979b`. The request was submitted
+exactly once and was not retried.
+
+The Relay returned a definite `REJECTED` result after `155 ms`, without a Provider request-ID hash.
+Raw quota and displayed usage both remained unchanged, and the retained Token log had no matching
+consume entry. Exact receipt v3 SHA-256
+`c05aaa7e31a545e0be6a5107a7300e30d4d10f2ef634d7472a51dd064f5db855` records `NO_CHARGE`,
+`billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`.
+
+The outcome supplies negative compatibility evidence, not an edit price. The current
+endpoint/`gpt-image-2-count` pair must be treated as text-to-image-only. Full edit and inpaint share
+the rejected edit transport and should not be dispatched without selecting a different
+edit-capable endpoint/model and beginning a new bounded approval sequence.

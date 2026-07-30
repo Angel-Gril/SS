@@ -326,6 +326,8 @@ assert.match(billingRunbook, /attestation v2/u);
 assert.match(billingRunbook, /PROVIDER_TOKEN_LOG_ENTRY/u);
 assert.match(billingRunbook, /NEW_API_QUOTA_AND_TOTAL_USAGE_V1/u);
 assert.match(billingRunbook, /rawQuotaDelta/u);
+assert.match(billingRunbook, /zero display delta must use its canonical/u);
+assert.match(billingRunbook, /\{ "amount": 0, "scale": 0 \}/u);
 assert.match(billingRunbook, /v3 settlement receipt/u);
 assert.match(billingRunbook, /preCallBillingSnapshotPath/u);
 assert.match(billingRunbook, /16 MiB/u);

@@ -243,6 +243,27 @@ The configured international relay/model produced one earlier text-to-image resu
 
 Treat this exact relay/model as text-to-image-only and still unverified for production. Model-catalog access is not generation acceptance, and generation acceptance is not edit acceptance. Do not repeat the rejected requests or enable reference generation, full edit, inpaint, suites, or tenant rollout unless the operator selects an edit-capable endpoint/model and completes a new bounded acceptance.
 
+### Recorded `gpt-image-2-count` edit rejection (2026-07-30)
+
+The exact catalog-visible alias was separately tested once under explicit approval as
+`IMAGE_TO_IMAGE`, `OPENAI_SQUARE_SINGLE_V1`, `1024x1024`, `n=1`, using the already accepted mug
+source SHA-256 `481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`.
+The private policy quoted exact `CNY 0.0119` and authorized a maximum of `CNY 1.0000`.
+
+Operation `qa02-i2i-20260730-083710-01` made exactly one guarded `/v1/images/edits` POST. Its v5
+report is a definite `REJECTED` result with `createRequests=1`, `providerRequestIdHash=null`,
+`failureCode=PROVIDER_REQUEST_FAILED`, and elapsed time `155 ms`. It was not retried. Independent
+raw-quota and displayed-usage snapshots both had zero delta, and the authenticated Token log had no
+matching consume entry. The append-only exact receipt v3 therefore records `NO_CHARGE`,
+`billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`; receipt SHA-256 is
+`c05aaa7e31a545e0be6a5107a7300e30d4d10f2ef634d7472a51dd064f5db855`.
+
+This exact endpoint/model is now directly evidenced as generation-capable but edit-transport
+incompatible. Do not dispatch `FULL_EDIT` or `INPAINT` against it: both share the rejected
+`/images/edits` transport, neither has a separate authorization, and another paid attempt would not
+repair the demonstrated capability gap. Select a different edit-capable endpoint/model and restart
+the bounded approval sequence there.
+
 The international database may still contain a legacy `openai-images` selection with a third-party
 Base URL. Current admin validation and paid runtime contracts reject that identity: official OpenAI
 Images is restricted to `https://api.openai.com/v1`, while a relay must be labeled `custom`. Use the

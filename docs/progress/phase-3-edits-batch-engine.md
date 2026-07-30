@@ -350,3 +350,26 @@ Progress: 4/5 tasks.
   edit or inpaint. Each of those three operations still needs its own private versioned price/limit
   record, bounded input evidence, explicit one-request maximum approval and separately reconciled
   request. `QA-04`, `REL-02`, `REL-03` and `REL-04` remain dependency-blocked.
+- The operator next approved one exact `IMAGE_TO_IMAGE` request for the same alias and square
+  profile, using source SHA-256
+  `481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`, quote `CNY 0.0119`, and
+  maximum `CNY 1.0000`. Policy SHA-256 was
+  `012c98966d76c55ed7c3874d974396742b4b942d942b1929b5f569d65821979b`; approval SHA-256 was
+  `3d34d963b9b64052a73d96ffd175079aff2a7b3416330aa35fefff744ba461fa`. The source, pre-call
+  snapshot, Git revision, dark state and official offline approval verification all passed before
+  dispatch.
+- Operation `qa02-i2i-20260730-083710-01` made exactly one Provider POST and returned a definite
+  `REJECTED` v5 report after `155 ms`, with `createRequests=1`, no Provider request-ID hash and
+  `PROVIDER_REQUEST_FAILED`. It was not retried. Raw quota and displayed usage both had zero delta,
+  and the retained authenticated Token log had no matching consume entry. The official network-free
+  finalizer wrote exact receipt v3 SHA-256
+  `c05aaa7e31a545e0be6a5107a7300e30d4d10f2ef634d7472a51dd064f5db855`, recording `NO_CHARGE`,
+  `billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`; exact replay returned the
+  same bytes. Intent/report bytes remained unchanged, outputs are private and sanitized, and both
+  VPS dark verifiers passed.
+- This exact relay/alias is now evidenced as text-to-image-only and incompatible with the shared
+  `/images/edits` transport. `FULL_EDIT` and `INPAINT` were not dispatched: they have no separate
+  authorization and another request against the same rejected transport is not justified. `QA-02`
+  therefore remains `4/5`, overall progress remains `32/37`, and all four downstream tasks remain
+  blocked until a different edit-capable endpoint/model completes bounded operation-specific
+  acceptance.
