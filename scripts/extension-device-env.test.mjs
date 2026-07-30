@@ -22,6 +22,7 @@ function baseEnv(extra = []) {
     'EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN=https://app.ss-erp.example',
     'EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN=https://admin.ss-erp.example',
     'EXTENSION_RELEASE_EXPECTED_API_ORIGIN=https://ss-erp.example',
+    'EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001',
     'CORS_ORIGIN=https://ss-erp.example',
     'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS=true',
     'EXTENSION_AUTH_MODE=compat',

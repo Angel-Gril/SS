@@ -40,6 +40,7 @@ function validateDeploymentEnv(hostLines) {
     'EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN=https://app.ss-erp.cn',
     'EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN=https://admin.ss-erp.cn',
     'EXTENSION_RELEASE_EXPECTED_API_ORIGIN=https://ss-erp.cn',
+    'EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001',
     'SMS_PROVIDER=',
     ...hostLines,
     '',
