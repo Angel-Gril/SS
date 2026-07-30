@@ -164,27 +164,48 @@ preflight rerun passed. Cloud/local/source package verification passed `449/0/0`
 
 Phase 3 remains `4/5` and overall progress remains `32/37`: the exact alias still lacks a retained
 authenticated price/revision artifact for each intended operation and account configuration, and
-no explicit per-request maximum cost has been approved. No Provider POST, charge, production
-mutation, VPS access, deployment, flag change, or `.context/` staging occurred.
+no explicit per-request maximum cost has been approved. The exact-money implementation and
+verification made no Provider POST, image charge, feature-flag change, ERP AI generation, media
+ingest, Ozon write or `.context/` staging.
+
+Commit `9e7c8140a17592b76be4b219332f65b58d18cb3f` was then pushed and dark-deployed to both
+app-dir VPS targets with every AI Media, extension workbench, legacy generation, translation and
+Ozon publisher flag still off. The international backup is
+`/var/backups/ss-erp/ss_erp_20260730_053537.sql.gz` (about 36 MB), and the domestic backup is
+`/var/backups/ss-erp/ss_erp_20260730_134042.sql.gz` (8.2 MB). Both deployments applied the same
+eight pending migrations, passed the post-migration database guard, runtime upload diagnostics,
+service/local/public readiness, clean-log and dark-rollout checks, and now report the exact deployed
+commit. The domestic verifier additionally passed direct-origin HTTPS, certificate, ACME and unknown
+Host rejection checks for all four `.cn` hostnames. Each full verifier reported zero failures and one
+warning because backup replication is not configured beyond the readable local artifact. These
+authorized deployment and schema changes made no Provider POST, image charge, feature-flag change,
+ERP AI generation, media ingest or Ozon write. `QA-02` therefore remains open at `4/5`, and overall
+progress remains `32/37`.
+
+The international sandbox CLI now has a private checkout at
+`/opt/ss-erp/private/ai-image-sandbox/checkouts/9e7c8140a17592b76be4b219332f65b58d18cb3f`.
+It is owned by `deploy:deploy` with mode `0700`; its exact HEAD, required paid-CLI Git blobs and clean
+tracked worktree were verified, frozen dependencies were installed, and the sandbox TypeScript
+configuration passed. Its ignored `tmp/ai-image-sandbox` link resolves to the deploy-managed private
+`/opt/ss-erp/shared/ai-image-sandbox` evidence directory. No Key or private account artifact was
+transferred, and no Provider command was run.
 
 ## Next Steps
 
-1. Commit, push and dark-deploy the exact-money revision with every AI/Ozon rollout flag still off,
-   then create a private clean checkout of that exact deployed revision for the sandbox CLI.
-2. Do not start a paid `QA-02` probe until an authenticated pricing artifact binds the exact alias,
+1. Do not start a paid `QA-02` probe until an authenticated pricing artifact binds the exact alias,
    account/group, operation, quality, size, image count, currency and pricing revision, and the
    operator explicitly approves one maximum cost. Then generate and manually finalize the private
    [v3 one-request approval record](../runbooks/ai-image-provider-sandbox-approval.md) with exact
    credential/deployed revisions, operation/profile, source/mask hashes, billing references and an
    unexpired validity window of at most 60 minutes. Do not repeat the two previously rejected
    `IMAGE_TO_IMAGE` requests.
-3. After a single approved request, retain private before/settled billing snapshots, create the v2
+2. After a single approved request, retain private before/settled billing snapshots, create the v2
    dual-meter attestation, run the append-only billing finalizer, and record exact
    endpoint/model/operation/request-mode evidence before promoting that capability. Record async as
    unsupported unless an explicit task protocol exists; absence does not justify another paid POST.
-4. Run `QA-04` only after exact paid `QA-02` evidence exists; then proceed to owner/shop/device pilot
+3. Run `QA-04` only after exact paid `QA-02` evidence exists; then proceed to owner/shop/device pilot
    and release gates.
-5. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+4. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol

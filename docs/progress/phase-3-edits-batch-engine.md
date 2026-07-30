@@ -297,5 +297,22 @@ Progress: 4/5 tasks.
   at build version `1.0.264`.
 - `QA-02` remains open at `4/5` and overall progress remains `32/37`. The exact alias still lacks a
   retained authenticated pricing artifact for each intended operation/account configuration, and
-  the operator has not explicitly approved one maximum cost. This work made no Provider POST,
-  charge, production mutation, VPS access, deployment, flag change, or `.context/` staging.
+  the operator has not explicitly approved one maximum cost. The exact-money implementation made no
+  Provider POST or image charge.
+- Commit `9e7c8140a17592b76be4b219332f65b58d18cb3f` was pushed and dark-deployed to both app-dir
+  VPS targets. International retained a readable approximately 36 MB database backup at
+  `/var/backups/ss-erp/ss_erp_20260730_053537.sql.gz`; domestic retained an 8.2 MB backup at
+  `/var/backups/ss-erp/ss_erp_20260730_134042.sql.gz`. Both applied the eight pending migrations and
+  passed the database guard, runtime upload checks, active service checks, local/public readiness,
+  clean-log checks and AI Media dark-state verification. Domestic also passed direct-origin HTTPS,
+  certificate, ACME and unknown Host rejection checks for `ss-erp.cn`, `www.ss-erp.cn`,
+  `app.ss-erp.cn` and `admin.ss-erp.cn`. Each full verifier returned zero failures and one warning
+  for local-only backup retention. All AI/Ozon rollout flags remain off; the authorized deployment
+  and schema migration made no Provider POST, image charge, ERP AI generation, media ingest or Ozon
+  write, and `.context/` was not staged.
+- International now has a deploy-owned mode-`0700` private sandbox checkout at
+  `/opt/ss-erp/private/ai-image-sandbox/checkouts/9e7c8140a17592b76be4b219332f65b58d18cb3f`.
+  Its exact HEAD, required paid-CLI Git blobs and tracked-worktree cleanliness were verified; frozen
+  dependencies were installed and the sandbox TypeScript configuration passed. The ignored checkout
+  evidence link resolves to `/opt/ss-erp/shared/ai-image-sandbox`, which remains `deploy:deploy` mode
+  `0700`. No Key or private account artifact was transferred, and no Provider command ran.
