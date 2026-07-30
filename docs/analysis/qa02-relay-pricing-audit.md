@@ -236,8 +236,22 @@ under the private QA-02 evidence root. The manifest SHA-256 is
 `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`; the retained files contain no
 credential. The separate frontend-route observation SHA-256 is
 `514329392fd9c88cb28f1e95edf010ce19324bef7d7ba681fb2f82af53a9c419`. The credential pasted into
-the conversation is considered exposed and must be revoked
-or rotated. No authenticated request may use it. A replacement credential must be entered through
-a private local DPAPI flow before one bounded authenticated read-only catalogue/account check.
-Until then, `ai.centos.hk` remains only a network-safe, unauthenticated candidate whose edit
-capability is unproved.
+the conversation was considered exposed and was never used. The operator revoked/rotated it and
+stored the replacement in a separate current-user DPAPI file outside the repository under the
+non-secret revision label `centos-key-rotation-20260730-01`.
+
+One bounded authenticated read-only sequence then used only credential-bearing GET requests with
+redirects disabled, no request body, and a 1 MiB response cap. `/v1/models` returned exactly
+`gpt-image-2` and `gpt-image-2-2k`; both advertise only `image-generation` and `openai` endpoint
+types. The Token's model limit permits exactly those two identifiers. `/api/usage/token/`,
+`/v1/dashboard/billing/usage`, and the canonical `/api/log/token` route are readable with the API
+Token. The Token log contained zero entries.
+
+After the catalogue/account checks, the Token-usage, displayed-usage, and Token-log response bytes
+were each identical to their corresponding pre-check response. The GET-only sequence therefore
+made no Provider image operation and consumed no quota. The closed private read-only summary v3 has
+SHA-256 `6ae534108272abcc84fef7f75abf8114d73304ea7ccca2bdb0283c771c1b510a`; exact and generic
+credential scans were clean. This proves credential validity, catalogue visibility, model limits,
+and usable reconciliation endpoints. It still does not prove that either listed model is accepted
+by `/v1/images/edits`, so a separately priced and explicitly authorized one-request edit probe is
+required before capability promotion.

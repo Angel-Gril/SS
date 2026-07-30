@@ -385,8 +385,14 @@ Progress: 4/5 tasks.
   `/v1/images/edits` route constant, but does not bind it to this account, model or upstream
   channel. Private preflight manifest SHA-256 is
   `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4`.
-- The candidate Key pasted into the conversation is considered exposed, was not used, and must be
-  revoked or rotated. A replacement must enter through private local DPAPI storage before one
-  bounded authenticated read-only catalogue/account check. Counts remain `4/5` and `32/37`; this
-  preflight made no authenticated request, Provider POST, charge, production mutation, deployment,
-  flag change or `.context/` staging.
+- The candidate Key pasted into the conversation was considered exposed and was never used. The
+  operator rotated it and stored the replacement in a private current-user DPAPI file under
+  non-secret revision `centos-key-rotation-20260730-01`. One bounded authenticated GET-only sequence
+  then confirmed the Token can access exactly `gpt-image-2` and `gpt-image-2-2k`; both catalogue
+  entries and the Token model limit still expose only `image-generation` and `openai`.
+- Token quota, displayed usage and the empty Token log were byte-identical before and after the
+  read-only checks, proving zero charge. Private read-only summary v3 SHA-256 is
+  `6ae534108272abcc84fef7f75abf8114d73304ea7ccca2bdb0283c771c1b510a`, and exact/generic credential
+  scans were clean. This proves credential validity and usable reconciliation endpoints, not edit
+  capability. Counts remain `4/5` and `32/37`; no Provider POST, charge, production mutation,
+  deployment, flag change or `.context/` staging occurred.

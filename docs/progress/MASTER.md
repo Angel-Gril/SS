@@ -250,19 +250,28 @@ not advertise `/v1/images/edits`. This is not edit-capability evidence and is no
 authorization. Its public frontend contains a generic `/v1/images/edits` route constant, but that
 constant is not bound to this account, model or upstream channel. Public snapshots and manifest SHA-256
 `92d0bf08298d0c9254687ca1e0369200f99dc68c5451180ccf2182937dc3b6b4` remain outside Git. The Key
-provided in conversation is treated as exposed; it was not used and must be rotated before a
-private DPAPI-injected, authenticated read-only catalogue/account check. No authenticated request,
-Provider POST, charge, production mutation, deployment, flag change, or `.context/` staging
-occurred. Counts remain `32/37`.
+provided in conversation was treated as exposed and was never used. The operator rotated it and
+stored the replacement in a private current-user DPAPI file under non-secret revision
+`centos-key-rotation-20260730-01`.
+
+The replacement credential passed a bounded authenticated GET-only check with redirects disabled,
+no body and a 1 MiB response cap. Its catalogue and Token model limits contain only `gpt-image-2`
+and `gpt-image-2-2k`; both still advertise only `image-generation` and `openai`. Token quota,
+displayed usage and the empty Token log were byte-identical before and after the checks, proving no
+charge. Private read-only summary v3 SHA-256 is
+`6ae534108272abcc84fef7f75abf8114d73304ea7ccca2bdb0283c771c1b510a`; secret scans were clean.
+This proves the credential and reconciliation endpoints, not edit capability. No Provider POST,
+charge, production mutation, deployment, flag change, or `.context/` staging occurred. Counts
+remain `32/37`.
 
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
-2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. For the alternate
-   `ai.centos.hk` candidate, first revoke/rotate the exposed Key and load the replacement only
-   through private local DPAPI storage. Then perform one bounded authenticated read-only catalogue
-   and account/billing check. Do not infer edit support from its public generation-only metadata.
+2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. The alternate `ai.centos.hk`
+   credential and read-only reconciliation endpoints are verified, but its two permitted models
+   still expose only generation metadata. Prepare one exact `gpt-image-2` `IMAGE_TO_IMAGE` policy
+   and obtain a new quote/maximum approval before the first `/v1/images/edits` POST.
 3. After selecting an actually edit-capable endpoint/model, prepare separate bounded source/mask
    bytes and a private versioned backend policy for each operation. Bind the exact profile, quote
    and one-request maximum; Provider pricing API sync is not required. Obtain a new explicit
