@@ -26,6 +26,19 @@ for (const flag of [
 ]) {
   assert.ok(deployment.includes(flag), `deployment guide must document dark default: ${flag}`);
 }
+for (const releaseControl of [
+  'EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN',
+  'EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN',
+  'EXTENSION_RELEASE_EXPECTED_API_ORIGIN',
+  'pnpm package:extension',
+  'signature.status=EXTERNAL_REQUIRED',
+  'verify-extension-byok-rollout-policy.mjs',
+]) {
+  assert.ok(
+    deployment.includes(releaseControl),
+    `deployment guide must document release control: ${releaseControl}`,
+  );
+}
 
 for (const requiredText of [
   'ERP_HOSTED',
@@ -55,6 +68,9 @@ for (const requiredText of [
   'FULL_EDIT',
   'INPAINT',
   'maxConcurrency',
+  'verify-extension-byok-rollout-policy.mjs',
+  'pnpm package:extension',
+  '真实签名或商店回执',
   '默认关闭',
   '不得在策略 JSON 中填写 API Key',
   'Prompt 与所选图片会发送到该 Provider',

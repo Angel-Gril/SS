@@ -97,7 +97,7 @@ Provider 的技术消费限额，也不表示最终一定会收取该上限金�
   是 `https://provider.example.com/v1`，策略中仍填它的 origin，而非 `/v1` 路径。
 - `allowedOperations` 只能选 `TEXT_TO_IMAGE`、`IMAGE_TO_IMAGE`、`FULL_EDIT`、`INPAINT`。
   文生图验证成功不代表参考图、整图编辑或局部重绘已被验证。
-- `maxConcurrency` 只能是 1–4。试点建议从 1 开始。
+- `maxConcurrency` 只能是 1–4；正式 `sandbox-pilot` / `publish-pilot` verifier 要求精确为 1。
 - 每次策略范围或开关改变时递增 `revision`，便于审核人员识别配置变更。
 - 不得在策略 JSON 中填写 API Key、Authorization、密码、URL 查询参数或 Provider 私有链接；
   解析器会拒绝这类值。
@@ -105,6 +105,15 @@ Provider 的技术消费限额，也不表示最终一定会收取该上限金�
 推荐顺序是：保存 `pilot` 策略 → 开启生成 → 审核质量与账单 → 开启结果接收 → 仅在完整
 草稿/发布演练后开启发布。关闭策略或任意对应开关都会使未授权路径失败关闭，不应改用旧版
 扩展来绕过。
+
+部署暗态由 `verify-ai-media-dark.sh` 固定验证 `off`。准备试点快照时，命令形状为：
+
+```text
+node scripts/verify-extension-byok-rollout-policy.mjs <sandbox-pilot|publish-pilot> <system-config-rows-json> <exact-expectations-json>
+```
+
+expectations 必须逐项列出 hosted 开关、revision、owner/shop/device、origin 和 operations。该
+命令只验证配置快照，不调用 Provider、不改开关，也不构成 pilot 审批。
 
 ## 用户：配置自带 Provider
 
@@ -227,9 +236,11 @@ Authorization，也不使用 Provider cookies。完成测试或不再使用该 P
 在扩大范围前，至少确认：
 
 1. cloud/local 扩展包为当前版本，设备、店铺和来源草稿均为试点范围内的真实授权对象；
-2. `pilot` 策略只包含最小 owner/shop/device/origin/operation 集合，`maxConcurrency` 为 1；
-3. Provider 能力证据精确匹配 endpoint、模型、操作和请求模式，且未过期；
-4. 已审阅 Provider 定价、外部费用上限、未知结果处理和账单核对路径；
-5. 已完成候选审核、ERP 接收、草稿绑定、发布预览与单一发布回执恢复的演练；
-6. 只有在准确付费 `QA-02`、安全/计费回归和发布审批都完成后，才考虑扩大开关或改为
+2. 双包来自一次 `pnpm package:extension`，版本一致，SHA-256 与 canonical release evidence
+   复验通过，并已另行取得真实签名或商店回执；
+3. `pilot` 策略只包含最小 owner/shop/device/origin/operation 集合，`maxConcurrency` 为 1；
+4. Provider 能力证据精确匹配 endpoint、模型、操作和请求模式，且未过期；
+5. 已审阅 Provider 定价、外部费用上限、未知结果处理和账单核对路径；
+6. 已完成候选审核、ERP 接收、草稿绑定、发布预览与单一发布回执恢复的演练；
+7. 只有在准确付费 `QA-02`、安全/计费回归和发布审批都完成后，才考虑扩大开关或改为
    `global`。

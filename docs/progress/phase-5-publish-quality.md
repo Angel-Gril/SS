@@ -84,3 +84,15 @@ Progress: 3/4 tasks.
   rehearsal evidence before its required complete `QA-02` operation matrix. No Provider request,
   charge, production mutation, VPS access, deployment, flag change, ERP ingest, Ozon write, or
   `.context/` staging occurred; Phase 5 remains `3/4` and overall progress remains `32/37`.
+- A fail-fast `pnpm qa:04:offline` aggregate now publishes a machine-readable rehearsal manifest and
+  runs exactly eight local gates: its own contract, `git diff --check`, workspace lint/typecheck,
+  `preflight --build`, the AI Media PostgreSQL integration plus populated upgrade replay, and fresh
+  cloud/local extension builds with verification. It explicitly reports that complete positive
+  `QA-02` evidence is still required and contains no Provider, VPS, remote-smoke or deployment step.
+- The final aggregate run passed in `583.5s`. Lint retained only the existing `20` Server and one
+  shared warning; workspace typecheck, full preflight including Server tests and Server/Web builds,
+  all PostgreSQL integration/upgrade gates, and both extension builds passed. Cloud verification was
+  `450/0/0`; local verification was `446/2/0` with only the expected `<all_urls>` and `file:///*`
+  warnings. A Prisma query confirmed no `20260730` test schema remained. This is durable rehearsal
+  evidence, not formal `QA-04` completion: Phase 5 remains `3/4` and overall remains `32/37` until
+  positive edit-capable `QA-02` evidence exists and the gate is rerun on that final revision.

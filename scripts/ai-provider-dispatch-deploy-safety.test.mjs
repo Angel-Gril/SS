@@ -39,7 +39,12 @@ assert.match(
   /COMMIT_HASH="\$\(git rev-parse --verify --end-of-options "\$\{DEPLOY_REF\}\^\{commit\}" 2>\/dev\/null\)"/u,
   'app-dir deploy must reject non-commit refs and capture the resolved commit OID',
 );
-assert.match(appDirDeploy, /\{40\}.*\{64\}/u, 'app-dir deploy must require a full SHA-1 or SHA-256 commit OID');
+assert.match(
+  appDirDeploy,
+  /\[0-9a-fA-F\]\{40\}/u,
+  'app-dir deploy must require the full 40-character commit OID used by release evidence',
+);
+assert.doesNotMatch(appDirDeploy, /\{64\}/u, 'app-dir deploy must not admit an unsupported OID width');
 assert.match(appDirDeploy, /TARBALL="build\/ss-erp-app-\$COMMIT_HASH\.tar\.gz"/u);
 assert.match(appDirDeploy, /echo "\$COMMIT_HASH" > "\$NEXT_DIR\/DEPLOYED_COMMIT"/u);
 

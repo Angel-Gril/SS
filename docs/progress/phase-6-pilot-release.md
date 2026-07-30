@@ -31,3 +31,20 @@ Progress: 0/3 tasks.
 - Each production operation remains limited to explicitly verified endpoint/model evidence.
 - `REL-04` completion never authorizes a pilot flag by itself; the scoped enablement belongs to
   `REL-02` only.
+- Formal packaging preparation now uses one `pnpm package:extension` coordinator for cloud and local
+  targets. It increments one shared version, refuses overwrites/concurrent release locks, writes
+  durable ZIPs, reopens and verifies ZIP SHA-256/CRC/file counts and portable paths, and retains a
+  canonical two-line checksum plus closed-schema release evidence. Independently approved Web,
+  Admin and API HTTPS origins must exactly match deployment defaults and every cloud manifest
+  permission surface.
+- Provenance binds one full 40-character Git commit, source mode and a deterministic digest of all
+  extension/package inputs. Inputs and scoped Git state are checked before and after both builds and
+  independently recomputed by the release verifier. The source manifest is fixed at the last
+  verified legacy floor `1.0.264`, so the first canonical release becomes `1.0.265` rather than a
+  Chrome-ineligible downgrade. Corrupt, orphaned or incomplete historical artifacts cannot influence
+  version selection.
+- The focused package/deploy matrix passed in `213.6s`; the complete offline gate then passed both
+  fresh package verifiers at cloud `450/0/0` and local `446/2/0`. Independent reviews found no
+  remaining P0/P1/P2. `signature.status=EXTERNAL_REQUIRED` deliberately proves that no real signing
+  or store receipt exists yet. No package was signed/distributed, no VPS was changed and no rollout
+  flag was enabled, so Phase 6 remains `0/3` and overall progress remains `32/37`.

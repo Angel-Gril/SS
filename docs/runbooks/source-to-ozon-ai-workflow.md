@@ -152,7 +152,7 @@ This release adds the fail-closed PDD/Taobao/Tmall network-evidence boundary. It
 | Rollout state | AI Media master `false`, rollout policy `revision:0` with zero tenant IDs, listing and publisher masters `false`, and all five publisher stages `off@0` in all three environments |
 | External effects | No paid AI provider call, real Ozon write or production image upload was executed |
 
-Deployment artifact note: the cloud extension package version is derived from each environment's previous build history, so this release produced `1.0.201` domestically and `1.0.236` internationally from the same application commit. Normalize cross-environment extension versioning before promoting extension artifacts as a single public release.
+Historical deployment artifact note: this release produced cloud extension `1.0.201` domestically and `1.0.236` internationally from the same application commit because each target/environment advanced independently. Current release tooling prevents recurrence: formal deployment calls one coordinated `pnpm package:extension`, derives one version from verified prior release evidence, re-verifies both ZIPs, and retains SHA-256 plus canonical evidence. This does not retroactively normalize the historical packages, and real signing/distribution remains required for `REL-03`.
 
 ## Release Evidence: `d932a9a`
 

@@ -113,8 +113,7 @@ if [ "$SKIP_BUILD" = false ]; then
   pnpm --filter web build
 
   echo "[5b/7] Building cloud and local extension packages..."
-  EXTENSION_PREVIOUS_BUILD_ROOT="$DEPLOY_DIR/build/extensions" pnpm package:extension:cloud
-  EXTENSION_PREVIOUS_BUILD_ROOT="$DEPLOY_DIR/build/extensions" pnpm package:extension:local
+  EXTENSION_PREVIOUS_BUILD_ROOT="$DEPLOY_DIR/build/extensions" pnpm package:extension
 else
   echo "[4-5/7] Skipping build (--skip-build)"
 fi

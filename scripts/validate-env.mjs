@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
+import { readExpectedReleaseOrigins } from './extension-release-contract.mjs';
 
 const args = process.argv.slice(2);
 const getArg = (name, fallback) => {
@@ -309,8 +310,17 @@ function validateCommon(env) {
   expectOneOf(env, 'IMAGE_STORAGE_BACKEND', ['local', 'oss', 'ozon-cdn']);
 }
 
+function validateExtensionReleaseOrigins(env) {
+  try {
+    readExpectedReleaseOrigins(env);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function validateCloudR2(env) {
   validateCommon(env);
+  validateExtensionReleaseOrigins(env);
   expectValue(env, 'RUNTIME_MODE', 'cloud');
   expectValue(env, 'IMAGE_STORAGE_BACKEND', 'oss');
   expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
@@ -332,6 +342,7 @@ function validateCloudR2(env) {
 
 function validateCloudBootstrap(env) {
   validateBootstrapBase(env);
+  validateExtensionReleaseOrigins(env);
   expectValue(env, 'RUNTIME_MODE', 'cloud');
   expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
   requireValue(env, 'CORS_ORIGIN');

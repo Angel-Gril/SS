@@ -68,8 +68,8 @@ DEPLOY_REF="${1:-HEAD}"
 if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
   fail "deployment ref is not a commit: $DEPLOY_REF"
 fi
-if [[ ! "$COMMIT_HASH" =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]]; then
-  fail "deployment ref did not resolve to a full commit OID: $DEPLOY_REF"
+if [[ ! "$COMMIT_HASH" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  fail "deployment ref did not resolve to a full 40-character commit OID: $DEPLOY_REF"
 fi
 TARBALL="build/ss-erp-app-$COMMIT_HASH.tar.gz"
 
@@ -214,7 +214,7 @@ log "Building server and web"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"
 
 log "Building cloud and local extension packages"
-run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:cloud && EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:local"
+run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension"
 
 SERVICES_QUIESCED=0
 restore_quiesced_services() {

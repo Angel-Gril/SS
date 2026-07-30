@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
+import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 
 const target = process.argv[2] || process.env.EXTENSION_TARGET || 'cloud';
 const outRoot = path.resolve(process.env.EXTENSION_OUT_DIR || 'build/extensions');
@@ -36,14 +45,15 @@ const manifest = JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8'
 const sourceVersion = manifest.version || '0.0.0';
 
 function parseVersion(value) {
-  const match = String(value || '').match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const match = String(value || '').match(/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u);
   if (!match) return null;
-  return {
+  const parsed = {
     major: Number(match[1]),
     minor: Number(match[2]),
     patch: Number(match[3]),
     raw: match[0],
   };
+  return [parsed.major, parsed.minor, parsed.patch].every(Number.isSafeInteger) ? parsed : null;
 }
 
 function compareVersions(a, b) {
@@ -55,7 +65,9 @@ function compareVersions(a, b) {
 }
 
 function nextPatchVersion(value) {
-  return `${value.major}.${value.minor}.${value.patch + 1}`;
+  const patch = value.patch + 1;
+  if (!Number.isSafeInteger(patch)) throw new Error('Extension package patch version cannot be incremented safely');
+  return `${value.major}.${value.minor}.${patch}`;
 }
 
 function readBuiltManifestVersion(root) {
@@ -93,12 +105,23 @@ function resolvePackageVersion() {
   return nextPatchVersion(latest);
 }
 
-const version = process.env.EXTENSION_AUTO_BUMP_VERSION === 'false'
-  ? sourceVersion
-  : resolvePackageVersion();
+const requestedVersion = String(process.env.EXTENSION_PACKAGE_VERSION || '').trim();
+if (requestedVersion && !parseVersion(requestedVersion)) {
+  console.error('EXTENSION_PACKAGE_VERSION must be a canonical major.minor.patch version');
+  process.exit(1);
+}
+const version = requestedVersion || (
+  process.env.EXTENSION_AUTO_BUMP_VERSION === 'false'
+    ? sourceVersion
+    : resolvePackageVersion()
+);
 manifest.version = version;
 writeFileSync(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 const zipPath = path.join(outRoot, `ss-erp-${target}-${version}.zip`);
+if (existsSync(zipPath)) {
+  console.error(`Refusing to overwrite existing extension ZIP: ${zipPath}`);
+  process.exit(1);
+}
 
 function listFiles(root, subdir = '') {
   const current = path.join(root, subdir);
@@ -160,12 +183,12 @@ function createZip(entries) {
     const crc = crc32(entry.data);
     const { date, time } = dosDateTime(entry.mtime);
     const local = Buffer.concat([
-      u32(0x04034b50), u16(20), u16(0), u16(0), u16(time), u16(date),
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(time), u16(date),
       u32(crc), u32(entry.data.length), u32(entry.data.length), u16(name.length), u16(0), name,
     ]);
     fileParts.push(local, entry.data);
     centralParts.push(Buffer.concat([
-      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(time), u16(date),
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(time), u16(date),
       u32(crc), u32(entry.data.length), u32(entry.data.length), u16(name.length), u16(0), u16(0),
       u16(0), u16(0), u32(0), u32(offset), name,
     ]));
@@ -190,10 +213,32 @@ const entries = listFiles(dir).map((relative) => {
   };
 });
 
-writeFileSync(zipPath, createZip(entries));
+writeNewArtifactDurably(zipPath, createZip(entries));
+const archiveVerification = spawnSync(
+  process.execPath,
+  [
+    'scripts/verify-extension-archive.mjs',
+    '--zip',
+    zipPath,
+    '--dir',
+    dir,
+    '--target',
+    target,
+    '--version',
+    version,
+  ],
+  { stdio: 'inherit', env: process.env },
+);
+if (archiveVerification.status !== 0) {
+  rmSync(zipPath, { force: true });
+  process.exit(archiveVerification.status || 1);
+}
+
+const sha256 = createHash('sha256').update(readFileSync(zipPath)).digest('hex');
 console.log(JSON.stringify({
   target,
   version,
   zip: zipPath,
   bytes: statSync(zipPath).size,
+  sha256,
 }, null, 2));

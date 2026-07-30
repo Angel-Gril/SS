@@ -114,8 +114,26 @@ Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirm
 - `feature_extension_byok_publish=false`
 - `extension_byok_admin_policy` 的 `mode` 为 `off`
 
-`verify-ai-media-dark.sh` 验证的是历史 AI Media 门禁，不代替以上扩展策略核对。部署人员必须
-同时保存并复核管理员配置快照，不能因为脚本通过就推断扩展双模式已获准启用。
+`verify-ai-media-dark.sh` 现在同时查询上述四个扩展开关和
+`extension_byok_admin_policy`，并把 Extension BYOK expectation 固定为 `off`。它只证明部署可
+在暗态启动，不授权任何 pilot。`sandbox-pilot` / `publish-pilot` 必须另行使用
+`verify-extension-byok-rollout-policy.mjs`，并显式传入期望的 hosted 开关、revision、owner、
+shop、device session、Provider origin 和 operations；`maxConcurrency` 必须为 1。
+
+正式扩展发布还要求私有部署 env 明确提供三项独立审批证据，且每项都是不带路径、查询或片段
+的公开 HTTPS origin：
+
+```text
+EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN
+EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN
+EXTENSION_RELEASE_EXPECTED_API_ORIGIN
+```
+
+三项值不会从 `EXTENSION_CLOUD_BASE_URL` / `NEXT_PUBLIC_*` 自动推导。`pnpm package:extension`
+一次计算版本并生成同版 cloud/local ZIP、SHA-256 清单和 canonical release evidence JSON；
+验证器会解包重验 defaults、manifest permissions、文件数、ZIP SHA/CRC 与完整 commit。Evidence
+中的 `signature.status=EXTERNAL_REQUIRED` 表示仍须完成真实签名/商店回执，不能把本地 JSON
+当成签名。
 
 `ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
 
@@ -126,7 +144,7 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 只有 `PASS AI Media rollout is dark` 才允许切换 release 或启动 API/Worker。检查失败时按以下顺序恢复：
 
 1. 保持 API/Worker 停止，保存失败输出和当前 `system_configs` 快照。
-2. 确认没有经过审批的试点后，通过受审计的管理员变更将五个开关恢复为 `false`，将 rollout policy 恢复为空 tenant 列表；不要用 shell 忽略 verifier 的退出码。
+2. 确认没有经过审批的试点后，通过受审计的管理员变更将历史 AI Media 与四个扩展开关恢复为 `false`，将 AI Media rollout policy 恢复为空 tenant 列表，并将 Extension BYOK policy 恢复为 revision 0 的默认 `off`；不要用 shell 忽略 verifier 的退出码。
 3. Compose 修复配置后重新运行 `deploy-compose.sh`，并检查一次性 migrate/gate 日志；systemd/手工部署重新运行宿主机 verifier。通过后再恢复服务；仍失败则恢复上一版应用，数据库保持 additive migration 的前向状态。
 4. 若失败来自 `20260720153000_bind_ai_image_edit_outputs` 并发索引 migration，禁止直接 `resolve --applied`。按 `docs/RUNBOOK.md` 检查 `pg_index.indisvalid` 和 `pg_get_indexdef`，必要时 `DROP INDEX CONCURRENTLY`、`prisma migrate resolve --rolled-back`、重新 deploy 并复核定义。
 5. 若失败来自 `1670`/`1680`，分别检查 `ai_media_workflow_owner_context_history` 和 `ai_media_workflow_owner_context_updates` 的 `indisvalid`、`indisready` 与精确定义。对失败项留下的同名 invalid index 执行独立 `DROP INDEX CONCURRENTLY`，只把实际失败的 migration resolve 为 rolled back，再重跑 deploy；完整命令见 `docs/RUNBOOK.md`。

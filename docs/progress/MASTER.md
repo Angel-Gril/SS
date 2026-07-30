@@ -318,6 +318,28 @@ rehearsal evidence: `QA-04` remains open until complete positive `QA-02` evidenc
 entire gate is rerun on the final revision. No Provider request, charge, VPS mutation, deployment,
 flag change, ERP media mutation, Ozon write, or `.context/` staging occurred. Counts remain `32/37`.
 
+Release preparation now has one coordinated, fail-closed cloud/local packaging path without
+claiming `REL-03` completion. `pnpm package:extension` chooses one version, holds an exclusive lock,
+writes artifacts durably without overwrite, verifies extracted ZIP paths/CRC/file counts and
+retains a canonical checksum plus closed-schema evidence. Three independently approved public HTTPS
+origins must exactly match deployment defaults and every concrete cloud permission surface. Evidence
+binds a full 40-character commit, source mode and deterministic package-input digest; both the
+coordinator and independent verifier recompute the inputs and repository Git state. The migration
+floor is the last verified legacy package `1.0.264`, so the first canonical release is `1.0.265` and
+cannot downgrade installed Chrome extensions. `signature.status=EXTERNAL_REQUIRED` remains an
+explicit unsigned boundary. The focused package/deploy matrix passed in `213.6s`, and two independent
+reviews found no remaining P0/P1/P2.
+
+A fail-fast `pnpm qa:04:offline` command now records an eight-step, network-free rehearsal manifest
+and rejects any Provider, VPS, remote-smoke or deployment command. Its final run passed in `583.5s`:
+diff check, workspace lint (only the existing `20` Server and one shared warning), workspace
+typecheck, full preflight with Server tests and Server/Web builds, all AI Media PostgreSQL integration
+and populated upgrade gates, and fresh cloud/local builds passed. Package verification reported
+cloud `450/0/0` and local `446/2/0`, with only the two expected local permission warnings; a Prisma
+query found no current-run `20260730` test schema. This remains rehearsal evidence because positive
+edit-capable `QA-02` evidence does not exist. `QA-04`, `REL-03`, `REL-04` and `REL-02` therefore stay
+unchecked; Phase 3 remains `4/5`, Phase 5 `3/4`, Phase 6 `0/3`, and overall progress stays `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and

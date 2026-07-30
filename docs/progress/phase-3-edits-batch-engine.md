@@ -436,3 +436,8 @@ Progress: 4/5 tasks.
   remains open at `4/5` and overall progress remains `32/37`. After a future custom derived-image
   model produces accepted operation-specific evidence, its exact reviewed contract must be added to
   `scripts/sandbox/ai-media-provider-contract.mjs`; it must not be whitelisted beforehand.
+- The reviewed sandbox contract gate now rejects an empty evidence set, duplicate bindings, unknown
+  operations and any endpoint/model/transport/result-mode mismatch before a paid derived-image
+  capability can be promoted. This prepares the exact `QA-02` promotion boundary but does not add
+  either failed relay candidate to the allowlist. Positive edit evidence and separate per-request
+  approvals are still absent, so Phase 3 remains `4/5` and overall progress remains `32/37`.

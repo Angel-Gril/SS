@@ -56,7 +56,13 @@ if [ -n "$SSH_KEY" ]; then
   SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
 fi
 
-COMMIT_HASH="${1:-$(git rev-parse --short HEAD)}"
+DEPLOY_REF="${1:-HEAD}"
+if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
+  fail "deployment ref is not a commit: $DEPLOY_REF"
+fi
+if [[ ! "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
+  fail "deployment ref did not resolve to a full 40-character commit OID: $DEPLOY_REF"
+fi
 RELEASE_DIR="$RELEASES_DIR/$COMMIT_HASH"
 TARBALL="build/ss-erp-release-$COMMIT_HASH.tar.gz"
 
@@ -142,8 +148,7 @@ pnpm --filter web build
 
 echo "[deploy] Building cloud and local extension packages"
 PREVIOUS_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
-EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:cloud
-EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:local
+EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension
 
 SERVICES_QUIESCED=0
 restore_quiesced_services() {

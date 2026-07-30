@@ -3,6 +3,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {
+  parseExpectedReleaseOrigins,
+  parseExtensionDeploymentDefaults,
+} from './extension-release-contract.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const cliArgs = process.argv.slice(2);
@@ -23,6 +27,11 @@ const extensionDir = path.resolve(
 );
 const strict = cliArgs.includes('--strict') || process.env.STRICT_EXTENSION_CHECK === '1';
 const requestedTarget = readCliOption('--target') || process.env.EXTENSION_TARGET;
+const rawExpectedReleaseOrigins = {
+  web: readCliOption('--expected-web-origin'),
+  admin: readCliOption('--expected-admin-origin'),
+  api: readCliOption('--expected-api-origin'),
+};
 const failures = [];
 const warnings = [];
 const passes = [];
@@ -301,6 +310,38 @@ else fail(`manifest_version is not 3: ${manifest.manifest_version}`);
 
 if (manifest.name && manifest.version) pass(`extension identity: ${manifest.name} ${manifest.version}`);
 else fail('manifest name/version missing');
+
+const hasAnyExpectedReleaseOrigin = Object.values(rawExpectedReleaseOrigins).some(Boolean);
+let expectedReleaseOrigins = null;
+if (hasAnyExpectedReleaseOrigin) {
+  try {
+    expectedReleaseOrigins = parseExpectedReleaseOrigins(
+      rawExpectedReleaseOrigins,
+      'package verifier expected origins',
+    );
+    if (packageTarget !== 'cloud') {
+      fail('expected release origins are valid only for the strict cloud package');
+    }
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+let deploymentDefaults = null;
+if (packageTarget === 'cloud' || packageTarget === 'local') {
+  try {
+    deploymentDefaults = parseExtensionDeploymentDefaults(
+      readFileSync(relToAbs('shared/erp-adapter/deployment-defaults.js'), 'utf8'),
+    );
+    if (deploymentDefaults.target === packageTarget) {
+      pass(`deployment defaults target is exactly ${packageTarget}`);
+    } else {
+      fail(`deployment defaults target mismatch: expected ${packageTarget}, received ${deploymentDefaults.target}`);
+    }
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
 
 const referenced = new Set(['manifest.json']);
 const jsReferenced = new Set();
@@ -696,6 +737,177 @@ const broadPermissionChecks = [
   [webResourceMatches, '<all_urls>', 'web_accessible_resources contains <all_urls>; tighten before store submission'],
   [hostPermissions, 'file:///*', 'host_permissions contains file:///*; keep only for local/offline package'],
 ];
+
+function containsExactlyOnce(values, expected) {
+  return Array.isArray(values) && values.filter((value) => value === expected).length === 1;
+}
+
+function containsExactUniqueSet(values, expected) {
+  return Array.isArray(values)
+    && values.length === new Set(values).size
+    && values.length === expected.length
+    && expected.every((value) => values.includes(value));
+}
+
+if (expectedReleaseOrigins) {
+  if (deploymentDefaults
+    && deploymentDefaults.web === expectedReleaseOrigins.web
+    && deploymentDefaults.admin === expectedReleaseOrigins.admin
+    && deploymentDefaults.api === expectedReleaseOrigins.api) {
+    pass('deployment defaults exactly match independently approved release origins');
+  } else {
+    fail('deployment defaults do not exactly match independently approved release origins');
+  }
+
+  const webMatch = `${expectedReleaseOrigins.web}/*`;
+  const adminMatch = `${expectedReleaseOrigins.admin}/*`;
+  const apiPermission = `${expectedReleaseOrigins.api}/*`;
+  const approvedErpMatches = [...new Set([
+    'https://ss-erp.com/*',
+    'https://*.ss-erp.com/*',
+    'https://ss-erp.cn/*',
+    'https://*.ss-erp.cn/*',
+    webMatch,
+    adminMatch,
+  ])];
+  if (containsExactUniqueSet(externalMatches, approvedErpMatches)) {
+    pass('externally_connectable exactly matches approved Web/Admin origins and SS ERP baseline');
+  } else {
+    fail('externally_connectable contains missing, duplicate, or unapproved ERP origins');
+  }
+
+  const erpBridgeScripts = (manifest.content_scripts || []).filter((script) => (
+    Array.isArray(script.js) && script.js.includes('content/erp-collect-bridge.js')
+  ));
+  if (erpBridgeScripts.length !== 1) {
+    fail('manifest must contain exactly one ERP collect bridge content-script entry');
+  } else if (containsExactUniqueSet(erpBridgeScripts[0].matches, approvedErpMatches)) {
+    pass('ERP collect bridge exactly matches approved Web/Admin origins and SS ERP baseline');
+  } else {
+    fail('ERP collect bridge contains missing, duplicate, or unapproved ERP origins');
+  }
+
+  if (containsExactlyOnce(hostPermissions, apiPermission)) {
+    pass('host_permissions contains the exact approved API origin');
+  } else {
+    fail('host_permissions must contain the exact approved API origin once');
+  }
+  const approvedCloudHostPermissions = new Set([
+    'https://ss-erp.com/*',
+    'https://*.ss-erp.com/*',
+    'https://ss-erp.cn/*',
+    'https://*.ss-erp.cn/*',
+    'https://seller.ozon.ru/*',
+    'https://globalcalculator.ozon.ru/*',
+    'https://docs.ozon.ru/*',
+    'https://docs.ozon.com/*',
+    'https://open.er-api.com/*',
+    'https://*.ozon.ru/*',
+    'https://*.ozon.kz/*',
+    'https://*.ozon.by/*',
+    'https://s.1688.com/*',
+    'https://*.1688.com/*',
+    'https://detail.1688.com/*',
+    'https://trade.1688.com/*',
+    'https://pifa.pinduoduo.com/*',
+    'https://mobile.pinduoduo.com/*',
+    'https://*.pinduoduo.com/*',
+    'https://*.yangkeduo.com/*',
+    'https://www.temu.com/*',
+    'https://*.aliexpress.com/*',
+    'https://www.wildberries.ru/*',
+    'https://item.jd.com/*',
+    'https://www.taobao.com/*',
+    'https://s.taobao.com/*',
+    'https://item.taobao.com/*',
+    'https://detail.tmall.com/*',
+    'https://www.goofish.com/*',
+    'https://goofish.com/*',
+    'https://2.taobao.com/*',
+    apiPermission,
+  ]);
+  const unknownCloudHostPermission = hostPermissions.find(
+    (permission) => !approvedCloudHostPermissions.has(permission),
+  );
+  if (unknownCloudHostPermission) {
+    fail(`host_permissions contains an unapproved cloud origin: ${unknownCloudHostPermission}`);
+  } else if (hostPermissions.length !== new Set(hostPermissions).size) {
+    fail('host_permissions contains duplicate cloud origins');
+  } else {
+    pass('host_permissions contains no unapproved cloud ERP/API origin');
+  }
+
+  const approvedContentMatches = new Set([
+    ...approvedErpMatches,
+    'https://mobile.yangkeduo.com/goods.html*',
+    'https://item.taobao.com/item.htm*',
+    'https://detail.tmall.com/item.htm*',
+    'https://seller.ozon.ru/*',
+    'https://globalcalculator.ozon.ru/*',
+    'https://*.ozon.ru/*',
+    'https://*.ozon.kz/*',
+    'https://*.ozon.by/*',
+    'https://detail.1688.com/*',
+    'https://*.pinduoduo.com/*',
+    'https://*.yangkeduo.com/*',
+    'https://www.temu.com/*',
+    'https://*.aliexpress.com/*',
+    'https://www.wildberries.ru/*',
+    'https://ozon.ru/product/*',
+    'https://www.ozon.ru/product/*',
+    'https://ozon.kz/product/*',
+    'https://www.ozon.kz/product/*',
+    'https://ozon.by/product/*',
+    'https://www.ozon.by/product/*',
+    'https://item.jd.com/*',
+    'https://item.taobao.com/*',
+    'https://detail.tmall.com/*',
+    'https://www.goofish.com/*',
+    'https://goofish.com/*',
+    'https://2.taobao.com/*',
+    'https://s.1688.com/*',
+    'https://*.1688.com/*',
+    'https://pifa.pinduoduo.com/*',
+    'https://www.taobao.com/*',
+    'https://s.taobao.com/*',
+    'https://www.ozon.ru/*',
+    'https://www.ozon.kz/*',
+    'https://www.ozon.by/*',
+    'https://trade.1688.com/*',
+    'https://mobile.pinduoduo.com/*',
+  ]);
+  const unknownContentMatch = contentMatches.find((match) => !approvedContentMatches.has(match));
+  if (unknownContentMatch) {
+    fail(`content_scripts contains an unapproved cloud origin: ${unknownContentMatch}`);
+  } else {
+    pass('content_scripts contain only approved ERP and marketplace origins');
+  }
+
+  const approvedWebResourceMatches = new Set([
+    ...approvedErpMatches,
+    'https://seller.ozon.ru/*',
+    'https://globalcalculator.ozon.ru/*',
+    'https://*.ozon.ru/*',
+    'https://*.ozon.kz/*',
+    'https://*.ozon.by/*',
+    'https://s.1688.com/*',
+    'https://*.1688.com/*',
+    'https://pifa.pinduoduo.com/*',
+    'https://www.taobao.com/*',
+    'https://s.taobao.com/*',
+    'https://www.goofish.com/*',
+    'https://goofish.com/*',
+    'https://2.taobao.com/*',
+  ]);
+  const unknownWebResourceMatch = webResourceMatches.find(
+    (match) => !approvedWebResourceMatches.has(match),
+  );
+  if (unknownWebResourceMatch) {
+    fail(`web_accessible_resources contains an unapproved cloud origin: ${unknownWebResourceMatch}`);
+  } else {
+    pass('web_accessible_resources contain only approved ERP and marketplace origins');
+  }
+}
 
 function isArbitraryHttpHostPermission(pattern) {
   if (pattern === '<all_urls>') return true;
