@@ -72,3 +72,15 @@ Progress: 3/4 tasks.
   BYOK admin settings, Provider settings UI, and workspace UI tests passed; full preflight passed
   `445` checks with zero failures and expected source verifier warnings only. No real Provider
   request, charge, ERP ingest, Ozon write, production mutation, VPS access, or deployment occurred.
+- A post-`410981e` offline `QA-04` rehearsal rebuilt extension version `1.0.264`; cloud strict
+  verification passed `449/0/0` and local verification passed `445/2/0` with the two expected local
+  permission warnings. The Server production build also passed. The local PostgreSQL gate exposed
+  ten date-sensitive fixture failures: fixed July 27/28 pairing/session expiries had become earlier
+  than PostgreSQL's insertion timestamp and violated the real expiry constraints. Both affected
+  fixture families now retain the intended chronology with a valid creation/expiry relationship.
+- The clean PostgreSQL rerun applied all `142` migrations to a new isolated schema, passed all 20 AI
+  Media integration files, and passed the populated migration-upgrade sequence; temporary schemas
+  were removed. Server typecheck and diff checks passed. `QA-04` remains unchecked because this is
+  rehearsal evidence before its required complete `QA-02` operation matrix. No Provider request,
+  charge, production mutation, VPS access, deployment, flag change, ERP ingest, Ozon write, or
+  `.context/` staging occurred; Phase 5 remains `3/4` and overall progress remains `32/37`.

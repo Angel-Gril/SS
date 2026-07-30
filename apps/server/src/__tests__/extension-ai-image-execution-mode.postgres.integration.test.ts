@@ -70,7 +70,7 @@ async function seedModeFixture(
   const planningRunId = `${prefix}_run`;
   const planVersionId = `${prefix}_version`;
   const suiteId = `${prefix}_suite`;
-  const now = new Date('2026-07-27T13:00:00.000Z');
+  const now = new Date(Date.now() - 60_000);
   const captureHash = digest(`${prefix}:capture`);
   const profileHash = digest(`${prefix}:profile`);
   const resultSha256 = digest(`${prefix}:result`);
@@ -176,6 +176,7 @@ async function seedModeFixture(
     status: 'CLAIMED',
     expiresAt: new Date(now.getTime() + 86_400_000),
     claimedAt: now,
+    createdAt: now,
   } });
   await client.extensionDeviceSession.create({ data: {
     id: deviceSessionId,
@@ -187,6 +188,7 @@ async function seedModeFixture(
     scopes: ['byok:media:ingest', 'media:execute'],
     currentJti: `${prefix}_jti`,
     expiresAt: new Date(now.getTime() + 86_400_000),
+    createdAt: now,
   } });
 
   const inputSnapshot = {

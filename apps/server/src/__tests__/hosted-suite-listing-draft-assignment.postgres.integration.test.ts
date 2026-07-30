@@ -252,6 +252,7 @@ async function seedHostedAssignmentFixture(
       status: 'CLAIMED',
       expiresAt: new Date(ASSIGNMENT_TIME.getTime() + 86_400_000),
       claimedAt: CAPTURE_TIME,
+      createdAt: CAPTURE_TIME,
     },
   });
   await client.extensionDeviceSession.create({
@@ -265,6 +266,7 @@ async function seedHostedAssignmentFixture(
       scopes: ['media:read', 'listing:write'],
       currentJti: `${prefix}_jti`,
       expiresAt: new Date(ASSIGNMENT_TIME.getTime() + 86_400_000),
+      createdAt: CAPTURE_TIME,
     },
   });
   await client.extensionDeviceShopGrant.create({

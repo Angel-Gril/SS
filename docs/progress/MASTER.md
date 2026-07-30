@@ -305,6 +305,19 @@ passed. Independent reviews found no remaining P0/P1/P2. No real Provider call, 
 flag change, ERP media mutation, Ozon write, or `.context/` staging occurred. Phase 3 remains `4/5`
 and overall progress remains `32/37` because positive edit capability evidence is still absent.
 
+An offline `QA-04` rehearsal starting from pushed commit `410981e`, with the fixture fixes below,
+then rebuilt and verified extension version `1.0.264`: cloud passed `449/0/0` and local passed
+`445/2/0` with only the expected local permission warnings. The Server production build passed. The
+real local PostgreSQL gate initially found ten expired test fixtures whose fixed July 27/28
+pairing/session expiry preceded the database insertion time. The two fixture families now preserve
+their intended event chronology while binding valid record creation time. A clean rerun applied all
+`142` migrations to a fresh isolated schema,
+passed all 20 AI Media PostgreSQL integration files, and passed the populated migration-upgrade
+sequence; every temporary schema was removed. Server typecheck and diff checks passed. This is only
+rehearsal evidence: `QA-04` remains open until complete positive `QA-02` evidence exists and the
+entire gate is rerun on the final revision. No Provider request, charge, VPS mutation, deployment,
+flag change, ERP media mutation, Ozon write, or `.context/` staging occurred. Counts remain `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
