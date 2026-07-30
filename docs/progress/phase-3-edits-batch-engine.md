@@ -396,3 +396,21 @@ Progress: 4/5 tasks.
   scans were clean. This proves credential validity and usable reconciliation endpoints, not edit
   capability. Counts remain `4/5` and `32/37`; no Provider POST, charge, production mutation,
   deployment, flag change or `.context/` staging occurred.
+- The operator separately approved one exact `IMAGE_TO_IMAGE` request against the alternate
+  candidate using `gpt-image-2`, `1024x1024`, `n=1`, source SHA-256
+  `481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`, quote `CNY 0.1`, and
+  maximum `CNY 1.0`. Policy SHA-256 was
+  `f517567b88b83c67fac20d349af1353f9f6f28e65bd3cc74e1b6939a07a13684`; approval SHA-256 was
+  `e04bddb16a3cd531c0401e4f72bf3a33bec39d28a8d57b51b9353d265f02609f`.
+- Operation `qa02-centos-i2i-20260730-094857-01` passed all offline gates and made exactly one
+  `/v1/images/edits` POST. It returned `REJECTED` after `302 ms`, with `createRequests=1`, no
+  Provider request-ID hash and `PROVIDER_AUTH_FAILED`. It was not retried. The same Token remains
+  valid for catalogue and billing GETs, so this is specific negative evidence for the current
+  Token/model/edit route rather than proof that the replacement credential is globally invalid.
+- Raw quota and displayed usage were byte-identical before and after, and the Token log stayed
+  empty. Exact receipt v3 SHA-256
+  `9d1e5db49dc5b76e7de70e36cad88a7429e426b3e93de4207ad62a46c040e2d2` records `NO_CHARGE`,
+  `billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`; replay returned the same
+  bytes. Both VPS dark verifiers and credential scans passed. Do not send `FULL_EDIT` or `INPAINT`
+  through the same endpoint/Token/model. Counts remain `4/5` and `32/37`; another edit-capable
+  endpoint/credential or explicit Provider-side edit enablement is required.

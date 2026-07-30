@@ -255,3 +255,42 @@ credential scans were clean. This proves credential validity, catalogue visibili
 and usable reconciliation endpoints. It still does not prove that either listed model is accepted
 by `/v1/images/edits`, so a separately priced and explicitly authorized one-request edit probe is
 required before capability promotion.
+
+## Alternate candidate image-to-image outcome
+
+The operator separately authorized exactly one `IMAGE_TO_IMAGE` request against
+`https://ai.centos.hk/v1` using `gpt-image-2`, profile `OPENAI_SQUARE_SINGLE_V1`, `1024x1024`,
+`n=1`, and source SHA-256
+`481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`. The backend quote was
+exact `CNY 0.1` and the approved single-request maximum was exact `CNY 1.0`. Private policy SHA-256
+was `f517567b88b83c67fac20d349af1353f9f6f28e65bd3cc74e1b6939a07a13684`; final approval SHA-256
+was `e04bddb16a3cd531c0401e4f72bf3a33bec39d28a8d57b51b9353d265f02609f`.
+
+Operation `qa02-centos-i2i-20260730-094857-01` passed the source, checkout, dark-state, billing
+snapshot and official no-key approval preflight. The rotated Key was decrypted from DPAPI only in
+memory and injected over SSH standard input; it was never placed in a command argument, file or
+artifact. The runner made exactly one `/v1/images/edits` POST and did not retry it.
+
+The Provider returned a definite `REJECTED` v5 report after `302 ms`, with `createRequests=1`, no
+Provider request-ID hash, and `failureCode=PROVIDER_AUTH_FAILED`. This differs from catalogue
+authentication: the same Token still successfully reads `/v1/models`, its Token quota, displayed
+usage and Token log. The result therefore establishes that the current Token/model/route is not
+accepted for image edits; it does not invalidate the read-only credential evidence and does not
+prove generation behavior.
+
+The before/after raw-quota and displayed-usage response bodies were byte-identical, and the Token
+log remained empty. Exact attestation SHA-256
+`0fd3c0e041db9dc04a3c9e2a829d79856ecccabcdf53af195231a6e70523d4a9` therefore recorded
+`NO_CHARGE`. Official receipt v3 SHA-256
+`9d1e5db49dc5b76e7de70e36cad88a7429e426b3e93de4207ad62a46c040e2d2` records `REJECTED`,
+`NO_CHARGE`, `billingGate=PASS`, `billedUnits=0`, actual `CNY 0.0`, and
+`sameRequestRetryAllowed=false`; exact replay returned the same receipt bytes. Both VPS dark
+verifiers passed, and exact/generic credential scans of the private retained artifacts were clean.
+Private run-summary SHA-256 is
+`70c11cbb27e38120781810773cf06c142d59e0b82896abd88f6da32d560fd2dc`.
+
+Do not send `FULL_EDIT` or `INPAINT` using this endpoint/Token/model combination: both would reuse
+the same rejected edit transport without new capability evidence. Do not retry the closed request
+or substitute a new Operation ID. Full QA-02 still requires another Provider endpoint/credential,
+or a Provider-side configuration change that explicitly enables image edits followed by a new
+catalogue review, price policy and one-request approval.

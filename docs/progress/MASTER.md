@@ -264,14 +264,33 @@ This proves the credential and reconciliation endpoints, not edit capability. No
 charge, production mutation, deployment, flag change, or `.context/` staging occurred. Counts
 remain `32/37`.
 
+The operator then authorized one separate `IMAGE_TO_IMAGE` probe for the alternate candidate:
+`gpt-image-2`, `1024x1024`, `n=1`, the accepted mug source, quote `CNY 0.1`, and maximum
+`CNY 1.0`. Operation `qa02-centos-i2i-20260730-094857-01` passed the private policy, pre-call
+snapshot, deployed-checkout, dark-state and official no-key approval gates. Its Key was injected
+from DPAPI through SSH standard input and never entered a command argument or retained artifact.
+
+Exactly one `/v1/images/edits` POST returned a definite `REJECTED` report after `302 ms`, with
+`createRequests=1`, no Provider request-ID hash and `PROVIDER_AUTH_FAILED`. It was not retried.
+Raw quota and displayed usage were byte-identical before/after and the Token log remained empty.
+Official exact receipt v3 SHA-256
+`9d1e5db49dc5b76e7de70e36cad88a7429e426b3e93de4207ad62a46c040e2d2` records `NO_CHARGE`,
+`billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`; exact replay returned the
+same bytes. Both VPS remained dark and private-artifact credential scans passed.
+
+This is operation-specific negative evidence: the rotated Token can read the catalogue and billing
+endpoints but the current `gpt-image-2` edit route is not accepted. It does not prove this candidate's
+generation behavior. `FULL_EDIT` and `INPAINT` must not be sent through the same endpoint/Token/model.
+QA-02 still needs another edit-capable endpoint/credential or an explicit Provider-side edit enablement
+followed by a fresh bounded approval sequence. Counts remain Phase 3 `4/5` and overall `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
-2. Do not send `FULL_EDIT` or `INPAINT` to the current relay/alias. The alternate `ai.centos.hk`
-   credential and read-only reconciliation endpoints are verified, but its two permitted models
-   still expose only generation metadata. Prepare one exact `gpt-image-2` `IMAGE_TO_IMAGE` policy
-   and obtain a new quote/maximum approval before the first `/v1/images/edits` POST.
+2. Do not retry `qa02-centos-i2i-20260730-094857-01` and do not send `FULL_EDIT` or `INPAINT` with
+   the same `ai.centos.hk` Token/model. Its catalogue authentication works, but its edit POST was
+   definitively rejected by the Provider authentication layer and settled with no charge.
 3. After selecting an actually edit-capable endpoint/model, prepare separate bounded source/mask
    bytes and a private versioned backend policy for each operation. Bind the exact profile, quote
    and one-request maximum; Provider pricing API sync is not required. Obtain a new explicit
