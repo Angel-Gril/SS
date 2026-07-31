@@ -9,6 +9,12 @@ assert.match(
   /must run directly as DEPLOY_RUN_USER, never through sudo\/root/u,
   'staging must reject root before any checkout-controlled Git command',
 );
+const stagingGitScrubIndex = stagingDeploy.indexOf('GIT_*) unset "$inherited_git_name"');
+assert.ok(
+  stagingGitScrubIndex >= 0
+    && stagingGitScrubIndex < stagingDeploy.indexOf('git --no-replace-objects'),
+  'staging must clear inherited Git redirects before its first repository read',
+);
 const releaseDeploy = readFileSync('scripts/deploy.sh', 'utf8');
 const deployBackupGate = readFileSync('scripts/deploy-backup-gate.mjs', 'utf8');
 const composeDeploy = readFileSync('scripts/deploy-compose.sh', 'utf8');
@@ -28,7 +34,7 @@ for (const [label, script, inPlaceBuild] of deployments) {
   const generateIndex = script.indexOf('prisma generate');
   const buildIndex = script.indexOf('pnpm --filter server build');
   const stopIndex = script.indexOf(
-    inPlaceBuild ? 'Quiescing application services' : 'Quiescing AI provider services',
+    inPlaceBuild ? 'Entering persistent maintenance' : 'Quiescing AI provider services',
   );
   const migrateIndex = script.lastIndexOf('deploy-backup-gate.mjs');
   const restartIndex = script.indexOf('Restarting services', migrateIndex);
@@ -108,12 +114,12 @@ for (const [label, script, inPlaceBuild] of deployments) {
     /WEB_NEXT_DIR="\$[A-Z_]+\/apps\/web\/\.next"/u,
     `${label} deploy must bind the runtime cache beneath the sealed Web output`,
   );
-  assert.match(script, /rm -rf -- "\$WEB_CACHE_DIR"/u);
   assert.match(
     script,
-    /install -d -o "\$DEPLOY_RUN_USER" -g "\$DEPLOY_RUN_GROUP" -m 0750 "\$WEB_CACHE_DIR"/u,
-    `${label} deploy must create a fresh runtime cache instead of taking ownership of build output`,
+    /web-cache\/\$TARGET_GIT_COMMIT/u,
+    `${label} deploy must bind Web cache writes to commit-scoped external storage`,
   );
+  assert.match(script, /runtime Web cache link is not bound/u);
   assert.doesNotMatch(
     script,
     /chown -R[^\r\n]*\.next\/cache/u,
@@ -172,15 +178,15 @@ const stagingSealIndex = matchIndex(
 const stagingClosedVerifyIndex = stagingDeploy.indexOf(
   '"$SEALED_DEPLOY_DIR" "$DEPLOY_BUILD_MANIFEST"',
 );
-const stagingReservedLinkIndex = stagingDeploy.indexOf('for reserved_runtime_link in');
+const stagingReservedLinkIndex = stagingDeploy.indexOf('for reserved_runtime_path in');
 assert.ok(
   stagingClosedManifestIndex >= 0
     && stagingClosedManifestIndex < stagingSealIndex
     && stagingSealIndex < stagingClosedVerifyIndex
     && stagingClosedVerifyIndex < stagingReservedLinkIndex,
-  'staging must close its post-build manifest, seal it, verify it, then reject reserved runtime symlinks',
+  'staging must close its post-build manifest, seal it, verify it, then reject reserved runtime paths',
 );
-assert.match(stagingDeploy, /if sudo test -L "\$reserved_runtime_link"/u);
+assert.match(stagingDeploy, /sudo test -e "\$reserved_runtime_path" \|\| sudo test -L "\$reserved_runtime_path"/u);
 for (const reservedPath of [
   '/.env.*',
   '/backups',
@@ -267,15 +273,20 @@ for (const script of deployments.slice(0, 2).map(([, source]) => source)) {
   assert.match(script, /ARCHIVE_SHA256/u);
   assert.match(script, /sha256sum "\$TARBALL"/u);
   assert.doesNotMatch(script, /@\$DEPLOY_HOST:\/tmp\/\$\(basename/u);
+  assert.match(script, /GIT_\*\) unset "\$inherited_git_name"/u);
+  assert.match(script, /GIT_SAFE_ARGS=\(--no-replace-objects/u);
+  assert.match(script, /cat-file blob/u);
+  assert.match(script, /PACKAGE_SNAPSHOT_TOOL" materialize/u);
+  assert.doesNotMatch(script, /git archive/u);
 }
 
-const resolveCommitIndex = appDirDeploy.indexOf('git rev-parse --verify --end-of-options');
-const archiveIndex = appDirDeploy.indexOf('git archive');
+const resolveCommitIndex = appDirDeploy.indexOf('rev-parse --verify --end-of-options');
+const archiveIndex = appDirDeploy.indexOf('PACKAGE_SNAPSHOT_TOOL" materialize');
 assert.ok(resolveCommitIndex >= 0, 'app-dir deploy must resolve the requested ref before packaging');
-assert.ok(resolveCommitIndex < archiveIndex, 'app-dir deploy must resolve the requested ref before git archive');
+assert.ok(resolveCommitIndex < archiveIndex, 'app-dir deploy must resolve the requested ref before raw snapshot materialization');
 assert.match(
   appDirDeploy,
-  /COMMIT_HASH="\$\(git rev-parse --verify --end-of-options "\$\{DEPLOY_REF\}\^\{commit\}" 2>\/dev\/null\)"/u,
+  /COMMIT_HASH="\$\(git "\$\{GIT_SAFE_ARGS\[@\]\}" rev-parse --verify --end-of-options "\$\{DEPLOY_REF\}\^\{commit\}" 2>\/dev\/null\)"/u,
   'app-dir deploy must reject non-commit refs and capture the resolved commit OID',
 );
 assert.match(
@@ -297,35 +308,82 @@ assert.match(
 const stagingCommitIndex = stagingDeploy.indexOf(
   'readonly TARGET_GIT_COMMIT="$(assert_clean_staging_checkout)"',
 );
+const stagingCurrentCommitIndex = stagingDeploy.indexOf(
+  'CURRENT_GIT_COMMIT="$(assert_clean_staging_checkout)"',
+);
 const stagingReleaseStageIndex = stagingDeploy.indexOf('node scripts/stage-extension-release.mjs');
 const stagingQuiesceIndex = stagingDeploy.indexOf(
-  'sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE"',
+  'enter "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"',
+  stagingCurrentCommitIndex,
+);
+const stagingThawIndex = stagingDeploy.indexOf(
+  'thaw "$CURRENT_DEPLOYED_COMMIT" "$DEPLOY_DIR" "$DEPLOY_RUN_USER" "$ENV_FILE"',
 );
 const stagingMarkerIndex = stagingDeploy.indexOf(
   'printf \'%s\\n\' "$TARGET_GIT_COMMIT" > DEPLOYED_COMMIT',
 );
-const stagingInstalledGateIndex = stagingDeploy.indexOf(
+const stagingCurrentGateIndex = stagingDeploy.indexOf(
+  'assert_installed_target_backup_gate "$CURRENT_GIT_COMMIT"',
+);
+const stagingTargetGateIndex = stagingDeploy.indexOf(
   'assert_installed_target_backup_gate "$TARGET_GIT_COMMIT"',
 );
 const stagingReleaseGateIndex = stagingDeploy.indexOf(
   'node scripts/verify-extension-release.mjs',
 );
 const stagingMigrationIndex = stagingDeploy.lastIndexOf('deploy-backup-gate.mjs');
+const stagingRestartIndex = stagingDeploy.indexOf('echo "[6/7] Restarting services..."');
+const stagingHealthIndex = stagingDeploy.indexOf('echo "[7/7] Health check..."');
 assert.ok(stagingCommitIndex >= 0, 'staging deploy must resolve the post-pull full Git commit');
 assert.ok(stagingQuiesceIndex >= 0, 'staging deploy must quiesce the Worker/API');
 assert.ok(stagingMarkerIndex >= 0, 'staging deploy must refresh DEPLOYED_COMMIT');
 assert.ok(stagingReleaseGateIndex >= 0, 'staging deploy must verify the current release set');
 assert.ok(
-  stagingCommitIndex < stagingQuiesceIndex
-    && stagingInstalledGateIndex < stagingQuiesceIndex
-    && stagingQuiesceIndex < stagingMarkerIndex
+  stagingCurrentCommitIndex >= 0
+    && stagingCurrentCommitIndex < stagingCurrentGateIndex
+    && stagingCurrentGateIndex < stagingQuiesceIndex
+    && stagingQuiesceIndex < stagingThawIndex
+    && stagingThawIndex < stagingCommitIndex
+    && stagingCommitIndex < stagingTargetGateIndex
+    && stagingTargetGateIndex < stagingMarkerIndex
     && stagingMarkerIndex < stagingReleaseStageIndex,
-  'staging deploy must preflight the installed gate and bind DEPLOYED_COMMIT before staging the release',
+  'staging deploy must verify and thaw only after quiescing, then bind the target gate before staging',
 );
 assert.ok(
   stagingReleaseStageIndex < stagingReleaseGateIndex
     && stagingReleaseGateIndex < stagingMigrationIndex,
   'staging release-set verification must run after immutable staging and before migration',
+);
+assert.doesNotMatch(
+  stagingDeploy.slice(stagingCommitIndex),
+  /\bthaw\b/u,
+  'staging checkout must remain root-frozen after the target update begins',
+);
+assert.match(
+  stagingDeploy,
+  /freeze-deploy-source\.sh" \\\r?\n\s+verify "\$CURRENT_DEPLOYED_COMMIT" "\$DEPLOY_DIR"/u,
+  'staging must verify the currently frozen checkout with its installed root gate before thaw',
+);
+assert.match(
+  stagingDeploy,
+  /deploy-maintenance-gate\.sh" \\\r?\n\s+enter "\$WORKER_SERVICE" "\$API_SERVICE" "\$WEB_SERVICE" \\\r?\n\s+"\$DEPLOY_RUNTIME_ROOT" "\$DEPLOY_DIR"/u,
+  'staging must persist its stopped-service state before thawing the checkout',
+);
+assert.match(
+  stagingDeploy,
+  /deploy-maintenance-gate\.sh" \\\r?\n\s+leave "\$WORKER_SERVICE" "\$API_SERVICE" "\$WEB_SERVICE" \\\r?\n\s+"\$DEPLOY_RUNTIME_ROOT" "\$DEPLOY_DIR"/u,
+  'staging must leave persistent maintenance only after resealing the checkout',
+);
+assert.ok(
+  stagingMigrationIndex < stagingRestartIndex
+    && stagingRestartIndex < stagingHealthIndex
+    && stagingHealthIndex < stagingDeploy.lastIndexOf('SERVICES_QUIESCED=0'),
+  'staging services must remain marked quiesced through migration, restart, and health checks',
+);
+assert.match(
+  stagingDeploy,
+  /chown "root:\$DEPLOY_RUN_GROUP" "\$SEALED_DEPLOY_DIR\/\$ENV_FILE"/u,
+  'the root-frozen checkout must retain a runtime-readable environment file',
 );
 for (const source of [appDirDeploy, releaseDeploy, stagingDeploy]) {
   assert.match(source, /EXTENSION_RELEASE_ROOT/u);
@@ -368,11 +426,15 @@ assert.doesNotMatch(stagingDeploy, /--skip-build|SKIP_BUILD/u);
 assert.match(stagingDeploy, /assert_installed_target_backup_gate/u);
 assert.match(
   stagingDeploy,
-  /verify-deploy-build-inputs\.mjs "\$TARGET_GIT_COMMIT" "\$ENV_FILE"/u,
+  /verify-deploy-build-inputs\.mjs" \\\r?\n\s+"\$TARGET_GIT_COMMIT" "\$ENV_FILE"/u,
   'staging must reject every ignored root env except its selected runtime env',
 );
 assert.ok(
-  stagingDeploy.indexOf('Quiescing application services')
+  (stagingDeploy.match(/git --no-replace-objects/gu) || []).length >= 6,
+  'staging Git identity, status, branch, fetch, checkout, and pull must ignore replacement objects',
+);
+assert.ok(
+  stagingDeploy.indexOf('Entering persistent maintenance')
     < stagingDeploy.indexOf('pnpm install --frozen-lockfile'),
   'staging must stop Worker/API/Web before dependency installation',
 );
@@ -386,10 +448,14 @@ assert.equal(
 );
 assert.match(
   composeDeploy,
-  /verify-deploy-build-inputs\.mjs "\$TARGET_GIT_COMMIT" "\$SOURCE_ENV_FILE"/u,
+  /verify-deploy-build-inputs\.mjs" \\\r?\n\s+"\$TARGET_GIT_COMMIT" "\$SOURCE_ENV_FILE"/u,
   'Compose must permit only its selected runtime env outside the target archive',
 );
-assert.match(composeDeploy, /git archive --format=tar/u);
+assert.match(composeDeploy, /SNAPSHOT_TOOL" materialize/u);
+assert.doesNotMatch(composeDeploy, /git archive/u);
+assert.match(composeDeploy, /GIT_\*\) unset "\$inherited_git_name"/u);
+assert.match(composeDeploy, /GIT_SAFE_ARGS=\(--no-replace-objects/u);
+assert.match(composeDeploy, /cat-file blob/u);
 assert.match(composeDeploy, /DEPLOY_SOURCE_ARCHIVE_SHA256/u);
 assert.doesNotMatch(composeDeploy, /CURRENT_WORKTREE_STATUS/u);
 

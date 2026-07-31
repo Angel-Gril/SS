@@ -286,7 +286,7 @@ describe('extensionDownloadRoutes', () => {
     expect((await app.inject({ method: 'GET', url: firstLocalUrl })).statusCode).toBe(404);
   });
 
-  it('rejects external-source production evidence and allows optional Git-HEAD evidence only without a marker', async () => {
+  it('rejects external-source production evidence and accepts matching Git-HEAD evidence with a marker', async () => {
     const external = await fixture();
     await writeRelease({
       buildRoot: external.buildRoot,
@@ -299,7 +299,6 @@ describe('extensionDownloadRoutes', () => {
       .toBe(404);
 
     const gitHead = await fixture();
-    await rm(path.join(gitHead.root, 'DEPLOYED_COMMIT'));
     await writeRelease({
       buildRoot: gitHead.buildRoot,
       mutateEvidence(evidence) {
@@ -309,6 +308,20 @@ describe('extensionDownloadRoutes', () => {
     });
     expect((await (await appFor(gitHead.buildRoot)).inject({ method: 'GET', url: '/latest' })).statusCode)
       .toBe(200);
+
+    const wrongGitHead = await fixture();
+    await writeRelease({
+      buildRoot: wrongGitHead.buildRoot,
+      gitCommit: 'c'.repeat(40),
+      mutateEvidence(evidence) {
+        const provenance = evidence.provenance as { commitSource: string };
+        provenance.commitSource = 'GIT_HEAD';
+      },
+    });
+    expect((await (await appFor(wrongGitHead.buildRoot)).inject({
+      method: 'GET',
+      url: '/latest',
+    })).statusCode).toBe(404);
   });
 
   it('rejects PK-prefixed junk and a ZIP file count that disagrees with evidence', async () => {

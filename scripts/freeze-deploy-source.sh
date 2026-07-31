@@ -75,6 +75,23 @@ verify_frozen_source() {
 
   while IFS= read -r -d '' path_entry; do
     relative="${path_entry#"$SOURCE_ROOT"/}"
+    case "$relative" in
+      apps/web/.next/cache)
+        if [ -L "$path_entry" ]; then
+          :
+        elif [ ! -d "$path_entry" ]; then
+          fail "runtime Web cache root is not a directory or managed symlink"
+        else
+          continue
+        fi
+        ;;
+      apps/web/.next/cache/*)
+        if [ -L "$path_entry" ] || { [ ! -d "$path_entry" ] && [ ! -f "$path_entry" ]; }; then
+          fail "runtime Web cache contains an unsupported entry: $relative"
+        fi
+        continue
+        ;;
+    esac
     if [ -L "$path_entry" ]; then
       if [ "$(stat -c '%u' "$path_entry")" != "0" ]; then
         fail "deployment source symlink must be root-owned: $relative"
@@ -82,7 +99,7 @@ verify_frozen_source() {
       case "$relative" in
         .env.*|backups|apps/server/public/uploads|apps/server/public/watermarked|\
         apps/server/public/resized|apps/server/public/tmp|tmp/ai-image-sandbox|\
-        tmp/ai-image-translation-sandbox) continue ;;
+        tmp/ai-image-translation-sandbox|apps/web/.next/cache) continue ;;
       esac
       resolved="$(readlink -f -- "$path_entry")"
       case "$resolved/" in

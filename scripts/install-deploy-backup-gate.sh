@@ -14,8 +14,11 @@ FILES=(
   deploy-backup-attestation.mjs
   deploy-database-identity.mjs
   deploy-environment.mjs
+  deploy-maintenance-gate.sh
   deploy-source-manifest.mjs
   freeze-deploy-source.sh
+  git-commit-tree.mjs
+  verify-deploy-build-inputs.mjs
   verify-deploy-backup.sh
 )
 STAGE_DIR=""

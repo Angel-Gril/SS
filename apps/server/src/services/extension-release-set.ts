@@ -583,8 +583,7 @@ export async function loadVerifiedExtensionReleaseSet(input: {
   }
   const matchingEvidence = parsedEvidence.filter(({ evidence }) => (
     !deployedCommit
-    || (evidence.gitCommit === deployedCommit
-      && evidence.provenance.commitSource === 'DEPLOYED_COMMIT')
+    || evidence.gitCommit === deployedCommit
   ));
   if (matchingEvidence.length < 1) {
     fail('extension release evidence does not match DEPLOYED_COMMIT');

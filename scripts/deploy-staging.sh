@@ -14,6 +14,7 @@ WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
+DEPLOY_RUNTIME_ROOT="${DEPLOY_RUNTIME_ROOT:-${DEPLOY_DIR}.runtime}"
 DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
 
 if [ "$#" -ne 0 ]; then
@@ -30,8 +31,15 @@ if [ "$(id -u)" = "0" ] || [ "$(id -un)" != "$DEPLOY_RUN_USER" ]; then
   exit 1
 fi
 
+while IFS= read -r inherited_git_name; do
+  case "$inherited_git_name" in
+    GIT_*) unset "$inherited_git_name" ;;
+  esac
+done < <(compgen -e)
+
 readonly DEPLOY_DIR ENV_FILE DEPLOY_ENV_PROFILE API_SERVICE WEB_SERVICE WORKER_SERVICE \
   DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT
+readonly DEPLOY_RUNTIME_ROOT
 
 if [[ ! "$ENV_FILE" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
   echo "ERROR: ENV_FILE must be one dot-prefixed basename" >&2
@@ -46,12 +54,22 @@ case "$EXTENSION_RELEASE_ROOT" in
   /*) ;;
   *) echo "ERROR: EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory" >&2; exit 1 ;;
 esac
+case "$DEPLOY_RUNTIME_ROOT" in
+  /*) ;;
+  *) echo "ERROR: DEPLOY_RUNTIME_ROOT must be an absolute path" >&2; exit 1 ;;
+esac
 if [ "$(readlink -m -- "$DEPLOY_DIR")" != "$DEPLOY_DIR" ] \
   || [ -L "$DEPLOY_DIR" ] || [ ! -d "$DEPLOY_DIR" ]; then
   echo "ERROR: DEPLOY_DIR must be one real canonical directory" >&2
   exit 1
 fi
 DEPLOY_PARENT="$(dirname -- "$DEPLOY_DIR")"
+if [ "$(readlink -m -- "$DEPLOY_RUNTIME_ROOT")" != "$DEPLOY_RUNTIME_ROOT" ] \
+  || [ "$(dirname -- "$DEPLOY_RUNTIME_ROOT")" != "$DEPLOY_PARENT" ] \
+  || [ "$DEPLOY_RUNTIME_ROOT" = "$DEPLOY_DIR" ]; then
+  echo "ERROR: DEPLOY_RUNTIME_ROOT must be one canonical sibling of DEPLOY_DIR" >&2
+  exit 1
+fi
 CURRENT_ANCESTOR="$DEPLOY_PARENT"
 while true; do
   if [ -L "$CURRENT_ANCESTOR" ] || [ ! -d "$CURRENT_ANCESTOR" ] \
@@ -127,7 +145,7 @@ assert_clean_staging_checkout() {
   local expected_commit="${1:-}"
   local current_commit
   local worktree_status
-  if ! current_commit="$(git -c safe.directory="$DEPLOY_DIR" rev-parse --verify --end-of-options "HEAD^{commit}" 2>/dev/null)"; then
+  if ! current_commit="$(git --no-replace-objects -c safe.directory="$DEPLOY_DIR" rev-parse --verify --end-of-options "HEAD^{commit}" 2>/dev/null)"; then
     echo "ERROR: staging HEAD is not a commit" >&2
     exit 1
   fi
@@ -139,7 +157,7 @@ assert_clean_staging_checkout() {
     echo "ERROR: staging HEAD changed during deployment" >&2
     exit 1
   fi
-  if ! worktree_status="$(git -c safe.directory="$DEPLOY_DIR" status --porcelain --untracked-files=all -- . ':(exclude)DEPLOYED_COMMIT')"; then
+  if ! worktree_status="$(git --no-replace-objects -c safe.directory="$DEPLOY_DIR" status --porcelain --untracked-files=all -- . ':(exclude)DEPLOYED_COMMIT')"; then
     echo "ERROR: could not inspect the complete staging worktree" >&2
     exit 1
   fi
@@ -161,8 +179,11 @@ assert_installed_target_backup_gate() {
     deploy-backup-attestation.mjs
     deploy-database-identity.mjs
     deploy-environment.mjs
+    deploy-maintenance-gate.sh
     deploy-source-manifest.mjs
     freeze-deploy-source.sh
+    git-commit-tree.mjs
+    verify-deploy-build-inputs.mjs
     verify-deploy-backup.sh
   )
   for path in "$DEPLOY_BACKUP_GATE_ROOT" "$target_dir"; do
@@ -202,7 +223,134 @@ assert_installed_target_backup_gate() {
 }
 
 assert_git_bound_build_inputs() {
-  node scripts/verify-deploy-build-inputs.mjs "$TARGET_GIT_COMMIT" "$ENV_FILE"
+  node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/verify-deploy-build-inputs.mjs" \
+    "$TARGET_GIT_COMMIT" "$ENV_FILE"
+}
+
+assert_managed_runtime_directory() {
+  local directory="$1"
+  local owner="$2"
+  local group="$3"
+  local mode="$4"
+  if sudo test -L "$directory" || ! sudo test -d "$directory" \
+    || [ "$(sudo readlink -f -- "$directory")" != "$directory" ] \
+    || [ "$(sudo stat -c '%u:%g:%a' "$directory")" != "$owner:$group:$mode" ]; then
+    echo "ERROR: managed runtime directory is invalid: $directory" >&2
+    exit 1
+  fi
+}
+
+prepare_managed_runtime_directory() {
+  local directory="$1"
+  local mode="$2"
+  if sudo test -L "$directory" || { sudo test -e "$directory" && ! sudo test -d "$directory"; }; then
+    echo "ERROR: managed runtime path must be one real directory: $directory" >&2
+    exit 1
+  fi
+  sudo install -d -o "$DEPLOY_RUN_USER" -g "$DEPLOY_RUN_GROUP" -m "$mode" "$directory"
+  assert_managed_runtime_directory \
+    "$directory" "$DEPLOY_RUN_UID" "$DEPLOY_RUN_GID" "$mode"
+}
+
+migrate_managed_runtime_directory() {
+  local source="$1"
+  local target="$2"
+  local preserve="$3"
+  if [ -L "$source" ]; then
+    if [ "$(readlink -f -- "$source")" != "$target" ]; then
+      echo "ERROR: runtime symlink does not target managed storage: $source" >&2
+      exit 1
+    fi
+    rm -- "$source"
+    return
+  fi
+  if [ ! -e "$source" ]; then
+    return
+  fi
+  if [ ! -d "$source" ] || [ "$(readlink -f -- "$source")" != "$source" ]; then
+    echo "ERROR: runtime source must be one real directory: $source" >&2
+    exit 1
+  fi
+  if [ "$preserve" = "1" ]; then
+    cp -a -n -- "$source/." "$target/"
+  fi
+  rm -rf -- "$source"
+}
+
+prepare_staging_runtime_storage() {
+  if sudo test -L "$DEPLOY_RUNTIME_ROOT" \
+    || { sudo test -e "$DEPLOY_RUNTIME_ROOT" && ! sudo test -d "$DEPLOY_RUNTIME_ROOT"; }; then
+    echo "ERROR: DEPLOY_RUNTIME_ROOT must be one real directory" >&2
+    exit 1
+  fi
+  sudo install -d -o root -g root -m 0755 "$DEPLOY_RUNTIME_ROOT"
+  assert_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT" 0 0 755
+  sudo install -d -o root -g root -m 0755 "$DEPLOY_RUNTIME_ROOT/web-cache"
+  assert_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/web-cache" 0 0 755
+
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/uploads" 750
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/watermarked" 750
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/resized" 750
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/public-tmp" 750
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/backups" 750
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/ai-image-sandbox" 700
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/ai-image-translation-sandbox" 700
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" 750
+
+  for runtime_parent in "$DEPLOY_DIR/apps/server/public" "$DEPLOY_DIR/tmp"; do
+    if [ -L "$runtime_parent" ] || { [ -e "$runtime_parent" ] && [ ! -d "$runtime_parent" ]; }; then
+      echo "ERROR: runtime link parent must be one real directory: $runtime_parent" >&2
+      exit 1
+    fi
+    mkdir -p "$runtime_parent"
+    if [ "$(readlink -f -- "$runtime_parent")" != "$runtime_parent" ]; then
+      echo "ERROR: runtime link parent escapes the deployment root: $runtime_parent" >&2
+      exit 1
+    fi
+  done
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/apps/server/public/uploads" "$DEPLOY_RUNTIME_ROOT/uploads" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/apps/server/public/watermarked" "$DEPLOY_RUNTIME_ROOT/watermarked" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/apps/server/public/resized" "$DEPLOY_RUNTIME_ROOT/resized" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/apps/server/public/tmp" "$DEPLOY_RUNTIME_ROOT/public-tmp" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/backups" "$DEPLOY_RUNTIME_ROOT/backups" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/tmp/ai-image-sandbox" "$DEPLOY_RUNTIME_ROOT/ai-image-sandbox" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/tmp/ai-image-translation-sandbox" \
+    "$DEPLOY_RUNTIME_ROOT/ai-image-translation-sandbox" 1
+  migrate_managed_runtime_directory \
+    "$DEPLOY_DIR/apps/web/.next/cache" \
+    "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" 0
+  sudo find -P "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" \
+    -xdev -mindepth 1 -delete
+  prepare_managed_runtime_directory "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" 750
+}
+
+install_staging_runtime_symlink() {
+  local target="$1"
+  local link="$2"
+  local target_real
+  if sudo test -L "$target" || ! sudo test -d "$target"; then
+    echo "ERROR: runtime symlink target must be one real directory: $target" >&2
+    exit 1
+  fi
+  if sudo test -e "$link" || sudo test -L "$link"; then
+    echo "ERROR: sealed build produced a reserved runtime path: $link" >&2
+    exit 1
+  fi
+  target_real="$(sudo readlink -f -- "$target")"
+  sudo ln -sT -- "$target_real" "$link"
+  sudo chown -h root:root "$link"
+  if ! sudo test -L "$link" || [ "$(sudo readlink -f -- "$link")" != "$target_real" ] \
+    || [ "$(sudo stat -c '%u' "$link")" != "0" ]; then
+    echo "ERROR: runtime symlink verification failed: $link" >&2
+    exit 1
+  fi
 }
 
 reset_generated_build_paths() {
@@ -244,7 +392,28 @@ reset_generated_build_paths() {
   done
 }
 
-BRANCH="${DEPLOY_BRANCH:-$(git branch --show-current)}"
+DEPLOY_ENV_SNAPSHOT_DIR=""
+DEPLOY_BUILD_HOME=""
+SERVICES_QUIESCED=0
+cleanup_environment_snapshot() {
+  if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ]; then
+    sudo rm -rf -- "$DEPLOY_ENV_SNAPSHOT_DIR"
+    sudo rm -rf -- "$DEPLOY_BUILD_HOME"
+  fi
+}
+restore_quiesced_services() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+    sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+    echo "[deploy] Persistent maintenance remains active after failure; operator recovery is required" >&2
+  fi
+  cleanup_environment_snapshot
+  exit "$status"
+}
+trap restore_quiesced_services EXIT
+
+BRANCH="${DEPLOY_BRANCH:-$(git --no-replace-objects -c safe.directory="$DEPLOY_DIR" branch --show-current)}"
 BRANCH="${BRANCH:-main}"
 
 if [ -L "$ENV_FILE" ] || [ ! -f "$ENV_FILE" ] || [ ! -r "$ENV_FILE" ]; then
@@ -259,12 +428,50 @@ echo "Env: $ENV_FILE"
 echo "Env profile: ${DEPLOY_ENV_PROFILE:-skip}"
 echo ""
 
+# A successful in-place deployment remains root-frozen while services run. The next
+# deployment verifies that frozen checkout before stopping services and thawing it.
+CURRENT_GIT_COMMIT="$(assert_clean_staging_checkout)"
+assert_installed_target_backup_gate "$CURRENT_GIT_COMMIT"
+CURRENT_SOURCE_OWNER="$(stat -c '%u' "$DEPLOY_DIR")"
+CURRENT_SOURCE_FROZEN=0
+if [ "$CURRENT_SOURCE_OWNER" = "0" ]; then
+  if [ -L DEPLOYED_COMMIT ] || [ ! -f DEPLOYED_COMMIT ] \
+    || [ "$(stat -c '%h' DEPLOYED_COMMIT)" != "1" ]; then
+    echo "ERROR: frozen staging checkout requires one trusted DEPLOYED_COMMIT" >&2
+    exit 1
+  fi
+  CURRENT_DEPLOYED_COMMIT="$(cat DEPLOYED_COMMIT)"
+  if [[ ! "$CURRENT_DEPLOYED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || [ "$CURRENT_DEPLOYED_COMMIT" != "$CURRENT_GIT_COMMIT" ]; then
+    echo "ERROR: frozen staging checkout marker does not match Git HEAD" >&2
+    exit 1
+  fi
+  sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$CURRENT_DEPLOYED_COMMIT/freeze-deploy-source.sh" \
+    verify "$CURRENT_DEPLOYED_COMMIT" "$DEPLOY_DIR"
+  CURRENT_SOURCE_FROZEN=1
+elif [ "$CURRENT_SOURCE_OWNER" != "$(id -u -- "$DEPLOY_RUN_USER")" ]; then
+  echo "ERROR: staging checkout must be owned by root or DEPLOY_RUN_USER" >&2
+  exit 1
+fi
+
+echo "[1a/7] Entering persistent maintenance and quiescing application services..."
+SERVICES_QUIESCED=1
+sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$CURRENT_GIT_COMMIT/deploy-maintenance-gate.sh" \
+  enter "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" \
+  "$DEPLOY_RUNTIME_ROOT" "$DEPLOY_DIR"
+
+if [ "$CURRENT_SOURCE_FROZEN" = "1" ]; then
+  echo "[1b/7] Restoring checkout ownership for the bounded update..."
+  sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$CURRENT_DEPLOYED_COMMIT/freeze-deploy-source.sh" \
+    thaw "$CURRENT_DEPLOYED_COMMIT" "$DEPLOY_DIR" "$DEPLOY_RUN_USER" "$ENV_FILE"
+  assert_clean_staging_checkout "$CURRENT_GIT_COMMIT" >/dev/null
+fi
+
 # 1. 拉取最新代码
-echo "[1/7] Pulling latest code..."
-assert_clean_staging_checkout >/dev/null
-git fetch origin "$BRANCH"
-git checkout "$BRANCH"
-git pull --ff-only origin "$BRANCH"
+echo "[1c/7] Pulling latest code..."
+git --no-replace-objects fetch origin "$BRANCH"
+git --no-replace-objects checkout "$BRANCH"
+git --no-replace-objects pull --ff-only origin "$BRANCH"
 readonly TARGET_GIT_COMMIT="$(assert_clean_staging_checkout)"
 assert_installed_target_backup_gate "$TARGET_GIT_COMMIT"
 assert_git_bound_build_inputs
@@ -292,19 +499,13 @@ if [ "$DEPLOY_RUN_UID" = "0" ] || [ "$DEPLOY_RUN_GID" = "0" ] \
   echo "ERROR: build and runtime users require distinct non-root UIDs and GIDs" >&2
   exit 1
 fi
+prepare_staging_runtime_storage
 DEPLOY_ENV_TOOL="$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs"
 DEPLOY_ENV_SNAPSHOT_DIR="$(sudo mktemp -d /run/ss-erp-deploy-env.XXXXXXXXXX)"
 DEPLOY_ENV_SNAPSHOT="$DEPLOY_ENV_SNAPSHOT_DIR/environment.env"
 DEPLOY_SOURCE_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/source-manifest.json"
 DEPLOY_BUILD_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/build-manifest.json"
 DEPLOY_BUILD_HOME="$(sudo mktemp -d /run/ss-erp-build-home.XXXXXXXXXX)"
-cleanup_environment_snapshot() {
-  if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ]; then
-    sudo rm -rf -- "$DEPLOY_ENV_SNAPSHOT_DIR"
-    sudo rm -rf -- "$DEPLOY_BUILD_HOME"
-  fi
-}
-trap cleanup_environment_snapshot EXIT
 sudo chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 sudo chown "$DEPLOY_BUILD_USER:$DEPLOY_BUILD_GROUP" "$DEPLOY_BUILD_HOME"
 sudo chmod 0700 "$DEPLOY_BUILD_HOME"
@@ -331,35 +532,6 @@ if [ -n "$DEPLOY_ENV_PROFILE" ]; then
   fi
 fi
 
-SERVICES_QUIESCED=0
-SOURCE_FROZEN=0
-restore_source_ownership() {
-  if [ "$SOURCE_FROZEN" = "1" ]; then
-    sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
-      thaw "$TARGET_GIT_COMMIT" "$DEPLOY_DIR" "$DEPLOY_RUN_USER" "$ENV_FILE" || true
-    SOURCE_FROZEN=0
-  fi
-}
-restore_quiesced_services() {
-  local status=$?
-  trap - EXIT
-  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
-    sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
-    echo "[deploy] Worker/API/Web remain stopped after failed build, migration, or gate; operator recovery is required" >&2
-  fi
-  restore_source_ownership
-  cleanup_environment_snapshot
-  exit "$status"
-}
-trap restore_quiesced_services EXIT
-
-echo "[1c/7] Quiescing application services before in-place dependency or build changes..."
-if ! sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
-  sudo systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
-  echo "ERROR: could not quiesce Worker/API/Web before in-place deployment" >&2
-  exit 1
-fi
-SERVICES_QUIESCED=1
 printf '%s\n' "$TARGET_GIT_COMMIT" > DEPLOYED_COMMIT
 echo "[1d/7] Removing prior generated dependencies and build outputs..."
 reset_generated_build_paths
@@ -460,6 +632,15 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
   --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
 
+if sudo test -L "$DEPLOY_DIR/apps/web/.next" \
+  || ! sudo test -d "$DEPLOY_DIR/apps/web/.next" \
+  || [ "$(sudo readlink -f -- "$DEPLOY_DIR/apps/web/.next")" \
+    != "$DEPLOY_DIR/apps/web/.next" ]; then
+  echo "ERROR: Web build output must be one real directory" >&2
+  exit 1
+fi
+sudo rm -rf -- "$DEPLOY_DIR/apps/web/.next/cache"
+
 echo "[5d/7] Sealing checkout source on new root-owned inodes..."
 sudo chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -472,6 +653,8 @@ UNSEALED_DEPLOY_DIR="$DEPLOY_DIR.unsealed.$$"
 cd /
 sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
   seal "$TARGET_GIT_COMMIT" "$DEPLOY_DIR" "$SEALED_DEPLOY_DIR"
+sudo chown "root:$DEPLOY_RUN_GROUP" "$SEALED_DEPLOY_DIR/$ENV_FILE"
+sudo chmod 0640 "$SEALED_DEPLOY_DIR/$ENV_FILE"
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
@@ -491,17 +674,23 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
   --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
 shopt -s nullglob
-for reserved_runtime_link in \
-  "$SEALED_DEPLOY_DIR"/.env.* \
+for reserved_environment_link in "$SEALED_DEPLOY_DIR"/.env.*; do
+  if sudo test -L "$reserved_environment_link"; then
+    echo "ERROR: staging build produced a reserved environment symlink" >&2
+    exit 1
+  fi
+done
+for reserved_runtime_path in \
   "$SEALED_DEPLOY_DIR/backups" \
   "$SEALED_DEPLOY_DIR/apps/server/public/uploads" \
   "$SEALED_DEPLOY_DIR/apps/server/public/watermarked" \
   "$SEALED_DEPLOY_DIR/apps/server/public/resized" \
   "$SEALED_DEPLOY_DIR/apps/server/public/tmp" \
   "$SEALED_DEPLOY_DIR/tmp/ai-image-sandbox" \
-  "$SEALED_DEPLOY_DIR/tmp/ai-image-translation-sandbox"; do
-  if sudo test -L "$reserved_runtime_link"; then
-    echo "ERROR: staging build produced a reserved external runtime symlink" >&2
+  "$SEALED_DEPLOY_DIR/tmp/ai-image-translation-sandbox" \
+  "$SEALED_DEPLOY_DIR/apps/web/.next/cache"; do
+  if sudo test -e "$reserved_runtime_path" || sudo test -L "$reserved_runtime_path"; then
+    echo "ERROR: staging build produced a reserved runtime path" >&2
     exit 1
   fi
 done
@@ -510,9 +699,26 @@ sudo mv "$DEPLOY_DIR" "$UNSEALED_DEPLOY_DIR"
 sudo mv "$SEALED_DEPLOY_DIR" "$DEPLOY_DIR"
 sudo rm -rf -- "$UNSEALED_DEPLOY_DIR"
 cd "$DEPLOY_DIR"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/uploads" "$DEPLOY_DIR/apps/server/public/uploads"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/watermarked" "$DEPLOY_DIR/apps/server/public/watermarked"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/resized" "$DEPLOY_DIR/apps/server/public/resized"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/public-tmp" "$DEPLOY_DIR/apps/server/public/tmp"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/backups" "$DEPLOY_DIR/backups"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/ai-image-sandbox" "$DEPLOY_DIR/tmp/ai-image-sandbox"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/ai-image-translation-sandbox" \
+  "$DEPLOY_DIR/tmp/ai-image-translation-sandbox"
+install_staging_runtime_symlink \
+  "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" \
+  "$DEPLOY_DIR/apps/web/.next/cache"
 sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
   verify "$TARGET_GIT_COMMIT" "$DEPLOY_DIR"
-SOURCE_FROZEN=1
 
 # 6. 迁移并重启服务
 echo "[6a-b/7] Verifying backup attestation and running the bound database migration..."
@@ -544,11 +750,10 @@ if sudo test -L "$WEB_NEXT_DIR" || ! sudo test -d "$WEB_NEXT_DIR" \
   echo "ERROR: sealed Web build output must be one real directory" >&2
   exit 1
 fi
-sudo rm -rf -- "$WEB_CACHE_DIR"
-sudo install -d -o "$DEPLOY_RUN_USER" -g "$DEPLOY_RUN_GROUP" -m 0750 "$WEB_CACHE_DIR"
-if sudo test -L "$WEB_CACHE_DIR" \
-  || [ "$(sudo stat -c '%u:%g:%a' "$WEB_CACHE_DIR")" != "$DEPLOY_RUN_UID:$DEPLOY_RUN_GID:750" ]; then
-  echo "ERROR: runtime Web cache could not be created safely" >&2
+if ! sudo test -L "$WEB_CACHE_DIR" \
+  || [ "$(sudo readlink -f -- "$WEB_CACHE_DIR")" \
+    != "$DEPLOY_RUNTIME_ROOT/web-cache/$TARGET_GIT_COMMIT" ]; then
+  echo "ERROR: runtime Web cache link is not bound to managed storage" >&2
   exit 1
 fi
 
@@ -564,6 +769,9 @@ echo "[6/7] Restarting services..."
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_ENV_TOOL" compare "$DEPLOY_DIR/$ENV_FILE" "$DEPLOY_ENV_SNAPSHOT"
+sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-maintenance-gate.sh" \
+  leave "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" \
+  "$DEPLOY_RUNTIME_ROOT" "$DEPLOY_DIR"
 sudo systemctl restart "$WORKER_SERVICE"
 sudo systemctl restart "$API_SERVICE"
 sudo systemctl restart "$WEB_SERVICE"
@@ -590,7 +798,6 @@ else
 fi
 
 SERVICES_QUIESCED=0
-restore_source_ownership
 
 echo ""
 echo "=== Deploy complete ==="

@@ -25,10 +25,16 @@ if [[ ! "$DEPLOY_RUN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
   fail "deploy-compose.sh must run directly as DEPLOY_RUN_USER"
 fi
 
-if ! REPOSITORY_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
+while IFS= read -r inherited_git_name; do
+  case "$inherited_git_name" in
+    GIT_*) unset "$inherited_git_name" ;;
+  esac
+done < <(compgen -e)
+if ! REPOSITORY_ROOT="$(git --no-replace-objects rev-parse --show-toplevel 2>/dev/null)" \
   || [ "$(pwd -P)" != "$(cd -- "$REPOSITORY_ROOT" && pwd -P)" ]; then
   fail "deploy-compose.sh must run from the exact repository root"
 fi
+GIT_SAFE_ARGS=(--no-replace-objects -c "safe.directory=$REPOSITORY_ROOT")
 
 case "$COMPOSE_FILE" in
   docker-compose.prod.yml) DEPLOY_COMPOSE_PROJECT=ss-erp-prod ;;
@@ -68,29 +74,33 @@ SOURCE_COMPOSE_FILE="$COMPOSE_FILE"
 ENV_FILE="$ENV_SNAPSHOT_DIR/environment.env"
 COMPOSE_FILE="$ENV_SNAPSHOT_DIR/compose.yml"
 
-if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options 'HEAD^{commit}' 2>/dev/null)"; then
+if ! COMMIT_HASH="$(git "${GIT_SAFE_ARGS[@]}" rev-parse --verify --end-of-options 'HEAD^{commit}' 2>/dev/null)"; then
   fail "Compose deployment HEAD is not a commit"
 fi
 if [[ ! "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
   fail "Compose deployment HEAD did not resolve to a full 40-character commit OID"
 fi
 readonly TARGET_GIT_COMMIT="$COMMIT_HASH"
-if ! WORKTREE_STATUS="$(git status --porcelain --untracked-files=all -- . ':(exclude)DEPLOYED_COMMIT')"; then
+if ! WORKTREE_STATUS="$(git "${GIT_SAFE_ARGS[@]}" status --porcelain --untracked-files=all -- . ':(exclude)DEPLOYED_COMMIT')"; then
   fail "could not inspect Compose deployment Git worktree"
 fi
 if [ -n "$WORKTREE_STATUS" ]; then
   fail "Compose deployment requires a clean Git worktree"
 fi
-node scripts/verify-deploy-build-inputs.mjs "$TARGET_GIT_COMMIT" "$SOURCE_ENV_FILE"
 SOURCE_ARCHIVE="$ENV_SNAPSHOT_DIR/source.tar"
 SOURCE_SNAPSHOT_ROOT="$ENV_SNAPSHOT_DIR/source"
 mkdir -m 0700 "$SOURCE_SNAPSHOT_ROOT"
-git archive --format=tar -o "$SOURCE_ARCHIVE" "$TARGET_GIT_COMMIT"
+SNAPSHOT_TOOL="$ENV_SNAPSHOT_DIR/git-commit-tree.mjs"
+git "${GIT_SAFE_ARGS[@]}" cat-file blob \
+  "$TARGET_GIT_COMMIT:scripts/git-commit-tree.mjs" > "$SNAPSHOT_TOOL"
+node "$SNAPSHOT_TOOL" materialize "$TARGET_GIT_COMMIT" "$SOURCE_SNAPSHOT_ROOT"
+node "$SOURCE_SNAPSHOT_ROOT/scripts/verify-deploy-build-inputs.mjs" \
+  "$TARGET_GIT_COMMIT" "$SOURCE_ENV_FILE"
+tar -cf "$SOURCE_ARCHIVE" -C "$SOURCE_SNAPSHOT_ROOT" .
 DEPLOY_SOURCE_ARCHIVE_SHA256="$(sha256sum "$SOURCE_ARCHIVE" | awk '{print $1}')"
 if [[ ! "$DEPLOY_SOURCE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   fail "could not hash the target commit source archive"
 fi
-tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_SNAPSHOT_ROOT"
 mv "$SOURCE_ARCHIVE" "$SOURCE_SNAPSHOT_ROOT/.ss-erp-source.tar"
 SOURCE_COMPOSE_FILE="$SOURCE_SNAPSHOT_ROOT/$SOURCE_COMPOSE_FILE"
 DEPLOY_ENV_TOOL="$SOURCE_SNAPSHOT_ROOT/scripts/deploy-environment.mjs"

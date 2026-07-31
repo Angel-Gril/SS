@@ -19,7 +19,7 @@ TimeoutStopSec=15
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/ss-erp/apps/web/.next/cache
+ReadWritePaths=/opt/ss-erp.runtime/web-cache /opt/ss-erp/apps/web/.next/cache
 
 [Install]
 WantedBy=multi-user.target

@@ -5,6 +5,8 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -27,6 +29,7 @@ import {
   extensionReleasePackageInputsSha256,
   extensionReleaseScopedGitStatus,
   extensionReleaseSourceMode,
+  materializeExtensionReleaseRepositorySnapshot,
 } from './extension-release-inputs.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -102,8 +105,8 @@ function versionsInRoot(root) {
   return versions;
 }
 
-function resolveVersion() {
-  const sourceManifestPath = path.join(sourceDir, 'manifest.json');
+function resolveVersion(releaseSourceDir = sourceDir) {
+  const sourceManifestPath = path.join(releaseSourceDir, 'manifest.json');
   if (!existsSync(sourceManifestPath)) throw new Error(`extension source manifest is missing: ${sourceManifestPath}`);
   const source = parseVersion(JSON.parse(readFileSync(sourceManifestPath, 'utf8')).version);
   if (!source) throw new Error('extension source version must be canonical major.minor.patch');
@@ -208,6 +211,7 @@ let lockDescriptor = null;
 let ownsLock = false;
 let releaseStarted = false;
 let cleanupArtifacts = [];
+let repositorySnapshotRoot = '';
 try {
   lockDescriptor = acquireReleaseLock(lockPath);
   ownsLock = true;
@@ -220,7 +224,36 @@ try {
   }
   const resolvedProvenance = releaseProvenance();
   const gitCommit = resolvedProvenance.gitCommit;
-  const version = resolveVersion();
+  let packagingRepoRoot = repoRoot;
+  let packagingSourceDir = sourceDir;
+  if (resolvedProvenance.provenance.sourceMode === 'REPOSITORY_SOURCE') {
+    const repositorySnapshotParent = path.join(repoRoot, 'build');
+    mkdirSync(repositorySnapshotParent, { recursive: true });
+    const repositorySnapshotParentMetadata = lstatSync(repositorySnapshotParent);
+    if (!repositorySnapshotParentMetadata.isDirectory()
+      || repositorySnapshotParentMetadata.isSymbolicLink()) {
+      throw new Error('extension release snapshot parent must be one real repository build directory');
+    }
+    repositorySnapshotRoot = mkdtempSync(
+      path.join(repositorySnapshotParent, 'tmp-extension-release-source-'),
+    );
+    const snapshot = materializeExtensionReleaseRepositorySnapshot({
+      repoRoot,
+      sourceDir,
+      outputRoot: repositorySnapshotRoot,
+    });
+    if (snapshot.gitCommit !== gitCommit) {
+      throw new Error('active Git HEAD changed while creating the extension release snapshot');
+    }
+    packagingRepoRoot = snapshot.repoRoot;
+    packagingSourceDir = snapshot.sourceDir;
+    writeFileSync(
+      path.join(packagingRepoRoot, 'DEPLOYED_COMMIT'),
+      `${gitCommit}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+  }
+  const version = resolveVersion(packagingSourceDir);
   const zipPaths = new Map(targets.map((target) => [
     target,
     path.join(outRoot, `ss-erp-${target}-${version}.zip`),
@@ -240,11 +273,16 @@ try {
   for (const target of targets) {
     const packaging = spawnSync(
       process.execPath,
-      ['scripts/package-extension-package.mjs', target],
+      [path.join(packagingRepoRoot, 'scripts/package-extension-package.mjs'), target],
       {
-        cwd: repoRoot,
+        cwd: packagingRepoRoot,
         stdio: 'inherit',
-        env: { ...process.env, EXTENSION_PACKAGE_VERSION: version },
+        env: {
+          ...process.env,
+          EXTENSION_OUT_DIR: outRoot,
+          EXTENSION_PACKAGE_VERSION: version,
+          EXTENSION_SOURCE_DIR: packagingSourceDir,
+        },
       },
     );
     if (packaging.status !== 0) throw new Error(`${target} extension packaging failed`);
@@ -301,7 +339,7 @@ try {
   const verification = spawnSync(
     process.execPath,
     [
-      'scripts/verify-extension-release.mjs',
+      path.join(packagingRepoRoot, 'scripts/verify-extension-release.mjs'),
       '--checksum',
       checksumPath,
       '--evidence',
@@ -315,7 +353,14 @@ try {
       '--expected-local-origin',
       expectedOrigins.local,
     ],
-    { cwd: repoRoot, stdio: 'inherit', env: process.env },
+    {
+      cwd: packagingRepoRoot,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        EXTENSION_SOURCE_DIR: packagingSourceDir,
+      },
+    },
   );
   if (verification.status !== 0) throw new Error('coordinated extension release verification failed');
   console.log(JSON.stringify({
@@ -344,4 +389,7 @@ try {
     }
   }
   if (ownsLock) rmSync(lockPath, { force: true });
+  if (repositorySnapshotRoot) {
+    rmSync(repositorySnapshotRoot, { recursive: true, force: true });
+  }
 }

@@ -130,7 +130,7 @@ proof 绑定最终 schema v2 attestation。maintenance 路由在新库中写入�
 排他写入新认证。归档摘要冲突、身份不一致、文件被替换或旧指针无法安全移除时都会失败关闭。
 
 `deploy.sh` 和 `deploy-app-dir.sh` 从目标 archive 解包后、在把 release 交给隔离构建用户前，会
-调用 `install-deploy-backup-gate.sh`，把七个 runtime gate 文件和只读 marker 原子安装到
+调用 `install-deploy-backup-gate.sh`，把十个 runtime gate 文件和只读 marker 原子安装到
 `/usr/local/lib/ss-erp-deploy-gate/<target-commit>/`。同一 commit 目录不可覆盖，只能逐字节复用。
 `deploy-staging.sh` 不会把 deploy 用户可写 checkout 提升为 root；它会在安装依赖或停服前要求
 目标 gate 已经预装且与 checkout 逐字节一致。预装必须从本机可信 checkout 生成的目标 revision
@@ -140,16 +140,22 @@ archive 解到 VPS 的 root-owned 私有目录，再由安装器完成：
 # 本机可信 checkout
 TARGET_COMMIT=<lowercase-full-40-character-commit>
 mkdir -p build
-git archive --format=tar.gz --output="build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" \
-  "$TARGET_COMMIT" -- \
+SNAPSHOT_ROOT="build/tmp-deploy-gate-source-${TARGET_COMMIT}"
+mkdir "$SNAPSHOT_ROOT"
+node scripts/git-commit-tree.mjs materialize "$TARGET_COMMIT" "$SNAPSHOT_ROOT"
+tar -czf "build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" -C "$SNAPSHOT_ROOT" \
   scripts/install-deploy-backup-gate.sh \
   scripts/deploy-backup-gate.mjs \
   scripts/deploy-backup-attestation.mjs \
   scripts/deploy-database-identity.mjs \
   scripts/deploy-environment.mjs \
+  scripts/deploy-maintenance-gate.sh \
   scripts/deploy-source-manifest.mjs \
   scripts/freeze-deploy-source.sh \
+  scripts/git-commit-tree.mjs \
+  scripts/verify-deploy-build-inputs.mjs \
   scripts/verify-deploy-backup.sh
+rm -rf -- "$SNAPSHOT_ROOT"
 scp "build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" root@<server>:/root/
 
 # VPS root shell
@@ -167,7 +173,9 @@ root-owned orchestrator 通过 no-follow、单链接、稳定 descriptor 把 `.e
 构建后 closed 清单固定完整树；随后把源码复制到新的 root-owned inode、同时复验两份清单，最后才
 安装 root-owned runtime symlink。Git 忽略的根级 `.env*` 也属于构建输入：除明确选择且 build UID
 不可读的 runtime env 外，任何额外文件都会失败关闭。封存副本中的 Next build cache 会被删除，再由
-root 新建一个空的 runtime cache，禁止递归接管构建产出的 symlink/hardlink。认证、migration 和
+root 安装到 commit-scoped 外置 cache 的 symlink，禁止递归接管构建产出的 symlink/hardlink。
+上传、水印、缩放、临时文件、备份和 sandbox evidence 同样只通过 root 安装的外置 symlink 写入。
+认证、migration 和
 post-migration guard 则从同一 root 快照降权到 runtime 用户执行。
 
 archive 模式要求 `/opt/ss-erp`、`releases`/`backups` 父目录和 `shared` 根目录由 root 所有且不可
@@ -186,7 +194,9 @@ bash scripts/deploy-compose.sh
 
 `deploy-compose.sh` 必须由精确的非 root `DEPLOY_RUN_USER` 执行，并使用 `init-server.sh` 预装在
 `/var/lib/ss-erp-deploy-locks` 的 root-owned 全局 project 锁。它验证 clean Git HEAD/可选 marker，
-只快照一次 env 和目标 commit 的 Compose 文件，再用 `git archive` 创建私有构建根。Dockerfile 在
+只快照一次 env；目标 Compose 文件和完整构建根都由 `--no-replace-objects` 的 `ls-tree` 与
+binary-safe `cat-file --batch` 从 raw Git blobs 物化。本地 `.git/info/attributes`、clean/smudge
+filter、`assume-unchanged`、`skip-worktree` 和 replacement refs 都不能改变构建字节。Dockerfile 在
 运行任何仓库代码前只复制并复验该 archive 的 SHA-256；镜像同时写入 commit 与 archive digest
 marker。镜像构建完成后，脚本确认原 env 未变化，才停止旧 API/Worker/Web、启动基础设施并运行
 一次性 `migrate` service。project 固定为 `ss-erp-prod` 或 `ss-erp-staging`，进程中的
@@ -231,9 +241,32 @@ package-input digest、origin、ZIP SHA/CRC/文件数，然后逐字节暂存到
 `pnpm package:extension`，因此 `REL-03` 已签名/分发候选不会在 `REL-04` 被另一个
 `EXTERNAL_REQUIRED` 版本替换。
 
+正式 repository-source 打包不读取工作树字节作为发布输入。Git 读取会移除继承的 `GIT_*`
+重定向并使用 `--no-replace-objects`；协调器按绑定 commit 的 blob 创建私有 snapshot，随后从该
+snapshot 执行 cloud/local 子打包器、archive verifier 和 release verifier。这样 Windows 的
+CRLF/mixed checkout、`.git/info/attributes` clean/smudge filter 或 `refs/replace` 都不能让实际 ZIP
+偏离 evidence 中的 commit/digest。`EXTENSION_OUT_DIR` 可以位于仓库外，但执行 snapshot 始终留在
+仓库 `build/` 下，以便只从同一安装依赖树解析受控工具依赖；成功或失败后都会删除 snapshot。
+`deploy.sh` 与 `deploy-app-dir.sh` 也从同一 raw-blob materializer 生成上传 archive，而不是执行受
+本地 attributes 影响的 `git archive`。
+
+`deploy-staging.sh` 成功后不会再把封存 checkout 交还给 runtime user。整个 `$DEPLOY_DIR` 在服务
+运行期间保持 root-owned、不可被 group/world 写入，实际 env 单独保持
+`root:<DEPLOY_RUN_USER primary group>`、`0640`；因此 runtime user 不能重命名或替换 serving
+`build` 父目录。下一次 staging 会先用当前 `DEPLOYED_COMMIT` 对应的预安装 root gate 验证冻结
+checkout，并由 root helper 写入持久 maintenance marker 和三个 systemd condition drop-in，停止
+Worker/API/Web，然后才调用 `thaw` 并执行 fetch/build。即使 deploy shell 被 SIGKILL 或主机重启，
+marker 仍会阻止服务从可写 checkout 启动；marker 同时绑定 canonical deploy root 与它的 runtime
+sibling，helper 只授予媒体、备份和 Web cache 的精确 `ReadWritePaths`。成功封存并复验后才删除
+marker。上传、备份、sandbox evidence 与 commit-scoped Next cache 位于默认 sibling
+`DEPLOY_RUNTIME_ROOT=/opt/ss-erp.runtime`；root-owned symlink 保持最小写边界。更新、migration、restart 或 health
+任一步失败时 maintenance 与停服状态保持，需操作员恢复；不要在服务运行时手工调用 `thaw`。
+
 生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical
 release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回
-404，且不会从 unpacked 目录现场重建。`/api/extensions/latest` 返回的每个下载 URL 都包含不可变 version 与
+404，且不会从 unpacked 目录现场重建。clean checkout 在正式打包时记录的 `commitSource=GIT_HEAD`
+可部署到相同 commit 的 `DEPLOYED_COMMIT` 目标；commitSource 只描述取证上下文，不替代 commit
+身份校验。`/api/extensions/latest` 返回的每个下载 URL 都包含不可变 version 与
 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载
 响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名
 或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh` 不接受 `--skip-build`；每个目标

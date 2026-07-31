@@ -27,7 +27,8 @@ assert.match(
 );
 assert.match(composeDeploy, /snapshot-file "\$SOURCE_COMPOSE_FILE" "\$COMPOSE_FILE"/u);
 assert.match(composeDeploy, /--project-directory "\$SOURCE_SNAPSHOT_ROOT"/u);
-assert.match(composeDeploy, /git archive --format=tar -o "\$SOURCE_ARCHIVE" "\$TARGET_GIT_COMMIT"/u);
+assert.match(composeDeploy, /SNAPSHOT_TOOL" materialize/u);
+assert.doesNotMatch(composeDeploy, /git archive/u);
 assert.match(composeDeploy, /\/var\/lib\/ss-erp-deploy-locks/u);
 assert.match(dockerIgnore, /^\.env\*$/mu);
 assert.match(dockerIgnore, /^\*\*\/\.env\*$/mu);
@@ -465,7 +466,7 @@ for (const entrypoint of deployEntrypoints) {
   assert.match(entrypoint.source, /set -euo pipefail/u, `${entrypoint.name} must fail closed`);
   assert.match(
     entrypoint.source,
-    /Worker\/API(?:\/Web)? remain stopped after failed [^\r\n]+operator recovery is required/u,
+    /(?:Worker\/API(?:\/Web)? remain stopped after failed [^\r\n]+|Persistent maintenance remains active after failure; )operator recovery is required/u,
     `${entrypoint.name} must keep provider services stopped after migration or gate failure`,
   );
   assert.doesNotMatch(
@@ -617,8 +618,8 @@ const composeStartIndex = composeDeploy.indexOf(
   'up -d --wait --force-recreate --no-deps api worker web',
 );
 assert.match(composeDeploy, /^set -euo pipefail$/mu);
-assert.match(composeDeploy, /git rev-parse --verify --end-of-options 'HEAD\^\{commit\}'/u);
-assert.match(composeDeploy, /git status --porcelain --untracked-files=all/u);
+assert.match(composeDeploy, /git "\$\{GIT_SAFE_ARGS\[@\]\}" rev-parse --verify --end-of-options 'HEAD\^\{commit\}'/u);
+assert.match(composeDeploy, /git "\$\{GIT_SAFE_ARGS\[@\]\}" status --porcelain --untracked-files=all/u);
 assert.match(composeDeploy, /could not inspect Compose deployment Git worktree/u);
 assert.doesNotMatch(composeDeploy, /CURRENT_WORKTREE_STATUS/u);
 assert.match(composeDeploy, /\.ss-erp-source\.tar/u);

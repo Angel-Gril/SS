@@ -113,3 +113,14 @@ Progress: 3/4 tasks.
   code matrix now separately rejects escaped remote `.mjs`, executable `.cjs`, remote-script SVG,
   CSP host sources and computed imports. This remains rehearsal evidence only: `QA-04`, Phase 5
   `3/4`, and overall `32/37` are unchanged pending complete positive `QA-02` evidence.
+- A release-provenance follow-up closed cross-platform and local-Git substitution gaps before the
+  formal gate. Repository-source package-input digests and deployment archives now read pinned raw
+  Git blobs instead of checkout bytes, ignore `refs/replace`, and remove inherited Git redirects.
+  Regressions cover CRLF/mixed worktrees, local attributes and clean/smudge filters,
+  `assume-unchanged`, `skip-worktree`, untracked or missing files, and non-blob entries. The
+  production download reader also accepts clean-checkout `GIT_HEAD` evidence when its commit exactly
+  matches `DEPLOYED_COMMIT`, while still rejecting external source and the wrong commit. The final
+  nine-step offline rehearsal passed in `991.8s`; cloud/local/source verification was `451/0/0`,
+  `447/2/0` and `446/2/0`, the no-network root lifecycle passed `5/5`, and no `20260731` test schema
+  remained. This is still rehearsal evidence: `QA-04`, Phase 5 `3/4`, and overall `32/37` remain
+  unchanged until complete positive `QA-02`.

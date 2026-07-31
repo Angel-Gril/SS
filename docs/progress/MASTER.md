@@ -427,6 +427,24 @@ candidate after build-UID writes are revoked. This is still offline preparation:
 flag, Provider request, VPS, migration, signature, distribution, pilot, or Ozon action completed,
 so the five open tasks and `32/37` count remain unchanged.
 
+The final release-handoff review then closed the remaining provenance and in-place lifecycle
+blockers without changing a formal task. Repository-source extension packages and all three
+deployment archive paths now read pinned raw Git blobs with inherited `GIT_*` redirects and
+replacement objects disabled; local attributes, clean/smudge filters, checkout EOLs,
+`assume-unchanged`, and `skip-worktree` cannot alter the claimed build bytes. The production reader
+accepts a clean-checkout `GIT_HEAD` candidate only when its commit equals `DEPLOYED_COMMIT`;
+external-source and wrong-commit evidence still fail closed. Staging executes its verifier from the
+preinstalled root gate, leaves the successful checkout root-frozen, and installs only root-owned
+links to external media, backup, sandbox-evidence, and commit-scoped Web-cache directories. Before
+any thaw, a root helper installs exact-path systemd write boundaries, writes a persistent marker
+bound to sibling deploy/runtime roots, and stops all three services; a process kill or reboot cannot
+start them from a writable checkout. Focused package/download/deployment tests, no-network Debian
+root lifecycle `5/5`, and the final nine-step offline rehearsal passed in `991.8s`;
+cloud/local/source verification was `451/0/0`, `447/2/0`, and `446/2/0`, and no `20260731` temporary
+schema remained. No Provider, VPS, deployment, signature, distribution, feature flag, pilot or Ozon
+action ran. `QA-02`, `QA-04`, `REL-03`, `REL-04`, `REL-02` and the overall `32/37` count remain
+unchanged.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and

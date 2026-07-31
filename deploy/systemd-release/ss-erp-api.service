@@ -20,7 +20,7 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/ss-erp/shared/uploads /opt/ss-erp/current/apps/server/public
+ReadWritePaths=/opt/ss-erp/shared/uploads /opt/ss-erp/shared/watermarked /opt/ss-erp/shared/resized /opt/ss-erp/shared/tmp /opt/ss-erp/shared/backups /opt/ss-erp/current/apps/server/public
 
 [Install]
 WantedBy=multi-user.target

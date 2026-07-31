@@ -77,8 +77,19 @@ if [ -n "$SSH_KEY" ]; then
   SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
 fi
 
+while IFS= read -r inherited_git_name; do
+  case "$inherited_git_name" in
+    GIT_*) unset "$inherited_git_name" ;;
+  esac
+done < <(compgen -e)
+if ! REPOSITORY_ROOT="$(git --no-replace-objects rev-parse --show-toplevel 2>/dev/null)" \
+  || [ "$(pwd -P)" != "$(cd -- "$REPOSITORY_ROOT" && pwd -P)" ]; then
+  fail "deploy.sh must run from the exact repository root"
+fi
+GIT_SAFE_ARGS=(--no-replace-objects -c "safe.directory=$REPOSITORY_ROOT")
+
 DEPLOY_REF="${1:-HEAD}"
-if ! COMMIT_HASH="$(git rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
+if ! COMMIT_HASH="$(git "${GIT_SAFE_ARGS[@]}" rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
   fail "deployment ref is not a commit: $DEPLOY_REF"
 fi
 if [[ ! "$COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
@@ -87,13 +98,26 @@ fi
 RELEASE_DIR="$RELEASES_DIR/$COMMIT_HASH"
 TARBALL="build/ss-erp-release-$COMMIT_HASH.tar.gz"
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+if [ -n "$(git "${GIT_SAFE_ARGS[@]}" status --porcelain --untracked-files=no)" ]; then
   fail "tracked working tree has uncommitted changes"
 fi
 
 mkdir -p build
+PACKAGE_SNAPSHOT_ROOT="$(mktemp -d build/tmp-deploy-source-XXXXXXXXXX)"
+cleanup_local_package_snapshot() {
+  if [ -n "${PACKAGE_SNAPSHOT_ROOT:-}" ]; then
+    rm -rf -- "$PACKAGE_SNAPSHOT_ROOT"
+  fi
+}
+trap cleanup_local_package_snapshot EXIT
+PACKAGE_SOURCE_ROOT="$PACKAGE_SNAPSHOT_ROOT/ss-erp"
+PACKAGE_SNAPSHOT_TOOL="$PACKAGE_SNAPSHOT_ROOT/git-commit-tree.mjs"
+mkdir "$PACKAGE_SOURCE_ROOT"
+git "${GIT_SAFE_ARGS[@]}" cat-file blob \
+  "$COMMIT_HASH:scripts/git-commit-tree.mjs" > "$PACKAGE_SNAPSHOT_TOOL"
 log "Packaging $COMMIT_HASH"
-git archive --format=tar.gz --prefix=ss-erp/ -o "$TARBALL" "$COMMIT_HASH"
+node "$PACKAGE_SNAPSHOT_TOOL" materialize "$COMMIT_HASH" "$PACKAGE_SOURCE_ROOT"
+tar -czf "$TARBALL" -C "$PACKAGE_SNAPSHOT_ROOT" ss-erp
 ARCHIVE_SHA256="$(node -e '
 const fs = require("node:fs");
 const crypto = require("node:crypto");
@@ -392,12 +416,13 @@ node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" snapsh
 chown "root:$DEPLOY_RUN_GROUP" "$DEPLOY_ENV_SNAPSHOT_DIR" "$DEPLOY_ENV_SNAPSHOT"
 chmod 0750 "$DEPLOY_ENV_SNAPSHOT_DIR"
 chmod 0640 "$DEPLOY_ENV_SNAPSHOT"
+mkdir -p "$RELEASE_DIR/apps/server/public" "$RELEASE_DIR/tmp"
 chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" create \
   "$RELEASE_DIR" "$DEPLOY_SOURCE_MANIFEST" "$TARGET_GIT_COMMIT"
 chmod 0750 "$DEPLOY_ENV_SNAPSHOT_DIR"
 
-for shared_child in uploads backups; do
+for shared_child in uploads watermarked resized tmp backups; do
   if [ -L "$SHARED_DIR/$shared_child" ]; then
     echo "[deploy] ERROR: shared runtime directory must not be a symlink: $shared_child" >&2
     exit 1
@@ -406,6 +431,32 @@ for shared_child in uploads backups; do
   chown "$DEPLOY_RUN_USER:$DEPLOY_RUN_GROUP" "$SHARED_DIR/$shared_child"
   chmod 0750 "$SHARED_DIR/$shared_child"
 done
+for shared_child in ai-image-sandbox ai-image-translation-sandbox; do
+  if [ -L "$SHARED_DIR/$shared_child" ]; then
+    echo "[deploy] ERROR: shared sandbox directory must not be a symlink: $shared_child" >&2
+    exit 1
+  fi
+  mkdir -p "$SHARED_DIR/$shared_child"
+  chown "$DEPLOY_RUN_USER:$DEPLOY_RUN_GROUP" "$SHARED_DIR/$shared_child"
+  chmod 0700 "$SHARED_DIR/$shared_child"
+done
+if [ -L "$SHARED_DIR/web-cache" ] \
+  || { [ -e "$SHARED_DIR/web-cache" ] && [ ! -d "$SHARED_DIR/web-cache" ]; }; then
+  echo "[deploy] ERROR: shared Web cache root must be one real directory" >&2
+  exit 1
+fi
+mkdir -p "$SHARED_DIR/web-cache"
+chown root:root "$SHARED_DIR/web-cache"
+chmod 0755 "$SHARED_DIR/web-cache"
+if [ -L "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT" ] \
+  || { [ -e "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT" ] \
+    && [ ! -d "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT" ]; }; then
+  echo "[deploy] ERROR: target Web cache must be one real directory" >&2
+  exit 1
+fi
+mkdir -p "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT"
+chown "$DEPLOY_RUN_USER:$DEPLOY_RUN_GROUP" "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT"
+chmod 0750 "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT"
 find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 \
   ! -name "$ENV_FILE_NAME" ! -name '.env.staging' \
   -exec chown -hR -P "$DEPLOY_BUILD_USER:$DEPLOY_BUILD_GROUP" -- {} +
@@ -467,6 +518,11 @@ find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chown root:root -- {
 find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chmod 0644 -- {} +
 
 echo "[deploy] Recording closed post-build source manifest"
+if [ -L "$RELEASE_DIR/apps/web/.next" ] || [ ! -d "$RELEASE_DIR/apps/web/.next" ]; then
+  echo "[deploy] ERROR: Web build output must be one real directory" >&2
+  exit 1
+fi
+rm -rf -- "$RELEASE_DIR/apps/web/.next/cache"
 chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" create-closed \
   "$RELEASE_DIR" "$DEPLOY_BUILD_MANIFEST" "$TARGET_GIT_COMMIT"
@@ -502,7 +558,20 @@ if [ "$ENV_FILE_NAME" != ".env.staging" ]; then
 fi
 install_root_runtime_symlink \
   "$SHARED_DIR/uploads" "$RELEASE_DIR/apps/server/public/uploads"
+install_root_runtime_symlink \
+  "$SHARED_DIR/watermarked" "$RELEASE_DIR/apps/server/public/watermarked"
+install_root_runtime_symlink \
+  "$SHARED_DIR/resized" "$RELEASE_DIR/apps/server/public/resized"
+install_root_runtime_symlink \
+  "$SHARED_DIR/tmp" "$RELEASE_DIR/apps/server/public/tmp"
 install_root_runtime_symlink "$SHARED_DIR/backups" "$RELEASE_DIR/backups"
+install_root_runtime_symlink \
+  "$SHARED_DIR/ai-image-sandbox" "$RELEASE_DIR/tmp/ai-image-sandbox"
+install_root_runtime_symlink \
+  "$SHARED_DIR/ai-image-translation-sandbox" \
+  "$RELEASE_DIR/tmp/ai-image-translation-sandbox"
+install_root_runtime_symlink \
+  "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT" "$RELEASE_DIR/apps/web/.next/cache"
 bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
   verify "$TARGET_GIT_COMMIT" "$RELEASE_DIR"
 
@@ -565,11 +634,10 @@ if [ -L "$WEB_NEXT_DIR" ] || [ ! -d "$WEB_NEXT_DIR" ] \
   echo "[deploy] ERROR: sealed Web build output must be one real directory" >&2
   exit 1
 fi
-rm -rf -- "$WEB_CACHE_DIR"
-install -d -o "$DEPLOY_RUN_USER" -g "$DEPLOY_RUN_GROUP" -m 0750 "$WEB_CACHE_DIR"
-if [ -L "$WEB_CACHE_DIR" ] \
-  || [ "$(stat -c '%u:%g:%a' "$WEB_CACHE_DIR")" != "$DEPLOY_RUN_UID:$DEPLOY_RUN_GID:750" ]; then
-  echo "[deploy] ERROR: runtime Web cache could not be created safely" >&2
+if [ ! -L "$WEB_CACHE_DIR" ] \
+  || [ "$(readlink -f -- "$WEB_CACHE_DIR")" \
+    != "$SHARED_DIR/web-cache/$TARGET_GIT_COMMIT" ]; then
+  echo "[deploy] ERROR: runtime Web cache link is not bound to shared storage" >&2
   exit 1
 fi
 

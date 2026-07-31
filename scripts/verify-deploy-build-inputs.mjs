@@ -2,6 +2,11 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
+import {
+  gitCommitTreeEnvironment,
+  gitCommitTreeSafeDirectoryArgs,
+  verifyGitCommitWorktree,
+} from './git-commit-tree.mjs';
 
 const FULL_GIT_OID = /^[a-f0-9]{40}$/u;
 const BUILD_PATHS = [
@@ -11,7 +16,15 @@ const BUILD_PATHS = [
   'extensions/ss-erp',
   'scripts',
   'docker',
+  '.gitattributes',
+  '.gitignore',
+  '.npmrc',
   '.env*',
+  'docker-compose*.yml',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'tsconfig.base.json',
   ':(exclude)apps/server/node_modules/**',
   ':(exclude)apps/server/dist/**',
   ':(exclude)apps/server/coverage/**',
@@ -34,16 +47,12 @@ function fail(message) {
 }
 
 function runGit(args, encoding = 'utf8') {
-  const result = spawnSync('git', ['-c', `safe.directory=${process.cwd()}`, ...args], {
+  const result = spawnSync('git', [
+    ...gitCommitTreeSafeDirectoryArgs(process.cwd()),
+    ...args,
+  ], {
     encoding,
-    env: {
-      PATH: process.env.PATH || '',
-      HOME: process.env.HOME || '',
-      LANG: 'C.UTF-8',
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-      GIT_OPTIONAL_LOCKS: '0',
-    },
+    env: gitCommitTreeEnvironment(),
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true,
   });
@@ -90,7 +99,8 @@ function main() {
       .join(', ');
     fail(`ignored deployment build inputs are forbidden: ${paths}`);
   }
-  console.log('PASS deployment build inputs are fully Git-bound');
+  verifyGitCommitWorktree({ repositoryRoot, commit: expectedCommit });
+  console.log('PASS deployment build inputs exactly match raw Git blobs');
 }
 
 try {

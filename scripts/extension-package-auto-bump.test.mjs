@@ -11,9 +11,13 @@ import {
   resolveExtensionReleaseProvenance,
 } from './extension-release-contract.mjs';
 import {
+  EXTENSION_RELEASE_CONTROLLED_INPUTS,
   extensionReleaseGitEnvironment,
   extensionReleaseGitHead,
   extensionReleaseGitSafeDirectoryArgs,
+  extensionReleasePackageInputsSha256,
+  extensionReleaseScopedGitStatus,
+  materializeExtensionReleaseRepositorySnapshot,
 } from './extension-release-inputs.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-erp-extension-bump-'));
@@ -45,7 +49,7 @@ assert.match(
 assert.equal(
   (releaseInputsSource.match(/\.\.\.extensionReleaseGitSafeDirectoryArgs\(repoRoot\)/gu) || [])
     .length,
-  3,
+  5,
   'all release Git reads must trust only the exact validated repository path',
 );
 assert.equal(
@@ -69,6 +73,21 @@ for (const source of [packageReleaseSource, verifyReleaseSource]) {
     'formal packaging and verification must share the fail-closed Git HEAD resolver',
   );
 }
+assert.match(
+  packageReleaseSource,
+  /materializeExtensionReleaseRepositorySnapshot/u,
+  'formal repository releases must build from a Git-blob source snapshot',
+);
+assert.match(
+  packageReleaseSource,
+  /path\.join\(packagingRepoRoot, 'scripts\/package-extension-package\.mjs'\)/u,
+  'formal repository releases must execute the snapshotted packaging entrypoint',
+);
+assert.match(
+  packageReleaseSource,
+  /repositorySnapshotParent = path\.join\(repoRoot, 'build'\)/u,
+  'the Git snapshot must stay beneath the repository so snapshotted tools resolve dependencies',
+);
 assert.match(
   releaseInputsSource,
   /lstatSync\(gitMetadataPath, \{ throwIfNoEntry: false \}\)/u,
@@ -116,6 +135,7 @@ assert.equal(
 assert.deepEqual(
   extensionReleaseGitSafeDirectoryArgs(directCheckout),
   [
+    '--no-replace-objects',
     '-c',
     `safe.directory=${process.platform === 'win32'
       ? path.resolve(directCheckout).split(path.sep).join('/')
@@ -133,6 +153,160 @@ assert.deepEqual(
   { PATH: '/fixture/bin' },
   'release Git reads must remove every inherited GIT_* redirect and config variable',
 );
+
+const blobDigestCheckout = path.join(root, 'blob-digest-checkout');
+const blobDigestSource = path.join(blobDigestCheckout, 'extensions', 'fixture');
+const emptyGitTemplate = path.join(root, 'empty-git-template');
+const emptyGitHooks = path.join(root, 'empty-git-hooks');
+fs.mkdirSync(emptyGitTemplate);
+fs.mkdirSync(emptyGitHooks);
+fs.mkdirSync(blobDigestSource, { recursive: true });
+fs.writeFileSync(path.join(blobDigestCheckout, '.gitattributes'), '* text eol=lf\n');
+fs.writeFileSync(path.join(blobDigestSource, 'main.js'), 'export const fixture = true;\n');
+const blobDigestControlledInputs = [...EXTENSION_RELEASE_CONTROLLED_INPUTS];
+for (const relative of blobDigestControlledInputs) {
+  const file = path.join(blobDigestCheckout, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `controlled ${relative}\n`);
+}
+function fixtureGit(args) {
+  const result = spawnSync('git', args, {
+    cwd: blobDigestCheckout,
+    encoding: 'utf8',
+    env: extensionReleaseGitEnvironment(),
+  });
+  assert.equal(result.status, 0, `fixture Git failed: git ${args.join(' ')}\n${result.stderr}`);
+  return result;
+}
+fixtureGit([
+  'init',
+  '--quiet',
+  '--object-format=sha1',
+  `--template=${emptyGitTemplate}`,
+]);
+fixtureGit(['config', 'user.email', 'extension-release-test@example.invalid']);
+fixtureGit(['config', 'user.name', 'Extension Release Test']);
+fixtureGit(['config', 'commit.gpgsign', 'false']);
+fixtureGit(['config', 'core.hooksPath', emptyGitHooks]);
+fixtureGit(['add', '--all']);
+fixtureGit(['commit', '--quiet', '--no-gpg-sign', '-m', 'fixture']);
+const blobDigest = extensionReleasePackageInputsSha256({
+  repoRoot: blobDigestCheckout,
+  sourceDir: blobDigestSource,
+});
+const originalBlobDigestCommit = fixtureGit(['rev-parse', 'HEAD']).stdout.trim();
+fs.writeFileSync(path.join(blobDigestSource, 'main.js'), 'export const replacement = true;\n');
+fixtureGit(['add', '--all']);
+fixtureGit(['commit', '--quiet', '--no-gpg-sign', '-m', 'replacement fixture']);
+const replacementBlobDigestCommit = fixtureGit(['rev-parse', 'HEAD']).stdout.trim();
+fixtureGit(['replace', originalBlobDigestCommit, replacementBlobDigestCommit]);
+fixtureGit(['reset', '--hard', originalBlobDigestCommit]);
+assert.equal(
+  extensionReleasePackageInputsSha256({
+    repoRoot: blobDigestCheckout,
+    sourceDir: blobDigestSource,
+  }),
+  blobDigest,
+  'repository provenance must ignore local Git replacement objects',
+);
+assert.notEqual(
+  extensionReleaseScopedGitStatus({
+    repoRoot: blobDigestCheckout,
+    sourceDir: blobDigestSource,
+  }),
+  '',
+  'clean-state verification must expose a worktree materialized from replacement objects',
+);
+fixtureGit(['replace', '-d', originalBlobDigestCommit]);
+fixtureGit(['reset', '--hard', originalBlobDigestCommit]);
+const filterAttributes = path.join(blobDigestCheckout, '.git', 'info', 'attributes');
+fs.mkdirSync(path.dirname(filterAttributes), { recursive: true });
+fs.writeFileSync(filterAttributes, 'extensions/fixture/main.js filter=release-snapshot\n');
+fixtureGit([
+  'config',
+  'filter.release-snapshot.clean',
+  'git show HEAD:extensions/fixture/main.js',
+]);
+fixtureGit([
+  'config',
+  'filter.release-snapshot.smudge',
+  "printf 'export const smudged = true;\\n'",
+]);
+fixtureGit(['config', 'filter.release-snapshot.required', 'true']);
+fs.rmSync(path.join(blobDigestSource, 'main.js'));
+fixtureGit(['checkout', '--force', '--', 'extensions/fixture/main.js']);
+assert.equal(
+  fs.readFileSync(path.join(blobDigestSource, 'main.js'), 'utf8'),
+  'export const smudged = true;\n',
+  'the fixture must materialize bytes that differ from the committed blob',
+);
+assert.equal(
+  fixtureGit(['status', '--porcelain', '--', 'extensions/fixture/main.js']).stdout,
+  '',
+  'the clean filter must hide the smudged worktree bytes from ordinary Git status',
+);
+const repositorySnapshotRoot = fs.mkdtempSync(path.join(root, 'blob-snapshot-'));
+const repositorySnapshot = materializeExtensionReleaseRepositorySnapshot({
+  repoRoot: blobDigestCheckout,
+  sourceDir: blobDigestSource,
+  outputRoot: repositorySnapshotRoot,
+});
+assert.equal(repositorySnapshot.gitCommit, originalBlobDigestCommit);
+assert.equal(
+  fs.readFileSync(path.join(repositorySnapshot.sourceDir, 'main.js'), 'utf8'),
+  'export const fixture = true;\n',
+  'the formal package snapshot must use committed blob bytes instead of smudged worktree bytes',
+);
+fs.rmSync(repositorySnapshotRoot, { recursive: true, force: true });
+fs.rmSync(filterAttributes);
+fixtureGit(['config', '--remove-section', 'filter.release-snapshot']);
+fixtureGit(['checkout', '--force', '--', 'extensions/fixture/main.js']);
+fs.writeFileSync(path.join(blobDigestSource, 'main.js'), 'export const fixture = true;\r\n');
+fs.writeFileSync(
+  path.join(blobDigestCheckout, blobDigestControlledInputs[0]),
+  `controlled ${blobDigestControlledInputs[0]}\r\n`,
+);
+assert.equal(
+  extensionReleasePackageInputsSha256({
+    repoRoot: blobDigestCheckout,
+    sourceDir: blobDigestSource,
+  }),
+  blobDigest,
+  'repository input provenance must hash Git blob bytes instead of checkout line endings',
+);
+fs.writeFileSync(path.join(blobDigestSource, 'untracked.js'), 'untracked\n');
+assert.throws(
+  () => extensionReleasePackageInputsSha256({
+    repoRoot: blobDigestCheckout,
+    sourceDir: blobDigestSource,
+  }),
+  /do not exactly match tracked Git HEAD files/u,
+  'repository input provenance must reject untracked source files',
+);
+fs.rmSync(path.join(blobDigestSource, 'untracked.js'));
+fs.rmSync(path.join(blobDigestSource, 'main.js'));
+assert.throws(
+  () => extensionReleasePackageInputsSha256({
+    repoRoot: blobDigestCheckout,
+    sourceDir: blobDigestSource,
+  }),
+  /do not exactly match tracked Git HEAD files/u,
+  'repository input provenance must reject missing tracked source files',
+);
+fs.writeFileSync(path.join(blobDigestSource, 'main.js'), 'export const fixture = true;\r\n');
+if (process.platform !== 'win32') {
+  fs.symlinkSync('main.js', path.join(blobDigestSource, 'linked.js'));
+  fixtureGit(['add', 'extensions/fixture/linked.js']);
+  fixtureGit(['commit', '--quiet', '--no-gpg-sign', '-m', 'non-blob fixture']);
+  assert.throws(
+    () => extensionReleasePackageInputsSha256({
+      repoRoot: blobDigestCheckout,
+      sourceDir: blobDigestSource,
+    }),
+    /must be a regular file/u,
+    'repository input provenance must reject non-regular Git inputs',
+  );
+}
 if (process.platform !== 'win32') {
   const danglingMetadataCheckout = path.join(root, 'dangling-metadata-checkout');
   fs.mkdirSync(danglingMetadataCheckout, { recursive: true });
@@ -910,9 +1084,15 @@ const releaseDeployer = fs.readFileSync('scripts/deploy.sh', 'utf8');
 assert.match(releaseDeployer, /DEPLOY_REF="\$\{1:-HEAD\}"/u);
 assert.match(
   releaseDeployer,
-  /git rev-parse --verify --end-of-options "\$\{DEPLOY_REF\}\^\{commit\}"/u,
-  'release deploy must resolve an explicit ref to a commit before creating its archive',
+  /git "\$\{GIT_SAFE_ARGS\[@\]\}" rev-parse --verify --end-of-options "\$\{DEPLOY_REF\}\^\{commit\}"/u,
+  'release deploy must resolve an explicit ref to a commit before creating its raw snapshot',
 );
+assert.match(
+  releaseDeployer,
+  /PACKAGE_SNAPSHOT_TOOL" materialize/u,
+  'release deploy must materialize its archive from raw Git blobs',
+);
+assert.doesNotMatch(releaseDeployer, /git archive/u);
 assert.match(
   releaseDeployer,
   /\[\[ ! "\$COMMIT_HASH" =~ \^\[0-9a-f\]\{40\}\$ \]\]/u,

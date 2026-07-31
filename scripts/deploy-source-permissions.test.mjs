@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  chownSync,
   closeSync,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -34,7 +36,7 @@ function run(command, args, options = {}) {
 test('root gate install and deployment source ownership are fail-closed', {
   skip: !linuxRoot,
 }, () => {
-  const root = mkdtempSync('/root/ss-erp-deploy-source-test-');
+  const root = mkdtempSync('/opt/ss-erp-deploy-source-test-');
   const source = join(root, 'source');
   const scripts = join(source, 'scripts');
   const gateRoot = join(root, 'gate');
@@ -43,8 +45,11 @@ test('root gate install and deployment source ownership are fail-closed', {
     'deploy-backup-attestation.mjs',
     'deploy-database-identity.mjs',
     'deploy-environment.mjs',
+    'deploy-maintenance-gate.sh',
     'deploy-source-manifest.mjs',
     'freeze-deploy-source.sh',
+    'git-commit-tree.mjs',
+    'verify-deploy-build-inputs.mjs',
     'verify-deploy-backup.sh',
   ];
   try {
@@ -85,7 +90,10 @@ test('root gate install and deployment source ownership are fail-closed', {
 
     const release = join(root, 'release');
     mkdirSync(join(release, 'apps', 'server'), { recursive: true });
+    mkdirSync(join(release, 'apps', 'web', '.next'), { recursive: true });
+    mkdirSync(join(release, 'build', 'extensions'), { recursive: true });
     writeFileSync(join(release, 'apps', 'server', 'mutable.js'), 'data\n');
+    writeFileSync(join(release, 'build', 'extensions', 'release.zip'), 'sealed release\n');
     writeFileSync(join(release, 'DEPLOYED_COMMIT'), `${commit}\n`);
     writeFileSync(join(release, '.env.staging'), 'DATABASE_URL=redacted\n');
     const manifestTool = join(process.cwd(), 'scripts', 'deploy-source-manifest.mjs');
@@ -133,6 +141,7 @@ test('root gate install and deployment source ownership are fail-closed', {
     result = run('bash', [freeze, 'verify', commit, release]);
     assert.equal(result.status, 0, result.stderr);
 
+    const nobody = run('id', ['-un', '65534']);
     const mutable = join(release, 'apps', 'server', 'mutable.js');
     const sealed = join(root, 'sealed-release');
     const oldDescriptor = openSync(mutable, 'r+');
@@ -147,6 +156,44 @@ test('root gate install and deployment source ownership are fail-closed', {
       assert.equal(readFileSync(join(sealed, 'apps', 'server', 'mutable.js'), 'utf8'), 'data\n');
       result = run('node', [manifestTool, 'verify', sealed, closedManifest, commit]);
       assert.equal(result.status, 0, result.stderr);
+      if (nobody.status === 0) {
+        const nobodyName = nobody.stdout.trim();
+        const nobodyGroup = run('id', ['-g', nobodyName]);
+        assert.equal(nobodyGroup.status, 0, nobodyGroup.stderr);
+        chmodSync(root, 0o755);
+        chownSync(join(sealed, '.env.staging'), 0, Number(nobodyGroup.stdout.trim()));
+        chmodSync(join(sealed, '.env.staging'), 0o640);
+        result = run('bash', [freeze, 'verify', commit, sealed]);
+        assert.equal(result.status, 0, result.stderr);
+        result = run('runuser', [
+          '-u', nobodyName, '--', 'test', '-r', join(sealed, '.env.staging'),
+        ]);
+        assert.equal(result.status, 0, 'the runtime group must retain read access to the frozen env');
+        result = run('runuser', [
+          '-u', nobodyName, '--', 'mv', join(sealed, 'build'), join(sealed, 'build-replaced'),
+        ]);
+        assert.notEqual(result.status, 0, 'the runtime user must not replace the sealed build parent');
+        assert.equal(lstatSync(join(sealed, 'build', 'extensions')).isDirectory(), true);
+
+        const inlineCache = join(sealed, 'apps', 'web', '.next', 'cache');
+        mkdirSync(inlineCache, { mode: 0o750 });
+        chownSync(inlineCache, 65534, Number(nobodyGroup.stdout.trim()));
+        writeFileSync(join(inlineCache, 'runtime.bin'), 'cache\n');
+        chownSync(join(inlineCache, 'runtime.bin'), 65534, Number(nobodyGroup.stdout.trim()));
+        result = run('bash', [freeze, 'verify', commit, sealed]);
+        assert.equal(
+          result.status,
+          0,
+          'an exact disposable runtime cache must not invalidate the frozen source',
+        );
+        rmSync(inlineCache, { recursive: true });
+        const externalCache = join(root, 'external-web-cache');
+        mkdirSync(externalCache, { mode: 0o750 });
+        chownSync(externalCache, 65534, Number(nobodyGroup.stdout.trim()));
+        symlinkSync(externalCache, inlineCache, 'dir');
+        result = run('bash', [freeze, 'verify', commit, sealed]);
+        assert.equal(result.status, 0, 'a root-installed external Web cache link must remain valid');
+      }
     } finally {
       closeSync(oldDescriptor);
     }
@@ -159,7 +206,6 @@ test('root gate install and deployment source ownership are fail-closed', {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /symlink escapes/u);
 
-    const nobody = run('id', ['-un', '65534']);
     if (nobody.status === 0) {
       result = run('bash', [freeze, 'thaw', commit, release, nobody.stdout.trim(), '.env.staging']);
       assert.equal(result.status, 0, result.stderr);
@@ -172,6 +218,86 @@ test('root gate install and deployment source ownership are fail-closed', {
       assert.equal(result.status, 0, result.stderr);
     }
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('persistent maintenance gate survives the deploy process and is idempotent', {
+  skip: !linuxRoot || !existsSync('/.dockerenv'),
+}, () => {
+  const root = mkdtempSync('/opt/ss-erp-maintenance-test-');
+  const bin = join(root, 'bin');
+  const log = join(root, 'systemctl.log');
+  const suffix = String(process.pid);
+  const services = [
+    `ss-erp-test-${suffix}-worker.service`,
+    `ss-erp-test-${suffix}-api.service`,
+    `ss-erp-test-${suffix}-web.service`,
+  ];
+  const runtimeRoot = join(root, 'runtime-root');
+  const deployRoot = join(root, 'deploy-root');
+  const marker = '/var/lib/ss-erp-deploy-maintenance/in-place-staging';
+  const helper = join(process.cwd(), 'scripts', 'deploy-maintenance-gate.sh');
+  const environment = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    SYSTEMCTL_LOG: log,
+  };
+  try {
+    mkdirSync(bin);
+    mkdirSync(deployRoot);
+    writeFileSync(join(bin, 'systemctl'), [
+      '#!/bin/sh',
+      'printf "%s\\n" "$*" >> "$SYSTEMCTL_LOG"',
+      '[ "$1" = "is-active" ] && exit 3',
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o700 });
+    let result = run('bash', [
+      helper, 'enter', ...services, join(root, 'not-a-sibling', 'runtime'), deployRoot,
+    ], { env: environment });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /canonical sibling/u);
+    for (const mode of ['enter', 'enter', 'verify']) {
+      result = run('bash', [
+        helper, mode, ...services, runtimeRoot, deployRoot,
+      ], { env: environment });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.equal(readFileSync(marker, 'utf8'), [
+      'schemaVersion=1',
+      `worker=${services[0]}`,
+      `api=${services[1]}`,
+      `web=${services[2]}`,
+      `runtimeRoot=${runtimeRoot}`,
+      `deployRoot=${deployRoot}`,
+      '',
+    ].join('\n'));
+    const applicationWritablePaths = [
+      'uploads', 'watermarked', 'resized', 'public-tmp', 'backups',
+    ].map((name) => `${runtimeRoot}/${name}`).join(' ');
+    for (const [service, writablePath] of [
+      [services[0], applicationWritablePaths],
+      [services[1], applicationWritablePaths],
+      [services[2], `${runtimeRoot}/web-cache`],
+    ]) {
+      assert.equal(
+        readFileSync(`/etc/systemd/system/${service}.d/10-ss-erp-deploy-maintenance.conf`, 'utf8'),
+        '[Unit]\nConditionPathExists=!/var/lib/ss-erp-deploy-maintenance/in-place-staging\n\n'
+          + `[Service]\nReadWritePaths=${writablePath}\n`,
+      );
+    }
+    result = run('bash', [
+      helper, 'leave', ...services, runtimeRoot, deployRoot,
+    ], { env: environment });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(marker), false);
+    assert.match(readFileSync(log, 'utf8'), /stop .*worker\.service .*api\.service .*web\.service/u);
+  } finally {
+    rmSync(marker, { force: true });
+    for (const service of services) {
+      rmSync(`/etc/systemd/system/${service}.d`, { recursive: true, force: true });
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });

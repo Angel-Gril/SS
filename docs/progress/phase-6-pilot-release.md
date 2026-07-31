@@ -132,3 +132,16 @@ Progress: 0/3 tasks.
   sealed helper to compare the four activated files byte-for-byte with the immutable input before
   migration or switching. Focused Windows and no-network Debian tests, full `preflight --build`,
   and the `817.7s` QA-04 offline aggregate passed. No deployment or external release action ran.
+- Final handoff review closed the remaining provenance and in-place lifecycle blockers. Formal
+  packages and deployment archives now materialize the exact raw Git tree, so checkout EOLs, local
+  attributes, replacement refs, filters and index visibility flags cannot change bytes while
+  retaining the claimed commit. A matching clean-checkout `GIT_HEAD` candidate is valid on a
+  deployment carrying the same `DEPLOYED_COMMIT`. The in-place path keeps the entire serving tree
+  root-frozen and installs only root-owned links to external runtime storage. Its trusted helper
+  persists a deploy/runtime-root-bound maintenance marker and exact-path systemd drop-ins before
+  stopping services and thawing, so SIGKILL or reboot cannot restart from writable source; the
+  marker is removed only after reseal, runtime-link verification, migration and dark checks. The
+  runtime env remains `root:<runtime-group>` mode `0640`. Focused package/download/deployment tests,
+  no-network Debian lifecycle `5/5`, and the final `991.8s` QA-04 offline rehearsal passed. This made
+  no deployment, signature, distribution, flag, Provider, pilot or Ozon change; Phase 6 stays `0/3`
+  and overall progress stays `32/37`.

@@ -81,7 +81,7 @@ not retained in evidence. The deployment re-hashes and gunzips those exact bytes
 first rollout of this gate, copy or check out `backup-db.sh`, `verify-backup-restore.sh`,
 `verify-deploy-backup.sh`, `deploy-backup-attestation.mjs`, and `deploy-database-identity.mjs` from
 the target revision into a private operator directory; do not use an older deployed backup script.
-Archive deploys install the seven runtime gate files plus the commit marker automatically. A Git
+Archive deploys install the ten runtime gate files plus the commit marker automatically. A Git
 checkout deployment must first follow the root-owned gate archive/install procedure in
 `docs/deployment.md`; `deploy-staging.sh` fails before dependencies or service quiescence when that
 exact target gate is absent. It always rebuilds the target and no longer supports `--skip-build`.
