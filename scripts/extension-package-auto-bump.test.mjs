@@ -10,7 +10,11 @@ import {
   readExpectedReleaseOrigins,
   resolveExtensionReleaseProvenance,
 } from './extension-release-contract.mjs';
-import { extensionReleaseGitHead } from './extension-release-inputs.mjs';
+import {
+  extensionReleaseGitEnvironment,
+  extensionReleaseGitHead,
+  extensionReleaseGitSafeDirectoryArgs,
+} from './extension-release-inputs.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-erp-extension-bump-'));
 const sourceDir = path.join(root, 'source');
@@ -37,6 +41,12 @@ assert.match(
   releaseInputsSource,
   /'ls-files',[\s\S]*'--ignored',[\s\S]*'--exclude-standard'/u,
   'repository release provenance must reject ignored source files that packaging would copy',
+);
+assert.equal(
+  (releaseInputsSource.match(/\.\.\.extensionReleaseGitSafeDirectoryArgs\(repoRoot\)/gu) || [])
+    .length,
+  3,
+  'all release Git reads must trust only the exact validated repository path',
 );
 assert.equal(
   repositoryManifest.version,
@@ -102,6 +112,26 @@ assert.equal(
   }),
   '2'.repeat(40),
   'a direct checkout must accept one canonical full Git HEAD',
+);
+assert.deepEqual(
+  extensionReleaseGitSafeDirectoryArgs(directCheckout),
+  [
+    '-c',
+    `safe.directory=${process.platform === 'win32'
+      ? path.resolve(directCheckout).split(path.sep).join('/')
+      : path.resolve(directCheckout)}`,
+  ],
+  'release Git reads must not mutate global safe.directory configuration',
+);
+assert.deepEqual(
+  extensionReleaseGitEnvironment({
+    PATH: '/fixture/bin',
+    GIT_DIR: '/attacker/metadata',
+    git_work_tree: '/attacker/tree',
+    GIT_CONFIG_COUNT: '1',
+  }),
+  { PATH: '/fixture/bin' },
+  'release Git reads must remove every inherited GIT_* redirect and config variable',
 );
 if (process.platform !== 'win32') {
   const danglingMetadataCheckout = path.join(root, 'dangling-metadata-checkout');
@@ -493,6 +523,137 @@ const verifyRelease = (origins = expectedOrigins) => spawnSync(
 const verification = verifyRelease();
 assert.equal(verification.status, 0, `${verification.stdout}\n${verification.stderr}`);
 
+function stageRelease(
+  outputDir,
+  targetGitCommit = evidence.gitCommit,
+  { verifyOnly = false } = {},
+) {
+  const options = [
+    'scripts/stage-extension-release.mjs',
+    '--build-root', outDir,
+    verifyOnly ? '--verify-output-dir' : '--output-dir', outputDir,
+    '--target-git-commit', targetGitCommit,
+    '--expected-web-origin', expectedOrigins.web,
+    '--expected-admin-origin', expectedOrigins.admin,
+    '--expected-api-origin', expectedOrigins.api,
+    '--expected-local-origin', expectedOrigins.local,
+  ];
+  const environment = {
+    ...process.env,
+    EXTENSION_SOURCE_DIR: sourceDir,
+    EXTENSION_RELEASE_TEST_ALLOW_EXTERNAL_SOURCE: '1',
+  };
+  if (process.platform === 'win32') {
+    return spawnSync(process.execPath, options, {
+      cwd: process.cwd(), encoding: 'utf8', env: environment,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  }
+  const previousUmask = process.umask(0o077);
+  try {
+    return spawnSync(process.execPath, options, {
+      cwd: process.cwd(), encoding: 'utf8', env: environment,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } finally {
+    process.umask(previousUmask);
+  }
+}
+
+const stagedRoot = path.join(root, 'staged-release');
+const stageResult = stageRelease(stagedRoot);
+assert.equal(stageResult.status, 0, `${stageResult.stdout}\n${stageResult.stderr}`);
+assert.deepEqual(fs.readdirSync(stagedRoot).sort(), [
+  path.basename(checksumPath),
+  path.basename(evidencePath),
+  'ss-erp-cloud-1.0.265.zip',
+  'ss-erp-local-1.0.265.zip',
+].sort(), 'staging must copy only the exact canonical four-file release set');
+if (process.platform !== 'win32') {
+  assert.equal(
+    fs.statSync(stagedRoot).mode & 0o777,
+    0o755,
+    'the sealed runtime must be able to traverse the staged release directory',
+  );
+}
+for (const filename of fs.readdirSync(stagedRoot)) {
+  if (process.platform !== 'win32') {
+    assert.equal(
+      fs.statSync(path.join(stagedRoot, filename)).mode & 0o777,
+      0o644,
+      `staged runtime artifact ${filename} must remain readable under umask 077`,
+    );
+  }
+  assert.deepEqual(
+    fs.readFileSync(path.join(stagedRoot, filename)),
+    fs.readFileSync(path.join(outDir, filename)),
+    `staging must preserve exact bytes for ${filename}`,
+  );
+}
+const exactStageVerification = stageRelease(
+  stagedRoot,
+  evidence.gitCommit,
+  { verifyOnly: true },
+);
+assert.equal(
+  exactStageVerification.status,
+  0,
+  `${exactStageVerification.stdout}\n${exactStageVerification.stderr}`,
+);
+const stagedCloudPath = path.join(stagedRoot, 'ss-erp-cloud-1.0.265.zip');
+fs.appendFileSync(stagedCloudPath, 'post-stage replacement\n');
+const replacedStageVerification = stageRelease(
+  stagedRoot,
+  evidence.gitCommit,
+  { verifyOnly: true },
+);
+assert.notEqual(
+  replacedStageVerification.status,
+  0,
+  'sealed verification must reject a build-user replacement after staging',
+);
+assert.match(
+  `${replacedStageVerification.stdout}\n${replacedStageVerification.stderr}`,
+  /does not byte-match the root release candidate/u,
+);
+fs.copyFileSync(path.join(outDir, 'ss-erp-cloud-1.0.265.zip'), stagedCloudPath);
+if (process.platform !== 'win32') {
+  const nobody = spawnSync('id', ['-u', 'nobody'], { encoding: 'utf8' });
+  if (nobody.status === 0) {
+    fs.chmodSync(root, 0o755);
+    for (const filename of fs.readdirSync(stagedRoot)) {
+      const readable = spawnSync(
+        'runuser',
+        ['-u', 'nobody', '--', 'test', '-r', path.join(stagedRoot, filename)],
+        { encoding: 'utf8' },
+      );
+      assert.equal(readable.status, 0, `runtime user must read staged ${filename}`);
+    }
+  }
+}
+
+const markerPath = path.resolve('DEPLOYED_COMMIT');
+const markerBefore = fs.existsSync(markerPath) ? fs.readFileSync(markerPath) : null;
+try {
+  fs.writeFileSync(markerPath, `${evidence.gitCommit}\n`, { mode: 0o644 });
+  const deployedMarkerStage = stageRelease(path.join(root, 'deployed-marker-stage'));
+  assert.equal(
+    deployedMarkerStage.status,
+    0,
+    `${deployedMarkerStage.stdout}\n${deployedMarkerStage.stderr}`,
+  );
+} finally {
+  if (markerBefore === null) fs.rmSync(markerPath, { force: true });
+  else fs.writeFileSync(markerPath, markerBefore);
+}
+
+const wrongCommitStage = stageRelease(path.join(root, 'wrong-commit-stage'), 'f'.repeat(40));
+assert.notEqual(wrongCommitStage.status, 0, 'staging must reject a release for another commit');
+assert.match(
+  `${wrongCommitStage.stdout}\n${wrongCommitStage.stderr}`,
+  /no approved-source extension release matches the active commit|exactly one matching/u,
+);
+
 const sourceManifestBeforeDrift = fs.readFileSync(sourceManifestPath);
 fs.appendFileSync(sourceManifestPath, '\n');
 const sourceDriftVerification = verifyRelease();
@@ -731,19 +892,18 @@ for (const file of [
   const deployer = fs.readFileSync(file, 'utf8');
   assert.match(
     deployer,
-    /pnpm package:extension(?:\s|"|$)/u,
-    `${file} must use the coordinated extension release command`,
+    /stage-extension-release\.mjs/u,
+    `${file} must stage the prebuilt coordinated extension release`,
   );
   assert.doesNotMatch(
     deployer,
-    /package:extension:(?:cloud|local)/u,
-    `${file} must not package release targets independently`,
+    /pnpm package:extension/u,
+    `${file} must not replace the REL-03 candidate during REL-04 deployment`,
   );
-  assert.equal(
-    (deployer.match(/EXTENSION_PREVIOUS_BUILD_ROOT=/gu) || []).length,
-    1,
-    `${file} must pass the previous release once to the coordinator`,
-  );
+  assert.match(deployer, /EXTENSION_RELEASE_ROOT/u);
+  assert.match(deployer, /--verify-output-dir/u);
+  assert.match(deployer, /Revoking build-user writes to the staged extension release/u);
+  assert.doesNotMatch(deployer, /EXTENSION_PREVIOUS_BUILD_ROOT/u);
 }
 
 const releaseDeployer = fs.readFileSync('scripts/deploy.sh', 'utf8');

@@ -17,6 +17,7 @@ set -euo pipefail
 #   DEPLOY_RUN_USER=deploy
 #   DEPLOY_BUILD_USER=ss-erp-build
 #   DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
+#   EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<commit>
 #   API_SERVICE=ss-erp-api
 #   WEB_SERVICE=ss-erp-web
 #   WORKER_SERVICE=ss-erp-worker
@@ -39,6 +40,7 @@ ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:-/usr/local/lib/ss-erp-deploy-gate}"
+EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
 API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
@@ -62,6 +64,9 @@ if [[ ! "$MIGRATION_TIMEOUT" =~ ^[1-9][0-9]*[smh]$ ]]; then
 fi
 if [[ ! "$ENV_FILE_NAME" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
   fail "ENV_FILE_NAME must be one dot-prefixed basename"
+fi
+if [[ ! "$EXTENSION_RELEASE_ROOT" =~ ^/ ]]; then
+  fail "EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory"
 fi
 if [[ ! "$KEEP_RELEASES" =~ ^[1-9][0-9]{0,2}$ ]] || [ "$KEEP_RELEASES" -gt 100 ]; then
   fail "KEEP_RELEASES must be an integer from 1 through 100"
@@ -116,7 +121,7 @@ if ! scp "${SSH_ARGS[@]}" "$TARBALL" \
 fi
 
 log "Deploying release"
-REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") bash -s"
+REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") EXTENSION_RELEASE_ROOT=$(shell_escape "$EXTENSION_RELEASE_ROOT") bash -s"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 umask 077
@@ -139,6 +144,7 @@ readonly REQUESTED_MIGRATION_TIMEOUT="${REQUESTED_MIGRATION_TIMEOUT:?}"
 readonly DEPLOY_RUN_USER="${DEPLOY_RUN_USER:?}"
 readonly DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:?}"
 readonly DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:?}"
+readonly EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:?}"
 readonly TARBALL="$UPLOAD_DIR/archive.tar.gz"
 DEPLOY_ENV_SNAPSHOT_DIR=""
 DEPLOY_ENV_SNAPSHOT=""
@@ -214,7 +220,7 @@ run_in_dir() {
     echo "[deploy] ERROR: deployment runtime user is missing: $DEPLOY_RUN_USER" >&2
     exit 1
   fi
-  for key in DEPLOY_DIR ENV_FILE EXTENSION_PREVIOUS_BUILD_ROOT SKIP_HTTP_CHECK \
+  for key in DEPLOY_DIR ENV_FILE SKIP_HTTP_CHECK \
     SKIP_PROCESS_ENV_CHECKS SKIP_SERVICE_CHECKS; do
     if [ -n "${!key:-}" ]; then
       child_environment+=("$key=${!key}")
@@ -269,6 +275,43 @@ assert_root_ancestor_chain() {
   done
 }
 
+assert_extension_release_files() {
+  local ancestor="$EXTENSION_RELEASE_ROOT"
+  local file
+  local mode
+  local count=0
+  while true; do
+    mode="$(stat -c '%a' "$ancestor")"
+    if (( (8#$mode & 8#001) == 0 )); then
+      echo "[deploy] ERROR: extension release ancestors must be traversable by the build user" >&2
+      exit 1
+    fi
+    [ "$ancestor" = "/" ] && break
+    ancestor="$(dirname -- "$ancestor")"
+  done
+  if [ "$(stat -c '%a' "$EXTENSION_RELEASE_ROOT")" != "755" ]; then
+    echo "[deploy] ERROR: extension release root must use mode 0755" >&2
+    exit 1
+  fi
+  while IFS= read -r -d '' file; do
+    count=$((count + 1))
+    if [ -L "$file" ] || [ ! -f "$file" ] || [ ! -r "$file" ] \
+      || [ "$(stat -c '%u' "$file")" != "0" ]; then
+      echo "[deploy] ERROR: extension release input must be a readable root-owned regular file" >&2
+      exit 1
+    fi
+    mode="$(stat -c '%a' "$file")"
+    if [ "$mode" != "644" ]; then
+      echo "[deploy] ERROR: extension release input must use mode 0644" >&2
+      exit 1
+    fi
+  done < <(find -P "$EXTENSION_RELEASE_ROOT" -mindepth 1 -maxdepth 1 -print0)
+  if [ "$count" -ne 4 ]; then
+    echo "[deploy] ERROR: extension release root must contain exactly four files" >&2
+    exit 1
+  fi
+}
+
 install_root_runtime_symlink() {
   local target="$1"
   local link="$2"
@@ -300,6 +343,8 @@ fi
 assert_root_ancestor_chain "$RELEASES_DIR"
 assert_root_ancestor_chain "$SHARED_DIR"
 assert_root_ancestor_chain "$(dirname -- "$CURRENT_LINK")"
+assert_root_ancestor_chain "$EXTENSION_RELEASE_ROOT"
+assert_extension_release_files
 if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
   if [ ! -L "$CURRENT_LINK" ]; then
     echo "[deploy] ERROR: current path must be a symlink: $CURRENT_LINK" >&2
@@ -394,14 +439,32 @@ echo "[deploy] Building server and web"
 run_in_dir "$RELEASE_DIR" exec-build pnpm --filter server build
 run_in_dir "$RELEASE_DIR" exec-build pnpm --filter web build
 
-echo "[deploy] Building cloud and local extension packages"
 PREVIOUS_RELEASE="$current_target"
-if [ -n "$PREVIOUS_RELEASE" ]; then
-  EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" \
-    run_in_dir "$RELEASE_DIR" exec-build pnpm package:extension
-else
-  run_in_dir "$RELEASE_DIR" exec-build pnpm package:extension
+echo "[deploy] Staging the prebuilt cloud and local extension release"
+EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN="$(node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN)"
+EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN="$(node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN)"
+EXTENSION_RELEASE_EXPECTED_API_ORIGIN="$(node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_API_ORIGIN)"
+EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN="$(node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN)"
+run_in_dir "$RELEASE_DIR" exec-build node scripts/stage-extension-release.mjs \
+  --build-root "$EXTENSION_RELEASE_ROOT" \
+  --output-dir "$RELEASE_DIR/build/extensions" \
+  --target-git-commit "$TARGET_GIT_COMMIT" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
+
+echo "[deploy] Revoking build-user writes to the staged extension release"
+chown root:root "$RELEASE_DIR/build"
+chmod 0755 "$RELEASE_DIR/build"
+if [ -L "$RELEASE_DIR/build/extensions" ] || [ ! -d "$RELEASE_DIR/build/extensions" ]; then
+  echo "[deploy] ERROR: staged extension release must be one real directory" >&2
+  exit 1
 fi
+chown root:root "$RELEASE_DIR/build/extensions"
+chmod 0755 "$RELEASE_DIR/build/extensions"
+find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chown root:root -- {} +
+find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chmod 0644 -- {} +
 
 echo "[deploy] Recording closed post-build source manifest"
 chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
@@ -418,6 +481,16 @@ node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" ve
   "$SEALED_RELEASE_DIR" "$DEPLOY_SOURCE_MANIFEST" "$TARGET_GIT_COMMIT"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_RELEASE_DIR" "$DEPLOY_BUILD_MANIFEST" "$TARGET_GIT_COMMIT"
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root LANG=C.UTF-8 \
+  node "$SEALED_RELEASE_DIR/scripts/stage-extension-release.mjs" \
+  --build-root "$EXTENSION_RELEASE_ROOT" \
+  --verify-output-dir "$SEALED_RELEASE_DIR/build/extensions" \
+  --target-git-commit "$TARGET_GIT_COMMIT" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
 mv "$RELEASE_DIR" "$UNSEALED_RELEASE_DIR"
 mv "$SEALED_RELEASE_DIR" "$RELEASE_DIR"
 rm -rf -- "$UNSEALED_RELEASE_DIR"

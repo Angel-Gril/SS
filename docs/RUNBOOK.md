@@ -84,6 +84,7 @@ DEPLOY_HOST=45.76.49.64 \
 DEPLOY_USER=root \
 SSH_KEY=~/.ssh/ss_erp_vultr_sg \
 DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
 ./scripts/deploy-app-dir.sh
 ```
 
@@ -117,6 +118,7 @@ $env:DEPLOY_HOST="45.76.49.64"
 $env:DEPLOY_USER="root"
 $env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
 $env:DEPLOY_ENV_PROFILE="cloud-r2"
+$env:EXTENSION_RELEASE_ROOT="/var/lib/ss-erp-extension-releases/<full-target-commit>"
 C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh <commit>
 ```
 
@@ -135,7 +137,7 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash 
 
 ```bash
 cd /opt/ss-erp
-DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
 checkout 模式不会把 deploy 用户可写的 Git 目录复制成 root 代码。每个目标提交必须先按
@@ -146,7 +148,7 @@ checkout 模式不会把 deploy 用户可写的 Git 目录复制成 root 代码�
 如果输出指向 `/opt/ss-erp/current`，使用 release/symlink 模式：
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
 
 执行部署脚本的用户需要有权限执行 `systemctl restart ss-erp-*`。
@@ -166,6 +168,11 @@ post-migration guard。脚本不接受 `--skip-build`，会删除旧依赖/构�
 `pnpm install --frozen-lockfile --force` 重建；Worker/API/Web 在任何 in-place 改动前停止。
 根目录除当前 `$ENV_FILE` 外不得残留任何被 Git 忽略的 `.env*`；Next 的构建 cache 不会被直接
 `chown`，封存后会清空并由 root 新建 runtime 专用目录。
+
+所有 systemd 部署模式都必须先把 `pnpm package:extension` 产生并完成外部审批的同一四件套安装到
+`/var/lib/ss-erp-extension-releases/<full-target-commit>`，目录为 `root:root 0755`、文件为
+`root:root 0644`。部署只运行 `stage-extension-release.mjs` 复验并复制该候选，不会重新打包或增版。
+候选准备与精确命令见 `docs/deployment.md`；缺少 `EXTENSION_RELEASE_ROOT` 时必须在停服前失败。
 
 如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
 

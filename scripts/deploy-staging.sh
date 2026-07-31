@@ -13,6 +13,7 @@ WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
+EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
 DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
 
 if [ "$#" -ne 0 ]; then
@@ -30,7 +31,7 @@ if [ "$(id -u)" = "0" ] || [ "$(id -un)" != "$DEPLOY_RUN_USER" ]; then
 fi
 
 readonly DEPLOY_DIR ENV_FILE DEPLOY_ENV_PROFILE API_SERVICE WEB_SERVICE WORKER_SERVICE \
-  DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT
+  DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT
 
 if [[ ! "$ENV_FILE" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
   echo "ERROR: ENV_FILE must be one dot-prefixed basename" >&2
@@ -40,6 +41,10 @@ fi
 case "$DEPLOY_DIR" in
   /*) ;;
   *) echo "ERROR: DEPLOY_DIR must be an absolute path" >&2; exit 1 ;;
+esac
+case "$EXTENSION_RELEASE_ROOT" in
+  /*) ;;
+  *) echo "ERROR: EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory" >&2; exit 1 ;;
 esac
 if [ "$(readlink -m -- "$DEPLOY_DIR")" != "$DEPLOY_DIR" ] \
   || [ -L "$DEPLOY_DIR" ] || [ ! -d "$DEPLOY_DIR" ]; then
@@ -63,6 +68,53 @@ while true; do
   [ "$CURRENT_ANCESTOR" = "/" ] && break
   CURRENT_ANCESTOR="$(dirname -- "$CURRENT_ANCESTOR")"
 done
+
+CURRENT_ANCESTOR="$EXTENSION_RELEASE_ROOT"
+while true; do
+  if [ -L "$CURRENT_ANCESTOR" ] || [ ! -d "$CURRENT_ANCESTOR" ] \
+    || [ ! -r "$CURRENT_ANCESTOR" ] \
+    || [ "$(readlink -f -- "$CURRENT_ANCESTOR")" != "$CURRENT_ANCESTOR" ] \
+    || [ "$(stat -c '%u' "$CURRENT_ANCESTOR")" != "0" ]; then
+    echo "ERROR: EXTENSION_RELEASE_ROOT ancestors must be readable root-owned canonical directories" >&2
+    exit 1
+  fi
+  EXTENSION_RELEASE_MODE="$(stat -c '%a' "$CURRENT_ANCESTOR")"
+  if (( (8#$EXTENSION_RELEASE_MODE & 8#022) != 0 )); then
+    echo "ERROR: EXTENSION_RELEASE_ROOT ancestors must not be group/world writable" >&2
+    exit 1
+  fi
+  if (( (8#$EXTENSION_RELEASE_MODE & 8#001) == 0 )); then
+    echo "ERROR: EXTENSION_RELEASE_ROOT ancestors must be traversable by the build user" >&2
+    exit 1
+  fi
+  [ "$CURRENT_ANCESTOR" = "/" ] && break
+  CURRENT_ANCESTOR="$(dirname -- "$CURRENT_ANCESTOR")"
+done
+
+if [ "$(stat -c '%a' "$EXTENSION_RELEASE_ROOT")" != "755" ]; then
+  echo "ERROR: extension release root must use mode 0755" >&2
+  exit 1
+fi
+
+EXTENSION_RELEASE_FILE_COUNT=0
+while IFS= read -r -d '' EXTENSION_RELEASE_FILE; do
+  EXTENSION_RELEASE_FILE_COUNT=$((EXTENSION_RELEASE_FILE_COUNT + 1))
+  if [ -L "$EXTENSION_RELEASE_FILE" ] || [ ! -f "$EXTENSION_RELEASE_FILE" ] \
+    || [ ! -r "$EXTENSION_RELEASE_FILE" ] \
+    || [ "$(stat -c '%u' "$EXTENSION_RELEASE_FILE")" != "0" ]; then
+    echo "ERROR: extension release input must be a readable root-owned regular file" >&2
+    exit 1
+  fi
+  EXTENSION_RELEASE_FILE_MODE="$(stat -c '%a' "$EXTENSION_RELEASE_FILE")"
+  if [ "$EXTENSION_RELEASE_FILE_MODE" != "644" ]; then
+    echo "ERROR: extension release input must use mode 0644" >&2
+    exit 1
+  fi
+done < <(find -P "$EXTENSION_RELEASE_ROOT" -mindepth 1 -maxdepth 1 -print0)
+if [ "$EXTENSION_RELEASE_FILE_COUNT" -ne 4 ]; then
+  echo "ERROR: extension release root must contain exactly four files" >&2
+  exit 1
+fi
 
 cd "$DEPLOY_DIR"
 
@@ -192,30 +244,6 @@ reset_generated_build_paths() {
   done
 }
 
-snapshot_previous_extension_release() {
-  local source="$DEPLOY_DIR/build/extensions"
-  local invalid_entry
-  if [ ! -e "$source" ] && [ ! -L "$source" ]; then
-    return
-  fi
-  if [ -L "$DEPLOY_DIR/build" ] || [ ! -d "$DEPLOY_DIR/build" ] \
-    || [ -L "$source" ] || [ ! -d "$source" ]; then
-    echo "ERROR: previous extension build root must be one real directory" >&2
-    exit 1
-  fi
-  invalid_entry="$(find -P "$source" -xdev -mindepth 1 \
-    ! -type d ! -type f -print -quit)"
-  if [ -n "$invalid_entry" ]; then
-    echo "ERROR: previous extension build root contains an unsupported entry" >&2
-    exit 1
-  fi
-  DEPLOY_PREVIOUS_BUILD_ROOT="$DEPLOY_BUILD_HOME/previous-extensions"
-  sudo -u "$DEPLOY_BUILD_USER" -- mkdir -m 0700 "$DEPLOY_PREVIOUS_BUILD_ROOT"
-  tar -C "$source" -cf - . \
-    | sudo -u "$DEPLOY_BUILD_USER" -- \
-      tar --no-same-owner --no-same-permissions -C "$DEPLOY_PREVIOUS_BUILD_ROOT" -xf -
-}
-
 BRANCH="${DEPLOY_BRANCH:-$(git branch --show-current)}"
 BRANCH="${BRANCH:-main}"
 
@@ -270,7 +298,6 @@ DEPLOY_ENV_SNAPSHOT="$DEPLOY_ENV_SNAPSHOT_DIR/environment.env"
 DEPLOY_SOURCE_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/source-manifest.json"
 DEPLOY_BUILD_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/build-manifest.json"
 DEPLOY_BUILD_HOME="$(sudo mktemp -d /run/ss-erp-build-home.XXXXXXXXXX)"
-DEPLOY_PREVIOUS_BUILD_ROOT=""
 cleanup_environment_snapshot() {
   if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ]; then
     sudo rm -rf -- "$DEPLOY_ENV_SNAPSHOT_DIR"
@@ -334,7 +361,6 @@ if ! sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
 fi
 SERVICES_QUIESCED=1
 printf '%s\n' "$TARGET_GIT_COMMIT" > DEPLOYED_COMMIT
-snapshot_previous_extension_release
 echo "[1d/7] Removing prior generated dependencies and build outputs..."
 reset_generated_build_paths
 sudo chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
@@ -392,17 +418,37 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$DEPLOY_BUILD_UID" "$DEPLOY_BUILD_GID" "$DEPLOY_BUILD_HOME" -- \
   pnpm --filter web build
 
-echo "[5b/7] Building cloud and local extension packages..."
-sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  HOME=/root LANG=C.UTF-8 EXTENSION_PREVIOUS_BUILD_ROOT="$DEPLOY_PREVIOUS_BUILD_ROOT" \
-  node "$DEPLOY_ENV_TOOL" exec-build-as "$DEPLOY_ENV_SNAPSHOT" "$DEPLOY_DIR" \
-  "$DEPLOY_BUILD_UID" "$DEPLOY_BUILD_GID" "$DEPLOY_BUILD_HOME" -- pnpm package:extension
-
-echo "[5c/7] Verifying current commit extension release set..."
+echo "[5b/7] Staging the prebuilt cloud and local extension release..."
 EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN="$(node "$DEPLOY_ENV_TOOL" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN)"
 EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN="$(node "$DEPLOY_ENV_TOOL" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN)"
 EXTENSION_RELEASE_EXPECTED_API_ORIGIN="$(node "$DEPLOY_ENV_TOOL" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_API_ORIGIN)"
 EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN="$(node "$DEPLOY_ENV_TOOL" value "$DEPLOY_ENV_SNAPSHOT" EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN)"
+sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root LANG=C.UTF-8 \
+  node "$DEPLOY_ENV_TOOL" exec-build-as "$DEPLOY_ENV_SNAPSHOT" "$DEPLOY_DIR" \
+  "$DEPLOY_BUILD_UID" "$DEPLOY_BUILD_GID" "$DEPLOY_BUILD_HOME" -- \
+  node scripts/stage-extension-release.mjs \
+  --build-root "$EXTENSION_RELEASE_ROOT" \
+  --output-dir "$DEPLOY_DIR/build/extensions" \
+  --target-git-commit "$TARGET_GIT_COMMIT" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
+
+echo "[5b/7] Revoking build-user writes to the staged extension release..."
+sudo chown root:root "$DEPLOY_DIR/build"
+sudo chmod 0755 "$DEPLOY_DIR/build"
+if sudo test -L "$DEPLOY_DIR/build/extensions" || ! sudo test -d "$DEPLOY_DIR/build/extensions"; then
+  echo "ERROR: staged extension release must be one real directory" >&2
+  exit 1
+fi
+sudo chown root:root "$DEPLOY_DIR/build/extensions"
+sudo chmod 0755 "$DEPLOY_DIR/build/extensions"
+sudo find -P "$DEPLOY_DIR/build/extensions" -xdev -type f -exec chown root:root -- {} +
+sudo find -P "$DEPLOY_DIR/build/extensions" -xdev -type f -exec chmod 0644 -- {} +
+
+echo "[5c/7] Verifying current commit extension release set..."
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_ENV_TOOL" exec-build-as "$DEPLOY_ENV_SNAPSHOT" "$DEPLOY_DIR" \
@@ -434,6 +480,16 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_DEPLOY_DIR" "$DEPLOY_BUILD_MANIFEST" "$TARGET_GIT_COMMIT"
+sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root LANG=C.UTF-8 \
+  node "$SEALED_DEPLOY_DIR/scripts/stage-extension-release.mjs" \
+  --build-root "$EXTENSION_RELEASE_ROOT" \
+  --verify-output-dir "$SEALED_DEPLOY_DIR/build/extensions" \
+  --target-git-commit "$TARGET_GIT_COMMIT" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
 shopt -s nullglob
 for reserved_runtime_link in \
   "$SEALED_DEPLOY_DIR"/.env.* \

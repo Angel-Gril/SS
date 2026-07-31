@@ -32,6 +32,8 @@ for (const releaseControl of [
   'EXTENSION_RELEASE_EXPECTED_API_ORIGIN',
   'EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN',
   'pnpm package:extension',
+  'stage-extension-release.mjs',
+  'EXTENSION_RELEASE_ROOT',
   'DEPLOYED_COMMIT',
   '/api/extensions/latest',
   'X-Content-SHA256',

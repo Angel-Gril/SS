@@ -85,8 +85,8 @@ Progress: 3/4 tasks.
   charge, production mutation, VPS access, deployment, flag change, ERP ingest, Ozon write, or
   `.context/` staging occurred; Phase 5 remains `3/4` and overall progress remains `32/37`.
 - A fail-fast `pnpm qa:04:offline` aggregate now publishes a machine-readable rehearsal manifest and
-  runs exactly eight local gates: its own contract, `git diff --check`, workspace lint/typecheck,
-  `preflight --build`, the AI Media PostgreSQL integration plus populated upgrade replay, and fresh
+  runs exactly nine local gates: its own contract, `git diff --check`, workspace lint/typecheck,
+  `preflight --build`, isolated scope-revocation and AI Media PostgreSQL integration lanes, and fresh
   cloud/local extension builds with verification. It explicitly reports that complete positive
   `QA-02` evidence is still required and contains no Provider, VPS, remote-smoke or deployment step.
 - The final aggregate run passed in `583.5s`. Lint retained only the existing `20` Server and one
@@ -96,3 +96,20 @@ Progress: 3/4 tasks.
   warnings. A Prisma query confirmed no `20260730` test schema remained. This is durable rehearsal
   evidence, not formal `QA-04` completion: Phase 5 remains `3/4` and overall remains `32/37` until
   positive edit-capable `QA-02` evidence exists and the gate is rerun on that final revision.
+- The offline aggregate now adds a separate ephemeral `logistics_test_*` PostgreSQL lane for the
+  real command-grant/session/current-JTI/scope revocation matrix. All `142` migrations and `7/7`
+  grant tests passed, including proof that scope loss consumes neither grant nor receipt, and the
+  schema was removed afterward. Package verification now has adversarial rejection coverage for
+  eval/Function, remote or computed imports/importScripts, runtime Worker construction,
+  WebAssembly, remote script assignment and executable-code CSP relaxation. The source package
+  verifier passed `446/2/0`; `QA-04` remains unchecked until complete positive `QA-02` evidence is
+  accepted and the enlarged aggregate is rerun on that final clean revision.
+- The enlarged nine-step `pnpm qa:04:offline` rehearsal passed end to end in `817.7s`. It reran
+  lint with zero errors and the existing `20` Server plus one shared warning, workspace typecheck,
+  full preflight with Server/Web production builds, the isolated scope/JTI/session revocation and
+  AI Media PostgreSQL/upgrade lanes, and fresh extension builds. Cloud/local/source verification
+  finished at `451/0/0`, `447/2/0`, and `446/2/0`; the two local/source warnings remain the expected
+  broad local permissions. A post-run query found no schema containing `20260731`. The dangerous
+  code matrix now separately rejects escaped remote `.mjs`, executable `.cjs`, remote-script SVG,
+  CSP host sources and computed imports. This remains rehearsal evidence only: `QA-04`, Phase 5
+  `3/4`, and overall `32/37` are unchanged pending complete positive `QA-02` evidence.

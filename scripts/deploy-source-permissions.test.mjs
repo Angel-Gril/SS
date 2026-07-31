@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 const linuxRoot = process.platform !== 'win32'
   && typeof process.getuid === 'function'
@@ -175,6 +176,70 @@ test('root gate install and deployment source ownership are fail-closed', {
   }
 });
 
+test('release Git verification scopes safe.directory to the validated root-owned checkout', {
+  skip: !linuxRoot,
+}, () => {
+  const root = mkdtempSync('/tmp/ss-erp-release-git-test-');
+  const repository = join(root, 'repository');
+  const source = join(repository, 'extensions', 'ss-erp');
+  try {
+    chmodSync(root, 0o755);
+    mkdirSync(source, { recursive: true, mode: 0o755 });
+    writeFileSync(join(source, 'manifest.json'), '{}\n', { mode: 0o644 });
+    let result = run('git', ['init', repository]);
+    assert.equal(result.status, 0, result.stderr);
+    result = run('git', ['-C', repository, 'add', '.']);
+    assert.equal(result.status, 0, result.stderr);
+    result = run('git', [
+      '-C', repository,
+      '-c', 'user.name=SS ERP Test',
+      '-c', 'user.email=test@example.invalid',
+      'commit', '-m', 'fixture',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+
+    result = run('runuser', [
+      '-u', 'nobody', '--', 'git', '-C', repository, 'rev-parse', 'HEAD',
+    ]);
+    assert.notEqual(result.status, 0, 'the fixture must exercise Git dubious ownership');
+
+    const moduleUrl = pathToFileURL(
+      join(process.cwd(), 'scripts', 'extension-release-inputs.mjs'),
+    ).href;
+    const verificationSource = `
+      import {
+        extensionReleaseGitHead,
+        extensionReleaseScopedGitStatus,
+      } from ${JSON.stringify(moduleUrl)};
+      const [repository, source] = process.argv.slice(1);
+      const gitCommit = extensionReleaseGitHead(repository);
+      const gitStatus = extensionReleaseScopedGitStatus({ repository, repoRoot: repository, sourceDir: source });
+      process.stdout.write(JSON.stringify({ gitCommit, gitStatus }));
+    `;
+    result = run('runuser', [
+      '-u', 'nobody', '--', process.execPath, '--input-type=module', '-e', verificationSource,
+      repository, source,
+    ], {
+      env: {
+        ...process.env,
+        GIT_DIR: join(root, 'attacker-git-dir'),
+        GIT_WORK_TREE: join(root, 'attacker-work-tree'),
+        GIT_INDEX_FILE: join(root, 'attacker-index'),
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'core.bare',
+        GIT_CONFIG_VALUE_0: 'true',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      gitCommit: run('git', ['-C', repository, 'rev-parse', 'HEAD']).stdout.trim(),
+      gitStatus: '',
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('initializer refuses a legacy shared symlink before changing its target', {
   skip: !linuxRoot,
 }, () => {
@@ -199,6 +264,7 @@ test('initializer refuses a legacy shared symlink before changing its target', {
         DEPLOY_BASE: base,
         DEPLOY_USER: 'nobody',
         ENV_FILE_NAME: '.env.staging',
+        EXTENSION_RELEASE_BASE: join(root, 'extension-releases'),
       },
     });
     assert.notEqual(result.status, 0);
@@ -206,6 +272,35 @@ test('initializer refuses a legacy shared symlink before changing its target', {
     const after = lstatSync(target);
     assert.equal(after.uid, before.uid);
     assert.equal(after.mode & 0o777, before.mode & 0o777);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('initializer rejects a writable extension release ancestor', {
+  skip: !linuxRoot,
+}, () => {
+  const root = mkdtempSync('/root/ss-erp-extension-release-root-test-');
+  const bin = join(root, 'bin');
+  const writableParent = join(root, 'writable-parent');
+  try {
+    mkdirSync(bin);
+    mkdirSync(writableParent, { mode: 0o777 });
+    chmodSync(writableParent, 0o777);
+    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
+    chmodSync(join(bin, 'sudo'), 0o700);
+    const result = run('bash', [join(process.cwd(), 'scripts', 'init-server.sh')], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        DEPLOY_BASE: join(root, 'deploy'),
+        DEPLOY_USER: 'nobody',
+        ENV_FILE_NAME: '.env.staging',
+        EXTENSION_RELEASE_BASE: join(writableParent, 'extension-releases'),
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /extension release base ancestors must not be group\/world writable/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

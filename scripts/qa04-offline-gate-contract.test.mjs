@@ -17,6 +17,11 @@ const expectedSteps = [
   ['workspace-lint', 'pnpm', ['lint']],
   ['workspace-typecheck', 'pnpm', ['typecheck']],
   ['preflight-build', 'pnpm', ['preflight', '--build']],
+  [
+    'scope-revocation-postgres',
+    'pnpm',
+    ['--filter', 'server', 'test:qa04:scope-revocation:postgres'],
+  ],
   ['ai-media-postgres', 'pnpm', ['--filter', 'server', 'test:ai-media:postgres']],
   ['extension-cloud', 'pnpm', ['build:extension:cloud']],
   ['extension-local', 'pnpm', ['build:extension:local']],

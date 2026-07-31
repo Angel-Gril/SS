@@ -37,6 +37,12 @@ export const QA04_OFFLINE_STEPS = Object.freeze(
       args: ['preflight', '--build'],
     },
     {
+      id: 'scope-revocation-postgres',
+      name: 'PostgreSQL command-grant scope and session revocation',
+      command: 'pnpm',
+      args: ['--filter', 'server', 'test:qa04:scope-revocation:postgres'],
+    },
+    {
       id: 'ai-media-postgres',
       name: 'AI Media PostgreSQL integration and upgrade replay',
       command: 'pnpm',

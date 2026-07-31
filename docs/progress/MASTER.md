@@ -407,6 +407,26 @@ version `1.0.264`. No real backup, restore, migration, VPS access, deployment, c
 request, charge, flag change, ERP media mutation, Ozon write or `.context/` staging occurred.
 `REL-04` remains preparation-only; Phase 6 stays `0/3` and overall progress stays `32/37`.
 
+The offline release handoff now preserves one `REL-03` candidate across `REL-04`: a bounded
+no-follow staging CLI selects and byte-preserves exactly one target-commit/origin/source-bound
+cloud/local ZIP, checksum and evidence set, then independently re-verifies the staged copy. The
+three systemd deployment entrypoints require a root-owned `EXTENSION_RELEASE_ROOT` under
+`/var/lib/ss-erp-extension-releases` and no longer package or increment extensions during deploy;
+after staging, root removes build-UID writes and the sealed tree must byte-match that input again.
+The QA-04 rehearsal also gained a real isolated PostgreSQL scope/JTI/session revocation lane and
+adversarial remote-code/eval/Worker/Wasm/CSP package tests. This is offline preparation only:
+external signature/store receipts, actual distribution, signed-package upgrade smoke, final QA-02
+evidence and all real rollout actions remain open. Counts stay `32/37`.
+
+The enlarged nine-step QA-04 offline rehearsal subsequently passed in `817.7s`, including both
+isolated PostgreSQL lanes, full preflight/builds, and cloud/local/source verification at `451/0/0`,
+`447/2/0`, and `446/2/0`; no `20260731` test schema remained. Final release-handoff regressions also
+cover Git environment poisoning, root-owned checkout reads, `umask 077`, non-root artifact access,
+and post-stage ZIP replacement. The sealed deploy tree must now byte-match the immutable root
+candidate after build-UID writes are revoked. This is still offline preparation: no formal task,
+flag, Provider request, VPS, migration, signature, distribution, pilot, or Ozon action completed,
+so the five open tasks and `32/37` count remain unchanged.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -431,6 +451,9 @@ request, charge, flag change, ERP media mutation, Ozon write or `.context/` stag
    stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
    to create and verify a fresh target-commit restore attestation; do not bypass the new gate with an
    old `backup-status.json` or the removed `RUN_DB_BACKUP` option.
+   After the one-time `REL-03` package/sign/distribution step, install its exact canonical four-file
+   candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
+   that path as `EXTENSION_RELEASE_ROOT`; deployment must never rebuild or increment it.
 6. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

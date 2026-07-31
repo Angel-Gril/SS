@@ -197,7 +197,47 @@ verifier 全部通过，才会重建应用服务。失败或超时时旧服务�
 
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
-三个 systemd 部署脚本都会在切换或重启服务前同时生成 cloud 与 local 扩展 ZIP；cloud 包使用当前站点域名，local 包固定连接本机 ERP。两类包都以当前线上产物和源码 manifest 的较高版本为基线自动递增一次。成功发布同一提交后不要仅为检查产物重复执行部署，否则扩展补丁版本会再次递增；应通过 `/api/extensions/latest` 和两个下载端点验收现有产物。生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回 404，且不会从 unpacked 目录现场重建。`/latest` 返回的每个下载 URL 都包含不可变 version 与 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh` 不再接受 `--skip-build`；每个新目标提交都必须重新编译、打包并复验，避免新 commit marker/数据库 migration 配上旧 `dist`、`.next` 或扩展产物。
+三个 systemd 部署脚本不再生成或递增扩展版本。正式候选必须先在完整 `QA-02`/`QA-04`
+对应的 clean commit 上仅执行一次 `pnpm package:extension`，完成外部签名/商店回执及安装升级验收后，
+再把同一 canonical 四件套预置到每台目标机。`init-server.sh` 会创建 root-owned
+`/var/lib/ss-erp-extension-releases`；每个 commit 使用一个 root-owned、不可被 group/world 写入、
+构建用户只读的子目录，并通过进程环境传入：
+
+```bash
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit>
+```
+
+本地可先把包含多版历史产物的 build root 收敛成待上传的精确四件套；四项 origin 必须与目标
+环境的独立审批完全相同：
+
+```bash
+TARGET_COMMIT="$(git rev-parse HEAD)"
+STAGE_ROOT="build/extension-release-stage-$TARGET_COMMIT"
+node scripts/stage-extension-release.mjs \
+  --build-root build/extensions \
+  --output-dir "$STAGE_ROOT" \
+  --target-git-commit "$TARGET_COMMIT" \
+  --expected-web-origin "$EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN" \
+  --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
+  --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
+  --expected-local-origin http://127.0.0.1:3001
+```
+
+把该目录内四个原始文件上传后，以 `root:root`、文件 `0644`、目录 `0755` 安装到上述远端
+路径。`deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在构建用户下重新验证完整 commit、
+package-input digest、origin、ZIP SHA/CRC/文件数，然后逐字节暂存到本次应用构建；任何缺失、额外
+匹配候选、符号链接、可写文件或字节漂移都会失败。暂存后 root 会立即收回构建用户写权限，封存
+树再通过可信脚本与远端原候选四项逐文件、逐字节比较；比较发生在 migration/切换之前。部署不再调用
+`pnpm package:extension`，因此 `REL-03` 已签名/分发候选不会在 `REL-04` 被另一个
+`EXTERNAL_REQUIRED` 版本替换。
+
+生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical
+release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回
+404，且不会从 unpacked 目录现场重建。`/api/extensions/latest` 返回的每个下载 URL 都包含不可变 version 与
+SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载
+响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名
+或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh` 不接受 `--skip-build`；每个目标
+commit 仍必须重新编译 Server/Web 并复验预置扩展候选，避免新 marker/migration 配上旧应用构建。
 
 ```env
 MIGRATION_TIMEOUT=20m
@@ -250,6 +290,7 @@ EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001
 验证器会解包重验 defaults、manifest permissions、文件数、ZIP SHA/CRC 与完整 commit。Evidence
 中的 `signature.status=EXTERNAL_REQUIRED` 表示仍须完成真实签名/商店回执，不能把本地 JSON
 当成签名。
+部署前还必须按上文设置 `EXTENSION_RELEASE_ROOT`；部署脚本只消费候选，不生成候选。
 
 `ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
 

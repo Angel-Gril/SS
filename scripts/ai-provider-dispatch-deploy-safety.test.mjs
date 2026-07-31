@@ -98,7 +98,7 @@ for (const [label, script, inPlaceBuild] of deployments) {
       /run_in_dir "\$(?:NEXT_DIR|RELEASE_DIR)\/apps\/server" exec-build npx prisma generate/u,
       /run_in_dir "\$(?:NEXT_DIR|RELEASE_DIR)" exec-build pnpm --filter server build/u,
       /run_in_dir "\$(?:NEXT_DIR|RELEASE_DIR)" exec-build pnpm --filter web build/u,
-      /run_in_dir "\$(?:NEXT_DIR|RELEASE_DIR)" exec-build pnpm package:extension/u,
+      /run_in_dir "\$(?:NEXT_DIR|RELEASE_DIR)" exec-build node scripts\/stage-extension-release\.mjs/u,
     ]) {
       assert.match(script, command, `${label} deploy build command must use the isolated build identity`);
     }
@@ -297,7 +297,7 @@ assert.match(
 const stagingCommitIndex = stagingDeploy.indexOf(
   'readonly TARGET_GIT_COMMIT="$(assert_clean_staging_checkout)"',
 );
-const stagingPackageIndex = stagingDeploy.indexOf('pnpm package:extension');
+const stagingReleaseStageIndex = stagingDeploy.indexOf('node scripts/stage-extension-release.mjs');
 const stagingQuiesceIndex = stagingDeploy.indexOf(
   'sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE"',
 );
@@ -319,14 +319,31 @@ assert.ok(
   stagingCommitIndex < stagingQuiesceIndex
     && stagingInstalledGateIndex < stagingQuiesceIndex
     && stagingQuiesceIndex < stagingMarkerIndex
-    && stagingMarkerIndex < stagingPackageIndex,
-  'staging deploy must preflight the installed gate and bind DEPLOYED_COMMIT before packaging',
+    && stagingMarkerIndex < stagingReleaseStageIndex,
+  'staging deploy must preflight the installed gate and bind DEPLOYED_COMMIT before staging the release',
 );
 assert.ok(
-  stagingPackageIndex < stagingReleaseGateIndex
+  stagingReleaseStageIndex < stagingReleaseGateIndex
     && stagingReleaseGateIndex < stagingMigrationIndex,
-  'staging release-set verification must run after the mandatory build and before migration',
+  'staging release-set verification must run after immutable staging and before migration',
 );
+for (const source of [appDirDeploy, releaseDeploy, stagingDeploy]) {
+  assert.match(source, /EXTENSION_RELEASE_ROOT/u);
+  assert.match(source, /stage-extension-release\.mjs/u);
+  assert.doesNotMatch(source, /pnpm package:extension/u);
+  assert.match(source, /extension release root must use mode 0755/u);
+  assert.match(source, /extension release input must use mode 0644/u);
+  assert.match(source, /extension release (?:root )?must contain exactly four files/u);
+  assert.match(source, /Revoking build-user writes to the staged extension release/u);
+  assert.match(
+    source,
+    /--verify-output-dir "\$[A-Z_]+\/build\/extensions"/u,
+    'sealed output must byte-match the immutable release candidate before activation',
+  );
+}
+assert.match(appDirDeploy, /assert_root_ancestor_chain "\$EXTENSION_RELEASE_ROOT"/u);
+assert.match(releaseDeploy, /assert_root_ancestor_chain "\$EXTENSION_RELEASE_ROOT"/u);
+assert.match(stagingDeploy, /EXTENSION_RELEASE_ROOT ancestors must be readable root-owned canonical directories/u);
 assert.match(
   stagingDeploy,
   /--build-root "\$DEPLOY_DIR\/build\/extensions"/u,

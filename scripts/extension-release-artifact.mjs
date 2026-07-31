@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
+  fchmodSync,
   fsyncSync,
   linkSync,
   openSync,
@@ -31,6 +32,9 @@ export function writeNewArtifactDurably(finalPath, value, { mode = 0o644 } = {})
   let finalLinked = false;
   try {
     descriptor = openSync(temporary, 'wx', mode);
+    // openSync applies the process umask; release artifacts require the exact
+    // mode contract even when deployment runs with umask 077.
+    fchmodSync(descriptor, mode);
     let offset = 0;
     while (offset < bytes.length) {
       const written = writeSync(descriptor, bytes, offset, bytes.length - offset, offset);

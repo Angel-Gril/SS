@@ -110,3 +110,25 @@ Progress: 0/3 tasks.
   version `1.0.264`. This remains offline preparation: no real backup, restore, migration, VPS
   access, deployment, canary, Provider request, charge, flag change or Ozon write occurred.
   `REL-04` stays unchecked, Phase 6 stays `0/3`, and overall progress stays `32/37`.
+- Offline `REL-03`/`REL-04` handoff hardening removes deployment-time extension packaging. A
+  no-follow bounded staging CLI selects exactly one target-commit, repository-source, origin-bound
+  canonical release, preserves the original cloud/local ZIP, checksum and evidence bytes, and
+  independently re-verifies the four-file result. All three systemd deployment modes now require a
+  root-owned, non-writable `EXTENSION_RELEASE_ROOT` under the initializer-provisioned
+  `/var/lib/ss-erp-extension-releases`; they stage the candidate as the isolated build UID and never
+  call `pnpm package:extension`. Root then revokes build-UID writes and the trusted sealed helper
+  compares every filename and byte back to the immutable candidate before activation. This prevents
+  a signed/distributed `REL-03` candidate from being replaced by an automatically incremented
+  unsigned package during `REL-04`. Focused package,
+  deployment and no-network Linux root tests passed. External signatures/store receipts, actual
+  distribution and final signed-package install/upgrade smoke remain open, so `REL-03` and all
+  formal counts remain unchanged.
+- Final handoff hardening strips inherited `GIT_*` redirects from every provenance read, scopes
+  Git's ownership exception to the exact validated checkout, requires the root candidate directory
+  and files to be `0755`/`0644`, and proves the isolated build UID can traverse them before work.
+  Staging under `umask 077`, clean-checkout `GIT_HEAD` evidence on a `DEPLOYED_COMMIT` target,
+  root-owned Git checkout reads, post-stage ZIP replacement, and non-root artifact reads all have
+  regressions. The three deployers revoke build-UID writes before sealing, then run the trusted
+  sealed helper to compare the four activated files byte-for-byte with the immutable input before
+  migration or switching. Focused Windows and no-network Debian tests, full `preflight --build`,
+  and the `817.7s` QA-04 offline aggregate passed. No deployment or external release action ran.

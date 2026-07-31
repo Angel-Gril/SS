@@ -190,16 +190,199 @@ function checkSyntax(jsFiles) {
   }
 }
 
+function consumeJavaScriptStringLiteral(text, start) {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'") return null;
+  let index = start + 1;
+  let value = '';
+  while (index < text.length) {
+    const character = text[index];
+    if (character === quote) return { end: index + 1, value };
+    if (character === '\r' || character === '\n') return null;
+    if (character !== '\\') {
+      value += character;
+      index += 1;
+      continue;
+    }
+    index += 1;
+    if (index >= text.length) return null;
+    const escape = text[index];
+    if (escape === '\r' || escape === '\n') {
+      index += escape === '\r' && text[index + 1] === '\n' ? 2 : 1;
+      continue;
+    }
+    if (escape === 'x') {
+      const digits = text.slice(index + 1, index + 3);
+      if (!/^[a-f0-9]{2}$/iu.test(digits)) return null;
+      value += String.fromCodePoint(Number.parseInt(digits, 16));
+      index += 3;
+      continue;
+    }
+    if (escape === 'u') {
+      if (text[index + 1] === '{') {
+        const closing = text.indexOf('}', index + 2);
+        const digits = closing < 0 ? '' : text.slice(index + 2, closing);
+        const codePoint = Number.parseInt(digits, 16);
+        if (!/^[a-f0-9]{1,6}$/iu.test(digits) || codePoint > 0x10ffff) return null;
+        value += String.fromCodePoint(codePoint);
+        index = closing + 1;
+        continue;
+      }
+      const digits = text.slice(index + 1, index + 5);
+      if (!/^[a-f0-9]{4}$/iu.test(digits)) return null;
+      value += String.fromCodePoint(Number.parseInt(digits, 16));
+      index += 5;
+      continue;
+    }
+    const simpleEscapes = {
+      '0': '\0', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v',
+    };
+    value += simpleEscapes[escape] ?? escape;
+    index += 1;
+  }
+  return null;
+}
+
+function javascriptStringLiteralValue(argument) {
+  const text = String(argument || '').trim();
+  const parsed = consumeJavaScriptStringLiteral(text, 0);
+  return parsed?.end === text.length ? parsed.value : null;
+}
+
+function javascriptLiteralArgumentList(argumentList) {
+  const text = String(argumentList || '');
+  const values = [];
+  let index = 0;
+  while (index < text.length) {
+    while (/\s/u.test(text[index] || '')) index += 1;
+    const parsed = consumeJavaScriptStringLiteral(text, index);
+    if (!parsed) return null;
+    values.push(parsed.value);
+    index = parsed.end;
+    while (/\s/u.test(text[index] || '')) index += 1;
+    if (index === text.length) return values;
+    if (text[index] !== ',') return null;
+    index += 1;
+  }
+  return values.length ? values : null;
+}
+
+function decodeExecutableEscapes(text) {
+  return text
+    .replace(/\\x([a-f0-9]{2})/giu, (_match, digits) => (
+      String.fromCodePoint(Number.parseInt(digits, 16))
+    ))
+    .replace(/\\u([a-f0-9]{4})/giu, (_match, digits) => (
+      String.fromCodePoint(Number.parseInt(digits, 16))
+    ))
+    .replace(/\\u\{([a-f0-9]{1,6})\}/giu, (match, digits) => {
+      const codePoint = Number.parseInt(digits, 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    })
+    .replace(/&#(?:x([a-f0-9]+)|([0-9]+));/giu, (match, hex, decimal) => {
+      const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    });
+}
+
+function nonPackagedExecutableSource(value) {
+  return /^(?:https?:|data:|blob:|filesystem:|\/\/)/iu.test(value);
+}
+
 function checkDangerousCode(files) {
-  const remoteScriptPattern = /<script[^>]+src=["']https?:\/\//i;
+  const nonPackagedExecutableSourcePattern = '(?:https?:|data:|blob:|filesystem:|//)';
+  const remoteScriptPattern = new RegExp(
+    `<script[^>]+src=["']${nonPackagedExecutableSourcePattern}`,
+    'iu',
+  );
+  const remoteScriptAssignmentPattern = new RegExp(
+    `(?:\\.src\\s*=|setAttribute\\s*\\(\\s*["']src["']\\s*,)\\s*["']${nonPackagedExecutableSourcePattern}`,
+    'iu',
+  );
   for (const abs of files) {
     const relPath = path.relative(extensionDir, abs).replaceAll(path.sep, '/');
     const text = readFileSync(abs, 'utf8');
-    if (/\beval\s*\(/.test(text)) fail(`eval() found: ${relPath}`);
-    if (/\bnew\s+Function\s*\(/.test(text)) fail(`new Function() found: ${relPath}`);
-    if (remoteScriptPattern.test(text)) fail(`remote script tag found: ${relPath}`);
+    const decodedText = decodeExecutableEscapes(text);
+    if (/\beval\b/u.test(decodedText)) fail(`eval() found: ${relPath}`);
+    if (/\b(?:new\s+)?(?:globalThis\.)?Function\s*\(/u.test(decodedText)) {
+      fail(`Function constructor found: ${relPath}`);
+    }
+    if (remoteScriptPattern.test(decodedText)) fail(`remote script tag found: ${relPath}`);
+    for (const pattern of [
+      /\bimport\s*(?=["'])/gu,
+      /\b(?:import|export)\b[^;]{0,512}?\bfrom\s*(?=["'])/gu,
+    ]) {
+      for (const match of text.matchAll(pattern)) {
+        const parsed = consumeJavaScriptStringLiteral(text, match.index + match[0].length);
+        if (parsed && nonPackagedExecutableSource(parsed.value)) {
+          fail(`remote static module import found: ${relPath}`);
+        }
+      }
+    }
+    for (const match of text.matchAll(/\bimport\s*\(([^)]*)\)/gu)) {
+      const argument = String(match[1] || '').trim();
+      const literal = javascriptStringLiteralValue(argument);
+      if (literal !== null && nonPackagedExecutableSource(literal)) {
+        fail(`remote dynamic module import found: ${relPath}`);
+      } else if (literal === null) {
+        fail(`non-literal dynamic module import found: ${relPath}`);
+      }
+    }
+    for (const match of text.matchAll(/\bimportScripts\s*\(([^)]*)\)/gu)) {
+      const argumentList = String(match[1] || '');
+      const literals = javascriptLiteralArgumentList(argumentList);
+      if (literals?.some(nonPackagedExecutableSource)) {
+        fail(`remote importScripts() source found: ${relPath}`);
+      }
+      if (!literals) fail(`non-literal importScripts() source found: ${relPath}`);
+    }
+    if (/\b(?:new\s+)?(?:Worker|SharedWorker)\s*\(/u.test(decodedText)) {
+      fail(`runtime Worker construction found: ${relPath}`);
+    }
+    if (/\bWebAssembly\b/u.test(decodedText)) fail(`WebAssembly execution found: ${relPath}`);
+    if (remoteScriptAssignmentPattern.test(decodedText)) {
+      fail(`remote script assignment found: ${relPath}`);
+    }
   }
   pass('dangerous code pattern scan complete');
+}
+
+function checkManifestCodePolicy(manifest) {
+  const policy = manifest.content_security_policy;
+  if (policy === undefined) {
+    pass('manifest uses the Manifest V3 default extension code policy');
+    return;
+  }
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    fail('manifest content_security_policy must be a Manifest V3 object');
+    return;
+  }
+  const allowedKeys = new Set(['extension_pages', 'sandbox']);
+  if (Object.keys(policy).some((key) => !allowedKeys.has(key))) {
+    fail('manifest content_security_policy contains an unsupported field');
+  }
+  for (const [surface, value] of Object.entries(policy)) {
+    if (typeof value !== 'string') {
+      fail(`manifest content_security_policy.${surface} must be a string`);
+      continue;
+    }
+    for (const directive of value.split(';').map((item) => item.trim()).filter(Boolean)) {
+      const [name, ...sources] = directive.split(/\s+/u);
+      if (![
+        'default-src',
+        'object-src',
+        'script-src',
+        'script-src-elem',
+        'script-src-attr',
+        'worker-src',
+      ]
+        .includes(name)) continue;
+      if (sources.some((source) => !["'none'", "'self'"].includes(source))) {
+        fail(`manifest content_security_policy.${surface} permits non-packaged executable code`);
+      }
+    }
+  }
+  pass('manifest extension code policy scan complete');
 }
 
 const sensitivePackageExtensions = new Set([
@@ -309,6 +492,8 @@ if (['cloud', 'local', 'source'].includes(packageTarget)) {
 if (manifest.manifest_version === 3) pass('manifest_version is 3');
 else fail(`manifest_version is not 3: ${manifest.manifest_version}`);
 
+checkManifestCodePolicy(manifest);
+
 if (manifest.name && manifest.version) pass(`extension identity: ${manifest.name} ${manifest.version}`);
 else fail('manifest name/version missing');
 
@@ -400,13 +585,18 @@ for (let index = 0; index < importQueue.length; index += 1) {
 for (const file of [...referenced].sort()) fileExists(file);
 
 const allFiles = await listFiles(extensionDir);
+for (const file of allFiles) {
+  if (path.extname(file).toLowerCase() === '.wasm') {
+    fail(`WebAssembly package file found: ${path.relative(extensionDir, file).replaceAll(path.sep, '/')}`);
+  }
+}
 const allJsFiles = allFiles
-  .filter((file) => file.endsWith('.js'))
+  .filter((file) => /\.(?:cjs|js|mjs)$/iu.test(file))
   .map((file) => path.relative(extensionDir, file).replaceAll(path.sep, '/'))
   .sort();
 
 checkSyntax(allJsFiles);
-checkDangerousCode(allFiles.filter((file) => /\.(?:js|html)$/i.test(file)));
+checkDangerousCode(allFiles.filter((file) => /\.(?:cjs|html|js|mjs|svg)$/iu.test(file)));
 checkPackagedSecrets(allFiles);
 
 const requiredAdapters = [

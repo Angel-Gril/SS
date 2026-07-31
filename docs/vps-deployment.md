@@ -307,13 +307,13 @@ Override them with `API_SERVICE`, `WORKER_SERVICE`, and `WEB_SERVICE` if needed.
 From the local repository:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
 
 Deploy a specific commit:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh 9538dc9
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh <full-target-commit>
 ```
 
 The script:
@@ -323,7 +323,7 @@ The script:
 3. extracts it into `/opt/ss-erp/releases/<commit>` and installs the immutable root-owned target gate
 4. links shared `.env.staging`, uploads, and application-managed backups
 5. snapshots env once as root, gives builds only a public allowlist and a non-connectable database URL
-6. installs dependencies and builds Server, Web, and both extensions as the isolated `ss-erp-build` UID/GID
+6. installs dependencies, builds Server/Web, and stages the exact prebuilt `REL-03` extension candidate as the isolated `ss-erp-build` UID/GID
 7. records pre/post source manifests, seals the tree onto new root-owned inodes, and re-verifies both
 8. stops Worker/API and has the target gate verify backup evidence, migrate, and run the database guard
 9. verifies runtime configuration and the dark rollout
@@ -351,12 +351,16 @@ If the VPS is itself a git checkout and you want the lowest-friction update path
 
 ```bash
 cd /opt/ss-erp
-DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
 That path is available only after the exact target gate is installed from a root-owned revision
 archive as described above. The release/symlink path is preferred when you want immutable releases
 and one-command application rollback.
+
+All three systemd deployment modes require the exact four-file extension candidate to be installed
+under the supplied root-owned `EXTENSION_RELEASE_ROOT` first. Deployment re-verifies and copies that
+candidate; it never rebuilds or increments the extension version.
 
 ## Important Notes
 

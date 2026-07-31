@@ -70,6 +70,51 @@ function outputOf(result) {
 {
   const { tempRoot, extensionDir } = createPackageCopy();
   try {
+    writeFileSync(
+      path.join(extensionDir, 'pages/escaped-remote-import.mjs'),
+      'import("https\\x3a//cdn.example/remote.mjs");\n',
+    );
+    const result = verify(extensionDir);
+    assert.notEqual(result.status, 0, 'escaped remote module URLs must fail closed');
+    assert.match(outputOf(result), /remote dynamic module import found/u);
+  } finally {
+    assert.ok(tempRoot.startsWith(tempPrefix));
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const { tempRoot, extensionDir } = createPackageCopy();
+  try {
+    writeFileSync(path.join(extensionDir, 'pages/function-constructor.cjs'), 'Function("x");\n');
+    const result = verify(extensionDir);
+    assert.notEqual(result.status, 0, 'CommonJS executable constructors must fail closed');
+    assert.match(outputOf(result), /Function constructor found: pages\/function-constructor\.cjs/u);
+  } finally {
+    assert.ok(tempRoot.startsWith(tempPrefix));
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const { tempRoot, extensionDir } = createPackageCopy();
+  try {
+    writeFileSync(
+      path.join(extensionDir, 'pages/remote-script.svg'),
+      '<svg><script src="data:text/javascript,alert(1)"></script></svg>\n',
+    );
+    const result = verify(extensionDir);
+    assert.notEqual(result.status, 0, 'SVG remote scripts must fail closed');
+    assert.match(outputOf(result), /remote script tag found: pages\/remote-script\.svg/u);
+  } finally {
+    assert.ok(tempRoot.startsWith(tempPrefix));
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const { tempRoot, extensionDir } = createPackageCopy();
+  try {
     unlinkSync(path.join(extensionDir, 'shared/contracts/ai-image-workbench-v1.js'));
     const result = verify(extensionDir);
     assert.notEqual(result.status, 0, 'the verifier must reject a package without the shared contract');
@@ -77,6 +122,91 @@ function outputOf(result) {
       outputOf(result),
       /shared contract shared\/contracts\/ai-image-workbench-v1\.js missing/u,
     );
+  } finally {
+    assert.ok(tempRoot.startsWith(tempPrefix));
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const { tempRoot, extensionDir } = createPackageCopy();
+  try {
+    const dangerousCodeCases = [
+      ['eval.js', 'eval("fixture");\n', /eval\(\) found/u],
+      [
+        'function-constructor.js',
+        'Function("return 1")(); new globalThis.Function("return 2");\n',
+        /Function constructor found/u,
+      ],
+      ['indirect-eval.js', '(0, eval)("fixture");\n', /eval\(\) found/u],
+      [
+        'remote-import-scripts.js',
+        'importScripts("https://cdn.example/remote.js");\n',
+        /remote importScripts\(\) source found/u,
+      ],
+      [
+        'computed-import-scripts.js',
+        'const source = "local.js"; importScripts(source);\n',
+        /non-literal importScripts\(\) source found/u,
+      ],
+      [
+        'remote-static-import.js',
+        'import "https://cdn.example/remote.mjs";\n',
+        /remote static module import found/u,
+      ],
+      [
+        'remote-static-export.js',
+        'export * from "//cdn.example/remote.mjs";\n',
+        /remote static module import found/u,
+      ],
+      [
+        'remote-dynamic-import.js',
+        'import("data:text/javascript,export default 1");\n',
+        /remote dynamic module import found/u,
+      ],
+      [
+        'computed-dynamic-import.js',
+        'const source = "local.mjs"; import(source);\n',
+        /non-literal dynamic module import found/u,
+      ],
+      [
+        'runtime-worker.js',
+        'new Worker("https://cdn.example/worker.js");\n',
+        /runtime Worker construction found/u,
+      ],
+      [
+        'webassembly.js',
+        'WebAssembly.instantiate(new Uint8Array());\n',
+        /WebAssembly execution found/u,
+      ],
+      [
+        'remote-script-assignment.js',
+        'const script = document.createElement("script"); script.src = "blob:fixture";\n',
+        /remote script assignment found/u,
+      ],
+    ];
+    for (const [filename, source] of dangerousCodeCases) {
+      writeFileSync(path.join(extensionDir, 'pages', filename), source);
+    }
+    writeFileSync(
+      path.join(extensionDir, 'pages/remote-code-negative.wasm'),
+      Buffer.from([0, 97, 115, 109]),
+    );
+    const manifestPath = path.join(extensionDir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.content_security_policy = {
+      extension_pages: "script-src 'self' cdn.example; object-src 'self'",
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const result = verify(extensionDir);
+    assert.notEqual(result.status, 0, 'the verifier must reject every remote-code execution path');
+    const output = outputOf(result);
+    for (const [, , expected] of dangerousCodeCases) assert.match(output, expected);
+    assert.match(
+      output,
+      /content_security_policy\.extension_pages permits non-packaged executable code/u,
+    );
+    assert.match(output, /WebAssembly package file found/u);
   } finally {
     assert.ok(tempRoot.startsWith(tempPrefix));
     rmSync(tempRoot, { recursive: true, force: true });

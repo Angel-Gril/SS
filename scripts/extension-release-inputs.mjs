@@ -7,6 +7,7 @@ export const EXTENSION_RELEASE_CONTROLLED_INPUTS = Object.freeze([
   'scripts/build-extension-package.mjs',
   'scripts/package-extension-package.mjs',
   'scripts/package-extension-release.mjs',
+  'scripts/stage-extension-release.mjs',
   'scripts/verify-extension-package.mjs',
   'scripts/verify-extension-archive.mjs',
   'scripts/verify-extension-release.mjs',
@@ -25,6 +26,20 @@ export function extensionReleaseSourceMode(repoRoot, sourceDir) {
     : 'EXTERNAL_SOURCE';
 }
 
+export function extensionReleaseGitSafeDirectoryArgs(repoRoot) {
+  const absolute = path.resolve(repoRoot);
+  const gitPath = process.platform === 'win32'
+    ? absolute.split(path.sep).join('/')
+    : absolute;
+  return ['-c', `safe.directory=${gitPath}`];
+}
+
+export function extensionReleaseGitEnvironment(environment = process.env) {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([key]) => !/^GIT_/iu.test(key)),
+  );
+}
+
 export function extensionReleaseGitHead(repoRoot, { spawnGit = spawnSync } = {}) {
   const gitMetadataPath = path.join(repoRoot, '.git');
   const metadata = lstatSync(gitMetadataPath, { throwIfNoEntry: false });
@@ -34,9 +49,15 @@ export function extensionReleaseGitHead(repoRoot, { spawnGit = spawnSync } = {})
   }
   let result;
   try {
-    result = spawnGit('git', ['rev-parse', '--verify', 'HEAD'], {
+    result = spawnGit('git', [
+      ...extensionReleaseGitSafeDirectoryArgs(repoRoot),
+      'rev-parse',
+      '--verify',
+      'HEAD',
+    ], {
       cwd: repoRoot,
       encoding: 'utf8',
+      env: extensionReleaseGitEnvironment(),
     });
   } catch {
     throw new Error('could not resolve the active extension release Git HEAD');
@@ -97,6 +118,7 @@ export function extensionReleaseScopedGitStatus({ repoRoot, sourceDir }) {
   const result = spawnSync(
     'git',
     [
+      ...extensionReleaseGitSafeDirectoryArgs(repoRoot),
       'status',
       '--porcelain=v1',
       '--untracked-files=all',
@@ -104,12 +126,13 @@ export function extensionReleaseScopedGitStatus({ repoRoot, sourceDir }) {
       sourcePath,
       ...EXTENSION_RELEASE_CONTROLLED_INPUTS,
     ],
-    { cwd: repoRoot, encoding: 'utf8' },
+    { cwd: repoRoot, encoding: 'utf8', env: extensionReleaseGitEnvironment() },
   );
   if (result.status !== 0) throw new Error('could not inspect extension release input Git state');
   const ignored = spawnSync(
     'git',
     [
+      ...extensionReleaseGitSafeDirectoryArgs(repoRoot),
       'ls-files',
       '--others',
       '--ignored',
@@ -118,7 +141,7 @@ export function extensionReleaseScopedGitStatus({ repoRoot, sourceDir }) {
       sourcePath,
       ...EXTENSION_RELEASE_CONTROLLED_INPUTS,
     ],
-    { cwd: repoRoot, encoding: 'utf8' },
+    { cwd: repoRoot, encoding: 'utf8', env: extensionReleaseGitEnvironment() },
   );
   if (ignored.status !== 0) throw new Error('could not inspect ignored extension release inputs');
   const ignoredStatus = String(ignored.stdout || '')

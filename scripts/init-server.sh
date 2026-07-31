@@ -71,22 +71,28 @@ assert_real_directory_or_absent() {
   fi
 }
 
+assert_root_owned_ancestor_chain() {
+  local current="$1"
+  local label="$2"
+  local mode
+  while true; do
+    if [ -L "$current" ] || [ ! -d "$current" ] \
+      || [ "$(readlink -f -- "$current")" != "$current" ] \
+      || [ "$(stat -c '%u' "$current")" != "0" ]; then
+      fail "$label ancestors must be readable root-owned canonical directories"
+    fi
+    mode="$(stat -c '%a' "$current")"
+    if (( (8#$mode & 8#022) != 0 )); then
+      fail "$label ancestors must not be group/world writable"
+    fi
+    [ "$current" = "/" ] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
 assert_real_directory_or_absent "$DEPLOY_BASE"
 DEPLOY_PARENT="$(dirname -- "$DEPLOY_BASE")"
-CURRENT_ANCESTOR="$DEPLOY_PARENT"
-while true; do
-  if [ -L "$CURRENT_ANCESTOR" ] || [ ! -d "$CURRENT_ANCESTOR" ] \
-    || [ "$(readlink -f -- "$CURRENT_ANCESTOR")" != "$CURRENT_ANCESTOR" ] \
-    || [ "$(stat -c '%u' "$CURRENT_ANCESTOR")" != "0" ]; then
-    fail "DEPLOY_BASE ancestors must be root-owned canonical directories"
-  fi
-  DEPLOY_PARENT_MODE="$(stat -c '%a' "$CURRENT_ANCESTOR")"
-  if (( (8#$DEPLOY_PARENT_MODE & 8#022) != 0 )); then
-    fail "DEPLOY_BASE ancestors must not be group/world writable"
-  fi
-  [ "$CURRENT_ANCESTOR" = "/" ] && break
-  CURRENT_ANCESTOR="$(dirname -- "$CURRENT_ANCESTOR")"
-done
+assert_root_owned_ancestor_chain "$DEPLOY_PARENT" "DEPLOY_BASE"
 
 echo "[init] Creating release deployment directories"
 sudo install -d -o root -g root -m 0755 "$DEPLOY_BASE"
@@ -130,11 +136,23 @@ sudo chown "root:$DEPLOY_GROUP" "$ENV_PATH"
 sudo chmod 0640 "$ENV_PATH"
 
 COMPOSE_LOCK_ROOT=/var/lib/ss-erp-deploy-locks
+EXTENSION_RELEASE_BASE="${EXTENSION_RELEASE_BASE:-/var/lib/ss-erp-extension-releases}"
 if [ -L "$COMPOSE_LOCK_ROOT" ] \
   || { [ -e "$COMPOSE_LOCK_ROOT" ] && [ ! -d "$COMPOSE_LOCK_ROOT" ]; }; then
   fail "Compose deployment lock root must be one real directory"
 fi
 sudo install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$COMPOSE_LOCK_ROOT"
+if [[ "$EXTENSION_RELEASE_BASE" != /* ]] \
+  || [ "$(readlink -m -- "$EXTENSION_RELEASE_BASE")" != "$EXTENSION_RELEASE_BASE" ] \
+  || [ -L "$EXTENSION_RELEASE_BASE" ] \
+  || { [ -e "$EXTENSION_RELEASE_BASE" ] && [ ! -d "$EXTENSION_RELEASE_BASE" ]; }; then
+  fail "extension release base must be one absolute real canonical directory"
+fi
+assert_real_directory_or_absent "$EXTENSION_RELEASE_BASE"
+assert_root_owned_ancestor_chain "$(dirname -- "$EXTENSION_RELEASE_BASE")" "extension release base"
+sudo install -d -o root -g root -m 0755 "$EXTENSION_RELEASE_BASE"
+sudo chown root:root "$EXTENSION_RELEASE_BASE"
+sudo chmod 0755 "$EXTENSION_RELEASE_BASE"
 for compose_project in ss-erp-prod ss-erp-staging; do
   COMPOSE_LOCK_FILE="$COMPOSE_LOCK_ROOT/$compose_project.lock"
   if [ -L "$COMPOSE_LOCK_FILE" ] \
