@@ -380,23 +380,29 @@ documentation, catalogue visibility or GET-only metering, and do not reuse this 
 account/route correction, or a new edit-capable endpoint, then begin a new operation-specific
 price/approval/evidence sequence.
 
-The next Packy candidate uses the isolated `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` transport rather than
-relabeling the rejected request. It binds `https://www.packyapi.ai/v1`, `gpt-image-2`, edit-only
+The documented Packy candidate used the isolated `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` transport rather
+than relabeling the first rejected request. It binds `https://www.packyapi.ai/v1`, `gpt-image-2`, edit-only
 operations, `1024x1024`, `n=1`, one source for `IMAGE_TO_IMAGE`, and the exact documented multipart
 additions above. The adapter, approval-draft generator, immutable Git revision set, request guard,
-and single-submit runner reject endpoint/model/profile mixing before dispatch. This offline support
-does not authorize a Provider call: generate a new private policy and non-approval draft from the
-clean implementation commit, then obtain a fresh source-bound quote and single-request maximum
-approval before the first POST.
+and single-submit runner reject endpoint/model/profile mixing before dispatch. Before that request
+was sent, it required a new private policy, non-approval draft, fresh source-bound quote, and
+single-request maximum approval from the clean implementation commit.
 
-Prepared operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` is bound to clean adapter commit
-`9b6cc058091837aa17641871c94138e9c164c0a6` and retained source SHA-256
-`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`. Its proposed pricing policy
-and non-approval draft SHA-256 values are respectively
-`8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c` and
-`1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The official verifier
-rejects the sentinels, so this preparation cannot dispatch. Obtain a new explicit USD `0.08` quote
-and USD `1.00` maximum authorization before fresh pre-call meters and final approval.
+Operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` was later explicitly approved for USD
+`0.08` with a USD `1.00` maximum. From clean adapter commit
+`9b6cc058091837aa17641871c94138e9c164c0a6`, it sent exactly one documented multipart POST and was
+not retried. Packy returned definite HTTP 400 after `991 ms`; report SHA-256
+`2ce500d9eb064e324216320d5f972bcdeb1748aeeb2242be68c3f2d1960460ae` records `REJECTED`, one
+create request, no Provider request-ID hash, and no image. The pre-call and settled billing captures
+remained byte-identical. Official receipt SHA-256
+`c62bbc576368df51e72406023ff9e2a4be2551498d0fd3f7f5ef7d5a6e342d36` records `NO_CHARGE`,
+`billingGate=PASS`, zero billed units, and `sameRequestRetryAllowed=false`; replay was byte-identical.
+
+This closes both the generic and documented Packy requests as negative evidence for the tested
+account/model/route. Never retry either Operation ID or relabel either request. Do not send
+`FULL_EDIT` or `INPAINT` through the same route. Require a Provider-confirmed material
+route/account/contract change or a different edit-capable Provider before beginning a new bounded
+price, approval, and evidence sequence.
 
 Successful sandbox output must be fully decoded before it can become capability evidence. Reject
 truncated or animated media, declared/decoded MIME mismatches, shared byte/pixel limit violations,

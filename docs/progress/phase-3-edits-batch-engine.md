@@ -512,13 +512,15 @@ Progress: 4/5 tasks.
   typechecks and the static contract passed. Full preflight passed `446/0` with the two expected
   local-extension permission warnings. No Provider request or charge occurred, and counts remain
   `4/5` and `32/37`.
-- Commit `9b6cc058091837aa17641871c94138e9c164c0a6` was pushed and used in a detached private checkout
-  to prepare operation `qa02-packy-i2i-documented-20260801-9b6cc05-01`. Proposed pricing policy
+- At that preparation checkpoint, commit `9b6cc058091837aa17641871c94138e9c164c0a6` had been pushed
+  and used in a detached private checkout to prepare operation
+  `qa02-packy-i2i-documented-20260801-9b6cc05-01`. Proposed pricing policy
   SHA-256 is `8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c`; non-approval draft
   SHA-256 is `1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The draft binds source
   `5d2627...6e32`, retains its review sentinels, and is rejected by the official no-key verifier.
-  Private ACL/digest checks passed. The proposed USD `0.08` quote and USD `1.00` maximum still need
-  new explicit authorization; no credential read, Provider GET/POST or charge occurred.
+  Private ACL/digest checks passed. The proposed USD `0.08` quote and USD `1.00` maximum still
+  required new explicit authorization at that point; no credential read, Provider GET/POST, or
+  charge had occurred during preparation.
 - Offline evidence hardening now fully decodes sandbox output before success, rejects truncated and
   animated media, enforces shared byte/pixel/MIME limits, and requires exact approved dimensions.
   Post-acceptance validation failure remains `RECONCILIATION_REQUIRED` and keeps the known Provider
@@ -527,3 +529,17 @@ Progress: 4/5 tasks.
   typechecks, targeted lint, the static contract and diff checks passed. Full preflight passed
   `446/0` with the two expected local-extension permission warnings. No Provider call or charge
   occurred, and counts remain `4/5` and `32/37`.
+- The operator approved the prepared documented Packy request as
+  `qa02-packy-i2i-documented-20260801-9b6cc05-01`. From clean commit `9b6cc05`, the runner sent one
+  `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` multipart POST with `quality=high`, `output_format=png`,
+  `response_format=url`, and omitted `input_fidelity`; it did not retry. Packy returned definite
+  HTTP 400 after `991 ms`. Report SHA-256 `2ce500d9...460ae` records `REJECTED`, one create request,
+  no Provider request-ID hash, and no image. Pre-call/settled manifest SHA-256 values are
+  `0916cb23...cab42` and `57c33eb2...0b954`; quota, displayed usage, and Token log were byte-identical.
+  Attestation SHA-256 `9bfcbf8d...e3dff` produced official receipt SHA-256
+  `c62bbc57...42d36`, which records `NO_CHARGE`, `PASS`, zero billed units, and no same-request
+  retry; replay preserved the exact bytes. Archive manifest SHA-256 is `3a59161e...c97cc`, and
+  run-summary SHA-256 is `4c0c402a...c81fa`. Exact/generic credential scans and private ACL checks
+  passed. This closes the documented Packy attempt as negative evidence; `FULL_EDIT` and `INPAINT`
+  were not sent. `QA-02` remains `4/5`, overall progress remains `32/37`, and no Registry, rollout,
+  deployment, flag, ERP ingest, or Ozon mutation occurred.

@@ -375,7 +375,7 @@ reuse its approval for `FULL_EDIT` or `INPAINT`, which share `/v1/images/edits`.
 QA-02 sequence requires a Provider-confirmed request-contract/account correction or another
 edit-capable endpoint, followed by new operation-specific policies and approvals.
 
-## Packy documented edit-profile follow-up
+## Packy documented edit-profile preparation
 
 The rejected request used `OPENAI_SQUARE_SINGLE_V1` and omitted Packy's documented edit-specific
 fields. A new offline-only `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` profile now binds exact API Base
@@ -385,10 +385,11 @@ and multipart values `quality=high`, `output_format=png`, and `response_format=u
 reject profile/endpoint/model mixing before dispatch, and the immutable adapter revision includes
 the profile module.
 
-This is a materially different candidate request, not a retry or renamed copy of the consumed
-operation. It has not been sent and has incurred no charge. It requires a new clean implementation
-commit, new Operation ID, new private policy and non-approval draft, fresh pre-call meters, and a
-new explicit source-bound single-request maximum approval before any Provider POST.
+At this preparation checkpoint, this was a materially different candidate request, not a retry or
+renamed copy of the consumed operation. It had not been sent and had incurred no charge. It still
+required a new clean implementation commit, new Operation ID, new private policy and non-approval
+draft, fresh pre-call meters, and a new explicit source-bound single-request maximum approval before
+any Provider POST.
 
 Implementation commit `9b6cc058091837aa17641871c94138e9c164c0a6` is pushed. From a detached
 private checkout, proposed operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` produced
@@ -398,4 +399,39 @@ and schema-v3 non-approval draft SHA-256
 SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, keeps its statement and
 timestamp sentinels, and fails official no-key verification with `SANDBOX_APPROVAL_SCHEMA_INVALID`.
 Private ACL and digest checks pass. The credential was not read and no Provider request or charge
-occurred; USD `0.08`/USD `1.00` remain proposed values pending a new exact approval.
+had occurred at that point; USD `0.08`/USD `1.00` remained proposed values pending a new exact
+approval.
+
+## Packy documented edit-profile outcome
+
+The operator subsequently approved that exact request. Final approval SHA-256 was
+`791cced1ebf2cffd37d750c6a99c45d3b1efe4f76fb6e2fac65f7ba26d580198`, and fresh pre-call manifest
+SHA-256 was `0916cb23af6d79034de743574bdfade8b16cb98199d9914b2e482608360cab42`.
+Operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` sent exactly one
+`PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` multipart POST and was not retried. The request included
+`quality=high`, `output_format=png`, and `response_format=url`, omitted `input_fidelity`, and used
+the operator-confirmed Sora-group credential. Packy returned HTTP 400 after `991 ms`. Report v5
+SHA-256 `2ce500d9eb064e324216320d5f972bcdeb1748aeeb2242be68c3f2d1960460ae` records `REJECTED`,
+`createRequests=1`, `PROVIDER_REQUEST_FAILED`, no Provider request-ID hash, and no image.
+
+The settled seven-GET manifest SHA-256 was
+`57c33eb2e05eab8687cabac92d80162361e3bd8f96e9e530cd4e59a084c0b954`. Raw quota, displayed total
+usage, and the empty Token log remained byte-identical to the pre-call values. Exact attestation
+SHA-256 `9bfcbf8d4de39772a5d3a3fe966be6b9c677d2a00ee11f1d907c0bbf93ce3dff` therefore recorded
+`NO_CHARGE`. Official receipt v3 SHA-256
+`c62bbc576368df51e72406023ff9e2a4be2551498d0fd3f7f5ef7d5a6e342d36` records `REJECTED`,
+`billingGate=PASS`, actual USD `0.00`, zero billed units, and `sameRequestRetryAllowed=false`.
+Exact replay returned the same receipt bytes.
+
+The sanitized six-file archive manifest SHA-256 is
+`3a59161e3fd4da8e9b6aa9b4054189513bff076591c1eb006063e8232f7c97cc`; private run-summary SHA-256
+is `4c0c402ad872b13dd2204c1f0fc6b54d1e42fd9884542378abb9ccf5e9ac81fa`. Exact Token and generic
+credential scans found zero matches, while all private ACL and reparse-point checks passed.
+
+This outcome removes the earlier ambiguity about omitted documented fields: the documented Packy
+contract also failed before an accepted task or charge. It does not establish that edits are
+unsupported for every Packy account, but it is conclusive negative evidence for this account,
+credential revision, model, endpoint, and contract. Do not retry this Operation ID, rename the same
+request, or send `FULL_EDIT`/`INPAINT` through the same route. The next positive QA-02 attempt needs
+a Provider-confirmed material route/account/contract change or a different edit-capable Provider,
+followed by a new operation-specific price policy, approval, settlement, and human quality review.
