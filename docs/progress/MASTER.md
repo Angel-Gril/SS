@@ -576,6 +576,17 @@ typechecks and the static single-submit contract passed. Full preflight passed `
 expected local-extension permission warnings. No Provider request, charge, Registry, deployment,
 flag, ingest or Ozon mutation occurred, so counts remain `4/5` and `32/37`.
 
+Clean adapter commit `9b6cc058091837aa17641871c94138e9c164c0a6` was pushed, then a detached
+private checkout generated the next non-approval artifacts without reading the DPAPI credential.
+Proposed operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` reuses only the retained source
+bytes with SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`.
+Pricing policy `qa02-packy-gpt-image-2-i2i-documented-usd-v1-9b6cc05` has SHA-256
+`8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c`; schema-v3 draft SHA-256 is
+`1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The draft retains all
+review sentinels, the official no-key verifier rejects it with `SANDBOX_APPROVAL_SCHEMA_INVALID`,
+and private ACL plus digest checks pass. USD `0.08` and USD `1.00` are proposed quote/maximum values,
+not a new authorization. No Provider GET/POST, credential read or charge occurred.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and

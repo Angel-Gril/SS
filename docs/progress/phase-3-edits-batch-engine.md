@@ -512,6 +512,13 @@ Progress: 4/5 tasks.
   typechecks and the static contract passed. Full preflight passed `446/0` with the two expected
   local-extension permission warnings. No Provider request or charge occurred, and counts remain
   `4/5` and `32/37`.
+- Commit `9b6cc058091837aa17641871c94138e9c164c0a6` was pushed and used in a detached private checkout
+  to prepare operation `qa02-packy-i2i-documented-20260801-9b6cc05-01`. Proposed pricing policy
+  SHA-256 is `8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c`; non-approval draft
+  SHA-256 is `1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The draft binds source
+  `5d2627...6e32`, retains its review sentinels, and is rejected by the official no-key verifier.
+  Private ACL/digest checks passed. The proposed USD `0.08` quote and USD `1.00` maximum still need
+  new explicit authorization; no credential read, Provider GET/POST or charge occurred.
 - Offline evidence hardening now fully decodes sandbox output before success, rejects truncated and
   animated media, enforces shared byte/pixel/MIME limits, and requires exact approved dimensions.
   Post-acceptance validation failure remains `RECONCILIATION_REQUIRED` and keeps the known Provider

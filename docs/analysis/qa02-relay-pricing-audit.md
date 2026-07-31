@@ -389,3 +389,13 @@ This is a materially different candidate request, not a retry or renamed copy of
 operation. It has not been sent and has incurred no charge. It requires a new clean implementation
 commit, new Operation ID, new private policy and non-approval draft, fresh pre-call meters, and a
 new explicit source-bound single-request maximum approval before any Provider POST.
+
+Implementation commit `9b6cc058091837aa17641871c94138e9c164c0a6` is pushed. From a detached
+private checkout, proposed operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` produced
+pricing-policy SHA-256 `8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c`
+and schema-v3 non-approval draft SHA-256
+`1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The draft binds source
+SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, keeps its statement and
+timestamp sentinels, and fails official no-key verification with `SANDBOX_APPROVAL_SCHEMA_INVALID`.
+Private ACL and digest checks pass. The credential was not read and no Provider request or charge
+occurred; USD `0.08`/USD `1.00` remain proposed values pending a new exact approval.

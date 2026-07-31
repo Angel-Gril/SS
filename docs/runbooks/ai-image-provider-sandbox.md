@@ -389,6 +389,15 @@ does not authorize a Provider call: generate a new private policy and non-approv
 clean implementation commit, then obtain a fresh source-bound quote and single-request maximum
 approval before the first POST.
 
+Prepared operation `qa02-packy-i2i-documented-20260801-9b6cc05-01` is bound to clean adapter commit
+`9b6cc058091837aa17641871c94138e9c164c0a6` and retained source SHA-256
+`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`. Its proposed pricing policy
+and non-approval draft SHA-256 values are respectively
+`8744574db12812666ba16b4a7725d8dd617fcddb03b7f98bd722ae4dd002977c` and
+`1bad6cdb203914f54dfb1935b6c50b977cd2b0f9e8c6f4427e9bc253bd061da1`. The official verifier
+rejects the sentinels, so this preparation cannot dispatch. Obtain a new explicit USD `0.08` quote
+and USD `1.00` maximum authorization before fresh pre-call meters and final approval.
+
 Successful sandbox output must be fully decoded before it can become capability evidence. Reject
 truncated or animated media, declared/decoded MIME mismatches, shared byte/pixel limit violations,
 and any dimensions different from the approved request profile. If the Provider already returned
