@@ -44,8 +44,21 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-`DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema `v2`
-one-request approval with `approvedAt`/`expiresAt`, a positive validity window capped at 60 minutes,
+Current checkpoint (2026-08-01): `QA-02` remains the only implementation-ready open task at
+Phase 3 `4/5`; PackyAPI is a prepared protocol candidate, not a verified edit-capable Provider.
+Credential revision `packy-sora-key-rotation-20260801-01` is invalidated: a local PowerShell
+UTF-16 stdin attempt caused its Authorization header value to appear in local stderr. Its DPAPI
+artifact remains in private quarantine and must never be restored. Replacement revision
+`packy-sora-key-rotation-20260801-02` is now stored in the active current-user DPAPI path; its ACL
+permits only the current user, SYSTEM, and Administrators, and DPAPI metadata validation passed
+without exposing plaintext. The official authenticated GET-only preflight has not run yet. The
+failed `-01` attempt stopped during Undici Header construction, before network dispatch, so it made
+no authenticated request, Provider POST, or charge. `QA-04`, `REL-03`, `REL-04`, and `REL-02`
+remain blocked; overall progress stays `32/37` and all rollout flags remain off.
+
+`DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
+approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
+a positive validity window capped at 60 minutes,
 strict UTF-8/duplicate-key/bounded-file checks, and freshness rechecks after DNS, at the immutable
 claim, before Provider execution, and at both generation/edit POST boundaries. The offline
 `sandbox:ai-image:approval:verify` command rejects submit secrets, non-HTTPS/localhost endpoints,
@@ -445,6 +458,54 @@ schema remained. No Provider, VPS, deployment, signature, distribution, feature 
 action ran. `QA-02`, `QA-04`, `REL-03`, `REL-04`, `REL-02` and the overall `32/37` count remain
 unchanged.
 
+The PackyAPI candidate is prepared for bounded authenticated edit verification, but it is not
+capability evidence yet. Credential revision `packy-sora-key-rotation-20260801-01` previously
+passed a bounded same-origin GET-only observation at `https://www.packyapi.ai/v1`: models, raw
+quota, displayed usage, and Token log returned HTTP 200 with byte-identical before/after snapshots.
+That remains historical transport evidence from the time of observation only; it is not an active
+credential gate. Its sanitized read-only manifest SHA-256 is
+`5f5829e7ec0d8703956112878929894bb161bf51e53ce51d3f8bda4e2a8ff3fc`. A later attempt to run the
+new official preflight delivered the credential as UTF-16 and exposed its Authorization value in
+local stderr while Undici rejected the header, before network dispatch. The credential is now
+invalid and its DPAPI artifact is quarantined. Replacement revision
+`packy-sora-key-rotation-20260801-02` is present only in the active current-user DPAPI path and has
+not yet run the official authenticated preflight. The
+`https://slb-v1.api.fan/v1` edge has incomplete same-origin metering and remains excluded from paid
+verification; the selected candidate API Base is `https://www.packyapi.ai/v1`.
+
+Public documentation identifies model `gpt-image-2`, Sora-group access, synchronous multipart
+`/v1/images/edits`, and the three operation mappings. Public price remains only an input to private
+policy: each operation has a USD `0.08` quote and USD `1.00` single-request maximum; Provider price
+synchronization is not required. Private bounded source/mask media remain reusable. All policy and
+approval drafts bound to `slb-v1.api.fan` are obsolete, and the main-base policies and schema-v3
+drafts bound to invalid credential revision `packy-sora-key-rotation-20260801-01` must not be
+finalized or used.
+
+The invalidated private main-base policy revisions have SHA-256 values `4f962b72ce5005c437e0df5887c6cd76b7c56abadfa0061b4dc90f0b8464cefa`
+(`IMAGE_TO_IMAGE`), `cbdf62711fe3986366fe51c1ff61d7342ece8d79e9f509ff63127d5b8e1e3b76`
+(`FULL_EDIT`), and `074b9ccb59d2561b27af19c834068b6d0c5bd926b64fd8aaa0de870b074344d1`
+(`INPAINT`). Clean checkout `cd8455e5818576300bc07dae80e7b46b0f49cc65` generated matching
+schema-v3 draft SHA-256 values `e1674527ac78d2fd81f4b4fab3221834666ea2b5f4072b53d78a3ef5a839928b`,
+`255263c896789ceed1b2c7bbe587f54d9f72c1550f968d7e0ea0c3371b9b315f`, and
+`8cbe900f84f3b99ff6fb23db7e9a7ce6d4e0bd38b4a4dff3d228a9196d5aee0f`. They retain the mandatory
+review sentinels and are historical preparation evidence only. After Provider-side rotation, every
+credential-revision-bound policy and approval artifact must be regenerated and independently
+reviewed.
+
+The official `sandbox:ai-image:readonly:preflight` helper now accepts a credential only through
+bounded UTF-8 stdin, performs the fixed seven-GET observation, and writes a descriptor-bound private
+evidence bundle. Its Windows matrix passes `51` with four POSIX cases skipped, and its Linux
+`--network none` matrix passes `55/55`, including UTF-16, exact raw-quota schema, symlink,
+parent/child replacement, and private-mode boundaries. It has not run with a valid replacement
+credential. The combined approval/submit/preflight/finalization/settlement matrix passes `203` with
+six platform-specific skips, the mocked exact-money edit matrix passes `58/58`, and the network-free
+candidate review contract passes `27/27`. Static and sandbox contracts, Server typecheck, targeted
+script ESLint, repository lint (`20` existing Server and one shared warning), and final full preflight
+(`446/0` with two expected local-package permission warnings) pass. No Packy Provider POST, charge,
+Registry change, flag change, deployment, ingest, or Ozon write occurred.
+Both checked SSH runners closed port 22 before a remote command, so a reachable real-DNS allowlisted
+execution node is still unavailable. `QA-02` remains `4/5` and overall progress remains `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -452,14 +513,19 @@ unchanged.
 2. Do not retry `qa02-centos-i2i-20260730-094857-01` and do not send `FULL_EDIT` or `INPAINT` with
    the same `ai.centos.hk` Token/model. Its catalogue authentication works, but its edit POST was
    definitively rejected by the Provider authentication layer and settled with no charge.
-3. `QA-02` paid edit testing is operator-paused. After selecting an actually edit-capable
-   endpoint/model, prepare separate bounded source/mask bytes and a private versioned backend
-   policy for each operation. Bind the exact profile, quote and one-request maximum; Provider
-   pricing API sync is not required. Obtain a new explicit
-   approval for each paid POST and settle it before the next operation. Only after positive custom
-   derived-image evidence is accepted, add that exact provider/model contract to the reviewed
-   allowlist in `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed
-   candidate.
+3. Never restore or reuse quarantined credential revision
+   `packy-sora-key-rotation-20260801-01`. Replacement revision
+   `packy-sora-key-rotation-20260801-02` is stored in the active private DPAPI path and still needs
+   the official GET-only preflight from a clean exact revision using bounded UTF-8 stdin. Only after
+   that preflight succeeds may new credential-revision-bound policies,
+   approvals, and pre-call snapshots be generated for `IMAGE_TO_IMAGE`, `FULL_EDIT`, and
+   `INPAINT`. Do not use `slb-v1.api.fan` for a paid request because its same-origin settlement
+   meters are incomplete. Execute and settle only one approved POST before considering the next;
+   never retry an uncertain POST. Provider price API synchronization is not required. Only after all
+   three positive custom
+   derived-image reports, billing receipts, and human quality review pass the candidate-only
+   boundary may a separate reviewed change add the exact provider/model contract to
+   `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
 4. Keep async marked unsupported unless the Relay supplies an explicit task protocol; absence does
    not justify a paid POST. Do not promote any edit capability from text-to-image evidence.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute

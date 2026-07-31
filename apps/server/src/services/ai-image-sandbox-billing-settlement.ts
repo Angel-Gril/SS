@@ -680,6 +680,7 @@ function sameFileIdentity(
 async function openPrivateOutputDirectory(
   path: string,
   allowedRoot: string,
+  descriptorBoundPath?: string,
 ): Promise<PrivateOutputDirectory> {
   const resolvedPath = resolve(path);
   const canonicalPath = await realpath(resolvedPath);
@@ -703,7 +704,7 @@ async function openPrivateOutputDirectory(
   }
   const directoryFlags = constants.O_RDONLY
     | (process.platform === 'win32' ? 0 : (constants.O_DIRECTORY || 0) | constants.O_NOFOLLOW);
-  const handle = await open(canonicalPath, directoryFlags);
+  const handle = await open(descriptorBoundPath || canonicalPath, directoryFlags);
   try {
     const handleMetadata = await handle.stat({ bigint: true });
     const directory = {
@@ -952,11 +953,11 @@ async function readExactPrivateFile(
   return evidence.bytes.equals(expected);
 }
 
-async function writeExclusiveAtomicFile(path: string, bytes: Buffer, allowedRoot: string) {
-  const outputDirectoryPath = dirname(path);
-  await ensurePrivateDirectory(outputDirectoryPath, allowedRoot);
-  const directory = await openPrivateOutputDirectory(outputDirectoryPath, allowedRoot);
-  const finalName = basename(path);
+async function writePrivateOutputEntry(
+  directory: PrivateOutputDirectory,
+  finalName: string,
+  bytes: Buffer,
+) {
   const temporaryName = `${finalName}.${process.pid}.${randomUUID()}.tmp`;
   const temporaryPath = privateOutputEntryPath(directory, temporaryName);
   const finalPath = privateOutputEntryPath(directory, finalName);
@@ -988,8 +989,127 @@ async function writeExclusiveAtomicFile(path: string, bytes: Buffer, allowedRoot
     await assertPrivateOutputDirectoryStable(directory);
   } finally {
     await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
+async function writeExclusiveAtomicFile(path: string, bytes: Buffer, allowedRoot: string) {
+  const outputDirectoryPath = dirname(path);
+  await ensurePrivateDirectory(outputDirectoryPath, allowedRoot);
+  const directory = await openPrivateOutputDirectory(outputDirectoryPath, allowedRoot);
+  try {
+    await writePrivateOutputEntry(directory, basename(path), bytes);
+  } finally {
     await directory.handle.close();
   }
+}
+
+export interface AiImageSandboxPrivateEvidenceBundleInput {
+  repositoryRoot: string;
+  evidenceRoot: string;
+  directoryName: string;
+  files: Array<{ name: string; bytes: Buffer }>;
+  beforeEntryWrite?: (input: {
+    index: number;
+    name: string;
+    outputDirectory: string;
+  }) => Promise<void> | void;
+}
+
+export async function writeAiImageSandboxPrivateEvidenceBundle(
+  input: AiImageSandboxPrivateEvidenceBundleInput,
+) {
+  if (!OPERATION_ID_PATTERN.test(input.directoryName)) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_CONFIG_INVALID',
+      'Sandbox private evidence directory name is invalid',
+    );
+  }
+  if (!Array.isArray(input.files) || input.files.length === 0 || input.files.length > 32) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_CONFIG_INVALID',
+      'Sandbox private evidence bundle is invalid',
+    );
+  }
+  const names = new Set<string>();
+  for (const file of input.files) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(file.name)
+      || names.has(file.name)
+      || !Buffer.isBuffer(file.bytes)
+      || file.bytes.byteLength === 0
+      || file.bytes.byteLength > MAX_BILLING_SNAPSHOT_BYTES
+    ) {
+      throw new AiImageSandboxBillingSettlementError(
+        'SANDBOX_BILLING_CONFIG_INVALID',
+        'Sandbox private evidence bundle entry is invalid',
+      );
+    }
+    names.add(file.name);
+  }
+  const allowedRoot = await resolvePrivateEvidenceRoot(
+    input.repositoryRoot,
+    input.evidenceRoot,
+  );
+  const outputDirectory = resolve(allowedRoot, input.directoryName);
+  if (!isPathWithin(allowedRoot, outputDirectory) || dirname(outputDirectory) !== allowedRoot) {
+    throw new AiImageSandboxBillingSettlementError(
+      'SANDBOX_BILLING_FILE_UNSAFE',
+      'Sandbox private evidence directory escaped its root',
+    );
+  }
+  const rootDirectory = await openPrivateOutputDirectory(allowedRoot, allowedRoot);
+  try {
+    const descriptorBoundOutputDirectory = privateOutputEntryPath(
+      rootDirectory,
+      input.directoryName,
+    );
+    await assertPrivateOutputDirectoryStable(rootDirectory);
+    try {
+      await mkdir(descriptorBoundOutputDirectory, { mode: 0o700 });
+    } catch (error) {
+      if (errorCode(error) === 'EEXIST') {
+        throw new AiImageSandboxBillingSettlementError(
+          'SANDBOX_BILLING_FILE_UNSAFE',
+          'Sandbox private evidence directory already exists',
+        );
+      }
+      throw error;
+    }
+    try {
+      await rootDirectory.handle.sync();
+    } catch (error) {
+      if (!isUnsupportedWindowsDirectorySync(error)) throw error;
+    }
+    await assertPrivateOutputDirectoryStable(rootDirectory);
+    const directory = await openPrivateOutputDirectory(
+      outputDirectory,
+      allowedRoot,
+      descriptorBoundOutputDirectory,
+    );
+    try {
+      await tolerateWindowsMode(() => directory.handle.chmod(0o700));
+      await assertPrivateOutputDirectoryStable(rootDirectory);
+      await assertPrivateOutputDirectoryStable(directory);
+      for (const [index, file] of input.files.entries()) {
+        await input.beforeEntryWrite?.({
+          index,
+          name: file.name,
+          outputDirectory: directory.path,
+        });
+        await assertPrivateOutputDirectoryStable(rootDirectory);
+        await assertPrivateOutputDirectoryStable(directory);
+        await writePrivateOutputEntry(directory, file.name, file.bytes);
+        await assertPrivateOutputDirectoryStable(rootDirectory);
+      }
+      await assertPrivateOutputDirectoryStable(directory);
+      await assertPrivateOutputDirectoryStable(rootDirectory);
+    } finally {
+      await directory.handle.close();
+    }
+  } finally {
+    await rootDirectory.handle.close();
+  }
+  return { evidenceRoot: allowedRoot, outputDirectory };
 }
 
 function assertApprovalEvidence(value: unknown) {

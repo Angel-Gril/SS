@@ -140,6 +140,50 @@ sanitized approval validity window without exposing either URL. It rejects a non
 Approval freshness is checked again throughout the submit path and immediately before the single
 Provider POST.
 
+### Packy GET-only transport and meter preflight
+
+Before reviewing a paid Packy approval, run the dedicated read-only command from the exact clean Git
+revision that would execute the request:
+
+```bash
+pnpm --filter server sandbox:ai-image:readonly:preflight
+```
+
+The command is intentionally restricted to API Base `https://www.packyapi.ai/v1`, host
+`www.packyapi.ai`, and model `gpt-image-2`. It requires `NODE_ENV=sandbox`, the exact non-secret
+adapter and credential revisions, `AI_IMAGE_SANDBOX_OPERATION_ID`, and one new
+`AI_IMAGE_SANDBOX_READONLY_EVIDENCE_ID`. It rejects `AI_IMAGE_SANDBOX_API_KEY`, paid confirmation,
+Authorization, and common Provider secret variables in the environment.
+
+Supply the credential only as bounded UTF-8 stdin. One final LF or CRLF is accepted; UTF-16, NUL,
+control characters, multiple lines, and values outside the printable ASCII/byte limits fail before
+an Authorization header is constructed. On PowerShell, do not pipe a .NET string through the
+default native pipeline encoding. Use a process with redirected stdin and set
+`StandardInputEncoding` to `new UTF8Encoding(false)`, keeping the decrypted value only in memory.
+The script accepts no argv values and rejects them before DNS or stdin. Never rely on that rejection
+to hide a command-line credential: shells and package managers such as pnpm may echo argv before the
+script starts. The direct Node/tsx entry emits only `AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_FAILED`
+and a stable failure code; it never prints a Provider body or credential. Secret-shaped operation
+IDs, evidence IDs, credential revisions, and evidence-root paths are also rejected.
+If a credential ever reaches argv, stdout, or stderr, revoke it at the Provider, quarantine the
+local artifact, and regenerate every credential-revision-bound policy and approval. A historical
+read-only observation does not make an exposed credential reusable.
+
+The command uses public DoH, rejects private DNS results, pins the accepted addresses, disables
+redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET sequence:
+before/after raw quota, displayed usage, and Token log, plus one model-catalogue check. Every body
+must be bounded UTF-8 JSON with its minimum successful schema. Raw quota requires `code: true` and
+the reviewed numeric `total_available`, `total_granted`, and `total_used` fields rather than any
+unrelated numeric property. The exact model must be visible, and all three before/after meter bodies
+must be byte-identical. Content-Type is normalized before it can enter the manifest, and parsed JSON
+is recursively checked for credential reflection. It writes a
+new private directory under the canonical `AI_IMAGE_SANDBOX_EVIDENCE_ROOT` (default
+`tmp/ai-image-sandbox`) containing the seven raw JSON files and one canonical sanitized manifest.
+Directory handles, real paths and device/inode identity remain bound through each exclusive durable
+write; the manifest is written last, and existing evidence is never overwritten. This proves only the
+credential/catalogue/meter read path; it is not an edit-capability result, paid approval, price
+source, Provider-side spending limit, or permission to retry a POST.
+
 ## International OpenAI-Compatible Probe
 
 This lane accepts an operator-approved third-party endpoint. The configured base URL must use HTTPS, contain a DNS hostname, and contain no credentials, query, fragment, or `/images/generations` or `/images/edits` operation path. The CLI normalizes the base to `/v1`, requires `AI_IMAGE_SANDBOX_EXPECTED_HOST` to equal its hostname, validates public DNS, pins the resolved addresses, and permits one create POST.

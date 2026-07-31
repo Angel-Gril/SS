@@ -1404,6 +1404,154 @@ describe('single-submit AI image sandbox runner', () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['IMAGE_TO_IMAGE', 'Use the supplied source image as the only visual reference.', false],
+    ['FULL_EDIT', 'Restyle the complete supplied product image', false],
+    ['INPAINT', 'Modify only the transparent mask region of the supplied product image.', true],
+  ] as const)(
+    'submits one exact-money v3/v5 mocked multipart request for %s',
+    async (operation, promptFragment, expectsMask) => {
+      const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-edit-'));
+      directories.push(path);
+      const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+      await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+      const source = await sharp({
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 255, g: 255, b: 255, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
+      const mask = await sharp(
+        Buffer.from([255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255]),
+        { raw: { width: 2, height: 2, channels: 4 } },
+      )
+        .png()
+        .toBuffer();
+      const result = await sharp({
+        create: { width: 3, height: 3, channels: 3, background: '#eeeeee' },
+      })
+        .png()
+        .toBuffer();
+      await writeFile(join(path, 'source.png'), source, { mode: 0o600 });
+      if (expectsMask) await writeFile(join(path, 'mask.png'), mask, { mode: 0o600 });
+
+      const sourceSha256 = createHash('sha256').update(source).digest('hex');
+      const maskSha256 = createHash('sha256').update(mask).digest('hex');
+      const operationId = `sandbox-exact-${operation.toLowerCase().replaceAll('_', '-')}-0001`;
+      const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        expect(String(input)).toBe('https://relay.example/v1/images/edits');
+        expect(init?.method).toBe('POST');
+        const form = init?.body as FormData;
+        expect(form).toBeInstanceOf(FormData);
+        expect(form.get('model')).toBe('opaque-edit-model');
+        expect(form.get('n')).toBe('1');
+        expect(form.get('size')).toBe('1024x1024');
+        expect(form.get('prompt')).toEqual(expect.stringContaining(promptFragment));
+        expect(form.getAll('image')).toHaveLength(1);
+        expect(form.has('image[]')).toBe(false);
+        const submittedSource = form.get('image') as Blob;
+        expect(submittedSource.type).toBe('image/png');
+        expect(Buffer.from(await submittedSource.arrayBuffer())).toEqual(source);
+        if (expectsMask) {
+          expect(form.getAll('mask')).toHaveLength(1);
+          const submittedMask = form.get('mask') as Blob;
+          expect(submittedMask.type).toBe('image/png');
+          expect(Buffer.from(await submittedMask.arrayBuffer())).toEqual(mask);
+        } else {
+          expect(form.has('mask')).toBe(false);
+        }
+        return new Response(
+          JSON.stringify({
+            id: `provider-${operation.toLowerCase()}-success-1`,
+            data: [{ b64_json: result.toString('base64') }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      });
+
+      const report = await runAiImageProviderSingleSubmit({
+        environment: await withSandboxApproval(path, {
+          NODE_ENV: 'sandbox',
+          AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+          AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+          AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+          AI_IMAGE_SANDBOX_MODEL: 'opaque-edit-model',
+          AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+          AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: `admin-config-rev-exact-${operation.toLowerCase()}`,
+          AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+          AI_IMAGE_SANDBOX_OPERATION: operation,
+          AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+          AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+          AI_IMAGE_SANDBOX_SOURCE_PATH: 'source.png',
+          AI_IMAGE_SANDBOX_SOURCE_SHA256: sourceSha256,
+          ...(expectsMask
+            ? {
+                AI_IMAGE_SANDBOX_MASK_PATH: 'mask.png',
+                AI_IMAGE_SANDBOX_MASK_SHA256: maskSha256,
+              }
+            : {}),
+          AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+          AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '8',
+          AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+          AI_IMAGE_SANDBOX_COST_SCALE: '2',
+        }),
+        outputDirectory: path,
+        repositoryRoot: path,
+        resolveDns: async () => [{ address: '93.184.216.34' }],
+        fetch,
+      });
+
+      const storedReport = JSON.parse(
+        await readFile(join(path, `${operationId}.report.json`), 'utf8'),
+      );
+      const storedIntent = JSON.parse(
+        await readFile(join(path, 'intents', `${operationId}.intent.json`), 'utf8'),
+      );
+      const quotedCost = { currency: 'USD', amount: 8, scale: 2 };
+      const maximumCost = { currency: 'USD', amount: 100, scale: 2 };
+      const expectedMaskSha256 = expectsMask ? maskSha256 : null;
+
+      expect(report).toMatchObject({
+        schemaVersion: 5,
+        state: 'SUCCEEDED',
+        operation,
+        sourceSha256: [sourceSha256],
+        maskSha256: expectedMaskSha256,
+        createRequests: 1,
+        actualCost: null,
+        quotedCost,
+        maximumCost,
+        approvalEvidence: {
+          currency: 'USD',
+        },
+      });
+      expect(storedReport).toMatchObject({
+        schemaVersion: 5,
+        operation,
+        quotedCost,
+        maximumCost,
+      });
+      expect(storedIntent).toMatchObject({
+        schemaVersion: 3,
+        quotedCost,
+        maximumCost,
+        request: {
+          operation,
+          sourceSha256: [sourceSha256],
+          maskSha256: expectedMaskSha256,
+        },
+      });
+      for (const artifact of [report, storedReport, storedIntent]) {
+        expect(JSON.stringify(artifact)).not.toMatch(/(?:actual|quoted|maximum)CostCents/u);
+      }
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
+
   it('keeps exact money in a v5 reconciliation report after the guarded POST dispatches', async () => {
     const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-failure-'));
     directories.push(path);

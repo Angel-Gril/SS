@@ -38,6 +38,10 @@ const billingFinalizer = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-billing-finalize.ts',
   'utf8',
 );
+const readonlyPreflight = fs.readFileSync(
+  'apps/server/scripts/ai-image-provider-readonly-preflight.ts',
+  'utf8',
+);
 const billingSettlement = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'utf8',
@@ -245,6 +249,34 @@ assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
 assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_PATH/u);
 assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_SHA256/u);
 assert.match(billingFinalizer, /ai-image-sandbox-money\.ts/u);
+assert.match(readonlyPreflight, /PACKY_API_BASE\s*=\s*'https:\/\/www\.packyapi\.ai\/v1'/u);
+assert.match(readonlyPreflight, /PACKY_MODEL\s*=\s*'gpt-image-2'/u);
+assert.match(readonlyPreflight, /readAiImageProviderCredential/u);
+assert.match(readonlyPreflight, /source:\s*AsyncIterable<unknown>\s*=\s*process\.stdin/u);
+assert.match(readonlyPreflight, /TextDecoder\('utf-8',\s*\{\s*fatal:\s*true\s*\}\)/u);
+assert.match(readonlyPreflight, /\^\[\\x21-\\x7e\]\{16,512\}\$/u);
+assert.match(readonlyPreflight, /\/api\/usage\/token\//u);
+assert.match(readonlyPreflight, /\/v1\/dashboard\/billing\/usage/u);
+assert.match(readonlyPreflight, /\/api\/log\/token/u);
+assert.match(readonlyPreflight, /method:\s*'GET'/u);
+assert.match(readonlyPreflight, /redirect:\s*'error'/u);
+assert.match(readonlyPreflight, /credentials:\s*'omit'/u);
+assert.match(readonlyPreflight, /MAX_RESPONSE_BYTES\s*=\s*1_048_576/u);
+assert.match(readonlyPreflight, /MAX_DOH_RESPONSE_BYTES\s*=\s*64\s*\*\s*1_024/u);
+assert.match(readonlyPreflight, /body\.Status\s*!==\s*0/u);
+assert.match(readonlyPreflight, /assertExpectedResponseSchema/u);
+assert.match(readonlyPreflight, /containsCredential/u);
+assert.match(readonlyPreflight, /contentType:\s*'application\/json'/u);
+assert.match(readonlyPreflight, /PACKY_API_KEY/u);
+assert.match(readonlyPreflight, /PACKY_TOKEN/u);
+assert.match(readonlyPreflight, /process\.argv\.slice\(2\)\.length/u);
+assert.match(readonlyPreflight, /interceptors\.dns/u);
+assert.match(readonlyPreflight, /writeAiImageSandboxPrivateEvidenceBundle/u);
+assert.match(readonlyPreflight, /providerPostSent:\s*false/u);
+assert.match(readonlyPreflight, /chargeObserved:\s*false/u);
+assert.match(readonlyPreflight, /SANDBOX_READONLY_METERS_CHANGED/u);
+assert.match(readonlyPreflight, /AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_FAILED/u);
+assert.doesNotMatch(readonlyPreflight, /method:\s*'POST'|createOpenAiImagesProvider|createOpenAiImageEditProvider/u);
 assert.match(billingSettlement, /I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT/u);
 assert.match(billingSettlement, /AI_IMAGE_SANDBOX_BILLING_SETTLED/u);
 assert.match(billingSettlement, /COST_LIMIT_EXCEEDED/u);
@@ -274,6 +306,8 @@ assert.match(billingSettlement, /apiBaseSha256/u);
 assert.match(billingSettlement, /operationEndpointSha256/u);
 assert.match(billingSettlement, /resolve\(billingDirectory, '\.claims'\)/u);
 assert.match(billingSettlement, /writeExclusiveAtomicFile/u);
+assert.match(billingSettlement, /writeAiImageSandboxPrivateEvidenceBundle/u);
+assert.match(billingSettlement, /writePrivateOutputEntry/u);
 assert.match(billingSettlement, /O_NOFOLLOW/u);
 assert.match(billingSettlement, /canonical JSON without duplicate keys/u);
 assert.match(billingSettlement, /preCallBillingSnapshotPath/u);
@@ -361,6 +395,10 @@ assert.equal(
   serverPackage.scripts['sandbox:ai-image:billing:finalize'],
   'tsx scripts/ai-image-provider-billing-finalize.ts',
 );
+assert.equal(
+  serverPackage.scripts['sandbox:ai-image:readonly:preflight'],
+  'tsx scripts/ai-image-provider-readonly-preflight.ts',
+);
 assert.match(preflight, /tsconfig\.sandbox\.json/u);
 assert.match(sandboxTsconfig, /ai-image-provider-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-provider-approval-draft\.ts/u);
@@ -369,6 +407,8 @@ assert.match(sandboxTsconfig, /ai-image-translation-single-submit\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-approval\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-media\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-provider-billing-finalize\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-provider-readonly-preflight\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-provider-readonly-preflight\.test\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-billing-settlement\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-code-revision\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-guard-filesystem\.test\.ts/u);

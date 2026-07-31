@@ -441,3 +441,29 @@ Progress: 4/5 tasks.
   capability can be promoted. This prepares the exact `QA-02` promotion boundary but does not add
   either failed relay candidate to the allowlist. Positive edit evidence and separate per-request
   approvals are still absent, so Phase 3 remains `4/5` and overall progress remains `32/37`.
+- PackyAPI is a protocol-compatible candidate only: its public docs and no-key preflight describe
+  `gpt-image-2`, Sora-group access, synchronous multipart `/v1/images/edits`, and the three edit
+  mappings, but no authenticated edit success has been observed. The private policy records bind
+  each operation to USD `0.08` quoted cost and USD `1.00` maximum without requiring Provider price
+  synchronization. The mocked exact-money edit matrix passed `58/58`; the network-free
+  `CANDIDATE_ONLY` review contract passed `27/27` and rejects mixed credentials, endpoint digests,
+  reused approvals/pricing/Token-log entries, and non-canonical money. It does not modify the
+  Registry and cannot itself produce `sandbox-verified` evidence. Server typecheck and full
+  preflight passed at `446/0` with the two expected local-package warnings. Phase 3 remains `4/5`,
+  with no Provider POST, charge, flag change, deployment, ingest, Ozon write, or `.context/`
+  staging.
+- Packy credential revision `packy-sora-key-rotation-20260801-01` previously passed a bounded
+  same-origin GET-only observation at `https://www.packyapi.ai/v1`, but a later local UTF-16 stdin
+  attempt exposed its Authorization value in stderr while Undici rejected the header before network
+  dispatch. The `-01` DPAPI artifact is quarantined and must never be restored. Replacement revision
+  `packy-sora-key-rotation-20260801-02` is now stored in the active current-user DPAPI path with a
+  current-user/SYSTEM/Administrators ACL and passed non-plaintext DPAPI metadata validation.
+  Main-base policies and approval drafts bound to `-01` remain invalidated. The official GET-only
+  preflight helper now rejects UTF-16 before Authorization construction and binds both the evidence
+  root and child directory through durable writes. Its
+  Windows matrix passes `51` with four POSIX skips, and its Linux `--network none` matrix passes
+  `55/55`; it has not run with replacement revision `-02`. No Packy Provider POST or charge
+  occurred. The combined affected matrix passes `203` with six platform-specific skips; static and
+  sandbox contracts, Server typecheck, targeted script ESLint, repository lint (existing warnings
+  only), and final full preflight `446/0` pass. A real-DNS allowlisted execution node remains
+  unavailable. `QA-02` stays `4/5` and overall progress stays `32/37`.

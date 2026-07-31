@@ -124,3 +124,9 @@ Progress: 3/4 tasks.
   `447/2/0` and `446/2/0`, the no-network root lifecycle passed `5/5`, and no `20260731` test schema
   remained. This is still rehearsal evidence: `QA-04`, Phase 5 `3/4`, and overall `32/37` remain
   unchanged until complete positive `QA-02`.
+- The Packy capability-candidate helper and its preflight contract are QA-02 promotion hardening,
+  not formal QA-04 evidence. It is deliberately `CANDIDATE_ONLY`, does not mutate the Provider
+  Registry, and requires a separate trusted replay of the private intent, attestation, fingerprint,
+  Token-log entry, and receipt chain before any Registry change. The offline matrix is green, but
+  `QA-04` remains `3/4` until all three positive edit operations are accepted and this aggregate is
+  rerun on the final clean revision.

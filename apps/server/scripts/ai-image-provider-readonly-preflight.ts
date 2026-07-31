@@ -1,0 +1,688 @@
+import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { TextDecoder } from 'node:util';
+import { Agent, fetch as undiciFetch, interceptors } from 'undici';
+import { validateAiImageProviderUrl } from '../src/services/ai-image-providers.js';
+import { writeAiImageSandboxPrivateEvidenceBundle } from '../src/services/ai-image-sandbox-billing-settlement.js';
+import {
+  AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
+  resolveAiImageSandboxRepositoryRevision,
+} from '../src/services/ai-image-sandbox-code-revision.js';
+
+const PACKY_API_BASE = 'https://www.packyapi.ai/v1';
+const PACKY_EXPECTED_HOST = 'www.packyapi.ai';
+const PACKY_MODEL = 'gpt-image-2';
+const MAX_CREDENTIAL_BYTES = 1_024;
+const MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_DOH_RESPONSE_BYTES = 64 * 1_024;
+const MAX_DOH_ANSWERS = 64;
+const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u;
+const SECRET_SHAPE_PATTERN = /(?:^|[^A-Za-z0-9])(?:sk|pk)-[A-Za-z0-9_-]{12,}/iu;
+const UNSAFE_ENVIRONMENT_NAMES = new Set([
+  'AI_IMAGE_SANDBOX_API_KEY',
+  'AI_IMAGE_SANDBOX_CONFIRM',
+  'AI_IMAGE_TRANSLATION_SANDBOX_API_KEY',
+  'AI_IMAGE_SANDBOX_TOKEN',
+  'AUTHORIZATION',
+  'OPENAI_API_KEY',
+  'PACKY_API_KEY',
+  'PACKY_TOKEN',
+  'DASHSCOPE_API_KEY',
+  'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
+  'ALIYUN_ACCESS_KEY_SECRET',
+]);
+const READONLY_PREFLIGHT_TRACKED_PATHS = [
+  'apps/server/scripts/ai-image-provider-readonly-preflight.ts',
+  'apps/server/src/services/ai-image-providers.ts',
+  'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
+  'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'apps/server/src/services/ai-image-job-error.ts',
+];
+
+type FetchLike = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
+interface CapturedResponse {
+  phase: 'BEFORE' | 'CHECK' | 'AFTER';
+  name: 'tokenUsage' | 'displayUsage' | 'tokenLog' | 'models';
+  method: 'GET';
+  uri: string;
+  httpStatus: 200;
+  contentType: string;
+  observedAt: string;
+  bytes: number;
+  sha256: string;
+  file: string;
+  body: Buffer;
+  parsed: unknown;
+}
+
+export interface AiImageProviderReadonlyPreflightOptions {
+  environment?: NodeJS.ProcessEnv;
+  repositoryRoot?: string;
+  resolveRevision?: typeof resolveAiImageSandboxRepositoryRevision;
+  resolveDns?: (hostname: string) => Promise<Array<{ address: string }>>;
+  fetch?: FetchLike;
+  readCredential?: () => Promise<string>;
+  now?: () => Date;
+  requireGitCheckout?: boolean;
+  beforeEvidenceWrite?: (input: {
+    index: number;
+    name: string;
+    outputDirectory: string;
+  }) => Promise<void> | void;
+}
+
+export class AiImageProviderReadonlyPreflightError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = 'AiImageProviderReadonlyPreflightError';
+  }
+}
+
+function preflightError(code: string, message: string) {
+  return new AiImageProviderReadonlyPreflightError(code, message);
+}
+
+function requiredEnvironment(name: string, environment: NodeJS.ProcessEnv) {
+  const value = String(environment[name] || '').trim();
+  if (!value) {
+    throw preflightError('SANDBOX_READONLY_CONFIG_INVALID', `${name} is required`);
+  }
+  return value;
+}
+
+function safeFailureCode(error: unknown) {
+  const value = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+  return value.toUpperCase().replace(/[^A-Z0-9_.-]/gu, '').slice(0, 80)
+    || 'SANDBOX_READONLY_FAILED';
+}
+
+function sha256(value: Buffer | string) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function contentTypeIs(value: string, expected: string) {
+  return value.split(';', 1)[0]?.trim().toLowerCase() === expected;
+}
+
+function isNonnegativeFiniteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function containsCredential(value: unknown, credential: string): boolean {
+  if (typeof value === 'string') return value.includes(credential);
+  if (Array.isArray(value)) return value.some((entry) => containsCredential(entry, credential));
+  if (isRecord(value)) {
+    return Object.entries(value).some(([key, entry]) => (
+      key.includes(credential) || containsCredential(entry, credential)
+    ));
+  }
+  return false;
+}
+
+function assertExpectedResponseSchema(name: CapturedResponse['name'], value: unknown) {
+  let valid = false;
+  if (name === 'tokenUsage') {
+    const usage = isRecord(value) ? value.data : undefined;
+    valid = isRecord(value)
+      && value.code === true
+      && isRecord(usage)
+      && typeof usage.object === 'string'
+      && usage.object.length > 0
+      && isNonnegativeFiniteNumber(usage.total_available)
+      && isNonnegativeFiniteNumber(usage.total_granted)
+      && isNonnegativeFiniteNumber(usage.total_used)
+      && typeof usage.unlimited_quota === 'boolean'
+      && typeof value.message === 'string';
+  } else if (name === 'displayUsage') {
+    valid = isRecord(value)
+      && typeof value.object === 'string'
+      && value.object.length > 0
+      && typeof value.total_usage === 'number'
+      && Number.isFinite(value.total_usage)
+      && value.total_usage >= 0;
+  } else if (name === 'tokenLog') {
+    valid = isRecord(value)
+      && value.success === true
+      && typeof value.message === 'string'
+      && (value.data === undefined || Array.isArray(value.data));
+  } else {
+    valid = isRecord(value)
+      && value.success === true
+      && value.object === 'list'
+      && Array.isArray(value.data);
+  }
+  if (!valid) {
+    throw preflightError(
+      'SANDBOX_READONLY_RESPONSE_SCHEMA_INVALID',
+      `Read-only ${name} response schema is invalid`,
+    );
+  }
+}
+
+function timestamp(options: AiImageProviderReadonlyPreflightOptions) {
+  const value = options.now ? options.now() : new Date();
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw preflightError('SANDBOX_READONLY_CLOCK_INVALID', 'Read-only observation clock is invalid');
+  }
+  return value.toISOString();
+}
+
+export async function readAiImageProviderCredential(
+  source: AsyncIterable<unknown> = process.stdin,
+) {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    for await (const chunk of source) {
+      const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(String(chunk), 'utf8');
+      totalBytes += bytes.byteLength;
+      if (totalBytes > MAX_CREDENTIAL_BYTES) {
+        bytes.fill(0);
+        throw preflightError(
+          'SANDBOX_READONLY_CREDENTIAL_INVALID',
+          'Read-only credential input exceeds the byte limit',
+        );
+      }
+      chunks.push(bytes);
+    }
+    const bytes = Buffer.concat(chunks, totalBytes);
+    let value = '';
+    try {
+      if (
+        bytes.byteLength >= 3
+        && bytes[0] === 0xef
+        && bytes[1] === 0xbb
+        && bytes[2] === 0xbf
+      ) {
+        throw preflightError(
+          'SANDBOX_READONLY_CREDENTIAL_INVALID',
+          'Read-only credential input must not contain a byte-order mark',
+        );
+      }
+      value = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      throw preflightError(
+        'SANDBOX_READONLY_CREDENTIAL_INVALID',
+        'Read-only credential input must use UTF-8',
+      );
+    } finally {
+      bytes.fill(0);
+    }
+    if (value.endsWith('\r\n')) value = value.slice(0, -2);
+    else if (value.endsWith('\n')) value = value.slice(0, -1);
+    if (!/^[\x21-\x7e]{16,512}$/u.test(value)) {
+      throw preflightError(
+        'SANDBOX_READONLY_CREDENTIAL_INVALID',
+        'Read-only credential input must be one bounded printable ASCII value',
+      );
+    }
+    return value;
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+  }
+}
+
+export async function resolveAiImageProviderPublicDns(hostname: string) {
+  const records: Array<{ address: string; family: 4 | 6; ttl: number }> = [];
+  for (const type of ['A', 'AAAA']) {
+    const url = new URL('https://cloudflare-dns.com/dns-query');
+    url.searchParams.set('name', hostname);
+    url.searchParams.set('type', type);
+    const response = await globalThis.fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/dns-json' },
+      redirect: 'error',
+      credentials: 'omit',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw preflightError(
+        'SANDBOX_READONLY_DNS_FAILED',
+        `Public DNS lookup failed with HTTP ${response.status}`,
+      );
+    }
+    const contentType = response.headers.get('content-type') || '';
+    if (
+      !contentTypeIs(contentType, 'application/dns-json')
+      && !contentTypeIs(contentType, 'application/json')
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS response is not JSON');
+    }
+    let body: Record<string, unknown>;
+    try {
+      const bytes = await readBoundedResponse(response, MAX_DOH_RESPONSE_BYTES);
+      const parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+      if (!isRecord(parsed)) throw new Error('invalid');
+      body = parsed;
+    } catch (error) {
+      if (error instanceof AiImageProviderReadonlyPreflightError) throw error;
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS response is invalid');
+    }
+    const answers = body.Answer;
+    if (
+      body.Status !== 0
+      || !Array.isArray(answers)
+      || answers.length === 0
+      || answers.length > MAX_DOH_ANSWERS
+    ) {
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS answer is invalid');
+    }
+    for (const answer of answers) {
+      if (!isRecord(answer) || (answer.type !== 1 && answer.type !== 28)) continue;
+      const answerName = typeof answer.name === 'string'
+        ? answer.name.toLowerCase().replace(/\.$/u, '')
+        : '';
+      if (
+        answerName !== hostname.toLowerCase()
+        || typeof answer.data !== 'string'
+        || !Number.isSafeInteger(answer.TTL)
+        || Number(answer.TTL) <= 0
+        || Number(answer.TTL) > 86_400
+      ) {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS record is invalid');
+      }
+      records.push({
+        address: answer.data,
+        family: answer.type === 1 ? 4 : 6,
+        ttl: Number(answer.TTL),
+      });
+    }
+  }
+  const unique = [...new Map(records.map((record) => [
+    `${record.family}:${record.address}`,
+    record,
+  ])).values()];
+  if (!unique.length) {
+    throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS lookup returned no address');
+  }
+  return unique.map(({ address }) => ({ address }));
+}
+
+async function readBoundedResponse(response: Response, maximumBytes = MAX_RESPONSE_BYTES) {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw preflightError(
+      'SANDBOX_READONLY_RESPONSE_INVALID',
+      'Read-only Provider response exceeds the byte limit',
+    );
+  }
+  if (!response.body) {
+    throw preflightError('SANDBOX_READONLY_RESPONSE_INVALID', 'Read-only Provider response is empty');
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const bytes = Buffer.from(value);
+      totalBytes += bytes.byteLength;
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw preflightError(
+          'SANDBOX_READONLY_RESPONSE_INVALID',
+          'Read-only Provider response exceeds the byte limit',
+        );
+      }
+      chunks.push(bytes);
+    }
+    if (!totalBytes) {
+      throw preflightError('SANDBOX_READONLY_RESPONSE_INVALID', 'Read-only Provider response is empty');
+    }
+    return Buffer.concat(chunks, totalBytes);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function exactModelAvailable(value: unknown, model: string) {
+  return isRecord(value)
+    && value.success === true
+    && value.object === 'list'
+    && Array.isArray(value.data)
+    && value.data.some((entry) => isRecord(entry) && entry.id === model);
+}
+
+export async function runAiImageProviderReadonlyPreflight(
+  options: AiImageProviderReadonlyPreflightOptions = {},
+) {
+  const environment = options.environment || process.env;
+  if (environment.NODE_ENV !== 'sandbox') {
+    throw preflightError('SANDBOX_READONLY_CONFIG_INVALID', 'NODE_ENV must equal sandbox');
+  }
+  if (Object.entries(environment).some(([name, value]) => (
+    UNSAFE_ENVIRONMENT_NAMES.has(name.toUpperCase()) && String(value || '').trim()
+  ))) {
+    throw preflightError(
+      'SANDBOX_READONLY_UNSAFE_ENV',
+      'Read-only preflight must receive its Provider credential through stdin only',
+    );
+  }
+  const apiBase = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
+  const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
+  const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL', environment);
+  if (apiBase !== PACKY_API_BASE || expectedHost !== PACKY_EXPECTED_HOST || model !== PACKY_MODEL) {
+    throw preflightError(
+      'SANDBOX_READONLY_PROVIDER_INVALID',
+      'Read-only preflight is restricted to the reviewed Packy Provider identity',
+    );
+  }
+  const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
+  const evidenceId = requiredEnvironment('AI_IMAGE_SANDBOX_READONLY_EVIDENCE_ID', environment);
+  if (!EVIDENCE_ID_PATTERN.test(operationId) || !EVIDENCE_ID_PATTERN.test(evidenceId)) {
+    throw preflightError(
+      'SANDBOX_READONLY_CONFIG_INVALID',
+      'Read-only Operation ID or evidence ID is invalid',
+    );
+  }
+  const credentialRevision = requiredEnvironment(
+    'AI_IMAGE_SANDBOX_CREDENTIAL_REVISION',
+    environment,
+  );
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(credentialRevision)) {
+    throw preflightError('SANDBOX_READONLY_CONFIG_INVALID', 'Credential revision is invalid');
+  }
+  const configuredEvidenceRoot = String(
+    environment.AI_IMAGE_SANDBOX_EVIDENCE_ROOT || 'tmp/ai-image-sandbox',
+  ).trim();
+  if (
+    SECRET_SHAPE_PATTERN.test(operationId)
+    || SECRET_SHAPE_PATTERN.test(evidenceId)
+    || SECRET_SHAPE_PATTERN.test(credentialRevision)
+    || SECRET_SHAPE_PATTERN.test(configuredEvidenceRoot)
+  ) {
+    throw preflightError(
+      'SANDBOX_READONLY_CONFIG_INVALID',
+      'Read-only non-secret identifiers contain a secret-shaped value',
+    );
+  }
+  const adapterRevision = requiredEnvironment(
+    'AI_IMAGE_SANDBOX_ADAPTER_REVISION',
+    environment,
+  ).toLowerCase();
+  if (!AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN.test(adapterRevision)) {
+    throw preflightError('SANDBOX_READONLY_CONFIG_INVALID', 'Adapter revision is invalid');
+  }
+  const repositoryRoot = options.repositoryRoot
+    || resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const resolveRevision = options.resolveRevision || resolveAiImageSandboxRepositoryRevision;
+  const repositoryRevision = await resolveRevision(
+    repositoryRoot,
+    undefined,
+    READONLY_PREFLIGHT_TRACKED_PATHS,
+    options.requireGitCheckout,
+  );
+  if (repositoryRevision !== adapterRevision) {
+    throw preflightError(
+      'SANDBOX_ADAPTER_REVISION_MISMATCH',
+      'Read-only preflight revision does not match the deployed code',
+    );
+  }
+
+  const dnsResolver = options.resolveDns || resolveAiImageProviderPublicDns;
+  const dnsRecords = await dnsResolver(expectedHost);
+  try {
+    await validateAiImageProviderUrl(apiBase, async () => dnsRecords);
+  } catch {
+    throw preflightError(
+      'SANDBOX_READONLY_DNS_FAILED',
+      'Read-only Provider DNS validation failed',
+    );
+  }
+  const pinnedRecords = dnsRecords.map((record) => {
+    const family = isIP(record.address);
+    if (family !== 4 && family !== 6) {
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'DNS returned an invalid address');
+    }
+    return { address: record.address, family, ttl: 60 } as const;
+  });
+
+  let closeTransport: () => Promise<void> = async () => {};
+  let fetcher = options.fetch;
+  if (!fetcher) {
+    const agent = new Agent().compose(interceptors.dns({
+      affinity: 4,
+      lookup(origin, _lookupOptions, callback) {
+        if (origin.hostname.toLowerCase() !== expectedHost) {
+          callback(Object.assign(new Error('Unexpected read-only Provider host'), { code: 'ENOTFOUND' }), []);
+          return;
+        }
+        callback(null, pinnedRecords);
+      },
+    }));
+    closeTransport = () => agent.close();
+    fetcher = (input, init) => undiciFetch(input as any, {
+      ...(init as any),
+      dispatcher: agent,
+    }) as Promise<Response>;
+  }
+
+  let credential = '';
+  try {
+    credential = await (options.readCredential || (() => readAiImageProviderCredential()))();
+    if (!/^[\x21-\x7e]{16,512}$/u.test(credential)) {
+      throw preflightError(
+        'SANDBOX_READONLY_CREDENTIAL_INVALID',
+        'Read-only credential input must be one bounded printable ASCII value',
+      );
+    }
+    if ([operationId, evidenceId, credentialRevision, configuredEvidenceRoot].some((value) => (
+      value.includes(credential)
+    ))) {
+      throw preflightError(
+        'SANDBOX_READONLY_CONFIG_INVALID',
+        'Read-only non-secret identifiers must not contain the credential',
+      );
+    }
+    const endpoints = {
+      tokenUsage: `${new URL(apiBase).origin}/api/usage/token/`,
+      displayUsage: `${new URL(apiBase).origin}/v1/dashboard/billing/usage`,
+      tokenLog: `${new URL(apiBase).origin}/api/log/token`,
+      models: `${apiBase}/models`,
+    } as const;
+    const captures: CapturedResponse[] = [];
+    const capture = async (
+      phase: CapturedResponse['phase'],
+      name: CapturedResponse['name'],
+      uri: string,
+      file: string,
+    ) => {
+      let response: Response;
+      try {
+        response = await fetcher!(uri, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${credential}`, Accept: 'application/json' },
+          redirect: 'error',
+          credentials: 'omit',
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch {
+        throw preflightError(
+          'SANDBOX_READONLY_PROVIDER_FAILED',
+          'Read-only Provider request failed before a valid response',
+        );
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (response.status !== 200) {
+        await response.body?.cancel().catch(() => undefined);
+        throw preflightError(
+          'SANDBOX_READONLY_PROVIDER_REJECTED',
+          'Read-only Provider request was rejected',
+        );
+      }
+      if (!contentTypeIs(contentType, 'application/json')) {
+        await response.body?.cancel().catch(() => undefined);
+        throw preflightError(
+          'SANDBOX_READONLY_RESPONSE_INVALID',
+          'Read-only Provider response must use JSON',
+        );
+      }
+      const body = await readBoundedResponse(response);
+      let parsed: unknown;
+      let text = '';
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+        parsed = JSON.parse(text) as unknown;
+      } catch {
+        throw preflightError(
+          'SANDBOX_READONLY_RESPONSE_INVALID',
+          'Read-only Provider response must contain UTF-8 JSON',
+        );
+      }
+      if (contentType.includes(credential) || text.includes(credential) || containsCredential(parsed, credential)) {
+        throw preflightError(
+          'SANDBOX_READONLY_CREDENTIAL_REFLECTED',
+          'Read-only Provider response reflected the credential',
+        );
+      }
+      const result: CapturedResponse = {
+        phase,
+        name,
+        method: 'GET',
+        uri,
+        httpStatus: 200,
+        contentType: 'application/json',
+        observedAt: timestamp(options),
+        bytes: body.byteLength,
+        sha256: sha256(body),
+        file,
+        body,
+        parsed,
+      };
+      captures.push(result);
+      assertExpectedResponseSchema(name, parsed);
+      return result;
+    };
+
+    const before = {
+      tokenUsage: await capture('BEFORE', 'tokenUsage', endpoints.tokenUsage, 'before-tokenUsage.json'),
+      displayUsage: await capture(
+        'BEFORE',
+        'displayUsage',
+        endpoints.displayUsage,
+        'before-displayUsage.json',
+      ),
+      tokenLog: await capture('BEFORE', 'tokenLog', endpoints.tokenLog, 'before-tokenLog.json'),
+    };
+    const models = await capture('CHECK', 'models', endpoints.models, 'check-models.json');
+    if (!exactModelAvailable(models.parsed, model)) {
+      throw preflightError(
+        'SANDBOX_READONLY_MODEL_UNAVAILABLE',
+        'Read-only Provider catalogue does not expose the exact model',
+      );
+    }
+    const after = {
+      tokenUsage: await capture('AFTER', 'tokenUsage', endpoints.tokenUsage, 'after-tokenUsage.json'),
+      displayUsage: await capture(
+        'AFTER',
+        'displayUsage',
+        endpoints.displayUsage,
+        'after-displayUsage.json',
+      ),
+      tokenLog: await capture('AFTER', 'tokenLog', endpoints.tokenLog, 'after-tokenLog.json'),
+    };
+    const metersUnchanged = (
+      before.tokenUsage.body.equals(after.tokenUsage.body)
+      && before.displayUsage.body.equals(after.displayUsage.body)
+      && before.tokenLog.body.equals(after.tokenLog.body)
+    );
+    if (!metersUnchanged) {
+      throw preflightError(
+        'SANDBOX_READONLY_METERS_CHANGED',
+        'Read-only Provider meters changed during the observation window',
+      );
+    }
+
+    const manifest = {
+      schemaVersion: 1,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+      operationId,
+      credentialRevision,
+      adapterRevision,
+      apiBase,
+      model,
+      metersUnchanged: true,
+      providerPostSent: false,
+      chargeObserved: false,
+      records: captures.map(({ body: _body, parsed: _parsed, ...record }) => record),
+    };
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const manifestSha256 = sha256(manifestBytes);
+    let outputDirectory = '';
+    try {
+      const bundle = await writeAiImageSandboxPrivateEvidenceBundle({
+        repositoryRoot,
+        evidenceRoot: configuredEvidenceRoot,
+        directoryName: evidenceId,
+        files: [
+          ...captures.map((record) => ({ name: record.file, bytes: record.body })),
+          { name: 'manifest.json', bytes: manifestBytes },
+        ],
+        beforeEntryWrite: options.beforeEvidenceWrite,
+      });
+      outputDirectory = bundle.outputDirectory;
+    } catch {
+      throw preflightError(
+        'SANDBOX_READONLY_EVIDENCE_UNSAFE',
+        'Read-only evidence could not be written to a stable private directory',
+      );
+    }
+    const event = {
+      schemaVersion: 1,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+      operationId,
+      credentialRevision,
+      adapterRevision,
+      model,
+      apiBaseSha256: sha256(apiBase),
+      manifestSha256,
+      metersUnchanged: true,
+      providerPostSent: false,
+      chargeObserved: false,
+    };
+    process.stdout.write(`${JSON.stringify(event, null, 2)}\n`);
+    return { manifest, manifestSha256, outputDirectory };
+  } finally {
+    credential = '';
+    await closeTransport();
+  }
+}
+
+const isDirectRun = process.argv[1]
+  ? resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
+if (isDirectRun) {
+  const fail = (error: unknown) => {
+    process.stderr.write(`${JSON.stringify({
+      schemaVersion: 1,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_FAILED',
+      failureCode: safeFailureCode(error),
+    })}\n`);
+    process.stderr.write('AI image Provider read-only preflight failed.\n');
+    process.exitCode = 1;
+  };
+  if (process.argv.slice(2).length > 0) {
+    fail(preflightError(
+      'SANDBOX_READONLY_ARGUMENT_INVALID',
+      'Read-only preflight does not accept command-line arguments',
+    ));
+  } else {
+    runAiImageProviderReadonlyPreflight({ requireGitCheckout: true }).catch(fail);
+  }
+}

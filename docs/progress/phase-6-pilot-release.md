@@ -145,3 +145,7 @@ Progress: 0/3 tasks.
   no-network Debian lifecycle `5/5`, and the final `991.8s` QA-04 offline rehearsal passed. This made
   no deployment, signature, distribution, flag, Provider, pilot or Ozon change; Phase 6 stays `0/3`
   and overall progress stays `32/37`.
+- Packy public preflight, private pricing proposals, approval drafts, and the `CANDIDATE_ONLY`
+  review helper do not constitute a signed package, distribution receipt, dark deployment, canary,
+  or pilot. `REL-03`, `REL-04`, and `REL-02` remain blocked behind accepted positive `QA-02` evidence
+  and the formal `QA-04` rerun; no feature flag is enabled.
