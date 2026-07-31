@@ -465,6 +465,17 @@ Progress: 4/5 tasks.
   this exact empty envelope and message digest match the historical observation. The helper now
   accepts only the exact two-key empty envelope or its existing successful Token-log schema. Its
   focused Windows matrix passes `55` with four POSIX skips, its Linux `--network none` matrix passes
-  `59/59`, and sandbox typecheck plus targeted script ESLint pass. The official full preflight with
-  the fix still requires a new clean commit and evidence ID. `QA-02` stays `4/5`, overall progress
-  stays `32/37`, and no Registry, rollout, deployment, ingest, or Ozon mutation occurred.
+  `59/59`, and sandbox typecheck plus targeted script ESLint pass. Clean commit `e4503e9` then
+  completed the official seven-GET sequence under replacement revision `-02`. The private eight-file
+  bundle's manifest SHA-256 is
+  `9f3dbc30bf2b78b99ede50bdfd285d3f932580cab1ddc5a52812ae7cbacb7b0f`; fixed routes, response
+  hashes/lengths, exact model visibility, byte-identical meter pairs, ACLs and credential scans all
+  passed independent verification. It records no POST and no charge.
+- A replacement private I2I proposed policy binds USD `0.08`/USD `1.00` and has SHA-256
+  `9b91a0fa1f3e98177ea5d085e3201e9146b617af7368c351f9e1080324f980cb`. Its schema-v3 draft has
+  SHA-256 `1f2d3bb6389856ed63c0ea443a6196a250bd8e1606a3aa2d327129aca71976e4`, binds prepared source
+  `5d2627...6e32`, retains all review sentinels, and is rejected by the offline verifier with
+  `SANDBOX_APPROVAL_SCHEMA_INVALID`. It does not reuse the earlier `481527...f0b` Centos source
+  authorization; those exact bytes are unavailable locally. `QA-02` stays `4/5`, overall progress
+  stays `32/37`, and no Registry, rollout, deployment, ingest, Ozon mutation, Provider POST or charge
+  occurred.

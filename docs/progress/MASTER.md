@@ -57,11 +57,15 @@ reviewed schemas, while Token log returned Packy's canonical empty-history envel
 failed closed because that exact envelope was not yet accepted, wrote no evidence bundle, reflected
 no credential, and made no Provider POST or charge. Three separate bounded GET-only diagnostics
 confirmed the response shapes; the empty Token-log message digest also matches the historical
-`-01` observation. The helper now accepts only that exact two-key empty envelope or the existing
-successful Token-log schema. Its focused Windows matrix passes `55` with four POSIX skips and its
-Linux `--network none` matrix passes `59/59`; the official full preflight still requires a new clean
-commit and evidence ID. `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress
-stays `32/37` and all rollout flags remain off.
+`-01` observation. Commit `e4503e9253b15eea5540dd436bf027c713cd3739` restricts acceptance to
+that exact two-key envelope or the existing successful Token-log schema. From a new clean checkout,
+replacement revision `-02` then completed the official fixed seven-GET sequence. The private
+eight-file evidence bundle has manifest SHA-256
+`9f3dbc30bf2b78b99ede50bdfd285d3f932580cab1ddc5a52812ae7cbacb7b0f`; all routes, response
+digests, lengths and ACLs were independently verified, the exact model is visible, all three meter
+pairs are byte-identical, and credential scans are clean. No Provider POST or charge occurred.
+`QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all
+rollout flags remain off.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -501,22 +505,29 @@ reviewed.
 
 The official `sandbox:ai-image:readonly:preflight` helper accepts a credential only through bounded
 UTF-8 stdin, performs the fixed seven-GET observation, and writes a descriptor-bound private
-evidence bundle. Replacement revision `-02` passed the credential, raw-quota, and displayed-usage
-boundaries from clean commit `ac41efa`; its first official attempt then rejected Packy's exact
-`{ message: "record not found", success: false }` empty Token-log envelope. No manifest or evidence
-directory was written. Three separate bounded authenticated diagnostic GETs confirmed the reviewed
-quota/usage schemas and that the empty Token-log envelope and message digest match the historical
-observation. The helper now accepts that exact two-key envelope while rejecting alternate failure
-messages, `data`, and extra fields. Its focused Windows matrix passes `55` with four POSIX cases
-skipped, and its Linux `--network none` matrix passes `59/59`, including UTF-16, response-schema,
-symlink, parent/child replacement, and private-mode boundaries. Sandbox typecheck and targeted
-script ESLint pass; the official full preflight with this fix has not yet run from a new clean
-commit. The earlier combined matrix, mocked exact-money edit matrix, candidate review contract,
-repository gates, and full preflight remain green at their recorded revisions. No Packy Provider
-POST, charge, Registry change, flag change, deployment, ingest, or Ozon write occurred.
-Both checked SSH runners closed port 22 before a remote command, so a reachable real-DNS allowlisted
-execution node is still unavailable; the local clean checkout supplied the reviewed public-DNS
-path for this GET-only preflight. `QA-02` remains `4/5` and overall progress remains `32/37`.
+evidence bundle. After the safe `ac41efa` schema rejection and three diagnostic GETs, the focused
+Windows matrix passed `55` with four POSIX skips, the Linux `--network none` matrix passed `59/59`,
+and static contract, sandbox typecheck, targeted script ESLint and diff checks passed. Clean commit
+`e4503e9253b15eea5540dd436bf027c713cd3739` then completed the official sequence under replacement
+credential revision `-02`. Manifest SHA-256
+`9f3dbc30bf2b78b99ede50bdfd285d3f932580cab1ddc5a52812ae7cbacb7b0f` binds seven fixed GETs;
+all eight file names, hashes, byte lengths, routes, methods, HTTP 200 statuses, normalized content
+types and private ACL identities were independently verified. The exact model is visible, raw quota,
+displayed usage and Token log are byte-identical before/after, and exact plus generic credential
+scans are clean. The manifest records `providerPostSent=false` and `chargeObserved=false`.
+
+A new private proposed `IMAGE_TO_IMAGE` policy now binds `gpt-image-2`, the square one-image profile,
+default-omitted quality, quote USD `0.08`, maximum USD `1.00`, and the successful read-only manifest.
+Policy SHA-256 is `9b91a0fa1f3e98177ea5d085e3201e9146b617af7368c351f9e1080324f980cb`;
+schema-v3 draft SHA-256 is
+`1f2d3bb6389856ed63c0ea443a6196a250bd8e1606a3aa2d327129aca71976e4`. The draft binds that policy
+digest, replacement credential revision `-02`, adapter revision `e4503e9`, and local
+prepared source SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`,
+not the earlier Centos request's `481527...f0b` source; those bytes are not present locally and its
+authorization cannot be reused. The new draft retains all review sentinels, and the offline verifier
+rejects it with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No Packy POST, charge, Registry change, flag
+change, deployment, ingest, or Ozon write occurred. `QA-02` remains `4/5` and overall progress
+remains `32/37`.
 
 ## Next Steps
 
@@ -527,14 +538,15 @@ path for this GET-only preflight. `QA-02` remains `4/5` and overall progress rem
    definitively rejected by the Provider authentication layer and settled with no charge.
 3. Never restore or reuse quarantined credential revision
    `packy-sora-key-rotation-20260801-01`. Replacement revision
-   `packy-sora-key-rotation-20260801-02` is stored in the active private DPAPI path and still needs
-   the official GET-only preflight from a clean exact revision using bounded UTF-8 stdin. Only after
-   that preflight succeeds may new credential-revision-bound policies,
-   approvals, and pre-call snapshots be generated for `IMAGE_TO_IMAGE`, `FULL_EDIT`, and
-   `INPAINT`. Do not use `slb-v1.api.fan` for a paid request because its same-origin settlement
-   meters are incomplete. Execute and settle only one approved POST before considering the next;
-   never retry an uncertain POST. Provider price API synchronization is not required. Only after all
-   three positive custom
+   `packy-sora-key-rotation-20260801-02` passed the official GET-only preflight from clean commit
+   `e4503e9`. The proposed I2I policy and non-approval draft use source SHA `5d2627...6e32`; do not
+   treat the earlier `481527...f0b` Centos source authorization as approval for this request. Either
+   review and explicitly approve every field of the new source-bound draft after retaining fresh
+   pre-call meter snapshots, or retrieve and verify the exact `481527...f0b` bytes and regenerate a
+   different operation/policy/draft set. Do not use `slb-v1.api.fan` for a paid request because its
+   same-origin settlement meters are incomplete. Execute and settle only one approved POST before
+   considering the next; never retry an uncertain POST. Provider price API synchronization is not
+   required. Only after all three positive custom
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.

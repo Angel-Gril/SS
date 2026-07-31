@@ -294,3 +294,28 @@ the same rejected edit transport without new capability evidence. Do not retry t
 or substitute a new Operation ID. Full QA-02 still requires another Provider endpoint/credential,
 or a Provider-side configuration change that explicitly enables image edits followed by a new
 catalogue review, price policy and one-request approval.
+
+## Packy replacement credential read-only outcome
+
+Replacement credential revision `packy-sora-key-rotation-20260801-02` completed the official
+GET-only Packy preflight from clean commit
+`e4503e9253b15eea5540dd436bf027c713cd3739`. The fixed sequence used seven bounded authenticated
+GETs only: before/after raw quota, displayed usage and Token log, with one exact model-catalogue
+check. The private eight-file manifest SHA-256 is
+`9f3dbc30bf2b78b99ede50bdfd285d3f932580cab1ddc5a52812ae7cbacb7b0f`. Independent verification
+confirmed the fixed routes, response hashes and lengths, HTTP 200 JSON records, exact
+`gpt-image-2` visibility, byte-identical meter pairs, private ACLs and clean credential scans. The
+manifest records no Provider POST and no observed charge.
+
+The private proposed `IMAGE_TO_IMAGE` policy supplies quote USD `0.08` and maximum USD `1.00`
+without requiring Provider price synchronization. Policy SHA-256 is
+`9b91a0fa1f3e98177ea5d085e3201e9146b617af7368c351f9e1080324f980cb`; the resulting non-approval
+schema-v3 draft SHA-256 is
+`1f2d3bb6389856ed63c0ea443a6196a250bd8e1606a3aa2d327129aca71976e4`. The draft binds local
+prepared source SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`.
+It does not reuse the earlier Centos request's source SHA-256
+`481527b89ed2e3da85ea1517a10d6227d89c0d17271c92950a98f51a7e044f0b`; those exact bytes are not
+present in the local retained evidence. The statement and timestamps remain review sentinels, and
+the official offline verifier rejects the draft with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No paid
+request is authorized until an operator reviews this exact source-bound request, retains fresh
+pre-call meters, and replaces only the three sentinels within a new bounded approval window.
