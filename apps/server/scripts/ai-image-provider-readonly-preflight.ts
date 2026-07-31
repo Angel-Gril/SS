@@ -14,6 +14,7 @@ import {
 const PACKY_API_BASE = 'https://www.packyapi.ai/v1';
 const PACKY_EXPECTED_HOST = 'www.packyapi.ai';
 const PACKY_MODEL = 'gpt-image-2';
+const PACKY_EMPTY_TOKEN_LOG_MESSAGE = 'record not found';
 const MAX_CREDENTIAL_BYTES = 1_024;
 const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_DOH_RESPONSE_BYTES = 64 * 1_024;
@@ -153,10 +154,15 @@ function assertExpectedResponseSchema(name: CapturedResponse['name'], value: unk
       && Number.isFinite(value.total_usage)
       && value.total_usage >= 0;
   } else if (name === 'tokenLog') {
-    valid = isRecord(value)
+    const emptyTokenLog = isRecord(value)
+      && Object.keys(value).length === 2
+      && value.success === false
+      && value.message === PACKY_EMPTY_TOKEN_LOG_MESSAGE
+      && value.data === undefined;
+    valid = emptyTokenLog || (isRecord(value)
       && value.success === true
       && typeof value.message === 'string'
-      && (value.data === undefined || Array.isArray(value.data));
+      && (value.data === undefined || Array.isArray(value.data)));
   } else {
     valid = isRecord(value)
       && value.success === true

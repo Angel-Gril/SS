@@ -456,14 +456,15 @@ Progress: 4/5 tasks.
   same-origin GET-only observation at `https://www.packyapi.ai/v1`, but a later local UTF-16 stdin
   attempt exposed its Authorization value in stderr while Undici rejected the header before network
   dispatch. The `-01` DPAPI artifact is quarantined and must never be restored. Replacement revision
-  `packy-sora-key-rotation-20260801-02` is now stored in the active current-user DPAPI path with a
+  `packy-sora-key-rotation-20260801-02` is stored in the active current-user DPAPI path with a
   current-user/SYSTEM/Administrators ACL and passed non-plaintext DPAPI metadata validation.
-  Main-base policies and approval drafts bound to `-01` remain invalidated. The official GET-only
-  preflight helper now rejects UTF-16 before Authorization construction and binds both the evidence
-  root and child directory through durable writes. Its
-  Windows matrix passes `51` with four POSIX skips, and its Linux `--network none` matrix passes
-  `55/55`; it has not run with replacement revision `-02`. No Packy Provider POST or charge
-  occurred. The combined affected matrix passes `203` with six platform-specific skips; static and
-  sandbox contracts, Server typecheck, targeted script ESLint, repository lint (existing warnings
-  only), and final full preflight `446/0` pass. A real-DNS allowlisted execution node remains
-  unavailable. `QA-02` stays `4/5` and overall progress stays `32/37`.
+  Main-base policies and approval drafts bound to `-01` remain invalidated. The first official
+  preflight from clean commit `ac41efa` issued only three bounded BEFORE GETs and failed closed on
+  Packy's canonical empty Token-log envelope; it wrote no evidence bundle and made no POST or charge.
+  Three separate bounded GET-only diagnostics confirmed the reviewed quota/usage schemas and that
+  this exact empty envelope and message digest match the historical observation. The helper now
+  accepts only the exact two-key empty envelope or its existing successful Token-log schema. Its
+  focused Windows matrix passes `55` with four POSIX skips, its Linux `--network none` matrix passes
+  `59/59`, and sandbox typecheck plus targeted script ESLint pass. The official full preflight with
+  the fix still requires a new clean commit and evidence ID. `QA-02` stays `4/5`, overall progress
+  stays `32/37`, and no Registry, rollout, deployment, ingest, or Ozon mutation occurred.

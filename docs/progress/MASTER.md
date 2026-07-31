@@ -51,10 +51,17 @@ UTF-16 stdin attempt caused its Authorization header value to appear in local st
 artifact remains in private quarantine and must never be restored. Replacement revision
 `packy-sora-key-rotation-20260801-02` is now stored in the active current-user DPAPI path; its ACL
 permits only the current user, SYSTEM, and Administrators, and DPAPI metadata validation passed
-without exposing plaintext. The official authenticated GET-only preflight has not run yet. The
-failed `-01` attempt stopped during Undici Header construction, before network dispatch, so it made
-no authenticated request, Provider POST, or charge. `QA-04`, `REL-03`, `REL-04`, and `REL-02`
-remain blocked; overall progress stays `32/37` and all rollout flags remain off.
+without exposing plaintext. The first official preflight from clean commit `ac41efa` reached the
+three BEFORE routes with bounded authenticated GETs: raw quota and displayed usage matched their
+reviewed schemas, while Token log returned Packy's canonical empty-history envelope. The helper
+failed closed because that exact envelope was not yet accepted, wrote no evidence bundle, reflected
+no credential, and made no Provider POST or charge. Three separate bounded GET-only diagnostics
+confirmed the response shapes; the empty Token-log message digest also matches the historical
+`-01` observation. The helper now accepts only that exact two-key empty envelope or the existing
+successful Token-log schema. Its focused Windows matrix passes `55` with four POSIX skips and its
+Linux `--network none` matrix passes `59/59`; the official full preflight still requires a new clean
+commit and evidence ID. `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress
+stays `32/37` and all rollout flags remain off.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -492,19 +499,24 @@ review sentinels and are historical preparation evidence only. After Provider-si
 credential-revision-bound policy and approval artifact must be regenerated and independently
 reviewed.
 
-The official `sandbox:ai-image:readonly:preflight` helper now accepts a credential only through
-bounded UTF-8 stdin, performs the fixed seven-GET observation, and writes a descriptor-bound private
-evidence bundle. Its Windows matrix passes `51` with four POSIX cases skipped, and its Linux
-`--network none` matrix passes `55/55`, including UTF-16, exact raw-quota schema, symlink,
-parent/child replacement, and private-mode boundaries. It has not run with a valid replacement
-credential. The combined approval/submit/preflight/finalization/settlement matrix passes `203` with
-six platform-specific skips, the mocked exact-money edit matrix passes `58/58`, and the network-free
-candidate review contract passes `27/27`. Static and sandbox contracts, Server typecheck, targeted
-script ESLint, repository lint (`20` existing Server and one shared warning), and final full preflight
-(`446/0` with two expected local-package permission warnings) pass. No Packy Provider POST, charge,
-Registry change, flag change, deployment, ingest, or Ozon write occurred.
+The official `sandbox:ai-image:readonly:preflight` helper accepts a credential only through bounded
+UTF-8 stdin, performs the fixed seven-GET observation, and writes a descriptor-bound private
+evidence bundle. Replacement revision `-02` passed the credential, raw-quota, and displayed-usage
+boundaries from clean commit `ac41efa`; its first official attempt then rejected Packy's exact
+`{ message: "record not found", success: false }` empty Token-log envelope. No manifest or evidence
+directory was written. Three separate bounded authenticated diagnostic GETs confirmed the reviewed
+quota/usage schemas and that the empty Token-log envelope and message digest match the historical
+observation. The helper now accepts that exact two-key envelope while rejecting alternate failure
+messages, `data`, and extra fields. Its focused Windows matrix passes `55` with four POSIX cases
+skipped, and its Linux `--network none` matrix passes `59/59`, including UTF-16, response-schema,
+symlink, parent/child replacement, and private-mode boundaries. Sandbox typecheck and targeted
+script ESLint pass; the official full preflight with this fix has not yet run from a new clean
+commit. The earlier combined matrix, mocked exact-money edit matrix, candidate review contract,
+repository gates, and full preflight remain green at their recorded revisions. No Packy Provider
+POST, charge, Registry change, flag change, deployment, ingest, or Ozon write occurred.
 Both checked SSH runners closed port 22 before a remote command, so a reachable real-DNS allowlisted
-execution node is still unavailable. `QA-02` remains `4/5` and overall progress remains `32/37`.
+execution node is still unavailable; the local clean checkout supplied the reviewed public-DNS
+path for this GET-only preflight. `QA-02` remains `4/5` and overall progress remains `32/37`.
 
 ## Next Steps
 

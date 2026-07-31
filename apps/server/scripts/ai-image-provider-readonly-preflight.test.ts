@@ -62,6 +62,7 @@ function jsonResponse(value: unknown, status = 200) {
 function successfulFetch(overrides: {
   changedMeter?: 'tokenUsage' | 'displayUsage' | 'tokenLog';
   invalidMeter?: 'tokenUsage' | 'displayUsage' | 'tokenLog';
+  emptyTokenLog?: boolean;
   model?: string;
   modelSuccess?: boolean;
 } = {}) {
@@ -105,6 +106,9 @@ function successfulFetch(overrides: {
     if (url.pathname === '/api/log/token') {
       calls.tokenLog += 1;
       if (overrides.invalidMeter === 'tokenLog') return jsonResponse({});
+      if (overrides.emptyTokenLog) {
+        return jsonResponse({ message: 'record not found', success: false });
+      }
       return jsonResponse({
         message: overrides.changedMeter === 'tokenLog' && calls.tokenLog === 2 ? 'changed' : '',
         success: true,
@@ -271,6 +275,65 @@ describe('AI image Provider read-only preflight', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
     },
   );
+
+  it('accepts the exact Packy empty Token-log envelope', async () => {
+    const value = await fixture();
+    const result = await runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns: vi.fn(async () => [{ address: '93.184.216.34' }]),
+      fetch: successfulFetch({ emptyTokenLog: true }),
+      readCredential: vi.fn(async () => credential),
+    });
+    expect(result.manifest).toMatchObject({
+      metersUnchanged: true,
+      providerPostSent: false,
+      chargeObserved: false,
+    });
+  });
+
+  it.each([
+    { message: 'permission denied', success: false },
+    { message: 'record not found', success: false, data: [] },
+    { message: 'record not found', success: false, error: true },
+  ])('rejects a noncanonical failed Token-log envelope', async (tokenLog) => {
+    const value = await fixture();
+    const fetch = successfulFetch();
+    fetch.mockImplementation(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/log/token') return jsonResponse(tokenLog);
+      if (url.pathname === '/api/usage/token/') {
+        return jsonResponse({
+          code: true,
+          data: {
+            object: 'credit_summary',
+            total_available: 10_000,
+            total_granted: 10_000,
+            total_used: 0,
+            unlimited_quota: false,
+          },
+          message: '',
+        });
+      }
+      if (url.pathname === '/v1/dashboard/billing/usage') {
+        return jsonResponse({ object: 'billing_usage', total_usage: 0 });
+      }
+      return jsonResponse({
+        data: [{ id: 'gpt-image-2', object: 'model' }],
+        object: 'list',
+        success: true,
+      });
+    });
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns: vi.fn(async () => [{ address: '93.184.216.34' }]),
+      fetch,
+      readCredential: vi.fn(async () => credential),
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_RESPONSE_SCHEMA_INVALID' });
+  });
 
   it.each(['tokenUsage', 'displayUsage', 'tokenLog'] as const)(
     'rejects an invalid %s response schema',

@@ -265,6 +265,7 @@ assert.match(readonlyPreflight, /MAX_RESPONSE_BYTES\s*=\s*1_048_576/u);
 assert.match(readonlyPreflight, /MAX_DOH_RESPONSE_BYTES\s*=\s*64\s*\*\s*1_024/u);
 assert.match(readonlyPreflight, /body\.Status\s*!==\s*0/u);
 assert.match(readonlyPreflight, /assertExpectedResponseSchema/u);
+assert.match(readonlyPreflight, /PACKY_EMPTY_TOKEN_LOG_MESSAGE\s*=\s*'record not found'/u);
 assert.match(readonlyPreflight, /containsCredential/u);
 assert.match(readonlyPreflight, /contentType:\s*'application\/json'/u);
 assert.match(readonlyPreflight, /PACKY_API_KEY/u);

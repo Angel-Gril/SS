@@ -174,9 +174,11 @@ redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET
 before/after raw quota, displayed usage, and Token log, plus one model-catalogue check. Every body
 must be bounded UTF-8 JSON with its minimum successful schema. Raw quota requires `code: true` and
 the reviewed numeric `total_available`, `total_granted`, and `total_used` fields rather than any
-unrelated numeric property. The exact model must be visible, and all three before/after meter bodies
-must be byte-identical. Content-Type is normalized before it can enter the manifest, and parsed JSON
-is recursively checked for credential reflection. It writes a
+unrelated numeric property. Token log accepts either its successful response schema or Packy's exact
+two-key empty-history envelope `{ "message": "record not found", "success": false }`; alternate
+failure messages, a `data` field, or any extra field fail closed. The exact model must be visible,
+and all three before/after meter bodies must be byte-identical. Content-Type is normalized before it
+can enter the manifest, and parsed JSON is recursively checked for credential reflection. It writes a
 new private directory under the canonical `AI_IMAGE_SANDBOX_EVIDENCE_ROOT` (default
 `tmp/ai-image-sandbox`) containing the seven raw JSON files and one canonical sanitized manifest.
 Directory handles, real paths and device/inode identity remain bound through each exclusive durable
