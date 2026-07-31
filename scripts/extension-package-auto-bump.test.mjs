@@ -760,7 +760,7 @@ assert.match(
 );
 assert.match(
   releaseDeployer,
-  /echo "\$COMMIT_HASH" > "\$RELEASE_DIR\/DEPLOYED_COMMIT"/u,
+  /printf '%s\\n' "\$TARGET_GIT_COMMIT" > "\$RELEASE_DIR\/DEPLOYED_COMMIT"/u,
   'the archive-only release must persist the full commit for formal release evidence',
 );
 assert.doesNotMatch(releaseDeployer, /git rev-parse --short/u);

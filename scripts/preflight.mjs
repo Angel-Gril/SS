@@ -99,6 +99,30 @@ const steps = [
     args: ['scripts/ai-media-dark-deploy.test.mjs'],
   },
   {
+    name: 'deployment backup attestation contract',
+    command: 'node',
+    args: [
+      '--test',
+      'scripts/deploy-backup-attestation.test.mjs',
+      'scripts/backup-operations-contract.test.mjs',
+    ],
+  },
+  {
+    name: 'deployment Git-bound build input contract',
+    command: 'node',
+    args: ['--test', 'scripts/deploy-build-inputs.test.mjs'],
+  },
+  {
+    name: 'deployment environment snapshot contract',
+    command: 'node',
+    args: ['--test', 'scripts/deploy-environment.test.mjs'],
+  },
+  {
+    name: 'deployment source permission contract',
+    command: 'node',
+    args: ['--test', 'scripts/deploy-source-permissions.test.mjs'],
+  },
+  {
     name: 'AI media suite post-migration DB guard contract',
     command: 'node',
     args: ['scripts/ai-media-suite-post-migration-guard.test.mjs'],

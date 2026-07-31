@@ -15,7 +15,7 @@
 - 确认 `.gitignore` 不会提交 `.env`、`node_modules`、`.next`、`build/dist`、`apps/server/dist`、上传图片、日志和本地数据库。
 - 生产启动时硬校验 `JWT_SECRET` 和 `ENCRYPTION_KEY`，禁止使用开发兜底值。
 - 统一 Redis 连接配置，所有 BullMQ `Queue` / `Worker` 使用 `REDIS_URL`，不要硬编码 `127.0.0.1:6379`。
-- Prisma 建立可复现的 baseline migration，生产只使用 `prisma migrate deploy`。
+- Prisma 建立可复现的 baseline migration；生产只通过带目标 commit 备份恢复认证的标准部署入口执行 migration。
 - 注册和短信发送接口接入 Cloudflare Turnstile 服务端校验。
 - 手机验证码使用 Redis TTL 存储，按手机号和 IP 做分级限流。
 - 生产 CORS 只允许正式 Web 域名和固定 Chrome 扩展 ID。

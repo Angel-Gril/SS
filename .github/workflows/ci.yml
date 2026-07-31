@@ -101,6 +101,18 @@ jobs:
       - name: Verify AI Media dark deployment contract
         run: node scripts/ai-media-dark-deploy.test.mjs
 
+      - name: Verify deployment backup attestation contract
+        run: node --test scripts/deploy-backup-attestation.test.mjs scripts/backup-operations-contract.test.mjs
+
+      - name: Verify deployment build inputs are Git-bound
+        run: node --test scripts/deploy-build-inputs.test.mjs
+
+      - name: Verify deployment environment snapshots
+        run: node --test scripts/deploy-environment.test.mjs
+
+      - name: Verify deployment source permissions
+        run: node --test scripts/deploy-source-permissions.test.mjs
+
       - name: Verify AI media suite post-migration DB guard contract
         run: node scripts/ai-media-suite-post-migration-guard.test.mjs
 

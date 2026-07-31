@@ -23,6 +23,9 @@ services:
     build:
       context: .
       dockerfile: docker/server.Dockerfile
+      args:
+        DEPLOY_TARGET_GIT_COMMIT: ${DEPLOY_TARGET_GIT_COMMIT:?DEPLOY_TARGET_GIT_COMMIT is required}
+        DEPLOY_SOURCE_ARCHIVE_SHA256: ${DEPLOY_SOURCE_ARCHIVE_SHA256:?DEPLOY_SOURCE_ARCHIVE_SHA256 is required}
     restart: unless-stopped
     env_file:
       - ${ENV_FILE:-.env.staging}
@@ -50,6 +53,9 @@ services:
     build:
       context: .
       dockerfile: docker/server.Dockerfile
+      args:
+        DEPLOY_TARGET_GIT_COMMIT: ${DEPLOY_TARGET_GIT_COMMIT:?DEPLOY_TARGET_GIT_COMMIT is required}
+        DEPLOY_SOURCE_ARCHIVE_SHA256: ${DEPLOY_SOURCE_ARCHIVE_SHA256:?DEPLOY_SOURCE_ARCHIVE_SHA256 is required}
     restart: unless-stopped
     command: ["node", "dist/worker.js"]
     env_file:
@@ -68,11 +74,22 @@ services:
     build:
       context: .
       dockerfile: docker/server.Dockerfile
+      args:
+        DEPLOY_TARGET_GIT_COMMIT: ${DEPLOY_TARGET_GIT_COMMIT:?DEPLOY_TARGET_GIT_COMMIT is required}
+        DEPLOY_SOURCE_ARCHIVE_SHA256: ${DEPLOY_SOURCE_ARCHIVE_SHA256:?DEPLOY_SOURCE_ARCHIVE_SHA256 is required}
     command: ["sh", "scripts/migrate-and-verify-ai-media-dark.sh"]
     env_file:
       - ${ENV_FILE:-.env.staging}
     environment:
       MIGRATION_TIMEOUT: ${MIGRATION_TIMEOUT:-20m}
+      DEPLOY_TARGET_GIT_COMMIT: ${DEPLOY_TARGET_GIT_COMMIT:?DEPLOY_TARGET_GIT_COMMIT is required}
+      DEPLOY_SOURCE_ARCHIVE_SHA256: ${DEPLOY_SOURCE_ARCHIVE_SHA256:?DEPLOY_SOURCE_ARCHIVE_SHA256 is required}
+      DEPLOY_BACKUP_LOCAL_DIR: /var/backups/ss-erp-deploy
+    volumes:
+      - type: bind
+        source: ${DEPLOY_BACKUP_LOCAL_DIR:?DEPLOY_BACKUP_LOCAL_DIR is required}
+        target: /var/backups/ss-erp-deploy
+        read_only: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +100,8 @@ services:
       context: .
       dockerfile: docker/web.Dockerfile
       args:
+        DEPLOY_TARGET_GIT_COMMIT: ${DEPLOY_TARGET_GIT_COMMIT:?DEPLOY_TARGET_GIT_COMMIT is required}
+        DEPLOY_SOURCE_ARCHIVE_SHA256: ${DEPLOY_SOURCE_ARCHIVE_SHA256:?DEPLOY_SOURCE_ARCHIVE_SHA256 is required}
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://staging.yourdomain.com/api}
         NEXT_PUBLIC_RUNTIME_MODE: ${NEXT_PUBLIC_RUNTIME_MODE:-cloud}
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}

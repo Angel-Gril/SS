@@ -48,10 +48,12 @@ load_env_file() {
     return
   fi
   pass "env file exists: $path"
-  set -a
-  # shellcheck disable=SC1090
-  . "$path"
-  set +a
+  if [ "${DEPLOY_ENV_PRELOADED:-0}" != "1" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$path"
+    set +a
+  fi
 }
 
 check_expected_env() {

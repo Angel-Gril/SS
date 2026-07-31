@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +38,10 @@ function bashExecutable() {
 }
 
 function extractFunction(name) {
-  const match = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'mu').exec(verifier);
+  const match = new RegExp(
+    `^${name}\\(\\) \\{[\\s\\S]*?^\\}(?=\\r?\\n(?:\\r?\\n[A-Za-z_][A-Za-z0-9_]*\\(\\) \\{|\\s*$))`,
+    'mu',
+  ).exec(verifier);
   assert.ok(match, `shell function is missing: ${name}`);
   return match[0].replace(/\r/gu, '');
 }
@@ -441,4 +452,36 @@ test('origin contract is wired into local preflight and CI', () => {
   const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   assert.match(preflight, /scripts\/vps-origin-mode-contract\.test\.mjs/u);
   assert.match(ci, /node scripts\/vps-origin-mode-contract\.test\.mjs/u);
+});
+
+test('local-only backup configuration preserves its four empty remote fields', {
+  skip: process.platform === 'win32'
+    || typeof process.geteuid !== 'function'
+    || process.geteuid() !== 0,
+}, () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-vps-backup-config-'));
+  const envFile = join(directory, 'backup.env');
+  try {
+    writeFileSync(envFile, [
+      'BACKUP_LOCAL_DIR=/var/backups/ss-erp',
+      'DEPLOY_DATABASE_ID=primary-db',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    chmodSync(envFile, 0o600);
+    const loadFn = extractFunction('load_backup_config');
+    const result = runShell(`
+pass() { :; }
+fail() { printf 'FAIL %s\\n' "$1" >&2; return 1; }
+${loadFn}
+BACKUP_ENV_FILE="$1"
+load_backup_config || exit 1
+printf '%s|%s|%s|%s|%s|%s' \\
+  "$BACKUP_LOCAL_DIR" "$DEPLOY_DATABASE_ID" "$BACKUP_S3_BUCKET" \\
+  "$BACKUP_S3_ENDPOINT" "$BACKUP_S3_ACCESS_KEY_ID" "$BACKUP_S3_SECRET_ACCESS_KEY"
+`, envFile);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '/var/backups/ss-erp|primary-db||||');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

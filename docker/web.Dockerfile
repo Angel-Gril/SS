@@ -1,5 +1,6 @@
 FROM node:22-bookworm-slim AS build
 
+ARG DEPLOY_SOURCE_ARCHIVE_SHA256
 WORKDIR /app
 RUN corepack enable
 
@@ -19,24 +20,30 @@ ENV NEXT_PUBLIC_USER_HOSTNAME=$NEXT_PUBLIC_USER_HOSTNAME
 ENV NEXT_PUBLIC_ADMIN_HOSTNAME=$NEXT_PUBLIC_ADMIN_HOSTNAME
 ENV NEXT_PUBLIC_MARKETING_HOSTNAME=$NEXT_PUBLIC_MARKETING_HOSTNAME
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
-COPY packages/shared/package.json packages/shared/package.json
-COPY apps/web/package.json apps/web/package.json
-
+COPY .ss-erp-source.tar /tmp/ss-erp-source.tar
+RUN case "$DEPLOY_SOURCE_ARCHIVE_SHA256" in *[!0-9a-f]*|'') exit 1;; esac \
+  && [ "${#DEPLOY_SOURCE_ARCHIVE_SHA256}" -eq 64 ] \
+  && printf '%s  %s\n' "$DEPLOY_SOURCE_ARCHIVE_SHA256" /tmp/ss-erp-source.tar | sha256sum -c - \
+  && tar -xf /tmp/ss-erp-source.tar -C /app \
+  && rm -f /tmp/ss-erp-source.tar
 RUN pnpm install --frozen-lockfile
-
-COPY packages/shared packages/shared
-COPY apps/web apps/web
-
 RUN pnpm --filter web build
 RUN pnpm deploy --legacy --filter web --prod /prod/web
 
 FROM node:22-bookworm-slim AS runtime
 
+ARG DEPLOY_TARGET_GIT_COMMIT
+ARG DEPLOY_SOURCE_ARCHIVE_SHA256
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 WORKDIR /app
+RUN case "$DEPLOY_TARGET_GIT_COMMIT" in *[!0-9a-f]*|'') exit 1;; esac \
+  && [ "${#DEPLOY_TARGET_GIT_COMMIT}" -eq 40 ] \
+  && case "$DEPLOY_SOURCE_ARCHIVE_SHA256" in *[!0-9a-f]*|'') exit 1;; esac \
+  && [ "${#DEPLOY_SOURCE_ARCHIVE_SHA256}" -eq 64 ] \
+  && printf '%s\n' "$DEPLOY_TARGET_GIT_COMMIT" > DEPLOYED_COMMIT \
+  && printf '%s\n' "$DEPLOY_SOURCE_ARCHIVE_SHA256" > DEPLOYED_SOURCE_ARCHIVE_SHA256
 
 COPY --from=build /prod/web ./
 COPY --from=build /app/apps/web/.next ./.next

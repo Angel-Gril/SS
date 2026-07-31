@@ -6,22 +6,147 @@ set -euo pipefail
 # Optional env:
 #   DEPLOY_BASE=/opt/ss-erp
 #   DEPLOY_USER=deploy
+#   DEPLOY_BUILD_USER=ss-erp-build
 #   ENV_FILE_NAME=.env.staging
 
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
+DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 RELEASES_DIR="$DEPLOY_BASE/releases"
 SHARED_DIR="$DEPLOY_BASE/shared"
 CURRENT_LINK="$DEPLOY_BASE/current"
 
-echo "[init] Creating release deployment directories"
-sudo mkdir -p "$RELEASES_DIR" "$SHARED_DIR/uploads" "$SHARED_DIR/backups"
-sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_BASE"
+fail() {
+  printf '[init] ERROR: %s\n' "$*" >&2
+  exit 1
+}
 
-if [ ! -e "$SHARED_DIR/$ENV_FILE_NAME" ]; then
-  sudo -u "$DEPLOY_USER" touch "$SHARED_DIR/$ENV_FILE_NAME"
+if [[ ! "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+  || ! id -- "$DEPLOY_USER" >/dev/null 2>&1; then
+  echo "[init] ERROR: deployment runtime user is missing: $DEPLOY_USER" >&2
+  exit 1
 fi
+if [[ ! "$DEPLOY_BUILD_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+  fail "deployment build user name is invalid"
+fi
+if ! id -- "$DEPLOY_BUILD_USER" >/dev/null 2>&1; then
+  sudo useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin \
+    -- "$DEPLOY_BUILD_USER"
+fi
+if [ "$DEPLOY_BUILD_USER" = "$DEPLOY_USER" ]; then
+  echo "[init] ERROR: deployment build user must differ from runtime user" >&2
+  exit 1
+fi
+DEPLOY_GROUP="$(id -gn -- "$DEPLOY_USER")"
+DEPLOY_UID="$(id -u -- "$DEPLOY_USER")"
+DEPLOY_GID="$(id -g -- "$DEPLOY_USER")"
+DEPLOY_BUILD_UID="$(id -u -- "$DEPLOY_BUILD_USER")"
+DEPLOY_BUILD_GID="$(id -g -- "$DEPLOY_BUILD_USER")"
+if [ "$DEPLOY_UID" = "0" ] || [ "$DEPLOY_GID" = "0" ] \
+  || [ "$DEPLOY_BUILD_UID" = "0" ] || [ "$DEPLOY_BUILD_GID" = "0" ] \
+  || [ "$DEPLOY_BUILD_UID" = "$DEPLOY_UID" ] \
+  || [ "$DEPLOY_BUILD_GID" = "$DEPLOY_GID" ]; then
+  fail "build and runtime users require distinct non-root UIDs and GIDs"
+fi
+
+case "$DEPLOY_BASE" in
+  /*) ;;
+  *) fail "DEPLOY_BASE must be an absolute path" ;;
+esac
+if [ "$(readlink -m -- "$DEPLOY_BASE")" != "$DEPLOY_BASE" ]; then
+  fail "DEPLOY_BASE must be one canonical absolute path"
+fi
+if [[ ! "$ENV_FILE_NAME" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+  fail "ENV_FILE_NAME must be one dot-prefixed basename"
+fi
+
+assert_real_directory_or_absent() {
+  local directory="$1"
+  if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+    fail "managed directory must not be a symlink or non-directory: $directory"
+  fi
+  if [ -d "$directory" ] && [ "$(readlink -f -- "$directory")" != "$directory" ]; then
+    fail "managed directory must be canonical: $directory"
+  fi
+}
+
+assert_real_directory_or_absent "$DEPLOY_BASE"
+DEPLOY_PARENT="$(dirname -- "$DEPLOY_BASE")"
+CURRENT_ANCESTOR="$DEPLOY_PARENT"
+while true; do
+  if [ -L "$CURRENT_ANCESTOR" ] || [ ! -d "$CURRENT_ANCESTOR" ] \
+    || [ "$(readlink -f -- "$CURRENT_ANCESTOR")" != "$CURRENT_ANCESTOR" ] \
+    || [ "$(stat -c '%u' "$CURRENT_ANCESTOR")" != "0" ]; then
+    fail "DEPLOY_BASE ancestors must be root-owned canonical directories"
+  fi
+  DEPLOY_PARENT_MODE="$(stat -c '%a' "$CURRENT_ANCESTOR")"
+  if (( (8#$DEPLOY_PARENT_MODE & 8#022) != 0 )); then
+    fail "DEPLOY_BASE ancestors must not be group/world writable"
+  fi
+  [ "$CURRENT_ANCESTOR" = "/" ] && break
+  CURRENT_ANCESTOR="$(dirname -- "$CURRENT_ANCESTOR")"
+done
+
+echo "[init] Creating release deployment directories"
+sudo install -d -o root -g root -m 0755 "$DEPLOY_BASE"
+sudo chown root:root "$DEPLOY_BASE"
+sudo chmod 0755 "$DEPLOY_BASE"
+assert_real_directory_or_absent "$RELEASES_DIR"
+assert_real_directory_or_absent "$SHARED_DIR"
+sudo install -d -o root -g root -m 0755 "$RELEASES_DIR" "$SHARED_DIR"
+for managed_child in "$SHARED_DIR/uploads" "$SHARED_DIR/backups"; do
+  assert_real_directory_or_absent "$managed_child"
+done
+sudo install -d -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" -m 0750 \
+  "$SHARED_DIR/uploads" "$SHARED_DIR/backups"
+sudo chown root:root "$DEPLOY_BASE" "$RELEASES_DIR" "$SHARED_DIR"
+sudo chmod 0755 "$DEPLOY_BASE" "$RELEASES_DIR" "$SHARED_DIR"
+
+if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
+  if [ ! -L "$CURRENT_LINK" ]; then
+    fail "current path must be a symlink when it already exists"
+  fi
+  CURRENT_TARGET="$(readlink -f -- "$CURRENT_LINK")"
+  CURRENT_COMMIT="${CURRENT_TARGET##*/}"
+  if [ "$(dirname -- "$CURRENT_TARGET")" != "$RELEASES_DIR" ] \
+    || [[ ! "$CURRENT_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || [ ! -d "$CURRENT_TARGET" ]; then
+    fail "current symlink must target one direct commit release beneath $RELEASES_DIR"
+  fi
+fi
+
+ENV_PATH="$SHARED_DIR/$ENV_FILE_NAME"
+if [ -L "$ENV_PATH" ] || { [ -e "$ENV_PATH" ] && [ ! -f "$ENV_PATH" ]; }; then
+  fail "environment path must be a regular non-symbolic-link file"
+fi
+if [ -f "$ENV_PATH" ] && [ "$(stat -c '%h' "$ENV_PATH")" != "1" ]; then
+  fail "environment file must not have additional hard links"
+fi
+if [ ! -e "$ENV_PATH" ]; then
+  sudo install -o root -g "$DEPLOY_GROUP" -m 0640 /dev/null "$ENV_PATH"
+fi
+sudo chown "root:$DEPLOY_GROUP" "$ENV_PATH"
+sudo chmod 0640 "$ENV_PATH"
+
+COMPOSE_LOCK_ROOT=/var/lib/ss-erp-deploy-locks
+if [ -L "$COMPOSE_LOCK_ROOT" ] \
+  || { [ -e "$COMPOSE_LOCK_ROOT" ] && [ ! -d "$COMPOSE_LOCK_ROOT" ]; }; then
+  fail "Compose deployment lock root must be one real directory"
+fi
+sudo install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$COMPOSE_LOCK_ROOT"
+for compose_project in ss-erp-prod ss-erp-staging; do
+  COMPOSE_LOCK_FILE="$COMPOSE_LOCK_ROOT/$compose_project.lock"
+  if [ -L "$COMPOSE_LOCK_FILE" ] \
+    || { [ -e "$COMPOSE_LOCK_FILE" ] && [ ! -f "$COMPOSE_LOCK_FILE" ]; }; then
+    fail "Compose deployment lock path must be one regular file"
+  fi
+  if [ ! -e "$COMPOSE_LOCK_FILE" ]; then
+    sudo install -o root -g "$DEPLOY_GROUP" -m 0660 /dev/null "$COMPOSE_LOCK_FILE"
+  fi
+  sudo chown "root:$DEPLOY_GROUP" "$COMPOSE_LOCK_FILE"
+  sudo chmod 0660 "$COMPOSE_LOCK_FILE"
+done
 
 cat <<EOF
 [init] Done.

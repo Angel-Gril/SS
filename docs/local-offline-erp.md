@@ -144,23 +144,29 @@ DEPLOY_HOST=<server> DEPLOY_USER=<user> ./scripts/deploy.sh
 
 ### 本地版推荐更新流程
 
-1. 备份数据库。
-2. 拉取最新代码或切换到目标 commit。
-3. `pnpm install --frozen-lockfile`
-4. `cd apps/server && npx prisma generate`，然后回到仓库根目录执行 `pnpm --filter server build && pnpm --filter web build`。
-5. 停止旧版 API 和 Worker，确认没有旧进程继续访问数据库；Web 可在短暂停机窗口内继续提供静态错误页。
-6. `cd apps/server && npx prisma migrate deploy`。
-7. 启动新版 API、Worker、Web。
-8. 跑 `pnpm smoke:remote` 或本地 smoke。
-9. 如果失败，立刻回滚到上一版；数据库迁移不可逆时必须按该版本的发布说明恢复备份。
+1. 拉取最新代码或切换到目标 commit，记录完整 40 位 `TARGET_COMMIT`。
+2. 在目标服务器上从该 revision 的私有运维 checkout 加载应用 env 和
+   `/etc/ss-erp-backup.env`，生成目标 commit 绑定的备份。
+3. 把同一份备份恢复到临时数据库；只有实际数据库身份一致、public 表数为正、临时库成功删除且
+   `verify-deploy-backup.sh "$TARGET_COMMIT"` 通过时才继续。
+4. 使用 `deploy-staging.sh`、`deploy-app-dir.sh "$TARGET_COMMIT"` 或
+   `deploy.sh "$TARGET_COMMIT"` 中与安装模式匹配的一条标准入口。入口负责 build、停止旧版
+   API/Worker、再次验证认证、migration、暗态检查、整体启动和 readiness。
+5. 跑 `pnpm smoke:remote` 或本地 smoke。
+6. 如果失败，保持 API/Worker 停止并按 Runbook 处理；数据库迁移不可逆时必须按该版本的发布说明
+   恢复已认证备份。
 
 涉及唯一索引或写入契约变化的版本不支持新旧 API 滚动共存。必须先完成构建，再停掉旧 API/Worker，迁移后整体启动新版本。
 
-线上或客户环境不要用 `prisma migrate dev` / `db push`。发布环境只用 `npx prisma migrate deploy`。
+线上或客户环境不要用 `prisma migrate dev` / `db push`，也不要手工裸跑
+`npx prisma migrate deploy`。发布 migration 只能由上述带备份恢复认证门禁的标准入口执行。
 
 ## 备份与恢复
 
 本地离线版也必须做备份，不要只依赖“服务器还在”。推荐：
+
+首次启用时先按 `docs/deployment.md` 为该数据库插入独立、同时绑定环境 ID 与 UUID 的 canonical
+`deployment_database_identity_v1` 对象；从其他环境克隆后必须轮换。
 
 - 本机备份保留 7-14 天。
 - 可选远程 S3/R2 备份保留 30-90 天。
@@ -170,12 +176,22 @@ DEPLOY_HOST=<server> DEPLOY_USER=<user> ./scripts/deploy.sh
 命令：
 
 ```bash
-source /etc/ss-erp-backup.env
-bash scripts/backup-db.sh
-bash scripts/verify-backup-restore.sh
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+set -a
+. ./.env.staging
+. /etc/ss-erp-backup.env
+set +a
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
+bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 ```
 
-`backup-db.sh` 每次都会生成 `backup-status.json`，超管后台和 `verify-vps-deploy.sh` 可以用它判断最近一次备份是否存在。
+应用 `DATABASE_URL` 与备份 `BACKUP_DB_URL` 必须查询到同一实际数据库名、OID 和库内 deployment
+UUID；hostname/port 路由可以不同。
+`DEPLOY_DATABASE_ID` 也必须一致。应用 env 的 `DEPLOY_BACKUP_LOCAL_DIR` 要等于备份 env 的
+`BACKUP_LOCAL_DIR`，且该目录由备份用户独占、不能被 group/world 写入。应用后台备份服务如使用
+自己的 `BACKUP_LOCAL_DIR`，必须选另一个目录。`backup-db.sh` 每次都会生成 schema v3
+`backup-status.json` 和不可变 sidecar，超管后台和 `verify-vps-deploy.sh` 可据此检查最近证据。
 
 ## 扩展包
 

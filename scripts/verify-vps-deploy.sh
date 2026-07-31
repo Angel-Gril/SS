@@ -14,6 +14,7 @@ LOG_SINCE="${VERIFY_LOG_SINCE:-10 minutes ago}"
 BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-/etc/ss-erp-backup.env}"
 BACKUP_LOG_DIR="${BACKUP_LOG_DIR:-/var/log/ss-erp}"
 BACKUP_MAX_AGE_HOURS="${BACKUP_MAX_AGE_HOURS:-36}"
+DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
 VERIFY_ORIGIN_MODE="${VERIFY_ORIGIN_MODE:-cloudflare}"
 VERIFY_DIRECT_HOSTNAMES="${VERIFY_DIRECT_HOSTNAMES:-}"
 VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED:-false}"
@@ -177,16 +178,64 @@ load_backup_config() {
     warn "backup env file missing; using current environment: $BACKUP_ENV_FILE"
     return
   fi
-  if [ ! -r "$BACKUP_ENV_FILE" ]; then
-    fail "backup env file is not readable: $BACKUP_ENV_FILE"
+  if [ -L "$BACKUP_ENV_FILE" ] || [ ! -f "$BACKUP_ENV_FILE" ] \
+    || [ ! -r "$BACKUP_ENV_FILE" ]; then
+    fail "backup env file must be a readable regular non-symbolic-link file: $BACKUP_ENV_FILE"
     return
   fi
-  # shellcheck disable=SC1090
-  if . "$BACKUP_ENV_FILE"; then
-    pass "backup configuration loaded: $BACKUP_ENV_FILE"
-  else
-    fail "backup env file could not be loaded: $BACKUP_ENV_FILE"
+  if [ "$(stat -c '%u:%a' "$BACKUP_ENV_FILE")" != "0:600" ]; then
+    fail "backup env file must be root-owned with mode 0600: $BACKUP_ENV_FILE"
+    return
   fi
+  local encoded
+  if ! encoded=$(
+    set -a
+    # shellcheck disable=SC1090
+    . "$BACKUP_ENV_FILE"
+    set +a
+    node -e '
+const keys = [
+  "BACKUP_LOCAL_DIR",
+  "DEPLOY_DATABASE_ID",
+  "BACKUP_S3_BUCKET",
+  "BACKUP_S3_ENDPOINT",
+  "BACKUP_S3_ACCESS_KEY_ID",
+  "BACKUP_S3_SECRET_ACCESS_KEY",
+];
+for (const key of keys) {
+  const encoded = Buffer.from(process.env[key] || "", "utf8").toString("base64");
+  process.stdout.write(`${key}=${encoded}\n`);
+}
+'
+  ); then
+    fail "backup env file could not be parsed in isolation: $BACKUP_ENV_FILE"
+    return
+  fi
+  local values=()
+  mapfile -t values <<< "$encoded"
+  if [ "${#values[@]}" -ne 6 ]; then
+    fail "backup env file did not produce the closed configuration field set"
+    return
+  fi
+  local keys=(
+    BACKUP_LOCAL_DIR DEPLOY_DATABASE_ID BACKUP_S3_BUCKET BACKUP_S3_ENDPOINT
+    BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY
+  )
+  local index
+  for index in "${!keys[@]}"; do
+    if [[ "${values[$index]}" != "${keys[$index]}="* ]]; then
+      fail "backup env file field order is invalid"
+      return
+    fi
+    values[$index]="${values[$index]#*=}"
+  done
+  BACKUP_LOCAL_DIR="$(printf '%s' "${values[0]}" | base64 --decode)"
+  DEPLOY_DATABASE_ID="$(printf '%s' "${values[1]}" | base64 --decode)"
+  BACKUP_S3_BUCKET="$(printf '%s' "${values[2]}" | base64 --decode)"
+  BACKUP_S3_ENDPOINT="$(printf '%s' "${values[3]}" | base64 --decode)"
+  BACKUP_S3_ACCESS_KEY_ID="$(printf '%s' "${values[4]}" | base64 --decode)"
+  BACKUP_S3_SECRET_ACCESS_KEY="$(printf '%s' "${values[5]}" | base64 --decode)"
+  pass "backup configuration loaded through an isolated allowlist: $BACKUP_ENV_FILE"
 }
 
 require_command() {
@@ -517,6 +566,90 @@ check_direct_public_hosts() {
 check_backup_status() {
   local backup_dir="${BACKUP_LOCAL_DIR:-/var/backups/ss-erp}"
   local status_file="${backup_dir}/backup-status.json"
+  local deployed_commit
+  if [ -L "$DEPLOY_DIR/DEPLOYED_COMMIT" ] || [ ! -f "$DEPLOY_DIR/DEPLOYED_COMMIT" ] \
+    || [ ! -r "$DEPLOY_DIR/DEPLOYED_COMMIT" ]; then
+    fail "DEPLOYED_COMMIT is required for backup verification"
+    return
+  fi
+  if ! deployed_commit="$(node -e '
+const fs = require("node:fs");
+const value = fs.readFileSync(process.argv[1], "utf8");
+const match = value.match(/^([a-f0-9]{40})(?:\n)?$/);
+if (!match) process.exit(1);
+process.stdout.write(match[1]);
+' "$DEPLOY_DIR/DEPLOYED_COMMIT")"; then
+    fail "DEPLOYED_COMMIT is not a lowercase full Git object ID"
+    return
+  fi
+  if [[ ! "${DEPLOY_DATABASE_ID:-}" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]]; then
+    fail "DEPLOY_DATABASE_ID is required for backup verification"
+    return
+  fi
+  local app_backup_config
+  local app_database_id
+  local app_backup_dir
+  local app_database_identity_sha256
+  local app_database_uuid_sha256
+  local app_env_file
+  local installed_gate="$DEPLOY_BACKUP_GATE_ROOT/$deployed_commit"
+  if ! app_env_file="$(readlink -f -- "$DEPLOY_DIR/$ENV_FILE")" \
+    || [ -L "$app_env_file" ] || [ ! -f "$app_env_file" ] || [ ! -r "$app_env_file" ]; then
+    fail "deployment environment must resolve to one readable regular file"
+    return
+  fi
+  if ! node "$installed_gate/deploy-backup-gate.mjs" \
+    --mode verify \
+    --env-file "$app_env_file" \
+    --target-git-commit "$deployed_commit"; then
+    fail "deploy backup attestation verification failed"
+    return
+  fi
+  pass "deploy backup attestation matches the deployed commit and database"
+  if ! app_backup_config=$(node --input-type=module - \
+    "$app_env_file" "$installed_gate/deploy-database-identity.mjs" <<'NODE'
+import { spawnSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
+const [envFile, helper] = process.argv.slice(2);
+const stats = lstatSync(envFile);
+if (stats.isSymbolicLink() || !stats.isFile() || stats.size < 1 || stats.size > 1024 * 1024) {
+  process.exit(1);
+}
+const parsed = parseEnv(readFileSync(envFile, 'utf8'));
+const databaseId = parsed.DEPLOY_DATABASE_ID || '';
+const backupDirectory = parsed.DEPLOY_BACKUP_LOCAL_DIR || '';
+const result = spawnSync(process.execPath, [helper, '--backup-binding'], {
+  encoding: 'utf8',
+  env: {
+    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    HOME: '/root',
+    LANG: 'C.UTF-8',
+    DEPLOY_DATABASE_ID: databaseId,
+    DEPLOY_DATABASE_URL: parsed.DATABASE_URL || '',
+  },
+  maxBuffer: 65536,
+  timeout: 30000,
+});
+if (result.error || result.signal || result.status !== 0
+  || !/^[a-f0-9]{64}\t[a-f0-9]{64}\n$/u.test(result.stdout)) process.exit(1);
+process.stdout.write(`${databaseId}\t${backupDirectory}\t${result.stdout.trim()}\n`);
+NODE
+  ); then
+    fail "could not load application backup/database identity configuration"
+    return
+  fi
+  IFS=$'\t' read -r app_database_id app_backup_dir app_database_identity_sha256 \
+    app_database_uuid_sha256 \
+    <<< "$app_backup_config"
+  if [ "$app_database_id" != "$DEPLOY_DATABASE_ID" ]; then
+    fail "backup and application DEPLOY_DATABASE_ID values do not match"
+    return
+  fi
+  if [ "$app_backup_dir" != "$backup_dir" ]; then
+    fail "backup and application deployment backup directories do not match"
+    return
+  fi
   if [ ! -r "$status_file" ]; then
     fail "backup status file missing or unreadable: $status_file"
     return
@@ -529,20 +662,70 @@ const path = require("path");
 const statusFile = process.argv[1];
 const backupDir = path.resolve(process.argv[2]);
 const maxAgeHours = Number(process.argv[3]);
+const expectedDatabaseId = process.argv[4];
+const expectedTargetGitCommit = process.argv[5];
+const expectedDatabaseIdentitySha256 = process.argv[6];
+const expectedDatabaseUuidSha256 = process.argv[7];
 const reject = (message) => {
   console.error(message);
   process.exit(1);
 };
+
+let statusStats;
+try {
+  statusStats = fs.lstatSync(statusFile);
+} catch (error) {
+  reject("backup status file is unreadable: " + error.message);
+}
+if (statusStats.isSymbolicLink() || !statusStats.isFile() || statusStats.size > 65536) {
+  reject("backup status must be one bounded regular non-symbolic-link file");
+}
 
 if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) {
   reject("BACKUP_MAX_AGE_HOURS must be a positive number");
 }
 
 let data;
+let statusText;
 try {
-  data = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+  statusText = fs.readFileSync(statusFile, "utf8");
+  data = JSON.parse(statusText);
 } catch (error) {
   reject("backup status JSON is invalid: " + error.message);
+}
+const expectedKeys = [
+  "schemaVersion",
+  "lastBackupAt",
+  "lastLocalFile",
+  "lastLocalSize",
+  "lastLocalBytes",
+  "lastLocalSha256",
+  "databaseId",
+  "databaseIdentitySha256",
+  "databaseUuidSha256",
+  "targetGitCommit",
+  "remoteUploaded",
+  "lastRemoteKey",
+];
+if (data.schemaVersion !== 3
+  || Object.keys(data).length !== expectedKeys.length
+  || expectedKeys.some((key) => !Object.hasOwn(data, key))) {
+  reject("backup status must use schemaVersion 3 and its closed field set");
+}
+if (statusText !== JSON.stringify(data, null, 2) + "\n") {
+  reject("backup status JSON is not canonical");
+}
+if (data.databaseId !== expectedDatabaseId
+  || data.databaseIdentitySha256 !== expectedDatabaseIdentitySha256
+  || data.databaseUuidSha256 !== expectedDatabaseUuidSha256
+  || data.targetGitCommit !== expectedTargetGitCommit) {
+  reject("backup status database or target commit does not match deployment");
+}
+if (!Number.isSafeInteger(data.lastLocalBytes) || data.lastLocalBytes < 1) {
+  reject("lastLocalBytes is missing or invalid");
+}
+if (typeof data.lastLocalSha256 !== "string" || !/^[a-f0-9]{64}$/.test(data.lastLocalSha256)) {
+  reject("lastLocalSha256 is missing or invalid");
 }
 
 const backupAt = Date.parse(data.lastBackupAt);
@@ -574,16 +757,25 @@ try {
 } catch {
   reject("lastLocalFile is not readable");
 }
-const stats = fs.statSync(localFile);
-if (!stats.isFile() || stats.size <= 0) {
+const stats = fs.lstatSync(localFile);
+if (stats.isSymbolicLink() || !stats.isFile() || stats.size <= 0) {
   reject("lastLocalFile is empty or not a regular file");
+}
+if (stats.size !== data.lastLocalBytes) {
+  reject("lastLocalBytes does not match the local artifact");
 }
 if (typeof data.remoteUploaded !== "boolean") {
   reject("remoteUploaded is missing or invalid");
 }
+if (typeof data.lastRemoteKey !== "string"
+  || data.remoteUploaded !== (data.lastRemoteKey.length > 0)) {
+  reject("remote backup state is inconsistent");
+}
 
 process.stdout.write(String(data.remoteUploaded) + "\t" + ageHours.toFixed(2) + "\t" + stats.size);
-' "$status_file" "$backup_dir" "$BACKUP_MAX_AGE_HOURS" 2>&1); then
+' "$status_file" "$backup_dir" "$BACKUP_MAX_AGE_HOURS" \
+    "$DEPLOY_DATABASE_ID" "$deployed_commit" "$app_database_identity_sha256" \
+    "$app_database_uuid_sha256" 2>&1); then
     local remote_uploaded
     local age_hours
     local local_size
@@ -615,6 +807,7 @@ process.stdout.write(String(data.remoteUploaded) + "\t" + ageHours.toFixed(2) + 
   else
     warn "remote backup is not configured; latest backup is local only"
   fi
+
 }
 
 check_logistics_rollout_expectations() {
@@ -848,6 +1041,9 @@ fi
 echo ""
 
 require_command node
+require_command base64
+require_command stat
+require_command psql
 require_command curl
 require_command ss
 require_command nginx

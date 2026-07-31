@@ -367,6 +367,46 @@ package/deployment matrix in `212.7s`; diff check also passed. This verification
 external signature, store receipt, clean install/upgrade smoke or distribution, so formal counts and
 release ordering remain unchanged.
 
+Subsequent offline release hardening closed the remaining environment and Git provenance gaps: the
+fixed local extension origin no longer requires a pre-existing operator env value, while templates
+document it; direct Git checkouts now fail closed on inspection failure, invalid or dangling `.git`
+metadata, and archive trees cannot inherit an unrelated ancestor checkout. The coordinated package
+matrix passed on a stable HEAD and commit `4367384` was pushed.
+
+Offline `REL-04` preparation also added a mandatory pre-migration database backup attestation gate.
+Real gzip bytes, compressed SHA-256/size, an immutable canonical status sidecar, stable database ID,
+full target commit, successful temporary restore, positive table count and bounded freshness are
+verified again before each systemd or Compose migration. Evidence files are `0600`, no-follow and
+identity checked; verification streams SHA-256/gunzip under an external timeout. Compose binds a
+clean stable HEAD and mounts the evidence directory read-only. The release evidence directory uses
+`DEPLOY_BACKUP_LOCAL_DIR`, separate from application-managed backup cleanup. Native focused gates and
+an offline Debian run passed all `28` POSIX backup/restore/symlink/mode assertions. Workspace lint
+had zero errors and the existing `20` Server plus one shared warning; workspace typecheck,
+Dockerfile check, both Compose config parses and full preflight passed. Preflight completed in
+`464.8s` at `445/0` with the two expected local-extension warnings. No real database backup,
+restore, migration, VPS access, deployment, canary, Provider request, flag change or Ozon write
+was performed. `REL-04` therefore remains preparation-only; Phase 6 stays `0/3` and overall
+progress stays `32/37`.
+
+A final offline `REL-04` hardening pass now gives root orchestration, runtime execution and builds
+three explicit trust levels. The distinct non-root `ss-erp-build` UID/GID receives no supplementary
+groups or runtime secrets; stable root env snapshots, pre/post closed source manifests and new-inode
+sealing bind every systemd build before migration. Unexpected ignored root `.env*` inputs fail
+closed, and runtime cache creation no longer recursively changes ownership of build-produced paths.
+Compose uses root-provisioned global project locks and a private target-commit archive whose digest
+is verified before either Dockerfile executes repository code; commit and archive markers are
+checked again by the migration container. Backup restore now binds maintenance and restore routes
+with a random database marker, requires an actual drop of the created temporary database, and can
+refresh an expired same-commit attestation only after root archives the old exact bytes under their
+SHA-256. A no-network Debian run passed the full `52/52` POSIX deployment/backup matrix. Lint had no
+errors and only the existing `20` Server plus one shared warning; workspace typecheck passed; the
+Server suite passed `4515` with `195` skipped; final preflight passed `445/0` with two expected local
+package warnings in `415.8s`. BuildKit checks had no Dockerfile warnings, both Compose configs
+parsed, and cloud/local/source extension verification passed `450/0/0`, `446/2/0` and `445/2/0` at
+version `1.0.264`. No real backup, restore, migration, VPS access, deployment, canary, Provider
+request, charge, flag change, ERP media mutation, Ozon write or `.context/` staging occurred.
+`REL-04` remains preparation-only; Phase 6 stays `0/3` and overall progress stays `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -387,7 +427,10 @@ release ordering remain unchanged.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
-   during `REL-03` or `REL-04`.
+   during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
+   stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
+   to create and verify a fresh target-commit restore attestation; do not bypass the new gate with an
+   old `backup-status.json` or the removed `RUN_DB_BACKUP` option.
 6. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

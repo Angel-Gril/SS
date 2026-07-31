@@ -12,6 +12,8 @@ const COMMAND_GRANT_SECRET = 'abcdef0123456789abcdef0123456789';
 function baseEnv(extra = []) {
   return [
     'DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/db?schema=public',
+    'DEPLOY_DATABASE_ID=test-primary',
+    'DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy',
     'REDIS_URL=redis://127.0.0.1:6379',
     `JWT_SECRET=${ACCOUNT_SECRET}`,
     'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',

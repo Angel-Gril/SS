@@ -70,3 +70,43 @@ Progress: 0/3 tasks.
   the full Server suite (`4514` passed, `195` skipped), and the coordinated package/deployment matrix
   in `212.7s`. `git diff --check` passed. No Provider, VPS, deployment, signature, distribution,
   production flag or Ozon operation was invoked.
+- Offline `REL-04` preparation now makes every supported migration entrypoint fail closed without a
+  fresh database/target-commit/restore-bound backup attestation. The shell backup path validates a
+  real gzip, retains compressed byte count and SHA-256 in canonical schema v3 latest status plus an
+  immutable per-backup sidecar, and refuses overwrite. The restore drill must restore that exact
+  sidecar-bound file into a temporary database and observe a positive public table count before it
+  can write one private canonical attestation. Verification reopens the attestation, immutable
+  status and backup without following final symlinks, checks identities/modes before and after
+  bounded streaming SHA-256/gunzip, enforces a 24-hour maximum configurable age and independent
+  timeout, and binds the stable `DEPLOY_DATABASE_ID` plus full target Git commit. The three systemd
+  deployers and the Compose migrate container run this gate before Prisma; Compose also binds a
+  clean, stable HEAD and read-only evidence mount. Application-managed backup storage remains
+  separate through `DEPLOY_BACKUP_LOCAL_DIR`, preventing the existing service backup worker from
+  overwriting or cleaning release evidence. Workspace lint passed with zero errors and the existing
+  `20` Server plus one shared warning; workspace typecheck, Dockerfile check, both Compose config
+  parses and full preflight passed. Preflight completed in `464.8s` at `445/0` with the two expected
+  local-extension warnings. An offline Debian container passed all `28` POSIX backup, restore,
+  `0600` and symlink assertions. This is code
+  readiness only: no real backup, restore, migration, VPS access, deployment or canary occurred, so
+  `REL-04` remains unchecked and counts stay `32/37`.
+- A final offline `REL-04` hardening pass now separates root orchestration, the runtime identity and
+  a dedicated `ss-erp-build` identity with distinct non-root UID/GID values and empty supplementary
+  groups. Root snapshots the env once; builds receive only public allowlisted values plus an
+  unusable database URL. Open/closed manifests bind the pre/post-build trees, sealing copies them to
+  new root-owned inodes, and runtime links are installed only afterward. Ignored root `.env*` files
+  fail closed except for the explicitly selected runtime env, and the sealed Next build cache is
+  discarded before root creates an empty runtime cache. Compose is serialized by preinstalled
+  global locks and builds only a private target-commit `git archive`; each Dockerfile verifies the
+  archive SHA-256 before executing repository code and records both commit and archive markers.
+  The restore drill now proves the maintenance and restore routes are the same database using a
+  random schema/table marker before import and before a mandatory, non-optional drop. Expired
+  same-commit attestations are archived byte-for-byte under a SHA-256-qualified name before a new
+  current pointer can be issued. A no-network Debian run passed all `52/52` deployment, backup,
+  restore, identity, mode, symlink and permission assertions. Lint passed with zero errors and the
+  existing `20` Server plus one shared warning; workspace typecheck passed; the full Server suite
+  passed `4515` with `195` skipped; final preflight passed `445/0` with two expected local-package
+  warnings in `415.8s`. BuildKit checks reported no Dockerfile warnings, both Compose configs parsed,
+  and cloud/local/source extension verification passed `450/0/0`, `446/2/0` and `445/2/0` at
+  version `1.0.264`. This remains offline preparation: no real backup, restore, migration, VPS
+  access, deployment, canary, Provider request, charge, flag change or Ozon write occurred.
+  `REL-04` stays unchecked, Phase 6 stays `0/3`, and overall progress stays `32/37`.

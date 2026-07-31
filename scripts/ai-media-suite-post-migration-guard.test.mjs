@@ -15,6 +15,7 @@ const deployments = [
   ['app-dir', readFileSync('scripts/deploy-app-dir.sh', 'utf8'), 'log "Restarting services"'],
   ['in-place staging', readFileSync('scripts/deploy-staging.sh', 'utf8'), 'echo "[6/7] Restarting services..."'],
 ];
+const deployBackupGate = readFileSync('scripts/deploy-backup-gate.mjs', 'utf8');
 const dockerWrapper = readFileSync('docker/migrate-and-verify-ai-media-dark.sh', 'utf8');
 const dockerfile = readFileSync('docker/server.Dockerfile', 'utf8');
 const verifyVps = readFileSync('scripts/verify-vps-deploy.sh', 'utf8');
@@ -87,13 +88,20 @@ assert.match(postgresUpgrade, /accepted a trigger bound to a foreign-schema func
 assert.match(postgresUpgrade, /wrong pg_proc binding/u);
 
 for (const [label, source, restartBoundary] of deployments) {
-  const migrateIndex = source.indexOf('npx prisma migrate deploy');
-  const guardIndex = source.indexOf('verify-ai-media-suite-post-migration.mjs', migrateIndex);
+  const migrateIndex = source.indexOf('deploy-backup-gate.mjs');
+  const modeIndex = source.indexOf('--mode migrate', migrateIndex);
   const restartIndex = source.indexOf(restartBoundary, migrateIndex);
-  assert.ok(migrateIndex >= 0, `${label} deploy must migrate`);
-  assert.ok(guardIndex > migrateIndex, `${label} deploy must run the DB guard after migration`);
-  assert.ok(restartIndex > guardIndex, `${label} deploy must keep API/Worker quiesced through the DB guard`);
+  assert.ok(migrateIndex >= 0 && modeIndex > migrateIndex, `${label} deploy must use the bound migration gate`);
+  assert.ok(restartIndex > modeIndex, `${label} deploy must keep API/Worker quiesced through the DB guard`);
 }
+
+const gateMigrateIndex = deployBackupGate.indexOf("['pnpm', 'exec', 'prisma', 'migrate', 'deploy']");
+const gateGuardIndex = deployBackupGate.indexOf(
+  "['node', 'scripts/verify-ai-media-suite-post-migration.mjs']",
+  gateMigrateIndex,
+);
+assert.ok(gateMigrateIndex >= 0, 'the bound deployment gate must run Prisma migration');
+assert.ok(gateGuardIndex > gateMigrateIndex, 'the bound deployment gate must guard after migration');
 
 const dockerMigrateIndex = dockerWrapper.indexOf('npx prisma migrate deploy');
 const dockerGuardIndex = dockerWrapper.indexOf('verify-ai-media-suite-post-migration.mjs');
@@ -102,12 +110,12 @@ assert.ok(dockerGuardIndex > dockerMigrateIndex, 'Docker must guard the migrated
 assert.ok(dockerDarkIndex > dockerGuardIndex, 'Docker must pass the DB guard before later gates');
 assert.match(
   dockerfile,
-  /COPY apps\/server\/scripts\/verify-ai-media-suite-post-migration\.mjs/u,
+  /COPY --from=build \/app\/apps\/server\/scripts\/verify-ai-media-suite-post-migration\.mjs/u,
   'the runtime migration image must contain the DB guard',
 );
 assert.match(
   dockerfile,
-  /COPY apps\/server\/scripts\/ai-media-suite-post-migration-contract\.mjs \.\/scripts\/ai-media-suite-post-migration-contract\.mjs/u,
+  /COPY --from=build \/app\/apps\/server\/scripts\/ai-media-suite-post-migration-contract\.mjs \.\/scripts\/ai-media-suite-post-migration-contract\.mjs/u,
   'the runtime migration image must contain the DB guard contract',
 );
 assert.match(verifyVps, /check_ai_media_suite_post_migration_guard/u);

@@ -14,7 +14,7 @@
 | A1 | 域名 + Cloudflare 配置 | DNS 指向 ECS，CF 代理开启，Turnstile site key 绑定 staging 域名 | 域名购买 |
 | A2 | Nginx 部署 + SSL | 用 docker/nginx/ss-erp.conf，替换 server_name，CF origin cert | A1 |
 | A3 | .env.staging 填入真实值 | DATABASE_URL、REDIS_URL、JWT_SECRET、ENCRYPTION_KEY、CORS_ORIGIN、SMS 密钥 | 服务器就绪 |
-| A4 | prisma migrate deploy | 在服务器上执行 baseline migration | A3 |
+| A4 | 标准 bootstrap/deploy gate | 仅全新空库按 Runbook 执行一次 bootstrap；既有库由带备份恢复认证的标准部署入口迁移 | A3 |
 | A5 | 首次 /setup 创建管理员 | 浏览器访问 staging 域名，用 SETUP_TOKEN 创建超管 | A4 |
 | A6 | 冒烟测试 | 登录 → 添加店铺 → 触发一次产品同步 → 查看订单 → 图片上传 | A5 |
 

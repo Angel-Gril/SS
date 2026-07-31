@@ -94,6 +94,11 @@ check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark.sh"
 check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark-policy.mjs"
 check_file "$DEPLOY_DIR/scripts/verify-extension-byok-rollout-policy.mjs"
 check_file "$DEPLOY_DIR/scripts/verify-backup-restore.sh"
+check_file "$DEPLOY_DIR/scripts/deploy-backup-attestation.mjs"
+check_file "$DEPLOY_DIR/scripts/deploy-backup-gate.mjs"
+check_file "$DEPLOY_DIR/scripts/deploy-database-identity.mjs"
+check_file "$DEPLOY_DIR/scripts/verify-deploy-backup.sh"
+check_file "$DEPLOY_DIR/scripts/verify-empty-bootstrap-database.mjs"
 
 if [ -f "$DEPLOY_DIR/DEPLOYED_COMMIT" ]; then
   deployed_commit=$(cat "$DEPLOY_DIR/DEPLOYED_COMMIT")

@@ -13,8 +13,27 @@ const preflight = readFileSync('scripts/preflight.mjs', 'utf8');
 const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8');
 const serverDockerfile = readFileSync('docker/server.Dockerfile', 'utf8');
 const composeMigrationWrapper = readFileSync('docker/migrate-and-verify-ai-media-dark.sh', 'utf8');
+const deployBackupVerifier = readFileSync('scripts/verify-deploy-backup.sh', 'utf8');
+const deployBackupGate = readFileSync('scripts/deploy-backup-gate.mjs', 'utf8');
+const deployBackupGateInstaller = readFileSync('scripts/install-deploy-backup-gate.sh', 'utf8');
 const composeDarkVerifier = readFileSync('docker/verify-ai-media-dark.mjs', 'utf8');
 const composeDeploy = readFileSync('scripts/deploy-compose.sh', 'utf8');
+const dockerIgnore = readFileSync('.dockerignore', 'utf8');
+const gitIgnore = readFileSync('.gitignore', 'utf8');
+assert.match(
+  composeDeploy,
+  /must run as a non-root deployment operator/u,
+  'Compose deploy must not execute repository-local Git configuration as root',
+);
+assert.match(composeDeploy, /snapshot-file "\$SOURCE_COMPOSE_FILE" "\$COMPOSE_FILE"/u);
+assert.match(composeDeploy, /--project-directory "\$SOURCE_SNAPSHOT_ROOT"/u);
+assert.match(composeDeploy, /git archive --format=tar -o "\$SOURCE_ARCHIVE" "\$TARGET_GIT_COMMIT"/u);
+assert.match(composeDeploy, /\/var\/lib\/ss-erp-deploy-locks/u);
+assert.match(dockerIgnore, /^\.env\*$/mu);
+assert.match(dockerIgnore, /^\*\*\/\.env\*$/mu);
+assert.match(dockerIgnore, /^tmp$/mu);
+assert.match(dockerIgnore, /^\*\*\/tmp$/mu);
+assert.match(gitIgnore, /^\.env\*$/mu);
 const concurrentIndexMigration = readFileSync(
   'apps/server/prisma/migrations/20260720153000_bind_ai_image_edit_outputs/migration.sql',
   'utf8',
@@ -418,21 +437,23 @@ for (const productionVerifier of [verifyAiMediaDark, composeDarkVerifier]) {
 }
 
 for (const entrypoint of deployEntrypoints) {
-  const migrationIndex = entrypoint.source.indexOf('npx prisma migrate deploy');
+  const migrationIndex = entrypoint.source.indexOf('deploy-backup-gate.mjs');
+  const backupGateIndex = entrypoint.source.indexOf('deploy-backup-gate.mjs');
   const darkVerificationIndex = entrypoint.source.indexOf('verify-ai-media-dark.sh', migrationIndex);
   const boundaryIndex = entrypoint.source.indexOf(entrypoint.boundary, migrationIndex);
 
-  assert.ok(migrationIndex >= 0, `${entrypoint.name} must run Prisma migrations`);
+  assert.ok(migrationIndex >= 0, `${entrypoint.name} must invoke the bound migration orchestrator`);
+  assert.ok(
+    backupGateIndex >= 0 && backupGateIndex === migrationIndex,
+    `${entrypoint.name} must verify commit/database/restore-bound backup evidence before migration`,
+  );
   assert.match(
     entrypoint.source,
     /MIGRATION_TIMEOUT="\$\{MIGRATION_TIMEOUT:-20m\}"/u,
     `${entrypoint.name} must set a bounded default migration timeout`,
   );
-  assert.match(
-    entrypoint.source,
-    /timeout --signal=TERM --kill-after=30s ["']?\$MIGRATION_TIMEOUT["']? npx prisma migrate deploy/u,
-    `${entrypoint.name} must enforce the migration timeout outside Prisma`,
-  );
+  assert.match(entrypoint.source, /--migration-timeout "\$MIGRATION_TIMEOUT"/u);
+  assert.doesNotMatch(entrypoint.source, /npx prisma migrate deploy/u);
   assert.ok(
     darkVerificationIndex > migrationIndex,
     `${entrypoint.name} must verify the dark rollout after migrations`,
@@ -444,7 +465,7 @@ for (const entrypoint of deployEntrypoints) {
   assert.match(entrypoint.source, /set -euo pipefail/u, `${entrypoint.name} must fail closed`);
   assert.match(
     entrypoint.source,
-    /Worker\/API remain stopped after failed [^\r\n]+operator recovery is required/u,
+    /Worker\/API(?:\/Web)? remain stopped after failed [^\r\n]+operator recovery is required/u,
     `${entrypoint.name} must keep provider services stopped after migration or gate failure`,
   );
   assert.doesNotMatch(
@@ -462,21 +483,37 @@ for (const entrypoint of deployEntrypoints) {
 const stagingDeploy = deployEntrypoints.find((entrypoint) => entrypoint.name === 'staging deploy').source;
 assert.ok(
   stagingDeploy.indexOf('MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT:-20m}"')
-    > stagingDeploy.indexOf('. "$ENV_FILE"'),
-  'staging must validate the effective migration timeout after loading its environment file',
+    > stagingDeploy.indexOf('deploy-environment.mjs value "$ENV_FILE" MIGRATION_TIMEOUT'),
+  'staging must validate the effective migration timeout after parsing its environment as data',
 );
-assert.match(
-  stagingDeploy,
-  /if ! DEPLOY_DIR="\$DEPLOY_DIR" ENV_FILE="\$ENV_FILE" bash scripts\/verify-ai-media-dark\.sh; then[\s\S]*SERVICES_QUIESCED=0[\s\S]*Worker\/API remain stopped[\s\S]*exit 1/u,
-  'an in-place staging deploy must leave provider services stopped when the dark check fails',
+assert.doesNotMatch(stagingDeploy, /^\. "\$ENV_FILE"$/mu);
+assert.match(stagingDeploy, /pnpm install --frozen-lockfile --force/u);
+assert.match(stagingDeploy, /freeze-deploy-source\.sh[\s\S]*freeze/u);
+const stagingDarkFailure = stagingDeploy.slice(
+  stagingDeploy.indexOf('if ! DEPLOY_DIR="$DEPLOY_DIR"'),
+  stagingDeploy.indexOf('echo "[6/7] Restarting services..."'),
+);
+assert.doesNotMatch(stagingDarkFailure, /SERVICES_QUIESCED=0/u);
+assert.match(stagingDarkFailure, /Worker\/API remain stopped[\s\S]*exit 1/u);
+assert.match(stagingDeploy, /git[^\r\n]*status --porcelain --untracked-files=all/u);
+assert.match(stagingDeploy, /readonly TARGET_GIT_COMMIT="\$\(assert_clean_staging_checkout\)"/u);
+assert.match(stagingDeploy, /deploy-source-manifest\.mjs" create-closed/u);
+assert.doesNotMatch(stagingDeploy, /^\s*sudo\b[^\r\n]*(?:\s|\/)git(?:\s|$)/mu);
+assert.ok(
+  stagingDeploy.lastIndexOf('SERVICES_QUIESCED=0')
+    > stagingDeploy.indexOf('echo "Web: OK"'),
+  'staging must remain fail-closed until API and Web health checks pass',
 );
 
 const releaseDeploy = deployEntrypoints.find((entrypoint) => entrypoint.name === 'release symlink deploy').source;
 assert.match(
   releaseDeploy,
-  /REQUESTED_MIGRATION_TIMEOUT="\$\{14\}"[\s\S]*\. "\$ENV_FILE_NAME"[\s\S]*MIGRATION_TIMEOUT="\$REQUESTED_MIGRATION_TIMEOUT"/u,
-  'release deploys must restore the validated timeout after loading the release environment',
+  /readonly REQUESTED_MIGRATION_TIMEOUT="\$\{REQUESTED_MIGRATION_TIMEOUT:\?\}"[\s\S]*readonly MIGRATION_TIMEOUT="\$REQUESTED_MIGRATION_TIMEOUT"/u,
+  'release deploys must freeze the operator-validated migration timeout before app env use',
 );
+assert.match(releaseDeploy, /readonly TARGET_GIT_COMMIT="\$\{TARGET_GIT_COMMIT:\?\}"/u);
+assert.match(releaseDeploy, /deploy-backup-gate\.mjs/u);
+assert.doesNotMatch(releaseDeploy, /^\. "\$ENV_FILE_NAME"$/mu);
 
 assert.match(
   preflight,
@@ -509,10 +546,16 @@ assert.equal(
 );
 assert.doesNotMatch(concurrentIndexMigration, /\bBEGIN\b|\bCOMMIT\b|\bSET\b|\bRESET\b/u);
 
-assert.match(serverDockerfile, /COPY docker\/migrate-and-verify-ai-media-dark\.sh/u);
-assert.match(serverDockerfile, /COPY docker\/verify-ai-media-dark\.mjs/u);
-assert.match(serverDockerfile, /COPY scripts\/verify-ai-media-dark-policy\.mjs/u);
-assert.match(serverDockerfile, /COPY scripts\/verify-extension-byok-rollout-policy\.mjs/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/docker\/migrate-and-verify-ai-media-dark\.sh/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/docker\/verify-ai-media-dark\.mjs/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/deploy-backup-attestation\.mjs/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/deploy-backup-gate\.mjs/u);
+assert.match(serverDockerfile, /postgresql-client/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/deploy-database-identity\.mjs/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/verify-deploy-backup\.sh/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/verify-ai-media-dark-policy\.mjs/u);
+assert.match(serverDockerfile, /COPY[^\r\n]*\/scripts\/verify-extension-byok-rollout-policy\.mjs/u);
+assert.match(serverDockerfile, /\.ss-erp-source\.tar[\s\S]*sha256sum -c -/u);
 for (const [name, compose] of composeDeployments) {
   assert.match(
     compose,
@@ -523,6 +566,11 @@ for (const [name, compose] of composeDeployments) {
     composeServiceBlock(compose, 'migrate'),
     /MIGRATION_TIMEOUT:\s*\$\{MIGRATION_TIMEOUT:-20m\}/u,
     `${name} must forward the validated migration timeout into the migrate container`,
+  );
+  assert.match(
+    composeServiceBlock(compose, 'migrate'),
+    /DEPLOY_TARGET_GIT_COMMIT:[\s\S]*BACKUP_LOCAL_DIR[\s\S]*read_only:\s*true/u,
+    `${name} migrate must receive the exact target commit and a read-only backup evidence mount`,
   );
   assert.match(
     compose.split(/\r?\n/u)[1] || '',
@@ -540,6 +588,7 @@ for (const [name, compose] of composeDeployments) {
 }
 
 const composeMigrationIndex = composeMigrationWrapper.indexOf('npx prisma migrate deploy');
+const composeBackupGateIndex = composeMigrationWrapper.indexOf('verify-deploy-backup.sh');
 const composeDarkVerificationIndex = composeMigrationWrapper.indexOf(
   'node scripts/verify-ai-media-dark.mjs',
 );
@@ -548,6 +597,10 @@ assert.match(composeMigrationWrapper, /MIGRATION_TIMEOUT="\$\{MIGRATION_TIMEOUT:
 assert.match(
   composeMigrationWrapper,
   /timeout --signal=TERM --kill-after=30s "\$MIGRATION_TIMEOUT" npx prisma migrate deploy/u,
+);
+assert.ok(
+  composeBackupGateIndex >= 0 && composeBackupGateIndex < composeMigrationIndex,
+  'Compose must verify commit/database/restore-bound backup evidence before migration',
 );
 assert.ok(
   composeDarkVerificationIndex > composeMigrationIndex,
@@ -564,6 +617,77 @@ const composeStartIndex = composeDeploy.indexOf(
   'up -d --wait --force-recreate --no-deps api worker web',
 );
 assert.match(composeDeploy, /^set -euo pipefail$/mu);
+assert.match(composeDeploy, /git rev-parse --verify --end-of-options 'HEAD\^\{commit\}'/u);
+assert.match(composeDeploy, /git status --porcelain --untracked-files=all/u);
+assert.match(composeDeploy, /could not inspect Compose deployment Git worktree/u);
+assert.doesNotMatch(composeDeploy, /CURRENT_WORKTREE_STATUS/u);
+assert.match(composeDeploy, /\.ss-erp-source\.tar/u);
+assert.match(composeDeploy, /DEPLOY_SOURCE_ARCHIVE_SHA256/u);
+assert.match(composeDeploy, /\[ -L DEPLOYED_COMMIT \] \|\| \[ -e DEPLOYED_COMMIT \]/u);
+assert.doesNotMatch(composeDeploy, /\. "\$ENV_FILE"/u);
+assert.match(composeDeploy, /readonly TARGET_GIT_COMMIT="\$COMMIT_HASH"/u);
+assert.match(composeDeploy, /DEPLOY_TARGET_GIT_COMMIT="\$TARGET_GIT_COMMIT"/u);
+assert.match(composeMigrationWrapper, /migration image provenance does not match/u);
+assert.match(
+  composeDeploy,
+  /COMPOSE_FILE must be docker-compose\.prod\.yml or docker-compose\.staging\.yml/u,
+);
+assert.match(composeDeploy, /must run from the exact repository root/u);
+assert.match(deployBackupVerifier, /DEPLOY_BACKUP_MAX_AGE_MINUTES:-120/u);
+assert.match(deployBackupVerifier, /DEPLOY_DATABASE_URL="\$DATABASE_URL"/u);
+assert.doesNotMatch(deployBackupVerifier, /DEPLOY_BACKUP_LOCAL_DIR:-\$\{BACKUP_LOCAL_DIR/u);
+assert.match(deployBackupVerifier, /deploy-backup-\$\{TARGET_GIT_COMMIT\}\.attestation\.json/u);
+assert.match(deployBackupGate, /parseEnv/u);
+assert.match(deployBackupGate, /TARGET_GIT_COMMIT/u);
+assert.match(deployBackupGate, /'pnpm', 'exec', 'prisma', 'migrate', 'deploy'/u);
+assert.doesNotMatch(deployBackupGate, /\.\.\.process\.env/u);
+assert.doesNotMatch(deployBackupGate, /`DATABASE_URL=\$\{/u);
+assert.match(deployBackupGate, /DATABASE_URL: environment\.DATABASE_URL/u);
+assert.match(deployBackupGate, /--preserve-environment/u);
+assert.match(deployBackupGate, /installed deployment gate does not match the target Git commit/u);
+const appDirEntrypoint = deployEntrypoints[1].source;
+assert.ok(
+  appDirEntrypoint.indexOf('install_target_backup_gate "$NEXT_DIR"')
+    < appDirEntrypoint.indexOf('chown -hR -P'),
+  'app-dir deploy must install the immutable root gate before release ownership changes',
+);
+assert.ok(
+  releaseDeploy.indexOf('install_target_backup_gate "$RELEASE_DIR"')
+    < releaseDeploy.indexOf('chown -hR -P "$DEPLOY_BUILD_USER'),
+  'release deploy must install the immutable root gate before release ownership changes',
+);
+for (const entrypoint of deployEntrypoints.slice(0, 2)) {
+  assert.match(entrypoint.source, /install-deploy-backup-gate\.sh/u);
+  assert.match(entrypoint.source, /ss-erp-deploy-upload\.XXXXXXXXXX/u);
+  assert.match(entrypoint.source, /sha256sum "\$TARBALL"/u);
+}
+assert.match(deployBackupGateInstaller, /\[ "\$\(id -u\)" != "0" \]/u);
+assert.match(deployBackupGateInstaller, /source root must be one real canonical directory/u);
+assert.match(deployBackupGateInstaller, /assert_trusted_ancestor_chain/u);
+assert.match(deployBackupGateInstaller, /mv -T -- "\$STAGE_DIR" "\$TARGET_DIR"/u);
+assert.match(appDirEntrypoint, /deployment runtime user is missing/u);
+assert.doesNotMatch(
+  appDirEntrypoint,
+  /if id "\$DEPLOY_RUN_USER"[\s\S]*else[\s\S]*bash -lc/u,
+);
+assert.match(stagingDeploy, /DEPLOY_BACKUP_GATE_ROOT=\/usr\/local\/lib\/ss-erp-deploy-gate/u);
+assert.match(stagingDeploy, /assert_installed_target_backup_gate "\$TARGET_GIT_COMMIT"/u);
+assert.doesNotMatch(stagingDeploy, /--skip-build|SKIP_BUILD/u);
+assert.match(composeDeploy, /--project-name "\$DEPLOY_COMPOSE_PROJECT"/u);
+assert.match(composeDeploy, /unset COMPOSE_PROJECT_NAME/u);
+assert.match(composeDeploy, /unset COMPOSE_PROJECT_NAME DEPLOY_BACKUP_LOCAL_DIR/u);
+assert.match(composeDeploy, /node "\$DEPLOY_ENV_TOOL" snapshot "\$SOURCE_ENV_FILE" "\$ENV_FILE"/u);
+assert.match(composeDeploy, /validate-env\.mjs"[\s\\\r\n]*--profile cloud-bootstrap --env "\$ENV_FILE"/u);
+assert.match(composeDeploy, /ss-erp-compose-env\.XXXXXXXXXX/u);
+for (const [name, compose] of composeDeployments) {
+  assert.match(compose, /target: \/var\/backups\/ss-erp-deploy/u, `${name} must use a fixed backup mount target`);
+  assert.doesNotMatch(
+    compose,
+    /target: \$\{DEPLOY_BACKUP_LOCAL_DIR/u,
+    `${name} must not let backup configuration replace image paths`,
+  );
+}
+assert.equal((composeDeploy.match(/verify-deploy-build-inputs\.mjs/gu) || []).length, 1);
 const composeProcessTimeoutIndex = composeDeploy.indexOf(
   'PROCESS_MIGRATION_TIMEOUT="${MIGRATION_TIMEOUT-}"',
 );

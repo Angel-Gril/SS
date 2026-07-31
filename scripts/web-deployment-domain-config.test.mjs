@@ -29,6 +29,8 @@ function validateDeploymentEnv(hostLines) {
   const envPath = path.join(directory, '.env');
   fs.writeFileSync(envPath, [
     'DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/ss_erp',
+    'DEPLOY_DATABASE_ID=test-primary',
+    'DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy',
     'REDIS_DISABLED=true',
     'JWT_SECRET=0123456789abcdef',
     'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',

@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const deployAppDir = readFileSync('scripts/deploy-app-dir.sh', 'utf8');
+const deployBackupGate = readFileSync('scripts/deploy-backup-gate.mjs', 'utf8');
 const diagnoseRuntimeEnv = readFileSync('scripts/diagnose-runtime-env.sh', 'utf8');
 const verifyCloudRuntime = readFileSync('scripts/verify-cloud-runtime.sh', 'utf8');
 const verifyDeployReadiness = readFileSync('scripts/verify-deploy-readiness.sh', 'utf8');
 
 assert.match(
   deployAppDir,
-  /--profile 'cloud-bootstrap'/,
+  /--profile cloud-bootstrap --env "\$ENV_FILE_NAME"/u,
   'app-dir deploy should validate only bootstrap env before dependencies and Prisma are available',
 );
 
@@ -21,9 +22,10 @@ assert.match(
   'app-dir deploy should run runtime config diagnostics in pre-switch mode',
 );
 
-const migrateIndex = deployAppDir.indexOf('npx prisma migrate deploy');
+const migrateIndex = deployAppDir.indexOf('deploy-backup-gate.mjs');
 const diagnosticsIndex = deployAppDir.indexOf('diagnose-runtime-env.sh');
-assert.ok(migrateIndex >= 0, 'app-dir deploy should still run Prisma migration');
+assert.ok(migrateIndex >= 0, 'app-dir deploy should invoke the bound migration orchestrator');
+assert.match(deployBackupGate, /'pnpm', 'exec', 'prisma', 'migrate', 'deploy'/u);
 assert.ok(diagnosticsIndex > migrateIndex, 'runtime config diagnostics must run after Prisma migration');
 
 assert.match(
@@ -54,6 +56,8 @@ const tempDir = mkdtempSync(join(tmpdir(), 'ss-erp-bootstrap-env-'));
 const bootstrapEnvPath = join(tempDir, '.env.staging');
 writeFileSync(bootstrapEnvPath, [
   'DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/db?schema=public',
+  'DEPLOY_DATABASE_ID=test-primary',
+  'DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy',
   'REDIS_URL=redis://127.0.0.1:6379',
   'JWT_SECRET=0123456789abcdef',
   'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',
@@ -83,6 +87,113 @@ assert.equal(
   `cloud-bootstrap should not require upload storage env when SystemConfig can provide it\nSTDOUT:\n${bootstrapCheck.stdout}\nSTDERR:\n${bootstrapCheck.stderr}`,
 );
 
+const missingDeployDatabaseIdPath = join(tempDir, '.env.missing-deploy-database-id');
+writeFileSync(
+  missingDeployDatabaseIdPath,
+  readFileSync(bootstrapEnvPath, 'utf8').replace('DEPLOY_DATABASE_ID=test-primary\n', ''),
+);
+const missingDeployDatabaseIdCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  missingDeployDatabaseIdPath,
+], { encoding: 'utf8' });
+assert.notEqual(missingDeployDatabaseIdCheck.status, 0);
+assert.match(missingDeployDatabaseIdCheck.stderr, /DEPLOY_DATABASE_ID is required/u);
+
+const missingDeployBackupDirPath = join(tempDir, '.env.missing-deploy-backup-dir');
+writeFileSync(
+  missingDeployBackupDirPath,
+  readFileSync(bootstrapEnvPath, 'utf8')
+    .replace('DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy\n', ''),
+);
+const missingDeployBackupDirCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  missingDeployBackupDirPath,
+], { encoding: 'utf8' });
+assert.notEqual(missingDeployBackupDirCheck.status, 0);
+assert.match(missingDeployBackupDirCheck.stderr, /DEPLOY_BACKUP_LOCAL_DIR is required/u);
+
+const sharedBackupDirPath = join(tempDir, '.env.shared-backup-dir');
+writeFileSync(
+  sharedBackupDirPath,
+  `${readFileSync(bootstrapEnvPath, 'utf8')}BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy\n`,
+);
+const sharedBackupDirCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  sharedBackupDirPath,
+], { encoding: 'utf8' });
+assert.notEqual(sharedBackupDirCheck.status, 0);
+assert.match(sharedBackupDirCheck.stderr, /must be separate/u);
+
+const aliasedBackupDirPath = join(tempDir, '.env.aliased-backup-dir');
+writeFileSync(
+  aliasedBackupDirPath,
+  `${readFileSync(bootstrapEnvPath, 'utf8')}BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy/./\n`,
+);
+const aliasedBackupDirCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  aliasedBackupDirPath,
+], { encoding: 'utf8' });
+assert.notEqual(aliasedBackupDirCheck.status, 0);
+assert.match(aliasedBackupDirCheck.stderr, /canonical absolute path/u);
+
+const invalidBackupWindowPath = join(tempDir, '.env.invalid-backup-window');
+writeFileSync(
+  invalidBackupWindowPath,
+  `${readFileSync(bootstrapEnvPath, 'utf8')}DEPLOY_BACKUP_MAX_AGE_MINUTES=1441\n`,
+);
+const invalidBackupWindowCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  invalidBackupWindowPath,
+], { encoding: 'utf8' });
+assert.notEqual(invalidBackupWindowCheck.status, 0);
+assert.match(invalidBackupWindowCheck.stderr, /integer from 1 through 1440/u);
+
+const invalidBackupTimeoutPath = join(tempDir, '.env.invalid-backup-timeout');
+writeFileSync(
+  invalidBackupTimeoutPath,
+  `${readFileSync(bootstrapEnvPath, 'utf8')}DEPLOY_BACKUP_VERIFY_TIMEOUT=25h\n`,
+);
+const invalidBackupTimeoutCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  invalidBackupTimeoutPath,
+], { encoding: 'utf8' });
+assert.notEqual(invalidBackupTimeoutCheck.status, 0);
+assert.match(invalidBackupTimeoutCheck.stderr, /no longer than 24 hours/u);
+
+const unsafeBackupMountPath = join(tempDir, '.env.unsafe-backup-mount');
+writeFileSync(
+  unsafeBackupMountPath,
+  readFileSync(bootstrapEnvPath, 'utf8')
+    .replace('DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy', 'DEPLOY_BACKUP_LOCAL_DIR=/app'),
+);
+const unsafeBackupMountCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  unsafeBackupMountPath,
+], { encoding: 'utf8' });
+assert.notEqual(unsafeBackupMountCheck.status, 0);
+assert.match(unsafeBackupMountCheck.stderr, /beneath \/var\/backups/u);
+
 const missingReleaseOriginEnvPath = join(tempDir, '.env.missing-release-origin');
 writeFileSync(
   missingReleaseOriginEnvPath,
@@ -111,6 +222,8 @@ assert.match(
 const missingApiBaseEnvPath = join(tempDir, '.env.missing-api-base');
 writeFileSync(missingApiBaseEnvPath, [
   'DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/db?schema=public',
+  'DEPLOY_DATABASE_ID=test-primary',
+  'DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy',
   'REDIS_URL=redis://127.0.0.1:6379',
   'JWT_SECRET=0123456789abcdef',
   'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',

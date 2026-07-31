@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
+import { posix as posixPath } from 'node:path';
 import { readExpectedReleaseOrigins } from './extension-release-contract.mjs';
 
 const args = process.argv.slice(2);
@@ -318,9 +319,58 @@ function validateExtensionReleaseOrigins(env) {
   }
 }
 
+function validateDeployBackupConfig(env) {
+  requireValue(env, 'DEPLOY_DATABASE_ID');
+  requireValue(env, 'DEPLOY_BACKUP_LOCAL_DIR');
+  if (isSet(env.DEPLOY_DATABASE_ID)
+    && !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(env.DEPLOY_DATABASE_ID)) {
+    fail('DEPLOY_DATABASE_ID must be a canonical deployment database identifier');
+  }
+  const deployBackupDirectory = isSet(env.DEPLOY_BACKUP_LOCAL_DIR)
+    ? posixPath.normalize(env.DEPLOY_BACKUP_LOCAL_DIR)
+    : '';
+  const applicationBackupDirectory = isSet(env.BACKUP_LOCAL_DIR)
+    ? posixPath.normalize(env.BACKUP_LOCAL_DIR)
+    : '';
+  if (deployBackupDirectory
+    && (!env.DEPLOY_BACKUP_LOCAL_DIR.startsWith('/')
+      || env.DEPLOY_BACKUP_LOCAL_DIR !== deployBackupDirectory
+      || deployBackupDirectory === '/')) {
+    fail('DEPLOY_BACKUP_LOCAL_DIR must be one canonical absolute path');
+  }
+  if (deployBackupDirectory && !deployBackupDirectory.startsWith('/var/backups/')) {
+    fail('DEPLOY_BACKUP_LOCAL_DIR must be located beneath /var/backups');
+  }
+  if (applicationBackupDirectory
+    && (!env.BACKUP_LOCAL_DIR.startsWith('/')
+      || env.BACKUP_LOCAL_DIR !== applicationBackupDirectory)) {
+    fail('BACKUP_LOCAL_DIR must be one canonical absolute path when set in the application env');
+  }
+  if (applicationBackupDirectory
+    && applicationBackupDirectory === deployBackupDirectory) {
+    fail('DEPLOY_BACKUP_LOCAL_DIR must be separate from application BACKUP_LOCAL_DIR');
+  }
+  if (isSet(env.DEPLOY_BACKUP_MAX_AGE_MINUTES)
+    && (!/^[1-9][0-9]{0,3}$/.test(env.DEPLOY_BACKUP_MAX_AGE_MINUTES)
+      || Number(env.DEPLOY_BACKUP_MAX_AGE_MINUTES) > 1440)) {
+    fail('DEPLOY_BACKUP_MAX_AGE_MINUTES must be an integer from 1 through 1440');
+  }
+  if (isSet(env.DEPLOY_BACKUP_VERIFY_TIMEOUT)) {
+    const match = env.DEPLOY_BACKUP_VERIFY_TIMEOUT.match(/^([1-9][0-9]*)([smh])$/);
+    const multipliers = { s: 1, m: 60, h: 3600 };
+    const seconds = match
+      ? Number(match[1]) * multipliers[match[2]]
+      : Number.NaN;
+    if (!Number.isSafeInteger(seconds) || seconds > 24 * 60 * 60) {
+      fail('DEPLOY_BACKUP_VERIFY_TIMEOUT must be a positive duration no longer than 24 hours');
+    }
+  }
+}
+
 function validateCloudR2(env) {
   validateCommon(env);
   validateExtensionReleaseOrigins(env);
+  validateDeployBackupConfig(env);
   expectValue(env, 'RUNTIME_MODE', 'cloud');
   expectValue(env, 'IMAGE_STORAGE_BACKEND', 'oss');
   expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
@@ -343,6 +393,7 @@ function validateCloudR2(env) {
 function validateCloudBootstrap(env) {
   validateBootstrapBase(env);
   validateExtensionReleaseOrigins(env);
+  validateDeployBackupConfig(env);
   expectValue(env, 'RUNTIME_MODE', 'cloud');
   expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
   requireValue(env, 'CORS_ORIGIN');

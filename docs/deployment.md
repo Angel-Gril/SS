@@ -38,7 +38,8 @@
 3. 创建 OSS/R2/COS bucket，配置 CORS 和 CDN 域名。
 4. 执行 Prisma baseline 校准。
 5. 构建镜像，但先不要启动 API/Worker。
-6. 停止写入后执行 `prisma migrate deploy`。
+6. 停止写入后，通过下文标准部署入口先验证目标 commit 的备份恢复认证，再执行
+   `prisma migrate deploy`；不得直接运行裸 Prisma 命令。
 7. 运行 `scripts/verify-ai-media-dark.sh`；失败时保持 API/Worker 停止。
 8. 暗态检查通过后启动服务，验证 `/health`、登录、店铺连接、图片上传、订单同步。
 9. Cloudflare 开启代理、WAF 和 Turnstile。
@@ -75,6 +76,107 @@ OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见�
 
 ## 部署命令示例
 
+首次启用备份门禁时，每个既有数据库先单独生成一个非秘密 UUID，并插入一次内部身份行。不得在
+production/staging 之间复用；从生产克隆数据库后也必须在克隆库轮换，再重新取证。下面的
+`INSERT` 在 identity 已存在时会失败，避免静默改写：
+
+```bash
+DATABASE_IDENTITY_UUID="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
+DATABASE_IDENTITY_VALUE="$(DEPLOY_DATABASE_ID="$DEPLOY_DATABASE_ID" \
+  DATABASE_IDENTITY_UUID="$DATABASE_IDENTITY_UUID" node -e '
+process.stdout.write(JSON.stringify({
+  databaseId: process.env.DEPLOY_DATABASE_ID,
+  databaseUuid: process.env.DATABASE_IDENTITY_UUID,
+}));
+')"
+PGDATABASE="$BACKUP_DB_URL" psql --no-psqlrc -v ON_ERROR_STOP=1 \
+  -v identity_value="$DATABASE_IDENTITY_VALUE" <<'SQL'
+INSERT INTO public.system_configs
+  (id, key, value, label, "group", description, revision, created_at, updated_at)
+VALUES
+  ('deployment-database-identity-v1', 'deployment_database_identity_v1', :'identity_value',
+   'Deployment database identity', 'deployment',
+   'Canonical non-secret deployment ID and UUID used by the pre-migration backup gate', 0,
+   CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+SQL
+```
+
+全新空数据库先完成 Runbook 中唯一的 bootstrap migration，再插入该身份行。identity 行必须是
+canonical JSON，并同时绑定 `DEPLOY_DATABASE_ID` 与 UUID；缺失、格式错误、被修改，或备份/应用
+连接查询到不同身份时，备份和部署都会失败。
+
+所有四条部署入口现在都在 `prisma migrate deploy` 前强制校验同一条备份认证链。先用目标
+revision 的 `backup-db.sh` 生成真实 gzip 和不可变 `.status.json` sidecar，再用
+`verify-backup-restore.sh` 恢复到临时数据库；只有 public 表数为正时才会排他写出
+`deploy-backup-<target-commit>.attestation.json`。应用 env 与备份 env 必须使用相同的
+`DEPLOY_DATABASE_ID`，且两条数据库 URL 必须查询到相同实际数据库名、OID 和库内 deployment
+UUID；宿主机与 Compose 可以使用不同 hostname/port 路由。
+schema v3 sidecar 保存非秘密身份摘要；恢复 SQL 从 no-follow held descriptor 流出，并用一次性
+proof 绑定最终 schema v2 attestation。maintenance 路由在新库中写入随机 schema/table 标记，
+恢复 URL 必须在导入前和删除前读回同一标记，避免同名数据库经不同主机路由被误认证。临时恢复库
+必须成功删除后才能写认证。默认认证窗口为
+120 分钟，完整 SHA-256/gunzip 复验受独立 `20m`
+超时保护。缺失、过期、跨数据库、跨 commit、被替换、非规范 JSON、非 gzip 或未恢复的证据
+都会让 API/Worker 保持停止且 migration 不执行。
+应用 env 使用 `DEPLOY_BACKUP_LOCAL_DIR` 指向这套发布证据；不要在应用 env 中用
+`BACKUP_LOCAL_DIR` 代替它，后者属于后台备份服务/独立备份工具，混用会造成状态覆盖和清理冲突。
+证据目录和三个不可变文件必须由执行备份/部署 verifier 的用户（标准部署为 root）所有；目录
+不得 group/world writable。Compose runtime 因此包含只读 PostgreSQL client，只查询身份而不把
+数据库 URL 放进 argv。
+
+同一 target commit 的认证过期时，重新运行恢复演练即可受控刷新；不要手工删除旧认证。root-only
+`archive` 步骤先把旧文件以
+`deploy-backup-<commit>.attestation.archived-<sha256>.json` 原字节留存，再删除当前 commit 指针并
+排他写入新认证。归档摘要冲突、身份不一致、文件被替换或旧指针无法安全移除时都会失败关闭。
+
+`deploy.sh` 和 `deploy-app-dir.sh` 从目标 archive 解包后、在把 release 交给隔离构建用户前，会
+调用 `install-deploy-backup-gate.sh`，把七个 runtime gate 文件和只读 marker 原子安装到
+`/usr/local/lib/ss-erp-deploy-gate/<target-commit>/`。同一 commit 目录不可覆盖，只能逐字节复用。
+`deploy-staging.sh` 不会把 deploy 用户可写 checkout 提升为 root；它会在安装依赖或停服前要求
+目标 gate 已经预装且与 checkout 逐字节一致。预装必须从本机可信 checkout 生成的目标 revision
+archive 解到 VPS 的 root-owned 私有目录，再由安装器完成：
+
+```bash
+# 本机可信 checkout
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+mkdir -p build
+git archive --format=tar.gz --output="build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" \
+  "$TARGET_COMMIT" -- \
+  scripts/install-deploy-backup-gate.sh \
+  scripts/deploy-backup-gate.mjs \
+  scripts/deploy-backup-attestation.mjs \
+  scripts/deploy-database-identity.mjs \
+  scripts/deploy-environment.mjs \
+  scripts/deploy-source-manifest.mjs \
+  scripts/freeze-deploy-source.sh \
+  scripts/verify-deploy-backup.sh
+scp "build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" root@<server>:/root/
+
+# VPS root shell
+SOURCE_ROOT="/root/ss-erp-deploy-gate-source-${TARGET_COMMIT}"
+install -d -o root -g root -m 0700 "$SOURCE_ROOT"
+tar -xzf "/root/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" -C "$SOURCE_ROOT"
+chmod 0700 "$SOURCE_ROOT" "$SOURCE_ROOT/scripts"
+bash "$SOURCE_ROOT/scripts/install-deploy-backup-gate.sh" "$TARGET_COMMIT" "$SOURCE_ROOT"
+```
+
+root-owned orchestrator 通过 no-follow、单链接、稳定 descriptor 把 `.env` 只快照一次，拒绝重复键
+和读取期间变化。依赖安装、Prisma generate、Server/Web/扩展构建全部使用独立非 root
+`ss-erp-build` UID/GID，并清空 supplementary groups；其 allowlist 环境只有构建所需公开值，
+`DATABASE_URL` 被替换为不可连接的构建占位值，运行时密钥不可读。构建前开放清单允许受控生成文件，
+构建后 closed 清单固定完整树；随后把源码复制到新的 root-owned inode、同时复验两份清单，最后才
+安装 root-owned runtime symlink。Git 忽略的根级 `.env*` 也属于构建输入：除明确选择且 build UID
+不可读的 runtime env 外，任何额外文件都会失败关闭。封存副本中的 Next build cache 会被删除，再由
+root 新建一个空的 runtime cache，禁止递归接管构建产出的 symlink/hardlink。认证、migration 和
+post-migration guard 则从同一 root 快照降权到 runtime 用户执行。
+
+archive 模式要求 `/opt/ss-erp`、`releases`/`backups` 父目录和 `shared` 根目录由 root 所有且不可
+group/world writable；只有构建阶段的目标树交给 `ss-erp-build`，明确的 `shared` 子目录交给
+runtime `deploy` 用户。共享
+env 必须是 `root:<deploy-primary-group>`、`0640`。归档上传使用服务器随机 root-owned `0700`
+临时目录，并在解包前复验调用方绑定的 SHA-256。旧版 `init-server.sh` 若曾递归把整个
+`/opt/ss-erp` 交给 deploy，先按 `docs/vps-deployment.md` 修正所有权，否则新部署会失败关闭。
+
 ```bash
 COMPOSE_FILE=docker-compose.prod.yml \
 ENV_FILE=.env.production \
@@ -82,14 +184,27 @@ MIGRATION_TIMEOUT=20m \
 bash scripts/deploy-compose.sh
 ```
 
-`deploy-compose.sh` 先构建镜像，再停止旧 API/Worker/Web，随后启动基础设施并运行一次性 `migrate` service；只有 `prisma migrate deploy` 和容器内暗态 verifier 都通过，才会重建并启动应用服务。失败或超时时旧应用服务保持停止，必须由运维按 Runbook 检查后恢复。不要用裸 `docker compose up -d` 执行升级，因为 `depends_on` 不会静默已经运行的旧容器。生产和 staging Compose 仍保留 `service_completed_successfully`，用于约束全新环境的首次启动。Compose 中 API 和 Worker 已分离：API 设置 `RUN_WORKERS=0`，Worker 使用 `node dist/worker.js`。
+`deploy-compose.sh` 必须由精确的非 root `DEPLOY_RUN_USER` 执行，并使用 `init-server.sh` 预装在
+`/var/lib/ss-erp-deploy-locks` 的 root-owned 全局 project 锁。它验证 clean Git HEAD/可选 marker，
+只快照一次 env 和目标 commit 的 Compose 文件，再用 `git archive` 创建私有构建根。Dockerfile 在
+运行任何仓库代码前只复制并复验该 archive 的 SHA-256；镜像同时写入 commit 与 archive digest
+marker。镜像构建完成后，脚本确认原 env 未变化，才停止旧 API/Worker/Web、启动基础设施并运行
+一次性 `migrate` service。project 固定为 `ss-erp-prod` 或 `ss-erp-staging`，进程中的
+`COMPOSE_PROJECT_NAME` 不能重定向 stack。migrate container 只读挂载备份目录并在 Prisma 前再次
+核对两个镜像 marker 和认证 verifier；只有备份门禁、migration、post-migration guard 与暗态
+verifier 全部通过，才会重建应用服务。失败或超时时旧服务保持停止。不要用裸
+`docker compose up -d`，因为它会绕过全局锁、env/source 快照和 host provenance 顺序。
 
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
-三个 systemd 部署脚本都会在切换或重启服务前同时生成 cloud 与 local 扩展 ZIP；cloud 包使用当前站点域名，local 包固定连接本机 ERP。两类包都以当前线上产物和源码 manifest 的较高版本为基线自动递增一次。成功发布同一提交后不要仅为检查产物重复执行部署，否则扩展补丁版本会再次递增；应通过 `/api/extensions/latest` 和两个下载端点验收现有产物。生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回 404，且不会从 unpacked 目录现场重建。`/latest` 返回的每个下载 URL 都包含不可变 version 与 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh --skip-build` 会跳过编译和扩展打包，但仍会在 migration 前严格复验当前 commit 的双包；缺少预先验证的当前产物时服务保持停止并终止部署。
+三个 systemd 部署脚本都会在切换或重启服务前同时生成 cloud 与 local 扩展 ZIP；cloud 包使用当前站点域名，local 包固定连接本机 ERP。两类包都以当前线上产物和源码 manifest 的较高版本为基线自动递增一次。成功发布同一提交后不要仅为检查产物重复执行部署，否则扩展补丁版本会再次递增；应通过 `/api/extensions/latest` 和两个下载端点验收现有产物。生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回 404，且不会从 unpacked 目录现场重建。`/latest` 返回的每个下载 URL 都包含不可变 version 与 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh` 不再接受 `--skip-build`；每个新目标提交都必须重新编译、打包并复验，避免新 commit marker/数据库 migration 配上旧 `dist`、`.next` 或扩展产物。
 
 ```env
 MIGRATION_TIMEOUT=20m
+DEPLOY_DATABASE_ID=production-primary
+DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp
+DEPLOY_BACKUP_MAX_AGE_MINUTES=120
+DEPLOY_BACKUP_VERIFY_TIMEOUT=20m
 ```
 
 超时时 wrapper 先发送 TERM，并在 30 秒后强制结束。若超时发生在 concurrent-index migration，不要直接重跑或标记 applied；先按 `docs/RUNBOOK.md` 检查 invalid index，再决定清理和重放。

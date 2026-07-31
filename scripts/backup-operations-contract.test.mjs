@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 const cronExample = readFileSync(new URL('./backup-db.crontab.example', import.meta.url), 'utf8');
 const localDevelopment = readFileSync(
@@ -13,6 +23,666 @@ const localDevelopment = readFileSync(
 const verifier = readFileSync(new URL('./verify-vps-deploy.sh', import.meta.url), 'utf8');
 const cloudVerifier = readFileSync(new URL('./verify-cloud-runtime.sh', import.meta.url), 'utf8');
 const appDirDeployer = readFileSync(new URL('./deploy-app-dir.sh', import.meta.url), 'utf8');
+const deployReadiness = readFileSync(
+  new URL('./verify-deploy-readiness.sh', import.meta.url),
+  'utf8',
+);
+const backupScript = readFileSync(new URL('./backup-db.sh', import.meta.url), 'utf8');
+const restoreVerifier = readFileSync(
+  new URL('./verify-backup-restore.sh', import.meta.url),
+  'utf8',
+);
+const deployBackupVerifier = readFileSync(
+  new URL('./verify-deploy-backup.sh', import.meta.url),
+  'utf8',
+);
+const deployBackupGatePath = join(process.cwd(), 'scripts', 'deploy-backup-gate.mjs');
+const deployBackupGate = readFileSync(deployBackupGatePath, 'utf8');
+const deployDatabaseIdentityScript = join(process.cwd(), 'scripts', 'deploy-database-identity.mjs');
+const emptyBootstrapVerifier = join(
+  process.cwd(),
+  'scripts',
+  'verify-empty-bootstrap-database.mjs',
+);
+const deployPsqlRunner = join(process.cwd(), 'scripts', 'run-deploy-psql.mjs');
+const preflight = readFileSync(new URL('./preflight.mjs', import.meta.url), 'utf8');
+const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+const productionEnvExample = readFileSync(
+  new URL('../.env.production.example', import.meta.url),
+  'utf8',
+);
+const stagingEnvExample = readFileSync(
+  new URL('../.env.staging.example', import.meta.url),
+  'utf8',
+);
+const databaseIdentitySha256 = createHash('sha256').update(`${JSON.stringify({
+  schemaVersion: 1,
+  databaseId: 'fixture-primary',
+  databaseName: 'fixture',
+  databaseOid: 16384,
+  databaseUuid: '123e4567-e89b-42d3-a456-426614174000',
+})}\n`).digest('hex');
+const databaseUuidSha256 = createHash('sha256')
+  .update('123e4567-e89b-42d3-a456-426614174000\n')
+  .digest('hex');
+
+function shellSingleQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+function databaseIdentityRow({
+  databaseId = 'fixture-primary',
+  databaseName = 'fixture',
+  databaseUuid = '123e4567-e89b-42d3-a456-426614174000',
+} = {}) {
+  return `${databaseName}\t16384\t${JSON.stringify({ databaseId, databaseUuid })}\n`;
+}
+
+test('backup and restore emit exact commit/database-bound deployment evidence', () => {
+  assert.match(backupScript, /gzip -t "\$TMP_FILE"/u);
+  assert.match(backupScript, /sha256sum "\$TMP_FILE"/u);
+  for (const field of [
+    'schemaVersion: 3',
+    'lastLocalBytes',
+    'lastLocalSha256',
+    'databaseId',
+    'databaseIdentitySha256',
+    'databaseUuidSha256',
+    'targetGitCommit',
+  ]) {
+    assert.ok(backupScript.includes(field), `backup status must retain ${field}`);
+  }
+  assert.ok(
+    backupScript.indexOf('BACKUP_AT=') < backupScript.indexOf('PGDATABASE="$BACKUP_DB_URL"'),
+    'backup freshness must start before the database snapshot is read',
+  );
+  const tableCountIndex = restoreVerifier.indexOf('if [ "$TABLE_COUNT" -le 0 ]');
+  const attestationIndex = restoreVerifier.indexOf('deploy-backup-attestation.mjs" record');
+  const archiveIndex = restoreVerifier.indexOf('deploy-backup-attestation.mjs" archive');
+  assert.ok(tableCountIndex >= 0 && attestationIndex > tableCountIndex);
+  assert.ok(
+    archiveIndex > tableCountIndex && archiveIndex < attestationIndex,
+    'an existing same-commit attestation must be archived before its current pointer is refreshed',
+  );
+  assert.match(restoreVerifier, /deploy-backup-attestation\.mjs" restore-stream/u);
+  assert.match(restoreVerifier, /randomBytes\(32\)\.toString\("hex"\)/u);
+  assert.match(restoreVerifier, /MAINTENANCE_TEMP_DB_URL/u);
+  const routeMarkerCheckIndex = restoreVerifier.indexOf('\nverify_restore_route_marker\n');
+  const restoreStreamIndex = restoreVerifier.indexOf('deploy-backup-attestation.mjs" restore-stream');
+  assert.ok(
+    routeMarkerCheckIndex >= 0 && routeMarkerCheckIndex < restoreStreamIndex,
+    'the restore route must prove it can read the maintenance-route marker before restore',
+  );
+  const routeMarkerRecheckIndex = restoreVerifier.indexOf(
+    '\nverify_restore_route_marker\n',
+    routeMarkerCheckIndex + 1,
+  );
+  const finalDropIndex = restoreVerifier.indexOf('if ! drop_temp_database;', tableCountIndex);
+  assert.ok(
+    routeMarkerRecheckIndex > tableCountIndex && routeMarkerRecheckIndex < finalDropIndex,
+    'the restore route marker must remain intact until the bounded maintenance-route drop',
+  );
+  assert.ok(
+    restoreVerifier.indexOf('drop_temp_database') < attestationIndex,
+    'the temporary restored database must be deleted before durable attestation',
+  );
+  assert.doesNotMatch(
+    restoreVerifier,
+    /dropdb --if-exists/u,
+    'a created restore database must be proven deleted rather than treated as optionally absent',
+  );
+  assert.match(restoreVerifier, /显式备份文件必须与 backup-status\.json 完全一致/u);
+  assert.match(deployBackupVerifier, /deploy-backup-\$\{TARGET_GIT_COMMIT\}\.attestation\.json/u);
+  assert.match(deployBackupVerifier, /DEPLOY_BACKUP_ATTESTATION_TEST_NOW is forbidden/u);
+  assert.match(deployBackupVerifier, /DEPLOY_DATABASE_URL="\$DATABASE_URL"/u);
+  assert.doesNotMatch(deployBackupVerifier, /DEPLOY_BACKUP_LOCAL_DIR:-\$\{BACKUP_LOCAL_DIR/u);
+  assert.doesNotMatch(appDirDeployer, /RUN_DB_BACKUP/u);
+  assert.match(deployReadiness, /deploy-backup-attestation\.mjs/u);
+  assert.match(deployReadiness, /deploy-database-identity\.mjs/u);
+  assert.match(deployReadiness, /verify-deploy-backup\.sh/u);
+  assert.match(deployBackupGate, /sameFileSnapshot\(before, openedAfter\)/u);
+  assert.ok(
+    deployBackupGate.includes('new RegExp(`^[ \\\\t]*(?:export[ \\\\t]+)?'),
+    'deployment env duplicate detection must include leading horizontal whitespace',
+  );
+  for (const source of [preflight, ciWorkflow]) {
+    assert.match(source, /deploy-backup-attestation\.test\.mjs/u);
+    assert.match(source, /backup-operations-contract\.test\.mjs/u);
+  }
+  for (const source of [productionEnvExample, stagingEnvExample]) {
+    assert.match(source, /^DEPLOY_BACKUP_LOCAL_DIR=\/var\/backups\/ss-erp$/mu);
+    assert.doesNotMatch(
+      source,
+      /^BACKUP_LOCAL_DIR=/mu,
+      'application env must not redirect the independently managed service backup directory',
+    );
+  }
+});
+
+test('root deployment gate rejects whitespace-prefixed duplicate required env keys', {
+  skip: process.platform === 'win32'
+    || typeof process.geteuid !== 'function'
+    || process.geteuid() !== 0,
+}, () => {
+  const gateDirectory = mkdtempSync(join(tmpdir(), 'ss-erp-deploy-gate-'));
+  const targetCommit = 'a'.repeat(40);
+  try {
+    chmodSync(gateDirectory, 0o700);
+    for (const name of [
+      'deploy-backup-gate.mjs',
+      'deploy-backup-attestation.mjs',
+      'deploy-database-identity.mjs',
+      'deploy-environment.mjs',
+      'deploy-source-manifest.mjs',
+      'freeze-deploy-source.sh',
+      'verify-deploy-backup.sh',
+    ]) {
+      writeFileSync(
+        join(gateDirectory, name),
+        name === 'deploy-backup-gate.mjs'
+          ? readFileSync(deployBackupGatePath)
+          : '# trusted fixture\n',
+        { mode: 0o500 },
+      );
+    }
+    writeFileSync(join(gateDirectory, 'TARGET_GIT_COMMIT'), `${targetCommit}\n`, {
+      mode: 0o400,
+    });
+    const envFile = join(gateDirectory, 'deployment.env');
+    writeFileSync(envFile, [
+      'DATABASE_URL=postgresql://first:secret@127.0.0.1:5432/fixture',
+      ' DATABASE_URL=postgresql://second:secret@127.0.0.1:5432/fixture',
+      'DEPLOY_DATABASE_ID=fixture-primary',
+      'DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp-deploy',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const result = spawnSync(process.execPath, [
+      join(gateDirectory, 'deploy-backup-gate.mjs'),
+      '--mode',
+      'verify',
+      '--env-file',
+      envFile,
+      '--target-git-commit',
+      targetCommit,
+    ], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DATABASE_URL must be assigned exactly once/u);
+  } finally {
+    rmSync(gateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('deployment psql runner strips Prisma parameters and keeps credentials out of argv', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'ss-erp-deploy-psql-'));
+  try {
+    const psql = join(fixture, 'psql');
+    writeFileSync(psql, [
+      '#!/usr/bin/env bash',
+      'printf "database=%s\\n" "$PGDATABASE"',
+      'printf "arg=%s\\n" "$@"',
+      '',
+    ].join('\n'));
+    chmodSync(psql, 0o755);
+    const databaseUrl = 'postgresql://user:top-secret@127.0.0.1:5432/fixture?schema=public&connection_limit=5&sslmode=require';
+    const result = spawnSync(process.execPath, [deployPsqlRunner, '--', '-v', 'ON_ERROR_STOP=1'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        PATH: `${fixture}:${process.env.PATH}`,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const [database, ...args] = result.stdout.trim().split('\n');
+    assert.match(database, /top-secret/u);
+    assert.match(database, /sslmode=require/u);
+    assert.doesNotMatch(database, /schema=|connection_limit=/u);
+    assert.deepEqual(args, [
+      'arg=--no-psqlrc',
+      'arg=-v',
+      'arg=ON_ERROR_STOP=1',
+    ]);
+    assert.doesNotMatch(args.join('\n'), /top-secret/u);
+
+    const override = spawnSync(process.execPath, [deployPsqlRunner, '--dbname=other'], {
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+    });
+    assert.notEqual(override.status, 0);
+    assert.match(override.stderr, /database target overrides are forbidden/u);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('database identity binds the actual database target without putting credentials in argv', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'ss-erp-database-identity-'));
+  const binDir = join(root, 'bin');
+  const argvLog = join(root, 'argv.log');
+  const databaseLog = join(root, 'database.log');
+  try {
+    mkdirSync(binDir, { recursive: true });
+    const psql = join(binDir, 'psql');
+    const installPsql = ({ databaseId = 'fixture-primary', databaseName = 'fixture' } = {}) => {
+      writeFileSync(psql, [
+        '#!/usr/bin/env bash',
+        `printf "%s\\n" "$*" > ${shellSingleQuote(argvLog)}`,
+        `printf "%s\\n" "$PGDATABASE" > ${shellSingleQuote(databaseLog)}`,
+        `printf %s ${shellSingleQuote(databaseIdentityRow({ databaseId, databaseName }))}`,
+        '',
+      ].join('\n'));
+      chmodSync(psql, 0o755);
+    };
+    installPsql();
+    const result = spawnSync(process.execPath, [deployDatabaseIdentityScript], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        DEPLOY_DATABASE_URL: 'postgresql://fixture:fixture-secret@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), databaseIdentitySha256);
+    assert.match(readFileSync(argvLog, 'utf8'), /--no-psqlrc/u);
+    assert.doesNotMatch(readFileSync(argvLog, 'utf8'), /fixture-secret/u);
+    const database = readFileSync(databaseLog, 'utf8');
+    assert.match(database, /sslmode=require/u);
+    assert.doesNotMatch(database, /schema=public/u);
+
+    installPsql({ databaseName: 'other' });
+    const mismatch = spawnSync(process.execPath, [deployDatabaseIdentityScript], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        DEPLOY_DATABASE_URL: 'postgresql://fixture:fixture-secret@127.0.0.1:5432/fixture',
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+      },
+    });
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr, /resolved to a different database name/u);
+
+    installPsql({ databaseId: 'other-primary' });
+    const labelMismatch = spawnSync(process.execPath, [deployDatabaseIdentityScript], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        DEPLOY_DATABASE_URL: 'postgresql://fixture:fixture-secret@127.0.0.1:5432/fixture',
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+      },
+    });
+    assert.notEqual(labelMismatch.status, 0);
+    assert.match(labelMismatch.stderr, /does not match DEPLOY_DATABASE_ID/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('empty bootstrap verification checks the Prisma target without exposing its URL', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'ss-erp-empty-bootstrap-'));
+  const binDir = join(root, 'bin');
+  const argvLog = join(root, 'argv.log');
+  const databaseLog = join(root, 'database.log');
+  try {
+    mkdirSync(binDir, { recursive: true });
+    const psql = join(binDir, 'psql');
+    const installPsql = (tableCount) => {
+      writeFileSync(psql, [
+        '#!/usr/bin/env bash',
+        `printf "%s\\n" "$*" > ${shellSingleQuote(argvLog)}`,
+        `printf "%s\\n" "$PGDATABASE" > ${shellSingleQuote(databaseLog)}`,
+        `printf %s ${shellSingleQuote(`${tableCount}\n`)}`,
+        '',
+      ].join('\n'));
+      chmodSync(psql, 0o755);
+    };
+    installPsql(0);
+    const environment = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      DATABASE_URL: 'postgresql://fixture:bootstrap-secret@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+    };
+    const empty = spawnSync(process.execPath, [emptyBootstrapVerifier], {
+      encoding: 'utf8',
+      env: environment,
+    });
+    assert.equal(empty.status, 0, empty.stderr);
+    assert.match(readFileSync(argvLog, 'utf8'), /--no-psqlrc/u);
+    assert.doesNotMatch(readFileSync(argvLog, 'utf8'), /bootstrap-secret/u);
+    assert.match(readFileSync(databaseLog, 'utf8'), /sslmode=require/u);
+    assert.doesNotMatch(readFileSync(databaseLog, 'utf8'), /schema=public/u);
+    installPsql(1);
+    const populated = spawnSync(process.execPath, [emptyBootstrapVerifier], {
+      encoding: 'utf8',
+      env: environment,
+    });
+    assert.notEqual(populated.status, 0);
+    assert.match(populated.stderr, /not empty/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('backup script writes a canonical immutable status sidecar for real gzip bytes', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'ss-erp-backup-script-'));
+  const backupDir = join(root, 'backups');
+  const binDir = join(root, 'bin');
+  const pgDump = join(binDir, 'pg_dump');
+  const targetCommit = 'a'.repeat(40);
+  try {
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(pgDump, '#!/usr/bin/env bash\nprintf "create table public.example(id integer);\\n"\n');
+    chmodSync(pgDump, 0o755);
+    const psql = join(binDir, 'psql');
+    writeFileSync(
+      psql,
+      `#!/usr/bin/env bash\nprintf %s ${shellSingleQuote(databaseIdentityRow())}\n`,
+    );
+    chmodSync(psql, 0o755);
+    const result = spawnSync('bash', ['scripts/backup-db.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        BACKUP_KEEP_DAYS: '7',
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: targetCommit,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const statusText = readFileSync(join(backupDir, 'backup-status.json'), 'utf8');
+    const status = JSON.parse(statusText);
+    assert.equal(statusText, `${JSON.stringify(status, null, 2)}\n`);
+    assert.equal(status.schemaVersion, 3);
+    assert.equal(status.databaseId, 'fixture-primary');
+    assert.equal(status.databaseIdentitySha256, databaseIdentitySha256);
+    assert.equal(status.databaseUuidSha256, databaseUuidSha256);
+    assert.equal(status.targetGitCommit, targetCommit);
+    const backup = readFileSync(join(backupDir, status.lastLocalFile));
+    assert.match(gunzipSync(backup).toString('utf8'), /create table public\.example/u);
+    assert.equal(status.lastLocalBytes, backup.length);
+    assert.equal(status.lastLocalSha256, createHash('sha256').update(backup).digest('hex'));
+    assert.equal(
+      readFileSync(join(backupDir, `${status.lastLocalFile}.status.json`), 'utf8'),
+      statusText,
+    );
+    assert.equal(
+      readdirSync(backupDir).filter((name) => name.endsWith('.status.json')).length,
+      1,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('restore drill writes attestation only after a positive restored table count', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'ss-erp-restore-script-'));
+  const backupDir = join(root, 'backups');
+  const binDir = join(root, 'bin');
+  const targetCommit = 'b'.repeat(40);
+  const filename = 'ss_erp_20300101_000000.sql.gz';
+  try {
+    mkdirSync(backupDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const backup = gzipSync(Buffer.from('create table public.example(id integer);\n'));
+    const status = {
+      schemaVersion: 3,
+      lastBackupAt: new Date(Date.now() - 60_000).toISOString(),
+      lastLocalFile: filename,
+      lastLocalSize: `${backup.length}B`,
+      lastLocalBytes: backup.length,
+      lastLocalSha256: createHash('sha256').update(backup).digest('hex'),
+      databaseId: 'fixture-primary',
+      databaseIdentitySha256,
+      databaseUuidSha256,
+      targetGitCommit: targetCommit,
+      remoteUploaded: false,
+      lastRemoteKey: '',
+    };
+    const statusText = `${JSON.stringify(status, null, 2)}\n`;
+    writeFileSync(join(backupDir, filename), backup);
+    writeFileSync(join(backupDir, 'backup-status.json'), statusText);
+    writeFileSync(join(backupDir, `${filename}.status.json`), statusText);
+    chmodSync(join(backupDir, filename), 0o600);
+    chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
+
+    for (const command of ['createdb', 'dropdb']) {
+      const executable = join(binDir, command);
+      writeFileSync(
+        executable,
+        command === 'dropdb'
+          ? '#!/usr/bin/env bash\n[ "${FAKE_DROP_FAIL:-0}" != "1" ]\n'
+          : '#!/usr/bin/env bash\nexit 0\n',
+      );
+      chmodSync(executable, 0o755);
+    }
+    const psql = join(binDir, 'psql');
+    const routeMarkerState = join(root, 'route-marker-state');
+    const installPsql = ({
+      restoredDatabaseUuid = '123e4567-e89b-42d3-a456-426614174000',
+      tableCount = 142,
+    } = {}) => {
+      const sourceIdentity = JSON.stringify({
+        databaseId: 'fixture-primary',
+        databaseUuid: '123e4567-e89b-42d3-a456-426614174000',
+      });
+      const restoredIdentity = JSON.stringify({
+        databaseId: 'fixture-primary',
+        databaseUuid: restoredDatabaseUuid,
+      });
+      writeFileSync(psql, [
+        '#!/usr/bin/env bash',
+        "DB_HOST=$(node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(value.hostname);')",
+        'ROUTE_MARKER=""',
+        'HAS_ROUTE_MARKER=0',
+        'HAS_ROUTE_SCHEMA=0',
+        'for argument in "$@"; do',
+        '  case "$argument" in',
+        '    restore_route_marker=*) ROUTE_MARKER="${argument#restore_route_marker=}"; HAS_ROUTE_MARKER=1 ;;',
+        '    restore_route_schema=*) HAS_ROUTE_SCHEMA=1 ;;',
+        '  esac',
+        'done',
+        'if [ "$HAS_ROUTE_MARKER" = "1" ]; then',
+        '  cat >/dev/null',
+        `  printf '%s\\t%s\\n' "$DB_HOST" "$ROUTE_MARKER" > ${shellSingleQuote(routeMarkerState)}`,
+        '  exit 0',
+        'fi',
+        'if [ "$HAS_ROUTE_SCHEMA" = "1" ]; then',
+        '  cat >/dev/null',
+        `  IFS=$'\\t' read -r MARKER_HOST MARKER_VALUE < ${shellSingleQuote(routeMarkerState)} || exit 1`,
+        '  [ "$DB_HOST" = "$MARKER_HOST" ] || exit 1',
+        '  printf \'%s\\n\' "$MARKER_VALUE"',
+        '  exit 0',
+        'fi',
+        'case "$*" in',
+        '  *"current_database(), database.oid::text"*)',
+        "    DB_NAME=$(node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(decodeURIComponent(value.pathname.slice(1)));')",
+        `    DB_IDENTITY=${shellSingleQuote(sourceIdentity)}`,
+        `    case "$DB_NAME" in ss_erp_restore_check_*) DB_IDENTITY=${shellSingleQuote(restoredIdentity)} ;; esac`,
+        '    printf \'%s\\t16384\\t%s\\n\' "$DB_NAME" "$DB_IDENTITY"',
+        '    exit 0',
+        '    ;;',
+        '  *"select current_database();"*)',
+        "    node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(decodeURIComponent(value.pathname.slice(1)) + \"\\n\");'",
+        '    exit 0',
+        '    ;;',
+        'esac',
+        'for argument in "$@"; do',
+        `  if [ "$argument" = "--tuples-only" ]; then printf %s ${shellSingleQuote(`${tableCount}\n`)}; exit 0; fi`,
+        'done',
+        'cat >/dev/null',
+        '',
+      ].join('\n'));
+      chmodSync(psql, 0o755);
+    };
+    installPsql();
+
+    const result = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: targetCommit,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const attestation = JSON.parse(readFileSync(
+      join(backupDir, `deploy-backup-${targetCommit}.attestation.json`),
+      'utf8',
+    ));
+    assert.equal(attestation.restoreDrill.status, 'PASSED');
+    assert.equal(attestation.restoreDrill.tableCount, 142);
+    assert.equal(attestation.backup.statusSha256, createHash('sha256').update(statusText).digest('hex'));
+
+    const routeMismatchCommit = 'e'.repeat(40);
+    const routeMismatchStatus = { ...status, targetGitCommit: routeMismatchCommit };
+    const routeMismatchStatusText = `${JSON.stringify(routeMismatchStatus, null, 2)}\n`;
+    writeFileSync(join(backupDir, 'backup-status.json'), routeMismatchStatusText);
+    writeFileSync(join(backupDir, `${filename}.status.json`), routeMismatchStatusText);
+    chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
+    installPsql();
+    const routeMismatch = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:route-secret@restore.fixture:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:route-secret@restore.fixture:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: routeMismatchCommit,
+        VERIFY_RESTORE_MAINTENANCE_URL: 'postgresql://fixture:route-secret@maintenance.fixture:5432/postgres?sslmode=require',
+        VERIFY_RESTORE_TEMP_DB: 'ss_erp_restore_check_same_name',
+      },
+    });
+    assert.notEqual(routeMismatch.status, 0);
+    assert.match(routeMismatch.stderr, /维护路由与恢复路由未指向同一临时数据库/u);
+    assert.doesNotMatch(`${routeMismatch.stdout}\n${routeMismatch.stderr}`, /route-secret/u);
+    assert.throws(() => readFileSync(
+      join(backupDir, `deploy-backup-${routeMismatchCommit}.attestation.json`),
+    ));
+
+    const uuidMismatchCommit = 'd'.repeat(40);
+    const uuidMismatchStatus = { ...status, targetGitCommit: uuidMismatchCommit };
+    const uuidMismatchStatusText = `${JSON.stringify(uuidMismatchStatus, null, 2)}\n`;
+    writeFileSync(join(backupDir, 'backup-status.json'), uuidMismatchStatusText);
+    writeFileSync(join(backupDir, `${filename}.status.json`), uuidMismatchStatusText);
+    chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
+    installPsql({ restoredDatabaseUuid: '223e4567-e89b-42d3-a456-426614174000' });
+    const uuidMismatch = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: uuidMismatchCommit,
+      },
+    });
+    assert.notEqual(uuidMismatch.status, 0);
+    assert.match(uuidMismatch.stderr, /恢复备份中的数据库 UUID/u);
+    assert.throws(() => readFileSync(
+      join(backupDir, `deploy-backup-${uuidMismatchCommit}.attestation.json`),
+    ));
+
+    const rejectedCommit = 'c'.repeat(40);
+    const rejectedStatus = { ...status, targetGitCommit: rejectedCommit };
+    const rejectedStatusText = `${JSON.stringify(rejectedStatus, null, 2)}\n`;
+    writeFileSync(join(backupDir, 'backup-status.json'), rejectedStatusText);
+    writeFileSync(join(backupDir, `${filename}.status.json`), rejectedStatusText);
+    chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
+    installPsql({ tableCount: 0 });
+    const rejected = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: rejectedCommit,
+      },
+    });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /public schema 中没有表/u);
+    assert.throws(() => readFileSync(
+      join(backupDir, `deploy-backup-${rejectedCommit}.attestation.json`),
+    ));
+
+    const maliciousName = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: rejectedCommit,
+        VERIFY_RESTORE_TEMP_DB: 'ss_erp_restore_check_%66ixture',
+      },
+    });
+    assert.notEqual(maliciousName.status, 0);
+    assert.match(maliciousName.stderr, /临时库名必须使用安全/u);
+
+    const cleanupCommit = 'd'.repeat(40);
+    const cleanupStatus = { ...status, targetGitCommit: cleanupCommit };
+    const cleanupStatusText = `${JSON.stringify(cleanupStatus, null, 2)}\n`;
+    writeFileSync(join(backupDir, 'backup-status.json'), cleanupStatusText);
+    writeFileSync(join(backupDir, `${filename}.status.json`), cleanupStatusText);
+    chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
+    installPsql();
+    const cleanupFailure = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        BACKUP_DB_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?sslmode=require',
+        DATABASE_URL: 'postgresql://fixture:fixture@127.0.0.1:5432/fixture?schema=public&sslmode=require',
+        BACKUP_LOCAL_DIR: backupDir,
+        DEPLOY_DATABASE_ID: 'fixture-primary',
+        BACKUP_TARGET_GIT_COMMIT: cleanupCommit,
+        FAKE_DROP_FAIL: '1',
+      },
+    });
+    assert.notEqual(cleanupFailure.status, 0);
+    assert.match(cleanupFailure.stderr, /不生成部署认证/u);
+    assert.throws(() => readFileSync(
+      join(backupDir, `deploy-backup-${cleanupCommit}.attestation.json`),
+    ));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('backup cron exports its env and targets the app-dir deployment script', () => {
   const expected =
@@ -26,10 +696,13 @@ test('backup cron exports its env and targets the app-dir deployment script', ()
       'cron must export backup env and use app-dir script: ' + command,
     );
   }
-  assert.ok(
-    localDevelopment.includes(
-      'set -a; . /etc/ss-erp-backup.env; set +a; bash scripts/backup-db.sh',
-    ),
+  assert.match(
+    localDevelopment,
+    /set -a; \. \.\/\.env\.staging; \. \/etc\/ss-erp-backup\.env; set \+a/u,
+  );
+  assert.match(
+    localDevelopment,
+    /BACKUP_TARGET_GIT_COMMIT="\$TARGET_COMMIT" bash scripts\/backup-db\.sh/u,
   );
   assert.doesNotMatch(cronExample, /\/opt\/ss-erp\/scripts\/backup-db\.sh/u);
 });
@@ -42,7 +715,7 @@ test('deployment creates and verification checks the backup cron log directory',
   );
   assert.match(
     appDirDeployer,
-    /mkdir -p "\$DEPLOY_BASE" "\$BACKUP_DIR" "\$BACKUP_LOG_DIR"/u,
+    /assert_root_ancestor_chain "\$BACKUP_LOG_DIR"/u,
   );
   assert.match(appDirDeployer, /chmod 0750 "\$BACKUP_LOG_DIR"/u);
   assert.match(appDirDeployer, /chown root:root "\$BACKUP_LOG_DIR"/u);
@@ -115,7 +788,11 @@ test('VPS verification rejects stale or missing backup artifacts', () => {
   assert.match(verifier, /Date\.parse\(data\.lastBackupAt\)/u);
   assert.match(verifier, /fs\.existsSync\(localFile\)/u);
   assert.match(verifier, /fs\.accessSync\(localFile, fs\.constants\.R_OK\)/u);
-  assert.match(verifier, /fs\.statSync\(localFile\)/u);
+  assert.match(verifier, /fs\.lstatSync\(localFile\)/u);
+  assert.match(verifier, /data\.schemaVersion !== 3/u);
+  assert.match(verifier, /data\.databaseIdentitySha256/u);
+  assert.match(verifier, /data\.lastLocalSha256/u);
+  assert.match(verifier, /deploy-backup-gate\.mjs[\s\S]*--mode verify/u);
   assert.match(verifier, /data\.remoteUploaded/u);
   assert.match(verifier, /BACKUP_S3_BUCKET/u);
   assert.match(
@@ -141,7 +818,7 @@ const backupStatusValidator = validatorMatch[1];
 function runBackupStatusValidator({
   ageHours = 1,
   createArtifact = true,
-  artifactContent = 'backup',
+  artifactContent = gzipSync(Buffer.from('backup\n')),
   remoteUploaded = true,
   maxAgeHours = 36,
 } = {}) {
@@ -154,19 +831,40 @@ function runBackupStatusValidator({
     if (createArtifact) {
       writeFileSync(artifactPath, artifactContent);
     }
+    const artifactBytes = Buffer.isBuffer(artifactContent)
+      ? artifactContent
+      : Buffer.from(artifactContent);
     writeFileSync(
       statusPath,
-      JSON.stringify({
+      `${JSON.stringify({
+        schemaVersion: 3,
         lastBackupAt: new Date(Date.now() - ageHours * 60 * 60 * 1000).toISOString(),
         lastLocalFile: artifactName,
         lastLocalSize: '1K',
+        lastLocalBytes: artifactBytes.length,
+        lastLocalSha256: createHash('sha256').update(artifactBytes).digest('hex'),
+        databaseId: 'fixture-primary',
+        databaseIdentitySha256,
+        databaseUuidSha256,
+        targetGitCommit: 'a'.repeat(40),
         remoteUploaded,
-      }),
+        lastRemoteKey: remoteUploaded ? 'db/ss_erp_contract.sql.gz' : '',
+      }, null, 2)}\n`,
     );
 
     return spawnSync(
       process.execPath,
-      ['-e', backupStatusValidator, statusPath, backupDir, String(maxAgeHours)],
+      [
+        '-e',
+        backupStatusValidator,
+        statusPath,
+        backupDir,
+        String(maxAgeHours),
+        'fixture-primary',
+        'a'.repeat(40),
+        databaseIdentitySha256,
+        databaseUuidSha256,
+      ],
       { encoding: 'utf8' },
     );
   } finally {
@@ -195,6 +893,6 @@ test('backup status validator rejects missing and empty local artifacts', async 
   await t.test('empty file', () => {
     const result = runBackupStatusValidator({ artifactContent: '' });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /lastLocalFile is empty/u);
+    assert.match(result.stderr, /lastLocalBytes is missing or invalid|lastLocalFile is empty/u);
   });
 });

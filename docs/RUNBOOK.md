@@ -32,12 +32,14 @@ cd /opt/ss-erp
 # 3. 安装依赖
 sudo -u deploy pnpm install --frozen-lockfile
 
-# 4. 配置 staging 环境变量
-sudo cp .env.staging.example .env.staging
+# 4. 配置 staging 环境变量（root 所有、deploy 主组只读，不跟随既有目标）
+DEPLOY_GROUP="$(id -gn deploy)"
+test ! -e .env.staging && test ! -L .env.staging
+sudo install -o root -g "$DEPLOY_GROUP" -m 0640 .env.staging.example .env.staging
 sudo nano .env.staging  # 填入 staging 密钥
 
-# 5. 数据库初始化
-sudo -u deploy bash -lc 'cd /opt/ss-erp/apps/server && set -a && . ../../.env.staging && set +a && npx prisma generate && npx prisma migrate deploy'
+# 5. 仅对确认实际 Prisma DATABASE_URL 没有任何用户表的全新数据库执行一次 bootstrap
+sudo -u deploy bash -lc 'cd /opt/ss-erp/apps/server && set -a && . ../../.env.staging && set +a && node ../../scripts/verify-empty-bootstrap-database.mjs && npx prisma generate && npx prisma migrate deploy'
 
 # 6. 构建
 sudo -u deploy bash -lc 'cd /opt/ss-erp && set -a && . ./.env.staging && set +a && pnpm --filter server build && pnpm --filter web build'
@@ -57,6 +59,13 @@ sudo nginx -t && sudo systemctl reload nginx
 # 9. 启动
 sudo systemctl start ss-erp-api ss-erp-worker ss-erp-web
 ```
+
+第 5 步是空数据库首次建表的唯一 bootstrap 例外。查询结果不是精确的 `0` 时必须停止，改走
+本页“备份与恢复”流程以及标准部署脚本；已存在业务表、`_prisma_migrations` 或任何历史数据的
+环境不得使用该命令。bootstrap 完成后、生成第一份部署备份前，必须按
+[部署文档的数据库身份初始化步骤](deployment.md#部署命令示例)写入一次数据库 ID/UUID 身份，并确认
+`DATABASE_URL` 与 `BACKUP_DB_URL` 通过 `deploy-database-identity.mjs` 得到相同摘要。后续所有
+migration 都必须经过目标 commit 绑定的备份恢复认证门禁。
 
 ## 日常更新 / 今天的更新推送
 
@@ -129,6 +138,11 @@ cd /opt/ss-erp
 DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
+checkout 模式不会把 deploy 用户可写的 Git 目录复制成 root 代码。每个目标提交必须先按
+`docs/deployment.md` 的步骤，从本机可信 checkout 生成 gate archive，并由 VPS root 在
+`/usr/local/lib/ss-erp-deploy-gate/<target-commit>/` 预装；缺失或逐字节不一致时脚本会在安装依赖和
+停服前失败。
+
 如果输出指向 `/opt/ss-erp/current`，使用 release/symlink 模式：
 
 ```bash
@@ -144,7 +158,14 @@ DEPLOY_BRANCH=hardening/prelaunch-auth-security ./scripts/deploy-staging.sh  # �
 DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh
 ```
 
-`deploy-staging.sh` 会加载 `.env.staging`，用于 `prisma migrate deploy` 和 `next build`。如果密钥包含 `$`、`#`、空格等特殊字符，请在 `.env.staging` 里加引号，保持 shell-compatible。
+`deploy-staging.sh` 必须直接由 runtime `deploy` 用户执行，root helper 以 no-follow descriptor 将
+`.env.staging` 快照一次。独立 `ss-erp-build` 用户以不同的非 root UID/GID、空 supplementary groups
+安装依赖并构建，只收到公开构建 allowlist 和不可连接的占位 `DATABASE_URL`，不能读取 env 或运行时
+密钥。构建前后清单及新 inode 封存通过后，runtime 用户才用同一快照执行备份认证、migration 和
+post-migration guard。脚本不接受 `--skip-build`，会删除旧依赖/构建输出并以
+`pnpm install --frozen-lockfile --force` 重建；Worker/API/Web 在任何 in-place 改动前停止。
+根目录除当前 `$ENV_FILE` 外不得残留任何被 Git 忽略的 `.env*`；Next 的构建 cache 不会被直接
+`chown`，封存后会清空并由 root 新建 runtime 专用目录。
 
 如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
 
@@ -459,6 +480,30 @@ docker compose -f docker-compose.prod.yml --env-file .env.production logs migrat
 
 超时或非零退出时 API/Worker 必须保持停止。若当前 migration 使用 `CREATE INDEX CONCURRENTLY`，超时也可能留下 invalid index；先执行本页“Prisma migration 失败”的 `pg_index` / `pg_get_indexdef` 检查，不得把重跑当作恢复策略。
 
+故障清理完成后，migration 重放仍必须使用安装在 root-owned target 目录中的统一 orchestrator；
+不得在已存在数据库上直接执行裸 Prisma migration。下面命令会用同一次 dotenv 读取先复验备份，
+再降权运行 migration 和 post-migration guard：
+
+```bash
+DEPLOY_ROOT=/opt/ss-erp/current  # app-dir 改为 /opt/ss-erp/app；checkout 改为 /opt/ss-erp
+TARGET_COMMIT="$(tr -d '\n' < "$DEPLOY_ROOT/DEPLOYED_COMMIT")"
+ENV_FILE_REAL="$(readlink -f -- "$DEPLOY_ROOT/.env.staging")"
+SERVER_DIR_REAL="$(readlink -f -- "$DEPLOY_ROOT/apps/server")"
+sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root LANG=C.UTF-8 \
+  node "/usr/local/lib/ss-erp-deploy-gate/$TARGET_COMMIT/deploy-backup-gate.mjs" \
+  --mode migrate \
+  --env-file "$ENV_FILE_REAL" \
+  --target-git-commit "$TARGET_COMMIT" \
+  --server-dir "$SERVER_DIR_REAL" \
+  --run-user deploy \
+  --migration-timeout 20m
+```
+
+本节所有手工 SQL 使用 `node ../../scripts/run-deploy-psql.mjs -- ...`。该 wrapper 从
+`DATABASE_URL` 环境读取目标，移除 Prisma-only 参数，强制 `--no-psqlrc`，并拒绝 `-d/--dbname`
+覆盖；数据库 URL 不会进入 argv。
+
 ### AI Media 历史分页索引检查与恢复（Unit 10A-H1）
 
 Unit 10A-H1 对应 111 个 migration。`20260720167000_add_ai_media_workflow_history_index` 和 `20260720168000_add_ai_media_workflow_priority_index` 都是单语句 `CREATE INDEX CONCURRENTLY`；前者建立 `ai_media_workflow_owner_context_history`，后者建立 `ai_media_workflow_owner_context_updates`。部署完成、超时或 migration 非零退出后，在 API/Worker 保持停止时执行：
@@ -471,7 +516,7 @@ set +a
 
 npx prisma migrate status
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT migration_name, started_at, finished_at, rolled_back_at, logs
 FROM "_prisma_migrations"
 WHERE migration_name IN (
@@ -508,7 +553,7 @@ SQL
 若失败 migration 留下同名 invalid index，先确认没有重复写入进程，再对对应索引执行独立的并发删除。`DROP INDEX CONCURRENTLY` 不能放入 transaction block。只有 ledger 显示 `1670` 实际失败且未 rolled back 时，运行：
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT format(
   'DROP INDEX CONCURRENTLY IF EXISTS %I.%I;',
   current_schema(),
@@ -522,7 +567,7 @@ npx prisma migrate resolve --rolled-back 20260720167000_add_ai_media_workflow_hi
 只有 ledger 显示 `1680` 实际失败且未 rolled back 时，运行：
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT format(
   'DROP INDEX CONCURRENTLY IF EXISTS %I.%I;',
   current_schema(),
@@ -533,14 +578,13 @@ SQL
 npx prisma migrate resolve --rolled-back 20260720168000_add_ai_media_workflow_priority_index
 ```
 
-处理所有实际失败项后再重放：
+处理所有实际失败项后，先回到仓库根目录执行上文统一 root-owned orchestrator 命令，再检查状态：
 
 ```bash
-npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境复核；H4 检查见下一节，H2/H3b 账本检查见后续各节。
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后在重放前复验当前目标 commit 的备份认证。认证过期时，先按“备份与恢复”重新生成可恢复证据，不能跳过 verifier。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境复核；H4 检查见下一节，H2/H3b 账本检查见后续各节。
 
 ### Provider 结果核对检查与恢复（Unit 10A-H4）
 
@@ -555,7 +599,7 @@ set -a
 set +a
 npx prisma migrate status
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT migration_name, finished_at, rolled_back_at
 FROM "_prisma_migrations"
 WHERE migration_name BETWEEN
@@ -589,17 +633,19 @@ SQL
 四个索引必须 `indisvalid=true` 且 `indisready=true`；事件 job/revision/created 索引必须 `indisunique=false`，从而允许终态后追加身份冲突证据。`126000` 与 `130000` 都必须保持为单语句 `CREATE INDEX CONCURRENTLY`。若其中一项失败并留下同名 invalid index，在所有 writer 停止时只执行对应的一组命令：
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 \
   -c 'DROP INDEX CONCURRENTLY IF EXISTS ai_image_job_workflow_provider_reconciliation'
 npx prisma migrate resolve --rolled-back 20260721126000_add_ai_provider_reconciliation_workflow_index
 
 # 或仅在 130000 实际失败时：
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 \
   -c 'DROP INDEX CONCURRENTLY IF EXISTS ai_image_job_provider_reconciliation_lease_due'
 npx prisma migrate resolve --rolled-back 20260721130000_index_ai_provider_reconciliation_leases
 ```
 
-不得对已经成功的另一个 concurrent-index migration 执行 `resolve --rolled-back`。清理实际失败项后重新执行 `prisma migrate deploy`、上述 `pg_index` 查询和暗态 verifier。
+不得对已经成功的另一个 concurrent-index migration 执行 `resolve --rolled-back`。清理实际失败项后，
+先按本页“备份与恢复”取得当前目标 commit 的新鲜认证，再执行上文统一 root-owned orchestrator、
+上述 `pg_index` 查询和暗态 verifier；不得裸跑 migration。
 
 `131000` 会为仍处于 `PENDING/RUNNING/RETRY_WAIT` 且期限不足 24 小时的任务同时延长 deadline、将 revision 加一，并写 `PROVIDER_RECONCILIATION_DEADLINE_EXTENDED` 不可变事件。任何失败都必须保持 API/Worker 停止；不得禁用 transition trigger、不得手工改 revision、不得 `resolve --applied`。修复后重跑 migration/status 和暗态 verifier，再启动 Worker，并检查：
 
@@ -623,7 +669,7 @@ set +a
 
 npx prisma migrate status
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT migration_name, finished_at, rolled_back_at
 FROM "_prisma_migrations"
 WHERE migration_name IN (
@@ -670,7 +716,7 @@ H3b 对应 migrations `20260721120000_add_ai_media_listing_draft_application_mut
 
 ```bash
 npx prisma migrate status
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT migration_name, finished_at, rolled_back_at
 FROM "_prisma_migrations"
 WHERE migration_name IN (
@@ -781,24 +827,46 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 - 80/443 对外可用
 - 两种 PostgreSQL 模式都要求 Prisma migration up to date，且本地和公网 `/ready` 通过
 - 仅 `VERIFY_EXPECT_LOCAL_POSTGRES=true` 的本地 PostgreSQL 模式检查临时恢复库残留；external/RDS 模式不提供远端临时恢复库残留证明
-- `backup-status.json` 存在且格式正确
+- schema v3 `backup-status.json`、不可变 sidecar 和当前 deployed-commit attestation 均通过
 - 最近 API/Worker 日志没有 fatal、exception、unhandled、panic
 
 ### 备份与恢复
 
+首次启用本门禁前，按 `docs/deployment.md` 为每个数据库插入独立的
+canonical `deployment_database_identity_v1` ID/UUID 对象；克隆数据库必须轮换，不能沿用源库
+identity。
+
 在 VPS 运行：
 
 ```bash
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+set -a
+. ./.env.staging
 . /etc/ss-erp-backup.env
-bash scripts/backup-db.sh
-bash scripts/verify-backup-restore.sh
+set +a
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
+bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 ```
 
 通过标准：
 
-- 本地生成 `ss_erp_*.sql.gz`
-- 写入 `/var/backups/ss-erp/backup-status.json`
-- 恢复演练能创建临时库、恢复备份、读到 public 表，并自动删除临时库
+- 本地生成经过 `gzip -t` 的 `ss_erp_*.sql.gz`，保留压缩字节数和 SHA-256
+- 写入 canonical schema v3 latest 状态及每份备份不可变的 `.status.json` sidecar
+- 应用和备份 URL 查询得到相同实际数据库名、OID 与库内 deployment UUID；路由可以不同
+- 恢复演练从 no-follow descriptor 读取同一份备份、读到正数 public 表，并确认临时库删除成功
+- maintenance 路由写入的随机数据库标记必须能由恢复 URL 在导入前及删除前精确读回
+- 生成 `0600`、数据库实际身份/目标 commit/恢复流绑定的 schema v2 部署认证，且部署前复验通过
+
+应用 env 中的发布门禁目录键是 `DEPLOY_BACKUP_LOCAL_DIR`；`BACKUP_LOCAL_DIR` 留在
+`/etc/ss-erp-backup.env` 给备份工具使用。后台备份服务若配置自己的 `BACKUP_LOCAL_DIR`，应使用
+不同目录，不能覆盖或清理发布认证文件。发布证据目录必须由备份/verifier 用户（标准部署为
+root）所有且不可被 group/world 写入；应用 `DATABASE_URL` 与备份 `BACKUP_DB_URL` 的目标
+数据库名、OID 和库内 deployment UUID 必须一致；hostname/port 路由可以不同。
+
+同一 commit 的认证过期后直接重新运行恢复演练。脚本由 root 先将旧认证以完整 SHA-256 命名归档，
+保留原始 inode/字节，再签发新的 commit 指针；不要手工删除、覆盖或改名
+`deploy-backup-<commit>.attestation.json`。任何轮换失败都不允许继续 migration。
 
 备份 R2/S3 bucket 建议和图片 R2 bucket 分开，避免生命周期规则互相影响。
 
@@ -822,15 +890,17 @@ node --input-type=module -e "import {PrismaClient} from '@prisma/client'; const 
 
 ## 回滚
 
+release/symlink 模式只允许用已测试的 rollback 入口切换现有不可变 release：
+
 ```bash
-cd /opt/ss-erp
-git log --oneline -10          # 找到要回滚的 commit
-git checkout <commit-hash>
-pnpm install --frozen-lockfile
-pnpm --filter server build
-pnpm --filter web build
-sudo systemctl restart ss-erp-api ss-erp-worker ss-erp-web
+DEPLOY_HOST=<server> DEPLOY_USER=root ./scripts/rollback.sh [full-target-commit]
+DEPLOY_DIR=/opt/ss-erp/current bash scripts/verify-vps-deploy.sh
 ```
+
+app-dir 模式必须在确认数据库向后兼容后，为目标 revision 生成新鲜备份/恢复认证，再用
+`deploy-app-dir.sh <full-target-commit>` 重新发布。checkout 模式不得手工 `git checkout` 后直接 build/restart；
+先预装目标 gate，再通过受控 rollback 分支运行 `deploy-staging.sh`，或改用 archive 入口。应用回滚
+不会撤销数据库 migration；不兼容旧 binary 时停止回滚并做前向修复。
 
 ## 数据库备份
 
@@ -839,20 +909,28 @@ sudo systemctl restart ss-erp-api ss-erp-worker ss-erp-web
 - 超管后台 `系统设置 -> 备份策略`：配置 `backup_remote_*`，密钥加密入库。
 - 超管后台 `接口与集成`：测试“数据库备份 R2”是否可写。
 - 超管后台 `系统设置 -> 备份策略`：可点“立即备份”，由 `ss-erp-worker` 执行 `pg_dump`、压缩、上传和状态写入。
-- app-dir 部署默认写入 `/opt/ss-erp/shared/backups`；旧 `/var/backups/ss-erp` 只作为 `backup-status.json` 读取兼容路径。
+- `/opt/ss-erp/shared/backups` 只属于应用后台备份 worker，不是发布门禁证据。
+- 发布门禁默认显式使用 `DEPLOY_BACKUP_LOCAL_DIR=/var/backups/ss-erp`；没有 shared/旧路径 fallback，
+  两个目录不得相同或通过符号链接指向同一位置。
 
-旧脚本仍保留，适合作为兼容兜底或恢复演练：
+发布备份脚本仍作为标准门禁的取证工具；它不是可绕过认证的兼容兜底：
 
 ```bash
-# 手动备份
-./scripts/backup-db.sh
+# 手动发布备份（目标必须是将要执行 migration 的完整 commit）
+set -a
+. ./.env.staging
+. /etc/ss-erp-backup.env
+set +a
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" ./scripts/backup-db.sh
 
 # 无损恢复演练（恢复到临时库后自动删除）
-. /etc/ss-erp-backup.env
-./scripts/verify-backup-restore.sh
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" ./scripts/verify-backup-restore.sh
+./scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 
 # 如果应用数据库账号没有 CREATEDB 权限，且 PostgreSQL 就在本机：
-VERIFY_RESTORE_LOCAL_POSTGRES=1 ./scripts/verify-backup-restore.sh
+VERIFY_RESTORE_LOCAL_POSTGRES=1 BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" \
+  ./scripts/verify-backup-restore.sh
 
 # 定时备份（参考 crontab）
 cat scripts/backup-db.crontab.example
@@ -862,7 +940,8 @@ cat scripts/backup-db.crontab.example
 
 1. 后台“数据库备份 R2”测试是否能写入并删除测试对象。
 2. 后台“立即备份”是否能生成本地备份、上传 R2、写入 `backup-status.json`。
-3. `verify-backup-restore.sh` 是否能把备份恢复到临时库并自动清理。
+3. `verify-backup-restore.sh` 是否能恢复同一份 sidecar-bound 备份、自动清理临时库，并让
+   `verify-deploy-backup.sh` 通过目标 commit/database 认证。
 
 如果备份桶接到了 R2 / 其他 S3 兼容存储，备份桶最好和图片桶分开，避免对象生命周期规则互相干扰。
 
@@ -892,7 +971,7 @@ set -a
 set +a
 npx prisma migrate status
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 <<'SQL'
 SELECT migration_name, started_at, finished_at, rolled_back_at, logs
 FROM "_prisma_migrations"
 WHERE migration_name = '20260720153000_bind_ai_image_edit_outputs';
@@ -918,11 +997,11 @@ SQL
 若索引不存在、无效，或 migration 已失败但留下了索引，保持 API/Worker 停止，并在独立语句中清理后重放。`DROP INDEX CONCURRENTLY` 不能放在 transaction block 中：
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+node ../../scripts/run-deploy-psql.mjs -- -v ON_ERROR_STOP=1 \
   -c 'DROP INDEX CONCURRENTLY IF EXISTS "media_assets_edit_output_job_kind_unique";'
 
 npx prisma migrate resolve --rolled-back 20260720153000_bind_ai_image_edit_outputs
-npx prisma migrate deploy
+# 回到仓库根目录执行上文统一 root-owned orchestrator 命令后：
 npx prisma migrate status
 ```
 
@@ -983,17 +1062,27 @@ Worker 每天执行一次，清理对象：
 
 ## 发布流程（推荐）
 
+下面的备份、恢复和 verifier 三条命令在目标 VPS 的目标 revision 私有运维 checkout 中执行；
+随后从持有同一 commit 的运维工作站运行标准部署入口。若分支在两步之间移动，commit 绑定会让
+部署失败，必须针对新的目标重新取证，不能复用旧认证。
+
 ```bash
 # 1. 开启维护模式
-# 2. 执行数据库备份
-./scripts/backup-db.sh
-# 3. git pull && pnpm install
-# 4. pnpm --filter server db:migrate
-# 5. pnpm build
-# 6. systemctl restart ss-erp-api ss-erp-worker ss-erp-web
-# 7. curl http://localhost:3001/ready
-# 8. cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
-# 9. 关闭维护模式
+# 2. 确认目标 revision，并从该 revision 的私有运维 checkout 执行：
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+set -a
+. ./.env.staging
+. /etc/ss-erp-backup.env
+set +a
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
+bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
+# 3. 使用与部署模式匹配的标准入口；不要直接执行 Prisma migration
+DEPLOY_HOST=<server> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh "$TARGET_COMMIT"
+# release/symlink 模式改用 ./scripts/deploy.sh "$TARGET_COMMIT"
+# 4. 标准入口通过 readiness 和暗态检查后运行 smoke
+cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+# 5. 关闭维护模式
 ```
 
 ## VPS 最小优化建议

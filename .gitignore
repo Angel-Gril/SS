@@ -37,13 +37,10 @@ docs/ozon-premium-data-plan.md
 extensions/ss-erp/debug-extension.md
 
 # Local environment and secrets
-.env
-.env.local
-.env.*.local
-apps/server/.env
-apps/web/.env
-apps/web/.env.local
+.env*
 !.env.example
+!.env.production.example
+!.env.staging.example
 
 # Runtime data, logs, and generated files
 tmp/

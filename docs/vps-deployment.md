@@ -44,7 +44,7 @@ DEPLOY_ENV_PROFILE=cloud-r2 \
 ./scripts/deploy-app-dir.sh
 ```
 
-The script packages the requested commit, uploads it to the server, builds it in a temporary directory, copies the current `.env.staging`, runs migrations, swaps `/opt/ss-erp/app`, restarts services, and checks `/ready`.
+The script packages the requested commit, uploads it to the server, builds it in a temporary directory, copies the current `.env.staging`, verifies a fresh commit/database/restore-bound backup attestation, runs migrations, swaps `/opt/ss-erp/app`, restarts services, and checks `/ready`.
 
 Deploy a specific commit:
 
@@ -52,11 +52,39 @@ Deploy a specific commit:
 DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh 4b47043
 ```
 
-Optional pre-deploy database backup:
+Every migration requires a separate pre-deploy backup and restore drill. Set the same stable
+`DEPLOY_DATABASE_ID` in the application env and `/etc/ss-erp-backup.env`, then run these commands
+on the VPS from a checkout containing the target revision's scripts:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg RUN_DB_BACKUP=true DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
+TARGET_COMMIT=<lowercase-full-40-character-commit>
+set -a
+. /opt/ss-erp/app/.env.staging
+. /etc/ss-erp-backup.env
+set +a
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
+BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
+bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 ```
+
+This creates a real gzip, an immutable canonical `.status.json` sidecar, and a `0600`
+`deploy-backup-<commit>.attestation.json` only after a temporary database restore reports a positive
+table count and is successfully removed. The backup and application URLs must query the same actual
+database name, database OID and database-stored deployment UUID; their network routes may differ.
+The maintenance route also writes a random marker into the temporary database, and the restore URL
+must read the exact marker before import and again before deletion. This rejects same-named databases
+reached through different hosts. When evidence for the same commit expires, rerun the drill as root:
+the old attestation is archived byte-for-byte under a SHA-256-qualified name before a new current
+pointer is created. Do not manually delete or overwrite the current attestation.
+Credentials and Prisma-only query parameters are
+not retained in evidence. The deployment re-hashes and gunzips those exact bytes before Prisma can run. For the
+first rollout of this gate, copy or check out `backup-db.sh`, `verify-backup-restore.sh`,
+`verify-deploy-backup.sh`, `deploy-backup-attestation.mjs`, and `deploy-database-identity.mjs` from
+the target revision into a private operator directory; do not use an older deployed backup script.
+Archive deploys install the seven runtime gate files plus the commit marker automatically. A Git
+checkout deployment must first follow the root-owned gate archive/install procedure in
+`docs/deployment.md`; `deploy-staging.sh` fails before dependencies or service quiescence when that
+exact target gate is absent. It always rebuilds the target and no longer supports `--skip-build`.
 
 `DEPLOY_ENV_PROFILE=cloud-r2` now validates two layers:
 
@@ -212,7 +240,22 @@ For the current user scale, a single VPS is still the default recommendation:
 Run once on the server:
 
 ```bash
-DEPLOY_BASE=/opt/ss-erp DEPLOY_USER=deploy ENV_FILE_NAME=.env.staging bash scripts/init-server.sh
+DEPLOY_BASE=/opt/ss-erp DEPLOY_USER=deploy DEPLOY_BUILD_USER=ss-erp-build \
+  ENV_FILE_NAME=.env.staging bash scripts/init-server.sh
+```
+
+The initializer keeps `/opt/ss-erp`, `/opt/ss-erp/releases`, and `/opt/ss-erp/shared` root-owned
+`0755`. Only the managed `shared/uploads` and `shared/backups` children are writable by `deploy`;
+the environment file is root-owned, group-readable by the deploy user's primary group, and `0640`.
+It creates or validates a distinct non-root `ss-erp-build` UID/GID with no runtime-group identity,
+and provisions root-owned per-project Compose lock files in `/var/lib/ss-erp-deploy-locks`.
+Older installations that recursively assigned the whole base to `deploy` must rerun the hardened
+initializer once before the next archive deployment. It rejects pre-existing symlinks and hard-linked
+env files before root changes ownership, then repairs only verified real paths:
+
+```bash
+DEPLOY_BASE=/opt/ss-erp DEPLOY_USER=deploy DEPLOY_BUILD_USER=ss-erp-build ENV_FILE_NAME=.env.staging \
+  bash scripts/init-server.sh
 ```
 
 Then copy the current environment file into:
@@ -277,15 +320,16 @@ The script:
 
 1. packages the commit with `git archive`
 2. uploads it to `/tmp`
-3. extracts it into `/opt/ss-erp/releases/<commit>`
-4. links shared `.env.staging`, uploads, and backups
-5. runs `pnpm install --frozen-lockfile`
-6. runs Prisma generate and migrations
-7. builds server and web
-8. switches `/opt/ss-erp/current`
-9. restarts worker, API, and web services
-10. checks `/ready`
-11. rolls back automatically if the health check fails
+3. extracts it into `/opt/ss-erp/releases/<commit>` and installs the immutable root-owned target gate
+4. links shared `.env.staging`, uploads, and application-managed backups
+5. snapshots env once as root, gives builds only a public allowlist and a non-connectable database URL
+6. installs dependencies and builds Server, Web, and both extensions as the isolated `ss-erp-build` UID/GID
+7. records pre/post source manifests, seals the tree onto new root-owned inodes, and re-verifies both
+8. stops Worker/API and has the target gate verify backup evidence, migrate, and run the database guard
+9. verifies runtime configuration and the dark rollout
+10. switches `/opt/ss-erp/current`
+11. restarts worker, API, and web services
+12. checks `/ready` and rolls back the application symlink if the health check fails
 
 ## Roll Back
 
@@ -310,7 +354,9 @@ cd /opt/ss-erp
 DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
-That path is good for small teams and fast iteration. The release/symlink path is better when you want immutable releases and one-command rollback.
+That path is available only after the exact target gate is installed from a root-owned revision
+archive as described above. The release/symlink path is preferred when you want immutable releases
+and one-command application rollback.
 
 ## Important Notes
 
@@ -333,14 +379,12 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 
 Recommended deploy order:
 
-1. backup database
-2. publish commit / pull branch
-3. migrate database
-4. build
-5. restart services
-6. run `/ready`
-7. run `smoke:live`
-8. run `verify-vps-deploy.sh`
+1. freeze the full target commit and create its database/restore-bound backup attestation
+2. publish the commit and use one standard deployment entrypoint
+3. let that entrypoint build, quiesce services, verify evidence, migrate, and enforce the dark gate
+4. run `/ready`
+5. run `smoke:live`
+6. run `verify-vps-deploy.sh`
 
 ## Existing Non-Release Deploy
 
