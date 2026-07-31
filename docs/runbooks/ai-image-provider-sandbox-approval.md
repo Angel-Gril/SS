@@ -19,13 +19,17 @@ gpt-image-2-i2i-20260724-200300-01
 gpt-image-2-i2i-20260725064150-03
 qa02-i2i-20260730-083710-01
 qa02-centos-i2i-20260730-094857-01
+qa02-packy-i2i-20260801-e4503e9-01
 ```
 
-The last operation above definitively rejected `/v1/images/edits` for the tested
-`https://ai.centos.hk/v1` Token and `gpt-image-2` combination and settled with no charge. Do not
-prepare `FULL_EDIT`, `INPAINT`, or another image-to-image approval for that same combination unless
-the Provider first supplies explicit edit-route enablement; use a new Operation ID and approval
-after that external capability change.
+The Centos operation definitively rejected `/v1/images/edits` for its tested
+`https://ai.centos.hk/v1` Token and `gpt-image-2` combination. The final Packy operation likewise
+returned definite HTTP 400 for
+`https://www.packyapi.ai/v1`, replacement credential revision `-02`, `gpt-image-2` and the reviewed
+single-source multipart contract. Both settled with no charge. Do not prepare `FULL_EDIT`, `INPAINT`,
+or another image-to-image approval for either same combination unless the Provider first supplies a
+reviewed edit-contract/account correction; otherwise select a different edit-capable Provider and
+use a new policy, Operation ID and approval after that external change.
 
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for

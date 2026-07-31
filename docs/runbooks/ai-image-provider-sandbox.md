@@ -341,6 +341,25 @@ Do not retry that operation or send `FULL_EDIT`/`INPAINT` through the same endpo
 model. Catalogue access proves only credential visibility; Provider-side edit-route entitlement or
 a different edit-capable endpoint/credential is still required.
 
+### Recorded Packy edit rejection (2026-08-01)
+
+Replacement credential revision `packy-sora-key-rotation-20260801-02` passed the official GET-only
+preflight and exposed exact model `gpt-image-2`. Under a separate USD `0.08` quote and USD `1.00`
+maximum, operation `qa02-packy-i2i-20260801-e4503e9-01` sent one approved
+`IMAGE_TO_IMAGE` request using source SHA-256
+`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`.
+
+The `/v1/images/edits` POST returned definite HTTP 400 after `1118 ms`; report v5 records
+`REJECTED`, `createRequests=1`, `PROVIDER_REQUEST_FAILED`, no Provider request-ID hash and no image.
+Quota, displayed usage and Token log were unchanged. Receipt v3 SHA-256
+`0107a287f45e6b74e185ea4669057b9b5264f8617d4cc59facaa1ad8950cb363` records `NO_CHARGE`,
+`billingGate=PASS`, zero billed units and `sameRequestRetryAllowed=false`; replay was byte-identical.
+
+Never retry this Operation ID or the same request fingerprint. Do not infer edit support from Packy
+documentation, catalogue visibility or GET-only metering, and do not reuse this approval for
+`FULL_EDIT` or `INPAINT`. Require a Provider-confirmed contract/account correction or select a new
+edit-capable endpoint, then begin a new operation-specific price/approval/evidence sequence.
+
 The international database may still contain a legacy `openai-images` selection with a third-party
 Base URL. Current admin validation and paid runtime contracts reject that identity: official OpenAI
 Images is restricted to `https://api.openai.com/v1`, while a relay must be labeled `custom`. Use the

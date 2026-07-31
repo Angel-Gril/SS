@@ -479,3 +479,19 @@ Progress: 4/5 tasks.
   authorization; those exact bytes are unavailable locally. `QA-02` stays `4/5`, overall progress
   stays `32/37`, and no Registry, rollout, deployment, ingest, Ozon mutation, Provider POST or charge
   occurred.
+- The operator subsequently approved the exact Packy I2I request bound to source `5d2627...6e32`.
+  Pre-call manifest/snapshot SHA-256 values are `e9cef9fb...172df` and `f653a02f...2f99e`; final
+  approval SHA-256 is `de530a1d...38da4`, and official no-key verification passed. Operation
+  `qa02-packy-i2i-20260801-e4503e9-01` made one guarded POST without retry and received a definite
+  HTTP 400 `REJECTED` result after `1118 ms`, with `createRequests=1`, no Provider request-ID hash,
+  no image and report SHA-256 `02ab909a...a4c3e`. Raw quota, displayed usage and Token log were
+  byte-identical across the `329871 ms` settlement window. Receipt SHA-256 `0107a287...cb363`
+  records `NO_CHARGE`, `PASS`, zero billed units and no same-request retry; replay was byte-identical.
+  Six execution records were copied into a private archive with manifest SHA-256
+  `43a2a316...e31eaf`; private run-summary SHA-256 is `e1e2c545...c1c896`. A 38-file credential
+  scan, ACL checks and the offline dark-deployment guard passed. This is negative evidence for the
+  shared Packy edits transport, so `FULL_EDIT` and `INPAINT` were not sent and must not reuse this
+  approval. Counts remain `4/5` and `32/37`; no
+  Registry, rollout, deployment, ingest or Ozon mutation occurred. The static sandbox contract,
+  candidate review `27/27`, dark-deployment guard and full preflight `446/0` passed; preflight kept
+  only the two expected local-extension permission warnings.

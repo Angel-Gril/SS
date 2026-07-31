@@ -319,3 +319,39 @@ present in the local retained evidence. The statement and timestamps remain revi
 the official offline verifier rejects the draft with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No paid
 request is authorized until an operator reviews this exact source-bound request, retains fresh
 pre-call meters, and replaces only the three sentinels within a new bounded approval window.
+
+## Packy image-to-image outcome
+
+The operator explicitly approved one `IMAGE_TO_IMAGE` request against
+`https://www.packyapi.ai/v1` using `gpt-image-2`, `OPENAI_SQUARE_SINGLE_V1`, `1024x1024`, `n=1`,
+source SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, quote USD `0.08`, and
+single-request maximum USD `1.00`. Fresh pre-call manifest SHA-256 was
+`e9cef9fb0a2efeefae62646f6bd32345e1782e28982e02d3db1608402ae172df`; final approval SHA-256
+was `de530a1d7f4258b713e909d91c444ffa0faf3832f42ad7639b9153a4d8438da4` and passed the official
+no-key verifier from clean commit `e4503e9253b15eea5540dd436bf027c713cd3739`.
+
+Operation `qa02-packy-i2i-20260801-e4503e9-01` made exactly one multipart `/v1/images/edits` POST
+and was not retried. The Provider returned HTTP 400 after `1118 ms`; authoritative v5 report
+SHA-256 `02ab909a2dc4d8cda2858f7291f41ebacb2e3e686f5583419bbdd1d8907a4c3e` records `REJECTED`,
+`createRequests=1`, `failureCode=PROVIDER_REQUEST_FAILED`, no Provider request-ID hash, and no image.
+
+The settled GET-only capture had manifest SHA-256
+`b64bb39aa4d55cfb38a4c1ba44a1601cc9de605e0823a1e8b226c9e2c2eaf5b4`. Raw quota and displayed
+usage both had zero delta, while Token log remained the same canonical empty envelope. Exact v2
+attestation SHA-256 `3ce448fe0dfc21d25d4862c03aa0d7c2198da9d3676e4fdee8d27f05fae83e70`
+used the exclusive `329871 ms` account window. Official v3 receipt SHA-256
+`0107a287f45e6b74e185ea4669057b9b5264f8617d4cc59facaa1ad8950cb363` records `REJECTED`,
+`NO_CHARGE`, `billingGate=PASS`, actual USD `0.00`, zero billed units, and
+`sameRequestRetryAllowed=false`; exact replay returned identical bytes.
+
+The six-file execution archive manifest SHA-256 is
+`43a2a316ba75055442553d4f8d9983f0b9c0d51878c56bb08e7d014bf2e31eaf`, and private run-summary
+SHA-256 is `e1e2c54583fd25f817b6d5021b024503303b15db74fbe259738a07ec9dc1c896`. Exact and generic
+credential scans across 38 retained files were clean; private ACL checks and the offline dark
+deployment guard passed.
+
+This is negative Provider evidence: public Packy documentation and model visibility did not produce
+an accepted edit request for this account/model/transport. Do not retry the consumed Operation ID or
+reuse its approval for `FULL_EDIT` or `INPAINT`, which share `/v1/images/edits`. A future positive
+QA-02 sequence requires a Provider-confirmed request-contract/account correction or another
+edit-capable endpoint, followed by new operation-specific policies and approvals.

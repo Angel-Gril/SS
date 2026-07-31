@@ -45,25 +45,17 @@ Overall: 32/37 tasks complete (86%).
 ## Current Status
 
 Current checkpoint (2026-08-01): `QA-02` remains the only implementation-ready open task at
-Phase 3 `4/5`; PackyAPI is a prepared protocol candidate, not a verified edit-capable Provider.
-Credential revision `packy-sora-key-rotation-20260801-01` is invalidated: a local PowerShell
-UTF-16 stdin attempt caused its Authorization header value to appear in local stderr. Its DPAPI
-artifact remains in private quarantine and must never be restored. Replacement revision
-`packy-sora-key-rotation-20260801-02` is now stored in the active current-user DPAPI path; its ACL
-permits only the current user, SYSTEM, and Administrators, and DPAPI metadata validation passed
-without exposing plaintext. The first official preflight from clean commit `ac41efa` reached the
-three BEFORE routes with bounded authenticated GETs: raw quota and displayed usage matched their
-reviewed schemas, while Token log returned Packy's canonical empty-history envelope. The helper
-failed closed because that exact envelope was not yet accepted, wrote no evidence bundle, reflected
-no credential, and made no Provider POST or charge. Three separate bounded GET-only diagnostics
-confirmed the response shapes; the empty Token-log message digest also matches the historical
-`-01` observation. Commit `e4503e9253b15eea5540dd436bf027c713cd3739` restricts acceptance to
-that exact two-key envelope or the existing successful Token-log schema. From a new clean checkout,
-replacement revision `-02` then completed the official fixed seven-GET sequence. The private
-eight-file evidence bundle has manifest SHA-256
-`9f3dbc30bf2b78b99ede50bdfd285d3f932580cab1ddc5a52812ae7cbacb7b0f`; all routes, response
-digests, lengths and ACLs were independently verified, the exact model is visible, all three meter
-pairs are byte-identical, and credential scans are clean. No Provider POST or charge occurred.
+Phase 3 `4/5`. Replacement Packy credential revision `packy-sora-key-rotation-20260801-02` passed
+the official fixed seven-GET preflight from clean commit
+`e4503e9253b15eea5540dd436bf027c713cd3739`, then the operator explicitly approved one exact
+`IMAGE_TO_IMAGE` request for `gpt-image-2`, `1024x1024`, `n=1`, source SHA-256
+`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, quote USD `0.08`, and
+maximum USD `1.00`. Operation `qa02-packy-i2i-20260801-e4503e9-01` made exactly one guarded
+`/v1/images/edits` POST and received a definite HTTP 400 `REJECTED` result after `1118 ms`; it was
+not retried. Raw quota, displayed usage and Token log remained byte-identical, and official receipt
+SHA-256 `0107a287f45e6b74e185ea4669057b9b5264f8617d4cc59facaa1ad8950cb363` records `NO_CHARGE`,
+`billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`. This endpoint/credential/
+model combination is negative edit evidence and must not be used for `FULL_EDIT` or `INPAINT`.
 `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all
 rollout flags remain off.
 
@@ -525,9 +517,34 @@ digest, replacement credential revision `-02`, adapter revision `e4503e9`, and l
 prepared source SHA-256 `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`,
 not the earlier Centos request's `481527...f0b` source; those bytes are not present locally and its
 authorization cannot be reused. The new draft retains all review sentinels, and the offline verifier
-rejects it with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No Packy POST, charge, Registry change, flag
-change, deployment, ingest, or Ozon write occurred. `QA-02` remains `4/5` and overall progress
-remains `32/37`.
+rejects it with `SANDBOX_APPROVAL_SCHEMA_INVALID`. At that preparation checkpoint no Packy POST or
+charge had occurred.
+
+The operator then explicitly approved the exact source-bound request. Fresh pre-call manifest
+SHA-256 `e9cef9fb0a2efeefae62646f6bd32345e1782e28982e02d3db1608402ae172df` and canonical snapshot
+SHA-256 `f653a02f3e9e0d80be45ca5550b5820b4620b5c1dee307eb407d43e38f32f99e` preceded final approval
+SHA-256 `de530a1d7f4258b713e909d91c444ffa0faf3832f42ad7639b9153a4d8438da4`; the final file differs
+from the draft only in statement and approval/expiry timestamps, and official no-key verification
+passed. Operation `qa02-packy-i2i-20260801-e4503e9-01` sent one multipart POST without retry. Its
+v5 report is definite `REJECTED`, `createRequests=1`, HTTP 400, `PROVIDER_REQUEST_FAILED`, no
+Provider request-ID hash and no image. Report SHA-256 is
+`02ab909a2dc4d8cda2858f7291f41ebacb2e3e686f5583419bbdd1d8907a4c3e`; intent SHA-256 is
+`bedb0b0a17e45190de71ba0578b04b950c37eeb7106ff012d70ffc62a04ea8e8`.
+
+Settled GET-only manifest SHA-256
+`b64bb39aa4d55cfb38a4c1ba44a1601cc9de605e0823a1e8b226c9e2c2eaf5b4` proved zero raw-quota
+delta, zero displayed-usage delta and an unchanged empty Token log over a `329871 ms` exclusive
+window. Exact attestation SHA-256
+`3ce448fe0dfc21d25d4862c03aa0d7c2198da9d3676e4fdee8d27f05fae83e70` produced the receipt
+above; exact replay returned identical bytes. A six-record private execution archive has manifest
+SHA-256 `43a2a316ba75055442553d4f8d9983f0b9c0d51878c56bb08e7d014bf2e31eaf`.
+Private run-summary SHA-256 is
+`e1e2c54583fd25f817b6d5021b024503303b15db74fbe259738a07ec9dc1c896`. Credential scans across
+38 retained files and private ACL checks passed. The offline dark-deployment guard passed, and no
+Registry, feature flag, VPS, deployment, ingest or Ozon mutation occurred. The sandbox static
+contract, candidate review contract `27/27`, dark-deployment guard, diff check and full preflight
+`446/0` passed with the two expected local-extension permission warnings.
+`QA-02` remains `4/5` and overall progress remains `32/37`.
 
 ## Next Steps
 
@@ -537,16 +554,14 @@ remains `32/37`.
    the same `ai.centos.hk` Token/model. Its catalogue authentication works, but its edit POST was
    definitively rejected by the Provider authentication layer and settled with no charge.
 3. Never restore or reuse quarantined credential revision
-   `packy-sora-key-rotation-20260801-01`. Replacement revision
-   `packy-sora-key-rotation-20260801-02` passed the official GET-only preflight from clean commit
-   `e4503e9`. The proposed I2I policy and non-approval draft use source SHA `5d2627...6e32`; do not
-   treat the earlier `481527...f0b` Centos source authorization as approval for this request. Either
-   review and explicitly approve every field of the new source-bound draft after retaining fresh
-   pre-call meter snapshots, or retrieve and verify the exact `481527...f0b` bytes and regenerate a
-   different operation/policy/draft set. Do not use `slb-v1.api.fan` for a paid request because its
-   same-origin settlement meters are incomplete. Execute and settle only one approved POST before
-   considering the next; never retry an uncertain POST. Provider price API synchronization is not
-   required. Only after all three positive custom
+   `packy-sora-key-rotation-20260801-01`. Never retry consumed Packy operation
+   `qa02-packy-i2i-20260801-e4503e9-01`, substitute a new ID for the same request, or reuse its
+   approval for `FULL_EDIT`/`INPAINT`; the tested combination definitively rejected the shared edit
+   transport and settled with no charge. Packy must first supply a reviewed request-contract or
+   account/route correction, or the operator must select another genuinely edit-capable Provider,
+   before a new independent policy and approval sequence. Do not use `slb-v1.api.fan` for a paid
+   request because its same-origin settlement meters are incomplete. Provider price API
+   synchronization is not required. Only after all three positive custom
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
