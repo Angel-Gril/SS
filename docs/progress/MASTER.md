@@ -44,8 +44,9 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-Current checkpoint (2026-08-01): `QA-02` remains the only implementation-ready open task at
-Phase 3 `4/5`. Replacement Packy credential revision `packy-sora-key-rotation-20260801-02` passed
+Current checkpoint (2026-08-01): `QA-02` remains the first unresolved dependency at Phase 3 `4/5`
+and is blocked on positive acceptance from an edit-capable Provider. Replacement Packy credential
+revision `packy-sora-key-rotation-20260801-02` passed
 the official fixed seven-GET preflight from clean commit
 `e4503e9253b15eea5540dd436bf027c713cd3739`, then the operator explicitly approved one exact
 `IMAGE_TO_IMAGE` request for `gpt-image-2`, `1024x1024`, `n=1`, source SHA-256
@@ -56,6 +57,9 @@ not retried. Raw quota, displayed usage and Token log remained byte-identical, a
 SHA-256 `0107a287f45e6b74e185ea4669057b9b5264f8617d4cc59facaa1ad8950cb363` records `NO_CHARGE`,
 `billingGate=PASS`, `billedUnits=0`, and `sameRequestRetryAllowed=false`. This endpoint/credential/
 model combination is negative edit evidence and must not be used for `FULL_EDIT` or `INPAINT`.
+Here `createRequests=1` proves that the guarded client sent one HTTP POST and received the 400
+response; it does not mean that Packy created an edit task. The null Provider request ID, unchanged
+meters and empty consumption log are consistent with rejection before an accepted or billed task.
 `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all
 rollout flags remain off.
 
@@ -546,6 +550,17 @@ contract, candidate review contract `27/27`, dark-deployment guard, diff check a
 `446/0` passed with the two expected local-extension permission warnings.
 `QA-02` remains `4/5` and overall progress remains `32/37`.
 
+An offline follow-up now prevents a future HTTP 200 from becoming false-positive QA-02 evidence.
+The single-submit runner fully decodes each returned image, rejects truncated or animated output,
+enforces shared byte/pixel/MIME limits, and requires the decoded dimensions to equal the approved
+request profile before writing a `SUCCEEDED` report. A post-acceptance validation failure remains
+`RECONCILIATION_REQUIRED` and retains the known Provider request-ID hash. The capability-candidate
+reviewer independently requires `requestedSize` to equal the reported width and height. Focused
+runner tests passed `61/61`, candidate review passed `29/29`, and Server/sandbox typechecks,
+targeted lint, the static single-submit contract and diff checks passed. Full preflight passed
+`446/0` with the two expected local-extension permission warnings. This hardening made no Provider
+request or charge and does not change the `32/37` count.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -557,10 +572,14 @@ contract, candidate review contract `27/27`, dark-deployment guard, diff check a
    `packy-sora-key-rotation-20260801-01`. Never retry consumed Packy operation
    `qa02-packy-i2i-20260801-e4503e9-01`, substitute a new ID for the same request, or reuse its
    approval for `FULL_EDIT`/`INPAINT`; the tested combination definitively rejected the shared edit
-   transport and settled with no charge. Packy must first supply a reviewed request-contract or
-   account/route correction, or the operator must select another genuinely edit-capable Provider,
-   before a new independent policy and approval sequence. Do not use `slb-v1.api.fan` for a paid
-   request because its same-origin settlement meters are incomplete. Provider price API
+   transport and settled with no charge. Packy's public instructions require a `sora`-group token,
+   but the retained model/quota GET responses do not expose the token group; the credential revision
+   name alone is not proof of that account setting. Before another Packy request, verify the active
+   token's group in the Packy dashboard or obtain Provider support confirmation for the exact
+   account/edit route and reviewed request contract. Otherwise select another genuinely
+   edit-capable Provider before a new independent policy and approval sequence. Do not use
+   `slb-v1.api.fan` for a paid request because its same-origin settlement meters are incomplete.
+   Provider price API
    synchronization is not required. Only after all three positive custom
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to

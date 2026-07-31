@@ -110,6 +110,31 @@ async function initializeGitRepository(path: string): Promise<string> {
   return revision.stdout.trim().toLowerCase();
 }
 
+async function exactTextToImageSandboxEnvironment(
+  repositoryRoot: string,
+  operationId: string,
+): Promise<NodeJS.ProcessEnv> {
+  const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+  await writeFile(join(repositoryRoot, 'DEPLOYED_COMMIT'), `${revision}\n`);
+  return withSandboxApproval(repositoryRoot, {
+    NODE_ENV: 'sandbox',
+    AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+    AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example',
+    AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+    AI_IMAGE_SANDBOX_MODEL: 'opaque-model-alias',
+    AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+    AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: `admin-config-${operationId}`,
+    AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+    AI_IMAGE_SANDBOX_OPERATION: 'TEXT_TO_IMAGE',
+    AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+    AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example',
+    AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+    AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '8',
+    AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+    AI_IMAGE_SANDBOX_COST_SCALE: '2',
+  });
+}
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -1331,7 +1356,7 @@ describe('single-submit AI image sandbox runner', () => {
     const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
     await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
     const result = await sharp({
-      create: { width: 3, height: 3, channels: 3, background: '#eeeeee' },
+      create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' },
     }).png().toBuffer();
     const operationId = 'sandbox-exact-submit-0001';
     const fetch = vi.fn(async () => new Response(JSON.stringify({
@@ -1432,7 +1457,7 @@ describe('single-submit AI image sandbox runner', () => {
         .png()
         .toBuffer();
       const result = await sharp({
-        create: { width: 3, height: 3, channels: 3, background: '#eeeeee' },
+        create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' },
       })
         .png()
         .toBuffer();
@@ -1551,6 +1576,120 @@ describe('single-submit AI image sandbox runner', () => {
       expect(fetch).toHaveBeenCalledOnce();
     },
   );
+
+  it('rejects a successful Provider response whose dimensions do not match the request profile', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-output-size-'));
+    directories.push(path);
+    const operationId = 'sandbox-output-size-mismatch-0001';
+    const result = await sharp({
+      create: { width: 3, height: 3, channels: 3, background: '#eeeeee' },
+    }).png().toBuffer();
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      id: 'provider-output-size-mismatch-1',
+      data: [{ b64_json: result.toString('base64') }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await exactTextToImageSandboxEnvironment(path, operationId),
+      repositoryRoot: path,
+      outputDirectory: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const report = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(report).toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      createRequests: 1,
+      failureCode: 'SANDBOX_MEDIA_INVALID',
+      requestedSize: '1024x1024',
+      providerRequestIdHash: createHash('sha256')
+        .update('provider-output-size-mismatch-1')
+        .digest('hex'),
+    });
+    expect(report).not.toHaveProperty('imagePath');
+  });
+
+  it('rejects an animated Provider result after exactly one create request', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-output-animation-'));
+    directories.push(path);
+    const operationId = 'sandbox-output-animation-0001';
+    const width = 1024;
+    const height = 1024;
+    const frameBytes = width * height * 3;
+    const animated = await sharp(Buffer.concat([
+      Buffer.alloc(frameBytes, 0),
+      Buffer.alloc(frameBytes, 255),
+    ]), {
+      raw: { width, height: height * 2, pageHeight: height, channels: 3 },
+    }).webp({ loop: 0, delay: [100, 100] }).toBuffer();
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (String(init?.method || 'GET').toUpperCase() === 'POST') {
+        return new Response(JSON.stringify({
+          id: 'provider-output-animation-1',
+          data: [{ url: 'https://result.example/animated.webp' }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(animated, {
+        status: 200,
+        headers: { 'content-type': 'image/webp' },
+      });
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await exactTextToImageSandboxEnvironment(path, operationId),
+      repositoryRoot: path,
+      outputDirectory: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const report = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(report).toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      createRequests: 1,
+      failureCode: 'SANDBOX_MEDIA_INVALID',
+      providerRequestIdHash: createHash('sha256')
+        .update('provider-output-animation-1')
+        .digest('hex'),
+    });
+  });
+
+  it('rejects Provider output that has metadata but cannot be decoded completely', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-output-truncated-'));
+    directories.push(path);
+    const operationId = 'sandbox-output-truncated-0001';
+    const complete = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' },
+    }).png().toBuffer();
+    const truncated = complete.subarray(0, complete.length - 20);
+    expect(await sharp(truncated).metadata()).toMatchObject({ width: 1024, height: 1024 });
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      id: 'provider-output-truncated-1',
+      data: [{ b64_json: truncated.toString('base64') }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await exactTextToImageSandboxEnvironment(path, operationId),
+      repositoryRoot: path,
+      outputDirectory: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const report = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(report).toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      createRequests: 1,
+      failureCode: 'SANDBOX_MEDIA_INVALID',
+      providerRequestIdHash: createHash('sha256')
+        .update('provider-output-truncated-1')
+        .digest('hex'),
+    });
+  });
 
   it('keeps exact money in a v5 reconciliation report after the guarded POST dispatches', async () => {
     const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-exact-failure-'));
@@ -1749,8 +1888,8 @@ describe('single-submit AI image sandbox runner', () => {
     }).png().toBuffer();
     const result = await sharp({
       create: {
-        width: 3,
-        height: 3,
+        width: 1024,
+        height: 1024,
         channels: 3,
         background: { r: 240, g: 240, b: 240 },
       },
@@ -2016,7 +2155,7 @@ describe('single-submit AI image sandbox runner', () => {
     const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
     await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
     const result = await sharp({
-      create: { width: 4, height: 6, channels: 3, background: '#eeeeee' },
+      create: { width: 1024, height: 1536, channels: 3, background: '#eeeeee' },
     }).png().toBuffer();
     const fetch = vi.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
@@ -2069,7 +2208,7 @@ describe('single-submit AI image sandbox runner', () => {
       255, 255, 255, 0, 255, 255, 255, 255,
     ]), { raw: { width: 2, height: 3, channels: 4 } }).png().toBuffer();
     const result = await sharp({
-      create: { width: 4, height: 6, channels: 3, background: '#ddeeff' },
+      create: { width: 1024, height: 1536, channels: 3, background: '#ddeeff' },
     }).png().toBuffer();
     await writeFile(join(path, 'source.png'), source);
     await writeFile(join(path, 'mask.png'), mask);

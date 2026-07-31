@@ -445,6 +445,7 @@ function validateReport(report, entry, manifest, reportSha256) {
     !Number.isInteger(report.height) ||
     report.height < 1 ||
     report.height > 4096 ||
+    report.requestedSize !== `${report.width}x${report.height}` ||
     !Number.isInteger(report.bytes) ||
     report.bytes < 1 ||
     report.bytes > MAX_IMAGE_BYTES ||

@@ -495,3 +495,18 @@ Progress: 4/5 tasks.
   Registry, rollout, deployment, ingest or Ozon mutation occurred. The static sandbox contract,
   candidate review `27/27`, dark-deployment guard and full preflight `446/0` passed; preflight kept
   only the two expected local-extension permission warnings.
+- `createRequests=1` in the rejected Packy report means that one guarded HTTP POST crossed the
+  dispatch boundary and received HTTP 400; it does not mean that the Provider created an edit task.
+  The null Provider request ID, unchanged meters and empty consumption log are consistent with no
+  accepted or billed task. Packy's public instructions require a `sora`-group token, while the
+  retained model/quota responses do not expose that group. A future Packy attempt therefore needs
+  dashboard or Provider-support confirmation of the exact token group and edit route before a new
+  policy and approval; the consumed request must not be retried.
+- Offline evidence hardening now fully decodes sandbox output before success, rejects truncated and
+  animated media, enforces shared byte/pixel/MIME limits, and requires exact approved dimensions.
+  Post-acceptance validation failure remains `RECONCILIATION_REQUIRED` and keeps the known Provider
+  request-ID hash. Candidate review separately binds `requestedSize` to reported width and height.
+  Focused runner tests passed `61/61`, candidate review passed `29/29`, and Server/sandbox
+  typechecks, targeted lint, the static contract and diff checks passed. Full preflight passed
+  `446/0` with the two expected local-extension permission warnings. No Provider call or charge
+  occurred, and counts remain `4/5` and `32/37`.

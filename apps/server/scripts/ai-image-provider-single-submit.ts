@@ -12,6 +12,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent, fetch as undiciFetch, interceptors } from 'undici';
 import sharp from 'sharp';
+import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
 import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
@@ -19,6 +20,7 @@ import {
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
 import {
+  AiImageSandboxMediaError,
   assertAiImageSandboxEditMediaLimit,
   assertMeaningfulAiImageSandboxMask,
   loadPinnedAiImageSandboxMedia,
@@ -248,6 +250,80 @@ function requiredAdapterRevision(environment: NodeJS.ProcessEnv) {
 
 function sha256(value: Buffer | string) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+async function inspectProviderOutput(
+  image: { buffer: Buffer; mimeType: string },
+  expected: { width: number; height: number },
+) {
+  if (
+    !Buffer.isBuffer(image.buffer)
+    || image.buffer.byteLength < 1
+    || image.buffer.byteLength > AI_IMAGE_WORKBENCH_LIMITS.maxResultBytes
+  ) {
+    throw new AiImageSandboxMediaError('Provider output must be a bounded image buffer');
+  }
+
+  let metadata: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
+  try {
+    metadata = await sharp(image.buffer, {
+      animated: true,
+      failOn: 'warning',
+      limitInputPixels: AI_IMAGE_WORKBENCH_LIMITS.maxPixels,
+    }).metadata();
+  } catch {
+    throw new AiImageSandboxMediaError('Provider output metadata could not be decoded safely');
+  }
+  const mimeType = metadata.format === 'png' ? 'image/png'
+    : metadata.format === 'jpeg' ? 'image/jpeg'
+      : metadata.format === 'webp' ? 'image/webp'
+        : null;
+  if (
+    !mimeType
+    || mimeType !== image.mimeType
+    || !Number.isSafeInteger(metadata.width)
+    || !Number.isSafeInteger(metadata.height)
+    || !metadata.width
+    || !metadata.height
+    || metadata.width > AI_IMAGE_WORKBENCH_LIMITS.maxDimension
+    || metadata.height > AI_IMAGE_WORKBENCH_LIMITS.maxDimension
+    || metadata.width * metadata.height > AI_IMAGE_WORKBENCH_LIMITS.maxPixels
+    || Number(metadata.pages || 1) !== 1
+  ) {
+    throw new AiImageSandboxMediaError(
+      'Provider output must be one supported single-frame image matching its declared MIME type',
+    );
+  }
+
+  let decoded: Awaited<ReturnType<ReturnType<typeof sharp>['toBuffer']>>;
+  try {
+    decoded = await sharp(image.buffer, {
+      animated: false,
+      failOn: 'warning',
+      limitInputPixels: AI_IMAGE_WORKBENCH_LIMITS.maxPixels,
+    })
+      .autoOrient()
+      .toColourspace('srgb')
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+  } catch {
+    throw new AiImageSandboxMediaError('Provider output could not be decoded completely');
+  }
+  if (
+    decoded.info.width !== expected.width
+    || decoded.info.height !== expected.height
+    || decoded.info.channels !== 4
+  ) {
+    throw new AiImageSandboxMediaError(
+      `Provider output dimensions must equal ${expected.width}x${expected.height}`,
+    );
+  }
+  return {
+    mimeType,
+    width: decoded.info.width,
+    height: decoded.info.height,
+  };
 }
 
 async function tolerateWindowsMode(operation: () => Promise<unknown>) {
@@ -741,12 +817,9 @@ export async function runAiImageProviderSingleSubmit(
   if (result.images.length !== 1) throw new Error(`Expected exactly one image, received ${result.images.length}`);
 
   const image = result.images[0]!;
-  const metadata = await sharp(image.buffer).metadata();
-  if (!metadata.width || !metadata.height || metadata.width > 4096 || metadata.height > 4096) {
-    throw new Error('Provider returned invalid image dimensions');
-  }
-  const extension = image.mimeType === 'image/jpeg' ? 'jpg'
-    : image.mimeType === 'image/webp' ? 'webp' : 'png';
+  const inspectedOutput = await inspectProviderOutput(image, profile);
+  const extension = inspectedOutput.mimeType === 'image/jpeg' ? 'jpg'
+    : inspectedOutput.mimeType === 'image/webp' ? 'webp' : 'png';
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const imagePath = resolve(outputDirectory, `${stamp}.${extension}`);
   await writePrivateFile(imagePath, image.buffer);
@@ -771,9 +844,9 @@ export async function runAiImageProviderSingleSubmit(
     requestedSize: outputSize,
     createRequests,
     imageCount: 1,
-    mimeType: image.mimeType,
-    width: metadata.width,
-    height: metadata.height,
+    mimeType: inspectedOutput.mimeType,
+    width: inspectedOutput.width,
+    height: inspectedOutput.height,
     bytes: image.buffer.byteLength,
     sha256: sha256(image.buffer),
     providerRequestIdHash: result.providerJobId
@@ -795,6 +868,9 @@ export async function runAiImageProviderSingleSubmit(
     if (!reportWritten) {
       const createRequests = fetchOnce.getCreateRequests();
       const evidence = fetchOnce.getEvidence();
+      const acceptedRequestIdHash = result?.providerJobId
+        ? sha256(result.providerJobId)
+        : evidence.providerRequestIdHash;
       const completedAtMs = Math.max(Date.now(), startedAtMs);
       const report = {
         schemaVersion: claim.intent.schemaVersion === 3 ? 5 : 4,
@@ -818,7 +894,7 @@ export async function runAiImageProviderSingleSubmit(
         maskSha256: requestContract.maskSha256,
         requestedSize: outputSize,
         createRequests,
-        providerRequestIdHash: failureRequestIdHash(error, evidence.providerRequestIdHash),
+        providerRequestIdHash: failureRequestIdHash(error, acceptedRequestIdHash),
         usage: null,
         failureCode: safeFailureCode(error),
         startedAt,

@@ -365,6 +365,27 @@ test('rejects an operation report reused under another operation', () => {
   );
 });
 
+for (const [label, requestedSize] of [
+  ['width', '512x1024'],
+  ['height', '1024x512'],
+]) {
+  test(`rejects requested size with a mismatched ${label}`, () => {
+    withBundle(
+      {
+        mutateReport(reports) {
+          reports[0].requestedSize = requestedSize;
+        },
+      },
+      ({ manifestPath }) => {
+        assert.throws(
+          () => reviewAiImageCapabilityCandidate(manifestPath),
+          /ARTIFACT_IDENTITY_INVALID/u,
+        );
+      },
+    );
+  });
+}
+
 test('rejects billing that is not settled within the approved limit', () => {
   withBundle(
     {

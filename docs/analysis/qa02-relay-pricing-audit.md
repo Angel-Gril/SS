@@ -334,6 +334,8 @@ Operation `qa02-packy-i2i-20260801-e4503e9-01` made exactly one multipart `/v1/i
 and was not retried. The Provider returned HTTP 400 after `1118 ms`; authoritative v5 report
 SHA-256 `02ab909a2dc4d8cda2858f7291f41ebacb2e3e686f5583419bbdd1d8907a4c3e` records `REJECTED`,
 `createRequests=1`, `failureCode=PROVIDER_REQUEST_FAILED`, no Provider request-ID hash, and no image.
+The request count proves HTTP dispatch and response only; it is not evidence that Packy created an
+edit task. The zero consumption log is therefore consistent with this rejected, unbilled outcome.
 
 The settled GET-only capture had manifest SHA-256
 `b64bb39aa4d55cfb38a4c1ba44a1601cc9de605e0823a1e8b226c9e2c2eaf5b4`. Raw quota and displayed
@@ -349,6 +351,17 @@ The six-file execution archive manifest SHA-256 is
 SHA-256 is `e1e2c54583fd25f817b6d5021b024503303b15db74fbe259738a07ec9dc1c896`. Exact and generic
 credential scans across 38 retained files were clean; private ACL checks and the offline dark
 deployment guard passed.
+
+Packy's public instructions require a `sora`-group token. The retained authenticated GET evidence
+shows token name/quota and model visibility but does not expose the token group, so the non-secret
+credential revision label cannot independently prove that account setting. A future Packy test
+must first obtain dashboard or Provider-support confirmation of the exact group and edit route.
+
+The follow-up offline implementation also closes a false-positive evidence path: returned images
+must fully decode as one bounded frame and exactly match the approved dimensions before the runner
+writes `SUCCEEDED`; candidate review independently cross-checks `requestedSize` against reported
+width and height. A post-acceptance media failure remains reconciliation-required and preserves the
+known Provider request-ID hash.
 
 This is negative Provider evidence: public Packy documentation and model visibility did not produce
 an accepted edit request for this account/model/transport. Do not retry the consumed Operation ID or

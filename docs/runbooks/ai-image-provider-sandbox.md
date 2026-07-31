@@ -355,10 +355,23 @@ Quota, displayed usage and Token log were unchanged. Receipt v3 SHA-256
 `0107a287f45e6b74e185ea4669057b9b5264f8617d4cc59facaa1ad8950cb363` records `NO_CHARGE`,
 `billingGate=PASS`, zero billed units and `sameRequestRetryAllowed=false`; replay was byte-identical.
 
+`createRequests=1` records one HTTP dispatch, not a successfully created Provider edit task. HTTP
+400 plus a null Provider request ID and zero billing/log deltas means this run produced no accepted
+or billed edit operation. Packy's public instructions require a `sora`-group token, but the retained
+model and quota GET responses do not expose the active token group. Before any newly approved Packy
+request, confirm the group in the dashboard or obtain Provider support confirmation for the exact
+account, edit route and multipart contract.
+
 Never retry this Operation ID or the same request fingerprint. Do not infer edit support from Packy
 documentation, catalogue visibility or GET-only metering, and do not reuse this approval for
 `FULL_EDIT` or `INPAINT`. Require a Provider-confirmed contract/account correction or select a new
 edit-capable endpoint, then begin a new operation-specific price/approval/evidence sequence.
+
+Successful sandbox output must be fully decoded before it can become capability evidence. Reject
+truncated or animated media, declared/decoded MIME mismatches, shared byte/pixel limit violations,
+and any dimensions different from the approved request profile. If the Provider already returned
+HTTP 200 or an acceptance identity, classify a later validation failure as
+`RECONCILIATION_REQUIRED` and retain only the request-ID hash for settlement.
 
 The international database may still contain a legacy `openai-images` selection with a third-party
 Base URL. Current admin validation and paid runtime contracts reject that identity: official OpenAI
