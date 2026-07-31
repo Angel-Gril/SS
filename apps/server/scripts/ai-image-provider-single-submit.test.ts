@@ -1039,6 +1039,228 @@ describe('single-submit AI image sandbox runner', () => {
     },
   );
 
+  it('submits the exact Packy edit profile as a separately bound multipart request', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-packy-profile-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const source = await sharp({
+      create: { width: 2, height: 2, channels: 4, background: '#ffffff' },
+    }).png().toBuffer();
+    const result = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' },
+    }).png().toBuffer();
+    await writeFile(join(path, 'source.png'), source, { mode: 0o600 });
+    const sourceSha256 = createHash('sha256').update(source).digest('hex');
+    const operationId = 'sandbox-packy-profile-image-to-image-0001';
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(String(input)).toBe('https://www.packyapi.ai/v1/images/edits');
+      const form = init?.body as FormData;
+      expect(form.get('quality')).toBe('high');
+      expect(form.get('output_format')).toBe('png');
+      expect(form.get('response_format')).toBe('url');
+      expect(form.has('input_fidelity')).toBe(false);
+      return new Response(JSON.stringify({
+        id: 'packy-profile-success-1',
+        data: [{ b64_json: result.toString('base64') }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    const report = await runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'packy-sora-test-revision',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+        AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '8',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+        AI_IMAGE_SANDBOX_SOURCE_PATH: join(path, 'source.png'),
+        AI_IMAGE_SANDBOX_SOURCE_SHA256: sourceSha256,
+      }),
+      repositoryRoot: path,
+      outputDirectory: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    });
+
+    expect(report).toMatchObject({
+      state: 'SUCCEEDED',
+      requestProfile: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+      operation: 'IMAGE_TO_IMAGE',
+      width: 1024,
+      height: 1024,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('rejects the Packy edit profile under a different model before media, approval, DNS, or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-packy-identity-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'other-model',
+        AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-packy-wrong-model-0001',
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'packy-sora-test-revision',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+      },
+      repositoryRoot: path,
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_REQUEST_PROFILE_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects the Packy Provider identity under the default request profile before media or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-packy-profile-downgrade-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-packy-profile-downgrade-0001',
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'packy-sora-test-revision',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+      },
+      repositoryRoot: path,
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_REQUEST_PROFILE_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects legacy cents for the Packy profile before media, approval, DNS, or dispatch', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-packy-legacy-money-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const resolveDns = vi.fn();
+    const fetch = vi.fn();
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_OPERATION_ID: 'sandbox-packy-legacy-money-0001',
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'packy-sora-test-revision',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+        AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: '8',
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: '100',
+      },
+      repositoryRoot: path,
+      resolveDns,
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_COST_CONFIG_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-PNG Packy result as reconciliation-required evidence', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-packy-output-format-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const source = await sharp({
+      create: { width: 2, height: 2, channels: 4, background: '#ffffff' },
+    }).png().toBuffer();
+    const jpegResult = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#eeeeee' },
+    }).jpeg().toBuffer();
+    await writeFile(join(path, 'source.png'), source, { mode: 0o600 });
+    const operationId = 'sandbox-packy-non-png-result-0001';
+    const providerRequestId = 'packy-non-png-result-1';
+    const resultUrl = 'https://cdn.packyapi.ai/result.jpg';
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(init?.method || 'GET').toUpperCase() === 'POST') {
+        return new Response(JSON.stringify({
+          id: providerRequestId,
+          data: [{ url: resultUrl }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      expect(String(input)).toBe(resultUrl);
+      return new Response(jpegResult, {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      });
+    });
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'packy-sora-test-revision',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+        AI_IMAGE_SANDBOX_CURRENCY: 'USD',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '8',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+        AI_IMAGE_SANDBOX_SOURCE_PATH: join(path, 'source.png'),
+        AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
+      }),
+      repositoryRoot: path,
+      outputDirectory: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({ code: 'SANDBOX_MEDIA_INVALID' });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const report = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(report).toMatchObject({
+      schemaVersion: 5,
+      state: 'RECONCILIATION_REQUIRED',
+      createRequests: 1,
+      failureCode: 'SANDBOX_MEDIA_INVALID',
+      providerRequestIdHash: createHash('sha256').update(providerRequestId).digest('hex'),
+    });
+  });
+
   it('rechecks approval expiry at submit after an earlier offline preflight passed', async () => {
     const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-approval-recheck-'));
     directories.push(path);

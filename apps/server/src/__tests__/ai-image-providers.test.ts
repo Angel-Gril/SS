@@ -5,6 +5,7 @@ import {
   createDashScopeWanxProvider,
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
+  createPackyGptImage2EditProvider,
   isOpenAiCompatibleImageEditSizeSupported,
   testAiImageProviderConnection,
   validateAiImageProviderUrl,
@@ -108,6 +109,89 @@ describe('AI image provider adapters', () => {
     expect(form.get('image')).toMatchObject({ name: 'image-1.png', type: 'image/png', size: png.length });
     expect(form.has('image[]')).toBe(false);
     expect(form.has('mask')).toBe(false);
+  });
+
+  it('submits the isolated Packy GPT-Image-2 multipart dialect with exact documented fields', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: 'packy-edit-response-1',
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const provider = createPackyGptImage2EditProvider({
+      baseUrl: 'https://www.packyapi.ai/v1',
+      apiKey: 'packy-secret',
+      model: 'gpt-image-2',
+      fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.edit({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'Preserve the product and replace the background.',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      images: [{ buffer: png, mimeType: 'image/png' }],
+    })).resolves.toMatchObject({ providerJobId: 'packy-edit-response-1' });
+
+    const form = fetch.mock.calls[0]?.[1]?.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect([...new Set([...form.keys()])].sort()).toEqual([
+      'image',
+      'model',
+      'n',
+      'output_format',
+      'prompt',
+      'quality',
+      'response_format',
+      'size',
+    ]);
+    expect(form.get('model')).toBe('gpt-image-2');
+    expect(form.get('n')).toBe('1');
+    expect(form.get('size')).toBe('1024x1024');
+    expect(form.get('quality')).toBe('high');
+    expect(form.get('output_format')).toBe('png');
+    expect(form.get('response_format')).toBe('url');
+    expect(form.has('input_fidelity')).toBe(false);
+    expect(form.getAll('image')).toHaveLength(1);
+  });
+
+  it('rejects a Packy edit adapter with a different API base or default model', () => {
+    expect(() => createPackyGptImage2EditProvider({
+      baseUrl: 'https://relay.example/v1',
+      apiKey: 'packy-secret',
+      model: 'gpt-image-2',
+    })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
+
+    expect(() => createPackyGptImage2EditProvider({
+      baseUrl: 'https://www.packyapi.ai/v1',
+      apiKey: 'packy-secret',
+      model: 'other-model',
+    })).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }));
+  });
+
+  it('rejects a Packy request model override before Provider dispatch', async () => {
+    const fetch = vi.fn();
+    const provider = createPackyGptImage2EditProvider({
+      baseUrl: 'https://www.packyapi.ai/v1',
+      apiKey: 'packy-secret',
+      model: 'gpt-image-2',
+      fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.edit({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'Preserve the product and replace the background.',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      model: 'other-model',
+      images: [{ buffer: png, mimeType: 'image/png' }],
+    })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_OPERATION',
+      providerSubmissionRejected: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('runs the optional dispatch fence immediately before the OpenAI edit fetch', async () => {

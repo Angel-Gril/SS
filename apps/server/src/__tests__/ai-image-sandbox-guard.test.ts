@@ -5,9 +5,15 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   claimAiImageSandboxOperation,
+  createAiImageSandboxRequestFingerprint,
   createAiImageSandboxEditFetchGuard,
   createAiImageSandboxFetchGuard,
 } from '../services/ai-image-sandbox-guard.js';
+import {
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  aiImageEditMultipartFields,
+} from '../services/ai-image-packy-edit-profile.js';
 
 const directories: string[] = [];
 const SANDBOX_NOW = new Date('2030-01-01T00:10:00.000Z');
@@ -197,15 +203,43 @@ describe('single-submit AI image sandbox guard', () => {
     });
   });
 
-  it('blocks replay when only audit profile metadata changes', async () => {
+  it('rejects an unknown request profile before replay identity is evaluated', async () => {
     const path = await directory();
     await claimAiImageSandboxOperation(input(path, 'sandbox-profile-first-0001'));
     const replay = input(path, 'sandbox-profile-replay-0002');
     replay.request.requestProfile = 'ALTERNATE_PROFILE_V1';
 
     await expect(claimAiImageSandboxOperation(replay)).rejects.toMatchObject({
-      code: 'SANDBOX_REQUEST_REPLAY',
+      code: 'INVALID_SANDBOX_REQUEST',
     });
+  });
+
+  it('binds the Packy multipart dialect and fields into a distinct request fingerprint', () => {
+    const common = {
+      n: 1,
+      size: '1024x1024',
+      promptSha256: '4'.repeat(64),
+      sourceSha256: ['5'.repeat(64)],
+      maskSha256: null,
+    };
+    const defaultFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256: '3'.repeat(64),
+      model: 'gpt-image-2',
+      request: common,
+    });
+    const packyFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256: '3'.repeat(64),
+      model: 'gpt-image-2',
+      request: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+        multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+        multipartFields: aiImageEditMultipartFields(AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT),
+        ...common,
+      },
+    });
+
+    expect(packyFingerprint).not.toBe(defaultFingerprint);
   });
 
   it('blocks the same Provider request after credential or adapter revision changes', async () => {
@@ -503,6 +537,107 @@ describe('single-submit AI image sandbox guard', () => {
       state: 'ACCEPTED',
       providerHttpStatus: 200,
     });
+  });
+
+  it('accepts only the exact Packy GPT-Image-2 multipart dialect fields', async () => {
+    const prompt = 'Preserve the mug and replace its background.';
+    const source = Buffer.from('89504e470d0a1a0a', 'hex');
+    let providerCalls = 0;
+    const guarded = createAiImageSandboxEditFetchGuard({
+      contract: {
+        endpoint: 'https://www.packyapi.ai/v1/images/edits',
+        operation: 'IMAGE_TO_IMAGE',
+        model: 'gpt-image-2',
+        promptSha256: createHash('sha256').update(prompt).digest('hex'),
+        size: '1024x1024',
+        n: 1,
+        sourceSha256: [createHash('sha256').update(source).digest('hex')],
+        maskSha256: null,
+        multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+      },
+      validateUrl: async (url) => url,
+      beforeCreate: () => undefined,
+      fetch: async () => {
+        providerCalls += 1;
+        return new Response('{}', { status: 200 });
+      },
+    });
+    const form = new FormData();
+    form.append('model', 'gpt-image-2');
+    form.append('prompt', prompt);
+    form.append('n', '1');
+    form.append('size', '1024x1024');
+    form.append('quality', 'high');
+    form.append('output_format', 'png');
+    form.append('response_format', 'url');
+    form.append('image', new Blob([source], { type: 'image/png' }), 'source.png');
+
+    await guarded.fetch('https://www.packyapi.ai/v1/images/edits', {
+      method: 'POST',
+      body: form,
+    });
+    expect(providerCalls).toBe(1);
+
+    const missingFieldGuard = createAiImageSandboxEditFetchGuard({
+      contract: {
+        endpoint: 'https://www.packyapi.ai/v1/images/edits',
+        operation: 'IMAGE_TO_IMAGE',
+        model: 'gpt-image-2',
+        promptSha256: createHash('sha256').update(prompt).digest('hex'),
+        size: '1024x1024',
+        n: 1,
+        sourceSha256: [createHash('sha256').update(source).digest('hex')],
+        maskSha256: null,
+        multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+      },
+      validateUrl: async (url) => url,
+      beforeCreate: () => undefined,
+      fetch: async () => new Response('{}', { status: 200 }),
+    });
+    form.delete('quality');
+    await expect(missingFieldGuard.fetch('https://www.packyapi.ai/v1/images/edits', {
+      method: 'POST',
+      body: form,
+    })).rejects.toThrow('unexpected multipart contract');
+    expect(missingFieldGuard.getCreateRequests()).toBe(0);
+  });
+
+  it('rejects Packy identity/dialect mixing and unknown dialects at guard construction', () => {
+    const contract = {
+      endpoint: 'https://www.packyapi.ai/v1/images/edits',
+      operation: 'IMAGE_TO_IMAGE' as const,
+      model: 'gpt-image-2',
+      promptSha256: '4'.repeat(64),
+      size: '1024x1024',
+      n: 1 as const,
+      sourceSha256: ['5'.repeat(64)],
+      maskSha256: null,
+    };
+    const options = {
+      validateUrl: async (url: string) => url,
+      beforeCreate: () => undefined,
+      fetch: async () => new Response('{}', { status: 200 }),
+    };
+
+    expect(() => createAiImageSandboxEditFetchGuard({
+      contract,
+      ...options,
+    })).toThrow('selected together');
+    expect(() => createAiImageSandboxEditFetchGuard({
+      contract: {
+        ...contract,
+        endpoint: 'https://relay.example/v1/images/edits',
+        multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+      },
+      ...options,
+    })).toThrow('selected together');
+    expect(() => createAiImageSandboxEditFetchGuard({
+      contract: {
+        ...contract,
+        multipartDialect: 'UNKNOWN_DIALECT' as never,
+      },
+      ...options,
+    })).toThrow('Unsupported AI image edit multipart dialect');
   });
 
   it('blocks an edit before the Provider POST when the approval recheck fails', async () => {

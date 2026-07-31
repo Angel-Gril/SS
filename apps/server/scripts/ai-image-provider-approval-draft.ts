@@ -17,6 +17,10 @@ import {
 } from '../src/services/ai-image-sandbox-media.js';
 import { normalizeOpenAiImagesApiBase } from '../src/services/ai-image-openai-url.js';
 import {
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  isAiImagePackyEditProviderIdentity,
+} from '../src/services/ai-image-packy-edit-profile.js';
+import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
@@ -43,6 +47,7 @@ const OPERATIONS = new Set<AiImageSandboxApprovalDraftOperation>([
 const REQUEST_PROFILES = new Set([
   'OPENAI_SQUARE_SINGLE_V1',
   'OZON_PORTRAIT_SINGLE_V1',
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
 ]);
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_API_KEY',
@@ -63,6 +68,7 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
+  'apps/server/src/services/ai-image-packy-edit-profile.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
@@ -764,13 +770,34 @@ export async function runAiImageProviderApprovalDraft(
     environment,
     253,
   ).toLowerCase();
+  const baseUrl = requiredBoundedText('AI_IMAGE_SANDBOX_BASE_URL', environment, 2048);
+  const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
   const endpoint = canonicalEndpoint({
-    baseUrl: requiredBoundedText('AI_IMAGE_SANDBOX_BASE_URL', environment, 2048),
+    baseUrl,
     expectedHost,
     operation,
   });
   const model = requiredBoundedText('AI_IMAGE_SANDBOX_MODEL', environment, 200);
+  const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
+    apiBase,
+    endpoint,
+    expectedHost,
+    model,
+    operation,
+  });
+  if ((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) !== packyProviderIdentity) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Packy edit Provider identity and request profile must be selected together',
+    );
+  }
   const exactCosts = exactDraftCosts(environment);
+  if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE && !exactCosts) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Packy edit profile requires exact-money evidence',
+    );
+  }
   const legacyCosts = exactCosts ? null : {
     quotedCostCents: requiredCost('AI_IMAGE_SANDBOX_QUOTED_COST_CENTS', environment),
     maximumCostCents: requiredCost('AI_IMAGE_SANDBOX_MAX_COST_CENTS', environment),

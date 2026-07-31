@@ -67,6 +67,7 @@ describe('AI image Provider billing finalizer command', () => {
         'apps/server/src/services/ai-image-sandbox-money.ts',
         'apps/server/src/services/ai-image-sandbox-code-revision.ts',
         'apps/server/src/services/ai-image-sandbox-guard.ts',
+        'apps/server/src/services/ai-image-packy-edit-profile.ts',
       ],
       undefined,
     );

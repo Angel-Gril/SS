@@ -60,6 +60,10 @@ model combination is negative edit evidence and must not be used for `FULL_EDIT`
 Here `createRequests=1` proves that the guarded client sent one HTTP POST and received the 400
 response; it does not mean that Packy created an edit task. The null Provider request ID, unchanged
 meters and empty consumption log are consistent with rejection before an accepted or billed task.
+The operator has now confirmed through MOSS that the active credential belongs to the Sora group.
+That closes the token-group prerequisite as an operator assertion, but the edit route remains
+unverified. Offline code now isolates Packy's documented edit multipart contract under
+`PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1`; it has not been sent and has incurred no charge.
 `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all
 rollout flags remain off.
 
@@ -561,6 +565,17 @@ targeted lint, the static single-submit contract and diff checks passed. Full pr
 `446/0` with the two expected local-extension permission warnings. This hardening made no Provider
 request or charge and does not change the `32/37` count.
 
+The documented Packy follow-up is now a separate immutable request profile rather than a relabeled
+retry. It requires exact Packy API Base/host/endpoint/model identity, edit-only operation,
+`1024x1024`, `n=1`, `quality=high`, `output_format=png`, `response_format=url`, and PNG output;
+optional `input_fidelity` stays omitted. Profile and Provider identity are bidirectionally bound,
+legacy cents evidence is rejected, and the request fingerprint includes the exact multipart
+dialect and fields while historical non-Packy fingerprints remain byte-compatible. Provider,
+approval, guard, runner and billing focused tests passed `275` with two skips; Server/sandbox
+typechecks and the static single-submit contract passed. Full preflight passed `446/0` with the two
+expected local-extension permission warnings. No Provider request, charge, Registry, deployment,
+flag, ingest or Ozon mutation occurred, so counts remain `4/5` and `32/37`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -572,15 +587,13 @@ request or charge and does not change the `32/37` count.
    `packy-sora-key-rotation-20260801-01`. Never retry consumed Packy operation
    `qa02-packy-i2i-20260801-e4503e9-01`, substitute a new ID for the same request, or reuse its
    approval for `FULL_EDIT`/`INPAINT`; the tested combination definitively rejected the shared edit
-   transport and settled with no charge. Packy's public instructions require a `sora`-group token,
-   but the retained model/quota GET responses do not expose the token group; the credential revision
-   name alone is not proof of that account setting. Before another Packy request, verify the active
-   token's group in the Packy dashboard or obtain Provider support confirmation for the exact
-   account/edit route and reviewed request contract. Otherwise select another genuinely
-   edit-capable Provider before a new independent policy and approval sequence. Do not use
+   transport and settled with no charge. The operator has confirmed through MOSS that the active
+   credential is in the Sora group, but the retained evidence still does not prove that this account
+   accepts the edit route. Any further Packy test must use the new documented profile from a clean
+   implementation commit, a new Operation ID, a new private policy and non-approval draft, fresh
+   pre-call meters, and a new explicit source-bound quote and maximum-cost approval. Do not use
    `slb-v1.api.fan` for a paid request because its same-origin settlement meters are incomplete.
-   Provider price API
-   synchronization is not required. Only after all three positive custom
+   Provider price API synchronization is not required. Only after all three positive custom
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.

@@ -34,6 +34,10 @@ const imageProviders = fs.readFileSync(
   'apps/server/src/services/ai-image-providers.ts',
   'utf8',
 );
+const packyEditProfile = fs.readFileSync(
+  'apps/server/src/services/ai-image-packy-edit-profile.ts',
+  'utf8',
+);
 const billingFinalizer = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-billing-finalize.ts',
   'utf8',
@@ -243,6 +247,16 @@ assert.match(openAiImageUrl, /AiImageJobError/u);
 assert.match(imageProviders, /from '.\/ai-image-job-error\.js'/u);
 assert.match(imageProviders, /import type \{[\s\S]*from '.\/ai-image-jobs\.js'/u);
 assert.match(imageProviders, /AI_IMAGE_WORKBENCH_LIMITS\.maxRequestBytes/u);
+assert.match(source, /ai-image-packy-edit-profile\.ts/u);
+assert.match(approvalDraft, /ai-image-packy-edit-profile\.ts/u);
+assert.match(billingFinalizer, /ai-image-packy-edit-profile\.ts/u);
+assert.match(source, /createPackyGptImage2EditProvider/u);
+assert.match(guard, /AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT/u);
+assert.match(packyEditProfile, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
+assert.match(packyEditProfile, /https:\/\/www\.packyapi\.ai\/v1\/images\/edits/u);
+assert.match(packyEditProfile, /quality:\s*'high'/u);
+assert.match(packyEditProfile, /output_format:\s*'png'/u);
+assert.match(packyEditProfile, /response_format:\s*'url'/u);
 assert.match(billingFinalizer, /SANDBOX_BILLING_UNSAFE_ENV/u);
 assert.match(billingFinalizer, /AI_IMAGE_TRANSLATION_SANDBOX_API_KEY/u);
 assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
@@ -359,10 +373,15 @@ assert.match(runbook, /AI_IMAGE_SANDBOX_MAX_COST_AMOUNT/u);
 assert.match(runbook, /AI_IMAGE_SANDBOX_COST_SCALE/u);
 assert.match(runbook, /`schemaVersion: 5` submit report/u);
 assert.match(runbook, /PROVIDER_DEFAULT_OMITTED/u);
+assert.match(runbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
+assert.match(runbook, /quality=high/u);
+assert.match(runbook, /output_format=png/u);
+assert.match(runbook, /response_format=url/u);
 assert.match(runbook, /failure-diagnostic\.json/u);
 assert.match(runbook, /report-bound failure diagnostic sidecar/u);
 assert.match(runbook, /qa02-centos-i2i-20260730-094857-01/u);
 assert.match(approvalRunbook, /PROVIDER_DEFAULT_OMITTED/u);
+assert.match(approvalRunbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(approvalRunbook, /qa02-centos-i2i-20260730-094857-01/u);
 assert.match(approvalRunbook, /ai\.centos\.hk\/v1/u);
 assert.match(approvalRunbook, /report-bound failure diagnostic sidecar/u);
@@ -428,7 +447,7 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(approvalDraft, /from ['"].*ai-image-providers\.js/u);
 assert.doesNotMatch(
-  openAiImageUrl + aiImageJobError + sandboxMedia,
+  openAiImageUrl + aiImageJobError + sandboxMedia + packyEditProfile,
   /\bfetch\b|\blookup\b|ipaddr|ai-image-(?:providers|jobs)|node:(?:http|https|net|tls|dns)/iu,
 );
 

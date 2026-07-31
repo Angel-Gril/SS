@@ -16,6 +16,16 @@ import {
   parseAiImageSandboxLegacyCents,
   parseAiImageSandboxMoney,
 } from './ai-image-sandbox-money.js';
+import {
+  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_PROFILE,
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  type AiImageEditMultipartDialect,
+  aiImageEditMultipartDialectForRequestProfile,
+  aiImageEditMultipartFields,
+  isAiImagePackyEditProviderIdentity,
+} from './ai-image-packy-edit-profile.js';
 
 export class AiImageSandboxGuardError extends Error {
   constructor(
@@ -73,6 +83,11 @@ const SANDBOX_OPERATIONS = new Set([
   'FULL_EDIT',
   'INPAINT',
 ]);
+const SANDBOX_REQUEST_PROFILES = new Set([
+  'OPENAI_SQUARE_SINGLE_V1',
+  'OZON_PORTRAIT_SINGLE_V1',
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+]);
 
 export type AiImageSandboxRequestState =
   | 'READY'
@@ -100,6 +115,7 @@ export interface AiImageSandboxEditContract {
   n: 1;
   sourceSha256: string[];
   maskSha256: string | null;
+  multipartDialect?: AiImageEditMultipartDialect;
 }
 
 function legacyCents(value: unknown, field: string) {
@@ -284,7 +300,7 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
   const endpoint = endpointUrl.toString();
   if (
     !SANDBOX_OPERATIONS.has(operation)
-    || !/^[A-Z][A-Z0-9_]{0,79}$/u.test(requestProfile)
+    || !SANDBOX_REQUEST_PROFILES.has(requestProfile)
     || record.n !== 1
     || !width
     || !height
@@ -320,6 +336,12 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
   ) invalidSandboxRequest('Sandbox request media evidence does not match its operation');
 
   const approvalEvidence = sanitizeApprovalEvidence(record.approvalEvidence, now);
+  const multipartDialect = isTextToImage
+    ? null
+    : aiImageEditMultipartDialectForRequestProfile(requestProfile);
+  const multipartFields = multipartDialect
+    ? aiImageEditMultipartFields(multipartDialect)
+    : null;
   const audit = {
     operation,
     requestProfile,
@@ -336,6 +358,9 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
   return {
     endpoint,
     fingerprint: {
+      ...(requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+        ? { operation, requestProfile, multipartDialect, multipartFields }
+        : {}),
       n: 1,
       size: record.size,
       promptSha256: record.promptSha256,
@@ -361,6 +386,10 @@ export function createAiImageSandboxRequestFingerprint(input: {
   endpointSha256: string;
   model: string;
   request: {
+    operation?: string;
+    requestProfile?: string;
+    multipartDialect?: AiImageEditMultipartDialect | null;
+    multipartFields?: Readonly<Record<string, string>> | null;
     n: number;
     size: string;
     promptSha256: string;
@@ -655,6 +684,22 @@ export async function claimAiImageSandboxOperation(
       'Sandbox endpoint evidence must be a SHA-256 digest',
     );
   }
+  const operation = sanitizedRequest.audit.operation;
+  const requestProfile = sanitizedRequest.audit.requestProfile;
+  const requestEndpoint = sanitizedRequest.endpoint;
+  const requestEndpointUrl = new URL(requestEndpoint);
+  const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
+    apiBase: requestEndpoint.replace(/\/images\/edits$/u, ''),
+    endpoint: requestEndpoint,
+    expectedHost: requestEndpointUrl.hostname.toLowerCase(),
+    model,
+    operation,
+  });
+  if ((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) !== packyProviderIdentity) {
+    invalidSandboxRequest(
+      'The Packy edit Provider identity and request profile must be selected together',
+    );
+  }
   const hasExactMoney = Object.hasOwn(input, 'quotedCost')
     || Object.hasOwn(input, 'maximumCost');
   const hasLegacyMoney = Object.hasOwn(input, 'quotedCostCents')
@@ -674,6 +719,12 @@ export async function claimAiImageSandboxOperation(
         maximumCostCents: legacyCents(input.maximumCostCents, 'maximumCostCents'),
       }
     : null;
+  if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE && !exactCosts) {
+    throw new AiImageSandboxGuardError(
+      'INVALID_SANDBOX_BUDGET',
+      'The Packy edit profile requires exact-money evidence',
+    );
+  }
   if (legacyCosts && legacyCosts.quotedCostCents > legacyCosts.maximumCostCents) {
     throw new AiImageSandboxGuardError(
       'INVALID_SANDBOX_BUDGET',
@@ -927,6 +978,21 @@ export function createAiImageSandboxEditFetchGuard(input: {
     throw new Error('The single-submit edit sandbox requires a pre-create approval check');
   }
   const expectedEndpoint = new URL(input.contract.endpoint).toString();
+  const multipartDialect = input.contract.multipartDialect
+    ?? AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT;
+  const multipartFields = aiImageEditMultipartFields(multipartDialect);
+  const packyProviderIdentity = expectedEndpoint === AI_IMAGE_PACKY_EDIT_PROFILE.endpoint
+    && input.contract.model === AI_IMAGE_PACKY_EDIT_PROFILE.model
+    && input.contract.size === `${AI_IMAGE_PACKY_EDIT_PROFILE.width}x${AI_IMAGE_PACKY_EDIT_PROFILE.height}`
+    && input.contract.n === 1
+    && input.contract.sourceSha256.length === 1;
+  if (
+    (multipartDialect === AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT) !== packyProviderIdentity
+  ) {
+    throw new Error(
+      'The Packy edit Provider identity and multipart dialect must be selected together',
+    );
+  }
   let createRequests = 0;
   let followupGetRequests = 0;
   let state: AiImageSandboxRequestState = 'READY';
@@ -956,7 +1022,16 @@ export function createAiImageSandboxEditFetchGuard(input: {
         throw new Error('The single-submit edit sandbox requires a multipart edit body');
       }
       const form = init.body;
-      const allowedKeys = new Set(['model', 'prompt', 'n', 'size', 'image', 'image[]', 'mask']);
+      const allowedKeys = new Set([
+        'model',
+        'prompt',
+        'n',
+        'size',
+        'image',
+        'image[]',
+        'mask',
+        ...Object.keys(multipartFields || {}),
+      ]);
       const keys: string[] = [];
       form.forEach((_value, key) => keys.push(key));
       const prompt = exactFormString(form, 'prompt');
@@ -988,6 +1063,9 @@ export function createAiImageSandboxEditFetchGuard(input: {
         || exactFormString(form, 'model') !== input.contract.model
         || exactFormString(form, 'n') !== String(input.contract.n)
         || exactFormString(form, 'size') !== input.contract.size
+        || Object.entries(multipartFields || {}).some(
+          ([key, value]) => exactFormString(form, key) !== value,
+        )
         || prompt === null
         || createHash('sha256').update(prompt).digest('hex') !== input.contract.promptSha256
         || !validSources

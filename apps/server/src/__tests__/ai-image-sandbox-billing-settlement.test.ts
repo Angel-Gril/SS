@@ -21,6 +21,11 @@ import {
   finalizeAiImageSandboxBillingSettlement,
 } from '../services/ai-image-sandbox-billing-settlement.js';
 import { createAiImageSandboxRequestFingerprint } from '../services/ai-image-sandbox-guard.js';
+import {
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  aiImageEditMultipartFields,
+} from '../services/ai-image-packy-edit-profile.js';
 
 const directories: string[] = [];
 const operationId = 'sandbox-billing-finalize-0001';
@@ -424,12 +429,19 @@ async function fixture(input: {
   providerLogBodyOverrides?: Record<string, unknown>;
   providerLogRequestOverrides?: Record<string, unknown>;
   providerLogSnapshotOverrides?: Record<string, unknown>;
+  requestFingerprint?: string;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-billing-'));
   directories.push(root);
+  const effectiveRequestFingerprint = input.requestFingerprint || requestFingerprint;
   const intentPath = join(root, 'intents', `${operationId}.intent.json`);
   const reportPath = join(root, `${operationId}.report.json`);
-  const claimPath = join(root, 'intents', '.fingerprints', `${requestFingerprint}.claim.json`);
+  const claimPath = join(
+    root,
+    'intents',
+    '.fingerprints',
+    `${effectiveRequestFingerprint}.claim.json`,
+  );
   const storedIntent = await writeCanonicalJson(
     intentPath,
     input.intentSchemaVersion === 3
@@ -437,9 +449,13 @@ async function fixture(input: {
           ...(input.attestationSchemaVersion === 3
             ? { apiBaseSha256: providerApiBaseSha256 }
             : {}),
+          requestFingerprint: effectiveRequestFingerprint,
           ...input.intentOverrides,
         }, input.approvalOverrides)
-      : intent(input.intentOverrides, input.approvalOverrides),
+      : intent({
+          requestFingerprint: effectiveRequestFingerprint,
+          ...input.intentOverrides,
+        }, input.approvalOverrides),
   );
   const storedReport = await writeCanonicalJson(
     reportPath,
@@ -452,7 +468,10 @@ async function fixture(input: {
         }, input.approvalOverrides)
       : report(input.reportOverrides, input.approvalOverrides, input.reportSchemaVersion),
   );
-  const storedClaim = await writeCanonicalJson(claimPath, fingerprintClaim(input.claimOverrides));
+  const storedClaim = await writeCanonicalJson(claimPath, fingerprintClaim({
+    requestFingerprint: effectiveRequestFingerprint,
+    ...input.claimOverrides,
+  }));
   const preCallBillingSnapshotPath = join(root, 'private', 'billing-before.snapshot');
   const settledBillingSnapshotPath = join(root, 'private', 'billing-settled.snapshot');
   const preCallBillingSnapshot = Buffer.from('private Provider balance before request\n', 'utf8');
@@ -494,11 +513,18 @@ async function fixture(input: {
           providerTokenLogSnapshotSha256: storedProviderTokenLogSnapshot!.sha256,
           providerTokenLogUserId: 2,
           providerTokenLogTokenId: 4,
+          requestFingerprint: effectiveRequestFingerprint,
           ...input.attestationOverrides,
         })
       : input.attestationSchemaVersion === 2
-      ? exactAttestation(attestationInput, input.attestationOverrides)
-      : attestation(attestationInput, input.attestationOverrides),
+      ? exactAttestation(attestationInput, {
+          requestFingerprint: effectiveRequestFingerprint,
+          ...input.attestationOverrides,
+        })
+      : attestation(attestationInput, {
+          requestFingerprint: effectiveRequestFingerprint,
+          ...input.attestationOverrides,
+        }),
   );
   return {
     root,
@@ -645,6 +671,69 @@ describe('AI image sandbox billing settlement', () => {
     expect(stored).not.toContain('quotaUnitsPerCurrencyUnit');
     expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
     expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+  });
+
+  it('recomputes and settles the Packy multipart request fingerprint', async () => {
+    const packyRequestFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256: '3'.repeat(64),
+      model: 'gpt-image-2',
+      request: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+        multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+        multipartFields: aiImageEditMultipartFields(AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT),
+        n: 1,
+        size: '1024x1024',
+        promptSha256: '4'.repeat(64),
+        sourceSha256: ['5'.repeat(64)],
+        maskSha256: null,
+      },
+    });
+    const value = await fixture({
+      requestFingerprint: packyRequestFingerprint,
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      intentOverrides: {
+        model: 'gpt-image-2',
+        request: {
+          operation: 'IMAGE_TO_IMAGE',
+          requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+          n: 1,
+          width: 1024,
+          height: 1024,
+          size: '1024x1024',
+          promptSha256: '4'.repeat(64),
+          sourceSha256: ['5'.repeat(64)],
+          sourceDimensions: [{ width: 1024, height: 1024 }],
+          maskSha256: null,
+          maskDimensions: null,
+          approvalEvidence: approvalEvidence({ currency: 'CNY' }),
+        },
+      },
+      reportOverrides: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+        model: 'gpt-image-2',
+      },
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 3,
+      submitState: 'SUCCEEDED',
+      billingOutcome: 'CHARGED',
+      billingGate: 'PASS',
+    });
   });
 
   it('finalizes exact billing from one private Provider token-log entry', async () => {

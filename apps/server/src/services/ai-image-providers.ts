@@ -13,6 +13,13 @@ import {
   isOfficialOpenAiImagesApiBase,
   normalizeOpenAiImagesApiBase,
 } from './ai-image-openai-url.js';
+import {
+  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_PROFILE,
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  type AiImageEditMultipartDialect,
+  aiImageEditMultipartFields,
+} from './ai-image-packy-edit-profile.js';
 
 export {
   isOfficialOpenAiImagesApiBase,
@@ -717,8 +724,9 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
   };
 }
 
-export function createOpenAiImageEditProvider(
+function createOpenAiImageEditProviderWithDialect(
   options: OpenAiImageEditProviderOptions,
+  multipartDialect: AiImageEditMultipartDialect,
 ): OpenAiImageEditProvider {
   const fetcher = options.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -732,14 +740,28 @@ export function createOpenAiImageEditProvider(
       } catch (error) {
         throw withProviderSubmissionRejected(error);
       }
+      const requestModel = request.model || options.model;
+      if (
+        multipartDialect === AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+        && requestModel !== AI_IMAGE_PACKY_EDIT_PROFILE.model
+      ) {
+        throw withProviderSubmissionRejected(new AiImageJobError(
+          'UNSUPPORTED_OPERATION',
+          'The Packy GPT-Image-2 edit profile requires its exact reviewed model',
+        ));
+      }
       const form = new FormData();
-      form.append('model', request.model || options.model);
+      form.append('model', requestModel);
       form.append(
         'prompt',
         request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
       );
       form.append('n', '1');
       form.append('size', validated.size);
+      const multipartFields = aiImageEditMultipartFields(multipartDialect);
+      if (multipartFields) {
+        Object.entries(multipartFields).forEach(([key, value]) => form.append(key, value));
+      }
       const imageFieldName = request.images.length === 1 ? 'image' : 'image[]';
       request.images.forEach((image, index) => {
         const mimeType = validated.imageMimeTypes[index]!;
@@ -821,6 +843,36 @@ export function createOpenAiImageEditProvider(
       }
     },
   };
+}
+
+export function createOpenAiImageEditProvider(
+  options: OpenAiImageEditProviderOptions,
+): OpenAiImageEditProvider {
+  return createOpenAiImageEditProviderWithDialect(
+    options,
+    AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+  );
+}
+
+export function createPackyGptImage2EditProvider(
+  options: OpenAiImageEditProviderOptions,
+): OpenAiImageEditProvider {
+  if (normalizeOpenAiImagesApiBase(options.baseUrl) !== AI_IMAGE_PACKY_EDIT_PROFILE.apiBase) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_URL',
+      'The Packy GPT-Image-2 edit profile requires its exact reviewed API base',
+    );
+  }
+  if (options.model !== AI_IMAGE_PACKY_EDIT_PROFILE.model) {
+    throw new AiImageJobError(
+      'UNSUPPORTED_OPERATION',
+      'The Packy GPT-Image-2 edit profile requires its exact reviewed model',
+    );
+  }
+  return createOpenAiImageEditProviderWithDialect(
+    options,
+    AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  );
 }
 
 /**

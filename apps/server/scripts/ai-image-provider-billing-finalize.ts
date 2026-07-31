@@ -23,6 +23,7 @@ const BILLING_FINALIZER_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-sandbox-guard.ts',
+  'apps/server/src/services/ai-image-packy-edit-profile.ts',
 ];
 
 type FinalizeBilling = typeof finalizeAiImageSandboxBillingSettlement;

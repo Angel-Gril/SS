@@ -499,9 +499,19 @@ Progress: 4/5 tasks.
   dispatch boundary and received HTTP 400; it does not mean that the Provider created an edit task.
   The null Provider request ID, unchanged meters and empty consumption log are consistent with no
   accepted or billed task. Packy's public instructions require a `sora`-group token, while the
-  retained model/quota responses do not expose that group. A future Packy attempt therefore needs
-  dashboard or Provider-support confirmation of the exact token group and edit route before a new
-  policy and approval; the consumed request must not be retried.
+  retained model/quota responses do not expose that group. At that checkpoint a future attempt
+  therefore required exact group confirmation plus either Provider route confirmation or a
+  materially different reviewed request contract; the consumed request must not be retried.
+- The operator subsequently confirmed through MOSS that the active credential is in the Sora group;
+  this is an operator assertion, not successful route evidence. An offline-only
+  `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` profile now binds the exact Packy identity, documented
+  `quality=high`, `output_format=png`, `response_format=url` multipart fields, exact-money v3
+  evidence, a dialect-bound request fingerprint and PNG output. Default-profile downgrade,
+  endpoint/model mixing, legacy cents, unknown dialects and non-PNG results fail closed. Provider,
+  approval, guard, runner and billing focused tests passed `275` with two skips; Server/sandbox
+  typechecks and the static contract passed. Full preflight passed `446/0` with the two expected
+  local-extension permission warnings. No Provider request or charge occurred, and counts remain
+  `4/5` and `32/37`.
 - Offline evidence hardening now fully decodes sandbox output before success, rejects truncated and
   animated media, enforces shared byte/pixel/MIME limits, and requires exact approved dimensions.
   Post-acceptance validation failure remains `RECONCILIATION_REQUIRED` and keeps the known Provider

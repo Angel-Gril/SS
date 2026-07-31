@@ -172,6 +172,74 @@ afterEach(async () => {
 });
 
 describe('AI image sandbox approval draft generator', () => {
+  it('binds the Packy GPT-Image-2 edit profile only to its exact Provider identity', async () => {
+    const value = await fixture('IMAGE_TO_IMAGE');
+    const environment = {
+      ...value.environment,
+      AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: undefined,
+      AI_IMAGE_SANDBOX_MAX_COST_CENTS: undefined,
+      AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '8',
+      AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+      AI_IMAGE_SANDBOX_COST_SCALE: '2',
+      AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+      AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+      AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+    };
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+
+    const result = await runAiImageProviderApprovalDraft({
+      environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+
+    expect(result.draft).toMatchObject({
+      endpoint: 'https://www.packyapi.ai/v1/images/edits',
+      expectedHost: 'www.packyapi.ai',
+      model: 'gpt-image-2',
+      operation: 'IMAGE_TO_IMAGE',
+      requestProfile: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+    });
+  });
+
+  it.each([
+    ['wrong endpoint', { AI_IMAGE_SANDBOX_BASE_URL: 'https://relay.example', AI_IMAGE_SANDBOX_EXPECTED_HOST: 'relay.example' }],
+    ['wrong model', { AI_IMAGE_SANDBOX_MODEL: 'other-model' }],
+    ['default request profile', { AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1' }],
+  ])('rejects the Packy edit profile with %s', async (_label, overrides) => {
+    const value = await fixture('IMAGE_TO_IMAGE');
+    await expect(runAiImageProviderApprovalDraft({
+      environment: {
+        ...value.environment,
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        ...overrides,
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID' });
+    await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects legacy cents for the Packy edit profile', async () => {
+    const value = await fixture('IMAGE_TO_IMAGE');
+    await expect(runAiImageProviderApprovalDraft({
+      environment: {
+        ...value.environment,
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://www.packyapi.ai/v1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'www.packyapi.ai',
+        AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1',
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID' });
+    await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('binds an exact sub-cent CNY quote without decimal conversion', async () => {
     const value = await fixture('TEXT_TO_IMAGE');
     const {

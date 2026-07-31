@@ -355,7 +355,13 @@ deployment guard passed.
 Packy's public instructions require a `sora`-group token. The retained authenticated GET evidence
 shows token name/quota and model visibility but does not expose the token group, so the non-secret
 credential revision label cannot independently prove that account setting. A future Packy test
-must first obtain dashboard or Provider-support confirmation of the exact group and edit route.
+must first confirm the exact group and use either Provider-confirmed route support or a materially
+different reviewed request contract.
+
+The operator has since confirmed through MOSS that the active credential belongs to the Sora group.
+This closes the group-identification question as an operator assertion only. It does not turn the
+HTTP 400 into an accepted task or independently establish that `/v1/images/edits` is enabled for
+this account.
 
 The follow-up offline implementation also closes a false-positive evidence path: returned images
 must fully decode as one bounded frame and exactly match the approved dimensions before the runner
@@ -368,3 +374,18 @@ an accepted edit request for this account/model/transport. Do not retry the cons
 reuse its approval for `FULL_EDIT` or `INPAINT`, which share `/v1/images/edits`. A future positive
 QA-02 sequence requires a Provider-confirmed request-contract/account correction or another
 edit-capable endpoint, followed by new operation-specific policies and approvals.
+
+## Packy documented edit-profile follow-up
+
+The rejected request used `OPENAI_SQUARE_SINGLE_V1` and omitted Packy's documented edit-specific
+fields. A new offline-only `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` profile now binds exact API Base
+`https://www.packyapi.ai/v1`, endpoint `/v1/images/edits`, model `gpt-image-2`, `1024x1024`, `n=1`,
+and multipart values `quality=high`, `output_format=png`, and `response_format=url`; optional
+`input_fidelity` stays omitted. Provider adapter, sandbox guard, approval drafting and submission
+reject profile/endpoint/model mixing before dispatch, and the immutable adapter revision includes
+the profile module.
+
+This is a materially different candidate request, not a retry or renamed copy of the consumed
+operation. It has not been sent and has incurred no charge. It requires a new clean implementation
+commit, new Operation ID, new private policy and non-approval draft, fresh pre-call meters, and a
+new explicit source-bound single-request maximum approval before any Provider POST.

@@ -39,9 +39,11 @@ single-request maximum. `AI_IMAGE_SANDBOX_PRICING_REVISION` names that policy re
 pricing API synchronization is required. The policy is an internal approval/budget control, not a
 Provider-side hard spending cap, and the finalizer must still reconcile the actual before/after
 meters. A price stated in chat remains planning input until it is entered into and reviewed against
-that policy. Current sandbox profiles bind quality as `PROVIDER_DEFAULT_OMITTED`: the guarded
-request contains no `quality` field. A policy for an explicit quality tier requires a new profile
-and cannot authorize the current transport contract.
+that policy. `OPENAI_SQUARE_SINGLE_V1` and `OZON_PORTRAIT_SINGLE_V1` bind quality as
+`PROVIDER_DEFAULT_OMITTED`: their guarded requests contain no `quality` field. The isolated
+`PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` profile instead binds `quality=high`, `output_format=png`, and
+`response_format=url` while omitting optional `input_fidelity`. A policy for another quality or
+multipart dialect requires a new profile and cannot authorize any existing transport contract.
 
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.

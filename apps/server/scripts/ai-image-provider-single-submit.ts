@@ -16,9 +16,17 @@ import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared/ai-image-workbench-contract';
 import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
+  createPackyGptImage2EditProvider,
   normalizeOpenAiImagesApiBase,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
+import {
+  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_PROFILE,
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  isAiImagePackyEditProviderIdentity,
+} from '../src/services/ai-image-packy-edit-profile.js';
 import {
   AiImageSandboxMediaError,
   assertAiImageSandboxEditMediaLimit,
@@ -65,6 +73,7 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-money.ts',
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
+  'apps/server/src/services/ai-image-packy-edit-profile.ts',
   'apps/server/src/services/ai-image-providers.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
@@ -73,11 +82,23 @@ type AiImageSandboxOperation = 'TEXT_TO_IMAGE' | AiImageSandboxEditOperation;
 type AiImageSandboxMode = 'SUBMIT' | 'VERIFY_APPROVAL';
 const SANDBOX_MODES = new Set<AiImageSandboxMode>(['SUBMIT', 'VERIFY_APPROVAL']);
 const REQUEST_PROFILES = Object.freeze({
-  OPENAI_SQUARE_SINGLE_V1: Object.freeze({ width: 1024, height: 1024, format: 'square' }),
+  OPENAI_SQUARE_SINGLE_V1: Object.freeze({
+    width: 1024,
+    height: 1024,
+    format: 'square',
+    expectedMimeType: null,
+  }),
+  [AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_PACKY_EDIT_PROFILE.width,
+    height: AI_IMAGE_PACKY_EDIT_PROFILE.height,
+    format: 'square Packy GPT-Image-2 high-quality PNG',
+    expectedMimeType: AI_IMAGE_PACKY_EDIT_PROFILE.expectedMimeType,
+  }),
   OZON_PORTRAIT_SINGLE_V1: Object.freeze({
     width: 1024,
     height: 1536,
     format: 'vertical 2:3 Provider canvas; compose crop-safe for final 3:4 normalization',
+    expectedMimeType: null,
   }),
 });
 type AiImageSandboxRequestProfile = keyof typeof REQUEST_PROFILES;
@@ -254,7 +275,7 @@ function sha256(value: Buffer | string) {
 
 async function inspectProviderOutput(
   image: { buffer: Buffer; mimeType: string },
-  expected: { width: number; height: number },
+  expected: { width: number; height: number; expectedMimeType: string | null },
 ) {
   if (
     !Buffer.isBuffer(image.buffer)
@@ -281,6 +302,7 @@ async function inspectProviderOutput(
   if (
     !mimeType
     || mimeType !== image.mimeType
+    || (expected.expectedMimeType !== null && mimeType !== expected.expectedMimeType)
     || !Number.isSafeInteger(metadata.width)
     || !Number.isSafeInteger(metadata.height)
     || !metadata.width
@@ -562,6 +584,27 @@ export async function runAiImageProviderSingleSubmit(
   if (parsedBaseUrl.hostname.toLowerCase() !== expectedHost) {
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
   }
+  const isPackyEditProfile = requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE;
+  const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
+    apiBase,
+    endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+    expectedHost,
+    model,
+    operation,
+  });
+  if (isPackyEditProfile !== packyProviderIdentity) {
+    throw Object.assign(
+      new Error('The Packy edit Provider identity and request profile must be selected together'),
+      { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
+    );
+  }
+  const costs = sandboxCostConfiguration(environment);
+  if (isPackyEditProfile && costs.kind !== 'EXACT') {
+    throw Object.assign(
+      new Error('The Packy edit profile requires exact-money evidence'),
+      { code: 'SANDBOX_COST_CONFIG_INVALID' },
+    );
+  }
   const sourcePath = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_PATH', environment);
   const sourceSha = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_SHA256', environment);
   const maskPath = optionalEnvironment('AI_IMAGE_SANDBOX_MASK_PATH', environment);
@@ -616,7 +659,6 @@ export async function runAiImageProviderSingleSubmit(
   const prompt = fixedPrompt(operation, profile);
   const sourceSha256 = source ? [source.sha256] : [];
   const maskSha256 = mask?.sha256 || null;
-  const costs = sandboxCostConfiguration(environment);
   const approvalEvidence = await loadAiImageSandboxApproval({
     repositoryRoot,
     approvalPath: requiredEnvironment('AI_IMAGE_SANDBOX_APPROVAL_PATH', environment),
@@ -764,6 +806,9 @@ export async function runAiImageProviderSingleSubmit(
         n: 1,
         sourceSha256: requestContract.sourceSha256,
         maskSha256: requestContract.maskSha256,
+        multipartDialect: isPackyEditProfile
+          ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+          : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
       },
       ...guardedTransport,
     });
@@ -798,7 +843,10 @@ export async function runAiImageProviderSingleSubmit(
         model,
       });
     } else {
-      const provider = createOpenAiImageEditProvider({
+      const createEditProvider = isPackyEditProfile
+        ? createPackyGptImage2EditProvider
+        : createOpenAiImageEditProvider;
+      const provider = createEditProvider({
         baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,
       });
       result = await provider.edit({

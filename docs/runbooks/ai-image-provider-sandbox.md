@@ -204,14 +204,21 @@ Prompts and requested count (`1`) are fixed in the CLI. The required request pro
 | Request profile                  | Requested size | Intended evidence scope                                      |
 | -------------------------------- | -------------- | ------------------------------------------------------------ |
 | `OPENAI_SQUARE_SINGLE_V1`        | `1024x1024`    | Square generation or one-source edit compatibility           |
+| `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024`  | Packy `gpt-image-2` edit only, with its reviewed multipart dialect |
 | `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
 
-Neither profile proves multi-reference compatibility. A Provider may return a different valid size; record that as a compatibility result, not automatic acceptance. Any promoted capability must be limited to the exact tested profile, operation, endpoint digest, model, adapter revision, credential revision, and verified reference count.
+No profile proves multi-reference compatibility. A Provider result whose decoded dimensions differ
+from the approved profile is rejected and cannot become capability evidence. Any promoted capability
+must be limited to the exact tested profile, operation, endpoint digest, model, adapter revision,
+credential revision, and verified reference count.
 
-Both current profiles freeze Provider quality as `PROVIDER_DEFAULT_OMITTED`: the guarded request
-must not contain a `quality` field. The private pricing policy must name that exact omitted/default
-quality state. A future explicit `low`, `medium`, `high`, or `auto` request requires a new versioned
-profile and separately reviewed pricing evidence; it must not reuse these profiles.
+`OPENAI_SQUARE_SINGLE_V1` and `OZON_PORTRAIT_SINGLE_V1` freeze Provider quality as
+`PROVIDER_DEFAULT_OMITTED`: the guarded request must not contain a `quality` field. The Packy-only
+profile instead freezes the documented multipart additions `quality=high`, `output_format=png`, and
+`response_format=url`, and omits optional `input_fidelity`. Its exact API Base, host, endpoint,
+model, edit operation, and fields are one immutable profile identity. The private pricing policy
+must name the matching quality state. A different quality or response dialect requires another
+versioned profile and separately reviewed policy and approval.
 
 ### Complete Environment Contract
 
@@ -232,7 +239,7 @@ fails before DNS, intent creation, or Provider dispatch when any exact request f
 | `AI_IMAGE_SANDBOX_APPROVAL_SHA256`     | Lowercase SHA-256 of the final reviewed approval file                                   |
 | `AI_IMAGE_SANDBOX_MODEL`               | Exact third-party model identifier under test                                           |
 | `AI_IMAGE_SANDBOX_OPERATION`           | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`                            |
-| `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | `OPENAI_SQUARE_SINGLE_V1` or `OZON_PORTRAIT_SINGLE_V1`                                 |
+| `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | One of the three versioned profiles above                                               |
 | `AI_IMAGE_SANDBOX_OPERATION_ID`        | New one-use Operation ID                                                                |
 | `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION` | Non-secret revision of the injected key                                                 |
 | `AI_IMAGE_SANDBOX_ADAPTER_REVISION`    | Exact deployed Git commit SHA                                                           |
@@ -359,13 +366,28 @@ Quota, displayed usage and Token log were unchanged. Receipt v3 SHA-256
 400 plus a null Provider request ID and zero billing/log deltas means this run produced no accepted
 or billed edit operation. Packy's public instructions require a `sora`-group token, but the retained
 model and quota GET responses do not expose the active token group. Before any newly approved Packy
-request, confirm the group in the dashboard or obtain Provider support confirmation for the exact
-account, edit route and multipart contract.
+request, confirm the group in the dashboard and require either Provider route confirmation or a
+materially different reviewed multipart contract.
+
+The operator subsequently confirmed through MOSS that the active credential is in the Sora group.
+That satisfies the token-group prerequisite as an operator assertion, but it does not prove that
+this account accepts the edit route. The route remains unverified until a newly approved request
+returns an accepted Provider identity or a valid image result.
 
 Never retry this Operation ID or the same request fingerprint. Do not infer edit support from Packy
 documentation, catalogue visibility or GET-only metering, and do not reuse this approval for
-`FULL_EDIT` or `INPAINT`. Require a Provider-confirmed contract/account correction or select a new
-edit-capable endpoint, then begin a new operation-specific price/approval/evidence sequence.
+`FULL_EDIT` or `INPAINT`. Require a materially different reviewed request contract, a Provider-side
+account/route correction, or a new edit-capable endpoint, then begin a new operation-specific
+price/approval/evidence sequence.
+
+The next Packy candidate uses the isolated `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` transport rather than
+relabeling the rejected request. It binds `https://www.packyapi.ai/v1`, `gpt-image-2`, edit-only
+operations, `1024x1024`, `n=1`, one source for `IMAGE_TO_IMAGE`, and the exact documented multipart
+additions above. The adapter, approval-draft generator, immutable Git revision set, request guard,
+and single-submit runner reject endpoint/model/profile mixing before dispatch. This offline support
+does not authorize a Provider call: generate a new private policy and non-approval draft from the
+clean implementation commit, then obtain a fresh source-bound quote and single-request maximum
+approval before the first POST.
 
 Successful sandbox output must be fully decoded before it can become capability evidence. Reject
 truncated or animated media, declared/decoded MIME mismatches, shared byte/pixel limit violations,

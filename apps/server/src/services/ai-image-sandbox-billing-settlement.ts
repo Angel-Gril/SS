@@ -6,6 +6,11 @@ import { TextDecoder } from 'node:util';
 import { AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN } from './ai-image-sandbox-code-revision.js';
 import { createAiImageSandboxRequestFingerprint } from './ai-image-sandbox-guard.js';
 import {
+  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  aiImageEditMultipartFields,
+} from './ai-image-packy-edit-profile.js';
+import {
   AI_IMAGE_SANDBOX_MONEY_MAX_SCALE,
   AiImageSandboxMoneyError,
   type AiImageSandboxMoney,
@@ -1996,6 +2001,16 @@ function assertArtifactsMatch(input: {
     endpointSha256: String(intentRecord.endpointSha256),
     model: intent.model,
     request: {
+      ...(request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+        ? {
+            operation: String(request.operation),
+            requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+            multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+            multipartFields: aiImageEditMultipartFields(
+              AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+            ),
+          }
+        : {}),
       n: Number(request.n),
       size: String(request.size),
       promptSha256: String(request.promptSha256),
