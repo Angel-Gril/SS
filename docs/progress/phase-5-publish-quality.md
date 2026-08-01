@@ -1,6 +1,6 @@
 # Phase 5: Publishing Closure and Product Quality
 
-Progress: 3/4 tasks.
+Progress: 4/4 tasks.
 
 ## Tasks
 
@@ -11,7 +11,7 @@ Progress: 3/4 tasks.
 - [x] `QA-03` Complete accessibility/responsive Chrome QA (`P0`, `L`). Acceptance: target
   desktop/mobile viewports have no overlap/clipping; keyboard, focus, live status, 200% zoom,
   reduced motion, stable media dimensions, contrast, screenshot, and DOM checks pass.
-- [ ] `QA-04` Run full security/billing/auth/package regression (`P0`, `XL`). Acceptance:
+- [x] `QA-04` Run full security/billing/auth/package regression (`P0`, `XL`). Acceptance:
   sentinel, endpoint, permission, hostile image, stale/revoked, billing, idempotency,
   one-receipt, remote-code, cloud/local package, lint, typecheck, tests, preflight, builds, and
   verifier pass.
@@ -130,3 +130,17 @@ Progress: 3/4 tasks.
   Token-log entry, and receipt chain before any Registry change. The offline matrix is green, but
   `QA-04` remains `3/4` until all three positive edit operations are accepted and this aggregate is
   rerun on the final clean revision.
+- After `QA-02` operation-specific capability acceptance completed, the final nine-step
+  `pnpm qa:04:offline` gate ran from clean pushed revision
+  `c053c2c7a4b1de967e67d4135172e309813e4896` and passed in `780s`. The gate contract, diff check,
+  workspace lint/typecheck, complete preflight with Server/Web builds, isolated PostgreSQL
+  scope-revocation and AI Media integration/upgrade lanes, and fresh cloud/local extension builds
+  all exited zero. Lint retained only the existing 20 Server and one shared warning.
+- Post-run package verification passed cloud `451/0/0`, local `447/2/0`, and source `446/2/0`;
+  the two local/source warnings are the expected `<all_urls>` and `file:///*` permissions. A direct
+  PostgreSQL audit found no `ai_media_test_20260801*` or `logistics_test_20260801*` schema. Private
+  final-acceptance summary SHA-256 is `1fb9d012...00acbd`. This reviewed run completes `QA-04` and
+  Phase 5 at `4/4`; overall progress is `34/37`.
+- The run accessed no Provider or VPS and performed no deployment, feature-flag change, ERP ingest,
+  or Ozon mutation. The unresolved Wanx billing chains still block candidate/Registry promotion but
+  do not invalidate the completed technical QA matrix. `REL-03` is now dependency-ready.

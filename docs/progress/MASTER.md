@@ -37,10 +37,10 @@ credential storage, or direct Ozon calls.
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
 - [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
-- [ ] Phase 5: Publishing closure and product quality (3/4 tasks) [details](./phase-5-publish-quality.md)
+- [x] Phase 5: Publishing closure and product quality (4/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 33/37 tasks complete (89%).
+Overall: 34/37 tasks complete (92%).
 
 ## Current Status
 
@@ -49,14 +49,23 @@ relay text-to-image chain and the three separately approved Wanx `IMAGE_TO_IMAGE
 `INPAINT` operations provide operation-specific positive Provider evidence. All three Wanx async
 tasks reached `SUCCEEDED`, each sent exactly one create request without retry, and each returned one
 validated 1024x1024 PNG. The operator approved all three images, including the subtle blue-gray
-INPAINT result and its visible rectangular test-mask boundary. Phase 3 is now `5/5`, overall
-progress is `33/37`, and `QA-04` is the next dependency-ready task.
+INPAINT result and its visible rectangular test-mask boundary. Phase 3 is now `5/5`;
+operation-specific capability acceptance is complete, and no result was retried.
 
 The Wanx API Key's billing account remains unlinked to the authenticated Bailian console account.
 No unrelated snapshot was used, actual cost remains unknown, and no formal Wanx billing receipt
 exists. This does not erase the real capability results, but it keeps the Wanx candidate out of the
 production Provider Registry and prevents candidate promotion. All rollout flags remain off; no
 deployment, VPS, ERP ingest, Ozon mutation, or production enablement occurred.
+
+The final `QA-04` aggregate then passed from clean pushed revision
+`c053c2c7a4b1de967e67d4135172e309813e4896` in `780s`. Its nine fail-fast gates covered the gate
+contract, diff check, workspace lint/typecheck, full preflight with builds, isolated scope-revocation
+and AI Media PostgreSQL lanes, and fresh cloud/local extension packages. Cloud verification passed
+`451/0/0`; local and source verification passed `447/2/0` and `446/2/0`, with only the two expected
+local permission warnings. No `20260801` QA schema remained. Private acceptance summary SHA-256 is
+`1fb9d012...00acbd`. Phase 5 is now `4/4`, overall progress is `34/37`, and `REL-03` is the next
+dependency-ready task.
 
 Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
 runner sent exactly one request to the approved route, received definite HTTP 400, produced no
@@ -921,8 +930,8 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Run the final `QA-04` acceptance on the clean QA-02 closure revision; then execute
-   `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
+7. Keep the passing `QA-04` result on `c053c2c` immutable. Execute `REL-03` packaging, then
+   `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
    stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
