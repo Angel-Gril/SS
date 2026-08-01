@@ -147,8 +147,9 @@ if [[ ! "$DATABASE_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] \
   exit 1
 fi
 
-PGDATABASE="$BACKUP_DB_URL" \
-  pg_dump --clean --if-exists --no-owner --no-privileges | gzip -c > "$TMP_FILE"
+node "$SCRIPT_DIR/run-postgres-command.mjs" \
+  --url-env BACKUP_DB_URL --command pg_dump -- \
+  --clean --if-exists --no-owner --no-privileges | gzip -c > "$TMP_FILE"
 gzip -t "$TMP_FILE"
 LOCAL_BYTES="$(stat -c '%s' "$TMP_FILE")"
 LOCAL_SHA256="$(sha256sum "$TMP_FILE" | awk '{print $1}')"

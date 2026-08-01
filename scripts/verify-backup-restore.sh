@@ -42,6 +42,14 @@ require_command() {
   fi
 }
 
+run_postgres_url() {
+  local url="$1"
+  local command="$2"
+  shift 2
+  SS_ERP_POSTGRES_URL="$url" node "$SCRIPT_DIR/run-postgres-command.mjs" \
+    --url-env SS_ERP_POSTGRES_URL --command "$command" -- "$@"
+}
+
 validate_backup_filename() {
   if [[ ! "$1" =~ ^ss_erp_[a-zA-Z0-9][a-zA-Z0-9._-]{0,180}\.sql\.gz$ ]]; then
     echo "[verify-restore] ERROR: 备份文件名必须是规范的 ss_erp_*.sql.gz" >&2
@@ -110,7 +118,7 @@ verify_restore_route_marker() {
   local marker_output
   local observed_marker
   if ! marker_output="$(
-    PGDATABASE="$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align \
+    run_postgres_url "$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align \
       -v ON_ERROR_STOP=1 \
       -v "restore_route_schema=$RESTORE_ROUTE_SCHEMA" \
       -v "restore_route_table=$RESTORE_ROUTE_TABLE" <<'SQL'
@@ -135,7 +143,7 @@ write_restore_route_marker() {
       -v "restore_route_table=$RESTORE_ROUTE_TABLE" \
       -v "restore_route_marker=$RESTORE_ROUTE_MARKER"
   else
-    PGDATABASE="$MAINTENANCE_TEMP_DB_URL" psql --no-psqlrc --quiet --single-transaction \
+    run_postgres_url "$MAINTENANCE_TEMP_DB_URL" psql --no-psqlrc --quiet --single-transaction \
       -v ON_ERROR_STOP=1 \
       -v "restore_route_schema=$RESTORE_ROUTE_SCHEMA" \
       -v "restore_route_table=$RESTORE_ROUTE_TABLE" \
@@ -149,8 +157,8 @@ drop_temp_database() {
     if [ "${VERIFY_RESTORE_LOCAL_POSTGRES:-0}" = "1" ]; then
       sudo -u postgres dropdb --force -- "$TEMP_DB" >/dev/null 2>&1 || return 1
     else
-      PGDATABASE="$MAINTENANCE_URL" \
-        dropdb --force -- "$TEMP_DB" >/dev/null 2>&1 || return 1
+      run_postgres_url "$MAINTENANCE_URL" dropdb --force -- "$TEMP_DB" \
+        >/dev/null 2>&1 || return 1
     fi
     CREATED=0
   fi
@@ -203,6 +211,10 @@ require_command node
 require_command createdb
 require_command dropdb
 require_command psql
+if [ ! -f "$SCRIPT_DIR/run-postgres-command.mjs" ]; then
+  echo "[verify-restore] ERROR: 缺少受控 PostgreSQL CLI wrapper" >&2
+  exit 1
+fi
 
 BACKUP_DATABASE_BINDING="$(DEPLOY_DATABASE_ID="$DEPLOY_DATABASE_ID" \
   DEPLOY_DATABASE_URL="$BACKUP_DB_URL" \
@@ -275,7 +287,7 @@ if [ "${VERIFY_RESTORE_LOCAL_POSTGRES:-0}" = "1" ]; then
   sudo -u postgres createdb -O "$SOURCE_USER" -- "$TEMP_DB"
 else
   CREATEDB_LOG=$(mktemp)
-  if ! PGDATABASE="$MAINTENANCE_URL" createdb -- "$TEMP_DB" 2>"$CREATEDB_LOG"; then
+  if ! run_postgres_url "$MAINTENANCE_URL" createdb -- "$TEMP_DB" 2>"$CREATEDB_LOG"; then
     cat "$CREATEDB_LOG" >&2
     if grep -qi 'permission denied to create database' "$CREATEDB_LOG"; then
       echo "[verify-restore] ERROR: 当前数据库账号没有 CREATEDB 权限。" >&2
@@ -305,7 +317,7 @@ then
   exit 1
 fi
 
-CONNECTED_TEMP_DB="$(PGDATABASE="$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align \
+CONNECTED_TEMP_DB="$(run_postgres_url "$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align \
   -v ON_ERROR_STOP=1 -c 'select current_database();' | tr -d '[:space:]')"
 if [ "$CONNECTED_TEMP_DB" != "$TEMP_DB" ]; then
   echo "[verify-restore] ERROR: 临时连接解析到了非预期数据库" >&2
@@ -322,7 +334,7 @@ node "$SCRIPT_DIR/deploy-backup-attestation.mjs" restore-stream \
   --expected-database-uuid-sha256 "$MIGRATION_DATABASE_UUID_SHA256" \
   --expected-target-git-commit "$BACKUP_TARGET_GIT_COMMIT" \
   --restore-started-at "$RESTORE_STARTED_AT" \
-  | PGDATABASE="$TEMP_DB_URL" psql --no-psqlrc --quiet --single-transaction -v ON_ERROR_STOP=1
+  | run_postgres_url "$TEMP_DB_URL" psql --no-psqlrc --quiet --single-transaction -v ON_ERROR_STOP=1
 
 RESTORED_DATABASE_BINDING="$(DEPLOY_DATABASE_ID="$DEPLOY_DATABASE_ID" \
   DEPLOY_DATABASE_URL="$TEMP_DB_URL" \
@@ -335,7 +347,7 @@ if [[ ! "$RESTORED_DATABASE_IDENTITY_SHA256" =~ ^[0-9a-f]{64}$ ]] \
   exit 1
 fi
 
-TABLE_COUNT=$(PGDATABASE="$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align -v ON_ERROR_STOP=1 \
+TABLE_COUNT=$(run_postgres_url "$TEMP_DB_URL" psql --no-psqlrc --tuples-only --no-align -v ON_ERROR_STOP=1 \
   -c "select count(*) from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE';" | tr -d '[:space:]')
 
 case "$TABLE_COUNT" in

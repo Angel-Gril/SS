@@ -1,66 +1,32 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { postgresConnectionEnvironment } from './postgres-connection-environment.mjs';
 
 const DATABASE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$/u;
 const DATABASE_OID = /^[1-9][0-9]{0,9}$/u;
 const DATABASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const DEPLOYMENT_DATABASE_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
-const PRISMA_ONLY_PARAMETERS = [
-  'connection_limit',
-  'pool_timeout',
-  'schema',
-  'socket_timeout',
-  'pgbouncer',
-];
 
 function fail(message) {
   throw new Error(message);
 }
 
 function databaseTarget(value) {
-  let url;
   try {
-    url = new URL(value);
-  } catch {
-    fail('DEPLOY_DATABASE_URL must be one valid PostgreSQL URL');
+    const environment = postgresConnectionEnvironment(value, {
+      applicationName: 'ss-erp-deploy-backup-identity',
+    });
+    if (!DATABASE_NAME.test(environment.PGDATABASE)) {
+      fail('DEPLOY_DATABASE_URL database name is outside the deployment identity contract');
+    }
+    return { databaseName: environment.PGDATABASE, environment };
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)
-    || !url.hostname
-    || url.hash
-    || !/^\/[A-Za-z0-9_.%~-]+$/u.test(url.pathname)) {
-    fail('DEPLOY_DATABASE_URL must identify one canonical PostgreSQL database');
-  }
-  let databaseName;
-  try {
-    databaseName = decodeURIComponent(url.pathname.slice(1));
-  } catch {
-    fail('DEPLOY_DATABASE_URL database name is not canonically encoded');
-  }
-  if (!DATABASE_NAME.test(databaseName)) {
-    fail('DEPLOY_DATABASE_URL database name is outside the deployment identity contract');
-  }
-  const port = url.port ? Number(url.port) : 5432;
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    fail('DEPLOY_DATABASE_URL port is invalid');
-  }
-  const psqlUrl = new URL(url);
-  psqlUrl.pathname = `/${encodeURIComponent(databaseName)}`;
-  for (const parameter of PRISMA_ONLY_PARAMETERS) psqlUrl.searchParams.delete(parameter);
-  return {
-    databaseName,
-    psqlUrl: psqlUrl.toString(),
-  };
 }
 
 function queryDatabaseIdentity(target, expectedDatabaseId) {
-  const environment = {
-    PATH: process.env.PATH || '',
-    HOME: process.env.HOME || '',
-    LANG: 'C.UTF-8',
-    PGAPPNAME: 'ss-erp-deploy-backup-identity',
-    PGDATABASE: target.psqlUrl,
-  };
   const result = spawnSync('psql', [
     '--no-psqlrc',
     '--no-align',
@@ -70,7 +36,7 @@ function queryDatabaseIdentity(target, expectedDatabaseId) {
     '--command=SELECT current_database(), database.oid::text, config.value FROM pg_database AS database CROSS JOIN public.system_configs AS config WHERE database.datname = current_database() AND config.key = \'deployment_database_identity_v1\';',
   ], {
     encoding: 'utf8',
-    env: environment,
+    env: target.environment,
     maxBuffer: 65_536,
     timeout: 30_000,
     windowsHide: true,

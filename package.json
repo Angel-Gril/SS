@@ -33,6 +33,8 @@
     "probe:extension-release-website": "node scripts/probe-extension-website-distribution.mjs",
     "verify:extension-publication": "node scripts/verify-extension-publication.mjs",
     "test:extension-release-publication": "node scripts/extension-release-publication.test.mjs",
+    "canary:rel04:dark": "node scripts/rel04-dark-canary.mjs",
+    "test:rel04:dark-canary": "node scripts/rel04-dark-canary.test.mjs",
     "verify:extension": "node scripts/verify-extension-package.mjs",
     "verify:extension:cloud": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-cloud --target cloud --strict",
     "verify:extension:local": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-local --target local",

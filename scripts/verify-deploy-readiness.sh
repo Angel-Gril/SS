@@ -97,6 +97,8 @@ check_file "$DEPLOY_DIR/scripts/verify-backup-restore.sh"
 check_file "$DEPLOY_DIR/scripts/deploy-backup-attestation.mjs"
 check_file "$DEPLOY_DIR/scripts/deploy-backup-gate.mjs"
 check_file "$DEPLOY_DIR/scripts/deploy-database-identity.mjs"
+check_file "$DEPLOY_DIR/scripts/postgres-connection-environment.mjs"
+check_file "$DEPLOY_DIR/scripts/run-postgres-command.mjs"
 check_file "$DEPLOY_DIR/scripts/verify-deploy-backup.sh"
 check_file "$DEPLOY_DIR/scripts/verify-empty-bootstrap-database.mjs"
 

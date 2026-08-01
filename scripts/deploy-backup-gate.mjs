@@ -174,6 +174,7 @@ function assertTrustedGateDirectory(directory, targetGitCommit) {
     'deploy-backup-gate.mjs',
     'deploy-backup-attestation.mjs',
     'deploy-database-identity.mjs',
+    'postgres-connection-environment.mjs',
     'deploy-environment.mjs',
     'deploy-source-manifest.mjs',
     'freeze-deploy-source.sh',

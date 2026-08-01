@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { postgresConnectionEnvironment } from './postgres-connection-environment.mjs';
 
 const cronExample = readFileSync(new URL('./backup-db.crontab.example', import.meta.url), 'utf8');
 const localDevelopment = readFileSync(
@@ -45,6 +46,7 @@ const emptyBootstrapVerifier = join(
   'verify-empty-bootstrap-database.mjs',
 );
 const deployPsqlRunner = join(process.cwd(), 'scripts', 'run-deploy-psql.mjs');
+const postgresCommandRunner = join(process.cwd(), 'scripts', 'run-postgres-command.mjs');
 const preflight = readFileSync(new URL('./preflight.mjs', import.meta.url), 'utf8');
 const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const productionEnvExample = readFileSync(
@@ -93,9 +95,13 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
     assert.ok(backupScript.includes(field), `backup status must retain ${field}`);
   }
   assert.ok(
-    backupScript.indexOf('BACKUP_AT=') < backupScript.indexOf('PGDATABASE="$BACKUP_DB_URL"'),
+    backupScript.indexOf('BACKUP_AT=') < backupScript.indexOf('run-postgres-command.mjs'),
     'backup freshness must start before the database snapshot is read',
   );
+  assert.match(backupScript, /--url-env BACKUP_DB_URL --command pg_dump/u);
+  assert.doesNotMatch(backupScript, /PGDATABASE="\$BACKUP_DB_URL"/u);
+  assert.match(restoreVerifier, /run_postgres_url/u);
+  assert.doesNotMatch(restoreVerifier, /PGDATABASE="\$(?:TEMP_DB_URL|MAINTENANCE_URL)"/u);
   const tableCountIndex = restoreVerifier.indexOf('if [ "$TABLE_COUNT" -le 0 ]');
   const attestationIndex = restoreVerifier.indexOf('deploy-backup-attestation.mjs" record');
   const archiveIndex = restoreVerifier.indexOf('deploy-backup-attestation.mjs" archive');
@@ -139,6 +145,8 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
   assert.doesNotMatch(appDirDeployer, /RUN_DB_BACKUP/u);
   assert.match(deployReadiness, /deploy-backup-attestation\.mjs/u);
   assert.match(deployReadiness, /deploy-database-identity\.mjs/u);
+  assert.match(deployReadiness, /postgres-connection-environment\.mjs/u);
+  assert.match(deployReadiness, /run-postgres-command\.mjs/u);
   assert.match(deployReadiness, /verify-deploy-backup\.sh/u);
   assert.match(deployBackupGate, /sameFileSnapshot\(before, openedAfter\)/u);
   assert.ok(
@@ -159,6 +167,43 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
   }
 });
 
+test('PostgreSQL URLs become discrete libpq fields without retaining Prisma parameters', () => {
+  const environment = postgresConnectionEnvironment(
+    'postgresql://user:top-secret@db.example:5433/fixture?schema=public&connection_limit=5&sslmode=require',
+    { applicationName: 'contract-test' },
+  );
+  assert.deepEqual(environment, {
+    PATH: process.env.PATH || '',
+    HOME: process.env.HOME || '',
+    LANG: 'C.UTF-8',
+    PGHOST: 'db.example',
+    PGPORT: '5433',
+    PGDATABASE: 'fixture',
+    PGUSER: 'user',
+    PGPASSWORD: 'top-secret',
+    PGAPPNAME: 'contract-test',
+    PGSSLMODE: 'require',
+  });
+  assert.throws(
+    () => postgresConnectionEnvironment('postgresql://user:secret@db.example/fixture?unknown=value'),
+    /unsupported/u,
+  );
+  assert.throws(
+    () => postgresConnectionEnvironment('postgresql://user:secret@db.example/fixture?sslmode=require&sslmode=prefer'),
+    /duplicated/u,
+  );
+  for (const encoded of ['a+b', 'a%2Bb']) {
+    const parsed = postgresConnectionEnvironment(
+      `postgresql://user:secret@db.example/fixture?application_name=${encoded}`,
+    );
+    assert.equal(parsed.PGAPPNAME, 'a+b');
+  }
+  assert.throws(
+    () => postgresConnectionEnvironment('postgresql://user:secret@db.example/fixture?sslmode=%'),
+    /canonically encoded/u,
+  );
+});
+
 test('root deployment gate rejects whitespace-prefixed duplicate required env keys', {
   skip: process.platform === 'win32'
     || typeof process.geteuid !== 'function'
@@ -172,6 +217,7 @@ test('root deployment gate rejects whitespace-prefixed duplicate required env ke
       'deploy-backup-gate.mjs',
       'deploy-backup-attestation.mjs',
       'deploy-database-identity.mjs',
+      'postgres-connection-environment.mjs',
       'deploy-environment.mjs',
       'deploy-source-manifest.mjs',
       'freeze-deploy-source.sh',
@@ -220,7 +266,7 @@ test('deployment psql runner strips Prisma parameters and keeps credentials out 
     const psql = join(fixture, 'psql');
     writeFileSync(psql, [
       '#!/usr/bin/env bash',
-      'printf "database=%s\\n" "$PGDATABASE"',
+      'printf "connection=%s|%s|%s|%s|%s|%s\\n" "$PGHOST" "$PGPORT" "$PGUSER" "$PGPASSWORD" "$PGDATABASE" "$PGSSLMODE"',
       'printf "arg=%s\\n" "$@"',
       '',
     ].join('\n'));
@@ -235,10 +281,8 @@ test('deployment psql runner strips Prisma parameters and keeps credentials out 
       },
     });
     assert.equal(result.status, 0, result.stderr);
-    const [database, ...args] = result.stdout.trim().split('\n');
-    assert.match(database, /top-secret/u);
-    assert.match(database, /sslmode=require/u);
-    assert.doesNotMatch(database, /schema=|connection_limit=/u);
+    const [connection, ...args] = result.stdout.trim().split('\n');
+    assert.equal(connection, 'connection=127.0.0.1|5432|user|top-secret|fixture|require');
     assert.deepEqual(args, [
       'arg=--no-psqlrc',
       'arg=-v',
@@ -246,12 +290,69 @@ test('deployment psql runner strips Prisma parameters and keeps credentials out 
     ]);
     assert.doesNotMatch(args.join('\n'), /top-secret/u);
 
-    const override = spawnSync(process.execPath, [deployPsqlRunner, '--dbname=other'], {
-      encoding: 'utf8',
-      env: { ...process.env, DATABASE_URL: databaseUrl },
-    });
-    assert.notEqual(override.status, 0);
-    assert.match(override.stderr, /database target overrides are forbidden/u);
+    for (const overrideArguments of [
+      ['--dbname=other'],
+      ['--host', 'attacker.invalid'],
+      ['postgresql://attacker:secret@attacker.invalid/other'],
+    ]) {
+      const override = spawnSync(process.execPath, [deployPsqlRunner, ...overrideArguments], {
+        encoding: 'utf8',
+        env: { ...process.env, DATABASE_URL: databaseUrl },
+      });
+      assert.notEqual(override.status, 0);
+      assert.match(override.stderr, /target overrides are forbidden|positional database targets/u);
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('controlled PostgreSQL commands cannot replace their bound server or database', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'ss-erp-postgres-command-'));
+  const marker = join(fixture, 'invoked.log');
+  try {
+    for (const command of ['createdb', 'dropdb', 'pg_dump', 'psql']) {
+      const executable = join(fixture, command);
+      writeFileSync(executable, [
+        '#!/usr/bin/env bash',
+        `printf '%s|%s|%s|%s|%s\\n' ${shellSingleQuote(command)} "$PGHOST" "$PGPORT" "$PGDATABASE" "$*" >> ${shellSingleQuote(marker)}`,
+        '',
+      ].join('\n'));
+      chmodSync(executable, 0o755);
+    }
+    const environment = {
+      ...process.env,
+      PATH: `${fixture}:${process.env.PATH}`,
+      SS_ERP_POSTGRES_URL:
+        'postgresql://fixture:secret@db.example:5433/maintenance?sslmode=require',
+    };
+    const run = (command, args) => spawnSync(process.execPath, [
+      postgresCommandRunner,
+      '--url-env', 'SS_ERP_POSTGRES_URL',
+      '--command', command,
+      '--',
+      ...args,
+    ], { encoding: 'utf8', env: environment });
+
+    for (const [command, args] of [
+      ['psql', ['postgresql://attacker.invalid/other']],
+      ['pg_dump', ['other_database']],
+      ['createdb', ['--maintenance-db=attacker', '--', 'restore_check']],
+      ['dropdb', ['--', 'postgresql://attacker.invalid/other']],
+    ]) {
+      const rejected = run(command, args);
+      assert.notEqual(rejected.status, 0);
+    }
+    assert.equal(readdirSync(fixture).includes('invoked.log'), false);
+
+    const accepted = run('createdb', ['--', 'restore_check']);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(
+      readFileSync(marker, 'utf8'),
+      'createdb|db.example|5433|maintenance|-- restore_check\n',
+    );
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -271,7 +372,7 @@ test('database identity binds the actual database target without putting credent
       writeFileSync(psql, [
         '#!/usr/bin/env bash',
         `printf "%s\\n" "$*" > ${shellSingleQuote(argvLog)}`,
-        `printf "%s\\n" "$PGDATABASE" > ${shellSingleQuote(databaseLog)}`,
+        `printf "%s|%s|%s|%s|%s|%s\\n" "$PGHOST" "$PGPORT" "$PGUSER" "$PGPASSWORD" "$PGDATABASE" "$PGSSLMODE" > ${shellSingleQuote(databaseLog)}`,
         `printf %s ${shellSingleQuote(databaseIdentityRow({ databaseId, databaseName }))}`,
         '',
       ].join('\n'));
@@ -292,8 +393,7 @@ test('database identity binds the actual database target without putting credent
     assert.match(readFileSync(argvLog, 'utf8'), /--no-psqlrc/u);
     assert.doesNotMatch(readFileSync(argvLog, 'utf8'), /fixture-secret/u);
     const database = readFileSync(databaseLog, 'utf8');
-    assert.match(database, /sslmode=require/u);
-    assert.doesNotMatch(database, /schema=public/u);
+    assert.equal(database, '127.0.0.1|5432|fixture|fixture-secret|fixture|require\n');
 
     installPsql({ databaseName: 'other' });
     const mismatch = spawnSync(process.execPath, [deployDatabaseIdentityScript], {
@@ -339,7 +439,7 @@ test('empty bootstrap verification checks the Prisma target without exposing its
       writeFileSync(psql, [
         '#!/usr/bin/env bash',
         `printf "%s\\n" "$*" > ${shellSingleQuote(argvLog)}`,
-        `printf "%s\\n" "$PGDATABASE" > ${shellSingleQuote(databaseLog)}`,
+        `printf "%s|%s|%s|%s|%s|%s\\n" "$PGHOST" "$PGPORT" "$PGUSER" "$PGPASSWORD" "$PGDATABASE" "$PGSSLMODE" > ${shellSingleQuote(databaseLog)}`,
         `printf %s ${shellSingleQuote(`${tableCount}\n`)}`,
         '',
       ].join('\n'));
@@ -358,8 +458,10 @@ test('empty bootstrap verification checks the Prisma target without exposing its
     assert.equal(empty.status, 0, empty.stderr);
     assert.match(readFileSync(argvLog, 'utf8'), /--no-psqlrc/u);
     assert.doesNotMatch(readFileSync(argvLog, 'utf8'), /bootstrap-secret/u);
-    assert.match(readFileSync(databaseLog, 'utf8'), /sslmode=require/u);
-    assert.doesNotMatch(readFileSync(databaseLog, 'utf8'), /schema=public/u);
+    assert.equal(
+      readFileSync(databaseLog, 'utf8'),
+      '127.0.0.1|5432|fixture|bootstrap-secret|fixture|require\n',
+    );
     installPsql(1);
     const populated = spawnSync(process.execPath, [emptyBootstrapVerifier], {
       encoding: 'utf8',
@@ -437,6 +539,7 @@ test('restore drill writes attestation only after a positive restored table coun
   const binDir = join(root, 'bin');
   const targetCommit = 'b'.repeat(40);
   const filename = 'ss_erp_20300101_000000.sql.gz';
+  const dropFailMarker = join(root, 'drop-fail');
   try {
     mkdirSync(backupDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
@@ -467,7 +570,7 @@ test('restore drill writes attestation only after a positive restored table coun
       writeFileSync(
         executable,
         command === 'dropdb'
-          ? '#!/usr/bin/env bash\n[ "${FAKE_DROP_FAIL:-0}" != "1" ]\n'
+          ? `#!/usr/bin/env bash\n[ ! -f ${shellSingleQuote(dropFailMarker)} ]\n`
           : '#!/usr/bin/env bash\nexit 0\n',
       );
       chmodSync(executable, 0o755);
@@ -488,7 +591,7 @@ test('restore drill writes attestation only after a positive restored table coun
       });
       writeFileSync(psql, [
         '#!/usr/bin/env bash',
-        "DB_HOST=$(node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(value.hostname);')",
+        'DB_HOST="$PGHOST"',
         'ROUTE_MARKER=""',
         'HAS_ROUTE_MARKER=0',
         'HAS_ROUTE_SCHEMA=0',
@@ -512,14 +615,14 @@ test('restore drill writes attestation only after a positive restored table coun
         'fi',
         'case "$*" in',
         '  *"current_database(), database.oid::text"*)',
-        "    DB_NAME=$(node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(decodeURIComponent(value.pathname.slice(1)));')",
+        '    DB_NAME="$PGDATABASE"',
         `    DB_IDENTITY=${shellSingleQuote(sourceIdentity)}`,
         `    case "$DB_NAME" in ss_erp_restore_check_*) DB_IDENTITY=${shellSingleQuote(restoredIdentity)} ;; esac`,
         '    printf \'%s\\t16384\\t%s\\n\' "$DB_NAME" "$DB_IDENTITY"',
         '    exit 0',
         '    ;;',
         '  *"select current_database();"*)',
-        "    node -e 'const value = new URL(process.env.PGDATABASE); process.stdout.write(decodeURIComponent(value.pathname.slice(1)) + \"\\n\");'",
+        '    printf \'%s\\n\' "$PGDATABASE"',
         '    exit 0',
         '    ;;',
         'esac',
@@ -660,6 +763,7 @@ test('restore drill writes attestation only after a positive restored table coun
     writeFileSync(join(backupDir, `${filename}.status.json`), cleanupStatusText);
     chmodSync(join(backupDir, `${filename}.status.json`), 0o600);
     installPsql();
+    writeFileSync(dropFailMarker, 'fail\n');
     const cleanupFailure = spawnSync('bash', ['scripts/verify-backup-restore.sh'], {
       cwd: process.cwd(),
       encoding: 'utf8',
@@ -671,7 +775,6 @@ test('restore drill writes attestation only after a positive restored table coun
         BACKUP_LOCAL_DIR: backupDir,
         DEPLOY_DATABASE_ID: 'fixture-primary',
         BACKUP_TARGET_GIT_COMMIT: cleanupCommit,
-        FAKE_DROP_FAIL: '1',
       },
     });
     assert.notEqual(cleanupFailure.status, 0);

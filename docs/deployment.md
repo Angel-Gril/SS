@@ -130,7 +130,7 @@ proof 绑定最终 schema v2 attestation。maintenance 路由在新库中写入�
 排他写入新认证。归档摘要冲突、身份不一致、文件被替换或旧指针无法安全移除时都会失败关闭。
 
 `deploy.sh` 和 `deploy-app-dir.sh` 从目标 archive 解包后、在把 release 交给隔离构建用户前，会
-调用 `install-deploy-backup-gate.sh`，把十个 runtime gate 文件和只读 marker 原子安装到
+调用 `install-deploy-backup-gate.sh`，把十一个 runtime gate 文件和只读 marker 原子安装到
 `/usr/local/lib/ss-erp-deploy-gate/<target-commit>/`。同一 commit 目录不可覆盖，只能逐字节复用。
 `deploy-staging.sh` 不会把 deploy 用户可写 checkout 提升为 root；它会在安装依赖或停服前要求
 目标 gate 已经预装且与 checkout 逐字节一致。预装必须从本机可信 checkout 生成的目标 revision
@@ -148,6 +148,7 @@ tar -czf "build/ss-erp-deploy-gate-${TARGET_COMMIT}.tar.gz" -C "$SNAPSHOT_ROOT" 
   scripts/deploy-backup-gate.mjs \
   scripts/deploy-backup-attestation.mjs \
   scripts/deploy-database-identity.mjs \
+  scripts/postgres-connection-environment.mjs \
   scripts/deploy-environment.mjs \
   scripts/deploy-maintenance-gate.sh \
   scripts/deploy-source-manifest.mjs \
@@ -310,6 +311,38 @@ Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirm
 在暗态启动，不授权任何 pilot。`sandbox-pilot` / `publish-pilot` 必须另行使用
 `verify-extension-byok-rollout-policy.mjs`，并显式传入期望的 hosted 开关、revision、owner、
 shop、device session、Provider origin 和 operations；`maxConcurrency` 必须为 1。
+
+`REL-04` 还必须从受保护的 token 文件运行 `pnpm canary:rel04:dark`。脚本先验证 `/ready`、
+区域候选、extension CORS、全部默认关闭配置、Hosted readiness 和 publisher capability，再创建
+仅含 `byok:media:ingest` 的临时设备配对，验证 refresh 与 BYOK disabled-path，最后撤销会话。
+claim 响应丢失时会按唯一 `deviceId` 找回并撤销已提交会话；任何清理失败都会使 canary 失败。
+它不发送 Provider 请求、不执行 ERP 图片 ingest，也不调用 Ozon 写接口。
+
+当生产库已有目标部署开始后完成的 `SUBMITTED/SUCCEEDED` 发布记录时，显式提供 workflow、attempt
+和 `REL04_PUBLISH_RECONCILIATION_NOT_BEFORE` 做只读核验。若暗部署前两区都没有发布记录，不得伪造；
+改为提供同一目标 commit 的 canonical `QA04_FINAL_ACCEPTANCE` 私密文件及其 SHA-256。canary 会重验
+commit、完整九项 gate、extension 结果和零 Provider/Ozon/VPS 副作用，再把该摘要绑定为
+`TARGET_COMMIT_QA04_REGRESSION`。第一次真实 Ozon reconciliation 仍属于 `REL-02` 单店试点。
+
+```bash
+export REL04_API_ORIGIN=https://ss-erp.com
+export REL04_TARGET_GIT_COMMIT=<full-target-commit>
+export REL04_EXTENSION_ORIGIN=chrome-extension://<managed-id>
+export REL04_SHOP_ID=<active-owner-shop-id>
+export REL04_OWNER_TOKEN_FILE=/operator-private/rel04-owner.token
+export REL04_ADMIN_TOKEN_FILE=/operator-private/rel04-admin.token
+export REL04_QA04_ACCEPTANCE_FILE=/operator-private/qa04-final.json
+export REL04_PUBLISH_RECONCILIATION_REGRESSION_SHA256=<qa04-file-sha256>
+export REL04_EXPECTED_PUBLISH_CAPABILITY_REASON=master_off
+export REL04_EXPECTED_PUBLISH_CAPABILITY_REVISION=master-off
+export REL04_EXPECTED_PUBLISH_LEGACY_ALLOWED=true
+export REL04_CANARY_OUTPUT=/operator-private/rel04-dark-canary.json
+pnpm canary:rel04:dark
+```
+
+三项 capability expectation 必须来自部署前已审计策略，不能照抄响应；这样
+`config_unavailable`、非法策略或 revision mismatch 不会被误判为暗态。该 canary 不能替代
+`verify-vps-deploy.sh`、systemd/Web 检查或后续官网 ZIP probe。
 
 正式扩展发布还要求私有部署 env 明确提供四项独立审批证据。前三项是不带路径、查询或片段
 的公开 HTTPS origin；local 首版只允许固定 loopback origin：

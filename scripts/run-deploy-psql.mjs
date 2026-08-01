@@ -1,61 +1,61 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-
-const PRISMA_ONLY_PARAMETERS = [
-  'connection_limit',
-  'pool_timeout',
-  'schema',
-  'socket_timeout',
-  'pgbouncer',
-];
+import { postgresConnectionEnvironment } from './postgres-connection-environment.mjs';
 
 function fail(message) {
   throw new Error(message);
 }
 
-function psqlUrl(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    fail('DATABASE_URL must be one valid PostgreSQL URL');
-  }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)
-    || !url.hostname
-    || url.hash
-    || !url.pathname
-    || url.pathname === '/') {
-    fail('DATABASE_URL must identify one PostgreSQL database');
-  }
-  for (const parameter of PRISMA_ONLY_PARAMETERS) url.searchParams.delete(parameter);
-  return url.toString();
+const CONNECTION_OPTIONS = ['-d', '--dbname', '-h', '--host', '-p', '--port', '-U', '--username'];
+const OPTIONS_WITH_SEPARATE_VALUE = new Set([
+  '-c', '--command', '-f', '--file', '-L', '--log-file', '-o', '--output',
+  '-P', '--pset', '-R', '--record-separator', '-F', '--field-separator',
+  '-T', '--table-attr', '-v', '--set', '--variable',
+]);
+
+function matchesOption(value, option) {
+  if (value === option) return true;
+  if (option.startsWith('--')) return value.startsWith(`${option}=`);
+  return value.startsWith(option) && value.length > option.length;
 }
 
 function psqlArguments() {
   const args = process.argv.slice(2);
   if (args[0] === '--') args.shift();
+  let expectOptionValue = false;
+  let separatorSeen = false;
   for (const value of args) {
     if (!value || value.length > 65_536 || /[\0\r\n]/u.test(value)) {
       fail('psql arguments must be bounded nonempty command-line values');
     }
-    if (value === '-d' || value.startsWith('-d') || value === '--dbname'
-      || value.startsWith('--dbname=')) {
-      fail('database target overrides are forbidden; DATABASE_URL is authoritative');
+    if (expectOptionValue) {
+      expectOptionValue = false;
+      continue;
     }
+    if (CONNECTION_OPTIONS.some((option) => matchesOption(value, option))) {
+      fail('connection target overrides are forbidden; DATABASE_URL is authoritative');
+    }
+    if (value === '--') {
+      if (separatorSeen) fail('psql command separator is duplicated');
+      separatorSeen = true;
+      continue;
+    }
+    if (!separatorSeen && value.startsWith('-')) {
+      if (OPTIONS_WITH_SEPARATE_VALUE.has(value)) expectOptionValue = true;
+      continue;
+    }
+    fail('positional database targets are forbidden; DATABASE_URL is authoritative');
   }
+  if (expectOptionValue) fail('psql command option is missing its value');
   return args;
 }
 
 function main() {
   if (!process.env.DATABASE_URL) fail('DATABASE_URL is required');
   const result = spawnSync('psql', ['--no-psqlrc', ...psqlArguments()], {
-    env: {
-      PATH: process.env.PATH || '',
-      HOME: process.env.HOME || '',
-      LANG: 'C.UTF-8',
-      PGAPPNAME: 'ss-erp-deploy-recovery',
-      PGDATABASE: psqlUrl(process.env.DATABASE_URL),
-    },
+    env: postgresConnectionEnvironment(process.env.DATABASE_URL, {
+      applicationName: 'ss-erp-deploy-recovery',
+    }),
     stdio: 'inherit',
     windowsHide: true,
   });

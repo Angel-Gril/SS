@@ -79,9 +79,10 @@ pointer is created. Do not manually delete or overwrite the current attestation.
 Credentials and Prisma-only query parameters are
 not retained in evidence. The deployment re-hashes and gunzips those exact bytes before Prisma can run. For the
 first rollout of this gate, copy or check out `backup-db.sh`, `verify-backup-restore.sh`,
-`verify-deploy-backup.sh`, `deploy-backup-attestation.mjs`, and `deploy-database-identity.mjs` from
-the target revision into a private operator directory; do not use an older deployed backup script.
-Archive deploys install the ten runtime gate files plus the commit marker automatically. A Git
+`verify-deploy-backup.sh`, `deploy-backup-attestation.mjs`, `deploy-database-identity.mjs`,
+`postgres-connection-environment.mjs`, and `run-postgres-command.mjs` from the target revision into
+a private operator directory; do not use an older deployed backup script.
+Archive deploys install the eleven runtime gate files plus the commit marker automatically. A Git
 checkout deployment must first follow the root-owned gate archive/install procedure in
 `docs/deployment.md`; `deploy-staging.sh` fails before dependencies or service quiescence when that
 exact target gate is absent. It always rebuilds the target and no longer supports `--skip-build`.
@@ -389,6 +390,9 @@ Recommended deploy order:
 4. run `/ready`
 5. run `smoke:live`
 6. run `verify-vps-deploy.sh`
+7. run the target-bound `canary:rel04:dark` contract from `docs/deployment.md`; retain its private
+   mode-0600 summary and verify that cleanup passed
+8. only after both regions pass, run the exact regional website download probe
 
 ## Existing Non-Release Deploy
 

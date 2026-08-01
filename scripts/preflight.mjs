@@ -104,6 +104,11 @@ const steps = [
     args: ['scripts/ai-media-dark-deploy.test.mjs'],
   },
   {
+    name: 'REL-04 dark canary contract',
+    command: 'node',
+    args: ['--test', 'scripts/rel04-dark-canary.test.mjs'],
+  },
+  {
     name: 'deployment backup attestation contract',
     command: 'node',
     args: [

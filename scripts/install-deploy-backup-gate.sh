@@ -13,6 +13,7 @@ FILES=(
   deploy-backup-gate.mjs
   deploy-backup-attestation.mjs
   deploy-database-identity.mjs
+  postgres-connection-environment.mjs
   deploy-environment.mjs
   deploy-maintenance-gate.sh
   deploy-source-manifest.mjs
