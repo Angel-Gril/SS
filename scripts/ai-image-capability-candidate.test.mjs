@@ -11,6 +11,17 @@ const API_BASE_SHA256 = 'a'.repeat(64);
 const OPERATION_ENDPOINT_SHA256 = '5'.repeat(64);
 const MODEL = 'reviewed-edit-model';
 const OPERATIONS = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
+const WANX_PROVIDER = 'dashscope-wanx21-image-edit';
+const WANX_MODEL = 'wanx2.1-imageedit';
+const WANX_API_BASE_SHA256 = sha256('https://dashscope.aliyuncs.com/api/v1');
+const WANX_OPERATION_ENDPOINT_SHA256 = sha256(
+  'https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis',
+);
+const WANX_PROFILES = {
+  IMAGE_TO_IMAGE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+  FULL_EDIT: 'DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1',
+  INPAINT: 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1',
+};
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -203,6 +214,47 @@ function withBundle(options, callback) {
   }
 }
 
+function createWanxBundle(options = {}) {
+  return createBundle({
+    mutateReport(reports) {
+      reports.forEach((report) => {
+        report.provider = WANX_PROVIDER;
+        report.model = WANX_MODEL;
+        report.apiBaseSha256 = WANX_API_BASE_SHA256;
+        report.operationEndpointSha256 = WANX_OPERATION_ENDPOINT_SHA256;
+        report.requestProfile = WANX_PROFILES[report.operation];
+        report.approvalEvidence.currency = 'CNY';
+        report.quotedCost = { currency: 'CNY', amount: 14, scale: 2 };
+        report.maximumCost = { currency: 'CNY', amount: 100, scale: 2 };
+      });
+      options.mutateReport?.(reports);
+    },
+    mutateReceipt(receipts) {
+      receipts.forEach((receipt) => {
+        receipt.actualCost = { currency: 'CNY', amount: 14, scale: 2 };
+      });
+      options.mutateReceipt?.(receipts);
+    },
+    mutateManifest(manifest) {
+      manifest.provider = WANX_PROVIDER;
+      manifest.model = WANX_MODEL;
+      manifest.apiBaseSha256 = WANX_API_BASE_SHA256;
+      manifest.inputTransport = 'base64';
+      manifest.resultMode = 'async';
+      options.mutateManifest?.(manifest);
+    },
+  });
+}
+
+function withWanxBundle(options, callback) {
+  const bundle = createWanxBundle(options);
+  try {
+    return callback(bundle);
+  } finally {
+    rmSync(bundle.directory, { recursive: true, force: true });
+  }
+}
+
 test('emits a sanitized candidate without modifying the provider registry', () => {
   withBundle({}, ({ manifestPath }) => {
     const candidate = reviewAiImageCapabilityCandidate(manifestPath);
@@ -266,6 +318,104 @@ test('accepts an exact v4 receipt with globally bound Token-log evidence', () =>
     },
   );
 });
+
+test('emits a candidate for the exact Wanx async data-URL edit chain', () => {
+  withWanxBundle({}, ({ manifestPath }) => {
+    const candidate = reviewAiImageCapabilityCandidate(manifestPath);
+    assert.deepEqual(candidate.candidateCapability, {
+      provider: WANX_PROVIDER,
+      model: WANX_MODEL,
+      operations: OPERATIONS,
+      maxReferences: 1,
+      supportsMask: true,
+      inputTransport: 'base64',
+      resultMode: 'async',
+      evidenceLevel: 'candidate-only',
+      requestedRegistryEvidenceLevel: 'sandbox-verified',
+      evidence: 'shape-validated candidate; trusted private evidence review is still required',
+      proposedSandboxEvidence: OPERATIONS.map((operation) => ({
+        endpointSha256: WANX_API_BASE_SHA256,
+        operation,
+        inputTransport: 'base64',
+        resultMode: 'async',
+      })),
+    });
+  });
+});
+
+test('rejects a Wanx chain using a non-CNY policy', () => {
+  withWanxBundle(
+    {
+      mutateReport(reports) {
+        reports[0].approvalEvidence.currency = 'USD';
+        reports[0].quotedCost.currency = 'USD';
+        reports[0].maximumCost.currency = 'USD';
+      },
+      mutateReceipt(receipts) {
+        receipts[0].actualCost.currency = 'USD';
+      },
+    },
+    ({ manifestPath }) => {
+      assert.throws(
+        () => reviewAiImageCapabilityCandidate(manifestPath),
+        /BILLING_EVIDENCE_INVALID/u,
+      );
+    },
+  );
+});
+
+test('rejects Wanx billing that does not use the accepted task identity', () => {
+  withWanxBundle(
+    {
+      mutateReceipt(receipts) {
+        promoteReceiptsToV4(receipts);
+      },
+    },
+    ({ manifestPath }) => {
+      assert.throws(
+        () => reviewAiImageCapabilityCandidate(manifestPath),
+        /BILLING_EVIDENCE_INVALID/u,
+      );
+    },
+  );
+});
+
+for (const [label, mutateReport] of [
+  ['Provider', (reports) => { reports[0].provider = 'custom-openai-compatible'; }],
+  ['model', (reports) => { reports[0].model = 'wanx2.1-t2i-turbo'; }],
+  ['API Base', (reports) => { reports[0].apiBaseSha256 = hash('0'); }],
+  ['submit endpoint', (reports) => { reports[0].operationEndpointSha256 = hash('0'); }],
+  ['operation profile', (reports) => {
+    reports[1].requestProfile = WANX_PROFILES.IMAGE_TO_IMAGE;
+  }],
+  ['task identity', (reports) => { reports[0].providerRequestIdHash = null; }],
+]) {
+  test(`rejects a Wanx report with mismatched ${label}`, () => {
+    withWanxBundle({ mutateReport }, ({ manifestPath }) => {
+      assert.throws(
+        () => reviewAiImageCapabilityCandidate(manifestPath),
+        /ARTIFACT_IDENTITY_INVALID/u,
+      );
+    });
+  });
+}
+
+for (const [label, mutateManifest] of [
+  ['Provider', (manifest) => { manifest.provider = 'dashscope-wanx'; }],
+  ['model', (manifest) => { manifest.model = 'wanx2.1-t2i-turbo'; }],
+  ['API Base', (manifest) => { manifest.apiBaseSha256 = hash('0'); }],
+  ['input transport', (manifest) => { manifest.inputTransport = 'multipart'; }],
+  ['result mode', (manifest) => { manifest.resultMode = 'sync'; }],
+]) {
+  test(`rejects a Wanx manifest with mismatched ${label}`, () => {
+    withWanxBundle({ mutateManifest }, ({ manifestPath }) => {
+      assert.throws(
+        () => reviewAiImageCapabilityCandidate(manifestPath),
+        /QUALITY_REVIEW_INVALID/u,
+      );
+    });
+  });
+}
 
 for (const [label, mutateManifest] of [
   [

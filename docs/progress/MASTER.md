@@ -139,6 +139,17 @@ same-request retry. This is positive `IMAGE_TO_IMAGE` capability evidence, not a
 chain; `QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP ingest,
 VPS, or Ozon mutation occurred.
 
+The network-free capability-candidate reviewer now supports the exact Wanx evidence family without
+weakening its historical custom OpenAI-compatible path. Wanx candidates must bind provider
+`dashscope-wanx21-image-edit`, model `wanx2.1-imageedit`, the reviewed API Base and image-synthesis
+endpoint digests, `base64` input, `async` result mode, all three operation-specific profiles, CNY
+exact money, a non-null accepted task-ID hash, and a v3 `PROVIDER_REQUEST_ID` receipt. It rejects
+generic DashScope labels, another model/base/endpoint/profile, multipart or sync relabeling,
+non-CNY evidence, and Token-log receipts. Focused candidate tests pass `43/43`; target lint,
+documentation contract, workspace typecheck, diff check, and the complete preflight pass. The
+helper remains `CANDIDATE_ONLY`, performs no Registry write, and cannot consume the current
+unresolved-billing I2I result. Counts and rollout state remain unchanged.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both

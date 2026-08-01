@@ -12,6 +12,13 @@ separate code review. The sanitized report/receipt bundle is self-described evid
 anchor, so the output deliberately uses `evidenceLevel: candidate-only` and cannot be pasted into
 the production Registry as an `AiImageProviderCapability`.
 
+The reviewer accepts two closed transport families. The existing `custom` family requires an exact
+model/API Base with synchronous `multipart` reports from `custom-openai-compatible`. The Wanx family
+requires provider `dashscope-wanx21-image-edit`, exact model `wanx2.1-imageedit`, the reviewed
+`https://dashscope.aliyuncs.com/api/v1` digest, `base64` input transport, and `async` result mode.
+It does not accept a generic DashScope provider label, another Wanx model, another region/base,
+multipart relabeling, or a synchronous result claim.
+
 ## Prepare The Review Bundle
 
 Create one private directory containing sanitized copies of the three submit reports, three billing
@@ -96,6 +103,27 @@ The review file is a closed canonical JSON object in this shape:
 }
 ```
 
+For a Wanx review, keep the same closed shape but set:
+
+```json
+{
+  "provider": "dashscope-wanx21-image-edit",
+  "model": "wanx2.1-imageedit",
+  "apiBaseSha256": "3d3074c32a59b1d48fc41b46cdc5f389411691480738fa914cde3537cb61fbff",
+  "inputTransport": "base64",
+  "resultMode": "async"
+}
+```
+
+The three Wanx reports must respectively use
+`DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`,
+`DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1`, and
+`DASHSCOPE_WANX21_INPAINT_ASYNC_V1`. Every report must bind the fixed image-synthesis submit
+endpoint digest, one accepted task-ID hash, and CNY exact money. Each matching receipt must be v3
+with `correlationMethod: PROVIDER_REQUEST_ID`, where that Provider request identity is the accepted
+Wanx task ID. A task count, image count, public list price, unrelated console snapshot, or
+capability-only unresolved-billing sidecar is not a receipt.
+
 Format the file as `JSON.stringify(value, null, 2)` followed by one newline. The three operations
 must use one credential revision, one Provider account, and one operation endpoint. They require
 independent Operation IDs, approval files/digests, pricing revisions, pre-call/reconciliation
@@ -111,10 +139,11 @@ scale. Settled actual cost must use that same currency and scale.
 node scripts/sandbox/ai-image-capability-candidate.mjs --review-manifest <bundle>/quality-review.json
 ```
 
-The candidate contains the exact `custom` provider, model, API Base digest, operation,
-`multipart` transport, and `sync` result mode. Its `proposedSandboxEvidence.endpointSha256` is copied
-only from the report and receipt field named `apiBaseSha256`; the operation-endpoint digest is
-retained as review evidence and is never substituted for the Registry digest.
+The candidate contains the exact reviewed provider, model, API Base digest, operation, input
+transport, and result mode. Its `proposedSandboxEvidence.endpointSha256` is copied only from the
+report and receipt field named `apiBaseSha256`; the operation-endpoint digest is retained as review
+evidence and is never substituted for the Registry digest. Wanx therefore emits `base64`/`async`;
+the custom OpenAI-compatible family continues to emit `multipart`/`sync` byte-for-byte.
 
 `CANDIDATE_ONLY` is not authorization to edit
 `apps/server/src/services/ai-image-provider-capabilities.ts`. Review the candidate, the three human

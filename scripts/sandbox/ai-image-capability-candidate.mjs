@@ -21,6 +21,17 @@ const OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u;
 const SECRET_SHAPE_PATTERN = /(?:^|[^A-Za-z0-9])(?:sk|pk)-[A-Za-z0-9_-]{12,}/iu;
 const EDIT_OPERATIONS = Object.freeze(['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']);
 const EDIT_OPERATION_SET = new Set(EDIT_OPERATIONS);
+const WANX_PROVIDER = 'dashscope-wanx21-image-edit';
+const WANX_MODEL = 'wanx2.1-imageedit';
+const WANX_API_BASE_SHA256 = sha256('https://dashscope.aliyuncs.com/api/v1');
+const WANX_OPERATION_ENDPOINT_SHA256 = sha256(
+  'https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis',
+);
+const WANX_PROFILE_BY_OPERATION = Object.freeze({
+  IMAGE_TO_IMAGE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+  FULL_EDIT: 'DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1',
+  INPAINT: 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1',
+});
 
 const MANIFEST_KEYS = new Set([
   'schemaVersion',
@@ -209,6 +220,38 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function manifestProviderIdentity(manifest) {
+  if (
+    manifest.provider === 'custom' &&
+    manifest.inputTransport === 'multipart' &&
+    manifest.resultMode === 'sync'
+  ) {
+    return {
+      kind: 'CUSTOM_OPENAI_COMPATIBLE',
+      reportProvider: 'custom-openai-compatible',
+      requiredCurrency: null,
+      operationEndpointSha256: null,
+      profiles: null,
+    };
+  }
+  if (
+    manifest.provider === WANX_PROVIDER &&
+    manifest.model === WANX_MODEL &&
+    manifest.apiBaseSha256 === WANX_API_BASE_SHA256 &&
+    manifest.inputTransport === 'base64' &&
+    manifest.resultMode === 'async'
+  ) {
+    return {
+      kind: 'DASHSCOPE_WANX21_ASYNC',
+      reportProvider: WANX_PROVIDER,
+      requiredCurrency: 'CNY',
+      operationEndpointSha256: WANX_OPERATION_ENDPOINT_SHA256,
+      profiles: WANX_PROFILE_BY_OPERATION,
+    };
+  }
+  fail('QUALITY_REVIEW_INVALID', 'quality review Provider transport is unsupported');
+}
+
 function safeRelativePath(root, value, label) {
   if (
     typeof value !== 'string' ||
@@ -339,12 +382,10 @@ function validateManifest(manifest) {
     manifest.schemaVersion !== 1 ||
     manifest.event !== 'AI_IMAGE_PROVIDER_EDIT_CAPABILITY_QUALITY_REVIEW' ||
     manifest.decision !== 'APPROVED' ||
-    manifest.provider !== 'custom' ||
+    !isSafePublicIdentifier(manifest.provider, 128) ||
     !isSafePublicIdentifier(manifest.model, 200) ||
     manifest.model === '*' ||
     !isSha256(manifest.apiBaseSha256) ||
-    manifest.inputTransport !== 'multipart' ||
-    manifest.resultMode !== 'sync' ||
     manifest.maxReferences !== 1 ||
     manifest.supportsMask !== true ||
     !isSha256(manifest.reviewerRefSha256) ||
@@ -354,6 +395,7 @@ function validateManifest(manifest) {
   ) {
     fail('QUALITY_REVIEW_INVALID', 'quality review manifest identity or decision is invalid');
   }
+  const identity = manifestProviderIdentity(manifest);
   const seen = new Set();
   for (const entry of manifest.operations) {
     if (
@@ -390,6 +432,7 @@ function validateManifest(manifest) {
   if (EDIT_OPERATIONS.some((operation) => !seen.has(operation))) {
     fail('QUALITY_REVIEW_INVALID', 'quality review must cover each edit operation exactly once');
   }
+  return identity;
 }
 
 function validateApprovalEvidence(value, report) {
@@ -411,7 +454,7 @@ function validateApprovalEvidence(value, report) {
   }
 }
 
-function validateReport(report, entry, manifest, reportSha256) {
+function validateReport(report, entry, manifest, identity, reportSha256) {
   if (!hasExactKeys(report, REPORT_KEYS)) {
     fail('REPORT_SCHEMA_INVALID', `${entry.operation} submit report has an unexpected schema`);
   }
@@ -420,7 +463,7 @@ function validateReport(report, entry, manifest, reportSha256) {
     report.state !== 'SUCCEEDED' ||
     report.operation !== entry.operation ||
     report.operationId !== entry.operationId ||
-    report.provider !== 'custom-openai-compatible' ||
+    report.provider !== identity.reportProvider ||
     report.model !== manifest.model ||
     report.apiBaseSha256 !== manifest.apiBaseSha256 ||
     !isSha256(report.operationEndpointSha256) ||
@@ -470,6 +513,19 @@ function validateReport(report, entry, manifest, reportSha256) {
       `${entry.operation} submit report does not match the reviewed capability`,
     );
   }
+  if (
+    identity.kind === 'DASHSCOPE_WANX21_ASYNC' &&
+    (
+      report.operationEndpointSha256 !== identity.operationEndpointSha256 ||
+      report.requestProfile !== identity.profiles[entry.operation] ||
+      !isSha256(report.providerRequestIdHash)
+    )
+  ) {
+    fail(
+      'ARTIFACT_IDENTITY_INVALID',
+      `${entry.operation} submit report does not match the reviewed Wanx transport`,
+    );
+  }
   if (reportSha256 !== entry.reportSha256) {
     fail(
       'ARTIFACT_DIGEST_MISMATCH',
@@ -479,11 +535,23 @@ function validateReport(report, entry, manifest, reportSha256) {
   const quotedCost = parseMoney(report.quotedCost, `${entry.operation} quoted cost`);
   const maximumCost = parseMoney(report.maximumCost, `${entry.operation} maximum cost`);
   validateMoneyPair(quotedCost, maximumCost, `${entry.operation} approved cost`);
+  if (identity.requiredCurrency && quotedCost.currency !== identity.requiredCurrency) {
+    fail('BILLING_EVIDENCE_INVALID', `${entry.operation} cost currency is invalid for Provider`);
+  }
   validateApprovalEvidence(report.approvalEvidence, report);
   return { quotedCost, maximumCost };
 }
 
-function validateReceipt(receipt, entry, manifest, report, reportSha256, receiptSha256, costs) {
+function validateReceipt(
+  receipt,
+  entry,
+  manifest,
+  identity,
+  report,
+  reportSha256,
+  receiptSha256,
+  costs,
+) {
   const expectedKeys = receipt?.schemaVersion === 4 ? RECEIPT_V4_KEYS : RECEIPT_V3_KEYS;
   if (![3, 4].includes(receipt?.schemaVersion) || !hasExactKeys(receipt, expectedKeys)) {
     fail('BILLING_EVIDENCE_INVALID', `${entry.operation} billing receipt has an unexpected schema`);
@@ -536,6 +604,15 @@ function validateReceipt(receipt, entry, manifest, report, reportSha256, receipt
     fail(
       'BILLING_EVIDENCE_INVALID',
       `${entry.operation} billing receipt does not bind the reviewed result`,
+    );
+  }
+  if (
+    identity.kind === 'DASHSCOPE_WANX21_ASYNC' &&
+    (receipt.schemaVersion !== 3 || receipt.correlationMethod !== 'PROVIDER_REQUEST_ID')
+  ) {
+    fail(
+      'BILLING_EVIDENCE_INVALID',
+      `${entry.operation} Wanx billing must correlate the accepted task identity`,
     );
   }
   for (const key of [
@@ -600,7 +677,7 @@ export function reviewAiImageCapabilityCandidate(reviewManifestPath) {
   }
   const manifestFile = readBoundedCanonicalJson(reviewManifestPath, 'quality review manifest');
   const manifest = manifestFile.value;
-  validateManifest(manifest);
+  const identity = validateManifest(manifest);
   const reviewRoot = path.dirname(realpathSync(path.resolve(reviewManifestPath)));
   const artifactPaths = new Set();
   const reviewedOperations = [];
@@ -627,14 +704,23 @@ export function reviewAiImageCapabilityCandidate(reviewManifestPath) {
       reviewRoot,
     );
     const report = reportFile.value;
-    const costs = validateReport(report, entry, manifest, reportFile.sha256);
+    const costs = validateReport(report, entry, manifest, identity, reportFile.sha256);
     const receiptFile = readBoundedCanonicalJson(
       receiptPath,
       `${operation} billing receipt`,
       reviewRoot,
     );
     const receipt = receiptFile.value;
-    validateReceipt(receipt, entry, manifest, report, reportFile.sha256, receiptFile.sha256, costs);
+    validateReceipt(
+      receipt,
+      entry,
+      manifest,
+      identity,
+      report,
+      reportFile.sha256,
+      receiptFile.sha256,
+      costs,
+    );
     reviewedIdentities.push({
       credentialRevision: report.credentialRevision,
       providerAccountRefSha256: report.approvalEvidence.providerAccountRefSha256,

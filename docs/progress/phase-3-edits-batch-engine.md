@@ -726,3 +726,11 @@ Progress: 4/5 tasks.
   This proves positive `IMAGE_TO_IMAGE` capability but does not close the billing gate, authorize a
   retry, or satisfy `FULL_EDIT`/`INPAINT`. Progress remains `4/5` and `32/37`; no deployment, flag,
   ERP ingest, VPS, or Ozon mutation occurred.
+- The network-free capability-candidate reviewer now accepts a second closed evidence family for
+  exact Wanx async editing. It binds the reviewed provider/model/API Base/submit endpoint,
+  `base64`/`async`, three operation-specific profiles, CNY exact money, accepted task identity, and
+  v3 task-correlated billing receipts. The historical custom `multipart`/`sync` family stays
+  byte-compatible. Forty-three focused tests cover the positive chains and Provider/model/base/
+  endpoint/profile/task/currency/receipt substitutions; target lint, docs contract, workspace
+  typecheck, diff check, and complete preflight pass. This is candidate-only validation, not a
+  Registry mutation or a substitute for the missing receipts and operations.
