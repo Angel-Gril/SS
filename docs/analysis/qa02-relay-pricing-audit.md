@@ -778,6 +778,27 @@ no finalizer or formal receipt ran, and sidecar SHA-256 `9150eb29...6bec93` reco
 `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, and no same-request retry. The result is
 positive operation-specific technical evidence, not a price or billing claim.
 
+### Positive Wanx FULL_EDIT capability-only result
+
+After the operator approved I2I image quality under private confirmation SHA-256
+`b140ce02...d367b5`, operation `qa02-wanx-full-edit-20260801-d077795-01` received its own exact
+authorization. Private pre-call and approval SHA-256 values are `ed8f8990...95db8d` and
+`a64c4d96...2dc5df`. The clean private `d077795` checkout sent one create request, polled only the
+accepted task nine times, and downloaded one result without forwarding Authorization.
+
+Report SHA-256 `9e1ee9e3...a912cd` and async-evidence SHA-256 `fd56c94d...612fed` record
+`SUCCEEDED`, one 1024x1024 PNG of 910,556 bytes, and output SHA-256
+`4638848afd8409c2cfa3db3d74235062794567593b4a5f604f4d429c7439e85e`. The output is not a copied
+source: mean absolute channel difference is `3.089`, and `14.14%` of pixels differ by more than five
+RGB levels. Visual inspection found a complete but restrained neutral-gray studio rerender that
+preserves the mug identity, shape, handle, proportions, camera angle, and no-text/no-logo rules.
+Technical-review SHA-256 is `7568c39e...d41ddd`; human confirmation remains pending.
+
+Billing again remains deliberately unresolved because the Key's account is not the authenticated
+console account. Sidecar SHA-256 `62a2b8d6...f0f449` records `actualCost=null`, no formal receipt,
+and no same-request retry. This is positive FULL_EDIT technical evidence only; the separate INPAINT
+draft remains unapproved.
+
 ## PicPi public no-credential preflight
 
 At the public-preflight checkpoint on 2026-08-01, the operator supplied `https://api.picpi.top` as

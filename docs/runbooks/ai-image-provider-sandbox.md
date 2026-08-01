@@ -277,6 +277,14 @@ evidence with billing unresolved; never convert the unrelated `CNY 0` console vi
 `NO_CHARGE`, and never infer actual cost from `usage.imageCount`. `FULL_EDIT` and `INPAINT` still
 require separate policies, media, approvals, Operation IDs, and single submissions.
 
+Operation `qa02-wanx-full-edit-20260801-d077795-01` later completed one positive live Wanx
+`FULL_EDIT` request from its exact clean checkout and approval. It sent one create POST, reached
+`SUCCEEDED` after polling only its accepted task, and downloaded one validated 1024x1024 PNG. Do
+not retry or rename it. Technical review found a non-identical full-image rerender with the product
+identity and neutral studio constraints preserved; human confirmation remains pending. Its billing
+account remains unlinked, so no receipt exists and actual cost remains unknown. The independently
+prepared INPAINT operation still requires separate human authorization before any POST.
+
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
 DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the V1

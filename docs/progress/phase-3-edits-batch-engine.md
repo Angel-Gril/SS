@@ -720,7 +720,8 @@ Progress: 4/5 tasks.
   `f6d90b58...9da24`. Async-evidence SHA-256 is `97776d79...ca3194`; task identity hashes agree and
   credential scans across the seven execution artifacts found zero matches. Technical visual review
   found the requested warm-beige background change while preserving the mug identity and geometry,
-  with no unexpected text, logo, watermark, or object. Human confirmation remains pending.
+  with no unexpected text, logo, watermark, or object. The operator later approved image quality;
+  private confirmation SHA-256 is `b140ce02...d367b5`.
 - No billing finalizer or formal receipt ran. Private sidecar SHA-256 `9150eb29...6bec93` records
   `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, and `sameRequestRetryAllowed=false`.
   This proves positive `IMAGE_TO_IMAGE` capability but does not close the billing gate, authorize a
@@ -742,3 +743,12 @@ Progress: 4/5 tasks.
   CNY `0.14` with proposed maximum CNY `1.00`, retain all review sentinels, and fail the official
   no-key verifier with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No Provider request or charge occurred;
   each operation still requires its own exact authorization.
+- The operator subsequently approved FULL_EDIT exactly. Private pre-call/approval SHA-256 values
+  `ed8f8990...95db8d` and `a64c4d96...2dc5df` preceded one create request from clean checkout
+  `d077795`. Wanx reached `SUCCEEDED` after nine polls and one result download. Report/async evidence
+  SHA-256 values are `9e1ee9e3...a912cd` and `fd56c94d...612fed`; the 1024x1024 PNG is 910,556
+  bytes under SHA-256 `4638848a...39e85e`. Pixel review proved a complete non-identical render while
+  preserving product identity and the neutral studio/no-text requirements. Technical-review SHA-256
+  is `7568c39e...d41ddd`; human confirmation remains pending. Billing remains honestly unresolved
+  under sidecar `62a2b8d6...f0f449`, with no receipt and no retry. INPAINT remains separately
+  unapproved, so progress stays `4/5` and `32/37` with all rollout flags off.
