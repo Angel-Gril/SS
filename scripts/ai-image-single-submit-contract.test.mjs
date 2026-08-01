@@ -469,6 +469,10 @@ assert.match(billingSettlement, /AI_IMAGE_SANDBOX_BILLING_SETTLED/u);
 assert.match(billingSettlement, /COST_LIMIT_EXCEEDED/u);
 assert.match(billingSettlement, /UNIQUE_ACCOUNT_TIME_WINDOW/u);
 assert.match(billingSettlement, /PROVIDER_TOKEN_LOG_ENTRY/u);
+assert.match(billingSettlement, /API_KEY_CUMULATIVE_ZERO_USAGE/u);
+assert.match(billingSettlement, /SUB2_API_KEY_CUMULATIVE_ZERO_USAGE_V1/u);
+assert.match(billingSettlement, /https:\/\/api\.picpi\.top\/v1/u);
+assert.match(billingSettlement, /total\.actual_cost/u);
 assert.match(billingSettlement, /providerTokenLogSnapshotPath/u);
 assert.match(billingSettlement, /providerBillingEntryRequestIdHash/u);
 assert.match(billingSettlement, /providerTokenLogUserId/u);
@@ -508,7 +512,7 @@ assert.match(billingSettlement, /BigInt\(rawQuotaDelta\)/u);
 assert.match(billingSettlement, /ATTESTATION_V3_KEYS/u);
 assert.match(
   billingSettlement,
-  /schemaVersion:\s*attestation\.schemaVersion\s*===\s*3\s*\?\s*4\s*:\s*3/u,
+  /attestation\.schemaVersion\s*===\s*4[\s\S]*\?\s*5[\s\S]*attestation\.schemaVersion\s*===\s*3[\s\S]*\?\s*4[\s\S]*:\s*3/u,
 );
 assert.match(billingSettlement, /artifacts mix incompatible evidence generations/u);
 assert.match(billingSettlement, /apiBaseSha256/u);

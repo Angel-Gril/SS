@@ -159,9 +159,64 @@ response body from the authenticated read-only request, not a reconstructed subs
 }
 ```
 
+### Sub2 API-key cumulative-zero attestation
+
+Attestation v4 is a narrow `NO_CHARGE` contract for the reviewed PicPi Sub2 deployment. It exists
+because Sub2 does not expose the Relay raw-quota meter used by v2/v3, while a definite HTTP 4xx may
+carry a response request-ID header whose raw value is intentionally not retained. V4 machine-checks
+the exact authenticated `GET /v1/usage` response instead of relabeling request counts as quota.
+
+```json
+{
+  "schemaVersion": 4,
+  "settlementId": "qa02-picpi-i2i-20260801-de951b7-01-billing-01",
+  "statement": "I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT",
+  "operationId": "qa02-picpi-i2i-20260801-de951b7-01",
+  "preCallObservedAt": "2026-08-01T08:43:29.325Z",
+  "settledObservedAt": "2026-08-01T09:04:23.000Z",
+  "reconcilerRef": "operator-picpi-sub2-20260801",
+  "providerAccountRef": "picpi-sub2-project",
+  "pricingRevision": "operator-cap-usd1-20260801-r1",
+  "preCallBillingSnapshotRef": "picpi-sub2-dashboard-before-qa02-picpi-i2i-20260801-de951b7-01",
+  "billingReconciliationRef": "picpi-sub2-dashboard-after-qa02-picpi-i2i-20260801-de951b7-01",
+  "settledBillingSnapshotPath": "C:\\private\\qa02-picpi.after-usage.json",
+  "settledBillingSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "providerBillingEntryRef": "picpi-sub2-api-key-cumulative-zero",
+  "intentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "submitReportSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "fingerprintClaimSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "requestFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "approvalId": "approval-qa02-picpi-i2i-20260801-de951b7-01",
+  "approvalSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "correlationMethod": "API_KEY_CUMULATIVE_ZERO_USAGE",
+  "providerRequestId": null,
+  "billingOutcome": "NO_CHARGE",
+  "actualCost": {
+    "currency": "USD",
+    "amount": 0,
+    "scale": 0
+  },
+  "cumulativeUsageEvidence": {
+    "schemaVersion": 1,
+    "kind": "SUB2_API_KEY_CUMULATIVE_ZERO_USAGE_V1",
+    "totalRequests": 0,
+    "totalActualCost": {
+      "amount": 0,
+      "scale": 0
+    }
+  }
+}
+```
+
+V4 deliberately has no `preCallBillingSnapshotPath` or pre-call snapshot digest. The approval-bound
+pre-call reference and observation time remain part of the chronology, but lifetime cumulative zero
+is sufficient without reconstructing or copying a missing before file. The settled file is the exact
+nonempty response body retained from authenticated `GET /v1/usage`; it may use the Provider's compact
+JSON representation and must not contain the Key or request headers.
+
 Rules:
 
-- Exact attestations v2/v3 use one closed `actualCost` object. `CHARGED` requires a positive
+- Exact attestations v2/v3/v4 use one closed `actualCost` object. `CHARGED` requires a positive
   amount; `NO_CHARGE` requires zero. Currency and scale must match the approved exact-money chain.
 - `meterEvidence` must independently prove the same exact cost through both integer raw-quota
   change and displayed total-usage change. For the example above, `5950 / 500000 = CNY 0.0119`,
@@ -199,15 +254,32 @@ Rules:
   ID hash, and a pre-call-to-settled observation window no longer than 15 minutes. Use it only when
   the account/time window uniquely identifies this request; concurrent Provider activity makes it
   invalid evidence.
+- `API_KEY_CUMULATIVE_ZERO_USAGE` is valid only in attestation v4. It requires the exact PicPi
+  `https://api.picpi.top/v1` API Base, `/images/edits`, `gpt-image-2`, `IMAGE_TO_IMAGE`, profile
+  `OPENAI_SQUARE_SINGLE_V1`, report v5, one create request, a definite `REJECTED` state, a retained
+  response request-ID hash, `usage: null`, and a settlement observation window no longer than 30
+  minutes. The longer v4 window does not affect the 15-minute before/after delta rule: lifetime
+  cumulative zero, not an unbounded account-window guess, is the correlation evidence.
+  `providerRequestId` remains null. It cannot settle `SUCCEEDED`, `RECONCILIATION_REQUIRED`, Wanx,
+  legacy evidence, a charge, another route/model/operation, or another Sub2 deployment.
+- The v4 settled body must say `isValid: true`, use the approved currency in `unit`, and contain
+  zero `requests` and `actual_cost` in both `usage.today` and `usage.total`. The finalizer parses and
+  compares the lifetime values with the closed cumulative evidence object. Sub2 upstream commit
+  `b22f73e725236790f97d89bf0c3b908a48e591d5` defines `/v1/usage` as current-API-key statistics;
+  `total.requests` is the lifetime `COUNT(*)` of that Key's usage logs and `total.actual_cost` is the
+  lifetime sum. A logged failed request contributes to the count, so zero proves this Key has no
+  recorded request or actual cost. Subscription-level usage fields are unrelated and are not used.
 - `preCallObservedAt` must be no later than submit `startedAt`; `settledObservedAt` must be no
   earlier than submit `completedAt` and no more than five minutes in the future. The pre-call
   observation must be at or before approval, no more than 15 minutes old when approved, and the
   submit must have started no more than 15 minutes after that observation and inside the stored
   approval window (allowing only the existing five-minute future-clock skew at its lower boundary).
-- Both snapshot paths are opened with bounded, private, no-symlink semantics and their actual bytes
-  must match the two attested SHA-256 values. The before and settled paths must be distinct files,
-  not aliases or hard links to the same file. Filesystems that cannot provide a stable canonical
-  path plus device/inode identity are rejected.
+- For v1-v3, both snapshot paths are opened with bounded, private, no-symlink semantics and their
+  actual bytes must match the two attested SHA-256 values. The before and settled paths must be
+  distinct files, not aliases or hard links to the same file. Filesystems that cannot provide a
+  stable canonical path plus device/inode identity are rejected.
+- V4 opens only the settled cumulative snapshot with the same bounded, private, no-symlink and
+  stable-identity checks. Do not copy the settled response and mislabel it as a pre-call snapshot.
 - The v3 Token-log snapshot is subject to the same private-file and distinct-inode checks. Its
   closed wrapper stores the exact authenticated GET URI/status/content type plus raw response bytes
   as canonical base64 and a SHA-256. The decoded response must be successful JSON with no more than
@@ -278,7 +350,8 @@ reopening the visible directory path.
 
 The sanitized settlement stores only hashes (including the model digest), enums, amounts,
 timestamps, and non-secret request metadata. An exact v5 submit produces a v3 settlement receipt
-for attestation v2 or a v4 receipt for Token-log attestation v3. Both retain exact `actualCost`,
+for attestation v2, a v4 receipt for Token-log attestation v3, or a v5 receipt for cumulative-zero
+attestation v4. All retain exact `actualCost`,
 `quotedCost`, and `maximumCost` objects plus explicit `apiBaseSha256` and
 `operationEndpointSha256`. The v4 receipt also retains separate upstream-response and Relay
 billing-entry request-ID hashes, their bridge status, a globally claimed billing-entry key, a
@@ -288,6 +361,8 @@ keeps the byte-stable v1 receipt whose `endpointSha256` means the operation endp
 receipt field explicitly named `apiBaseSha256` may be copied into Registry evidence. The settlement
 never stores raw meter deltas, raw account/billing references, the raw Provider request ID, API
 keys, Authorization, Provider responses, URLs, free-form reasons, or local paths.
+The v5 receipt retains the cumulative evidence kind and settled snapshot digest, but not the raw
+Sub2 response or a nonexistent pre-call snapshot digest.
 
 For Wanx, the receipt retains the legacy API Base digest and async image-synthesis submit-endpoint
 digest. It does not retain the raw task ID, poll URL, temporary result URL, or DashScope response

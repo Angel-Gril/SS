@@ -62,6 +62,8 @@ const rawProviderRequestId = 'provider-request-private-0001';
 const providerBillingRequestId = 'relay-billing-request-private-0001';
 const providerApiBase = 'https://relay.example/v1';
 const providerApiBaseSha256 = sha256(providerApiBase);
+const sub2ApiBase = 'https://api.picpi.top/v1';
+const sub2EditEndpoint = `${sub2ApiBase}/images/edits`;
 const xiaoyiApiBaseSha256 = sha256(AI_IMAGE_XIAOYI_API_BASE);
 const exactQuotedCost = { currency: 'CNY', amount: 119, scale: 4 } as const;
 const exactMaximumCost = { currency: 'CNY', amount: 1_000, scale: 4 } as const;
@@ -220,6 +222,62 @@ function wanxEvidenceBindings() {
       apiBaseSha256,
       operationEndpointSha256: endpointSha256,
     },
+  };
+}
+
+function sub2CumulativeZeroBindings(reportOverrides: Record<string, unknown> = {}) {
+  const state = reportOverrides.state === 'SUCCEEDED' ? 'SUCCEEDED' : 'REJECTED';
+  const endpointSha256 = sha256(sub2EditEndpoint);
+  const request = {
+    operation: 'IMAGE_TO_IMAGE',
+    requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+    n: 1,
+    width: 1024,
+    height: 1024,
+    size: '1024x1024',
+    promptSha256: '4'.repeat(64),
+    sourceSha256: ['5'.repeat(64)],
+    sourceDimensions: [{ width: 1024, height: 1024 }],
+    maskSha256: null,
+    maskDimensions: null,
+    approvalEvidence: approvalEvidence({ currency: 'USD' }),
+  };
+  const fingerprint = createAiImageSandboxRequestFingerprint({
+    endpointSha256,
+    model: 'gpt-image-2',
+    request: {
+      n: request.n,
+      size: request.size,
+      promptSha256: request.promptSha256,
+      sourceSha256: request.sourceSha256,
+      maskSha256: request.maskSha256,
+    },
+  });
+  return {
+    requestFingerprint: fingerprint,
+    approvalOverrides: { currency: 'USD' },
+    intentOverrides: {
+      endpointSha256,
+      apiBaseSha256: sha256(sub2ApiBase),
+      model: 'gpt-image-2',
+      request,
+      quotedCost: { currency: 'USD', amount: 1, scale: 0 },
+      maximumCost: { currency: 'USD', amount: 1, scale: 0 },
+    },
+    reportOverrides: {
+      state,
+      provider: 'custom-openai-compatible',
+      model: 'gpt-image-2',
+      operation: 'IMAGE_TO_IMAGE',
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      apiBaseSha256: sha256(sub2ApiBase),
+      operationEndpointSha256: endpointSha256,
+      ...(state === 'SUCCEEDED' ? {} : { failureCode: 'PROVIDER_REQUEST_FAILED' }),
+      quotedCost: { currency: 'USD', amount: 1, scale: 0 },
+      maximumCost: { currency: 'USD', amount: 1, scale: 0 },
+      ...reportOverrides,
+    },
+    attestationOverrides: { requestFingerprint: fingerprint },
   };
 }
 
@@ -496,6 +554,48 @@ function exactAttestation(input: {
   };
 }
 
+function cumulativeZeroAttestation(input: {
+  intentSha256: string;
+  reportSha256: string;
+  fingerprintClaimSha256: string;
+  settledBillingSnapshotPath: string;
+  settledBillingSnapshotSha256: string;
+}, overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 4,
+    settlementId: 'sandbox-billing-settlement-0001',
+    statement: AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT,
+    operationId,
+    preCallObservedAt: '2029-12-31T23:59:30.000Z',
+    settledObservedAt: '2030-01-01T00:05:00.000Z',
+    reconcilerRef: 'billing-operator-review',
+    providerAccountRef: 'provider-account-main',
+    pricingRevision: 'pricing-r1',
+    preCallBillingSnapshotRef: 'private-ledger/before',
+    billingReconciliationRef: 'private-ledger/after',
+    settledBillingSnapshotPath: input.settledBillingSnapshotPath,
+    settledBillingSnapshotSha256: input.settledBillingSnapshotSha256,
+    providerBillingEntryRef: 'private-ledger/api-key-cumulative-zero',
+    intentSha256: input.intentSha256,
+    submitReportSha256: input.reportSha256,
+    fingerprintClaimSha256: input.fingerprintClaimSha256,
+    requestFingerprint,
+    approvalId: `approval-${operationId}`,
+    approvalSha256,
+    correlationMethod: 'API_KEY_CUMULATIVE_ZERO_USAGE',
+    providerRequestId: null,
+    billingOutcome: 'NO_CHARGE',
+    actualCost: { currency: 'USD', amount: 0, scale: 0 },
+    cumulativeUsageEvidence: {
+      schemaVersion: 1,
+      kind: 'SUB2_API_KEY_CUMULATIVE_ZERO_USAGE_V1',
+      totalRequests: 0,
+      totalActualCost: { amount: 0, scale: 0 },
+    },
+    ...overrides,
+  };
+}
+
 function providerTokenLogEntry(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -567,13 +667,14 @@ async function fixture(input: {
   reportOverrides?: Record<string, unknown>;
   intentSchemaVersion?: 2 | 3;
   reportSchemaVersion?: 3 | 4 | 5;
-  attestationSchemaVersion?: 1 | 2 | 3;
+  attestationSchemaVersion?: 1 | 2 | 3 | 4;
   claimOverrides?: Record<string, unknown>;
   attestationOverrides?: Record<string, unknown>;
   providerLogEntryOverrides?: Record<string, unknown>;
   providerLogBodyOverrides?: Record<string, unknown>;
   providerLogRequestOverrides?: Record<string, unknown>;
   providerLogSnapshotOverrides?: Record<string, unknown>;
+  settledBillingSnapshotValue?: unknown;
   requestFingerprint?: string;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-billing-'));
@@ -620,7 +721,17 @@ async function fixture(input: {
   const preCallBillingSnapshotPath = join(root, 'private', 'billing-before.snapshot');
   const settledBillingSnapshotPath = join(root, 'private', 'billing-settled.snapshot');
   const preCallBillingSnapshot = Buffer.from('private Provider balance before request\n', 'utf8');
-  const settledBillingSnapshot = Buffer.from('private Provider balance after request\n', 'utf8');
+  const settledBillingSnapshot = input.attestationSchemaVersion === 4
+    ? Buffer.from(`${JSON.stringify(input.settledBillingSnapshotValue || {
+        isValid: true,
+        mode: 'unrestricted',
+        unit: 'USD',
+        usage: {
+          today: { requests: 0, actual_cost: 0 },
+          total: { requests: 0, actual_cost: 0 },
+        },
+      }, null, 2)}\n`, 'utf8')
+    : Buffer.from('private Provider balance after request\n', 'utf8');
   await mkdir(dirname(preCallBillingSnapshotPath), { recursive: true, mode: 0o700 });
   await writeFile(preCallBillingSnapshotPath, preCallBillingSnapshot, { mode: 0o600 });
   await writeFile(settledBillingSnapshotPath, settledBillingSnapshot, { mode: 0o600 });
@@ -649,7 +760,18 @@ async function fixture(input: {
   };
   const storedSettlement = await writeCanonicalJson(
     settlementPath,
-    input.attestationSchemaVersion === 3
+    input.attestationSchemaVersion === 4
+      ? cumulativeZeroAttestation({
+          intentSha256: storedIntent.sha256,
+          reportSha256: storedReport.sha256,
+          fingerprintClaimSha256: storedClaim.sha256,
+          settledBillingSnapshotPath,
+          settledBillingSnapshotSha256: sha256(settledBillingSnapshot),
+        }, {
+          requestFingerprint: effectiveRequestFingerprint,
+          ...input.attestationOverrides,
+        })
+      : input.attestationSchemaVersion === 3
       ? exactAttestation(attestationInput, {
           schemaVersion: 3,
           correlationMethod: 'PROVIDER_TOKEN_LOG_ENTRY',
@@ -816,6 +938,181 @@ describe('AI image sandbox billing settlement', () => {
     expect(stored).not.toContain('quotaUnitsPerCurrencyUnit');
     expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
     expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+  });
+
+  it('settles a definite Sub2 rejection from authenticated API-key cumulative zero usage', async () => {
+    const bindings = sub2CumulativeZeroBindings();
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 5,
+      submitState: 'REJECTED',
+      providerOutcomeResolved: true,
+      correlationMethod: 'API_KEY_CUMULATIVE_ZERO_USAGE',
+      providerRequestIdHash: sha256(rawProviderRequestId),
+      billingOutcome: 'NO_CHARGE',
+      billingGate: 'PASS',
+      actualCost: { currency: 'USD', amount: 0, scale: 0 },
+      billedUnits: 0,
+      cumulativeUsageEvidenceKind: 'SUB2_API_KEY_CUMULATIVE_ZERO_USAGE_V1',
+      settledBillingSnapshotSha256: value.settledBillingSnapshotSha256,
+    });
+    expect(result.receipt).not.toHaveProperty('preCallBillingSnapshotSha256');
+  });
+
+  it.each([
+    ['requests', { usage: {
+      today: { requests: 0, actual_cost: 0 },
+      total: { requests: 1, actual_cost: 0 },
+    } }],
+    ['actual cost', { usage: {
+      today: { requests: 0, actual_cost: 0 },
+      total: { requests: 0, actual_cost: 0.01 },
+    } }],
+    ['currency', { unit: 'CNY', usage: {
+      today: { requests: 0, actual_cost: 0 },
+      total: { requests: 0, actual_cost: 0 },
+    } }],
+  ])('rejects Sub2 cumulative-zero evidence with nonzero or mismatched %s', async (_name, settledBillingSnapshotValue) => {
+    const bindings = sub2CumulativeZeroBindings();
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+      settledBillingSnapshotValue: {
+        isValid: true,
+        mode: 'unrestricted',
+        unit: 'USD',
+        ...settledBillingSnapshotValue,
+      },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_EVIDENCE_INVALID' });
+  });
+
+  it.each([
+    ['charged', {}, { billingOutcome: 'CHARGED', actualCost: { currency: 'USD', amount: 1, scale: 0 } }],
+    ['unresolved', { state: 'RECONCILIATION_REQUIRED' }, {}],
+    ['successful', { state: 'SUCCEEDED' }, {}],
+  ])('rejects cumulative-zero settlement for a %s Provider outcome', async (_name, reportOverrides, attestationOverrides) => {
+    const bindings = sub2CumulativeZeroBindings(reportOverrides);
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+      attestationOverrides: {
+        ...bindings.attestationOverrides,
+        ...attestationOverrides,
+      },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({
+      code: _name === 'charged'
+        ? 'SANDBOX_BILLING_ATTESTATION_INVALID'
+        : 'SANDBOX_BILLING_MISMATCH',
+    });
+  });
+
+  it.each([
+    ['missing response-ID hash', { providerRequestIdHash: null }, {}],
+  ])('rejects cumulative-zero correlation with %s', async (_name, reportOverrides, attestationOverrides) => {
+    const bindings = sub2CumulativeZeroBindings(reportOverrides);
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+      attestationOverrides: {
+        ...bindings.attestationOverrides,
+        ...attestationOverrides,
+      },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('caps cumulative-zero settlement observation at 30 minutes', async () => {
+    const bindings = sub2CumulativeZeroBindings();
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+      attestationOverrides: {
+        ...bindings.attestationOverrides,
+        settledObservedAt: '2030-01-01T00:29:30.001Z',
+      },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:35:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('keeps cumulative-zero attestation v4 closed and separate from before/after delta evidence', async () => {
+    const bindings = sub2CumulativeZeroBindings();
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 4,
+      ...bindings,
+      attestationOverrides: {
+        ...bindings.attestationOverrides,
+        preCallBillingSnapshotPath: 'private/forbidden-before.json',
+      },
+    });
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_ATTESTATION_INVALID' });
   });
 
   it('recomputes and settles the Wanx async JSON request fingerprint', async () => {

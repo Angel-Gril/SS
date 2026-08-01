@@ -49,6 +49,7 @@ const MAX_PROVIDER_TOKEN_LOG_ENTRIES = 1_000;
 const MAX_PROVIDER_DURATION_DIFFERENCE_MS = 10_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_CORRELATION_WINDOW_MS = 15 * 60 * 1000;
+const MAX_CUMULATIVE_ZERO_SETTLEMENT_WINDOW_MS = 30 * 60 * 1000;
 const MAX_PRECALL_SNAPSHOT_AGE_MS = 15 * 60 * 1000;
 const MAX_APPROVAL_WINDOW_MS = 60 * 60 * 1000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -102,6 +103,15 @@ const ATTESTATION_V3_KEYS = new Set([
   'providerTokenLogTokenId',
 ]);
 
+const ATTESTATION_V4_KEYS = new Set([
+  ...ATTESTATION_COMMON_KEYS.filter((key) => (
+    key !== 'preCallBillingSnapshotPath'
+    && key !== 'preCallBillingSnapshotSha256'
+  )),
+  'actualCost',
+  'cumulativeUsageEvidence',
+]);
+
 const METER_EVIDENCE_KEYS = new Set([
   'schemaVersion',
   'kind',
@@ -110,6 +120,17 @@ const METER_EVIDENCE_KEYS = new Set([
   'displayTotalUsageDelta',
   'displayTotalUsageUnitCurrencyScale',
 ]);
+
+const CUMULATIVE_USAGE_EVIDENCE_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'totalRequests',
+  'totalActualCost',
+]);
+
+const SUB2_API_BASE = 'https://api.picpi.top/v1';
+const SUB2_EDIT_ENDPOINT = `${SUB2_API_BASE}/images/edits`;
+const SUB2_CUMULATIVE_USAGE_KIND = 'SUB2_API_KEY_CUMULATIVE_ZERO_USAGE_V1';
 
 const PROVIDER_TOKEN_LOG_SNAPSHOT_KEYS = new Set([
   'schemaVersion',
@@ -326,7 +347,8 @@ type BillingOutcome = 'CHARGED' | 'NO_CHARGE';
 type CorrelationMethod =
   | 'PROVIDER_REQUEST_ID'
   | 'UNIQUE_ACCOUNT_TIME_WINDOW'
-  | 'PROVIDER_TOKEN_LOG_ENTRY';
+  | 'PROVIDER_TOKEN_LOG_ENTRY'
+  | 'API_KEY_CUMULATIVE_ZERO_USAGE';
 
 interface PrivateFileEvidence {
   path: string;
@@ -574,6 +596,91 @@ function parseMeterEvidence(value: unknown, actualCost: AiImageSandboxMoney) {
     displayTotalUsageDelta,
     displayTotalUsageUnitCurrencyScale,
   };
+}
+
+function parseCumulativeUsageEvidence(value: unknown, actualCost: AiImageSandboxMoney) {
+  const code = 'SANDBOX_BILLING_ATTESTATION_INVALID' as const;
+  if (!isRecord(value) || !hasExactKeys(value, CUMULATIVE_USAGE_EVIDENCE_KEYS)) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox cumulative usage evidence contains missing or unsupported fields',
+    );
+  }
+  const totalRequests = requiredNonnegativeInteger(value, 'totalRequests', code);
+  const totalActualCost = exactDecimal(
+    value.totalActualCost,
+    'totalActualCost',
+    code,
+  );
+  if (
+    value.schemaVersion !== 1
+    || value.kind !== SUB2_CUMULATIVE_USAGE_KIND
+    || totalRequests !== 0
+    || totalActualCost.amount !== 0
+    || totalActualCost.scale !== 0
+    || actualCost.amount !== 0
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox cumulative usage evidence must prove zero lifetime requests and actual cost',
+    );
+  }
+  return {
+    kind: SUB2_CUMULATIVE_USAGE_KIND,
+    totalRequests,
+    totalActualCost,
+  };
+}
+
+function parseSub2CumulativeUsageSnapshot(
+  evidence: PrivateFileEvidence,
+  attestation: ReturnType<typeof parseAttestation>,
+) {
+  const code = 'SANDBOX_BILLING_EVIDENCE_INVALID' as const;
+  let record: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(evidence.bytes),
+    ) as unknown;
+    if (!isRecord(parsed)) throw new Error('invalid');
+    record = parsed;
+  } catch {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox cumulative usage snapshot must contain one UTF-8 JSON object',
+    );
+  }
+  const usage = isRecord(record.usage) ? record.usage : null;
+  const today = usage && isRecord(usage.today) ? usage.today : null;
+  const total = usage && isRecord(usage.total) ? usage.total : null;
+  const todayRequests = today && Number.isSafeInteger(today.requests)
+    ? Number(today.requests)
+    : null;
+  const todayActualCost = today && typeof today.actual_cost === 'number'
+    && Number.isFinite(today.actual_cost)
+    ? Number(today.actual_cost)
+    : null;
+  const totalRequests = total && Number.isSafeInteger(total.requests)
+    ? Number(total.requests)
+    : null;
+  const totalActualCost = total && typeof total.actual_cost === 'number'
+    && Number.isFinite(total.actual_cost)
+    ? Number(total.actual_cost)
+    : null;
+  if (
+    record.isValid !== true
+    || record.unit !== attestation.currency
+    || todayRequests !== 0
+    || todayActualCost !== 0
+    || totalRequests !== attestation.cumulativeUsageEvidence?.totalRequests
+    || totalActualCost !== 0
+    || attestation.cumulativeUsageEvidence?.totalActualCost.amount !== 0
+  ) {
+    throw new AiImageSandboxBillingSettlementError(
+      code,
+      'Sandbox cumulative usage snapshot does not prove zero API-key usage and actual cost',
+    );
+  }
 }
 
 function positiveInteger(value: unknown) {
@@ -1257,7 +1364,9 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
       ? ATTESTATION_V2_KEYS
       : schemaVersion === 3
         ? ATTESTATION_V3_KEYS
-        : null;
+        : schemaVersion === 4
+          ? ATTESTATION_V4_KEYS
+          : null;
   if (!expectedKeys || !hasExactKeys(record, expectedKeys)) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1329,6 +1438,7 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
   let actualCostCents: number | null = null;
   let actualCost: AiImageSandboxMoney | null = null;
   let meterEvidence: ReturnType<typeof parseMeterEvidence> | null = null;
+  let cumulativeUsageEvidence: ReturnType<typeof parseCumulativeUsageEvidence> | null = null;
   if (schemaVersion === 1) {
     currency = requiredString(
       record,
@@ -1355,25 +1465,37 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
       { allowZero: true },
     );
     currency = actualCost.currency;
-    meterEvidence = parseMeterEvidence(record.meterEvidence, actualCost);
+    if (schemaVersion === 4) {
+      cumulativeUsageEvidence = parseCumulativeUsageEvidence(
+        record.cumulativeUsageEvidence,
+        actualCost,
+      );
+    } else {
+      meterEvidence = parseMeterEvidence(record.meterEvidence, actualCost);
+    }
   }
   if (
     ![
       'PROVIDER_REQUEST_ID',
       'UNIQUE_ACCOUNT_TIME_WINDOW',
       'PROVIDER_TOKEN_LOG_ENTRY',
+      'API_KEY_CUMULATIVE_ZERO_USAGE',
     ].includes(correlationMethod)
     || providerRequestId === undefined
     || (correlationMethod === 'PROVIDER_REQUEST_ID' && !providerRequestId)
     || (correlationMethod === 'UNIQUE_ACCOUNT_TIME_WINDOW' && providerRequestId !== null)
     || (correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY' && !providerRequestId)
+    || (correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE' && providerRequestId !== null)
     || (schemaVersion === 3 && correlationMethod !== 'PROVIDER_TOKEN_LOG_ENTRY')
     || (schemaVersion !== 3 && correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY')
+    || (schemaVersion === 4 && correlationMethod !== 'API_KEY_CUMULATIVE_ZERO_USAGE')
+    || (schemaVersion !== 4 && correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE')
     || !['CHARGED', 'NO_CHARGE'].includes(billingOutcome)
     || (schemaVersion === 1 && billingOutcome === 'CHARGED' && Number(actualCostCents) <= 0)
     || (schemaVersion === 1 && billingOutcome === 'NO_CHARGE' && actualCostCents !== 0)
     || (schemaVersion !== 1 && billingOutcome === 'CHARGED' && actualCost!.amount <= 0)
     || (schemaVersion !== 1 && billingOutcome === 'NO_CHARGE' && actualCost!.amount !== 0)
+    || (schemaVersion === 4 && billingOutcome !== 'NO_CHARGE')
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
@@ -1381,7 +1503,7 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     );
   }
   return {
-    schemaVersion: schemaVersion as 1 | 2 | 3,
+    schemaVersion: schemaVersion as 1 | 2 | 3 | 4,
     generation: schemaVersion === 1 ? 'LEGACY' as const : 'EXACT' as const,
     settlementId,
     operationId,
@@ -1393,19 +1515,27 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     currency,
     preCallBillingSnapshotRef: requiredString(record, 'preCallBillingSnapshotRef', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
     billingReconciliationRef: requiredString(record, 'billingReconciliationRef', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
-    preCallBillingSnapshotPath: requiredString(
-      record,
-      'preCallBillingSnapshotPath',
-      'SANDBOX_BILLING_ATTESTATION_INVALID',
-      2_048,
-    ),
+    preCallBillingSnapshotPath: schemaVersion === 4
+      ? null
+      : requiredString(
+          record,
+          'preCallBillingSnapshotPath',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+          2_048,
+        ),
     settledBillingSnapshotPath: requiredString(
       record,
       'settledBillingSnapshotPath',
       'SANDBOX_BILLING_ATTESTATION_INVALID',
       2_048,
     ),
-    preCallBillingSnapshotSha256: requiredSha256(record, 'preCallBillingSnapshotSha256', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
+    preCallBillingSnapshotSha256: schemaVersion === 4
+      ? null
+      : requiredSha256(
+          record,
+          'preCallBillingSnapshotSha256',
+          'SANDBOX_BILLING_ATTESTATION_INVALID',
+        ),
     settledBillingSnapshotSha256: requiredSha256(record, 'settledBillingSnapshotSha256', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
     providerBillingEntryRef: requiredString(record, 'providerBillingEntryRef', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
     intentSha256: requiredSha256(record, 'intentSha256', 'SANDBOX_BILLING_ATTESTATION_INVALID'),
@@ -1420,6 +1550,7 @@ function parseAttestation(record: Record<string, unknown>, now: Date) {
     actualCostCents,
     actualCost,
     meterEvidence,
+    cumulativeUsageEvidence,
     providerTokenLogSnapshotPath: schemaVersion === 3
       ? requiredString(
           record,
@@ -2016,6 +2147,14 @@ function assertArtifactsMatch(input: {
   const wanxProviderIdentity = wanxApiIdentity
     && intentRecord.endpointSha256
       === sha256(aiImageWanx21EditSubmitEndpoint(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE));
+  const sub2CumulativeUsageSelected = attestation.schemaVersion === 4;
+  const sub2CumulativeUsageIdentity = intent.generation === 'EXACT'
+    && intentRecord.apiBaseSha256 === sha256(SUB2_API_BASE)
+    && intentRecord.endpointSha256 === sha256(SUB2_EDIT_ENDPOINT)
+    && intent.model === 'gpt-image-2'
+    && request.operation === 'IMAGE_TO_IMAGE'
+    && request.requestProfile === 'OPENAI_SQUARE_SINGLE_V1'
+    && reportRecord.provider === 'custom-openai-compatible';
   if (
     attestation.generation !== intent.generation
     || intent.generation !== report.generation
@@ -2032,6 +2171,7 @@ function assertArtifactsMatch(input: {
       || wanxOperation !== String(request.operation)
       || reportRecord.provider !== 'dashscope-wanx21-image-edit'
     ))
+    || (sub2CumulativeUsageSelected && !sub2CumulativeUsageIdentity)
     || (!wanxProfileSelected && reportRecord.provider !== 'custom-openai-compatible')
   ) {
     throw new AiImageSandboxBillingSettlementError(
@@ -2150,6 +2290,20 @@ function assertArtifactsMatch(input: {
           > MAX_CORRELATION_WINDOW_MS))
     || (attestation.correlationMethod === 'PROVIDER_TOKEN_LOG_ENTRY'
       && (!providerRequestIdHash || !attestation.providerRequestId))
+    || (attestation.correlationMethod === 'API_KEY_CUMULATIVE_ZERO_USAGE'
+      && (
+        attestation.schemaVersion !== 4
+        || !providerRequestIdHash
+        || attestation.providerRequestId !== null
+        || report.schemaVersion !== 5
+        || reportRecord.state !== 'REJECTED'
+        || reportRecord.createRequests !== 1
+        || reportRecord.usage !== null
+        || attestation.billingOutcome !== 'NO_CHARGE'
+        || attestation.actualCost?.amount !== 0
+        || attestation.settledObservedAt.time - attestation.preCallObservedAt.time
+          > MAX_CUMULATIVE_ZERO_SETTLEMENT_WINDOW_MS
+      ))
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_MISMATCH',
@@ -2258,37 +2412,37 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
       'Sandbox billing attestation does not match the Operation ID',
     );
   }
-  const preCallSnapshotEvidence = await loadPrivateFile({
-    repositoryRoot: input.repositoryRoot,
-    path: attestation.preCallBillingSnapshotPath,
-    expectedSha256: attestation.preCallBillingSnapshotSha256,
-    maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
-  });
+  const preCallSnapshotEvidence = attestation.schemaVersion === 4
+    ? null
+    : await loadPrivateFile({
+        repositoryRoot: input.repositoryRoot,
+        path: attestation.preCallBillingSnapshotPath!,
+        expectedSha256: attestation.preCallBillingSnapshotSha256!,
+        maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
+      });
   const settledSnapshotEvidence = await loadPrivateFile({
     repositoryRoot: input.repositoryRoot,
     path: attestation.settledBillingSnapshotPath,
     expectedSha256: attestation.settledBillingSnapshotSha256,
     maxBytes: MAX_BILLING_SNAPSHOT_BYTES,
   });
-  const sameSnapshotPath = samePath(
+  const snapshotIdentityAvailable = hasStableFileIdentity(
+    settledSnapshotEvidence.device,
+    settledSnapshotEvidence.inode,
+  ) && (preCallSnapshotEvidence === null || hasStableFileIdentity(
+    preCallSnapshotEvidence.device,
+    preCallSnapshotEvidence.inode,
+  ));
+  const sameSnapshotPath = preCallSnapshotEvidence !== null && samePath(
     preCallSnapshotEvidence.canonicalPath,
     settledSnapshotEvidence.canonicalPath,
   );
-  const snapshotIdentityAvailable = hasStableFileIdentity(
-    preCallSnapshotEvidence.device,
-    preCallSnapshotEvidence.inode,
-  ) && hasStableFileIdentity(
-    settledSnapshotEvidence.device,
-    settledSnapshotEvidence.inode,
-  );
-  const sameSnapshotFile = snapshotIdentityAvailable && sameFileIdentity(
-    preCallSnapshotEvidence,
-    settledSnapshotEvidence,
-  );
-  if (sameSnapshotPath || !snapshotIdentityAvailable || sameSnapshotFile) {
+  const sameSnapshotFile = preCallSnapshotEvidence !== null
+    && sameFileIdentity(preCallSnapshotEvidence, settledSnapshotEvidence);
+  if (!snapshotIdentityAvailable || sameSnapshotPath || sameSnapshotFile) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_ATTESTATION_INVALID',
-      'Sandbox billing before and settled snapshots must be distinct files',
+      'Sandbox billing snapshots must have stable, distinct private file identities',
     );
   }
 
@@ -2356,13 +2510,13 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
       !providerIdentityAvailable
       || samePath(
         providerTokenLogEvidence.canonicalPath,
-        preCallSnapshotEvidence.canonicalPath,
+        preCallSnapshotEvidence!.canonicalPath,
       )
       || samePath(
         providerTokenLogEvidence.canonicalPath,
         settledSnapshotEvidence.canonicalPath,
       )
-      || sameFileIdentity(providerTokenLogEvidence, preCallSnapshotEvidence)
+      || sameFileIdentity(providerTokenLogEvidence, preCallSnapshotEvidence!)
       || sameFileIdentity(providerTokenLogEvidence, settledSnapshotEvidence)
     ) {
       throw new AiImageSandboxBillingSettlementError(
@@ -2385,6 +2539,12 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     }));
   }
   assertArtifactsMatch({ attestation, intent, report, claim: claimEvidence.record });
+  if (attestation.schemaVersion === 4) {
+    parseSub2CumulativeUsageSnapshot(
+      settledSnapshotEvidence,
+      attestation,
+    );
+  }
 
   const billedUnits = attestation.billingOutcome === 'CHARGED' ? 1 : 0;
   const billingGate = attestation.generation === 'EXACT'
@@ -2473,7 +2633,11 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
     : { endpointSha256: intent.record.endpointSha256 };
   const receipt = attestation.generation === 'EXACT'
     ? {
-        schemaVersion: attestation.schemaVersion === 3 ? 4 : 3,
+        schemaVersion: attestation.schemaVersion === 4
+          ? 5
+          : attestation.schemaVersion === 3
+            ? 4
+            : 3,
         event: 'AI_IMAGE_SANDBOX_BILLING_SETTLED',
         operationId,
         settlementId: attestation.settlementId,
@@ -2508,6 +2672,9 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
           })),
           providerTokenLogSnapshotSha256: providerTokenLogEvidence!.sha256,
         } : {}),
+        ...(attestation.schemaVersion === 4 ? {
+          cumulativeUsageEvidenceKind: attestation.cumulativeUsageEvidence!.kind,
+        } : {}),
         billingOutcome: attestation.billingOutcome,
         billingGate,
         actualCost: attestation.actualCost!,
@@ -2522,7 +2689,9 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
         preCallBillingSnapshotRefSha256: sha256(attestation.preCallBillingSnapshotRef),
         billingReconciliationRefSha256: sha256(attestation.billingReconciliationRef),
         providerBillingEntryRefSha256: sha256(attestation.providerBillingEntryRef),
-        preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
+        ...(preCallSnapshotEvidence ? {
+          preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
+        } : {}),
         settledBillingSnapshotSha256: settledSnapshotEvidence.sha256,
       }
     : {
@@ -2566,7 +2735,7 @@ export async function finalizeAiImageSandboxBillingSettlement(input: {
         preCallBillingSnapshotRefSha256: sha256(attestation.preCallBillingSnapshotRef),
         billingReconciliationRefSha256: sha256(attestation.billingReconciliationRef),
         providerBillingEntryRefSha256: sha256(attestation.providerBillingEntryRef),
-        preCallBillingSnapshotSha256: preCallSnapshotEvidence.sha256,
+        preCallBillingSnapshotSha256: preCallSnapshotEvidence!.sha256,
         settledBillingSnapshotSha256: settledSnapshotEvidence.sha256,
       };
   const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, 'utf8');

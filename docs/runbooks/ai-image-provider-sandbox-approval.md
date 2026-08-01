@@ -22,6 +22,8 @@ qa02-centos-i2i-20260730-094857-01
 qa02-packy-i2i-20260801-e4503e9-01
 qa02-packy-i2i-documented-20260801-9b6cc05-01
 qa02-xiaoyi-i2i-20260801-f189dfa-01
+qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01
+qa02-picpi-i2i-20260801-de951b7-01
 ```
 
 The Centos operation definitively rejected `/v1/images/edits` for its tested
