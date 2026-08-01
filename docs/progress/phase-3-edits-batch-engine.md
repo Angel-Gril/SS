@@ -708,3 +708,21 @@ Progress: 4/5 tasks.
   `b2f3e0c0...941369e` remains unapproved. `QA-02` stays `4/5`, overall progress stays `32/37`, and
   no task, synthesis, poll, download, paid operation, deployment, flag, ERP ingest, or Ozon mutation
   occurred.
+- Operation `qa02-wanx-i2i-20260801-3ac48e4-01` is the first positive live Wanx edit result. The
+  operator disclosed before dispatch that the DPAPI Key and authenticated Bailian console belong to
+  different billing accounts, so the console snapshot was explicitly excluded. A capability-only
+  policy (`d4a1f162...561a7f`), pre-call record (`28163310...bdcda`), and exact approval
+  (`0dff1d18...9654a`) retained the CNY `0.14` quote, CNY `1.00` maximum, and one-request boundary
+  without claiming account-specific billing visibility.
+- The runner sent exactly one async create request, polled only its accepted task eight times, and
+  downloaded one result without forwarding Authorization. Report SHA-256 `a0671f5c...caed42`
+  records `SUCCEEDED`, `createRequests=1`, one 1024x1024 PNG of 951,543 bytes, and image SHA-256
+  `f6d90b58...9da24`. Async-evidence SHA-256 is `97776d79...ca3194`; task identity hashes agree and
+  credential scans across the seven execution artifacts found zero matches. Technical visual review
+  found the requested warm-beige background change while preserving the mug identity and geometry,
+  with no unexpected text, logo, watermark, or object. Human confirmation remains pending.
+- No billing finalizer or formal receipt ran. Private sidecar SHA-256 `9150eb29...6bec93` records
+  `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, and `sameRequestRetryAllowed=false`.
+  This proves positive `IMAGE_TO_IMAGE` capability but does not close the billing gate, authorize a
+  retry, or satisfy `FULL_EDIT`/`INPAINT`. Progress remains `4/5` and `32/37`; no deployment, flag,
+  ERP ingest, VPS, or Ozon mutation occurred.

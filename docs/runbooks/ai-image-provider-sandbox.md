@@ -268,6 +268,15 @@ snapshot. The private CNY `0.14` quote/CNY `1.00` maximum policy remains a propo
 draft remains explicitly unapproved. Only an operator's exact one-request authorization after those
 gates may permit one async image-synthesis POST.
 
+Operation `qa02-wanx-i2i-20260801-3ac48e4-01` later completed the first positive live Wanx
+`IMAGE_TO_IMAGE` request. It sent one create POST, polled only the accepted task, reached
+`SUCCEEDED`, and downloaded one validated 1024x1024 PNG. Do not retry or rename it. The API Key's
+billing account did not match the authenticated Bailian console account, so that console snapshot
+is excluded and no billing receipt exists. Treat the result as positive technical capability
+evidence with billing unresolved; never convert the unrelated `CNY 0` console view into
+`NO_CHARGE`, and never infer actual cost from `usage.imageCount`. `FULL_EDIT` and `INPAINT` still
+require separate policies, media, approvals, Operation IDs, and single submissions.
+
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
 DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the V1

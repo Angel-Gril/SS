@@ -753,6 +753,31 @@ one-request approval. No task, synthesis, poll, image download, paid operation, 
 ERP ingest, VPS, or Ozon mutation occurred. `QA-02` remains `4/5` and overall progress remains
 `32/37`.
 
+### Positive Wanx IMAGE_TO_IMAGE capability-only result
+
+Operation `qa02-wanx-i2i-20260801-3ac48e4-01` used the reviewed legacy API Base, exact
+`wanx2.1-imageedit` model, `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`, one pinned 1024x1024 source,
+and the fixed warm-beige marketplace Prompt. The operator approved one request with quote CNY
+`0.14` and maximum CNY `1.00`. Before dispatch the operator disclosed that the DPAPI Key's billing
+account differs from the authenticated Bailian console account. The console snapshot manifest
+`151dc6d0...fdffde` was therefore marked excluded. Capability-only policy, pre-call, and approval
+SHA-256 values are `d4a1f162...561a7f`, `28163310...bdcda`, and `0dff1d18...9654a`.
+
+The guarded runner made one create request. DashScope accepted the task, returned `SUCCEEDED` after
+eight polls, and exposed one metered result that was downloaded once without Provider
+Authorization. Report SHA-256 `a0671f5c...caed42` and async-evidence SHA-256
+`97776d79...ca3194` bind one 1024x1024 PNG, 951,543 bytes, SHA-256
+`f6d90b58d722376bde094c7fcc7308a7f60683877d080be28038473f7c19da24`. Source corner mean RGB
+`[203,203,202]` changed to output `[214,189,171]`; visual inspection confirmed the warm-beige
+background, preserved mug identity/shape/handle/proportions/camera angle, and absence of text,
+logos, watermarks, or extra objects. Technical review SHA-256 is `9fb8c7fd...83cb98`; human
+confirmation remains pending.
+
+Billing remains deliberately unresolved. No unrelated console value was treated as actual cost,
+no finalizer or formal receipt ran, and sidecar SHA-256 `9150eb29...6bec93` records
+`UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, and no same-request retry. The result is
+positive operation-specific technical evidence, not a price or billing claim.
+
 ## PicPi public no-credential preflight
 
 At the public-preflight checkpoint on 2026-08-01, the operator supplied `https://api.picpi.top` as

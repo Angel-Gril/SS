@@ -118,6 +118,27 @@ authorization. Approval-draft SHA-256
 `DRAFT_REVIEW_REQUIRED_NOT_APPROVED`. No task, image-synthesis, poll, download, paid operation, or
 production mutation occurred. `QA-02` remains `4/5` and overall progress remains `32/37`.
 
+The later exact operation `qa02-wanx-i2i-20260801-3ac48e4-01` produced the first positive live
+edit result. Before dispatch, the operator clarified that the DPAPI API Key belongs to a different
+Alibaba billing account than the authenticated Bailian console session. The console snapshot was
+therefore excluded rather than misrepresented as Key-specific billing evidence. Capability-only
+policy SHA-256 `d4a1f162...561a7f`, pre-call record SHA-256 `28163310...bdcda`, and approval
+SHA-256 `0dff1d18...9654a` bind exactly one `IMAGE_TO_IMAGE` request, quote CNY `0.14`, maximum CNY
+`1.00`, the reviewed source, Prompt, endpoint, model, profile, credential revision, and clean
+adapter revision `3ac48e40b04f7b2b6f7942d865e3bde5d747d955`.
+
+The guarded runner sent one create request and did not retry. Wanx accepted the async task, reached
+`SUCCEEDED` after eight polls, and allowed one result download. Schema-v5 report SHA-256 is
+`a0671f5c...caed42`; async-evidence SHA-256 is `97776d79...ca3194`. The result is one 1024x1024 PNG,
+951,543 bytes, SHA-256 `f6d90b58...9da24`. Technical visual review confirmed that the gray source
+background changed to visible warm beige while the white mug identity, shape, handle, proportions,
+and camera angle remained stable, with no text, logo, watermark, or extra object. Human confirmation
+remains pending. No formal billing finalizer or receipt ran: actual cost is unknown and private
+sidecar SHA-256 `9150eb29...6bec93` records `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH` and forbids a
+same-request retry. This is positive `IMAGE_TO_IMAGE` capability evidence, not a completed billing
+chain; `QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP ingest,
+VPS, or Ozon mutation occurred.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both
@@ -816,15 +837,14 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    contract, followed by a new profile, policy, Operation ID, approval, and reconciliation;
    otherwise use a different edit-capable Provider. Async remains unverified and cannot inherit
    either profile's approval or evidence.
-5. Keep the successful Wanx v3 manifest and exact private response bytes immutable. For operation
-   `qa02-wanx-i2i-20260801-6948460-01`, finalize the exact Prompt, retain an independent Alibaba
-   console or reviewed Billing OpenAPI pre-call snapshot, then obtain explicit operator approval for
-   the exact endpoint/model/profile/source, quote CNY `0.14`, and independently selected
-   single-request maximum CNY `1.00`. The current draft is not approval, and Provider price API
-   synchronization is not required. Only after both gates pass may the guarded runner send one async
-   image-synthesis POST, poll only its accepted task, reconcile billing, and perform human quality
-   review. Do not reuse any Packy/Xiaoyi approval. After one accepted operation is fully reconciled
-   and quality-reviewed, repeat with new policies and approvals for `FULL_EDIT` and `INPAINT`.
+5. Keep the successful Wanx catalogue manifest and consumed capability-only operation
+   `qa02-wanx-i2i-20260801-3ac48e4-01` immutable. Never retry or rename that request. Obtain human
+   confirmation of its returned image, then either correlate its task to the API Key's real billing
+   account or retain billing as explicitly unresolved; the unrelated Bailian console snapshot must
+   never enter a receipt. Provider price API synchronization is not required. Prepare independent
+   policies, Operation IDs, bounded media, approvals, and single-request maxima before testing
+   `FULL_EDIT` and `INPAINT`; neither may inherit the consumed `IMAGE_TO_IMAGE` approval. Complete
+   QA-02 only after the accepted evidence policy for all three operations is explicit and truthful.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt
