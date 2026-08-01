@@ -749,6 +749,19 @@ Progress: 4/5 tasks.
   SHA-256 values are `9e1ee9e3...a912cd` and `fd56c94d...612fed`; the 1024x1024 PNG is 910,556
   bytes under SHA-256 `4638848a...39e85e`. Pixel review proved a complete non-identical render while
   preserving product identity and the neutral studio/no-text requirements. Technical-review SHA-256
-  is `7568c39e...d41ddd`; human confirmation remains pending. Billing remains honestly unresolved
-  under sidecar `62a2b8d6...f0f449`, with no receipt and no retry. INPAINT remains separately
-  unapproved, so progress stays `4/5` and `32/37` with all rollout flags off.
+  is `7568c39e...d41ddd`; the operator approved image quality under private confirmation SHA-256
+  `6ca5ce26...17ae59`. Billing remains honestly unresolved under sidecar
+  `62a2b8d6...f0f449`, with no receipt and no retry.
+- The operator separately approved INPAINT operation
+  `qa02-wanx-inpaint-20260801-d077795-01`. Private pre-call/approval SHA-256 values
+  `ed0788bc...e6b465` and `c2de393f...f95827` preceded one create request from the same clean
+  checkout. Wanx reached `SUCCEEDED` after six polls and one download. Report/async evidence
+  SHA-256 values are `51060c57...778f6d` and `e4bdb4a0...49ee6f`; the 1024x1024 PNG is 923,461
+  bytes under SHA-256 `8fb82855...735284`. The 25,600-pixel edit region has mean absolute channel
+  difference `3.418` and `37.54%` of pixels changed by more than five levels. Across the 1,022,976
+  preserve pixels, mean difference is `0.015` and only `0.07%` changed by more than five levels.
+  Technical-review SHA-256 `e44ee59f...976526` therefore records positive mask transport, local
+  modification, and unmasked preservation. The requested light-blue change is visually subtle
+  blue-gray and the hard test-mask boundary remains visible, so human quality confirmation is
+  pending. Billing remains unresolved under sidecar `2c788c19...f0cc7c9`, with `actualCost=null`,
+  no receipt, and no retry. Progress stays `4/5` and `32/37` with all rollout flags off.

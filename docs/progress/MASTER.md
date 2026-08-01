@@ -169,10 +169,26 @@ allowed one result download without Authorization forwarding. Schema-v5 report S
 910,556 bytes, SHA-256 `4638848a...39e85e`. It is not source-byte reuse: 14.14% of pixels changed by
 more than five RGB levels, while visual review found the mug identity, shape, handle, proportions,
 camera angle, neutral gray background, and no-text/no-logo constraints preserved. Technical review
-SHA-256 is `7568c39e...d41ddd`; human confirmation remains pending. Billing sidecar SHA-256
+SHA-256 is `7568c39e...d41ddd`; the operator later approved image quality under private
+confirmation SHA-256 `6ca5ce26...17ae59`. Billing sidecar SHA-256
 `62a2b8d6...f0f449` records `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, and no
-same-request retry. This is positive FULL_EDIT technical evidence only. The independently prepared
-INPAINT draft remains unapproved; counts and rollout state remain unchanged.
+same-request retry. This is positive FULL_EDIT capability and quality evidence, with billing still
+explicitly unresolved.
+
+The operator then separately approved operation `qa02-wanx-inpaint-20260801-d077795-01`. Private
+pre-call SHA-256 `ed0788bc...e6b465` and approval SHA-256 `c2de393f...f95827` preceded one create
+request from the same clean private `d077795` checkout. Wanx reached `SUCCEEDED` after six polls and
+one result download. Schema-v5 report SHA-256 is `51060c57...778f6d`; async-evidence SHA-256 is
+`e4bdb4a0...49ee6f`. The output is one 1024x1024 PNG, 923,461 bytes, SHA-256
+`8fb82855...735284`. The 25,600-pixel transparent edit region changed with mean absolute channel
+difference `3.418`, while the 1,022,976-pixel preserve region had mean difference `0.015` and only
+`0.07%` of its pixels changed by more than five RGB levels. Technical review SHA-256
+`e44ee59f...976526` therefore records positive mask transport, local modification, and unmasked
+preservation. The requested blue shift is subtle blue-gray and a hard test-mask boundary remains
+visible, so human quality confirmation is still pending. Billing sidecar SHA-256
+`2c788c19...f0cc7c9` records `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, no receipt,
+and no same-request retry. This is positive INPAINT technical evidence only; counts remain `4/5`
+and `32/37`, with every rollout flag still off.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -876,12 +892,12 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    `qa02-wanx-i2i-20260801-3ac48e4-01` immutable. Its image quality is approved; never retry or
    rename that request. Either correlate its task to the API Key's real billing account or retain
    billing as explicitly unresolved; the unrelated Bailian console snapshot must never enter a
-   receipt. Provider price API synchronization is not required. Keep the consumed
-   `FULL_EDIT` operation immutable and obtain human confirmation of its returned image. Never retry
-   or rename it. Then review the separately prepared `INPAINT` policy, mask, draft, and maximum and
-   obtain a new exact authorization before replacing its three sentinels or dispatching. Neither
-   operation may inherit the consumed `IMAGE_TO_IMAGE` approval. Complete QA-02 only after the
-   accepted evidence policy for all three operations is explicit and truthful.
+   receipt. Provider price API synchronization is not required. Keep the consumed `FULL_EDIT`
+   operation immutable; its image quality is approved, and it must never be retried or renamed.
+   Keep the consumed `INPAINT` operation immutable and obtain human confirmation of its returned
+   image; its subtle blue-gray shift and visible hard test-mask boundary must not be hidden or
+   overstated. None of the operations may inherit another operation's approval. Complete QA-02 only
+   after the accepted evidence policy for all three operations is explicit and truthful.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt

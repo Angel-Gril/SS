@@ -771,7 +771,7 @@ Authorization. Report SHA-256 `a0671f5c...caed42` and async-evidence SHA-256
 `[203,203,202]` changed to output `[214,189,171]`; visual inspection confirmed the warm-beige
 background, preserved mug identity/shape/handle/proportions/camera angle, and absence of text,
 logos, watermarks, or extra objects. Technical review SHA-256 is `9fb8c7fd...83cb98`; human
-confirmation remains pending.
+quality was later approved under private confirmation SHA-256 `b140ce02...d367b5`.
 
 Billing remains deliberately unresolved. No unrelated console value was treated as actual cost,
 no finalizer or formal receipt ran, and sidecar SHA-256 `9150eb29...6bec93` records
@@ -792,12 +792,45 @@ Report SHA-256 `9e1ee9e3...a912cd` and async-evidence SHA-256 `fd56c94d...612fed
 source: mean absolute channel difference is `3.089`, and `14.14%` of pixels differ by more than five
 RGB levels. Visual inspection found a complete but restrained neutral-gray studio rerender that
 preserves the mug identity, shape, handle, proportions, camera angle, and no-text/no-logo rules.
-Technical-review SHA-256 is `7568c39e...d41ddd`; human confirmation remains pending.
+Technical-review SHA-256 is `7568c39e...d41ddd`; the operator later approved FULL_EDIT image
+quality under private confirmation SHA-256
+`6ca5ce2674d7ff223e90ec299e7c6d4b168350ca6fd6a5eec3d07d548317ae59`.
 
 Billing again remains deliberately unresolved because the Key's account is not the authenticated
 console account. Sidecar SHA-256 `62a2b8d6...f0f449` records `actualCost=null`, no formal receipt,
-and no same-request retry. This is positive FULL_EDIT technical evidence only; the separate INPAINT
-draft remains unapproved.
+and no same-request retry. This is positive FULL_EDIT capability and quality evidence with billing
+still unresolved.
+
+### Positive Wanx INPAINT capability-only result
+
+Operation `qa02-wanx-inpaint-20260801-d077795-01` received a separate exact authorization for the
+reviewed source, mask, Prompt, profile, quote CNY `0.14`, and maximum CNY `1.00`. Private pre-call
+SHA-256 is `ed0788bc5f108cfcbddc3857662e352e69cea3b8d71d606747c11dc6fae6b465`; approval SHA-256 is
+`c2de393f55ac49c859e0065f7ae17a591da06b9c7dbd73a8f66461a404f95827`. The original 1024x1024 PNG
+mask SHA-256 is `f5a5d6945d37b0616f9606d1832f48dcf47710b37fda494bd5ce115bfb14fe3b`; its deterministic Wanx
+transport mask SHA-256 is `ebd90e94ba683f52f52f8199e312cd43b024380986151520df0d3c715abcfe02`.
+
+The guarded runner sent one create request and did not retry. Wanx reached `SUCCEEDED` after six
+polls and one result download. Report SHA-256
+`51060c57b2c39bf4d6d02f40336b1e1c588011d490799d394e41815408778f6d` and async-evidence SHA-256
+`e4bdb4a0c5db86de58fe3e2c410600e3c7c527647cb69e95c8ff43382749ee6f` bind one 1024x1024 PNG,
+923,461 bytes, SHA-256 `8fb828558e9bf35da5534b769af8de21442d54d42edd99dd8ea4a3c6e7735284`.
+
+Pixel review found that the 25,600-pixel transparent edit region changed with mean absolute channel
+difference `3.418`, with `37.54%` of edit pixels changing by more than five RGB levels. The
+1,022,976-pixel preserve region had mean difference `0.015`, with only `0.07%` changing by more than
+five levels. Technical-review SHA-256
+`e44ee59f07111b18c78aad22a559a17810bef516636a11705a1abe60e9976526` therefore records positive
+mask transport, masked-region modification, unmasked preservation, product preservation, and no
+unexpected text, logo, watermark, or object. The requested blue change is visually subtle blue-gray
+and the hard boundary of the deliberately rectangular test mask remains visible. Human visual
+quality confirmation is pending and must not be inferred from the technical locality result.
+
+Billing remains deliberately unresolved. Sidecar SHA-256
+`2c788c1978538f35bc7908cd39a7a262aa066a841a0d147e2923d19fdf0cc7c9` records
+`UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, no formal receipt, and no same-request
+retry. This is positive INPAINT technical evidence only. It does not promote the Wanx candidate or
+change the `4/5` Phase 3 and `32/37` overall counts.
 
 ## PicPi public no-credential preflight
 

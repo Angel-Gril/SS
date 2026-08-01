@@ -281,9 +281,20 @@ Operation `qa02-wanx-full-edit-20260801-d077795-01` later completed one positive
 `FULL_EDIT` request from its exact clean checkout and approval. It sent one create POST, reached
 `SUCCEEDED` after polling only its accepted task, and downloaded one validated 1024x1024 PNG. Do
 not retry or rename it. Technical review found a non-identical full-image rerender with the product
-identity and neutral studio constraints preserved; human confirmation remains pending. Its billing
-account remains unlinked, so no receipt exists and actual cost remains unknown. The independently
-prepared INPAINT operation still requires separate human authorization before any POST.
+identity and neutral studio constraints preserved; the operator subsequently approved image
+quality under private confirmation SHA-256 `6ca5ce26...17ae59`. Its billing account remains
+unlinked, so no receipt exists and actual cost remains unknown.
+
+Operation `qa02-wanx-inpaint-20260801-d077795-01` later completed one separately approved positive
+live Wanx `INPAINT` request. It sent one create POST, reached `SUCCEEDED` after six polls, and
+downloaded one validated 1024x1024 PNG. Do not retry or rename it. Technical review proved that the
+25,600-pixel edit region changed while the 1,022,976-pixel preserve region remained effectively
+unchanged: preserve-region mean absolute channel difference was `0.015`, and only `0.07%` of its
+pixels changed by more than five RGB levels. The requested blue change is subtle blue-gray and the
+hard boundary of the deliberately rectangular test mask remains visible. Treat this as positive
+technical inpaint evidence with human visual quality confirmation pending. Its billing account is
+also unlinked, so no receipt exists and actual cost remains unknown. Never infer either quality or
+billing acceptance from the successful task state alone.
 
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
