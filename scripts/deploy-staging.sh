@@ -654,7 +654,8 @@ SEALED_DEPLOY_DIR="$DEPLOY_DIR.sealed.$$"
 UNSEALED_DEPLOY_DIR="$DEPLOY_DIR.unsealed.$$"
 cd /
 sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
-  seal "$TARGET_GIT_COMMIT" "$DEPLOY_DIR" "$SEALED_DEPLOY_DIR"
+  seal "$TARGET_GIT_COMMIT" "$DEPLOY_DIR" "$SEALED_DEPLOY_DIR" \
+  "$DEPLOY_RUN_USER" "$ENV_FILE"
 sudo chown "root:$DEPLOY_RUN_GROUP" "$SEALED_DEPLOY_DIR/$ENV_FILE"
 sudo chmod 0640 "$SEALED_DEPLOY_DIR/$ENV_FILE"
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \

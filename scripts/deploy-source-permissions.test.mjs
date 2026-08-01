@@ -256,6 +256,12 @@ test('root gate install and deployment source ownership are fail-closed', {
     mkdirSync(join(release, 'apps', 'server'), { recursive: true });
     mkdirSync(join(release, 'apps', 'web', '.next'), { recursive: true });
     mkdirSync(join(release, 'build', 'extensions'), { recursive: true });
+    mkdirSync(join(release, 'node_modules'), { mode: 0o700 });
+    writeFileSync(
+      join(release, 'node_modules', '.pnpm-workspace-state-v1.json'),
+      '{}\n',
+      { mode: 0o600 },
+    );
     writeFileSync(join(release, 'apps', 'server', 'mutable.js'), 'data\n');
     writeFileSync(join(release, 'build', 'extensions', 'release.zip'), 'sealed release\n');
     writeFileSync(join(release, 'DEPLOYED_COMMIT'), `${commit}\n`);
@@ -306,11 +312,23 @@ test('root gate install and deployment source ownership are fail-closed', {
     assert.equal(result.status, 0, result.stderr);
 
     const nobody = run('id', ['-un', '65534']);
+    assert.equal(nobody.status, 0, nobody.stderr);
+    const nobodyName = nobody.stdout.trim();
+    const nobodyGroup = run('id', ['-g', nobodyName]);
+    assert.equal(nobodyGroup.status, 0, nobodyGroup.stderr);
     const mutable = join(release, 'apps', 'server', 'mutable.js');
     const sealed = join(root, 'sealed-release');
     const oldDescriptor = openSync(mutable, 'r+');
     try {
-      result = run('bash', [freeze, 'seal', commit, release, sealed]);
+      result = run('bash', [
+        freeze,
+        'seal',
+        commit,
+        release,
+        sealed,
+        nobodyName,
+        '.env.staging',
+      ]);
       assert.equal(result.status, 0, result.stderr);
       assert.notEqual(lstatSync(mutable).ino, lstatSync(join(sealed, 'apps', 'server', 'mutable.js')).ino);
       result = run('node', [manifestTool, 'verify', sealed, closedManifest, commit]);
@@ -321,18 +339,22 @@ test('root gate install and deployment source ownership are fail-closed', {
       result = run('node', [manifestTool, 'verify', sealed, closedManifest, commit]);
       assert.equal(result.status, 0, result.stderr);
       if (nobody.status === 0) {
-        const nobodyName = nobody.stdout.trim();
-        const nobodyGroup = run('id', ['-g', nobodyName]);
-        assert.equal(nobodyGroup.status, 0, nobodyGroup.stderr);
         chmodSync(root, 0o755);
-        chownSync(join(sealed, '.env.staging'), 0, Number(nobodyGroup.stdout.trim()));
-        chmodSync(join(sealed, '.env.staging'), 0o640);
         result = run('bash', [freeze, 'verify', commit, sealed]);
         assert.equal(result.status, 0, result.stderr);
         result = run('runuser', [
           '-u', nobodyName, '--', 'test', '-r', join(sealed, '.env.staging'),
         ]);
         assert.equal(result.status, 0, 'the runtime group must retain read access to the frozen env');
+        result = run('runuser', [
+          '-u',
+          nobodyName,
+          '--',
+          'test',
+          '-r',
+          join(sealed, 'node_modules', '.pnpm-workspace-state-v1.json'),
+        ]);
+        assert.equal(result.status, 0, 'the runtime user must read sealed pnpm workspace state');
         result = run('runuser', [
           '-u', nobodyName, '--', 'mv', join(sealed, 'build'), join(sealed, 'build-replaced'),
         ]);

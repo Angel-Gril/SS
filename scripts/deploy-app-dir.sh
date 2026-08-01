@@ -561,7 +561,8 @@ log "Sealing built source on new root-owned inodes"
 SEALED_NEXT_DIR="$NEXT_DIR.sealed"
 UNSEALED_NEXT_DIR="$NEXT_DIR.unsealed"
 bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
-  seal "$TARGET_GIT_COMMIT" "$NEXT_DIR" "$SEALED_NEXT_DIR"
+  seal "$TARGET_GIT_COMMIT" "$NEXT_DIR" "$SEALED_NEXT_DIR" \
+  "$DEPLOY_RUN_USER" "$ENV_FILE_NAME"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_NEXT_DIR" "$DEPLOY_SOURCE_MANIFEST" "$TARGET_GIT_COMMIT"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \

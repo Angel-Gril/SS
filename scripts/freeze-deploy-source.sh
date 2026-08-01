@@ -11,6 +11,7 @@ TARGET_GIT_COMMIT="${2:-}"
 SOURCE_ROOT="${3:-}"
 RUN_USER="${4:-}"
 ENV_FILE_NAME="${5:-}"
+SEALED_ENV_FILE_NAME="${6:-}"
 VERIFY_MOUNT_LIST=""
 VERIFY_PATH_LIST=""
 SEALED_ROOT=""
@@ -124,6 +125,7 @@ verify_frozen_source() {
 
 if [ "$MODE" = "seal" ]; then
   SEALED_ROOT="$RUN_USER"
+  SEALED_RUN_USER="$ENV_FILE_NAME"
   case "$SEALED_ROOT" in
     /*) ;;
     *) fail "sealed source destination must be an absolute path" ;;
@@ -133,6 +135,12 @@ if [ "$MODE" = "seal" ]; then
     || [ -e "$SEALED_ROOT" ] || [ -L "$SEALED_ROOT" ]; then
     fail "sealed source destination must be a new canonical sibling"
   fi
+  if [[ ! "$SEALED_RUN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+    || ! id "$SEALED_RUN_USER" >/dev/null 2>&1 \
+    || [ "$(id -u "$SEALED_RUN_USER")" = "0" ]; then
+    fail "sealed source runtime user must be one non-root system identity"
+  fi
+  SEALED_RUN_GROUP="$(id -gn "$SEALED_RUN_USER")"
   parent="$(dirname -- "$SOURCE_ROOT")"
   while true; do
     mode="$(stat -c '%a' "$parent")"
@@ -149,8 +157,20 @@ if [ "$MODE" = "seal" ]; then
   cp -a --reflink=never -- "$SOURCE_ROOT/." "$SEALED_ROOT/"
   SOURCE_ROOT="$SEALED_ROOT"
   MARKER="$SOURCE_ROOT/DEPLOYED_COMMIT"
-  chown -hR -P root:root -- "$SOURCE_ROOT"
-  find -P "$SOURCE_ROOT" -xdev \( -type d -o -type f \) -exec chmod go-w -- {} +
+  chown -hR -P "root:$SEALED_RUN_GROUP" -- "$SOURCE_ROOT"
+  find -P "$SOURCE_ROOT" -xdev -type d \
+    -exec chmod u+rwx,g+rx,o-rwx -- {} +
+  find -P "$SOURCE_ROOT" -xdev -type f \
+    -exec chmod u+rw,g+rX,o-rwx -- {} +
+  if [ -n "$SEALED_ENV_FILE_NAME" ] && [ -e "$SOURCE_ROOT/$SEALED_ENV_FILE_NAME" ]; then
+    if [[ ! "$SEALED_ENV_FILE_NAME" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+      || [ -L "$SOURCE_ROOT/$SEALED_ENV_FILE_NAME" ] \
+      || [ ! -f "$SOURCE_ROOT/$SEALED_ENV_FILE_NAME" ] \
+      || [ "$(stat -c '%h' "$SOURCE_ROOT/$SEALED_ENV_FILE_NAME")" != "1" ]; then
+      fail "sealed deployment environment file is not a trusted regular file"
+    fi
+    chmod 0640 "$SOURCE_ROOT/$SEALED_ENV_FILE_NAME"
+  fi
   chmod 0755 "$SOURCE_ROOT"
   chmod 0444 "$MARKER"
   verify_frozen_source

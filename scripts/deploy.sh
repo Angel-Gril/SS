@@ -627,7 +627,8 @@ echo "[deploy] Sealing built source on new root-owned inodes"
 SEALED_RELEASE_DIR="$RELEASE_DIR.sealed.$$"
 UNSEALED_RELEASE_DIR="$RELEASE_DIR.unsealed.$$"
 bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
-  seal "$TARGET_GIT_COMMIT" "$RELEASE_DIR" "$SEALED_RELEASE_DIR"
+  seal "$TARGET_GIT_COMMIT" "$RELEASE_DIR" "$SEALED_RELEASE_DIR" \
+  "$DEPLOY_RUN_USER" "$ENV_FILE_NAME"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_RELEASE_DIR" "$DEPLOY_SOURCE_MANIFEST" "$TARGET_GIT_COMMIT"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
