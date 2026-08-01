@@ -734,3 +734,11 @@ Progress: 4/5 tasks.
   endpoint/profile/task/currency/receipt substitutions; target lint, docs contract, workspace
   typecheck, diff check, and complete preflight pass. This is candidate-only validation, not a
   Registry mutation or a substitute for the missing receipts and operations.
+- Clean revision `d07779567eb4b06c3a3de61622704fe8c580b672` prepared two independent, still
+  unapproved capability-only continuations. FULL_EDIT policy/draft SHA-256 values are
+  `c5d0b141...1d2429` and `1d48d56a...2547b9`. INPAINT policy/draft SHA-256 values are
+  `805193a3...3ae8d2` and `95b66c54...c748c9`; it binds private 1024x1024 mask SHA-256
+  `f5a5d694...14fe3b`, whose transparent upper-left 160x160 region avoids the product. Both quote
+  CNY `0.14` with proposed maximum CNY `1.00`, retain all review sentinels, and fail the official
+  no-key verifier with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No Provider request or charge occurred;
+  each operation still requires its own exact authorization.

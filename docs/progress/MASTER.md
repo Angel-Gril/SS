@@ -150,6 +150,16 @@ documentation contract, workspace typecheck, diff check, and the complete prefli
 helper remains `CANDIDATE_ONLY`, performs no Registry write, and cannot consume the current
 unresolved-billing I2I result. Counts and rollout state remain unchanged.
 
+From clean pushed revision `d07779567eb4b06c3a3de61622704fe8c580b672`, the next capability-only
+`FULL_EDIT` and `INPAINT` requests are prepared but not approved. FULL_EDIT operation
+`qa02-wanx-full-edit-20260801-d077795-01` has policy SHA-256 `c5d0b141...1d2429` and draft SHA-256
+`1d48d56a...2547b9`. INPAINT operation `qa02-wanx-inpaint-20260801-d077795-01` has policy SHA-256
+`805193a3...3ae8d2`, draft SHA-256 `95b66c54...c748c9`, and a private 1024x1024 PNG mask under
+SHA-256 `f5a5d694...14fe3b`; its transparent 160x160 edit region lies in the upper-left background
+and does not cover the mug. Both policies only propose CNY `0.14` quote/CNY `1.00` maximum. Both
+drafts retain `DRAFT_REVIEW_REQUIRED_NOT_APPROVED`, and the no-key official verifier rejects each
+with `SANDBOX_APPROVAL_SCHEMA_INVALID`. No Provider request or additional charge occurred.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both
@@ -853,9 +863,11 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    confirmation of its returned image, then either correlate its task to the API Key's real billing
    account or retain billing as explicitly unresolved; the unrelated Bailian console snapshot must
    never enter a receipt. Provider price API synchronization is not required. Prepare independent
-   policies, Operation IDs, bounded media, approvals, and single-request maxima before testing
-   `FULL_EDIT` and `INPAINT`; neither may inherit the consumed `IMAGE_TO_IMAGE` approval. Complete
-   QA-02 only after the accepted evidence policy for all three operations is explicit and truthful.
+   prepared policy, Operation ID, bounded media, approval draft, and single-request maximum for
+   `FULL_EDIT`; obtain a new exact authorization before replacing its three sentinels or dispatching.
+   Only after that operation closes may the separately prepared `INPAINT` draft be reviewed and
+   authorized. Neither may inherit the consumed `IMAGE_TO_IMAGE` approval. Complete QA-02 only after
+   the accepted evidence policy for all three operations is explicit and truthful.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt
