@@ -481,7 +481,7 @@ if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
   fi
 fi
 mkdir "$RELEASE_DIR"
-tar -xzf "$TARBALL" -C "$RELEASE_DIR" --strip-components=1
+tar -xzf "$TARBALL" -C "$RELEASE_DIR" --strip-components=1 --no-same-owner
 rm -f -- "$TARBALL"
 rmdir -- "$UPLOAD_DIR"
 install_target_backup_gate "$RELEASE_DIR"

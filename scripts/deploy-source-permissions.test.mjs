@@ -71,6 +71,16 @@ test('release deployment atomically transitions systemd units before service ver
   assert.match(installer, /Install failed; restoring previous unit files/u);
 });
 
+test('release extraction discards local archive ownership before installing the trusted gate', () => {
+  const deploy = readFileSync(join(process.cwd(), 'scripts', 'deploy.sh'), 'utf8');
+  const extractionIndex = deploy.indexOf(
+    'tar -xzf "$TARBALL" -C "$RELEASE_DIR" --strip-components=1 --no-same-owner',
+  );
+  const gateIndex = deploy.indexOf('install_target_backup_gate "$RELEASE_DIR"');
+  assert.ok(extractionIndex >= 0, 'release extraction must ignore uploader UID/GID metadata');
+  assert.ok(gateIndex > extractionIndex, 'root-owned extraction must precede trusted gate install');
+});
+
 test('release systemd installer snapshots, verifies, restores, and auto-recovers', {
   skip: !linuxRoot,
 }, () => {
