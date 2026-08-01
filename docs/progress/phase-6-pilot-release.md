@@ -149,3 +149,24 @@ Progress: 0/3 tasks.
   review helper do not constitute a signed package, distribution receipt, dark deployment, canary,
   or pilot. `REL-03`, `REL-04`, and `REL-02` remain blocked behind accepted positive `QA-02` evidence
   and the formal `QA-04` rerun; no feature flag is enabled.
+- After `QA-02` and `QA-04` completed, formal `REL-03` packaging ran from clean pushed commit
+  `45693943a63d106d6a4adfb58ca782c1703ba5f8`. The first attempt failed closed before retaining a
+  candidate because the build-time API origin had not been bound to the independently reviewed API
+  origin; the coordinator removed its partial output and did not consume a version. The corrected
+  invocation bound Web/Admin/API to `https://app.ss-erp.com`, `https://admin.ss-erp.com`, and
+  `https://ss-erp.com`, with local `http://127.0.0.1:3001`.
+- The successful coordinator created canonical version `1.0.265`. Both packages contain 189 files.
+  Cloud ZIP SHA-256 is `a832b6e00e24d2a8a335aa272f7109aa73520a235090e570337b04d99e277f80`;
+  local ZIP SHA-256 is `3c1e8694dbbee7ff7a5ef7ed4670934417da17b59e248ee8aa914d153a7ac55a`;
+  release-evidence SHA-256 is `c4f8f8aeaf4800e4b129be58e1311e0207091b9e2e8d36bcbc6cc01893d7d2e7`.
+  The independent release verifier passed, and the official staging helper retained a byte-identical
+  private directory containing exactly the two ZIPs, checksum, and evidence.
+- A real persistent-Chromium same-path upgrade smoke loaded `1.0.264`, stored one valid non-secret
+  Provider profile plus a session-only sentinel, restarted with `1.0.265`, and retained the same
+  extension ID and profile. The session sentinel disappeared and was absent from local and sync
+  storage. Private smoke-summary SHA-256 is `98996dc33dd7337c94b9e2676bc3f176ff26005d56eb96341e9aa36a824d1b09`.
+- The canonical evidence intentionally remains `signature.status=EXTERNAL_REQUIRED`. No Chrome Web
+  Store or enterprise signature, distribution receipt, external publication, VPS access, deployment,
+  flag change, Provider call, ERP ingest, or Ozon mutation occurred. `REL-03` is not complete until
+  one approved external signing/distribution channel returns retained evidence. Phase 6 stays `0/3`
+  and overall progress stays `34/37`.

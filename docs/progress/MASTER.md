@@ -67,6 +67,22 @@ local permission warnings. No `20260801` QA schema remained. Private acceptance 
 `1fb9d012...00acbd`. Phase 5 is now `4/4`, overall progress is `34/37`, and `REL-03` is the next
 dependency-ready task.
 
+`REL-03` packaging then produced the first canonical release candidate from clean pushed commit
+`45693943a63d106d6a4adfb58ca782c1703ba5f8`. The coordinated release is version `1.0.265`, binds
+Web/Admin/API origins `https://app.ss-erp.com`, `https://admin.ss-erp.com`, and
+`https://ss-erp.com` plus local `http://127.0.0.1:3001`, and contains 189 files per target. Cloud
+ZIP SHA-256 is `a832b6e0...77f80`; local ZIP SHA-256 is `3c1e8694...c55a`; canonical evidence
+SHA-256 is `c4f8f8ae...d7d2e7`. The official no-follow staging verifier byte-preserved exactly the
+two ZIPs, checksum, and evidence into a private four-file candidate.
+
+A persistent-Chromium same-path upgrade smoke moved from `1.0.264` to `1.0.265` with the same
+extension ID. The non-secret Provider profile remained, the session-only sentinel was present before
+restart and absent afterward, and it never entered local or sync storage. Private smoke-summary
+SHA-256 is `98996dc3...d1b09`. The candidate still records
+`signature.status=EXTERNAL_REQUIRED`: no store/enterprise signature, distribution receipt, or
+external publication occurred. `REL-03` therefore remains open, Phase 6 remains `0/3`, and overall
+progress remains `34/37` pending selection and execution of the external release channel.
+
 Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
 runner sent exactly one request to the approved route, received definite HTTP 400, produced no
 image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero; official receipt
@@ -930,8 +946,10 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep the passing `QA-04` result on `c053c2c` immutable. Execute `REL-03` packaging, then
-   `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
+7. Keep the passing `QA-04` result and canonical `1.0.265` candidate immutable. Complete `REL-03`
+   through an approved Chrome Web Store or controlled-enterprise signing/distribution channel and
+   retain its external receipt; do not rebuild or increment the candidate. Then execute `REL-04`
+   dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
    stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
