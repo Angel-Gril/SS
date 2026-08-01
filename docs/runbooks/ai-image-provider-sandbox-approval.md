@@ -20,6 +20,8 @@ gpt-image-2-i2i-20260725064150-03
 qa02-i2i-20260730-083710-01
 qa02-centos-i2i-20260730-094857-01
 qa02-packy-i2i-20260801-e4503e9-01
+qa02-packy-i2i-documented-20260801-9b6cc05-01
+qa02-xiaoyi-i2i-20260801-f189dfa-01
 ```
 
 The Centos operation definitively rejected `/v1/images/edits` for its tested
@@ -30,6 +32,11 @@ single-source multipart contract. Both settled with no charge. Do not prepare `F
 or another image-to-image approval for either same combination unless the Provider first supplies a
 reviewed edit-contract/account correction; otherwise select a different edit-capable Provider and
 use a new policy, Operation ID and approval after that external change.
+
+The Xiaoyi operation likewise sent its exact documented synchronous multipart contract once and
+received definite HTTP 400, with no Provider request ID, no image and no charge. Do not retry that
+Operation ID or prepare `FULL_EDIT`/`INPAINT` for the same Xiaoyi route/account/model. A future test
+requires a Provider-confirmed material contract change and a new versioned profile.
 
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for

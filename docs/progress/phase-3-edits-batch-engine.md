@@ -584,7 +584,15 @@ Progress: 4/5 tasks.
   approval, runner, claim and settlement boundaries; generic-profile `FULL_EDIT` and `INPAINT`
   regression fixtures fail before dispatch or settlement.
 - Public USD `0.07` base price times the highest published enabled group ratio is USD `0.2002`.
-  The proposed private policy uses quote USD `0.210001`, maximum USD `1.000000`, scale `6`, pending
-  explicit approval. The one-microdollar increment preserves the exact-money minimum-shared-scale
-  invariant while retaining the Provider meter's six-place resolution. No Provider POST or charge
-  occurred; progress remains `4/5` and `32/37`.
+  Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` was explicitly approved with quote USD
+  `0.210001`, maximum USD `1.000000`, scale `6`, then sent exactly one synchronous multipart POST
+  from clean pushed commit `f189dfa`. It did not retry. Xiaoyi returned definite HTTP 400 after
+  `1858 ms`; report SHA-256 `0457ffa6...82d5` records `REJECTED`, one create request, no Provider
+  request-ID hash and no image.
+- Pre-call/settled manifest SHA-256 values are `7c273351...3a30` and `e845170a...759e`; all three
+  meter bodies were byte-identical. Exact attestation SHA-256 `c22c5729...dfe7` produced v3 receipt
+  SHA-256 `98bb603e...5ad7`, with `NO_CHARGE`, `PASS`, zero billed units and no same-request retry;
+  replay preserved the exact bytes. Archive manifest SHA-256 is `f4fa78fc...c656`, and run-summary
+  SHA-256 is `f5b3e8a0...9aaf5`. Credential and ACL checks passed. No image existed for quality
+  review. This exact Xiaoyi route/account/profile is now negative evidence and cannot authorize
+  `FULL_EDIT`, `INPAINT` or a renamed retry. Progress remains `4/5` and `32/37`.

@@ -189,9 +189,12 @@ Token-log evidence only from the exact Xiaoyi billing origin, and that billing o
 an intent for any other API Base. All other Providers retain the same-origin `/v1` API and Token-log
 rule. Both the preflight and finalizer Git revision checks include the shared Xiaoyi identity module.
 
-The Xiaoyi API credential pasted into chat is exposed and must not be used. Revoke it in the
-Xiaoyi console, create a replacement, store that replacement with current-user DPAPI outside the
-repository, and assign a new non-secret credential revision before running this preflight.
+The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
+revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
+DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the exact
+documented synchronous multipart request once and received definite HTTP 400, with no image or
+charge. It must not be retried or reused for `FULL_EDIT`/`INPAINT`. A future paid Xiaoyi request
+requires a Provider-confirmed material route/account/contract change and a new profile and approval.
 
 The command uses public DoH, rejects private DNS results, pins the accepted addresses, disables
 redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET sequence:

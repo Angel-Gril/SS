@@ -513,3 +513,35 @@ make a generic-profile `FULL_EDIT` or `INPAINT` request evaluate both sides of t
 check as false. The final implementation separates exact route/model identity from the
 `IMAGE_TO_IMAGE` allowlist in approval, execution, claim and settlement, with internally consistent
 downgrade fixtures at all four boundaries.
+
+## Xiaoyi bounded I2I result
+
+The operator approved operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` from clean pushed commit
+`f189dfab715ac60e8b168b10c13ac9557a091e29`, with source SHA-256
+`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, the frozen profile prompt,
+quote USD `0.210001`, and maximum USD `1.000000`. The official verifier accepted final approval
+SHA-256 `35822efa228a1d04832c720c79f37675243312265c061da6bac5c1694ccfa7ae`.
+
+The guarded runner sent one synchronous multipart `/v1/images/edits` POST and did not retry. The
+Provider returned definite HTTP 400 after `1858 ms`. Intent SHA-256 is
+`aa38b2eb6a8e63970c1ede9942ecae3d5b6772d0f42bf8c146afe5c6176e386a`; report SHA-256 is
+`0457ffa6e5baf87e9127c6de174191dff0e4cf889dddc738ea2849ddbef682d5`. The report records one create
+request, `REJECTED`, no Provider request-ID hash and no image, so no human image-quality result can
+be claimed.
+
+Pre-call and settled manifest SHA-256 values are
+`7c2733516cb08d639a8c2a2099285bbb537448e5d22ff87d9a41650a19e63a30` and
+`e845170aa7edc113d488608f7c024fb906ad2464e413e22afb6e642f7f73759e`. Raw quota, displayed usage
+and Token log were byte-identical over the `272.716` second exclusive window. Exact no-charge
+attestation SHA-256 `c22c5729c1d2a9f611b3abffa79439ce6d9a619c69d55216a6400b1d4b14dfe7` produced v3 receipt
+SHA-256 `98bb603e775e0935e8bc2af4f2151f9bcfafdb73be9535516ba049b6ccbb5ad7`. It records
+`billingGate=PASS`, zero billed units and `sameRequestRetryAllowed=false`; replay was byte-identical.
+Six sanitized execution files are retained under archive manifest SHA-256
+`f4fa78fc0b35b29acf9b9ecd9184eafaeb8255f9e70f2fa68d11441eb5e3c656`; private run-summary SHA-256
+is `f5b3e8a0d1c2ae775b13b849ef7c021ed2266e3de61fc38d4de166ae2ee9aaf5`. Exact Token and generic
+secret scans found zero matches, and private ACL/reparse checks passed.
+
+This is conclusive negative evidence for the exact endpoint, account credential revision, model and
+profile. Do not retry the Operation ID, rename the same request, or use this route for `FULL_EDIT`
+or `INPAINT`. A later Xiaoyi paid test requires a Provider-confirmed material route/account/contract
+change and a new profile, policy and approval. `QA-02` remains incomplete.

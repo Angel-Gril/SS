@@ -73,14 +73,28 @@ An independent security review found and closed the generic-profile `FULL_EDIT`/
 route/model identity and the operation allowlist are now separate checks in approval, execution,
 claim and settlement.
 
-Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists base USD `0.07`; its highest
-published enabled group ratio yields USD `0.2002`. The proposed private policy therefore rounds the
-quote up to USD `0.210001` and retains the operator's USD `1.000000` single-request maximum at scale
-6, matching the `500000`-quota-units-per-USD meter resolution while keeping the money pair at its
-canonical minimum shared scale. This is not yet an approval or
-Provider-side cap. No Provider POST, charge, Registry mutation, deployment, flag, ERP ingest, or
-Ozon write occurred. `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress
-stays `32/37` and all rollout flags remain off.
+From clean pushed commit `f189dfab715ac60e8b168b10c13ac9557a091e29`, the operator then approved
+operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` with quote USD `0.210001` and maximum USD
+`1.000000`. The guarded runner sent exactly one synchronous multipart POST and did not retry. Xiaoyi
+returned definite HTTP 400 after `1858 ms`; report SHA-256 is
+`0457ffa6e5baf87e9127c6de174191dff0e4cf889dddc738ea2849ddbef682d5`, with `REJECTED`, one create
+request, no Provider request-ID hash and no image.
+
+Pre-call and settled manifest SHA-256 values are
+`7c2733516cb08d639a8c2a2099285bbb537448e5d22ff87d9a41650a19e63a30` and
+`e845170aa7edc113d488608f7c024fb906ad2464e413e22afb6e642f7f73759e`; raw quota, displayed usage
+and Token log were byte-identical. Exact attestation SHA-256
+`c22c5729c1d2a9f611b3abffa79439ce6d9a619c69d55216a6400b1d4b14dfe7` produced v3 receipt SHA-256
+`98bb603e775e0935e8bc2af4f2151f9bcfafdb73be9535516ba049b6ccbb5ad7`, recording `NO_CHARGE`,
+`billingGate=PASS`, zero billed units and `sameRequestRetryAllowed=false`; offline replay was
+byte-identical. Archive manifest SHA-256 is
+`f4fa78fc0b35b29acf9b9ecd9184eafaeb8255f9e70f2fa68d11441eb5e3c656`, and private run-summary
+SHA-256 is `f5b3e8a0d1c2ae775b13b849ef7c021ed2266e3de61fc38d4de166ae2ee9aaf5`. No image existed for
+human quality review. Credential scans and private ACL checks passed. No Registry mutation,
+deployment, flag, ERP ingest or Ozon write occurred. This is negative evidence for the exact Xiaoyi
+route/account/profile; do not retry it or use it for `FULL_EDIT`/`INPAINT`. `QA-04`, `REL-03`,
+`REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all rollout flags remain
+off.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -641,12 +655,12 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
-4. The rotated Xiaoyi credential and dual-origin GET-only preflight now pass. Commit and review the
-   exact `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` implementation, then retain its private USD `0.210001`
-   quote / USD `1.000000` maximum policy and generate a non-approval draft from that clean commit.
-   Send no POST until the operator explicitly approves the resulting Operation ID, source digest,
-   prompt/profile and maximum. Run exactly one synchronous `IMAGE_TO_IMAGE`; do not send
-   `FULL_EDIT` or `INPAINT`. Async remains unverified until a separate bounded profile and approval.
+4. Do not retry `qa02-xiaoyi-i2i-20260801-f189dfa-01` or send `FULL_EDIT`/`INPAINT` through the
+   same Xiaoyi route/account/model. Its exact documented synchronous multipart request received
+   definite HTTP 400 and settled with no charge. Another paid Xiaoyi test requires a
+   Provider-confirmed material route/account/contract change, a new versioned profile, policy,
+   Operation ID and explicit approval; otherwise select a different edit-capable Provider. Async
+   remains unverified and cannot inherit this approval or evidence.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
