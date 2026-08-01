@@ -99,6 +99,25 @@ diff checks pass. Full repository preflight passes `446/0` with the two existing
 permission warnings. Counts remain `4/5` and `32/37`, and no paid Provider call, deployment, flag,
 ERP ingest, or Ozon mutation occurred.
 
+From clean pushed revision `6948460a41a2038e3a5c48b589b291ce179ab407`, credential revision
+`dashscope-wanx-beijing-rotation-20260801-01` completed the official v3 preflight with exactly one
+authenticated catalogue GET. Private manifest SHA-256 is
+`d30992953eed5218818e54146d70a0d9897de7bf1b60a993051ad0e23bf43c5f`; the 1022-byte catalogue
+body SHA-256 is `5d2dd214e9eb01aebe9f16d7ab29538f869ab140a42345af531d1d7b2611d578`.
+It records `authenticationVerified=true`, `exactModelListed=true`, one exact GET record,
+`billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`, `providerPostSent=false`,
+`chargeObserved=false`, and `editCapabilityVerified=false`. The response/manifest hashes match,
+credential scans found zero matches, and the directory plus both files have protected explicit
+current-user/SYSTEM/Administrators ACLs with no reparse points.
+
+The private policy for operation `qa02-wanx-i2i-20260801-6948460-01` now has SHA-256
+`e6b4d5a6c0d338411cbcd89740e73b91d6dbc21e4b7eb609b354a1a0d6e6c4f6`, quote CNY `0.14`, and
+proposed maximum CNY `1.00`, but remains pending a separate billing snapshot and operator maximum
+authorization. Approval-draft SHA-256
+`b2f3e0c092b57cacdf868e14a5a62fcb6e55c035658a1c45f088d22ef941369e` still states
+`DRAFT_REVIEW_REQUIRED_NOT_APPROVED`. No task, image-synthesis, poll, download, paid operation, or
+production mutation occurred. `QA-02` remains `4/5` and overall progress remains `32/37`.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both
@@ -797,16 +816,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    contract, followed by a new profile, policy, Operation ID, approval, and reconciliation;
    otherwise use a different edit-capable Provider. Async remains unverified and cannot inherit
    either profile's approval or evidence.
-5. Revoke the Alibaba credential exposed in chat and create a new private Beijing credential
-   revision. Keep the failed catalogue evidence ID: it was not consumed. From the new clean pushed
-   revision, rerun only the catalog preflight through its pinned DoH resolver; do not treat the
-   separate no-credential A/AAAA observation as authentication or model visibility. Confirm whether
-   the credential uses the reviewed legacy API Base or requires a workspace-specific host; the latter
-   needs its exact Workspace ID identity reviewed before use. Only after the catalogue preflight
-   succeeds, prepare the first `IMAGE_TO_IMAGE` policy/draft from a clean pushed adapter revision and
-   obtain a fresh explicit CNY quote and independently chosen single-request maximum. Do not reuse
-   any Packy or Xiaoyi approval. After one accepted operation is fully reconciled and
-   quality-reviewed, repeat with new approvals for `FULL_EDIT` and `INPAINT`.
+5. Keep the successful Wanx v3 manifest and exact private response bytes immutable. For operation
+   `qa02-wanx-i2i-20260801-6948460-01`, finalize the exact Prompt, retain an independent Alibaba
+   console or reviewed Billing OpenAPI pre-call snapshot, then obtain explicit operator approval for
+   the exact endpoint/model/profile/source, quote CNY `0.14`, and independently selected
+   single-request maximum CNY `1.00`. The current draft is not approval, and Provider price API
+   synchronization is not required. Only after both gates pass may the guarded runner send one async
+   image-synthesis POST, poll only its accepted task, reconcile billing, and perform human quality
+   review. Do not reuse any Packy/Xiaoyi approval. After one accepted operation is fully reconciled
+   and quality-reviewed, repeat with new policies and approvals for `FULL_EDIT` and `INPAINT`.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt

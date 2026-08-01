@@ -696,3 +696,15 @@ Progress: 4/5 tasks.
   `446/0` with the two existing local-extension permission warnings. This diagnosis is not edit
   capability or billing evidence. `QA-02` stays `4/5`, overall progress stays `32/37`, and no paid
   task, deployment, flag, ERP ingest, or Ozon mutation occurred.
+- From clean pushed revision `6948460a41a2038e3a5c48b589b291ce179ab407`, credential revision
+  `dashscope-wanx-beijing-rotation-20260801-01` completed official v3 evidence with exactly one
+  authenticated catalogue GET. Manifest SHA-256 is `d3099295...43c5f`; its single 1022-byte model
+  response SHA-256 is `5d2dd214...1d578`, and the record hash matches those bytes. It proves
+  authentication plus one exact `wanx2.1-imageedit` row while explicitly recording separate billing
+  evidence required, no Provider POST/charge observation, and no edit-capability verification.
+- Credential scans found zero matches. The evidence directory/files have explicit protected
+  current-user/SYSTEM/Administrators ACLs and no reparse points. Private policy SHA-256
+  `e6b4d5a6...e6c4f6` still only proposes CNY `0.14` quote/CNY `1.00` maximum; draft SHA-256
+  `b2f3e0c0...941369e` remains unapproved. `QA-02` stays `4/5`, overall progress stays `32/37`, and
+  no task, synthesis, poll, download, paid operation, deployment, flag, ERP ingest, or Ozon mutation
+  occurred.

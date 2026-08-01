@@ -255,6 +255,19 @@ preflight `446/0` with two existing warnings. Commit it before rerunning the off
 preflight with a new evidence ID; the diagnostic is not itself a successful v3 manifest or
 edit-capability evidence.
 
+Clean revision `6948460a41a2038e3a5c48b589b291ce179ab407` subsequently completed official v3
+evidence ID `qa02-wanx-readonly-20260801-6948460-01` with one authenticated GET. Manifest SHA-256
+is `d3099295...43c5f`, and its only 1022-byte response SHA-256 is `5d2dd214...1d578`. The manifest
+proves authentication and exact model visibility only; it still records separate billing evidence
+required, no Provider POST/charge observation, and no edit-capability verification. Private ACL,
+reparse, hash, and credential scans passed.
+
+Do not repeat the catalogue preflight merely to authorize a paid request. Preserve it, finalize the
+exact Prompt, and retain an independent Alibaba console or reviewed Billing OpenAPI pre-call
+snapshot. The private CNY `0.14` quote/CNY `1.00` maximum policy remains a proposal and the approval
+draft remains explicitly unapproved. Only an operator's exact one-request authorization after those
+gates may permit one async image-synthesis POST.
+
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
 DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the V1

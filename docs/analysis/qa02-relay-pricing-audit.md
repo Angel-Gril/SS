@@ -723,6 +723,36 @@ skips. Sandbox typecheck, target lint, the static contract, and diff checks pass
 ID may now execute the official one-GET preflight. `QA-02` remains `4/5`, overall progress remains
 `32/37`, and no paid Provider call or production mutation occurred.
 
+### Completed Wanx v3 catalogue preflight
+
+From clean pushed revision `6948460a41a2038e3a5c48b589b291ce179ab407`, the bounded launcher read
+credential revision `dashscope-wanx-beijing-rotation-20260801-01` from current-user DPAPI and passed
+it only through child stdin. Official v3 evidence ID `qa02-wanx-readonly-20260801-6948460-01`
+completed exactly one authenticated GET to the reviewed model URI. Private manifest SHA-256 is
+`d30992953eed5218818e54146d70a0d9897de7bf1b60a993051ad0e23bf43c5f`. The sole retained
+1022-byte response SHA-256 is
+`5d2dd214e9eb01aebe9f16d7ab29538f869ab140a42345af531d1d7b2611d578`; its hashed request ID is
+`a7598f5df0d0164e3e136c0a59288ca708bc7a8d33c89f3b1e090dc683918dbc`.
+
+The manifest binds operation `qa02-wanx-i2i-20260801-6948460-01`, exact API Base/model/revision,
+one GET record, and matching response hash. It records `authenticationVerified=true`,
+`exactModelListed=true`, `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
+`providerPostSent=false`, `chargeObserved=false`, and `editCapabilityVerified=false`. Credential
+scans across both files found zero matches. The evidence directory and files use protected explicit
+current-user/SYSTEM/Administrators ACLs, contain no reparse point, and retain the same hashes after
+ACL hardening.
+
+Private pricing-policy SHA-256 is
+`e6b4d5a6c0d338411cbcd89740e73b91d6dbc21e4b7eb609b354a1a0d6e6c4f6`. It proposes quote CNY
+`0.14` and maximum CNY `1.00`, but its status remains pending a separate billing snapshot and
+operator maximum authorization. Approval-draft SHA-256 is
+`b2f3e0c092b57cacdf868e14a5a62fcb6e55c035658a1c45f088d22ef941369e`; it still says
+`DRAFT_REVIEW_REQUIRED_NOT_APPROVED`. No Provider price synchronization is required, but the exact
+Prompt and an independent pre-call billing snapshot must be retained before asking for explicit
+one-request approval. No task, synthesis, poll, image download, paid operation, deployment, flag,
+ERP ingest, VPS, or Ozon mutation occurred. `QA-02` remains `4/5` and overall progress remains
+`32/37`.
+
 ## PicPi public no-credential preflight
 
 At the public-preflight checkpoint on 2026-08-01, the operator supplied `https://api.picpi.top` as
