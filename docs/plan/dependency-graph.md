@@ -158,6 +158,16 @@ FND-01
 -> REL-03/REL-04/REL-02
 ```
 
+## Offline Preparation Versus Completion
+
+The graph defines completion and external-action dependencies. Fixture implementation, regression
+rehearsal, package-orchestration development, backup-gate tests, and dark-deploy script tests may
+run before `QA-02` so engineering does not idle on a Provider capability decision. Such work does
+not remove `Q2 -> Q4`, does not complete `Q4` or any release node, and authorizes no paid request,
+deployment, flag change, ERP mutation, or Ozon write. The final `QA-04` run and sequential
+`REL-03 -> REL-04 -> REL-02` execution still require accepted live evidence for every configured
+`QA-02` operation.
+
 ## Merge Ownership Hotspots
 
 The following surfaces are serialized even when surrounding lanes run in parallel:

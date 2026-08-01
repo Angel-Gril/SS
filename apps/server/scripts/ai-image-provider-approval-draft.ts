@@ -28,6 +28,19 @@ import {
   isAiImageXiaoyiEditRequestProfile,
 } from '../src/services/ai-image-xiaoyi-provider.js';
 import {
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_EDIT_PROFILE,
+  aiImageWanx21EditOperationForRequestProfile,
+  aiImageWanx21EditSubmitEndpoint,
+  isAiImageWanx21EditApiIdentity,
+  isAiImageWanx21EditEndpointIdentity,
+  isAiImageWanx21EditRequestProfile,
+  normalizeAiImageWanx21EditApiBase,
+  assertAiImageWanx21EditMedia,
+} from '../src/services/ai-image-wanx-edit-profile.js';
+import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
@@ -57,6 +70,9 @@ const REQUEST_PROFILES = new Set([
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
 ]);
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_API_KEY',
@@ -83,6 +99,7 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
   'apps/server/src/services/ai-image-xiaoyi-provider.ts',
+  'apps/server/src/services/ai-image-wanx-edit-profile.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
@@ -292,8 +309,19 @@ function canonicalEndpoint(input: {
   baseUrl: string;
   expectedHost: string;
   operation: AiImageSandboxApprovalDraftOperation;
+  requestProfile: string;
 }) {
-  const apiBase = normalizeOpenAiImagesApiBase(input.baseUrl);
+  let apiBase: string;
+  try {
+    apiBase = isAiImageWanx21EditRequestProfile(input.requestProfile)
+      ? normalizeAiImageWanx21EditApiBase(input.baseUrl)
+      : normalizeOpenAiImagesApiBase(input.baseUrl);
+  } catch {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'AI_IMAGE_SANDBOX_BASE_URL is invalid for the selected request profile',
+    );
+  }
   const parsed = new URL(apiBase);
   const hostname = parsed.hostname.toLowerCase();
   if (
@@ -315,9 +343,11 @@ function canonicalEndpoint(input: {
       'AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL',
     );
   }
-  return new URL(
-    `${apiBase}/images/${input.operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
-  ).toString();
+  return isAiImageWanx21EditRequestProfile(input.requestProfile)
+    ? aiImageWanx21EditSubmitEndpoint(apiBase)
+    : new URL(
+        `${apiBase}/images/${input.operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+      ).toString();
 }
 
 async function loadPinnedImage(input: {
@@ -366,6 +396,7 @@ async function resolveMediaBindings(input: {
   operation: AiImageSandboxApprovalDraftOperation;
   environment: NodeJS.ProcessEnv;
   repositoryRoot: string;
+  wanx?: boolean;
 }) {
   const sourcePath = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_PATH', input.environment);
   const sourceSha256 = optionalEnvironment('AI_IMAGE_SANDBOX_SOURCE_SHA256', input.environment);
@@ -391,6 +422,7 @@ async function resolveMediaBindings(input: {
     shaEnvironment: 'AI_IMAGE_SANDBOX_SOURCE_SHA256',
     environment: input.environment,
     repositoryRoot: input.repositoryRoot,
+    maximumBytes: input.wanx ? AI_IMAGE_WANX21_EDIT_PROFILE.maximumInputBytes : undefined,
   });
   if (input.operation !== 'INPAINT') {
     if (maskPath || maskSha256) {
@@ -398,6 +430,16 @@ async function resolveMediaBindings(input: {
         'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
         `${input.operation} must not configure a mask`,
       );
+    }
+    if (input.wanx) {
+      try {
+        assertAiImageWanx21EditMedia({ source });
+      } catch (error) {
+        throw draftError(
+          'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
+          error instanceof Error ? error.message : 'Wanx source media is invalid',
+        );
+      }
     }
     return { sourceSha256: [source.sha256], maskSha256: null };
   }
@@ -411,7 +453,12 @@ async function resolveMediaBindings(input: {
     pathEnvironment: 'AI_IMAGE_SANDBOX_MASK_PATH',
     shaEnvironment: 'AI_IMAGE_SANDBOX_MASK_SHA256',
     requirePng: true,
-    maximumBytes: remainingAiImageSandboxEditMediaBytes([source]),
+    maximumBytes: Math.min(
+      remainingAiImageSandboxEditMediaBytes([source]),
+      input.wanx
+        ? AI_IMAGE_WANX21_EDIT_PROFILE.maximumInputBytes
+        : Number.MAX_SAFE_INTEGER,
+    ),
     environment: input.environment,
     repositoryRoot: input.repositoryRoot,
   });
@@ -429,6 +476,16 @@ async function resolveMediaBindings(input: {
       'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
       'The INPAINT mask dimensions must match the source image',
     );
+  }
+  if (input.wanx) {
+    try {
+      assertAiImageWanx21EditMedia({ source, mask });
+    } catch (error) {
+      throw draftError(
+        'SANDBOX_APPROVAL_DRAFT_MEDIA_INVALID',
+        error instanceof Error ? error.message : 'Wanx edit media is invalid',
+      );
+    }
   }
   return { sourceSha256: [source.sha256], maskSha256: mask.sha256 };
 }
@@ -785,11 +842,22 @@ export async function runAiImageProviderApprovalDraft(
     253,
   ).toLowerCase();
   const baseUrl = requiredBoundedText('AI_IMAGE_SANDBOX_BASE_URL', environment, 2048);
-  const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
+  let apiBase: string;
+  try {
+    apiBase = isAiImageWanx21EditRequestProfile(requestProfile)
+      ? normalizeAiImageWanx21EditApiBase(baseUrl)
+      : normalizeOpenAiImagesApiBase(baseUrl);
+  } catch {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'AI_IMAGE_SANDBOX_BASE_URL is invalid for the selected request profile',
+    );
+  }
   const endpoint = canonicalEndpoint({
     baseUrl,
     expectedHost,
     operation,
+    requestProfile,
   });
   const model = requiredBoundedText('AI_IMAGE_SANDBOX_MODEL', environment, 200);
   const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
@@ -802,6 +870,11 @@ export async function runAiImageProviderApprovalDraft(
   const xiaoyiProviderIdentity = isAiImageXiaoyiEditProviderIdentity({
     apiBase,
     endpoint,
+    expectedHost,
+    model,
+  });
+  const wanxApiIdentity = isAiImageWanx21EditApiIdentity({
+    apiBase,
     expectedHost,
     model,
   });
@@ -826,10 +899,35 @@ export async function runAiImageProviderApprovalDraft(
       'The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE',
     );
   }
+  if (isAiImageWanx21EditRequestProfile(requestProfile) !== wanxApiIdentity) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Wanx 2.1 edit Provider identity and request profile must be selected together',
+    );
+  }
+  if (
+    isAiImageWanx21EditRequestProfile(requestProfile)
+    && !isAiImageWanx21EditEndpointIdentity({ apiBase, endpoint, expectedHost, model })
+  ) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Wanx 2.1 edit request profile requires the exact async image-synthesis endpoint',
+    );
+  }
+  if (
+    isAiImageWanx21EditRequestProfile(requestProfile)
+    && aiImageWanx21EditOperationForRequestProfile(requestProfile) !== operation
+  ) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Wanx 2.1 edit request profile does not match the selected operation',
+    );
+  }
   const exactCosts = exactDraftCosts(environment);
   if (
     (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-      || isAiImageXiaoyiEditRequestProfile(requestProfile))
+      || isAiImageXiaoyiEditRequestProfile(requestProfile)
+      || isAiImageWanx21EditRequestProfile(requestProfile))
     && !exactCosts
   ) {
     throw draftError(
@@ -847,7 +945,12 @@ export async function runAiImageProviderApprovalDraft(
       'Quoted sandbox cost exceeds the proposed maximum',
     );
   }
-  const media = await resolveMediaBindings({ operation, environment, repositoryRoot });
+  const media = await resolveMediaBindings({
+    operation,
+    environment,
+    repositoryRoot,
+    wanx: isAiImageWanx21EditRequestProfile(requestProfile),
+  });
   const currency = requiredBoundedText('AI_IMAGE_SANDBOX_CURRENCY', environment, 3);
   if (!/^[A-Z]{3}$/u.test(currency)) {
     throw draftError(

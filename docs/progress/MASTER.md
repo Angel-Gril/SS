@@ -44,12 +44,18 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-Current checkpoint (2026-08-01): `QA-02` remains the first unresolved dependency at Phase 3 `4/5`
-and is blocked on positive acceptance from an edit-capable Provider. Both Packy edit requests and
-the Xiaoyi V1 and minimal V2 requests are closed negative evidence and must not be retried.
-Xiaoyi's first-party guide documents synchronous multipart `/v1/images/edits` separately from
-`/v1/images/edits/async`; its synchronous curl example contains only `model`, `prompt`, and `image`.
-Public pricing remains planning input, not a maximum-cost authorization.
+Current checkpoint (2026-08-01): a sandbox-only Alibaba Wanx 2.1 asynchronous JSON edit adapter is
+implemented offline for separate `IMAGE_TO_IMAGE`, `FULL_EDIT`, and `INPAINT` profiles. It pins the
+reviewed Beijing legacy API Base/model, persists accepted task identity before polling, permits one
+POST only, binds the exact transport/function and derived inpaint mask, and downloads only from the
+reviewed DashScope OSS host shape without forwarding Authorization. Mocked evidence is not Provider
+acceptance: `QA-02` remains the first unresolved dependency at Phase 3 `4/5`, and overall progress
+remains `32/37`.
+
+Both Packy edit requests and the Xiaoyi V1 and minimal V2 requests remain closed negative evidence
+and must not be retried. Public pricing is planning input, not a maximum-cost authorization or
+settled billing proof. The Alibaba credential pasted into chat was exposed and was not used; it must
+be revoked before any authenticated Wanx preflight or paid operation.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -670,6 +676,29 @@ is `4c0c402ad872b13dd2204c1f0fc6b54d1e42fd9884542378abb9ccf5e9ac81fa`. Exact Tok
 credential scans found zero matches, and private ACL checks passed. No Registry, deployment, flag,
 ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
 
+The next materially different Provider lane is now implemented offline against the official Wanx
+2.1 asynchronous image-edit contract. Three closed profiles map `IMAGE_TO_IMAGE` and `FULL_EDIT` to
+`description_edit`, and `INPAINT` to `description_edit_with_mask`; the logical operations retain
+separate approvals and fingerprints even when the Provider function matches. The guarded runner
+sends bounded source/mask data URLs, persists the raw accepted task ID and temporary result URL only
+in private recovery files, polls only that task, requires one successful metered image, and never
+forwards Provider Authorization to result storage. The guard and adapter share an idempotent task
+identity persistence callback; the guard's bounded `32 MiB` clone reader never waits for clone
+cancellation, so an accepted response cannot deadlock before recovery evidence is durable. An
+accepted-task uncertainty remains
+`RECONCILIATION_REQUIRED` and cannot trigger a second POST. The offline finalizer independently
+recomputes the Wanx transport/function request fingerprint and exact Provider identity; technical
+async sidecars do not substitute for actual billing evidence.
+
+Focused approval, runner, guard, provider, and settlement suites pass `292` tests with two platform
+skips. The full Server suite passes `4699` tests with `199` platform skips. Repository lint has zero
+errors and only the existing `20` Server plus one shared warning; workspace and sandbox typechecks,
+the static contract, and diff checks pass. Full preflight passes `446/0` with the two existing local
+extension permission warnings. This checkpoint permits continued fixture-based `QA-04` and
+release-orchestration development, but final `QA-04`, `REL-03`, `REL-04`, and `REL-02` completion
+remains gated on live positive `QA-02` evidence. No Alibaba credential was read, no Provider request
+or charge occurred, and no VPS access, deployment, flag, ERP ingest, or Ozon mutation was performed.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -699,7 +728,15 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    contract, followed by a new profile, policy, Operation ID, approval, and reconciliation;
    otherwise use a different edit-capable Provider. Async remains unverified and cannot inherit
    either profile's approval or evidence.
-5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
+5. Revoke the Alibaba credential exposed in chat and create a new private Beijing credential
+   revision. Confirm whether it uses the reviewed legacy API Base or requires a workspace-specific
+   host; the latter needs its exact Workspace ID identity reviewed before use. From a clean pushed
+   adapter revision, prepare only the first `IMAGE_TO_IMAGE` policy/draft and obtain a fresh explicit
+   CNY quote and independently chosen single-request maximum. Do not reuse any Packy or Xiaoyi
+   approval. After one accepted operation is fully reconciled and quality-reviewed, repeat with new
+   approvals for `FULL_EDIT` and `INPAINT`.
+6. Continue fixture implementation and rehearsal as needed, but run the final `QA-04` acceptance
+   only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
@@ -709,7 +746,7 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    After the one-time `REL-03` package/sign/distribution step, install its exact canonical four-file
    candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
    that path as `EXTENSION_RELEASE_ROOT`; deployment must never rebuild or increment it.
-6. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+7. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol

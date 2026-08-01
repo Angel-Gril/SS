@@ -85,6 +85,25 @@ async function fixture(operation = 'FULL_EDIT') {
   return { root, privateDirectory, sourcePath, maskPath, draftPath, environment, operationId };
 }
 
+async function prepareWanxMedia(value: Awaited<ReturnType<typeof fixture>>) {
+  const sourceBytes = await sharp({
+    create: { width: 512, height: 512, channels: 4, background: '#f2f2f2' },
+  }).png().toBuffer();
+  await writeFile(value.sourcePath, sourceBytes, { mode: 0o600 });
+  value.environment.AI_IMAGE_SANDBOX_SOURCE_SHA256 = sha256(sourceBytes);
+  if (value.environment.AI_IMAGE_SANDBOX_OPERATION === 'INPAINT') {
+    const raw = Buffer.alloc(512 * 512 * 4, 255);
+    for (let y = 0; y < 512; y += 1) {
+      for (let x = 0; x < 256; x += 1) raw[(y * 512 + x) * 4 + 3] = 0;
+    }
+    const maskBytes = await sharp(raw, {
+      raw: { width: 512, height: 512, channels: 4 },
+    }).png().toBuffer();
+    await writeFile(value.maskPath, maskBytes, { mode: 0o600 });
+    value.environment.AI_IMAGE_SANDBOX_MASK_SHA256 = sha256(maskBytes);
+  }
+}
+
 async function resizePinnedMedia(
   value: Awaited<ReturnType<typeof fixture>>,
   sourceBytes: number,
@@ -172,6 +191,72 @@ afterEach(async () => {
 });
 
 describe('AI image sandbox approval draft generator', () => {
+  it.each([
+    ['IMAGE_TO_IMAGE', 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1'],
+    ['FULL_EDIT', 'DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1'],
+    ['INPAINT', 'DASHSCOPE_WANX21_INPAINT_ASYNC_V1'],
+  ])('binds Wanx 2.1 %s to its distinct async request profile', async (operation, requestProfile) => {
+    const value = await fixture(operation);
+    await prepareWanxMedia(value);
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+    const result = await runAiImageProviderApprovalDraft({
+      environment: {
+        ...value.environment,
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: undefined,
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: undefined,
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '14',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://dashscope.aliyuncs.com/api/v1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'dashscope.aliyuncs.com',
+        AI_IMAGE_SANDBOX_MODEL: 'wanx2.1-imageedit',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: requestProfile,
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    });
+    expect(result.draft).toMatchObject({
+      endpoint: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis',
+      expectedHost: 'dashscope.aliyuncs.com',
+      model: 'wanx2.1-imageedit',
+      operation,
+      requestProfile,
+      quotedCost: { currency: 'CNY', amount: 14, scale: 2 },
+      maximumCost: { currency: 'CNY', amount: 100, scale: 2 },
+    });
+  });
+
+  it.each([
+    ['profile/operation mismatch', {
+      AI_IMAGE_SANDBOX_OPERATION: 'FULL_EDIT',
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+    }],
+    ['wrong model', { AI_IMAGE_SANDBOX_MODEL: 'wanx2.1-t2i-turbo' }],
+    ['generic-profile downgrade', { AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1' }],
+  ])('rejects Wanx 2.1 with %s', async (_label, overrides) => {
+    const value = await fixture('IMAGE_TO_IMAGE');
+    await expect(runAiImageProviderApprovalDraft({
+      environment: {
+        ...value.environment,
+        AI_IMAGE_SANDBOX_QUOTED_COST_CENTS: undefined,
+        AI_IMAGE_SANDBOX_MAX_COST_CENTS: undefined,
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '14',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://dashscope.aliyuncs.com/api/v1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'dashscope.aliyuncs.com',
+        AI_IMAGE_SANDBOX_MODEL: 'wanx2.1-imageedit',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+        ...overrides,
+      },
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+    })).rejects.toMatchObject({ code: 'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID' });
+    await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('binds the Packy GPT-Image-2 edit profile only to its exact Provider identity', async () => {
     const value = await fixture('IMAGE_TO_IMAGE');
     const environment = {

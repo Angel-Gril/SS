@@ -36,6 +36,13 @@ import {
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
 } from '../services/ai-image-xiaoyi-provider.js';
+import {
+  AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+  AI_IMAGE_WANX21_EDIT_MODEL,
+  AI_IMAGE_WANX21_EDIT_TRANSPORT,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  aiImageWanx21EditSubmitEndpoint,
+} from '../services/ai-image-wanx-edit-profile.js';
 
 const directories: string[] = [];
 const operationId = 'sandbox-billing-finalize-0001';
@@ -161,6 +168,58 @@ function xiaoyiEvidenceBindings(overrides: {
       operationEndpointSha256: endpointSha256,
     },
     providerLogEntryOverrides: { model_name: model },
+  };
+}
+
+function wanxEvidenceBindings() {
+  const endpoint = aiImageWanx21EditSubmitEndpoint(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE);
+  const endpointSha256 = sha256(endpoint);
+  const apiBaseSha256 = sha256(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE);
+  const request = {
+    operation: 'IMAGE_TO_IMAGE',
+    requestProfile: AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+    n: 1,
+    width: 1024,
+    height: 1024,
+    size: '1024x1024',
+    promptSha256: '4'.repeat(64),
+    sourceSha256: ['5'.repeat(64)],
+    sourceDimensions: [{ width: 1024, height: 1024 }],
+    maskSha256: null,
+    maskDimensions: null,
+    approvalEvidence: approvalEvidence({ currency: 'CNY' }),
+  };
+  const fingerprint = createAiImageSandboxRequestFingerprint({
+    endpointSha256,
+    model: AI_IMAGE_WANX21_EDIT_MODEL,
+    request: {
+      operation: request.operation,
+      requestProfile: request.requestProfile,
+      providerTransport: AI_IMAGE_WANX21_EDIT_TRANSPORT,
+      providerFunction: 'description_edit',
+      n: request.n,
+      size: request.size,
+      promptSha256: request.promptSha256,
+      sourceSha256: request.sourceSha256,
+      maskSha256: request.maskSha256,
+    },
+  });
+  return {
+    requestFingerprint: fingerprint,
+    intentOverrides: {
+      endpointSha256,
+      apiBaseSha256,
+      model: AI_IMAGE_WANX21_EDIT_MODEL,
+      request,
+    },
+    reportOverrides: {
+      provider: 'dashscope-wanx21-image-edit',
+      operation: request.operation,
+      requestProfile: request.requestProfile,
+      model: AI_IMAGE_WANX21_EDIT_MODEL,
+      apiBaseSha256,
+      operationEndpointSha256: endpointSha256,
+    },
   };
 }
 
@@ -757,6 +816,100 @@ describe('AI image sandbox billing settlement', () => {
     expect(stored).not.toContain('quotaUnitsPerCurrencyUnit');
     expect(await readFile(value.intentPath)).toEqual(value.originalIntent);
     expect(await readFile(value.reportPath)).toEqual(value.originalReport);
+  });
+
+  it('recomputes and settles the Wanx async JSON request fingerprint', async () => {
+    const bindings = wanxEvidenceBindings();
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      requestFingerprint: bindings.requestFingerprint,
+      intentOverrides: bindings.intentOverrides,
+      reportOverrides: bindings.reportOverrides,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 3,
+      apiBaseSha256: sha256(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE),
+      operationEndpointSha256: sha256(
+        aiImageWanx21EditSubmitEndpoint(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE),
+      ),
+      submitState: 'SUCCEEDED',
+      billingGate: 'PASS',
+    });
+  });
+
+  it('rejects downgrading the Wanx API identity to a generic generation profile', async () => {
+    const endpoint = `${AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE}/images/generations`;
+    const endpointSha256 = sha256(endpoint);
+    const apiBaseSha256 = sha256(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE);
+    const request = {
+      operation: 'TEXT_TO_IMAGE',
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      n: 1,
+      width: 1024,
+      height: 1024,
+      size: '1024x1024',
+      promptSha256: '4'.repeat(64),
+      sourceSha256: [],
+      sourceDimensions: [],
+      maskSha256: null,
+      maskDimensions: null,
+      approvalEvidence: approvalEvidence({ currency: 'CNY' }),
+    };
+    const fingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256,
+      model: AI_IMAGE_WANX21_EDIT_MODEL,
+      request: {
+        n: request.n,
+        size: request.size,
+        promptSha256: request.promptSha256,
+        sourceSha256: request.sourceSha256,
+        maskSha256: request.maskSha256,
+      },
+    });
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+      requestFingerprint: fingerprint,
+      intentOverrides: {
+        endpointSha256,
+        apiBaseSha256,
+        model: AI_IMAGE_WANX21_EDIT_MODEL,
+        request,
+      },
+      reportOverrides: {
+        provider: 'custom-openai-compatible',
+        operation: request.operation,
+        requestProfile: request.requestProfile,
+        model: AI_IMAGE_WANX21_EDIT_MODEL,
+        apiBaseSha256,
+        operationEndpointSha256: endpointSha256,
+        sourceSha256: [],
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
   });
 
   it('recomputes and settles the Packy multipart request fingerprint', async () => {

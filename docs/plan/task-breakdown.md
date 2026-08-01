@@ -145,6 +145,10 @@ proves the trust, storage, billing, draft, and publish boundaries before batch/e
 | QA-04 | Run security, billing, authorization, package, and full regression suites | P0 | XL | INT-03, QA-02 | Secret sentinel, endpoint/redirect/permission, hostile image, stale draft, scope revocation, billing separation, idempotency, one-receipt, remote-code/eval, cloud/local package, lint, typecheck, server tests, preflight, extension builds, and package verification all pass |
 | DOC-01 | Document profile setup, charges, permissions, failure recovery, and privacy | P1 | M | UI-06, INT-03 | Help text distinguishes ERP-hosted charges from external BYOK charges, session key behavior, per-operation capability testing, image data disclosure, retry risk, draft review, and existing ERP publish ownership |
 
+`QA-04` implementation and fixture-based rehearsal may proceed offline after `INT-03`. Those runs
+are preparation only: they do not satisfy the `QA-02` dependency, and the complete suite must be
+rerun against the final positive operation-specific evidence before `QA-04` can be checked.
+
 ## Phase 6: Pilot and Release
 
 ### Parallel lanes
@@ -153,6 +157,9 @@ proves the trust, storage, billing, draft, and publish boundaries before batch/e
 - Lane B, exact sandbox evidence: final `QA-02` runs for approved profiles.
 - Release execution is sequential after all gates pass: `REL-03` packages, `REL-04` dark deploy and
   pre-enable canaries, then `REL-02` sandbox/one-shop pilots and post-enable canaries.
+- Packaging, deploy orchestration, backup gates, and canary scripts may be built and rehearsed
+  offline before `QA-02`; no release task is complete and no external action is authorized by that
+  preparation.
 
 | ID | Task | Priority | Effort | Dependencies | Acceptance criteria |
 | --- | --- | --- | --- | --- | --- |
@@ -165,7 +172,9 @@ proves the trust, storage, billing, draft, and publish boundaries before batch/e
 These tasks are intentionally outside the first production release:
 
 - Persistent "remember API key" support, pending a separate reviewed at-rest secret design.
-- Provider-specific Wan, Nano Banana, Responses API, or proprietary async relay adapters.
+- Production promotion of provider-specific Wanx, Nano Banana, Responses API, or proprietary async
+  relay adapters. The Wanx 2.1 sandbox-only QA adapter exists, but remains unpromoted until exact
+  positive `QA-02` evidence and release gates pass.
 - Automatic Provider job recovery after browser restart when the session key no longer exists.
 - Browser-side Ozon credentials or direct Ozon Seller API calls; these are prohibited, not
   deferred.

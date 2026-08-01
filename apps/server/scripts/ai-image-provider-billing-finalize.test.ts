@@ -74,6 +74,7 @@ describe('AI image Provider billing finalizer command', () => {
         'apps/server/src/services/ai-image-sandbox-guard.ts',
         'apps/server/src/services/ai-image-packy-edit-profile.ts',
         'apps/server/src/services/ai-image-xiaoyi-provider.ts',
+        'apps/server/src/services/ai-image-wanx-edit-profile.ts',
       ],
       undefined,
     );

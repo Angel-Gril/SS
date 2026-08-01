@@ -36,6 +36,17 @@ import {
   isAiImageXiaoyiEditProviderIdentity,
   isAiImageXiaoyiEditRequestProfile,
 } from './ai-image-xiaoyi-provider.js';
+import {
+  AI_IMAGE_WANX21_EDIT_TRANSPORT,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
+  aiImageWanx21EditFunction,
+  aiImageWanx21EditOperationForRequestProfile,
+  isAiImageWanx21EditApiIdentity,
+  isAiImageWanx21EditEndpointIdentity,
+  isAiImageWanx21EditRequestProfile,
+} from './ai-image-wanx-edit-profile.js';
 
 export class AiImageSandboxGuardError extends Error {
   constructor(
@@ -99,6 +110,9 @@ const SANDBOX_REQUEST_PROFILES = new Set([
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
 ]);
 
 export type AiImageSandboxRequestState =
@@ -329,8 +343,11 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
 
   const isTextToImage = operation === 'TEXT_TO_IMAGE';
   const isInpaint = operation === 'INPAINT';
+  const isWanxEdit = isAiImageWanx21EditRequestProfile(requestProfile);
   if (
-    !endpointUrl.pathname.endsWith(isTextToImage ? '/images/generations' : '/images/edits')
+    !(isWanxEdit
+      ? endpointUrl.pathname.endsWith('/services/aigc/image2image/image-synthesis')
+      : endpointUrl.pathname.endsWith(isTextToImage ? '/images/generations' : '/images/edits'))
     || (isTextToImage && (
       sourceSha256.length !== 0
       || sourceDimensions.length !== 0
@@ -348,7 +365,7 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
   ) invalidSandboxRequest('Sandbox request media evidence does not match its operation');
 
   const approvalEvidence = sanitizeApprovalEvidence(record.approvalEvidence, now);
-  const multipartDialect = isTextToImage
+  const multipartDialect = isTextToImage || isWanxEdit
     ? null
     : aiImageEditMultipartDialectForRequestProfile(requestProfile);
   const multipartFields = multipartDialect
@@ -373,7 +390,14 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
       ...((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
         || isAiImageXiaoyiEditRequestProfile(requestProfile))
         ? { operation, requestProfile, multipartDialect, multipartFields }
-        : {}),
+        : isWanxEdit
+          ? {
+              operation,
+              requestProfile,
+              providerTransport: AI_IMAGE_WANX21_EDIT_TRANSPORT,
+              providerFunction: aiImageWanx21EditFunction(operation as AiImageSandboxEditOperation),
+            }
+          : {}),
       n: 1,
       size: record.size,
       promptSha256: record.promptSha256,
@@ -403,6 +427,8 @@ export function createAiImageSandboxRequestFingerprint(input: {
     requestProfile?: string;
     multipartDialect?: AiImageEditMultipartDialect | null;
     multipartFields?: Readonly<Record<string, string>> | null;
+    providerTransport?: string;
+    providerFunction?: string;
     n: number;
     size: string;
     promptSha256: string;
@@ -714,6 +740,15 @@ export async function claimAiImageSandboxOperation(
     expectedHost: requestEndpointUrl.hostname.toLowerCase(),
     model,
   });
+  const wanxApiBase = requestEndpoint.replace(
+    /\/services\/aigc\/image2image\/image-synthesis$/u,
+    '',
+  ).replace(/\/images\/(?:generations|edits)$/u, '');
+  const wanxApiIdentity = isAiImageWanx21EditApiIdentity({
+    apiBase: wanxApiBase,
+    expectedHost: requestEndpointUrl.hostname.toLowerCase(),
+    model,
+  });
   if ((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) !== packyProviderIdentity) {
     invalidSandboxRequest(
       'The Packy edit Provider identity and request profile must be selected together',
@@ -729,6 +764,24 @@ export async function claimAiImageSandboxOperation(
     && !isAiImageXiaoyiEditOperation(operation)
   ) {
     invalidSandboxRequest('The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE');
+  }
+  if (isAiImageWanx21EditRequestProfile(requestProfile) !== wanxApiIdentity) {
+    invalidSandboxRequest(
+      'The Wanx 2.1 edit Provider identity and request profile must be selected together',
+    );
+  }
+  if (isAiImageWanx21EditRequestProfile(requestProfile)) {
+    if (
+      aiImageWanx21EditOperationForRequestProfile(requestProfile) !== operation
+      || !isAiImageWanx21EditEndpointIdentity({
+        apiBase: wanxApiBase,
+        endpoint: requestEndpoint,
+        expectedHost: requestEndpointUrl.hostname.toLowerCase(),
+        model,
+      })
+    ) {
+      invalidSandboxRequest('The Wanx 2.1 edit request profile does not match its operation');
+    }
   }
   const hasExactMoney = Object.hasOwn(input, 'quotedCost')
     || Object.hasOwn(input, 'maximumCost');
@@ -751,7 +804,8 @@ export async function claimAiImageSandboxOperation(
     : null;
   if (
     (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-      || isAiImageXiaoyiEditRequestProfile(requestProfile))
+      || isAiImageXiaoyiEditRequestProfile(requestProfile)
+      || isAiImageWanx21EditRequestProfile(requestProfile))
     && !exactCosts
   ) {
     throw new AiImageSandboxGuardError(

@@ -6,6 +6,8 @@ Two Provider lanes are supported:
 
 - International generation and editing through an explicitly configured third-party OpenAI-compatible HTTPS endpoint.
 - Image translation through the official Alibaba Cloud DashScope endpoint with the fixed `qwen-mt-image` model.
+- Alibaba Cloud Wanx 2.1 image editing through its dedicated asynchronous JSON endpoint. This is a
+  sandbox-only edit adapter until a positive Provider result is recorded.
 
 The sandbox uses separate environment variables and `NODE_ENV=sandbox`. It must not read a production API key implicitly or change a production feature flag.
 
@@ -244,6 +246,9 @@ Prompts and requested count (`1`) are fixed in the CLI. The required request pro
 | `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024`  | Packy `gpt-image-2` edit only, with its reviewed multipart dialect |
 | `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024` | Xiaoyi `gpt-image-2` synchronous `IMAGE_TO_IMAGE` only        |
 | `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` | `1024x1024` | Xiaoyi documented minimal synchronous `IMAGE_TO_IMAGE` only |
+| `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1` | `1024x1024` | Wanx 2.1 `description_edit`, asynchronous reference edit only |
+| `DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1` | `1024x1024` | Wanx 2.1 `description_edit`, asynchronous full-image edit only |
+| `DASHSCOPE_WANX21_INPAINT_ASYNC_V1` | `1024x1024` | Wanx 2.1 `description_edit_with_mask`, asynchronous masked edit only |
 | `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
 
 No profile proves multi-reference compatibility. A Provider result whose decoded dimensions differ
@@ -270,6 +275,43 @@ dispatch. Both profiles permit only `IMAGE_TO_IMAGE`; `FULL_EDIT`, `INPAINT`, an
 separate future profiles and positive evidence. V1 and V2 produce different replay fingerprints,
 and the approval, runner, dedicated adapter, request guard, and offline finalizer independently
 derive and enforce the matching dialect.
+
+### Alibaba Wanx 2.1 edit profiles
+
+The Wanx adapter is a separate transport and is never treated as an OpenAI-compatible edit. The
+first reviewed sandbox identity is pinned to the Beijing legacy API Base
+`https://dashscope.aliyuncs.com/api/v1` and model `wanx2.1-imageedit`. A workspace-specific Beijing
+endpoint can be supported by the adapter, but it is not a QA-02 identity until its exact host,
+credential revision, approval and billing evidence are reviewed.
+
+All three profiles use the official asynchronous JSON contract:
+
+```text
+POST /api/v1/services/aigc/image2image/image-synthesis
+GET  /api/v1/tasks/<task_id>
+```
+
+The submit request contains only `model`, `input.function`, `input.prompt`,
+`input.base_image_url`, an optional `input.mask_image_url`, and `parameters.n=1`. The submit header
+must include `X-DashScope-Async: enable`. No `size`, `output_format`, `response_format`, or relay
+multipart field is added. Local source bytes are sent as bounded `data:` URLs, so the first sandbox
+probe does not expose a source image through a public staging URL. `IMAGE_TO_IMAGE` and `FULL_EDIT`
+map to `description_edit`; `INPAINT` maps to `description_edit_with_mask`.
+
+The existing editor mask uses alpha transparency. The Wanx adapter deterministically converts it to
+an RGB PNG before dispatch: alpha below 128 becomes white (edit), and alpha 128 or above becomes
+black (preserve). The derived mask digest is checked by the guarded JSON request. Source and mask
+must be 512-4096 pixels and each no larger than 10 MiB; a Wanx mask must match the source dimensions.
+
+A positive result requires one `output.results[].url`, `task_metrics.TOTAL=1`,
+`task_metrics.SUCCEEDED=1`, `task_metrics.FAILED=0`, and `usage.image_count=1`. The result URL is
+downloaded immediately without Provider Authorization. The accepted task ID and raw temporary URL
+are private recovery evidence; the public report stores hashes only. A poll timeout, task mismatch,
+download failure or malformed success is `RECONCILIATION_REQUIRED` and never causes a second submit.
+
+The public Wanx price shown in Alibaba documentation is planning input only. The operator must set a
+new exact quote and an independently reviewed single-request maximum in CNY for each profile; no live
+Provider pricing synchronization is required. See the [official Wanx API reference](https://help.aliyun.com/zh/model-studio/wanx-image-edit-api-reference).
 
 ### Complete Environment Contract
 

@@ -38,6 +38,38 @@ three-field dialect that omits `n` and `size` from the wire body while retaining
 request constraints. An intent, claim, report, or attestation that mixes either profile with the
 other dialect/fingerprint is ineligible even when endpoint, model, Prompt, source, and money match.
 
+For Wanx 2.1 editing, the finalizer accepts only the reviewed legacy API Base
+`https://dashscope.aliyuncs.com/api/v1`, model `wanx2.1-imageedit`, the async image-synthesis
+endpoint, and submit provider `dashscope-wanx21-image-edit`. It requires one of these exact
+operation/profile pairs:
+
+| Operation        | Request profile                                      | Provider function             |
+| ---------------- | ---------------------------------------------------- | ----------------------------- |
+| `IMAGE_TO_IMAGE` | `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`           | `description_edit`            |
+| `FULL_EDIT`      | `DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1`                | `description_edit`            |
+| `INPAINT`        | `DASHSCOPE_WANX21_INPAINT_ASYNC_V1`                  | `description_edit_with_mask`  |
+
+The recomputed fingerprint binds transport
+`DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1`, the operation-specific Provider function, profile,
+logical `1024x1024`, `n=1`, Prompt digest, source digest, and mask digest when applicable. It is not
+a multipart fingerprint. Sharing `description_edit` does not allow an `IMAGE_TO_IMAGE` approval,
+claim, or report to settle a `FULL_EDIT` operation; all three operations retain separate approval
+and evidence chains.
+
+Wanx asynchronous technical evidence is retained beside the normal artifacts. The private
+`<operation-id>.wanx.provider-task.json` stores the accepted raw task ID, and
+`<operation-id>.wanx.result-url.json` stores the temporary raw result URL for recovery. The
+guard and Provider adapter use the same idempotent task-file writer. The guard reads at most the
+same `32 MiB` JSON budget as the adapter and never waits for cancellation of a cloned response
+branch, preventing an accepted task from stalling before its recovery identity is persisted. The
+sanitized `<operation-id>.wanx.async-evidence.json` stores task and response-ID hashes, transport,
+function, status, request counts, and `usage.imageCount`, but no raw task ID, result URL, or Key.
+These sidecars prove technical submission/poll/download facts and support read-only recovery; the
+billing finalizer does not consume these sidecars and cannot treat them as proof of price or charge.
+It independently validates the immutable intent, fingerprint claim, report, and billing
+attestation. An accepted task followed by poll, validation, or download uncertainty remains
+`RECONCILIATION_REQUIRED` and must not be resubmitted.
+
 The evidence root may be the deployment-managed top-level link to the private shared sandbox
 directory. The finalizer resolves that link once, requires its target to be a private directory, and
 rejects any intent/report/claim whose real path escapes the resolved target.
@@ -144,6 +176,11 @@ Rules:
   matching legacy intent/report generation. Do not convert or mix generations in place.
 - `PROVIDER_REQUEST_ID` requires the raw private request ID, whose SHA-256 must match the submit
   report. It is valid only in attestation v2; the raw ID remains only in the private attestation.
+- For Wanx, the submit report's `providerRequestIdHash` is the SHA-256 of the accepted Provider
+  `task_id`; therefore a `PROVIDER_REQUEST_ID` attestation must supply that exact private task ID.
+  DashScope response `request_id` values have separate hashes in the async evidence and are not
+  interchangeable with the task ID. If the settled Provider bill cannot be correlated to the task
+  ID or a valid unique account/time window, do not invent a correlation or finalize the operation.
 - `PROVIDER_TOKEN_LOG_ENTRY` is valid only in attestation v3. `providerRequestId` is the private
   Relay billing-log `request_id`, not the upstream response ID. The finalizer separately retains
   the report's upstream request-ID hash, then opens and hashes the reviewed Token-log snapshot,
@@ -190,6 +227,15 @@ Rules:
 - Account, pricing, currency, and before/after billing references must hash to the approval evidence.
 - The intent, report, fingerprint claim, request fingerprint, approval ID/digest, endpoint/model,
   operation/profile, Prompt/source/mask hashes, revisions, and quoted/maximum costs must all agree.
+
+Alibaba's public reference reviewed on 2026-08-01 lists `CNY 0.14` per image; it is planning input
+only. No live Provider pricing synchronization is required, and the finalizer performs none. Each
+Wanx operation still requires a separately approved exact CNY quote and single-request maximum,
+followed by private before/settled billing evidence that proves the actual charge.
+`usage.imageCount=1` proves one successful output, not its price. If the selected DashScope account
+does not expose evidence compatible with the exact meter and correlation rules above, QA-02 remains
+open until the attestation contract is explicitly extended and reviewed; the public list price must
+not be copied into `actualCost` as a substitute.
 
 ## Run Offline
 
@@ -242,6 +288,11 @@ keeps the byte-stable v1 receipt whose `endpointSha256` means the operation endp
 receipt field explicitly named `apiBaseSha256` may be copied into Registry evidence. The settlement
 never stores raw meter deltas, raw account/billing references, the raw Provider request ID, API
 keys, Authorization, Provider responses, URLs, free-form reasons, or local paths.
+
+For Wanx, the receipt retains the legacy API Base digest and async image-synthesis submit-endpoint
+digest. It does not retain the raw task ID, poll URL, temporary result URL, or DashScope response
+IDs. Preserve the private async sidecars with the receipt for audit and recovery, but do not treat
+their `usage.imageCount` as a billing amount.
 
 ## Interpret The Result
 

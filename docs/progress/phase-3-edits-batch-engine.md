@@ -627,3 +627,24 @@ Progress: 4/5 tasks.
   negative evidence. No Registry, deployment, flag, ERP ingest, or Ozon mutation occurred. Progress
   remains `4/5` and `32/37`; a Provider-confirmed material permission/contract change or a different
   edit-capable Provider is still required.
+- A sandbox-only Alibaba Wanx 2.1 candidate now supplies a materially different official async JSON
+  transport without changing the Xiaoyi evidence. Separate
+  `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`,
+  `DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1`, and
+  `DASHSCOPE_WANX21_INPAINT_ASYNC_V1` profiles bind the Beijing legacy API Base,
+  `wanx2.1-imageedit`, operation-specific Provider function, bounded source/mask data URLs, one
+  submit, accepted task, bounded polling, metered one-image success, and an official DashScope OSS
+  result host without Authorization forwarding. Inpaint deterministically converts local alpha to
+  Wanx white-edit/black-preserve bytes, and the guarded JSON request binds the derived digest.
+- Raw task/result recovery material stays private; a sanitized async sidecar retains hashes and
+  counts. Guard and adapter share an idempotent task persistence callback, while the guard's
+  bounded `32 MiB` clone reader cannot wait on clone cancellation. Poll/download uncertainty is
+  reconciliation-only and cannot resubmit. Approval, claim, runner, async guard, provider, and
+  finalizer focused suites pass `292` tests with two skips; the full Server suite passes `4699`
+  with `199` skips. Repository lint has no errors and only the
+  existing `20` Server plus one shared warning; workspace/sandbox typechecks, static contract, diff
+  checks, and full preflight `446/0` pass with the two existing local-extension warnings. The
+  exposed Alibaba credential was not used, and no Provider request, charge, VPS access, deployment,
+  flag, ERP ingest, Ozon write, or `.context/` staging occurred. These changes unblock downstream
+  offline rehearsal only. `QA-02` remains `4/5`, overall progress remains `32/37`, and final release
+  dependencies remain closed until three positive live Wanx operation evidence chains are accepted.

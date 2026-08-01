@@ -31,7 +31,7 @@ export {
   normalizeOpenAiImagesApiBase,
 } from './ai-image-openai-url.js';
 
-type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export type BeforeAiImageProviderDispatch = () => Promise<void>;
 
@@ -173,22 +173,22 @@ function safeProviderError(provider: string, status: number, code?: string) {
   );
 }
 
-function withProviderAcceptance(error: unknown, providerJobId: string, providerAcceptedAt: Date) {
+export function withProviderAcceptance(error: unknown, providerJobId: string, providerAcceptedAt: Date) {
   const acceptedError = error instanceof Error ? error : new Error(String(error));
   return Object.assign(acceptedError, { providerJobId, providerAcceptedAt });
 }
 
-function withProviderSubmissionUncertain(error: unknown) {
+export function withProviderSubmissionUncertain(error: unknown) {
   const uncertainError = error instanceof Error ? error : new Error(String(error));
   return Object.assign(uncertainError, { providerSubmissionUncertain: true });
 }
 
-function withProviderSubmissionRejected(error: unknown) {
+export function withProviderSubmissionRejected(error: unknown) {
   const rejectedError = error instanceof Error ? error : new Error(String(error));
   return Object.assign(rejectedError, { providerSubmissionRejected: true });
 }
 
-function isDefiniteProviderRejection(error: unknown) {
+export function isDefiniteProviderRejection(error: unknown) {
   if (!(error instanceof AiImageJobError)) return false;
   if (error.code === 'INVALID_PROVIDER_URL') return true;
   const status = Number((error as AiImageJobError & { providerHttpStatus?: number }).providerHttpStatus);
@@ -198,7 +198,7 @@ function isDefiniteProviderRejection(error: unknown) {
     && ![408, 409, 425, 429].includes(status);
 }
 
-function normalizedProviderIdentity(value: unknown): string | null {
+export function normalizedProviderIdentity(value: unknown): string | null {
   if (value == null || value === '') return null;
   if (typeof value !== 'string') {
     throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Provider request identity must be a string');
@@ -411,7 +411,7 @@ async function readJson(response: Response, maxBytes = MAX_JSON_BYTES): Promise<
   }
 }
 
-async function requestJson(
+export async function requestJson(
   provider: string,
   fetcher: FetchLike,
   apiKey: string,
@@ -492,7 +492,7 @@ async function openAiInpaintDimensions(
   }
 }
 
-async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
+export async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
   if (
     request.operation !== 'IMAGE_TO_IMAGE'
     && request.operation !== 'FULL_EDIT'
@@ -567,7 +567,7 @@ async function validateOpenAiImageEditRequest(request: OpenAiImageEditRequest) {
   return { imageMimeTypes, maskMimeType, size };
 }
 
-async function downloadImage(fetcher: FetchLike, url: string, timeoutMs: number) {
+export async function downloadImage(fetcher: FetchLike, url: string, timeoutMs: number) {
   return fetchWithTimeout(fetcher, url, { method: 'GET' }, timeoutMs, async (response) => {
     if (!response.ok) throw safeProviderError('AI image download', response.status);
     const mimeType = (response.headers.get('content-type') || 'image/png').split(';')[0]!.trim().toLowerCase();

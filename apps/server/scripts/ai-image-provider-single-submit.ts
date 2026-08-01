@@ -4,6 +4,7 @@ import {
   chmod,
   mkdir,
   open,
+  readFile,
   rename,
   unlink,
 } from 'node:fs/promises';
@@ -23,6 +24,10 @@ import {
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
 import {
+  convertOpenAiAlphaMaskToWanxMask,
+  createDashScopeWanx21ImageEditProvider,
+} from '../src/services/ai-image-wanx-edit-provider.js';
+import {
   AI_IMAGE_PACKY_EDIT_PROFILE,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   aiImageEditMultipartDialectForRequestProfile,
@@ -37,6 +42,23 @@ import {
   isAiImageXiaoyiEditRequestProfile,
 } from '../src/services/ai-image-xiaoyi-provider.js';
 import {
+  AI_IMAGE_WANX21_EDIT_PROFILE,
+  AI_IMAGE_WANX21_EDIT_TRANSPORT,
+  AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+  AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE,
+  aiImageWanx21EditFunction,
+  aiImageWanx21EditOperationForRequestProfile,
+  aiImageWanx21EditSubmitEndpoint,
+  aiImageWanx21EditTaskEndpointBase,
+  assertAiImageWanx21EditMedia,
+  isAiImageWanx21EditApiIdentity,
+  isAiImageWanx21EditEndpointIdentity,
+  isAiImageWanx21EditRequestProfile,
+  normalizeAiImageWanx21EditApiBase,
+  normalizeAiImageWanx21EditResultUrl,
+} from '../src/services/ai-image-wanx-edit-profile.js';
+import {
   AiImageSandboxMediaError,
   assertAiImageSandboxEditMediaLimit,
   assertMeaningfulAiImageSandboxMask,
@@ -49,6 +71,8 @@ import {
   createAiImageSandboxFetchGuard,
   type AiImageSandboxEditOperation,
 } from '../src/services/ai-image-sandbox-guard.js';
+import { createAiImageWanx21EditSandboxFetchGuard } from
+  '../src/services/ai-image-wanx-edit-sandbox-guard.js';
 import {
   assertAiImageSandboxApprovalCurrent,
   loadAiImageSandboxApproval,
@@ -84,6 +108,9 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
   'apps/server/src/services/ai-image-xiaoyi-provider.ts',
+  'apps/server/src/services/ai-image-wanx-edit-profile.ts',
+  'apps/server/src/services/ai-image-wanx-edit-provider.ts',
+  'apps/server/src/services/ai-image-wanx-edit-sandbox-guard.ts',
   'apps/server/src/services/ai-image-providers.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
@@ -115,6 +142,24 @@ const REQUEST_PROFILES = Object.freeze({
     height: AI_IMAGE_XIAOYI_EDIT_PROFILE.height,
     format: 'square Xiaoyi GPT-Image-2 documented edit',
     expectedMimeType: AI_IMAGE_XIAOYI_EDIT_PROFILE.expectedMimeType,
+  }),
+  [AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_WANX21_EDIT_PROFILE.width,
+    height: AI_IMAGE_WANX21_EDIT_PROFILE.height,
+    format: 'square Wanx 2.1 reference edit',
+    expectedMimeType: AI_IMAGE_WANX21_EDIT_PROFILE.expectedMimeType,
+  }),
+  [AI_IMAGE_WANX21_FULL_EDIT_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_WANX21_EDIT_PROFILE.width,
+    height: AI_IMAGE_WANX21_EDIT_PROFILE.height,
+    format: 'square Wanx 2.1 full-image edit',
+    expectedMimeType: AI_IMAGE_WANX21_EDIT_PROFILE.expectedMimeType,
+  }),
+  [AI_IMAGE_WANX21_INPAINT_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_WANX21_EDIT_PROFILE.width,
+    height: AI_IMAGE_WANX21_EDIT_PROFILE.height,
+    format: 'square Wanx 2.1 masked inpaint',
+    expectedMimeType: AI_IMAGE_WANX21_EDIT_PROFILE.expectedMimeType,
   }),
   OZON_PORTRAIT_SINGLE_V1: Object.freeze({
     width: 1024,
@@ -587,7 +632,23 @@ export async function runAiImageProviderSingleSubmit(
   const profile = REQUEST_PROFILES[requestProfile];
   const outputSize = `${profile.width}x${profile.height}`;
   const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
-  const apiBase = normalizeOpenAiImagesApiBase(baseUrl);
+  const isPackyEditProfile = requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE;
+  const isXiaoyiEditProfile = isAiImageXiaoyiEditRequestProfile(requestProfile);
+  const isXiaoyiMinimalEditProfile = requestProfile
+    === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
+  const isWanxEditProfile = isAiImageWanx21EditRequestProfile(requestProfile);
+  let apiBase: string;
+  if (isWanxEditProfile) {
+    try {
+      apiBase = normalizeAiImageWanx21EditApiBase(baseUrl);
+    } catch {
+      throw Object.assign(new Error('AI_IMAGE_SANDBOX_BASE_URL is invalid for the selected profile'), {
+        code: 'SANDBOX_REQUEST_PROFILE_INVALID',
+      });
+    }
+  } else {
+    apiBase = normalizeOpenAiImagesApiBase(baseUrl);
+  }
   const parsedBaseUrl = new URL(apiBase);
   if (parsedBaseUrl.protocol !== 'https:') {
     throw new Error('AI_IMAGE_SANDBOX_BASE_URL must use HTTPS');
@@ -606,13 +667,12 @@ export async function runAiImageProviderSingleSubmit(
   if (parsedBaseUrl.hostname.toLowerCase() !== expectedHost) {
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
   }
-  const isPackyEditProfile = requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE;
-  const isXiaoyiEditProfile = isAiImageXiaoyiEditRequestProfile(requestProfile);
-  const isXiaoyiMinimalEditProfile = requestProfile
-    === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
+  const preliminaryEndpoint = isWanxEditProfile
+    ? aiImageWanx21EditSubmitEndpoint(apiBase)
+    : `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`;
   const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
     apiBase,
-    endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+    endpoint: preliminaryEndpoint,
     expectedHost,
     model,
     operation,
@@ -625,7 +685,7 @@ export async function runAiImageProviderSingleSubmit(
   }
   const xiaoyiProviderIdentity = isAiImageXiaoyiEditProviderIdentity({
     apiBase,
-    endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+    endpoint: preliminaryEndpoint,
     expectedHost,
     model,
   });
@@ -641,8 +701,32 @@ export async function runAiImageProviderSingleSubmit(
       { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
     );
   }
+  const wanxApiIdentity = isAiImageWanx21EditApiIdentity({ apiBase, expectedHost, model });
+  if (isWanxEditProfile !== wanxApiIdentity) {
+    throw Object.assign(
+      new Error('The Wanx 2.1 edit Provider identity and request profile must be selected together'),
+      { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
+    );
+  }
+  if (
+    isWanxEditProfile
+    && (
+      aiImageWanx21EditOperationForRequestProfile(requestProfile) !== operation
+      || !isAiImageWanx21EditEndpointIdentity({
+        apiBase,
+        endpoint: preliminaryEndpoint,
+        expectedHost,
+        model,
+      })
+    )
+  ) {
+    throw Object.assign(
+      new Error('The Wanx 2.1 edit request profile does not match its operation'),
+      { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
+    );
+  }
   const costs = sandboxCostConfiguration(environment);
-  if ((isPackyEditProfile || isXiaoyiEditProfile) && costs.kind !== 'EXACT') {
+  if ((isPackyEditProfile || isXiaoyiEditProfile || isWanxEditProfile) && costs.kind !== 'EXACT') {
     throw Object.assign(
       new Error('Provider-specific edit profiles require exact-money evidence'),
       { code: 'SANDBOX_COST_CONFIG_INVALID' },
@@ -667,6 +751,9 @@ export async function runAiImageProviderSingleSubmit(
       shaEnvironment: 'AI_IMAGE_SANDBOX_SOURCE_SHA256',
       environment,
       repositoryRoot,
+      maximumBytes: isWanxEditProfile
+        ? AI_IMAGE_WANX21_EDIT_PROFILE.maximumInputBytes
+        : undefined,
     });
   }
   if (operation === 'INPAINT' && source) {
@@ -677,7 +764,12 @@ export async function runAiImageProviderSingleSubmit(
       pathEnvironment: 'AI_IMAGE_SANDBOX_MASK_PATH',
       shaEnvironment: 'AI_IMAGE_SANDBOX_MASK_SHA256',
       requirePng: true,
-      maximumBytes: remainingAiImageSandboxEditMediaBytes([source]),
+      maximumBytes: Math.min(
+        remainingAiImageSandboxEditMediaBytes([source]),
+        isWanxEditProfile
+          ? AI_IMAGE_WANX21_EDIT_PROFILE.maximumInputBytes
+          : Number.MAX_SAFE_INTEGER,
+      ),
       environment,
       repositoryRoot,
     });
@@ -694,9 +786,10 @@ export async function runAiImageProviderSingleSubmit(
       throw new Error('The INPAINT mask dimensions must match the pinned source image');
     }
   }
-  const operationEndpoint = new URL(
-    `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
-  ).toString();
+  if (isWanxEditProfile && source) {
+    assertAiImageWanx21EditMedia({ source, mask });
+  }
+  const operationEndpoint = new URL(preliminaryEndpoint).toString();
   const apiBaseSha256 = sha256(apiBase);
   const operationEndpointSha256 = sha256(operationEndpoint);
   const prompt = fixedPrompt(operation, profile);
@@ -736,7 +829,7 @@ export async function runAiImageProviderSingleSubmit(
       requestProfile,
       credentialRevision,
       adapterRevision,
-      provider: 'custom-openai-compatible',
+      provider: isWanxEditProfile ? 'dashscope-wanx21-image-edit' : 'custom-openai-compatible',
       model,
       apiBaseSha256,
       operationEndpointSha256,
@@ -786,6 +879,9 @@ export async function runAiImageProviderSingleSubmit(
     maskDimensions: mask ? { width: mask.width, height: mask.height } : null,
     approvalEvidence,
   };
+  const wanxTransportMask = isWanxEditProfile && mask
+    ? await convertOpenAiAlphaMaskToWanxMask(mask.image.buffer)
+    : null;
   const claim = await claimAiImageSandboxOperation({
     directory: resolve(outputDirectory, 'intents'),
     operationId,
@@ -828,7 +924,74 @@ export async function runAiImageProviderSingleSubmit(
       dispatcher: pinnedDispatcher,
     })) as typeof globalThis.fetch,
   };
-  const fetchOnce = operation === 'TEXT_TO_IMAGE'
+  const wanxRecoveryPrefix = resolve(outputDirectory, `${operationId}.wanx`);
+  const wanxProviderTaskPath = `${wanxRecoveryPrefix}.provider-task.json`;
+  const persistWanxProviderTask = isWanxEditProfile
+    ? async (providerTaskId: string) => {
+      const payload = `${JSON.stringify({
+        schemaVersion: 1,
+        operationId,
+        adapterRevision,
+        operationEndpointSha256,
+        providerTaskId,
+      }, null, 2)}\n`;
+      try {
+        await writePrivateFile(wanxProviderTaskPath, payload);
+      } catch (error: any) {
+        if (error?.code !== 'EEXIST') throw error;
+        let existing: any;
+        try {
+          existing = JSON.parse(await readFile(wanxProviderTaskPath, 'utf8'));
+        } catch {
+          throw error;
+        }
+        if (
+          existing?.schemaVersion !== 1
+          || existing.operationId !== operationId
+          || existing.adapterRevision !== adapterRevision
+          || existing.operationEndpointSha256 !== operationEndpointSha256
+          || existing.providerTaskId !== providerTaskId
+        ) {
+          throw Object.assign(
+            new Error('Wanx provider task recovery identity conflicts with an existing file'),
+            { code: 'EEXIST' },
+          );
+        }
+      }
+    }
+    : undefined;
+  const wanxFetchGuard = isWanxEditProfile
+    ? createAiImageWanx21EditSandboxFetchGuard({
+        contract: {
+          submitEndpoint: operationEndpoint,
+          taskEndpointBase: aiImageWanx21EditTaskEndpointBase(apiBase),
+          operation: operation as AiImageSandboxEditOperation,
+          requestProfile,
+          providerFunction: aiImageWanx21EditFunction(operation as AiImageSandboxEditOperation),
+          model,
+          promptSha256: requestContract.promptSha256,
+          sourceSha256: requestContract.sourceSha256[0]!,
+          transportMaskSha256: wanxTransportMask ? sha256(wanxTransportMask) : null,
+          n: 1,
+          maxPollRequests: AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollRequests,
+          maxPollDurationMs: AI_IMAGE_WANX21_EDIT_PROFILE.maximumPollDurationMs,
+        },
+        ...guardedTransport,
+        toResultDownloadUrl: normalizeAiImageWanx21EditResultUrl,
+        onProviderTaskId: persistWanxProviderTask,
+        onRawResultUrl: async (rawResultUrl) => writePrivateFile(
+          `${wanxRecoveryPrefix}.result-url.json`,
+          `${JSON.stringify({
+            schemaVersion: 1,
+            operationId,
+            adapterRevision,
+            providerTaskIdFile: `${operationId}.wanx.provider-task.json`,
+            rawResultUrl,
+          }, null, 2)}\n`,
+        ),
+      })
+    : null;
+  const fetchOnce = wanxFetchGuard || (operation === 'TEXT_TO_IMAGE'
     ? createAiImageSandboxFetchGuard({
       contract: {
         endpoint: operationEndpoint,
@@ -852,7 +1015,7 @@ export async function runAiImageProviderSingleSubmit(
         multipartDialect: aiImageEditMultipartDialectForRequestProfile(requestProfile),
       },
       ...guardedTransport,
-    });
+    }));
 
   const reportPath = resolve(outputDirectory, `${operationId}.report.json`);
   const reportCosts = claim.intent.schemaVersion === 3
@@ -866,6 +1029,39 @@ export async function runAiImageProviderSingleSubmit(
         quotedCostCents: claim.intent.quotedCostCents,
         maximumCostCents: claim.intent.maximumCostCents,
       };
+  const wanxAsyncEvidencePath = resolve(outputDirectory, `${operationId}.wanx.async-evidence.json`);
+  let wanxAsyncEvidenceWritten = false;
+  const writeWanxAsyncEvidence = async (providerOutcome: 'SUCCEEDED' | 'NOT_SUCCEEDED') => {
+    if (!wanxFetchGuard || wanxAsyncEvidenceWritten) return;
+    const evidence = wanxFetchGuard.getEvidence();
+    await atomicWritePrivateJson(wanxAsyncEvidencePath, {
+      schemaVersion: 1,
+      operationId,
+      provider: 'dashscope-wanx21-image-edit',
+      model,
+      operation,
+      requestProfile,
+      adapterRevision,
+      requestFingerprint: claim.intent.requestFingerprint,
+      apiBaseSha256,
+      operationEndpointSha256,
+      transport: AI_IMAGE_WANX21_EDIT_TRANSPORT,
+      providerFunction: aiImageWanx21EditFunction(operation as AiImageSandboxEditOperation),
+      sourceSha256: requestContract.sourceSha256,
+      maskSha256: requestContract.maskSha256,
+      transportMaskSha256: wanxTransportMask ? sha256(wanxTransportMask) : null,
+      providerOutcome,
+      state: evidence.state,
+      createRequests: wanxFetchGuard.getCreateRequests(),
+      pollRequests: wanxFetchGuard.getPollRequests(),
+      resultDownloads: wanxFetchGuard.getResultDownloads(),
+      providerTaskIdHash: evidence.providerTaskIdHash,
+      providerRequestIdHashes: evidence.providerRequestIdHashes,
+      providerStatus: evidence.providerStatus,
+      usage: evidence.usage,
+    });
+    wanxAsyncEvidenceWritten = true;
+  };
   let reportWritten = false;
   let result;
   try {
@@ -884,7 +1080,9 @@ export async function runAiImageProviderSingleSubmit(
         model,
       });
     } else {
-      const createEditProvider = isPackyEditProfile
+      const createEditProvider = isWanxEditProfile
+        ? createDashScopeWanx21ImageEditProvider
+        : isPackyEditProfile
         ? createPackyGptImage2EditProvider
         : isXiaoyiMinimalEditProfile
           ? createXiaoyiGptImage2MinimalEditProvider
@@ -892,7 +1090,13 @@ export async function runAiImageProviderSingleSubmit(
           ? createXiaoyiGptImage2EditProvider
           : createOpenAiImageEditProvider;
       const provider = createEditProvider({
-        baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,
+        baseUrl: apiBase,
+        apiKey,
+        model,
+        fetch: fetchOnce.fetch,
+        timeoutMs: 180_000,
+        costPerImageCents: 0,
+        onProviderJobCreated: persistWanxProviderTask,
       });
       result = await provider.edit({
         operation,
@@ -905,6 +1109,7 @@ export async function runAiImageProviderSingleSubmit(
         mask: mask?.image || null,
       });
     }
+  await writeWanxAsyncEvidence('SUCCEEDED');
   const createRequests = fetchOnce.getCreateRequests();
   if (createRequests !== 1) throw new Error(`Expected exactly one create request, received ${createRequests}`);
   if (result.images.length !== 1) throw new Error(`Expected exactly one image, received ${result.images.length}`);
@@ -926,7 +1131,7 @@ export async function runAiImageProviderSingleSubmit(
     requestProfile,
     credentialRevision,
     adapterRevision,
-    provider: 'custom-openai-compatible',
+    provider: isWanxEditProfile ? 'dashscope-wanx21-image-edit' : 'custom-openai-compatible',
     model,
     apiBaseSha256,
     operationEndpointSha256,
@@ -958,6 +1163,21 @@ export async function runAiImageProviderSingleSubmit(
   process.stdout.write(`${JSON.stringify({ ...report, reportPath }, null, 2)}\n`);
   return report;
   } catch (error) {
+    if (wanxFetchGuard && !wanxAsyncEvidenceWritten) {
+      try {
+        await writeWanxAsyncEvidence('NOT_SUCCEEDED');
+      } catch {
+        try {
+          process.stderr.write(`${JSON.stringify({
+            schemaVersion: 1,
+            event: 'SANDBOX_WANX_ASYNC_EVIDENCE_WRITE_FAILED',
+            operationId,
+          })}\n`);
+        } catch {
+          // Preserve the authoritative Provider failure.
+        }
+      }
+    }
     if (!reportWritten) {
       const createRequests = fetchOnce.getCreateRequests();
       const evidence = fetchOnce.getEvidence();
@@ -973,7 +1193,7 @@ export async function runAiImageProviderSingleSubmit(
           : evidence.state === 'REJECTED'
             ? 'REJECTED'
             : 'RECONCILIATION_REQUIRED',
-        provider: 'custom-openai-compatible',
+        provider: isWanxEditProfile ? 'dashscope-wanx21-image-edit' : 'custom-openai-compatible',
         model,
         operation,
         requestProfile,

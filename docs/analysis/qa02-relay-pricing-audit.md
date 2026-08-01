@@ -584,3 +584,64 @@ renamed, and it cannot authorize `FULL_EDIT`, `INPAINT`, or async testing. The n
 requires Provider-confirmed account permission or a materially different route/contract, or a
 different edit-capable Provider, followed by a new policy, approval, and billing window. `QA-02`
 remains incomplete.
+
+## Alibaba Wanx 2.1 async edit implementation checkpoint
+
+The Xiaoyi V1 and minimal V2 HTTP 400 results above remain immutable negative evidence. Selecting
+Alibaba Cloud Wanx does not reinterpret, delete, or satisfy them. It provides a materially different
+Provider and transport for the next positive capability attempt.
+
+The offline sandbox implementation now has a closed Wanx 2.1 edit identity for legacy Beijing API
+Base `https://dashscope.aliyuncs.com/api/v1`, exact model `wanx2.1-imageedit`, and asynchronous JSON
+submit/poll flow:
+
+```text
+POST /api/v1/services/aigc/image2image/image-synthesis
+GET  /api/v1/tasks/<task_id>
+```
+
+The single submit uses `X-DashScope-Async: enable`, sends the source as a bounded data URL, polls
+only the accepted task, and downloads exactly one reviewed result URL without forwarding Provider
+Authorization. It requires one successful image through `task_metrics.TOTAL=1`,
+`task_metrics.SUCCEEDED=1`, `task_metrics.FAILED=0`, and `usage.image_count=1`. Any accepted-task
+uncertainty is retained for read-only recovery and never causes a second POST.
+
+The three operation identities are intentionally separate:
+
+| Operation        | Profile                                                | Wanx function                 |
+| ---------------- | ------------------------------------------------------ | ----------------------------- |
+| `IMAGE_TO_IMAGE` | `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`             | `description_edit`            |
+| `FULL_EDIT`      | `DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1`                  | `description_edit`            |
+| `INPAINT`        | `DASHSCOPE_WANX21_INPAINT_ASYNC_V1`                    | `description_edit_with_mask`  |
+
+The claim and offline finalizer recompute a transport-semantic fingerprint that includes
+`DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1`, the exact operation/profile, Provider function, Prompt,
+source, and mask evidence. `IMAGE_TO_IMAGE` and `FULL_EDIT` cannot share approval merely because
+both map to `description_edit`. `INPAINT` converts the local alpha mask deterministically to Wanx
+white=edit/black=preserve semantics; the guarded JSON request separately binds the derived
+transport-mask digest.
+
+Alibaba's [official Wanx image-edit reference](https://help.aliyun.com/zh/model-studio/wanx-image-edit-api-reference)
+reviewed on 2026-08-01 lists `CNY 0.14` per image. This is planning input only, not an
+account-specific quote, an operator-approved maximum, a Provider-side spending cap, or
+actual-charge evidence. The backend does not need to synchronize a Provider price. Before each of
+the three paid operations, retain a separate private pricing-policy revision and obtain explicit
+approval for that operation's exact CNY quote and independently selected single-request maximum.
+Afterward, reconcile the real before/settled meter; `usage.image_count=1` alone does not prove the
+CNY amount.
+
+The Alibaba credential pasted into chat was exposed and was not used by this implementation. No
+authenticated Wanx preflight, submit, poll, image download, Provider charge, VPS access,
+deployment, feature-flag change, ERP mutation, or Ozon write occurred at this checkpoint. Any
+future live validation requires revoking that value, injecting a newly rotated credential only
+from private local storage, a clean reviewed implementation revision, and a fresh one-request
+approval containing the exact operation, endpoint, model, Prompt, source/mask hashes, quote, and
+maximum.
+
+Mocked focused tests cover the async submit/poll/download success path, task recovery without
+resubmit, operation/profile rejection, mask conversion, and Wanx request-fingerprint settlement.
+This permits downstream offline implementation and rehearsal to continue without fabricating
+Provider evidence. It does not complete `QA-02`, does not promote a capability, and does not remove
+the positive live-evidence dependency from later release gates. Overall progress therefore remains
+`32/37` until real operation-specific Provider, billing, privacy, and human quality evidence is
+retained.

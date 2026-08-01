@@ -31,10 +31,16 @@ async function withSandboxApproval(
   const baseUrl = new URL(String(environment.AI_IMAGE_SANDBOX_BASE_URL));
   const apiBase = baseUrl.pathname === '/' ? new URL('/v1', baseUrl) : baseUrl;
   const operation = String(environment.AI_IMAGE_SANDBOX_OPERATION);
-  const endpoint = new URL(
-    `images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
-    `${apiBase.toString().replace(/\/$/u, '')}/`,
-  ).toString();
+  const requestProfile = String(environment.AI_IMAGE_SANDBOX_REQUEST_PROFILE);
+  const endpoint = requestProfile.startsWith('DASHSCOPE_WANX21_')
+    ? new URL(
+        'services/aigc/image2image/image-synthesis',
+        `${apiBase.toString().replace(/\/$/u, '')}/`,
+      ).toString()
+    : new URL(
+        `images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+        `${apiBase.toString().replace(/\/$/u, '')}/`,
+      ).toString();
   const sourceSha256 = environment.AI_IMAGE_SANDBOX_SOURCE_SHA256
     ? [String(environment.AI_IMAGE_SANDBOX_SOURCE_SHA256)]
     : [];
@@ -81,7 +87,7 @@ async function withSandboxApproval(
     expectedHost: String(environment.AI_IMAGE_SANDBOX_EXPECTED_HOST),
     model: String(environment.AI_IMAGE_SANDBOX_MODEL),
     operation,
-    requestProfile: String(environment.AI_IMAGE_SANDBOX_REQUEST_PROFILE),
+    requestProfile,
     credentialRevision: String(environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION),
     adapterRevision: String(environment.AI_IMAGE_SANDBOX_ADAPTER_REVISION),
     sourceSha256,
@@ -1403,6 +1409,197 @@ describe('single-submit AI image sandbox runner', () => {
     })).rejects.toMatchObject({ code: 'SANDBOX_COST_CONFIG_INVALID' });
     expect(resolveDns).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('runs one guarded Wanx 2.1 async IMAGE_TO_IMAGE request and retains recovery identity', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-wanx-profile-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const source = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#d8d8d8' },
+    }).png().toBuffer();
+    const result = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#f0e4d2' },
+    }).png().toBuffer();
+    const sourcePath = join(path, 'wanx-source.png');
+    await writeFile(sourcePath, source, { mode: 0o600 });
+    const operationId = 'sandbox-wanx-image-to-image-0001';
+    const resultUrl = 'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/wanx-result.png?token=opaque';
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: { task_id: 'wanx-task-0001', task_status: 'PENDING' },
+        request_id: 'wanx-submit-request-0001',
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: {
+          task_id: 'wanx-task-0001',
+          task_status: 'SUCCEEDED',
+          results: [{ url: resultUrl }],
+          task_metrics: { TOTAL: 1, SUCCEEDED: 1, FAILED: 0 },
+        },
+        usage: { image_count: 1 },
+        request_id: 'wanx-poll-request-0001',
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(result, {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      }));
+
+    const report = await runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://dashscope.aliyuncs.com/api/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'wanx2.1-imageedit',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'dashscope-wanx-test-r1',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'dashscope.aliyuncs.com',
+        AI_IMAGE_SANDBOX_SOURCE_PATH: sourcePath,
+        AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '14',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    });
+
+    expect(report).toMatchObject({
+      schemaVersion: 5,
+      state: 'SUCCEEDED',
+      provider: 'dashscope-wanx21-image-edit',
+      model: 'wanx2.1-imageedit',
+      operation: 'IMAGE_TO_IMAGE',
+      requestProfile: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+      createRequests: 1,
+      imageCount: 1,
+      providerRequestIdHash: createHash('sha256').update('wanx-task-0001').digest('hex'),
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    const submit = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(submit.body))).toMatchObject({
+      model: 'wanx2.1-imageedit',
+      input: {
+        function: 'description_edit',
+        base_image_url: expect.stringMatching(/^data:image\/png;base64,/u),
+      },
+      parameters: { n: 1 },
+    });
+    expect(new Headers((fetch.mock.calls[2]?.[1] as RequestInit).headers).has('authorization')).toBe(false);
+    expect(JSON.parse(await readFile(
+      join(path, `${operationId}.wanx.provider-task.json`),
+      'utf8',
+    ))).toMatchObject({ providerTaskId: 'wanx-task-0001' });
+    expect(JSON.parse(await readFile(
+      join(path, `${operationId}.wanx.result-url.json`),
+      'utf8',
+    ))).toMatchObject({ rawResultUrl: resultUrl });
+    const asyncEvidence = await readFile(
+      join(path, `${operationId}.wanx.async-evidence.json`),
+      'utf8',
+    );
+    expect(JSON.parse(asyncEvidence)).toMatchObject({
+      providerOutcome: 'SUCCEEDED',
+      transport: 'DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1',
+      providerFunction: 'description_edit',
+      createRequests: 1,
+      pollRequests: 1,
+      resultDownloads: 1,
+      providerTaskIdHash: createHash('sha256').update('wanx-task-0001').digest('hex'),
+      providerStatus: 'SUCCEEDED',
+      usage: { imageCount: 1 },
+    });
+    expect(asyncEvidence).not.toContain('sandbox-secret-never-report');
+    expect(asyncEvidence).not.toContain('wanx-task-0001');
+    expect(asyncEvidence).not.toContain(resultUrl);
+  });
+
+  it('quarantines an accepted Wanx task for poll-only recovery without a second POST', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'ss-erp-ai-image-sandbox-wanx-recovery-'));
+    directories.push(path);
+    const revision = '35cb9b8cf14a44c5f449c5065d7f2dbf441c9ad3';
+    await writeFile(join(path, 'DEPLOYED_COMMIT'), `${revision}\n`);
+    const source = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: '#d8d8d8' },
+    }).png().toBuffer();
+    const sourcePath = join(path, 'wanx-source.png');
+    await writeFile(sourcePath, source, { mode: 0o600 });
+    const operationId = 'sandbox-wanx-poll-recovery-0001';
+    const pollFailure = Object.assign(new Error('simulated poll connection loss'), {
+      code: 'UND_ERR_SOCKET',
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        output: { task_id: 'wanx-task-recovery-0001', task_status: 'PENDING' },
+        request_id: 'wanx-submit-recovery-0001',
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockRejectedValueOnce(pollFailure);
+
+    await expect(runAiImageProviderSingleSubmit({
+      environment: await withSandboxApproval(path, {
+        NODE_ENV: 'sandbox',
+        AI_IMAGE_SANDBOX_CONFIRM: 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST',
+        AI_IMAGE_SANDBOX_BASE_URL: 'https://dashscope.aliyuncs.com/api/v1',
+        AI_IMAGE_SANDBOX_API_KEY: 'sandbox-secret-never-report',
+        AI_IMAGE_SANDBOX_MODEL: 'wanx2.1-imageedit',
+        AI_IMAGE_SANDBOX_OPERATION_ID: operationId,
+        AI_IMAGE_SANDBOX_CREDENTIAL_REVISION: 'dashscope-wanx-test-r2',
+        AI_IMAGE_SANDBOX_ADAPTER_REVISION: revision,
+        AI_IMAGE_SANDBOX_OPERATION: 'IMAGE_TO_IMAGE',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1',
+        AI_IMAGE_SANDBOX_EXPECTED_HOST: 'dashscope.aliyuncs.com',
+        AI_IMAGE_SANDBOX_SOURCE_PATH: sourcePath,
+        AI_IMAGE_SANDBOX_SOURCE_SHA256: createHash('sha256').update(source).digest('hex'),
+        AI_IMAGE_SANDBOX_CURRENCY: 'CNY',
+        AI_IMAGE_SANDBOX_QUOTED_COST_AMOUNT: '14',
+        AI_IMAGE_SANDBOX_MAX_COST_AMOUNT: '100',
+        AI_IMAGE_SANDBOX_COST_SCALE: '2',
+      }),
+      outputDirectory: path,
+      repositoryRoot: path,
+      resolveDns: async () => [{ address: '93.184.216.34' }],
+      fetch,
+    })).rejects.toMatchObject({
+      providerJobId: 'wanx-task-recovery-0001',
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.map((call) => String(call[1]?.method).toUpperCase()))
+      .toEqual(['POST', 'GET']);
+    const report = JSON.parse(await readFile(join(path, `${operationId}.report.json`), 'utf8'));
+    expect(report).toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      provider: 'dashscope-wanx21-image-edit',
+      createRequests: 1,
+      providerRequestIdHash: createHash('sha256')
+        .update('wanx-task-recovery-0001')
+        .digest('hex'),
+    });
+    const asyncEvidence = JSON.parse(await readFile(
+      join(path, `${operationId}.wanx.async-evidence.json`),
+      'utf8',
+    ));
+    expect(asyncEvidence).toMatchObject({
+      providerOutcome: 'NOT_SUCCEEDED',
+      state: 'RECONCILIATION_REQUIRED',
+      createRequests: 1,
+      pollRequests: 1,
+      resultDownloads: 0,
+    });
+    expect(JSON.parse(await readFile(
+      join(path, `${operationId}.wanx.provider-task.json`),
+      'utf8',
+    ))).toMatchObject({ providerTaskId: 'wanx-task-recovery-0001' });
+    await expect(readFile(join(path, `${operationId}.wanx.result-url.json`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects a non-PNG Packy result as reconciliation-required evidence', async () => {

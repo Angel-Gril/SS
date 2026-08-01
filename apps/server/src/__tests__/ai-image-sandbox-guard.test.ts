@@ -20,6 +20,10 @@ import {
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
 } from '../services/ai-image-xiaoyi-provider.js';
+import {
+  AI_IMAGE_WANX21_EDIT_TRANSPORT,
+  AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+} from '../services/ai-image-wanx-edit-profile.js';
 
 const directories: string[] = [];
 const SANDBOX_NOW = new Date('2030-01-01T00:10:00.000Z');
@@ -138,6 +142,68 @@ describe('single-submit AI image sandbox guard', () => {
     });
     expect(intent).not.toHaveProperty('quotedCostCents');
     expect(intent).not.toHaveProperty('maximumCostCents');
+  });
+
+  it('binds Wanx async JSON transport and rejects a generic-profile downgrade', async () => {
+    const path = await directory();
+    const endpoint = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis';
+    const exact = input(path, 'sandbox-wanx-claim-0001');
+    delete exact.quotedCostCents;
+    delete exact.maximumCostCents;
+    exact.apiBaseSha256 = createHash('sha256')
+      .update('https://dashscope.aliyuncs.com/api/v1')
+      .digest('hex');
+    exact.endpointSha256 = createHash('sha256').update(endpoint).digest('hex');
+    exact.model = 'wanx2.1-imageedit';
+    exact.quotedCost = { currency: 'CNY', amount: 14, scale: 2 };
+    exact.maximumCost = { currency: 'CNY', amount: 100, scale: 2 };
+    exact.request = {
+      ...exact.request,
+      operation: 'IMAGE_TO_IMAGE',
+      requestProfile: AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+      endpoint,
+      sourceSha256: ['1'.repeat(64)],
+      sourceDimensions: [{ width: 1024, height: 1024 }],
+    };
+
+    const claimed = await claimAiImageSandboxOperation(exact);
+    const intent = JSON.parse(await readFile(claimed.intentPath, 'utf8'));
+    expect(intent.requestFingerprint).toBe(createAiImageSandboxRequestFingerprint({
+      endpointSha256: exact.endpointSha256,
+      model: exact.model,
+      request: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_WANX21_IMAGE_TO_IMAGE_REQUEST_PROFILE,
+        providerTransport: AI_IMAGE_WANX21_EDIT_TRANSPORT,
+        providerFunction: 'description_edit',
+        n: 1,
+        size: '1024x1024',
+        promptSha256: exact.request.promptSha256 as string,
+        sourceSha256: ['1'.repeat(64)],
+        maskSha256: null,
+      },
+    }));
+
+    await expect(claimAiImageSandboxOperation({
+      ...exact,
+      operationId: 'sandbox-wanx-generic-0002',
+      request: { ...exact.request, requestProfile: 'OPENAI_SQUARE_SINGLE_V1' },
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_REQUEST' });
+
+    const generationEndpoint = 'https://dashscope.aliyuncs.com/api/v1/images/generations';
+    await expect(claimAiImageSandboxOperation({
+      ...exact,
+      operationId: 'sandbox-wanx-generic-t2i-0003',
+      endpointSha256: createHash('sha256').update(generationEndpoint).digest('hex'),
+      request: {
+        ...exact.request,
+        operation: 'TEXT_TO_IMAGE',
+        requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+        endpoint: generationEndpoint,
+        sourceSha256: [],
+        sourceDimensions: [],
+      },
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_REQUEST' });
   });
 
   it('retains the legacy v2 intent cost shape for historical cents callers', async () => {

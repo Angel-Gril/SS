@@ -40,6 +40,13 @@ The first-party synchronous curl example is a materially different three-field r
 by `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`; it still requires a new policy, Operation ID, approval, and
 billing capture before any POST.
 
+Those two Xiaoyi results remain negative evidence for their exact account, endpoint, model, and
+wire contracts. They are not erased or converted into Wanx evidence by selecting a new Provider.
+The Wanx implementation described below is offline and mocked only: the credential pasted into
+chat was exposed and was not used, no live DashScope request was made, and no Wanx charge was
+incurred. Revoke that value and use only a separately rotated private credential revision for any
+future authenticated preflight or paid approval.
+
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for
 this sandbox. Before a paid approval, retain a private, versioned backend pricing policy that binds
@@ -62,6 +69,44 @@ require exact money and neither can authorize `FULL_EDIT`, `INPAINT`, or async e
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.
 
+## Wanx 2.1 Async Edit Approval Boundary
+
+The first reviewed Wanx sandbox identity is exactly:
+
+```text
+API Base: https://dashscope.aliyuncs.com/api/v1
+Submit:   https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis
+Model:    wanx2.1-imageedit
+```
+
+The approval and runner derive the asynchronous submit endpoint from that API Base. A workspace
+endpoint, another region, another model, or an OpenAI-compatible `/images/edits` route is a
+different Provider identity and cannot inherit this approval. Each operation has its own closed
+profile and function mapping:
+
+| Operation        | Request profile                                      | Wanx function                 |
+| ---------------- | ---------------------------------------------------- | ----------------------------- |
+| `IMAGE_TO_IMAGE` | `DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1`           | `description_edit`            |
+| `FULL_EDIT`      | `DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1`                | `description_edit`            |
+| `INPAINT`        | `DASHSCOPE_WANX21_INPAINT_ASYNC_V1`                  | `description_edit_with_mask`  |
+
+Although `IMAGE_TO_IMAGE` and `FULL_EDIT` share the Provider function, they are different product
+operations with different Prompts and expected outcomes. Generate and review three separate
+policies, Operation IDs, approval files, pre-call billing snapshots, and settlements. A successful
+or consumed approval for one profile never authorizes either of the other two. `INPAINT` also binds
+the exact source digest, original alpha-mask digest, and same-size media. The immutable fingerprint
+binds that original mask plus the transport/function and adapter revision; the guarded JSON request
+separately binds the deterministic transport-mask digest after alpha is converted to white=edit and
+black=preserve.
+
+Alibaba's [public Wanx reference](https://help.aliyun.com/zh/model-studio/wanx-image-edit-api-reference)
+reviewed on 2026-08-01 lists `CNY 0.14` per image. That value is only input for planning a private
+policy; it is not an account-specific quote, an approved maximum, a Provider-side cap, or proof of
+a settled charge. No Provider pricing synchronization is required. Before every paid operation,
+the operator must explicitly approve an exact CNY quote and a separately chosen single-request
+maximum in the private schema v3 record. The quote and maximum may be reviewed from internal policy
+without calling a Provider pricing endpoint.
+
 ## Generate A Non-Approval Draft Offline
 
 After selecting the exact endpoint/model and preparing the non-secret request metadata, an operator
@@ -80,7 +125,8 @@ maximum, and the maximum must not exceed `100,000` major currency units. Decimal
 floating-point values are never used. Exact-money variables must not be mixed with the legacy
 integer-cents variables. Edit media must use supported bounded PNG/JPEG/WebP bytes. `INPAINT`
 accepts one such source and requires a same-size PNG mask; source plus mask must not exceed the shared `50 MiB`
-multipart limit. It additionally requires:
+multipart limit. A Wanx profile applies the narrower Provider contract: source and mask must each
+be no larger than 10 MiB and 512 through 4096 pixels on each axis. It additionally requires:
 
 | Variable                                                  | Requirement                                                         |
 | --------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -179,13 +225,23 @@ example value with reviewed evidence; do not leave placeholder brackets.
 }
 ```
 
-Operation-specific fields:
+Operation-specific fields for the OpenAI-compatible profiles:
 
 - `TEXT_TO_IMAGE`: use `/v1/images/generations`, `sourceSha256: []`, and `maskSha256: null`.
 - `IMAGE_TO_IMAGE` or `FULL_EDIT`: use `/v1/images/edits`, exactly one source digest, and
   `maskSha256: null`.
 - `INPAINT`: use `/v1/images/edits`, exactly one PNG, JPEG, or WebP source digest, and the exact same-size PNG
   mask digest.
+
+For a Wanx profile, use the exact async submit endpoint above instead of `/v1/images/edits`. Use
+one source digest for all three operations and no mask for `IMAGE_TO_IMAGE` or `FULL_EDIT`.
+`INPAINT` requires the exact same-size PNG mask digest. The approval stores the original local mask
+digest; the guard separately derives and binds the converted Wanx transport-mask digest in its exact
+JSON request contract. The task poll URL and temporary result URL are Provider responses and do not
+belong in the pre-call approval.
+
+All profiles also require:
+
 - `adapterRevision` must be the full deployed `DEPLOYED_COMMIT`, not a planned or abbreviated SHA.
 - `approvedAt` and `expiresAt` must be canonical UTC ISO-8601 timestamps. The window must be
   positive and no longer than 60 minutes. A clock at most five minutes behind `approvedAt` is

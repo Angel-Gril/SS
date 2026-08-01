@@ -27,6 +27,15 @@ import {
   isAiImageXiaoyiEditOperation,
   isAiImageXiaoyiEditRequestProfile,
 } from './ai-image-xiaoyi-provider.js';
+import {
+  AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+  AI_IMAGE_WANX21_EDIT_MODEL,
+  AI_IMAGE_WANX21_EDIT_TRANSPORT,
+  aiImageWanx21EditFunction,
+  aiImageWanx21EditOperationForRequestProfile,
+  aiImageWanx21EditSubmitEndpoint,
+  isAiImageWanx21EditRequestProfile,
+} from './ai-image-wanx-edit-profile.js';
 
 export const AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT =
   'I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT';
@@ -1823,7 +1832,7 @@ function parseReport(record: Record<string, unknown>, operationId: string) {
     || record.operationId !== operationId
     || (schemaVersion === 5 ? record.actualCost !== null : record.actualCostCents !== null)
     || record.createRequests !== 1
-    || record.provider !== 'custom-openai-compatible'
+    || !['custom-openai-compatible', 'dashscope-wanx21-image-edit'].includes(String(record.provider))
     || record.usage !== null
     || !SANDBOX_OPERATIONS.has(String(record.operation))
     || typeof record.requestProfile !== 'string'
@@ -1996,15 +2005,34 @@ function assertArtifactsMatch(input: {
   );
   const xiaoyiProviderIdentity = intent.model === AI_IMAGE_XIAOYI_EDIT_PROFILE.model
     && intentRecord.endpointSha256 === sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint);
+  const wanxProfileSelected = isAiImageWanx21EditRequestProfile(
+    String(request.requestProfile),
+  );
+  const wanxOperation = aiImageWanx21EditOperationForRequestProfile(
+    String(request.requestProfile),
+  );
+  const wanxApiIdentity = intent.model === AI_IMAGE_WANX21_EDIT_MODEL
+    && intentRecord.apiBaseSha256 === sha256(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE);
+  const wanxProviderIdentity = wanxApiIdentity
+    && intentRecord.endpointSha256
+      === sha256(aiImageWanx21EditSubmitEndpoint(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE));
   if (
     attestation.generation !== intent.generation
     || intent.generation !== report.generation
     || xiaoyiProfileSelected !== xiaoyiProviderIdentity
+    || wanxProfileSelected !== wanxApiIdentity
+    || (wanxProfileSelected && !wanxProviderIdentity)
     || (xiaoyiProfileSelected && (
       intent.generation !== 'EXACT'
       || intentRecord.apiBaseSha256 !== sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.apiBase)
       || !isAiImageXiaoyiEditOperation(String(request.operation))
     ))
+    || (wanxProfileSelected && (
+      intent.generation !== 'EXACT'
+      || wanxOperation !== String(request.operation)
+      || reportRecord.provider !== 'dashscope-wanx21-image-edit'
+    ))
+    || (!wanxProfileSelected && reportRecord.provider !== 'custom-openai-compatible')
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_MISMATCH',
@@ -2038,7 +2066,14 @@ function assertArtifactsMatch(input: {
               aiImageEditMultipartDialectForRequestProfile(String(request.requestProfile)),
             ),
           }
-        : {}),
+        : wanxProfileSelected
+          ? {
+              operation: String(request.operation),
+              requestProfile: String(request.requestProfile),
+              providerTransport: AI_IMAGE_WANX21_EDIT_TRANSPORT,
+              providerFunction: aiImageWanx21EditFunction(wanxOperation!),
+            }
+          : {}),
       n: Number(request.n),
       size: String(request.size),
       promptSha256: String(request.promptSha256),

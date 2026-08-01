@@ -50,6 +50,18 @@ const xiaoyiProvider = fs.readFileSync(
   'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'utf8',
 );
+const wanxEditProfile = fs.readFileSync(
+  'apps/server/src/services/ai-image-wanx-edit-profile.ts',
+  'utf8',
+);
+const wanxEditProvider = fs.readFileSync(
+  'apps/server/src/services/ai-image-wanx-edit-provider.ts',
+  'utf8',
+);
+const wanxEditGuard = fs.readFileSync(
+  'apps/server/src/services/ai-image-wanx-edit-sandbox-guard.ts',
+  'utf8',
+);
 const billingSettlement = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'utf8',
@@ -363,6 +375,82 @@ assert.match(
 assert.match(approvalDraft, /XIAOYI_API_KEY/u);
 assert.match(approvalDraft, /XIAOYI_TOKEN/u);
 assert.match(guard, /AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE/u);
+assert.match(source, /ai-image-wanx-edit-profile\.ts/u);
+assert.match(source, /ai-image-wanx-edit-provider\.ts/u);
+assert.match(source, /ai-image-wanx-edit-sandbox-guard\.ts/u);
+assert.match(approvalDraft, /ai-image-wanx-edit-profile\.ts/u);
+assert.match(billingFinalizer, /ai-image-wanx-edit-profile\.ts/u);
+assert.match(source, /createDashScopeWanx21ImageEditProvider/u);
+assert.match(source, /createAiImageWanx21EditSandboxFetchGuard/u);
+assert.match(source, /\.wanx\.provider-task\.json/u);
+assert.match(source, /wanxRecoveryPrefix\}\s*\.result-url\.json/u);
+assert.match(source, /\.wanx\.async-evidence\.json/u);
+assert.match(source, /onProviderTaskId:\s*persistWanxProviderTask/u);
+assert.match(source, /onProviderJobCreated:\s*persistWanxProviderTask/u);
+assert.match(source, /writeWanxAsyncEvidence\('SUCCEEDED'\)/u);
+assert.match(source, /writeWanxAsyncEvidence\('NOT_SUCCEEDED'\)/u);
+assert.match(source, /providerTaskIdHash:\s*evidence\.providerTaskIdHash/u);
+assert.match(source, /providerRequestIdHashes:\s*evidence\.providerRequestIdHashes/u);
+assert.match(wanxEditProfile, /AI_IMAGE_WANX21_EDIT_MODEL\s*=\s*'wanx2\.1-imageedit'/u);
+assert.match(
+  wanxEditProfile,
+  /AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE\s*=\s*'https:\/\/dashscope\.aliyuncs\.com\/api\/v1'/u,
+);
+assert.match(wanxEditProfile, /\/services\/aigc\/image2image\/image-synthesis/u);
+assert.match(wanxEditProfile, /AI_IMAGE_WANX21_EDIT_TASK_PATH\s*=\s*'\/tasks'/u);
+assert.match(wanxEditProfile, /DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1/u);
+assert.match(wanxEditProfile, /DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1/u);
+assert.match(wanxEditProfile, /DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1/u);
+assert.match(wanxEditProfile, /DASHSCOPE_WANX21_INPAINT_ASYNC_V1/u);
+assert.match(
+  wanxEditProfile,
+  /operation === 'INPAINT' \? 'description_edit_with_mask' : 'description_edit'/u,
+);
+assert.match(wanxEditProfile, /maximumInputBytes:\s*10 \* 1024 \* 1024/u);
+assert.match(wanxEditProfile, /maximumPollRequests:\s*120/u);
+assert.match(wanxEditProfile, /maximumPollDurationMs:\s*180_000/u);
+assert.match(wanxEditProfile, /DASHSCOPE_WANX_RESULT_HOST_PATTERN/u);
+assert.match(wanxEditProfile, /normalizeAiImageWanx21EditResultUrl/u);
+assert.match(wanxEditProfile, /parsed\.hash/u);
+assert.match(wanxEditProvider, /convertOpenAiAlphaMaskToWanxMask/u);
+assert.match(wanxEditProvider, /const value = alpha < 128 \? 255 : 0/u);
+assert.match(wanxEditProvider, /method:\s*'POST'/u);
+assert.match(wanxEditProvider, /'X-DashScope-Async':\s*'enable'/u);
+assert.match(wanxEditProvider, /base_image_url:\s*dataUrl/u);
+assert.match(wanxEditProvider, /mask_image_url:\s*dataUrl\('image\/png'/u);
+assert.match(wanxEditProvider, /parameters:\s*\{ n:\s*1 \}/u);
+assert.match(wanxEditProvider, /method:\s*'GET'/u);
+assert.match(wanxEditProvider, /metrics\.TOTAL !== 1/u);
+assert.match(wanxEditProvider, /metrics\.SUCCEEDED !== 1/u);
+assert.match(wanxEditProvider, /metrics\.FAILED !== 0/u);
+assert.match(wanxEditProvider, /imageCount !== 1/u);
+assert.match(wanxEditProvider, /withProviderAcceptance\(error, taskId, providerAcceptedAt\)/u);
+assert.match(wanxEditGuard, /blocked a duplicate submit request/u);
+assert.match(wanxEditGuard, /x-dashscope-async/u);
+assert.match(wanxEditGuard, /exactKeys\(body, \['model', 'input', 'parameters'\]\)/u);
+assert.match(
+  wanxEditGuard,
+  /providerTaskId = taskId;[\s\S]*await input\.onProviderTaskId\?\.\(taskId\)/u,
+);
+assert.match(wanxEditGuard, /await input\.onProviderTaskId\?\.\(taskId\)/u);
+assert.match(wanxEditGuard, /MAX_EVIDENCE_JSON_BYTES = 32 \* 1024 \* 1024/u);
+assert.match(wanxEditGuard, /void reader\.cancel\(\)\.catch\(\(\) => undefined\)/u);
+assert.doesNotMatch(wanxEditGuard, /await reader\.cancel\(\)/u);
+assert.match(wanxEditGuard, /pollRequests >= input\.contract\.maxPollRequests/u);
+assert.match(wanxEditGuard, /now\(\) - acceptedAt >= input\.contract\.maxPollDurationMs/u);
+assert.match(wanxEditGuard, /await input\.onRawResultUrl\?\.\(canonicalRawResultUrl\)/u);
+assert.match(wanxEditGuard, /headers\.has\('authorization'\)/u);
+assert.match(wanxEditGuard, /credentials:\s*'omit'/u);
+assert.match(wanxEditGuard, /redirect:\s*'error'/u);
+assert.match(wanxEditGuard, /state = 'RECONCILIATION_REQUIRED'/u);
+assert.match(
+  billingSettlement,
+  /\['custom-openai-compatible', 'dashscope-wanx21-image-edit'\]/u,
+);
+assert.match(billingSettlement, /AI_IMAGE_WANX21_EDIT_TRANSPORT/u);
+assert.match(billingSettlement, /providerFunction:\s*aiImageWanx21EditFunction/u);
+assert.match(billingSettlement, /wanxProfileSelected !== wanxApiIdentity/u);
+assert.match(guard, /\(\?:generations\|edits\)/u);
 assert.match(readonlyPreflight, /AI_IMAGE_SANDBOX_BILLING_ORIGIN/u);
 assert.match(readonlyPreflight, /XIAOYI_API_KEY/u);
 assert.match(readonlyPreflight, /XIAOYI_TOKEN/u);
@@ -395,7 +483,7 @@ assert.match(
 );
 assert.match(
   guard,
-  /const multipartDialect = isTextToImage\s*\? null\s*:\s*aiImageEditMultipartDialectForRequestProfile\(requestProfile\)/u,
+  /const multipartDialect = isTextToImage\s*\|\|\s*isWanxEdit\s*\? null\s*:\s*aiImageEditMultipartDialectForRequestProfile\(requestProfile\)/u,
 );
 assert.match(guard, /const multipartShape = aiImageEditMultipartShape\(multipartDialect\)/u);
 assert.match(
@@ -482,6 +570,13 @@ assert.match(runbook, /PROVIDER_DEFAULT_OMITTED/u);
 assert.match(runbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(runbook, /XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(runbook, /XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2/u);
+assert.match(runbook, /DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1/u);
+assert.match(runbook, /DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1/u);
+assert.match(runbook, /DASHSCOPE_WANX21_INPAINT_ASYNC_V1/u);
+assert.match(runbook, /X-DashScope-Async:\s*enable/u);
+assert.match(runbook, /task_metrics\.TOTAL=1/u);
+assert.match(runbook, /usage\.image_count=1/u);
+assert.match(runbook, /never causes a second submit/u);
 assert.match(runbook, /sends exactly\s+`model`, `prompt`, and `image`/u);
 assert.match(runbook, /Xiaoyi-only profile/u);
 assert.match(runbook, /quality=high/u);
@@ -494,8 +589,18 @@ assert.match(approvalRunbook, /PROVIDER_DEFAULT_OMITTED/u);
 assert.match(approvalRunbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(approvalRunbook, /XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(approvalRunbook, /XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2/u);
+assert.match(approvalRunbook, /Wanx 2\.1 Async Edit Approval Boundary/u);
+assert.match(approvalRunbook, /DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1/u);
+assert.match(approvalRunbook, /DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1/u);
+assert.match(approvalRunbook, /DASHSCOPE_WANX21_INPAINT_ASYNC_V1/u);
+assert.match(approvalRunbook, /three separate\s+policies, Operation IDs, approval files/u);
 assert.match(billingRunbook, /finalizer derives the multipart dialect from the versioned request profile/u);
 assert.match(billingRunbook, /minimal V2 recomputes the distinct/u);
+assert.match(billingRunbook, /DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1/u);
+assert.match(billingRunbook, /dashscope-wanx21-image-edit/u);
+assert.match(billingRunbook, /\.wanx\.provider-task\.json/u);
+assert.match(billingRunbook, /\.wanx\.async-evidence\.json/u);
+assert.match(billingRunbook, /must not be resubmitted/u);
 assert.match(approvalRunbook, /qa02-centos-i2i-20260730-094857-01/u);
 assert.match(approvalRunbook, /ai\.centos\.hk\/v1/u);
 assert.match(approvalRunbook, /report-bound failure diagnostic sidecar/u);
@@ -547,10 +652,19 @@ assert.match(sandboxTsconfig, /ai-image-sandbox-billing-settlement\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-code-revision\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-guard-filesystem\.test\.ts/u);
 assert.match(sandboxTsconfig, /ai-image-sandbox-media\.test\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-wanx-edit-profile\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-wanx-edit-provider\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-wanx-edit-sandbox-guard\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-wanx-edit-provider\.test\.ts/u);
+assert.match(sandboxTsconfig, /ai-image-wanx-edit-sandbox-guard\.test\.ts/u);
 assert.doesNotMatch(source, /endpointPath/u);
 assert.doesNotMatch(source, /providerEndpoint\s*:/u);
 assert.doesNotMatch(source, /setConfig|uploadBuffer|enqueueAiImageJob/u);
 assert.doesNotMatch(source + guard, /gpt-image-2-count|sk-[A-Za-z0-9_.-]{12,}|rawResponse/u);
+assert.doesNotMatch(
+  wanxEditProfile + wanxEditProvider + wanxEditGuard,
+  /sk-[A-Za-z0-9_.-]{12,}|AI_IMAGE_SANDBOX_API_KEY/u,
+);
 assert.doesNotMatch(
   billingFinalizer + billingSettlement,
   /undici|validateAiImageProviderUrl|createOpenAiImagesProvider|createOpenAiImageEditProvider|cloudflare-dns|node:(?:http|https|net|tls|dns)/iu,

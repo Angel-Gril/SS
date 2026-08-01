@@ -23,8 +23,13 @@
     "src/services/ai-image-sandbox-billing-settlement.ts",
     "src/services/ai-image-sandbox-code-revision.ts",
     "src/services/ai-image-sandbox-guard.ts",
+    "src/services/ai-image-wanx-edit-profile.ts",
+    "src/services/ai-image-wanx-edit-provider.ts",
+    "src/services/ai-image-wanx-edit-sandbox-guard.ts",
     "src/__tests__/ai-image-sandbox-guard-filesystem.test.ts",
     "src/__tests__/ai-image-sandbox-media.test.ts",
+    "src/__tests__/ai-image-wanx-edit-provider.test.ts",
+    "src/__tests__/ai-image-wanx-edit-sandbox-guard.test.ts",
     "src/services/ai-image-translation-sandbox-guard.ts"
   ],
   "exclude": ["node_modules", "dist", "dist-sandbox"]
