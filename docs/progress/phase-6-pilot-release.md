@@ -22,8 +22,9 @@ Progress: 0/3 tasks.
 
 - Lane A: rollout controls and observability preparation; no pilot flag is enabled.
 - Lane B: final exact Provider sandbox evidence.
-- After all quality gates pass, execution is strictly `REL-03` package -> `REL-04` dark deploy and
-  pre-enable canary -> `REL-02` sandbox/one-shop pilot and post-enable canary.
+- After all quality gates pass, execution is `REL-03a` package/sign -> `REL-04` dark deploy and
+  pre-enable canary -> `REL-03b` exact website download receipt -> `REL-02` sandbox/one-shop pilot
+  and post-enable canary. `REL-03` and `REL-04` close together after the receipt verifies.
 
 ## Notes
 
@@ -46,7 +47,7 @@ Progress: 0/3 tasks.
 - The focused package/deploy matrix passed in `213.6s`; the complete offline gate then passed both
   fresh package verifiers at cloud `450/0/0` and local `446/2/0`. Independent reviews found no
   remaining P0/P1/P2. `signature.status=EXTERNAL_REQUIRED` deliberately proves that no real signing
-  or store receipt exists yet. No package was signed/distributed, no VPS was changed and no rollout
+  or first-party website distribution receipt exists yet. No package was signed/distributed, no VPS was changed and no rollout
   flag was enabled, so Phase 6 remains `0/3` and overall progress remains `32/37`.
 - A subsequent offline distribution review found that the public extension download routes still
   trusted mutable unpacked manifests and could rebuild a ZIP without canonical release evidence.
@@ -120,7 +121,7 @@ Progress: 0/3 tasks.
   compares every filename and byte back to the immutable candidate before activation. This prevents
   a signed/distributed `REL-03` candidate from being replaced by an automatically incremented
   unsigned package during `REL-04`. Focused package,
-  deployment and no-network Linux root tests passed. External signatures/store receipts, actual
+  deployment and no-network Linux root tests passed. External signatures/website receipts, actual
   distribution and final signed-package install/upgrade smoke remain open, so `REL-03` and all
   formal counts remain unchanged.
 - Final handoff hardening strips inherited `GIT_*` redirects from every provenance read, scopes
@@ -165,8 +166,17 @@ Progress: 0/3 tasks.
   Provider profile plus a session-only sentinel, restarted with `1.0.265`, and retained the same
   extension ID and profile. The session sentinel disappeared and was absent from local and sync
   storage. Private smoke-summary SHA-256 is `98996dc33dd7337c94b9e2676bc3f176ff26005d56eb96341e9aa36a824d1b09`.
-- The canonical evidence intentionally remains `signature.status=EXTERNAL_REQUIRED`. No Chrome Web
-  Store or enterprise signature, distribution receipt, external publication, VPS access, deployment,
+- The canonical evidence intentionally remains `signature.status=EXTERNAL_REQUIRED`. No detached
+  release signature, first-party website distribution receipt, external publication, VPS access, deployment,
   flag change, Provider call, ERP ingest, or Ozon mutation occurred. `REL-03` is not complete until
-  one approved external signing/distribution channel returns retained evidence. Phase 6 stays `0/3`
+  the approved first-party `/api/extensions` channel returns retained cloud/local evidence. Phase 6 stays `0/3`
   and overall progress stays `34/37`.
+- The distribution channel is now fixed to the first-party website `/api/extensions` interface,
+  not Chrome Web Store. An Ed25519 key was generated only in the protected local operator store;
+  repository keyring key `ss-erp-extension-release-2026-08-02-01` has public-key SHA-256
+  `78b7e0cf...a9a9`. Candidate `1.0.265` was signed without changing its exact four-file directory;
+  private signature sidecar SHA-256 is `d2eb50bd...ce84`. This records an immutable signing
+  checkpoint only. The Web download-page correction changes application code, so the deployable
+  candidate must be regenerated from the final clean implementation commit and signed again. No
+  website probe, VPS access, deployment, flag change, Provider call, ERP ingest, or Ozon mutation
+  occurred; `REL-03`, `REL-04`, Phase 6 and overall counts remain unchanged.

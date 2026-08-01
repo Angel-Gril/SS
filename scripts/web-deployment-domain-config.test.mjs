@@ -75,6 +75,9 @@ test('login, download and settings surfaces do not embed an international deploy
   assert.match(userLogin, /resolveCrossDeploymentHref/);
   assert.match(adminLogin, /resolveCrossDeploymentHref/);
   assert.match(downloadPage, /appHostname \|\| '当前 ERP'/);
+  assert.match(downloadPage, /resolvePublicApiOrigin/);
+  assert.match(integrationsPage, /apiUrl\(/);
+  assert.doesNotMatch(downloadPage, /Chrome Web Store|商店安装/u);
 });
 
 test('middleware preserves admin paths and marketing routes in a single-domain deployment', () => {

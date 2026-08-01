@@ -208,7 +208,7 @@ verifier 全部通过，才会重建应用服务。失败或超时时旧服务�
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
 三个 systemd 部署脚本不再生成或递增扩展版本。正式候选必须先在完整 `QA-02`/`QA-04`
-对应的 clean commit 上仅执行一次 `pnpm package:extension`，完成外部签名/商店回执及安装升级验收后，
+对应的 clean commit 上仅执行一次 `pnpm package:extension`，完成外部签名、官网分发回执及安装升级验收后，
 再把同一 canonical 四件套预置到每台目标机。`init-server.sh` 会创建 root-owned
 `/var/lib/ss-erp-extension-releases`；每个 commit 使用一个 root-owned、不可被 group/world 写入、
 构建用户只读的子目录，并通过进程环境传入：
@@ -268,8 +268,9 @@ release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit
 可部署到相同 commit 的 `DEPLOYED_COMMIT` 目标；commitSource 只描述取证上下文，不替代 commit
 身份校验。`/api/extensions/latest` 返回的每个下载 URL 都包含不可变 version 与
 SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载
-响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示产物未完成真实签名
-或商店回执，下载可用不等于 `REL-03` 完成。`deploy-staging.sh` 不接受 `--skip-build`；每个目标
+响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示 canonical 四件套本身
+不内嵌签名；必须另行保留 Ed25519 签名侧车和官网双包下载回执，下载可用不等于 `REL-03` 完成。
+`deploy-staging.sh` 不接受 `--skip-build`；每个目标
 commit 仍必须重新编译 Server/Web 并复验预置扩展候选，避免新 marker/migration 配上旧应用构建。
 
 ```env
@@ -321,9 +322,54 @@ EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001
 四项值不会从 `EXTENSION_CLOUD_BASE_URL` / `NEXT_PUBLIC_*` 自动推导。`pnpm package:extension`
 一次计算版本并生成同版 cloud/local ZIP、SHA-256 清单和 canonical release evidence JSON；
 验证器会解包重验 defaults、manifest permissions、文件数、ZIP SHA/CRC 与完整 commit。Evidence
-中的 `signature.status=EXTERNAL_REQUIRED` 表示仍须完成真实签名/商店回执，不能把本地 JSON
-当成签名。
+中的 `signature.status=EXTERNAL_REQUIRED` 表示仍须完成真实签名和官网分发回执，不能把本地 JSON
+或单独一次 HTTP 200 当成签名/分发证明。
 部署前还必须按上文设置 `EXTENSION_RELEASE_ROOT`；部署脚本只消费候选，不生成候选。
+
+扩展正式分发渠道固定为官网第一方 `/api/extensions`（receipt channel=`FIRST_PARTY_WEBSITE`），
+不是 Chrome Web Store。canonical 候选目录
+必须始终只保留两份 ZIP、checksum 和 release evidence 四个文件；Ed25519 私钥只能位于操作员的
+受保护私密目录，仓库只保留 `config/extension-release-trusted-keys.json` 公钥 keyring。签名和回执
+必须显式输出到候选目录之外：
+
+```bash
+export EXTENSION_RELEASE_SIGNING_KEY_ID=ss-erp-extension-release-2026-08-02-01
+export EXTENSION_RELEASE_SIGNING_KEY_PATH=/operator-private/extension-release-signing-key.pkcs8.pem
+
+# 仅首次创建或审计轮换时运行；父目录必须预先限制为操作员/SYSTEM/Administrators。
+pnpm create:extension-release-key
+# 将命令输出的 public key 条目经审查后加入 trusted-key keyring；不得输出或提交私钥。
+
+node scripts/sign-extension-release.mjs \
+  --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
+  --output "$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json"
+```
+
+官网 ZIP 是下载后解压并用 Chrome 开发者模式加载的完整 MV3 包；Ed25519 侧车不把 ZIP 变成 CRX、
+商店安装或自动更新。首次安装必须使用受管固定目录并把实际 `chrome-extension://<id>` 加入
+`CORS_EXTENSION_ORIGINS`；升级时覆盖同一路径后重新加载，避免路径变化造成扩展 ID 和本地 profile
+隔离。实际下载回执只能在 `REL-04` 暗部署
+并通过 pre-enable canary 后生成：探针不带 Cookie/Authorization、拒绝跳转，先读取
+`/api/extensions/latest`，再完整下载 cloud/local 两个 version/SHA URL，并核对 Content-Length、
+Content-Disposition、`X-Content-SHA256` 和 body SHA-256。
+
+```bash
+node scripts/probe-extension-website-distribution.mjs \
+  --origin https://ss-erp.com \
+  --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
+  --signature "$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json" \
+  --output "$PUBLICATION/ss-erp-extension-$VERSION.distribution-receipt.json"
+
+node scripts/verify-extension-publication.mjs \
+  --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
+  --signature "$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json" \
+  --receipt "$PUBLICATION/ss-erp-extension-$VERSION.distribution-receipt.json" \
+  --keyring config/extension-release-trusted-keys.json
+```
+
+因此执行顺序是 `REL-03a package/sign -> REL-04 dark deploy/canary -> REL-03b website receipt`；只有
+最终 verifier 通过，`REL-03` 与 `REL-04` 才能同时关闭并进入 `REL-02`。任何阶段都不能把私钥复制
+到仓库、VPS、命令参数、日志或候选四件套。
 
 `ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
 

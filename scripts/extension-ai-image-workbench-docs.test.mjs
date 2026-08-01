@@ -39,6 +39,12 @@ for (const releaseControl of [
   'X-Content-SHA256',
   'signatureStatus=EXTERNAL_REQUIRED',
   'signature.status=EXTERNAL_REQUIRED',
+  'FIRST_PARTY_WEBSITE',
+  'config/extension-release-trusted-keys.json',
+  'sign-extension-release.mjs',
+  'probe-extension-website-distribution.mjs',
+  'verify-extension-publication.mjs',
+  'EXTENSION_RELEASE_SIGNING_KEY_PATH',
   'verify-extension-byok-rollout-policy.mjs',
 ]) {
   assert.ok(
@@ -77,7 +83,7 @@ for (const requiredText of [
   'maxConcurrency',
   'verify-extension-byok-rollout-policy.mjs',
   'pnpm package:extension',
-  '真实签名或商店回执',
+  '真实签名和官网分发回执',
   '默认关闭',
   '不得在策略 JSON 中填写 API Key',
   'Prompt 与所选图片会发送到该 Provider',

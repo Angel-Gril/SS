@@ -46,3 +46,21 @@ export function resolveCrossDeploymentHref(
 export function deploymentOrigin(hostname: string): string {
   return hostname ? `https://${hostname}` : '';
 }
+
+/**
+ * The extension artifacts are served by the first-party API origin, which may
+ * be different from the public app origin in a split deployment.
+ */
+export function resolvePublicApiOrigin(): string {
+  const configured = String(process.env.NEXT_PUBLIC_API_BASE_URL || '').trim();
+  if (!configured) return '';
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      return '';
+    }
+    return url.origin;
+  } catch {
+    return '';
+  }
+}

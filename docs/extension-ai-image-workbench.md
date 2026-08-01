@@ -237,7 +237,7 @@ Authorization，也不使用 Provider cookies。完成测试或不再使用该 P
 
 1. cloud/local 扩展包为当前版本，设备、店铺和来源草稿均为试点范围内的真实授权对象；
 2. 双包来自一次 `pnpm package:extension`，版本一致，SHA-256 与 canonical release evidence
-   复验通过，并已另行取得真实签名或商店回执；
+   复验通过，并已另行取得真实签名和官网分发回执；
 3. `pilot` 策略只包含最小 owner/shop/device/origin/operation 集合，`maxConcurrency` 为 1；
 4. Provider 能力证据精确匹配 endpoint、模型、操作和请求模式，且未过期；
 5. 已审阅 Provider 定价、外部费用上限、未知结果处理和账单核对路径；

@@ -55,7 +55,7 @@
 | # | 问题 | 说明 | 工作量 |
 |---|------|------|--------|
 | 12 | **版本发布表 + 接口** | Web/扩展/打印代理统一版本检查 | 2h |
-| 13 | **Chrome 扩展 OTA** | 优先 Chrome Web Store；企业用户走策略安装 | 2h |
+| 13 | **Chrome 扩展发布** | 官网 API 发布版本/SHA 绑定的云端包与本地包 | 2h |
 | 14 | **打印代理 electron-updater** | GitHub Releases + OSS 托管 | 2h |
 | 15 | **大文件拆分** | collect.ts 1585 行 / order.ts 1344 行 → routes + services 分层 | 8h |
 | 16 | **测试基线** | auth + crypto + image-storage 先写 vitest 覆盖关键路径 | 4h |

@@ -79,9 +79,19 @@ A persistent-Chromium same-path upgrade smoke moved from `1.0.264` to `1.0.265` 
 extension ID. The non-secret Provider profile remained, the session-only sentinel was present before
 restart and absent afterward, and it never entered local or sync storage. Private smoke-summary
 SHA-256 is `98996dc3...d1b09`. The candidate still records
-`signature.status=EXTERNAL_REQUIRED`: no store/enterprise signature, distribution receipt, or
-external publication occurred. `REL-03` therefore remains open, Phase 6 remains `0/3`, and overall
-progress remains `34/37` pending selection and execution of the external release channel.
+`signature.status=EXTERNAL_REQUIRED`: no detached release signature, first-party website download
+receipt, or external publication occurred. `REL-03` therefore remains open, Phase 6 remains `0/3`,
+and overall progress remains `34/37` pending execution of the approved `/api/extensions` channel.
+
+The release channel is now explicitly the first-party website `/api/extensions` API, not Chrome Web
+Store. A protected local Ed25519 key produced public keyring entry
+`ss-erp-extension-release-2026-08-02-01` with public-key SHA-256 `78b7e0cf...a9a9`. The unchanged
+`1.0.265` four-file candidate received a detached signature sidecar whose SHA-256 is
+`d2eb50bd...ce84`; neither the private key nor sidecar entered the candidate or repository. This is
+only a signing checkpoint: the website copy/API-origin correction changes application code, so a
+new deployable candidate must be packaged from the final clean commit and signed again. Actual
+cloud/local GET evidence remains pending until the dark deployment can serve the exact version/SHA
+URLs. Phase 6 remains `0/3` and overall progress remains `34/37`.
 
 Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
 runner sent exactly one request to the approved route, received definite HTTP 400, produced no
@@ -634,7 +644,7 @@ The resulting offline distribution patch passed the focused download matrix (`7`
 Windows-only symlink case skipped), Server typecheck and targeted lint, deployment/documentation
 contracts, the full Server suite (`4514` passed, `195` skipped), and the coordinated
 package/deployment matrix in `212.7s`; diff check also passed. This verification does not provide an
-external signature, store receipt, clean install/upgrade smoke or distribution, so formal counts and
+external signature, website download receipt, clean install/upgrade smoke or distribution, so formal counts and
 release ordering remain unchanged.
 
 Subsequent offline release hardening closed the remaining environment and Git provenance gaps: the
@@ -685,7 +695,7 @@ three systemd deployment entrypoints require a root-owned `EXTENSION_RELEASE_ROO
 after staging, root removes build-UID writes and the sealed tree must byte-match that input again.
 The QA-04 rehearsal also gained a real isolated PostgreSQL scope/JTI/session revocation lane and
 adversarial remote-code/eval/Worker/Wasm/CSP package tests. This is offline preparation only:
-external signature/store receipts, actual distribution, signed-package upgrade smoke, final QA-02
+external signature/website receipts, actual distribution, signed-package upgrade smoke, final QA-02
 evidence and all real rollout actions remain open. Counts stay `32/37`.
 
 The enlarged nine-step QA-04 offline rehearsal subsequently passed in `817.7s`, including both
@@ -946,10 +956,10 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep the passing `QA-04` result and canonical `1.0.265` candidate immutable. Complete `REL-03`
-   through an approved Chrome Web Store or controlled-enterprise signing/distribution channel and
-   retain its external receipt; do not rebuild or increment the candidate. Then execute `REL-04`
-   dark deployment/pre-enable canaries, and finally `REL-02`
+7. Keep the historical canonical `1.0.265` candidate immutable. Re-run focused/final QA for the
+   first-party website distribution implementation, package and sign one new clean-commit candidate,
+   then execute `REL-04` dark deployment/pre-enable canaries. Probe both exact `/api/extensions`
+   downloads, retain and verify the signed receipt, close `REL-03`/`REL-04` together, and finally run `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
    stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts

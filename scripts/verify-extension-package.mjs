@@ -923,7 +923,7 @@ const optionalHostPermissions = manifest.optional_host_permissions || [];
 const contentMatches = (manifest.content_scripts || []).flatMap((script) => script.matches || []);
 const webResourceMatches = (manifest.web_accessible_resources || []).flatMap((group) => group.matches || []);
 const broadPermissionChecks = [
-  [hostPermissions, '<all_urls>', 'host_permissions contains <all_urls>; tighten before Chrome Web Store release'],
+  [hostPermissions, '<all_urls>', 'host_permissions contains <all_urls>; tighten before first-party website release'],
   [contentMatches, '<all_urls>', 'content_scripts contains <all_urls>; split local/cloud release package before store submission'],
   [webResourceMatches, '<all_urls>', 'web_accessible_resources contains <all_urls>; tighten before store submission'],
   [hostPermissions, 'file:///*', 'host_permissions contains file:///*; keep only for local/offline package'],

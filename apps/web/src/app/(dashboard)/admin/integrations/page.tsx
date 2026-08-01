@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
 import { deploymentOrigin, resolvePublicAppHostname } from '@/lib/deployment-hosts';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
 
 interface IntegrationCheck {
   key: string;
@@ -177,10 +177,10 @@ export default function AdminIntegrationsPage() {
 }
 
 function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null }) {
-  const cloudHref = toAppHref(
+  const cloudHref = apiUrl(
     release?.targets.cloud.downloadUrl || '/api/extensions/download/cloud',
   );
-  const localHref = release?.targets.local ? toAppHref(release.targets.local.downloadUrl) : '';
+  const localHref = release?.targets.local ? apiUrl(release.targets.local.downloadUrl) : '';
   const publicDownloadHref = toAppHref('/download');
   return (
     <Card>

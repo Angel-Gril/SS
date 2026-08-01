@@ -35,7 +35,7 @@
 ## P2: 持续迭代和 OTA
 
 - Web 使用蓝绿或滚动部署，不做运行时热替换。
-- Chrome 扩展优先走 Chrome Web Store 自动更新；企业客户再考虑策略安装。
+- Chrome 扩展通过官网第一方下载接口发布版本与 SHA-256 绑定的云端/本地包；升级需重新下载并加载。
 - 打印代理使用 `electron-updater` 或独立更新器，下载包必须校验 SHA256。
 - Windows 离线包更新前先自动备份本地 PostgreSQL 数据。
 - 增加 `app_versions` 或等价配置，统一管理 Web、API、扩展、打印代理、Windows 包版本。
@@ -60,5 +60,5 @@ docker compose -f docker-compose.prod.yml build
 
 - 不在首轮拆完所有大路由文件。
 - 不在首轮引入 Kubernetes。
-- 不自研浏览器扩展热更新协议替代 Chrome Web Store。
+- 不通过公告、远程 JS 或自研热更新协议替换扩展代码；更新只发布完整官网安装包。
 - 不把本地 Windows 离线包和云端 SaaS 强行合并成同一套启动方式。

@@ -155,8 +155,10 @@ rerun against the final positive operation-specific evidence before `QA-04` can 
 
 - Lane A, rollout controls and observability preparation; no pilot flag is enabled.
 - Lane B, exact sandbox evidence: final `QA-02` runs for approved profiles.
-- Release execution is sequential after all gates pass: `REL-03` packages, `REL-04` dark deploy and
-  pre-enable canaries, then `REL-02` sandbox/one-shop pilots and post-enable canaries.
+- First-party website distribution uses a two-stage release gate: `REL-03a` packages and signs the
+  immutable candidate, `REL-04` dark-deploys it and runs pre-enable canaries, then `REL-03b` probes
+  both exact website downloads and retains the signed receipt. `REL-03` and `REL-04` close together
+  before `REL-02` sandbox/one-shop pilots and post-enable canaries.
 - Packaging, deploy orchestration, backup gates, and canary scripts may be built and rehearsed
   offline before `QA-02`; no release task is complete and no external action is authorized by that
   preparation.
@@ -164,8 +166,8 @@ rerun against the final positive operation-specific evidence before `QA-04` can 
 | ID | Task | Priority | Effort | Dependencies | Acceptance criteria |
 | --- | --- | --- | --- | --- | --- |
 | REL-02 | Release through owner/shop/device pilots | P0 | M | REL-04 | Positive BYOK fixture ingest passes; generation, ingest, and publish can be disabled independently without affecting hosted mode; first pilot is sandbox-only, then one-shop publish; audit events and receipts are visible; post-enable canaries and publish reconciliation pass; rollback leaves already-stored assets and receipts consistent |
-| REL-03 | Build, sign, distribute, and verify cloud/local extension packages | P0 | M | QA-03, QA-04, DOC-01 | Both packages contain the same completed feature set with environment-correct ERP endpoints; version increments once; installation/upgrade preserves non-secret profiles but not session keys; package hashes and smoke results are recorded |
-| REL-04 | Deploy server/web changes dark and run pre-enable canaries | P0 | M | REL-03 | Database backup/migration, API/web/worker restart, readiness, default-off flags, both VPS environments, extension pairing, hosted regression, BYOK disabled-path fixture rejection, and publish reconciliation checks pass before any pilot flag is enabled |
+| REL-03 | Build, sign, distribute, and verify cloud/local extension packages through the first-party website API | P0 | M | QA-03, QA-04, DOC-01 | Both packages contain the same completed feature set with environment-correct ERP endpoints; version increments once; installation/upgrade preserves non-secret profiles but not session keys; package hashes and smoke results are recorded; the signed receipt binds successful cloud/local downloads from the exact version/SHA URLs |
+| REL-04 | Deploy server/web changes dark and run pre-enable canaries | P0 | M | REL-03a signed candidate | Database backup/migration, API/web/worker restart, readiness, default-off flags, both VPS environments, extension pairing, hosted regression, BYOK disabled-path fixture rejection, publish reconciliation, and first-party extension download checks pass before any pilot flag is enabled |
 
 ## Deferred Work
 

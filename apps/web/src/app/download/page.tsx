@@ -1,14 +1,20 @@
 import Link from 'next/link';
 import { ArrowLeft, Cable, CheckCircle2, Download, Key, Package, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { deploymentOrigin, resolvePublicAppHostname } from '@/lib/deployment-hosts';
+import {
+  deploymentOrigin,
+  resolvePublicApiOrigin,
+  resolvePublicAppHostname,
+} from '@/lib/deployment-hosts';
 
 const appHostname = resolvePublicAppHostname(process.env.NEXT_PUBLIC_RUNTIME_MODE);
 const appOrigin = deploymentOrigin(appHostname);
+const apiOrigin = resolvePublicApiOrigin();
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
-const cloudExtensionHref = `${appOrigin}/api/extensions/download/cloud`;
-const localExtensionHref = `${appOrigin}/api/extensions/download/local`;
+const extensionApiPrefix = apiOrigin || '';
+const cloudExtensionHref = `${extensionApiPrefix}/api/extensions/download/cloud`;
+const localExtensionHref = `${extensionApiPrefix}/api/extensions/download/local`;
 
 export default function DownloadPage() {
   return (
@@ -57,7 +63,8 @@ export default function DownloadPage() {
             </Button>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            云端扩展连接 {appHostname || '当前 ERP'}；本地扩展连接 127.0.0.1:3001，适合 Windows 本地测试包。
+            版本元数据和 ZIP 均由官网第一方接口提供；云端扩展连接 {appHostname || '当前 ERP'}，本地扩展连接
+            127.0.0.1:3001。
           </p>
         </div>
 
@@ -65,7 +72,7 @@ export default function DownloadPage() {
           <StepCard
             icon={Download}
             title="1. 安装扩展"
-            desc="测试阶段使用开发者模式加载扩展包；正式上架 Chrome Web Store 后改为商店安装入口。"
+            desc="从官网获取云端或本地 ZIP，首次解压到固定目录并用开发者模式加载；升级时保留同一路径。"
           />
           <StepCard
             icon={Key}
@@ -113,8 +120,8 @@ export default function DownloadPage() {
               这样符合 Chrome MV3 对远程托管代码的限制。
             </p>
             <p>
-              扩展功能升级仍通过重新打包发布完成。测试阶段可以使用开发者模式重新加载；
-              正式阶段优先使用 Chrome Web Store 或明确的安装包下载入口。
+              扩展功能升级仍通过重新打包发布完成。官网 `/api/extensions/latest` 返回版本与
+              SHA-256 绑定的下载 URL；覆盖原扩展目录并在开发者模式中重新加载即可升级。
             </p>
           </div>
         </div>
