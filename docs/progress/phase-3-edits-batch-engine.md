@@ -611,3 +611,19 @@ Progress: 4/5 tasks.
   fingerprint now protects compatibility. This is offline preparation, not positive capability
   evidence or approval. No credential was read, no Provider request or charge occurred, and counts
   remain `4/5` and `32/37`.
+- The operator then approved the separate minimal operation
+  `qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01` from clean pushed commit `78fe4c7`, with the pinned
+  source, quote USD `0.210001`, and maximum USD `1.000000`. Pre-call manifest SHA-256 was
+  `8021ef61...bcc72`, and final approval SHA-256 was `792d7587...c28a2`. The guarded V2 adapter sent
+  exactly one synchronous multipart POST containing only `model`, `prompt`, and `image`; it did not
+  retry. Xiaoyi returned definite HTTP 400 after `795 ms`. Report SHA-256 `a46f67fb...85516`
+  records `REJECTED`, one create request, no Provider request-ID hash, and no image.
+- Settled manifest SHA-256 was `f86ba3b9...5a3c3`; raw quota, displayed usage, and Token log were
+  byte-identical across the POST window. Exact attestation SHA-256 `06598b9b...62218` produced v3
+  receipt SHA-256 `5fe9b606...4f887`, with `NO_CHARGE`, `PASS`, zero billed units, and no
+  same-request retry; offline replay preserved the exact bytes. Archive manifest SHA-256 is
+  `d436381b...c2b1d`, and private run-summary SHA-256 is `5a286b63...7c542`. Credential scans found
+  zero matches, and private ACL/reparse checks passed. This closes the documented V2 contract as
+  negative evidence. No Registry, deployment, flag, ERP ingest, or Ozon mutation occurred. Progress
+  remains `4/5` and `32/37`; a Provider-confirmed material permission/contract change or a different
+  edit-capable Provider is still required.

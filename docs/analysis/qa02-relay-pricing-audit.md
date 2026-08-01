@@ -545,3 +545,42 @@ This is conclusive negative evidence for the exact endpoint, account credential 
 profile. Do not retry the Operation ID, rename the same request, or use this route for `FULL_EDIT`
 or `INPAINT`. A later Xiaoyi paid test requires a Provider-confirmed material route/account/contract
 change and a new profile, policy and approval. `QA-02` remains incomplete.
+
+## Xiaoyi documented minimal V2 result
+
+The first-party synchronous curl contract was isolated as
+`XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`, with logical `1024x1024`, `n=1`, one source, and exactly three
+wire fields: `model`, `prompt`, and `image`. The operator approved operation
+`qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01` from clean pushed commit
+`78fe4c748fd7c5b6c1c4974467d3342ff6b9cc6a`, using the same source SHA-256
+`5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32`, quote USD `0.210001`, and
+maximum USD `1.000000`. Pre-call manifest SHA-256 was
+`8021ef614b8658f3b080a648ff3b31970a11fb7e64ca4dc9a2de0e8ce7cbcc72`; final approval SHA-256 was
+`792d75870bd711f210ae565dd49ea1c24eac4bde7678889fb2c15c615a6c28a2`.
+
+The guarded adapter sent exactly one synchronous `/v1/images/edits` POST and did not retry. Xiaoyi
+returned definite HTTP 400 after `795 ms`. Intent SHA-256 is
+`70177c26fc06a9f339e14660261b4df72e13d0a330330deb0817c75662d19e90`; request-fingerprint claim
+SHA-256 is `2893c5db2f5e2623c42f880ff1fb197e831a085bdf3455d46d181d14dd69df61`; report SHA-256 is
+`a46f67fbd30dcf0bfc74f64efb5a67af83a625ce8f7c3f5c8b7e09f048b85516`. The report records one
+create request, `REJECTED`, no Provider request-ID hash, and no image. This proves that zero usage in
+the Provider dashboard did not mean the POST was skipped.
+
+Settled manifest SHA-256 was
+`f86ba3b90c7b93ebfcb26bb1b60c885990304fee5cc7e57f1fce0d649de5a3c3`. Raw quota, displayed usage,
+and Token log were byte-identical over the `336.430` second exclusive window. Exact no-charge
+attestation SHA-256 `06598b9bc6f20e93d0ed20314d42b06475146a88224e86a6bcc89a057ad62218`
+produced v3 receipt SHA-256
+`5fe9b606e5839b8fe71305e6a48d72b834eb7e697aeb4b1bed68d8853e24f887`. It records
+`billingGate=PASS`, zero billed units, and `sameRequestRetryAllowed=false`; offline replay was
+byte-identical. Six sanitized execution files are retained under archive manifest SHA-256
+`d436381bdff60e751962f44755f2159673d07101582a45f276237ce249cc2b1d`; private run-summary SHA-256
+is `5a286b63e1b5b03a28d9403e9c7c1109d4710d241d63e6ad95f1af4b85d7c542`. Exact credential scans
+found zero matches, and private ACL/reparse checks passed.
+
+This closes the documented three-field V2 request as negative evidence for the exact Xiaoyi
+endpoint, account credential revision, model, and synchronous contract. It must not be retried or
+renamed, and it cannot authorize `FULL_EDIT`, `INPAINT`, or async testing. The next paid edit attempt
+requires Provider-confirmed account permission or a materially different route/contract, or a
+different edit-capable Provider, followed by a new policy, approval, and billing window. `QA-02`
+remains incomplete.

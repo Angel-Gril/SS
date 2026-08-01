@@ -198,8 +198,13 @@ with no image or charge. It must not be retried or reused for `FULL_EDIT`/`INPAI
 The first-party [image API guide](https://xiaoyiapi.xyz/docs/api/images/) separately shows a minimal
 synchronous curl contract containing only `model`, `prompt`, and `image`; asynchronous editing is a
 different `/v1/images/edits/async` route. `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` represents that
-materially different synchronous wire request. It does not authorize a POST: use a new pricing
-policy, Operation ID, source-bound approval, and billing capture before any paid attempt.
+materially different synchronous wire request. Operation
+`qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01` later sent that exact three-field request once and
+received definite HTTP 400, with no image or charge. It must not be retried, renamed, or reused for
+another operation. A later Xiaoyi paid attempt requires a Provider-confirmed material
+permission/route/contract change, or a different edit-capable Provider, followed by a new profile,
+pricing policy, Operation ID, source-bound approval, and billing capture. The profile alone never
+authorizes a POST.
 
 The command uses public DoH, rejects private DNS results, pins the accepted addresses, disables
 redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET sequence:

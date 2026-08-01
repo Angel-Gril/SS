@@ -46,8 +46,8 @@ Overall: 32/37 tasks complete (86%).
 
 Current checkpoint (2026-08-01): `QA-02` remains the first unresolved dependency at Phase 3 `4/5`
 and is blocked on positive acceptance from an edit-capable Provider. Both Packy edit requests and
-the Xiaoyi V1 request are closed negative evidence and must not be retried. Xiaoyi's first-party
-guide documents synchronous multipart `/v1/images/edits` separately from
+the Xiaoyi V1 and minimal V2 requests are closed negative evidence and must not be retried.
+Xiaoyi's first-party guide documents synchronous multipart `/v1/images/edits` separately from
 `/v1/images/edits/async`; its synchronous curl example contains only `model`, `prompt`, and `image`.
 Public pricing remains planning input, not a maximum-cost authorization.
 
@@ -107,8 +107,30 @@ warning. Preflight and the standalone source-extension verifier report `446` pas
 and the two existing local-package permission warnings. Independent review found and closed two V2
 dispatch gaps: the dedicated adapter now rejects zero/multiple sources, while the multipart guard
 requires `IMAGE_TO_IMAGE` with no mask before accepting the minimal dialect. A fixed historical V1
-fingerprint prevents silent compatibility drift. No credential was read, no Provider GET/POST or
-charge occurred, and no V2 approval exists yet.
+fingerprint prevents silent compatibility drift. That implementation checkpoint made no credential
+read, Provider request, or charge.
+
+From clean pushed commit `78fe4c748fd7c5b6c1c4974467d3342ff6b9cc6a`, the operator approved the
+separate minimal operation `qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01`, with the same pinned
+source, quote USD `0.210001`, and maximum USD `1.000000`. Fresh pre-call manifest SHA-256 was
+`8021ef614b8658f3b080a648ff3b31970a11fb7e64ca4dc9a2de0e8ce7cbcc72`; final approval SHA-256 was
+`792d75870bd711f210ae565dd49ea1c24eac4bde7678889fb2c15c615a6c28a2`. The guarded V2 adapter sent
+exactly one synchronous three-field multipart POST and did not retry. Xiaoyi returned definite HTTP
+400 after `795 ms`; report SHA-256
+`a46f67fbd30dcf0bfc74f64efb5a67af83a625ce8f7c3f5c8b7e09f048b85516` records `REJECTED`, one
+create request, no Provider request-ID hash, and no image.
+
+Settled manifest SHA-256 was
+`f86ba3b90c7b93ebfcb26bb1b60c885990304fee5cc7e57f1fce0d649de5a3c3`; raw quota, displayed usage,
+and Token log remained byte-identical across the POST window. Exact attestation SHA-256
+`06598b9bc6f20e93d0ed20314d42b06475146a88224e86a6bcc89a057ad62218` produced v3 receipt SHA-256
+`5fe9b606e5839b8fe71305e6a48d72b834eb7e697aeb4b1bed68d8853e24f887`, recording `NO_CHARGE`,
+`billingGate=PASS`, zero billed units, and `sameRequestRetryAllowed=false`; offline replay was
+byte-identical. Six execution files are retained under archive manifest SHA-256
+`d436381bdff60e751962f44755f2159673d07101582a45f276237ce249cc2b1d`; private run-summary SHA-256
+is `5a286b63e1b5b03a28d9403e9c7c1109d4710d241d63e6ad95f1af4b85d7c542`. Credential, ACL, and
+reparse checks passed. This closes the documented minimal contract as negative evidence. No
+Registry, deployment, flag, ERP ingest, or Ozon mutation occurred; counts remain `4/5` and `32/37`.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -669,13 +691,14 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
-4. Do not retry `qa02-xiaoyi-i2i-20260801-f189dfa-01` or send `FULL_EDIT`/`INPAINT` through its V1
-   profile. Its five-field synchronous multipart request received definite HTTP 400 and settled with
-   no charge. The first-party three-field synchronous example is now isolated as
-   `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`; after its implementation is committed and pushed, prepare a
-   new private pricing policy, Operation ID, pre-call billing snapshot, non-approval draft, and
-   explicit one-request approval. Do not read the credential or send a POST before that approval.
-   Async remains unverified and cannot inherit either profile's approval or evidence.
+4. Do not retry `qa02-xiaoyi-i2i-20260801-f189dfa-01` or
+   `qa02-xiaoyi-minimal-i2i-20260801-78fe4c7-01`, rename either request, or send `FULL_EDIT`/`INPAINT`
+   through either Xiaoyi profile. The V1 five-field and documented V2 three-field synchronous
+   requests both received definite HTTP 400 responses and settled with no charge. Another paid
+   Xiaoyi attempt requires Provider-confirmed account permission or a materially different route and
+   contract, followed by a new profile, policy, Operation ID, approval, and reconciliation;
+   otherwise use a different edit-capable Provider. Async remains unverified and cannot inherit
+   either profile's approval or evidence.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
