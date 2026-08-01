@@ -21,15 +21,20 @@ import {
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_PROFILE,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
   type AiImageEditMultipartDialect,
   aiImageEditMultipartDialectForRequestProfile,
   aiImageEditMultipartFields,
+  aiImageEditMultipartShape,
   isAiImagePackyEditProviderIdentity,
 } from './ai-image-packy-edit-profile.js';
 import {
+  AI_IMAGE_XIAOYI_EDIT_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
   isAiImageXiaoyiEditOperation,
   isAiImageXiaoyiEditProviderIdentity,
+  isAiImageXiaoyiEditRequestProfile,
 } from './ai-image-xiaoyi-provider.js';
 
 export class AiImageSandboxGuardError extends Error {
@@ -93,6 +98,7 @@ const SANDBOX_REQUEST_PROFILES = new Set([
   'OZON_PORTRAIT_SINGLE_V1',
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
 ]);
 
 export type AiImageSandboxRequestState =
@@ -365,7 +371,7 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
     endpoint,
     fingerprint: {
       ...((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-        || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+        || isAiImageXiaoyiEditRequestProfile(requestProfile))
         ? { operation, requestProfile, multipartDialect, multipartFields }
         : {}),
       n: 1,
@@ -713,13 +719,13 @@ export async function claimAiImageSandboxOperation(
       'The Packy edit Provider identity and request profile must be selected together',
     );
   }
-  if ((requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE) !== xiaoyiProviderIdentity) {
+  if (isAiImageXiaoyiEditRequestProfile(requestProfile) !== xiaoyiProviderIdentity) {
     invalidSandboxRequest(
       'The Xiaoyi edit Provider identity and request profile must be selected together',
     );
   }
   if (
-    requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    isAiImageXiaoyiEditRequestProfile(requestProfile)
     && !isAiImageXiaoyiEditOperation(operation)
   ) {
     invalidSandboxRequest('The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE');
@@ -745,7 +751,7 @@ export async function claimAiImageSandboxOperation(
     : null;
   if (
     (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-      || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+      || isAiImageXiaoyiEditRequestProfile(requestProfile))
     && !exactCosts
   ) {
     throw new AiImageSandboxGuardError(
@@ -1008,7 +1014,8 @@ export function createAiImageSandboxEditFetchGuard(input: {
   const expectedEndpoint = new URL(input.contract.endpoint).toString();
   const multipartDialect = input.contract.multipartDialect
     ?? AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT;
-  const multipartFields = aiImageEditMultipartFields(multipartDialect);
+  const multipartShape = aiImageEditMultipartShape(multipartDialect);
+  const multipartFields = multipartShape.fields;
   const packyProviderIdentity = expectedEndpoint === AI_IMAGE_PACKY_EDIT_PROFILE.endpoint
     && input.contract.model === AI_IMAGE_PACKY_EDIT_PROFILE.model
     && input.contract.size === `${AI_IMAGE_PACKY_EDIT_PROFILE.width}x${AI_IMAGE_PACKY_EDIT_PROFILE.height}`
@@ -1019,6 +1026,23 @@ export function createAiImageSandboxEditFetchGuard(input: {
   ) {
     throw new Error(
       'The Packy edit Provider identity and multipart dialect must be selected together',
+    );
+  }
+  const xiaoyiProviderIdentity = expectedEndpoint === AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint
+    && input.contract.model === AI_IMAGE_XIAOYI_EDIT_PROFILE.model
+    && input.contract.size
+      === `${AI_IMAGE_XIAOYI_EDIT_PROFILE.width}x${AI_IMAGE_XIAOYI_EDIT_PROFILE.height}`
+    && input.contract.n === 1
+    && input.contract.sourceSha256.length === 1;
+  const xiaoyiMinimalProviderIdentity = xiaoyiProviderIdentity
+    && input.contract.operation === 'IMAGE_TO_IMAGE'
+    && input.contract.maskSha256 === null;
+  if (
+    multipartDialect === AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT
+    && !xiaoyiMinimalProviderIdentity
+  ) {
+    throw new Error(
+      'The Xiaoyi minimal edit multipart dialect requires its exact Provider identity',
     );
   }
   let createRequests = 0;
@@ -1053,8 +1077,8 @@ export function createAiImageSandboxEditFetchGuard(input: {
       const allowedKeys = new Set([
         'model',
         'prompt',
-        'n',
-        'size',
+        ...(multipartShape.includeN ? ['n'] : []),
+        ...(multipartShape.includeSize ? ['size'] : []),
         'image',
         'image[]',
         'mask',
@@ -1089,8 +1113,12 @@ export function createAiImageSandboxEditFetchGuard(input: {
         keys.some((key) => !allowedKeys.has(key))
         || form.has(alternateSourceField)
         || exactFormString(form, 'model') !== input.contract.model
-        || exactFormString(form, 'n') !== String(input.contract.n)
-        || exactFormString(form, 'size') !== input.contract.size
+        || (multipartShape.includeN
+          ? exactFormString(form, 'n') !== String(input.contract.n)
+          : form.has('n'))
+        || (multipartShape.includeSize
+          ? exactFormString(form, 'size') !== input.contract.size
+          : form.has('size'))
         || Object.entries(multipartFields || {}).some(
           ([key, value]) => exactFormString(form, key) !== value,
         )

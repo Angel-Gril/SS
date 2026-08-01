@@ -6,9 +6,8 @@ import { TextDecoder } from 'node:util';
 import { AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN } from './ai-image-sandbox-code-revision.js';
 import { createAiImageSandboxRequestFingerprint } from './ai-image-sandbox-guard.js';
 import {
-  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
-  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  aiImageEditMultipartDialectForRequestProfile,
   aiImageEditMultipartFields,
 } from './ai-image-packy-edit-profile.js';
 import {
@@ -25,8 +24,8 @@ import {
   AI_IMAGE_XIAOYI_API_BASE,
   AI_IMAGE_XIAOYI_BILLING_ORIGIN,
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
-  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
   isAiImageXiaoyiEditOperation,
+  isAiImageXiaoyiEditRequestProfile,
 } from './ai-image-xiaoyi-provider.js';
 
 export const AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT =
@@ -1992,7 +1991,9 @@ function assertArtifactsMatch(input: {
   const intentRecord = intent.record;
   const reportRecord = report.record;
   const request = intent.request;
-  const xiaoyiProfileSelected = request.requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE;
+  const xiaoyiProfileSelected = isAiImageXiaoyiEditRequestProfile(
+    String(request.requestProfile),
+  );
   const xiaoyiProviderIdentity = intent.model === AI_IMAGE_XIAOYI_EDIT_PROFILE.model
     && intentRecord.endpointSha256 === sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint);
   if (
@@ -2026,17 +2027,15 @@ function assertArtifactsMatch(input: {
     model: intent.model,
     request: {
       ...((request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-        || request.requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+        || isAiImageXiaoyiEditRequestProfile(String(request.requestProfile)))
         ? {
             operation: String(request.operation),
             requestProfile: String(request.requestProfile),
-            multipartDialect: request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-              ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
-              : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+            multipartDialect: aiImageEditMultipartDialectForRequestProfile(
+              String(request.requestProfile),
+            ),
             multipartFields: aiImageEditMultipartFields(
-              request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-                ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
-                : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+              aiImageEditMultipartDialectForRequestProfile(String(request.requestProfile)),
             ),
           }
         : {}),

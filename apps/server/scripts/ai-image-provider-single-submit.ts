@@ -18,21 +18,23 @@ import {
   createOpenAiImagesProvider,
   createPackyGptImage2EditProvider,
   createXiaoyiGptImage2EditProvider,
+  createXiaoyiGptImage2MinimalEditProvider,
   normalizeOpenAiImagesApiBase,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
 import {
-  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
-  AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_PROFILE,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  aiImageEditMultipartDialectForRequestProfile,
   isAiImagePackyEditProviderIdentity,
 } from '../src/services/ai-image-packy-edit-profile.js';
 import {
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
   isAiImageXiaoyiEditOperation,
   isAiImageXiaoyiEditProviderIdentity,
+  isAiImageXiaoyiEditRequestProfile,
 } from '../src/services/ai-image-xiaoyi-provider.js';
 import {
   AiImageSandboxMediaError,
@@ -103,6 +105,12 @@ const REQUEST_PROFILES = Object.freeze({
     expectedMimeType: AI_IMAGE_PACKY_EDIT_PROFILE.expectedMimeType,
   }),
   [AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_XIAOYI_EDIT_PROFILE.width,
+    height: AI_IMAGE_XIAOYI_EDIT_PROFILE.height,
+    format: 'square Xiaoyi GPT-Image-2 documented edit',
+    expectedMimeType: AI_IMAGE_XIAOYI_EDIT_PROFILE.expectedMimeType,
+  }),
+  [AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE]: Object.freeze({
     width: AI_IMAGE_XIAOYI_EDIT_PROFILE.width,
     height: AI_IMAGE_XIAOYI_EDIT_PROFILE.height,
     format: 'square Xiaoyi GPT-Image-2 documented edit',
@@ -599,7 +607,9 @@ export async function runAiImageProviderSingleSubmit(
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
   }
   const isPackyEditProfile = requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE;
-  const isXiaoyiEditProfile = requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE;
+  const isXiaoyiEditProfile = isAiImageXiaoyiEditRequestProfile(requestProfile);
+  const isXiaoyiMinimalEditProfile = requestProfile
+    === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
   const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
     apiBase,
     endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
@@ -839,9 +849,7 @@ export async function runAiImageProviderSingleSubmit(
         n: 1,
         sourceSha256: requestContract.sourceSha256,
         maskSha256: requestContract.maskSha256,
-        multipartDialect: isPackyEditProfile
-          ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
-          : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+        multipartDialect: aiImageEditMultipartDialectForRequestProfile(requestProfile),
       },
       ...guardedTransport,
     });
@@ -878,7 +886,9 @@ export async function runAiImageProviderSingleSubmit(
     } else {
       const createEditProvider = isPackyEditProfile
         ? createPackyGptImage2EditProvider
-        : isXiaoyiEditProfile
+        : isXiaoyiMinimalEditProfile
+          ? createXiaoyiGptImage2MinimalEditProvider
+          : isXiaoyiEditProfile
           ? createXiaoyiGptImage2EditProvider
           : createOpenAiImageEditProvider;
       const provider = createEditProvider({

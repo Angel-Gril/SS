@@ -32,6 +32,12 @@ Historical v3 report `endpointSha256` is read only as an operation-endpoint dige
 reinterpreted as an API Base. The finalizer recomputes the transport-semantic request fingerprint
 rather than trusting matching values copied among the artifacts.
 
+For Xiaoyi, the finalizer derives the multipart dialect from the versioned request profile. V1
+recomputes the historical five-field/default-dialect fingerprint; minimal V2 recomputes the distinct
+three-field dialect that omits `n` and `size` from the wire body while retaining them as logical
+request constraints. An intent, claim, report, or attestation that mixes either profile with the
+other dialect/fingerprint is ineligible even when endpoint, model, Prompt, source, and money match.
+
 The evidence root may be the deployment-managed top-level link to the private shared sandbox
 directory. The finalizer resolves that link once, requires its target to be a private directory, and
 rejects any intent/report/claim whose real path escapes the resolved target.

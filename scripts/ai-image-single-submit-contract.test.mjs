@@ -258,6 +258,7 @@ assert.match(source, /createPackyGptImage2EditProvider/u);
 assert.match(source, /ai-image-xiaoyi-provider\.ts/u);
 assert.match(approvalDraft, /ai-image-xiaoyi-provider\.ts/u);
 assert.match(source, /createXiaoyiGptImage2EditProvider/u);
+assert.match(source, /createXiaoyiGptImage2MinimalEditProvider/u);
 assert.match(guard, /AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT/u);
 assert.match(packyEditProfile, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(packyEditProfile, /https:\/\/www\.packyapi\.ai\/v1\/images\/edits/u);
@@ -299,11 +300,66 @@ assert.match(
 );
 assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_API_BASE\s*=\s*'https:\/\/image\.xiaoyiapi\.xyz\/v1'/u);
 assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_BILLING_ORIGIN\s*=\s*'https:\/\/xiaoyiapi\.xyz'/u);
+assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE/u);
 assert.match(xiaoyiProvider, /XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
+assert.match(
+  xiaoyiProvider,
+  /AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE\s*=\s*\n\s*'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2'/u,
+);
 assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_EDIT_OPERATIONS\s*=\s*new Set\(\[\s*'IMAGE_TO_IMAGE',\s*\]\)/u);
 assert.doesNotMatch(xiaoyiProvider, /'FULL_EDIT'|'INPAINT'/u);
+assert.match(xiaoyiProvider, /function isAiImageXiaoyiEditRequestProfile/u);
+assert.match(
+  xiaoyiProvider,
+  /requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE\s*\|\| requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE/u,
+);
+assert.match(
+  packyEditProfile,
+  /AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT\s*=\s*\n\s*'XIAOYI_GPT_IMAGE_2_MINIMAL_V2'/u,
+);
+assert.match(
+  packyEditProfile,
+  /case AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT:\s*return Object\.freeze\(\{ includeN: false, includeSize: false, fields: null \}\)/u,
+);
+assert.match(
+  packyEditProfile,
+  /requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE[\s\S]*return AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT/u,
+);
+const defaultEditDialect = packyEditProfile.match(
+  /AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT\s*=\s*\n?\s*'([^']+)'/u,
+)?.[1];
+const packyEditDialect = packyEditProfile.match(
+  /AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT\s*=\s*\n?\s*'([^']+)'/u,
+)?.[1];
+const xiaoyiMinimalEditDialect = packyEditProfile.match(
+  /AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT\s*=\s*\n?\s*'([^']+)'/u,
+)?.[1];
+assert.equal(xiaoyiMinimalEditDialect, 'XIAOYI_GPT_IMAGE_2_MINIMAL_V2');
+assert.notEqual(xiaoyiMinimalEditDialect, defaultEditDialect);
+assert.notEqual(xiaoyiMinimalEditDialect, packyEditDialect);
 assert.match(imageProviders, /createXiaoyiGptImage2EditProvider/u);
+assert.match(imageProviders, /function createXiaoyiGptImage2MinimalEditProvider/u);
+assert.match(imageProviders, /form\.append\('model', requestModel\)/u);
+assert.match(imageProviders, /form\.append\(\s*'prompt'/u);
+assert.match(imageProviders, /form\.append\(\s*imageFieldName,/u);
+assert.match(imageProviders, /const multipartShape = aiImageEditMultipartShape\(multipartDialect\)/u);
+assert.match(imageProviders, /if \(multipartShape\.includeN\) form\.append\('n', '1'\)/u);
+assert.match(imageProviders, /if \(multipartShape\.includeSize\) form\.append\('size', validated\.size\)/u);
+assert.match(
+  imageProviders,
+  /createXiaoyiGptImage2MinimalEditProvider[\s\S]*AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT[\s\S]*isAiImageXiaoyiEditOperation,[\s\S]*1,/u,
+);
+assert.match(imageProviders, /request\.images\.length !== requiredImageCount/u);
 assert.match(imageProviders, /isAiImageXiaoyiEditOperation/u);
+assert.match(source, /isAiImageXiaoyiEditRequestProfile\(requestProfile\)/u);
+assert.match(
+  source,
+  /multipartDialect:\s*aiImageEditMultipartDialectForRequestProfile\(requestProfile\)/u,
+);
+assert.match(
+  source,
+  /isXiaoyiMinimalEditProfile[\s\S]*\? createXiaoyiGptImage2MinimalEditProvider[\s\S]*:\s*isXiaoyiEditProfile[\s\S]*\? createXiaoyiGptImage2EditProvider/u,
+);
 assert.match(approvalDraft, /XIAOYI_API_KEY/u);
 assert.match(approvalDraft, /XIAOYI_TOKEN/u);
 assert.match(guard, /AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE/u);
@@ -332,7 +388,24 @@ assert.match(billingSettlement, /providerTokenLogTokenId/u);
 assert.match(billingSettlement, /AI_IMAGE_XIAOYI_API_BASE/u);
 assert.match(billingSettlement, /AI_IMAGE_XIAOYI_BILLING_ORIGIN/u);
 assert.match(billingSettlement, /xiaoyiProfileSelected\s*!==\s*xiaoyiProviderIdentity/u);
-assert.match(billingSettlement, /AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE/u);
+assert.match(billingSettlement, /isAiImageXiaoyiEditRequestProfile/u);
+assert.match(
+  billingSettlement,
+  /multipartDialect:\s*aiImageEditMultipartDialectForRequestProfile\(\s*String\(request\.requestProfile\),?\s*\)/u,
+);
+assert.match(
+  guard,
+  /const multipartDialect = isTextToImage\s*\? null\s*:\s*aiImageEditMultipartDialectForRequestProfile\(requestProfile\)/u,
+);
+assert.match(guard, /const multipartShape = aiImageEditMultipartShape\(multipartDialect\)/u);
+assert.match(
+  guard,
+  /xiaoyiMinimalProviderIdentity = xiaoyiProviderIdentity[\s\S]*operation === 'IMAGE_TO_IMAGE'[\s\S]*maskSha256 === null/u,
+);
+assert.match(
+  guard,
+  /multipartDialect === AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT[\s\S]*!xiaoyiMinimalProviderIdentity/u,
+);
 assert.match(billingSettlement, /logUri\.origin\s*!==\s*AI_IMAGE_XIAOYI_BILLING_ORIGIN/u);
 assert.match(billingSettlement, /PROVIDER_BILLING_ENTRY_CLAIM_KEYS/u);
 assert.match(billingSettlement, /resolve\(billingDirectory, '\.provider-entries'\)/u);
@@ -408,6 +481,8 @@ assert.match(runbook, /`schemaVersion: 5` submit report/u);
 assert.match(runbook, /PROVIDER_DEFAULT_OMITTED/u);
 assert.match(runbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(runbook, /XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
+assert.match(runbook, /XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2/u);
+assert.match(runbook, /sends exactly\s+`model`, `prompt`, and `image`/u);
 assert.match(runbook, /Xiaoyi-only profile/u);
 assert.match(runbook, /quality=high/u);
 assert.match(runbook, /output_format=png/u);
@@ -418,6 +493,9 @@ assert.match(runbook, /qa02-centos-i2i-20260730-094857-01/u);
 assert.match(approvalRunbook, /PROVIDER_DEFAULT_OMITTED/u);
 assert.match(approvalRunbook, /PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
 assert.match(approvalRunbook, /XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1/u);
+assert.match(approvalRunbook, /XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2/u);
+assert.match(billingRunbook, /finalizer derives the multipart dialect from the versioned request profile/u);
+assert.match(billingRunbook, /minimal V2 recomputes the distinct/u);
 assert.match(approvalRunbook, /qa02-centos-i2i-20260730-094857-01/u);
 assert.match(approvalRunbook, /ai\.centos\.hk\/v1/u);
 assert.match(approvalRunbook, /report-bound failure diagnostic sidecar/u);

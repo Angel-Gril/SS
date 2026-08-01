@@ -240,7 +240,10 @@ describe('AI image sandbox approval draft generator', () => {
     await expect(access(value.draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('binds the Xiaoyi GPT-Image-2 edit profile only to its exact Provider identity', async () => {
+  it.each([
+    'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1',
+    'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2',
+  ])('binds %s only to the exact Xiaoyi Provider identity', async (requestProfile) => {
     const value = await fixture('IMAGE_TO_IMAGE');
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
 
@@ -255,7 +258,7 @@ describe('AI image sandbox approval draft generator', () => {
         AI_IMAGE_SANDBOX_BASE_URL: 'https://image.xiaoyiapi.xyz/v1',
         AI_IMAGE_SANDBOX_EXPECTED_HOST: 'image.xiaoyiapi.xyz',
         AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
-        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: requestProfile,
       },
       repositoryRoot: value.root,
       resolveRevision: vi.fn(async () => adapterRevision),
@@ -266,7 +269,7 @@ describe('AI image sandbox approval draft generator', () => {
       expectedHost: 'image.xiaoyiapi.xyz',
       model: 'gpt-image-2',
       operation: 'IMAGE_TO_IMAGE',
-      requestProfile: 'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1',
+      requestProfile,
       quotedCost: { currency: 'USD', amount: 21, scale: 2 },
       maximumCost: { currency: 'USD', amount: 100, scale: 2 },
     });
@@ -277,6 +280,14 @@ describe('AI image sandbox approval draft generator', () => {
     ['wrong model', { AI_IMAGE_SANDBOX_MODEL: 'other-model' }],
     ['default request profile', { AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'OPENAI_SQUARE_SINGLE_V1' }],
     ['unsupported full edit operation', { AI_IMAGE_SANDBOX_OPERATION: 'FULL_EDIT' }],
+    ['minimal unsupported full edit', {
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2',
+      AI_IMAGE_SANDBOX_OPERATION: 'FULL_EDIT',
+    }],
+    ['minimal unsupported inpaint', {
+      AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2',
+      AI_IMAGE_SANDBOX_OPERATION: 'INPAINT',
+    }],
   ])('rejects the Xiaoyi edit profile with %s', async (_label, overrides) => {
     const value = await fixture('IMAGE_TO_IMAGE');
     await expect(runAiImageProviderApprovalDraft({
@@ -313,7 +324,10 @@ describe('AI image sandbox approval draft generator', () => {
     },
   );
 
-  it('rejects legacy cents for the Xiaoyi edit profile', async () => {
+  it.each([
+    'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1',
+    'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2',
+  ])('rejects legacy cents for %s', async (requestProfile) => {
     const value = await fixture('IMAGE_TO_IMAGE');
     await expect(runAiImageProviderApprovalDraft({
       environment: {
@@ -321,7 +335,7 @@ describe('AI image sandbox approval draft generator', () => {
         AI_IMAGE_SANDBOX_BASE_URL: 'https://image.xiaoyiapi.xyz/v1',
         AI_IMAGE_SANDBOX_EXPECTED_HOST: 'image.xiaoyiapi.xyz',
         AI_IMAGE_SANDBOX_MODEL: 'gpt-image-2',
-        AI_IMAGE_SANDBOX_REQUEST_PROFILE: 'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1',
+        AI_IMAGE_SANDBOX_REQUEST_PROFILE: requestProfile,
       },
       repositoryRoot: value.root,
       resolveRevision: vi.fn(async () => adapterRevision),

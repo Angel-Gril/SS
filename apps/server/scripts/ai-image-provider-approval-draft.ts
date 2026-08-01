@@ -22,8 +22,10 @@ import {
 } from '../src/services/ai-image-packy-edit-profile.js';
 import {
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
   isAiImageXiaoyiEditOperation,
   isAiImageXiaoyiEditProviderIdentity,
+  isAiImageXiaoyiEditRequestProfile,
 } from '../src/services/ai-image-xiaoyi-provider.js';
 import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
@@ -54,6 +56,7 @@ const REQUEST_PROFILES = new Set([
   'OZON_PORTRAIT_SINGLE_V1',
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
 ]);
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_API_KEY',
@@ -808,14 +811,14 @@ export async function runAiImageProviderApprovalDraft(
       'The Packy edit Provider identity and request profile must be selected together',
     );
   }
-  if ((requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE) !== xiaoyiProviderIdentity) {
+  if (isAiImageXiaoyiEditRequestProfile(requestProfile) !== xiaoyiProviderIdentity) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
       'The Xiaoyi edit Provider identity and request profile must be selected together',
     );
   }
   if (
-    requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    isAiImageXiaoyiEditRequestProfile(requestProfile)
     && !isAiImageXiaoyiEditOperation(operation)
   ) {
     throw draftError(
@@ -826,7 +829,7 @@ export async function runAiImageProviderApprovalDraft(
   const exactCosts = exactDraftCosts(environment);
   if (
     (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-      || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+      || isAiImageXiaoyiEditRequestProfile(requestProfile))
     && !exactCosts
   ) {
     throw draftError(

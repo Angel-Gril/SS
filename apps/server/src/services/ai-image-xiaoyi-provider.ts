@@ -5,6 +5,8 @@ export const AI_IMAGE_XIAOYI_BILLING_HOST = 'xiaoyiapi.xyz';
 export const AI_IMAGE_XIAOYI_MODEL = 'gpt-image-2';
 export const AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE =
   'XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1';
+export const AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE =
+  'XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2';
 
 export const AI_IMAGE_XIAOYI_EDIT_PROFILE = Object.freeze({
   apiBase: AI_IMAGE_XIAOYI_API_BASE,
@@ -22,6 +24,11 @@ const AI_IMAGE_XIAOYI_EDIT_OPERATIONS = new Set([
 
 export function isAiImageXiaoyiEditOperation(operation: string) {
   return AI_IMAGE_XIAOYI_EDIT_OPERATIONS.has(operation);
+}
+
+export function isAiImageXiaoyiEditRequestProfile(requestProfile: string) {
+  return requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    || requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
 }
 
 export function isAiImageXiaoyiEditProviderIdentity(input: {

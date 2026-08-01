@@ -25,6 +25,8 @@ import {
   AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+  aiImageEditMultipartDialectForRequestProfile,
   aiImageEditMultipartFields,
 } from '../services/ai-image-packy-edit-profile.js';
 import {
@@ -32,6 +34,7 @@ import {
   AI_IMAGE_XIAOYI_BILLING_ORIGIN,
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
   AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
 } from '../services/ai-image-xiaoyi-provider.js';
 
 const directories: string[] = [];
@@ -91,7 +94,10 @@ function xiaoyiEvidenceBindings(overrides: {
   endpoint?: string;
   model?: string;
   operation?: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
-  requestProfile?: typeof AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE | 'OPENAI_SQUARE_SINGLE_V1';
+  requestProfile?:
+    | typeof AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    | typeof AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE
+    | 'OPENAI_SQUARE_SINGLE_V1';
   currency?: 'CNY' | 'USD';
 } = {}) {
   const endpoint = overrides.endpoint || AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint;
@@ -102,6 +108,8 @@ function xiaoyiEvidenceBindings(overrides: {
   const currency = overrides.currency || 'CNY';
   const maskSha256 = operation === 'INPAINT' ? '6'.repeat(64) : null;
   const maskDimensions = operation === 'INPAINT' ? { width: 1024, height: 1024 } : null;
+  const xiaoyiProfileSelected = requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    || requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE;
   const request = {
     operation,
     requestProfile,
@@ -120,12 +128,14 @@ function xiaoyiEvidenceBindings(overrides: {
     endpointSha256,
     model,
     request: {
-      ...(requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+      ...(xiaoyiProfileSelected
         ? {
             operation: request.operation,
             requestProfile: request.requestProfile,
-            multipartDialect: AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
-            multipartFields: aiImageEditMultipartFields(AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT),
+            multipartDialect: aiImageEditMultipartDialectForRequestProfile(requestProfile),
+            multipartFields: aiImageEditMultipartFields(
+              aiImageEditMultipartDialectForRequestProfile(requestProfile),
+            ),
           }
         : {}),
       n: request.n,
@@ -836,6 +846,106 @@ describe('AI image sandbox billing settlement', () => {
       billingOutcome: 'CHARGED',
       billingGate: 'PASS',
     });
+  });
+
+  it('recomputes and settles the Xiaoyi minimal V2 multipart request fingerprint', async () => {
+    const legacyBindings = xiaoyiEvidenceBindings();
+    const minimalBindings = xiaoyiEvidenceBindings({
+      requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+    });
+    expect(minimalBindings.requestFingerprint).not.toBe(legacyBindings.requestFingerprint);
+
+    const value = await fixture({
+      ...minimalBindings,
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 3,
+      submitState: 'SUCCEEDED',
+      billingOutcome: 'CHARGED',
+      billingGate: 'PASS',
+    });
+  });
+
+  it('rejects a Xiaoyi minimal V2 profile bound to the historical V1 fingerprint', async () => {
+    const minimalBindings = xiaoyiEvidenceBindings({
+      requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+    });
+    const value = await fixture({
+      ...minimalBindings,
+      requestFingerprint: xiaoyiEvidenceBindings().requestFingerprint,
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('rejects internally consistent Xiaoyi minimal V2 evidence forged with the default dialect', async () => {
+    const minimalBindings = xiaoyiEvidenceBindings({
+      requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+    });
+    const forgedFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256: sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint),
+      model: AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+      request: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+        multipartDialect: AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+        multipartFields: aiImageEditMultipartFields(AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT),
+        n: 1,
+        size: '1024x1024',
+        promptSha256: '4'.repeat(64),
+        sourceSha256: ['5'.repeat(64)],
+        maskSha256: null,
+      },
+    });
+    expect(forgedFingerprint).not.toBe(minimalBindings.requestFingerprint);
+    expect(
+      aiImageEditMultipartDialectForRequestProfile(
+        AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+      ),
+    ).toBe(AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT);
+
+    const value = await fixture({
+      ...minimalBindings,
+      requestFingerprint: forgedFingerprint,
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
   });
 
   it.each([

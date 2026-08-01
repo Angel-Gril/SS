@@ -1,13 +1,18 @@
+import { AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE } from './ai-image-xiaoyi-provider.js';
+
 export const AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE =
   'PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1';
 export const AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT =
   'PACKY_GPT_IMAGE_2_V1';
 export const AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT =
   'OPENAI_COMPATIBLE_DEFAULT_V1';
+export const AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT =
+  'XIAOYI_GPT_IMAGE_2_MINIMAL_V2';
 
 export type AiImageEditMultipartDialect =
   | typeof AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT
-  | typeof AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT;
+  | typeof AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+  | typeof AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
 
 export const AI_IMAGE_PACKY_EDIT_PROFILE = Object.freeze({
   apiBase: 'https://www.packyapi.ai/v1',
@@ -45,11 +50,21 @@ export function isAiImagePackyEditProviderIdentity(input: {
 }
 
 export function aiImageEditMultipartFields(dialect: AiImageEditMultipartDialect) {
+  return aiImageEditMultipartShape(dialect).fields;
+}
+
+export function aiImageEditMultipartShape(dialect: AiImageEditMultipartDialect) {
   switch (dialect) {
     case AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT:
-      return null;
+      return Object.freeze({ includeN: true, includeSize: true, fields: null });
     case AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT:
-      return AI_IMAGE_PACKY_EDIT_PROFILE.multipartFields;
+      return Object.freeze({
+        includeN: true,
+        includeSize: true,
+        fields: AI_IMAGE_PACKY_EDIT_PROFILE.multipartFields,
+      });
+    case AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT:
+      return Object.freeze({ includeN: false, includeSize: false, fields: null });
     default:
       throw new Error('Unsupported AI image edit multipart dialect');
   }
@@ -58,7 +73,11 @@ export function aiImageEditMultipartFields(dialect: AiImageEditMultipartDialect)
 export function aiImageEditMultipartDialectForRequestProfile(
   requestProfile: string,
 ): AiImageEditMultipartDialect {
-  return requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
-    ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
-    : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT;
+  if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) {
+    return AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT;
+  }
+  if (requestProfile === AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE) {
+    return AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT;
+  }
+  return AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT;
 }

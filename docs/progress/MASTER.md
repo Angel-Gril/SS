@@ -45,12 +45,11 @@ Overall: 32/37 tasks complete (86%).
 ## Current Status
 
 Current checkpoint (2026-08-01): `QA-02` remains the first unresolved dependency at Phase 3 `4/5`
-and is blocked on positive acceptance from an edit-capable Provider. Both Packy edit requests are
-closed negative evidence and must not be retried. The next candidate is Xiaoyi: its first-party
-guide explicitly documents `gpt-image-2` synchronous multipart `/v1/images/edits` and asynchronous
-`/v1/images/edits/async`, while public status binds long-running image traffic to
-`https://image.xiaoyiapi.xyz/v1`. Public pricing lists USD `0.07` before account-group adjustment;
-it is planning input, not a maximum-cost authorization.
+and is blocked on positive acceptance from an edit-capable Provider. Both Packy edit requests and
+the Xiaoyi V1 request are closed negative evidence and must not be retried. Xiaoyi's first-party
+guide documents synchronous multipart `/v1/images/edits` separately from
+`/v1/images/edits/async`; its synchronous curl example contains only `model`, `prompt`, and `image`.
+Public pricing remains planning input, not a maximum-cost authorization.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -95,6 +94,21 @@ deployment, flag, ERP ingest or Ozon write occurred. This is negative evidence f
 route/account/profile; do not retry it or use it for `FULL_EDIT`/`INPAINT`. `QA-04`, `REL-03`,
 `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all rollout flags remain
 off.
+
+Offline development now adds `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` for the materially different
+documented synchronous request. It retains logical `1024x1024`, `n=1`, one source, exact money, and
+`IMAGE_TO_IMAGE`, but sends exactly `model`, `prompt`, and `image`. V1 still sends its historical
+five fields and keeps its prior fingerprints. V2 has an independent dialect and replay identity;
+approval, runner, claim, multipart guard, and finalizer derive that identity from the profile and
+reject cross-generation mixing. Focused tests pass `323` with two platform skips; Server/sandbox
+typechecks, the static security contract, and diff checks pass. The full Server suite passes `4661`
+with `199` platform skips; lint has zero errors and only the existing `20` Server plus one shared
+warning. Preflight and the standalone source-extension verifier report `446` passes, zero failures,
+and the two existing local-package permission warnings. Independent review found and closed two V2
+dispatch gaps: the dedicated adapter now rejects zero/multiple sources, while the multipart guard
+requires `IMAGE_TO_IMAGE` with no mask before accepting the minimal dialect. A fixed historical V1
+fingerprint prevents silent compatibility drift. No credential was read, no Provider GET/POST or
+charge occurred, and no V2 approval exists yet.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -655,12 +669,13 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
-4. Do not retry `qa02-xiaoyi-i2i-20260801-f189dfa-01` or send `FULL_EDIT`/`INPAINT` through the
-   same Xiaoyi route/account/model. Its exact documented synchronous multipart request received
-   definite HTTP 400 and settled with no charge. Another paid Xiaoyi test requires a
-   Provider-confirmed material route/account/contract change, a new versioned profile, policy,
-   Operation ID and explicit approval; otherwise select a different edit-capable Provider. Async
-   remains unverified and cannot inherit this approval or evidence.
+4. Do not retry `qa02-xiaoyi-i2i-20260801-f189dfa-01` or send `FULL_EDIT`/`INPAINT` through its V1
+   profile. Its five-field synchronous multipart request received definite HTTP 400 and settled with
+   no charge. The first-party three-field synchronous example is now isolated as
+   `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`; after its implementation is committed and pushed, prepare a
+   new private pricing policy, Operation ID, pre-call billing snapshot, non-approval draft, and
+   explicit one-request approval. Do not read the credential or send a POST before that approval.
+   Async remains unverified and cannot inherit either profile's approval or evidence.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled

@@ -596,3 +596,18 @@ Progress: 4/5 tasks.
   SHA-256 is `f5b3e8a0...9aaf5`. Credential and ACL checks passed. No image existed for quality
   review. This exact Xiaoyi route/account/profile is now negative evidence and cannot authorize
   `FULL_EDIT`, `INPAINT` or a renamed retry. Progress remains `4/5` and `32/37`.
+- A follow-up check of Xiaoyi's first-party image guide clarified that its synchronous curl example
+  sends only `model`, `prompt`, and `image`; `/v1/images/edits/async` is a separate contract. The
+  offline `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` profile therefore keeps logical `1024x1024`, `n=1`,
+  one source, exact money, and `IMAGE_TO_IMAGE`, but omits `n`/`size` from the wire and rejects every
+  extra, duplicate, missing, mask, or `image[]` field before dispatch. V1 remains byte-compatible
+  negative evidence and has a distinct replay fingerprint. Approval, runner, claim, guard, and
+  finalizer derive the V2 dialect independently; focused tests pass `323` with two platform skips,
+  and the full Server suite passes `4661` with `199` platform skips. Server/sandbox/workspace
+  typechecks, static contract, diff checks, and lint pass; lint retains only the existing `20` Server
+  plus one shared warning. Preflight and standalone source-extension verification report `446/0`
+  with the two existing local-package permission warnings. Independent security review found and
+  closed minimal-adapter multi-source and direct-guard operation/mask bypasses; a fixed historical V1
+  fingerprint now protects compatibility. This is offline preparation, not positive capability
+  evidence or approval. No credential was read, no Provider request or charge occurred, and counts
+  remain `4/5` and `32/37`.

@@ -13,9 +13,13 @@ import {
   AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
   aiImageEditMultipartFields,
 } from '../services/ai-image-packy-edit-profile.js';
-import { AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE } from '../services/ai-image-xiaoyi-provider.js';
+import {
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+} from '../services/ai-image-xiaoyi-provider.js';
 
 const directories: string[] = [];
 const SANDBOX_NOW = new Date('2030-01-01T00:10:00.000Z');
@@ -251,10 +255,29 @@ describe('single-submit AI image sandbox guard', () => {
         ...common,
       },
     });
+    const xiaoyiMinimalFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256: '3'.repeat(64),
+      model: 'gpt-image-2',
+      request: {
+        operation: 'IMAGE_TO_IMAGE',
+        requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+        multipartDialect: AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+        multipartFields: aiImageEditMultipartFields(
+          AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+        ),
+        ...common,
+      },
+    });
 
     expect(packyFingerprint).not.toBe(defaultFingerprint);
     expect(xiaoyiFingerprint).not.toBe(defaultFingerprint);
     expect(xiaoyiFingerprint).not.toBe(packyFingerprint);
+    expect(xiaoyiFingerprint).toBe(
+      '0100adfd1c95254e089f02493fb4b8ba3eb38c2f42df99e56858f019adf73529',
+    );
+    expect(xiaoyiMinimalFingerprint).not.toBe(defaultFingerprint);
+    expect(xiaoyiMinimalFingerprint).not.toBe(packyFingerprint);
+    expect(xiaoyiMinimalFingerprint).not.toBe(xiaoyiFingerprint);
   });
 
   it('binds the Xiaoyi request profile to its exact Provider identity and exact money', async () => {
@@ -284,6 +307,21 @@ describe('single-submit AI image sandbox guard', () => {
       intent: { schemaVersion: 3 },
     });
 
+    const minimal = {
+      ...exact,
+      operationId: 'sandbox-xiaoyi-minimal-claim-0002',
+      request: {
+        ...exact.request,
+        requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+      },
+    };
+    await expect(claimAiImageSandboxOperation(minimal)).resolves.toMatchObject({
+      intent: {
+        schemaVersion: 3,
+        request: { requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE },
+      },
+    });
+
     const downgraded = {
       ...exact,
       operationId: 'sandbox-xiaoyi-claim-downgrade-0002',
@@ -306,14 +344,16 @@ describe('single-submit AI image sandbox guard', () => {
         operationId: `sandbox-xiaoyi-generic-${operation.toLowerCase().replaceAll('_', '-')}-0004`,
         request: operationRequest,
       })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_REQUEST' });
-      await expect(claimAiImageSandboxOperation({
-        ...exact,
-        operationId: `sandbox-xiaoyi-profile-${operation.toLowerCase().replaceAll('_', '-')}-0005`,
-        request: {
-          ...operationRequest,
-          requestProfile: AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
-        },
-      })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_REQUEST' });
+      for (const requestProfile of [
+        AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+        AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+      ]) {
+        await expect(claimAiImageSandboxOperation({
+          ...exact,
+          operationId: `sandbox-xiaoyi-profile-${requestProfile.endsWith('V2') ? 'v2' : 'v1'}-${operation.toLowerCase().replaceAll('_', '-')}-0005`,
+          request: { ...operationRequest, requestProfile },
+        })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_REQUEST' });
+      }
     }
 
     const legacy = input(path, 'sandbox-xiaoyi-claim-legacy-0003');
@@ -323,6 +363,14 @@ describe('single-submit AI image sandbox guard', () => {
     await expect(claimAiImageSandboxOperation(legacy)).rejects.toMatchObject({
       code: 'INVALID_SANDBOX_BUDGET',
     });
+    await expect(claimAiImageSandboxOperation({
+      ...legacy,
+      operationId: 'sandbox-xiaoyi-minimal-claim-legacy-0006',
+      request: {
+        ...legacy.request,
+        requestProfile: AI_IMAGE_XIAOYI_MINIMAL_EDIT_REQUEST_PROFILE,
+      },
+    })).rejects.toMatchObject({ code: 'INVALID_SANDBOX_BUDGET' });
   });
 
   it('blocks the same Provider request after credential or adapter revision changes', async () => {
@@ -685,6 +733,71 @@ describe('single-submit AI image sandbox guard', () => {
     expect(missingFieldGuard.getCreateRequests()).toBe(0);
   });
 
+  it('accepts the Xiaoyi minimal V2 body and rejects every additional or missing field', async () => {
+    const prompt = 'Preserve the mug and replace its background.';
+    const source = Buffer.from('89504e470d0a1a0a', 'hex');
+    const contract: Parameters<typeof createAiImageSandboxEditFetchGuard>[0]['contract'] = {
+      endpoint: 'https://image.xiaoyiapi.xyz/v1/images/edits',
+      operation: 'IMAGE_TO_IMAGE' as const,
+      model: 'gpt-image-2',
+      promptSha256: createHash('sha256').update(prompt).digest('hex'),
+      size: '1024x1024',
+      n: 1 as const,
+      sourceSha256: [createHash('sha256').update(source).digest('hex')],
+      maskSha256: null,
+      multipartDialect: AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+    };
+    const form = () => {
+      const value = new FormData();
+      value.append('model', 'gpt-image-2');
+      value.append('prompt', prompt);
+      value.append('image', new Blob([source], { type: 'image/png' }), 'source.png');
+      return value;
+    };
+    let providerCalls = 0;
+    const guard = () => createAiImageSandboxEditFetchGuard({
+      contract,
+      validateUrl: async (url) => url,
+      beforeCreate: () => undefined,
+      fetch: async () => {
+        providerCalls += 1;
+        return new Response('{}', { status: 200 });
+      },
+    });
+
+    await guard().fetch(contract.endpoint, { method: 'POST', body: form() });
+    expect(providerCalls).toBe(1);
+
+    const invalidBodies: Array<[string, (value: FormData) => void]> = [
+      ['n', (value) => value.append('n', '1')],
+      ['size', (value) => value.append('size', '1024x1024')],
+      ['unknown', (value) => value.append('quality', 'high')],
+      ['duplicate model', (value) => value.append('model', 'gpt-image-2')],
+      ['duplicate prompt', (value) => value.append('prompt', prompt)],
+      ['missing model', (value) => value.delete('model')],
+      ['missing prompt', (value) => value.delete('prompt')],
+      ['missing image', (value) => value.delete('image')],
+      ['image array', (value) => {
+        value.delete('image');
+        value.append('image[]', new Blob([source], { type: 'image/png' }), 'source.png');
+      }],
+      ['mask', (value) => value.append(
+        'mask',
+        new Blob([source], { type: 'image/png' }),
+        'mask.png',
+      )],
+    ];
+    for (const [_label, mutate] of invalidBodies) {
+      const body = form();
+      mutate(body);
+      const guarded = guard();
+      await expect(guarded.fetch(contract.endpoint, { method: 'POST', body }))
+        .rejects.toThrow('unexpected multipart contract');
+      expect(guarded.getCreateRequests()).toBe(0);
+    }
+    expect(providerCalls).toBe(1);
+  });
+
   it('rejects Packy identity/dialect mixing and unknown dialects at guard construction', () => {
     const contract = {
       endpoint: 'https://www.packyapi.ai/v1/images/edits',
@@ -721,6 +834,26 @@ describe('single-submit AI image sandbox guard', () => {
       },
       ...options,
     })).toThrow('Unsupported AI image edit multipart dialect');
+    expect(() => createAiImageSandboxEditFetchGuard({
+      contract: {
+        ...contract,
+        endpoint: 'https://relay.example/v1/images/edits',
+        multipartDialect: AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+      },
+      ...options,
+    })).toThrow('requires its exact Provider identity');
+    for (const operation of ['FULL_EDIT', 'INPAINT'] as const) {
+      expect(() => createAiImageSandboxEditFetchGuard({
+        contract: {
+          ...contract,
+          endpoint: 'https://image.xiaoyiapi.xyz/v1/images/edits',
+          operation,
+          maskSha256: operation === 'INPAINT' ? '6'.repeat(64) : null,
+          multipartDialect: AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+        },
+        ...options,
+      })).toThrow('requires its exact Provider identity');
+    }
   });
 
   it('blocks an edit before the Provider POST when the approval recheck fails', async () => {

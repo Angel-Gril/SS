@@ -17,8 +17,9 @@ import {
   AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_PROFILE,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+  AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
   type AiImageEditMultipartDialect,
-  aiImageEditMultipartFields,
+  aiImageEditMultipartShape,
 } from './ai-image-packy-edit-profile.js';
 import {
   AI_IMAGE_XIAOYI_EDIT_PROFILE,
@@ -733,6 +734,7 @@ function createOpenAiImageEditProviderWithDialect(
   multipartDialect: AiImageEditMultipartDialect,
   requiredModel?: string,
   operationAllowed?: (operation: OpenAiImageEditRequest['operation']) => boolean,
+  requiredImageCount?: number,
 ): OpenAiImageEditProvider {
   const fetcher = options.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -740,6 +742,15 @@ function createOpenAiImageEditProviderWithDialect(
   return {
     name: 'openai-image-edits',
     async edit(request: OpenAiImageEditRequest): Promise<AiImageProviderResult> {
+      if (
+        requiredImageCount !== undefined
+        && (!Array.isArray(request.images) || request.images.length !== requiredImageCount)
+      ) {
+        throw withProviderSubmissionRejected(new AiImageJobError(
+          'UNSUPPORTED_OPERATION',
+          `The Provider-specific image edit profile requires exactly ${requiredImageCount} source image`,
+        ));
+      }
       let validated: Awaited<ReturnType<typeof validateOpenAiImageEditRequest>>;
       try {
         validated = await validateOpenAiImageEditRequest(request);
@@ -765,11 +776,11 @@ function createOpenAiImageEditProviderWithDialect(
         'prompt',
         request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
       );
-      form.append('n', '1');
-      form.append('size', validated.size);
-      const multipartFields = aiImageEditMultipartFields(multipartDialect);
-      if (multipartFields) {
-        Object.entries(multipartFields).forEach(([key, value]) => form.append(key, value));
+      const multipartShape = aiImageEditMultipartShape(multipartDialect);
+      if (multipartShape.includeN) form.append('n', '1');
+      if (multipartShape.includeSize) form.append('size', validated.size);
+      if (multipartShape.fields) {
+        Object.entries(multipartShape.fields).forEach(([key, value]) => form.append(key, value));
       }
       const imageFieldName = request.images.length === 1 ? 'image' : 'image[]';
       request.images.forEach((image, index) => {
@@ -905,6 +916,30 @@ export function createXiaoyiGptImage2EditProvider(
     AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
     AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
     isAiImageXiaoyiEditOperation,
+  );
+}
+
+export function createXiaoyiGptImage2MinimalEditProvider(
+  options: OpenAiImageEditProviderOptions,
+): OpenAiImageEditProvider {
+  if (normalizeOpenAiImagesApiBase(options.baseUrl) !== AI_IMAGE_XIAOYI_EDIT_PROFILE.apiBase) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_URL',
+      'The Xiaoyi GPT-Image-2 minimal edit profile requires its exact reviewed API base',
+    );
+  }
+  if (options.model !== AI_IMAGE_XIAOYI_EDIT_PROFILE.model) {
+    throw new AiImageJobError(
+      'UNSUPPORTED_OPERATION',
+      'The Xiaoyi GPT-Image-2 minimal edit profile requires its exact reviewed model',
+    );
+  }
+  return createOpenAiImageEditProviderWithDialect(
+    options,
+    AI_IMAGE_XIAOYI_MINIMAL_EDIT_MULTIPART_DIALECT,
+    AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+    isAiImageXiaoyiEditOperation,
+    1,
   );
 }
 

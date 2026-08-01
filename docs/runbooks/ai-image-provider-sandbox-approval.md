@@ -33,10 +33,12 @@ or another image-to-image approval for either same combination unless the Provid
 reviewed edit-contract/account correction; otherwise select a different edit-capable Provider and
 use a new policy, Operation ID and approval after that external change.
 
-The Xiaoyi operation likewise sent its exact documented synchronous multipart contract once and
-received definite HTTP 400, with no Provider request ID, no image and no charge. Do not retry that
-Operation ID or prepare `FULL_EDIT`/`INPAINT` for the same Xiaoyi route/account/model. A future test
-requires a Provider-confirmed material contract change and a new versioned profile.
+The Xiaoyi operation sent its V1 five-field OpenAI-compatible synchronous multipart contract once
+and received definite HTTP 400, with no Provider request ID, no image and no charge. Do not retry
+that Operation ID or prepare `FULL_EDIT`/`INPAINT` for the same Xiaoyi route/account/model/profile.
+The first-party synchronous curl example is a materially different three-field request, represented
+by `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`; it still requires a new policy, Operation ID, approval, and
+billing capture before any POST.
 
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for
@@ -52,8 +54,10 @@ that policy. `OPENAI_SQUARE_SINGLE_V1` and `OZON_PORTRAIT_SINGLE_V1` bind qualit
 `response_format=url` while omitting optional `input_fidelity`. A policy for another quality or
 multipart dialect requires a new profile and cannot authorize any existing transport contract.
 `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` binds the exact Xiaoyi image host, `gpt-image-2`, synchronous
-`IMAGE_TO_IMAGE`, one source, `1024x1024`, `n=1`, and the default multipart fields only. It requires
-exact money and cannot authorize `FULL_EDIT` or `INPAINT`.
+`IMAGE_TO_IMAGE`, one source, `1024x1024`, `n=1`, and the V1 five-field multipart body. The distinct
+`XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` keeps the same logical dimensions/count but sends only
+`model`, `prompt`, and `image`; it cannot inherit the consumed V1 approval or fingerprint. Both
+require exact money and neither can authorize `FULL_EDIT`, `INPAINT`, or async editing.
 
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.

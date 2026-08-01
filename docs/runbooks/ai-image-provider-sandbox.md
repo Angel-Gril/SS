@@ -191,10 +191,15 @@ rule. Both the preflight and finalizer Git revision checks include the shared Xi
 
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
-DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the exact
-documented synchronous multipart request once and received definite HTTP 400, with no image or
-charge. It must not be retried or reused for `FULL_EDIT`/`INPAINT`. A future paid Xiaoyi request
-requires a Provider-confirmed material route/account/contract change and a new profile and approval.
+DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the V1
+five-field OpenAI-compatible synchronous multipart request once and received definite HTTP 400,
+with no image or charge. It must not be retried or reused for `FULL_EDIT`/`INPAINT`.
+
+The first-party [image API guide](https://xiaoyiapi.xyz/docs/api/images/) separately shows a minimal
+synchronous curl contract containing only `model`, `prompt`, and `image`; asynchronous editing is a
+different `/v1/images/edits/async` route. `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` represents that
+materially different synchronous wire request. It does not authorize a POST: use a new pricing
+policy, Operation ID, source-bound approval, and billing capture before any paid attempt.
 
 The command uses public DoH, rejects private DNS results, pins the accepted addresses, disables
 redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET sequence:
@@ -233,6 +238,7 @@ Prompts and requested count (`1`) are fixed in the CLI. The required request pro
 | `OPENAI_SQUARE_SINGLE_V1`        | `1024x1024`    | Square generation or one-source edit compatibility           |
 | `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024`  | Packy `gpt-image-2` edit only, with its reviewed multipart dialect |
 | `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024` | Xiaoyi `gpt-image-2` synchronous `IMAGE_TO_IMAGE` only        |
+| `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2` | `1024x1024` | Xiaoyi documented minimal synchronous `IMAGE_TO_IMAGE` only |
 | `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
 
 No profile proves multi-reference compatibility. A Provider result whose decoded dimensions differ
@@ -248,13 +254,17 @@ model, edit operation, and fields are one immutable profile identity. The privat
 must name the matching quality state. A different quality or response dialect requires another
 versioned profile and separately reviewed policy and approval.
 
-The Xiaoyi-only profile freezes API Base `https://image.xiaoyiapi.xyz/v1`, exact
-`/v1/images/edits` endpoint, host `image.xiaoyiapi.xyz`, model `gpt-image-2`, one source,
-`1024x1024`, `n=1`, and the documented default multipart fields `model`, `prompt`, `n`, `size`, and
-`image`. It does not send Packy's `quality`, `output_format`, or `response_format` additions. V1
-permits only `IMAGE_TO_IMAGE`; `FULL_EDIT` and `INPAINT` require separate future profiles and
-positive evidence. The approval, runner, immutable fingerprint, dedicated adapter, and offline
-finalizer all enforce the same identity and exact-money generation independently.
+Both Xiaoyi-only profiles freeze API Base `https://image.xiaoyiapi.xyz/v1`, exact
+`/v1/images/edits` endpoint, host `image.xiaoyiapi.xyz`, model `gpt-image-2`, one source, logical
+`1024x1024`, `n=1`, and exact money. V1 sends `model`, `prompt`, `n`, `size`, and `image`; its closed
+HTTP 400 is negative evidence for only that five-field transport. Minimal V2 sends exactly
+`model`, `prompt`, and `image`: the logical size/count remain approval, fingerprint, output-validation,
+and audit constraints but are omitted from the multipart body. The guard rejects `n`, `size`,
+`quality`, `mask`, `image[]`, unknown fields, duplicates, or missing required fields before Provider
+dispatch. Both profiles permit only `IMAGE_TO_IMAGE`; `FULL_EDIT`, `INPAINT`, and async require
+separate future profiles and positive evidence. V1 and V2 produce different replay fingerprints,
+and the approval, runner, dedicated adapter, request guard, and offline finalizer independently
+derive and enforce the matching dialect.
 
 ### Complete Environment Contract
 
@@ -275,7 +285,7 @@ fails before DNS, intent creation, or Provider dispatch when any exact request f
 | `AI_IMAGE_SANDBOX_APPROVAL_SHA256`     | Lowercase SHA-256 of the final reviewed approval file                                   |
 | `AI_IMAGE_SANDBOX_MODEL`               | Exact third-party model identifier under test                                           |
 | `AI_IMAGE_SANDBOX_OPERATION`           | `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or `INPAINT`                            |
-| `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | One of the three versioned profiles above                                               |
+| `AI_IMAGE_SANDBOX_REQUEST_PROFILE`     | One of the four versioned profiles above                                                |
 | `AI_IMAGE_SANDBOX_OPERATION_ID`        | New one-use Operation ID                                                                |
 | `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION` | Non-secret revision of the injected key                                                 |
 | `AI_IMAGE_SANDBOX_ADAPTER_REVISION`    | Exact deployed Git commit SHA                                                           |
