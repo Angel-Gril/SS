@@ -645,3 +645,36 @@ Provider evidence. It does not complete `QA-02`, does not promote a capability, 
 the positive live-evidence dependency from later release gates. Overall progress therefore remains
 `32/37` until real operation-specific Provider, billing, privacy, and human quality evidence is
 retained.
+
+## PicPi public no-credential preflight
+
+On 2026-08-01 the operator supplied `https://api.picpi.top` as another OpenAI-compatible edit
+candidate. The Token pasted into chat was exposed and was not used. The resumed CLI process had
+neither `AI_IMAGE_SANDBOX_API_KEY` nor `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION`, so no authenticated
+request was possible or attempted.
+
+The candidate API Base canonicalizes to `https://api.picpi.top/v1`. The local proxy resolver
+returned fake-IP `198.18.0.29`, which the sandbox public-DNS guard correctly rejects. Independent
+Cloudflare and Google DNS-over-HTTPS answers agreed on public IPv4 addresses `104.21.13.92` and
+`172.67.167.234`. A future local run therefore requires excluding `api.picpi.top` from proxy
+fake-IP DNS or running the reviewed CLI in an environment that resolves those public records; the
+sandbox guard must not be weakened to accept `198.18.0.0/15`.
+
+Bounded anonymous requests with redirects disabled observed:
+
+| Request | Result |
+| --- | --- |
+| `GET /` | HTTP 200 HTML, title `picpi 皮皮工艺站 - AI API Gateway` |
+| `GET /v1` | HTTP 200 HTML |
+| `GET /v1/models` | HTTP 401 JSON requiring Bearer, `x-api-key`, or `x-goog-api-key` authentication |
+| `GET /api/status` | HTTP 404 plain text |
+| `GET /api/pricing` | HTTP 404 plain text |
+| `OPTIONS /v1/images/edits` | HTTP 403 with no body |
+
+These observations prove a reachable authenticated API gateway, not an edit route, model
+entitlement, price, or positive Provider capability. No POST was sent and no charge occurred.
+After revoking the exposed Token, the next step is one authenticated GET-only model-catalog and
+billing-meter preflight using a new private credential revision. Only if that evidence identifies
+an exact edit-capable model and usable billing references may a fresh operation-specific policy,
+quote, maximum, approval, and one-POST `IMAGE_TO_IMAGE` attempt be prepared. Existing Packy,
+Xiaoyi, CentOS, or Wanx approvals cannot be reused.

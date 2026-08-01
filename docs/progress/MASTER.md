@@ -735,7 +735,15 @@ or charge occurred, and no VPS access, deployment, flag, ERP ingest, or Ozon mut
    CNY quote and independently chosen single-request maximum. Do not reuse any Packy or Xiaoyi
    approval. After one accepted operation is fully reconciled and quality-reviewed, repeat with new
    approvals for `FULL_EDIT` and `INPAINT`.
-6. Continue fixture implementation and rehearsal as needed, but run the final `QA-04` acceptance
+6. Treat `https://api.picpi.top/v1` as an unverified candidate only. Revoke the PicPi Token exposed
+   in chat, create a new private credential revision, and exclude `api.picpi.top` from the local
+   proxy fake-IP resolver before running the official authenticated GET-only preflight. Public DNS
+   resolves to `104.21.13.92` and `172.67.167.234`; never relax the guard to accept the local
+   `198.18.0.29` answer. Anonymous `/v1/models` correctly returned 401, while public status/pricing
+   metadata was absent and `OPTIONS /v1/images/edits` returned 403. Do not infer edit support or send
+   a POST until the new model catalogue, billing references, exact quote, maximum, and separate
+   `IMAGE_TO_IMAGE` approval are retained.
+7. Continue fixture implementation and rehearsal as needed, but run the final `QA-04` acceptance
    only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
@@ -746,7 +754,7 @@ or charge occurred, and no VPS access, deployment, flag, ERP ingest, or Ozon mut
    After the one-time `REL-03` package/sign/distribution step, install its exact canonical four-file
    candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
    that path as `EXTENSION_RELEASE_ROOT`; deployment must never rebuild or increment it.
-7. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
+8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
 ## Cross-Conversation Protocol
