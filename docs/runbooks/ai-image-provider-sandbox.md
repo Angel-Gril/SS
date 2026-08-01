@@ -169,6 +169,30 @@ If a credential ever reaches argv, stdout, or stderr, revoke it at the Provider,
 local artifact, and regenerate every credential-revision-bound policy and approval. A historical
 read-only observation does not make an exposed credential reusable.
 
+### Xiaoyi dual-origin GET-only preflight
+
+Xiaoyi separates paid image traffic from account and billing evidence. Use only the reviewed exact
+identity: API Base `https://image.xiaoyiapi.xyz/v1`, expected host `image.xiaoyiapi.xyz`, billing
+origin `https://xiaoyiapi.xyz`, and model `gpt-image-2`. Set
+`AI_IMAGE_SANDBOX_BILLING_ORIGIN=https://xiaoyiapi.xyz`; the command rejects a missing, derived,
+slash-suffixed, queried, or otherwise different value before DNS or credential input.
+
+The helper resolves and validates the image and billing hosts independently, pins each host to its
+own public addresses, and sends the Bearer credential only to seven fixed GET requests: three
+before meters on the billing origin, `/v1/models` on the image host, then the same three billing
+meters again. A private or mixed answer for either host fails before stdin is read. The v2 private
+manifest binds both origins; stdout includes only their SHA-256 digests. It never sends an image
+POST, follows a redirect, accepts cookies, or writes the credential.
+
+Charged settlement uses the same closed identity. An intent bound to the Xiaoyi image API accepts
+Token-log evidence only from the exact Xiaoyi billing origin, and that billing origin cannot settle
+an intent for any other API Base. All other Providers retain the same-origin `/v1` API and Token-log
+rule. Both the preflight and finalizer Git revision checks include the shared Xiaoyi identity module.
+
+The Xiaoyi API credential pasted into chat is exposed and must not be used. Revoke it in the
+Xiaoyi console, create a replacement, store that replacement with current-user DPAPI outside the
+repository, and assign a new non-secret credential revision before running this preflight.
+
 The command uses public DoH, rejects private DNS results, pins the accepted addresses, disables
 redirects/cookies, and permits exactly four Provider routes in a fixed seven-GET sequence:
 before/after raw quota, displayed usage, and Token log, plus one model-catalogue check. Every body

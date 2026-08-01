@@ -20,6 +20,10 @@ import {
   parseAiImageSandboxDecimal,
   parseAiImageSandboxMoney,
 } from './ai-image-sandbox-money.js';
+import {
+  AI_IMAGE_XIAOYI_API_BASE,
+  AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+} from './ai-image-xiaoyi-provider.js';
 
 export const AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT =
   'I_ATTEST_EXACT_PROVIDER_BILLING_SETTLEMENT';
@@ -1477,7 +1481,14 @@ function parseProviderTokenLogSnapshot(input: {
   } catch {
     throw new AiImageSandboxBillingSettlementError(code, 'Sandbox Provider token-log URI is invalid');
   }
-  const expectedApiBase = `${logUri.origin}/v1`;
+  const intentApiBaseSha256 = intent.generation === 'EXACT'
+    ? intent.record.apiBaseSha256
+    : null;
+  const xiaoyiApiBaseSha256 = sha256(AI_IMAGE_XIAOYI_API_BASE);
+  const logOriginMatchesPaidApiBase = intentApiBaseSha256 === xiaoyiApiBaseSha256
+    ? logUri.origin === AI_IMAGE_XIAOYI_BILLING_ORIGIN
+    : logUri.origin !== AI_IMAGE_XIAOYI_BILLING_ORIGIN
+      && intentApiBaseSha256 === sha256(`${logUri.origin}/v1`);
   if (
     name !== 'providerTokenLog'
     || method !== 'GET'
@@ -1490,7 +1501,7 @@ function parseProviderTokenLogSnapshot(input: {
     || logUri.search
     || logUri.hash
     || intent.generation !== 'EXACT'
-    || intent.record.apiBaseSha256 !== sha256(expectedApiBase)
+    || !logOriginMatchesPaidApiBase
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_MISMATCH',

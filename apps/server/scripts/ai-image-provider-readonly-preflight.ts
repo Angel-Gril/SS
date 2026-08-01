@@ -10,6 +10,13 @@ import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
+import {
+  AI_IMAGE_XIAOYI_API_BASE,
+  AI_IMAGE_XIAOYI_BILLING_HOST,
+  AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+  AI_IMAGE_XIAOYI_EXPECTED_HOST,
+  AI_IMAGE_XIAOYI_MODEL,
+} from '../src/services/ai-image-xiaoyi-provider.js';
 
 const PACKY_API_BASE = 'https://www.packyapi.ai/v1';
 const PACKY_EXPECTED_HOST = 'www.packyapi.ai';
@@ -30,6 +37,8 @@ const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'OPENAI_API_KEY',
   'PACKY_API_KEY',
   'PACKY_TOKEN',
+  'XIAOYI_API_KEY',
+  'XIAOYI_TOKEN',
   'DASHSCOPE_API_KEY',
   'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
   'ALIYUN_ACCESS_KEY_SECRET',
@@ -39,6 +48,7 @@ const READONLY_PREFLIGHT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-providers.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'apps/server/src/services/ai-image-job-error.ts',
 ];
 
@@ -61,6 +71,37 @@ interface CapturedResponse {
   body: Buffer;
   parsed: unknown;
 }
+
+interface ReviewedProviderIdentity {
+  manifestSchemaVersion: 1 | 2;
+  apiBase: string;
+  apiHost: string;
+  billingOrigin: string;
+  billingHost: string;
+  model: string;
+  emptyTokenLogMessage: string;
+}
+
+const REVIEWED_PROVIDER_IDENTITIES: readonly ReviewedProviderIdentity[] = Object.freeze([
+  Object.freeze({
+    manifestSchemaVersion: 1,
+    apiBase: PACKY_API_BASE,
+    apiHost: PACKY_EXPECTED_HOST,
+    billingOrigin: new URL(PACKY_API_BASE).origin,
+    billingHost: PACKY_EXPECTED_HOST,
+    model: PACKY_MODEL,
+    emptyTokenLogMessage: PACKY_EMPTY_TOKEN_LOG_MESSAGE,
+  }),
+  Object.freeze({
+    manifestSchemaVersion: 2,
+    apiBase: AI_IMAGE_XIAOYI_API_BASE,
+    apiHost: AI_IMAGE_XIAOYI_EXPECTED_HOST,
+    billingOrigin: AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+    billingHost: AI_IMAGE_XIAOYI_BILLING_HOST,
+    model: AI_IMAGE_XIAOYI_MODEL,
+    emptyTokenLogMessage: PACKY_EMPTY_TOKEN_LOG_MESSAGE,
+  }),
+]);
 
 export interface AiImageProviderReadonlyPreflightOptions {
   environment?: NodeJS.ProcessEnv;
@@ -132,7 +173,11 @@ function containsCredential(value: unknown, credential: string): boolean {
   return false;
 }
 
-function assertExpectedResponseSchema(name: CapturedResponse['name'], value: unknown) {
+function assertExpectedResponseSchema(
+  name: CapturedResponse['name'],
+  value: unknown,
+  identity: ReviewedProviderIdentity,
+) {
   let valid = false;
   if (name === 'tokenUsage') {
     const usage = isRecord(value) ? value.data : undefined;
@@ -157,7 +202,7 @@ function assertExpectedResponseSchema(name: CapturedResponse['name'], value: unk
     const emptyTokenLog = isRecord(value)
       && Object.keys(value).length === 2
       && value.success === false
-      && value.message === PACKY_EMPTY_TOKEN_LOG_MESSAGE
+      && value.message === identity.emptyTokenLogMessage
       && value.data === undefined;
     valid = emptyTokenLog || (isRecord(value)
       && value.success === true
@@ -277,11 +322,10 @@ export async function resolveAiImageProviderPublicDns(hostname: string) {
       if (error instanceof AiImageProviderReadonlyPreflightError) throw error;
       throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS response is invalid');
     }
-    const answers = body.Answer;
+    const answers = body.Answer ?? [];
     if (
       body.Status !== 0
       || !Array.isArray(answers)
-      || answers.length === 0
       || answers.length > MAX_DOH_ANSWERS
     ) {
       throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS answer is invalid');
@@ -364,6 +408,20 @@ function exactModelAvailable(value: unknown, model: string) {
     && value.data.some((entry) => isRecord(entry) && entry.id === model);
 }
 
+function reviewedProviderIdentity(input: {
+  apiBase: string;
+  expectedHost: string;
+  billingOrigin: string;
+  model: string;
+}) {
+  return REVIEWED_PROVIDER_IDENTITIES.find((identity) => (
+    input.apiBase === identity.apiBase
+    && input.expectedHost === identity.apiHost
+    && input.model === identity.model
+    && input.billingOrigin === identity.billingOrigin
+  )) || null;
+}
+
 export async function runAiImageProviderReadonlyPreflight(
   options: AiImageProviderReadonlyPreflightOptions = {},
 ) {
@@ -382,10 +440,16 @@ export async function runAiImageProviderReadonlyPreflight(
   const apiBase = requiredEnvironment('AI_IMAGE_SANDBOX_BASE_URL', environment);
   const expectedHost = requiredEnvironment('AI_IMAGE_SANDBOX_EXPECTED_HOST', environment).toLowerCase();
   const model = requiredEnvironment('AI_IMAGE_SANDBOX_MODEL', environment);
-  if (apiBase !== PACKY_API_BASE || expectedHost !== PACKY_EXPECTED_HOST || model !== PACKY_MODEL) {
+  const configuredBillingOrigin = String(
+    environment.AI_IMAGE_SANDBOX_BILLING_ORIGIN || '',
+  ).trim();
+  const billingOrigin = configuredBillingOrigin
+    || (apiBase === PACKY_API_BASE ? new URL(PACKY_API_BASE).origin : '');
+  const identity = reviewedProviderIdentity({ apiBase, expectedHost, billingOrigin, model });
+  if (!identity || (identity.manifestSchemaVersion === 2 && !configuredBillingOrigin)) {
     throw preflightError(
       'SANDBOX_READONLY_PROVIDER_INVALID',
-      'Read-only preflight is restricted to the reviewed Packy Provider identity',
+      'Read-only preflight is restricted to a reviewed Provider and billing identity',
     );
   }
   const operationId = requiredEnvironment('AI_IMAGE_SANDBOX_OPERATION_ID', environment);
@@ -441,22 +505,31 @@ export async function runAiImageProviderReadonlyPreflight(
   }
 
   const dnsResolver = options.resolveDns || resolveAiImageProviderPublicDns;
-  const dnsRecords = await dnsResolver(expectedHost);
-  try {
-    await validateAiImageProviderUrl(apiBase, async () => dnsRecords);
-  } catch {
-    throw preflightError(
-      'SANDBOX_READONLY_DNS_FAILED',
-      'Read-only Provider DNS validation failed',
-    );
-  }
-  const pinnedRecords = dnsRecords.map((record) => {
-    const family = isIP(record.address);
-    if (family !== 4 && family !== 6) {
-      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'DNS returned an invalid address');
+  const pinnedRecordsByHost = new Map<string, Array<{
+    address: string;
+    family: 4 | 6;
+    ttl: number;
+  }>>();
+  for (const target of [
+    { host: identity.apiHost, url: identity.apiBase },
+    { host: identity.billingHost, url: identity.billingOrigin },
+  ]) {
+    if (pinnedRecordsByHost.has(target.host)) continue;
+    try {
+      const dnsRecords = await dnsResolver(target.host);
+      await validateAiImageProviderUrl(target.url, async () => dnsRecords);
+      pinnedRecordsByHost.set(target.host, dnsRecords.map((record) => {
+        const family = isIP(record.address);
+        if (family !== 4 && family !== 6) throw new Error('invalid DNS address');
+        return { address: record.address, family, ttl: 60 };
+      }));
+    } catch {
+      throw preflightError(
+        'SANDBOX_READONLY_DNS_FAILED',
+        'Read-only Provider DNS validation failed',
+      );
     }
-    return { address: record.address, family, ttl: 60 } as const;
-  });
+  }
 
   let closeTransport: () => Promise<void> = async () => {};
   let fetcher = options.fetch;
@@ -464,11 +537,12 @@ export async function runAiImageProviderReadonlyPreflight(
     const agent = new Agent().compose(interceptors.dns({
       affinity: 4,
       lookup(origin, _lookupOptions, callback) {
-        if (origin.hostname.toLowerCase() !== expectedHost) {
+        const records = pinnedRecordsByHost.get(origin.hostname.toLowerCase());
+        if (!records) {
           callback(Object.assign(new Error('Unexpected read-only Provider host'), { code: 'ENOTFOUND' }), []);
           return;
         }
-        callback(null, pinnedRecords);
+        callback(null, records);
       },
     }));
     closeTransport = () => agent.close();
@@ -487,7 +561,14 @@ export async function runAiImageProviderReadonlyPreflight(
         'Read-only credential input must be one bounded printable ASCII value',
       );
     }
-    if ([operationId, evidenceId, credentialRevision, configuredEvidenceRoot].some((value) => (
+    if ([
+      operationId,
+      evidenceId,
+      credentialRevision,
+      configuredEvidenceRoot,
+      identity.apiBase,
+      identity.billingOrigin,
+    ].some((value) => (
       value.includes(credential)
     ))) {
       throw preflightError(
@@ -496,9 +577,9 @@ export async function runAiImageProviderReadonlyPreflight(
       );
     }
     const endpoints = {
-      tokenUsage: `${new URL(apiBase).origin}/api/usage/token/`,
-      displayUsage: `${new URL(apiBase).origin}/v1/dashboard/billing/usage`,
-      tokenLog: `${new URL(apiBase).origin}/api/log/token`,
+      tokenUsage: `${identity.billingOrigin}/api/usage/token/`,
+      displayUsage: `${identity.billingOrigin}/v1/dashboard/billing/usage`,
+      tokenLog: `${identity.billingOrigin}/api/log/token`,
       models: `${apiBase}/models`,
     } as const;
     const captures: CapturedResponse[] = [];
@@ -571,7 +652,7 @@ export async function runAiImageProviderReadonlyPreflight(
         parsed,
       };
       captures.push(result);
-      assertExpectedResponseSchema(name, parsed);
+      assertExpectedResponseSchema(name, parsed, identity);
       return result;
     };
 
@@ -614,19 +695,35 @@ export async function runAiImageProviderReadonlyPreflight(
       );
     }
 
-    const manifest = {
-      schemaVersion: 1,
-      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
-      operationId,
-      credentialRevision,
-      adapterRevision,
-      apiBase,
-      model,
-      metersUnchanged: true,
-      providerPostSent: false,
-      chargeObserved: false,
-      records: captures.map(({ body: _body, parsed: _parsed, ...record }) => record),
-    };
+    const records = captures.map(({ body: _body, parsed: _parsed, ...record }) => record);
+    const manifest = identity.manifestSchemaVersion === 1
+      ? {
+          schemaVersion: 1,
+          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+          operationId,
+          credentialRevision,
+          adapterRevision,
+          apiBase,
+          model,
+          metersUnchanged: true,
+          providerPostSent: false,
+          chargeObserved: false,
+          records,
+        }
+      : {
+          schemaVersion: 2,
+          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+          operationId,
+          credentialRevision,
+          adapterRevision,
+          apiBase,
+          billingOrigin: identity.billingOrigin,
+          model,
+          metersUnchanged: true,
+          providerPostSent: false,
+          chargeObserved: false,
+          records,
+        };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     const manifestSha256 = sha256(manifestBytes);
     let outputDirectory = '';
@@ -648,19 +745,34 @@ export async function runAiImageProviderReadonlyPreflight(
         'Read-only evidence could not be written to a stable private directory',
       );
     }
-    const event = {
-      schemaVersion: 1,
-      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
-      operationId,
-      credentialRevision,
-      adapterRevision,
-      model,
-      apiBaseSha256: sha256(apiBase),
-      manifestSha256,
-      metersUnchanged: true,
-      providerPostSent: false,
-      chargeObserved: false,
-    };
+    const event = identity.manifestSchemaVersion === 1
+      ? {
+          schemaVersion: 1,
+          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+          operationId,
+          credentialRevision,
+          adapterRevision,
+          model,
+          apiBaseSha256: sha256(apiBase),
+          manifestSha256,
+          metersUnchanged: true,
+          providerPostSent: false,
+          chargeObserved: false,
+        }
+      : {
+          schemaVersion: 2,
+          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+          operationId,
+          credentialRevision,
+          adapterRevision,
+          model,
+          apiBaseSha256: sha256(apiBase),
+          billingOriginSha256: sha256(identity.billingOrigin),
+          manifestSha256,
+          metersUnchanged: true,
+          providerPostSent: false,
+          chargeObserved: false,
+        };
     process.stdout.write(`${JSON.stringify(event, null, 2)}\n`);
     return { manifest, manifestSha256, outputDirectory };
   } finally {

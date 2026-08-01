@@ -26,6 +26,10 @@ import {
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   aiImageEditMultipartFields,
 } from '../services/ai-image-packy-edit-profile.js';
+import {
+  AI_IMAGE_XIAOYI_API_BASE,
+  AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+} from '../services/ai-image-xiaoyi-provider.js';
 
 const directories: string[] = [];
 const operationId = 'sandbox-billing-finalize-0001';
@@ -45,6 +49,7 @@ const rawProviderRequestId = 'provider-request-private-0001';
 const providerBillingRequestId = 'relay-billing-request-private-0001';
 const providerApiBase = 'https://relay.example/v1';
 const providerApiBaseSha256 = sha256(providerApiBase);
+const xiaoyiApiBaseSha256 = sha256(AI_IMAGE_XIAOYI_API_BASE);
 const exactQuotedCost = { currency: 'CNY', amount: 119, scale: 4 } as const;
 const exactMaximumCost = { currency: 'CNY', amount: 1_000, scale: 4 } as const;
 
@@ -767,6 +772,84 @@ describe('AI image sandbox billing settlement', () => {
     expect(stored).not.toContain(rawProviderRequestId);
     expect(stored).not.toContain(providerBillingRequestId);
     expect(stored).not.toContain(value.providerTokenLogSnapshotPath);
+  });
+
+  it('binds the reviewed Xiaoyi image API to its separate billing origin', async () => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      intentOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
+      reportOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
+      providerLogRequestOverrides: {
+        uri: `${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/api/log/token`,
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).resolves.toMatchObject({
+      receipt: {
+        schemaVersion: 4,
+        apiBaseSha256: xiaoyiApiBaseSha256,
+        correlationMethod: 'PROVIDER_TOKEN_LOG_ENTRY',
+        billingGate: 'PASS',
+      },
+    });
+  });
+
+  it.each([
+    ['image API host', 'https://image.xiaoyiapi.xyz/api/log/token'],
+    ['unreviewed third-party host', 'https://billing.example/api/log/token'],
+  ])('rejects Xiaoyi billing evidence from the %s', async (_source, uri) => {
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      intentOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
+      reportOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
+      providerLogRequestOverrides: { uri },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('does not let the reviewed Xiaoyi billing origin settle another API Base', async () => {
+    const mainSiteApiBaseSha256 = sha256(`${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/v1`);
+    const value = await fixture({
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      intentOverrides: { apiBaseSha256: mainSiteApiBaseSha256 },
+      reportOverrides: { apiBaseSha256: mainSiteApiBaseSha256 },
+      providerLogRequestOverrides: {
+        uri: `${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/api/log/token`,
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
   });
 
   it.each([

@@ -543,3 +543,25 @@ Progress: 4/5 tasks.
   passed. This closes the documented Packy attempt as negative evidence; `FULL_EDIT` and `INPAINT`
   were not sent. `QA-02` remains `4/5`, overall progress remains `32/37`, and no Registry, rollout,
   deployment, flag, ERP ingest, or Ozon mutation occurred.
+- Xiaoyi is now the next candidate based on stronger first-party route evidence. Its documentation
+  explicitly binds `gpt-image-2` to synchronous multipart `/v1/images/edits` and also publishes an
+  `/async` edit path. Public status binds image calls to `https://image.xiaoyiapi.xyz/v1`; public
+  pricing revision `a42d372c...1f9d2` lists USD `0.07` before group adjustment. Public DNS returned
+  `23.144.68.169`, TLS hostname validation passed, and private public-preflight summary SHA-256 is
+  `720e0f12...28757`.
+- Xiaoyi uses separate image and billing hosts. The official GET-only helper now has a closed v2
+  Xiaoyi identity that separately validates and pins `image.xiaoyiapi.xyz` and `xiaoyiapi.xyz`,
+  permits only the exact model-catalogue GET plus six fixed meter GETs, binds the billing origin in
+  private evidence, and preserves Packy v1 evidence bytes. Focused tests pass `69` with four
+  platform skips; Server/sandbox typechecks, target lint and the static contract pass.
+- The billing finalizer shares that immutable identity and enforces it in both directions: the
+  Xiaoyi API digest accepts only the Xiaoyi billing origin, and that origin cannot settle another
+  API Base. Existing Provider logs remain same-origin. Combined preflight, settlement and finalizer
+  tests pass `137` with five platform skips, including mixed-origin rejection.
+- Full Server tests pass `4616` with 199 platform skips; workspace and sandbox typechecks, target
+  lint, the static contract and `git diff --check` pass. The complete repository preflight passes
+  `446` checks with zero failures and two existing extension-permission warnings.
+- The Xiaoyi Key pasted into chat is exposed and was not used. It must be revoked, replaced and
+  written to a new current-user DPAPI revision before authenticated preflight. No authenticated GET,
+  Provider POST, charge, Registry mutation, deployment, flag, ERP ingest or Ozon write occurred.
+  `QA-02` remains `4/5` and overall progress remains `32/37`.

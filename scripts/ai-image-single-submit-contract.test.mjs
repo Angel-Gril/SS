@@ -46,6 +46,10 @@ const readonlyPreflight = fs.readFileSync(
   'apps/server/scripts/ai-image-provider-readonly-preflight.ts',
   'utf8',
 );
+const xiaoyiProvider = fs.readFileSync(
+  'apps/server/src/services/ai-image-xiaoyi-provider.ts',
+  'utf8',
+);
 const billingSettlement = fs.readFileSync(
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'utf8',
@@ -263,6 +267,7 @@ assert.match(billingFinalizer, /requireGitCheckout:\s*true/u);
 assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_PATH/u);
 assert.match(billingFinalizer, /AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_SHA256/u);
 assert.match(billingFinalizer, /ai-image-sandbox-money\.ts/u);
+assert.match(billingFinalizer, /ai-image-xiaoyi-provider\.ts/u);
 assert.match(readonlyPreflight, /PACKY_API_BASE\s*=\s*'https:\/\/www\.packyapi\.ai\/v1'/u);
 assert.match(readonlyPreflight, /PACKY_MODEL\s*=\s*'gpt-image-2'/u);
 assert.match(readonlyPreflight, /readAiImageProviderCredential/u);
@@ -284,6 +289,18 @@ assert.match(readonlyPreflight, /containsCredential/u);
 assert.match(readonlyPreflight, /contentType:\s*'application\/json'/u);
 assert.match(readonlyPreflight, /PACKY_API_KEY/u);
 assert.match(readonlyPreflight, /PACKY_TOKEN/u);
+assert.match(readonlyPreflight, /ai-image-xiaoyi-provider\.js/u);
+assert.match(
+  readonlyPreflight,
+  /'apps\/server\/src\/services\/ai-image-xiaoyi-provider\.ts'/u,
+);
+assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_API_BASE\s*=\s*'https:\/\/image\.xiaoyiapi\.xyz\/v1'/u);
+assert.match(xiaoyiProvider, /AI_IMAGE_XIAOYI_BILLING_ORIGIN\s*=\s*'https:\/\/xiaoyiapi\.xyz'/u);
+assert.match(readonlyPreflight, /AI_IMAGE_SANDBOX_BILLING_ORIGIN/u);
+assert.match(readonlyPreflight, /XIAOYI_API_KEY/u);
+assert.match(readonlyPreflight, /XIAOYI_TOKEN/u);
+assert.match(readonlyPreflight, /pinnedRecordsByHost/u);
+assert.match(readonlyPreflight, /billingOriginSha256/u);
 assert.match(readonlyPreflight, /process\.argv\.slice\(2\)\.length/u);
 assert.match(readonlyPreflight, /interceptors\.dns/u);
 assert.match(readonlyPreflight, /writeAiImageSandboxPrivateEvidenceBundle/u);
@@ -301,6 +318,9 @@ assert.match(billingSettlement, /providerTokenLogSnapshotPath/u);
 assert.match(billingSettlement, /providerBillingEntryRequestIdHash/u);
 assert.match(billingSettlement, /providerTokenLogUserId/u);
 assert.match(billingSettlement, /providerTokenLogTokenId/u);
+assert.match(billingSettlement, /AI_IMAGE_XIAOYI_API_BASE/u);
+assert.match(billingSettlement, /AI_IMAGE_XIAOYI_BILLING_ORIGIN/u);
+assert.match(billingSettlement, /logUri\.origin\s*!==\s*AI_IMAGE_XIAOYI_BILLING_ORIGIN/u);
 assert.match(billingSettlement, /PROVIDER_BILLING_ENTRY_CLAIM_KEYS/u);
 assert.match(billingSettlement, /resolve\(billingDirectory, '\.provider-entries'\)/u);
 assert.match(billingSettlement, /actualCostCents\s*!==\s*null/u);

@@ -435,3 +435,41 @@ credential revision, model, endpoint, and contract. Do not retry this Operation 
 request, or send `FULL_EDIT`/`INPAINT` through the same route. The next positive QA-02 attempt needs
 a Provider-confirmed material route/account/contract change or a different edit-capable Provider,
 followed by a new operation-specific price policy, approval, settlement, and human quality review.
+
+## Xiaoyi edit candidate public preflight
+
+The replacement candidate publishes a first-party image API guide at
+`https://xiaoyiapi.xyz/docs/api/images/`. It explicitly documents synchronous multipart
+`POST /v1/images/edits` and asynchronous `POST /v1/images/edits/async` at API Base
+`https://image.xiaoyiapi.xyz`, with `gpt-image-2` in the synchronous edit example. Its public
+status independently identifies `https://image.xiaoyiapi.xyz/v1` as the long-running image API
+Base. Public resolvers returned one A record, `23.144.68.169`, and no AAAA record. TLS hostname
+validation exposed a certificate for `image.xiaoyiapi.xyz` valid through 2026-10-03.
+
+Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists `gpt-image-2` at USD `0.07`
+before account-group adjustment. The listed groups have different ratios, so this is planning
+input rather than authorization or proof of the selected Token's charge. The status record uses
+USD display and `500000` quota units per currency unit. As with earlier candidates, live Provider
+price synchronization is unnecessary: a paid request still needs a private exact quote, explicit
+single-request maximum, and post-call reconciliation.
+
+The image subdomain intentionally rejects account-meter routes. Token quota, displayed usage and
+Token log live on `https://xiaoyiapi.xyz`, while model and image routes live on
+`https://image.xiaoyiapi.xyz`. The read-only preflight now supports this exact reviewed dual-origin
+identity with independent DNS/SSRF validation and fixed seven-GET routing. It does not accept an
+arbitrary billing origin and preserves the historical Packy v1 manifest.
+
+The offline billing finalizer now applies the same bidirectional closed mapping: the Xiaoyi image
+API digest can use only the Xiaoyi main-site Token log, and the main-site Token log cannot settle a
+different API digest. Existing Providers remain same-origin. The shared identity module is bound by
+both executable revision allowlists. Focused preflight, settlement and finalizer tests pass `137`
+with five platform skips, including positive Xiaoyi dual-origin settlement and mixed-origin
+rejection cases. Full Server tests pass `4616` with 199 platform skips; workspace and sandbox
+typechecks, target lint, the static contract and `git diff --check` pass. The complete repository
+preflight passes `446` checks with zero failures and two existing extension-permission warnings.
+
+Private public-preflight summary SHA-256 is
+`720e0f1273ca4f52db3158ad8afb465ccb9249b9679c363947f1006412628757`. It records no credential
+read, Provider POST or charge; generic secret scanning and private ACL checks passed. The credential
+pasted into chat is exposed and was not used. It must be revoked and replaced in a separate local
+DPAPI record before authenticated GET-only preflight. Positive edit capability remains unproved.

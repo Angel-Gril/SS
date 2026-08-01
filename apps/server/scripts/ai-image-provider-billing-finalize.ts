@@ -12,8 +12,13 @@ const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_API_KEY',
   'AI_IMAGE_SANDBOX_CONFIRM',
   'AI_IMAGE_TRANSLATION_SANDBOX_API_KEY',
+  'AI_IMAGE_SANDBOX_TOKEN',
   'AUTHORIZATION',
   'OPENAI_API_KEY',
+  'PACKY_API_KEY',
+  'PACKY_TOKEN',
+  'XIAOYI_API_KEY',
+  'XIAOYI_TOKEN',
   'DASHSCOPE_API_KEY',
 ]);
 
@@ -24,6 +29,7 @@ const BILLING_FINALIZER_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
   'apps/server/src/services/ai-image-sandbox-guard.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
+  'apps/server/src/services/ai-image-xiaoyi-provider.ts',
 ];
 
 type FinalizeBilling = typeof finalizeAiImageSandboxBillingSettlement;

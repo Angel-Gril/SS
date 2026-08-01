@@ -52,6 +52,17 @@ async function fixture() {
   };
 }
 
+async function xiaoyiFixture() {
+  const value = await fixture();
+  value.environment.AI_IMAGE_SANDBOX_BASE_URL = 'https://image.xiaoyiapi.xyz/v1';
+  value.environment.AI_IMAGE_SANDBOX_EXPECTED_HOST = 'image.xiaoyiapi.xyz';
+  value.environment.AI_IMAGE_SANDBOX_BILLING_ORIGIN = 'https://xiaoyiapi.xyz';
+  value.environment.AI_IMAGE_SANDBOX_OPERATION_ID = 'qa02-xiaoyi-i2i-main-test-0001';
+  value.environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION = 'xiaoyi-key-test-0001';
+  value.environment.AI_IMAGE_SANDBOX_READONLY_EVIDENCE_ID = 'xiaoyi-readonly-test-0001';
+  return { ...value, evidenceId: 'xiaoyi-readonly-test-0001' };
+}
+
 function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
@@ -125,6 +136,52 @@ function successfulFetch(overrides: {
   });
 }
 
+function successfulXiaoyiFetch() {
+  const calls = { tokenUsage: 0, displayUsage: 0, tokenLog: 0 };
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    expect(init?.method).toBe('GET');
+    expect(init?.redirect).toBe('error');
+    expect(init?.credentials).toBe('omit');
+    expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${credential}`);
+    expect(init?.body).toBeUndefined();
+    const url = new URL(String(input));
+    expect(url.protocol).toBe('https:');
+    expect(url.port).toBe('');
+    expect(url.search).toBe('');
+    if (url.hostname === 'image.xiaoyiapi.xyz' && url.pathname === '/v1/models') {
+      return jsonResponse({
+        data: [{ id: 'gpt-image-2', object: 'model' }],
+        object: 'list',
+        success: true,
+      });
+    }
+    expect(url.hostname).toBe('xiaoyiapi.xyz');
+    if (url.pathname === '/api/usage/token/') {
+      calls.tokenUsage += 1;
+      return jsonResponse({
+        code: true,
+        data: {
+          object: 'credit_summary',
+          total_available: 10_000,
+          total_granted: 10_000,
+          total_used: 0,
+          unlimited_quota: false,
+        },
+        message: '',
+      });
+    }
+    if (url.pathname === '/v1/dashboard/billing/usage') {
+      calls.displayUsage += 1;
+      return jsonResponse({ object: 'billing_usage', total_usage: 0 });
+    }
+    if (url.pathname === '/api/log/token') {
+      calls.tokenLog += 1;
+      return jsonResponse({ message: 'record not found', success: false });
+    }
+    throw new Error(`Unexpected URL ${url.toString()}`);
+  });
+}
+
 describe('AI image Provider read-only preflight', () => {
   it('captures one private GET-only Packy evidence set without persisting or printing the credential', async () => {
     const value = await fixture();
@@ -171,6 +228,19 @@ describe('AI image Provider read-only preflight', () => {
       providerPostSent: false,
       chargeObserved: false,
     });
+    expect(Object.keys(result.manifest)).toEqual([
+      'schemaVersion',
+      'event',
+      'operationId',
+      'credentialRevision',
+      'adapterRevision',
+      'apiBase',
+      'model',
+      'metersUnchanged',
+      'providerPostSent',
+      'chargeObserved',
+      'records',
+    ]);
     expect(result.manifest.records).toHaveLength(7);
     expect(result.manifest.records.every((record) => record.contentType === 'application/json'))
       .toBe(true);
@@ -209,6 +279,118 @@ describe('AI image Provider read-only preflight', () => {
     expect(stdout.join('')).not.toContain('https://www.packyapi.ai');
   });
 
+  it('captures one reviewed dual-origin Xiaoyi GET-only evidence set', async () => {
+    const value = await xiaoyiFixture();
+    const fetch = successfulXiaoyiFetch();
+    const resolveDns = vi.fn(async (hostname: string) => (
+      hostname === 'image.xiaoyiapi.xyz'
+        ? [{ address: '93.184.216.34' }]
+        : [{ address: '1.1.1.1' }]
+    ));
+    const stdout: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const result = await runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns,
+      fetch,
+      readCredential: vi.fn(async () => credential),
+      now: vi.fn(() => new Date('2030-01-01T00:00:00.000Z')),
+    });
+
+    expect(resolveDns.mock.calls.map(([hostname]) => hostname)).toEqual([
+      'image.xiaoyiapi.xyz',
+      'xiaoyiapi.xyz',
+    ]);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://xiaoyiapi.xyz/api/usage/token/',
+      'https://xiaoyiapi.xyz/v1/dashboard/billing/usage',
+      'https://xiaoyiapi.xyz/api/log/token',
+      'https://image.xiaoyiapi.xyz/v1/models',
+      'https://xiaoyiapi.xyz/api/usage/token/',
+      'https://xiaoyiapi.xyz/v1/dashboard/billing/usage',
+      'https://xiaoyiapi.xyz/api/log/token',
+    ]);
+    expect(result.manifest).toMatchObject({
+      schemaVersion: 2,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+      apiBase: 'https://image.xiaoyiapi.xyz/v1',
+      billingOrigin: 'https://xiaoyiapi.xyz',
+      model: 'gpt-image-2',
+      metersUnchanged: true,
+      providerPostSent: false,
+      chargeObserved: false,
+    });
+    const event = JSON.parse(stdout.join('')) as Record<string, unknown>;
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+      manifestSha256: result.manifestSha256,
+    });
+    expect(event.apiBaseSha256).toBe(createHash('sha256')
+      .update('https://image.xiaoyiapi.xyz/v1').digest('hex'));
+    expect(event.billingOriginSha256).toBe(createHash('sha256')
+      .update('https://xiaoyiapi.xyz').digest('hex'));
+    expect(stdout.join('')).not.toContain('xiaoyiapi.xyz');
+    expect(stdout.join('')).not.toContain(credential);
+  });
+
+  it.each([
+    ['missing billing origin', 'AI_IMAGE_SANDBOX_BILLING_ORIGIN', undefined],
+    ['wrong billing origin', 'AI_IMAGE_SANDBOX_BILLING_ORIGIN', 'https://image.xiaoyiapi.xyz'],
+    ['billing origin slash', 'AI_IMAGE_SANDBOX_BILLING_ORIGIN', 'https://xiaoyiapi.xyz/'],
+    ['billing origin query', 'AI_IMAGE_SANDBOX_BILLING_ORIGIN', 'https://xiaoyiapi.xyz?x=1'],
+    ['wrong API host', 'AI_IMAGE_SANDBOX_EXPECTED_HOST', 'xiaoyiapi.xyz'],
+    ['API Base slash', 'AI_IMAGE_SANDBOX_BASE_URL', 'https://image.xiaoyiapi.xyz/v1/'],
+    ['wrong model', 'AI_IMAGE_SANDBOX_MODEL', 'gpt-image-2-vip'],
+  ])('rejects Xiaoyi identity mixing: %s', async (_label, name, replacement) => {
+    const value = await xiaoyiFixture();
+    if (replacement === undefined) delete value.environment[name];
+    else value.environment[name] = replacement;
+    const resolveDns = vi.fn();
+    const readCredential = vi.fn(async () => credential);
+
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns,
+      fetch: successfulXiaoyiFetch(),
+      readCredential,
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_PROVIDER_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(readCredential).not.toHaveBeenCalled();
+  });
+
+  it.each(['image.xiaoyiapi.xyz', 'xiaoyiapi.xyz'])(
+    'rejects a private Xiaoyi %s resolution before reading the credential',
+    async (privateHost) => {
+      const value = await xiaoyiFixture();
+      const readCredential = vi.fn(async () => credential);
+      const fetch = successfulXiaoyiFetch();
+
+      await expect(runAiImageProviderReadonlyPreflight({
+        environment: value.environment,
+        repositoryRoot: value.root,
+        resolveRevision: vi.fn(async () => adapterRevision),
+        resolveDns: vi.fn(async (hostname: string) => (
+          hostname === privateHost
+            ? [{ address: '127.0.0.1' }]
+            : [{ address: '93.184.216.34' }]
+        )),
+        fetch,
+        readCredential,
+      })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+      expect(readCredential).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it('rejects UTF-16 or control-bearing stdin before constructing an Authorization header', async () => {
     const utf16 = Buffer.from(credential, 'utf16le');
     await expect(readAiImageProviderCredential(Readable.from([utf16])))
@@ -239,6 +421,8 @@ describe('AI image Provider read-only preflight', () => {
     'AI_IMAGE_SANDBOX_TOKEN',
     'PACKY_API_KEY',
     'PACKY_TOKEN',
+    'XIAOYI_API_KEY',
+    'XIAOYI_TOKEN',
   ])('rejects Provider secret environment variable %s before stdin or network', async (name) => {
     const value = await fixture();
     value.environment[name] = credential;
@@ -391,6 +575,24 @@ describe('AI image Provider read-only preflight', () => {
       fetch: successfulFetch(),
       readCredential,
     })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_PROVIDER_INVALID' });
+    expect(readCredential).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed unreviewed API Base before DNS or credential input', async () => {
+    const value = await fixture();
+    value.environment.AI_IMAGE_SANDBOX_BASE_URL = 'not-a-url';
+    const resolveDns = vi.fn();
+    const readCredential = vi.fn(async () => credential);
+
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns,
+      fetch: successfulFetch(),
+      readCredential,
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_PROVIDER_INVALID' });
+    expect(resolveDns).not.toHaveBeenCalled();
     expect(readCredential).not.toHaveBeenCalled();
   });
 
@@ -627,6 +829,29 @@ describe('AI image Provider read-only preflight', () => {
       { address: '2606:2800:220:1:248:1893:25c8:1946' },
     ]);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts a public DNS name with A records and no AAAA records', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const type = url.searchParams.get('type');
+      return new Response(JSON.stringify({
+        Status: 0,
+        Answer: type === 'A' ? [{
+          name: 'image.xiaoyiapi.xyz.',
+          type: 1,
+          TTL: 60,
+          data: '23.144.68.169',
+        }] : undefined,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+
+    await expect(resolveAiImageProviderPublicDns('image.xiaoyiapi.xyz')).resolves.toEqual([
+      { address: '23.144.68.169' },
+    ]);
   });
 
   it('rejects an oversized DoH response', async () => {

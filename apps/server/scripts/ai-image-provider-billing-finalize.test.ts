@@ -10,8 +10,13 @@ describe('AI image Provider billing finalizer command', () => {
     ['AI_IMAGE_SANDBOX_API_KEY', 'provider-secret'],
     ['AI_IMAGE_SANDBOX_CONFIRM', 'I_ACCEPT_ONE_PAID_IMAGE_REQUEST'],
     ['AI_IMAGE_TRANSLATION_SANDBOX_API_KEY', 'provider-secret'],
+    ['AI_IMAGE_SANDBOX_TOKEN', 'provider-secret'],
     ['AUTHORIZATION', 'Bearer provider-secret'],
     ['OPENAI_API_KEY', 'provider-secret'],
+    ['PACKY_API_KEY', 'provider-secret'],
+    ['PACKY_TOKEN', 'provider-secret'],
+    ['XIAOYI_API_KEY', 'provider-secret'],
+    ['XIAOYI_TOKEN', 'provider-secret'],
   ])('rejects unsafe %s before code or evidence inspection', async (name, value) => {
     const resolveRevision = vi.fn();
     const finalizeBilling = vi.fn();
@@ -68,6 +73,7 @@ describe('AI image Provider billing finalizer command', () => {
         'apps/server/src/services/ai-image-sandbox-code-revision.ts',
         'apps/server/src/services/ai-image-sandbox-guard.ts',
         'apps/server/src/services/ai-image-packy-edit-profile.ts',
+        'apps/server/src/services/ai-image-xiaoyi-provider.ts',
       ],
       undefined,
     );
