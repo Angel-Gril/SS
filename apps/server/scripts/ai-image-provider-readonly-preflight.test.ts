@@ -1010,6 +1010,8 @@ describe('AI image Provider read-only preflight', () => {
       const type = url.searchParams.get('type');
       return new Response(JSON.stringify({
         Status: 0,
+        TC: false,
+        Question: [{ name: 'www.packyapi.ai.', type: type === 'A' ? 1 : 28 }],
         Answer: [{
           name: 'www.packyapi.ai.',
           type: type === 'A' ? 1 : 28,
@@ -1036,6 +1038,8 @@ describe('AI image Provider read-only preflight', () => {
       const type = url.searchParams.get('type');
       return new Response(JSON.stringify({
         Status: 0,
+        TC: false,
+        Question: [{ name: 'image.xiaoyiapi.xyz.', type: type === 'A' ? 1 : 28 }],
         Answer: type === 'A' ? [{
           name: 'image.xiaoyiapi.xyz.',
           type: 1,
@@ -1051,6 +1055,250 @@ describe('AI image Provider read-only preflight', () => {
     await expect(resolveAiImageProviderPublicDns('image.xiaoyiapi.xyz')).resolves.toEqual([
       { address: '23.144.68.169' },
     ]);
+  });
+
+  it('accepts bounded public A and AAAA records reached through one owned CNAME chain', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const type = url.searchParams.get('type');
+      const target = 'gtm-cn-rttest.dashscope.aliyuncs.com.';
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: false,
+        Question: [{ name: 'dashscope.aliyuncs.com.', type: type === 'A' ? 1 : 28 }],
+        Answer: [
+          {
+            name: 'dashscope.aliyuncs.com.',
+            type: 5,
+            TTL: 32,
+            data: target,
+          },
+          {
+            name: target,
+            type: type === 'A' ? 1 : 28,
+            TTL: 30,
+            data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com')).resolves.toEqual([
+      { address: '39.96.213.166' },
+      { address: '2408:400a:3e:ef02:12f:bd95:e827:51d' },
+    ]);
+  });
+
+  it.each([
+    ['unrelated injected address', [
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'target.example.' },
+      { name: 'target.example.', type: 1, TTL: 30, data: '39.96.213.166' },
+      { name: 'injected.example.', type: 1, TTL: 30, data: '93.184.216.34' },
+    ]],
+    ['CNAME loop', [
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'target.example.' },
+      { name: 'target.example.', type: 5, TTL: 30, data: 'dashscope.aliyuncs.com.' },
+    ]],
+    ['missing terminal address', [
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'target.example.' },
+    ]],
+    ['unused CNAME branch', [
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'target.example.' },
+      { name: 'target.example.', type: 1, TTL: 30, data: '39.96.213.166' },
+      { name: 'unused.example.', type: 5, TTL: 30, data: 'other.example.' },
+    ]],
+    ['ambiguous CNAME owner', [
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'target.example.' },
+      { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: 'other.example.' },
+      { name: 'target.example.', type: 1, TTL: 30, data: '39.96.213.166' },
+    ]],
+  ])('rejects an unsafe CNAME answer: %s', async (_label, answers) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      Status: 0,
+      TC: false,
+      Question: [{ name: 'dashscope.aliyuncs.com.', type: 1 }],
+      Answer: answers,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/dns-json' },
+    })));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+  });
+
+  it('rejects A and AAAA answers that terminate at different CNAME targets', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const type = new URL(String(input)).searchParams.get('type');
+      const target = type === 'A' ? 'ipv4-target.example.' : 'ipv6-target.example.';
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: false,
+        Question: [{ name: 'dashscope.aliyuncs.com.', type: type === 'A' ? 1 : 28 }],
+        Answer: [
+          { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: target },
+          {
+            name: target,
+            type: type === 'A' ? 1 : 28,
+            TTL: 30,
+            data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+  });
+
+  it.each([
+    ['a mismatched Question', { TC: false, questionName: 'other.example.', questionClass: 1 }],
+    ['a truncated response', { TC: true, questionName: 'dashscope.aliyuncs.com.', questionClass: 1 }],
+    ['a non-IN Question class', {
+      TC: false, questionName: 'dashscope.aliyuncs.com.', questionClass: 3,
+    }],
+    ['a non-IN Answer class', {
+      TC: false, questionName: 'dashscope.aliyuncs.com.', questionClass: 1, answerClass: 3,
+    }],
+  ])('rejects a DoH response with %s', async (_label, metadata) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const type = new URL(String(input)).searchParams.get('type');
+      const expectedType = type === 'A' ? 1 : 28;
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: metadata.TC,
+        Question: [{
+          name: metadata.questionName,
+          type: expectedType,
+          class: metadata.questionClass,
+        }],
+        Answer: [{
+          name: 'dashscope.aliyuncs.com.',
+          type: expectedType,
+          class: ('answerClass' in metadata ? metadata.answerClass : undefined) ?? 1,
+          TTL: 30,
+          data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+        }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+  });
+
+  it('rejects A and AAAA answers with different CNAME paths to the same terminal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const type = new URL(String(input)).searchParams.get('type');
+      const expectedType = type === 'A' ? 1 : 28;
+      const intermediate = type === 'A' ? 'ipv4-path.example.' : 'ipv6-path.example.';
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: false,
+        Question: [{ name: 'dashscope.aliyuncs.com.', type: expectedType }],
+        Answer: [
+          { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: intermediate },
+          { name: intermediate, type: 5, TTL: 30, data: 'terminal.example.' },
+          {
+            name: 'terminal.example.',
+            type: expectedType,
+            TTL: 30,
+            data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+  });
+
+  it('rejects an IP-literal CNAME target', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const type = new URL(String(input)).searchParams.get('type');
+      const expectedType = type === 'A' ? 1 : 28;
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: false,
+        Question: [{ name: 'dashscope.aliyuncs.com.', type: expectedType }],
+        Answer: [
+          { name: 'dashscope.aliyuncs.com.', type: 5, TTL: 30, data: '127.0.0.1.' },
+          {
+            name: '127.0.0.1.',
+            type: expectedType,
+            TTL: 30,
+            data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
+  });
+
+  it('accepts a CNAME chain exactly at the fixed hop limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const type = new URL(String(input)).searchParams.get('type');
+      const expectedType = type === 'A' ? 1 : 28;
+      const answers: Array<Record<string, unknown>> = [];
+      let owner = 'dashscope.aliyuncs.com.';
+      for (let index = 0; index < 8; index += 1) {
+        const target = `hop-${index}.example.`;
+        answers.push({ name: owner, type: 5, TTL: 30, data: target });
+        owner = target;
+      }
+      answers.push({
+        name: owner,
+        type: expectedType,
+        TTL: 30,
+        data: type === 'A' ? '39.96.213.166' : '2408:400a:3e:ef02:12f:bd95:e827:51d',
+      });
+      return new Response(JSON.stringify({
+        Status: 0,
+        TC: false,
+        Question: [{ name: 'dashscope.aliyuncs.com.', type: expectedType }],
+        Answer: answers,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/dns-json' },
+      });
+    }));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com')).resolves.toEqual([
+      { address: '39.96.213.166' },
+      { address: '2408:400a:3e:ef02:12f:bd95:e827:51d' },
+    ]);
+  });
+
+  it('rejects a CNAME chain longer than the fixed hop limit', async () => {
+    const answers: Array<Record<string, unknown>> = [];
+    let owner = 'dashscope.aliyuncs.com.';
+    for (let index = 0; index < 9; index += 1) {
+      const target = `hop-${index}.example.`;
+      answers.push({ name: owner, type: 5, TTL: 30, data: target });
+      owner = target;
+    }
+    answers.push({ name: owner, type: 1, TTL: 30, data: '39.96.213.166' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      Status: 0,
+      TC: false,
+      Question: [{ name: 'dashscope.aliyuncs.com.', type: 1 }],
+      Answer: answers,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/dns-json' },
+    })));
+    await expect(resolveAiImageProviderPublicDns('dashscope.aliyuncs.com'))
+      .rejects.toMatchObject({ code: 'SANDBOX_READONLY_DNS_FAILED' });
   });
 
   it('rejects an oversized DoH response', async () => {
@@ -1112,13 +1360,22 @@ describe('AI image Provider read-only preflight', () => {
   });
 
   it.each([
-    ['failed status', { Status: 1, Answer: [] }],
+    ['failed status', {
+      Status: 1,
+      TC: false,
+      Question: [{ name: 'www.packyapi.ai.', type: 1 }],
+      Answer: [],
+    }],
     ['wrong owner', {
       Status: 0,
+      TC: false,
+      Question: [{ name: 'www.packyapi.ai.', type: 1 }],
       Answer: [{ name: 'other.example.', type: 1, TTL: 60, data: '93.184.216.34' }],
     }],
     ['invalid TTL', {
       Status: 0,
+      TC: false,
+      Question: [{ name: 'www.packyapi.ai.', type: 1 }],
       Answer: [{ name: 'www.packyapi.ai.', type: 1, TTL: 0, data: '93.184.216.34' }],
     }],
   ])('rejects a DoH response with %s', async (_label, body) => {

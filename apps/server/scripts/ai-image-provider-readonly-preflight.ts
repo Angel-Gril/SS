@@ -30,6 +30,7 @@ const MAX_CREDENTIAL_BYTES = 1_024;
 const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_DOH_RESPONSE_BYTES = 64 * 1_024;
 const MAX_DOH_ANSWERS = 64;
+const MAX_DOH_CNAME_HOPS = 8;
 const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u;
 const SECRET_SHAPE_PATTERN = /(?:^|[^A-Za-z0-9])(?:sk|pk)-[A-Za-z0-9_-]{12,}/iu;
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
@@ -306,7 +307,28 @@ export async function readAiImageProviderCredential(
 }
 
 export async function resolveAiImageProviderPublicDns(hostname: string) {
+  const canonicalDnsName = (value: unknown) => {
+    const name = typeof value === 'string'
+      ? value.toLowerCase().replace(/\.$/u, '')
+      : '';
+    if (
+      !name
+      || name.length > 253
+      || isIP(name) !== 0
+      || !name.split('.').every((label) => (
+        label.length >= 1
+        && label.length <= 63
+        && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label)
+      ))
+    ) {
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS name is invalid');
+    }
+    return name;
+  };
+  const queryName = canonicalDnsName(hostname);
   const records: Array<{ address: string; family: 4 | 6; ttl: number }> = [];
+  const terminalNames = new Set<string>();
+  const cnameChains = new Set<string>();
   for (const type of ['A', 'AAAA']) {
     const url = new URL('https://cloudflare-dns.com/dns-query');
     url.searchParams.set('name', hostname);
@@ -342,34 +364,98 @@ export async function resolveAiImageProviderPublicDns(hostname: string) {
       if (error instanceof AiImageProviderReadonlyPreflightError) throw error;
       throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS response is invalid');
     }
+    const expectedType = type === 'A' ? 1 : 28;
+    const questions = body.Question;
     const answers = body.Answer ?? [];
     if (
       body.Status !== 0
+      || body.TC !== false
+      || !Array.isArray(questions)
+      || questions.length !== 1
       || !Array.isArray(answers)
       || answers.length > MAX_DOH_ANSWERS
     ) {
       throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS answer is invalid');
     }
+    const question = questions[0];
+    if (
+      !isRecord(question)
+      || canonicalDnsName(question.name) !== queryName
+      || question.type !== expectedType
+      || (question.class !== undefined && question.class !== 1)
+    ) {
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS question is invalid');
+    }
+    const cnameTargets = new Map<string, string>();
+    const addressRecords: Array<{
+      owner: string;
+      address: string;
+      family: 4 | 6;
+      ttl: number;
+    }> = [];
     for (const answer of answers) {
-      if (!isRecord(answer) || (answer.type !== 1 && answer.type !== 28)) continue;
-      const answerName = typeof answer.name === 'string'
-        ? answer.name.toLowerCase().replace(/\.$/u, '')
-        : '';
+      if (!isRecord(answer)) {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS record is invalid');
+      }
+      if (answer.class !== undefined && answer.class !== 1) {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS record class is invalid');
+      }
+      if (typeof answer.type !== 'number' || ![1, 5, 28].includes(answer.type)) continue;
       if (
-        answerName !== hostname.toLowerCase()
-        || typeof answer.data !== 'string'
-        || !Number.isSafeInteger(answer.TTL)
+        !Number.isSafeInteger(answer.TTL)
         || Number(answer.TTL) <= 0
         || Number(answer.TTL) > 86_400
       ) {
         throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS record is invalid');
       }
-      records.push({
-        address: answer.data,
-        family: answer.type === 1 ? 4 : 6,
-        ttl: Number(answer.TTL),
-      });
+      const owner = canonicalDnsName(answer.name);
+      if (answer.type === 5) {
+        const target = canonicalDnsName(answer.data);
+        const existingTarget = cnameTargets.get(owner);
+        if (existingTarget && existingTarget !== target) {
+          throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS CNAME is ambiguous');
+        }
+        cnameTargets.set(owner, target);
+        continue;
+      }
+      if (answer.type !== expectedType || typeof answer.data !== 'string') {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS address type is invalid');
+      }
+      const family = isIP(answer.data);
+      if (family !== (expectedType === 1 ? 4 : 6)) {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS address is invalid');
+      }
+      addressRecords.push({ owner, address: answer.data, family, ttl: Number(answer.TTL) });
     }
+    if (!answers.length) continue;
+    let terminalName = queryName;
+    const cnameChain = [queryName];
+    const visited = new Set<string>();
+    let hops = 0;
+    while (cnameTargets.has(terminalName)) {
+      if (visited.has(terminalName) || hops >= MAX_DOH_CNAME_HOPS) {
+        throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS CNAME chain is unsafe');
+      }
+      visited.add(terminalName);
+      terminalName = cnameTargets.get(terminalName)!;
+      cnameChain.push(terminalName);
+      hops += 1;
+    }
+    if (
+      cnameTargets.size !== hops
+      || addressRecords.length === 0
+      || addressRecords.some((record) => record.owner !== terminalName)
+    ) {
+      throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS answer is not chain-bound');
+    }
+    terminalNames.add(terminalName);
+    cnameChains.add(cnameChain.join('>'));
+    for (const record of addressRecords) {
+      records.push({ address: record.address, family: record.family, ttl: record.ttl });
+    }
+  }
+  if (terminalNames.size > 1 || cnameChains.size > 1) {
+    throw preflightError('SANDBOX_READONLY_DNS_FAILED', 'Public DNS CNAME targets are inconsistent');
   }
   const unique = [...new Map(records.map((record) => [
     `${record.family}:${record.address}`,

@@ -206,8 +206,12 @@ The command sends exactly one authenticated GET with no request body:
 GET /api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1
 ```
 
-The credential is accepted only through bounded UTF-8 stdin, DNS remains pinned, redirects and
-ambient credentials remain disabled, and no task, image-synthesis, or guessed billing endpoint is
+The credential is accepted only through bounded UTF-8 stdin. Before reading it, each DoH response must
+bind its Question to `dashscope.aliyuncs.com` and the queried A/AAAA type, set `TC=false`, and use IN
+class when present. A/AAAA responses must provide a complete, bounded CNAME chain to the terminal
+address owner; compare the complete chains across address families. Reject loops, unrelated records,
+missing terminals, mismatched targets, and chains longer than eight hops. DNS remains pinned, redirects
+and ambient credentials remain disabled, and no task, image-synthesis, or guessed billing endpoint is
 called. The private v3 manifest records `authenticationVerified=true`,
 `exactModelListed=true`, `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
 `providerPostSent=false`, `chargeObserved=false`, and `editCapabilityVerified=false`.
@@ -217,6 +221,22 @@ It does not prove edit-route permission, successful editing, price, account bala
 Retain separate private Alibaba console or reviewed Billing OpenAPI evidence immediately before and
 after every paid operation. Only a settled, quality-reviewed edit result can satisfy the matching
 `QA-02` operation.
+
+#### First real preflight checkpoint (2026-08-01)
+
+The first real catalogue-preflight attempt failed with `SANDBOX_READONLY_DNS_FAILED` before stdin or
+private credential decryption because the original resolver rejected DashScope's legitimate DoH CNAME
+owner chain. Its evidence ID remains available for a corrected run. No authenticated GET, Provider
+POST, or charge occurred. A separate no-credential resolver observation returned public DashScope A
+and AAAA answers, but it does not establish authentication or model visibility and must not be
+promoted to a successful preflight.
+
+After the DNS hardening, focused tests pass `95` with four platform skips and the full Server suite
+passes `4735` with `199` skips. Target lint, sandbox TypeScript compilation, the static contract, and
+diff checks pass. Full repository preflight passes `446/0` with the two existing local-extension
+permission warnings. Run the same catalog-only preflight again from the new clean pushed revision
+through its pinned DoH resolver; do not bypass the DNS gate or prepare a paid approval from this
+failed attempt.
 
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user

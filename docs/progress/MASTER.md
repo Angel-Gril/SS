@@ -58,17 +58,25 @@ Mocked evidence is not Provider acceptance. The Alibaba credential pasted into c
 was not used; it must be revoked before any authenticated Wanx preflight or paid operation. Public
 pricing remains planning input, not a maximum-cost authorization or settled billing proof.
 
-The read-only helper now has a separate DashScope Wanx catalog-only v3 contract for the reviewed
-legacy API Base and exact `wanx2.1-imageedit` model. It sends one bounded authenticated model GET,
-rejects workspace hosts and billing-origin mixing before DNS or credential input, and explicitly
-records `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED` plus
-`editCapabilityVerified=false`; it never contacts task, image-synthesis, or guessed billing paths.
-Historical Packy v1 and Xiaoyi v2 manifest shapes remain compatible. Focused preflight tests pass
-`80` with four platform skips; Server and sandbox typechecks, target lint, the static contract, and
-diff checks pass. The full Server suite passes `4720` with `199` skips. No private credential was
-present or read, no authenticated GET or Provider POST was sent, and no charge, deployment, flag,
-ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37` until live edit evidence is
-accepted.
+The first real DashScope Wanx catalog preflight stopped before credential input with
+`SANDBOX_READONLY_DNS_FAILED`: the original resolver required each A/AAAA owner to equal the
+requested hostname and rejected DashScope's legitimate DoH CNAME chain. The proposed evidence ID
+remains unconsumed. No credential was decrypted, no authenticated Provider GET or POST was sent, and
+no charge occurred. A separate no-credential resolver observation then returned public DashScope A
+and AAAA answers; that proves only that public resolution is available, not authentication, model
+visibility, edit capability, or billing.
+
+The catalog-only v3 helper now accepts only bounded A/AAAA responses whose complete CNAME chain is
+bound to the requested host and terminal address owner. It binds the DoH Question, rejects truncated
+or non-IN responses, compares the complete A/AAAA chains, and rejects loops, unrelated records,
+missing terminals, terminal mismatches, and chains longer than eight hops before credential input.
+The exact legacy API Base/model, workspace-host and billing-origin exclusions, one-GET limit, and
+explicit `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED` and `editCapabilityVerified=false` evidence
+remain unchanged. Focused tests pass `95` with four platform skips; the full Server suite passes
+`4735` with `199` skips. Target lint, sandbox TypeScript compilation, the static contract, and diff
+checks pass. Full repository preflight passes `446/0` with the two existing local-extension
+permission warnings. Counts remain `4/5` and `32/37`; no deployment, flag, ERP ingest, or Ozon
+mutation occurred.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -769,12 +777,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    otherwise use a different edit-capable Provider. Async remains unverified and cannot inherit
    either profile's approval or evidence.
 5. Revoke the Alibaba credential exposed in chat and create a new private Beijing credential
-   revision. Confirm whether it uses the reviewed legacy API Base or requires a workspace-specific
-   host; the latter needs its exact Workspace ID identity reviewed before use. From a clean pushed
-   adapter revision, prepare only the first `IMAGE_TO_IMAGE` policy/draft and obtain a fresh explicit
-   CNY quote and independently chosen single-request maximum. Do not reuse any Packy or Xiaoyi
-   approval. After one accepted operation is fully reconciled and quality-reviewed, repeat with new
-   approvals for `FULL_EDIT` and `INPAINT`.
+   revision. Keep the failed catalogue evidence ID: it was not consumed. From the new clean pushed
+   revision, rerun only the catalog preflight through its pinned DoH resolver; do not treat the
+   separate no-credential A/AAAA observation as authentication or model visibility. Confirm whether
+   the credential uses the reviewed legacy API Base or requires a workspace-specific host; the latter
+   needs its exact Workspace ID identity reviewed before use. Only after the catalogue preflight
+   succeeds, prepare the first `IMAGE_TO_IMAGE` policy/draft from a clean pushed adapter revision and
+   obtain a fresh explicit CNY quote and independently chosen single-request maximum. Do not reuse
+   any Packy or Xiaoyi approval. After one accepted operation is fully reconciled and
+   quality-reviewed, repeat with new approvals for `FULL_EDIT` and `INPAINT`.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt

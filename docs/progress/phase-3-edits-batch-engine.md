@@ -664,13 +664,20 @@ Progress: 4/5 tasks.
   route/account/model/profile, not permission to retry or test `FULL_EDIT`/`INPAINT`. No Registry,
   deployment, flag, ERP ingest, or Ozon mutation occurred. `QA-02` remains `4/5`, overall progress
   remains `32/37`, and all four downstream tasks remain blocked on positive edit evidence.
-- The official read-only helper now supports a distinct DashScope Wanx catalog-only v3 preflight
-  for the reviewed legacy API Base and exact `wanx2.1-imageedit` model. It sends one fixed model GET
-  and records authentication/model visibility while explicitly retaining
-  `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED` and `editCapabilityVerified=false`. Workspace
-  hosts, billing-origin mixing, malformed DashScope envelopes, multiple catalogue rows, and model
-  substitutions fail closed; no task, synthesis, guessed billing path, or POST is reachable from
-  this branch. Focused tests pass `80` with four platform skips; Server/sandbox typechecks, target
-  lint, the static contract, diff checks, and the full Server suite (`4720` passed, `199` skipped)
-  pass. No real credential was read and no authenticated Provider request or charge occurred.
-  `QA-02` therefore remains open at `4/5`, with overall progress unchanged at `32/37`.
+- The official read-only helper supports a distinct DashScope Wanx catalog-only v3 preflight for the
+  reviewed legacy API Base and exact `wanx2.1-imageedit` model. Its DNS gate binds the DoH Question,
+  rejects truncated or non-IN responses, compares complete A/AAAA CNAME paths, and accepts only
+  bounded, fully chain-bound CNAME answers. Loops, unrelated records, a missing terminal, mismatched
+  targets, and chains longer than eight hops fail before credential input.
+  Workspace hosts, billing-origin mixing, malformed DashScope envelopes, multiple catalogue rows,
+  model substitutions, task/synthesis routes, guessed billing paths, and POST remain unreachable.
+- The first real catalogue preflight failed before credential input with
+  `SANDBOX_READONLY_DNS_FAILED` because the original resolver rejected DashScope's legitimate DoH
+  CNAME owner chain. Its evidence ID was not consumed; no credential was decrypted, no authenticated
+  GET or POST was sent, and no charge occurred. A separate credential-free resolver observation
+  returned public DashScope A and AAAA answers but did not prove authentication or model visibility.
+  Focused tests pass `95` with four platform skips; the full Server suite passes `4735` with `199`
+  skips. Target lint, sandbox TypeScript compilation, the static contract, and diff checks pass.
+  Full repository preflight passes `446/0` with the two existing local-extension permission
+  warnings. `QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP
+  ingest, or Ozon mutation occurred.

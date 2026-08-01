@@ -658,10 +658,13 @@ GET /api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1
 
 The branch retains the existing stdin-only credential, public DNS validation, DNS pinning,
 no-redirect, no-cookie, bounded-response, secret-reflection, private-evidence, and clean-revision
-controls. It accepts only the reviewed DashScope `request_id` plus `output.models[].model_id`
-envelope with at most one row and requires the exact model ID. It rejects workspace-specific hosts,
-an injected billing origin, OpenAI-style catalogue envelopes, multiple rows, and wrong models before
-they can become evidence.
+controls. It binds each DoH Question, rejects truncated or non-IN responses, and compares the full
+A/AAAA CNAME paths. An accepted A or AAAA response must contain a bounded, complete CNAME chain from
+the requested host to the terminal address owner. Loops, unrelated records, a missing terminal,
+mismatched targets, and chains longer than eight hops fail before credential input. It accepts only the
+reviewed DashScope `request_id` plus `output.models[].model_id` envelope with at most one row and
+requires the exact model ID. It rejects workspace-specific hosts, an injected billing origin,
+OpenAI-style catalogue envelopes, multiple rows, and wrong models before they can become evidence.
 
 The private manifest and sanitized completion event record authentication and exact catalogue
 visibility, but also record `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
@@ -670,10 +673,18 @@ DashScope billing endpoint or arbitrary task lookup is used. A successful prefli
 not prove edit permission, price, balance, billing, or positive capability; separate before/settled
 Alibaba billing evidence and a successful paid edit remain mandatory.
 
-Focused tests pass `80` with four platform skips. Server and sandbox typechecks, target lint, the
-static contract, diff checks, and the full Server suite (`4720` passed, `199` skipped) pass. This
-checkpoint read no private credential and sent no authenticated GET, task request, synthesis POST,
-or charge. `QA-02` and the overall `32/37` count remain unchanged.
+The first real catalogue-preflight attempt failed before credential input with
+`SANDBOX_READONLY_DNS_FAILED` because the original resolver rejected DashScope's legitimate DoH
+CNAME owner chain. The proposed evidence ID was not consumed. No credential was decrypted, no
+authenticated Provider GET or POST was sent, and no charge occurred. A subsequent credential-free
+resolver observation returned public DashScope A and AAAA answers. That observation validates only
+the public resolver path; an authenticated catalogue GET has not yet succeeded.
+
+Focused tests pass `95` with four platform skips. Target lint, sandbox TypeScript compilation, the
+static contract, diff checks, and the full Server suite (`4735` passed, `199` skipped) pass.
+Full repository preflight passes `446/0` with the two existing local-extension permission warnings.
+`QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP ingest, or
+Ozon mutation occurred.
 
 ## PicPi public no-credential preflight
 
