@@ -512,7 +512,8 @@ if [ -n "$DEPLOY_ENV_PROFILE" ]; then
 fi
 
 log "Installing dependencies"
-run_in_dir "$NEXT_DIR" exec-build pnpm install --frozen-lockfile
+run_in_dir "$NEXT_DIR" exec-build pnpm install --frozen-lockfile \
+  --store-dir "$DEPLOY_BUILD_HOME/pnpm-store"
 
 log "Generating Prisma client"
 run_in_dir "$NEXT_DIR/apps/server" exec-build npx prisma generate

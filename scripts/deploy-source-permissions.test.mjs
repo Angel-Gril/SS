@@ -81,6 +81,17 @@ test('release extraction discards local archive ownership before installing the 
   assert.ok(gateIndex > extractionIndex, 'root-owned extraction must precede trusted gate install');
 });
 
+test('isolated deployment builds use an explicit writable pnpm store', () => {
+  for (const scriptName of ['deploy.sh', 'deploy-app-dir.sh', 'deploy-staging.sh']) {
+    const deploy = readFileSync(join(process.cwd(), 'scripts', scriptName), 'utf8');
+    assert.match(
+      deploy,
+      /pnpm install --frozen-lockfile(?: --force)?[\s\\]+--store-dir "\$DEPLOY_BUILD_HOME\/pnpm-store"/u,
+      `${scriptName} must not make pnpm probe the root-owned deployment directory`,
+    );
+  }
+});
+
 test('release systemd installer snapshots, verifies, restores, and auto-recovers', {
   skip: !linuxRoot,
 }, () => {

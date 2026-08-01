@@ -564,7 +564,8 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_ENV_TOOL" exec-build-as "$DEPLOY_ENV_SNAPSHOT" "$DEPLOY_DIR" \
   "$DEPLOY_BUILD_UID" "$DEPLOY_BUILD_GID" "$DEPLOY_BUILD_HOME" -- \
-  pnpm install --frozen-lockfile --force
+  pnpm install --frozen-lockfile --force \
+  --store-dir "$DEPLOY_BUILD_HOME/pnpm-store"
 
 # 3. Prisma Client
 echo "[3/7] Generating Prisma client..."

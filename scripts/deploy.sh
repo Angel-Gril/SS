@@ -575,7 +575,8 @@ if [ -n "$DEPLOY_ENV_PROFILE" ]; then
 fi
 
 echo "[deploy] Installing dependencies"
-run_in_dir "$RELEASE_DIR" exec-build pnpm install --frozen-lockfile
+run_in_dir "$RELEASE_DIR" exec-build pnpm install --frozen-lockfile \
+  --store-dir "$DEPLOY_BUILD_HOME/pnpm-store"
 
 echo "[deploy] Generating Prisma client"
 run_in_dir "$RELEASE_DIR/apps/server" exec-build npx prisma generate
