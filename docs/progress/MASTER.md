@@ -93,6 +93,24 @@ new deployable candidate must be packaged from the final clean commit and signed
 cloud/local GET evidence remains pending until the dark deployment can serve the exact version/SHA
 URLs. Phase 6 remains `0/3` and overall progress remains `34/37`.
 
+The first-party distribution implementation was committed and pushed as
+`19e98810593ea619360edcadf9b78eacc93b37cd`. Final `QA-04` then passed from that clean revision in
+`820.1s`, including all nine fail-fast gates, production builds, isolated PostgreSQL lanes and fresh
+extension verification at cloud `451/0/0`, local `447/2/0`, and source `446/2/0`. Private acceptance
+summary SHA-256 is `e3f868f3...ff01`.
+
+Formal packaging from the same commit produced version `1.0.266`, package-input SHA-256
+`ff7103d8...6ac8f`, and 189 files per target. Cloud ZIP SHA-256 is `9c5bbb5d...51fe`; local ZIP
+SHA-256 is `ed68aa6e...aa83`; canonical evidence SHA-256 is `31619531...c5d3`. The no-follow staging
+verifier retained the exact four files under the commit-bound private release directory. Detached
+Ed25519 signature SHA-256 is `53428f4f...e0bf`, stored separately from the candidate. A real
+same-path persistent-Chromium upgrade from `1.0.265` to `1.0.266` retained the non-secret Provider
+profile and removed the session sentinel from session/local/sync storage; private smoke-summary
+SHA-256 is `b1519bdc...53e1`. This completes the `REL-03a` package/sign gate. No website GET, VPS
+access, deployment, flag change, Provider call, ERP ingest, or Ozon mutation occurred. `REL-03` and
+`REL-04` remain open until dark deployment/canaries and the signed first-party cloud/local download
+receipt pass; Phase 6 remains `0/3` and overall progress remains `34/37`.
+
 Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
 runner sent exactly one request to the approved route, received definite HTTP 400, produced no
 image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero; official receipt
@@ -956,9 +974,9 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep the historical canonical `1.0.265` candidate immutable. Re-run focused/final QA for the
-   first-party website distribution implementation, package and sign one new clean-commit candidate,
-   then execute `REL-04` dark deployment/pre-enable canaries. Probe both exact `/api/extensions`
+7. Keep historical `1.0.265` and signed target-commit `1.0.266` immutable. Execute `REL-04` against
+   candidate commit `19e98810593ea619360edcadf9b78eacc93b37cd` with every pilot flag off and pass
+   dark deployment/pre-enable canaries. Probe both exact `/api/extensions`
    downloads, retain and verify the signed receipt, close `REL-03`/`REL-04` together, and finally run `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same

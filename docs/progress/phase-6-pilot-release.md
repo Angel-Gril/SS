@@ -180,3 +180,19 @@ Progress: 0/3 tasks.
   candidate must be regenerated from the final clean implementation commit and signed again. No
   website probe, VPS access, deployment, flag change, Provider call, ERP ingest, or Ozon mutation
   occurred; `REL-03`, `REL-04`, Phase 6 and overall counts remain unchanged.
+- The first-party distribution implementation was committed and pushed at
+  `19e98810593ea619360edcadf9b78eacc93b37cd`. Final `QA-04` passed from that clean revision in
+  `820.1s`; private acceptance summary SHA-256 is `e3f868f3904390287852573ecdabd659c547539bd92f46cbe57798337f50ff01`.
+  Fresh verification remained cloud `451/0/0`, local `447/2/0`, and source `446/2/0`.
+- The new canonical release is `1.0.266`, with 189 files per target. Cloud ZIP SHA-256 is
+  `9c5bbb5df81214e60901bf52f91e2fb59f77ddec8d8ce5e79e525bbd4b7751fe`; local ZIP SHA-256 is
+  `ed68aa6e5e48298620fc024be5a531e7731c06801ed25c9436b8d7818592aa83`; canonical evidence
+  SHA-256 is `31619531ee06a249f55eababaea8736834e8823d991d1ddfb9ca3a578321c5d3`. The staged candidate
+  still contains exactly four files. Detached signature SHA-256 is
+  `53428f4fb89e9ccadd25e4a0dc5a7c03d22e717c972224d4c71a9853c13be0bf` and remains outside it.
+- A persistent-Chromium same-path upgrade from `1.0.265` to `1.0.266` retained the non-secret
+  Provider profile and cleared the session-only sentinel without writing it to local/sync storage.
+  Private smoke-summary SHA-256 is `b1519bdc03d99121f6e86f87aeb48cda18620c147bde0062079fd575312a53e1`.
+  `REL-03a` is ready, but no real website probe, VPS access, deployment, flag, Provider, ERP or Ozon
+  action ran. `REL-03` and `REL-04` remain unchecked until dark canaries and the signed cloud/local
+  website receipt pass; Phase 6 remains `0/3` and overall progress remains `34/37`.
