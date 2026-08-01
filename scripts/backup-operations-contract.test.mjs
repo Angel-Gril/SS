@@ -22,6 +22,10 @@ const localDevelopment = readFileSync(
   'utf8',
 );
 const verifier = readFileSync(new URL('./verify-vps-deploy.sh', import.meta.url), 'utf8');
+const vpsExtensionReleaseVerifier = readFileSync(
+  new URL('./verify-vps-extension-release.mjs', import.meta.url),
+  'utf8',
+);
 const cloudVerifier = readFileSync(new URL('./verify-cloud-runtime.sh', import.meta.url), 'utf8');
 const appDirDeployer = readFileSync(new URL('./deploy-app-dir.sh', import.meta.url), 'utf8');
 const deployReadiness = readFileSync(
@@ -787,16 +791,16 @@ test('restore drill writes attestation only after a positive restored table coun
   }
 });
 
-test('backup cron exports its env and targets the app-dir deployment script', () => {
+test('backup cron exports its env and follows the active release symlink and commit marker', () => {
   const expected =
-    'set -a; . /etc/ss-erp-backup.env; set +a; bash /opt/ss-erp/app/scripts/backup-db.sh';
+    'set -a; . /etc/ss-erp-backup.env; set +a; BACKUP_DEPLOYED_COMMIT_FILE=/opt/ss-erp/current/DEPLOYED_COMMIT bash /opt/ss-erp/current/scripts/backup-db.sh';
   const cronCommands = cronExample.split(/\r?\n/u).filter((line) => line.includes('backup-db.sh'));
 
   assert.equal(cronCommands.length, 2, 'daily and weekly cron examples must both be present');
   for (const command of cronCommands) {
     assert.ok(
       command.includes(expected),
-      'cron must export backup env and use app-dir script: ' + command,
+      'cron must export backup env and bind the active release script and marker: ' + command,
     );
   }
   assert.match(
@@ -807,7 +811,13 @@ test('backup cron exports its env and targets the app-dir deployment script', ()
     localDevelopment,
     /BACKUP_TARGET_GIT_COMMIT="\$TARGET_COMMIT" bash scripts\/backup-db\.sh/u,
   );
-  assert.doesNotMatch(cronExample, /\/opt\/ss-erp\/scripts\/backup-db\.sh/u);
+  assert.doesNotMatch(cronExample, /\/opt\/ss-erp\/app\/(?:DEPLOYED_COMMIT|scripts\/backup-db\.sh)/u);
+  assert.match(verifier, /rejects legacy or unbound database backup commands/u);
+  assert.match(verifier, /BACKUP_DEPLOYED_COMMIT_FILE=\/opt\/ss-erp\/current\/DEPLOYED_COMMIT/u);
+  assert.doesNotMatch(
+    verifier,
+    /pass "cron exports backup env and targets the app-dir backup script"/u,
+  );
 });
 
 
@@ -852,12 +862,18 @@ test('VPS verification keeps logistics distribution dark unless rollout expectat
   assert.ok(verifier.includes('LOGISTICS_DISTRIBUTION_ENABLED'));
   assert.ok(verifier.includes('NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED'));
   assert.ok(verifier.includes('EXTENSION_AUTH_MODE'));
-  assert.ok(verifier.includes(
-    'build/extensions/ss-erp-cloud/shared/logistics-rules/distribution-feature.js',
-  ));
-  assert.ok(verifier.includes(
-    'enabled:[[:space:]]*${expected_cloud_extension}',
-  ));
+  assert.match(verifier, /verify-vps-extension-release\.mjs/u);
+  assert.match(verifier, /--build-root "\$DEPLOY_DIR\/build\/extensions"/u);
+  assert.match(verifier, /--deployed-commit-file "\$DEPLOY_DIR\/DEPLOYED_COMMIT"/u);
+  assert.match(verifier, /--expected-cloud-logistics-enabled "\$expected_cloud_extension"/u);
+  assert.doesNotMatch(verifier, /build\/extensions\/ss-erp-cloud\//u);
+  assert.doesNotMatch(verifier, /grep -Eq "\^\[\[:space:\]\]\*enabled:/u);
+  assert.match(vpsExtensionReleaseVerifier, /verify-extension-release\.mjs/u);
+  assert.match(vpsExtensionReleaseVerifier, /parseStoredZip/u);
+  assert.match(preflight, /verify-vps-extension-release\.test\.mjs/u);
+  assert.match(vpsExtensionReleaseVerifier, /staged extension release must contain exactly four files/u);
+  assert.doesNotMatch(vpsExtensionReleaseVerifier, /(?:exec|spawn).*unzip/u);
+  assert.doesNotMatch(vpsExtensionReleaseVerifier, /mkdtemp/u);
 });
 
 test('VPS verification accepts the complete IPv4 loopback range', () => {

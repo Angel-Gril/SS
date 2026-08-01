@@ -176,9 +176,10 @@ Directories:
 
 Next steps:
   1. Put production env values in $SHARED_DIR/$ENV_FILE_NAME
-  2. Install release-mode systemd units:
-     DEPLOY_BASE=$DEPLOY_BASE ENV_FILE_NAME=$ENV_FILE_NAME bash scripts/install-release-systemd.sh --restart
-  3. Ensure systemd uses EnvironmentFile=$SHARED_DIR/$ENV_FILE_NAME
+  2. Install the target-bound database gate and signed four-file extension candidate
+  3. Create and verify the target-bound backup/restore attestation
   4. Deploy with:
      DEPLOY_HOST=<server> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
+     deploy.sh snapshots the existing units, installs verified release-mode units after
+     switching current, and restores the snapshot automatically if activation fails.
 EOF

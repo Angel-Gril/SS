@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseExpectedReleaseOrigins } from './extension-release-contract.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
@@ -119,7 +120,7 @@ function safeArchiveName(name, expectedRoot) {
   return { parts, portableName: parts.map((part) => part.toLowerCase()).join('/') };
 }
 
-function parseStoredZip(buffer, expectedRoot) {
+export function parseStoredZip(buffer, expectedRoot) {
   if (buffer.length < 22 || buffer.length > MAX_ARCHIVE_BYTES) {
     throw new Error('ZIP size is outside the extension archive limit');
   }
@@ -353,9 +354,13 @@ function main() {
   }, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`FAIL ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+const isMain = process.argv[1]
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`FAIL ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }

@@ -287,11 +287,25 @@ EnvironmentFile=/opt/ss-erp/shared/.env.staging
 ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1
 ```
 
-Install the release-mode unit templates when switching to the symlink deployment:
+`deploy.sh` performs the first unit transition itself. After it switches `current`, but before any
+service restart, it validates the release templates with `systemd-analyze`, snapshots the existing
+unit files under `/var/lib/ss-erp-deploy-systemd-snapshots/<target-commit>`, installs them atomically,
+reloads systemd, and checks the effective `FragmentPath`, `WorkingDirectory`, `EnvironmentFiles`,
+and `ExecStart`. After restart it also verifies every main process cwd resolves into the target
+release before accepting `/ready`. A failed install, restart, process check, or health check restores
+the previous unit snapshot; the first release does not depend on a nonexistent previous symlink.
+
+Use the installer directly only for an audited manual recovery, with a new root-only snapshot path:
 
 ```bash
-DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging bash scripts/install-release-systemd.sh --restart
+DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging \
+UNIT_SNAPSHOT_DIR=/var/lib/ss-erp-deploy-systemd-snapshots/manual-<unique-id> \
+  bash scripts/install-release-systemd.sh --restart
 ```
+
+Do not install release units before `current` points to a sealed full-commit release. To restore a
+retained snapshot without restarting services, run the same command with `--restore` instead of
+`--restart`, inspect the effective units, and then restart explicitly.
 
 The older `deploy/systemd/*.service` templates are for a direct git checkout at `/opt/ss-erp` and read `/opt/ss-erp/.env.staging`. Do not use those templates with `/opt/ss-erp/current`, otherwise the running process can keep reading the wrong env file and stay in local mode even after R2 values are added.
 
@@ -310,6 +324,12 @@ From the local repository:
 ```bash
 EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
+
+When a region is reachable only through an audited jump host, keep the host blocks and their
+separate identity files in one protected OpenSSH config outside the repository. Set
+`SSH_CONFIG_FILE` to its absolute path and set `DEPLOY_HOST` to the target alias. The deployer passes
+that file to both `ssh` and `scp` with `-F`; do not embed a `ProxyCommand`, private-key value, or
+credential in a command argument. Keep strict host-key checking enabled for both hops.
 
 Deploy a specific commit:
 
@@ -362,6 +382,12 @@ and one-command application rollback.
 All three systemd deployment modes require the exact four-file extension candidate to be installed
 under the supplied root-owned `EXTENSION_RELEASE_ROOT` first. Deployment re-verifies and copies that
 candidate; it never rebuilds or increments the extension version.
+
+After switching to release mode, the root backup cron must invoke
+`/opt/ss-erp/current/scripts/backup-db.sh` and explicitly set
+`BACKUP_DEPLOYED_COMMIT_FILE=/opt/ss-erp/current/DEPLOYED_COMMIT`. The VPS verifier rejects an
+active `/opt/ss-erp/app/scripts/backup-db.sh` cron because that old script can overwrite current
+target/database-bound backup evidence with a legacy schema.
 
 ## Important Notes
 

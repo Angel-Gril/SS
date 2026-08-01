@@ -520,11 +520,18 @@ check_acme_sh_renewal() {
 
 check_cron() {
   local cron
+  local backup_cron
+  local expected_backup_command
   cron=$(crontab -l 2>/dev/null || true)
-  if echo "$cron" | grep -Ev '^[[:space:]]*#' | grep -Fq 'set -a; . /etc/ss-erp-backup.env; set +a; bash /opt/ss-erp/app/scripts/backup-db.sh'; then
-    pass "cron exports backup env and targets the app-dir backup script"
+  expected_backup_command='set -a; . /etc/ss-erp-backup.env; set +a; BACKUP_DEPLOYED_COMMIT_FILE=/opt/ss-erp/current/DEPLOYED_COMMIT bash /opt/ss-erp/current/scripts/backup-db.sh'
+  backup_cron=$(printf '%s\n' "$cron" | grep -Ev '^[[:space:]]*#' \
+    | grep -F 'backup-db.sh' || true)
+  if [ -z "$backup_cron" ]; then
+    fail "cron database backup command is missing"
+  elif printf '%s\n' "$backup_cron" | grep -Fvq "$expected_backup_command"; then
+    fail "cron rejects legacy or unbound database backup commands"
   else
-    fail "cron database backup command does not export env or target the app-dir script"
+    pass "cron exports backup env and binds the active release script and commit marker"
   fi
   if [ -d "$BACKUP_LOG_DIR" ] && [ -w "$BACKUP_LOG_DIR" ]; then
     pass "backup log directory is present and writable: $BACKUP_LOG_DIR"
@@ -850,7 +857,14 @@ check_logistics_rollout_expectations() {
     set +u
     # shellcheck disable=SC1090
     . "$env_path"
-    printf '%s|%s|%s' "${LOGISTICS_DISTRIBUTION_ENABLED-}" "${NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED-}" "${EXTENSION_AUTH_MODE-}"
+    printf '%s|%s|%s|%s|%s|%s|%s' \
+      "${LOGISTICS_DISTRIBUTION_ENABLED-}" \
+      "${NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED-}" \
+      "${EXTENSION_AUTH_MODE-}" \
+      "${EXTENSION_RELEASE_EXPECTED_WEB_ORIGIN-}" \
+      "${EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN-}" \
+      "${EXTENSION_RELEASE_EXPECTED_API_ORIGIN-}" \
+      "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN-}"
   ); then
     fail "deployment env file could not be loaded: $env_path"
     return
@@ -859,7 +873,13 @@ check_logistics_rollout_expectations() {
   local actual_logistics
   local actual_public
   local actual_auth_mode
-  IFS='|' read -r actual_logistics actual_public actual_auth_mode <<< "$actual_values"
+  local expected_web_origin
+  local expected_admin_origin
+  local expected_api_origin
+  local expected_local_origin
+  IFS='|' read -r actual_logistics actual_public actual_auth_mode \
+    expected_web_origin expected_admin_origin expected_api_origin expected_local_origin \
+    <<< "$actual_values"
   if [ "$actual_logistics" = "$expected_logistics" ]; then
     pass "LOGISTICS_DISTRIBUTION_ENABLED matches rollout expectation: $expected_logistics"
   else
@@ -876,15 +896,22 @@ check_logistics_rollout_expectations() {
     fail "EXTENSION_AUTH_MODE expected $expected_auth_mode, found ${actual_auth_mode:-<unset>}"
   fi
 
-  local cloud_feature_file="${DEPLOY_DIR}/build/extensions/ss-erp-cloud/shared/logistics-rules/distribution-feature.js"
-  if [ ! -r "$cloud_feature_file" ]; then
-    fail "cloud extension logistics feature file is missing or unreadable: $cloud_feature_file"
+  local release_verifier="${DEPLOY_DIR}/scripts/verify-vps-extension-release.mjs"
+  if [ ! -r "$release_verifier" ]; then
+    fail "VPS extension release verifier is missing or unreadable: $release_verifier"
     return
   fi
-  if grep -Eq "^[[:space:]]*enabled:[[:space:]]*${expected_cloud_extension},?[[:space:]]*$" "$cloud_feature_file"; then
-    pass "cloud extension logistics distribution matches rollout expectation: $expected_cloud_extension"
+  if node "$release_verifier" \
+    --build-root "$DEPLOY_DIR/build/extensions" \
+    --deployed-commit-file "$DEPLOY_DIR/DEPLOYED_COMMIT" \
+    --expected-web-origin "$expected_web_origin" \
+    --expected-admin-origin "$expected_admin_origin" \
+    --expected-api-origin "$expected_api_origin" \
+    --expected-local-origin "$expected_local_origin" \
+    --expected-cloud-logistics-enabled "$expected_cloud_extension"; then
+    pass "formal extension release and cloud logistics expectation are verified"
   else
-    fail "cloud extension logistics distribution expected $expected_cloud_extension: $cloud_feature_file"
+    fail "formal extension release or cloud logistics verification failed"
   fi
 }
 

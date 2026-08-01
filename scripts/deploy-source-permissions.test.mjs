@@ -33,6 +33,148 @@ function run(command, args, options = {}) {
   });
 }
 
+test('release deployment atomically transitions systemd units before service verification', () => {
+  const deploy = readFileSync(join(process.cwd(), 'scripts', 'deploy.sh'), 'utf8');
+  const installer = readFileSync(
+    join(process.cwd(), 'scripts', 'install-release-systemd.sh'),
+    'utf8',
+  );
+  const switchIndex = deploy.indexOf('ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"');
+  const installIndex = deploy.indexOf(
+    'bash "$RELEASE_DIR/scripts/install-release-systemd.sh"',
+    switchIndex,
+  );
+  const restartLabelIndex = deploy.indexOf('echo "[deploy] Restarting services"', installIndex);
+  const restartIndex = deploy.indexOf(
+    'systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"',
+    restartLabelIndex,
+  );
+  const runtimeCheckIndex = deploy.indexOf('verify_service_release_cwd "$API_SERVICE"');
+  const healthIndex = deploy.indexOf('curl -fsS "$HEALTH_URL"');
+  assert.ok(
+    switchIndex >= 0 && installIndex > switchIndex
+      && restartLabelIndex > installIndex && restartIndex > restartLabelIndex,
+    'release units must be installed after the current switch and before service restart',
+  );
+  assert.ok(
+    runtimeCheckIndex > restartIndex && healthIndex > runtimeCheckIndex,
+    'live process working directories must be target-bound before health is accepted',
+  );
+  assert.match(deploy, /UNIT_SNAPSHOT_DIR="\$DEPLOY_SYSTEMD_SNAPSHOT_ROOT\/\$TARGET_GIT_COMMIT"/u);
+  assert.match(deploy, /install-release-systemd\.sh" --restore/u);
+  assert.match(deploy, /SSH_ARGS\+=\(-F "\$SSH_CONFIG_FILE"\)/u);
+  assert.doesNotMatch(deploy, /eval .*SSH|ProxyCommand=/u);
+  assert.match(installer, /systemd-analyze verify/u);
+  assert.match(installer, /FragmentPath does not use the installed release unit/u);
+  assert.match(installer, /WorkingDirectory does not target the current release/u);
+  assert.match(installer, /does not use the shared release environment/u);
+  assert.match(installer, /Install failed; restoring previous unit files/u);
+});
+
+test('release systemd installer snapshots, verifies, restores, and auto-recovers', {
+  skip: !linuxRoot,
+}, () => {
+  const root = mkdtempSync('/opt/ss-erp-release-systemd-test-');
+  const base = join(root, 'deploy');
+  const release = join(base, 'releases', commit);
+  const current = join(base, 'current');
+  const source = join(root, 'units');
+  const destination = join(root, 'installed');
+  const bin = join(root, 'bin');
+  const firstSnapshot = join(root, 'snapshot-first');
+  const failedSnapshot = join(root, 'snapshot-failed');
+  const services = {
+    api: `ss-erp-test-${process.pid}-api`,
+    worker: `ss-erp-test-${process.pid}-worker`,
+    web: `ss-erp-test-${process.pid}-web`,
+  };
+  const installer = join(process.cwd(), 'scripts', 'install-release-systemd.sh');
+  try {
+    mkdirSync(join(release, 'apps', 'server'), { recursive: true });
+    mkdirSync(join(release, 'apps', 'web'), { recursive: true });
+    mkdirSync(join(base, 'shared'), { recursive: true });
+    mkdirSync(source);
+    mkdirSync(destination);
+    mkdirSync(bin);
+    symlinkSync(release, current, 'dir');
+    writeFileSync(join(base, 'shared', '.env.staging'), 'NODE_ENV=production\n', { mode: 0o640 });
+    for (const service of Object.values(services)) {
+      writeFileSync(join(source, `${service}.service`), `new-${service}\n`, { mode: 0o644 });
+      writeFileSync(join(destination, `${service}.service`), `legacy-${service}\n`, { mode: 0o644 });
+    }
+    writeFileSync(join(bin, 'systemd-analyze'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'systemctl'), [
+      '#!/bin/sh',
+      'if [ "$1" != "show" ]; then exit 0; fi',
+      'service="$2"',
+      'property="$4"',
+      'case "$property" in',
+      '  FragmentPath) printf "%s/%s.service\\n" "$TEST_UNIT_DST" "$service" ;;',
+      '  WorkingDirectory)',
+      '    if [ "${TEST_BAD_WORKING_DIRECTORY:-0}" = "1" ]; then printf "/opt/legacy\\n";',
+      '    elif [ "$service" = "$TEST_WEB_SERVICE" ]; then printf "%s/current/apps/web\\n" "$TEST_DEPLOY_BASE";',
+      '    else printf "%s/current/apps/server\\n" "$TEST_DEPLOY_BASE"; fi ;;',
+      '  EnvironmentFiles) printf "%s/shared/.env.staging (ignore_errors=no)\\n" "$TEST_DEPLOY_BASE" ;;',
+      '  ExecStart)',
+      '    if [ "$service" = "$TEST_API_SERVICE" ]; then printf "/usr/bin/node dist/index.js\\n";',
+      '    elif [ "$service" = "$TEST_WORKER_SERVICE" ]; then printf "/usr/bin/node dist/worker.js\\n";',
+      '    else printf "/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1\\n"; fi ;;',
+      '  *) exit 2 ;;',
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const environment = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      DEPLOY_BASE: base,
+      UNIT_SRC_DIR: source,
+      UNIT_DST_DIR: destination,
+      API_SERVICE: services.api,
+      WORKER_SERVICE: services.worker,
+      WEB_SERVICE: services.web,
+      TEST_UNIT_DST: destination,
+      TEST_DEPLOY_BASE: base,
+      TEST_API_SERVICE: services.api,
+      TEST_WORKER_SERVICE: services.worker,
+      TEST_WEB_SERVICE: services.web,
+    };
+    let result = run('bash', [installer], {
+      env: { ...environment, UNIT_SNAPSHOT_DIR: firstSnapshot },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(lstatSync(firstSnapshot).mode & 0o777, 0o700);
+    assert.equal(lstatSync(join(firstSnapshot, 'manifest')).mode & 0o777, 0o600);
+    for (const service of Object.values(services)) {
+      assert.equal(readFileSync(join(destination, `${service}.service`), 'utf8'), `new-${service}\n`);
+      assert.equal(readFileSync(join(firstSnapshot, `${service}.service`), 'utf8'), `legacy-${service}\n`);
+      assert.equal(readFileSync(join(firstSnapshot, `${service}.enabled`), 'utf8'), 'disabled\n');
+    }
+    result = run('bash', [installer, '--restore'], {
+      env: { ...environment, UNIT_SNAPSHOT_DIR: firstSnapshot },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const service of Object.values(services)) {
+      assert.equal(readFileSync(join(destination, `${service}.service`), 'utf8'), `legacy-${service}\n`);
+    }
+
+    result = run('bash', [installer], {
+      env: {
+        ...environment,
+        UNIT_SNAPSHOT_DIR: failedSnapshot,
+        TEST_BAD_WORKING_DIRECTORY: '1',
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /WorkingDirectory does not target the current release/u);
+    assert.match(result.stderr, /Install failed; restoring previous unit files/u);
+    for (const service of Object.values(services)) {
+      assert.equal(readFileSync(join(destination, `${service}.service`), 'utf8'), `legacy-${service}\n`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('root gate install and deployment source ownership are fail-closed', {
   skip: !linuxRoot,
 }, () => {

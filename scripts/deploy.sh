@@ -9,6 +9,7 @@ set -euo pipefail
 # Optional env:
 #   DEPLOY_USER=root
 #   SSH_KEY=~/.ssh/ss_erp_vultr_sg
+#   SSH_CONFIG_FILE=/operator-private/rel04-ssh-config
 #   DEPLOY_BASE=/opt/ss-erp
 #   RELEASES_DIR=$DEPLOY_BASE/releases
 #   CURRENT_LINK=$DEPLOY_BASE/current
@@ -17,6 +18,7 @@ set -euo pipefail
 #   DEPLOY_RUN_USER=deploy
 #   DEPLOY_BUILD_USER=ss-erp-build
 #   DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
+#   DEPLOY_SYSTEMD_SNAPSHOT_ROOT=/var/lib/ss-erp-deploy-systemd-snapshots
 #   EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<commit>
 #   API_SERVICE=ss-erp-api
 #   WEB_SERVICE=ss-erp-web
@@ -32,6 +34,7 @@ set -euo pipefail
 DEPLOY_USER="${DEPLOY_USER:-root}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
 SSH_KEY="${SSH_KEY:-}"
+SSH_CONFIG_FILE="${SSH_CONFIG_FILE:-}"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
 RELEASES_DIR="${RELEASES_DIR:-$DEPLOY_BASE/releases}"
 CURRENT_LINK="${CURRENT_LINK:-$DEPLOY_BASE/current}"
@@ -40,6 +43,7 @@ ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:-/usr/local/lib/ss-erp-deploy-gate}"
+DEPLOY_SYSTEMD_SNAPSHOT_ROOT="${DEPLOY_SYSTEMD_SNAPSHOT_ROOT:-/var/lib/ss-erp-deploy-systemd-snapshots}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
 API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
@@ -51,6 +55,34 @@ DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
+
+assert_windows_private_acl() {
+  local file="$1"
+  local script
+  script=$(cat <<'POWERSHELL'
+$ErrorActionPreference='Stop'
+$path=$env:SS_ERP_SSH_CONFIG_PATH
+$current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$allowed=@($current,'S-1-5-18','S-1-5-32-544')
+$acl=[System.IO.File]::GetAccessControl($path)
+$owner=(New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+if(-not ($allowed -contains $owner)){throw 'owner'}
+$rules=$acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])
+foreach($rule in $rules){
+  if($rule.AccessControlType -eq 'Allow' -and -not ($allowed -contains $rule.IdentityReference.Value)){
+    throw 'access'
+  }
+}
+Write-Output 'OK'
+POWERSHELL
+)
+  local result
+  result=$(SS_ERP_SSH_CONFIG_PATH="$file" powershell.exe \
+    -NoLogo -NoProfile -NonInteractive -Command "$script" 2>/dev/null) \
+    || fail "SSH_CONFIG_FILE Windows ACL is not private"
+  result="${result//$'\r'/}"
+  [ "$result" = "OK" ] || fail "SSH_CONFIG_FILE Windows ACL is not private"
+}
 
 shell_escape() {
   printf '%q' "$1"
@@ -68,11 +100,39 @@ fi
 if [[ ! "$EXTENSION_RELEASE_ROOT" =~ ^/ ]]; then
   fail "EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory"
 fi
+if [[ ! "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" =~ ^/ ]] \
+  || [ "$(readlink -m -- "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")" != "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ]; then
+  fail "DEPLOY_SYSTEMD_SNAPSHOT_ROOT must be one canonical absolute path"
+fi
 if [[ ! "$KEEP_RELEASES" =~ ^[1-9][0-9]{0,2}$ ]] || [ "$KEEP_RELEASES" -gt 100 ]; then
   fail "KEEP_RELEASES must be an integer from 1 through 100"
 fi
 
 SSH_ARGS=(-o BatchMode=yes)
+if [ -n "$SSH_CONFIG_FILE" ]; then
+  platform="$(uname -s)"
+  if [[ "$platform" =~ ^(MINGW|MSYS) ]]; then
+    [[ "$SSH_CONFIG_FILE" =~ ^[A-Za-z]:/ ]] \
+      || fail "SSH_CONFIG_FILE must be one absolute real regular file"
+  elif [[ "$SSH_CONFIG_FILE" != /* ]]; then
+    fail "SSH_CONFIG_FILE must be one absolute real regular file"
+  fi
+  if [ -L "$SSH_CONFIG_FILE" ] \
+    || [ ! -f "$SSH_CONFIG_FILE" ] \
+    || [ "$(stat -c '%h' "$SSH_CONFIG_FILE")" != "1" ] \
+    || [ "$(stat -c '%u' "$SSH_CONFIG_FILE")" != "$(id -u)" ]; then
+    fail "SSH_CONFIG_FILE must be one absolute real regular file"
+  fi
+  if [[ "$platform" =~ ^(MINGW|MSYS) ]]; then
+    assert_windows_private_acl "$SSH_CONFIG_FILE"
+  else
+    ssh_config_mode="$(stat -c '%a' "$SSH_CONFIG_FILE")"
+    if (( (8#$ssh_config_mode & 8#077) != 0 )); then
+      fail "SSH_CONFIG_FILE must not be accessible by group or other users"
+    fi
+  fi
+  SSH_ARGS+=(-F "$SSH_CONFIG_FILE")
+fi
 if [ -n "$SSH_KEY" ]; then
   SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
 fi
@@ -87,6 +147,14 @@ if ! REPOSITORY_ROOT="$(git --no-replace-objects rev-parse --show-toplevel 2>/de
   fail "deploy.sh must run from the exact repository root"
 fi
 GIT_SAFE_ARGS=(--no-replace-objects -c "safe.directory=$REPOSITORY_ROOT")
+if [ -n "$SSH_CONFIG_FILE" ]; then
+  SSH_CONFIG_REAL="$(readlink -f -- "$SSH_CONFIG_FILE")"
+  case "$SSH_CONFIG_REAL/" in
+    "$REPOSITORY_ROOT"/*)
+      fail "SSH_CONFIG_FILE must remain outside the repository"
+      ;;
+  esac
+fi
 
 DEPLOY_REF="${1:-HEAD}"
 if ! COMMIT_HASH="$(git "${GIT_SAFE_ARGS[@]}" rev-parse --verify --end-of-options "${DEPLOY_REF}^{commit}" 2>/dev/null)"; then
@@ -145,7 +213,7 @@ if ! scp "${SSH_ARGS[@]}" "$TARBALL" \
 fi
 
 log "Deploying release"
-REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") EXTENSION_RELEASE_ROOT=$(shell_escape "$EXTENSION_RELEASE_ROOT") bash -s"
+REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") DEPLOY_SYSTEMD_SNAPSHOT_ROOT=$(shell_escape "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT") EXTENSION_RELEASE_ROOT=$(shell_escape "$EXTENSION_RELEASE_ROOT") bash -s"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 umask 077
@@ -168,6 +236,7 @@ readonly REQUESTED_MIGRATION_TIMEOUT="${REQUESTED_MIGRATION_TIMEOUT:?}"
 readonly DEPLOY_RUN_USER="${DEPLOY_RUN_USER:?}"
 readonly DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:?}"
 readonly DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:?}"
+readonly DEPLOY_SYSTEMD_SNAPSHOT_ROOT="${DEPLOY_SYSTEMD_SNAPSHOT_ROOT:?}"
 readonly EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:?}"
 readonly TARBALL="$UPLOAD_DIR/archive.tar.gz"
 DEPLOY_ENV_SNAPSHOT_DIR=""
@@ -178,9 +247,16 @@ DEPLOY_BUILD_MANIFEST=""
 current_target=""
 previous_git_commit=""
 PREVIOUS_RELEASE=""
+SYSTEMD_TRANSITIONED=0
+UNIT_SNAPSHOT_DIR="$DEPLOY_SYSTEMD_SNAPSHOT_ROOT/$TARGET_GIT_COMMIT"
 
 if [[ ! "$TARGET_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "[deploy] ERROR: target commit must be one lowercase full 40-character object ID" >&2
+  exit 1
+fi
+if [[ "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" != /* ]] \
+  || [ "$(readlink -m -- "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")" != "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ]; then
+  echo "[deploy] ERROR: systemd snapshot root must be one canonical absolute path" >&2
   exit 1
 fi
 if [ "$(id -u)" != "0" ]; then
@@ -368,6 +444,24 @@ assert_root_ancestor_chain "$RELEASES_DIR"
 assert_root_ancestor_chain "$SHARED_DIR"
 assert_root_ancestor_chain "$(dirname -- "$CURRENT_LINK")"
 assert_root_ancestor_chain "$EXTENSION_RELEASE_ROOT"
+assert_root_ancestor_chain "$(dirname -- "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")"
+if [ -L "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ] \
+  || { [ -e "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ] \
+    && [ ! -d "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ]; }; then
+  echo "[deploy] ERROR: systemd snapshot root must be one real directory" >&2
+  exit 1
+fi
+if [ ! -e "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ]; then
+  install -d -o root -g root -m 0700 "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT"
+fi
+if [ "$(stat -c '%u:%g:%a' "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")" != "0:0:700" ]; then
+  echo "[deploy] ERROR: systemd snapshot root must be root:root mode 0700" >&2
+  exit 1
+fi
+if [ -e "$UNIT_SNAPSHOT_DIR" ] || [ -L "$UNIT_SNAPSHOT_DIR" ]; then
+  echo "[deploy] ERROR: target systemd snapshot already exists: $UNIT_SNAPSHOT_DIR" >&2
+  exit 1
+fi
 assert_extension_release_files
 if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
   if [ ! -L "$CURRENT_LINK" ]; then
@@ -579,7 +673,11 @@ SERVICES_QUIESCED=0
 restore_quiesced_services() {
   local status=$?
   trap - EXIT
-  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+  if [ "$status" -ne 0 ] && [ "$SYSTEMD_TRANSITIONED" = "1" ]; then
+    if ! rollback; then
+      echo "[deploy] ERROR: automatic application/systemd rollback failed" >&2
+    fi
+  elif [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
     systemctl stop "$WORKER_SERVICE" "$API_SERVICE" || true
     echo "[deploy] Worker/API remain stopped after failed migration or gate; operator recovery is required" >&2
   fi
@@ -589,12 +687,33 @@ restore_quiesced_services() {
 trap restore_quiesced_services EXIT
 
 rollback() {
+  local failed=0
+  systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || failed=1
   if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
     echo "[deploy] Rolling back to ${PREVIOUS_RELEASE##*/}"
     ln -sfnT "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+  elif [ -L "$CURRENT_LINK" ] \
+    && [ "$(readlink -f -- "$CURRENT_LINK")" = "$RELEASE_DIR" ]; then
+    echo "[deploy] Removing first-release current link before legacy-unit recovery"
+    rm -- "$CURRENT_LINK"
   fi
-  systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+  if [ "$SYSTEMD_TRANSITIONED" = "1" ]; then
+    if ! DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
+      ENV_FILE_NAME="$ENV_FILE_NAME" \
+      UNIT_SNAPSHOT_DIR="$UNIT_SNAPSHOT_DIR" \
+      API_SERVICE="$API_SERVICE" WORKER_SERVICE="$WORKER_SERVICE" \
+      WEB_SERVICE="$WEB_SERVICE" \
+      bash "$RELEASE_DIR/scripts/install-release-systemd.sh" --restore; then
+      failed=1
+    else
+      SYSTEMD_TRANSITIONED=0
+    fi
+  fi
+  if [ "$failed" -eq 0 ]; then
+    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || failed=1
+  fi
   SERVICES_QUIESCED=0
+  return "$failed"
 }
 
 echo "[deploy] Quiescing AI provider services before migration"
@@ -646,17 +765,63 @@ node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" compar
 echo "[deploy] Switching current symlink"
 ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
 
+echo "[deploy] Installing and verifying release-mode systemd units"
+if ! DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
+  ENV_FILE_NAME="$ENV_FILE_NAME" \
+  UNIT_SRC_DIR="$RELEASE_DIR/deploy/systemd-release" \
+  UNIT_SNAPSHOT_DIR="$UNIT_SNAPSHOT_DIR" \
+  API_SERVICE="$API_SERVICE" WORKER_SERVICE="$WORKER_SERVICE" \
+  WEB_SERVICE="$WEB_SERVICE" \
+  bash "$RELEASE_DIR/scripts/install-release-systemd.sh"; then
+  if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+    ln -sfnT "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+  elif [ -L "$CURRENT_LINK" ] \
+    && [ "$(readlink -f -- "$CURRENT_LINK")" = "$RELEASE_DIR" ]; then
+    rm -- "$CURRENT_LINK"
+  fi
+  if systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
+    SERVICES_QUIESCED=0
+  else
+    systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+    echo "[deploy] ERROR: legacy service recovery failed after systemd install rejection" >&2
+  fi
+  exit 1
+fi
+SYSTEMD_TRANSITIONED=1
+
 echo "[deploy] Restarting services"
 if ! systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
-  rollback
+  rollback || true
   exit 1
 fi
 SERVICES_QUIESCED=0
 
 sleep 3
+verify_service_release_cwd() {
+  local service="$1"
+  local expected="$2"
+  local pid
+  local actual
+  pid="$(systemctl show "$service" -p MainPID --value)"
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]] || [ ! -d "/proc/$pid" ]; then
+    echo "[deploy] ERROR: $service has no live main process" >&2
+    return 1
+  fi
+  actual="$(readlink -f -- "/proc/$pid/cwd")"
+  if [ "$actual" != "$(readlink -f -- "$expected")" ]; then
+    echo "[deploy] ERROR: $service runs from $actual instead of the target release" >&2
+    return 1
+  fi
+}
+if ! verify_service_release_cwd "$API_SERVICE" "$CURRENT_LINK/apps/server" \
+  || ! verify_service_release_cwd "$WORKER_SERVICE" "$CURRENT_LINK/apps/server" \
+  || ! verify_service_release_cwd "$WEB_SERVICE" "$CURRENT_LINK/apps/web"; then
+  rollback || true
+  exit 1
+fi
 echo "[deploy] Health check: $HEALTH_URL"
 if ! curl -fsS "$HEALTH_URL" >/dev/null; then
-  rollback
+  rollback || true
   exit 1
 fi
 

@@ -253,6 +253,13 @@ CRLF/mixed checkout、`.git/info/attributes` clean/smudge filter 或 `refs/repla
 `deploy.sh` 与 `deploy-app-dir.sh` 也从同一 raw-blob materializer 生成上传 archive，而不是执行受
 本地 attributes 影响的 `git archive`。
 
+release/symlink 的 `deploy.sh` 还负责首次 systemd 切换，不能把它拆成“先用旧 unit 重启成功，
+再人工换 unit”两段。脚本在 `current` 切换后、重启前以目标 release 中的模板执行
+`systemd-analyze verify`，把现有三个 unit 保存到 target-bound root-only 快照，原子安装后检查有效
+`FragmentPath`、`WorkingDirectory`、`EnvironmentFiles` 和 `ExecStart`。重启后必须再证明三个
+MainPID 的 cwd 都解析到目标 release，才会检查 `/ready`。安装、启动、cwd 或健康失败都会先恢复
+旧 unit；首次发布不依赖不存在的 `PREVIOUS_RELEASE` symlink。
+
 `deploy-staging.sh` 成功后不会再把封存 checkout 交还给 runtime user。整个 `$DEPLOY_DIR` 在服务
 运行期间保持 root-owned、不可被 group/world 写入，实际 env 单独保持
 `root:<DEPLOY_RUN_USER primary group>`、`0640`；因此 runtime user 不能重命名或替换 serving

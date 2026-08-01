@@ -393,14 +393,23 @@ EnvironmentFile=/opt/ss-erp/shared/.env.staging
 
 如果仍使用 `deploy/systemd/*.service`，服务会从 `/opt/ss-erp/.env.staging` 读取环境变量；这会导致你已经在 shared env 写入 R2 配置，但运行中的 API 仍返回 `mode:"local"`。
 
-安装 release 模式 systemd 模板：
+标准 `deploy.sh` 会在切换 `current` 后、重启前自动执行 release systemd 迁移：验证模板，按目标
+commit 保存旧 unit 快照，原子安装，检查有效 `WorkingDirectory` / `EnvironmentFile` / `ExecStart`，
+并在启动后核对三个主进程的实际 cwd。不要在 `current` 尚未指向封存 release 时提前覆盖 unit。
+
+只有人工恢复时才直接运行安装器，并使用全新的 root-only 快照目录：
 
 ```bash
 cd /opt/ss-erp/current
-DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging bash scripts/install-release-systemd.sh --restart
+DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging \
+UNIT_SNAPSHOT_DIR=/var/lib/ss-erp-deploy-systemd-snapshots/manual-<unique-id> \
+  bash scripts/install-release-systemd.sh --restart
 ```
 
-该脚本是只读诊断：只检查环境文件、systemd `EnvironmentFile`、API/Worker 运行进程实际环境变量和本机 `/ready`。不会创建用户、不会修改数据库、不会上传文件。若 smoke 已提示 `runtime.mode="local"` 或 `imageUpload="local"`，优先跑它确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
+该安装器会修改 systemd unit；`--restore` 会从指定快照恢复 unit 但不会自动重启服务。只读诊断应
+运行 `scripts/diagnose-runtime-env.sh`。若 smoke 已提示 `runtime.mode="local"` 或
+`imageUpload="local"`，优先用诊断脚本确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和
+`IMAGE_STORAGE_BACKEND=oss`。
 
 诊断脚本还会检查 systemd 的 `WorkingDirectory` 与 `EnvironmentFiles` 是否匹配当前部署模式。`DEPLOY_DIR=/opt/ss-erp/current` 时，脚本会期望：
 
@@ -942,6 +951,10 @@ VERIFY_RESTORE_LOCAL_POSTGRES=1 BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" \
 # 定时备份（参考 crontab）
 cat scripts/backup-db.crontab.example
 ```
+
+release 模式的 root cron 必须同时跟随 `/opt/ss-erp/current/scripts/backup-db.sh` 和
+`/opt/ss-erp/current/DEPLOYED_COMMIT`。不得继续调用 `/opt/ss-erp/app`；旧脚本可能用旧 schema
+覆盖当前目标提交/数据库身份绑定的 `backup-status.json`，`verify-vps-deploy.sh` 会直接拒绝。
 
 建议至少做两类备份测试：
 
