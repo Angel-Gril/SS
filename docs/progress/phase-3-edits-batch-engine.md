@@ -584,5 +584,7 @@ Progress: 4/5 tasks.
   approval, runner, claim and settlement boundaries; generic-profile `FULL_EDIT` and `INPAINT`
   regression fixtures fail before dispatch or settlement.
 - Public USD `0.07` base price times the highest published enabled group ratio is USD `0.2002`.
-  The proposed private policy uses quote USD `0.210000`, maximum USD `1.000000`, scale `6`, pending
-  explicit approval. No Provider POST or charge occurred; progress remains `4/5` and `32/37`.
+  The proposed private policy uses quote USD `0.210001`, maximum USD `1.000000`, scale `6`, pending
+  explicit approval. The one-microdollar increment preserves the exact-money minimum-shared-scale
+  invariant while retaining the Provider meter's six-place resolution. No Provider POST or charge
+  occurred; progress remains `4/5` and `32/37`.

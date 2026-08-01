@@ -494,8 +494,9 @@ operation, model, endpoint/API digests, fingerprint and the reviewed billing ori
 
 Pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` gives base USD `0.07`; the largest
 published ratio among its enabled groups is `2.86`, yielding USD `0.2002`. The proposed backend
-policy rounds the quote to USD `0.210000` and sets the separately reviewed maximum to USD `1.000000`
-at scale `6`, which can represent the published `500000` quota units per USD exactly. This remains
+policy sets the quote to USD `0.210001` and the separately reviewed maximum to USD `1.000000` at
+scale `6`. The one-microdollar increment keeps the pair at its canonical minimum shared scale while
+representing the published `500000` quota units per USD exactly. This remains
 planning input until the clean implementation commit, private policy and non-approval draft are
 reviewed and the operator explicitly authorizes the one request. No live Provider price sync is
 required.

@@ -75,8 +75,9 @@ claim and settlement.
 
 Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists base USD `0.07`; its highest
 published enabled group ratio yields USD `0.2002`. The proposed private policy therefore rounds the
-quote up to USD `0.210000` and retains the operator's USD `1.000000` single-request maximum at scale
-6, matching the `500000`-quota-units-per-USD meter resolution. This is not yet an approval or
+quote up to USD `0.210001` and retains the operator's USD `1.000000` single-request maximum at scale
+6, matching the `500000`-quota-units-per-USD meter resolution while keeping the money pair at its
+canonical minimum shared scale. This is not yet an approval or
 Provider-side cap. No Provider POST, charge, Registry mutation, deployment, flag, ERP ingest, or
 Ozon write occurred. `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress
 stays `32/37` and all rollout flags remain off.
@@ -641,7 +642,7 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
 4. The rotated Xiaoyi credential and dual-origin GET-only preflight now pass. Commit and review the
-   exact `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` implementation, then retain its private USD `0.210000`
+   exact `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` implementation, then retain its private USD `0.210001`
    quote / USD `1.000000` maximum policy and generate a non-approval draft from that clean commit.
    Send no POST until the operator explicitly approves the resulting Operation ID, source digest,
    prompt/profile and maximum. Run exactly one synchronous `IMAGE_TO_IMAGE`; do not send
