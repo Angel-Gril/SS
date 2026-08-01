@@ -208,8 +208,10 @@ verifier 全部通过，才会重建应用服务。失败或超时时旧服务�
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
 三个 systemd 部署脚本不再生成或递增扩展版本。正式候选必须先在完整 `QA-02`/`QA-04`
-对应的 clean commit 上仅执行一次 `pnpm package:extension`，完成外部签名、官网分发回执及安装升级验收后，
-再把同一 canonical 四件套预置到每台目标机。`init-server.sh` 会创建 root-owned
+对应的 clean commit 上按独立 origin 区域各执行一次 `pnpm package:extension`。同一发布的区域候选必须
+使用相同 target commit 和扩展版本，但 `.com` 与 `.cn` 的 cloud 包、evidence、签名及官网回执必须
+分别绑定各自的 Web/Admin/API origin；不得把一个区域的四件套部署到另一区域。完成外部签名和安装
+升级验收后，再把与目标机区域一致的 canonical 四件套预置到该目标机。`init-server.sh` 会创建 root-owned
 `/var/lib/ss-erp-extension-releases`；每个 commit 使用一个 root-owned、不可被 group/world 写入、
 构建用户只读的子目录，并通过进程环境传入：
 
@@ -366,6 +368,10 @@ node scripts/verify-extension-publication.mjs \
   --receipt "$PUBLICATION/ss-erp-extension-$VERSION.distribution-receipt.json" \
   --keyring config/extension-release-trusted-keys.json
 ```
+
+国际站和国内站必须分别运行上述 probe/verifier：国际站使用 `https://ss-erp.com` 及 `.com` 候选，
+国内站使用 `https://ss-erp.cn` 及 `.cn` 候选。两份回执不得混用；候选可以同版、同 commit，但其
+evidence/signature/receipt SHA-256 必然独立。
 
 因此执行顺序是 `REL-03a package/sign -> REL-04 dark deploy/canary -> REL-03b website receipt`；只有
 最终 verifier 通过，`REL-03` 与 `REL-04` 才能同时关闭并进入 `REL-02`。任何阶段都不能把私钥复制

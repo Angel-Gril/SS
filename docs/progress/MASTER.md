@@ -111,6 +111,24 @@ access, deployment, flag change, Provider call, ERP ingest, or Ozon mutation occ
 `REL-04` remain open until dark deployment/canaries and the signed first-party cloud/local download
 receipt pass; Phase 6 remains `0/3` and overall progress remains `34/37`.
 
+A regional-origin audit then confirmed that the `.com` candidate cannot pass the domestic `.cn`
+deployment verifier. A second region-specific candidate was built from the same target commit and
+the same version `1.0.266`, binding `https://app.ss-erp.cn`, `https://admin.ss-erp.cn`, and
+`https://ss-erp.cn`. It retains exactly four files with cloud ZIP SHA-256 `23746c3b...14285`, local
+ZIP SHA-256 `2903ef35...9606`, evidence SHA-256 `1a1c756f...9d60`, and detached Ed25519 signature
+SHA-256 `1cd54054...ff06`. Independent signature verification passed. The `.cn` same-path Chromium
+upgrade retained the non-secret profile, cleared the session sentinel, and kept the same extension
+ID; private summary SHA-256 is `b10d8990...e7a1`.
+
+Read-only VPS readiness checks made no remote changes. The international SSH TCP port was reachable,
+but the host closed the SSH session before state inspection. The domestic VPS remained healthy on
+commit `9e7c8140...3f` with API/Web/Worker active, but still uses the legacy `/opt/ss-erp/app` layout;
+its private env has empty `CORS_EXTENSION_ORIGINS` and no release origin, stable database identity,
+backup directory, or verification-age settings, and `/var/lib/ss-erp-extension-releases` is absent.
+It is therefore not ready for the hardened `REL-04` deploy. No upload, backup, migration, restart,
+website probe, flag change, Provider call, ERP ingest, or Ozon mutation occurred. Phase 6 remains
+`0/3` and overall progress remains `34/37`.
+
 Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
 runner sent exactly one request to the approved route, received definite HTTP 400, produced no
 image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero; official receipt
@@ -974,17 +992,20 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep historical `1.0.265` and signed target-commit `1.0.266` immutable. Execute `REL-04` against
-   candidate commit `19e98810593ea619360edcadf9b78eacc93b37cd` with every pilot flag off and pass
-   dark deployment/pre-enable canaries. Probe both exact `/api/extensions`
-   downloads, retain and verify the signed receipt, close `REL-03`/`REL-04` together, and finally run `REL-02`
+7. Keep historical `1.0.265` and both region-specific signed target-commit `1.0.266` candidates
+   immutable. Execute `REL-04` against candidate commit
+   `19e98810593ea619360edcadf9b78eacc93b37cd`, using the `.com` four-file candidate internationally
+   and the `.cn` candidate domestically, with every pilot flag off. First restore international SSH
+   inspection and migrate each operator env to the hardened release/backup contract. Then pass dark
+   deployment/pre-enable canaries, probe both exact `/api/extensions` downloads in each region,
+   retain and verify both signed receipts, close `REL-03`/`REL-04` together, and finally run `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
    stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
    to create and verify a fresh target-commit restore attestation; do not bypass the new gate with an
    old `backup-status.json` or the removed `RUN_DB_BACKUP` option.
-   After the one-time `REL-03` package/sign/distribution step, install its exact canonical four-file
-   candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
+   After the regional `REL-03` package/sign step, install the matching region's exact canonical
+   four-file candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
    that path as `EXTENSION_RELEASE_ROOT`; deployment must never rebuild or increment it.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.

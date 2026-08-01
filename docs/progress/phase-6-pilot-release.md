@@ -196,3 +196,20 @@ Progress: 0/3 tasks.
   `REL-03a` is ready, but no real website probe, VPS access, deployment, flag, Provider, ERP or Ozon
   action ran. `REL-03` and `REL-04` remain unchecked until dark canaries and the signed cloud/local
   website receipt pass; Phase 6 remains `0/3` and overall progress remains `34/37`.
+- Region binding requires independent `.com` and `.cn` publication chains. From the same clean
+  commit and version `1.0.266`, the domestic candidate binds `https://app.ss-erp.cn`,
+  `https://admin.ss-erp.cn`, and `https://ss-erp.cn`; its cloud/local ZIP SHA-256 values are
+  `23746c3b8bd7b1ce11184dcdcf4161edf182c1b930bb0a4f3fd803728ea14285` and
+  `2903ef35faadfea3369e3013559b263f86c96c5b085006162f9f4affd8689606`. Evidence SHA-256 is
+  `1a1c756fa5c3b38a824519a048218273c84574c7b1e8c98272148cbdad209d60`; detached signature
+  SHA-256 is `1cd54054ed45fb71d74af73427cfdd5dfc3136ad340a2fdc0d3ffb2628abff06` and independently
+  verifies against the repository public key. Its same-path `1.0.265` to `1.0.266` Chromium smoke
+  preserved the extension ID and non-secret profile and cleared session/local/sync secret state;
+  private summary SHA-256 is `b10d89903c7bd8a7238df5278e35b143d424c8d274e3bf547aa067d4758ce7a1`.
+- Subsequent read-only VPS checks changed no remote state. International port 22 accepted TCP but
+  closed the SSH session before inspection. Domestic API/Web/Worker remained active on legacy
+  commit `9e7c8140a17592b76be4b219332f65b58d18cb3f`; its env still has empty
+  `CORS_EXTENSION_ORIGINS`, lacks the hardened release-origin/database-identity/backup settings,
+  and `/var/lib/ss-erp-extension-releases` is absent. `REL-04` must not deploy until those one-time
+  prerequisites are explicitly authorized and verified. No upload, backup, migration, restart,
+  website GET, flag, Provider, ERP, or Ozon action occurred; counts remain `0/3` and `34/37`.
