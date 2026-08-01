@@ -53,6 +53,12 @@ chat was exposed and was not used, no live DashScope request was made, and no Wa
 incurred. Revoke that value and use only a separately rotated private credential revision for any
 future authenticated preflight or paid approval.
 
+The dedicated DashScope catalog-only preflight may verify that a rotated credential can read an
+exact `wanx2.1-imageedit` model entry from the reviewed legacy API Base. Its v3 manifest explicitly
+requires separate billing evidence and records `editCapabilityVerified=false`; it is not a pricing
+record, maximum-cost approval, billing snapshot, or positive edit result. Do not create a paid
+approval merely because this GET succeeds.
+
 The candidate `https://ai.big-model-api.top/v1` / `gpt-image-2-count` is present in an
 authenticated model catalogue, but the catalogue does not need to be a live pricing source for
 this sandbox. Before a paid approval, retain a private, versioned backend pricing policy that binds

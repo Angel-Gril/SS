@@ -58,6 +58,18 @@ Mocked evidence is not Provider acceptance. The Alibaba credential pasted into c
 was not used; it must be revoked before any authenticated Wanx preflight or paid operation. Public
 pricing remains planning input, not a maximum-cost authorization or settled billing proof.
 
+The read-only helper now has a separate DashScope Wanx catalog-only v3 contract for the reviewed
+legacy API Base and exact `wanx2.1-imageedit` model. It sends one bounded authenticated model GET,
+rejects workspace hosts and billing-origin mixing before DNS or credential input, and explicitly
+records `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED` plus
+`editCapabilityVerified=false`; it never contacts task, image-synthesis, or guessed billing paths.
+Historical Packy v1 and Xiaoyi v2 manifest shapes remain compatible. Focused preflight tests pass
+`80` with four platform skips; Server and sandbox typechecks, target lint, the static contract, and
+diff checks pass. The full Server suite passes `4720` with `199` skips. No private credential was
+present or read, no authenticated GET or Provider POST was sent, and no charge, deployment, flag,
+ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37` until live edit evidence is
+accepted.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both

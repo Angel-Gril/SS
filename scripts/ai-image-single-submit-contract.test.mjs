@@ -306,6 +306,13 @@ assert.match(readonlyPreflight, /contentType:\s*'application\/json'/u);
 assert.match(readonlyPreflight, /PACKY_API_KEY/u);
 assert.match(readonlyPreflight, /PACKY_TOKEN/u);
 assert.match(readonlyPreflight, /ai-image-xiaoyi-provider\.js/u);
+assert.match(readonlyPreflight, /ai-image-wanx-edit-profile\.js/u);
+assert.match(readonlyPreflight, /DASHSCOPE_MODEL_CATALOG/u);
+assert.match(readonlyPreflight, /AI_IMAGE_WANX21_EDIT_MODEL/u);
+assert.match(readonlyPreflight, /page_no/u);
+assert.match(readonlyPreflight, /page_size/u);
+assert.match(readonlyPreflight, /SEPARATE_EVIDENCE_REQUIRED/u);
+assert.match(readonlyPreflight, /editCapabilityVerified:\s*false/u);
 assert.match(
   readonlyPreflight,
   /'apps\/server\/src\/services\/ai-image-xiaoyi-provider\.ts'/u,
@@ -577,6 +584,10 @@ assert.match(runbook, /XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2/u);
 assert.match(runbook, /DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1/u);
 assert.match(runbook, /DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1/u);
 assert.match(runbook, /DASHSCOPE_WANX21_INPAINT_ASYNC_V1/u);
+assert.match(runbook, /DashScope Wanx catalog-only preflight/u);
+assert.match(runbook, /billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED/u);
+assert.match(runbook, /editCapabilityVerified=false/u);
+assert.match(runbook, /workspace-specific host is a different/u);
 assert.match(runbook, /X-DashScope-Async:\s*enable/u);
 assert.match(runbook, /task_metrics\.TOTAL=1/u);
 assert.match(runbook, /usage\.image_count=1/u);
@@ -598,6 +609,8 @@ assert.match(approvalRunbook, /DASHSCOPE_WANX21_IMAGE_TO_IMAGE_ASYNC_V1/u);
 assert.match(approvalRunbook, /DASHSCOPE_WANX21_FULL_EDIT_ASYNC_V1/u);
 assert.match(approvalRunbook, /DASHSCOPE_WANX21_INPAINT_ASYNC_V1/u);
 assert.match(approvalRunbook, /three separate\s+policies, Operation IDs, approval files/u);
+assert.match(approvalRunbook, /catalog-only preflight/u);
+assert.match(approvalRunbook, /editCapabilityVerified=false/u);
 assert.match(billingRunbook, /finalizer derives the multipart dialect from the versioned request profile/u);
 assert.match(billingRunbook, /minimal V2 recomputes the distinct/u);
 assert.match(billingRunbook, /DASHSCOPE_WANX21_ASYNC_JSON_DATA_URL_V1/u);

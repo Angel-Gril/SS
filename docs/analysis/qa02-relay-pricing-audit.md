@@ -646,6 +646,35 @@ the positive live-evidence dependency from later release gates. Overall progress
 `32/37` until real operation-specific Provider, billing, privacy, and human quality evidence is
 retained.
 
+### DashScope Wanx catalog-only preflight implementation
+
+The shared read-only helper now has an isolated schema v3 branch for the reviewed legacy
+`https://dashscope.aliyuncs.com/api/v1` identity and exact `wanx2.1-imageedit` model. It performs
+exactly one credential-bearing GET:
+
+```text
+GET /api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1
+```
+
+The branch retains the existing stdin-only credential, public DNS validation, DNS pinning,
+no-redirect, no-cookie, bounded-response, secret-reflection, private-evidence, and clean-revision
+controls. It accepts only the reviewed DashScope `request_id` plus `output.models[].model_id`
+envelope with at most one row and requires the exact model ID. It rejects workspace-specific hosts,
+an injected billing origin, OpenAI-style catalogue envelopes, multiple rows, and wrong models before
+they can become evidence.
+
+The private manifest and sanitized completion event record authentication and exact catalogue
+visibility, but also record `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
+`providerPostSent=false`, `chargeObserved=false`, and `editCapabilityVerified=false`. No guessed
+DashScope billing endpoint or arbitrary task lookup is used. A successful preflight therefore does
+not prove edit permission, price, balance, billing, or positive capability; separate before/settled
+Alibaba billing evidence and a successful paid edit remain mandatory.
+
+Focused tests pass `80` with four platform skips. Server and sandbox typechecks, target lint, the
+static contract, diff checks, and the full Server suite (`4720` passed, `199` skipped) pass. This
+checkpoint read no private credential and sent no authenticated GET, task request, synthesis POST,
+or charge. `QA-02` and the overall `32/37` count remain unchanged.
+
 ## PicPi public no-credential preflight
 
 At the public-preflight checkpoint on 2026-08-01, the operator supplied `https://api.picpi.top` as

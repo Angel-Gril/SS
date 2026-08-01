@@ -11,6 +11,10 @@ import {
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
 import {
+  AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+  AI_IMAGE_WANX21_EDIT_MODEL,
+} from '../src/services/ai-image-wanx-edit-profile.js';
+import {
   AI_IMAGE_XIAOYI_API_BASE,
   AI_IMAGE_XIAOYI_BILLING_HOST,
   AI_IMAGE_XIAOYI_BILLING_ORIGIN,
@@ -48,6 +52,7 @@ const READONLY_PREFLIGHT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-providers.ts',
   'apps/server/src/services/ai-image-sandbox-billing-settlement.ts',
   'apps/server/src/services/ai-image-sandbox-code-revision.ts',
+  'apps/server/src/services/ai-image-wanx-edit-profile.ts',
   'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'apps/server/src/services/ai-image-job-error.ts',
 ];
@@ -73,18 +78,20 @@ interface CapturedResponse {
 }
 
 interface ReviewedProviderIdentity {
-  manifestSchemaVersion: 1 | 2;
+  manifestSchemaVersion: 1 | 2 | 3;
+  preflightKind: 'NEW_API_METERS' | 'DASHSCOPE_MODEL_CATALOG';
   apiBase: string;
   apiHost: string;
-  billingOrigin: string;
-  billingHost: string;
+  billingOrigin: string | null;
+  billingHost: string | null;
   model: string;
-  emptyTokenLogMessage: string;
+  emptyTokenLogMessage: string | null;
 }
 
 const REVIEWED_PROVIDER_IDENTITIES: readonly ReviewedProviderIdentity[] = Object.freeze([
   Object.freeze({
     manifestSchemaVersion: 1,
+    preflightKind: 'NEW_API_METERS',
     apiBase: PACKY_API_BASE,
     apiHost: PACKY_EXPECTED_HOST,
     billingOrigin: new URL(PACKY_API_BASE).origin,
@@ -94,12 +101,23 @@ const REVIEWED_PROVIDER_IDENTITIES: readonly ReviewedProviderIdentity[] = Object
   }),
   Object.freeze({
     manifestSchemaVersion: 2,
+    preflightKind: 'NEW_API_METERS',
     apiBase: AI_IMAGE_XIAOYI_API_BASE,
     apiHost: AI_IMAGE_XIAOYI_EXPECTED_HOST,
     billingOrigin: AI_IMAGE_XIAOYI_BILLING_ORIGIN,
     billingHost: AI_IMAGE_XIAOYI_BILLING_HOST,
     model: AI_IMAGE_XIAOYI_MODEL,
     emptyTokenLogMessage: PACKY_EMPTY_TOKEN_LOG_MESSAGE,
+  }),
+  Object.freeze({
+    manifestSchemaVersion: 3,
+    preflightKind: 'DASHSCOPE_MODEL_CATALOG',
+    apiBase: AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE,
+    apiHost: new URL(AI_IMAGE_WANX21_EDIT_LEGACY_API_BASE).hostname,
+    billingOrigin: null,
+    billingHost: null,
+    model: AI_IMAGE_WANX21_EDIT_MODEL,
+    emptyTokenLogMessage: null,
   }),
 ]);
 
@@ -208,11 +226,13 @@ function assertExpectedResponseSchema(
       && value.success === true
       && typeof value.message === 'string'
       && (value.data === undefined || Array.isArray(value.data)));
-  } else {
+  } else if (identity.preflightKind === 'NEW_API_METERS') {
     valid = isRecord(value)
       && value.success === true
       && value.object === 'list'
       && Array.isArray(value.data);
+  } else {
+    valid = dashScopeModels(value) !== null;
   }
   if (!valid) {
     throw preflightError(
@@ -400,7 +420,35 @@ async function readBoundedResponse(response: Response, maximumBytes = MAX_RESPON
   }
 }
 
-function exactModelAvailable(value: unknown, model: string) {
+function dashScopeModels(value: unknown): Array<Record<string, unknown>> | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.request_id !== 'string'
+    || value.request_id.length < 1
+    || value.request_id.length > 500
+  ) return null;
+  const output = isRecord(value.output) ? value.output : null;
+  if (!output || !Array.isArray(output.models) || output.models.length > 1) {
+    return null;
+  }
+  const models = output.models;
+  if (!models.every((entry) => (
+    isRecord(entry)
+    && typeof entry.model_id === 'string'
+    && entry.model_id.length > 0
+    && entry.model_id.length <= 256
+  ))) return null;
+  return models as Array<Record<string, unknown>>;
+}
+
+function exactModelAvailable(
+  value: unknown,
+  model: string,
+  identity: ReviewedProviderIdentity,
+) {
+  if (identity.preflightKind === 'DASHSCOPE_MODEL_CATALOG') {
+    return dashScopeModels(value)?.some((entry) => entry.model_id === model) || false;
+  }
   return isRecord(value)
     && value.success === true
     && value.object === 'list'
@@ -418,7 +466,7 @@ function reviewedProviderIdentity(input: {
     input.apiBase === identity.apiBase
     && input.expectedHost === identity.apiHost
     && input.model === identity.model
-    && input.billingOrigin === identity.billingOrigin
+    && input.billingOrigin === (identity.billingOrigin || '')
   )) || null;
 }
 
@@ -510,10 +558,13 @@ export async function runAiImageProviderReadonlyPreflight(
     family: 4 | 6;
     ttl: number;
   }>>();
-  for (const target of [
+  const dnsTargets = [
     { host: identity.apiHost, url: identity.apiBase },
-    { host: identity.billingHost, url: identity.billingOrigin },
-  ]) {
+    ...(identity.billingHost && identity.billingOrigin
+      ? [{ host: identity.billingHost, url: identity.billingOrigin }]
+      : []),
+  ];
+  for (const target of dnsTargets) {
     if (pinnedRecordsByHost.has(target.host)) continue;
     try {
       const dnsRecords = await dnsResolver(target.host);
@@ -567,7 +618,7 @@ export async function runAiImageProviderReadonlyPreflight(
       credentialRevision,
       configuredEvidenceRoot,
       identity.apiBase,
-      identity.billingOrigin,
+      identity.billingOrigin || '',
     ].some((value) => (
       value.includes(credential)
     ))) {
@@ -576,12 +627,6 @@ export async function runAiImageProviderReadonlyPreflight(
         'Read-only non-secret identifiers must not contain the credential',
       );
     }
-    const endpoints = {
-      tokenUsage: `${identity.billingOrigin}/api/usage/token/`,
-      displayUsage: `${identity.billingOrigin}/v1/dashboard/billing/usage`,
-      tokenLog: `${identity.billingOrigin}/api/log/token`,
-      models: `${apiBase}/models`,
-    } as const;
     const captures: CapturedResponse[] = [];
     const capture = async (
       phase: CapturedResponse['phase'],
@@ -656,42 +701,74 @@ export async function runAiImageProviderReadonlyPreflight(
       return result;
     };
 
-    const before = {
-      tokenUsage: await capture('BEFORE', 'tokenUsage', endpoints.tokenUsage, 'before-tokenUsage.json'),
-      displayUsage: await capture(
-        'BEFORE',
-        'displayUsage',
-        endpoints.displayUsage,
-        'before-displayUsage.json',
-      ),
-      tokenLog: await capture('BEFORE', 'tokenLog', endpoints.tokenLog, 'before-tokenLog.json'),
-    };
-    const models = await capture('CHECK', 'models', endpoints.models, 'check-models.json');
-    if (!exactModelAvailable(models.parsed, model)) {
-      throw preflightError(
-        'SANDBOX_READONLY_MODEL_UNAVAILABLE',
-        'Read-only Provider catalogue does not expose the exact model',
+    if (identity.preflightKind === 'DASHSCOPE_MODEL_CATALOG') {
+      const modelsEndpoint = new URL(`${apiBase}/models`);
+      modelsEndpoint.searchParams.set('model', model);
+      modelsEndpoint.searchParams.set('page_no', '1');
+      modelsEndpoint.searchParams.set('page_size', '1');
+      const models = await capture(
+        'CHECK',
+        'models',
+        modelsEndpoint.toString(),
+        'check-models.json',
       );
+      if (!exactModelAvailable(models.parsed, model, identity)) {
+        throw preflightError(
+          'SANDBOX_READONLY_MODEL_UNAVAILABLE',
+          'Read-only Provider catalogue does not expose the exact model',
+        );
+      }
+    } else {
+      const billingOriginValue = identity.billingOrigin!;
+      const endpoints = {
+        tokenUsage: `${billingOriginValue}/api/usage/token/`,
+        displayUsage: `${billingOriginValue}/v1/dashboard/billing/usage`,
+        tokenLog: `${billingOriginValue}/api/log/token`,
+        models: `${apiBase}/models`,
+      } as const;
+      const before = {
+        tokenUsage: await capture('BEFORE', 'tokenUsage', endpoints.tokenUsage, 'before-tokenUsage.json'),
+        displayUsage: await capture(
+          'BEFORE',
+          'displayUsage',
+          endpoints.displayUsage,
+          'before-displayUsage.json',
+        ),
+        tokenLog: await capture('BEFORE', 'tokenLog', endpoints.tokenLog, 'before-tokenLog.json'),
+      };
+      const models = await capture('CHECK', 'models', endpoints.models, 'check-models.json');
+      if (!exactModelAvailable(models.parsed, model, identity)) {
+        throw preflightError(
+          'SANDBOX_READONLY_MODEL_UNAVAILABLE',
+          'Read-only Provider catalogue does not expose the exact model',
+        );
+      }
+      const after = {
+        tokenUsage: await capture('AFTER', 'tokenUsage', endpoints.tokenUsage, 'after-tokenUsage.json'),
+        displayUsage: await capture(
+          'AFTER',
+          'displayUsage',
+          endpoints.displayUsage,
+          'after-displayUsage.json',
+        ),
+        tokenLog: await capture('AFTER', 'tokenLog', endpoints.tokenLog, 'after-tokenLog.json'),
+      };
+      const metersUnchanged = (
+        before.tokenUsage.body.equals(after.tokenUsage.body)
+        && before.displayUsage.body.equals(after.displayUsage.body)
+        && before.tokenLog.body.equals(after.tokenLog.body)
+      );
+      if (!metersUnchanged) {
+        throw preflightError(
+          'SANDBOX_READONLY_METERS_CHANGED',
+          'Read-only Provider meters changed during the observation window',
+        );
+      }
     }
-    const after = {
-      tokenUsage: await capture('AFTER', 'tokenUsage', endpoints.tokenUsage, 'after-tokenUsage.json'),
-      displayUsage: await capture(
-        'AFTER',
-        'displayUsage',
-        endpoints.displayUsage,
-        'after-displayUsage.json',
-      ),
-      tokenLog: await capture('AFTER', 'tokenLog', endpoints.tokenLog, 'after-tokenLog.json'),
-    };
-    const metersUnchanged = (
-      before.tokenUsage.body.equals(after.tokenUsage.body)
-      && before.displayUsage.body.equals(after.displayUsage.body)
-      && before.tokenLog.body.equals(after.tokenLog.body)
-    );
-    if (!metersUnchanged) {
+    if (!captures.length) {
       throw preflightError(
-        'SANDBOX_READONLY_METERS_CHANGED',
-        'Read-only Provider meters changed during the observation window',
+        'SANDBOX_READONLY_PROVIDER_FAILED',
+        'Read-only Provider preflight captured no evidence',
       );
     }
 
@@ -710,20 +787,37 @@ export async function runAiImageProviderReadonlyPreflight(
           chargeObserved: false,
           records,
         }
-      : {
-          schemaVersion: 2,
-          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
-          operationId,
-          credentialRevision,
-          adapterRevision,
-          apiBase,
-          billingOrigin: identity.billingOrigin,
-          model,
-          metersUnchanged: true,
-          providerPostSent: false,
-          chargeObserved: false,
-          records,
-        };
+      : identity.manifestSchemaVersion === 2
+        ? {
+            schemaVersion: 2,
+            event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+            operationId,
+            credentialRevision,
+            adapterRevision,
+            apiBase,
+            billingOrigin: identity.billingOrigin,
+            model,
+            metersUnchanged: true,
+            providerPostSent: false,
+            chargeObserved: false,
+            records,
+          }
+        : {
+            schemaVersion: 3,
+            event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+            operationId,
+            credentialRevision,
+            adapterRevision,
+            apiBase,
+            model,
+            authenticationVerified: true,
+            exactModelListed: true,
+            billingMeterStatus: 'SEPARATE_EVIDENCE_REQUIRED',
+            providerPostSent: false,
+            chargeObserved: false,
+            editCapabilityVerified: false,
+            records,
+          };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     const manifestSha256 = sha256(manifestBytes);
     let outputDirectory = '';
@@ -759,20 +853,37 @@ export async function runAiImageProviderReadonlyPreflight(
           providerPostSent: false,
           chargeObserved: false,
         }
-      : {
-          schemaVersion: 2,
-          event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
-          operationId,
-          credentialRevision,
-          adapterRevision,
-          model,
-          apiBaseSha256: sha256(apiBase),
-          billingOriginSha256: sha256(identity.billingOrigin),
-          manifestSha256,
-          metersUnchanged: true,
-          providerPostSent: false,
-          chargeObserved: false,
-        };
+      : identity.manifestSchemaVersion === 2
+        ? {
+            schemaVersion: 2,
+            event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+            operationId,
+            credentialRevision,
+            adapterRevision,
+            model,
+            apiBaseSha256: sha256(apiBase),
+            billingOriginSha256: sha256(identity.billingOrigin!),
+            manifestSha256,
+            metersUnchanged: true,
+            providerPostSent: false,
+            chargeObserved: false,
+          }
+        : {
+            schemaVersion: 3,
+            event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+            operationId,
+            credentialRevision,
+            adapterRevision,
+            model,
+            apiBaseSha256: sha256(apiBase),
+            manifestSha256,
+            authenticationVerified: true,
+            exactModelListed: true,
+            billingMeterStatus: 'SEPARATE_EVIDENCE_REQUIRED',
+            providerPostSent: false,
+            chargeObserved: false,
+            editCapabilityVerified: false,
+          };
     process.stdout.write(`${JSON.stringify(event, null, 2)}\n`);
     return { manifest, manifestSha256, outputDirectory };
   } finally {

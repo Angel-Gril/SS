@@ -63,6 +63,17 @@ async function xiaoyiFixture() {
   return { ...value, evidenceId: 'xiaoyi-readonly-test-0001' };
 }
 
+async function wanxFixture() {
+  const value = await fixture();
+  value.environment.AI_IMAGE_SANDBOX_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1';
+  value.environment.AI_IMAGE_SANDBOX_EXPECTED_HOST = 'dashscope.aliyuncs.com';
+  value.environment.AI_IMAGE_SANDBOX_MODEL = 'wanx2.1-imageedit';
+  value.environment.AI_IMAGE_SANDBOX_OPERATION_ID = 'qa02-wanx-i2i-main-test-0001';
+  value.environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION = 'wanx-key-test-0001';
+  value.environment.AI_IMAGE_SANDBOX_READONLY_EVIDENCE_ID = 'wanx-readonly-test-0001';
+  return { ...value, evidenceId: 'wanx-readonly-test-0001' };
+}
+
 function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
@@ -179,6 +190,38 @@ function successfulXiaoyiFetch() {
       return jsonResponse({ message: 'record not found', success: false });
     }
     throw new Error(`Unexpected URL ${url.toString()}`);
+  });
+}
+
+function successfulWanxFetch(overrides: {
+  model?: string;
+  requestId?: unknown;
+  models?: unknown;
+  envelope?: 'output' | 'data';
+} = {}) {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    expect(init?.method).toBe('GET');
+    expect(init?.redirect).toBe('error');
+    expect(init?.credentials).toBe('omit');
+    expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${credential}`);
+    expect(init?.body).toBeUndefined();
+    const url = new URL(String(input));
+    expect(url.origin).toBe('https://dashscope.aliyuncs.com');
+    expect(url.pathname).toBe('/api/v1/models');
+    expect([...url.searchParams.entries()]).toEqual([
+      ['model', 'wanx2.1-imageedit'],
+      ['page_no', '1'],
+      ['page_size', '1'],
+    ]);
+    const models = overrides.models ?? [{
+      model_id: overrides.model || 'wanx2.1-imageedit',
+      name: 'Wanx 2.1 image edit',
+    }];
+    const body = {
+      request_id: overrides.requestId === undefined ? 'dashscope-readonly-request-1' : overrides.requestId,
+      [overrides.envelope || 'output']: { models },
+    };
+    return jsonResponse(body);
   });
 }
 
@@ -326,6 +369,20 @@ describe('AI image Provider read-only preflight', () => {
       providerPostSent: false,
       chargeObserved: false,
     });
+    expect(Object.keys(result.manifest)).toEqual([
+      'schemaVersion',
+      'event',
+      'operationId',
+      'credentialRevision',
+      'adapterRevision',
+      'apiBase',
+      'billingOrigin',
+      'model',
+      'metersUnchanged',
+      'providerPostSent',
+      'chargeObserved',
+      'records',
+    ]);
     const event = JSON.parse(stdout.join('')) as Record<string, unknown>;
     expect(event).toMatchObject({
       schemaVersion: 2,
@@ -338,6 +395,148 @@ describe('AI image Provider read-only preflight', () => {
       .update('https://xiaoyiapi.xyz').digest('hex'));
     expect(stdout.join('')).not.toContain('xiaoyiapi.xyz');
     expect(stdout.join('')).not.toContain(credential);
+  });
+
+  it('captures one catalog-only Wanx GET without claiming billing or edit capability', async () => {
+    const value = await wanxFixture();
+    const fetch = successfulWanxFetch();
+    const resolveRevision = vi.fn(async () => adapterRevision);
+    const stdout: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const result = await runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision,
+      resolveDns: vi.fn(async () => [{ address: '47.74.1.1' }]),
+      fetch,
+      readCredential: vi.fn(async () => credential),
+      now: vi.fn(() => new Date('2030-01-01T00:00:00.000Z')),
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(String(fetch.mock.calls[0]![0])).toBe(
+      'https://dashscope.aliyuncs.com/api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1',
+    );
+    expect(resolveRevision).toHaveBeenCalledWith(
+      value.root,
+      undefined,
+      expect.arrayContaining(['apps/server/src/services/ai-image-wanx-edit-profile.ts']),
+      undefined,
+    );
+    expect(result.manifest).toEqual({
+      schemaVersion: 3,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT',
+      operationId: value.environment.AI_IMAGE_SANDBOX_OPERATION_ID,
+      credentialRevision: value.environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION,
+      adapterRevision,
+      apiBase: 'https://dashscope.aliyuncs.com/api/v1',
+      model: 'wanx2.1-imageedit',
+      authenticationVerified: true,
+      exactModelListed: true,
+      billingMeterStatus: 'SEPARATE_EVIDENCE_REQUIRED',
+      providerPostSent: false,
+      chargeObserved: false,
+      editCapabilityVerified: false,
+      records: [{
+        phase: 'CHECK',
+        name: 'models',
+        method: 'GET',
+        uri: 'https://dashscope.aliyuncs.com/api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1',
+        httpStatus: 200,
+        contentType: 'application/json',
+        observedAt: '2030-01-01T00:00:00.000Z',
+        bytes: expect.any(Number),
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        file: 'check-models.json',
+      }],
+    });
+    expect((await readdir(result.outputDirectory)).sort()).toEqual([
+      'check-models.json',
+      'manifest.json',
+    ]);
+    const stored = `${await readFile(join(result.outputDirectory, 'check-models.json'), 'utf8')}${
+      await readFile(join(result.outputDirectory, 'manifest.json'), 'utf8')
+    }`;
+    expect(stored).not.toContain(credential);
+    expect(stdout.join('')).not.toContain(credential);
+    expect(JSON.parse(stdout.join(''))).toEqual({
+      schemaVersion: 3,
+      event: 'AI_IMAGE_PROVIDER_READONLY_PREFLIGHT_COMPLETED',
+      operationId: value.environment.AI_IMAGE_SANDBOX_OPERATION_ID,
+      credentialRevision: value.environment.AI_IMAGE_SANDBOX_CREDENTIAL_REVISION,
+      adapterRevision,
+      model: 'wanx2.1-imageedit',
+      apiBaseSha256: createHash('sha256')
+        .update('https://dashscope.aliyuncs.com/api/v1').digest('hex'),
+      manifestSha256: result.manifestSha256,
+      authenticationVerified: true,
+      exactModelListed: true,
+      billingMeterStatus: 'SEPARATE_EVIDENCE_REQUIRED',
+      providerPostSent: false,
+      chargeObserved: false,
+      editCapabilityVerified: false,
+    });
+  });
+
+  it.each([
+    ['OpenAI-style data envelope', { envelope: 'data' as const }],
+    ['missing request ID', { requestId: null }],
+    ['oversized request ID', { requestId: 'x'.repeat(501) }],
+    ['multiple models despite page size one', {
+      models: [{ model_id: 'wanx2.1-imageedit' }, { model_id: 'another-model' }],
+    }],
+    ['id instead of model_id', { models: [{ id: 'wanx2.1-imageedit' }] }],
+  ])('rejects a noncanonical DashScope catalogue: %s', async (_label, overrides) => {
+    const value = await wanxFixture();
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns: vi.fn(async () => [{ address: '47.74.1.1' }]),
+      fetch: successfulWanxFetch(overrides),
+      readCredential: vi.fn(async () => credential),
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_RESPONSE_SCHEMA_INVALID' });
+  });
+
+  it('rejects a canonical DashScope catalogue that omits the exact model', async () => {
+    const value = await wanxFixture();
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns: vi.fn(async () => [{ address: '47.74.1.1' }]),
+      fetch: successfulWanxFetch({ model: 'wanx-other-model' }),
+      readCredential: vi.fn(async () => credential),
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_MODEL_UNAVAILABLE' });
+  });
+
+  it.each([
+    ['workspace API base', 'AI_IMAGE_SANDBOX_BASE_URL', 'https://workspace-1.cn-beijing.maas.aliyuncs.com/api/v1'],
+    ['workspace expected host', 'AI_IMAGE_SANDBOX_EXPECTED_HOST', 'workspace-1.cn-beijing.maas.aliyuncs.com'],
+    ['different model', 'AI_IMAGE_SANDBOX_MODEL', 'wanx2.1-t2i-turbo'],
+    ['billing origin', 'AI_IMAGE_SANDBOX_BILLING_ORIGIN', 'https://dashscope.aliyuncs.com'],
+  ])('rejects Wanx legacy identity mixing: %s', async (_label, name, replacement) => {
+    const value = await wanxFixture();
+    value.environment[name] = replacement;
+    const readCredential = vi.fn(async () => credential);
+    const resolveDns = vi.fn(async () => [{ address: '47.74.1.1' }]);
+    const fetch = successfulWanxFetch();
+
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns,
+      fetch,
+      readCredential,
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_PROVIDER_INVALID' });
+    expect(readCredential).not.toHaveBeenCalled();
+    expect(resolveDns).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([

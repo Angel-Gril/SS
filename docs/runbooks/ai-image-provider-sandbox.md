@@ -191,6 +191,33 @@ Token-log evidence only from the exact Xiaoyi billing origin, and that billing o
 an intent for any other API Base. All other Providers retain the same-origin `/v1` API and Token-log
 rule. Both the preflight and finalizer Git revision checks include the shared Xiaoyi identity module.
 
+### DashScope Wanx catalog-only preflight
+
+Before preparing the first Wanx approval, run the same read-only command with the exact reviewed
+legacy identity: API Base `https://dashscope.aliyuncs.com/api/v1`, expected host
+`dashscope.aliyuncs.com`, and model `wanx2.1-imageedit`. Do not set
+`AI_IMAGE_SANDBOX_BILLING_ORIGIN` for this branch. A workspace-specific host is a different
+Provider identity and remains rejected until its exact Workspace ID and complete approval,
+execution, and billing chain are reviewed.
+
+The command sends exactly one authenticated GET with no request body:
+
+```text
+GET /api/v1/models?model=wanx2.1-imageedit&page_no=1&page_size=1
+```
+
+The credential is accepted only through bounded UTF-8 stdin, DNS remains pinned, redirects and
+ambient credentials remain disabled, and no task, image-synthesis, or guessed billing endpoint is
+called. The private v3 manifest records `authenticationVerified=true`,
+`exactModelListed=true`, `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
+`providerPostSent=false`, `chargeObserved=false`, and `editCapabilityVerified=false`.
+
+This observation proves only that the exact credential can read a catalogue containing the model.
+It does not prove edit-route permission, successful editing, price, account balance, or billing.
+Retain separate private Alibaba console or reviewed Billing OpenAPI evidence immediately before and
+after every paid operation. Only a settled, quality-reviewed edit result can satisfy the matching
+`QA-02` operation.
+
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
 DPAPI outside the repository. Operation `qa02-xiaoyi-i2i-20260801-f189dfa-01` later sent the V1
