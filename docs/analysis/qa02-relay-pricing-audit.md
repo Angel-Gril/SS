@@ -823,14 +823,35 @@ five levels. Technical-review SHA-256
 `e44ee59f07111b18c78aad22a559a17810bef516636a11705a1abe60e9976526` therefore records positive
 mask transport, masked-region modification, unmasked preservation, product preservation, and no
 unexpected text, logo, watermark, or object. The requested blue change is visually subtle blue-gray
-and the hard boundary of the deliberately rectangular test mask remains visible. Human visual
-quality confirmation is pending and must not be inferred from the technical locality result.
+and the hard boundary of the deliberately rectangular test mask remains visible. The operator
+explicitly accepted those quality characteristics under private human-confirmation SHA-256
+`36b1970057cceae56027254c41c2732e44d8ee5f99c3e9c1de9ad2a0c46a2826`, which binds the report,
+technical review, and output image hashes while leaving billing unattested.
 
 Billing remains deliberately unresolved. Sidecar SHA-256
 `2c788c1978538f35bc7908cd39a7a262aa066a841a0d147e2923d19fdf0cc7c9` records
 `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, no formal receipt, and no same-request
-retry. This is positive INPAINT technical evidence only. It does not promote the Wanx candidate or
-change the `4/5` Phase 3 and `32/37` overall counts.
+retry. This is positive INPAINT capability and quality evidence only. It does not promote the Wanx
+candidate or provide a billing claim.
+
+### QA-02 technical acceptance closure
+
+The retained relay text-to-image result and the independently approved Wanx `IMAGE_TO_IMAGE`,
+`FULL_EDIT`, and `INPAINT` results satisfy the task's operation-specific technical scope. Wanx also
+proved the configured asynchronous create/poll/download path in every edit operation. No operation
+reused another approval or Operation ID, and no create request was retried. With all three returned
+images now approved by the operator, `QA-02` is complete: Phase 3 is `5/5` and overall progress is
+`33/37`.
+
+The configured sandbox matrix is profile-specific: it does not claim that the historical relay can
+edit or that Wanx supplied the retained text-to-image chain. This matches the heterogeneous adapter
+boundary and prevents evidence from one endpoint/model/profile being reused for another operation.
+
+This closure is deliberately narrower than Provider promotion. The three Wanx billing sidecars
+remain `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, with `actualCost=null`, no formal receipt, and
+`sameRequestRetryAllowed=false`. The candidate-only reviewer still requires task-correlated
+`billingGate=PASS` receipts. Therefore the live results may close technical sandbox capability
+testing but cannot promote Wanx into the production Registry, enable a flag, or authorize rollout.
 
 ## PicPi public no-credential preflight
 

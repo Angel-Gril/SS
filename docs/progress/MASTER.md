@@ -35,28 +35,42 @@ credential storage, or direct Ozon calls.
 - [x] Phase 0: Contract and regression baseline (3/3 tasks) [details](./phase-0-contract-baseline.md)
 - [x] Phase 1: Default-off security foundation (7/7 tasks) [details](./phase-1-security-foundation.md)
 - [x] Phase 2: Secure single-image BYOK vertical slice (10/10 tasks) [details](./phase-2-byok-vertical-slice.md)
-- [ ] Phase 3: Edit operations and batch engine (4/5 tasks) [details](./phase-3-edits-batch-engine.md)
+- [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [ ] Phase 5: Publishing closure and product quality (3/4 tasks) [details](./phase-5-publish-quality.md)
 - [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 32/37 tasks complete (86%).
+Overall: 33/37 tasks complete (89%).
 
 ## Current Status
 
-Current checkpoint (2026-08-01): the bounded PicPi `IMAGE_TO_IMAGE` operation is closed as negative
-evidence. The guarded runner sent exactly one request to the approved route, received definite HTTP
-400, produced no image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero;
-official receipt v5 records `NO_CHARGE`, `billingGate=PASS`, zero billed units, and
-`sameRequestRetryAllowed=false`. This does not prove edit capability: `QA-02` remains the first
-unresolved dependency at Phase 3 `4/5`, and overall progress remains `32/37`.
+Current checkpoint (2026-08-01): `QA-02` technical sandbox acceptance is complete. The earlier
+relay text-to-image chain and the three separately approved Wanx `IMAGE_TO_IMAGE`, `FULL_EDIT`, and
+`INPAINT` operations provide operation-specific positive Provider evidence. All three Wanx async
+tasks reached `SUCCEEDED`, each sent exactly one create request without retry, and each returned one
+validated 1024x1024 PNG. The operator approved all three images, including the subtle blue-gray
+INPAINT result and its visible rectangular test-mask boundary. Phase 3 is now `5/5`, overall
+progress is `33/37`, and `QA-04` is the next dependency-ready task.
+
+The Wanx API Key's billing account remains unlinked to the authenticated Bailian console account.
+No unrelated snapshot was used, actual cost remains unknown, and no formal Wanx billing receipt
+exists. This does not erase the real capability results, but it keeps the Wanx candidate out of the
+production Provider Registry and prevents candidate promotion. All rollout flags remain off; no
+deployment, VPS, ERP ingest, Ozon mutation, or production enablement occurred.
+
+Earlier, the bounded PicPi `IMAGE_TO_IMAGE` operation closed as negative evidence. The guarded
+runner sent exactly one request to the approved route, received definite HTTP 400, produced no
+image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero; official receipt
+v5 records `NO_CHARGE`, `billingGate=PASS`, zero billed units, and
+`sameRequestRetryAllowed=false`.
 
 Both Packy requests, both Xiaoyi requests, and this PicPi request are closed negative evidence and
-must not be retried. The sandbox-only Alibaba Wanx 2.1 asynchronous adapter remains the materially
-different offline candidate for separate `IMAGE_TO_IMAGE`, `FULL_EDIT`, and `INPAINT` validation.
-Mocked evidence is not Provider acceptance. The Alibaba credential pasted into chat was exposed and
-was not used; it must be revoked before any authenticated Wanx preflight or paid operation. Public
-pricing remains planning input, not a maximum-cost authorization or settled billing proof.
+must not be retried. At that earlier checkpoint, the sandbox-only Alibaba Wanx 2.1 asynchronous
+adapter was the materially different candidate selected for separate `IMAGE_TO_IMAGE`, `FULL_EDIT`,
+and `INPAINT` validation; the later live operations now provide that Provider acceptance evidence.
+The Alibaba credential pasted into chat was exposed, never used, and replaced before the retained
+preflight and paid operations by the current DPAPI credential revision. Public pricing remains
+planning input, not a maximum-cost authorization or settled billing proof.
 
 The first real DashScope Wanx catalog preflight stopped before credential input with
 `SANDBOX_READONLY_DNS_FAILED`: the original resolver required each A/AAAA owner to equal the
@@ -185,10 +199,12 @@ difference `3.418`, while the 1,022,976-pixel preserve region had mean differenc
 `0.07%` of its pixels changed by more than five RGB levels. Technical review SHA-256
 `e44ee59f...976526` therefore records positive mask transport, local modification, and unmasked
 preservation. The requested blue shift is subtle blue-gray and a hard test-mask boundary remains
-visible, so human quality confirmation is still pending. Billing sidecar SHA-256
+visible. The operator approved image quality under private confirmation SHA-256
+`36b19700...a2826`. Billing sidecar SHA-256
 `2c788c19...f0cc7c9` records `UNRESOLVED_ACCOUNT_IDENTITY_MISMATCH`, `actualCost=null`, no receipt,
-and no same-request retry. This is positive INPAINT technical evidence only; counts remain `4/5`
-and `32/37`, with every rollout flag still off.
+and no same-request retry. This closes the operation-specific INPAINT capability and quality gate,
+but not billing or Registry promotion. `QA-02` is complete at Phase 3 `5/5`; overall progress is
+`33/37`, with every rollout flag still off.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -894,10 +910,10 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    billing as explicitly unresolved; the unrelated Bailian console snapshot must never enter a
    receipt. Provider price API synchronization is not required. Keep the consumed `FULL_EDIT`
    operation immutable; its image quality is approved, and it must never be retried or renamed.
-   Keep the consumed `INPAINT` operation immutable and obtain human confirmation of its returned
-   image; its subtle blue-gray shift and visible hard test-mask boundary must not be hidden or
-   overstated. None of the operations may inherit another operation's approval. Complete QA-02 only
-   after the accepted evidence policy for all three operations is explicit and truthful.
+   Keep the consumed `INPAINT` operation immutable; its image quality is approved with the subtle
+   blue-gray shift and visible hard test-mask boundary explicitly accepted. None of the operations
+   may inherit another operation's approval. `QA-02` technical acceptance is complete, while all
+   three unresolved Wanx billing chains remain ineligible for candidate promotion or Registry use.
 6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
    for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
    contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt
@@ -905,8 +921,7 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Continue fixture implementation and rehearsal as needed, but run the final `QA-04` acceptance
-   only after all `QA-02` operation-specific evidence is accepted; then execute
+7. Run the final `QA-04` acceptance on the clean QA-02 closure revision; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
    during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same

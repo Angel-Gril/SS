@@ -1,6 +1,6 @@
 # Phase 3: Edit Operations and Batch Engine
 
-Progress: 4/5 tasks.
+Progress: 5/5 tasks.
 
 ## Tasks
 
@@ -16,7 +16,7 @@ Progress: 4/5 tasks.
 - [x] `UI-03` Integrate references/full edit/inpaint (`P1`, `L`). Acceptance: users select
   global/per-slot references, edit whole image, draw compatible mask, review alternatives,
   and regenerate a slot; unsupported operations show a concrete disabled reason.
-- [ ] `QA-02` Verify exact Provider sandbox capabilities (`P1`, `L`). Acceptance: configured
+- [x] `QA-02` Verify exact Provider sandbox capabilities (`P1`, `L`). Acceptance: configured
   relay is tested separately for text-to-image, reference edit, full edit, inpaint, and async;
   evidence stays operation-specific and does not enable production rollout.
 
@@ -762,6 +762,20 @@ Progress: 4/5 tasks.
   preserve pixels, mean difference is `0.015` and only `0.07%` changed by more than five levels.
   Technical-review SHA-256 `e44ee59f...976526` therefore records positive mask transport, local
   modification, and unmasked preservation. The requested light-blue change is visually subtle
-  blue-gray and the hard test-mask boundary remains visible, so human quality confirmation is
-  pending. Billing remains unresolved under sidecar `2c788c19...f0cc7c9`, with `actualCost=null`,
-  no receipt, and no retry. Progress stays `4/5` and `32/37` with all rollout flags off.
+  blue-gray and the hard test-mask boundary remains visible. The operator approved those exact
+  quality characteristics under private confirmation SHA-256 `36b19700...a2826`. Billing remains
+  unresolved under sidecar `2c788c19...f0cc7c9`, with `actualCost=null`, no receipt, and no retry.
+- The earlier relay text-to-image chain plus separately approved Wanx `IMAGE_TO_IMAGE`, `FULL_EDIT`,
+  and `INPAINT` results now satisfy the operation-specific technical scope of `QA-02`; the three
+  Wanx operations also prove the configured async mode. Each edit used an independent policy,
+  approval, Operation ID, create request, evidence chain, and human quality decision. Phase 3 is
+  complete at `5/5`, and overall progress is `33/37`.
+- In this heterogeneous adapter design, the configured sandbox matrix is evaluated by exact
+  operation-specific Provider profile rather than requiring one host to implement every operation.
+  The relay result proves only text-to-image; Wanx proves only the three reviewed edit profiles and
+  async transport. Evidence is never transferred between profiles.
+- This technical acceptance does not settle the three Wanx charges. Their account-identity mismatch,
+  `actualCost=null`, absent receipts, and no-retry decisions remain immutable. The candidate-only
+  reviewer still requires task-correlated `billingGate=PASS` receipts before any Wanx Registry
+  promotion. All production flags remain off, and no deployment, VPS, ERP ingest, or Ozon mutation
+  occurred.

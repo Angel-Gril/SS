@@ -226,8 +226,11 @@ review, not silent compatibility expansion.
 This observation proves only that the exact credential can read a catalogue containing the model.
 It does not prove edit-route permission, successful editing, price, account balance, or billing.
 Retain separate private Alibaba console or reviewed Billing OpenAPI evidence immediately before and
-after every paid operation. Only a settled, quality-reviewed edit result can satisfy the matching
-`QA-02` operation.
+after every paid operation when it can be bound to the API Key's real billing account. If account
+identity cannot be linked, record billing as explicitly unresolved and never fabricate a receipt.
+A successful exact operation plus human quality approval may satisfy the technical `QA-02`
+capability scope, but only a task-correlated `billingGate=PASS` receipt may satisfy candidate
+promotion or production Registry review.
 
 #### First real preflight checkpoint (2026-08-01)
 
@@ -291,10 +294,15 @@ downloaded one validated 1024x1024 PNG. Do not retry or rename it. Technical rev
 25,600-pixel edit region changed while the 1,022,976-pixel preserve region remained effectively
 unchanged: preserve-region mean absolute channel difference was `0.015`, and only `0.07%` of its
 pixels changed by more than five RGB levels. The requested blue change is subtle blue-gray and the
-hard boundary of the deliberately rectangular test mask remains visible. Treat this as positive
-technical inpaint evidence with human visual quality confirmation pending. Its billing account is
-also unlinked, so no receipt exists and actual cost remains unknown. Never infer either quality or
-billing acceptance from the successful task state alone.
+hard boundary of the deliberately rectangular test mask remains visible. The operator approved
+those exact quality characteristics under private confirmation SHA-256 `36b19700...a2826`. Its
+billing account is still unlinked, so no receipt exists and actual cost remains unknown. This closes
+the technical INPAINT quality gate, not billing or Registry promotion.
+
+Together with the earlier relay text-to-image evidence and separately approved Wanx
+`IMAGE_TO_IMAGE` and `FULL_EDIT` results, this closes `QA-02` technical sandbox acceptance. Keep all
+three Wanx operations immutable and never retry them. Their unresolved billing sidecars remain a
+hard stop for the candidate-only reviewer and any production Provider Registry change.
 
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
