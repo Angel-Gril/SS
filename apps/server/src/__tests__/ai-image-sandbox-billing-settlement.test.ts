@@ -22,6 +22,7 @@ import {
 } from '../services/ai-image-sandbox-billing-settlement.js';
 import { createAiImageSandboxRequestFingerprint } from '../services/ai-image-sandbox-guard.js';
 import {
+  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   aiImageEditMultipartFields,
@@ -29,6 +30,8 @@ import {
 import {
   AI_IMAGE_XIAOYI_API_BASE,
   AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+  AI_IMAGE_XIAOYI_EDIT_PROFILE,
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
 } from '../services/ai-image-xiaoyi-provider.js';
 
 const directories: string[] = [];
@@ -80,6 +83,74 @@ function approvalEvidence(overrides: Record<string, unknown> = {}) {
     preCallBillingSnapshotRefSha256: sha256('private-ledger/before'),
     billingReconciliationRefSha256: sha256('private-ledger/after'),
     ...overrides,
+  };
+}
+
+function xiaoyiEvidenceBindings(overrides: {
+  apiBaseSha256?: string;
+  endpoint?: string;
+  model?: string;
+  operation?: 'IMAGE_TO_IMAGE' | 'FULL_EDIT' | 'INPAINT';
+  requestProfile?: typeof AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE | 'OPENAI_SQUARE_SINGLE_V1';
+  currency?: 'CNY' | 'USD';
+} = {}) {
+  const endpoint = overrides.endpoint || AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint;
+  const endpointSha256 = sha256(endpoint);
+  const model = overrides.model || AI_IMAGE_XIAOYI_EDIT_PROFILE.model;
+  const operation = overrides.operation || 'IMAGE_TO_IMAGE';
+  const requestProfile = overrides.requestProfile || AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE;
+  const currency = overrides.currency || 'CNY';
+  const maskSha256 = operation === 'INPAINT' ? '6'.repeat(64) : null;
+  const maskDimensions = operation === 'INPAINT' ? { width: 1024, height: 1024 } : null;
+  const request = {
+    operation,
+    requestProfile,
+    n: 1,
+    width: 1024,
+    height: 1024,
+    size: '1024x1024',
+    promptSha256: '4'.repeat(64),
+    sourceSha256: ['5'.repeat(64)],
+    sourceDimensions: [{ width: 1024, height: 1024 }],
+    maskSha256,
+    maskDimensions,
+    approvalEvidence: approvalEvidence({ currency }),
+  };
+  const fingerprint = createAiImageSandboxRequestFingerprint({
+    endpointSha256,
+    model,
+    request: {
+      ...(requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+        ? {
+            operation: request.operation,
+            requestProfile: request.requestProfile,
+            multipartDialect: AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+            multipartFields: aiImageEditMultipartFields(AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT),
+          }
+        : {}),
+      n: request.n,
+      size: request.size,
+      promptSha256: request.promptSha256,
+      sourceSha256: request.sourceSha256,
+      maskSha256: request.maskSha256,
+    },
+  });
+  return {
+    requestFingerprint: fingerprint,
+    intentOverrides: {
+      endpointSha256,
+      apiBaseSha256: overrides.apiBaseSha256 || xiaoyiApiBaseSha256,
+      model,
+      request,
+    },
+    reportOverrides: {
+      operation: request.operation,
+      requestProfile: request.requestProfile,
+      model,
+      apiBaseSha256: overrides.apiBaseSha256 || xiaoyiApiBaseSha256,
+      operationEndpointSha256: endpointSha256,
+    },
+    providerLogEntryOverrides: { model_name: model },
   };
 }
 
@@ -741,6 +812,151 @@ describe('AI image sandbox billing settlement', () => {
     });
   });
 
+  it('recomputes and settles the Xiaoyi multipart request fingerprint', async () => {
+    const value = await fixture({
+      ...xiaoyiEvidenceBindings(),
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    const result = await finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    });
+
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 3,
+      submitState: 'SUCCEEDED',
+      billingOutcome: 'CHARGED',
+      billingGate: 'PASS',
+    });
+  });
+
+  it.each([
+    ['model', { model: 'other-model' }],
+    ['endpoint', { endpoint: 'https://image.xiaoyiapi.xyz/v1/images/generations' }],
+    ['API Base', { apiBaseSha256: sha256('https://image.xiaoyiapi.xyz/v2') }],
+    ['operation', { operation: 'FULL_EDIT' as const }],
+  ])('rejects internally consistent Xiaoyi evidence with a mismatched %s', async (
+    _field,
+    overrides,
+  ) => {
+    const value = await fixture({
+      ...xiaoyiEvidenceBindings(overrides),
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 2,
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it.each(['FULL_EDIT', 'INPAINT'] as const)(
+    'rejects internally consistent Xiaoyi %s evidence under the generic profile',
+    async (operation) => {
+      const value = await fixture({
+        ...xiaoyiEvidenceBindings({ operation, requestProfile: 'OPENAI_SQUARE_SINGLE_V1' }),
+        intentSchemaVersion: 3,
+        reportSchemaVersion: 5,
+        attestationSchemaVersion: 2,
+      });
+
+      await expect(finalizeAiImageSandboxBillingSettlement({
+        repositoryRoot: value.root,
+        evidenceRoot: value.root,
+        operationId,
+        settlementPath: value.settlementPath,
+        settlementSha256: value.settlementSha256,
+        finalizationAdapterRevision: 'b'.repeat(40),
+        now: new Date('2030-01-01T00:10:00.000Z'),
+      })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+    },
+  );
+
+  it('rejects internally consistent legacy-cents Xiaoyi profile evidence', async () => {
+    const bindings = xiaoyiEvidenceBindings({ currency: 'USD' });
+    const exactIntentOverrides = bindings.intentOverrides as Record<string, unknown>;
+    const exactReportOverrides = bindings.reportOverrides as Record<string, unknown>;
+    const value = await fixture({
+      requestFingerprint: bindings.requestFingerprint,
+      intentSchemaVersion: 2,
+      reportSchemaVersion: 3,
+      attestationSchemaVersion: 1,
+      intentOverrides: {
+        endpointSha256: exactIntentOverrides.endpointSha256,
+        model: exactIntentOverrides.model,
+        request: exactIntentOverrides.request,
+      },
+      reportOverrides: {
+        operation: exactReportOverrides.operation,
+        requestProfile: exactReportOverrides.requestProfile,
+        model: exactReportOverrides.model,
+        endpointSha256: exactIntentOverrides.endpointSha256,
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('rejects legacy-cents Xiaoyi route evidence under the generic profile', async () => {
+    const bindings = xiaoyiEvidenceBindings({
+      operation: 'FULL_EDIT',
+      requestProfile: 'OPENAI_SQUARE_SINGLE_V1',
+      currency: 'USD',
+    });
+    const exactIntentOverrides = bindings.intentOverrides as Record<string, unknown>;
+    const exactReportOverrides = bindings.reportOverrides as Record<string, unknown>;
+    const value = await fixture({
+      requestFingerprint: bindings.requestFingerprint,
+      intentSchemaVersion: 2,
+      reportSchemaVersion: 3,
+      attestationSchemaVersion: 1,
+      intentOverrides: {
+        endpointSha256: exactIntentOverrides.endpointSha256,
+        model: exactIntentOverrides.model,
+        request: exactIntentOverrides.request,
+      },
+      reportOverrides: {
+        operation: exactReportOverrides.operation,
+        requestProfile: exactReportOverrides.requestProfile,
+        model: exactReportOverrides.model,
+        endpointSha256: exactIntentOverrides.endpointSha256,
+      },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
   it('finalizes exact billing from one private Provider token-log entry', async () => {
     const value = await fixture({
       intentSchemaVersion: 3,
@@ -776,11 +992,10 @@ describe('AI image sandbox billing settlement', () => {
 
   it('binds the reviewed Xiaoyi image API to its separate billing origin', async () => {
     const value = await fixture({
+      ...xiaoyiEvidenceBindings(),
       intentSchemaVersion: 3,
       reportSchemaVersion: 5,
       attestationSchemaVersion: 3,
-      intentOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
-      reportOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
       providerLogRequestOverrides: {
         uri: `${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/api/log/token`,
       },
@@ -809,12 +1024,62 @@ describe('AI image sandbox billing settlement', () => {
     ['unreviewed third-party host', 'https://billing.example/api/log/token'],
   ])('rejects Xiaoyi billing evidence from the %s', async (_source, uri) => {
     const value = await fixture({
+      ...xiaoyiEvidenceBindings(),
       intentSchemaVersion: 3,
       reportSchemaVersion: 5,
       attestationSchemaVersion: 3,
-      intentOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
-      reportOverrides: { apiBaseSha256: xiaoyiApiBaseSha256 },
       providerLogRequestOverrides: { uri },
+    });
+
+    await expect(finalizeAiImageSandboxBillingSettlement({
+      repositoryRoot: value.root,
+      evidenceRoot: value.root,
+      operationId,
+      settlementPath: value.settlementPath,
+      settlementSha256: value.settlementSha256,
+      finalizationAdapterRevision: 'b'.repeat(40),
+      now: new Date('2030-01-01T00:10:00.000Z'),
+    })).rejects.toMatchObject({ code: 'SANDBOX_BILLING_MISMATCH' });
+  });
+
+  it('rejects the Xiaoyi edit identity under the generic request profile', async () => {
+    const endpointSha256 = sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint);
+    const request = {
+      ...exactIntent().request,
+      operation: 'IMAGE_TO_IMAGE',
+    };
+    const genericFingerprint = createAiImageSandboxRequestFingerprint({
+      endpointSha256,
+      model: AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+      request: {
+        n: Number(request.n),
+        size: String(request.size),
+        promptSha256: String(request.promptSha256),
+        sourceSha256: request.sourceSha256 as string[],
+        maskSha256: request.maskSha256 as string | null,
+      },
+    });
+    const value = await fixture({
+      requestFingerprint: genericFingerprint,
+      intentSchemaVersion: 3,
+      reportSchemaVersion: 5,
+      attestationSchemaVersion: 3,
+      intentOverrides: {
+        endpointSha256,
+        apiBaseSha256: xiaoyiApiBaseSha256,
+        model: AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+        request,
+      },
+      reportOverrides: {
+        operation: 'IMAGE_TO_IMAGE',
+        model: AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+        apiBaseSha256: xiaoyiApiBaseSha256,
+        operationEndpointSha256: endpointSha256,
+      },
+      providerLogEntryOverrides: { model_name: AI_IMAGE_XIAOYI_EDIT_PROFILE.model },
+      providerLogRequestOverrides: {
+        uri: `${AI_IMAGE_XIAOYI_BILLING_ORIGIN}/api/log/token`,
+      },
     });
 
     await expect(finalizeAiImageSandboxBillingSettlement({

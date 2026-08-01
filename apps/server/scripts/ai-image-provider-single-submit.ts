@@ -17,6 +17,7 @@ import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
   createPackyGptImage2EditProvider,
+  createXiaoyiGptImage2EditProvider,
   normalizeOpenAiImagesApiBase,
   validateAiImageProviderUrl,
 } from '../src/services/ai-image-providers.js';
@@ -27,6 +28,12 @@ import {
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   isAiImagePackyEditProviderIdentity,
 } from '../src/services/ai-image-packy-edit-profile.js';
+import {
+  AI_IMAGE_XIAOYI_EDIT_PROFILE,
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  isAiImageXiaoyiEditOperation,
+  isAiImageXiaoyiEditProviderIdentity,
+} from '../src/services/ai-image-xiaoyi-provider.js';
 import {
   AiImageSandboxMediaError,
   assertAiImageSandboxEditMediaLimit,
@@ -74,6 +81,7 @@ const SINGLE_SUBMIT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
+  'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'apps/server/src/services/ai-image-providers.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
@@ -93,6 +101,12 @@ const REQUEST_PROFILES = Object.freeze({
     height: AI_IMAGE_PACKY_EDIT_PROFILE.height,
     format: 'square Packy GPT-Image-2 high-quality PNG',
     expectedMimeType: AI_IMAGE_PACKY_EDIT_PROFILE.expectedMimeType,
+  }),
+  [AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE]: Object.freeze({
+    width: AI_IMAGE_XIAOYI_EDIT_PROFILE.width,
+    height: AI_IMAGE_XIAOYI_EDIT_PROFILE.height,
+    format: 'square Xiaoyi GPT-Image-2 documented edit',
+    expectedMimeType: AI_IMAGE_XIAOYI_EDIT_PROFILE.expectedMimeType,
   }),
   OZON_PORTRAIT_SINGLE_V1: Object.freeze({
     width: 1024,
@@ -585,6 +599,7 @@ export async function runAiImageProviderSingleSubmit(
     throw new Error('AI_IMAGE_SANDBOX_EXPECTED_HOST does not match the configured base URL');
   }
   const isPackyEditProfile = requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE;
+  const isXiaoyiEditProfile = requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE;
   const packyProviderIdentity = isAiImagePackyEditProviderIdentity({
     apiBase,
     endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
@@ -598,10 +613,28 @@ export async function runAiImageProviderSingleSubmit(
       { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
     );
   }
-  const costs = sandboxCostConfiguration(environment);
-  if (isPackyEditProfile && costs.kind !== 'EXACT') {
+  const xiaoyiProviderIdentity = isAiImageXiaoyiEditProviderIdentity({
+    apiBase,
+    endpoint: `${apiBase}/images/${operation === 'TEXT_TO_IMAGE' ? 'generations' : 'edits'}`,
+    expectedHost,
+    model,
+  });
+  if (isXiaoyiEditProfile !== xiaoyiProviderIdentity) {
     throw Object.assign(
-      new Error('The Packy edit profile requires exact-money evidence'),
+      new Error('The Xiaoyi edit Provider identity and request profile must be selected together'),
+      { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
+    );
+  }
+  if (isXiaoyiEditProfile && !isAiImageXiaoyiEditOperation(operation)) {
+    throw Object.assign(
+      new Error('The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE'),
+      { code: 'SANDBOX_REQUEST_PROFILE_INVALID' },
+    );
+  }
+  const costs = sandboxCostConfiguration(environment);
+  if ((isPackyEditProfile || isXiaoyiEditProfile) && costs.kind !== 'EXACT') {
+    throw Object.assign(
+      new Error('Provider-specific edit profiles require exact-money evidence'),
       { code: 'SANDBOX_COST_CONFIG_INVALID' },
     );
   }
@@ -845,7 +878,9 @@ export async function runAiImageProviderSingleSubmit(
     } else {
       const createEditProvider = isPackyEditProfile
         ? createPackyGptImage2EditProvider
-        : createOpenAiImageEditProvider;
+        : isXiaoyiEditProfile
+          ? createXiaoyiGptImage2EditProvider
+          : createOpenAiImageEditProvider;
       const provider = createEditProvider({
         baseUrl, apiKey, model, fetch: fetchOnce.fetch, timeoutMs: 180_000, costPerImageCents: 0,
       });

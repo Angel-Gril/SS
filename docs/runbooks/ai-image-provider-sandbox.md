@@ -229,6 +229,7 @@ Prompts and requested count (`1`) are fixed in the CLI. The required request pro
 | -------------------------------- | -------------- | ------------------------------------------------------------ |
 | `OPENAI_SQUARE_SINGLE_V1`        | `1024x1024`    | Square generation or one-source edit compatibility           |
 | `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024`  | Packy `gpt-image-2` edit only, with its reviewed multipart dialect |
+| `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` | `1024x1024` | Xiaoyi `gpt-image-2` synchronous `IMAGE_TO_IMAGE` only        |
 | `OZON_PORTRAIT_SINGLE_V1`        | `1024x1536`    | 2:3 Provider canvas composed crop-safe for final 3:4 normalization; does not prove native 3:4 transport |
 
 No profile proves multi-reference compatibility. A Provider result whose decoded dimensions differ
@@ -243,6 +244,14 @@ profile instead freezes the documented multipart additions `quality=high`, `outp
 model, edit operation, and fields are one immutable profile identity. The private pricing policy
 must name the matching quality state. A different quality or response dialect requires another
 versioned profile and separately reviewed policy and approval.
+
+The Xiaoyi-only profile freezes API Base `https://image.xiaoyiapi.xyz/v1`, exact
+`/v1/images/edits` endpoint, host `image.xiaoyiapi.xyz`, model `gpt-image-2`, one source,
+`1024x1024`, `n=1`, and the documented default multipart fields `model`, `prompt`, `n`, `size`, and
+`image`. It does not send Packy's `quality`, `output_format`, or `response_format` additions. V1
+permits only `IMAGE_TO_IMAGE`; `FULL_EDIT` and `INPAINT` require separate future profiles and
+positive evidence. The approval, runner, immutable fingerprint, dedicated adapter, and offline
+finalizer all enforce the same identity and exact-money generation independently.
 
 ### Complete Environment Contract
 

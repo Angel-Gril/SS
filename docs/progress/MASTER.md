@@ -52,21 +52,34 @@ guide explicitly documents `gpt-image-2` synchronous multipart `/v1/images/edits
 `https://image.xiaoyiapi.xyz/v1`. Public pricing lists USD `0.07` before account-group adjustment;
 it is planning input, not a maximum-cost authorization.
 
-Xiaoyi separates the image API from account meters. The official GET-only helper now supports only
-the exact reviewed pair `image.xiaoyiapi.xyz` plus `xiaoyiapi.xyz`, independently validates and pins
-both public DNS identities, and writes a v2 manifest that binds the separate billing origin. Packy
-v1 output remains compatible. The finalizer uses the same bidirectional closed identity, so the
-Xiaoyi API can use only its main-site Token log and that log cannot settle another API Base.
-Combined focused tests pass `137` with five platform skips; full Server tests pass `4616` with 199
-platform skips, workspace and sandbox typechecks pass, and the static contract passes. The complete
-repository preflight passes `446` checks with zero failures and two existing extension-permission
-warnings. Private public-preflight summary SHA-256 is
-`720e0f1273ca4f52db3158ad8afb465ccb9249b9679c363947f1006412628757`.
-The Xiaoyi Token pasted into chat is exposed and was not used. It must be revoked and replaced in a
-new local DPAPI revision before authenticated GET-only preflight. No authenticated GET, Provider
-POST, charge, Registry mutation, deployment, flag, ERP ingest, or Ozon write occurred. `QA-04`,
-`REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress stays `32/37` and all rollout
-flags remain off.
+Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
+under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
+clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both
+public DNS identities and completed the fixed seven authenticated Provider GETs. The catalogue
+contained exactly `gpt-image-2`; all three before/after meter bodies were byte-identical. Private v2
+manifest SHA-256 is `db10c7505118ea3c89517e18ae344151a036f36cad720ab7468a3c1797bf1c33`
+and records `providerPostSent=false`, `chargeObserved=false`.
+
+The new `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` profile binds only synchronous `IMAGE_TO_IMAGE`, exact
+Xiaoyi API/host/model, one `1024x1024` source, `n=1`, and default multipart fields. It rejects
+generic-profile downgrade, request-model override, legacy cents, `FULL_EDIT`, and `INPAINT` before
+dispatch. The finalizer independently enforces the same operation, model, endpoint/API digests,
+exact-money generation, fingerprint, and dual-origin Token-log mapping. Focused implementation tests
+pass `302` with two platform skips; the full Server suite passes `4646` with `199` platform skips.
+Sandbox and workspace typechecks, the static contract and diff checks pass. Repository lint has zero
+errors and only the existing `20` Server plus one shared warning. The complete repository preflight
+passes `446` checks with zero failures and the two existing local-extension permission warnings.
+An independent security review found and closed the generic-profile `FULL_EDIT`/`INPAINT` downgrade:
+route/model identity and the operation allowlist are now separate checks in approval, execution,
+claim and settlement.
+
+Public pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` lists base USD `0.07`; its highest
+published enabled group ratio yields USD `0.2002`. The proposed private policy therefore rounds the
+quote up to USD `0.210000` and retains the operator's USD `1.000000` single-request maximum at scale
+6, matching the `500000`-quota-units-per-USD meter resolution. This is not yet an approval or
+Provider-side cap. No Provider POST, charge, Registry mutation, deployment, flag, ERP ingest, or
+Ozon write occurred. `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked; overall progress
+stays `32/37` and all rollout flags remain off.
 
 `DOC-01` is complete. `QA-02` preparation now uses a private canonical closed-schema one-request
 approval (`v3` for exact money; historical `v2` remains cents-only) with `approvedAt`/`expiresAt`,
@@ -627,13 +640,12 @@ ERP ingest, or Ozon mutation occurred. Counts remain `4/5` and `32/37`.
    derived-image reports, billing receipts, and human quality review pass the candidate-only
    boundary may a separate reviewed change add the exact provider/model contract to
    `scripts/sandbox/ai-media-provider-contract.mjs`; never pre-authorize a failed candidate.
-4. Revoke the Xiaoyi Token exposed in chat and store a replacement under a new local DPAPI revision.
-   From a clean commit, run only the reviewed dual-origin GET-only preflight first. If the exact
-   `gpt-image-2` catalogue and all three before/after meters pass, retain an operation-specific USD
-   quote and maximum approval before any POST. Start with one `IMAGE_TO_IMAGE` sync request; do not
-   send `FULL_EDIT` or `INPAINT` until the first edit is accepted and settled. Xiaoyi publishes an
-   explicit async task protocol, but async remains unverified until its separate bounded evidence
-   run. Do not promote any edit capability from documentation or text-to-image evidence.
+4. The rotated Xiaoyi credential and dual-origin GET-only preflight now pass. Commit and review the
+   exact `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` implementation, then retain its private USD `0.210000`
+   quote / USD `1.000000` maximum policy and generate a non-approval draft from that clean commit.
+   Send no POST until the operator explicitly approves the resulting Operation ID, source digest,
+   prompt/profile and maximum. Run exactly one synchronous `IMAGE_TO_IMAGE`; do not send
+   `FULL_EDIT` or `INPAINT`. Async remains unverified until a separate bounded profile and approval.
 5. Run `QA-04` only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`
    sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled

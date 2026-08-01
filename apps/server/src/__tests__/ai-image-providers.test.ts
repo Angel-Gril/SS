@@ -6,6 +6,7 @@ import {
   createOpenAiImageEditProvider,
   createOpenAiImagesProvider,
   createPackyGptImage2EditProvider,
+  createXiaoyiGptImage2EditProvider,
   isOpenAiCompatibleImageEditSizeSupported,
   testAiImageProviderConnection,
   validateAiImageProviderUrl,
@@ -186,6 +187,88 @@ describe('AI image provider adapters', () => {
       width: 1024,
       height: 1024,
       model: 'other-model',
+      images: [{ buffer: png, mimeType: 'image/png' }],
+    })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_OPERATION',
+      providerSubmissionRejected: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('submits the isolated Xiaoyi GPT-Image-2 documented multipart fields', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: 'xiaoyi-edit-response-1',
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const provider = createXiaoyiGptImage2EditProvider({
+      baseUrl: 'https://image.xiaoyiapi.xyz/v1',
+      apiKey: 'xiaoyi-secret',
+      model: 'gpt-image-2',
+      fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.edit({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'Preserve the product and replace the background.',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      images: [{ buffer: png, mimeType: 'image/png' }],
+    })).resolves.toMatchObject({ providerJobId: 'xiaoyi-edit-response-1' });
+
+    const form = fetch.mock.calls[0]?.[1]?.body as FormData;
+    expect([...new Set([...form.keys()])].sort()).toEqual([
+      'image',
+      'model',
+      'n',
+      'prompt',
+      'size',
+    ]);
+    expect(form.get('model')).toBe('gpt-image-2');
+  });
+
+  it('rejects Xiaoyi adapter identity or request-model overrides before dispatch', async () => {
+    expect(() => createXiaoyiGptImage2EditProvider({
+      baseUrl: 'https://relay.example/v1',
+      apiKey: 'xiaoyi-secret',
+      model: 'gpt-image-2',
+    })).toThrow(expect.objectContaining({ code: 'INVALID_PROVIDER_URL' }));
+
+    expect(() => createXiaoyiGptImage2EditProvider({
+      baseUrl: 'https://image.xiaoyiapi.xyz/v1',
+      apiKey: 'xiaoyi-secret',
+      model: 'other-model',
+    })).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_OPERATION' }));
+
+    const fetch = vi.fn();
+    const provider = createXiaoyiGptImage2EditProvider({
+      baseUrl: 'https://image.xiaoyiapi.xyz/v1',
+      apiKey: 'xiaoyi-secret',
+      model: 'gpt-image-2',
+      fetch,
+      timeoutMs: 1000,
+    });
+    await expect(provider.edit({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'Preserve the product and replace the background.',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
+      model: 'other-model',
+      images: [{ buffer: png, mimeType: 'image/png' }],
+    })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_OPERATION',
+      providerSubmissionRejected: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+
+    await expect(provider.edit({
+      operation: 'FULL_EDIT',
+      prompt: 'Preserve the product and replace the background.',
+      negativePrompt: null,
+      width: 1024,
+      height: 1024,
       images: [{ buffer: png, mimeType: 'image/png' }],
     })).rejects.toMatchObject({
       code: 'UNSUPPORTED_OPERATION',

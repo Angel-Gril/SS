@@ -565,3 +565,24 @@ Progress: 4/5 tasks.
   written to a new current-user DPAPI revision before authenticated preflight. No authenticated GET,
   Provider POST, charge, Registry mutation, deployment, flag, ERP ingest or Ozon write occurred.
   `QA-02` remains `4/5` and overall progress remains `32/37`.
+- The exposed Xiaoyi credential was revoked and replaced under revision
+  `xiaoyi-image-key-rotation-20260801-01`. From clean pushed commit `f8ee687`, the exact dual-origin
+  authenticated preflight completed seven Provider GETs with model `gpt-image-2`; all three meter
+  bodies remained byte-identical. Private manifest SHA-256 is `db10c750...f1c33` and records no POST
+  or charge. Four additional credential-free Cloudflare DoH GETs resolved the two hosts' A/AAAA
+  records.
+- `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` now binds only synchronous `IMAGE_TO_IMAGE`, the exact
+  Xiaoyi endpoint/host/model, one `1024x1024` source, `n=1`, default multipart fields and exact money.
+  Dedicated adapter, approval, runner, claim and finalizer checks reject model/profile/operation,
+  digest, legacy-money and dual-origin mixing. `FULL_EDIT` and `INPAINT` remain unavailable. Focused
+  tests pass `302` with two platform skips; the full Server suite passes `4646` with `199` platform
+  skips. Sandbox and workspace typechecks, the static contract and diff checks pass. Repository lint
+  has zero errors and only the existing `20` Server plus one shared warning. The complete repository
+  preflight passes `446/0` with the two existing local-extension permission warnings.
+- An independent security review found and closed a generic-profile operation downgrade. Exact
+  Xiaoyi route/model identity and the `IMAGE_TO_IMAGE` allowlist are now checked separately at the
+  approval, runner, claim and settlement boundaries; generic-profile `FULL_EDIT` and `INPAINT`
+  regression fixtures fail before dispatch or settlement.
+- Public USD `0.07` base price times the highest published enabled group ratio is USD `0.2002`.
+  The proposed private policy uses quote USD `0.210000`, maximum USD `1.000000`, scale `6`, pending
+  explicit approval. No Provider POST or charge occurred; progress remains `4/5` and `32/37`.

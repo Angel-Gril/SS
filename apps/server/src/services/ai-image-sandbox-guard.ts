@@ -26,6 +26,11 @@ import {
   aiImageEditMultipartFields,
   isAiImagePackyEditProviderIdentity,
 } from './ai-image-packy-edit-profile.js';
+import {
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  isAiImageXiaoyiEditOperation,
+  isAiImageXiaoyiEditProviderIdentity,
+} from './ai-image-xiaoyi-provider.js';
 
 export class AiImageSandboxGuardError extends Error {
   constructor(
@@ -87,6 +92,7 @@ const SANDBOX_REQUEST_PROFILES = new Set([
   'OPENAI_SQUARE_SINGLE_V1',
   'OZON_PORTRAIT_SINGLE_V1',
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
 ]);
 
 export type AiImageSandboxRequestState =
@@ -358,7 +364,8 @@ function sanitizeSandboxRequest(value: unknown, now: Date) {
   return {
     endpoint,
     fingerprint: {
-      ...(requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+      ...((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+        || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
         ? { operation, requestProfile, multipartDialect, multipartFields }
         : {}),
       n: 1,
@@ -695,10 +702,27 @@ export async function claimAiImageSandboxOperation(
     model,
     operation,
   });
+  const xiaoyiProviderIdentity = isAiImageXiaoyiEditProviderIdentity({
+    apiBase: requestEndpoint.replace(/\/images\/edits$/u, ''),
+    endpoint: requestEndpoint,
+    expectedHost: requestEndpointUrl.hostname.toLowerCase(),
+    model,
+  });
   if ((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) !== packyProviderIdentity) {
     invalidSandboxRequest(
       'The Packy edit Provider identity and request profile must be selected together',
     );
+  }
+  if ((requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE) !== xiaoyiProviderIdentity) {
+    invalidSandboxRequest(
+      'The Xiaoyi edit Provider identity and request profile must be selected together',
+    );
+  }
+  if (
+    requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    && !isAiImageXiaoyiEditOperation(operation)
+  ) {
+    invalidSandboxRequest('The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE');
   }
   const hasExactMoney = Object.hasOwn(input, 'quotedCost')
     || Object.hasOwn(input, 'maximumCost');
@@ -719,10 +743,14 @@ export async function claimAiImageSandboxOperation(
         maximumCostCents: legacyCents(input.maximumCostCents, 'maximumCostCents'),
       }
     : null;
-  if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE && !exactCosts) {
+  if (
+    (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+      || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+    && !exactCosts
+  ) {
     throw new AiImageSandboxGuardError(
       'INVALID_SANDBOX_BUDGET',
-      'The Packy edit profile requires exact-money evidence',
+      'Provider-specific edit profiles require exact-money evidence',
     );
   }
   if (legacyCosts && legacyCosts.quotedCostCents > legacyCosts.maximumCostCents) {

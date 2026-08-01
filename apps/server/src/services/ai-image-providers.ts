@@ -20,6 +20,10 @@ import {
   type AiImageEditMultipartDialect,
   aiImageEditMultipartFields,
 } from './ai-image-packy-edit-profile.js';
+import {
+  AI_IMAGE_XIAOYI_EDIT_PROFILE,
+  isAiImageXiaoyiEditOperation,
+} from './ai-image-xiaoyi-provider.js';
 
 export {
   isOfficialOpenAiImagesApiBase,
@@ -727,6 +731,8 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
 function createOpenAiImageEditProviderWithDialect(
   options: OpenAiImageEditProviderOptions,
   multipartDialect: AiImageEditMultipartDialect,
+  requiredModel?: string,
+  operationAllowed?: (operation: OpenAiImageEditRequest['operation']) => boolean,
 ): OpenAiImageEditProvider {
   const fetcher = options.fetch || globalThis.fetch;
   const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -741,13 +747,16 @@ function createOpenAiImageEditProviderWithDialect(
         throw withProviderSubmissionRejected(error);
       }
       const requestModel = request.model || options.model;
-      if (
-        multipartDialect === AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
-        && requestModel !== AI_IMAGE_PACKY_EDIT_PROFILE.model
-      ) {
+      if (requiredModel && requestModel !== requiredModel) {
         throw withProviderSubmissionRejected(new AiImageJobError(
           'UNSUPPORTED_OPERATION',
-          'The Packy GPT-Image-2 edit profile requires its exact reviewed model',
+          'The Provider-specific image edit profile requires its exact reviewed model',
+        ));
+      }
+      if (operationAllowed && !operationAllowed(request.operation)) {
+        throw withProviderSubmissionRejected(new AiImageJobError(
+          'UNSUPPORTED_OPERATION',
+          'The Provider-specific image edit profile does not support this operation',
         ));
       }
       const form = new FormData();
@@ -872,6 +881,30 @@ export function createPackyGptImage2EditProvider(
   return createOpenAiImageEditProviderWithDialect(
     options,
     AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+    AI_IMAGE_PACKY_EDIT_PROFILE.model,
+  );
+}
+
+export function createXiaoyiGptImage2EditProvider(
+  options: OpenAiImageEditProviderOptions,
+): OpenAiImageEditProvider {
+  if (normalizeOpenAiImagesApiBase(options.baseUrl) !== AI_IMAGE_XIAOYI_EDIT_PROFILE.apiBase) {
+    throw new AiImageJobError(
+      'INVALID_PROVIDER_URL',
+      'The Xiaoyi GPT-Image-2 edit profile requires its exact reviewed API base',
+    );
+  }
+  if (options.model !== AI_IMAGE_XIAOYI_EDIT_PROFILE.model) {
+    throw new AiImageJobError(
+      'UNSUPPORTED_OPERATION',
+      'The Xiaoyi GPT-Image-2 edit profile requires its exact reviewed model',
+    );
+  }
+  return createOpenAiImageEditProviderWithDialect(
+    options,
+    AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
+    AI_IMAGE_XIAOYI_EDIT_PROFILE.model,
+    isAiImageXiaoyiEditOperation,
   );
 }
 

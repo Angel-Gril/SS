@@ -44,6 +44,9 @@ that policy. `OPENAI_SQUARE_SINGLE_V1` and `OZON_PORTRAIT_SINGLE_V1` bind qualit
 `PACKY_GPT_IMAGE_2_SQUARE_EDIT_V1` profile instead binds `quality=high`, `output_format=png`, and
 `response_format=url` while omitting optional `input_fidelity`. A policy for another quality or
 multipart dialect requires a new profile and cannot authorize any existing transport contract.
+`XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` binds the exact Xiaoyi image host, `gpt-image-2`, synchronous
+`IMAGE_TO_IMAGE`, one source, `1024x1024`, `n=1`, and the default multipart fields only. It requires
+exact money and cannot authorize `FULL_EDIT` or `INPAINT`.
 
 One approval file authorizes only one of `TEXT_TO_IMAGE`, `IMAGE_TO_IMAGE`, `FULL_EDIT`, or
 `INPAINT`; it cannot prove another operation.

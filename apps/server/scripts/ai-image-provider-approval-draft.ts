@@ -21,6 +21,11 @@ import {
   isAiImagePackyEditProviderIdentity,
 } from '../src/services/ai-image-packy-edit-profile.js';
 import {
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  isAiImageXiaoyiEditOperation,
+  isAiImageXiaoyiEditProviderIdentity,
+} from '../src/services/ai-image-xiaoyi-provider.js';
+import {
   AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN,
   resolveAiImageSandboxRepositoryRevision,
 } from '../src/services/ai-image-sandbox-code-revision.js';
@@ -48,6 +53,7 @@ const REQUEST_PROFILES = new Set([
   'OPENAI_SQUARE_SINGLE_V1',
   'OZON_PORTRAIT_SINGLE_V1',
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
 ]);
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_SANDBOX_API_KEY',
@@ -57,6 +63,10 @@ const UNSAFE_ENVIRONMENT_NAMES = new Set([
   'AI_IMAGE_TRANSLATION_SANDBOX_API_KEY',
   'AUTHORIZATION',
   'OPENAI_API_KEY',
+  'PACKY_API_KEY',
+  'PACKY_TOKEN',
+  'XIAOYI_API_KEY',
+  'XIAOYI_TOKEN',
   'DASHSCOPE_API_KEY',
   'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
   'ALIYUN_ACCESS_KEY_SECRET',
@@ -69,6 +79,7 @@ const APPROVAL_DRAFT_TRACKED_PATHS = [
   'apps/server/src/services/ai-image-job-error.ts',
   'apps/server/src/services/ai-image-openai-url.ts',
   'apps/server/src/services/ai-image-packy-edit-profile.ts',
+  'apps/server/src/services/ai-image-xiaoyi-provider.ts',
   'apps/server/src/services/ai-image-sandbox-media.ts',
   'packages/shared/src/ai-image-workbench-contract.ts',
 ];
@@ -785,17 +796,42 @@ export async function runAiImageProviderApprovalDraft(
     model,
     operation,
   });
+  const xiaoyiProviderIdentity = isAiImageXiaoyiEditProviderIdentity({
+    apiBase,
+    endpoint,
+    expectedHost,
+    model,
+  });
   if ((requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE) !== packyProviderIdentity) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
       'The Packy edit Provider identity and request profile must be selected together',
     );
   }
-  const exactCosts = exactDraftCosts(environment);
-  if (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE && !exactCosts) {
+  if ((requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE) !== xiaoyiProviderIdentity) {
     throw draftError(
       'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
-      'The Packy edit profile requires exact-money evidence',
+      'The Xiaoyi edit Provider identity and request profile must be selected together',
+    );
+  }
+  if (
+    requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE
+    && !isAiImageXiaoyiEditOperation(operation)
+  ) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'The Xiaoyi edit request profile permits only IMAGE_TO_IMAGE',
+    );
+  }
+  const exactCosts = exactDraftCosts(environment);
+  if (
+    (requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+      || requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
+    && !exactCosts
+  ) {
+    throw draftError(
+      'SANDBOX_APPROVAL_DRAFT_CONFIG_INVALID',
+      'Provider-specific edit profiles require exact-money evidence',
     );
   }
   const legacyCosts = exactCosts ? null : {

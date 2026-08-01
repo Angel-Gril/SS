@@ -473,3 +473,42 @@ Private public-preflight summary SHA-256 is
 read, Provider POST or charge; generic secret scanning and private ACL checks passed. The credential
 pasted into chat is exposed and was not used. It must be revoked and replaced in a separate local
 DPAPI record before authenticated GET-only preflight. Positive edit capability remains unproved.
+
+## Xiaoyi authenticated preflight and bounded I2I profile
+
+The exposed credential was revoked and replaced under non-secret revision
+`xiaoyi-image-key-rotation-20260801-01`. From clean pushed commit
+`f8ee687dbe0faceb73b26a60f9af2543ad003b8d`, operation
+`qa02-xiaoyi-readonly-20260801-f8ee687-01` completed the fixed seven authenticated Provider GETs.
+The image catalogue returned exactly `gpt-image-2`; raw quota, displayed usage and Token log were
+byte-identical before and after. Private manifest SHA-256 is
+`db10c7505118ea3c89517e18ae344151a036f36cad720ab7468a3c1797bf1c33`, with no POST or charge.
+
+The paid runner now has a closed `XIAOYI_GPT_IMAGE_2_SQUARE_EDIT_V1` profile for one synchronous
+`IMAGE_TO_IMAGE` request. It binds API Base `https://image.xiaoyiapi.xyz/v1`, endpoint
+`/v1/images/edits`, model `gpt-image-2`, one source, `1024x1024`, `n=1`, and multipart fields
+`model`, `prompt`, `n`, `size`, and `image`. It does not add Packy fields. The profile and exported
+adapter reject request-model override, generic-profile downgrade, legacy cents, `FULL_EDIT`, and
+`INPAINT` before dispatch. Offline settlement separately validates exact generation, profile,
+operation, model, endpoint/API digests, fingerprint and the reviewed billing origin.
+
+Pricing revision `a42d372ccf0b5dd13ecf71203521f9d2` gives base USD `0.07`; the largest
+published ratio among its enabled groups is `2.86`, yielding USD `0.2002`. The proposed backend
+policy rounds the quote to USD `0.210000` and sets the separately reviewed maximum to USD `1.000000`
+at scale `6`, which can represent the published `500000` quota units per USD exactly. This remains
+planning input until the clean implementation commit, private policy and non-approval draft are
+reviewed and the operator explicitly authorizes the one request. No live Provider price sync is
+required.
+
+The final implementation gate passes `302` focused tests with two platform skips and `4646` full
+Server tests with `199` platform skips. Sandbox and workspace typechecks, the static contract and
+diff checks pass. Repository lint has zero errors and only the existing `20` Server plus one shared
+warning. The complete repository preflight passes `446` checks with zero failures and the two
+existing local-extension permission warnings. These are offline implementation results only; no
+edit POST or charge occurred.
+
+An independent security review found that coupling route identity to the operation allowlist could
+make a generic-profile `FULL_EDIT` or `INPAINT` request evaluate both sides of the profile identity
+check as false. The final implementation separates exact route/model identity from the
+`IMAGE_TO_IMAGE` allowlist in approval, execution, claim and settlement, with internally consistent
+downgrade fixtures at all four boundaries.

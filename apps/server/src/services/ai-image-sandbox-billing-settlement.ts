@@ -6,6 +6,7 @@ import { TextDecoder } from 'node:util';
 import { AI_IMAGE_SANDBOX_FULL_GIT_OID_PATTERN } from './ai-image-sandbox-code-revision.js';
 import { createAiImageSandboxRequestFingerprint } from './ai-image-sandbox-guard.js';
 import {
+  AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
   AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
   aiImageEditMultipartFields,
@@ -23,6 +24,9 @@ import {
 import {
   AI_IMAGE_XIAOYI_API_BASE,
   AI_IMAGE_XIAOYI_BILLING_ORIGIN,
+  AI_IMAGE_XIAOYI_EDIT_PROFILE,
+  AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE,
+  isAiImageXiaoyiEditOperation,
 } from './ai-image-xiaoyi-provider.js';
 
 export const AI_IMAGE_SANDBOX_BILLING_SETTLEMENT_STATEMENT =
@@ -1988,9 +1992,18 @@ function assertArtifactsMatch(input: {
   const intentRecord = intent.record;
   const reportRecord = report.record;
   const request = intent.request;
+  const xiaoyiProfileSelected = request.requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE;
+  const xiaoyiProviderIdentity = intent.model === AI_IMAGE_XIAOYI_EDIT_PROFILE.model
+    && intentRecord.endpointSha256 === sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.endpoint);
   if (
     attestation.generation !== intent.generation
     || intent.generation !== report.generation
+    || xiaoyiProfileSelected !== xiaoyiProviderIdentity
+    || (xiaoyiProfileSelected && (
+      intent.generation !== 'EXACT'
+      || intentRecord.apiBaseSha256 !== sha256(AI_IMAGE_XIAOYI_EDIT_PROFILE.apiBase)
+      || !isAiImageXiaoyiEditOperation(String(request.operation))
+    ))
   ) {
     throw new AiImageSandboxBillingSettlementError(
       'SANDBOX_BILLING_MISMATCH',
@@ -2012,13 +2025,18 @@ function assertArtifactsMatch(input: {
     endpointSha256: String(intentRecord.endpointSha256),
     model: intent.model,
     request: {
-      ...(request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+      ...((request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+        || request.requestProfile === AI_IMAGE_XIAOYI_EDIT_REQUEST_PROFILE)
         ? {
             operation: String(request.operation),
-            requestProfile: AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE,
-            multipartDialect: AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+            requestProfile: String(request.requestProfile),
+            multipartDialect: request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+              ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+              : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
             multipartFields: aiImageEditMultipartFields(
-              AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT,
+              request.requestProfile === AI_IMAGE_PACKY_EDIT_REQUEST_PROFILE
+                ? AI_IMAGE_PACKY_EDIT_MULTIPART_DIALECT
+                : AI_IMAGE_DEFAULT_EDIT_MULTIPART_DIALECT,
             ),
           }
         : {}),
