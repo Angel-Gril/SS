@@ -661,10 +661,12 @@ no-redirect, no-cookie, bounded-response, secret-reflection, private-evidence, a
 controls. It binds each DoH Question, rejects truncated or non-IN responses, and compares the full
 A/AAAA CNAME paths. An accepted A or AAAA response must contain a bounded, complete CNAME chain from
 the requested host to the terminal address owner. Loops, unrelated records, a missing terminal,
-mismatched targets, and chains longer than eight hops fail before credential input. It accepts only the
-reviewed DashScope `request_id` plus `output.models[].model_id` envelope with at most one row and
-requires the exact model ID. It rejects workspace-specific hosts, an injected billing origin,
-OpenAI-style catalogue envelopes, multiple rows, and wrong models before they can become evidence.
+mismatched targets, and chains longer than eight hops fail before credential input. It accepts only
+the reviewed DashScope success envelope, fixed single-row pagination, `request_id`, and
+`output.models[].model` field, and requires the exact model ID. It rejects workspace-specific hosts,
+an injected billing origin, OpenAI-style catalogue envelopes, failed success envelopes, inconsistent
+totals, multiple rows, legacy `model_id`/`id` substitutions, and wrong models before they can become
+evidence.
 
 The private manifest and sanitized completion event record authentication and exact catalogue
 visibility, but also record `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
@@ -685,6 +687,41 @@ static contract, diff checks, and the full Server suite (`4735` passed, `199` sk
 Full repository preflight passes `446/0` with the two existing local-extension permission warnings.
 `QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP ingest, or
 Ozon mutation occurred.
+
+### Authenticated catalogue response-shape checkpoint
+
+From clean pushed revision `7001a43e8531f44a3428ec757c63194098f816af`, the repaired DNS path
+decrypted credential revision `dashscope-wanx-beijing-rotation-20260801-01` only in the bounded
+launcher and sent the fixed catalogue GET exactly once. DashScope returned HTTP 200. The helper
+rejected it with `SANDBOX_READONLY_RESPONSE_SCHEMA_INVALID` before evidence persistence because the
+live catalogue row uses `model`, whereas the first offline contract required `model_id`. No evidence
+directory was created, and no task, synthesis, image download, billing path, or POST was contacted.
+
+A second GET-only diagnostic used the same reviewed URI and a current validated public pin
+`39.96.198.249`. It wrote the raw response and headers only to protected local private files. The
+1022-byte response SHA-256 is
+`a30c5462e64fd10ad118231784569c8f2deb3f9500283c25ebe30ec87e5cf2cb`; header SHA-256 is
+`7fe7fe49163ae328bd0fd415d57bae4f7a04c2fbad009a4efdeab017179528ed`. Credential scans of both
+files found no match. Sanitized inspection found `success=true`, null `code`/`message`, page `1`,
+page size `1`, total equal to one row, and exactly one row whose `model` equals
+`wanx2.1-imageedit`. This confirms authentication and model visibility as a response-shape fact, but
+it is not an official v3 completion manifest and does not prove edit permission, price, balance, or
+billing.
+
+The parser now requires that exact closed envelope and rejects failed success flags, non-null error
+fields, extra top-level/output fields, inconsistent pagination/totals, multiple rows, and any row
+that mixes `model` with `model_id`, `id`, or error fields. An empty page with total zero passes schema
+validation but is rejected as exact-model unavailable. The endpoint/query are corroborated by the
+official DashScope SDK; the success envelope and `model` row field are explicitly a versioned live
+response-shape contract bound to the retained body hash, not a generalized SDK schema. `total` equal
+to this zero-or-one filtered page is intentionally required; any Provider drift fails closed and
+requires a new observation/schema revision.
+
+Focused tests pass `109` with four platform skips; the full Server suite passes `4749` with `199`
+skips. Sandbox typecheck, target lint, the static contract, and diff checks pass. Full preflight is
+`446/0` with the two existing local-extension permission warnings. A new clean revision and evidence
+ID may now execute the official one-GET preflight. `QA-02` remains `4/5`, overall progress remains
+`32/37`, and no paid Provider call or production mutation occurred.
 
 ## PicPi public no-credential preflight
 

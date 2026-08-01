@@ -31,6 +31,23 @@ const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_DOH_RESPONSE_BYTES = 64 * 1_024;
 const MAX_DOH_ANSWERS = 64;
 const MAX_DOH_CNAME_HOPS = 8;
+const DASHSCOPE_CATALOG_TOP_LEVEL_FIELDS = [
+  'code',
+  'message',
+  'output',
+  'request_id',
+  'success',
+] as const;
+const DASHSCOPE_CATALOG_OUTPUT_FIELDS = ['models', 'page_no', 'page_size', 'total'] as const;
+const DASHSCOPE_CATALOG_FORBIDDEN_MODEL_FIELDS = new Set([
+  'code',
+  'data',
+  'error',
+  'id',
+  'message',
+  'model_id',
+  'success',
+]);
 const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/u;
 const SECRET_SHAPE_PATTERN = /(?:^|[^A-Za-z0-9])(?:sk|pk)-[A-Za-z0-9_-]{12,}/iu;
 const UNSAFE_ENVIRONMENT_NAMES = new Set([
@@ -171,6 +188,12 @@ function sha256(value: Buffer | string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactFields(value: Record<string, unknown>, fields: readonly string[]) {
+  const keys = Object.keys(value);
+  return keys.length === fields.length
+    && fields.every((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
 function contentTypeIs(value: string, expected: string) {
@@ -509,20 +532,34 @@ async function readBoundedResponse(response: Response, maximumBytes = MAX_RESPON
 function dashScopeModels(value: unknown): Array<Record<string, unknown>> | null {
   if (!isRecord(value)) return null;
   if (
-    typeof value.request_id !== 'string'
+    !hasExactFields(value, DASHSCOPE_CATALOG_TOP_LEVEL_FIELDS)
+    || value.success !== true
+    || value.code !== null
+    || value.message !== null
+    || typeof value.request_id !== 'string'
     || value.request_id.length < 1
     || value.request_id.length > 500
   ) return null;
   const output = isRecord(value.output) ? value.output : null;
-  if (!output || !Array.isArray(output.models) || output.models.length > 1) {
+  if (
+    !output
+    || !hasExactFields(output, DASHSCOPE_CATALOG_OUTPUT_FIELDS)
+    || output.page_no !== 1
+    || output.page_size !== 1
+    || !Array.isArray(output.models)
+    || output.models.length > 1
+    || !Number.isSafeInteger(output.total)
+    || output.total !== output.models.length
+  ) {
     return null;
   }
   const models = output.models;
   if (!models.every((entry) => (
     isRecord(entry)
-    && typeof entry.model_id === 'string'
-    && entry.model_id.length > 0
-    && entry.model_id.length <= 256
+    && !Object.keys(entry).some((field) => DASHSCOPE_CATALOG_FORBIDDEN_MODEL_FIELDS.has(field))
+    && typeof entry.model === 'string'
+    && entry.model.length > 0
+    && entry.model.length <= 256
   ))) return null;
   return models as Array<Record<string, unknown>>;
 }
@@ -533,7 +570,7 @@ function exactModelAvailable(
   identity: ReviewedProviderIdentity,
 ) {
   if (identity.preflightKind === 'DASHSCOPE_MODEL_CATALOG') {
-    return dashScopeModels(value)?.some((entry) => entry.model_id === model) || false;
+    return dashScopeModels(value)?.some((entry) => entry.model === model) || false;
   }
   return isRecord(value)
     && value.success === true

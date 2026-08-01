@@ -193,11 +193,38 @@ function successfulXiaoyiFetch() {
   });
 }
 
+// Sanitized key/type fixture from private body SHA-256
+// a30c5462e64fd10ad118231784569c8f2deb3f9500283c25ebe30ec87e5cf2cb.
+function observedWanxModelRow(model = 'wanx2.1-imageedit') {
+  return {
+    capabilities: [],
+    description: 'redacted',
+    equivalent_snapshot: null,
+    features: [],
+    inference_metadata: {},
+    inference_provider: 'redacted',
+    model,
+    model_info: {},
+    name: 'redacted',
+    prices: [],
+    provider: 'redacted',
+    published_time: 'redacted',
+  };
+}
+
 function successfulWanxFetch(overrides: {
   model?: string;
   requestId?: unknown;
   models?: unknown;
   envelope?: 'output' | 'data';
+  success?: unknown;
+  code?: unknown;
+  message?: unknown;
+  pageNo?: unknown;
+  pageSize?: unknown;
+  total?: unknown;
+  topLevelExtras?: Record<string, unknown>;
+  outputExtras?: Record<string, unknown>;
 } = {}) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     expect(init?.method).toBe('GET');
@@ -213,13 +240,22 @@ function successfulWanxFetch(overrides: {
       ['page_no', '1'],
       ['page_size', '1'],
     ]);
-    const models = overrides.models ?? [{
-      model_id: overrides.model || 'wanx2.1-imageedit',
-      name: 'Wanx 2.1 image edit',
-    }];
+    const models = overrides.models ?? [observedWanxModelRow(overrides.model)];
     const body = {
+      success: overrides.success === undefined ? true : overrides.success,
+      code: overrides.code === undefined ? null : overrides.code,
+      message: overrides.message === undefined ? null : overrides.message,
       request_id: overrides.requestId === undefined ? 'dashscope-readonly-request-1' : overrides.requestId,
-      [overrides.envelope || 'output']: { models },
+      ...overrides.topLevelExtras,
+      [overrides.envelope || 'output']: {
+        models,
+        page_no: overrides.pageNo === undefined ? 1 : overrides.pageNo,
+        page_size: overrides.pageSize === undefined ? 1 : overrides.pageSize,
+        total: overrides.total === undefined && Array.isArray(models)
+          ? models.length
+          : overrides.total,
+        ...overrides.outputExtras,
+      },
     };
     return jsonResponse(body);
   });
@@ -487,9 +523,28 @@ describe('AI image Provider read-only preflight', () => {
     ['missing request ID', { requestId: null }],
     ['oversized request ID', { requestId: 'x'.repeat(501) }],
     ['multiple models despite page size one', {
-      models: [{ model_id: 'wanx2.1-imageedit' }, { model_id: 'another-model' }],
+      models: [{ model: 'wanx2.1-imageedit' }, { model: 'another-model' }],
     }],
-    ['id instead of model_id', { models: [{ id: 'wanx2.1-imageedit' }] }],
+    ['legacy model_id instead of model', { models: [{ model_id: 'wanx2.1-imageedit' }] }],
+    ['id instead of model', { models: [{ id: 'wanx2.1-imageedit' }] }],
+    ['false success flag', { success: false }],
+    ['non-null code', { code: 'UnexpectedCode' }],
+    ['non-null message', { message: 'unexpected message' }],
+    ['wrong page number', { pageNo: 2 }],
+    ['wrong page size', { pageSize: 2 }],
+    ['total inconsistent with rows', { total: 0 }],
+    ['mixed output and data envelopes', { topLevelExtras: { data: { error: 'denied' } } }],
+    ['top-level error field', { topLevelExtras: { error: 'denied' } }],
+    ['output error field', { outputExtras: { error: 'denied' } }],
+    ['model mixed with legacy model_id', {
+      models: [{ ...observedWanxModelRow(), model_id: 'different-model' }],
+    }],
+    ['model mixed with id', {
+      models: [{ ...observedWanxModelRow(), id: 'different-model' }],
+    }],
+    ['model mixed with row error', {
+      models: [{ ...observedWanxModelRow(), error: 'denied' }],
+    }],
   ])('rejects a noncanonical DashScope catalogue: %s', async (_label, overrides) => {
     const value = await wanxFixture();
     await expect(runAiImageProviderReadonlyPreflight({
@@ -510,6 +565,18 @@ describe('AI image Provider read-only preflight', () => {
       resolveRevision: vi.fn(async () => adapterRevision),
       resolveDns: vi.fn(async () => [{ address: '47.74.1.1' }]),
       fetch: successfulWanxFetch({ model: 'wanx-other-model' }),
+      readCredential: vi.fn(async () => credential),
+    })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_MODEL_UNAVAILABLE' });
+  });
+
+  it('treats an observed empty page with total zero as exact-model unavailable', async () => {
+    const value = await wanxFixture();
+    await expect(runAiImageProviderReadonlyPreflight({
+      environment: value.environment,
+      repositoryRoot: value.root,
+      resolveRevision: vi.fn(async () => adapterRevision),
+      resolveDns: vi.fn(async () => [{ address: '47.74.1.1' }]),
+      fetch: successfulWanxFetch({ models: [], total: 0 }),
       readCredential: vi.fn(async () => credential),
     })).rejects.toMatchObject({ code: 'SANDBOX_READONLY_MODEL_UNAVAILABLE' });
   });

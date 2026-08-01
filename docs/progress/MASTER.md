@@ -78,6 +78,27 @@ checks pass. Full repository preflight passes `446/0` with the two existing loca
 permission warnings. Counts remain `4/5` and `32/37`; no deployment, flag, ERP ingest, or Ozon
 mutation occurred.
 
+From clean pushed revision `7001a43e8531f44a3428ec757c63194098f816af`, the corrected DNS gate
+then sent exactly one authenticated catalogue GET. DashScope returned HTTP 200, but v3 rejected the
+response before persistence because the live catalogue row uses `model`, not the assumed
+`model_id`; the evidence ID was not created. One additional GET-only pinned diagnostic retained the
+1022-byte body privately under SHA-256
+`a30c5462e64fd10ad118231784569c8f2deb3f9500283c25ebe30ec87e5cf2cb` and confirmed exactly one
+row whose `model` equals `wanx2.1-imageedit`. It found no credential reflection and sent no task,
+image-synthesis, or other POST. This establishes the live response shape only; it is not a completed
+v3 manifest and does not prove edit permission, billing, price, or balance.
+
+The v3 parser now requires `success=true`, null `code`/`message`, fixed page `1`/size `1`, a total
+consistent with at most one row, and the exact bounded `output.models[].model` field. It rejects the
+old `model_id` assumption, extra top-level/output fields, contradictory row aliases, and all failed
+or inconsistent envelopes. This is an explicit live response-shape revision: the official SDK
+corroborates the endpoint/query, while the exact envelope comes from the retained HTTP 200 body;
+future Provider drift fails closed. Focused tests pass `109` with four platform skips; the full
+Server suite passes `4749` with `199` skips. Sandbox typecheck, target lint, the static contract, and
+diff checks pass. Full repository preflight passes `446/0` with the two existing local-extension
+permission warnings. Counts remain `4/5` and `32/37`, and no paid Provider call, deployment, flag,
+ERP ingest, or Ozon mutation occurred.
+
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
 clean pushed commit `f8ee687dbe0faceb73b26a60f9af2543ad003b8d`. It independently pinned both

@@ -681,3 +681,18 @@ Progress: 4/5 tasks.
   Full repository preflight passes `446/0` with the two existing local-extension permission
   warnings. `QA-02` remains `4/5`, overall progress remains `32/37`, and no deployment, flag, ERP
   ingest, or Ozon mutation occurred.
+- From clean pushed revision `7001a43e8531f44a3428ec757c63194098f816af`, the DNS-corrected helper
+  sent one authenticated catalogue GET and received HTTP 200. The v3 schema rejected the live row
+  before persistence because DashScope uses `output.models[].model`, not the assumed `model_id`; the
+  evidence ID was not created. A second pinned GET-only diagnostic retained the private 1022-byte
+  response under SHA-256 `a30c5462...e5cf2cb` and confirmed exactly one matching
+  `wanx2.1-imageedit` row, with no credential reflection and no Provider POST.
+- The v3 parser now binds the observed success/pagination envelope and exact `model` field while
+  rejecting extra top-level/output fields, contradictory row aliases, failed envelopes, inconsistent
+  totals, multiple rows, and legacy `model_id`/`id` substitutions. This is a versioned live
+  response-shape contract; Provider drift fails closed rather than silently broadening evidence.
+  Focused tests pass `109` with four platform skips; the full Server suite passes `4749` with `199`
+  skips. Sandbox typecheck, target lint, the static contract, and diff checks pass; full preflight is
+  `446/0` with the two existing local-extension permission warnings. This diagnosis is not edit
+  capability or billing evidence. `QA-02` stays `4/5`, overall progress stays `32/37`, and no paid
+  task, deployment, flag, ERP ingest, or Ozon mutation occurred.

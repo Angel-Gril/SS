@@ -215,6 +215,13 @@ and ambient credentials remain disabled, and no task, image-synthesis, or guesse
 called. The private v3 manifest records `authenticationVerified=true`,
 `exactModelListed=true`, `billingMeterStatus=SEPARATE_EVIDENCE_REQUIRED`,
 `providerPostSent=false`, `chargeObserved=false`, and `editCapabilityVerified=false`.
+The catalogue response must also set `success=true`, keep `code` and `message` null, report page and
+page size `1`, make `total` equal the returned zero-or-one row count, and identify a row through the
+exact `model` field. Top-level and output fields are closed to the observed shape; do not accept
+mixed `data`/`error` fields, `model_id`, `id`, multiple rows, or inconsistent pagination. The
+endpoint/query are corroborated by the official SDK, but this exact success envelope is a versioned
+live response-shape contract bound to retained evidence. Provider drift must fail closed and trigger
+review, not silent compatibility expansion.
 
 This observation proves only that the exact credential can read a catalogue containing the model.
 It does not prove edit-route permission, successful editing, price, account balance, or billing.
@@ -237,6 +244,16 @@ diff checks pass. Full repository preflight passes `446/0` with the two existing
 permission warnings. Run the same catalog-only preflight again from the new clean pushed revision
 through its pinned DoH resolver; do not bypass the DNS gate or prepare a paid approval from this
 failed attempt.
+
+The next clean revision reached the authenticated catalogue once and received HTTP 200, but the
+first v3 response parser rejected it because the live row uses `model`, not `model_id`. The evidence
+ID was not created. A separate pinned GET-only diagnostic retained the private response under
+SHA-256 `a30c5462...e5cf2cb`, confirmed one exact `wanx2.1-imageedit` row, and found no credential
+reflection. Neither GET contacted a task, synthesis, billing, or POST route. The parser correction
+passes focused tests `109` with four platform skips, full Server `4749` with `199` skips, and full
+preflight `446/0` with two existing warnings. Commit it before rerunning the official catalog
+preflight with a new evidence ID; the diagnostic is not itself a successful v3 manifest or
+edit-capability evidence.
 
 The Xiaoyi API credential pasted into chat was exposed, revoked and replaced under non-secret
 revision `xiaoyi-image-key-rotation-20260801-01`; only the replacement may remain in current-user
