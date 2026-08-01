@@ -44,18 +44,19 @@ Overall: 32/37 tasks complete (86%).
 
 ## Current Status
 
-Current checkpoint (2026-08-01): a sandbox-only Alibaba Wanx 2.1 asynchronous JSON edit adapter is
-implemented offline for separate `IMAGE_TO_IMAGE`, `FULL_EDIT`, and `INPAINT` profiles. It pins the
-reviewed Beijing legacy API Base/model, persists accepted task identity before polling, permits one
-POST only, binds the exact transport/function and derived inpaint mask, and downloads only from the
-reviewed DashScope OSS host shape without forwarding Authorization. Mocked evidence is not Provider
-acceptance: `QA-02` remains the first unresolved dependency at Phase 3 `4/5`, and overall progress
-remains `32/37`.
+Current checkpoint (2026-08-01): the bounded PicPi `IMAGE_TO_IMAGE` operation is closed as negative
+evidence. The guarded runner sent exactly one request to the approved route, received definite HTTP
+400, produced no image, and did not retry. Authenticated Sub2 API-key lifetime usage remained zero;
+official receipt v5 records `NO_CHARGE`, `billingGate=PASS`, zero billed units, and
+`sameRequestRetryAllowed=false`. This does not prove edit capability: `QA-02` remains the first
+unresolved dependency at Phase 3 `4/5`, and overall progress remains `32/37`.
 
-Both Packy edit requests and the Xiaoyi V1 and minimal V2 requests remain closed negative evidence
-and must not be retried. Public pricing is planning input, not a maximum-cost authorization or
-settled billing proof. The Alibaba credential pasted into chat was exposed and was not used; it must
-be revoked before any authenticated Wanx preflight or paid operation.
+Both Packy requests, both Xiaoyi requests, and this PicPi request are closed negative evidence and
+must not be retried. The sandbox-only Alibaba Wanx 2.1 asynchronous adapter remains the materially
+different offline candidate for separate `IMAGE_TO_IMAGE`, `FULL_EDIT`, and `INPAINT` validation.
+Mocked evidence is not Provider acceptance. The Alibaba credential pasted into chat was exposed and
+was not used; it must be revoked before any authenticated Wanx preflight or paid operation. Public
+pricing remains planning input, not a maximum-cost authorization or settled billing proof.
 
 Xiaoyi separates the image API from account meters. After the exposed Token was revoked and replaced
 under credential revision `xiaoyi-image-key-rotation-20260801-01`, the official helper ran from
@@ -699,6 +700,33 @@ release-orchestration development, but final `QA-04`, `REL-03`, `REL-04`, and `R
 remains gated on live positive `QA-02` evidence. No Alibaba credential was read, no Provider request
 or charge occurred, and no VPS access, deployment, flag, ERP ingest, or Ozon mutation was performed.
 
+PicPi credential revision `picpi-sub2-20260801-r2` then passed authenticated `GET /v1/models`: the
+HTTP 200 catalogue contained 13 models including `gpt-image-2`. The exact approved operation
+`qa02-picpi-i2i-20260801-de951b7-01` bound API Base `https://api.picpi.top/v1`, endpoint
+`/images/edits`, profile `OPENAI_SQUARE_SINGLE_V1`, one `1024x1024` source with SHA-256
+`5d2627b4...b6e32`, quote USD `1.00`, and maximum USD `1.00`. From clean submission revision
+`de951b7`, the runner sent exactly one POST and did not retry. PicPi returned definite HTTP 400 after
+`2025 ms`; report SHA-256 `87a574b0...f239f` records `REJECTED`, one create request, response-ID
+hash `f4cfe87f...de017`, no usage, and no image.
+
+Authenticated `GET /v1/usage` raw SHA-256 `654b930e...3efcf` showed this API Key's today and
+lifetime `requests=0` and `actual_cost=0`. Sub2 upstream source confirms that lifetime total is the
+Key-filtered usage-log count and actual-cost sum, including logged failed requests. Finalizer
+revision `0d42a87` added the closed v4 cumulative-zero attestation without relabeling request counts
+as raw quota or fabricating a before snapshot. Attestation SHA-256 `a82fded6...0764f` produced v5
+receipt SHA-256 `e2ed71a3...65cd`, with `NO_CHARGE`, `PASS`, zero billed units and no same-request
+retry; offline replay was byte-identical. Nine private evidence files passed hash, ACL, reparse and
+credential checks under archive manifest SHA-256 `a91d8105...3476`; private run-summary SHA-256 is
+`3708060f...fe36`. Focused settlement/finalizer tests passed `93` with one platform skip, the full
+Server suite passed `4709` with `199` skips, and Server typecheck, target lint, static contract and
+diff checks passed.
+
+This closes billing only and remains negative capability evidence for the exact PicPi
+route/account/model/profile. No Registry mutation, deployment, feature-flag change, ERP media
+mutation, Ozon write, VPS access, or image quality review occurred. Do not retry this Operation ID,
+rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts remain `4/5` and
+`32/37`; `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked on complete positive `QA-02`.
+
 ## Next Steps
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
@@ -735,14 +763,13 @@ or charge occurred, and no VPS access, deployment, flag, ERP ingest, or Ozon mut
    CNY quote and independently chosen single-request maximum. Do not reuse any Packy or Xiaoyi
    approval. After one accepted operation is fully reconciled and quality-reviewed, repeat with new
    approvals for `FULL_EDIT` and `INPAINT`.
-6. Treat `https://api.picpi.top/v1` as an unverified candidate only. Revoke the PicPi Token exposed
-   in chat, create a new private credential revision, and exclude `api.picpi.top` from the local
-   proxy fake-IP resolver before running the official authenticated GET-only preflight. Public DNS
-   resolves to `104.21.13.92` and `172.67.167.234`; never relax the guard to accept the local
-   `198.18.0.29` answer. Anonymous `/v1/models` correctly returned 401, while public status/pricing
-   metadata was absent and `OPTIONS /v1/images/edits` returned 403. Do not infer edit support or send
-   a POST until the new model catalogue, billing references, exact quote, maximum, and separate
-   `IMAGE_TO_IMAGE` approval are retained.
+6. Never retry consumed PicPi operation `qa02-picpi-i2i-20260801-de951b7-01`, substitute another ID
+   for the same request, or reuse its approval for `FULL_EDIT`/`INPAINT`. Its exact generic multipart
+   contract received definite HTTP 400 and settled with no charge. Another PicPi paid attempt
+   requires a Provider-confirmed material route/account/contract change followed by a new profile,
+   policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
+   public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
+   `198.18.0.29`.
 7. Continue fixture implementation and rehearsal as needed, but run the final `QA-04` acceptance
    only after all `QA-02` operation-specific evidence is accepted; then execute
    `REL-03` packaging, `REL-04` dark deployment/pre-enable canaries, and finally `REL-02`

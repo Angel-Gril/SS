@@ -648,8 +648,9 @@ retained.
 
 ## PicPi public no-credential preflight
 
-On 2026-08-01 the operator supplied `https://api.picpi.top` as another OpenAI-compatible edit
-candidate. The Token pasted into chat was exposed and was not used. The resumed CLI process had
+At the public-preflight checkpoint on 2026-08-01, the operator supplied `https://api.picpi.top` as
+another OpenAI-compatible edit candidate. The Token pasted into chat was exposed and was not used.
+The resumed CLI process had
 neither `AI_IMAGE_SANDBOX_API_KEY` nor `AI_IMAGE_SANDBOX_CREDENTIAL_REVISION`, so no authenticated
 request was possible or attempted.
 
@@ -673,8 +674,67 @@ Bounded anonymous requests with redirects disabled observed:
 
 These observations prove a reachable authenticated API gateway, not an edit route, model
 entitlement, price, or positive Provider capability. No POST was sent and no charge occurred.
-After revoking the exposed Token, the next step is one authenticated GET-only model-catalog and
-billing-meter preflight using a new private credential revision. Only if that evidence identifies
-an exact edit-capable model and usable billing references may a fresh operation-specific policy,
-quote, maximum, approval, and one-POST `IMAGE_TO_IMAGE` attempt be prepared. Existing Packy,
-Xiaoyi, CentOS, or Wanx approvals cannot be reused.
+At that checkpoint, the next step was one authenticated GET-only model-catalog and billing-meter
+preflight using a new private credential revision, followed only then by a fresh
+operation-specific policy, quote, maximum, approval, and one-POST `IMAGE_TO_IMAGE` attempt. Existing
+Packy, Xiaoyi, CentOS, or Wanx approvals could not be reused. The resulting attempt is recorded
+below.
+
+## PicPi authenticated preflight and bounded I2I result
+
+After the exposed PicPi Token was revoked, replacement credential revision
+`picpi-sub2-20260801-r2` remained only in current-user DPAPI storage. With system DNS returning
+public addresses `104.21.13.92` and `172.67.167.234`, an authenticated read-only model request
+returned HTTP 200 and 13 model IDs, including `gpt-image-2`. Guessed legacy billing endpoints were
+404; the deployed Sub2 frontend identified authenticated `GET /v1/usage` as the API-key usage
+endpoint.
+
+The operator approved exactly one request:
+
+| Field | Bound value |
+| --- | --- |
+| Operation ID | `qa02-picpi-i2i-20260801-de951b7-01` |
+| API Base | `https://api.picpi.top/v1` |
+| Operation endpoint | `https://api.picpi.top/v1/images/edits` |
+| Model/profile | `gpt-image-2` / `OPENAI_SQUARE_SINGLE_V1` |
+| Operation/size/count | `IMAGE_TO_IMAGE` / `1024x1024` / `n=1` |
+| Source SHA-256 | `5d2627b439825054a0205afc97fab6444cffa64085c31e68f8f37781520b6e32` |
+| Quote/maximum | USD `1.00` / USD `1.00` |
+| Approval SHA-256 | `2c48bfe635105a78fc23c9a102fff8ce88bd6a9ec3634c68ae0a7bad005f0576` |
+
+From clean pushed submission revision `de951b79655ecb32c9d44c4d748b38f48a28dc42`, the guarded
+runner sent exactly one synchronous multipart POST. It did not retry. PicPi returned definite HTTP
+400 after `2025 ms`. Intent, fingerprint claim, report and sanitized diagnostic SHA-256 values are
+`c85423b4...62ae4`, `2f8c59af...8aa57`, `87a574b0...f239f`, and `74d45944...2ab15`.
+The v5 report records `REJECTED`, `createRequests=1`, response request-ID hash
+`f4cfe87f...de017`, `usage=null`, and no image.
+
+The retained authenticated `/v1/usage` body has SHA-256 `654b930e...3efcf`. It reports
+`usage.today.requests=0`, `usage.today.actual_cost=0`, `usage.total.requests=0`, and
+`usage.total.actual_cost=0` for this API Key. Subscription-level historical usage is a different
+scope and was not used. Upstream Sub2 commit `b22f73e725236790f97d89bf0c3b908a48e591d5` confirms that
+`/v1/usage` filters by the authenticated API Key; lifetime requests are `COUNT(*)` over its usage
+logs and lifetime actual cost is their sum. Logged failed requests also contribute to the count.
+
+The existing exact-money v2 attestation could not honestly represent this evidence: it requires a
+Relay raw-quota delta and raw response request ID, while the runner intentionally retained only the
+request-ID hash. Finalizer revision `0d42a87d75980ead4a4806a188e6d26f9f5b7aa9` therefore added a
+closed v4 cumulative-zero contract. It accepts only this exact PicPi route/model/operation/profile,
+one definite rejected request, a response-ID hash, and machine-parsed Key-level today/lifetime zero
+usage. It cannot settle a charge, success, unresolved outcome, another Provider, or another
+operation, and it does not fabricate a pre-call snapshot.
+
+Attestation SHA-256 `a82fded6935f7b4e9013a1ad034083bb13bd1ed0553c4081b08374bc5fb0764f`
+produced v5 receipt SHA-256
+`e2ed71a3a7dfbdb5ef9cc292fb7bc881fb27f616ac432ab0ec99d0965d6465cd`. It records
+`NO_CHARGE`, `billingGate=PASS`, USD `0`, zero billed units, resolved rejection, and
+`sameRequestRetryAllowed=false`; offline replay returned byte-identical evidence. Nine private
+files were retained under archive manifest SHA-256
+`a91d81050c37580e002d4cf8b70e251fbb59ef35b27116bfa5725953fd403476`; private run-summary
+SHA-256 is `3708060fb9932a1fbc92b1ae177517098299b9acceb75cdf478a381082a4fe36`.
+
+This is a closed negative result for the exact PicPi account/route/model/generic multipart
+contract. It proves one POST was sent and no usage or charge was recorded, not that editing works.
+Do not retry the Operation ID, rename the same request, or infer `FULL_EDIT`/`INPAINT` support. No
+Registry, deployment, flag, ERP ingest, Ozon, or VPS mutation occurred. Phase 3 remains `4/5` and
+overall progress remains `32/37`.

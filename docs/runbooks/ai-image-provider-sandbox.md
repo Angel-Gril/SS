@@ -497,6 +497,27 @@ account/model/route. Never retry either Operation ID or relabel either request. 
 route/account/contract change or a different edit-capable Provider before beginning a new bounded
 price, approval, and evidence sequence.
 
+### Recorded PicPi edit rejection (2026-08-01)
+
+Credential revision `picpi-sub2-20260801-r2` passed authenticated `GET /v1/models` and exposed
+`gpt-image-2`. Operation `qa02-picpi-i2i-20260801-de951b7-01` then bound the exact
+`https://api.picpi.top/v1/images/edits` route, `OPENAI_SQUARE_SINGLE_V1`, one reviewed
+`1024x1024` source, USD `1.00` quote, and USD `1.00` maximum. The guarded runner sent one multipart
+POST from clean revision `de951b7` and did not retry.
+
+PicPi returned definite HTTP 400 after `2025 ms`. Report SHA-256 `87a574b0...f239f` records
+`REJECTED`, `createRequests=1`, a response request-ID hash, `usage=null`, and no image. Authenticated
+Sub2 `/v1/usage` raw SHA-256 `654b930e...3efcf` reported this API Key's today and lifetime
+`requests=0` and `actual_cost=0`. Do not confuse the unrelated subscription-level historical usage
+fields with this Key-level evidence.
+
+Closed cumulative-zero attestation v4 SHA-256 `a82fded6...0764f` produced receipt v5 SHA-256
+`e2ed71a3...65cd`. It records `NO_CHARGE`, `billingGate=PASS`, zero billed units, resolved rejection,
+and `sameRequestRetryAllowed=false`; replay was byte-identical. The exact request is consumed and is
+negative capability evidence. Never retry it, substitute a new ID for the same request, or reuse the
+approval for `FULL_EDIT`/`INPAINT`. Require a Provider-confirmed material route/account/contract
+change and a new bounded approval sequence, or select another edit-capable Provider.
+
 Successful sandbox output must be fully decoded before it can become capability evidence. Reject
 truncated or animated media, declared/decoded MIME mismatches, shared byte/pixel limit violations,
 and any dimensions different from the approved request profile. If the Provider already returned

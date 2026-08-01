@@ -35,12 +35,16 @@ or another image-to-image approval for either same combination unless the Provid
 reviewed edit-contract/account correction; otherwise select a different edit-capable Provider and
 use a new policy, Operation ID and approval after that external change.
 
-The Xiaoyi operation sent its V1 five-field OpenAI-compatible synchronous multipart contract once
-and received definite HTTP 400, with no Provider request ID, no image and no charge. Do not retry
-that Operation ID or prepare `FULL_EDIT`/`INPAINT` for the same Xiaoyi route/account/model/profile.
-The first-party synchronous curl example is a materially different three-field request, represented
-by `XIAOYI_GPT_IMAGE_2_MINIMAL_EDIT_V2`; it still requires a new policy, Operation ID, approval, and
-billing capture before any POST.
+The two Xiaoyi operations sent the V1 five-field and documented V2 three-field synchronous
+multipart contracts once each. Both received definite HTTP 400, produced no image, and settled with
+no charge. Do not retry either Operation ID or prepare `FULL_EDIT`/`INPAINT` for the same Xiaoyi
+route/account/model/profile without a Provider-confirmed material permission or contract change.
+
+The PicPi operation sent the generic multipart contract once, received definite HTTP 400, produced
+no image, and settled from authenticated API-key lifetime zero usage. Do not retry it or prepare
+`FULL_EDIT`/`INPAINT` for the same PicPi route/account/model/profile. Another paid PicPi approval
+requires a Provider-confirmed material route/account/contract change; renaming the Operation ID is
+not such a change.
 
 Those two Xiaoyi results remain negative evidence for their exact account, endpoint, model, and
 wire contracts. They are not erased or converted into Wanx evidence by selecting a new Provider.

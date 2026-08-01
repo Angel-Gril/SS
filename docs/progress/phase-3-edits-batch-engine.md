@@ -648,3 +648,19 @@ Progress: 4/5 tasks.
   flag, ERP ingest, Ozon write, or `.context/` staging occurred. These changes unblock downstream
   offline rehearsal only. `QA-02` remains `4/5`, overall progress remains `32/37`, and final release
   dependencies remain closed until three positive live Wanx operation evidence chains are accepted.
+- PicPi credential revision `picpi-sub2-20260801-r2` subsequently passed authenticated model
+  catalogue inspection and exposed `gpt-image-2`. Operation
+  `qa02-picpi-i2i-20260801-de951b7-01` bound the exact PicPi API Base/edit endpoint, generic
+  `OPENAI_SQUARE_SINGLE_V1` multipart profile, one reviewed `1024x1024` source, quote USD `1.00`,
+  and maximum USD `1.00`. From clean revision `de951b7`, the guard sent exactly one POST. PicPi
+  returned definite HTTP 400 after `2025 ms`; report SHA-256 `87a574b0...f239f` records `REJECTED`,
+  one create request, one response-ID hash, no image, and no retry.
+- Authenticated `/v1/usage` raw SHA-256 `654b930e...3efcf` showed this Key's today and lifetime
+  `requests=0` and `actual_cost=0`. Closed cumulative-zero attestation v4 SHA-256
+  `a82fded6...0764f` produced receipt v5 SHA-256 `e2ed71a3...65cd`, recording `NO_CHARGE`, `PASS`,
+  zero billed units and `sameRequestRetryAllowed=false`; offline replay was byte-identical. Private
+  archive/run-summary SHA-256 values are `a91d8105...3476` and `3708060f...fe36`; hashes, ACLs,
+  reparse checks and credential scans passed. This is negative evidence for the exact PicPi
+  route/account/model/profile, not permission to retry or test `FULL_EDIT`/`INPAINT`. No Registry,
+  deployment, flag, ERP ingest, or Ozon mutation occurred. `QA-02` remains `4/5`, overall progress
+  remains `32/37`, and all four downstream tasks remain blocked on positive edit evidence.
