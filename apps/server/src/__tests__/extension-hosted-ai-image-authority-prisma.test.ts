@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
   createSourceProductCaptureV2Submission,
+  verifySourceProductCaptureV2Submission,
   type SourceProductCaptureV2Submission,
 } from 'shared';
 import { describe, expect, it, vi } from 'vitest';
@@ -267,6 +268,119 @@ describe('Prisma extension hosted AI image authority loader', () => {
     expect(values).toEqual(['owner-1', 'listing-workflow-1']);
   });
 
+  it('maps NFKC capture SKU aliases to canonical workflow and media authority keys', async () => {
+    const capturedSkuKey = 'sku:variant\uff081.5cm+4cm\uff09';
+    const canonicalSkuKey = capturedSkuKey.normalize('NFKC');
+    const capture = structuredClone(captureFixture.capture);
+    capture.skus[0]!.key = capturedSkuKey;
+    capture.facts.selectedSkuKey = capturedSkuKey;
+    capture.fieldEvidence.selectedSkuKey.value = capturedSkuKey;
+    capture.prices[0]!.skuKey = capturedSkuKey;
+    capture.prices[0]!.fieldEvidence.skuKey.value = capturedSkuKey;
+    capture.media[0]!.skuKeys = [capturedSkuKey];
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    await expect(verifySourceProductCaptureV2Submission(submission)).resolves.toMatchObject({
+      valid: true,
+    });
+    const { loader } = fixture([[planRow({
+      workflowSelectedSkuKeys: [canonicalSkuKey],
+      draftSelectedSkuKeys: [canonicalSkuKey],
+      snapshotCaptureHash: submission.captureHash,
+      snapshotPayloadBytes: submission.payloadBytes,
+      snapshotPayload: submission.capture,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toMatchObject({
+      selectedSkuKeys: [canonicalSkuKey],
+      capturedSkuKeys: [canonicalSkuKey],
+      candidateMediaKeys: ['media-main-0'],
+    });
+  });
+
+  it('does not treat an unbound SKU-role image as product-level candidate media', async () => {
+    const capture = structuredClone(captureFixture.capture);
+    capture.media[0]!.role = 'sku';
+    capture.media[0]!.fieldEvidence.role.value = 'sku';
+    capture.media[0]!.skuKeys = [];
+    capture.skus[0]!.mediaKeys = [];
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    await expect(verifySourceProductCaptureV2Submission(submission)).resolves.toMatchObject({
+      valid: true,
+    });
+    const { loader } = fixture([[planRow({
+      snapshotCaptureHash: submission.captureHash,
+      snapshotPayloadBytes: submission.payloadBytes,
+      snapshotPayload: submission.capture,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toMatchObject({ candidateMediaKeys: [] });
+  });
+
+  it('rejects capture SKU identities that collide after NFKC normalization', async () => {
+    const capturedSkuKey = 'sku:variant\uff081.5cm+4cm\uff09';
+    const canonicalSkuKey = capturedSkuKey.normalize('NFKC');
+    const capture = structuredClone(captureFixture.capture);
+    capture.skus[0]!.key = capturedSkuKey;
+    const duplicate = structuredClone(capture.skus[0]!);
+    duplicate.key = canonicalSkuKey;
+    duplicate.ordinal = 1;
+    duplicate.sourceSkuId = 'sku-source-1';
+    duplicate.mediaKeys = [];
+    duplicate.fieldEvidence.sourceSkuId.value = duplicate.sourceSkuId;
+    capture.skus.push(duplicate);
+    capture.facts.selectedSkuKey = capturedSkuKey;
+    capture.fieldEvidence.selectedSkuKey.value = capturedSkuKey;
+    capture.prices[0]!.skuKey = capturedSkuKey;
+    capture.prices[0]!.fieldEvidence.skuKey.value = capturedSkuKey;
+    capture.media[0]!.skuKeys = [capturedSkuKey];
+    Object.assign(capture.counts.find((row) => row.fieldPath === '/skus')!, {
+      totalCount: 2,
+      capturedCount: 2,
+      submittedCount: 2,
+    });
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    await expect(verifySourceProductCaptureV2Submission(submission)).resolves.toMatchObject({
+      valid: true,
+    });
+    const { loader } = fixture([[planRow({
+      workflowSelectedSkuKeys: [canonicalSkuKey],
+      draftSelectedSkuKeys: [canonicalSkuKey],
+      snapshotCaptureHash: submission.captureHash,
+      snapshotPayloadBytes: submission.payloadBytes,
+      snapshotPayload: submission.capture,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toBeNull();
+  });
+
+  it('returns null when capture verification rejects an unknown media SKU reference', async () => {
+    const capture = structuredClone(captureFixture.capture);
+    capture.media[0]!.skuKeys = ['missing-sku'];
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    await expect(verifySourceProductCaptureV2Submission(submission)).resolves.toMatchObject({
+      valid: false,
+    });
+    const { loader } = fixture([[planRow({
+      snapshotCaptureHash: submission.captureHash,
+      snapshotPayloadBytes: submission.payloadBytes,
+      snapshotPayload: submission.capture,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toBeNull();
+  });
+
   it.each([
     'CATEGORY_REVIEW',
     'ATTRIBUTE_REVIEW',
@@ -358,6 +472,10 @@ describe('Prisma extension hosted AI image authority loader', () => {
     ['selected SKU absent from capture', {
       workflowSelectedSkuKeys: ['sku-missing'],
       draftSelectedSkuKeys: ['sku-missing'],
+    }],
+    ['legacy source SKU alias stored as the selected key', {
+      workflowSelectedSkuKeys: ['sku-source-0'],
+      draftSelectedSkuKeys: ['sku-source-0'],
     }],
   ])('returns null for %s plan authority', async (_name, overrides) => {
     const { loader } = fixture([[planRow(overrides)]]);

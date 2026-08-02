@@ -18,6 +18,7 @@ import {
   AI_IMAGE_SUITE_OUTPUT_NORMALIZER_VERSION,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
 } from './ai-image-suite-output-normalizer.js';
+import { capturedSourceSkuAliases } from './source-listing-sku-identity.js';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_IDENTIFIER_LENGTH = 1_024;
@@ -446,7 +447,12 @@ function bindingMatchesInput(
 function capturedSkuKeys(capture: SourceProductCaptureV2): string[] | null {
   if (!Array.isArray(capture.skus)) return null;
   if (capture.skus.length === 0) return [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY];
-  const keys = capture.skus.map((sku) => exactText(sku?.key, 500));
+  const aliases = capturedSourceSkuAliases(capture);
+  const keys = capture.skus.map((sku) => {
+    if (typeof sku?.key !== 'string') return null;
+    const normalized = exactText(sku.key.normalize('NFKC').trim(), 500);
+    return normalized && aliases.get(normalized) === normalized ? normalized : null;
+  });
   if (keys.some((key) => key === null || key === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY)) return null;
   const result = keys as string[];
   return new Set(result).size === result.length ? result : null;
@@ -457,6 +463,7 @@ function eligibleMediaKeys(
   selectedSkuKeys: readonly string[],
 ): string[] | null {
   if (!Array.isArray(capture.media)) return null;
+  const aliases = capturedSourceSkuAliases(capture);
   const selected = new Set(selectedSkuKeys);
   const seen = new Set<string>();
   const eligible: string[] = [];
@@ -464,13 +471,18 @@ function eligibleMediaKeys(
     const key = exactText(media?.key, 500);
     if (!key || seen.has(key) || !Array.isArray(media.skuKeys)) return null;
     seen.add(key);
-    const mediaSkuKeys = media.skuKeys.map((skuKey) => exactText(skuKey, 500));
+    const mediaSkuKeys = media.skuKeys.map((skuKey) => {
+      if (typeof skuKey !== 'string') return null;
+      const normalized = exactText(skuKey.normalize('NFKC').trim(), 500);
+      const canonical = normalized ? aliases.get(normalized) : null;
+      return canonical ? exactText(canonical, 500) : null;
+    });
     if (mediaSkuKeys.some((skuKey) => skuKey === null)) return null;
     if (media.kind === 'image'
       && media.disposition === 'accepted'
       && typeof media.url === 'string'
       && media.url.length > 0
-      && (mediaSkuKeys.length === 0
+      && ((media.role !== 'sku' && mediaSkuKeys.length === 0)
         || (mediaSkuKeys as string[]).some((skuKey) => selected.has(skuKey)))
       && eligible.length < MAX_CANDIDATE_MEDIA) eligible.push(key);
   }

@@ -38,11 +38,64 @@ credential storage, or direct Ozon calls.
 - [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [x] Phase 5: Publishing closure and product quality (4/4 tasks) [details](./phase-5-publish-quality.md)
-- [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
+- [ ] Phase 6: Pilot and release (2/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 34/37 tasks complete (92%).
+Overall: 36/37 tasks complete (97%).
 
 ## Current Status
+
+Current checkpoint (2026-08-03): the recovered `.com` BINI sandbox pilot loaded the session-only
+Provider Key, restored the exact origin permission, and completed the separately authorized
+replacement `TEXT_TO_IMAGE` capability probe. The extension sent exactly one Provider POST without
+retry, received one HTTP 200 `b64_json` result, and retained evidence bound to composite policy
+revision `271223250`. The formal product generation has not been sent, so one authorized Provider
+POST remains. Hosted generation, BYOK ingest/publish, and Ozon writes remain disabled.
+
+The real 1688 source bootstrap created the BINI workflow and exact selected SKU, then exposed a
+server mode-lock defect before Provider dispatch. The immutable capture keeps its fullwidth source
+SKU key while workflow mutation intentionally persists the NFKC canonical key; hosted authority
+compared those values byte-for-byte and returned no context. Authority now uses the existing
+collision-aware capture alias map for both captured SKU identity and media ownership, returns only
+canonical keys, rejects ambiguous/unknown aliases, and no longer treats an unbound `role=sku` image
+as product-level media. Regression coverage passes `40/40`, the related authority/mode-lock/context
+matrix passes `96/96`, Server typecheck passes, Server lint has no errors, and the complete Server
+suite passes `4767` tests with `199` skips. Independent review found no blocking issue.
+
+The scoped `.com` generation and source-workbench controls remain enabled only for the exact BINI
+owner/shop/device and `https://ai.big-model-api.top` `TEXT_TO_IMAGE` origin while the clean patch
+release is prepared. No generation, ERP media ingest, publish intent, or Ozon mutation occurred.
+`REL-02` remains open at `36/37`; the next gate is a clean commit/QA-04 patch release followed by a
+deployment strategy that does not silently bypass the rollout verifier or invalidate capability
+evidence without a separately authorized replacement probe.
+
+Current checkpoint (2026-08-03): replacement release commit
+`87e5e2791ac33ea42ffc95abd7def39c71b8c3cd` is now dark-deployed and distributed in both regions.
+The clean final QA-04 command passed all nine gates in `781.4s`; canonical acceptance SHA-256 is
+`14ef3c13...7b29e`. Regional version `1.0.276` candidates passed signature verification and real
+same-path `1.0.275 -> 1.0.276` persistent-Chromium upgrade smokes while clearing session-only state.
+
+Both `.com` and `.cn` deployments used fresh target/database/restore-bound backup attestations,
+completed migration and post-migration guards, and passed the complete topology-correct runtime/VPS
+verifiers. All API/Web/Worker processes run the exact target commit, readiness is healthy, and every
+AI Media, Extension BYOK and Ozon publisher flag remains off. Pre-enable canaries passed `7/7` and
+cleaned up their temporary device and account sessions; receipt SHA-256 values are
+`891b9a2b...ac2b0` for `.com` and `542141c4...34da1` for `.cn`. Signed first-party website
+distribution then passed exact latest/cloud/local GET and offline verification in both regions;
+publication receipt SHA-256 values are `b65a32a6...ad87b0` and `1db0b300...55c45f` respectively.
+No canary or publication probe sent a Provider request, ERP media ingest or Ozon mutation.
+
+`REL-03` and `REL-04` are therefore restored to complete, Phase 6 is `2/3`, and overall progress is
+`36/37`. Only `REL-02` remains. The isolated BINI pilot browser session ended at
+`2026-08-02T15:50:46Z`; because Provider Key and capability evidence are intentionally
+`chrome.storage.session`-only, both were cleared. Capability probe POST 1 remains consumed and no
+generation was sent. Same-path recovery is now complete: the managed package is `1.0.276`, the
+extension ID remains `nkkemglcckgmhmcfnjjmcfbdhciafahl`, strict verification passed `451/451`, and
+the pre/post-move file-hash maps are identical while the old package remains retained as a backup.
+The same profile recovered its scoped BINI device credential, and the Provider profile was narrowed
+to `TEXT_TO_IMAGE` only. Resume now requires a user-reloaded Key and explicit authorization for one
+replacement capability probe plus the still-pending generation; the existing two-POST authorization
+cannot silently expand to three. Ingest, publish and Ozon remain outside the current sandbox
+authorization.
 
 Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
 `e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
