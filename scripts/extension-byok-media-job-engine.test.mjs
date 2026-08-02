@@ -6,6 +6,8 @@ import vm from 'node:vm';
 
 const contractPath = 'extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js';
 const enginePath = 'extensions/ss-erp/shared/byok/media-job-engine.js';
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function loadApi() {
   assert.equal(fs.existsSync(enginePath), true, 'media job engine module is missing');
@@ -153,6 +155,29 @@ test('caps deterministic FIFO dispatch at the requested, policy, and contract mi
   assert.ok(snapshot.attempts.every((item) => item.intentHash));
   assert.ok(snapshot.attempts.every((item) => item.policyRevision === '991'));
   assert.ok(snapshot.attempts.every((item) => item.executionMode === 'BYOK'));
+});
+
+test('accepts only canonical structured Unicode slot keys while preserving legacy ASCII slots', async () => {
+  const api = loadApi();
+  const engine = createEngine(api, {
+    executionMode: 'BYOK',
+    requestedConcurrency: 1,
+    policyMaxConcurrency: 1,
+    async dispatch(input) { return success(`canonical-${input.slotKey.length}`); },
+  });
+  const unicode = engine.enqueue(job(CANONICAL_BINI_SLOT_KEY, 'canonical-unicode'));
+  const ascii = engine.enqueue(job('sku-1:hero', 'canonical-ascii'));
+  await engine.whenSettled();
+  assert.equal(unicode.slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.equal(ascii.slotKey, 'sku-1:hero');
+  assert.throws(
+    () => engine.enqueue(job('任意Unicode槽位', 'arbitrary-unicode')),
+    (error) => error?.code === 'SS_ERP_MEDIA_JOB_INPUT_INVALID',
+  );
+  assert.throws(
+    () => engine.enqueue(job('sku:任意:detail', 'unsupported-unicode')),
+    (error) => error?.code === 'SS_ERP_MEDIA_JOB_INPUT_INVALID',
+  );
 });
 
 test('rejects missing or malformed server concurrency authority and runner caps', () => {

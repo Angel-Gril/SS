@@ -182,6 +182,17 @@
       });
   }
 
+  function slotKey(value, code) {
+    var result = text(value, 1, 200, code);
+    if (SHARED_DETAIL_ROLES.some(function (role) {
+      return result === 'shared:detail:' + role;
+    })) return result;
+    if (!result.startsWith('sku:') || !result.endsWith(':hero')) fail(code);
+    var skuKey = text(result.slice(4, -5), 1, 500, code);
+    if (result !== 'sku:' + skuKey + ':hero') fail(code);
+    return result;
+  }
+
   function normalizePageSlot(value) {
     var code = 'SS_ERP_BYOK_BATCH_REGISTRY_INPUT_INVALID';
     if (!exactKeys(value, [
@@ -189,11 +200,11 @@
       'prompt', 'negativePrompt', 'size',
     ]) || !OPERATIONS.includes(value.operation)) fail(code);
     var skuKey = text(value.skuKey, 1, 500, code);
-    var slotKey = identifier(value.slotKey, 1, 200, code);
-    if (!supportedSlot(skuKey, slotKey)) fail(code);
+    var normalizedSlotKey = slotKey(value.slotKey, code);
+    if (!supportedSlot(skuKey, normalizedSlotKey)) fail(code);
     return Object.freeze({
       skuKey: skuKey,
-      slotKey: slotKey,
+      slotKey: normalizedSlotKey,
       operation: value.operation,
       idempotencyKey: identifier(value.providerIdempotencyKey, 16, 200, code),
       intentHash: sha256(value.intentHash, code),
@@ -278,7 +289,7 @@
       ]))) fail(code);
       return Object.freeze({
         ...base,
-        slotKey: identifier(value.slotKey, 1, 200, code),
+        slotKey: slotKey(value.slotKey, code),
         attemptId: identifier(value.attemptId, 1, 200, code),
         expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
       });
@@ -289,7 +300,7 @@
       ]))) fail(code);
       return Object.freeze({
         ...base,
-        slotKey: identifier(value.slotKey, 1, 200, code),
+        slotKey: slotKey(value.slotKey, code),
         attemptId: identifier(value.attemptId, 1, 200, code),
         expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
       });
@@ -300,7 +311,7 @@
       ]))) fail(code);
       return Object.freeze({
         ...base,
-        slotKey: identifier(value.slotKey, 1, 200, code),
+        slotKey: slotKey(value.slotKey, code),
         expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
         chargeAcknowledgement: normalizeCharge(value.chargeAcknowledgement),
       });
@@ -315,7 +326,7 @@
       if (!charge && !unknown) fail(code);
       var retry = {
         ...base,
-        slotKey: identifier(value.slotKey, 1, 200, code),
+        slotKey: slotKey(value.slotKey, code),
         attemptId: identifier(value.attemptId, 1, 200, code),
         expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
       };
@@ -330,7 +341,7 @@
       return Object.freeze({
         ...base,
         attemptId: identifier(value.attemptId, 1, 200, code),
-        slotKey: identifier(value.slotKey, 1, 200, code),
+        slotKey: slotKey(value.slotKey, code),
         expectedSlotRevision: positiveInteger(value.expectedSlotRevision, code),
       });
     }
@@ -405,9 +416,11 @@
           if (!exactKeys(slot, ['skuKey', 'slotKey', 'operation'])
             || !OPERATIONS.includes(slot.operation)) fail(code);
           var skuKey = text(slot.skuKey, 1, 500, code);
-          var slotKey = identifier(slot.slotKey, 1, 200, code);
-          if (!supportedSlot(skuKey, slotKey)) fail(code);
-          return Object.freeze({ skuKey: skuKey, slotKey: slotKey, operation: slot.operation });
+          var normalizedSlotKey = slotKey(slot.slotKey, code);
+          if (!supportedSlot(skuKey, normalizedSlotKey)) fail(code);
+          return Object.freeze({
+            skuKey: skuKey, slotKey: normalizedSlotKey, operation: slot.operation,
+          });
         });
         if (new Set(slots.map(function (slot) { return slot.slotKey; })).size !== slots.length) {
           fail(code);
@@ -481,7 +494,7 @@
       if (!exactKeys(target, ['skuKey', 'slotKey'])) fail(code);
       return {
         skuKey: text(target.skuKey, 1, 500, code),
-        slotKey: identifier(target.slotKey, 1, 200, code),
+        slotKey: slotKey(target.slotKey, code),
       };
     });
     var priorTarget = -1;
@@ -726,10 +739,10 @@
       fail(code);
     }
     var skuKey = pageText(value.skuKey, 1, 500, code);
-    var slotKey = identifier(value.slotKey, 1, 200, code);
-    if (!supportedSlot(skuKey, slotKey) || !OPERATIONS.includes(value.operation)) fail(code);
+    var normalizedSlotKey = slotKey(value.slotKey, code);
+    if (!supportedSlot(skuKey, normalizedSlotKey) || !OPERATIONS.includes(value.operation)) fail(code);
     return {
-      slotKey: slotKey,
+      slotKey: normalizedSlotKey,
       skuKey: skuKey,
       assignmentOrdinal: ordinal(value.assignmentOrdinal, code),
       operation: value.operation,
@@ -746,7 +759,7 @@
     if (!isRecord(value) || !Number.isSafeInteger(value.width) || value.width < 1
       || !Number.isSafeInteger(value.height) || value.height < 1) fail(code);
     return {
-      slotKey: identifier(value.slotKey, 1, 200, code),
+      slotKey: slotKey(value.slotKey, code),
       skuKey: pageText(value.skuKey, 1, 500, code),
       assignmentOrdinal: ordinal(value.assignmentOrdinal, code),
       attemptId: identifier(value.attemptId, 1, 200, code),

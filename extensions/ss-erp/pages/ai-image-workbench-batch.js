@@ -113,6 +113,17 @@
       });
   }
 
+  function canonicalSupportedSlotKey(value, code) {
+    var result = canonicalText(value, 1, 200, code);
+    if (SHARED_DETAIL_ROLES.some(function (role) {
+      return result === 'shared:detail:' + role;
+    })) return result;
+    if (!result.startsWith('sku:') || !result.endsWith(':hero')) fail(code);
+    var skuKey = canonicalText(result.slice(4, -5), 1, 500, code);
+    if (result !== 'sku:' + skuKey + ':hero') fail(code);
+    return result;
+  }
+
   function safeErrorCode(error) {
     var candidate = error && typeof error === 'object' ? String(error.code || '') : '';
     return /^[A-Z][A-Z0-9_]{0,199}$/u.test(candidate)
@@ -210,7 +221,7 @@
         slots.push({
           skuKey: skuKey,
           skuLabel: skuLabel,
-          slotKey: identifier(slot.slotKey, 1, 200, code),
+          slotKey: canonicalSupportedSlotKey(slot.slotKey, code),
           role: slot.role === 'HERO' ? 'HERO' : 'DETAIL',
           prompt: promptText(slot.prompt, MAX_PROMPT, false, code),
           negativePrompt: promptText(slot.negativePrompt, MAX_NEGATIVE_PROMPT, true, code),
@@ -239,7 +250,7 @@
     value.slots.forEach(function (slot) {
       if (!isRecord(slot) || !Array.isArray(slot.attempts)
         || !Number.isSafeInteger(slot.revision) || slot.revision < 1) fail(code);
-      identifier(slot.slotKey, 1, 200, code);
+      canonicalSupportedSlotKey(slot.slotKey, code);
       canonicalText(slot.skuKey, 1, 500, code);
       slot.attempts.forEach(function (attempt) {
         if (!isRecord(attempt) || !ATTEMPT_STATES.includes(attempt.state)) fail(code);
@@ -609,8 +620,8 @@
     }
 
     function setSlotSelected(slotKeyValue, selected) {
-      var slotKey = identifier(
-        slotKeyValue, 1, 200, 'SS_ERP_BYOK_BATCH_PAGE_INPUT_INVALID',
+      var slotKey = canonicalSupportedSlotKey(
+        slotKeyValue, 'SS_ERP_BYOK_BATCH_PAGE_INPUT_INVALID',
       );
       if (started || busy || !slotsByKey.has(slotKey) || typeof selected !== 'boolean') {
         fail('SS_ERP_BYOK_BATCH_PAGE_SELECTION_LOCKED');
@@ -741,8 +752,8 @@
         ),
       };
       if (!['PAUSE_AFTER_CURRENT', 'CONTINUE'].includes(intent.action)) {
-        command.slotKey = identifier(
-          intent.slotKey, 1, 200, 'SS_ERP_BYOK_BATCH_PAGE_INTENT_INVALID',
+        command.slotKey = canonicalSupportedSlotKey(
+          intent.slotKey, 'SS_ERP_BYOK_BATCH_PAGE_INTENT_INVALID',
         );
         command.expectedSlotRevision = positiveInteger(
           intent.expectedSlotRevision, 'SS_ERP_BYOK_BATCH_PAGE_INTENT_INVALID',
@@ -793,8 +804,8 @@
 
     async function openPreview(slotKeyValue, attemptIdValue) {
       if (!started || busy) fail('SS_ERP_BYOK_BATCH_PAGE_PREVIEW_UNAVAILABLE');
-      var slotKey = identifier(
-        slotKeyValue, 1, 200, 'SS_ERP_BYOK_BATCH_PAGE_PREVIEW_INVALID',
+      var slotKey = canonicalSupportedSlotKey(
+        slotKeyValue, 'SS_ERP_BYOK_BATCH_PAGE_PREVIEW_INVALID',
       );
       var attemptId = identifier(
         attemptIdValue, 1, 200, 'SS_ERP_BYOK_BATCH_PAGE_PREVIEW_INVALID',

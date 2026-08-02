@@ -86,6 +86,19 @@
     return normalized;
   }
 
+  function slotKey(value, label) {
+    var normalized = canonicalText(value, 1, 200, label);
+    if (SHARED_DETAIL_ROLES.some(function (role) {
+      return normalized === 'shared:detail:' + role;
+    })) return normalized;
+    if (!normalized.startsWith('sku:') || !normalized.endsWith(':hero')) {
+      invalid(label + ' is invalid');
+    }
+    var skuKey = canonicalText(normalized.slice(4, -5), 1, 500, label);
+    if (normalized !== 'sku:' + skuKey + ':hero') invalid(label + ' is invalid');
+    return normalized;
+  }
+
   function sha256(value, label) {
     if (typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value)) {
       invalid(label + ' is invalid');
@@ -181,7 +194,7 @@
     }
     return Object.freeze({
       skuKey: canonicalText(value.skuKey, 1, 500, 'SKU key'),
-      slotKey: identifier(value.slotKey, 'slot key'),
+      slotKey: slotKey(value.slotKey, 'slot key'),
       assignmentMode: 'APPEND',
       assignmentOrdinal: assignmentOrdinal(value.assignmentOrdinal),
       operation: value.operation,
@@ -446,8 +459,8 @@
 
     function findSlot(slotKeyValue) {
       var state = requireActive();
-      var slotKey = identifier(slotKeyValue, 'slot key');
-      var slot = state.slotByKey.get(slotKey);
+      var normalizedSlotKey = slotKey(slotKeyValue, 'slot key');
+      var slot = state.slotByKey.get(normalizedSlotKey);
       if (!slot) throw coordinatorError(
         'SS_ERP_BYOK_BATCH_SLOT_NOT_FOUND', 'FAILED_FINAL', 'BYOK batch slot is unavailable',
       );

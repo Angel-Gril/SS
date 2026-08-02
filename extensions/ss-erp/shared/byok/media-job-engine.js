@@ -50,6 +50,29 @@
     return normalized;
   }
 
+  function boundedSlotKey(value, label) {
+    if (typeof value !== 'string') throw engineError(
+      'SS_ERP_MEDIA_JOB_INPUT_INVALID', label + ' is invalid',
+    );
+    var normalized = value.normalize('NFKC').trim();
+    if (normalized !== value || !normalized || normalized.length > 200
+      // eslint-disable-next-line no-control-regex
+      || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+      throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', label + ' is invalid');
+    }
+    if (/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/u.test(normalized)) return normalized;
+    if (!normalized.startsWith('sku:') || !normalized.endsWith(':hero')) {
+      throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', label + ' is invalid');
+    }
+    var skuKey = normalized.slice(4, -5);
+    if (!skuKey || skuKey !== skuKey.normalize('NFKC').trim()
+      // eslint-disable-next-line no-control-regex
+      || /[\u0000-\u001f\u007f]/u.test(skuKey)) {
+      throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', label + ' is invalid');
+    }
+    return normalized;
+  }
+
   function sha256(value, label) {
     if (typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value)) {
       throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', label + ' is invalid');
@@ -103,7 +126,7 @@
       throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', 'media job input is invalid');
     }
     return {
-      slotKey: boundedId(value.slotKey, 'slotKey'),
+      slotKey: boundedSlotKey(value.slotKey, 'slotKey'),
       operation: operation(value.operation),
       idempotencyKey: boundedId(value.idempotencyKey, 'idempotencyKey'),
       intentHash: sha256(value.intentHash, 'intentHash'),
@@ -709,7 +732,7 @@
     }
 
     function selectCandidate(slotKeyValue, attemptIdValue) {
-      var slotKey = boundedId(slotKeyValue, 'slotKey');
+      var slotKey = boundedSlotKey(slotKeyValue, 'slotKey');
       var attemptId = boundedId(attemptIdValue, 'attemptId');
       var slot = slots.get(slotKey);
       var attempt = attempts.get(attemptId);
@@ -747,7 +770,7 @@
     }
 
     function regenerate(slotKeyValue, value) {
-      var slotKey = boundedId(slotKeyValue, 'slotKey');
+      var slotKey = boundedSlotKey(slotKeyValue, 'slotKey');
       if (!slots.has(slotKey)) throw engineError(
         'SS_ERP_MEDIA_JOB_SLOT_NOT_FOUND', 'Media slot is not found',
       );

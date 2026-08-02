@@ -6,6 +6,8 @@ const source = readFileSync(new URL(
   '../extensions/ss-erp/pages/ai-image-workbench-batch.js',
   import.meta.url,
 ), 'utf8');
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function uuid(index) {
   return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
@@ -256,6 +258,34 @@ function batchError(code, outcome = 'UNKNOWN_OUTCOME') {
   assert.equal(JSON.stringify(start).toLowerCase().includes('batchid'), false);
   assert.equal(JSON.stringify(start).toLowerCase().includes('binding'), false);
   assert.ok(emitted.some((event) => event.type === 'ss-erp:workspace-runtime'));
+}
+
+{
+  const value = bootstrap();
+  value.selectedSkuKey = CANONICAL_BINI_SKU_KEY;
+  value.selectedSlotKey = CANONICAL_BINI_SLOT_KEY;
+  value.skus = [{
+    skuKey: CANONICAL_BINI_SKU_KEY,
+    label: 'BINI canonical SKU',
+    slots: [{
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+      role: 'HERO',
+      prompt: 'Create one factual marketplace hero image.',
+      negativePrompt: null,
+      referenceIds: [],
+      alternatives: [],
+      selectedAttemptId: null,
+    }],
+  }];
+  const result = projection();
+  result.slots[0].skuKey = CANONICAL_BINI_SKU_KEY;
+  result.slots[0].slotKey = CANONICAL_BINI_SLOT_KEY;
+  const { controller, calls } = createHarness({ start: () => result });
+  controller.bootstrap(value);
+  await controller.start({ profileId: 'profile-1', size: '1024x1024' });
+  assert.equal(calls.find((call) => call[0] === 'start')[1].slots[0].slotKey,
+    CANONICAL_BINI_SLOT_KEY);
+  assert.equal(controller.getView().slots[0].slotKey, CANONICAL_BINI_SLOT_KEY);
 }
 
 {

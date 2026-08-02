@@ -23,6 +23,8 @@ const MESSAGE_TYPES = Object.freeze({
 const sender = Object.freeze({ tabId: 77, documentId: 'document-1', frameId: 0 });
 const request = (value = {}) => ({ contractVersion: api.REQUEST_VERSION, ...value });
 const hash = (character) => character.repeat(64);
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -225,6 +227,31 @@ assert.deepEqual([...api.COMMAND_KINDS], [
   });
   assert.deepEqual(test.calls.slice(3).map((call) => call[0]), ['ingest', 'recover', 'clear']);
   assert.deepEqual(plain(test.calls[3][2]), ingestCommand());
+}
+
+{
+  const test = fixture();
+  const start = startRequest({
+    slots: [{
+      ...startRequest().slots[0],
+      skuKey: CANONICAL_BINI_SKU_KEY,
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+    }],
+  });
+  await test.dispatcher.handlers[MESSAGE_TYPES.BATCH_START]({
+    sender,
+    payload: request({ startRequest: start }),
+  });
+  assert.equal(test.calls[0][2].slots[0].slotKey, CANONICAL_BINI_SLOT_KEY);
+  await test.dispatcher.handlers[MESSAGE_TYPES.BATCH_PREVIEW]({
+    sender,
+    payload: request({ slotKey: CANONICAL_BINI_SLOT_KEY, attemptId: 'attempt-000001' }),
+  });
+  assert.equal(test.calls[1][2].slotKey, CANONICAL_BINI_SLOT_KEY);
+  await rejected(test.dispatcher.handlers[MESSAGE_TYPES.BATCH_START], {
+    sender,
+    payload: request({ startRequest: { ...start, profileId: '档案-1' } }),
+  }, 'SS_ERP_BYOK_BATCH_RUNTIME_INPUT_INVALID');
 }
 
 {

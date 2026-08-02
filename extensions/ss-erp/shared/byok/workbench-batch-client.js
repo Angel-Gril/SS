@@ -269,11 +269,13 @@
   }
 
   function slotKey(value, code) {
-    var result = identifier(value, 1, 200, code);
-    if (!/^sku:.+:hero$/u.test(result)
-      && !SHARED_DETAIL_ROLES.some(function (role) {
-        return result === 'shared:detail:' + role;
-      })) fail(code);
+    var result = canonicalText(value, 1, 200, code);
+    if (SHARED_DETAIL_ROLES.some(function (role) {
+      return result === 'shared:detail:' + role;
+    })) return result;
+    if (!result.startsWith('sku:') || !result.endsWith(':hero')) fail(code);
+    var skuKey = canonicalText(result.slice(4, -5), 1, 500, code);
+    if (result !== 'sku:' + skuKey + ':hero') fail(code);
     return result;
   }
 

@@ -7,6 +7,8 @@ const registryPath = 'extensions/ss-erp/shared/byok/workbench-batch-registry.js'
 const brokerPath = 'extensions/ss-erp/shared/byok/execution-intent-claim-broker.js';
 const runtimeHandlerPath =
   'extensions/ss-erp/shared/byok/workbench-batch-runtime-handler.js';
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -662,6 +664,35 @@ test('prepares every slot, reserves once, expands minimal intents, then starts c
     (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_DISPATCH_UNAVAILABLE'
       && error.outcome === 'UNKNOWN_OUTCOME',
   );
+});
+
+test('preserves the canonical Unicode SKU hero slot through registry preparation and reservation', async () => {
+  const harness = createHarness({
+    batchLaunchClient: {
+      async resolve(value) {
+        const response = { ...value };
+        delete response.preferredSkuKey;
+        delete response.selectionKind;
+        return {
+          contractVersion: 'extension-byok-workbench-batch-launch-context/v1',
+          ...response,
+          anchorSkuKey: 'sku-1',
+          firstAssignmentOrdinal: 17,
+          targets: [{ skuKey: CANONICAL_BINI_SKU_KEY, slotKey: CANONICAL_BINI_SLOT_KEY }],
+        };
+      },
+    },
+  });
+  await harness.registry.start(owner(), pageStart({
+    slots: [pageSlot(0, {
+      skuKey: CANONICAL_BINI_SKU_KEY,
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+    })],
+  }));
+  assert.equal(harness.internalStart.slots[0].slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.equal(harness.prepared[0].value.readinessBinding.slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.equal(harness.events.find((event) => event[0] === 'reserve')[1].items[0]
+    .readinessBinding.slotKey, CANONICAL_BINI_SLOT_KEY);
 });
 
 test('rejects requested concurrency above one before claiming a device operation', async () => {

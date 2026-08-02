@@ -11,6 +11,8 @@ const COMMAND_VERSION = 'extension-byok-workbench-batch-runtime-command/v1';
 const INGEST_VERSION = 'extension-byok-workbench-batch-ingest/v1';
 const COORDINATOR_VERSION = 'extension-byok-workbench-batch-coordinator/v1';
 const PREVIEW_VERSION = 'extension-byok-workbench-preview-channel/v1';
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -333,6 +335,43 @@ test('uses the seven registered messages and returns one strict sanitized state 
       contractVersion: INGEST_VERSION, idempotencyKey: 'batch-ingest-000001',
     },
   });
+});
+
+test('accepts the canonical Unicode SKU hero slot without relaxing profile identifiers', async () => {
+  const api = loadApi();
+  const unicodeProjection = activeProjection({
+    slots: [{
+      ...activeProjection().slots[0],
+      skuKey: CANONICAL_BINI_SKU_KEY,
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+    }],
+  });
+  const fixture = createRuntime(api, () => ({ ok: true, data: unicodeProjection }));
+  const client = api.createClient({
+    runtime: fixture.runtime,
+    BroadcastChannel: FakeBroadcastChannel,
+    now: () => new Date(NOW),
+    timeoutMs: 1000,
+  });
+  const input = startInput({
+    slots: [{
+      ...startInput().slots[0],
+      skuKey: CANONICAL_BINI_SKU_KEY,
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+    }],
+  });
+
+  const result = await client.start(input);
+  assert.equal(result.slots[0].slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.equal(fixture.messages[0].payload.startRequest.slots[0].slotKey,
+    CANONICAL_BINI_SLOT_KEY);
+  await client.command({
+    kind: 'KEEP_ATTEMPT', commandId: 'command-unicode-slot',
+    expectedWorkspaceRevision: 4, expectedRuntimeRevision: 2,
+    expectedSlotRevision: 2, slotKey: CANONICAL_BINI_SLOT_KEY, attemptId: 'attempt-1',
+  });
+  await rejectsCode(client.start({ ...input, profileId: '档案-1' }),
+    'SS_ERP_BYOK_BATCH_CLIENT_INPUT_INVALID');
 });
 
 test('rejects secret, binary, URL, binding, batch, and Provider identity page inputs', async () => {

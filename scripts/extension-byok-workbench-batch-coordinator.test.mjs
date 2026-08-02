@@ -6,6 +6,8 @@ import vm from 'node:vm';
 const contractPath = 'extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js';
 const enginePath = 'extensions/ss-erp/shared/byok/media-job-engine.js';
 const coordinatorPath = 'extensions/ss-erp/shared/byok/workbench-batch-coordinator.js';
+const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
+const CANONICAL_BINI_SLOT_KEY = `sku:${CANONICAL_BINI_SKU_KEY}:hero`;
 
 function loadApi() {
   assert.equal(fs.existsSync(coordinatorPath), true, 'BYOK batch coordinator module is missing');
@@ -395,6 +397,26 @@ test('dispatches four selected slots serially through the background engine and 
     );
     assert.equal(isolated.providerCalls.length, 0);
   }
+});
+
+test('accepts the canonical Unicode SKU hero slot while keeping opaque identifiers ASCII-only', async () => {
+  const harness = createHarness();
+  harness.coordinator.startBatch(batchInput(1, {
+    binding: binding({ skuKey: CANONICAL_BINI_SKU_KEY }),
+    slots: [slot(0, {
+      skuKey: CANONICAL_BINI_SKU_KEY,
+      slotKey: CANONICAL_BINI_SLOT_KEY,
+    })],
+  }));
+  await harness.coordinator.whenSettled();
+  assert.equal(harness.providerCalls[0].resultBinding.slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.equal(harness.coordinator.getProjection().slots[0].slotKey, CANONICAL_BINI_SLOT_KEY);
+  assert.throws(
+    () => createHarness().coordinator.startBatch(batchInput(1, {
+      slots: [slot(0, { idempotencyKey: '凭据-1' })],
+    })),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_INPUT_INVALID',
+  );
 });
 
 test('rejects requested concurrency two through four at the coordinator boundary', () => {
