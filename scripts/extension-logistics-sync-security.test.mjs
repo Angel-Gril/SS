@@ -256,7 +256,10 @@ test('one-click device pairing pins cloud API traffic to the packaged deployment
   assert.match(serviceWorkerSource, /SS_ERP_DEPLOYMENT_DEFAULTS/);
   assert.match(serviceWorkerSource, /defaults\.erpApiBaseUrl \|\| defaults\.erpBaseUrl/);
   assert.match(serviceWorkerSource, /defaults\.target === 'cloud'/);
-  assert.match(serviceWorkerSource, /connectionState\.isAllowedCloudDeviceClaim\(defaults, sender, baseUrl\.origin\)/);
+  assert.match(
+    serviceWorkerSource,
+    /connectionState\.isAllowedCloudDeviceClaim\(\s*defaults,\s*sender,\s*baseUrl\.origin,\s*chrome\.runtime\.id,\s*\)/u,
+  );
   assert.match(serviceWorkerSource, /defaults\.target === 'local'/);
   assert.match(serviceWorkerSource, /expectedBaseUrl = defaults\.target === 'cloud'/);
   assert.match(serviceWorkerSource, /\{ expectedBaseUrl \}/);
@@ -296,6 +299,23 @@ test('cloud device claims use exact packaged Web, admin, and API origins for cus
   };
   assert.equal(allowed(international, 'https://app.ss-erp.com/settings', 'https://ss-erp.com'), true);
   assert.equal(allowed(international, 'https://admin.ss-erp.com/admin', 'https://ss-erp.com'), true);
+  assert.equal(allowed(
+    international,
+    runtimeSender('chrome-extension://extension-id/pages/settings.html', 'extension-id'),
+    'https://ss-erp.com',
+    'extension-id',
+  ), true);
+  assert.equal(allowed(
+    international,
+    runtimeSender('chrome-extension://extension-id/pages/settings.html', 'attacker-id'),
+    'https://ss-erp.com',
+    'extension-id',
+  ), false);
+  assert.equal(allowed(
+    international,
+    runtimeSender('chrome-extension://extension-id/pages/settings.html', 'extension-id'),
+    'https://ss-erp.com',
+  ), false);
   assert.equal(allowed(international, 'https://app.ss-erp.cn/settings', 'https://ss-erp.com'), false);
   assert.equal(allowed(international, 'https://app.ss-erp.com/settings', 'https://ss-erp.cn'), false);
 

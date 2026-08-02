@@ -563,7 +563,12 @@ function trustedErpDeviceBaseUrl(value, sender) {
     if (!connectionState || typeof connectionState.isAllowedCloudDeviceClaim !== 'function') {
       throw new Error('扩展部署领取校验模块不可用');
     }
-    if (!connectionState.isAllowedCloudDeviceClaim(defaults, sender, baseUrl.origin)) {
+    if (!connectionState.isAllowedCloudDeviceClaim(
+      defaults,
+      sender,
+      baseUrl.origin,
+      chrome.runtime.id,
+    )) {
       throw new Error('ERP 地址与扩展安装包不一致');
     }
     return baseUrl.origin;

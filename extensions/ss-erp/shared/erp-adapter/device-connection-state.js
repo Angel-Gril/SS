@@ -59,9 +59,9 @@
     return allowedOrigins.includes(senderUrl.origin);
   }
 
-  function isAllowedCloudDeviceClaim(defaults, sender, baseUrl) {
+  function isAllowedCloudDeviceClaim(defaults, sender, baseUrl, runtimeId) {
     if (String(defaults && defaults.target || '').trim() !== 'cloud') return false;
-    if (!isAllowedDeploymentSender(defaults, sender)) return false;
+    if (!isAllowedDeploymentSender(defaults, sender, runtimeId)) return false;
     var packagedApiUrl = parseOrigin(defaults && defaults.erpApiBaseUrl);
     var requestedApiUrl = parseOrigin(baseUrl);
     return Boolean(packagedApiUrl && requestedApiUrl
