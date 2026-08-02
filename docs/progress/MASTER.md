@@ -38,11 +38,42 @@ credential storage, or direct Ozon calls.
 - [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [x] Phase 5: Publishing closure and product quality (4/4 tasks) [details](./phase-5-publish-quality.md)
-- [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
+- [ ] Phase 6: Pilot and release (2/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 34/37 tasks complete (92%).
+Overall: 36/37 tasks complete (97%).
 
 ## Current Status
+
+Current checkpoint (2026-08-02): `REL-03` and `REL-04` are complete on final pushed commit
+`2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`. Both `.com` and `.cn` VPS environments run that
+exact commit through hardened release-mode systemd units with verified backup/restore attestations,
+no pending migrations, passing post-migration guards, healthy private/public readiness, correct
+runtime permissions and all AI Media, Extension BYOK and Ozon publisher flags off. The complete VPS
+verifier passed in both regions with only the non-blocking local-only backup warning.
+
+Both pre-enable canaries passed all seven checks and cleaned up their temporary device and account
+sessions. Domestic receipt SHA-256 is `b2b1abb4...5a32f`; international receipt SHA-256 is
+`2d381f57...63f4e`. Neither canary sent a Provider request, ERP ingest, or Ozon mutation. The
+international first deployment attempt exposed a bounded startup race between the fixed three-second
+wait and the API listener; rollback restored the legacy services, the failed artifacts were retained,
+and a second clean deployment of the same immutable target passed. Its legacy backup cron was then
+bound to `/opt/ss-erp/current` and the full verifier reran successfully.
+
+Canonical extension version `1.0.272` is now actually distributed through the first-party website
+API in both regions. The `.com` publication verifier passed receipt SHA-256
+`ddd86111...f6c4`; the `.cn` verifier passed receipt SHA-256 `1abd7c8d...c944`. Each receipt binds
+the region-specific release evidence, Ed25519 sidecar, exact version/commit, cloud/local filename,
+Content-Length, `X-Content-SHA256` and downloaded body SHA-256. Phase 6 is `2/3`, overall progress
+is `36/37`, and only `REL-02` remains. No pilot flag has been enabled.
+
+Read-only `REL-02` readiness found no existing production workflow that can be reused safely.
+International has 15 active owner/shop pairs and domestic has 5, but both regions have zero source
+captures, source-listing workflows, BYOK provenance rows, publish intents and publish attempts. All
+relevant Extension BYOK and source-workflow configs remain `false` at revision `0`. Private
+readiness SHA-256 values are `0192dc0e...9969` for `.com` and `19064fe4...a6c` for `.cn`. The
+sanitized fixture may be used only for the sandbox capture/ingest lane; its partial facts cannot be
+published to Ozon. `REL-02` therefore awaits an exact real source product, target Ozon shop and
+separate operator authorization for the scoped device/policy changes and final Ozon mutation.
 
 Current checkpoint (2026-08-01): `QA-02` technical sandbox acceptance is complete. The earlier
 relay text-to-image chain and the three separately approved Wanx `IMAGE_TO_IMAGE`, `FULL_EDIT`, and
@@ -992,21 +1023,13 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep historical `1.0.265` and both region-specific signed target-commit `1.0.266` candidates
-   immutable. Execute `REL-04` against candidate commit
-   `19e98810593ea619360edcadf9b78eacc93b37cd`, using the `.com` four-file candidate internationally
-   and the `.cn` candidate domestically, with every pilot flag off. First restore international SSH
-   inspection and migrate each operator env to the hardened release/backup contract. Then pass dark
-   deployment/pre-enable canaries, probe both exact `/api/extensions` downloads in each region,
-   retain and verify both signed receipts, close `REL-03`/`REL-04` together, and finally run `REL-02`
-   sandbox/one-shop pilots with post-enable canaries and reconciliation. No pilot flag may be enabled
-   during `REL-03` or `REL-04`. Before the first migration, migrate both operator envs to the same
-   stable `DEPLOY_DATABASE_ID`, set `DEPLOY_BACKUP_LOCAL_DIR`, and use the target revision's scripts
-   to create and verify a fresh target-commit restore attestation; do not bypass the new gate with an
-   old `backup-status.json` or the removed `RUN_DB_BACKUP` option.
-   After the regional `REL-03` package/sign step, install the matching region's exact canonical
-   four-file candidate as root under `/var/lib/ss-erp-extension-releases/<target-commit>` on each VPS and pass
-   that path as `EXTENSION_RELEASE_ROOT`; deployment must never rebuild or increment it.
+7. Keep final commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`, both region-specific
+   version `1.0.272` candidates, signatures, canary summaries and website distribution receipts
+   immutable. `REL-03` and `REL-04` are complete. Prepare `REL-02` read-only readiness first, then
+   obtain separate operator authorization before enabling any scoped sandbox or one-shop pilot flag
+   or sending any Ozon mutation. The pilot must use the existing independent generation, ingest and
+   publish kill switches, retain audit/receipt/reconciliation evidence, run post-enable canaries, and
+   restore all scoped rollout policy to off after the bounded pilot.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

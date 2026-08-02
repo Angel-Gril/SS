@@ -1,6 +1,6 @@
 # Phase 6: Pilot and Release
 
-Progress: 0/3 tasks.
+Progress: 2/3 tasks.
 
 ## Tasks
 
@@ -9,11 +9,11 @@ Progress: 0/3 tasks.
   switches are independent; audit and receipts are visible; post-enable canaries and publish
   reconciliation pass; rollback preserves consistent stored assets and receipts. Depends on the
   dark deployment and pre-enable canaries in `REL-04`.
-- [ ] `REL-03` Build/sign/distribute cloud and local extension packages (`P0`, `M`).
+- [x] `REL-03` Build/sign/distribute cloud and local extension packages (`P0`, `M`).
   Acceptance: same feature set with environment-correct endpoints, one version increment,
   non-secret profile upgrade, no session-key persistence, verified hashes, and smoke results.
   Depends on `QA-03`, `QA-04`, and `DOC-01`.
-- [ ] `REL-04` Deploy server/web dark and run pre-enable canaries (`P0`, `M`). Acceptance:
+- [x] `REL-04` Deploy server/web dark and run pre-enable canaries (`P0`, `M`). Acceptance:
   backup/migration, services, readiness, default-off flags, both VPS environments, pairing, hosted
   regression, BYOK disabled-path fixture rejection, and publish reconciliation pass before pilot
   enablement. Depends on `REL-03`.
@@ -213,3 +213,49 @@ Progress: 0/3 tasks.
   and `/var/lib/ss-erp-extension-releases` is absent. `REL-04` must not deploy until those one-time
   prerequisites are explicitly authorized and verified. No upload, backup, migration, restart,
   website GET, flag, Provider, ERP, or Ozon action occurred; counts remain `0/3` and `34/37`.
+- Final release commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f` passed the complete
+  nine-step `QA-04` aggregate, then produced separately origin-bound `.com` and `.cn` canonical
+  version `1.0.272` candidates. Both candidates contain exactly 189 files per package, have
+  independent canonical evidence and Ed25519 sidecars, and passed same-path persistent-Chromium
+  `1.0.271` to `1.0.272` upgrade smoke without retaining the session sentinel.
+- Both VPS environments now run the exact final commit through `/opt/ss-erp/current` with
+  API/Worker/Web under `deploy:deploy`, shared env `root:deploy 0640`, target-bound release-mode
+  systemd units, verified process working directories, current-script backup cron binding, no
+  pending migration, a passing post-migration AI Media database guard, healthy private/public
+  `/ready`, and every AI Media, Extension BYOK and Ozon publisher rollout flag still off. Each
+  region's full deployment verifier passed with the single non-blocking warning that only local
+  backup storage is configured.
+- The international first deployment attempt reached the new systemd units but its one-shot health
+  curl raced the API listener by less than one second. The deployer removed the first-release
+  `current` link, restored all three legacy units, and kept the service available. The failed sealed
+  release and systemd snapshot were retained under timestamped failure-history directories. A clean
+  second attempt against the same immutable target passed the health gate. The international backup
+  cron was then migrated from the legacy `/opt/ss-erp/app` path to the active release script and
+  commit marker before the complete verifier was rerun.
+- Both protected pre-enable canaries passed all seven checks: exact release metadata and extension
+  CORS, default-off policy, Hosted disabled-route regression, target-commit `QA04_FINAL_ACCEPTANCE`
+  reconciliation, device pairing/refresh lifecycle, BYOK disabled-path rejection, and session
+  cleanup. Domestic receipt SHA-256 is `b2b1abb4...5a32f`; international receipt SHA-256 is
+  `2d381f57...63f4e`. The canaries sent no Provider dispatch, ERP ingest, or Ozon mutation. Their
+  temporary device sessions were revoked in-band, and the short-lived owner/admin account sessions
+  plus raw shop/extension identifiers were removed immediately afterward.
+- The first-party website distribution probe then downloaded both exact cloud/local ZIPs from each
+  region's immutable version/SHA URL. The operator machine's fake-IP DNS was rejected as designed;
+  two independent VPS resolvers agreed on the public addresses, which were supplied to the probe's
+  existing pinned TLS fetcher without weakening certificate, redirect, public-address, length,
+  header, body-hash, or signing checks. Formal publication verification passed for `.com` receipt
+  SHA-256 `ddd86111...f6c4` and `.cn` receipt SHA-256 `1abd7c8d...c944`. This completes `REL-03`
+  and `REL-04`; Phase 6 is `2/3`, overall progress is `36/37`, and only the separately authorized
+  `REL-02` sandbox/one-shop pilot remains. All pilot flags remain off.
+- Read-only `REL-02` readiness then confirmed that neither region has a reusable pilot workflow:
+  `.com` has 15 active owner/shop pairs and `.cn` has 5, but both databases contain zero source
+  captures, zero source-listing workflows, zero BYOK provenance rows, zero publish intents and zero
+  publish attempts. Every Extension BYOK and source-workflow flag remains `false` at revision `0`;
+  both admin policies remain their revision-0 off values. Private readiness SHA-256 values are
+  `0192dc0e...9969` for `.com` and `19064fe4...a6c` for `.cn`.
+- The sanitized repository source-capture fixture is suitable only for the sandbox capture/ingest
+  lane. It is explicitly partial and lacks real packaging facts, so it must not be promoted into an
+  Ozon one-shop publish. Completing `REL-02` now requires the operator to select one real source
+  product and exact Ozon shop, approve creation of a scoped pilot device/session and policy, review
+  the captured facts/draft, and separately authorize the resulting Ozon mutation. No pilot flag or
+  production record was changed by readiness inspection.
