@@ -700,7 +700,7 @@ rollback() {
     rm -- "$CURRENT_LINK"
   fi
   if [ "$SYSTEMD_TRANSITIONED" = "1" ]; then
-    if ! DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
+    if ! env DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
       ENV_FILE_NAME="$ENV_FILE_NAME" \
       UNIT_SNAPSHOT_DIR="$UNIT_SNAPSHOT_DIR" \
       API_SERVICE="$API_SERVICE" WORKER_SERVICE="$WORKER_SERVICE" \
@@ -768,7 +768,7 @@ echo "[deploy] Switching current symlink"
 ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
 
 echo "[deploy] Installing and verifying release-mode systemd units"
-if ! DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
+if ! env DEPLOY_BASE="$(dirname -- "$CURRENT_LINK")" \
   ENV_FILE_NAME="$ENV_FILE_NAME" \
   UNIT_SRC_DIR="$RELEASE_DIR/deploy/systemd-release" \
   UNIT_SNAPSHOT_DIR="$UNIT_SNAPSHOT_DIR" \

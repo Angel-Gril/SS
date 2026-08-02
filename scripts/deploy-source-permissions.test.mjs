@@ -62,6 +62,14 @@ test('release deployment atomically transitions systemd units before service ver
   );
   assert.match(deploy, /UNIT_SNAPSHOT_DIR="\$DEPLOY_SYSTEMD_SNAPSHOT_ROOT\/\$TARGET_GIT_COMMIT"/u);
   assert.match(deploy, /install-release-systemd\.sh" --restore/u);
+  const systemdInstallerCalls = deploy.match(
+    /(?:if ! )?env DEPLOY_BASE="\$\(dirname -- "\$CURRENT_LINK"\)"[\s\S]*?install-release-systemd\.sh"(?: --restore)?/gu,
+  ) || [];
+  assert.equal(
+    systemdInstallerCalls.length,
+    2,
+    'install and rollback must pass readonly deployment inputs through env',
+  );
   assert.match(deploy, /SSH_ARGS\+=\(-F "\$SSH_CONFIG_FILE"\)/u);
   assert.doesNotMatch(deploy, /eval .*SSH|ProxyCommand=/u);
   assert.match(installer, /systemd-analyze verify/u);
