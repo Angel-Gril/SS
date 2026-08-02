@@ -179,6 +179,12 @@ root 安装到 commit-scoped 外置 cache 的 symlink，禁止递归接管构建
 认证、migration 和
 post-migration guard 则从同一 root 快照降权到 runtime 用户执行。
 
+非敏感的临时 `pnpm` store 位于磁盘型 `/var/lib/ss-erp-deploy-build`，不得放入容量有限的
+`/run` tmpfs；只有环境快照与构建清单保留在 `/run`。该父目录固定为 `root:root 0711`，三种
+systemd 部署入口在整个构建期间持有同一 `flock`。构建 UID 只能写随机 `0700` 子目录，不能重命名
+父目录项；上次进程被 SIGKILL 或主机重启留下的目录，下一次部署只会在持锁后核对名称、所有者、
+规范路径和非挂载点，再进行单文件系统清理。未知条目、内存型挂载或锁文件身份异常均失败关闭。
+
 archive 模式要求 `/opt/ss-erp`、`releases`/`backups` 父目录和 `shared` 根目录由 root 所有且不可
 group/world writable；只有构建阶段的目标树交给 `ss-erp-build`，明确的 `shared` 子目录交给
 runtime `deploy` 用户。共享

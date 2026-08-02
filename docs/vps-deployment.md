@@ -249,7 +249,12 @@ The initializer keeps `/opt/ss-erp`, `/opt/ss-erp/releases`, and `/opt/ss-erp/sh
 `0755`. Only the managed `shared/uploads` and `shared/backups` children are writable by `deploy`;
 the environment file is root-owned, group-readable by the deploy user's primary group, and `0640`.
 It creates or validates a distinct non-root `ss-erp-build` UID/GID with no runtime-group identity,
-and provisions root-owned per-project Compose lock files in `/var/lib/ss-erp-deploy-locks`.
+provisions root-owned per-project Compose lock files in `/var/lib/ss-erp-deploy-locks`, and creates
+the shared systemd-build lock plus protected disk-backed build root at
+`/var/lib/ss-erp-deploy-build`. The build root is `root:root 0711`; each deployment creates one
+random build-user-owned `0700` child while secret environment snapshots remain under `/run`.
+Systemd deployment entrypoints hold the shared lock for their full lifetime and safely remove only
+validated non-mounted stale children left by an interrupted prior build.
 Older installations that recursively assigned the whole base to `deploy` must rerun the hardened
 initializer once before the next archive deployment. It rejects pre-existing symlinks and hard-linked
 env files before root changes ownership, then repairs only verified real paths:

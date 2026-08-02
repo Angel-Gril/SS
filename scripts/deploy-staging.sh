@@ -16,6 +16,8 @@ DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
 DEPLOY_RUNTIME_ROOT="${DEPLOY_RUNTIME_ROOT:-${DEPLOY_DIR}.runtime}"
 DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
+DEPLOY_BUILD_ROOT=/var/lib/ss-erp-deploy-build
+DEPLOY_BUILD_LOCK_FILE="$DEPLOY_BUILD_ROOT/deploy.lock"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
 WEB_HEALTH_URL="${WEB_HEALTH_URL:-http://127.0.0.1:3000}"
 
@@ -41,7 +43,7 @@ done < <(compgen -e)
 
 readonly DEPLOY_DIR ENV_FILE DEPLOY_ENV_PROFILE API_SERVICE WEB_SERVICE WORKER_SERVICE \
   DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT
-readonly DEPLOY_RUNTIME_ROOT HEALTH_URL WEB_HEALTH_URL
+readonly DEPLOY_RUNTIME_ROOT DEPLOY_BUILD_ROOT DEPLOY_BUILD_LOCK_FILE HEALTH_URL WEB_HEALTH_URL
 
 if [[ ! "$ENV_FILE" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
   echo "ERROR: ENV_FILE must be one dot-prefixed basename" >&2
@@ -400,10 +402,62 @@ DEPLOY_BUILD_HOME=""
 MAINTENANCE_GATE_COMMIT=""
 SERVICES_QUIESCED=0
 cleanup_environment_snapshot() {
-  if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ]; then
+  if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ] && [ -d "$DEPLOY_ENV_SNAPSHOT_DIR" ]; then
     sudo rm -rf -- "$DEPLOY_ENV_SNAPSHOT_DIR"
+  fi
+  if [ -n "${DEPLOY_BUILD_HOME:-}" ] && [ -d "$DEPLOY_BUILD_HOME" ]; then
     sudo rm -rf -- "$DEPLOY_BUILD_HOME"
   fi
+}
+acquire_deploy_build_lock() {
+  local filesystem_type
+  local expected_gid
+  expected_gid="$(id -g -- "$DEPLOY_RUN_USER")"
+  if [ -L "$DEPLOY_BUILD_ROOT" ] || [ ! -d "$DEPLOY_BUILD_ROOT" ] \
+    || [ "$(readlink -f -- "$DEPLOY_BUILD_ROOT")" != "$DEPLOY_BUILD_ROOT" ] \
+    || [ "$(stat -c '%u:%g:%a' "$DEPLOY_BUILD_ROOT")" != "0:0:711" ]; then
+    echo "ERROR: deployment build root must be root:root mode 0711" >&2
+    exit 1
+  fi
+  filesystem_type="$(findmnt -n -o FSTYPE --target "$DEPLOY_BUILD_ROOT")"
+  case "$filesystem_type" in
+    tmpfs|ramfs|'')
+      echo "ERROR: deployment build root must use a resolved disk-backed filesystem" >&2
+      exit 1
+      ;;
+  esac
+  if [ -L "$DEPLOY_BUILD_LOCK_FILE" ] || [ ! -f "$DEPLOY_BUILD_LOCK_FILE" ] \
+    || [ "$(stat -c '%u:%g:%a:%h' "$DEPLOY_BUILD_LOCK_FILE")" \
+      != "0:$expected_gid:660:1" ]; then
+    echo "ERROR: deployment build lock is not trusted" >&2
+    exit 1
+  fi
+  exec 9<>"$DEPLOY_BUILD_LOCK_FILE"
+  if ! flock -n 9; then
+    echo "ERROR: another systemd deployment holds the build lock" >&2
+    exit 1
+  fi
+}
+remove_stale_deploy_build_homes() {
+  local entry
+  local entry_name
+  local metadata
+  while IFS= read -r -d '' entry; do
+    entry_name="${entry##*/}"
+    metadata="$(sudo stat -c '%u:%g' "$entry" 2>/dev/null || true)"
+    if [[ ! "$entry_name" =~ ^ss-erp-build-home\.[A-Za-z0-9]{10}$ ]] \
+      || sudo test -L "$entry" || ! sudo test -d "$entry" \
+      || [ "$(dirname -- "$entry")" != "$DEPLOY_BUILD_ROOT" ] \
+      || [ "$(sudo readlink -f -- "$entry")" != "$entry" ] \
+      || { [ "$metadata" != "$DEPLOY_BUILD_UID:$DEPLOY_BUILD_GID" ] \
+        && [ "$metadata" != "0:0" ]; } \
+      || sudo mountpoint -q -- "$entry"; then
+      echo "ERROR: refusing untrusted stale deployment build path: $entry" >&2
+      exit 1
+    fi
+    sudo rm -rf --one-file-system -- "$entry"
+  done < <(sudo find -P "$DEPLOY_BUILD_ROOT" -mindepth 1 -maxdepth 1 \
+    ! -name 'deploy.lock' -print0)
 }
 restore_quiesced_services() {
   local status=$?
@@ -432,6 +486,8 @@ restore_quiesced_services() {
   exit "$status"
 }
 trap restore_quiesced_services EXIT
+
+acquire_deploy_build_lock
 
 BRANCH="${DEPLOY_BRANCH:-$(git --no-replace-objects -c safe.directory="$DEPLOY_DIR" branch --show-current)}"
 BRANCH="${BRANCH:-main}"
@@ -521,13 +577,14 @@ if [ "$DEPLOY_RUN_UID" = "0" ] || [ "$DEPLOY_RUN_GID" = "0" ] \
   echo "ERROR: build and runtime users require distinct non-root UIDs and GIDs" >&2
   exit 1
 fi
+remove_stale_deploy_build_homes
 prepare_staging_runtime_storage
 DEPLOY_ENV_TOOL="$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs"
 DEPLOY_ENV_SNAPSHOT_DIR="$(sudo mktemp -d /run/ss-erp-deploy-env.XXXXXXXXXX)"
 DEPLOY_ENV_SNAPSHOT="$DEPLOY_ENV_SNAPSHOT_DIR/environment.env"
 DEPLOY_SOURCE_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/source-manifest.json"
 DEPLOY_BUILD_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/build-manifest.json"
-DEPLOY_BUILD_HOME="$(sudo mktemp -d /run/ss-erp-build-home.XXXXXXXXXX)"
+DEPLOY_BUILD_HOME="$(sudo mktemp -d "$DEPLOY_BUILD_ROOT/ss-erp-build-home.XXXXXXXXXX")"
 sudo chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 sudo chown "$DEPLOY_BUILD_USER:$DEPLOY_BUILD_GROUP" "$DEPLOY_BUILD_HOME"
 sudo chmod 0700 "$DEPLOY_BUILD_HOME"

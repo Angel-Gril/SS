@@ -7,6 +7,7 @@ set -euo pipefail
 #   DEPLOY_BASE=/opt/ss-erp
 #   DEPLOY_USER=deploy
 #   DEPLOY_BUILD_USER=ss-erp-build
+#   DEPLOY_BUILD_ROOT=/var/lib/ss-erp-deploy-build
 #   ENV_FILE_NAME=.env.staging
 
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
@@ -21,6 +22,12 @@ fail() {
   printf '[init] ERROR: %s\n' "$*" >&2
   exit 1
 }
+
+for required_command in findmnt flock mountpoint; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    fail "required deployment command is missing: $required_command"
+  fi
+done
 
 if [[ ! "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
   || ! id -- "$DEPLOY_USER" >/dev/null 2>&1; then
@@ -136,12 +143,43 @@ sudo chown "root:$DEPLOY_GROUP" "$ENV_PATH"
 sudo chmod 0640 "$ENV_PATH"
 
 COMPOSE_LOCK_ROOT=/var/lib/ss-erp-deploy-locks
+DEPLOY_BUILD_ROOT="${DEPLOY_BUILD_ROOT:-/var/lib/ss-erp-deploy-build}"
+DEPLOY_BUILD_LOCK_FILE="$DEPLOY_BUILD_ROOT/deploy.lock"
 EXTENSION_RELEASE_BASE="${EXTENSION_RELEASE_BASE:-/var/lib/ss-erp-extension-releases}"
 if [ -L "$COMPOSE_LOCK_ROOT" ] \
   || { [ -e "$COMPOSE_LOCK_ROOT" ] && [ ! -d "$COMPOSE_LOCK_ROOT" ]; }; then
   fail "Compose deployment lock root must be one real directory"
 fi
 sudo install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$COMPOSE_LOCK_ROOT"
+if [[ "$DEPLOY_BUILD_ROOT" != /* ]] \
+  || [ "$(readlink -m -- "$DEPLOY_BUILD_ROOT")" != "$DEPLOY_BUILD_ROOT" ] \
+  || [ -L "$DEPLOY_BUILD_ROOT" ] \
+  || { [ -e "$DEPLOY_BUILD_ROOT" ] && [ ! -d "$DEPLOY_BUILD_ROOT" ]; }; then
+  fail "deployment build root must be one absolute real canonical directory"
+fi
+assert_root_owned_ancestor_chain "$(dirname -- "$DEPLOY_BUILD_ROOT")" "deployment build root"
+if [ ! -e "$DEPLOY_BUILD_ROOT" ]; then
+  sudo install -d -o root -g root -m 0711 "$DEPLOY_BUILD_ROOT"
+fi
+if [ "$(stat -c '%u:%g:%a' "$DEPLOY_BUILD_ROOT")" != "0:0:711" ]; then
+  fail "deployment build root must be root:root mode 0711"
+fi
+DEPLOY_BUILD_FS_TYPE="$(findmnt -n -o FSTYPE --target "$DEPLOY_BUILD_ROOT")"
+case "$DEPLOY_BUILD_FS_TYPE" in
+  tmpfs|ramfs) fail "deployment build root must use a disk-backed filesystem" ;;
+  '') fail "deployment build root filesystem could not be resolved" ;;
+esac
+if [ -L "$DEPLOY_BUILD_LOCK_FILE" ] \
+  || { [ -e "$DEPLOY_BUILD_LOCK_FILE" ] && [ ! -f "$DEPLOY_BUILD_LOCK_FILE" ]; }; then
+  fail "deployment build lock must be one regular file"
+fi
+if [ ! -e "$DEPLOY_BUILD_LOCK_FILE" ]; then
+  sudo install -o root -g "$DEPLOY_GROUP" -m 0660 /dev/null "$DEPLOY_BUILD_LOCK_FILE"
+fi
+if [ "$(stat -c '%u:%g:%a:%h' "$DEPLOY_BUILD_LOCK_FILE")" \
+  != "0:$DEPLOY_GID:660:1" ]; then
+  fail "deployment build lock ownership, mode, or link count is invalid"
+fi
 if [[ "$EXTENSION_RELEASE_BASE" != /* ]] \
   || [ "$(readlink -m -- "$EXTENSION_RELEASE_BASE")" != "$EXTENSION_RELEASE_BASE" ] \
   || [ -L "$EXTENSION_RELEASE_BASE" ] \

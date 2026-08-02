@@ -168,6 +168,9 @@ post-migration guard。脚本不接受 `--skip-build`，会删除旧依赖/构�
 `pnpm install --frozen-lockfile --force` 重建；Worker/API/Web 在任何 in-place 改动前停止。
 根目录除当前 `$ENV_FILE` 外不得残留任何被 Git 忽略的 `.env*`；Next 的构建 cache 不会被直接
 `chown`，封存后会清空并由 root 新建 runtime 专用目录。
+临时 `pnpm` store 使用 `init-server.sh` 创建的 `/var/lib/ss-erp-deploy-build` 磁盘目录，并由三种
+systemd 部署入口的共享锁串行化；不要把它改回 `/run`。环境快照仍只在 `/run`，中断残留仅在名称、
+所有者、规范路径和挂载点验证通过后清理。
 
 所有 systemd 部署模式都必须先把 `pnpm package:extension` 产生并完成外部审批的同一四件套安装到
 `/var/lib/ss-erp-extension-releases/<full-target-commit>`，目录为 `root:root 0755`、文件为

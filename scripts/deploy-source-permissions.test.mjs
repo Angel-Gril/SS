@@ -242,6 +242,122 @@ test('isolated deployment builds use an explicit writable pnpm store', () => {
   }
 });
 
+test('deployment build stores use one locked root-owned disk parent while env snapshots remain memory-backed', () => {
+  const initializer = readFileSync(join(process.cwd(), 'scripts', 'init-server.sh'), 'utf8');
+  assert.match(
+    initializer,
+    /DEPLOY_BUILD_ROOT="\$\{DEPLOY_BUILD_ROOT:-\/var\/lib\/ss-erp-deploy-build\}"/u,
+    'initializer must provision the fixed deployment build root',
+  );
+  assert.match(
+    initializer,
+    /install -d -o root -g root -m 0711 "\$DEPLOY_BUILD_ROOT"/u,
+    'build root must not be writable by either deployment identity',
+  );
+  assert.match(
+    initializer,
+    /tmpfs\|ramfs\) fail "deployment build root must use a disk-backed filesystem"/u,
+    'initializer must reject memory-backed build roots',
+  );
+  assert.match(
+    initializer,
+    /install -o root -g "\$DEPLOY_GROUP" -m 0660 \/dev\/null "\$DEPLOY_BUILD_LOCK_FILE"/u,
+    'initializer must provision the shared systemd-deployment lock',
+  );
+
+  for (const scriptName of ['deploy.sh', 'deploy-app-dir.sh', 'deploy-staging.sh']) {
+    const deploy = readFileSync(join(process.cwd(), 'scripts', scriptName), 'utf8');
+    assert.match(
+      deploy,
+      /DEPLOY_ENV_SNAPSHOT_DIR="\$\((?:sudo )?mktemp -d \/run\/ss-erp-deploy-env\.XXXXXXXXXX\)"/u,
+      `${scriptName} must retain the secret environment snapshot under /run`,
+    );
+    assert.match(
+      deploy,
+      /DEPLOY_BUILD_HOME="\$\((?:sudo )?mktemp -d "\$DEPLOY_BUILD_ROOT\/ss-erp-build-home\.XXXXXXXXXX"\)"/u,
+      `${scriptName} must place the non-secret build store beneath the protected parent`,
+    );
+    assert.doesNotMatch(
+      deploy,
+      /DEPLOY_BUILD_HOME="\$\((?:sudo )?mktemp -d \/run\//u,
+      `${scriptName} must not consume the bounded /run tmpfs with the pnpm store`,
+    );
+    assert.match(
+      deploy,
+      /exec 9<>"\$DEPLOY_BUILD_LOCK_FILE"[\s\S]{0,80}flock -n 9/u,
+      `${scriptName} must hold the shared lock for the deployment lifetime`,
+    );
+    assert.match(
+      deploy,
+      /remove_stale_deploy_build_homes[\s\S]+rm -rf --one-file-system -- "\$entry"/u,
+      `${scriptName} must remove only validated stale build homes while locked`,
+    );
+    assert.match(
+      deploy,
+      /chown "\$DEPLOY_BUILD_USER:\$DEPLOY_BUILD_GROUP" "\$DEPLOY_BUILD_HOME"[\s\S]{0,80}chmod 0700 "\$DEPLOY_BUILD_HOME"/u,
+      `${scriptName} must isolate the build home to the dedicated build identity`,
+    );
+    assert.match(
+      deploy,
+      /rm -rf -- "\$DEPLOY_BUILD_HOME"/u,
+      `${scriptName} must remove the build home from its exit cleanup`,
+    );
+  }
+});
+
+test('initializer prevents the build identity from renaming its persistent build home', {
+  skip: !linuxRoot,
+}, () => {
+  const root = mkdtempSync('/root/ss-erp-deploy-build-root-test-');
+  const bin = join(root, 'bin');
+  const buildRoot = join(root, 'deploy-build');
+  const buildHome = join(buildRoot, 'ss-erp-build-home.ABCDEFGHIJ');
+  try {
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
+    const result = run('bash', [join(process.cwd(), 'scripts', 'init-server.sh')], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        DEPLOY_BASE: join(root, 'deploy'),
+        DEPLOY_USER: 'nobody',
+        DEPLOY_BUILD_ROOT: buildRoot,
+        ENV_FILE_NAME: '.env.staging',
+        EXTENSION_RELEASE_BASE: join(root, 'extension-releases'),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(lstatSync(buildRoot).uid, 0);
+    assert.equal(lstatSync(buildRoot).mode & 0o777, 0o711);
+    const lock = lstatSync(join(buildRoot, 'deploy.lock'));
+    assert.equal(lock.uid, 0);
+    assert.equal(lock.gid, Number(run('id', ['-g', 'nobody']).stdout.trim()));
+    assert.equal(lock.mode & 0o777, 0o660);
+    assert.equal(lock.nlink, 1);
+    const lockPath = join(buildRoot, 'deploy.lock');
+    const lockContention = run('runuser', [
+      '-u', 'nobody', '--', 'bash', '-c',
+      'exec 9<>"$1"; flock -n 9; ! flock -n "$1" -c true',
+      'lock-test', lockPath,
+    ]);
+    assert.equal(lockContention.status, 0, lockContention.stderr);
+
+    mkdirSync(buildHome, { mode: 0o700 });
+    const buildIdentity = 'ss-erp-build';
+    const buildUid = Number(run('id', ['-u', buildIdentity]).stdout.trim());
+    const buildGid = Number(run('id', ['-g', buildIdentity]).stdout.trim());
+    chownSync(buildHome, buildUid, buildGid);
+    const rename = run('runuser', [
+      '-u', buildIdentity, '--', 'mv', buildHome, `${buildHome}.escaped`,
+    ]);
+    assert.notEqual(rename.status, 0, 'build identity must not rename its root-owned parent entry');
+    assert.equal(existsSync(buildHome), true);
+    assert.equal(existsSync(`${buildHome}.escaped`), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('release systemd installer snapshots, verifies, restores, and auto-recovers', {
   skip: !linuxRoot,
 }, () => {
@@ -725,6 +841,7 @@ test('initializer refuses a legacy shared symlink before changing its target', {
         PATH: `${bin}:${process.env.PATH}`,
         DEPLOY_BASE: base,
         DEPLOY_USER: 'nobody',
+        DEPLOY_BUILD_ROOT: join(root, 'deploy-build'),
         ENV_FILE_NAME: '.env.staging',
         EXTENSION_RELEASE_BASE: join(root, 'extension-releases'),
       },
@@ -757,6 +874,7 @@ test('initializer rejects a writable extension release ancestor', {
         PATH: `${bin}:${process.env.PATH}`,
         DEPLOY_BASE: join(root, 'deploy'),
         DEPLOY_USER: 'nobody',
+        DEPLOY_BUILD_ROOT: join(root, 'deploy-build'),
         ENV_FILE_NAME: '.env.staging',
         EXTENSION_RELEASE_BASE: join(writableParent, 'extension-releases'),
       },

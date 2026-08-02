@@ -280,6 +280,8 @@ DEPLOY_ENV_SNAPSHOT=""
 DEPLOY_BUILD_HOME=""
 DEPLOY_SOURCE_MANIFEST=""
 DEPLOY_BUILD_MANIFEST=""
+readonly DEPLOY_BUILD_ROOT=/var/lib/ss-erp-deploy-build
+readonly DEPLOY_BUILD_LOCK_FILE="$DEPLOY_BUILD_ROOT/deploy.lock"
 current_target=""
 previous_git_commit=""
 PREVIOUS_RELEASE=""
@@ -379,6 +381,57 @@ cleanup_environment_snapshot() {
     rm -rf -- "$DEPLOY_BUILD_HOME"
   fi
 }
+trap cleanup_environment_snapshot EXIT
+
+acquire_deploy_build_lock() {
+  local filesystem_type
+  if [ -L "$DEPLOY_BUILD_ROOT" ] || [ ! -d "$DEPLOY_BUILD_ROOT" ] \
+    || [ "$(readlink -f -- "$DEPLOY_BUILD_ROOT")" != "$DEPLOY_BUILD_ROOT" ] \
+    || [ "$(stat -c '%u:%g:%a' "$DEPLOY_BUILD_ROOT")" != "0:0:711" ]; then
+    echo "[deploy] ERROR: deployment build root must be root:root mode 0711" >&2
+    exit 1
+  fi
+  filesystem_type="$(findmnt -n -o FSTYPE --target "$DEPLOY_BUILD_ROOT")"
+  case "$filesystem_type" in
+    tmpfs|ramfs|'')
+      echo "[deploy] ERROR: deployment build root must use a resolved disk-backed filesystem" >&2
+      exit 1
+      ;;
+  esac
+  if [ -L "$DEPLOY_BUILD_LOCK_FILE" ] || [ ! -f "$DEPLOY_BUILD_LOCK_FILE" ] \
+    || [ "$(stat -c '%u:%g:%a:%h' "$DEPLOY_BUILD_LOCK_FILE")" \
+      != "0:$DEPLOY_RUN_GID:660:1" ]; then
+    echo "[deploy] ERROR: deployment build lock is not trusted" >&2
+    exit 1
+  fi
+  exec 9<>"$DEPLOY_BUILD_LOCK_FILE"
+  if ! flock -n 9; then
+    echo "[deploy] ERROR: another systemd deployment holds the build lock" >&2
+    exit 1
+  fi
+}
+
+remove_stale_deploy_build_homes() {
+  local entry
+  local entry_name
+  local metadata
+  while IFS= read -r -d '' entry; do
+    entry_name="${entry##*/}"
+    metadata="$(stat -c '%u:%g' "$entry" 2>/dev/null || true)"
+    if [[ ! "$entry_name" =~ ^ss-erp-build-home\.[A-Za-z0-9]{10}$ ]] \
+      || [ -L "$entry" ] || [ ! -d "$entry" ] \
+      || [ "$(dirname -- "$entry")" != "$DEPLOY_BUILD_ROOT" ] \
+      || [ "$(readlink -f -- "$entry")" != "$entry" ] \
+      || { [ "$metadata" != "$DEPLOY_BUILD_UID:$DEPLOY_BUILD_GID" ] \
+        && [ "$metadata" != "0:0" ]; } \
+      || mountpoint -q -- "$entry"; then
+      echo "[deploy] ERROR: refusing untrusted stale deployment build path: $entry" >&2
+      exit 1
+    fi
+    rm -rf --one-file-system -- "$entry"
+  done < <(find -P "$DEPLOY_BUILD_ROOT" -mindepth 1 -maxdepth 1 \
+    ! -name 'deploy.lock' -print0)
+}
 
 install_target_backup_gate() {
   local source_root="$1"
@@ -471,6 +524,9 @@ install_root_runtime_symlink() {
   fi
 }
 
+acquire_deploy_build_lock
+remove_stale_deploy_build_homes
+
 echo "[deploy] Preparing $RELEASE_DIR"
 if [ -L "$RELEASE_DIR" ] || [ -e "$RELEASE_DIR" ]; then
   echo "[deploy] ERROR: release directory already exists: $RELEASE_DIR" >&2
@@ -533,14 +589,13 @@ if [ -L "$SHARED_DIR/$ENV_FILE_NAME" ] || [ ! -f "$SHARED_DIR/$ENV_FILE_NAME" ] 
   exit 1
 fi
 DEPLOY_ENV_SNAPSHOT_DIR="$(mktemp -d /run/ss-erp-deploy-env.XXXXXXXXXX)"
-DEPLOY_BUILD_HOME="$(mktemp -d /run/ss-erp-build-home.XXXXXXXXXX)"
+DEPLOY_BUILD_HOME="$(mktemp -d "$DEPLOY_BUILD_ROOT/ss-erp-build-home.XXXXXXXXXX")"
 chown "$DEPLOY_BUILD_USER:$DEPLOY_BUILD_GROUP" "$DEPLOY_BUILD_HOME"
 chmod 0700 "$DEPLOY_BUILD_HOME"
 chmod 0700 "$DEPLOY_ENV_SNAPSHOT_DIR"
 DEPLOY_ENV_SNAPSHOT="$DEPLOY_ENV_SNAPSHOT_DIR/environment.env"
 DEPLOY_SOURCE_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/source-manifest.json"
 DEPLOY_BUILD_MANIFEST="$DEPLOY_ENV_SNAPSHOT_DIR/build-manifest.json"
-trap cleanup_environment_snapshot EXIT
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-environment.mjs" snapshot \
   "$SHARED_DIR/$ENV_FILE_NAME" "$DEPLOY_ENV_SNAPSHOT"
 chown "root:$DEPLOY_RUN_GROUP" "$DEPLOY_ENV_SNAPSHOT_DIR" "$DEPLOY_ENV_SNAPSHOT"
