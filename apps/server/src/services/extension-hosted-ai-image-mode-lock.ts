@@ -1,5 +1,5 @@
 import {
-  isExtensionHostedAiImagePrePublishDraftStage,
+  isExtensionHostedAiImageActiveDraftStage,
   type ExtensionHostedAiImagePlanAuthority,
   type ExtensionHostedAiImagePlanBinding,
   type ExtensionHostedAiImagePlanIdentity,
@@ -159,7 +159,7 @@ function exactAuthority(
   if (!sameBinding(value, binding)
     || value.sourceCaptureCurrent !== true
     || value.workflowStatus !== 'ACTIVE'
-    || !isExtensionHostedAiImagePrePublishDraftStage(value.draftStage)) {
+    || !isExtensionHostedAiImageActiveDraftStage(value.draftStage)) {
     return fail(
       'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_STALE',
       409,

@@ -274,8 +274,6 @@ describe('Prisma extension hosted AI image authority loader', () => {
     'MEDIA_REVIEW',
     'PRICING_REVIEW',
     'VALIDATION',
-    'READY_TO_PUBLISH',
-    'PUBLISH_INTENT_RECORDED',
   ] as const)('returns the actual matching active %s draft stage for mode-lock authority', async (
     draftStage,
   ) => {
@@ -342,6 +340,16 @@ describe('Prisma extension hosted AI image authority loader', () => {
     ['foreign owner', { subjectOwnerUserId: 'owner-2' }],
     ['inactive workflow', { workflowStatus: 'COMPLETED' }],
     ['wrong stage', { draftStage: 'COPY_REVIEW' }],
+    ['ready-to-publish draft', {
+      workflowStage: 'READY_TO_PUBLISH',
+      draftStage: 'READY_TO_PUBLISH',
+      draftStatus: 'READY',
+    }],
+    ['publish-intent draft', {
+      workflowStage: 'PUBLISH_INTENT_RECORDED',
+      draftStage: 'PUBLISH_INTENT_RECORDED',
+      draftStatus: 'READY',
+    }],
     ['published workflow', { workflowStage: 'PUBLISHED', draftStage: 'PUBLISHED' }],
     ['mismatched workflow and draft stages', {
       workflowStage: 'CATEGORY_REVIEW',

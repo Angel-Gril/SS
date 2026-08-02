@@ -10,21 +10,19 @@ import type {
 export const EXTENSION_HOSTED_AI_IMAGE_PLAN_VERSION =
   'extension-hosted-ai-image-plan/v1' as const;
 
-const EXTENSION_HOSTED_AI_IMAGE_PRE_PUBLISH_STAGES = new Set<SourceListingWorkflowStage>([
+const EXTENSION_HOSTED_AI_IMAGE_ACTIVE_DRAFT_STAGES = new Set<SourceListingWorkflowStage>([
   'CATEGORY_REVIEW',
   'ATTRIBUTE_REVIEW',
   'CONTENT_REVIEW',
   'MEDIA_REVIEW',
   'PRICING_REVIEW',
   'VALIDATION',
-  'READY_TO_PUBLISH',
-  'PUBLISH_INTENT_RECORDED',
 ]);
 
-export function isExtensionHostedAiImagePrePublishDraftStage(
+export function isExtensionHostedAiImageActiveDraftStage(
   value: unknown,
-): value is Exclude<SourceListingWorkflowStage, 'PUBLISHED'> {
-  return EXTENSION_HOSTED_AI_IMAGE_PRE_PUBLISH_STAGES.has(value as SourceListingWorkflowStage);
+): value is SourceListingWorkflowStage {
+  return EXTENSION_HOSTED_AI_IMAGE_ACTIVE_DRAFT_STAGES.has(value as SourceListingWorkflowStage);
 }
 
 export type ExtensionHostedAiImagePlanErrorCode =

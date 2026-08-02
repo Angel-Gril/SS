@@ -5,7 +5,7 @@ import {
   type SourceProductCaptureV2,
 } from 'shared';
 import {
-  isExtensionHostedAiImagePrePublishDraftStage,
+  isExtensionHostedAiImageActiveDraftStage,
   type ExtensionHostedAiImagePlanAuthority,
 } from './extension-hosted-ai-image-plan.js';
 import type {
@@ -500,7 +500,7 @@ async function planAuthorityFromRow(
     || listingWorkflowId !== input.listingWorkflowId
     || row.workflowStatus !== 'ACTIVE'
     || row.draftStatus !== 'ACTIVE'
-    || !isExtensionHostedAiImagePrePublishDraftStage(draftStage)
+    || !isExtensionHostedAiImageActiveDraftStage(draftStage)
     || row.workflowStage !== draftStage
     || row.shopStatus !== 'ACTIVE'
     || row.shopPlatform !== 'OZON'

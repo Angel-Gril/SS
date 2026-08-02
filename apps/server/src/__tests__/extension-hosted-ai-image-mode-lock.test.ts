@@ -122,6 +122,12 @@ describe('extension hosted AI image mode lock service', () => {
       403,
     ],
     [
+      'ready-to-publish draft',
+      authority({ draftStage: 'READY_TO_PUBLISH' }),
+      'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_STALE',
+      409,
+    ],
+    [
       'published draft',
       authority({ draftStage: 'PUBLISHED' }),
       'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_STALE',
