@@ -4,8 +4,9 @@ import {
   verifySourceProductCaptureV2Submission,
   type SourceProductCaptureV2,
 } from 'shared';
-import type {
-  ExtensionHostedAiImagePlanAuthority,
+import {
+  isExtensionHostedAiImagePrePublishDraftStage,
+  type ExtensionHostedAiImagePlanAuthority,
 } from './extension-hosted-ai-image-plan.js';
 import type {
   ExtensionHostedCandidatePreviewAuthority,
@@ -491,15 +492,16 @@ async function planAuthorityFromRow(
   const selectedSkuKeys = exactStringArray(row.workflowSelectedSkuKeys, MAX_SELECTED_SKUS);
   const captureHash = exactHash(row.snapshotCaptureHash);
   const payloadBytes = exactInteger(row.snapshotPayloadBytes);
+  const draftStage = row.draftStage;
   if (!ownerUserId || !listingWorkflowId || !shopId || !sourceSubjectId || !snapshotId
     || !supplyGoodsId || !draftRevision || !draftVersion || !selectedSkuKeys
     || !captureHash || !payloadBytes
     || ownerUserId !== input.ownerUserId
     || listingWorkflowId !== input.listingWorkflowId
     || row.workflowStatus !== 'ACTIVE'
-    || row.workflowStage !== 'MEDIA_REVIEW'
     || row.draftStatus !== 'ACTIVE'
-    || row.draftStage !== 'MEDIA_REVIEW'
+    || !isExtensionHostedAiImagePrePublishDraftStage(draftStage)
+    || row.workflowStage !== draftStage
     || row.shopStatus !== 'ACTIVE'
     || row.shopPlatform !== 'OZON'
     || row.draftOwnerUserId !== ownerUserId
@@ -540,7 +542,7 @@ async function planAuthorityFromRow(
     sourceSubjectId,
     sourceCaptureCurrent: true,
     workflowStatus: 'ACTIVE',
-    draftStage: 'MEDIA_REVIEW',
+    draftStage,
     snapshotId,
     supplyGoodsId,
     shopId,

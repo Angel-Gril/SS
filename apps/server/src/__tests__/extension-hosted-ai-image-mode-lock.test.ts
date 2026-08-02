@@ -96,6 +96,17 @@ describe('extension hosted AI image mode lock service', () => {
     expect(result).toMatchObject({ state: 'NO_SUITE', hostedExecutionEnabled: false });
   });
 
+  it('returns NO_SUITE for an exact active CATEGORY_REVIEW draft', async () => {
+    const options = dependencies();
+    options.loadAuthority.mockResolvedValue(authority({ draftStage: 'CATEGORY_REVIEW' }));
+    const service = createExtensionHostedAiImageModeLockService(options);
+
+    await expect(service.get({ identity, binding })).resolves.toMatchObject({
+      state: 'NO_SUITE',
+    });
+    expect(options.hasHostedSuite).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['missing authority', null, 'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_NOT_FOUND', 404],
     [
@@ -109,6 +120,12 @@ describe('extension hosted AI image mode lock service', () => {
       authority({ ownerUserId: 'owner-2' }),
       'HOSTED_AI_IMAGE_MODE_LOCK_FORBIDDEN',
       403,
+    ],
+    [
+      'published draft',
+      authority({ draftStage: 'PUBLISHED' }),
+      'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_STALE',
+      409,
     ],
   ] as const)('rejects %s before reading suite state', async (_label, loaded, code, statusCode) => {
     const options = dependencies();

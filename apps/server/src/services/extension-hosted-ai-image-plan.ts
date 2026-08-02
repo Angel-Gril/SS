@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { SourceListingWorkflowStage } from 'shared';
 import type {
   AiMediaPlanRecord,
   AiMediaPlanVersionRecord,
@@ -8,6 +9,23 @@ import type {
 
 export const EXTENSION_HOSTED_AI_IMAGE_PLAN_VERSION =
   'extension-hosted-ai-image-plan/v1' as const;
+
+const EXTENSION_HOSTED_AI_IMAGE_PRE_PUBLISH_STAGES = new Set<SourceListingWorkflowStage>([
+  'CATEGORY_REVIEW',
+  'ATTRIBUTE_REVIEW',
+  'CONTENT_REVIEW',
+  'MEDIA_REVIEW',
+  'PRICING_REVIEW',
+  'VALIDATION',
+  'READY_TO_PUBLISH',
+  'PUBLISH_INTENT_RECORDED',
+]);
+
+export function isExtensionHostedAiImagePrePublishDraftStage(
+  value: unknown,
+): value is Exclude<SourceListingWorkflowStage, 'PUBLISHED'> {
+  return EXTENSION_HOSTED_AI_IMAGE_PRE_PUBLISH_STAGES.has(value as SourceListingWorkflowStage);
+}
 
 export type ExtensionHostedAiImagePlanErrorCode =
   | 'HOSTED_AI_IMAGE_PLAN_INVALID_REQUEST'
@@ -50,7 +68,7 @@ export interface ExtensionHostedAiImagePlanAuthority
   sourceSubjectId: string;
   sourceCaptureCurrent: boolean;
   workflowStatus: string;
-  draftStage: string;
+  draftStage: SourceListingWorkflowStage;
   selectedSkuKeys: string[];
   capturedSkuKeys: string[];
   candidateMediaKeys: string[];

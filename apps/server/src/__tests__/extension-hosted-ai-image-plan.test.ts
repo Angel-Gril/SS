@@ -290,6 +290,11 @@ describe('extension hosted AI image plan service', () => {
     ['shop', authority({ shopId: 'shop-2' }), 'HOSTED_AI_IMAGE_PLAN_FORBIDDEN'],
     ['owner', authority({ ownerUserId: 'owner-2' }), 'HOSTED_AI_IMAGE_PLAN_FORBIDDEN'],
     ['stale source', authority({ sourceCaptureCurrent: false }), 'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE'],
+    [
+      'pre-media-review stage',
+      authority({ draftStage: 'CATEGORY_REVIEW' }),
+      'HOSTED_AI_IMAGE_PLAN_CONTEXT_STALE',
+    ],
   ] as const)('rejects a changed %s before creating a plan', async (_label, loaded, code) => {
     const fixture = setup({ authority: loaded });
     await expect(fixture.service.create({

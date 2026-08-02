@@ -267,6 +267,32 @@ describe('Prisma extension hosted AI image authority loader', () => {
     expect(values).toEqual(['owner-1', 'listing-workflow-1']);
   });
 
+  it.each([
+    'CATEGORY_REVIEW',
+    'ATTRIBUTE_REVIEW',
+    'CONTENT_REVIEW',
+    'MEDIA_REVIEW',
+    'PRICING_REVIEW',
+    'VALIDATION',
+    'READY_TO_PUBLISH',
+    'PUBLISH_INTENT_RECORDED',
+  ] as const)('returns the actual matching active %s draft stage for mode-lock authority', async (
+    draftStage,
+  ) => {
+    const { loader } = fixture([[planRow({
+      workflowStage: draftStage,
+      draftStage,
+    })]]);
+
+    await expect(loader.loadPlanAuthority({
+      ownerUserId: 'owner-1',
+      listingWorkflowId: 'listing-workflow-1',
+    })).resolves.toMatchObject({
+      workflowStatus: 'ACTIVE',
+      draftStage,
+    });
+  });
+
   it('derives the reserved product-only SKU from a verified capture with no SKU rows', async () => {
     const capture = structuredClone(captureFixture.capture);
     capture.skus = [];
@@ -316,6 +342,11 @@ describe('Prisma extension hosted AI image authority loader', () => {
     ['foreign owner', { subjectOwnerUserId: 'owner-2' }],
     ['inactive workflow', { workflowStatus: 'COMPLETED' }],
     ['wrong stage', { draftStage: 'COPY_REVIEW' }],
+    ['published workflow', { workflowStage: 'PUBLISHED', draftStage: 'PUBLISHED' }],
+    ['mismatched workflow and draft stages', {
+      workflowStage: 'CATEGORY_REVIEW',
+      draftStage: 'ATTRIBUTE_REVIEW',
+    }],
     ['selected SKU absent from capture', {
       workflowSelectedSkuKeys: ['sku-missing'],
       draftSelectedSkuKeys: ['sku-missing'],

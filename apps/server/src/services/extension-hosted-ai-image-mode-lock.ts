@@ -1,8 +1,9 @@
-import type {
-  ExtensionHostedAiImagePlanAuthority,
-  ExtensionHostedAiImagePlanBinding,
-  ExtensionHostedAiImagePlanIdentity,
-  ExtensionHostedAiImagePlanPolicyDecision,
+import {
+  isExtensionHostedAiImagePrePublishDraftStage,
+  type ExtensionHostedAiImagePlanAuthority,
+  type ExtensionHostedAiImagePlanBinding,
+  type ExtensionHostedAiImagePlanIdentity,
+  type ExtensionHostedAiImagePlanPolicyDecision,
 } from './extension-hosted-ai-image-plan.js';
 
 export const EXTENSION_HOSTED_AI_IMAGE_MODE_LOCK_VERSION =
@@ -158,7 +159,7 @@ function exactAuthority(
   if (!sameBinding(value, binding)
     || value.sourceCaptureCurrent !== true
     || value.workflowStatus !== 'ACTIVE'
-    || value.draftStage !== 'MEDIA_REVIEW') {
+    || !isExtensionHostedAiImagePrePublishDraftStage(value.draftStage)) {
     return fail(
       'HOSTED_AI_IMAGE_MODE_LOCK_CONTEXT_STALE',
       409,
