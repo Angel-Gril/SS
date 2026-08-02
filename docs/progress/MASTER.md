@@ -38,11 +38,30 @@ credential storage, or direct Ozon calls.
 - [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [x] Phase 5: Publishing closure and product quality (4/4 tasks) [details](./phase-5-publish-quality.md)
-- [ ] Phase 6: Pilot and release (2/3 tasks) [details](./phase-6-pilot-release.md)
+- [ ] Phase 6: Pilot and release (0/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 36/37 tasks complete (97%).
+Overall: 34/37 tasks complete (92%).
 
 ## Current Status
+
+Current checkpoint (2026-08-02): the authorized `.com` `BINI` REL-02 sandbox preflight stopped
+before device claim or any Provider request. The staged `1.0.272` package loaded successfully in an
+isolated Chromium profile, but its extension-origin settings page was rejected by the packaged
+deployment sender check. The first fix at `fe099b988c9cf679596dee4dcbb3a8be96959ddf` passed the
+runtime ID into that check; independent review then found that the central runtime policy would
+also admit the claim message from unrelated same-extension pages. A second regression now permits
+the claim from `pages/settings.html` while rejecting popup, Provider settings and AI Workbench
+pages, and retains exact ERP Web/Admin one-click pairing. The focused message, device pairing and
+lifecycle matrix passes `57/57`; independent review found no remaining P0/P1/P2 issue.
+
+The unconsumed pairing code and short-lived owner/admin sessions were revoked, the isolated browser
+was closed, and the exact pilot label has zero device sessions. Preflight evidence SHA-256 is
+`19021ce2...480c`. No Provider call, ERP ingest, Ozon mutation or feature-flag change occurred; all
+regions remain dark. Because the distributed `1.0.272` package contains the pairing defect,
+`REL-03` and `REL-04` are reopened until a clean QA-04 run, version `1.0.273` package/sign/upgrade
+chain, both dark deployments/canaries and both first-party website receipts pass. Phase 6 is
+therefore `0/3` and effective progress is `34/37`; `REL-02` resumes only from that replacement
+release.
 
 Current checkpoint (2026-08-02): `REL-03` and `REL-04` are complete on final pushed commit
 `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`. Both `.com` and `.cn` VPS environments run that
@@ -1023,13 +1042,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep final commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`, both region-specific
-   version `1.0.272` candidates, signatures, canary summaries and website distribution receipts
-   immutable. `REL-03` and `REL-04` are complete. Prepare `REL-02` read-only readiness first, then
-   obtain separate operator authorization before enabling any scoped sandbox or one-shop pilot flag
-   or sending any Ozon mutation. The pilot must use the existing independent generation, ingest and
-   publish kill switches, retain audit/receipt/reconciliation evidence, run post-enable canaries, and
-   restore all scoped rollout policy to off after the bounded pilot.
+7. Keep commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`, both region-specific version
+   `1.0.272` candidates, signatures, canary summaries and website distribution receipts immutable as
+   historical evidence, but do not use that package for a pilot. From the clean pairing-fix commit,
+   rerun QA-04, build and sign origin-bound `1.0.273` candidates, repeat both same-path upgrade
+   smokes, dark deployments/canaries and first-party website receipts, then restore `REL-03` and
+   `REL-04` completion. Only afterward resume the separately authorized `.com` `BINI` REL-02
+   sandbox pilot. The pilot must use the existing independent generation, ingest and publish kill
+   switches, retain audit/receipt/reconciliation evidence, run post-enable canaries, and restore all
+   scoped rollout policy to off after the bounded pilot.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

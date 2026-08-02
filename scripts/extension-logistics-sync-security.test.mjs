@@ -166,6 +166,18 @@ test('runtime message policy preserves only each trusted surface required workfl
     `chrome-extension://${extensionId}/pages/config-import.html`,
     extensionId,
   );
+  const popup = runtimeSender(
+    `chrome-extension://${extensionId}/pages/popup.html`,
+    extensionId,
+  );
+  const providerSettings = runtimeSender(
+    `chrome-extension://${extensionId}/pages/ai-provider-settings.html`,
+    extensionId,
+  );
+  const aiWorkbench = runtimeSender(
+    `chrome-extension://${extensionId}/pages/ai-image-workbench.html`,
+    extensionId,
+  );
   const erp = runtimeSender('https://app.ss-erp.cn/collect', extensionId);
   const seller = runtimeSender('https://seller.ozon.ru/app/products', extensionId);
   const official = runtimeSender('https://globalcalculator.ozon.ru/', extensionId);
@@ -192,6 +204,18 @@ test('runtime message policy preserves only each trusted surface required workfl
   ), true);
   assert.equal(policy.isAllowedRuntimeMessageSender(
     'ss-erp:logistics-device-claim', configImport, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', settings, extensionId,
+  ), true);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', popup, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', providerSettings, extensionId,
+  ), false);
+  assert.equal(policy.isAllowedRuntimeMessageSender(
+    'ss-erp:extension-device-claim', aiWorkbench, extensionId,
   ), false);
 
   assert.equal(policy.isAllowedRuntimeMessageSender('ss-erp:ping', erp, extensionId), true);

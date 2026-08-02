@@ -1,6 +1,6 @@
 # Phase 6: Pilot and Release
 
-Progress: 2/3 tasks.
+Progress: 0/3 tasks.
 
 ## Tasks
 
@@ -9,11 +9,11 @@ Progress: 2/3 tasks.
   switches are independent; audit and receipts are visible; post-enable canaries and publish
   reconciliation pass; rollback preserves consistent stored assets and receipts. Depends on the
   dark deployment and pre-enable canaries in `REL-04`.
-- [x] `REL-03` Build/sign/distribute cloud and local extension packages (`P0`, `M`).
+- [ ] `REL-03` Build/sign/distribute cloud and local extension packages (`P0`, `M`).
   Acceptance: same feature set with environment-correct endpoints, one version increment,
   non-secret profile upgrade, no session-key persistence, verified hashes, and smoke results.
   Depends on `QA-03`, `QA-04`, and `DOC-01`.
-- [x] `REL-04` Deploy server/web dark and run pre-enable canaries (`P0`, `M`). Acceptance:
+- [ ] `REL-04` Deploy server/web dark and run pre-enable canaries (`P0`, `M`). Acceptance:
   backup/migration, services, readiness, default-off flags, both VPS environments, pairing, hosted
   regression, BYOK disabled-path fixture rejection, and publish reconciliation pass before pilot
   enablement. Depends on `REL-03`.
@@ -28,6 +28,20 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The first authorized `.com` `BINI` REL-02 sandbox preflight found a packaged extension pairing
+  regression before any device claim or Provider dispatch. The first fix made the packaged runtime
+  ID available to the deployment sender check; security review then found that the central message
+  policy still allowed `ss-erp:extension-device-claim` from unrelated same-extension pages. The
+  central policy now restricts that message to `pages/settings.html` while preserving exact ERP
+  Web/Admin one-click pairing. Focused message/device/lifecycle tests pass `57/57`, and independent
+  review found no remaining P0/P1/P2 issue.
+- The unconsumed pairing code and short-lived owner/admin sessions were revoked, the isolated
+  browser was closed, and no device session exists for the pilot label. Private preflight evidence
+  SHA-256 is `19021ce2...480c`. No Provider request, ERP ingest, Ozon mutation or flag change
+  occurred. Version `1.0.272` remains immutable historical release evidence but is not eligible for
+  the pilot. `REL-03` and `REL-04` are reopened pending clean QA-04, a signed `1.0.273` replacement,
+  both dark deployments/canaries and both website receipts; Phase 6 is `0/3` and overall progress
+  is `34/37` until those replacement gates pass.
 - Text-to-image pilot success does not automatically enable edits or inpaint.
 - Each production operation remains limited to explicitly verified endpoint/model evidence.
 - `REL-04` completion never authorizes a pilot flag by itself; the scoped enablement belongs to
