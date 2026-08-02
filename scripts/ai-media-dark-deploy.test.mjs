@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const verifier = 'scripts/verify-ai-media-dark-policy.mjs';
 const extensionByokVerifier = 'scripts/verify-extension-byok-rollout-policy.mjs';
@@ -69,6 +76,28 @@ function runExtensionByok(expectation, rows, expected) {
   const args = [extensionByokVerifier, expectation, JSON.stringify(rows)];
   if (expected !== undefined) args.push(JSON.stringify(expected));
   return spawnSync(process.execPath, args, { encoding: 'utf8' });
+}
+
+const symlinkRoot = mkdtempSync(join(tmpdir(), 'ss-erp-dark-policy-symlink-'));
+try {
+  const scriptsLink = join(symlinkRoot, 'scripts');
+  symlinkSync(resolve('scripts'), scriptsLink, process.platform === 'win32' ? 'junction' : 'dir');
+  const darkResult = spawnSync(process.execPath, [
+    join(scriptsLink, 'verify-ai-media-dark-policy.mjs'),
+    '[]',
+  ], { encoding: 'utf8' });
+  assert.equal(darkResult.status, 0, darkResult.stderr);
+  assert.match(darkResult.stdout, /PASS AI Media rollout is dark/u);
+
+  const byokResult = spawnSync(process.execPath, [
+    join(scriptsLink, 'verify-extension-byok-rollout-policy.mjs'),
+    'off',
+    '[]',
+  ], { encoding: 'utf8' });
+  assert.equal(byokResult.status, 0, byokResult.stderr);
+  assert.match(byokResult.stdout, /PASS Extension BYOK rollout matches off/u);
+} finally {
+  rmSync(symlinkRoot, { recursive: true, force: true });
 }
 
 const defaultExtensionByokPolicy = {
