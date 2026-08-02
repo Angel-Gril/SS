@@ -16,6 +16,8 @@ DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
 DEPLOY_RUNTIME_ROOT="${DEPLOY_RUNTIME_ROOT:-${DEPLOY_DIR}.runtime}"
 DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
+WEB_HEALTH_URL="${WEB_HEALTH_URL:-http://127.0.0.1:3000}"
 
 if [ "$#" -ne 0 ]; then
   echo "ERROR: deploy-staging.sh does not accept arguments; every target commit must be rebuilt"
@@ -39,7 +41,7 @@ done < <(compgen -e)
 
 readonly DEPLOY_DIR ENV_FILE DEPLOY_ENV_PROFILE API_SERVICE WEB_SERVICE WORKER_SERVICE \
   DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT
-readonly DEPLOY_RUNTIME_ROOT
+readonly DEPLOY_RUNTIME_ROOT HEALTH_URL WEB_HEALTH_URL
 
 if [[ ! "$ENV_FILE" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
   echo "ERROR: ENV_FILE must be one dot-prefixed basename" >&2
@@ -395,6 +397,7 @@ reset_generated_build_paths() {
 
 DEPLOY_ENV_SNAPSHOT_DIR=""
 DEPLOY_BUILD_HOME=""
+MAINTENANCE_GATE_COMMIT=""
 SERVICES_QUIESCED=0
 cleanup_environment_snapshot() {
   if [ -n "${DEPLOY_ENV_SNAPSHOT_DIR:-}" ]; then
@@ -406,8 +409,24 @@ restore_quiesced_services() {
   local status=$?
   trap - EXIT
   if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+    local maintenance_commit="$MAINTENANCE_GATE_COMMIT"
+    local maintenance_restored=0
+    if [ -n "$maintenance_commit" ] \
+      && [ -f "$DEPLOY_BACKUP_GATE_ROOT/$maintenance_commit/deploy-maintenance-gate.sh" ] \
+      && sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$maintenance_commit/deploy-maintenance-gate.sh" \
+        enter "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" \
+        "$DEPLOY_RUNTIME_ROOT" "$DEPLOY_DIR" \
+      && sudo bash "$DEPLOY_BACKUP_GATE_ROOT/$maintenance_commit/deploy-maintenance-gate.sh" \
+        verify "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" \
+        "$DEPLOY_RUNTIME_ROOT" "$DEPLOY_DIR"; then
+      maintenance_restored=1
+    fi
     sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
-    echo "[deploy] Persistent maintenance remains active after failure; operator recovery is required" >&2
+    if [ "$maintenance_restored" = "1" ]; then
+      echo "[deploy] Persistent maintenance remains active after failure; operator recovery is required" >&2
+    else
+      echo "[deploy] ERROR: persistent maintenance could not be restored; services remain stopped and operator recovery is required" >&2
+    fi
   fi
   cleanup_environment_snapshot
   exit "$status"
@@ -433,6 +452,7 @@ echo ""
 # deployment verifies that frozen checkout before stopping services and thawing it.
 CURRENT_GIT_COMMIT="$(assert_clean_staging_checkout)"
 assert_installed_target_backup_gate "$CURRENT_GIT_COMMIT"
+MAINTENANCE_GATE_COMMIT="$CURRENT_GIT_COMMIT"
 CURRENT_SOURCE_OWNER="$(stat -c '%u' "$DEPLOY_DIR")"
 CURRENT_SOURCE_FROZEN=0
 if [ "$CURRENT_SOURCE_OWNER" = "0" ]; then
@@ -475,6 +495,7 @@ git --no-replace-objects checkout "$BRANCH"
 git --no-replace-objects pull --ff-only origin "$BRANCH"
 readonly TARGET_GIT_COMMIT="$(assert_clean_staging_checkout)"
 assert_installed_target_backup_gate "$TARGET_GIT_COMMIT"
+MAINTENANCE_GATE_COMMIT="$TARGET_GIT_COMMIT"
 assert_git_bound_build_inputs
 if [[ ! "$DEPLOY_RUN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
   || ! id -- "$DEPLOY_RUN_USER" >/dev/null 2>&1; then
@@ -781,21 +802,18 @@ sudo systemctl restart "$WEB_SERVICE"
 
 # 7. 健康检查
 echo "[7/7] Health check..."
-sleep 3
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/ready || echo "000")
-if [ "$HTTP_CODE" = "200" ]; then
+if bash "$DEPLOY_DIR/scripts/deploy-health-check.sh" "$HEALTH_URL" "200"; then
   echo "API /ready: OK"
 else
-  echo "API /ready: FAILED (HTTP $HTTP_CODE)"
+  echo "API /ready: FAILED"
   echo "Check logs: journalctl -u ss-erp-api -n 50"
   exit 1
 fi
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000 || echo "000")
-if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+if bash "$DEPLOY_DIR/scripts/deploy-health-check.sh" "$WEB_HEALTH_URL" "200,302"; then
   echo "Web: OK"
 else
-  echo "Web: FAILED (HTTP $HTTP_CODE)"
+  echo "Web: FAILED"
   echo "Check logs: journalctl -u ss-erp-web -n 50"
   exit 1
 fi

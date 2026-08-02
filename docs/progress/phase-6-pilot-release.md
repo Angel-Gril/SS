@@ -28,6 +28,22 @@ Progress: 0/3 tasks.
 
 ## Notes
 
+- The clean `e795e67de4df1a53bdb8738e8dd4158a6570d22d` replacement passed final QA-04,
+  regional `1.0.273` package/sign checks, both upgrade smokes, and fresh backup/restore gates. Its
+  first `.com` dark deployment reproduced the earlier fixed-delay startup race after all build,
+  migration, dark-config, systemd and process-cwd checks passed. Automatic rollback restored
+  healthy commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`; `.cn` was not deployed and no canary,
+  website receipt, flag, Provider, ERP ingest or Ozon mutation occurred. The failed
+  `e795e67`/`1.0.273` release evidence is immutable and cannot be retried.
+- Deployment health acceptance now has a non-configurable 30-attempt limit, one-second delay,
+  two-second per-request timeout, exact API HTTP `200`, and Web HTTP `200`/`302`. Release and
+  app-dir entrypoints preserve a bounded fallback for explicit targets that predate the helper;
+  rollback uses the same bound. In-place staging re-enters and verifies only its last successfully
+  validated persistent-maintenance gate after a health failure. Focused deployment, backup,
+  environment, package and full isolated Linux `12/12` behavior tests pass, including transport
+  refusal and HTTP-status recovery; independent review found no remaining P0/P1/P2 issue. A new
+  clean commit, full QA-04, version `1.0.274`, fresh backup/restore gates, both dark
+  deployments/canaries and both website receipts remain required before the `BINI` pilot resumes.
 - The first authorized `.com` `BINI` REL-02 sandbox preflight found a packaged extension pairing
   regression before any device claim or Provider dispatch. The first fix made the packaged runtime
   ID available to the deployment sender check; security review then found that the central message

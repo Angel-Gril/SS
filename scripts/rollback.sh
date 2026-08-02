@@ -71,6 +71,34 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 1
 fi
 
+health_check() {
+  local attempt=1
+  local max_attempts=30
+  local retry_delay_seconds=1
+  local http_code
+  while true; do
+    http_code=""
+    if http_code="$(curl --silent --show-error --max-time 2 \
+      --output /dev/null --write-out '%{http_code}' "$HEALTH_URL")"; then
+      if [ "$http_code" = "200" ]; then
+        printf '[rollback] Health check passed after %s attempt(s) (HTTP %s)\n' \
+          "$attempt" "$http_code"
+        return 0
+      fi
+    else
+      http_code=000
+    fi
+    printf '[rollback] Health check attempt %s returned HTTP %s\n' "$attempt" "$http_code" >&2
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      printf '[rollback] ERROR: health check failed after %s attempts\n' \
+        "$max_attempts" >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep "$retry_delay_seconds"
+  done
+}
+
 CURRENT_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
 echo "[rollback] Current: ${CURRENT_RELEASE##*/}"
 echo "[rollback] Target: $TARGET_COMMIT"
@@ -78,8 +106,7 @@ echo "[rollback] Target: $TARGET_COMMIT"
 ln -sfn "$TARGET_DIR" "$CURRENT_LINK"
 systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"
 
-sleep 3
-if ! curl -fsS "$HEALTH_URL" >/dev/null; then
+if ! health_check; then
   echo "[rollback] ERROR: health check failed after rollback" >&2
   if [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
     echo "[rollback] Restoring previous current symlink"

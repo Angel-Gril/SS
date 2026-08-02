@@ -239,6 +239,42 @@ readonly DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:?}"
 readonly DEPLOY_SYSTEMD_SNAPSHOT_ROOT="${DEPLOY_SYSTEMD_SNAPSHOT_ROOT:?}"
 readonly EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:?}"
 readonly TARBALL="$UPLOAD_DIR/archive.tar.gz"
+
+run_health_check() {
+  local helper="$1"
+  local health_url="$2"
+  local allowed_statuses="$3"
+  if [ -f "$helper" ]; then
+    bash "$helper" "$health_url" "$allowed_statuses"
+    return
+  fi
+  local attempt=1
+  local max_attempts=30
+  local retry_delay_seconds=1
+  local http_code
+  while true; do
+    http_code=""
+    if http_code="$(curl --silent --show-error --max-time 2 \
+      --output /dev/null --write-out '%{http_code}' "$health_url")"; then
+      case ",$allowed_statuses," in
+        *,"$http_code",*)
+          printf '[deploy-health] PASS after %s attempt(s) (HTTP %s)\n' "$attempt" "$http_code"
+          return 0
+          ;;
+      esac
+    else
+      http_code=000
+    fi
+    printf '[deploy-health] attempt %s returned HTTP %s\n' "$attempt" "$http_code" >&2
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      printf '[deploy-health] ERROR: health check failed after %s attempts\n' "$max_attempts" >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep "$retry_delay_seconds"
+  done
+}
+
 DEPLOY_ENV_SNAPSHOT_DIR=""
 DEPLOY_ENV_SNAPSHOT=""
 DEPLOY_BUILD_HOME=""
@@ -822,7 +858,7 @@ if ! verify_service_release_cwd "$API_SERVICE" "$CURRENT_LINK/apps/server" \
   exit 1
 fi
 echo "[deploy] Health check: $HEALTH_URL"
-if ! curl -fsS "$HEALTH_URL" >/dev/null; then
+if ! run_health_check "$RELEASE_DIR/scripts/deploy-health-check.sh" "$HEALTH_URL" "200"; then
   rollback || true
   exit 1
 fi

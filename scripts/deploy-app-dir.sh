@@ -177,6 +177,42 @@ TARBALL="$UPLOAD_DIR/archive.tar.gz"
 readonly DEPLOY_BASE APP_DIR BACKUP_DIR BACKUP_LOG_DIR ENV_FILE_NAME DEPLOY_RUN_USER \
   DEPLOY_BACKUP_GATE_ROOT DEPLOY_ENV_PROFILE KEEP_APP_BACKUPS API_SERVICE WEB_SERVICE \
   WORKER_SERVICE HEALTH_URL MIGRATION_TIMEOUT UPLOAD_DIR ARCHIVE_SHA256 TARBALL
+
+run_health_check() {
+  local helper="$1"
+  local health_url="$2"
+  local allowed_statuses="$3"
+  if [ -f "$helper" ]; then
+    bash "$helper" "$health_url" "$allowed_statuses"
+    return
+  fi
+  local attempt=1
+  local max_attempts=30
+  local retry_delay_seconds=1
+  local http_code
+  while true; do
+    http_code=""
+    if http_code="$(curl --silent --show-error --max-time 2 \
+      --output /dev/null --write-out '%{http_code}' "$health_url")"; then
+      case ",$allowed_statuses," in
+        *,"$http_code",*)
+          printf '[deploy-health] PASS after %s attempt(s) (HTTP %s)\n' "$attempt" "$http_code"
+          return 0
+          ;;
+      esac
+    else
+      http_code=000
+    fi
+    printf '[deploy-health] attempt %s returned HTTP %s\n' "$attempt" "$http_code" >&2
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      printf '[deploy-health] ERROR: health check failed after %s attempts\n' "$max_attempts" >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep "$retry_delay_seconds"
+  done
+}
+
 DEPLOY_ENV_SNAPSHOT_DIR=""
 DEPLOY_ENV_SNAPSHOT=""
 DEPLOY_BUILD_HOME=""
@@ -682,7 +718,7 @@ for service in "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; do
 done
 
 log "Health check: $HEALTH_URL"
-if ! curl -fsS "$HEALTH_URL" >/dev/null; then
+if ! run_health_check "$APP_DIR/scripts/deploy-health-check.sh" "$HEALTH_URL" "200"; then
   rollback
   exit 1
 fi

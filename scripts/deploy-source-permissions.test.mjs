@@ -50,7 +50,7 @@ test('release deployment atomically transitions systemd units before service ver
     restartLabelIndex,
   );
   const runtimeCheckIndex = deploy.indexOf('verify_service_release_cwd "$API_SERVICE"');
-  const healthIndex = deploy.indexOf('curl -fsS "$HEALTH_URL"');
+  const healthIndex = deploy.indexOf('deploy-health-check.sh" "$HEALTH_URL"');
   assert.ok(
     switchIndex >= 0 && installIndex > switchIndex
       && restartLabelIndex > installIndex && restartIndex > restartLabelIndex,
@@ -77,6 +77,148 @@ test('release deployment atomically transitions systemd units before service ver
   assert.match(installer, /WorkingDirectory does not target the current release/u);
   assert.match(installer, /does not use the shared release environment/u);
   assert.match(installer, /Install failed; restoring previous unit files/u);
+});
+
+test('all systemd deployment entrypoints use the bounded health retry contract', () => {
+  const helper = readFileSync(
+    join(process.cwd(), 'scripts', 'deploy-health-check.sh'),
+    'utf8',
+  );
+  assert.match(helper, /readonly MAX_ATTEMPTS=30/u);
+  assert.match(helper, /readonly RETRY_DELAY_SECONDS=1/u);
+  assert.match(helper, /curl --silent --show-error --max-time 2/u);
+  assert.match(helper, /--write-out '%\{http_code\}'/u);
+  assert.match(helper, /allowed_statuses="\$\{2:-200\}"/u);
+  assert.match(helper, /"\$attempt" -ge "\$MAX_ATTEMPTS"/u);
+  assert.doesNotMatch(helper, /MAX_ATTEMPTS="\$\{/u);
+
+  for (const scriptName of ['deploy.sh', 'deploy-app-dir.sh', 'deploy-staging.sh', 'rollback.sh']) {
+    const deploy = readFileSync(join(process.cwd(), 'scripts', scriptName), 'utf8');
+    if (scriptName === 'rollback.sh') {
+      assert.match(deploy, /local max_attempts=30/u);
+      assert.match(deploy, /local retry_delay_seconds=1/u);
+      assert.match(deploy, /curl --silent --show-error --max-time 2[\s\S]{0,120}--write-out '%\{http_code\}'/u);
+      assert.doesNotMatch(deploy, /sleep 3[\s\S]{0,800}curl -fsS "\$HEALTH_URL"/u);
+    } else {
+      assert.match(
+        deploy,
+        scriptName === 'deploy-staging.sh'
+          ? /deploy-health-check\.sh" "\$[A-Z_]+_URL"/u
+          : /run_health_check "\$[A-Z_]+\/scripts\/deploy-health-check\.sh" "\$HEALTH_URL" "200"/u,
+        `${scriptName} must use the bounded health retry helper`,
+      );
+      assert.doesNotMatch(
+        deploy,
+        /sleep 3[\s\S]{0,800}curl -fsS "\$HEALTH_URL"/u,
+        `${scriptName} must not retain the fixed-delay single health probe`,
+      );
+      if (scriptName !== 'deploy-staging.sh') {
+        assert.match(
+          deploy,
+          /if \[ -f "\$helper" \][\s\S]{0,500}max_attempts=30/u,
+          `${scriptName} must retain a fallback for pre-helper target releases`,
+        );
+      }
+    }
+  }
+  const staging = readFileSync(join(process.cwd(), 'scripts', 'deploy-staging.sh'), 'utf8');
+  assert.match(staging, /deploy-health-check\.sh" "\$HEALTH_URL" "200"/u);
+  assert.match(staging, /deploy-health-check\.sh" "\$WEB_HEALTH_URL" "200,302"/u);
+});
+
+test('staging re-enters persistent maintenance when post-leave health fails', () => {
+  const staging = readFileSync(join(process.cwd(), 'scripts', 'deploy-staging.sh'), 'utf8');
+  assert.match(staging, /MAINTENANCE_GATE_COMMIT=""/u);
+  assert.match(
+    staging,
+    /assert_installed_target_backup_gate "\$CURRENT_GIT_COMMIT"\r?\nMAINTENANCE_GATE_COMMIT="\$CURRENT_GIT_COMMIT"/u,
+  );
+  assert.match(
+    staging,
+    /assert_installed_target_backup_gate "\$TARGET_GIT_COMMIT"\r?\nMAINTENANCE_GATE_COMMIT="\$TARGET_GIT_COMMIT"/u,
+  );
+  assert.match(
+    staging,
+    /local maintenance_commit="\$MAINTENANCE_GATE_COMMIT"[\s\S]{0,700}deploy-maintenance-gate\.sh" \\\r?\n\s+enter[\s\S]{0,350}deploy-maintenance-gate\.sh" \\\r?\n\s+verify/u,
+  );
+  assert.match(staging, /persistent maintenance could not be restored/u);
+  assert.doesNotMatch(staging, /maintenance_commit="\$\{TARGET_GIT_COMMIT/u);
+});
+
+test('bounded deployment health retry succeeds on recovery and stops at its fixed limit', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join('/tmp', 'ss-erp-deploy-health-test-'));
+  const bin = join(root, 'bin');
+  const state = join(root, 'attempts');
+  const helper = join(process.cwd(), 'scripts', 'deploy-health-check.sh');
+  try {
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'curl'), [
+      '#!/bin/sh',
+      'attempts=0',
+      '[ ! -f "$TEST_HEALTH_STATE" ] || attempts="$(cat "$TEST_HEALTH_STATE")"',
+      'attempts=$((attempts + 1))',
+      'printf "%s\\n" "$attempts" > "$TEST_HEALTH_STATE"',
+      'if [ "$attempts" -le "${TEST_HEALTH_TRANSPORT_FAILURES:-0}" ]; then exit 7; fi',
+      'status="${TEST_HEALTH_STATUS_BEFORE:-503}"',
+      'if [ "$attempts" -ge "${TEST_HEALTH_SUCCESS_AT:-999}" ]; then status="${TEST_HEALTH_STATUS_AFTER:-200}"; fi',
+      'printf "%s" "$status"',
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const environment = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TEST_HEALTH_STATE: state,
+      TEST_HEALTH_SUCCESS_AT: '3',
+    };
+    let result = run('bash', [helper, 'http://127.0.0.1:3001/ready'], {
+      env: { ...environment, TEST_HEALTH_STATUS_AFTER: '200' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /PASS after 3 attempt\(s\) \(HTTP 200\)/u);
+    assert.equal(readFileSync(state, 'utf8'), '3\n');
+
+    rmSync(state);
+    result = run('bash', [helper, 'http://127.0.0.1:3001/ready'], {
+      env: {
+        ...environment,
+        TEST_HEALTH_SUCCESS_AT: '1',
+        TEST_HEALTH_STATUS_AFTER: '200',
+        TEST_HEALTH_TRANSPORT_FAILURES: '2',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /attempt 1 returned HTTP 000/u);
+    assert.match(result.stdout, /PASS after 3 attempt\(s\) \(HTTP 200\)/u);
+    assert.equal(readFileSync(state, 'utf8'), '3\n');
+
+    rmSync(state);
+    result = run('bash', [helper, 'http://127.0.0.1:3001/ready'], {
+      env: { ...environment, TEST_HEALTH_SUCCESS_AT: '31', TEST_HEALTH_STATUS_AFTER: '200' },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /failed after 30 attempts/u);
+    assert.equal(readFileSync(state, 'utf8'), '30\n');
+
+    rmSync(state);
+    result = run('bash', [helper, 'http://127.0.0.1:3001/ready'], {
+      env: { ...environment, TEST_HEALTH_SUCCESS_AT: '1', TEST_HEALTH_STATUS_AFTER: '204' },
+    });
+    assert.notEqual(result.status, 0, 'API readiness must reject HTTP 204');
+    assert.equal(readFileSync(state, 'utf8'), '30\n');
+
+    rmSync(state);
+    result = run('bash', [helper, 'http://127.0.0.1:3000', '200,302'], {
+      env: { ...environment, TEST_HEALTH_SUCCESS_AT: '1', TEST_HEALTH_STATUS_AFTER: '302' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /HTTP 302/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('release extraction discards local archive ownership before installing the trusted gate', () => {

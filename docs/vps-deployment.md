@@ -292,8 +292,18 @@ service restart, it validates the release templates with `systemd-analyze`, snap
 unit files under `/var/lib/ss-erp-deploy-systemd-snapshots/<target-commit>`, installs them atomically,
 reloads systemd, and checks the effective `FragmentPath`, `WorkingDirectory`, `EnvironmentFiles`,
 and `ExecStart`. After restart it also verifies every main process cwd resolves into the target
-release before accepting `/ready`. A failed install, restart, process check, or health check restores
-the previous unit snapshot; the first release does not depend on a nonexistent previous symlink.
+release before accepting `/ready`. Health acceptance is bounded to 30 attempts with a fixed
+one-second delay and two-second request timeout. API readiness accepts only HTTP `200`; the
+in-place Web check accepts only HTTP `200` or `302`. The retry count cannot be expanded through an
+environment variable. A failed install, restart, process check, or health check restores the
+previous unit snapshot; the first release does not depend on a nonexistent previous symlink.
+
+The release and app-dir deployers keep the same bounded status check inline as a compatibility
+fallback when an explicitly selected historical target predates `scripts/deploy-health-check.sh`.
+The in-place staging deployer instead runs the helper from the just-verified target checkout. If a
+post-restart health check fails after staging leaves maintenance, its EXIT path re-enters and
+verifies only the last root-owned, content-verified maintenance gate, stops all three services, and
+requires operator recovery. It never executes a newly fetched but rejected target gate as root.
 
 Use the installer directly only for an audited manual recovery, with a new root-only snapshot path:
 

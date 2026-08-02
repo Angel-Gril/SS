@@ -44,6 +44,27 @@ Overall: 34/37 tasks complete (92%).
 
 ## Current Status
 
+Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
+`e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
+package/sign verification, both same-path upgrade smokes, and fresh commit/database/restore-bound
+backup gates. The first `.com` dark deployment then reproduced the previously observed startup
+race: all build, migration, dark-config, symlink, systemd and process-cwd checks passed, but the
+single `/ready` probe ran before the API listener was ready. Automatic rollback restored commit
+`2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`; API, Web and Worker are active and readiness is
+healthy. `.cn` was not deployed, no canary or website receipt ran, and no flag, Provider, ERP ingest
+or Ozon mutation occurred. The failed `e795e67`/`1.0.273` artifacts remain immutable evidence and
+must not be retried as a release.
+
+The deployment regression now uses a fixed 30-attempt, one-second retry contract with a two-second
+per-probe timeout, exact API HTTP `200`, and Web HTTP `200`/`302`. Explicit old-commit deploy and
+rollback paths retain an in-runner fallback when the target tree predates the helper. In-place
+staging re-enters and verifies its last trusted persistent-maintenance gate after any post-leave
+health failure; it never executes an unverified target gate as root. Focused deployment, backup,
+environment, package and full Linux `12/12` behavior tests pass, including connection refusal,
+HTTP-status rejection, bounded exhaustion and recovery. Independent review found no remaining
+P0/P1/P2 issue. A new clean commit, full QA-04 run, version `1.0.274` chain and fresh dual-region
+rollout evidence are still required. Phase 6 remains `0/3` and overall progress remains `34/37`.
+
 Current checkpoint (2026-08-02): the authorized `.com` `BINI` REL-02 sandbox preflight stopped
 before device claim or any Provider request. The staged `1.0.272` package loaded successfully in an
 isolated Chromium profile, but its extension-origin settings page was rejected by the packaged
