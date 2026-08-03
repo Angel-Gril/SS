@@ -85,15 +85,33 @@ session files were removed after all five unique tokens were confirmed inactive;
 SHA-256 is `374fb7ea88041118c5ef20177a82851ebeb87292fbbb634cc16dc5cf339effda`.
 
 `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`, and overall progress remains `36/37`.
-Only `REL-02` is open. Three of the current four authorized Provider POSTs were consumed before this
-release; POST 4 remains unsent and reserved for formal generation. Because b6 and policy revision 5
-intentionally invalidate the earlier capability evidence, resume requires a user-reloaded
-session-only Key and explicit authorization to raise the bound from four to five POSTs: POST 4 for
-one post-upgrade capability probe and POST 5 for one formal generation, still under total CNY 1.00
-and with no automatic retry. A successful generation alone cannot close `REL-02`; positive BYOK
-ingest, independent kill-switch checks, one-shop publish, audit/receipt visibility, post-enable
-canary, reconciliation, and rollback still require separate authorization. Ingest, publish, and
-Ozon writes are not currently authorized.
+Only `REL-02` is open. POST 4 completed one post-upgrade `TEXT_TO_IMAGE` capability probe with
+exactly one Provider POST, HTTP `200`, no retry, and policy revision `735123817`; its pre-call and
+result receipt SHA-256 values are `c0522f21155edfc3b55052447e8a057edcd09c155220029ff93f8b7e179424c3`
+and `d59fbd4b3ba5abc541dc49beb872b52ea59cb17d65a0514bd432df52bbf62b2b`.
+
+The first formal-generation UI attempt then failed definitively before Provider dispatch. The
+workbench page and installed files were b6, but Chromium still ran the pre-b6 imported batch runtime
+from its extension service-worker registration, which rejected the canonical Unicode SKU slot.
+CDP observed zero target Provider POSTs for the complete window; batch revision remained `0`, and
+the session had zero uncertain probes and zero Provider dispatch rows. The immutable failure receipt
+SHA-256 is `5c6a549522db2310b601affd67e6900f337346fcf7151efc492c4832169089b6`.
+POST 5 therefore remains unsent.
+
+A controlled extension reload and isolated-Chromium recovery now load the current b6 worker; the
+same Unicode slot contract passes in the live worker. The new side-effect-free live-worker Unicode
+regression smoke binds the installed manifest version and exact slot echo; its receipt SHA-256 is
+`77d6bdcfd0a90de78cc66399c43200822bbb957b98412f5d3a103e5061fcfae1`. The explicit operator CLI
+and its eight offline regressions detect this pre-b6 handler behavior. This is current runtime
+behavior evidence, not generic build provenance or proof that an upgrade occurred; the signed
+package, installed-file hash map, and upgrade receipt retain those separate roles. Reload correctly
+cleared the session-only Key and capability evidence. Resume therefore requires the Key to be loaded
+again and explicit approval to raise the Provider POST ceiling from five to six: POST 5 is one
+post-reload capability probe and POST 6 is one formal generation, with total CNY 1.00 unchanged and
+no automatic retry. A successful generation alone cannot close `REL-02`; positive BYOK ingest,
+independent kill-switch checks, one-shop publish, audit/receipt visibility, post-enable canary,
+reconciliation, and rollback still require separate authorization. Ingest, publish, and Ozon writes
+are not currently authorized.
 
 Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
 `e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
@@ -1117,11 +1135,13 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 7. Keep all earlier release candidates, signatures, failed deployment receipts and consumed Provider
    operations immutable as historical evidence. Continue `REL-02` only from deployed commit
    `b6f421211fdc14686ccb5188badf3985cb16930b`, managed extension `1.0.278`, and composite policy
-   revision `735123817`. First reload the session-only Provider Key. Then obtain explicit approval to
-   raise the Provider POST ceiling from four to five: POST 4 is one post-upgrade capability probe and
-   POST 5 is one formal generation, with total CNY 1.00 unchanged and no retry. After human review,
-   obtain separate authorization before any positive BYOK ingest, one-shop Ozon publish, post-enable
-   canary, reconciliation, or rollback exercise. Keep generation, ingest, and publish independently
+   revision `735123817`. Keep successful POST 4 and the zero-POST Unicode-slot pre-dispatch failure
+   immutable. The recovered live worker now accepts the b6 contract, but extension reload cleared its
+   session authority. Reload the session-only Provider Key, then obtain explicit approval to raise
+   the Provider POST ceiling from five to six: POST 5 is one post-reload capability probe and POST 6
+   is one formal generation, with total CNY 1.00 unchanged and no retry. After human review, obtain
+   separate authorization before any positive BYOK ingest, one-shop Ozon publish, post-enable canary,
+   reconciliation, or rollback exercise. Keep generation, ingest, and publish independently
    switchable, retain audit/receipt evidence, and restore all scoped rollout policy to off after the
    bounded pilot.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use

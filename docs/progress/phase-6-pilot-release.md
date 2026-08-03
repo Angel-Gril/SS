@@ -64,15 +64,28 @@ Progress: 2/3 tasks.
   `b7cf09e0c34dfc5e6eed6768e8ffd252d840c2d759d8a9aa1619848aab9793b5`. Eight raw short-lived
   session files were removed after five unique tokens were confirmed inactive; cleanup receipt
   SHA-256 is `374fb7ea88041118c5ef20177a82851ebeb87292fbbb634cc16dc5cf339effda`.
-- Three of the current four authorized Provider POSTs were consumed before b6; POST 4 remains unsent
-  and reserved for formal generation. Because b6 and policy revision 5 invalidate the earlier
-  capability evidence, the next external step requires a user-reloaded session Key and explicit
-  approval to raise the ceiling from four to five POSTs: POST 4 for one post-upgrade capability probe
-  and POST 5 for one formal generation, with total CNY 1.00 unchanged and no retry. These release,
-  distribution, restore and upgrade actions sent no Provider request, ERP ingest, publish intent or
-  Ozon mutation. Formal generation alone does not complete `REL-02`; ingest, independent kill-switch
-  checks, one-shop publish, audit/receipts, post-enable canary, reconciliation and rollback remain
-  separately unauthorized.
+- POST 4 completed one post-upgrade `TEXT_TO_IMAGE` capability probe with exactly one Provider POST,
+  HTTP `200`, no retry, and policy revision `735123817`. Its pre-call and result receipt SHA-256
+  values are `c0522f21155edfc3b55052447e8a057edcd09c155220029ff93f8b7e179424c3` and
+  `d59fbd4b3ba5abc541dc49beb872b52ea59cb17d65a0514bd432df52bbf62b2b`.
+- The first formal-generation UI attempt failed definitively before Provider dispatch: Chromium's
+  extension service worker still ran the pre-b6 imported batch runtime and rejected the canonical
+  Unicode SKU slot. The complete CDP window observed zero target Provider POSTs, batch revision `0`,
+  zero uncertain probes and zero Provider dispatch rows. The immutable failure receipt SHA-256 is
+  `5c6a549522db2310b601affd67e6900f337346fcf7151efc492c4832169089b6`; POST 5 remains unsent.
+- A controlled extension reload now loads the current b6 worker, and the same Unicode slot contract
+  passes in that live worker. A new side-effect-free live-worker Unicode regression smoke binds the
+  installed manifest version and exact slot echo; receipt SHA-256 is
+  `77d6bdcfd0a90de78cc66399c43200822bbb957b98412f5d3a103e5061fcfae1`. Its explicit operator CLI
+  and eight offline regressions detect this pre-b6 handler behavior. This is current runtime
+  behavior evidence, not generic build provenance or proof that an upgrade occurred; the signed
+  package, installed-file hash map, and upgrade receipt remain separate evidence. Reload correctly
+  cleared the session-only Key and capability evidence. Resume requires the Key to be loaded again
+  and explicit approval to raise the ceiling from five to six POSTs: POST 5 is one post-reload
+  capability probe and POST 6 is one formal generation, with total CNY 1.00 unchanged and no retry.
+  Formal generation alone does not complete `REL-02`; ingest, independent kill-switch checks,
+  one-shop publish, audit/receipts, post-enable canary, reconciliation and rollback remain separately
+  unauthorized.
 
 - The clean `e795e67de4df1a53bdb8738e8dd4158a6570d22d` replacement passed final QA-04,
   regional `1.0.273` package/sign checks, both upgrade smokes, and fresh backup/restore gates. Its
