@@ -44,58 +44,56 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-03): the recovered `.com` BINI sandbox pilot loaded the session-only
-Provider Key, restored the exact origin permission, and completed the separately authorized
-replacement `TEXT_TO_IMAGE` capability probe. The extension sent exactly one Provider POST without
-retry, received one HTTP 200 `b64_json` result, and retained evidence bound to composite policy
-revision `271223250`. The formal product generation has not been sent, so one authorized Provider
-POST remains. Hosted generation, BYOK ingest/publish, and Ozon writes remain disabled.
-
-The real 1688 source bootstrap created the BINI workflow and exact selected SKU, then exposed a
-server mode-lock defect before Provider dispatch. The immutable capture keeps its fullwidth source
-SKU key while workflow mutation intentionally persists the NFKC canonical key; hosted authority
-compared those values byte-for-byte and returned no context. Authority now uses the existing
-collision-aware capture alias map for both captured SKU identity and media ownership, returns only
-canonical keys, rejects ambiguous/unknown aliases, and no longer treats an unbound `role=sku` image
-as product-level media. Regression coverage passes `40/40`, the related authority/mode-lock/context
-matrix passes `96/96`, Server typecheck passes, Server lint has no errors, and the complete Server
-suite passes `4767` tests with `199` skips. Independent review found no blocking issue.
-
-The scoped `.com` generation and source-workbench controls remain enabled only for the exact BINI
-owner/shop/device and `https://ai.big-model-api.top` `TEXT_TO_IMAGE` origin while the clean patch
-release is prepared. No generation, ERP media ingest, publish intent, or Ozon mutation occurred.
-`REL-02` remains open at `36/37`; the next gate is a clean commit/QA-04 patch release followed by a
-deployment strategy that does not silently bypass the rollout verifier or invalidate capability
-evidence without a separately authorized replacement probe.
-
-Current checkpoint (2026-08-03): replacement release commit
-`87e5e2791ac33ea42ffc95abd7def39c71b8c3cd` is now dark-deployed and distributed in both regions.
-The clean final QA-04 command passed all nine gates in `781.4s`; canonical acceptance SHA-256 is
-`14ef3c13...7b29e`. Regional version `1.0.276` candidates passed signature verification and real
-same-path `1.0.275 -> 1.0.276` persistent-Chromium upgrade smokes while clearing session-only state.
+Current checkpoint (2026-08-03): final release commit
+`b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate QA-04 command in
+`774.4s`; canonical acceptance SHA-256 is
+`5a97e22583cfe200a7204b747a92259c6e0a951bed2cfafa193832e6c9fe7219`. Both origin-bound
+version `1.0.278` candidates passed detached-signature verification and persistent-Chromium
+same-path upgrade smokes while preserving non-secret profile state and clearing session-only state.
 
 Both `.com` and `.cn` deployments used fresh target/database/restore-bound backup attestations,
 completed migration and post-migration guards, and passed the complete topology-correct runtime/VPS
-verifiers. All API/Web/Worker processes run the exact target commit, readiness is healthy, and every
-AI Media, Extension BYOK and Ozon publisher flag remains off. Pre-enable canaries passed `7/7` and
-cleaned up their temporary device and account sessions; receipt SHA-256 values are
-`891b9a2b...ac2b0` for `.com` and `542141c4...34da1` for `.cn`. Signed first-party website
-distribution then passed exact latest/cloud/local GET and offline verification in both regions;
-publication receipt SHA-256 values are `b65a32a6...ad87b0` and `1db0b300...55c45f` respectively.
-No canary or publication probe sent a Provider request, ERP media ingest or Ozon mutation.
+verifiers. Backup attestation SHA-256 values are
+`153a04c6b367e7df02b912aa5ead697916266bb933eaf2e00e85ae98dd4a6f8b` for `.com` and
+`9d22a45681889682ad58c9aba734900c34744bde2307b4c5391c49bc6e396168` for `.cn`; VPS verifier
+SHA-256 values are `42f9e2c6878675978945921bfd61605f888253a3269597b173fe6e9855dab41a` and
+`482d85b155e001b4db69b8e062bad2b19c3e0112018cded106191f3f9a84174a`. Pre-enable canaries passed
+`7/7` in each region with SHA-256 values
+`61b94f977dcd390af0be6eba6b18b7862236b2071c67df3c20d2ff5633810991` and
+`64503e2f8208834d6179f4d8f14c74a512c2225366ba6156a081d12febd53ead`. Signed first-party website
+distribution and offline verification passed with publication receipt SHA-256 values
+`77e0cc2d4100ed8fbb73c40ee386aff3d910baa94e5fb621cd999306ae07a218` and
+`5f98a25109b5aa317865159e66082de33fc59cde00243daa47ffcc6c9d394ba9`; public DNS quorum evidence
+SHA-256 is `284aa1b923bad43f455661353e7bff297fe8c493806d012b7116ff01addb5871`. These actions sent no
+Provider request, ERP media ingest, publish intent, or Ozon mutation.
 
-`REL-03` and `REL-04` are therefore restored to complete, Phase 6 is `2/3`, and overall progress is
-`36/37`. Only `REL-02` remains. The isolated BINI pilot browser session ended at
-`2026-08-02T15:50:46Z`; because Provider Key and capability evidence are intentionally
-`chrome.storage.session`-only, both were cleared. Capability probe POST 1 remains consumed and no
-generation was sent. Same-path recovery is now complete: the managed package is `1.0.276`, the
-extension ID remains `nkkemglcckgmhmcfnjjmcfbdhciafahl`, strict verification passed `451/451`, and
-the pre/post-move file-hash maps are identical while the old package remains retained as a backup.
-The same profile recovered its scoped BINI device credential, and the Provider profile was narrowed
-to `TEXT_TO_IMAGE` only. Resume now requires a user-reloaded Key and explicit authorization for one
-replacement capability probe plus the still-pending generation; the existing two-POST authorization
-cannot silently expand to three. Ingest, publish and Ozon remain outside the current sandbox
-authorization.
+After dark deployment, `.com` atomically restored the exact BINI owner/shop/device pilot and
+`https://ai.big-model-api.top` `TEXT_TO_IMAGE` scope. All six changed rows advanced from revision
+`8` to `9`; the BYOK admin policy advanced to internal revision `5`, and the source policy now binds
+the full b6 commit. A fresh read-only database snapshot, the repository composition formula, and the
+official rollout verifier independently confirm composite policy revision `735123817`. Hosted
+generation, BYOK ingest, and BYOK publish remain `false@0`; `.cn` remains dark. The restore receipt
+SHA-256 is `ecf029cd81c883bbeeaed48690f5e1bf43fca422c11b7e55455d756adfae86b0`; the post-restore
+read-only audit SHA-256 is `baeaadb0c2b474adf17c4dfe87b3a9bd7ce718c88fe3013d2dd055b37a79504f`.
+
+The dedicated BINI browser then upgraded on the same managed path from `1.0.276` to `1.0.278` under
+unchanged extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Its 189 installed files exactly match
+the verified candidate hash map, the non-secret origin/model profile remains, and the Provider Key
+and old capability evidence were cleared as designed. Upgrade receipt SHA-256 is
+`b7cf09e0c34dfc5e6eed6768e8ffd252d840c2d759d8a9aa1619848aab9793b5`. Eight raw short-lived
+session files were removed after all five unique tokens were confirmed inactive; cleanup receipt
+SHA-256 is `374fb7ea88041118c5ef20177a82851ebeb87292fbbb634cc16dc5cf339effda`.
+
+`REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`, and overall progress remains `36/37`.
+Only `REL-02` is open. Three of the current four authorized Provider POSTs were consumed before this
+release; POST 4 remains unsent and reserved for formal generation. Because b6 and policy revision 5
+intentionally invalidate the earlier capability evidence, resume requires a user-reloaded
+session-only Key and explicit authorization to raise the bound from four to five POSTs: POST 4 for
+one post-upgrade capability probe and POST 5 for one formal generation, still under total CNY 1.00
+and with no automatic retry. A successful generation alone cannot close `REL-02`; positive BYOK
+ingest, independent kill-switch checks, one-shop publish, audit/receipt visibility, post-enable
+canary, reconciliation, and rollback still require separate authorization. Ingest, publish, and
+Ozon writes are not currently authorized.
 
 Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
 `e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
@@ -1116,15 +1114,16 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep commit `2fa91856b1c09531865c1a9b8af7a0a82d27cf4f`, both region-specific version
-   `1.0.272` candidates, signatures, canary summaries and website distribution receipts immutable as
-   historical evidence, but do not use that package for a pilot. From the clean pairing-fix commit,
-   rerun QA-04, build and sign origin-bound `1.0.273` candidates, repeat both same-path upgrade
-   smokes, dark deployments/canaries and first-party website receipts, then restore `REL-03` and
-   `REL-04` completion. Only afterward resume the separately authorized `.com` `BINI` REL-02
-   sandbox pilot. The pilot must use the existing independent generation, ingest and publish kill
-   switches, retain audit/receipt/reconciliation evidence, run post-enable canaries, and restore all
-   scoped rollout policy to off after the bounded pilot.
+7. Keep all earlier release candidates, signatures, failed deployment receipts and consumed Provider
+   operations immutable as historical evidence. Continue `REL-02` only from deployed commit
+   `b6f421211fdc14686ccb5188badf3985cb16930b`, managed extension `1.0.278`, and composite policy
+   revision `735123817`. First reload the session-only Provider Key. Then obtain explicit approval to
+   raise the Provider POST ceiling from four to five: POST 4 is one post-upgrade capability probe and
+   POST 5 is one formal generation, with total CNY 1.00 unchanged and no retry. After human review,
+   obtain separate authorization before any positive BYOK ingest, one-shop Ozon publish, post-enable
+   canary, reconciliation, or rollback exercise. Keep generation, ingest, and publish independently
+   switchable, retain audit/receipt evidence, and restore all scoped rollout policy to off after the
+   bounded pilot.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
