@@ -6,8 +6,10 @@ import vm from 'node:vm';
 
 const extensionRoot = 'extensions/ss-erp';
 const policyPath = `${extensionRoot}/shared/message-security/runtime-message-policy.js`;
+const deviceSessionPath = `${extensionRoot}/shared/erp-adapter/source-workflow-device-session.js`;
 const threatModelPath = 'docs/security/source-listing-extension-threat-model.md';
 const policySource = fs.readFileSync(policyPath, 'utf8');
+const deviceSessionSource = fs.readFileSync(deviceSessionPath, 'utf8');
 const manifest = JSON.parse(fs.readFileSync(`${extensionRoot}/manifest.json`, 'utf8'));
 
 function loadPolicy() {
@@ -15,6 +17,24 @@ function loadPolicy() {
   context.globalThis = context;
   vm.runInNewContext(policySource, context, { filename: policyPath });
   return context.SS_ERP_RUNTIME_MESSAGE_POLICY;
+}
+
+function loadDeviceSessionTransport() {
+  const context = {
+    AbortController,
+    ArrayBuffer,
+    Blob,
+    FormData,
+    TextDecoder,
+    TextEncoder,
+    URL,
+    Uint8Array,
+    clearTimeout,
+    setTimeout,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(deviceSessionSource, context, { filename: deviceSessionPath });
+  return context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION;
 }
 
 function runtimeSender(url, extensionId) {
@@ -291,4 +311,73 @@ test('the threat model documents trust zones, fail-closed commands, replay, and 
   ]) {
     assert.match(source, new RegExp(required, 'i'), `threat model must cover ${required}`);
   }
+});
+
+test('device transport admits canonical batch status-v2 and preserves source GET queries', async () => {
+  const api = loadDeviceSessionTransport();
+  const requests = [];
+  const transport = api.createTransport({
+    credentials: {
+      async beginOperation() {
+        return {
+          state: 'paired',
+          epoch: 0,
+          baseUrl: 'https://api.ss-erp.example',
+          deploymentId: 'deployment-1',
+          deviceId: 'device-1',
+          ownerUserId: 'owner-1',
+          sessionId: 'session-1',
+          scopes: ['listing:review', 'byok:media:ingest'],
+          expiresAt: '2030-01-01T00:00:00.000Z',
+          accessToken: 'fixture-access-token',
+        };
+      },
+      async isOperationCurrent() { return true; },
+      async clearIfCurrent() { return true; },
+    },
+    async fetchImpl(url, init) {
+      requests.push({ url, init });
+      const body = JSON.stringify({ code: 1, data: {} });
+      return {
+        status: 200,
+        ok: true,
+        headers: { get() { return null; } },
+        body: null,
+        async text() { return body; },
+      };
+    },
+  });
+  const statusV2Query = '?contractVersion=extension-byok-execution-batch-status%2Fv2';
+  const allowed = [
+    '/api/extension-device/byok-media/execution-batches/batch-1',
+    `/api/extension-device/byok-media/execution-batches/batch-1${statusV2Query}`,
+    `/api/extension-device/byok-media/execution-batches/by-idempotency/reservation-1${statusV2Query}`,
+    '/api/extension-device/source-workbench/status?snapshotId=snapshot-1&supplyGoodsId=goods-1',
+  ];
+  for (const requestPath of allowed) {
+    await transport.get(requestPath, { requiredScope: 'byok:media:ingest' });
+  }
+  assert.deepEqual(
+    requests.map(({ url }) => url),
+    allowed.map((requestPath) => `https://api.ss-erp.example${requestPath}`),
+  );
+
+  const rejected = [
+    '/api/extension-device/byok-media/execution-batches/batch-1?contractVersion=extension-byok-execution-batch-status%2Fv1',
+    `/api/extension-device/byok-media/execution-batches/batch-1${statusV2Query}&contractVersion=extension-byok-execution-batch-status%2Fv2`,
+    '/api/extension-device/byok-media/execution-batches/batch-1?unknown=1',
+    '/api/extension-device/byok-media/execution-batches/batch-1?contractVersion=extension-byok-execution-batch-status%2fv2',
+    '/api/extension-device/byok-media/execution-batches/batch-1?contractVersion=extension-byok-execution-batch-status/v2',
+    `/api/extension-device/byok-media/execution-batches/batch-1${statusV2Query}#fragment`,
+    '/api/extension-device/byok-media/execution-batches/batch-1?',
+    '/api/extension-device/source-workbench/status?snapshotId=snapshot-1#fragment',
+    '/api/extension-device/source-workbench/status?',
+  ];
+  for (const requestPath of rejected) {
+    await assert.rejects(
+      transport.get(requestPath, { requiredScope: 'byok:media:ingest' }),
+      /source workbench path is invalid/u,
+    );
+  }
+  assert.equal(requests.length, allowed.length);
 });

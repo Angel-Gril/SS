@@ -26,6 +26,8 @@
     '/api/extension-device/byok-media/workbench-batch-launch';
   var BYOK_EXECUTION_INTENT_PATH = '/api/extension-device/byok-media/execution-intents';
   var BYOK_EXECUTION_BATCH_PATH = '/api/extension-device/byok-media/execution-batches';
+  var BYOK_EXECUTION_BATCH_STATUS_V2_QUERY =
+    '?contractVersion=extension-byok-execution-batch-status%2Fv2';
   var BYOK_PUBLISH_PREVIEW_PATH = '/api/extension-device/byok-publish/preview';
   var BYOK_PUBLISH_PREPARE_PATH = '/api/extension-device/byok-publish/prepare';
   var BYOK_PUBLISH_STATUS_PATH = '/api/extension-device/byok-publish/status';
@@ -167,15 +169,22 @@
         || byokExecutionIntentOutcomePath(candidate)
         || byokExecutionBatchMutationPath(candidate);
     }
-    var allowed = method === 'GET' ? allowedGetPath(path) : allowedPostPath(path);
-    if (!allowed) {
+    var parsed;
+    try { parsed = new URL(path, 'https://ss-erp.invalid'); } catch {
       throw new TypeError('source workbench path is invalid');
     }
-    var parsed = new URL(path, 'https://ss-erp.invalid');
+    var allowedPath = method === 'GET'
+      ? allowedGetPath(parsed.pathname) : allowedPostPath(parsed.pathname);
+    var executionBatchRead = method === 'GET'
+      && byokExecutionBatchReadPath(parsed.pathname);
+    var allowedQuery = method === 'GET'
+      ? (!executionBatchRead || parsed.search === ''
+        || parsed.search === BYOK_EXECUTION_BATCH_STATUS_V2_QUERY)
+      : parsed.search === '';
     if (parsed.origin !== 'https://ss-erp.invalid'
-      || (method === 'GET'
-        ? !allowedGetPath(parsed.pathname)
-        : !allowedPostPath(parsed.pathname) || parsed.search)) {
+      || path !== parsed.pathname + parsed.search
+      || !allowedPath
+      || !allowedQuery) {
       throw new TypeError('source workbench path is invalid');
     }
     return parsed.pathname + parsed.search;
