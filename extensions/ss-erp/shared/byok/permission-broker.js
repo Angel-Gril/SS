@@ -370,9 +370,15 @@
       return next;
     }
 
-    function invalidateConsent(origin, reason) {
-      if (typeof onConsentRevoked === 'function') {
-        onConsentRevoked({ origin: origin, reason: reason });
+    async function invalidateConsent(origin, reason) {
+      if (typeof onConsentRevoked !== 'function') return;
+      try {
+        await onConsentRevoked({ origin: origin, reason: reason });
+      } catch (_error) {
+        throw permissionError(
+          'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+          'Generated results could not be invalidated',
+        );
       }
     }
 
@@ -579,7 +585,7 @@
       var consentRemoved = await enqueueConsentOperation(async function () {
         var state = await readConsentState();
         var removed = state.consents[origin] === true;
-        if (removed) invalidateConsent(origin, 'consent_revoked');
+        if (removed) await invalidateConsent(origin, 'consent_revoked');
         delete state.consents[origin];
         state.epoch = nextConsentEpoch(state.epoch);
         await writeConsentState(state);
@@ -606,7 +612,9 @@
       assertBackgroundAuthority();
       return enqueueConsentOperation(async function () {
         var state = await readConsentState();
-        if (Object.keys(state.consents).length) invalidateConsent(null, 'session_consent_cleared');
+        if (Object.keys(state.consents).length) {
+          await invalidateConsent(null, 'session_consent_cleared');
+        }
         state.epoch = nextConsentEpoch(state.epoch);
         await sessionStorage.set({ [SESSION_CONSENT_EPOCH_STORAGE_KEY]: state.epoch });
         await sessionStorage.remove([SESSION_CONSENT_STORAGE_KEY]);

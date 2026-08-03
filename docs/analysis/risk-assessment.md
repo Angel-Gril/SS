@@ -120,6 +120,30 @@ A timeout after Provider POST is `UNKNOWN`, not `FAILED`. Automatic retry is all
 when the Provider supports a stable idempotency key or request lookup. Pause acts after the
 current request. Cancel is best effort and must not claim remote cancellation without proof.
 
+### MV3 worker restart and local candidate loss
+
+**Risk:** a Provider request succeeds and may be charged, but the MV3 worker terminates before
+review and loses a memory-only Blob. A page heartbeat cannot guarantee survival because Chrome may
+freeze or discard the page.
+
+**Controls:**
+
+- fixed public PING/ACK heartbeat is mitigation only and carries no secret or payload;
+- stage the verified candidate before reporting the execution intent `SUCCEEDED`;
+- persist only AES-256-GCM ciphertext with a random 256-bit `chrome.storage.session` key;
+- enforce 16 entries, a 50 MiB retained-media budget, 20 MiB/result, and a hard ten-minute TTL
+  without `unlimitedStorage`;
+- authenticated status v2 exposes only the result SHA-256 addition for `SUCCEEDED` intents;
+- require exact intent, idempotency/request/result hashes, binding, and current lifecycle authority;
+- restore only a review-only coordinator with zero Provider-capable commands;
+- serialize Provider-consent and credential invalidation with result staging, drain recovery and
+  preview reads under one Registry cleanup fence, rotate the escrow key inside that fence, and
+  reject queued Provider handoff while the fence is closed;
+- browser-session/key loss, expiry, tamper, quota, missing proof, or mismatch fails closed and never
+  authorizes retry;
+- durably delete escrow, including fresh-worker deletion by execution-intent identity, before
+  returning reject or terminal batch cleanup.
+
 ### Stale draft/media binding
 
 Every ingest and publish action binds owner, shop, listing draft ID, revision, draft version,
@@ -203,6 +227,12 @@ The feature cannot leave dark/pilot state until all gates pass:
     production rollout.
 12. Privacy disclosure states that selected prompts and images are sent to the user's chosen
     Provider.
+13. Ciphertext tests cover AES-GCM authentication, ciphertext-only IndexedDB rows, TTL, entry/media
+    byte limits, quota failure, tamper, key loss/rotation, binding mismatch, and durable deletion.
+14. Worker-A/worker-B restart fixtures prove pre-report staging, authenticated status-v2 hash
+    binding, review-only preview/keep/reject/ingest recovery, and zero Provider redispatch.
+15. A signed-package Chrome smoke force-terminates the MV3 worker after a fixture success and before
+    preview, then restores review-only without a real Provider POST.
 
 ## Phase 1 Open Decision
 

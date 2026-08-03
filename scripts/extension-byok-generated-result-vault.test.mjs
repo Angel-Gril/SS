@@ -79,6 +79,53 @@ assert.equal(JSON.stringify(stored).includes('providerRequestIdSha256'), false);
 assert.equal(vault.size(), 1);
 assert.equal(vault.totalBytes(), bytes.byteLength);
 
+const escrowResultId = `br_${'e'.repeat(48)}`;
+const escrowed = vault.put(result({
+  executionIntentId: 'intent-escrow-1',
+  idempotencyKey: 'provider-generate-escrow-0001',
+  requestHash: 'e'.repeat(64),
+  escrowResultId,
+}), binding(), authority());
+assert.equal(escrowed.resultId, escrowResultId,
+  'the memory vault must retain the durable escrow identity across worker restart');
+assert.equal(vault.getForBackground(escrowResultId).resultId, escrowResultId);
+assert.throws(() => vault.put(result({
+  executionIntentId: 'intent-escrow-collision-1',
+  idempotencyKey: 'provider-generate-escrow-collision-0001',
+  requestHash: 'f'.repeat(64),
+  escrowResultId,
+}), binding(), authority()), /RESULT_ID_COLLISION/u);
+
+const restoredVault = api.createVault({
+  now: () => new Date('2026-07-25T15:00:00.000Z'),
+  randomValues(value) { value.fill(99); return value; },
+});
+const restored = restoredVault.restore({
+  resultId: `br_${'7'.repeat(48)}`,
+  expiresAtMillis: Date.parse('2026-07-25T15:05:00.000Z'),
+  result: result({
+    executionIntentId: 'intent-restored-1',
+    idempotencyKey: 'provider-generate-restored-0001',
+    requestHash: '7'.repeat(64),
+    image: { ...result().image, sha256: '8'.repeat(64) },
+  }),
+  binding: binding(),
+  lifecycleAuthority: authority(),
+});
+assert.equal(restored.resultId, `br_${'7'.repeat(48)}`);
+assert.equal(restored.expiresAt, '2026-07-25T15:05:00.000Z');
+assert.equal(restoredVault.getForBackground(restored.resultId).blob, blob);
+assert.throws(() => restoredVault.restore({
+  resultId: `br_${'8'.repeat(48)}`,
+  expiresAtMillis: Date.parse('2026-07-25T14:59:59.999Z'),
+  result: result({
+    executionIntentId: 'intent-restored-expired-1',
+    idempotencyKey: 'provider-generate-restored-expired-0001',
+  }),
+  binding: binding(),
+  lifecycleAuthority: authority(),
+}), /RESULT_INVALID/u);
+
 assert.deepEqual(
   JSON.parse(JSON.stringify(vault.put(result(), binding(), authority()))),
   JSON.parse(JSON.stringify(stored)),

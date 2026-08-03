@@ -384,6 +384,7 @@ function loadClient(options = {}) {
       return { cleared: true };
     },
   };
+  Object.assign(profileStore, options.profileStoreOverrides || {});
   const permissionSessionStorage = options.permissionSessionStorage || createStorage();
   if (options.providerConsent !== false) {
     permissionSessionStorage.seed(
@@ -401,6 +402,7 @@ function loadClient(options = {}) {
     profileStore,
     permissionBroker,
     executionIntentClient: executionIntent.client,
+    stageResult: options.stageResult,
     fetchImpl: options.fetchImpl,
     authorizeResultOrigin: options.authorizeResultOrigin,
     timeoutMs: options.timeoutMs,
@@ -607,6 +609,136 @@ test('claims the exact draft intent before Provider POST and reports success bef
     resultSha256: createHash('sha256').update(pngBytes).digest('hex'),
   });
   assert.equal(client.getOperationState(input.idempotencyKey).executionIntentId, 'intent-text-success-1');
+});
+
+test('escrows the completed text result before reporting SUCCEEDED', async () => {
+  let staged = false;
+  let stagedResult;
+  let stagedBinding;
+  const stagedResultId = `br_${'a'.repeat(48)}`;
+  const loaded = loadClient({
+    stageResult: async (result, binding) => {
+      stagedResult = result;
+      stagedBinding = binding;
+      staged = true;
+      return { resultId: stagedResultId };
+    },
+    executionIntentClient: {
+      async claim(input) {
+        return createExecutionIntentHarness().client.claim(input);
+      },
+      async reportOutcome(input) {
+        assert.equal(staged, true, 'durable escrow must precede the success report');
+        return {
+          contractVersion: 'extension-byok-execution-intent-outcome/v1',
+          intentId: input.intentId,
+          replayed: false,
+          outcome: input.outcome,
+          providerIdempotencyKey: input.providerIdempotencyKey,
+          providerRequestHash: input.providerRequestHash,
+          providerRequestIdSha256: input.providerRequestIdSha256,
+          resultSha256: input.resultSha256,
+        };
+      },
+    },
+    fetchImpl: async () => jsonResponse({
+      data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+    }),
+  });
+
+  const generated = await loaded.client.generate(request({ idempotencyKey: 'escrow-text-1' }));
+
+  assert.equal(generated.escrowResultId, stagedResultId);
+  assert.equal(stagedResult.outcome, 'SUCCEEDED');
+  assert.equal(stagedResult.executionIntentId, 'intent-1');
+  assert.equal(stagedResult.image.blob instanceof Blob, true);
+  assert.equal(stagedBinding.slotKey, 'sku:sku-1:hero');
+});
+
+test('holds exact permission and credential authority through durable text-result staging', async () => {
+  const events = [];
+  let releaseStage;
+  let stageStarted = false;
+  let authorityQueue = Promise.resolve();
+  function enqueueAuthority(operation) {
+    const next = authorityQueue.then(operation, operation);
+    authorityQueue = next.catch(() => {});
+    return next;
+  }
+  const loaded = loadClient({
+    profileStoreOverrides: {
+      commitWithCredentialRevisionForBackground(id, identity, revision, commit) {
+        return enqueueAuthority(async () => {
+          events.push('credential-commit-start');
+          assert.equal(id, 'relay-profile-1');
+          assert.equal(typeof identity, 'string');
+          assert.equal(revision, '1'.repeat(64));
+          try { return await commit(); } finally { events.push('credential-commit-end'); }
+        });
+      },
+    },
+    stageResult: async () => {
+      events.push('stage-start');
+      stageStarted = true;
+      await new Promise((resolve) => { releaseStage = resolve; });
+      events.push('stage-end');
+      return { resultId: `br_${'c'.repeat(48)}` };
+    },
+    fetchImpl: async () => jsonResponse({
+      data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+    }),
+  });
+  const pending = loaded.client.generate(request({ idempotencyKey: 'stage-authority-text-1' }));
+  while (!stageStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+  let rotationSettled = false;
+  const rotation = enqueueAuthority(async () => { events.push('credential-rotation'); })
+    .finally(() => { rotationSettled = true; });
+  let revocationSettled = false;
+  const revocation = loaded.permissionBroker.removeOriginPermission('https://relay.example/v1')
+    .finally(() => { revocationSettled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(rotationSettled, false, 'credential rotation must wait for staging');
+  assert.equal(revocationSettled, false, 'permission revocation must wait for staging');
+  releaseStage();
+  await Promise.all([pending, rotation, revocation]);
+  assert.deepEqual(events, [
+    'credential-commit-start',
+    'stage-start',
+    'stage-end',
+    'credential-commit-end',
+    'credential-rotation',
+  ]);
+});
+
+test('fails closed without a second text POST when result escrow is unavailable', async () => {
+  let postCount = 0;
+  const loaded = loadClient({
+    stageResult: async () => {
+      throw Object.assign(new Error('escrow unavailable'), {
+        code: 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE',
+      });
+    },
+    fetchImpl: async () => {
+      postCount += 1;
+      return jsonResponse({
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const input = request({ idempotencyKey: 'escrow-text-failure-1' });
+
+  await assert.rejects(
+    loaded.client.generate(input),
+    (error) => error?.code === 'SS_ERP_BYOK_PROVIDER_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'UNKNOWN_OUTCOME'
+      && error?.automaticRetryAllowed === false,
+  );
+  await assert.rejects(loaded.client.generate(input));
+  assert.equal(postCount, 1);
+  assert.deepEqual(
+    loaded.executionIntentCalls.map((call) => [call.method, call.input.outcome || null]),
+    [['claim', null], ['reportOutcome', 'UNKNOWN_OUTCOME']],
+  );
 });
 
 test('fails a rejected intent claim before dispatch and removes the undispatched entry', async () => {

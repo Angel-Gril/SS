@@ -27,6 +27,7 @@ try { importScripts('../shared/byok/workbench-edit-media-store.js'); } catch (e)
 try { importScripts('../shared/byok/workbench-edit-epoch-guard.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench edit epoch guard load error:', e); }
 try { importScripts('../shared/byok/workbench-edit-controller.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench edit controller load error:', e); }
 try { importScripts('../shared/byok/provider-settings-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK Provider settings handler load error:', e); }
+try { importScripts('../shared/byok/generated-result-vault-persistence.js'); } catch (e) { console.warn('[SS ERP] BYOK result escrow load error:', e); }
 try { importScripts('../shared/byok/generated-result-vault.js'); } catch (e) { console.warn('[SS ERP] BYOK result vault load error:', e); }
 try { importScripts('../shared/byok/generated-asset-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK ingest client load error:', e); }
 try { importScripts('../shared/byok/generated-asset-batch-ingest-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch ingest client load error:', e); }
@@ -392,7 +393,9 @@ let byokTextToImageClient = null;
 let byokImageEditClient = null;
 let byokCapabilityClient = null;
 let byokProviderSettingsDispatcher = null;
+let byokGeneratedResultEscrow = null;
 let byokGeneratedResultVault = null;
+let byokGeneratedResultAuthorityResetQueue = Promise.resolve();
 let byokGeneratedAssetIngestClient = null;
 let byokGeneratedAssetBatchIngestClient = null;
 let byokListingPublishCoordinator = null;
@@ -423,21 +426,57 @@ const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
 const SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES = 1;
 const SS_ERP_BYOK_BATCH_LIFECYCLE_PORT_NAME =
   'ss-erp:ai-image-workbench-batch-lifecycle';
+const SS_ERP_BYOK_BATCH_LIFECYCLE_PING =
+  'ss-erp:ai-image-workbench-batch-lifecycle-ping/v1';
+const SS_ERP_BYOK_BATCH_LIFECYCLE_ACK =
+  'ss-erp:ai-image-workbench-batch-lifecycle-ack/v1';
 
-function clearCachedByokGeneratedResults() {
-  if (byokWorkbenchBatchRegistry) {
-    void Promise.resolve(byokWorkbenchBatchRegistry.clearAll('provider_state_changed'))
-      .catch(function () {});
-  }
+async function clearCachedByokGeneratedResults() {
   if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
   if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
   if (byokWorkbenchEditEpochGuard) byokWorkbenchEditEpochGuard.rotate();
   if (byokWorkbenchProviderSemaphore) byokWorkbenchProviderSemaphore.invalidateAll();
   if (byokGeneratedResultVault) byokGeneratedResultVault.clear();
   if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
-  if (byokWorkbenchSessionManager) {
-    void byokWorkbenchSessionManager.clearProviderState().catch(function () {});
-  }
+
+  const reset = async () => {
+    const finalize = async () => {
+      let failure = null;
+      try {
+        await getByokGeneratedResultEscrow().clearAndRotateKey();
+      } catch (error) {
+        failure = error;
+      }
+      try {
+        if (byokGeneratedResultVault) byokGeneratedResultVault.clear();
+      } catch (error) {
+        if (!failure) failure = error;
+      }
+      try {
+        if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
+      } catch (error) {
+        if (!failure) failure = error;
+      }
+      if (byokWorkbenchSessionManager) {
+        try {
+          await byokWorkbenchSessionManager.clearProviderState();
+        } catch (error) {
+          if (!failure) failure = error;
+        }
+      }
+      if (failure) throw failure;
+    };
+    if (byokWorkbenchBatchRegistry) {
+      return byokWorkbenchBatchRegistry.clearAll(
+        'provider_state_changed',
+        finalize,
+      );
+    }
+    return finalize();
+  };
+  const pending = byokGeneratedResultAuthorityResetQueue.then(reset, reset);
+  byokGeneratedResultAuthorityResetQueue = pending.catch(function () {});
+  return pending;
 }
 
 function clearHostedAiImageSuiteRuntime(reason) {
@@ -1095,6 +1134,7 @@ function getByokTextToImageClient() {
     crypto: globalThis.crypto,
     now: () => new Date(),
     executionIntentClient: getByokExecutionIntentClaimBroker(),
+    stageResult: stageByokGeneratedResult,
   });
   return byokTextToImageClient;
 }
@@ -1135,6 +1175,7 @@ function getByokImageEditClient() {
     crypto: globalThis.crypto,
     now: () => new Date(),
     executionIntentClient: getByokExecutionIntentClaimBroker(),
+    stageResult: stageByokGeneratedResult,
   });
   return byokImageEditClient;
 }
@@ -1198,11 +1239,39 @@ function getByokGeneratedResultVault() {
   byokGeneratedResultVault = api.createVault({
     now: () => new Date(),
     onDiscardedResult: (resultId) => {
+      void getByokGeneratedResultEscrow().delete(resultId).catch(function () {});
       try { byokGeneratedAssetIngestClient?.discardResult(resultId); } catch (_error) {}
       try { byokWorkbenchPreviewBroker?.releaseResult(resultId); } catch (_error) {}
     },
   });
   return byokGeneratedResultVault;
+}
+
+function getByokGeneratedResultEscrow() {
+  if (byokGeneratedResultEscrow) return byokGeneratedResultEscrow;
+  const api = globalThis.SS_ERP_BYOK_GENERATED_RESULT_VAULT_PERSISTENCE;
+  if (!api || typeof api.createStore !== 'function'
+    || typeof api.createIndexedDbRepository !== 'function') {
+    throw new Error('BYOK generated result escrow is unavailable');
+  }
+  const repository = api.createIndexedDbRepository({ indexedDB: globalThis.indexedDB });
+  byokGeneratedResultEscrow = api.createStore({
+    repository,
+    sessionStorage: chrome.storage.session,
+    crypto: globalThis.crypto,
+    randomValues: (bytes) => globalThis.crypto.getRandomValues(bytes),
+    now: () => Date.now(),
+  });
+  return byokGeneratedResultEscrow;
+}
+
+async function stageByokGeneratedResult(result, binding) {
+  const authority = await getByokRuntimeAuthorityGuard().capture(binding);
+  return getByokGeneratedResultEscrow().stage(
+    result,
+    binding,
+    authority.lifecycleAuthority,
+  );
 }
 
 function getByokRuntimeAuthorityGuard() {
@@ -1467,6 +1536,7 @@ function getByokWorkbenchBatchRegistry() {
       throw error;
     },
     resultVault: getByokGeneratedResultVault(),
+    resultEscrow: getByokGeneratedResultEscrow(),
     previewBroker: getByokWorkbenchPreviewBroker(),
     crypto: globalThis.crypto,
   });
@@ -6348,6 +6418,13 @@ if (chrome.runtime?.onConnect?.addListener) {
       return;
     }
     const owner = Object.freeze({ tabId, documentId });
+    port.onMessage.addListener((message) => {
+      if (message !== SS_ERP_BYOK_BATCH_LIFECYCLE_PING) {
+        try { port.disconnect(); } catch {}
+        return;
+      }
+      try { port.postMessage(SS_ERP_BYOK_BATCH_LIFECYCLE_ACK); } catch {}
+    });
     port.onDisconnect.addListener(() => {
       if (!byokWorkbenchBatchRegistry) return;
       void Promise.resolve(byokWorkbenchBatchRegistry.clear(owner)).catch(() => {});

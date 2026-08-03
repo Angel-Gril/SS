@@ -43,6 +43,12 @@ const batchRecoveryPreparing = {
     { skuKey: 'sku-1', slotKey: 'shared:detail:DETAIL', operation: 'FULL_EDIT' },
   ],
 };
+const batchRecoveryPreparingV2 = {
+  ...batchRecoveryPreparing,
+  contractVersion: 'extension-byok-workbench-batch-recovery/v2',
+  successorRecovery: null,
+  profileId: 'profile-1',
+};
 const successorRecovery = {
   contractVersion: 'extension-byok-workbench-successor-recovery/v1',
   state: 'CLAIMING',
@@ -298,6 +304,38 @@ assert.equal(
   false,
   'clearing the operation also clears its separate recovery descriptor',
 );
+
+await assert.rejects(
+  restoredManager.beginOperation(batchReloadSender, 'byok_batch_recovery_invalid_v2', {
+    ...batchRecoveryPreparingV2,
+    profileId: undefined,
+  }),
+  /SESSION_OPERATION_INVALID/u,
+  'recovery v2 requires one canonical non-secret profile identity',
+);
+const batchV2 = await restoredManager.beginOperation(
+  batchReloadSender,
+  'byok_batch_recovery_v2',
+  batchRecoveryPreparingV2,
+);
+assert.equal(batchV2.operation.recovery.contractVersion, api.BATCH_RECOVERY_VERSION);
+assert.equal(batchV2.operation.recovery.profileId, 'profile-1');
+assert.equal(
+  storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'].recovery.profileId,
+  'profile-1',
+  'recovery v2 retains the non-secret profile ID only in its sidecar',
+);
+await assert.rejects(
+  restoredManager.updateOperationRecovery(batchReloadSender, 'byok_batch_recovery_v2', {
+    ...batchRecoveryPreparingV2,
+    phase: 'RESERVED',
+    executionBatchId: 'execution-batch-v2',
+    profileId: 'profile-other',
+  }),
+  /SESSION_OPERATION_CONFLICT/u,
+  'an active recovery cannot switch its profile identity',
+);
+await restoredManager.clearOperation(batchReloadSender, 'byok_batch_recovery_v2');
 
 await restoredManager.beginOperation(batchReloadSender, 'replacement-operation');
 storage.values[api.BATCH_RECOVERY_STORAGE_KEY]['77'] = {

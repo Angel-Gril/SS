@@ -751,6 +751,12 @@ test('composes the BYOK batch page through serial Provider review and atomic zer
       });
     },
     resultVault: vault,
+    resultEscrow: {
+      async findByExecutionIntentId() { return null; },
+      async delete() { return true; },
+      async deleteMany() { return 0; },
+      async deleteByExecutionIntentIds() { return 0; },
+    },
     previewBroker: {
       open() { throw new Error('preview is outside this fixture'); },
       releaseResult() { return 0; },
@@ -1061,7 +1067,13 @@ test('projects a worker-restart batch through Registry, runtime handler, and pag
     createCoordinator() { throw new Error('restart projection must not create a coordinator'); },
     resolveProviderInput: unused,
     resolveRecovery: unused,
-    resultVault: { getForBackground: unused, release() { return false; } },
+    resultVault: { restore: unused, getForBackground: unused, release() { return false; } },
+    resultEscrow: {
+      findByExecutionIntentId: unused,
+      async delete() { return false; },
+      async deleteMany() { return 0; },
+      async deleteByExecutionIntentIds() { return 0; },
+    },
     previewBroker: { open: unused, releaseResult() { return 0; } },
     crypto: webcrypto,
   });

@@ -240,12 +240,12 @@ function createHarness(options = {}) {
   let serverReservationKey = options.initialReservationKey
     || options.initialOperation?.recovery?.reservationIdempotencyKey
     || null;
-  function serverStatus() {
+  function serverStatus(contractVersion = 'extension-byok-execution-batch-status/v1') {
     if (!serverBatch) throw new Error('missing batch');
     const itemStatus = serverBatch.status === 'OPEN' ? 'ACTIVE'
       : serverBatch.status === 'BOUND' ? 'BOUND' : 'RELEASED';
     return {
-      contractVersion: 'extension-byok-execution-batch-status/v1',
+      contractVersion,
       batchId: serverBatch.batchId,
       status: serverBatch.status,
       context: {
@@ -255,7 +255,18 @@ function createHarness(options = {}) {
       },
       boundDraftRevision: serverBatch.status === 'BOUND' ? 8 : null,
       boundDraftVersion: serverBatch.status === 'BOUND' ? 12 : null,
-      items: serverBatch.items.map((item) => ({ ...plain(item), status: itemStatus })),
+      items: serverBatch.items.map((item) => ({
+        ...plain(item),
+        status: itemStatus,
+        intent: contractVersion === 'extension-byok-execution-batch-status/v2'
+          ? {
+            ...plain(item.intent),
+            resultSha256: item.intent.outcome === 'SUCCEEDED'
+              ? item.intent.resultSha256
+              : null,
+          }
+          : plain(item.intent),
+      })),
     };
   }
   const executionBatchClient = {
@@ -328,6 +339,14 @@ function createHarness(options = {}) {
       if (!serverBatch || serverBatch.batchId !== value.batchId) throw new Error('missing batch');
       return serverStatus();
     },
+    async statusV2(value) {
+      events.push(['reservation-status-v2', plain(value)]);
+      if (options.statusV2Failure) throw new Error('status v2 unavailable');
+      if (options.statusV2Override) return plain(options.statusV2Override);
+      if (options.statusOverride) throw new Error('status v2 downgraded');
+      if (!serverBatch || serverBatch.batchId !== value.batchId) throw new Error('missing batch');
+      return serverStatus('extension-byok-execution-batch-status/v2');
+    },
     async statusByIdempotency(value) {
       events.push(['reservation-idempotency-status', plain(value)]);
       if (options.idempotencyStatusFailure) throw new Error('lookup unavailable');
@@ -372,7 +391,18 @@ function createHarness(options = {}) {
         policyRevision: value.policyRevision,
       };
     },
-    async assertCurrent(value) { events.push(['authority-current', value.ownerUserId]); return value; },
+    async assertCurrent(value) {
+      events.push(['authority-current', value.ownerUserId]);
+      if (typeof options.beforeAuthorityCurrent === 'function') {
+        await options.beforeAuthorityCurrent(value);
+      }
+      if (options.authorityStale) {
+        throw Object.assign(new Error('authority stale'), {
+          code: 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+        });
+      }
+      return value;
+    },
   };
 
   let internalStart = null;
@@ -418,11 +448,61 @@ function createHarness(options = {}) {
         projection = buildProjection(value);
         return projection;
       },
+      restoreBatch(value) {
+        events.push(['coordinator-restore', plain(value)]);
+        internalStart = value;
+        projection = buildProjection({
+          batchId: value.batchId,
+          slots: value.slots.map((restoredSlot) => ({
+            ...restoredSlot,
+            intentHash: value.attempts.find(
+              (attempt) => attempt.slotKey === restoredSlot.slotKey,
+            ).intentHash,
+          })),
+        }, 'CANDIDATE_READY');
+        projection.scheduler = {
+          state: 'REVIEW', activeCount: 0, queuedCount: 0,
+          pauseRequested: false, effectiveConcurrency: 1,
+        };
+        projection.slots.forEach((projectedSlot) => {
+          projectedSlot.attempts = value.attempts
+            .filter((attempt) => attempt.slotKey === projectedSlot.slotKey)
+            .map((attempt) => ({
+              attemptId: attempt.attemptId, generation: attempt.generation,
+              operation: attempt.operation, intentHash: attempt.intentHash,
+              state: 'CANDIDATE_READY', resultId: attempt.resultHandle,
+              resultSha256: attempt.resultSha256, errorCode: null,
+              retryOfAttemptId: null, externalChargePossible: false, retryRisk: null,
+              chargeWarningVersion: null, automaticRetryAllowed: null,
+              recoveryRequirement: null, unknownOutcomeSuperseded: false,
+              reviewState: 'AVAILABLE',
+            }));
+        });
+        return projection;
+      },
       getProjection() { return projection; },
       pause() { return projection; },
       continue() { return projection; },
-      keepAttempt() { return projection; },
-      rejectAttempt() { return projection; },
+      keepAttempt(slotKey, attemptId) {
+        events.push(['coordinator-keep', slotKey, attemptId]);
+        const projectedSlot = projection.slots.find((item) => item.slotKey === slotKey);
+        projectedSlot.selectedAttemptId = attemptId;
+        projectedSlot.selectedResultId = projectedSlot.attempts.find(
+          (attempt) => attempt.attemptId === attemptId,
+        ).resultId;
+        projectedSlot.attempts.forEach((attempt) => {
+          attempt.reviewState = attempt.attemptId === attemptId ? 'KEPT' : attempt.reviewState;
+        });
+        return projection;
+      },
+      rejectAttempt(slotKey, attemptId) {
+        events.push(['coordinator-reject', slotKey, attemptId]);
+        const projectedSlot = projection.slots.find((item) => item.slotKey === slotKey);
+        projectedSlot.attempts.find(
+          (attempt) => attempt.attemptId === attemptId,
+        ).reviewState = 'REJECTED';
+        return projection;
+      },
       cancelQueued(attemptId) {
         events.push(['coordinator-cancel', attemptId]);
         for (const slot of projection.slots) {
@@ -449,12 +529,109 @@ function createHarness(options = {}) {
     };
   });
 
+  const restoredResults = new Map();
   const resultVault = {
-    getForBackground() {
-      return { resultId: 'br_' + 'a'.repeat(48), reviewState: 'CANDIDATE_READY',
-        blob: {}, mimeType: 'image/png', byteLength: 4, sha256: '9'.repeat(64) };
+    restore(candidate) {
+      events.push(['vault-restore', candidate.resultId]);
+      const entry = {
+        resultId: candidate.resultId,
+        reviewState: 'CANDIDATE_READY',
+        blob: candidate.result.image.blob,
+        mimeType: candidate.result.image.mimeType,
+        byteLength: candidate.result.image.byteLength,
+        sha256: candidate.result.image.sha256,
+      };
+      restoredResults.set(entry.resultId, entry);
+      return {
+        resultId: entry.resultId, outcome: 'SUCCEEDED',
+        operation: candidate.result.operation, model: candidate.result.model,
+        policyRevision: candidate.result.policyRevision,
+        idempotencyKey: candidate.result.idempotencyKey,
+        requestHash: candidate.result.requestHash,
+        reviewState: entry.reviewState,
+        image: { mimeType: entry.mimeType, byteLength: entry.byteLength, sha256: entry.sha256 },
+      };
     },
-    release(resultId) { events.push(['vault-release', resultId]); return true; },
+    getForBackground(resultId) {
+      return restoredResults.get(resultId) || {
+        resultId: 'br_' + 'a'.repeat(48), reviewState: 'CANDIDATE_READY',
+        blob: {}, mimeType: 'image/png', byteLength: 4, sha256: '9'.repeat(64),
+      };
+    },
+    release(resultId) {
+      events.push(['vault-release', resultId]);
+      restoredResults.delete(resultId);
+      return true;
+    },
+  };
+  const escrowCandidates = options.escrowRepository || new Map();
+  (options.initialEscrowCandidates || []).forEach((candidate) => {
+    escrowCandidates.set(candidate.result.executionIntentId, candidate);
+  });
+  const resultEscrow = {
+    async findByExecutionIntentId(executionIntentId, expected) {
+      events.push(['escrow-find', executionIntentId, plain(expected)]);
+      const candidate = escrowCandidates.get(executionIntentId);
+      if (typeof options.beforeEscrowFind === 'function') {
+        await options.beforeEscrowFind(executionIntentId, expected);
+      }
+      if (options.escrowKeyLoss) throw new Error('escrow key unavailable');
+      return candidate ? { ...candidate, result: { ...candidate.result,
+        image: { ...candidate.result.image } } } : null;
+    },
+    async delete(resultId) {
+      events.push(['escrow-delete', resultId]);
+      if (typeof options.beforeEscrowDelete === 'function') {
+        await options.beforeEscrowDelete(resultId);
+      }
+      if (options.escrowDeleteFailure) {
+        throw Object.assign(new Error('escrow delete unavailable'), {
+          code: 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE',
+          outcome: 'FAILED_FINAL', automaticRetryAllowed: false,
+        });
+      }
+      for (const [intentId, candidate] of escrowCandidates) {
+        if (candidate.resultId === resultId) {
+          escrowCandidates.delete(intentId);
+          return true;
+        }
+      }
+      return false;
+    },
+    async deleteMany(resultIds) {
+      events.push(['escrow-delete-many', plain(resultIds)]);
+      if (options.escrowDeleteManyFailure) {
+        throw Object.assign(new Error('escrow deleteMany unavailable'), {
+          code: 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE',
+          outcome: 'FAILED_FINAL', automaticRetryAllowed: false,
+        });
+      }
+      let deleted = 0;
+      for (const resultId of resultIds) {
+        for (const [intentId, candidate] of escrowCandidates) {
+          if (candidate.resultId === resultId) {
+            escrowCandidates.delete(intentId);
+            deleted += 1;
+            break;
+          }
+        }
+      }
+      return deleted;
+    },
+    async deleteByExecutionIntentIds(value) {
+      events.push(['escrow-delete-by-intents', plain(value)]);
+      if (options.escrowDeleteByIntentFailure) {
+        throw Object.assign(new Error('escrow delete by intents unavailable'), {
+          code: 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE',
+          outcome: 'FAILED_FINAL', automaticRetryAllowed: false,
+        });
+      }
+      let deleted = 0;
+      for (const intentId of value.executionIntentIds) {
+        if (escrowCandidates.delete(intentId)) deleted += 1;
+      }
+      return deleted;
+    },
   };
   const previewBroker = {
     open(value) { events.push(['preview', value.resultId]); return { ticket: 'preview-ticket-1' }; },
@@ -464,14 +641,20 @@ function createHarness(options = {}) {
   const registry = api.createRegistry({
     sessionManager, batchLaunchClient, readinessClient, executionBatchClient,
     claimBroker, textClient, editClient, authorityGuard, createCoordinator,
-    resolveProviderInput: async () => ({}),
+    resolveProviderInput: async (value) => {
+      events.push(['provider-input', value.profileId]);
+      if (typeof options.beforeResolveProviderInput === 'function') {
+        await options.beforeResolveProviderInput(value);
+      }
+      return {};
+    },
     resolveRecovery: async (value) => {
       events.push(['trusted-recovery', value.attempt.attemptId]);
       return { state: 'FAILED_FINAL', candidateId: null, resultHandle: null,
         resultSha256: null, requestHash: null, errorCode: 'LOOKUP_NOT_FOUND',
         evidenceSha256: '8'.repeat(64) };
     },
-    resultVault, previewBroker,
+    resultVault, resultEscrow, previewBroker,
     crypto: { randomUUID() {
       uuid += 1;
       return `00000000-0000-4000-8000-${String(uuid).padStart(12, '0')}`;
@@ -486,7 +669,58 @@ function createHarness(options = {}) {
     get internalStart() { return internalStart; },
     get projection() { return projection; },
     get coordinatorHooks() { return coordinatorHooks; },
+    get restoredResults() { return restoredResults; },
+    get escrowRepository() { return escrowCandidates; },
   };
+}
+
+function completeProviderBatch(harness) {
+  const candidates = harness.serverBatch.items.map((item, index) => {
+    const resultSha256 = String(index + 7).repeat(64);
+    item.intent.outcome = 'SUCCEEDED';
+    item.intent.resultSha256 = resultSha256;
+    const readinessBinding = harness.readiness[index].readinessBinding;
+    return {
+      resultId: `br_${String(index + 1).repeat(48)}`,
+      expiresAtMillis: Date.now() + 300_000,
+      result: {
+        outcome: 'SUCCEEDED',
+        operation: readinessBinding.operation,
+        requestMode: readinessBinding.operation === 'TEXT_TO_IMAGE' ? 'json' : 'multipart',
+        profileId: 'profile-1',
+        providerOrigin: readinessBinding.providerOrigin,
+        model: readinessBinding.model,
+        policyRevision: readinessBinding.policyRevision,
+        executionIntentId: item.intent.intentId,
+        idempotencyKey: item.intent.providerIdempotencyKey,
+        requestHash: item.intent.providerRequestHash,
+        promptHash: String(index + 3).repeat(64),
+        negativePromptHash: null,
+        endpointHash: String(index + 4).repeat(64),
+        providerRequestIdSha256: null,
+        providerTaskIdSha256: null,
+        sourceSha256: null,
+        referenceSha256s: [],
+        maskSha256: null,
+        acceptedAt: '2026-08-03T00:00:00.000Z',
+        image: {
+          blob: {}, mimeType: 'image/png', byteLength: 4, sha256: resultSha256,
+        },
+      },
+      binding: plain(readinessBinding),
+      lifecycleAuthority: {
+        contractVersion: 'extension-byok-device-session-lifecycle/v1', epoch: 9,
+      },
+    };
+  });
+  return candidates;
+}
+
+function legacyRecoveryV1(operation) {
+  const legacy = plain(operation);
+  legacy.recovery.contractVersion = 'extension-byok-workbench-batch-recovery/v1';
+  delete legacy.recovery.profileId;
+  return legacy;
 }
 
 function rejectingBatchLaunchClient({ state, status = null, errorCode = null }) {
@@ -666,6 +900,58 @@ test('prepares every slot, reserves once, expands minimal intents, then starts c
   );
 });
 
+test('credential reset fence blocks a queued runner before prepared Provider handoff', async () => {
+  let blockRunner = false;
+  let runnerEntered;
+  let releaseRunner;
+  const entered = new Promise((resolve) => { runnerEntered = resolve; });
+  const barrier = new Promise((resolve) => { releaseRunner = resolve; });
+  const harness = createHarness({
+    async beforeAuthorityCurrent() {
+      if (!blockRunner) return;
+      blockRunner = false;
+      runnerEntered();
+      await barrier;
+    },
+  });
+  await harness.registry.start(owner(), pageStart());
+  blockRunner = true;
+  const slot = harness.internalStart.slots[0];
+  const pendingResolve = harness.coordinatorHooks.resolveDispatchInput(
+    slot.dispatchRef,
+    {
+      attemptId: 'attempt-1', slotKey: slot.slotKey, generation: 1,
+      operation: slot.operation, executionMode: 'BYOK', policyRevision: '23',
+      idempotencyKey: slot.idempotencyKey, intentHash: slot.intentHash,
+    },
+  );
+  await entered;
+
+  let finalizeEntered;
+  let releaseFinalize;
+  const inFinalize = new Promise((resolve) => { finalizeEntered = resolve; });
+  const finalizeBarrier = new Promise((resolve) => { releaseFinalize = resolve; });
+  const cleanup = harness.registry.clearAll('provider_state_changed', async () => {
+    finalizeEntered();
+    await finalizeBarrier;
+  });
+  await inFinalize;
+  releaseRunner();
+  await assert.rejects(
+    pendingResolve,
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
+  );
+  assert.equal(
+    harness.events.filter((event) => event[0] === 'release-prepared').length,
+    2,
+    'cleanup must revoke every queued prepared handle before finalize returns',
+  );
+  releaseFinalize();
+  assert.equal(await cleanup, 1);
+  assert.equal(harness.operation, null);
+});
+
 test('preserves the canonical Unicode SKU hero slot through registry preparation and reservation', async () => {
   const harness = createHarness({
     batchLaunchClient: {
@@ -761,14 +1047,13 @@ test('uncertain startup cancellation retains the operation lock and recovery ent
   await assert.rejects(harness.registry.start(owner(), pageStart()));
 });
 
-test('state remains absorbing while startup preparation has not resolved', async () => {
+test('credential reset does not deadlock behind a start waiting on provider profile state', async () => {
   let releasePreparation;
   let preparationEntered;
   const entered = new Promise((resolve) => { preparationEntered = resolve; });
   const blocked = new Promise((resolve) => { releasePreparation = resolve; });
   const harness = createHarness({
-    async beforePrepare(index) {
-      if (index !== 0) return;
+    async beforeResolveProviderInput() {
       preparationEntered();
       await blocked;
     },
@@ -784,21 +1069,35 @@ test('state remains absorbing while startup preparation has not resolved', async
   );
   assert.equal(harness.events.some((event) => event[0] === 'reserve'), false);
 
-  assert.equal(await harness.registry.clearAll('device_disconnected'), 0);
-  assert.equal(await harness.registry.removeTab(17), 0);
+  let finalizeEntered;
+  let releaseFinalize;
+  const inFinalize = new Promise((resolve) => { finalizeEntered = resolve; });
+  const finalizeBarrier = new Promise((resolve) => { releaseFinalize = resolve; });
+  const cleanup = harness.registry.clearAll('device_disconnected', async () => {
+    finalizeEntered();
+    await finalizeBarrier;
+  });
+  await inFinalize;
+  assert.equal(harness.events.some((event) => event[0] === 'prepare'), false,
+    'reset must reach finalize without waiting on provider profile resolution');
   await assert.rejects(
-    harness.registry.clear(owner()),
-    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE'
-      && error.outcome === 'UNKNOWN_OUTCOME',
+    harness.registry.start(owner({ documentId: 'late-start' }), pageStart()),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
   );
   assert.ok(harness.operation, 'startup lifecycle cleanup must retain the persisted lock');
 
+  releaseFinalize();
+  assert.equal(await cleanup, 0,
+    'global cleanup must complete before the profile-blocked start is released');
   releasePreparation();
   await assert.rejects(
     pendingStart,
     (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_START_CANCELLED'
       && error.outcome === 'FAILED_FINAL',
   );
+  assert.equal(await harness.registry.removeTab(17), 0);
+  assert.deepEqual(plain(await harness.registry.clear(owner())), { cleared: false });
   assert.equal(harness.events.some((event) => event[0] === 'reserve'), false);
   assert.equal(harness.events.some((event) => event[0] === 'coordinator-start'), false);
   assert.equal(harness.operation, null);
@@ -817,7 +1116,8 @@ test('tab-close during a lost reservation response rolls back before Provider di
   });
   const pendingStart = harness.registry.start(owner(), pageStart());
   await accepted;
-  assert.equal(await harness.registry.removeTab(17), 0);
+  assert.equal(await harness.registry.removeTab(17), 0,
+    'tab cleanup must mark cancellation without waiting on the active reservation call');
   assert.ok(harness.operation);
   releaseResponse();
   await assert.rejects(
@@ -905,7 +1205,7 @@ test('a fresh Registry reconciles a persisted dispatched batch without reopening
   assert.equal(projection.slots.length, 2);
   assert.equal(projection.slots[0].attempts[0].state, 'UNKNOWN_OUTCOME');
   assert.equal(projection.slots[0].attempts[0].automaticRetryAllowed, false);
-  assert.equal(restored.events.filter((event) => event[0] === 'reservation-status').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'reservation-status-v2').length, 1);
   assert.ok(restored.operation, 'reconciliation must retain the unresolved operation lock');
   assertSanitizedProjection(projection);
 
@@ -938,6 +1238,659 @@ test('a fresh Registry reconciles a persisted dispatched batch without reopening
   );
 });
 
+test('a fresh Registry restores exact v2 successful candidates into review without Provider dispatch', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  assert.equal(
+    original.operation.recovery.contractVersion,
+    'extension-byok-workbench-batch-recovery/v2',
+  );
+  assert.equal(original.operation.recovery.profileId, 'profile-1');
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+
+  let projection = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.equal(projection.scheduler.state, 'REVIEW');
+  assert.equal(projection.scheduler.activeCount, 0);
+  assert.equal(projection.scheduler.queuedCount, 0);
+  assert.ok(projection.slots.every((slotValue) => (
+    slotValue.state === 'CANDIDATE_READY'
+      && slotValue.attempts.length === 1
+      && slotValue.attempts[0].state === 'CANDIDATE_READY'
+      && slotValue.attempts[0].resultId
+  )));
+  assert.equal(restored.events.filter((event) => event[0] === 'reservation-status-v2').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'launch').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'readiness').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'authority-current').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'escrow-find').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'vault-restore').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-restore').length, 1);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+
+  const preview = await restored.registry.openPreview(
+    owner({ documentId: 'document-reloaded' }),
+    {
+      slotKey: projection.slots[0].slotKey,
+      attemptId: projection.slots[0].attempts[0].attemptId,
+    },
+  );
+  assert.equal(preview.ticket, 'preview-ticket-1');
+  projection = await restored.registry.command(
+    owner({ documentId: 'document-reloaded' }),
+    pageCommand('KEEP', {
+      commandId: 'command-restored-keep',
+      expectedRuntimeRevision: projection.revision,
+      slotKey: projection.slots[0].slotKey,
+      attemptId: projection.slots[0].attempts[0].attemptId,
+      expectedSlotRevision: projection.slots[0].revision,
+    }),
+  );
+  assert.equal(projection.slots[0].attempts[0].reviewState, 'KEPT');
+  await assert.rejects(
+    restored.registry.command(
+      owner({ documentId: 'document-reloaded' }),
+      pageCommand('PAUSE', {
+        commandId: 'command-restored-pause',
+        expectedRuntimeRevision: projection.revision,
+      }),
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_REVIEW_ONLY',
+  );
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-start'), false);
+});
+
+test('serializes concurrent restart state and preview into one escrow hydration', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  let releaseFind;
+  let findEntered;
+  let blocked = true;
+  const entered = new Promise((resolve) => { findEntered = resolve; });
+  const barrier = new Promise((resolve) => { releaseFind = resolve; });
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    async beforeEscrowFind() {
+      if (!blocked) return;
+      blocked = false;
+      findEntered();
+      await barrier;
+    },
+  });
+  const reloadedOwner = owner({ documentId: 'document-reloaded' });
+  const statePromise = restored.registry.state(reloadedOwner);
+  await entered;
+  const previewPromise = restored.registry.openPreview(reloadedOwner, {
+    slotKey: 'sku:sku-1:hero',
+    attemptId: 'recovered-attempt-0-0',
+  });
+  releaseFind();
+  const [projection, preview] = await Promise.all([statePromise, previewPromise]);
+  assert.equal(projection.scheduler.state, 'REVIEW');
+  assert.equal(preview.ticket, 'preview-ticket-1');
+  assert.equal(restored.events.filter((event) => event[0] === 'reservation-status-v2').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'escrow-find').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'vault-restore').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-restore').length, 1);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+for (const cleanupCase of [
+  {
+    name: 'clear',
+    run: (registry, reloadedOwner) => registry.clear(reloadedOwner),
+    expected: { cleared: true },
+  },
+  {
+    name: 'clearAll',
+    run: (registry) => registry.clearAll('device_disconnected'),
+    expected: 1,
+  },
+  {
+    name: 'removeTab',
+    run: (registry, reloadedOwner) => registry.removeTab(reloadedOwner.tabId),
+    expected: 1,
+  },
+]) {
+  test(`${cleanupCase.name} fences and drains deferred escrow recovery before cleanup`, async () => {
+    const original = createHarness();
+    await original.registry.start(owner(), pageStart());
+    const candidates = completeProviderBatch(original);
+    let releaseFind;
+    let findEntered;
+    let blocked = true;
+    const entered = new Promise((resolve) => { findEntered = resolve; });
+    const barrier = new Promise((resolve) => { releaseFind = resolve; });
+    const restored = createHarness({
+      initialOperation: original.operation,
+      initialServerBatch: original.serverBatch,
+      initialEscrowCandidates: candidates,
+      async beforeEscrowFind(executionIntentId) {
+        if (!blocked || executionIntentId !== 'intent-2') return;
+        blocked = false;
+        findEntered();
+        await barrier;
+      },
+    });
+    const reloadedOwner = owner({ documentId: 'document-reloaded' });
+    const statePromise = restored.registry.state(reloadedOwner);
+    await entered;
+
+    let cleanupSettled = false;
+    const cleanupPromise = cleanupCase.run(restored.registry, reloadedOwner).finally(() => {
+      cleanupSettled = true;
+    });
+    await Promise.resolve();
+    assert.equal(cleanupSettled, false, 'cleanup must await the registered recovery barrier');
+    await assert.rejects(
+      restored.registry.state(reloadedOwner),
+      (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+        && error?.outcome === 'FAILED_RETRYABLE'
+        && error?.automaticRetryAllowed === false,
+    );
+    assert.equal(restored.events.filter((event) => event[0] === 'escrow-find').length, 2,
+      'a fenced recovery must fail before escrow I/O');
+
+    releaseFind();
+    await assert.rejects(
+      statePromise,
+      (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+        && error?.outcome === 'FAILED_RETRYABLE',
+    );
+    const cleanupResult = await cleanupPromise;
+    assert.deepEqual(plain(cleanupResult), cleanupCase.expected);
+    assert.equal(restored.operation, null, 'cleanup must release the persisted operation lock');
+    assert.equal(restored.escrowRepository.size, 0, 'cleanup must delete durable ciphertext');
+    assert.equal(restored.restoredResults.size, 0, 'cleanup must release restored Blob state');
+
+    const firstRestore = restored.events.findIndex((event) => event[0] === 'vault-restore');
+    const escrowDelete = restored.events.findIndex((event) => event[0] === 'escrow-delete-many');
+    const lastVaultRelease = restored.events.findLastIndex(
+      (event) => event[0] === 'vault-release',
+    );
+    const lockClear = restored.events.findIndex((event) => event[0] === 'operation-clear');
+    assert.ok(firstRestore >= 0 && firstRestore < escrowDelete,
+      'recovery must finish before scoped escrow cleanup starts');
+    assert.ok(escrowDelete < lastVaultRelease && lastVaultRelease < lockClear,
+      'ciphertext and Blob cleanup must finish before lock release');
+    assert.equal(restored.events.some((event) => [
+      'prepare', 'reserve', 'coordinator-start', 'successor',
+    ].includes(event[0])), false, 'cleanup recovery must not dispatch Provider work');
+
+    const afterCleanup = await restored.registry.state(reloadedOwner);
+    assert.equal(afterCleanup.revision, 0);
+    assert.equal(restored.restoredResults.size, 0,
+      'no late recovery may restore a Blob after cleanup returns');
+  });
+}
+
+test('global reset drains pending preview and holds its fence through trusted finalize', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  let blockPreview = false;
+  let previewValidationEntered;
+  let releasePreviewValidation;
+  const previewEntered = new Promise((resolve) => { previewValidationEntered = resolve; });
+  const previewBarrier = new Promise((resolve) => { releasePreviewValidation = resolve; });
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    async beforeAuthorityCurrent() {
+      if (!blockPreview) return;
+      blockPreview = false;
+      previewValidationEntered();
+      await previewBarrier;
+    },
+  });
+  const reloadedOwner = owner({ documentId: 'document-reset-preview' });
+  await restored.registry.state(reloadedOwner);
+  blockPreview = true;
+  const pendingPreview = restored.registry.openPreview(reloadedOwner, {
+    slotKey: 'sku:sku-1:hero',
+    attemptId: 'recovered-attempt-0-0',
+  });
+  await previewEntered;
+
+  let finalizeEntered;
+  let releaseFinalize;
+  const inFinalize = new Promise((resolve) => { finalizeEntered = resolve; });
+  const finalizeBarrier = new Promise((resolve) => { releaseFinalize = resolve; });
+  let finalized = false;
+  const cleanup = restored.registry.clearAll('provider_state_changed', async () => {
+    finalizeEntered();
+    await finalizeBarrier;
+    finalized = true;
+  });
+  await Promise.resolve();
+  assert.equal(finalized, false);
+  assert.equal(restored.events.some((event) => event[0] === 'preview'), false);
+  await assert.rejects(
+    restored.registry.state(reloadedOwner),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
+  );
+  await assert.rejects(
+    restored.registry.start(owner({ documentId: 'late-global-start' }), pageStart()),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
+  );
+
+  releasePreviewValidation();
+  await assert.rejects(
+    pendingPreview,
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
+  );
+  await inFinalize;
+  assert.equal(restored.events.some((event) => event[0] === 'preview'), false,
+    'a pre-reset preview must not create a late ticket');
+  assert.equal(restored.escrowRepository.size, 0);
+  assert.equal(restored.restoredResults.size, 0);
+  const eventCount = restored.events.length;
+  await assert.rejects(
+    restored.registry.openPreview(reloadedOwner, {
+      slotKey: 'sku:sku-1:hero', attemptId: 'recovered-attempt-0-0',
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS',
+  );
+  assert.equal(restored.events.length, eventCount,
+    'the fenced finalize window must reject before session, escrow, Blob, or preview I/O');
+
+  releaseFinalize();
+  assert.equal(await cleanup, 1);
+  assert.equal(finalized, true);
+  assert.equal((await restored.registry.state(reloadedOwner)).revision, 0);
+  assert.equal(restored.events.some((event) => event[0] === 'preview'), false);
+});
+
+test('clearAll rejects an invalid finalize and releases its fence after finalize failure', async () => {
+  const harness = createHarness();
+  await harness.registry.start(owner(), pageStart());
+  await assert.rejects(
+    harness.registry.clearAll('provider_state_changed', {}),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_FINALIZE_INVALID'
+      && error?.outcome === 'FAILED_FINAL',
+  );
+  assert.equal((await harness.registry.state(owner())).revision, 1,
+    'invalid finalize input must fail before cleanup');
+
+  const finalizeFailure = new Error('trusted finalize failed');
+  await assert.rejects(
+    harness.registry.clearAll('provider_state_changed', async () => {
+      await assert.rejects(
+        harness.registry.state(owner()),
+        (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS',
+      );
+      throw finalizeFailure;
+    }),
+    (error) => error === finalizeFailure,
+  );
+  assert.equal((await harness.registry.state(owner())).revision, 0,
+    'a throwing finalize must propagate and release the global fence in finally');
+});
+
+test('restores on demand for direct review, ingest, and recovery entrypoints', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+  const reloadedOwner = owner({ documentId: 'document-reloaded' });
+  let projection = await restored.registry.command(reloadedOwner, pageCommand('KEEP', {
+    commandId: 'command-on-demand-keep-1',
+    expectedRuntimeRevision: 1,
+    slotKey: 'sku:sku-1:hero',
+    attemptId: 'recovered-attempt-0-0',
+    expectedSlotRevision: 1,
+  }));
+  projection = await restored.registry.command(reloadedOwner, pageCommand('KEEP', {
+    commandId: 'command-on-demand-keep-2',
+    expectedRuntimeRevision: projection.revision,
+    slotKey: 'shared:detail:DETAIL',
+    attemptId: 'recovered-attempt-1-0',
+    expectedSlotRevision: 1,
+  }));
+  const ingestCommand = {
+    contractVersion: 'extension-byok-workbench-batch-ingest/v1',
+    idempotencyKey: 'on-demand-ingest-0001',
+  };
+  await restored.registry.ingest(reloadedOwner, ingestCommand);
+  await restored.registry.recover(reloadedOwner, ingestCommand);
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-restore').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-keep').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'ingest').length, 1);
+  assert.equal(restored.events.filter((event) => event[0] === 'recover').length, 1);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+for (const failure of ['missing', 'tamper', 'key-loss']) {
+  test(`worker restart keeps successful Provider evidence local-result-lost when escrow is ${failure}`, async () => {
+    const original = createHarness();
+    await original.registry.start(owner(), pageStart());
+    const candidates = completeProviderBatch(original);
+    if (failure === 'missing') candidates.shift();
+    if (failure === 'tamper') candidates[0].result.image.sha256 = 'f'.repeat(64);
+    const restored = createHarness({
+      initialOperation: original.operation,
+      initialServerBatch: original.serverBatch,
+      initialEscrowCandidates: candidates,
+      escrowKeyLoss: failure === 'key-loss',
+    });
+
+    const projection = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+    assert.equal(projection.scheduler.state, 'FAILED');
+    assert.equal(projection.ingest.state, 'FAILED_FINAL');
+    assert.ok(projection.slots.every((slotValue) => (
+      slotValue.attempts[0].state === 'FAILED_FINAL'
+        && slotValue.attempts[0].errorCode === 'SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST'
+    )));
+    assert.equal(restored.events.some((event) => event[0] === 'coordinator-restore'), false);
+    assert.equal(restored.events.some((event) => [
+      'prepare', 'reserve', 'coordinator-start', 'successor',
+    ].includes(event[0])), false);
+    assert.equal(restored.restoredResults.size, 0, 'partial vault restoration must roll back');
+  });
+}
+
+test('a stale escrow lifecycle epoch cannot enter the in-memory vault after restart', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  candidates[0].lifecycleAuthority.epoch = 8;
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+  const projection = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.equal(projection.scheduler.state, 'FAILED');
+  assert.ok(projection.slots.every((slotValue) => (
+    slotValue.attempts[0].errorCode === 'SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST'
+  )));
+  assert.equal(restored.events.some((event) => event[0] === 'vault-restore'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-restore'), false);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+test('worker restart rejects stale current authority before escrow or coordinator restoration', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    authorityStale: true,
+  });
+  await assert.rejects(
+    restored.registry.state(owner({ documentId: 'document-reloaded' })),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+  );
+  assert.equal(restored.events.some((event) => event[0] === 'escrow-find'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-restore'), false);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+test('status v1 downgrade and legacy recovery v1 preserve LOCAL_RESULT_LOST behavior byte-for-byte', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const oldestLegacy = legacyRecoveryV1(original.operation);
+  delete oldestLegacy.recovery.successorRecovery;
+  const cases = [
+    { operation: original.operation, statusV2Failure: true },
+    { operation: legacyRecoveryV1(original.operation), statusV2Failure: false },
+    { operation: oldestLegacy, statusV2Failure: false },
+  ];
+  for (const [index, value] of cases.entries()) {
+    const before = plain(value.operation);
+    const restored = createHarness({
+      initialOperation: value.operation,
+      initialServerBatch: original.serverBatch,
+      initialEscrowCandidates: candidates,
+      statusV2Failure: value.statusV2Failure,
+    });
+    const projection = await restored.registry.state(owner({
+      documentId: `document-v1-${index}`,
+    }));
+    assert.equal(projection.scheduler.state, 'FAILED');
+    assert.ok(projection.slots.every((slotValue) => (
+      slotValue.attempts[0].errorCode === 'SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST'
+    )));
+    assert.equal(restored.events.some((event) => event[0] === 'escrow-find'), false);
+    assert.equal(restored.events.some((event) => event[0] === 'coordinator-restore'), false);
+    assert.deepEqual(plain(restored.operation), before);
+  }
+});
+
+test('rejects an unknown recovery v2 field before status, escrow, or coordinator work', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  completeProviderBatch(original);
+  const operation = plain(original.operation);
+  operation.recovery.unexpected = true;
+  const restored = createHarness({
+    initialOperation: operation,
+    initialServerBatch: original.serverBatch,
+  });
+  await assert.rejects(
+    restored.registry.state(owner({ documentId: 'document-reloaded' })),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_SESSION_INVALID',
+  );
+  assert.equal(restored.events.some((event) => event[0].startsWith('reservation-status')), false);
+  assert.equal(restored.events.some((event) => event[0] === 'escrow-find'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-create'), false);
+});
+
+test('awaits escrow deletion on reject and a later worker cannot resurrect the candidate', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const first = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+  const projection = await first.registry.state(owner({ documentId: 'document-reloaded' }));
+  const rejected = projection.slots[0].attempts[0];
+  await first.registry.command(
+    owner({ documentId: 'document-reloaded' }),
+    pageCommand('REJECT', {
+      commandId: 'command-restored-reject',
+      expectedRuntimeRevision: projection.revision,
+      slotKey: projection.slots[0].slotKey,
+      attemptId: rejected.attemptId,
+      expectedSlotRevision: projection.slots[0].revision,
+    }),
+  );
+  assert.equal(first.events.filter((event) => event[0] === 'escrow-delete').length, 1);
+  assert.equal(first.escrowRepository.size, 1);
+
+  const restarted = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    escrowRepository: first.escrowRepository,
+  });
+  const afterRestart = await restarted.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.equal(afterRestart.scheduler.state, 'FAILED');
+  assert.equal(afterRestart.slots[0].attempts[0].errorCode, 'SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST');
+  assert.equal(restarted.events.some((event) => event[0] === 'coordinator-restore'), false);
+});
+
+test('fails REJECT before coordinator mutation when durable escrow deletion fails', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    escrowDeleteFailure: true,
+  });
+  const projection = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  await assert.rejects(
+    restored.registry.command(
+      owner({ documentId: 'document-reloaded' }),
+      pageCommand('REJECT', {
+        commandId: 'command-restored-reject-delete-failed',
+        expectedRuntimeRevision: projection.revision,
+        slotKey: projection.slots[0].slotKey,
+        attemptId: projection.slots[0].attempts[0].attemptId,
+        expectedSlotRevision: projection.slots[0].revision,
+      }),
+    ),
+    (error) => error?.code === 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'FAILED_FINAL'
+      && error?.automaticRetryAllowed === false,
+  );
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-reject'), false);
+  const afterFailure = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.equal(afterFailure.slots[0].attempts[0].reviewState, 'AVAILABLE');
+  assert.equal(restored.escrowRepository.size, 2);
+  assert.equal(restored.restoredResults.size, 2);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+test('locks ingest, clear, and command IDs while REJECT awaits durable deletion', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  let deleteEntered;
+  let releaseDelete;
+  const entered = new Promise((resolve) => { deleteEntered = resolve; });
+  const barrier = new Promise((resolve) => { releaseDelete = resolve; });
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    async beforeEscrowDelete() {
+      deleteEntered();
+      await barrier;
+    },
+  });
+  const reloadedOwner = owner({ documentId: 'document-reloaded' });
+  const projection = await restored.registry.state(reloadedOwner);
+  const rejectPromise = restored.registry.command(
+    reloadedOwner,
+    pageCommand('REJECT', {
+      commandId: 'command-race-reject',
+      expectedRuntimeRevision: projection.revision,
+      slotKey: projection.slots[0].slotKey,
+      attemptId: projection.slots[0].attempts[0].attemptId,
+      expectedSlotRevision: projection.slots[0].revision,
+    }),
+  );
+  await entered;
+  await assert.rejects(
+    restored.registry.ingest(reloadedOwner, {
+      contractVersion: 'extension-byok-workbench-batch-ingest/v1',
+      idempotencyKey: 'race-ingest-idempotency-0001',
+    }),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS',
+  );
+  const keepCommand = pageCommand('KEEP', {
+    commandId: 'command-race-keep',
+    expectedRuntimeRevision: projection.revision,
+    slotKey: projection.slots[1].slotKey,
+    attemptId: projection.slots[1].attempts[0].attemptId,
+    expectedSlotRevision: projection.slots[1].revision,
+  });
+  await assert.rejects(
+    restored.registry.command(reloadedOwner, keepCommand),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS',
+  );
+  await assert.rejects(
+    restored.registry.clear(reloadedOwner),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS',
+  );
+  assert.equal(restored.events.some((event) => event[0] === 'ingest'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'escrow-delete-many'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'reservation-cancel'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-dispose'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'operation-clear'), false);
+  releaseDelete();
+  await rejectPromise;
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-reject').length, 1);
+  const kept = await restored.registry.command(reloadedOwner, keepCommand);
+  assert.equal(kept.slots[1].attempts[0].reviewState, 'KEPT');
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-keep').length, 1);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+test('awaits one scoped escrow deleteMany before clearing a restored review-only batch', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+  await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.deepEqual(
+    plain(await restored.registry.clear(owner({ documentId: 'document-reloaded' }))),
+    { cleared: true },
+  );
+  const deleteEvents = restored.events.filter((event) => event[0] === 'escrow-delete-many');
+  assert.equal(deleteEvents.length, 1);
+  assert.deepEqual(new Set(deleteEvents[0][1]), new Set(candidates.map((item) => item.resultId)));
+  assert.equal(restored.escrowRepository.size, 0);
+  assert.equal(restored.operation, null);
+  assert.ok(
+    restored.events.findIndex((event) => event[0] === 'escrow-delete-many')
+      < restored.events.findIndex((event) => event[0] === 'operation-clear'),
+  );
+});
+
+test('fails CLEAR before reservation or coordinator cleanup when escrow deleteMany fails', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    escrowDeleteManyFailure: true,
+  });
+  await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  await assert.rejects(
+    restored.registry.clear(owner({ documentId: 'document-reloaded' })),
+    (error) => error?.code === 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'FAILED_FINAL',
+  );
+  assert.equal(restored.events.some((event) => event[0] === 'reservation-cancel'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'coordinator-dispose'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'operation-clear'), false);
+  assert.equal(restored.escrowRepository.size, 2);
+  assert.ok(restored.operation);
+});
+
 test('a fresh Registry safely cancels a persisted reservation that never reached dispatch', async () => {
   const original = createHarness();
   await original.registry.start(owner(), pageStart());
@@ -956,9 +1909,32 @@ test('a fresh Registry safely cancels a persisted reservation that never reached
   assert.equal(restored.operation, null);
 });
 
+test('a fresh RESERVED rollback does not terminalize or cancel before durable intent cleanup', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const reservedOperation = plain(original.operation);
+  reservedOperation.recovery.phase = 'RESERVED';
+  const restored = createHarness({
+    initialOperation: reservedOperation,
+    initialServerBatch: original.serverBatch,
+    escrowDeleteByIntentFailure: true,
+  });
+
+  await assert.rejects(
+    restored.registry.state(owner({ documentId: 'reserved-delete-failed' })),
+    (error) => error?.code === 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'FAILED_FINAL',
+  );
+  assert.equal(restored.reported.length, 0);
+  assert.equal(restored.events.some((event) => event[0] === 'reservation-cancel'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'operation-clear'), false);
+  assert.ok(restored.operation);
+});
+
 test('a fresh Registry converts a bound batch into one authoritative draft reload', async () => {
   const original = createHarness();
   await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
   const status = {
     contractVersion: 'extension-byok-execution-batch-status/v1',
     batchId: original.serverBatch.batchId,
@@ -977,6 +1953,7 @@ test('a fresh Registry converts a bound batch into one authoritative draft reloa
   const restored = createHarness({
     initialOperation: original.operation,
     initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
     statusOverride: status,
   });
 
@@ -986,9 +1963,149 @@ test('a fresh Registry converts a bound batch into one authoritative draft reloa
   assert.equal(projection.ingest.boundDraftRevision, 8);
   assert.equal(projection.ingest.boundDraftVersion, 12);
   assert.equal(restored.operation, null);
+  assert.equal(restored.escrowRepository.size, 0);
+  assert.ok(
+    restored.events.findIndex((event) => event[0] === 'escrow-delete-by-intents')
+      < restored.events.findIndex((event) => event[0] === 'operation-clear'),
+  );
   assertSanitizedProjection(projection);
   const empty = await restored.registry.state(owner({ documentId: 'bound-reload' }));
   assert.equal(empty.revision, 0);
+});
+
+test('a fresh Registry durably deletes CANCELLED ciphertext before releasing its operation lock', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const cancelledBatch = plain(original.serverBatch);
+  cancelledBatch.status = 'CANCELLED';
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: cancelledBatch,
+    initialEscrowCandidates: candidates,
+  });
+
+  const projection = await restored.registry.state(owner({ documentId: 'cancelled-reload' }));
+  assert.equal(projection.revision, 0);
+  assert.equal(restored.escrowRepository.size, 0);
+  assert.equal(restored.operation, null);
+  assert.ok(
+    restored.events.findIndex((event) => event[0] === 'escrow-delete-by-intents')
+      < restored.events.findIndex((event) => event[0] === 'operation-clear'),
+  );
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+test('fresh BOUND and CANCELLED clear paths durably delete ciphertext before lock release', async () => {
+  for (const terminalStatus of ['BOUND', 'CANCELLED']) {
+    const original = createHarness();
+    await original.registry.start(owner(), pageStart());
+    const candidates = completeProviderBatch(original);
+    const terminalBatch = plain(original.serverBatch);
+    terminalBatch.status = terminalStatus;
+    const restored = createHarness({
+      initialOperation: original.operation,
+      initialServerBatch: terminalBatch,
+      initialEscrowCandidates: candidates,
+    });
+
+    assert.deepEqual(
+      plain(await restored.registry.clear(owner({
+        documentId: `${terminalStatus.toLowerCase()}-direct-clear`,
+      }))),
+      { cleared: true },
+    );
+    assert.equal(restored.escrowRepository.size, 0);
+    assert.equal(restored.operation, null);
+    assert.ok(
+      restored.events.findIndex((event) => event[0] === 'escrow-delete-by-intents')
+        < restored.events.findIndex((event) => event[0] === 'operation-clear'),
+    );
+  }
+});
+
+test('a fresh terminal OPEN clear durably deletes ciphertext before cancel and lock release', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+
+  assert.deepEqual(
+    plain(await restored.registry.clear(owner({ documentId: 'terminal-open-clear' }))),
+    { cleared: true },
+  );
+  const deleteIndex = restored.events.findIndex(
+    (event) => event[0] === 'escrow-delete-by-intents',
+  );
+  const cancelIndex = restored.events.findIndex((event) => event[0] === 'reservation-cancel');
+  const clearIndex = restored.events.findIndex((event) => event[0] === 'operation-clear');
+  assert.ok(deleteIndex >= 0 && deleteIndex < cancelIndex && cancelIndex < clearIndex);
+  assert.equal(restored.escrowRepository.size, 0);
+  assert.equal(restored.operation, null);
+  assert.equal(restored.events.some((event) => [
+    'escrow-find', 'vault-restore', 'coordinator-restore', 'prepare', 'reserve',
+    'coordinator-start', 'successor',
+  ].includes(event[0])), false);
+});
+
+for (const terminalStatus of ['BOUND', 'CANCELLED']) {
+  for (const entrypoint of ['state', 'clear']) {
+    test(`fresh ${terminalStatus} ${entrypoint} retains ciphertext and lock when durable deletion fails`, async () => {
+    const original = createHarness();
+    await original.registry.start(owner(), pageStart());
+    const candidates = completeProviderBatch(original);
+    const terminalBatch = plain(original.serverBatch);
+    terminalBatch.status = terminalStatus;
+    const restored = createHarness({
+      initialOperation: original.operation,
+      initialServerBatch: terminalBatch,
+      initialEscrowCandidates: candidates,
+      escrowDeleteByIntentFailure: true,
+    });
+
+    await assert.rejects(
+      restored.registry[entrypoint](owner({
+        documentId: `${terminalStatus.toLowerCase()}-${entrypoint}-failed-delete`,
+      })),
+      (error) => error?.code === 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'
+        && error?.outcome === 'FAILED_FINAL'
+        && error?.automaticRetryAllowed === false,
+    );
+    assert.equal(restored.escrowRepository.size, candidates.length);
+    assert.ok(restored.operation);
+    assert.equal(restored.events.some((event) => event[0] === 'reservation-cancel'), false);
+    assert.equal(restored.events.some((event) => event[0] === 'operation-clear'), false);
+    });
+  }
+}
+
+test('fresh terminal OPEN clear keeps ciphertext and lock when durable deletion fails', async () => {
+  const original = createHarness();
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original);
+  const restored = createHarness({
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+    escrowDeleteByIntentFailure: true,
+  });
+
+  await assert.rejects(
+    restored.registry.clear(owner({ documentId: 'terminal-open-failed-delete' })),
+    (error) => error?.code === 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'FAILED_FINAL'
+      && error?.automaticRetryAllowed === false,
+  );
+  assert.equal(restored.escrowRepository.size, candidates.length);
+  assert.ok(restored.operation);
+  assert.equal(restored.events.some((event) => event[0] === 'reservation-cancel'), false);
+  assert.equal(restored.events.some((event) => event[0] === 'operation-clear'), false);
 });
 
 test('safe queued cancellation reports the exact reserved intent terminal', async () => {
@@ -1033,6 +2150,66 @@ test('successor regeneration prepares, claims with charge confirmation, register
     < harness.events.findIndex((event) => event[0] === 'coordinator-regenerate'));
   assert.equal(harness.events.find((event) => event[0] === 'broker-attempt')[1]
     .intent.executionMode, 'BYOK');
+});
+
+test('credential reset does not deadlock behind REGENERATE waiting on provider profile state', async () => {
+  let blockProviderInput = false;
+  let providerInputEntered;
+  let releaseProviderInput;
+  const entered = new Promise((resolve) => { providerInputEntered = resolve; });
+  const barrier = new Promise((resolve) => { releaseProviderInput = resolve; });
+  const harness = createHarness({
+    async beforeResolveProviderInput() {
+      if (!blockProviderInput) return;
+      blockProviderInput = false;
+      providerInputEntered();
+      await barrier;
+      throw Object.assign(new Error('provider profile authority was reset'), {
+        code: 'SS_ERP_BYOK_PROVIDER_PROFILE_NOT_FOUND',
+      });
+    },
+  });
+  await harness.registry.start(owner(), pageStart());
+  harness.projection.slots[0].attempts[0].state = 'CANDIDATE_READY';
+  harness.projection.slots[0].state = 'CANDIDATE_READY';
+  harness.projection.scheduler.queuedCount = 1;
+  blockProviderInput = true;
+  const pendingRegenerate = harness.registry.command(owner(), pageCommand('REGENERATE', {
+    slotKey: 'sku:sku-1:hero', commandId: 'command-reset-lock-order-regenerate',
+    expectedSlotRevision: 1,
+    chargeAcknowledgement: { warningVersion: 'external-provider-charge/v1', confirmed: true },
+  }));
+  await entered;
+
+  let finalizeEntered;
+  let releaseFinalize;
+  const inFinalize = new Promise((resolve) => { finalizeEntered = resolve; });
+  const finalizeBarrier = new Promise((resolve) => { releaseFinalize = resolve; });
+  const cleanup = harness.registry.clearAll('provider_state_changed', async () => {
+    finalizeEntered();
+    await finalizeBarrier;
+  });
+  await inFinalize;
+  await assert.rejects(
+    harness.registry.command(owner(), pageCommand('PAUSE', {
+      commandId: 'command-reset-fenced-pause',
+    })),
+    (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS'
+      && error?.outcome === 'FAILED_RETRYABLE',
+  );
+  releaseFinalize();
+  assert.equal(await cleanup, 0,
+    'reset must complete without waiting for the profile-blocked mutation');
+
+  releaseProviderInput();
+  await assert.rejects(
+    pendingRegenerate,
+    (error) => error?.code === 'SS_ERP_BYOK_PROVIDER_PROFILE_NOT_FOUND',
+  );
+  assert.equal(harness.events.some((event) => event[0] === 'successor'), false);
+  assert.equal(harness.events.some((event) => event[0] === 'broker-attempt'), false);
+  assert.equal(harness.events.some((event) => event[0] === 'coordinator-regenerate'), false,
+    'the stale mutation must never reach Provider dispatch');
 });
 
 for (const responseFailure of ['successorResponseLost', 'successorResponseMalformed']) {
@@ -1109,7 +2286,7 @@ test('ambiguous successor claim persists exact recovery and safely terminalizes 
   assert.equal(restarted.reported[0].intentId, first.serverBatch.items[0].intent.intentId);
   assert.equal(restarted.reported[0].outcome, 'FAILED_FINAL');
   assert.equal(restarted.operation.recovery.successorRecovery, null);
-  assert.ok(restarted.events.filter((event) => event[0] === 'reservation-status').length >= 2);
+  assert.ok(restarted.events.filter((event) => event[0] === 'reservation-status-v2').length >= 2);
   assert.equal(restarted.events.some((event) => event[0] === 'coordinator-create'), false);
   assert.deepEqual(plain(await restarted.registry.clear(owner())), { cleared: true });
   assert.equal(restarted.operation, null);

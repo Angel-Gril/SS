@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "minimum_chrome_version": "106",
+  "minimum_chrome_version": "114",
   "name": "SS ERP - 松鼠跨境卖家助手",
   "short_name": "SS ERP",
   "version": "1.0.264",

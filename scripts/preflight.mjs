@@ -373,6 +373,16 @@ const steps = [
     args: ['scripts/extension-byok-generated-result-vault.test.mjs'],
   },
   {
+    name: 'extension BYOK generated result escrow contract',
+    command: 'node',
+    args: ['scripts/extension-byok-generated-result-vault-persistence.test.mjs'],
+  },
+  {
+    name: 'extension BYOK encrypted batch restart fixture',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-escrow-restart.test.mjs'],
+  },
+  {
     name: 'extension BYOK generated asset ingest client contract',
     command: 'node',
     args: ['scripts/extension-byok-generated-asset-ingest-client.test.mjs'],
@@ -451,6 +461,11 @@ const steps = [
     name: 'extension BYOK workbench batch recovery UI contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-batch-recovery-ui.test.mjs'],
+  },
+  {
+    name: 'extension BYOK workbench batch lifecycle heartbeat contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-batch-lifecycle-heartbeat.test.mjs'],
   },
   {
     name: 'extension BYOK workbench batch service-worker wiring contract',

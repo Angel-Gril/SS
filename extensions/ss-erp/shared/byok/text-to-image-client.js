@@ -258,6 +258,21 @@
       }
     }
     return {
+      contractVersion: READINESS_BINDING_VERSION,
+      ownerUserId: value.ownerUserId,
+      deviceSessionId: value.deviceSessionId,
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+      sourcePlatform: value.sourcePlatform,
+      sourceProductId: value.sourceProductId,
+      sourceCaptureSnapshotId: value.sourceCaptureSnapshotId,
+      supplyGoodsId: value.supplyGoodsId,
+      skuKey: value.skuKey,
+      slotKey: value.slotKey,
+      assignmentMode: value.assignmentMode,
+      assignmentOrdinal: value.assignmentOrdinal,
       providerOrigin: providerOrigin,
       model: value.model.trim(),
       operation: OPERATION,
@@ -725,6 +740,7 @@
     var profileStore = options && options.profileStore;
     var permissionBroker = options && options.permissionBroker;
     var executionIntentClient = options && options.executionIntentClient;
+    var stageResult = options && options.stageResult;
     var fetchImpl = options && options.fetchImpl;
     var authorizeResultOrigin = options && options.authorizeResultOrigin;
     var cryptoImpl = options && options.crypto || global.crypto;
@@ -761,6 +777,9 @@
     }
     if (authorizeResultOrigin !== undefined && typeof authorizeResultOrigin !== 'function') {
       throw new TypeError('authorizeResultOrigin must be a function');
+    }
+    if (stageResult !== undefined && typeof stageResult !== 'function') {
+      throw new TypeError('stageResult must be a function');
     }
 
     var operations = new Map();
@@ -929,6 +948,66 @@
         await reportExecutionOutcome(entry, prepared, error.outcome);
       } catch {
         // The Provider outcome remains authoritative and absorbing when audit transport fails.
+      }
+    }
+
+    async function stageCompletedResult(result, binding) {
+      if (!stageResult) return result;
+      var staged;
+      try {
+        staged = await stageResult(result, binding);
+      } catch (error) {
+        throw clientError(
+          'SS_ERP_BYOK_PROVIDER_RESULT_ESCROW_UNAVAILABLE',
+          'Provider result could not be retained for review',
+          'UNKNOWN_OUTCOME',
+          {
+            automaticRetryAllowed: false,
+            causeCode: String(error && error.code || 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE')
+              .slice(0, 100),
+          },
+        );
+      }
+      if (!isRecord(staged) || typeof staged.resultId !== 'string'
+        || !/^br_[a-f0-9]{48}$/u.test(staged.resultId)) {
+        throw clientError(
+          'SS_ERP_BYOK_PROVIDER_RESULT_ESCROW_UNAVAILABLE',
+          'Provider result escrow returned an invalid identity',
+          'UNKNOWN_OUTCOME',
+          { automaticRetryAllowed: false },
+        );
+      }
+      result.escrowResultId = staged.resultId;
+      return result;
+    }
+
+    async function stageCompletedResultWithAuthority(
+      entry,
+      prepared,
+      result,
+      providerRequestIdSha256,
+    ) {
+      var stageStarted = false;
+      try {
+        return await permissionBroker.commitWithOriginPermission(
+          prepared.endpoint.baseUrl,
+          function () {
+            return profileStore.commitWithCredentialRevisionForBackground(
+              entry.profileId,
+              entry.profileIdentity,
+              entry.credentialRevision,
+              function () {
+                stageStarted = true;
+                return stageCompletedResult(result, prepared.binding);
+              },
+            );
+          },
+        );
+      } catch (error) {
+        if (stageStarted) throw error;
+        var stale = resultAuthorityStale(error);
+        stale.providerRequestIdSha256 = safeSha256(providerRequestIdSha256);
+        throw stale;
       }
     }
 
@@ -1331,13 +1410,6 @@
       }
       entry.providerRequestIdSha256 = providerRequestIdSha256;
       entry.resultSha256 = resultHash;
-      if (!entry.capabilityProbe) {
-        try {
-          await reportExecutionOutcome(entry, prepared, 'SUCCEEDED');
-        } catch (error) {
-          throw unknownOutcome(error, providerRequestIdSha256);
-        }
-      }
       var acceptedAt;
       try {
         acceptedAt = new Date(now());
@@ -1345,7 +1417,7 @@
       } catch {
         acceptedAt = new Date();
       }
-      return {
+      var result = {
         contractVersion: CONTRACT_VERSION,
         outcome: 'SUCCEEDED',
         operation: OPERATION,
@@ -1373,6 +1445,20 @@
           resultUrlHash: image.resultUrlHash,
         },
       };
+      if (!entry.capabilityProbe) {
+        result = await stageCompletedResultWithAuthority(
+          entry,
+          prepared,
+          result,
+          providerRequestIdSha256,
+        );
+        try {
+          await reportExecutionOutcome(entry, prepared, 'SUCCEEDED');
+        } catch (error) {
+          throw unknownOutcome(error, providerRequestIdSha256);
+        }
+      }
+      return result;
     }
 
     async function runPrepared(prepared, capabilityProbe) {

@@ -11,6 +11,8 @@ const source = readFileSync(new URL(
 const SLOT_KEY = 'sku:sku-1:hero';
 const ATTEMPT_ID = 'attempt-1';
 const COMMAND_ID = 'byok-command:00000000-0000-4000-8000-000000000001';
+const LIFECYCLE_PING = 'ss-erp:ai-image-workbench-batch-lifecycle-ping/v1';
+const LIFECYCLE_ACK = 'ss-erp:ai-image-workbench-batch-lifecycle-ack/v1';
 
 class TestNode {
   constructor(id = '', tagName = 'div') {
@@ -194,6 +196,9 @@ async function createHarness(state, recoveryRequirement = null) {
   const documentListeners = new Map();
   const body = new TestNode('body', 'body');
   let runtimeRevision = 0;
+  const lifecycleMessageListeners = [];
+  const lifecycleDisconnectListeners = [];
+  let lifecycleDisconnected = false;
   const context = {
     Array,
     Blob,
@@ -235,11 +240,45 @@ async function createHarness(state, recoveryRequirement = null) {
         async digest() { return Uint8Array.from({ length: 32 }, (_value, index) => index).buffer; },
       },
     },
+    chrome: {
+      runtime: {
+        connect(input) {
+          assert.equal(input && input.name, 'ss-erp:ai-image-workbench-batch-lifecycle');
+          assert.deepEqual(Object.keys(input || {}), ['name']);
+          return {
+            onMessage: {
+              addListener(listener) { lifecycleMessageListeners.push(listener); },
+            },
+            onDisconnect: {
+              addListener(listener) { lifecycleDisconnectListeners.push(listener); },
+            },
+            postMessage(message) {
+              assert.equal(lifecycleDisconnected, false);
+              assert.equal(message, LIFECYCLE_PING);
+              Promise.resolve().then(function () {
+                lifecycleMessageListeners.forEach(function (listener) {
+                  listener(LIFECYCLE_ACK);
+                });
+              });
+            },
+            disconnect() {
+              if (lifecycleDisconnected) return;
+              lifecycleDisconnected = true;
+              lifecycleDisconnectListeners.forEach(function (listener) { listener(); });
+            },
+          };
+        },
+      },
+    },
     URL: {
       createObjectURL() { return 'blob:unused'; },
       revokeObjectURL() {},
     },
-    setTimeout,
+    setTimeout(callback, delay) {
+      const timer = setTimeout(callback, delay);
+      timer.unref();
+      return timer;
+    },
     clearTimeout,
   };
   context.globalThis = context;

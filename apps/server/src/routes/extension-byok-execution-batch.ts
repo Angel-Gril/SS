@@ -13,6 +13,7 @@ import {
   EXTENSION_BYOK_EXECUTION_BATCH_CANCEL_VERSION,
   EXTENSION_BYOK_EXECUTION_BATCH_REQUEST_VERSION,
   EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION,
+  EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2,
   EXTENSION_BYOK_EXECUTION_BATCH_VERSION,
   ExtensionByokExecutionBatchError,
   type ExtensionByokExecutionBatchErrorCode,
@@ -66,6 +67,12 @@ const idempotencyStatusParamsSchema = z.object({
 const cancelBodySchema = z.object({
   contractVersion: z.literal(EXTENSION_BYOK_EXECUTION_BATCH_CANCEL_REQUEST_VERSION),
 }).strict();
+const statusQuerySchema = z.object({
+  contractVersion: z.enum([
+    EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION,
+    EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2,
+  ]).optional(),
+}).strict();
 
 const contextSchema = z.object({
   shopId: identifier(),
@@ -103,6 +110,22 @@ const statusItemProjectionSchema = itemProjectionSchema.extend({
   status: z.enum(['ACTIVE', 'BOUND', 'RELEASED']),
 }).strict();
 
+const statusIntentProjectionV2Schema = intentProjectionSchema.extend({
+  resultSha256: z.string().regex(HASH_PATTERN).nullable(),
+}).strict().superRefine((intent, context) => {
+  if ((intent.outcome === 'SUCCEEDED') !== (intent.resultSha256 !== null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'resultSha256 is inconsistent with outcome',
+    });
+  }
+});
+
+const statusItemProjectionV2Schema = itemProjectionSchema.omit({ intent: true }).extend({
+  status: z.enum(['ACTIVE', 'BOUND', 'RELEASED']),
+  intent: statusIntentProjectionV2Schema,
+}).strict();
+
 const createProjectionSchema = z.object({
   contractVersion: z.literal(EXTENSION_BYOK_EXECUTION_BATCH_VERSION),
   batchId: identifier(),
@@ -136,6 +159,14 @@ const statusProjectionSchema = z.object({
   boundDraftRevision: z.number().int().positive().nullable(),
   boundDraftVersion: z.number().int().positive().nullable(),
   items: z.array(statusItemProjectionSchema).min(1).max(MAX_ITEMS),
+}).strict();
+
+const statusProjectionV2Schema = statusProjectionSchema.omit({
+  contractVersion: true,
+  items: true,
+}).extend({
+  contractVersion: z.literal(EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2),
+  items: z.array(statusItemProjectionV2Schema).min(1).max(MAX_ITEMS),
 }).strict();
 
 export interface ExtensionByokExecutionBatchRoutesOptions {
@@ -397,6 +428,9 @@ function attemptProjection(
 function statusProjection(
   batch: ExtensionByokExecutionBatchRecord,
   loadedItems: ExtensionByokExecutionBatchLoadedItem[],
+  contractVersion: typeof EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION
+  | typeof EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2 =
+  EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION,
 ) {
   const bound = batch.status === 'BOUND';
   const lifecycleMatches = batch.status === 'OPEN'
@@ -416,6 +450,9 @@ function statusProjection(
     : batch.status === 'BOUND' ? 'BOUND' : 'RELEASED';
   const items = loadedItems.map(({ item, intent }) => {
     const projection = itemProjection(batch, intent, item.itemIndex);
+    const resultProofMatches = intent.outcome === 'SUCCEEDED'
+      ? typeof intent.resultSha256 === 'string' && HASH_PATTERN.test(intent.resultSha256)
+      : intent.resultSha256 === null;
     if (item.batchId !== batch.id
       || item.ownerUserId !== batch.ownerUserId
       || item.listingWorkflowId !== batch.listingWorkflowId
@@ -431,17 +468,32 @@ function statusProjection(
       || (item.status === 'RELEASED' && (item.boundAt !== null || item.releasedAt === null))
       || (batch.status === 'BOUND' && intent.outcome !== 'SUCCEEDED')
       || (batch.status === 'CANCELLED'
-        && ['PENDING', 'UNKNOWN_OUTCOME'].includes(intent.outcome))) {
+        && ['PENDING', 'UNKNOWN_OUTCOME'].includes(intent.outcome))
+      || !resultProofMatches) {
       throw new TypeError('BYOK execution batch recovery item is invalid');
     }
-    return { ...projection, status: item.status };
+    return {
+      ...projection,
+      status: item.status,
+      ...(contractVersion === EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2
+        ? {
+            intent: {
+              ...projection.intent,
+              resultSha256: intent.outcome === 'SUCCEEDED' ? intent.resultSha256 : null,
+            },
+          }
+        : {}),
+    };
   }).sort((left, right) => left.itemIndex - right.itemIndex);
   if (items.some((item, index) => item.itemIndex !== index)
     || new Set(items.map((item) => item.batchItemId)).size !== items.length) {
     throw new TypeError('BYOK execution batch recovery item order is invalid');
   }
-  const projection = statusProjectionSchema.safeParse({
-    contractVersion: EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION,
+  const projectionSchema = contractVersion === EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2
+    ? statusProjectionV2Schema
+    : statusProjectionSchema;
+  const projection = projectionSchema.safeParse({
+    contractVersion,
     batchId: batch.id,
     status: batch.status,
     context: batchStatusContext(batch),
@@ -479,7 +531,8 @@ export async function extensionByokExecutionBatchRoutes(
     preHandler: [options.authenticateDevice],
   }, async (request, reply) => {
     const params = idempotencyStatusParamsSchema.safeParse(request.params);
-    if (!params.success) {
+    const query = statusQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
       return routeError(
         reply,
         400,
@@ -503,7 +556,11 @@ export async function extensionByokExecutionBatchRoutes(
       }
       return reply.status(200).send({
         code: 1,
-        data: statusProjection(result.batch, result.items),
+        data: statusProjection(
+          result.batch,
+          result.items,
+          query.data.contractVersion,
+        ),
       });
     } catch (error) {
       if (error instanceof ExtensionByokExecutionBatchError) {
@@ -526,7 +583,8 @@ export async function extensionByokExecutionBatchRoutes(
     preHandler: [options.authenticateDevice],
   }, async (request, reply) => {
     const params = cancelParamsSchema.safeParse(request.params);
-    if (!params.success) {
+    const query = statusQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
       return routeError(
         reply,
         400,
@@ -550,7 +608,11 @@ export async function extensionByokExecutionBatchRoutes(
       }
       return reply.status(200).send({
         code: 1,
-        data: statusProjection(result.batch, result.items),
+        data: statusProjection(
+          result.batch,
+          result.items,
+          query.data.contractVersion,
+        ),
       });
     } catch (error) {
       if (error instanceof ExtensionByokExecutionBatchError) return knownError(reply, error);

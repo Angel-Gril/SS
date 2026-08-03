@@ -414,6 +414,160 @@ describe('extension BYOK execution batch routes', () => {
     await app.close();
   });
 
+  it('returns canonical result proofs only through explicitly negotiated status/v2', async () => {
+    const { app, getStatus } = await build();
+    getStatus.mockResolvedValueOnce({
+      batch: batch({ itemCount: 4 }),
+      items: [
+        statusItem(0, 'ACTIVE', 'PENDING'),
+        statusItem(1, 'ACTIVE', 'SUCCEEDED', 1),
+        statusItem(2, 'ACTIVE', 'FAILED_FINAL', 2),
+        statusItem(3, 'ACTIVE', 'UNKNOWN_OUTCOME', 3),
+      ],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/batch-1'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv2',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        contractVersion: 'extension-byok-execution-batch-status/v2',
+        items: [
+          { intent: { outcome: 'PENDING', resultSha256: null } },
+          { intent: { outcome: 'SUCCEEDED', resultSha256: '8'.repeat(64) } },
+          { intent: { outcome: 'FAILED_FINAL', resultSha256: null } },
+          { intent: { outcome: 'UNKNOWN_OUTCOME', resultSha256: null } },
+        ],
+      },
+    });
+    const body = response.json();
+    expect(Object.keys(body.data.items[1].intent).sort()).toEqual([
+      'attemptIndex',
+      'contractVersion',
+      'intentId',
+      'outcome',
+      'providerIdempotencyKey',
+      'providerRequestHash',
+      'resultSha256',
+    ]);
+    for (const forbidden of [
+      'provider.example', 'providerOriginSha256', 'image-model-1',
+      'https://', 'data:', 'bytes', 'prompt', 'apiKey', 'errorCode',
+    ]) {
+      expect(response.body).not.toContain(forbidden);
+    }
+    await app.close();
+  });
+
+  it('requires the same authenticated owner device for status/v2', async () => {
+    const { app, getStatus } = await build({ actorUserId: 'actor-2' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/batch-1'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv2',
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      code: 0, errorCode: 'invalid_device_context',
+    });
+    expect(getStatus).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('negotiates status/v2 for idempotency recovery without weakening device authority', async () => {
+    const { app, getStatusByIdempotencyKey } = await build();
+    getStatusByIdempotencyKey.mockResolvedValueOnce({
+      batch: batch(),
+      items: [
+        statusItem(0, 'ACTIVE', 'SUCCEEDED'),
+        statusItem(1, 'ACTIVE', 'FAILED_FINAL'),
+      ],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/by-idempotency/provider-batch-attempt-0001'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv2',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        contractVersion: 'extension-byok-execution-batch-status/v2',
+        items: [
+          { intent: { outcome: 'SUCCEEDED', resultSha256: '8'.repeat(64) } },
+          { intent: { outcome: 'FAILED_FINAL', resultSha256: null } },
+        ],
+      },
+    });
+    await app.close();
+  });
+
+  it('keeps explicit status/v1 identical to the default projection', async () => {
+    const { app } = await build();
+    const implicit = await app.inject({
+      method: 'GET', url: '/byok-media/execution-batches/batch-1',
+    });
+    const explicit = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/batch-1'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv1',
+    });
+
+    expect(explicit.statusCode).toBe(200);
+    expect(explicit.body).toBe(implicit.body);
+    expect(explicit.body).not.toContain('resultSha256');
+    await app.close();
+  });
+
+  it.each([
+    ['missing success proof', { outcome: 'SUCCEEDED', resultSha256: null }],
+    ['uppercase success proof', { outcome: 'SUCCEEDED', resultSha256: 'A'.repeat(64) }],
+    ['proof on failed intent', { outcome: 'FAILED_FINAL', resultSha256: '8'.repeat(64) }],
+  ] as const)('fails closed when status/v2 receives %s', async (_label, overrides) => {
+    const { app, getStatus } = await build();
+    const malformed = statusItem(0, 'ACTIVE', 'PENDING');
+    malformed.intent = { ...malformed.intent, ...overrides };
+    getStatus.mockResolvedValueOnce({
+      batch: batch({ itemCount: 1 }),
+      items: [malformed],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/batch-1'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv2',
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      code: 0, errorCode: 'byok_execution_batch_unavailable',
+    });
+    expect(response.body).not.toContain(String(overrides.resultSha256));
+    await app.close();
+  });
+
+  it('rejects unsupported status contract negotiation before service access', async () => {
+    const { app, getStatus } = await build();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/byok-media/execution-batches/batch-1'
+        + '?contractVersion=extension-byok-execution-batch-status%2Fv3',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      code: 0, errorCode: 'byok_execution_batch_invalid_request',
+    });
+    expect(getStatus).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it.each([
     {
       batchStatus: 'BOUND' as const,

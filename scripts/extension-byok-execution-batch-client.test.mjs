@@ -203,6 +203,7 @@ test('loads and validates the exact persisted batch state for Worker recovery', 
   const status = await client.status({ batchId: 'batch-1' });
   assert.equal(status.status, 'OPEN');
   assert.equal(status.items[1].intent.outcome, 'PENDING');
+  assert.equal(Object.hasOwn(status.items[1].intent, 'resultSha256'), false);
   assert.equal(Object.isFrozen(status), true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
     path: '/api/extension-device/byok-media/execution-batches/batch-1',
@@ -224,6 +225,161 @@ test('loads and validates the exact persisted batch state for Worker recovery', 
     malformed.status({ batchId: 'batch-1' }),
     (error) => error?.code === 'SS_ERP_BYOK_EXECUTION_BATCH_RESPONSE_INVALID',
   );
+});
+
+test('explicitly negotiates status/v2 and returns only canonical succeeded result proofs', async () => {
+  const api = loadApi();
+  assert.equal(api.STATUS_RESPONSE_VERSION, 'extension-byok-execution-batch-status/v1');
+  assert.equal(api.STATUS_RESPONSE_VERSION_V2, 'extension-byok-execution-batch-status/v2');
+  const calls = [];
+  const client = api.createClient({
+    transport: {
+      async post() { throw new Error('unexpected POST'); },
+      async get(path, options) {
+        calls.push({ path, options });
+        return response(200, {
+          contractVersion: 'extension-byok-execution-batch-status/v2',
+          batchId: 'batch-1',
+          status: 'OPEN',
+          context: {
+            shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 7, draftVersion: 11,
+            sourcePlatform: '1688', sourceProductId: 'source-1',
+            sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+          },
+          boundDraftRevision: null,
+          boundDraftVersion: null,
+          items: [
+            {
+              ...publicItem(0, {
+                intent: { ...publicItem(0).intent, outcome: 'SUCCEEDED', resultSha256: HASHES[2] },
+              }),
+              status: 'ACTIVE',
+            },
+            {
+              ...publicItem(1, {
+                intent: { ...publicItem(1).intent, outcome: 'FAILED_FINAL', resultSha256: null },
+              }),
+              status: 'ACTIVE',
+            },
+          ],
+        });
+      },
+    },
+  });
+
+  const status = await client.statusV2({ batchId: 'batch-1' });
+  assert.equal(status.contractVersion, 'extension-byok-execution-batch-status/v2');
+  assert.equal(status.items[0].intent.resultSha256, HASHES[2]);
+  assert.equal(status.items[1].intent.resultSha256, null);
+  assert.equal(Object.isFrozen(status.items[0].intent), true);
+  assert.deepEqual(Object.keys(status.items[0].intent).sort(), [
+    'attemptIndex',
+    'contractVersion',
+    'intentId',
+    'outcome',
+    'providerIdempotencyKey',
+    'providerRequestHash',
+    'resultSha256',
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
+    path: '/api/extension-device/byok-media/execution-batches/batch-1'
+      + '?contractVersion=extension-byok-execution-batch-status%2Fv2',
+    options: { requiredScope: 'byok:media:ingest' },
+  }]);
+});
+
+test('status/v2 rejects v1 downgrade and inconsistent or non-canonical result proofs', async () => {
+  const api = loadApi();
+  let responseData;
+  const client = api.createClient({
+    transport: {
+      async post() { throw new Error('unexpected POST'); },
+      async get() { return response(200, responseData); },
+    },
+  });
+  const base = {
+    contractVersion: 'extension-byok-execution-batch-status/v2',
+    batchId: 'batch-1',
+    status: 'OPEN',
+    context: {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 7, draftVersion: 11,
+      sourcePlatform: '1688', sourceProductId: 'source-1',
+      sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    },
+    boundDraftRevision: null,
+    boundDraftVersion: null,
+  };
+  const invalidIntents = [
+    { ...publicItem(0).intent, outcome: 'SUCCEEDED', resultSha256: null },
+    { ...publicItem(0).intent, outcome: 'SUCCEEDED', resultSha256: 'A'.repeat(64) },
+    { ...publicItem(0).intent, outcome: 'FAILED_FINAL', resultSha256: HASHES[2] },
+  ];
+  for (const intent of invalidIntents) {
+    responseData = { ...base, items: [{ ...publicItem(0, { intent }), status: 'ACTIVE' }] };
+    await assert.rejects(
+      client.statusV2({ batchId: 'batch-1' }),
+      (error) => error?.code === 'SS_ERP_BYOK_EXECUTION_BATCH_RESPONSE_INVALID',
+    );
+  }
+  responseData = {
+    ...base,
+    contractVersion: 'extension-byok-execution-batch-status/v1',
+    items: [{ ...publicItem(0), status: 'ACTIVE' }],
+  };
+  await assert.rejects(
+    client.statusV2({ batchId: 'batch-1' }),
+    (error) => error?.code === 'SS_ERP_BYOK_EXECUTION_BATCH_RESPONSE_INVALID',
+  );
+});
+
+test('explicitly negotiates status/v2 idempotency recovery and preserves exact misses', async () => {
+  const api = loadApi();
+  const calls = [];
+  let missing = false;
+  const key = 'byok-reservation:00000000-0000-4000-8000-000000000001';
+  const client = api.createClient({
+    transport: {
+      async post() { throw new Error('unexpected POST'); },
+      async get(path, options) {
+        calls.push({ path, options });
+        if (missing) {
+          return {
+            state: 'http_error', status: 404,
+            body: { code: 0, errorCode: 'byok_execution_batch_not_found', msg: 'not found' },
+          };
+        }
+        return response(200, {
+          contractVersion: 'extension-byok-execution-batch-status/v2',
+          batchId: 'batch-1', status: 'OPEN',
+          context: {
+            shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 7, draftVersion: 11,
+            sourcePlatform: '1688', sourceProductId: 'source-1',
+            sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+          },
+          boundDraftRevision: null, boundDraftVersion: null,
+          items: [{
+            ...publicItem(0, {
+              intent: { ...publicItem(0).intent, outcome: 'SUCCEEDED', resultSha256: HASHES[2] },
+            }),
+            status: 'ACTIVE',
+          }],
+        });
+      },
+    },
+  });
+
+  assert.equal(
+    (await client.statusByIdempotencyV2({ idempotencyKey: key })).items[0].intent.resultSha256,
+    HASHES[2],
+  );
+  missing = true;
+  assert.equal(await client.statusByIdempotencyV2({ idempotencyKey: key }), null);
+  assert.equal(calls.every((call) => (
+    call.path === '/api/extension-device/byok-media/execution-batches/by-idempotency/'
+      + encodeURIComponent(key)
+      + '?contractVersion=extension-byok-execution-batch-status%2Fv2'
+      && call.options.requiredScope === 'byok:media:ingest'
+  )), true);
 });
 
 test('looks up an ambiguous reservation by exact idempotency key and clears only an exact miss', async () => {

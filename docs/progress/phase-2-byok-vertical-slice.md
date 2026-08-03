@@ -26,8 +26,9 @@ Progress: 10/10 tasks.
   trusted launch binds exact product/shop/draft; user can select BYOK, edit Prompt, generate,
   observe truthful state, reject, or accept; injected UI remains a compact launcher.
 - [x] `INT-01` Add background asset ingest client (`P0`, `L`). Acceptance: accepted Blob
-  bytes use dedicated grant/hash/idempotency without normal message history or persistent
-  bytes; temporary data clears on reject, expiry, and success.
+  bytes use dedicated grant/hash/idempotency without normal message history or plaintext
+  persistent bytes; bounded session-encrypted pre-review escrow supports only exact, review-only
+  MV3 worker-restart recovery and clears on reject, expiry, or terminal cleanup.
 - [x] `INT-02` Bridge accepted result to current publisher (`P0`, `L`). Acceptance: final
   shop/draft/SKU/order preview and confirmation use existing publish intent, grant, receipt,
   and recovery; duplicate/reload/timeout yields at most one receipt; no Ozon key/direct call.
@@ -52,7 +53,9 @@ Progress: 10/10 tasks.
   ERP-owned local/OSS/R2 storage, and commits asset/provenance/receipt atomically.
 - `EXT-04A` now runs only in the background worker with exact-origin permission, bounded
   Provider/result reads, no-auth result download, unknown-outcome handling, and an in-memory
-  Blob vault; runtime responses contain only redacted hashes and identifiers.
+  Blob vault backed only for same-browser-session MV3 restart by bounded AES-256-GCM IndexedDB
+  ciphertext under a `chrome.storage.session` key; runtime responses contain only redacted hashes
+  and identifiers.
 - `EXT-05` now requires endpoint/model/operation/request-mode/policy-revision evidence before
   generation. A dedicated probe records 24-hour evidence and immediately releases probe bytes.
   Authenticated readiness attestations become maximum-ten-minute, one-use in-memory handles.
@@ -109,15 +112,20 @@ Progress: 10/10 tasks.
   asserting one upload winner plus one replay without depending on Promise arrival order and by
   giving the native ESM child-process case a 15-second outer test budget. Their focused suites and
   the complete preflight then passed.
-- `INT-01` now moves approved Blob bytes only inside the background worker through the dedicated
-  raw ingest transport. It durably commits the exact request hash before binary dispatch, obtains
-  the device-scoped command grant, and binds the normalized ERP-owned asset to the exact draft,
-  SKU, slot, and ordinal without placing base64 or bytes in runtime messages or persistent storage.
-- Receipt recovery is authoritative across page reload and MV3 restart. `PENDING` and unknown
+- `INT-01` keeps approved ingest bytes inside the background worker and never places base64 or
+  plaintext/raw bytes in runtime messages or persistent storage. Pre-review candidates may use
+  only the bounded encrypted escrow described above.
+- Execution-batch recovery now requires authenticated status v2, a `SUCCEEDED` result hash, exact
+  intent/idempotency/request proof, current readiness binding, and lifecycle authority. A recovered
+  worker is review-only and cannot dispatch Provider work.
+- Existing ingest receipt recovery remains authoritative across page reload and MV3 restart.
+  `PENDING` and unknown
   outcomes remain status-only; `NOT_COMMITTED` retires the old grant and renews it before the same
   bytes may be resent; exact authenticated `NOT_FOUND` purges the retired operation and uses a new
   random idempotency identity; immutable `FAILED` clears the candidate, preview, Blob, and client
   operation. Pre-binary final failures preserve the approved candidate and purge their operation.
+  Browser-session/key loss, escrow expiry/tamper/quota, missing proof, and binding mismatch fail
+  closed; full browser-restart Provider-result recovery remains intentionally unsupported.
 - Upload staging status now derives the same owner/idempotency asset ID as ingest and requires the
   exact staging ID, asset ID, owner, device session, request hash, and active state, preventing two
   different idempotency keys with the same request hash from colliding. Grant-level binary 401/410

@@ -87,7 +87,7 @@ proves the trust, storage, billing, draft, and publish boundaries before batch/e
 | EXT-05 | Store exact capability evidence | P0 | M | EXT-04A | Evidence binds canonical base URL/origin, model, operation, request mode, policy revision, and timestamp; any endpoint/model/mode change invalidates it; text-to-image success does not unlock edit or inpaint |
 | UI-01 | Create focused BYOK Provider settings page | P1 | L | EXT-01, EXT-02, EXT-05, SRV-01 | Users can name a profile, set endpoint/model, grant/revoke permission, load a session key, and test every currently implemented capability; operations that depend on later adapters remain explicitly closed; key input is cleared after submission and cannot be revealed; no first-release "remember key" option exists |
 | UI-02A | Create the minimal original single-image workbench | P0 | L | FND-01, EXT-04A | A trusted source-page launch opens an extension-origin page bound to exact product/shop/draft context; user can choose BYOK, edit a Prompt, generate one result, view truthful state, reject it, or accept it; injected source panels remain compact launchers |
-| INT-01 | Implement background BYOK asset ingest client | P0 | L | EXT-03, SRV-04, SRV-05, UI-02A | Accepted Blob bytes move directly from background memory to the dedicated ingest endpoint with a grant, content hash, and idempotency key; base64 and raw bytes do not enter normal runtime-message history or persistent storage; temporary bytes are removed after reject, expiry, or success |
+| INT-01 | Implement background BYOK asset ingest client | P0 | L | EXT-03, SRV-04, SRV-05, UI-02A | Accepted Blob bytes remain background-only through ingest; base64 and plaintext/raw image bytes do not enter normal runtime-message history or persistent storage; before execution success is reported, a pre-review candidate may be staged only as bounded AES-256-GCM IndexedDB ciphertext under a session-only key; exact authenticated status-v2 proof and current binding/authority may restore it after an MV3 worker restart into review-only mode; reject, expiry, and terminal cleanup remove escrow state; session/key loss, tamper, quota, missing proof, and mismatch fail closed without Provider retry |
 | INT-02 | Bridge accepted BYOK result to current ERP publish flow | P0 | L | FND-02, SRV-02, SRV-05, INT-01 | Extension shows final shop/draft/SKU/media order and requires explicit confirmation; it invokes the existing publish intent, `OZON_PUBLISH` grant, receipt, and recovery path; double-click, reload, or timeout yields at most one Ozon receipt; no Ozon key or direct Seller API request exists |
 | QA-01 | Prove the BYOK text-to-image vertical slice with fixtures | P0 | XL | SRV-06, EXT-04A, INT-02 | Fake Provider completes generate, preview, ingest, new draft revision, confirm, and publish; secret sentinel, private host, redirect, response bomb, malformed image, revocation, cross-shop access, stale draft, duplicate action, and unknown-outcome tests pass; BYOK AI cost rows remain exactly zero |
 
@@ -177,7 +177,9 @@ These tasks are intentionally outside the first production release:
 - Production promotion of provider-specific Wanx, Nano Banana, Responses API, or proprietary async
   relay adapters. The Wanx 2.1 sandbox-only QA adapter exists, but remains unpromoted until exact
   positive `QA-02` evidence and release gates pass.
-- Automatic Provider job recovery after browser restart when the session key no longer exists.
+- Automatic Provider job recovery after a full browser/session restart or after escrow-key loss.
+  Current recovery is intentionally limited to MV3 service-worker restart within the same browser
+  session and requires exact authenticated status-v2 proof.
 - Browser-side Ozon credentials or direct Ozon Seller API calls; these are prohibited, not
   deferred.
 

@@ -280,6 +280,61 @@ test('serializes result commit with app consent and invalidates cached results o
   assert.equal(commits, 0);
 });
 
+test('awaits durable result invalidation and blocks consent revocation when it fails', async () => {
+  const permissions = createPermissions();
+  const sessionStorage = createSessionStorage();
+  const loaded = loadApi(permissions, createReadinessBridge(), sessionStorage);
+  let releaseInvalidation;
+  let invalidationStarted = false;
+  const broker = loaded.api.createBroker({
+    permissions,
+    readinessBridge: loaded.readinessBridge,
+    sessionStorage,
+    async onConsentRevoked() {
+      invalidationStarted = true;
+      await new Promise((resolve) => { releaseInvalidation = resolve; });
+    },
+  });
+  await broker.requestOriginPermission({
+    endpoint: 'https://relay.example/v1',
+    readinessHandle: 'readiness-token',
+    readinessBinding: { providerOrigin: 'https://relay.example' },
+    trustedGesture: broker.createTrustedGestureToken(new loaded.TestEvent(true)),
+  });
+  const revoking = broker.removeOriginPermission('https://relay.example/v1');
+  while (!invalidationStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+  let settled = false;
+  revoking.finally(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(settled, false, 'consent mutation must wait for durable invalidation');
+  releaseInvalidation();
+  assert.equal((await revoking).removed, true);
+
+  const failingPermissions = createPermissions();
+  const failingStorage = createSessionStorage();
+  const failing = loadApi(failingPermissions, createReadinessBridge(), failingStorage);
+  const failingBroker = failing.api.createBroker({
+    permissions: failingPermissions,
+    readinessBridge: failing.readinessBridge,
+    sessionStorage: failingStorage,
+    async onConsentRevoked() { throw new Error('escrow rotation failed'); },
+  });
+  await failingBroker.requestOriginPermission({
+    endpoint: 'https://relay.example/v1',
+    readinessHandle: 'readiness-token',
+    readinessBinding: { providerOrigin: 'https://relay.example' },
+    trustedGesture: failingBroker.createTrustedGestureToken(new failing.TestEvent(true)),
+  });
+  await assert.rejects(
+    failingBroker.removeOriginPermission('https://relay.example/v1'),
+    (error) => error && error.code === 'SS_ERP_BYOK_PERMISSION_CONSENT_UNAVAILABLE',
+  );
+  assert.equal(
+    (await failingBroker.hasOriginPermission('https://relay.example/v1')).granted,
+    true,
+  );
+});
+
 function createExactPermissions() {
   const granted = new Set();
   return {

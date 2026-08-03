@@ -44,7 +44,7 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-03): final release commit
+Current checkpoint (2026-08-03): currently deployed release commit
 `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate QA-04 command in
 `774.4s`; canonical acceptance SHA-256 is
 `5a97e22583cfe200a7204b747a92259c6e0a951bed2cfafa193832e6c9fe7219`. Both origin-bound
@@ -85,33 +85,56 @@ session files were removed after all five unique tokens were confirmed inactive;
 SHA-256 is `374fb7ea88041118c5ef20177a82851ebeb87292fbbb634cc16dc5cf339effda`.
 
 `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`, and overall progress remains `36/37`.
-Only `REL-02` is open. POST 4 completed one post-upgrade `TEXT_TO_IMAGE` capability probe with
-exactly one Provider POST, HTTP `200`, no retry, and policy revision `735123817`; its pre-call and
-result receipt SHA-256 values are `c0522f21155edfc3b55052447e8a057edcd09c155220029ff93f8b7e179424c3`
-and `d59fbd4b3ba5abc541dc49beb872b52ea59cb17d65a0514bd432df52bbf62b2b`.
+Only `REL-02` is open. POST 5 sent exactly one post-reload `TEXT_TO_IMAGE` capability request,
+received HTTP `200`, and was not retried. Its pre-call receipt SHA-256 is
+`f712abf4df1bed4a8488f2e7e384a48cceabae639ca419995ad327dcfd60ec3d`. The immutable original
+result receipt SHA-256 is `6277ba540535eaca11da735dee9fc6b7bb2c6010acce6ed64718e36d4763992e`;
+it conservatively recorded `CONSUMED_NOT_SUCCESSFUL` during a UI-render race. The append-only
+reconciliation is authoritative for the durable evidence and records POST 5 as `SUCCEEDED`; its
+SHA-256 is `20cbda840025d887dab2e270b2f74b80ac7cb978a7c51e89989b168949a836eb`.
 
-The first formal-generation UI attempt then failed definitively before Provider dispatch. The
-workbench page and installed files were b6, but Chromium still ran the pre-b6 imported batch runtime
-from its extension service-worker registration, which rejected the canonical Unicode SKU slot.
-CDP observed zero target Provider POSTs for the complete window; batch revision remained `0`, and
-the session had zero uncertain probes and zero Provider dispatch rows. The immutable failure receipt
-SHA-256 is `5c6a549522db2310b601affd67e6900f337346fcf7151efc492c4832169089b6`.
-POST 5 therefore remains unsent.
+POST 6 then sent exactly one formal-generation Provider request, received HTTP `200`, and was not
+retried. Pre-call receipt SHA-256 is
+`acc1e3b58ba8f862603ddbe2381c4b65e238a0f9385f40d94e80677002545e61`; the immediate result
+receipt SHA-256 is `aff32ecf7ea7028b6d08121b5877e66d356761a24f47c4c9ea2d9c6f7a54537e` and recorded
+`CANDIDATE_READY`. Before review, the MV3 service worker restarted and cleared the memory-only Blob
+vault. Preview therefore failed, and durable reconciliation correctly finalized the local batch as
+`FAILED_FINAL` with `SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST`; reconciliation receipt SHA-256 is
+`18358a64f1c56a6fa7da909b401cc7dd24827cc0dd555c19dbd14fa5fa4426f4`. This proves Provider
+success but not an end-to-end formal generation, and the lost candidate cannot be recovered.
 
-A controlled extension reload and isolated-Chromium recovery now load the current b6 worker; the
-same Unicode slot contract passes in the live worker. The new side-effect-free live-worker Unicode
-regression smoke binds the installed manifest version and exact slot echo; its receipt SHA-256 is
-`77d6bdcfd0a90de78cc66399c43200822bbb957b98412f5d3a103e5061fcfae1`. The explicit operator CLI
-and its eight offline regressions detect this pre-b6 handler behavior. This is current runtime
-behavior evidence, not generic build provenance or proof that an upgrade occurred; the signed
-package, installed-file hash map, and upgrade receipt retain those separate roles. Reload correctly
-cleared the session-only Key and capability evidence. Resume therefore requires the Key to be loaded
-again and explicit approval to raise the Provider POST ceiling from five to six: POST 5 is one
-post-reload capability probe and POST 6 is one formal generation, with total CNY 1.00 unchanged and
-no automatic retry. A successful generation alone cannot close `REL-02`; positive BYOK ingest,
-independent kill-switch checks, one-shop publish, audit/receipt visibility, post-enable canary,
-reconciliation, and rollback still require separate authorization. Ingest, publish, and Ozon writes
-are not currently authorized.
+All six authorized Provider POSTs are consumed and the current authorization has zero remaining;
+no retry is permitted. POST 6 remains unrecoverable and must never be ingested. No candidate was
+reviewed or kept, no ERP ingest or publish ran, and no Ozon write occurred.
+
+The offline follow-up now treats the fixed public PING/ACK lifecycle protocol, five-second ACK
+deadline, twenty-second heartbeat, twenty-minute active bound, and fail-closed page gates as
+mitigation only; a frozen or discarded page cannot make a heartbeat a correctness guarantee.
+Before a non-probe text/edit execution intent may be reported `SUCCEEDED`, the candidate is staged
+as AES-256-GCM ciphertext in IndexedDB under a random 256-bit key held in
+`chrome.storage.session`. Escrow is bounded to 16 entries, a 50 MiB retained-media budget,
+20 MiB per result, and a hard ten-minute TTL. API Keys, Authorization values, raw Prompts, result
+URLs, base64, and plaintext image bytes do not enter persistent storage.
+
+The authenticated closed-schema `extension-byok-execution-batch-status/v2` projection adds
+`resultSha256` only for `SUCCEEDED` intents. A same-browser-session MV3 worker restart may restore a
+candidate only when the exact execution intent, Provider idempotency/request hashes, result hash,
+readiness binding, and current lifecycle authority all match. The restored coordinator is
+review-only: preview, keep/reject, ingest, and ingest recovery remain available, while pause,
+continue, cancel, regenerate, retry, unknown-outcome resolution, and every Provider dispatch path
+remain closed. Browser-session/key loss, expiry, tamper, quota failure, missing v2 proof, or any
+binding/authority mismatch fails closed to local-result-lost without retry.
+Credential or Provider-consent changes wait for one serialized Registry cleanup fence: pending
+recovery and preview reads drain before escrow key rotation, in-memory/session state is cleared
+inside the same fence, and queued Provider handoff rechecks that the fence is open. Fresh-worker
+terminal cleanup durably deletes ciphertext by execution-intent identity before clearing its
+operation lock.
+
+This recovery implementation has passed offline source, Cloud, and Local build/package verification,
+but it is not signed, release-staged, website-distributed, deployed, or paid-validated and cannot
+retroactively restore POST 6. This offline work made no Provider request, VPS change, rollout-flag
+change, ERP ingest, publish, or Ozon mutation. Phase 6 remains `2/3`, overall progress remains
+`36/37`, and only `REL-02` is open.
 
 Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
 `e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
@@ -1132,18 +1155,17 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep all earlier release candidates, signatures, failed deployment receipts and consumed Provider
-   operations immutable as historical evidence. Continue `REL-02` only from deployed commit
-   `b6f421211fdc14686ccb5188badf3985cb16930b`, managed extension `1.0.278`, and composite policy
-   revision `735123817`. Keep successful POST 4 and the zero-POST Unicode-slot pre-dispatch failure
-   immutable. The recovered live worker now accepts the b6 contract, but extension reload cleared its
-   session authority. Reload the session-only Provider Key, then obtain explicit approval to raise
-   the Provider POST ceiling from five to six: POST 5 is one post-reload capability probe and POST 6
-   is one formal generation, with total CNY 1.00 unchanged and no retry. After human review, obtain
-   separate authorization before any positive BYOK ingest, one-shop Ozon publish, post-enable canary,
-   reconciliation, or rollback exercise. Keep generation, ingest, and publish independently
-   switchable, retain audit/receipt evidence, and restore all scoped rollout policy to off after the
-   bounded pilot.
+7. Keep all earlier release candidates, signatures, failed deployment receipts, POST 5/POST 6
+   original receipts, append-only reconciliations, and consumed Provider operations immutable as
+   historical evidence. All `6/6` authorized Provider POSTs are consumed; the current authorization
+   permits no further Provider POST or retry. The encrypted-escrow, status-v2, and review-only restart
+   implementation and offline gates are complete; heartbeat remains mitigation only. The unrecoverable
+   POST 6 candidate must not be ingested. Release packaging/signing, website distribution, VPS dark
+   deployment, any flag change, and any new paid validation require new explicit authorization. A later paid
+   validation requires a new exact POST count and cost ceiling and must not auto-retry. Only after it
+   yields a reviewable candidate and human approval may separately authorized positive BYOK ingest,
+   independent kill-switch checks, one-shop Ozon publish, post-enable canary, reconciliation, and
+   rollback resume.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
@@ -1161,6 +1183,9 @@ At the start of every development session:
 ## Non-Negotiable Invariants
 
 - API keys stay background-only in `chrome.storage.session` for the first release.
+- Raw/base64 Provider result bytes never enter runtime-message history or plaintext persistent
+  storage. Active-session restart recovery may retain only bounded AES-256-GCM ciphertext whose key
+  remains in `chrome.storage.session`; session/key loss, expiry, tamper, or proof mismatch fails closed.
 - BYOK creates no ERP AI generation reservation or settlement.
 - Hosted paid execution always uses ERP cost controls and candidate review.
 - Every publish-selected BYOK image is normalized, persisted, hashed, and draft-bound first.

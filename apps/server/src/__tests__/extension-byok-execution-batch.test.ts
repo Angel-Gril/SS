@@ -453,6 +453,56 @@ describe('extension BYOK execution batch reservation', () => {
     });
   });
 
+  it('preserves only canonical succeeded result proofs during authenticated recovery', async () => {
+    const { service, repository } = build();
+    repository.loadBatchState.mockResolvedValueOnce({
+      kind: 'found',
+      batch: batchRecord('batch-1', 'OPEN'),
+      items: [
+        { item: batchItemRecord(0), intent: executionIntent(0, 'SUCCEEDED') },
+        { item: batchItemRecord(1), intent: executionIntent(1, 'FAILED_FINAL') },
+        { item: batchItemRecord(2), intent: executionIntent(2, 'UNKNOWN_OUTCOME') },
+      ],
+    });
+
+    await expect(service.getStatus({
+      identity: input().identity,
+      batchId: 'batch-1',
+    })).resolves.toMatchObject({
+      items: [
+        { intent: { outcome: 'SUCCEEDED', resultSha256: '9'.repeat(64) } },
+        { intent: { outcome: 'FAILED_FINAL', resultSha256: null } },
+        { intent: { outcome: 'UNKNOWN_OUTCOME', resultSha256: null } },
+      ],
+    });
+  });
+
+  it.each([
+    ['missing success proof', { outcome: 'SUCCEEDED', resultSha256: null }],
+    ['uppercase success proof', { outcome: 'SUCCEEDED', resultSha256: 'A'.repeat(64) }],
+    ['proof on failed intent', { outcome: 'FAILED_FINAL', resultSha256: '9'.repeat(64) }],
+  ] as const)('fails closed on a repository result with %s', async (_label, overrides) => {
+    const { service, repository } = build();
+    repository.loadBatchState.mockResolvedValueOnce({
+      kind: 'found',
+      batch: batchRecord('batch-1', 'OPEN'),
+      items: [0, 1, 2].map((index) => ({
+        item: batchItemRecord(index),
+        intent: index === 0
+          ? { ...executionIntent(index), ...overrides }
+          : executionIntent(index),
+      })),
+    });
+
+    await expect(service.getStatus({
+      identity: input().identity,
+      batchId: 'batch-1',
+    })).rejects.toMatchObject({
+      code: 'BYOK_EXECUTION_BATCH_UNAVAILABLE',
+      statusCode: 503,
+    });
+  });
+
   it.each([
     ['not_found', 'BYOK_EXECUTION_BATCH_NOT_FOUND', 404],
     ['forbidden', 'BYOK_EXECUTION_BATCH_FORBIDDEN', 403],

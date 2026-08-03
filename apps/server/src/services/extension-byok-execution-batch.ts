@@ -22,6 +22,8 @@ export const EXTENSION_BYOK_EXECUTION_BATCH_VERSION =
   'extension-byok-execution-batch/v1' as const;
 export const EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION =
   'extension-byok-execution-batch-status/v1' as const;
+export const EXTENSION_BYOK_EXECUTION_BATCH_STATUS_VERSION_V2 =
+  'extension-byok-execution-batch-status/v2' as const;
 export const EXTENSION_BYOK_EXECUTION_BATCH_REQUEST_VERSION =
   'extension-byok-execution-batch-request/v1' as const;
 export const EXTENSION_BYOK_EXECUTION_BATCH_ATTEMPT_REQUEST_VERSION =
@@ -570,7 +572,12 @@ function resolveLoadedBatch(
   if ((expected.batchId !== undefined && result.batch.id !== expected.batchId)
     || (expected.idempotencyKey !== undefined
       && result.batch.idempotencyKey !== expected.idempotencyKey)
-    || !Array.isArray(result.items)) {
+    || !Array.isArray(result.items)
+    || result.items.some(({ intent }) => (
+      intent.outcome === 'SUCCEEDED'
+        ? typeof intent.resultSha256 !== 'string' || !HASH_PATTERN.test(intent.resultSha256)
+        : intent.resultSha256 !== null
+    ))) {
     return fail('BYOK_EXECUTION_BATCH_UNAVAILABLE', 503, 'batch recovery is unavailable');
   }
   return { batch: result.batch, items: result.items };

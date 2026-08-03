@@ -28,7 +28,7 @@ Progress: 2/3 tasks.
 
 ## Notes
 
-- Final release commit `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate
+- Currently deployed release commit `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate
   QA-04 command in `774.4s`; target-bound acceptance SHA-256 is
   `5a97e22583cfe200a7204b747a92259c6e0a951bed2cfafa193832e6c9fe7219`. Both origin-bound
   `1.0.278` candidates passed detached-signature verification and persistent-Chromium same-path
@@ -64,28 +64,38 @@ Progress: 2/3 tasks.
   `b7cf09e0c34dfc5e6eed6768e8ffd252d840c2d759d8a9aa1619848aab9793b5`. Eight raw short-lived
   session files were removed after five unique tokens were confirmed inactive; cleanup receipt
   SHA-256 is `374fb7ea88041118c5ef20177a82851ebeb87292fbbb634cc16dc5cf339effda`.
-- POST 4 completed one post-upgrade `TEXT_TO_IMAGE` capability probe with exactly one Provider POST,
-  HTTP `200`, no retry, and policy revision `735123817`. Its pre-call and result receipt SHA-256
-  values are `c0522f21155edfc3b55052447e8a057edcd09c155220029ff93f8b7e179424c3` and
-  `d59fbd4b3ba5abc541dc49beb872b52ea59cb17d65a0514bd432df52bbf62b2b`.
-- The first formal-generation UI attempt failed definitively before Provider dispatch: Chromium's
-  extension service worker still ran the pre-b6 imported batch runtime and rejected the canonical
-  Unicode SKU slot. The complete CDP window observed zero target Provider POSTs, batch revision `0`,
-  zero uncertain probes and zero Provider dispatch rows. The immutable failure receipt SHA-256 is
-  `5c6a549522db2310b601affd67e6900f337346fcf7151efc492c4832169089b6`; POST 5 remains unsent.
-- A controlled extension reload now loads the current b6 worker, and the same Unicode slot contract
-  passes in that live worker. A new side-effect-free live-worker Unicode regression smoke binds the
-  installed manifest version and exact slot echo; receipt SHA-256 is
-  `77d6bdcfd0a90de78cc66399c43200822bbb957b98412f5d3a103e5061fcfae1`. Its explicit operator CLI
-  and eight offline regressions detect this pre-b6 handler behavior. This is current runtime
-  behavior evidence, not generic build provenance or proof that an upgrade occurred; the signed
-  package, installed-file hash map, and upgrade receipt remain separate evidence. Reload correctly
-  cleared the session-only Key and capability evidence. Resume requires the Key to be loaded again
-  and explicit approval to raise the ceiling from five to six POSTs: POST 5 is one post-reload
-  capability probe and POST 6 is one formal generation, with total CNY 1.00 unchanged and no retry.
-  Formal generation alone does not complete `REL-02`; ingest, independent kill-switch checks,
-  one-shop publish, audit/receipts, post-enable canary, reconciliation and rollback remain separately
-  unauthorized.
+- POST 5 sent exactly one post-reload `TEXT_TO_IMAGE` capability request, received HTTP `200`, and
+  was not retried. Pre-call receipt SHA-256 is
+  `f712abf4df1bed4a8488f2e7e384a48cceabae639ca419995ad327dcfd60ec3d`. The immutable original
+  result receipt SHA-256 is `6277ba540535eaca11da735dee9fc6b7bb2c6010acce6ed64718e36d4763992e`;
+  its conservative UI-race outcome remains unchanged. Append-only reconciliation records the
+  durable authoritative outcome as `SUCCEEDED`; its SHA-256 is
+  `20cbda840025d887dab2e270b2f74b80ac7cb978a7c51e89989b168949a836eb`.
+- POST 6 sent exactly one formal-generation Provider request, received HTTP `200`, and was not
+  retried. Its pre-call and immediate-result receipt SHA-256 values are
+  `acc1e3b58ba8f862603ddbe2381c4b65e238a0f9385f40d94e80677002545e61` and
+  `aff32ecf7ea7028b6d08121b5877e66d356761a24f47c4c9ea2d9c6f7a54537e`; the immediate result
+  reached `CANDIDATE_READY`.
+- Before review, the MV3 worker restarted and cleared the memory-only Blob vault. Preview failed,
+  durable state finalized as `FAILED_FINAL` with `SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST`, and the
+  reconciliation receipt SHA-256 is
+  `18358a64f1c56a6fa7da909b401cc7dd24827cc0dd555c19dbd14fa5fa4426f4`. Provider dispatch
+  succeeded, but end-to-end formal generation did not; the lost candidate is unrecoverable.
+- All `6/6` authorized Provider POSTs are consumed, with zero remaining and no retry permitted. No
+  candidate was reviewed or kept, no ERP ingest or publish ran, and no Ozon write occurred. POST 6
+  remains unrecoverable and must never be ingested.
+- Heartbeat is mitigation only. The offline follow-up adds bounded AES-256-GCM IndexedDB ciphertext
+  under a `chrome.storage.session` key, authenticated status-v2 result-hash proof, and exact-binding
+  review-only MV3 worker-restart recovery. The retained-media budget is 50 MiB across at most 16
+  entries, each no larger than 20 MiB, with a hard ten-minute TTL. Browser-session/key loss, expiry,
+  tamper, quota failure, missing proof, or authority mismatch fails closed without Provider retry.
+- Credential and Provider-consent changes wait for a serialized Registry cleanup fence. Recovery
+  and preview reads drain before escrow key rotation, queued Provider handoff rechecks the fence,
+  and fresh-worker terminal cleanup deletes ciphertext before releasing the operation lock.
+- The follow-up has passed offline source, Cloud, and Local build/package verification, but it is not
+  signed, release-staged, website-distributed, deployed, or paid-validated. It caused no Provider
+  request, VPS or flag change, ERP ingest/publish, or Ozon mutation. `REL-02` remains open; Phase 6
+  stays `2/3` and overall progress stays `36/37`.
 
 - The clean `e795e67de4df1a53bdb8738e8dd4158a6570d22d` replacement passed final QA-04,
   regional `1.0.273` package/sign checks, both upgrade smokes, and fresh backup/restore gates. Its

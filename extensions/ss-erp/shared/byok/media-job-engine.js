@@ -134,6 +134,31 @@
     };
   }
 
+  function normalizedRestoredCandidate(value) {
+    if (!exactKeys(value, [
+      'attemptId', 'slotKey', 'generation', 'operation', 'idempotencyKey',
+      'intentHash', 'providerRequestHash', 'candidateId', 'resultHandle',
+      'resultSha256',
+    ]) || !Number.isSafeInteger(value.generation)
+      || value.generation < 1 || value.generation > MAX_ATTEMPTS) {
+      throw engineError(
+        'SS_ERP_MEDIA_JOB_INPUT_INVALID', 'restored media candidate is invalid',
+      );
+    }
+    return {
+      attemptId: boundedId(value.attemptId, 'attemptId'),
+      slotKey: boundedSlotKey(value.slotKey, 'slotKey'),
+      generation: value.generation,
+      operation: operation(value.operation),
+      idempotencyKey: boundedId(value.idempotencyKey, 'idempotencyKey'),
+      intentHash: sha256(value.intentHash, 'intentHash'),
+      providerRequestHash: sha256(value.providerRequestHash, 'providerRequestHash'),
+      candidateId: boundedId(value.candidateId, 'candidateId'),
+      resultHandle: boundedId(value.resultHandle, 'resultHandle'),
+      resultSha256: sha256(value.resultSha256, 'resultSha256'),
+    };
+  }
+
   function normalizedChargeAcknowledgement(value) {
     if (!exactKeys(value, ['warningVersion', 'confirmed'])
       || value.warningVersion !== EXTERNAL_CHARGE_WARNING_VERSION
@@ -405,8 +430,16 @@
     var unknownRecoveryInFlight = new Set();
     var nextAttemptNumber = 1;
     var pauseRequested = false;
+    var reviewOnly = false;
     var waiters = [];
     var listeners = new Set();
+
+    function ensureProviderWorkAllowed() {
+      if (reviewOnly) throw engineError(
+        'SS_ERP_MEDIA_JOB_REVIEW_ONLY',
+        'Restored media candidates allow review and ingest only',
+      );
+    }
 
     function schedulerState() {
       if (pauseRequested && (activeCount > 0 || queue.length > 0)) {
@@ -674,6 +707,7 @@
     }
 
     function enqueueBatch(values) {
+      ensureProviderWorkAllowed();
       if (!Array.isArray(values) || values.length < 1 || values.length > MAX_BATCH_SIZE) {
         throw engineError('SS_ERP_MEDIA_JOB_INPUT_INVALID', 'media job batch is invalid');
       }
@@ -704,6 +738,7 @@
     }
 
     function pause() {
+      ensureProviderWorkAllowed();
       pauseRequested = true;
       emitSnapshot();
       resolveWaiters();
@@ -711,12 +746,14 @@
     }
 
     function continueScheduling() {
+      ensureProviderWorkAllowed();
       pauseRequested = false;
       schedule();
       return getSnapshot();
     }
 
     function cancelQueued(attemptIdValue) {
+      ensureProviderWorkAllowed();
       var attemptId = boundedId(attemptIdValue, 'attemptId');
       var attempt = attempts.get(attemptId);
       if (!attempt || attempt.state !== 'QUEUED') {
@@ -770,6 +807,7 @@
     }
 
     function regenerate(slotKeyValue, value) {
+      ensureProviderWorkAllowed();
       var slotKey = boundedSlotKey(slotKeyValue, 'slotKey');
       if (!slots.has(slotKey)) throw engineError(
         'SS_ERP_MEDIA_JOB_SLOT_NOT_FOUND', 'Media slot is not found',
@@ -787,6 +825,7 @@
     }
 
     async function retryAttempt(attemptIdValue, value) {
+      ensureProviderWorkAllowed();
       var attemptId = boundedId(attemptIdValue, 'attemptId');
       var prior = attempts.get(attemptId);
       if (!prior || !['FAILED_RETRYABLE', 'UNKNOWN_OUTCOME'].includes(prior.state)) {
@@ -869,6 +908,7 @@
     }
 
     async function resolveUnknownAttempt(attemptIdValue, recoveryRefValue) {
+      ensureProviderWorkAllowed();
       var attemptId = boundedId(attemptIdValue, 'attemptId');
       var attempt = attempts.get(attemptId);
       if (!attempt || attempt.state !== 'UNKNOWN_OUTCOME') throw engineError(
@@ -917,6 +957,77 @@
       return attempt ? frozenAttempt(attempt) : null;
     }
 
+    function restoreCandidates(values) {
+      if (reviewOnly) ensureProviderWorkAllowed();
+      if (attemptOrder.length || slots.size || queue.length || activeCount) throw engineError(
+        'SS_ERP_MEDIA_JOB_RESTORE_NOT_ALLOWED',
+        'Media candidates can only be restored into an empty engine',
+      );
+      if (!Array.isArray(values) || values.length < 1 || values.length > MAX_ATTEMPTS) {
+        throw engineError(
+          'SS_ERP_MEDIA_JOB_INPUT_INVALID', 'restored media candidate batch is invalid',
+        );
+      }
+      var normalized = values.map(normalizedRestoredCandidate);
+      var identities = new Set();
+      var attemptIds = new Set();
+      var candidateIds = new Set();
+      var resultHandles = new Set();
+      var generations = new Set();
+      normalized.forEach(function (candidate) {
+        var generationKey = candidate.slotKey + '\u0000' + candidate.generation;
+        if (identities.has(candidate.idempotencyKey) || attemptIds.has(candidate.attemptId)
+          || candidateIds.has(candidate.candidateId) || resultHandles.has(candidate.resultHandle)
+          || generations.has(generationKey)) throw engineError(
+          'SS_ERP_MEDIA_JOB_INPUT_INVALID',
+          'restored media candidate identities are not unique',
+        );
+        identities.add(candidate.idempotencyKey);
+        attemptIds.add(candidate.attemptId);
+        candidateIds.add(candidate.candidateId);
+        resultHandles.add(candidate.resultHandle);
+        generations.add(generationKey);
+      });
+      normalized.forEach(function (candidate) {
+        var attempt = {
+          attemptId: candidate.attemptId,
+          slotKey: candidate.slotKey,
+          generation: candidate.generation,
+          operation: candidate.operation,
+          executionMode: executionMode,
+          policyRevision: policyRevision,
+          idempotencyKey: candidate.idempotencyKey,
+          intentHash: candidate.intentHash,
+          dispatchRef: null,
+          providerRequestHash: candidate.providerRequestHash,
+          state: 'CANDIDATE_READY',
+          candidateId: candidate.candidateId,
+          resultHandle: candidate.resultHandle,
+          resultSha256: candidate.resultSha256,
+          errorCode: null,
+          automaticRetryAllowed: null,
+          recoveryRequirement: null,
+          retryOfAttemptId: null,
+          externalChargePossible: false,
+          retryRisk: null,
+          recoveryStrategy: null,
+          recoveryEvidenceSha256: null,
+        };
+        var slot = ensureSlot(candidate.slotKey);
+        attempts.set(candidate.attemptId, attempt);
+        attemptOrder.push(candidate.attemptId);
+        identityIndex.set(candidate.idempotencyKey, candidate.attemptId);
+        slot.attemptIds.push(candidate.attemptId);
+        slot.revision += 1;
+      });
+      reviewOnly = true;
+      emitSnapshot();
+      resolveWaiters();
+      return Object.freeze(normalized.map(function (candidate) {
+        return frozenAttempt(attempts.get(candidate.attemptId));
+      }));
+    }
+
     function whenSettled() {
       if (isSettled()) return Promise.resolve(getSnapshot());
       return new Promise(function (resolve) { waiters.push(resolve); });
@@ -939,6 +1050,7 @@
     return Object.freeze({
       enqueue: enqueue,
       enqueueBatch: enqueueBatch,
+      restoreCandidates: restoreCandidates,
       pause: pause,
       continue: continueScheduling,
       cancelQueued: cancelQueued,

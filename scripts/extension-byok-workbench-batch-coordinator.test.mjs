@@ -106,6 +106,64 @@ function batchInput(count = 2, overrides = {}) {
   };
 }
 
+function restoredSlot(value) {
+  return {
+    skuKey: value.skuKey,
+    slotKey: value.slotKey,
+    assignmentMode: value.assignmentMode,
+    assignmentOrdinal: value.assignmentOrdinal,
+    operation: value.operation,
+  };
+}
+
+function restoredResultBinding(batchBinding, selectedSlot) {
+  return {
+    contractVersion: 'extension-byok-readiness-binding/v2',
+    ownerUserId: batchBinding.ownerUserId,
+    deviceSessionId: batchBinding.deviceSessionId,
+    shopId: batchBinding.shopId,
+    workflowId: batchBinding.workflowId,
+    draftRevision: batchBinding.draftRevision,
+    draftVersion: batchBinding.draftVersion,
+    sourcePlatform: batchBinding.sourcePlatform,
+    sourceProductId: batchBinding.sourceProductId,
+    sourceCaptureSnapshotId: batchBinding.sourceCaptureSnapshotId,
+    supplyGoodsId: batchBinding.supplyGoodsId,
+    skuKey: selectedSlot.skuKey,
+    slotKey: selectedSlot.slotKey,
+    assignmentMode: 'APPEND',
+    assignmentOrdinal: selectedSlot.assignmentOrdinal,
+    providerOrigin: batchBinding.providerOrigin,
+    model: batchBinding.model,
+    operation: selectedSlot.operation,
+    policyRevision: batchBinding.policyRevision,
+  };
+}
+
+function seedRestoredAttempt(harness, batchBinding, selectedSlot, {
+  attemptId, generation, idempotencyKey, intentHash, candidateId,
+}) {
+  const stored = harness.vault.store({
+    attempt: {
+      attemptId,
+      operation: selectedSlot.operation,
+      idempotencyKey,
+    },
+  }, restoredResultBinding(batchBinding, selectedSlot));
+  return {
+    attemptId,
+    slotKey: selectedSlot.slotKey,
+    generation,
+    operation: selectedSlot.operation,
+    idempotencyKey,
+    intentHash,
+    providerRequestHash: stored.requestHash,
+    candidateId,
+    resultHandle: stored.resultId,
+    resultSha256: stored.sha256,
+  };
+}
+
 function createVault() {
   const entries = new Map();
   const rejected = [];
@@ -945,4 +1003,165 @@ test('rejects any non-exact or charged atomic receipt and makes its uncertain ou
     );
     assert.equal(calls, 1);
   }
+});
+
+test('restores review-only candidates without Provider dispatch and reuses review plus atomic ingest', async () => {
+  const harness = createHarness();
+  const batchBinding = binding();
+  const selectedSlots = [restoredSlot(slot(0)), restoredSlot(slot(1))];
+  const hero = seedRestoredAttempt(harness, batchBinding, selectedSlots[0], {
+    attemptId: 'attempt-restored-hero-1', generation: 1,
+    idempotencyKey: 'provider-restored-hero-1', intentHash: '1'.repeat(64),
+    candidateId: 'candidate-restored-hero-1',
+  });
+  const alternate = seedRestoredAttempt(harness, batchBinding, selectedSlots[0], {
+    attemptId: 'attempt-restored-hero-2', generation: 2,
+    idempotencyKey: 'provider-restored-hero-2', intentHash: '2'.repeat(64),
+    candidateId: 'candidate-restored-hero-2',
+  });
+  const detail = seedRestoredAttempt(harness, batchBinding, selectedSlots[1], {
+    attemptId: 'attempt-restored-detail-1', generation: 1,
+    idempotencyKey: 'provider-restored-detail-1', intentHash: '3'.repeat(64),
+    candidateId: 'candidate-restored-detail-1',
+  });
+
+  let projection = harness.coordinator.restoreBatch({
+    contractVersion: harness.api.RESTORE_COMMAND_VERSION,
+    batchId: 'batch-restored-1',
+    binding: batchBinding,
+    slots: selectedSlots,
+    attempts: [hero, alternate, detail],
+  });
+  assert.equal(harness.providerCalls.length, 0);
+  assert.equal(projection.scheduler.state, 'REVIEW');
+  assert.equal(projection.scheduler.activeCount, 0);
+  assert.equal(projection.scheduler.queuedCount, 0);
+  assert.deepEqual(plain(projection.slots[0].attempts.map((attempt) => ({
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    intentHash: attempt.intentHash,
+    resultId: attempt.resultId,
+    resultSha256: attempt.resultSha256,
+  }))), [hero, alternate].map((attempt) => ({
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    intentHash: attempt.intentHash,
+    resultId: attempt.resultHandle,
+    resultSha256: attempt.resultSha256,
+  })));
+  assert.equal(harness.vault.getPublic(hero.resultHandle).reviewState, 'CANDIDATE_READY');
+
+  const reviewOnly = (error) => error?.code === 'SS_ERP_BYOK_BATCH_REVIEW_ONLY';
+  assert.throws(() => harness.coordinator.pause(), reviewOnly);
+  assert.throws(() => harness.coordinator.continue(), reviewOnly);
+  assert.throws(() => harness.coordinator.cancelQueued(hero.attemptId), reviewOnly);
+  assert.throws(
+    () => harness.coordinator.regenerateSlot(hero.slotKey, {}),
+    reviewOnly,
+  );
+  await assert.rejects(harness.coordinator.retryAttempt(hero.attemptId, {}), reviewOnly);
+  await assert.rejects(
+    harness.coordinator.resolveUnknownAttempt(hero.attemptId, 'lookup-restored-1'),
+    reviewOnly,
+  );
+  assert.equal(harness.providerCalls.length, 0);
+
+  harness.coordinator.keepAttempt(hero.slotKey, hero.attemptId);
+  harness.coordinator.rejectAttempt(alternate.slotKey, alternate.attemptId);
+  projection = harness.coordinator.keepAttempt(detail.slotKey, detail.attemptId);
+  assert.equal(projection.slots[0].selectedAttemptId, hero.attemptId);
+  assert.equal(
+    projection.slots[0].attempts.find((attempt) => attempt.attemptId === alternate.attemptId)
+      .reviewState,
+    'REJECTED',
+  );
+  assert.equal(harness.vault.entries.has(alternate.resultHandle), false);
+
+  const accepted = await harness.coordinator.ingestSelectedBatch({
+    contractVersion: harness.api.INGEST_COMMAND_VERSION,
+    idempotencyKey: 'restored-batch-ingest-0001',
+  });
+  assert.equal(accepted.ingest.state, 'SUCCEEDED');
+  assert.equal(accepted.ingest.erpGenerationChargeCents, 0);
+  assert.equal(harness.ingestCalls.length, 1);
+  assert.deepEqual(
+    harness.ingestCalls[0].request.resultIds,
+    [hero.resultHandle, detail.resultHandle],
+  );
+  assert.equal(harness.providerCalls.length, 0);
+  harness.coordinator.dispose();
+  assert.equal(harness.coordinator.getProjection().ingest.state, 'SUCCEEDED');
+});
+
+test('rejects non-exact restored batch schemas atomically before activation', () => {
+  const harness = createHarness();
+  const batchBinding = binding();
+  const selectedSlot = restoredSlot(slot(0));
+  const attempt = seedRestoredAttempt(harness, batchBinding, selectedSlot, {
+    attemptId: 'attempt-restored-exact-1', generation: 1,
+    idempotencyKey: 'provider-restored-exact-1', intentHash: '4'.repeat(64),
+    candidateId: 'candidate-restored-exact-1',
+  });
+  assert.throws(() => harness.coordinator.restoreBatch({
+    contractVersion: harness.api.RESTORE_COMMAND_VERSION,
+    batchId: 'batch-restored-exact-1',
+    binding: batchBinding,
+    slots: [selectedSlot],
+    attempts: [{ ...attempt, dispatchRef: 'must-not-be-restored' }],
+  }), (error) => error?.code === 'SS_ERP_BYOK_BATCH_INPUT_INVALID');
+  assert.equal(harness.coordinator.getProjection().batchId, null);
+  assert.throws(() => harness.coordinator.restoreBatch({
+    contractVersion: harness.api.RESTORE_COMMAND_VERSION,
+    batchId: 'batch-restored-exact-1',
+    binding: batchBinding,
+    slots: [selectedSlot],
+    attempts: [{ ...attempt, providerRequestHash: 'f'.repeat(64) }],
+  }), (error) => error?.code === 'SS_ERP_BYOK_BATCH_RESTORE_RESULT_INVALID');
+  assert.equal(harness.coordinator.getProjection().batchId, null);
+  assert.equal(harness.providerCalls.length, 0);
+});
+
+test('recovers an unknown atomic ingest for restored candidates without Provider redispatch', async () => {
+  let firstIngest = true;
+  const harness = createHarness({
+    atomicBehavior(request, api, vault, _authority, recovering) {
+      if (!recovering && firstIngest) {
+        firstIngest = false;
+        const error = new Error('ERP response lost after atomic ingest dispatch');
+        error.code = 'ERP_BATCH_TIMEOUT';
+        error.outcome = 'UNKNOWN_OUTCOME';
+        throw error;
+      }
+      return receiptFor(api, request, vault, { replayed: true });
+    },
+  });
+  const batchBinding = binding();
+  const selectedSlot = restoredSlot(slot(0));
+  const attempt = seedRestoredAttempt(harness, batchBinding, selectedSlot, {
+    attemptId: 'attempt-restored-recovery-1', generation: 1,
+    idempotencyKey: 'provider-restored-recovery-1', intentHash: '5'.repeat(64),
+    candidateId: 'candidate-restored-recovery-1',
+  });
+  harness.coordinator.restoreBatch({
+    contractVersion: harness.api.RESTORE_COMMAND_VERSION,
+    batchId: 'batch-restored-recovery-1',
+    binding: batchBinding,
+    slots: [selectedSlot],
+    attempts: [attempt],
+  });
+  harness.coordinator.keepAttempt(selectedSlot.slotKey, attempt.attemptId);
+  const command = {
+    contractVersion: harness.api.INGEST_COMMAND_VERSION,
+    idempotencyKey: 'restored-ingest-recovery-0001',
+  };
+  await assert.rejects(
+    harness.coordinator.ingestSelectedBatch(command),
+    (error) => error?.outcome === 'UNKNOWN_OUTCOME',
+  );
+  const recovered = await harness.coordinator.recoverIngest(command);
+  assert.equal(recovered.ingest.state, 'SUCCEEDED');
+  assert.equal(recovered.ingest.replayed, true);
+  assert.equal(harness.ingestCalls.length, 1);
+  assert.equal(harness.recoverCalls.length, 1);
+  assert.equal(harness.providerCalls.length, 0);
 });

@@ -1055,3 +1055,123 @@ test('pauses queued Provider work when the result vault applies backpressure', a
   assert.deepEqual(starts, attempts.map((attempt) => attempt.attemptId));
   assert.equal(engine.getAttempt(attempts[1].attemptId).state, 'CANDIDATE_READY');
 });
+
+test('restores retained candidates into review without dispatch and closes every Provider-capable control', async () => {
+  const api = loadApi();
+  let dispatchCount = 0;
+  const engine = createEngine(api, {
+    executionMode: 'BYOK',
+    requestedConcurrency: 1,
+    policyMaxConcurrency: 1,
+    dispatch() {
+      dispatchCount += 1;
+      throw new Error('restored candidates must never dispatch');
+    },
+  });
+  const restored = [
+    {
+      attemptId: 'attempt-restored-000007',
+      slotKey: 'sku:sku-red:hero',
+      generation: 3,
+      operation: 'TEXT_TO_IMAGE',
+      idempotencyKey: 'provider-restored-hero-3',
+      intentHash: '1'.repeat(64),
+      providerRequestHash: '2'.repeat(64),
+      candidateId: 'candidate-restored-hero-3',
+      resultHandle: 'result-restored-hero-3',
+      resultSha256: '3'.repeat(64),
+    },
+    {
+      attemptId: 'attempt-restored-000008',
+      slotKey: 'shared:detail:SCENE',
+      generation: 1,
+      operation: 'IMAGE_TO_IMAGE',
+      idempotencyKey: 'provider-restored-scene-1',
+      intentHash: '4'.repeat(64),
+      providerRequestHash: '5'.repeat(64),
+      candidateId: 'candidate-restored-scene-1',
+      resultHandle: 'result-restored-scene-1',
+      resultSha256: '6'.repeat(64),
+    },
+  ];
+
+  assert.deepEqual(plain(engine.restoreCandidates(restored)), restored.map((attempt) => ({
+    ...attempt,
+    executionMode: 'BYOK',
+    policyRevision: '734',
+    state: 'CANDIDATE_READY',
+    errorCode: null,
+    automaticRetryAllowed: null,
+    recoveryRequirement: null,
+    retryOfAttemptId: null,
+    externalChargePossible: false,
+    retryRisk: null,
+    unknownRecoveryStrategy: null,
+    recoveryEvidenceSha256: null,
+  })));
+  const snapshot = engine.getSnapshot();
+  assert.equal(dispatchCount, 0);
+  assert.equal(snapshot.schedulerState, 'REVIEW');
+  assert.equal(snapshot.activeCount, 0);
+  assert.equal(snapshot.queuedCount, 0);
+  assert.deepEqual(plain(snapshot.attempts.map((attempt) => ({
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    idempotencyKey: attempt.idempotencyKey,
+    intentHash: attempt.intentHash,
+    providerRequestHash: attempt.providerRequestHash,
+    resultHandle: attempt.resultHandle,
+    resultSha256: attempt.resultSha256,
+  }))), restored.map((attempt) => ({
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    idempotencyKey: attempt.idempotencyKey,
+    intentHash: attempt.intentHash,
+    providerRequestHash: attempt.providerRequestHash,
+    resultHandle: attempt.resultHandle,
+    resultSha256: attempt.resultSha256,
+  })));
+  assert.equal(
+    engine.selectCandidate(restored[0].slotKey, restored[0].attemptId).selectedAttemptId,
+    restored[0].attemptId,
+  );
+
+  const reviewOnly = (error) => error?.code === 'SS_ERP_MEDIA_JOB_REVIEW_ONLY';
+  assert.throws(() => engine.enqueue(job('shared:detail:DETAIL', 'restore-enqueue')), reviewOnly);
+  assert.throws(
+    () => engine.enqueueBatch([job('shared:detail:DETAIL', 'restore-batch')]),
+    reviewOnly,
+  );
+  assert.throws(() => engine.pause(), reviewOnly);
+  assert.throws(() => engine.continue(), reviewOnly);
+  assert.throws(() => engine.cancelQueued(restored[0].attemptId), reviewOnly);
+  assert.throws(() => engine.regenerate(restored[0].slotKey, {}), reviewOnly);
+  await assert.rejects(engine.retryAttempt(restored[0].attemptId, {}), reviewOnly);
+  await assert.rejects(engine.resolveUnknownAttempt(restored[0].attemptId, 'lookup-1'), reviewOnly);
+  assert.equal(dispatchCount, 0);
+});
+
+test('validates candidate restoration atomically with an exact schema on an empty engine', () => {
+  const api = loadApi();
+  const engine = createEngine(api, {
+    executionMode: 'BYOK', requestedConcurrency: 1, policyMaxConcurrency: 1,
+    async dispatch() { throw new Error('must not dispatch'); },
+  });
+  const valid = {
+    attemptId: 'attempt-restored-exact-1', slotKey: 'sku:sku-red:hero', generation: 1,
+    operation: 'TEXT_TO_IMAGE', idempotencyKey: 'provider-restored-exact-1',
+    intentHash: '7'.repeat(64), providerRequestHash: '8'.repeat(64),
+    candidateId: 'candidate-restored-exact-1', resultHandle: 'result-restored-exact-1',
+    resultSha256: '9'.repeat(64),
+  };
+  assert.throws(
+    () => engine.restoreCandidates([{ ...valid, dispatchRef: 'must-never-be-restored' }]),
+    (error) => error?.code === 'SS_ERP_MEDIA_JOB_INPUT_INVALID',
+  );
+  assert.equal(engine.getSnapshot().schedulerState, 'READY');
+  engine.restoreCandidates([valid]);
+  assert.throws(
+    () => engine.restoreCandidates([valid]),
+    (error) => error?.code === 'SS_ERP_MEDIA_JOB_REVIEW_ONLY',
+  );
+});

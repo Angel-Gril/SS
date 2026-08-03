@@ -3,6 +3,7 @@
 
   var CONTRACT_VERSION = 'extension-byok-workbench-batch-coordinator/v1';
   var START_COMMAND_VERSION = 'extension-byok-workbench-batch-start/v1';
+  var RESTORE_COMMAND_VERSION = 'extension-byok-workbench-batch-restore/v1';
   var BINDING_VERSION = 'extension-byok-workbench-batch-binding/v1';
   var PROVIDER_DISPATCH_VERSION = 'extension-byok-workbench-batch-provider-dispatch/v1';
   var INGEST_COMMAND_VERSION = 'extension-byok-workbench-batch-ingest/v1';
@@ -12,6 +13,7 @@
   var EXTERNAL_CHARGE_WARNING_VERSION = 'external-provider-charge/v1';
   var DUPLICATE_CHARGE_WARNING_VERSION = 'external-provider-duplicate-charge/v1';
   var MAX_SELECTED_SLOTS = 4;
+  var MAX_RESTORED_ATTEMPTS = 500;
   var SERIAL_REQUESTED_CONCURRENCY = 1;
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
   var SOURCE_PLATFORMS = ['1688', 'pdd', 'taobao', 'tmall'];
@@ -25,6 +27,14 @@
   var SLOT_KEYS = [
     'skuKey', 'slotKey', 'assignmentMode', 'assignmentOrdinal', 'operation', 'idempotencyKey',
     'intentHash', 'dispatchRef',
+  ];
+  var RESTORE_SLOT_KEYS = [
+    'skuKey', 'slotKey', 'assignmentMode', 'assignmentOrdinal', 'operation',
+  ];
+  var RESTORE_ATTEMPT_KEYS = [
+    'attemptId', 'slotKey', 'generation', 'operation', 'idempotencyKey',
+    'intentHash', 'providerRequestHash', 'candidateId', 'resultHandle',
+    'resultSha256',
   ];
   var RESULT_BINDING_KEYS = [
     'contractVersion', 'ownerUserId', 'deviceSessionId', 'shopId', 'workflowId',
@@ -204,6 +214,39 @@
     });
   }
 
+  function normalizeRestoredSlot(value) {
+    if (!exactKeys(value, RESTORE_SLOT_KEYS) || value.assignmentMode !== 'APPEND'
+      || !OPERATIONS.includes(value.operation)) invalid('restored batch slot is invalid');
+    return Object.freeze({
+      skuKey: canonicalText(value.skuKey, 1, 500, 'SKU key'),
+      slotKey: slotKey(value.slotKey, 'slot key'),
+      assignmentMode: 'APPEND',
+      assignmentOrdinal: assignmentOrdinal(value.assignmentOrdinal),
+      operation: value.operation,
+    });
+  }
+
+  function normalizeRestoredAttempt(value) {
+    if (!exactKeys(value, RESTORE_ATTEMPT_KEYS)
+      || !Number.isSafeInteger(value.generation) || value.generation < 1
+      || value.generation > MAX_RESTORED_ATTEMPTS
+      || !OPERATIONS.includes(value.operation)) {
+      invalid('restored batch attempt is invalid');
+    }
+    return Object.freeze({
+      attemptId: identifier(value.attemptId, 'attempt ID'),
+      slotKey: slotKey(value.slotKey, 'slot key'),
+      generation: value.generation,
+      operation: value.operation,
+      idempotencyKey: identifier(value.idempotencyKey, 'Provider idempotency key'),
+      intentHash: sha256(value.intentHash, 'intent hash'),
+      providerRequestHash: sha256(value.providerRequestHash, 'Provider request hash'),
+      candidateId: identifier(value.candidateId, 'candidate ID'),
+      resultHandle: identifier(value.resultHandle, 'result handle'),
+      resultSha256: sha256(value.resultSha256, 'result SHA-256'),
+    });
+  }
+
   function normalizeStart(value) {
     if (!exactKeys(value, ['contractVersion', 'batchId', 'binding', 'slots'])
       || value.contractVersion !== START_COMMAND_VERSION
@@ -232,6 +275,59 @@
       batchId: identifier(value.batchId, 'batch ID'),
       binding: binding,
       slots: Object.freeze(slots),
+    });
+  }
+
+  function normalizeRestore(value) {
+    if (!exactKeys(value, [
+      'contractVersion', 'batchId', 'binding', 'slots', 'attempts',
+    ]) || value.contractVersion !== RESTORE_COMMAND_VERSION
+      || !Array.isArray(value.slots) || value.slots.length < 1
+      || value.slots.length > MAX_SELECTED_SLOTS
+      || !Array.isArray(value.attempts) || value.attempts.length < 1
+      || value.attempts.length > MAX_RESTORED_ATTEMPTS) {
+      invalid('batch restore command is invalid');
+    }
+    var binding = normalizeBinding(value.binding);
+    var slots = value.slots.map(normalizeRestoredSlot);
+    var attempts = value.attempts.map(normalizeRestoredAttempt);
+    var firstAssignmentOrdinal = slots[0].assignmentOrdinal;
+    if (slots.some(function (slot, index) {
+      return slot.assignmentOrdinal !== firstAssignmentOrdinal + index;
+    })) invalid('restored batch assignment ordinals must be absolute and consecutive');
+    if (slots.some(function (slot) {
+      var skuHero = slot.slotKey === 'sku:' + slot.skuKey + ':hero';
+      var sharedDetail = slot.skuKey === binding.skuKey
+        && SHARED_DETAIL_ROLES.some(function (role) {
+          return slot.slotKey === 'shared:detail:' + role;
+        });
+      return !skuHero && !sharedDetail;
+    })) invalid('restored batch slot is not supported by the exact binding');
+    if (new Set(slots.map(function (slot) { return slot.slotKey; })).size !== slots.length) {
+      invalid('restored batch slots must be unique');
+    }
+    var slotByKey = new Map(slots.map(function (slot) { return [slot.slotKey, slot]; }));
+    if (attempts.some(function (attempt) {
+      var restoredSlot = slotByKey.get(attempt.slotKey);
+      return !restoredSlot || restoredSlot.operation !== attempt.operation;
+    }) || slots.some(function (slot) {
+      return !attempts.some(function (attempt) { return attempt.slotKey === slot.slotKey; });
+    })) invalid('restored attempts do not match the exact batch slots');
+    ['attemptId', 'idempotencyKey', 'candidateId', 'resultHandle'].forEach(function (field) {
+      if (new Set(attempts.map(function (attempt) { return attempt[field]; })).size
+        !== attempts.length) invalid('restored batch attempt identities must be unique');
+    });
+    var generationKeys = attempts.map(function (attempt) {
+      return attempt.slotKey + '\u0000' + attempt.generation;
+    });
+    if (new Set(generationKeys).size !== generationKeys.length) {
+      invalid('restored batch generations must be unique per slot');
+    }
+    return Object.freeze({
+      batchId: identifier(value.batchId, 'batch ID'),
+      binding: binding,
+      slots: Object.freeze(slots),
+      attempts: Object.freeze(attempts),
     });
   }
 
@@ -476,6 +572,15 @@
       return state;
     }
 
+    function ensureProviderWorkAllowed() {
+      var state = ensureReviewMutable();
+      if (state.reviewOnly) throw coordinatorError(
+        'SS_ERP_BYOK_BATCH_REVIEW_ONLY', 'FAILED_FINAL',
+        'Restored BYOK candidates allow review and ingest only',
+      );
+      return state;
+    }
+
     function attemptsForSlot(slotKey) {
       return engine.getSnapshot().attempts.filter(function (attempt) {
         return attempt.slotKey === slotKey;
@@ -655,6 +760,10 @@
 
     async function dispatchProvider(input) {
       var state = requireActive();
+      if (state.reviewOnly) throw coordinatorError(
+        'SS_ERP_BYOK_BATCH_REVIEW_ONLY', 'FAILED_FINAL',
+        'Restored BYOK candidates cannot dispatch Provider work',
+      );
       var slot = state.slotByKey.get(input.slotKey);
       if (!slot) throw coordinatorError(
         'SS_ERP_BYOK_BATCH_SLOT_NOT_FOUND', 'FAILED_FINAL', 'Provider slot is unavailable',
@@ -716,20 +825,13 @@
     });
     engineUnsubscribe = engine.subscribe(function () { emit(); });
 
-    function startBatch(value) {
-      if (active) throw coordinatorError(
-        'SS_ERP_BYOK_BATCH_ALREADY_STARTED', 'FAILED_FINAL',
-        'A coordinator owns exactly one immutable BYOK batch',
-      );
-      var normalized = normalizeStart(value);
-      if (normalized.binding.policyRevision !== String(options.concurrencyAuthority.policyRevision)) {
-        invalid('batch policy revision does not match concurrency authority');
-      }
-      active = {
+    function activeBatch(normalized, reviewOnly) {
+      return {
         batchId: normalized.batchId,
         binding: normalized.binding,
         slots: normalized.slots,
         slotByKey: new Map(normalized.slots.map(function (slot) { return [slot.slotKey, slot]; })),
+        reviewOnly: reviewOnly,
         rejectedAttemptIds: new Set(),
         retiredUnknownAttemptIds: new Set(),
         unknownRetryInFlightIds: new Set(),
@@ -742,6 +844,18 @@
           selected: null, request: null,
         },
       };
+    }
+
+    function startBatch(value) {
+      if (active) throw coordinatorError(
+        'SS_ERP_BYOK_BATCH_ALREADY_STARTED', 'FAILED_FINAL',
+        'A coordinator owns exactly one immutable BYOK batch',
+      );
+      var normalized = normalizeStart(value);
+      if (normalized.binding.policyRevision !== String(options.concurrencyAuthority.policyRevision)) {
+        invalid('batch policy revision does not match concurrency authority');
+      }
+      active = activeBatch(normalized, false);
       try {
         engine.enqueueBatch(normalized.slots.map(function (slot) {
           return {
@@ -760,20 +874,64 @@
       return getProjection();
     }
 
+    function restoreBatch(value) {
+      if (active) throw coordinatorError(
+        'SS_ERP_BYOK_BATCH_ALREADY_STARTED', 'FAILED_FINAL',
+        'A coordinator owns exactly one immutable BYOK batch',
+      );
+      var normalized = normalizeRestore(value);
+      if (normalized.binding.policyRevision !== String(options.concurrencyAuthority.policyRevision)) {
+        invalid('restored batch policy revision does not match concurrency authority');
+      }
+      normalized.attempts.forEach(function (attempt) {
+        var restoredSlot = normalized.slots.find(function (slot) {
+          return slot.slotKey === attempt.slotKey;
+        });
+        try {
+          var publicResult = resultVault.getPublic(attempt.resultHandle);
+          if (!publicResult || publicResult.resultId !== attempt.resultHandle
+            || publicResult.outcome !== 'SUCCEEDED'
+            || publicResult.operation !== attempt.operation
+            || publicResult.model !== normalized.binding.model
+            || publicResult.policyRevision !== normalized.binding.policyRevision
+            || publicResult.idempotencyKey !== attempt.idempotencyKey
+            || publicResult.requestHash !== attempt.providerRequestHash
+            || !publicResult.image || publicResult.image.sha256 !== attempt.resultSha256
+            || publicResult.reviewState !== 'CANDIDATE_READY' || !restoredSlot) {
+            throw new Error('restored result mismatch');
+          }
+        } catch {
+          throw coordinatorError(
+            'SS_ERP_BYOK_BATCH_RESTORE_RESULT_INVALID', 'FAILED_FINAL',
+            'Restored Provider result does not match its retained vault entry',
+          );
+        }
+      });
+      active = activeBatch(normalized, true);
+      try {
+        engine.restoreCandidates(normalized.attempts);
+      } catch (error) {
+        active = null;
+        throw error;
+      }
+      emit();
+      return getProjection();
+    }
+
     function pause() {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       engine.pause();
       return getProjection();
     }
 
     function continueBatch() {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       engine.continue();
       return getProjection();
     }
 
     function cancelQueued(attemptIdValue) {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       var result = engine.cancelQueued(identifier(attemptIdValue, 'attempt ID'));
       return deepFreeze({
         cancelled: result.cancelled,
@@ -822,7 +980,7 @@
     }
 
     function regenerateSlot(slotKeyValue, value) {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       var slot = findSlot(slotKeyValue);
       assertNoUnknown(slot.slotKey);
       if (!isRecord(value) || value.slotKey !== slot.slotKey || value.operation !== slot.operation) {
@@ -833,7 +991,7 @@
     }
 
     async function retryAttempt(attemptIdValue, value) {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       var attemptId = identifier(attemptIdValue, 'attempt ID');
       var attempt = engine.getAttempt(attemptId);
       if (!attempt || !active.slotByKey.has(attempt.slotKey)) throw coordinatorError(
@@ -857,7 +1015,7 @@
     }
 
     async function resolveUnknownAttempt(attemptIdValue, recoveryRefValue) {
-      ensureReviewMutable();
+      ensureProviderWorkAllowed();
       var attemptId = identifier(attemptIdValue, 'attempt ID');
       var attempt = engine.getAttempt(attemptId);
       if (!attempt || !active.slotByKey.has(attempt.slotKey)) throw coordinatorError(
@@ -1142,6 +1300,7 @@
 
     return Object.freeze({
       startBatch: startBatch,
+      restoreBatch: restoreBatch,
       pause: pause,
       continue: continueBatch,
       cancelQueued: cancelQueued,
@@ -1169,6 +1328,7 @@
   global.SS_ERP_BYOK_WORKBENCH_BATCH_COORDINATOR = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     START_COMMAND_VERSION: START_COMMAND_VERSION,
+    RESTORE_COMMAND_VERSION: RESTORE_COMMAND_VERSION,
     BINDING_VERSION: BINDING_VERSION,
     PROVIDER_DISPATCH_VERSION: PROVIDER_DISPATCH_VERSION,
     INGEST_COMMAND_VERSION: INGEST_COMMAND_VERSION,

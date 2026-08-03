@@ -1164,22 +1164,199 @@
     return;
   }
 
-  var lifecyclePort = null;
-  try {
-    if (global.chrome && global.chrome.runtime
-      && typeof global.chrome.runtime.connect === 'function') {
-      lifecyclePort = global.chrome.runtime.connect({
-        name: 'ss-erp:ai-image-workbench-batch-lifecycle',
-      });
-    }
-  } catch {}
-
   var renderedSlotSignature = '';
   var renderedRecoverySignature = '';
   var lastPreviewUrl = '';
   var lastView = controller.getView();
   var pollTimer = null;
   var lastLockState = null;
+  var lastGenerateBaseDisabled = true;
+  var lifecyclePort = null;
+  var lifecycleHeartbeatTimer = null;
+  var lifecycleAckTimer = null;
+  var lifecycleMaximumTimer = null;
+  var lifecycleHandshake = null;
+  var lifecycleHandshakeResolve = null;
+  var lifecycleHandshakeReject = null;
+  var lifecycleStartPending = false;
+  var lifecycleState = 'IDLE';
+  var SS_ERP_BYOK_BATCH_LIFECYCLE_PING =
+    'ss-erp:ai-image-workbench-batch-lifecycle-ping/v1';
+  var SS_ERP_BYOK_BATCH_LIFECYCLE_ACK =
+    'ss-erp:ai-image-workbench-batch-lifecycle-ack/v1';
+  var LIFECYCLE_ACK_DEADLINE_MS = 5 * 1000;
+  var LIFECYCLE_HEARTBEAT_INTERVAL_MS = 20 * 1000;
+  var LIFECYCLE_MAXIMUM_ACTIVE_MS = 20 * 60 * 1000;
+
+  function lifecycleError() {
+    return Object.assign(
+      new Error('The background candidate lifecycle is unavailable'),
+      { code: 'SS_ERP_BYOK_BATCH_LIFECYCLE_UNAVAILABLE' },
+    );
+  }
+
+  function clearLifecycleTimers() {
+    if (lifecycleHeartbeatTimer !== null) {
+      try { global.clearTimeout(lifecycleHeartbeatTimer); } catch {}
+    }
+    lifecycleHeartbeatTimer = null;
+    if (lifecycleAckTimer !== null) {
+      try { global.clearTimeout(lifecycleAckTimer); } catch {}
+    }
+    lifecycleAckTimer = null;
+    if (lifecycleMaximumTimer !== null) {
+      try { global.clearTimeout(lifecycleMaximumTimer); } catch {}
+    }
+    lifecycleMaximumTimer = null;
+  }
+
+  function lifecycleRequired() {
+    return lifecycleStartPending || Boolean(lastView && lastView.active);
+  }
+
+  function closeLifecyclePort() {
+    clearLifecycleTimers();
+    var port = lifecyclePort;
+    lifecyclePort = null;
+    if (port) {
+      try { port.disconnect(); } catch {}
+    }
+  }
+
+  function rejectLifecycleHandshake(error) {
+    var reject = lifecycleHandshakeReject;
+    lifecycleHandshake = null;
+    lifecycleHandshakeResolve = null;
+    lifecycleHandshakeReject = null;
+    if (reject) reject(error);
+  }
+
+  function failLifecycleProtection(port) {
+    if (port && port !== lifecyclePort) return false;
+    if (lifecycleState === 'FAILED' || lifecycleState === 'DISPOSED') return false;
+    var error = lifecycleError();
+    lifecycleState = 'FAILED';
+    closeLifecyclePort();
+    rejectLifecycleHandshake(error);
+    try { render(controller.getView()); } catch {}
+    return true;
+  }
+
+  function scheduleLifecycleHeartbeat() {
+    if (lifecycleHeartbeatTimer !== null) {
+      try { global.clearTimeout(lifecycleHeartbeatTimer); } catch {}
+      lifecycleHeartbeatTimer = null;
+    }
+    if (lifecycleState !== 'READY' || !lifecyclePort || !lifecycleRequired()
+      || typeof global.setTimeout !== 'function') return;
+    var port = lifecyclePort;
+    lifecycleHeartbeatTimer = global.setTimeout(function () {
+      lifecycleHeartbeatTimer = null;
+      sendLifecyclePing(port);
+    }, LIFECYCLE_HEARTBEAT_INTERVAL_MS);
+  }
+
+  function handleLifecycleAck(port, message) {
+    if (port !== lifecyclePort || lifecycleAckTimer === null
+      || message !== SS_ERP_BYOK_BATCH_LIFECYCLE_ACK) {
+      failLifecycleProtection(port);
+      return;
+    }
+    try { global.clearTimeout(lifecycleAckTimer); } catch {}
+    lifecycleAckTimer = null;
+    if (lifecycleState === 'CONNECTING') {
+      var resolve = lifecycleHandshakeResolve;
+      lifecycleHandshake = null;
+      lifecycleHandshakeResolve = null;
+      lifecycleHandshakeReject = null;
+      lifecycleState = 'READY';
+      if (resolve) resolve(true);
+    }
+    if (!lifecycleRequired()) {
+      lifecycleState = 'IDLE';
+      closeLifecyclePort();
+      return;
+    }
+    scheduleLifecycleHeartbeat();
+    try { render(controller.getView()); } catch {}
+  }
+
+  function sendLifecyclePing(port) {
+    if (port !== lifecyclePort || lifecycleAckTimer !== null
+      || lifecycleState === 'FAILED' || lifecycleState === 'DISPOSED') return false;
+    try {
+      port.postMessage(SS_ERP_BYOK_BATCH_LIFECYCLE_PING);
+    } catch {
+      failLifecycleProtection(port);
+      return false;
+    }
+    if (typeof global.setTimeout !== 'function') {
+      failLifecycleProtection(port);
+      return false;
+    }
+    lifecycleAckTimer = global.setTimeout(function () {
+      lifecycleAckTimer = null;
+      failLifecycleProtection(port);
+    }, LIFECYCLE_ACK_DEADLINE_MS);
+    return true;
+  }
+
+  function ensureLifecycleProtection() {
+    if (lifecycleState === 'READY' && lifecyclePort) return Promise.resolve(true);
+    if (lifecycleState === 'CONNECTING' && lifecycleHandshake) return lifecycleHandshake;
+    if (lifecycleState === 'FAILED' || lifecycleState === 'DISPOSED') {
+      return Promise.reject(lifecycleError());
+    }
+    lifecycleState = 'CONNECTING';
+    lifecycleHandshake = new Promise(function (resolve, reject) {
+      lifecycleHandshakeResolve = resolve;
+      lifecycleHandshakeReject = reject;
+    });
+    var handshake = lifecycleHandshake;
+    try {
+      if (!global.chrome || !global.chrome.runtime
+        || typeof global.chrome.runtime.connect !== 'function') throw lifecycleError();
+      var port = global.chrome.runtime.connect({
+        name: 'ss-erp:ai-image-workbench-batch-lifecycle',
+      });
+      if (!port || !port.onMessage || typeof port.onMessage.addListener !== 'function'
+        || !port.onDisconnect || typeof port.onDisconnect.addListener !== 'function'
+        || typeof port.postMessage !== 'function' || typeof port.disconnect !== 'function') {
+        throw lifecycleError();
+      }
+      lifecyclePort = port;
+      lifecycleMaximumTimer = global.setTimeout(function () {
+        lifecycleMaximumTimer = null;
+        failLifecycleProtection(port);
+      }, LIFECYCLE_MAXIMUM_ACTIVE_MS);
+      port.onMessage.addListener(function (message) {
+        handleLifecycleAck(port, message);
+      });
+      port.onDisconnect.addListener(function () {
+        if (port === lifecyclePort) failLifecycleProtection(port);
+      });
+      sendLifecyclePing(port);
+    } catch {
+      failLifecycleProtection(lifecyclePort);
+    }
+    return handshake;
+  }
+
+  function updateLifecycleScope(view) {
+    if (view.active || lifecycleStartPending) {
+      if (lifecycleState === 'IDLE') {
+        void ensureLifecycleProtection().catch(function () {});
+      } else if (lifecycleState === 'READY') {
+        scheduleLifecycleHeartbeat();
+      }
+      return;
+    }
+    if (lifecycleState === 'CONNECTING' || lifecycleState === 'READY') {
+      lifecycleState = 'IDLE';
+      closeLifecyclePort();
+      rejectLifecycleHandshake(lifecycleError());
+    }
+  }
 
   function stateClass(state) {
     if (state === 'REVIEW' || state === 'SUCCEEDED') return 'state-success';
@@ -1189,6 +1366,9 @@
   }
 
   function statusText(view) {
+    if (lifecycleState === 'FAILED') {
+      return '后台候选保护已中断。请重新加载工作台并核对批次状态。';
+    }
     if (view.errorCode) return '批次操作被拒绝：' + view.errorCode;
     if (!view.available) return '等待当前草稿和槽位上下文';
     if (!view.active) {
@@ -1262,11 +1442,14 @@
   }
 
   function runRecovery(value) {
+    if (lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.recoverAttempt(value).catch(function () {});
   }
 
   function renderRecovery(view) {
-    var signature = JSON.stringify(view.recoveryRows) + '|' + String(view.busy);
+    var lifecycleReady = lifecycleState === 'READY' && Boolean(lifecyclePort);
+    var signature = JSON.stringify(view.recoveryRows) + '|' + String(view.busy)
+      + '|' + String(lifecycleReady);
     if (signature === renderedRecoverySignature) return;
     renderedRecoverySignature = signature;
     clearChildren(nodes.recoveryList);
@@ -1283,7 +1466,7 @@
         resolveButton.type = 'button';
         resolveButton.className = 'button button-secondary button-compact';
         resolveButton.textContent = '查询原请求';
-        resolveButton.disabled = view.busy;
+        resolveButton.disabled = view.busy || !lifecycleReady;
         resolveButton.addEventListener('click', function (event) {
           if (!event || event.isTrusted !== true || resolveButton.disabled) return;
           runRecovery({
@@ -1303,7 +1486,7 @@
       confirmationLabel.className = 'batch-charge-confirmation';
       var confirmation = document.createElement('input');
       confirmation.type = 'checkbox';
-      confirmation.disabled = view.busy;
+      confirmation.disabled = view.busy || !lifecycleReady;
       var confirmationText = document.createElement('span');
       confirmationText.textContent = row.state === 'UNKNOWN_OUTCOME'
         ? '确认可能重复扣费' : '确认再次产生 Provider 费用';
@@ -1316,7 +1499,7 @@
       retryButton.disabled = true;
       confirmation.addEventListener('change', function (event) {
         if (!event || event.isTrusted !== true) return;
-        retryButton.disabled = view.busy || confirmation.checked !== true;
+        retryButton.disabled = view.busy || !lifecycleReady || confirmation.checked !== true;
       });
       retryButton.addEventListener('click', function (event) {
         if (!event || event.isTrusted !== true || retryButton.disabled) return;
@@ -1355,6 +1538,8 @@
 
   function render(view) {
     lastView = view;
+    updateLifecycleScope(view);
+    var lifecycleReady = lifecycleState === 'READY' && Boolean(lifecyclePort);
     if (document.body && document.body.dataset) {
       document.body.dataset.byokBatchLocked = view.locked ? 'true' : 'false';
     }
@@ -1370,9 +1555,9 @@
     var displayState = view.ingestState || view.schedulerState || (view.available ? 'READY' : 'PENDING');
     nodes.badge.textContent = displayState === 'READY' ? '待开始' : displayState || '等待上下文';
     nodes.badge.className = 'state-badge ' + stateClass(displayState);
-    nodes.acceptButton.disabled = !view.canIngest;
+    nodes.acceptButton.disabled = !view.canIngest || !lifecycleReady;
     nodes.recoverButton.hidden = !view.canRecoverIngest;
-    nodes.recoverButton.disabled = !view.canRecoverIngest;
+    nodes.recoverButton.disabled = !view.canRecoverIngest || !lifecycleReady;
     nodes.clearButton.disabled = !view.canClear;
     nodes.clearButton.hidden = !view.active;
     if (view.active) {
@@ -1385,8 +1570,10 @@
     } else {
       nodes.generateButton.textContent = view.selectedCount > 1
         ? '生成所选 ' + view.selectedCount + ' 个槽位' : '生成所选槽位';
+      nodes.generateButton.disabled = lastGenerateBaseDisabled || lifecycleStartPending
+        || lifecycleState === 'FAILED';
     }
-    var polling = view.active && !view.busy && (
+    var polling = lifecycleState !== 'FAILED' && view.active && !view.busy && (
       view.schedulerState === null
       || ['READY', 'RUNNING', 'PAUSING'].includes(view.schedulerState)
       || ['SUBMITTING', 'RECOVERING'].includes(view.ingestState)
@@ -1409,11 +1596,13 @@
     try { controller.setConcurrency(Number(nodes.concurrency.value)); } catch {}
   });
   nodes.acceptButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.acceptButton.disabled) return;
+    if (!event || event.isTrusted !== true || nodes.acceptButton.disabled
+      || lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.ingest().catch(function () {});
   });
   nodes.recoverButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.recoverButton.disabled) return;
+    if (!event || event.isTrusted !== true || nodes.recoverButton.disabled
+      || lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.recover().catch(function () {});
   });
   nodes.clearButton.addEventListener('click', function (event) {
@@ -1444,26 +1633,44 @@
     } catch {}
   });
   document.addEventListener('ss-erp:workspace-action', function (event) {
-    void controller.handleWorkspaceAction(event && event.detail).catch(function () {});
+    var detail = event && event.detail;
+    if (detail && detail.action !== 'SAVE_PROMPT'
+      && (lifecycleState !== 'READY' || !lifecyclePort)) return;
+    void controller.handleWorkspaceAction(detail).catch(function () {});
   });
   document.addEventListener('ss-erp:workspace-intent', function (event) {
+    if (lifecycleState !== 'READY' || !lifecyclePort) return;
     void controller.handleWorkspaceIntent(event && event.detail).catch(function () {});
   });
 
-  function startFromPage() {
+  async function startFromPage() {
     if (!lastView.available || lastView.active || lastView.busy) return Promise.resolve(false);
-    return controller.start({
-      profileId: String(nodes.profileSelect.value || ''),
-      size: String(nodes.sizeSelect.value || ''),
-      primaryPrompt: String(nodes.promptInput.value || '').normalize('NFKC').trim(),
-      primaryNegativePrompt: String(nodes.negativePromptInput.value || '').normalize('NFKC').trim(),
-    }).then(function () { return true; });
+    lifecycleStartPending = true;
+    render(controller.getView());
+    try {
+      await ensureLifecycleProtection();
+      if (!lastView.available || lastView.active || lastView.busy
+        || lifecycleState !== 'READY' || !lifecyclePort) return false;
+      await controller.start({
+        profileId: String(nodes.profileSelect.value || ''),
+        size: String(nodes.sizeSelect.value || ''),
+        primaryPrompt: String(nodes.promptInput.value || '').normalize('NFKC').trim(),
+        primaryNegativePrompt:
+          String(nodes.negativePromptInput.value || '').normalize('NFKC').trim(),
+      });
+      return true;
+    } finally {
+      lifecycleStartPending = false;
+      render(controller.getView());
+    }
   }
 
   function syncGenerateControl(value) {
     var view = controller.getView();
     var baseDisabled = !value || value.baseDisabled === true;
-    if (!view.available || view.active || view.busy || view.selectedCount < 1) {
+    lastGenerateBaseDisabled = baseDisabled;
+    if (!view.available || view.active || view.busy || view.selectedCount < 1
+      || lifecycleStartPending || lifecycleState === 'FAILED') {
       nodes.generateButton.disabled = true;
     } else {
       nodes.generateButton.disabled = baseDisabled;
@@ -1478,10 +1685,9 @@
       pollTimer = null;
     }
     try { controller.dispose(); } catch {}
-    if (lifecyclePort) {
-      try { lifecyclePort.disconnect(); } catch {}
-      lifecyclePort = null;
-    }
+    lifecycleState = 'DISPOSED';
+    closeLifecyclePort();
+    rejectLifecycleHandshake(lifecycleError());
   }
   if (typeof global.addEventListener === 'function') {
     global.addEventListener('pagehide', dispose, { once: true });
@@ -1490,6 +1696,9 @@
   global.SS_ERP_BYOK_WORKBENCH_BATCH_PAGE_CONTROLLER = Object.freeze({
     isAvailable: function () { return controller.getView().available; },
     isLocked: function () { return controller.getView().locked; },
+    isLifecycleReady: function () {
+      return lifecycleState === 'READY' && Boolean(lifecyclePort);
+    },
     startFromPage: startFromPage,
     syncGenerateControl: syncGenerateControl,
     refresh: controller.refresh,

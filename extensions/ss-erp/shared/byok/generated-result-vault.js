@@ -154,6 +154,15 @@
     }).join('');
   }
 
+  function escrowResultId(value) {
+    if (value === undefined) return null;
+    var resultId = text(value, 128);
+    if (!/^br_[a-f0-9]{48}$/u.test(resultId)) {
+      throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+    }
+    return resultId;
+  }
+
   function publicResult(entry) {
     return Object.freeze({
       contractVersion: CONTRACT_VERSION,
@@ -292,6 +301,7 @@
       }
       var editHashes = normalizedEditHashes(result, result.operation);
       return {
+        escrowResultId: escrowResultId(result.escrowResultId),
         operation: result.operation,
         requestMode: result.requestMode,
         profileId: text(result.profileId, 128),
@@ -330,24 +340,21 @@
       };
     }
 
-    function put(result, binding, lifecycleAuthority) {
-      var current = currentMillis();
-      prune(current);
-      var normalized = normalize(result, binding, lifecycleAuthority);
+    function retain(normalized, current, expiresAtMillis) {
       var existingId = operationIndex.get(normalized.idempotencyKey);
       var existing = existingId && entries.get(existingId);
       if (existing) {
         if (existing.requestHash !== normalized.requestHash
           || existing.sha256 !== normalized.sha256
+          || existing.resultId !== (normalized.escrowResultId || existing.resultId)
           || existing.authorityFingerprint !== normalized.authorityFingerprint) {
           throw vaultError('SS_ERP_BYOK_RESULT_IDEMPOTENCY_CONFLICT');
         }
         return publicResult(existing);
       }
-      var resultId = createId(randomValues);
+      var resultId = normalized.escrowResultId || createId(randomValues);
       if (entries.has(resultId)) throw vaultError('SS_ERP_BYOK_RESULT_ID_COLLISION');
       planEvictions(normalized.byteLength).forEach(remove);
-      var expiresAtMillis = current + ttlMs;
       var entry = {
         ...normalized,
         resultId: resultId,
@@ -360,6 +367,43 @@
       totalBytes += entry.byteLength;
       scheduleExpiry(entry);
       return publicResult(entry);
+    }
+
+    function put(result, binding, lifecycleAuthority) {
+      var current = currentMillis();
+      prune(current);
+      return retain(
+        normalize(result, binding, lifecycleAuthority),
+        current,
+        current + ttlMs,
+      );
+    }
+
+    function restore(candidate) {
+      var current = currentMillis();
+      prune(current);
+      if (!exactKeys(candidate, [
+        'resultId', 'expiresAtMillis', 'result', 'binding', 'lifecycleAuthority',
+      ])
+        || typeof candidate.resultId !== 'string'
+        || !/^br_[a-f0-9]{48}$/u.test(candidate.resultId)
+        || !Number.isSafeInteger(candidate.expiresAtMillis)
+        || candidate.expiresAtMillis <= current
+        || candidate.expiresAtMillis > current + ttlMs
+        || !candidate.result || typeof candidate.result !== 'object'
+        || !candidate.result.image || typeof candidate.result.image !== 'object') {
+        throw vaultError('SS_ERP_BYOK_RESULT_INVALID');
+      }
+      var restoredResult = {
+        ...candidate.result,
+        escrowResultId: candidate.resultId,
+        image: { ...candidate.result.image },
+      };
+      return retain(
+        normalize(restoredResult, candidate.binding, candidate.lifecycleAuthority),
+        current,
+        candidate.expiresAtMillis,
+      );
     }
 
     function getForBackground(resultIdValue) {
@@ -442,6 +486,7 @@
 
     return Object.freeze({
       put: put,
+      restore: restore,
       getForBackground: getForBackground,
       getPublic: getPublic,
       getPublicByOperation: getPublicByOperation,

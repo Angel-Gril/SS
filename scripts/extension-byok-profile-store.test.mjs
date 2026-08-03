@@ -258,6 +258,44 @@ test('invalidates generated results before key rotation, profile rebind, and cre
   assert.equal(JSON.stringify(invalidations).includes('sk-'), false);
 });
 
+test('awaits durable generated-result invalidation and blocks credential mutation when it fails', async () => {
+  let releaseInvalidation;
+  let invalidationStarted = false;
+  const api = loadApi({
+    async onCredentialAuthorityChanged() {
+      invalidationStarted = true;
+      await new Promise((resolve) => { releaseInvalidation = resolve; });
+    },
+  });
+  await api.store.saveProfile(profile());
+  const setting = api.store.setApiKey('relay-profile-1', 'sk-awaited-rotation-sentinel');
+  while (!invalidationStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(api.sessionStorage.value(api.schema.SESSION_SECRETS_STORAGE_KEY), undefined);
+  let settled = false;
+  setting.finally(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(settled, false, 'credential mutation must wait for durable invalidation');
+  releaseInvalidation();
+  await setting;
+  assert.equal(
+    api.sessionStorage.value(api.schema.SESSION_SECRETS_STORAGE_KEY)['relay-profile-1'].apiKey,
+    'sk-awaited-rotation-sentinel',
+  );
+
+  const rejected = loadApi({
+    async onCredentialAuthorityChanged() { throw new Error('escrow rotation failed'); },
+  });
+  await rejected.store.saveProfile(profile());
+  await assert.rejects(
+    rejected.store.setApiKey('relay-profile-1', 'sk-blocked-rotation-sentinel'),
+    (error) => error && error.code === 'SS_ERP_BYOK_CREDENTIAL_INVALIDATION_UNAVAILABLE',
+  );
+  assert.equal(
+    rejected.sessionStorage.value(rejected.schema.SESSION_SECRETS_STORAGE_KEY),
+    undefined,
+  );
+});
+
 test('persists bounded normal dispatch tombstones across store recreation and clears them on key reset', async () => {
   const localStorage = createStorage();
   const sessionStorage = createStorage();

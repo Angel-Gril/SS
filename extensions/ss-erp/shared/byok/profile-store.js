@@ -506,13 +506,10 @@
     var writeQueue = Promise.resolve();
     var sessionGeneration = 0;
 
-    function invalidateCredentialAuthority(reason, id) {
+    async function invalidateCredentialAuthority(reason, id) {
       if (typeof onCredentialAuthorityChanged !== 'function') return;
       try {
-        var result = onCredentialAuthorityChanged({ reason: reason, profileId: id || null });
-        if (result && typeof result.then === 'function') {
-          throw new Error('credential invalidation must be synchronous');
-        }
+        await onCredentialAuthorityChanged({ reason: reason, profileId: id || null });
       } catch (_error) {
         throw storeError(
           'SS_ERP_BYOK_CREDENTIAL_INVALIDATION_UNAVAILABLE',
@@ -627,9 +624,9 @@
       if (!state.authorityMigrations.length) return state.profiles;
 
       assertSessionGeneration(expectedGeneration);
-      state.authorityMigrations.forEach(function (id) {
-        invalidateCredentialAuthority('profile_authority_changed', id);
-      });
+      for (const id of state.authorityMigrations) {
+        await invalidateCredentialAuthority('profile_authority_changed', id);
+      }
       var maps = await readSessionMaps();
       state.authorityMigrations.forEach(function (id) {
         delete maps.secrets[id];
@@ -674,7 +671,7 @@
           throw storeError('SS_ERP_BYOK_PROFILE_LIMIT', 'Too many Provider profiles');
         }
         if (changedBinding || removedOperations.length) {
-          invalidateCredentialAuthority('profile_authority_changed', next.id);
+          await invalidateCredentialAuthority('profile_authority_changed', next.id);
           var maps = await readSessionMaps();
           if (changedBinding) {
             delete maps.secrets[next.id];
@@ -781,7 +778,7 @@
           throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         }
         var key = normalizeApiKey(value);
-        invalidateCredentialAuthority('session_key_set', normalizedId);
+        await invalidateCredentialAuthority('session_key_set', normalizedId);
         var maps = await readSessionMaps();
         maps.storage = session;
         var identity = schema.profileIdentity(profile);
@@ -1152,7 +1149,7 @@
     async function clearSession() {
       sessionGeneration += 1;
       return enqueue(async function () {
-        invalidateCredentialAuthority('session_cleared', null);
+        await invalidateCredentialAuthority('session_cleared', null);
         var storage = assertSessionStorage(sessionStorage);
         await storage.remove([
           schema.SESSION_SECRETS_STORAGE_KEY,
@@ -1177,7 +1174,7 @@
         if (!profile) {
           throw storeError('SS_ERP_BYOK_PROFILE_NOT_FOUND', 'Provider profile is not found');
         }
-        invalidateCredentialAuthority('session_key_cleared', normalizedId);
+        await invalidateCredentialAuthority('session_key_cleared', normalizedId);
         var maps = await readSessionMaps();
         var cleared = Boolean(
           maps.secrets[normalizedId]
@@ -1214,7 +1211,7 @@
         var profiles = await readProfilesInQueue(expectedGeneration);
         var next = profiles.filter(function (candidate) { return candidate.id !== normalizedId; });
         if (next.length !== profiles.length) {
-          invalidateCredentialAuthority('profile_deleted', normalizedId);
+          await invalidateCredentialAuthority('profile_deleted', normalizedId);
         }
         var maps = await readSessionMaps();
         delete maps.secrets[normalizedId];

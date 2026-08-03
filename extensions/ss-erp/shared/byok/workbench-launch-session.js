@@ -11,7 +11,8 @@
   var DEFAULT_LIMIT = 8;
   var MAX_RETIRED_DOCUMENTS = 32;
   var INGEST_CONTRACT_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
-  var BATCH_RECOVERY_VERSION = 'extension-byok-workbench-batch-recovery/v1';
+  var BATCH_RECOVERY_VERSION_V1 = 'extension-byok-workbench-batch-recovery/v1';
+  var BATCH_RECOVERY_VERSION = 'extension-byok-workbench-batch-recovery/v2';
   var SUCCESSOR_RECOVERY_VERSION = 'extension-byok-workbench-successor-recovery/v1';
   var BATCH_RECOVERY_PHASES = ['PREPARING', 'RESERVED', 'DISPATCHING'];
   var BATCH_RECOVERY_OPERATIONS = [
@@ -42,9 +43,12 @@
   ];
   var BATCH_RECOVERY_KEYS = [
     'contractVersion', 'phase', 'reservationIdempotencyKey', 'executionBatchId',
-    'context', 'slots', 'successorRecovery',
+    'context', 'slots', 'successorRecovery', 'profileId',
   ];
-  var LEGACY_BATCH_RECOVERY_KEYS = BATCH_RECOVERY_KEYS.filter(function (key) {
+  var BATCH_RECOVERY_KEYS_V1 = BATCH_RECOVERY_KEYS.filter(function (key) {
+    return key !== 'profileId';
+  });
+  var LEGACY_BATCH_RECOVERY_KEYS_V1 = BATCH_RECOVERY_KEYS_V1.filter(function (key) {
     return key !== 'successorRecovery';
   });
   var BATCH_RECOVERY_CONTEXT_KEYS = [
@@ -337,9 +341,13 @@
   function normalizeBatchRecovery(value, context) {
     if (value === null || value === undefined) return null;
     var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_INVALID';
-    var legacy = exactKeys(value, LEGACY_BATCH_RECOVERY_KEYS);
-    if (!legacy && !exactKeys(value, BATCH_RECOVERY_KEYS)
-      || value.contractVersion !== BATCH_RECOVERY_VERSION
+    var recoveryV2 = exactKeys(value, BATCH_RECOVERY_KEYS)
+      && value.contractVersion === BATCH_RECOVERY_VERSION;
+    var recoveryV1 = exactKeys(value, BATCH_RECOVERY_KEYS_V1)
+      && value.contractVersion === BATCH_RECOVERY_VERSION_V1;
+    var legacyRecoveryV1 = exactKeys(value, LEGACY_BATCH_RECOVERY_KEYS_V1)
+      && value.contractVersion === BATCH_RECOVERY_VERSION_V1;
+    if (!recoveryV2 && !recoveryV1 && !legacyRecoveryV1
       || !BATCH_RECOVERY_PHASES.includes(value.phase)
       || !exactKeys(value.context, BATCH_RECOVERY_CONTEXT_KEYS)
       || !Array.isArray(value.slots) || value.slots.length < 1 || value.slots.length > 4) {
@@ -385,20 +393,24 @@
       throw sessionError(code);
     }
     var successorRecovery = normalizeSuccessorRecovery(
-      legacy ? null : value.successorRecovery, context, slots,
+      legacyRecoveryV1 ? null : value.successorRecovery, context, slots,
     );
     if (successorRecovery !== null && value.phase !== 'DISPATCHING') {
       throw sessionError(code);
     }
-    return Object.freeze({
-      contractVersion: BATCH_RECOVERY_VERSION,
+    var normalized = {
+      contractVersion: recoveryV2 ? BATCH_RECOVERY_VERSION : BATCH_RECOVERY_VERSION_V1,
       phase: value.phase,
       reservationIdempotencyKey: reservationIdempotencyKey,
       executionBatchId: executionBatchId,
       context: recoveryContext,
       slots: Object.freeze(slots),
       successorRecovery: successorRecovery,
-    });
+    };
+    if (recoveryV2) {
+      normalized.profileId = recoveryIdentifier(value.profileId, 1, 128, code);
+    }
+    return Object.freeze(normalized);
   }
 
   function normalizeOperation(value, context) {
@@ -883,6 +895,8 @@
         var recovery = normalizeBatchRecovery(recoveryValue, session.context);
         var previous = session.operation.recovery;
         var sameBase = previous && recovery
+          && previous.contractVersion === recovery.contractVersion
+          && (previous.profileId || null) === (recovery.profileId || null)
           && JSON.stringify(previous.context) === JSON.stringify(recovery.context)
           && JSON.stringify(previous.slots) === JSON.stringify(recovery.slots)
           && previous.reservationIdempotencyKey === recovery.reservationIdempotencyKey;
@@ -1271,6 +1285,7 @@
     CONTRACT_VERSION: CONTRACT_VERSION,
     CONTEXT_VERSION: CONTEXT_VERSION,
     BATCH_RECOVERY_VERSION: BATCH_RECOVERY_VERSION,
+    BATCH_RECOVERY_VERSION_V1: BATCH_RECOVERY_VERSION_V1,
     SUCCESSOR_RECOVERY_VERSION: SUCCESSOR_RECOVERY_VERSION,
     STORAGE_KEY: STORAGE_KEY,
     BATCH_RECOVERY_STORAGE_KEY: BATCH_RECOVERY_STORAGE_KEY,

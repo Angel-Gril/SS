@@ -5,6 +5,7 @@
   var CREATE_REQUEST_VERSION = 'extension-byok-execution-batch-request/v1';
   var CREATE_RESPONSE_VERSION = 'extension-byok-execution-batch/v1';
   var STATUS_RESPONSE_VERSION = 'extension-byok-execution-batch-status/v1';
+  var STATUS_RESPONSE_VERSION_V2 = 'extension-byok-execution-batch-status/v2';
   var ATTEMPT_REQUEST_VERSION = 'extension-byok-execution-batch-attempt-request/v1';
   var ATTEMPT_RESPONSE_VERSION = 'extension-byok-execution-batch-attempt/v1';
   var CANCEL_REQUEST_VERSION = 'extension-byok-execution-batch-cancel-request/v1';
@@ -327,9 +328,11 @@
     });
   }
 
-  function normalizeStatusItem(value) {
+  function normalizeStatusItem(value, contractVersion) {
+    var intentKeys = contractVersion === STATUS_RESPONSE_VERSION_V2
+      ? INTENT_KEYS.concat(['resultSha256']) : INTENT_KEYS;
     if (!exactKeys(value, PUBLIC_ITEM_KEYS.concat(['status']))
-      || !exactKeys(value.intent, INTENT_KEYS)
+      || !exactKeys(value.intent, intentKeys)
       || !['ACTIVE', 'BOUND', 'RELEASED'].includes(value.status)) invalidResponse();
     var itemIndex = ordinal(value.itemIndex, invalidResponse);
     var attemptIndex = ordinal(value.intent.attemptIndex, invalidResponse);
@@ -345,6 +348,12 @@
       value.intent.providerIdempotencyKey, 200, invalidResponse,
     );
     if (providerIdempotencyKey.length < 16) invalidResponse();
+    var resultSha256 = null;
+    if (contractVersion === STATUS_RESPONSE_VERSION_V2) {
+      if (value.intent.outcome === 'SUCCEEDED') {
+        resultSha256 = sha256(value.intent.resultSha256, invalidResponse);
+      } else if (value.intent.resultSha256 !== null) invalidResponse();
+    }
     return deepFreeze({
       batchItemId: identifier(value.batchItemId, 200, invalidResponse),
       itemIndex: itemIndex,
@@ -359,15 +368,17 @@
         outcome: value.intent.outcome,
         providerIdempotencyKey: providerIdempotencyKey,
         providerRequestHash: sha256(value.intent.providerRequestHash, invalidResponse),
+        ...(contractVersion === STATUS_RESPONSE_VERSION_V2
+          ? { resultSha256: resultSha256 } : {}),
       },
     });
   }
 
-  function normalizeStatusResponse(value, batchId, response) {
+  function normalizeStatusResponse(value, batchId, response, contractVersion) {
     if (!exactKeys(value, [
       'contractVersion', 'batchId', 'status', 'context', 'boundDraftRevision',
       'boundDraftVersion', 'items',
-    ]) || value.contractVersion !== STATUS_RESPONSE_VERSION || value.batchId !== batchId
+    ]) || value.contractVersion !== contractVersion || value.batchId !== batchId
       || !STATUSES.includes(value.status) || !exactKeys(value.context, STATUS_CONTEXT_KEYS)
       || !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 4) {
       invalidResponse();
@@ -394,7 +405,9 @@
         && (boundDraftRevision !== null || boundDraftVersion !== null))) invalidResponse();
     var expectedItemStatus = value.status === 'OPEN'
       ? 'ACTIVE' : value.status === 'BOUND' ? 'BOUND' : 'RELEASED';
-    var items = value.items.map(normalizeStatusItem);
+    var items = value.items.map(function (item) {
+      return normalizeStatusItem(item, contractVersion);
+    });
     var firstOrdinal = items[0].assignmentOrdinal;
     if (items.some(function (item, index) {
       return item.itemIndex !== index || item.status !== expectedItemStatus
@@ -405,7 +418,7 @@
       invalidResponse();
     }
     return deepFreeze({
-      contractVersion: STATUS_RESPONSE_VERSION,
+      contractVersion: contractVersion,
       batchId: batchId,
       status: value.status,
       context: context,
@@ -501,7 +514,28 @@
             operation: 'STATUS', status: null,
           });
         }
-        return normalizeStatusResponse(responseData(response, 'STATUS'), batchId, response);
+        return normalizeStatusResponse(
+          responseData(response, 'STATUS'), batchId, response, STATUS_RESPONSE_VERSION,
+        );
+      },
+      statusV2: async function (value) {
+        if (!exactKeys(value, ['batchId']) || typeof transport.get !== 'function') invalid();
+        var batchId = identifier(value.batchId, 200, invalid);
+        var response;
+        try {
+          response = await transport.get(
+            PATH + '/' + encodeURIComponent(batchId) + '?contractVersion='
+              + encodeURIComponent(STATUS_RESPONSE_VERSION_V2),
+            { requiredScope: REQUIRED_SCOPE },
+          );
+        } catch {
+          throw clientError('SS_ERP_BYOK_EXECUTION_BATCH_UNAVAILABLE', 'FAILED_RETRYABLE', {
+            operation: 'STATUS_V2', status: null,
+          });
+        }
+        return normalizeStatusResponse(
+          responseData(response, 'STATUS_V2'), batchId, response, STATUS_RESPONSE_VERSION_V2,
+        );
       },
       statusByIdempotency: async function (value) {
         if (!exactKeys(value, ['idempotencyKey']) || typeof transport.get !== 'function') invalid();
@@ -522,7 +556,29 @@
         var data = responseData(response, 'STATUS_BY_IDEMPOTENCY');
         if (!isRecord(data)) invalidResponse();
         var batchId = identifier(data.batchId, 200, invalidResponse);
-        return normalizeStatusResponse(data, batchId, response);
+        return normalizeStatusResponse(data, batchId, response, STATUS_RESPONSE_VERSION);
+      },
+      statusByIdempotencyV2: async function (value) {
+        if (!exactKeys(value, ['idempotencyKey']) || typeof transport.get !== 'function') invalid();
+        var idempotencyKey = identifier(value.idempotencyKey, 200, invalid);
+        if (idempotencyKey.length < 16) invalid();
+        var response;
+        try {
+          response = await transport.get(
+            PATH + '/by-idempotency/' + encodeURIComponent(idempotencyKey)
+              + '?contractVersion=' + encodeURIComponent(STATUS_RESPONSE_VERSION_V2),
+            { requiredScope: REQUIRED_SCOPE },
+          );
+        } catch {
+          throw clientError('SS_ERP_BYOK_EXECUTION_BATCH_UNAVAILABLE', 'FAILED_RETRYABLE', {
+            operation: 'STATUS_BY_IDEMPOTENCY_V2', status: null,
+          });
+        }
+        if (isExactLookupMiss(response)) return null;
+        var data = responseData(response, 'STATUS_BY_IDEMPOTENCY_V2');
+        if (!isRecord(data)) invalidResponse();
+        var batchId = identifier(data.batchId, 200, invalidResponse);
+        return normalizeStatusResponse(data, batchId, response, STATUS_RESPONSE_VERSION_V2);
       },
     });
   }
@@ -532,6 +588,7 @@
     CREATE_REQUEST_VERSION: CREATE_REQUEST_VERSION,
     CREATE_RESPONSE_VERSION: CREATE_RESPONSE_VERSION,
     STATUS_RESPONSE_VERSION: STATUS_RESPONSE_VERSION,
+    STATUS_RESPONSE_VERSION_V2: STATUS_RESPONSE_VERSION_V2,
     ATTEMPT_REQUEST_VERSION: ATTEMPT_REQUEST_VERSION,
     ATTEMPT_RESPONSE_VERSION: ATTEMPT_RESPONSE_VERSION,
     CANCEL_REQUEST_VERSION: CANCEL_REQUEST_VERSION,

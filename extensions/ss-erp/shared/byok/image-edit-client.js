@@ -538,6 +538,7 @@
   function createClient(options) {
     var profileStore = options && options.profileStore;
     var executionIntentClient = options && options.executionIntentClient;
+    var stageResult = options && options.stageResult;
     var permissionBroker = options && options.permissionBroker;
     var inspector = options && options.imageInputInspector || defaultInspector;
     var maskTransformer = options && options.maskTransformer;
@@ -600,6 +601,9 @@
     if (typeof fetchImpl !== 'function') throw new TypeError('background fetchImpl is required');
     if (authorizeResultOrigin !== undefined && typeof authorizeResultOrigin !== 'function') {
       throw new TypeError('authorizeResultOrigin must be a function');
+    }
+    if (stageResult !== undefined && typeof stageResult !== 'function') {
+      throw new TypeError('stageResult must be a function');
     }
     if (!cryptoImpl || !cryptoImpl.subtle || typeof cryptoImpl.subtle.digest !== 'function') {
       throw new TypeError('Web Crypto is required');
@@ -967,6 +971,76 @@
           'BYOK execution outcome could not be verified',
           'FAILED_RETRYABLE',
         );
+      }
+    }
+
+    async function stageCompletedResult(result, binding, requestIdHash, taskIdHash) {
+      if (!stageResult) return result;
+      var staged;
+      try {
+        staged = await stageResult(result, binding);
+      } catch (error) {
+        throw clientError(
+          'SS_ERP_BYOK_IMAGE_EDIT_RESULT_ESCROW_UNAVAILABLE',
+          'Provider edit result could not be retained for review',
+          'UNKNOWN_OUTCOME',
+          {
+            automaticRetryAllowed: false,
+            providerRequestIdSha256: safeSha256(requestIdHash),
+            providerTaskIdSha256: safeSha256(taskIdHash),
+            causeCode: String(error && error.code || 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE')
+              .slice(0, 100),
+          },
+        );
+      }
+      if (!isRecord(staged) || typeof staged.resultId !== 'string'
+        || !/^br_[a-f0-9]{48}$/u.test(staged.resultId)) {
+        throw clientError(
+          'SS_ERP_BYOK_IMAGE_EDIT_RESULT_ESCROW_UNAVAILABLE',
+          'Provider edit result escrow returned an invalid identity',
+          'UNKNOWN_OUTCOME',
+          {
+            automaticRetryAllowed: false,
+            providerRequestIdSha256: safeSha256(requestIdHash),
+            providerTaskIdSha256: safeSha256(taskIdHash),
+          },
+        );
+      }
+      result.escrowResultId = staged.resultId;
+      return result;
+    }
+
+    async function stageCompletedResultWithAuthority(
+      entry,
+      prepared,
+      result,
+      requestIdHash,
+      taskIdHash,
+    ) {
+      var stageStarted = false;
+      try {
+        return await permissionBroker.commitWithOriginPermission(
+          prepared.endpoint.apiBaseUrl,
+          function () {
+            return profileStore.commitWithCredentialRevisionForBackground(
+              entry.profileId,
+              entry.profileIdentity,
+              entry.credentialRevision,
+              function () {
+                stageStarted = true;
+                return stageCompletedResult(
+                  result,
+                  prepared.binding,
+                  requestIdHash,
+                  taskIdHash,
+                );
+              },
+            );
+          },
+        );
+      } catch (error) {
+        if (stageStarted) throw error;
+        throw resultAuthorityStale(error, requestIdHash, taskIdHash);
       }
     }
 
@@ -1339,6 +1413,13 @@
         },
       };
       if (!entry.capabilityProbe) {
+        result = await stageCompletedResultWithAuthority(
+          entry,
+          prepared,
+          result,
+          requestIdHash,
+          taskIdHash,
+        );
         try {
           await reportExecutionIntentOutcome(
             entry,

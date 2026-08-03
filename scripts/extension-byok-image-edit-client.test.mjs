@@ -370,6 +370,7 @@ function loadClient(options = {}) {
   const client = context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT.createClient({
     profileStore,
     executionIntentClient,
+    stageResult: options.stageResult,
     permissionBroker,
     imageInputInspector: context.SS_ERP_BYOK_IMAGE_INPUT_INSPECTOR,
     maskTransformer: {
@@ -660,6 +661,125 @@ test('claims an exact execution intent before Provider dispatch and reports the 
   assert.equal(
     loaded.client.getOperationState(input.idempotencyKey).executionIntentId,
     result.executionIntentId,
+  );
+});
+
+test('escrows the completed edit result before reporting SUCCEEDED', async () => {
+  let staged = false;
+  const stagedResultId = `br_${'b'.repeat(48)}`;
+  const loaded = loadClient({
+    stageResult: async (result, binding) => {
+      assert.equal(result.outcome, 'SUCCEEDED');
+      assert.equal(result.operation, 'FULL_EDIT');
+      assert.equal(result.image.blob instanceof Blob, true);
+      assert.equal(binding.operation, 'FULL_EDIT');
+      staged = true;
+      return { resultId: stagedResultId };
+    },
+    executionIntentClientOverrides: {
+      async reportOutcome(value) {
+        loaded.executionIntentCalls.push({ method: 'reportOutcome', value: plain(value) });
+        assert.equal(staged, true, 'durable escrow must precede the success report');
+        return executionIntentOutcomeReceipt(value);
+      },
+    },
+    fetchImpl: async () => jsonResponse({
+      data: [{ b64_json: Buffer.from(outputPng).toString('base64') }],
+    }),
+  });
+
+  const edited = await loaded.client.edit(editRequest('FULL_EDIT', {
+    idempotencyKey: 'escrow-edit-1',
+  }));
+
+  assert.equal(edited.escrowResultId, stagedResultId);
+});
+
+test('holds exact permission and credential authority through durable edit-result staging', async () => {
+  const events = [];
+  let releaseStage;
+  let stageStarted = false;
+  let authorityQueue = Promise.resolve();
+  function enqueueAuthority(operation) {
+    const next = authorityQueue.then(operation, operation);
+    authorityQueue = next.catch(() => {});
+    return next;
+  }
+  const loaded = loadClient({
+    profileStoreOverrides: {
+      commitWithCredentialRevisionForBackground(id, identity, revision, commit) {
+        return enqueueAuthority(async () => {
+          events.push('credential-commit-start');
+          assert.equal(id, 'edit-profile-1');
+          assert.equal(typeof identity, 'string');
+          assert.equal(revision, CREDENTIAL_REVISION);
+          try { return await commit(); } finally { events.push('credential-commit-end'); }
+        });
+      },
+    },
+    stageResult: async () => {
+      events.push('stage-start');
+      stageStarted = true;
+      await new Promise((resolve) => { releaseStage = resolve; });
+      events.push('stage-end');
+      return { resultId: `br_${'d'.repeat(48)}` };
+    },
+    fetchImpl: async () => jsonResponse({
+      data: [{ b64_json: Buffer.from(outputPng).toString('base64') }],
+    }),
+  });
+  const pending = loaded.client.edit(editRequest('FULL_EDIT', {
+    idempotencyKey: 'stage-authority-edit-1',
+  }));
+  while (!stageStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+  let rotationSettled = false;
+  const rotation = enqueueAuthority(async () => { events.push('credential-rotation'); })
+    .finally(() => { rotationSettled = true; });
+  let revocationSettled = false;
+  const revocation = loaded.permissionBroker.removeOriginPermission('https://relay.example/v1')
+    .finally(() => { revocationSettled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(rotationSettled, false, 'credential rotation must wait for staging');
+  assert.equal(revocationSettled, false, 'permission revocation must wait for staging');
+  releaseStage();
+  await Promise.all([pending, rotation, revocation]);
+  assert.deepEqual(events, [
+    'credential-commit-start',
+    'stage-start',
+    'stage-end',
+    'credential-commit-end',
+    'credential-rotation',
+  ]);
+});
+
+test('fails closed without a second edit POST when result escrow is unavailable', async () => {
+  let postCount = 0;
+  const loaded = loadClient({
+    stageResult: async () => {
+      throw Object.assign(new Error('escrow unavailable'), {
+        code: 'SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE',
+      });
+    },
+    fetchImpl: async () => {
+      postCount += 1;
+      return jsonResponse({
+        data: [{ b64_json: Buffer.from(outputPng).toString('base64') }],
+      });
+    },
+  });
+  const input = editRequest('FULL_EDIT', { idempotencyKey: 'escrow-edit-failure-1' });
+
+  await assert.rejects(
+    loaded.client.edit(input),
+    (error) => error?.code === 'SS_ERP_BYOK_IMAGE_EDIT_RESULT_ESCROW_UNAVAILABLE'
+      && error?.outcome === 'UNKNOWN_OUTCOME'
+      && error?.automaticRetryAllowed === false,
+  );
+  await assert.rejects(loaded.client.edit(input));
+  assert.equal(postCount, 1);
+  assert.deepEqual(
+    loaded.executionIntentCalls.map((call) => [call.method, call.value.outcome || null]),
+    [['claim', null], ['reportOutcome', 'UNKNOWN_OUTCOME']],
   );
 });
 

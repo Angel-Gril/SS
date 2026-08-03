@@ -7,10 +7,12 @@
   var INGEST_VERSION = 'extension-byok-workbench-batch-ingest/v1';
   var COORDINATOR_VERSION = 'extension-byok-workbench-batch-coordinator/v1';
   var COORDINATOR_START_VERSION = 'extension-byok-workbench-batch-start/v1';
+  var COORDINATOR_RESTORE_VERSION = 'extension-byok-workbench-batch-restore/v1';
   var COORDINATOR_BINDING_VERSION = 'extension-byok-workbench-batch-binding/v1';
   var READINESS_BINDING_VERSION = 'extension-byok-readiness-binding/v2';
   var PREPARED_REQUEST_VERSION = 'extension-byok-prepared-provider-request/v1';
-  var BATCH_RECOVERY_VERSION = 'extension-byok-workbench-batch-recovery/v1';
+  var BATCH_RECOVERY_VERSION_V1 = 'extension-byok-workbench-batch-recovery/v1';
+  var BATCH_RECOVERY_VERSION = 'extension-byok-workbench-batch-recovery/v2';
   var SUCCESSOR_RECOVERY_VERSION = 'extension-byok-workbench-successor-recovery/v1';
   var LIFECYCLE_VERSION = 'extension-byok-device-session-lifecycle/v1';
   var EXTERNAL_CHARGE_WARNING_VERSION = 'external-provider-charge/v1';
@@ -21,9 +23,12 @@
   var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
   var BATCH_RECOVERY_KEYS = [
     'contractVersion', 'phase', 'reservationIdempotencyKey', 'executionBatchId',
-    'context', 'slots', 'successorRecovery',
+    'context', 'slots', 'successorRecovery', 'profileId',
   ];
-  var LEGACY_BATCH_RECOVERY_KEYS = BATCH_RECOVERY_KEYS.filter(function (key) {
+  var BATCH_RECOVERY_KEYS_V1 = BATCH_RECOVERY_KEYS.filter(function (key) {
+    return key !== 'profileId';
+  });
+  var LEGACY_BATCH_RECOVERY_KEYS_V1 = BATCH_RECOVERY_KEYS_V1.filter(function (key) {
     return key !== 'successorRecovery';
   });
   var SUCCESSOR_RECOVERY_KEYS = [
@@ -32,7 +37,7 @@
     'providerRequestHash',
   ];
   var REQUIRED_COORDINATOR_METHODS = [
-    'startBatch', 'getProjection', 'pause', 'continue', 'cancelQueued', 'keepAttempt',
+    'startBatch', 'restoreBatch', 'getProjection', 'pause', 'continue', 'cancelQueued', 'keepAttempt',
     'rejectAttempt', 'regenerateSlot', 'retryAttempt', 'resolveUnknownAttempt',
     'ingestSelectedBatch', 'recoverIngest', 'dispose',
   ];
@@ -400,9 +405,13 @@
       var operationKey = identifier(operation.idempotencyKey, 1, 128, code);
       var recovery = operation.recovery;
       if (recovery !== null) {
-        var legacyRecovery = exactKeys(recovery, LEGACY_BATCH_RECOVERY_KEYS);
-        if (!legacyRecovery && !exactKeys(recovery, BATCH_RECOVERY_KEYS)
-          || recovery.contractVersion !== BATCH_RECOVERY_VERSION
+        var recoveryV2 = exactKeys(recovery, BATCH_RECOVERY_KEYS)
+          && recovery.contractVersion === BATCH_RECOVERY_VERSION;
+        var recoveryV1 = exactKeys(recovery, BATCH_RECOVERY_KEYS_V1)
+          && recovery.contractVersion === BATCH_RECOVERY_VERSION_V1;
+        var legacyRecoveryV1 = exactKeys(recovery, LEGACY_BATCH_RECOVERY_KEYS_V1)
+          && recovery.contractVersion === BATCH_RECOVERY_VERSION_V1;
+        if (!recoveryV2 && !recoveryV1 && !legacyRecoveryV1
           || !['PREPARING', 'RESERVED', 'DISPATCHING'].includes(recovery.phase)
           || !exactKeys(recovery.context, [
             'shopId', 'workflowId', 'draftRevision', 'draftVersion',
@@ -434,17 +443,21 @@
           .test(reservationIdempotencyKey)) fail(code);
         if ((recovery.phase === 'PREPARING') !== (executionBatchId === null)) fail(code);
         var successorRecovery = normalizePersistedSuccessorRecovery(
-          legacyRecovery ? null : recovery.successorRecovery, slots, code,
+          legacyRecoveryV1 ? null : recovery.successorRecovery, slots, code,
         );
         if (successorRecovery !== null && recovery.phase !== 'DISPATCHING') fail(code);
+        var profileId = recoveryV2
+          ? identifier(recovery.profileId, 1, 128, code)
+          : null;
         recovery = Object.freeze({
-          contractVersion: BATCH_RECOVERY_VERSION,
+          contractVersion: recoveryV2 ? BATCH_RECOVERY_VERSION : BATCH_RECOVERY_VERSION_V1,
           phase: recovery.phase,
           reservationIdempotencyKey: reservationIdempotencyKey,
           executionBatchId: executionBatchId,
           context: Object.freeze({ ...recovery.context }),
           slots: Object.freeze(slots),
           successorRecovery: successorRecovery,
+          ...(recoveryV2 ? { profileId: profileId } : {}),
         });
       }
       operation = Object.freeze({
@@ -609,6 +622,7 @@
 
   function recoveryDescriptor(
     session,
+    profileId,
     slots,
     reservationIdempotencyKey,
     phase,
@@ -626,6 +640,9 @@
         draftRevision: session.context.draftRevision,
         draftVersion: session.context.draftVersion,
       },
+      profileId: identifier(
+        profileId, 1, 128, 'SS_ERP_BYOK_BATCH_REGISTRY_INPUT_INVALID',
+      ),
       slots: slots.map(function (slot) {
         return { skuKey: slot.skuKey, slotKey: slot.slotKey, operation: slot.operation };
       }),
@@ -656,6 +673,7 @@
   function entryRecoveryDescriptor(entry, successorRecovery) {
     return recoveryDescriptor(
       entry.session,
+      entry.profileId,
       entry.pageSlots,
       entry.reservationIdempotencyKey,
       'DISPATCHING',
@@ -839,7 +857,10 @@
   function persistedStatusMatches(session, recovery, status) {
     var context = status && status.context;
     return isRecord(status) && isRecord(context)
-      && status.contractVersion === 'extension-byok-execution-batch-status/v1'
+      && [
+        'extension-byok-execution-batch-status/v1',
+        'extension-byok-execution-batch-status/v2',
+      ].includes(status.contractVersion)
       && status.batchId === recovery.executionBatchId
       && ['OPEN', 'BOUND', 'CANCELLED'].includes(status.status)
       && context.shopId === session.context.shopId
@@ -952,6 +973,7 @@
     var resolveProviderInput = options && options.resolveProviderInput;
     var resolveRecovery = options && options.resolveRecovery;
     var resultVault = options && options.resultVault;
+    var resultEscrow = options && options.resultEscrow;
     var previewBroker = options && options.previewBroker;
     var cryptoImpl = options && options.crypto || global.crypto;
     var dependencies = [
@@ -961,13 +983,16 @@
       [batchLaunchClient, ['resolve']],
       [readinessClient, ['getReadiness']],
       [executionBatchClient, [
-        'claim', 'claimSuccessor', 'cancel', 'status', 'statusByIdempotency',
+        'claim', 'claimSuccessor', 'cancel', 'status', 'statusV2', 'statusByIdempotency',
       ]],
       [claimBroker, ['registerBatch', 'registerAttempt', 'releaseBatch', 'reportOutcome']],
       [textClient, ['prepareDispatch', 'releasePrepared']],
       [editClient, ['prepareDispatch', 'releasePrepared']],
       [authorityGuard, ['capture', 'assertCurrent']],
-      [resultVault, ['getForBackground', 'release']],
+      [resultVault, ['restore', 'getForBackground', 'release']],
+      [resultEscrow, [
+        'findByExecutionIntentId', 'delete', 'deleteMany', 'deleteByExecutionIntentIds',
+      ]],
       [previewBroker, ['open', 'releaseResult']],
     ];
     if (!isRecord(options)
@@ -986,6 +1011,88 @@
     var entries = new Map();
     var starting = new Set();
     var cleanupRequested = new Set();
+    var recoveryInFlight = new Map();
+    var activeReadOperations = new Map();
+    var ownerCleanupFences = new Map();
+    var tabCleanupFences = new Map();
+    var globalCleanupFences = 0;
+
+    function incrementFence(fences, key) {
+      fences.set(key, (fences.get(key) || 0) + 1);
+      return function () {
+        var remaining = (fences.get(key) || 1) - 1;
+        if (remaining > 0) fences.set(key, remaining);
+        else fences.delete(key);
+      };
+    }
+
+    function beginOwnerCleanup(key) {
+      return incrementFence(ownerCleanupFences, key);
+    }
+
+    function beginTabCleanup(tabId) {
+      return incrementFence(tabCleanupFences, tabId);
+    }
+
+    function beginGlobalCleanup() {
+      globalCleanupFences += 1;
+      return function () { globalCleanupFences -= 1; };
+    }
+
+    function recoveryBlocked(owner, key) {
+      return globalCleanupFences > 0
+        || tabCleanupFences.has(owner.tabId)
+        || ownerCleanupFences.has(key);
+    }
+
+    function assertCleanupOpen(owner) {
+      var key = ownerKey(owner);
+      if (recoveryBlocked(owner, key)) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+      }
+    }
+
+    function beginReadOperation(owner) {
+      var key = ownerKey(owner);
+      assertCleanupOpen(owner);
+      var releaseBarrier;
+      var barrier = new Promise(function (resolve) { releaseBarrier = resolve; });
+      var barriers = activeReadOperations.get(key);
+      if (!barriers) {
+        barriers = new Set();
+        activeReadOperations.set(key, barriers);
+      }
+      barriers.add(barrier);
+      var released = false;
+      return function () {
+        if (released) return;
+        released = true;
+        barriers.delete(barrier);
+        if (barriers.size === 0) activeReadOperations.delete(key);
+        releaseBarrier();
+      };
+    }
+
+    async function waitForReadOperations(predicate) {
+      var barriers = [];
+      activeReadOperations.forEach(function (operations, key) {
+        if (predicate(key)) barriers.push(...operations);
+      });
+      await Promise.allSettled(barriers);
+    }
+
+    async function waitForRecovery(key) {
+      var recovery = recoveryInFlight.get(key);
+      if (!recovery) return;
+      try { await recovery; } catch {}
+    }
+
+    async function waitForRecoveries(predicate) {
+      var recoveries = Array.from(recoveryInFlight.entries()).filter(function (pair) {
+        return predicate(pair[0]);
+      }).map(function (pair) { return pair[1]; });
+      await Promise.allSettled(recoveries);
+    }
 
     function randomId(prefix) {
       var value = cryptoImpl.randomUUID();
@@ -997,6 +1104,35 @@
 
     function getEntry(owner) {
       return entries.get(ownerKey(owner)) || null;
+    }
+
+    function recoverEntry(owner) {
+      var key = ownerKey(owner);
+      if (recoveryBlocked(owner, key)) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+      }
+      var entry = getEntry(owner);
+      if (entry) return Promise.resolve({
+        entry: entry, projection: null, session: entry.session,
+      });
+      if (recoveryInFlight.has(key)) return recoveryInFlight.get(key);
+      var recovering = (async function () {
+        var current = getEntry(owner);
+        if (current) return { entry: current, projection: null, session: current.session };
+        var session = normalizeSession(
+          await sessionManager.claim(sessionSender(owner)), owner,
+        );
+        if (session.operation === null) {
+          return { entry: null, projection: null, session: session };
+        }
+        var projection = await reconcilePersisted(owner, session);
+        return { entry: getEntry(owner), projection: projection, session: session };
+      }());
+      var barrier = recovering.finally(function () {
+        if (recoveryInFlight.get(key) === barrier) recoveryInFlight.delete(key);
+      });
+      recoveryInFlight.set(key, barrier);
+      return barrier;
     }
 
     function assertStartupNotCancelled(key) {
@@ -1206,6 +1342,16 @@
       }
     }
 
+    async function deletePersistedEscrow(persisted) {
+      if (!persisted.status) return 0;
+      var executionIntentIds = persisted.status.items.map(function (item) {
+        return item.intent.intentId;
+      });
+      return resultEscrow.deleteByExecutionIntentIds({
+        executionIntentIds: executionIntentIds,
+      });
+    }
+
     async function loadPersistedStatus(owner, session) {
       var operation = session.operation;
       var recovery = operation && operation.recovery;
@@ -1214,11 +1360,21 @@
       }
       var status;
       try {
-        status = recovery.phase === 'PREPARING'
-          ? await executionBatchClient.statusByIdempotency({
+        if (recovery.phase === 'PREPARING') {
+          status = await executionBatchClient.statusByIdempotency({
             idempotencyKey: recovery.reservationIdempotencyKey,
-          })
-          : await executionBatchClient.status({ batchId: recovery.executionBatchId });
+          });
+        } else if (recovery.contractVersion === BATCH_RECOVERY_VERSION) {
+          try {
+            status = await executionBatchClient.statusV2({
+              batchId: recovery.executionBatchId,
+            });
+          } catch {
+            status = await executionBatchClient.status({ batchId: recovery.executionBatchId });
+          }
+        } else {
+          status = await executionBatchClient.status({ batchId: recovery.executionBatchId });
+        }
       } catch {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_RECONCILIATION_UNAVAILABLE', 'UNKNOWN_OUTCOME');
       }
@@ -1307,6 +1463,7 @@
         })) {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_RECONCILIATION_INVALID', 'UNKNOWN_OUTCOME');
       }
+      await deletePersistedEscrow(persisted);
       try {
         for (const item of persisted.status.items) {
           if (item.intent.outcome === 'FAILED_FINAL') continue;
@@ -1334,10 +1491,12 @@
         return emptyProjection();
       }
       if (persisted.status.status === 'CANCELLED') {
+        await deletePersistedEscrow(persisted);
         await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
         return emptyProjection();
       }
       if (persisted.status.status === 'BOUND') {
+        await deletePersistedEscrow(persisted);
         await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
         return persistedBoundProjection(persisted.status);
       }
@@ -1345,6 +1504,8 @@
       if (persisted.recovery.phase === 'RESERVED') {
         return cancelUndispatchedPersisted(owner, persisted);
       }
+      var restored = await restorePersistedReview(owner, session, persisted);
+      if (restored) return restored;
       return persistedOpenProjection(persisted.recovery, persisted.status);
     }
 
@@ -1376,6 +1537,215 @@
       });
     }
 
+    function sameClosedRecord(left, right) {
+      return isRecord(left) && isRecord(right)
+        && exactKeys(left, Object.keys(right))
+        && Object.keys(right).every(function (key) { return left[key] === right[key]; });
+    }
+
+    function currentLifecycleAuthority(authority) {
+      var lifecycleAuthority = authority && authority.lifecycleAuthority;
+      if (!exactKeys(lifecycleAuthority, ['contractVersion', 'epoch'])
+        || lifecycleAuthority.contractVersion !== LIFECYCLE_VERSION
+        || !Number.isSafeInteger(lifecycleAuthority.epoch)
+        || lifecycleAuthority.epoch < 0) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_AUTHORITY_INVALID');
+      }
+      return lifecycleAuthority;
+    }
+
+    async function restorePersistedReview(owner, session, persisted) {
+      if (persisted.recovery.contractVersion !== BATCH_RECOVERY_VERSION
+        || persisted.status.contractVersion
+          !== 'extension-byok-execution-batch-status/v2'
+        || persisted.status.status !== 'OPEN'
+        || !persisted.status.items.every(function (item) {
+          return item.intent.outcome === 'SUCCEEDED'
+            && typeof item.intent.resultSha256 === 'string'
+            && /^[a-f0-9]{64}$/u.test(item.intent.resultSha256);
+        })) return null;
+
+      var launch;
+      try {
+        launch = normalizeLaunch(
+          await batchLaunchClient.resolve(launchRequest(session.context)),
+          session,
+          persisted.recovery.slots,
+        );
+      } catch (error) {
+        throw normalizeBatchLaunchFailure(error);
+      }
+      var readiness = [];
+      for (let index = 0; index < persisted.recovery.slots.length; index += 1) {
+        var restoredSlot = persisted.recovery.slots[index];
+        var assignmentOrdinal = launch.firstAssignmentOrdinal + index;
+        if (persisted.status.items[index].assignmentOrdinal !== assignmentOrdinal) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_READINESS_INVALID');
+        }
+        var readinessRequest = expectedReadinessRequest(
+          { profileId: persisted.recovery.profileId },
+          launch,
+          restoredSlot,
+          assignmentOrdinal,
+        );
+        var currentReadiness = normalizeReadiness(
+          await readinessClient.getReadiness(readinessRequest),
+          readinessRequest,
+        );
+        if (readiness.length && !sameReadinessAuthority(readiness[0], currentReadiness)) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_READINESS_INVALID');
+        }
+        readiness.push(currentReadiness);
+      }
+      var authority = await authorityGuard.capture(readiness[0].binding);
+      await authorityGuard.assertCurrent(authority);
+      var lifecycleAuthority = currentLifecycleAuthority(authority);
+      var restoredResultIds = [];
+      var restoredAttempts = [];
+      var validatedCandidates = [];
+      var coordinator = null;
+      try {
+        for (let index = 0; index < persisted.status.items.length; index += 1) {
+          var item = persisted.status.items[index];
+          var binding = readiness[index].binding;
+          var candidate = await resultEscrow.findByExecutionIntentId(
+            item.intent.intentId,
+            Object.freeze({
+              resultSha256: item.intent.resultSha256,
+              binding: binding,
+            }),
+          );
+          var candidateResult = candidate && candidate.result;
+          var candidateImage = candidateResult && candidateResult.image;
+          if (!exactKeys(candidate, [
+            'resultId', 'expiresAtMillis', 'result', 'binding', 'lifecycleAuthority',
+          ]) || !sameClosedRecord(candidate.binding, binding)
+            || !sameClosedRecord(candidate.lifecycleAuthority, lifecycleAuthority)
+            || !isRecord(candidateResult) || !isRecord(candidateImage)
+            || candidateResult.profileId !== persisted.recovery.profileId
+            || candidateResult.executionIntentId !== item.intent.intentId
+            || candidateResult.operation !== persisted.recovery.slots[index].operation
+            || candidateResult.providerOrigin !== binding.providerOrigin
+            || candidateResult.model !== binding.model
+            || candidateResult.policyRevision !== binding.policyRevision
+            || candidateResult.idempotencyKey !== item.intent.providerIdempotencyKey
+            || candidateResult.requestHash !== item.intent.providerRequestHash
+            || candidateImage.sha256 !== item.intent.resultSha256) {
+            throw registryError('SS_ERP_BYOK_BATCH_REGISTRY_RESULT_RESTORE_INVALID');
+          }
+          validatedCandidates.push({
+            candidate: candidate,
+            result: candidateResult,
+            binding: binding,
+            item: item,
+            index: index,
+          });
+        }
+        for (const validated of validatedCandidates) {
+          var publicResult = resultVault.restore(validated.candidate);
+          restoredResultIds.push(validated.candidate.resultId);
+          var restoredItem = validated.item;
+          var restoredIndex = validated.index;
+          if (!publicResult || publicResult.resultId !== validated.candidate.resultId
+            || publicResult.outcome !== 'SUCCEEDED'
+            || publicResult.operation !== validated.result.operation
+            || publicResult.model !== validated.binding.model
+            || publicResult.policyRevision !== validated.binding.policyRevision
+            || publicResult.idempotencyKey !== restoredItem.intent.providerIdempotencyKey
+            || publicResult.requestHash !== restoredItem.intent.providerRequestHash
+            || publicResult.reviewState !== 'CANDIDATE_READY'
+            || !publicResult.image
+            || publicResult.image.sha256 !== restoredItem.intent.resultSha256) {
+            throw registryError('SS_ERP_BYOK_BATCH_REGISTRY_RESULT_RESTORE_INVALID');
+          }
+          restoredAttempts.push({
+            attemptId: 'recovered-attempt-' + restoredIndex
+              + '-' + restoredItem.intent.attemptIndex,
+            slotKey: persisted.recovery.slots[restoredIndex].slotKey,
+            generation: restoredItem.intent.attemptIndex + 1,
+            operation: persisted.recovery.slots[restoredIndex].operation,
+            idempotencyKey: restoredItem.intent.providerIdempotencyKey,
+            intentHash: restoredItem.intent.providerRequestHash,
+            providerRequestHash: restoredItem.intent.providerRequestHash,
+            candidateId: 'recovered-candidate-' + restoredIndex
+              + '-' + restoredItem.intent.attemptIndex,
+            resultHandle: publicResult.resultId,
+            resultSha256: restoredItem.intent.resultSha256,
+          });
+        }
+        var entry = {
+          owner: owner,
+          operationKey: persisted.operation.idempotencyKey,
+          session: session,
+          launch: launch,
+          profileId: persisted.recovery.profileId,
+          requestedConcurrency: SERIAL_REQUESTED_CONCURRENCY,
+          pageSlots: persisted.recovery.slots,
+          readiness: readiness,
+          authority: authority,
+          executionBatchId: persisted.recovery.executionBatchId,
+          reservationIdempotencyKey: persisted.recovery.reservationIdempotencyKey,
+          reservationStatus: 'OPEN',
+          preparedByRef: new Map(),
+          latestBySlot: new Map(),
+          intentByAttempt: new Map(),
+          recoveryRefs: new Map(),
+          commandIds: new Set(),
+          coordinator: null,
+          phase: 'ACTIVE',
+          dispatchMayHaveStarted: true,
+          rollbackRecords: [],
+          previewResultIds: new Set(),
+          reviewOnly: true,
+          mutationInFlight: false,
+        };
+        coordinator = createCoordinator(Object.freeze({
+          owner: owner,
+          requestedConcurrency: SERIAL_REQUESTED_CONCURRENCY,
+          concurrencyAuthority: Object.freeze({
+            ownerUserId: readiness[0].binding.ownerUserId,
+            deviceSessionId: readiness[0].binding.deviceSessionId,
+            policyRevision: readiness[0].binding.policyRevision,
+            maxConcurrency: readiness[0].maxConcurrency,
+            expiresAt: readiness[0].expiresAt,
+          }),
+          resolveDispatchInput: function (dispatchRef, attempt) {
+            return resolvePrepared(entry, dispatchRef, attempt);
+          },
+          resolveRecovery: function (recovery) { return internalRecovery(entry, recovery); },
+        }));
+        if (!coordinatorMethods(coordinator)) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_COORDINATOR_INVALID');
+        }
+        entry.coordinator = coordinator;
+        var projection = coordinator.restoreBatch({
+          contractVersion: COORDINATOR_RESTORE_VERSION,
+          batchId: entry.executionBatchId,
+          binding: internalBinding(entry, lifecycleAuthority),
+          slots: persisted.recovery.slots.map(function (slot, index) {
+            return {
+              skuKey: slot.skuKey,
+              slotKey: slot.slotKey,
+              assignmentMode: 'APPEND',
+              assignmentOrdinal: readiness[index].binding.assignmentOrdinal,
+              operation: slot.operation,
+            };
+          }),
+          attempts: restoredAttempts,
+        });
+        entries.set(ownerKey(owner), entry);
+        return pageProjection(projection);
+      } catch {
+        restoredResultIds.forEach(function (resultId) {
+          try { resultVault.release(resultId); } catch {}
+        });
+        if (coordinator) {
+          try { coordinator.dispose(); } catch {}
+        }
+        return null;
+      }
+    }
+
     function synchronizeAttempts(entry, projection) {
       if (!projection || !Array.isArray(projection.slots)) return;
       projection.slots.forEach(function (slot) {
@@ -1402,6 +1772,7 @@
       record.resolving = true;
       try {
         await validateEntry(entry.owner, entry);
+        assertCleanupOpen(entry.owner);
         if (record.handedOff) {
           fail('SS_ERP_BYOK_BATCH_REGISTRY_DISPATCH_UNAVAILABLE', 'UNKNOWN_OUTCOME');
         }
@@ -1434,6 +1805,7 @@
 
     async function start(ownerValue, value) {
       var owner = normalizeOwner(ownerValue);
+      assertCleanupOpen(owner);
       var key = ownerKey(owner);
       if (entries.has(key) || starting.has(key)) {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_ALREADY_STARTED');
@@ -1453,6 +1825,7 @@
             operationKey,
             recoveryDescriptor(
               initialSession,
+              startRequest.profileId,
               startRequest.slots,
               reservationIdempotencyKey,
               'PREPARING',
@@ -1488,6 +1861,7 @@
           dispatchMayHaveStarted: false,
           rollbackRecords: records,
           previewResultIds: new Set(),
+          mutationInFlight: false,
         };
         entries.set(key, entry);
         assertStartupNotCancelled(key);
@@ -1557,6 +1931,7 @@
           operationKey,
           recoveryDescriptor(
             lockedSession,
+            startRequest.profileId,
             startRequest.slots,
             reservationIdempotencyKey,
             'RESERVED',
@@ -1617,6 +1992,7 @@
           operationKey,
           recoveryDescriptor(
             lockedSession,
+            startRequest.profileId,
             startRequest.slots,
             reservationIdempotencyKey,
             'DISPATCHING',
@@ -1849,181 +2225,249 @@
 
     async function command(ownerValue, value) {
       var owner = normalizeOwner(ownerValue);
+      assertCleanupOpen(owner);
       var entry = getEntry(owner);
       var input = normalizeCommand(value);
       if (!entry) {
-        var persistedSession = normalizeSession(
-          await sessionManager.claim(sessionSender(owner)), owner,
-        );
+        var recovered = await recoverEntry(owner);
+        entry = recovered.entry;
+        var persistedSession = recovered.session;
         if (persistedSession.operation === null) {
           fail('SS_ERP_BYOK_BATCH_REGISTRY_NOT_STARTED');
         }
-        if (input.kind !== 'RESOLVE_UNKNOWN') {
+        if (!entry && input.kind !== 'RESOLVE_UNKNOWN') {
           fail('SS_ERP_BYOK_BATCH_REGISTRY_RESTART_RETRY_UNAVAILABLE', 'UNKNOWN_OUTCOME');
         }
-        var persistedProjection = await reconcilePersisted(owner, persistedSession);
-        if (persistedProjection.revision === 0 || persistedProjection.ingest?.state === 'SUCCEEDED') {
+        if (!entry) {
+          var persistedProjection = recovered.projection;
+          if (persistedProjection.revision === 0
+            || persistedProjection.ingest?.state === 'SUCCEEDED') {
+            return persistedProjection;
+          }
+          var persistedSlot = persistedProjection.slots.find(function (slot) {
+            return slot.slotKey === input.slotKey;
+          });
+          var persistedAttempt = persistedSlot && persistedSlot.attempts.find(function (attempt) {
+            return attempt.attemptId === input.attemptId;
+          });
+          if (persistedProjection.revision !== input.expectedRuntimeRevision
+            || !persistedSlot || persistedSlot.revision !== input.expectedSlotRevision
+            || !persistedAttempt || persistedAttempt.state !== 'UNKNOWN_OUTCOME') {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_RUNTIME_STALE');
+          }
           return persistedProjection;
         }
-        var persistedSlot = persistedProjection.slots.find(function (slot) {
-          return slot.slotKey === input.slotKey;
-        });
-        var persistedAttempt = persistedSlot && persistedSlot.attempts.find(function (attempt) {
-          return attempt.attemptId === input.attemptId;
-        });
-        if (persistedProjection.revision !== input.expectedRuntimeRevision
-          || !persistedSlot || persistedSlot.revision !== input.expectedSlotRevision
-          || !persistedAttempt || persistedAttempt.state !== 'UNKNOWN_OUTCOME') {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_RUNTIME_STALE');
-        }
-        return persistedProjection;
       }
       if (!entry || !entry.coordinator || entry.phase !== 'ACTIVE') {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_NOT_STARTED');
       }
       await validateEntry(owner, entry);
+      if (recoveryBlocked(owner, ownerKey(owner))) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+      }
       var currentProjection = entry.coordinator.getProjection();
       if (currentProjection.revision !== input.expectedRuntimeRevision) {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_RUNTIME_STALE');
       }
-      if (entry.commandIds.has(input.commandId)) {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_COMMAND_REPLAY_BLOCKED', 'UNKNOWN_OUTCOME');
+      if (entry.reviewOnly && [
+        'PAUSE', 'CONTINUE', 'CANCEL_QUEUED', 'REGENERATE', 'RETRY', 'RESOLVE_UNKNOWN',
+      ].includes(input.kind)) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_REVIEW_ONLY');
       }
-      entry.commandIds.add(input.commandId);
-      if (input.kind === 'PAUSE') return pageProjection(entry.coordinator.pause());
-      if (input.kind === 'CONTINUE') return pageProjection(entry.coordinator.continue());
-      if (['KEEP', 'REJECT'].includes(input.kind)) {
-        var review = projectedAttempt(entry, input.attemptId);
-        if (review.slot.slotKey !== input.slotKey
-          || review.slot.revision !== input.expectedSlotRevision) {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
-        }
-        return pageProjection(input.kind === 'KEEP'
-          ? entry.coordinator.keepAttempt(input.slotKey, input.attemptId)
-          : entry.coordinator.rejectAttempt(input.slotKey, input.attemptId));
+      if (entry.mutationInFlight) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
       }
-      if (input.kind === 'CANCEL_QUEUED') {
-        var attempted = projectedAttempt(entry, input.attemptId);
-        if (attempted.slot.slotKey !== input.slotKey
-          || attempted.slot.revision !== input.expectedSlotRevision
-          || attempted.attempt.state !== 'QUEUED') {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
-        }
-        var cancelled = entry.coordinator.cancelQueued(input.attemptId);
-        if (cancelled.cancelled === true) {
-          try { await terminalizeSafeAttempt(entry, attempted, 'CANCELLED'); } catch (error) {
-            entry.phase = 'RECOVERY_REQUIRED';
-            throw error;
-          }
-        }
-        return pageCancellation(cancelled);
-      }
-      if (input.kind === 'REGENERATE') {
-        var slot = (currentProjection.slots || []).find(function (candidate) {
-          return candidate.slotKey === input.slotKey;
-        });
-        if (!slot) {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
-        }
-        var prior = slot.attempts[slot.attempts.length - 1];
-        return pageProjection(await successor(entry, input, slot, prior));
-      }
-      if (input.kind === 'RETRY') {
-        var retry = projectedAttempt(entry, input.attemptId);
-        if (retry.slot.slotKey !== input.slotKey) {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
-        }
-        return pageProjection(await successor(entry, input, retry.slot, retry.attempt));
-      }
-      var unknown = projectedAttempt(entry, input.attemptId);
-      if (unknown.slot.slotKey !== input.slotKey
-        || unknown.slot.revision !== input.expectedSlotRevision
-        || unknown.attempt.state !== 'UNKNOWN_OUTCOME') {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
-      }
-      var recoveryRef = randomId('byok-recovery:');
-      entry.recoveryRefs.set(recoveryRef, {
-        attemptId: input.attemptId,
-        command: input,
-      });
+      entry.mutationInFlight = true;
       try {
-        return pageProjection(
-          await entry.coordinator.resolveUnknownAttempt(input.attemptId, recoveryRef),
-        );
+        if (entry.commandIds.has(input.commandId)) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_COMMAND_REPLAY_BLOCKED', 'UNKNOWN_OUTCOME');
+        }
+        entry.commandIds.add(input.commandId);
+        if (input.kind === 'PAUSE') return pageProjection(entry.coordinator.pause());
+        if (input.kind === 'CONTINUE') return pageProjection(entry.coordinator.continue());
+        if (['KEEP', 'REJECT'].includes(input.kind)) {
+          var review = projectedAttempt(entry, input.attemptId);
+          if (review.slot.slotKey !== input.slotKey
+            || review.slot.revision !== input.expectedSlotRevision) {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
+          }
+          if (input.kind === 'REJECT') {
+            if (!review.attempt.resultId) {
+              fail('SS_ERP_BYOK_BATCH_REGISTRY_RESULT_ESCROW_UNAVAILABLE');
+            }
+            var deleted = await resultEscrow.delete(review.attempt.resultId);
+            if (deleted !== true) {
+              fail('SS_ERP_BYOK_BATCH_REGISTRY_RESULT_ESCROW_UNAVAILABLE');
+            }
+            return pageProjection(
+              entry.coordinator.rejectAttempt(input.slotKey, input.attemptId),
+            );
+          }
+          return pageProjection(entry.coordinator.keepAttempt(
+            input.slotKey, input.attemptId,
+          ));
+        }
+        if (input.kind === 'CANCEL_QUEUED') {
+          var attempted = projectedAttempt(entry, input.attemptId);
+          if (attempted.slot.slotKey !== input.slotKey
+            || attempted.slot.revision !== input.expectedSlotRevision
+            || attempted.attempt.state !== 'QUEUED') {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
+          }
+          var cancelled = entry.coordinator.cancelQueued(input.attemptId);
+          if (cancelled.cancelled === true) {
+            try { await terminalizeSafeAttempt(entry, attempted, 'CANCELLED'); } catch (error) {
+              entry.phase = 'RECOVERY_REQUIRED';
+              throw error;
+            }
+          }
+          return pageCancellation(cancelled);
+        }
+        if (input.kind === 'REGENERATE') {
+          var slot = (currentProjection.slots || []).find(function (candidate) {
+            return candidate.slotKey === input.slotKey;
+          });
+          if (!slot) {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
+          }
+          var prior = slot.attempts[slot.attempts.length - 1];
+          return pageProjection(await successor(entry, input, slot, prior));
+        }
+        if (input.kind === 'RETRY') {
+          var retry = projectedAttempt(entry, input.attemptId);
+          if (retry.slot.slotKey !== input.slotKey) {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
+          }
+          return pageProjection(await successor(entry, input, retry.slot, retry.attempt));
+        }
+        var unknown = projectedAttempt(entry, input.attemptId);
+        if (unknown.slot.slotKey !== input.slotKey
+          || unknown.slot.revision !== input.expectedSlotRevision
+          || unknown.attempt.state !== 'UNKNOWN_OUTCOME') {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_SLOT_STALE');
+        }
+        var recoveryRef = randomId('byok-recovery:');
+        entry.recoveryRefs.set(recoveryRef, {
+          attemptId: input.attemptId,
+          command: input,
+        });
+        try {
+          return pageProjection(
+            await entry.coordinator.resolveUnknownAttempt(input.attemptId, recoveryRef),
+          );
+        } finally {
+          entry.recoveryRefs.delete(recoveryRef);
+        }
       } finally {
-        entry.recoveryRefs.delete(recoveryRef);
+        entry.mutationInFlight = false;
       }
     }
 
     async function state(ownerValue) {
       var owner = normalizeOwner(ownerValue);
-      var key = ownerKey(owner);
-      var entry = getEntry(owner);
-      if (starting.has(key) || entry && !entry.coordinator) {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_START_UNRESOLVED', 'UNKNOWN_OUTCOME');
-      }
-      if (!entry) {
-        var persisted = normalizeSession(
-          await sessionManager.claim(sessionSender(owner)), owner,
-        );
-        if (persisted.operation !== null) {
-          return reconcilePersisted(owner, persisted);
+      var releaseReadOperation = beginReadOperation(owner);
+      try {
+        var key = ownerKey(owner);
+        var entry = getEntry(owner);
+        if (starting.has(key) || entry && !entry.coordinator) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_START_UNRESOLVED', 'UNKNOWN_OUTCOME');
         }
-        return emptyProjection();
+        if (!entry) {
+          var recovered = await recoverEntry(owner);
+          entry = recovered.entry;
+          if (!entry) return recovered.projection || emptyProjection();
+        }
+        await validateEntry(owner, entry);
+        if (recoveryBlocked(owner, key)) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+        }
+        var projection = entry.coordinator.getProjection();
+        synchronizeAttempts(entry, projection);
+        return pageProjection(projection);
+      } finally {
+        releaseReadOperation();
       }
-      await validateEntry(owner, entry);
-      var projection = entry.coordinator.getProjection();
-      synchronizeAttempts(entry, projection);
-      return pageProjection(projection);
     }
 
     async function openPreview(ownerValue, value) {
       var owner = normalizeOwner(ownerValue);
-      var entry = getEntry(owner);
-      if (!entry || !entry.coordinator || !exactKeys(value, ['slotKey', 'attemptId'])) {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID');
+      var releaseReadOperation = beginReadOperation(owner);
+      try {
+        if (!exactKeys(value, ['slotKey', 'attemptId'])) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID');
+        }
+        var entry = getEntry(owner);
+        if (!entry) entry = (await recoverEntry(owner)).entry;
+        if (!entry || !entry.coordinator) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID');
+        }
+        await validateEntry(owner, entry);
+        if (recoveryBlocked(owner, ownerKey(owner))) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+        }
+        var attempted = projectedAttempt(
+          entry,
+          identifier(value.attemptId, 1, 200, 'SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID'),
+        );
+        if (attempted.slot.slotKey !== value.slotKey
+          || !['CANDIDATE_READY', 'KEPT'].includes(attempted.attempt.state)
+          || !attempted.attempt.resultId) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID');
+        }
+        var result = resultVault.getForBackground(attempted.attempt.resultId);
+        var ticket = previewBroker.open({
+          resultId: result.resultId,
+          reviewState: result.reviewState,
+          blob: result.blob,
+          mimeType: result.mimeType,
+          byteLength: result.byteLength,
+          sha256: result.sha256,
+        });
+        entry.previewResultIds.add(result.resultId);
+        return ticket;
+      } finally {
+        releaseReadOperation();
       }
-      await validateEntry(owner, entry);
-      var attempted = projectedAttempt(
-        entry,
-        identifier(value.attemptId, 1, 200, 'SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID'),
-      );
-      if (attempted.slot.slotKey !== value.slotKey
-        || !['CANDIDATE_READY', 'KEPT'].includes(attempted.attempt.state)
-        || !attempted.attempt.resultId) {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_PREVIEW_INVALID');
-      }
-      var result = resultVault.getForBackground(attempted.attempt.resultId);
-      var ticket = previewBroker.open({
-        resultId: result.resultId,
-        reviewState: result.reviewState,
-        blob: result.blob,
-        mimeType: result.mimeType,
-        byteLength: result.byteLength,
-        sha256: result.sha256,
-      });
-      entry.previewResultIds.add(result.resultId);
-      return ticket;
     }
 
     async function ingest(ownerValue, value) {
       var owner = normalizeOwner(ownerValue);
+      assertCleanupOpen(owner);
       var entry = getEntry(owner);
+      if (!entry) entry = (await recoverEntry(owner)).entry;
       if (!entry || !entry.coordinator || entry.phase !== 'ACTIVE') {
         fail('SS_ERP_BYOK_BATCH_REGISTRY_NOT_STARTED');
       }
       await validateEntry(owner, entry);
-      return pageProjection(
-        await entry.coordinator.ingestSelectedBatch(normalizeIngest(value)),
-      );
+      if (recoveryBlocked(owner, ownerKey(owner)) || entry.mutationInFlight) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+      }
+      entry.mutationInFlight = true;
+      try {
+        return pageProjection(
+          await entry.coordinator.ingestSelectedBatch(normalizeIngest(value)),
+        );
+      } finally {
+        entry.mutationInFlight = false;
+      }
     }
 
     async function recover(ownerValue, value) {
       var owner = normalizeOwner(ownerValue);
+      assertCleanupOpen(owner);
       var entry = getEntry(owner);
+      if (!entry) entry = (await recoverEntry(owner)).entry;
       if (!entry || !entry.coordinator) fail('SS_ERP_BYOK_BATCH_REGISTRY_NOT_STARTED');
       await validateEntry(owner, entry);
-      return pageProjection(await entry.coordinator.recoverIngest(normalizeIngest(value)));
+      if (recoveryBlocked(owner, ownerKey(owner)) || entry.mutationInFlight) {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
+      }
+      entry.mutationInFlight = true;
+      try {
+        return pageProjection(await entry.coordinator.recoverIngest(normalizeIngest(value)));
+      } finally {
+        entry.mutationInFlight = false;
+      }
     }
 
     async function safeCleanup(entry) {
@@ -2050,6 +2494,10 @@
           }))) || (projection.ingest && [
           'SUBMITTING', 'RECOVERING', 'UNKNOWN_OUTCOME',
         ].includes(projection.ingest.state))) return false;
+        var resultIds = Array.from(new Set(attempts.map(function (attempted) {
+          return attempted.attempt.resultId;
+        }).filter(Boolean)));
+        await resultEscrow.deleteMany(resultIds);
         for (const attempted of attempts) {
           if (attempted.attempt.state === 'QUEUED') {
             var cancelled = entry.coordinator.cancelQueued(attempted.attempt.attemptId);
@@ -2098,63 +2546,94 @@
     async function clear(ownerValue) {
       var owner = normalizeOwner(ownerValue);
       var key = ownerKey(owner);
-      if (starting.has(key)) {
-        cleanupRequested.add(key);
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
-      }
-      var entry = entries.get(key);
-      if (!entry) {
-        var session = normalizeSession(
-          await sessionManager.claim(sessionSender(owner)), owner,
-        );
-        if (session.operation === null) return Object.freeze({ cleared: false });
-        var persisted = await loadPersistedStatus(owner, session);
-        if (persisted.status === null) {
+      var releaseCleanupFence = beginOwnerCleanup(key);
+      try {
+        if (starting.has(key)) {
+          cleanupRequested.add(key);
+        }
+        await waitForReadOperations(function (activeKey) { return activeKey === key; });
+        await waitForRecovery(key);
+        var entry = entries.get(key);
+        if (!entry) {
+          var session = normalizeSession(
+            await sessionManager.claim(sessionSender(owner)), owner,
+          );
+          if (session.operation === null) return Object.freeze({ cleared: false });
+          var persisted = await loadPersistedStatus(owner, session);
+          if (persisted.status === null) {
+            await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
+            return Object.freeze({ cleared: true });
+          }
+          if (persisted.status.status === 'BOUND' || persisted.status.status === 'CANCELLED') {
+            await deletePersistedEscrow(persisted);
+            await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
+            return Object.freeze({ cleared: true });
+          }
+          if (persisted.recovery.phase === 'RESERVED') {
+            await cancelUndispatchedPersisted(owner, persisted);
+            return Object.freeze({ cleared: true });
+          }
+          var terminal = persisted.status.items.every(function (item) {
+            return ['FAILED_FINAL', 'SUCCEEDED'].includes(item.intent.outcome);
+          });
+          if (!terminal) {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
+          }
+          await deletePersistedEscrow(persisted);
+          try {
+            await executionBatchClient.cancel({ batchId: persisted.recovery.executionBatchId });
+          } catch {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
+          }
           await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
           return Object.freeze({ cleared: true });
         }
-        if (persisted.status.status === 'BOUND' || persisted.status.status === 'CANCELLED') {
-          await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
-          return Object.freeze({ cleared: true });
+        if (entry.mutationInFlight) {
+          fail('SS_ERP_BYOK_BATCH_REGISTRY_MUTATION_IN_PROGRESS', 'FAILED_RETRYABLE');
         }
-        if (persisted.recovery.phase === 'RESERVED') {
-          await cancelUndispatchedPersisted(owner, persisted);
-          return Object.freeze({ cleared: true });
-        }
-        var terminal = persisted.status.items.every(function (item) {
-          return ['FAILED_FINAL', 'SUCCEEDED'].includes(item.intent.outcome);
-        });
-        if (!terminal) {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
-        }
+        entry.mutationInFlight = true;
         try {
-          await executionBatchClient.cancel({ batchId: persisted.recovery.executionBatchId });
-        } catch {
-          fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
+          if (!await safeCleanup(entry)) {
+            fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
+          }
+          entries.delete(key);
+          return Object.freeze({ cleared: true });
+        } finally {
+          entry.mutationInFlight = false;
         }
-        await clearPersistedOperation(owner, persisted.operation.idempotencyKey);
-        return Object.freeze({ cleared: true });
+      } finally {
+        releaseCleanupFence();
       }
-      if (!await safeCleanup(entry)) {
-        fail('SS_ERP_BYOK_BATCH_REGISTRY_CLEAR_UNSAFE', 'UNKNOWN_OUTCOME');
-      }
-      entries.delete(key);
-      return Object.freeze({ cleared: true });
     }
 
-    async function clearAll(reasonValue) {
+    async function clearAll(reasonValue, finalize) {
       text(reasonValue, 1, 100, 'SS_ERP_BYOK_BATCH_REGISTRY_REASON_INVALID');
-      starting.forEach(function (key) { cleanupRequested.add(key); });
-      var cleared = 0;
-      for (const pair of Array.from(entries.entries())) {
-        try {
-          if (await safeCleanup(pair[1])) {
-            entries.delete(pair[0]);
-            cleared += 1;
-          }
-        } catch {}
+      if (finalize !== undefined && typeof finalize !== 'function') {
+        fail('SS_ERP_BYOK_BATCH_REGISTRY_FINALIZE_INVALID');
       }
-      return cleared;
+      var releaseCleanupFence = beginGlobalCleanup();
+      try {
+        starting.forEach(function (key) { cleanupRequested.add(key); });
+        await waitForReadOperations(function () { return true; });
+        await waitForRecoveries(function () { return true; });
+        var cleared = 0;
+        for (const pair of Array.from(entries.entries())) {
+          if (pair[1].mutationInFlight) continue;
+          pair[1].mutationInFlight = true;
+          try {
+            if (await safeCleanup(pair[1])) {
+              entries.delete(pair[0]);
+              cleared += 1;
+            }
+          } catch {} finally {
+            pair[1].mutationInFlight = false;
+          }
+        }
+        if (finalize) await finalize();
+        return cleared;
+      } finally {
+        releaseCleanupFence();
+      }
     }
 
     async function removeTab(tabIdValue) {
@@ -2162,20 +2641,31 @@
         fail('SS_ERP_BYOK_BATCH_REGISTRY_SENDER_INVALID');
       }
       var prefix = String(tabIdValue) + '\u0000';
-      starting.forEach(function (key) {
-        if (key.startsWith(prefix)) cleanupRequested.add(key);
-      });
-      var cleared = 0;
-      for (const pair of Array.from(entries.entries())) {
-        if (pair[1].owner.tabId !== tabIdValue) continue;
-        try {
-          if (await safeCleanup(pair[1])) {
-            entries.delete(pair[0]);
-            cleared += 1;
+      var releaseCleanupFence = beginTabCleanup(tabIdValue);
+      try {
+        starting.forEach(function (key) {
+          if (key.startsWith(prefix)) cleanupRequested.add(key);
+        });
+        await waitForReadOperations(function (key) { return key.startsWith(prefix); });
+        await waitForRecoveries(function (key) { return key.startsWith(prefix); });
+        var cleared = 0;
+        for (const pair of Array.from(entries.entries())) {
+          if (pair[1].owner.tabId !== tabIdValue) continue;
+          if (pair[1].mutationInFlight) continue;
+          pair[1].mutationInFlight = true;
+          try {
+            if (await safeCleanup(pair[1])) {
+              entries.delete(pair[0]);
+              cleared += 1;
+            }
+          } catch {} finally {
+            pair[1].mutationInFlight = false;
           }
-        } catch {}
+        }
+        return cleared;
+      } finally {
+        releaseCleanupFence();
       }
-      return cleared;
     }
 
     return Object.freeze({
