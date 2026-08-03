@@ -44,7 +44,40 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-03): currently deployed release commit
+Current checkpoint (2026-08-04): replacement release
+`49ae41e337f2857cecece4a173f0c8a661c536cd` / `1.0.281` completed the authorized REL-02
+pre-release chain. Its target-bound QA-04 acceptance SHA-256 is
+`8d069c4926edac9756e343c08ed3255c19713c9a9c974f112a38ff9dc6d8f8df`. Independent `.com`
+and `.cn` candidates contain 190 files per package, passed detached-signature verification and
+signed MV3 restart smoke, and replaced the quarantined `1.0.279` and `1.0.280` artifacts.
+
+Both regions completed fresh commit/database/restore-bound backup drills, dark deployment,
+topology-correct VPS verification and `7/7` pre-enable canaries. Canary receipt SHA-256 values are
+`6662ff24b3675d1d58d48321cfdb126cbbc14509c99caaf97e28e01eaa4c9eb2` for `.com` and
+`ee2da3888681320ac750360b35162f2b1afccd5eefc2fc31ed343115bce47de8` for `.cn`. Both regions
+serve the exact target commit with every pilot flag off.
+
+First-party website latest/cloud/local download and offline publication verification passed in both
+regions. Publication receipt SHA-256 values are
+`20e89f47919f2748465781a8c4875051224553ed40868ec4fc8d01b30fcac195` for `.com` and
+`4a6cc67b14035fb38b30604b59194aa66164af1965ead046a61d2232f586f3be` for `.cn`; fresh
+two-VPS public DNS quorum evidence SHA-256 is
+`375105c6179846acee715ea067850f3f5550e959bd44bf1699131bd31360edc6`.
+
+The isolated signed-package upgrade smoke passed from `1.0.278` to `1.0.281` with summary SHA-256
+`839c86210f876c4208b274d93201f1a984b903ec4170061f24f6479ae0c73280`. BINI then upgraded
+atomically on its original managed path under unchanged extension ID
+`nkkemglcckgmhmcfnjjmcfbdhciafahl`. Its 190 installed files match target tree SHA-256
+`2799885b1983f0b2b3f8bb1b98b29c2af4bbe6ecce685e0a9dfa7512adb48cf8`; the non-secret
+Provider profile was preserved, while session secrets, capability evidence, vault key and batch
+recovery state remained absent. The exact `1.0.278` tree remains as a rollback backup. Upgrade
+receipt SHA-256 is `12a121c6e84ca418eb06f4f5027e3f419d6385b57207c29eca195fb91de8072c`.
+
+This pre-release called no Provider and incurred no Provider cost. It made no feature-flag change,
+ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`,
+overall progress remains `36/37`, and only `REL-02` is open.
+
+Historical checkpoint (2026-08-03): then-deployed release commit
 `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate QA-04 command in
 `774.4s`; canonical acceptance SHA-256 is
 `5a97e22583cfe200a7204b747a92259c6e0a951bed2cfafa193832e6c9fe7219`. Both origin-bound
@@ -130,11 +163,11 @@ inside the same fence, and queued Provider handoff rechecks that the fence is op
 terminal cleanup durably deletes ciphertext by execution-intent identity before clearing its
 operation lock.
 
-This recovery implementation has passed offline source, Cloud, and Local build/package verification,
-but it is not signed, release-staged, website-distributed, deployed, or paid-validated and cannot
-retroactively restore POST 6. This offline work made no Provider request, VPS change, rollout-flag
-change, ERP ingest, publish, or Ozon mutation. Phase 6 remains `2/3`, overall progress remains
-`36/37`, and only `REL-02` is open.
+At the `ac4227f9` checkpoint this recovery implementation had passed offline source, Cloud, and
+Local build/package verification but was not yet signed, release-staged, website-distributed,
+deployed, or paid-validated and could not retroactively restore POST 6. That offline work made no
+Provider request, VPS change, rollout-flag change, ERP ingest, publish, or Ozon mutation. Phase 6
+remained `2/3`, overall progress remained `36/37`, and only `REL-02` was open.
 
 The authorized pre-release from `ac4227f9d6e1291bf275ff314f78dc049d565a7f` passed the complete
 nine-step `QA-04` aggregate in `806.7s`; source/Cloud/Local verification passed `450/455/451`.
@@ -1180,15 +1213,14 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    `198.18.0.29`.
 7. Keep all earlier release candidates, signatures, failed deployment receipts, POST 5/POST 6
    original receipts, append-only reconciliations, and consumed Provider operations immutable as
-   historical evidence. All `6/6` authorized Provider POSTs are consumed; the current authorization
-   permits no further Provider POST or retry. The encrypted-escrow, status-v2, and review-only restart
-   implementation and offline gates are complete; heartbeat remains mitigation only. The unrecoverable
-   POST 6 candidate must not be ingested. Release packaging/signing, website distribution, VPS dark
-   deployment, any flag change, and any new paid validation require new explicit authorization. A later paid
-   validation requires a new exact POST count and cost ceiling and must not auto-retry. Only after it
-   yields a reviewable candidate and human approval may separately authorized positive BYOK ingest,
-   independent kill-switch checks, one-shop Ozon publish, post-enable canary, reconciliation, and
-   rollback resume.
+   historical evidence. The authorized `49ae41e3` / `1.0.281` pre-release chain is complete, but all
+   pilot flags remain off and it added no Provider authorization. All prior `6/6` Provider POSTs are
+   consumed; the current authorization permits no further Provider POST or retry. The unrecoverable
+   POST 6 candidate must not be ingested. The next action is the separately authorized `REL-02`
+   sandbox/one-shop pilot. Any new paid validation requires a new exact POST count and cost ceiling
+   and must not auto-retry. Only after it yields a reviewable candidate and human approval may
+   separately authorized positive BYOK ingest, independent kill-switch checks, one-shop Ozon
+   publish, post-enable canary, reconciliation, and rollback resume.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

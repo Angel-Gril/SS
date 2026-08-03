@@ -28,7 +28,33 @@ Progress: 2/3 tasks.
 
 ## Notes
 
-- Currently deployed release commit `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate
+- Replacement release `49ae41e337f2857cecece4a173f0c8a661c536cd` / `1.0.281` completed the
+  authorized REL-02 pre-release chain. Target-bound QA-04 acceptance SHA-256 is
+  `8d069c4926edac9756e343c08ed3255c19713c9a9c974f112a38ff9dc6d8f8df`; both 190-file regional
+  candidates passed detached-signature verification and signed MV3 restart smoke.
+- Both regions completed fresh backup/restore validation, dark deployment, full VPS verification
+  and `7/7` pre-enable canaries. Canary receipt SHA-256 values are
+  `6662ff24b3675d1d58d48321cfdb126cbbc14509c99caaf97e28e01eaa4c9eb2` for `.com` and
+  `ee2da3888681320ac750360b35162f2b1afccd5eefc2fc31ed343115bce47de8` for `.cn`; every pilot
+  flag remains off.
+- First-party website latest/cloud/local verification passed with publication receipt SHA-256
+  `20e89f47919f2748465781a8c4875051224553ed40868ec4fc8d01b30fcac195` for `.com` and
+  `4a6cc67b14035fb38b30604b59194aa66164af1965ead046a61d2232f586f3be` for `.cn`. Fresh
+  two-VPS DNS quorum evidence SHA-256 is
+  `375105c6179846acee715ea067850f3f5550e959bd44bf1699131bd31360edc6`.
+- The isolated `1.0.278` to `1.0.281` upgrade smoke passed with summary SHA-256
+  `839c86210f876c4208b274d93201f1a984b903ec4170061f24f6479ae0c73280`. BINI then upgraded
+  atomically on its original path under unchanged extension ID. Its 190 installed files match tree
+  SHA-256 `2799885b1983f0b2b3f8bb1b98b29c2af4bbe6ecce685e0a9dfa7512adb48cf8`; the non-secret
+  profile was preserved and session secrets, capability evidence, vault key and batch recovery
+  remained absent. Upgrade receipt SHA-256 is
+  `12a121c6e84ca418eb06f4f5027e3f419d6385b57207c29eca195fb91de8072c`.
+- This pre-release called no Provider, incurred no Provider cost, changed no feature flag, and made
+  no ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`,
+  overall progress remains `36/37`, and only `REL-02` is open.
+
+- At the 2026-08-03 checkpoint, deployed release commit
+  `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate
   QA-04 command in `774.4s`; target-bound acceptance SHA-256 is
   `5a97e22583cfe200a7204b747a92259c6e0a951bed2cfafa193832e6c9fe7219`. Both origin-bound
   `1.0.278` candidates passed detached-signature verification and persistent-Chromium same-path
@@ -92,10 +118,10 @@ Progress: 2/3 tasks.
 - Credential and Provider-consent changes wait for a serialized Registry cleanup fence. Recovery
   and preview reads drain before escrow key rotation, queued Provider handoff rechecks the fence,
   and fresh-worker terminal cleanup deletes ciphertext before releasing the operation lock.
-- The follow-up has passed offline source, Cloud, and Local build/package verification, but it is not
-  signed, release-staged, website-distributed, deployed, or paid-validated. It caused no Provider
-  request, VPS or flag change, ERP ingest/publish, or Ozon mutation. `REL-02` remains open; Phase 6
-  stays `2/3` and overall progress stays `36/37`.
+- At the `ac4227f9` checkpoint the follow-up had passed offline source, Cloud, and Local
+  build/package verification but was not yet signed, release-staged, website-distributed, deployed,
+  or paid-validated. It caused no Provider request, VPS or flag change, ERP ingest/publish, or Ozon
+  mutation. `REL-02` remained open; Phase 6 stayed `2/3` and overall progress stayed `36/37`.
 - The authorized `ac4227f9d6e1291bf275ff314f78dc049d565a7f` pre-release ran the complete nine-step
   `QA-04` aggregate in `806.7s`; source, Cloud, and Local verification passed `450`, `455`, and
   `451` checks respectively. Independent `.com` and `.cn` version `1.0.279` candidates were built
