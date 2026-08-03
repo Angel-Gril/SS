@@ -51,6 +51,7 @@ try {
     'src/__tests__/ai-media-translation-budget.postgres.integration.test.ts',
     'src/__tests__/ai-image-workbench-billing-separation.postgres.integration.test.ts',
     'src/__tests__/extension-byok-media-provenance.postgres.integration.test.ts',
+    'src/__tests__/extension-byok-upload-staging.postgres.integration.test.ts',
     'src/__tests__/extension-byok-publish-vertical.postgres.integration.test.ts',
     'src/__tests__/extension-byok-execution-batch-prisma.postgres.integration.test.ts',
     'src/__tests__/extension-byok-generated-asset-batch-commit-prisma.postgres.integration.test.ts',

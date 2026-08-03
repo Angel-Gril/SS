@@ -262,6 +262,8 @@ describe('extension BYOK upload staging', () => {
     expect(observedSql).toContain('"status" = \'CLEANING\' AND "cleanup_lease_until" <= $1');
     expect(observedSql).toContain('FOR UPDATE SKIP LOCKED');
     expect(observedSql).toContain('"cleanup_lease_token" = $3');
+    expect(observedSql).toMatch(/RETURNING\s+"staging"\."id"/u);
+    expect(observedSql).toContain('"staging"."cleanup_lease_token" AS "cleanupLeaseToken"');
   });
 
   it('reclaims an expired cleanup lease and idempotently removes a crash orphan', async () => {

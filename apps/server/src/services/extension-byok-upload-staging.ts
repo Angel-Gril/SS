@@ -75,25 +75,33 @@ export interface ExtensionByokUploadStorageReference {
   storageKey: string;
 }
 
-const STAGING_COLUMNS = `
-  "id",
-  "owner_user_id" AS "ownerUserId",
-  "device_session_id" AS "deviceSessionId",
-  "asset_id" AS "assetId",
-  "request_hash" AS "requestHash",
-  "storage_backend" AS "storageBackend",
-  "storage_namespace_id" AS "storageNamespaceId",
-  "storage_key" AS "storageKey",
-  "status",
-  "expires_at" AS "expiresAt",
-  "cleanup_lease_token" AS "cleanupLeaseToken",
-  "cleanup_lease_until" AS "cleanupLeaseUntil",
-  "cleanup_attempt_count" AS "cleanupAttemptCount",
-  "last_error" AS "lastError",
-  "committed_at" AS "committedAt",
-  "cleaned_at" AS "cleanedAt",
-  "created_at" AS "createdAt",
-  "updated_at" AS "updatedAt"`;
+const STAGING_COLUMN_PROJECTIONS = [
+  ['id', null],
+  ['owner_user_id', 'ownerUserId'],
+  ['device_session_id', 'deviceSessionId'],
+  ['asset_id', 'assetId'],
+  ['request_hash', 'requestHash'],
+  ['storage_backend', 'storageBackend'],
+  ['storage_namespace_id', 'storageNamespaceId'],
+  ['storage_key', 'storageKey'],
+  ['status', null],
+  ['expires_at', 'expiresAt'],
+  ['cleanup_lease_token', 'cleanupLeaseToken'],
+  ['cleanup_lease_until', 'cleanupLeaseUntil'],
+  ['cleanup_attempt_count', 'cleanupAttemptCount'],
+  ['last_error', 'lastError'],
+  ['committed_at', 'committedAt'],
+  ['cleaned_at', 'cleanedAt'],
+  ['created_at', 'createdAt'],
+  ['updated_at', 'updatedAt'],
+] as const;
+
+function stagingColumns(tableAlias?: 'staging'): string {
+  const qualifier = tableAlias ? `"${tableAlias}".` : '';
+  return STAGING_COLUMN_PROJECTIONS.map(([column, resultName]) => (
+    `  ${qualifier}"${column}"${resultName ? ` AS "${resultName}"` : ''}`
+  )).join(',\n');
+}
 
 function record(row: any): ExtensionByokUploadStagingRecord {
   return {
@@ -208,7 +216,7 @@ export function createPrismaExtensionByokUploadStagingStore(
              "created_at", "updated_at")
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $10)
            ON CONFLICT DO NOTHING
-           RETURNING ${STAGING_COLUMNS}`,
+           RETURNING ${stagingColumns()}`,
           input.id,
           input.ownerUserId,
           input.deviceSessionId,
@@ -223,7 +231,7 @@ export function createPrismaExtensionByokUploadStagingStore(
         if (inserted[0]) return { kind: 'created', staging: record(inserted[0]) };
 
         const existingRows = await tx.$queryRawUnsafe<any[]>(
-          `SELECT ${STAGING_COLUMNS}
+          `SELECT ${stagingColumns()}
            FROM "extension_byok_upload_staging"
            WHERE "id" = $1
            FOR UPDATE`,
@@ -251,7 +259,7 @@ export function createPrismaExtensionByokUploadStagingStore(
                "cleaned_at" = NULL,
                "updated_at" = $3
            WHERE "id" = $1 AND "status" = 'CLEANED'
-           RETURNING ${STAGING_COLUMNS}`,
+           RETURNING ${stagingColumns()}`,
           input.id,
           expiresAt,
           input.now,
@@ -352,7 +360,7 @@ export function createPrismaExtensionByokUploadStagingStore(
              "updated_at" = $1
          FROM candidates
          WHERE staging."id" = candidates."id"
-         RETURNING ${STAGING_COLUMNS}`,
+         RETURNING ${stagingColumns('staging')}`,
         input.now,
         Math.max(1, Math.min(100, Math.trunc(input.limit))),
         leaseToken,

@@ -136,6 +136,29 @@ retroactively restore POST 6. This offline work made no Provider request, VPS ch
 change, ERP ingest, publish, or Ozon mutation. Phase 6 remains `2/3`, overall progress remains
 `36/37`, and only `REL-02` is open.
 
+The authorized pre-release from `ac4227f9d6e1291bf275ff314f78dc049d565a7f` passed the complete
+nine-step `QA-04` aggregate in `806.7s`; source/Cloud/Local verification passed `450/455/451`.
+Regional version `1.0.279` candidates were built with 190 files per target but were never signed.
+Release review correlated a live `.com` Worker PostgreSQL `42702` loop with an unqualified
+`RETURNING` projection in the expired BYOK upload-staging `UPDATE ... FROM`; b6 and `ac4227f9`
+both contain the defect. The two `1.0.279` candidates are quarantined and must never be signed,
+distributed, deployed, or installed.
+
+The six `.com` BINI-scoped rollout rows were first atomically returned from revision `9` to dark
+revision `10`, and the official dark verifier passed. Private state-change receipt SHA-256 is
+`e88efc87d8f556df39800594ebd85c45f7a377d7bc4c3a1dc1ff51d4f6187f3b`. The command invoked no
+Provider, ingest, publish, or Ozon path; its embedded zero counters state the command boundary and
+are not independent billing or side-effect observations. `.cn` remained dark, and both regions
+continued serving b6 without upload, backup, migration, or restart.
+
+The cleanup fix now derives every returned field from one structured projection, qualifies the
+target alias for the ambiguous query, and adds a real isolated-schema PostgreSQL regression to the
+formal AI Media aggregate. Focused unit tests passed `13/13`; PostgreSQL passed `21` files and `96`
+tests; Server typecheck, focused lint, and diff checks passed. The replacement release must use a
+new clean commit and version `1.0.280`, then rerun full `QA-04`, regional package/sign, signed MV3
+restart smoke, both dark deployments/download receipts, and the BINI same-path upgrade. Progress
+remains `36/37`; no Provider authorization was added and all pilot rollout state remains off.
+
 Current checkpoint (2026-08-02): the replacement release from clean pairing-fix commit
 `e795e67de4df1a53bdb8738e8dd4158a6570d22d` passed the complete QA-04 gate, regional `1.0.273`
 package/sign verification, both same-path upgrade smokes, and fresh commit/database/restore-bound

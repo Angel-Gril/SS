@@ -96,6 +96,26 @@ Progress: 2/3 tasks.
   signed, release-staged, website-distributed, deployed, or paid-validated. It caused no Provider
   request, VPS or flag change, ERP ingest/publish, or Ozon mutation. `REL-02` remains open; Phase 6
   stays `2/3` and overall progress stays `36/37`.
+- The authorized `ac4227f9d6e1291bf275ff314f78dc049d565a7f` pre-release ran the complete nine-step
+  `QA-04` aggregate in `806.7s`; source, Cloud, and Local verification passed `450`, `455`, and
+  `451` checks respectively. Independent `.com` and `.cn` version `1.0.279` candidates were built
+  with 190 files per target, but remain unsigned and quarantined. A production-log review found that
+  both the deployed b6 release and `ac4227f9` used an unqualified `RETURNING` projection in the
+  expired BYOK upload-staging claim, causing PostgreSQL `42702` on every cleanup tick. No `1.0.279`
+  artifact may be signed, distributed, deployed, or installed.
+- Before that review, the six `.com` BINI-scoped rollout rows were atomically returned from revision
+  `9` to dark revision `10`; the official dark verifier then passed. Private state-change receipt
+  SHA-256 is `e88efc87d8f556df39800594ebd85c45f7a377d7bc4c3a1dc1ff51d4f6187f3b`.
+  The command invoked no Provider, ingest, publish, or Ozon path; the receipt's zero counters are
+  declarations of that command boundary rather than independent metering evidence. `.cn` remained
+  dark and both regions continued serving b6 without upload, backup, migration, or restart.
+- The staging cleanup fix now generates all 18 returned fields from one structured projection and
+  qualifies the target alias only for `UPDATE ... FROM`. A real isolated-schema PostgreSQL
+  regression executes the formerly failing claim and is included in the AI Media integration
+  aggregate. Focused unit tests passed `13/13`; the PostgreSQL aggregate passed `21` files and `96`
+  tests; Server typecheck, focused lint, and diff checks passed. The replacement must use a new
+  clean commit and version `1.0.280`, rerun full `QA-04`, regional package/sign, signed MV3 restart
+  smoke, both dark deployments/download receipts, and BINI same-path upgrade before `REL-02` resumes.
 
 - The clean `e795e67de4df1a53bdb8738e8dd4158a6570d22d` replacement passed final QA-04,
   regional `1.0.273` package/sign checks, both upgrade smokes, and fresh backup/restore gates. Its
