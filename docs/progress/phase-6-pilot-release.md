@@ -61,6 +61,8 @@ Progress: 2/3 tasks.
   `27e220de97ff6a29578c9163ee035ea1ce8bb2fd983363cdd48aa28ab91710ac` at `279652` bytes in
   Chrome `147.0.7727.15`; attestation receipt SHA-256 is
   `9a8174f2791177a7844195b16b4e6358b38566b7a4e4cb2deb82deacf621c449`.
+  The combined 23 active-worker/Unicode contracts and complete local preflight passed in `627.9s`;
+  source extension verification finished at `450` passes, two existing warnings and zero failures.
 - Provider accounting remains one successful capability POST, zero formal-generation POSTs and one
   unused POST under the original two-call authorization. Because the real reload cleared the Key,
   host permission and capability evidence, the replacement capability probe and formal generation

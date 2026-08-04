@@ -91,6 +91,9 @@ detach. Its real Chrome `147.0.7727.15` receipt SHA-256 is
 SHA-256 are both `27e220de97ff6a29578c9163ee035ea1ce8bb2fd983363cdd48aa28ab91710ac`
 at `279652` bytes. The receipt scope is intentionally `MAIN_SCRIPT_IDENTITY_ONLY`; signed package,
 installed tree, imported scripts and the upgrade transition remain separate gates.
+The combined 23 active-worker/Unicode contracts and complete local preflight passed in `627.9s`;
+source extension verification finished at `450` passes, the two existing local-package warnings and
+zero failures.
 
 The first authorized `1.0.281` capability probe consumed one Provider POST and succeeded. The
 failed formal click consumed none, so the current accounting remains one consumed and one
