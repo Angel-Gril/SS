@@ -1100,6 +1100,12 @@
   'use strict';
 
   var SERIAL_REQUESTED_CONCURRENCY = 1;
+  var WORKSPACE_INTENT_VERSION = 'extension-byok-workbench-action-intent/v1';
+  var WORKSPACE_OUTCOME_VERSION = 'extension-byok-workbench-action-outcome/v1';
+  var WORKSPACE_INTENT_ACTIONS = Object.freeze([
+    'PAUSE_AFTER_CURRENT', 'CONTINUE', 'CANCEL_QUEUED', 'KEEP_ATTEMPT',
+    'REJECT_ATTEMPT', 'REGENERATE_SLOT',
+  ]);
   var api = global.SS_ERP_BYOK_WORKBENCH_BATCH_PAGE;
   var clientApi = global.SS_ERP_BYOK_WORKBENCH_BATCH_CLIENT;
   var workspaceEvents = global.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS;
@@ -1147,6 +1153,28 @@
       || typeof document.dispatchEvent !== 'function') return false;
     document.dispatchEvent(new global.CustomEvent(type, { detail: detail }));
     return true;
+  }
+
+  function lifecycleRejectedOutcome(intent) {
+    if (!intent || !intent.binding) return null;
+    return Object.freeze({
+      contractVersion: WORKSPACE_OUTCOME_VERSION,
+      binding: Object.freeze({
+        shopId: intent.binding.shopId,
+        workflowId: intent.binding.workflowId,
+        draftRevision: intent.binding.draftRevision,
+        draftVersion: intent.binding.draftVersion,
+      }),
+      action: intent.action,
+      commandId: intent.commandId,
+      expectedWorkspaceRevision: intent.expectedWorkspaceRevision,
+      expectedRuntimeRevision: intent.expectedRuntimeRevision,
+      expectedSlotRevision: intent.expectedSlotRevision,
+      slotKey: intent.slotKey,
+      attemptId: intent.attemptId,
+      status: 'REJECTED',
+      errorCode: 'SS_ERP_BYOK_BATCH_LIFECYCLE_UNAVAILABLE',
+    });
   }
 
   var controller;
@@ -1639,8 +1667,19 @@
     void controller.handleWorkspaceAction(detail).catch(function () {});
   });
   document.addEventListener('ss-erp:workspace-intent', function (event) {
-    if (lifecycleState !== 'READY' || !lifecyclePort) return;
-    void controller.handleWorkspaceIntent(event && event.detail).catch(function () {});
+    var intent = event && event.detail;
+    if (lifecycleState !== 'READY' || !lifecyclePort) {
+      // Resolve the page-side pending intent instead of leaving the workspace stuck.
+      if (intent && intent.contractVersion === WORKSPACE_INTENT_VERSION
+        && WORKSPACE_INTENT_ACTIONS.includes(intent.action)) {
+        try {
+          var outcome = lifecycleRejectedOutcome(intent);
+          if (outcome) emit('ss-erp:workspace-intent-outcome', outcome);
+        } catch {}
+      }
+      return;
+    }
+    void controller.handleWorkspaceIntent(intent).catch(function () {});
   });
 
   async function startFromPage() {

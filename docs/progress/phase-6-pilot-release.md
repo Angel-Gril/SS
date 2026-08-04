@@ -28,6 +28,16 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The 2026-08-04 `1.0.282` BINI scoped sandbox pilot consumed its separately authorized two
+  Provider POSTs exactly once: capability probe then formal `TEXT_TO_IMAGE`. The formal execution
+  succeeded and produced candidate SHA-256
+  `e5ae237c7f35d519a7134194aca2543edfd0c4ed21d64aeef7780046038f1e42`; the immediate result
+  receipt SHA-256 is `68f4c3683a7acd20448fa6f8efbc40e8b2739c4f29645481c4ac152dc4e8cdc2`. The
+  operator confirmed image quality, but the trusted keep action arrived after the hard ten-minute
+  AES escrow TTL. The runtime projection and escrow were empty, so no authoritative keep or ingest
+  transition was committed. Private human-review/expiry reconciliation SHA-256 is
+  `e9a249fc812f2adcbf180822d7b16811b51bc4e127f106d436d54d187912d3c4`. No retry, ERP/Ozon write or
+  flag change occurred; `REL-02` remains open and any new attempt needs a new exact authorization.
 - Replacement release `49ae41e337f2857cecece4a173f0c8a661c536cd` / `1.0.281` completed the
   authorized REL-02 pre-release chain. Target-bound QA-04 acceptance SHA-256 is
   `8d069c4926edac9756e343c08ed3255c19713c9a9c974f112a38ff9dc6d8f8df`; both 190-file regional
@@ -63,11 +73,9 @@ Progress: 2/3 tasks.
   `9a8174f2791177a7844195b16b4e6358b38566b7a4e4cb2deb82deacf621c449`.
   The combined 23 active-worker/Unicode contracts and complete local preflight passed in `627.9s`;
   source extension verification finished at `450` passes, two existing warnings and zero failures.
-- Provider accounting remains one successful capability POST, zero formal-generation POSTs and one
-  unused POST under the original two-call authorization. Because the real reload cleared the Key,
-  host permission and capability evidence, the replacement capability probe and formal generation
-  wait for restored session-only state and explicit authorization to raise the total limit to three.
-  Ingest, publish and Ozon writes remain disabled.
+- The earlier `1.0.281` accounting is historical only: it records the pre-reload failed formal click
+  and must not be combined with the later `1.0.282` two-POST authorization. The `1.0.282` scope is
+  exhausted, no retry is permitted, and ingest, publish and Ozon writes remain disabled.
 - The package/deployment pre-release itself called no Provider, incurred no Provider cost, changed
   no feature flag, and made no ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain
   complete, Phase 6 remains `2/3`,

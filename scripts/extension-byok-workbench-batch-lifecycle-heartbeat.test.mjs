@@ -291,6 +291,7 @@ async function createHarness(options = {}) {
   const connectInputs = [];
   const pageListeners = new Map();
   const documentListeners = new Map();
+  const intentOutcomes = [];
   const calls = {
     state: [],
     start: [],
@@ -378,6 +379,9 @@ async function createHarness(options = {}) {
       return true;
     },
   };
+  document.addEventListener('ss-erp:workspace-intent-outcome', (event) => {
+    intentOutcomes.push(event.detail);
+  });
   const context = {
     ArrayBuffer,
     Blob,
@@ -461,6 +465,7 @@ async function createHarness(options = {}) {
     controller,
     document,
     nodes,
+    intentOutcomes,
     ports,
     pagehide() {
       for (const listener of pageListeners.get('pagehide') || []) listener({ type: 'pagehide' });
@@ -668,6 +673,19 @@ test('active lifecycle loss blocks preview and intent but still permits cleanup'
   await flushAsync();
   assert.equal(harness.calls.openPreview.length, 0);
   assert.equal(harness.calls.command.length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.intentOutcomes)), [{
+    contractVersion: 'extension-byok-workbench-action-outcome/v1',
+    binding: bootstrap().binding,
+    action: 'KEEP_ATTEMPT',
+    commandId: 'byok-command:00000000-0000-4000-8000-000000000001',
+    expectedWorkspaceRevision: 2,
+    expectedRuntimeRevision: 3,
+    expectedSlotRevision: 2,
+    slotKey: SLOT_KEY,
+    attemptId: ATTEMPT_ID,
+    status: 'REJECTED',
+    errorCode: UNAVAILABLE,
+  }]);
 
   await harness.controller.clear();
   assert.equal(harness.calls.clear.length, 1, 'local cleanup remains available fail-closed');

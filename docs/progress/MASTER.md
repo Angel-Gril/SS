@@ -95,17 +95,29 @@ The combined 23 active-worker/Unicode contracts and complete local preflight pas
 source extension verification finished at `450` passes, the two existing local-package warnings and
 zero failures.
 
-The first authorized `1.0.281` capability probe consumed one Provider POST and succeeded. The
-failed formal click consumed none, so the current accounting remains one consumed and one
-remaining under the original two-POST authorization. The required reload cleared the session Key,
-host permission and capability evidence. A replacement probe plus formal generation therefore
-requires the operator to restore the two session-only states and explicitly extend the total limit
-to three POSTs. No Provider retry is permitted; ingest, publish and Ozon writes remain disabled.
+The authorized `1.0.282` BINI sandbox pilot consumed exactly two Provider POSTs: one capability
+probe and one formal `TEXT_TO_IMAGE` generation. Both authoritative execution records are
+successful, no automatic retry occurred, and the two-POST authorization is exhausted. The formal
+candidate result SHA-256 is
+`e5ae237c7f35d519a7134194aca2543edfd0c4ed21d64aeef7780046038f1e42`; its immediate result receipt
+SHA-256 is `68f4c3683a7acd20448fa6f8efbc40e8b2739c4f29645481c4ac152dc4e8cdc2`. Provider price
+synchronization was not required and actual Provider cost was not observed from the separate
+account. Ingest, publish and Ozon writes remain disabled.
 
 The package/deployment pre-release itself called no Provider and incurred no Provider cost. It made
 no feature-flag change, ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete,
 Phase 6 remains `2/3`,
 overall progress remains `36/37`, and only `REL-02` is open.
+
+The formal candidate was displayed in the active BINI workbench and the operator confirmed its
+image quality. A trusted `保留此图` action was attempted, but by then the review-only candidate had
+passed the hard ten-minute AES escrow TTL: the runtime batch projection was empty and the escrow
+store contained zero entries. No authoritative keep/ingest transition was committed. The append-only
+human-review reconciliation is private receipt SHA-256
+`e9a249fc812f2adcbf180822d7b16811b51bc4e127f106d436d54d187912d3c4`; it records the quality pass,
+candidate-expiry observation, and zero ERP/Ozon side effects. `REL-02` therefore remains open and
+the next pilot attempt requires a new Operation ID, explicit Provider POST/cost authorization and a
+fresh session before any Provider request.
 
 Historical checkpoint (2026-08-03): then-deployed release commit
 `b6f421211fdc14686ccb5188badf3985cb16930b` passed the complete nine-gate QA-04 command in
