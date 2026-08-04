@@ -73,8 +73,35 @@ Provider profile was preserved, while session secrets, capability evidence, vaul
 recovery state remained absent. The exact `1.0.278` tree remains as a rollback backup. Upgrade
 receipt SHA-256 is `12a121c6e84ca418eb06f4f5027e3f419d6385b57207c29eca195fb91de8072c`.
 
-This pre-release called no Provider and incurred no Provider cost. It made no feature-flag change,
-ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`,
+REL-02 pre-dispatch validation then found that the persistent BINI profile still executed the
+historical worker bytes even though the installed tree and runtime manifest reported `1.0.281`.
+The trusted generation click failed at the lifecycle ACK before Provider dispatch; stale-worker
+block receipt SHA-256 is `aa416be83f9907e88df754f1b192f4fc6b3ae287d62fa73b4de00f597475dca5`.
+The original managed-upgrade receipt therefore remains valid for its signed package, installed
+tree, profile and session-state assertions, but it is not accepted by itself as proof of the active
+worker code.
+
+An official extension reload repaired the active worker. Reload reconciliation and stop/wake
+receipt SHA-256 values are `af1a4c0f6057fbed17ecb1935f26809aca0e692498184289dd38a6254d9c099a`
+and `76f8565f303b0a8972850deeeaccda9b0d1952c8c4373219ce0c28c4db20a27b`. A new
+side-effect-free main-script attestor now compares the exact active `Debugger.getScriptSource`
+bytes with an explicitly selected installation directory and awaits Debugger disable plus Target
+detach. Its real Chrome `147.0.7727.15` receipt SHA-256 is
+`9a8174f2791177a7844195b16b4e6358b38566b7a4e4cb2deb82deacf621c449`; active and disk worker
+SHA-256 are both `27e220de97ff6a29578c9163ee035ea1ce8bb2fd983363cdd48aa28ab91710ac`
+at `279652` bytes. The receipt scope is intentionally `MAIN_SCRIPT_IDENTITY_ONLY`; signed package,
+installed tree, imported scripts and the upgrade transition remain separate gates.
+
+The first authorized `1.0.281` capability probe consumed one Provider POST and succeeded. The
+failed formal click consumed none, so the current accounting remains one consumed and one
+remaining under the original two-POST authorization. The required reload cleared the session Key,
+host permission and capability evidence. A replacement probe plus formal generation therefore
+requires the operator to restore the two session-only states and explicitly extend the total limit
+to three POSTs. No Provider retry is permitted; ingest, publish and Ozon writes remain disabled.
+
+The package/deployment pre-release itself called no Provider and incurred no Provider cost. It made
+no feature-flag change, ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete,
+Phase 6 remains `2/3`,
 overall progress remains `36/37`, and only `REL-02` is open.
 
 Historical checkpoint (2026-08-03): then-deployed release commit

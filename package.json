@@ -38,6 +38,7 @@
     "verify:extension": "node scripts/verify-extension-package.mjs",
     "verify:extension:cloud": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-cloud --target cloud --strict",
     "verify:extension:local": "node scripts/verify-extension-package.mjs --dir build/extensions/ss-erp-local --target local",
+    "attest:extension:active-worker": "node scripts/extension-active-worker-attestation.mjs",
     "smoke:extension:live-sw-unicode": "node scripts/extension-live-sw-unicode-smoke.mjs",
     "test:extension-live-sw-unicode-smoke": "node --test scripts/extension-live-sw-unicode-smoke.test.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""

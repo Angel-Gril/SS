@@ -49,8 +49,26 @@ Progress: 2/3 tasks.
   profile was preserved and session secrets, capability evidence, vault key and batch recovery
   remained absent. Upgrade receipt SHA-256 is
   `12a121c6e84ca418eb06f4f5027e3f419d6385b57207c29eca195fb91de8072c`.
-- This pre-release called no Provider, incurred no Provider cost, changed no feature flag, and made
-  no ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain complete, Phase 6 remains `2/3`,
+- REL-02 pre-dispatch validation caught a manifest-new/worker-old same-path upgrade state before
+  Provider dispatch. The formal click made zero Provider requests; stale-worker block receipt
+  SHA-256 is `aa416be83f9907e88df754f1b192f4fc6b3ae287d62fa73b4de00f597475dca5`.
+  The original upgrade receipt proves its signed package/tree/profile/session fields, not active
+  worker identity.
+- Official reload plus stop/wake verification restored the exact `1.0.281` worker. Receipt SHA-256
+  values are `af1a4c0f6057fbed17ecb1935f26809aca0e692498184289dd38a6254d9c099a` and
+  `76f8565f303b0a8972850deeeaccda9b0d1952c8c4373219ce0c28c4db20a27b`. The new read-only
+  main-script attestor independently matched active and disk SHA-256
+  `27e220de97ff6a29578c9163ee035ea1ce8bb2fd983363cdd48aa28ab91710ac` at `279652` bytes in
+  Chrome `147.0.7727.15`; attestation receipt SHA-256 is
+  `9a8174f2791177a7844195b16b4e6358b38566b7a4e4cb2deb82deacf621c449`.
+- Provider accounting remains one successful capability POST, zero formal-generation POSTs and one
+  unused POST under the original two-call authorization. Because the real reload cleared the Key,
+  host permission and capability evidence, the replacement capability probe and formal generation
+  wait for restored session-only state and explicit authorization to raise the total limit to three.
+  Ingest, publish and Ozon writes remain disabled.
+- The package/deployment pre-release itself called no Provider, incurred no Provider cost, changed
+  no feature flag, and made no ERP ingest/publish or Ozon write. `REL-03` and `REL-04` remain
+  complete, Phase 6 remains `2/3`,
   overall progress remains `36/37`, and only `REL-02` is open.
 
 - At the 2026-08-03 checkpoint, deployed release commit
