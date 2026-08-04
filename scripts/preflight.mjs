@@ -282,6 +282,11 @@ const steps = [
     args: ['scripts/extension-byok-device-session-lifecycle.test.mjs'],
   },
   {
+    name: 'extension device credential manager contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-device-credential-manager.test.mjs'],
+  },
+  {
     name: 'extension BYOK exact-origin permission contract',
     command: 'node',
     args: ['scripts/extension-byok-permission-broker.test.mjs'],

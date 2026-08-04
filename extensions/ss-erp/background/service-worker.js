@@ -562,6 +562,8 @@ function getLogisticsDeviceCredentials() {
   }
   const credentials = api.createManager({
     localStorage: chrome.storage.local,
+    sessionStorage: chrome.storage.session,
+    lockManager: globalThis.navigator && globalThis.navigator.locks,
     fetchImpl: globalThis.fetch.bind(globalThis),
     now: () => new Date(),
     requestTimeoutMs: 6000,
