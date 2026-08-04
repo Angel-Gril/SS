@@ -1100,8 +1100,17 @@
   'use strict';
 
   var SERIAL_REQUESTED_CONCURRENCY = 1;
+  var WORKSPACE_VERSION = 'extension-byok-workbench-workspace-state/v1';
   var WORKSPACE_INTENT_VERSION = 'extension-byok-workbench-action-intent/v1';
   var WORKSPACE_OUTCOME_VERSION = 'extension-byok-workbench-action-outcome/v1';
+  var WORKSPACE_INTENT_KEYS = Object.freeze([
+    'contractVersion', 'binding', 'action', 'commandId', 'expectedWorkspaceRevision',
+    'expectedRuntimeRevision', 'expectedSlotRevision', 'slotKey', 'attemptId',
+    'externalChargeAcknowledgement',
+  ]);
+  var WORKSPACE_BINDING_KEYS = Object.freeze([
+    'shopId', 'workflowId', 'draftRevision', 'draftVersion',
+  ]);
   var WORKSPACE_INTENT_ACTIONS = Object.freeze([
     'PAUSE_AFTER_CURRENT', 'CONTINUE', 'CANCEL_QUEUED', 'KEEP_ATTEMPT',
     'REJECT_ATTEMPT', 'REGENERATE_SLOT',
@@ -1208,6 +1217,8 @@
   var lifecycleHandshakeReject = null;
   var lifecycleStartPending = false;
   var lifecycleState = 'IDLE';
+  var currentWorkspaceMode = null;
+  var byokWorkspaceBinding = null;
   var SS_ERP_BYOK_BATCH_LIFECYCLE_PING =
     'ss-erp:ai-image-workbench-batch-lifecycle-ping/v1';
   var SS_ERP_BYOK_BATCH_LIFECYCLE_ACK =
@@ -1221,6 +1232,45 @@
       new Error('The background candidate lifecycle is unavailable'),
       { code: 'SS_ERP_BYOK_BATCH_LIFECYCLE_UNAVAILABLE' },
     );
+  }
+
+  function exactRecord(value, keys) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+      && Object.getOwnPropertySymbols(value).length === 0
+      && Object.keys(value).length === keys.length
+      && Object.keys(value).every(function (key) { return keys.includes(key); });
+  }
+
+  function workspaceBinding(value) {
+    if (!exactRecord(value, WORKSPACE_BINDING_KEYS)
+      || typeof value.shopId !== 'string' || !value.shopId
+      || typeof value.workflowId !== 'string' || !value.workflowId
+      || !Number.isSafeInteger(value.draftRevision) || value.draftRevision < 1
+      || !Number.isSafeInteger(value.draftVersion) || value.draftVersion < 1) return null;
+    return Object.freeze({
+      shopId: value.shopId,
+      workflowId: value.workflowId,
+      draftRevision: value.draftRevision,
+      draftVersion: value.draftVersion,
+    });
+  }
+
+  function sameWorkspaceBinding(left, right) {
+    return Boolean(left) && Boolean(right)
+      && left.shopId === right.shopId
+      && left.workflowId === right.workflowId
+      && left.draftRevision === right.draftRevision
+      && left.draftVersion === right.draftVersion;
+  }
+
+  function ownsActiveByokIntent(intent) {
+    return currentWorkspaceMode === 'BYOK'
+      && Boolean(lastView && lastView.available && lastView.active)
+      && Boolean(byokWorkspaceBinding)
+      && exactRecord(intent, WORKSPACE_INTENT_KEYS)
+      && intent.contractVersion === WORKSPACE_INTENT_VERSION
+      && WORKSPACE_INTENT_ACTIONS.includes(intent.action)
+      && sameWorkspaceBinding(workspaceBinding(intent.binding), byokWorkspaceBinding);
   }
 
   function clearLifecycleTimers() {
@@ -1654,11 +1704,25 @@
 
   document.addEventListener('ss-erp:workspace-bootstrap', function (event) {
     var detail = event && event.detail;
-    if (!detail || detail.executionMode !== 'BYOK' || detail.dispatched !== false) return;
+    var binding = detail && detail.contractVersion === WORKSPACE_VERSION
+      ? workspaceBinding(detail.binding) : null;
+    if (!binding || !['BYOK', 'ERP_HOSTED'].includes(detail.executionMode)
+      || typeof detail.dispatched !== 'boolean') return;
+    if (detail.executionMode !== 'BYOK' || detail.dispatched !== false) {
+      currentWorkspaceMode = detail.executionMode;
+      byokWorkspaceBinding = null;
+      return;
+    }
     try {
       controller.bootstrap(detail);
+      currentWorkspaceMode = 'BYOK';
+      byokWorkspaceBinding = binding;
       void controller.refresh().catch(function () {});
     } catch {}
+  });
+  document.addEventListener('ss-erp:workspace-clear', function () {
+    currentWorkspaceMode = null;
+    byokWorkspaceBinding = null;
   });
   document.addEventListener('ss-erp:workspace-action', function (event) {
     var detail = event && event.detail;
@@ -1668,15 +1732,13 @@
   });
   document.addEventListener('ss-erp:workspace-intent', function (event) {
     var intent = event && event.detail;
+    if (!ownsActiveByokIntent(intent)) return;
     if (lifecycleState !== 'READY' || !lifecyclePort) {
       // Resolve the page-side pending intent instead of leaving the workspace stuck.
-      if (intent && intent.contractVersion === WORKSPACE_INTENT_VERSION
-        && WORKSPACE_INTENT_ACTIONS.includes(intent.action)) {
-        try {
-          var outcome = lifecycleRejectedOutcome(intent);
-          if (outcome) emit('ss-erp:workspace-intent-outcome', outcome);
-        } catch {}
-      }
+      try {
+        var outcome = lifecycleRejectedOutcome(intent);
+        if (outcome) emit('ss-erp:workspace-intent-outcome', outcome);
+      } catch {}
       return;
     }
     void controller.handleWorkspaceIntent(intent).catch(function () {});

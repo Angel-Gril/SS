@@ -1073,6 +1073,14 @@ assertActionIntent(emittedIntents.at(-1), {
 });
 assert.equal(nodes.workspaceContinueButton.disabled, true,
   'continue intent is fenced while awaiting an authoritative scheduler projection');
+const continueIntent = emittedIntents.at(-1);
+dispatchDocument(
+  'ss-erp:workspace-intent-outcome',
+  intentOutcome(continueIntent, 'REJECTED', 'SS_ERP_BYOK_BATCH_LIFECYCLE_UNAVAILABLE'),
+);
+assert.equal(nodes.workspaceContinueButton.disabled, false,
+  'a lifecycle rejection releases the exact pending workspace control');
+assert.match(nodes.workspaceTaskSummary.textContent, /后台候选保护已中断/u);
 
 dispatchDocument('ss-erp:workspace-clear', null);
 const publishBootstrap = bootstrapInput();

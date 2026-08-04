@@ -209,6 +209,26 @@ function bootstrap() {
   };
 }
 
+function workspaceIntent(action, index = 1, overrides = {}) {
+  const slotScoped = !['PAUSE_AFTER_CURRENT', 'CONTINUE'].includes(action);
+  const attemptScoped = ['CANCEL_QUEUED', 'KEEP_ATTEMPT', 'REJECT_ATTEMPT'].includes(action);
+  return {
+    contractVersion: 'extension-byok-workbench-action-intent/v1',
+    binding: bootstrap().binding,
+    action,
+    commandId: `byok-command:00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    expectedWorkspaceRevision: 2,
+    expectedRuntimeRevision: 3,
+    expectedSlotRevision: slotScoped ? 2 : null,
+    slotKey: slotScoped ? SLOT_KEY : null,
+    attemptId: attemptScoped ? ATTEMPT_ID : null,
+    externalChargeAcknowledgement: action === 'REGENERATE_SLOT'
+      ? { warningVersion: 'external-provider-charge/v1', confirmed: true }
+      : null,
+    ...overrides,
+  };
+}
+
 function projection(options = {}) {
   const kept = options.kept === true;
   const ingestState = options.ingestState || 'NOT_STARTED';
@@ -656,18 +676,7 @@ test('active lifecycle loss blocks preview and intent but still permits cleanup'
   );
   harness.document.dispatchEvent(
     new harness.context.CustomEvent('ss-erp:workspace-intent', {
-      detail: {
-        contractVersion: 'extension-byok-workbench-action-intent/v1',
-        binding: bootstrap().binding,
-        action: 'KEEP_ATTEMPT',
-        commandId: 'byok-command:00000000-0000-4000-8000-000000000001',
-        expectedWorkspaceRevision: 2,
-        expectedRuntimeRevision: 3,
-        expectedSlotRevision: 2,
-        slotKey: SLOT_KEY,
-        attemptId: ATTEMPT_ID,
-        externalChargeAcknowledgement: null,
-      },
+      detail: workspaceIntent('KEEP_ATTEMPT'),
     }),
   );
   await flushAsync();
@@ -689,6 +698,77 @@ test('active lifecycle loss blocks preview and intent but still permits cleanup'
 
   await harness.controller.clear();
   assert.equal(harness.calls.clear.length, 1, 'local cleanup remains available fail-closed');
+});
+
+test('lifecycle rejection is scoped to the exact active BYOK workspace owner', async (t) => {
+  await t.test('inactive BYOK batch', async () => {
+    const harness = await createHarness();
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: workspaceIntent('KEEP_ATTEMPT'),
+    }));
+    await flushAsync();
+    assert.equal(harness.intentOutcomes.length, 0);
+    assert.equal(harness.calls.command.length, 0);
+  });
+
+  await t.test('cross-binding and non-closed intent', async () => {
+    const harness = await createHarness();
+    const port = await startWithAck(harness);
+    port.remoteDisconnect();
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: workspaceIntent('KEEP_ATTEMPT', 2, {
+        binding: { ...bootstrap().binding, workflowId: 'workflow-other' },
+      }),
+    }));
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: { ...workspaceIntent('KEEP_ATTEMPT', 3), extra: true },
+    }));
+    const symbolExtended = workspaceIntent('KEEP_ATTEMPT', 4);
+    symbolExtended[Symbol('extra')] = true;
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: symbolExtended,
+    }));
+    await flushAsync();
+    assert.equal(harness.intentOutcomes.length, 0);
+    assert.equal(harness.calls.command.length, 0);
+  });
+
+  await t.test('same-binding ERP hosted workspace', async () => {
+    const harness = await createHarness();
+    const port = await startWithAck(harness);
+    port.remoteDisconnect();
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-bootstrap', {
+      detail: { ...bootstrap(), executionMode: 'ERP_HOSTED' },
+    }));
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: workspaceIntent('KEEP_ATTEMPT', 5),
+    }));
+    await flushAsync();
+    assert.equal(harness.intentOutcomes.length, 0,
+      'the BYOK listener must not reject a hosted intent after hosted execution has started');
+    assert.equal(harness.calls.command.length, 0);
+  });
+});
+
+test('active BYOK lifecycle loss rejects every owned workspace intent without dispatch', async () => {
+  const harness = await createHarness();
+  const port = await startWithAck(harness);
+  port.remoteDisconnect();
+  const actions = [
+    'PAUSE_AFTER_CURRENT', 'CONTINUE', 'CANCEL_QUEUED', 'KEEP_ATTEMPT',
+    'REJECT_ATTEMPT', 'REGENERATE_SLOT',
+  ];
+  actions.forEach((action, index) => {
+    harness.document.dispatchEvent(new harness.context.CustomEvent('ss-erp:workspace-intent', {
+      detail: workspaceIntent(action, index + 10),
+    }));
+  });
+  await flushAsync();
+  assert.deepEqual(harness.intentOutcomes.map((outcome) => outcome.action), actions);
+  assert.ok(harness.intentOutcomes.every((outcome) => (
+    outcome.status === 'REJECTED' && outcome.errorCode === UNAVAILABLE
+  )));
+  assert.equal(harness.calls.command.length, 0);
 });
 
 test('active lifecycle loss blocks ingest and recovery UI actions', async (t) => {

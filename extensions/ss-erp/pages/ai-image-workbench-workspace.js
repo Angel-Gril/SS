@@ -607,6 +607,8 @@
       NO_MEDIA_SLOTS: '当前工作区没有可发布的图片槽位',
       ORDER_LOCKED_WHILE_ACTIVE: '任务仍在处理或排队，暂不能调整图片顺序',
       ACTION_IN_FLIGHT: '正在等待任务协调器确认上一项操作',
+      SS_ERP_BYOK_BATCH_LIFECYCLE_UNAVAILABLE:
+        '后台候选保护已中断，请重新加载工作台并核对批次状态',
       HOSTED_GROUP_SCOPE_UNSUPPORTED: '当前草稿不支持仅覆盖部分 SKU 的商品共享槽位',
       HOSTED_CONTINUE_UNAVAILABLE: '当前托管任务不可继续',
     }[reason] || reason;
