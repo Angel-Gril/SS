@@ -39,6 +39,15 @@ const steps = [
     args: ['scripts/extension-package-auto-bump.test.mjs'],
   },
   {
+    name: 'extension live worker identity and Unicode contracts',
+    command: 'node',
+    args: [
+      '--test',
+      'scripts/extension-active-worker-attestation.test.mjs',
+      'scripts/extension-live-sw-unicode-smoke.test.mjs',
+    ],
+  },
+  {
     name: 'Web auth security settings contract',
     command: 'node',
     args: ['scripts/web-auth-security-settings.test.mjs'],

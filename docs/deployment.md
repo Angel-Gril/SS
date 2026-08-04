@@ -396,7 +396,31 @@ node scripts/sign-extension-release.mjs \
 官网 ZIP 是下载后解压并用 Chrome 开发者模式加载的完整 MV3 包；Ed25519 侧车不把 ZIP 变成 CRX、
 商店安装或自动更新。首次安装必须使用受管固定目录并把实际 `chrome-extension://<id>` 加入
 `CORS_EXTENSION_ORIGINS`；升级时覆盖同一路径后重新加载，避免路径变化造成扩展 ID 和本地 profile
-隔离。实际下载回执只能在 `REL-04` 暗部署
+隔离。磁盘 manifest 版本和安装目录哈希不能单独证明 Chrome 正在执行新 Worker；同路径替换后必须
+在 `chrome://extensions` 对目标扩展执行一次明确 reload，再从专用 loopback CDP 会话运行活动主脚本
+证明和独立语义 smoke：
+
+```bash
+pnpm attest:extension:active-worker -- \
+  --cdp http://127.0.0.1:$CDP_PORT \
+  --extension-id "$EXTENSION_ID" \
+  --extension-dir "$MANAGED_EXTENSION_DIR" \
+  --expected-version "$VERSION" \
+  --output "$PRIVATE_RECEIPTS/active-worker-$VERSION.json"
+
+pnpm smoke:extension:live-sw-unicode -- \
+  --cdp http://127.0.0.1:$CDP_PORT \
+  --extension-id "$EXTENSION_ID" \
+  --expected-version "$VERSION" \
+  --output "$PRIVATE_RECEIPTS/live-sw-unicode-$VERSION.json"
+```
+
+Active-worker receipt 的范围仅为 `MAIN_SCRIPT_IDENTITY_ONLY`。外层升级回执仍必须分别绑定已验证的
+release evidence、detached signature、官网 distribution receipt、ZIP SHA-256、候选/安装整树、固定
+managed path、同一 extension ID、非密 profile 保留与 session-only 状态清除；随后再绑定上述
+active-worker 和 Unicode smoke 两份回执 SHA-256。缺少任一项都不能声明 same-path upgrade 通过。
+
+实际下载回执只能在 `REL-04` 暗部署
 并通过 pre-enable canary 后生成：探针不带 Cookie/Authorization、拒绝跳转，先读取
 `/api/extensions/latest`，再完整下载 cloud/local 两个 version/SHA URL，并核对 Content-Length、
 Content-Disposition、`X-Content-SHA256` 和 body SHA-256。
