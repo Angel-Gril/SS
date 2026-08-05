@@ -263,11 +263,14 @@
   }
 
   function isExactLookupMiss(response) {
-    return response && response.state === 'http_error' && response.status === 404
-      && exactKeys(response.body, ['code', 'errorCode', 'msg'])
-      && response.body.code === 0
-      && response.body.errorCode === 'byok_execution_batch_not_found'
-      && typeof response.body.msg === 'string';
+    return response && (
+      (response.state === 'not_found' && exactKeys(response, ['state']))
+      || (response.state === 'http_error' && response.status === 404
+        && exactKeys(response.body, ['code', 'errorCode', 'msg'])
+        && response.body.code === 0
+        && response.body.errorCode === 'byok_execution_batch_not_found'
+        && typeof response.body.msg === 'string')
+    );
   }
 
   function normalizeCreateResponse(value, input, response) {

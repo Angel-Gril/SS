@@ -508,6 +508,155 @@ async function loadClaimReplay(
     : { kind: 'idempotency_conflict' };
 }
 
+async function releaseRevokedSameDeviceReservations(
+  tx: ExtensionCommandTransactionClient,
+  input: ExtensionByokExecutionBatchCreateRecord,
+): Promise<void> {
+  const slots = input.items.map((item) => item.slotKey);
+  const ordinals = input.items.map((item) => item.assignmentOrdinal);
+  const candidates = rows(await tx.$queryRawUnsafe(
+    `SELECT batch."id" AS "releasableBatchId", batch."item_count" AS "itemCount"
+     FROM "extension_byok_execution_batches" batch
+     JOIN "extension_device_sessions" previous_session
+       ON previous_session."id" = batch."device_session_id"
+     JOIN "extension_device_sessions" current_session
+       ON current_session."id" = $1
+      AND current_session."owner_user_id" = $2
+      AND current_session."actor_user_id" = $3
+      AND current_session."status" = 'ACTIVE'
+      AND current_session."expires_at" > CURRENT_TIMESTAMP
+     WHERE batch."owner_user_id" = $2
+       AND batch."actor_user_id" = $3
+       AND batch."shop_id" = $4
+       AND batch."listing_workflow_id" = $5
+       AND batch."draft_revision" = $6
+       AND batch."draft_version" = $7
+       AND batch."source_platform" = $8
+       AND batch."source_product_id" = $9
+       AND batch."source_capture_snapshot_id" = $10
+       AND batch."supply_goods_id" = $11
+       AND batch."status" = 'OPEN'
+       AND previous_session."id" <> current_session."id"
+       AND previous_session."owner_user_id" = current_session."owner_user_id"
+       AND previous_session."actor_user_id" = current_session."actor_user_id"
+       AND previous_session."deployment_id" = current_session."deployment_id"
+       AND previous_session."device_id" = current_session."device_id"
+       AND (
+         previous_session."status" <> 'ACTIVE'
+         OR previous_session."expires_at" <= CURRENT_TIMESTAMP
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM "extension_byok_execution_batch_items" candidate_item
+         WHERE candidate_item."batch_id" = batch."id"
+           AND candidate_item."status" = 'ACTIVE'
+           AND (
+             candidate_item."slot_key" = ANY($12::text[])
+             OR candidate_item."assignment_ordinal" = ANY($13::integer[])
+           )
+       )
+       AND (
+         SELECT COUNT(*)
+         FROM "extension_byok_execution_batch_items" active_item
+         WHERE active_item."batch_id" = batch."id"
+           AND active_item."status" = 'ACTIVE'
+       ) = batch."item_count"
+       AND NOT EXISTS (
+         SELECT 1
+         FROM "extension_byok_execution_batch_items" item
+         WHERE item."batch_id" = batch."id"
+           AND NOT EXISTS (
+             SELECT 1
+             FROM "extension_byok_execution_intents" intent
+             WHERE intent."execution_batch_item_id" = item."id"
+           )
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM "extension_byok_execution_batch_items" item
+         JOIN "extension_byok_execution_intents" intent
+           ON intent."execution_batch_item_id" = item."id"
+         WHERE item."batch_id" = batch."id"
+           AND intent."outcome" NOT IN ('SUCCEEDED', 'FAILED_FINAL')
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM "extension_byok_execution_batch_items" item
+         JOIN "extension_byok_execution_intents" intent
+           ON intent."execution_batch_item_id" = item."id"
+         JOIN "extension_byok_media_provenance" provenance
+           ON provenance."execution_intent_id" = intent."id"
+         WHERE item."batch_id" = batch."id"
+       )
+     ORDER BY batch."id"
+     FOR UPDATE OF batch`,
+    input.batch.deviceSessionId,
+    input.batch.ownerUserId,
+    input.batch.actorUserId,
+    input.batch.shopId,
+    input.batch.listingWorkflowId,
+    input.batch.draftRevision,
+    input.batch.draftVersion,
+    input.batch.sourcePlatform,
+    input.batch.sourceProductId,
+    input.batch.sourceCaptureSnapshotId,
+    input.batch.supplyGoodsId,
+    slots,
+    ordinals,
+  ), 'releasable revoked-session batch');
+  if (candidates.length === 0) return;
+
+  const expectedCounts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const batchId = candidate.releasableBatchId;
+    const itemCount = candidate.itemCount;
+    if (typeof batchId !== 'string' || !batchId
+      || !Number.isSafeInteger(itemCount) || Number(itemCount) < 1
+      || expectedCounts.has(batchId)) {
+      throw new Error('Extension BYOK revoked-session batch recovery is invalid');
+    }
+    expectedCounts.set(batchId, Number(itemCount));
+  }
+  const batchIds = [...expectedCounts.keys()];
+  const released = rows(await tx.$queryRawUnsafe(
+    `UPDATE "extension_byok_execution_batch_items"
+     SET "status" = 'RELEASED', "released_at" = $2, "updated_at" = $2
+     WHERE "batch_id" = ANY($1::text[]) AND "status" = 'ACTIVE'
+     RETURNING "batch_id" AS "batchId", "id"`,
+    batchIds,
+    input.batch.createdAt,
+  ), 'revoked-session batch item release');
+  const releasedCounts = new Map<string, number>();
+  for (const item of released) {
+    if (typeof item.batchId !== 'string' || !expectedCounts.has(item.batchId)
+      || typeof item.id !== 'string' || !item.id) {
+      throw new Error('Extension BYOK revoked-session item release is invalid');
+    }
+    releasedCounts.set(item.batchId, (releasedCounts.get(item.batchId) || 0) + 1);
+  }
+  if ([...expectedCounts].some(([batchId, count]) => releasedCounts.get(batchId) !== count)) {
+    throw new Error('Extension BYOK revoked-session item release was incomplete');
+  }
+
+  const cancelled = rows(await tx.$queryRawUnsafe(
+    `UPDATE "extension_byok_execution_batches"
+     SET "status" = 'CANCELLED', "cancelled_at" = $2, "updated_at" = $2
+     WHERE "id" = ANY($1::text[]) AND "status" = 'OPEN'
+     RETURNING "id", "status", "cancelled_at" AS "cancelledAt"`,
+    batchIds,
+    input.batch.createdAt,
+  ), 'revoked-session batch cancellation');
+  if (cancelled.length !== batchIds.length
+    || cancelled.some((batch) => (
+      typeof batch.id !== 'string'
+      || !expectedCounts.has(batch.id)
+      || batch.status !== 'CANCELLED'
+      || nullableDate(batch.cancelledAt) === null
+    ))) {
+    throw new Error('Extension BYOK revoked-session batch cancellation was incomplete');
+  }
+}
+
 async function retainedAttemptCount(
   tx: ExtensionCommandTransactionClient,
   input: AuthorityContext,
@@ -722,6 +871,7 @@ async function claimBatchTransaction(
     if (replay.kind !== 'replayed') throw new BatchClaimRollback(replay);
     return replay;
   }
+  await releaseRevokedSameDeviceReservations(tx, input);
   if (await hasBlockingStandaloneIntent(tx, input)) {
     throw new BatchClaimRollback({ kind: 'reservation_conflict' });
   }

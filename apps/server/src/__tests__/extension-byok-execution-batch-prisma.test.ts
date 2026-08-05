@@ -146,6 +146,7 @@ function standardClaimDatabase(input: ExtensionByokExecutionBatchCreateRecord) {
     if (sql.includes('claim_extension_ai_image_execution_mode')) return [{ claimed: '' }];
     if (sql.includes('FROM "extension_byok_execution_batches"')
       && sql.includes('"idempotency_key" = $2')) return [];
+    if (sql.includes('AS "releasableBatchId"')) return [];
     if (sql.includes('AS "reserved"')) return [{ reserved: false }];
     if (sql.includes('COUNT(*)::INTEGER')) return [{ count: 0 }];
     if (sql.includes('INSERT INTO "extension_byok_execution_batches"')) return [input.batch];
@@ -282,6 +283,51 @@ describe('Prisma extension BYOK execution batch repository', () => {
     expect(db.query.mock.calls.map(sqlOf).join('\n')).not.toContain(
       'INSERT INTO "extension_byok_execution_batches"',
     );
+  });
+
+  it('releases only terminal orphan reservations from a revoked same-device session', async () => {
+    const input = createRecord();
+    const releasedBatch = batch({
+      id: 'orphan-batch',
+      itemCount: 1,
+      status: 'CANCELLED',
+      cancelledAt: NOW,
+    });
+    let itemIndex = 0;
+    let intentIndex = 0;
+    const db = database((sql) => {
+      if (sql.includes('AS "allowed"')) return [{ allowed: true, current: true }];
+      if (sql.includes('claim_extension_ai_image_execution_mode')) return [{ claimed: '' }];
+      if (sql.includes('FROM "extension_byok_execution_batches"')
+        && sql.includes('"idempotency_key" = $2')) return [];
+      if (sql.includes('AS "releasableBatchId"')) {
+        return [{ releasableBatchId: 'orphan-batch', itemCount: 1 }];
+      }
+      if (sql.includes('UPDATE "extension_byok_execution_batch_items"')
+        && sql.includes('ANY($1::text[])')) {
+        return [{ batchId: 'orphan-batch', id: 'orphan-item' }];
+      }
+      if (sql.includes('UPDATE "extension_byok_execution_batches"')
+        && sql.includes('ANY($1::text[])')) return [releasedBatch];
+      if (sql.includes('AS "reserved"')) return [{ reserved: false }];
+      if (sql.includes('COUNT(*)::INTEGER')) return [{ count: 0 }];
+      if (sql.includes('INSERT INTO "extension_byok_execution_batches"')) return [input.batch];
+      if (sql.includes('INSERT INTO "extension_byok_execution_batch_items"')) {
+        return [input.items[itemIndex++]];
+      }
+      if (sql.includes('INSERT INTO "extension_byok_execution_intents"')) {
+        return [input.intents[intentIndex++]];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+
+    await expect(createPrismaExtensionByokExecutionBatchRepository(db.client as never)
+      .claimBatch(input)).resolves.toMatchObject({ kind: 'created' });
+    const statements = db.query.mock.calls.map(sqlOf).join('\n');
+    expect(statements).toContain('previous_session."device_id" = current_session."device_id"');
+    expect(statements).toContain('previous_session."status" <> \'ACTIVE\'');
+    expect(statements).toContain("intent.\"outcome\" NOT IN ('SUCCEEDED', 'FAILED_FINAL')");
+    expect(statements).toContain('extension_byok_media_provenance');
   });
 
   it('classifies the Prisma raw-query 23505 column signature for a partial unique index', async () => {

@@ -36,6 +36,7 @@ function assertIsolatedSchema(urlText: string): string {
 interface BatchFixture {
   ownerUserId: string;
   deviceSessionId: string;
+  deviceId: string;
   shopId: string;
   listingWorkflowId: string;
   draftRevision: number;
@@ -56,6 +57,7 @@ async function seedFixture(client: PrismaClient, label: string): Promise<BatchFi
   const sourceCaptureSnapshotId = `${prefix}_snapshot`;
   const pairingCodeId = `${prefix}_pairing`;
   const deviceSessionId = `${prefix}_session`;
+  const deviceId = `${prefix}_device`;
   const now = new Date();
   const captureHash = digest(`${prefix}:capture`);
 
@@ -137,7 +139,7 @@ async function seedFixture(client: PrismaClient, label: string): Promise<BatchFi
     id: deviceSessionId,
     pairingCodeId,
     deploymentId: 'byok-batch-integration',
-    deviceId: `${prefix}_device`,
+    deviceId,
     actorUserId: ownerUserId,
     ownerUserId,
     scopes: ['byok:media:ingest'],
@@ -154,6 +156,7 @@ async function seedFixture(client: PrismaClient, label: string): Promise<BatchFi
   return {
     ownerUserId,
     deviceSessionId,
+    deviceId,
     shopId,
     listingWorkflowId: draft.id,
     draftRevision: draft.revision,
@@ -168,6 +171,7 @@ async function seedSecondDevice(
   client: PrismaClient,
   fixture: BatchFixture,
   label: string,
+  deviceId = `${fixture.ownerUserId}_${label}_device`,
 ): Promise<string> {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
   const pairingCodeId = `${fixture.ownerUserId}_${label}_${suffix}_pairing`;
@@ -189,7 +193,7 @@ async function seedSecondDevice(
     id: deviceSessionId,
     pairingCodeId,
     deploymentId: 'byok-batch-integration',
-    deviceId: `${deviceSessionId}_device`,
+    deviceId,
     actorUserId: fixture.ownerUserId,
     ownerUserId: fixture.ownerUserId,
     scopes: ['byok:media:ingest'],
@@ -431,6 +435,99 @@ describePostgres('extension BYOK execution batch PostgreSQL reservation', () => 
       },
       idempotencyKey: input.batch.idempotencyKey,
     })).resolves.toEqual({ kind: 'not_found' });
+  }, 30_000);
+
+  it('atomically replaces a terminal orphan reservation from a revoked same-device session', async () => {
+    const fixture = await seedFixture(first, 'revoked-same-device');
+    const orphan = batchInput(fixture, 'orphan');
+    const batchRepository = createPrismaExtensionByokExecutionBatchRepository(first as never);
+    const intentRepository = createPrismaExtensionByokExecutionIntentRepository(first as never);
+    await expect(batchRepository.claimBatch(orphan)).resolves.toMatchObject({ kind: 'created' });
+    const orphanIntent = orphan.intents[0]!;
+    await expect(intentRepository.recordOutcome({
+      identity: {
+        ownerUserId: fixture.ownerUserId,
+        actorUserId: fixture.ownerUserId,
+        deviceSessionId: fixture.deviceSessionId,
+      },
+      intentId: orphanIntent.id,
+      providerIdempotencyKey: orphanIntent.providerIdempotencyKey,
+      providerRequestHash: orphanIntent.providerRequestHash,
+      outcome: 'SUCCEEDED',
+      providerRequestIdSha256: null,
+      resultSha256: digest(`${orphanIntent.id}:result`),
+      outcomeUpdatedAt: new Date(),
+    })).resolves.toMatchObject({ kind: 'updated' });
+    await first.extensionDeviceSession.update({
+      where: { id: fixture.deviceSessionId },
+      data: { status: 'REVOKED', revokedAt: new Date(), revokedReason: 'PAIRING_APPROVED' },
+    });
+    const replacementSessionId = await seedSecondDevice(
+      first,
+      fixture,
+      'replacement',
+      fixture.deviceId,
+    );
+    const replacementFixture = { ...fixture, deviceSessionId: replacementSessionId };
+    const replacement = batchInput(replacementFixture, 'replacement');
+
+    await expect(batchRepository.claimBatch(replacement)).resolves.toMatchObject({
+      kind: 'created',
+      batch: { id: replacement.batch.id },
+    });
+    const stored = await first.$queryRawUnsafe<Array<{
+      batchStatus: string;
+      itemStatus: string;
+    }>>(
+      `SELECT batch."status" AS "batchStatus", item."status" AS "itemStatus"
+       FROM "extension_byok_execution_batches" batch
+       JOIN "extension_byok_execution_batch_items" item ON item."batch_id" = batch."id"
+       WHERE batch."id" = $1`,
+      orphan.batch.id,
+    );
+    expect(stored).toEqual([{ batchStatus: 'CANCELLED', itemStatus: 'RELEASED' }]);
+  }, 30_000);
+
+  it('keeps pending attempts fenced after a same-device session replacement', async () => {
+    const fixture = await seedFixture(first, 'revoked-same-device-pending');
+    const orphan = batchInput(fixture, 'orphan');
+    const batchRepository = createPrismaExtensionByokExecutionBatchRepository(first as never);
+    await expect(batchRepository.claimBatch(orphan)).resolves.toMatchObject({ kind: 'created' });
+    await first.extensionDeviceSession.update({
+      where: { id: fixture.deviceSessionId },
+      data: { status: 'REVOKED', revokedAt: new Date(), revokedReason: 'PAIRING_APPROVED' },
+    });
+    const replacementSessionId = await seedSecondDevice(
+      first,
+      fixture,
+      'replacement',
+      fixture.deviceId,
+    );
+    const replacement = batchInput(
+      { ...fixture, deviceSessionId: replacementSessionId },
+      'replacement',
+    );
+
+    await expect(batchRepository.claimBatch(replacement)).resolves.toEqual({
+      kind: 'reservation_conflict',
+    });
+  }, 30_000);
+
+  it('keeps revoked-session reservations fenced across different physical devices', async () => {
+    const fixture = await seedFixture(first, 'revoked-other-device');
+    const orphan = batchInput(fixture, 'orphan');
+    const batchRepository = createPrismaExtensionByokExecutionBatchRepository(first as never);
+    await expect(batchRepository.claimBatch(orphan)).resolves.toMatchObject({ kind: 'created' });
+    await first.extensionDeviceSession.update({
+      where: { id: fixture.deviceSessionId },
+      data: { status: 'REVOKED', revokedAt: new Date(), revokedReason: 'PAIRING_APPROVED' },
+    });
+    const replacementSessionId = await seedSecondDevice(first, fixture, 'other-device');
+    const replacement = batchInput({ ...fixture, deviceSessionId: replacementSessionId }, 'replacement');
+
+    await expect(batchRepository.claimBatch(replacement)).resolves.toEqual({
+      kind: 'reservation_conflict',
+    });
   }, 30_000);
 
   it('lets a standalone pre-dispatch claim block a later overlapping batch reservation', async () => {

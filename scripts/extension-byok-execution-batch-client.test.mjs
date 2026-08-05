@@ -411,6 +411,10 @@ test('looks up an ambiguous reservation by exact idempotency key and clears only
             body: { code: 0, errorCode: 'byok_execution_batch_not_found', msg: 'not found' },
           };
         }
+        if (mode === 'canonical-missing') return { state: 'not_found' };
+        if (mode === 'malformed-canonical-missing') {
+          return { state: 'not_found', privateDetail: 'must-not-be-trusted' };
+        }
         return { state: 'http_error', status: 404, body: { code: 0, error: 'route missing' } };
       },
     },
@@ -419,6 +423,13 @@ test('looks up an ambiguous reservation by exact idempotency key and clears only
   assert.equal((await client.statusByIdempotency({ idempotencyKey: key })).batchId, 'batch-1');
   mode = 'missing';
   assert.equal(await client.statusByIdempotency({ idempotencyKey: key }), null);
+  mode = 'canonical-missing';
+  assert.equal(await client.statusByIdempotency({ idempotencyKey: key }), null);
+  mode = 'malformed-canonical-missing';
+  await assert.rejects(
+    client.statusByIdempotency({ idempotencyKey: key }),
+    (error) => error?.code === 'SS_ERP_BYOK_EXECUTION_BATCH_UNAVAILABLE',
+  );
   mode = 'generic-404';
   await assert.rejects(
     client.statusByIdempotency({ idempotencyKey: key }),
