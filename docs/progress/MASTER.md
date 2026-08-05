@@ -44,7 +44,52 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-04): replacement release
+Current checkpoint (2026-08-05): replacement release
+`7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` completed the full replacement
+pre-release chain. Target-bound QA-04 acceptance SHA-256 is
+`224e3432ee481aceaea072b72c526201b93f1d0fab37efdc921790f2a27815f4`. Independent `.com`
+and `.cn` 190-file candidates passed detached-signature verification, signed MV3 restart smoke,
+and same-path upgrade smoke.
+
+The previous `.com` BINI scope was atomically returned to dark state before deployment; its
+state-change receipt SHA-256 is
+`e521117471428ff91b514c66421a592093d055b00beff1d843789dbc10768623`. Both regions then
+completed fresh commit/database/restore-bound backup drills, migration, service restart, complete
+runtime verification, and `7/7` dark canaries. Canary receipt SHA-256 values are
+`a51fc832b8d7031ba214f37b6324535f6aae497bc47ed1c39a36e8fa40f31892` for `.com` and
+`572b61487599d5334c20394b2c0f21d204273eaba1e99af181c314c06c258d42` for `.cn`; every
+pilot flag remains off. First-party website distribution and offline signature verification passed
+with receipt SHA-256 values
+`5b104d2616eead3176d07aa7aab1a14f8cee5e1953439388e1d5378859d84dda` and
+`95ad8b0297b4f8570f17505c77895993cb2844d3506890be183db879dab1983d` respectively.
+
+BINI upgraded atomically on its original managed path from `1.0.282` to `1.0.283` under unchanged
+extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Its installed tree SHA-256 is
+`fbdc9edce1f2549151af39ff1b5ae5619ad6d224afc03c385ca16f4666c765ab`; upgrade receipt
+SHA-256 is `868c403ed64b5a6603bf5b4ab0b9f77e98244f875263ef4baedb4acd94525bee`. The
+non-secret Provider profile was preserved, while session Key, capability evidence, dispatch/vault
+state, and device-session access remained absent. A trusted `chrome://extensions` reload recorded
+`event.isTrusted=true`, changed the service-worker target, and proved the old target gone; receipt
+SHA-256 is `8e43a9c0740e45266e85f590d8fa58448703cf5a23b32a0477cf1385b1661719`.
+
+The read-only main-script attestor then matched active and disk worker SHA-256
+`ac1f6b60d1d9902c3456828952a873f9d1b93bf96af5a67204f06cbeced04857` at `279765`
+bytes and independently observed runtime manifest `1.0.283`; attestation receipt SHA-256 is
+`c5d82bdacffb46440ef88c4f5430115b4c80a3a85fb45cbe628fd7577b2119a8`. The isolated live
+Worker Unicode slot smoke passed with receipt SHA-256
+`f0ec879fba1827c28cc0ec59153394ea56239cd8ca850f8916e63549da3435f7`. Final replacement
+release reconciliation SHA-256 is
+`88a4adecb1b3bb83a2291604b40d129733a46f5861d28bd4f9caa2656d6c71f1`.
+
+This replacement chain made zero Provider POSTs, incurred zero Provider cost, and made no ERP
+media ingest, ERP publish, or Ozon write. It intentionally changed the old scoped rollout rows to
+dark state, and all flags remain off. `REL-03` and `REL-04` remain complete; Phase 6 stays `2/3`,
+overall progress stays `36/37`, and only `REL-02` is open. The `1.0.282` two-POST authorization is
+exhausted and does not carry forward. BINI session-only state is cleared, so the next pilot attempt
+requires a freshly loaded Key plus a new exact owner/shop/device-scoped Provider POST count and
+single/cumulative cost ceiling before any Provider request.
+
+Historical checkpoint (2026-08-04): replacement release
 `49ae41e337f2857cecece4a173f0c8a661c536cd` / `1.0.281` completed the authorized REL-02
 pre-release chain. Its target-bound QA-04 acceptance SHA-256 is
 `8d069c4926edac9756e343c08ed3255c19713c9a9c974f112a38ff9dc6d8f8df`. Independent `.com`
@@ -1255,14 +1300,16 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    `198.18.0.29`.
 7. Keep all earlier release candidates, signatures, failed deployment receipts, POST 5/POST 6
    original receipts, append-only reconciliations, and consumed Provider operations immutable as
-   historical evidence. The authorized `49ae41e3` / `1.0.281` pre-release chain is complete, but all
-   pilot flags remain off and it added no Provider authorization. All prior `6/6` Provider POSTs are
-   consumed; the current authorization permits no further Provider POST or retry. The unrecoverable
-   POST 6 candidate must not be ingested. The next action is the separately authorized `REL-02`
-   sandbox/one-shop pilot. Any new paid validation requires a new exact POST count and cost ceiling
-   and must not auto-retry. Only after it yields a reviewable candidate and human approval may
-   separately authorized positive BYOK ingest, independent kill-switch checks, one-shop Ozon
-   publish, post-enable canary, reconciliation, and rollback resume.
+   historical evidence. The `7202b597` / `1.0.283` replacement release chain is complete with all
+   pilot flags off and no new Provider authorization. The old `1.0.282` two-POST scope and every
+   earlier Provider allowance are consumed and do not carry forward; no Provider POST or retry is
+   currently authorized. The unrecoverable historical POST 6 candidate must not be ingested. First
+   reopen BINI `1.0.283` and load the Key into its fresh session, then obtain a new exact
+   owner/shop/device-scoped POST count, single-request ceiling, and cumulative cost ceiling. Only
+   after the separately authorized probe/formal generation yields a reviewable candidate and human
+   approval may separately authorized positive BYOK ingest, independent kill-switch checks,
+   one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No Provider POST
+   may auto-retry.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 

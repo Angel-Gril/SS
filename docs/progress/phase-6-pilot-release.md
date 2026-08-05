@@ -28,6 +28,30 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Replacement release `7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` passed
+  target-bound QA-04, regional package/signature checks, signed MV3 restart and same-path upgrade
+  smokes. QA-04 acceptance SHA-256 is
+  `224e3432ee481aceaea072b72c526201b93f1d0fab37efdc921790f2a27815f4`.
+- The old `.com` BINI scope was atomically darkened first; receipt SHA-256 is
+  `e521117471428ff91b514c66421a592093d055b00beff1d843789dbc10768623`. Both regions then
+  passed fresh backup/restore, migration, restart, runtime verification, and `7/7` dark canaries.
+  Canary SHA-256 values are `a51fc832b8d7031ba214f37b6324535f6aae497bc47ed1c39a36e8fa40f31892`
+  for `.com` and `572b61487599d5334c20394b2c0f21d204273eaba1e99af181c314c06c258d42` for `.cn`.
+- First-party website distribution passed with `.com`/`.cn` receipt SHA-256 values
+  `5b104d2616eead3176d07aa7aab1a14f8cee5e1953439388e1d5378859d84dda` and
+  `95ad8b0297b4f8570f17505c77895993cb2844d3506890be183db879dab1983d`. BINI upgraded on its
+  original path to `1.0.283`; installed tree and upgrade-receipt SHA-256 values are
+  `fbdc9edce1f2549151af39ff1b5ae5619ad6d224afc03c385ca16f4666c765ab` and
+  `868c403ed64b5a6603bf5b4ab0b9f77e98244f875263ef4baedb4acd94525bee`.
+- Trusted reload, active/disk Worker identity with runtime manifest `1.0.283`, and the live Unicode
+  slot smoke passed. Their receipt SHA-256 values are
+  `8e43a9c0740e45266e85f590d8fa58448703cf5a23b32a0477cf1385b1661719`,
+  `c5d82bdacffb46440ef88c4f5430115b4c80a3a85fb45cbe628fd7577b2119a8`, and
+  `f0ec879fba1827c28cc0ec59153394ea56239cd8ca850f8916e63549da3435f7`. Final replacement
+  reconciliation SHA-256 is `88a4adecb1b3bb83a2291604b40d129733a46f5861d28bd4f9caa2656d6c71f1`.
+- The replacement chain made zero Provider POSTs/cost, ERP ingest/publish, or Ozon writes. All
+  flags remain off. `REL-02` remains open at `36/37`; the exhausted `1.0.282` authorization does not
+  carry forward. A fresh BINI Key session and new exact scoped POST/cost authorization are required.
 - The 2026-08-04 `1.0.282` BINI scoped sandbox pilot consumed its separately authorized two
   Provider POSTs exactly once: capability probe then formal `TEXT_TO_IMAGE`. The formal execution
   succeeded and produced candidate SHA-256
