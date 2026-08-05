@@ -44,6 +44,48 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-05): the separately authorized `1.0.285` `.com`/BINI scoped
+sandbox pilot passed the exact owner/shop/device rollout verifier and sent one successful
+`TEXT_TO_IMAGE` capability POST to `https://ai.big-model-api.top/v1/images/generations`.
+The Provider returned HTTP 200, capability evidence was persisted for the exact profile/model/
+operation, and capability result receipt SHA-256 is
+`a8c2c3735cf73ea8eb093768c436594eedc46fb21f3bdf94edce2e5e8fe76872`.
+
+The trusted formal-generation action sent zero Provider POSTs. Its ERP execution-batch claim
+returned HTTP 409 with an exact 120-byte response, which maps to
+`byok_execution_batch_reservation_conflict`; the subsequent exact idempotency lookup returned the
+canonical `{ state: "not_found" }`, proving that no new batch or intent was created. Read-only
+production database evidence bound the conflict to OPEN batch SHA-256
+`f26d89f7cbf332c1f1199a404ead4fb3e6d19783ed2e0955fddf42ee221fcaf4` from a revoked prior
+session on the same physical device. Its only attempt is `SUCCEEDED`, has a result hash, and has no
+ERP provenance; the unrecoverable `1.0.283` local candidate therefore still held the exact hero-slot
+reservation. The current client also accepted only the older structured HTTP 404 form and
+misclassified the device transport's canonical `not_found` state as reconciliation unavailable.
+
+Fix commit `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` accepts only the exact canonical
+`not_found` lookup shape and atomically releases an overlapping old reservation only when owner,
+actor, deployment, physical device, shop, workflow, draft, source product/snapshot/supply context,
+slot and ordinal all match; the prior session must be revoked or expired, every old attempt must be
+`SUCCEEDED` or `FAILED_FINAL`, no provenance may exist, and all item/batch counts must remain exact.
+Pending or unknown attempts, different devices, different source contexts, provenance, malformed
+responses and concurrent state changes remain fail-closed.
+
+Focused client and Server suites passed `9/9` and `95/95`; the isolated PostgreSQL AI-media gate
+replayed all 142 migrations and passed all 99 tests plus the populated-upgrade gate. The complete
+Server suite passed 4,781 tests with 203 platform skips. Workspace lint/typecheck passed with only
+the existing 21 warnings. Final `pnpm preflight` passed in `611.3s` with 450 extension checks, zero
+failures and the two existing local-package permission warnings.
+
+All six scoped rollout rows were returned to default dark state by exact revision/value CAS and the
+official off verifier passed. Dark-disable receipt SHA-256 is
+`8953a69c4c59ada7f897847443e49a9875e96ab8c71136e1c5f47ed4228805e5`. The pilot consumed
+exactly one of its two numerical Provider POST slots; the formal action and rollback sent none, and
+the unused numerical slot is closed and cannot be reused. No ERP ingest/publish or Ozon write
+occurred. `REL-02` remains open, Phase 6 remains `2/3`, and overall progress remains `36/37`.
+The next external step is a separately authorized dark replacement release for commit `0cd3761a`
+as extension version `1.0.286`; only after that release, BINI upgrade and fresh scoped pilot
+authorization may Provider testing resume.
+
 Current checkpoint (2026-08-05): replacement release
 `a0e47316f9a4664b0105b5feced11140cb700c7b` / `1.0.285` completed the authorized dark
 pre-release chain. Target-bound QA-04 passed all nine gates in `821.9s`; canonical acceptance
@@ -1443,6 +1485,14 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 `32/37`; `QA-04`, `REL-03`, `REL-04`, and `REL-02` remain blocked on complete positive `QA-02`.
 
 ## Next Steps
+
+Immediate next step: build, sign, distribute and dark-deploy commit
+`0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` as extension `1.0.286`, including target-bound QA-04,
+signed-package MV3 restart smoke, both regional backup/restore/migration/canary chains, website
+download receipts and the BINI same-path upgrade. Keep every pilot flag off and make no Provider,
+ingest, publish or Ozon call during that replacement release. A later live pilot requires a fresh
+Key session plus a new exact POST count and single/cumulative cost authorization; no `1.0.285`
+authorization carries forward.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

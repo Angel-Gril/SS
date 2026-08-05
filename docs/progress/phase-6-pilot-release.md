@@ -28,6 +28,26 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The separately authorized `1.0.285` `.com`/BINI pilot sent one successful capability POST and
+  persisted exact `TEXT_TO_IMAGE` evidence; result receipt SHA-256 is
+  `a8c2c3735cf73ea8eb093768c436594eedc46fb21f3bdf94edce2e5e8fe76872`. The trusted formal
+  action sent zero Provider POSTs because ERP batch claim failed first with HTTP 409 and a 120-byte
+  `byok_execution_batch_reservation_conflict` body. Exact lookup returned canonical `not_found`, and
+  read-only production evidence identified an OPEN terminal batch from the revoked `1.0.283`
+  session on the same physical device, with no provenance, still reserving the exact hero slot.
+- Fix commit `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` recognizes only the exact canonical lookup
+  miss and releases a revoked/expired same-device terminal orphan atomically with a new claim. It
+  requires exact owner/actor/deployment/device/shop/workflow/draft/source/slot/ordinal identity and
+  rejects pending, unknown, different-device, provenance-bearing, malformed or raced state.
+  Focused tests passed `9/9` and `95/95`; the 142-migration PostgreSQL gate passed `99/99` plus
+  populated-upgrade checks; Server passed 4,781 tests; lint/typecheck passed with the 21 existing
+  warnings; final preflight passed in `611.3s` with 450 checks and the two existing package warnings.
+- Exact CAS returned all six rollout rows to default dark state and the official off verifier
+  passed. Dark-disable receipt SHA-256 is
+  `8953a69c4c59ada7f897847443e49a9875e96ab8c71136e1c5f47ed4228805e5`. The pilot consumed
+  one Provider POST; formal generation and rollback sent none. The unused numerical authorization
+  is closed. No ERP ingest/publish or Ozon write occurred. `REL-02` remains open at `36/37`; next is
+  a separately authorized `0cd3761a` / `1.0.286` dark replacement release before any fresh pilot.
 - Replacement release `a0e47316f9a4664b0105b5feced11140cb700c7b` / `1.0.285` passed
   target-bound QA-04, regional package/sign verification, signed MV3 restart smoke, and both
   `1.0.284 -> 1.0.285` upgrade smokes. QA-04 acceptance SHA-256 is
