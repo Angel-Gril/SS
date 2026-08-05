@@ -28,6 +28,36 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The live `1.0.283` `.com` BINI scoped sandbox pilot consumed its separate `2/2` Provider POST
+  authorization exactly once per action: one capability probe and one formal `TEXT_TO_IMAGE`
+  generation, with no automatic retry. The formal status-v2 record reached `SUCCEEDED`; its
+  1,804,392-byte PNG SHA-256 is
+  `82b77095a9674d7d960d2fc59ce855c527fbea4c000f597dbc431c9d995b07bd`, and the workbench
+  screenshot SHA-256 is `8319769612dbe0f43fb71062cbd07bbec4a349621b14af71d0a1f6918460820d`.
+  A trusted keep action committed local `KEPT` review state while ingest remained `NOT_STARTED`.
+- A real MV3 worker stop/wake then reset the memory-only device-authority epoch to `0`. Exact
+  lifecycle validation rejected the encrypted candidate and finalized the batch as
+  `FAILED_FINAL / SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST`, with ingest error
+  `SS_ERP_BYOK_BATCH_WORKER_RESTART_UNRESOLVED`. The escrow TTL later expired; the result is not
+  recoverable and must never be ingested. Append-only private reconciliation SHA-256 is
+  `34f2464c9b73601e488a5d4ba16e237501619b97b07d85bfcd15e1bbfd921307`.
+- Fix commit `4632a9e17f9617ec6bd0e979d491324734677467` persists the epoch in
+  `chrome.storage.session`, serializes cross-worker updates with Web Locks, preserves fail-closed
+  invalidation and stale-epoch rejection, and adds real Worker A -> Worker B review-only recovery
+  coverage with zero Provider dispatch. Focused contracts passed `81/81`; full `pnpm preflight`
+  passed in `642.1s`; source extension verification passed `450` checks with zero failures and the
+  two existing warnings. Two independent reviews found no blocker. The fix is pushed but not yet
+  built, signed, distributed, deployed, or live-validated.
+- After authorization exhaustion, the six scoped rollout rows were atomically returned to dark and
+  the official verifier passed. Dark-disable and verifier receipt SHA-256 values are
+  `01db8e79942c23938fdcdd93cbace37f920bfeb3d4ce34c3fa9c4b0d71dc2edb` and
+  `971a64e3fec064aa5227f36fdb03aa01a9cac00fd0ffa0192756318d502b700f`. BINI session Key,
+  origin permission, and capability evidence were cleared; cleanup receipt SHA-256 is
+  `b0a664622c91cd0031ed53843c8d93e543972ba1baf5c6046e5e3ea3b2c13cd4`. No Provider request
+  followed the formal generation, actual Provider cost was not observed, and no ERP ingest,
+  publish, or Ozon write occurred. `REL-02` remains open at `36/37`; the next dependency-ready
+  action is a separately authorized dark `1.0.284` replacement pre-release, followed later by a
+  separately authorized fresh scoped live pilot.
 - Replacement release `7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` passed
   target-bound QA-04, regional package/signature checks, signed MV3 restart and same-path upgrade
   smokes. QA-04 acceptance SHA-256 is

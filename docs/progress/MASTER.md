@@ -44,7 +44,45 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-05): replacement release
+Current checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
+its separately authorized two Provider POSTs exactly once: one `TEXT_TO_IMAGE` capability probe
+and one formal generation, with no automatic retry. The formal status-v2 record reached
+`SUCCEEDED`; its 1,804,392-byte PNG result SHA-256 is
+`82b77095a9674d7d960d2fc59ce855c527fbea4c000f597dbc431c9d995b07bd`. Workbench screenshot
+SHA-256 is `8319769612dbe0f43fb71062cbd07bbec4a349621b14af71d0a1f6918460820d`.
+A trusted `保留此图` action committed local `KEPT` review state while ingest remained
+`NOT_STARTED`.
+
+An actual MV3 worker stop/wake then exposed that `1.0.283` kept the device-authority epoch only in
+worker memory. The new worker reset its epoch to `0`, so exact lifecycle-authority validation
+rejected the still-encrypted candidate and finalized the local batch as
+`FAILED_FINAL / SS_ERP_BYOK_BATCH_LOCAL_RESULT_LOST`; ingest finalized as
+`SS_ERP_BYOK_BATCH_WORKER_RESTART_UNRESOLVED`. The ten-minute escrow TTL later expired, so the
+original result is not recoverable and must never be ingested. Append-only private reconciliation
+SHA-256 is `34f2464c9b73601e488a5d4ba16e237501619b97b07d85bfcd15e1bbfd921307`.
+
+Fix commit `4632a9e17f9617ec6bd0e979d491324734677467` persists the lifecycle epoch in
+`chrome.storage.session`, serializes cross-worker read/modify/write with Web Locks, retains
+fail-closed pending invalidation, and proves Worker A epoch `1` -> Worker B epoch `1` review-only
+restore without Provider dispatch while stale epochs remain rejected. The combined focused
+contracts passed `81/81`; full `pnpm preflight` passed in `642.1s`; source extension verification
+passed `450` checks with zero failures and the two existing local-package permission warnings.
+Independent compatibility and security reviews found no blocking issue. The fix is pushed but is
+not built, signed, distributed, deployed, or live-validated yet.
+
+After the `2/2` authorization was exhausted, all six `.com` BINI rollout rows were atomically
+returned to dark state and the official dark verifier passed. Dark-disable and verification receipt
+SHA-256 values are `01db8e79942c23938fdcdd93cbace37f920bfeb3d4ce34c3fa9c4b0d71dc2edb` and
+`971a64e3fec064aa5227f36fdb03aa01a9cac00fd0ffa0192756318d502b700f`. The BINI session Key,
+exact Provider-origin permission, and capability evidence were then cleared; cleanup receipt
+SHA-256 is `b0a664622c91cd0031ed53843c8d93e543972ba1baf5c6046e5e3ea3b2c13cd4`. No Provider
+request followed the formal generation, actual Provider cost was not observed, and no ERP ingest,
+ERP publish, or Ozon write occurred. `REL-02` remains open, Phase 6 remains `2/3`, and overall
+progress remains `36/37`. The next dependency-ready action is a separately authorized `1.0.284`
+replacement pre-release from the fix commit with every pilot flag kept off; only after BINI upgrade
+and active-worker attestation may a fresh scoped live-pilot authorization be considered.
+
+Historical checkpoint (2026-08-05): replacement release
 `7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` completed the full replacement
 pre-release chain. Target-bound QA-04 acceptance SHA-256 is
 `224e3432ee481aceaea072b72c526201b93f1d0fab37efdc921790f2a27815f4`. Independent `.com`
@@ -1298,18 +1336,21 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    policy, Operation ID, approval, and reconciliation; otherwise use a different Provider. Keep the
    public DNS pins `104.21.13.92` and `172.67.167.234`; never weaken the guard to accept proxy fake-IP
    `198.18.0.29`.
-7. Keep all earlier release candidates, signatures, failed deployment receipts, POST 5/POST 6
-   original receipts, append-only reconciliations, and consumed Provider operations immutable as
-   historical evidence. The `7202b597` / `1.0.283` replacement release chain is complete with all
-   pilot flags off and no new Provider authorization. The old `1.0.282` two-POST scope and every
-   earlier Provider allowance are consumed and do not carry forward; no Provider POST or retry is
-   currently authorized. The unrecoverable historical POST 6 candidate must not be ingested. First
-   reopen BINI `1.0.283` and load the Key into its fresh session, then obtain a new exact
-   owner/shop/device-scoped POST count, single-request ceiling, and cumulative cost ceiling. Only
-   after the separately authorized probe/formal generation yields a reviewable candidate and human
-   approval may separately authorized positive BYOK ingest, independent kill-switch checks,
-   one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No Provider POST
-   may auto-retry.
+7. Keep all earlier release candidates, signatures, failed deployment receipts, Provider results,
+   append-only reconciliations, and consumed operations immutable as historical evidence. The
+   `1.0.283` BINI authorization is exhausted at `2/2`, every earlier Provider allowance is also
+   consumed, and no Provider POST or retry is currently authorized. Its encrypted formal candidate
+   expired after the worker-restart authority mismatch and must never be ingested. All pilot flags
+   are dark; the BINI session Key and Provider-origin permission are cleared. First run a separately
+   authorized `1.0.284` replacement pre-release from
+   `4632a9e17f9617ec6bd0e979d491324734677467`: full QA-04, regional package/sign, signed MV3
+   restart smoke, dark dual-region deployment/download receipts, BINI same-path upgrade, reload,
+   and active-worker attestation, with no Provider call. Only then may a fresh Key session and new
+   exact owner/shop/device-scoped POST count, single-request ceiling, and cumulative cost ceiling be
+   authorized. After that separately authorized probe/formal generation yields a restart-surviving,
+   reviewable candidate may separately authorized positive BYOK ingest, independent kill-switch
+   checks, one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No
+   Provider POST may auto-retry.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
