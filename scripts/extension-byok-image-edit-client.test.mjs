@@ -273,6 +273,7 @@ function loadClient(options = {}) {
   assert.ok(context.SS_ERP_BYOK_IMAGE_EDIT_ADAPTERS, 'image-edit-adapters global is missing');
   assert.ok(context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT, 'image-edit-client global is missing');
   assert.equal(typeof context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT.createClient, 'function');
+  assert.equal(context.SS_ERP_BYOK_IMAGE_EDIT_CLIENT.LIMITS.providerTimeoutMs, 240_000);
 
   const selectedProfile = options.profile || profile();
   const selectedProfileIdentity = context.SS_ERP_BYOK_PROFILE_SCHEMA.profileIdentity(selectedProfile);

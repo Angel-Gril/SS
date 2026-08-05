@@ -22,7 +22,8 @@
   var MAX_PREPARED_REQUEST_COUNT = 16;
   var MAX_CONSUMED_PREPARED_HANDLE_COUNT = 100;
   var MAX_CONCURRENCY = 1;
-  var DEFAULT_TIMEOUT_MS = 120000;
+  // Leave time for outcome persistence below Chrome MV3's five-minute event ceiling.
+  var DEFAULT_TIMEOUT_MS = 240000;
   var CAPABILITY_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
   var READINESS_KEYS = [
     'contractVersion',

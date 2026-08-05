@@ -61,7 +61,7 @@ export const AI_IMAGE_WORKBENCH_LIMITS = Object.freeze({
   maxPromptCharacters: 8000,
   maxNegativePromptCharacters: 4000,
   maxConcurrency: 4,
-  providerTimeoutMs: 120_000,
+  providerTimeoutMs: 240_000,
 } as const);
 
 export const AI_IMAGE_WORKBENCH_UNKNOWN_OUTCOME_POLICY = Object.freeze({

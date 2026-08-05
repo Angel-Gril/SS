@@ -24,7 +24,8 @@
   var MAX_OPERATION_COUNT = 100;
   var MAX_PREPARED_REQUEST_COUNT = 16;
   var MAX_CONSUMED_PREPARED_HANDLE_COUNT = 100;
-  var DEFAULT_TIMEOUT_MS = 120000;
+  // Leave time for outcome persistence below Chrome MV3's five-minute event ceiling.
+  var DEFAULT_TIMEOUT_MS = 240000;
   var DEFAULT_POLL_INTERVAL_MS = 1000;
   var CAPABILITY_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
   var READINESS_KEYS = [
@@ -1783,6 +1784,7 @@
     CONTRACT_VERSION: CONTRACT_VERSION,
     PREPARED_REQUEST_CONTRACT_VERSION: PREPARED_REQUEST_CONTRACT_VERSION,
     EDIT_OPERATIONS: EDIT_OPERATIONS,
+    LIMITS: Object.freeze({ providerTimeoutMs: DEFAULT_TIMEOUT_MS }),
     createClient: createClient,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

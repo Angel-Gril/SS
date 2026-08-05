@@ -4,7 +4,7 @@
   var CONTRACT_VERSION = 'extension-byok-provider-settings-client/v1';
   var DEVICE_SESSION_INVALIDATED_MESSAGE = 'ss-erp:byok-device-session-invalidated';
   var DEFAULT_TIMEOUT_MS = 15 * 1000;
-  var CAPABILITY_TIMEOUT_MS = 135 * 1000;
+  var CAPABILITY_TIMEOUT_MS = 315 * 1000;
   var MAX_PREPARED_PERMISSIONS = 64;
   var MESSAGE_TYPES = Object.freeze({
     GET_SETUP_CONTEXT: 'ss-erp:byok-provider-setup-context',

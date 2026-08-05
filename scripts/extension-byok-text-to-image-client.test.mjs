@@ -1729,6 +1729,7 @@ test('keeps the initial BYOK runtime at one active Provider request', async () =
     },
   });
   assert.equal(api.LIMITS.maxConcurrency, 1);
+  assert.equal(api.LIMITS.providerTimeoutMs, 240_000);
   const first = client.generate(request({ idempotencyKey: 'concurrency-1' }));
   await new Promise((resolve) => setTimeout(resolve, 25));
   await assert.rejects(

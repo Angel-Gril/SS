@@ -142,7 +142,7 @@ describe('AI image workbench v1 contract', () => {
       maxPromptCharacters: 8000,
       maxNegativePromptCharacters: 4000,
       maxConcurrency: 4,
-      providerTimeoutMs: 120_000,
+      providerTimeoutMs: 240_000,
     });
   });
 

@@ -595,9 +595,27 @@ const editEpochGuard = {
     return { clearedCount: 1 };
   },
 };
+let providerSemaphoreBusy = false;
 const providerSemaphore = {
   async acquire(value) {
     calls.push(['provider-semaphore-acquire', value]);
+    let released = false;
+    return Object.freeze({
+      release() {
+        if (released) return false;
+        released = true;
+        calls.push(['provider-semaphore-release', value.ownerToken]);
+        return true;
+      },
+    });
+  },
+  async tryAcquire(value) {
+    calls.push(['provider-semaphore-try-acquire', value]);
+    if (providerSemaphoreBusy) {
+      throw Object.assign(new Error('interactive Provider capacity is busy'), {
+        code: 'SS_ERP_BYOK_PROVIDER_EXECUTION_BUSY',
+      });
+    }
     let released = false;
     return Object.freeze({
       release() {
@@ -845,6 +863,22 @@ assert.deepEqual(JSON.parse(JSON.stringify(readinessCall)), {
   supplyGoodsId: 'goods-1', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
   assignmentMode: 'APPEND', assignmentOrdinal: 2, operation: 'TEXT_TO_IMAGE',
 });
+
+providerSemaphoreBusy = true;
+const generateCallsBeforeBusy = calls.filter((row) => row[0] === 'generate').length;
+const busyProvider = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
+  payload: {
+    profileId: 'profile-1', prompt: 'Do not queue this interactive request',
+    negativePrompt: null, size: '1024x1024', idempotencyKey: 'generate-busy-1',
+  },
+  sender,
+  authorization: authorizationFor(),
+});
+assert.equal(busyProvider.ok, false);
+assert.equal(busyProvider.errorCode, 'SS_ERP_BYOK_PROVIDER_EXECUTION_BUSY');
+assert.equal(calls.filter((row) => row[0] === 'generate').length, generateCallsBeforeBusy);
+assert.equal(session.operation, null);
+providerSemaphoreBusy = false;
 
 const executeResponse = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
   payload: {

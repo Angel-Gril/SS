@@ -390,6 +390,32 @@ function loadClientWithRuntime(runtimeValue, timers) {
   });
 }
 
+const providerTimers = [];
+const providerClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage() {},
+}, {
+  setTimeout(callback, delay) {
+    providerTimers.push({ callback, delay });
+    return providerTimers.length;
+  },
+  clearTimeout() {},
+});
+const timedOutGeneration = providerClient.generate({
+  profileId: 'profile-1', prompt: 'Create a clean product hero image', negativePrompt: null,
+  size: '1024x1024', idempotencyKey: 'workbench-generate-timeout-0001', readiness,
+});
+assert.equal(
+  providerTimers[0].delay,
+  315_000,
+  'generation runtime messaging must outlive the 240-second background Provider deadline',
+);
+providerTimers[0].callback();
+await assert.rejects(
+  timedOutGeneration,
+  (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME',
+);
+
 const recoveryTimers = [];
 const recoveryClient = loadClientWithRuntime({
   lastError: null,
@@ -407,6 +433,25 @@ recoveryTimers[0].callback();
 await assert.rejects(
   timedOutRecovery,
   (error) => error && error.code === 'SS_ERP_BYOK_INGEST_UNKNOWN_OUTCOME',
+);
+
+const publishTimers = [];
+const publishClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage() {},
+}, {
+  setTimeout(callback, delay) {
+    publishTimers.push({ callback, delay });
+    return publishTimers.length;
+  },
+  clearTimeout() {},
+});
+const timedOutPublish = publishClient.confirmPublish('9'.repeat(64));
+assert.equal(publishTimers[0].delay, 130_000, 'publish retains its existing timeout');
+publishTimers[0].callback();
+await assert.rejects(
+  timedOutPublish,
+  (error) => error && error.code === 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME',
 );
 
 const lastErrorRuntime = {

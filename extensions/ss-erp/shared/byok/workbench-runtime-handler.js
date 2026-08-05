@@ -303,7 +303,7 @@
     var clearEditEpoch = requiredMethod(config.editEpochGuard, 'clear');
     var clearEditEpochByTab = requiredMethod(config.editEpochGuard, 'clearByTab');
     var acknowledgeEditEpoch = requiredMethod(config.editEpochGuard, 'acknowledge');
-    var acquireProviderLease = requiredMethod(config.providerSemaphore, 'acquire');
+    var acquireProviderLease = requiredMethod(config.providerSemaphore, 'tryAcquire');
     var cancelProviderOwner = requiredMethod(config.providerSemaphore, 'cancelOwner');
     var now = typeof config.now === 'function' ? config.now : function () { return new Date(); };
     var randomValues = typeof config.randomValues === 'function'

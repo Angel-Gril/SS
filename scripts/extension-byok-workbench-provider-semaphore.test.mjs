@@ -50,7 +50,10 @@ test('bounds pending work per device and exposes no mutable scheduler state', as
   const semaphore = api.createSemaphore({
     now: () => new Date('2026-07-27T10:00:00.000Z'),
   });
-  assert.deepEqual(Object.keys(semaphore).sort(), ['acquire', 'cancelOwner', 'invalidateAll']);
+  assert.deepEqual(
+    Object.keys(semaphore).sort(),
+    ['acquire', 'cancelOwner', 'invalidateAll', 'tryAcquire'],
+  );
   const active = await semaphore.acquire(authority({ ownerToken: 'bounded-active' }));
   const queued = Array.from({ length: 32 }, (_, index) => semaphore.acquire(authority({
     ownerToken: `bounded-${index}`,
@@ -62,6 +65,21 @@ test('bounds pending work per device and exposes no mutable scheduler state', as
   semaphore.invalidateAll();
   await Promise.allSettled(queued);
   active.release();
+});
+
+test('interactive acquisition fails before dispatch instead of waiting behind active work', async () => {
+  const api = loadApi();
+  const semaphore = api.createSemaphore({
+    now: () => new Date('2026-07-27T10:00:00.000Z'),
+  });
+  const active = await semaphore.acquire(authority({ ownerToken: 'active-owner' }));
+  await assert.rejects(
+    semaphore.tryAcquire(authority({ ownerToken: 'interactive-owner' })),
+    (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_EXECUTION_BUSY',
+  );
+  active.release();
+  const interactive = await semaphore.tryAcquire(authority({ ownerToken: 'interactive-owner' }));
+  assert.equal(interactive.release(), true);
 });
 
 test('bounds pending work globally without blocking independent immediate capacity', async () => {

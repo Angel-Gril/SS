@@ -139,7 +139,7 @@
       cleanupPool(pool);
     }
 
-    async function acquire(value) {
+    async function acquireWithQueue(value, allowQueue) {
       var authority = normalizeAuthority(value);
       if (authority.expiresAt <= currentMillis()) {
         throw semaphoreError('SS_ERP_BYOK_PROVIDER_EXECUTION_AUTHORITY_EXPIRED');
@@ -183,6 +183,9 @@
         throw semaphoreError('SS_ERP_BYOK_PROVIDER_EXECUTION_OWNER_BUSY');
       }
       var mustQueue = pool.active.size >= pool.maxConcurrency || pool.queue.length > 0;
+      if (mustQueue && !allowQueue) {
+        throw semaphoreError('SS_ERP_BYOK_PROVIDER_EXECUTION_BUSY');
+      }
       if (mustQueue && (pool.queue.length >= MAX_PENDING_PER_DEVICE
         || pendingCount() >= MAX_PENDING_TOTAL)) {
         throw semaphoreError('SS_ERP_BYOK_PROVIDER_EXECUTION_QUEUE_FULL');
@@ -196,6 +199,14 @@
         pool.queue.push(entry);
         pump(pool);
       });
+    }
+
+    function acquire(value) {
+      return acquireWithQueue(value, true);
+    }
+
+    function tryAcquire(value) {
+      return acquireWithQueue(value, false);
     }
 
     function cancelOwner(ownerTokenValue) {
@@ -231,6 +242,7 @@
 
     return Object.freeze({
       acquire: acquire,
+      tryAcquire: tryAcquire,
       cancelOwner: cancelOwner,
       invalidateAll: invalidateAll,
     });

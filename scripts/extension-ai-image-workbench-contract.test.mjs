@@ -114,7 +114,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(contract.LIMITS)), {
   maxPromptCharacters: 8000,
   maxNegativePromptCharacters: 4000,
   maxConcurrency: 4,
-  providerTimeoutMs: 120_000,
+  providerTimeoutMs: 240_000,
 });
 assert.equal(contract.resolveProviderOutcome({
   requestDispatched: false, responseReceived: false, definiteFailure: false,

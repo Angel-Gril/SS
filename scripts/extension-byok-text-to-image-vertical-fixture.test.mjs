@@ -840,8 +840,8 @@ const editEpochGuard = {
 };
 const providerSemaphoreCalls = [];
 const providerSemaphore = {
-  async acquire(value) {
-    providerSemaphoreCalls.push(['acquire', plain(value)]);
+  async tryAcquire(value) {
+    providerSemaphoreCalls.push(['tryAcquire', plain(value)]);
     assert.equal(value.ownerUserId, binding.ownerUserId);
     assert.equal(value.deviceSessionId, binding.deviceSessionId);
     assert.equal(value.policyRevision, binding.policyRevision);
@@ -945,7 +945,7 @@ assert.equal(generated.ok, true);
 assert.match(generated.data.resultId, /^br_[a-f0-9]{48}$/u);
 assert.equal(generated.data.reviewState, 'CANDIDATE_READY');
 assert.equal(providerCalls.length, 1);
-assert.deepEqual(providerSemaphoreCalls.map((row) => row[0]), ['acquire', 'release']);
+assert.deepEqual(providerSemaphoreCalls.map((row) => row[0]), ['tryAcquire', 'release']);
 
 const previewed = await runtime(MESSAGE_TYPES.OPEN_PREVIEW, {
   resultId: generated.data.resultId,

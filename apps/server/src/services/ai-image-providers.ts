@@ -95,7 +95,7 @@ export interface AiImageConnectionResult {
   detail: string;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = AI_IMAGE_WORKBENCH_LIMITS.providerTimeoutMs;
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_JSON_BYTES = 32 * 1024 * 1024;

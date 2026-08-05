@@ -151,9 +151,10 @@ test('keeps capability runtime messaging alive beyond the background Provider de
     readiness: readiness(),
   });
   assert.equal(delays[0], 15_000);
-  assert.ok(
-    delays[1] > 120_000,
-    'capability messaging must not time out while the 120-second Provider request is still running',
+  assert.equal(
+    delays[1],
+    315_000,
+    'capability messaging must outlive the 240-second background Provider deadline',
   );
 });
 
@@ -173,7 +174,7 @@ test('locks an uncertain capability probe instead of retrying it with a fresh id
     idempotencyKey: 'probe-uncertain-1',
     readiness: readiness(),
   });
-  assert.equal(timers[0].delay, 135_000);
+  assert.equal(timers[0].delay, 315_000);
   timers[0].callback();
   await assert.rejects(
     pending,

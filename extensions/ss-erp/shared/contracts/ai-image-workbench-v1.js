@@ -23,7 +23,7 @@
     maxPromptCharacters: 8000,
     maxNegativePromptCharacters: 4000,
     maxConcurrency: 4,
-    providerTimeoutMs: 120000,
+    providerTimeoutMs: 240000,
   });
   var UNKNOWN_OUTCOME_POLICY = Object.freeze({
     automaticRetryAllowed: false,
