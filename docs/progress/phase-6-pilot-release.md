@@ -28,7 +28,39 @@ Progress: 2/3 tasks.
 
 ## Notes
 
-- Replacement release `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` passed
+- Replacement release `a0e47316f9a4664b0105b5feced11140cb700c7b` / `1.0.285` passed
+  target-bound QA-04, regional package/sign verification, signed MV3 restart smoke, and both
+  `1.0.284 -> 1.0.285` upgrade smokes. QA-04 acceptance SHA-256 is
+  `8eeffce5c70d73ba56bdcbb809746ba94568df0c283dee048eb308dce1b16027`; signed restart
+  receipt SHA-256 values are `ca9c8b4c687bbe141b0abc63db5fa1affeed96fc3d69bbcf11d3da2e91758a56`
+  for `.com` and `e46625a929bd4188a6c7e61cfdb3248d666b18839c363850ad93964de8473300`
+  for `.cn`.
+- Both regions completed fresh backup/restore validation, migration, service restart, full runtime
+  verification, final dark checks, and `7/7` pre-enable canaries. Canary SHA-256 values are
+  `10768ce83d4d35185737219a24910cc24497620397323ab1c04b756fd475ea34` for `.com` and
+  `5854148eda0099eb0814a0d563ea6d405f081549462f7218428d71789d3430d8` for `.cn`.
+  Temporary auth sessions were logged out/deleted, all pilot flags remain off, and the only retained
+  operations warning is that remote backup is not configured.
+- Fresh two-VPS DNS quorum evidence SHA-256 is
+  `b527a646f88afc44420423c9ed919bd60387383c1f32d741239a186859a56bb7`. First-party website
+  distribution and offline verification passed with receipt SHA-256
+  `2e899f09b2ab54802b7e14bedba040f439f98fa119ad1f6f7795db7a75e7eabd` for `.com` and
+  `f8b21598dd5773cdf8e2a58f923183445d76e0dda51d48c75f0bfdafd7e32edd` for `.cn`.
+- BINI upgraded atomically on its original managed path to `1.0.285` under unchanged extension ID
+  `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Installed tree and upgrade receipt SHA-256 values are
+  `dd2013195eb2163a920df3ad21ae96f671131508e55a0a30915f4c57afc4a395` and
+  `c505982cebcaf56012253d523415063a8fb46c5c2eac01315e718d61d622a239`. Trusted reload,
+  active/disk Worker identity at runtime manifest `1.0.285`, and Unicode slot smoke passed; their
+  receipt SHA-256 values are `35354fd647e4353c73f12ffab11146a19d1a5343321aed351531f147240620d5`,
+  `04fe4e442f9e2a1e2edf1f5c9b856136d9748db43c128acf674f44f1db460988`, and
+  `92046e18d341dc6e9a072de50b8cc4d83e02490abc9ea15914ed2db14219acc8`.
+  Final replacement reconciliation SHA-256 is
+  `745c81f6c6d37dab5a00614944a88d6fabeb9eee231cc98cd261d5046ce1ef7c`.
+- The `1.0.285` replacement chain made zero Provider POSTs/cost, ERP ingest/publish, or Ozon writes.
+  `REL-03` and `REL-04` remain complete; `REL-02` remains open at `36/37`. BINI is idle with its Key
+  and session-only state cleared. A new exact scoped POST/cost authorization and fresh Key session
+  are required before the next pilot request; no earlier authorization carries forward.
+- Historical replacement release `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` passed
   target-bound QA-04, regional package/sign verification, signed MV3 restart smoke, and both
   `1.0.283 -> 1.0.284` upgrade smokes. QA-04 acceptance SHA-256 is
   `de3082ab834d43d7241e1b19fc62db7c139fef0128e80b5aa4254742d0e24f37`; signed restart
@@ -87,9 +119,9 @@ Progress: 2/3 tasks.
   channels a 315-second outer window, and makes interactive generation fail before dispatch when
   semaphore capacity is busy. Edit and batch queues remain unchanged. Focused suites, two
   independent reviews, final `pnpm preflight` (`640s`) and full lint passed; only the 20 existing
-  lint warnings remain. No Provider, VPS, ERP or Ozon action occurred. The pushed fix now requires
-  a separately authorized `1.0.285` build/sign/distribution/dark-deploy/BINI upgrade before any new
-  scoped pilot authorization.
+  lint warnings remain. No Provider, VPS, ERP or Ozon action occurred. The fix is included in the
+  completed `a0e47316` / `1.0.285` replacement release above; a fresh scoped pilot still requires
+  separate POST/cost authorization.
 - The live `1.0.283` `.com` BINI scoped sandbox pilot consumed its separate `2/2` Provider POST
   authorization exactly once per action: one capability probe and one formal `TEXT_TO_IMAGE`
   generation, with no automatic retry. The formal status-v2 record reached `SUCCEEDED`; its

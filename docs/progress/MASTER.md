@@ -45,6 +45,60 @@ Overall: 36/37 tasks complete (97%).
 ## Current Status
 
 Current checkpoint (2026-08-05): replacement release
+`a0e47316f9a4664b0105b5feced11140cb700c7b` / `1.0.285` completed the authorized dark
+pre-release chain. Target-bound QA-04 passed all nine gates in `821.9s`; canonical acceptance
+SHA-256 is `8eeffce5c70d73ba56bdcbb809746ba94568df0c283dee048eb308dce1b16027`.
+Independent `.com` and `.cn` 190-file candidates passed detached Ed25519 verification, signed MV3
+restart smoke, and `1.0.284 -> 1.0.285` upgrade smoke. Signed restart receipt SHA-256 values are
+`ca9c8b4c687bbe141b0abc63db5fa1affeed96fc3d69bbcf11d3da2e91758a56` and
+`e46625a929bd4188a6c7e61cfdb3248d666b18839c363850ad93964de8473300`.
+
+Both regions completed fresh target/database/restore-bound backup validation, migration, service
+restart, topology-correct runtime verification, final dark verification, and `7/7` pre-enable
+canaries. Canary receipt SHA-256 values are
+`10768ce83d4d35185737219a24910cc24497620397323ab1c04b756fd475ea34` for `.com` and
+`5854148eda0099eb0814a0d563ea6d405f081549462f7218428d71789d3430d8` for `.cn`.
+Temporary owner/admin sessions were logged out and deleted. Both receipts prove zero Provider
+dispatch, ERP ingest, and Ozon mutation; every AI Media, Extension BYOK, ingest, publish, and Ozon
+publisher flag remains off. The only deployment warning is unchanged: each latest backup is valid
+but retained on its VPS because remote backup is not configured.
+
+Fresh two-VPS public DNS quorum rejected the local proxy fake-IP and pinned only agreed public
+address sets; quorum evidence SHA-256 is
+`b527a646f88afc44420423c9ed919bd60387383c1f32d741239a186859a56bb7`. First-party website
+latest/Cloud/Local GET probes and offline publication verification passed in both regions.
+Distribution receipt SHA-256 values are
+`2e899f09b2ab54802b7e14bedba040f439f98fa119ad1f6f7795db7a75e7eabd` for `.com` and
+`f8b21598dd5773cdf8e2a58f923183445d76e0dda51d48c75f0bfdafd7e32edd` for `.cn`.
+
+BINI upgraded atomically on its original managed path from `1.0.284` to `1.0.285` under unchanged
+extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Its 190 installed files match tree SHA-256
+`dd2013195eb2163a920df3ad21ae96f671131508e55a0a30915f4c57afc4a395`; upgrade receipt
+SHA-256 is `c505982cebcaf56012253d523415063a8fb46c5c2eac01315e718d61d622a239`.
+The first pre-switch snapshot correctly failed closed on browser session residue without changing
+the managed tree; a controlled offline snapshot cleared the stale MV3 session state, and the only
+atomic switch then passed while preserving the non-secret Provider profile.
+
+A trusted `chrome://extensions` reload recorded `event.isTrusted=true`, replaced the Worker target,
+and proved the old target gone; reload receipt SHA-256 is
+`35354fd647e4353c73f12ffab11146a19d1a5343321aed351531f147240620d5`. The read-only
+attestor matched active and disk Worker SHA-256
+`c9a70e7eff1a9dedc991105864ff9771bc19978e3e181582da0ad9c4aa9f5aa6` at `279878` bytes and
+observed runtime manifest `1.0.285`; attestation SHA-256 is
+`04fe4e442f9e2a1e2edf1f5c9b856136d9748db43c128acf674f44f1db460988`. The live Unicode
+slot smoke passed with receipt SHA-256
+`92046e18d341dc6e9a072de50b8cc4d83e02490abc9ea15914ed2db14219acc8`. Final replacement
+release reconciliation SHA-256 is
+`745c81f6c6d37dab5a00614944a88d6fabeb9eee231cc98cd261d5046ce1ef7c`.
+
+The complete `1.0.285` replacement chain made zero Provider POSTs/cost, changed no pilot flag,
+and performed no ERP ingest/publish or Ozon write. BINI is idle with session Key and session-only
+state cleared. `REL-03` and `REL-04` remain complete; Phase 6 remains `2/3`, overall progress
+remains `36/37`, and only `REL-02` is open. The next external action requires a fresh BINI Key
+session plus a separately authorized exact owner/shop/device Provider POST count and single/cumulative
+cost ceiling; no earlier pilot authorization carries forward.
+
+Historical checkpoint (2026-08-05): replacement release
 `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` completed the authorized dark
 pre-release chain. Target-bound QA-04 passed all nine gates in `809.5s`; canonical acceptance
 SHA-256 is `de3082ab834d43d7241e1b19fc62db7c139fef0128e80b5aa4254742d0e24f37`.
@@ -137,9 +191,9 @@ uses immediate semaphore acquisition and fails before execution-intent claim or 
 when capacity is busy; edit and batch scheduling retain their existing queues. Focused Provider,
 semaphore, runtime, edit, and Server tests passed, two independent reviews found no remaining
 issue, final `pnpm preflight` passed in `640s`, and full lint passed with the 20 existing warnings.
-The fix is pushed but not packaged, deployed, or loaded into BINI. The next external action is a
-separately authorized `1.0.285` replacement release with every pilot flag kept off; only after that
-release may a new exact scoped POST/cost authorization be considered.
+The fix is included in the completed `a0e47316` / `1.0.285` replacement release above. The next
+external action is a separately authorized fresh scoped pilot with a new Key session and exact
+Provider POST/cost limits.
 
 Historical checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
 its separately authorized two Provider POSTs exactly once: one `TEXT_TO_IMAGE` capability probe
