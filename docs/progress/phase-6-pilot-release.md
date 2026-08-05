@@ -64,16 +64,32 @@ Progress: 2/3 tasks.
   official `sandbox-pilot` verifier at composite revision `955791647`. POST 1 sent exactly one T2I
   capability request, but no HTTP status arrived before the 120-second deadline; Chromium reported
   `net::ERR_ABORTED` and the extension persisted `UNKNOWN_OUTCOME` with the original request and
-  credential authority bound against replay. Actual Provider cost is unobserved and must be treated
-  as a possible charge up to the authorized ceiling. POST 2 formal generation was not executed.
+  credential authority bound against replay. A later authenticated GET-only reconciliation made no
+  Provider POST and found exactly one matching consume entry: `quota=5950`, `useTime=134s`, model
+  `gpt-image-2-count`, and path `/v1/images/generations`. Current public status reports CNY display
+  and `quota_per_unit=500000`, so the unique log entry represents exact `CNY 0.0119`. This is not a
+  paired-meter finalizer because the attempt has no request-bound pre-call snapshot, and the log
+  contains no image response or result identity; capability evidence remains zero. GET manifest
+  and final reconciliation receipt SHA-256 values are
+  `aa881a30d604144cca933f72917536de77c310fdb2c42fa09d1e4eae232bc3d5` and
+  `126c19e3dd458694219eb3f6eb032c46517aeac1c35a6f9f7b537c32bb94b6d9`. POST 2 formal
+  generation was not executed.
   Result and dark-disable receipt SHA-256 values are
   `7fcb726c563e69ec1e478624093c8817c64df04f693769929d7da61c5352838a` and
   `ddf898d58118efa1e9be12d7fe832d865b3b0c0668580cc679b5fa8b292464d0`.
   All scoped rows are dark again, the owner token was revoked/deleted, and the temporary human
   challenge override was restored. The stable device session, session Key, exact Chrome permission,
   and one uncertain-probe guard remain; ingest, publish and Ozon writes stayed at zero. Do not retry
-  or rename the request. `REL-02` remains open at `36/37` pending Provider-side resolution or a
-  materially different Provider contract/credential revision and new exact authorization.
+  or rename the request. The accounting outcome is `CHARGED_RESPONSE_UNOBSERVED`, not positive
+  capability evidence. `REL-02` remains open at `36/37`.
+- Fix commit `bcb3e4e4e8ef7a6aaf28e74a058b2a90b59479a1` binds the Hosted default and BYOK maximum
+  to a shared 240-second deadline below the MV3 event ceiling, gives capability/single-generation UI
+  channels a 315-second outer window, and makes interactive generation fail before dispatch when
+  semaphore capacity is busy. Edit and batch queues remain unchanged. Focused suites, two
+  independent reviews, final `pnpm preflight` (`640s`) and full lint passed; only the 20 existing
+  lint warnings remain. No Provider, VPS, ERP or Ozon action occurred. The pushed fix now requires
+  a separately authorized `1.0.285` build/sign/distribution/dark-deploy/BINI upgrade before any new
+  scoped pilot authorization.
 - The live `1.0.283` `.com` BINI scoped sandbox pilot consumed its separate `2/2` Provider POST
   authorization exactly once per action: one capability probe and one formal `TEXT_TO_IMAGE`
   generation, with no automatic retry. The formal status-v2 record reached `SUCCEEDED`; its

@@ -103,9 +103,21 @@ Authorized POST 1 sent exactly one `TEXT_TO_IMAGE` capability request to
 Chromium ended the request with `net::ERR_ABORTED`, and the extension finalized it as
 `UNKNOWN_OUTCOME` with automatic retry disabled. The persistent uncertain-probe guard binds the
 original request hash, credential revision, profile, operation, request mode, and policy revision.
-Actual Provider cost is not observed and must be treated as a possible charge up to the authorized
-single/cumulative ceiling. POST 2 formal generation was therefore not executed. Result and
-dark-disable receipt SHA-256 values are `7fcb726c563e69ec1e478624093c8817c64df04f693769929d7da61c5352838a` and
+A later authenticated GET-only reconciliation sent zero Provider POSTs and retained all three HTTP
+200 responses under manifest SHA-256
+`aa881a30d604144cca933f72917536de77c310fdb2c42fa09d1e4eae232bc3d5`. The bounded target
+window contains exactly one consume entry for `gpt-image-2-count` and
+`/v1/images/generations`: `quota=5950`, `useTime=134s`, created at
+`2026-08-05T09:01:27.000Z`. Current public status independently reports CNY display with
+`quota_per_unit=500000`, so the unique log entry represents exact charge
+`5950 / 500000 = CNY 0.0119`, within both approved ceilings. This is a log-bound reconciliation,
+not the paired before/after meter finalizer, because this attempt has no request-bound pre-call
+meter snapshot. It proves gateway acceptance and billing, not a valid image response: the extension
+received no HTTP status, image bytes, URL, MIME, dimensions, or hash, and capability evidence
+remains zero. Private reconciliation receipt SHA-256 is
+`126c19e3dd458694219eb3f6eb032c46517aeac1c35a6f9f7b537c32bb94b6d9`. POST 2 formal
+generation was therefore not executed. Result and dark-disable receipt SHA-256 values are
+`7fcb726c563e69ec1e478624093c8817c64df04f693769929d7da61c5352838a` and
 `ddf898d58118efa1e9be12d7fe832d865b3b0c0668580cc679b5fa8b292464d0`.
 
 All six scoped rows are dark again, the short-lived owner token was revoked and deleted, and the
@@ -113,8 +125,21 @@ temporary human-challenge override was restored. The stable BINI device session,
 exact-origin Chrome permission, and one `UNKNOWN_OUTCOME` anti-replay record remain. No ERP ingest,
 publish, or Ozon write occurred. `REL-03` and `REL-04` remain complete; Phase 6 remains `2/3`,
 overall progress remains `36/37`, and only `REL-02` is open. Do not retry or replace the unknown
-probe with a new ID. Resume only after Provider-side lookup resolves the original request, or after
-a materially different Provider contract/credential revision receives a new exact authorization.
+probe with a new ID. The accounting side is now resolved as `CHARGED_RESPONSE_UNOBSERVED`, but the
+Provider exposes no request-result lookup that could recover and validate the image; the original
+anti-replay guard therefore remains authoritative.
+
+Fix commit `bcb3e4e4e8ef7a6aaf28e74a058b2a90b59479a1` increases the shared Hosted default and
+BYOK maximum Provider deadline from 120 to 240 seconds, leaving 60 seconds beneath the Chrome MV3
+five-minute event ceiling for result staging, intent reporting, or `UNKNOWN_OUTCOME` persistence.
+Settings and the single-generation workbench keep a 315-second outer response window. Interactive generation now
+uses immediate semaphore acquisition and fails before execution-intent claim or Provider dispatch
+when capacity is busy; edit and batch scheduling retain their existing queues. Focused Provider,
+semaphore, runtime, edit, and Server tests passed, two independent reviews found no remaining
+issue, final `pnpm preflight` passed in `640s`, and full lint passed with the 20 existing warnings.
+The fix is pushed but not packaged, deployed, or loaded into BINI. The next external action is a
+separately authorized `1.0.285` replacement release with every pilot flag kept off; only after that
+release may a new exact scoped POST/cost authorization be considered.
 
 Historical checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
 its separately authorized two Provider POSTs exactly once: one `TEXT_TO_IMAGE` capability probe
@@ -1413,16 +1438,16 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    append-only reconciliations, and consumed operations immutable as historical evidence. The
    `1.0.283` BINI authorization is exhausted at `2/2`; its expired encrypted candidate must never be
    ingested. The separately authorized `1.0.284` probe consumed POST 1 exactly once but received no
-   HTTP status before timeout and is now persistently `UNKNOWN_OUTCOME`; its cost is unobserved and
-   must be treated as a possible charge. Never retry it, substitute a new ID, clear its anti-replay
+   HTTP status before timeout and is now persistently `UNKNOWN_OUTCOME`. GET-only reconciliation
+   uniquely proves it was charged `CNY 0.0119` after 134 seconds, but provides no recoverable image
+   response or capability evidence. Never retry it, substitute a new ID, clear its anti-replay
    guard, or use the unused numerical allowance for formal generation.
    All pilot rows are dark, while the stable BINI device session, session Key, exact Provider-origin
-   permission, and uncertain-probe record remain. Provider-side lookup must first resolve the
-   original request; absent that, another paid attempt requires a materially different Provider
-   contract or credential revision plus a new exact POST/cost authorization. Only a successful new
-   probe and restart-surviving reviewable candidate may unblock separately authorized ingest,
+   permission, and uncertain-probe record remain. Build/sign/deploy the pushed `bcb3e4e4` timeout
+   fix as a new dark replacement before requesting any new paid authorization. Only a separately
+   authorized successful new probe and restart-surviving reviewable candidate may unblock ingest,
    kill-switch checks, one-shop Ozon publish, reconciliation, and rollback. No Provider POST may
-   auto-retry.
+   auto-retry or wait behind another interactive request.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
