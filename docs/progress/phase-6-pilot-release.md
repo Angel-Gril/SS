@@ -28,6 +28,29 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-06): the authorized replacement release
+  `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` / `1.0.286` completed target-bound QA-04,
+  independent `.com`/`.cn` Cloud/Local package and signature verification, signed MV3 restart
+  smoke, and both `1.0.285 -> 1.0.286` upgrade smokes. Corrected QA-04 acceptance SHA-256 is
+  `755c1569d60409a84dfc4ad98a69f7ea158d05113994792c457fb69763c29a34`; signed restart receipt
+  SHAs are `d062be30a7bc8a97347565c85e42efbcd3f44709f573366c9e01f5c97b34660f` and
+  `42682d81da3fc7fdf3f88cb69397e98c5345241e4288c8c7383337e3b9ff27ee`.
+- Both VPS regions completed target-bound backup/restore, migration, restart, runtime and final
+  dark verification, and `7/7` canaries. First-party website Cloud/Local GET publication and
+  two-VPS DNS quorum passed. The only retained operations warning is missing remote backup; all
+  pilot flags remain off.
+- BINI upgraded atomically on the original managed path from `1.0.285` to `1.0.286` under the
+  unchanged extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Installed tree SHA-256 is
+  `6924a1d3c53b43c892ef65e358760afd511cf40298062ba45fe1da302ba59318`; trusted reload, active
+  Worker attestation, Unicode smoke, and final read-only runtime storage snapshot passed. The
+  final snapshot has one non-secret profile and no session Key, capability evidence, provider
+  dispatch, batch recovery or device access. Private replacement receipt SHA-256 is
+  `e66502c9eb856625e00496d611d2a70bf4bcec6f8e9ea773e4dcddc974c5701d`.
+- The replacement chain made zero Provider POSTs/cost, ERP ingest/publish, or Ozon writes.
+  `REL-02` remains open at `36/37`; the next live pilot requires a fresh BINI Key session and a
+  separately authorized exact owner/shop/device POST count and single/cumulative cost ceiling.
+  No prior pilot authorization carries forward.
+
 - The separately authorized `1.0.285` `.com`/BINI pilot sent one successful capability POST and
   persisted exact `TEXT_TO_IMAGE` evidence; result receipt SHA-256 is
   `a8c2c3735cf73ea8eb093768c436594eedc46fb21f3bdf94edce2e5e8fe76872`. The trusted formal

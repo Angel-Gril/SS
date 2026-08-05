@@ -44,6 +44,39 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the authorized replacement release
+`0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` / `1.0.286` completed the full dark pre-release
+chain. The corrected canonical QA-04 acceptance is bound by SHA-256
+`755c1569d60409a84dfc4ad98a69f7ea158d05113994792c457fb69763c29a34`; the aggregate log is
+`b694576cb4663a88f62592c903d70cd87c9a9e597c93c7c0772ddccc66acc6c1`. Independent `.com` and
+`.cn` 190-file Cloud/Local candidates passed release evidence, Ed25519 signature verification,
+signed MV3 restart smoke, and upgrade smoke. The signed restart receipt SHAs are
+`d062be30a7bc8a97347565c85e42efbcd3f44709f573366c9e01f5c97b34660f` and
+`42682d81da3fc7fdf3f88cb69397e98c5345241e4288c8c7383337e3b9ff27ee`.
+
+Both VPS regions now serve the exact target commit in dark mode. Target-bound backup/restore,
+migration, restart, runtime verification, final dark checks, and `7/7` canaries passed; the
+only retained operations warning is that remote backup is not configured, so the latest valid
+backup remains on each VPS. First-party website Cloud/Local GET publication receipts and the
+two-VPS DNS quorum passed. No pilot flag was enabled.
+
+BINI upgraded atomically on its original managed path from `1.0.285` to `1.0.286` under the
+unchanged extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. The installed 190-file tree SHA-256 is
+`6924a1d3c53b43c892ef65e358760afd511cf40298062ba45fe1da302ba59318`; trusted reload, active
+Worker attestation, and live Unicode smoke passed with receipt SHAs
+`85296d1115ff068710b88b40ca3c5dbf873396b4557c8b8ac795c8ac04de6a7b`,
+`f24dcd4725f72df13abfc6bb409959dc10820f6029d18ff997a3522c80f37eea`, and
+`a877fca90b927ed17f8d0990627ebe82d8c9b8a66ead4b0c86b1cc53c61e00ae`. A final read-only runtime
+snapshot found one non-secret profile and no session Key, capability evidence, provider dispatch,
+batch recovery, device access, or secret leak. The private replacement receipt is
+`e66502c9eb856625e00496d611d2a70bf4bcec6f8e9ea773e4dcddc974c5701d`.
+
+This release made zero Provider POSTs/cost, ERP ingest/publish, or Ozon writes. `REL-03` and
+`REL-04` remain complete; Phase 6 remains `2/3`, overall progress remains `36/37`, and only
+`REL-02` is open. The next external action requires a fresh BINI Key session and a new exact
+owner/shop/device scoped Provider POST count plus single/cumulative cost ceiling; no earlier
+pilot authorization carries forward.
+
 Current checkpoint (2026-08-05): the separately authorized `1.0.285` `.com`/BINI scoped
 sandbox pilot passed the exact owner/shop/device rollout verifier and sent one successful
 `TEXT_TO_IMAGE` capability POST to `https://ai.big-model-api.top/v1/images/generations`.
