@@ -18,7 +18,35 @@ function loadLifecycle() {
   return context.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE;
 }
 
-function createFixture() {
+function createSessionStorage(initial = {}) {
+  const values = structuredClone(initial);
+  return {
+    async get(keys) {
+      const result = {};
+      for (const key of keys) {
+        if (Object.hasOwn(values, key)) result[key] = structuredClone(values[key]);
+      }
+      return result;
+    },
+    async set(patch) { Object.assign(values, structuredClone(patch)); },
+    snapshot() { return structuredClone(values); },
+  };
+}
+
+function createLockManager() {
+  const tails = new Map();
+  return {
+    request(name, operation) {
+      const next = (tails.get(name) || Promise.resolve())
+        .catch(() => {})
+        .then(operation);
+      tails.set(name, next.catch(() => {}));
+      return next;
+    },
+  };
+}
+
+function createFixture(options = {}) {
   const calls = [];
   let clearIfCurrentResult = true;
   const credentials = {
@@ -36,6 +64,8 @@ function createFixture() {
   };
   const lifecycle = loadLifecycle().createLifecycle({
     credentials,
+    sessionStorage: options.sessionStorage || createSessionStorage(),
+    lockManager: options.lockManager || createLockManager(),
     async clearByokState(input) { calls.push(['clearByokState', input.reason]); },
   });
   return {
@@ -52,6 +82,114 @@ test('clears BYOK session authority before every new device claim', async () => 
     ['clearByokState', 'device_claim'],
     ['claim', { code: 'pairing-code' }],
   ]);
+});
+
+test('restores the claimed lifecycle epoch across MV3 worker instances', async () => {
+  const sessionStorage = createSessionStorage();
+  const lockManager = createLockManager();
+  const workerA = createFixture({ sessionStorage, lockManager });
+  await workerA.lifecycle.claim({ code: 'pairing-code' });
+  const claimedAuthority = await workerA.lifecycle.captureAuthority();
+  assert.equal(claimedAuthority.epoch, 1);
+
+  const workerB = createFixture({ sessionStorage, lockManager });
+  const restoredAuthority = await workerB.lifecycle.captureAuthority();
+  assert.equal(restoredAuthority.contractVersion, claimedAuthority.contractVersion);
+  assert.equal(restoredAuthority.epoch, claimedAuthority.epoch);
+  assert.equal(await workerB.lifecycle.isAuthorityCurrent(claimedAuthority), true);
+
+  await workerB.lifecycle.clear();
+  assert.equal(await workerB.lifecycle.isAuthorityCurrent(claimedAuthority), false);
+  assert.equal((await workerB.lifecycle.captureAuthority()).epoch, 2);
+});
+
+test('serializes durable epoch increments across concurrent worker instances', async () => {
+  const sessionStorage = createSessionStorage();
+  const lockManager = createLockManager();
+  const workerA = createFixture({ sessionStorage, lockManager });
+  const workerB = createFixture({ sessionStorage, lockManager });
+  await Promise.all([
+    workerA.lifecycle.claim({ code: 'worker-a-claim' }),
+    workerB.lifecycle.claim({ code: 'worker-b-claim' }),
+  ]);
+  assert.equal((await workerA.lifecycle.captureAuthority()).epoch, 2);
+  assert.equal((await workerB.lifecycle.captureAuthority()).epoch, 2);
+});
+
+test('fails closed when the persisted lifecycle epoch is unavailable', async () => {
+  const fixture = createFixture({
+    sessionStorage: {
+      async get() { throw new Error('session storage unavailable'); },
+      async set() { throw new Error('session storage unavailable'); },
+    },
+  });
+  await assert.rejects(
+    fixture.lifecycle.captureAuthority(),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_LIFECYCLE_AUTHORITY_UNAVAILABLE',
+  );
+  await assert.rejects(
+    fixture.lifecycle.claim({ code: 'must-not-claim' }),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_LIFECYCLE_AUTHORITY_UNAVAILABLE',
+  );
+  assert.equal(fixture.calls.some((call) => call[0] === 'claim'), false);
+});
+
+test('cleans old BYOK state but never claims when the epoch write fails', async () => {
+  const fixture = createFixture({
+    sessionStorage: {
+      async get() { return {}; },
+      async set() { throw new Error('session storage write unavailable'); },
+    },
+  });
+  await assert.rejects(
+    fixture.lifecycle.claim({ code: 'must-not-claim' }),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_LIFECYCLE_AUTHORITY_UNAVAILABLE',
+  );
+  assert.deepEqual(fixture.calls, [['clearByokState', 'device_claim']]);
+});
+
+test('fails closed when the cross-worker authority lock is unavailable', async () => {
+  const fixture = createFixture({
+    lockManager: {
+      async request() { throw new Error('lock unavailable'); },
+    },
+  });
+  await assert.rejects(
+    fixture.lifecycle.captureAuthority(),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_LIFECYCLE_AUTHORITY_UNAVAILABLE',
+  );
+});
+
+test('does not invalidate current authority while a stale clearIfCurrent resolves false', async () => {
+  let resolveClear;
+  let clearStarted;
+  const inClear = new Promise((resolve) => { clearStarted = resolve; });
+  const credentials = {
+    async claim() {},
+    async clear() {},
+    async clearIfCurrent() {
+      clearStarted();
+      return new Promise((resolve) => { resolveClear = resolve; });
+    },
+    async getAccessToken() {},
+    async getStatus() { return { state: 'paired' }; },
+    async getConnection() {},
+    async beginOperation() {},
+    async isOperationCurrent() { return true; },
+  };
+  const lifecycle = loadLifecycle().createLifecycle({
+    credentials,
+    sessionStorage: createSessionStorage(),
+    lockManager: createLockManager(),
+    async clearByokState() {},
+  });
+  const authority = await lifecycle.captureAuthority();
+  const clearing = lifecycle.clearIfCurrent({ epoch: 7 }, { status: 401 });
+  await inClear;
+  assert.equal(await lifecycle.isAuthorityCurrent(authority), true);
+  resolveClear(false);
+  assert.equal(await clearing, false);
+  assert.equal(await lifecycle.isAuthorityCurrent(authority), true);
 });
 
 test('clears BYOK state for explicit disconnect and live revocation only when authority changed', async () => {
@@ -89,6 +227,8 @@ test('attempts BYOK cleanup even when credential clear fails', async () => {
   };
   const lifecycle = loadLifecycle().createLifecycle({
     credentials,
+    sessionStorage: createSessionStorage(),
+    lockManager: createLockManager(),
     async clearByokState() { calls.push('clearByokState'); },
   });
   await assert.rejects(lifecycle.clear(), /credential clear failed/u);
@@ -109,6 +249,8 @@ test('fails a new claim closed when old BYOK session cleanup fails', async () =>
   };
   const lifecycle = loadLifecycle().createLifecycle({
     credentials,
+    sessionStorage: createSessionStorage(),
+    lockManager: createLockManager(),
     async clearByokState(input) {
       calls.push(['clearByokState', input.reason]);
       throw new Error('old BYOK state was not cleared');
@@ -139,25 +281,27 @@ test('detects credential revocation performed inside beginOperation and invalida
   };
   const lifecycle = loadLifecycle().createLifecycle({
     credentials,
+    sessionStorage: createSessionStorage(),
+    lockManager: createLockManager(),
     async clearByokState(input) { calls.push(input.reason); },
   });
-  const captured = lifecycle.captureAuthority();
+  const captured = await lifecycle.captureAuthority();
   await assert.rejects(lifecycle.beginOperation(), /refresh credential revoked/u);
   assert.deepEqual(calls, ['device_authority_revoked']);
-  assert.equal(lifecycle.isAuthorityCurrent(captured), false);
+  assert.equal(await lifecycle.isAuthorityCurrent(captured), false);
 });
 
 test('drops a Provider result when device authority changes while generation is running', async () => {
   let epoch = 4;
   let paired = true;
   const credentials = {
-    captureAuthority() {
+    async captureAuthority() {
       return {
         contractVersion: 'extension-byok-device-session-lifecycle/v1',
         epoch,
       };
     },
-    isAuthorityCurrent(snapshot) { return snapshot && snapshot.epoch === epoch; },
+    async isAuthorityCurrent(snapshot) { return snapshot && snapshot.epoch === epoch; },
     async getStatus() {
       return paired
         ? { state: 'paired', ownerUserId: 'owner-1', sessionId: 'session-1' }
@@ -183,13 +327,34 @@ test('drops a Provider result when device authority changes while generation is 
     vault: { put() { vaultWrites += 1; return {}; } },
   }))();
   epoch += 1;
-  paired = false;
   finishGeneration({ outcome: 'SUCCEEDED' });
   await assert.rejects(
     commit,
     (error) => error && error.code === 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
   );
   assert.equal(vaultWrites, 0);
+});
+
+test('normalizes lifecycle storage failures to the runtime stale-authority contract', async () => {
+  const credentials = {
+    async captureAuthority() {
+      const error = new Error('authority storage unavailable');
+      error.code = 'SS_ERP_BYOK_DEVICE_LIFECYCLE_AUTHORITY_UNAVAILABLE';
+      throw error;
+    },
+    async isAuthorityCurrent() { return true; },
+    async getStatus() {
+      return { state: 'paired', ownerUserId: 'owner-1', sessionId: 'session-1' };
+    },
+  };
+  const context = { Error, Number, Object, Promise };
+  context.globalThis = context;
+  vm.runInNewContext(authoritySource, context, { filename: authorityModulePath });
+  const guard = context.SS_ERP_BYOK_RUNTIME_AUTHORITY.createGuard({ credentials });
+  await assert.rejects(
+    guard.capture({ ownerUserId: 'owner-1', deviceSessionId: 'session-1' }),
+    (error) => error?.code === 'SS_ERP_BYOK_DEVICE_AUTHORITY_STALE',
+  );
 });
 
 test('central service-worker cleanup clears all device-scoped BYOK authority and notifies pages', () => {
@@ -206,6 +371,10 @@ test('central service-worker cleanup clears all device-scoped BYOK authority and
   assert.doesNotMatch(cachedCleanupSource, /byokWorkbenchSessionManager\.clear\(\)/u);
   assert.match(serviceWorkerSource, /onCredentialAuthorityChanged: clearCachedByokGeneratedResults/u);
   assert.match(serviceWorkerSource, /onConsentRevoked: clearCachedByokGeneratedResults/u);
+  assert.match(
+    serviceWorkerSource,
+    /lifecycle\.createLifecycle\(\{\s*credentials,\s*sessionStorage: chrome\.storage\.session,\s*lockManager: globalThis\.navigator && globalThis\.navigator\.locks,/u,
+  );
 
   const cleanupStart = serviceWorkerSource.indexOf('async function clearByokDeviceSessionState(input)');
   const cleanupEnd = serviceWorkerSource.indexOf('\nfunction logisticsDistributionDisabledResult()', cleanupStart);

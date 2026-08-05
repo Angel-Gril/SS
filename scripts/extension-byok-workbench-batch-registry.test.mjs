@@ -5,6 +5,8 @@ import vm from 'node:vm';
 
 const registryPath = 'extensions/ss-erp/shared/byok/workbench-batch-registry.js';
 const brokerPath = 'extensions/ss-erp/shared/byok/execution-intent-claim-broker.js';
+const lifecyclePath = 'extensions/ss-erp/shared/byok/device-session-lifecycle.js';
+const authorityPath = 'extensions/ss-erp/shared/byok/runtime-authority.js';
 const runtimeHandlerPath =
   'extensions/ss-erp/shared/byok/workbench-batch-runtime-handler.js';
 const CANONICAL_BINI_SKU_KEY = 'sku:5777037825166|晚霞肤(1.5cm+4cm胸垫)>M(适合34/75ABC)';
@@ -107,6 +109,56 @@ function emptyProjection() {
     executionMode: 'BYOK', revision: 0, batchId: null, binding: null,
     scheduler: null, billing: { erpGenerationChargeCents: 0 }, slots: [], ingest: null,
   };
+}
+
+function createSharedAuthorityFixture() {
+  const context = { Error, Number, Object, Promise };
+  context.globalThis = context;
+  vm.runInNewContext(readFileSync(lifecyclePath, 'utf8'), context, { filename: lifecyclePath });
+  vm.runInNewContext(readFileSync(authorityPath, 'utf8'), context, { filename: authorityPath });
+  const values = Object.create(null);
+  const sessionStorage = {
+    async get(keys) {
+      const result = {};
+      for (const key of keys) {
+        if (Object.hasOwn(values, key)) result[key] = values[key];
+      }
+      return result;
+    },
+    async set(patch) { Object.assign(values, patch); },
+  };
+  let lockTail = Promise.resolve();
+  const lockManager = {
+    request(_name, operation) {
+      const next = lockTail.catch(() => {}).then(operation);
+      lockTail = next.catch(() => {});
+      return next;
+    },
+  };
+  function createWorker() {
+    const lifecycle = context.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE.createLifecycle({
+      sessionStorage,
+      lockManager,
+      credentials: {
+        async claim() { return { state: 'paired' }; },
+        async clear() { return { state: 'unpaired' }; },
+        async clearIfCurrent() { return false; },
+        async getAccessToken() { return 'token'; },
+        async getStatus() {
+          return { state: 'paired', ownerUserId: 'owner-1', sessionId: 'session-1' };
+        },
+        async getConnection() { return { baseUrl: 'https://erp.example' }; },
+        async beginOperation() { return { state: 'paired' }; },
+        async isOperationCurrent() { return true; },
+      },
+      async clearByokState() {},
+    });
+    return {
+      lifecycle,
+      guard: context.SS_ERP_BYOK_RUNTIME_AUTHORITY.createGuard({ credentials: lifecycle }),
+    };
+  }
+  return { createWorker };
 }
 
 function createHarness(options = {}) {
@@ -380,7 +432,7 @@ function createHarness(options = {}) {
     reportOutcome(value) { return realBroker.reportOutcome(value); },
   };
 
-  const authorityGuard = {
+  const authorityGuard = options.authorityGuard || {
     async capture(value) {
       events.push(['authority-capture', value.slotKey]);
       return {
@@ -674,7 +726,7 @@ function createHarness(options = {}) {
   };
 }
 
-function completeProviderBatch(harness) {
+function completeProviderBatch(harness, lifecycleEpoch = 9) {
   const candidates = harness.serverBatch.items.map((item, index) => {
     const resultSha256 = String(index + 7).repeat(64);
     item.intent.outcome = 'SUCCEEDED';
@@ -709,7 +761,7 @@ function completeProviderBatch(harness) {
       },
       binding: plain(readinessBinding),
       lifecycleAuthority: {
-        contractVersion: 'extension-byok-device-session-lifecycle/v1', epoch: 9,
+        contractVersion: 'extension-byok-device-session-lifecycle/v1', epoch: lifecycleEpoch,
       },
     };
   });
@@ -1304,6 +1356,38 @@ test('a fresh Registry restores exact v2 successful candidates into review witho
     (error) => error?.code === 'SS_ERP_BYOK_BATCH_REGISTRY_REVIEW_ONLY',
   );
   assert.equal(restored.events.some((event) => event[0] === 'coordinator-start'), false);
+});
+
+test('restores exact candidates through Registry after a claimed lifecycle worker restarts', async () => {
+  const authority = createSharedAuthorityFixture();
+  const workerA = authority.createWorker();
+  await workerA.lifecycle.claim({ code: 'worker-a-device-claim' });
+  const claimed = await workerA.lifecycle.captureAuthority();
+  assert.equal(claimed.epoch, 1);
+
+  const original = createHarness({ authorityGuard: workerA.guard });
+  await original.registry.start(owner(), pageStart());
+  const candidates = completeProviderBatch(original, claimed.epoch);
+
+  const workerB = authority.createWorker();
+  assert.equal((await workerB.lifecycle.captureAuthority()).epoch, claimed.epoch);
+  const restored = createHarness({
+    authorityGuard: workerB.guard,
+    initialOperation: original.operation,
+    initialServerBatch: original.serverBatch,
+    initialEscrowCandidates: candidates,
+  });
+  const projection = await restored.registry.state(owner({ documentId: 'document-reloaded' }));
+  assert.equal(projection.scheduler.state, 'REVIEW');
+  assert.ok(projection.slots.every((slotValue) => (
+    slotValue.state === 'CANDIDATE_READY'
+      && slotValue.attempts[0].errorCode === null
+  )));
+  assert.equal(restored.events.filter((event) => event[0] === 'escrow-find').length, 2);
+  assert.equal(restored.events.filter((event) => event[0] === 'coordinator-restore').length, 1);
+  assert.equal(restored.events.some((event) => [
+    'prepare', 'reserve', 'coordinator-start', 'successor', 'provider-input',
+  ].includes(event[0])), false);
 });
 
 test('serializes concurrent restart state and preview into one escrow hydration', async () => {

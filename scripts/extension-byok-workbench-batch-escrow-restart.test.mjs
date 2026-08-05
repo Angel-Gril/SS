@@ -6,6 +6,7 @@ import vm from 'node:vm';
 
 const MODULES = [
   'extensions/ss-erp/shared/contracts/ai-image-workbench-v1.js',
+  'extensions/ss-erp/shared/byok/device-session-lifecycle.js',
   'extensions/ss-erp/shared/byok/generated-result-vault-persistence.js',
   'extensions/ss-erp/shared/byok/generated-result-vault.js',
   'extensions/ss-erp/shared/byok/media-job-engine.js',
@@ -55,10 +56,42 @@ function loadApis() {
     vm.runInContext(readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
   }
   return {
+    lifecycle: context.SS_ERP_BYOK_DEVICE_SESSION_LIFECYCLE,
     persistence: context.SS_ERP_BYOK_GENERATED_RESULT_VAULT_PERSISTENCE,
     vault: context.SS_ERP_BYOK_GENERATED_RESULT_VAULT,
     engine: context.SS_ERP_BYOK_MEDIA_JOB_ENGINE,
     coordinator: context.SS_ERP_BYOK_WORKBENCH_BATCH_COORDINATOR,
+  };
+}
+
+function createLifecycle(api, sessionStorage, lockManager) {
+  return api.createLifecycle({
+    sessionStorage,
+    credentials: {
+      async claim() { return { state: 'paired' }; },
+      async clear() { return { state: 'unpaired' }; },
+      async clearIfCurrent() { return false; },
+      async getAccessToken() { return 'token'; },
+      async getStatus() {
+        return { state: 'paired', ownerUserId: 'owner-1', sessionId: 'device-session-1' };
+      },
+      async getConnection() { return { baseUrl: 'https://erp.example' }; },
+      async beginOperation() { return { state: 'paired' }; },
+      async isOperationCurrent() { return true; },
+    },
+    lockManager,
+    async clearByokState() {},
+  });
+}
+
+function createLockManager() {
+  let tail = Promise.resolve();
+  return {
+    request(_name, operation) {
+      const next = tail.catch(() => {}).then(operation);
+      tail = next.catch(() => {});
+      return next;
+    },
   };
 }
 
@@ -296,7 +329,11 @@ test('restores encrypted candidate across workers for review and atomic ingest r
   let now = START_MILLIS;
   const result = await providerResult();
   const binding = resultBinding();
-  const authority = lifecycleAuthority();
+  const authorityLockManager = createLockManager();
+  const lifecycleA = createLifecycle(apis.lifecycle, sessionStorage, authorityLockManager);
+  await lifecycleA.claim({ code: 'worker-a-device-claim' });
+  const authority = await lifecycleA.captureAuthority();
+  assert.equal(authority.epoch, 1);
 
   const workerA = apis.persistence.createStore({
     repository,
@@ -330,6 +367,10 @@ test('restores encrypted candidate across workers for review and atomic ingest r
     randomValues: randomValues(160),
   });
   await workerB.ready();
+  const lifecycleB = createLifecycle(apis.lifecycle, sessionStorage, authorityLockManager);
+  const restoredAuthority = await lifecycleB.captureAuthority();
+  assert.equal(restoredAuthority.epoch, authority.epoch);
+  assert.equal(await lifecycleB.isAuthorityCurrent(authority), true);
 
   const mismatchVault = apis.vault.createVault({ now: () => new Date(now) });
   assert.equal(await findExactCandidate(workerB, {
@@ -348,7 +389,7 @@ test('restores encrypted candidate across workers for review and atomic ingest r
     executionIntentId: EXECUTION_INTENT_ID,
     resultSha256: result.image.sha256,
     binding,
-    lifecycleAuthority: lifecycleAuthority(8),
+    lifecycleAuthority: lifecycleAuthority(authority.epoch + 1),
   }), null, 'a lifecycle mismatch must fail before vault hydration');
   assert.equal(mismatchVault.size(), 0);
 
@@ -356,7 +397,7 @@ test('restores encrypted candidate across workers for review and atomic ingest r
     executionIntentId: EXECUTION_INTENT_ID,
     resultSha256: result.image.sha256,
     binding,
-    lifecycleAuthority: authority,
+    lifecycleAuthority: restoredAuthority,
   });
   assert.ok(recoveredCandidate);
   assert.equal(recoveredCandidate.resultId, staged.resultId);
@@ -434,7 +475,7 @@ test('restores encrypted candidate across workers for review and atomic ingest r
   let projection = coordinator.restoreBatch({
     contractVersion: apis.coordinator.RESTORE_COMMAND_VERSION,
     batchId: 'batch-escrow-restart-1',
-    binding: batchBinding(authority),
+    binding: batchBinding(restoredAuthority),
     slots: [restoredSlot()],
     attempts: [attempt],
   });

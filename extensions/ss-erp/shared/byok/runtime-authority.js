@@ -20,12 +20,28 @@
     var isAuthorityCurrent = requiredMethod(credentials, 'isAuthorityCurrent');
     var getStatus = requiredMethod(credentials, 'getStatus');
 
+    async function captureLifecycleAuthority() {
+      try {
+        return await captureAuthority();
+      } catch {
+        throw authorityError();
+      }
+    }
+
+    async function lifecycleAuthorityIsCurrent(value) {
+      try {
+        return Boolean(await isAuthorityCurrent(value));
+      } catch {
+        throw authorityError();
+      }
+    }
+
     async function assertCurrent(context) {
-      if (!context || !isAuthorityCurrent(context.lifecycleAuthority)) {
+      if (!context || !await lifecycleAuthorityIsCurrent(context.lifecycleAuthority)) {
         throw authorityError();
       }
       var status = await getStatus();
-      if (!isAuthorityCurrent(context.lifecycleAuthority)
+      if (!await lifecycleAuthorityIsCurrent(context.lifecycleAuthority)
         || !status || status.state !== 'paired'
         || status.ownerUserId !== context.ownerUserId
         || status.sessionId !== context.deviceSessionId) {
@@ -37,7 +53,7 @@
     async function capture(binding) {
       if (!binding || typeof binding !== 'object') throw authorityError();
       return assertCurrent({
-        lifecycleAuthority: captureAuthority(),
+        lifecycleAuthority: await captureLifecycleAuthority(),
         ownerUserId: binding.ownerUserId,
         deviceSessionId: binding.deviceSessionId,
         shopId: binding.shopId,

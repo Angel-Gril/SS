@@ -575,6 +575,8 @@ function getLogisticsDeviceCredentials() {
   }
   logisticsDeviceCredentials = lifecycle.createLifecycle({
     credentials,
+    sessionStorage: chrome.storage.session,
+    lockManager: globalThis.navigator && globalThis.navigator.locks,
     clearByokState: clearByokDeviceSessionState,
   });
   return logisticsDeviceCredentials;
