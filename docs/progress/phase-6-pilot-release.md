@@ -28,6 +28,37 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Replacement release `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` passed
+  target-bound QA-04, regional package/sign verification, signed MV3 restart smoke, and both
+  `1.0.283 -> 1.0.284` upgrade smokes. QA-04 acceptance SHA-256 is
+  `de3082ab834d43d7241e1b19fc62db7c139fef0128e80b5aa4254742d0e24f37`; signed restart
+  receipt SHA-256 values are `290a12b132803880dc5d39c31e16ffbee8a8ce22612d08c762874a1e520b4202`
+  for `.com` and `36fadeb64bbd65c140e70d2efe8f26bf2008af3e3bbef7e3798ea55731c65800`
+  for `.cn`.
+- Both regions completed fresh backup/restore validation, migration, service restart, full runtime
+  verification, final dark checks, and `7/7` pre-enable canaries. Canary SHA-256 values are
+  `ed36f43294c0ea06f7e7d22213258cead939c44ed036cff273c2b79721808376` for `.com` and
+  `b8750b48c19df39e2c2b87610f400938da9de1e0290e95ba79151707d08ca540` for `.cn`.
+  Temporary account/device sessions were removed, and all pilot flags remain off.
+- Fresh two-VPS DNS quorum evidence SHA-256 is
+  `b4685b108dd4bc0a2097ce5a5ee4973da5d518672f63fd29bf5a17d76df800c1`. First-party website
+  distribution and offline verification passed with receipt SHA-256
+  `09df3e9c7eb4b59e62c543269945d12622e1d28d028b4ba42d0428c627764aa7` for `.com` and
+  `dfd475bac5d0e0e7baf4ba82738a949057d06e78cc2f2caf25d55207d28b1d72` for `.cn`.
+- BINI upgraded atomically on its original managed path to `1.0.284` under unchanged extension ID
+  `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Installed tree and upgrade receipt SHA-256 values are
+  `c75ffe17ebba367a0320fa5ab0d2b98d68c30fbd263b6e46c07799b4ea676313` and
+  `875d634b50329b1f2d3af4d7dbb9daec23352a0a59c072e7b0d6e87064b04062`. Trusted reload,
+  active/disk Worker identity at runtime manifest `1.0.284`, and Unicode slot smoke passed; their
+  receipt SHA-256 values are `24e18c9b3aea70acd68811c33713d6c2c65cbf41467a12225ca0a75e7c806ddb`,
+  `7ba7bffa2f1ea416e1d9ffeb41d4a45d7fbe4f17ac1727125de238f103018456`, and
+  `500270b1b0e2a443127266cdfca6937d38d26dd4b9948c9d1a027ba7ce5131e0`.
+  Final replacement reconciliation SHA-256 is
+  `28df1dd7d39477d582e28cc33347593b2c03cfcd456c3bde2abfa13fafb90d1c`.
+- The `1.0.284` replacement chain made zero Provider POSTs/cost, ERP ingest/publish, or Ozon writes.
+  `REL-03` and `REL-04` remain complete; `REL-02` remains open at `36/37`. BINI is idle with its Key
+  and session-only state cleared. A new exact scoped POST/cost authorization and fresh Key session
+  are required before the next pilot request; no earlier authorization carries forward.
 - The live `1.0.283` `.com` BINI scoped sandbox pilot consumed its separate `2/2` Provider POST
   authorization exactly once per action: one capability probe and one formal `TEXT_TO_IMAGE`
   generation, with no automatic retry. The formal status-v2 record reached `SUCCEEDED`; its
@@ -46,8 +77,8 @@ Progress: 2/3 tasks.
   invalidation and stale-epoch rejection, and adds real Worker A -> Worker B review-only recovery
   coverage with zero Provider dispatch. Focused contracts passed `81/81`; full `pnpm preflight`
   passed in `642.1s`; source extension verification passed `450` checks with zero failures and the
-  two existing warnings. Two independent reviews found no blocker. The fix is pushed but not yet
-  built, signed, distributed, deployed, or live-validated.
+  two existing warnings. Two independent reviews found no blocker. This fix was subsequently
+  included in the completed `ad4b8714` / `1.0.284` replacement release described above.
 - After authorization exhaustion, the six scoped rollout rows were atomically returned to dark and
   the official verifier passed. Dark-disable and verifier receipt SHA-256 values are
   `01db8e79942c23938fdcdd93cbace37f920bfeb3d4ce34c3fa9c4b0d71dc2edb` and
@@ -55,9 +86,9 @@ Progress: 2/3 tasks.
   origin permission, and capability evidence were cleared; cleanup receipt SHA-256 is
   `b0a664622c91cd0031ed53843c8d93e543972ba1baf5c6046e5e3ea3b2c13cd4`. No Provider request
   followed the formal generation, actual Provider cost was not observed, and no ERP ingest,
-  publish, or Ozon write occurred. `REL-02` remains open at `36/37`; the next dependency-ready
-  action is a separately authorized dark `1.0.284` replacement pre-release, followed later by a
-  separately authorized fresh scoped live pilot.
+  publish, or Ozon write occurred. `REL-02` remains open at `36/37`; the dark `1.0.284` replacement
+  pre-release is now complete, so the next dependency-ready action is a separately authorized fresh
+  scoped live pilot.
 - Replacement release `7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` passed
   target-bound QA-04, regional package/signature checks, signed MV3 restart and same-path upgrade
   smokes. QA-04 acceptance SHA-256 is

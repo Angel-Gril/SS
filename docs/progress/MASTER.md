@@ -44,7 +44,61 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
+Current checkpoint (2026-08-05): replacement release
+`ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` completed the authorized dark
+pre-release chain. Target-bound QA-04 passed all nine gates in `809.5s`; canonical acceptance
+SHA-256 is `de3082ab834d43d7241e1b19fc62db7c139fef0128e80b5aa4254742d0e24f37`.
+Independent `.com` and `.cn` 190-file Cloud/Local candidates passed detached Ed25519 signature
+verification, signed MV3 restart smoke, and `1.0.283 -> 1.0.284` upgrade smoke. Signed restart
+receipt SHA-256 values are `290a12b132803880dc5d39c31e16ffbee8a8ce22612d08c762874a1e520b4202`
+and `36fadeb64bbd65c140e70d2efe8f26bf2008af3e3bbef7e3798ea55731c65800`.
+
+Both regions completed fresh target/database/restore-bound backup validation, migration, service
+restart, topology-correct runtime verification, final dark verification, and `7/7` pre-enable
+canaries. Canary receipt SHA-256 values are
+`ed36f43294c0ea06f7e7d22213258cead939c44ed036cff273c2b79721808376` for `.com` and
+`b8750b48c19df39e2c2b87610f400938da9de1e0290e95ba79151707d08ca540` for `.cn`.
+Temporary account/device sessions were removed, and both receipts prove no Provider dispatch, ERP
+ingest, or Ozon mutation. Every AI Media, Extension BYOK, ingest, publish, and Ozon publisher flag
+remains off.
+
+Fresh two-VPS public DNS quorum rejected the local proxy fake-IP and pinned only the agreed public
+address sets; quorum evidence SHA-256 is
+`b4685b108dd4bc0a2097ce5a5ee4973da5d518672f63fd29bf5a17d76df800c1`. First-party website
+latest/Cloud/Local GET probes and offline publication verification passed in both regions.
+Distribution receipt SHA-256 values are
+`09df3e9c7eb4b59e62c543269945d12622e1d28d028b4ba42d0428c627764aa7` for `.com` and
+`dfd475bac5d0e0e7baf4ba82738a949057d06e78cc2f2caf25d55207d28b1d72` for `.cn`.
+
+BINI upgraded atomically on its original managed path from `1.0.283` to `1.0.284` under unchanged
+extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`. Its 190 installed files match tree SHA-256
+`c75ffe17ebba367a0320fa5ab0d2b98d68c30fbd263b6e46c07799b4ea676313`; upgrade receipt
+SHA-256 is `875d634b50329b1f2d3af4d7dbb9daec23352a0a59c072e7b0d6e87064b04062`.
+The first pre-switch snapshot correctly failed closed on browser session residue without changing
+the managed tree; one controlled restart cleared it, and the only atomic switch then passed. The
+non-secret Provider profile was preserved while session Key, capability, dispatch, vault, batch
+recovery, and device-access state remained absent.
+
+A trusted `chrome://extensions` reload recorded `event.isTrusted=true`, changed the Worker target,
+and proved the old target gone; reload receipt SHA-256 is
+`24e18c9b3aea70acd68811c33713d6c2c65cbf41467a12225ca0a75e7c806ddb`. The read-only
+attestor matched active and disk Worker SHA-256
+`c9a70e7eff1a9dedc991105864ff9771bc19978e3e181582da0ad9c4aa9f5aa6` at `279878` bytes and
+observed runtime manifest `1.0.284`; attestation SHA-256 is
+`7ba7bffa2f1ea416e1d9ffeb41d4a45d7fbe4f17ac1727125de238f103018456`. The live Unicode
+slot smoke passed with receipt SHA-256
+`500270b1b0e2a443127266cdfca6937d38d26dd4b9948c9d1a027ba7ce5131e0`. Final replacement
+release reconciliation SHA-256 is
+`28df1dd7d39477d582e28cc33347593b2c03cfcd456c3bde2abfa13fafb90d1c`.
+
+This replacement chain made zero Provider POSTs, incurred zero Provider cost, and made no ERP
+media ingest, ERP publish, or Ozon write. `REL-03` and `REL-04` remain complete; Phase 6 remains
+`2/3`, overall progress remains `36/37`, and only `REL-02` is open. BINI is idle with all
+session-only state cleared. Resuming the pilot requires a freshly loaded Key plus a new exact
+owner/shop/device-scoped Provider POST count and single/cumulative cost ceilings; no previous
+Provider authorization carries forward.
+
+Historical checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
 its separately authorized two Provider POSTs exactly once: one `TEXT_TO_IMAGE` capability probe
 and one formal generation, with no automatic retry. The formal status-v2 record reached
 `SUCCEEDED`; its 1,804,392-byte PNG result SHA-256 is
@@ -67,8 +121,9 @@ fail-closed pending invalidation, and proves Worker A epoch `1` -> Worker B epoc
 restore without Provider dispatch while stale epochs remain rejected. The combined focused
 contracts passed `81/81`; full `pnpm preflight` passed in `642.1s`; source extension verification
 passed `450` checks with zero failures and the two existing local-package permission warnings.
-Independent compatibility and security reviews found no blocking issue. The fix is pushed but is
-not built, signed, distributed, deployed, or live-validated yet.
+Independent compatibility and security reviews found no blocking issue. At that checkpoint the fix
+was pushed but not yet released; it was subsequently included in the completed `ad4b8714` /
+`1.0.284` replacement release recorded above.
 
 After the `2/2` authorization was exhausted, all six `.com` BINI rollout rows were atomically
 returned to dark state and the official dark verifier passed. Dark-disable and verification receipt
@@ -78,9 +133,9 @@ exact Provider-origin permission, and capability evidence were then cleared; cle
 SHA-256 is `b0a664622c91cd0031ed53843c8d93e543972ba1baf5c6046e5e3ea3b2c13cd4`. No Provider
 request followed the formal generation, actual Provider cost was not observed, and no ERP ingest,
 ERP publish, or Ozon write occurred. `REL-02` remains open, Phase 6 remains `2/3`, and overall
-progress remains `36/37`. The next dependency-ready action is a separately authorized `1.0.284`
-replacement pre-release from the fix commit with every pilot flag kept off; only after BINI upgrade
-and active-worker attestation may a fresh scoped live-pilot authorization be considered.
+progress remains `36/37`. At that checkpoint the next dependency was the dark `1.0.284`
+replacement pre-release; it is now complete, and a fresh scoped live-pilot authorization may be
+considered under the current checkpoint above.
 
 Historical checkpoint (2026-08-05): replacement release
 `7202b5971571d1debbacc76540f311e7dd733d5a` / `1.0.283` completed the full replacement
@@ -1340,17 +1395,17 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    append-only reconciliations, and consumed operations immutable as historical evidence. The
    `1.0.283` BINI authorization is exhausted at `2/2`, every earlier Provider allowance is also
    consumed, and no Provider POST or retry is currently authorized. Its encrypted formal candidate
-   expired after the worker-restart authority mismatch and must never be ingested. All pilot flags
-   are dark; the BINI session Key and Provider-origin permission are cleared. First run a separately
-   authorized `1.0.284` replacement pre-release from
-   `4632a9e17f9617ec6bd0e979d491324734677467`: full QA-04, regional package/sign, signed MV3
-   restart smoke, dark dual-region deployment/download receipts, BINI same-path upgrade, reload,
-   and active-worker attestation, with no Provider call. Only then may a fresh Key session and new
-   exact owner/shop/device-scoped POST count, single-request ceiling, and cumulative cost ceiling be
-   authorized. After that separately authorized probe/formal generation yields a restart-surviving,
-   reviewable candidate may separately authorized positive BYOK ingest, independent kill-switch
-   checks, one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No
-   Provider POST may auto-retry.
+   expired after the worker-restart authority mismatch and must never be ingested. The dark
+   `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` replacement pre-release is complete:
+   QA-04, regional package/sign, signed MV3 restart and upgrade smokes, dual-region deployment and
+   download receipts, BINI same-path upgrade, trusted reload, active-worker attestation, and Unicode
+   smoke all passed with no Provider call. All pilot flags are dark; the BINI session Key and
+   Provider-origin permission are cleared. The next action is a separately authorized fresh Key
+   session with an exact owner/shop/device-scoped POST count, single-request ceiling, and cumulative
+   cost ceiling. Only after a new probe/formal generation yields a restart-surviving, reviewable
+   candidate may separately authorized positive BYOK ingest, independent kill-switch checks,
+   one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No Provider POST
+   may auto-retry.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
