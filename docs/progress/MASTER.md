@@ -82,6 +82,14 @@ official off verifier passed. Dark-disable receipt SHA-256 is
 exactly one of its two numerical Provider POST slots; the formal action and rollback sent none, and
 the unused numerical slot is closed and cannot be reused. No ERP ingest/publish or Ozon write
 occurred. `REL-02` remains open, Phase 6 remains `2/3`, and overall progress remains `36/37`.
+The dedicated BINI browser was then contained locally: the session Key and capability evidence were
+cleared through the Provider UI, the exact Provider-origin permission was revoked, and the orphaned
+`PREPARING` recovery was removed only after the independent canonical `not_found` proof. The two
+legacy `1.0.285` clear diagnostics made read-only ERP GETs that returned 404; session-manager clear
+and the MV3 worker reload made no network request. Post-reload verification found no session Key,
+exact-origin or `<all_urls>` permission, batch recovery, document fence or launch session. Cleanup
+sent zero Provider POSTs and made no ingest, publish or Ozon write. Private cleanup receipt SHA-256
+is `e01e5fcfe432ca2a60a9011a41f44dedd54471aa466028923e65573720be3217`.
 The next external step is a separately authorized dark replacement release for commit `0cd3761a`
 as extension version `1.0.286`; only after that release, BINI upgrade and fresh scoped pilot
 authorization may Provider testing resume.

@@ -48,6 +48,13 @@ Progress: 2/3 tasks.
   one Provider POST; formal generation and rollback sent none. The unused numerical authorization
   is closed. No ERP ingest/publish or Ozon write occurred. `REL-02` remains open at `36/37`; next is
   a separately authorized `0cd3761a` / `1.0.286` dark replacement release before any fresh pilot.
+- Local BINI containment is complete. The Provider UI cleared the session Key/capability evidence
+  and revoked the exact-origin permission. After the already-proved canonical `not_found`, the
+  orphaned `PREPARING` recovery was cleared with the extension session manager and the MV3 worker
+  was reloaded. Post-reload checks found no Key, exact-origin or `<all_urls>` permission, recovery,
+  document fence or launch session. Cleanup sent zero Provider POSTs and made no ingest, publish or
+  Ozon write; private receipt SHA-256 is
+  `e01e5fcfe432ca2a60a9011a41f44dedd54471aa466028923e65573720be3217`.
 - Replacement release `a0e47316f9a4664b0105b5feced11140cb700c7b` / `1.0.285` passed
   target-bound QA-04, regional package/sign verification, signed MV3 restart smoke, and both
   `1.0.284 -> 1.0.285` upgrade smokes. QA-04 acceptance SHA-256 is
