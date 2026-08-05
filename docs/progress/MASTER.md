@@ -91,12 +91,30 @@ slot smoke passed with receipt SHA-256
 release reconciliation SHA-256 is
 `28df1dd7d39477d582e28cc33347593b2c03cfcd456c3bde2abfa13fafb90d1c`.
 
-This replacement chain made zero Provider POSTs, incurred zero Provider cost, and made no ERP
-media ingest, ERP publish, or Ozon write. `REL-03` and `REL-04` remain complete; Phase 6 remains
-`2/3`, overall progress remains `36/37`, and only `REL-02` is open. BINI is idle with all
-session-only state cleared. Resuming the pilot requires a freshly loaded Key plus a new exact
-owner/shop/device-scoped Provider POST count and single/cumulative cost ceilings; no previous
-Provider authorization carries forward.
+The replacement chain itself made zero Provider POSTs or ERP/Ozon mutations. A subsequent,
+separately authorized `1.0.284` `.com` BINI sandbox pilot repaired the exact device session,
+retained only `capture:write`, `listing:review`, and `byok:media:ingest` scopes, and granted only
+`https://ai.big-model-api.top/*` in Chrome. The six-row owner/shop/device/origin/T2I policy CAS and
+official `sandbox-pilot` verifier passed at composite policy revision `955791647`; ingest, publish,
+hosted AI, and every Ozon publisher stage remained off.
+
+Authorized POST 1 sent exactly one `TEXT_TO_IMAGE` capability request to
+`/v1/images/generations`. The Provider returned no HTTP status before the 120-second fetch deadline;
+Chromium ended the request with `net::ERR_ABORTED`, and the extension finalized it as
+`UNKNOWN_OUTCOME` with automatic retry disabled. The persistent uncertain-probe guard binds the
+original request hash, credential revision, profile, operation, request mode, and policy revision.
+Actual Provider cost is not observed and must be treated as a possible charge up to the authorized
+single/cumulative ceiling. POST 2 formal generation was therefore not executed. Result and
+dark-disable receipt SHA-256 values are `7fcb726c563e69ec1e478624093c8817c64df04f693769929d7da61c5352838a` and
+`ddf898d58118efa1e9be12d7fe832d865b3b0c0668580cc679b5fa8b292464d0`.
+
+All six scoped rows are dark again, the short-lived owner token was revoked and deleted, and the
+temporary human-challenge override was restored. The stable BINI device session, session Key,
+exact-origin Chrome permission, and one `UNKNOWN_OUTCOME` anti-replay record remain. No ERP ingest,
+publish, or Ozon write occurred. `REL-03` and `REL-04` remain complete; Phase 6 remains `2/3`,
+overall progress remains `36/37`, and only `REL-02` is open. Do not retry or replace the unknown
+probe with a new ID. Resume only after Provider-side lookup resolves the original request, or after
+a materially different Provider contract/credential revision receives a new exact authorization.
 
 Historical checkpoint (2026-08-05): the live `1.0.283` `.com` BINI scoped sandbox pilot consumed
 its separately authorized two Provider POSTs exactly once: one `TEXT_TO_IMAGE` capability probe
@@ -1393,19 +1411,18 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
    `198.18.0.29`.
 7. Keep all earlier release candidates, signatures, failed deployment receipts, Provider results,
    append-only reconciliations, and consumed operations immutable as historical evidence. The
-   `1.0.283` BINI authorization is exhausted at `2/2`, every earlier Provider allowance is also
-   consumed, and no Provider POST or retry is currently authorized. Its encrypted formal candidate
-   expired after the worker-restart authority mismatch and must never be ingested. The dark
-   `ad4b8714b53d0826ffe470f6db97b6906dcc52c0` / `1.0.284` replacement pre-release is complete:
-   QA-04, regional package/sign, signed MV3 restart and upgrade smokes, dual-region deployment and
-   download receipts, BINI same-path upgrade, trusted reload, active-worker attestation, and Unicode
-   smoke all passed with no Provider call. All pilot flags are dark; the BINI session Key and
-   Provider-origin permission are cleared. The next action is a separately authorized fresh Key
-   session with an exact owner/shop/device-scoped POST count, single-request ceiling, and cumulative
-   cost ceiling. Only after a new probe/formal generation yields a restart-surviving, reviewable
-   candidate may separately authorized positive BYOK ingest, independent kill-switch checks,
-   one-shop Ozon publish, post-enable canary, reconciliation, and rollback resume. No Provider POST
-   may auto-retry.
+   `1.0.283` BINI authorization is exhausted at `2/2`; its expired encrypted candidate must never be
+   ingested. The separately authorized `1.0.284` probe consumed POST 1 exactly once but received no
+   HTTP status before timeout and is now persistently `UNKNOWN_OUTCOME`; its cost is unobserved and
+   must be treated as a possible charge. Never retry it, substitute a new ID, clear its anti-replay
+   guard, or use the unused numerical allowance for formal generation.
+   All pilot rows are dark, while the stable BINI device session, session Key, exact Provider-origin
+   permission, and uncertain-probe record remain. Provider-side lookup must first resolve the
+   original request; absent that, another paid attempt requires a materially different Provider
+   contract or credential revision plus a new exact POST/cost authorization. Only a successful new
+   probe and restart-surviving reviewable candidate may unblock separately authorized ingest,
+   kill-switch checks, one-shop Ozon publish, reconciliation, and rollback. No Provider POST may
+   auto-retry.
 8. Do not downgrade to an old extension while a BYOK batch is pending. Drain the batch first or use
    a rollback package carrying the new launch-session and Registry recovery layer.
 
