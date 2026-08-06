@@ -28,6 +28,24 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Standard BINI reauthorization replaced the blocked three-scope device session with one unique
+  active session containing exactly `capture:write`, `listing:review`, `media:execute`, and
+  `byok:media:ingest`. The predecessor session and grant were atomically revoked with reason
+  `PAIRING_APPROVED`. Read-only database and CDP checks found all rollout rows dark, the official
+  `off` verifier passing, no Provider/session capability state or Chrome origin permission, and
+  zero new execution, ingest, publish, Ozon, or command-grant rows. The private reauthorization
+  receipt SHA-256 is `0111a4496ae1abb57ae2431f9cda2cc2668bf17ed0d88644228d3393618fd5a1`.
+- The replacement four-scope operator binds the exact new session, sole BINI grant and authorized
+  verifier blob, and passed read-only `inspect`. It fail-closes before enable until a Key/browser
+  authorization-readiness receipt recorded in the preceding ten minutes exists.
+  The Web pairing UI now exposes `byok:media:ingest` only as an explicit non-default scope and
+  hydrates a verified active session's exact current grant instead of falsely projecting the
+  defaults. Pairing tests pass `18/18` and Web typecheck passes. This UI correction is not deployed
+  and changed no live flag or external system.
+- `REL-02` remains open at `36/37`. The old Provider authorization is closed; the next live action
+  requires a freshly loaded Key and a new explicit two-POST allowance with single and cumulative
+  cost ceilings. Publish and Ozon writes remain outside the ingest-pilot boundary.
+
 - The separately authorized `1.0.286` `.com`/BINI `ingest-pilot` enabled only the exact scoped
   source workflow, BYOK generation and BYOK ingest rows. Hosted AI, BYOK publish and the Ozon
   publisher stayed off. Its capability probe made exactly one Provider POST without retry, returned
@@ -41,8 +59,8 @@ Progress: 2/3 tasks.
   not reusable because standard device reauthorization invalidates the old credential evidence.
   Final reconciliation SHA-256 is
   `7f492b0e7df97d90bdc0f9aec78eb39ea657816a364850dedd4b0bf22b5853cd`.
-  `REL-02` remains open at `36/37`; the next attempt requires standard BINI reauthorization with
-  `media:execute`, a freshly loaded Key, and a new two-POST capability/formal-generation allowance.
+  `REL-02` remains open at `36/37`; the required standard BINI reauthorization has since completed
+  as recorded above, while the fresh Key and new two-POST allowance remain pending.
 
 - The second separately authorized `1.0.286` `.com`/BINI sandbox attempt consumed exactly `2/2`
   Provider POSTs without retry. The capability probe and formal `TEXT_TO_IMAGE` generation both

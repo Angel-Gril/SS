@@ -21,6 +21,14 @@ test('extension dialog creates shop-scoped one-time device pairing codes', () =>
   assert.match(source, /useState<string\[\]>\(\[\]\)/);
 });
 
+test('BYOK ingest is selectable but never granted by default', () => {
+  const options = source.match(/const DEVICE_SCOPE_OPTIONS = \[([\s\S]*?)\] as const;/)?.[1] || '';
+  const defaults = source.match(/const DEFAULT_DEVICE_SCOPES = \[([\s\S]*?)\];/)?.[1] || '';
+  assert.match(options, /byok:media:ingest/);
+  assert.doesNotMatch(defaults, /byok:media:ingest/);
+  assert.doesNotMatch(defaults, /listing:publish/);
+});
+
 test('pairing supports a trusted one-click device claim without restoring legacy token injection', () => {
   assert.match(source, /ss-erp:extension-device-status/);
   assert.match(source, /ss-erp:extension-device-claim/);
@@ -67,6 +75,17 @@ test('successful one-click reauthorization replaces stale dialog status', () => 
   assert.match(
     source,
     /function showConnectedExtension\([\s\S]{0,120}generation: number\) \{[\s\S]{0,180}setExtensionDeviceStatus\(status\)/,
+  );
+});
+
+test('a verified active session hydrates its exact grant without minting a new grant', () => {
+  assert.match(source, /const hydratedSessionRef = useRef\(''\)/);
+  assert.match(source, /status\?\.state !== 'paired'[\s\S]{0,500}hydratedSessionRef\.current === session\.id/);
+  assert.match(source, /setSelectedShopIds\(session\.shopIds\.slice\(\)\)/);
+  assert.match(source, /setSelectedScopes\(session\.scopes\.slice\(\)\)/);
+  assert.doesNotMatch(
+    source,
+    /useEffect\(\(\) => \{[\s\S]{0,900}(?:issuePairingCode|createPairingCode|connectExtension)\(/,
   );
 });
 

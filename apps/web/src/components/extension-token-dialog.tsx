@@ -84,6 +84,7 @@ const DEVICE_SCOPE_OPTIONS = [
   { value: 'listing:write', label: '草稿编辑' },
   { value: 'listing:review', label: '草稿审核' },
   { value: 'media:execute', label: 'AI 媒体执行' },
+  { value: 'byok:media:ingest', label: 'BYOK 图片接收' },
   { value: 'listing:publish', label: 'Ozon 发布', highRisk: true },
 ] as const;
 
@@ -182,6 +183,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [legacyDisabled, setLegacyDisabled] = useState(false);
   const [copied, setCopied] = useState<CopyTarget>(null);
   const pairingGenerationRef = useRef(0);
+  const hydratedSessionRef = useRef('');
 
   const erpUrl = typeof window !== 'undefined' ? getApiBase() : '';
   const shopNameById = useMemo(() => new Map(shops.map((shop) => [shop.id, shop.name])), [shops]);
@@ -217,6 +219,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
 
   function handleOpenChange(nextOpen: boolean) {
     beginPairingGeneration();
+    if (nextOpen) hydratedSessionRef.current = '';
     if (!nextOpen) {
       setLoadingContext(false);
       setPairingBusy(false);
@@ -406,6 +409,28 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     }
     return undefined;
   }, [open]);
+
+  useEffect(() => {
+    const status = extensionDeviceStatus;
+    const session = currentDeviceSession;
+    if (!open || loadingContext || pairingSelectionLocked
+      || status?.state !== 'paired' || !session || session.status !== 'ACTIVE'
+      || status.ownerUserId !== currentOwnerUserId || status.sessionId !== session.id
+      || !equalStringSets(status.scopes || [], session.scopes)
+      || session.shopIds.some((id) => !shops.some((shop) => shop.id === id))
+      || hydratedSessionRef.current === session.id) return;
+    hydratedSessionRef.current = session.id;
+    setSelectedShopIds(session.shopIds.slice());
+    setSelectedScopes(session.scopes.slice());
+  }, [
+    currentDeviceSession,
+    currentOwnerUserId,
+    extensionDeviceStatus,
+    loadingContext,
+    open,
+    pairingSelectionLocked,
+    shops,
+  ]);
 
   function toggleShop(shopId: string) {
     setSelectedShopIds((current) => {

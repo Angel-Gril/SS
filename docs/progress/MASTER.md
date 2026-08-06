@@ -44,6 +44,26 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): standard BINI device reauthorization replaced the blocked
+three-scope session with one unique active session containing exactly `capture:write`,
+`listing:review`, `media:execute`, and `byok:media:ingest`. The predecessor session and its shop
+grant were atomically revoked with reason `PAIRING_APPROVED`. Read-only database and browser
+verification found all ten rollout rows dark, the official `off` verifier passing, and zero new
+execution batches, intents, provenance, upload staging, ingest rate events, publish intents, Ozon
+attempts, or command grants. The Provider Key, capability evidence, dispatch state, result vault,
+exact-origin permission, and `<all_urls>` permission are absent. The reauthorization receipt
+SHA-256 is `0111a4496ae1abb57ae2431f9cda2cc2668bf17ed0d88644228d3393618fd5a1`.
+
+A new four-scope operator now binds the exact active session, its sole BINI grant, and the authorized
+verifier blob while requiring the current HEAD to descend from that verifier commit. Its read-only
+`inspect` passed, but it cannot enable a gate without a Key/browser readiness receipt recorded in
+the preceding ten minutes. The Web device
+dialog now exposes `byok:media:ingest` as an explicit, non-default permission and hydrates only a
+verified active session's exact existing grant. Focused Web pairing tests pass `18/18` and Web
+typecheck passes. This correction is not deployed and does not authorize a rollout. `REL-02`
+remains open at `36/37`; the next live action requires a freshly loaded Key and a new explicit
+two-POST/single-and-cumulative-cost authorization. Publish and Ozon remain outside that boundary.
+
 Current checkpoint (2026-08-06): the separately authorized `1.0.286` `.com`/BINI
 `ingest-pilot` passed the final v3 authorization/readiness gate and enabled only source workflow,
 BYOK generation, and BYOK ingest for the exact owner/shop/device. Hosted AI, BYOK publish, and the
@@ -62,9 +82,9 @@ exact Provider-origin permission, and stale workbench tabs were cleared. The unu
 slot is closed because normal device reauthorization invalidates the old Key and capability
 evidence. Final reconciliation SHA-256 is
 `7f492b0e7df97d90bdc0f9aec78eb39ea657816a364850dedd4b0bf22b5853cd`.
-`REL-02` remains open at `36/37`. The next live attempt requires a standard BINI reauthorization
-with `media:execute` added, a freshly loaded Key, and a new two-POST allowance for one capability
-probe plus one formal generation; publish and Ozon remain outside that boundary.
+`REL-02` remains open at `36/37`. That checkpoint required standard BINI reauthorization with
+`media:execute`; the reauthorization is now complete as recorded above, while the fresh Key and
+new two-POST allowance remain pending.
 
 Current checkpoint (2026-08-06): the second separately authorized `1.0.286` `.com`/BINI scoped
 sandbox attempt consumed exactly its `2/2` Provider POST allowance without retry. POST 1 returned
