@@ -80,6 +80,27 @@ remains `36/37` because the task acceptance still requires a separately authoriz
 publish pilot, publish reconciliation, and final rollback evidence. No publish or Ozon mutation was
 performed under the current authorization.
 
+Offline follow-up (2026-08-06): commit
+`eb6d841d85c2a06fe5ddd74d5d481115d3a09602` closes the device reauthorization gap between BYOK
+ingest and publish. A successful same-device re-pair now records one immutable, unique direct
+predecessor. Publish authorization accepts that successor only when deployment, physical device,
+owner, actor and shop remain exact; the predecessor session and shop grant were both revoked by
+`PAIRING_APPROVED`; and the active successor retains both `byok:media:ingest` and
+`listing:publish`. Cross-device, cross-deployment, unrelated, revoked, expired and multi-hop
+successors fail closed. Historical sessions are intentionally not backfilled.
+
+All 143 migrations replayed in isolated PostgreSQL schemas. The AI media PostgreSQL suite passed
+`99/99`, the device-session PostgreSQL suite passed `5/5`, the complete Server suite passed
+`4792/4792`, focused authorization tests passed `52/52`, and Server typecheck and Prisma validation
+passed. Lint has zero errors and the 20 pre-existing warnings. This commit is not deployed and made
+no Provider, VPS, ERP publish or Ozon mutation.
+
+The read-only BINI publish preflight confirms that the generated asset remains bound at draft
+revision/version `3/3`, but the draft is still at `CATEGORY_REVIEW`: category, required attributes,
+reviewed Russian copy and RUB pricing are absent, and validation is stale. Those business facts
+must be completed and authoritatively validated before the one-shop Ozon mutation can be
+authorized. `REL-02` therefore remains open at `36/37`.
+
 Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
 exactly three authenticated `GET` requests, one each to `/api/usage/token/`,
 `/v1/dashboard/billing/usage`, and `/api/log/token`. All three returned HTTP 200 JSON. It sent no
