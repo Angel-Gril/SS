@@ -28,6 +28,29 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The separately authorized `1.0.286` `.com`/BINI sandbox pilot consumed exactly two Provider
+  POSTs without retry: one successful capability probe and one successful formal
+  `TEXT_TO_IMAGE` generation. Status v2 records `SUCCEEDED`; the generated PNG is `1,634,189`
+  bytes at `1254x1254` with SHA-256
+  `9c071263c6c55dd72747aa0634c9ce4562b80b86aa9c05733a9f06abca7cfa74`. Actual Provider cost
+  was not observed and Provider price synchronization was not required.
+- Live visual inspection passed, and the result hash matched the AES-256-GCM escrow and preview.
+  The hard ten-minute escrow nevertheless expired `2,955 ms` before the trusted keep action reached
+  the Worker, which failed closed with `SS_ERP_BYOK_RESULT_NOT_FOUND`. No human confirmation,
+  authoritative keep, live MV3 restart recovery, or ingest occurred. Formal-result and expiry
+  receipt SHA-256 values are
+  `1f4d00bdb818d9e65462e5c479908bdd3ce385885111074fdf1799e3ffc562a6` and
+  `f3bdfc006314fe17e5fdf012d6df6581a913d851f671a7e49e84e07c0cb9fafa`.
+- Controlled cleanup cancelled the execution batch, released its reservation, retained the
+  `SUCCEEDED` intent audit, and removed local recovery. Exact CAS returned all six scoped rows to
+  dark and the official `off` verifier passed. The session Key, capability evidence, dispatch
+  records, result vault/escrow and Provider-origin permission are absent; Turnstile and both `.com`
+  services are active. Dark-disable receipt SHA-256 is
+  `48b47f1cfff1b67f049ee4f677e223eb39769431370a362ee845c63be963564d`.
+- The `2/2` authorization is exhausted. No ERP ingest/publish or Ozon write occurred. `REL-02`
+  remains open at `36/37`; another attempt needs a fresh Key and new POST/cost authorization, and
+  review, trusted keep and live same-session MV3 restart recovery must finish inside the escrow TTL.
+
 - Current checkpoint (2026-08-06): the authorized replacement release
   `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` / `1.0.286` completed target-bound QA-04,
   independent `.com`/`.cn` Cloud/Local package and signature verification, signed MV3 restart

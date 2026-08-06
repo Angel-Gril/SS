@@ -44,6 +44,41 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the separately authorized `1.0.286` `.com`/BINI scoped
+sandbox pilot consumed exactly two Provider POSTs without retry: one successful capability probe
+and one successful formal `TEXT_TO_IMAGE` generation at
+`https://ai.big-model-api.top/v1/images/generations`. The formal response was HTTP 200. Exact
+status-v2 evidence records `SUCCEEDED` with result SHA-256
+`9c071263c6c55dd72747aa0634c9ce4562b80b86aa9c05733a9f06abca7cfa74`; the decoded PNG is
+`1,634,189` bytes at `1254x1254`. Provider price synchronization was not required and actual
+Provider cost was not observed.
+
+The live workbench rendered the square candidate and automated inspection passed: one centered
+sunset-skin halter bra on a clean light warm-neutral studio background, with no visible person,
+text, logo, watermark, packaging, measurement, or extra object. The result vault, status-v2 hash,
+and AES-256-GCM ciphertext envelope matched before expiry; screenshot SHA-256 is
+`c13f0e5220c58eda6fc23b06e1485c00507a078faae8195c55b9c6d7486d40fa`. The hard ten-minute
+escrow expired `2,955 ms` before the trusted keep action reached the Worker, so it failed closed
+with `SS_ERP_BYOK_RESULT_NOT_FOUND`. No human quality confirmation, authoritative keep, live MV3
+restart recovery, or ERP ingest occurred. Formal-result and expiry-reconciliation receipt SHA-256
+values are `1f4d00bdb818d9e65462e5c479908bdd3ce385885111074fdf1799e3ffc562a6` and
+`f3bdfc006314fe17e5fdf012d6df6581a913d851f671a7e49e84e07c0cb9fafa`.
+
+Controlled cleanup cancelled the OPEN execution batch, released its item reservation, retained the
+`SUCCEEDED` intent audit, and removed batch recovery without another Provider request. Exact CAS
+returned all six scoped rows to dark; the official `off` verifier passed after restoring the admin
+policy's internal revision to `0`. The session Key, capability evidence, dispatch records, vault,
+escrow, and exact Provider-origin permission are absent; the non-secret profile and stable BINI
+pairing remain. Cloudflare Turnstile and both `.com` services are active. Dark-disable receipt
+SHA-256 is `48b47f1cfff1b67f049ee4f677e223eb39769431370a362ee845c63be963564d`.
+
+The authorization is exhausted at `2/2`. No ERP media ingest, publish, or Ozon write occurred.
+`REL-02` remains open, Phase 6 remains `2/3`, and overall progress remains `36/37`. Another live
+attempt requires a freshly loaded Key, exact-origin authorization, and a new explicit POST count
+plus single/cumulative cost ceilings. Candidate review, trusted keep, and live same-session MV3
+restart recovery must complete inside the hard escrow TTL; no part of this authorization carries
+forward.
+
 Current checkpoint (2026-08-06): the authorized replacement release
 `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` / `1.0.286` completed the full dark pre-release
 chain. The corrected canonical QA-04 acceptance is bound by SHA-256
@@ -1527,13 +1562,14 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: build, sign, distribute and dark-deploy commit
-`0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` as extension `1.0.286`, including target-bound QA-04,
-signed-package MV3 restart smoke, both regional backup/restore/migration/canary chains, website
-download receipts and the BINI same-path upgrade. Keep every pilot flag off and make no Provider,
-ingest, publish or Ozon call during that replacement release. A later live pilot requires a fresh
-Key session plus a new exact POST count and single/cumulative cost authorization; no `1.0.285`
-authorization carries forward.
+Immediate next step: keep `1.0.286` and both regions dark. A new `.com`/BINI sandbox attempt first
+requires a freshly loaded session Key, trusted exact-origin permission, and explicit authorization
+for the exact Provider POST count plus single/cumulative cost ceilings. Use the first POST only for
+capability evidence and the second only for formal generation, with no retry. After the candidate
+renders, complete human review, trusted local keep, and live same-session MV3 Worker restart
+recovery inside the hard ten-minute escrow TTL. ERP ingest, publish, and Ozon writes remain closed
+until that sandbox boundary passes and receive separate authorization. The consumed `2/2`
+`1.0.286` authorization cannot be reused.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
