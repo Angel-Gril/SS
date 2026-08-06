@@ -93,22 +93,33 @@ publish command receipt is durable, its one-hop identity remains linkable after 
 expiry or revocation; the PostgreSQL suite covers this post-execution reconciliation case.
 
 All 143 migrations replayed in isolated PostgreSQL schemas. The AI media PostgreSQL suite passed
-`99/99`, the device-session PostgreSQL suite passed `5/5`, the complete Server suite passed
-`4792/4792`, focused authorization tests passed `52/52`, and Server typecheck and Prisma validation
-passed. Lint has zero errors and the 20 pre-existing warnings. This commit is not deployed and made
-no Provider, VPS, ERP publish or Ozon mutation.
+`99/99`, the device-session PostgreSQL suite passed `5/5`, focused authorization tests passed
+`52/52`, and Server typecheck and Prisma validation passed. Lint has zero errors and the 20
+pre-existing warnings. This correction is not deployed and made no Provider, VPS, ERP publish or
+Ozon mutation.
 
 The read-only BINI publish preflight confirms that the generated asset remains bound at draft
 revision/version `3/3`, but the draft is still at `CATEGORY_REVIEW`: category, required attributes,
-reviewed Russian copy and RUB pricing are absent, and validation is stale. A separate read-only
+reviewed Russian copy and explicit shop-currency pricing are absent, and validation is stale. A separate read-only
 source audit (private receipt SHA-256
 `1c086ac0fc322b1e2146725b05595a662b321f045ad1eb17c007b59fb25c2fe9`) confirms trusted package
 facts of `110 g` and `300 x 200 x 50 mm`, source category `美背文胸`, and the semantic Ozon target
 `Одежда / Белье / Бюстгальтер` (`200001517/93065`). The local Ozon catalog snapshot is expired and
 incomplete and there is no attribute-definition cache for that target, so a fresh official GET is
 required before category/attribute mutation. ERP contains the `14.80 CNY` purchase price but no
-saved source quote or RUB retail price. Reviewed Russian copy plus exact RUB price, old price and
-VAT remain business inputs. `REL-02` therefore remains open at `36/37`.
+saved source quote or retail-price decision.
+
+A further read-only currency audit found that all `648` active BINI products, including all `42`
+products in target category `200001517`, are priced in `CNY`; the earlier strict V2 workflow had
+incorrectly forced `RUB`. Commit `33e1e78db58527f954ee73ed532522d2e904a2d2` keeps existing RUB
+draft compatibility while allowing explicit CNY pricing, requires every SKU in one draft to use
+the same supported currency, rejects USD/mixed-currency data again in the final compiler, and adds
+an explicit CNY/RUB Web selector. The complete Server suite passed `4798/4798`; focused pricing
+tests passed `57/57`; Server/Web/shared typecheck and lint passed; and `pnpm preflight` passed all
+selected checks (`450` package checks, zero failures, two existing package warnings). This fix is
+not deployed and made no external call or production mutation. Exact CNY price, old price, BINI VAT,
+reviewed Russian copy and a precise one-shop Ozon mutation authorization remain business inputs.
+`REL-02` therefore remains open at `36/37`.
 
 Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
 exactly three authenticated `GET` requests, one each to `/api/usage/token/`,

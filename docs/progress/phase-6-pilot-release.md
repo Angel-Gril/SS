@@ -57,17 +57,23 @@ Progress: 2/3 tasks.
   command receipt remains linkable after later session expiry/revocation so post-execution
   reconciliation cannot strand a valid Ozon result.
 - Migration replay and PostgreSQL integration passed (`99/99` AI media and `5/5` device session),
-  the complete Server suite passed `4792/4792`, focused authorization tests passed `52/52`, and
-  typecheck/Prisma validation passed. This correction is not deployed and changed no live flag or
-  external system.
+  focused authorization tests passed `52/52`, and typecheck/Prisma validation passed. This
+  correction is not deployed and changed no live flag or external system.
 - Read-only publish preflight still finds draft `3/3` in `CATEGORY_REVIEW`, with the generated
-  assignment current but category, required attributes, reviewed Russian copy, RUB pricing and
+  assignment current but category, required attributes, reviewed Russian copy, shop-currency pricing and
   authoritative validation incomplete. A source audit proves package facts `110 g` and
   `300 x 200 x 50 mm`; category semantics resolve to Ozon bra `200001517/93065`. The catalog
   snapshot is expired/incomplete and no definition cache exists, so fresh official Ozon GET data
-  is required. ERP has a `14.80 CNY` purchase price but no RUB quote. Reviewed Russian copy, RUB
-  price/oldPrice/VAT and a precise one-shop mutation authorization remain prerequisites; overall
-  progress remains `36/37`.
+  is required. ERP has a `14.80 CNY` purchase price but no retail quote.
+- Read-only BINI pricing audit found all `648` active products and all `42` target-category products
+  use `CNY`, exposing an incorrect V2 `RUB` hardcode. Commit
+  `33e1e78db58527f954ee73ed532522d2e904a2d2` supports explicit CNY/RUB pricing without implicit FX,
+  requires one currency per draft, rejects unsupported/mixed currencies at both readiness and final
+  compilation, and renders an explicit Web currency selector. The complete Server suite passed
+  `4798/4798`, focused pricing tests passed `57/57`, all three typechecks and lint passed, and
+  `pnpm preflight` passed with zero failures. This correction is not deployed and performed no
+  external call. Reviewed Russian copy, exact CNY price/oldPrice, BINI VAT and a precise one-shop
+  mutation authorization remain prerequisites; overall progress remains `36/37`.
 
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
   requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.
