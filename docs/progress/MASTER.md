@@ -44,6 +44,28 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the newly authorized four-scope `.com`/BINI `ingest-pilot`
+passed its fresh Key/browser readiness gate, exact owner/shop/device policy CAS, official
+`ingest-pilot` verifier, and independent zero-effect pre-call audits. Exact Provider-origin
+permission was granted while `<all_urls>` remained false. The capability action then sent exactly
+one POST without retry to `https://ai.big-model-api.top/v1/images/generations`.
+
+The Provider connection closed without an HTTP response as `net::ERR_CONNECTION_CLOSED`. No
+capability evidence was created, and the extension persisted one absorbing `TEXT_TO_IMAGE`
+`UNKNOWN_OUTCOME` anti-replay guard. Under the no-retry and cumulative-cost boundary, the second
+formal-generation POST was not dispatched and the authorized ERP ingest was not attempted. Actual
+Provider cost was not observable. Exact rollback returned all ten rows to dark and passed the
+official `off` verifier; read-only reconciliation found zero batches, intents, provenance, upload
+staging, ingest-rate events, publish intents, Ozon attempts, or command grants.
+
+The exact Provider permission was revoked. The session-only Key and the one unknown guard remain
+only to preserve the request authority; evidence, dispatch, workbench, batch, and result-vault state
+are empty. Final reconciliation SHA-256 is
+`6cdd31202c8f0b6a92464bb4fff6b0b99720e216f8ed4bcae51cae187557e092`.
+`REL-02` remains open at `36/37`. This authorization is closed and the unknown request must not be
+retried or replaced under the same cost boundary; continuation requires Provider-side outcome/cost
+reconciliation or a separately authorized new credential/provider boundary.
+
 Current checkpoint (2026-08-06): standard BINI device reauthorization replaced the blocked
 three-scope session with one unique active session containing exactly `capture:write`,
 `listing:review`, `media:execute`, and `byok:media:ingest`. The predecessor session and its shop

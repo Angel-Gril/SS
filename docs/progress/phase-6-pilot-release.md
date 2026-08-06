@@ -28,6 +28,23 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The freshly authorized four-scope `.com`/BINI `ingest-pilot` passed Key/browser readiness,
+  exact scoped policy CAS, the official `ingest-pilot` verifier, and independent zero-effect
+  pre-call audits. It granted only the exact Provider origin; `<all_urls>` stayed false. Capability
+  POST 1 was sent exactly once without retry to the expected generations endpoint.
+- The connection closed without an HTTP response as `net::ERR_CONNECTION_CLOSED`. No capability
+  evidence was created, and one `TEXT_TO_IMAGE` `UNKNOWN_OUTCOME` anti-replay guard was retained.
+  The formal-generation POST and ERP ingest were not run. Exact rollback returned all ten rows to
+  dark and passed the official `off` verifier; eight execution/ingest/publish/Ozon database counts
+  remained zero. Actual Provider cost was not observed.
+- Exact-origin permission was revoked. The Key and unknown guard remain session-only to preserve
+  request authority; evidence, dispatch, workbench, batch and vault state are empty. Final
+  reconciliation SHA-256 is
+  `6cdd31202c8f0b6a92464bb4fff6b0b99720e216f8ed4bcae51cae187557e092`.
+  `REL-02` remains open at `36/37`; this authorization is closed, and continuation requires
+  Provider-side outcome/cost reconciliation or a separately authorized new credential/provider
+  boundary rather than a retry of the unknown request.
+
 - Standard BINI reauthorization replaced the blocked three-scope device session with one unique
   active session containing exactly `capture:write`, `listing:review`, `media:execute`, and
   `byok:media:ingest`. The predecessor session and grant were atomically revoked with reason
