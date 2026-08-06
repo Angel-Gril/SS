@@ -149,7 +149,7 @@ describePostgres('extension device PostgreSQL integration', () => {
       ownerUserId: seed.ownerUserId,
       actorParentId: null,
       shopIds: [seed.shopId],
-      scopes: ['logistics:read'],
+      scopes: ['byok:media:ingest'],
     });
     const deviceId = `${seed.prefix}_device`;
     const original = await service.claimPairingCode({
@@ -162,7 +162,7 @@ describePostgres('extension device PostgreSQL integration', () => {
       ownerUserId: seed.ownerUserId,
       actorParentId: null,
       shopIds: [seed.shopId],
-      scopes: ['capture:write', 'media:execute'],
+      scopes: ['byok:media:ingest', 'listing:publish'],
     });
     const replacement = await service.claimPairingCode({
       code: replacementPairing.code,
@@ -171,7 +171,7 @@ describePostgres('extension device PostgreSQL integration', () => {
     });
 
     expect(replacement.session.id).not.toBe(original.session.id);
-    expect(replacement.session.scopes).toEqual(['capture:write', 'media:execute']);
+    expect(replacement.session.scopes).toEqual(['byok:media:ingest', 'listing:publish']);
     expect((await repository.loadAuthorization(original.session.id))?.status).toBe('REVOKED');
     expect((await repository.loadAuthorization(replacement.session.id))?.status).toBe('ACTIVE');
     const lineage = await first.$queryRawUnsafe<Array<{ replacesSessionId: string | null }>>(
@@ -190,6 +190,28 @@ describePostgres('extension device PostgreSQL integration', () => {
       seed.ownerUserId, deviceId,
     );
     expect(Number(active[0]?.count || 0)).toBe(1);
+    const matchBeforeRevocation = await first.$queryRawUnsafe<Array<{ matches: boolean }>>(
+      `SELECT "extension_byok_publish_session_matches"($1, $2, $3, $3, $4) AS "matches"`,
+      original.session.id,
+      replacement.session.id,
+      seed.ownerUserId,
+      seed.shopId,
+    );
+    expect(matchBeforeRevocation).toEqual([{ matches: true }]);
+    expect(await repository.revokeSession({
+      sessionId: replacement.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    })).toBe(true);
+    const matchAfterRevocation = await first.$queryRawUnsafe<Array<{ matches: boolean }>>(
+      `SELECT "extension_byok_publish_session_matches"($1, $2, $3, $3, $4) AS "matches"`,
+      original.session.id,
+      replacement.session.id,
+      seed.ownerUserId,
+      seed.shopId,
+    );
+    expect(matchAfterRevocation).toEqual([{ matches: true }]);
   });
 
   it('serializes two concurrent authorization replacements for the same device', async () => {

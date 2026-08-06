@@ -33,6 +33,8 @@ RETURNS BOOLEAN
 LANGUAGE SQL
 STABLE
 AS $$
+  -- Command issuance and consumption enforce liveness. This matcher preserves
+  -- durable receipt identity after a later re-pair, expiry, or revocation.
   SELECT provenance_session_id = command_session_id
     OR EXISTS (
       SELECT 1
@@ -60,16 +62,9 @@ AS $$
         AND provenance_grant."status" = 'REVOKED'
         AND provenance_grant."revoked_at" IS NOT NULL
         AND provenance_grant."revoked_reason" = 'PAIRING_APPROVED'
-        AND command_session."status" = 'ACTIVE'
-        AND command_session."revoked_at" IS NULL
-        AND command_session."revoked_reason" IS NULL
-        AND command_session."expires_at" > CURRENT_TIMESTAMP
         AND command_session."scopes" @> ARRAY[
           'byok:media:ingest', 'listing:publish'
         ]::TEXT[]
-        AND command_grant."status" = 'ACTIVE'
-        AND command_grant."revoked_at" IS NULL
-        AND command_grant."revoked_reason" IS NULL
     );
 $$;
 

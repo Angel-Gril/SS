@@ -47,8 +47,7 @@ describe('extension device persistence contract', () => {
     expect(replacementLineageMigration).toContain('extension_device_sessions_replaces_session_id_fkey');
     expect(replacementLineageMigration).toContain('prevent_extension_device_session_replacement_rewrite');
     expect(replacementLineageMigration).toContain('extension_byok_publish_session_matches');
-    expect(replacementLineageMigration).toContain('command_session."status" = \'ACTIVE\'');
-    expect(replacementLineageMigration).toContain('command_grant."status" = \'ACTIVE\'');
+    expect(replacementLineageMigration).toContain('command_session."scopes" @> ARRAY[');
     expect(replacementLineageMigration).toContain('validate_extension_byok_media_provenance_authority()');
     expect(replacementLineageMigration).toContain('BYOK provenance publish receipt guard has unexpected definition');
     expect(replacementLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
