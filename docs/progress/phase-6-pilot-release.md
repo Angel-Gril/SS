@@ -28,6 +28,24 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
+  requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.
+  All returned HTTP 200 JSON. No Provider `POST`, `/api/status`, `/models`, image generation, guard
+  cleanup, ERP ingest/publish, or Ozon write occurred.
+- The raw 1,000-entry token log contains exactly one `gpt-image-2-count`
+  `/v1/images/generations` record in both the tight and expanded request windows. It was created at
+  `2026-08-06T06:13:01.000Z`, consumed quota `5950`, and records `162` seconds of processing. This
+  proves a Provider ledger charge for the original request but not a client-observed response,
+  capability success, or generation success. Classification is `PROVIDER_CHARGE_OBSERVED` /
+  `CHARGED_RESPONSE_UNOBSERVED`; no formal paired-meter settlement was claimed because there was no
+  request-bound pre-call meter snapshot.
+- The session-only Key and the exact single `UNKNOWN_OUTCOME` guard remain. Capability evidence,
+  dispatch, vault, workbench and batch state remain empty; exact-origin and `<all_urls>` permissions
+  remain false. Manifest SHA-256 is
+  `a4b9216096053fddeca6b08be272d2e2969d9540dd500af9232ad5e87657aaee`. The request remains
+  non-retriable, formal POST 2 and ingest remain unexecuted, all rollout rows remain dark, and
+  `REL-02` remains open at `36/37`.
+
 - The freshly authorized four-scope `.com`/BINI `ingest-pilot` passed Key/browser readiness,
   exact scoped policy CAS, the official `ingest-pilot` verifier, and independent zero-effect
   pre-call audits. It granted only the exact Provider origin; `<all_urls>` stayed false. Capability

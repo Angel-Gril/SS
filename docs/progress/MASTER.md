@@ -44,6 +44,28 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
+exactly three authenticated `GET` requests, one each to `/api/usage/token/`,
+`/v1/dashboard/billing/usage`, and `/api/log/token`. All three returned HTTP 200 JSON. It sent no
+Provider `POST`, requested neither `/api/status` nor `/models`, generated no new image, and did not
+clear the existing unknown-outcome guard.
+
+The raw 1,000-entry token log contains exactly one record in both the tight request interval and the
+expanded correlation window for `gpt-image-2-count` at `/v1/images/generations`. The record was
+created at `2026-08-06T06:13:01.000Z`, consumed Provider quota `5950`, and reports `162` seconds of
+upstream processing. This is unique Provider ledger evidence that the original capability request
+was accepted and charged, but the client still observed no HTTP or image response. It is therefore
+classified `PROVIDER_CHARGE_OBSERVED` / `CHARGED_RESPONSE_UNOBSERVED`, not capability or generation
+success. No request-bound pre-call meter snapshot exists, so no formal paired-meter settlement was
+claimed.
+
+Post-reconciliation containment still has one session-only Key and the same single
+`TEXT_TO_IMAGE` `UNKNOWN_OUTCOME` guard; capability evidence, dispatch, vault, workbench, and batch
+state remain empty, and exact-origin plus `<all_urls>` permissions remain false. The manifest
+SHA-256 is `a4b9216096053fddeca6b08be272d2e2969d9540dd500af9232ad5e87657aaee`.
+The original request remains non-retriable, formal POST 2 and ERP ingest remain unexecuted, all
+rollout rows remain dark, and `REL-02` remains open at `36/37`.
+
 Current checkpoint (2026-08-06): the newly authorized four-scope `.com`/BINI `ingest-pilot`
 passed its fresh Key/browser readiness gate, exact owner/shop/device policy CAS, official
 `ingest-pilot` verifier, and independent zero-effect pre-call audits. Exact Provider-origin
@@ -1666,15 +1688,17 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep `1.0.286` and both regions dark. The second `2/2` authorization is
-exhausted and its cleared candidate cannot be reused. To continue REL-02 with a real generated
-asset, separately authorize a fresh `.com`/BINI generation-and-ingest attempt with a newly loaded
-session Key, trusted exact-origin permission, exact Provider POST count and cost ceilings, and the
-`byok:media:ingest` gate enabled only for the same owner/shop/device. Record independent human
-quality approval before local keep and ingest, then verify the generation and ingest kill switches,
-stored-asset provenance, zero ERP AI charge, and post-enable canary before returning the scope to
-dark. A later one-shop Ozon publish remains a separate explicit mutation authorization and must end
-with publish reconciliation and rollback evidence. No current authorization permits either lane.
+Immediate next step: keep `1.0.286` and both regions dark. Provider reconciliation proves that the
+latest unknown capability request consumed quota, but no valid response or image was recovered; its
+guard must remain and the request must not be retried. The current GET-only authorization is closed.
+To continue `REL-02`, separately authorize retiring the current credential authority, loading a new
+session credential revision, and running a fresh `.com`/BINI generation-and-ingest attempt with an
+exact Provider POST count and single/cumulative cost ceilings. Provider price synchronization is not
+required. Record independent human quality approval before local keep and ingest, then verify the
+generation and ingest kill switches, stored-asset provenance, zero ERP AI charge, and post-enable
+canary before returning the scope to dark. A later one-shop Ozon publish remains a separate explicit
+mutation authorization and must end with publish reconciliation and rollback evidence. No current
+authorization permits either lane.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
