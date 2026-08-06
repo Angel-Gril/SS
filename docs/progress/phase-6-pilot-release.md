@@ -28,6 +28,29 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The second separately authorized `1.0.286` `.com`/BINI sandbox attempt consumed exactly `2/2`
+  Provider POSTs without retry. The capability probe and formal `TEXT_TO_IMAGE` generation both
+  returned HTTP 200. Status v2 records `SUCCEEDED`; the decoded `1254x1254` PNG is `1,603,057`
+  bytes with SHA-256 `1ec671d0768c1bcc911f95bebd87c2255509f91a9b27ae2485f6edc981424932`.
+  Provider price synchronization was not required and actual Provider cost was not observed.
+- Automated inspection of the live preview passed, but independent human quality confirmation was
+  not recorded. Before escrow expiry, a live MV3 stop/wake removed the old Worker and restored the
+  exact candidate under a new Worker in review-only state. Status v2, result SHA-256 and the
+  AES-256-GCM ciphertext envelope matched; recovery sent zero Provider POSTs and made zero ERP
+  ingest. The extension-origin workbench committed an authorized programmatic local keep at
+  projection revision `5`, leaving the attempt `KEPT` and ingest `NOT_STARTED`.
+- Controlled cleanup cleared the batch, returned all six scoped rows to dark, passed the official
+  `off` verifier, cleared the Key/evidence, revoked the exact origin and removed all dispatch,
+  recovery, vault and escrow state. Formal-result and final-reconciliation receipt SHA-256 values
+  are `088be737bcd762f165e94d0cc637996fd8c8499e316bd9e87953de2ab426a733` and
+  `fd2862e623341aecdb54e8dacbf60d7ab4f68d25b0bbb81c069a06d5f074ca65`; screenshot SHA-256 is
+  `f89be18582528fa070c99d36228522e001aedb7423a0a4fac52c5168e2ca8a95`.
+- The authorization is exhausted and the cleared local result cannot be reused. No ERP ingest,
+  publish or Ozon write occurred. `REL-02` remains open at `36/37`: positive ingest, independent
+  kill-switch/post-enable canary evidence, one-shop publish and publish reconciliation still need
+  separate authorization. The next live lane must record human approval before keeping and
+  ingesting a newly generated candidate; the Ozon mutation remains a later, distinct approval.
+
 - The separately authorized `1.0.286` `.com`/BINI sandbox pilot consumed exactly two Provider
   POSTs without retry: one successful capability probe and one successful formal
   `TEXT_TO_IMAGE` generation. Status v2 records `SUCCEEDED`; the generated PNG is `1,634,189`

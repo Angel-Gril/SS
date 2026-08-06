@@ -44,7 +44,39 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
-Current checkpoint (2026-08-06): the separately authorized `1.0.286` `.com`/BINI scoped
+Current checkpoint (2026-08-06): the second separately authorized `1.0.286` `.com`/BINI scoped
+sandbox attempt consumed exactly its `2/2` Provider POST allowance without retry. POST 1 returned
+HTTP 200 and persisted exact `TEXT_TO_IMAGE` capability evidence. POST 2 returned HTTP 200 and
+status v2 records `SUCCEEDED`; the decoded PNG is `1,603,057` bytes at `1254x1254`, with result
+SHA-256 `1ec671d0768c1bcc911f95bebd87c2255509f91a9b27ae2485f6edc981424932`. Provider price
+synchronization was not required and actual Provider cost was not observed.
+
+The live preview rendered one centered sunset-skin halter bra on a clean light neutral studio
+background with no visible person, text, logo, watermark, packaging, measurement, or extra object.
+Automated visual inspection passed; independent human quality confirmation was not recorded. Before
+the hard escrow TTL, the MV3 Worker was stopped and woken. The old Worker disappeared, the new
+Worker restored the exact candidate in review-only state from the AES-256-GCM ciphertext vault, the
+status-v2 result hash matched, and restart recovery made zero Provider POSTs and zero ERP ingest.
+The extension-origin workbench then committed an authorized programmatic local keep at projection
+revision `5`; the recovered attempt is `KEPT`, while ingest remains `NOT_STARTED` and ERP AI charge
+is zero. This local keep does not satisfy the independent human-review or ingest acceptance gates.
+
+Controlled cleanup cleared the execution batch, returned all six scoped rows to dark, passed the
+official `off` verifier, cleared the session Key and capability evidence, and revoked the exact
+Provider-origin permission. Final browser containment found no secret, uncertain probe, dispatch,
+batch recovery, vault, escrow, exact-origin permission, or `<all_urls>` permission. Formal-result
+and final-reconciliation receipt SHA-256 values are
+`088be737bcd762f165e94d0cc637996fd8c8499e316bd9e87953de2ab426a733` and
+`fd2862e623341aecdb54e8dacbf60d7ab4f68d25b0bbb81c069a06d5f074ca65`; screenshot SHA-256 is
+`f89be18582528fa070c99d36228522e001aedb7423a0a4fac52c5168e2ca8a95`.
+
+The authorization is exhausted and cannot be reused. No ERP media ingest, publish, or Ozon write
+occurred. `REL-02` remains open, Phase 6 remains `2/3`, and overall progress remains `36/37` because
+positive ingest, independent kill-switch/post-enable canary evidence, one-shop publish, and publish
+reconciliation remain outside this authorization. The candidate bytes were removed during cleanup,
+so a later ingest lane cannot reuse this local result.
+
+Historical checkpoint (2026-08-06): the first separately authorized `1.0.286` `.com`/BINI scoped
 sandbox pilot consumed exactly two Provider POSTs without retry: one successful capability probe
 and one successful formal `TEXT_TO_IMAGE` generation at
 `https://ai.big-model-api.top/v1/images/generations`. The formal response was HTTP 200. Exact
@@ -1562,14 +1594,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep `1.0.286` and both regions dark. A new `.com`/BINI sandbox attempt first
-requires a freshly loaded session Key, trusted exact-origin permission, and explicit authorization
-for the exact Provider POST count plus single/cumulative cost ceilings. Use the first POST only for
-capability evidence and the second only for formal generation, with no retry. After the candidate
-renders, complete human review, trusted local keep, and live same-session MV3 Worker restart
-recovery inside the hard ten-minute escrow TTL. ERP ingest, publish, and Ozon writes remain closed
-until that sandbox boundary passes and receive separate authorization. The consumed `2/2`
-`1.0.286` authorization cannot be reused.
+Immediate next step: keep `1.0.286` and both regions dark. The second `2/2` authorization is
+exhausted and its cleared candidate cannot be reused. To continue REL-02 with a real generated
+asset, separately authorize a fresh `.com`/BINI generation-and-ingest attempt with a newly loaded
+session Key, trusted exact-origin permission, exact Provider POST count and cost ceilings, and the
+`byok:media:ingest` gate enabled only for the same owner/shop/device. Record independent human
+quality approval before local keep and ingest, then verify the generation and ingest kill switches,
+stored-asset provenance, zero ERP AI charge, and post-enable canary before returning the scope to
+dark. A later one-shop Ozon publish remains a separate explicit mutation authorization and must end
+with publish reconciliation and rollback evidence. No current authorization permits either lane.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
