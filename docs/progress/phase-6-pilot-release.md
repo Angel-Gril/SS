@@ -48,19 +48,26 @@ Progress: 2/3 tasks.
 - This completes positive sandbox generation and BYOK ingest evidence but does not check `REL-02`:
   its acceptance still requires a separately authorized one-shop Ozon publish and publish
   reconciliation. No publish or Ozon mutation occurred in this lane.
-- Offline commit `eb6d841d85c2a06fe5ddd74d5d481115d3a09602` fixes the normal re-pair gap
+- Offline commits `eb6d841d85c2a06fe5ddd74d5d481115d3a09602` and
+  `05f723424e0b1c36815ce41d6965bfd77873c4ff` fix the normal re-pair gap
   between BYOK ingest and publish. The database records one immutable direct predecessor, and both
   application and trigger authority permit only the same deployment/device/owner/actor/shop when
   the old session and grant were replaced by `PAIRING_APPROVED` and the live successor retains
-  ingest plus publish scopes. There is no historical backfill or multi-hop inheritance.
+  ingest plus publish scopes. There is no historical backfill or multi-hop inheritance. A durable
+  command receipt remains linkable after later session expiry/revocation so post-execution
+  reconciliation cannot strand a valid Ozon result.
 - Migration replay and PostgreSQL integration passed (`99/99` AI media and `5/5` device session),
   the complete Server suite passed `4792/4792`, focused authorization tests passed `52/52`, and
   typecheck/Prisma validation passed. This correction is not deployed and changed no live flag or
   external system.
 - Read-only publish preflight still finds draft `3/3` in `CATEGORY_REVIEW`, with the generated
   assignment current but category, required attributes, reviewed Russian copy, RUB pricing and
-  authoritative validation incomplete. These business inputs and a precise one-shop Ozon mutation
-  authorization are the remaining prerequisites; overall progress remains `36/37`.
+  authoritative validation incomplete. A source audit proves package facts `110 g` and
+  `300 x 200 x 50 mm`; category semantics resolve to Ozon bra `200001517/93065`. The catalog
+  snapshot is expired/incomplete and no definition cache exists, so fresh official Ozon GET data
+  is required. ERP has a `14.80 CNY` purchase price but no RUB quote. Reviewed Russian copy, RUB
+  price/oldPrice/VAT and a precise one-shop mutation authorization remain prerequisites; overall
+  progress remains `36/37`.
 
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
   requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.

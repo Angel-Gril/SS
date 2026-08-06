@@ -80,14 +80,17 @@ remains `36/37` because the task acceptance still requires a separately authoriz
 publish pilot, publish reconciliation, and final rollback evidence. No publish or Ozon mutation was
 performed under the current authorization.
 
-Offline follow-up (2026-08-06): commit
-`eb6d841d85c2a06fe5ddd74d5d481115d3a09602` closes the device reauthorization gap between BYOK
+Offline follow-up (2026-08-06): commits
+`eb6d841d85c2a06fe5ddd74d5d481115d3a09602` and
+`05f723424e0b1c36815ce41d6965bfd77873c4ff` close the device reauthorization gap between BYOK
 ingest and publish. A successful same-device re-pair now records one immutable, unique direct
 predecessor. Publish authorization accepts that successor only when deployment, physical device,
 owner, actor and shop remain exact; the predecessor session and shop grant were both revoked by
 `PAIRING_APPROVED`; and the active successor retains both `byok:media:ingest` and
 `listing:publish`. Cross-device, cross-deployment, unrelated, revoked, expired and multi-hop
-successors fail closed. Historical sessions are intentionally not backfilled.
+successors fail closed. Historical sessions are intentionally not backfilled. Once an authorized
+publish command receipt is durable, its one-hop identity remains linkable after a later re-pair,
+expiry or revocation; the PostgreSQL suite covers this post-execution reconciliation case.
 
 All 143 migrations replayed in isolated PostgreSQL schemas. The AI media PostgreSQL suite passed
 `99/99`, the device-session PostgreSQL suite passed `5/5`, the complete Server suite passed
@@ -97,9 +100,15 @@ no Provider, VPS, ERP publish or Ozon mutation.
 
 The read-only BINI publish preflight confirms that the generated asset remains bound at draft
 revision/version `3/3`, but the draft is still at `CATEGORY_REVIEW`: category, required attributes,
-reviewed Russian copy and RUB pricing are absent, and validation is stale. Those business facts
-must be completed and authoritatively validated before the one-shop Ozon mutation can be
-authorized. `REL-02` therefore remains open at `36/37`.
+reviewed Russian copy and RUB pricing are absent, and validation is stale. A separate read-only
+source audit (private receipt SHA-256
+`1c086ac0fc322b1e2146725b05595a662b321f045ad1eb17c007b59fb25c2fe9`) confirms trusted package
+facts of `110 g` and `300 x 200 x 50 mm`, source category `美背文胸`, and the semantic Ozon target
+`Одежда / Белье / Бюстгальтер` (`200001517/93065`). The local Ozon catalog snapshot is expired and
+incomplete and there is no attribute-definition cache for that target, so a fresh official GET is
+required before category/attribute mutation. ERP contains the `14.80 CNY` purchase price but no
+saved source quote or RUB retail price. Reviewed Russian copy plus exact RUB price, old price and
+VAT remain business inputs. `REL-02` therefore remains open at `36/37`.
 
 Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
 exactly three authenticated `GET` requests, one each to `/api/usage/token/`,
