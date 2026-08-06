@@ -43,7 +43,7 @@ Progress: 2/3 tasks.
   `off` verifier, cleared the Key/evidence, revoked the exact origin and removed all dispatch,
   recovery, vault and escrow state. Formal-result and final-reconciliation receipt SHA-256 values
   are `088be737bcd762f165e94d0cc637996fd8c8499e316bd9e87953de2ab426a733` and
-  `fd2862e623341aecdb54e8dacbf60d7ab4f68d25b0bbb81c069a06d5f074ca65`; screenshot SHA-256 is
+  `a0a50a683656ea8213d49fc62093162d39ba34cdc2028c15723c90b758cf6fef`; screenshot SHA-256 is
   `f89be18582528fa070c99d36228522e001aedb7423a0a4fac52c5168e2ca8a95`.
 - The authorization is exhausted and the cleared local result cannot be reused. No ERP ingest,
   publish or Ozon write occurred. `REL-02` remains open at `36/37`: positive ingest, independent
