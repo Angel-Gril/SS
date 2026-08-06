@@ -72,7 +72,9 @@ Progress: 2/3 tasks.
   compilation, and renders an explicit Web currency selector. The complete Server suite passed
   `4798/4798`, focused pricing tests passed `57/57`, all three typechecks and lint passed, and
   `pnpm preflight` passed with zero failures. This correction is not deployed and performed no
-  external call. Reviewed Russian copy, exact CNY price/oldPrice, BINI VAT and a precise one-shop
+  external call. Follow-up commit `b087a0f1430477bec80ff8c77a1ba2ce92cd3c5d` removes the
+  unaudited VAT `0` Web default and requires explicit input; its final preflight rerun also passed.
+  Reviewed Russian copy, exact CNY price/oldPrice, BINI VAT and a precise one-shop
   mutation authorization remain prerequisites; overall progress remains `36/37`.
 
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`

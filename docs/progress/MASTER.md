@@ -117,7 +117,9 @@ the same supported currency, rejects USD/mixed-currency data again in the final 
 an explicit CNY/RUB Web selector. The complete Server suite passed `4798/4798`; focused pricing
 tests passed `57/57`; Server/Web/shared typecheck and lint passed; and `pnpm preflight` passed all
 selected checks (`450` package checks, zero failures, two existing package warnings). This fix is
-not deployed and made no external call or production mutation. Exact CNY price, old price, BINI VAT,
+not deployed and made no external call or production mutation. Follow-up commit
+`b087a0f1430477bec80ff8c77a1ba2ce92cd3c5d` removes the Web form's unaudited VAT `0` default, so a
+tax value must now be entered explicitly; the final preflight rerun also passed. Exact CNY price, old price, BINI VAT,
 reviewed Russian copy and a precise one-shop Ozon mutation authorization remain business inputs.
 `REL-02` therefore remains open at `36/37`.
 
