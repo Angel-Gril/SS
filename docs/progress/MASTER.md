@@ -76,6 +76,14 @@ positive ingest, independent kill-switch/post-enable canary evidence, one-shop p
 reconciliation remain outside this authorization. The candidate bytes were removed during cleanup,
 so a later ingest lane cannot reuse this local result.
 
+Offline follow-up (2026-08-06): added the explicit `ingest-pilot` rollout expectation to the official
+Extension BYOK verifier. It now fail-closes the three combinations as `(generation, ingest, publish)`
+`(true,false,false)`, `(true,true,false)`, and `(true,true,true)` for `sandbox-pilot`, `ingest-pilot`,
+and `publish-pilot`. Focused dark-deployment, documentation, and Server gate tests pass, and the
+complete preflight passed `450` checks with `0` failures and the two existing package warnings. This
+is an offline safety/tooling change only: no flags, deployment, Provider call, ERP ingest, publish,
+or Ozon write changed.
+
 Historical checkpoint (2026-08-06): the first separately authorized `1.0.286` `.com`/BINI scoped
 sandbox pilot consumed exactly two Provider POSTs without retry: one successful capability probe
 and one successful formal `TEXT_TO_IMAGE` generation at

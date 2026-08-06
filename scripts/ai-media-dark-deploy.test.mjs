@@ -122,6 +122,7 @@ const pilotExpectation = {
 };
 
 function extensionByokPilotRows(expectation, overrides = {}) {
+  const ingestPilot = expectation === 'ingest-pilot' || expectation === 'publish-pilot';
   const publishPilot = expectation === 'publish-pilot';
   const policy = {
     ...defaultExtensionByokPolicy,
@@ -137,7 +138,7 @@ function extensionByokPilotRows(expectation, overrides = {}) {
   return [
     { key: 'feature_extension_hosted_ai', value: 'false' },
     { key: 'feature_extension_byok_ai', value: 'true' },
-    { key: 'feature_extension_byok_ingest', value: publishPilot ? 'true' : 'false' },
+    { key: 'feature_extension_byok_ingest', value: ingestPilot ? 'true' : 'false' },
     { key: 'feature_extension_byok_publish', value: publishPilot ? 'true' : 'false' },
     { key: 'extension_byok_admin_policy', value: JSON.stringify(policy) },
   ];
@@ -196,7 +197,11 @@ for (const rows of [
   assert.match(result.stdout, /PASS Extension BYOK rollout matches off/u);
 }
 
-for (const expectation of ['sandbox-pilot', 'publish-pilot']) {
+for (const [expectation, expectedFlags] of [
+  ['sandbox-pilot', 'generation=true; ingest=false; publish=false'],
+  ['ingest-pilot', 'generation=true; ingest=true; publish=false'],
+  ['publish-pilot', 'generation=true; ingest=true; publish=true'],
+]) {
   const result = runExtensionByok(
     expectation,
     extensionByokPilotRows(expectation),
@@ -204,6 +209,7 @@ for (const expectation of ['sandbox-pilot', 'publish-pilot']) {
   );
   assert.equal(result.status, 0, `${expectation} fixture should pass: ${result.stderr}`);
   assert.match(result.stdout, new RegExp(`matches ${expectation}`, 'u'));
+  assert.match(result.stdout, new RegExp(expectedFlags, 'u'));
 }
 
 const hostedPilot = {
@@ -244,6 +250,8 @@ for (const rows of [
 }
 
 const sandboxRows = extensionByokPilotRows('sandbox-pilot');
+const ingestRows = extensionByokPilotRows('ingest-pilot');
+const publishRows = extensionByokPilotRows('publish-pilot');
 const pilotFailureCases = [
   ['missing hosted flag', sandboxRows.slice(1), pilotExpectation],
   [
@@ -266,6 +274,54 @@ const pilotFailureCases = [
       ? { ...row, value: 'true' }
       : row),
     pilotExpectation,
+  ],
+  [
+    'ingest pilot ingest disabled',
+    ingestRows.map((row) => row.key === 'feature_extension_byok_ingest'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+    'ingest-pilot',
+  ],
+  [
+    'ingest pilot generation disabled',
+    ingestRows.map((row) => row.key === 'feature_extension_byok_ai'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+    'ingest-pilot',
+  ],
+  [
+    'ingest pilot publish enabled',
+    ingestRows.map((row) => row.key === 'feature_extension_byok_publish'
+      ? { ...row, value: 'true' }
+      : row),
+    pilotExpectation,
+    'ingest-pilot',
+  ],
+  [
+    'publish pilot ingest disabled',
+    publishRows.map((row) => row.key === 'feature_extension_byok_ingest'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+    'publish-pilot',
+  ],
+  [
+    'publish pilot generation disabled',
+    publishRows.map((row) => row.key === 'feature_extension_byok_ai'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+    'publish-pilot',
+  ],
+  [
+    'publish pilot publish disabled',
+    publishRows.map((row) => row.key === 'feature_extension_byok_publish'
+      ? { ...row, value: 'false' }
+      : row),
+    pilotExpectation,
+    'publish-pilot',
   ],
   [
     'missing policy',
@@ -351,8 +407,8 @@ const pilotFailureCases = [
   ],
 ];
 
-for (const [name, rows, expected] of pilotFailureCases) {
-  const result = runExtensionByok('sandbox-pilot', rows, expected);
+for (const [name, rows, expected, expectation = 'sandbox-pilot'] of pilotFailureCases) {
+  const result = runExtensionByok(expectation, rows, expected);
   assert.notEqual(result.status, 0, `${name} must fail closed`);
   assert.match(result.stderr, /FAIL Extension BYOK rollout mismatch/u);
 }
@@ -450,7 +506,7 @@ assert.match(
 );
 assert.match(
   extensionByokVerifierSource,
-  /off', 'sandbox-pilot', 'publish-pilot/u,
+  /off', 'sandbox-pilot', 'ingest-pilot', 'publish-pilot/u,
   'the fixture verifier must expose only the named rollout expectations',
 );
 assert.match(
@@ -461,7 +517,7 @@ assert.match(
 for (const productionVerifier of [verifyAiMediaDark, composeDarkVerifier]) {
   assert.doesNotMatch(
     productionVerifier,
-    /sandbox-pilot|publish-pilot/u,
+    /sandbox-pilot|ingest-pilot|publish-pilot/u,
     'production dark deployment entrypoints must not accept a pilot expectation',
   );
 }

@@ -46,6 +46,7 @@ for (const releaseControl of [
   'verify-extension-publication.mjs',
   'EXTENSION_RELEASE_SIGNING_KEY_PATH',
   'verify-extension-byok-rollout-policy.mjs',
+  'ingest-pilot',
 ]) {
   assert.ok(
     deployment.includes(releaseControl),
@@ -82,6 +83,7 @@ for (const requiredText of [
   'INPAINT',
   'maxConcurrency',
   'verify-extension-byok-rollout-policy.mjs',
+  'ingest-pilot',
   'pnpm package:extension',
   '真实签名和官网分发回执',
   '默认关闭',

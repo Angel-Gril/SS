@@ -50,6 +50,12 @@ Progress: 2/3 tasks.
   kill-switch/post-enable canary evidence, one-shop publish and publish reconciliation still need
   separate authorization. The next live lane must record human approval before keeping and
   ingesting a newly generated candidate; the Ozon mutation remains a later, distinct approval.
+- Offline follow-up added the explicit `ingest-pilot` verifier expectation. It requires generation
+  and ingest to be `true` while publish remains `false`; `sandbox-pilot` and `publish-pilot` retain
+  their exact `(true,false,false)` and `(true,true,true)` combinations. The dark-deployment and
+  documentation contracts plus the relevant Server gates passed, and `pnpm preflight` passed `450`
+  checks with `0` failures and the two existing package warnings. No rollout flag or external effect
+  changed.
 
 - The separately authorized `1.0.286` `.com`/BINI sandbox pilot consumed exactly two Provider
   POSTs without retry: one successful capability probe and one successful formal

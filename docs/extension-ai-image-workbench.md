@@ -97,7 +97,8 @@ Provider 的技术消费限额，也不表示最终一定会收取该上限金�
   是 `https://provider.example.com/v1`，策略中仍填它的 origin，而非 `/v1` 路径。
 - `allowedOperations` 只能选 `TEXT_TO_IMAGE`、`IMAGE_TO_IMAGE`、`FULL_EDIT`、`INPAINT`。
   文生图验证成功不代表参考图、整图编辑或局部重绘已被验证。
-- `maxConcurrency` 只能是 1–4；正式 `sandbox-pilot` / `publish-pilot` verifier 要求精确为 1。
+- `maxConcurrency` 只能是 1–4；正式 `sandbox-pilot` / `ingest-pilot` / `publish-pilot`
+  verifier 要求精确为 1。
 - 每次策略范围或开关改变时递增 `revision`，便于审核人员识别配置变更。
 - 不得在策略 JSON 中填写 API Key、Authorization、密码、URL 查询参数或 Provider 私有链接；
   解析器会拒绝这类值。
@@ -106,10 +107,12 @@ Provider 的技术消费限额，也不表示最终一定会收取该上限金�
 草稿/发布演练后开启发布。关闭策略或任意对应开关都会使未授权路径失败关闭，不应改用旧版
 扩展来绕过。
 
-部署暗态由 `verify-ai-media-dark.sh` 固定验证 `off`。准备试点快照时，命令形状为：
+部署暗态由 `verify-ai-media-dark.sh` 固定验证 `off`。三个试点 expectation 对应互不混用的
+开关组合：`sandbox-pilot` 只开启生成，`ingest-pilot` 开启生成和 ERP 接收但保持发布关闭，
+`publish-pilot` 才同时开启生成、接收和发布。准备试点快照时，命令形状为：
 
 ```text
-node scripts/verify-extension-byok-rollout-policy.mjs <sandbox-pilot|publish-pilot> <system-config-rows-json> <exact-expectations-json>
+node scripts/verify-extension-byok-rollout-policy.mjs <sandbox-pilot|ingest-pilot|publish-pilot> <system-config-rows-json> <exact-expectations-json>
 ```
 
 expectations 必须逐项列出 hosted 开关、revision、owner/shop/device、origin 和 operations。该

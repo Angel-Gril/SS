@@ -4,7 +4,12 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-const EXPECTATIONS = new Set(['off', 'sandbox-pilot', 'publish-pilot']);
+const EXPECTATIONS = new Set(['off', 'sandbox-pilot', 'ingest-pilot', 'publish-pilot']);
+const PILOT_FLAG_EXPECTATIONS = Object.freeze({
+  'sandbox-pilot': Object.freeze({ generation: true, ingest: false, publish: false }),
+  'ingest-pilot': Object.freeze({ generation: true, ingest: true, publish: false }),
+  'publish-pilot': Object.freeze({ generation: true, ingest: true, publish: true }),
+});
 const OPERATIONS = Object.freeze([
   'TEXT_TO_IMAGE',
   'IMAGE_TO_IMAGE',
@@ -283,7 +288,7 @@ export function verifyExtensionByokRolloutPolicy(rows, options) {
     fail('rollout expectation must be an object');
   }
   if (!EXPECTATIONS.has(options.expectation)) {
-    fail('expectation must be off, sandbox-pilot, or publish-pilot');
+    fail('expectation must be off, sandbox-pilot, ingest-pilot, or publish-pilot');
   }
   const values = parseRows(rows);
   if (options.expectation === 'off') {
@@ -317,7 +322,7 @@ export function verifyExtensionByokRolloutPolicy(rows, options) {
   }
 
   const expected = pilotExpectation(options);
-  const publishPilot = options.expectation === 'publish-pilot';
+  const expectedFlags = PILOT_FLAG_EXPECTATIONS[options.expectation];
   const result = {
     expectation: options.expectation,
     hostedAi: verifyFlag(
@@ -326,9 +331,24 @@ export function verifyExtensionByokRolloutPolicy(rows, options) {
       expected.hostedAiEnabled,
       false,
     ),
-    generation: verifyFlag(values, 'feature_extension_byok_ai', true, false),
-    ingest: verifyFlag(values, 'feature_extension_byok_ingest', publishPilot, false),
-    publish: verifyFlag(values, 'feature_extension_byok_publish', publishPilot, false),
+    generation: verifyFlag(
+      values,
+      'feature_extension_byok_ai',
+      expectedFlags.generation,
+      false,
+    ),
+    ingest: verifyFlag(
+      values,
+      'feature_extension_byok_ingest',
+      expectedFlags.ingest,
+      false,
+    ),
+    publish: verifyFlag(
+      values,
+      'feature_extension_byok_publish',
+      expectedFlags.publish,
+      false,
+    ),
     policy: '',
   };
   const rawPolicy = values.get('extension_byok_admin_policy');
@@ -365,8 +385,8 @@ function cliOptions(expectation, rawExpected) {
     if (rawExpected !== undefined) fail('off expectation does not accept pilot expectations');
     return { expectation };
   }
-  if (!['sandbox-pilot', 'publish-pilot'].includes(expectation)) {
-    fail('expectation must be off, sandbox-pilot, or publish-pilot');
+  if (!['sandbox-pilot', 'ingest-pilot', 'publish-pilot'].includes(expectation)) {
+    fail('expectation must be off, sandbox-pilot, ingest-pilot, or publish-pilot');
   }
   const expected = parseJsonArgument(rawExpected, 'pilot expectations JSON');
   exactObject(expected, PILOT_EXPECTATION_KEYS, 'pilot expectations JSON');
@@ -379,7 +399,7 @@ if (process.argv[1]
     if (process.argv.length < 4 || process.argv.length > 5) {
       fail(
         'usage: verify-extension-byok-rollout-policy.mjs '
-          + '<off|sandbox-pilot|publish-pilot> <rows-json> [pilot-expectations-json]',
+          + '<off|sandbox-pilot|ingest-pilot|publish-pilot> <rows-json> [pilot-expectations-json]',
       );
     }
     const expectation = process.argv[2];

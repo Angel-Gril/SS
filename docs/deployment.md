@@ -321,9 +321,11 @@ Unit 10A-H3b 已增加暗态 fake-only listing-draft 精确槽位 APPEND/confirm
 
 `verify-ai-media-dark.sh` 现在同时查询上述四个扩展开关和
 `extension_byok_admin_policy`，并把 Extension BYOK expectation 固定为 `off`。它只证明部署可
-在暗态启动，不授权任何 pilot。`sandbox-pilot` / `publish-pilot` 必须另行使用
+在暗态启动，不授权任何 pilot。`sandbox-pilot` / `ingest-pilot` / `publish-pilot` 必须另行使用
 `verify-extension-byok-rollout-policy.mjs`，并显式传入期望的 hosted 开关、revision、owner、
 shop、device session、Provider origin 和 operations；`maxConcurrency` 必须为 1。
+`sandbox-pilot` 精确要求生成开启、接收和发布关闭；`ingest-pilot` 精确要求生成和接收开启、
+发布关闭；只有 `publish-pilot` 可以让三项都开启。任一其他组合必须失败关闭。
 
 `REL-04` 还必须从受保护的 token 文件运行 `pnpm canary:rel04:dark`。脚本先验证 `/ready`、
 区域候选、extension CORS、全部默认关闭配置、Hosted readiness 和 publisher capability，再创建
