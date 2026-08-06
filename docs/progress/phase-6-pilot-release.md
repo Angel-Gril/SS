@@ -28,6 +28,22 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- The separately authorized `1.0.286` `.com`/BINI `ingest-pilot` enabled only the exact scoped
+  source workflow, BYOK generation and BYOK ingest rows. Hosted AI, BYOK publish and the Ozon
+  publisher stayed off. Its capability probe made exactly one Provider POST without retry, returned
+  HTTP 200, and persisted exact `TEXT_TO_IMAGE` evidence.
+- Formal generation made zero Provider POSTs. The authoritative workbench launch failed closed with
+  `scope_required`: the active BINI session has `capture:write`, `listing:review`, and
+  `byok:media:ingest`, but lacks the required `media:execute` scope. The post-enable database window
+  contains zero new batches, intents, provenance, upload staging, or ingest-rate rows.
+- Exact rollback passed the official `off` verifier and browser cleanup removed the Key, capability
+  evidence, exact-origin permission, and stale workbench tabs. The one numerically unused POST is
+  not reusable because standard device reauthorization invalidates the old credential evidence.
+  Final reconciliation SHA-256 is
+  `7f492b0e7df97d90bdc0f9aec78eb39ea657816a364850dedd4b0bf22b5853cd`.
+  `REL-02` remains open at `36/37`; the next attempt requires standard BINI reauthorization with
+  `media:execute`, a freshly loaded Key, and a new two-POST capability/formal-generation allowance.
+
 - The second separately authorized `1.0.286` `.com`/BINI sandbox attempt consumed exactly `2/2`
   Provider POSTs without retry. The capability probe and formal `TEXT_TO_IMAGE` generation both
   returned HTTP 200. Status v2 records `SUCCEEDED`; the decoded `1254x1254` PNG is `1,603,057`

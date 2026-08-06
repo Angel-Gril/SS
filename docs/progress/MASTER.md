@@ -44,6 +44,28 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the separately authorized `1.0.286` `.com`/BINI
+`ingest-pilot` passed the final v3 authorization/readiness gate and enabled only source workflow,
+BYOK generation, and BYOK ingest for the exact owner/shop/device. Hosted AI, BYOK publish, and the
+Ozon publisher remained off. The capability probe sent exactly one Provider POST without retry to
+`https://ai.big-model-api.top/v1/images/generations`, returned HTTP 200, and persisted exact
+`TEXT_TO_IMAGE` evidence valid through `2026-08-07T05:11:07.997Z`.
+
+The formal generation was blocked before Provider dispatch because the paired BINI device session
+has `capture:write`, `listing:review`, and `byok:media:ingest`, but the authoritative workbench
+launch additionally requires `media:execute`. The formal POST count is therefore zero. The live
+database window contains zero new execution batches, intents, provenance rows, upload staging rows,
+or ingest rate events. No ERP ingest, publish, or Ozon write occurred.
+
+The official `off` verifier passed after exact rollback; the session Key, capability evidence,
+exact Provider-origin permission, and stale workbench tabs were cleared. The unused numerical POST
+slot is closed because normal device reauthorization invalidates the old Key and capability
+evidence. Final reconciliation SHA-256 is
+`7f492b0e7df97d90bdc0f9aec78eb39ea657816a364850dedd4b0bf22b5853cd`.
+`REL-02` remains open at `36/37`. The next live attempt requires a standard BINI reauthorization
+with `media:execute` added, a freshly loaded Key, and a new two-POST allowance for one capability
+probe plus one formal generation; publish and Ozon remain outside that boundary.
+
 Current checkpoint (2026-08-06): the second separately authorized `1.0.286` `.com`/BINI scoped
 sandbox attempt consumed exactly its `2/2` Provider POST allowance without retry. POST 1 returned
 HTTP 200 and persisted exact `TEXT_TO_IMAGE` capability evidence. POST 2 returned HTTP 200 and
