@@ -119,15 +119,20 @@ describe('Prisma extension BYOK media provenance repository', () => {
   it('loads the live session, account, exact shop grant, and shop ownership boundary', async () => {
     const findUnique = vi.fn(async () => ({
       id: 'session-1',
+      deploymentId: 'deployment-1',
+      deviceId: 'physical-device-1',
+      replacesSessionId: 'session-0',
       status: 'ACTIVE',
       expiresAt: new Date('2026-07-27T00:00:00.000Z'),
       revokedAt: null,
+      revokedReason: null,
       ownerUserId: 'owner-1',
       actorUserId: 'owner-1',
       owner: { status: 'ACTIVE', role: 'USER' },
       actor: { status: 'ACTIVE', role: 'USER', parentId: null },
       shopGrants: [{
         status: 'ACTIVE',
+        revokedReason: null,
         shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'OZON' },
       }],
     }));
@@ -139,10 +144,14 @@ describe('Prisma extension BYOK media provenance repository', () => {
       sessionId: 'session-1', ownerUserId: 'owner-1', shopId: 'shop-1',
     })).resolves.toMatchObject({
       sessionId: 'session-1',
+      deploymentId: 'deployment-1',
+      deviceId: 'physical-device-1',
+      replacesSessionId: 'session-0',
       status: 'ACTIVE',
       ownerUserId: 'owner-1',
       actorUserId: 'owner-1',
       shopGrantStatus: 'ACTIVE',
+      shopGrantRevokedReason: null,
       shopId: 'shop-1',
       shopOwnerUserId: 'owner-1',
       shopStatus: 'ACTIVE',
@@ -151,6 +160,10 @@ describe('Prisma extension BYOK media provenance repository', () => {
     expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'session-1' },
       select: expect.objectContaining({
+        deploymentId: true,
+        deviceId: true,
+        replacesSessionId: true,
+        revokedReason: true,
         shopGrants: expect.objectContaining({ where: { shopId: 'shop-1' } }),
       }),
     }));

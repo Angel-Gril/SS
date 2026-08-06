@@ -69,10 +69,14 @@ function deviceAuthorization(
 ): ExtensionByokPublishDeviceAuthorization {
   return {
     sessionId,
+    deploymentId: 'deployment-1',
+    deviceId: 'physical-device-1',
+    replacesSessionId: null,
     scopes: ['byok:media:ingest', 'listing:publish'],
     status: 'ACTIVE',
     expiresAt: new Date('2026-07-27T00:00:00.000Z'),
     revokedAt: null,
+    revokedReason: null,
     ownerUserId: 'owner-1',
     actorUserId: 'owner-1',
     ownerStatus: 'ACTIVE',
@@ -81,6 +85,7 @@ function deviceAuthorization(
     actorRole: 'USER',
     actorParentId: null,
     shopGrantStatus: 'ACTIVE',
+    shopGrantRevokedReason: null,
     shopId: 'shop-1',
     shopOwnerUserId: 'owner-1',
     shopStatus: 'ACTIVE',
@@ -175,6 +180,104 @@ describe('extension BYOK publish authorization', () => {
         reasonCode: 'DEVICE_NOT_ALLOWED',
         statusCode: 409,
       });
+  });
+
+  it('allows the owner-approved direct replacement session on the same physical device', async () => {
+    const loadDeviceAuthorization = vi.fn(async ({ sessionId }: { sessionId: string }) => (
+      sessionId === 'device-origin'
+        ? deviceAuthorization(sessionId, {
+            scopes: ['byok:media:ingest'],
+            status: 'REVOKED',
+            revokedAt: new Date('2026-07-25T00:00:00.000Z'),
+            revokedReason: 'PAIRING_APPROVED',
+            shopGrantStatus: 'REVOKED',
+            shopGrantRevokedReason: 'PAIRING_APPROVED',
+          })
+        : deviceAuthorization(sessionId, {
+            replacesSessionId: 'device-origin',
+          })
+    ));
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadPolicy: async () => policy({ deviceSessionIds: ['device-publisher'] }),
+      loadDeviceAuthorization,
+    }));
+
+    await expect(authorize(input({ requestingDeviceSessionId: 'device-publisher' })))
+      .resolves.toEqual({
+        byokAssetIds: ['asset-byok'],
+        policyRevision: 17,
+      });
+    expect(loadDeviceAuthorization).toHaveBeenCalledTimes(2);
+  });
+
+  const rejectedReplacementCases: Array<[
+    string,
+    Partial<ExtensionByokPublishDeviceAuthorization>,
+    Partial<ExtensionByokPublishDeviceAuthorization>,
+    Partial<ExtensionByokPolicySnapshot>?,
+  ]> = [
+    ['different device', {}, { deviceId: 'physical-device-2' }],
+    ['different deployment', {}, { deploymentId: 'deployment-2' }],
+    ['unlinked replacement', {}, { replacesSessionId: 'another-session' }],
+    ['replacement missing ingest scope', {}, { scopes: ['listing:publish'] }],
+    ['replacement missing publish scope', {}, { scopes: ['byok:media:ingest'] }],
+    ['replacement policy names only predecessor', {}, { }, { deviceSessionIds: ['device-origin'] }],
+    ['predecessor remains active', { status: 'ACTIVE', revokedAt: null, revokedReason: null, shopGrantStatus: 'ACTIVE', shopGrantRevokedReason: null }, {}],
+    ['wrong session revocation', { revokedReason: 'OWNER_REVOKED' }, {}],
+    ['wrong shop-grant revocation', { shopGrantRevokedReason: 'OWNER_REVOKED' }, {}],
+  ];
+
+  it.each(rejectedReplacementCases)(
+    'rejects a replacement publish authorization with %s',
+    async (_label, provenancePatch, replacementPatch, policyPatch = {}) => {
+      const authorize = createExtensionByokPublishAuthorizer(dependencies({
+        loadPolicy: async () => policy({ deviceSessionIds: ['device-publisher'], ...policyPatch }),
+        loadDeviceAuthorization: async ({ sessionId }: { sessionId: string }) => (
+          sessionId === 'device-origin'
+            ? deviceAuthorization(sessionId, {
+                scopes: ['byok:media:ingest'],
+                status: 'REVOKED',
+                revokedAt: new Date('2026-07-25T00:00:00.000Z'),
+                revokedReason: 'PAIRING_APPROVED',
+                shopGrantStatus: 'REVOKED',
+                shopGrantRevokedReason: 'PAIRING_APPROVED',
+                ...provenancePatch,
+              })
+            : deviceAuthorization(sessionId, {
+                replacesSessionId: 'device-origin',
+                ...replacementPatch,
+              })
+        ),
+      }));
+
+      await expect(authorize(input({ requestingDeviceSessionId: 'device-publisher' })))
+        .rejects.toMatchObject({
+          code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+          reasonCode: 'DEVICE_NOT_ALLOWED',
+          statusCode: 409,
+        });
+    },
+  );
+
+  it.each([
+    ['deployment ID', { deploymentId: 42 }],
+    ['device ID', { deviceId: { value: 'physical-device-1' } }],
+    ['replacement session ID', { replacesSessionId: 42 }],
+  ])('fails closed for a malformed %s from the authorization repository', async (_label, patch) => {
+    const authorize = createExtensionByokPublishAuthorizer(dependencies({
+      loadDeviceAuthorization: async ({ sessionId }: { sessionId: string }) => (
+        deviceAuthorization(
+          sessionId,
+          patch as unknown as Partial<ExtensionByokPublishDeviceAuthorization>,
+        )
+      ),
+    }));
+
+    await expect(authorize(input())).rejects.toMatchObject({
+      code: 'EXTENSION_BYOK_PUBLISH_DISABLED',
+      reasonCode: 'DEVICE_NOT_ALLOWED',
+      statusCode: 409,
+    });
   });
 
   it('propagates a missing publish scope from the cached same-device authorization', async () => {

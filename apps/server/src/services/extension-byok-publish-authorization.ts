@@ -25,10 +25,14 @@ export interface ExtensionByokPublishAssetInspection {
 
 export interface ExtensionByokPublishDeviceAuthorization {
   sessionId: string;
+  deploymentId: string;
+  deviceId: string;
+  replacesSessionId: string | null;
   scopes: string[];
   status: string;
   expiresAt: Date;
   revokedAt: Date | null;
+  revokedReason: string | null;
   ownerUserId: string;
   actorUserId: string;
   ownerStatus: string;
@@ -37,6 +41,7 @@ export interface ExtensionByokPublishDeviceAuthorization {
   actorRole: string;
   actorParentId: string | null;
   shopGrantStatus: string | null;
+  shopGrantRevokedReason: string | null;
   shopId: string | null;
   shopOwnerUserId: string | null;
   shopStatus: string | null;
@@ -173,18 +178,14 @@ export function createExtensionByokPublishAuthorizer(options: {
     const evaluate = createExtensionByokPolicyEvaluator({ loadPolicy: async () => policy });
     const now = (options.now || (() => new Date()))();
     if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return unavailable();
-    const liveDeviceCache = new Map<string, ExtensionByokPublishDeviceAuthorization>();
+    const deviceCache = new Map<string, ExtensionByokPublishDeviceAuthorization>();
 
-    const requireLiveDevice = async (
+    const loadDevice = async (
       sessionId: string,
-      requiredScope: string,
     ): Promise<ExtensionByokPublishDeviceAuthorization> => {
       const exactSessionId = exactIdentifier(sessionId);
-      const cached = liveDeviceCache.get(exactSessionId);
-      if (cached) {
-        if (!cached.scopes.includes(requiredScope)) denied('DEVICE_NOT_ALLOWED');
-        return cached;
-      }
+      const cached = deviceCache.get(exactSessionId);
+      if (cached) return cached;
       let authorization: ExtensionByokPublishDeviceAuthorization | null;
       try {
         authorization = await options.loadDeviceAuthorization({
@@ -199,11 +200,25 @@ export function createExtensionByokPublishAuthorizer(options: {
       if (authorization.sessionId !== exactSessionId) unavailable();
       if (!Array.isArray(authorization.scopes)
         || authorization.scopes.some((scope) => typeof scope !== 'string')
-        || !authorization.scopes.includes(requiredScope)
-        || authorization.status !== 'ACTIVE'
-        || authorization.revokedAt !== null
+        || typeof authorization.deploymentId !== 'string'
+        || !authorization.deploymentId
+        || authorization.deploymentId.length > 200
+        || authorization.deploymentId !== authorization.deploymentId.normalize('NFKC').trim()
+        || typeof authorization.deviceId !== 'string'
+        || !authorization.deviceId
+        || authorization.deviceId.length > 200
+        || authorization.deviceId !== authorization.deviceId.normalize('NFKC').trim()
+        || (authorization.replacesSessionId !== null
+          && (typeof authorization.replacesSessionId !== 'string'
+            || !authorization.replacesSessionId
+            || authorization.replacesSessionId.length > 500
+            || authorization.replacesSessionId
+              !== authorization.replacesSessionId.normalize('NFKC').trim()))
         || !(authorization.expiresAt instanceof Date)
-        || authorization.expiresAt.getTime() <= now.getTime()
+        || !Number.isFinite(authorization.expiresAt.getTime())
+        || (authorization.revokedAt !== null
+          && (!(authorization.revokedAt instanceof Date)
+            || !Number.isFinite(authorization.revokedAt.getTime())))
         || authorization.ownerUserId !== ownerUserId
         || authorization.actorUserId !== ownerUserId
         || authorization.ownerStatus !== 'ACTIVE'
@@ -211,41 +226,89 @@ export function createExtensionByokPublishAuthorizer(options: {
         || !['USER', 'ADMIN'].includes(authorization.ownerRole)
         || !['USER', 'ADMIN'].includes(authorization.actorRole)
         || authorization.actorParentId !== null
-        || authorization.shopGrantStatus !== 'ACTIVE'
         || authorization.shopId !== shopId
         || authorization.shopOwnerUserId !== ownerUserId
         || authorization.shopStatus !== 'ACTIVE'
         || authorization.shopPlatform !== 'OZON') {
         denied('DEVICE_NOT_ALLOWED');
       }
-      liveDeviceCache.set(exactSessionId, authorization);
+      deviceCache.set(exactSessionId, authorization);
       return authorization;
+    };
+
+    const requireLiveDevice = async (
+      sessionId: string,
+      requiredScopes: string[],
+    ): Promise<ExtensionByokPublishDeviceAuthorization> => {
+      const authorization = await loadDevice(sessionId);
+      if (requiredScopes.some((scope) => !authorization.scopes.includes(scope))
+        || authorization.status !== 'ACTIVE'
+        || authorization.revokedAt !== null
+        || authorization.revokedReason !== null
+        || !(authorization.expiresAt instanceof Date)
+        || authorization.expiresAt.getTime() <= now.getTime()
+        || authorization.shopGrantStatus !== 'ACTIVE'
+        || authorization.shopGrantRevokedReason !== null) {
+        denied('DEVICE_NOT_ALLOWED');
+      }
+      return authorization;
+    };
+
+    const requireDirectReplacement = async (
+      provenanceSessionId: string,
+      requestingSessionId: string,
+    ): Promise<ExtensionByokPublishDeviceAuthorization> => {
+      const provenanceDevice = await loadDevice(provenanceSessionId);
+      const requestingDevice = await requireLiveDevice(
+        requestingSessionId,
+        ['byok:media:ingest', 'listing:publish'],
+      );
+      if (!provenanceDevice.scopes.includes('byok:media:ingest')
+        || provenanceDevice.status !== 'REVOKED'
+        || !(provenanceDevice.revokedAt instanceof Date)
+        || provenanceDevice.revokedAt.getTime() > now.getTime()
+        || provenanceDevice.revokedReason !== 'PAIRING_APPROVED'
+        || provenanceDevice.shopGrantStatus !== 'REVOKED'
+        || provenanceDevice.shopGrantRevokedReason !== 'PAIRING_APPROVED'
+        || requestingDevice.replacesSessionId !== provenanceDevice.sessionId
+        || requestingDevice.deploymentId !== provenanceDevice.deploymentId
+        || requestingDevice.deviceId !== provenanceDevice.deviceId) {
+        denied('DEVICE_NOT_ALLOWED');
+      }
+      return requestingDevice;
     };
 
     for (const row of provenanceRows) {
       const providerOrigin = originsByHash.get(row.endpointOriginSha256);
       if (!providerOrigin) return denied('ORIGIN_NOT_ALLOWED');
       const provenanceDeviceSessionId = exactIdentifier(row.deviceSessionId);
-      await requireLiveDevice(provenanceDeviceSessionId, 'byok:media:ingest');
-      const deviceSessionIds = [provenanceDeviceSessionId];
+      let policyDeviceSessionId = provenanceDeviceSessionId;
       if (input.requestingDeviceSessionId) {
         const requestingDeviceSessionId = exactIdentifier(input.requestingDeviceSessionId);
-        if (requestingDeviceSessionId !== provenanceDeviceSessionId) {
-          denied('DEVICE_NOT_ALLOWED');
+        if (requestingDeviceSessionId === provenanceDeviceSessionId) {
+          await requireLiveDevice(
+            provenanceDeviceSessionId,
+            ['byok:media:ingest', 'listing:publish'],
+          );
+        } else {
+          const replacement = await requireDirectReplacement(
+            provenanceDeviceSessionId,
+            requestingDeviceSessionId,
+          );
+          policyDeviceSessionId = replacement.sessionId;
         }
-        await requireLiveDevice(requestingDeviceSessionId, 'listing:publish');
+      } else {
+        await requireLiveDevice(provenanceDeviceSessionId, ['byok:media:ingest']);
       }
-      for (const deviceSessionId of deviceSessionIds) {
-        const decision = await evaluate.evaluate({
-          ownerUserId,
-          shopId,
-          deviceSessionId,
-          providerOrigin,
-          operation: row.operation,
-        });
-        if (!decision.capabilities.publish.ready) {
-          return denied(decision.capabilities.publish.reasonCode);
-        }
+      const decision = await evaluate.evaluate({
+        ownerUserId,
+        shopId,
+        deviceSessionId: policyDeviceSessionId,
+        providerOrigin,
+        operation: row.operation,
+      });
+      if (!decision.capabilities.publish.ready) {
+        return denied(decision.capabilities.publish.reasonCode);
       }
     }
 

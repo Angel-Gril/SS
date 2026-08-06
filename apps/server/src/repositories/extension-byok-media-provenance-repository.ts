@@ -303,10 +303,14 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
         where: { id: input.sessionId },
         select: {
           id: true,
+          deploymentId: true,
+          deviceId: true,
+          replacesSessionId: true,
           scopes: true,
           status: true,
           expiresAt: true,
           revokedAt: true,
+          revokedReason: true,
           ownerUserId: true,
           actorUserId: true,
           owner: { select: { status: true, role: true } },
@@ -315,6 +319,7 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
             where: { shopId: input.shopId },
             select: {
               status: true,
+              revokedReason: true,
               shop: { select: { id: true, userId: true, status: true, platform: true } },
             },
           },
@@ -326,6 +331,11 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
       const grant = grants[0] || null;
       return {
         sessionId: String(session.id),
+        deploymentId: String(session.deploymentId),
+        deviceId: String(session.deviceId),
+        replacesSessionId: session.replacesSessionId == null
+          ? null
+          : String(session.replacesSessionId),
         scopes: Array.isArray(session.scopes) ? session.scopes.map(String) : [],
         status: String(session.status),
         expiresAt: session.expiresAt instanceof Date
@@ -336,6 +346,7 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
           : session.revokedAt instanceof Date
             ? session.revokedAt
             : new Date(session.revokedAt),
+        revokedReason: session.revokedReason == null ? null : String(session.revokedReason),
         ownerUserId: String(session.ownerUserId),
         actorUserId: String(session.actorUserId),
         ownerStatus: String(session.owner?.status || ''),
@@ -344,6 +355,9 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
         actorRole: String(session.actor?.role || ''),
         actorParentId: session.actor?.parentId == null ? null : String(session.actor.parentId),
         shopGrantStatus: grant ? String(grant.status) : null,
+        shopGrantRevokedReason: grant?.revokedReason == null
+          ? null
+          : String(grant.revokedReason),
         shopId: grant?.shop ? String(grant.shop.id) : null,
         shopOwnerUserId: grant?.shop ? String(grant.shop.userId) : null,
         shopStatus: grant?.shop ? String(grant.shop.status) : null,

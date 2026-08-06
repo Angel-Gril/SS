@@ -173,9 +173,9 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       ownerUserId,
       actorParentId: null,
       shopIds: [shopId],
-      scopes: ['byok:media:ingest', 'listing:publish'],
+      scopes: ['byok:media:ingest'],
     });
-    const claimed = await deviceService.claimPairingCode({
+    const ingestClaimed = await deviceService.claimPairingCode({
       code: pairing.code,
       deviceId: `device_${suffix}`,
       deploymentId: authConfig.deploymentId,
@@ -261,7 +261,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
         executionMode: 'BYOK',
         ownerUserId,
         actorUserId: ownerUserId,
-        deviceSessionId: claimed.session.id,
+        deviceSessionId: ingestClaimed.session.id,
         shopId,
         listingWorkflowId: created.id,
         draftRevision: ingestCommand.draftRevision,
@@ -300,8 +300,8 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       secret: commandSecret,
     });
     const ingestGrant = await commandService.issue({
-      sessionId: claimed.session.id,
-      tokenId: claimed.session.currentJti,
+      sessionId: ingestClaimed.session.id,
+      tokenId: ingestClaimed.session.currentJti,
       ownerUserId,
       shopId,
       operation: 'BYOK_MEDIA_INGEST',
@@ -312,8 +312,8 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     });
     const committed = await createPrismaExtensionByokGeneratedAssetCommitter(client as never)({
       binding: {
-        sessionId: claimed.session.id,
-        tokenId: claimed.session.currentJti,
+        sessionId: ingestClaimed.session.id,
+        tokenId: ingestClaimed.session.currentJti,
         ownerUserId,
         shopId,
         operation: 'BYOK_MEDIA_INGEST',
@@ -359,6 +359,25 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     });
     expect(committed.replayed).toBe(false);
 
+    const publishPairing = await deviceService.createPairingCode({
+      actorUserId: ownerUserId,
+      ownerUserId,
+      actorParentId: null,
+      shopIds: [shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const publishClaimed = await deviceService.claimPairingCode({
+      code: publishPairing.code,
+      deviceId: `device_${suffix}`,
+      deploymentId: authConfig.deploymentId,
+    });
+    expect(publishClaimed.session.id).not.toBe(ingestClaimed.session.id);
+    const replacementLineage = await client.extensionDeviceSession.findUnique({
+      where: { id: publishClaimed.session.id },
+      select: { replacesSessionId: true },
+    });
+    expect(replacementLineage).toEqual({ replacesSessionId: ingestClaimed.session.id });
+
     const boundDraft = await workflow.getDraft({ draftId: created.id, ownerUserId });
     expect(boundDraft).toMatchObject({
       revision: committed.receipt.boundDraftRevision,
@@ -385,7 +404,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       publishEnabled: true,
       ownerUserIds: [ownerUserId],
       shopIds: [shopId],
-      deviceSessionIds: [claimed.session.id],
+      deviceSessionIds: [publishClaimed.session.id],
       allowedOrigins: [providerOrigin],
       allowedOperations: ['TEXT_TO_IMAGE' as const],
       maxConcurrency: 1,
@@ -475,7 +494,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       resolveCommand: resolver,
       executeOzonPublish,
     });
-    const authHeaders = { authorization: `Bearer ${claimed.accessToken}` };
+    const authHeaders = { authorization: `Bearer ${publishClaimed.accessToken}` };
     const binding = {
       contractVersion: EXTENSION_BYOK_LISTING_PUBLISH_VERSION,
       shopId,
@@ -563,10 +582,10 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     const [intentCount, publishGrantCount, publishReceiptCount, provenanceRow] = await Promise.all([
       client.sourceListingPublishIntent.count({ where: { ownerUserId, idempotencyKey } }),
       client.extensionCommandGrant.count({
-        where: { sessionId: claimed.session.id, idempotencyKey, operation: 'OZON_PUBLISH' },
+        where: { sessionId: publishClaimed.session.id, idempotencyKey, operation: 'OZON_PUBLISH' },
       }),
       client.extensionCommandReceipt.count({
-        where: { grant: { sessionId: claimed.session.id, idempotencyKey } },
+        where: { grant: { sessionId: publishClaimed.session.id, idempotencyKey } },
       }),
       client.extensionByokMediaProvenance.findUnique({
         where: { id: committed.receipt.provenanceId },

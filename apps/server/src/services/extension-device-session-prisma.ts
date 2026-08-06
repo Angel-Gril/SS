@@ -412,16 +412,19 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
             actorUserId: pairing.actorUserId,
           });
         }
+        const replacesSessionId = replacedSessions.length === 1
+          ? replacedSessions[0]!.sessionId
+          : null;
 
         await tx.$executeRawUnsafe(
           `INSERT INTO "extension_device_sessions"
             ("id", "pairing_code_id", "deployment_id", "device_id", "device_label",
              "actor_user_id", "owner_user_id", "status", "scopes", "current_jti", "expires_at",
-             "last_seen_at", "created_at", "updated_at")
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8::text[], $9, $10, $11, $11, $11)`,
+             "replaces_session_id", "last_seen_at", "created_at", "updated_at")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8::text[], $9, $10, $11, $12, $12, $12)`,
           input.sessionId, pairing.id, input.deploymentId, input.deviceId, input.deviceLabel,
           pairing.actorUserId, pairing.ownerUserId, pairing.scopes, input.currentJti,
-          input.sessionExpiresAt, input.now,
+          input.sessionExpiresAt, replacesSessionId, input.now,
         );
         await tx.$executeRawUnsafe(
           `INSERT INTO "extension_device_refresh_families"

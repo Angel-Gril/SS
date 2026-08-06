@@ -174,6 +174,16 @@ describePostgres('extension device PostgreSQL integration', () => {
     expect(replacement.session.scopes).toEqual(['capture:write', 'media:execute']);
     expect((await repository.loadAuthorization(original.session.id))?.status).toBe('REVOKED');
     expect((await repository.loadAuthorization(replacement.session.id))?.status).toBe('ACTIVE');
+    const lineage = await first.$queryRawUnsafe<Array<{ replacesSessionId: string | null }>>(
+      `SELECT "replaces_session_id" AS "replacesSessionId"
+       FROM "extension_device_sessions" WHERE "id" = $1`,
+      replacement.session.id,
+    );
+    expect(lineage).toEqual([{ replacesSessionId: original.session.id }]);
+    await expect(first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "replaces_session_id" = NULL WHERE "id" = $1`,
+      replacement.session.id,
+    )).rejects.toThrow(/replacement lineage is immutable/u);
     const active = await first.$queryRawUnsafe<Array<{ count: bigint }>>(
       `SELECT COUNT(*) AS "count" FROM "extension_device_sessions"
        WHERE "owner_user_id" = $1 AND "device_id" = $2 AND "status" = 'ACTIVE'`,

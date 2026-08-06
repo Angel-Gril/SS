@@ -7,6 +7,13 @@ const migrationUrl = new URL(
   import.meta.url,
 );
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
+const replacementLineageMigrationUrl = new URL(
+  '../../prisma/migrations/20260806190000_add_extension_device_session_replacement_lineage/migration.sql',
+  import.meta.url,
+);
+const replacementLineageMigration = existsSync(replacementLineageMigrationUrl)
+  ? readFileSync(replacementLineageMigrationUrl, 'utf8')
+  : '';
 
 function modelBlock(name: string): string {
   return schema.match(new RegExp(`model ${name} \\{[\\s\\S]*?\\n\\}`))?.[0] || '';
@@ -23,6 +30,29 @@ describe('extension device persistence contract', () => {
     expect(repository).toMatch(
       /owner_user_id" = \$1[\s\S]*deployment_id" = \$2[\s\S]*device_id" = \$3[\s\S]*status" = 'ACTIVE'/,
     );
+  });
+
+  it('records one immutable direct predecessor for a replacement session', () => {
+    const session = modelBlock('ExtensionDeviceSession');
+    const repository = readFileSync(
+      new URL('../services/extension-device-session-prisma.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(session).toMatch(/replacesSessionId\s+String\?\s+@unique/);
+    expect(session).toMatch(/replacesSession\s+ExtensionDeviceSession\?/);
+    expect(session).toMatch(/replacedBySession\s+ExtensionDeviceSession\?/);
+    expect(replacementLineageMigration).toContain('replaces_session_id');
+    expect(replacementLineageMigration).toContain('extension_device_sessions_replaces_session_id_key');
+    expect(replacementLineageMigration).toContain('extension_device_sessions_replaces_session_id_fkey');
+    expect(replacementLineageMigration).toContain('prevent_extension_device_session_replacement_rewrite');
+    expect(replacementLineageMigration).toContain('extension_byok_publish_session_matches');
+    expect(replacementLineageMigration).toContain('command_session."status" = \'ACTIVE\'');
+    expect(replacementLineageMigration).toContain('command_grant."status" = \'ACTIVE\'');
+    expect(replacementLineageMigration).toContain('validate_extension_byok_media_provenance_authority()');
+    expect(replacementLineageMigration).toContain('BYOK provenance publish receipt guard has unexpected definition');
+    expect(replacementLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
+    expect(repository).toContain('replacesSessionId');
   });
 
   it('stores only keyed digests for pairing and refresh credentials', () => {

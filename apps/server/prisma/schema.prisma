@@ -4121,6 +4121,9 @@ model ExtensionDeviceSession {
   lastSeenAt                        DateTime?                                 @map("last_seen_at")
   revokedAt                         DateTime?                                 @map("revoked_at")
   revokedReason                     ExtensionDeviceRevocationReason?          @map("revoked_reason")
+  replacesSessionId                 String?                                   @unique @map("replaces_session_id")
+  replacesSession                   ExtensionDeviceSession?                   @relation("ExtensionDeviceSessionReplacement", fields: [replacesSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  replacedBySession                 ExtensionDeviceSession?                   @relation("ExtensionDeviceSessionReplacement")
   createdAt                         DateTime                                  @default(now()) @map("created_at")
   updatedAt                         DateTime                                  @updatedAt @map("updated_at")
   refreshFamily                     ExtensionDeviceRefreshFamily?
