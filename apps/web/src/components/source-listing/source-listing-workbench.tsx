@@ -813,7 +813,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       return [skuKey, {
         price: String(row?.price || ''),
         oldPrice: String(row?.oldPrice || ''),
-        vat: String(row?.vat ?? '0'),
+        vat: String(row?.vat ?? ''),
         offerId: String(row?.offerId || ''),
       }];
     })));
@@ -1293,7 +1293,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   function updatePriceRow(skuKey: string, patch: Partial<PriceFormRow>) {
     setPriceRows((current) => ({
       ...current,
-      [skuKey]: { price: '', oldPrice: '', vat: '0', offerId: '', ...current[skuKey], ...patch },
+      [skuKey]: { price: '', oldPrice: '', vat: '', offerId: '', ...current[skuKey], ...patch },
     }));
   }
 
@@ -1995,7 +1995,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                 <div>Canonical SKU</div><div>售价 {pricingCurrency || '币种'}</div><div>划线价 {pricingCurrency || '币种'}</div><div>VAT</div><div>Offer ID（可选）</div>
               </div>
               {draft.selectedSkuKeys.map((skuKey) => {
-                const row = priceRows[skuKey] || { price: '', oldPrice: '', vat: '0', offerId: '' };
+                const row = priceRows[skuKey] || { price: '', oldPrice: '', vat: '', offerId: '' };
                 return (
                   <div key={skuKey} className="grid min-w-[800px] grid-cols-[minmax(220px,1fr)_130px_130px_100px_180px] gap-2 border-t px-3 py-2">
                     <div className="break-all font-mono text-xs">

@@ -140,6 +140,7 @@ assert.match(workbench, /aria-label=\{`载入候选 \$\{candidate\.titleRu \|\| 
 for (const label of ['OZON_LISTING_SUPPORTED_CURRENCY_CODES', 'VAT', '定价币种', '服务端校验通过', '校验已过期']) {
   assert.match(workbench, new RegExp(label), `workbench should expose ${label}`);
 }
+assert.doesNotMatch(workbench, /vat:\s*String\(row\?\.vat\s*\?\?\s*['"]0['"]\)/, 'VAT must not be silently defaulted');
 
 for (const token of ['listPublishAttempts', 'pollPublishAttempt', 'requestPayloadHash', 'itemErrors', "state === 'UNKNOWN'", 'resolvePublishAttempt']) {
   assert.match(workbench, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `workbench should expose recovery via ${token}`);
