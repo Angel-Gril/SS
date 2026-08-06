@@ -44,6 +44,42 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-06): the separately authorized `.com`/BINI `ingest-pilot` on
+`0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` completed the positive BYOK generation and ingest lane
+without retry. The capability probe and formal generation consumed exactly `2/2` Provider POSTs
+to `https://ai.big-model-api.top/v1/images/generations`; the formal response was HTTP 200 and
+produced a PNG candidate SHA-256
+`dec8f79d8540cf877a1343aacca01add8c6dee33024b126adb4e36ec6f0e19a9` (`1,841,991` bytes,
+`1254x1254`). The approved Prompt produced one centered product on a warm-beige studio background
+with no person, text, logo, watermark, packaging, or extra object. Provider price synchronization
+was not required and actual Provider cost was not observed; the exact single and cumulative ceiling
+was CNY `1.00`.
+
+The delegated quality review kept the same batch slot/attempt and the single ERP
+`/api/extension-device/byok-media/batch-ingest` POST returned HTTP 200. The normalized stored asset
+SHA-256 is `684f929a2c308d7d78fe1715b9ff096a9ccf4f90660f0bb2a868ea04b350b828` (`2,330,290` bytes,
+`1254x1254`); provenance is BYOK/TEXT_TO_IMAGE, `erpAiChargeCents=0`, and the asset is bound to
+draft revision/version `3/3`. Database counts are exactly one execution batch, item, intent,
+provenance, upload staging row, and ingest-rate event; publish intents, Ozon attempts, and
+`OZON_PUBLISH` grants are all zero. Database audit SHA-256 is
+`e86a05c393ab92cdc3d6820823ce4eed5af631dd9f99a2bce38c8b5a2f7ddab2`.
+
+The read-only post-enable canary returned HTTP 200 with `workflowEnabled=true` (`tenant_allowed`)
+and `webMediaEnabled=true` (`pilot_match`) while hosted AI, publish, and Ozon remained off. Exact
+CAS rollback then returned all 13 rollout rows to dark; the official `off` verifier passed with no
+warnings. The media correction disable receipt SHA-256 is
+`407d6cfd7e9e6051410746760db787f2efbaef2b47a1cfac05ecc6a4548d1cc1`; the gate dark-disable
+receipt SHA-256 is `f663be98786da29b6db26000952c482ef6a970eaf61dcde722209a60c12f52d4`.
+The dedicated browser restart/cleanup found zero session Key, capability evidence, uncertain
+probe, dispatch, batch recovery, or vault key, with exact Provider origin and `<all_urls>` both
+false. Final reconciliation SHA-256 is
+`1f00affd2b5e6b89fec0876a728a7d122e8392f949e835bc74f4d746c73520ed`.
+
+This closes the positive sandbox generation and BYOK ingest portion of `REL-02`; overall progress
+remains `36/37` because the task acceptance still requires a separately authorized one-shop Ozon
+publish pilot, publish reconciliation, and final rollback evidence. No publish or Ozon mutation was
+performed under the current authorization.
+
 Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
 exactly three authenticated `GET` requests, one each to `/api/usage/token/`,
 `/v1/dashboard/billing/usage`, and `/api/log/token`. All three returned HTTP 200 JSON. It sent no
@@ -1688,17 +1724,13 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep `1.0.286` and both regions dark. Provider reconciliation proves that the
-latest unknown capability request consumed quota, but no valid response or image was recovered; its
-guard must remain and the request must not be retried. The current GET-only authorization is closed.
-To continue `REL-02`, separately authorize retiring the current credential authority, loading a new
-session credential revision, and running a fresh `.com`/BINI generation-and-ingest attempt with an
-exact Provider POST count and single/cumulative cost ceilings. Provider price synchronization is not
-required. Record independent human quality approval before local keep and ingest, then verify the
-generation and ingest kill switches, stored-asset provenance, zero ERP AI charge, and post-enable
-canary before returning the scope to dark. A later one-shop Ozon publish remains a separate explicit
-mutation authorization and must end with publish reconciliation and rollback evidence. No current
-authorization permits either lane.
+Immediate next step: keep `1.0.286`, both regions, and all rollout rows dark. The authorized
+`.com`/BINI generation-and-ingest lane is complete and its asset remains bound to draft revision/
+version `3/3` with zero ERP AI charge. Do not repeat the consumed Provider operations or create a
+second generation. To close `REL-02`, obtain a separate explicit one-shop Ozon publish
+authorization, use the already-bound asset through the existing ERP publisher, record the publish
+intent/receipt and reconciliation, and return the publish scope to dark. That mutation must not be
+combined with a new Provider request; no current authorization permits publish or Ozon writes.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

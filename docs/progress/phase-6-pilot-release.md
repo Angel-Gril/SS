@@ -28,6 +28,27 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-06): the separately authorized `.com`/BINI `ingest-pilot` completed
+  one capability POST and one formal `TEXT_TO_IMAGE` POST, both without retry. The formal HTTP 200
+  candidate is PNG SHA-256
+  `dec8f79d8540cf877a1343aacca01add8c6dee33024b126adb4e36ec6f0e19a9`, `1,841,991` bytes at
+  `1254x1254`; delegated quality review passed. Provider price synchronization was not required
+  and actual Provider cost was not observed; the single/cumulative ceiling was CNY `1.00`.
+- The same batch attempt was kept and accepted through exactly one ERP `batch-ingest` POST. The
+  normalized asset SHA-256 is
+  `684f929a2c308d7d78fe1715b9ff096a9ccf4f90660f0bb2a868ea04b350b828`, `2,330,290` bytes at
+  `1254x1254`; provenance is BYOK/TEXT_TO_IMAGE, ERP AI charge is `0`, and the asset is bound to
+  draft revision/version `3/3`. The database audit found one batch/item/intent/provenance/staging/
+  rate row and zero publish intents, Ozon attempts, or `OZON_PUBLISH` grants.
+- The post-enable GET-only canary returned HTTP 200 with `workflowEnabled=true` and
+  `webMediaEnabled=true`. Exact rollback returned all 13 rollout rows to dark and the official
+  `off` verifier passed without warnings. The browser cleanup left zero session secret/evidence/
+  dispatch/recovery state and no exact Provider origin or `<all_urls>` permission. Final
+  reconciliation SHA-256 is `1f00affd2b5e6b89fec0876a728a7d122e8392f949e835bc74f4d746c73520ed`.
+- This completes positive sandbox generation and BYOK ingest evidence but does not check `REL-02`:
+  its acceptance still requires a separately authorized one-shop Ozon publish and publish
+  reconciliation. No publish or Ozon mutation occurred in this lane.
+
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
   requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.
   All returned HTTP 200 JSON. No Provider `POST`, `/api/status`, `/models`, image generation, guard
