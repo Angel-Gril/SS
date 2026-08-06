@@ -353,9 +353,31 @@ describe('Ozon listing payload compiler', () => {
     delete incompletePrice.oldPrice;
     expectCompileCode(missingOldPrice, 'OZON_LISTING_COMPILE_PRICING_INVALID');
 
+    const unsupportedCurrency = buildInput();
+    const unsupportedCurrencyItems = (
+      unsupportedCurrency.draft.pricing.value as unknown as {
+        items: Array<{ currencyCode: string }>;
+      }
+    ).items;
+    unsupportedCurrencyItems[0]!.currencyCode = 'USD';
+    expectCompileCode(unsupportedCurrency, 'OZON_LISTING_COMPILE_PRICING_INVALID');
+
+    const mixedCurrency = buildInput();
+    (mixedCurrency.draft.pricing.value as OzonListingPricingV1).items[0]!.currencyCode = 'CNY';
+    expectCompileCode(mixedCurrency, 'OZON_LISTING_COMPILE_PRICING_INVALID');
+
     const tooMany = buildInput();
     tooMany.draft.selectedSkuKeys = Array.from({ length: 101 }, (_, index) => `sku-${index}`);
     expectCompileCode(tooMany, 'OZON_LISTING_COMPILE_SKU_INVALID');
+  });
+
+  it('passes one explicit CNY pricing currency through unchanged', () => {
+    const input = buildInput();
+    for (const item of (input.draft.pricing.value as OzonListingPricingV1).items) {
+      item.currencyCode = 'CNY';
+    }
+    const result = compileOzonListingPayload(input);
+    expect(result.payload.items.every((item) => item.currency_code === 'CNY')).toBe(true);
   });
 
   it('allows the product-only sentinel only when the exact capture has zero SKU rows', () => {

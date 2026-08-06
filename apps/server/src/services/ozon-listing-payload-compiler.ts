@@ -6,6 +6,7 @@ import {
   OZON_LISTING_IMPORT_MAX_ITEMS,
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
+  OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   OZON_LISTING_VAT_MAX_LENGTH,
   canonicalStringify,
   sourceProductCaptureCanonicalStringify,
@@ -28,6 +29,7 @@ export const OZON_LISTING_RESOLVED_IMAGES_CONTRACT_VERSION = 'ozon-listing-resol
 const MAX_IDENTIFIER_LENGTH = 500;
 const MAX_IMAGE_URL_LENGTH = 4096;
 const MAX_TITLE_LENGTH = 500;
+const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
 const MAX_DESCRIPTION_LENGTH = 200_000;
 const MAX_ATTRIBUTE_VALUES = 100;
 
@@ -398,6 +400,7 @@ function parsePricing(draft: OzonListingDraft, skuKeys: string[]): Map<string, O
     fail('OZON_LISTING_COMPILE_PRICING_INVALID', 'Pricing must use ozon-listing-pricing/v1');
   }
   const parsed = new Map<string, OzonListingSkuPricingV1>();
+  let pricingCurrency: OzonListingSkuPricingV1['currencyCode'] | null = null;
   for (const raw of value.items) {
     if (!isPlainRecord(raw)
       || !hasExactKeys(raw, ['skuKey', 'price', 'oldPrice', 'currencyCode', 'vat'], ['offerId'])) {
@@ -409,17 +412,21 @@ function parsePricing(draft: OzonListingDraft, skuKeys: string[]): Map<string, O
     if (!skuKey || skuKey !== raw.skuKey || parsed.has(skuKey)
       || !exactPositiveDecimal(raw.price) || !exactPositiveDecimal(raw.oldPrice)
       || !new RegExp(`^[A-Z]{${OZON_LISTING_CURRENCY_CODE_LENGTH}}$`).test(currencyCode)
+      || !SUPPORTED_CURRENCY_CODES.has(currencyCode)
+      || (pricingCurrency !== null && currencyCode !== pricingCurrency)
       || vat !== vat.normalize('NFKC').trim()
       || vat.length === 0 || vat.length > OZON_LISTING_VAT_MAX_LENGTH
       || !/^[A-Za-z0-9._-]+$/.test(vat) || hasAsciiControl(vat)) {
       fail('OZON_LISTING_COMPILE_PRICING_INVALID', `Pricing for ${skuKey || '<unknown>'} is invalid`);
     }
+    const supportedCurrency = currencyCode as OzonListingSkuPricingV1['currencyCode'];
+    pricingCurrency = supportedCurrency;
     const offerId = raw.offerId === undefined ? undefined : validatedOfferId(raw.offerId);
     parsed.set(skuKey, {
       skuKey,
       price: raw.price,
       oldPrice: raw.oldPrice,
-      currencyCode,
+      currencyCode: supportedCurrency,
       vat,
       ...(offerId ? { offerId } : {}),
     });

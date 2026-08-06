@@ -75,7 +75,7 @@ assert.match(
   'V2 submission must CAS the exact revision shown in final confirmation',
 );
 
-for (const token of ['exactWorkflowId={draft.id}', 'exactSnapshotId={activeHandoff.snapshotId}', 'lockedShopId={draft.shopId}', 'exactRevision={draft.revision}', 'onDraftChange={setDraft}']) {
+for (const token of ['exactWorkflowId={draft.id}', 'exactSnapshotId={activeHandoff.snapshotId}', 'lockedShopId={draft.shopId}', 'exactRevision={draft.revision}', 'onDraftChange={handleAttributeDraftChange}']) {
   assert.match(workbench, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `workbench should bind attributes through ${token}`);
 }
 assert.match(
@@ -137,7 +137,7 @@ assert.match(
 );
 assert.match(workbench, /role="alert" aria-live="assertive"/, 'AI capability failures must be announced accessibly');
 assert.match(workbench, /aria-label=\{`载入候选 \$\{candidate\.titleRu \|\| candidate\.id\}`\}/, 'candidate load controls need candidate-specific accessible names');
-for (const label of ['RUB', 'VAT', '服务端校验通过', '校验已过期']) {
+for (const label of ['OZON_LISTING_SUPPORTED_CURRENCY_CODES', 'VAT', '定价币种', '服务端校验通过', '校验已过期']) {
   assert.match(workbench, new RegExp(label), `workbench should expose ${label}`);
 }
 

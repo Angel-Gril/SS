@@ -31,6 +31,7 @@ function loadClientModule(defaultApi = {}) {
           OZON_LISTING_IMPORT_MAX_ITEMS: 100,
           OZON_LISTING_OFFER_ID_MAX_LENGTH: 100,
           OZON_LISTING_PRICING_CONTRACT_VERSION: 'ozon-listing-pricing/v1',
+          OZON_LISTING_SUPPORTED_CURRENCY_CODES: ['CNY', 'RUB'],
         };
       }
       throw new Error(`Unexpected import: ${specifier}`);
@@ -106,10 +107,19 @@ const workflow = loadClientModule();
       { skuKey: 'sku-1', price: '1299.00', oldPrice: '1499.00', currencyCode: 'RUB', vat: '0', offerId: 'offer-1' },
     ],
   });
+  const cnyPricing = workflow.buildOzonListingPricingV1({
+    selectedSkuKeys: ['sku-1'],
+    items: [{ skuKey: 'sku-1', price: '107', oldPrice: '129', currencyCode: 'CNY', vat: '0' }],
+  });
+  assert.equal(cnyPricing.items[0].currencyCode, 'CNY');
   for (const input of [
     { selectedSkuKeys: ['sku-1', 'sku-2'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '0', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'USD', vat: '0' }] },
+    { selectedSkuKeys: ['sku-1', 'sku-2'], items: [
+      { skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'CNY', vat: '0' },
+      { skuKey: 'sku-2', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' },
+    ] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: 1, oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
     { selectedSkuKeys: ['sku-1'], items: [
       { skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' },

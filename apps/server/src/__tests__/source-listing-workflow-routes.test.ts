@@ -17,14 +17,14 @@ function draft(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-function strictPricing(skuKeys = ['sku-a']) {
+function strictPricing(skuKeys = ['sku-a'], currencyCode: 'CNY' | 'RUB' = 'RUB') {
   return {
     contractVersion: 'ozon-listing-pricing/v1',
     items: skuKeys.map((skuKey) => ({
       skuKey,
       price: '100',
       oldPrice: '120',
-      currencyCode: 'RUB',
+      currencyCode,
       vat: '0',
     })),
   };
@@ -512,13 +512,13 @@ describe('source listing workflow routes', () => {
     const pricing = await app.inject({
       method: 'PUT',
       url: '/draft-1/pricing',
-      payload: { expectedRevision: 2, value: strictPricing() },
+      payload: { expectedRevision: 2, value: strictPricing(['sku-a'], 'CNY') },
     });
     expect(pricing.statusCode).toBe(200);
     expect(service.setPricing).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1',
       actorUserId: 'owner-1',
-      value: strictPricing(),
+      value: strictPricing(['sku-a'], 'CNY'),
     }));
     const fact = await app.inject({
       method: 'POST',
@@ -563,6 +563,13 @@ describe('source listing workflow routes', () => {
       { markupPct: 12 },
       { ...strictPricing(['sku-a', 'sku-b']), extra: true },
       strictPricing(['sku-a']),
+      {
+        ...strictPricing(['sku-a', 'sku-b']),
+        items: [
+          { ...strictPricing(['sku-a']).items[0], currencyCode: 'CNY' },
+          { ...strictPricing(['sku-b']).items[0], currencyCode: 'RUB' },
+        ],
+      },
     ]) {
       const response = await app.inject({
         method: 'PUT', url: '/draft-1/pricing', payload: { expectedRevision: 2, value },

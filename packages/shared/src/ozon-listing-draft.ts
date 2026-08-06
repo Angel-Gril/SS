@@ -7,6 +7,10 @@ export const OZON_LISTING_PRICING_CONTRACT_VERSION = 'ozon-listing-pricing/v1' a
 export const OZON_LISTING_IMPORT_MAX_ITEMS = 100;
 export const OZON_LISTING_DECIMAL_MAX_LENGTH = 64;
 export const OZON_LISTING_CURRENCY_CODE_LENGTH = 3;
+// Keep the pilot contract explicit. CNY is used by the existing BINI Ozon
+// catalogue; RUB remains supported for shops whose catalogue is ruble-based.
+export const OZON_LISTING_SUPPORTED_CURRENCY_CODES = ['CNY', 'RUB'] as const;
+export type OzonListingCurrencyCode = typeof OZON_LISTING_SUPPORTED_CURRENCY_CODES[number];
 export const OZON_LISTING_VAT_MAX_LENGTH = 16;
 export const OZON_LISTING_OFFER_ID_MAX_LENGTH = 100;
 
@@ -14,7 +18,7 @@ export interface OzonListingSkuPricingV1 {
   skuKey: string;
   price: string;
   oldPrice: string;
-  currencyCode: string;
+  currencyCode: OzonListingCurrencyCode;
   vat: string;
   offerId?: string;
 }

@@ -132,6 +132,14 @@ describe('strict source listing pricing', () => {
     expect(result).not.toBe(value);
   });
 
+  it('accepts one exact CNY pricing row for every selected canonical SKU', () => {
+    const value = pricing([
+      { skuKey: 'sku-a', price: '107', oldPrice: '129', currencyCode: 'CNY', vat: '0' },
+      { skuKey: 'sku-b', price: '122', oldPrice: '147', currencyCode: 'CNY', vat: '0' },
+    ]);
+    expect(validateSourceListingPricing(value, ['sku-a', 'sku-b'])).toEqual(value);
+  });
+
   it.each([
     ['null', null],
     ['arbitrary object', { markupPct: 20 }],
@@ -156,8 +164,15 @@ describe('strict source listing pricing', () => {
       { skuKey: 'sku-a', price: '0100', oldPrice: '120', currencyCode: 'RUB', vat: '0' },
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
-    ['non-RUB currency', pricing([
-      { skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'USD', vat: '0' },
+    ['unsupported currency', pricing([
+      {
+        skuKey: 'sku-a', price: '100', oldPrice: '120',
+        currencyCode: 'USD' as unknown as 'RUB', vat: '0',
+      },
+      { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
+    ])],
+    ['mixed supported currencies', pricing([
+      { skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'CNY', vat: '0' },
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
     ['invalid VAT', pricing([

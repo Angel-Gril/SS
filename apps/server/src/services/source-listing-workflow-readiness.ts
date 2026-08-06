@@ -4,12 +4,16 @@ import {
   OZON_LISTING_IMPORT_MAX_ITEMS,
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
+  OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   OZON_LISTING_VAT_MAX_LENGTH,
   SOURCE_LISTING_SKU_KEY_MAX_LENGTH,
+  type OzonListingCurrencyCode,
   type OzonListingDraft,
   type OzonListingPricingV1,
   type OzonListingWorkflowIssue,
 } from 'shared';
+
+const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
 
 export class SourceListingWorkflowReadinessError extends Error {
   constructor(
@@ -132,27 +136,33 @@ export function validateSourceListingPricing(
 
   const items: OzonListingPricingV1['items'] = [];
   const priced = new Set<string>();
+  let pricingCurrency: OzonListingCurrencyCode | null = null;
   for (const raw of value.items) {
+    const currencyCode = isPlainRecord(raw) && typeof raw.currencyCode === 'string'
+      ? raw.currencyCode
+      : '';
     if (!isPlainRecord(raw)
       || !hasExactKeys(raw, ['skuKey', 'price', 'oldPrice', 'currencyCode', 'vat'], ['offerId'])
       || !exactIdentifier(raw.skuKey, SOURCE_LISTING_SKU_KEY_MAX_LENGTH)
       || priced.has(raw.skuKey)
       || !exactPositiveDecimal(raw.price)
       || !exactPositiveDecimal(raw.oldPrice)
-      || raw.currencyCode !== 'RUB'
-      || typeof raw.currencyCode !== 'string'
-      || raw.currencyCode.length !== OZON_LISTING_CURRENCY_CODE_LENGTH
+      || currencyCode.length !== OZON_LISTING_CURRENCY_CODE_LENGTH
+      || !SUPPORTED_CURRENCY_CODES.has(currencyCode)
+      || (pricingCurrency !== null && currencyCode !== pricingCurrency)
       || !validVat(raw.vat)
       || (raw.offerId !== undefined
         && !exactOfferId(raw.offerId))) {
       pricingError('Pricing contains an invalid SKU row');
     }
+    const supportedCurrency = currencyCode as OzonListingCurrencyCode;
+    pricingCurrency = supportedCurrency;
     priced.add(raw.skuKey);
     items.push({
       skuKey: raw.skuKey,
       price: raw.price,
       oldPrice: raw.oldPrice,
-      currencyCode: 'RUB',
+      currencyCode: supportedCurrency,
       vat: raw.vat,
       ...(raw.offerId === undefined ? {} : { offerId: raw.offerId }),
     });
@@ -294,7 +304,7 @@ function pricingIssues(draft: OzonListingDraft): OzonListingWorkflowIssue[] {
     if (!(error instanceof SourceListingWorkflowReadinessError)) throw error;
     return [issue(
       'OZON_LISTING_PRICING_INVALID',
-      'Pricing must exactly cover every selected SKU using the RUB pricing contract',
+      'Pricing must exactly cover every selected SKU using one explicit supported currency',
       'pricing.value',
     )];
   }

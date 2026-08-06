@@ -17,7 +17,9 @@ import {
   Upload,
 } from 'lucide-react';
 import {
+  OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+  type OzonListingCurrencyCode,
   type OzonListingDraftView as OzonListingDraft,
 } from 'shared';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
@@ -401,6 +403,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const [aiCopyCapabilityError, setAiCopyCapabilityError] = useState('');
   const [aiCopyCapabilityLoading, setAiCopyCapabilityLoading] = useState(Boolean(handoff.workflowId));
   const [aiCopyCapabilityReload, setAiCopyCapabilityReload] = useState(0);
+  const [pricingCurrency, setPricingCurrency] = useState<OzonListingCurrencyCode | ''>('');
   const [priceRows, setPriceRows] = useState<Record<string, PriceFormRow>>({});
   const [attempt, setAttempt] = useState<SourceListingPublishAttempt | null>(null);
   const [attemptError, setAttemptError] = useState('');
@@ -797,6 +800,13 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
     const items = value?.contractVersion === 'ozon-listing-pricing/v1' && Array.isArray(value.items)
       ? value.items as Array<Record<string, unknown>>
       : [];
+    const currencies = new Set(items.map((item) => item.currencyCode).filter(
+      (currency): currency is OzonListingCurrencyCode => (
+        typeof currency === 'string'
+        && OZON_LISTING_SUPPORTED_CURRENCY_CODES.includes(currency as OzonListingCurrencyCode)
+      ),
+    ));
+    setPricingCurrency(currencies.size === 1 ? [...currencies][0]! : '');
     const existing = new Map(items.map((item) => [String(item.skuKey || ''), item]));
     setPriceRows(Object.fromEntries(draft.selectedSkuKeys.map((skuKey) => {
       const row = existing.get(skuKey);
@@ -1290,6 +1300,10 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   async function saveStrictPricing() {
     if (!draft) return;
     if (blockDraftRevisionChangeForMask()) return;
+    if (!pricingCurrency) {
+      setDraftError('请先明确选择该 Ozon 店铺使用的定价币种');
+      return;
+    }
     const request = captureHandoffRequest();
     const requestDraftId = draft.id;
     setBusyAction('pricing');
@@ -1306,7 +1320,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
             skuKey,
             price: row.price,
             oldPrice: row.oldPrice,
-            currencyCode: 'RUB' as const,
+            currencyCode: pricingCurrency,
             vat: row.vat,
             ...(row.offerId ? { offerId: row.offerId } : {}),
           };
@@ -1318,7 +1332,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       });
       if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(updated);
-      setMessage('逐 canonical SKU 的 RUB 定价已保存');
+      setMessage(`逐 canonical SKU 的 ${pricingCurrency} 定价已保存`);
     } catch (error) {
       if (isHandoffRequestActive(request, requestDraftId)) {
         setDraftError(errorText(error, '保存严格定价失败'));
@@ -1945,16 +1959,40 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-medium">逐 SKU 定价</div>
-                <div className="text-xs text-muted-foreground">必须精确覆盖 {draft.selectedSkuKeys.length} 个 canonical SKU，币种固定 RUB，VAT 显式填写。</div>
+                <div className="text-xs text-muted-foreground">必须精确覆盖 {draft.selectedSkuKeys.length} 个 canonical SKU，币种和 VAT 均需显式确认。</div>
               </div>
-              <Button type="button" size="sm" onClick={saveStrictPricing} disabled={busyAction === 'pricing' || aiMediaMaskDraftDirty}>
-                {busyAction === 'pricing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                保存严格定价
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex h-9 overflow-hidden border" role="group" aria-label="定价币种">
+                  {OZON_LISTING_SUPPORTED_CURRENCY_CODES.map((currency) => (
+                    <button
+                      key={currency}
+                      type="button"
+                      aria-pressed={pricingCurrency === currency}
+                      className={`w-16 border-r text-sm font-medium last:border-r-0 ${
+                        pricingCurrency === currency
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-background text-foreground hover:bg-muted'
+                      }`}
+                      onClick={() => setPricingCurrency(currency)}
+                    >
+                      {currency}
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={saveStrictPricing}
+                  disabled={!pricingCurrency || busyAction === 'pricing' || aiMediaMaskDraftDirty}
+                >
+                  {busyAction === 'pricing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  保存严格定价
+                </Button>
+              </div>
             </div>
             <div className="max-h-96 overflow-auto border">
               <div className="grid min-w-[800px] grid-cols-[minmax(220px,1fr)_130px_130px_100px_180px] bg-muted/50 px-3 py-2 text-xs font-medium">
-                <div>Canonical SKU</div><div>售价 RUB</div><div>划线价 RUB</div><div>VAT</div><div>Offer ID（可选）</div>
+                <div>Canonical SKU</div><div>售价 {pricingCurrency || '币种'}</div><div>划线价 {pricingCurrency || '币种'}</div><div>VAT</div><div>Offer ID（可选）</div>
               </div>
               {draft.selectedSkuKeys.map((skuKey) => {
                 const row = priceRows[skuKey] || { price: '', oldPrice: '', vat: '0', offerId: '' };

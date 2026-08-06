@@ -6,6 +6,7 @@ import {
   OZON_LISTING_IMPORT_MAX_ITEMS,
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
+  OZON_LISTING_SUPPORTED_CURRENCY_CODES,
   OZON_LISTING_VAT_MAX_LENGTH,
   SOURCE_LISTING_IDEMPOTENCY_KEY_MAX_LENGTH,
   SOURCE_LISTING_IDEMPOTENCY_KEY_MIN_LENGTH,
@@ -273,7 +274,7 @@ const pricingItemSchema = z.object({
   skuKey: z.string().min(1).max(SOURCE_LISTING_SKU_KEY_MAX_LENGTH * 2),
   price: pricingDecimal,
   oldPrice: pricingDecimal,
-  currencyCode: z.literal('RUB').refine(
+  currencyCode: z.enum(OZON_LISTING_SUPPORTED_CURRENCY_CODES).refine(
     (value) => value.length === OZON_LISTING_CURRENCY_CODE_LENGTH,
   ),
   vat: z.string().min(1).max(OZON_LISTING_VAT_MAX_LENGTH).regex(/^[A-Za-z0-9._-]+$/),
