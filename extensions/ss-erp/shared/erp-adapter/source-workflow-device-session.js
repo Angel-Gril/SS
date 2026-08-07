@@ -31,6 +31,9 @@
   var BYOK_PUBLISH_PREVIEW_PATH = '/api/extension-device/byok-publish/preview';
   var BYOK_PUBLISH_PREPARE_PATH = '/api/extension-device/byok-publish/prepare';
   var BYOK_PUBLISH_STATUS_PATH = '/api/extension-device/byok-publish/status';
+  var WORKBENCH_PUBLISH_PREVIEW_PATH = '/api/extension-device/workbench-publish/preview';
+  var WORKBENCH_PUBLISH_PREPARE_PATH = '/api/extension-device/workbench-publish/prepare';
+  var WORKBENCH_PUBLISH_STATUS_PATH = '/api/extension-device/workbench-publish/status';
   var OZON_PUBLISH_EXECUTE_PATH = '/api/extension-device/ozon-publish/execute';
   var HOSTED_PLAN_PATH = '/api/extension-device/source-workbench/plans';
   var HOSTED_LISTING_ASSIGNMENT_PATH =
@@ -40,6 +43,9 @@
   var HOSTED_PREVIEW_CONSUME_PATH = HOSTED_PREVIEW_PATH + '/consume';
   var LARGE_PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
+    WORKBENCH_PUBLISH_PREVIEW_PATH,
+    WORKBENCH_PUBLISH_PREPARE_PATH,
+    WORKBENCH_PUBLISH_STATUS_PATH,
     OZON_PUBLISH_EXECUTE_PATH,
   ]);
   var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([
@@ -88,6 +94,9 @@
       BYOK_PUBLISH_PREVIEW_PATH,
       BYOK_PUBLISH_PREPARE_PATH,
       BYOK_PUBLISH_STATUS_PATH,
+      WORKBENCH_PUBLISH_PREVIEW_PATH,
+      WORKBENCH_PUBLISH_PREPARE_PATH,
+      WORKBENCH_PUBLISH_STATUS_PATH,
       OZON_PUBLISH_EXECUTE_PATH,
       HOSTED_PLAN_PATH,
       HOSTED_LISTING_ASSIGNMENT_PATH,
@@ -539,6 +548,7 @@
             throw new Error('device credential operation superseded');
           }
           var maximumResponseBytes = path === BYOK_PUBLISH_PREVIEW_PATH
+            || path === WORKBENCH_PUBLISH_PREVIEW_PATH
             ? MAX_PUBLISH_RESPONSE_BYTES
             : bodyMode === 'hosted-preview'
               ? MAX_HOSTED_PREVIEW_RESPONSE_BYTES

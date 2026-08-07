@@ -44,6 +44,36 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-07): the authorized
+`c53b9e766b84ec39fb6e1042c68372baf3f7ef3e` / `1.0.288` BINI one-shop publish pilot stopped safely
+before any Ozon request. Draft revision `11`, draft version `9`, validation `VALID`, payload SHA-256
+`25ee7eb17a2736c25e53738220520d48e9517f97283d30b0a13d193bb02faa3d`, the exact selected SKU, and
+its single generated asset all passed the final read-only boundary. Same-device direct
+reauthorization produced one active five-scope session; its private receipt SHA-256 is
+`3112ae44a1fdf7a86dd82e97ccb5a3685bb1f6f7d480a9253a454a2d37f24e07`.
+
+The exact owner/shop/device publish policy passed the official `publish-pilot` verifier and all
+three Source decisions returned `pilot_match`. The first coordinator preview then failed locally
+because the shared device transport omitted the unified `/workbench-publish/*` endpoints from its
+exact POST allowlist. The rejection happened before network dispatch: publish intent, Ozon attempt,
+`OZON_PUBLISH` grant, command receipt, Provider calls, and Ozon writes all remain zero. Exact CAS
+rollback returned every affected row to dark and passed the official `off` verifier. Enable and
+disable receipt SHA-256 values are
+`c2f4a6208a504385e4cabe9380bcb4306cf742b3998906e700a9d0afa7908834` and
+`3ae4d30662147ae2adac39c4810c844376fc7a57cb5de98f7afddee87f73aeba`.
+
+The TDD correction admits only the three exact unified preview/prepare/status POST paths, rejects
+query, fragment, absolute, and adjacent paths before network I/O, and preserves the publish-only
+request/preview size bounds. Focused transport, coordinator, security, Hosted transport, and BYOK
+vertical-fixture tests pass; workspace typecheck passes; lint has zero errors and only the existing
+`20` Server plus one shared warning; source extension verification passes `450/450` with the two
+existing package warnings. Full preflight did not complete within outer `120s` and `600s` limits
+and reported no test failure; unrelated Node test processes from 2026-08-03 remain on the host, so
+this checkpoint does not claim that aggregate gate. Production remains on c53 with all pilot rows
+dark. `REL-02` remains the only open task at `36/37`; the c53 live authorization is closed, and the
+transport correction requires a new dark replacement release before another version-bound
+one-shop publish authorization.
+
 Current checkpoint (2026-08-06): the separately authorized `.com`/BINI `ingest-pilot` on
 `0cd3761a66627209cebdc6fb25a2fb4b1c4fc939` completed the positive BYOK generation and ingest lane
 without retry. The capability probe and formal generation consumed exactly `2/2` Provider POSTs
@@ -1791,15 +1821,14 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep the deployed `1.0.286`, both regions, and all rollout rows dark. The
-working-tree correction is now pushed as `c2f7acb`; production still runs `c3542468`, so a new
-commit-bound replacement release is required before the BINI draft can use the corrected SKU
-evidence and VAT control. The exact BINI values are resolved as CNY `180` / old price `200`, VAT
-token `0`, no-brand dictionary ID `126745801`, and Russian sizes `75A/75B/75C` (IDs
-`35600/35602/35603`). After replacement, write those values through the draft workflow, refresh
-validation, and only then use a separately renewed one-shop Ozon mutation authorization to record
-the publish intent/receipt and reconciliation before returning the publish scope to dark. Do not
-repeat consumed Provider operations or combine an Ozon mutation with a new Provider request.
+Immediate next step: keep both regions and all rollout rows dark. Commit and push the exact
+unified-workbench transport allowlist correction, then build/sign/distribute and dark-deploy the
+next Cloud/Local package as a commit-bound replacement for `1.0.288`. Upgrade the dedicated BINI
+path and attest the active worker before requesting a new release/version-bound one-shop mutation
+authorization. Do not reuse the closed c53 gate receipt, do not create a publish intent before the
+new preview is verified, and do not repeat the already completed Provider generation or ERP ingest.
+The next live publish attempt must still execute at most one Ozon import without automatic retry,
+perform bounded status reconciliation, and restore dark state afterward.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

@@ -201,6 +201,9 @@ for (const path of [
   '/api/extension-device/byok-publish/preview',
   '/api/extension-device/byok-publish/prepare',
   '/api/extension-device/byok-publish/status',
+  '/api/extension-device/workbench-publish/preview',
+  '/api/extension-device/workbench-publish/prepare',
+  '/api/extension-device/workbench-publish/status',
 ]) {
   const routeResult = await publishTransport.post(
     path,
@@ -209,6 +212,28 @@ for (const path of [
   );
   assert.equal(routeResult.state, 'response');
 }
+
+const publishRequestsBeforeInvalidPaths = publishRequests.length;
+for (const path of [
+  '/api/extension-device/workbench-publish/preview?retry=1',
+  '/api/extension-device/workbench-publish/preview#fragment',
+  '/api/extension-device/workbench-publish/preview/extra',
+  'https://erp.example/api/extension-device/workbench-publish/preview',
+]) {
+  await assert.rejects(
+    publishTransport.post(
+      path,
+      { contractVersion: 'extension-workbench-listing-publish/v1' },
+      { requiredScope: 'listing:publish' },
+    ),
+    /source workbench path is invalid/u,
+  );
+}
+assert.equal(
+  publishRequests.length,
+  publishRequestsBeforeInvalidPaths,
+  'invalid workbench publish paths must fail before network I/O',
+);
 
 const largeSkuKeys = Array.from({ length: 500 }, (_unused, index) => (
   `sku-${String(index).padStart(3, '0')}-` + 'x'.repeat(280)
@@ -224,6 +249,29 @@ assert.equal((await publishTransport.post(
   { requiredScope: 'listing:publish', commandGrant: 'p'.repeat(43) },
 )).state, 'response', 'a contract-valid large publish envelope must pass the publish-only bound');
 
+const largeWorkbenchPreviewPayload = {
+  contractVersion: 'extension-workbench-listing-publish/v1',
+  executionMode: 'BYOK',
+  shopId: 'shop-1',
+  workflowId: 'workflow-1',
+  basisDraftRevision: 11,
+  basisDraftVersion: 9,
+  selectedMedia: largeSkuKeys.map((skuKey, index) => ({
+    scope: 'SKU',
+    skuKey,
+    slotKey: `sku:${String(index).padStart(3, '0')}:hero`,
+    assetId: `asset-${String(index).padStart(3, '0')}`,
+  })),
+};
+assert.ok(
+  new TextEncoder().encode(JSON.stringify(largeWorkbenchPreviewPayload)).byteLength > 64 * 1024,
+);
+assert.equal((await publishTransport.post(
+  '/api/extension-device/workbench-publish/preview',
+  largeWorkbenchPreviewPayload,
+  { requiredScope: 'listing:publish' },
+)).state, 'response', 'a contract-valid workbench preview must pass the publish-only bound');
+
 const largePreviewTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
   credentials: credentials(['listing:publish']),
   fetchImpl: async () => response(200, {
@@ -231,11 +279,16 @@ const largePreviewTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.crea
     data: { preview: 'x'.repeat(600 * 1024) },
   }),
 });
-assert.equal((await largePreviewTransport.post(
+for (const path of [
   '/api/extension-device/byok-publish/preview',
-  { contractVersion: 'extension-byok-listing-publish/v1' },
-  { requiredScope: 'listing:publish' },
-)).state, 'response', 'a bounded large publish preview must pass the preview-only response limit');
+  '/api/extension-device/workbench-publish/preview',
+]) {
+  assert.equal((await largePreviewTransport.post(
+    path,
+    { contractVersion: 'extension-byok-listing-publish/v1' },
+    { requiredScope: 'listing:publish' },
+  )).state, 'response', 'a bounded large publish preview must pass the preview-only response limit');
+}
 
 const defaultResponseTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
   credentials: credentials(),

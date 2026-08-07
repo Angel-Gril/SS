@@ -28,6 +28,37 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-07): the authorized `c53b9e766b84ec39fb6e1042c68372baf3f7ef3e`
+  / `1.0.288` BINI one-shop publish pilot completed exact draft preparation and same-device
+  reauthorization without reaching Ozon. The frozen draft is revision `11`, draft version `9`,
+  `READY_TO_PUBLISH`, validation `VALID`, with payload SHA-256
+  `25ee7eb17a2736c25e53738220520d48e9517f97283d30b0a13d193bb02faa3d` and exactly one generated
+  asset bound to the authorized SKU. The new active session preserves the same physical device,
+  directly replaces the prior ingest session, and contains exactly `capture:write`,
+  `listing:review`, `media:execute`, `byok:media:ingest`, and `listing:publish`. Draft-readiness and
+  reauthorization receipt SHA-256 values are
+  `01a5c6c5b6975462d215ff82decfac4a4693b805d46ed348d3ad2d17ac9ced61` and
+  `3112ae44a1fdf7a86dd82e97ccb5a3685bb1f6f7d480a9253a454a2d37f24e07`.
+- Exact CAS enabled only the authorized owner/shop/device `publish-pilot`; the official BYOK
+  verifier passed `publish-pilot`, and Source workflow, extension workbench, and Ozon publisher
+  decisions all returned `pilot_match`. Before confirmation, the extension's shared device
+  transport rejected the coordinator's exact `/api/extension-device/workbench-publish/preview`
+  path as invalid. This happened before network dispatch, so no preview was accepted, no publish
+  intent, `OZON_PUBLISH` grant, command receipt, or Ozon attempt was created, and no Provider or
+  Ozon call occurred. Gate-enable receipt SHA-256 is
+  `c2f4a6208a504385e4cabe9380bcb4306cf742b3998906e700a9d0afa7908834`.
+- Exact rollback restored all BYOK/source/publisher flags and both policies to dark; the official
+  `off` verifier passed. Dark-disable receipt SHA-256 is
+  `3ae4d30662147ae2adac39c4810c844376fc7a57cb5de98f7afddee87f73aeba`. A TDD correction now admits
+  only the three exact unified workbench publish POST paths, keeps query/fragment/absolute/adjacent
+  paths rejected before network I/O, and applies the existing `1 MiB` publish request and `4 MiB`
+  preview response bounds. Focused transport/coordinator/security/Hosted/vertical-fixture tests,
+  workspace typecheck, lint with only the existing warnings, and source extension verification
+  (`450/450`, two existing package warnings) pass. Two complete preflight attempts were terminated
+  by outer `120s` and `600s` limits without a reported test failure; the machine still has unrelated
+  Node test processes dating from 2026-08-03, so this checkpoint does not claim a complete
+  preflight pass. `REL-02` remains open at `36/37`. The c53 live mutation authorization is closed;
+  the correction must ship as a new dark replacement before a new version-bound publish pilot.
 - Current checkpoint (2026-08-06): the separately authorized `.com`/BINI `ingest-pilot` completed
   one capability POST and one formal `TEXT_TO_IMAGE` POST, both without retry. The formal HTTP 200
   candidate is PNG SHA-256
