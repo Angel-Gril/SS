@@ -359,6 +359,24 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     });
     expect(committed.replayed).toBe(false);
 
+    const intermediatePairing = await deviceService.createPairingCode({
+      actorUserId: ownerUserId,
+      ownerUserId,
+      actorParentId: null,
+      shopIds: [shopId],
+      scopes: ['byok:media:ingest'],
+    });
+    const intermediateClaimed = await deviceService.claimPairingCode({
+      code: intermediatePairing.code,
+      deviceId: `device_${suffix}`,
+      deploymentId: authConfig.deploymentId,
+    });
+    expect(intermediateClaimed.session.id).not.toBe(ingestClaimed.session.id);
+    expect(await client.extensionDeviceSession.findUnique({
+      where: { id: intermediateClaimed.session.id },
+      select: { replacesSessionId: true },
+    })).toEqual({ replacesSessionId: ingestClaimed.session.id });
+
     const publishPairing = await deviceService.createPairingCode({
       actorUserId: ownerUserId,
       ownerUserId,
@@ -376,7 +394,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       where: { id: publishClaimed.session.id },
       select: { replacesSessionId: true },
     });
-    expect(replacementLineage).toEqual({ replacesSessionId: ingestClaimed.session.id });
+    expect(replacementLineage).toEqual({ replacesSessionId: intermediateClaimed.session.id });
 
     const boundDraft = await workflow.getDraft({ draftId: created.id, ownerUserId });
     expect(boundDraft).toMatchObject({

@@ -28,6 +28,36 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-08): the authorized
+  `cffc12bdca95efc5f7c75ae236ccd9a0ab394428` / `1.0.289` BINI one-shop pre-gate revalidated the
+  exact revision `11`, draft version `9`, payload SHA-256
+  `25ee7eb17a2736c25e53738220520d48e9517f97283d30b0a13d193bb02faa3d`, and single authorized
+  SKU/asset. Every rollout row stayed dark. Provider POST, ERP ingest, publish intent,
+  `OZON_PUBLISH` grant, Ozon attempt, and Ozon import counts remained zero. The gate was never
+  enabled; blocked-preflight receipt SHA-256 is
+  `3bea7cfc03e278101247f2ce3086c7b26d200017ce91ed32e685b77c1f7a2abb`.
+- A lost browser logical-device identity first produced a parallel session. It was revoked, its
+  orphan pairing was canceled, and the browser credential was cleared before any external effect.
+  Restoring the historical stable identity and re-pairing on the same physical device produced one
+  exact active five-scope successor with zero pending pairing codes. The private repair receipt
+  SHA-256 is `6b28ed4626427fd0e470832b502d8cd62c73bfac88edd3ba70f153c8619026fe`.
+- The asset provenance and live session are separated by two valid same-device
+  `PAIRING_APPROVED` edges, while cffc accepted only one direct replacement. The pilot therefore
+  stopped before gate enablement. The later offline correction supersedes that direct-only limit
+  without rewriting its historical behavior: application and database now traverse at most `16`
+  acyclic edges and require every session/grant revocation to be effective and every deployment,
+  physical device, owner, actor, and shop boundary to remain exact. Broken, cyclic, over-depth,
+  cross-boundary, missing-time, and future-revocation chains fail closed.
+- The PostgreSQL vertical publish fixture now performs two consecutive same-device re-pairs and
+  completes preview, prepare, grant, one execution, status, and provenance receipt linking. A fresh
+  isolated schema applied all `144` migrations and passed `1/1`, then was deleted. Focused Server
+  tests pass `72/72`; the complete Server suite passes `4831` with `204` environment skips. Server
+  typecheck, the unified publish controller, lint with zero errors and only the existing warnings,
+  and `pnpm preflight` all pass; source extension verification is `450/450` with two existing
+  package warnings. Both workbench UNKNOWN codes now become `OUTCOME_UNRESOLVED`: confirm cannot be
+  repeated and recovery is never automatic. The correction is offline and undeployed, so it cannot
+  enable a gate or authorize Ozon. Phase 6 remains `2/3`; overall progress remains `36/37`, with only
+  `REL-02` open.
 - Current checkpoint (2026-08-07): the authorized `c53b9e766b84ec39fb6e1042c68372baf3f7ef3e`
   / `1.0.288` BINI one-shop publish pilot completed exact draft preparation and same-device
   reauthorization without reaching Ozon. The frozen draft is revision `11`, draft version `9`,

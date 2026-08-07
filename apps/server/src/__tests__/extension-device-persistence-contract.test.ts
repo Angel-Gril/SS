@@ -14,6 +14,13 @@ const replacementLineageMigrationUrl = new URL(
 const replacementLineageMigration = existsSync(replacementLineageMigrationUrl)
   ? readFileSync(replacementLineageMigrationUrl, 'utf8')
   : '';
+const validatedLineageMigrationUrl = new URL(
+  '../../prisma/migrations/20260808120000_validate_extension_byok_publish_session_lineage/migration.sql',
+  import.meta.url,
+);
+const validatedLineageMigration = existsSync(validatedLineageMigrationUrl)
+  ? readFileSync(validatedLineageMigrationUrl, 'utf8')
+  : '';
 
 function modelBlock(name: string): string {
   return schema.match(new RegExp(`model ${name} \\{[\\s\\S]*?\\n\\}`))?.[0] || '';
@@ -52,6 +59,51 @@ describe('extension device persistence contract', () => {
     expect(replacementLineageMigration).toContain('BYOK provenance publish receipt guard has unexpected definition');
     expect(replacementLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
     expect(repository).toContain('replacesSessionId');
+  });
+
+  it('validates a bounded acyclic replacement lineage for durable BYOK publish receipts', () => {
+    expect(validatedLineageMigration).toContain(
+      'CREATE OR REPLACE FUNCTION "extension_byok_publish_session_matches"',
+    );
+    expect(validatedLineageMigration).toContain('provenance_session_id = command_session_id');
+    expect(validatedLineageMigration).toContain('FOR replacement_depth IN 1..16 LOOP');
+    expect(validatedLineageMigration).toContain('visited_session_ids');
+    expect(validatedLineageMigration).toContain('= ANY(visited_session_ids)');
+    expect(validatedLineageMigration).toContain(
+      'predecessor."deployment_id" = current_session."deployment_id"',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor."device_id" = current_session."device_id"',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor."owner_user_id" = current_session."owner_user_id"',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor."actor_user_id" = current_session."actor_user_id"',
+    );
+    expect(validatedLineageMigration).toContain('predecessor."status" = \'REVOKED\'');
+    expect(validatedLineageMigration).toContain(
+      'predecessor."revoked_reason" = \'PAIRING_APPROVED\'',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor."revoked_at" <= CURRENT_TIMESTAMP',
+    );
+    expect(validatedLineageMigration).toContain(
+      "predecessor.\"scopes\" @> ARRAY['byok:media:ingest']::TEXT[]",
+    );
+    expect(validatedLineageMigration).toContain(
+      "'byok:media:ingest', 'listing:publish'",
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor_grant."shop_id" = expected_shop_id',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor_grant."revoked_reason" = \'PAIRING_APPROVED\'',
+    );
+    expect(validatedLineageMigration).toContain(
+      'predecessor_grant."revoked_at" <= CURRENT_TIMESTAMP',
+    );
+    expect(validatedLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
   });
 
   it('stores only keyed digests for pairing and refresh credentials', () => {

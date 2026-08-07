@@ -41,6 +41,7 @@ export interface ExtensionByokPublishDeviceAuthorization {
   actorRole: string;
   actorParentId: string | null;
   shopGrantStatus: string | null;
+  shopGrantRevokedAt: Date | null;
   shopGrantRevokedReason: string | null;
   shopId: string | null;
   shopOwnerUserId: string | null;
@@ -112,6 +113,8 @@ function selectedAssetIds(
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+
+const MAX_REPLACEMENT_CHAIN_HOPS = 16;
 
 export function createExtensionByokPublishAuthorizer(options: {
   loadPolicy(): Promise<unknown>;
@@ -219,6 +222,9 @@ export function createExtensionByokPublishAuthorizer(options: {
         || (authorization.revokedAt !== null
           && (!(authorization.revokedAt instanceof Date)
             || !Number.isFinite(authorization.revokedAt.getTime())))
+        || (authorization.shopGrantRevokedAt !== null
+          && (!(authorization.shopGrantRevokedAt instanceof Date)
+            || !Number.isFinite(authorization.shopGrantRevokedAt.getTime())))
         || authorization.ownerUserId !== ownerUserId
         || authorization.actorUserId !== ownerUserId
         || authorization.ownerStatus !== 'ACTIVE'
@@ -248,34 +254,58 @@ export function createExtensionByokPublishAuthorizer(options: {
         || !(authorization.expiresAt instanceof Date)
         || authorization.expiresAt.getTime() <= now.getTime()
         || authorization.shopGrantStatus !== 'ACTIVE'
+        || authorization.shopGrantRevokedAt !== null
         || authorization.shopGrantRevokedReason !== null) {
         denied('DEVICE_NOT_ALLOWED');
       }
       return authorization;
     };
 
-    const requireDirectReplacement = async (
+    const requireReplacementChain = async (
       provenanceSessionId: string,
       requestingSessionId: string,
     ): Promise<ExtensionByokPublishDeviceAuthorization> => {
-      const provenanceDevice = await loadDevice(provenanceSessionId);
       const requestingDevice = await requireLiveDevice(
         requestingSessionId,
         ['byok:media:ingest', 'listing:publish'],
       );
-      if (!provenanceDevice.scopes.includes('byok:media:ingest')
-        || provenanceDevice.status !== 'REVOKED'
-        || !(provenanceDevice.revokedAt instanceof Date)
-        || provenanceDevice.revokedAt.getTime() > now.getTime()
-        || provenanceDevice.revokedReason !== 'PAIRING_APPROVED'
-        || provenanceDevice.shopGrantStatus !== 'REVOKED'
-        || provenanceDevice.shopGrantRevokedReason !== 'PAIRING_APPROVED'
-        || requestingDevice.replacesSessionId !== provenanceDevice.sessionId
-        || requestingDevice.deploymentId !== provenanceDevice.deploymentId
-        || requestingDevice.deviceId !== provenanceDevice.deviceId) {
-        denied('DEVICE_NOT_ALLOWED');
+      const visited = new Set([requestingDevice.sessionId]);
+      let current = requestingDevice;
+
+      for (let hop = 0; hop < MAX_REPLACEMENT_CHAIN_HOPS; hop += 1) {
+        const predecessorSessionId = current.replacesSessionId;
+        if (!predecessorSessionId || visited.has(predecessorSessionId)) {
+          denied('DEVICE_NOT_ALLOWED');
+        }
+        visited.add(predecessorSessionId);
+        const predecessor = await loadDevice(predecessorSessionId);
+        if (!predecessor.scopes.includes('byok:media:ingest')
+          || predecessor.status !== 'REVOKED'
+          || !(predecessor.revokedAt instanceof Date)
+          || predecessor.revokedAt.getTime() > now.getTime()
+          || predecessor.revokedReason !== 'PAIRING_APPROVED'
+          || predecessor.shopGrantStatus !== 'REVOKED'
+          || !(predecessor.shopGrantRevokedAt instanceof Date)
+          || predecessor.shopGrantRevokedAt.getTime() > now.getTime()
+          || predecessor.shopGrantRevokedReason !== 'PAIRING_APPROVED'
+          || predecessor.deploymentId !== requestingDevice.deploymentId
+          || predecessor.deviceId !== requestingDevice.deviceId
+          || predecessor.ownerUserId !== requestingDevice.ownerUserId
+          || predecessor.actorUserId !== requestingDevice.actorUserId
+          || predecessor.shopId !== requestingDevice.shopId) {
+          denied('DEVICE_NOT_ALLOWED');
+        }
+        if (predecessor.sessionId === provenanceSessionId) {
+          if (predecessor.replacesSessionId
+            && visited.has(predecessor.replacesSessionId)) {
+            denied('DEVICE_NOT_ALLOWED');
+          }
+          return requestingDevice;
+        }
+        current = predecessor;
       }
-      return requestingDevice;
+
+      return denied('DEVICE_NOT_ALLOWED');
     };
 
     for (const row of provenanceRows) {
@@ -291,7 +321,7 @@ export function createExtensionByokPublishAuthorizer(options: {
             ['byok:media:ingest', 'listing:publish'],
           );
         } else {
-          const replacement = await requireDirectReplacement(
+          const replacement = await requireReplacementChain(
             provenanceDeviceSessionId,
             requestingDeviceSessionId,
           );

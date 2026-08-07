@@ -314,9 +314,12 @@ for (const mode of ['ERP_HOSTED', 'BYOK']) {
   assert.equal(test.controller.getState().publishState.state, 'SUCCEEDED');
 }
 
-{
+for (const code of [
+  'SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME',
+  'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME',
+]) {
   const unknown = Object.assign(new Error('response lost'), {
-    code: 'SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME',
+    code,
     outcome: 'UNKNOWN_OUTCOME',
     automaticRetryAllowed: false,
   });
@@ -331,6 +334,11 @@ for (const mode of ['ERP_HOSTED', 'BYOK']) {
   assert.equal(test.nodes.workspacePublishRecoverButton.hidden, false);
   assert.equal(test.nodes.workspacePublishConfirmButton.hidden, true);
   assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 1);
+  assert.equal(test.calls.filter((row) => row[0] === 'recover').length, 0);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', true);
+  await settle();
+  assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 1);
+  assert.equal(test.calls.filter((row) => row[0] === 'recover').length, 0);
 }
 
 {

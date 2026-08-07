@@ -319,6 +319,7 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
             where: { shopId: input.shopId },
             select: {
               status: true,
+              revokedAt: true,
               revokedReason: true,
               shop: { select: { id: true, userId: true, status: true, platform: true } },
             },
@@ -355,6 +356,11 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
         actorRole: String(session.actor?.role || ''),
         actorParentId: session.actor?.parentId == null ? null : String(session.actor.parentId),
         shopGrantStatus: grant ? String(grant.status) : null,
+        shopGrantRevokedAt: grant?.revokedAt == null
+          ? null
+          : grant.revokedAt instanceof Date
+            ? grant.revokedAt
+            : new Date(grant.revokedAt),
         shopGrantRevokedReason: grant?.revokedReason == null
           ? null
           : String(grant.revokedReason),

@@ -214,6 +214,182 @@ describePostgres('extension device PostgreSQL integration', () => {
     expect(matchAfterRevocation).toEqual([{ matches: true }]);
   });
 
+  it('matches only an acyclic, fully validated replacement lineage of at most sixteen hops', async () => {
+    const seed = await seedOwnerAndShop(first, 'bounded_lineage');
+    const { service } = serviceFor(first);
+    const deviceId = `${seed.prefix}_device`;
+    const sessions: Array<{ id: string }> = [];
+    for (let index = 0; index < 18; index += 1) {
+      const pairing = await service.createPairingCode({
+        actorUserId: seed.ownerUserId,
+        ownerUserId: seed.ownerUserId,
+        actorParentId: null,
+        shopIds: [seed.shopId],
+        scopes: ['byok:media:ingest', 'listing:publish'],
+      });
+      const claimed = await service.claimPairingCode({
+        code: pairing.code,
+        deviceId,
+        deploymentId: authConfig.deploymentId,
+      });
+      sessions.push({ id: claimed.session.id });
+    }
+    const commandSessionId = sessions.at(-1)!.id;
+    const match = async (provenanceSessionId: string) => {
+      const rows = await first.$queryRawUnsafe<Array<{ matches: boolean }>>(
+        `SELECT "extension_byok_publish_session_matches"($1, $2, $3, $3, $4) AS "matches"`,
+        provenanceSessionId,
+        commandSessionId,
+        seed.ownerUserId,
+        seed.shopId,
+      );
+      return rows[0]?.matches === true;
+    };
+
+    expect(await match(commandSessionId)).toBe(true);
+    expect(await match(sessions[1]!.id)).toBe(true);
+    expect(await match(sessions[0]!.id)).toBe(false);
+
+    const unrelatedPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const unrelated = await service.claimPairingCode({
+      code: unrelatedPairing.code,
+      deviceId: `${seed.prefix}_other_device`,
+      deploymentId: authConfig.deploymentId,
+    });
+    expect(await match(unrelated.session.id)).toBe(false);
+
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "scopes" = ARRAY['byok:media:ingest']::TEXT[]
+       WHERE "id" = $1`,
+      commandSessionId,
+    );
+    try {
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions"
+         SET "scopes" = ARRAY['byok:media:ingest', 'listing:publish']::TEXT[]
+         WHERE "id" = $1`,
+        commandSessionId,
+      );
+    }
+
+    const intermediateSessionId = sessions[8]!.id;
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "device_id" = $1 WHERE "id" = $2`,
+      `${deviceId}_mismatch`, intermediateSessionId,
+    );
+    try {
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions" SET "device_id" = $1 WHERE "id" = $2`,
+        deviceId, intermediateSessionId,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "revoked_reason" = 'OWNER_REVOKED' WHERE "id" = $1`,
+      intermediateSessionId,
+    );
+    try {
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions" SET "revoked_reason" = 'PAIRING_APPROVED' WHERE "id" = $1`,
+        intermediateSessionId,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "revoked_at" = '2099-01-01T00:00:00.000Z'
+       WHERE "id" = $1`,
+      intermediateSessionId,
+    );
+    try {
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions" SET "revoked_at" = CURRENT_TIMESTAMP WHERE "id" = $1`,
+        intermediateSessionId,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions" SET "scopes" = ARRAY['listing:publish']::TEXT[] WHERE "id" = $1`,
+      intermediateSessionId,
+    );
+    try {
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions"
+         SET "scopes" = ARRAY['byok:media:ingest', 'listing:publish']::TEXT[]
+         WHERE "id" = $1`,
+        intermediateSessionId,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `ALTER TABLE "extension_device_shop_grants"
+       DISABLE TRIGGER "extension_device_shop_grants_tombstone"`,
+    );
+    try {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_shop_grants" SET "status" = 'ACTIVE',
+           "revoked_at" = NULL, "revoked_reason" = NULL
+         WHERE "session_id" = $1 AND "shop_id" = $2`,
+        intermediateSessionId, seed.shopId,
+      );
+      expect(await match(sessions[1]!.id)).toBe(false);
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_shop_grants" SET "status" = 'REVOKED',
+           "revoked_at" = '2099-01-01T00:00:00.000Z', "revoked_reason" = 'PAIRING_APPROVED'
+         WHERE "session_id" = $1 AND "shop_id" = $2`,
+        intermediateSessionId, seed.shopId,
+      );
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_shop_grants" SET "status" = 'REVOKED',
+           "revoked_at" = CURRENT_TIMESTAMP, "revoked_reason" = 'PAIRING_APPROVED'
+         WHERE "session_id" = $1 AND "shop_id" = $2`,
+        intermediateSessionId, seed.shopId,
+      );
+      await first.$executeRawUnsafe(
+        `ALTER TABLE "extension_device_shop_grants"
+         ENABLE TRIGGER "extension_device_shop_grants_tombstone"`,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `ALTER TABLE "extension_device_sessions"
+       DISABLE TRIGGER "prevent_extension_device_session_replacement_rewrite"`,
+    );
+    try {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions" SET "replaces_session_id" = $1 WHERE "id" = $2`,
+        commandSessionId, sessions[1]!.id,
+      );
+      expect(await match(sessions[1]!.id)).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions" SET "replaces_session_id" = $1 WHERE "id" = $2`,
+        sessions[0]!.id, sessions[1]!.id,
+      );
+      await first.$executeRawUnsafe(
+        `ALTER TABLE "extension_device_sessions"
+         ENABLE TRIGGER "prevent_extension_device_session_replacement_rewrite"`,
+      );
+    }
+  }, 30_000);
+
   it('serializes two concurrent authorization replacements for the same device', async () => {
     const seed = await seedOwnerAndShop(first, 'concurrent_reauthorize');
     const firstClient = serviceFor(first);

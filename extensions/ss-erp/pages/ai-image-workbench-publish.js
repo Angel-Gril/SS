@@ -243,16 +243,25 @@
     return deepFreeze({ ...clone(value), request: request });
   }
 
+  function isUnknownPublishOutcome(error) {
+    return Boolean(error) && [
+      'SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME',
+      'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME',
+    ].includes(error.code);
+  }
+
   function errorLabel(error) {
     var code = error && typeof error.code === 'string' ? error.code : '';
     if (code === 'SS_ERP_WORKBENCH_PUBLISH_DRAFT_NOT_READY') {
       return 'ERP 草稿校验尚未通过；完成校验后点击“重新核对草稿”。';
     }
+    if (isUnknownPublishOutcome(error)) {
+      return '发布结果暂时未知；只能恢复同一发布身份。';
+    }
     return {
       SS_ERP_WORKBENCH_PUBLISH_PREVIEW_REJECTED: 'ERP 拒绝了当前草稿或媒体顺序；请重新载入权威草稿。',
       SS_ERP_WORKBENCH_PUBLISH_RESPONSE_INVALID: '发布预览完整性校验失败，已阻止提交。',
       SS_ERP_WORKBENCH_PUBLISH_CONFIRMATION_REQUIRED: '发布预览已变化，请重新核对。',
-      SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME: '发布结果暂时未知；只能恢复同一发布身份。',
       SS_ERP_WORKBENCH_PUBLISH_OPERATION_NOT_FOUND: '没有找到可恢复的发布身份。',
       SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH: '工作台与当前草稿不一致，已阻止发布。',
     }[code] || '发布服务暂不可用；未创建新的 Ozon 提交。';
@@ -517,7 +526,7 @@
       return true;
     } catch (error) {
       if (!sameRequest(request, submittedRequest) || preview !== submittedPreview) return false;
-      if (error && error.code === 'SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME') {
+      if (isUnknownPublishOutcome(error)) {
         publishState = unresolvedState();
       } else {
         lastError = errorLabel(error);

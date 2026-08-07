@@ -132,6 +132,7 @@ describe('Prisma extension BYOK media provenance repository', () => {
       actor: { status: 'ACTIVE', role: 'USER', parentId: null },
       shopGrants: [{
         status: 'ACTIVE',
+        revokedAt: null,
         revokedReason: null,
         shop: { id: 'shop-1', userId: 'owner-1', status: 'ACTIVE', platform: 'OZON' },
       }],
@@ -151,6 +152,7 @@ describe('Prisma extension BYOK media provenance repository', () => {
       ownerUserId: 'owner-1',
       actorUserId: 'owner-1',
       shopGrantStatus: 'ACTIVE',
+      shopGrantRevokedAt: null,
       shopGrantRevokedReason: null,
       shopId: 'shop-1',
       shopOwnerUserId: 'owner-1',
@@ -164,7 +166,10 @@ describe('Prisma extension BYOK media provenance repository', () => {
         deviceId: true,
         replacesSessionId: true,
         revokedReason: true,
-        shopGrants: expect.objectContaining({ where: { shopId: 'shop-1' } }),
+        shopGrants: expect.objectContaining({
+          where: { shopId: 'shop-1' },
+          select: expect.objectContaining({ revokedAt: true }),
+        }),
       }),
     }));
   });

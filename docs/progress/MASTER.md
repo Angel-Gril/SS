@@ -44,6 +44,47 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-08): the authorized
+`cffc12bdca95efc5f7c75ae236ccd9a0ab394428` / `1.0.289` BINI one-shop publish pre-gate stopped
+before rollout enablement or any Ozon request. The exact draft remains revision `11`, draft version
+`9`, with payload SHA-256
+`25ee7eb17a2736c25e53738220520d48e9517f97283d30b0a13d193bb02faa3d` and the same single
+authorized SKU/asset. All rollout rows remained dark; Provider POST, ERP ingest, publish intent,
+`OZON_PUBLISH` grant, Ozon attempt, and Ozon import counts all remained zero. The private blocked
+preflight receipt SHA-256 is
+`3bea7cfc03e278101247f2ce3086c7b26d200017ce91ed32e685b77c1f7a2abb`.
+
+The initial browser repair attempt exposed that its persistent logical device identity had been
+lost. The resulting parallel session was revoked and its orphan pairing canceled before any gate or
+external mutation; the browser credential was cleared. The historical stable device identity was
+then restored and a true same-physical-device five-scope re-pair directly replaced the prior active
+session. Exactly one matching session remains active and no pairing code remains pending. The
+private containment/repair receipt SHA-256 is
+`6b28ed4626427fd0e470832b502d8cd62c73bfac88edd3ba70f153c8619026fe`.
+
+Read-only lineage inspection then proved two valid `PAIRING_APPROVED` replacement edges between the
+asset provenance session and the current live session. The cffc application and database matcher
+accepted only one direct edge, so the pilot failed closed before enabling the gate. The offline
+correction replaces that direct-only rule with an acyclic traversal bounded to `16` edges. Every
+predecessor session and shop grant must have an effective `PAIRING_APPROVED` revocation, and every
+edge must preserve deployment, physical device, owner, actor, and shop. Broken, cyclic, over-depth,
+cross-boundary, missing-time, and future-revocation chains fail closed in both the application and
+database. The existing PostgreSQL vertical fixture now performs two consecutive same-device
+re-pairs and completes preview, prepare, `OZON_PUBLISH` grant, one execution, status, and provenance
+receipt linking. A fresh isolated schema applied all `144` migrations and passed that vertical test
+`1/1`; the schema was removed afterward. Current focused Server tests pass `72/72`; the complete
+Server suite passes `4831` tests with `204` environment skips. Server typecheck and the unified
+workbench publish controller test pass. Lint has zero errors and only the existing `20` Server plus
+one shared warning. `pnpm preflight` passes all selected local checks, including source extension
+verification at `450/450` with the two existing package warnings.
+
+The same offline correction also normalizes both workbench and BYOK UNKNOWN error codes to
+`OUTCOME_UNRESOLVED`. A lost acknowledgement cannot expose another confirm action or trigger an
+automatic recover/re-dispatch; any explicit same-identity recovery remains subject to authoritative
+status and the existing one-attempt ledger. This correction is not packaged or deployed and
+does not authorize an Ozon mutation. Phase 6 remains `2/3` and overall progress remains `36/37`
+(`97%`); `REL-02` is the only open task.
+
 Current checkpoint (2026-08-07): the authorized
 `c53b9e766b84ec39fb6e1042c68372baf3f7ef3e` / `1.0.288` BINI one-shop publish pilot stopped safely
 before any Ozon request. Draft revision `11`, draft version `9`, validation `VALID`, payload SHA-256
@@ -1821,14 +1862,20 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep both regions and all rollout rows dark. Commit and push the exact
-unified-workbench transport allowlist correction, then build/sign/distribute and dark-deploy the
-next Cloud/Local package as a commit-bound replacement for `1.0.288`. Upgrade the dedicated BINI
-path and attest the active worker before requesting a new release/version-bound one-shop mutation
-authorization. Do not reuse the closed c53 gate receipt, do not create a publish intent before the
-new preview is verified, and do not repeat the already completed Provider generation or ERP ingest.
-The next live publish attempt must still execute at most one Ozon import without automatic retry,
-perform bounded status reconciliation, and restore dark state afterward.
+Immediate next step: keep both regions and all rollout rows dark. Run the final offline QA-04 gates
+against the clean pushed bounded-lineage/UNKNOWN correction commit. Then obtain a new exact
+pre-release authorization and create the next immutable Cloud/Local replacement release, expected
+to be `1.0.290` and bound to that commit. Sign and verify both regional candidates; perform fresh
+backup/restore, migration, dark deployment, canaries, first-party website receipts, and a same-path
+BINI upgrade with active-worker attestation. The closed c53 and cffc release/mutation authorizations
+do not carry to a new commit or version.
+
+After the replacement release is independently dark and verified, obtain a separate exact
+owner/shop/device/draft/version/payload authorization for the one-shop pilot. Do not repeat the
+completed Provider generation or ERP ingest. The live publish attempt must create at most one
+publish intent and one `OZON_PUBLISH` grant, execute exactly one Ozon import without automatic retry,
+perform bounded read-only status reconciliation, avoid manual resolution or resubmission when the
+result is UNKNOWN, and restore dark state and revoke the pilot session afterward.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
