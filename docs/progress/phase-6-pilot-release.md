@@ -89,6 +89,12 @@ Progress: 2/3 tasks.
   contract scripts and typechecks pass; lint has no errors and only the existing warnings. This work
   is not deployed, and the one-shop import plus
   reconciliation remain outstanding, so `REL-02` stays open at `36/37`.
+- Offline replacement candidate (2026-08-07): `1.0.287` was generated from clean pushed commit
+  `ac2bc70b05a150d2f1c931ddbaadef6f6ddd9594` with 190 files per Cloud/Local target. Cloud ZIP
+  SHA-256 is `3167b8f466aaddd0eac95621c4b9c58008b063ac18257657bfce918c5207e813`; Local ZIP
+  SHA-256 is `3c808958553ec97a0ed79dd8db796b57204b067d3b8df5bc39e0f0f1748745ea`. Canonical
+  evidence and checksum verification passed; signature remains `EXTERNAL_REQUIRED`. No website,
+  VPS, flag, Provider, or Ozon action ran.
 
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
   requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.

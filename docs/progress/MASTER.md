@@ -140,6 +140,13 @@ affected typechecks pass. Lint has zero errors
 and only the existing `20` Server plus one shared warning. This work is not deployed; the one-shop
 Ozon import and reconciliation are still outstanding, so `REL-02` remains open at `36/37`.
 
+Offline replacement candidate (2026-08-07): version `1.0.287` was generated from clean pushed
+commit `ac2bc70b05a150d2f1c931ddbaadef6f6ddd9594` with 190 files per target. Cloud ZIP SHA-256 is
+`3167b8f466aaddd0eac95621c4b9c58008b063ac18257657bfce918c5207e813`; Local ZIP SHA-256 is
+`3c808958553ec97a0ed79dd8db796b57204b067d3b8df5bc39e0f0f1748745ea`; canonical release evidence
+and checksum verification passed. The candidate remains `signature.status=EXTERNAL_REQUIRED` and
+has not been distributed, deployed, or used for an Ozon mutation.
+
 Current checkpoint (2026-08-06): the separately authorized Provider-side reconciliation sent
 exactly three authenticated `GET` requests, one each to `/api/usage/token/`,
 `/v1/dashboard/billing/usage`, and `/api/log/token`. All three returned HTTP 200 JSON. It sent no
