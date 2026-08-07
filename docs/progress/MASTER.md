@@ -1784,13 +1784,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep `1.0.286`, both regions, and all rollout rows dark. The authorized
-`.com`/BINI generation-and-ingest lane is complete and its asset remains bound to draft revision/
-version `3/3` with zero ERP AI charge. Do not repeat the consumed Provider operations or create a
-second generation. To close `REL-02`, obtain a separate explicit one-shop Ozon publish
-authorization, use the already-bound asset through the existing ERP publisher, record the publish
-intent/receipt and reconciliation, and return the publish scope to dark. That mutation must not be
-combined with a new Provider request; no current authorization permits publish or Ozon writes.
+Immediate next step: keep the deployed `1.0.286`, both regions, and all rollout rows dark. The
+working-tree correction is now pushed as `c2f7acb`; production still runs `c3542468`, so a new
+commit-bound replacement release is required before the BINI draft can use the corrected SKU
+evidence and VAT control. The exact BINI values are resolved as CNY `180` / old price `200`, VAT
+token `0`, no-brand dictionary ID `126745801`, and Russian sizes `75A/75B/75C` (IDs
+`35600/35602/35603`). After replacement, write those values through the draft workflow, refresh
+validation, and only then use a separately renewed one-shop Ozon mutation authorization to record
+the publish intent/receipt and reconciliation before returning the publish scope to dark. Do not
+repeat consumed Provider operations or combine an Ozon mutation with a new Provider request.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
