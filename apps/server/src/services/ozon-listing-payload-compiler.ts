@@ -7,13 +7,16 @@ import {
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
+  OZON_LISTING_SUPPORTED_VAT_RATES,
   OZON_LISTING_VAT_MAX_LENGTH,
   canonicalStringify,
+  isOzonListingOldPriceAtLeastPrice,
   sourceProductCaptureCanonicalStringify,
   sourceProductCapturePayloadBytes,
   validateSourceProductCaptureV2Submission,
   type OzonListingDraft,
   type OzonListingSkuPricingV1,
+  type OzonListingVatRate,
   type SourceCaptureEvidence,
   type SourceProductCaptureV2,
 } from 'shared';
@@ -30,6 +33,7 @@ const MAX_IDENTIFIER_LENGTH = 500;
 const MAX_IMAGE_URL_LENGTH = 4096;
 const MAX_TITLE_LENGTH = 500;
 const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
+const SUPPORTED_VAT_RATES = new Set<string>(OZON_LISTING_SUPPORTED_VAT_RATES);
 const MAX_DESCRIPTION_LENGTH = 200_000;
 const MAX_ATTRIBUTE_VALUES = 100;
 
@@ -411,12 +415,13 @@ function parsePricing(draft: OzonListingDraft, skuKeys: string[]): Map<string, O
     const vat = typeof raw.vat === 'string' ? raw.vat : '';
     if (!skuKey || skuKey !== raw.skuKey || parsed.has(skuKey)
       || !exactPositiveDecimal(raw.price) || !exactPositiveDecimal(raw.oldPrice)
+      || !isOzonListingOldPriceAtLeastPrice(raw.price, raw.oldPrice)
       || !new RegExp(`^[A-Z]{${OZON_LISTING_CURRENCY_CODE_LENGTH}}$`).test(currencyCode)
       || !SUPPORTED_CURRENCY_CODES.has(currencyCode)
       || (pricingCurrency !== null && currencyCode !== pricingCurrency)
       || vat !== vat.normalize('NFKC').trim()
       || vat.length === 0 || vat.length > OZON_LISTING_VAT_MAX_LENGTH
-      || !/^[A-Za-z0-9._-]+$/.test(vat) || hasAsciiControl(vat)) {
+      || !SUPPORTED_VAT_RATES.has(vat) || hasAsciiControl(vat)) {
       fail('OZON_LISTING_COMPILE_PRICING_INVALID', `Pricing for ${skuKey || '<unknown>'} is invalid`);
     }
     const supportedCurrency = currencyCode as OzonListingSkuPricingV1['currencyCode'];
@@ -427,7 +432,7 @@ function parsePricing(draft: OzonListingDraft, skuKeys: string[]): Map<string, O
       price: raw.price,
       oldPrice: raw.oldPrice,
       currencyCode: supportedCurrency,
-      vat,
+      vat: vat as OzonListingVatRate,
       ...(offerId ? { offerId } : {}),
     });
   }

@@ -119,4 +119,20 @@ describe('source listing attribute production source context', () => {
     expect(derived.operationalFacts?.selectedStock).toEqual({ known: 0, unknown: 1 });
     expect(derived.operationalFacts?.evidence.selectedSkuStock).toBe('');
   });
+
+  it('matches NFKC-normalized selected keys to full-width captured SKU keys', () => {
+    const capture = structuredClone(fixture.capture);
+    const sku = capture.skus[0]!;
+    sku.key = 'sku:晚霞肤（1.5cm+4cm胸垫）>M（适合34/75ABC）';
+    sku.sourceSkuId = '5777037825166';
+    sku.stock = 45162;
+    const selectedKey = sku.key.normalize('NFKC');
+
+    const context = contextFor(capture, [selectedKey]);
+
+    expect(context.operationalFacts?.selectedStock).toEqual({ known: 1, unknown: 0 });
+    expect(context.operationalFacts?.evidence.selectedSkuStock)
+      .toContain('window.skuMap.sku-source-0.stock');
+    expect(context.skuStandards?.[selectedKey]).toBeDefined();
+  });
 });

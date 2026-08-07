@@ -32,6 +32,17 @@ function loadClientModule(defaultApi = {}) {
           OZON_LISTING_OFFER_ID_MAX_LENGTH: 100,
           OZON_LISTING_PRICING_CONTRACT_VERSION: 'ozon-listing-pricing/v1',
           OZON_LISTING_SUPPORTED_CURRENCY_CODES: ['CNY', 'RUB'],
+          OZON_LISTING_SUPPORTED_VAT_RATES: ['0', '0.05', '0.07', '0.1', '0.2', '0.22'],
+          isOzonListingOldPriceAtLeastPrice(price, oldPrice) {
+            const [priceInteger, priceFraction = ''] = price.split('.');
+            const [oldPriceInteger, oldPriceFraction = ''] = oldPrice.split('.');
+            if (oldPriceInteger.length !== priceInteger.length) {
+              return oldPriceInteger.length > priceInteger.length;
+            }
+            if (oldPriceInteger !== priceInteger) return oldPriceInteger > priceInteger;
+            const scale = Math.max(priceFraction.length, oldPriceFraction.length);
+            return oldPriceFraction.padEnd(scale, '0') >= priceFraction.padEnd(scale, '0');
+          },
         };
       }
       throw new Error(`Unexpected import: ${specifier}`);
@@ -109,12 +120,16 @@ const workflow = loadClientModule();
   });
   const cnyPricing = workflow.buildOzonListingPricingV1({
     selectedSkuKeys: ['sku-1'],
-    items: [{ skuKey: 'sku-1', price: '107', oldPrice: '129', currencyCode: 'CNY', vat: '0' }],
+    items: [{ skuKey: 'sku-1', price: '180', oldPrice: '200', currencyCode: 'CNY', vat: '0' }],
   });
   assert.equal(cnyPricing.items[0].currencyCode, 'CNY');
   for (const input of [
     { selectedSkuKeys: ['sku-1', 'sku-2'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '0', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
+    { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '2.01', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
+    { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '9007199254740993', oldPrice: '9007199254740992', currencyCode: 'RUB', vat: '0' }] },
+    { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '1.0000000000000000002', oldPrice: '1.0000000000000000001', currencyCode: 'RUB', vat: '0' }] },
+    { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0.20' }] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'USD', vat: '0' }] },
     { selectedSkuKeys: ['sku-1', 'sku-2'], items: [
       { skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'CNY', vat: '0' },

@@ -119,11 +119,11 @@ function pricing(): OzonListingPricingV1 {
     items: [
       {
         skuKey: 'sku-1', price: '2199.00', oldPrice: '2599.00',
-        currencyCode: 'RUB', vat: '0.20',
+        currencyCode: 'RUB', vat: '0.2',
       },
       {
         skuKey: 'sku-0', price: '1999.00', oldPrice: '2399.00',
-        currencyCode: 'RUB', vat: '0.20', offerId: 'reviewed-offer-0',
+        currencyCode: 'RUB', vat: '0.2', offerId: 'reviewed-offer-0',
       },
     ],
   };
@@ -223,7 +223,7 @@ describe('Ozon listing payload compiler', () => {
     expect(result.payload.items[0]).toMatchObject({
       offer_id: 'reviewed-offer-0', name: 'Тестовый товар',
       description: 'Проверенное описание', price: '1999.00', old_price: '2399.00',
-      currency_code: 'RUB', vat: '0.20', weight: 500,
+      currency_code: 'RUB', vat: '0.2', weight: 500,
       depth: 300, width: 200, height: 40, dimension_unit: 'mm', weight_unit: 'g',
       images: ['https://cdn.example.com/product.jpg', 'https://cdn.example.com/sku-0.jpg'],
     });
@@ -345,6 +345,14 @@ describe('Ozon listing payload compiler', () => {
     const invalidDecimal = buildInput();
     (invalidDecimal.draft.pricing.value as OzonListingPricingV1).items[0]!.price = '0';
     expectCompileCode(invalidDecimal, 'OZON_LISTING_COMPILE_PRICING_INVALID');
+
+    const oldPriceBelowPrice = buildInput();
+    (oldPriceBelowPrice.draft.pricing.value as OzonListingPricingV1).items[0]!.oldPrice = '1';
+    expectCompileCode(oldPriceBelowPrice, 'OZON_LISTING_COMPILE_PRICING_INVALID');
+
+    const unsupportedVat = buildInput();
+    (unsupportedVat.draft.pricing.value as OzonListingPricingV1).items[0]!.vat = '0.20' as '0';
+    expectCompileCode(unsupportedVat, 'OZON_LISTING_COMPILE_PRICING_INVALID');
 
     const missingOldPrice = buildInput();
     const incompletePrice = (

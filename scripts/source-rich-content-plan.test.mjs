@@ -150,6 +150,29 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
 {
   const plan = planner.buildSourceRichContentPlan({
+    title: 'BINI 女士文胸',
+    metadata: {
+      categoryName: '文胸',
+      sourceAttributes: [
+        { name: '尺码', value: 'M（适合34/75ABC）' },
+      ],
+    },
+    variants: [{ attrs: { 颜色: '晚霞肤', 尺码: 'M（适合34/75ABC）' }, stock: 45162 }],
+  });
+
+  assert.equal(plan.templateKey, 'bra');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'bra');
+  const biniRows = plan.sizeChart.tableRows.filter((row) => row.size === '75ABC');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(biniRows.map((row) => row.ruSize))),
+    ['75A', '75B', '75C'],
+  );
+  assert.equal(plan.sizeChart.tableRows.some((row) => row.size === 'M' || row.ruSize === 'M'), false);
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
     title: '女士背心',
     metadata: {
       sourceAttributes: [{ name: '尺码', value: '均码【适合80-125斤】' }],

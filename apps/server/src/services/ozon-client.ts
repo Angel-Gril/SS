@@ -890,6 +890,7 @@ export interface OzonProductInfo {
   old_price: string;
   price: string;
   currency_code: string;
+  vat?: string;
   sku: number;
   sources: { sku: number; source: string }[];
   stocks: {

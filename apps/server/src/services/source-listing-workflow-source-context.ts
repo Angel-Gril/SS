@@ -15,6 +15,7 @@ import {
 } from './source-evidence-trust.js';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+  capturedSourceSkuAliases,
   isProductOnlySourceCapture,
 } from './source-listing-sku-identity.js';
 import {
@@ -96,9 +97,36 @@ export function buildSourceListingAttributeSourceContext(input: {
   const factEvidence = capture.fieldEvidence;
   const selectedSkuKeys = [...new Set(input.selectedSkuKeys.map(normalizedKey).filter(Boolean))];
   const selectedKeySet = new Set(selectedSkuKeys);
-  const selectedSkus = (Array.isArray(capture.skus) ? capture.skus : [])
-    .filter((sku) => selectedKeySet.has(sku.key)
-      || (sku.sourceSkuId != null && selectedKeySet.has(sku.sourceSkuId)));
+  const skuAliases = capturedSourceSkuAliases(capture);
+  const canonicalAlias = (normalized: string): string | null => {
+    if (!normalized) return null;
+    const alias = skuAliases.get(normalized);
+    return typeof alias === 'string' ? alias : null;
+  };
+  const selectedKeysByAlias = new Map<string, string[]>();
+  for (const selectedKey of selectedSkuKeys) {
+    const alias = canonicalAlias(selectedKey);
+    if (!alias) continue;
+    const keys = selectedKeysByAlias.get(alias) || [];
+    keys.push(selectedKey);
+    selectedKeysByAlias.set(alias, keys);
+  }
+  const matchingSelectedKeys = (sku: { key: string; sourceSkuId: string | null }): string[] => {
+    const key = normalizedKey(sku.key);
+    const sourceSkuId = normalizedKey(sku.sourceSkuId);
+    const matches = new Set<string>();
+    if (selectedKeySet.has(key)) matches.add(key);
+    if (selectedKeySet.has(sourceSkuId)) matches.add(sourceSkuId);
+    for (const alias of [canonicalAlias(key), canonicalAlias(sourceSkuId)]) {
+      if (!alias) continue;
+      for (const selectedKey of selectedKeysByAlias.get(alias) || []) matches.add(selectedKey);
+    }
+    return [...matches];
+  };
+  const selectedSkuMatches = (Array.isArray(capture.skus) ? capture.skus : [])
+    .map((sku) => ({ sku, selectedKeys: matchingSelectedKeys(sku) }))
+    .filter((entry) => entry.selectedKeys.length > 0);
+  const selectedSkus = selectedSkuMatches.map((entry) => entry.sku);
   const trustedProductAttributes = (Array.isArray(capture.attributes) ? capture.attributes : [])
     .filter((attribute) => (
       attribute.isSaleAttribute !== true
@@ -109,17 +137,21 @@ export function buildSourceListingAttributeSourceContext(input: {
         attribute.fieldEvidence?.isSaleAttribute,
       )
     ));
-  const trustedSelectedSkus = selectedSkus.map((sku) => ({
-    ...sku,
-    attributes: isTrustedSourceEvidence(sku.rowEvidence)
-      ? sku.attributes.filter((attribute) => (
-        hasTrustedSourceEvidence(
-          attribute.fieldEvidence?.name,
-          attribute.fieldEvidence?.value,
-        )
-      ))
-      : [],
+  const trustedSelectedSkuMatches = selectedSkuMatches.map(({ sku, selectedKeys }) => ({
+    selectedKeys,
+    sku: {
+      ...sku,
+      attributes: isTrustedSourceEvidence(sku.rowEvidence)
+        ? sku.attributes.filter((attribute) => (
+          hasTrustedSourceEvidence(
+            attribute.fieldEvidence?.name,
+            attribute.fieldEvidence?.value,
+          )
+        ))
+        : [],
+    },
   }));
+  const trustedSelectedSkus = trustedSelectedSkuMatches.map((entry) => entry.sku);
   const normalizeTrustedStandard = (skus: typeof trustedSelectedSkus) => normalizeSourceStandardAttributes({
     title: isTrustedSourceEvidence(factEvidence?.title) ? capture.facts?.title : null,
     metadata: {
@@ -160,7 +192,7 @@ export function buildSourceListingAttributeSourceContext(input: {
   );
 
   const skuStandards: NonNullable<SourceListingAttributeSourceContext['skuStandards']> = {};
-  for (const sku of trustedSelectedSkus) {
+  for (const { sku, selectedKeys } of trustedSelectedSkuMatches) {
     const skuStandard = normalizeTrustedStandard([sku]);
     const skuRows: EvidenceRow[] = [
       ...trustedProductEvidenceRows,
@@ -173,9 +205,7 @@ export function buildSourceListingAttributeSourceContext(input: {
       sourceStandard: skuStandard,
       sourceStandardEvidence: standardEvidence(skuStandard, skuRows, factEvidence?.title),
     };
-    for (const selectedKey of selectedSkuKeys) {
-      if (selectedKey === sku.key || selectedKey === sku.sourceSkuId) skuStandards[selectedKey] = standard;
-    }
+    for (const selectedKey of selectedKeys) skuStandards[selectedKey] = standard;
   }
   if (isProductOnlySourceCapture(capture)
     && selectedKeySet.has(SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY)) {

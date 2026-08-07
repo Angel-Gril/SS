@@ -76,6 +76,19 @@ Progress: 2/3 tasks.
   unaudited VAT `0` Web default and requires explicit input; its final preflight rerun also passed.
   Reviewed Russian copy, exact CNY price/oldPrice, BINI VAT and a precise one-shop
   mutation authorization remain prerequisites; overall progress remains `36/37`.
+- Current follow-up (2026-08-07): the operator supplied CNY price `180`, old price `200`, and no
+  brand for the exact selected BINI SKU. A production read-only audit returned `42` live
+  target-category products; all `36` exact `200001517/93065` peers use `CNY` and report VAT
+  `0.00`, so the canonical Ozon import token for this pilot is `0`. The complete unexpired Ozon
+  dictionary cache resolves no-brand as `Нет бренда`/`126745801` and the captured composite size
+  `M（适合34/75ABC）` as `75A`/`35600`, `75B`/`35602`, and `75C`/`35603`. No Ozon mutation ran.
+- Working-tree hardening now restricts VAT to official Ozon tokens, enforces
+  `oldPrice >= price` across all pricing boundaries, uses a VAT select control, preserves stock
+  evidence across full-width/NFKC SKU aliases, and regresses the exact composite bra size. Focused
+  Server tests pass `80/80`, and the complete Server suite passes `4806/4806`; all three affected
+  contract scripts and typechecks pass; lint has no errors and only the existing warnings. This work
+  is not deployed, and the one-shop import plus
+  reconciliation remain outstanding, so `REL-02` stays open at `36/37`.
 
 - The separately authorized Provider-side reconciliation sent exactly three authenticated `GET`
   requests, one each to `/api/usage/token/`, `/v1/dashboard/billing/usage`, and `/api/log/token`.

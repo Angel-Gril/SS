@@ -570,6 +570,20 @@ describe('source listing workflow routes', () => {
           { ...strictPricing(['sku-b']).items[0], currencyCode: 'RUB' },
         ],
       },
+      {
+        ...strictPricing(['sku-a', 'sku-b']),
+        items: [
+          { ...strictPricing(['sku-a']).items[0], vat: '0.20' },
+          strictPricing(['sku-b']).items[0],
+        ],
+      },
+      {
+        ...strictPricing(['sku-a', 'sku-b']),
+        items: [
+          { ...strictPricing(['sku-a']).items[0], price: '121', oldPrice: '120' },
+          strictPricing(['sku-b']).items[0],
+        ],
+      },
     ]) {
       const response = await app.inject({
         method: 'PUT', url: '/draft-1/pricing', payload: { expectedRevision: 2, value },

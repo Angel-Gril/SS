@@ -18,9 +18,11 @@ import {
 } from 'lucide-react';
 import {
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
+  OZON_LISTING_SUPPORTED_VAT_RATES,
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
   type OzonListingCurrencyCode,
   type OzonListingDraftView as OzonListingDraft,
+  type OzonListingVatRate,
 } from 'shared';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
 import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
@@ -98,8 +100,24 @@ interface CategoryConfirmationResponse {
 interface PriceFormRow {
   price: string;
   oldPrice: string;
-  vat: string;
+  vat: OzonListingVatRate | '';
   offerId: string;
+}
+
+const VAT_RATE_LABELS: Record<OzonListingVatRate, string> = {
+  '0': '不征 VAT',
+  '0.05': 'VAT 5%',
+  '0.07': 'VAT 7%',
+  '0.1': 'VAT 10%',
+  '0.2': 'VAT 20%',
+  '0.22': 'VAT 22%',
+};
+
+function exactVatRate(value: unknown): OzonListingVatRate | '' {
+  return typeof value === 'string'
+    && OZON_LISTING_SUPPORTED_VAT_RATES.includes(value as OzonListingVatRate)
+    ? value as OzonListingVatRate
+    : '';
 }
 
 interface PendingCopyGeneration {
@@ -813,7 +831,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       return [skuKey, {
         price: String(row?.price || ''),
         oldPrice: String(row?.oldPrice || ''),
-        vat: String(row?.vat ?? ''),
+        vat: exactVatRate(row?.vat),
         offerId: String(row?.offerId || ''),
       }];
     })));
@@ -1991,19 +2009,31 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
               </div>
             </div>
             <div className="max-h-96 overflow-auto border">
-              <div className="grid min-w-[800px] grid-cols-[minmax(220px,1fr)_130px_130px_100px_180px] bg-muted/50 px-3 py-2 text-xs font-medium">
+              <div className="grid min-w-[850px] grid-cols-[minmax(220px,1fr)_130px_130px_150px_180px] bg-muted/50 px-3 py-2 text-xs font-medium">
                 <div>Canonical SKU</div><div>售价 {pricingCurrency || '币种'}</div><div>划线价 {pricingCurrency || '币种'}</div><div>VAT</div><div>Offer ID（可选）</div>
               </div>
               {draft.selectedSkuKeys.map((skuKey) => {
                 const row = priceRows[skuKey] || { price: '', oldPrice: '', vat: '', offerId: '' };
                 return (
-                  <div key={skuKey} className="grid min-w-[800px] grid-cols-[minmax(220px,1fr)_130px_130px_100px_180px] gap-2 border-t px-3 py-2">
+                  <div key={skuKey} className="grid min-w-[850px] grid-cols-[minmax(220px,1fr)_130px_130px_150px_180px] gap-2 border-t px-3 py-2">
                     <div className="break-all font-mono text-xs">
                       {skuKey === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY ? '无变体商品' : skuKey}
                     </div>
                     <Input value={row.price} onChange={(event) => updatePriceRow(skuKey, { price: event.target.value })} inputMode="decimal" />
                     <Input value={row.oldPrice} onChange={(event) => updatePriceRow(skuKey, { oldPrice: event.target.value })} inputMode="decimal" />
-                    <Input value={row.vat} onChange={(event) => updatePriceRow(skuKey, { vat: event.target.value })} />
+                    <select
+                      aria-label={`VAT 税率 ${skuKey}`}
+                      className="h-9 w-full border border-input bg-background px-2 text-sm"
+                      value={row.vat}
+                      onChange={(event) => updatePriceRow(skuKey, {
+                        vat: exactVatRate(event.target.value),
+                      })}
+                    >
+                      <option value="">选择税率</option>
+                      {OZON_LISTING_SUPPORTED_VAT_RATES.map((vat) => (
+                        <option key={vat} value={vat}>{VAT_RATE_LABELS[vat]} ({vat})</option>
+                      ))}
+                    </select>
                     <Input value={row.offerId} onChange={(event) => updatePriceRow(skuKey, { offerId: event.target.value })} />
                   </div>
                 );

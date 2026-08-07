@@ -5,15 +5,18 @@ import {
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
+  OZON_LISTING_SUPPORTED_VAT_RATES,
   SOURCE_LISTING_IDEMPOTENCY_KEY_MAX_LENGTH,
   SOURCE_LISTING_IDEMPOTENCY_KEY_MIN_LENGTH,
   SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS,
   SOURCE_LISTING_SKU_KEY_MAX_LENGTH,
+  isOzonListingOldPriceAtLeastPrice,
   type OzonListingAiCopyCandidateView as OzonListingAiCopyCandidate,
   type OzonListingDraftView as OzonListingDraft,
   type OzonListingDraftMediaAssignment,
   type OzonListingCurrencyCode,
   type OzonListingPricingV1,
+  type OzonListingVatRate,
   type SourceProductCaptureV2,
 } from 'shared';
 import { api } from '@/lib/api';
@@ -419,6 +422,7 @@ export function buildOzonListingPricingV1(input: SourceListingPricingBuilderInpu
   }
   const bySku = new Map<string, OzonListingPricingV1['items'][number]>();
   const supportedCurrencies = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
+  const supportedVatRates = new Set<string>(OZON_LISTING_SUPPORTED_VAT_RATES);
   let pricingCurrency: OzonListingCurrencyCode | null = null;
   for (const [index, raw] of input.items.entries()) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) pricingFailure(`pricing item ${index} 无效`);
@@ -443,10 +447,10 @@ export function buildOzonListingPricingV1(input: SourceListingPricingBuilderInpu
     }
     const currencyCode = raw.currencyCode as OzonListingCurrencyCode;
     pricingCurrency = currencyCode;
-    if (typeof raw.vat !== 'string' || !raw.vat || raw.vat !== raw.vat.normalize('NFKC').trim()
-      || raw.vat.length > 16 || !/^[A-Za-z0-9._-]+$/.test(raw.vat)) {
-      pricingFailure(`SKU ${skuKey} 的 vat 无效`);
+    if (typeof raw.vat !== 'string' || !supportedVatRates.has(raw.vat)) {
+      pricingFailure(`SKU ${skuKey} 的 VAT 必须使用 Ozon 官方税率`);
     }
+    const vat = raw.vat as OzonListingVatRate;
     let offerId: string | undefined;
     if (raw.offerId !== undefined) {
       try {
@@ -455,12 +459,17 @@ export function buildOzonListingPricingV1(input: SourceListingPricingBuilderInpu
         pricingFailure(error instanceof Error ? error.message : `SKU ${skuKey} 的 offerId 无效`);
       }
     }
+    const price = exactPositiveDecimal(raw.price, `SKU ${skuKey} price`);
+    const oldPrice = exactPositiveDecimal(raw.oldPrice, `SKU ${skuKey} oldPrice`);
+    if (!isOzonListingOldPriceAtLeastPrice(price, oldPrice)) {
+      pricingFailure(`SKU ${skuKey} 的划线价不得低于售价`);
+    }
     bySku.set(skuKey, {
       skuKey,
-      price: exactPositiveDecimal(raw.price, `SKU ${skuKey} price`),
-      oldPrice: exactPositiveDecimal(raw.oldPrice, `SKU ${skuKey} oldPrice`),
+      price,
+      oldPrice,
       currencyCode,
-      vat: raw.vat,
+      vat,
       ...(offerId ? { offerId } : {}),
     });
   }

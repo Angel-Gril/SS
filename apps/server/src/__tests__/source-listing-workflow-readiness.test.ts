@@ -1,10 +1,28 @@
-import type { OzonListingDraft, OzonListingPricingV1, OzonListingWorkflowIssue } from 'shared';
+import {
+  OZON_LISTING_SUPPORTED_VAT_RATES,
+  isOzonListingOldPriceAtLeastPrice,
+  type OzonListingDraft,
+  type OzonListingPricingV1,
+  type OzonListingWorkflowIssue,
+} from 'shared';
 import { describe, expect, it } from 'vitest';
 import {
   mergeSourceListingWorkflowReadiness,
   sourceListingWorkflowReadinessIssues,
   validateSourceListingPricing,
 } from '../services/source-listing-workflow-readiness.js';
+
+describe('exact Ozon price relation', () => {
+  it.each([
+    ['180', '200', true],
+    ['180.00', '180', true],
+    ['9007199254740993', '9007199254740992', false],
+    ['1.0000000000000000002', '1.0000000000000000001', false],
+    ['99999999999999999999.9', '100000000000000000000', true],
+  ])('compares price %s and old price %s without floating point', (price, oldPrice, expected) => {
+    expect(isOzonListingOldPriceAtLeastPrice(price, oldPrice)).toBe(expected);
+  });
+});
 
 function pricing(items: OzonListingPricingV1['items'] = [
   { skuKey: 'sku-a', price: '100.50', oldPrice: '120', currencyCode: 'RUB', vat: '0' },
@@ -140,6 +158,14 @@ describe('strict source listing pricing', () => {
     expect(validateSourceListingPricing(value, ['sku-a', 'sku-b'])).toEqual(value);
   });
 
+  it.each(OZON_LISTING_SUPPORTED_VAT_RATES)('accepts official Ozon VAT rate %s', (vat) => {
+    const value = pricing([
+      { skuKey: 'sku-a', price: '100', oldPrice: '100', currencyCode: 'CNY', vat },
+      { skuKey: 'sku-b', price: '200', oldPrice: '240', currencyCode: 'CNY', vat },
+    ]);
+    expect(validateSourceListingPricing(value, ['sku-a', 'sku-b'])).toEqual(value);
+  });
+
   it.each([
     ['null', null],
     ['arbitrary object', { markupPct: 20 }],
@@ -164,6 +190,10 @@ describe('strict source listing pricing', () => {
       { skuKey: 'sku-a', price: '0100', oldPrice: '120', currencyCode: 'RUB', vat: '0' },
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
+    ['old price below price', pricing([
+      { skuKey: 'sku-a', price: '120.01', oldPrice: '120', currencyCode: 'RUB', vat: '0' },
+      { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
+    ])],
     ['unsupported currency', pricing([
       {
         skuKey: 'sku-a', price: '100', oldPrice: '120',
@@ -176,7 +206,10 @@ describe('strict source listing pricing', () => {
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
     ['invalid VAT', pricing([
-      { skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'RUB', vat: 'bad vat' },
+      {
+        skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'RUB',
+        vat: '0.20' as unknown as '0',
+      },
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
     ['noncanonical offer ID', pricing([

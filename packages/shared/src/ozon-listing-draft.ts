@@ -12,14 +12,36 @@ export const OZON_LISTING_CURRENCY_CODE_LENGTH = 3;
 export const OZON_LISTING_SUPPORTED_CURRENCY_CODES = ['CNY', 'RUB'] as const;
 export type OzonListingCurrencyCode = typeof OZON_LISTING_SUPPORTED_CURRENCY_CODES[number];
 export const OZON_LISTING_VAT_MAX_LENGTH = 16;
+export const OZON_LISTING_SUPPORTED_VAT_RATES = [
+  '0',
+  '0.05',
+  '0.07',
+  '0.1',
+  '0.2',
+  '0.22',
+] as const;
+export type OzonListingVatRate = typeof OZON_LISTING_SUPPORTED_VAT_RATES[number];
 export const OZON_LISTING_OFFER_ID_MAX_LENGTH = 100;
+
+export function isOzonListingOldPriceAtLeastPrice(price: string, oldPrice: string): boolean {
+  const pattern = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+  if (!pattern.test(price) || !pattern.test(oldPrice)) return false;
+  const [priceInteger = '', priceFraction = ''] = price.split('.');
+  const [oldPriceInteger = '', oldPriceFraction = ''] = oldPrice.split('.');
+  if (oldPriceInteger.length !== priceInteger.length) {
+    return oldPriceInteger.length > priceInteger.length;
+  }
+  if (oldPriceInteger !== priceInteger) return oldPriceInteger > priceInteger;
+  const scale = Math.max(priceFraction.length, oldPriceFraction.length);
+  return oldPriceFraction.padEnd(scale, '0') >= priceFraction.padEnd(scale, '0');
+}
 
 export interface OzonListingSkuPricingV1 {
   skuKey: string;
   price: string;
   oldPrice: string;
   currencyCode: OzonListingCurrencyCode;
-  vat: string;
+  vat: OzonListingVatRate;
   offerId?: string;
 }
 

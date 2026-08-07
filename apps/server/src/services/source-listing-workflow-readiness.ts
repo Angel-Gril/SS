@@ -5,15 +5,19 @@ import {
   OZON_LISTING_OFFER_ID_MAX_LENGTH,
   OZON_LISTING_PRICING_CONTRACT_VERSION,
   OZON_LISTING_SUPPORTED_CURRENCY_CODES,
+  OZON_LISTING_SUPPORTED_VAT_RATES,
   OZON_LISTING_VAT_MAX_LENGTH,
   SOURCE_LISTING_SKU_KEY_MAX_LENGTH,
+  isOzonListingOldPriceAtLeastPrice,
   type OzonListingCurrencyCode,
   type OzonListingDraft,
   type OzonListingPricingV1,
+  type OzonListingVatRate,
   type OzonListingWorkflowIssue,
 } from 'shared';
 
 const SUPPORTED_CURRENCY_CODES = new Set<string>(OZON_LISTING_SUPPORTED_CURRENCY_CODES);
+const SUPPORTED_VAT_RATES = new Set<string>(OZON_LISTING_SUPPORTED_VAT_RATES);
 
 export class SourceListingWorkflowReadinessError extends Error {
   constructor(
@@ -101,12 +105,12 @@ function exactPositiveDecimal(value: unknown): value is string {
     && /[1-9]/.test(value.replace('.', ''));
 }
 
-function validVat(value: unknown): value is string {
+function validVat(value: unknown): value is OzonListingVatRate {
   return typeof value === 'string'
     && value.length > 0
     && value.length <= OZON_LISTING_VAT_MAX_LENGTH
     && value === value.normalize('NFKC').trim()
-    && /^[A-Za-z0-9._-]+$/.test(value);
+    && SUPPORTED_VAT_RATES.has(value);
 }
 
 export function validateSourceListingPricing(
@@ -147,6 +151,7 @@ export function validateSourceListingPricing(
       || priced.has(raw.skuKey)
       || !exactPositiveDecimal(raw.price)
       || !exactPositiveDecimal(raw.oldPrice)
+      || !isOzonListingOldPriceAtLeastPrice(raw.price, raw.oldPrice)
       || currencyCode.length !== OZON_LISTING_CURRENCY_CODE_LENGTH
       || !SUPPORTED_CURRENCY_CODES.has(currencyCode)
       || (pricingCurrency !== null && currencyCode !== pricingCurrency)

@@ -205,11 +205,11 @@ function build() {
       items: [
         {
           skuKey: 'sku-1', price: '2199.00', oldPrice: '2599.00',
-          currencyCode: 'RUB', vat: '0.20',
+          currencyCode: 'RUB', vat: '0.2',
         },
         {
           skuKey: 'sku-0', price: '1999.00', oldPrice: '2399.00',
-          currencyCode: 'RUB', vat: '0.20', offerId: 'reviewed-offer-0',
+          currencyCode: 'RUB', vat: '0.2', offerId: 'reviewed-offer-0',
         },
       ],
     } },

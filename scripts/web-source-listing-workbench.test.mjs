@@ -137,7 +137,7 @@ assert.match(
 );
 assert.match(workbench, /role="alert" aria-live="assertive"/, 'AI capability failures must be announced accessibly');
 assert.match(workbench, /aria-label=\{`载入候选 \$\{candidate\.titleRu \|\| candidate\.id\}`\}/, 'candidate load controls need candidate-specific accessible names');
-for (const label of ['OZON_LISTING_SUPPORTED_CURRENCY_CODES', 'VAT', '定价币种', '服务端校验通过', '校验已过期']) {
+for (const label of ['OZON_LISTING_SUPPORTED_CURRENCY_CODES', 'OZON_LISTING_SUPPORTED_VAT_RATES', 'VAT', '定价币种', '选择税率', '服务端校验通过', '校验已过期']) {
   assert.match(workbench, new RegExp(label), `workbench should expose ${label}`);
 }
 assert.doesNotMatch(workbench, /vat:\s*String\(row\?\.vat\s*\?\?\s*['"]0['"]\)/, 'VAT must not be silently defaulted');
