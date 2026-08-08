@@ -32,13 +32,18 @@
     return value;
   }
 
+  function canonicalText(value, maximum) {
+    if (typeof value !== 'string' || value.length > maximum) return null;
+    return text(value.normalize('NFKC'), maximum);
+  }
+
   function positiveInteger(value) {
     return Number.isSafeInteger(value) && value > 0 ? value : null;
   }
 
   function sourceSkuIdentifier(value) {
     if (Number.isSafeInteger(value) && value >= 0) return String(value);
-    return text(value, 500);
+    return canonicalText(value, 500);
   }
 
   function sourceProductIdentifier(value) {
@@ -62,11 +67,11 @@
       ? capture.skus : [];
     return rows.flatMap(function (value) {
       var row = record(value);
-      var key = row && text(row.key, 500);
+      var key = row && canonicalText(row.key, 500);
       if (!key) return [];
       return [{
         key: key,
-        sourceSkuId: text(row.sourceSkuId, 500),
+        sourceSkuId: canonicalText(row.sourceSkuId, 500),
         specText: typeof row.specText === 'string'
           ? row.specText.normalize('NFKC').trim().slice(0, 500) : '',
       }];
@@ -80,7 +85,7 @@
     }
     var capture = record(product && product.captureV2);
     var facts = record(capture && capture.facts);
-    var selectedKey = facts && text(facts.selectedSkuKey, 500);
+    var selectedKey = facts && canonicalText(facts.selectedSkuKey, 500);
     if (selectedKey && skus.some(function (sku) { return sku.key === selectedKey; })) {
       return selectedKey;
     }

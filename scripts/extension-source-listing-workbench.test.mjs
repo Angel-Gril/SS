@@ -1853,6 +1853,93 @@ assert.equal(launchContext.derivePreferredSkuKey({
   ...skuProduct,
   captureV2: { ...skuProduct.captureV2, facts: { selectedSkuKey: 'sku-red' } },
 }), 'sku-red', 'contract-selected SKU takes precedence when it belongs to the capture');
+const fullwidthSkuKey = 'sku:5777037825166|晚霞肤（1.5cm+4cm胸垫）>M（适合34/75ABC）';
+const canonicalSkuKey = fullwidthSkuKey.normalize('NFKC');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: '５７７７０３７８２５１６６' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [{
+      key: fullwidthSkuKey,
+      sourceSkuId: '5777037825166',
+      specText: '晚霞肤 M',
+    }],
+  },
+}), canonicalSkuKey, 'marketplace SKU identities are canonicalized before matching');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: '5777037825166' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [{
+      key: fullwidthSkuKey,
+      sourceSkuId: '５７７７０３７８２５１６６',
+      specText: '晚霞肤 M',
+    }],
+  },
+}), canonicalSkuKey, 'captured marketplace SKU IDs use the same canonical identity');
+assert.equal(launchContext.derivePreferredSkuKey({
+  captureV2: {
+    facts: { selectedSkuKey: fullwidthSkuKey },
+    skus: [{
+      key: fullwidthSkuKey,
+      sourceSkuId: '5777037825166',
+      specText: '晚霞肤 M',
+    }],
+  },
+}), canonicalSkuKey, 'contract-selected marketplace SKU keys use the same canonical identity');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: 'source-blue' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [
+      { key: 'sku（blue）', sourceSkuId: 'source-blue', specText: '蓝色' },
+      { key: 'sku(blue)', sourceSkuId: 'source-red', specText: '红色' },
+    ],
+  },
+}), null, 'SKU keys that collide after canonicalization must never be guessed');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: 'source-blue' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [{
+      key: 'ｈｔｔｐｓ：／／evil.example',
+      sourceSkuId: 'source-blue',
+      specText: '蓝色',
+    }],
+  },
+}), null, 'dangerous identifiers remain rejected after canonicalization');
+const decomposedOverlimitSkuKey = 'e\u0301'.repeat(500);
+const composedMaximumSkuKey = '\u00e9'.repeat(500);
+assert.equal(launchContext.derivePreferredSkuKey({
+  captureV2: {
+    facts: { selectedSkuKey: decomposedOverlimitSkuKey },
+    skus: [{
+      key: composedMaximumSkuKey,
+      sourceSkuId: 'source-blue',
+      specText: '\u84dd\u8272',
+    }],
+  },
+}), null, 'raw over-limit SKU identities cannot become valid by shrinking under NFKC');
+assert.equal(launchContext.derivePreferredSkuKey({
+  selectedSku: { skuId: 'source-blue' },
+  captureV2: {
+    facts: { selectedSkuKey: null },
+    skus: [{
+      key: decomposedOverlimitSkuKey,
+      sourceSkuId: 'source-blue',
+      specText: '\u84dd\u8272',
+    }],
+  },
+}), null, 'raw over-limit capture keys remain outside the launch authority');
+for (const wrappedKey of [' sku-blue ', '\tsku-blue\t', '\nsku-blue\n']) {
+  assert.equal(launchContext.derivePreferredSkuKey({
+    selectedSku: { skuId: 'source-blue' },
+    captureV2: {
+      facts: { selectedSkuKey: null },
+      skus: [{ key: wrappedKey, sourceSkuId: 'source-blue', specText: '\u84dd\u8272' }],
+    },
+  }), null, 'edge whitespace and control characters remain outside SKU authority');
+}
 assert.equal(launchContext.derivePreferredSkuKey({
   ...skuProduct,
   captureV2: {
@@ -1899,7 +1986,27 @@ assert.deepEqual(JSON.parse(JSON.stringify(liveSelectionCalls)), [{
   options: { frameId: 0, documentId: 'source-document-1' },
 }]);
 liveSelectionProduct = {
-  ...liveSelectionProduct,
+  selectedSku: { skuId: '５７７７０３７８２５１６６' },
+  captureV2: {
+    sourceIdentity: { platform: '1688', productId: 'offer-1' },
+    facts: { selectedSkuKey: null },
+    skus: [{
+      key: fullwidthSkuKey,
+      sourceSkuId: '5777037825166',
+      specText: '晚霞肤 M',
+    }],
+  },
+};
+await verifyLiveSelection({
+  ...liveSelectionWitness,
+  sourceSelectionKey: canonicalSkuKey,
+});
+liveSelectionProduct = {
+  ...skuProduct,
+  captureV2: {
+    ...skuProduct.captureV2,
+    sourceIdentity: { platform: '1688', productId: 'offer-1' },
+  },
   selectedSku: { skuId: 'source-red' },
 };
 let guardedSessionOpenCalls = 0;
