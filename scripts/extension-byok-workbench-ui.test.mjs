@@ -27,6 +27,7 @@ const launchHtml = fs.readFileSync(launchPath, 'utf8');
 const css = fs.readFileSync(cssPath, 'utf8');
 const pageSource = fs.readFileSync(pagePath, 'utf8');
 const batchPageSource = fs.readFileSync(batchPagePath, 'utf8');
+const publishPageSource = fs.readFileSync(publishPagePath, 'utf8');
 const verifierSource = fs.readFileSync('scripts/verify-extension-package.mjs', 'utf8');
 const preflightSource = fs.readFileSync('scripts/preflight.mjs', 'utf8');
 
@@ -130,6 +131,21 @@ assert.match(
   css,
   /body\.is-review-publish-only\s+\.workspace-rail,[\s\S]*#workspacePublishSummary[\s\S]*display:\s*none\s*!important/u,
 );
+assert.doesNotMatch(
+  css,
+  /body\.is-review-publish-only\s+\.workbench-grid\s*,/u,
+  'review-only publish must not hide the publish dock ancestor',
+);
+assert.match(
+  css,
+  /body\.is-review-publish-only\s+\.workbench-grid\s*>\s*:not\(#workspaceTaskDock\)[\s\S]*display:\s*none\s*!important/u,
+  'review-only publish must hide every non-publish workbench panel',
+);
+assert.match(
+  css,
+  /body\.is-review-publish-only\s+\.workbench-grid\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/u,
+  'review-only publish must render its dock in one stable column',
+);
 assert.match(
   css,
   /body\.is-review-publish-only\s+\.workspace-task-dock\s*\{[\s\S]*position:\s*static/u,
@@ -188,6 +204,7 @@ class TestNode {
 
   addEventListener(type, listener) { this.listeners[type] = listener; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   appendChild(child) { this.children.push(child); return child; }
   replaceChildren(...children) { this.children = children; }
 }
@@ -202,6 +219,12 @@ const ids = [
   'publishPanel', 'publishStatus', 'publishShop', 'publishDraft', 'publishSkuOrder',
   'publishMediaList', 'publishNotice', 'publishConfirmationRow', 'publishConfirmation',
   'publishConfirmButton', 'publishRecoverButton',
+  'workspaceShell', 'workspaceTaskDock',
+  'workspacePublishControls', 'workspacePublishMode', 'workspacePublishShop',
+  'workspacePublishDraft', 'workspacePublishSkus', 'workspacePublishMedia',
+  'workspacePublishOperationStatus', 'workspacePublishConfirmationRow',
+  'workspacePublishConfirmation', 'workspacePublishConfirmButton',
+  'workspacePublishRefreshButton', 'workspacePublishRecoverButton',
   'emptyResult',
 ];
 const nodes = Object.fromEntries(ids.map((id) => [id, new TestNode(
@@ -607,6 +630,33 @@ function cloneValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function unifiedPublishPreview(value) {
+  const selectedSkuKeys = value.selectedMedia
+    .filter((row) => row.scope === 'SKU')
+    .map((row) => row.skuKey);
+  return {
+    contractVersion: 'extension-workbench-listing-publish/v1',
+    executionMode: value.executionMode,
+    shopId: value.binding.shopId,
+    workflowId: value.binding.workflowId,
+    basisDraftRevision: value.binding.draftRevision,
+    basisDraftVersion: value.binding.draftVersion,
+    selectedMedia: cloneValue(value.selectedMedia),
+    currentDraftRevision: value.binding.draftRevision,
+    currentDraftVersion: value.binding.draftVersion,
+    previewHash: '8'.repeat(64),
+    selectedSkuKeys,
+    orderedMedia: value.selectedMedia.map((row, ordinal) => ({
+      ordinal,
+      scope: row.scope,
+      skuKey: row.skuKey,
+      slotKey: row.slotKey,
+      assetId: row.assetId,
+      source: 'GENERATED',
+    })),
+  };
+}
+
 function isolatedPublicState(result = null) {
   const value = cloneValue(publicState);
   value.result = result;
@@ -693,6 +743,19 @@ function createPageHarness(options = {}) {
       boundDraftRevision: 4, boundDraftVersion: 5,
       previewHash: '9'.repeat(64), receiptId: 'publish-receipt-1', failureCode: null,
     })),
+    confirmWorkspacePublish: options.confirmWorkspacePublish || ((value, previewHash) => ({
+      contractVersion: 'extension-workbench-listing-publish/v1',
+      request: cloneValue(value),
+      state: 'SUCCEEDED',
+      executionMode: value.executionMode,
+      shopId: value.binding.shopId,
+      workflowId: value.binding.workflowId,
+      currentDraftRevision: value.binding.draftRevision,
+      currentDraftVersion: value.binding.draftVersion,
+      previewHash,
+      receiptId: 'workspace-receipt-1',
+      failureCode: null,
+    })),
   };
   const harnessClient = {
     async getPublicState() { harnessCalls.push(['state']); return operations.getPublicState(); },
@@ -722,6 +785,25 @@ function createPageHarness(options = {}) {
     async recoverPublish() {
       harnessCalls.push(['publish-recover']);
       return operations.recoverPublish();
+    },
+    async getActiveWorkspacePublish() {
+      harnessCalls.push(['workspace-active']);
+      return null;
+    },
+    async getWorkspacePublishState(value) {
+      harnessCalls.push(['workspace-state', cloneValue(value)]);
+      return null;
+    },
+    async getWorkspacePublishPreview(value) {
+      harnessCalls.push(['workspace-preview', cloneValue(value)]);
+      return unifiedPublishPreview(value);
+    },
+    async confirmWorkspacePublish(value, previewHash) {
+      harnessCalls.push(['workspace-confirm', cloneValue(value), previewHash]);
+      return operations.confirmWorkspacePublish(value, previewHash);
+    },
+    async recoverWorkspacePublish() {
+      throw new Error('workspace recovery is not expected in the page integration fixture');
     },
   };
   const harnessWindowListeners = {};
@@ -790,6 +872,22 @@ function createPageHarness(options = {}) {
       return workspaceRuntimeRevision;
     },
   });
+  if (options.simulateWorkspaceController) {
+    harnessContext.document.addEventListener('ss-erp:workspace-clear', function () {
+      harnessNodes.workspaceShell.hidden = true;
+      harnessNodes.workspaceShell.setAttribute('aria-busy', 'true');
+      harnessNodes.workspaceShell.setAttribute('aria-disabled', 'true');
+      harnessNodes.workspaceShell.setAttribute('data-runtime-state', 'CLEARED');
+      harnessNodes.workspaceTaskDock.hidden = true;
+    });
+  }
+  if (options.integratePublishController) {
+    harnessContext.SS_ERP_BYOK_WORKBENCH_WORKSPACE_STATE = Object.freeze({
+      PUBLISH_PROJECTION_CONTRACT_VERSION:
+        'extension-byok-workbench-publish-projection/v1',
+    });
+    vm.runInNewContext(publishPageSource, harnessContext, { filename: publishPagePath });
+  }
   vm.runInNewContext(pageSource, harnessContext, { filename: pagePath });
   return {
     authoritative,
@@ -799,11 +897,89 @@ function createPageHarness(options = {}) {
     runtimeListeners: harnessRuntimeListeners,
     windowListeners: harnessWindowListeners,
     documentEvents: harnessDocumentEvents,
+    publishController: harnessContext.SS_ERP_WORKBENCH_PUBLISH_PAGE_CONTROLLER || null,
     dispatchDocument(type, detail) {
       harnessContext.document.dispatchEvent(new harnessContext.CustomEvent(type, { detail }));
     },
     get revokeCount() { return harnessRevokeCount; },
   };
+}
+
+{
+  const pendingConfirm = createDeferred();
+  const reviewContext = {
+    contractVersion: 'extension-byok-workbench-review-launch-context/v1',
+    launchMode: 'REVIEW_PUBLISH_ONLY',
+    sourcePlatform: '1688', sourceProductId: 'product-confirm-race',
+    sourceCaptureSnapshotId: 'snapshot-confirm-race', supplyGoodsId: 'goods-confirm-race',
+    shopId: 'shop-confirm-race', workflowId: 'workflow-confirm-race',
+    draftRevision: 11, draftVersion: 9,
+    skuKey: 'sku-confirm-race', slotKey: 'sku:sku-confirm-race:hero', assignmentOrdinal: 0,
+    assetId: 'byok_asset-confirm-race', source: 'GENERATED',
+  };
+  const publishRequest = {
+    executionMode: 'BYOK',
+    binding: {
+      shopId: reviewContext.shopId,
+      workflowId: reviewContext.workflowId,
+      draftRevision: 11,
+      draftVersion: 9,
+    },
+    selectedMedia: [{
+      scope: 'SKU',
+      skuKey: reviewContext.skuKey,
+      slotKey: reviewContext.slotKey,
+      assetId: reviewContext.assetId,
+    }],
+  };
+  const reviewState = {
+    contractVersion: 'extension-byok-workbench-review-public-state/v1',
+    executionMode: 'BYOK',
+    context: reviewContext,
+    publishRequest,
+  };
+  const harness = createPageHarness({
+    simulateWorkspaceController: true,
+    integratePublishController: true,
+    authoritative: { value: reviewState },
+    confirmWorkspacePublish: () => pendingConfirm.promise,
+  });
+  await flushAsync(8);
+  harness.nodes.workspacePublishConfirmation.checked = true;
+  harness.nodes.workspacePublishConfirmation.listeners.change({ isTrusted: true });
+  harness.nodes.workspacePublishConfirmButton.listeners.click({ isTrusted: true });
+  assert.equal(harness.publishController.getState().busy, true);
+  assert.equal(harness.calls.filter((row) => row[0] === 'workspace-confirm').length, 1);
+  const authoritativeReads = harness.calls.filter((row) => row[0] === 'state').length;
+
+  harness.nodes.refreshButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(
+    harness.calls.filter((row) => row[0] === 'state').length,
+    authoritativeReads,
+    'header refresh must not revalidate while the exact publish confirm is in flight',
+  );
+  assert.equal(harness.publishController.getState().busy, true);
+  assert.equal(harness.publishController.getState().directReview, true);
+  assert.equal(harness.calls.filter((row) => row[0] === 'workspace-confirm').length, 1);
+
+  pendingConfirm.resolve({
+    contractVersion: 'extension-workbench-listing-publish/v1',
+    request: publishRequest,
+    state: 'SUCCEEDED',
+    executionMode: 'BYOK',
+    shopId: reviewContext.shopId,
+    workflowId: reviewContext.workflowId,
+    currentDraftRevision: 11,
+    currentDraftVersion: 9,
+    previewHash: '8'.repeat(64),
+    receiptId: 'workspace-receipt-confirm-race',
+    failureCode: null,
+  });
+  await flushAsync(8);
+  assert.equal(harness.publishController.getState().busy, false);
+  assert.equal(harness.publishController.getState().publishState.state, 'SUCCEEDED');
+  assert.equal(harness.calls.filter((row) => row[0] === 'workspace-confirm').length, 1);
 }
 
 {
@@ -826,6 +1002,7 @@ function createPageHarness(options = {}) {
     }],
   };
   const harness = createPageHarness({
+    simulateWorkspaceController: true,
     authoritative: {
       value: {
         contractVersion: 'extension-byok-workbench-review-public-state/v1',
@@ -837,6 +1014,14 @@ function createPageHarness(options = {}) {
   });
   await flushAsync(8);
   assert.equal(harness.body.classList.values.has('is-review-publish-only'), true);
+  assert.equal(harness.nodes.workspaceShell.hidden, false);
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, false);
+  assert.equal(harness.nodes.workspaceShell.attributes['aria-busy'], 'false');
+  assert.equal(harness.nodes.workspaceShell.attributes['aria-disabled'], 'false');
+  assert.equal(
+    harness.nodes.workspaceShell.attributes['data-runtime-state'],
+    'REVIEW_PUBLISH_ONLY',
+  );
   assert.equal(harness.nodes.contextBadge.textContent, '只读发布');
   assert.equal(harness.nodes.contextSku.textContent, 'sku-1 · 主图 · 已绑定位置 2');
   assert.equal(harness.nodes.generateButton.disabled, true);
@@ -855,12 +1040,87 @@ function createPageHarness(options = {}) {
   harness.nodes.generateButton.listeners.click({ isTrusted: true });
   await flushAsync(2);
   assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 0);
+  harness.dispatchDocument('ss-erp:workspace-refresh-request', null);
+  assert.equal(
+    harness.body.classList.values.has('is-review-publish-only'),
+    true,
+    'a delayed hosted workspace refresh must not revoke review-only authority',
+  );
+  assert.equal(harness.nodes.workspaceShell.hidden, false);
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, false);
   harness.authoritative.value = null;
   harness.nodes.refreshButton.listeners.click({ isTrusted: true });
   await flushAsync(4);
   assert.equal(harness.documentEvents.some((event) => (
     event.type === 'ss-erp:workbench-publish-review-clear'
   )), true);
+  assert.equal(harness.body.classList.values.has('is-review-publish-only'), false);
+  assert.equal(harness.nodes.workspaceShell.hidden, true);
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, true);
+}
+
+{
+  const deferred = createDeferred();
+  let reads = 0;
+  const reviewContext = {
+    contractVersion: 'extension-byok-workbench-review-launch-context/v1',
+    launchMode: 'REVIEW_PUBLISH_ONLY',
+    sourcePlatform: '1688', sourceProductId: 'product-refresh',
+    sourceCaptureSnapshotId: 'snapshot-refresh', supplyGoodsId: 'goods-refresh',
+    shopId: 'shop-refresh', workflowId: 'workflow-refresh', draftRevision: 11, draftVersion: 9,
+    skuKey: 'sku-refresh', slotKey: 'sku:sku-refresh:hero', assignmentOrdinal: 0,
+    assetId: 'byok_asset-refresh', source: 'GENERATED',
+  };
+  const publishRequest = {
+    executionMode: 'BYOK',
+    binding: {
+      shopId: 'shop-refresh', workflowId: 'workflow-refresh', draftRevision: 11, draftVersion: 9,
+    },
+    selectedMedia: [{
+      scope: 'SKU', skuKey: 'sku-refresh', slotKey: 'sku:sku-refresh:hero',
+      assetId: 'byok_asset-refresh',
+    }],
+  };
+  const reviewState = {
+    contractVersion: 'extension-byok-workbench-review-public-state/v1',
+    executionMode: 'BYOK',
+    context: reviewContext,
+    publishRequest,
+  };
+  const harness = createPageHarness({
+    simulateWorkspaceController: true,
+    integratePublishController: true,
+    getPublicState() {
+      reads += 1;
+      return reads === 1 ? reviewState : deferred.promise;
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.publishController.getState().directReview, true);
+  assert.equal(harness.nodes.workspacePublishControls.hidden, false);
+  assert.equal(harness.nodes.workspacePublishConfirmationRow.hidden, false);
+  assert.equal(harness.nodes.workspacePublishConfirmButton.disabled, true);
+
+  harness.nodes.refreshButton.listeners.click({ isTrusted: true });
+  assert.equal(
+    harness.publishController.getState().directReview,
+    false,
+    'authoritative refresh must synchronously revoke the prior direct-review authority',
+  );
+  assert.equal(harness.nodes.workspacePublishControls.hidden, true);
+  harness.nodes.workspacePublishConfirmation.checked = true;
+  harness.nodes.workspacePublishConfirmation.listeners.change({ isTrusted: true });
+  harness.nodes.workspacePublishConfirmButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(harness.calls.filter((row) => row[0] === 'workspace-confirm').length, 0);
+
+  deferred.resolve(reviewState);
+  await flushAsync(8);
+  assert.equal(harness.publishController.getState().directReview, true);
+  assert.equal(harness.nodes.workspaceShell.hidden, false);
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, false);
+  assert.equal(harness.nodes.workspacePublishControls.hidden, false);
+  assert.equal(harness.calls.filter((row) => row[0] === 'workspace-confirm').length, 0);
 }
 
 {

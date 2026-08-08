@@ -28,6 +28,31 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-09): the authorized deployed `90cef7ea` / BINI `1.0.292` REL-02
+  cycle 14 revalidated the exact owner/shop/device/draft/payload/SKU/asset boundary, enabled only
+  that scoped publish gate and obtained the authoritative review-only preview. Execution stopped
+  before confirmation because review-only CSS hid the publish dock ancestor and the workspace clear
+  listener could re-hide the shell and dock. No confirmation was clicked and no trusted mutation
+  began. Preview and stopped-execution receipt SHA-256 values are
+  `356e3e87cb26ef5d4d03d8f5b9d43962e088362c3f9f8344a8790ccabf075092` and
+  `36d8a935a5703ff9b909bd04628b9775061209ac7d2e451c3923232cb2fe8371`.
+- Exact rollback returned every scoped row to dark. Final `NOT_COMMITTED_NO_RETRY` reconciliation
+  proves zero submission claims/acknowledgements, intents, attempts, grants, receipts and Ozon
+  imports, with no cost-ledger delta. Reconciliation SHA-256 is
+  `cbbed302dae56f29b0ea6e79321c5852fb0ace6142412c0ba9645c3ec3a74719`. The pilot session and
+  temporary browser/session/vault state were removed; final runtime SHA-256 is
+  `a6d2980f5787b3e08c536890ee8356fc947e8d05b459ff5423138a908059efd9`. No Provider request,
+  generation, ERP ingest/publish or Ozon write occurred, and the `1.0.292` authorization is closed.
+- The offline correction exposes only the publish dock in one column, restores it after workspace
+  clear, revokes stale authority before revalidation, blocks authority refresh during an in-flight
+  confirmation and ignores delayed hosted refresh while review-only authority is current. Focused
+  tests, targeted ESLint, source verification `450/450` and full `pnpm preflight` (`766.7s`) pass.
+  Isolated desktop/mobile Chromium checks prove non-zero controls and no horizontal overflow. The
+  correction is not packaged or deployed and grants no write authority. `REL-02` remains open at
+  `36/37`; continuation requires a separately authorized replacement release and then a fresh exact
+  one-shop authorization bound to the resulting deployed commit/version. The old authorization
+  cannot be reused.
+
 - Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
   `90cef7ea0f0c89bb408339b04e893423b200b636` / `1.0.292` completed end to end with every pilot
   row dark. The target NFKC-canonicalizes marketplace SKU launch identity so captured fullwidth

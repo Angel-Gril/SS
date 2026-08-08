@@ -45,6 +45,8 @@
     publishConfirmButton: byId('publishConfirmButton'),
     publishRecoverButton: byId('publishRecoverButton'),
     refreshButton: byId('refreshButton'),
+    workspaceShell: byId('workspaceShell'),
+    workspaceTaskDock: byId('workspaceTaskDock'),
   };
 
   var client;
@@ -229,9 +231,37 @@
       && state.publicState.contractVersion === REVIEW_PUBLIC_STATE_VERSION);
   }
 
+  function unifiedPublishMutationBusy() {
+    var controller = global.SS_ERP_WORKBENCH_PUBLISH_PAGE_CONTROLLER;
+    if (!controller || typeof controller.getState !== 'function') return false;
+    try {
+      return controller.getState().busy === true;
+    } catch {
+      return true;
+    }
+  }
+
   function setReviewPublishOnlyClass(enabled) {
     if (!document.body || !document.body.classList) return;
-    document.body.classList.toggle('is-review-publish-only', enabled === true);
+    var reviewOnly = enabled === true;
+    document.body.classList.toggle('is-review-publish-only', reviewOnly);
+    if (!nodes.workspaceShell || !nodes.workspaceTaskDock) return;
+    if (reviewOnly) {
+      nodes.workspaceShell.hidden = false;
+      nodes.workspaceShell.setAttribute('aria-busy', 'false');
+      nodes.workspaceShell.setAttribute('aria-disabled', 'false');
+      nodes.workspaceShell.setAttribute('data-runtime-state', 'REVIEW_PUBLISH_ONLY');
+      nodes.workspaceTaskDock.hidden = false;
+      return;
+    }
+    if (nodes.workspaceShell.getAttribute('data-runtime-state') !== 'REVIEW_PUBLISH_ONLY') {
+      return;
+    }
+    nodes.workspaceShell.hidden = true;
+    nodes.workspaceShell.setAttribute('aria-busy', 'true');
+    nodes.workspaceShell.setAttribute('aria-disabled', 'true');
+    nodes.workspaceShell.setAttribute('data-runtime-state', 'CLEARED');
+    nodes.workspaceTaskDock.hidden = true;
   }
 
   function isSha256(value) {
@@ -1051,7 +1081,16 @@
       ? expectedLifecycleEpoch
       : state.lifecycleEpoch;
     if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
+    if (unifiedPublishMutationBusy()) {
+      setStatus('发布操作正在处理；完成前不会刷新或创建新的提交。', 'warning');
+      return false;
+    }
     var loaded = false;
+    if (reviewPublishOnly()) {
+      emitWorkspaceEvent(DIRECT_REVIEW_CLEAR_EVENT, null);
+      state.publicState = null;
+      setReviewPublishOnlyClass(false);
+    }
     state.busy = true;
     renderControls();
     setStatus('正在重新验证工作台会话与 ERP 草稿...', '');
@@ -1069,13 +1108,13 @@
         state.publicState = next;
         state.readiness = null;
         state.unknownOutcome = false;
-        setReviewPublishOnlyClass(true);
         renderContext(next.context);
         nodes.profileSelect.replaceChildren();
         state.selectedProfileId = '';
         nodes.profileSummary.textContent = '当前会话仅核对已绑定资产，不会调用 Provider。';
         clearResultView();
         clearWorkspaceView();
+        setReviewPublishOnlyClass(true);
         emitWorkspaceEvent(DIRECT_REVIEW_EVENT, next.publishRequest);
         setStatus('已绑定资产通过发布授权核对。请检查 ERP 权威清单后确认。', 'success');
       } else {
@@ -1450,6 +1489,10 @@
       renderControls();
     });
     document.addEventListener(WORKSPACE_REFRESH_EVENT, function () {
+      if (reviewPublishOnly()) {
+        renderControls();
+        return;
+      }
       renderControls();
       if (!hostedByokExecutionAllowed()) {
         clearWorkspaceView();

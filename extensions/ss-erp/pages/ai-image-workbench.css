@@ -103,13 +103,17 @@ body.is-hosted-mode #emptyResult {
 
 body.is-review-publish-only .workspace-rail,
 body.is-review-publish-only .workspace-organizer,
-body.is-review-publish-only .workbench-grid,
+body.is-review-publish-only .workbench-grid > :not(#workspaceTaskDock),
 body.is-review-publish-only #workspaceTaskDock > :not(.workspace-publish-section),
 body.is-review-publish-only #workspacePublishSummary {
   display: none !important;
 }
 
 body.is-review-publish-only .workspace-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.is-review-publish-only .workbench-grid {
   grid-template-columns: minmax(0, 1fr);
 }
 

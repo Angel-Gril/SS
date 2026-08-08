@@ -44,6 +44,46 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-09): the authorized
+`90cef7ea0f0c89bb408339b04e893423b200b636` / BINI `1.0.292` REL-02 cycle 14 revalidated the exact
+owner, shop, physical device, revision `11`,
+draft version `9`, payload, single SKU and bound BYOK asset. The scoped publish gate was enabled and
+the authoritative review-only preview passed, but execution stopped before confirmation because
+review-only CSS hid the publish dock's `.workbench-grid` ancestor and the workspace clear listener
+could hide the shell and dock again. The execution receipt confirms that no confirmation was clicked
+and no trusted publish action started. Baseline, readiness, gate-enable, preview and stopped-execution
+SHA-256 values are `64d79794efd1233c2776ddcfd500fe3780bfda0ec4d7cf9e508d9e995507dc65`,
+`4b617ff8c2dab74fe474411aeba2bc89a41e24e606aa47aef4e35b87eeccfd15`,
+`3cfde1566c21544df6d689d941fc0937f48e76c84d9aed4bb45f23d5aee39fe9`,
+`356e3e87cb26ef5d4d03d8f5b9d43962e088362c3f9f8344a8790ccabf075092`, and
+`36d8a935a5703ff9b909bd04628b9775061209ac7d2e451c3923232cb2fe8371`.
+
+Rollback restored every scoped row to dark. Final reconciliation is
+`NOT_COMMITTED_NO_RETRY`: submission claims and acknowledgements, publish intents and attempts,
+`OZON_PUBLISH` grants, receipts and Ozon imports are all zero, and the cost ledger did not change.
+Dark-disable and reconciliation SHA-256 values are
+`fc52009b3ab40a07f080bb24ae3c53cda175357fae0f707a52fae1568d5c4690` and
+`cbbed302dae56f29b0ea6e79321c5852fb0ace6142412c0ba9645c3ec3a74719`. The pilot device session
+was revoked, temporary browser/session state was removed, and the final runtime snapshot
+`a6d2980f5787b3e08c536890ee8356fc947e8d05b459ff5423138a908059efd9` proves no API Key,
+capability evidence, dispatch, vault key, recovery state, device access or Provider permission
+remains. No Provider request, generation, ERP ingest/publish or Ozon write occurred.
+
+The offline correction keeps only the publish dock visible in a stable one-column review layout,
+reopens the shell after the workspace clear event, synchronously revokes stale review authority
+before revalidation, blocks every authority refresh while a publish confirmation is in flight, and
+ignores delayed hosted-workspace refresh events while review-only authority is current. Focused UI,
+publish-controller, workspace, runtime and coordinator tests pass; source verification is `450/450`
+with the two existing package warnings; targeted ESLint and the complete `pnpm preflight` pass in
+`766.7s`. Isolated Chromium desktop and mobile layout receipts have SHA-256
+`206896835e046d24a2d6a869c7c3a97c46eb2d605f8131846f0d163f06e41eca` and
+`11576a53457027c5a2a9c404b795238d47620ce554ea8e83b3bc11ac00500af2`; every confirmation control
+has a non-zero rectangle and neither viewport has horizontal overflow. This correction is not
+packaged or deployed and grants no Ozon authority. Phase 6 remains `2/3`, overall progress remains
+`36/37` (`97%`), and only `REL-02` is open. Its next live step requires a separately authorized
+replacement release, followed by a new exact one-shop publish authorization bound to that deployed
+commit/version and freshly revalidated inputs; the closed `1.0.292` authorization must not be reused.
+
 Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
 `90cef7ea0f0c89bb408339b04e893423b200b636` / `1.0.292` completed end to end while every pilot
 row remained dark. This target adds NFKC-canonical marketplace SKU launch identity so a captured
