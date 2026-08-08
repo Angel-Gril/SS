@@ -44,6 +44,49 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-08): the separately authorized replacement pre-release for
+`496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` completed end to end while every pilot
+row remained dark. The COM and CN Cloud/Local candidates each contain `190` files; their release
+evidence SHA-256 values are
+`9aff17844711afa3bc892ccc1a6a89bd2ea1c2f1df40ce7e154f59e8e364fca0` and
+`cfc371d077c48db885210a70a64c233093bb1df0b4eb22df94480d169523634f`. Both Ed25519 signatures,
+signed-package MV3 restart smokes, and source/local package checks passed. The final fresh COM
+backup is `39,232,384` bytes with SHA-256
+`e0857b73eb7b62f5c3a597d1b0ec283abcfba91682dcccf81a24b625e4659480`; its `142`-table restore
+attestation SHA-256 is `4c48a0a56d28365ab0c606ed4724dd07314d4baac6e03dde4aa70c37b5cf752e`.
+The final fresh CN backup is `9,585,514` bytes with SHA-256
+`22813961f752d4a6f5a44417a5afd14b744524c131b08742b0536a58239a2ca9`; its `141`-table restore
+attestation SHA-256 is `4e2218e0adf09c01a6c9fc2440fe0deae535f6cf5a5133dd2e8989e876489581`.
+
+Both VPS environments now run the exact target commit with all three services active, all `144`
+migrations applied, public/local readiness healthy, and the formal AI-media policy dark. Final
+runtime verifier logs have SHA-256
+`c2b89c04312e09c3acd9b6672f5d98d17205f25c812d16e8d23614f2a34f67fb` for COM and
+`bb6d967259ed3959215525dcc0da8f6935f0258936769a4da77dcc078900eace` for CN; both report zero
+failures and the single deployment warning that remote backup storage is not configured. The
+target-bound dark canaries passed all seven checks and cleaned both their temporary device session
+and short-lived account sessions. Their receipt SHA-256 values are
+`256f69e2838f8bdf1b12b01cd46cca12341e8991bb866429acd985f4789934ab` and
+`475bf8aee4437b285b6e3964acf1bb7a2e1bc7b13a43d521cc8a4caa5dac42a9`.
+
+A fresh two-VPS exact-public-set DNS quorum then pinned first-party distribution verification.
+COM and CN website receipts passed Ed25519 and exact ZIP-byte verification with SHA-256
+`8672d2e2e5a12ed83f2fcbdda1dd63f0fcdd453e9497af3024e5cce32862abca` and
+`d607eb190fb9db516cda07a7f800f718aa38c2f3b0f51381f977c1994928f006`. BINI was atomically
+upgraded on its original profile and managed path from `1.0.289` to `1.0.290`; the extension ID
+and non-secret Provider profile fingerprint remained unchanged. The managed-upgrade, trusted
+reload, active-worker, Unicode, and final storage receipts have SHA-256
+`c03a1e381eca1c9feddcd3f956bc19bc6344d4910e0e601b660bbf53b956182b`,
+`61a5214717b6af02b3ff816e373765f682ab07d447d4f48ee57520e29cfce1f2`,
+`3ec4d2b5505cea19044a995c584da04c47efe21b93548f44751b1f47377a69ec`,
+`4ab4669fccabae8763a8df9f93f05a00e02ff23c26194b8b22bff7a983e7560b`, and
+`b5d8f1a82c52d54b37b9b3cbee8db8d2ba6682df9cdc91d8491a656d0ac92e1a`. The final browser
+snapshot contains no API Key, capability evidence, uncertain request, Provider dispatch, vault
+key, batch recovery, device credential, exact Provider-origin permission, or `<all_urls>`
+permission. This pre-release made no Provider request, generation, ERP ingest/publish, or Ozon
+write. Phase 6 therefore remains `2/3` and overall progress remains `36/37` (`97%`); only the
+separately authorized `REL-02` one-shop publish pilot remains.
+
 Current checkpoint (2026-08-08): the authorized
 `cffc12bdca95efc5f7c75ae236ccd9a0ab394428` / `1.0.289` BINI one-shop publish pre-gate stopped
 before rollout enablement or any Ozon request. The exact draft remains revision `11`, draft version
@@ -1862,20 +1905,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep both regions and all rollout rows dark. Run the final offline QA-04 gates
-against the clean pushed bounded-lineage/UNKNOWN correction commit. Then obtain a new exact
-pre-release authorization and create the next immutable Cloud/Local replacement release, expected
-to be `1.0.290` and bound to that commit. Sign and verify both regional candidates; perform fresh
-backup/restore, migration, dark deployment, canaries, first-party website receipts, and a same-path
-BINI upgrade with active-worker attestation. The closed c53 and cffc release/mutation authorizations
-do not carry to a new commit or version.
-
-After the replacement release is independently dark and verified, obtain a separate exact
-owner/shop/device/draft/version/payload authorization for the one-shop pilot. Do not repeat the
-completed Provider generation or ERP ingest. The live publish attempt must create at most one
-publish intent and one `OZON_PUBLISH` grant, execute exactly one Ozon import without automatic retry,
-perform bounded read-only status reconciliation, avoid manual resolution or resubmission when the
-result is UNKNOWN, and restore dark state and revoke the pilot session afterward.
+Immediate next step: keep both regions and every rollout row dark. Obtain a separate exact
+authorization for the deployed `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` BINI
+owner, shop, physical device, draft revision/version, payload SHA-256, single SKU, and stored asset.
+First revalidate those frozen inputs read-only. Do not repeat the completed Provider generation or
+ERP ingest. The live pilot may then create at most one publish intent and one `OZON_PUBLISH` grant,
+execute exactly one Ozon import without automatic retry, perform at most the authorized bounded
+read-only status reconciliation, avoid manual resolution or resubmission when the result is
+UNKNOWN, and restore dark state and revoke the pilot session afterward. The closed c53/cffc pilot
+authorizations and this replacement pre-release authorization do not authorize that Ozon write.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

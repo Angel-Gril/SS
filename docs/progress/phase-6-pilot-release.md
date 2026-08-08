@@ -28,6 +28,32 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-08): the separately authorized
+  `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` replacement pre-release completed with
+  every pilot row dark. COM/CN candidates contain `190` files per target and passed Ed25519,
+  signed-package restart, source, Cloud, and Local verification. Final fresh backup/restore evidence
+  is COM `39,232,384` bytes / `142` tables / attestation SHA-256
+  `4c48a0a56d28365ab0c606ed4724dd07314d4baac6e03dde4aa70c37b5cf752e`, and CN `9,585,514`
+  bytes / `141` tables / attestation SHA-256
+  `4e2218e0adf09c01a6c9fc2440fe0deae535f6cf5a5133dd2e8989e876489581`.
+- Both regions run the exact target with all three services active, `144` migrations current,
+  healthy public/local readiness, and the formal dark policy. Final runtime verifiers report zero
+  failures and only the existing deployment warning that backups are local because remote storage
+  is not configured. Dark-canary receipt SHA-256 values are
+  `256f69e2838f8bdf1b12b01cd46cca12341e8991bb866429acd985f4789934ab` and
+  `475bf8aee4437b285b6e3964acf1bb7a2e1bc7b13a43d521cc8a4caa5dac42a9`; both temporary device
+  sessions and both pairs of short-lived account sessions were revoked and removed.
+- Fresh two-VPS public DNS quorum and first-party download probes verified every regional ZIP.
+  Website receipt SHA-256 values are
+  `8672d2e2e5a12ed83f2fcbdda1dd63f0fcdd453e9497af3024e5cce32862abca` and
+  `d607eb190fb9db516cda07a7f800f718aa38c2f3b0f51381f977c1994928f006`. BINI then completed an
+  atomic same-path `1.0.289` -> `1.0.290` upgrade, trusted reload, active-worker attestation, and
+  Unicode smoke. The final runtime snapshot SHA-256 is
+  `b5d8f1a82c52d54b37b9b3cbee8db8d2ba6682df9cdc91d8491a656d0ac92e1a` and proves no secret,
+  capability, uncertain request, dispatch, vault, recovery, device credential, Provider-origin, or
+  `<all_urls>` permission remains. No Provider, generation, ERP ingest/publish, or Ozon action ran.
+  `REL-02` remains the sole open task at `36/37`; its one-shop Ozon write requires a separate exact
+  authorization bound to this deployed release and freshly revalidated draft/device inputs.
 - Current checkpoint (2026-08-08): the authorized
   `cffc12bdca95efc5f7c75ae236ccd9a0ab394428` / `1.0.289` BINI one-shop pre-gate revalidated the
   exact revision `11`, draft version `9`, payload SHA-256
