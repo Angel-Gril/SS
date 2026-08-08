@@ -28,6 +28,50 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
+  `90cef7ea0f0c89bb408339b04e893423b200b636` / `1.0.292` completed end to end with every pilot
+  row dark. The target NFKC-canonicalizes marketplace SKU launch identity so captured fullwidth
+  identifiers resolve to the exact preferred review-only SKU. Final `QA-04` passed Server `4836`
+  plus `204` environment skips, AI Media PostgreSQL `99/99`, Cloud `455/455`, Local `451/451` plus
+  two package warnings, and source `450/450` plus two package warnings. Canonical acceptance
+  SHA-256 is `61ea9c236258fe721e3dede0a6d5a892885b824dbfb7de4c1ee9752fa986d970`.
+- Both `190`-file regional candidates passed Ed25519 verification. COM Cloud/Local SHA-256 values
+  are `489bbbedce52ec044d127a5ff55ca8075cabeb62eade2b24475ba405df770504` and
+  `0a3e005cad2996bd9dcbe84c233fb017e987ba795e3e862ac7e09d4237947386`; CN values are
+  `a4ad791fe1965af4581e337dca5131cbb681d777762679244478a9a794c5c3a5` and
+  `2c5e4846c88925e0071a43f4180cfca0bf4d5e0bc13f052a1b86fa9f274b5671`. Release-evidence SHA-256
+  values are `54c4df1f6dc4c52de4523122af750b62f6a775347b1a8f9ccde2fedc5b6809ae` and
+  `0e57f9a39ecf5f31fee24841c13282c3172a1b7a19c9814f73007c7a203b89ed`.
+- Fresh COM evidence is a `39,234,718`-byte backup, `142` restored tables and attestation SHA-256
+  `56b28abe8dee5c987d7fb98c9b3b7e0431f445045706549810cd9bc79f94ed14`. Fresh CN evidence is a
+  `9,676,220`-byte backup, `141` restored tables and attestation SHA-256
+  `01176f4c3fecf388e44b11247d26836a5d5aa45d771e9c4def6b04a679a284a7`. Both regions run the exact
+  target with three active services, `144` migrations, healthy readiness and all flags dark. Both
+  verifiers have zero failures and only the existing local-only-backup warning; the temporary CN
+  Prisma wrapper was removed before acceptance.
+- Both dark canaries passed `7/7` and `32` controlled requests with temporary sessions cleaned and
+  all Provider/ingest/Ozon side-effect flags false. Receipt SHA-256 values are
+  `0206c90bf323d41a1fe0a8b4fc0895ef2696a5b71f0ec97044953cd79bf5d831` and
+  `c9acc0fe5728c46546490abb6d4b0d4814bf3ac42758e194085e59990d921576`. An initial seven-character
+  canary directory typo failed before session creation; the corrected eight-character target path
+  then passed without external effects.
+- Fresh DNS quorum SHA-256 is
+  `0eaca480245c0d5dcade7caa50ecfff6d35d4e2991c54bb0a3b50d1150a662d4`. COM/CN website receipt
+  SHA-256 values are `6a19b1fbd11bc0fd1db0082867132ff0b9759820aa976e7374594934131b1ecd` and
+  `85cec41d72ba2e1aca3b360a5928c134c5eeb26f0b4f17014d69294472e6f629`; TLS, Ed25519 and exact
+  ZIP bytes passed. Signed-package restart smoke SHA-256 is
+  `9e765c3475daa0a433d9318eb0b0c82477833f7a47843c1145c5303d8016662e`.
+- BINI completed its same-profile/same-path `1.0.291` -> `1.0.292` atomic upgrade, trusted reload,
+  active-worker attestations and Unicode smoke while preserving its extension ID and non-secret
+  profile fingerprint. Managed-upgrade and final-runtime receipt SHA-256 values are
+  `164f4acd9e0f348cc699d16c13481f7de3c2b70021c69d0646eb546d654212f2` and
+  `c8967b6e6cd3aef0e945c46f3405bf6a627fa6b0987630f2b75d51e0343cc879`. The final snapshot has no
+  Key, capability evidence, uncertain request, dispatch, vault/recovery/device credential, exact
+  Provider permission or `<all_urls>` permission. No Provider, generation, ERP ingest/publish or
+  Ozon action ran. `REL-02` remains the only open task at `36/37`; continuation requires a new exact
+  one-shop publish authorization bound to deployed `90cef7e` / BINI `1.0.292` and freshly
+  revalidated owner/shop/device/draft/payload/SKU/asset inputs.
+
 - Current checkpoint (2026-08-08): the exact `496abb31bf1ffe3f825c54fd47f351c14900c474` /
   `1.0.290` BINI publish pilot stopped before any publish intent, grant, Ozon attempt, or import.
   Fresh launch failed closed with HTTP `409` because the authorized SKU hero already contained the
