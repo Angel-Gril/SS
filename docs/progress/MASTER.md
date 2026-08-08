@@ -44,6 +44,32 @@ Overall: 36/37 tasks complete (97%).
 
 ## Current Status
 
+Current checkpoint (2026-08-08): the exact `496abb31bf1ffe3f825c54fd47f351c14900c474` /
+`1.0.290` BINI publish pilot stopped before creating a publish intent, `OZON_PUBLISH` grant, Ozon
+attempt, or import. The fresh workbench launch returned fail-closed HTTP `409` because the only
+authorized SKU hero was already occupied by the previously ingested BYOK asset, while the v2 launch
+contract could represent only a new empty generation slot. Every scoped rollout row was restored
+dark. No Provider request, generation, ERP ingest, Ozon write, or other SKU action occurred.
+
+The offline correction adds an explicitly negotiated launch request v3 and a distinct
+`REVIEW_PUBLISH_ONLY` context for an occupied generated hero. Request v1/v2 behavior is unchanged;
+only a v3 client advertising both supported launch modes can receive the new decision. The Server
+binds the exact current draft, SKU, slot, ordinal and asset, requires zero-charge BYOK provenance,
+and reuses the existing same-device replacement-chain publish authorizer. The extension review
+session exposes only an exact unified publish request; Provider generation, edit, preview-result,
+review-result, ingest and legacy publish operations fail before dependency calls. Authoritative
+state loss also clears any in-flight or displayed direct-review preview so stale confirmation UI
+cannot survive a failed revalidation.
+
+Focused launch-route tests pass `31/31`, publish-authorization tests pass `50/50`, and the launch
+client/session/runtime, unified publish controller, UI, lifecycle, vertical fixture, batch and
+workspace regressions pass. The complete local `pnpm preflight` passes in `753.8s`; source extension
+verification is `450/450` with only the two existing package warnings. Independent Server and
+extension reviews found no remaining blocking issue. The correction is committed as
+`791b5f827d326a8b9c672915e07ef81da35274d7`, but it is not packaged, distributed or deployed and
+authorizes no Ozon mutation. Phase 6 remains `2/3` and overall progress remains `36/37` (`97%`);
+`REL-02` is still the only open task.
+
 Current checkpoint (2026-08-08): the separately authorized replacement pre-release for
 `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` completed end to end while every pilot
 row remained dark. The COM and CN Cloud/Local candidates each contain `190` files; their release
@@ -1906,14 +1932,17 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 ## Next Steps
 
 Immediate next step: keep both regions and every rollout row dark. Obtain a separate exact
-authorization for the deployed `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` BINI
-owner, shop, physical device, draft revision/version, payload SHA-256, single SKU, and stored asset.
-First revalidate those frozen inputs read-only. Do not repeat the completed Provider generation or
-ERP ingest. The live pilot may then create at most one publish intent and one `OZON_PUBLISH` grant,
-execute exactly one Ozon import without automatic retry, perform at most the authorized bounded
-read-only status reconciliation, avoid manual resolution or resubmission when the result is
-UNKNOWN, and restore dark state and revoke the pilot session afterward. The closed c53/cffc pilot
-authorizations and this replacement pre-release authorization do not authorize that Ozon write.
+authorization to build/sign `791b5f827d326a8b9c672915e07ef81da35274d7` as the next version,
+deploy the Server to both regions before publishing or upgrading the v3 extension client, run fresh
+backup/restore, migration, dark verifier/canary and first-party download receipts, and upgrade BINI
+on its original path. That replacement release must not call Provider, repeat generation/ingest,
+or write Ozon. After all replacement gates pass, obtain a new version-bound one-shop pilot
+authorization for the same owner, shop, physical device, exact draft revision/version, payload
+SHA-256, single SKU and stored asset. The pilot may create at most one publish intent and one
+`OZON_PUBLISH` grant, execute exactly one Ozon import without automatic retry, perform only the
+authorized bounded read-only reconciliation, avoid recover/resubmit/manual resolution for UNKNOWN
+or PENDING, and restore dark state and revoke its session afterward. All earlier deployment and
+pilot authorizations are closed and do not authorize either new phase.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

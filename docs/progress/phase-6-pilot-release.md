@@ -28,6 +28,28 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-08): the exact `496abb31bf1ffe3f825c54fd47f351c14900c474` /
+  `1.0.290` BINI publish pilot stopped before any publish intent, grant, Ozon attempt, or import.
+  Fresh launch failed closed with HTTP `409` because the authorized SKU hero already contained the
+  previously ingested BYOK asset and launch v2 allowed only an empty generation target. Exact
+  rollback returned every scoped row dark; Provider, generation, ERP ingest, Ozon write, and other
+  SKU counts remained zero.
+- The offline correction introduces capability-negotiated request v3 and a strict
+  `REVIEW_PUBLISH_ONLY` context for that occupied generated hero. Request v1/v2 behavior remains
+  byte-compatible and occupied v2 launches still return `409`. The Server binds current draft,
+  SKU, slot, ordinal, asset, zero-charge BYOK provenance, the live or valid same-device successor,
+  publish scopes, and the current policy. The extension prevents Provider/edit/ingest and legacy
+  publish calls in review-only sessions and passes only the exact bound asset through the unified
+  authoritative preview/confirm coordinator. Failed revalidation clears stale or in-flight review
+  previews before another confirmation can be exposed.
+- Focused route tests pass `31/31`, publish authorization passes `50/50`, and all affected extension
+  launch/session/runtime/UI/publish, vertical, lifecycle, batch and workspace regressions pass.
+  `pnpm preflight` passes in `753.8s`; source verification is `450/450` with the two existing package
+  warnings. Two independent reviews found no blocking issue. The correction is committed as
+  `791b5f827d326a8b9c672915e07ef81da35274d7`, but is not packaged or deployed and grants no Ozon
+  authority. `REL-02` remains open at `36/37`; the next action requires a separately authorized
+  replacement release with Server deployment preceding v3 extension distribution, followed by a
+  new exact one-shop pilot authorization.
 - Current checkpoint (2026-08-08): the separately authorized
   `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` replacement pre-release completed with
   every pilot row dark. COM/CN candidates contain `190` files per target and passed Ed25519,
