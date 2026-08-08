@@ -70,6 +70,54 @@ extension reviews found no remaining blocking issue. The correction is committed
 authorizes no Ozon mutation. Phase 6 remains `2/3` and overall progress remains `36/37` (`97%`);
 `REL-02` is still the only open task.
 
+Current checkpoint (2026-08-08): the subsequently authorized replacement pre-release for
+`791b5f827d326a8b9c672915e07ef81da35274d7` / `1.0.291` completed end to end while every pilot
+row remained dark. The target-bound nine-gate `QA-04` run passed in `899.929s`: Server
+`4836` passed with `204` environment skips, AI Media PostgreSQL passed `99/99`, Cloud passed
+`455/455`, Local passed `451/451` with two package warnings, and source passed `450/450` with two
+package warnings. Its canonical acceptance SHA-256 is
+`146adb86f578835d1383a56a9846bafd87837b63321c22e4ee3be65c852bab1f`. COM and CN Cloud/Local
+candidates each contain `190` files. Their release-evidence SHA-256 values are
+`1bdeba1054c800c9b69e276c01faa22377eef4d86b5c26edbf2a1b59eca8d2ba` and
+`9830f4a930f29df3cf4f42acb5f663a6abbec52eb40c0880a6a4488ff55bc072`; both Ed25519 signatures
+and signed-package MV3 restart smokes passed.
+
+The final fresh COM backup is `39,232,191` bytes with SHA-256
+`3513852558df868e08df0f13deb53058dd978c0058f7a6a542ffc3407c69e7a1`; its `142`-table restore
+attestation SHA-256 is `9d0a8dbc7f33b7558a65ca1aa4644469681616cfffe78cd59ac0fa47bbeb3fdb`.
+The final fresh CN backup is `9,585,513` bytes with SHA-256
+`e7abefb55e36f30962471655203f3052f67f9b8a530a8a4b5141b4fda10cec9c`; its `141`-table restore
+attestation SHA-256 is `2b845291d084e6aac600c7cd8be9a159d42aef603b41a69f386c9600a68fb40a`.
+Both regions now run the exact target with API, Web and Worker active, all `144` migrations current,
+healthy local/public readiness, and every rollout row dark. Final verifier SHA-256 values are
+`25a45761117a88817d8b91d8166f8326ca5800e8baa1f85d641ec1c88a8e6df8` and
+`42c6266a7f7b1262984188c67e241ad5b1f10b9a0a03a9c6f8a9c7a29cde4ce6`; both report zero
+failures and only the existing warning that remote backup storage is not configured. Both dark
+canaries passed `7/7`, issued only their `32` controlled requests, and removed their temporary
+device and account sessions. The CN lane failed closed before an initial switch when its immutable
+Prisma cache was absent, safely restored the previous services after a later local orchestration
+timeout, quarantined both incomplete candidates, and switched only after the full retry passed.
+
+A fresh two-VPS DNS quorum receipt has SHA-256
+`928aeced56826f5f8a5eccbc479cc40c801a02da8790703860cef4970c643893`. COM and CN first-party
+website receipts then passed Ed25519 and exact ZIP-byte verification with SHA-256
+`a3994c1a89281b99e96c8f1ac444aa7fafff2160814e75f4bfa37bdbc45e6b15` and
+`b609c2c3653f91c20ce7f2212c78236c3d25978918fddbbf07d28357afff29ef`. BINI was atomically
+upgraded on its original profile and managed path from `1.0.290` to `1.0.291`; its extension ID and
+non-secret Provider profile fingerprint remained unchanged. The isolated upgrade smoke, managed
+upgrade, trusted reload, post-reload active-worker, Unicode and final runtime receipt SHA-256 values
+are `0f1156c19d8344001a2d6423f8683488cbca34b3cc1fb9c3fcf979a13e06a06e`,
+`ade7cd817fd5d24ee900bf2efba99aa5558f9f6530cc35aca19d2e2d468250ef`,
+`de6550fd6bcdd2523ca903595e0eeb8850dd7f1f3b2101060a9ab324bb2ce2a0`,
+`048ae9ac51856a39888e2f3c7ff06eb44bcb3767f68b453d74c2facc757a964a`,
+`c0d9a1c8a0098951e2b7ab39adf94bceaff9d440964fbe5886ea83342f232de3`, and
+`75fb8f13d627081c2798cf780d853b182b34810ba8275e2d8662dcf6df3f9a59`. The final snapshot proves
+that no Key, capability evidence, uncertain request, Provider dispatch, vault/recovery/device
+credential, exact Provider permission or `<all_urls>` permission remains. This pre-release made no
+Provider request, generation, ERP ingest/publish or Ozon write. Phase 6 remains `2/3`, overall
+progress remains `36/37` (`97%`), and only `REL-02` remains open; it requires a newly authorized
+one-shop publish pilot.
+
 Current checkpoint (2026-08-08): the separately authorized replacement pre-release for
 `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` completed end to end while every pilot
 row remained dark. The COM and CN Cloud/Local candidates each contain `190` files; their release
@@ -1931,18 +1979,15 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep both regions and every rollout row dark. Obtain a separate exact
-authorization to build/sign `791b5f827d326a8b9c672915e07ef81da35274d7` as the next version,
-deploy the Server to both regions before publishing or upgrading the v3 extension client, run fresh
-backup/restore, migration, dark verifier/canary and first-party download receipts, and upgrade BINI
-on its original path. That replacement release must not call Provider, repeat generation/ingest,
-or write Ozon. After all replacement gates pass, obtain a new version-bound one-shop pilot
-authorization for the same owner, shop, physical device, exact draft revision/version, payload
-SHA-256, single SKU and stored asset. The pilot may create at most one publish intent and one
-`OZON_PUBLISH` grant, execute exactly one Ozon import without automatic retry, perform only the
-authorized bounded read-only reconciliation, avoid recover/resubmit/manual resolution for UNKNOWN
-or PENDING, and restore dark state and revoke its session afterward. All earlier deployment and
-pilot authorizations are closed and do not authorize either new phase.
+Immediate next step: keep both regions and every rollout row dark. Obtain a new exact one-shop
+publish-pilot authorization bound to deployed commit
+`791b5f827d326a8b9c672915e07ef81da35274d7`, BINI `1.0.291`, the same owner, shop and physical
+device, and the freshly revalidated exact draft revision/version, payload SHA-256, single SKU and
+stored asset. The pilot may create at most one publish intent and one `OZON_PUBLISH` grant, execute
+exactly one Ozon import without automatic retry, perform only the authorized bounded read-only
+reconciliation, avoid recover/resubmit/manual resolution for UNKNOWN or PENDING, and restore dark
+state and revoke its session afterward. No Provider request, regeneration or ERP ingest is needed.
+All earlier deployment and pilot authorizations are closed and do not authorize this write.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

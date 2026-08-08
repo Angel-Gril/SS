@@ -50,6 +50,42 @@ Progress: 2/3 tasks.
   authority. `REL-02` remains open at `36/37`; the next action requires a separately authorized
   replacement release with Server deployment preceding v3 extension distribution, followed by a
   new exact one-shop pilot authorization.
+- Current checkpoint (2026-08-08): the subsequently authorized replacement pre-release for
+  `791b5f827d326a8b9c672915e07ef81da35274d7` / `1.0.291` completed end to end with every pilot
+  row dark. The target-bound nine-gate `QA-04` acceptance passed Server `4836` plus `204` skips,
+  AI Media `99/99`, Cloud `455/455`, Local `451/451` plus two package warnings, and source `450/450`
+  plus two package warnings. Its canonical SHA-256 is
+  `146adb86f578835d1383a56a9846bafd87837b63321c22e4ee3be65c852bab1f`. Both `190`-file regional
+  candidates passed Ed25519 signing and signed-package MV3 restart smoke; COM/CN release-evidence
+  SHA-256 values are `1bdeba1054c800c9b69e276c01faa22377eef4d86b5c26edbf2a1b59eca8d2ba`
+  and `9830f4a930f29df3cf4f42acb5f663a6abbec52eb40c0880a6a4488ff55bc072`.
+- Final fresh COM backup/restore evidence is `39,232,191` bytes, backup SHA-256
+  `3513852558df868e08df0f13deb53058dd978c0058f7a6a542ffc3407c69e7a1`, `142` tables, and
+  attestation SHA-256 `9d0a8dbc7f33b7558a65ca1aa4644469681616cfffe78cd59ac0fa47bbeb3fdb`.
+  Final CN evidence is `9,585,513` bytes, backup SHA-256
+  `e7abefb55e36f30962471655203f3052f67f9b8a530a8a4b5141b4fda10cec9c`, `141` tables, and
+  attestation SHA-256 `2b845291d084e6aac600c7cd8be9a159d42aef603b41a69f386c9600a68fb40a`.
+  Both regions now run the exact target with three active services, `144` migrations current,
+  healthy local/public readiness, and zero verifier failures. Both target-bound dark canaries passed
+  `7/7` and cleaned their temporary device/account sessions. The only retained warning is that
+  remote backup storage is not configured. The CN cache prerequisite and later local orchestration
+  timeout both failed closed without switching to an incomplete release; the successful full retry
+  quarantined the interrupted candidates and removed its temporary wrapper.
+- Fresh DNS quorum receipt SHA-256 is
+  `928aeced56826f5f8a5eccbc479cc40c801a02da8790703860cef4970c643893`. COM/CN website receipt
+  SHA-256 values `a3994c1a89281b99e96c8f1ac444aa7fafff2160814e75f4bfa37bdbc45e6b15` and
+  `b609c2c3653f91c20ce7f2212c78236c3d25978918fddbbf07d28357afff29ef` passed Ed25519 and exact
+  ZIP-byte verification. BINI then completed its original-path/profile `1.0.290` -> `1.0.291`
+  atomic upgrade, trusted reload, active-worker attestation and Unicode smoke while preserving its
+  extension ID and non-secret profile fingerprint. Managed-upgrade and final-runtime receipt
+  SHA-256 values are `ade7cd817fd5d24ee900bf2efba99aa5558f9f6530cc35aca19d2e2d468250ef`
+  and `75fb8f13d627081c2798cf780d853b182b34810ba8275e2d8662dcf6df3f9a59`; the final snapshot contains
+  no Key, capability evidence, uncertain request, dispatch, vault/recovery/device credential, exact
+  Provider permission or `<all_urls>` permission. No Provider request, generation, ERP
+  ingest/publish or Ozon action ran. `REL-02` remains the sole open task at `36/37`; it now requires
+  only a fresh exact one-shop publish authorization bound to deployed `791b5f82` / BINI `1.0.291`
+  and revalidated owner/shop/device/draft/payload/SKU/asset inputs. No Provider, regeneration or
+  ingest is needed.
 - Current checkpoint (2026-08-08): the separately authorized
   `496abb31bf1ffe3f825c54fd47f351c14900c474` / `1.0.290` replacement pre-release completed with
   every pilot row dark. COM/CN candidates contain `190` files per target and passed Ed25519,
