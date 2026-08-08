@@ -14,6 +14,9 @@ import {
   EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION,
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2,
+  EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
+  EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_CONTEXT_VERSION,
+  EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_DECISION_VERSION,
 } from '../services/extension-byok-workbench-launch.js';
 
 const NOW = new Date('2026-07-25T15:00:00.000Z');
@@ -70,8 +73,17 @@ async function build(options: {
   assignments?: unknown[];
   selectedSkuKeys?: string[];
   readiness?: ReturnType<typeof decision>;
+  boundSlotAuthorized?: boolean;
+  boundSlotAssetId?: string;
+  boundSlotAuthorizationThrows?: boolean;
 } = {}) {
   const getReadiness = vi.fn(async () => options.readiness || decision());
+  const authorizeBoundSlotLaunch = vi.fn(async (input: { assetId: string }) => {
+    if (options.boundSlotAuthorizationThrows) throw new Error('authorization unavailable');
+    return options.boundSlotAuthorized === true
+      ? { authorized: true as const, assetId: options.boundSlotAssetId || input.assetId }
+      : { authorized: false as const, assetId: null };
+  });
   const app = Fastify();
   const attachDevice = async (fastifyRequest: FastifyRequest) => {
     (fastifyRequest as any).device = {
@@ -113,10 +125,17 @@ async function build(options: {
       },
       stage: 'MEDIA', runState: 'DRAFT',
     }),
+    authorizeBoundSlotLaunch,
     getReadiness,
     now: () => NOW,
   });
-  return { app, getReadiness, authenticateDevice, authenticateLaunchDevice };
+  return {
+    app,
+    getReadiness,
+    authorizeBoundSlotLaunch,
+    authenticateDevice,
+    authenticateLaunchDevice,
+  };
 }
 
 describe('extension BYOK readiness attestation route', () => {
@@ -298,6 +317,39 @@ describe('extension BYOK readiness attestation route', () => {
     await app.close();
   });
 
+  it('does not reinterpret an occupied generated hero for legacy v1 or v2 clients', async () => {
+    const { app, authorizeBoundSlotLaunch } = await build({
+      selectedSkuKeys: ['sku-1'],
+      boundSlotAuthorized: true,
+      assignments: [{
+        scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+        assetId: 'asset-generated-1', source: 'GENERATED',
+      }],
+    });
+    for (const contractVersion of [
+      EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
+      EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2,
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/workbench-launch',
+        payload: {
+          contractVersion,
+          sourcePlatform: '1688', sourceProductId: 'product-1',
+          sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+          shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+          ...(contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
+            ? { preferredSkuKey: 'sku-1', selectionKind: 'HINT' }
+            : {}),
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().errorCode).toBe('byok_workbench_launch_slot_unavailable');
+    }
+    expect(authorizeBoundSlotLaunch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('keeps v1 multi-SKU launch fail-closed when only one hero remains empty', async () => {
     const { app } = await build({
       assignments: [{
@@ -417,6 +469,233 @@ describe('extension BYOK readiness attestation route', () => {
       context: { skuKey: 'sku-1', slotKey: 'sku:sku-1:hero' },
     });
     await preferred.app.close();
+  });
+
+  it('allows an authorized generated hero to reopen only for review and publish', async () => {
+    const { app, authorizeBoundSlotLaunch, getReadiness } = await build({
+      selectedSkuKeys: ['sku-1'],
+      boundSlotAuthorized: true,
+      assignments: [
+        {
+          scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:source',
+          assetId: 'asset-source-1', source: 'SOURCE',
+        },
+        {
+          scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+          assetId: 'asset-generated-1', source: 'GENERATED',
+        },
+      ],
+    });
+    const payload = {
+      contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
+      sourcePlatform: '1688' as const,
+      sourceProductId: 'product-1', sourceCaptureSnapshotId: 'snapshot-1',
+      supplyGoodsId: 'goods-1', shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4,
+      preferredSkuKey: 'sku-1', selectionKind: 'HINT' as const,
+      supportedLaunchModes: ['GENERATE', 'REVIEW_PUBLISH_ONLY'] as const,
+    };
+    const response = await app.inject({ method: 'POST', url: '/workbench-launch', payload });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({
+      contractVersion: EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_DECISION_VERSION,
+      state: 'REVIEW_PUBLISH_ONLY',
+      context: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_CONTEXT_VERSION,
+        launchMode: 'REVIEW_PUBLISH_ONLY',
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+        skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+        assignmentOrdinal: 1, assetId: 'asset-generated-1', source: 'GENERATED',
+      },
+    });
+    expect(authorizeBoundSlotLaunch).toHaveBeenCalledOnce();
+    expect(authorizeBoundSlotLaunch).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', requestingDeviceSessionId: 'session-1',
+      sourcePlatform: '1688', sourceProductId: 'product-1',
+      sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+      shopId: 'shop-1', workflowId: 'workflow-1',
+      draftRevision: 3, draftVersion: 4,
+      skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+      assignmentOrdinal: 1, assetId: 'asset-generated-1', source: 'GENERATED',
+    });
+
+    const readiness = await app.inject({
+      method: 'POST',
+      url: '/readiness',
+      payload: request({ assignmentOrdinal: 1 }),
+    });
+    expect(readiness.statusCode).toBe(409);
+    expect(readiness.json().errorCode).toBe('byok_readiness_target_stale');
+    expect(getReadiness).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('uses request v3 as capability negotiation while preserving empty-slot generation', async () => {
+    const { app, authorizeBoundSlotLaunch } = await build({ selectedSkuKeys: ['sku-1'] });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workbench-launch',
+      payload: {
+        contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
+        sourcePlatform: '1688', sourceProductId: 'product-1',
+        sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+        shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+        preferredSkuKey: 'sku-1', selectionKind: 'HINT',
+        supportedLaunchModes: ['GENERATE', 'REVIEW_PUBLISH_ONLY'],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION,
+      state: 'READY',
+      context: { skuKey: 'sku-1', assignmentMode: 'APPEND' },
+    });
+    expect(authorizeBoundSlotLaunch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rejects malformed request v3 launch capability negotiation before authorization', async () => {
+    for (const supportedLaunchModes of [
+      undefined,
+      ['REVIEW_PUBLISH_ONLY', 'GENERATE'],
+      ['GENERATE'],
+      ['GENERATE', 'REVIEW_PUBLISH_ONLY', 'OTHER'],
+    ]) {
+      const { app, authorizeBoundSlotLaunch } = await build({
+        selectedSkuKeys: ['sku-1'],
+        boundSlotAuthorized: true,
+        assignments: [{
+          scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+          assetId: 'asset-generated-1', source: 'GENERATED',
+        }],
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/workbench-launch',
+        payload: {
+          contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
+          sourcePlatform: '1688', sourceProductId: 'product-1',
+          sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+          shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+          preferredSkuKey: 'sku-1', selectionKind: 'HINT',
+          ...(supportedLaunchModes === undefined ? {} : { supportedLaunchModes }),
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().errorCode).toBe('byok_workbench_launch_request_invalid');
+      expect(authorizeBoundSlotLaunch).not.toHaveBeenCalled();
+      await app.close();
+    }
+  });
+
+  it('rejects an unapproved, non-generated, mismatched, or stale occupied hero', async () => {
+    const cases = [
+      {
+        name: 'unapproved generated asset',
+        options: {
+          selectedSkuKeys: ['sku-1', 'sku-2'],
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-generated-1', source: 'GENERATED',
+          }],
+        },
+        draftRevision: 3,
+        selectionKind: 'HINT' as const,
+        authorizerCalls: 1,
+        expectedErrorCode: 'byok_workbench_launch_slot_unavailable',
+      },
+      {
+        name: 'non-generated asset',
+        options: {
+          selectedSkuKeys: ['sku-1'], boundSlotAuthorized: true,
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-source-1', source: 'SOURCE',
+          }],
+        },
+        draftRevision: 3,
+        authorizerCalls: 0,
+        expectedErrorCode: 'byok_workbench_launch_slot_unavailable',
+      },
+      {
+        name: 'mismatched authorized asset',
+        options: {
+          selectedSkuKeys: ['sku-1'], boundSlotAuthorized: true,
+          boundSlotAssetId: 'asset-generated-other',
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-generated-1', source: 'GENERATED',
+          }],
+        },
+        draftRevision: 3,
+        authorizerCalls: 1,
+        expectedErrorCode: 'byok_workbench_launch_slot_unavailable',
+      },
+      {
+        name: 'authorization dependency failure',
+        options: {
+          selectedSkuKeys: ['sku-1'], boundSlotAuthorizationThrows: true,
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-generated-1', source: 'GENERATED',
+          }],
+        },
+        draftRevision: 3,
+        authorizerCalls: 1,
+        expectedErrorCode: 'byok_workbench_launch_slot_unavailable',
+      },
+      {
+        name: 'mismatched SKU binding',
+        options: {
+          selectedSkuKeys: ['sku-1'], boundSlotAuthorized: true,
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-2', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-generated-1', source: 'GENERATED',
+          }],
+        },
+        draftRevision: 3,
+        authorizerCalls: 0,
+        expectedErrorCode: 'byok_workbench_launch_slot_unavailable',
+      },
+      {
+        name: 'stale draft binding',
+        options: {
+          selectedSkuKeys: ['sku-1'], draftRevision: 4, boundSlotAuthorized: true,
+          assignments: [{
+            scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
+            assetId: 'asset-generated-1', source: 'GENERATED',
+          }],
+        },
+        draftRevision: 3,
+        authorizerCalls: 0,
+        expectedErrorCode: 'byok_workbench_launch_context_stale',
+      },
+    ];
+    for (const testCase of cases) {
+      const { app, authorizeBoundSlotLaunch } = await build(testCase.options);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/workbench-launch',
+        payload: {
+          contractVersion: EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
+          sourcePlatform: '1688', sourceProductId: 'product-1',
+          sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+          shopId: 'shop-1', workflowId: 'workflow-1',
+          draftRevision: testCase.draftRevision, draftVersion: 4,
+          preferredSkuKey: 'sku-1',
+          selectionKind: 'selectionKind' in testCase ? testCase.selectionKind : 'EXPLICIT',
+          supportedLaunchModes: ['GENERATE', 'REVIEW_PUBLISH_ONLY'],
+        },
+      });
+      expect(response.statusCode, testCase.name).toBe(409);
+      expect(response.json().errorCode, testCase.name)
+        .toBe(testCase.expectedErrorCode);
+      expect(authorizeBoundSlotLaunch, testCase.name)
+        .toHaveBeenCalledTimes(testCase.authorizerCalls);
+      await app.close();
+    }
   });
 
   it('turns an invalid automatic SKU hint into an explicit current choice', async () => {

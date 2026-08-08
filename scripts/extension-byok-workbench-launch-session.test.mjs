@@ -30,6 +30,58 @@ const launchContext = {
   skuKey: 'sku-1', slotKey: 'sku:sku-1:hero',
   assignmentMode: 'APPEND', assignmentOrdinal: 0,
 };
+const reviewContext = {
+  contractVersion: api.REVIEW_CONTEXT_VERSION,
+  launchMode: 'REVIEW_PUBLISH_ONLY',
+  sourcePlatform: '1688', sourceProductId: 'product-1',
+  sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 1,
+  assetId: 'byok_asset-1', source: 'GENERATED',
+};
+assert.deepEqual(
+  JSON.parse(JSON.stringify(api.normalizeContext(reviewContext))),
+  reviewContext,
+);
+assert.equal(api.sameContext(reviewContext, { ...reviewContext }), true);
+assert.equal(api.sameContext(reviewContext, launchContext), false);
+for (const invalidReviewContext of [
+  { ...reviewContext, assignmentMode: 'APPEND' },
+  { ...reviewContext, source: 'SOURCE' },
+  { ...reviewContext, assetId: 'sk-' + 'a'.repeat(24) },
+]) {
+  assert.throws(() => api.normalizeContext(invalidReviewContext), /SESSION_CONTEXT_INVALID/u);
+}
+const reviewStorage = storageArea();
+const reviewTabs = {
+  async create() { return { id: 901 }; },
+  async update(id) { return { id }; },
+  async remove() {},
+};
+const reviewManager = api.createManager({
+  sessionStorage: reviewStorage,
+  tabs: reviewTabs,
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => Date.parse('2026-07-26T09:00:00.000Z'),
+});
+await reviewManager.open({
+  context: reviewContext,
+  sourceTabId: 12,
+  sourceDocumentId: 'review-source-document',
+});
+const restartedReviewManager = api.createManager({
+  sessionStorage: reviewStorage,
+  tabs: reviewTabs,
+  runtime: { getURL(path) { return `chrome-extension://extension-id/${path}`; } },
+  now: () => Date.parse('2026-07-26T09:00:01.000Z'),
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await restartedReviewManager.claim({
+    tabId: 901, documentId: 'review-workbench-document', frameId: 0,
+  }))).context,
+  reviewContext,
+  'review-only launch context survives an MV3 worker restart',
+);
 const batchRecoveryPreparing = {
   contractVersion: 'extension-byok-workbench-batch-recovery/v1',
   phase: 'PREPARING',

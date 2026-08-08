@@ -203,6 +203,16 @@ function createHarness(options = {}) {
     emitSnapshot(value) {
       document.dispatchEvent(new FakeCustomEvent('ss-erp:workspace-state', { detail: value }));
     },
+    emitDirectReview(value) {
+      document.dispatchEvent(new FakeCustomEvent('ss-erp:workbench-publish-review', {
+        detail: value,
+      }));
+    },
+    clearDirectReview() {
+      document.dispatchEvent(new FakeCustomEvent('ss-erp:workbench-publish-review-clear', {
+        detail: null,
+      }));
+    },
   };
 }
 
@@ -262,6 +272,69 @@ for (const mode of ['ERP_HOSTED', 'BYOK']) {
   await settle();
   assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 1);
   assert.equal(test.controller.getState().publishState.receiptId, 'receipt-1');
+}
+
+{
+  const test = createHarness();
+  await settle();
+  const directRequest = {
+    executionMode: 'BYOK',
+    binding: {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 12, draftVersion: 8,
+    },
+    selectedMedia: [{
+      scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku:sku-red:hero', assetId: 'asset-hero',
+    }],
+  };
+  test.emitDirectReview(directRequest);
+  await settle();
+  assert.equal(test.controller.getState().directReview, true);
+  assert.deepEqual(clone(test.controller.getState().request), directRequest);
+  assert.equal(test.calls.filter((row) => row[0] === 'preview').length, 1);
+  assert.equal(test.nodes.workspacePublishConfirmationRow.hidden, false);
+  assert.equal(test.nodes.workspacePublishConfirmButton.disabled, true);
+  test.nodes.workspacePublishConfirmation.checked = true;
+  test.nodes.workspacePublishConfirmation.dispatch('change', false);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', false);
+  await settle();
+  assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 0);
+  test.nodes.workspacePublishConfirmation.dispatch('change', true);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', true);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', true);
+  await settle();
+  assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 1);
+  assert.equal(test.controller.getState().publishState.state, 'SUCCEEDED');
+}
+
+{
+  const pendingPreview = {};
+  pendingPreview.promise = new Promise((resolve) => { pendingPreview.resolve = resolve; });
+  const test = createHarness({ preview: () => pendingPreview.promise });
+  const directRequest = {
+    executionMode: 'BYOK',
+    binding: {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 12, draftVersion: 8,
+    },
+    selectedMedia: [{
+      scope: 'SKU', skuKey: 'sku-red', slotKey: 'sku:sku-red:hero', assetId: 'asset-hero',
+    }],
+  };
+  test.emitDirectReview(directRequest);
+  await settle();
+  assert.equal(test.calls.filter((row) => row[0] === 'preview').length, 1);
+  test.clearDirectReview();
+  pendingPreview.resolve(preview(directRequest));
+  await settle();
+  assert.equal(test.controller.getState().directReview, false);
+  assert.equal(test.controller.getState().request, null);
+  assert.equal(test.controller.getState().preview, null);
+  assert.equal(test.controller.getState().publishState, null);
+  assert.equal(test.nodes.workspacePublishControls.hidden, true);
+  test.nodes.workspacePublishConfirmation.checked = true;
+  test.nodes.workspacePublishConfirmation.dispatch('change', true);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', true);
+  await settle();
+  assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 0);
 }
 
 {

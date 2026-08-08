@@ -8,12 +8,17 @@ import {
 import {
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION,
   EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2,
+  EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3,
   ExtensionByokWorkbenchLaunchError,
   parseExtensionByokWorkbenchLaunchRequest,
   resolveExtensionByokWorkbenchBatchLaunchContext,
+  resolveExtensionByokWorkbenchBoundSlotCandidate,
+  resolveExtensionByokWorkbenchBoundSlotLaunchDecision,
   resolveExtensionByokWorkbenchLaunchContext,
   resolveExtensionByokWorkbenchLaunchDecision,
   resolveExtensionByokWorkbenchSlotTarget,
+  type ExtensionByokWorkbenchBoundSlotAuthorizationInput,
+  type ExtensionByokWorkbenchBoundSlotAuthorizationDecision,
   type ExtensionByokWorkbenchDraft,
 } from '../services/extension-byok-workbench-launch.js';
 
@@ -37,6 +42,9 @@ export interface ExtensionByokReadinessRoutesOptions {
   loadDraft(input: { workflowId: string; ownerUserId: string }): Promise<
     ExtensionByokWorkbenchDraft | null
   >;
+  authorizeBoundSlotLaunch?(
+    input: ExtensionByokWorkbenchBoundSlotAuthorizationInput,
+  ): Promise<ExtensionByokWorkbenchBoundSlotAuthorizationDecision>;
   getReadiness(input: {
     ownerUserId: string;
     shopId: string;
@@ -103,17 +111,68 @@ export async function extensionByokReadinessRoutes(
       if (!draft) {
         return routeError(reply, 409, 'byok_workbench_launch_context_stale', '商品草稿已变化');
       }
-      const data = parsed.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2
-        ? resolveExtensionByokWorkbenchLaunchDecision({
-          ownerUserId: device.ownerUserId,
-          request: parsed,
-          draft,
-        })
-        : resolveExtensionByokWorkbenchLaunchContext({
+      let data;
+      if (parsed.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3) {
+        const boundCandidate = resolveExtensionByokWorkbenchBoundSlotCandidate({
           ownerUserId: device.ownerUserId,
           request: parsed,
           draft,
         });
+        if (boundCandidate) {
+          let authorization: ExtensionByokWorkbenchBoundSlotAuthorizationDecision | null = null;
+          try {
+            authorization = options.authorizeBoundSlotLaunch
+              ? await options.authorizeBoundSlotLaunch({
+                ownerUserId: device.ownerUserId,
+                requestingDeviceSessionId: device.sessionId,
+                sourcePlatform: parsed.sourcePlatform,
+                sourceProductId: parsed.sourceProductId,
+                sourceCaptureSnapshotId: parsed.sourceCaptureSnapshotId,
+                supplyGoodsId: parsed.supplyGoodsId,
+                shopId: parsed.shopId,
+                workflowId: parsed.workflowId,
+                draftRevision: parsed.draftRevision,
+                draftVersion: parsed.draftVersion,
+                ...boundCandidate,
+              })
+              : null;
+          } catch {
+            authorization = null;
+          }
+          if (authorization?.authorized !== true
+            || authorization.assetId !== boundCandidate.assetId) {
+            throw new ExtensionByokWorkbenchLaunchError(
+              'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+              409,
+              'The generated SKU hero is not authorized for review-only launch',
+            );
+          }
+          data = resolveExtensionByokWorkbenchBoundSlotLaunchDecision({
+            ownerUserId: device.ownerUserId,
+            request: parsed,
+            draft,
+            authorizedCandidate: boundCandidate,
+          });
+        } else {
+          data = resolveExtensionByokWorkbenchLaunchDecision({
+            ownerUserId: device.ownerUserId,
+            request: parsed,
+            draft,
+          });
+        }
+      } else if (parsed.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2) {
+        data = resolveExtensionByokWorkbenchLaunchDecision({
+          ownerUserId: device.ownerUserId,
+          request: parsed,
+          draft,
+        });
+      } else {
+        data = resolveExtensionByokWorkbenchLaunchContext({
+          ownerUserId: device.ownerUserId,
+          request: parsed,
+          draft,
+        });
+      }
       return reply.send({ code: 1, data });
     } catch (error) {
       if (error instanceof ExtensionByokWorkbenchLaunchError) {
@@ -141,6 +200,9 @@ export async function extensionByokReadinessRoutes(
     }
     if (!device.allowedShopIds.includes(parsed.shopId)) {
       return routeError(reply, 403, 'byok_readiness_shop_denied', '设备无权访问该店铺');
+    }
+    if (parsed.contractVersion === EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3) {
+      return routeError(reply, 400, 'byok_workbench_launch_request_invalid', '批量工作台请求无效');
     }
     try {
       const [shop, draft] = await Promise.all([

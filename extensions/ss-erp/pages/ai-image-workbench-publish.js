@@ -11,6 +11,8 @@
   var STATE_EVENT = 'ss-erp:workspace-state';
   var STATE_CLEAR_EVENT = 'ss-erp:workspace-state-clear';
   var PROJECTION_EVENT = 'ss-erp:workspace-publish-projection';
+  var DIRECT_REVIEW_EVENT = 'ss-erp:workbench-publish-review';
+  var DIRECT_REVIEW_CLEAR_EVENT = 'ss-erp:workbench-publish-review-clear';
   var RECOVERABLE_STATES = [
     'CONFIRMED', 'PREPARING', 'PREPARED', 'DISPATCHING',
     'OUTCOME_UNRESOLVED', 'NOT_COMMITTED', 'PENDING',
@@ -279,6 +281,7 @@
   var sessionEpoch = 0;
   var loadingKey = null;
   var projectionRevision = 0;
+  var directReview = false;
 
   function modeLabel(value) {
     return value === 'ERP_HOSTED' ? 'ERP 托管计费' : '自带 API Key';
@@ -336,9 +339,12 @@
     nodes.skus.textContent = preview ? preview.selectedSkuKeys.join(' → ') : '从已保存发布身份恢复';
     replaceMediaRows(preview ? preview.orderedMedia : []);
     var recoverable = Boolean(publishState && RECOVERABLE_STATES.includes(publishState.state));
-    var confirmable = Boolean(preview && !publishState && snapshot
-      && snapshot.publishSummary && snapshot.publishSummary.eligible === true
-      && sameRequest(requestFromSnapshot(snapshot), request));
+    var confirmable = Boolean(preview && !publishState && (
+      directReview
+        ? request !== null
+        : snapshot && snapshot.publishSummary && snapshot.publishSummary.eligible === true
+          && sameRequest(requestFromSnapshot(snapshot), request)
+    ));
     nodes.confirmationRow.hidden = !confirmable;
     nodes.confirmation.disabled = busy || !confirmable;
     if (!confirmable) nodes.confirmation.checked = false;
@@ -367,7 +373,8 @@
   }
 
   function emitProjection(current) {
-    if (!current || !preview || !request || !sameRequest(requestFromSnapshot(current), request)
+    if (directReview || !current || !preview || !request
+      || !sameRequest(requestFromSnapshot(current), request)
       || !isRecord(current.publishBasis)) return false;
     projectionRevision = Math.max(
       projectionRevision,
@@ -437,6 +444,7 @@
   }
 
   function handleSnapshot(value) {
+    if (directReview) return;
     snapshot = isRecord(value) ? value : null;
     var nextRequest = requestFromSnapshot(snapshot);
     if (!nextRequest) {
@@ -462,6 +470,23 @@
     }
     if (!preview && !publishState && loadingKey === null) void loadRequest(nextRequest);
     render();
+  }
+
+  function clearDirectReview(force) {
+    if (!directReview && force !== true) return false;
+    sessionEpoch += 1;
+    loadEpoch += 1;
+    loadingKey = null;
+    snapshot = null;
+    directReview = false;
+    request = null;
+    preview = null;
+    publishState = null;
+    lastError = null;
+    busy = false;
+    nodes.confirmation.checked = false;
+    render();
+    return true;
   }
 
   async function restoreActive() {
@@ -504,8 +529,9 @@
   async function confirmPublish() {
     if (!client || busy || !preview || publishState
       || nodes.confirmation.checked !== true
-      || !snapshot || !snapshot.publishSummary || snapshot.publishSummary.eligible !== true
-      || !sameRequest(requestFromSnapshot(snapshot), request)) return false;
+      || (!directReview && (!snapshot || !snapshot.publishSummary
+        || snapshot.publishSummary.eligible !== true
+        || !sameRequest(requestFromSnapshot(snapshot), request)))) return false;
     var submittedRequest = request;
     var submittedPreview = preview;
     busy = true;
@@ -589,6 +615,27 @@
   global.document.addEventListener(STATE_CLEAR_EVENT, function () {
     handleSnapshot(null);
   });
+  global.document.addEventListener(DIRECT_REVIEW_CLEAR_EVENT, function () {
+    clearDirectReview();
+  });
+  global.document.addEventListener(DIRECT_REVIEW_EVENT, function (event) {
+    var nextRequest = normalizeRequest(event && event.detail);
+    if (!nextRequest) {
+      clearDirectReview(true);
+      lastError = '发布审核上下文无效，已阻止提交。';
+      render();
+      return;
+    }
+    sessionEpoch += 1;
+    directReview = true;
+    snapshot = null;
+    request = nextRequest;
+    preview = null;
+    if (!publishState || !sameRequest(publishState.request, nextRequest)) publishState = null;
+    nodes.confirmation.checked = false;
+    void loadRequest(nextRequest);
+    render();
+  });
   if (global.chrome && global.chrome.runtime && global.chrome.runtime.onMessage
     && typeof global.chrome.runtime.onMessage.addListener === 'function') {
     global.chrome.runtime.onMessage.addListener(function (message) {
@@ -597,6 +644,7 @@
       loadEpoch += 1;
       loadingKey = null;
       snapshot = null;
+      directReview = false;
       request = null;
       preview = null;
       publishState = null;
@@ -615,6 +663,7 @@
         publishState: publishState ? clone(publishState) : null,
         busy: busy,
         lastError: lastError,
+        directReview: directReview,
       });
     },
   });

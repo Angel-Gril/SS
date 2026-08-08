@@ -92,6 +92,10 @@
   var WORKSPACE_AUTHORITATIVE_RELOAD_EVENT = 'ss-erp:workspace-authoritative-reload';
   var WORKSPACE_AUTHORITATIVE_RELOAD_VERSION =
     'extension-byok-workbench-authoritative-reload/v1';
+  var REVIEW_PUBLIC_STATE_VERSION = 'extension-byok-workbench-review-public-state/v1';
+  var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
+  var DIRECT_REVIEW_EVENT = 'ss-erp:workbench-publish-review';
+  var DIRECT_REVIEW_CLEAR_EVENT = 'ss-erp:workbench-publish-review-clear';
   var WORKSPACE_BOUND_INGEST_VERSION = 'extension-byok-generated-asset-ingest-client/v1';
   var WORKSPACE_BOUND_INGEST_KEYS = Object.freeze([
     'contractVersion', 'replayed', 'receiptId', 'assetId', 'provenanceId',
@@ -175,6 +179,59 @@
       && isCanonicalText(value.skuKey, 1, 500)
       && isCanonicalText(value.slotKey, 1, 200)
       && value.slotKey === 'sku:' + value.skuKey + ':hero';
+  }
+
+  function reviewPublishContextIsCanonical(value) {
+    return isRecord(value)
+      && exactKeys(value, [
+        'contractVersion', 'launchMode', 'sourcePlatform', 'sourceProductId',
+        'sourceCaptureSnapshotId', 'supplyGoodsId', 'shopId', 'workflowId',
+        'draftRevision', 'draftVersion', 'skuKey', 'slotKey', 'assignmentOrdinal',
+        'assetId', 'source',
+      ])
+      && value.contractVersion === REVIEW_CONTEXT_VERSION
+      && value.launchMode === 'REVIEW_PUBLISH_ONLY'
+      && ['1688', 'pdd', 'taobao', 'tmall'].includes(value.sourcePlatform)
+      && isCanonicalText(value.sourceProductId, 1, 200)
+      && isCanonicalText(value.sourceCaptureSnapshotId, 1, 200)
+      && isCanonicalText(value.supplyGoodsId, 1, 200)
+      && isCanonicalText(value.shopId, 1, 200)
+      && isCanonicalText(value.workflowId, 1, 200)
+      && positiveInteger(value.draftRevision)
+      && positiveInteger(value.draftVersion)
+      && isCanonicalText(value.skuKey, 1, 500)
+      && isCanonicalText(value.slotKey, 1, 200)
+      && value.slotKey === 'sku:' + value.skuKey + ':hero'
+      && Number.isSafeInteger(value.assignmentOrdinal)
+      && value.assignmentOrdinal >= 0 && value.assignmentOrdinal <= 499
+      && isCanonicalText(value.assetId, 1, 500)
+      && value.source === 'GENERATED';
+  }
+
+  function reviewPublishRequestMatchesContext(value, context) {
+    return exactKeys(value, ['executionMode', 'binding', 'selectedMedia'])
+      && value.executionMode === 'BYOK'
+      && exactKeys(value.binding, ['shopId', 'workflowId', 'draftRevision', 'draftVersion'])
+      && value.binding.shopId === context.shopId
+      && value.binding.workflowId === context.workflowId
+      && value.binding.draftRevision === context.draftRevision
+      && value.binding.draftVersion === context.draftVersion
+      && Array.isArray(value.selectedMedia) && value.selectedMedia.length === 1
+      && exactKeys(value.selectedMedia[0], ['scope', 'skuKey', 'slotKey', 'assetId'])
+      && value.selectedMedia[0].scope === 'SKU'
+      && value.selectedMedia[0].skuKey === context.skuKey
+      && value.selectedMedia[0].slotKey === context.slotKey
+      && value.selectedMedia[0].assetId === context.assetId;
+  }
+
+  function reviewPublishOnly() {
+    return Boolean(state.publicState
+      && state.publicState.contractVersion === REVIEW_PUBLIC_STATE_VERSION);
+  }
+
+  function setReviewPublishOnlyClass(enabled) {
+    if (!document.body || !document.body.classList) return;
+    document.body.classList.toggle('is-review-publish-only', enabled === true);
   }
 
   function isSha256(value) {
@@ -420,8 +477,9 @@
   }
 
   function renderContext(context) {
-    nodes.contextKicker.textContent = '服务器已绑定';
-    nodes.contextBadge.textContent = '精确草稿';
+    var reviewOnly = context && context.launchMode === 'REVIEW_PUBLISH_ONLY';
+    nodes.contextKicker.textContent = reviewOnly ? '服务器已授权发布审核' : '服务器已绑定';
+    nodes.contextBadge.textContent = reviewOnly ? '只读发布' : '精确草稿';
     ['state-pending', 'state-ready', 'state-error'].forEach(function (name) {
       nodes.contextBadge.classList.remove(name);
     });
@@ -430,8 +488,8 @@
     nodes.contextShop.textContent = context.shopId;
     nodes.contextDraft.textContent = context.workflowId
       + ' · r' + context.draftRevision + ' · v' + context.draftVersion;
-    nodes.contextSku.textContent = context.skuKey
-      + ' · 主图 · 追加位置 ' + (context.assignmentOrdinal + 1);
+    nodes.contextSku.textContent = context.skuKey + ' · 主图 · '
+      + (reviewOnly ? '已绑定位置 ' : '追加位置 ') + (context.assignmentOrdinal + 1);
   }
 
   function clearContextView(label, unavailable) {
@@ -739,9 +797,10 @@
     var hostedBlocked = !hostedByokExecutionAllowed();
     var batchController = batchPageController();
     var batchLocked = Boolean(batchController && batchController.isLocked());
-    var locked = state.busy || Boolean(state.candidate) || state.unknownOutcome
+    var reviewOnly = reviewPublishOnly();
+    var locked = reviewOnly || state.busy || Boolean(state.candidate) || state.unknownOutcome
       || editTaskLocked || hostedBlocked || batchLocked;
-    nodes.profileSelect.disabled = hostedBlocked || state.busy || Boolean(state.candidate)
+    nodes.profileSelect.disabled = reviewOnly || hostedBlocked || state.busy || Boolean(state.candidate)
       || !profileRows().length || editTaskLocked;
     nodes.promptInput.disabled = locked;
     nodes.negativePromptInput.disabled = locked;
@@ -934,7 +993,7 @@
     var lifecycleEpoch = Number.isSafeInteger(options.lifecycleEpoch)
       ? options.lifecycleEpoch
       : state.lifecycleEpoch;
-    if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
+    if (!lifecycleIsCurrent(lifecycleEpoch) || reviewPublishOnly()) return false;
     state.readiness = null;
     renderControls();
     var row = selectedProfileRow();
@@ -1000,31 +1059,54 @@
     try {
       var next = await client.getPublicState();
       if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
-      if (!isRecord(next) || next.contractVersion !== 'extension-byok-workbench-public-state/v1'
-        || next.executionMode !== 'BYOK' || !isRecord(next.context)
-        || !Array.isArray(next.profiles)
-        || ![null, 'UNKNOWN_OUTCOME'].includes(next.generationOutcome)
-        || (next.result && next.generationOutcome !== null)) {
-        throw new Error('state_invalid');
-      }
-      var priorUnknownOutcome = state.unknownOutcome;
-      state.publicState = next;
-      state.unknownOutcome = next.generationOutcome === 'UNKNOWN_OUTCOME';
-      if (priorUnknownOutcome && !state.unknownOutcome) clearWorkspaceView();
-      renderContext(next.context);
-      renderProfileOptions();
-      if (next.result && isRecord(next.result)) {
-        var previewAvailable = await showCandidate(next.result, lifecycleEpoch);
-        if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
-        if (!previewAvailable) {
-          setStatus('候选图仍保留在扩展后台；预览不可用时只能驳回删除，不能批准。', 'warning');
+      if (isRecord(next) && next.contractVersion === REVIEW_PUBLIC_STATE_VERSION) {
+        if (!exactKeys(next, ['contractVersion', 'executionMode', 'context', 'publishRequest'])
+          || next.executionMode !== 'BYOK'
+          || !reviewPublishContextIsCanonical(next.context)
+          || !reviewPublishRequestMatchesContext(next.publishRequest, next.context)) {
+          throw new Error('state_invalid');
         }
-      } else {
+        state.publicState = next;
+        state.readiness = null;
+        state.unknownOutcome = false;
+        setReviewPublishOnlyClass(true);
+        renderContext(next.context);
+        nodes.profileSelect.replaceChildren();
+        state.selectedProfileId = '';
+        nodes.profileSummary.textContent = '当前会话仅核对已绑定资产，不会调用 Provider。';
         clearResultView();
-        emitWorkspaceBootstrap(null);
-        if (state.unknownOutcome) {
-          emitWorkspaceUnknownOutcome();
-          setStatus('Provider 请求结果仍未知；刷新只会核对状态，不会重新提交或产生第二次扣费。', 'warning');
+        clearWorkspaceView();
+        emitWorkspaceEvent(DIRECT_REVIEW_EVENT, next.publishRequest);
+        setStatus('已绑定资产通过发布授权核对。请检查 ERP 权威清单后确认。', 'success');
+      } else {
+        if (!isRecord(next) || next.contractVersion !== 'extension-byok-workbench-public-state/v1'
+          || next.executionMode !== 'BYOK' || !isRecord(next.context)
+          || !Array.isArray(next.profiles)
+          || ![null, 'UNKNOWN_OUTCOME'].includes(next.generationOutcome)
+          || (next.result && next.generationOutcome !== null)) {
+          throw new Error('state_invalid');
+        }
+        emitWorkspaceEvent(DIRECT_REVIEW_CLEAR_EVENT, null);
+        setReviewPublishOnlyClass(false);
+        var priorUnknownOutcome = state.unknownOutcome;
+        state.publicState = next;
+        state.unknownOutcome = next.generationOutcome === 'UNKNOWN_OUTCOME';
+        if (priorUnknownOutcome && !state.unknownOutcome) clearWorkspaceView();
+        renderContext(next.context);
+        renderProfileOptions();
+        if (next.result && isRecord(next.result)) {
+          var previewAvailable = await showCandidate(next.result, lifecycleEpoch);
+          if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
+          if (!previewAvailable) {
+            setStatus('候选图仍保留在扩展后台；预览不可用时只能驳回删除，不能批准。', 'warning');
+          }
+        } else {
+          clearResultView();
+          emitWorkspaceBootstrap(null);
+          if (state.unknownOutcome) {
+            emitWorkspaceUnknownOutcome();
+            setStatus('Provider 请求结果仍未知；刷新只会核对状态，不会重新提交或产生第二次扣费。', 'warning');
+          }
         }
       }
       loaded = true;
@@ -1035,7 +1117,9 @@
       state.authoritativeReloadPending = false;
       clearResultView();
       clearWorkspaceView();
+      emitWorkspaceEvent(DIRECT_REVIEW_CLEAR_EVENT, null);
       clearContextView('不可用', true);
+      setReviewPublishOnlyClass(false);
       setStatus(errorLabel(error), 'error');
       throw error;
     } finally {
@@ -1415,7 +1499,8 @@
     renderControls();
   });
   nodes.generateButton.addEventListener('click', function (event) {
-    if (!event || event.isTrusted !== true || nodes.generateButton.disabled) return;
+    if (!event || event.isTrusted !== true || reviewPublishOnly()
+      || nodes.generateButton.disabled) return;
     var batchController = batchPageController();
     if (batchController && batchController.isAvailable()) {
       void batchController.startFromPage().catch(function (error) {
@@ -1484,6 +1569,7 @@
       clearResultView();
       clearWorkspaceView();
       clearContextView('设备已断开', true);
+      setReviewPublishOnlyClass(false);
       setStatus('扩展设备会话已变化，请重新连接后从来源商品页打开工作台。', 'warning');
       renderControls();
     });
@@ -1492,7 +1578,7 @@
   var initialLifecycleEpoch = state.lifecycleEpoch;
   void loadPublicState(initialLifecycleEpoch).then(function (loaded) {
     if (loaded && lifecycleIsCurrent(initialLifecycleEpoch)
-      && !state.candidate && !state.unknownOutcome) {
+      && !reviewPublishOnly() && !state.candidate && !state.unknownOutcome) {
       return refreshReadiness({ lifecycleEpoch: initialLifecycleEpoch });
     }
     return null;

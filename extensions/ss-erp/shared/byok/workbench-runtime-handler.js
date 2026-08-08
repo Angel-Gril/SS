@@ -3,7 +3,10 @@
 
   var CONTRACT_VERSION = 'extension-byok-workbench-runtime-handler/v2';
   var LAUNCH_DECISION_VERSION = 'extension-byok-workbench-launch-decision/v2';
+  var REVIEW_LAUNCH_DECISION_VERSION = 'extension-byok-workbench-launch-decision/v3';
+  var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
   var PUBLIC_STATE_VERSION = 'extension-byok-workbench-public-state/v1';
+  var REVIEW_PUBLIC_STATE_VERSION = 'extension-byok-workbench-review-public-state/v1';
   var OPERATION = 'TEXT_TO_IMAGE';
   var REQUEST_MODE = 'json';
   var EDIT_OPERATIONS = ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
@@ -102,13 +105,56 @@
   }
 
   function readyLaunchContext(value) {
+    if (!isRecord(value) || !exactKeys(value, ['contractVersion', 'state', 'context'])
+      || !isRecord(value.context)) return null;
+    if (value.contractVersion === LAUNCH_DECISION_VERSION && value.state === 'READY') {
+      return value.context;
+    }
+    return value.contractVersion === REVIEW_LAUNCH_DECISION_VERSION
+      && value.state === 'REVIEW_PUBLISH_ONLY'
+      && value.context.contractVersion === REVIEW_CONTEXT_VERSION
+      ? value.context : null;
+  }
+
+  function isReviewPublishContext(value) {
     return isRecord(value)
-      && exactKeys(value, ['contractVersion', 'state', 'context'])
-      && value.contractVersion === LAUNCH_DECISION_VERSION
-      && value.state === 'READY'
-      && isRecord(value.context)
-      ? value.context
-      : null;
+      && value.contractVersion === REVIEW_CONTEXT_VERSION
+      && value.launchMode === 'REVIEW_PUBLISH_ONLY';
+  }
+
+  function reviewPublishRequest(context) {
+    return {
+      executionMode: 'BYOK',
+      binding: {
+        shopId: context.shopId,
+        workflowId: context.workflowId,
+        draftRevision: context.draftRevision,
+        draftVersion: context.draftVersion,
+      },
+      selectedMedia: [{
+        scope: 'SKU',
+        skuKey: context.skuKey,
+        slotKey: context.slotKey,
+        assetId: context.assetId,
+      }],
+    };
+  }
+
+  function reviewPublishRequestMatches(value, context) {
+    return exactKeys(value, ['executionMode', 'binding', 'selectedMedia'])
+      && value.executionMode === 'BYOK'
+      && exactKeys(value.binding, ['shopId', 'workflowId', 'draftRevision', 'draftVersion'])
+      && value.binding.shopId === context.shopId
+      && value.binding.workflowId === context.workflowId
+      && value.binding.draftRevision === context.draftRevision
+      && value.binding.draftVersion === context.draftVersion
+      && Array.isArray(value.selectedMedia)
+      && value.selectedMedia.length === 1
+      && exactKeys(value.selectedMedia[0], ['scope', 'skuKey', 'slotKey', 'assetId'])
+      && value.selectedMedia[0].scope === 'SKU'
+      && value.selectedMedia[0].skuKey === context.skuKey
+      && value.selectedMedia[0].slotKey === context.slotKey
+      && value.selectedMedia[0].assetId === context.assetId;
   }
 
   function choiceRequiredLaunch(value) {
@@ -315,6 +361,16 @@
     var reviewLocks = new Set();
     var publishLocks = new Set();
     var modeTransitionLocks = new Map();
+
+    function generationGuarded(operation) {
+      return guarded(async function generationOnlyHandler(handlerContext) {
+        var session = await claimSession(handlerContext && handlerContext.sender);
+        if (isReviewPublishContext(session.context)) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_REVIEW_ONLY');
+        }
+        return operation(handlerContext);
+      });
+    }
 
     function currentMillis() {
       var value = new Date(now()).getTime();
@@ -683,6 +739,14 @@
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
       }
       var session = await claimLive(handlerContext.sender);
+      if (isReviewPublishContext(session.context)) {
+        return {
+          contractVersion: REVIEW_PUBLIC_STATE_VERSION,
+          executionMode: 'BYOK',
+          context: session.context,
+          publishRequest: reviewPublishRequest(session.context),
+        };
+      }
       var result = await readSessionResult(session, handlerContext.sender);
       var publish = result && result.deliveryState === 'BOUND'
         ? await getPublishState(publishInput(session))
@@ -705,7 +769,7 @@
       };
     });
 
-    handlers[messageTypes.EDIT_MEDIA_PREPARE] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_MEDIA_PREPARE] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['purpose'])
         || !['REFERENCE', 'SOURCE', 'MASK'].includes(input.purpose)) {
@@ -718,7 +782,7 @@
       return prepareEditMedia(owner, input.purpose);
     });
 
-    handlers[messageTypes.EDIT_MEDIA_RELEASE] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_MEDIA_RELEASE] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['mediaHandle', 'purpose'])
         || !['REFERENCE', 'SOURCE', 'MASK'].includes(input.purpose)) {
@@ -729,7 +793,7 @@
       return { released: Boolean(releaseEditMedia(owner, input.mediaHandle, input.purpose)) };
     });
 
-    handlers[messageTypes.EDIT_STATE] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_STATE] = generationGuarded(async function (handlerContext) {
       if (!exactKeys(handlerContext.payload || {}, [])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
       }
@@ -747,7 +811,7 @@
       }
     });
 
-    handlers[messageTypes.EDIT_REFERENCES] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_REFERENCES] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['scope', 'handles'])
         || !['SESSION_GLOBAL', 'SLOT'].includes(input.scope)
@@ -763,7 +827,7 @@
         : { scope: 'SESSION_GLOBAL', handles: input.handles });
     });
 
-    handlers[messageTypes.EDIT_START] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_START] = generationGuarded(async function (handlerContext) {
       var transition = await withModeTransitionLock(handlerContext.sender, async function () {
         var session = await claimLive(handlerContext.sender);
         if (session.operation || session.result) {
@@ -783,7 +847,7 @@
       }
     });
 
-    handlers[messageTypes.EDIT_SELECT] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_SELECT] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['attemptId'])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
@@ -795,7 +859,7 @@
       return selectEditAlternative(owner, input);
     });
 
-    handlers[messageTypes.EDIT_REGENERATE] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_REGENERATE] = generationGuarded(async function (handlerContext) {
       var session = await claimLive(handlerContext.sender);
       var owner = editOwner(handlerContext.sender, session);
       await assertEditEpoch(owner, { requireActive: true });
@@ -803,7 +867,7 @@
       return regenerateEdit(owner, handlerContext.payload || {});
     });
 
-    handlers[messageTypes.EDIT_PREVIEW] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_PREVIEW] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['resultId'])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
@@ -824,7 +888,7 @@
       return openPreview(entry);
     });
 
-    handlers[messageTypes.EDIT_CLEANUP] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EDIT_CLEANUP] = generationGuarded(async function (handlerContext) {
       return withModeTransitionLock(handlerContext.sender, async function () {
         var input = handlerContext.payload || {};
         var acknowledgement = exactKeys(input, ['restartAcknowledgement'])
@@ -854,7 +918,7 @@
       });
     });
 
-    handlers[messageTypes.GET_READINESS] = guarded(async function (handlerContext) {
+    handlers[messageTypes.GET_READINESS] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['profileId'])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
@@ -870,7 +934,7 @@
       return readiness;
     });
 
-    handlers[messageTypes.EXECUTE_PROVIDER] = guarded(async function (handlerContext) {
+    handlers[messageTypes.EXECUTE_PROVIDER] = generationGuarded(async function (handlerContext) {
       var readiness = handlerContext.authorization && handlerContext.authorization.readiness;
       var transition = await withModeTransitionLock(handlerContext.sender, async function () {
         var session = await claimLive(handlerContext.sender);
@@ -967,7 +1031,7 @@
       }
     });
 
-    handlers[messageTypes.OPEN_PREVIEW] = guarded(async function (handlerContext) {
+    handlers[messageTypes.OPEN_PREVIEW] = generationGuarded(async function (handlerContext) {
       var input = handlerContext.payload || {};
       if (!exactKeys(input, ['resultId'])) {
         throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
@@ -982,7 +1046,7 @@
       return openPreview(entry);
     });
 
-    handlers[messageTypes.REVIEW_RESULT] = guarded(function (handlerContext) {
+    handlers[messageTypes.REVIEW_RESULT] = generationGuarded(function (handlerContext) {
       return withReviewLock(handlerContext.sender, async function () {
         var input = handlerContext.payload || {};
         if (!exactKeys(input, ['resultId', 'decision'])
@@ -1015,7 +1079,7 @@
       });
     });
 
-    handlers[messageTypes.INGEST] = guarded(function (handlerContext) {
+    handlers[messageTypes.INGEST] = generationGuarded(function (handlerContext) {
       return withReviewLock(handlerContext.sender, async function () {
         var input = handlerContext.payload || {};
         if (!exactKeys(input, ['resultId'])) {
@@ -1102,7 +1166,7 @@
       });
     });
 
-    handlers[messageTypes.RECOVER_INGEST] = guarded(function (handlerContext) {
+    handlers[messageTypes.RECOVER_INGEST] = generationGuarded(function (handlerContext) {
       return withReviewLock(handlerContext.sender, async function () {
         var input = handlerContext.payload || {};
         if (!exactKeys(input, ['resultId'])) {
@@ -1219,6 +1283,11 @@
           'WORKSPACE_PREVIEW', 'WORKSPACE_STATE', 'WORKSPACE_CONFIRM',
           'WORKSPACE_RECOVER', 'WORKSPACE_ACTIVE',
         ];
+        var localSession = await claimSession(handlerContext.sender);
+        var reviewOnly = isReviewPublishContext(localSession.context);
+        if (reviewOnly && !workspaceActions.includes(action)) {
+          throw handlerError('SS_ERP_BYOK_WORKBENCH_REVIEW_ONLY');
+        }
         if (workspaceActions.includes(action)) {
           var workspaceKeys = action === 'WORKSPACE_ACTIVE'
             ? ['action']
@@ -1231,18 +1300,36 @@
                 || !/^[a-f0-9]{64}$/u.test(input.previewHash)))) {
             throw handlerError('SS_ERP_WORKBENCH_PUBLISH_INPUT_INVALID');
           }
-          var workspaceSession = await claimSession(handlerContext.sender);
+          if (reviewOnly && action !== 'WORKSPACE_ACTIVE'
+            && !reviewPublishRequestMatches(input.request, localSession.context)) {
+            throw handlerError('SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
+          }
+          var workspaceSession = reviewOnly
+            ? await claimLive(handlerContext.sender)
+            : localSession;
           if (action === 'WORKSPACE_ACTIVE') {
-            return workspacePublishMethod('getActive')({
+            var active = await workspacePublishMethod('getActive')({
               shopId: workspaceSession.context.shopId,
               workflowId: workspaceSession.context.workflowId,
             });
+            if (reviewOnly && active !== null
+              && (!isRecord(active) || !reviewPublishRequestMatches(
+                active.request,
+                workspaceSession.context,
+              ))) {
+              throw handlerError('SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
+            }
+            return active;
           }
           var workspaceRequest = input.request;
           if (!isRecord(workspaceRequest)
             || !isRecord(workspaceRequest.binding)
             || workspaceRequest.binding.shopId !== workspaceSession.context.shopId
-            || workspaceRequest.binding.workflowId !== workspaceSession.context.workflowId) {
+            || workspaceRequest.binding.workflowId !== workspaceSession.context.workflowId
+            || (reviewOnly && !reviewPublishRequestMatches(
+              workspaceRequest,
+              workspaceSession.context,
+            ))) {
             throw handlerError('SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
           }
           if (action === 'WORKSPACE_PREVIEW') {
@@ -1345,6 +1432,7 @@
   global.SS_ERP_BYOK_WORKBENCH_RUNTIME_HANDLER = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     PUBLIC_STATE_VERSION: PUBLIC_STATE_VERSION,
+    REVIEW_PUBLIC_STATE_VERSION: REVIEW_PUBLIC_STATE_VERSION,
     createDispatcher: createDispatcher,
   });
 }(typeof globalThis !== 'undefined' ? globalThis : self));

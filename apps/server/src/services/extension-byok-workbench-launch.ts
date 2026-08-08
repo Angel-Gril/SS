@@ -5,10 +5,16 @@ export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION =
   'extension-byok-workbench-launch-request/v1' as const;
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2 =
   'extension-byok-workbench-launch-request/v2' as const;
+export const EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3 =
+  'extension-byok-workbench-launch-request/v3' as const;
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_DECISION_VERSION =
   'extension-byok-workbench-launch-decision/v2' as const;
+export const EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_DECISION_VERSION =
+  'extension-byok-workbench-launch-decision/v3' as const;
 export const EXTENSION_BYOK_WORKBENCH_LAUNCH_CONTEXT_VERSION =
   'extension-byok-workbench-launch-context/v1' as const;
+export const EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_CONTEXT_VERSION =
+  'extension-byok-workbench-review-launch-context/v1' as const;
 export const EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION =
   'extension-byok-workbench-batch-launch-context/v1' as const;
 
@@ -50,6 +56,15 @@ const launchRequestSchema = z.discriminatedUnion('contractVersion', [
     preferredSkuKey: identifier(500).nullable(),
     selectionKind: z.enum(['HINT', 'EXPLICIT']),
   }).strict(),
+  launchAuthoritySchema.extend({
+    contractVersion: z.literal(EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3),
+    preferredSkuKey: identifier(500).nullable(),
+    selectionKind: z.enum(['HINT', 'EXPLICIT']),
+    supportedLaunchModes: z.tuple([
+      z.literal('GENERATE'),
+      z.literal('REVIEW_PUBLISH_ONLY'),
+    ]),
+  }).strict(),
 ]);
 
 export type ExtensionByokWorkbenchLaunchRequest = z.infer<typeof launchRequestSchema>;
@@ -61,6 +76,13 @@ export type ExtensionByokWorkbenchLaunchRequestV2 = Extract<
   ExtensionByokWorkbenchLaunchRequest,
   { contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V2 }
 >;
+export type ExtensionByokWorkbenchLaunchRequestV3 = Extract<
+  ExtensionByokWorkbenchLaunchRequest,
+  { contractVersion: typeof EXTENSION_BYOK_WORKBENCH_LAUNCH_REQUEST_VERSION_V3 }
+>;
+type ExtensionByokWorkbenchLaunchRequestWithSelection =
+  | ExtensionByokWorkbenchLaunchRequestV2
+  | ExtensionByokWorkbenchLaunchRequestV3;
 
 export type ExtensionByokWorkbenchLaunchBinding = Pick<
   ExtensionByokWorkbenchLaunchRequest,
@@ -95,7 +117,30 @@ export type ExtensionByokWorkbenchLaunchDecision =
     state: 'CHOICE_REQUIRED';
     binding: ExtensionByokWorkbenchLaunchBinding;
     skuKeys: string[];
+  }
+  | {
+    contractVersion: typeof EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_DECISION_VERSION;
+    state: 'REVIEW_PUBLISH_ONLY';
+    context: ExtensionByokWorkbenchReviewLaunchContext;
   };
+
+export interface ExtensionByokWorkbenchReviewLaunchContext {
+  contractVersion: typeof EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_CONTEXT_VERSION;
+  launchMode: 'REVIEW_PUBLISH_ONLY';
+  sourcePlatform: typeof SOURCE_PLATFORMS[number];
+  sourceProductId: string;
+  sourceCaptureSnapshotId: string;
+  supplyGoodsId: string;
+  shopId: string;
+  workflowId: string;
+  draftRevision: number;
+  draftVersion: number;
+  skuKey: string;
+  slotKey: string;
+  assignmentOrdinal: number;
+  assetId: string;
+  source: 'GENERATED';
+}
 
 export interface ExtensionByokWorkbenchBatchLaunchContext {
   contractVersion: typeof EXTENSION_BYOK_WORKBENCH_BATCH_LAUNCH_CONTEXT_VERSION;
@@ -116,6 +161,30 @@ export type ExtensionByokWorkbenchSlotTarget = Pick<
   ExtensionByokWorkbenchLaunchContext,
   'skuKey' | 'slotKey' | 'assignmentMode' | 'assignmentOrdinal'
 >;
+
+export interface ExtensionByokWorkbenchBoundSlotCandidate
+  extends Pick<ExtensionByokWorkbenchSlotTarget, 'skuKey' | 'slotKey' | 'assignmentOrdinal'> {
+  assetId: string;
+  source: 'GENERATED';
+}
+
+export interface ExtensionByokWorkbenchBoundSlotAuthorizationInput
+  extends ExtensionByokWorkbenchBoundSlotCandidate {
+  ownerUserId: string;
+  requestingDeviceSessionId: string;
+  sourcePlatform: typeof SOURCE_PLATFORMS[number];
+  sourceProductId: string;
+  sourceCaptureSnapshotId: string;
+  supplyGoodsId: string;
+  shopId: string;
+  workflowId: string;
+  draftRevision: number;
+  draftVersion: number;
+}
+
+export type ExtensionByokWorkbenchBoundSlotAuthorizationDecision =
+  | { authorized: true; assetId: string }
+  | { authorized: false; assetId: null };
 
 export interface ExtensionByokWorkbenchDraft {
   id: string;
@@ -306,6 +375,74 @@ function launchContext(
   };
 }
 
+export function resolveExtensionByokWorkbenchBoundSlotCandidate(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequestV3;
+  draft: ExtensionByokWorkbenchDraft;
+}): ExtensionByokWorkbenchBoundSlotCandidate | null {
+  const { request } = input;
+  const authority = resolveDraftMediaAuthority(input);
+  const skuKey = request.preferredSkuKey;
+  if (!skuKey || !authority.skuKeys.includes(skuKey)) return null;
+  const slotKey = `sku:${skuKey}:hero`;
+  if (slotKey.length > 200) return null;
+  const assignmentOrdinal = authority.assignments.findIndex((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const assignment = value as Record<string, unknown>;
+    return assignment.scope === 'SKU'
+      && assignment.skuKey === skuKey
+      && assignment.slotKey === slotKey
+      && assignment.source === 'GENERATED';
+  });
+  if (assignmentOrdinal < 0) return null;
+  const assignment = authority.assignments[assignmentOrdinal] as Record<string, unknown>;
+  const assetId = canonicalIdentifier(assignment.assetId, 500);
+  if (!assetId) return null;
+  return {
+    skuKey,
+    slotKey,
+    assignmentOrdinal,
+    assetId,
+    source: 'GENERATED',
+  };
+}
+
+export function resolveExtensionByokWorkbenchBoundSlotLaunchDecision(input: {
+  ownerUserId: string;
+  request: ExtensionByokWorkbenchLaunchRequestV3;
+  draft: ExtensionByokWorkbenchDraft;
+  authorizedCandidate: ExtensionByokWorkbenchBoundSlotCandidate;
+}): Extract<ExtensionByokWorkbenchLaunchDecision, { state: 'REVIEW_PUBLISH_ONLY' }> {
+  const current = resolveExtensionByokWorkbenchBoundSlotCandidate(input);
+  const authorized = input.authorizedCandidate;
+  if (!current
+    || current.skuKey !== authorized?.skuKey
+    || current.slotKey !== authorized?.slotKey
+    || current.assignmentOrdinal !== authorized?.assignmentOrdinal
+    || current.assetId !== authorized?.assetId
+    || current.source !== authorized?.source) {
+    return fail(
+      'BYOK_WORKBENCH_LAUNCH_SLOT_UNAVAILABLE',
+      409,
+      'The authorized generated SKU hero is no longer bound to the current draft',
+    );
+  }
+  return {
+    contractVersion: EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_DECISION_VERSION,
+    state: 'REVIEW_PUBLISH_ONLY',
+    context: {
+      contractVersion: EXTENSION_BYOK_WORKBENCH_REVIEW_LAUNCH_CONTEXT_VERSION,
+      launchMode: 'REVIEW_PUBLISH_ONLY',
+      ...launchBinding(input.request),
+      skuKey: current.skuKey,
+      slotKey: current.slotKey,
+      assignmentOrdinal: current.assignmentOrdinal,
+      assetId: current.assetId,
+      source: current.source,
+    },
+  };
+}
+
 export function resolveExtensionByokWorkbenchSlotTarget(input: {
   ownerUserId: string;
   request: ExtensionByokWorkbenchLaunchRequest;
@@ -376,7 +513,7 @@ export function resolveExtensionByokWorkbenchLaunchContext(input: {
 
 export function resolveExtensionByokWorkbenchLaunchDecision(input: {
   ownerUserId: string;
-  request: ExtensionByokWorkbenchLaunchRequestV2;
+  request: ExtensionByokWorkbenchLaunchRequestWithSelection;
   draft: ExtensionByokWorkbenchDraft;
 }): ExtensionByokWorkbenchLaunchDecision {
   const { request } = input;

@@ -2241,6 +2241,36 @@ if (isExtensionDeviceAuthEnabled()) {
     }),
     loadShop: loadExtensionCommandShop,
     loadDraft: loadExtensionByokWorkbenchDraft,
+    authorizeBoundSlotLaunch: async (input) => {
+      const provenance = await prisma.extensionByokMediaProvenance.findFirst({
+        where: {
+          executionMode: 'BYOK',
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.ownerUserId,
+          shopId: input.shopId,
+          workflowId: input.workflowId,
+          skuKey: input.skuKey,
+          slotKey: input.slotKey,
+          assetId: input.assetId,
+          erpAiChargeCents: 0,
+        },
+        select: { assetId: true },
+      });
+      if (!provenance || provenance.assetId !== input.assetId) {
+        return { authorized: false as const, assetId: null };
+      }
+      const decision = await extensionByokPublishAuthorizer({
+        ownerUserId: input.ownerUserId,
+        shopId: input.shopId,
+        workflowId: input.workflowId,
+        assignments: [{ assetId: input.assetId }],
+        requestingDeviceSessionId: input.requestingDeviceSessionId,
+      });
+      return decision.byokAssetIds.length === 1
+        && decision.byokAssetIds[0] === input.assetId
+        ? { authorized: true as const, assetId: input.assetId }
+        : { authorized: false as const, assetId: null };
+    },
     getReadiness: (input) => extensionByokPolicyEvaluator.evaluate(input),
   });
   await app.register(extensionByokExecutionIntentRoutes, {

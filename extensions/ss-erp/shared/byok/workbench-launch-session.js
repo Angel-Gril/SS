@@ -3,6 +3,7 @@
 
   var CONTRACT_VERSION = 'extension-byok-workbench-launch-session/v1';
   var CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
+  var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
   var STORAGE_KEY = 'ss-erp:byok:workbench-launch-sessions:v1';
   var DOCUMENT_FENCE_STORAGE_KEY = 'ss-erp:byok:workbench-document-fences:v1';
   var BATCH_RECOVERY_STORAGE_KEY = 'ss-erp:byok:workbench-batch-recoveries:v1';
@@ -22,6 +23,12 @@
     'contractVersion', 'sourcePlatform', 'sourceProductId', 'sourceCaptureSnapshotId',
     'supplyGoodsId', 'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'skuKey',
     'slotKey', 'assignmentMode', 'assignmentOrdinal',
+  ];
+  var REVIEW_CONTEXT_KEYS = [
+    'contractVersion', 'launchMode', 'sourcePlatform', 'sourceProductId',
+    'sourceCaptureSnapshotId', 'supplyGoodsId', 'shopId', 'workflowId',
+    'draftRevision', 'draftVersion', 'skuKey', 'slotKey', 'assignmentOrdinal',
+    'assetId', 'source',
   ];
   var SESSION_KEYS = [
     'contractVersion', 'context', 'sourceTabId', 'sourceDocumentId', 'workbenchTabId',
@@ -120,6 +127,40 @@
 
   function normalizeContext(value) {
     var code = 'SS_ERP_BYOK_WORKBENCH_SESSION_CONTEXT_INVALID';
+    if (exactKeys(value, REVIEW_CONTEXT_KEYS)
+      && value.contractVersion === REVIEW_CONTEXT_VERSION) {
+      var reviewSourcePlatform = exactText(value.sourcePlatform, 16, code);
+      var reviewSkuKey = exactText(value.skuKey, 500, code);
+      var reviewSlotKey = exactText(value.slotKey, 200, code);
+      var reviewAssetId = exactText(value.assetId, 500, code);
+      if (!['1688', 'pdd', 'taobao', 'tmall'].includes(reviewSourcePlatform)
+        || value.launchMode !== 'REVIEW_PUBLISH_ONLY'
+        || reviewSlotKey !== 'sku:' + reviewSkuKey + ':hero'
+        || !Number.isSafeInteger(value.assignmentOrdinal)
+        || value.assignmentOrdinal < 0 || value.assignmentOrdinal > 499
+        || value.source !== 'GENERATED'
+        || secretShapedIdentifier(reviewAssetId)
+        || /(?:https?|ftp|data):/iu.test(reviewAssetId)) {
+        throw sessionError(code);
+      }
+      return Object.freeze({
+        contractVersion: REVIEW_CONTEXT_VERSION,
+        launchMode: 'REVIEW_PUBLISH_ONLY',
+        sourcePlatform: reviewSourcePlatform,
+        sourceProductId: exactText(value.sourceProductId, 200, code),
+        sourceCaptureSnapshotId: exactText(value.sourceCaptureSnapshotId, 200, code),
+        supplyGoodsId: exactText(value.supplyGoodsId, 200, code),
+        shopId: exactText(value.shopId, 200, code),
+        workflowId: exactText(value.workflowId, 200, code),
+        draftRevision: positiveInteger(value.draftRevision, code),
+        draftVersion: positiveInteger(value.draftVersion, code),
+        skuKey: reviewSkuKey,
+        slotKey: reviewSlotKey,
+        assignmentOrdinal: value.assignmentOrdinal,
+        assetId: reviewAssetId,
+        source: 'GENERATED',
+      });
+    }
     if (!exactKeys(value, CONTEXT_KEYS) || value.contractVersion !== CONTEXT_VERSION) {
       throw sessionError(code);
     }
@@ -152,9 +193,15 @@
   }
 
   function sameContext(left, right) {
-    var normalized;
-    try { normalized = normalizeContext(right); } catch { return false; }
-    return CONTEXT_KEYS.every(function (key) { return left[key] === normalized[key]; });
+    var normalizedLeft;
+    var normalizedRight;
+    try {
+      normalizedLeft = normalizeContext(left);
+      normalizedRight = normalizeContext(right);
+    } catch {
+      return false;
+    }
+    return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
   }
 
   function normalizeIngest(value) {
@@ -197,7 +244,8 @@
   }
 
   function ingestMatchesContext(ingest, context) {
-    return ingest.sourceDraftRevision === context.draftRevision
+    return context.contractVersion === CONTEXT_VERSION
+      && ingest.sourceDraftRevision === context.draftRevision
       && ingest.sourceDraftVersion === context.draftVersion
       && ingest.assignmentOrdinal === context.assignmentOrdinal
       && ingest.skuKey === context.skuKey
@@ -1284,6 +1332,7 @@
   global.SS_ERP_BYOK_WORKBENCH_LAUNCH_SESSION = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     CONTEXT_VERSION: CONTEXT_VERSION,
+    REVIEW_CONTEXT_VERSION: REVIEW_CONTEXT_VERSION,
     BATCH_RECOVERY_VERSION: BATCH_RECOVERY_VERSION,
     BATCH_RECOVERY_VERSION_V1: BATCH_RECOVERY_VERSION_V1,
     SUCCESSOR_RECOVERY_VERSION: SUCCESSOR_RECOVERY_VERSION,

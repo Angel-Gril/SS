@@ -1,10 +1,13 @@
 (function exposeByokWorkbenchLaunchClient(global) {
   'use strict';
 
-  var CONTRACT_VERSION = 'extension-byok-workbench-launch-client/v2';
-  var REQUEST_VERSION = 'extension-byok-workbench-launch-request/v2';
+  var CONTRACT_VERSION = 'extension-byok-workbench-launch-client/v3';
+  var REQUEST_VERSION = 'extension-byok-workbench-launch-request/v3';
+  var SUPPORTED_LAUNCH_MODES = Object.freeze(['GENERATE', 'REVIEW_PUBLISH_ONLY']);
   var DECISION_VERSION = 'extension-byok-workbench-launch-decision/v2';
+  var REVIEW_DECISION_VERSION = 'extension-byok-workbench-launch-decision/v3';
   var CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
+  var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
   var LAUNCH_PATH = '/api/extension-device/byok-media/workbench-launch';
   var SOURCE_PLATFORMS = ['1688', 'pdd', 'taobao', 'tmall'];
   var AUTHORITY_KEYS = [
@@ -15,6 +18,10 @@
   var CONTEXT_KEYS = [
     'contractVersion', ...AUTHORITY_KEYS, 'skuKey', 'slotKey', 'assignmentMode',
     'assignmentOrdinal',
+  ];
+  var REVIEW_CONTEXT_KEYS = [
+    'contractVersion', 'launchMode', ...AUTHORITY_KEYS, 'skuKey', 'slotKey',
+    'assignmentOrdinal', 'assetId', 'source',
   ];
 
   function launchError(code) {
@@ -154,10 +161,60 @@
     });
   }
 
-  function normalizeDecision(value, request) {
-    if (!isRecord(value) || value.contractVersion !== DECISION_VERSION) {
+  function normalizeReviewContext(value, request) {
+    if (!exactKeys(value, REVIEW_CONTEXT_KEYS)
+      || value.contractVersion !== REVIEW_CONTEXT_VERSION
+      || value.launchMode !== 'REVIEW_PUBLISH_ONLY') {
       throw responseError();
     }
+    var normalized = responseAuthority(Object.fromEntries(AUTHORITY_KEYS.map(function (key) {
+      return [key, value[key]];
+    })), request);
+    var skuKey;
+    var slotKey;
+    var assetId;
+    try {
+      skuKey = text(value.skuKey, 500);
+      slotKey = text(value.slotKey, 200);
+      assetId = text(value.assetId, 500);
+    } catch {
+      throw responseError();
+    }
+    if (request.preferredSkuKey === null || request.preferredSkuKey !== skuKey
+      || slotKey !== 'sku:' + skuKey + ':hero'
+      || !Number.isSafeInteger(value.assignmentOrdinal)
+      || value.assignmentOrdinal < 0 || value.assignmentOrdinal > 499
+      || value.source !== 'GENERATED') {
+      throw responseError();
+    }
+    return Object.freeze({
+      contractVersion: REVIEW_CONTEXT_VERSION,
+      launchMode: 'REVIEW_PUBLISH_ONLY',
+      ...normalized,
+      skuKey: skuKey,
+      slotKey: slotKey,
+      assignmentOrdinal: value.assignmentOrdinal,
+      assetId: assetId,
+      source: 'GENERATED',
+    });
+  }
+
+  function normalizeDecision(value, request) {
+    if (!isRecord(value)) {
+      throw responseError();
+    }
+    if (value.contractVersion === REVIEW_DECISION_VERSION) {
+      if (value.state !== 'REVIEW_PUBLISH_ONLY'
+        || !exactKeys(value, ['contractVersion', 'state', 'context'])) {
+        throw responseError();
+      }
+      return Object.freeze({
+        contractVersion: REVIEW_DECISION_VERSION,
+        state: 'REVIEW_PUBLISH_ONLY',
+        context: normalizeReviewContext(value.context, request),
+      });
+    }
+    if (value.contractVersion !== DECISION_VERSION) throw responseError();
     if (value.state === 'READY') {
       if (!exactKeys(value, ['contractVersion', 'state', 'context'])) throw responseError();
       return Object.freeze({
@@ -202,6 +259,7 @@
           response = await transport.post(LAUNCH_PATH, {
             contractVersion: REQUEST_VERSION,
             ...request,
+            supportedLaunchModes: SUPPORTED_LAUNCH_MODES,
           }, { requiredScope: 'listing:review' });
         } catch (cause) {
           var transportError = launchError('SS_ERP_BYOK_WORKBENCH_LAUNCH_UNAVAILABLE');
@@ -227,8 +285,11 @@
   global.SS_ERP_BYOK_WORKBENCH_LAUNCH_CLIENT = Object.freeze({
     CONTRACT_VERSION: CONTRACT_VERSION,
     REQUEST_VERSION: REQUEST_VERSION,
+    SUPPORTED_LAUNCH_MODES: SUPPORTED_LAUNCH_MODES,
     DECISION_VERSION: DECISION_VERSION,
+    REVIEW_DECISION_VERSION: REVIEW_DECISION_VERSION,
     CONTEXT_VERSION: CONTEXT_VERSION,
+    REVIEW_CONTEXT_VERSION: REVIEW_CONTEXT_VERSION,
     LAUNCH_PATH: LAUNCH_PATH,
     createClient: createClient,
   });

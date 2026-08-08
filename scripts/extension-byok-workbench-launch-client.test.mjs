@@ -37,6 +37,21 @@ const readyDecision = {
   state: 'READY',
   context: responseContext,
 };
+const reviewContext = {
+  contractVersion: api.REVIEW_CONTEXT_VERSION,
+  launchMode: 'REVIEW_PUBLISH_ONLY',
+  ...binding,
+  skuKey: 'sku-1',
+  slotKey: 'sku:sku-1:hero',
+  assignmentOrdinal: 1,
+  assetId: 'byok_asset-1',
+  source: 'GENERATED',
+};
+const reviewDecision = {
+  contractVersion: api.REVIEW_DECISION_VERSION,
+  state: 'REVIEW_PUBLISH_ONLY',
+  context: reviewContext,
+};
 const client = api.createClient({
   transport: {
     async post(path, body, options) {
@@ -54,9 +69,24 @@ const resolved = await client.resolve(request);
 assert.deepEqual(JSON.parse(JSON.stringify(resolved)), readyDecision);
 assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{
   path: api.LAUNCH_PATH,
-  body: { contractVersion: api.REQUEST_VERSION, ...request },
+  body: {
+    contractVersion: api.REQUEST_VERSION,
+    ...request,
+    supportedLaunchModes: ['GENERATE', 'REVIEW_PUBLISH_ONLY'],
+  },
   options: { requiredScope: 'listing:review' },
 }]);
+
+const reviewRequest = { ...request, preferredSkuKey: 'sku-1' };
+const reviewClient = api.createClient({
+  transport: { async post() {
+    return { state: 'response', status: 200, body: { code: 1, data: reviewDecision } };
+  } },
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await reviewClient.resolve(reviewRequest))),
+  reviewDecision,
+);
 
 const choiceCalls = [];
 const choiceDecision = {
@@ -76,7 +106,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(choiceResolved)), choiceDecision);
 assert.equal(Object.isFrozen(choiceResolved), true);
 assert.deepEqual(JSON.parse(JSON.stringify(choiceCalls[0])), {
   path: api.LAUNCH_PATH,
-  body: { contractVersion: api.REQUEST_VERSION, ...request },
+  body: {
+    contractVersion: api.REQUEST_VERSION,
+    ...request,
+    supportedLaunchModes: ['GENERATE', 'REVIEW_PUBLISH_ONLY'],
+  },
   options: { requiredScope: 'listing:review' },
 });
 
@@ -153,6 +187,25 @@ for (const invalidDecision of [
     } },
   });
   await assert.rejects(invalidClient.resolve(request), /LAUNCH_RESPONSE_INVALID/u);
+}
+
+await assert.rejects(reviewClient.resolve(request), /LAUNCH_RESPONSE_INVALID/u);
+for (const invalidReviewDecision of [
+  { ...reviewDecision, context: { ...reviewContext, assetId: 'sk-' + 'c'.repeat(24) } },
+  { ...reviewDecision, context: { ...reviewContext, source: 'SOURCE' } },
+  { ...reviewDecision, context: { ...reviewContext, launchMode: 'GENERATE' } },
+  { ...reviewDecision, context: { ...reviewContext, assignmentMode: 'APPEND' } },
+  { ...reviewDecision, contractVersion: api.DECISION_VERSION },
+]) {
+  const invalidReviewClient = api.createClient({
+    transport: { async post() {
+      return { state: 'response', status: 200, body: { code: 1, data: invalidReviewDecision } };
+    } },
+  });
+  await assert.rejects(
+    invalidReviewClient.resolve(reviewRequest),
+    /LAUNCH_RESPONSE_INVALID/u,
+  );
 }
 
 const preferredRequest = {

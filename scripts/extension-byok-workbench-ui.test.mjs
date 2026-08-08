@@ -126,6 +126,14 @@ assert.match(
   /@media\s*\(max-width:\s*720px\)[\s\S]*\.workspace-task-dock\s*\{[\s\S]*position:\s*static/u,
 );
 assert.match(css, /prefers-reduced-motion/u);
+assert.match(
+  css,
+  /body\.is-review-publish-only\s+\.workspace-rail,[\s\S]*#workspacePublishSummary[\s\S]*display:\s*none\s*!important/u,
+);
+assert.match(
+  css,
+  /body\.is-review-publish-only\s+\.workspace-task-dock\s*\{[\s\S]*position:\s*static/u,
+);
 assert.doesNotMatch(pageSource, /innerHTML|localStorage|storage\.local|storage\.sync|apiKey/u);
 assert.match(pageSource, /event\.isTrusted\s*!==\s*true/u);
 assert.match(batchPageSource, /nodes\.concurrency\.disabled\s*=\s*true/u);
@@ -787,6 +795,7 @@ function createPageHarness(options = {}) {
     authoritative,
     calls: harnessCalls,
     nodes: harnessNodes,
+    body: harnessBody,
     runtimeListeners: harnessRuntimeListeners,
     windowListeners: harnessWindowListeners,
     documentEvents: harnessDocumentEvents,
@@ -795,6 +804,63 @@ function createPageHarness(options = {}) {
     },
     get revokeCount() { return harnessRevokeCount; },
   };
+}
+
+{
+  const reviewContext = {
+    contractVersion: 'extension-byok-workbench-review-launch-context/v1',
+    launchMode: 'REVIEW_PUBLISH_ONLY',
+    sourcePlatform: '1688', sourceProductId: 'product-1',
+    sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 11, draftVersion: 9,
+    skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 1,
+    assetId: 'byok_asset-1', source: 'GENERATED',
+  };
+  const publishRequest = {
+    executionMode: 'BYOK',
+    binding: {
+      shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 11, draftVersion: 9,
+    },
+    selectedMedia: [{
+      scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'byok_asset-1',
+    }],
+  };
+  const harness = createPageHarness({
+    authoritative: {
+      value: {
+        contractVersion: 'extension-byok-workbench-review-public-state/v1',
+        executionMode: 'BYOK',
+        context: reviewContext,
+        publishRequest,
+      },
+    },
+  });
+  await flushAsync(8);
+  assert.equal(harness.body.classList.values.has('is-review-publish-only'), true);
+  assert.equal(harness.nodes.contextBadge.textContent, '只读发布');
+  assert.equal(harness.nodes.contextSku.textContent, 'sku-1 · 主图 · 已绑定位置 2');
+  assert.equal(harness.nodes.generateButton.disabled, true);
+  assert.equal(harness.nodes.profileSelect.disabled, true);
+  assert.equal(harness.nodes.promptInput.disabled, true);
+  assert.equal(harness.nodes.negativePromptInput.disabled, true);
+  assert.equal(harness.calls.filter((row) => row[0] === 'readiness').length, 0);
+  assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 0);
+  const reviewEvent = harness.documentEvents.find((event) => (
+    event.type === 'ss-erp:workbench-publish-review'
+  ));
+  assert.deepEqual(cloneValue(reviewEvent?.detail), publishRequest);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+  )), false);
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 0);
+  harness.authoritative.value = null;
+  harness.nodes.refreshButton.listeners.click({ isTrusted: true });
+  await flushAsync(4);
+  assert.equal(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workbench-publish-review-clear'
+  )), true);
 }
 
 {

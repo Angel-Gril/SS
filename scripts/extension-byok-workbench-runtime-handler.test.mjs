@@ -79,6 +79,22 @@ function readyLaunchDecision(contextValue = launchContext) {
     context: contextValue,
   };
 }
+const reviewContext = {
+  contractVersion: 'extension-byok-workbench-review-launch-context/v1',
+  launchMode: 'REVIEW_PUBLISH_ONLY',
+  sourcePlatform: '1688', sourceProductId: 'product-1',
+  sourceCaptureSnapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
+  shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assignmentOrdinal: 1,
+  assetId: 'byok_asset-1', source: 'GENERATED',
+};
+function reviewLaunchDecision(contextValue = reviewContext) {
+  return {
+    contractVersion: 'extension-byok-workbench-launch-decision/v3',
+    state: 'REVIEW_PUBLISH_ONLY',
+    context: contextValue,
+  };
+}
 function choiceLaunchDecision() {
   return {
     contractVersion: 'extension-byok-workbench-launch-decision/v2',
@@ -148,7 +164,7 @@ const sessionManager = {
     return session;
   },
   sameContext(left, right) {
-    return Object.keys(launchContext).every((key) => left[key] === right[key]);
+    return JSON.stringify(left) === JSON.stringify(right);
   },
   async beginOperation(_sender, idempotencyKey) {
     if (session.operation || session.result) throw Object.assign(new Error('conflict'), {
@@ -1452,6 +1468,131 @@ const blockedRetry = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({
 assert.equal(blockedRetry.ok, false);
 assert.equal(blockedRetry.errorCode, 'SS_ERP_BYOK_WORKBENCH_SESSION_OPERATION_CONFLICT');
 assert.equal(calls.filter((row) => row[0] === 'generate').length, 3);
+
+resolvedLaunchDecision = reviewLaunchDecision();
+liveSourceSelectionKey = 'sku-1';
+const reviewOpened = await dispatcher.openFromSource({
+  request: { ...launchBinding, preferredSkuKey: 'sku-1', selectionKind: 'HINT' },
+  sourceSender: { tabId: 12, documentId: 'source-document-1', frameId: 0 },
+  sourceSelectionKey: 'sku-1',
+});
+assert.deepEqual(JSON.parse(JSON.stringify(reviewOpened)), {
+  state: 'workbench_opened', tabId: 77,
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.filter((row) => row[0] === 'open').at(-1)[1].context)),
+  reviewContext,
+);
+session = {
+  context: reviewContext, sourceTabId: 12, sourceDocumentId: 'source-document-1',
+  workbenchTabId: 77, workbenchDocumentId: 'document-1', operation: null, result: null,
+};
+const reviewState = await dispatcher.handlers[MESSAGE_TYPES.GET_PUBLIC_STATE]({
+  payload: {}, sender,
+});
+const reviewRequest = {
+  executionMode: 'BYOK',
+  binding: {
+    shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
+  },
+  selectedMedia: [{
+    scope: 'SKU', skuKey: 'sku-1', slotKey: 'sku:sku-1:hero', assetId: 'byok_asset-1',
+  }],
+};
+assert.deepEqual(JSON.parse(JSON.stringify(reviewState)), {
+  ok: true,
+  data: {
+    contractVersion: api.REVIEW_PUBLIC_STATE_VERSION,
+    executionMode: 'BYOK',
+    context: reviewContext,
+    publishRequest: reviewRequest,
+  },
+});
+const externalCallNames = [
+  'readiness', 'generate', 'edit-open', 'edit-start', 'edit-state', 'edit-references',
+  'edit-regenerate', 'edit-media-prepare', 'edit-media-release', 'preview', 'ingest',
+  'ingest-recover', 'publish-preview', 'publish-confirm', 'publish-recover',
+];
+const externalCounts = Object.fromEntries(externalCallNames.map((name) => [
+  name, calls.filter((row) => row[0] === name).length,
+]));
+const reviewOnlyMessages = [
+  [MESSAGE_TYPES.GET_READINESS, { profileId: 'profile-1' }],
+  [MESSAGE_TYPES.EXECUTE_PROVIDER, {}],
+  [MESSAGE_TYPES.OPEN_PREVIEW, { resultId }],
+  [MESSAGE_TYPES.REVIEW_RESULT, { resultId, decision: 'APPROVE' }],
+  [MESSAGE_TYPES.INGEST, { resultId }],
+  [MESSAGE_TYPES.RECOVER_INGEST, { resultId }],
+  [MESSAGE_TYPES.EDIT_MEDIA_PREPARE, {}],
+  [MESSAGE_TYPES.EDIT_MEDIA_RELEASE, {}],
+  [MESSAGE_TYPES.EDIT_STATE, {}],
+  [MESSAGE_TYPES.EDIT_REFERENCES, {}],
+  [MESSAGE_TYPES.EDIT_START, {}],
+  [MESSAGE_TYPES.EDIT_SELECT, {}],
+  [MESSAGE_TYPES.EDIT_REGENERATE, {}],
+  [MESSAGE_TYPES.EDIT_PREVIEW, {}],
+  [MESSAGE_TYPES.EDIT_CLEANUP, {}],
+  [MESSAGE_TYPES.PUBLISH, { action: 'PREVIEW' }],
+];
+for (const [messageType, payload] of reviewOnlyMessages) {
+  const deniedReviewAction = await dispatcher.handlers[messageType]({ payload, sender });
+  assert.equal(deniedReviewAction.ok, false, messageType);
+  assert.equal(deniedReviewAction.errorCode, 'SS_ERP_BYOK_WORKBENCH_REVIEW_ONLY', messageType);
+}
+for (const name of externalCallNames) {
+  assert.equal(
+    calls.filter((row) => row[0] === name).length,
+    externalCounts[name],
+    `review-only ${name} dependency must remain untouched`,
+  );
+}
+const reviewPreviewCalls = calls.filter((row) => row[0] === 'workbench-publish-preview').length;
+const reviewPreview = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_PREVIEW', request: reviewRequest }, sender,
+});
+assert.equal(reviewPreview.ok, true);
+assert.equal(
+  calls.filter((row) => row[0] === 'workbench-publish-preview').length,
+  reviewPreviewCalls + 1,
+);
+const reviewConfirmCalls = calls.filter((row) => row[0] === 'workbench-publish-confirm').length;
+const reviewConfirmed = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: {
+    action: 'WORKSPACE_CONFIRM',
+    request: reviewRequest,
+    previewHash: '8'.repeat(64),
+  },
+  sender,
+});
+assert.equal(reviewConfirmed.ok, true);
+assert.equal(
+  calls.filter((row) => row[0] === 'workbench-publish-confirm').length,
+  reviewConfirmCalls + 1,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.filter((row) => (
+    row[0] === 'workbench-publish-confirm'
+  )).at(-1)[1])),
+  { ...reviewRequest, previewHash: '8'.repeat(64) },
+);
+const resolvesBeforeTamper = calls.filter((row) => row[0] === 'resolve').length;
+const tamperedReview = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: {
+    action: 'WORKSPACE_PREVIEW',
+    request: {
+      ...reviewRequest,
+      selectedMedia: [{ ...reviewRequest.selectedMedia[0], assetId: 'other-asset' }],
+    },
+  },
+  sender,
+});
+assert.equal(tamperedReview.ok, false);
+assert.equal(tamperedReview.errorCode, 'SS_ERP_WORKBENCH_PUBLISH_CONTEXT_MISMATCH');
+assert.equal(calls.filter((row) => row[0] === 'resolve').length, resolvesBeforeTamper);
+assert.equal(
+  calls.filter((row) => row[0] === 'workbench-publish-preview').length,
+  reviewPreviewCalls + 1,
+);
 
 session = {
   context: launchContext, sourceTabId: 12, sourceDocumentId: 'source-document-1',
