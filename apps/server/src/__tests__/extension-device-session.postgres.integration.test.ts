@@ -214,6 +214,430 @@ describePostgres('extension device PostgreSQL integration', () => {
     expect(matchAfterRevocation).toEqual([{ matches: true }]);
   });
 
+  it('resumes an explicitly owner-authorized revoked session on the same logical device identifier', async () => {
+    const seed = await seedOwnerAndShop(first, 'explicit_resume');
+    const { repository, service } = serviceFor(first);
+    const deviceId = `${seed.prefix}_device`;
+    const originalPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const original = await service.claimPairingCode({
+      code: originalPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    expect(await repository.revokeSession({
+      sessionId: original.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    })).toBe(true);
+
+    const resumePairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: original.session.id,
+    });
+    const resumed = await service.claimPairingCode({
+      code: resumePairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+
+    const rows = await first.$queryRawUnsafe<Array<{
+      resumeSessionId: string | null;
+      replacesSessionId: string | null;
+      predecessorStatus: string;
+      predecessorReason: string | null;
+      predecessorGrantStatus: string;
+      predecessorGrantReason: string | null;
+    }>>(
+      `SELECT p."resume_session_id" AS "resumeSessionId",
+              resumed."replaces_session_id" AS "replacesSessionId",
+              predecessor."status"::text AS "predecessorStatus",
+              predecessor."revoked_reason"::text AS "predecessorReason",
+              predecessor_grant."status"::text AS "predecessorGrantStatus",
+              predecessor_grant."revoked_reason"::text AS "predecessorGrantReason"
+       FROM "extension_device_pairing_codes" p
+       JOIN "extension_device_sessions" resumed ON resumed."pairing_code_id" = p."id"
+       JOIN "extension_device_sessions" predecessor ON predecessor."id" = resumed."replaces_session_id"
+       JOIN "extension_device_shop_grants" predecessor_grant
+         ON predecessor_grant."session_id" = predecessor."id"
+        AND predecessor_grant."shop_id" = $3
+       WHERE p."id" = $1 AND resumed."id" = $2`,
+      resumePairing.id, resumed.session.id, seed.shopId,
+    );
+    expect(rows).toEqual([{
+      resumeSessionId: original.session.id,
+      replacesSessionId: original.session.id,
+      predecessorStatus: 'REVOKED',
+      predecessorReason: 'OWNER_REVOKED',
+      predecessorGrantStatus: 'REVOKED',
+      predecessorGrantReason: 'OWNER_REVOKED',
+    }]);
+
+    const matches = async () => {
+      const result = await first.$queryRawUnsafe<Array<{ matches: boolean }>>(
+        `SELECT "extension_byok_publish_session_matches"($1, $2, $3, $3, $4) AS "matches"`,
+        original.session.id,
+        resumed.session.id,
+        seed.ownerUserId,
+        seed.shopId,
+      );
+      return result[0]?.matches === true;
+    };
+    expect(await matches()).toBe(true);
+    await expect(first.$executeRawUnsafe(
+      `UPDATE "extension_device_pairing_codes" SET "resume_session_id" = NULL WHERE "id" = $1`,
+      resumePairing.id,
+    )).rejects.toThrow(/pairing resume target is immutable/u);
+
+    await first.$executeRawUnsafe(
+      `ALTER TABLE "extension_device_pairing_codes"
+       DISABLE TRIGGER "prevent_extension_device_pairing_resume_rewrite"`,
+    );
+    try {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_pairing_codes" SET "resume_session_id" = NULL WHERE "id" = $1`,
+        resumePairing.id,
+      );
+      expect(await matches()).toBe(false);
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_pairing_codes" SET "resume_session_id" = $1 WHERE "id" = $2`,
+        resumed.session.id, resumePairing.id,
+      );
+      expect(await matches()).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_pairing_codes" SET "resume_session_id" = $1 WHERE "id" = $2`,
+        original.session.id, resumePairing.id,
+      );
+      await first.$executeRawUnsafe(
+        `ALTER TABLE "extension_device_pairing_codes"
+         ENABLE TRIGGER "prevent_extension_device_pairing_resume_rewrite"`,
+      );
+    }
+
+    await first.$executeRawUnsafe(
+      `UPDATE "extension_device_sessions"
+       SET "revoked_reason" = 'PASSWORD_RESET' WHERE "id" = $1`,
+      original.session.id,
+    );
+    try {
+      expect(await matches()).toBe(false);
+    } finally {
+      await first.$executeRawUnsafe(
+        `UPDATE "extension_device_sessions"
+         SET "revoked_reason" = 'OWNER_REVOKED' WHERE "id" = $1`,
+        original.session.id,
+      );
+    }
+  });
+
+  it('does not consume an explicit resume pairing from another device', async () => {
+    const seed = await seedOwnerAndShop(first, 'resume_device');
+    const { repository, service } = serviceFor(first);
+    const deviceId = `${seed.prefix}_device`;
+    const originalPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest'],
+    });
+    const original = await service.claimPairingCode({
+      code: originalPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    await repository.revokeSession({
+      sessionId: original.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+    const resumePairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: original.session.id,
+    });
+
+    await expect(service.claimPairingCode({
+      code: resumePairing.code,
+      deviceId: `${deviceId}_other`,
+      deploymentId: authConfig.deploymentId,
+    })).rejects.toMatchObject({ code: 'invalid_pairing_code' });
+    const status = await first.$queryRawUnsafe<Array<{ status: string }>>(
+      `SELECT "status"::text AS "status" FROM "extension_device_pairing_codes" WHERE "id" = $1`,
+      resumePairing.id,
+    );
+    expect(status).toEqual([{ status: 'PENDING' }]);
+
+    await expect(service.claimPairingCode({
+      code: resumePairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    })).resolves.toMatchObject({ session: { deviceId } });
+  });
+
+  it('allows only one concurrent explicit resume claim for one revoked predecessor', async () => {
+    const seed = await seedOwnerAndShop(first, 'resume_concurrent');
+    const firstClient = serviceFor(first);
+    const secondClient = serviceFor(second);
+    const deviceId = `${seed.prefix}_device`;
+    const originalPairing = await firstClient.service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const original = await firstClient.service.claimPairingCode({
+      code: originalPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    await firstClient.repository.revokeSession({
+      sessionId: original.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+    const pairings = await Promise.all([
+      firstClient.service.createPairingCode({
+        actorUserId: seed.ownerUserId,
+        ownerUserId: seed.ownerUserId,
+        actorParentId: null,
+        shopIds: [seed.shopId],
+        scopes: ['byok:media:ingest', 'listing:publish'],
+        resumeSessionId: original.session.id,
+      }),
+      secondClient.service.createPairingCode({
+        actorUserId: seed.ownerUserId,
+        ownerUserId: seed.ownerUserId,
+        actorParentId: null,
+        shopIds: [seed.shopId],
+        scopes: ['byok:media:ingest', 'listing:publish'],
+        resumeSessionId: original.session.id,
+      }),
+    ]);
+
+    const results = await Promise.allSettled(pairings.map((pairing, index) => (
+      (index === 0 ? firstClient : secondClient).service.claimPairingCode({
+        code: pairing.code,
+        deviceId,
+        deploymentId: authConfig.deploymentId,
+      })
+    )));
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const statuses = await first.$queryRawUnsafe<Array<{ id: string; status: string }>>(
+      `SELECT "id", "status"::text AS "status"
+       FROM "extension_device_pairing_codes"
+       WHERE "id" = ANY($1::TEXT[])
+       ORDER BY "id"`,
+      pairings.map((pairing) => pairing.id),
+    );
+    expect(statuses.map((row) => row.status).sort()).toEqual(['CLAIMED', 'PENDING']);
+    const lineage = await first.$queryRawUnsafe<Array<{ successors: bigint; active: bigint }>>(
+      `SELECT
+         (SELECT COUNT(*) FROM "extension_device_sessions"
+          WHERE "replaces_session_id" = $1) AS "successors",
+         (SELECT COUNT(*) FROM "extension_device_sessions"
+          WHERE "owner_user_id" = $2 AND "deployment_id" = $3
+            AND "device_id" = $4 AND "status" = 'ACTIVE') AS "active"`,
+      original.session.id, seed.ownerUserId, authConfig.deploymentId, deviceId,
+    );
+    expect(Number(lineage[0]?.successors || 0)).toBe(1);
+    expect(Number(lineage[0]?.active || 0)).toBe(1);
+  });
+
+  it('rejects resume targets outside the exact revoked ingest and shop boundary', async () => {
+    const noIngest = await seedOwnerAndShop(first, 'resume_no_ingest');
+    const firstClient = serviceFor(first);
+    const noIngestPairing = await firstClient.service.createPairingCode({
+      actorUserId: noIngest.ownerUserId,
+      ownerUserId: noIngest.ownerUserId,
+      actorParentId: null,
+      shopIds: [noIngest.shopId],
+      scopes: ['listing:review'],
+    });
+    const noIngestSession = await firstClient.service.claimPairingCode({
+      code: noIngestPairing.code,
+      deviceId: `${noIngest.prefix}_device`,
+      deploymentId: authConfig.deploymentId,
+    });
+    await firstClient.repository.revokeSession({
+      sessionId: noIngestSession.session.id,
+      ownerUserId: noIngest.ownerUserId,
+      actorUserId: noIngest.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+    await expect(firstClient.service.createPairingCode({
+      actorUserId: noIngest.ownerUserId,
+      ownerUserId: noIngest.ownerUserId,
+      actorParentId: null,
+      shopIds: [noIngest.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: noIngestSession.session.id,
+    })).rejects.toMatchObject({ code: 'resume_session_unavailable', statusCode: 404 });
+
+    const wrongShop = await seedOwnerAndShop(first, 'resume_wrong_shop');
+    const secondShopId = `${wrongShop.prefix}_second_shop`;
+    await first.$executeRawUnsafe(
+      `INSERT INTO "shops"
+        ("id", "user_id", "platform", "name", "api_key_encrypted", "updated_at")
+       VALUES ($1, $2, 'OZON', $3, $4, CURRENT_TIMESTAMP)`,
+      secondShopId, wrongShop.ownerUserId, `${wrongShop.prefix} second`, 'encrypted-test-key',
+    );
+    const secondClient = serviceFor(first);
+    const wrongShopPairing = await secondClient.service.createPairingCode({
+      actorUserId: wrongShop.ownerUserId,
+      ownerUserId: wrongShop.ownerUserId,
+      actorParentId: null,
+      shopIds: [wrongShop.shopId],
+      scopes: ['byok:media:ingest'],
+    });
+    const wrongShopSession = await secondClient.service.claimPairingCode({
+      code: wrongShopPairing.code,
+      deviceId: `${wrongShop.prefix}_device`,
+      deploymentId: authConfig.deploymentId,
+    });
+    await secondClient.repository.revokeSession({
+      sessionId: wrongShopSession.session.id,
+      ownerUserId: wrongShop.ownerUserId,
+      actorUserId: wrongShop.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+    await expect(secondClient.service.createPairingCode({
+      actorUserId: wrongShop.ownerUserId,
+      ownerUserId: wrongShop.ownerUserId,
+      actorParentId: null,
+      shopIds: [secondShopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: wrongShopSession.session.id,
+    })).rejects.toMatchObject({ code: 'resume_session_unavailable', statusCode: 404 });
+
+    const expiredService = createExtensionDeviceSessionService({
+      repository: secondClient.repository,
+      authConfig,
+      now: () => new Date(wrongShopSession.session.expiresAt.getTime() + 1),
+    });
+    await expect(expiredService.createPairingCode({
+      actorUserId: wrongShop.ownerUserId,
+      ownerUserId: wrongShop.ownerUserId,
+      actorParentId: null,
+      shopIds: [wrongShop.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: wrongShopSession.session.id,
+    })).rejects.toMatchObject({ code: 'resume_session_unavailable', statusCode: 404 });
+  });
+
+  it('rejects stale or implicit resume authority', async () => {
+    const seed = await seedOwnerAndShop(first, 'resume_fences');
+    const { repository, service } = serviceFor(first);
+    const deviceId = `${seed.prefix}_device`;
+    const originalPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const original = await service.claimPairingCode({
+      code: originalPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    await repository.revokeSession({
+      sessionId: original.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+
+    const firstResume = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: original.session.id,
+    });
+    const staleResume = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: original.session.id,
+    });
+    const resumed = await service.claimPairingCode({
+      code: firstResume.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    await repository.revokeSession({
+      sessionId: resumed.session.id,
+      ownerUserId: seed.ownerUserId,
+      actorUserId: seed.ownerUserId,
+      reason: 'OWNER_REVOKED',
+    });
+    await expect(service.claimPairingCode({
+      code: staleResume.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    })).rejects.toMatchObject({ code: 'invalid_pairing_code' });
+
+    const ordinaryPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const ordinary = await service.claimPairingCode({
+      code: ordinaryPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    const ordinaryLineage = await first.$queryRawUnsafe<Array<{ replacesSessionId: string | null }>>(
+      `SELECT "replaces_session_id" AS "replacesSessionId"
+       FROM "extension_device_sessions" WHERE "id" = $1`,
+      ordinary.session.id,
+    );
+    expect(ordinaryLineage).toEqual([{ replacesSessionId: null }]);
+
+    const activeBlockedPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: resumed.session.id,
+    });
+    await expect(service.claimPairingCode({
+      code: activeBlockedPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    })).rejects.toMatchObject({ code: 'invalid_pairing_code' });
+    const activeBlockedStatus = await first.$queryRawUnsafe<Array<{ status: string }>>(
+      `SELECT "status"::text AS "status" FROM "extension_device_pairing_codes" WHERE "id" = $1`,
+      activeBlockedPairing.id,
+    );
+    expect(activeBlockedStatus).toEqual([{ status: 'PENDING' }]);
+  });
+
   it('matches only an acyclic, fully validated replacement lineage of at most sixteen hops', async () => {
     const seed = await seedOwnerAndShop(first, 'bounded_lineage');
     const { service } = serviceFor(first);

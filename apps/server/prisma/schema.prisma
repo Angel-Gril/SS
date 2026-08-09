@@ -4086,6 +4086,8 @@ model ExtensionDevicePairingCode {
   ownerUserId    String                       @map("owner_user_id")
   owner          User                         @relation("ExtensionPairingOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
   codeDigest     String                       @unique @map("code_digest")
+  resumeSessionId String?                     @map("resume_session_id")
+  resumeSession  ExtensionDeviceSession?      @relation("ExtensionDevicePairingResume", fields: [resumeSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   shopIds        String[]                     @default([]) @map("shop_ids")
   scopes         String[]                     @default([])
   deviceLabel    String?                      @map("device_label")
@@ -4095,18 +4097,19 @@ model ExtensionDevicePairingCode {
   canceledAt     DateTime?                    @map("canceled_at")
   createdAt      DateTime                     @default(now()) @map("created_at")
   updatedAt      DateTime                     @updatedAt @map("updated_at")
-  claimedSession ExtensionDeviceSession?
+  claimedSession ExtensionDeviceSession?      @relation("ExtensionDevicePairingClaim")
 
   @@index([ownerUserId, status, expiresAt])
   @@index([actorUserId, status])
   @@index([deploymentId, status, expiresAt])
+  @@index([resumeSessionId], map: "extension_device_pairing_codes_resume_session_id_idx")
   @@map("extension_device_pairing_codes")
 }
 
 model ExtensionDeviceSession {
   id                                String                                    @id
   pairingCodeId                     String                                    @unique @map("pairing_code_id")
-  pairingCode                       ExtensionDevicePairingCode                @relation(fields: [pairingCodeId], references: [id], onDelete: Restrict)
+  pairingCode                       ExtensionDevicePairingCode                @relation("ExtensionDevicePairingClaim", fields: [pairingCodeId], references: [id], onDelete: Restrict)
   deploymentId                      String                                    @map("deployment_id")
   deviceId                          String                                    @map("device_id")
   deviceLabel                       String?                                   @map("device_label")
@@ -4124,6 +4127,7 @@ model ExtensionDeviceSession {
   replacesSessionId                 String?                                   @unique @map("replaces_session_id")
   replacesSession                   ExtensionDeviceSession?                   @relation("ExtensionDeviceSessionReplacement", fields: [replacesSessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   replacedBySession                 ExtensionDeviceSession?                   @relation("ExtensionDeviceSessionReplacement")
+  resumedByPairingCodes             ExtensionDevicePairingCode[]              @relation("ExtensionDevicePairingResume")
   createdAt                         DateTime                                  @default(now()) @map("created_at")
   updatedAt                         DateTime                                  @updatedAt @map("updated_at")
   refreshFamily                     ExtensionDeviceRefreshFamily?

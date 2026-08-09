@@ -68,6 +68,7 @@ const pairingSchema = z.object({
   shopIds: z.array(z.string().trim().min(1).max(200)).min(1).max(50),
   scopes: z.array(z.enum(EXTENSION_DEVICE_SCOPES)).min(1).max(EXTENSION_DEVICE_SCOPES.length),
   deviceLabel: z.string().trim().min(1).max(120).optional(),
+  resumeSessionId: z.string().trim().min(1).max(200).optional(),
 }).strict();
 
 const claimSchema = z.object({
@@ -203,6 +204,9 @@ export async function extensionDeviceRoutes(
         shopIds: parsed.data.shopIds,
         scopes: parsed.data.scopes,
         deviceLabel: parsed.data.deviceLabel,
+        ...(parsed.data.resumeSessionId
+          ? { resumeSessionId: parsed.data.resumeSessionId }
+          : {}),
       });
       return reply.status(201).send({ code: 1, msg: '配对码已创建', data: result });
     } catch (error) {

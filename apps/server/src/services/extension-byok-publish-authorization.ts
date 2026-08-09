@@ -28,6 +28,11 @@ export interface ExtensionByokPublishDeviceAuthorization {
   deploymentId: string;
   deviceId: string;
   replacesSessionId: string | null;
+  pairingDeploymentId: string;
+  pairingOwnerUserId: string;
+  pairingActorUserId: string;
+  pairingShopIds: string[];
+  pairingResumeSessionId: string | null;
   scopes: string[];
   status: string;
   expiresAt: Date;
@@ -217,6 +222,43 @@ export function createExtensionByokPublishAuthorizer(options: {
             || authorization.replacesSessionId.length > 500
             || authorization.replacesSessionId
               !== authorization.replacesSessionId.normalize('NFKC').trim()))
+        || typeof authorization.pairingDeploymentId !== 'string'
+        || !authorization.pairingDeploymentId
+        || authorization.pairingDeploymentId.length > 200
+        || authorization.pairingDeploymentId
+          !== authorization.pairingDeploymentId.normalize('NFKC').trim()
+        || authorization.pairingDeploymentId !== authorization.deploymentId
+        || typeof authorization.pairingOwnerUserId !== 'string'
+        || !authorization.pairingOwnerUserId
+        || authorization.pairingOwnerUserId.length > 500
+        || authorization.pairingOwnerUserId
+          !== authorization.pairingOwnerUserId.normalize('NFKC').trim()
+        || authorization.pairingOwnerUserId !== authorization.ownerUserId
+        || typeof authorization.pairingActorUserId !== 'string'
+        || !authorization.pairingActorUserId
+        || authorization.pairingActorUserId.length > 500
+        || authorization.pairingActorUserId
+          !== authorization.pairingActorUserId.normalize('NFKC').trim()
+        || authorization.pairingActorUserId !== authorization.actorUserId
+        || !Array.isArray(authorization.pairingShopIds)
+        || authorization.pairingShopIds.length < 1
+        || authorization.pairingShopIds.length > 50
+        || authorization.pairingShopIds.some((pairingShopId) => (
+          typeof pairingShopId !== 'string'
+          || !pairingShopId
+          || pairingShopId.length > 500
+          || pairingShopId !== pairingShopId.normalize('NFKC').trim()
+        ))
+        || new Set(authorization.pairingShopIds).size !== authorization.pairingShopIds.length
+        || !authorization.pairingShopIds.includes(shopId)
+        || (authorization.pairingResumeSessionId !== null
+          && (typeof authorization.pairingResumeSessionId !== 'string'
+            || !authorization.pairingResumeSessionId
+            || authorization.pairingResumeSessionId.length > 200
+            || authorization.pairingResumeSessionId
+              !== authorization.pairingResumeSessionId.normalize('NFKC').trim()))
+        || (authorization.pairingResumeSessionId !== null
+          && authorization.pairingResumeSessionId !== authorization.replacesSessionId)
         || !(authorization.expiresAt instanceof Date)
         || !Number.isFinite(authorization.expiresAt.getTime())
         || (authorization.revokedAt !== null
@@ -279,15 +321,20 @@ export function createExtensionByokPublishAuthorizer(options: {
         }
         visited.add(predecessorSessionId);
         const predecessor = await loadDevice(predecessorSessionId);
+        const ordinaryPairingHop = current.pairingResumeSessionId === null
+          && predecessor.revokedReason === 'PAIRING_APPROVED'
+          && predecessor.shopGrantRevokedReason === 'PAIRING_APPROVED';
+        const ownerResumeHop = current.pairingResumeSessionId === predecessorSessionId
+          && predecessor.revokedReason === 'OWNER_REVOKED'
+          && predecessor.shopGrantRevokedReason === 'OWNER_REVOKED';
         if (!predecessor.scopes.includes('byok:media:ingest')
           || predecessor.status !== 'REVOKED'
           || !(predecessor.revokedAt instanceof Date)
           || predecessor.revokedAt.getTime() > now.getTime()
-          || predecessor.revokedReason !== 'PAIRING_APPROVED'
           || predecessor.shopGrantStatus !== 'REVOKED'
           || !(predecessor.shopGrantRevokedAt instanceof Date)
           || predecessor.shopGrantRevokedAt.getTime() > now.getTime()
-          || predecessor.shopGrantRevokedReason !== 'PAIRING_APPROVED'
+          || (!ordinaryPairingHop && !ownerResumeHop)
           || predecessor.deploymentId !== requestingDevice.deploymentId
           || predecessor.deviceId !== requestingDevice.deviceId
           || predecessor.ownerUserId !== requestingDevice.ownerUserId

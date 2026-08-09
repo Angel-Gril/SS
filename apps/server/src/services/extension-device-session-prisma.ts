@@ -106,6 +106,12 @@ interface PairingRow {
   ownerRole: string;
   actorRole: string;
   actorParentId: string | null;
+  resumeSessionId: string | null;
+}
+
+interface ResumeSessionRow {
+  id: string;
+  deviceId: string;
 }
 
 interface RefreshRow {
@@ -133,6 +139,84 @@ interface RefreshRow {
 
 function activeAccountStatus(value: string): boolean {
   return value === 'ACTIVE';
+}
+
+async function loadExplicitResumeSession(
+  tx: SqlTransaction,
+  input: {
+    resumeSessionId: string;
+    deploymentId: string;
+    actorUserId: string;
+    ownerUserId: string;
+    shopIds: string[];
+    now: Date;
+    deviceId?: string;
+    requireNoActiveSession?: boolean;
+  },
+): Promise<ResumeSessionRow | null> {
+  const rows = await tx.$queryRawUnsafe<ResumeSessionRow[]>(
+    `SELECT resumed."id", resumed."device_id" AS "deviceId"
+     FROM "extension_device_sessions" resumed
+     WHERE resumed."id" = $1
+       AND resumed."deployment_id" = $2
+       AND resumed."actor_user_id" = $3
+       AND resumed."owner_user_id" = $4
+       AND resumed."status" = 'REVOKED'
+       AND resumed."revoked_at" IS NOT NULL
+       AND resumed."revoked_at" <= $6
+       AND resumed."revoked_reason" = 'OWNER_REVOKED'
+       AND resumed."expires_at" > $6
+       AND resumed."scopes" @> ARRAY['byok:media:ingest']::TEXT[]
+       AND ($7::TEXT IS NULL OR resumed."device_id" = $7)
+       AND NOT EXISTS (
+         SELECT 1 FROM "extension_device_sessions" successor
+         WHERE successor."replaces_session_id" = resumed."id"
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM "extension_device_shop_grants" resume_grant
+         WHERE resume_grant."session_id" = resumed."id"
+           AND (
+             NOT (resume_grant."shop_id" = ANY($5::TEXT[]))
+             OR resume_grant."status" <> 'REVOKED'
+             OR resume_grant."revoked_at" IS NULL
+             OR resume_grant."revoked_at" > $6
+             OR resume_grant."revoked_reason" IS DISTINCT FROM 'OWNER_REVOKED'
+           )
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM unnest($5::TEXT[]) requested_shop("id")
+         WHERE NOT EXISTS (
+           SELECT 1 FROM "extension_device_shop_grants" resume_grant
+           WHERE resume_grant."session_id" = resumed."id"
+             AND resume_grant."shop_id" = requested_shop."id"
+         )
+       )
+       AND (
+         SELECT COUNT(*) FROM "extension_device_shop_grants" resume_grant
+         WHERE resume_grant."session_id" = resumed."id"
+       ) = cardinality($5::TEXT[])
+       AND (
+         NOT $8::BOOLEAN
+         OR NOT EXISTS (
+           SELECT 1 FROM "extension_device_sessions" active_session
+           WHERE active_session."owner_user_id" = resumed."owner_user_id"
+             AND active_session."actor_user_id" = resumed."actor_user_id"
+             AND active_session."deployment_id" = resumed."deployment_id"
+             AND active_session."device_id" = resumed."device_id"
+             AND active_session."status" = 'ACTIVE'
+         )
+       )
+     FOR UPDATE OF resumed`,
+    input.resumeSessionId,
+    input.deploymentId,
+    input.actorUserId,
+    input.ownerUserId,
+    input.shopIds,
+    input.now,
+    input.deviceId || null,
+    input.requireNoActiveSession === true,
+  );
+  return rows.length === 1 ? rows[0]! : null;
 }
 
 export function resolveExtensionDeviceRefreshRevocationReason(input: {
@@ -326,14 +410,26 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
         );
         if (Number(counts[0]?.count || 0) >= 5) return { kind: 'limit' as const };
 
+        if (input.resumeSessionId && !await loadExplicitResumeSession(tx, {
+          resumeSessionId: input.resumeSessionId,
+          deploymentId: input.deploymentId,
+          actorUserId: input.actorUserId,
+          ownerUserId: input.ownerUserId,
+          shopIds: input.shopIds,
+          now: input.createdAt,
+        })) {
+          return { kind: 'invalid_resume' as const };
+        }
+
         const id = randomUUID();
         await tx.$executeRawUnsafe(
           `INSERT INTO "extension_device_pairing_codes"
             ("id", "deployment_id", "actor_user_id", "owner_user_id", "code_digest", "shop_ids",
-             "scopes", "device_label", "status", "expires_at", "created_at", "updated_at")
-           VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8, 'PENDING', $9, $10, $10)`,
+             "scopes", "device_label", "resume_session_id", "status", "expires_at", "created_at", "updated_at")
+            VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8, $9, 'PENDING', $10, $11, $11)`,
           id, input.deploymentId, input.actorUserId, input.ownerUserId, input.codeDigest,
-          input.shopIds, input.scopes, input.deviceLabel, input.expiresAt, input.createdAt,
+          input.shopIds, input.scopes, input.deviceLabel, input.resumeSessionId,
+          input.expiresAt, input.createdAt,
         );
         return { kind: 'created' as const, id };
       });
@@ -344,6 +440,7 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
         const rows = await tx.$queryRawUnsafe<PairingRow[]>(
           `SELECT p."id", p."actor_user_id" AS "actorUserId", p."owner_user_id" AS "ownerUserId",
                   p."status"::text AS "status", p."shop_ids" AS "shopIds", p."scopes",
+                  p."resume_session_id" AS "resumeSessionId",
                   p."expires_at" AS "expiresAt", owner."status"::text AS "ownerStatus",
                   actor."status"::text AS "actorStatus", owner."role"::text AS "ownerRole",
                   actor."role"::text AS "actorRole", actor."parent_id" AS "actorParentId"
@@ -374,15 +471,6 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
         );
         if (ownedShops.length !== pairing.shopIds.length) return { kind: 'invalid' as const };
 
-        const consumed = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-          `UPDATE "extension_device_pairing_codes"
-           SET "status" = 'CLAIMED', "claimed_at" = $1, "updated_at" = $1
-           WHERE "id" = $2 AND "status" = 'PENDING'
-           RETURNING "id"`,
-          input.now, pairing.id,
-        );
-        if (consumed.length !== 1) return { kind: 'invalid' as const };
-
         const deviceLockKey = JSON.stringify([
           pairing.ownerUserId,
           input.deploymentId,
@@ -395,26 +483,52 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
            SELECT 1::int AS "locked" FROM device_lock`,
           deviceLockKey,
         );
-        const replacedSessions = await tx.$queryRawUnsafe<Array<{
-          sessionId: string;
-          familyId: string;
-        }>>(
-          `SELECT s."id" AS "sessionId", f."id" AS "familyId"
-           FROM "extension_device_sessions" s
-           JOIN "extension_device_refresh_families" f ON f."session_id" = s."id"
-           WHERE s."owner_user_id" = $1 AND s."deployment_id" = $2
-             AND s."device_id" = $3 AND s."status" = 'ACTIVE'
-           FOR UPDATE OF s, f`,
-          pairing.ownerUserId, input.deploymentId, input.deviceId,
-        );
-        for (const session of replacedSessions) {
-          await revokeRefreshFamily(tx, session, 'PAIRING_APPROVED', input.now, {
+        let replacesSessionId: string | null = null;
+        let replacedSessions: Array<{ sessionId: string; familyId: string }> = [];
+        if (pairing.resumeSessionId) {
+          const resumed = await loadExplicitResumeSession(tx, {
+            resumeSessionId: pairing.resumeSessionId,
+            deploymentId: input.deploymentId,
             actorUserId: pairing.actorUserId,
+            ownerUserId: pairing.ownerUserId,
+            shopIds: pairing.shopIds,
+            now: input.now,
+            deviceId: input.deviceId,
+            requireNoActiveSession: true,
           });
+          if (!resumed) return { kind: 'invalid' as const };
+          replacesSessionId = resumed.id;
+        } else {
+          replacedSessions = await tx.$queryRawUnsafe<Array<{
+            sessionId: string;
+            familyId: string;
+          }>>(
+            `SELECT s."id" AS "sessionId", f."id" AS "familyId"
+             FROM "extension_device_sessions" s
+             JOIN "extension_device_refresh_families" f ON f."session_id" = s."id"
+             WHERE s."owner_user_id" = $1 AND s."deployment_id" = $2
+               AND s."device_id" = $3 AND s."status" = 'ACTIVE'
+             FOR UPDATE OF s, f`,
+            pairing.ownerUserId, input.deploymentId, input.deviceId,
+          );
+          for (const session of replacedSessions) {
+            await revokeRefreshFamily(tx, session, 'PAIRING_APPROVED', input.now, {
+              actorUserId: pairing.actorUserId,
+            });
+          }
+          replacesSessionId = replacedSessions.length === 1
+            ? replacedSessions[0]!.sessionId
+            : null;
         }
-        const replacesSessionId = replacedSessions.length === 1
-          ? replacedSessions[0]!.sessionId
-          : null;
+
+        const consumed = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+          `UPDATE "extension_device_pairing_codes"
+           SET "status" = 'CLAIMED', "claimed_at" = $1, "updated_at" = $1
+           WHERE "id" = $2 AND "status" = 'PENDING'
+           RETURNING "id"`,
+          input.now, pairing.id,
+        );
+        if (consumed.length !== 1) return { kind: 'invalid' as const };
 
         await tx.$executeRawUnsafe(
           `INSERT INTO "extension_device_sessions"

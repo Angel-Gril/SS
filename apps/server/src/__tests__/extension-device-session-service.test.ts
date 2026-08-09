@@ -173,6 +173,46 @@ describe('extension device session service', () => {
       shopIds: ['shop-1'],
     })).rejects.toMatchObject({ code: 'pairing_limit_reached', statusCode: 429 });
   });
+
+  it('binds an owner-authorized resume session explicitly and fails closed when it is unavailable', async () => {
+    const module = await import('../services/extension-device-session.js');
+    const auth = await import('../lib/extension-device-auth.js');
+    const repo = repository();
+    const service = module.createExtensionDeviceSessionService({
+      repository: repo,
+      authConfig: auth.resolveExtensionDeviceAuthConfig(authEnvironment()),
+      now: () => NOW,
+    });
+
+    const created = await service.createPairingCode({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      shopIds: ['shop-1'],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: 'revoked-session-1',
+    });
+
+    expect(repo.createPairingCode).toHaveBeenCalledWith(expect.objectContaining({
+      deploymentId: 'test-deployment',
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      shopIds: ['shop-1'],
+      resumeSessionId: 'revoked-session-1',
+    }));
+    expect(created).toMatchObject({ resumeSessionId: 'revoked-session-1' });
+
+    repo.createPairingCode.mockResolvedValueOnce({ kind: 'invalid_resume' as const });
+    await expect(service.createPairingCode({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      shopIds: ['shop-1'],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      resumeSessionId: 'revoked-session-1',
+    })).rejects.toMatchObject({ code: 'resume_session_unavailable', statusCode: 404 });
+  });
+
   it('claims a pairing once and returns a 256-bit refresh credential without persisting plaintext', async () => {
     const module = await import('../services/extension-device-session.js');
     const auth = await import('../lib/extension-device-auth.js');

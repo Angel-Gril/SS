@@ -21,6 +21,13 @@ const validatedLineageMigrationUrl = new URL(
 const validatedLineageMigration = existsSync(validatedLineageMigrationUrl)
   ? readFileSync(validatedLineageMigrationUrl, 'utf8')
   : '';
+const pairingResumeMigrationUrl = new URL(
+  '../../prisma/migrations/20260809160000_add_extension_device_pairing_resume/migration.sql',
+  import.meta.url,
+);
+const pairingResumeMigration = existsSync(pairingResumeMigrationUrl)
+  ? readFileSync(pairingResumeMigrationUrl, 'utf8')
+  : '';
 
 function modelBlock(name: string): string {
   return schema.match(new RegExp(`model ${name} \\{[\\s\\S]*?\\n\\}`))?.[0] || '';
@@ -59,6 +66,41 @@ describe('extension device persistence contract', () => {
     expect(replacementLineageMigration).toContain('BYOK provenance publish receipt guard has unexpected definition');
     expect(replacementLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
     expect(repository).toContain('replacesSessionId');
+  });
+
+  it('persists only an explicit pairing resume target with a restrictive foreign key', () => {
+    const pairing = modelBlock('ExtensionDevicePairingCode');
+    const session = modelBlock('ExtensionDeviceSession');
+
+    expect(pairing).toMatch(/resumeSessionId\s+String\?/);
+    expect(pairing).toMatch(/resumeSession\s+ExtensionDeviceSession\?/);
+    expect(session).toMatch(/resumedByPairingCodes\s+ExtensionDevicePairingCode\[\]/);
+    expect(pairingResumeMigration).toContain('ADD COLUMN "resume_session_id" TEXT');
+    expect(pairingResumeMigration).toContain(
+      'extension_device_pairing_codes_resume_session_id_idx',
+    );
+    expect(pairingResumeMigration).toContain(
+      'extension_device_pairing_codes_resume_session_id_fkey',
+    );
+    expect(pairingResumeMigration).toMatch(
+      /resume_session_id_fkey"[\s\S]*ON DELETE RESTRICT ON UPDATE NO ACTION/u,
+    );
+    expect(pairingResumeMigration).toContain(
+      'prevent_extension_device_pairing_resume_rewrite',
+    );
+    expect(pairingResumeMigration).toContain(
+      'current_pairing."resume_session_id" IS NULL',
+    );
+    expect(pairingResumeMigration).toContain(
+      'current_pairing."resume_session_id" = predecessor."id"',
+    );
+    expect(pairingResumeMigration).toContain(
+      'predecessor."revoked_reason" = \'OWNER_REVOKED\'',
+    );
+    expect(pairingResumeMigration).toContain(
+      'predecessor_grant."revoked_reason" = \'OWNER_REVOKED\'',
+    );
+    expect(pairingResumeMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
   });
 
   it('validates a bounded acyclic replacement lineage for durable BYOK publish receipts', () => {

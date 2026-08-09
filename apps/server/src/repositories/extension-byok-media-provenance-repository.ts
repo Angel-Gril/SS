@@ -306,6 +306,13 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
           deploymentId: true,
           deviceId: true,
           replacesSessionId: true,
+          pairingCode: { select: {
+            deploymentId: true,
+            ownerUserId: true,
+            actorUserId: true,
+            shopIds: true,
+            resumeSessionId: true,
+          } },
           scopes: true,
           status: true,
           expiresAt: true,
@@ -337,6 +344,15 @@ export function createPrismaExtensionByokPublishProvenanceReader(prisma: PrismaC
         replacesSessionId: session.replacesSessionId == null
           ? null
           : String(session.replacesSessionId),
+        pairingDeploymentId: String(session.pairingCode?.deploymentId || ''),
+        pairingOwnerUserId: String(session.pairingCode?.ownerUserId || ''),
+        pairingActorUserId: String(session.pairingCode?.actorUserId || ''),
+        pairingShopIds: Array.isArray(session.pairingCode?.shopIds)
+          ? session.pairingCode.shopIds.map(String)
+          : [],
+        pairingResumeSessionId: session.pairingCode?.resumeSessionId == null
+          ? null
+          : String(session.pairingCode.resumeSessionId),
         scopes: Array.isArray(session.scopes) ? session.scopes.map(String) : [],
         status: String(session.status),
         expiresAt: session.expiresAt instanceof Date

@@ -105,6 +105,31 @@ describe('extension device routes', () => {
     });
   });
 
+  it('passes an explicit owner-authorized resume session only on pairing creation', async () => {
+    const { app, sessionService } = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pairing-codes',
+      payload: {
+        shopIds: ['shop-1'],
+        scopes: ['byok:media:ingest', 'listing:publish'],
+        resumeSessionId: 'revoked-session-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(sessionService.createPairingCode).toHaveBeenCalledWith({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      actorRole: 'USER',
+      shopIds: ['shop-1'],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+      deviceLabel: undefined,
+      resumeSessionId: 'revoked-session-1',
+    });
+  });
+
   it('requires the owner to select at least one allowlisted device scope', async () => {
     const { app, sessionService } = await buildApp();
 

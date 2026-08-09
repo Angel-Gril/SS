@@ -71,9 +71,14 @@ export interface ExtensionDeviceSessionRepository {
     shopIds: string[];
     scopes: string[];
     deviceLabel: string | null;
+    resumeSessionId: string | null;
     expiresAt: Date;
     createdAt: Date;
-  }): Promise<{ kind: 'created'; id: string } | { kind: 'limit' }>;
+  }): Promise<
+    | { kind: 'created'; id: string }
+    | { kind: 'limit' }
+    | { kind: 'invalid_resume' }
+  >;
   claimPairingCodeAtomically(input: {
     codeDigest: string;
     deploymentId: string;
@@ -169,6 +174,7 @@ export function createExtensionDeviceSessionService(options: {
       shopIds: string[];
       scopes?: string[];
       deviceLabel?: string;
+      resumeSessionId?: string;
     }) {
       const actorRole = input.actorRole || 'USER';
       if (input.actorParentId
@@ -178,6 +184,14 @@ export function createExtensionDeviceSessionService(options: {
       }
       const shopIds = normalizeIds(input.shopIds);
       const scopes = normalizeScopes(input.scopes);
+      const resumeSessionId = input.resumeSessionId == null
+        ? null
+        : String(input.resumeSessionId).trim();
+      if (resumeSessionId !== null && (!resumeSessionId || resumeSessionId.length > 200)) {
+        throw new ExtensionDeviceSessionError(
+          'resume_session_unavailable', 404, 'Resume session is unavailable',
+        );
+      }
       if (!shopIds.length || shopIds.length > 50) {
         throw new ExtensionDeviceSessionError('invalid_shop_scope', 400, 'Shop scope is required');
       }
@@ -199,11 +213,17 @@ export function createExtensionDeviceSessionService(options: {
         shopIds,
         scopes,
         deviceLabel: normalizeLabel(input.deviceLabel),
+        resumeSessionId,
         expiresAt,
         createdAt,
       });
       if (row.kind === 'limit') {
         throw new ExtensionDeviceSessionError('pairing_limit_reached', 429, 'Too many outstanding pairing codes');
+      }
+      if (row.kind === 'invalid_resume') {
+        throw new ExtensionDeviceSessionError(
+          'resume_session_unavailable', 404, 'Resume session is unavailable',
+        );
       }
       return {
         id: row.id,
@@ -212,6 +232,7 @@ export function createExtensionDeviceSessionService(options: {
         deploymentId: authConfig.deploymentId,
         shopIds,
         scopes,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
       };
     },
 
