@@ -1276,13 +1276,16 @@
     });
 
     handlers[messageTypes.PUBLISH] = guarded(function (handlerContext) {
-      return withPublishLock(handlerContext.sender, async function () {
-        var input = handlerContext.payload || {};
-        var action = input.action;
-        var workspaceActions = [
-          'WORKSPACE_PREVIEW', 'WORKSPACE_STATE', 'WORKSPACE_CONFIRM',
-          'WORKSPACE_RECOVER', 'WORKSPACE_ACTIVE',
-        ];
+      var input = handlerContext.payload || {};
+      var action = input.action;
+      var workspaceActions = [
+        'WORKSPACE_PREVIEW', 'WORKSPACE_STATE', 'WORKSPACE_CONFIRM',
+        'WORKSPACE_RECOVER', 'WORKSPACE_ACTIVE',
+      ];
+      var mutationActions = [
+        'CONFIRM', 'RECOVER', 'WORKSPACE_CONFIRM', 'WORKSPACE_RECOVER',
+      ];
+      var operation = async function () {
         var localSession = await claimSession(handlerContext.sender);
         var reviewOnly = isReviewPublishContext(localSession.context);
         if (reviewOnly && !workspaceActions.includes(action)) {
@@ -1361,7 +1364,10 @@
         if (action === 'PREVIEW') return previewPublish(bound);
         if (action === 'RECOVER') return recoverPublish(bound);
         return confirmPublish({ ...bound, previewHash: input.previewHash });
-      });
+      };
+      return mutationActions.includes(action)
+        ? withPublishLock(handlerContext.sender, operation)
+        : operation();
     });
 
     async function openFromSource(value) {

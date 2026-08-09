@@ -508,12 +508,22 @@ const workbenchPublishPreview = {
   }],
   orderedMedia: [],
 };
+let workbenchActiveGate = null;
+let workbenchConfirmGate = null;
 const workbenchPublishCoordinator = {
   async preview(input) { calls.push(['workbench-publish-preview', input]); return workbenchPublishPreview; },
-  async confirm(input) { calls.push(['workbench-publish-confirm', input]); return workbenchPublishState; },
+  async confirm(input) {
+    calls.push(['workbench-publish-confirm', input]);
+    if (workbenchConfirmGate) await workbenchConfirmGate;
+    return workbenchPublishState;
+  },
   async recover(input) { calls.push(['workbench-publish-recover', input]); return workbenchPublishState; },
   async getState(input) { calls.push(['workbench-publish-state', input]); return null; },
-  async getActive(input) { calls.push(['workbench-publish-active', input]); return null; },
+  async getActive(input) {
+    calls.push(['workbench-publish-active', input]);
+    if (workbenchActiveGate) await workbenchActiveGate;
+    return null;
+  },
 };
 
 const emptyEditSnapshot = {
@@ -1546,6 +1556,23 @@ for (const name of externalCallNames) {
     `review-only ${name} dependency must remain untouched`,
   );
 }
+let releaseActive;
+workbenchActiveGate = new Promise((resolve) => { releaseActive = resolve; });
+const pendingReviewActive = dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_ACTIVE' }, sender,
+});
+await Promise.resolve();
+const stateWhileActivePending = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_STATE', request: reviewRequest }, sender,
+});
+const previewWhileActivePending = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_PREVIEW', request: reviewRequest }, sender,
+});
+assert.equal(stateWhileActivePending.ok, true);
+assert.equal(previewWhileActivePending.ok, true);
+releaseActive();
+assert.equal((await pendingReviewActive).ok, true);
+workbenchActiveGate = null;
 const reviewPreviewCalls = calls.filter((row) => row[0] === 'workbench-publish-preview').length;
 const reviewPreview = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
   payload: { action: 'WORKSPACE_PREVIEW', request: reviewRequest }, sender,
@@ -1575,6 +1602,23 @@ assert.deepEqual(
   )).at(-1)[1])),
   { ...reviewRequest, previewHash: '8'.repeat(64) },
 );
+let releaseConfirm;
+workbenchConfirmGate = new Promise((resolve) => { releaseConfirm = resolve; });
+const pendingReviewConfirm = dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: {
+    action: 'WORKSPACE_CONFIRM', request: reviewRequest, previewHash: '8'.repeat(64),
+  },
+  sender,
+});
+await Promise.resolve();
+const concurrentReviewRecover = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
+  payload: { action: 'WORKSPACE_RECOVER', request: reviewRequest }, sender,
+});
+assert.equal(concurrentReviewRecover.ok, false);
+assert.equal(concurrentReviewRecover.errorCode, 'SS_ERP_BYOK_PUBLISH_IN_PROGRESS');
+releaseConfirm();
+assert.equal((await pendingReviewConfirm).ok, true);
+workbenchConfirmGate = null;
 const resolvesBeforeTamper = calls.filter((row) => row[0] === 'resolve').length;
 const tamperedReview = await dispatcher.handlers[MESSAGE_TYPES.PUBLISH]({
   payload: {
