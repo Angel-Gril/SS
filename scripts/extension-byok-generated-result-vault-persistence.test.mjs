@@ -49,6 +49,7 @@ function repository() {
   let gate = null;
   let nextFailure = null;
   let nextDeleteFailure = null;
+  let nextClearFailure = null;
   return {
     async ready() { events.push(['ready']); },
     async list() { return [...rows.values()].map(clone); },
@@ -98,7 +99,15 @@ function repository() {
       }
       ids.forEach((id) => rows.delete(id));
     },
-    async clear() { events.push(['clear']); rows.clear(); },
+    async clear() {
+      events.push(['clear']);
+      if (nextClearFailure) {
+        const failure = nextClearFailure;
+        nextClearFailure = null;
+        throw namedError(failure);
+      }
+      rows.clear();
+    },
     holdNextStage() {
       let enter;
       let release;
@@ -109,6 +118,7 @@ function repository() {
     },
     failNextStage(name = 'QuotaExceededError') { nextFailure = name; },
     failNextDelete(name = 'UnknownError') { nextDeleteFailure = name; },
+    failNextClear(name = 'UnknownError') { nextClearFailure = name; },
     mutate(id, operation) { rows.set(id, operation(clone(rows.get(id)))); },
     get(id) { return clone(rows.get(id)); },
     size() { return rows.size; },
@@ -433,6 +443,113 @@ test('deleteMany and clearAndRotateKey remove ciphertext and rotate the key', as
   assert.equal(repo.size(), 0);
   assert.notEqual(session.snapshot()[api.SESSION_STORAGE_KEY].keyId, oldKey);
   assert.equal(await target.find({ resultId: second.resultId }), null);
+});
+
+test('clearAndDeleteKey removes ciphertext and the session key without rotating it', async () => {
+  const repo = repository();
+  const session = sessionStorage();
+  const target = store({ repository: repo, sessionStorage: session, randomValues: randomValues(72) });
+  await target.ready();
+  const candidate = await stage(target, await input());
+  assert.equal(repo.size(), 1);
+  assert.ok(session.snapshot()[api.SESSION_STORAGE_KEY]);
+
+  const cleared = await target.clearAndDeleteKey();
+  assert.equal(cleared.cleared, true);
+  assert.equal(cleared.keyDeleted, true);
+  assert.equal(repo.size(), 0);
+  assert.equal(session.snapshot()[api.SESSION_STORAGE_KEY], undefined);
+
+  await target.ready();
+  assert.ok(session.snapshot()[api.SESSION_STORAGE_KEY]);
+  assert.equal(await target.find({ resultId: candidate.resultId }), null);
+});
+
+test('clearAndDeleteKey does not create a key for an uninitialized empty escrow', async () => {
+  const repo = repository();
+  const session = sessionStorage();
+  const target = store({ repository: repo, sessionStorage: session, randomValues: randomValues(73) });
+
+  await target.clearAndDeleteKey();
+
+  assert.equal(repo.size(), 0);
+  assert.deepEqual(session.snapshot(), {});
+});
+
+test('clearAndDeleteKey removes the session key without waiting for ciphertext cleanup', async () => {
+  const repo = repository();
+  const session = sessionStorage();
+  const target = store({ repository: repo, sessionStorage: session, randomValues: randomValues(77) });
+  await target.ready();
+  await stage(target, await input());
+  const originalClear = repo.clear.bind(repo);
+  let releaseClear;
+  let markClearStarted;
+  const clearStarted = new Promise((resolve) => { markClearStarted = resolve; });
+  const clearGate = new Promise((resolve) => { releaseClear = resolve; });
+  repo.clear = async () => {
+    markClearStarted();
+    await clearGate;
+    return originalClear();
+  };
+
+  const clearing = target.clearAndDeleteKey();
+  await clearStarted;
+  await Promise.resolve();
+  assert.equal(session.snapshot()[api.SESSION_STORAGE_KEY], undefined);
+  releaseClear();
+  await clearing;
+  assert.equal(repo.size(), 0);
+});
+
+test('clearAndDeleteKey fails closed and is retryable after either durable clear fails', async () => {
+  const repositoryFailureRepo = repository();
+  const repositoryFailureSession = sessionStorage();
+  const repositoryFailureTarget = store({
+    repository: repositoryFailureRepo,
+    sessionStorage: repositoryFailureSession,
+    randomValues: randomValues(74),
+  });
+  await repositoryFailureTarget.ready();
+  await stage(repositoryFailureTarget, await input());
+  repositoryFailureRepo.failNextClear();
+  await assert.rejects(
+    repositoryFailureTarget.clearAndDeleteKey(),
+    isEscrowError('SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'),
+  );
+  assert.equal(repositoryFailureRepo.size(), 1);
+  assert.equal(repositoryFailureSession.snapshot()[api.SESSION_STORAGE_KEY], undefined);
+  await repositoryFailureTarget.clearAndDeleteKey();
+  assert.equal(repositoryFailureRepo.size(), 0);
+  assert.equal(repositoryFailureSession.snapshot()[api.SESSION_STORAGE_KEY], undefined);
+
+  const sessionFailureRepo = repository();
+  const sessionFailureStorage = sessionStorage();
+  const originalRemove = sessionFailureStorage.remove.bind(sessionFailureStorage);
+  let failNextRemove = false;
+  sessionFailureStorage.remove = async (keys) => {
+    if (failNextRemove) {
+      failNextRemove = false;
+      throw namedError('UnknownError');
+    }
+    return originalRemove(keys);
+  };
+  const sessionFailureTarget = store({
+    repository: sessionFailureRepo,
+    sessionStorage: sessionFailureStorage,
+    randomValues: randomValues(76),
+  });
+  await sessionFailureTarget.ready();
+  await stage(sessionFailureTarget, await input());
+  failNextRemove = true;
+  await assert.rejects(
+    sessionFailureTarget.clearAndDeleteKey(),
+    isEscrowError('SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE'),
+  );
+  assert.equal(sessionFailureRepo.size(), 0);
+  assert.ok(sessionFailureStorage.snapshot()[api.SESSION_STORAGE_KEY]);
+  await sessionFailureTarget.clearAndDeleteKey();
+  assert.equal(sessionFailureStorage.snapshot()[api.SESSION_STORAGE_KEY], undefined);
 });
 
 test('deletes ciphertext durably by a closed bounded set of canonical execution intent IDs', async () => {

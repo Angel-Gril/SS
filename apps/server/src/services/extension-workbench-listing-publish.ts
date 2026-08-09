@@ -431,6 +431,10 @@ export function createExtensionWorkbenchListingPublishService(options: {
   authorizePublish(
     input: ExtensionByokPublishAuthorizationInput,
   ): Promise<ExtensionByokPublishAuthorizationDecision>;
+  preflightPublishAuthority(input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+  }): Promise<void>;
   recordPublishIntent(input: {
     draftId: string;
     ownerUserId: string;
@@ -555,6 +559,12 @@ export function createExtensionWorkbenchListingPublishService(options: {
           409,
           'Workbench publish preview changed before confirmation',
         );
+      }
+      if (context.draft.stage === 'READY_TO_PUBLISH') {
+        await options.preflightPublishAuthority({
+          ownerUserId: actor.ownerUserId,
+          draft: context.draft,
+        });
       }
       const recorded = await options.recordPublishIntent({
         draftId: basis.workflowId,

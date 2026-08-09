@@ -19,10 +19,17 @@ import {
 import {
   OzonListingProductionCompileError,
   createOzonListingProductionCompileAdapter,
+  preflightOzonListingProductionAuthorities,
   type OzonListingProductionCompileAdapterOptions,
 } from '../services/ozon-listing-production-compile-adapter.js';
+import {
+  createOzonListingProductionCompileCache,
+  preflightOzonListingProductionCompile,
+} from '../services/ozon-listing-production-compile-cache.js';
 import { hashOzonPublishJson } from '../services/ozon-publish-attempts.js';
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from '../services/ozon-v3-import-package-contract.js';
+import { hashOzonListingPublishState } from '../services/source-listing-workflow.js';
+import { SourceListingWorkflowCategoryError } from '../services/source-listing-workflow-category.js';
 
 const fixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
@@ -311,6 +318,127 @@ describe('Ozon listing production compile adapter', () => {
     expect(result.requestPayload.items).toHaveLength(2);
   });
 
+  it('refreshes authoritative validation before reading the current catalog while capture and media load in parallel', async () => {
+    const context = build();
+    const events: string[] = [];
+    let releaseValidation!: () => void;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    const loadCapture = context.options.loadOwnedCapture;
+    const loadCatalog = context.options.loadCurrentCatalogAuthority;
+    const loadValidation = context.options.loadAuthoritativeValidation;
+    const loadAssets = context.options.loadOwnedMediaAssets;
+    context.options.loadOwnedCapture = vi.fn(async (input) => {
+      events.push('capture');
+      return loadCapture(input);
+    });
+    context.options.loadOwnedMediaAssets = vi.fn(async (input) => {
+      events.push('media');
+      return loadAssets(input);
+    });
+    context.options.loadAuthoritativeValidation = vi.fn(async (input) => {
+      events.push('validation:start');
+      await validationGate;
+      events.push('validation:end');
+      return loadValidation(input);
+    });
+    context.options.loadCurrentCatalogAuthority = vi.fn(async (input) => {
+      events.push('catalog');
+      return loadCatalog(input);
+    });
+
+    const pending = preflightOzonListingProductionAuthorities(context.options, {
+      ownerUserId: 'owner-1',
+      draft: context.draft,
+    });
+    await vi.waitFor(() => {
+      expect(events).toEqual(expect.arrayContaining(['capture', 'media', 'validation:start']));
+    });
+    expect(events).not.toContain('catalog');
+
+    releaseValidation();
+    await pending;
+    expect(events.indexOf('capture')).toBeLessThan(events.indexOf('validation:end'));
+    expect(events.indexOf('media')).toBeLessThan(events.indexOf('validation:end'));
+    expect(events.indexOf('validation:end')).toBeLessThan(events.indexOf('catalog'));
+  });
+
+  it('compiles a READY preflight through a frozen view and reuses it for the recorded intent', async () => {
+    const context = build();
+    const uncached = vi.fn(createOzonListingProductionCompileAdapter(context.options));
+    const cached = createOzonListingProductionCompileCache({ compile: uncached });
+    const ready = structuredClone(context.draft);
+    ready.stage = 'READY_TO_PUBLISH';
+    const frozen = structuredClone(context.draft);
+    frozen.revision += 1;
+    frozen.publishTaskIds = ['publish-intent-1'];
+    frozen.auditEvents.push({
+      type: 'PUBLISH_INTENT_RECORDED',
+      draftVersion: frozen.draftVersion,
+    } as never);
+    frozen.updatedAt = '2026-07-15T08:10:00.000Z';
+
+    await expect(preflightOzonListingProductionCompile(cached, {
+      ownerUserId: 'owner-1',
+      draft: ready,
+    })).resolves.toBeUndefined();
+    const result = await cached({ ownerUserId: 'owner-1', draft: frozen });
+
+    expect(ready.stage).toBe('READY_TO_PUBLISH');
+    expect(result.draftStateHash).toBe(hashOzonListingPublishState(frozen));
+    expect(result.requestPayload.items).toHaveLength(2);
+    expect(uncached).toHaveBeenCalledTimes(1);
+  });
+
+  it('preflights owner-scoped authorities without compiling the Ozon payload', async () => {
+    const context = build();
+    const pricing = context.draft.pricing.value as {
+      items: Array<{ price: string }>;
+    };
+    pricing.items[0]!.price = 'not-a-price';
+
+    const result = await preflightOzonListingProductionAuthorities(context.options, {
+      ownerUserId: 'owner-1',
+      draft: context.draft,
+    });
+
+    expect(Object.keys(result).sort()).toEqual(['capture', 'catalog', 'images', 'validation']);
+    expect(result.capture.captureHash).toBe(context.draft.sourceCaptureHash);
+    expect(result.catalog.authority.snapshotId).toBe('catalog-snapshot-1');
+    expect(result.images.product).toHaveLength(1);
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1',
+      draft: context.draft,
+    })).rejects.toMatchObject({ code: 'OZON_LISTING_PRODUCTION_PAYLOAD_INVALID' });
+  });
+
+  it.each([
+    ['SOURCE_LISTING_CATALOG_STALE', 409],
+    ['SOURCE_LISTING_CATEGORY_NOT_SELECTABLE', 422],
+  ] as const)(
+    'maps typed %s category authority failures to the production catalog-stale contract',
+    async (code, statusCode) => {
+      const context = build();
+      vi.mocked(context.options.loadAuthoritativeValidation).mockRejectedValue(
+        new SourceListingWorkflowCategoryError(
+          code,
+          statusCode,
+          'unsafe downstream detail',
+        ),
+      );
+
+      await expect(preflightOzonListingProductionAuthorities(context.options, {
+        ownerUserId: 'owner-1',
+        draft: context.draft,
+      })).rejects.toMatchObject({
+        code: 'OZON_LISTING_PRODUCTION_CATALOG_STALE',
+        statusCode: 422,
+        message: 'Current authoritative Ozon catalog does not match the frozen draft',
+      });
+    },
+  );
+
   it.each([
     'loadOwnedCapture',
     'loadCurrentCatalogAuthority',
@@ -338,6 +466,57 @@ describe('Ozon listing production compile adapter', () => {
       'message',
       expect.stringContaining('private_table'),
     );
+  });
+
+  it.each([
+    'loadOwnedCapture',
+    'loadAuthoritativeValidation',
+    'loadOwnedMediaAssets',
+  ] as const)('sanitizes a synchronous throw from %s', async (loader) => {
+    const context = build();
+    vi.mocked(context.options[loader]).mockImplementation(() => {
+      throw new Error('password=synchronous-secret SELECT * FROM private_table');
+    });
+
+    const promise = preflightOzonListingProductionAuthorities(context.options, {
+      ownerUserId: 'owner-1',
+      draft: context.draft,
+    });
+    await expect(promise).rejects.toMatchObject({
+      code: 'OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE',
+      statusCode: 503,
+      message: 'Production publish authority is temporarily unavailable',
+    });
+  });
+
+  it('observes a delayed capture rejection when the media loader throws synchronously', async () => {
+    const context = build();
+    let rejectCapture!: (error: Error) => void;
+    const delayedCapture = new Promise<never>((_resolve, reject) => {
+      rejectCapture = reject;
+    });
+    vi.mocked(context.options.loadOwnedCapture).mockImplementation(() => delayedCapture);
+    vi.mocked(context.options.loadOwnedMediaAssets).mockImplementation(() => {
+      throw new Error('synchronous media loader failure');
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const promise = preflightOzonListingProductionAuthorities(context.options, {
+        ownerUserId: 'owner-1',
+        draft: context.draft,
+      });
+      rejectCapture(new Error('delayed capture loader failure'));
+      await expect(promise).rejects.toMatchObject({
+        code: 'OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE',
+        statusCode: 503,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('maps explicit SKU scope by canonical skuKey and keeps slotKey as a role only', async () => {

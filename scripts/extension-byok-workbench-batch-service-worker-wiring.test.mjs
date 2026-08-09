@@ -158,7 +158,10 @@ const finalizeStart = clearRuntime.indexOf('const finalize = async () => {');
 const finalizeEnd = clearRuntime.indexOf('    if (byokWorkbenchBatchRegistry)', finalizeStart);
 assert.ok(finalizeStart >= 0 && finalizeEnd > finalizeStart, 'trusted reset finalize is missing');
 const fencedFinalize = clearRuntime.slice(finalizeStart, finalizeEnd);
-assert.match(fencedFinalize, /await getByokGeneratedResultEscrow\(\)\.clearAndRotateKey\(\)/u);
+assert.match(
+  fencedFinalize,
+  /const escrow = getByokGeneratedResultEscrow\(\);\s*if \(byokDeviceSessionCleanupDepth > 0\) await escrow\.clearAndDeleteKey\(\);\s*else await escrow\.clearAndRotateKey\(\);/u,
+);
 assert.match(fencedFinalize, /byokGeneratedResultVault\.clear\(\)/u);
 assert.match(fencedFinalize, /byokWorkbenchPreviewBroker\.clear\(\)/u);
 assert.match(fencedFinalize, /await byokWorkbenchSessionManager\.clearProviderState\(\)/u);
@@ -185,6 +188,21 @@ assert.match(deviceClear, /byokWorkbenchBatchRegistry\.clearAll\(/u);
 assert.match(deviceClear, /device_session_changed/u);
 assert.match(deviceClear, /getByokProfileStore\(\)\.disconnectDevice\(\)/u);
 assert.match(deviceClear, /getByokPermissionBroker\(\)\.clearSessionConsent\(\)/u);
+assert.match(
+  deviceClear,
+  /Promise\.resolve\(\)\.then\(function \(\) \{ return getByokGeneratedResultEscrow\(\)\.clearAndDeleteKey\(\); \}\)/u,
+  'device invalidation must delete durable escrow ciphertext and its session key',
+);
+assert.match(
+  deviceClear,
+  /notifyByokDeviceSessionInvalidated\(input && input\.reason\);\s*const outcomes = await Promise\.allSettled\(cleanups\)/u,
+  'device invalidation and escrow deletion must not wait behind another cleanup',
+);
+assert.match(
+  worker,
+  /if \(byokDeviceSessionCleanupDepth > 0\) await escrow\.clearAndDeleteKey\(\);\s*else await escrow\.clearAndRotateKey\(\);/u,
+  'credential callbacks must not recreate an escrow key during device invalidation',
+);
 assert.doesNotMatch(
   deviceClear,
   /getByokGeneratedResultEscrow\(\)\.clearAndRotateKey\(\)/u,

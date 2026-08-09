@@ -944,8 +944,35 @@
       return Object.freeze({ cleared: true, keyRotated: true });
     }
 
+    async function clearAndDeleteKeyNow() {
+      if (initialized) {
+        try { await initialized; } catch (_error) {}
+      }
+      var durableCleanups = [
+        Promise.resolve().then(function () {
+          return sessionStorage.remove([SESSION_STORAGE_KEY]);
+        }),
+        Promise.resolve().then(function () { return repository.clear(); }),
+      ];
+      cacheById.forEach(function (entry) { entry.blob = null; });
+      cacheById.clear();
+      idByExecutionIntentHash.clear();
+      idByOperationKeyHash.clear();
+      usedIvs.clear();
+      keyRecord = null;
+      cryptoKey = null;
+      initialized = null;
+      var outcomes = await Promise.allSettled(durableCleanups);
+      var failed = outcomes.find(function (outcome) { return outcome.status === 'rejected'; });
+      var failure = failed && failed.reason;
+      if (failure) {
+        throw escrowError('SS_ERP_BYOK_RESULT_ESCROW_UNAVAILABLE', null, failure);
+      }
+      return Object.freeze({ cleared: true, keyDeleted: true });
+    }
+
     return Object.freeze({
-      ready: ensureReady,
+      ready: function () { return enqueue(ensureReady); },
       stage: function (result, binding, lifecycleAuthority) {
         return enqueue(function () { return stageNow(result, binding, lifecycleAuthority); });
       },
@@ -967,6 +994,7 @@
         });
       },
       clearAndRotateKey: function () { return enqueue(clearAndRotateKeyNow); },
+      clearAndDeleteKey: function () { return enqueue(clearAndDeleteKeyNow); },
     });
   }
 

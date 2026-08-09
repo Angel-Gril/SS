@@ -56,7 +56,11 @@ assert.match(
   /workbenchDispatcher\.handlers[\s\S]*hostedWorkbenchDispatcher\.handlers/u,
 );
 
-assert.match(serviceWorker, /clearHostedAiImageSuiteRuntime\(input && input\.reason\)/u);
+assert.match(
+  serviceWorker,
+  /const reason = String\(input && input\.reason \|\| 'device_session_changed'\)\.slice\(0, 100\)/u,
+);
+assert.match(serviceWorker, /clearHostedAiImageSuiteRuntime\(reason\)/u);
 assert.match(serviceWorker, /hostedAiImageSuiteClientRegistry\.clearAll/u);
 assert.match(serviceWorker, /hostedAiImageSuitePreviewBridge\.clear/u);
 assert.match(serviceWorker, /getHostedAiImageSuiteClientRegistry\(\)\.removeTab\(tabId\)/u);

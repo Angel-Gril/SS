@@ -19,6 +19,9 @@ import {
 import {
   SourceListingWorkflowError,
 } from '../services/source-listing-workflow.js';
+import {
+  OzonListingProductionCompileError,
+} from '../services/ozon-listing-production-compile-adapter.js';
 
 const BODY_LIMIT = 96 * 1024;
 
@@ -68,7 +71,8 @@ function safeKnownError(error: unknown): { statusCode: number; errorCode: string
     && !(error instanceof ExtensionByokPublishAuthorizationError)
     && !(error instanceof ExtensionByokPublishStatusRepositoryError)
     && !(error instanceof ExtensionByokMediaProvenanceError)
-    && !(error instanceof SourceListingWorkflowError)) return null;
+    && !(error instanceof SourceListingWorkflowError)
+    && !(error instanceof OzonListingProductionCompileError)) return null;
   const value = error as { statusCode?: unknown; code?: unknown } | null;
   const statusCode = Number(value?.statusCode);
   const code = typeof value?.code === 'string' ? value.code : '';

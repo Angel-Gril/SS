@@ -27,6 +27,7 @@ import {
   type OzonPublishJson,
 } from './ozon-publish-attempts.js';
 import { hashOzonListingPublishState } from './source-listing-workflow.js';
+import { SourceListingWorkflowCategoryError } from './source-listing-workflow-category.js';
 
 export const OZON_LISTING_PRODUCTION_COMPILE_ADAPTER_VERSION =
   'ozon-listing-production-compile-adapter/v1' as const;
@@ -108,6 +109,16 @@ export interface OzonListingProductionCompileAdapterOptions {
     assetIds: string[];
   }): Promise<OzonListingOwnedMediaAsset[]>;
   now?: () => Date;
+}
+
+export interface OzonListingProductionAuthorityPreflightResult {
+  capture: OzonListingOwnedCaptureSnapshot;
+  catalog: {
+    authority: OzonListingCurrentCatalogAuthority;
+    target: OzonCategoryCatalogEntry;
+  };
+  validation: OzonListingAuthoritativeValidation;
+  images: OzonListingResolvedImagesV1;
 }
 
 function fail(code: OzonListingProductionCompileErrorCode, message: string): never {
@@ -400,15 +411,38 @@ async function loadAuthorities(
   assetIds: string[],
 ) {
   try {
-    const [capture, catalog, validation, assets] = await Promise.all([
-      options.loadOwnedCapture({ ownerUserId, snapshotId: draft.sourceCaptureSnapshotId }),
-      options.loadCurrentCatalogAuthority({ ownerUserId, shopId: draft.shopId }),
-      options.loadAuthoritativeValidation({ ownerUserId, draft }),
-      options.loadOwnedMediaAssets({ ownerUserId, assetIds }),
+    const captureAndAssets = Promise.all([
+      Promise.resolve().then(() => options.loadOwnedCapture({
+        ownerUserId,
+        snapshotId: draft.sourceCaptureSnapshotId,
+      })),
+      Promise.resolve().then(() => options.loadOwnedMediaAssets({ ownerUserId, assetIds })),
+    ]);
+    const validationAndCatalog = (async () => {
+      const validation = await Promise.resolve().then(() => (
+        options.loadAuthoritativeValidation({ ownerUserId, draft })
+      ));
+      const catalog = await options.loadCurrentCatalogAuthority({
+        ownerUserId,
+        shopId: draft.shopId,
+      });
+      return { validation, catalog };
+    })();
+    const [[capture, assets], { validation, catalog }] = await Promise.all([
+      captureAndAssets,
+      validationAndCatalog,
     ]);
     return { capture, catalog, validation, assets };
   } catch (error) {
     if (error instanceof OzonListingProductionCompileError) throw error;
+    if (error instanceof SourceListingWorkflowCategoryError
+      && (error.code === 'SOURCE_LISTING_CATALOG_STALE'
+        || error.code === 'SOURCE_LISTING_CATEGORY_NOT_SELECTABLE')) {
+      fail(
+        'OZON_LISTING_PRODUCTION_CATALOG_STALE',
+        'Current authoritative Ozon catalog does not match the frozen draft',
+      );
+    }
     fail(
       'OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE',
       'Production publish authority is temporarily unavailable',
@@ -416,39 +450,50 @@ async function loadAuthorities(
   }
 }
 
+export async function preflightOzonListingProductionAuthorities(
+  options: OzonListingProductionCompileAdapterOptions,
+  input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+  },
+): Promise<OzonListingProductionAuthorityPreflightResult> {
+  const ownerUserId = exactText(input.ownerUserId, 'ownerUserId');
+  if (ownerUserId !== input.draft.ownerUserId) {
+    fail('OZON_LISTING_PRODUCTION_OWNER_INVALID', 'Compile owner does not own the frozen draft');
+  }
+  const currentTime = (options.now || (() => new Date()))();
+  if (!(currentTime instanceof Date) || !Number.isFinite(currentTime.getTime())) {
+    fail('OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE', 'Compile clock is invalid');
+  }
+  const assetIds = [...new Set(input.draft.media.assignments.map((assignment) => (
+    mediaIdentifier(assignment.assetId, 'media.assetId')
+  )))];
+  const loaded = await loadAuthorities(options, ownerUserId, input.draft, assetIds);
+  const capture = assertOwnedCapture(input.draft, ownerUserId, loaded.capture);
+  const catalog = catalogTarget(input.draft, loaded.catalog, currentTime);
+  const validation = authoritativeValidation(
+    input.draft,
+    catalog.authority.snapshot.revision,
+    loaded.validation,
+  );
+  const images = resolvedImages(
+    input.draft,
+    ownerUserId,
+    loaded.assets,
+    currentTime.toISOString(),
+  );
+  return { capture, catalog, validation, images };
+}
+
 export function createOzonListingProductionCompileAdapter(
   options: OzonListingProductionCompileAdapterOptions,
 ) {
-  const now = options.now || (() => new Date());
   return async function compile(input: {
     ownerUserId: string;
     draft: OzonListingDraft;
   }): Promise<CompiledOzonListingPublishRequest> {
-    const ownerUserId = exactText(input.ownerUserId, 'ownerUserId');
-    if (ownerUserId !== input.draft.ownerUserId) {
-      fail('OZON_LISTING_PRODUCTION_OWNER_INVALID', 'Compile owner does not own the frozen draft');
-    }
-    const currentTime = now();
-    if (!(currentTime instanceof Date) || !Number.isFinite(currentTime.getTime())) {
-      fail('OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE', 'Compile clock is invalid');
-    }
-    const assetIds = [...new Set(input.draft.media.assignments.map((assignment) => (
-      mediaIdentifier(assignment.assetId, 'media.assetId')
-    )))];
-    const loaded = await loadAuthorities(options, ownerUserId, input.draft, assetIds);
-    const capture = assertOwnedCapture(input.draft, ownerUserId, loaded.capture);
-    const catalog = catalogTarget(input.draft, loaded.catalog, currentTime);
-    const validation = authoritativeValidation(
-      input.draft,
-      catalog.authority.snapshot.revision,
-      loaded.validation,
-    );
-    const images = resolvedImages(
-      input.draft,
-      ownerUserId,
-      loaded.assets,
-      currentTime.toISOString(),
-    );
+    const { capture, catalog, validation, images } =
+      await preflightOzonListingProductionAuthorities(options, input);
 
     let compiled;
     try {

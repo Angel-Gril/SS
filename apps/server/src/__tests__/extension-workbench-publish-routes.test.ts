@@ -7,6 +7,9 @@ import {
   EXTENSION_WORKBENCH_LISTING_PUBLISH_VERSION,
   type ExtensionWorkbenchListingPublishStatusResult,
 } from '../services/extension-workbench-listing-publish.js';
+import {
+  OzonListingProductionCompileError,
+} from '../services/ozon-listing-production-compile-adapter.js';
 
 const SHA = { payload: 'c'.repeat(64) };
 
@@ -90,6 +93,7 @@ async function build(options: {
   scopes?: string[];
   allowedShopIds?: string[];
   status?: ExtensionWorkbenchListingPublishStatusResult;
+  preflightError?: Error;
 } = {}) {
   let current = structuredClone(options.currentDraft || draft());
   let storedIntent: any = null;
@@ -97,6 +101,9 @@ async function build(options: {
     byokAssetIds: ['byok-asset-1', 'byok-asset-2'],
     policyRevision: 14,
   }));
+  const preflightPublishAuthority = vi.fn(async () => {
+    if (options.preflightError) throw options.preflightError;
+  });
   const recordPublishIntent = vi.fn(async (input: any) => {
     if (!storedIntent) {
       storedIntent = {
@@ -128,6 +135,7 @@ async function build(options: {
   const service = createExtensionWorkbenchListingPublishService({
     loadDraft: async () => structuredClone(current),
     authorizePublish,
+    preflightPublishAuthority,
     recordPublishIntent,
     findPublishStatus,
     linkPublishedByokAssets,
@@ -148,7 +156,9 @@ async function build(options: {
   });
   return {
     app,
+    service,
     authorizePublish,
+    preflightPublishAuthority,
     recordPublishIntent,
     findPublishStatus,
     linkPublishedByokAssets,
@@ -272,6 +282,7 @@ describe('extension workbench publish routes', () => {
       idempotencyKey: 'workbench-publish-operation-0001',
     };
     const first = await built.app.inject({ method: 'POST', url: '/prepare', payload });
+    built.preflightPublishAuthority.mockRejectedValue(new Error('authority unavailable after intent'));
     const replay = await built.app.inject({ method: 'POST', url: '/prepare', payload });
     expect(first.statusCode).toBe(201);
     expect(replay.statusCode).toBe(200);
@@ -295,7 +306,98 @@ describe('extension workbench publish routes', () => {
       },
     });
     expect(replay.json().data.replayed).toBe(true);
+    expect(built.preflightPublishAuthority).toHaveBeenCalledTimes(1);
     expect(built.recordPublishIntent).toHaveBeenCalledTimes(2);
+    await built.app.close();
+  });
+
+  it('preflights production authority once after preview confirmation and before intent persistence', async () => {
+    const built = await build();
+    const preview = await built.app.inject({
+      method: 'POST', url: '/preview', payload: previewRequest(),
+    });
+    expect(built.preflightPublishAuthority).not.toHaveBeenCalled();
+
+    const prepared = await built.app.inject({
+      method: 'POST',
+      url: '/prepare',
+      payload: {
+        ...previewRequest(),
+        previewHash: preview.json().data.previewHash,
+        idempotencyKey: 'workbench-publish-preflight-0001',
+      },
+    });
+
+    expect(prepared.statusCode).toBe(201);
+    expect(built.preflightPublishAuthority).toHaveBeenCalledTimes(1);
+    expect(built.preflightPublishAuthority).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      draft: expect.objectContaining({
+        id: 'workflow-1',
+        revision: 12,
+        stage: 'READY_TO_PUBLISH',
+      }),
+    });
+    expect(built.preflightPublishAuthority.mock.invocationCallOrder[0]).toBeLessThan(
+      built.recordPublishIntent.mock.invocationCallOrder[0]!,
+    );
+    await built.app.close();
+  });
+
+  it.each([
+    new OzonListingProductionCompileError(
+      'OZON_LISTING_PRODUCTION_VALIDATION_STALE',
+      'Authoritative validation is stale',
+    ),
+    new OzonListingProductionCompileError(
+      'OZON_LISTING_PRODUCTION_AUTHORITY_UNAVAILABLE',
+      'Production authority is unavailable',
+    ),
+  ])('preserves production preflight failure $code without recording an intent', async (error) => {
+    const built = await build({ preflightError: error });
+    const actor = {
+      sessionId: 'session-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+    };
+    const preview = await built.service.preview(previewRequest(), actor);
+
+    await expect(built.service.prepare({
+      ...previewRequest(),
+      previewHash: preview.previewHash,
+      idempotencyKey: 'workbench-publish-preflight-failure-0001',
+    }, actor)).rejects.toBe(error);
+    expect(built.preflightPublishAuthority).toHaveBeenCalledTimes(1);
+    expect(built.recordPublishIntent).not.toHaveBeenCalled();
+    await built.app.close();
+  });
+
+  it('returns a safe typed production preflight code without persisting an intent', async () => {
+    const built = await build({
+      preflightError: new OzonListingProductionCompileError(
+        'OZON_LISTING_PRODUCTION_CATALOG_STALE',
+        'sensitive upstream detail',
+      ),
+    });
+    const preview = await built.app.inject({
+      method: 'POST', url: '/preview', payload: previewRequest(),
+    });
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/prepare',
+      payload: {
+        ...previewRequest(),
+        previewHash: preview.json().data.previewHash,
+        idempotencyKey: 'workbench-publish-preflight-stale-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({
+      code: 0,
+      errorCode: 'ozon_listing_production_catalog_stale',
+      msg: '工作台商品发布请求未通过校验',
+    });
+    expect(response.body).not.toContain('sensitive upstream detail');
+    expect(built.recordPublishIntent).not.toHaveBeenCalled();
     await built.app.close();
   });
 

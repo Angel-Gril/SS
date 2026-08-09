@@ -17,18 +17,48 @@ describe('Ozon publish production bootstrap', () => {
       source.indexOf('const sourceListingShadowAttributeService'),
       source.indexOf('const sourceOzonPublishAttemptRepository'),
     );
-    const compileWiring = source.slice(
-      source.indexOf('const sourceOzonListingProductionCompile'),
+    const productionCompileWiring = source.slice(
+      source.indexOf('const sourceOzonListingProductionCompileOptions'),
+      source.indexOf('const sourceOzonListingShadowCompile'),
+    );
+    const shadowCompileWiring = source.slice(
+      source.indexOf('const sourceOzonListingShadowCompile'),
+      source.indexOf('const sourceOzonPublisherEntrypointParityObserver'),
+    );
+    const parityWiring = source.slice(
+      source.indexOf('const sourceOzonPublisherEntrypointParityObserver'),
       source.indexOf('const sourceOzonPublisherInstanceId'),
+    );
+    const workbenchPublishWiring = source.slice(
+      source.indexOf('await app.register(extensionWorkbenchPublishRoutes'),
+      source.indexOf('const byokGeneratedAssetRepository'),
     );
 
     expect(shadowAttributes).toContain('fetchDefinitions: async () => throwShadowAuthorityUnavailable()');
     expect(shadowAttributes).toContain('fetchPage: async () => throwShadowAuthorityUnavailable()');
     expect(shadowAttributes).not.toContain('loadOwnedSourceListingOzonClient');
-    expect(compileWiring).toContain('sourceListingWorkflowAttributeService.validateAuthoritative');
-    expect(compileWiring).toContain('sourceListingShadowAttributeService.validateAuthoritative');
-    expect(compileWiring).toContain('compile: sourceOzonListingShadowCompile');
-    expect(compileWiring).not.toContain('compile: sourceOzonListingProductionCompile');
+    expect(productionCompileWiring).toContain(
+      'sourceListingWorkflowAttributeService.validateAuthoritative',
+    );
+    expect(productionCompileWiring).toContain(
+      'createOzonListingProductionCompileCache({',
+    );
+    expect(productionCompileWiring).toContain(
+      'compile: sourceOzonListingProductionCompileUncached',
+    );
+    expect(shadowCompileWiring).toContain(
+      'sourceListingShadowAttributeService.validateAuthoritative',
+    );
+    expect(shadowCompileWiring).not.toContain('createOzonListingProductionCompileCache');
+    expect(shadowCompileWiring).not.toContain('loadOwnedSourceListingOzonClient');
+    expect(parityWiring).toContain('compile: sourceOzonListingShadowCompile');
+    expect(parityWiring).not.toContain('compile: sourceOzonListingProductionCompile');
+    expect(workbenchPublishWiring).toContain(
+      'await preflightOzonListingProductionCompile(',
+    );
+    expect(workbenchPublishWiring).toContain(
+      'sourceOzonListingProductionCompile,',
+    );
   });
 
   it('persists sanitized parity observations without wiring publisher side effects into the recorder', () => {

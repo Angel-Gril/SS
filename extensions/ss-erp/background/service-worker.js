@@ -396,6 +396,7 @@ let byokProviderSettingsDispatcher = null;
 let byokGeneratedResultEscrow = null;
 let byokGeneratedResultVault = null;
 let byokGeneratedResultAuthorityResetQueue = Promise.resolve();
+let byokDeviceSessionCleanupDepth = 0;
 let byokGeneratedAssetIngestClient = null;
 let byokGeneratedAssetBatchIngestClient = null;
 let byokListingPublishCoordinator = null;
@@ -443,7 +444,9 @@ async function clearCachedByokGeneratedResults() {
     const finalize = async () => {
       let failure = null;
       try {
-        await getByokGeneratedResultEscrow().clearAndRotateKey();
+        const escrow = getByokGeneratedResultEscrow();
+        if (byokDeviceSessionCleanupDepth > 0) await escrow.clearAndDeleteKey();
+        else await escrow.clearAndRotateKey();
       } catch (error) {
         failure = error;
       }
@@ -517,31 +520,45 @@ function notifyByokDeviceSessionInvalidated(reason) {
 }
 
 async function clearByokDeviceSessionState(input) {
-  clearHostedAiImageSuiteRuntime(input && input.reason);
-  getByokReadinessHandleCache().clear();
-  if (byokWorkbenchBatchRegistry) {
-    await Promise.resolve(byokWorkbenchBatchRegistry.clearAll(
-      String(input && input.reason || 'device_session_changed').slice(0, 100),
-    )).catch(function () {});
-  }
-  if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
-  if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
-  if (byokWorkbenchEditEpochGuard) byokWorkbenchEditEpochGuard.rotate();
-  if (byokWorkbenchProviderSemaphore) byokWorkbenchProviderSemaphore.invalidateAll();
-  getByokGeneratedResultVault().clear();
-  if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
+  byokDeviceSessionCleanupDepth += 1;
   try {
-    const outcomes = await Promise.allSettled([
-      getByokProfileStore().disconnectDevice(),
-      getByokPermissionBroker().clearSessionConsent(),
-      getByokWorkbenchSessionManager().clearProviderState(),
-      getByokListingPublishCoordinator().clear(),
-      getWorkbenchListingPublishCoordinator().clear(),
-    ]);
+    const reason = String(input && input.reason || 'device_session_changed').slice(0, 100);
+    const cleanups = [
+      Promise.resolve().then(function () { clearHostedAiImageSuiteRuntime(reason); }),
+      Promise.resolve().then(function () { getByokReadinessHandleCache().clear(); }),
+      Promise.resolve().then(function () {
+        if (!byokWorkbenchBatchRegistry) return undefined;
+        return byokWorkbenchBatchRegistry.clearAll(reason);
+      }).catch(function () {}),
+      Promise.resolve().then(function () {
+        if (byokWorkbenchEditController) byokWorkbenchEditController.clear();
+      }),
+      Promise.resolve().then(function () {
+        if (byokWorkbenchEditMediaStore) byokWorkbenchEditMediaStore.clear();
+      }),
+      Promise.resolve().then(function () {
+        if (byokWorkbenchEditEpochGuard) byokWorkbenchEditEpochGuard.rotate();
+      }),
+      Promise.resolve().then(function () {
+        if (byokWorkbenchProviderSemaphore) byokWorkbenchProviderSemaphore.invalidateAll();
+      }),
+      Promise.resolve().then(function () { getByokGeneratedResultVault().clear(); }),
+      Promise.resolve().then(function () {
+        if (byokWorkbenchPreviewBroker) byokWorkbenchPreviewBroker.clear();
+      }),
+      Promise.resolve().then(function () { return getByokProfileStore().disconnectDevice(); }),
+      Promise.resolve().then(function () { return getByokPermissionBroker().clearSessionConsent(); }),
+      Promise.resolve().then(function () { return getByokWorkbenchSessionManager().clearProviderState(); }),
+      Promise.resolve().then(function () { return getByokListingPublishCoordinator().clear(); }),
+      Promise.resolve().then(function () { return getWorkbenchListingPublishCoordinator().clear(); }),
+      Promise.resolve().then(function () { return getByokGeneratedResultEscrow().clearAndDeleteKey(); }),
+    ];
+    notifyByokDeviceSessionInvalidated(input && input.reason);
+    const outcomes = await Promise.allSettled(cleanups);
     const failed = outcomes.find((outcome) => outcome.status === 'rejected');
     if (failed) throw failed.reason;
   } finally {
-    notifyByokDeviceSessionInvalidated(input && input.reason);
+    byokDeviceSessionCleanupDepth = Math.max(0, byokDeviceSessionCleanupDepth - 1);
   }
 }
 

@@ -387,6 +387,29 @@ test('central service-worker cleanup clears all device-scoped BYOK authority and
   assert.match(cleanupSource, /byokWorkbenchPreviewBroker\.clear\(\)/u);
   assert.match(cleanupSource, /getByokProfileStore\(\)\.disconnectDevice\(\)/u);
   assert.match(cleanupSource, /getByokPermissionBroker\(\)\.clearSessionConsent\(\)/u);
+  assert.match(
+    cleanupSource,
+    /Promise\.resolve\(\)\.then\(function \(\) \{ return getByokGeneratedResultEscrow\(\)\.clearAndDeleteKey\(\); \}\)/u,
+  );
+  assert.match(cleanupSource, /const outcomes = await Promise\.allSettled\(cleanups\)/u);
+  assert.match(cleanupSource, /byokDeviceSessionCleanupDepth \+= 1/u);
+  assert.match(
+    cleanupSource,
+    /byokDeviceSessionCleanupDepth = Math\.max\(0, byokDeviceSessionCleanupDepth - 1\)/u,
+  );
+  assert.match(
+    serviceWorkerSource,
+    /if \(byokDeviceSessionCleanupDepth > 0\) await escrow\.clearAndDeleteKey\(\);\s*else await escrow\.clearAndRotateKey\(\);/u,
+  );
+  assert.ok(
+    cleanupSource.indexOf('notifyByokDeviceSessionInvalidated(input && input.reason)')
+      < cleanupSource.indexOf('await Promise.allSettled(cleanups)'),
+    'device-session invalidation must be announced before any cleanup can hang',
+  );
+  assert.doesNotMatch(
+    cleanupSource,
+    /getByokGeneratedResultEscrow\(\)\.clearAndRotateKey\(\)/u,
+  );
   assert.match(cleanupSource, /notifyByokDeviceSessionInvalidated\(input && input\.reason\)/u);
 
   const profileStoreSource = fs.readFileSync(profileStorePath, 'utf8');

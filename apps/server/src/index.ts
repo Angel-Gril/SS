@@ -315,6 +315,10 @@ import {
   createOzonListingProductionCompileAdapter,
   type OzonListingProductionCompileAdapterOptions,
 } from './services/ozon-listing-production-compile-adapter.js';
+import {
+  createOzonListingProductionCompileCache,
+  preflightOzonListingProductionCompile,
+} from './services/ozon-listing-production-compile-cache.js';
 import { createOzonPublisherEntrypointParityObserver } from './services/ozon-publisher-entrypoint-parity-shadow.js';
 import { createPrismaOzonPublisherRolloutRecorder } from './services/ozon-publisher-rollout-recorder.js';
 import { createOzonPublisherParityObservationService } from './services/ozon-publisher-parity-observations.js';
@@ -853,11 +857,17 @@ const sourceOzonListingCompileAuthorityLoaders: Pick<
     },
   }),
 };
-const sourceOzonListingProductionCompile = createOzonListingProductionCompileAdapter({
+const sourceOzonListingProductionCompileOptions: OzonListingProductionCompileAdapterOptions = {
   ...sourceOzonListingCompileAuthorityLoaders,
   loadAuthoritativeValidation: ({ ownerUserId, draft }) => (
     sourceListingWorkflowAttributeService.validateAuthoritative({ ownerUserId, draft })
   ),
+};
+const sourceOzonListingProductionCompileUncached = createOzonListingProductionCompileAdapter(
+  sourceOzonListingProductionCompileOptions,
+);
+const sourceOzonListingProductionCompile = createOzonListingProductionCompileCache({
+  compile: sourceOzonListingProductionCompileUncached,
 });
 const sourceOzonListingShadowCompile = createOzonListingProductionCompileAdapter({
   ...sourceOzonListingCompileAuthorityLoaders,
@@ -2585,6 +2595,12 @@ if (isExtensionDeviceAuthEnabled()) {
         }
       },
       authorizePublish: extensionByokPublishAuthorizer,
+      preflightPublishAuthority: async (input) => {
+        await preflightOzonListingProductionCompile(
+          sourceOzonListingProductionCompile,
+          input,
+        );
+      },
       recordPublishIntent: (input) => sourceListingWorkflowService.recordPublishIntent(input),
       findPublishStatus: (input) => extensionByokPublishStatusRepository.findStatus(input),
       linkPublishedByokAssets: async (input) => {
