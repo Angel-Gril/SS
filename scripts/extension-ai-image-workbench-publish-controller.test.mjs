@@ -387,6 +387,23 @@ for (const mode of ['ERP_HOSTED', 'BYOK']) {
   assert.equal(test.controller.getState().publishState.state, 'SUCCEEDED');
 }
 
+{
+  const rejected = Object.assign(new Error('production payload rejected'), {
+    code: 'SS_ERP_WORKBENCH_PUBLISH_PREPARE_REJECTED',
+  });
+  const test = createHarness({ confirm: async () => { throw rejected; } });
+  test.emitSnapshot(snapshot('BYOK'));
+  await settle();
+  test.nodes.workspacePublishConfirmation.checked = true;
+  test.nodes.workspacePublishConfirmation.dispatch('change', true);
+  test.nodes.workspacePublishConfirmButton.dispatch('click', true);
+  await settle();
+  assert.match(test.nodes.workspacePublishOperationStatus.textContent, /发布准备校验未通过/u);
+  assert.doesNotMatch(test.nodes.workspacePublishOperationStatus.textContent, /服务暂不可用/u);
+  assert.equal(test.calls.filter((row) => row[0] === 'confirm').length, 1);
+  assert.equal(test.controller.getState().publishState, null);
+}
+
 for (const code of [
   'SS_ERP_WORKBENCH_PUBLISH_UNKNOWN_OUTCOME',
   'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME',

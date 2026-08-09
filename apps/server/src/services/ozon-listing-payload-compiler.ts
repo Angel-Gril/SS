@@ -23,7 +23,10 @@ import {
 import { z } from 'zod';
 import type { OzonAttributeValidationReport } from './ozon-attribute-validation.js';
 import type { OzonImportItem } from './ozon-client.js';
-import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from './source-listing-sku-identity.js';
+import {
+  SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+  capturedSourceSkuAliases,
+} from './source-listing-sku-identity.js';
 import { OZON_V3_IMPORT_PACKAGE_CONTRACT } from './ozon-v3-import-package-contract.js';
 
 export const OZON_LISTING_PAYLOAD_COMPILER_VERSION = 'ozon-listing-payload-compiler/v1' as const;
@@ -320,11 +323,14 @@ function selectedCanonicalSkuKeys(draft: OzonListingDraft, capture: SourceProduc
     fail('OZON_LISTING_COMPILE_SKU_INVALID', 'The product-only key cannot identify a real SKU row');
   }
 
+  const captureAliases = capturedSourceSkuAliases(capture);
   const captureKeys = new Set<string>();
   for (const sku of capture.skus) {
     const key = normalizedText(sku.key);
-    if (!key || key !== sku.key || key === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY || captureKeys.has(key)) {
-      fail('OZON_LISTING_COMPILE_SKU_INVALID', 'Capture SKU keys are not unique exact canonical values');
+    if (!key || Array.from(key).length > MAX_IDENTIFIER_LENGTH
+      || key === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY
+      || captureAliases.get(key) !== key || captureKeys.has(key)) {
+      fail('OZON_LISTING_COMPILE_SKU_INVALID', 'Capture SKU keys do not map to unique canonical values');
     }
     captureKeys.add(key);
   }

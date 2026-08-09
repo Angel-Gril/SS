@@ -208,6 +208,26 @@ function expectCompileCode(input: ReturnType<typeof buildInput>, code: string) {
   );
 }
 
+function rebindCaptureAuthority(input: ReturnType<typeof buildInput>) {
+  input.draft.sourceCaptureHash = hashCapture(input.capture);
+  input.draft.copy.candidates[0]!.sourceCaptureHash = input.draft.sourceCaptureHash;
+  input.resolvedImages.authority.sourceCaptureHash = input.draft.sourceCaptureHash;
+}
+
+function addUnselectedCaptureSku(input: ReturnType<typeof buildInput>, key: string) {
+  const sku = structuredClone(input.capture.skus[0]!);
+  sku.key = key;
+  sku.sourceSkuId = `source-extra-${input.capture.skus.length}`;
+  sku.ordinal = input.capture.skus.length;
+  sku.fieldEvidence.sourceSkuId.value = sku.sourceSkuId;
+  input.capture.skus.push(sku);
+  const skuCount = input.capture.counts.find((count) => count.fieldPath === '/skus')!;
+  skuCount.totalCount = input.capture.skus.length;
+  skuCount.capturedCount = input.capture.skus.length;
+  skuCount.submittedCount = input.capture.skus.length;
+  rebindCaptureAuthority(input);
+}
+
 describe('Ozon listing payload compiler', () => {
   it('compiles one immutable v3 import item per canonical SKU without deriving commercial facts', () => {
     const result = compileOzonListingPayload(buildInput());
@@ -377,6 +397,52 @@ describe('Ozon listing payload compiler', () => {
     const tooMany = buildInput();
     tooMany.draft.selectedSkuKeys = Array.from({ length: 101 }, (_, index) => `sku-${index}`);
     expectCompileCode(tooMany, 'OZON_LISTING_COMPILE_SKU_INVALID');
+  });
+
+  it('maps injective NFKC capture SKU keys to the canonical draft identity', () => {
+    const input = buildInput();
+    input.capture.skus[0]!.key = '\uff53\uff4b\uff55\uff0d\uff10';
+    input.capture.skus[1]!.key = '\uff53\uff4b\uff55\uff0d\uff11';
+    input.capture.facts.selectedSkuKey = input.capture.skus[0]!.key;
+    input.capture.fieldEvidence.selectedSkuKey.value = input.capture.skus[0]!.key;
+    rebindCaptureAuthority(input);
+
+    const result = compileOzonListingPayload(input);
+
+    expect(result.offerTrace.map(({ skuKey }) => skuKey)).toEqual(['sku-0', 'sku-1']);
+    expect(input.capture.skus.map(({ key }) => key)).toEqual([
+      '\uff53\uff4b\uff55\uff0d\uff10',
+      '\uff53\uff4b\uff55\uff0d\uff11',
+    ]);
+  });
+
+  it('rejects capture SKU keys that collide after NFKC normalization', () => {
+    const input = buildInput();
+    addUnselectedCaptureSku(input, '\uff53\uff4b\uff55\uff0d\uff10');
+
+    expectCompileCode(input, 'OZON_LISTING_COMPILE_SKU_INVALID');
+  });
+
+  it('rejects a noncanonical capture SKU alias for the product-only sentinel', () => {
+    const input = buildInput();
+    const reservedAlias = Array.from(SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY, (character) => {
+      if (character === '_') return '\uff3f';
+      return String.fromCodePoint(character.codePointAt(0)! + 0xfee0);
+    }).join('');
+    expect(reservedAlias.normalize('NFKC')).toBe(SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY);
+    addUnselectedCaptureSku(input, reservedAlias);
+
+    expectCompileCode(input, 'OZON_LISTING_COMPILE_SKU_INVALID');
+  });
+
+  it('rejects a capture SKU key that exceeds the limit only after NFKC expansion', () => {
+    const input = buildInput();
+    const expandingKey = '\ufb03'.repeat(167);
+    expect(Array.from(expandingKey)).toHaveLength(167);
+    expect(Array.from(expandingKey.normalize('NFKC'))).toHaveLength(501);
+    addUnselectedCaptureSku(input, expandingKey);
+
+    expectCompileCode(input, 'OZON_LISTING_COMPILE_SKU_INVALID');
   });
 
   it('passes one explicit CNY pricing currency through unchanged', () => {

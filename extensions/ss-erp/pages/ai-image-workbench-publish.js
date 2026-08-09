@@ -262,6 +262,7 @@
     }
     return {
       SS_ERP_WORKBENCH_PUBLISH_PREVIEW_REJECTED: 'ERP 拒绝了当前草稿或媒体顺序；请重新载入权威草稿。',
+      SS_ERP_WORKBENCH_PUBLISH_PREPARE_REJECTED: 'ERP 发布准备校验未通过；未创建新的 Ozon 提交。',
       SS_ERP_WORKBENCH_PUBLISH_RESPONSE_INVALID: '发布预览完整性校验失败，已阻止提交。',
       SS_ERP_WORKBENCH_PUBLISH_CONFIRMATION_REQUIRED: '发布预览已变化，请重新核对。',
       SS_ERP_WORKBENCH_PUBLISH_OPERATION_NOT_FOUND: '没有找到可恢复的发布身份。',
