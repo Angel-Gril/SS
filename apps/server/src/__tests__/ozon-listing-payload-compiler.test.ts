@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import {
+  OZON_LISTING_OFFER_ID_MAX_LENGTH,
   canonicalStringify,
   sourceProductCaptureCanonicalStringify,
   type OzonListingDraft,
@@ -292,6 +293,23 @@ describe('Ozon listing payload compiler', () => {
     );
   });
 
+  it('generates stable unique 50-character offer IDs with 180 bits of digest entropy', () => {
+    const firstInput = buildInput();
+    const firstPricing = (firstInput.draft.pricing.value as OzonListingPricingV1).items;
+    for (const item of firstPricing) delete item.offerId;
+    const secondInput = structuredClone(firstInput);
+
+    const first = compileOzonListingPayload(firstInput);
+    const second = compileOzonListingPayload(secondInput);
+    const firstOfferIds = first.offerTrace.map((trace) => trace.offerId);
+
+    expect(OZON_LISTING_OFFER_ID_MAX_LENGTH).toBe(50);
+    expect(first.offerTrace.every((trace) => trace.source === 'DETERMINISTIC')).toBe(true);
+    expect(firstOfferIds.every((offerId) => /^ssv2-[a-f0-9]{45}$/.test(offerId))).toBe(true);
+    expect(new Set(firstOfferIds).size).toBe(firstOfferIds.length);
+    expect(second.offerTrace.map((trace) => trace.offerId)).toEqual(firstOfferIds);
+  });
+
   it('compiles independently reviewed title and description fields from separate candidates', () => {
     const input = buildInput();
     const titleCandidate = {
@@ -542,5 +560,26 @@ describe('Ozon listing payload compiler', () => {
     items[0]!.offerId = 'duplicate-offer';
     items[1]!.offerId = 'duplicate-offer';
     expectCompileCode(input, 'OZON_LISTING_COMPILE_OFFER_ID_INVALID');
+  });
+
+  it('rejects an explicit offer ID above the Ozon 50-character limit', () => {
+    const input = buildInput();
+    const items = (input.draft.pricing.value as OzonListingPricingV1).items;
+    items[0]!.offerId = 'a'.repeat(51);
+    expectCompileCode(input, 'OZON_LISTING_COMPILE_OFFER_ID_INVALID');
+  });
+
+  it('preserves an explicit offer ID at the Ozon 50-character limit', () => {
+    const input = buildInput();
+    const items = (input.draft.pricing.value as OzonListingPricingV1).items;
+    const offerId = 'a'.repeat(50);
+    items[0]!.offerId = offerId;
+
+    const result = compileOzonListingPayload(input);
+    expect(result.offerTrace).toContainEqual(expect.objectContaining({
+      offerId,
+      source: 'USER',
+    }));
+    expect(result.payload.items).toContainEqual(expect.objectContaining({ offer_id: offerId }));
   });
 });

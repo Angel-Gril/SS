@@ -461,13 +461,17 @@ function validatedOfferId(value: unknown): string {
 }
 
 function deterministicOfferId(draft: OzonListingDraft, skuKey: string): string {
+  const prefix = 'ssv2-';
   const digest = createHash('sha256').update(canonicalStringify({
     contractVersion: 'ozon-listing-offer-id/v1',
     shopId: draft.shopId,
     draftId: draft.id,
     skuKey,
   })).digest('hex');
-  return validatedOfferId(`ssv2-${digest}`);
+  return validatedOfferId(`${prefix}${digest.slice(
+    0,
+    OZON_LISTING_OFFER_ID_MAX_LENGTH - prefix.length,
+  )}`);
 }
 
 function trustedActualEvidence(evidence: SourceCaptureEvidence | undefined, value: number): boolean {

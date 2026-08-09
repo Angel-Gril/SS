@@ -21,7 +21,7 @@ export const OZON_LISTING_SUPPORTED_VAT_RATES = [
   '0.22',
 ] as const;
 export type OzonListingVatRate = typeof OZON_LISTING_SUPPORTED_VAT_RATES[number];
-export const OZON_LISTING_OFFER_ID_MAX_LENGTH = 100;
+export const OZON_LISTING_OFFER_ID_MAX_LENGTH = 50;
 
 export function isOzonListingOldPriceAtLeastPrice(price: string, oldPrice: string): boolean {
   const pattern = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;

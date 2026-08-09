@@ -158,6 +158,17 @@ describe('strict source listing pricing', () => {
     expect(validateSourceListingPricing(value, ['sku-a', 'sku-b'])).toEqual(value);
   });
 
+  it('accepts an explicit offer ID at the Ozon 50-character limit', () => {
+    const value = pricing([
+      {
+        skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'RUB', vat: '0',
+        offerId: 'a'.repeat(50),
+      },
+      { skuKey: 'sku-b', price: '200', oldPrice: '240', currencyCode: 'RUB', vat: '0' },
+    ]);
+    expect(validateSourceListingPricing(value, ['sku-a', 'sku-b'])).toEqual(value);
+  });
+
   it.each(OZON_LISTING_SUPPORTED_VAT_RATES)('accepts official Ozon VAT rate %s', (vat) => {
     const value = pricing([
       { skuKey: 'sku-a', price: '100', oldPrice: '100', currencyCode: 'CNY', vat },
@@ -214,6 +225,13 @@ describe('strict source listing pricing', () => {
     ])],
     ['noncanonical offer ID', pricing([
       { skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'RUB', vat: '0', offerId: ' offer-a' },
+      { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
+    ])],
+    ['offer ID above the Ozon 50-character limit', pricing([
+      {
+        skuKey: 'sku-a', price: '100', oldPrice: '120', currencyCode: 'RUB', vat: '0',
+        offerId: 'a'.repeat(51),
+      },
       { skuKey: 'sku-b', price: '200', oldPrice: '220', currencyCode: 'RUB', vat: '0' },
     ])],
   ])('rejects %s', (_label, value) => {

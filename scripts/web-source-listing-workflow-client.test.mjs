@@ -29,7 +29,7 @@ function loadClientModule(defaultApi = {}) {
           OZON_LISTING_CURRENCY_CODE_LENGTH: 3,
           OZON_LISTING_DECIMAL_MAX_LENGTH: 64,
           OZON_LISTING_IMPORT_MAX_ITEMS: 100,
-          OZON_LISTING_OFFER_ID_MAX_LENGTH: 100,
+          OZON_LISTING_OFFER_ID_MAX_LENGTH: 50,
           OZON_LISTING_PRICING_CONTRACT_VERSION: 'ozon-listing-pricing/v1',
           OZON_LISTING_SUPPORTED_CURRENCY_CODES: ['CNY', 'RUB'],
           OZON_LISTING_SUPPORTED_VAT_RATES: ['0', '0.05', '0.07', '0.1', '0.2', '0.22'],
@@ -123,6 +123,15 @@ const workflow = loadClientModule();
     items: [{ skuKey: 'sku-1', price: '180', oldPrice: '200', currencyCode: 'CNY', vat: '0' }],
   });
   assert.equal(cnyPricing.items[0].currencyCode, 'CNY');
+  const maximumOfferId = 'a'.repeat(50);
+  const boundaryPricing = workflow.buildOzonListingPricingV1({
+    selectedSkuKeys: ['sku-1'],
+    items: [{
+      skuKey: 'sku-1', price: '180', oldPrice: '200', currencyCode: 'CNY', vat: '0',
+      offerId: maximumOfferId,
+    }],
+  });
+  assert.equal(boundaryPricing.items[0].offerId, maximumOfferId);
   for (const input of [
     { selectedSkuKeys: ['sku-1', 'sku-2'], items: [{ skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
     { selectedSkuKeys: ['sku-1'], items: [{ skuKey: 'sku-1', price: '0', oldPrice: '2', currencyCode: 'RUB', vat: '0' }] },
@@ -140,6 +149,10 @@ const workflow = loadClientModule();
       { skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' },
       { skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0' },
     ] },
+    { selectedSkuKeys: ['sku-1'], items: [{
+      skuKey: 'sku-1', price: '1', oldPrice: '2', currencyCode: 'RUB', vat: '0',
+      offerId: 'a'.repeat(51),
+    }] },
   ]) {
     assert.throws(
       () => workflow.buildOzonListingPricingV1(input),
