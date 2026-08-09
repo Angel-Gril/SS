@@ -45,6 +45,7 @@ export interface GetCachedOzonAttributeDefinitionsDeps {
   ttlMs?: number;
   emptyDefinitionsPolicy?: EmptyOzonAttributeDefinitionsPolicy;
   forceRefresh?: boolean;
+  cacheOnly?: boolean;
 }
 
 export interface OzonAttributeDefinitionCacheResult extends OzonAttributeDefinitionCacheRecord {
@@ -152,6 +153,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || 'unknown error');
 }
 
+function isFreshCompleteRecord(
+  record: OzonAttributeDefinitionCacheRecord | null,
+  now: Date,
+): record is OzonAttributeDefinitionCacheRecord {
+  if (!record
+    || record.complete !== true
+    || !(record.fetchedAt instanceof Date)
+    || !(record.expiresAt instanceof Date)
+    || !(now instanceof Date)) return false;
+  const fetchedAt = record.fetchedAt.getTime();
+  const expiresAt = record.expiresAt.getTime();
+  const currentTime = now.getTime();
+  return Number.isFinite(fetchedAt)
+    && Number.isFinite(expiresAt)
+    && Number.isFinite(currentTime)
+    && fetchedAt <= currentTime
+    && expiresAt > fetchedAt
+    && expiresAt > currentTime;
+}
+
 function resultOrBlockingError(
   key: OzonAttributeDefinitionCacheKey,
   record: OzonAttributeDefinitionCacheRecord,
@@ -192,9 +213,14 @@ export async function getCachedOzonAttributeDefinitions(
     cached = null;
   }
 
-  if (!deps.forceRefresh && cached?.complete === true && cached.expiresAt.getTime() > now.getTime()) {
+  if (deps.cacheOnly && deps.forceRefresh) {
+    throw new Error('Ozon attribute definition cache lookup cannot refresh in cache-only mode');
+  }
+
+  if (!deps.forceRefresh && isFreshCompleteRecord(cached, now)) {
     return resultOrBlockingError(key, cached, 'cache', policy);
   }
+  if (deps.cacheOnly) throw new OzonAttributeDefinitionsRequiredError(key);
 
   try {
     const definitions = normalizeOzonAttributeDefinitions(await deps.fetchDefinitions());

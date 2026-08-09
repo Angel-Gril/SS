@@ -61,7 +61,18 @@ type GetCachedOzonAttributeValuesDeps = {
   maxPages?: number;
   maxRows?: number;
   forceRefresh?: boolean;
+  cacheOnly?: boolean;
 };
+
+export class OzonAttributeDictionaryRequiredError extends Error {
+  readonly code = 'OZON_ATTRIBUTE_DICTIONARY_REQUIRED';
+  readonly statusCode = 422;
+
+  constructor(readonly params: NormalizedOzonAttributeDictionaryCacheParams) {
+    super('A fresh complete official Ozon attribute dictionary cache is required');
+    this.name = 'OzonAttributeDictionaryRequiredError';
+  }
+}
 
 const DEFAULT_DICTIONARY_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -136,6 +147,24 @@ function isCompleteForRevision(
     && String(record.catalogRevision || '') === catalogRevision;
 }
 
+function hasFreshTemporalIntegrity(
+  record: OzonAttributeDictionaryCacheRecord,
+  now: Date,
+): boolean {
+  if (!(record.fetchedAt instanceof Date)
+    || !(record.expiresAt instanceof Date)
+    || !(now instanceof Date)) return false;
+  const fetchedAt = record.fetchedAt.getTime();
+  const expiresAt = record.expiresAt.getTime();
+  const currentTime = now.getTime();
+  return Number.isFinite(fetchedAt)
+    && Number.isFinite(expiresAt)
+    && Number.isFinite(currentTime)
+    && fetchedAt <= currentTime
+    && expiresAt > fetchedAt
+    && expiresAt > currentTime;
+}
+
 export async function getCachedOzonAttributeValues(
   params: OzonAttributeDictionaryCacheParams,
   deps: GetCachedOzonAttributeValuesDeps,
@@ -149,15 +178,19 @@ export async function getCachedOzonAttributeValues(
   } catch {
     cached = null;
   }
+  if (deps.cacheOnly && deps.forceRefresh) {
+    throw new Error('Ozon attribute dictionary cache lookup cannot refresh in cache-only mode');
+  }
   const strictCompleteness = Boolean(deps.fetchPage || normalizedParams.catalogRevision);
   if (!deps.forceRefresh
     && cached
-    && cached.expiresAt.getTime() > now.getTime()
+    && hasFreshTemporalIntegrity(cached, now)
     && (strictCompleteness
       ? isCompleteForRevision(cached, normalizedParams.catalogRevision)
       : cached.complete !== false)) {
     return { values: cached.values, source: 'cache', ...cacheMetadata(cached) };
   }
+  if (deps.cacheOnly) throw new OzonAttributeDictionaryRequiredError(normalizedParams);
 
   try {
     let fetched: {

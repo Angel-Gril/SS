@@ -718,6 +718,11 @@ export interface GetOrRefreshOzonCategoryCatalogSnapshotDeps {
   ttlMs?: number;
 }
 
+export interface RequireFreshOzonCategoryCatalogSnapshotDeps {
+  store: OzonCategoryCatalogSnapshotStore;
+  now?: () => Date;
+}
+
 export interface GetOrRefreshOzonCategoryCatalogSnapshotResult {
   snapshot: OzonCategoryCatalogSnapshot;
   refreshed: boolean;
@@ -745,6 +750,39 @@ function hasVerifiedCompleteSnapshot(snapshot: OzonCategoryCatalogSnapshot | nul
   if (!(snapshot.fetchedAt instanceof Date) || !Number.isFinite(snapshot.fetchedAt.getTime())) return false;
   if (!(snapshot.expiresAt instanceof Date) || !Number.isFinite(snapshot.expiresAt.getTime())) return false;
   return snapshot.revision === deriveOzonCategoryCatalogRevision(snapshot.entries);
+}
+
+export async function requireFreshOzonCategoryCatalogSnapshotForShop(
+  params: { shopId: string },
+  deps: RequireFreshOzonCategoryCatalogSnapshotDeps,
+): Promise<OzonCategoryCatalogSnapshot> {
+  const shopId = cleanText(params.shopId);
+  if (!shopId) {
+    throw new OzonCategoryCatalogRefreshError(
+      'OZON_CATEGORY_CATALOG_SHOP_REQUIRED',
+      'Ozon shop is required',
+    );
+  }
+  const now = deps.now?.() || new Date();
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new OzonCategoryCatalogRefreshError(
+      'OZON_CATEGORY_CATALOG_CLOCK_INVALID',
+      'Ozon category catalog cache clock is invalid',
+    );
+  }
+  const snapshot = await deps.store.find(shopId);
+  if (!hasVerifiedCompleteSnapshot(snapshot)
+    || snapshot.authoritative !== true
+    || snapshot.stale !== false
+    || snapshot.fetchedAt.getTime() > now.getTime()
+    || snapshot.expiresAt.getTime() <= now.getTime()
+    || snapshot.expiresAt.getTime() <= snapshot.fetchedAt.getTime()) {
+    throw new OzonCategoryCatalogRefreshError(
+      'OZON_CATEGORY_CATALOG_FRESH_CACHE_REQUIRED',
+      'A fresh complete authoritative Ozon category catalog cache is required',
+    );
+  }
+  return snapshot;
 }
 
 function asNonAuthoritativeStaleSnapshot(snapshot: OzonCategoryCatalogSnapshot): OzonCategoryCatalogSnapshot {

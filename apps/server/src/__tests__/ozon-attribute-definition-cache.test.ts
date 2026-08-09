@@ -67,6 +67,54 @@ describe('Ozon attribute definition cache', () => {
     expect(store.upsert).not.toHaveBeenCalled();
   });
 
+  it('requires a fresh complete definition cache without invoking the configured fetcher', async () => {
+    const fetchDefinitions = vi.fn(async () => normalizedDefinitions);
+    const store: OzonAttributeDefinitionCacheStore = {
+      find: vi.fn(async () => record()),
+      upsert: vi.fn(async () => undefined),
+    };
+
+    const result = await getCachedOzonAttributeDefinitions(key, {
+      store,
+      now: () => new Date('2026-07-15T00:00:00.000Z'),
+      cacheOnly: true,
+      fetchDefinitions,
+    });
+
+    expect(result).toMatchObject({ source: 'cache', complete: true });
+    expect(fetchDefinitions).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null, new Date('2026-07-15T00:00:00.000Z')],
+    ['incomplete', record({ complete: false }), new Date('2026-07-15T00:00:00.000Z')],
+    ['expired', record({ expiresAt: new Date('2026-07-15T00:00:00.000Z') }), new Date('2026-07-15T00:00:00.000Z')],
+    ['future fetchedAt', record({ fetchedAt: new Date('2026-07-15T12:00:00.000Z') }), new Date('2026-07-15T00:00:00.000Z')],
+    ['invalid interval', record({
+      fetchedAt: new Date('2026-07-14T00:00:00.000Z'),
+      expiresAt: new Date('2026-07-14T00:00:00.000Z'),
+    }), new Date('2026-07-15T00:00:00.000Z')],
+    ['invalid fetchedAt date', record({ fetchedAt: new Date('invalid') }), new Date('2026-07-15T00:00:00.000Z')],
+    ['invalid expiresAt date', record({ expiresAt: new Date('invalid') }), new Date('2026-07-15T00:00:00.000Z')],
+    ['invalid clock date', record(), new Date('invalid')],
+  ])('fails cache-only definition lookup for a %s record without fetching', async (_label, cached, now) => {
+    const fetchDefinitions = vi.fn(async () => normalizedDefinitions);
+    const store: OzonAttributeDefinitionCacheStore = {
+      find: vi.fn(async () => cached),
+      upsert: vi.fn(async () => undefined),
+    };
+
+    await expect(getCachedOzonAttributeDefinitions(key, {
+      store,
+      now: () => now,
+      cacheOnly: true,
+      fetchDefinitions,
+    })).rejects.toMatchObject({ code: 'OZON_ATTRIBUTE_DEFINITIONS_REQUIRED' });
+    expect(fetchDefinitions).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
   it('bypasses a fresh definition cache for authoritative validation', async () => {
     const refreshed = [{ ...normalizedDefinitions[0]!, description: 'Updated official definition' }];
     const fetchDefinitions = vi.fn(async () => refreshed);

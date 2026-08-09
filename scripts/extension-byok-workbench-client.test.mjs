@@ -447,7 +447,11 @@ const publishClient = loadClientWithRuntime({
   clearTimeout() {},
 });
 const timedOutPublish = publishClient.confirmPublish('9'.repeat(64));
-assert.equal(publishTimers[0].delay, 130_000, 'publish retains its existing timeout');
+assert.equal(
+  publishTimers[0].delay,
+  160_000,
+  'publish keeps bounded headroom above the four-hop device transport budget',
+);
 publishTimers[0].callback();
 await assert.rejects(
   timedOutPublish,

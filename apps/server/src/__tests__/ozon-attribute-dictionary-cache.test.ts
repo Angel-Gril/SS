@@ -77,6 +77,93 @@ describe('ozon attribute dictionary cache', () => {
     expect(apiCalls).toBe(0);
   });
 
+  it('requires a fresh complete exact-revision cache without calling Ozon API', async () => {
+    let apiCalls = 0;
+    const store = createMemoryStore({
+      [cacheKey(versionedParams)]: {
+        values: dict,
+        valuesHash: 'cached-hash',
+        fetchedAt: new Date('2026-06-19T00:00:00.000Z'),
+        expiresAt: new Date('2026-06-21T00:00:00.000Z'),
+        source: 'ozon_api',
+        complete: true,
+        catalogRevision: versionedParams.catalogRevision,
+        pageCount: 1,
+        finalCursor: 102,
+      },
+    });
+
+    const result = await getCachedOzonAttributeValues(versionedParams, {
+      store,
+      now: () => new Date('2026-06-20T00:00:00.000Z'),
+      cacheOnly: true,
+      fetchPage: async () => {
+        apiCalls += 1;
+        return { values: [], hasNext: false, nextCursor: null };
+      },
+    });
+
+    expect(result).toMatchObject({
+      source: 'cache', values: dict, complete: true,
+      catalogRevision: versionedParams.catalogRevision,
+    });
+    expect(apiCalls).toBe(0);
+  });
+
+  it.each([
+    ['missing', null, new Date('2026-06-20T00:00:00.000Z')],
+    ['incomplete', { complete: false, expiresAt: new Date('2026-06-21T00:00:00.000Z') }, new Date('2026-06-20T00:00:00.000Z')],
+    ['expired', { complete: true, expiresAt: new Date('2026-06-20T00:00:00.000Z') }, new Date('2026-06-20T00:00:00.000Z')],
+    ['wrong revision', {
+      complete: true,
+      expiresAt: new Date('2026-06-21T00:00:00.000Z'),
+      catalogRevision: 'catalog-v6',
+    }, new Date('2026-06-20T00:00:00.000Z')],
+    ['future fetchedAt', {
+      fetchedAt: new Date('2026-06-20T12:00:00.000Z'),
+    }, new Date('2026-06-20T00:00:00.000Z')],
+    ['invalid interval', {
+      fetchedAt: new Date('2026-06-19T00:00:00.000Z'),
+      expiresAt: new Date('2026-06-19T00:00:00.000Z'),
+    }, new Date('2026-06-20T00:00:00.000Z')],
+    ['invalid fetchedAt date', {
+      fetchedAt: new Date('invalid'),
+    }, new Date('2026-06-20T00:00:00.000Z')],
+    ['invalid expiresAt date', {
+      expiresAt: new Date('invalid'),
+    }, new Date('2026-06-20T00:00:00.000Z')],
+    ['invalid clock date', {}, new Date('invalid')],
+  ])('fails cache-only dictionary lookup for a %s record without fetching', async (_label, override, now) => {
+    let apiCalls = 0;
+    const cached = override == null ? {} : (() => {
+      const value = {
+        values: dict,
+        valuesHash: 'cached-hash',
+        fetchedAt: new Date('2026-06-19T00:00:00.000Z'),
+        expiresAt: new Date('2026-06-21T00:00:00.000Z'),
+        source: 'ozon_api',
+        complete: true,
+        catalogRevision: versionedParams.catalogRevision,
+        pageCount: 1,
+        finalCursor: 102,
+      };
+      Object.assign(value, override);
+      return { [cacheKey(versionedParams)]: value };
+    })();
+    const store = createMemoryStore(cached);
+
+    await expect(getCachedOzonAttributeValues(versionedParams, {
+      store,
+      now: () => now,
+      cacheOnly: true,
+      fetchPage: async () => {
+        apiCalls += 1;
+        return { values: [], hasNext: false, nextCursor: null };
+      },
+    })).rejects.toMatchObject({ code: 'OZON_ATTRIBUTE_DICTIONARY_REQUIRED' });
+    expect(apiCalls).toBe(0);
+  });
+
   it('bypasses a fresh cache when an authoritative refresh is required', async () => {
     let apiCalls = 0;
     const now = new Date('2026-06-20T00:00:00.000Z');

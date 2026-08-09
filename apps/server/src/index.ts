@@ -287,6 +287,7 @@ import {
 import {
   createPrismaOzonCategoryCatalogSnapshotStore,
   getOrRefreshOzonCategoryCatalogSnapshotForShop,
+  requireFreshOzonCategoryCatalogSnapshotForShop,
 } from './services/ozon-category-catalog.js';
 import type { OzonClient, OzonImportItem } from './services/ozon-client.js';
 import { createOzonListingPublisher } from './services/ozon-listing-publisher.js';
@@ -641,6 +642,20 @@ const sourceListingWorkflowCategoryValidator = createSourceListingWorkflowCatego
   },
 });
 
+const sourceListingPublishCategoryValidator = createSourceListingWorkflowCategoryValidator({
+  loadCatalog: async ({ ownerUserId, shopId }) => {
+    const ownedShop = await prisma.shop.findFirst({
+      where: { id: shopId, userId: ownerUserId, platform: 'OZON', status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (!ownedShop) throw new Error('Owned active Ozon shop was not found');
+    const snapshot = await requireFreshOzonCategoryCatalogSnapshotForShop({ shopId }, {
+      store: sourceOzonCategoryCatalogSnapshotStore,
+    });
+    return { revision: snapshot.revision, entries: snapshot.entries };
+  },
+});
+
 async function loadSourceListingAttributeSourceContext(input: {
   ownerUserId: string;
   draft: OzonListingDraft;
@@ -673,7 +688,10 @@ function throwShadowAuthorityUnavailable(): never {
 
 const sourceListingWorkflowAttributeService = createSourceListingWorkflowAttributeService({
   loadSchema: async ({ ownerUserId, draft, category, freshness }) => {
-    await sourceListingWorkflowCategoryValidator.validate({
+    const categoryValidator = freshness === 'PUBLISH_CACHE_REQUIRED'
+      ? sourceListingPublishCategoryValidator
+      : sourceListingWorkflowCategoryValidator;
+    await categoryValidator.validate({
       ownerUserId,
       shopId: draft.shopId,
       category,
@@ -688,6 +706,7 @@ const sourceListingWorkflowAttributeService = createSourceListingWorkflowAttribu
     const definitions = await getCachedOzonAttributeDefinitions(cacheKey, {
       store: sourceListingAttributeDefinitionStore,
       forceRefresh: freshness === 'OFFICIAL_REFRESH_REQUIRED',
+      cacheOnly: freshness === 'PUBLISH_CACHE_REQUIRED',
       fetchDefinitions: async () => (
         await loadOwnedSourceListingOzonClient(ownerUserId, draft.shopId)
       ).getDescriptionCategoryAttributes({
@@ -708,6 +727,7 @@ const sourceListingWorkflowAttributeService = createSourceListingWorkflowAttribu
     }, {
       store: sourceListingAttributeDictionaryStore,
       forceRefresh: freshness === 'OFFICIAL_REFRESH_REQUIRED',
+      cacheOnly: freshness === 'PUBLISH_CACHE_REQUIRED',
       fetchPage: async (params) => (
         await loadOwnedSourceListingOzonClient(ownerUserId, draft.shopId)
       ).getAttributeValuesPage({
@@ -860,7 +880,7 @@ const sourceOzonListingCompileAuthorityLoaders: Pick<
 const sourceOzonListingProductionCompileOptions: OzonListingProductionCompileAdapterOptions = {
   ...sourceOzonListingCompileAuthorityLoaders,
   loadAuthoritativeValidation: ({ ownerUserId, draft }) => (
-    sourceListingWorkflowAttributeService.validateAuthoritative({ ownerUserId, draft })
+    sourceListingWorkflowAttributeService.validateForPublish({ ownerUserId, draft })
   ),
 };
 const sourceOzonListingProductionCompileUncached = createOzonListingProductionCompileAdapter(

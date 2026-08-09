@@ -11,6 +11,7 @@ import {
   searchOzonCategoryCatalog,
   searchOrRefreshOzonCategoryCatalogForShop,
   getOrRefreshOzonCategoryCatalogSnapshotForShop,
+  requireFreshOzonCategoryCatalogSnapshotForShop,
   OzonCategoryCatalogRefreshError,
   translateOzonCategoryText,
   type OzonCategoryCatalogEntry,
@@ -99,6 +100,46 @@ describe('ozon category catalog', () => {
     });
     expect(expired.snapshot.revision).not.toBe(cached.revision);
     expect(state.store.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a fresh complete authoritative catalog snapshot without exposing a fetch path', async () => {
+    const cached = catalogSnapshot(buildMergedOzonCategoryCatalog(snapshotDefaultTree(), snapshotZhTree()));
+    const state = memorySnapshotStore(cached);
+
+    await expect(requireFreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      now: () => new Date('2026-07-14T12:00:00.000Z'),
+    })).resolves.toBe(cached);
+    expect(state.store.find).toHaveBeenCalledTimes(1);
+    expect(state.store.replace).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null],
+    ['incomplete', { complete: false }],
+    ['default tree incomplete', { defaultTreeComplete: false }],
+    ['Chinese tree incomplete', { zhHansTreeComplete: false }],
+    ['non-authoritative', { authoritative: false }],
+    ['stale', { stale: true }],
+    ['revision mismatch', { revision: 'f'.repeat(64) }],
+    ['future fetched time', { fetchedAt: new Date('2026-07-14T12:00:00.001Z') }],
+    ['expired', { expiresAt: new Date('2026-07-14T12:00:00.000Z') }],
+    ['non-positive lifetime', {
+      fetchedAt: new Date('2026-07-14T12:00:00.000Z'),
+      expiresAt: new Date('2026-07-14T12:00:00.000Z'),
+    }],
+    ['invalid fetched time', { fetchedAt: new Date('invalid') }],
+    ['invalid expiry time', { expiresAt: new Date('invalid') }],
+  ])('rejects a %s catalog cache without replacing it', async (_label, override) => {
+    const entries = buildMergedOzonCategoryCatalog(snapshotDefaultTree(), snapshotZhTree());
+    const cached = override === null ? null : catalogSnapshot(entries, override);
+    const state = memorySnapshotStore(cached);
+
+    await expect(requireFreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      now: () => new Date('2026-07-14T12:00:00.000Z'),
+    })).rejects.toMatchObject({ code: 'OZON_CATEGORY_CATALOG_FRESH_CACHE_REQUIRED' });
+    expect(state.store.replace).not.toHaveBeenCalled();
   });
 
   it('removes a newly disabled pair from the selectable catalog after refresh', async () => {

@@ -8,7 +8,7 @@
   var DEFAULT_TIMEOUT_MS = 30 * 1000;
   var PROVIDER_TIMEOUT_MS = 315 * 1000;
   var INGEST_TIMEOUT_MS = 130 * 1000;
-  var PUBLISH_TIMEOUT_MS = 130 * 1000;
+  var PUBLISH_TIMEOUT_MS = 160 * 1000;
   var DEVICE_INVALIDATED_MESSAGE = 'ss-erp:byok-device-session-invalidated';
   var MESSAGE_TYPES = Object.freeze({
     GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',

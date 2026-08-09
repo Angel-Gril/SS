@@ -78,6 +78,7 @@ export interface OzonListingCurrentCatalogAuthority {
 }
 
 export interface OzonListingAuthoritativeValidation {
+  authorityMode?: 'PUBLISH_CACHE_REQUIRED';
   schema: OzonNormalizedAttributeSchema;
   result: OzonAttributeValidationResult;
 }
@@ -151,6 +152,64 @@ function canonicalEqual(left: unknown, right: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function frozenValidationSemantics(report: unknown): Record<string, unknown> | null {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  const {
+    schemaSource: _schemaSource,
+    officialDataFreshness: _officialDataFreshness,
+    ...semantics
+  } = report as Record<string, unknown>;
+  return semantics;
+}
+
+function authorityDictionaryKeys(
+  report: unknown,
+  requirement: 'OFFICIAL_REFRESH_REQUIRED' | 'PUBLISH_CACHE_REQUIRED',
+  source: 'ozon_api' | 'cache',
+): string[] | null {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  const record = report as Record<string, unknown>;
+  if (record.schemaSource !== source || record.schemaWarning) return null;
+  const freshness = record.officialDataFreshness;
+  if (!freshness || typeof freshness !== 'object' || Array.isArray(freshness)) return null;
+  const metadata = freshness as Record<string, unknown>;
+  const dictionarySources = metadata.dictionarySources;
+  if (metadata.requirement !== requirement
+    || metadata.schemaSource !== source
+    || !dictionarySources
+    || typeof dictionarySources !== 'object'
+    || Array.isArray(dictionarySources)) return null;
+  const sources = dictionarySources as Record<string, unknown>;
+  const keys = Object.keys(sources).sort();
+  return keys.every((key) => sources[key] === source) ? keys : null;
+}
+
+function hasFreshPublishCacheAuthority(
+  value: OzonListingAuthoritativeValidation,
+  frozenReport: unknown,
+): boolean {
+  if (value.authorityMode !== 'PUBLISH_CACHE_REQUIRED'
+    || value.schema.definitionSource !== 'cache'
+    || value.schema.definitionWarning) return false;
+  const frozenKeys = authorityDictionaryKeys(
+    frozenReport,
+    'OFFICIAL_REFRESH_REQUIRED',
+    'ozon_api',
+  );
+  const liveKeys = authorityDictionaryKeys(
+    value.result.report,
+    'PUBLISH_CACHE_REQUIRED',
+    'cache',
+  );
+  if (!frozenKeys || !liveKeys || frozenKeys.length !== liveKeys.length) return false;
+  const schemaDictionaryKeys = new Set(value.schema.fields
+    .filter((field) => field.valuePolicy !== 'FREE_TEXT' && field.dictionaryId != null)
+    .map((field) => String(field.attributeId)));
+  return frozenKeys.every((key, index) => (
+    key === liveKeys[index] && schemaDictionaryKeys.has(key)
+  ));
 }
 
 function schemaRevision(schema: OzonNormalizedAttributeSchema): string {
@@ -231,12 +290,20 @@ function authoritativeValidation(
   catalogRevision: string,
   value: OzonListingAuthoritativeValidation | null,
 ): OzonListingAuthoritativeValidation {
+  const reportMatches = value?.authorityMode === 'PUBLISH_CACHE_REQUIRED'
+    ? canonicalEqual(
+        frozenValidationSemantics(value.result.report),
+        frozenValidationSemantics(draft.validation.report as OzonAttributeValidationResult['report']),
+      )
+    : canonicalEqual(value?.result.report, draft.validation.report);
   if (!value
     || value.result.status !== 'VALID'
     || value.result.blockers.length > 0
     || value.result.report.operationReadiness.ozonImport.status !== 'READY'
     || value.result.report.operationReadiness.ozonImport.issues.length > 0
-    || !canonicalEqual(value.result.report, draft.validation.report)) {
+    || !reportMatches
+    || (value.authorityMode === 'PUBLISH_CACHE_REQUIRED'
+      && !hasFreshPublishCacheAuthority(value, draft.validation.report))) {
     fail('OZON_LISTING_PRODUCTION_VALIDATION_STALE', 'Authoritative validation is not the frozen VALID report');
   }
   const schema = value.schema;
@@ -497,10 +564,13 @@ export function createOzonListingProductionCompileAdapter(
 
     let compiled;
     try {
+      const payloadValidationReport = frozenValidationSemantics(input.draft.validation.report);
+      const payloadDraft = structuredClone(input.draft);
+      payloadDraft.validation.report = payloadValidationReport as typeof payloadDraft.validation.report;
       compiled = compileOzonListingPayload({
-        draft: input.draft,
+        draft: payloadDraft,
         capture: capture.capture,
-        validationReport: validation.result.report,
+        validationReport: payloadValidationReport,
         resolvedImages: images,
       });
     } catch (error) {

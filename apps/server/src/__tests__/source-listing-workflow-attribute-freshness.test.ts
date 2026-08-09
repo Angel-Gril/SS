@@ -67,6 +67,64 @@ const sourceProfile = buildSourceProductProfile({
 });
 
 describe('source listing attribute authoritative freshness', () => {
+  it('accepts fresh complete cache authority for publish without using manual refresh mode', async () => {
+    const loadSchema = vi.fn(async () => ({ ...baseSchema, definitionSource: 'cache' as const }));
+    const loadDictionary = vi.fn(async () => ({
+      complete: true,
+      values: [{ id: 201, value: 'Белый' }],
+      source: 'cache' as const,
+    }));
+    const service = createSourceListingWorkflowAttributeService({
+      loadSchema,
+      loadDictionary,
+      loadSourceContext: async () => ({ sourceProfile }),
+    });
+
+    const authoritative = await service.validateForPublish({
+      ownerUserId: 'owner-1', draft: draft(),
+    });
+
+    expect(authoritative.result).toMatchObject({ status: 'VALID', blockers: [] });
+    expect(authoritative.authorityMode).toBe('PUBLISH_CACHE_REQUIRED');
+    expect(loadSchema).toHaveBeenCalledWith(expect.objectContaining({
+      freshness: 'PUBLISH_CACHE_REQUIRED',
+    }));
+    expect(loadDictionary).toHaveBeenCalledWith(expect.objectContaining({
+      freshness: 'PUBLISH_CACHE_REQUIRED',
+    }));
+  });
+
+  it.each([
+    ['schema', 'stale-cache', 'cache'],
+    ['dictionary', 'cache', 'stale-cache'],
+  ] as const)('blocks publish when the %s authority is not a fresh cache hit', async (
+    _label,
+    schemaSource,
+    dictionarySource,
+  ) => {
+    const service = createSourceListingWorkflowAttributeService({
+      loadSchema: async () => ({
+        ...baseSchema,
+        definitionSource: schemaSource,
+        ...(schemaSource === 'stale-cache' ? { definitionWarning: 'cache unavailable' } : {}),
+      }),
+      loadDictionary: async () => ({
+        complete: true,
+        values: [{ id: 201, value: 'Белый' }],
+        source: dictionarySource,
+        ...(dictionarySource === 'stale-cache' ? { warning: 'cache unavailable' } : {}),
+      }),
+      loadSourceContext: async () => ({ sourceProfile }),
+    });
+
+    const authoritative = await service.validateForPublish({
+      ownerUserId: 'owner-1', draft: draft(),
+    });
+
+    expect(authoritative.result.status).toBe('INVALID');
+    expect(authoritative.result.report.operationReadiness.ozonImport.status).toBe('BLOCKED');
+  });
+
   it('allows cached preview but blocks final readiness when official refresh falls back to stale data', async () => {
     const loadSchema = vi.fn(async ({ freshness }: { freshness: string }) => ({
       ...baseSchema,

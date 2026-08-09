@@ -213,6 +213,57 @@ for (const path of [
   assert.equal(routeResult.state, 'response');
 }
 
+const delayedTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['byok:media:ingest', 'listing:publish']),
+  requestTimeoutMs: 5,
+  publishRequestTimeoutMs: 50,
+  fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(response()), 20);
+    init.signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new Error('aborted'));
+    }, { once: true });
+  }),
+});
+await assert.rejects(
+  delayedTransport.post(
+    '/api/extension-device/byok-media/ingest-status',
+    statusPayload,
+    { requiredScope: 'byok:media:ingest' },
+  ),
+  (error) => error?.code === 'SS_ERP_SOURCE_WORKFLOW_REQUEST_OUTCOME_UNKNOWN'
+    && error?.outcome === 'UNKNOWN_OUTCOME'
+    && error?.requestDispatched === true
+    && error?.automaticRetryAllowed === false,
+  'ordinary requests must retain the shorter request timeout',
+);
+assert.equal((await delayedTransport.post(
+  '/api/extension-device/workbench-publish/prepare',
+  { contractVersion: 'extension-workbench-listing-publish/v1' },
+  { requiredScope: 'listing:publish' },
+)).state, 'response', 'publish prepare must use its independent bounded timeout');
+
+const publishTimedOut = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['listing:publish']),
+  requestTimeoutMs: 50,
+  publishRequestTimeoutMs: 5,
+  fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }),
+});
+await assert.rejects(
+  publishTimedOut.post(
+    '/api/extension-device/workbench-publish/prepare',
+    { contractVersion: 'extension-workbench-listing-publish/v1' },
+    { requiredScope: 'listing:publish' },
+  ),
+  (error) => error?.code === 'SS_ERP_SOURCE_WORKFLOW_REQUEST_OUTCOME_UNKNOWN'
+    && error?.outcome === 'UNKNOWN_OUTCOME'
+    && error?.requestDispatched === true
+    && error?.automaticRetryAllowed === false,
+  'a publish timeout must remain unknown and non-retryable',
+);
+
 const publishRequestsBeforeInvalidPaths = publishRequests.length;
 for (const path of [
   '/api/extension-device/workbench-publish/preview?retry=1',

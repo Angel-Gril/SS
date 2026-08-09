@@ -2,6 +2,7 @@
   'use strict';
 
   var DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+  var DEFAULT_PUBLISH_REQUEST_TIMEOUT_MS = 30000;
   var DEFAULT_MASK_REQUEST_TIMEOUT_MS = 60000;
   var MAX_RESPONSE_BYTES = 512 * 1024;
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
@@ -43,6 +44,16 @@
   var HOSTED_PREVIEW_CONSUME_PATH = HOSTED_PREVIEW_PATH + '/consume';
   var LARGE_PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
+    WORKBENCH_PUBLISH_PREVIEW_PATH,
+    WORKBENCH_PUBLISH_PREPARE_PATH,
+    WORKBENCH_PUBLISH_STATUS_PATH,
+    OZON_PUBLISH_EXECUTE_PATH,
+  ]);
+  var PUBLISH_REQUEST_PATHS = new Set([
+    '/api/extension-device/command-grants',
+    BYOK_PUBLISH_PREVIEW_PATH,
+    BYOK_PUBLISH_PREPARE_PATH,
+    BYOK_PUBLISH_STATUS_PATH,
     WORKBENCH_PUBLISH_PREVIEW_PATH,
     WORKBENCH_PUBLISH_PREPARE_PATH,
     WORKBENCH_PUBLISH_STATUS_PATH,
@@ -408,6 +419,11 @@
     var requestTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? Math.min(configuredTimeout, DEFAULT_REQUEST_TIMEOUT_MS)
       : DEFAULT_REQUEST_TIMEOUT_MS;
+    var configuredPublishTimeout = Number(options && options.publishRequestTimeoutMs);
+    var publishRequestTimeoutMs = Number.isFinite(configuredPublishTimeout)
+      && configuredPublishTimeout > 0
+      ? Math.min(configuredPublishTimeout, DEFAULT_PUBLISH_REQUEST_TIMEOUT_MS)
+      : DEFAULT_PUBLISH_REQUEST_TIMEOUT_MS;
     var configuredMaskTimeout = Number(options && options.maskRequestTimeoutMs);
     var maskRequestTimeoutMs = Number.isFinite(configuredMaskTimeout) && configuredMaskTimeout > 0
       ? Math.min(configuredMaskTimeout, DEFAULT_MASK_REQUEST_TIMEOUT_MS)
@@ -442,6 +458,11 @@
 
     async function send(method, pathValue, bodyValue, commandOptions, bodyMode) {
         var path = requestPath(pathValue, method);
+        var publishRequest = Boolean(
+          commandOptions
+          && commandOptions.requiredScope === 'listing:publish'
+          && PUBLISH_REQUEST_PATHS.has(path),
+        );
         var requestBody = null;
         var binaryRequest = null;
         if (bodyMode === 'byok-bytes') {
@@ -458,12 +479,10 @@
             throw new TypeError('source workbench command body is invalid');
           }
           requestBody = JSON.stringify(bodyValue);
-          var publishRequest = commandOptions
-            && commandOptions.requiredScope === 'listing:publish'
-            && LARGE_PUBLISH_REQUEST_PATHS.has(path);
           var maximumRequestBytes = path === MEDIA_EDIT_MASK_PATH
             ? MAX_MEDIA_EDIT_MASK_REQUEST_BYTES
-            : publishRequest ? MAX_PUBLISH_REQUEST_BYTES : MAX_COMMAND_REQUEST_BYTES;
+            : publishRequest && LARGE_PUBLISH_REQUEST_PATHS.has(path)
+              ? MAX_PUBLISH_REQUEST_BYTES : MAX_COMMAND_REQUEST_BYTES;
           if (byteLength(requestBody) > maximumRequestBytes) {
             throw new Error('source workbench command is too large');
           }
@@ -491,7 +510,7 @@
         var timeoutId;
         var timeoutMs = MEDIA_EDIT_LONG_REQUEST_PATHS.has(path)
           ? maskRequestTimeoutMs
-          : requestTimeoutMs;
+          : publishRequest ? publishRequestTimeoutMs : requestTimeoutMs;
         var requestDispatched = false;
         var timeout = new Promise(function (_resolve, reject) {
           timeoutId = setTimeout(function () {

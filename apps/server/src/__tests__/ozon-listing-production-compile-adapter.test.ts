@@ -290,6 +290,79 @@ async function expectCode(
     .rejects.toMatchObject({ code, statusCode: 422 });
 }
 
+function dictionaryPublishAuthority(
+  dictionarySources: Record<string, string>,
+  optionalInvalid = false,
+): ReturnType<typeof build> {
+  const context = build();
+  context.schema.definitionsHash = 'e'.repeat(64);
+  context.schema.definitionSource = 'cache';
+  context.schema.fields.push({
+    attributeId: 30,
+    name: 'Цвет',
+    description: '',
+    sourceType: 'String',
+    valueType: 'STRING',
+    cardinality: 'SINGLE',
+    required: !optionalInvalid,
+    dictionaryId: 300,
+    valuePolicy: 'STRICT_DICTIONARY',
+    ownership: 'EDITOR',
+    editorMode: 'EDITABLE',
+    aiSuggestionAllowed: false,
+    readinessImpact: optionalInvalid ? 'WARNING' : 'OZON_IMPORT',
+  });
+  const frozenReport = context.draft.validation.report as OzonAttributeValidationReport;
+  frozenReport.schemaRevision = schemaRevision(context.schema);
+  if (!optionalInvalid) {
+    frozenReport.normalizedAttributes.push({
+      key: '30',
+      attributeId: 30,
+      values: [{ value: 'Белый', dictionaryValueId: 301 }],
+      source: 'MANUAL',
+      reviewed: true,
+      evidence: ['owner:product'],
+    });
+  } else {
+    context.draft.attributes.values['30'] = {
+      value: 'Неизвестный цвет',
+      source: 'MANUAL',
+      reviewed: true,
+      evidence: ['owner:product'],
+      dictionaryMatch: { status: 'UNRESOLVED', dictionaryValueId: null },
+      dictionaryMatches: [],
+      manualReview: 'CONFIRMED',
+    };
+  }
+  frozenReport.fieldDecisions.push({
+    key: '30',
+    attributeId: 30,
+    valuePolicy: 'STRICT_DICTIONARY',
+    readinessImpact: optionalInvalid ? 'WARNING' : 'OZON_IMPORT',
+    accepted: !optionalInvalid,
+    issueCodes: optionalInvalid ? ['OZON_ATTRIBUTE_DICTIONARY_VALUE_INVALID'] : [],
+  });
+  frozenReport.schemaSource = 'ozon_api';
+  frozenReport.officialDataFreshness = {
+    requirement: 'OFFICIAL_REFRESH_REQUIRED',
+    schemaSource: 'ozon_api',
+    dictionarySources: { 30: 'ozon_api' },
+  };
+  const liveReport = structuredClone(frozenReport);
+  liveReport.schemaSource = 'cache';
+  liveReport.officialDataFreshness = {
+    requirement: 'PUBLISH_CACHE_REQUIRED',
+    schemaSource: 'cache',
+    dictionarySources,
+  };
+  context.options.loadAuthoritativeValidation = vi.fn(async () => ({
+    authorityMode: 'PUBLISH_CACHE_REQUIRED' as const,
+    schema: context.schema,
+    result: { status: 'VALID' as const, report: liveReport, blockers: [], warnings: [] },
+  }));
+  return context;
+}
+
 describe('Ozon listing production compile adapter', () => {
   it('loads exact owner-scoped authorities and returns the publisher request contract', async () => {
     const context = build();
@@ -316,6 +389,92 @@ describe('Ozon listing production compile adapter', () => {
       ],
     });
     expect(result.requestPayload.items).toHaveLength(2);
+  });
+
+  it('accepts explicit fresh-cache publish authority while comparing frozen validation semantics exactly', async () => {
+    const context = build();
+    const frozenReport = context.draft.validation.report as OzonAttributeValidationReport;
+    frozenReport.schemaSource = 'ozon_api';
+    frozenReport.officialDataFreshness = {
+      requirement: 'OFFICIAL_REFRESH_REQUIRED',
+      schemaSource: 'ozon_api',
+      dictionarySources: {},
+    };
+    const liveReport = structuredClone(frozenReport);
+    liveReport.schemaSource = 'cache';
+    liveReport.officialDataFreshness = {
+      requirement: 'PUBLISH_CACHE_REQUIRED',
+      schemaSource: 'cache',
+      dictionarySources: {},
+    };
+    context.schema.definitionSource = 'cache';
+    context.options.loadAuthoritativeValidation = vi.fn(async () => ({
+      authorityMode: 'PUBLISH_CACHE_REQUIRED' as const,
+      schema: context.schema,
+      result: { status: 'VALID' as const, report: liveReport, blockers: [], warnings: [] },
+    }));
+
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).resolves.toMatchObject({ catalogRevision: context.catalog.snapshot.revision });
+
+    liveReport.normalizedAttributes[0]!.values[0]!.value = 'Changed semantic value';
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).rejects.toMatchObject({ code: 'OZON_LISTING_PRODUCTION_VALIDATION_STALE' });
+  });
+
+  it('accepts an exact cache authority key for every used dictionary attribute', async () => {
+    const context = dictionaryPublishAuthority({ 30: 'cache' });
+
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).resolves.toMatchObject({ catalogRevision: context.catalog.snapshot.revision });
+  });
+
+  it('accepts matching cache authority for a used optional dictionary value omitted from normalized output', async () => {
+    const context = dictionaryPublishAuthority({ 30: 'cache' }, true);
+
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).resolves.toMatchObject({ catalogRevision: context.catalog.snapshot.revision });
+  });
+
+  it.each([
+    ['missing', {}],
+    ['extra', { 30: 'cache', 31: 'cache' }],
+    ['wrong', { 31: 'cache' }],
+  ])('rejects a %s publish-cache dictionary authority key set', async (_label, sources) => {
+    const context = dictionaryPublishAuthority(sources);
+
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).rejects.toMatchObject({ code: 'OZON_LISTING_PRODUCTION_VALIDATION_STALE' });
+  });
+
+  it.each([
+    ['schema retrieval source', { schemaSource: 'ozon_api', dictionarySources: {} }, null],
+    ['dictionary retrieval source', { schemaSource: 'cache', dictionarySources: { 100: 'stale-cache' } }, null],
+    ['validation schema warning', { schemaSource: 'cache', dictionarySources: {} }, 'cache warning'],
+  ])('rejects publish-cache authority with an invalid %s', async (_label, metadata, schemaWarning) => {
+    const context = build();
+    const liveReport = structuredClone(context.report);
+    liveReport.schemaSource = 'cache';
+    liveReport.officialDataFreshness = {
+      requirement: 'PUBLISH_CACHE_REQUIRED',
+      ...metadata,
+    };
+    if (schemaWarning) liveReport.schemaWarning = schemaWarning;
+    context.schema.definitionSource = 'cache';
+    context.options.loadAuthoritativeValidation = vi.fn(async () => ({
+      authorityMode: 'PUBLISH_CACHE_REQUIRED' as const,
+      schema: context.schema,
+      result: { status: 'VALID' as const, report: liveReport, blockers: [], warnings: [] },
+    }));
+
+    await expect(createOzonListingProductionCompileAdapter(context.options)({
+      ownerUserId: 'owner-1', draft: context.draft,
+    })).rejects.toMatchObject({ code: 'OZON_LISTING_PRODUCTION_VALIDATION_STALE' });
   });
 
   it('refreshes authoritative validation before reading the current catalog while capture and media load in parallel', async () => {

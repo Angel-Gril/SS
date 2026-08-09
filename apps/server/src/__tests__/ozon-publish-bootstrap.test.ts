@@ -13,6 +13,14 @@ describe('Ozon publish production bootstrap', () => {
   });
 
   it('keeps parity shadow compilation cache-only and separate from the production refresher', () => {
+    const publishCategoryAuthority = source.slice(
+      source.indexOf('const sourceListingPublishCategoryValidator'),
+      source.indexOf('async function loadSourceListingAttributeSourceContext'),
+    );
+    const productionAttributes = source.slice(
+      source.indexOf('const sourceListingWorkflowAttributeService'),
+      source.indexOf('const sourceListingShadowAttributeService'),
+    );
     const shadowAttributes = source.slice(
       source.indexOf('const sourceListingShadowAttributeService'),
       source.indexOf('const sourceOzonPublishAttemptRepository'),
@@ -37,7 +45,25 @@ describe('Ozon publish production bootstrap', () => {
     expect(shadowAttributes).toContain('fetchDefinitions: async () => throwShadowAuthorityUnavailable()');
     expect(shadowAttributes).toContain('fetchPage: async () => throwShadowAuthorityUnavailable()');
     expect(shadowAttributes).not.toContain('loadOwnedSourceListingOzonClient');
+    expect(productionAttributes.match(/forceRefresh: freshness === 'OFFICIAL_REFRESH_REQUIRED'/g))
+      .toHaveLength(2);
+    expect(productionAttributes.match(/cacheOnly: freshness === 'PUBLISH_CACHE_REQUIRED'/g))
+      .toHaveLength(2);
+    expect(productionAttributes).toContain(
+      "freshness === 'PUBLISH_CACHE_REQUIRED'",
+    );
+    expect(productionAttributes).toContain('sourceListingPublishCategoryValidator');
+    expect(publishCategoryAuthority).toContain(
+      'requireFreshOzonCategoryCatalogSnapshotForShop',
+    );
+    expect(publishCategoryAuthority).not.toContain('loadAuthoritativeOzonCategoryCatalog');
+    expect(publishCategoryAuthority).not.toContain('getOrRefreshOzonCategoryCatalogSnapshotForShop');
+    expect(publishCategoryAuthority).not.toContain('loadOwnedSourceListingOzonClient');
+    expect(publishCategoryAuthority).not.toContain('fetchTree');
     expect(productionCompileWiring).toContain(
+      'sourceListingWorkflowAttributeService.validateForPublish',
+    );
+    expect(productionCompileWiring).not.toContain(
       'sourceListingWorkflowAttributeService.validateAuthoritative',
     );
     expect(productionCompileWiring).toContain(

@@ -73,7 +73,8 @@ export interface SourceListingAttributeSourceContext {
 
 export type SourceListingAttributeFreshness =
   | 'CACHE_ALLOWED'
-  | 'OFFICIAL_REFRESH_REQUIRED';
+  | 'OFFICIAL_REFRESH_REQUIRED'
+  | 'PUBLISH_CACHE_REQUIRED';
 
 export interface SourceListingAttributeSuggestionReference {
   attributeId: number;
@@ -690,13 +691,14 @@ export function createSourceListingWorkflowAttributeService(
         fieldPath: 'attributes',
       });
     }
-    if (freshness === 'OFFICIAL_REFRESH_REQUIRED') {
-      const schemaFresh = input.schema.definitionSource === 'ozon_api';
+    if (freshness !== 'CACHE_ALLOWED') {
+      const requiredSource = freshness === 'PUBLISH_CACHE_REQUIRED' ? 'cache' : 'ozon_api';
+      const schemaFresh = input.schema.definitionSource === requiredSource;
       const staleDictionaryFields = fields.filter((field) => (
         field.valuePolicy !== 'FREE_TEXT'
         && field.dictionaryId != null
         && input.values[field.key || String(field.attributeId)] != null
-        && field.dictionarySource !== 'ozon_api'
+        && field.dictionarySource !== requiredSource
       ));
       const importIssues = result.report.operationReadiness.ozonImport.issues;
       if (!schemaFresh) {
@@ -1003,12 +1005,14 @@ export function createSourceListingWorkflowAttributeService(
     };
   }
 
-  async function validateAuthoritative(input: {
+  async function validateWithFreshness(input: {
     ownerUserId: string;
     draft: OzonListingDraft;
-  }): Promise<{ schema: OzonNormalizedAttributeSchema; result: OzonAttributeValidationResult }> {
+  }, freshness: Exclude<SourceListingAttributeFreshness, 'CACHE_ALLOWED'>): Promise<{
+    schema: OzonNormalizedAttributeSchema;
+    result: OzonAttributeValidationResult;
+  }> {
     const dictionaryMemo: DictionaryMemo = new Map();
-    const freshness: SourceListingAttributeFreshness = 'OFFICIAL_REFRESH_REQUIRED';
     const schema = await loadSchema({ ...input, freshness });
     const sourceContext = await options.loadSourceContext(input);
     const result = withOperationalReadiness(
@@ -1025,9 +1029,31 @@ export function createSourceListingWorkflowAttributeService(
     return { schema, result };
   }
 
+  async function validateAuthoritative(input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+  }): Promise<{ schema: OzonNormalizedAttributeSchema; result: OzonAttributeValidationResult }> {
+    return validateWithFreshness(input, 'OFFICIAL_REFRESH_REQUIRED');
+  }
+
+  async function validateForPublish(input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+  }): Promise<{
+    authorityMode: 'PUBLISH_CACHE_REQUIRED';
+    schema: OzonNormalizedAttributeSchema;
+    result: OzonAttributeValidationResult;
+  }> {
+    return {
+      authorityMode: 'PUBLISH_CACHE_REQUIRED',
+      ...await validateWithFreshness(input, 'PUBLISH_CACHE_REQUIRED'),
+    };
+  }
+
   return {
     getWorkspace: workspace,
     validateAuthoritative,
+    validateForPublish,
 
     async searchDictionary(input: {
       ownerUserId: string;
