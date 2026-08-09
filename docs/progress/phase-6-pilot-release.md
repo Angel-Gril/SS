@@ -28,6 +28,47 @@ Progress: 2/3 tasks.
 
 ## Notes
 
+- Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
+  `18822ed50d04d61a72d4b7f1409703683ef417ae` / BINI `1.0.293` completed end to end with every
+  pilot flag dark. Final `QA-04` passed Server `4836` plus `204` environment skips, AI Media
+  PostgreSQL `99/99`, Cloud `455/455`, Local `451/451` plus two package warnings, and source
+  `450/450` plus two package warnings. Canonical acceptance SHA-256 is
+  `cdb6082813260e1a11b9a5b33142c0c2265dfea76bd28b95ba06a1675f53887e`.
+- Both `190`-file regional candidates passed Ed25519 verification. COM Cloud/Local SHA-256 values
+  are `c0685a6f5bc316150e1f2daaab878d0efa2e396dfb1a2083803649727da08880` and
+  `5ce7668eb405e3cfec2892d0a475ea3e650d6df53cfe1b4676e4c44ba9bb698c`; CN values are
+  `71f1910043c84d70717bab5d848385d795420e586b00bd6e09c081235f6daf5d` and
+  `7097de15fe4c3094eb2f3737dfc2365b8ed92330d0256dc22af31181329fcf70`. Signed-package restart and
+  isolated upgrade smoke receipt SHA-256 values are
+  `812191dec9830adbaf0dde17b8e2d3ca3db761edaa3aebc12737ceb3d13e1a01` and
+  `f253dcdcff9a47903eeab16c931e13381254c4d815bb34921fc04f1cc7c7a1af`.
+- Fresh COM evidence is a `39,236,979`-byte backup, `142` restored tables and attestation SHA-256
+  `e3ab9f677011ada402ff95525451a294441f8786fa3927953dbc1f7d51aea3d6`. Fresh CN evidence is a
+  `9,676,579`-byte backup, `141` restored tables and attestation SHA-256
+  `14794670ed5554c11df6e0047aeb4b043e9ca0a231247d6bae81c691d8edab5f`. Both regions run the exact
+  target with three active services, `144` migrations, healthy readiness and all flags dark. The
+  first CN command was interrupted by the local 20-minute wait after its migration/DB guard; the
+  old services were restored, the incomplete release quarantined, and a clean full retry passed.
+  Remote backup remains unconfigured, so the fresh backups are retained locally on each VPS.
+- Both dark canaries passed `7/7` and `32` controlled read-only requests with temporary sessions
+  removed and every Provider/ingest/Ozon side-effect flag false. COM/CN receipt SHA-256 values are
+  `35d92d181f3e51f0033b1729ad9416a7ec3621e7c4e115f737834acc6e3b7981` and
+  `7bd63f8fed72654a8fc6b216b36a6bc6c1347bc7df42801ffc9eba7a80ca8f2d`.
+- Fresh DNS quorum SHA-256 is
+  `302b515c4a2b89d707519a150ba1a0a68db4b212fa2cc16777d6356552f31a08`. COM/CN website receipt
+  SHA-256 values are `ef85cece937aa2dbeb073dd0dd84286acdfadc11ab6a17563f977ad75f516b06` and
+  `338faa48c68b60833392eda853d2174b3064ead135e73ff6346d60aa7a8b51cd`; both official verifiers
+  confirmed TLS, signatures and exact ZIP bytes.
+- BINI completed its same-profile/same-path `1.0.292` -> `1.0.293` atomic upgrade, trusted reload,
+  active-worker attestations and Unicode smoke. Managed-upgrade and final-runtime receipt SHA-256
+  values are `bbf5226ac7ee5dda4be5d72b05e25ea4678baf26b103ce05ec311b91e30c15bc` and
+  `de0e5f706df5c64df53f91e7dd4cb36aa8fec83d3830f0218ab442307afddef5`. The final snapshot has no
+  Key, capability evidence, dispatch, vault/recovery state, device access or Provider permission.
+  No Provider, generation, ERP ingest/publish or Ozon action ran. `REL-02` remains the only open
+  task at `36/37`; continuation requires a new exact one-shop publish authorization bound to
+  deployed `18822ed` / BINI `1.0.293` and freshly revalidated owner/shop/device/draft/payload/SKU/
+  asset inputs. Earlier-version authorizations cannot be reused.
+
 - Current checkpoint (2026-08-09): the authorized deployed `90cef7ea` / BINI `1.0.292` REL-02
   cycle 14 revalidated the exact owner/shop/device/draft/payload/SKU/asset boundary, enabled only
   that scoped publish gate and obtained the authoritative review-only preview. Execution stopped
