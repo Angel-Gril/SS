@@ -38,11 +38,45 @@ credential storage, or direct Ozon calls.
 - [x] Phase 3: Edit operations and batch engine (5/5 tasks) [details](./phase-3-edits-batch-engine.md)
 - [x] Phase 4: Complete dual-mode workbench (5/5 tasks) [details](./phase-4-dual-mode-workbench.md)
 - [x] Phase 5: Publishing closure and product quality (4/4 tasks) [details](./phase-5-publish-quality.md)
-- [ ] Phase 6: Pilot and release (2/3 tasks) [details](./phase-6-pilot-release.md)
+- [x] Phase 6: Pilot and release (3/3 tasks) [details](./phase-6-pilot-release.md)
 
-Overall: 36/37 tasks complete (97%).
+Overall: 37/37 tasks complete (100%).
 
 ## Current Status
+
+Final checkpoint (2026-08-10): all `37/37` tasks are complete. The exact `.com`/BINI cycle 20 pilot
+on `35a517f09475dba0ab212186b64788e59103d243` / `1.0.300` sent exactly one authorized Ozon import
+for the single bound SKU, with one intent, attempt, grant, receipt, submission claim and
+acknowledgement. One manifest-bound status request reconciled that exact task to `SUCCEEDED`; no
+retry, recovery, manual resolution, other-SKU publish, Provider POST or new ERP ingest occurred.
+Status, final-reconciliation, final-dark and runtime-bindings SHA-256 values are
+`12c2099246ee788b835cb7f33e7b1e8d0f30456bd6c6a3c02581ddb7d6a69f44`,
+`07c2978986c989c2692d3e8a95aaa3e2d1f17075a04ee1edba3234414c5e421c`,
+`f5aa9df72f630dacad0755a700f0da2d3b9f1e00994abee048da4ba35bbbea95` and
+`4666dd9d28e8b4ba6453b0610206675df52801830d7f2cdbea1109c4f5f30136`.
+
+The standalone-worker reconciliation correction was committed and pushed as
+`3b15f7fcc900d88b64b749c03be572efa3990f63`. Full preflight and target-bound QA-04 passed; canonical
+acceptance SHA-256 is `f3df4205075190b96ca43184f521ddc24249615d69c786ada32db5435e3d6499`.
+Signed version `1.0.301` completed fresh backup/restore, migration checks, dark deployment,
+post-deploy verification, canaries and final fences in both regions. New workers made zero Ozon
+reconciliation claims and both database snapshots remained unchanged; aggregate SHA-256 is
+`ce6fca795d43a2b5c0b61ac10df1d363e6e8c626a5137014e439e3301501f7a5`. DNS quorum and official
+COM/CN website receipt SHA-256 values are
+`5f505a0bced900e3d38e7ab4f0856ba71482f93c01a5e13b8e654e5ff602217b`,
+`5ec3e240104aa547d994fed35695d6d6b0153d8a8b0747fa2bb1fc65a284bb7d` and
+`353ac95d82f66bc67df13f7e980f7e221e97d0b4501c74a6317410f63eb7ee18`.
+
+BINI completed its same-path `1.0.300` -> `1.0.301` upgrade, trusted official reload, active-worker
+attestation and final no-secret snapshot. The transient Chromium launcher and idle MV3 worker both
+failed closed before reload; preserved evidence drove a single-session, read-only wake followed by
+an immediate trusted reload. Closure SHA-256 is
+`f07c4fb5c41ad92547f791daa03dac3295ffefd1b6d572cef83fd104337d344d`. Both regions now run the exact
+target with three active services, healthy readiness and every rollout row dark. No Provider,
+ERP ingest/publish or additional Ozon call occurred during the corrective release. The only
+remaining operational warning is that fresh backups are retained locally on each VPS because
+remote backup storage is not configured. All generated analysis, plans, progress records, private
+evidence and operator helpers remain preserved; cleanup requires an explicit retention decision.
 
 Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
 `18822ed50d04d61a72d4b7f1409703683ef417ae` / BINI `1.0.293` completed end to end while every
@@ -2133,15 +2167,10 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Immediate next step: keep both regions and every rollout row dark. Obtain a new exact one-shop
-publish-pilot authorization bound to deployed commit
-`90cef7ea0f0c89bb408339b04e893423b200b636`, BINI `1.0.292`, the same owner, shop and physical
-device, and the freshly revalidated exact draft revision/version, payload SHA-256, single SKU and
-stored asset. The pilot may create at most one publish intent and one `OZON_PUBLISH` grant, execute
-exactly one Ozon import without automatic retry, perform only the authorized bounded read-only
-reconciliation, avoid recover/resubmit/manual resolution for UNKNOWN or PENDING, and restore dark
-state and revoke its session afterward. No Provider request, regeneration or ERP ingest is needed.
-All earlier deployment and pilot authorizations are closed and do not authorize this write.
+Completion follow-up: keep both regions and every rollout row dark, configure remote backup storage
+before the next production change, and retain all generated analysis, plan, progress, private
+evidence and operator-helper artifacts until an explicit keep/delete decision is made. Do not
+repeat the completed cycle 20 Ozon import or status request; its exactly-once authority is closed.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.

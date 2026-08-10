@@ -1,10 +1,10 @@
 # Phase 6: Pilot and Release
 
-Progress: 2/3 tasks.
+Progress: 3/3 tasks.
 
 ## Tasks
 
-- [ ] `REL-02` Run owner/shop/device pilots (`P0`, `M`). Acceptance: sandbox, then one-shop
+- [x] `REL-02` Run owner/shop/device pilots (`P0`, `M`). Acceptance: sandbox, then one-shop
   publish pilot succeeds; positive BYOK fixture ingest passes; generation/ingest/publish kill
   switches are independent; audit and receipts are visible; post-enable canaries and publish
   reconciliation pass; rollback preserves consistent stored assets and receipts. Depends on the
@@ -27,6 +27,60 @@ Progress: 2/3 tasks.
   and post-enable canary. `REL-03` and `REL-04` close together after the receipt verifies.
 
 ## Notes
+
+- Final checkpoint (2026-08-10): `REL-02` is complete. The exact `.com`/BINI cycle 20 pilot on
+  `35a517f09475dba0ab212186b64788e59103d243` / `1.0.300` created exactly one new publish intent,
+  attempt, `OZON_PUBLISH` grant and receipt, claimed and acknowledged exactly one submission, and
+  sent exactly one Ozon import for the authorized SKU. One manifest-bound status request then
+  reconciled the exact task from `PENDING` to `SUCCEEDED`; there was no retry, recovery, manual
+  resolution, other-SKU publish, Provider POST or new ERP ingest. Status-observation and final
+  reconciliation SHA-256 values are
+  `12c2099246ee788b835cb7f33e7b1e8d0f30456bd6c6a3c02581ddb7d6a69f44` and
+  `07c2978986c989c2692d3e8a95aaa3e2d1f17075a04ee1edba3234414c5e421c`.
+- Cleanup revoked the exact pilot session, removed browser authority, restored all rollout rows to
+  dark and retained the rejected historical provenance without linking or replaying it. Final-dark
+  and runtime-bindings SHA-256 values are
+  `f5aa9df72f630dacad0755a700f0da2d3b9f1e00994abee048da4ba35bbbea95` and
+  `4666dd9d28e8b4ba6453b0610206675df52801830d7f2cdbea1109c4f5f30136`.
+- The standalone-worker reconciliation correction was committed and pushed as
+  `3b15f7fcc900d88b64b749c03be572efa3990f63`. Full `pnpm preflight` and the complete target-bound
+  `QA-04` offline gate passed; canonical QA-04 SHA-256 is
+  `f3df4205075190b96ca43184f521ddc24249615d69c786ada32db5435e3d6499`. Version `1.0.301` was built,
+  signed and independently verified for both regions. Release-bindings SHA-256 is
+  `fb196eaf8b98a517682594b39eec06146ff43bc819e257d3425e48bad514e467`.
+- Both regions completed fresh backup/restore validation, migration checks, dark deployment,
+  post-deploy verification, `7/7` canaries and final fences. The new worker in each region made
+  zero reconciliation claims and the repeatable-read database snapshots were unchanged; the
+  dual-region zero-claim aggregate SHA-256 is
+  `ce6fca795d43a2b5c0b61ac10df1d363e6e8c626a5137014e439e3301501f7a5`. COM/CN dark-canary
+  SHA-256 values are `b6c9908dd859fb01dce7d10bfe64e25fa36b17d4d10c3649a845f15b91ed6ec1`
+  and `c432a02ea7bd57c9878edb03dcbf033900d2c08385026f2eb6b30d0a7d9d9bee`. The existing warning
+  remains: fresh backups are local to each VPS because remote backup storage is not configured.
+- Official website distribution returned the exact signed Cloud/Local `1.0.301` bytes in both
+  regions. DNS quorum, COM receipt and CN receipt SHA-256 values are
+  `5f505a0bced900e3d38e7ab4f0856ba71482f93c01a5e13b8e654e5ff602217b`,
+  `5ec3e240104aa547d994fed35695d6d6b0153d8a8b0747fa2bb1fc65a284bb7d` and
+  `353ac95d82f66bc67df13f7e980f7e221e97d0b4501c74a6317410f63eb7ee18`.
+- BINI completed the same-profile, same-managed-path `1.0.300` -> `1.0.301` atomic upgrade. Windows
+  Chromium handed its transient launcher PID to the real CDP owner, and the MV3 worker later idled;
+  both assumptions failed closed before reload. Preserved failure evidence led to an idle-safe,
+  single-CDP-session flow that used the existing read-only `ss-erp:ping`, then immediately clicked
+  the official reload control. `event.isTrusted` was true, the ready/pre target matched, the old
+  target disappeared, and the post target matched the active-worker attestation. Managed-upgrade,
+  trusted-reload, active-worker and final-runtime SHA-256 values are
+  `954e4664650be788866d771a675278cc1a32900c14893a74d9e41021abbb0a92`,
+  `b8b31f152f7db1638299c1fef62166731e5a80398dc369d1a719ed74d32e0628`,
+  `cfa7e61f3e99739e77a3f37a6b5dfd5ad1699a74076ac8a9f2a24bae279abe41` and
+  `b4c4420714b8bd6dd9a787ecbcaa698f5bc4a2a5d6a309378bdb6b8b1612a8f1`; closure SHA-256 is
+  `f07c4fb5c41ad92547f791daa03dac3295ffefd1b6d572cef83fd104337d344d`. The final snapshot retains
+  one non-secret Provider profile fingerprint but no Key, capability evidence, dispatch, vault,
+  recovery state, device access or Provider permission.
+- A final read-only production check confirmed both regions still run the exact target, all three
+  services are active, readiness passes and every AI Media/BYOK/Ozon rollout flag remains dark.
+  No Provider request, ERP ingest/publish or additional Ozon import/status request occurred during
+  the correction, replacement release, website distribution or BINI upgrade. Phase 6 is `3/3` and
+  overall progress is `37/37`; generated analysis, plan, progress, private evidence and operator
+  helpers remain preserved pending an explicit artifact-retention decision.
 
 - Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
   `18822ed50d04d61a72d4b7f1409703683ef417ae` / BINI `1.0.293` completed end to end with every
