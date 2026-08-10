@@ -297,20 +297,19 @@ import {
 } from './services/extension-byok-publish-authorization.js';
 import {
   createPrismaExtensionByokPublishProvenanceReader,
-  PrismaExtensionByokMediaProvenanceRepository,
 } from './repositories/extension-byok-media-provenance-repository.js';
 import {
   createPrismaExtensionByokPublishStatusRepository,
 } from './repositories/extension-byok-publish-status-repository.js';
-import {
-  createExtensionByokMediaProvenanceService,
-} from './services/extension-byok-media-provenance.js';
 import {
   createExtensionByokListingPublishService,
 } from './services/extension-byok-listing-publish.js';
 import {
   createExtensionWorkbenchListingPublishService,
 } from './services/extension-workbench-listing-publish.js';
+import {
+  createExtensionWorkbenchByokPublishProvenanceService,
+} from './services/extension-workbench-byok-publish-provenance.js';
 import { createPrismaOzonPublishAttemptRepository } from './services/ozon-publish-attempt-prisma.js';
 import {
   createOzonListingProductionCompileAdapter,
@@ -2497,13 +2496,10 @@ if (isExtensionDeviceAuthEnabled()) {
     executeMediaApplyCommand: executeExtensionMediaOrSuiteApply,
   };
   await app.register(extensionCommandGrantRoutes, extensionCommandRoutesOptions);
-  const extensionByokPublishProvenanceRepository =
-    new PrismaExtensionByokMediaProvenanceRepository(prisma);
-  const extensionByokPublishProvenanceService = createExtensionByokMediaProvenanceService(
-    extensionByokPublishProvenanceRepository,
-  );
   const extensionByokPublishStatusRepository =
     createPrismaExtensionByokPublishStatusRepository(prisma);
+  const extensionWorkbenchByokPublishProvenanceService =
+    createExtensionWorkbenchByokPublishProvenanceService(prisma);
   const loadExtensionByokAcceptedPublishProvenance = async ({
     provenanceId,
     ownerUserId,
@@ -2591,7 +2587,7 @@ if (isExtensionDeviceAuthEnabled()) {
       authorizePublish: extensionByokPublishAuthorizer,
       recordPublishIntent: (input) => sourceListingWorkflowService.recordPublishIntent(input),
       findPublishStatus: (input) => extensionByokPublishStatusRepository.findStatus(input),
-      linkPublish: (input) => extensionByokPublishProvenanceService.linkPublish(input),
+      linkPublish: (input) => extensionWorkbenchByokPublishProvenanceService.linkStatus(input),
     }),
   });
   await app.register(extensionWorkbenchPublishRoutes, {
@@ -2615,6 +2611,9 @@ if (isExtensionDeviceAuthEnabled()) {
         }
       },
       authorizePublish: extensionByokPublishAuthorizer,
+      assertReusableByokAssets: (input) => (
+        extensionWorkbenchByokPublishProvenanceService.assertReusable(input)
+      ),
       preflightPublishAuthority: async (input) => {
         await preflightOzonListingProductionCompile(
           sourceOzonListingProductionCompile,
@@ -2623,23 +2622,9 @@ if (isExtensionDeviceAuthEnabled()) {
       },
       recordPublishIntent: (input) => sourceListingWorkflowService.recordPublishIntent(input),
       findPublishStatus: (input) => extensionByokPublishStatusRepository.findStatus(input),
-      linkPublishedByokAssets: async (input) => {
-        const rows = await prisma.extensionByokMediaProvenance.findMany({
-          where: {
-            executionMode: 'BYOK',
-            ownerUserId: input.ownerUserId,
-            workflowId: input.workflowId,
-            assetId: { in: input.assetIds },
-          },
-          select: { id: true },
-        });
-        await Promise.all(rows.map((row) => extensionByokPublishProvenanceService.linkPublish({
-          provenanceId: row.id,
-          ownerUserId: input.ownerUserId,
-          publishIntentId: input.publishIntentId,
-          publishReceiptId: input.publishReceiptId,
-        })));
-      },
+      linkPublishedByokAssets: (input) => (
+        extensionWorkbenchByokPublishProvenanceService.linkStatus(input)
+      ),
     }),
   });
   const byokGeneratedAssetRepository = createPrismaByokGeneratedAssetRepository(prisma);

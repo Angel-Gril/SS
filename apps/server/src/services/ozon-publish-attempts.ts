@@ -186,6 +186,14 @@ export interface OzonPublishLeaseClaim {
   leaseEpoch: number;
 }
 
+export interface OzonPublishSubmissionClaimInput {
+  attemptId: string;
+  workerId: string;
+  leaseMs: number;
+  byokAssetIds: string[];
+  requestingDeviceSessionId: string | null;
+}
+
 export type OzonPublishReconciliationAttemptRecord = Omit<
   OzonPublishAttemptRecord,
   | 'catalogSnapshot'
@@ -235,6 +243,43 @@ export function boundedOzonPublishText(
     invalid(`${label} must contain ${minLength} to ${maxLength} characters`);
   }
   return normalized;
+}
+
+export function normalizeOzonPublishSubmissionClaimBoundary(
+  input: Pick<
+    OzonPublishSubmissionClaimInput,
+    'byokAssetIds' | 'requestingDeviceSessionId'
+  >,
+): Pick<
+  OzonPublishSubmissionClaimInput,
+  'byokAssetIds' | 'requestingDeviceSessionId'
+> {
+  if (!Array.isArray(input?.byokAssetIds) || input.byokAssetIds.length > 500) {
+    invalid('byokAssetIds must contain at most 500 canonical asset IDs');
+  }
+  const byokAssetIds = input.byokAssetIds.map((value) => {
+    const assetId = boundedOzonPublishText(value, 'byokAssetId', 500);
+    if (assetId !== value) invalid('byokAssetIds must be canonical');
+    return assetId;
+  });
+  if (new Set(byokAssetIds).size !== byokAssetIds.length) {
+    invalid('byokAssetIds must be unique');
+  }
+  if (byokAssetIds.length === 0) {
+    if (input.requestingDeviceSessionId !== null) {
+      invalid('Hosted claims must not include a requesting device session');
+    }
+    return { byokAssetIds, requestingDeviceSessionId: null };
+  }
+  const requestingDeviceSessionId = boundedOzonPublishText(
+    input.requestingDeviceSessionId,
+    'requestingDeviceSessionId',
+    500,
+  );
+  if (requestingDeviceSessionId !== input.requestingDeviceSessionId) {
+    invalid('requestingDeviceSessionId must be canonical');
+  }
+  return { byokAssetIds, requestingDeviceSessionId };
 }
 
 export function normalizeOzonPublishHash(value: unknown, label: string): string {
@@ -434,7 +479,7 @@ export interface OzonPublishAttemptRepository {
     workflowId: string;
     ownerUserId: string;
   }): Promise<OzonPublishAttemptSummary | null>;
-  claimSubmission(input: { attemptId: string; workerId: string; leaseMs: number }): Promise<OzonPublishLeaseClaim | null>;
+  claimSubmission(input: OzonPublishSubmissionClaimInput): Promise<OzonPublishLeaseClaim | null>;
   heartbeat(input: { attemptId: string; workerId: string; leaseToken: string; leaseEpoch: number; leaseMs: number }): Promise<boolean>;
   completeSubmission(input: { attemptId: string; workerId: string; leaseToken: string; leaseEpoch: number; outcome: OzonSubmissionOutcome }): Promise<OzonPublishAttemptRecord>;
   recoverSubmissionAcknowledgement(input: {

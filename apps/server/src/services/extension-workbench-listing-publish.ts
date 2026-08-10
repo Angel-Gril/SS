@@ -13,6 +13,11 @@ import type {
   ExtensionByokPublishAuthorizationDecision,
   ExtensionByokPublishAuthorizationInput,
 } from './extension-byok-publish-authorization.js';
+import {
+  ExtensionWorkbenchByokPublishProvenanceError,
+  type ExtensionWorkbenchByokPublishProvenanceBasis,
+  type ExtensionWorkbenchByokPublishProvenanceLinkInput,
+} from './extension-workbench-byok-publish-provenance.js';
 
 export const EXTENSION_WORKBENCH_LISTING_PUBLISH_VERSION =
   'extension-workbench-listing-publish/v1' as const;
@@ -162,6 +167,7 @@ export class ExtensionWorkbenchListingPublishError extends Error {
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_STALE'
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_NOT_READY'
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_MEDIA_CONFLICT'
+      | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_PROVENANCE_CONFLICT'
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_PREVIEW_CONFLICT'
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_INTENT_CONFLICT'
       | 'EXTENSION_WORKBENCH_LISTING_PUBLISH_STATUS_CONFLICT'
@@ -431,6 +437,9 @@ export function createExtensionWorkbenchListingPublishService(options: {
   authorizePublish(
     input: ExtensionByokPublishAuthorizationInput,
   ): Promise<ExtensionByokPublishAuthorizationDecision>;
+  assertReusableByokAssets(
+    input: ExtensionWorkbenchByokPublishProvenanceBasis,
+  ): Promise<unknown>;
   preflightPublishAuthority(input: {
     ownerUserId: string;
     draft: OzonListingDraft;
@@ -451,14 +460,25 @@ export function createExtensionWorkbenchListingPublishService(options: {
     idempotencyKey: string;
     requestHash: string;
   }): Promise<ExtensionWorkbenchListingPublishStatusResult>;
-  linkPublishedByokAssets(input: {
-    ownerUserId: string;
-    workflowId: string;
-    assetIds: string[];
-    publishIntentId: string;
-    publishReceiptId: string;
-  }): Promise<unknown>;
+  linkPublishedByokAssets(
+    input: ExtensionWorkbenchByokPublishProvenanceLinkInput,
+  ): Promise<unknown>;
 }) {
+  async function provenanceBoundary<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof ExtensionWorkbenchByokPublishProvenanceError) {
+        return fail(
+          'EXTENSION_WORKBENCH_LISTING_PUBLISH_PROVENANCE_CONFLICT',
+          409,
+          'Workbench BYOK media has an unsafe prior publish result',
+        );
+      }
+      throw error;
+    }
+  }
+
   async function verifyContext(
     basis: ExtensionWorkbenchListingPublishBasis,
     actor: ExtensionWorkbenchListingPublishActor,
@@ -508,6 +528,14 @@ export function createExtensionWorkbenchListingPublishService(options: {
         503,
         'Workbench publish authorization returned an invalid decision',
       );
+    }
+    if (decision.byokAssetIds.length) {
+      await provenanceBoundary(() => options.assertReusableByokAssets({
+        ownerUserId: actor.ownerUserId,
+        shopId: basis.shopId,
+        workflowId: basis.workflowId,
+        assetIds: decision.byokAssetIds,
+      }));
     }
     return { draft, previewDraftRevision, selectedSkuKeys, orderedMedia: media };
   }
@@ -675,14 +703,16 @@ export function createExtensionWorkbenchListingPublishService(options: {
         idempotencyKey: envelope.idempotencyKey,
         requestHash: parsed.data.requestHash,
       });
-      if (result.kind !== 'not_committed') {
-        await options.linkPublishedByokAssets({
+      if (result.kind === 'succeeded' || result.kind === 'failed') {
+        await provenanceBoundary(() => options.linkPublishedByokAssets({
           ownerUserId: actor.ownerUserId,
+          shopId: envelope.shopId,
           workflowId: envelope.workflowId,
           assetIds: draft.media.assignments.map((assignment) => assignment.assetId),
           publishIntentId: envelope.command.publishIntentId,
           publishReceiptId: result.receiptId,
-        });
+          requestHash: parsed.data.requestHash,
+        }));
       }
       return {
         contractVersion: EXTENSION_WORKBENCH_LISTING_PUBLISH_VERSION,

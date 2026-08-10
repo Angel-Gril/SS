@@ -13,6 +13,10 @@ import type {
   ExtensionByokPublishAuthorizationDecision,
   ExtensionByokPublishAuthorizationInput,
 } from './extension-byok-publish-authorization.js';
+import {
+  ExtensionWorkbenchByokPublishProvenanceError,
+  type ExtensionWorkbenchByokPublishProvenanceLinkInput,
+} from './extension-workbench-byok-publish-provenance.js';
 
 export const EXTENSION_BYOK_LISTING_PUBLISH_VERSION =
   'extension-byok-listing-publish/v1' as const;
@@ -460,13 +464,23 @@ export function createExtensionByokListingPublishService(options: {
     idempotencyKey: string;
     requestHash: string;
   }): Promise<ExtensionByokListingPublishStatusResult>;
-  linkPublish(input: {
-    provenanceId: string;
-    ownerUserId: string;
-    publishIntentId: string;
-    publishReceiptId: string;
-  }): Promise<unknown>;
+  linkPublish(input: ExtensionWorkbenchByokPublishProvenanceLinkInput): Promise<unknown>;
 }) {
+  async function provenanceBoundary<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof ExtensionWorkbenchByokPublishProvenanceError) {
+        return fail(
+          'EXTENSION_BYOK_LISTING_PUBLISH_PROVENANCE_CONFLICT',
+          409,
+          'Accepted BYOK media has an unsafe prior publish result',
+        );
+      }
+      throw error;
+    }
+  }
+
   async function loadProvenance(
     provenanceId: string,
     actor: ExtensionByokListingPublishActor,
@@ -751,13 +765,16 @@ export function createExtensionByokListingPublishService(options: {
         idempotencyKey: envelope.idempotencyKey,
         requestHash: parsed.data.requestHash,
       });
-      if (result.kind !== 'not_committed') {
-        await options.linkPublish({
-          provenanceId: provenance.id,
+      if (result.kind === 'succeeded' || result.kind === 'failed') {
+        await provenanceBoundary(() => options.linkPublish({
           ownerUserId: actor.ownerUserId,
+          shopId: envelope.shopId,
+          workflowId: envelope.workflowId,
+          assetIds: [provenance.assetId],
           publishIntentId: envelope.command.publishIntentId,
           publishReceiptId: result.receiptId,
-        });
+          requestHash: parsed.data.requestHash,
+        }));
       }
       return {
         contractVersion: EXTENSION_BYOK_LISTING_PUBLISH_VERSION,

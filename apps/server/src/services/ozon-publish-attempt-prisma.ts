@@ -15,6 +15,7 @@ import {
   normalizeOzonPublishHash,
   normalizeOzonPublishLeaseMs,
   normalizeOzonPublishOfferTrace,
+  normalizeOzonPublishSubmissionClaimBoundary,
   normalizeOzonPublishTaskId,
   type OzonPublishAttemptRecord,
   type OzonPublishAttemptListPage,
@@ -541,6 +542,50 @@ async function appendEvent(
   );
 }
 
+async function rejectPreparedSubmissionClaim(
+  tx: SqlClient,
+  input: {
+    attemptId: string;
+    workerId: string;
+    errorCode: string;
+    errorMessage: string;
+    createId: () => string;
+  },
+): Promise<void> {
+  const rows = await tx.$queryRawUnsafe<any[]>(
+    `UPDATE "ozon_publish_attempts" a
+     SET "state" = 'REJECTED', "state_version" = "state_version" + 1,
+         "last_error_code" = $2, "last_error_message" = $3,
+         "rejected_at" = clock_timestamp(), "updated_at" = clock_timestamp()
+     WHERE a."id" = $1 AND a."state" = 'PREPARED'
+     RETURNING ${ATTEMPT_COLUMNS}`,
+    input.attemptId,
+    input.errorCode,
+    input.errorMessage,
+  );
+  if (!rows[0]) return;
+  const rejected = attemptRow(rows[0]);
+  await appendEvent(tx, rejected, {
+    eventType: 'LOCAL_REJECTED',
+    workerId: input.workerId,
+    payload: { errorCode: rejected.lastErrorCode },
+  }, input.createId);
+}
+
+function exactAuthoritativeAssetSet(value: unknown, expected: string[]): value is string[] {
+  if (!Array.isArray(value) || value.length > 500 || value.length !== expected.length) return false;
+  const authoritative = new Set<string>();
+  for (const assetId of value) {
+    if (typeof assetId !== 'string'
+      || !assetId
+      || assetId.length > 500
+      || assetId !== assetId.normalize('NFKC').trim()
+      || authoritative.has(assetId)) return false;
+    authoritative.add(assetId);
+  }
+  return expected.every((assetId) => authoritative.has(assetId));
+}
+
 function samePreparedAttempt(
   attempt: OzonPublishAttemptRecord,
   source: OzonPublishAttemptSource,
@@ -639,7 +684,7 @@ export function createPrismaOzonPublishAttemptRepository(options: {
         if (!source) throw new OzonPublishAttemptError('NOT_FOUND', 'Publish intent was not found');
         await tx.$queryRawUnsafe(
           'SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1, 0))',
-          `ozon-publish-attempt:${source.ownerUserId}:${source.idempotencyKey}`,
+          `ozon-publish-attempt-workflow:${source.ownerUserId}:${source.workflowId}`,
         );
         const existing = await loadAttempt(tx, 'a."publish_intent_id" = $1', [source.publishIntentId], true);
         if (existing) {
@@ -657,6 +702,32 @@ export function createPrismaOzonPublishAttemptRepository(options: {
           || source.currentStage !== 'PUBLISH_INTENT_RECORDED'
           || source.currentStatus !== 'ACTIVE') {
           throw new OzonPublishAttemptError('VERSION_CONFLICT', 'Publish intent no longer references the current draft');
+        }
+        const blocked = await tx.$queryRawUnsafe<Array<{ blocked: boolean }>>(
+          `SELECT EXISTS (
+             SELECT 1 FROM "ozon_publish_attempts" other
+             WHERE other."owner_user_id" = $1 AND other."workflow_id" = $2
+               AND NOT (
+                 other."state" = 'REJECTED'
+                 AND other."reconciliation_state" = 'NOT_REQUIRED'
+                 AND other."ozon_task_id" IS NULL
+                 AND other."acceptance_source" IS NULL
+                 AND other."lease_purpose" IS NULL
+                 AND other."lease_token" IS NULL
+                 AND other."lease_owner" IS NULL
+                 AND other."heartbeat_at" IS NULL
+                 AND other."lease_expires_at" IS NULL
+                 AND other."submitted_at" IS NULL
+               )
+           ) AS "blocked"`,
+          source.ownerUserId,
+          source.workflowId,
+        );
+        if (blocked[0]?.blocked !== false) {
+          throw new OzonPublishAttemptError(
+            'VERSION_CONFLICT',
+            'A prior Ozon publish attempt for this workflow is not a terminal rejection',
+          );
         }
         const catalogs = await tx.$queryRawUnsafe<Array<{ id: string }>>(
           `SELECT "id" FROM "ozon_category_catalog_snapshots"
@@ -739,9 +810,277 @@ export function createPrismaOzonPublishAttemptRepository(options: {
       const attemptId = boundedOzonPublishText(input.attemptId, 'attemptId', 200);
       const workerId = boundedOzonPublishText(input.workerId, 'workerId', 200);
       const leaseMs = normalizeOzonPublishLeaseMs(input.leaseMs);
+      const claimBoundary = normalizeOzonPublishSubmissionClaimBoundary(input);
       return serializable(options.client, async (tx) => {
+        const observed = await loadAttempt(tx, 'a."id" = $1', [attemptId]);
+        if (!observed || observed.state !== 'PREPARED') return null;
+        await tx.$queryRawUnsafe(
+          'SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended($1, 0))',
+          `ozon-publish-attempt-workflow:${observed.ownerUserId}:${observed.workflowId}`,
+        );
         const current = await loadAttempt(tx, 'a."id" = $1', [attemptId], true);
         if (!current || current.state !== 'PREPARED') return null;
+
+        const frozenAuthority = await tx.$queryRawUnsafe<Array<{
+          draftValid: boolean;
+          authoritativeByokAssetIds: string[];
+        }>>(
+          `WITH frozen_draft AS (
+             SELECT draft."payload"
+             FROM "source_listing_publish_intents" intent
+             JOIN "source_listing_draft_versions" draft
+               ON draft."workflow_id" = intent."workflow_id"
+              AND draft."revision" = intent."revision"
+              AND draft."owner_user_id" = intent."owner_user_id"
+              AND draft."draft_version" = intent."draft_version"
+             WHERE intent."id" = $1
+               AND intent."owner_user_id" = $2
+               AND intent."shop_id" = $3
+               AND intent."workflow_id" = $4
+               AND intent."revision" = $5
+               AND intent."draft_version" = $6
+               AND draft."shop_id" = $3
+           ), assignment_values AS (
+             SELECT assignment."value" AS "assignment"
+             FROM frozen_draft
+             CROSS JOIN LATERAL jsonb_array_elements(
+               CASE
+                 WHEN jsonb_typeof(frozen_draft."payload"->'media'->'assignments') = 'array'
+                   THEN frozen_draft."payload"->'media'->'assignments'
+                 ELSE '[]'::jsonb
+               END
+             ) assignment
+           ), assignment_assets AS (
+             SELECT assignment, assignment->>'assetId' AS "assetId"
+             FROM assignment_values
+           ), classified_byok AS (
+             SELECT DISTINCT assignment_asset."assetId"
+             FROM assignment_assets assignment_asset
+             LEFT JOIN "media_assets" asset
+               ON asset."id" = assignment_asset."assetId"
+              AND asset."owner_user_id" = $2
+             WHERE left(asset."id", 5) = 'byok_'
+                OR left(asset."source_media_key", 15) = 'extension-byok:'
+                OR asset."metadata"->>'generatedAssetSource' = 'EXTENSION_BYOK'
+                OR asset."metadata"->>'executionMode' = 'BYOK'
+                OR asset."metadata"->>'outputRole' = 'BYOK_ACCEPTED'
+                OR EXISTS (
+                  SELECT 1
+                  FROM "extension_byok_media_provenance" marker_provenance
+                  WHERE marker_provenance."execution_mode" = 'BYOK'
+                    AND marker_provenance."owner_user_id" = $2
+                    AND marker_provenance."shop_id" = $3
+                    AND marker_provenance."workflow_id" = $4
+                    AND marker_provenance."asset_id" = assignment_asset."assetId"
+                )
+           ), draft_validity AS (
+             SELECT EXISTS (SELECT 1 FROM frozen_draft)
+               AND COALESCE((
+                 SELECT jsonb_typeof(frozen_draft."payload") = 'object'
+                   AND jsonb_typeof(frozen_draft."payload"->'media') = 'object'
+                   AND jsonb_typeof(frozen_draft."payload"->'media'->'assignments') = 'array'
+                 FROM frozen_draft
+               ), FALSE)
+               AND (SELECT count(*) FROM assignment_values) <= 500
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM assignment_assets assignment_asset
+                 LEFT JOIN "media_assets" asset
+                   ON asset."id" = assignment_asset."assetId"
+                  AND asset."owner_user_id" = $2
+                 WHERE jsonb_typeof(assignment_asset."assignment") <> 'object'
+                    OR jsonb_typeof(assignment_asset."assignment"->'assetId') <> 'string'
+                    OR assignment_asset."assetId" IS NULL
+                    OR assignment_asset."assetId" = ''
+                    OR char_length(assignment_asset."assetId") > 500
+                    OR btrim(assignment_asset."assetId") <> assignment_asset."assetId"
+                    OR asset."id" IS NULL
+               ) AS "draftValid"
+           )
+           SELECT draft_validity."draftValid",
+                  COALESCE((
+                    SELECT array_agg(classified_byok."assetId" ORDER BY classified_byok."assetId")
+                    FROM classified_byok
+                  ), ARRAY[]::TEXT[]) AS "authoritativeByokAssetIds"
+           FROM draft_validity`,
+          current.publishIntentId,
+          current.ownerUserId,
+          current.shopId,
+          current.workflowId,
+          current.revision,
+          current.draftVersion,
+        );
+        const authoritativeByokAssetIds = frozenAuthority[0]?.authoritativeByokAssetIds;
+        if (frozenAuthority[0]?.draftValid !== true
+          || !exactAuthoritativeAssetSet(
+            authoritativeByokAssetIds,
+            claimBoundary.byokAssetIds,
+          )) {
+          await rejectPreparedSubmissionClaim(tx, {
+            attemptId,
+            workerId,
+            errorCode: 'LOCAL_BYOK_PROVENANCE_CONFLICT',
+            errorMessage: 'Frozen draft BYOK authority changed before Ozon submission',
+            createId,
+          });
+          return null;
+        }
+
+        if (authoritativeByokAssetIds.length) {
+          const liveAuthority = await tx.$queryRawUnsafe<Array<{ sessionId: string }>>(
+            `SELECT session."id" AS "sessionId"
+             FROM "extension_device_sessions" session
+             JOIN "extension_device_pairing_codes" pairing
+               ON pairing."id" = session."pairing_code_id"
+              AND pairing."deployment_id" = session."deployment_id"
+              AND pairing."owner_user_id" = session."owner_user_id"
+              AND pairing."actor_user_id" = session."actor_user_id"
+             JOIN "extension_device_shop_grants" shop_grant
+               ON shop_grant."session_id" = session."id"
+              AND shop_grant."shop_id" = $4
+             WHERE session."id" = $1
+               AND session."owner_user_id" = $2
+               AND session."actor_user_id" = $3
+               AND nullif(session."deployment_id", '') IS NOT NULL
+               AND session."status" = 'ACTIVE'
+               AND session."revoked_at" IS NULL
+               AND session."revoked_reason" IS NULL
+               AND session."expires_at" > clock_timestamp()
+               AND session."scopes" @> ARRAY[
+                 'byok:media:ingest', 'listing:publish'
+               ]::TEXT[]
+               AND pairing."status" = 'CLAIMED'
+               AND pairing."claimed_at" IS NOT NULL
+               AND pairing."canceled_at" IS NULL
+               AND $4 = ANY(pairing."shop_ids")
+               AND pairing."scopes" @> ARRAY[
+                 'byok:media:ingest', 'listing:publish'
+               ]::TEXT[]
+               AND shop_grant."status" = 'ACTIVE'
+               AND shop_grant."revoked_at" IS NULL
+               AND shop_grant."revoked_reason" IS NULL
+             FOR UPDATE OF session, shop_grant`,
+            claimBoundary.requestingDeviceSessionId,
+            current.ownerUserId,
+            current.actorUserId,
+            current.shopId,
+          );
+          if (liveAuthority.length !== 1
+            || liveAuthority[0]?.sessionId !== claimBoundary.requestingDeviceSessionId) {
+            await rejectPreparedSubmissionClaim(tx, {
+              attemptId,
+              workerId,
+              errorCode: 'LOCAL_BYOK_SESSION_AUTHORITY_CONFLICT',
+              errorMessage: 'BYOK device session authority changed before Ozon submission',
+              createId,
+            });
+            return null;
+          }
+
+          const provenance = await tx.$queryRawUnsafe<Array<{
+            assetId: string;
+            sessionMatches: boolean;
+            historySafe: boolean;
+          }>>(
+            `SELECT provenance."asset_id" AS "assetId",
+                    "extension_byok_publish_session_matches"(
+                      provenance."device_session_id", $5, $1, $4, $2
+                    ) AS "sessionMatches",
+                    (
+                      (
+                        provenance."publish_intent_id" IS NULL
+                        AND provenance."publish_receipt_id" IS NULL
+                      )
+                      OR (
+                        provenance."publish_intent_id" IS NOT NULL
+                        AND provenance."publish_receipt_id" IS NOT NULL
+                        AND intent."id" = provenance."publish_intent_id"
+                        AND receipt."id" = provenance."publish_receipt_id"
+                        AND intent."owner_user_id" = $1
+                        AND intent."shop_id" = $2
+                        AND intent."workflow_id" = $3
+                        AND command_grant."owner_user_id" = $1
+                        AND command_grant."shop_id" = $2
+                        AND command_grant."workflow_id" = $3
+                        AND attempt."owner_user_id" = $1
+                        AND attempt."shop_id" = $2
+                        AND attempt."workflow_id" = $3
+                        AND attempt."publish_intent_id" = intent."id"
+                        AND intent."draft_version" >= 1
+                        AND attempt."draft_version" = intent."draft_version"
+                        AND command_grant."draft_version" = intent."draft_version"
+                        AND command_grant."operation" = 'OZON_PUBLISH'
+                        AND nullif(intent."idempotency_key", '') IS NOT NULL
+                        AND command_grant."idempotency_key" = intent."idempotency_key"
+                        AND receipt."status" = 'FAILED'
+                        AND (
+                          receipt."result" IS NULL
+                          OR receipt."result" = 'null'::jsonb
+                        )
+                        AND receipt."failure_code" = 'OZON_SUBMIT_REJECTED'
+                        AND attempt."state" = 'REJECTED'
+                        AND attempt."reconciliation_state" = 'NOT_REQUIRED'
+                        AND attempt."ozon_task_id" IS NULL
+                        AND attempt."acceptance_source" IS NULL
+                        AND attempt."lease_purpose" IS NULL
+                        AND attempt."lease_token" IS NULL
+                        AND attempt."lease_owner" IS NULL
+                        AND attempt."heartbeat_at" IS NULL
+                        AND attempt."lease_expires_at" IS NULL
+                        AND attempt."submit_started_at" IS NOT NULL
+                        AND attempt."submitted_at" IS NULL
+                        AND attempt."rejected_at" IS NOT NULL
+                      )
+                    ) AS "historySafe"
+             FROM "extension_byok_media_provenance" provenance
+             LEFT JOIN "source_listing_publish_intents" intent
+               ON intent."id" = provenance."publish_intent_id"
+             LEFT JOIN "extension_command_receipts" receipt
+               ON receipt."id" = provenance."publish_receipt_id"
+             LEFT JOIN "extension_command_grants" command_grant
+               ON command_grant."id" = receipt."grant_id"
+             LEFT JOIN "ozon_publish_attempts" attempt
+               ON attempt."publish_intent_id" = intent."id"
+             WHERE provenance."execution_mode" = 'BYOK'
+               AND provenance."owner_user_id" = $1
+               AND provenance."shop_id" = $2
+               AND provenance."workflow_id" = $3
+               AND provenance."actor_user_id" = $4
+               AND provenance."asset_id" = ANY($6::TEXT[])
+             ORDER BY provenance."asset_id"
+             FOR UPDATE OF provenance`,
+            current.ownerUserId,
+            current.shopId,
+            current.workflowId,
+            current.actorUserId,
+            claimBoundary.requestingDeviceSessionId,
+            authoritativeByokAssetIds,
+          );
+          const expectedAssets = new Set(authoritativeByokAssetIds);
+          const seenAssets = new Set<string>();
+          let provenanceValid = provenance.length === expectedAssets.size;
+          for (const row of provenance) {
+            if (typeof row.assetId !== 'string'
+              || !expectedAssets.has(row.assetId)
+              || seenAssets.has(row.assetId)
+              || row.sessionMatches !== true
+              || row.historySafe !== true) {
+              provenanceValid = false;
+              break;
+            }
+            seenAssets.add(row.assetId);
+          }
+          if (!provenanceValid) {
+            await rejectPreparedSubmissionClaim(tx, {
+              attemptId,
+              workerId,
+              errorCode: 'LOCAL_BYOK_PROVENANCE_CONFLICT',
+              errorMessage: 'BYOK provenance changed before Ozon submission',
+              createId,
+            });
+            return null;
+          }
+        }
         const valid = await tx.$queryRawUnsafe<Array<{ valid: boolean }>>(
           `SELECT EXISTS (
              SELECT 1 FROM "source_listing_workflows" workflow
@@ -759,10 +1098,28 @@ export function createPrismaOzonPublishAttemptRepository(options: {
                    AND catalog."is_current" = TRUE
                    AND catalog."expires_at" > clock_timestamp()
                )
+               AND NOT EXISTS (
+                 SELECT 1 FROM "ozon_publish_attempts" other
+                 WHERE other."owner_user_id" = $2 AND other."workflow_id" = $1
+                   AND other."id" <> $8
+                   AND NOT (
+                     other."state" = 'REJECTED'
+                     AND other."reconciliation_state" = 'NOT_REQUIRED'
+                     AND other."ozon_task_id" IS NULL
+                     AND other."acceptance_source" IS NULL
+                     AND other."lease_purpose" IS NULL
+                     AND other."lease_token" IS NULL
+                     AND other."lease_owner" IS NULL
+                     AND other."heartbeat_at" IS NULL
+                     AND other."lease_expires_at" IS NULL
+                     AND other."submitted_at" IS NULL
+                   )
+               )
            ) AS "valid"`,
           current.workflowId, current.ownerUserId, current.shopId,
           current.revision, current.draftVersion,
           current.catalogSnapshotId, current.catalogRevision,
+          current.id,
         );
         if (valid[0]?.valid !== true) {
           const rows = await tx.$queryRawUnsafe<any[]>(

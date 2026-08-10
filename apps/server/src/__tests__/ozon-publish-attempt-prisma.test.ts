@@ -81,6 +81,42 @@ function prepareInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function claimInput(overrides: Record<string, unknown> = {}) {
+  return {
+    attemptId: 'attempt-1',
+    workerId: 'worker-1',
+    leaseMs: 30_000,
+    byokAssetIds: [],
+    requestingDeviceSessionId: null,
+    ...overrides,
+  };
+}
+
+function authoritativeByokSet(assetIds: string[] = [], draftValid = true) {
+  return [{ draftValid, authoritativeByokAssetIds: assetIds }];
+}
+
+function activePublishSession() {
+  return [{ sessionId: 'device-session-2' }];
+}
+
+function expectDefinitiveRejectedSiblingSql(sql: string) {
+  expect(sql).toContain('other."state" = \'REJECTED\'');
+  expect(sql).toContain('other."reconciliation_state" = \'NOT_REQUIRED\'');
+  for (const field of [
+    'ozon_task_id',
+    'acceptance_source',
+    'lease_purpose',
+    'lease_token',
+    'lease_owner',
+    'heartbeat_at',
+    'lease_expires_at',
+    'submitted_at',
+  ]) {
+    expect(sql).toContain(`other."${field}" IS NULL`);
+  }
+}
+
 describe('Prisma Ozon publish attempt repository', () => {
   it('loads a persisted attempt by publish intent only within its owner scope', async () => {
     const client = new ScriptedClient((sql, params) => {
@@ -116,6 +152,7 @@ describe('Prisma Ozon publish attempt repository', () => {
       if (sql.includes('FROM "source_listing_publish_intents" intent')) return [sourceRow()];
       if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
       if (sql.includes('FROM "ozon_publish_attempts" a')) return [];
+      if (sql.includes('FROM "ozon_publish_attempts" other')) return [{ blocked: false }];
       if (sql.includes('FROM "ozon_category_catalog_snapshots"')) return [{ id: 'catalog-1' }];
       if (sql.includes('INSERT INTO "ozon_publish_attempts"')) return [attemptRow()];
       if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
@@ -131,8 +168,98 @@ describe('Prisma Ozon publish attempt repository', () => {
       attempt: { id: 'attempt-1', requestPayloadHash: hashOzonPublishJson({ items: [{ offer_id: 'offer-1' }] }) },
     });
     expect(client.transactionOptions).toEqual([{ isolationLevel: 'Serializable' }]);
+    expect(client.calls.find(({ sql }) => sql.includes('pg_advisory_xact_lock'))?.params)
+      .toEqual(['ozon-publish-attempt-workflow:owner-1:workflow-1']);
     const event = client.calls.find(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempt_events"'))!;
     expect(event.params).toEqual(expect.arrayContaining(['event-1', 'attempt-1', 1, 'PREPARED', 'owner-1']));
+  });
+
+  it('allows a new intent only when every prior workflow attempt is a terminal rejection', async () => {
+    const ids = ['attempt-1', 'event-1'];
+    const client = new ScriptedClient((sql, params) => {
+      if (sql.includes('FROM "source_listing_publish_intents" intent')) return [sourceRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [];
+      if (sql.includes('FROM "ozon_publish_attempts" other')) {
+        expect(sql).toContain('other."owner_user_id" = $1 AND other."workflow_id" = $2');
+        expectDefinitiveRejectedSiblingSql(sql);
+        expect(params).toEqual(['owner-1', 'workflow-1']);
+        return [{ blocked: false }];
+      }
+      if (sql.includes('FROM "ozon_category_catalog_snapshots"')) return [{ id: 'catalog-1' }];
+      if (sql.includes('INSERT INTO "ozon_publish_attempts"')) return [attemptRow()];
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createId: () => ids.shift() || 'unexpected-id',
+    });
+
+    await expect(repository.prepare(prepareInput())).resolves.toMatchObject({
+      idempotent: false,
+      attempt: { id: 'attempt-1' },
+    });
+    expect(client.calls.some(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempts"')))
+      .toBe(true);
+  });
+
+  it('blocks a new intent while another workflow attempt is not a terminal rejection', async () => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "source_listing_publish_intents" intent')) return [sourceRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [];
+      if (sql.includes('FROM "ozon_publish_attempts" other')) return [{ blocked: true }];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({ client: client as never });
+
+    await expect(repository.prepare(prepareInput())).rejects.toMatchObject({
+      code: 'VERSION_CONFLICT',
+    });
+    expect(client.calls.some(({ sql }) => sql.includes('ozon_category_catalog_snapshots')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempts"')))
+      .toBe(false);
+  });
+
+  it('blocks a terminal-looking sibling that retains task, lease, acknowledgement, or submission evidence', async () => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "source_listing_publish_intents" intent')) return [sourceRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [];
+      if (sql.includes('FROM "ozon_publish_attempts" other')) {
+        expectDefinitiveRejectedSiblingSql(sql);
+        return [{ blocked: true }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({ client: client as never });
+
+    await expect(repository.prepare(prepareInput())).rejects.toMatchObject({
+      code: 'VERSION_CONFLICT',
+    });
+    expect(client.calls.some(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempts"')))
+      .toBe(false);
+  });
+
+  it('replays an identical attempt for the same intent before checking workflow siblings', async () => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "source_listing_publish_intents" intent')) return [sourceRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({ client: client as never });
+
+    await expect(repository.prepare(prepareInput())).resolves.toMatchObject({
+      idempotent: true,
+      attempt: { id: 'attempt-1' },
+    });
+    expect(client.calls.some(({ sql }) => sql.includes('FROM "ozon_publish_attempts" other')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempts"')))
+      .toBe(false);
   });
 
   it('conflicts when an existing prepared intent recompiles to a different immutable request', async () => {
@@ -171,9 +298,17 @@ describe('Prisma Ozon publish attempt repository', () => {
   it('revalidates the current catalog before submission and durably rejects stale authority', async () => {
     const client = new ScriptedClient((sql) => {
       if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('AS "authoritativeByokAssetIds"')) return authoritativeByokSet();
       if (sql.includes('SELECT EXISTS')) {
         expect(sql).toContain('FROM "ozon_category_catalog_snapshots" catalog');
         expect(sql).toContain('catalog."expires_at" > clock_timestamp()');
+        expect(sql).toContain('NOT EXISTS');
+        expect(sql).toContain('FROM "ozon_publish_attempts" other');
+        expect(sql).toContain('other."owner_user_id" = $2 AND other."workflow_id" = $1');
+        expect(sql).toContain('other."id" <> $8');
+        expect(sql).toContain('other."state" = \'REJECTED\'');
+        expect(sql).toContain('other."reconciliation_state" = \'NOT_REQUIRED\'');
         return [{ valid: false }];
       }
       if (sql.includes('UPDATE "ozon_publish_attempts" a')) {
@@ -188,12 +323,316 @@ describe('Prisma Ozon publish attempt repository', () => {
     });
     const repository = createPrismaOzonPublishAttemptRepository({ client: client as never });
 
-    await expect(repository.claimSubmission({
-      attemptId: 'attempt-1', workerId: 'worker-1', leaseMs: 30_000,
-    })).resolves.toBeNull();
+    await expect(repository.claimSubmission(claimInput())).resolves.toBeNull();
+    const authority = client.calls.find(({ sql }) => (
+      sql.includes('FROM "source_listing_workflows" workflow')
+      && sql.includes('AS "valid"')
+    ))!;
+    expect(authority.params).toEqual([
+      'workflow-1', 'owner-1', 'shop-1', 5, 3, 'catalog-1', 'catalog-rev-1', 'attempt-1',
+    ]);
     expect(client.calls.some(({ sql }) => sql.includes('LOCAL_REJECTED'))).toBe(false);
     expect(client.calls.find(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempt_events"'))
       ?.params).toContain('LOCAL_REJECTED');
+  });
+
+  it('claims a prepared attempt when every sibling is a terminal rejection', async () => {
+    const client = new ScriptedClient((sql, params) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('AS "authoritativeByokAssetIds"')) return authoritativeByokSet();
+      if (sql.includes('SELECT EXISTS')) {
+        expect(sql).toContain('other."id" <> $8');
+        expectDefinitiveRejectedSiblingSql(sql);
+        expect(params.at(-1)).toBe('attempt-1');
+        return [{ valid: true }];
+      }
+      if (sql.includes('UPDATE "ozon_publish_attempts" a')) {
+        expect(params).toEqual(['attempt-1', 'lease-1', 'worker-1', 30_000]);
+        return [attemptRow({
+          state: 'SUBMITTING', stateVersion: 2,
+          leasePurpose: 'SUBMIT', leaseToken: 'lease-1', leaseOwner: 'worker-1', leaseEpoch: 1,
+          heartbeatAt: NOW.toISOString(),
+          leaseExpiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+          submitStartedAt: NOW.toISOString(),
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createLeaseToken: () => 'lease-1',
+      createId: () => 'claim-event-1',
+    });
+
+    await expect(repository.claimSubmission(claimInput())).resolves.toMatchObject({
+      leaseToken: 'lease-1',
+      leaseEpoch: 1,
+      attempt: { id: 'attempt-1', state: 'SUBMITTING' },
+    });
+    expect(client.calls.find(({ sql }) => sql.includes('INSERT INTO "ozon_publish_attempt_events"'))
+      ?.params).toContain('SUBMISSION_CLAIMED');
+  });
+
+  it('claims a hosted attempt only after proving the frozen draft has no BYOK assets', async () => {
+    let attemptLoads = 0;
+    const client = new ScriptedClient((sql, params) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) {
+        attemptLoads += 1;
+        return [attemptRow()];
+      }
+      if (sql.includes('pg_advisory_xact_lock')) {
+        expect(params).toEqual(['ozon-publish-attempt-workflow:owner-1:workflow-1']);
+        return [{ locked: 1 }];
+      }
+      if (sql.includes('AS "authoritativeByokAssetIds"')) {
+        expect(sql).toContain('jsonb_array_elements');
+        expect(sql).toContain('LEFT JOIN "media_assets" asset');
+        expect(sql).toContain('left(asset."id", 5) = \'byok_\'');
+        expect(sql).toContain('left(asset."source_media_key", 15) = \'extension-byok:\'');
+        expect(sql).toContain('asset."metadata"->>\'generatedAssetSource\' = \'EXTENSION_BYOK\'');
+        expect(sql).toContain('asset."metadata"->>\'executionMode\' = \'BYOK\'');
+        expect(sql).toContain('asset."metadata"->>\'outputRole\' = \'BYOK_ACCEPTED\'');
+        expect(sql).toContain('FROM "extension_byok_media_provenance" marker_provenance');
+        expect(params).toEqual(['intent-1', 'owner-1', 'shop-1', 'workflow-1', 5, 3]);
+        return authoritativeByokSet();
+      }
+      if (sql.includes('SELECT EXISTS')) return [{ valid: true }];
+      if (sql.includes('UPDATE "ozon_publish_attempts" a')) {
+        return [attemptRow({
+          state: 'SUBMITTING', stateVersion: 2,
+          leasePurpose: 'SUBMIT', leaseToken: 'lease-1', leaseOwner: 'worker-1', leaseEpoch: 1,
+          heartbeatAt: NOW.toISOString(),
+          leaseExpiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+          submitStartedAt: NOW.toISOString(),
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createLeaseToken: () => 'lease-1',
+      createId: () => 'claim-event-1',
+    });
+
+    await expect(repository.claimSubmission(claimInput())).resolves.toMatchObject({
+      attempt: { state: 'SUBMITTING' },
+    });
+    expect(attemptLoads).toBe(2);
+    expect(client.calls.some(({ sql }) => sql.includes('AS "authoritativeByokAssetIds"')))
+      .toBe(true);
+    expect(client.calls.some(({ sql }) => sql.includes('FOR UPDATE OF session, shop_grant')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('FOR UPDATE OF provenance')))
+      .toBe(false);
+  });
+
+  it('locks and accepts exact BYOK provenance with a definitive rejected history', async () => {
+    const client = new ScriptedClient((sql, params) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) {
+        expect(params).toEqual(['ozon-publish-attempt-workflow:owner-1:workflow-1']);
+        return [{ locked: 1 }];
+      }
+      if (sql.includes('AS "authoritativeByokAssetIds"')) {
+        return authoritativeByokSet(['asset-1']);
+      }
+      if (sql.includes('FROM "extension_device_sessions" session')) {
+        expect(sql).toContain('session."status" = \'ACTIVE\'');
+        expect(sql).toContain('session."revoked_at" IS NULL');
+        expect(sql).toContain('session."revoked_reason" IS NULL');
+        expect(sql).toContain('session."expires_at" > clock_timestamp()');
+        expect(sql).toMatch(/session\."scopes"\s+@>\s+ARRAY\[\s*'byok:media:ingest',\s*'listing:publish'\s*\]::TEXT\[\]/u);
+        expect(sql).toContain('pairing."deployment_id" = session."deployment_id"');
+        expect(sql).toContain('pairing."owner_user_id" = session."owner_user_id"');
+        expect(sql).toContain('pairing."actor_user_id" = session."actor_user_id"');
+        expect(sql).toContain('pairing."status" = \'CLAIMED\'');
+        expect(sql).toContain('pairing."claimed_at" IS NOT NULL');
+        expect(sql).toContain('$4 = ANY(pairing."shop_ids")');
+        expect(sql).toMatch(/pairing\."scopes"\s+@>\s+ARRAY\[\s*'byok:media:ingest',\s*'listing:publish'\s*\]::TEXT\[\]/u);
+        expect(sql).toContain('shop_grant."status" = \'ACTIVE\'');
+        expect(sql).toContain('shop_grant."revoked_at" IS NULL');
+        expect(sql).toContain('shop_grant."revoked_reason" IS NULL');
+        expect(sql).toContain('FOR UPDATE OF session, shop_grant');
+        expect(params).toEqual(['device-session-2', 'owner-1', 'owner-1', 'shop-1']);
+        return activePublishSession();
+      }
+      if (sql.includes('FROM "extension_byok_media_provenance" provenance')) {
+        expect(sql).toContain('FOR UPDATE OF provenance');
+        expect(sql).toContain('"extension_byok_publish_session_matches"');
+        expect(sql).toContain('receipt."failure_code" = \'OZON_SUBMIT_REJECTED\'');
+        expect(sql).toContain('attempt."state" = \'REJECTED\'');
+        expect(sql).toContain('attempt."reconciliation_state" = \'NOT_REQUIRED\'');
+        expect(sql).toContain('attempt."ozon_task_id" IS NULL');
+        expect(sql).toContain('attempt."acceptance_source" IS NULL');
+        expect(sql).toContain('attempt."lease_token" IS NULL');
+        expect(sql).toContain('attempt."submit_started_at" IS NOT NULL');
+        expect(sql).toContain('attempt."submitted_at" IS NULL');
+        expect(sql).toContain('attempt."rejected_at" IS NOT NULL');
+        expect(params).toEqual([
+          'owner-1', 'shop-1', 'workflow-1', 'owner-1', 'device-session-2',
+          ['asset-1'],
+        ]);
+        return [{ assetId: 'asset-1', sessionMatches: true, historySafe: true }];
+      }
+      if (sql.includes('SELECT EXISTS')) return [{ valid: true }];
+      if (sql.includes('UPDATE "ozon_publish_attempts" a')) {
+        return [attemptRow({
+          state: 'SUBMITTING', stateVersion: 2,
+          leasePurpose: 'SUBMIT', leaseToken: 'lease-1', leaseOwner: 'worker-1', leaseEpoch: 1,
+          heartbeatAt: NOW.toISOString(),
+          leaseExpiresAt: new Date(NOW.getTime() + 30_000).toISOString(),
+          submitStartedAt: NOW.toISOString(),
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createLeaseToken: () => 'lease-1',
+      createId: () => 'claim-event-1',
+    });
+
+    await expect(repository.claimSubmission(claimInput({
+      byokAssetIds: ['asset-1'],
+      requestingDeviceSessionId: 'device-session-2',
+    }))).resolves.toMatchObject({ attempt: { state: 'SUBMITTING' } });
+  });
+
+  it.each([
+    ['missing row', []],
+    ['unsafe history', [{ assetId: 'asset-1', sessionMatches: true, historySafe: false }]],
+    ['lineage mismatch', [{ assetId: 'asset-1', sessionMatches: false, historySafe: true }]],
+  ])('locally rejects BYOK claim provenance with %s before submission', async (_label, rows) => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('AS "authoritativeByokAssetIds"')) {
+        return authoritativeByokSet(['asset-1']);
+      }
+      if (sql.includes('FROM "extension_device_sessions" session')) return activePublishSession();
+      if (sql.includes('FROM "extension_byok_media_provenance" provenance')) return rows;
+      if (sql.includes('"last_error_code" = $2')) {
+        return [attemptRow({
+          state: 'REJECTED', stateVersion: 2, rejectedAt: NOW.toISOString(),
+          lastErrorCode: 'LOCAL_BYOK_PROVENANCE_CONFLICT',
+          lastErrorMessage: 'BYOK provenance changed before Ozon submission',
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createId: () => 'reject-event-1',
+    });
+
+    await expect(repository.claimSubmission(claimInput({
+      byokAssetIds: ['asset-1'],
+      requestingDeviceSessionId: 'device-session-2',
+    }))).resolves.toBeNull();
+    expect(client.calls.some(({ sql }) => sql.includes('SET "state" = \'SUBMITTING\'')))
+      .toBe(false);
+    const event = client.calls.find(({ sql }) => sql.includes(
+      'INSERT INTO "ozon_publish_attempt_events"',
+    ));
+    expect(event?.params).toContain('LOCAL_REJECTED');
+    expect(event?.params.some((value) => (
+      typeof value === 'string' && value.includes('LOCAL_BYOK_PROVENANCE_CONFLICT')
+    ))).toBe(true);
+    expect(client.calls.some(({ sql }) => (
+      sql.includes('FROM "source_listing_workflows" workflow')
+      && sql.includes('AS "valid"')
+    ))).toBe(false);
+  });
+
+  it.each([
+    ['caller hides a frozen BYOK assignment', authoritativeByokSet(['asset-1']), claimInput()],
+    ['caller invents a BYOK assignment', authoritativeByokSet(), claimInput({
+      byokAssetIds: ['asset-1'], requestingDeviceSessionId: 'device-session-2',
+    })],
+    ['frozen draft media is malformed', authoritativeByokSet([], false), claimInput()],
+  ])('locally rejects %s before checking session or Ozon authority', async (
+    _label,
+    authorityRows,
+    input,
+  ) => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('AS "authoritativeByokAssetIds"')) return authorityRows;
+      if (sql.includes('"last_error_code" = $2')) {
+        return [attemptRow({
+          state: 'REJECTED', stateVersion: 2, rejectedAt: NOW.toISOString(),
+          lastErrorCode: 'LOCAL_BYOK_PROVENANCE_CONFLICT',
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createId: () => 'reject-event-1',
+    });
+
+    await expect(repository.claimSubmission(input as never)).resolves.toBeNull();
+    expect(client.calls.some(({ sql }) => sql.includes('FROM "extension_device_sessions" session')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('FOR UPDATE OF provenance')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('SET "state" = \'SUBMITTING\'')))
+      .toBe(false);
+  });
+
+  it('locally rejects a revoked, expired, under-scoped, wrong-identity, or ungranted live session', async () => {
+    const client = new ScriptedClient((sql) => {
+      if (sql.includes('FROM "ozon_publish_attempts" a')) return [attemptRow()];
+      if (sql.includes('pg_advisory_xact_lock')) return [{ locked: 1 }];
+      if (sql.includes('AS "authoritativeByokAssetIds"')) {
+        return authoritativeByokSet(['asset-1']);
+      }
+      if (sql.includes('FROM "extension_device_sessions" session')) return [];
+      if (sql.includes('"last_error_code" = $2')) {
+        return [attemptRow({
+          state: 'REJECTED', stateVersion: 2, rejectedAt: NOW.toISOString(),
+          lastErrorCode: 'LOCAL_BYOK_SESSION_AUTHORITY_CONFLICT',
+        })];
+      }
+      if (sql.includes('INSERT INTO "ozon_publish_attempt_events"')) return [];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const repository = createPrismaOzonPublishAttemptRepository({
+      client: client as never,
+      createId: () => 'reject-event-1',
+    });
+
+    await expect(repository.claimSubmission(claimInput({
+      byokAssetIds: ['asset-1'],
+      requestingDeviceSessionId: 'device-session-2',
+    }))).resolves.toBeNull();
+    expect(client.calls.some(({ sql }) => sql.includes('FOR UPDATE OF provenance')))
+      .toBe(false);
+    expect(client.calls.some(({ sql }) => sql.includes('SET "state" = \'SUBMITTING\'')))
+      .toBe(false);
+  });
+
+  it.each([
+    [{ byokAssetIds: [' asset-1'], requestingDeviceSessionId: 'device-session-2' }],
+    [{ byokAssetIds: ['asset-1', 'asset-1'], requestingDeviceSessionId: 'device-session-2' }],
+    [{ byokAssetIds: ['asset-1'], requestingDeviceSessionId: null }],
+    [{ byokAssetIds: [], requestingDeviceSessionId: 'device-session-2' }],
+  ])('rejects a non-canonical claim provenance boundary before a transaction', async (patch) => {
+    const client = new ScriptedClient(() => { throw new Error('database must not be called'); });
+    const repository = createPrismaOzonPublishAttemptRepository({ client: client as never });
+
+    await expect(repository.claimSubmission(claimInput(patch))).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+    expect(client.calls).toHaveLength(0);
+    expect(client.transactionOptions).toHaveLength(0);
   });
 
   it('rejects completion when the worker token or epoch no longer owns the submission lease', async () => {

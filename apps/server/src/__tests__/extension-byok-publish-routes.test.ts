@@ -325,7 +325,7 @@ describe('extension BYOK publish routes', () => {
     await built.app.close();
   });
 
-  it('returns only safe authoritative status projections and links provenance once a receipt exists', async () => {
+  it('returns safe status projections and links provenance only for terminal receipts', async () => {
     for (const status of [
       { kind: 'not_committed' } as const,
       { kind: 'pending', receiptId: 'receipt-1' } as const,
@@ -363,11 +363,14 @@ describe('extension BYOK publish routes', () => {
         },
       });
       expect(JSON.stringify(response.json())).not.toMatch(/result|taskId|url|credential|secret/iu);
-      expect(built.linkPublish).toHaveBeenCalledTimes(status.kind === 'not_committed' ? 0 : 1);
-      if (status.kind !== 'not_committed') {
+      const terminal = status.kind === 'succeeded' || status.kind === 'failed';
+      expect(built.linkPublish).toHaveBeenCalledTimes(terminal ? 1 : 0);
+      if (terminal) {
         expect(built.linkPublish).toHaveBeenCalledWith({
-          provenanceId: 'provenance-1', ownerUserId: 'owner-1',
+          ownerUserId: 'owner-1', shopId: 'shop-1', workflowId: 'workflow-1',
+          assetIds: ['byok-asset-1'],
           publishIntentId: 'publish-intent-1', publishReceiptId: 'receipt-1',
+          requestHash: prepareData.requestHash,
         });
       }
       await built.app.close();
@@ -410,8 +413,10 @@ describe('extension BYOK publish routes', () => {
     });
     expect(built.authorizePublish).toHaveBeenCalledTimes(authorizationCalls);
     expect(built.linkPublish).toHaveBeenCalledWith({
-      provenanceId: 'provenance-1', ownerUserId: 'owner-1',
+      ownerUserId: 'owner-1', shopId: 'shop-1', workflowId: 'workflow-1',
+      assetIds: ['byok-asset-1'],
       publishIntentId: 'publish-intent-1', publishReceiptId: 'receipt-1',
+      requestHash: prepared.json().data.requestHash,
     });
     await built.app.close();
   });

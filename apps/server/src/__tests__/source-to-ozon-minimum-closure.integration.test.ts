@@ -294,7 +294,9 @@ class BoundedInMemoryAttemptRepository implements OzonPublishAttemptRepository {
     return page.items[0] || null;
   }
 
-  async claimSubmission(input: { attemptId: string; workerId: string; leaseMs: number }) {
+  async claimSubmission(
+    input: Parameters<OzonPublishAttemptRepository['claimSubmission']>[0],
+  ) {
     const current = this.attempts.get(input.attemptId);
     if (!current || current.state !== 'PREPARED') return null;
     const claimed = cloneAttempt(current);
@@ -727,7 +729,7 @@ describe('1688 Capture V2 to immutable Ozon publish attempt minimum closure', ()
       attempts,
       compile,
       submitImportOnce,
-      authorizeDraftMediaPublish: async () => undefined,
+      authorizeDraftMediaPublish: async () => ({ byokAssetIds: [], policyRevision: null }),
       workerId: 'unit6b-api-1',
       leaseMs: 60_000,
     });
@@ -819,7 +821,7 @@ describe('1688 Capture V2 to immutable Ozon publish attempt minimum closure', ()
       attempts,
       compile: reloadCompile,
       submitImportOnce: reloadSubmit,
-      authorizeDraftMediaPublish: async () => undefined,
+      authorizeDraftMediaPublish: async () => ({ byokAssetIds: [], policyRevision: null }),
       workerId: 'unit6b-api-2',
       leaseMs: 60_000,
     });

@@ -19,6 +19,7 @@ import {
   type SourceListingWorkflowService,
 } from './source-listing-workflow.js';
 import type {
+  ExtensionByokPublishAuthorizationDecision,
   ExtensionByokPublishAuthorizationInput,
 } from './extension-byok-publish-authorization.js';
 
@@ -153,7 +154,7 @@ export function createOzonListingPublisher(options: {
   }): Promise<unknown>;
   authorizeDraftMediaPublish(
     input: ExtensionByokPublishAuthorizationInput,
-  ): Promise<unknown>;
+  ): Promise<ExtensionByokPublishAuthorizationDecision>;
   workerId: string;
   leaseMs?: number;
   acknowledgementRecoveryAttempts?: number;
@@ -319,7 +320,7 @@ export function createOzonListingPublisher(options: {
       if (prepared.attempt.state !== 'PREPARED') return prepared.attempt;
       const preparedAttempt: OzonPublishAttemptRecord = prepared.attempt;
 
-      await options.authorizeDraftMediaPublish({
+      const finalAuthorization = await options.authorizeDraftMediaPublish({
         ...authorizationInput,
         assignments: frozen.draft.media.assignments,
       });
@@ -328,6 +329,10 @@ export function createOzonListingPublisher(options: {
         attemptId: preparedAttempt.id,
         workerId,
         leaseMs,
+        byokAssetIds: finalAuthorization.byokAssetIds,
+        requestingDeviceSessionId: finalAuthorization.byokAssetIds.length
+          ? input.requestingDeviceSessionId ?? null
+          : null,
       });
       if (!claim) {
         const latest = await options.attempts.getOwned({

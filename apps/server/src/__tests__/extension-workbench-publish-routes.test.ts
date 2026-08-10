@@ -10,6 +10,9 @@ import {
 import {
   OzonListingProductionCompileError,
 } from '../services/ozon-listing-production-compile-adapter.js';
+import {
+  ExtensionWorkbenchByokPublishProvenanceError,
+} from '../services/extension-workbench-byok-publish-provenance.js';
 
 const SHA = { payload: 'c'.repeat(64) };
 
@@ -94,6 +97,7 @@ async function build(options: {
   allowedShopIds?: string[];
   status?: ExtensionWorkbenchListingPublishStatusResult;
   preflightError?: Error;
+  provenanceError?: Error;
 } = {}) {
   let current = structuredClone(options.currentDraft || draft());
   let storedIntent: any = null;
@@ -131,10 +135,15 @@ async function build(options: {
   const findPublishStatus = vi.fn(async () => (
     options.status || { kind: 'not_committed' } as const
   ));
+  const assertReusableByokAssets = vi.fn(async () => {
+    if (options.provenanceError) throw options.provenanceError;
+    return { provenanceCount: 2, rejectedHistoryCount: 0 };
+  });
   const linkPublishedByokAssets = vi.fn(async () => ({ linked: true }));
   const service = createExtensionWorkbenchListingPublishService({
     loadDraft: async () => structuredClone(current),
     authorizePublish,
+    assertReusableByokAssets,
     preflightPublishAuthority,
     recordPublishIntent,
     findPublishStatus,
@@ -158,6 +167,7 @@ async function build(options: {
     app,
     service,
     authorizePublish,
+    assertReusableByokAssets,
     preflightPublishAuthority,
     recordPublishIntent,
     findPublishStatus,
@@ -344,6 +354,53 @@ describe('extension workbench publish routes', () => {
     await built.app.close();
   });
 
+  it('checks linked BYOK history during preview and prepare before persisting an intent', async () => {
+    const built = await build();
+    const preview = await built.app.inject({
+      method: 'POST', url: '/preview', payload: previewRequest(),
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(built.assertReusableByokAssets).toHaveBeenNthCalledWith(1, {
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      workflowId: 'workflow-1',
+      assetIds: ['byok-asset-1', 'byok-asset-2'],
+    });
+
+    const prepared = await built.app.inject({
+      method: 'POST',
+      url: '/prepare',
+      payload: {
+        ...previewRequest(),
+        previewHash: preview.json().data.previewHash,
+        idempotencyKey: 'workbench-provenance-preflight-0001',
+      },
+    });
+    expect(prepared.statusCode).toBe(201);
+    expect(built.assertReusableByokAssets).toHaveBeenCalledTimes(2);
+    expect(built.assertReusableByokAssets.mock.invocationCallOrder[1]).toBeLessThan(
+      built.recordPublishIntent.mock.invocationCallOrder[0]!,
+    );
+    await built.app.close();
+  });
+
+  it('returns a safe conflict and records no intent for unsafe BYOK publish history', async () => {
+    const built = await build({
+      provenanceError: new ExtensionWorkbenchByokPublishProvenanceError(),
+    });
+    const response = await built.app.inject({
+      method: 'POST', url: '/preview', payload: previewRequest(),
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: 0,
+      errorCode: 'extension_workbench_listing_publish_provenance_conflict',
+      msg: '工作台商品发布请求未通过校验',
+    });
+    expect(built.recordPublishIntent).not.toHaveBeenCalled();
+    await built.app.close();
+  });
+
   it.each([
     new OzonListingProductionCompileError(
       'OZON_LISTING_PRODUCTION_VALIDATION_STALE',
@@ -401,7 +458,7 @@ describe('extension workbench publish routes', () => {
     await built.app.close();
   });
 
-  it('recovers one receipt and links every selected BYOK asset to it', async () => {
+  it('returns a pending receipt without linking BYOK provenance', async () => {
     const built = await build({
       status: { kind: 'pending', receiptId: 'receipt-1' },
     });
@@ -439,12 +496,48 @@ describe('extension workbench publish routes', () => {
       },
     });
     expect(built.findPublishStatus).toHaveBeenCalledTimes(1);
+    expect(built.linkPublishedByokAssets).not.toHaveBeenCalled();
+    await built.app.close();
+  });
+
+  it('links every selected BYOK asset after a terminal successful receipt', async () => {
+    const built = await build({
+      status: { kind: 'succeeded', receiptId: 'receipt-1' },
+    });
+    const preview = await built.app.inject({
+      method: 'POST', url: '/preview', payload: previewRequest({ executionMode: 'BYOK' }),
+    });
+    const prepared = await built.app.inject({
+      method: 'POST',
+      url: '/prepare',
+      payload: {
+        ...previewRequest({ executionMode: 'BYOK' }),
+        previewHash: preview.json().data.previewHash,
+        idempotencyKey: 'workbench-publish-operation-0003',
+      },
+    });
+    const data = prepared.json().data;
+    const status = await built.app.inject({
+      method: 'POST',
+      url: '/status',
+      payload: {
+        contractVersion: EXTENSION_WORKBENCH_LISTING_PUBLISH_VERSION,
+        previewHash: data.previewHash,
+        requestHash: data.requestHash,
+        envelope: data.envelope,
+      },
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().data.state).toBe('SUCCEEDED');
     expect(built.linkPublishedByokAssets).toHaveBeenCalledWith({
       ownerUserId: 'owner-1',
+      shopId: 'shop-1',
       workflowId: 'workflow-1',
       assetIds: ['source-1', 'hosted-asset-1', 'byok-asset-1', 'byok-asset-2'],
       publishIntentId: 'publish-intent-1',
       publishReceiptId: 'receipt-1',
+      requestHash: data.requestHash,
     });
     await built.app.close();
   });

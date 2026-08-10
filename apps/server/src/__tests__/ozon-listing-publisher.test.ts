@@ -16,6 +16,7 @@ import { InMemoryOzonListingDraftRepository } from '../services/ozon-listing-dra
 import { hashOzonListingPublishState } from '../services/source-listing-workflow.js';
 import { createSourceListingWorkflowService } from '../services/source-listing-workflow.js';
 import type {
+  ExtensionByokPublishAuthorizationDecision,
   ExtensionByokPublishAuthorizationInput,
 } from '../services/extension-byok-publish-authorization.js';
 
@@ -87,7 +88,7 @@ function build(options: {
   claim?: OzonPublishLeaseClaim | null;
   authorizeDraftMediaPublish?: (
     input: ExtensionByokPublishAuthorizationInput,
-  ) => Promise<unknown>;
+  ) => Promise<ExtensionByokPublishAuthorizationDecision>;
 } = {}) {
   const current = draft();
   const prepared = options.prepared || attempt({ draftStateHash: hashOzonListingPublishState(current) });
@@ -165,7 +166,7 @@ describe('Ozon listing publisher', () => {
     });
     const authorizeDraftMediaPublish = vi.fn(async (
       _input: ExtensionByokPublishAuthorizationInput,
-    ): Promise<unknown> => { throw denied; });
+    ): Promise<ExtensionByokPublishAuthorizationDecision> => { throw denied; });
     const built = build({ authorizeDraftMediaPublish });
 
     await expect(built.publisher.publish({
@@ -191,8 +192,10 @@ describe('Ozon listing publisher', () => {
     });
     const authorizeDraftMediaPublish = vi.fn(async (
       _input: ExtensionByokPublishAuthorizationInput,
-    ): Promise<unknown> => undefined)
-      .mockResolvedValueOnce({ byokAssetIds: ['asset-byok'], policyRevision: 17 })
+    ): Promise<ExtensionByokPublishAuthorizationDecision> => (
+      { byokAssetIds: [], policyRevision: null }
+    ))
+      .mockResolvedValueOnce({ byokAssetIds: [], policyRevision: 17 })
       .mockRejectedValueOnce(denied);
     const built = build({ authorizeDraftMediaPublish });
 
@@ -202,6 +205,28 @@ describe('Ozon listing publisher', () => {
     expect(built.repository.prepare).toHaveBeenCalledTimes(1);
     expect(built.repository.claimSubmission).not.toHaveBeenCalled();
     expect(built.submitImportOnce).not.toHaveBeenCalled();
+  });
+
+  it('binds the final BYOK decision and requesting session into the submission claim', async () => {
+    const authorizeDraftMediaPublish = vi.fn(async () => ({
+      byokAssetIds: ['asset-byok'],
+      policyRevision: 17,
+    }));
+    const built = build({ authorizeDraftMediaPublish });
+
+    await expect(built.publisher.publish({
+      ...publishInput,
+      requestingDeviceSessionId: 'device-publisher',
+    })).resolves.toMatchObject({ state: 'SUBMITTED' });
+    expect(authorizeDraftMediaPublish).toHaveBeenCalledTimes(2);
+    expect(built.repository.claimSubmission).toHaveBeenCalledWith({
+      attemptId: 'attempt-1',
+      workerId: 'api-1',
+      leaseMs: 60_000,
+      byokAssetIds: ['asset-byok'],
+      requestingDeviceSessionId: 'device-publisher',
+    });
+    expect(built.repository.claimSubmission).toHaveBeenCalledBefore(built.submitImportOnce);
   });
 
   it('persists the frozen request and SUBMITTING lease before one external call', async () => {
@@ -216,6 +241,13 @@ describe('Ozon listing publisher', () => {
       offerTrace: [{ ordinal: 0, offerId: 'offer-1', skuKey: 'sku-1' }],
     }));
     expect(repository.claimSubmission).toHaveBeenCalledBefore(submitImportOnce);
+    expect(repository.claimSubmission).toHaveBeenCalledWith({
+      attemptId: 'attempt-1',
+      workerId: 'api-1',
+      leaseMs: 60_000,
+      byokAssetIds: [],
+      requestingDeviceSessionId: null,
+    });
     expect(submitImportOnce).toHaveBeenCalledTimes(1);
     expect(submitImportOnce).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1', shopId: 'shop-1',
@@ -387,7 +419,7 @@ describe('Ozon listing publisher', () => {
       attempts,
       compile,
       submitImportOnce,
-      authorizeDraftMediaPublish: async () => undefined,
+      authorizeDraftMediaPublish: async () => ({ byokAssetIds: [], policyRevision: null }),
       workerId: 'api-replay',
       leaseMs: 60_000,
     });
