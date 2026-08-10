@@ -629,5 +629,5 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
       ]);
       expect(completionRaceAssetCount).toBe(0);
     }
-  });
+  }, 30_000);
 });

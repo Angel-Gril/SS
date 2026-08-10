@@ -7,7 +7,6 @@ import {
   resolveExtensionDeviceAuthConfig,
 } from '../lib/extension-device-auth.js';
 import {
-  PrismaExtensionByokMediaProvenanceRepository,
   createPrismaExtensionByokPublishProvenanceReader,
 } from '../repositories/extension-byok-media-provenance-repository.js';
 import {
@@ -34,9 +33,6 @@ import {
   EXTENSION_BYOK_LISTING_PUBLISH_VERSION,
 } from '../services/extension-byok-listing-publish.js';
 import {
-  createExtensionByokMediaProvenanceService,
-} from '../services/extension-byok-media-provenance.js';
-import {
   EXTENSION_BYOK_POLICY_VERSION,
 } from '../services/extension-byok-policy.js';
 import {
@@ -57,10 +53,23 @@ import {
   createPrismaExtensionDeviceSessionRepository,
 } from '../services/extension-device-session-prisma.js';
 import {
+  createExtensionWorkbenchByokPublishProvenanceService,
+} from '../services/extension-workbench-byok-publish-provenance.js';
+import {
+  createOzonListingPublisher,
+} from '../services/ozon-listing-publisher.js';
+import {
+  createPrismaOzonPublishAttemptRepository,
+} from '../services/ozon-publish-attempt-prisma.js';
+import {
+  hashOzonPublishJson,
+} from '../services/ozon-publish-attempts.js';
+import {
   createPrismaSourceListingWorkflowRepository,
 } from '../services/source-listing-workflow-prisma.js';
 import {
   createSourceListingWorkflowService,
+  hashOzonListingPublishState,
 } from '../services/source-listing-workflow.js';
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
@@ -113,6 +122,8 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     const sourceAssetId = `source_publish_asset_${suffix}`;
     const byokAssetId = `byok_publish_asset_${suffix}`;
     const executionIntentId = `byok_publish_intent_${suffix}`;
+    const catalogSnapshotId = `byok_publish_catalog_${suffix}`;
+    const catalogRevision = 'c'.repeat(64);
     const resultSha256 = 'a'.repeat(64);
     const now = new Date();
 
@@ -123,6 +134,20 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       data: {
         id: shopId, userId: ownerUserId, platform: 'OZON', name: 'BYOK publish shop',
         apiKeyEncrypted: 'integration-test',
+      },
+    });
+    await client.ozonCategoryCatalogSnapshot.create({
+      data: {
+        id: catalogSnapshotId,
+        shopId,
+        schemaVersion: 'ozon-category-catalog/v1',
+        revision: catalogRevision,
+        fetchedAt: now,
+        expiresAt: new Date(now.getTime() + 86_400_000),
+        complete: true,
+        defaultTreeComplete: true,
+        zhHansTreeComplete: true,
+        isCurrent: true,
       },
     });
     await client.supplyGoods.create({
@@ -192,7 +217,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     const categorized = await workflow.setCategory({
       draftId: created.id, ownerUserId, actorUserId: ownerUserId,
       expectedRevision: created.revision,
-      category: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1' },
+      category: { categoryId: 10, typeId: 20, catalogRevision },
     });
     const candidate = await workflow.addAiCopyCandidate({
       draftId: created.id, ownerUserId, actorUserId: ownerUserId,
@@ -431,8 +456,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       loadPolicy: async () => policy,
       ...createPrismaExtensionByokPublishProvenanceReader(client),
     });
-    const provenanceRepository = new PrismaExtensionByokMediaProvenanceRepository(client);
-    const provenanceService = createExtensionByokMediaProvenanceService(provenanceRepository);
+    const provenanceService = createExtensionWorkbenchByokPublishProvenanceService(client);
     const statusRepository = createPrismaExtensionByokPublishStatusRepository(client);
     const loadAcceptedProvenance = async (provenanceId: string) => {
       const row = await client.extensionByokMediaProvenance.findFirst({
@@ -460,7 +484,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       authorizePublish: publishAuthorizer,
       recordPublishIntent: (input) => workflow.recordPublishIntent(input),
       findPublishStatus: (input) => statusRepository.findStatus(input),
-      linkPublish: (input) => provenanceService.linkPublish(input),
+      linkPublish: (input) => provenanceService.linkStatus(input),
     });
     const authenticate = authenticateExtensionDevice({
       config: authConfig,
@@ -488,10 +512,66 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
         }
       },
     });
-    const executeOzonPublish = vi.fn(async () => ({
-      state: 'SUBMITTED' as const,
-      lastErrorCode: null,
-    }));
+    const attemptRepository = createPrismaOzonPublishAttemptRepository({ client: client as never });
+    const submitImportOnce = vi.fn(async () => ({ result: { task_id: '9007199254740997' } }));
+    const ozonPublisher = createOzonListingPublisher({
+      workflow: {
+        getDraft: (input) => workflow.getDraft({
+          draftId: input.draftId,
+          ownerUserId: input.ownerUserId,
+        }),
+        recordPublishIntent: (input) => workflow.recordPublishIntent(input),
+      },
+      attempts: attemptRepository,
+      compile: async ({ draft }) => {
+        const catalogSnapshot = { revision: catalogRevision };
+        const attributeSchemaSnapshot = { fields: [] };
+        const offerId = `byok-fixture-${suffix}`;
+        const requestPayload = { items: [{ offer_id: offerId }] };
+        return {
+          publisherContractVersion: 'ozon-listing-publisher/v1',
+          endpoint: '/v3/product/import' as const,
+          draftStateHash: hashOzonListingPublishState(draft),
+          catalogSnapshotId,
+          catalogRevision,
+          catalogSnapshot,
+          catalogSnapshotHash: hashOzonPublishJson(catalogSnapshot),
+          attributeSchemaSnapshot,
+          attributeSchemaHash: hashOzonPublishJson(attributeSchemaSnapshot),
+          requestPayload,
+          requestPayloadHash: hashOzonPublishJson(requestPayload),
+          offerTrace: [{ ordinal: 0, offerId, skuKey: 'sku-1' }],
+        };
+      },
+      submitImportOnce,
+      authorizeDraftMediaPublish: publishAuthorizer,
+      workerId: `byok-publish-worker-${suffix}`,
+      leaseMs: 60_000,
+    });
+    const executeOzonPublish = vi.fn(async (input: {
+      deviceSessionId: string;
+      ownerUserId: string;
+      actorUserId: string;
+      shopId: string;
+      workflowId: string;
+      draftVersion: number;
+      idempotencyKey: string;
+      command: Record<string, unknown>;
+    }) => {
+      const expectedRevision = Number(input.command.draftRevision);
+      const publishIntentId = String(input.command.publishIntentId || '').trim();
+      if (!Number.isSafeInteger(expectedRevision) || !publishIntentId) {
+        throw new Error('Ozon publish command identity is invalid');
+      }
+      return ozonPublisher.publish({
+        draftId: input.workflowId,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        expectedRevision,
+        idempotencyKey: input.idempotencyKey,
+        requestingDeviceSessionId: input.deviceSessionId,
+      });
+    });
     const app = Fastify();
     await app.register(extensionByokPublishRoutes, {
       prefix: '/api/extension-device/byok-publish',
@@ -580,6 +660,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
     expect([firstExecute.statusCode, duplicateExecute.statusCode]
       .every((status) => [200, 202].includes(status))).toBe(true);
     expect(executeOzonPublish).toHaveBeenCalledTimes(1);
+    expect(submitImportOnce).toHaveBeenCalledTimes(1);
 
     const status = await app.inject({
       method: 'POST', url: '/api/extension-device/byok-publish/status',
@@ -597,7 +678,7 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       code: 1, data: { state: 'SUCCEEDED', receiptId: expect.any(String), failureCode: null },
     });
 
-    const [intentCount, publishGrantCount, publishReceiptCount, provenanceRow] = await Promise.all([
+    const [intentCount, publishGrantCount, publishReceiptCount, provenanceRow, attemptRow] = await Promise.all([
       client.sourceListingPublishIntent.count({ where: { ownerUserId, idempotencyKey } }),
       client.extensionCommandGrant.count({
         where: { sessionId: publishClaimed.session.id, idempotencyKey, operation: 'OZON_PUBLISH' },
@@ -609,6 +690,17 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
         where: { id: committed.receipt.provenanceId },
         select: { publishIntentId: true, publishReceiptId: true, erpAiChargeCents: true },
       }),
+      client.ozonPublishAttempt.findUnique({
+        where: { publishIntentId: envelope.command.publishIntentId },
+        select: {
+          state: true,
+          reconciliationState: true,
+          ozonTaskId: true,
+          acceptanceSource: true,
+          submitStartedAt: true,
+          submittedAt: true,
+        },
+      }),
     ]);
     expect({ intentCount, publishGrantCount, publishReceiptCount }).toEqual({
       intentCount: 1, publishGrantCount: 1, publishReceiptCount: 1,
@@ -617,6 +709,14 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       publishIntentId: envelope.command.publishIntentId,
       publishReceiptId: status.json().data.receiptId,
       erpAiChargeCents: 0,
+    });
+    expect(attemptRow).toMatchObject({
+      state: 'SUBMITTED',
+      reconciliationState: 'PENDING',
+      ozonTaskId: '9007199254740997',
+      acceptanceSource: 'OZON_TASK_RESPONSE',
+      submitStartedAt: expect.any(Date),
+      submittedAt: expect.any(Date),
     });
     const [reservationCount, settlementCount] = await Promise.all([
       client.aiCostReservation.count({ where: { ownerUserId } }),
