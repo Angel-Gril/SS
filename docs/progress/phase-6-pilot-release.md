@@ -28,17 +28,20 @@ Progress: 3/3 tasks.
 
 ## Notes
 
-- Post-release analytics-auth correction (2026-08-11, offline): paired shop discovery already used
-  the live device grant, but analytics and graph persistence still required the legacy account
-  Token. Two exact device routes now require `capture:write`, owner equality and the granted Ozon
-  shop; the extension keeps its access token inside the worker and uses a dedicated bounded writer.
-  Graph failures no longer report success, and revoked/unpaired sessions cannot fall back to a
-  retained legacy Token. Old account routes retain their compatible graph defaults through the same
-  normalized snapshot builder.
-- Verification passes focused Server `60/60`, complete Server `5019` with `220` environment skips,
-  source package `452/452`, lint, all workspace typechecks and full `pnpm preflight`. This correction
-  is not yet packaged or deployed; production remains `3b15f7fc` / `1.0.301`, all rollout
-  flags remain dark, and no Provider, ERP ingest/publish, Ozon or database mutation occurred.
+- Analytics-auth correction release (2026-08-11): commit `cd0848a5` / extension `1.0.302` passed
+  QA-04 (source `452`, Cloud `457`, Local `453`), signed-package restart and `1.0.301 -> 1.0.302`
+  upgrade smokes. Both regions completed fresh backup/restore, `145` migrations, dark deployment,
+  verifier, `7`-check/`32`-request canary and final fence. Dual-region zero-claim SHA-256 is
+  `84fe7182214bb64f1315084cf15fe62e9ecde3556083e1373479f568b28a0bc6`.
+- Official COM/CN website distribution receipts are
+  `cde1458d641eb30f9cd1a75e580e35e070dc9851e7ecc306e37b10e0798f009b` and
+  `b36a5126bb923d0049a4ba13106131b289fbf36ab41eb6adecf33c7506d93817`. BINI retained its fixed
+  extension ID, managed path, profile fingerprint and one non-secret profile after the atomic
+  `1.0.302` upgrade. Trusted reload, active-worker and final storage checks passed; closure SHA-256
+  is `21e0b69925664ab886f718cf17ebbb003815a866024ec75704e5ec229dd3c4f1`.
+- All rollout flags remain dark. This replacement release made no Provider call, ERP ingest/publish
+  or Ozon write. Fresh database recovery points are local to each VPS; remote backup storage remains
+  unconfigured.
 - Dual-region obsolete-staging cleanup (2026-08-10) used exact read-only manifests
   `b19325567c33e56ea272355c17d8fac48e325e8337b01e2838652d76edcf5d1e` (COM) and
   `e14d9218b83200582f72565fb4b4f41b1656a97adf5f055a5626080451bcdb96` (CN). Seven stale COM

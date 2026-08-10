@@ -44,20 +44,27 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
-Post-release analytics-auth correction (2026-08-11, offline): BINI reproduced a migration gap in
-which the paired device could read its granted Ozon shop but manual analytics and graph writes still
-required the legacy account Token. The correction adds two `capture:write` device routes bound to
-the live owner/shop grant, a dedicated extension device writer, bounded payload validation and one
-shared snapshot builder for device and account routes. Graph persistence failures now propagate
-instead of returning a false success. A security review also removed analytics fallback to a
-retained legacy Token, including the revoked-session -> unpaired second-invocation path.
+Post-release analytics-auth correction release (2026-08-11): exact commit
+`cd0848a501a7cab758b161afef805fecc88850a9` is packaged as extension `1.0.302`. QA-04 passed in
+`937` seconds: source `452/452`, Cloud `457/457`, Local `453/453`, lint, workspace typechecks and
+full preflight. The LF-only acceptance SHA-256 is
+`5104a860a0dfdb31a496e23fd65c05b9a512ec0a0c533871f02372f34bae2fc0`.
 
-Focused Server tests pass `60/60`; complete Server tests pass `5019` with `220` environment skips;
-source package verification passes `452/452` with the two existing package warnings; lint and all
-workspace typechecks pass; full `pnpm preflight` passes. The correction is not yet packaged or
-deployed. Both regions and BINI therefore remain on exact release
-`3b15f7fcc900d88b64b749c03be572efa3990f63` / `1.0.301`. No Provider, ERP ingest/publish, Ozon,
-database or rollout state was changed. Overall implementation progress remains `37/37`.
+COM and CN completed fresh backup/restore verification, `145` migrations, dark deployment,
+post-deploy verification, `7`-check/`32`-request canaries and final dark fences. The dual-region
+zero-claim receipt SHA-256 is
+`84fe7182214bb64f1315084cf15fe62e9ecde3556083e1373479f568b28a0bc6`. Official website Cloud/Local
+distribution passed in both regions; COM/CN distribution receipt SHA-256 values are
+`cde1458d641eb30f9cd1a75e580e35e070dc9851e7ecc306e37b10e0798f009b` and
+`b36a5126bb923d0049a4ba13106131b289fbf36ab41eb6adecf33c7506d93817`.
+
+BINI was atomically upgraded on its existing managed path and profile to `1.0.302`; trusted MV3
+reload, active-worker identity and final storage/permission checks passed while the browser remained
+in `OFFLINE_RELEASE_SMOKE`. Closure SHA-256 is
+`21e0b69925664ab886f718cf17ebbb003815a866024ec75704e5ec229dd3c4f1`. All pilot flags remain dark;
+this release called no Provider and performed no ERP ingest/publish or Ozon write. Remote backup
+storage remains the only release-operations warning; both fresh recovery points exist locally on
+their respective VPS. Overall implementation progress remains `37/37`.
 
 Dual-region obsolete-staging cleanup checkpoint (2026-08-10): exact read-only inventories and
 process/reference checks produced COM/CN dry-run manifest SHA-256 values
