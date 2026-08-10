@@ -2179,6 +2179,15 @@ if (isExtensionDeviceAuthEnabled()) {
       config: extensionDeviceAuthConfig,
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
+    authenticateShopAnalyticsDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['capture:write'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+      shopIdFromRequest: (request) => {
+        const params = request.params as { shopId?: unknown };
+        return typeof params.shopId === 'string' ? params.shopId : null;
+      },
+    }),
     shopRepository: {
       listAuthorizedShops: async ({ ownerUserId, shopIds }) => {
         if (!shopIds.length) return [];
@@ -2202,6 +2211,28 @@ if (isExtensionDeviceAuthEnabled()) {
           name: shop.name,
           status: shop.status,
         }));
+      },
+    },
+    shopAnalyticsRepository: {
+      createSnapshot: async ({ ownerUserId, shopId, snapshot }) => {
+        const shop = await prisma.shop.findFirst({
+          where: {
+            id: shopId,
+            userId: ownerUserId,
+            platform: 'OZON',
+            status: { not: 'DISABLED' },
+          },
+          select: { id: true },
+        });
+        if (!shop) return null;
+        const stored = await prisma.shopAnalyticsSnapshot.create({
+          data: {
+            shopId: shop.id,
+            ...snapshot,
+          },
+          select: { id: true, productCount: true },
+        });
+        return stored;
       },
     },
   });

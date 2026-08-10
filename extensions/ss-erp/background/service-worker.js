@@ -314,6 +314,9 @@ try {
 try { importScripts('../shared/erp-adapter/source-workflow-device-session.js'); } catch (error) {
   console.warn('[SS ERP] source workflow device session module failed to load', error);
 }
+try { importScripts('../shared/erp-adapter/shop-analytics-device-writer.js'); } catch (error) {
+  console.warn('[SS ERP] shop analytics device writer failed to load', error);
+}
 try { importScripts('../shared/erp-adapter/listing-workflow-client.js'); } catch (error) {
   console.warn('[SS ERP] listing workflow client module failed to load', error);
 }
@@ -381,6 +384,7 @@ let logisticsBindingProbeRuntime = null;
 let logisticsBindingProbeMessageHandler = null;
 let sourceCaptureSubmitter = null;
 let sourceListingWorkflowClient = null;
+let shopAnalyticsDeviceWriter = null;
 let byokProfileStore = null;
 let byokReadinessHandleCache = null;
 let byokReadinessClient = null;
@@ -841,6 +845,20 @@ async function readExtensionDeviceOzonShops() {
 
 globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS = readExtensionDeviceOzonShops;
 
+async function writeExtensionDeviceShopAnalytics(input) {
+  try {
+    return await getShopAnalyticsDeviceWriter().write(input);
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'device_analytics_write_failed',
+      error: error && error.message ? error.message : '设备分析数据写入失败',
+    };
+  }
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_SHOP_ANALYTICS = writeExtensionDeviceShopAnalytics;
+
 async function claimExtensionDeviceFromErp(message, sender) {
   const baseUrl = trustedErpDeviceBaseUrl(message.baseUrl, sender);
   const credentials = getLogisticsDeviceCredentials();
@@ -988,6 +1006,18 @@ function getByokDeviceTransport() {
     fetchImpl: globalThis.fetch.bind(globalThis),
   });
   return byokDeviceTransport;
+}
+
+function getShopAnalyticsDeviceWriter() {
+  if (shopAnalyticsDeviceWriter) return shopAnalyticsDeviceWriter;
+  const api = globalThis.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER;
+  if (!api || typeof api.createWriter !== 'function') {
+    throw new Error('设备分析数据写入模块不可用');
+  }
+  shopAnalyticsDeviceWriter = api.createWriter({
+    transport: getByokDeviceTransport(),
+  });
+  return shopAnalyticsDeviceWriter;
 }
 
 function getHostedAiImageSuitePreviewBridge() {

@@ -8,6 +8,7 @@
   var MAX_COMMAND_REQUEST_BYTES = 64 * 1024;
   var MAX_PUBLISH_RESPONSE_BYTES = 4 * 1024 * 1024;
   var MAX_PUBLISH_REQUEST_BYTES = 1 * 1024 * 1024;
+  var MAX_SHOP_ANALYTICS_REQUEST_BYTES = 1 * 1024 * 1024;
   var MAX_MEDIA_EDIT_MASK_REQUEST_BYTES = 30 * 1024 * 1024;
   var MAX_BYOK_INGEST_REQUEST_BYTES = 20 * 1024 * 1024;
   var MAX_BYOK_BATCH_INGEST_REQUEST_BYTES = 50 * 1024 * 1024;
@@ -179,6 +180,17 @@
       }
       return exactEncodedIdentifier(remainder);
     }
+    function shopAnalyticsWritePath(candidate) {
+      var prefix = '/api/extension-device/shops/';
+      if (!candidate.startsWith(prefix)) return false;
+      var remainder = candidate.slice(prefix.length);
+      var analyticsSuffix = '/analytics';
+      var graphsSuffix = '/analytics-graphs';
+      var suffix = remainder.endsWith(graphsSuffix) ? graphsSuffix
+        : remainder.endsWith(analyticsSuffix) ? analyticsSuffix : '';
+      return Boolean(suffix
+        && exactEncodedIdentifier(remainder.slice(0, -suffix.length)));
+    }
     function allowedGetPath(candidate) {
       return candidate.startsWith('/api/extension-device/source-workbench/')
         || byokExecutionBatchReadPath(candidate);
@@ -187,7 +199,8 @@
       return commandPaths.has(candidate)
         || hostedPlanReviewPath(candidate)
         || byokExecutionIntentOutcomePath(candidate)
-        || byokExecutionBatchMutationPath(candidate);
+        || byokExecutionBatchMutationPath(candidate)
+        || shopAnalyticsWritePath(candidate);
     }
     var parsed;
     try { parsed = new URL(path, 'https://ss-erp.invalid'); } catch {
@@ -479,8 +492,12 @@
             throw new TypeError('source workbench command body is invalid');
           }
           requestBody = JSON.stringify(bodyValue);
+          var shopAnalyticsRequest = /^\/api\/extension-device\/shops\/[^/]+\/analytics(?:-graphs)?$/u
+            .test(path);
           var maximumRequestBytes = path === MEDIA_EDIT_MASK_PATH
             ? MAX_MEDIA_EDIT_MASK_REQUEST_BYTES
+            : shopAnalyticsRequest
+              ? MAX_SHOP_ANALYTICS_REQUEST_BYTES
             : publishRequest && LARGE_PUBLISH_REQUEST_PATHS.has(path)
               ? MAX_PUBLISH_REQUEST_BYTES : MAX_COMMAND_REQUEST_BYTES;
           if (byteLength(requestBody) > maximumRequestBytes) {
@@ -529,6 +546,7 @@
             || requestedScope === 'listing:publish'
             || requestedScope === 'media:execute'
             || requestedScope === 'byok:media:ingest'
+            || requestedScope === 'capture:write'
             ? requestedScope
             : method === 'GET' ? 'listing:review' : 'media:execute';
           if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {

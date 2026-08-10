@@ -5276,6 +5276,36 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   return pushResult;
 }
 
+async function writeShopAnalyticsSnapshotToErp(shopId, kind, payload) {
+  if (!shopId) return { ok: false, error: "请指定店铺 ID" };
+
+  // A revoked device becomes unpaired after 401/410. Falling back to a
+  // retained account token here would bypass the device shop grant.
+  const deviceAnalyticsWriter = globalThis.SS_ERP_EXTENSION_DEVICE_SHOP_ANALYTICS;
+  if (typeof deviceAnalyticsWriter !== "function") {
+    return {
+      ok: false,
+      errorCode: "device_analytics_writer_unavailable",
+      error: "设备分析数据写入模块不可用，请重新加载扩展"
+    };
+  }
+  let deviceResult;
+  try {
+    deviceResult = await deviceAnalyticsWriter({ shopId, kind, payload });
+  } catch (error) {
+    deviceResult = {
+      ok: false,
+      errorCode: "device_analytics_write_failed",
+      error: normalizeErrorMessage(error) || "设备分析数据写入失败"
+    };
+  }
+  return deviceResult || {
+    ok: false,
+    errorCode: "device_analytics_write_failed",
+    error: "设备分析数据写入失败"
+  };
+}
+
 async function syncShopAnalyticsToErp(shopId, companyIdInput) {
   const companyId = await getSellerCompanyId(companyIdInput);
   let analyticsItems = [];
@@ -5336,43 +5366,38 @@ async function syncShopAnalyticsToErp(shopId, companyIdInput) {
   }
 
   if (!analyticsItems.length) return { ok: false, error: "未获取到分析数据，请确认已登录 seller.ozon.ru" };
-  const conn = await getStoredErpConnection();
-  if (!conn.baseUrl) return { ok: false, error: "请先在设置中配置 ERP 后端地址" };
-  if (!conn.token) return { ok: false, error: "请先在设置中配置 ERP Token" };
-  if (!shopId) return { ok: false, error: "请指定店铺 ID" };
-
-  const pushResponse = await fetch(conn.baseUrl + "/api/shops/" + shopId + "/analytics", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + conn.token
-    },
-    body: JSON.stringify({ items: analyticsItems, period: "30d" })
+  const writeResult = await writeShopAnalyticsSnapshotToErp(shopId, "analytics", {
+    items: analyticsItems,
+    period: "30d"
   });
-  const pushText = await pushResponse.text();
-  if (!pushResponse.ok) return { ok: false, error: "ERP 返回 HTTP " + pushResponse.status + ": " + pushText.slice(0, 300) };
-  let pushParsed = {};
-  try { pushParsed = JSON.parse(pushText); } catch (e) {}
-  return { ok: true, data: { itemCount: analyticsItems.length, erpResponse: pushParsed } };
+  if (!writeResult.ok) return writeResult;
+  return {
+    ok: true,
+    data: {
+      itemCount: analyticsItems.length,
+      authMode: writeResult.authMode,
+      erpResponse: writeResult.erpResponse || writeResult.data
+    }
+  };
 }
 
 async function syncShopGraphsToErp(shopId, companyIdInput, period) {
   const companyId = await getSellerCompanyId(companyIdInput);
   const v3Result = await syncShopGraphsWithFallback(companyId, period || 30);
-  if (shopId) {
-    const graphConn = await getStoredErpConnection();
-    if (graphConn.baseUrl && graphConn.token) {
-      await fetch(graphConn.baseUrl + "/api/shops/" + shopId + "/analytics-graphs", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json;charset=utf-8",
-          "Authorization": "Bearer " + graphConn.token
-        },
-        body: JSON.stringify(v3Result)
-      });
+  const writeResult = await writeShopAnalyticsSnapshotToErp(
+    shopId,
+    "analytics-graphs",
+    v3Result
+  );
+  if (!writeResult.ok) return writeResult;
+  return {
+    ok: true,
+    data: {
+      ...v3Result,
+      authMode: writeResult.authMode,
+      erpResponse: writeResult.erpResponse || writeResult.data
     }
-  }
-  return { ok: true, data: v3Result };
+  };
 }
 
 globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_BACKGROUND || {}, {

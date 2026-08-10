@@ -28,6 +28,17 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Post-release analytics-auth correction (2026-08-11, offline): paired shop discovery already used
+  the live device grant, but analytics and graph persistence still required the legacy account
+  Token. Two exact device routes now require `capture:write`, owner equality and the granted Ozon
+  shop; the extension keeps its access token inside the worker and uses a dedicated bounded writer.
+  Graph failures no longer report success, and revoked/unpaired sessions cannot fall back to a
+  retained legacy Token. Old account routes retain their compatible graph defaults through the same
+  normalized snapshot builder.
+- Verification passes focused Server `60/60`, complete Server `5019` with `220` environment skips,
+  source package `452/452`, lint, all workspace typechecks and full `pnpm preflight`. This correction
+  is not yet packaged or deployed; production remains `3b15f7fc` / `1.0.301`, all rollout
+  flags remain dark, and no Provider, ERP ingest/publish, Ozon or database mutation occurred.
 - Dual-region obsolete-staging cleanup (2026-08-10) used exact read-only manifests
   `b19325567c33e56ea272355c17d8fac48e325e8337b01e2838652d76edcf5d1e` (COM) and
   `e14d9218b83200582f72565fb4b4f41b1656a97adf5f055a5626080451bcdb96` (CN). Seven stale COM

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const sessionPath = 'extensions/ss-erp/shared/erp-adapter/source-workflow-device-session.js';
@@ -596,5 +596,193 @@ for (const invalidPath of [
   );
 }
 assert.equal(batchRouteRequests.length, 9);
+
+const analyticsWriterPath =
+  'extensions/ss-erp/shared/erp-adapter/shop-analytics-device-writer.js';
+assert.equal(
+  existsSync(analyticsWriterPath),
+  true,
+  'paired analytics must use a dedicated device writer',
+);
+const analyticsContext = { ...context };
+analyticsContext.globalThis = analyticsContext;
+vm.runInNewContext(readFileSync(analyticsWriterPath, 'utf8'), analyticsContext, {
+  filename: analyticsWriterPath,
+});
+const analyticsRequests = [];
+const analyticsTransport = analyticsContext.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['capture:write']),
+  fetchImpl: async (url, init) => {
+    analyticsRequests.push({ url, init });
+    return response(200, { code: 1, data: { id: 'snapshot-1', productCount: 1 } });
+  },
+});
+const analyticsWriter = analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+  transport: analyticsTransport,
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await analyticsWriter.write({
+    kind: 'analytics',
+    shopId: 'shop-1',
+    payload: { period: '30d', items: [{ sku: 'sku-1', soldCount: 1, soldSum: 10 }] },
+  }))),
+  {
+    ok: true,
+    authMode: 'device',
+    data: { id: 'snapshot-1', productCount: 1 },
+  },
+);
+assert.equal(
+  analyticsRequests[0].url,
+  'https://erp.example/api/extension-device/shops/shop-1/analytics',
+);
+assert.equal(analyticsRequests[0].init.headers.Authorization, 'Bearer device-token');
+assert.equal(analyticsRequests[0].init.credentials, 'omit');
+assert.equal(analyticsRequests[0].init.redirect, 'error');
+
+const analyticsRequestsBeforeInvalidTransportPaths = analyticsRequests.length;
+for (const invalidPath of [
+  '/api/extension-device/shops/shop-1/analytics?retry=1',
+  '/api/extension-device/shops/shop-1/analytics#fragment',
+  '/api/extension-device/shops/shop-1/analytics/extra',
+  'https://erp.example/api/extension-device/shops/shop-1/analytics',
+]) {
+  await assert.rejects(
+    analyticsTransport.post(invalidPath, { items: [{}] }, { requiredScope: 'capture:write' }),
+    /source workbench path is invalid/u,
+  );
+}
+assert.equal(analyticsRequests.length, analyticsRequestsBeforeInvalidTransportPaths);
+
+await analyticsWriter.write({
+  kind: 'analytics-graphs',
+  shopId: 'shop-%E5%8C%97%E4%BA%AC',
+  payload: { period: '30d', graphData: {}, tableData: {} },
+});
+assert.equal(
+  analyticsRequests[1].url,
+  'https://erp.example/api/extension-device/shops/shop-%25E5%258C%2597%25E4%25BA%25AC/analytics-graphs',
+  'shop ids must be encoded exactly once from their literal value',
+);
+
+const requestsBeforeInvalidAnalyticsPaths = analyticsRequests.length;
+for (const shopId of ['', ' shop-1', 'shop/1', 'shop\\1']) {
+  await assert.rejects(
+    analyticsWriter.write({ kind: 'analytics', shopId, payload: { items: [{}] } }),
+    /shopId is invalid/u,
+  );
+}
+assert.equal(analyticsRequests.length, requestsBeforeInvalidAnalyticsPaths);
+
+const missingAnalyticsScopeRequests = [];
+const missingAnalyticsScopeWriter =
+  analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+    transport: analyticsContext.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+      credentials: credentials(['listing:review']),
+      fetchImpl: async (...args) => {
+        missingAnalyticsScopeRequests.push(args);
+        return response();
+      },
+    }),
+  });
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await missingAnalyticsScopeWriter.write({
+    kind: 'analytics', shopId: 'shop-1', payload: { items: [{}] },
+  }))),
+  { ok: false, errorCode: 'device_scope_required', error: '设备缺少分析数据写入权限' },
+);
+assert.equal(missingAnalyticsScopeRequests.length, 0);
+
+await assert.rejects(
+  analyticsTransport.post(
+    '/api/extension-device/shops/shop-1/analytics',
+    { items: [{ name: 'x'.repeat(1024 * 1024) }] },
+    { requiredScope: 'capture:write' },
+  ),
+  /source workbench command is too large/u,
+);
+
+const unpairedWriter = analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+  transport: { async post() { return { state: 'unpaired' }; } },
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await unpairedWriter.write({
+    kind: 'analytics', shopId: 'shop-1', payload: { items: [{}] },
+  }))),
+  { ok: false, errorCode: 'device_unpaired', error: '设备未配对' },
+);
+
+const failedGraphWriter = analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+  transport: {
+    async post() {
+      return {
+        state: 'http_error',
+        status: 503,
+        body: { code: 0, errorCode: 'analytics_unavailable', msg: '暂时无法写入' },
+      };
+    },
+  },
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await failedGraphWriter.write({
+    kind: 'analytics-graphs', shopId: 'shop-1', payload: { graphData: {}, tableData: {} },
+  }))),
+  {
+    ok: false,
+    errorCode: 'analytics_unavailable',
+    error: '暂时无法写入',
+    status: 503,
+  },
+  'graph persistence failures must not be reported as successful',
+);
+
+const unknownOutcomeWriter = analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+  transport: {
+    async post() {
+      throw Object.assign(new Error('response lost after dispatch'), {
+        outcome: 'UNKNOWN_OUTCOME',
+        automaticRetryAllowed: false,
+      });
+    },
+  },
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await unknownOutcomeWriter.write({
+    kind: 'analytics', shopId: 'shop-1', payload: { items: [{}] },
+  }))),
+  {
+    ok: false,
+    errorCode: 'device_analytics_write_outcome_unknown',
+    error: 'response lost after dispatch',
+    outcome: 'UNKNOWN_OUTCOME',
+    automaticRetryAllowed: false,
+  },
+  'a lost analytics response must not authorize an automatic retry',
+);
+
+const revokedStates = [
+  { state: 'authorization_required', status: 410 },
+  { state: 'unpaired' },
+];
+const revokedWriter = analyticsContext.SS_ERP_SHOP_ANALYTICS_DEVICE_WRITER.createWriter({
+  transport: { async post() { return revokedStates.shift(); } },
+});
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await revokedWriter.write({
+    kind: 'analytics', shopId: 'shop-1', payload: { items: [{}] },
+  }))),
+  {
+    ok: false,
+    errorCode: 'device_authorization_required',
+    error: '设备授权已失效，请重新配对',
+  },
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(await revokedWriter.write({
+    kind: 'analytics', shopId: 'shop-1', payload: { items: [{}] },
+  }))),
+  { ok: false, errorCode: 'device_unpaired', error: '设备未配对' },
+  'a cleared revoked session must remain closed on the next invocation',
+);
 
 console.log('extension BYOK ingest transport tests passed');

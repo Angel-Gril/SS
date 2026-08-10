@@ -39,6 +39,11 @@ import {
   warehouseLogisticsScopeChanged,
   retireShopLogisticsScope,
 } from '../services/logistics-scope-invalidation.js';
+import {
+  buildShopAnalyticsGraphsSnapshot,
+  buildShopAnalyticsSummarySnapshot,
+  ShopAnalyticsPayloadError,
+} from '../services/shop-analytics-snapshot.js';
 
 const createShopSchema = z.object({
   platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']),
@@ -1121,33 +1126,29 @@ export async function shopRoutes(app: FastifyInstance) {
   app.post('/:id/analytics', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const body = request.body as { items: any[]; period?: string };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
-    if (!body?.items?.length) {
+    let snapshotData;
+    try {
+      snapshotData = buildShopAnalyticsSummarySnapshot(request.body);
+    } catch (error) {
+      if (!(error instanceof ShopAnalyticsPayloadError)) throw error;
       return reply.status(400).send({ code: 0, msg: '无分析数据' });
     }
-
-    const totalSales = body.items.reduce((sum, item) => sum + (Number(item.soldSum) || 0), 0);
-    const totalOrders = body.items.reduce((sum, item) => sum + (Number(item.soldCount) || 0), 0);
 
     const snapshot = await prisma.shopAnalyticsSnapshot.create({
       data: {
         shopId: id,
-        period: body.period || '30d',
-        data: { type: 'what_to_sell', items: body.items },
-        productCount: body.items.length,
-        totalSales,
-        totalOrders,
+        ...snapshotData,
       },
     });
 
     return reply.send({
       code: 1,
-      msg: `已保存 ${body.items.length} 条分析数据`,
-      data: { id: snapshot.id, productCount: body.items.length },
+      msg: `已保存 ${snapshotData.productCount} 条分析数据`,
+      data: { id: snapshot.id, productCount: snapshotData.productCount },
     });
   });
 
@@ -1207,77 +1208,28 @@ export async function shopRoutes(app: FastifyInstance) {
   app.post('/:id/analytics-graphs', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const body = request.body as {
-      version?: string;
-      period: string;
-      dateFrom: string;
-      dateTo: string;
-      prevFrom?: string;
-      prevTo?: string;
-      graphData: any;
-      tableData: any;
-      totals?: any;
-      recommendations?: any;
-      salesFunnel?: any;
-    };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
-    if (!body?.graphData && !body?.tableData) {
+    let built;
+    try {
+      built = buildShopAnalyticsGraphsSnapshot(request.body);
+    } catch (error) {
+      if (!(error instanceof ShopAnalyticsPayloadError)) throw error;
       return reply.status(400).send({ code: 0, msg: '无分析数据' });
-    }
-
-    let totalRevenue = 0;
-    let totalOrders = 0;
-    let productCount = 0;
-
-    if (body.version === 'v3') {
-      // V3 format: tableData.items[].metrics.orderedUnits / revenue
-      const items = body.tableData?.items || [];
-      productCount = items.length;
-      totalOrders = items.reduce((sum: number, item: any) => sum + (Number(item.metrics?.orderedUnits) || 0), 0);
-      totalRevenue = body.totals?.metrics?.revenue || items.reduce((sum: number, item: any) => sum + (Number(item.metrics?.revenue) || 0), 0);
-    } else {
-      // Legacy format
-      const tableItems = body.tableData?.result?.data || [];
-      productCount = tableItems.length;
-      totalRevenue = tableItems.reduce((sum: number, item: any) => {
-        const metrics = item.metrics || [];
-        return sum + (Number(metrics[4]) || 0);
-      }, 0);
-      totalOrders = tableItems.reduce((sum: number, item: any) => {
-        const metrics = item.metrics || [];
-        return sum + (Number(metrics[0]) || 0);
-      }, 0);
     }
 
     const snapshot = await prisma.shopAnalyticsSnapshot.create({
       data: {
         shopId: id,
-        period: body.period || '30d',
-        data: {
-          type: 'graphs',
-          version: body.version || 'legacy',
-          dateFrom: body.dateFrom,
-          dateTo: body.dateTo,
-          prevFrom: body.prevFrom || null,
-          prevTo: body.prevTo || null,
-          graphData: body.graphData,
-          tableData: body.tableData,
-          totals: body.totals || null,
-          recommendations: body.recommendations || null,
-          salesFunnel: body.salesFunnel || null,
-        },
-        productCount,
-        totalSales: totalRevenue,
-        totalOrders,
+        ...built.snapshot,
       },
     });
 
     return reply.send({
       code: 1,
-      msg: `已保存 V${body.version === 'v3' ? '3' : '1'} 数据: ${productCount} 条SKU`,
+      msg: `已保存 V${built.responseVersion} 数据: ${built.snapshot.productCount} 条SKU`,
       data: { id: snapshot.id },
     });
   });

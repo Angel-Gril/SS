@@ -7,6 +7,12 @@ import {
   ExtensionDeviceSessionError,
   type ExtensionDeviceRevocationReason,
 } from '../services/extension-device-session.js';
+import {
+  buildShopAnalyticsGraphsSnapshot,
+  buildShopAnalyticsSummarySnapshot,
+  ShopAnalyticsPayloadError,
+  type ShopAnalyticsSnapshotData,
+} from '../services/shop-analytics-snapshot.js';
 
 type ExtensionDeviceSessionService = ReturnType<typeof createExtensionDeviceSessionService>;
 
@@ -51,6 +57,14 @@ export interface ExtensionDeviceShopRepository {
   }): Promise<ExtensionDeviceAuthorizedShop[]>;
 }
 
+export interface ExtensionDeviceShopAnalyticsRepository {
+  createSnapshot(input: {
+    ownerUserId: string;
+    shopId: string;
+    snapshot: ShopAnalyticsSnapshotData;
+  }): Promise<{ id: string; productCount: number } | null>;
+}
+
 export interface ExtensionDeviceRoutesOptions {
   sessionService: Pick<ExtensionDeviceSessionService, 'createPairingCode' | 'claimPairingCode' | 'refresh'>;
   managementRepository: ExtensionDeviceManagementRepository;
@@ -61,6 +75,11 @@ export interface ExtensionDeviceRoutesOptions {
    */
   authenticateDevice?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   shopRepository?: ExtensionDeviceShopRepository;
+  authenticateShopAnalyticsDevice?: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<unknown>;
+  shopAnalyticsRepository?: ExtensionDeviceShopAnalyticsRepository;
   authenticateAccount?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -87,6 +106,8 @@ export function extensionDeviceClaimRateLimitKey(request: FastifyRequest): strin
 
 
 const idParamsSchema = z.object({ id: z.string().trim().min(1).max(200) });
+const shopParamsSchema = z.object({ shopId: z.string().trim().min(1).max(200) });
+const SHOP_ANALYTICS_BODY_LIMIT = 2 * 1024 * 1024;
 
 const claimRateLimitConfig = {
   rateLimit: {
@@ -165,6 +186,48 @@ function deviceContext(request: FastifyRequest): {
     allowedShopIds,
   };
 }
+
+function deviceShopContext(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  shopId: string,
+): ReturnType<typeof deviceContext> {
+  const device = deviceContext(request);
+  if (!device) {
+    reply.status(401).send({
+      code: 0,
+      errorCode: 'invalid_device_context',
+      msg: '无效的设备令牌',
+    });
+    return null;
+  }
+  if (!device.allowedShopIds.includes(shopId)) {
+    reply.status(404).send({
+      code: 0,
+      errorCode: 'device_shop_not_found',
+      msg: '店铺未授权给该设备',
+    });
+    return null;
+  }
+  const scopes = (request as any).device?.scopes;
+  if (!Array.isArray(scopes) || !scopes.includes('capture:write')) {
+    reply.status(403).send({
+      code: 0,
+      errorCode: 'insufficient_scope',
+      msg: '设备权限不足',
+    });
+    return null;
+  }
+  return device;
+}
+
+function invalidAnalyticsPayload(reply: FastifyReply) {
+  return reply.status(400).send({
+    code: 0,
+    errorCode: 'invalid_analytics_payload',
+    msg: '分析数据无效',
+  });
+}
 export async function extensionDeviceRoutes(
   app: FastifyInstance,
   options: ExtensionDeviceRoutesOptions,
@@ -190,6 +253,80 @@ export async function extensionDeviceRoutes(
       });
       reply.header('Cache-Control', 'no-store');
       return reply.send({ code: 1, msg: 'ok', data });
+    });
+  }
+
+  if (options.authenticateShopAnalyticsDevice && options.shopAnalyticsRepository) {
+    app.post('/shops/:shopId/analytics', {
+      bodyLimit: SHOP_ANALYTICS_BODY_LIMIT,
+      preHandler: [options.authenticateShopAnalyticsDevice],
+    }, async (request, reply) => {
+      const params = shopParamsSchema.safeParse(request.params);
+      if (!params.success) return invalidInput(reply);
+      const device = deviceShopContext(request, reply, params.data.shopId);
+      if (!device) return reply;
+
+      let snapshot: ShopAnalyticsSnapshotData;
+      try {
+        snapshot = buildShopAnalyticsSummarySnapshot(request.body);
+      } catch (error) {
+        if (error instanceof ShopAnalyticsPayloadError) return invalidAnalyticsPayload(reply);
+        throw error;
+      }
+      const stored = await options.shopAnalyticsRepository!.createSnapshot({
+        ownerUserId: device.ownerUserId,
+        shopId: params.data.shopId,
+        snapshot,
+      });
+      if (!stored) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      reply.header('Cache-Control', 'no-store');
+      return reply.send({
+        code: 1,
+        msg: `已保存 ${snapshot.productCount} 条分析数据`,
+        data: stored,
+      });
+    });
+
+    app.post('/shops/:shopId/analytics-graphs', {
+      bodyLimit: SHOP_ANALYTICS_BODY_LIMIT,
+      preHandler: [options.authenticateShopAnalyticsDevice],
+    }, async (request, reply) => {
+      const params = shopParamsSchema.safeParse(request.params);
+      if (!params.success) return invalidInput(reply);
+      const device = deviceShopContext(request, reply, params.data.shopId);
+      if (!device) return reply;
+
+      let built: ReturnType<typeof buildShopAnalyticsGraphsSnapshot>;
+      try {
+        built = buildShopAnalyticsGraphsSnapshot(request.body);
+      } catch (error) {
+        if (error instanceof ShopAnalyticsPayloadError) return invalidAnalyticsPayload(reply);
+        throw error;
+      }
+      const stored = await options.shopAnalyticsRepository!.createSnapshot({
+        ownerUserId: device.ownerUserId,
+        shopId: params.data.shopId,
+        snapshot: built.snapshot,
+      });
+      if (!stored) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      reply.header('Cache-Control', 'no-store');
+      return reply.send({
+        code: 1,
+        msg: `已保存 V${built.responseVersion} 数据: ${built.snapshot.productCount} 条SKU`,
+        data: { id: stored.id },
+      });
     });
   }
 

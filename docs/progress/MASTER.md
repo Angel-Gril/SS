@@ -44,6 +44,21 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release analytics-auth correction (2026-08-11, offline): BINI reproduced a migration gap in
+which the paired device could read its granted Ozon shop but manual analytics and graph writes still
+required the legacy account Token. The correction adds two `capture:write` device routes bound to
+the live owner/shop grant, a dedicated extension device writer, bounded payload validation and one
+shared snapshot builder for device and account routes. Graph persistence failures now propagate
+instead of returning a false success. A security review also removed analytics fallback to a
+retained legacy Token, including the revoked-session -> unpaired second-invocation path.
+
+Focused Server tests pass `60/60`; complete Server tests pass `5019` with `220` environment skips;
+source package verification passes `452/452` with the two existing package warnings; lint and all
+workspace typechecks pass; full `pnpm preflight` passes. The correction is not yet packaged or
+deployed. Both regions and BINI therefore remain on exact release
+`3b15f7fcc900d88b64b749c03be572efa3990f63` / `1.0.301`. No Provider, ERP ingest/publish, Ozon,
+database or rollout state was changed. Overall implementation progress remains `37/37`.
+
 Dual-region obsolete-staging cleanup checkpoint (2026-08-10): exact read-only inventories and
 process/reference checks produced COM/CN dry-run manifest SHA-256 values
 `b19325567c33e56ea272355c17d8fac48e325e8337b01e2838652d76edcf5d1e` and

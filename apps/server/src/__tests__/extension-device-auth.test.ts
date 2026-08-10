@@ -469,6 +469,23 @@ describe('extension-device production startup configuration', () => {
     expect(logisticsRegistration).toBeGreaterThan(deviceRegistration);
     expect(index.slice(deviceRegistration, logisticsRegistration)).toContain('extensionDeviceRoutes');
   });
+
+  it('binds device analytics writes to capture scope and the exact requested shop', () => {
+    const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const analyticsAuth = index.indexOf('authenticateShopAnalyticsDevice: authenticateExtensionDevice({');
+    const analyticsRepository = index.indexOf('shopAnalyticsRepository:', analyticsAuth);
+    const registration = index.slice(analyticsAuth, analyticsRepository);
+
+    expect(analyticsAuth).toBeGreaterThan(-1);
+    expect(analyticsRepository).toBeGreaterThan(analyticsAuth);
+    expect(registration).toMatch(/requiredScopes:\s*\['capture:write'\]/u);
+    expect(registration).toContain('shopIdFromRequest');
+    expect(registration).toContain('params.shopId');
+    const repository = index.slice(analyticsRepository, index.indexOf('\n  });', analyticsRepository));
+    expect(repository).toContain('userId: ownerUserId');
+    expect(repository).toContain("platform: 'OZON'");
+    expect(repository).toContain("status: { not: 'DISABLED' }");
+  });
 });
 
   it('documents the device auth boundary and legacy cutoff flag in the environment example', () => {

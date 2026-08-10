@@ -58,10 +58,29 @@ test('settings reconciles the legacy form with an active scoped device session',
   assert.match(workerSource, /message\.type === 'ss-erp:extension-device-clear'/);
   assert.match(source, /本机设备配对已清除/);
   assert.match(workerSource, /SS_ERP_EXTENSION_DEVICE_SHOPS/);
+  assert.match(workerSource, /shop-analytics-device-writer\.js/);
+  assert.match(workerSource, /SS_ERP_EXTENSION_DEVICE_SHOP_ANALYTICS/);
   assert.match(workerSource, /\/api\/extension-device\/shops/);
   assert.match(workerSource, /operation\.accessToken/);
   assert.match(collectWorkerSource, /deviceShopReader/);
   assert.match(collectWorkerSource, /!deviceResult \|\| deviceResult\.errorCode !== 'device_unpaired'/);
+  assert.match(collectWorkerSource, /deviceAnalyticsWriter/);
+  assert.match(collectWorkerSource, /writeShopAnalyticsSnapshotToErp/);
+  const writerStart = collectWorkerSource.indexOf('async function writeShopAnalyticsSnapshotToErp');
+  const analyticsStart = collectWorkerSource.indexOf('async function syncShopAnalyticsToErp');
+  const graphsStart = collectWorkerSource.indexOf('async function syncShopGraphsToErp');
+  const exportStart = collectWorkerSource.indexOf('globalThis.SS_ERP_COLLECT_BACKGROUND', graphsStart);
+  assert.ok(writerStart >= 0 && analyticsStart > writerStart
+    && graphsStart > analyticsStart && exportStart > graphsStart);
+  const analyticsWriter = collectWorkerSource.slice(writerStart, analyticsStart);
+  assert.doesNotMatch(analyticsWriter, /getStoredErpConnection|conn\.token|\/api\/shops\//);
+  assert.match(analyticsWriter, /device_analytics_writer_unavailable/);
+  const analyticsHandler = collectWorkerSource.slice(analyticsStart, graphsStart);
+  const graphsHandler = collectWorkerSource.slice(graphsStart, exportStart);
+  assert.match(analyticsHandler, /writeShopAnalyticsSnapshotToErp/);
+  assert.doesNotMatch(analyticsHandler, /if \(!conn\.token\)/);
+  assert.match(graphsHandler, /writeShopAnalyticsSnapshotToErp/);
+  assert.doesNotMatch(graphsHandler, /return \{ ok: true, data: v3Result \};/);
   assert.match(fs.readFileSync('apps/server/src/routes/extension-device.ts', 'utf8'), /app\.get\('\/shops'/);
 });
 
