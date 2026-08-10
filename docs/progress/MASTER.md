@@ -44,6 +44,25 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Backup-cleanup checkpoint (2026-08-10): a read-only integrity pass validated every retained
+database dump in both regions against its schema-v3 sidecar, byte count, SHA-256 and `gzip -t`.
+COM retains `36` valid dumps (`1,396,351,693` bytes); CN retains `37` valid dumps (`349,577,571`
+bytes). No database dump was deleted. An exact allowlist cleanup removed `8` COM and `9` CN
+attestation files (`14,160` bytes total) whose declared dump and sidecar had already expired and
+which had no current verifier or evidence reference. The ordinary orphan-attestation count is now
+zero. COM/CN cleanup receipt SHA-256 values for the top-level sets are
+`078b5a71d590387e6a3bbbd5ca24776082b295e3cce13da77b4710a0e113ccbd` and
+`9617c3893275fcd73ec51779c44aa3269fa152c6047f23bac71db402484e49dc`; the separately expired CN
+history attestation had SHA-256
+`da9ed4ac0f11718dd1c6d7b3d701570b6e0ae61bf70eadd8983a73d053eefb2e`.
+
+The two CN `.timeout-*` attestation groups remain because their renamed dump/sidecar pairs and
+quarantine receipts form retained failure-audit evidence. Current `3b15f7fc` recovery points still
+exist and report restore `PASSED` for COM `142` tables and CN `141` tables; API, Worker and Web are
+active in both regions. No rollout flag, Provider, ERP ingest/publish or Ozon state was touched.
+The remote-backup warning remains, and all local release/private evidence and other reproducible
+artifacts remain preserved pending a separate retention decision.
+
 Final checkpoint (2026-08-10): all `37/37` tasks are complete. The exact `.com`/BINI cycle 20 pilot
 on `35a517f09475dba0ab212186b64788e59103d243` / `1.0.300` sent exactly one authorized Ozon import
 for the single bound SKU, with one intent, attempt, grant, receipt, submission claim and
@@ -75,8 +94,9 @@ an immediate trusted reload. Closure SHA-256 is
 target with three active services, healthy readiness and every rollout row dark. No Provider,
 ERP ingest/publish or additional Ozon call occurred during the corrective release. The only
 remaining operational warning is that fresh backups are retained locally on each VPS because
-remote backup storage is not configured. All generated analysis, plans, progress records, private
-evidence and operator helpers remain preserved; cleanup requires an explicit retention decision.
+remote backup storage is not configured. Invalid backup attestations were cleaned under the exact
+checkpoint above; all generated analysis, plans, progress records, private evidence and operator
+helpers remain preserved pending a separate broader retention decision.
 
 Current checkpoint (2026-08-09): the separately authorized replacement pre-release for
 `18822ed50d04d61a72d4b7f1409703683ef417ae` / BINI `1.0.293` completed end to end while every

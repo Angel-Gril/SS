@@ -28,6 +28,17 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Backup cleanup (2026-08-10) validated all retained SQL dumps against sidecar schema, bytes,
+  SHA-256 and `gzip -t`: COM `36/36` (`1,396,351,693` bytes), CN `37/37` (`349,577,571` bytes).
+  No dump was deleted. An exact allowlist removed `8` COM and `9` CN orphan/expired attestations
+  (`14,160` bytes); ordinary orphan count is now zero. Top-level COM/CN cleanup receipt SHA-256
+  values are `078b5a71d590387e6a3bbbd5ca24776082b295e3cce13da77b4710a0e113ccbd` and
+  `9617c3893275fcd73ec51779c44aa3269fa152c6047f23bac71db402484e49dc`.
+- Two CN `.timeout-*` groups remain intentionally because their isolated dump/sidecar bytes and
+  quarantine receipts are failure-audit evidence. Current `3b15f7fc` recovery points remain
+  `PASSED` at COM `142` and CN `141` tables; all three services are active in both regions. This
+  cleanup changed no rollout flag and made no Provider, ERP ingest/publish or Ozon request. Remote
+  backup storage is still not configured; broader local artifact retention remains undecided.
 - Final checkpoint (2026-08-10): `REL-02` is complete. The exact `.com`/BINI cycle 20 pilot on
   `35a517f09475dba0ab212186b64788e59103d243` / `1.0.300` created exactly one new publish intent,
   attempt, `OZON_PUBLISH` grant and receipt, claimed and acknowledged exactly one submission, and
