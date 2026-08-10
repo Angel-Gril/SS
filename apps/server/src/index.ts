@@ -3400,11 +3400,7 @@ if (RUN_WORKERS) {
         const client = await loadOwnedSourceListingOzonClient(ownerUserId, shopId);
         return {
           getImportInfo: (taskId) => {
-            const numericTaskId = typeof taskId === 'number' ? taskId : Number(taskId);
-            if (!Number.isSafeInteger(numericTaskId) || numericTaskId <= 0) {
-              throw new Error('Ozon import task ID exceeds the supported read contract');
-            }
-            return client.getImportInfo(numericTaskId);
+            return client.getImportInfo(taskId);
           },
           getProductInfoByOfferId: (offerIds) => client.getProductInfoByOfferId(offerIds),
         };

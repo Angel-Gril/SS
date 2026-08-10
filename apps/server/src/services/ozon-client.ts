@@ -590,7 +590,7 @@ export class OzonClient {
     return this.request('/v1/product/pictures/import', { body: params });
   }
 
-  async getImportInfo(task_id: number): Promise<OzonImportInfo> {
+  async getImportInfo(task_id: number | string): Promise<OzonImportInfo> {
     const res = await this.request<{ result: OzonImportInfo }>(
       '/v1/product/import/info',
       { body: { task_id } },

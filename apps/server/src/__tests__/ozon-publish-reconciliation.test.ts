@@ -10,7 +10,10 @@ import {
   runOzonPublishReconciliationTick,
   type OzonPublishReconciliationLogger,
 } from '../services/ozon-publish-reconciliation.js';
-import { startOzonPublishReconciliationWorker } from '../workers/ozon-publish-reconciliation.js';
+import {
+  runOzonPublishReconciliationWorkerTick,
+  startOzonPublishReconciliationWorker,
+} from '../workers/ozon-publish-reconciliation.js';
 
 const HASH = 'a'.repeat(64);
 const NOW = new Date('2026-07-15T08:00:00.000Z');
@@ -700,12 +703,57 @@ describe('Ozon publish reconciliation service', () => {
 });
 
 describe('Ozon publish reconciliation timer worker', () => {
-  it('starts immediately, schedules periodically without overlap, and registers a synchronous stop', async () => {
+  it('runs the standalone production tick through the injected owner/shop status client', async () => {
+    const value = attempt({ ozonTaskId: '9007199254740997' });
+    const store = repository({ claims: [claim(value)] });
+    const getImportInfo = vi.fn(async () => ({
+      items: value.offerTrace.map((trace, index) => ({
+        offer_id: trace.offerId,
+        product_id: index + 1,
+        status: 'imported',
+        errors: [],
+      })),
+    }));
+    const resolveOwnedClient = vi.fn(async () => ({ getImportInfo }));
+
+    const result = await runOzonPublishReconciliationWorkerTick({
+      repository: store,
+      resolveOwnedClient,
+      workerId: 'standalone-worker-1',
+      logger: logger(),
+    });
+
+    expect(resolveOwnedClient).toHaveBeenCalledWith('user-1', 'shop-1');
+    expect(getImportInfo).toHaveBeenCalledOnce();
+    expect(getImportInfo).toHaveBeenCalledWith('9007199254740997');
+    expect(store.completeReconciliation).toHaveBeenCalledWith(expect.objectContaining({
+      attemptId: 'attempt-1',
+      workerId: 'standalone-worker-1',
+      outcome: expect.objectContaining({ kind: 'SUCCEEDED' }),
+    }));
+    expect(result).toMatchObject({ claimed: 1, completed: 1, failed: 0 });
+  });
+
+  it('starts immediately, logs a single-line initial result, and registers an awaitable stop', async () => {
+    const emptyTickResult = {
+      staleMarked: 0,
+      claimed: 0,
+      completed: 0,
+      retried: 0,
+      manualReview: 0,
+      lateAcknowledged: 0,
+      leaseLost: 0,
+      failed: 0,
+      skipped: 0,
+    };
     let releaseFirst!: () => void;
     const firstTick = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const runTick = vi.fn()
-      .mockImplementationOnce(() => firstTick)
-      .mockResolvedValue(undefined);
+      .mockImplementationOnce(async () => {
+        await firstTick;
+        return emptyTickResult;
+      })
+      .mockResolvedValue(emptyTickResult);
     const scheduled: Array<{ callback: () => void; delay: number; handle: object }> = [];
     const setTimeoutFn = vi.fn((callback: () => void, delay: number) => {
       const handle = { unref: vi.fn() };
@@ -714,6 +762,7 @@ describe('Ozon publish reconciliation timer worker', () => {
     });
     const clearTimeoutFn = vi.fn();
     const registerStop = vi.fn();
+    const logs = logger();
 
     const worker = startOzonPublishReconciliationWorker({
       runTick,
@@ -721,7 +770,7 @@ describe('Ozon publish reconciliation timer worker', () => {
       setTimeout: setTimeoutFn,
       clearTimeout: clearTimeoutFn,
       registerStop,
-      logger: logger(),
+      logger: logs,
     });
 
     expect(runTick).toHaveBeenCalledTimes(1);
@@ -730,6 +779,9 @@ describe('Ozon publish reconciliation timer worker', () => {
 
     releaseFirst();
     await flush();
+    expect(logs.info).toHaveBeenCalledWith(
+      '[ozon-publish-reconciliation] {"event":"INITIAL_TICK_COMPLETED","staleMarked":0,"claimed":0,"completed":0,"retried":0,"manualReview":0,"lateAcknowledged":0,"leaseLost":0,"failed":0,"skipped":0}',
+    );
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0]?.delay).toBe(2_500);
 
@@ -738,7 +790,7 @@ describe('Ozon publish reconciliation timer worker', () => {
     expect(runTick).toHaveBeenCalledTimes(2);
     expect(scheduled).toHaveLength(2);
 
-    worker.stop();
+    await worker.stop();
     expect(clearTimeoutFn).toHaveBeenCalledWith(scheduled[1]?.handle);
     scheduled[1]?.callback();
     await flush();
@@ -760,9 +812,13 @@ describe('Ozon publish reconciliation timer worker', () => {
       registerStop,
       logger: logs,
     });
-    worker.stop();
-    rejectTick(new Error('database unavailable'));
+    let stopCompleted = false;
+    const stopping = worker.stop().then(() => { stopCompleted = true; });
     await flush();
+    expect(stopCompleted).toBe(false);
+    rejectTick(new Error('database unavailable'));
+    await stopping;
+    expect(stopCompleted).toBe(true);
 
     expect(logs.error).toHaveBeenCalledWith(
       '[ozon-publish-reconciliation] tick failed',
@@ -799,6 +855,6 @@ describe('Ozon publish reconciliation timer worker', () => {
     scheduled[0]?.();
     await flush();
     expect(runTick).toHaveBeenCalledTimes(2);
-    worker.stop();
+    await worker.stop();
   });
 });

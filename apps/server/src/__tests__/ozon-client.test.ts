@@ -54,6 +54,24 @@ describe('Ozon client errors', () => {
     }]);
   });
 
+  it('preserves an exact Ozon import task ID beyond JavaScript safe integers', async () => {
+    const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+    class StubClient extends OzonClient {
+      override async request<T = unknown>(path: string, options: Record<string, unknown> = {}): Promise<T> {
+        calls.push({ path, options });
+        return { result: { items: [] } } as T;
+      }
+    }
+    const client = new StubClient({ clientId: 'client', apiKey: 'key' });
+
+    await client.getImportInfo('9007199254740997');
+
+    expect(calls).toEqual([{
+      path: '/v1/product/import/info',
+      options: { body: { task_id: '9007199254740997' } },
+    }]);
+  });
+
   it('keeps the request timeout active while the response body is being read', async () => {
     const observed: { signal?: AbortSignal } = {};
     const requestFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

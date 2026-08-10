@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+const standaloneWorkerSource = readFileSync(new URL('../worker.ts', import.meta.url), 'utf8');
+const reconciliationWorkerSource = readFileSync(
+  new URL('../workers/ozon-publish-reconciliation.ts', import.meta.url),
+  'utf8',
+);
 
 describe('Ozon publish production bootstrap', () => {
   it('injects the authoritative publisher and submits through the non-retrying client method', () => {
@@ -118,6 +123,20 @@ describe('Ozon publish production bootstrap', () => {
     expect(redisGuard).toBeGreaterThan(reconciliation);
     expect(workers).toContain('runOzonPublishReconciliationTick({');
     expect(workers).toContain('repository: sourceOzonPublishAttemptRepository');
+  });
+
+  it('starts the same database reconciler in the split-process production worker', () => {
+    expect(standaloneWorkerSource).toContain(
+      "import { startOzonPublishReconciliationWorker } from './workers/ozon-publish-reconciliation.js';",
+    );
+    expect(standaloneWorkerSource).toContain('startOzonPublishReconciliationWorker();');
+    expect(reconciliationWorkerSource).toContain('runOzonPublishReconciliationWorkerTick(');
+    expect(reconciliationWorkerSource).toContain('createPrismaOzonPublishAttemptRepository({');
+    expect(reconciliationWorkerSource).toContain("platform: 'OZON'");
+    expect(reconciliationWorkerSource).toContain("status: 'ACTIVE'");
+    expect(reconciliationWorkerSource).toContain('client.getImportInfo(taskId)');
+    expect(reconciliationWorkerSource).not.toContain('importProductsOnce');
+    expect(reconciliationWorkerSource).not.toMatch(/\.submit\(/u);
   });
 
   it('registers publisher discovery before the parameterized workflow routes', () => {

@@ -1,28 +1,23 @@
 import type { Worker } from 'bullmq';
 
 const workers: Worker[] = [];
-const timers: (() => void)[] = [];
+const timers: Array<() => void | Promise<void>> = [];
 
 export function registerWorker(worker: Worker) {
   workers.push(worker);
 }
 
-export function registerTimer(stop: () => void) {
+export function registerTimer(stop: () => void | Promise<void>) {
   timers.push(stop);
 }
 
 export async function shutdownAllWorkers(timeoutMs = 30000): Promise<void> {
   console.log(`[shutdown] closing ${workers.length} BullMQ workers + ${timers.length} timers...`);
 
-  for (const stop of timers.splice(0)) {
-    try {
-      stop();
-    } catch (e) {
-      console.error('[shutdown] timer stop error:', e);
-    }
-  }
-
-  const closeAll = Promise.allSettled(workers.splice(0).map((w) => w.close()));
+  const closeAll = Promise.allSettled([
+    ...timers.splice(0).map(async (stop) => stop()),
+    ...workers.splice(0).map((worker) => worker.close()),
+  ]);
   const timeout = new Promise<PromiseSettledResult<void>[]>((_, reject) => {
     setTimeout(() => reject(new Error(`worker shutdown timed out after ${timeoutMs}ms`)), timeoutMs).unref();
   });
