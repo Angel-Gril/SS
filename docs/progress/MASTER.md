@@ -44,6 +44,24 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+CN payload-cleanup checkpoint (2026-08-10): after an exact dry-run with manifest SHA-256
+`b10106a6aba11a656775eb3727c6da0887ec8d93bebe4f9a0e82da02377f99c6`, the operator retired `12`
+unreferenced and reproducible failure payloads: two abandoned legacy stages, one failed legacy
+deploy, four `failed-releases`, three duplicate `.failed/.timeout` releases, one preactivation
+mode-failure quarantine and one quarantined build cache. The cleanup measured
+`11,308,519,424` bytes (`10.53 GiB`) reclaimed. CN moved from `88%` used with `4.82 GiB` available
+to `59%` used with `15.35 GiB` available.
+
+The exact current release and all four normal rollback releases, all `37` database dumps, current
+restore evidence, the two complete interrupted-release evidence copies and the six isolated
+timeout backup files were protected and remain present. API, Worker and Web retained their PIDs;
+local API and Web checks returned HTTP `200`. The root-owned `0600` completion receipt is stored at
+`/var/lib/ss-erp-rel04-evidence/cn-invalid-payload-cleanup-20260810-3b15f7fc.json` and in the local
+private evidence root. Its body SHA-256 is
+`639bb52421138efdf1a658a9d6ca971e91bfbafcf01635c8b9d6bc8e9d50bf9d`; file SHA-256 is
+`d2114e519457541305328893836c6ddf9a49880b701d15c47c43aae15ab55851`. No rollout flag, database,
+Provider, ERP ingest/publish or Ozon state was changed.
+
 Backup-cleanup checkpoint (2026-08-10): a read-only integrity pass validated every retained
 database dump in both regions against its schema-v3 sidecar, byte count, SHA-256 and `gzip -t`.
 COM retains `36` valid dumps (`1,396,351,693` bytes); CN retains `37` valid dumps (`349,577,571`

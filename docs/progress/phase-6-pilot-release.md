@@ -28,6 +28,17 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- CN payload cleanup (2026-08-10) retired `12` exact unreferenced/reproducible failed, timeout,
+  abandoned-stage and build-quarantine payloads after dry-run manifest SHA-256
+  `b10106a6aba11a656775eb3727c6da0887ec8d93bebe4f9a0e82da02377f99c6`. Measured reclaimed space
+  is `11,308,519,424` bytes (`10.53 GiB`), moving CN from `88%` used / `4.82 GiB` available to
+  `59%` used / `15.35 GiB` available. Current plus four normal rollback releases, `37` valid DB
+  dumps, both complete interrupted evidence copies and isolated timeout backup evidence remain.
+- The cleanup receipt body/file SHA-256 values are
+  `639bb52421138efdf1a658a9d6ca971e91bfbafcf01635c8b9d6bc8e9d50bf9d` and
+  `d2114e519457541305328893836c6ddf9a49880b701d15c47c43aae15ab55851`. API, Worker and Web kept
+  their PIDs and local API/Web checks returned HTTP `200`; no rollout flag, database, Provider,
+  ERP ingest/publish or Ozon state changed.
 - Backup cleanup (2026-08-10) validated all retained SQL dumps against sidecar schema, bytes,
   SHA-256 and `gzip -t`: COM `36/36` (`1,396,351,693` bytes), CN `37/37` (`349,577,571` bytes).
   No dump was deleted. An exact allowlist removed `8` COM and `9` CN orphan/expired attestations
