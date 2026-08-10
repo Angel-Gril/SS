@@ -44,6 +44,39 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Dual-region obsolete-staging cleanup checkpoint (2026-08-10): exact read-only inventories and
+process/reference checks produced COM/CN dry-run manifest SHA-256 values
+`b19325567c33e56ea272355c17d8fac48e325e8337b01e2838652d76edcf5d1e` and
+`e14d9218b83200582f72565fb4b4f41b1656a97adf5f055a5626080451bcdb96`. Before deletion, seven
+non-production COM smoke processes whose working directories were already deleted exited under
+`SIGTERM`; the production API, Worker and Web PIDs were excluded. The exact allowlists then removed
+`61` COM and `26` CN paths: obsolete extension/release uploads and operator/source/canary staging,
+legacy app snapshots, failed/quarantined release payloads, two CN RDS migration stages and
+accidental empty root paths. The `/opt/ss-erp/backups` paths removed here were old application
+snapshots, not `/var/backups/ss-erp` database recovery points.
+
+Measured reclamation was `8,520,830,976` bytes on COM and `3,080,237,056` bytes on CN,
+`11,601,068,032` bytes (`10.80 GiB`) total. COM now uses `29%` with `82,573,078,528` bytes available;
+CN now uses `52%` with `19,557,842,944` bytes available. Together with the immediately preceding CN
+failure-payload cleanup, the current storage-maintenance work reclaimed `22,909,587,456` bytes
+(`21.34 GiB`). All `87/87` exact targets are absent and the broader stale staging/upload scans
+return zero.
+
+Both regions still run exact release `3b15f7fcc900d88b64b749c03be572efa3990f63` with the same three
+service PIDs and healthy local HTTP checks. The current release plus four normal rollbacks, COM
+`36` and CN `37` production database dumps, restore evidence (`142`/`141` tables), cron entries,
+runtime `shared/private`, extension releases, credentials and useful deployment caches remain.
+COM `/opt/ss-erp/app` was intentionally retained because its Cloudflare IP updater is still a cron
+target. Database orphan counts and deleted-working-directory process counts are both zero.
+
+Root-owned `0600` completion receipts are stored under `/var/lib/ss-erp-rel04-evidence` and copied
+to the local private `rel04-3b15f7fc` evidence root. COM body/file SHA-256 values are
+`f04fa56f6dbbd711c9c751d36f79e59c295e4b1c75b21b0ba9e31781039139a0` and
+`f1b7b08463c9c22da9b385b4f19bfa1b87056a69fd73ad3c66591904b83bdba9`; CN values are
+`77b69085dffeeb4ac9b65f66bb7ffc9108a8fa29c39d832fdf7e63a1488becab` and
+`6a570124ace09e27df273b203e1a0b8939eafe3503abe2865bc9b4ad889484d8`. No rollout flag, database,
+Provider, ERP ingest/publish or Ozon state changed.
+
 CN payload-cleanup checkpoint (2026-08-10): after an exact dry-run with manifest SHA-256
 `b10106a6aba11a656775eb3727c6da0887ec8d93bebe4f9a0e82da02377f99c6`, the operator retired `12`
 unreferenced and reproducible failure payloads: two abandoned legacy stages, one failed legacy

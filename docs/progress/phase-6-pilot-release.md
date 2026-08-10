@@ -28,6 +28,30 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Dual-region obsolete-staging cleanup (2026-08-10) used exact read-only manifests
+  `b19325567c33e56ea272355c17d8fac48e325e8337b01e2838652d76edcf5d1e` (COM) and
+  `e14d9218b83200582f72565fb4b4f41b1656a97adf5f055a5626080451bcdb96` (CN). Seven stale COM
+  smoke processes with already-deleted working directories exited under `SIGTERM`; production
+  service PIDs were excluded. The exact allowlists removed `61` COM and `26` CN obsolete upload,
+  source/operator/canary, application-snapshot, failed/quarantine, RDS-migration and accidental
+  empty paths. Removed `/opt/ss-erp/backups` content was application staging, not database dumps.
+- The cleanup reclaimed COM `8,520,830,976` bytes and CN `3,080,237,056` bytes:
+  `11,601,068,032` bytes (`10.80 GiB`) total. COM is now `29%` used with `82,573,078,528` bytes
+  available; CN is `52%` used with `19,557,842,944` bytes available. All `87` exact paths and the
+  broader obsolete staging/upload patterns are absent. Including the preceding CN payload cleanup,
+  this maintenance reclaimed `22,909,587,456` bytes (`21.34 GiB`).
+- Exact release `3b15f7fc`, all four normal rollbacks, COM `36` and CN `37` database dumps, current
+  restore evidence, cron, runtime shared/private data, extension releases, credentials and useful
+  caches remain. COM `/opt/ss-erp/app` remains because cron references its Cloudflare updater. Both
+  regions retained all three service PIDs and healthy local HTTP checks; orphan backup evidence and
+  deleted-CWD process counts are zero.
+- COM cleanup receipt body/file SHA-256 values are
+  `f04fa56f6dbbd711c9c751d36f79e59c295e4b1c75b21b0ba9e31781039139a0` and
+  `f1b7b08463c9c22da9b385b4f19bfa1b87056a69fd73ad3c66591904b83bdba9`; CN values are
+  `77b69085dffeeb4ac9b65f66bb7ffc9108a8fa29c39d832fdf7e63a1488becab` and
+  `6a570124ace09e27df273b203e1a0b8939eafe3503abe2865bc9b4ad889484d8`. Root-owned `0600` remote
+  receipts were copied into the local private evidence root. No rollout flag, database, Provider,
+  ERP ingest/publish or Ozon state changed.
 - CN payload cleanup (2026-08-10) retired `12` exact unreferenced/reproducible failed, timeout,
   abandoned-stage and build-quarantine payloads after dry-run manifest SHA-256
   `b10106a6aba11a656775eb3727c6da0887ec8d93bebe4f9a0e82da02377f99c6`. Measured reclaimed space
