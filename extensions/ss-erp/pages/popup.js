@@ -211,20 +211,17 @@
   }
 
   function requestSellerOzonAccess(callback) {
-    if (!chrome.permissions || typeof chrome.permissions.request !== 'function') {
-      callback({ ok: true });
+    var access = globalThis.SS_ERP_SELLER_ORIGIN_ACCESS;
+    if (!access || typeof access.request !== 'function') {
+      callback({ ok: false, error: 'Seller 站点权限组件未加载，请重新加载扩展后重试。' });
       return;
     }
-
-    var permissions = { origins: ['https://seller.ozon.ru/*'] };
-    chrome.permissions.request(permissions, function (granted) {
-      if (chrome.runtime.lastError) {
-        callback({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
-        return;
-      }
-      callback(granted
-        ? { ok: true }
-        : { ok: false, error: '未授权访问 seller.ozon.ru' });
+    access.request(function (result) {
+      callback(result && result.ok ? result : {
+        ok: false,
+        errorCode: result && result.errorCode,
+        error: formatRuntimeError(result && result.error),
+      });
     });
   }
 
@@ -876,7 +873,7 @@
     var endpoint = normalizeErpBaseUrl(value || '');
     try {
       return endpoint ? new URL(endpoint).host : '';
-    } catch (_error) {
+    } catch {
       return endpoint.replace(/^https?:\/\//, '');
     }
   }

@@ -61,6 +61,8 @@
   var lastRequestIdNode = document.getElementById('lastRequestId');
   var lastResponseStatusNode = document.getElementById('lastResponseStatus');
   var lastReadModeNode = document.getElementById('lastReadMode');
+  var extensionRuntimeIdentityNode = document.getElementById('extensionRuntimeIdentity');
+  var sellerPermissionStatusNode = document.getElementById('sellerPermissionStatus');
   var packingFeeInput = document.getElementById('packingFeeInput');
   var customFeesInput = document.getElementById('customFeesInput');
   var saveFeeSettingsBtn = document.getElementById('saveFeeSettingsBtn');
@@ -80,6 +82,7 @@
   var visibleServiceIds = [];
   var modalReturnFocus = null;
   var selectorOpen = false;
+  var sellerPermissionStatusSequence = 0;
 
   function on(node, eventName, handler) {
     if (node) node.addEventListener(eventName, handler);
@@ -175,20 +178,18 @@
 
   function requestSellerOzonAccess() {
     return new Promise(function (resolve) {
-      if (!chrome.permissions || typeof chrome.permissions.request !== 'function') {
-        resolve({ ok: true });
+      var access = globalThis.SS_ERP_SELLER_ORIGIN_ACCESS;
+      if (!access || typeof access.request !== 'function') {
+        resolve({ ok: false, error: 'Seller 站点权限组件未加载，请重新加载扩展后重试。' });
         return;
       }
-
-      var permissions = { origins: ['https://seller.ozon.ru/*'] };
-      chrome.permissions.request(permissions, function (granted) {
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
-          return;
-        }
-        resolve(granted
-          ? { ok: true }
-          : { ok: false, error: '未授权访问 seller.ozon.ru，无法读取卖家后台分析数据。请允许扩展访问 seller.ozon.ru 后重试。' });
+      access.request(function (result) {
+        refreshSellerPermissionStatus();
+        resolve(result && result.ok ? result : {
+          ok: false,
+          errorCode: result && result.errorCode,
+          error: formatRuntimeError(result && result.error),
+        });
       });
     });
   }
@@ -345,8 +346,51 @@
         var manifest = chrome.runtime.getManifest();
         version = manifest && manifest.version ? manifest.version : version;
       }
-    } catch (error) {}
+    } catch {}
     setText(extensionVersionNode, version);
+  }
+
+  function renderExtensionRuntimeIdentity() {
+    var version = 'unknown';
+    var runtimeId = '';
+    try {
+      var manifest = chrome.runtime.getManifest();
+      version = manifest && manifest.version ? manifest.version : version;
+      runtimeId = String(chrome.runtime.id || '');
+    } catch {}
+    var identity = 'v' + version + (runtimeId ? ' · ' + runtimeId : '');
+    setText(extensionRuntimeIdentityNode, identity);
+    if (extensionRuntimeIdentityNode) extensionRuntimeIdentityNode.title = identity;
+  }
+
+  function renderSellerPermissionStatus(result) {
+    if (!result || !result.ok) {
+      setText(sellerPermissionStatusNode, '检测失败');
+      return;
+    }
+    setText(sellerPermissionStatusNode, result.granted ? '当前配置文件已授权' : '当前配置文件未授权');
+  }
+
+  function refreshSellerPermissionStatus() {
+    var access = globalThis.SS_ERP_SELLER_ORIGIN_ACCESS;
+    if (!access || typeof access.inspect !== 'function') {
+      setText(sellerPermissionStatusNode, '检测组件未加载');
+      return;
+    }
+    var sequence = ++sellerPermissionStatusSequence;
+    access.inspect(function (result) {
+      if (sequence !== sellerPermissionStatusSequence) return;
+      renderSellerPermissionStatus(result);
+    });
+  }
+
+  function subscribeSellerPermissionStatus() {
+    var access = globalThis.SS_ERP_SELLER_ORIGIN_ACCESS;
+    if (!access || typeof access.subscribe !== 'function') return;
+    access.subscribe(function (result) {
+      sellerPermissionStatusSequence += 1;
+      renderSellerPermissionStatus(result);
+    });
   }
 
   function renderHealthSummary() {
@@ -813,6 +857,7 @@
 
   on(refreshDiagnosticBtn, 'click', function () {
     loadStatus('同步诊断已刷新。');
+    refreshSellerPermissionStatus();
   });
 
   on(openSellerBtn, 'click', function () {
@@ -978,7 +1023,7 @@
       parsed.search = '';
       parsed.hash = '';
       return parsed.toString().replace(/\/+$/, '');
-    } catch (_error) {
+    } catch {
       return raw.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
     }
   }
@@ -988,7 +1033,7 @@
     if (!normalized) return '';
     try {
       return new URL(normalized).host;
-    } catch (_error) {
+    } catch {
       return normalized.replace(/^https?:\/\//, '');
     }
   }
@@ -1030,8 +1075,7 @@
       erpTokenInput.placeholder = '已使用安全设备授权，无需填写旧 Token';
     }
     if (!options || options.showStatus !== false) {
-      var host = endpointHost(endpoint);
-      setStatus(erpStatusNode, '设备已连接（授权店铺读取可用）' + (host ? ' · ' + host : ''), '');
+      updatePairedShopAccessStatus('正在验证授权店铺', '');
       setStatus(
         logisticsDistributionStatus,
         '已配对' + (status.deploymentId ? ' · ' + String(status.deploymentId) : ''),
@@ -1039,6 +1083,13 @@
       );
     }
     return true;
+  }
+
+  function updatePairedShopAccessStatus(label, tone) {
+    if (!pairedDeviceStatus || pairedDeviceStatus.state !== 'paired') return;
+    var endpoint = normalizeErpConnectionBaseUrl(pairedDeviceStatus.endpoint);
+    var host = endpointHost(endpoint);
+    setStatus(erpStatusNode, '设备已连接（' + label + '）' + (host ? ' · ' + host : ''), tone || '');
   }
 
   function refreshPairedDeviceStatus(options) {
@@ -1189,6 +1240,7 @@
       return refreshPairedDeviceStatus({ showStatus: true }).then(function (status) {
         if (status && status.state === 'paired') applyPairedDeviceStatus(status);
         setStatus(logisticsDistributionStatus, '设备配对成功', 'success');
+        loadAnalyticsShops();
         return true;
       });
     }).catch(function () {
@@ -1431,11 +1483,8 @@
     refreshPairedDeviceStatus({ showStatus: false }).then(function (status) {
       if (status && status.state === 'paired') {
         applyPairedDeviceStatus(status, { showStatus: false });
-        setStatus(
-          erpStatusNode,
-          '设备已连接（授权店铺读取可用）' + (endpointHost(status.endpoint) ? ' · ' + endpointHost(status.endpoint) : ''),
-          '',
-        );
+        updatePairedShopAccessStatus('正在验证授权店铺', '');
+        loadAnalyticsShops();
         return;
       }
       if (status && status.state === 'unreachable') {
@@ -1502,6 +1551,7 @@
   var syncAnalyticsBtn = document.getElementById('syncAnalyticsBtn');
   var syncGraphsBtn = document.getElementById('syncGraphsBtn');
   var analyticsStatusNode = document.getElementById('analyticsStatus');
+  var analyticsShopLoadSequence = 0;
 
   function setAnalyticsStatus(text, tone) {
     if (!analyticsStatusNode) return;
@@ -1510,11 +1560,15 @@
   }
 
   function loadAnalyticsShops() {
+    var sequence = ++analyticsShopLoadSequence;
     pairedDeviceStatusPromise.catch(function () { return null; }).then(function () {
+      if (sequence !== analyticsShopLoadSequence) return null;
       return sendMessage({ type: 'spb-self-hosted:get-ozon-shops' });
     }).then(function (response) {
+      if (sequence !== analyticsShopLoadSequence) return;
       if (!analyticsShopSelect) return;
       if (!response || !response.ok) {
+        updatePairedShopAccessStatus('授权店铺读取失败', 'warn');
         var statusName = pairedDeviceStatus && pairedDeviceStatus.state;
         var message = statusName === 'paired'
           ? '设备已连接，但暂时无法读取授权店铺'
@@ -1530,9 +1584,11 @@
       }
       var shops = response.data || [];
       if (!shops.length) {
+        updatePairedShopAccessStatus('未授权任何店铺', 'warn');
         analyticsShopSelect.innerHTML = '<option value="">没有 OZON 店铺</option>';
         return;
       }
+      updatePairedShopAccessStatus('已授权 ' + shops.length + ' 个店铺', '');
       analyticsShopSelect.innerHTML = shops.map(function (shop) {
         return '<option value="' + shop.id + '">' + escapeHtml(shop.name) + '</option>';
       }).join('');
@@ -1817,6 +1873,9 @@
   });
 
   renderExtensionVersion();
+  renderExtensionRuntimeIdentity();
+  subscribeSellerPermissionStatus();
+  refreshSellerPermissionStatus();
   renderHealthSummary();
   loadStatus();
 }());

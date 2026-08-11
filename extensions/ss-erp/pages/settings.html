@@ -340,6 +340,8 @@
           <button id="refreshDiagnosticBtn" class="btn btn-muted" type="button">刷新状态</button>
         </div>
         <div class="diagnostic-grid">
+          <div><span>扩展实例</span><strong id="extensionRuntimeIdentity">读取中</strong></div>
+          <div><span>Seller 站点权限</span><strong id="sellerPermissionStatus">检测中</strong></div>
           <div><span>桥接标记</span><strong id="bridgeStatus">已检测到</strong></div>
           <div><span>最近请求 ID</span><strong id="lastRequestId">等待同步</strong></div>
           <div><span>最近响应</span><strong id="lastResponseStatus">等待状态</strong></div>
@@ -403,6 +405,7 @@
   <script src="../shared/logistics-rules/distribution-feature.js"></script>
   <script src="../shared/erp-adapter/deployment-defaults.js"></script>
   <script src="../shared/config-bridge/sync-schema.js"></script>
+  <script src="../shared/ozon/seller-origin-access.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

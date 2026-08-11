@@ -73,6 +73,11 @@ const steps = [
     args: ['--test', 'scripts/extension-ozon-list-performance-runtime.test.mjs'],
   },
   {
+    name: 'extension Seller origin access contract',
+    command: 'node',
+    args: ['scripts/extension-seller-origin-access.test.mjs'],
+  },
+  {
     name: 'Web extension device pairing contract',
     command: 'node',
     args: ['--test', 'scripts/web-extension-device-pairing.test.mjs'],

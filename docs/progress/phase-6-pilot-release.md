@@ -28,6 +28,15 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Seller permission/profile diagnosis (2026-08-12): the online BINI `1.0.304` session retained
+  Seller login and completed analytics synchronization. Failed and successful observations came
+  from different Chrome profiles/extension IDs, whose site grants and device sessions are isolated.
+  The development tree now exposes exact runtime identity and effective Seller access, verifies the
+  grant after a trusted request, fails closed on missing APIs, refreshes shops after pairing, and
+  rejects stale shop-list responses. Full preflight passed in `721.9` seconds; source/Cloud/Local
+  verification passed `454/454`, `459/459` and `455/455`, with only the two expected Local warnings.
+  This checkpoint is not deployed; production remains `cf657969` / `1.0.304` and no Provider, VPS
+  or Ozon write operation was performed.
 - Seamless connection/Cookie/list-performance replacement release (2026-08-11): exact target
   `cf6579697c4d44b2cfd2245cd7b580260feab874` / extension `1.0.304` passed target-bound QA-04 in
   `969` seconds with source `452/452`, Cloud `457/457` and Local `453/453`. Canonical acceptance

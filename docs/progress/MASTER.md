@@ -44,6 +44,21 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release Seller permission diagnosis (2026-08-12): an online BINI session proved that Ozon
+login and analytics synchronization remain functional on extension `1.0.304`. The intermittent
+failure was isolated to different Chrome profiles and extension IDs: site grants, device sessions
+and selected shops are profile-local and were being presented as one logical state. The development
+tree now reports the exact extension instance and effective `seller.ozon.ru` grant, rechecks the
+grant after every trusted permission request, fails closed when the permissions API is unavailable,
+refreshes shops after pairing, and prevents stale shop-list responses from replacing newer state.
+
+Complete `pnpm preflight` passed in `721.9` seconds. Final source/Cloud/Local package verification
+passed `454/454`, `459/459` and `455/455`; Local retains its two expected packaging warnings. The
+Seller permission and out-of-order shop response regression test, targeted lint and diff checks also
+pass, and independent review found no P0/P1/P2 issue. This is a development checkpoint only: the
+currently deployed and installed release remains `cf657969` / `1.0.304`; no replacement release,
+Provider call, VPS change or Ozon write was performed.
+
 Post-release seamless extension and Ozon list performance enhancement (2026-08-11): the
 development tree now supports a bounded, least-privileged automatic ERP device connection for
 accounts with exactly one active Ozon shop. The logged-in ERP page issues a one-time pairing code,
