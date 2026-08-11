@@ -63,7 +63,8 @@ authority changes and MV3 worker restarts.
 
 Final focused verification passed Server device tests `116/116`, extension auth/Cookie tests
 `16/16`, security sender tests, Ozon maintenance/auto-sync contracts, source package verification
-`452/452`, lint and workspace typechecks. Complete `pnpm preflight` passed in `753.5` seconds, and
+`452/452`, lint and workspace typechecks. Complete final-tree `pnpm preflight` passed in `734.1`
+seconds, and
 independent Server/Worker reviews found no remaining P0/P1/P2. This correction is committed and
 pushed only as source: it has not been packaged, signed, distributed, deployed or installed over
 BINI `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Overall progress

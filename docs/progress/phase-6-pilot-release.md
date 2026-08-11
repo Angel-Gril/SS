@@ -40,8 +40,8 @@ Progress: 3/3 tasks.
   same-shop FIFO, queue epochs, CAS config merging and a streaming `256 KiB` response ceiling close
   UNKNOWN, storage, authority, worker-restart and oversized-response retry paths. Server device
   tests passed `116/116`; extension focused passed `16/16`; security, Ozon maintenance/auto-sync,
-  source `452/452`, lint, typechecks and the `753.5`-second full preflight passed. Independent reviews
-  found no remaining P0/P1/P2.
+  source `452/452`, lint, typechecks and the final-tree `734.1`-second full preflight passed.
+  Independent reviews found no remaining P0/P1/P2.
 - This source correction is not packaged, signed, distributed, deployed or installed over BINI
   `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Phase 6 remains
   `3/3`; a separately authorized replacement release is required before production retest.
