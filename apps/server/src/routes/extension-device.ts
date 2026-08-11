@@ -121,8 +121,15 @@ const refreshSchema = z.object({
 }).strict();
 const OZON_CDN_COOKIE_MAX_LENGTH = 64 * 1024;
 const OZON_CDN_AUTH_BODY_LIMIT = OZON_CDN_COOKIE_MAX_LENGTH + 1024;
+function hasOzonCdnControlCharacter(value: string) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
+  }
+  return false;
+}
 const ozonCdnCompanyIdSchema = z.union([
-  z.string().trim().min(1).max(200).refine((value) => !/[\u0000-\u001F\u007F]/u.test(value)),
+  z.string().trim().min(1).max(200).refine((value) => !hasOzonCdnControlCharacter(value)),
   z.number().int().safe().positive().transform(String),
 ]);
 const ozonCdnAuthSchema = z.object({
@@ -130,7 +137,7 @@ const ozonCdnAuthSchema = z.object({
     .trim()
     .min(1)
     .max(OZON_CDN_COOKIE_MAX_LENGTH)
-    .refine((value) => !/[\u0000-\u001F\u007F]/u.test(value))
+    .refine((value) => !hasOzonCdnControlCharacter(value))
     .optional(),
   companyId: ozonCdnCompanyIdSchema.optional(),
 }).strict().refine((value) => value.cookie !== undefined || value.companyId !== undefined);

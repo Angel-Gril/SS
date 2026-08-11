@@ -24,10 +24,18 @@ function configRecord(config: Prisma.JsonValue | null): Record<string, Prisma.Js
     : {};
 }
 
+function hasControlCharacter(value: string) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
+  }
+  return false;
+}
+
 function safeIdentifier(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const normalized = String(value).trim();
-  return normalized && normalized.length <= 200 && !/[\u0000-\u001F\u007F]/u.test(normalized)
+  return normalized && normalized.length <= 200 && !hasControlCharacter(normalized)
     ? normalized
     : null;
 }
