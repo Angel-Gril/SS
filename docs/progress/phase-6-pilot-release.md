@@ -28,6 +28,36 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Seamless connection/Cookie/list-performance replacement release (2026-08-11): exact target
+  `cf6579697c4d44b2cfd2245cd7b580260feab874` / extension `1.0.304` passed target-bound QA-04 in
+  `969` seconds with source `452/452`, Cloud `457/457` and Local `453/453`. Canonical acceptance
+  and release-bindings SHA-256 values are
+  `e019f2b609f3a31de2b5c9ac7103ffa89afa888cb80f9f6f0ea9ca1a04b4fea4` and
+  `f9738e000f9a65cfc1c00eb1286413d832b9aae2dba0e9bbbfc30d07feecca23`.
+- COM/CN signed-package MV3 restart receipt SHA-256 values are
+  `eb2e55f49df0e3f11484131f60f5defa59ff3767fc529bd2d563ddeafca44a40` and
+  `f0d2f90c1bf332efd9d34f9eb62b0c4ea8e72f760e8096fb94cd29767615a648`; isolated
+  `1.0.303 -> 1.0.304` upgrade-smoke summary SHA-256 is
+  `c334eadf64e784b47cd779a508d5b2403c2e3b5634cc8cc6c71ce2aa188b669d`.
+- Both regions completed fresh backup/restore, `145` migrations, dark deployment, verifier,
+  `7`-check/`32`-request canaries and final fences. COM/CN fresh-backup attestation SHA-256 values
+  are `0381bc2e2f49c2d4a030e55cd7bdcc30adacee33bc6a2ae93e32ef9c6d0f2fbb` and
+  `8d6cc4443008bccfab9bc4f16b653f67a5aad9bf8af44a598ab37ca23ed8a52e`; dual-region zero-claim
+  SHA-256 is `f615168fabb287af56208c9b7e8c3edc126983ae80df591d7b8c81a2c1719ef5`.
+- DNS quorum and COM/CN website distribution SHA-256 values are
+  `1fb1c5f5bffe8c773618ddac3120d09c2e5d37ea03e96bcf80304017306a9e4b`,
+  `72da4570ebaed84c2a55e48de97480c5f8c4712408d3a09cbc9c9379af108941` and
+  `208684d5634f418be93ce0770f895ef87b3ae8a35fc1bdfab19fcbfa3a225651`.
+- BINI retained its fixed extension ID, managed path, profile fingerprint and one non-secret
+  profile after the atomic same-path upgrade. Trusted reload, active-worker and final
+  storage/permission checks passed in `OFFLINE_RELEASE_SMOKE`; installed-tree and closure SHA-256
+  values are `122da4428b74a6d576210e81cd7e27536b63a5adcfe60fab31a673ecccf725d3` and
+  `bbfc1d60bef5ea5ddf547dbde9a29f45d340f92e22c93c7cfab9f4b1dd86edf4`.
+- Final read-only checks confirmed both regions run `cf657969`, all six API/Worker/Web services are
+  active and every rollout row remains dark. No Provider, ERP ingest/publish or Ozon write occurred.
+  Fresh database recovery points are local to each VPS; remote backup storage remains unconfigured.
+  Phase 6 remains complete at `3/3` and overall progress remains `37/37`.
+
 - Scoped shop/Cookie post-release correction (2026-08-11): code commits `832efd75` and `f1639fd4`
   close the incomplete `1.0.302` device-auth migration that left popup shop discovery and Cookie
   status/update dependent on the optional legacy account token. New owner/shop/grant-bound device
@@ -63,8 +93,9 @@ Progress: 3/3 tasks.
   passed in `OFFLINE_RELEASE_SMOKE`; installed-tree and closure SHA-256 values are
   `099ab916aa3c28e5f9c7af7e3c3889f6c935fd6bb505c24f26d307d3f5f46b9d` and
   `87cef68f6c4d61e2477e0931bd33036e837c7a972dcbc9864542e6d32795a899`.
-- Final read-only checks confirmed both regions run `5fe3da68`, all six API/Worker/Web services are
-  active and every rollout row remains dark. No Provider, ERP ingest/publish or Ozon write occurred.
+- At that `1.0.303` checkpoint, final read-only checks confirmed both regions ran `5fe3da68`, all
+  six API/Worker/Web services were active and every rollout row remained dark. No Provider, ERP
+  ingest/publish or Ozon write occurred.
   Fresh database recovery points are local to each VPS; remote backup storage remains unconfigured.
   Phase 6 remains complete at `3/3`.
 
