@@ -28,6 +28,23 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Scoped shop/Cookie post-release correction (offline, 2026-08-11): code commit `832efd75`
+  closes the incomplete `1.0.302` device-auth migration that left popup shop discovery and Cookie
+  status/update dependent on the optional legacy account token. New owner/shop/grant-bound device
+  routes return only safe shop identity and Cookie presence/company metadata; Cookie bytes, shop
+  config and device tokens are never returned. Popup, Worker and automatic maintenance now use the
+  scoped device session exclusively.
+- Automatic writes require one unique live seller company match and stop Cookie, analytics and
+  graph writes on missing, conflicting or ambiguous evidence. Pre-transport unresolved guards,
+  same-shop FIFO, queue epochs, CAS config merging and a streaming `256 KiB` response ceiling close
+  UNKNOWN, storage, authority, worker-restart and oversized-response retry paths. Server device
+  tests passed `116/116`; extension focused passed `16/16`; security, Ozon maintenance/auto-sync,
+  source `452/452`, lint, typechecks and the `753.5`-second full preflight passed. Independent reviews
+  found no remaining P0/P1/P2.
+- This source correction is not packaged, signed, distributed, deployed or installed over BINI
+  `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Phase 6 remains
+  `3/3`; a separately authorized replacement release is required before production retest.
+
 - Analytics-auth correction release (2026-08-11): commit `cd0848a5` / extension `1.0.302` passed
   QA-04 (source `452`, Cloud `457`, Local `453`), signed-package restart and `1.0.301 -> 1.0.302`
   upgrade smokes. Both regions completed fresh backup/restore, `145` migrations, dark deployment,

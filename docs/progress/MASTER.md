@@ -44,6 +44,30 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release scoped shop/Cookie correction (offline, 2026-08-11): code commit
+`832efd75611eec1291a55b655562010c6872f304` fixes the production symptom reported against
+extension `1.0.302`. The root cause was an incomplete authentication migration: settings-page
+analytics used the scoped device session, while the popup shop list and Ozon Cookie status/update
+paths still called account-token `/api/shops` routes. A correctly paired device therefore appeared
+connected but returned no shops when the optional legacy account token was empty.
+
+The Server now exposes owner/shop/grant-bound device routes for safe Ozon shop identity and
+Cookie-status/update metadata. Responses never include Cookie bytes, shop config or device tokens;
+updates require `capture:write`, bounded/control-free inputs and CAS config merging. Popup, worker,
+Cookie maintenance and analytics discovery now use only scoped device auth. Automatic writes require
+one unique live seller company match. Ambiguous/missing matches stop Cookie, analytics and graph
+writes. A durable pre-transport unresolved guard, strict same-shop FIFO, queue epochs and a real
+streaming `256 KiB` response limit prevent blind retries across network failures, storage failures,
+authority changes and MV3 worker restarts.
+
+Final focused verification passed Server device tests `116/116`, extension auth/Cookie tests
+`16/16`, security sender tests, Ozon maintenance/auto-sync contracts, source package verification
+`452/452`, lint and workspace typechecks. Complete `pnpm preflight` passed in `753.5` seconds, and
+independent Server/Worker reviews found no remaining P0/P1/P2. This correction is committed and
+pushed only as source: it has not been packaged, signed, distributed, deployed or installed over
+BINI `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Overall progress
+remains `37/37`; replacing affected `1.0.302` installations requires a separately authorized release.
+
 Post-release analytics-auth correction release (2026-08-11): exact commit
 `cd0848a501a7cab758b161afef805fecc88850a9` is packaged as extension `1.0.302`. QA-04 passed in
 `937` seconds: source `452/452`, Cloud `457/457`, Local `453/453`, lint, workspace typechecks and
