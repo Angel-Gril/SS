@@ -13,6 +13,7 @@ import {
   ShopAnalyticsPayloadError,
   type ShopAnalyticsSnapshotData,
 } from '../services/shop-analytics-snapshot.js';
+import { ExtensionDeviceShopConfigConflictError } from '../services/extension-device-shop-prisma.js';
 
 type ExtensionDeviceSessionService = ReturnType<typeof createExtensionDeviceSessionService>;
 
@@ -48,6 +49,8 @@ export interface ExtensionDeviceAuthorizedShop {
   platform: string;
   name: string;
   status: string;
+  clientId?: string | null;
+  companyId?: string | null;
 }
 
 export interface ExtensionDeviceShopRepository {
@@ -55,6 +58,22 @@ export interface ExtensionDeviceShopRepository {
     ownerUserId: string;
     shopIds: string[];
   }): Promise<ExtensionDeviceAuthorizedShop[]>;
+  readOzonCdnAuth?(input: {
+    ownerUserId: string;
+    shopId: string;
+  }): Promise<ExtensionDeviceOzonCdnAuthStatus | null>;
+  updateOzonCdnAuth?(input: {
+    ownerUserId: string;
+    shopId: string;
+    cookie?: string;
+    companyId?: string;
+  }): Promise<ExtensionDeviceOzonCdnAuthStatus | null>;
+}
+
+export interface ExtensionDeviceOzonCdnAuthStatus {
+  hasCookie: boolean;
+  companyId: string | null;
+  updatedAt: string | null;
 }
 
 export interface ExtensionDeviceShopAnalyticsRepository {
@@ -100,6 +119,21 @@ const claimSchema = z.object({
 const refreshSchema = z.object({
   refreshToken: z.string().trim().min(32).max(1000),
 }).strict();
+const OZON_CDN_COOKIE_MAX_LENGTH = 64 * 1024;
+const OZON_CDN_AUTH_BODY_LIMIT = OZON_CDN_COOKIE_MAX_LENGTH + 1024;
+const ozonCdnCompanyIdSchema = z.union([
+  z.string().trim().min(1).max(200).refine((value) => !/[\u0000-\u001F\u007F]/u.test(value)),
+  z.number().int().safe().positive().transform(String),
+]);
+const ozonCdnAuthSchema = z.object({
+  cookie: z.string()
+    .trim()
+    .min(1)
+    .max(OZON_CDN_COOKIE_MAX_LENGTH)
+    .refine((value) => !/[\u0000-\u001F\u007F]/u.test(value))
+    .optional(),
+  companyId: ozonCdnCompanyIdSchema.optional(),
+}).strict().refine((value) => value.cookie !== undefined || value.companyId !== undefined);
 export function extensionDeviceClaimRateLimitKey(request: FastifyRequest): string {
   return request.ip;
 }
@@ -191,6 +225,7 @@ function deviceShopContext(
   request: FastifyRequest,
   reply: FastifyReply,
   shopId: string,
+  requiredScope: 'capture:write' | null = 'capture:write',
 ): ReturnType<typeof deviceContext> {
   const device = deviceContext(request);
   if (!device) {
@@ -210,7 +245,7 @@ function deviceShopContext(
     return null;
   }
   const scopes = (request as any).device?.scopes;
-  if (!Array.isArray(scopes) || !scopes.includes('capture:write')) {
+  if (requiredScope && (!Array.isArray(scopes) || !scopes.includes(requiredScope))) {
     reply.status(403).send({
       code: 0,
       errorCode: 'insufficient_scope',
@@ -227,6 +262,33 @@ function invalidAnalyticsPayload(reply: FastifyReply) {
     errorCode: 'invalid_analytics_payload',
     msg: '分析数据无效',
   });
+}
+
+function invalidOzonCdnAuthPayload(reply: FastifyReply) {
+  return reply.status(400).send({
+    code: 0,
+    errorCode: 'invalid_ozon_cdn_auth_payload',
+    msg: 'Ozon CDN 认证数据无效',
+  });
+}
+
+function ozonCdnAuthResponseData(status: ExtensionDeviceOzonCdnAuthStatus) {
+  return {
+    hasCookie: status.hasCookie === true,
+    companyId: typeof status.companyId === 'string' ? status.companyId : null,
+    updatedAt: typeof status.updatedAt === 'string' ? status.updatedAt : null,
+  };
+}
+
+function authorizedShopResponseData(shop: ExtensionDeviceAuthorizedShop) {
+  return {
+    id: shop.id,
+    platform: shop.platform,
+    name: shop.name,
+    status: shop.status,
+    clientId: typeof shop.clientId === 'string' ? shop.clientId : null,
+    companyId: typeof shop.companyId === 'string' ? shop.companyId : null,
+  };
 }
 export async function extensionDeviceRoutes(
   app: FastifyInstance,
@@ -252,7 +314,79 @@ export async function extensionDeviceRoutes(
         shopIds: device.allowedShopIds,
       });
       reply.header('Cache-Control', 'no-store');
-      return reply.send({ code: 1, msg: 'ok', data });
+      return reply.send({ code: 1, msg: 'ok', data: data.map(authorizedShopResponseData) });
+    });
+  }
+
+  const readOzonCdnAuth = options.shopRepository?.readOzonCdnAuth;
+  if (options.authenticateDevice && readOzonCdnAuth) {
+    app.get('/shops/:shopId/ozon-cdn-auth', {
+      preHandler: [options.authenticateDevice],
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const params = shopParamsSchema.safeParse(request.params);
+      if (!params.success) return invalidInput(reply);
+      const device = deviceShopContext(request, reply, params.data.shopId, null);
+      if (!device) return reply;
+
+      const status = await readOzonCdnAuth({
+        ownerUserId: device.ownerUserId,
+        shopId: params.data.shopId,
+      });
+      if (!status) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      return reply.send({ code: 1, msg: 'ok', data: ozonCdnAuthResponseData(status) });
+    });
+  }
+
+  const updateOzonCdnAuth = options.shopRepository?.updateOzonCdnAuth;
+  if (options.authenticateShopAnalyticsDevice && updateOzonCdnAuth) {
+    app.put('/shops/:shopId/ozon-cdn-auth', {
+      bodyLimit: OZON_CDN_AUTH_BODY_LIMIT,
+      preHandler: [options.authenticateShopAnalyticsDevice],
+    }, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const params = shopParamsSchema.safeParse(request.params);
+      if (!params.success) return invalidInput(reply);
+      const parsed = ozonCdnAuthSchema.safeParse(request.body);
+      if (!parsed.success) return invalidOzonCdnAuthPayload(reply);
+      const device = deviceShopContext(request, reply, params.data.shopId);
+      if (!device) return reply;
+
+      let status;
+      try {
+        status = await updateOzonCdnAuth({
+          ownerUserId: device.ownerUserId,
+          shopId: params.data.shopId,
+          ...parsed.data,
+        });
+      } catch (error) {
+        if (error instanceof ExtensionDeviceShopConfigConflictError) {
+          return reply.status(409).send({
+            code: 0,
+            errorCode: 'ozon_cdn_auth_conflict',
+            msg: '店铺配置已变化，请重新同步',
+          });
+        }
+        throw error;
+      }
+      if (!status) {
+        return reply.status(404).send({
+          code: 0,
+          errorCode: 'device_shop_not_found',
+          msg: '店铺未授权给该设备',
+        });
+      }
+      return reply.send({
+        code: 1,
+        msg: '已保存',
+        data: ozonCdnAuthResponseData(status),
+      });
     });
   }
 

@@ -35,19 +35,34 @@ assert.match(
 );
 
 const companyIdCandidateMatch = serviceWorker.match(
-  /const companyIdCandidates\s*=\s*preferStoredCompanyId\s*\?\s*\[([^\]]+)\]\s*:\s*\[([^\]]+)\]/,
+  /const companyIdCandidates\s*=\s*requireCompanyMatch\s*\?\s*\[([^\]]+)\]\s*:\s*preferStoredCompanyId\s*\?\s*\[([^\]]+)\]\s*:\s*\[([^\]]+)\]/,
 );
 assert.ok(companyIdCandidateMatch, 'cookie sync should define explicit companyId candidate orders');
 const candidateNames = (value) => value.split(',').map((name) => name.trim());
 assert.deepEqual(
   candidateNames(companyIdCandidateMatch[1]),
+  ['payloadCompanyId'],
+  'automatic sync should use only the exact companyId resolved for the authorized shop',
+);
+assert.deepEqual(
+  candidateNames(companyIdCandidateMatch[2]),
   ['storedCompanyId', 'payloadCompanyId', 'tabCompanyId', 'capturedCompanyId', 'cookieCompanyId'],
   'an explicit stored-shop sync should prefer the selected shop companyId',
 );
 assert.deepEqual(
-  candidateNames(companyIdCandidateMatch[2]),
+  candidateNames(companyIdCandidateMatch[3]),
   ['tabCompanyId', 'payloadCompanyId', 'capturedCompanyId', 'cookieCompanyId', 'storedCompanyId'],
   'normal sync should prefer live browser evidence and keep stored companyId as the final fallback',
+);
+assert.match(
+  serviceWorker,
+  /requireCompanyMatch[\s\S]{0,320}liveCompanyIds\.length === 0/,
+  'automatic sync should fail closed when no live seller companyId is available',
+);
+assert.match(
+  serviceWorker,
+  /if \(matches\.length === 1 && matches\[0\]\.id\)/,
+  'automatic shop resolution should reject an ambiguous companyId match',
 );
 assert.match(
   serviceWorker,

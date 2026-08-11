@@ -2,6 +2,7 @@ import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionDeviceClaimRateLimitKey, extensionDeviceRoutes } from '../routes/extension-device.js';
 import { ExtensionDeviceSessionError } from '../services/extension-device-session.js';
+import { ExtensionDeviceShopConfigConflictError } from '../services/extension-device-shop-prisma.js';
 
 const NOW = new Date('2026-07-12T08:00:00.000Z');
 
@@ -279,6 +280,10 @@ describe('extension device routes', () => {
       platform: 'OZON',
       name: 'BINI',
       status: 'ACTIVE',
+      clientId: 'client-1',
+      companyId: 'company-1',
+      ozonCdnCookie: 'must-not-leak',
+      config: { privateSetting: 'must-not-leak' },
     }]);
     const app = Fastify();
     await app.register(extensionDeviceRoutes, {
@@ -293,10 +298,18 @@ describe('extension device routes', () => {
     expect(response.headers['cache-control']).toContain('no-store');
     expect(response.json()).toMatchObject({
       code: 1,
-      data: [{ id: 'shop-1', platform: 'OZON', name: 'BINI' }],
+      data: [{
+        id: 'shop-1',
+        platform: 'OZON',
+        name: 'BINI',
+        clientId: 'client-1',
+        companyId: 'company-1',
+      }],
     });
     expect(response.json().data[0]).not.toHaveProperty('balance');
     expect(response.json().data[0]).not.toHaveProperty('productCount');
+    expect(response.json().data[0]).not.toHaveProperty('ozonCdnCookie');
+    expect(response.json().data[0]).not.toHaveProperty('config');
     expect(listAuthorizedShops).toHaveBeenCalledWith({
       ownerUserId: 'owner-1',
       shopIds: ['shop-1', 'shop-2'],
@@ -321,6 +334,174 @@ describe('extension device routes', () => {
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ errorCode: 'invalid_device_context' });
     expect(listAuthorizedShops).not.toHaveBeenCalled();
+  });
+
+  it('reads and updates Ozon CDN auth only through the granted device shop', async () => {
+    const deps = dependencies();
+    const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        scopes: ['capture:write'],
+      };
+    });
+    const readOzonCdnAuth = vi.fn(async () => ({
+      hasCookie: true,
+      companyId: 'company-1',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }));
+    const updateOzonCdnAuth = vi.fn(async (input: any) => ({
+      hasCookie: Boolean(input.cookie),
+      companyId: input.companyId || null,
+      updatedAt: '2026-08-11T05:01:00.000Z',
+    }));
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateDevice,
+      authenticateShopAnalyticsDevice: authenticateDevice,
+      shopRepository: {
+        listAuthorizedShops: vi.fn(async () => []),
+        readOzonCdnAuth,
+        updateOzonCdnAuth,
+      },
+    } as any);
+
+    const status = await app.inject({
+      method: 'GET',
+      url: '/shops/shop-1/ozon-cdn-auth',
+    });
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: 'session=secret', companyId: 'company-1' },
+    });
+    const denied = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-2/ozon-cdn-auth',
+      payload: { cookie: 'session=other' },
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.headers['cache-control']).toContain('no-store');
+    expect(status.json()).toEqual({
+      code: 1,
+      msg: 'ok',
+      data: {
+        hasCookie: true,
+        companyId: 'company-1',
+        updatedAt: '2026-08-11T05:00:00.000Z',
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({
+      code: 1,
+      data: { hasCookie: true, companyId: 'company-1' },
+    });
+    expect(denied.statusCode).toBe(404);
+    expect(denied.json()).toMatchObject({ errorCode: 'device_shop_not_found' });
+    expect(readOzonCdnAuth).toHaveBeenCalledWith({ ownerUserId: 'owner-1', shopId: 'shop-1' });
+    expect(updateOzonCdnAuth).toHaveBeenCalledTimes(1);
+    expect(updateOzonCdnAuth).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      cookie: 'session=secret',
+      companyId: 'company-1',
+    });
+  });
+
+  it('requires capture:write and a bounded exact payload for device Cookie updates', async () => {
+    const deps = dependencies();
+    const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        scopes: ['listing:review'],
+      };
+    });
+    const updateOzonCdnAuth = vi.fn(async () => null);
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateDevice,
+      authenticateShopAnalyticsDevice: authenticateDevice,
+      shopRepository: {
+        listAuthorizedShops: vi.fn(async () => []),
+        readOzonCdnAuth: vi.fn(async () => null),
+        updateOzonCdnAuth,
+      },
+    } as any);
+
+    const missingScope = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: 'session=secret' },
+    });
+    const malformed = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: '', companyId: '', unexpected: true },
+    });
+    const controlCompanyId = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { companyId: 'company-1\r\nInjected: value' },
+    });
+    const controlCookie = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: 'session=secret\u001fmore' },
+    });
+
+    expect(missingScope.statusCode).toBe(403);
+    expect(missingScope.json()).toMatchObject({ errorCode: 'insufficient_scope' });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({ errorCode: 'invalid_ozon_cdn_auth_payload' });
+    expect(controlCompanyId.statusCode).toBe(400);
+    expect(controlCompanyId.json()).toMatchObject({
+      errorCode: 'invalid_ozon_cdn_auth_payload',
+    });
+    expect(controlCookie.statusCode).toBe(400);
+    expect(controlCookie.json()).toMatchObject({
+      errorCode: 'invalid_ozon_cdn_auth_payload',
+    });
+    expect(updateOzonCdnAuth).not.toHaveBeenCalled();
+  });
+
+  it('returns a stable conflict when a device Cookie update loses every CAS attempt', async () => {
+    const deps = dependencies();
+    const authenticateDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        scopes: ['capture:write'],
+      };
+    });
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateDevice,
+      authenticateShopAnalyticsDevice: authenticateDevice,
+      shopRepository: {
+        listAuthorizedShops: vi.fn(async () => []),
+        readOzonCdnAuth: vi.fn(async () => null),
+        updateOzonCdnAuth: vi.fn(async () => {
+          throw new ExtensionDeviceShopConfigConflictError();
+        }),
+      },
+    } as any);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: 'session=secret' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ errorCode: 'ozon_cdn_auth_conflict' });
   });
 
   it('stores summary and graph analytics only through the paired device shop authority', async () => {

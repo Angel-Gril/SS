@@ -5556,17 +5556,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             };
           }
           if (deviceResult && deviceResult.ok) return deviceResult;
-          // Once the new reader is present, do not let a legacy account token
-          // bypass a paired device's shop grants. Legacy is allowed only when
-          // the device is explicitly unpaired (or on an old package with no
-          // reader at all).
-          if (!deviceResult || deviceResult.errorCode !== 'device_unpaired') {
-            return deviceResult || {
-              ok: false,
-              errorCode: 'device_shop_read_failed',
-              error: '设备店铺读取失败',
-            };
-          }
+          // Once this scoped reader exists, never fall back to an account-wide
+          // legacy token. A revoked or unpaired device must be paired again.
+          return deviceResult || {
+            ok: false,
+            errorCode: 'device_shop_read_failed',
+            error: '设备店铺读取失败',
+          };
         }
 
         // Compatibility fallback for older packages or an explicitly supplied

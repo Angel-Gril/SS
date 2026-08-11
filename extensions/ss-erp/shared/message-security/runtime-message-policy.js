@@ -181,6 +181,7 @@
     'ozon-calc:erp-package-export',
     'ozon-calc:erp-package-summary',
     'ozon-calc:erp-package-push',
+    'ozon-calc:get-ozon-cdn-auth',
     'ozon-calc:sync-ozon-cookie',
     'ozon-calc:sync-current-ozon-cookie',
     'ozon-calc:auto-sync-maintenance',

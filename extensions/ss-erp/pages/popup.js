@@ -980,41 +980,41 @@
   }
 
   // Sync handlers
+  function readAuthorizedOzonShops(callback) {
+    sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops' }, function (response) {
+      if (!response || !response.ok || !Array.isArray(response.data)) {
+        callback((response && response.error) || '暂时无法读取授权店铺', []);
+        return;
+      }
+      callback(null, response.data.filter(function (shop) {
+        return String(shop && shop.platform || '').toUpperCase() === 'OZON';
+      }));
+    });
+  }
+
   function getSelectedShopId(callback) {
-    getErpConnectionStorage(['ss_erp_selected_shop'], function (conn, result) {
-      var baseUrl = conn.baseUrl;
-      var token = conn.token;
-      if (!baseUrl || !token) return callback(null);
-
-      fetch(baseUrl + '/api/shops', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      }).then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.code === 1 && data.data && data.data.length > 0) {
-            var shops = data.data;
-            var ozonShops = shops.filter(function (s) { return String(s.platform || '').toUpperCase() === 'OZON'; });
-            var candidates = ozonShops.length ? ozonShops : shops;
-            var uiShopId = cookieShopSelect && cookieShopSelect.value ? cookieShopSelect.value : '';
-            var uiShop = candidates.find(function (s) { return s.id === uiShopId; });
-            if (uiShop) {
-              chrome.storage.local.set({ ss_erp_selected_shop: uiShop.id, ss_erp_cookie_shop: uiShop.id });
-              return callback(uiShop.id);
-            }
-            var cachedShopId = result.ss_erp_selected_shop;
-            var cachedShop = candidates.find(function (s) { return s.id === cachedShopId; });
-            if (cachedShop) return callback(cachedShop.id);
-
-            var id = candidates[0].id;
-            chrome.storage.local.set({ ss_erp_selected_shop: id });
-            callback(id);
-          } else {
-            chrome.storage.local.remove(['ss_erp_selected_shop']);
-            callback(null);
-          }
-        }).catch(function () {
+    chrome.storage.local.get(['ss_erp_selected_shop'], function (result) {
+      readAuthorizedOzonShops(function (_error, shops) {
+        if (!shops.length) {
           chrome.storage.local.remove(['ss_erp_selected_shop']);
           callback(null);
-        });
+          return;
+        }
+        var uiShopId = cookieShopSelect && cookieShopSelect.value ? cookieShopSelect.value : '';
+        var uiShop = shops.find(function (shop) { return shop.id === uiShopId; });
+        if (uiShop) {
+          chrome.storage.local.set({ ss_erp_selected_shop: uiShop.id, ss_erp_cookie_shop: uiShop.id });
+          callback(uiShop.id);
+          return;
+        }
+        var cachedShop = shops.find(function (shop) { return shop.id === result.ss_erp_selected_shop; });
+        if (cachedShop) {
+          callback(cachedShop.id);
+          return;
+        }
+        chrome.storage.local.set({ ss_erp_selected_shop: shops[0].id });
+        callback(shops[0].id);
+      });
     });
   }
 
@@ -1136,32 +1136,32 @@
   // 加载店铺列表到下拉框
   function loadShopsToSelect() {
     if (!cookieShopSelect) return;
-    getErpConnectionStorage(['ss_erp_cookie_shop'], function (conn, result) {
-      var baseUrl = conn.baseUrl;
-      var token = conn.token;
-      if (!baseUrl || !token) return;
-
-      fetch(baseUrl + '/api/shops', { headers: { 'Authorization': 'Bearer ' + token } })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.code !== 1 || !Array.isArray(data.data)) return;
-          var ozonShops = data.data.filter(function (s) { return (s.platform || '').toUpperCase() === 'OZON'; });
-          while (cookieShopSelect.options.length > 1) cookieShopSelect.remove(1);
-          ozonShops.forEach(function (s) {
-            var opt = document.createElement('option');
-            opt.value = s.id;
-            opt.textContent = s.name + (s.clientId ? ' (' + s.clientId + ')' : '');
-            cookieShopSelect.appendChild(opt);
-          });
-          var cachedShopId = result.ss_erp_cookie_shop;
-          var cachedExists = ozonShops.some(function (s) { return s.id === cachedShopId; });
-          if (cachedShopId && cachedExists) {
-            cookieShopSelect.value = cachedShopId;
-            loadShopAuthInfo(cachedShopId);
-          } else if (cachedShopId) {
-            chrome.storage.local.remove(['ss_erp_cookie_shop']);
-          }
-        }).catch(function () {});
+    chrome.storage.local.get(['ss_erp_cookie_shop'], function (result) {
+      readAuthorizedOzonShops(function (error, shops) {
+        cookieShopSelect.innerHTML = '<option value="">选择目标店铺</option>';
+        if (error) {
+          cookieShopSelect.options[0].textContent = error;
+          return;
+        }
+        if (!shops.length) {
+          cookieShopSelect.options[0].textContent = '没有已授权的 OZON 店铺';
+          chrome.storage.local.remove(['ss_erp_cookie_shop']);
+          return;
+        }
+        shops.forEach(function (shop) {
+          var opt = document.createElement('option');
+          opt.value = shop.id;
+          opt.textContent = shop.name || shop.id;
+          cookieShopSelect.appendChild(opt);
+        });
+        var selected = shops.find(function (shop) { return shop.id === result.ss_erp_cookie_shop; }) || shops[0];
+        cookieShopSelect.value = selected.id;
+        chrome.storage.local.set({
+          ss_erp_cookie_shop: selected.id,
+          ss_erp_selected_shop: selected.id
+        });
+        loadShopAuthInfo(selected.id);
+      });
     });
   }
 
@@ -1171,28 +1171,15 @@
       callback({ companyId: '', updatedAt: '' });
       return;
     }
-    getErpConnectionStorage([], function (conn) {
-      var baseUrl = conn.baseUrl;
-      var token = conn.token;
-      if (!baseUrl || !token) {
-        callback({ companyId: '', updatedAt: '' });
-        return;
-      }
-      fetch(baseUrl + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
-        headers: { 'Authorization': 'Bearer ' + token }
-      }).then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.code === 1 && data.data) {
-            callback({
-              companyId: data.data.companyId ? String(data.data.companyId) : '',
-              updatedAt: data.data.updatedAt || ''
-            });
-            return;
-          }
-          callback({ companyId: '', updatedAt: '' });
-        }).catch(function () {
-          callback({ companyId: '', updatedAt: '' });
-        });
+    sendRuntimeMessage({
+      type: 'ozon-calc:get-ozon-cdn-auth',
+      payload: { shopId: shopId }
+    }, function (response) {
+      var data = response && response.ok && response.data;
+      callback({
+        companyId: data && data.companyId ? String(data.companyId) : '',
+        updatedAt: data && data.updatedAt ? data.updatedAt : ''
+      });
     });
   }
 

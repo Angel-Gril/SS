@@ -148,6 +148,10 @@ const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms'
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
 let imageSearchJobsQueue = Promise.resolve();
 let ozonInsightCookieSyncInFlight = null;
+const ozonCdnWriteQueues = new Map();
+const ozonCdnWriteEpochs = new Map();
+const ozonCdnMemoryGuards = new Map();
+let ozonCdnGuardStorageQueue = Promise.resolve();
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
@@ -160,10 +164,14 @@ const OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_ses
 const OZON_SYNC_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 const SS_ERP_SYNC_TIMES_KEY = 'ss_erp_sync_times';
 const SS_ERP_OZON_AUTO_SYNC_STATE_KEY = 'ss_erp_ozon_auto_sync_state';
+const SS_ERP_OZON_CDN_WRITE_GUARDS_KEY = 'ss-erp:ozon-cdn-write-guards:v1';
+const SS_ERP_OZON_CDN_WRITE_GUARD_MAX = 50;
 const SS_ERP_OZON_AUTO_SYNC_ALARM_NAME = 'ss-erp:ozon-auto-sync';
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MS = SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES * 60 * 1000;
 const SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const SS_ERP_DEVICE_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
+const SS_ERP_DEVICE_COOKIE_REQUEST_MAX_BYTES = 66 * 1024;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
 const OZON_LOGISTICS_CALCULATOR_STATE_KEY = 'ozon-logistics:calculator-state:v1';
@@ -785,6 +793,59 @@ async function readExtensionDeviceStatus(verify) {
   };
 }
 
+async function readBoundedExtensionDeviceJson(response) {
+  const declaredHeader = response && response.headers
+    && typeof response.headers.get === 'function'
+    ? response.headers.get('content-length')
+    : null;
+  const declaredLength = declaredHeader === null ? NaN : Number(declaredHeader);
+  if (Number.isFinite(declaredLength)
+    && (declaredLength < 0 || declaredLength > SS_ERP_DEVICE_JSON_RESPONSE_MAX_BYTES)) {
+    throw new Error('设备响应过大');
+  }
+  if (!response || !response.body || typeof response.body.getReader !== 'function') {
+    throw new Error('设备响应不支持受限流式读取');
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      const value = part.value;
+      if (!ArrayBuffer.isView(value)
+        || !Number.isSafeInteger(value.byteLength)
+        || value.byteLength < 0) {
+        throw new Error('设备响应流无效');
+      }
+      byteLength += value.byteLength;
+      if (byteLength > SS_ERP_DEVICE_JSON_RESPONSE_MAX_BYTES) {
+        try { await reader.cancel(); } catch (_error) {}
+        throw new Error('设备响应过大');
+      }
+      chunks.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (_error) {}
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  });
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return text ? JSON.parse(text) : null;
+}
+
+function deviceShopIdentifier(value) {
+  const normalized = toText(value).trim();
+  return normalized && normalized.length <= 200 && !/[\u0000-\u001F\u007F]/.test(normalized)
+    ? normalized
+    : null;
+}
+
 // Read-only shop metadata for extension pages. The legacy settings page used
 // `/api/shops` with the old account-equivalent token, which is intentionally
 // empty after a scoped device pairing. Keep the device token inside the
@@ -810,7 +871,10 @@ async function readExtensionDeviceOzonShops() {
     return { ok: false, errorCode: 'device_unpaired', error: '设备未配对' };
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
   let response;
+  let body;
   try {
     response = await fetch(operation.baseUrl + '/api/extension-device/shops', {
       method: 'GET',
@@ -820,15 +884,31 @@ async function readExtensionDeviceOzonShops() {
       },
       credentials: 'omit',
       cache: 'no-store',
+      redirect: 'error',
+      signal: controller.signal,
     });
+    if (response.status === 401 || response.status === 410) {
+      await credentials.clearIfCurrent(operation, {
+        status: response.status,
+        reason: 'device_shop_authorization_revoked',
+      });
+      return {
+        ok: false,
+        errorCode: 'device_authorization_required',
+        error: '设备授权已失效，请重新配对',
+        status: response.status,
+      };
+    }
+    body = await readBoundedExtensionDeviceJson(response);
   } catch (error) {
     return {
       ok: false,
       errorCode: 'device_unreachable',
       error: error && error.message ? error.message : '设备店铺读取失败',
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
-  const body = await response.json().catch(() => null);
   if (!response.ok || !body || body.code !== 1 || !Array.isArray(body.data)) {
     return {
       ok: false,
@@ -836,14 +916,176 @@ async function readExtensionDeviceOzonShops() {
       error: body && (body.msg || body.error) || '设备店铺读取失败',
     };
   }
+  if (!await credentials.isOperationCurrent(operation)) {
+    return {
+      ok: false,
+      errorCode: 'device_authority_changed',
+      error: '设备授权在请求期间已变化，请刷新状态',
+    };
+  }
   return {
     ok: true,
     authMode: 'device',
-    data: body.data.filter((shop) => String(shop && shop.platform || '').toUpperCase() === 'OZON'),
+    data: body.data
+      .filter((shop) => String(shop && shop.platform || '').toUpperCase() === 'OZON')
+      .map((shop) => ({
+        id: deviceShopIdentifier(shop && shop.id),
+        platform: 'OZON',
+        name: deviceShopIdentifier(shop && shop.name),
+        status: deviceShopIdentifier(shop && shop.status),
+        clientId: deviceShopIdentifier(shop && shop.clientId),
+        companyId: deviceShopIdentifier(shop && shop.companyId),
+      }))
+      .filter((shop) => Boolean(shop.id && shop.name && shop.status)),
   };
 }
 
 globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS = readExtensionDeviceOzonShops;
+
+async function requestExtensionDeviceOzonCdnAuth(method, shopId, payload, expectedSessionId) {
+  const normalizedShopId = String(shopId == null ? '' : shopId).trim();
+  if (!normalizedShopId || normalizedShopId.length > 200 || /[\\/]/.test(normalizedShopId)) {
+    return { ok: false, errorCode: 'invalid_shop_id', error: '店铺 ID 无效' };
+  }
+  const credentials = getLogisticsDeviceCredentials();
+  const stored = await credentials.getStatus();
+  if (!stored || stored.state !== 'paired') {
+    return { ok: false, errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+
+  let operation;
+  try {
+    operation = await credentials.beginOperation();
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'device_unreachable',
+      error: error && error.message ? error.message : '设备授权验证失败',
+    };
+  }
+  if (!operation || operation.state !== 'paired' || !operation.accessToken) {
+    return { ok: false, errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+  if (method === 'PUT' && expectedSessionId && operation.sessionId !== expectedSessionId) {
+    return {
+      ok: false,
+      errorCode: 'device_authority_changed',
+      error: '设备授权在写入前已变化，请重新发起同步',
+    };
+  }
+  if (method === 'PUT' && (!Array.isArray(operation.scopes) || !operation.scopes.includes('capture:write'))) {
+    return { ok: false, errorCode: 'device_scope_required', error: '设备缺少 Cookie 同步权限' };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+  let response;
+  let body;
+  try {
+    const headers = {
+      Accept: 'application/json',
+      Authorization: 'Bearer ' + operation.accessToken,
+    };
+    const init = {
+      method,
+      headers,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: controller.signal,
+    };
+    if (method === 'PUT') {
+      headers['Content-Type'] = 'application/json;charset=utf-8';
+      init.body = JSON.stringify(payload || {});
+      if (new TextEncoder().encode(init.body).byteLength > SS_ERP_DEVICE_COOKIE_REQUEST_MAX_BYTES) {
+        return { ok: false, errorCode: 'device_cookie_request_too_large', error: '设备 Cookie 请求过大' };
+      }
+    }
+    response = await fetch(
+      operation.baseUrl + '/api/extension-device/shops/'
+        + encodeURIComponent(normalizedShopId) + '/ozon-cdn-auth',
+      init,
+    );
+    if (response.status === 401 || response.status === 410) {
+      await credentials.clearIfCurrent(operation, {
+        status: response.status,
+        reason: 'device_cookie_authorization_revoked',
+      });
+      return {
+        ok: false,
+        errorCode: 'device_authorization_required',
+        error: '设备授权已失效，请重新配对',
+        status: response.status,
+      };
+    }
+    body = await readBoundedExtensionDeviceJson(response);
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: method === 'PUT' ? 'device_cookie_write_outcome_unknown' : 'device_unreachable',
+      error: error && error.message ? error.message : '设备 Cookie 请求失败',
+      ...(method === 'PUT' ? {
+        outcome: 'UNKNOWN_OUTCOME',
+        automaticRetryAllowed: false,
+        guardSessionId: operation.sessionId,
+      } : {}),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  const uncertainWriteResponse = method === 'PUT' && (
+    response.status === 408
+    || response.status === 425
+    || response.status === 429
+    || (response.status >= 500 && response.status <= 599)
+    || (response.ok && (!body || body.code !== 1 || !body.data))
+  );
+  if (uncertainWriteResponse) {
+    return {
+      ok: false,
+      errorCode: 'device_cookie_write_outcome_unknown',
+      error: body && (body.msg || body.error) || ('设备 Cookie 写入结果未知: HTTP ' + response.status),
+      status: response.status,
+      outcome: 'UNKNOWN_OUTCOME',
+      automaticRetryAllowed: false,
+      guardSessionId: operation.sessionId,
+    };
+  }
+  if (!response.ok || !body || body.code !== 1 || !body.data) {
+    return {
+      ok: false,
+      errorCode: body && body.errorCode || 'device_cookie_request_failed',
+      error: body && (body.msg || body.error) || ('设备 Cookie 请求失败: HTTP ' + response.status),
+      status: response.status,
+    };
+  }
+  if (!await credentials.isOperationCurrent(operation)) {
+    return {
+      ok: false,
+      errorCode: 'device_authority_changed',
+      error: '设备授权在请求期间已变化，请刷新状态',
+      ...(method === 'PUT' ? {
+        outcome: 'UNKNOWN_OUTCOME',
+        automaticRetryAllowed: false,
+        guardSessionId: operation.sessionId,
+      } : {}),
+    };
+  }
+  return { ok: true, authMode: 'device', data: body.data };
+}
+
+function readExtensionDeviceOzonCdnAuth(shopId) {
+  return requestExtensionDeviceOzonCdnAuth('GET', shopId);
+}
+
+function writeExtensionDeviceOzonCdnAuth(shopId, payload, expectedSessionId) {
+  return requestExtensionDeviceOzonCdnAuth('PUT', shopId, payload, expectedSessionId);
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_OZON_CDN_AUTH = Object.freeze({
+  read: readExtensionDeviceOzonCdnAuth,
+  write: writeExtensionDeviceOzonCdnAuth,
+});
 
 async function writeExtensionDeviceShopAnalytics(input) {
   try {
@@ -3640,13 +3882,321 @@ async function getOzonSellerCookiesForSync() {
   return merged;
 }
 
-function fetchStoredOzonCompanyIdForSync(apiBase, token, shopId) {
-  if (!apiBase || !token || !shopId) return Promise.resolve('');
-  return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
-    headers: { 'authorization': 'Bearer ' + token },
-  }).then((res) => res.json())
-    .then((data) => normalizeOzonCompanyIdForSync(data && data.data && data.data.companyId))
-    .catch(() => '');
+async function readOzonCdnAuthForSync(shopId) {
+  return readExtensionDeviceOzonCdnAuth(shopId);
+}
+
+async function writeOzonCdnAuthForSync(shopId, payload, options) {
+  const normalizedShopId = deviceShopIdentifier(shopId);
+  if (!normalizedShopId) throw new Error('店铺 ID 无效');
+  const writeEpoch = ozonCdnWriteEpochs.get(normalizedShopId) || 0;
+  return enqueueOzonCdnWrite(normalizedShopId, async (sessionId) => {
+    const requestSha256 = await ozonCdnWriteRequestSha256(payload);
+    const guard = await prepareOzonCdnWriteGuard(
+      normalizedShopId,
+      sessionId,
+      requestSha256,
+      options && options.automatic === true,
+      writeEpoch,
+    );
+    let result;
+    try {
+      result = await writeExtensionDeviceOzonCdnAuth(
+        normalizedShopId,
+        payload,
+        sessionId,
+      );
+    } catch (error) {
+      result = {
+        ok: false,
+        errorCode: 'device_cookie_write_outcome_unknown',
+        error: error && error.message ? error.message : '设备 Cookie 写入结果未知',
+        outcome: 'UNKNOWN_OUTCOME',
+        automaticRetryAllowed: false,
+        guardSessionId: sessionId,
+      };
+    }
+    return requireOzonCdnWriteSuccess(
+      normalizedShopId,
+      sessionId,
+      requestSha256,
+      guard.preexisting,
+      result,
+    );
+  });
+}
+
+async function fetchStoredOzonCompanyIdForSync(shopId) {
+  const result = await readOzonCdnAuthForSync(shopId);
+  return normalizeOzonCompanyIdForSync(result && result.ok && result.data && result.data.companyId);
+}
+
+function ozonCdnWriteError(result) {
+  const error = new Error(result && result.error || '同步店铺 Cookie 失败');
+  error.errorCode = result && result.errorCode || 'device_cookie_write_failed';
+  if (result && result.outcome) error.outcome = result.outcome;
+  if (result && result.automaticRetryAllowed === false) error.automaticRetryAllowed = false;
+  return error;
+}
+
+function publicOzonSyncError(error) {
+  return {
+    ok: false,
+    error: error && error.message ? error.message : String(error),
+    ...(error && error.errorCode ? { errorCode: error.errorCode } : {}),
+    ...(error && error.outcome ? { outcome: error.outcome } : {}),
+    ...(error && error.automaticRetryAllowed === false ? { automaticRetryAllowed: false } : {}),
+  };
+}
+
+async function ozonCdnWriteRequestSha256(payload) {
+  const normalized = {
+    cookie: payload && typeof payload.cookie === 'string' ? payload.cookie : null,
+    companyId: payload && payload.companyId != null ? String(payload.companyId) : null,
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(normalized));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest, (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function enqueueOzonCdnWrite(shopId, task) {
+  const key = shopId;
+  const previous = ozonCdnWriteQueues.get(key) || Promise.resolve();
+  const run = previous.catch(() => {}).then(async () => {
+    const status = await getLogisticsDeviceCredentials().getStatus();
+    const sessionId = status && status.state === 'paired'
+      ? deviceShopIdentifier(status.sessionId)
+      : null;
+    if (!sessionId) throw ozonCdnWriteError({
+      errorCode: 'device_unpaired',
+      error: '设备未配对',
+    });
+    return task(sessionId);
+  });
+  let tail;
+  tail = run.catch(() => {}).finally(() => {
+    if (ozonCdnWriteQueues.get(key) === tail) ozonCdnWriteQueues.delete(key);
+  });
+  ozonCdnWriteQueues.set(key, tail);
+  return run;
+}
+
+function ozonCdnWriteGuardError(message) {
+  const error = new Error(message);
+  error.errorCode = 'device_cookie_write_guard_unavailable';
+  error.outcome = 'UNKNOWN_OUTCOME';
+  error.automaticRetryAllowed = false;
+  return error;
+}
+
+function normalizeOzonCdnWriteGuard(guard) {
+  if (!guard || typeof guard !== 'object') return null;
+  const shopId = deviceShopIdentifier(guard.shopId);
+  const sessionId = deviceShopIdentifier(guard.sessionId);
+  const requestSha256 = toText(guard.requestSha256).trim().toLowerCase();
+  const createdAt = toText(guard.createdAt).trim();
+  if (
+    !shopId
+    || !sessionId
+    || !/^[a-f0-9]{64}$/.test(requestSha256)
+    || guard.outcome !== 'UNKNOWN_OUTCOME'
+    || !createdAt
+    || createdAt.length > 64
+  ) return null;
+  return { shopId, sessionId, requestSha256, outcome: 'UNKNOWN_OUTCOME', createdAt };
+}
+
+function ozonCdnWriteGuardKey(guard) {
+  return `${guard.sessionId}\n${guard.shopId}`;
+}
+
+function normalizeOzonCdnWriteGuards(value, source) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw ozonCdnWriteGuardError(`设备 Cookie UNKNOWN guard ${source} 格式无效`);
+  }
+  const guards = value.map(normalizeOzonCdnWriteGuard);
+  if (guards.some((guard) => !guard)) {
+    throw ozonCdnWriteGuardError(`设备 Cookie UNKNOWN guard ${source} 包含无效记录`);
+  }
+  return guards;
+}
+
+function replaceOzonCdnMemoryGuards(guards) {
+  ozonCdnMemoryGuards.clear();
+  guards.forEach((guard) => {
+    ozonCdnMemoryGuards.set(ozonCdnWriteGuardKey(guard), guard);
+  });
+}
+
+function ozonCdnLocalGuardStorage() {
+  const area = chrome.storage && chrome.storage.local;
+  if (
+    !area
+    || typeof area.get !== 'function'
+    || typeof area.set !== 'function'
+    || typeof area.remove !== 'function'
+  ) throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 本地存储不可用');
+  return area;
+}
+
+function mergeOzonCdnWriteGuard(guards, guard) {
+  const key = ozonCdnWriteGuardKey(guard);
+  const existing = guards.get(key);
+  if (existing && existing.requestSha256 !== guard.requestSha256) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 存在冲突请求');
+  }
+  guards.set(key, existing || guard);
+}
+
+async function readOzonCdnWriteGuards(activeSessionId) {
+  const sessionId = deviceShopIdentifier(activeSessionId);
+  if (!sessionId) throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 会话无效');
+  let stored;
+  try {
+    stored = await ozonCdnLocalGuardStorage().get([SS_ERP_OZON_CDN_WRITE_GUARDS_KEY]);
+  } catch (_error) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 无法读取');
+  }
+  const persisted = normalizeOzonCdnWriteGuards(
+    stored && stored[SS_ERP_OZON_CDN_WRITE_GUARDS_KEY],
+    'local',
+  ).filter((guard) => guard.sessionId === sessionId);
+  const guards = new Map();
+  persisted.forEach((guard) => mergeOzonCdnWriteGuard(guards, guard));
+  Array.from(ozonCdnMemoryGuards.values())
+    .filter((guard) => guard.sessionId === sessionId)
+    .forEach((guard) => mergeOzonCdnWriteGuard(guards, guard));
+  if (guards.size > SS_ERP_OZON_CDN_WRITE_GUARD_MAX) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 超出授权店铺上限');
+  }
+  return Array.from(guards.values());
+}
+
+async function writeOzonCdnWriteGuards(value) {
+  const guards = normalizeOzonCdnWriteGuards(value, 'memory');
+  const unique = new Map();
+  guards.forEach((guard) => mergeOzonCdnWriteGuard(unique, guard));
+  if (unique.size > SS_ERP_OZON_CDN_WRITE_GUARD_MAX) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 超出授权店铺上限');
+  }
+  const canonical = Array.from(unique.values());
+  try {
+    const area = ozonCdnLocalGuardStorage();
+    if (canonical.length) {
+      await area.set({ [SS_ERP_OZON_CDN_WRITE_GUARDS_KEY]: canonical });
+    } else {
+      await area.remove([SS_ERP_OZON_CDN_WRITE_GUARDS_KEY]);
+    }
+  } catch (_error) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 无法持久化');
+  }
+  replaceOzonCdnMemoryGuards(canonical);
+}
+
+function mutateOzonCdnWriteGuards(activeSessionId, mutator) {
+  const run = ozonCdnGuardStorageQueue.catch(() => {}).then(async () => {
+    const current = await readOzonCdnWriteGuards(activeSessionId);
+    const mutation = mutator(current);
+    await writeOzonCdnWriteGuards(mutation.guards);
+    return mutation.value;
+  });
+  ozonCdnGuardStorageQueue = run.catch(() => {});
+  return run;
+}
+
+async function prepareOzonCdnWriteGuard(
+  shopId,
+  sessionId,
+  requestSha256,
+  automatic,
+  writeEpoch,
+) {
+  const normalizedShopId = deviceShopIdentifier(shopId);
+  const operationSessionId = deviceShopIdentifier(sessionId);
+  if (!normalizedShopId || !operationSessionId || !/^[a-f0-9]{64}$/.test(requestSha256)) {
+    throw ozonCdnWriteGuardError('设备 Cookie UNKNOWN guard 输入无效');
+  }
+  const currentEpoch = ozonCdnWriteEpochs.get(normalizedShopId) || 0;
+  if (currentEpoch !== writeEpoch) {
+    const error = new Error('设备 Cookie 写入队列已被未知结果中止，请重新发起手动同步');
+    error.errorCode = 'device_cookie_write_queue_superseded';
+    error.outcome = 'UNKNOWN_OUTCOME';
+    error.automaticRetryAllowed = false;
+    throw error;
+  }
+  return mutateOzonCdnWriteGuards(operationSessionId, (guards) => {
+    const activeGuard = guards.find((guard) => guard.shopId === normalizedShopId) || null;
+    if (activeGuard) {
+      if (!automatic && activeGuard.requestSha256 === requestSha256) {
+        return { guards, value: { preexisting: true } };
+      }
+      const error = new Error(automatic
+        ? '上次设备 Cookie 写入结果未知，已停止后台自动重试；请手动同步相同内容确认'
+        : '上次设备 Cookie 写入结果未知，只允许手动重试相同内容或重新配对');
+      error.errorCode = 'device_cookie_write_blocked_unknown';
+      error.outcome = 'UNKNOWN_OUTCOME';
+      error.automaticRetryAllowed = false;
+      throw error;
+    }
+    const next = guards.concat({
+      shopId: normalizedShopId,
+      sessionId: operationSessionId,
+      requestSha256,
+      outcome: 'UNKNOWN_OUTCOME',
+      createdAt: new Date().toISOString(),
+    });
+    return { guards: next, value: { preexisting: false } };
+  });
+}
+
+async function clearOzonCdnWriteGuard(shopId, sessionId, requestSha256) {
+  const normalizedShopId = deviceShopIdentifier(shopId);
+  if (!normalizedShopId) return;
+  await mutateOzonCdnWriteGuards(sessionId, (guards) => ({
+    guards: guards.filter((guard) => (
+      guard.shopId !== normalizedShopId
+      || guard.requestSha256 !== requestSha256
+    )),
+    value: undefined,
+  }));
+}
+
+function advanceOzonCdnWriteEpoch(shopId) {
+  const normalizedShopId = deviceShopIdentifier(shopId) || shopId;
+  ozonCdnWriteEpochs.set(
+    normalizedShopId,
+    (ozonCdnWriteEpochs.get(normalizedShopId) || 0) + 1,
+  );
+}
+
+async function requireOzonCdnWriteSuccess(
+  shopId,
+  sessionId,
+  requestSha256,
+  preexisting,
+  result,
+) {
+  if (result && result.ok) {
+    try {
+      await clearOzonCdnWriteGuard(shopId, sessionId, requestSha256);
+    } catch (error) {
+      advanceOzonCdnWriteEpoch(shopId);
+      throw error;
+    }
+    return result;
+  }
+  if (result && result.outcome === 'UNKNOWN_OUTCOME') {
+    advanceOzonCdnWriteEpoch(shopId);
+  } else if (!preexisting) {
+    try {
+      await clearOzonCdnWriteGuard(shopId, sessionId, requestSha256);
+    } catch (error) {
+      advanceOzonCdnWriteEpoch(shopId);
+      throw error;
+    }
+  }
+  throw ozonCdnWriteError(result);
 }
 
 function ensureOzonAutoSyncAlarm() {
@@ -3676,15 +4226,10 @@ async function getOzonAutoSyncConnection() {
   };
 }
 
-async function fetchOzonShopsForAutoSync(apiBase, token) {
-  if (!apiBase || !token) return [];
-  const response = await fetch(apiBase + '/api/shops', {
-    headers: { 'authorization': 'Bearer ' + token },
-  });
-  if (!response.ok) return [];
-  const data = await response.json().catch(() => null);
-  if (!data || data.code !== 1 || !Array.isArray(data.data)) return [];
-  return data.data.filter((shop) => String(shop && shop.platform || '').toUpperCase() === 'OZON');
+async function readOzonShopsForAutoSync() {
+  const deviceResult = await readExtensionDeviceOzonShops();
+  if (deviceResult && deviceResult.ok) return deviceResult.data || [];
+  throw new Error(deviceResult && deviceResult.error || '设备店铺读取失败');
 }
 
 function shopMatchesOzonCompanyId(shop, companyId) {
@@ -3700,25 +4245,36 @@ function shopMatchesOzonCompanyId(shop, companyId) {
   ].some((value) => normalizeOzonCompanyIdForSync(value) === target);
 }
 
-async function resolveOzonAutoSyncShop(apiBase, token, companyId) {
+async function resolveOzonAutoSyncShop(companyId, options) {
   const storage = await chrome.storage.local.get(['ss_erp_cookie_shop', 'ss_erp_selected_shop']);
-  const shops = await fetchOzonShopsForAutoSync(apiBase, token);
-  const matched = shops.find((shop) => shopMatchesOzonCompanyId(shop, companyId));
-  if (matched && matched.id) {
+  const shops = await readOzonShopsForAutoSync();
+  const normalizedCompanyId = normalizeOzonCompanyIdForSync(companyId);
+  const matches = normalizedCompanyId
+    ? shops.filter((shop) => shopMatchesOzonCompanyId(shop, normalizedCompanyId))
+    : [];
+  if (matches.length === 1 && matches[0].id) {
+    const matched = matches[0];
     await chrome.storage.local.set({ ss_erp_cookie_shop: matched.id, ss_erp_selected_shop: matched.id });
     return matched;
   }
+  if (normalizedCompanyId) return null;
+  if (options && options.requireCompanyMatch === true) return null;
   const fallbackId = toText(storage.ss_erp_cookie_shop || storage.ss_erp_selected_shop).trim();
-  if (!fallbackId) return null;
-  return shops.find((shop) => shop.id === fallbackId) || { id: fallbackId };
+  const fallback = fallbackId ? shops.find((shop) => shop.id === fallbackId) : null;
+  return fallback || (shops.length === 1 ? shops[0] : null);
 }
 
 async function updateOzonSyncTimes(patch) {
-  const current = await chrome.storage.local.get([SS_ERP_SYNC_TIMES_KEY]);
-  const times = current[SS_ERP_SYNC_TIMES_KEY] && typeof current[SS_ERP_SYNC_TIMES_KEY] === 'object'
-    ? current[SS_ERP_SYNC_TIMES_KEY]
-    : {};
-  await chrome.storage.local.set({ [SS_ERP_SYNC_TIMES_KEY]: { ...times, ...patch } });
+  try {
+    const current = await chrome.storage.local.get([SS_ERP_SYNC_TIMES_KEY]);
+    const times = current[SS_ERP_SYNC_TIMES_KEY] && typeof current[SS_ERP_SYNC_TIMES_KEY] === 'object'
+      ? current[SS_ERP_SYNC_TIMES_KEY]
+      : {};
+    await chrome.storage.local.set({ [SS_ERP_SYNC_TIMES_KEY]: { ...times, ...patch } });
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 async function syncOzonCookieToShopForSync(shopId, options) {
@@ -3732,20 +4288,32 @@ async function syncOzonCookieToShopForSync(shopId, options) {
   const cookieStr = mergeCookieStringsForSync(cookieStringFromOzonCookiesForSync(cookies), tabCookieStr);
   if (!cookieStr) throw new Error('未检测到 seller.ozon.ru 登录态，请先登录卖家后台');
 
-  const connection = await getOzonAutoSyncConnection();
-  if (!connection.apiBase) throw new Error('请先在插件设置中配置 ERP 地址');
-  if (!connection.token) throw new Error('请先在插件设置中配置 ERP Token');
-
   const payloadCompanyId = normalizeOzonCompanyIdForSync(options && options.companyId);
   const cookieCompanyId = findOzonCompanyIdFromCookies(cookies);
   const [capturedCompanyId, storedCompanyId] = await Promise.all([
     getCapturedOzonCompanyIdForSync(),
-    fetchStoredOzonCompanyIdForSync(connection.apiBase, connection.token, normalizedShopId),
+    fetchStoredOzonCompanyIdForSync(normalizedShopId),
   ]);
   const preferStoredCompanyId = options && options.useStoredCompanyId === true;
-  const companyIdCandidates = preferStoredCompanyId
-    ? [storedCompanyId, payloadCompanyId, tabCompanyId, capturedCompanyId, cookieCompanyId]
-    : [tabCompanyId, payloadCompanyId, capturedCompanyId, cookieCompanyId, storedCompanyId];
+  const automatic = options && options.automatic === true;
+  const requireCompanyMatch = automatic || (options && options.requireCompanyMatch === true);
+  const liveCompanyIds = [tabCompanyId, cookieCompanyId]
+    .map(normalizeOzonCompanyIdForSync)
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+  if (requireCompanyMatch && (
+    !payloadCompanyId
+    || liveCompanyIds.length === 0
+    || liveCompanyIds.some((value) => value !== payloadCompanyId)
+  )) {
+    const error = new Error('当前 seller 店铺与已解析的 ERP 店铺不一致，已停止自动同步');
+    error.errorCode = 'ozon_company_binding_mismatch';
+    throw error;
+  }
+  const companyIdCandidates = requireCompanyMatch
+    ? [payloadCompanyId]
+    : preferStoredCompanyId
+      ? [storedCompanyId, payloadCompanyId, tabCompanyId, capturedCompanyId, cookieCompanyId]
+      : [tabCompanyId, payloadCompanyId, capturedCompanyId, cookieCompanyId, storedCompanyId];
   const companyId = companyIdCandidates.find((value) => normalizeOzonCompanyIdForSync(value)) || '';
   const body = { cookie: cookieStr };
   if (companyId) {
@@ -3753,47 +4321,60 @@ async function syncOzonCookieToShopForSync(shopId, options) {
     rememberRuntimeOzonCompanyIdForSync(companyId);
   }
 
-  const data = await fetch(connection.apiBase + '/api/shops/' + encodeURIComponent(normalizedShopId) + '/ozon-cdn-auth', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + connection.token },
-    body: JSON.stringify(body),
-  }).then((res) => res.json());
-  if (!data || data.code !== 1) throw new Error((data && data.msg) || '同步失败');
+  const writeResult = await writeOzonCdnAuthForSync(
+    normalizedShopId,
+    body,
+    { automatic },
+  );
   const now = new Date().toISOString();
-  await updateOzonSyncTimes({ cookie: now });
-  return { ok: true, shopId: normalizedShopId, companyId: companyId || '', data: data.data, syncedAt: now };
+  await updateOzonSyncTimes({ cookie: now }).catch(() => false);
+  return {
+    ok: true,
+    authMode: writeResult.authMode,
+    shopId: normalizedShopId,
+    companyId: companyId || '',
+    data: writeResult.data,
+    syncedAt: now,
+  };
 }
 
 globalThis.syncOzonCookieToShopForSync = syncOzonCookieToShopForSync;
 
 async function syncCurrentOzonCookieForSync(options) {
-  const connection = await getOzonAutoSyncConnection();
-  if (!connection.apiBase) throw new Error('请先在插件设置中配置 ERP 地址');
-  if (!connection.token) throw new Error('请先在插件设置中配置 ERP Token');
-
   const capturedCompanyId = normalizeOzonCompanyIdForSync(
     (options && options.companyId)
     || await getCapturedOzonCompanyIdForSync()
     || await readOzonSellerCookieValueFromOpenTabForSync('sc_company_id')
   );
-  const shop = await resolveOzonAutoSyncShop(connection.apiBase, connection.token, capturedCompanyId);
+  const automatic = options && options.automatic === true;
+  const shop = await resolveOzonAutoSyncShop(capturedCompanyId, {
+    requireCompanyMatch: automatic,
+  });
   if (!shop || !shop.id) {
     throw new Error('未找到匹配的 Ozon 店铺，请先在扩展弹窗选择目标店铺，或在 seller.ozon.ru 切换到已绑定 company_id 的店铺');
   }
 
-  const result = await syncOzonCookieToShopForSync(shop.id, { companyId: capturedCompanyId });
-  const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
-  const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
-    ? stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY]
-    : {};
-  await chrome.storage.local.set({
-    [SS_ERP_OZON_AUTO_SYNC_STATE_KEY]: {
-      ...state,
-      cookieAt: Date.now(),
-      lastReason: 'quick_cookie_sync',
-      ...(result.companyId ? { lastCompanyId: result.companyId } : {}),
-    },
+  const result = await syncOzonCookieToShopForSync(shop.id, {
+    companyId: capturedCompanyId,
+    automatic,
+    requireCompanyMatch: Boolean(capturedCompanyId),
   });
+  try {
+    const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
+    const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
+      ? stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY]
+      : {};
+    await chrome.storage.local.set({
+      [SS_ERP_OZON_AUTO_SYNC_STATE_KEY]: {
+        ...state,
+        cookieAt: Date.now(),
+        lastReason: 'quick_cookie_sync',
+        ...(result.companyId ? { lastCompanyId: result.companyId } : {}),
+      },
+    });
+  } catch (_error) {
+    // Remote success is authoritative; local timestamps are diagnostics only.
+  }
   return result;
 }
 
@@ -3818,6 +4399,7 @@ async function ensureCurrentOzonCookieSyncedForInsights(options) {
   ozonInsightCookieSyncInFlight = syncCurrentOzonCookieForSync({
     ...(options && typeof options === 'object' ? options : {}),
     companyId: liveCompanyId || (options && options.companyId) || '',
+    automatic: true,
   }).finally(() => {
     ozonInsightCookieSyncInFlight = null;
   });
@@ -3835,6 +4417,9 @@ function summarizeOzonAutoSyncResult(value) {
   if (!value || typeof value !== 'object') return null;
   const summary = { ok: value.ok === true };
   if (value.error) summary.error = toText(value.error).slice(0, 240);
+  if (value.errorCode) summary.errorCode = toText(value.errorCode).slice(0, 100);
+  if (value.outcome) summary.outcome = toText(value.outcome).slice(0, 100);
+  if (value.automaticRetryAllowed === false) summary.automaticRetryAllowed = false;
   if (value.skipped) summary.skipped = true;
   if (value.syncedAt) summary.syncedAt = value.syncedAt;
   if (value.data && typeof value.data === 'object') {
@@ -3848,52 +4433,87 @@ async function runOzonAutoSyncMaintenance(options) {
   const now = Date.now();
   const force = options && options.force === true;
   const reason = toText(options && options.reason).trim() || 'scheduled';
-  const connection = await getOzonAutoSyncConnection();
-  if (!connection.apiBase || !connection.token) return { ok: false, skipped: true, reason: 'missing_erp_connection' };
 
   const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
   const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
     ? stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY]
     : {};
   const capturedCompanyId = normalizeOzonCompanyIdForSync((options && options.companyId) || await getCapturedOzonCompanyIdForSync() || await readOzonSellerCookieValueFromOpenTabForSync('sc_company_id'));
-  const shop = await resolveOzonAutoSyncShop(connection.apiBase, connection.token, capturedCompanyId);
+  const shop = await resolveOzonAutoSyncShop(capturedCompanyId, {
+    requireCompanyMatch: true,
+  });
   if (!shop || !shop.id) return { ok: false, skipped: true, reason: 'missing_ozon_shop' };
 
   const nextState = { ...state, lastReason: reason };
   const result = { ok: true, shopId: shop.id, companyId: capturedCompanyId || '', cookie: null, analytics: null, graphs: null };
   const companyChanged = capturedCompanyId && capturedCompanyId !== state.lastCompanyId;
 
-  if (shouldRunOzonAutoSyncSlot(state, 'cookieAt', now, force || companyChanged)) {
+  const cookieSyncRequired = shouldRunOzonAutoSyncSlot(
+    state,
+    'cookieAt',
+    now,
+    force || companyChanged,
+  );
+  if (cookieSyncRequired) {
     try {
-      result.cookie = await syncOzonCookieToShopForSync(shop.id, { companyId: capturedCompanyId });
+      result.cookie = await syncOzonCookieToShopForSync(shop.id, {
+        companyId: capturedCompanyId,
+        automatic: true,
+      });
       nextState.cookieAt = now;
       if (capturedCompanyId) nextState.lastCompanyId = capturedCompanyId;
     } catch (error) {
-      result.cookie = { ok: false, error: error && error.message ? error.message : String(error) };
+      result.cookie = publicOzonSyncError(error);
     }
   }
+  const shopBindingVerified = !cookieSyncRequired || Boolean(result.cookie && result.cookie.ok);
+  if (!shopBindingVerified) {
+    result.ok = false;
+    result.analytics = { ok: false, skipped: true, reason: 'company_binding_unverified' };
+    result.graphs = { ok: false, skipped: true, reason: 'company_binding_unverified' };
+  }
 
-  if (shouldRunOzonAutoSyncSlot(state, 'analyticsAt', now, force || companyChanged)) {
+  if (shopBindingVerified && shouldRunOzonAutoSyncSlot(
+    state,
+    'analyticsAt',
+    now,
+    force || companyChanged,
+  )) {
     const syncAnalytics = globalThis.SS_ERP_COLLECT_BACKGROUND && globalThis.SS_ERP_COLLECT_BACKGROUND.syncShopAnalyticsToErp;
-    const response = typeof syncAnalytics === 'function'
-      ? await syncAnalytics(shop.id, capturedCompanyId || undefined)
-      : { ok: false, error: 'Ozon 分析同步模块未加载' };
+    let response;
+    try {
+      response = typeof syncAnalytics === 'function'
+        ? await syncAnalytics(shop.id, capturedCompanyId || undefined)
+        : { ok: false, error: 'Ozon 分析同步模块未加载' };
+    } catch (error) {
+      response = publicOzonSyncError(error);
+    }
     result.analytics = response;
     if (response && response.ok) {
       nextState.analyticsAt = now;
-      await updateOzonSyncTimes({ analytics: new Date(now).toISOString() });
+      await updateOzonSyncTimes({ analytics: new Date(now).toISOString() }).catch(() => false);
     }
   }
 
-  if (shouldRunOzonAutoSyncSlot(state, 'graphsAt', now, force || companyChanged)) {
+  if (shopBindingVerified && shouldRunOzonAutoSyncSlot(
+    state,
+    'graphsAt',
+    now,
+    force || companyChanged,
+  )) {
     const syncGraphs = globalThis.SS_ERP_COLLECT_BACKGROUND && globalThis.SS_ERP_COLLECT_BACKGROUND.syncShopGraphsToErp;
-    const response = typeof syncGraphs === 'function'
-      ? await syncGraphs(shop.id, capturedCompanyId || undefined, 30)
-      : { ok: false, error: 'Ozon 图表同步模块未加载' };
+    let response;
+    try {
+      response = typeof syncGraphs === 'function'
+        ? await syncGraphs(shop.id, capturedCompanyId || undefined, 30)
+        : { ok: false, error: 'Ozon 图表同步模块未加载' };
+    } catch (error) {
+      response = publicOzonSyncError(error);
+    }
     result.graphs = response;
     if (response && response.ok) {
       nextState.graphsAt = now;
-      await updateOzonSyncTimes({ graphs: new Date(now).toISOString() });
+      await updateOzonSyncTimes({ graphs: new Date(now).toISOString() }).catch(() => false);
     }
   }
 
@@ -3903,13 +4523,14 @@ async function runOzonAutoSyncMaintenance(options) {
     analytics: summarizeOzonAutoSyncResult(result.analytics),
     graphs: summarizeOzonAutoSyncResult(result.graphs),
   };
-  await chrome.storage.local.set({ [SS_ERP_OZON_AUTO_SYNC_STATE_KEY]: nextState });
+  await chrome.storage.local.set({ [SS_ERP_OZON_AUTO_SYNC_STATE_KEY]: nextState }).catch(() => {});
   return result;
 }
 
 async function readOzonAutoSyncStatus() {
-  const [connection, stateRow] = await Promise.all([
+  const [connection, deviceConnection, stateRow] = await Promise.all([
     getOzonAutoSyncConnection(),
+    getLogisticsDeviceCredentials().getConnection().catch(() => null),
     chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]),
   ]);
   const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
@@ -3925,8 +4546,9 @@ async function readOzonAutoSyncStatus() {
   }
   return {
     ok: true,
-    hasErpConnection: Boolean(connection.apiBase && connection.token),
-    apiBase: connection.apiBase || '',
+    hasErpConnection: Boolean(deviceConnection && deviceConnection.baseUrl)
+      || Boolean(connection.apiBase && connection.token),
+    apiBase: deviceConnection && deviceConnection.baseUrl || connection.apiBase || '',
     intervalMinutes: SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES,
     state,
   };
@@ -4683,6 +5305,23 @@ async function openImageSearchTabsFromOzon(payload) {
     await chrome.tabs.create({ url: job.url });
   }
   return jobsToOpen;
+}
+
+function isOzonPageRuntimeSender(sender) {
+  try {
+    const url = new URL(String(sender && (sender.url || sender.documentUrl) || ''));
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === 'https:' && (
+      hostname === 'ozon.ru'
+      || hostname.endsWith('.ozon.ru')
+      || hostname === 'ozon.kz'
+      || hostname.endsWith('.ozon.kz')
+      || hostname === 'ozon.by'
+      || hostname.endsWith('.ozon.by')
+    );
+  } catch (_error) {
+    return false;
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -6362,6 +7001,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // ─── OZON CDN Cookie + Company ID 同步到指定店铺 ───
+  if (message.type === 'ozon-calc:get-ozon-cdn-auth') {
+    const shopId = message.payload && message.payload.shopId;
+    if (!shopId) {
+      sendResponse({ ok: false, error: '缺少 shopId，请先选择目标店铺' });
+      return false;
+    }
+    readOzonCdnAuthForSync(shopId).then((result) => {
+      sendResponse(result);
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === 'ozon-calc:sync-ozon-cookie') {
     const shopId = message.payload && message.payload.shopId;
     if (!shopId) {
@@ -6373,13 +7026,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).then((result) => {
       sendResponse({ ok: true, msg: 'Cookie 已同步到该店铺', data: result.data });
     }).catch((error) => {
-      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+      sendResponse(publicOzonSyncError(error));
     });
     return true;
   }
 
   if (message.type === 'ozon-calc:sync-current-ozon-cookie') {
-    syncCurrentOzonCookieForSync(message.payload || {}).then((result) => {
+    const payload = message.payload && typeof message.payload === 'object'
+      ? { ...message.payload }
+      : {};
+    if (isOzonPageRuntimeSender(sender)) payload.automatic = true;
+    syncCurrentOzonCookieForSync(payload).then((result) => {
       sendResponse({
         ok: true,
         msg: 'Cookie 已同步到当前 Ozon 店铺',
@@ -6391,7 +7048,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         },
       });
     }).catch((error) => {
-      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+      sendResponse(publicOzonSyncError(error));
     });
     return true;
   }
@@ -6423,25 +7080,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     rememberRuntimeOzonCompanyIdForSync(companyId);
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY]).then((result) => {
-      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
-      if (!baseEndpoint) throw new Error('请先在插件设置中配置 ERP 地址');
-      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
-      if (!token) throw new Error('请先在插件设置中配置 ERP Token');
-      const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
-      return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
-        body: JSON.stringify({ companyId: String(companyId) }),
-      }).then((res) => res.json());
-    }).then((data) => {
-      if (data && data.code === 1) {
-        sendResponse({ ok: true, msg: 'Company ID 已同步', data: data.data });
-      } else {
-        throw new Error((data && data.msg) || '同步失败');
-      }
+    writeOzonCdnAuthForSync(shopId, { companyId: String(companyId) }).then((result) => {
+      sendResponse({ ok: true, msg: 'Company ID 已同步', data: result.data });
     }).catch((error) => {
-      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+      sendResponse(publicOzonSyncError(error));
     });
     return true;
   }

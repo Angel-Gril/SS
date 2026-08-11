@@ -486,7 +486,7 @@
     listDataCookieAutoSyncAt = now;
     listDataCookieAutoSyncPromise = send({
       type: 'ozon-calc:sync-current-ozon-cookie',
-      payload: { reason: 'ozon_list_kpi_preload' },
+      payload: { reason: 'ozon_list_kpi_preload', automatic: true },
     }, 30000).then((response) => {
       if (response && response.ok) {
         failedPremiumCache.clear();

@@ -339,6 +339,7 @@ import { runOzonPublishReconciliationTick } from './services/ozon-publish-reconc
 import type { OzonListingDraft, SourceProductCaptureV2 } from 'shared';
 import { createExtensionDeviceSessionService } from './services/extension-device-session.js';
 import { createPrismaExtensionDeviceSessionRepository } from './services/extension-device-session-prisma.js';
+import { createPrismaExtensionDeviceShopRepository } from './services/extension-device-shop-prisma.js';
 import {
   createExtensionCommandGrantService,
   digestExtensionCommandGrantToken,
@@ -2188,31 +2189,7 @@ if (isExtensionDeviceAuthEnabled()) {
         return typeof params.shopId === 'string' ? params.shopId : null;
       },
     }),
-    shopRepository: {
-      listAuthorizedShops: async ({ ownerUserId, shopIds }) => {
-        if (!shopIds.length) return [];
-        const shops = await prisma.shop.findMany({
-          where: {
-            userId: ownerUserId,
-            id: { in: shopIds },
-            platform: 'OZON',
-            status: { not: 'DISABLED' },
-          },
-          select: {
-            id: true,
-            platform: true,
-            name: true,
-            status: true,
-          },
-        });
-        return shops.map((shop) => ({
-          id: shop.id,
-          platform: shop.platform,
-          name: shop.name,
-          status: shop.status,
-        }));
-      },
-    },
+    shopRepository: createPrismaExtensionDeviceShopRepository(prisma),
     shopAnalyticsRepository: {
       createSnapshot: async ({ ownerUserId, shopId, snapshot }) => {
         const shop = await prisma.shop.findFirst({

@@ -67,7 +67,7 @@ assert.match(
 
 assert.match(
   serviceWorker,
-  /shouldRunOzonAutoSyncSlot\(state,\s*'analyticsAt',\s*now,\s*force \|\| companyChanged\)/,
+  /shopBindingVerified && shouldRunOzonAutoSyncSlot\(\s*state,\s*'analyticsAt',\s*now,\s*force \|\| companyChanged,?\s*\)/,
   'analytics sync should run immediately when the selected Ozon company changes',
 );
 
@@ -79,8 +79,14 @@ assert.match(
 
 assert.match(
   serviceWorker,
-  /shouldRunOzonAutoSyncSlot\(state,\s*'graphsAt',\s*now,\s*force \|\| companyChanged\)/,
+  /shopBindingVerified && shouldRunOzonAutoSyncSlot\(\s*state,\s*'graphsAt',\s*now,\s*force \|\| companyChanged,?\s*\)/,
   'graph sync should run immediately when the selected Ozon company changes',
+);
+
+assert.match(
+  serviceWorker,
+  /company_binding_unverified/,
+  'analytics and graph writes should stop when the live seller binding is not verified',
 );
 
 assert.match(
