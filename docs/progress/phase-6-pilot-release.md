@@ -28,7 +28,8 @@ Progress: 3/3 tasks.
 
 ## Notes
 
-- Scoped shop/Cookie post-release correction (offline, 2026-08-11): code commit `832efd75`
+- Scoped shop/Cookie post-release correction (offline, 2026-08-11): code commits `832efd75` and
+  `f1639fd4`
   closes the incomplete `1.0.302` device-auth migration that left popup shop discovery and Cookie
   status/update dependent on the optional legacy account token. New owner/shop/grant-bound device
   routes return only safe shop identity and Cookie presence/company metadata; Cookie bytes, shop

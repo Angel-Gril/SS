@@ -44,9 +44,10 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
-Post-release scoped shop/Cookie correction (offline, 2026-08-11): code commit
-`832efd75611eec1291a55b655562010c6872f304` fixes the production symptom reported against
-extension `1.0.302`. The root cause was an incomplete authentication migration: settings-page
+Post-release scoped shop/Cookie correction (offline, 2026-08-11): code commits
+`832efd75611eec1291a55b655562010c6872f304` and
+`f1639fd49e98ffe2d6a0798f95f4a4532a3b254c` fix the production symptom reported against extension
+`1.0.302`. The root cause was an incomplete authentication migration: settings-page
 analytics used the scoped device session, while the popup shop list and Ozon Cookie status/update
 paths still called account-token `/api/shops` routes. A correctly paired device therefore appeared
 connected but returned no shops when the optional legacy account token was empty.
