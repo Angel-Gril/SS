@@ -28,9 +28,8 @@ Progress: 3/3 tasks.
 
 ## Notes
 
-- Scoped shop/Cookie post-release correction (offline, 2026-08-11): code commits `832efd75` and
-  `f1639fd4`
-  closes the incomplete `1.0.302` device-auth migration that left popup shop discovery and Cookie
+- Scoped shop/Cookie post-release correction (2026-08-11): code commits `832efd75` and `f1639fd4`
+  close the incomplete `1.0.302` device-auth migration that left popup shop discovery and Cookie
   status/update dependent on the optional legacy account token. New owner/shop/grant-bound device
   routes return only safe shop identity and Cookie presence/company metadata; Cookie bytes, shop
   config and device tokens are never returned. Popup, Worker and automatic maintenance now use the
@@ -42,9 +41,32 @@ Progress: 3/3 tasks.
   tests passed `116/116`; extension focused passed `16/16`; security, Ozon maintenance/auto-sync,
   source `452/452`, lint, typechecks and the final-tree `734.1`-second full preflight passed.
   Independent reviews found no remaining P0/P1/P2.
-- This source correction is not packaged, signed, distributed, deployed or installed over BINI
-  `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Phase 6 remains
-  `3/3`; a separately authorized replacement release is required before production retest.
+- Exact target `5fe3da68e04596db6dcf610650ff972f858617e1` / extension `1.0.303` passed target-bound QA-04
+  in `979.5` seconds: source `452/452`, Cloud `457/457`, Local `453/453`. Canonical acceptance and
+  release-bindings SHA-256 values are
+  `a2d173282a149b3fa46ecbb81a6fa80c9463e78f76af5874e08bac07dcbf68ec` and
+  `a1fa5be219511f4d35daf6d05b9943bf354aa62286002955c11870cd6cf2844d`. Cloud/Local signing,
+  signed-package MV3 restart and isolated `1.0.302 -> 1.0.303` upgrade smokes passed.
+- The first signed-smoke attempt was preserved under an explicit `signed-smoke-id-failure`
+  quarantine because its temporary unpacked-extension IDs were inherited from `1.0.302`.
+  Deterministic path-derived IDs were corrected and the clean rerun passed; no signed-package or
+  product defect was observed.
+- Both regions completed fresh backup/restore, `145` migrations, dark deployment, verifier,
+  `7`-check/`32`-request canaries and final fences. Dual-region zero-claim SHA-256 is
+  `943de5fcfcd07ff0f4202d1b89e1016015091810570b4fdc1ab8955a6458db05`. DNS quorum and COM/CN
+  website distribution SHA-256 values are
+  `5d6b02371d032806036f6434d2043aade3f0ebf44a3cf690c1d5e932c67c30cd`,
+  `937cad89a27c7cc41968e6725e097c686a89dfd298f6aafca01d80e5deb7be40` and
+  `c6e327aac1389d63c3bd3785753add2450f88e8de9597178e0f2245506b4ef50`.
+- BINI retained its fixed extension ID, managed path, profile fingerprint and one non-secret
+  profile after the atomic `1.0.303` upgrade. Trusted reload, active-worker and final storage checks
+  passed in `OFFLINE_RELEASE_SMOKE`; installed-tree and closure SHA-256 values are
+  `099ab916aa3c28e5f9c7af7e3c3889f6c935fd6bb505c24f26d307d3f5f46b9d` and
+  `87cef68f6c4d61e2477e0931bd33036e837c7a972dcbc9864542e6d32795a899`.
+- Final read-only checks confirmed both regions run `5fe3da68`, all six API/Worker/Web services are
+  active and every rollout row remains dark. No Provider, ERP ingest/publish or Ozon write occurred.
+  Fresh database recovery points are local to each VPS; remote backup storage remains unconfigured.
+  Phase 6 remains complete at `3/3`.
 
 - Analytics-auth correction release (2026-08-11): commit `cd0848a5` / extension `1.0.302` passed
   QA-04 (source `452`, Cloud `457`, Local `453`), signed-package restart and `1.0.301 -> 1.0.302`

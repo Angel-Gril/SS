@@ -44,13 +44,14 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
-Post-release scoped shop/Cookie correction (offline, 2026-08-11): code commits
-`832efd75611eec1291a55b655562010c6872f304` and
-`f1639fd49e98ffe2d6a0798f95f4a4532a3b254c` fix the production symptom reported against extension
-`1.0.302`. The root cause was an incomplete authentication migration: settings-page
-analytics used the scoped device session, while the popup shop list and Ozon Cookie status/update
-paths still called account-token `/api/shops` routes. A correctly paired device therefore appeared
-connected but returned no shops when the optional legacy account token was empty.
+Post-release scoped shop/Cookie correction release (2026-08-11): exact commit
+`5fe3da68e04596db6dcf610650ff972f858617e1` is packaged and installed as extension `1.0.303`.
+The underlying code commits `832efd75611eec1291a55b655562010c6872f304` and
+`f1639fd49e98ffe2d6a0798f95f4a4532a3b254c` correct the production symptom reported against
+`1.0.302`. The root cause was an incomplete authentication migration: settings-page analytics used
+the scoped device session, while popup shop discovery and Ozon Cookie status/update still called
+account-token `/api/shops` routes. A correctly paired device therefore appeared connected but
+returned no shops when the optional legacy account token was empty.
 
 The Server now exposes owner/shop/grant-bound device routes for safe Ozon shop identity and
 Cookie-status/update metadata. Responses never include Cookie bytes, shop config or device tokens;
@@ -64,11 +65,35 @@ authority changes and MV3 worker restarts.
 Final focused verification passed Server device tests `116/116`, extension auth/Cookie tests
 `16/16`, security sender tests, Ozon maintenance/auto-sync contracts, source package verification
 `452/452`, lint and workspace typechecks. Complete final-tree `pnpm preflight` passed in `734.1`
-seconds, and
-independent Server/Worker reviews found no remaining P0/P1/P2. This correction is committed and
-pushed only as source: it has not been packaged, signed, distributed, deployed or installed over
-BINI `1.0.302`. No Provider, ERP ingest/publish, Ozon write or VPS action occurred. Overall progress
-remains `37/37`; replacing affected `1.0.302` installations requires a separately authorized release.
+seconds. Target-bound QA-04 then passed in `979.5` seconds with source `452/452`, Cloud `457/457`
+and Local `453/453`; canonical acceptance SHA-256 is
+`a2d173282a149b3fa46ecbb81a6fa80c9463e78f76af5874e08bac07dcbf68ec`. Cloud/Local signing,
+signed-package MV3 restart and isolated `1.0.302 -> 1.0.303` upgrade smokes passed. Release-bindings
+SHA-256 is `a1fa5be219511f4d35daf6d05b9943bf354aa62286002955c11870cd6cf2844d`.
+
+The first signed-smoke attempt was preserved under an explicit `signed-smoke-id-failure` quarantine:
+its temporary unpacked-extension IDs were mechanically inherited from `1.0.302`. Deterministic
+path-derived IDs were corrected and the clean rerun passed; no signed package or product defect was
+observed. COM and CN then completed fresh backup/restore verification, `145` migrations, dark
+deployment, post-deploy verification, `7`-check/`32`-request canaries and final dark fences. The
+dual-region zero-claim aggregate SHA-256 is
+`943de5fcfcd07ff0f4202d1b89e1016015091810570b4fdc1ab8955a6458db05`.
+
+Official website Cloud/Local distribution passed in both regions. DNS-quorum SHA-256 is
+`5d6b02371d032806036f6434d2043aade3f0ebf44a3cf690c1d5e932c67c30cd`; COM/CN distribution
+receipt SHA-256 values are `937cad89a27c7cc41968e6725e097c686a89dfd298f6aafca01d80e5deb7be40`
+and `c6e327aac1389d63c3bd3785753add2450f88e8de9597178e0f2245506b4ef50`. BINI retained its fixed
+extension ID, managed path, profile fingerprint and one non-secret profile after the atomic upgrade
+to `1.0.303`. Trusted reload, active-worker identity and final storage/permission checks passed in
+`OFFLINE_RELEASE_SMOKE`; installed-tree and closure SHA-256 values are
+`099ab916aa3c28e5f9c7af7e3c3889f6c935fd6bb505c24f26d307d3f5f46b9d` and
+`87cef68f6c4d61e2477e0931bd33036e837c7a972dcbc9864542e6d32795a899`.
+
+Final read-only checks confirmed both regions point to exact commit `5fe3da68`, all six
+API/Worker/Web services are active, and every AI Media/BYOK/Ozon rollout row remains dark. No
+Provider, ERP ingest/publish or Ozon write occurred. Remote backup storage remains the sole release
+operations warning; both fresh recovery points exist locally on their respective VPS. Overall
+implementation progress remains `37/37`.
 
 Post-release analytics-auth correction release (2026-08-11): exact commit
 `cd0848a501a7cab758b161afef805fecc88850a9` is packaged as extension `1.0.302`. QA-04 passed in
@@ -2286,10 +2311,12 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Completion follow-up: keep both regions and every rollout row dark, configure remote backup storage
-before the next production change, and retain all generated analysis, plan, progress, private
-evidence and operator-helper artifacts until an explicit keep/delete decision is made. Do not
-repeat the completed cycle 20 Ozon import or status request; its exactly-once authority is closed.
+Completion follow-up: treat exact commit `5fe3da68e04596db6dcf610650ff972f858617e1` and extension
+`1.0.303` as the current dual-region/BINI baseline. Keep both regions and every rollout row dark,
+configure remote backup storage before the next production change, and retain all generated
+analysis, plan, progress, private evidence and operator-helper artifacts until an explicit
+keep/delete decision is made. Do not repeat the completed cycle 20 Ozon import or status request;
+its exactly-once authority is closed.
 
 1. Do not repeat `qa02-t2i-20260730-063129-01` or `qa02-i2i-20260730-083710-01`; both requests and
    billing are closed and their receipts explicitly forbid same-request retry.
