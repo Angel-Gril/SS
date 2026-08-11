@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -243,11 +244,15 @@ test('device Cookie transport keeps credentials in the worker and rejects missin
   const write = await context.SS_ERP_EXTENSION_DEVICE_OZON_CDN_AUTH.write('shop-1', {
     cookie: 'session=secret', companyId: '123',
   });
+  const clear = await context.SS_ERP_EXTENSION_DEVICE_OZON_CDN_AUTH.write('shop-1', {
+    clearCookie: true, companyId: '123',
+  });
   assert.equal(read.ok, true);
   assert.equal(write.ok, true);
+  assert.equal(clear.ok, true);
   assert.equal(JSON.stringify(read).includes('device-secret-token'), false);
   assert.equal(JSON.stringify(write).includes('device-secret-token'), false);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.equal(requests[0].url, 'https://erp.example/api/extension-device/shops/shop-1/ozon-cdn-auth');
   assert.equal(requests[0].init.method, 'GET');
   assert.equal(requests[0].init.headers.Authorization, 'Bearer device-secret-token');
@@ -256,6 +261,10 @@ test('device Cookie transport keeps credentials in the worker and rejects missin
   assert.equal(requests[1].init.method, 'PUT');
   assert.deepEqual(JSON.parse(requests[1].init.body), {
     cookie: 'session=secret', companyId: '123',
+  });
+  assert.equal(requests[2].init.method, 'PUT');
+  assert.deepEqual(JSON.parse(requests[2].init.body), {
+    clearCookie: true, companyId: '123',
   });
 
   scopes = ['listing:review'];
@@ -267,7 +276,7 @@ test('device Cookie transport keeps credentials in the worker and rejects missin
     errorCode: 'device_scope_required',
     error: '设备缺少 Cookie 同步权限',
   });
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
 
   const shops = await context.SS_ERP_EXTENSION_DEVICE_SHOPS();
   assert.equal(shops.ok, true);
@@ -661,6 +670,18 @@ test('unknown device Cookie writes survive worker restart and block automatic re
 
   const firstWorker = createContext();
   const payload = { cookie: 'session=secret', companyId: '1001' };
+  const historicalRequestSha256 = createHash('sha256')
+    .update(JSON.stringify({ cookie: 'session=secret', companyId: '1001' }))
+    .digest('hex');
+  assert.equal(
+    await firstWorker.ozonCdnWriteRequestSha256(payload),
+    historicalRequestSha256,
+    'ordinary Cookie writes must retain the pre-clearCookie guard hash',
+  );
+  assert.notEqual(
+    await firstWorker.ozonCdnWriteRequestSha256({ clearCookie: true, companyId: '1001' }),
+    historicalRequestSha256,
+  );
   await assert.rejects(firstWorker.writeOzonCdnAuthForSync('shop-1', payload), (error) => (
     error.outcome === 'UNKNOWN_OUTCOME' && error.automaticRetryAllowed === false
   ));

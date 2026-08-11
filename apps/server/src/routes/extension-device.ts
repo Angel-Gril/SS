@@ -67,6 +67,7 @@ export interface ExtensionDeviceShopRepository {
     shopId: string;
     cookie?: string;
     companyId?: string;
+    clearCookie?: true;
   }): Promise<ExtensionDeviceOzonCdnAuthStatus | null>;
 }
 
@@ -140,7 +141,10 @@ const ozonCdnAuthSchema = z.object({
     .refine((value) => !hasOzonCdnControlCharacter(value))
     .optional(),
   companyId: ozonCdnCompanyIdSchema.optional(),
-}).strict().refine((value) => value.cookie !== undefined || value.companyId !== undefined);
+  clearCookie: z.literal(true).optional(),
+}).strict()
+  .refine((value) => value.cookie !== undefined || value.companyId !== undefined || value.clearCookie)
+  .refine((value) => !(value.cookie !== undefined && value.clearCookie));
 export function extensionDeviceClaimRateLimitKey(request: FastifyRequest): string {
   return request.ip;
 }

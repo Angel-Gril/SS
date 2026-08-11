@@ -19,6 +19,30 @@ assert.match(
 
 assert.match(
   serviceWorker,
+  /change\.removed[\s\S]{0,300}ozonSellerCookieRemovalPending = true[\s\S]{0,300}scheduleOzonSellerCookieLifecycleSync\(\)/,
+  'removed Seller auth Cookies should debounce a guarded resnapshot or clear',
+);
+
+assert.match(
+  serviceWorker,
+  /clearIfMissingAuth[\s\S]{0,1800}authCookieState === false[\s\S]{0,2200}clearCookie:\s*true/,
+  'Cookie removal should clear ERP state only after confirming no replacement auth Cookie exists',
+);
+
+assert.match(
+  serviceWorker,
+  /completedQueries === queries\.length \? false : null/,
+  'partial Cookie API failures must not be treated as a confirmed Seller logout',
+);
+
+assert.match(
+  serviceWorker,
+  /result && result\.cleared === true[\s\S]{0,260}authCookieState === false[\s\S]{0,180}clearRuntimeOzonCompanyIdForSync\(\)[\s\S]{0,220}broadcastOzonCompanyContextChanged\(\)/,
+  'a confirmed Seller logout should clear captured company context and invalidate cached metrics',
+);
+
+assert.match(
+  serviceWorker,
   /chrome\.alarms\.create\(\s*SS_ERP_OZON_AUTO_SYNC_ALARM_NAME/,
   'service worker should create a recurring Ozon auto sync alarm',
 );
@@ -31,8 +55,109 @@ assert.match(
 
 assert.match(
   serviceWorker,
-  /chrome\.cookies\.onChanged\.addListener[\s\S]*sc_company_id/,
-  'service worker should trigger auto sync when the selected Ozon company cookie changes',
+  /function handleOzonSellerCookieChange[\s\S]{0,700}cookie\.name === 'sc_company_id'/,
+  'service worker should handle selected Ozon company Cookie changes',
+);
+
+assert.match(
+  serviceWorker,
+  /chrome\.cookies\.onChanged\.addListener\(handleOzonSellerCookieChange\)/,
+  'service worker should register the named Ozon Seller Cookie change handler',
+);
+
+assert.match(
+  serviceWorker,
+  /SS_ERP_OZON_COOKIE_LIFECYCLE_DEBOUNCE_MS\s*=\s*750/,
+  'ordinary Seller Cookie lifecycle events should be debounced',
+);
+
+assert.match(
+  serviceWorker,
+  /function runOzonCookieOnlySyncSingleFlight[\s\S]{0,500}if \(ozonCookieOnlySyncInFlight\)[\s\S]{0,500}syncCurrentOzonCookieForSync/,
+  'ordinary Seller Cookie lifecycle events should share one cookie-only in-flight request',
+);
+
+assert.match(
+  serviceWorker,
+  /function scheduleOzonSellerCookieLifecycleSync\(\)[\s\S]{0,500}clearTimeout\(ozonSellerCookieLifecycleTimer\)[\s\S]{0,500}setTimeout\([\s\S]{0,180}SS_ERP_OZON_COOKIE_LIFECYCLE_DEBOUNCE_MS/,
+  'Seller Cookie lifecycle scheduling should collapse bursts into one delayed run',
+);
+
+const cookieOnlyLifecycle = serviceWorker.slice(
+  serviceWorker.indexOf('function runOzonCookieOnlySyncSingleFlight'),
+  serviceWorker.indexOf('function shouldRunOzonAutoSyncSlot'),
+);
+assert.ok(cookieOnlyLifecycle.length > 0, 'cookie-only lifecycle block should be present');
+assert.doesNotMatch(
+  cookieOnlyLifecycle,
+  /runOzonAutoSyncMaintenance|syncShopAnalyticsToErp|syncShopGraphsToErp/,
+  'ordinary Seller Cookie lifecycle runs must not invoke analytics, graphs, or full maintenance',
+);
+
+assert.match(
+  serviceWorker,
+  /chrome\.tabs\.onUpdated\.addListener\([\s\S]{0,300}changeInfo\.status !== 'complete'[\s\S]{0,300}isOzonSellerTabUrlForSync[\s\S]{0,180}scheduleOzonSellerCookieLifecycleSync\(\)/,
+  'a completed seller.ozon.ru tab should schedule cookie-only sync',
+);
+
+assert.match(
+  serviceWorker,
+  /scheduleOzonSellerCookieLifecycleSyncWhenTabExists[\s\S]{0,500}chrome\.tabs\.query\(\{ url: 'https:\/\/seller\.ozon\.ru\/\*' \}\)[\s\S]{0,300}scheduleOzonSellerCookieLifecycleSync\(\)/,
+  'startup sync should only be scheduled when a Seller tab already exists',
+);
+
+assert.match(
+  serviceWorker,
+  /chrome\.runtime\.onStartup\.addListener\([\s\S]{0,240}scheduleOzonSellerCookieLifecycleSyncWhenTabExists\(\)/,
+  'browser startup should check for an existing Seller tab before cookie-only sync',
+);
+
+assert.match(
+  serviceWorker,
+  /isRelevantOzonSellerAuthCookieForSync\(cookie\)[\s\S]{0,700}change\.removed[\s\S]{0,400}cookie\.name === 'sc_company_id'[\s\S]{0,300}scheduleOzonCompanyMaintenance\(companyId\)[\s\S]{0,200}return;[\s\S]{0,160}scheduleOzonSellerCookieLifecycleSync\(\)/,
+  'company changes should retain full maintenance while other auth cookies use cookie-only sync',
+);
+
+assert.match(
+  serviceWorker,
+  /function enqueueOzonAutoSyncMaintenance[\s\S]{0,500}ozonAutoSyncMaintenanceQueue\.then[\s\S]{0,500}runOzonAutoSyncMaintenance/,
+  'full Ozon maintenance should be serialized across alarm, company-change, and manual triggers',
+);
+
+assert.match(
+  serviceWorker,
+  /function scheduleOzonCompanyMaintenance[\s\S]{0,700}clearTimeout\(ozonCompanyMaintenanceTimer\)[\s\S]{0,400}flushOzonCompanyMaintenance/,
+  'company Cookie replacement bursts should coalesce to the latest company before maintenance',
+);
+
+assert.match(
+  serviceWorker,
+  /message\.type === 'ss-erp:extension-device-claim'[\s\S]{0,500}deviceStatus\.state === 'paired'[\s\S]{0,220}broadcastOzonCompanyContextChanged\(\)[\s\S]{0,180}scheduleOzonSellerCookieLifecycleSync\(\)/,
+  'a successful extension-device claim should invalidate old context and schedule cookie-only sync',
+);
+
+assert.match(
+  serviceWorker,
+  /message\.type === 'ss-erp:extension-device-clear'[\s\S]{0,700}getLogisticsDeviceCredentials\(\)\.clear\(\)[\s\S]{0,240}broadcastOzonCompanyContextChanged\(\)/,
+  'clearing a device session should invalidate background and content Seller context',
+);
+
+assert.match(
+  serviceWorker,
+  /message\.type === 'ss-erp:ozon-company-id-captured'[\s\S]{0,180}handleCapturedOzonCompanyIdForSync/,
+  'captured Seller company changes should flow through the cache invalidation handler',
+);
+
+assert.doesNotMatch(
+  serviceWorker,
+  /chrome\.tabs\.reload\(/,
+  'Seller Cookie lifecycle automation must not reload user pages',
+);
+
+assert.doesNotMatch(
+  serviceWorker,
+  /console\.(?:log|warn|error)\([^\n;]*(?:cookie\.value|message\.token|conn\.token)/i,
+  'service-worker logs must not include Cookie or token values',
 );
 
 assert.match(

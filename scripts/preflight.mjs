@@ -68,6 +68,16 @@ const steps = [
     args: ['scripts/web-ozon-video-probe-routing.test.mjs'],
   },
   {
+    name: 'extension Ozon list performance runtime contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-ozon-list-performance-runtime.test.mjs'],
+  },
+  {
+    name: 'Web extension device pairing contract',
+    command: 'node',
+    args: ['--test', 'scripts/web-extension-device-pairing.test.mjs'],
+  },
+  {
     name: 'AI media provider foundation contract',
     command: 'node',
     args: ['scripts/ai-media-provider-contract.test.mjs'],

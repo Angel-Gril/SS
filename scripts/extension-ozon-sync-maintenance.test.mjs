@@ -84,6 +84,42 @@ assert.match(
 
 assert.match(
   serviceWorker,
+  /SS_ERP_OZON_AUTH_COOKIE_NAME_PATTERN[\s\S]{0,180}(?:access|refresh|auth|session)/,
+  'Cookie lifecycle should react only to Ozon authentication-oriented Cookie names',
+);
+
+assert.match(
+  serviceWorker,
+  /function isOzonSellerCookieDomainForSync[\s\S]{0,260}domain === 'ozon\.ru' \|\| domain\.endsWith\('\.ozon\.ru'\)/,
+  'Cookie lifecycle should reject changes outside the exact Ozon domain family',
+);
+
+assert.match(
+  serviceWorker,
+  /function runOzonCookieOnlySyncSingleFlight[\s\S]{0,700}automatic:\s*true/,
+  'lifecycle Cookie writes should retain the automatic exact-company guard',
+);
+
+assert.match(
+  serviceWorker,
+  /function flushOzonSellerCookieLifecycleSync[\s\S]{0,1200}runOzonCookieOnlySyncSingleFlight\(\{ automatic: true, clearIfMissingAuth \}\)/,
+  'debounced lifecycle work should execute only the guarded current-Cookie resnapshot or clear',
+);
+
+assert.match(
+  serviceWorker,
+  /function flushOzonCompanyMaintenance[\s\S]{0,500}enqueueOzonAutoSyncMaintenance\(\{ reason: 'company_id_cookie_changed', companyId \}\)/,
+  'sc_company_id changes should keep the existing full maintenance behavior',
+);
+
+assert.match(
+  serviceWorker,
+  /if \(change\.removed\) \{[\s\S]{0,220}broadcastOzonCompanyContextChanged[\s\S]{0,120}return;/,
+  'a removed company Cookie should invalidate page caches without syncing the obsolete company value',
+);
+
+assert.match(
+  serviceWorker,
   /function\s+ensureCurrentOzonCookieSyncedForInsights/,
   'seller KPI aggregation should have a throttled guard that syncs the currently logged-in Ozon seller cookie automatically',
 );

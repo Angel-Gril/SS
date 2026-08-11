@@ -147,7 +147,13 @@ const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
 let imageSearchJobsQueue = Promise.resolve();
-let ozonInsightCookieSyncInFlight = null;
+let ozonCookieOnlySyncInFlight = null;
+let ozonSellerCookieLifecycleTimer = null;
+let ozonSellerCookieLifecyclePending = false;
+let ozonSellerCookieRemovalPending = false;
+let ozonAutoSyncMaintenanceQueue = Promise.resolve();
+let ozonCompanyMaintenanceTimer = null;
+let ozonPendingMaintenanceCompanyId = '';
 const ozonCdnWriteQueues = new Map();
 const ozonCdnWriteEpochs = new Map();
 const ozonCdnMemoryGuards = new Map();
@@ -170,6 +176,9 @@ const SS_ERP_OZON_AUTO_SYNC_ALARM_NAME = 'ss-erp:ozon-auto-sync';
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MS = SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES * 60 * 1000;
 const SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const SS_ERP_OZON_COOKIE_LIFECYCLE_DEBOUNCE_MS = 750;
+const SS_ERP_OZON_AUTH_COOKIE_NAME_PATTERN =
+  /token|(?:^|[_-])(?:access|refresh|auth|authorization|session|jwt)(?:[_-]|$)/i;
 const SS_ERP_DEVICE_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const SS_ERP_DEVICE_COOKIE_REQUEST_MAX_BYTES = 66 * 1024;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
@@ -1103,6 +1112,10 @@ globalThis.SS_ERP_EXTENSION_DEVICE_SHOP_ANALYTICS = writeExtensionDeviceShopAnal
 
 async function claimExtensionDeviceFromErp(message, sender) {
   const baseUrl = trustedErpDeviceBaseUrl(message.baseUrl, sender);
+  if (message.onlyIfAuthorizationRequired === true) {
+    const latestStatus = await readExtensionDeviceStatus(true);
+    if (latestStatus.state !== 'authorization_required') return latestStatus;
+  }
   const credentials = getLogisticsDeviceCredentials();
   const current = await credentials.getStatus();
   if (current && current.state === 'paired') {
@@ -3627,6 +3640,34 @@ if (chrome.runtime.onStartup) {
   });
 }
 
+function packagedErpBridgeRegistration() {
+  const manifest = chrome.runtime.getManifest();
+  return (manifest.content_scripts || []).find((entry) => (
+    Array.isArray(entry.js)
+    && entry.js.includes('content/erp-collect-bridge.js')
+  )) || null;
+}
+
+async function injectErpBridgeIntoOpenTabs() {
+  if (!chrome.tabs || typeof chrome.tabs.query !== 'function'
+    || !chrome.scripting || typeof chrome.scripting.executeScript !== 'function') return;
+  const registration = packagedErpBridgeRegistration();
+  const matches = registration && Array.isArray(registration.matches)
+    ? registration.matches.filter((value) => /^https?:\/\//u.test(String(value || '')))
+    : [];
+  if (!matches.length) return;
+  const tabs = await chrome.tabs.query({ url: matches });
+  await Promise.allSettled((tabs || []).filter((tab) => tab && Number.isInteger(tab.id)).map((tab) => (
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: [
+        'shared/erp-adapter/deployment-defaults.js',
+        'content/erp-collect-bridge.js',
+      ],
+    })
+  )));
+}
+
 try {
   importScripts('../shared/erp-package/erp-package-export.js');
 } catch (error) {
@@ -3637,6 +3678,7 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log('[ozon-calc] installed');
   if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
   ensureOzonAutoSyncAlarm();
+  injectErpBridgeIntoOpenTabs().catch(() => {});
   if (!isLogisticsDistributionFeatureEnabled()) {
     disableLogisticsDistributionAlarms();
     return;
@@ -3746,6 +3788,16 @@ function rememberRuntimeOzonCompanyIdForSync(value, capturedAt) {
     }).catch(() => {});
   }
   return companyId;
+}
+
+async function clearRuntimeOzonCompanyIdForSync() {
+  globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = null;
+  if (!chrome.storage || !chrome.storage.session
+    || typeof chrome.storage.session.remove !== 'function') return;
+  await chrome.storage.session.remove([
+    OZON_SYNC_SESSION_COMPANY_ID_KEY,
+    OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY,
+  ]).catch(() => {});
 }
 
 function getRuntimeOzonCompanyIdForSync() {
@@ -3954,6 +4006,7 @@ async function ozonCdnWriteRequestSha256(payload) {
     cookie: payload && typeof payload.cookie === 'string' ? payload.cookie : null,
     companyId: payload && payload.companyId != null ? String(payload.companyId) : null,
   };
+  if (payload && payload.clearCookie === true) normalized.clearCookie = true;
   const bytes = new TextEncoder().encode(JSON.stringify(normalized));
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(digest, (value) => value.toString(16).padStart(2, '0')).join('');
@@ -4280,13 +4333,15 @@ async function updateOzonSyncTimes(patch) {
 async function syncOzonCookieToShopForSync(shopId, options) {
   const normalizedShopId = toText(shopId).trim();
   if (!normalizedShopId) throw new Error('缺少 shopId，请先选择目标店铺');
-  const [cookies, tabCookieStr, tabCompanyId] = await Promise.all([
+  const [cookies, tabCookieStr, tabCompanyId, authCookieState] = await Promise.all([
     getOzonSellerCookiesForSync(),
     readOzonSellerCookieStringFromOpenTabForSync(),
     readOzonSellerCookieValueFromOpenTabForSync('sc_company_id'),
+    options && options.clearIfMissingAuth === true
+      ? hasCurrentOzonSellerAuthCookieForSync()
+      : Promise.resolve(null),
   ]);
   const cookieStr = mergeCookieStringsForSync(cookieStringFromOzonCookiesForSync(cookies), tabCookieStr);
-  if (!cookieStr) throw new Error('未检测到 seller.ozon.ru 登录态，请先登录卖家后台');
 
   const payloadCompanyId = normalizeOzonCompanyIdForSync(options && options.companyId);
   const cookieCompanyId = findOzonCompanyIdFromCookies(cookies);
@@ -4297,10 +4352,20 @@ async function syncOzonCookieToShopForSync(shopId, options) {
   const preferStoredCompanyId = options && options.useStoredCompanyId === true;
   const automatic = options && options.automatic === true;
   const requireCompanyMatch = automatic || (options && options.requireCompanyMatch === true);
+  const clearCookie = options && options.clearIfMissingAuth === true && authCookieState === false;
   const liveCompanyIds = [tabCompanyId, cookieCompanyId]
     .map(normalizeOzonCompanyIdForSync)
     .filter((value, index, values) => value && values.indexOf(value) === index);
-  if (requireCompanyMatch && (
+  if (clearCookie && (
+    !payloadCompanyId
+    || !storedCompanyId
+    || payloadCompanyId !== storedCompanyId
+  )) {
+    const error = new Error('当前 seller 店铺与 ERP 店铺绑定不一致，已停止 Cookie 撤销');
+    error.errorCode = 'ozon_company_binding_mismatch';
+    throw error;
+  }
+  if (!clearCookie && requireCompanyMatch && (
     !payloadCompanyId
     || liveCompanyIds.length === 0
     || liveCompanyIds.some((value) => value !== payloadCompanyId)
@@ -4315,7 +4380,10 @@ async function syncOzonCookieToShopForSync(shopId, options) {
       ? [storedCompanyId, payloadCompanyId, tabCompanyId, capturedCompanyId, cookieCompanyId]
       : [tabCompanyId, payloadCompanyId, capturedCompanyId, cookieCompanyId, storedCompanyId];
   const companyId = companyIdCandidates.find((value) => normalizeOzonCompanyIdForSync(value)) || '';
-  const body = { cookie: cookieStr };
+  if (!clearCookie && !cookieStr) {
+    throw new Error('未检测到 seller.ozon.ru 登录态，请先登录卖家后台');
+  }
+  const body = clearCookie ? { clearCookie: true } : { cookie: cookieStr };
   if (companyId) {
     body.companyId = companyId;
     rememberRuntimeOzonCompanyIdForSync(companyId);
@@ -4333,6 +4401,7 @@ async function syncOzonCookieToShopForSync(shopId, options) {
     authMode: writeResult.authMode,
     shopId: normalizedShopId,
     companyId: companyId || '',
+    cleared: clearCookie,
     data: writeResult.data,
     syncedAt: now,
   };
@@ -4358,6 +4427,7 @@ async function syncCurrentOzonCookieForSync(options) {
     companyId: capturedCompanyId,
     automatic,
     requireCompanyMatch: Boolean(capturedCompanyId),
+    clearIfMissingAuth: options && options.clearIfMissingAuth === true,
   });
   try {
     const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
@@ -4378,6 +4448,17 @@ async function syncCurrentOzonCookieForSync(options) {
   return result;
 }
 
+function runOzonCookieOnlySyncSingleFlight(options) {
+  if (ozonCookieOnlySyncInFlight) return ozonCookieOnlySyncInFlight;
+  ozonCookieOnlySyncInFlight = syncCurrentOzonCookieForSync({
+    ...(options && typeof options === 'object' ? options : {}),
+    automatic: true,
+  }).finally(() => {
+    ozonCookieOnlySyncInFlight = null;
+  });
+  return ozonCookieOnlySyncInFlight;
+}
+
 async function ensureCurrentOzonCookieSyncedForInsights(options) {
   const liveCompanyId = normalizeOzonCompanyIdForSync(
     (options && options.companyId)
@@ -4394,18 +4475,99 @@ async function ensureCurrentOzonCookieSyncedForInsights(options) {
   if (sameCompany && lastCookieAt && now - lastCookieAt < SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS) {
     return { ok: true, skipped: true, reason: 'recent_cookie_sync', companyId: liveCompanyId || state.lastCompanyId || '' };
   }
-  if (ozonInsightCookieSyncInFlight) return await ozonInsightCookieSyncInFlight;
-
-  ozonInsightCookieSyncInFlight = syncCurrentOzonCookieForSync({
+  return await runOzonCookieOnlySyncSingleFlight({
     ...(options && typeof options === 'object' ? options : {}),
     companyId: liveCompanyId || (options && options.companyId) || '',
-    automatic: true,
-  }).finally(() => {
-    ozonInsightCookieSyncInFlight = null;
   });
-  return await ozonInsightCookieSyncInFlight;
 }
 globalThis.ensureCurrentOzonCookieSyncedForInsights = ensureCurrentOzonCookieSyncedForInsights;
+
+function isOzonSellerTabUrlForSync(value) {
+  try {
+    const url = new URL(toText(value));
+    return url.protocol === 'https:' && url.hostname === 'seller.ozon.ru';
+  } catch {
+    return false;
+  }
+}
+
+function isOzonSellerCookieDomainForSync(value) {
+  const domain = toText(value).trim().toLowerCase().replace(/^\./, '');
+  return domain === 'ozon.ru' || domain.endsWith('.ozon.ru');
+}
+
+function isOzonSellerSessionAuthCookieForSync(cookie) {
+  if (!cookie || !isOzonSellerCookieDomainForSync(cookie.domain)) return false;
+  return SS_ERP_OZON_AUTH_COOKIE_NAME_PATTERN.test(toText(cookie.name).trim());
+}
+
+async function hasCurrentOzonSellerAuthCookieForSync() {
+  if (!chrome.cookies || typeof chrome.cookies.getAll !== 'function') return null;
+  const queries = [{ domain: '.ozon.ru' }, { domain: 'seller.ozon.ru' }];
+  let completedQueries = 0;
+  for (const query of queries) {
+    try {
+      const cookies = await chrome.cookies.getAll(query);
+      completedQueries += 1;
+      if ((cookies || []).some(isOzonSellerSessionAuthCookieForSync)) return true;
+    } catch (_error) {}
+  }
+  return completedQueries === queries.length ? false : null;
+}
+
+function isRelevantOzonSellerAuthCookieForSync(cookie) {
+  if (!cookie || !isOzonSellerCookieDomainForSync(cookie.domain)) return false;
+  const name = toText(cookie.name).trim();
+  return name === 'sc_company_id' || isOzonSellerSessionAuthCookieForSync(cookie);
+}
+
+function flushOzonSellerCookieLifecycleSync() {
+  ozonSellerCookieLifecycleTimer = null;
+  if (!ozonSellerCookieLifecyclePending) return;
+  if (ozonCookieOnlySyncInFlight) {
+    const scheduleAfterCurrent = () => {
+      if (ozonSellerCookieLifecyclePending) scheduleOzonSellerCookieLifecycleSync();
+    };
+    ozonCookieOnlySyncInFlight.then(scheduleAfterCurrent, scheduleAfterCurrent);
+    return;
+  }
+
+  ozonSellerCookieLifecyclePending = false;
+  const clearIfMissingAuth = ozonSellerCookieRemovalPending;
+  ozonSellerCookieRemovalPending = false;
+  runOzonCookieOnlySyncSingleFlight({ automatic: true, clearIfMissingAuth })
+    .then(async (result) => {
+      if (result && result.cleared === true) {
+        const authCookieState = await hasCurrentOzonSellerAuthCookieForSync();
+        if (authCookieState === false) await clearRuntimeOzonCompanyIdForSync();
+        await broadcastOzonCompanyContextChanged();
+      }
+      return result;
+    })
+    .catch(() => null)
+    .finally(() => {
+      if (ozonSellerCookieLifecyclePending) scheduleOzonSellerCookieLifecycleSync();
+    });
+}
+
+function scheduleOzonSellerCookieLifecycleSync() {
+  ozonSellerCookieLifecyclePending = true;
+  if (ozonSellerCookieLifecycleTimer !== null) {
+    clearTimeout(ozonSellerCookieLifecycleTimer);
+  }
+  ozonSellerCookieLifecycleTimer = setTimeout(
+    flushOzonSellerCookieLifecycleSync,
+    SS_ERP_OZON_COOKIE_LIFECYCLE_DEBOUNCE_MS,
+  );
+}
+
+async function scheduleOzonSellerCookieLifecycleSyncWhenTabExists() {
+  if (!chrome.tabs || typeof chrome.tabs.query !== 'function') return;
+  const tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+  if ((tabs || []).some((tab) => tab && isOzonSellerTabUrlForSync(tab.url))) {
+    scheduleOzonSellerCookieLifecycleSync();
+  }
+}
 
 function shouldRunOzonAutoSyncSlot(state, key, now, force) {
   if (force) return true;
@@ -4527,6 +4689,61 @@ async function runOzonAutoSyncMaintenance(options) {
   return result;
 }
 
+function enqueueOzonAutoSyncMaintenance(options) {
+  const run = ozonAutoSyncMaintenanceQueue.then(() => runOzonAutoSyncMaintenance(options));
+  ozonAutoSyncMaintenanceQueue = run.catch(() => null);
+  return run;
+}
+
+async function broadcastOzonCompanyContextChanged() {
+  if (typeof globalThis.invalidateOzonWorkbenchInsightContext === 'function') {
+    globalThis.invalidateOzonWorkbenchInsightContext();
+  }
+  if (!chrome.tabs || typeof chrome.tabs.query !== 'function'
+    || typeof chrome.tabs.sendMessage !== 'function') return;
+  const tabs = await chrome.tabs.query({
+    url: [
+      'https://*.ozon.ru/*',
+      'https://*.ozon.kz/*',
+      'https://*.ozon.by/*',
+    ],
+  });
+  await Promise.allSettled((tabs || []).filter((tab) => tab && Number.isInteger(tab.id)).map((tab) => (
+    chrome.tabs.sendMessage(tab.id, { type: 'ss-erp:ozon-company-context-changed' })
+  )));
+}
+
+function flushOzonCompanyMaintenance() {
+  ozonCompanyMaintenanceTimer = null;
+  const companyId = ozonPendingMaintenanceCompanyId;
+  ozonPendingMaintenanceCompanyId = '';
+  if (!companyId) return;
+  enqueueOzonAutoSyncMaintenance({ reason: 'company_id_cookie_changed', companyId }).catch(() => {
+    console.warn('[SS ERP] Ozon auto sync after company switch failed');
+  });
+}
+
+function scheduleOzonCompanyMaintenance(companyId) {
+  const normalized = normalizeOzonCompanyIdForSync(companyId);
+  if (!normalized) return;
+  ozonPendingMaintenanceCompanyId = normalized;
+  if (ozonCompanyMaintenanceTimer !== null) clearTimeout(ozonCompanyMaintenanceTimer);
+  ozonCompanyMaintenanceTimer = setTimeout(
+    flushOzonCompanyMaintenance,
+    SS_ERP_OZON_COOKIE_LIFECYCLE_DEBOUNCE_MS,
+  );
+}
+
+function handleCapturedOzonCompanyIdForSync(companyId, capturedAt) {
+  const previousCompanyId = getRuntimeOzonCompanyIdForSync();
+  const nextCompanyId = rememberRuntimeOzonCompanyIdForSync(companyId, capturedAt);
+  if (nextCompanyId && nextCompanyId !== previousCompanyId) {
+    broadcastOzonCompanyContextChanged().catch(() => {});
+    scheduleOzonCompanyMaintenance(nextCompanyId);
+  }
+  return nextCompanyId;
+}
+
 async function readOzonAutoSyncStatus() {
   const [connection, deviceConnection, stateRow] = await Promise.all([
     getOzonAutoSyncConnection(),
@@ -4554,6 +4771,21 @@ async function readOzonAutoSyncStatus() {
   };
 }
 
+if (chrome.tabs && chrome.tabs.onUpdated) {
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (!changeInfo || changeInfo.status !== 'complete') return;
+    if (!isOzonSellerTabUrlForSync(tab && tab.url)) return;
+    scheduleOzonSellerCookieLifecycleSync();
+  });
+}
+
+if (chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    injectErpBridgeIntoOpenTabs().catch(() => {});
+    scheduleOzonSellerCookieLifecycleSyncWhenTabExists().catch(() => {});
+  });
+}
+
 if (chrome.alarms && chrome.alarms.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (!alarm) return;
@@ -4576,22 +4808,32 @@ if (chrome.alarms && chrome.alarms.onAlarm) {
       return;
     }
     if (alarm.name !== SS_ERP_OZON_AUTO_SYNC_ALARM_NAME) return;
-    runOzonAutoSyncMaintenance({ reason: 'alarm' }).catch((error) => {
+    enqueueOzonAutoSyncMaintenance({ reason: 'alarm' }).catch((error) => {
       console.warn('[SS ERP] Ozon auto sync alarm failed:', error);
     });
   });
 }
 
-if (chrome.cookies && chrome.cookies.onChanged) {
-  chrome.cookies.onChanged.addListener((change) => {
-    const cookie = change && change.cookie;
-    if (!cookie || cookie.name !== 'sc_company_id') return;
-    if (!String(cookie.domain || '').includes('ozon.ru')) return;
+function handleOzonSellerCookieChange(change) {
+  const cookie = change && change.cookie;
+  if (!isRelevantOzonSellerAuthCookieForSync(cookie)) return;
+  if (change.removed) {
+    ozonSellerCookieRemovalPending = true;
+    if (cookie.name === 'sc_company_id') broadcastOzonCompanyContextChanged().catch(() => {});
+    scheduleOzonSellerCookieLifecycleSync();
+    return;
+  }
+  if (cookie.name === 'sc_company_id') {
     const companyId = rememberRuntimeOzonCompanyIdForSync(cookie.value);
-    runOzonAutoSyncMaintenance({ reason: 'company_id_cookie_changed', companyId }).catch((error) => {
-      console.warn('[SS ERP] Ozon auto sync after company switch failed:', error);
-    });
-  });
+    broadcastOzonCompanyContextChanged().catch(() => {});
+    scheduleOzonCompanyMaintenance(companyId);
+    return;
+  }
+  scheduleOzonSellerCookieLifecycleSync();
+}
+
+if (chrome.cookies && chrome.cookies.onChanged) {
+  chrome.cookies.onChanged.addListener(handleOzonSellerCookieChange);
 }
 
 function safeIsoDate(value) {
@@ -5729,7 +5971,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ss-erp:ozon-company-id-captured') {
-    rememberRuntimeOzonCompanyIdForSync(message.companyId, message.capturedAt);
+    handleCapturedOzonCompanyIdForSync(message.companyId, message.capturedAt);
     sendResponse({ ok: true });
     return false;
   }
@@ -5748,6 +5990,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'ss-erp:extension-device-claim') {
     Promise.resolve().then(() => enqueueExtensionDeviceClaim(message, sender)).then((deviceStatus) => {
+      if (deviceStatus && deviceStatus.state === 'paired') {
+        broadcastOzonCompanyContextChanged().catch(() => {});
+        scheduleOzonSellerCookieLifecycleSync();
+      }
       sendResponse({ ok: true, data: deviceStatus });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -5763,6 +6009,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       assertTrustedErpDeviceSender(sender);
       return getLogisticsDeviceCredentials().clear();
     }).then((deviceStatus) => {
+      broadcastOzonCompanyContextChanged().catch(() => {});
       sendResponse({ ok: true, data: deviceStatus });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -7054,7 +7301,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calc:auto-sync-maintenance') {
-    runOzonAutoSyncMaintenance(message.payload || {}).then((result) => {
+    enqueueOzonAutoSyncMaintenance(message.payload || {}).then((result) => {
       sendResponse(result);
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

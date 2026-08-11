@@ -296,8 +296,8 @@ assert.match(
 );
 assert.match(
   overlay,
-  /rememberVisibleListSkus\(\)/,
-  'Ozon list scans should remember newly visible SKUs before refreshing the quick action count',
+  /scanRoot[\s\S]*rememberVisibleListSkus\(root\)[\s\S]*ensureListQuickActions\(\)/,
+  'Ozon incremental scans should remember changed-root SKUs before refreshing the quick action count',
 );
 assert.match(
   overlay,
@@ -308,6 +308,61 @@ assert.match(
   overlay,
   /rootMargin:\s*LIST_PRELOAD_ROOT_MARGIN/,
   'Ozon list IntersectionObserver should use the bounded preload window',
+);
+assert.match(
+  overlay,
+  /const\s+CARD_SELECTOR\s*=\s*CARD_SELECTORS\.join\(['"],['"]\)/,
+  'Ozon list discovery should compile the overlapping card selectors into one DOM query',
+);
+assert.doesNotMatch(
+  overlay,
+  /CARD_SCAN_FAST_MS|CARD_SCAN_SLOW_MS|CARD_SCAN_FAST_UNTIL_MS/,
+  'Ozon list discovery should not keep the old 500ms/2s permanent full-page scan loop',
+);
+assert.match(
+  overlay,
+  /CARD_SCAN_SAFETY_MS\s*=\s*10\s*\*\s*1000/,
+  'Ozon list discovery should retain only a low-frequency safety scan for missed virtual-list changes',
+);
+assert.match(
+  overlay,
+  /function\s+handleListMutations\(records\)[\s\S]*record\.addedNodes[\s\S]*scheduleScanRoot/,
+  'Ozon list discovery should process only changed roots from MutationObserver records',
+);
+assert.match(
+  overlay,
+  /attributeFilter:\s*\[['"]href['"]\]/,
+  'Ozon virtual-list card reuse should be detected when a product link changes SKU in place',
+);
+assert.match(
+  overlay,
+  /function\s+isSsErpOwnedNode[\s\S]*ss-erp-/,
+  'Ozon list discovery should ignore DOM inserted by the extension itself',
+);
+assert.match(
+  overlay,
+  /root !== document\.body && root\.isConnected === false/,
+  'delayed mutation roots should be discarded after Ozon detaches or recycles them',
+);
+assert.match(
+  overlay,
+  /premiumContextEpoch[\s\S]*premiumRequestKey[\s\S]*requestEpoch !== premiumContextEpoch[\s\S]*inFlightPremium\.get\(requestKey\) === request/,
+  'company-switch epochs should prevent stale list requests from writing cache or deleting newer in-flight work',
+);
+assert.match(
+  overlay,
+  /PREMIUM_MAX_PENDING\s*=\s*60[\s\S]*PREMIUM_QUEUE_DEADLINE_MS\s*=\s*15\s*\*\s*1000[\s\S]*next\.isCancelled\(\)/,
+  'content-side list preloading should drop bounded, expired, or detached work before background dispatch',
+);
+assert.match(
+  overlay,
+  /ss-erp:ozon-company-context-changed[\s\S]{0,300}invalidatePremiumContext\(\)/,
+  'Seller company changes should invalidate buyer-list content caches immediately',
+);
+assert.match(
+  overlay,
+  /type:\s*['"]spb-self-hosted:aggregate-product-insights['"][\s\S]{0,220}includeOffers:\s*false[\s\S]{0,220}profile:\s*['"]list-card['"]/,
+  'ordinary list cards should use the lightweight profile without seller-offer detail requests',
 );
 assert.doesNotMatch(
   overlay,

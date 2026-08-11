@@ -14,6 +14,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
 import { api, getApiBase, type ApiResponse } from '@/lib/api';
+import {
+  sendToExtension,
+} from '@/lib/extension-device-bridge';
 import { equalStringSets } from '@/lib/extension-device-pairing';
 
 interface ExtensionTokenDialogProps {
@@ -58,12 +61,6 @@ interface ExtensionDeviceStatus {
   ownerUserId?: string;
   scopes?: string[];
   expiresAt?: string;
-}
-
-interface ExtensionBridgeResponse {
-  ok?: boolean;
-  data?: ExtensionDeviceStatus;
-  error?: string;
 }
 
 type View = 'pairing' | 'legacy';
@@ -228,41 +225,6 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     setOpen(nextOpen);
   }
 
-  function sendToExtension(
-    message: Record<string, unknown>,
-    timeoutMs = 5000,
-  ): Promise<ExtensionBridgeResponse> {
-    if (typeof window === 'undefined') {
-      return Promise.resolve({ ok: false, error: '当前环境无法连接扩展' });
-    }
-    const requestId = `extension-device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (response: ExtensionBridgeResponse) => {
-        if (settled) return;
-        settled = true;
-        window.removeEventListener('message', onMessage);
-        window.clearTimeout(timer);
-        resolve(response);
-      };
-      const onMessage = (event: MessageEvent) => {
-        if (event.source !== window || event.origin !== window.location.origin) return;
-        const data = event.data as Record<string, unknown> | null;
-        if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
-        finish((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse);
-      };
-      const timer = window.setTimeout(() => {
-        finish({ ok: false, error: '未检测到 SS ERP 扩展，请确认已安装并刷新当前页面' });
-      }, timeoutMs);
-      window.addEventListener('message', onMessage);
-      window.postMessage({
-        direction: 'ss-erp:to-extension',
-        requestId,
-        message,
-      }, window.location.origin);
-    });
-  }
-
   function showConnectedExtension(status: ExtensionDeviceStatus, generation: number) {
     if (!isCurrentPairingGeneration(generation)) return;
     setExtensionDeviceStatus(status);
@@ -283,7 +245,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       setExtensionConnection('checking');
       setExtensionConnectionDetail('正在检测当前浏览器扩展...');
     }
-    const response = await sendToExtension({
+    const response = await sendToExtension<ExtensionDeviceStatus>({
       type: 'ss-erp:extension-device-status',
       verify: true,
     }, 8000);
@@ -598,7 +560,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
           nextPairing = null;
           return;
         }
-        const response = await sendToExtension({
+        const response = await sendToExtension<ExtensionDeviceStatus>({
           type: 'ss-erp:extension-device-claim',
           baseUrl: erpUrl,
           deploymentId: nextPairing.deploymentId,

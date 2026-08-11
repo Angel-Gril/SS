@@ -10,6 +10,7 @@ import { api, tokenStore } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { GlobalSearch } from '@/components/global-search';
 import { ExtensionTokenDialog } from '@/components/extension-token-dialog';
+import { ExtensionDeviceAutoConnect } from '@/components/extension-device-auto-connect';
 import type { AuthUser } from 'shared';
 
 interface TopbarProps {
@@ -92,6 +93,7 @@ export function Topbar({ user, onToggle }: TopbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
+        <ExtensionDeviceAutoConnect />
         <span className="text-sm text-muted-foreground hidden sm:inline">
           余额: <span className="font-medium text-foreground">{formatCurrency(user.balance)}</span>
         </span>

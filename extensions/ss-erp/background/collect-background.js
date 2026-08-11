@@ -12,8 +12,16 @@ var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 var SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY = 6;
 var SS_ERP_OZON_COMMISSION_SNAPSHOT_KEY = "ozon-calculator:commission-snapshot";
 var OZON_WORKBENCH_INSIGHT_TTL_MS = 5 * 60 * 1000;
+var OZON_WORKBENCH_INSIGHT_MAX_ENTRIES = 300;
+var OZON_LIST_INSIGHT_REQUEST_CONCURRENCY = 3;
+var OZON_LIST_INSIGHT_REQUEST_MAX_PENDING = 60;
+var OZON_LIST_INSIGHT_REQUEST_DEADLINE_MS = 18 * 1000;
 var ozonWorkbenchInsightCache = new Map();
 var ozonWorkbenchInsightInFlight = new Map();
+var ozonWorkbenchInsightContextEpoch = 0;
+var ozonListInsightRequestQueue = [];
+var ozonListInsightActiveRequests = 0;
+var ozonListInsightRequestSequence = 0;
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -64,6 +72,50 @@ let ozonWorkbenchPublishPayloadRunQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
+}
+
+function drainOzonListInsightRequestQueue() {
+  while (ozonListInsightActiveRequests < OZON_LIST_INSIGHT_REQUEST_CONCURRENCY
+    && ozonListInsightRequestQueue.length) {
+    const next = ozonListInsightRequestQueue.shift();
+    if (next.deadlineAt <= Date.now()) {
+      next.reject(new Error("Ozon list insight request expired before dispatch"));
+      continue;
+    }
+    ozonListInsightActiveRequests += 1;
+    Promise.resolve()
+      .then(next.task)
+      .then(next.resolve, next.reject)
+      .finally(() => {
+        ozonListInsightActiveRequests -= 1;
+        drainOzonListInsightRequestQueue();
+      });
+  }
+}
+
+function enqueueOzonListInsightRequest(task, options = {}) {
+  if (ozonListInsightRequestQueue.length >= OZON_LIST_INSIGHT_REQUEST_MAX_PENDING) {
+    return Promise.reject(new Error("Ozon list insight request queue is full"));
+  }
+  const priority = options.priority === "list" ? 1 : 0;
+  const timeoutMs = Math.min(
+    OZON_LIST_INSIGHT_REQUEST_DEADLINE_MS,
+    Math.max(1000, Number(options.timeoutMs) || OZON_LIST_INSIGHT_REQUEST_DEADLINE_MS),
+  );
+  return new Promise((resolve, reject) => {
+    ozonListInsightRequestQueue.push({
+      task,
+      resolve,
+      reject,
+      priority,
+      deadlineAt: Date.now() + timeoutMs,
+      sequence: ozonListInsightRequestSequence++,
+    });
+    ozonListInsightRequestQueue.sort((left, right) => (
+      left.priority - right.priority || left.sequence - right.sequence
+    ));
+    drainOzonListInsightRequestQueue();
+  });
 }
 
 function containsCjkText(value) {
@@ -1971,28 +2023,34 @@ function extractOzonSellerSearchItem(payload, sku) {
 
 async function getOzonInsights(productId, options = {}) {
   const includeOffers = options.includeOffers !== false;
-  const companyId = await getSellerCompanyId();
-  let analytics = null;
-  let analyticsError = "";
-  try {
-    analytics = await sellerTabFetchJson(
+  const includeDetail = options.includeDetail !== false;
+  const companyId = options.companyId || await getSellerCompanyId();
+  const requestQueueOptions = {
+    priority: options.requestPriority === "list" ? "list" : "interactive",
+    timeoutMs: options.requestTimeoutMs,
+  };
+  const analyticsPromise = enqueueOzonListInsightRequest(() => sellerTabFetchJson(
       OZON_ENDPOINTS.analytics,
       buildOzonAnalyticsRequestBody(productId),
       companyId
-    );
-  } catch (error) {
-    analyticsError = normalizeErrorMessage(error);
+    ), requestQueueOptions).then((data) => ({ data, error: "" }))
+    .catch((error) => ({ data: null, error: normalizeErrorMessage(error) }));
+  const searchPromise = enqueueOzonListInsightRequest(
+    () => fetchOzonSellerSearchBySku(productId, companyId),
+    requestQueueOptions,
+  )
+    .then((data) => ({ data, error: "" }))
+    .catch((error) => ({ data: null, error: normalizeErrorMessage(error) }));
+  let offersPromise = Promise.resolve(null);
+  if (includeOffers) {
+    offersPromise = fetchOzonSellerOffers(productId).catch(() => null);
   }
-
-  let search = null;
-  let searchItem = null;
-  let searchError = "";
-  try {
-    search = await fetchOzonSellerSearchBySku(productId, companyId);
-    searchItem = extractOzonSellerSearchItem(search, productId);
-  } catch (error) {
-    searchError = normalizeErrorMessage(error);
-  }
+  const [analyticsResult, searchResult, offerResult] = await Promise.all([analyticsPromise, searchPromise, offersPromise]);
+  const analytics = analyticsResult.data;
+  const analyticsError = analyticsResult.error;
+  const search = searchResult.data;
+  const searchError = searchResult.error;
+  const searchItem = extractOzonSellerSearchItem(search, productId);
 
   const firstItemRaw = analytics && Array.isArray(analytics.items) && analytics.items.length ? analytics.items[0] : null;
   const mergedItemRaw = firstItemRaw || searchItem
@@ -2002,15 +2060,7 @@ async function getOzonInsights(productId, options = {}) {
     ...mergedItemRaw,
     ...normalizeOzonAnalyticsRow({ ...mergedItemRaw, sku: mergedItemRaw.sku || productId }, productId),
   } : null;
-  let offers = null;
-  if (includeOffers) {
-    try {
-      const offerResult = await fetchOzonSellerOffers(productId);
-      if (offerResult && offerResult.ok && offerResult.data) {
-        offers = offerResult.data;
-      }
-    } catch (e) {}
-  }
+  const offers = offerResult && offerResult.ok && offerResult.data ? offerResult.data : null;
   if (!firstItem) {
     return {
       source: "seller.ozon.ru analytics",
@@ -2028,17 +2078,22 @@ async function getOzonInsights(productId, options = {}) {
   }
 
   let detail = null;
+  let detailError = "";
   let specs = null;
-  if (firstItem.variantId) {
-    detail = await sellerTabFetchJson(
-      OZON_ENDPOINTS.bundleByVariantId,
-      {
-        company_id: String(companyId),
-        variant_id: String(firstItem.variantId),
-        source: "SOURCE_UI_COPY_MERGED"
-      },
-      companyId
-    );
+  if (includeDetail && firstItem.variantId) {
+    try {
+      detail = await enqueueOzonListInsightRequest(() => sellerTabFetchJson(
+        OZON_ENDPOINTS.bundleByVariantId,
+        {
+          company_id: String(companyId),
+          variant_id: String(firstItem.variantId),
+          source: "SOURCE_UI_COPY_MERGED"
+        },
+        companyId
+      ), requestQueueOptions);
+    } catch (error) {
+      detailError = normalizeErrorMessage(error);
+    }
     if (detail && detail.item) {
       specs = extractOzonSpecifications(detail.item);
     }
@@ -2054,6 +2109,7 @@ async function getOzonInsights(productId, options = {}) {
     searchError,
     item: firstItem,
     detail: detail && detail.item ? detail.item : null,
+    detailError,
     specs,
     offers
   };
@@ -2984,7 +3040,13 @@ function hasInsightValue(value) {
   return value != null && value !== "" && !(Array.isArray(value) && value.length === 0);
 }
 
-function shouldFetchPublicProductFallback(item) {
+function shouldFetchPublicProductFallback(item, options = {}) {
+  const profile = options.profile === "list-card" ? "list-card" : "full";
+  if (profile === "list-card") {
+    return !hasInsightValue(item.title)
+      || !hasInsightValue(item.brand)
+      || (!hasInsightValue(item.category) && !hasInsightValue(item.category3) && !hasInsightValue(item.categoryPath));
+  }
   return !hasInsightValue(item.title)
     || !hasInsightValue(item.brand)
     || !hasInsightValue(item.category)
@@ -3037,6 +3099,8 @@ async function aggregateOzonProductInsights(productId, options = {}) {
   const sku = String(productId || "").trim();
   if (!sku) return { ok: false, error: "缺少 productId" };
   const includeOffers = options.includeOffers !== false;
+  const profile = options.profile === "list-card" ? "list-card" : "full";
+  const includeDetail = options.includeDetail !== false;
 
   const sources = [];
   const sourceErrors = [];
@@ -3046,7 +3110,13 @@ async function aggregateOzonProductInsights(productId, options = {}) {
 
   // 来源 1：seller-analytics（仅当登录 + 有 Premium 时成功）
   try {
-    const analytics = await getOzonInsights(sku, { includeOffers });
+    const analytics = await getOzonInsights(sku, {
+      includeOffers,
+      includeDetail,
+      companyId: options.companyId,
+      requestPriority: profile === "list-card" ? "list" : "interactive",
+      requestTimeoutMs: profile === "list-card" ? OZON_LIST_INSIGHT_REQUEST_DEADLINE_MS : undefined,
+    });
     if (analytics && analytics.item) {
       if (analytics.analytics && Array.isArray(analytics.analytics.items) && analytics.analytics.items.length) {
         sources.push("seller-analytics");
@@ -3136,7 +3206,11 @@ async function aggregateOzonProductInsights(productId, options = {}) {
         heightMm: analytics.specs.heightMm,
       });
     } else if (analytics && analytics.item) {
-      recordInsightSourceError(sourceErrors, "seller-detail", "seller.ozon.ru 未返回该 SKU 的重量/尺寸明细");
+      recordInsightSourceError(
+        sourceErrors,
+        "seller-detail",
+        analytics.detailError || "seller.ozon.ru 未返回该 SKU 的重量/尺寸明细"
+      );
     }
     if (analytics && analytics.item && analytics.item.weightGrams && !item.weightGrams) {
       item.weightGrams = analytics.item.weightGrams;
@@ -3150,7 +3224,7 @@ async function aggregateOzonProductInsights(productId, options = {}) {
 
   // 来源 2：OZON 公开 entrypoint API（widgetStates 提取）
   // seller 只返回部分字段时，也用公开接口补商品基础信息。
-  if (shouldFetchPublicProductFallback(item)) {
+  if (shouldFetchPublicProductFallback(item, { profile })) {
     try {
       const pub = await fetchOzonProductViaTab(sku);
       if (pub && pub.ok && pub.data) {
@@ -3184,49 +3258,51 @@ async function aggregateOzonProductInsights(productId, options = {}) {
     }
   }
 
-  // 来源 3：SS ERP 后端缓存（其他用户已采集过的 Premium 数据）
-  try {
-    const { baseUrl, token } = await getStoredErpConnection();
-    if (baseUrl && token) {
-      const r = await fetch(baseUrl + "/api/ozon-analytics/cache?sku=" + encodeURIComponent(sku), {
-        method: "GET",
-        headers: { Authorization: "Bearer " + token },
-      });
-      if (r.ok) {
-        const j = await r.json();
-        if (j && j.code === 1 && j.data && j.data.metrics) {
-          sources.push("erp-cache");
-          // ERP 缓存优先级最低，只补缺失字段
-          for (const k of Object.keys(j.data.metrics)) {
-            if (item[k] == null && j.data.metrics[k] != null) {
-              item[k] = j.data.metrics[k];
-            }
-          }
-        } else if (j && j.code === 0 && j.msg && !/无缓存/.test(String(j.msg))) {
-          recordInsightSourceError(sourceErrors, "erp-cache", j.msg);
-        }
-      } else {
-        recordInsightSourceError(sourceErrors, "erp-cache", "HTTP " + r.status);
-      }
-    } else {
-      recordInsightSourceError(sourceErrors, "erp-cache", "扩展未配置 ERP 连接或 Token，无法读取缓存");
-    }
-  } catch (e) {
-    recordInsightSourceError(sourceErrors, "erp-cache", e);
-  }
-
-  // 如果拿到了 seller-analytics 数据，回写 ERP 缓存让其他用户复用
-  if (sources.includes("seller-analytics")) {
+  // 完整工作台保留旧缓存兼容；高频列表卡不执行逐 SKU legacy-token HTTP。
+  if (profile !== "list-card") {
     try {
       const { baseUrl, token } = await getStoredErpConnection();
       if (baseUrl && token) {
-        await fetch(baseUrl + "/api/ozon-analytics/cache", {
-          method: "POST",
-          headers: { "content-type": "application/json", Authorization: "Bearer " + token },
-          body: JSON.stringify({ sku, metrics: item, source: "seller-analytics" }),
-        }).catch(() => {});
+        const r = await fetch(baseUrl + "/api/ozon-analytics/cache?sku=" + encodeURIComponent(sku), {
+          method: "GET",
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (j && j.code === 1 && j.data && j.data.metrics) {
+            sources.push("erp-cache");
+            // ERP 缓存优先级最低，只补缺失字段
+            for (const k of Object.keys(j.data.metrics)) {
+              if (item[k] == null && j.data.metrics[k] != null) {
+                item[k] = j.data.metrics[k];
+              }
+            }
+          } else if (j && j.code === 0 && j.msg && !/无缓存/.test(String(j.msg))) {
+            recordInsightSourceError(sourceErrors, "erp-cache", j.msg);
+          }
+        } else {
+          recordInsightSourceError(sourceErrors, "erp-cache", "HTTP " + r.status);
+        }
+      } else {
+        recordInsightSourceError(sourceErrors, "erp-cache", "扩展未配置 ERP 连接或 Token，无法读取缓存");
       }
-    } catch (e) {}
+    } catch (e) {
+      recordInsightSourceError(sourceErrors, "erp-cache", e);
+    }
+
+    // 如果拿到了 seller-analytics 数据，完整工作台回写 ERP 缓存让其他用户复用。
+    if (sources.includes("seller-analytics")) {
+      try {
+        const { baseUrl, token } = await getStoredErpConnection();
+        if (baseUrl && token) {
+          await fetch(baseUrl + "/api/ozon-analytics/cache", {
+            method: "POST",
+            headers: { "content-type": "application/json", Authorization: "Bearer " + token },
+            body: JSON.stringify({ sku, metrics: item, source: "seller-analytics" }),
+          }).catch(() => {});
+        }
+      } catch (e) {}
+    }
   }
 
   await applyOzonCommissionToAggregatedItem(item, sku);
@@ -3376,49 +3452,99 @@ function hasRichWorkbenchSeedRow(seed, options = {}) {
   return false;
 }
 
-function getOzonWorkbenchInsightCacheKey(sku, includeOffers) {
+function normalizeOzonInsightProfile(value) {
+  return value === "list-card" ? "list-card" : "full";
+}
+
+function invalidateOzonWorkbenchInsightContext() {
+  ozonWorkbenchInsightContextEpoch += 1;
+  ozonWorkbenchInsightCache.clear();
+  ozonWorkbenchInsightInFlight.clear();
+}
+globalThis.invalidateOzonWorkbenchInsightContext = invalidateOzonWorkbenchInsightContext;
+
+function getOzonWorkbenchInsightCacheKey(sku, includeOffers, options = {}) {
   const key = String(sku || "").trim();
-  return key ? key + ":" + (includeOffers ? "offers" : "base") : "";
+  const contextKey = String(options.contextKey || "").trim();
+  const profile = normalizeOzonInsightProfile(options.profile);
+  const includeDetail = options.includeDetail !== false;
+  return key && contextKey
+    ? contextKey + ":" + profile + ":" + key + ":" + (includeOffers ? "offers" : "base")
+      + ":" + (includeDetail ? "detail" : "summary")
+    : "";
 }
 
 function getCachedOzonWorkbenchInsight(sku, options = {}) {
   const includeOffers = options.includeOffers !== false;
-  const fullKey = getOzonWorkbenchInsightCacheKey(sku, true);
-  const key = includeOffers ? fullKey : getOzonWorkbenchInsightCacheKey(sku, false);
-  if (!key) return null;
-  let hitKey = key;
-  let hit = ozonWorkbenchInsightCache.get(hitKey);
-  if (!hit && !includeOffers && fullKey) {
-    hitKey = fullKey;
-    hit = ozonWorkbenchInsightCache.get(hitKey);
+  const includeDetail = options.includeDetail !== false;
+  const candidates = [
+    { includeOffers, includeDetail },
+    ...(!includeDetail ? [{ includeOffers, includeDetail: true }] : []),
+    ...(!includeOffers ? [{ includeOffers: true, includeDetail }] : []),
+    ...(!includeOffers && !includeDetail ? [{ includeOffers: true, includeDetail: true }] : []),
+  ];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const hitKey = getOzonWorkbenchInsightCacheKey(sku, candidate.includeOffers, {
+      ...options,
+      includeDetail: candidate.includeDetail,
+    });
+    if (!hitKey || seen.has(hitKey)) continue;
+    seen.add(hitKey);
+    const hit = ozonWorkbenchInsightCache.get(hitKey);
+    if (!hit) continue;
+    if (Date.now() - hit.ts > OZON_WORKBENCH_INSIGHT_TTL_MS) {
+      ozonWorkbenchInsightCache.delete(hitKey);
+      continue;
+    }
+    return hit.data;
   }
-  if (!hit) return null;
-  if (Date.now() - hit.ts > OZON_WORKBENCH_INSIGHT_TTL_MS) {
-    ozonWorkbenchInsightCache.delete(hitKey);
-    return null;
-  }
-  return hit.data;
+  return null;
 }
 
 function setCachedOzonWorkbenchInsight(sku, data, options = {}) {
-  const key = getOzonWorkbenchInsightCacheKey(sku, options.includeOffers !== false);
+  const key = getOzonWorkbenchInsightCacheKey(sku, options.includeOffers !== false, options);
   if (!key || !data) return data;
+  ozonWorkbenchInsightCache.delete(key);
+  while (ozonWorkbenchInsightCache.size >= OZON_WORKBENCH_INSIGHT_MAX_ENTRIES) {
+    const oldestKey = ozonWorkbenchInsightCache.keys().next().value;
+    if (!oldestKey) break;
+    ozonWorkbenchInsightCache.delete(oldestKey);
+  }
   ozonWorkbenchInsightCache.set(key, { data, ts: Date.now() });
   return data;
 }
 
 async function fetchCachedOzonWorkbenchInsight(sku, options = {}) {
   const includeOffers = options.includeOffers !== false;
-  const key = getOzonWorkbenchInsightCacheKey(sku, includeOffers);
+  const profile = normalizeOzonInsightProfile(options.profile);
+  const contextEpoch = ozonWorkbenchInsightContextEpoch;
+  const companyId = String(options.companyId || await getSellerCompanyId().catch(() => "")).trim();
+  const contextKey = companyId ? "epoch-" + contextEpoch + ":company-" + companyId : "";
+  if (!contextKey) {
+    return await aggregateOzonProductInsights(sku, {
+      ...options,
+      includeOffers,
+      profile,
+    });
+  }
+  const cacheOptions = { ...options, includeOffers, profile, companyId, contextKey };
+  const key = getOzonWorkbenchInsightCacheKey(sku, includeOffers, cacheOptions);
   if (!key) return null;
-  const cached = getCachedOzonWorkbenchInsight(sku, { includeOffers });
+  const cached = getCachedOzonWorkbenchInsight(sku, cacheOptions);
   if (cached) return cached;
   const inFlight = ozonWorkbenchInsightInFlight.get(key);
   if (inFlight) return await inFlight;
-  const request = aggregateOzonProductInsights(sku, { includeOffers })
-    .then((data) => setCachedOzonWorkbenchInsight(sku, data, { includeOffers }))
+  const request = aggregateOzonProductInsights(sku, cacheOptions)
+    .then((data) => (
+      contextEpoch === ozonWorkbenchInsightContextEpoch
+        ? setCachedOzonWorkbenchInsight(sku, data, cacheOptions)
+        : null
+    ))
     .finally(() => {
-      ozonWorkbenchInsightInFlight.delete(key);
+      if (ozonWorkbenchInsightInFlight.get(key) === request) {
+        ozonWorkbenchInsightInFlight.delete(key);
+      }
     });
   ozonWorkbenchInsightInFlight.set(key, request);
   return await request;
@@ -5614,7 +5740,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const productId = message.productId;
         if (!productId) return { ok: false, error: "缺少 productId" };
         try {
-          return await aggregateOzonProductInsights(productId);
+          const includeOffers = message.includeOffers !== false;
+          const profile = normalizeOzonInsightProfile(message.profile);
+          return await fetchCachedOzonWorkbenchInsight(productId, {
+            includeOffers,
+            profile,
+            includeDetail: message.includeDetail !== false,
+          });
         } catch (e) {
           return { ok: false, error: e && e.message ? e.message : String(e) };
         }

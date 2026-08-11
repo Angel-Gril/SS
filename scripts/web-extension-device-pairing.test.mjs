@@ -1,13 +1,81 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { equalStringSets } from '../apps/web/src/lib/extension-device-pairing.ts';
+import vm from 'node:vm';
+import ts from 'typescript';
+import {
+  equalStringSets,
+  singleActiveOzonShopIds,
+} from '../apps/web/src/lib/extension-device-pairing.ts';
 
 const source = fs.readFileSync('apps/web/src/components/extension-token-dialog.tsx', 'utf8');
+const autoConnectSource = fs.readFileSync(
+  'apps/web/src/components/extension-device-auto-connect.tsx',
+  'utf8',
+);
+const topbarSource = fs.readFileSync('apps/web/src/components/layout/topbar.tsx', 'utf8');
+const erpBridgeSource = fs.readFileSync('extensions/ss-erp/content/erp-collect-bridge.js', 'utf8');
 const serviceWorkerSource = fs.readFileSync(
   'extensions/ss-erp/background/service-worker.js',
   'utf8',
 );
+
+function loadAutoConnectRuntime(overrides = {}) {
+  const storage = new Map();
+  const dispatched = [];
+  const api = overrides.api;
+  const module = { exports: {} };
+  const sandbox = {
+    CustomEvent: class CustomEvent {
+      constructor(type) { this.type = type; }
+    },
+    Date,
+    Math,
+    clearTimeout,
+    console,
+    exports: module.exports,
+    module,
+    navigator: overrides.navigator || {},
+    process: { env: { NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED: 'true' } },
+    require: (id) => {
+      if (id === 'react') return { useEffect: () => {} };
+      if (id === '@/lib/api') {
+        return { api, getApiBase: () => 'https://api.ss-erp.test' };
+      }
+      if (id === '@/lib/extension-device-bridge') {
+        return { sendToExtension: overrides.sendToExtension };
+      }
+      if (id === '@/lib/extension-device-pairing') {
+        return { equalStringSets, singleActiveOzonShopIds };
+      }
+      throw new Error(`Unexpected auto-connect dependency: ${id}`);
+    },
+    setTimeout,
+    window: {
+      addEventListener: () => {},
+      clearTimeout,
+      dispatchEvent: (event) => dispatched.push(event.type),
+      localStorage: {
+        getItem: (key) => storage.get(key) || null,
+        setItem: (key, value) => storage.set(key, value),
+      },
+      location: { origin: 'https://app.ss-erp.test' },
+      postMessage: () => {},
+      removeEventListener: () => {},
+      setTimeout,
+    },
+  };
+  const compiled = ts.transpileModule(autoConnectSource, {
+    compilerOptions: {
+      esModuleInterop: true,
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  vm.runInNewContext(compiled, sandbox, { filename: 'extension-device-auto-connect.cjs' });
+  return { dispatched, exports: module.exports };
+}
 
 test('extension dialog creates shop-scoped one-time device pairing codes', () => {
   assert.match(source, /\/api\/extension-device\/pairing-codes/);
@@ -169,4 +237,159 @@ test('device pairing rollout is independent from logistics distribution', () => 
   assert.match(source, /NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED/);
   assert.match(source, /useState<View>\(extensionDeviceAuthEnabled \? 'pairing' : 'legacy'\)/);
   assert.match(source, /if \(open && extensionDeviceAuthEnabled\) \{[\s\S]{0,220}loadPairingContext\(generation\)/);
+});
+
+test('logged-in ERP pages can establish a bounded minimal device session without copying account tokens', () => {
+  assert.match(topbarSource, /ExtensionDeviceAutoConnect/);
+  assert.match(autoConnectSource, /ss-erp:extension-device-status/);
+  assert.match(autoConnectSource, /status\.state !== 'authorization_required'/);
+  assert.match(autoConnectSource, /\/api\/extension-device\/pairing-codes/);
+  assert.match(autoConnectSource, /ss-erp:extension-device-claim/);
+  assert.match(autoConnectSource, /onlyIfAuthorizationRequired:\s*true/);
+  assert.match(autoConnectSource, /AUTO_CONNECT_SCOPES\s*=\s*\['capture:write'\]/);
+  assert.match(autoConnectSource, /singleActiveOzonShopIds\(shopResponse\.data\)/);
+  assert.doesNotMatch(autoConnectSource, /NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED/);
+  assert.match(autoConnectSource, /navigator\.locks/);
+  assert.match(erpBridgeSource, /ss-erp:extension-bridge-ready/);
+  assert.match(autoConnectSource, /bridgeEvent\?\.type === 'ss-erp:extension-bridge-ready'[\s\S]*connect\(\)/);
+  assert.match(serviceWorkerSource, /function injectErpBridgeIntoOpenTabs[\s\S]*chrome\.tabs\.query\(\{ url: matches \}\)[\s\S]*content\/erp-collect-bridge\.js/);
+  assert.doesNotMatch(serviceWorkerSource, /injectErpBridgeIntoOpenTabs[\s\S]{0,1200}chrome\.tabs\.reload/);
+  assert.match(serviceWorkerSource, /chrome\.runtime\.onInstalled\.addListener[\s\S]{0,300}injectErpBridgeIntoOpenTabs\(\)/);
+  assert.match(serviceWorkerSource, /chrome\.runtime\.onStartup\.addListener[\s\S]{0,300}injectErpBridgeIntoOpenTabs\(\)/);
+  assert.equal(
+    [...serviceWorkerSource.matchAll(/injectErpBridgeIntoOpenTabs\(\)\.catch\(\(\) => \{\}\)/g)].length,
+    2,
+    'ERP bridge injection should run only for install/update and browser startup, not every MV3 wake',
+  );
+  assert.match(autoConnectSource, /const pairing = pairingResponse\.data;[\s\S]*try \{[\s\S]*if \(cancelled\(\)\) return;[\s\S]*finally \{[\s\S]*cancelPairingCode\(pairing\.id\)/);
+  assert.match(autoConnectSource, /claimedStatus\.ownerUserId === ownerUserId/);
+  assert.match(autoConnectSource, /equalStringSets\(claimedSession\.shopIds, shopIds\)/);
+  assert.match(autoConnectSource, /equalStringSets\(claimedSession\.scopes, AUTO_CONNECT_SCOPES\)/);
+  assert.doesNotMatch(autoConnectSource, /ozon-calc:erp-token|sserp_token|Authorization:\s*['"]Bearer/);
+  assert.doesNotMatch(autoConnectSource, /listing:write|listing:review|media:execute|byok:media:ingest|listing:publish/);
+});
+
+test('silent device bootstrap is available only for one exact active Ozon shop', () => {
+  assert.deepEqual(singleActiveOzonShopIds([
+    { id: 'shop-b', platform: 'OZON', status: 'ACTIVE' },
+    { id: 'shop-b', platform: 'OZON', status: 'ACTIVE' },
+    { id: 'disabled', platform: 'OZON', status: 'DISABLED' },
+    { id: 'errored', platform: 'OZON', status: 'ERROR' },
+    { id: 'unknown', platform: 'OZON' },
+    { id: 'other', platform: 'WB', status: 'ACTIVE' },
+  ]), ['shop-b']);
+  assert.deepEqual(singleActiveOzonShopIds([]), []);
+  assert.deepEqual(singleActiveOzonShopIds([
+    { id: 'shop-a', platform: 'OZON', status: 'ACTIVE' },
+    { id: 'shop-b', platform: 'OZON', status: 'ACTIVE' },
+  ]), []);
+});
+
+test('silent auto-connect serializes concurrent bootstrap and cleans its one-time code', async () => {
+  const calls = { claim: 0, delete: 0, post: 0, status: 0 };
+  const api = {
+    delete: async () => {
+      calls.delete += 1;
+      return { code: 1 };
+    },
+    get: async (path) => {
+      if (path === '/api/shops') {
+        return { code: 1, data: [{ id: 'shop-1', platform: 'OZON', status: 'ACTIVE' }] };
+      }
+      if (path === '/api/user/me') return { code: 1, data: { id: 'owner-1' } };
+      if (path === '/api/extension-device/sessions') {
+        return {
+          code: 1,
+          data: [{
+            id: 'session-1',
+            scopes: ['capture:write'],
+            shopIds: ['shop-1'],
+            status: 'ACTIVE',
+          }],
+        };
+      }
+      throw new Error(`Unexpected GET ${path}`);
+    },
+    post: async () => {
+      calls.post += 1;
+      return {
+        code: 1,
+        data: { code: 'one-time-code', deploymentId: 'deployment-1', id: 'pairing-1' },
+      };
+    },
+  };
+  let lockBusy = false;
+  const navigator = {
+    locks: {
+      request: async (_name, _options, callback) => {
+        if (lockBusy) return callback(null);
+        lockBusy = true;
+        try {
+          return await callback({ name: 'lock' });
+        } finally {
+          lockBusy = false;
+        }
+      },
+    },
+  };
+  const runtime = loadAutoConnectRuntime({
+    api,
+    navigator,
+    sendToExtension: async (message) => {
+      if (message.type === 'ss-erp:extension-device-claim') {
+        calls.claim += 1;
+        return { ok: true, data: { state: 'paired' } };
+      }
+      calls.status += 1;
+      return calls.status === 1
+        ? { ok: true, data: { state: 'authorization_required' } }
+        : {
+            ok: true,
+            data: { ownerUserId: 'owner-1', sessionId: 'session-1', state: 'paired' },
+          };
+    },
+  });
+  const run = () => runtime.exports.runAutoConnect(() => false);
+  await Promise.all([
+    runtime.exports.runWithAutoConnectLock(run),
+    runtime.exports.runWithAutoConnectLock(run),
+  ]);
+
+  assert.deepEqual(calls, { claim: 1, delete: 1, post: 1, status: 2 });
+  assert.deepEqual(runtime.dispatched, ['ss-erp:extension-device-connected']);
+});
+
+test('silent auto-connect deletes an issued code when the page is disposed before claim', async () => {
+  const calls = { claim: 0, delete: 0, post: 0 };
+  let disposed = false;
+  const runtime = loadAutoConnectRuntime({
+    api: {
+      delete: async () => {
+        calls.delete += 1;
+        return { code: 1 };
+      },
+      get: async (path) => {
+        if (path === '/api/shops') {
+          return { code: 1, data: [{ id: 'shop-1', platform: 'OZON', status: 'ACTIVE' }] };
+        }
+        if (path === '/api/user/me') return { code: 1, data: { id: 'owner-1' } };
+        throw new Error(`Unexpected GET ${path}`);
+      },
+      post: async () => {
+        calls.post += 1;
+        disposed = true;
+        return {
+          code: 1,
+          data: { code: 'one-time-code', deploymentId: 'deployment-1', id: 'pairing-1' },
+        };
+      },
+    },
+    sendToExtension: async (message) => {
+      if (message.type === 'ss-erp:extension-device-claim') calls.claim += 1;
+      return { ok: true, data: { state: 'authorization_required' } };
+    },
+  });
+  await runtime.exports.runAutoConnect(() => disposed);
+
+  assert.deepEqual(calls, { claim: 0, delete: 1, post: 1 });
 });

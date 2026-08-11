@@ -113,6 +113,37 @@ describe('extension device shop Prisma repository', () => {
     expect(updateMany).not.toHaveBeenCalled();
   });
 
+  it('clears only the stored Cookie while preserving company binding and unrelated config', async () => {
+    const updatedAt = new Date('2026-08-11T05:00:00.000Z');
+    const updateMany = vi.fn(async (_input: any) => ({ count: 1 }));
+    const repository = createPrismaExtensionDeviceShopRepository({
+      shop: {
+        findFirst: vi.fn(async () => ({
+          config: {
+            notificationMode: 'keep',
+            ozonCdnCookie: 'session=secret',
+            ozonCompanyId: 'company-1',
+          },
+          updatedAt,
+        })),
+        updateMany,
+      },
+    } as never);
+
+    const result = await repository.updateOzonCdnAuth({
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      clearCookie: true,
+    });
+
+    expect(result).toMatchObject({ hasCookie: false, companyId: 'company-1' });
+    expect(updateMany.mock.calls[0]![0].data.config).toMatchObject({
+      notificationMode: 'keep',
+      ozonCompanyId: 'company-1',
+    });
+    expect(updateMany.mock.calls[0]![0].data.config).not.toHaveProperty('ozonCdnCookie');
+  });
+
   it('fails with a stable conflict after the bounded CAS retries are exhausted', async () => {
     const findFirst = vi.fn(async () => ({
       config: { notificationMode: 'current' },

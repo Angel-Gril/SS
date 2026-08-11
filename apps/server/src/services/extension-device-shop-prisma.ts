@@ -102,6 +102,7 @@ export function createPrismaExtensionDeviceShopRepository(client: ShopClient) {
       shopId: string;
       cookie?: string;
       companyId?: string;
+      clearCookie?: true;
     }) {
       for (let attempt = 0; attempt < MAX_CONFIG_UPDATE_ATTEMPTS; attempt += 1) {
         const shop = await client.shop.findFirst({
@@ -117,8 +118,10 @@ export function createPrismaExtensionDeviceShopRepository(client: ShopClient) {
 
         const nextRowUpdatedAt = new Date(Math.max(Date.now(), shop.updatedAt.getTime() + 1));
         const updatedAt = nextRowUpdatedAt.toISOString();
+        const currentConfig = { ...configRecord(shop.config) };
+        if (input.clearCookie) delete currentConfig.ozonCdnCookie;
         const config = {
-          ...configRecord(shop.config),
+          ...currentConfig,
           ...(input.cookie !== undefined ? { ozonCdnCookie: input.cookie } : {}),
           ...(input.companyId !== undefined ? { ozonCompanyId: input.companyId } : {}),
           ozonCdnUpdatedAt: updatedAt,

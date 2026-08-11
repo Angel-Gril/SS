@@ -85,6 +85,13 @@
     });
 
     document.documentElement.setAttribute('data-ss-erp-bridge', 'ready');
+    if (typeof window.postMessage === 'function') {
+      window.postMessage({
+        direction: DIRECTION_FROM_EXT,
+        broadcast: true,
+        event: { type: 'ss-erp:extension-bridge-ready' },
+      }, window.location.origin);
+    }
   }
 
   if (shouldActivate()) {

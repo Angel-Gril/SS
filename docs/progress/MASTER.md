@@ -44,6 +44,28 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release seamless extension and Ozon list performance enhancement (2026-08-11): the
+development tree now supports a bounded, least-privileged automatic ERP device connection for
+accounts with exactly one active Ozon shop. The logged-in ERP page issues a one-time pairing code,
+the packaged bridge claims it without copying the account bearer token, and the resulting device
+session is limited to the exact shop and `capture:write`. Multi-shop, stale, unreachable, or
+cross-account states continue to require the explicit pairing flow.
+
+Seller Cookie maintenance now reacts to completed Seller tabs and relevant authentication Cookie
+changes without reloading the Seller page. Bursts are debounced, writes are single-flight, company
+changes invalidate cache epochs, and a settled logout clears only the matching stored Cookie through
+the existing device-scoped CAS and unresolved-outcome guard. Ozon buyer-list enrichment now uses
+targeted mutation roots, virtual-card rebinding, bounded priority queues, in-flight deduplication,
+company/profile-aware caching, concurrent analytics/search requests and optional detail loading.
+Scheduled full-page scans fall from roughly 60 to at most 6 per visible minute.
+
+Final verification passed complete `pnpm preflight` in `727.4` seconds, including Ozon list and
+Cookie runtime contracts `18/18`, device pairing/automatic connection contracts `22/22`, workspace typechecks,
+Server tests and source/Cloud/Local extension verification. The source package remains `452/452`
+with only the two existing store-submission warnings. This enhancement is not yet packaged or
+deployed: production remains commit `5fe3da68e04596db6dcf610650ff972f858617e1`, extension
+`1.0.303`. No Provider call, ERP/Ozon production write, VPS access or deployment was performed.
+
 Post-release scoped shop/Cookie correction release (2026-08-11): exact commit
 `5fe3da68e04596db6dcf610650ff972f858617e1` is packaged and installed as extension `1.0.303`.
 The underlying code commits `832efd75611eec1291a55b655562010c6872f304` and

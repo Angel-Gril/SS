@@ -382,6 +382,11 @@ describe('extension device routes', () => {
       url: '/shops/shop-2/ozon-cdn-auth',
       payload: { cookie: 'session=other' },
     });
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { clearCookie: true, companyId: 'company-1' },
+    });
 
     expect(status.statusCode).toBe(200);
     expect(status.headers['cache-control']).toContain('no-store');
@@ -402,11 +407,19 @@ describe('extension device routes', () => {
     expect(denied.statusCode).toBe(404);
     expect(denied.json()).toMatchObject({ errorCode: 'device_shop_not_found' });
     expect(readOzonCdnAuth).toHaveBeenCalledWith({ ownerUserId: 'owner-1', shopId: 'shop-1' });
-    expect(updateOzonCdnAuth).toHaveBeenCalledTimes(1);
-    expect(updateOzonCdnAuth).toHaveBeenCalledWith({
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toMatchObject({ code: 1 });
+    expect(updateOzonCdnAuth).toHaveBeenCalledTimes(2);
+    expect(updateOzonCdnAuth).toHaveBeenNthCalledWith(1, {
       ownerUserId: 'owner-1',
       shopId: 'shop-1',
       cookie: 'session=secret',
+      companyId: 'company-1',
+    });
+    expect(updateOzonCdnAuth).toHaveBeenNthCalledWith(2, {
+      ownerUserId: 'owner-1',
+      shopId: 'shop-1',
+      clearCookie: true,
       companyId: 'company-1',
     });
   });
@@ -454,6 +467,11 @@ describe('extension device routes', () => {
       url: '/shops/shop-1/ozon-cdn-auth',
       payload: { cookie: 'session=secret\u001fmore' },
     });
+    const conflictingClear = await app.inject({
+      method: 'PUT',
+      url: '/shops/shop-1/ozon-cdn-auth',
+      payload: { cookie: 'session=secret', clearCookie: true },
+    });
 
     expect(missingScope.statusCode).toBe(403);
     expect(missingScope.json()).toMatchObject({ errorCode: 'insufficient_scope' });
@@ -465,6 +483,10 @@ describe('extension device routes', () => {
     });
     expect(controlCookie.statusCode).toBe(400);
     expect(controlCookie.json()).toMatchObject({
+      errorCode: 'invalid_ozon_cdn_auth_payload',
+    });
+    expect(conflictingClear.statusCode).toBe(400);
+    expect(conflictingClear.json()).toMatchObject({
       errorCode: 'invalid_ozon_cdn_auth_payload',
     });
     expect(updateOzonCdnAuth).not.toHaveBeenCalled();

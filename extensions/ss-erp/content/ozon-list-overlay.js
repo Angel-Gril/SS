@@ -26,16 +26,19 @@
     '[data-widget="tileGrid"] [data-index]',
     '#layoutPage [data-index]',
   ];
+  const CARD_SELECTOR = CARD_SELECTORS.join(',');
 
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
   const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
   const LIST_DATA_COOKIE_AUTO_SYNC_TTL_MS = 5 * 60 * 1000;
   const PRODUCT_SELECTION_POOL_STATUS_TTL_MS = 2 * 60 * 1000;
   const PREMIUM_CONCURRENCY = 3;
-  const LIST_PRELOAD_ROOT_MARGIN = '1200px 0px 1800px 0px';
-  const CARD_SCAN_FAST_MS = 500;
-  const CARD_SCAN_SLOW_MS = 2000;
-  const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
+  const PREMIUM_MAX_PENDING = 60;
+  const PREMIUM_QUEUE_DEADLINE_MS = 15 * 1000;
+  const PREMIUM_QUEUE_SKIPPED = Object.freeze({ skipped: true });
+  const LIST_PRELOAD_ROOT_MARGIN = '600px 0px 900px 0px';
+  const CARD_SCAN_SAFETY_MS = 10 * 1000;
+  const CARD_SCAN_DEBOUNCE_MS = 80;
   // T6 自动滚动：防风控节流——随机步进间隔 + 到底判定的稳定轮次。
   const AUTO_SCROLL_STEP_DELAY_MIN_MS = 3000;
   const AUTO_SCROLL_STEP_DELAY_MAX_MS = 5000;
@@ -147,16 +150,20 @@
   const premiumCache = new Map();  // sku -> { data, ts }
   const failedPremiumCache = new Map(); // sku -> ts
   const inFlightPremium = new Map(); // sku -> Promise
+  const inFlightPremiumCallers = new Map(); // request key -> Set<isCancelled>
   const premiumQueue = [];
   let activePremiumRequests = 0;
   let listDataCookieAutoSyncPromise = null;
   let listDataCookieAutoSyncAt = 0;
+  let listDataCookieCompanyId = '';
+  let premiumContextEpoch = 0;
   let overlayIdCounter = 0;
   let activeExpandedPanel = null;
   let expandedPanelListenersInstalled = false;
   let productSelectionRulesCache = null;
   const observedListSkuSet = new Set();
   let observedListSkuPageKey = '';
+  const observedCardSku = new WeakMap();
   const autoFavoriteProductPoolSet = new Set();
   const productSelectionPoolStatusCache = new Map();
   const productSelectionPoolStatusPending = new Set();
@@ -195,9 +202,54 @@
     map.set(key, { data, ts: Date.now() });
   }
 
-  function enqueuePremiumRequest(task) {
+  function selectedListFieldsNeedDetail() {
+    return readSelectedDisplayFieldIds().some((field) => field === 'weight' || field === 'dimensions');
+  }
+
+  function premiumRequestKey(sku, includeDetail, epoch = premiumContextEpoch) {
+    return `${epoch}:${String(sku || '').trim()}:${includeDetail ? 'detail' : 'summary'}`;
+  }
+
+  function getCachedPremium(sku, options = {}) {
+    const includeDetail = options.includeDetail === true;
+    const exact = getCached(premiumCache, premiumRequestKey(sku, includeDetail), PREMIUM_TTL_MS);
+    if (exact || includeDetail) return exact;
+    return getCached(premiumCache, premiumRequestKey(sku, true), PREMIUM_TTL_MS);
+  }
+
+  function getBestCachedPremium(sku) {
+    return getCachedPremium(sku, { includeDetail: true })
+      || getCachedPremium(sku, { includeDetail: false });
+  }
+
+  function invalidatePremiumContext() {
+    premiumContextEpoch += 1;
+    premiumCache.clear();
+    failedPremiumCache.clear();
+    inFlightPremium.clear();
+    inFlightPremiumCallers.clear();
+    listDataCookieAutoSyncAt = 0;
+    document.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((card) => {
+      const wrap = card.querySelector(`.${CARD_CLASS}`);
+      if (wrap) {
+        removeExpandedPortal(wrap);
+        wrap.remove();
+      }
+      card.removeAttribute(PROCESSED_ATTR);
+      card.removeAttribute(SKU_ATTR);
+    });
+    scheduleScanRoot(document.body);
+  }
+
+  function enqueuePremiumRequest(task, options = {}) {
+    if (premiumQueue.length >= PREMIUM_MAX_PENDING) return Promise.resolve(PREMIUM_QUEUE_SKIPPED);
     return new Promise((resolve) => {
-      premiumQueue.push({ task, resolve });
+      premiumQueue.push({
+        task,
+        resolve,
+        queuedAt: Date.now(),
+        isCancelled: typeof options.isCancelled === 'function' ? options.isCancelled : () => false,
+      });
       drainPremiumQueue();
     });
   }
@@ -205,6 +257,10 @@
   function drainPremiumQueue() {
     while (activePremiumRequests < PREMIUM_CONCURRENCY && premiumQueue.length) {
       const next = premiumQueue.shift();
+      if (next.isCancelled() || Date.now() - next.queuedAt > PREMIUM_QUEUE_DEADLINE_MS) {
+        next.resolve(PREMIUM_QUEUE_SKIPPED);
+        continue;
+      }
       activePremiumRequests += 1;
       Promise.resolve()
         .then(next.task)
@@ -259,13 +315,22 @@
     return [location.origin, location.pathname, location.search].join('');
   }
 
-  function rememberVisibleListSkus() {
+  function ensureListSkuPageContext() {
     const pageKey = getListSkuPageKey();
     if (pageKey !== observedListSkuPageKey) {
       observedListSkuSet.clear();
       observedListSkuPageKey = pageKey;
+      return true;
     }
-    collectDistinctProductSkus(document.body).forEach((sku) => observedListSkuSet.add(String(sku)));
+    return false;
+  }
+
+  function rememberVisibleListSkus(root = document.body) {
+    ensureListSkuPageContext();
+    if (root !== document.body && root.isConnected === false) {
+      return Array.from(observedListSkuSet).slice(0, 1000);
+    }
+    collectDistinctProductSkus(root).forEach((sku) => observedListSkuSet.add(String(sku)));
     return Array.from(observedListSkuSet).slice(0, 1000);
   }
 
@@ -489,6 +554,11 @@
       payload: { reason: 'ozon_list_kpi_preload', automatic: true },
     }, 30000).then((response) => {
       if (response && response.ok) {
+        const companyId = String(response.data && response.data.companyId || '').trim();
+        if (companyId && listDataCookieCompanyId && companyId !== listDataCookieCompanyId) {
+          invalidatePremiumContext();
+        }
+        if (companyId) listDataCookieCompanyId = companyId;
         failedPremiumCache.clear();
         try { globalThis.__SS_ERP_LIST_OVERLAY_SOURCE_ERRORS__ = {}; } catch (e) {}
       }
@@ -515,25 +585,57 @@
 
   // === 公开 API：拉商品基础信息（含销量/卖家等可选字段）===
   // 通过 background 聚合 seller-analytics、公开 entrypoint 和 ERP 缓存；失败时保持基础卡片。
-  async function fetchPublicProduct(sku) {
-    const cached = getCached(premiumCache, sku, PREMIUM_TTL_MS);
+  async function fetchPublicProduct(sku, options = {}) {
+    const includeDetail = options.includeDetail === true;
+    const requestEpoch = premiumContextEpoch;
+    const requestKey = premiumRequestKey(sku, includeDetail, requestEpoch);
+    const callerIsCancelled = typeof options.isCancelled === 'function'
+      ? options.isCancelled
+      : () => false;
+    const resolveForCaller = (sharedRequest) => sharedRequest.then((result) => {
+      if (requestEpoch !== premiumContextEpoch || callerIsCancelled()) return null;
+      if (result === PREMIUM_QUEUE_SKIPPED) {
+        if (typeof options.onSkipped === 'function') setTimeout(options.onSkipped, 1000);
+        return null;
+      }
+      return result;
+    });
+    const cached = getCachedPremium(sku, { includeDetail });
     if (cached) return cached;
 
     autoSyncCurrentOzonCookieForListData();
 
-    const failTs = failedPremiumCache.get(sku);
+    const failTs = failedPremiumCache.get(requestKey);
     if (failTs && Date.now() - failTs < PREMIUM_FAILURE_TTL_MS) return null;
-    if (inFlightPremium.has(sku)) return inFlightPremium.get(sku);
+    if (inFlightPremium.has(requestKey)) {
+      const callers = inFlightPremiumCallers.get(requestKey);
+      if (callers) callers.add(callerIsCancelled);
+      return resolveForCaller(inFlightPremium.get(requestKey));
+    }
+
+    const callers = new Set([callerIsCancelled]);
+    inFlightPremiumCallers.set(requestKey, callers);
 
     const request = enqueuePremiumRequest(async () => {
       const resp = await send(
-        { type: 'spb-self-hosted:aggregate-product-insights', productId: sku },
+        {
+          type: 'spb-self-hosted:aggregate-product-insights',
+          productId: sku,
+          includeOffers: false,
+          includeDetail,
+          profile: 'list-card',
+        },
         20000,
       );
       return resp;
+    }, {
+      isCancelled: () => requestEpoch !== premiumContextEpoch
+        || Array.from(callers).every((isCancelled) => isCancelled()),
     }).then((resp) => {
+      if (requestEpoch !== premiumContextEpoch) return null;
+      if (resp === PREMIUM_QUEUE_SKIPPED) return PREMIUM_QUEUE_SKIPPED;
       if (!resp || !resp.ok || !resp.item) {
-        failedPremiumCache.set(sku, Date.now());
+        if (requestEpoch === premiumContextEpoch) failedPremiumCache.set(requestKey, Date.now());
         rememberSourceErrors(sku, [{
           source: 'extension',
           error: (resp && (resp.error || resp.msg)) || '详细数据请求失败',
@@ -547,18 +649,22 @@
       });
       rememberSourceErrors(sku, data._sourceErrors);
       if (!hasDisplayablePremiumData(data)) {
-        failedPremiumCache.set(sku, Date.now());
+        if (requestEpoch === premiumContextEpoch) failedPremiumCache.set(requestKey, Date.now());
         return null;
       }
-      setCached(premiumCache, sku, data);
-      failedPremiumCache.delete(sku);
+      if (requestEpoch !== premiumContextEpoch) return null;
+      setCached(premiumCache, requestKey, data);
+      failedPremiumCache.delete(requestKey);
       return data;
     }).finally(() => {
-      inFlightPremium.delete(sku);
+      if (inFlightPremium.get(requestKey) === request) {
+        inFlightPremium.delete(requestKey);
+        inFlightPremiumCallers.delete(requestKey);
+      }
     });
 
-    inFlightPremium.set(sku, request);
-    return request;
+    inFlightPremium.set(requestKey, request);
+    return resolveForCaller(request);
   }
 
   // === 字段提取（聚合接口扁平格式 + 兼容旧的 item/_insightsItem 嵌套）===
@@ -1490,9 +1596,22 @@
   }
 
   function rerenderAllListMetrics() {
+    const includeDetail = selectedListFieldsNeedDetail();
     document.querySelectorAll(`.${CARD_CLASS}`).forEach((wrap) => {
       const sku = wrap.getAttribute('data-ss-erp-sku') || '';
-      renderMetrics(wrap, sku, wrap.__ssErpDom || {}, wrap.__ssErpPremium || null);
+      const dom = wrap.__ssErpDom || {};
+      renderMetrics(wrap, sku, dom, getBestCachedPremium(sku) || wrap.__ssErpPremium || null);
+      if (includeDetail && !getCachedPremium(sku, { includeDetail: true })) {
+        const requestEpoch = premiumContextEpoch;
+        void fetchPublicProduct(sku, {
+          includeDetail: true,
+          isCancelled: () => !wrap.isConnected,
+        }).then((premium) => {
+          if (premium && wrap.isConnected && premiumContextEpoch === requestEpoch) {
+            renderMetrics(wrap, sku, dom, premium);
+          }
+        });
+      }
     });
   }
 
@@ -1918,7 +2037,8 @@
   }
 
   function getCurrentPageSkus() {
-    return rememberVisibleListSkus();
+    ensureListSkuPageContext();
+    return Array.from(observedListSkuSet).slice(0, 1000);
   }
 
   function getCardDomBySku(sku) {
@@ -1933,7 +2053,7 @@
       .filter(Boolean)
       .map((sku) => {
         const dom = getCardDomBySku(sku);
-        const premium = getCached(premiumCache, sku, PREMIUM_TTL_MS) || {};
+        const premium = getBestCachedPremium(sku) || {};
         const premiumPrice = firstPresentValue(pickFlat(premium, 'priceRub'), pickFlat(premium, 'price'), pickFlat(premium, 'avgPrice'));
         const hasPremiumPrice = premiumPrice != null && premiumPrice !== '';
         const pagePrice = hasPremiumPrice ? premiumPrice : dom.price;
@@ -3750,6 +3870,7 @@
 
   // === 注入卡片 + 绑定事件 ===
   async function attachOverlay(target) {
+    if (!target || !target.isConnected) return;
     const card = resolveProductCardTarget(target);
     if (!card) return;
 
@@ -3784,8 +3905,7 @@
       const willOpen = expanded.style.display === 'none';
       // 展开时若数据已加载则立即渲染
       if (willOpen) {
-        const cached = premiumCache.get(sku);
-        const premium = cached ? cached.data : null;
+        const premium = getBestCachedPremium(sku);
         expanded.innerHTML = renderExpandedFields(sku, dom, premium);
         expanded.setAttribute('data-rendered', '1');
       }
@@ -3829,7 +3949,16 @@
     });
 
     // 进入视口后自动加载 Premium 数据，不等用户展开
-    const premium = await fetchPublicProduct(sku);
+    const premium = await fetchPublicProduct(sku, {
+      includeDetail: selectedListFieldsNeedDetail(),
+      isCancelled: () => !card.isConnected || card.getAttribute(SKU_ATTR) !== sku,
+      onSkipped: () => {
+        if (!card.isConnected || card.getAttribute(SKU_ATTR) !== sku) return;
+        card.removeAttribute(PROCESSED_ATTR);
+        scheduleScanRoot(card);
+      },
+    });
+    if (!wrap.isConnected || card.getAttribute(SKU_ATTR) !== sku) return;
     renderMetrics(wrap, sku, dom, premium);
   }
 
@@ -3849,62 +3978,131 @@
     return intersectionObserver;
   }
 
-  function scan() {
-    if (!isProductPage()) return;
-    cleanupDetachedExpandedPanels();
-    ensureListWorkbenchBar();
-    rememberVisibleListSkus();
-    ensureListQuickActions();
-    const io = ensureIntersectionObserver();
-    const targets = new Set();
-
-    CARD_SELECTORS.forEach((sel) => {
-      document.querySelectorAll(sel).forEach((candidate) => {
-        collectProductCardTargets(candidate).forEach((target) => addProductCardTarget(targets, target));
-      });
-    });
-
-    targets.forEach((target) => {
-      const sku = extractSku(target);
-      if (!sku) return;
-      if (target.getAttribute(PROCESSED_ATTR) && target.getAttribute(SKU_ATTR) === sku && target.querySelector(`.${CARD_CLASS}`)) return;
-      if (io) io.observe(target);
-      else attachOverlay(target);
-    });
+  function isSsErpOwnedNode(node) {
+    const element = node && node.nodeType === 1 ? node : node && node.parentElement;
+    if (!element || typeof element.matches !== 'function') return false;
+    const ownSelector = `.${CARD_CLASS},[${PORTAL_ATTR}],[id^="ss-erp-"]`;
+    return element.matches(ownSelector)
+      || (typeof element.closest === 'function' && Boolean(element.closest(ownSelector)));
   }
 
+  function collectCardCandidates(root) {
+    const candidates = new Set();
+    if (!root || typeof root.querySelectorAll !== 'function') return candidates;
+    if (typeof root.matches === 'function' && root.matches(CARD_SELECTOR)) candidates.add(root);
+    if (typeof root.closest === 'function') {
+      const ancestor = root.closest(CARD_SELECTOR);
+      if (ancestor) candidates.add(ancestor);
+    }
+    root.querySelectorAll(CARD_SELECTOR).forEach((candidate) => candidates.add(candidate));
+    return candidates;
+  }
+
+  function scanRoot(root, options = {}) {
+    if (!isProductPage() || !root || isSsErpOwnedNode(root)
+      || (root !== document.body && root.isConnected === false)) return;
+    const pageChanged = ensureListSkuPageContext();
+    if (pageChanged && root !== document.body) {
+      scanRoot(document.body, { refreshUi: true });
+      return;
+    }
+    rememberVisibleListSkus(root);
+    const io = ensureIntersectionObserver();
+    const targets = new Set();
+    collectCardCandidates(root).forEach((candidate) => {
+      collectProductCardTargets(candidate).forEach((target) => addProductCardTarget(targets, target));
+    });
+    targets.forEach((target) => {
+      if (!target.isConnected) return;
+      const sku = extractSku(target);
+      if (!sku) return;
+      const previousSku = observedCardSku.get(target);
+      observedCardSku.set(target, sku);
+      if (target.getAttribute(PROCESSED_ATTR) && target.getAttribute(SKU_ATTR) === sku && target.querySelector(`.${CARD_CLASS}`)) return;
+      if (io) {
+        if (previousSku && previousSku !== sku) io.unobserve(target);
+        io.observe(target);
+      } else {
+        attachOverlay(target);
+      }
+    });
+    if (options.refreshUi) {
+      cleanupDetachedExpandedPanels();
+      ensureListWorkbenchBar();
+      ensureListQuickActions();
+    }
+  }
+
+  const pendingScanRoots = new Set();
   let scanScheduled = false;
-  function scheduleScan() {
+  function scheduleScanRoot(root) {
+    const element = root && root.nodeType === 1 ? root : document.body;
+    if (isSsErpOwnedNode(element) || (element !== document.body && element.isConnected === false)) return;
+    for (const existing of Array.from(pendingScanRoots)) {
+      if (existing === element || (typeof existing.contains === 'function' && existing.contains(element))) return;
+      if (typeof element.contains === 'function' && element.contains(existing)) pendingScanRoots.delete(existing);
+    }
+    pendingScanRoots.add(element);
     if (scanScheduled) return;
     scanScheduled = true;
     setTimeout(() => {
       scanScheduled = false;
-      scan();
-    }, 300);
+      const roots = Array.from(pendingScanRoots).filter((scanTarget) => (
+        scanTarget === document.body || scanTarget.isConnected !== false
+      ));
+      pendingScanRoots.clear();
+      roots.forEach((scanTarget) => scanRoot(scanTarget, { refreshUi: true }));
+    }, CARD_SCAN_DEBOUNCE_MS);
+  }
+
+  function scheduleScan() {
+    scheduleScanRoot(document.body);
+  }
+
+  function handleListMutations(records) {
+    records.forEach((record) => {
+      if (record.type === 'attributes') {
+        scheduleScanRoot(record.target);
+        return;
+      }
+      record.addedNodes.forEach((node) => {
+        if (node && node.nodeType === 1) scheduleScanRoot(node);
+      });
+    });
   }
 
   function init() {
     if (!isProductPage()) return;
-    const startedAt = Date.now();
     ensureListOverlayStyles();
     hydrateProductSelectionRulesFromStorage();
     autoSyncCurrentOzonCookieForListData();
-    scan();
-    const observer = new MutationObserver(scheduleScan);
-    observer.observe(document.body, { childList: true, subtree: true });
-    startPeriodicScan(startedAt);
+    scanRoot(document.body, { refreshUi: true });
+    const observer = new MutationObserver(handleListMutations);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['href'],
+    });
+    startPeriodicSafetyScan();
   }
 
-  function startPeriodicScan(startedAt) {
+  function startPeriodicSafetyScan() {
     function tick() {
       if (!isProductPage()) return;
-      if (document.visibilityState === 'visible') scan();
-      const delay = Date.now() - startedAt < CARD_SCAN_FAST_UNTIL_MS
-        ? CARD_SCAN_FAST_MS
-        : CARD_SCAN_SLOW_MS;
-      setTimeout(tick, delay);
+      if (document.visibilityState === 'visible') scheduleScanRoot(document.body);
+      setTimeout(tick, CARD_SCAN_SAFETY_MS);
     }
-    setTimeout(tick, CARD_SCAN_FAST_MS);
+    setTimeout(tick, CARD_SCAN_SAFETY_MS);
+  }
+
+  if (chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!message || message.type !== 'ss-erp:ozon-company-context-changed') return;
+      listDataCookieCompanyId = '';
+      invalidatePremiumContext();
+      autoSyncCurrentOzonCookieForListData();
+    });
   }
 
   if (document.readyState === 'loading') {

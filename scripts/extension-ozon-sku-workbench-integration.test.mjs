@@ -92,7 +92,7 @@ test('Ozon workbench keeps optional offer enrichment while list workbench stays 
   assert.match(background, /includeOffers\s*\?\s*"offers"\s*:\s*"base"/, 'workbench insight cache should not let profit-only reads poison full offer reads');
   assert.match(aggregate[0], /options\s*=\s*\{\}/, 'aggregate insights should accept fetch options');
   assert.match(aggregate[0], /includeOffers\s*=\s*options\.includeOffers\s*!==\s*false/);
-  assert.match(aggregate[0], /getOzonInsights\(sku,\s*\{\s*includeOffers\s*\}\)/);
+  assert.match(aggregate[0], /getOzonInsights\(sku,\s*\{[\s\S]*includeOffers[\s\S]*includeDetail/);
   assert.match(background, /if\s*\(includeOffers\)\s*\{[\s\S]*fetchOzonSellerOffers\(productId\)/);
   assert.match(
     overlay,
@@ -105,6 +105,66 @@ test('Ozon workbench keeps optional offer enrichment while list workbench stays 
     'list publish mode should keep full seller-offer enrichment before one-click listing',
   );
   assert.doesNotMatch(overlay, /focus:\s*'data'|data-mode=["']data["']|data-mode=["']profit["']/);
+});
+
+test('ordinary Ozon list enrichment is parallel, context-bound, and reuses the shared cache', () => {
+  const getInsights = background.match(/async function getOzonInsights[\s\S]*?\r?\n}\r?\n\r?\n\/\/ 并发批量/);
+  assert.ok(getInsights, 'getOzonInsights should be present');
+  assert.match(
+    getInsights[0],
+    /Promise\.all\(\[analyticsPromise,\s*searchPromise,\s*offersPromise\]\)/,
+    'seller analytics and seller search should run concurrently for each SKU',
+  );
+  assert.match(
+    background,
+    /OZON_LIST_INSIGHT_REQUEST_CONCURRENCY\s*=\s*3[\s\S]*function\s+enqueueOzonListInsightRequest/,
+    'parallel list enrichment should retain a global three-request Seller concurrency limit',
+  );
+  assert.match(
+    background,
+    /OZON_LIST_INSIGHT_REQUEST_MAX_PENDING\s*=\s*60[\s\S]*OZON_LIST_INSIGHT_REQUEST_DEADLINE_MS\s*=\s*18\s*\*\s*1000/,
+    'list enrichment should have bounded pending work and a queue deadline',
+  );
+  assert.match(
+    background,
+    /ozonListInsightRequestQueue\.sort\([\s\S]{0,300}left\.priority - right\.priority/,
+    'interactive Seller requests should take priority over list preloading',
+  );
+  assert.match(
+    background,
+    /function\s+getOzonWorkbenchInsightCacheKey[\s\S]*contextKey[\s\S]*profile/,
+    'shared insight cache keys should include the live Seller company context and enrichment profile',
+  );
+  assert.match(
+    background,
+    /function invalidateOzonWorkbenchInsightContext[\s\S]{0,300}ozonWorkbenchInsightContextEpoch \+= 1[\s\S]{0,300}ozonWorkbenchInsightCache\.clear\(\)[\s\S]{0,200}ozonWorkbenchInsightInFlight\.clear\(\)/,
+    'Seller company changes should invalidate both background cache and in-flight generations',
+  );
+  assert.match(
+    background,
+    /contextEpoch === ozonWorkbenchInsightContextEpoch[\s\S]{0,300}setCachedOzonWorkbenchInsight[\s\S]{0,500}ozonWorkbenchInsightInFlight\.get\(key\) === request/,
+    'an old company generation must not write cache or delete a newer in-flight request',
+  );
+  assert.match(
+    background,
+    /getOzonWorkbenchInsightCacheKey[\s\S]{0,600}includeDetail[\s\S]{0,300}["']detail["'][\s\S]{0,100}["']summary["']/,
+    'summary cache entries must not satisfy later detail-required reads',
+  );
+  assert.match(
+    background,
+    /OZON_WORKBENCH_INSIGHT_MAX_ENTRIES\s*=\s*300/,
+    'shared insight cache should have a bounded entry count',
+  );
+  assert.match(
+    background,
+    /case ["']spb-self-hosted:aggregate-product-insights["'][\s\S]{0,700}fetchCachedOzonWorkbenchInsight/,
+    'direct list-card aggregation should reuse the background cache and in-flight deduplication',
+  );
+  assert.match(
+    background,
+    /profile === ["']list-card["'][\s\S]{0,320}item\.title[\s\S]{0,320}item\.brand/,
+    'the list-card public fallback should require only fields actually needed by the list card',
+  );
 });
 
 test('background passes synced commission rules into Ozon SKU workbench row building', () => {

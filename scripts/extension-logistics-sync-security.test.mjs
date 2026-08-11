@@ -551,6 +551,95 @@ test('a timed-out credential request releases the serialized claim queue for the
   assert.match(serviceWorkerSource, /enqueueExtensionDeviceClaim\(message, sender\)/);
 });
 
+test('a queued silent claim cannot replace a manual grant that completed first', async () => {
+  const queueSource = fs.readFileSync(
+    'extensions/ss-erp/shared/erp-adapter/device-claim-queue.js',
+    'utf8',
+  );
+  const claimStart = serviceWorkerSource.indexOf('async function claimExtensionDeviceFromErp');
+  const claimEnd = serviceWorkerSource.indexOf('\nfunction enqueueExtensionDeviceClaim', claimStart);
+  assert.ok(claimStart >= 0 && claimEnd > claimStart, 'device claim handler must be extractable');
+
+  let currentStatus = { state: 'authorization_required' };
+  const claimedCodes = [];
+  const credentials = {
+    async claim(input) {
+      claimedCodes.push(input.code);
+      currentStatus = {
+        state: 'paired',
+        sessionId: 'manual-session',
+        ownerUserId: 'owner-1',
+        scopes: ['capture:write', 'listing:review'],
+      };
+      return { ownerUserId: 'owner-1' };
+    },
+    async clear() {},
+    async getConnection() {
+      return currentStatus.state === 'paired'
+        ? { baseUrl: 'https://api.ss-erp.test' }
+        : null;
+    },
+    async getStatus() {
+      return currentStatus.state === 'paired' ? { state: 'paired' } : { state: 'unpaired' };
+    },
+  };
+  const context = {
+    OZON_CALC_ERP_ENDPOINT_KEY: 'ozon-calc:erp-endpoint',
+    OZON_CALC_ERP_TOKEN_KEY: 'ozon-calc:erp-token',
+    Promise,
+    chrome: {
+      storage: {
+        local: {
+          async get() { return {}; },
+          async set() {},
+        },
+      },
+    },
+    ensureExtensionDeviceId: async () => 'device-1',
+    getLogisticsDeviceCredentials: () => credentials,
+    readExtensionDeviceStatus: async () => currentStatus,
+    self: {},
+    toText: (value) => String(value || ''),
+    trustedErpDeviceBaseUrl: () => 'https://api.ss-erp.test',
+    validateStoredCompatibilityCredential: async () => '',
+  };
+  context.globalThis = context;
+  vm.runInNewContext(
+    serviceWorkerSource.slice(claimStart, claimEnd),
+    context,
+    { filename: 'extension-device-claim-handler.js' },
+  );
+  vm.runInNewContext(queueSource, context, { filename: 'device-claim-queue.js' });
+  const enqueue = context.SS_ERP_EXTENSION_DEVICE_CLAIM_QUEUE.create(
+    context.claimExtensionDeviceFromErp,
+  );
+  const sender = { url: 'https://app.ss-erp.test/settings' };
+  const manual = enqueue({
+    baseUrl: 'https://api.ss-erp.test',
+    code: 'manual-code',
+    deploymentId: 'deployment-1',
+    deviceLabel: 'Manual grant',
+    reauthorize: true,
+  }, sender);
+  const automatic = enqueue({
+    baseUrl: 'https://api.ss-erp.test',
+    code: 'automatic-code',
+    deploymentId: 'deployment-1',
+    deviceLabel: 'Automatic grant',
+    onlyIfAuthorizationRequired: true,
+  }, sender);
+
+  const [manualStatus, automaticStatus] = await Promise.all([manual, automatic]);
+  assert.deepEqual(claimedCodes, ['manual-code']);
+  assert.equal(manualStatus.sessionId, 'manual-session');
+  assert.equal(automaticStatus.sessionId, 'manual-session');
+  assert.deepEqual(Array.from(automaticStatus.scopes), ['capture:write', 'listing:review']);
+  assert.match(
+    serviceWorkerSource,
+    /onlyIfAuthorizationRequired === true[\s\S]{0,240}latestStatus\.state !== 'authorization_required'/,
+  );
+});
+
 test('both background message listeners enforce the centralized policy before dispatch', () => {
   const policy = loadMessagePolicy();
   const policyImportIndex = serviceWorkerSource.indexOf(
