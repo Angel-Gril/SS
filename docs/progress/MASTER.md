@@ -44,6 +44,49 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Automatic pairing and device-collection replacement release (2026-08-13): exact target
+`0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` is deployed in both regions and installed on BINI as
+extension `1.0.306`. Target-bound QA-04 passed in `954` seconds with source `454/454`, Cloud
+`459/459` and Local `455/455`; only the two expected source/Local packaging warnings remain.
+Canonical acceptance and release-bindings SHA-256 values are
+`ce0daead74a52c7c4301543fecf5612833460cefc0d349be7f5fd6441681dfa9` and
+`40a809385f8fb090b9571fbca417416bb41c7bc66d9d5c69010ea48af3dee8a7`. COM/CN signed-package
+MV3 restart receipt SHA-256 values are
+`11c30c516bccfc6d3f245ca02d6ea654aedcced45db661af2339a00954e8b8b7` and
+`01a1bcb337af4472356c701edc278cd4fba93b8aff40b44056f6563384e6eb1a`; the isolated
+`1.0.305 -> 1.0.306` same-path upgrade smoke and target-tree SHA-256 values are
+`70f5e0d2bdfcd5513a0ef4571f7ec282b4f382e4630781e1c05eaf4dd3685d42` and
+`c46327a20e50e44cafa759d996b485b081b80df84198477136817b9732d0268c`.
+
+COM and CN completed fresh backup/restore verification, all `146` repository migrations, dark
+deployment, post-deploy verification, `7`-check/`32`-request canaries and final dark fences.
+Fresh-backup attestation SHA-256 values are
+`c54829e075d4d2916924a4e18335335926c3a768f3cd7192ed855b74bdfbac1e` and
+`0b81a9c8f3357493623a53a2e9d8a3a78fb98c98648922556bf06e5e049d85f5`; the dual-region deployment
+summary and zero-claim aggregate SHA-256 values are
+`0a8539ee4516fbc825f88dd5f21737fac9974b76002bbce97bb41102b5069409` and
+`c3a50c197bc9e4adfb1e60e9dc9461807c89e58fabb4b5329f751834fb3c1eb6`. Official Cloud/Local
+website distribution and verifier replay passed in both regions. DNS-quorum and COM/CN distribution
+receipt SHA-256 values are
+`2d8ad0217d2c768a6ea11c9b8da4648d814171e825da8b9ab2a9a39853d4abbc`,
+`f0e3626679b8beceb51b9722774937b1f1bfb649e101cf81a7183273c6cd52f8` and
+`1e662467ce531342da359842cbde754a147d89986b2fbadc11460b785edafdbc`.
+
+BINI retained fixed extension ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`, its managed path, one
+non-secret Provider profile and profile fingerprint through the atomic same-path upgrade. A
+pre-install ownership check conservatively rejected the normal Chromium child-process tree; exact
+source recovery completed with no partial install, after which the sealed recovery path completed
+the upgrade. Managed-upgrade, trusted-reload, active-worker, final-runtime and closure SHA-256
+values are `206cfae543d885a3ca82c188b281bcaab8bcef9534d3c5b15fb6c10013d452f1`,
+`75b50e8ce0149ca315b50a5ce329a3be8e8f892b5d357fb9d05defa0bd776002`,
+`1df931cdcc5a0ae7e181c22ba0e455b75d80f91dbf90ae3f43d2b2fa3af779bb`,
+`7d9c7e599fe2e2cddda6ae571d56ee4154dd93f2219d3cbcf3385ebb26957da4` and
+`d5bb023e39fd58e1bb3014f71244be37a164f42e5fe46e69d8eaebe1be98369a`. Final read-only checks
+confirmed both regions run exact `0c326b10`, all six API/Worker/Web services are active with exact
+release CWD, database/Redis readiness is healthy and every rollout row remains dark. No Provider
+request, ERP ingest/publish or Ozon write occurred. Fresh recovery points remain local to each VPS;
+remote backup storage is still unconfigured. Overall progress remains `37/37`.
+
 Post-release collection authentication correction (2026-08-13): automatic ERP device pairing
 now covers browser product collection as well as shop discovery, Cookie maintenance and analytics.
 The previous Ozon collection path still required the legacy account-equivalent Token, and 1688
@@ -56,15 +99,17 @@ device authorization failure without silently falling back to a tenant Token, an
 route only for genuinely unpaired compatibility installs. The ERP collect page accepts paired
 `capture:write` status without requiring `hasToken`. Server typecheck passed; device route and
 collection tests passed `47/47`; extension collection, source fallback and diagnostics contracts
-passed. This source correction is not packaged or deployed yet; no Provider call, ERP/Ozon
-production write, VPS access or deployment occurred. Overall task count remains `37/37`.
+passed. At that source checkpoint no Provider call, ERP/Ozon production write, VPS access or
+deployment occurred; the correction was subsequently included in the `1.0.306` replacement
+release recorded above. Overall task count remains `37/37`.
 
 The follow-up security correction adds a durable extension-device authority fence. A successful
 scoped pairing clears any retained compatibility Token; explicit unpair, owner switching, and
 device 401/410 revocation clear the Token and block legacy fallback until the current account
 re-pairs. Legacy `/api/collect/batch` remains available only to installs that have never entered
-the scoped-device flow. Focused extension contracts and Cloud/Server typechecks passed; this
-correction is source-only and still requires the normal signed package/release process.
+the scoped-device flow. Focused extension contracts and Cloud/Server typechecks passed. This was
+a source-only checkpoint and was subsequently included in the signed `1.0.306` replacement
+release.
 
 Connection UX follow-up (2026-08-13): when the current account has exactly one active Ozon shop,
 ERP login now performs the minimal `capture:write` pairing without requiring a manual token or
@@ -72,8 +117,8 @@ pairing-code copy. Focus/online/visibility events retry the bounded bootstrap af
 shop list or network recovery; multi-shop accounts still require one explicit shop choice. Device
 management now shows active devices by default and folds revoked sessions into read-only audit
 history. Revoked session rows are not physically deleted because they are referenced by refresh,
-security, capture, media, and publish records. Source-only; the next signed extension package
-must include this change.
+security, capture, media, and publish records. This source-only checkpoint was subsequently
+included in the signed `1.0.306` replacement release.
 
 Post-release Seller access diagnosis and source correction (2026-08-12): the reported `1.0.305`
 Cloud instance is `hbaahhdfolpocohbihhkpbldggljdeog`, loaded from the user's versioned Downloads
@@ -98,9 +143,9 @@ The downloaded unpacked instance and the managed BINI instance
 `nkkemglcckgmhmcfnjjmcfbdhciafahl` have independent extension IDs, profiles and local state. The
 current website ZIP contract therefore requires same-path managed upgrades; extracting every
 version into a new directory creates a new path-derived ID and does not inherit pairing/session
-state. This source correction has not yet been packaged or deployed, so installed `1.0.305` remains
-unchanged. No Provider call, ERP/Ozon write, VPS access or deployment occurred. Overall progress
-remains `37/37`.
+state. At that checkpoint installed `1.0.305` remained unchanged and no Provider call, ERP/Ozon
+write, VPS access or deployment occurred; the correction was subsequently included in the
+`1.0.306` replacement release recorded above. Overall progress remains `37/37`.
 
 Replacement release (2026-08-12): exact target
 `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` is now deployed in both regions and installed on BINI

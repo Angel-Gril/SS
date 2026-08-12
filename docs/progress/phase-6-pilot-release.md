@@ -28,6 +28,46 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Automatic pairing and device-collection replacement release (2026-08-13): exact target
+  `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` passed target-bound QA-04 in
+  `954` seconds with source `454/454`, Cloud `459/459` and Local `455/455`. Canonical acceptance
+  and release-bindings SHA-256 values are
+  `ce0daead74a52c7c4301543fecf5612833460cefc0d349be7f5fd6441681dfa9` and
+  `40a809385f8fb090b9571fbca417416bb41c7bc66d9d5c69010ea48af3dee8a7`.
+- COM/CN signed-package MV3 restart receipt SHA-256 values are
+  `11c30c516bccfc6d3f245ca02d6ea654aedcced45db661af2339a00954e8b8b7` and
+  `01a1bcb337af4472356c701edc278cd4fba93b8aff40b44056f6563384e6eb1a`; isolated
+  `1.0.305 -> 1.0.306` upgrade-smoke summary and target-tree SHA-256 values are
+  `70f5e0d2bdfcd5513a0ef4571f7ec282b4f382e4630781e1c05eaf4dd3685d42` and
+  `c46327a20e50e44cafa759d996b485b081b80df84198477136817b9732d0268c`.
+- Both regions completed fresh backup/restore, all `146` repository migrations, dark deployment,
+  verifier, `7`-check/`32`-request canaries and final fences. COM/CN fresh-backup attestation
+  SHA-256 values are `c54829e075d4d2916924a4e18335335926c3a768f3cd7192ed855b74bdfbac1e`
+  and `0b81a9c8f3357493623a53a2e9d8a3a78fb98c98648922556bf06e5e049d85f5`; deployment summary and
+  dual-region zero-claim SHA-256 values are
+  `0a8539ee4516fbc825f88dd5f21737fac9974b76002bbce97bb41102b5069409` and
+  `c3a50c197bc9e4adfb1e60e9dc9461807c89e58fabb4b5329f751834fb3c1eb6`.
+- DNS quorum and COM/CN website distribution SHA-256 values are
+  `2d8ad0217d2c768a6ea11c9b8da4648d814171e825da8b9ab2a9a39853d4abbc`,
+  `f0e3626679b8beceb51b9722774937b1f1bfb649e101cf81a7183273c6cd52f8` and
+  `1e662467ce531342da359842cbde754a147d89986b2fbadc11460b785edafdbc`. The official verifier
+  replayed both publications successfully.
+- BINI retained fixed ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`, its managed path, one non-secret
+  profile and profile fingerprint through the atomic same-path upgrade. A conservative process
+  ownership rejection recovered the sealed `1.0.305` source with zero external effects before the
+  recovery path completed `1.0.306`. Managed-upgrade, trusted-reload, active-worker, final-runtime
+  and closure SHA-256 values are
+  `206cfae543d885a3ca82c188b281bcaab8bcef9534d3c5b15fb6c10013d452f1`,
+  `75b50e8ce0149ca315b50a5ce329a3be8e8f892b5d357fb9d05defa0bd776002`,
+  `1df931cdcc5a0ae7e181c22ba0e455b75d80f91dbf90ae3f43d2b2fa3af779bb`,
+  `7d9c7e599fe2e2cddda6ae571d56ee4154dd93f2219d3cbcf3385ebb26957da4` and
+  `d5bb023e39fd58e1bb3014f71244be37a164f42e5fe46e69d8eaebe1be98369a`.
+- Final read-only checks confirmed both regions run exact `0c326b10`, all six API/Worker/Web
+  services are active with exact release CWD, database/Redis readiness is healthy and every
+  rollout row remains dark. No Provider request, ERP ingest/publish or Ozon write occurred. Fresh
+  recovery points remain local to each VPS because remote backup storage is still unconfigured.
+  Phase 6 remains `3/3` and overall progress remains `37/37`.
+
 - Post-release collection authentication correction (2026-08-13): automatic pairing already
   grants `capture:write`, but Ozon collection and 1688 legacy-compatible fallback still required
   the old account-equivalent Token. This was exposed by pairing a different ERP user, which
@@ -36,8 +76,9 @@ Progress: 3/3 tasks.
   core; paired extensions use it for Ozon and legacy-compatible collection and never silently
   downgrade a revoked/failed device to a tenant Token. The ERP collect page now accepts paired
   `capture:write` without `hasToken`. Server typecheck passed, device/batch tests passed `47/47`,
-  and extension collection/source/diagnostic contracts passed. Source-only, not packaged or
-  deployed; no Provider, ERP/Ozon production write, VPS access or deployment occurred.
+  and extension collection/source/diagnostic contracts passed. At that source checkpoint no
+  Provider, ERP/Ozon production write, VPS access or deployment occurred; the correction was
+  subsequently included in the `1.0.306` replacement release recorded above.
 
 - Post-release Seller permission diagnosis (2026-08-12): direct inspection of the user's active
   `1.0.305` Downloads instance `hbaahhdfolpocohbihhkpbldggljdeog` found exact Seller access in
@@ -50,8 +91,8 @@ Progress: 3/3 tasks.
   issue, and final-tree `pnpm preflight` passed in `738.1` seconds with source verification
   `454/454`. The downloaded version-directory instance and managed BINI fixed-ID instance remain
   separate profiles; same-path managed upgrade is still required to preserve extension identity.
-  This correction is source-only and not yet packaged/deployed. No Provider, ERP/Ozon write, VPS
-  access or deployment occurred; Phase 6 remains `3/3`, overall `37/37`.
+  At that source checkpoint no Provider, ERP/Ozon write, VPS access or deployment occurred; the
+  correction was subsequently included in `1.0.306`. Phase 6 remains `3/3`, overall `37/37`.
 - Seller permission/profile replacement release (2026-08-12): exact target
   `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` / extension `1.0.305` passed target-bound QA-04 in
   `992` seconds with Server `5033` passed / `221` environment skips, source `454/454`, Cloud
