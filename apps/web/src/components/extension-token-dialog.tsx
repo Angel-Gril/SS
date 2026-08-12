@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cable, Check, Copy, Key, Loader2, MonitorUp, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { Cable, Check, ChevronDown, ChevronUp, Copy, Key, Loader2, MonitorUp, RefreshCw, ShieldCheck, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -162,6 +162,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [deviceLabel, setDeviceLabel] = useState('');
   const [pairing, setPairing] = useState<PairingCode | null>(null);
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
+  const [showRevokedSessions, setShowRevokedSessions] = useState(false);
   const [currentOwnerUserId, setCurrentOwnerUserId] = useState('');
   const [loadingContext, setLoadingContext] = useState(false);
   const [pairingBusy, setPairingBusy] = useState(false);
@@ -188,6 +189,17 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     () => sessions.find((session) => session.id === extensionDeviceStatus?.sessionId) || null,
     [extensionDeviceStatus?.sessionId, sessions],
   );
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => session.status === 'ACTIVE'),
+    [sessions],
+  );
+  const revokedSessions = useMemo(
+    () => sessions.filter((session) => session.status !== 'ACTIVE'),
+    [sessions],
+  );
+  const visibleSessions = showRevokedSessions
+    ? [...activeSessions, ...revokedSessions]
+    : activeSessions;
   const extensionNeedsAuthorization = deviceGrantMismatch({
     status: extensionDeviceStatus,
     session: currentDeviceSession,
@@ -978,14 +990,32 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
                     已配对设备
                   </h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    撤销后不会删除发布历史，只停止该设备继续拉取。
+                    断开只停止设备访问，不删除审计和发布历史；已撤销记录可展开查看。
                   </p>
                 </div>
-                <Badge variant="outline">{sessions.length}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{activeSessions.length}</Badge>
+                  {revokedSessions.length ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs text-muted-foreground"
+                      onClick={() => setShowRevokedSessions((current) => !current)}
+                    >
+                      {showRevokedSessions ? (
+                        <ChevronUp className="mr-1 h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="mr-1 h-3.5 w-3.5" />
+                      )}
+                      {showRevokedSessions ? '收起历史' : `${revokedSessions.length} 条历史`}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <div className="divide-y border-y">
-                {sessions.length ? (
-                  sessions.map((session) => (
+                {visibleSessions.length ? (
+                  visibleSessions.map((session) => (
                     <div key={session.id} className="flex items-start gap-3 px-2 py-3">
                       <MonitorUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
@@ -1017,25 +1047,27 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
                             .join('、') || '-'}
                         </div>
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="shrink-0 text-destructive"
-                        onClick={() => revokeSession(session.id)}
-                        disabled={revokingId === session.id}
-                      >
-                        {revokingId === session.id ? (
-                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                        )}
-                        撤销设备
-                      </Button>
+                      {session.status === 'ACTIVE' ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="shrink-0 text-destructive"
+                          onClick={() => revokeSession(session.id)}
+                          disabled={revokingId === session.id}
+                        >
+                          {revokingId === session.id ? (
+                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Unplug className="mr-1.5 h-3.5 w-3.5" />
+                          )}
+                          断开访问
+                        </Button>
+                      ) : null}
                     </div>
                   ))
                 ) : (
                   <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                    尚无已配对设备
+                    {revokedSessions.length ? '当前没有活动设备' : '尚无已配对设备'}
                   </div>
                 )}
               </div>

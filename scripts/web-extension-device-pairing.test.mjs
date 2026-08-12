@@ -229,6 +229,14 @@ test('tenant owners can inspect and revoke paired devices', () => {
   assert.match(source, /api\.delete/);
 });
 
+test('device management keeps revoked sessions as collapsed audit history', () => {
+  assert.match(source, /const \[showRevokedSessions, setShowRevokedSessions\] = useState\(false\)/);
+  assert.match(source, /sessions\.filter\(\(session\) => session\.status === 'ACTIVE'\)/);
+  assert.match(source, /sessions\.filter\(\(session\) => session\.status !== 'ACTIVE'\)/);
+  assert.match(source, /showRevokedSessions \? '收起历史' : `\$\{revokedSessions\.length\} 条历史`/);
+  assert.match(source, /session\.status === 'ACTIVE' \? \([\s\S]{0,1200}断开访问/);
+});
+
 test('opening the dialog does not automatically mint a legacy account token', () => {
   assert.doesNotMatch(source, /onOpenChange=.*generateToken\(\)/);
 });
@@ -255,6 +263,14 @@ assert.match(
   assert.match(autoConnectSource, /singleActiveOzonShopIds\(shopResponse\.data\)/);
   assert.doesNotMatch(autoConnectSource, /NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED/);
   assert.match(autoConnectSource, /navigator\.locks/);
+  assert.match(autoConnectSource, /window\.addEventListener\('focus', connect\)/);
+  assert.match(autoConnectSource, /window\.addEventListener\('online', connect\)/);
+  assert.match(autoConnectSource, /document\.addEventListener\('visibilitychange', onVisible\)/);
+  assert.ok(
+    autoConnectSource.indexOf('const shopIds = singleActiveOzonShopIds')
+      < autoConnectSource.indexOf('if (recentlyAttempted()) return'),
+    'a missing or ambiguous shop must not consume the retry cooldown',
+  );
   assert.match(erpBridgeSource, /ss-erp:extension-bridge-ready/);
   assert.match(autoConnectSource, /bridgeEvent\?\.type === 'ss-erp:extension-bridge-ready'[\s\S]*connect\(\)/);
   assert.match(serviceWorkerSource, /function injectErpBridgeIntoOpenTabs[\s\S]*chrome\.tabs\.query\(\{ url: matches \}\)[\s\S]*content\/erp-collect-bridge\.js/);

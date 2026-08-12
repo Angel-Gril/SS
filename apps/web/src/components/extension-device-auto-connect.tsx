@@ -84,13 +84,13 @@ export async function runAutoConnect(cancelled: () => boolean): Promise<void> {
     return runAutoConnect(cancelled);
   }
   if (status.state !== 'authorization_required' || status.ownerUserId) return;
-  if (recentlyAttempted()) return;
-  rememberAttempt();
 
   const shopResponse = await api.get<ShopOption[]>('/api/shops');
   if (cancelled() || shopResponse.code !== 1 || !Array.isArray(shopResponse.data)) return;
   const shopIds = singleActiveOzonShopIds(shopResponse.data);
   if (!ownerUserId || !shopIds.length) return;
+  if (recentlyAttempted()) return;
+  rememberAttempt();
 
   const pairingResponse = await api.post<PairingCode>('/api/extension-device/pairing-codes', {
     shopIds,
@@ -175,11 +175,20 @@ export function ExtensionDeviceAutoConnect() {
         connect();
       }
     };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') connect();
+    };
     window.addEventListener('message', onBridgeReady);
+    window.addEventListener('focus', connect);
+    window.addEventListener('online', connect);
+    document.addEventListener('visibilitychange', onVisible);
     connect();
     return () => {
       disposed = true;
       window.removeEventListener('message', onBridgeReady);
+      window.removeEventListener('focus', connect);
+      window.removeEventListener('online', connect);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
   return null;

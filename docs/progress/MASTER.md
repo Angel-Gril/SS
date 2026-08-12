@@ -66,6 +66,15 @@ re-pairs. Legacy `/api/collect/batch` remains available only to installs that ha
 the scoped-device flow. Focused extension contracts and Cloud/Server typechecks passed; this
 correction is source-only and still requires the normal signed package/release process.
 
+Connection UX follow-up (2026-08-13): when the current account has exactly one active Ozon shop,
+ERP login now performs the minimal `capture:write` pairing without requiring a manual token or
+pairing-code copy. Focus/online/visibility events retry the bounded bootstrap after a delayed
+shop list or network recovery; multi-shop accounts still require one explicit shop choice. Device
+management now shows active devices by default and folds revoked sessions into read-only audit
+history. Revoked session rows are not physically deleted because they are referenced by refresh,
+security, capture, media, and publish records. Source-only; the next signed extension package
+must include this change.
+
 Post-release Seller access diagnosis and source correction (2026-08-12): the reported `1.0.305`
 Cloud instance is `hbaahhdfolpocohbihhkpbldggljdeog`, loaded from the user's versioned Downloads
 directory. Chrome's persisted Default-profile state proves that exact instance has active, granted
