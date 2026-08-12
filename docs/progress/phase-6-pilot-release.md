@@ -28,15 +28,48 @@ Progress: 3/3 tasks.
 
 ## Notes
 
-- Seller permission/profile diagnosis (2026-08-12): the online BINI `1.0.304` session retained
-  Seller login and completed analytics synchronization. Failed and successful observations came
-  from different Chrome profiles/extension IDs, whose site grants and device sessions are isolated.
-  The development tree now exposes exact runtime identity and effective Seller access, verifies the
-  grant after a trusted request, fails closed on missing APIs, refreshes shops after pairing, and
-  rejects stale shop-list responses. Full preflight passed in `721.9` seconds; source/Cloud/Local
-  verification passed `454/454`, `459/459` and `455/455`, with only the two expected Local warnings.
-  This checkpoint is not deployed; production remains `cf657969` / `1.0.304` and no Provider, VPS
-  or Ozon write operation was performed.
+- Seller permission/profile replacement release (2026-08-12): exact target
+  `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` / extension `1.0.305` passed target-bound QA-04 in
+  `992` seconds with Server `5033` passed / `221` environment skips, source `454/454`, Cloud
+  `459/459` and Local `455/455`. Only the expected source/Local packaging warnings remain.
+  Canonical acceptance and release-bindings SHA-256 values are
+  `03275dd86d636e72a3eb72b3e87e2090ed29559447774b388aa3e535a2777a73` and
+  `5b8bd9a1b85eb2ca7f1a9e94dbe1c14de071c5b8cae234963d79b21cd9934d4e`.
+- COM/CN signed-package MV3 restart receipt SHA-256 values are
+  `ca3689595ed8ac2f892e42e8dab28b70b64d6e268bbab4255c9258a1fa71bf84` and
+  `e5ccbecf39184361f64f57d1e3566722e3b78831f72a63ccc96ba162646f28d8`; isolated
+  `1.0.304 -> 1.0.305` upgrade-smoke summary and target-tree SHA-256 values are
+  `2218f8ddf17e98d85d36f7a6e8f46b41344a11de5c5a9c29371f0ec5093a013c` and
+  `96ee720d94a64f17a696f3c14c2d47c4c169490efe71d8e9a0869cab50599dd4`.
+- Both regions completed fresh backup/restore, all `146` repository migrations, dark deployment,
+  verifier, `7`-check/`32`-request canaries and final fences. COM/CN fresh-backup attestation
+  SHA-256 values are `f018bd8c14bf569fcc5065244ecad2af9a174dd9960f804d6053a666bfa8a959`
+  and `506294aced57f614427046e1f2305137fe6c4aedfefdddcd5054ec72bb13048b`; deployment summary and
+  dual-region zero-claim SHA-256 values are
+  `541e030f6dcb37d0a745f2013f05727a7c2ff72206599790ffd3ffdf5890239e` and
+  `102565eca9496a992a2c50b489384562b4d1e3bba206c82be6da6f33e258f6fe`.
+- DNS quorum and COM/CN website distribution SHA-256 values are
+  `5c39c75703ac898368f619ebc6bbd1a84964f0e69b4ebf0882c441717b879333`,
+  `ac1aca872b08f030843d8d1296376dd44b8835b0fa2c90d4f1dfe840d6bf7600` and
+  `8c4c70922b0e4380dd4bfa08ced48b615f0948398f36cea10104e53e3d9bd4ff`. The official verifier
+  replayed both publications successfully.
+- BINI retained its fixed extension ID, managed path, profile fingerprint and one non-secret
+  profile through the atomic same-path upgrade. Trusted reload, active-worker and final
+  storage/permission checks passed in `OFFLINE_RELEASE_SMOKE`; managed-upgrade, trusted-reload,
+  active-worker, final-runtime and closure SHA-256 values are
+  `ad192e284ceceb28da66e4109ad5413af5c5f140e23347d9c963ca8f829cb023`,
+  `66b423c323d8b484154a93eb1b5e8997a255e275de913d98c1b17a659df0d8ca`,
+  `5899be2d73cca391fdaa6d10cd6db3787fae6da6d37515d18e4378f79517d6c9`,
+  `10134908b3ec7614ce2bfdba10401cae790d161cb665e8aa301491b8c7539cb4` and
+  `af294344b23477b748b32df437353b160ab55d1d2b3996e63128f7b7b13540a4`.
+- Final live read-only checks confirmed both regions run exact `951ecdc8`, all six API/Worker/Web
+  services are active with exact release CWD, database/Redis readiness is healthy and every rollout
+  row remains dark. No Provider request, ERP ingest/publish or Ozon write occurred. Frozen deploy
+  and replacement-helper manifest SHA-256 values are
+  `4b828c608d88e14e048ae3841923f3ff74ad79f4b70ad8440991b4719db7756c` and
+  `d666d2560679e9c27e942c7f6660b12f90e298f09c7a9b731885956eada2a3b4`. Fresh database recovery
+  points remain local to each VPS; remote backup storage is still unconfigured. Phase 6 remains
+  complete at `3/3` and overall progress remains `37/37`.
 - Seamless connection/Cookie/list-performance replacement release (2026-08-11): exact target
   `cf6579697c4d44b2cfd2245cd7b580260feab874` / extension `1.0.304` passed target-bound QA-04 in
   `969` seconds with source `452/452`, Cloud `457/457` and Local `453/453`. Canonical acceptance

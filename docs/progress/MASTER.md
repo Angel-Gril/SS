@@ -44,20 +44,47 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
-Post-release Seller permission diagnosis (2026-08-12): an online BINI session proved that Ozon
-login and analytics synchronization remain functional on extension `1.0.304`. The intermittent
-failure was isolated to different Chrome profiles and extension IDs: site grants, device sessions
-and selected shops are profile-local and were being presented as one logical state. The development
-tree now reports the exact extension instance and effective `seller.ozon.ru` grant, rechecks the
-grant after every trusted permission request, fails closed when the permissions API is unavailable,
-refreshes shops after pairing, and prevents stale shop-list responses from replacing newer state.
+Replacement release (2026-08-12): exact target
+`951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` is now deployed in both regions and installed on BINI
+as extension `1.0.305`. Target-bound QA-04 passed in `992` seconds with Server `5033` tests passed
+and `221` environment skips, source `454/454`, Cloud `459/459` and Local `455/455`; only the expected
+source/Local packaging warnings remain. Canonical acceptance and release-bindings SHA-256 values are
+`03275dd86d636e72a3eb72b3e87e2090ed29559447774b388aa3e535a2777a73` and
+`5b8bd9a1b85eb2ca7f1a9e94dbe1c14de071c5b8cae234963d79b21cd9934d4e`. COM/CN signed-package
+MV3 restart receipt SHA-256 values are
+`ca3689595ed8ac2f892e42e8dab28b70b64d6e268bbab4255c9258a1fa71bf84` and
+`e5ccbecf39184361f64f57d1e3566722e3b78831f72a63ccc96ba162646f28d8`; the isolated
+`1.0.304 -> 1.0.305` upgrade-smoke summary SHA-256 is
+`2218f8ddf17e98d85d36f7a6e8f46b41344a11de5c5a9c29371f0ec5093a013c`.
 
-Complete `pnpm preflight` passed in `721.9` seconds. Final source/Cloud/Local package verification
-passed `454/454`, `459/459` and `455/455`; Local retains its two expected packaging warnings. The
-Seller permission and out-of-order shop response regression test, targeted lint and diff checks also
-pass, and independent review found no P0/P1/P2 issue. This is a development checkpoint only: the
-currently deployed and installed release remains `cf657969` / `1.0.304`; no replacement release,
-Provider call, VPS change or Ozon write was performed.
+COM and CN completed fresh backup/restore verification, all `146` repository migrations, dark
+deployment, post-deploy verification, `7`-check/`32`-request canaries and final dark fences. COM/CN
+applied migration rows are `148` and `146`; final live read-only checks confirmed all six
+API/Worker/Web services active with exact release CWD and database/Redis readiness healthy.
+Fresh-backup attestation SHA-256 values are
+`f018bd8c14bf569fcc5065244ecad2af9a174dd9960f804d6053a666bfa8a959` and
+`506294aced57f614427046e1f2305137fe6c4aedfefdddcd5054ec72bb13048b`; the dual-region deployment
+summary and zero-claim aggregate SHA-256 values are
+`541e030f6dcb37d0a745f2013f05727a7c2ff72206599790ffd3ffdf5890239e` and
+`102565eca9496a992a2c50b489384562b4d1e3bba206c82be6da6f33e258f6fe`.
+
+Official website Cloud/Local distribution passed in both regions and the official verifier replay
+passed. DNS-quorum SHA-256 is
+`5c39c75703ac898368f619ebc6bbd1a84964f0e69b4ebf0882c441717b879333`; COM/CN distribution receipt
+SHA-256 values are `ac1aca872b08f030843d8d1296376dd44b8835b0fa2c90d4f1dfe840d6bf7600` and
+`8c4c70922b0e4380dd4bfa08ced48b615f0948398f36cea10104e53e3d9bd4ff`. BINI retained its fixed
+extension ID, managed path, profile fingerprint and one non-secret profile through the atomic
+same-path upgrade. Trusted reload, active-worker identity and final storage/permission checks passed
+in `OFFLINE_RELEASE_SMOKE`; installed-tree and closure SHA-256 values are
+`96ee720d94a64f17a696f3c14c2d47c4c169490efe71d8e9a0869cab50599dd4` and
+`af294344b23477b748b32df437353b160ab55d1d2b3996e63128f7b7b13540a4`.
+
+Every rollout row remains dark. This replacement release made no Provider request and performed no
+ERP ingest/publish or Ozon write. Frozen deploy and replacement-helper manifest SHA-256 values are
+`4b828c608d88e14e048ae3841923f3ff74ad79f4b70ad8440991b4719db7756c` and
+`d666d2560679e9c27e942c7f6660b12f90e298f09c7a9b731885956eada2a3b4`. Remote backup storage
+remains the sole release-operations warning; both fresh recovery points exist locally on their
+respective VPS. Overall progress remains `37/37`.
 
 Post-release seamless extension and Ozon list performance enhancement (2026-08-11): the
 development tree now supports a bounded, least-privileged automatic ERP device connection for
@@ -2381,8 +2408,8 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Completion follow-up: treat exact commit `cf6579697c4d44b2cfd2245cd7b580260feab874` and extension
-`1.0.304` as the current dual-region/BINI baseline. Keep both regions and every rollout row dark,
+Completion follow-up: treat exact commit `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` and extension
+`1.0.305` as the current dual-region/BINI baseline. Keep both regions and every rollout row dark,
 configure remote backup storage before the next production change, and retain all generated
 analysis, plan, progress, private evidence and operator-helper artifacts until an explicit
 keep/delete decision is made. Do not repeat the completed cycle 20 Ozon import or status request;
