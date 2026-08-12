@@ -513,7 +513,15 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       },
     });
     const attemptRepository = createPrismaOzonPublishAttemptRepository({ client: client as never });
-    const submitImportOnce = vi.fn(async () => ({ result: { task_id: '9007199254740997' } }));
+    let markSubmitStarted!: () => void;
+    let releaseSubmit!: () => void;
+    const submitStarted = new Promise<void>((resolve) => { markSubmitStarted = resolve; });
+    const submitRelease = new Promise<void>((resolve) => { releaseSubmit = resolve; });
+    const submitImportOnce = vi.fn(async () => {
+      markSubmitStarted();
+      await submitRelease;
+      return { result: { task_id: '9007199254740997' } };
+    });
     const ozonPublisher = createOzonListingPublisher({
       workflow: {
         getDraft: (input) => workflow.getDraft({
@@ -647,18 +655,65 @@ describePostgres('extension BYOK publish PostgreSQL vertical closure', () => {
       ...authHeaders,
       'x-ss-erp-command-grant': grant.json().data.grantToken,
     };
-    const [firstExecute, duplicateExecute] = await Promise.all([
-      app.inject({
-        method: 'POST', url: '/api/extension-device/ozon-publish/execute',
-        headers: executeHeaders, payload: executePayload,
-      }),
-      app.inject({
-        method: 'POST', url: '/api/extension-device/ozon-publish/execute',
-        headers: executeHeaders, payload: executePayload,
-      }),
+    const firstExecutePromise = app.inject({
+      method: 'POST', url: '/api/extension-device/ozon-publish/execute',
+      headers: executeHeaders, payload: executePayload,
+    });
+    const firstBoundary = await Promise.race([
+      submitStarted.then(() => ({ kind: 'submitting' as const })),
+      firstExecutePromise.then((response) => ({ kind: 'completed' as const, response })),
     ]);
+    if (firstBoundary.kind === 'completed') {
+      const body = firstBoundary.response.json();
+      const attemptDiagnostic = await client.ozonPublishAttempt.findUnique({
+        where: { publishIntentId: envelope.command.publishIntentId },
+        select: { lastErrorCode: true, lastErrorMessage: true },
+      });
+      throw new Error(JSON.stringify({
+        stage: 'before_provider_submission',
+        status: firstBoundary.response.statusCode,
+        code: body.code,
+        errorCode: body.errorCode || null,
+        receiptStatus: body.data?.receipt?.status || null,
+        failureCode: body.data?.receipt?.failureCode || null,
+        attemptErrorCode: attemptDiagnostic?.lastErrorCode || null,
+        attemptErrorMessage: attemptDiagnostic?.lastErrorMessage || null,
+      }));
+    }
+    let duplicateExecute;
+    try {
+      duplicateExecute = await app.inject({
+        method: 'POST', url: '/api/extension-device/ozon-publish/execute',
+        headers: executeHeaders, payload: executePayload,
+      });
+    } finally {
+      releaseSubmit();
+    }
+    const firstExecute = await firstExecutePromise;
+    const responseDiagnostics = [firstExecute, duplicateExecute].map((response) => {
+      const body = response.json();
+      return {
+        status: response.statusCode,
+        code: body.code,
+        errorCode: body.errorCode || null,
+        receiptStatus: body.data?.receipt?.status || null,
+        failureCode: body.data?.receipt?.failureCode || null,
+        replay: body.data?.replay ?? null,
+      };
+    });
     expect([firstExecute.statusCode, duplicateExecute.statusCode]
-      .every((status) => [200, 202].includes(status))).toBe(true);
+      .every((status) => [200, 202].includes(status)), JSON.stringify(responseDiagnostics)).toBe(true);
+    expect(executeOzonPublish).toHaveBeenCalledTimes(1);
+    expect(submitImportOnce).toHaveBeenCalledTimes(1);
+    const completedReplay = await app.inject({
+      method: 'POST', url: '/api/extension-device/ozon-publish/execute',
+      headers: executeHeaders, payload: executePayload,
+    });
+    expect(completedReplay.statusCode).toBe(200);
+    expect(completedReplay.json()).toMatchObject({
+      code: 1,
+      data: { receipt: { status: 'SUCCEEDED' }, replay: true },
+    });
     expect(executeOzonPublish).toHaveBeenCalledTimes(1);
     expect(submitImportOnce).toHaveBeenCalledTimes(1);
 

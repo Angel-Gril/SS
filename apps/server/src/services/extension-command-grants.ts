@@ -138,6 +138,12 @@ export type ExtensionCommandRevokeResult =
 
 export interface ExtensionCommandGrantStore {
   issueGrant(grant: ExtensionCommandGrantRecord): Promise<ExtensionCommandIssueResult>;
+  inspectGrant(input: {
+    tokenDigest: string;
+    binding: ExtensionCommandBinding;
+    now: Date;
+    requireLiveAuthorizationForPendingReplay?: boolean;
+  }): Promise<ExtensionCommandInspectResult>;
   consumeOrReplay(input: {
     tokenDigest: string;
     binding: ExtensionCommandBinding;
@@ -426,6 +432,27 @@ export class InMemoryExtensionCommandGrantStore implements ExtensionCommandGrant
     return { kind: 'execute', receipt: clone(receipt) };
   }
 
+  async inspectGrant(input: {
+    tokenDigest: string;
+    binding: ExtensionCommandBinding;
+    now: Date;
+    requireLiveAuthorizationForPendingReplay?: boolean;
+  }): Promise<ExtensionCommandInspectResult> {
+    const grant = [...this.grants.values()].find((item) => item.tokenDigest === input.tokenDigest);
+    if (!grant) return { kind: 'not_found' };
+    if (!extensionCommandIdentityEqual(grant, input.binding)) return { kind: 'mismatch' };
+    const existing = [...this.receipts.values()].find((item) => item.grantId === grant.id);
+    if (existing
+      && (existing.status !== 'PENDING' || input.requireLiveAuthorizationForPendingReplay !== true)) {
+      return { kind: 'replay', receipt: clone(existing) };
+    }
+    if (grant.tokenId !== input.binding.tokenId) return { kind: 'mismatch' };
+    if (grant.revokedAt) return { kind: 'revoked' };
+    if (grant.expiresAt.getTime() <= input.now.getTime()) return { kind: 'expired' };
+    if (existing) return { kind: 'replay', receipt: clone(existing) };
+    return { kind: 'allowed' };
+  }
+
   async claimPendingRecovery(input: {
     receiptId: string;
     now: Date;
@@ -610,6 +637,21 @@ export function createExtensionCommandGrantService(options: {
       };
       const [code, statusCode, message] = errors[result.kind];
       throw new ExtensionCommandGrantError(code, statusCode, message);
+    },
+
+    async findReplay(input: ExtensionCommandBinding & { token: string }) {
+      const binding = normalizeBinding(input);
+      const token = String(input.token || '').trim();
+      if (!/^[A-Za-z0-9_-]{43,}$/.test(token)) {
+        throw new ExtensionCommandGrantError('COMMAND_GRANT_NOT_FOUND', 404, 'Command grant not found');
+      }
+      const result = await options.store.inspectGrant({
+        tokenDigest: digestExtensionCommandGrantToken(secret, token),
+        binding,
+        now: now(),
+        requireLiveAuthorizationForPendingReplay: true,
+      });
+      return result.kind === 'replay' ? result : null;
     },
 
     async claimPendingRecovery(input: { receiptId: string }) {

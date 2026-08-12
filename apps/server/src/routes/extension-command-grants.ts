@@ -840,6 +840,21 @@ interface ExtensionCommandGrantRouteService {
     requestHash: string;
     token: string;
   }): Promise<{ kind: 'execute' | 'replay'; receipt: { id: string; status: string; result: unknown; failureCode: string | null } }>;
+  findReplay(input: {
+    sessionId: string;
+    tokenId: string;
+    ownerUserId: string;
+    shopId: string | null;
+    operation: ExtensionCommandOperation;
+    workflowId: string | null;
+    draftVersion: number | null;
+    idempotencyKey: string;
+    requestHash: string;
+    token: string;
+  }): Promise<{
+    kind: 'replay';
+    receipt: { id: string; status: string; result: unknown; failureCode: string | null };
+  } | null>;
   claimPendingRecovery(input: { receiptId: string }): Promise<{
     kind: 'acquired' | 'not_ready';
     receipt: { id: string; status: string; result: unknown; failureCode: string | null };
@@ -1073,34 +1088,44 @@ export async function extensionCommandGrantRoutes(
         idempotencyKey: parsed.data.idempotencyKey,
         command: parsed.data.command,
       });
-      if (resolution.kind !== 'allowed'
-        || resolution.shopId !== parsed.data.shopId
-        || resolution.workflowId !== parsed.data.workflowId
-        || resolution.draftVersion !== parsed.data.draftVersion) {
-        const decisions = {
-          unavailable: [409, 'command_operation_unavailable', '该命令尚未开放'],
-          stale: [409, 'command_context_stale', '命令上下文已过期'],
-          forbidden: [403, 'command_context_forbidden', '无权访问命令上下文'],
-          rollout_unavailable: [503, 'source_workflow_rollout_unavailable', '来源商品发布策略暂不可用'],
-        } as const;
-        if (resolution.kind === 'allowed') {
-          return error(reply, 409, 'command_context_stale', '命令上下文已过期');
-        }
-        const [statusCode, code, message] = decisions[resolution.kind];
-        return error(reply, statusCode, code, message);
-      }
-      const authorized = await options.service.authorize({
+      const authorizationInput = {
         sessionId: device.sessionId,
         tokenId: device.tokenId,
         ownerUserId: device.ownerUserId,
         shopId: parsed.data.shopId,
-        operation: 'OZON_PUBLISH',
+        operation: 'OZON_PUBLISH' as const,
         workflowId: parsed.data.workflowId,
         draftVersion: parsed.data.draftVersion,
         idempotencyKey: parsed.data.idempotencyKey,
         requestHash: hashExtensionCommandRequest(envelope),
         token,
-      });
+      };
+      let authorized: Awaited<ReturnType<ExtensionCommandGrantRouteService['authorize']>>;
+      if (resolution.kind !== 'allowed'
+        || resolution.shopId !== parsed.data.shopId
+        || resolution.workflowId !== parsed.data.workflowId
+        || resolution.draftVersion !== parsed.data.draftVersion) {
+        const replay = resolution.kind === 'stale'
+          ? await options.service.findReplay(authorizationInput)
+          : null;
+        if (replay) {
+          authorized = replay;
+        } else {
+          const decisions = {
+            unavailable: [409, 'command_operation_unavailable', '该命令尚未开放'],
+            stale: [409, 'command_context_stale', '命令上下文已过期'],
+            forbidden: [403, 'command_context_forbidden', '无权访问命令上下文'],
+            rollout_unavailable: [503, 'source_workflow_rollout_unavailable', '来源商品发布策略暂不可用'],
+          } as const;
+          if (resolution.kind === 'allowed') {
+            return error(reply, 409, 'command_context_stale', '命令上下文已过期');
+          }
+          const [statusCode, code, message] = decisions[resolution.kind];
+          return error(reply, statusCode, code, message);
+        }
+      } else {
+        authorized = await options.service.authorize(authorizationInput);
+      }
       let receipt = authorized.receipt;
       let recovering = false;
       if (authorized.kind === 'replay' && authorized.receipt.status === 'PENDING') {
@@ -1116,6 +1141,14 @@ export async function extensionCommandGrantRoutes(
         receipt = recovery.receipt;
         recovering = true;
       } else if (authorized.kind === 'replay') {
+        if (authorized.receipt.status === 'FAILED') {
+          return reply.status(409).send({
+            code: 0,
+            errorCode: 'publish_failed',
+            msg: 'Ozon 发布执行失败',
+            data: { receipt: authorized.receipt, replay: true },
+          });
+        }
         return reply.send({ code: 1, data: { receipt: authorized.receipt, replay: true } });
       }
       try {

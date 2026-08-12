@@ -339,6 +339,10 @@ export function createPrismaExtensionCommandGrantStore(options: {
   const client = (options.client || prisma) as unknown as ExtensionCommandDatabaseClient;
 
   return {
+    async inspectGrant(input): Promise<ExtensionCommandInspectResult> {
+      return inspectExtensionCommandGrant(client, input);
+    },
+
     async issueGrant(grant): Promise<ExtensionCommandIssueResult> {
       return runSerializable(client, async (tx) => {
         const sessions = await tx.$queryRawUnsafe<Array<{ id: string }>>(

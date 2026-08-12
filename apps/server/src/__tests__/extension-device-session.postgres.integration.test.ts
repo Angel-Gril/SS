@@ -214,6 +214,69 @@ describePostgres('extension device PostgreSQL integration', () => {
     expect(matchAfterRevocation).toEqual([{ matches: true }]);
   });
 
+  it('validates a replacement immediately when the application clock leads PostgreSQL', async () => {
+    const seed = await seedOwnerAndShop(first, 'clock_skew');
+    const repository = createPrismaExtensionDeviceSessionRepository({
+      client: first,
+      consumePairingClaimAttemptBudget: async () => true,
+    });
+    const applicationNow = new Date(Date.now() + 5 * 60_000);
+    const service = createExtensionDeviceSessionService({
+      repository,
+      authConfig,
+      now: () => new Date(applicationNow),
+    });
+    const deviceId = `${seed.prefix}_device`;
+    const firstPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest'],
+    });
+    const original = await service.claimPairingCode({
+      code: firstPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    const replacementPairing = await service.createPairingCode({
+      actorUserId: seed.ownerUserId,
+      ownerUserId: seed.ownerUserId,
+      actorParentId: null,
+      shopIds: [seed.shopId],
+      scopes: ['byok:media:ingest', 'listing:publish'],
+    });
+    const replacement = await service.claimPairingCode({
+      code: replacementPairing.code,
+      deviceId,
+      deploymentId: authConfig.deploymentId,
+    });
+    const rows = await first.$queryRawUnsafe<Array<{
+      applicationClockLeads: boolean;
+      causalOrderValid: boolean;
+      matches: boolean;
+    }>>(
+      `SELECT predecessor."revoked_at" > clock_timestamp() AS "applicationClockLeads",
+              predecessor."revoked_at" <= successor."created_at" AS "causalOrderValid",
+              "extension_byok_publish_session_matches"(
+                predecessor."id", successor."id", $3, $3, $4
+              ) AS "matches"
+       FROM "extension_device_sessions" predecessor
+       JOIN "extension_device_sessions" successor
+         ON successor."replaces_session_id" = predecessor."id"
+       WHERE predecessor."id" = $1 AND successor."id" = $2`,
+      original.session.id,
+      replacement.session.id,
+      seed.ownerUserId,
+      seed.shopId,
+    );
+    expect(rows).toEqual([{
+      applicationClockLeads: true,
+      causalOrderValid: true,
+      matches: true,
+    }]);
+  });
+
   it('resumes an explicitly owner-authorized revoked session on the same logical device identifier', async () => {
     const seed = await seedOwnerAndShop(first, 'explicit_resume');
     const { repository, service } = serviceFor(first);

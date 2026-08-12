@@ -28,6 +28,13 @@ const pairingResumeMigrationUrl = new URL(
 const pairingResumeMigration = existsSync(pairingResumeMigrationUrl)
   ? readFileSync(pairingResumeMigrationUrl, 'utf8')
   : '';
+const causalLineageMigrationUrl = new URL(
+  '../../prisma/migrations/20260812140000_validate_extension_byok_publish_lineage_causality/migration.sql',
+  import.meta.url,
+);
+const causalLineageMigration = existsSync(causalLineageMigrationUrl)
+  ? readFileSync(causalLineageMigrationUrl, 'utf8')
+  : '';
 
 function modelBlock(name: string): string {
   return schema.match(new RegExp(`model ${name} \\{[\\s\\S]*?\\n\\}`))?.[0] || '';
@@ -146,6 +153,22 @@ describe('extension device persistence contract', () => {
       'predecessor_grant."revoked_at" <= CURRENT_TIMESTAMP',
     );
     expect(validatedLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
+  });
+
+  it('orders replacement revocations against their durable successor instead of wall clock time', () => {
+    expect(causalLineageMigration).toContain(
+      'CREATE OR REPLACE FUNCTION "extension_byok_publish_session_matches"',
+    );
+    expect(causalLineageMigration).toContain(
+      'predecessor."revoked_at" <= current_session."created_at"',
+    );
+    expect(causalLineageMigration).toContain(
+      'predecessor_grant."revoked_at" <= current_session."created_at"',
+    );
+    expect(causalLineageMigration).not.toContain('CURRENT_TIMESTAMP');
+    expect(causalLineageMigration).toContain('FOR replacement_depth IN 1..16 LOOP');
+    expect(causalLineageMigration).toContain('visited_session_ids');
+    expect(causalLineageMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/u);
   });
 
   it('stores only keyed digests for pairing and refresh credentials', () => {

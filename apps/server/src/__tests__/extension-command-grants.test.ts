@@ -208,6 +208,20 @@ describe('extension command grants', () => {
     expect(store.snapshot().grants[0]?.consumedAt).toEqual(NOW);
   });
 
+  it('finds only an exact durable replay without creating or consuming authority', async () => {
+    const { service, store } = target();
+    await service.issue(publishBinding());
+    expect(await service.findReplay({ token: TOKEN, ...publishBinding() })).toBeNull();
+    const first = await service.authorize({ token: TOKEN, ...publishBinding() });
+    expect(await service.findReplay({ token: TOKEN, ...publishBinding() }))
+      .toEqual({ kind: 'replay', receipt: first.receipt });
+    expect(await service.findReplay({
+      token: TOKEN,
+      ...publishBinding({ requestHash: 'b'.repeat(64) }),
+    })).toBeNull();
+    expect(store.snapshot().receipts).toHaveLength(1);
+  });
+
   it('rejects a changed payload binding and an expired token without consuming the grant', async () => {
     const { service, store } = target();
     await service.issue(publishBinding());
@@ -239,6 +253,7 @@ describe('extension command grants', () => {
   ] as const)('maps live %s authorization failures without executing', async (kind, code, statusCode) => {
     const store = {
       issueGrant: async () => ({ kind: 'conflict' as const }),
+      inspectGrant: async () => ({ kind }),
       consumeOrReplay: async () => ({ kind }),
       claimPendingRecovery: async () => ({ kind: 'not_found' as const }),
       completeReceipt: async () => ({ kind: 'not_found' as const }),

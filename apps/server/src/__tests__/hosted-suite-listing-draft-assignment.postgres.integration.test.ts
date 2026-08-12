@@ -802,7 +802,8 @@ describePostgres('hosted suite listing-draft assignment PostgreSQL atomicity', (
     }>>(
       `SELECT "condeferrable" AS "deferrable", "condeferred" AS "initiallyDeferred"
        FROM pg_constraint
-       WHERE "conname" = 'extension_hosted_listing_assignment_bound_draft_fkey'`,
+       WHERE "conrelid" = 'extension_hosted_ai_image_listing_assignments'::regclass
+         AND "conname" = 'extension_hosted_listing_assignment_bound_draft_fkey'`,
     );
     expect(constraints).toEqual([{ deferrable: true, initiallyDeferred: true }]);
   }, 30_000);
