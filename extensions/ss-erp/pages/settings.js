@@ -1608,7 +1608,7 @@
       setAnalyticsStatus('请先选择店铺', 'error');
       return;
     }
-    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
+    setAnalyticsStatus('正在确认 seller.ozon.ru 访问权限...', '');
     runSellerOzonAction(function () {
       setAnalyticsStatus('正在从 seller.ozon.ru 获取分析数据并推送到 ERP...', '');
       return sendSellerAnalyticsMessage('spb-self-hosted:sync-shop-analytics', shopId);
@@ -1628,7 +1628,7 @@
       setAnalyticsStatus('请先选择店铺', 'error');
       return;
     }
-    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
+    setAnalyticsStatus('正在确认 seller.ozon.ru 访问权限...', '');
     runSellerOzonAction(function () {
       setAnalyticsStatus('正在从 seller.ozon.ru 获取 V3 经营数据（含环比+AI推荐）...', '');
       return sendSellerAnalyticsMessage('spb-self-hosted:sync-shop-graphs', shopId);
@@ -1652,7 +1652,7 @@
   var marketApiResults = document.getElementById('marketApiResults');
 
   on(testMarketApisBtn, 'click', function () {
-    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
+    setAnalyticsStatus('正在确认 seller.ozon.ru 访问权限...', '');
     if (marketApiResults) { marketApiResults.style.display = 'none'; marketApiResults.innerHTML = ''; }
     runSellerOzonAction(function () {
       setAnalyticsStatus('正在检查市场数据权限（搜索词/趋势/爆品/竞争定位）...', '');

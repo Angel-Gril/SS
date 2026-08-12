@@ -3,7 +3,7 @@
 
   var SELLER_ORIGIN = 'https://seller.ozon.ru/*';
   var DENIED_MESSAGE = '当前 Chrome 配置文件未授权访问 seller.ozon.ru；'
-    + '其他 Chrome 配置文件或扩展 ID 的授权不会共享。请在当前窗口允许站点访问后重试。';
+    + '其他 Chrome 配置文件或扩展 ID 的授权不会共享。请再次点击当前操作并在当前窗口允许站点访问。';
   var API_UNAVAILABLE_MESSAGE = '当前扩展上下文无法检测 Seller 站点权限，请重新加载扩展后重试。';
 
   function permissionSpec() {
@@ -82,6 +82,26 @@
 
     function request(callback) {
       var settle = typeof callback === 'function' ? callback : function () {};
+      if (cachedGranted === true) {
+        inspect(function (verification) {
+          if (!verification.ok) {
+            settle(verification);
+            return;
+          }
+          if (verification.granted) {
+            settle({ ok: true, granted: true, requested: false });
+            return;
+          }
+          settle({
+            ok: false,
+            granted: false,
+            requested: false,
+            errorCode: 'seller_site_access_denied',
+            error: DENIED_MESSAGE,
+          });
+        });
+        return;
+      }
       if (!permissions || typeof permissions.request !== 'function') {
         cachedGranted = null;
         settle(publish(unavailableResult()));
@@ -91,20 +111,23 @@
       // Keep the request synchronous with the trusted click handler.
       try {
         permissions.request(permissionSpec(), function (requested) {
-          var error = runtimeErrorMessage();
-          if (error) {
-            cachedGranted = null;
-            settle(publish({
-              ok: false,
-              granted: false,
-              errorCode: 'seller_site_access_request_failed',
-              error: error,
-            }));
-            return;
-          }
+          var requestError = runtimeErrorMessage();
           inspect(function (verification) {
             if (!verification.ok) {
               settle(verification);
+              return;
+            }
+            if (verification.granted) {
+              settle({ ok: true, granted: true, requested: Boolean(requested) });
+              return;
+            }
+            if (requestError) {
+              settle(publish({
+                ok: false,
+                granted: false,
+                errorCode: 'seller_site_access_request_failed',
+                error: requestError,
+              }));
               return;
             }
             if (!verification.granted) {
@@ -117,7 +140,6 @@
               });
               return;
             }
-            settle({ ok: true, granted: true, requested: Boolean(requested) });
           });
         });
       } catch (error) {

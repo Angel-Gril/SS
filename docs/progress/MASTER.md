@@ -44,6 +44,33 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release Seller access diagnosis and source correction (2026-08-12): the reported `1.0.305`
+Cloud instance is `hbaahhdfolpocohbihhkpbldggljdeog`, loaded from the user's versioned Downloads
+directory. Chrome's persisted Default-profile state proves that exact instance has active, granted
+and scriptable access to `https://seller.ozon.ru/*`, with permission withholding disabled. The
+visible gray per-site controls are governed by the enabled master switch; the failure was not a
+missing user grant. The production symptom came from two extension defects: an already-effective
+mandatory Seller grant was requested again, and a Seller page navigation/script-context failure was
+collapsed into the same "site permission" message.
+
+The source tree now re-verifies effective access without reopening the permission prompt, preserves
+permission-check failures as a distinct error, validates the Seller tab before MAIN-world script
+execution and validates `location.origin` again inside that script. Seller scripts execute once;
+unknown completion is never retried. Regression coverage includes mandatory grants, stale cached
+grants, Chrome request/check failures, closed and navigated-away tabs, precise error classification
+and the no-replay invariant. Focused Seller/Ozon/ERP bridge tests pass `29/29`; the related Server
+worker file passes `10/10`; final static review found no medium/high-risk issue. Final-tree
+`pnpm preflight` passed in `738.1` seconds with source package verification `454/454` and the two
+expected packaging warnings.
+
+The downloaded unpacked instance and the managed BINI instance
+`nkkemglcckgmhmcfnjjmcfbdhciafahl` have independent extension IDs, profiles and local state. The
+current website ZIP contract therefore requires same-path managed upgrades; extracting every
+version into a new directory creates a new path-derived ID and does not inherit pairing/session
+state. This source correction has not yet been packaged or deployed, so installed `1.0.305` remains
+unchanged. No Provider call, ERP/Ozon write, VPS access or deployment occurred. Overall progress
+remains `37/37`.
+
 Replacement release (2026-08-12): exact target
 `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` is now deployed in both regions and installed on BINI
 as extension `1.0.305`. Target-bound QA-04 passed in `992` seconds with Server `5033` tests passed

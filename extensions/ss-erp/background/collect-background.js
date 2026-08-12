@@ -61,6 +61,8 @@ const OZON_ENDPOINTS = {
 
 const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
 const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
+const SELLER_OZON_PERMISSION_CHECK_ERROR = "无法确认 seller.ozon.ru 站点权限，请重新加载扩展后重试。";
+const SELLER_OZON_PAGE_SCRIPT_ERROR = "seller.ozon.ru 页面当前正在跳转或扩展页面上下文已失效。请等待页面加载完成或刷新 seller 页面后重试。";
 const OZON_COLLECT_ENRICHMENT_QUEUE_KEY = "ss_erp_ozon_collect_enrichment_queue";
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY = "ss_erp_ozon_workbench_publish_payload_queue";
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME = "ss-erp:ozon-workbench-publish-payload";
@@ -632,32 +634,117 @@ function formatOzonCompanyPermissionError(companyId, rawError) {
   return "OZON 拒绝访问该店铺 Seller 接口：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。" + rawSuffix;
 }
 
-function chromePermissionsContains(permissions) {
+function sellerOzonAccessError(errorCode, message) {
+  return Object.assign(new Error(message), { errorCode });
+}
+
+function chromePermissionsInspect(permissions) {
   return new Promise((resolve) => {
     if (!chrome.permissions || typeof chrome.permissions.contains !== "function") {
-      resolve(true);
+      resolve({ ok: false, granted: false, error: "chrome.permissions.contains unavailable" });
       return;
     }
 
-    chrome.permissions.contains(permissions, (granted) => {
-      resolve(!chrome.runtime.lastError && Boolean(granted));
-    });
+    try {
+      chrome.permissions.contains(permissions, (granted) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          resolve({
+            ok: false,
+            granted: false,
+            error: runtimeError.message || String(runtimeError),
+          });
+          return;
+        }
+        resolve({ ok: true, granted: Boolean(granted), error: "" });
+      });
+    } catch (error) {
+      resolve({ ok: false, granted: false, error: normalizeErrorMessage(error) });
+    }
   });
 }
 
 async function ensureSellerOzonHostAccess() {
-  const granted = await chromePermissionsContains({ origins: [SELLER_OZON_ORIGIN] });
-  if (!granted) {
-    throw new Error(SELLER_OZON_PERMISSION_ERROR);
+  const access = await chromePermissionsInspect({ origins: [SELLER_OZON_ORIGIN] });
+  if (!access.ok) {
+    const detail = access.error ? ` 原始错误: ${access.error.slice(0, 240)}` : "";
+    throw sellerOzonAccessError(
+      "seller_site_access_check_failed",
+      SELLER_OZON_PERMISSION_CHECK_ERROR + detail,
+    );
+  }
+  if (!access.granted) {
+    throw sellerOzonAccessError("seller_site_access_denied", SELLER_OZON_PERMISSION_ERROR);
   }
 }
 
-async function executeScriptWithHostAccess(options, permissionErrorMessage) {
+function isSellerOzonTabUrl(value) {
+  return /^https:\/\/seller\.ozon\.ru(?:\/|$)/i.test(String(value || ""));
+}
+
+async function ensureExpectedScriptOrigin(options, expectedOrigin) {
+  if (expectedOrigin !== SELLER_OZON_ORIGIN) return null;
+  const targetTabId = options && options.target && options.target.tabId;
+  if (
+    !Number.isInteger(targetTabId)
+    || !chrome.tabs
+    || typeof chrome.tabs.get !== "function"
+  ) {
+    throw sellerOzonAccessError("seller_page_script_unavailable", SELLER_OZON_PAGE_SCRIPT_ERROR);
+  }
+  let targetTab;
+  try {
+    targetTab = await chrome.tabs.get(targetTabId);
+  } catch (_error) {
+    throw sellerOzonAccessError("seller_page_script_unavailable", SELLER_OZON_PAGE_SCRIPT_ERROR);
+  }
+  if (!isSellerOzonTabUrl(targetTab && targetTab.url)) {
+    throw sellerOzonAccessError("seller_page_script_unavailable", SELLER_OZON_PAGE_SCRIPT_ERROR);
+  }
+  return targetTab;
+}
+
+async function executeScriptWithHostAccess(options, permissionErrorMessage, expectedOrigin) {
+  const expectedTab = await ensureExpectedScriptOrigin(options, expectedOrigin);
+  if (expectedTab && expectedTab.status === "loading") {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await ensureExpectedScriptOrigin(options, expectedOrigin);
+  }
   try {
     return await chrome.scripting.executeScript(options);
   } catch (error) {
     if (isHostAccessError(error)) {
-      throw new Error(permissionErrorMessage || SELLER_OZON_PERMISSION_ERROR);
+      const targetTabId = options && options.target && options.target.tabId;
+      let targetTab = null;
+      if (Number.isInteger(targetTabId) && chrome.tabs && typeof chrome.tabs.get === "function") {
+        try {
+          targetTab = await chrome.tabs.get(targetTabId);
+        } catch (_tabError) {}
+      }
+      const targetUrl = String(targetTab && targetTab.url || "");
+      const expectsSellerOrigin = expectedOrigin === SELLER_OZON_ORIGIN
+        || isSellerOzonTabUrl(targetUrl);
+      if (expectsSellerOrigin) {
+        const access = await chromePermissionsInspect({ origins: [SELLER_OZON_ORIGIN] });
+        if (!access.ok) {
+          const detail = access.error ? ` 原始错误: ${access.error.slice(0, 240)}` : "";
+          throw sellerOzonAccessError(
+            "seller_site_access_check_failed",
+            SELLER_OZON_PERMISSION_CHECK_ERROR + detail,
+          );
+        }
+        if (!access.granted) {
+          throw sellerOzonAccessError(
+            "seller_site_access_denied",
+            permissionErrorMessage || SELLER_OZON_PERMISSION_ERROR,
+          );
+        }
+        const detail = normalizeErrorMessage(error).slice(0, 240);
+        throw sellerOzonAccessError(
+          "seller_page_script_unavailable",
+          SELLER_OZON_PAGE_SCRIPT_ERROR + (detail ? ` 原始错误: ${detail}` : ""),
+        );
+      }
     }
     throw error;
   }
@@ -696,8 +783,8 @@ async function readOzonSellerCookieValueFromOpenTab(name) {
       const results = await executeScriptWithHostAccess({
         target: { tabId: tab.id },
         world: "MAIN",
-        func: () => document.cookie || "",
-      });
+        func: () => location.origin === "https://seller.ozon.ru" ? document.cookie || "" : "",
+      }, undefined, SELLER_OZON_ORIGIN);
       const cookieString = results && results[0] ? results[0].result : "";
       const value = parseCookieValueFromString(cookieString, name);
       if (value) return value;
@@ -1268,7 +1355,10 @@ async function getSellerTab() {
     throw new Error("请先打开并登录 seller.ozon.ru");
   }
 
-  return tabs.find((tab) => tab.active) || tabs.find((tab) => (tab.url || "").includes("/app/")) || tabs[0];
+  const targetTab = tabs.find((tab) => tab.active)
+    || tabs.find((tab) => (tab.url || "").includes("/app/"))
+    || tabs[0];
+  return targetTab;
 }
 
 async function sellerTabFetchJson(url, body, companyId, requestOptions) {
@@ -1279,6 +1369,9 @@ async function sellerTabFetchJson(url, body, companyId, requestOptions) {
     world: "MAIN",
     args: [url, body, companyId, requestOptions || {}],
     func: async (targetUrl, requestBody, xCompanyId, options) => {
+      if (location.origin !== "https://seller.ozon.ru") {
+        return { ok: false, error: "seller.ozon.ru 页面已跳转，请刷新后重试" };
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 25000);
 
@@ -1319,7 +1412,7 @@ async function sellerTabFetchJson(url, body, companyId, requestOptions) {
         return { ok: false, error: error && error.message ? error.message : String(error) };
       }
     }
-  });
+  }, undefined, SELLER_OZON_ORIGIN);
 
   const result = results && results[0] ? results[0].result : null;
   if (!result) {
@@ -5833,7 +5926,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })().then(sendResponse).catch((error) => {
     sendResponse({
       ok: false,
-      error: error && error.message ? error.message : String(error)
+      error: error && error.message ? error.message : String(error),
+      ...(error && error.errorCode ? { errorCode: error.errorCode } : {}),
     });
   });
 

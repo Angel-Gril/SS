@@ -28,6 +28,19 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Post-release Seller permission diagnosis (2026-08-12): direct inspection of the user's active
+  `1.0.305` Downloads instance `hbaahhdfolpocohbihhkpbldggljdeog` found exact Seller access in
+  Chrome's active, granted and scriptable permission sets with withholding disabled. The reported
+  permission failure was therefore an extension misclassification, not a missing Chrome grant.
+  Source now avoids re-requesting an effective mandatory grant, distinguishes permission-check,
+  denial and page-context failures, verifies the Seller origin before and inside MAIN-world script
+  execution, and never retries a script with unknown completion. Focused tests pass `29/29`, the
+  related Server worker tests pass `10/10`, independent final review found no medium/high-risk
+  issue, and final-tree `pnpm preflight` passed in `738.1` seconds with source verification
+  `454/454`. The downloaded version-directory instance and managed BINI fixed-ID instance remain
+  separate profiles; same-path managed upgrade is still required to preserve extension identity.
+  This correction is source-only and not yet packaged/deployed. No Provider, ERP/Ozon write, VPS
+  access or deployment occurred; Phase 6 remains `3/3`, overall `37/37`.
 - Seller permission/profile replacement release (2026-08-12): exact target
   `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` / extension `1.0.305` passed target-bound QA-04 in
   `992` seconds with Server `5033` passed / `221` environment skips, source `454/454`, Cloud

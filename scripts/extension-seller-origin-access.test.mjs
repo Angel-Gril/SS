@@ -121,13 +121,45 @@ function plain(value) {
 const api = loadApi();
 assert.equal(api.SELLER_ORIGIN, 'https://seller.ozon.ru/*');
 
-for (const initialGrant of [true, false]) {
+{
   const harness = createChromeMock({
-    containsResults: [initialGrant, true],
+    containsResults: [true, true],
     requestResults: [true],
   });
   const access = api.create(harness.chrome);
-  assert.deepEqual(plain(await inspect(access)), { ok: true, granted: initialGrant });
+  assert.deepEqual(plain(await inspect(access)), { ok: true, granted: true });
+  assert.deepEqual(plain(await request(access, harness)), {
+    ok: true,
+    granted: true,
+    requested: false,
+  });
+  assert.equal(
+    harness.requestCalls(),
+    0,
+    'an effective cached Seller grant must not open another permission prompt',
+  );
+}
+
+{
+  const harness = createChromeMock({
+    containsResults: [true, false],
+    requestResults: [true],
+  });
+  const access = api.create(harness.chrome);
+  assert.deepEqual(plain(await inspect(access)), { ok: true, granted: true });
+  const result = await request(access, harness);
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'seller_site_access_denied');
+  assert.equal(harness.requestCalls(), 0, 'a stale cache must stop instead of claiming access');
+}
+
+{
+  const harness = createChromeMock({
+    containsResults: [false, true],
+    requestResults: [true],
+  });
+  const access = api.create(harness.chrome);
+  assert.deepEqual(plain(await inspect(access)), { ok: true, granted: false });
   assert.deepEqual(plain(await request(access, harness)), {
     ok: true,
     granted: true,
@@ -138,6 +170,25 @@ for (const initialGrant of [true, false]) {
     harness.requestCalledSynchronously(),
     true,
     'permissions.request must remain inside the trusted click call stack',
+  );
+}
+
+{
+  const harness = createChromeMock({
+    containsResults: [false, true],
+    requestResults: [{ granted: false, lastError: 'The user gesture expired' }],
+  });
+  const access = api.create(harness.chrome);
+  assert.deepEqual(plain(await inspect(access)), { ok: true, granted: false });
+  assert.deepEqual(plain(await request(access, harness)), {
+    ok: true,
+    granted: true,
+    requested: false,
+  });
+  assert.equal(
+    harness.requestCalls(),
+    1,
+    'a request API error must still verify the effective Chrome host grant',
   );
 }
 
@@ -172,7 +223,11 @@ for (const failure of [
   { containsResults: [{ throw: new Error('contains threw') }], code: 'seller_site_access_check_failed' },
   { containsResults: [{ lastError: 'contains lastError' }], code: 'seller_site_access_check_failed' },
   { requestResults: [{ throw: new Error('request threw') }], code: 'seller_site_access_request_failed' },
-  { requestResults: [{ lastError: 'request lastError' }], code: 'seller_site_access_request_failed' },
+  {
+    containsResults: [false],
+    requestResults: [{ granted: false, lastError: 'request lastError' }],
+    code: 'seller_site_access_request_failed',
+  },
 ]) {
   const harness = createChromeMock(failure);
   const access = api.create(harness.chrome);
@@ -239,6 +294,186 @@ for (const failure of [
   callbacks.shift()(false);
   assert.deepEqual(plain(await pending), { ok: true, granted: false });
 }
+
+const collectBackgroundSource = readFileSync(
+  'extensions/ss-erp/background/collect-background.js',
+  'utf8',
+);
+
+function loadCollectPermissionApi(chrome) {
+  const constantSource = [
+    'SELLER_OZON_ORIGIN',
+    'SELLER_OZON_PERMISSION_ERROR',
+    'SELLER_OZON_PERMISSION_CHECK_ERROR',
+    'SELLER_OZON_PAGE_SCRIPT_ERROR',
+  ].map((name) => {
+    const match = collectBackgroundSource.match(new RegExp(`const ${name} = [^\\n]+;`));
+    assert.ok(match, `collect background must define ${name}`);
+    return match[0];
+  }).join('\n');
+  const normalizeSource = collectBackgroundSource.match(
+    /function normalizeErrorMessage\(error\) \{[\s\S]*?\n\}/,
+  );
+  const hostErrorSource = collectBackgroundSource.match(
+    /function isHostAccessError\(error\) \{[\s\S]*?\n\}/,
+  );
+  const permissionSource = collectBackgroundSource.match(
+    /function sellerOzonAccessError\(errorCode, message\) \{[\s\S]*?\n\}\n\nfunction parseCookieValueFromString/,
+  );
+  assert.ok(normalizeSource, 'collect background must expose error normalization for VM regression');
+  assert.ok(hostErrorSource, 'collect background must classify Chrome host-access errors');
+  assert.ok(permissionSource, 'collect background must expose its complete Seller permission flow');
+
+  const context = { chrome, console, Promise, setTimeout };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(
+    `${constantSource}\n${normalizeSource[0]}\n${hostErrorSource[0]}\n`
+      + `${permissionSource[0].replace(/\n\nfunction parseCookieValueFromString$/, '')}\n`
+      + 'globalThis.permissionApi = {'
+      + 'chromePermissionsInspect, ensureSellerOzonHostAccess, executeScriptWithHostAccess};',
+    context,
+    { filename: 'collect-background-seller-permission.js' },
+  );
+  return context.permissionApi;
+}
+
+async function rejectedError(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail('expected promise to reject');
+}
+
+{
+  const runtime = { lastError: null };
+  const chrome = {
+    runtime,
+    permissions: {
+      contains(_spec, callback) {
+        runtime.lastError = { message: 'Permission database temporarily unavailable' };
+        callback(false);
+        runtime.lastError = null;
+      },
+    },
+  };
+  const permissionApi = loadCollectPermissionApi(chrome);
+  const error = await rejectedError(permissionApi.ensureSellerOzonHostAccess());
+  assert.equal(error.errorCode, 'seller_site_access_check_failed');
+  assert.doesNotMatch(error.message, /未获得 seller\.ozon\.ru 站点访问权限/);
+}
+
+{
+  const runtime = { lastError: null };
+  const chrome = {
+    runtime,
+    permissions: {
+      contains(_spec, callback) {
+        callback(true);
+      },
+    },
+    scripting: {
+      async executeScript() {
+        throw new Error('Cannot access contents of url https://seller.ozon.ru/app/');
+      },
+    },
+    tabs: {
+      async get() {
+        throw new Error('No tab with id: 42');
+      },
+    },
+  };
+  const permissionApi = loadCollectPermissionApi(chrome);
+  const error = await rejectedError(permissionApi.executeScriptWithHostAccess(
+    { target: { tabId: 42 }, func() {} },
+    undefined,
+    'https://seller.ozon.ru/*',
+  ));
+  assert.equal(error.errorCode, 'seller_page_script_unavailable');
+  assert.doesNotMatch(error.message, /No tab with id/);
+}
+
+for (const [granted, expectedCode] of [
+  [true, 'seller_page_script_unavailable'],
+  [false, 'seller_site_access_denied'],
+]) {
+  const runtime = { lastError: null };
+  const chrome = {
+    runtime,
+    permissions: {
+      contains(_spec, callback) {
+        callback(granted);
+      },
+    },
+    scripting: {
+      async executeScript() {
+        throw new Error('Cannot access contents of url https://seller.ozon.ru/app/');
+      },
+    },
+    tabs: {
+      async get(tabId) {
+        assert.equal(tabId, 42);
+        return { id: tabId, url: 'https://seller.ozon.ru/app/' };
+      },
+    },
+  };
+  const permissionApi = loadCollectPermissionApi(chrome);
+  const error = await rejectedError(permissionApi.executeScriptWithHostAccess({
+    target: { tabId: 42 },
+    func() {},
+  }));
+  assert.equal(
+    error.errorCode,
+    expectedCode,
+    `executeScript host error with effective grant=${granted} must be classified precisely`,
+  );
+  if (granted) {
+    assert.doesNotMatch(error.message, /未获得 seller\.ozon\.ru 站点访问权限/);
+  } else {
+    assert.match(error.message, /未获得 seller\.ozon\.ru 站点访问权限/);
+  }
+}
+
+{
+  let attempts = 0;
+  const chrome = {
+    runtime: { lastError: null },
+    permissions: {
+      contains(_spec, callback) {
+        callback(true);
+      },
+    },
+    scripting: {
+      async executeScript() {
+        attempts += 1;
+        return [{ result: { ok: true } }];
+      },
+    },
+    tabs: {
+      async get(tabId) {
+        return { id: tabId, status: 'complete', url: 'https://www.ozon.ru/product/123' };
+      },
+    },
+  };
+  const permissionApi = loadCollectPermissionApi(chrome);
+  const error = await rejectedError(permissionApi.executeScriptWithHostAccess(
+    { target: { tabId: 42 }, func() {} },
+    undefined,
+    'https://seller.ozon.ru/*',
+  ));
+  assert.equal(error.errorCode, 'seller_page_script_unavailable');
+  assert.equal(attempts, 0, 'a navigated-away Seller tab must never run the supplied script');
+}
+
+assert.doesNotMatch(
+  collectBackgroundSource.match(
+    /async function executeScriptWithHostAccess[\s\S]*?\nfunction parseCookieValueFromString/,
+  )[0],
+  /return await chrome\.scripting\.executeScript\(options\)[\s\S]+return await chrome\.scripting\.executeScript\(options\)/,
+  'Seller script execution must never retry an injected function with unknown completion',
+);
 
 const settingsHtml = readFileSync('extensions/ss-erp/pages/settings.html', 'utf8');
 const popupHtml = readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
