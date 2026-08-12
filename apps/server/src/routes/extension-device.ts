@@ -85,6 +85,11 @@ export interface ExtensionDeviceShopAnalyticsRepository {
   }): Promise<{ id: string; productCount: number } | null>;
 }
 
+export interface ExtensionDeviceCollectBatchResult {
+  statusCode: number;
+  body: Record<string, unknown>;
+}
+
 export interface ExtensionDeviceRoutesOptions {
   sessionService: Pick<ExtensionDeviceSessionService, 'createPairingCode' | 'claimPairingCode' | 'refresh'>;
   managementRepository: ExtensionDeviceManagementRepository;
@@ -99,7 +104,22 @@ export interface ExtensionDeviceRoutesOptions {
     request: FastifyRequest,
     reply: FastifyReply,
   ) => Promise<unknown>;
+  authenticateCollectDevice?: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<unknown>;
   shopAnalyticsRepository?: ExtensionDeviceShopAnalyticsRepository;
+  collectBatch?: (input: {
+    ownerUserId: string;
+    actorUserId: string;
+    body: {
+      items: unknown[];
+      collectPhase?: string;
+      ephemeralListing?: boolean;
+      ephemeralListingSource?: string;
+    };
+    log?: { warn: (metadata: unknown, message: string) => void };
+  }) => Promise<ExtensionDeviceCollectBatchResult>;
   authenticateAccount?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -326,6 +346,52 @@ export async function extensionDeviceRoutes(
       });
       reply.header('Cache-Control', 'no-store');
       return reply.send({ code: 1, msg: 'ok', data: data.map(authorizedShopResponseData) });
+    });
+  }
+
+  if (options.authenticateCollectDevice && options.collectBatch) {
+    const collectBatch = options.collectBatch;
+    app.post('/collect/batch', {
+      bodyLimit: 10 * 1024 * 1024,
+      preHandler: [options.authenticateCollectDevice],
+    }, async (request, reply) => {
+      const device = deviceContext(request);
+      if (!device) {
+        return reply.status(401).send({
+          code: 0,
+          errorCode: 'invalid_device_context',
+          msg: '无效的设备令牌',
+        });
+      }
+      const scopes = (request as any).device?.scopes;
+      if (!Array.isArray(scopes) || !scopes.includes('capture:write')) {
+        return reply.status(403).send({
+          code: 0,
+          errorCode: 'insufficient_scope',
+          msg: '设备权限不足',
+        });
+      }
+      const body = request.body as {
+        items?: unknown;
+        collectPhase?: unknown;
+        ephemeralListing?: unknown;
+        ephemeralListingSource?: unknown;
+      };
+      if (!body || !Array.isArray(body.items)) {
+        return reply.status(400).send({ code: 0, errorCode: 'invalid_collect_payload', msg: '请提供商品数据' });
+      }
+      const result = await collectBatch({
+        ownerUserId: device.ownerUserId,
+        actorUserId: device.actorUserId,
+        body: {
+          items: body.items,
+          ...(typeof body.collectPhase === 'string' ? { collectPhase: body.collectPhase } : {}),
+          ...(typeof body.ephemeralListing === 'boolean' ? { ephemeralListing: body.ephemeralListing } : {}),
+          ...(typeof body.ephemeralListingSource === 'string' ? { ephemeralListingSource: body.ephemeralListingSource } : {}),
+        },
+        log: request.log,
+      });
+      return reply.status(result.statusCode).send(result.body);
     });
   }
 

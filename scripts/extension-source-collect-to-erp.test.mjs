@@ -24,8 +24,13 @@ assert.match(
 );
 assert.match(
   serviceWorker,
-  /SS_ERP_CLIENT\.submitCollect\s*\(\s*\{\s*items:/,
-  'service worker should retain the explicit legacy compatibility path',
+  /SS_ERP_CLIENT\.submitCollect\(legacyPayload\)/,
+  'service worker should retain the explicit legacy compatibility path for unpaired installations',
+);
+assert.match(
+  serviceWorker,
+  /SS_ERP_EXTENSION_DEVICE_COLLECT[\s\S]{0,1200}deviceCollect\.submit\(legacyPayload\)/,
+  'paired source collection should use the scoped device collect transport',
 );
 assert.match(
   serviceWorker,

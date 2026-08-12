@@ -77,6 +77,97 @@ describe('extension device routes', () => {
     expect(second).toBe(first);
   });
 
+  it('writes collect batches through the scoped device owner and never accepts a client owner', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-2',
+        actorUserId: 'owner-2',
+        allowedShopIds: ['shop-2'],
+        scopes: ['capture:write'],
+      };
+    });
+    const collectBatch = vi.fn(async (input: any) => ({
+      statusCode: 200,
+      body: { code: 1, data: { saved: input.body.items.length } },
+    }));
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateCollectDevice,
+      collectBatch,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/collect/batch',
+      payload: {
+        ownerUserId: 'attacker-owner',
+        items: [{ sku: 'ozon-1', sourcePlatform: 'ozon', title: 'Product' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ code: 1, data: { saved: 1 } });
+    expect(collectBatch).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-2',
+      actorUserId: 'owner-2',
+      body: expect.objectContaining({ items: [{ sku: 'ozon-1', sourcePlatform: 'ozon', title: 'Product' }] }),
+    }));
+  });
+
+  it('rejects malformed device collect batches before calling persistence', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        scopes: ['capture:write'],
+      };
+    });
+    const collectBatch = vi.fn();
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateCollectDevice,
+      collectBatch,
+    } as any);
+
+    const response = await app.inject({ method: 'POST', url: '/collect/batch', payload: { items: {} } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ errorCode: 'invalid_collect_payload' });
+    expect(collectBatch).not.toHaveBeenCalled();
+  });
+
+  it('defends the collect route against a weaker pre-handler scope', async () => {
+    const deps = dependencies();
+    const authenticateCollectDevice = vi.fn(async (request: FastifyRequest) => {
+      (request as any).device = {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        scopes: ['listing:review'],
+      };
+    });
+    const collectBatch = vi.fn();
+    const app = Fastify();
+    await app.register(extensionDeviceRoutes, {
+      ...deps,
+      authenticateCollectDevice,
+      collectBatch,
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/collect/batch',
+      payload: { items: [{ sku: 'ozon-1' }] },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ errorCode: 'insufficient_scope' });
+    expect(collectBatch).not.toHaveBeenCalled();
+  });
+
   it('lets a tenant owner create a shop-scoped pairing code', async () => {
     const { app, sessionService } = await buildApp();
     const response = await app.inject({

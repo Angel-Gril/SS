@@ -310,7 +310,12 @@ async function runOzonCollectEnrichmentJob(job, erpConn) {
 async function flushOzonCollectEnrichmentQueue() {
   return enqueueOzonCollectEnrichment(async () => {
     const erpConn = await getStoredErpConnection();
-    if (!erpConn.baseUrl || !erpConn.token) return;
+    const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
+    const deviceStatus = deviceCollect && typeof deviceCollect.status === "function"
+      ? await deviceCollect.status()
+      : { ok: false, state: "unpaired" };
+    if (!erpConn.baseUrl || (deviceStatus.ok !== true && !erpConn.token)) return;
+    if (deviceStatus.ok !== true && deviceStatus.state !== "unpaired") return;
 
     const queue = await readOzonCollectEnrichmentQueue();
     if (!queue.length) return;
@@ -993,22 +998,52 @@ async function fetchErpIdentityForDiagnostics(erpBase, erpToken) {
 
 async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors, options = {}) {
   const batchPayload = buildOzonCollectBatchPayload(collected, options);
-  const pushResp = await fetch(erpBase + "/api/collect/batch", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + erpToken,
-    },
-    body: JSON.stringify(batchPayload),
-  });
-
-  const pushText = await pushResp.text();
-  if (!pushResp.ok) {
-    return { ok: false, error: "ERP 推送失败: HTTP " + pushResp.status + " " + pushText.slice(0, 200), collected: collected.length, errors };
-  }
-
+  const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
   let pushParsed = {};
-  try { pushParsed = JSON.parse(pushText); } catch (e) {}
+  let authMode = "legacy";
+  if (deviceCollect && typeof deviceCollect.status === "function") {
+    const deviceStatus = await deviceCollect.status();
+    if (deviceStatus && deviceStatus.ok === true) {
+      const deviceResult = await deviceCollect.submit(batchPayload);
+      if (!deviceResult || deviceResult.ok !== true) {
+        return {
+          ok: false,
+          error: deviceResult && deviceResult.error || "设备采集失败",
+          errorCode: deviceResult && deviceResult.errorCode,
+          collected: collected.length,
+          errors,
+        };
+      }
+      pushParsed = deviceResult.body || {};
+      authMode = "device";
+    } else if (deviceStatus && deviceStatus.state !== "unpaired") {
+      return {
+        ok: false,
+        error: deviceStatus.error || "设备采集授权不可用",
+        errorCode: deviceStatus.errorCode,
+        collected: collected.length,
+        errors,
+      };
+    }
+  }
+  if (authMode === "legacy") {
+    if (!erpBase || !erpToken) {
+      return { ok: false, error: "请先配置 ERP 连接", errorCode: "erp_legacy_token_required", collected: collected.length, errors };
+    }
+    const pushResp = await fetch(erpBase + "/api/collect/batch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json;charset=utf-8",
+        "Authorization": "Bearer " + erpToken,
+      },
+      body: JSON.stringify(batchPayload),
+    });
+    const pushText = await pushResp.text();
+    if (!pushResp.ok) {
+      return { ok: false, error: "ERP 推送失败: HTTP " + pushResp.status + " " + pushText.slice(0, 200), collected: collected.length, errors };
+    }
+    try { pushParsed = JSON.parse(pushText); } catch (e) {}
+  }
   const backendErrors = pushParsed && pushParsed.data && Array.isArray(pushParsed.data.errors)
     ? pushParsed.data.errors
     : [];
@@ -1022,8 +1057,10 @@ async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, erro
   }
 
   const shouldBroadcast = options.broadcast !== false;
-  const identity = await fetchErpIdentityForDiagnostics(erpBase, erpToken);
-  const connection = { baseUrl: erpBase, user: identity };
+  const identity = authMode === "legacy"
+    ? await fetchErpIdentityForDiagnostics(erpBase, erpToken)
+    : null;
+  const connection = { baseUrl: erpBase, user: identity, authMode };
 
   if (shouldBroadcast) {
     await notifyErpCollectCompleted(collected.length, allErrors.length, {
@@ -1039,6 +1076,7 @@ async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, erro
       pushed: pushParsed,
       errors: allErrors,
       connection,
+      authMode,
     },
   };
 }
@@ -5357,8 +5395,15 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   const erpConn = await getStoredErpConnection();
   const erpBase = erpConn.baseUrl;
   const erpToken = erpConn.token;
-  if (!erpBase || !erpToken) {
+  const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
+  const deviceStatus = deviceCollect && typeof deviceCollect.status === "function"
+    ? await deviceCollect.status()
+    : { ok: false, state: "unpaired" };
+  if (!erpBase || (deviceStatus.ok !== true && !erpToken)) {
     return { ok: false, error: "请先配置 ERP 连接" };
+  }
+  if (deviceStatus.ok !== true && deviceStatus.state !== "unpaired") {
+    return { ok: false, error: deviceStatus.error || "设备采集授权不可用", errorCode: deviceStatus.errorCode };
   }
 
   let sellerCompanyId = null;

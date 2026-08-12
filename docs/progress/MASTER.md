@@ -44,6 +44,21 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Post-release collection authentication correction (2026-08-13): automatic ERP device pairing
+now covers browser product collection as well as shop discovery, Cookie maintenance and analytics.
+The previous Ozon collection path still required the legacy account-equivalent Token, and 1688
+legacy-compatible fallback used the same Token-only `/api/collect/batch`; pairing another ERP
+user correctly cleared the old owner's Token, so those users saw "请先配置 ERP 连接" despite a
+healthy `capture:write` device session. A dedicated `/api/extension-device/collect/batch` route
+now authenticates the scoped device, derives owner/actor from the live device context, and reuses
+the validated batch persistence core. The extension uses that transport whenever paired, rejects
+device authorization failure without silently falling back to a tenant Token, and keeps the old
+route only for genuinely unpaired compatibility installs. The ERP collect page accepts paired
+`capture:write` status without requiring `hasToken`. Server typecheck passed; device route and
+collection tests passed `47/47`; extension collection, source fallback and diagnostics contracts
+passed. This source correction is not packaged or deployed yet; no Provider call, ERP/Ozon
+production write, VPS access or deployment occurred. Overall task count remains `37/37`.
+
 Post-release Seller access diagnosis and source correction (2026-08-12): the reported `1.0.305`
 Cloud instance is `hbaahhdfolpocohbihhkpbldggljdeog`, loaded from the user's versioned Downloads
 directory. Chrome's persisted Default-profile state proves that exact instance has active, granted

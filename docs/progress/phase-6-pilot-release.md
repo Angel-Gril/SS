@@ -28,6 +28,17 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Post-release collection authentication correction (2026-08-13): automatic pairing already
+  grants `capture:write`, but Ozon collection and 1688 legacy-compatible fallback still required
+  the old account-equivalent Token. This was exposed by pairing a different ERP user, which
+  correctly clears a Token belonging to another owner. Added the owner-derived,
+  device-authenticated `/api/extension-device/collect/batch` route and shared batch persistence
+  core; paired extensions use it for Ozon and legacy-compatible collection and never silently
+  downgrade a revoked/failed device to a tenant Token. The ERP collect page now accepts paired
+  `capture:write` without `hasToken`. Server typecheck passed, device/batch tests passed `47/47`,
+  and extension collection/source/diagnostic contracts passed. Source-only, not packaged or
+  deployed; no Provider, ERP/Ozon production write, VPS access or deployment occurred.
+
 - Post-release Seller permission diagnosis (2026-08-12): direct inspection of the user's active
   `1.0.305` Downloads instance `hbaahhdfolpocohbihhkpbldggljdeog` found exact Seller access in
   Chrome's active, granted and scriptable permission sets with withholding disabled. The reported

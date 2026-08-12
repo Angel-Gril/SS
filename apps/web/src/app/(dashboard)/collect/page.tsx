@@ -72,6 +72,8 @@ interface ExtensionPingStatus {
   hasEndpoint?: boolean;
   hasToken?: boolean;
   hasCollectModule?: boolean;
+  deviceState?: 'paired' | 'authorization_required' | 'invalid' | 'unreachable' | 'unconfigured';
+  deviceScopes?: string[];
   error?: string;
 }
 
@@ -632,11 +634,14 @@ export default function CollectPage() {
       toast({ title: '扩展采集模块未加载，请重新加载 SS ERP 扩展', variant: 'destructive' });
       return;
     }
-    if (!ping.hasEndpoint || !ping.hasToken) {
+    const deviceCollectReady = ping.deviceState === 'paired'
+      && Array.isArray(ping.deviceScopes)
+      && ping.deviceScopes.includes('capture:write');
+    if ((!ping.hasEndpoint && !deviceCollectReady) || (!ping.hasToken && !deviceCollectReady)) {
       setExtFetching(false);
-      const missing = !ping.hasEndpoint ? 'ERP 地址' : 'ERP Token';
+      const missing = !ping.hasEndpoint ? 'ERP 地址' : 'ERP Token 或设备采集授权';
       setExtFetchStatus(`扩展未配置 ${missing}，请先用右上角扩展同步登录/Token`);
-      toast({ title: `扩展未配置 ${missing}`, description: '请先用右上角扩展同步登录/Token 后再采集', variant: 'destructive' });
+      toast({ title: `扩展未配置 ${missing}`, description: '请先完成扩展自动连接或同步兼容 Token 后再采集', variant: 'destructive' });
       return;
     }
 

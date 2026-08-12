@@ -848,6 +848,120 @@ async function readBoundedExtensionDeviceJson(response) {
   return text ? JSON.parse(text) : null;
 }
 
+async function readExtensionDeviceCollectOperation() {
+  const credentials = getLogisticsDeviceCredentials();
+  const stored = await credentials.getStatus();
+  if (!stored || stored.state !== 'paired') {
+    return { ok: false, state: 'unpaired', errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+  let operation;
+  try {
+    operation = await credentials.beginOperation();
+  } catch (error) {
+    return {
+      ok: false,
+      state: 'unreachable',
+      errorCode: 'device_unreachable',
+      error: error && error.message ? error.message : '设备授权验证失败',
+    };
+  }
+  if (!operation || operation.state !== 'paired' || !operation.accessToken) {
+    return { ok: false, state: 'unpaired', errorCode: 'device_unpaired', error: '设备未配对' };
+  }
+  if (!Array.isArray(operation.scopes) || !operation.scopes.includes('capture:write')) {
+    return { ok: false, state: 'paired', errorCode: 'device_scope_required', error: '设备缺少商品采集权限' };
+  }
+  return { ok: true, state: 'paired', operation };
+}
+
+async function readExtensionDeviceCollectStatus() {
+  const result = await readExtensionDeviceCollectOperation();
+  return {
+    ok: result.ok === true,
+    state: result.state,
+    authMode: result.ok === true ? 'device' : undefined,
+    errorCode: result.errorCode,
+    error: result.error,
+    scopes: result.operation && Array.isArray(result.operation.scopes)
+      ? result.operation.scopes.slice()
+      : [],
+  };
+}
+
+async function submitExtensionDeviceCollectBatch(payload) {
+  const result = await readExtensionDeviceCollectOperation();
+  if (!result.ok) return result;
+  const operation = result.operation;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+  let response;
+  let body;
+  try {
+    response = await fetch(operation.baseUrl + '/api/extension-device/collect/batch', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json;charset=utf-8',
+        Authorization: 'Bearer ' + operation.accessToken,
+      },
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+      body: JSON.stringify(payload || {}),
+      signal: controller.signal,
+    });
+    if (response.status === 401 || response.status === 410) {
+      await getLogisticsDeviceCredentials().clearIfCurrent(operation, {
+        status: response.status,
+        reason: 'device_collect_authorization_revoked',
+      });
+      return {
+        ok: false,
+        state: 'unpaired',
+        errorCode: 'device_authorization_required',
+        error: '设备授权已失效，请重新配对',
+        status: response.status,
+      };
+    }
+    body = await readBoundedExtensionDeviceJson(response);
+  } catch (error) {
+    return {
+      ok: false,
+      state: 'paired',
+      errorCode: 'device_collect_outcome_unknown',
+      error: error && error.message ? error.message : '设备采集请求失败',
+      outcome: 'UNKNOWN_OUTCOME',
+      automaticRetryAllowed: false,
+      guardSessionId: operation.sessionId,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  if (!response.ok || !body || typeof body !== 'object') {
+    return {
+      ok: false,
+      state: 'paired',
+      errorCode: body && body.errorCode || 'device_collect_failed',
+      error: body && (body.msg || body.error) || ('设备采集失败: HTTP ' + response.status),
+      status: response.status,
+    };
+  }
+  if (!await getLogisticsDeviceCredentials().isOperationCurrent(operation)) {
+    return {
+      ok: false,
+      state: 'paired',
+      errorCode: 'device_authority_changed',
+      error: '设备授权在采集期间已变化，请刷新状态后重试',
+    };
+  }
+  return { ok: true, state: 'paired', authMode: 'device', body };
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT = Object.freeze({
+  status: readExtensionDeviceCollectStatus,
+  submit: submitExtensionDeviceCollectBatch,
+});
+
 function deviceShopIdentifier(value) {
   const normalized = toText(value).trim();
   return normalized && normalized.length <= 200 && !/[\u0000-\u001F\u007F]/.test(normalized)
@@ -6040,6 +6154,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         hasEndpoint: Boolean(baseUrl),
         hasToken: Boolean(token),
         deviceState: deviceStatus.state,
+        deviceScopes: Array.isArray(deviceStatus.scopes) ? deviceStatus.scopes.slice() : [],
         deviceEndpoint: deviceStatus.endpoint,
         hasCollectModule: Boolean(collectModule.collectOzonProductsToErp),
       });
@@ -6543,7 +6658,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
       const items = rawItems.map(normalizeSourceProductForErpCollect);
-      const data = await self.SS_ERP_CLIENT.submitCollect({ items: items });
+      const legacyPayload = { items: items };
+      const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
+      const deviceStatus = deviceCollect && typeof deviceCollect.status === 'function'
+        ? await deviceCollect.status()
+        : { ok: false, state: 'unpaired' };
+      let data;
+      if (deviceStatus.ok === true) {
+        const deviceResult = await deviceCollect.submit(legacyPayload);
+        if (!deviceResult || deviceResult.ok !== true) {
+          throw Object.assign(
+            new Error(deviceResult && deviceResult.error || '设备来源采集失败'),
+            { errorCode: deviceResult && deviceResult.errorCode },
+          );
+        }
+        data = deviceResult.body;
+      } else if (deviceStatus.state !== 'unpaired') {
+        throw Object.assign(
+          new Error(deviceStatus.error || '设备来源采集授权不可用'),
+          { errorCode: deviceStatus.errorCode },
+        );
+      } else {
+        data = await self.SS_ERP_CLIENT.submitCollect(legacyPayload);
+      }
       if (!data || data.code !== 1) {
         throw new Error((data && data.msg) || 'ERP 采集失败');
       }

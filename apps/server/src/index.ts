@@ -30,6 +30,7 @@ import { staffRoutes } from './routes/staff.js';
 import { notificationRoutes } from './routes/notification.js';
 import {
   collectRoutes,
+  collectBatchForOwner,
   type CollectRoutesOptions,
 } from './routes/collect.js';
 import { ozonAnalyticsRoutes } from './routes/ozon-analytics.js';
@@ -2176,6 +2177,15 @@ if (isExtensionDeviceAuthEnabled()) {
       repository: extensionDeviceRepository, authConfig: extensionDeviceAuthConfig,
     }),
     managementRepository: extensionDeviceRepository,
+    collectBatch: async (input) => collectBatchForOwner({
+      ownerUserId: input.ownerUserId,
+      body: input.body,
+      dependencies: {
+        featureFlags: sourceWorkflowFeatureFlags,
+        sourceCaptureService: sourceCaptureService || undefined,
+      },
+      log: input.log,
+    }),
     authenticateDevice: authenticateExtensionDevice({
       config: extensionDeviceAuthConfig,
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
@@ -2188,6 +2198,11 @@ if (isExtensionDeviceAuthEnabled()) {
         const params = request.params as { shopId?: unknown };
         return typeof params.shopId === 'string' ? params.shopId : null;
       },
+    }),
+    authenticateCollectDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['capture:write'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
     shopRepository: createPrismaExtensionDeviceShopRepository(prisma),
     shopAnalyticsRepository: {

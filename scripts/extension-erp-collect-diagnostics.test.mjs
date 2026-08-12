@@ -25,6 +25,11 @@ test('extension background exposes ERP collect diagnostics ping', () => {
     /deviceState:/,
     'ping response should report the scoped device connection state without exposing credentials',
   );
+  assert.match(
+    source,
+    /deviceScopes:/,
+    'ping response should report device scopes without exposing the access token',
+  );
 });
 
 test('extension popup treats a scoped device session as the primary ERP connection', () => {
@@ -67,6 +72,11 @@ test('ERP collect page checks extension status before starting Ozon collection',
     /扩展未连接|扩展未响应/,
     'collect page should show an immediate actionable error when the extension bridge is unavailable',
   );
+  assert.match(
+    source,
+    /deviceCollectReady[\s\S]{0,500}capture:write/,
+    'collect page should accept a paired capture:write device without a legacy token',
+  );
 });
 
 test('ERP collect bridge relays Chrome runtime errors to the page', () => {
@@ -108,8 +118,8 @@ test('Ozon ERP collect response includes the target ERP account and backend for 
   );
   assert.match(
     source,
-    /const\s+connection\s*=\s*\{\s*baseUrl:\s*erpBase,\s*user:\s*identity\s*\}/,
-    'successful collection responses should build connection context from the ERP base URL and account identity',
+    /const\s+connection\s*=\s*\{\s*baseUrl:\s*erpBase,\s*user:\s*identity,\s*authMode\s*\}/,
+    'successful collection responses should build connection context from the ERP base URL and auth mode',
   );
   assert.match(
     source,
@@ -120,6 +130,16 @@ test('Ozon ERP collect response includes the target ERP account and backend for 
     source,
     /notifyErpCollectCompleted\(collected\.length,\s*allErrors\.length,\s*\{[\s\S]*connection:/,
     'collect-completed broadcasts should include the same connection context shown in the popup/page',
+  );
+  assert.match(
+    source,
+    /SS_ERP_EXTENSION_DEVICE_COLLECT[\s\S]{0,900}deviceCollect\.submit\(batchPayload\)/,
+    'paired Ozon collection should write through the scoped device transport',
+  );
+  assert.match(
+    source,
+    /deviceStatus\.state !== "unpaired"[\s\S]{0,260}设备采集授权不可用/,
+    'paired device failures must not silently fall back to an account token',
   );
 });
 

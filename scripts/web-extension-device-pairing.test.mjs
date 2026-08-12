@@ -242,7 +242,12 @@ test('device pairing rollout is independent from logistics distribution', () => 
 test('logged-in ERP pages can establish a bounded minimal device session without copying account tokens', () => {
   assert.match(topbarSource, /ExtensionDeviceAutoConnect/);
   assert.match(autoConnectSource, /ss-erp:extension-device-status/);
-  assert.match(autoConnectSource, /status\.state !== 'authorization_required'/);
+assert.match(autoConnectSource, /status\.state !== 'authorization_required'/);
+assert.match(
+  autoConnectSource,
+  /status\.state === 'paired'[\s\S]{0,280}status\.ownerUserId !== ownerUserId[\s\S]{0,220}extension-device-clear/,
+  'silent auto-connect must replace a device session bound to a different logged-in ERP owner',
+);
   assert.match(autoConnectSource, /\/api\/extension-device\/pairing-codes/);
   assert.match(autoConnectSource, /ss-erp:extension-device-claim/);
   assert.match(autoConnectSource, /onlyIfAuthorizationRequired:\s*true/);

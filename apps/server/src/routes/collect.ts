@@ -4153,6 +4153,206 @@ export interface CollectRoutesOptions {
   loadAuthoritativeOzonCategoryCatalog?: LoadAuthoritativeOzonCategoryCatalog;
 }
 
+export interface CollectBatchRequestBody {
+  items: any[];
+  collectPhase?: string;
+  ephemeralListing?: boolean;
+  ephemeralListingSource?: string;
+}
+
+export interface CollectBatchDependencies {
+  featureFlags?: SourceWorkflowFeatureFlagEvaluator;
+  sourceCaptureService?: CollectRoutesOptions['sourceCaptureService'];
+}
+
+export interface CollectBatchResult {
+  statusCode: number;
+  body: Record<string, unknown>;
+}
+
+/**
+ * Persists a browser-collected batch for an already authenticated owner.
+ * Both account-token and scoped device routes use this function so the
+ * authorization transport cannot change the ownership and validation rules.
+ */
+export async function collectBatchForOwner(input: {
+  ownerUserId: string;
+  body: CollectBatchRequestBody;
+  dependencies?: CollectBatchDependencies;
+  log?: { warn: (metadata: unknown, message: string) => void };
+}): Promise<CollectBatchResult> {
+  const userId = String(input.ownerUserId || '').trim();
+  const body = input.body;
+  if (!userId) return { statusCode: 401, body: { code: 0, errorCode: 'invalid_owner', msg: '无效的 ERP 账号' } };
+  if (!Array.isArray(body?.items) || !body.items.length) {
+    return { statusCode: 400, body: { code: 0, msg: '请提供商品数据' } };
+  }
+  if (body.items.length > 50) {
+    return {
+      statusCode: 413,
+      body: {
+        code: 0,
+        errorCode: 'source_collect_batch_limit_exceeded',
+        msg: '单次最多提交 50 件商品，请分批重试',
+        data: { observedCount: body.items.length, limit: 50, recoverable: true },
+      },
+    };
+  }
+
+  const featureFlags = input.dependencies?.featureFlags || sourceWorkflowFeatureFlags;
+  const sourceCaptureService = input.dependencies?.sourceCaptureService || null;
+  const captureRollouts = new Map<string, SourceWorkflowFeatureDecision>();
+  if (sourceCaptureService) {
+    const platforms = [...new Set(body.items.map((item) => (
+      String(item?.sourcePlatform || '').trim().toLowerCase()
+    )).filter((platform) => platform === '1688'))];
+    for (const platform of platforms) {
+      let decision: SourceWorkflowFeatureDecision;
+      try {
+        decision = await featureFlags.evaluate('SOURCE_CAPTURE_V2', { ownerUserId: userId, platform });
+      } catch {
+        return { statusCode: 503, body: { code: 0, errorCode: 'source_workflow_rollout_unavailable', msg: '来源商品采集策略暂不可用' } };
+      }
+      captureRollouts.set(platform, decision);
+      if (!decision.legacyAllowed) {
+        return {
+          statusCode: decision.enabled ? 409 : 503,
+          body: {
+            code: 0,
+            errorCode: decision.enabled ? 'source_capture_v2_required' : 'source_workflow_rollout_unavailable',
+            msg: decision.enabled ? '该来源商品已启用采集 V2，请升级扩展后重试' : '来源商品采集策略暂不可用',
+            rolloutRevision: decision.revision,
+          },
+        };
+      }
+    }
+  }
+
+  const collectPhase = String(body.collectPhase || 'collect').trim().toLowerCase();
+  const shouldUpdateExisting = collectPhase === 'enrichment';
+  let saved = 0;
+  const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
+  for (const item of body.items) {
+    try {
+      const validationError = validateDomesticCollectPayload(item as Record<string, unknown>);
+      if (validationError) throw new Error(validationError);
+      const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
+      const sourcePlatform = String(item.sourcePlatform || '').trim().toLowerCase();
+      const captureRollout = captureRollouts.get(sourcePlatform) as SourceWorkflowFeatureDecision | null;
+      const legacyCaptureTrusted = sourceCaptureService
+        && captureRollout?.enabled
+        && (captureRollout.captureStage === 'shadow_write' || captureRollout.captureStage === 'dual_read')
+        ? {
+          ownerUserId: userId,
+          actorUserId: userId,
+          rolloutRevision: captureRollout.revision,
+          rolloutStage: captureRollout.captureStage,
+          ingestChannel: 'LEGACY_ADAPTER' as const,
+        }
+        : null;
+      const imageState = await prepareCollectedSourceImageMetadata(item, userId);
+      const metadata: Record<string, unknown> = {
+        ...buildCollectedGoodsMetadata({ ...item, ...imageState.metadataPatch }),
+        ...imageState.metadataPatch,
+      };
+      if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
+      if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
+      if (item.typeId) metadata.typeId = item.typeId;
+      if (item.weightG) metadata.weightG = item.weightG;
+      if (item.lengthMm) metadata.lengthMm = item.lengthMm;
+      if (item.widthMm) metadata.widthMm = item.widthMm;
+      if (item.heightMm) metadata.heightMm = item.heightMm;
+      if (item.manufacturerName) metadata.manufacturerName = item.manufacturerName;
+      if (item.brandName) metadata.brandName = item.brandName;
+      if (item.priceText) metadata.priceText = String(item.priceText);
+      if (item.unitPriceText) metadata.unitPriceText = String(item.unitPriceText);
+      if (item.shippingCny !== undefined) metadata.shippingCny = item.shippingCny;
+      if (item.totalCostCny !== undefined) metadata.totalCostCny = item.totalCostCny;
+      if (item.priceSourceType) metadata.priceSourceType = String(item.priceSourceType);
+      if (item.selectedSku) metadata.selectedSku = item.selectedSku;
+      if (item.skuItems) metadata.skuItems = Array.isArray(item.skuItems) ? item.skuItems.slice(0, 100) : item.skuItems;
+      if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
+      if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
+      const ephemeralListing = body.ephemeralListing === true || item.ephemeralListing === true;
+      if (ephemeralListing) {
+        metadata.ephemeralListing = true;
+        metadata.ephemeralListingSource = String(item.ephemeralListingSource || body.ephemeralListingSource || 'browser-one-click-listing').slice(0, 120);
+        metadata.ephemeralListingExpiresAt = new Date(Date.now() + EPHEMERAL_LISTING_TTL_MS).toISOString();
+      }
+      const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
+      const sourceDescription = sanitizePublishDescription(item.description);
+      const priceInfo = await resolveCollectedPrice(item.priceText || item.price, item.currency, item.sourceUrl);
+      const displayTitle = resolveCollectedDisplayTitle({
+        title: item.title,
+        publishTitle: item.publishTitle,
+        sourceTitleRaw: item.sourceTitleRaw,
+        sourceUrl: item.sourceUrl,
+        sourceProductId,
+        sku: item.sku,
+        sourcePlatform: item.sourcePlatform,
+      });
+      const ensuredProjection = sourceCaptureService && legacyCaptureTrusted
+        ? await sourceCaptureService.ensureLegacyProjection({ trusted: legacyCaptureTrusted, item })
+        : null;
+      const existing = ensuredProjection
+        ? await prisma.supplyGoods.findFirst({ where: { id: ensuredProjection.supplyGoodsId, userId } })
+        : shouldUpdateExisting
+          ? await findExistingCollectedOzonGoods(userId, { sourcePlatform: item.sourcePlatform, sourceProductId, sku: item.sku })
+          : null;
+      if (ensuredProjection && !existing) throw new Error('稳定采集投影不存在，请重试');
+      const data = {
+        title: displayTitle,
+        sourceUrl: item.sourceUrl || null,
+        sourcePlatform: item.sourcePlatform || 'ozon',
+        sourceProductId,
+        sku: item.sku || sourceProductId,
+        images: imageState.images.length ? imageState.images : undefined,
+        purchasePrice: priceInfo.purchasePriceCny,
+        currency: 'CNY',
+        originalPrice: priceInfo.originalPrice,
+        originalCurrency: priceInfo.originalCurrency,
+        exchangeRateUsed: priceInfo.exchangeRateUsed,
+        priceNeedsReview: priceInfo.needsReview,
+        notes: sourceDescription.slice(0, 500) || null,
+        metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
+        variants: hasVariants ? (item.variants as any) : undefined,
+        modelId: item.modelId ? String(item.modelId) : null,
+        status: 'collected',
+      };
+      const persisted = existing
+        ? await prisma.supplyGoods.update({ where: { id: existing.id }, data: { ...data, metadata: mergeCollectedMetadata(existing.metadata, metadata) as any } })
+        : await prisma.supplyGoods.create({ data: { user: { connect: { id: userId } }, ...data } });
+      if (sourceCaptureService && legacyCaptureTrusted) {
+        try {
+          await sourceCaptureService.ingestLegacy({ trusted: legacyCaptureTrusted, item, supplyGoodsId: persisted.id });
+        } catch (caught) {
+          input.log?.warn({ err: caught, sourcePlatform, sourceProductId }, 'source capture V2 shadow write failed');
+        }
+      }
+      saved++;
+    } catch (e: any) {
+      const errMsg = (e?.message ? String(e.message) : '未知错误').slice(0, 300);
+      errors.push({
+        sku: item.sku ? String(item.sku) : undefined,
+        sourceProductId: item.sourceProductId ? String(item.sourceProductId) : undefined,
+        title: item.title ? String(item.title).slice(0, 100) : undefined,
+        error: errMsg,
+      });
+    }
+  }
+  return {
+    statusCode: 200,
+    body: {
+      code: saved > 0 ? 1 : 0,
+      msg: saved > 0
+        ? (errors.length ? `成功采集 ${saved} 件商品，${errors.length} 件失败` : `成功采集 ${saved} 件商品`)
+        : (errors.length ? `采集失败：${errors[0]!.error}` : '采集失败'),
+      data: { saved, errors },
+    },
+  };
+}
+
+
 class SourceOzonCategoryRouteError extends Error {
   constructor(
     readonly errorCode: string,
@@ -4727,217 +4927,17 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
       ephemeralListingSource?: string;
     };
 
-    if (!Array.isArray(body?.items) || !body.items.length) {
-      return reply.status(400).send({ code: 0, msg: '请提供商品数据' });
-    }
-    if (body.items.length > 50) {
-      return reply.status(413).send({
-        code: 0,
-        errorCode: 'source_collect_batch_limit_exceeded',
-        msg: '单次最多提交 50 件商品，请分批重试',
-        data: {
-          observedCount: body.items.length,
-          limit: 50,
-          recoverable: true,
-        },
-      });
-    }
-
-    const captureRollouts = new Map<string, SourceWorkflowFeatureDecision>();
-    if (sourceCaptureService) {
-      const platforms = [...new Set(body.items.map((item) => (
-        String(item?.sourcePlatform || '').trim().toLowerCase()
-      )).filter((platform) => platform === '1688'))];
-      for (const platform of platforms) {
-        let decision: SourceWorkflowFeatureDecision;
-        try {
-          decision = await featureFlags.evaluate('SOURCE_CAPTURE_V2', {
-            ownerUserId: userId,
-            platform,
-          });
-        } catch {
-          return reply.status(503).send({
-            code: 0,
-            errorCode: 'source_workflow_rollout_unavailable',
-            msg: '来源商品采集策略暂不可用',
-          });
-        }
-        captureRollouts.set(platform, decision);
-        if (!decision.legacyAllowed) {
-          return reply.status(decision.enabled ? 409 : 503).send({
-            code: 0,
-            errorCode: decision.enabled
-              ? 'source_capture_v2_required'
-              : 'source_workflow_rollout_unavailable',
-            msg: decision.enabled
-              ? '该来源商品已启用采集 V2，请升级扩展后重试'
-              : '来源商品采集策略暂不可用',
-            rolloutRevision: decision.revision,
-          });
-        }
-      }
-    }
-
-    const collectPhase = String(body.collectPhase || 'collect').trim().toLowerCase();
-    const shouldUpdateExisting = collectPhase === 'enrichment';
-    let saved = 0;
-    const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
-    for (const item of body.items) {
-      try {
-        const validationError = validateDomesticCollectPayload(item as Record<string, unknown>);
-        if (validationError) throw new Error(validationError);
-        const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
-        const sourcePlatform = String(item.sourcePlatform || '').trim().toLowerCase();
-        const captureRollout = captureRollouts.get(sourcePlatform);
-        const legacyCaptureTrusted = sourceCaptureService
-          && captureRollout?.enabled
-          && (captureRollout.captureStage === 'shadow_write'
-            || captureRollout.captureStage === 'dual_read')
-          ? {
-            ownerUserId: userId,
-            actorUserId: userId,
-            rolloutRevision: captureRollout.revision,
-            rolloutStage: captureRollout.captureStage,
-            ingestChannel: 'LEGACY_ADAPTER' as const,
-          }
-          : null;
-        const imageState = await prepareCollectedSourceImageMetadata(item, userId);
-        const metadata: Record<string, unknown> = {
-          ...buildCollectedGoodsMetadata({ ...item, ...imageState.metadataPatch }),
-          ...imageState.metadataPatch,
-        };
-        if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
-        if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
-        if (item.typeId) metadata.typeId = item.typeId;
-        if (item.weightG) metadata.weightG = item.weightG;
-        if (item.lengthMm) metadata.lengthMm = item.lengthMm;
-        if (item.widthMm) metadata.widthMm = item.widthMm;
-        if (item.heightMm) metadata.heightMm = item.heightMm;
-        if (item.manufacturerName) metadata.manufacturerName = item.manufacturerName;
-        if (item.brandName) metadata.brandName = item.brandName;
-        if (item.priceText) metadata.priceText = String(item.priceText);
-        if (item.unitPriceText) metadata.unitPriceText = String(item.unitPriceText);
-        if (item.shippingCny !== undefined) metadata.shippingCny = item.shippingCny;
-        if (item.totalCostCny !== undefined) metadata.totalCostCny = item.totalCostCny;
-        if (item.priceSourceType) metadata.priceSourceType = String(item.priceSourceType);
-        if (item.selectedSku) metadata.selectedSku = item.selectedSku;
-        if (item.skuItems) metadata.skuItems = Array.isArray(item.skuItems) ? item.skuItems.slice(0, 100) : item.skuItems;
-        if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
-        // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
-        if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
-        const ephemeralListing = body.ephemeralListing === true || item.ephemeralListing === true;
-        if (ephemeralListing) {
-          metadata.ephemeralListing = true;
-          metadata.ephemeralListingSource = String(item.ephemeralListingSource || body.ephemeralListingSource || 'browser-one-click-listing').slice(0, 120);
-          metadata.ephemeralListingExpiresAt = new Date(Date.now() + EPHEMERAL_LISTING_TTL_MS).toISOString();
-        }
-
-        const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
-        const sourceDescription = sanitizePublishDescription(item.description);
-        console.log(`[batch-collect] SKU=${item.sku} | modelId=${item.modelId || 'none'} | variants=${hasVariants ? item.variants.length : 0} | ozonAttributes=${Array.isArray(item.ozonAttributes) ? item.ozonAttributes.length : 'NONE'}`);
-
-        const priceInfo = await resolveCollectedPrice(item.priceText || item.price, item.currency, item.sourceUrl);
-        const displayTitle = resolveCollectedDisplayTitle({
-          title: item.title,
-          publishTitle: item.publishTitle,
-          sourceTitleRaw: item.sourceTitleRaw,
-          sourceUrl: item.sourceUrl,
-          sourceProductId,
-          sku: item.sku,
-          sourcePlatform: item.sourcePlatform,
-        });
-
-        const ensuredProjection = sourceCaptureService && legacyCaptureTrusted
-          ? await sourceCaptureService.ensureLegacyProjection({
-            trusted: legacyCaptureTrusted,
-            item,
-          })
-          : null;
-        const existing = ensuredProjection
-          ? await prisma.supplyGoods.findFirst({
-            where: { id: ensuredProjection.supplyGoodsId, userId },
-          })
-          : shouldUpdateExisting
-            ? await findExistingCollectedOzonGoods(userId, {
-            sourcePlatform: item.sourcePlatform,
-            sourceProductId,
-            sku: item.sku,
-          })
-            : null;
-        if (ensuredProjection && !existing) {
-          throw new Error('稳定采集投影不存在，请重试');
-        }
-
-        const data = {
-          title: displayTitle,
-          sourceUrl: item.sourceUrl || null,
-          sourcePlatform: item.sourcePlatform || 'ozon',
-          sourceProductId,
-          sku: item.sku || sourceProductId,
-          images: imageState.images.length ? imageState.images : undefined,
-          purchasePrice: priceInfo.purchasePriceCny,
-          currency: 'CNY',
-          originalPrice: priceInfo.originalPrice,
-          originalCurrency: priceInfo.originalCurrency,
-          exchangeRateUsed: priceInfo.exchangeRateUsed,
-          priceNeedsReview: priceInfo.needsReview,
-          notes: sourceDescription.slice(0, 500) || null,
-          metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
-          variants: hasVariants ? (item.variants as any) : undefined,
-          modelId: item.modelId ? String(item.modelId) : null,
-          status: 'collected',
-        };
-
-        const persisted = existing
-          ? await prisma.supplyGoods.update({
-            where: { id: existing.id },
-            data: {
-              ...data,
-              metadata: mergeCollectedMetadata(existing.metadata, metadata) as any,
-            },
-          })
-          : await prisma.supplyGoods.create({
-            data: {
-              user: { connect: { id: userId } },
-              ...data,
-            },
-          });
-
-        if (sourceCaptureService && legacyCaptureTrusted) {
-          try {
-            await sourceCaptureService.ingestLegacy({
-              trusted: legacyCaptureTrusted,
-              item,
-              supplyGoodsId: persisted.id,
-            });
-          } catch (caught) {
-            request.log.warn({
-              err: caught,
-              sourcePlatform,
-              sourceProductId,
-            }, 'source capture V2 shadow write failed');
-          }
-        }
-        saved++;
-      } catch (e: any) {
-        const errMsg = (e?.message ? String(e.message) : '未知错误').slice(0, 300);
-        console.error(`[batch-collect] failed sku=${item.sku || item.sourceProductId}:`, errMsg);
-        errors.push({
-          sku: item.sku ? String(item.sku) : undefined,
-          sourceProductId: item.sourceProductId ? String(item.sourceProductId) : undefined,
-          title: item.title ? String(item.title).slice(0, 100) : undefined,
-          error: errMsg,
-        });
-      }
-    }
-
-    return reply.send({
-      code: saved > 0 ? 1 : 0,
-      msg: saved > 0
-        ? (errors.length ? `成功采集 ${saved} 件商品，${errors.length} 件失败` : `成功采集 ${saved} 件商品`)
-        : (errors.length ? `采集失败：${errors[0]!.error}` : '采集失败'),
-      data: { saved, errors },
+    const result = await collectBatchForOwner({
+      ownerUserId: userId,
+      body,
+      dependencies: {
+        featureFlags,
+        sourceCaptureService,
+      },
+      log: request.log,
     });
+    return reply.status(result.statusCode).send(result.body);
+
   });
 
   app.post('/:id/videos/retransfer', async (request, reply) => {

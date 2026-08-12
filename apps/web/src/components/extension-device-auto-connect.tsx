@@ -70,17 +70,22 @@ export async function runAutoConnect(cancelled: () => boolean): Promise<void> {
   }, 8000);
   if (cancelled() || !statusResponse.ok || !statusResponse.data) return;
   const status = statusResponse.data;
+  const userResponse = await api.get<{ id: string }>('/api/user/me');
+  if (cancelled() || userResponse.code !== 1 || !userResponse.data) return;
+  const ownerUserId = String(userResponse.data.id || '').trim();
+  if (!ownerUserId) return;
+  if (status.state === 'paired' && status.ownerUserId && status.ownerUserId !== ownerUserId) {
+    const cleared = await sendToExtension({ type: 'ss-erp:extension-device-clear' }, 8000);
+    if (cancelled() || !cleared.ok) return;
+    try { window.localStorage.removeItem(AUTO_CONNECT_ATTEMPT_KEY); } catch { /* best effort */ }
+    return runAutoConnect(cancelled);
+  }
   if (status.state !== 'authorization_required' || status.ownerUserId) return;
   if (recentlyAttempted()) return;
   rememberAttempt();
 
-  const [shopResponse, userResponse] = await Promise.all([
-    api.get<ShopOption[]>('/api/shops'),
-    api.get<{ id: string }>('/api/user/me'),
-  ]);
-  if (cancelled() || shopResponse.code !== 1 || !Array.isArray(shopResponse.data)
-    || userResponse.code !== 1 || !userResponse.data) return;
-  const ownerUserId = String(userResponse.data.id || '').trim();
+  const shopResponse = await api.get<ShopOption[]>('/api/shops');
+  if (cancelled() || shopResponse.code !== 1 || !Array.isArray(shopResponse.data)) return;
   const shopIds = singleActiveOzonShopIds(shopResponse.data);
   if (!ownerUserId || !shopIds.length) return;
 
