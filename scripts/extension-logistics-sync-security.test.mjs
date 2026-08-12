@@ -363,12 +363,11 @@ test('one-click pairing verifies an existing credential and clears stale local a
   assert.match(serviceWorkerSource, /verified\.state === 'unreachable'/);
 });
 
-test('one-click pairing never carries an unverified legacy account token into a device session', () => {
-  assert.match(serviceWorkerSource, /validateStoredCompatibilityCredential/);
-  assert.match(serviceWorkerSource, /baseUrl \+ '\/api\/user\/me'/);
-  assert.match(serviceWorkerSource, /credentials: 'omit'/);
-  assert.match(serviceWorkerSource, /claimed\.ownerUserId/);
-  assert.match(serviceWorkerSource, /\[OZON_CALC_ERP_TOKEN_KEY\]: legacyToken/);
+test('one-click pairing clears legacy account credentials before entering a device session', () => {
+  assert.match(serviceWorkerSource, /clearLegacyCompatibilityCredential\(\)/);
+  assert.match(serviceWorkerSource, /markExtensionDeviceAuthority\('paired', claimed\)/);
+  assert.match(serviceWorkerSource, /\[OZON_CALC_ERP_TOKEN_KEY\]: ''/);
+  assert.doesNotMatch(serviceWorkerSource, /\[OZON_CALC_ERP_TOKEN_KEY\]: legacyToken/);
 });
 
 test('device status never reports a retained but unverifiable credential as paired', () => {
@@ -601,7 +600,8 @@ test('a queued silent claim cannot replace a manual grant that completed first',
     self: {},
     toText: (value) => String(value || ''),
     trustedErpDeviceBaseUrl: () => 'https://api.ss-erp.test',
-    validateStoredCompatibilityCredential: async () => '',
+    clearLegacyCompatibilityCredential: async () => {},
+    markExtensionDeviceAuthority: async () => {},
   };
   context.globalThis = context;
   vm.runInNewContext(

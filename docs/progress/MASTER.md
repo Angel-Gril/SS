@@ -59,6 +59,13 @@ collection tests passed `47/47`; extension collection, source fallback and diagn
 passed. This source correction is not packaged or deployed yet; no Provider call, ERP/Ozon
 production write, VPS access or deployment occurred. Overall task count remains `37/37`.
 
+The follow-up security correction adds a durable extension-device authority fence. A successful
+scoped pairing clears any retained compatibility Token; explicit unpair, owner switching, and
+device 401/410 revocation clear the Token and block legacy fallback until the current account
+re-pairs. Legacy `/api/collect/batch` remains available only to installs that have never entered
+the scoped-device flow. Focused extension contracts and Cloud/Server typechecks passed; this
+correction is source-only and still requires the normal signed package/release process.
+
 Post-release Seller access diagnosis and source correction (2026-08-12): the reported `1.0.305`
 Cloud instance is `hbaahhdfolpocohbihhkpbldggljdeog`, loaded from the user's versioned Downloads
 directory. Chrome's persisted Default-profile state proves that exact instance has active, granted

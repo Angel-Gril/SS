@@ -30,6 +30,16 @@ test('extension background exposes ERP collect diagnostics ping', () => {
     /deviceScopes:/,
     'ping response should report device scopes without exposing the access token',
   );
+  assert.match(
+    source,
+    /deviceLegacyFallbackAllowed:/,
+    'ping response should expose whether legacy-token fallback is still permitted',
+  );
+  assert.match(
+    source,
+    /legacyFallbackAllowed !== true/,
+    'collection must fail closed after a scoped device authority exists',
+  );
 });
 
 test('extension popup treats a scoped device session as the primary ERP connection', () => {
@@ -138,7 +148,7 @@ test('Ozon ERP collect response includes the target ERP account and backend for 
   );
   assert.match(
     source,
-    /deviceStatus\.state !== "unpaired"[\s\S]{0,260}设备采集授权不可用/,
+    /legacyFallbackAllowed !== true[\s\S]{0,260}设备采集授权不可用/,
     'paired device failures must not silently fall back to an account token',
   );
 });

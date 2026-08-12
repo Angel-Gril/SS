@@ -162,6 +162,9 @@ const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
 const SS_ERP_EXTENSION_DEVICE_ID_KEY = 'ss-erp:logistics-device-id';
+// Durable fence: paired devices must fail closed after revoke/clear instead of
+// silently falling back to a legacy account token.
+const SS_ERP_EXTENSION_DEVICE_AUTHORITY_KEY = 'ss-erp:extension-device-authority:v1';
 const OZON_CALC_ERP_PUSH_HISTORY_KEY = 'ozon-calc:erp-push-history';
 const OZON_SYNC_LEGACY_COMPANY_ID_STORAGE_KEY = 'ss_erp_ozon_company_id';
 const OZON_SYNC_LEGACY_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_captured_at';
@@ -709,45 +712,49 @@ async function ensureExtensionDeviceId() {
   return deviceId;
 }
 
-async function validateStoredCompatibilityCredential(baseUrl, token, ownerUserId) {
-  const candidate = toText(token).trim();
-  if (!candidate || !ownerUserId) return '';
-  const controller = new AbortController();
-  let timer = null;
-  try {
-    const request = Promise.resolve().then(async () => {
-      const response = await fetch(baseUrl + '/api/user/me', {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: 'Bearer ' + candidate,
-        },
-        credentials: 'omit',
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      return {
-        response,
-        body: response.ok ? await response.json() : null,
-      };
-    });
-    const timedOut = new Promise((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        reject(new Error('compatibility credential validation timed out'));
-      }, 1500);
-    });
-    const { response, body } = await Promise.race([request, timedOut]);
-    if (!response.ok) return '';
-    return Number(body && body.code) === 1
-      && toText(body && body.data && body.data.id).trim() === ownerUserId
-      ? candidate
-      : '';
-  } catch (_error) {
-    return '';
-  } finally {
-    if (timer !== null) clearTimeout(timer);
+async function readExtensionDeviceAuthority() {
+  const stored = await chrome.storage.local.get([SS_ERP_EXTENSION_DEVICE_AUTHORITY_KEY]);
+  const authority = stored[SS_ERP_EXTENSION_DEVICE_AUTHORITY_KEY];
+  if (!authority || typeof authority !== 'object') return null;
+  const state = toText(authority.state).trim();
+  if (!['paired', 'revoked', 'cleared', 'owner_mismatch'].includes(state)) return null;
+  return {
+    state,
+    ownerUserId: toText(authority.ownerUserId).trim(),
+    sessionId: toText(authority.sessionId).trim(),
+    updatedAt: toText(authority.updatedAt).trim(),
+  };
+}
+
+async function markExtensionDeviceAuthority(state, details = {}) {
+  if (!['paired', 'revoked', 'cleared', 'owner_mismatch'].includes(state)) {
+    throw new Error('设备授权栅栏状态无效');
   }
+  await chrome.storage.local.set({
+    [SS_ERP_EXTENSION_DEVICE_AUTHORITY_KEY]: {
+      state,
+      ownerUserId: toText(details.ownerUserId).trim(),
+      sessionId: toText(details.sessionId).trim(),
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function clearLegacyCompatibilityCredential() {
+  const stored = await chrome.storage.local.get([
+    OZON_CALC_ERP_ENDPOINT_KEY,
+    'ss_erp_connection',
+  ]);
+  const legacy = stored.ss_erp_connection && typeof stored.ss_erp_connection === 'object'
+    ? stored.ss_erp_connection
+    : {};
+  const baseUrl = toText(legacy.baseUrl).trim().replace(/\/+$/, '')
+    || toText(stored[OZON_CALC_ERP_ENDPOINT_KEY]).trim().replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+  await chrome.storage.local.set({
+    [OZON_CALC_ERP_ENDPOINT_KEY]: baseUrl ? baseUrl + '/api/collect' : '',
+    [OZON_CALC_ERP_TOKEN_KEY]: '',
+    ss_erp_connection: { baseUrl, token: '' },
+  });
 }
 
 async function readExtensionDeviceStatus(verify) {
@@ -850,9 +857,38 @@ async function readBoundedExtensionDeviceJson(response) {
 
 async function readExtensionDeviceCollectOperation() {
   const credentials = getLogisticsDeviceCredentials();
+  const authority = await readExtensionDeviceAuthority();
   const stored = await credentials.getStatus();
+  if (authority && authority.state !== 'paired') {
+    return {
+      ok: false,
+      state: 'blocked',
+      errorCode: 'device_repair_required',
+      error: '设备授权已撤销，请重新配对后再采集',
+      legacyFallbackAllowed: false,
+    };
+  }
   if (!stored || stored.state !== 'paired') {
-    return { ok: false, state: 'unpaired', errorCode: 'device_unpaired', error: '设备未配对' };
+    if (authority) {
+      return {
+        ok: false,
+        state: 'blocked',
+        errorCode: 'device_repair_required',
+        error: '设备授权已撤销，请重新配对后再采集',
+        legacyFallbackAllowed: false,
+      };
+    }
+    return {
+      ok: false,
+      state: 'unpaired',
+      errorCode: 'device_unpaired',
+      error: '设备未配对',
+      legacyFallbackAllowed: authority === null,
+    };
+  }
+  if (!authority) {
+    await clearLegacyCompatibilityCredential();
+    await markExtensionDeviceAuthority('paired', stored);
   }
   let operation;
   try {
@@ -863,15 +899,28 @@ async function readExtensionDeviceCollectOperation() {
       state: 'unreachable',
       errorCode: 'device_unreachable',
       error: error && error.message ? error.message : '设备授权验证失败',
+      legacyFallbackAllowed: false,
     };
   }
   if (!operation || operation.state !== 'paired' || !operation.accessToken) {
-    return { ok: false, state: 'unpaired', errorCode: 'device_unpaired', error: '设备未配对' };
+    return {
+      ok: false,
+      state: 'blocked',
+      errorCode: 'device_repair_required',
+      error: '设备授权已撤销，请重新配对后再采集',
+      legacyFallbackAllowed: false,
+    };
   }
   if (!Array.isArray(operation.scopes) || !operation.scopes.includes('capture:write')) {
-    return { ok: false, state: 'paired', errorCode: 'device_scope_required', error: '设备缺少商品采集权限' };
+    return {
+      ok: false,
+      state: 'paired',
+      errorCode: 'device_scope_required',
+      error: '设备缺少商品采集权限',
+      legacyFallbackAllowed: false,
+    };
   }
-  return { ok: true, state: 'paired', operation };
+  return { ok: true, state: 'paired', operation, legacyFallbackAllowed: false };
 }
 
 async function readExtensionDeviceCollectStatus() {
@@ -882,6 +931,7 @@ async function readExtensionDeviceCollectStatus() {
     authMode: result.ok === true ? 'device' : undefined,
     errorCode: result.errorCode,
     error: result.error,
+    legacyFallbackAllowed: result.legacyFallbackAllowed === true,
     scopes: result.operation && Array.isArray(result.operation.scopes)
       ? result.operation.scopes.slice()
       : [],
@@ -915,12 +965,15 @@ async function submitExtensionDeviceCollectBatch(payload) {
         status: response.status,
         reason: 'device_collect_authorization_revoked',
       });
+      await clearLegacyCompatibilityCredential();
+      await markExtensionDeviceAuthority('revoked', operation);
       return {
         ok: false,
-        state: 'unpaired',
+        state: 'blocked',
         errorCode: 'device_authorization_required',
         error: '设备授权已失效，请重新配对',
         status: response.status,
+        legacyFallbackAllowed: false,
       };
     }
     body = await readBoundedExtensionDeviceJson(response);
@@ -933,6 +986,7 @@ async function submitExtensionDeviceCollectBatch(payload) {
       outcome: 'UNKNOWN_OUTCOME',
       automaticRetryAllowed: false,
       guardSessionId: operation.sessionId,
+      legacyFallbackAllowed: false,
     };
   } finally {
     clearTimeout(timeoutId);
@@ -944,6 +998,7 @@ async function submitExtensionDeviceCollectBatch(payload) {
       errorCode: body && body.errorCode || 'device_collect_failed',
       error: body && (body.msg || body.error) || ('设备采集失败: HTTP ' + response.status),
       status: response.status,
+      legacyFallbackAllowed: false,
     };
   }
   if (!await getLogisticsDeviceCredentials().isOperationCurrent(operation)) {
@@ -952,9 +1007,10 @@ async function submitExtensionDeviceCollectBatch(payload) {
       state: 'paired',
       errorCode: 'device_authority_changed',
       error: '设备授权在采集期间已变化，请刷新状态后重试',
+      legacyFallbackAllowed: false,
     };
   }
-  return { ok: true, state: 'paired', authMode: 'device', body };
+  return { ok: true, state: 'paired', authMode: 'device', body, legacyFallbackAllowed: false };
 }
 
 globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT = Object.freeze({
@@ -1015,6 +1071,8 @@ async function readExtensionDeviceOzonShops() {
         status: response.status,
         reason: 'device_shop_authorization_revoked',
       });
+      await clearLegacyCompatibilityCredential();
+      await markExtensionDeviceAuthority('revoked', operation);
       return {
         ok: false,
         errorCode: 'device_authorization_required',
@@ -1134,6 +1192,8 @@ async function requestExtensionDeviceOzonCdnAuth(method, shopId, payload, expect
         status: response.status,
         reason: 'device_cookie_authorization_revoked',
       });
+      await clearLegacyCompatibilityCredential();
+      await markExtensionDeviceAuthority('revoked', operation);
       return {
         ok: false,
         errorCode: 'device_authorization_required',
@@ -1238,7 +1298,11 @@ async function claimExtensionDeviceFromErp(message, sender) {
       throw new Error('扩展已连接其他 ERP，请先在完整设置中解除配对');
     }
     const verified = await readExtensionDeviceStatus(true);
-    if (verified.state === 'paired' && message.reauthorize !== true) return verified;
+    if (verified.state === 'paired' && message.reauthorize !== true) {
+      await clearLegacyCompatibilityCredential();
+      await markExtensionDeviceAuthority('paired', verified);
+      return verified;
+    }
     if (verified.state === 'unreachable') {
       throw new Error('原设备授权暂时无法验证，请恢复 ERP 网络后重试');
     }
@@ -1254,26 +1318,10 @@ async function claimExtensionDeviceFromErp(message, sender) {
     deviceLabel: toText(message.deviceLabel).trim() || 'Chrome extension',
   });
 
-  const stored = await chrome.storage.local.get([
-    OZON_CALC_ERP_ENDPOINT_KEY,
-    OZON_CALC_ERP_TOKEN_KEY,
-    'ss_erp_connection',
-  ]);
-  const legacy = stored.ss_erp_connection || {};
-  const legacyBaseUrl = toText(legacy.baseUrl).trim().replace(/\/+$/, '');
-  const legacyTokenCandidate = legacyBaseUrl === baseUrl
-    ? toText(stored[OZON_CALC_ERP_TOKEN_KEY] || legacy.token).trim()
-    : '';
-  const legacyToken = await validateStoredCompatibilityCredential(
-    baseUrl,
-    legacyTokenCandidate,
-    claimed.ownerUserId,
-  );
-  await chrome.storage.local.set({
-    [OZON_CALC_ERP_ENDPOINT_KEY]: baseUrl + '/api/collect',
-    [OZON_CALC_ERP_TOKEN_KEY]: legacyToken,
-    ss_erp_connection: { baseUrl, token: legacyToken },
-  });
+  // A scoped device session is the sole authority after pairing. Do not carry
+  // forward a token from a previous owner or compatibility install.
+  await clearLegacyCompatibilityCredential();
+  await markExtensionDeviceAuthority('paired', claimed);
   if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
   return readExtensionDeviceStatus(false);
 }
@@ -6121,7 +6169,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // sender assertion here as a second boundary before deleting the
       // service-worker-owned credential.
       assertTrustedErpDeviceSender(sender);
-      return getLogisticsDeviceCredentials().clear();
+      return getLogisticsDeviceCredentials().clear().then(async (deviceStatus) => {
+        await clearLegacyCompatibilityCredential();
+        await markExtensionDeviceAuthority(message.reason === 'owner_mismatch' ? 'owner_mismatch' : 'cleared');
+        return deviceStatus;
+      });
     }).then((deviceStatus) => {
       broadcastOzonCompanyContextChanged().catch(() => {});
       sendResponse({ ok: true, data: deviceStatus });
@@ -6137,8 +6189,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return Promise.all([
         chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']),
         readExtensionDeviceStatusAfterClaims(false),
+        readExtensionDeviceCollectStatus(),
       ]);
-    }).then(([result, deviceStatus]) => {
+    }).then(([result, deviceStatus, deviceCollectStatus]) => {
       const legacyConn = result.ss_erp_connection || {};
       const rawEndpoint = result[OZON_CALC_ERP_ENDPOINT_KEY] || (legacyConn.baseUrl ? legacyConn.baseUrl + '/api/collect' : '');
       const endpoint = normalizeEndpoint(rawEndpoint);
@@ -6156,6 +6209,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         deviceState: deviceStatus.state,
         deviceScopes: Array.isArray(deviceStatus.scopes) ? deviceStatus.scopes.slice() : [],
         deviceEndpoint: deviceStatus.endpoint,
+        deviceCollectState: deviceCollectStatus.state,
+        deviceLegacyFallbackAllowed: deviceCollectStatus.legacyFallbackAllowed === true,
         hasCollectModule: Boolean(collectModule.collectOzonProductsToErp),
       });
     }).catch((error) => {
@@ -6662,7 +6717,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
       const deviceStatus = deviceCollect && typeof deviceCollect.status === 'function'
         ? await deviceCollect.status()
-        : { ok: false, state: 'unpaired' };
+        : { ok: false, state: 'unpaired', legacyFallbackAllowed: true };
       let data;
       if (deviceStatus.ok === true) {
         const deviceResult = await deviceCollect.submit(legacyPayload);
@@ -6673,7 +6728,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           );
         }
         data = deviceResult.body;
-      } else if (deviceStatus.state !== 'unpaired') {
+      } else if (deviceStatus.legacyFallbackAllowed !== true) {
         throw Object.assign(
           new Error(deviceStatus.error || '设备来源采集授权不可用'),
           { errorCode: deviceStatus.errorCode },

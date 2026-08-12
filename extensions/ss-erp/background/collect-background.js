@@ -313,9 +313,9 @@ async function flushOzonCollectEnrichmentQueue() {
     const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
     const deviceStatus = deviceCollect && typeof deviceCollect.status === "function"
       ? await deviceCollect.status()
-      : { ok: false, state: "unpaired" };
+      : { ok: false, state: "unpaired", legacyFallbackAllowed: true };
     if (!erpConn.baseUrl || (deviceStatus.ok !== true && !erpConn.token)) return;
-    if (deviceStatus.ok !== true && deviceStatus.state !== "unpaired") return;
+    if (deviceStatus.ok !== true && deviceStatus.legacyFallbackAllowed !== true) return;
 
     const queue = await readOzonCollectEnrichmentQueue();
     if (!queue.length) return;
@@ -1016,10 +1016,10 @@ async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, erro
       }
       pushParsed = deviceResult.body || {};
       authMode = "device";
-    } else if (deviceStatus && deviceStatus.state !== "unpaired") {
+    } else if (!deviceStatus || deviceStatus.legacyFallbackAllowed !== true) {
       return {
         ok: false,
-        error: deviceStatus.error || "设备采集授权不可用",
+        error: deviceStatus && deviceStatus.error || "设备采集授权不可用",
         errorCode: deviceStatus.errorCode,
         collected: collected.length,
         errors,
@@ -5398,12 +5398,12 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   const deviceCollect = globalThis.SS_ERP_EXTENSION_DEVICE_COLLECT;
   const deviceStatus = deviceCollect && typeof deviceCollect.status === "function"
     ? await deviceCollect.status()
-    : { ok: false, state: "unpaired" };
+    : { ok: false, state: "unpaired", legacyFallbackAllowed: true };
+  if (deviceStatus.ok !== true && deviceStatus.legacyFallbackAllowed !== true) {
+    return { ok: false, error: deviceStatus.error || "设备采集授权不可用", errorCode: deviceStatus.errorCode };
+  }
   if (!erpBase || (deviceStatus.ok !== true && !erpToken)) {
     return { ok: false, error: "请先配置 ERP 连接" };
-  }
-  if (deviceStatus.ok !== true && deviceStatus.state !== "unpaired") {
-    return { ok: false, error: deviceStatus.error || "设备采集授权不可用", errorCode: deviceStatus.errorCode };
   }
 
   let sellerCompanyId = null;

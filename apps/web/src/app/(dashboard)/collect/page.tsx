@@ -74,6 +74,8 @@ interface ExtensionPingStatus {
   hasCollectModule?: boolean;
   deviceState?: 'paired' | 'authorization_required' | 'invalid' | 'unreachable' | 'unconfigured';
   deviceScopes?: string[];
+  deviceCollectState?: 'paired' | 'unpaired' | 'blocked' | 'unreachable';
+  deviceLegacyFallbackAllowed?: boolean;
   error?: string;
 }
 
@@ -637,6 +639,12 @@ export default function CollectPage() {
     const deviceCollectReady = ping.deviceState === 'paired'
       && Array.isArray(ping.deviceScopes)
       && ping.deviceScopes.includes('capture:write');
+    if (ping.deviceLegacyFallbackAllowed === false && !deviceCollectReady) {
+      setExtFetching(false);
+      setExtFetchStatus('设备采集授权已失效，请重新配对当前账号后再采集');
+      toast({ title: '设备采集授权已失效', description: '请重新配对当前 ERP 账号和浏览器设备后再采集', variant: 'destructive' });
+      return;
+    }
     if ((!ping.hasEndpoint && !deviceCollectReady) || (!ping.hasToken && !deviceCollectReady)) {
       setExtFetching(false);
       const missing = !ping.hasEndpoint ? 'ERP 地址' : 'ERP Token 或设备采集授权';

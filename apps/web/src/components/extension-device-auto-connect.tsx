@@ -75,7 +75,10 @@ export async function runAutoConnect(cancelled: () => boolean): Promise<void> {
   const ownerUserId = String(userResponse.data.id || '').trim();
   if (!ownerUserId) return;
   if (status.state === 'paired' && status.ownerUserId && status.ownerUserId !== ownerUserId) {
-    const cleared = await sendToExtension({ type: 'ss-erp:extension-device-clear' }, 8000);
+    const cleared = await sendToExtension({
+      type: 'ss-erp:extension-device-clear',
+      reason: 'owner_mismatch',
+    }, 8000);
     if (cancelled() || !cleared.ok) return;
     try { window.localStorage.removeItem(AUTO_CONNECT_ATTEMPT_KEY); } catch { /* best effort */ }
     return runAutoConnect(cancelled);
