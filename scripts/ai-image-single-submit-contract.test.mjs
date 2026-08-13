@@ -76,7 +76,7 @@ const approvalRunbook = fs.readFileSync(
   'utf8',
 );
 const pricingAudit = fs.readFileSync(
-  'docs/analysis/qa02-relay-pricing-audit.md',
+  'docs/runbooks/ai-image-provider-sandbox-approval.md',
   'utf8',
 );
 const billingRunbook = fs.readFileSync(

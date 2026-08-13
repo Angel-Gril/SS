@@ -1,21 +1,17 @@
 ---
 name: develop-dual-mode-ai-workbench
-description: Implement, review, test, package, deploy, or resume the SS ERP browser extension dual-mode AI image workbench. Use for tasks involving ERP-hosted image generation, BYOK Provider profiles and background calls, reference generation, full-image editing, inpaint, batch SKU media slots, generated-asset ingest, draft binding, extension publish coordination, or the related progress plan under docs/progress.
+description: Maintain, review, test, package, deploy, or resume the completed SS ERP browser extension dual-mode AI image workbench. Use for ERP-hosted image generation, BYOK Provider profiles and background calls, reference generation, full-image editing, inpaint, batch SKU media slots, generated-asset ingest, draft binding, extension publish coordination, release packaging, and pilot verification.
 ---
 
-# Develop the SS ERP Dual-Mode AI Workbench
+# Maintain the SS ERP Dual-Mode AI Workbench
 
 ## Start Every Session
 
-1. Read `docs/progress/MASTER.md` completely.
-2. Read the active phase file linked from MASTER and the matching section in
-   `docs/plan/task-breakdown.md`.
-3. Read `docs/plan/dependency-graph.md` when choosing parallel work.
-4. Inspect the Git worktree. Preserve unrelated user changes and never include `.context/`.
-5. Put the next dependency-ready task in the native task tracker as `in_progress`; keep all
-   other active-phase tasks pending.
-6. Read the relevant analysis file before changing an unfamiliar module:
-   `docs/analysis/project-overview.md`, `module-inventory.md`, or `risk-assessment.md`.
+1. Inspect the Git worktree. Preserve unrelated user changes and never include `.context/` or
+   historical `build/` artifacts.
+2. Treat the committed source, focused contracts, release scripts, and current operator
+   authorization as the source of truth; do not recreate deleted planning/progress archives.
+3. Before changing an unfamiliar module, read the relevant source contract, runbook, and test.
 
 Do not restart analysis or repeat completed work. Treat MASTER as the cross-conversation
 source of truth.
@@ -121,8 +117,8 @@ observable and compatible with this skill's security invariants.
 5. Test focused modules first, then the affected workspace.
 6. Run `git diff --check` and review for secrets, unrelated files, stale flags, and duplicated
    logic.
-7. Update the active phase checkbox and count immediately.
-8. Update MASTER overall count, percentage, Current Status, and Next Steps immediately.
+7. Record decisions and release evidence in the active operator-controlled release artifact,
+   never by restoring deleted planning archives.
 
 Do not mark a task complete merely because code exists. Its acceptance criteria and required
 tests must pass.
@@ -163,21 +159,14 @@ canaries.
 
 ## Progress and Handoff
 
-After each completed task:
-
-- Check the task in `docs/progress/phase-N-*.md`.
-- Update `Progress: X/Y tasks` in that file.
-- Update the Phase line and overall count in `docs/progress/MASTER.md`.
-- Record decisions, regressions, blockers, sandbox evidence, and rollout state in Notes.
-- Set MASTER Current Status to the next dependency-ready task.
-- Mirror the same status in the native task tracker.
+After each completed task, report the exact commit, tests, remaining gates, feature flags,
+release bindings, and whether any Provider charge or production mutation occurred.
 
 When handing off, report completed task IDs, tests run, remaining gates, current flags, Git
 state, and whether any real Provider charge or production mutation occurred.
 
 ## Complete and Clean Up
 
-When every implementation checkbox in MASTER is complete, initiate the spec-driven cleanup
-phase. List the generated analysis, plan, progress, and project skill artifacts and ask the
-user which to keep before deleting anything. Preserve all artifacts until the user explicitly
-chooses. Do not remove this skill or the progress system automatically.
+The generated analysis, plan, and progress archives were intentionally removed after the
+implementation reached completion. Keep this project skill as the maintained operational
+boundary; do not restore the deleted archives or remove this skill automatically.
