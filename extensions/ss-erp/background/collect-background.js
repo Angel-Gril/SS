@@ -65,19 +65,26 @@ const SELLER_OZON_PERMISSION_CHECK_ERROR = "无法确认 seller.ozon.ru 站点�
 const SELLER_OZON_PAGE_SCRIPT_ERROR = "seller.ozon.ru 页面当前正在跳转或扩展页面上下文已失效。请等待页面加载完成或刷新 seller 页面后重试。";
 const OZON_COLLECT_ENRICHMENT_QUEUE_KEY = "ss_erp_ozon_collect_enrichment_queue";
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY = "ss_erp_ozon_workbench_publish_payload_queue";
+const OZON_WORKBENCH_PUBLISH_INTENT_KEY = "ss_erp_ozon_workbench_publish_intent";
+const OZON_WORKBENCH_PUBLISH_INTENT_MAX_ENTRIES = 32;
+const OZON_WORKBENCH_PUBLISH_INTENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME = "ss-erp:ozon-workbench-publish-payload";
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_MINUTES = 1;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_BASE_MS = 60 * 1000;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_MAX_MS = 15 * 60 * 1000;
+const OZON_WORKBENCH_REVIEW_JOB_ID_MAX_LENGTH = 200;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_TERMINAL_ERROR_CODES = new Set([
   "device_authorization_required",
   "device_publish_scope_required",
   "device_unpaired",
   "device_repair_required",
   "device_authority_changed",
+  "review_handoff_failed",
+  "browser_payload_revision_required",
 ]);
 let ozonCollectEnrichmentRunQueue = Promise.resolve();
 let ozonWorkbenchPublishPayloadRunQueue = Promise.resolve();
+let ozonWorkbenchPublishPayloadQueueWriteQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
@@ -89,7 +96,13 @@ function normalizeErrorCode(error) {
 }
 
 function isOzonWorkbenchPublishPayloadTerminalError(error) {
-  return OZON_WORKBENCH_PUBLISH_PAYLOAD_TERMINAL_ERROR_CODES.has(normalizeErrorCode(error));
+  const errorCode = normalizeErrorCode(error);
+  if (errorCode === "browser_payload_conflict") return false;
+  return Boolean(error && (error.terminal === true || error.automaticRetryAllowed === false))
+    || errorCode === "SS_ERP_SOURCE_WORKFLOW_REQUEST_OUTCOME_UNKNOWN"
+    || /source workbench command is too large/i.test(normalizeErrorMessage(error))
+    || OZON_WORKBENCH_PUBLISH_PAYLOAD_TERMINAL_ERROR_CODES.has(errorCode)
+    || /^(?:SOURCE_CAPTURE_|SOURCE_LISTING_|BROWSER_ONE_CLICK_)/.test(errorCode);
 }
 
 function drainOzonListInsightRequestQueue() {
@@ -356,6 +369,12 @@ function enqueueOzonWorkbenchPublishPayloadRun(task) {
   return run;
 }
 
+function enqueueOzonWorkbenchPublishPayloadQueueWrite(task) {
+  const run = ozonWorkbenchPublishPayloadQueueWriteQueue.then(() => task());
+  ozonWorkbenchPublishPayloadQueueWriteQueue = run.catch(() => {});
+  return run;
+}
+
 function cloneOzonWorkbenchPublishPayloadOptions(options) {
   try {
     return JSON.parse(JSON.stringify(options || {}));
@@ -392,8 +411,138 @@ function cloneOzonWorkbenchPublishPayloadOptions(options) {
   }
 }
 
+function normalizeOzonWorkbenchReviewJobId(value) {
+  const normalized = String(value == null ? "" : value).normalize("NFKC").trim();
+  return normalized === String(value == null ? "" : value)
+    && normalized.length > 0
+    && normalized.length <= OZON_WORKBENCH_REVIEW_JOB_ID_MAX_LENGTH
+    && /^[A-Za-z0-9_-]+$/.test(normalized)
+    ? normalized
+    : "";
+}
+
+function normalizeOzonWorkbenchClientRequestId(value) {
+  const normalized = String(value == null ? "" : value).normalize("NFKC").trim();
+  return normalized === String(value == null ? "" : value)
+    && normalized.length >= 16
+    && normalized.length <= OZON_WORKBENCH_REVIEW_JOB_ID_MAX_LENGTH
+    && /^[A-Za-z0-9_-]+$/.test(normalized)
+    ? normalized
+    : "";
+}
+
+async function ozonWorkbenchPublishIntentFingerprint(productIds, options = {}) {
+  const intentInput = {
+    initialPayload: buildOzonWorkbenchInitialPublishPayload(productIds, options),
+    completionOptions: cloneOzonWorkbenchPublishPayloadOptions(options),
+  };
+  const canonicalJson = (value) => {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  };
+  if (!globalThis.crypto || !globalThis.crypto.subtle || typeof TextEncoder !== "function") {
+    throw new Error("当前浏览器无法生成任务幂等指纹，请升级浏览器后重试");
+  }
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalJson(intentInput)),
+  ));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function newOzonWorkbenchClientRequestId() {
+  try {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+      return `ow-${globalThis.crypto.randomUUID()}`;
+    }
+  } catch (_error) {}
+  return `ow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`;
+}
+
+async function loadOrCreateOzonWorkbenchPublishIntent(productIds, options = {}) {
+  const fingerprint = await ozonWorkbenchPublishIntentFingerprint(productIds, options);
+  return enqueueOzonWorkbenchPublishPayloadQueueWrite(async () => {
+    const stored = await storageGet(OZON_WORKBENCH_PUBLISH_INTENT_KEY);
+    const rawIntents = Array.isArray(stored)
+      ? stored
+      : (stored && Array.isArray(stored.intents)
+        ? stored.intents
+        : (stored && typeof stored === "object" ? [stored] : []));
+    const storedEnvelope = Boolean(stored && !Array.isArray(stored) && Array.isArray(stored.intents));
+    const cutoff = Date.now() - OZON_WORKBENCH_PUBLISH_INTENT_MAX_AGE_MS;
+    const intents = rawIntents.filter((entry) => {
+      const createdAt = Date.parse(entry && entry.createdAt || "");
+      return entry && /^[a-f0-9]{64}$/.test(String(entry.fingerprint || ""))
+        && normalizeOzonWorkbenchClientRequestId(entry.clientRequestId)
+        && Number.isFinite(createdAt)
+        && createdAt >= cutoff;
+    });
+    const existing = intents.find((entry) => entry.fingerprint === fingerprint);
+    if (existing) {
+      if (!storedEnvelope || rawIntents.length !== intents.length) {
+        await storageSet({
+          [OZON_WORKBENCH_PUBLISH_INTENT_KEY]: { version: 1, intents },
+        });
+      }
+      return existing;
+    }
+    if (intents.length >= OZON_WORKBENCH_PUBLISH_INTENT_MAX_ENTRIES) {
+      throw Object.assign(new Error("待对账的一键上架请求过多，请先在 ERP 上架日志确认结果"), {
+        code: "ozon_workbench_publish_intent_capacity_exceeded",
+        errorCode: "ozon_workbench_publish_intent_capacity_exceeded",
+        automaticRetryAllowed: false,
+      });
+    }
+    const intent = {
+      fingerprint,
+      clientRequestId: newOzonWorkbenchClientRequestId(),
+      createdAt: new Date().toISOString(),
+    };
+    await storageSet({
+      [OZON_WORKBENCH_PUBLISH_INTENT_KEY]: {
+        version: 1,
+        intents: [...intents, intent],
+      },
+    });
+    return intent;
+  });
+}
+
+async function clearOzonWorkbenchPublishIntent(intent) {
+  if (!intent || !intent.clientRequestId) return;
+  await enqueueOzonWorkbenchPublishPayloadQueueWrite(async () => {
+    const stored = await storageGet(OZON_WORKBENCH_PUBLISH_INTENT_KEY);
+    const intents = Array.isArray(stored)
+      ? stored
+      : (stored && Array.isArray(stored.intents)
+        ? stored.intents
+        : (stored && typeof stored === "object" ? [stored] : []));
+    const remaining = intents.filter((entry) => entry && entry.clientRequestId !== intent.clientRequestId);
+    if (remaining.length === intents.length) return;
+    if (!remaining.length) {
+      await storageRemove(OZON_WORKBENCH_PUBLISH_INTENT_KEY);
+      return;
+    }
+    await storageSet({
+      [OZON_WORKBENCH_PUBLISH_INTENT_KEY]: { version: 1, intents: remaining },
+    });
+  });
+}
+
+function retainOzonWorkbenchPublishIntentAfterCreateFailure(failure) {
+  return Boolean(failure && (
+    failure.outcome === "UNKNOWN_OUTCOME"
+    || (failure.requestDispatched === true && failure.automaticRetryAllowed === false)
+  ));
+}
+
 function normalizeOzonWorkbenchPublishPayloadJob(job) {
-  const jobId = String(job && job.jobId || "").trim();
+  const jobId = normalizeOzonWorkbenchReviewJobId(job && job.jobId);
   const productIds = Array.isArray(job && job.productIds)
     ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
@@ -430,31 +579,35 @@ async function writeOzonWorkbenchPublishPayloadQueue(queue) {
 async function upsertOzonWorkbenchPublishPayloadJob(job) {
   const normalized = normalizeOzonWorkbenchPublishPayloadJob(job);
   if (!normalized.jobId) return;
-  const queue = await readOzonWorkbenchPublishPayloadQueue();
-  const existing = queue.find((item) => item.jobId === normalized.jobId) || {};
-  const nextJob = {
-    ...existing,
-    ...normalized,
-    queuedAt: existing.queuedAt || normalized.queuedAt,
-    attempts: Number(existing.attempts) || 0,
-    nextRunAt: "",
-    lastError: "",
-    lastErrorCode: "",
-    terminal: false,
-    terminalAt: "",
-  };
-  await writeOzonWorkbenchPublishPayloadQueue([
-    ...queue.filter((item) => item.jobId !== normalized.jobId),
-    nextJob,
-  ]);
+  await enqueueOzonWorkbenchPublishPayloadQueueWrite(async () => {
+    const queue = await readOzonWorkbenchPublishPayloadQueue();
+    const existing = queue.find((item) => item.jobId === normalized.jobId) || {};
+    const nextJob = {
+      ...existing,
+      ...normalized,
+      queuedAt: existing.queuedAt || normalized.queuedAt,
+      attempts: Number(existing.attempts) || 0,
+      nextRunAt: "",
+      lastError: "",
+      lastErrorCode: "",
+      terminal: false,
+      terminalAt: "",
+    };
+    await writeOzonWorkbenchPublishPayloadQueue([
+      ...queue.filter((item) => item.jobId !== normalized.jobId),
+      nextJob,
+    ]);
+  });
   ensureOzonWorkbenchPublishPayloadAlarm();
 }
 
 async function removeOzonWorkbenchPublishPayloadJob(jobId) {
   const normalizedJobId = String(jobId || "").trim();
   if (!normalizedJobId) return;
-  const queue = await readOzonWorkbenchPublishPayloadQueue();
-  await writeOzonWorkbenchPublishPayloadQueue(queue.filter((job) => job.jobId !== normalizedJobId));
+  await enqueueOzonWorkbenchPublishPayloadQueueWrite(async () => {
+    const queue = await readOzonWorkbenchPublishPayloadQueue();
+    await writeOzonWorkbenchPublishPayloadQueue(queue.filter((job) => job.jobId !== normalizedJobId));
+  });
 }
 
 function nextOzonWorkbenchPublishPayloadRetryAt(attempts) {
@@ -469,41 +622,31 @@ function nextOzonWorkbenchPublishPayloadRetryAt(attempts) {
 async function recordOzonWorkbenchPublishPayloadRetry(job, error) {
   const normalized = normalizeOzonWorkbenchPublishPayloadJob(job);
   if (!normalized.jobId) return;
-  const queue = await readOzonWorkbenchPublishPayloadQueue();
-  const current = queue.find((item) => item.jobId === normalized.jobId) || normalized;
   const errorCode = normalizeErrorCode(error);
   const lastError = normalizeErrorMessage(error).slice(0, 260);
   if (isOzonWorkbenchPublishPayloadTerminalError(error)) {
-    const terminalJob = {
+    await finalizeOzonWorkbenchPublishPayloadJob(normalized.jobId);
+    return { terminal: true, errorCode, lastError };
+  }
+  await enqueueOzonWorkbenchPublishPayloadQueueWrite(async () => {
+    const queue = await readOzonWorkbenchPublishPayloadQueue();
+    const current = queue.find((item) => item.jobId === normalized.jobId) || normalized;
+    const attempts = (Number(current.attempts) || 0) + 1;
+    const nextJob = {
       ...current,
+      attempts,
       lastAttemptAt: new Date().toISOString(),
-      nextRunAt: "",
+      nextRunAt: nextOzonWorkbenchPublishPayloadRetryAt(attempts),
       lastError,
       lastErrorCode: errorCode,
-      terminal: true,
-      terminalAt: new Date().toISOString(),
+      terminal: false,
+      terminalAt: "",
     };
     await writeOzonWorkbenchPublishPayloadQueue([
       ...queue.filter((item) => item.jobId !== normalized.jobId),
-      terminalJob,
+      nextJob,
     ]);
-    return { terminal: true, errorCode };
-  }
-  const attempts = (Number(current.attempts) || 0) + 1;
-  const nextJob = {
-    ...current,
-    attempts,
-    lastAttemptAt: new Date().toISOString(),
-    nextRunAt: nextOzonWorkbenchPublishPayloadRetryAt(attempts),
-    lastError,
-    lastErrorCode: errorCode,
-    terminal: false,
-    terminalAt: "",
-  };
-  await writeOzonWorkbenchPublishPayloadQueue([
-    ...queue.filter((item) => item.jobId !== normalized.jobId),
-    nextJob,
-  ]);
+  });
 }
 
 function isOzonWorkbenchPublishPayloadDue(job, nowMs) {
@@ -530,15 +673,22 @@ async function flushOzonWorkbenchPublishPayloadQueue() {
 
     const nowMs = Date.now();
     for (const job of queue) {
-      if (!job.jobId || job.terminal === true || !isOzonWorkbenchPublishPayloadDue(job, nowMs)) continue;
+      if (!job.jobId || !isOzonWorkbenchPublishPayloadDue(job, nowMs)) continue;
+      if (job.terminal === true) {
+        await finalizeOzonWorkbenchPublishPayloadJob(job.jobId);
+        continue;
+      }
       try {
         const result = await completeOzonWorkbenchPublishJobPayload(null, job.jobId, job.productIds, job.options, { keepQueued: true });
         if (result && result.ok === true) {
-          await removeOzonWorkbenchPublishPayloadJob(job.jobId);
+          await finalizeOzonWorkbenchPublishPayloadJob(job.jobId);
         } else {
           const retryError = Object.assign(
             new Error(result && result.error ? result.error : "浏览器补全商品数据失败"),
-            { errorCode: result && result.errorCode },
+            {
+              errorCode: result && result.errorCode,
+              terminal: result && result.terminal === true,
+            },
           );
           await recordOzonWorkbenchPublishPayloadRetry(job, retryError);
         }
@@ -547,6 +697,94 @@ async function flushOzonWorkbenchPublishPayloadQueue() {
       }
     }
   });
+}
+
+function inferOzonWorkbenchReviewWebBaseUrl(value) {
+  const defaults = globalThis.SS_ERP_DEPLOYMENT_DEFAULTS || {};
+  const candidates = defaults.target === "cloud"
+    ? [defaults.erpBaseUrl, value]
+    : [value, defaults.erpBaseUrl, "http://localhost:3000"];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(String(candidate || "").trim().replace(/\/+$/, ""));
+      const local = /^(localhost|127\.0\.0\.1)$/i.test(url.hostname);
+      if (url.username || url.password || (url.protocol !== "https:" && !(local && url.protocol === "http:"))) continue;
+      url.pathname = url.pathname.replace(/\/api\/.*$/, "").replace(/\/+$/, "");
+      url.search = "";
+      url.hash = "";
+      if (local && url.port === "3001") url.port = "3000";
+      return url.href.replace(/\/+$/, "");
+    } catch (_error) {}
+  }
+  return "http://localhost:3000";
+}
+
+async function openOzonWorkbenchReviewTab(jobId) {
+  const normalizedJobId = normalizeOzonWorkbenchReviewJobId(jobId);
+  if (!normalizedJobId || !chrome.tabs || typeof chrome.tabs.create !== "function") return false;
+  let configuredBaseUrl = "";
+  try {
+    const connection = await getStoredErpConnection();
+    configuredBaseUrl = connection && connection.baseUrl;
+  } catch (_error) {}
+  const baseUrl = inferOzonWorkbenchReviewWebBaseUrl(configuredBaseUrl);
+  const url = baseUrl + "/listing-logs?jobId=" + encodeURIComponent(normalizedJobId);
+  try {
+    await chrome.tabs.create({ url, active: true });
+    return true;
+  } catch (_error) {
+    // Completion was durably removed before this best-effort navigation.
+    return false;
+  }
+}
+
+async function finalizeOzonWorkbenchPublishPayloadJob(jobId) {
+  const normalizedJobId = normalizeOzonWorkbenchReviewJobId(jobId);
+  if (!normalizedJobId) return false;
+  await removeOzonWorkbenchPublishPayloadJob(normalizedJobId);
+  return openOzonWorkbenchReviewTab(normalizedJobId);
+}
+
+function isOzonWorkbenchReviewHandoff(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || value.contractVersion !== "browser-one-click-v2-handoff/v1"
+    || value.state !== "REVIEW_REQUIRED"
+    || !Array.isArray(value.drafts)
+    || value.drafts.length === 0
+    || value.drafts.length > 100
+    || !Array.isArray(value.failures)
+    || value.failures.length > 100
+    || value.drafts.length + value.failures.length > 100) return false;
+  const supplyGoodsIds = new Set();
+  const draftIds = new Set();
+  const exactId = (candidate) => {
+    const normalized = String(candidate == null ? "" : candidate).normalize("NFKC").trim();
+    if (!normalized || normalized.length > 200 || normalized !== candidate) return "";
+    for (let index = 0; index < normalized.length; index += 1) {
+      const code = normalized.charCodeAt(index);
+      if (code <= 31 || code === 127) return "";
+    }
+    return normalized;
+  };
+  for (const draft of value.drafts) {
+    if (!draft || typeof draft !== "object" || Array.isArray(draft)) return false;
+    const supplyGoodsId = exactId(draft.supplyGoodsId);
+    const snapshotId = exactId(draft.snapshotId);
+    const draftId = exactId(draft.draftId);
+    const skuKey = exactId(draft.skuKey);
+    const sourceSku = exactId(draft.sourceSku);
+    if (!supplyGoodsId || !snapshotId || !draftId || !skuKey || !sourceSku
+      || !Number.isSafeInteger(draft.draftVersion) || draft.draftVersion < 0
+      || !Number.isSafeInteger(draft.revision) || draft.revision < 0
+      || supplyGoodsIds.has(supplyGoodsId) || draftIds.has(draftId)) return false;
+    supplyGoodsIds.add(supplyGoodsId);
+    draftIds.add(draftId);
+  }
+  return value.failures.every((failure) => failure
+    && typeof failure === "object"
+    && !Array.isArray(failure)
+    && exactId(failure.errorCode)
+    && (failure.supplyGoodsId == null || exactId(failure.supplyGoodsId)));
 }
 function normalizeRichDescriptionText(value) {
   return String(value || "")
@@ -843,20 +1081,41 @@ async function readOzonSellerCookieValueFromOpenTab(name) {
 }
 
 function storageGet(key) {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([key], (result) => resolve(result[key]));
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get([key], (result) => {
+      const runtimeError = chrome.runtime && chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "读取扩展存储失败"));
+        return;
+      }
+      resolve(result && result[key]);
+    });
   });
 }
 
 function storageSet(patch) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set(patch, resolve);
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(patch, () => {
+      const runtimeError = chrome.runtime && chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "写入扩展存储失败"));
+        return;
+      }
+      resolve();
+    });
   });
 }
 
 function storageRemove(keys) {
-  return new Promise((resolve) => {
-    chrome.storage.local.remove(keys, resolve);
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(keys, () => {
+      const runtimeError = chrome.runtime && chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "删除扩展存储失败"));
+        return;
+      }
+      resolve();
+    });
   });
 }
 
@@ -4041,7 +4300,7 @@ async function buildOzonWorkbenchPublishPayload(productIds, options = {}) {
     : [];
   const rows = await buildOzonWorkbenchPublishRows(productIds, options);
   const productUrls = Array.isArray(options.productUrls)
-    ? options.productUrls.map((url) => String(url || "").trim()).filter(Boolean)
+    ? options.productUrls.map((url) => String(url || "").trim())
     : [];
   const publish = {
     publishMode: options.publishMode === "follow" ? "follow" : "clone",
@@ -4074,9 +4333,8 @@ function buildOzonWorkbenchInitialPublishPayload(productIds, options = {}) {
     ? productIds.map((sku) => String(sku || "").trim()).filter(Boolean)
     : [];
   const productUrls = Array.isArray(options.productUrls)
-    ? options.productUrls.map((url) => String(url || "").trim()).filter(Boolean)
+    ? options.productUrls.map((url) => String(url || "").trim())
     : [];
-  const rows = Array.isArray(options.rows) ? options.rows : [];
   const publish = {
     publishMode: options.publishMode === "follow" ? "follow" : "clone",
     followBrand: options.followBrand === true,
@@ -4096,7 +4354,7 @@ function buildOzonWorkbenchInitialPublishPayload(productIds, options = {}) {
     mode: publish.publishMode,
     sourceSkus,
     productUrls,
-    rows,
+    rows: [],
     itemCount: sourceSkus.length,
     watermark: options.watermark || null,
     publish,
@@ -4109,10 +4367,78 @@ async function patchOzonWorkbenchPublishJob(conn, jobId, body) {
   if (!deviceApi || typeof deviceApi.patch !== "function") {
     throw new Error("设备上架通道未加载，请重新加载扩展");
   }
-  const result = await deviceApi.patch(jobId, body);
+  const reconcileUnknownOutcome = async (error) => {
+    let observed = null;
+    if (typeof deviceApi.read === "function") {
+      try { observed = await deviceApi.read(jobId); } catch (_readError) {}
+    }
+    const receipt = observed && observed.ok === true && observed.data && typeof observed.data === "object"
+      ? observed.data
+      : null;
+    const requestedRows = body && body.payload && Array.isArray(body.payload.rows)
+      ? body.payload.rows
+      : [];
+    const canonicalJson = (value) => {
+      if (value === null || typeof value !== "object") return JSON.stringify(value);
+      if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+      return `{${Object.keys(value)
+        .filter((key) => value[key] !== undefined)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+        .join(",")}}`;
+    };
+    const hashRow = async (row) => {
+      const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(canonicalJson(row)),
+      ));
+      return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    };
+    const acceptedRowHashes = receipt && receipt.acceptedRowHashes
+      && typeof receipt.acceptedRowHashes === "object" && !Array.isArray(receipt.acceptedRowHashes)
+      ? receipt.acceptedRowHashes
+      : {};
+    const requestedRowHashes = await Promise.all(requestedRows.map(async (row) => ({
+      sku: String(row && (row.sku || row.productId) || "").trim(),
+      hash: await hashRow(JSON.parse(JSON.stringify(row))),
+    })));
+    const handoff = receipt && receipt.handoff;
+    const completionRequested = Boolean(body && body.payload
+      && body.payload.browserPayloadReady === true
+      && body.payload.browserPayloadComplete === true);
+    if ((completionRequested && isOzonWorkbenchReviewHandoff(handoff))
+      || (requestedRowHashes.length > 0 && requestedRowHashes.every((entry) => (
+        entry.sku && acceptedRowHashes[entry.sku] === entry.hash
+      )))) {
+      return { ok: true, data: receipt, reconciled: true };
+    }
+    throw Object.assign(
+      new Error("ERP 是否已接收本次商品数据暂无法确认；已停止自动重放，请在 ERP 上架日志核对任务"),
+      {
+        code: "browser_payload_outcome_unknown",
+        errorCode: "browser_payload_outcome_unknown",
+        outcome: "UNKNOWN_OUTCOME",
+        automaticRetryAllowed: false,
+        terminal: true,
+        cause: error,
+      },
+    );
+  };
+  let result;
+  try {
+    result = await deviceApi.patch(jobId, body);
+  } catch (error) {
+    if (!error || error.automaticRetryAllowed !== false) throw error;
+    return reconcileUnknownOutcome(error);
+  }
   if (!result || result.ok !== true) {
+    if (result && result.automaticRetryAllowed === false) {
+      return reconcileUnknownOutcome(result);
+    }
     throw Object.assign(new Error(result && result.error || "更新上架日志失败"), {
       code: result && result.errorCode || "device_publish_update_failed",
+      errorCode: result && result.errorCode || "device_publish_update_failed",
+      terminal: result && result.terminal === true,
     });
   }
   return result;
@@ -4204,7 +4530,7 @@ async function markOzonWorkbenchPublishJobFailed(conn, jobId, error) {
 async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, options = {}, lifecycle = {}) {
   try {
     const streamResult = await streamOzonWorkbenchPublishRowsToJob(conn, jobId, productIds, options);
-    await patchOzonWorkbenchPublishJob(conn, jobId, {
+    const completion = await patchOzonWorkbenchPublishJob(conn, jobId, {
       status: "RUNNING",
       payload: {
         stage: "submitted",
@@ -4217,28 +4543,40 @@ async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, o
         },
       },
     });
-    return { ok: true, count: streamResult.count, errors: streamResult.errors };
+    const handoff = completion && completion.data && completion.data.handoff;
+    if (!isOzonWorkbenchReviewHandoff(handoff)) {
+      throw Object.assign(new Error("ERP 未返回完整的可审核草稿交接"), {
+        errorCode: "browser_one_click_handoff_invalid",
+        terminal: true,
+      });
+    }
+    return { ok: true, count: streamResult.count, errors: streamResult.errors, handoff };
   } catch (error) {
     if (lifecycle && lifecycle.keepQueued === true) {
-      try {
-        await patchOzonWorkbenchPublishJob(conn, jobId, {
-          status: "RUNNING",
-          errorMessage: "浏览器补全商品数据暂时中断，扩展会自动重试: " + normalizeErrorMessage(error).slice(0, 220),
-          payload: {
-            stage: "collecting",
-            browserPayloadReady: false,
-            browserPayloadRetrying: true,
-            browserPayloadRetryAt: new Date().toISOString(),
-            browserPayloadLastError: normalizeErrorMessage(error).slice(0, 260),
-          },
-        });
-      } catch (patchError) {
-        console.warn("[SS ERP] record Ozon one-click listing payload retry:", normalizeErrorMessage(patchError));
+      let completionError = error;
+      if (!isOzonWorkbenchPublishPayloadTerminalError(completionError)) {
+        try {
+          await patchOzonWorkbenchPublishJob(conn, jobId, {
+            status: "RUNNING",
+            errorMessage: "浏览器补全商品数据暂时中断，扩展会自动重试: " + normalizeErrorMessage(completionError).slice(0, 220),
+            payload: {
+              stage: "collecting",
+              browserPayloadReady: false,
+              browserPayloadRetrying: true,
+              browserPayloadRetryAt: new Date().toISOString(),
+              browserPayloadLastError: normalizeErrorMessage(completionError).slice(0, 260),
+            },
+          });
+        } catch (patchError) {
+          console.warn("[SS ERP] record Ozon one-click listing payload retry:", normalizeErrorMessage(patchError));
+          if (isOzonWorkbenchPublishPayloadTerminalError(patchError)) completionError = patchError;
+        }
       }
       return {
         ok: false,
-        error: normalizeErrorMessage(error),
-        errorCode: normalizeErrorCode(error),
+        error: normalizeErrorMessage(completionError),
+        errorCode: normalizeErrorCode(completionError),
+        terminal: isOzonWorkbenchPublishPayloadTerminalError(completionError),
       };
     }
     await markOzonWorkbenchPublishJobFailed(conn, jobId, error);
@@ -4271,23 +4609,59 @@ async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   const shopId = String(options.shopId || "").trim();
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
   await ensureOzonWorkbenchPublishCookieSynced(shopId, options);
-  const payload = buildOzonWorkbenchInitialPublishPayload(productIds, options);
+  const intent = await loadOrCreateOzonWorkbenchPublishIntent(productIds, { ...options, shopId });
+  const payload = {
+    ...buildOzonWorkbenchInitialPublishPayload(productIds, options),
+    clientRequestId: intent.clientRequestId,
+  };
   const deviceApi = globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK;
   if (!deviceApi || typeof deviceApi.create !== "function") {
+    await clearOzonWorkbenchPublishIntent(intent);
     return { ok: false, error: "设备上架通道未加载，请重新加载扩展" };
   }
-  const parsed = await deviceApi.create(payload);
+  let parsed;
+  try {
+    parsed = await deviceApi.create(payload);
+  } catch (error) {
+    if (!retainOzonWorkbenchPublishIntentAfterCreateFailure(error)) {
+      await clearOzonWorkbenchPublishIntent(intent);
+    }
+    return {
+      ok: false,
+      errorCode: error && (error.errorCode || error.code) || "device_create_outcome_unknown",
+      error: normalizeErrorMessage(error) || "创建上架日志结果未知；请在 ERP 上架日志核对任务",
+      outcome: error && error.outcome,
+      requestDispatched: error && error.requestDispatched,
+      automaticRetryAllowed: error && error.automaticRetryAllowed,
+      clientRequestId: intent.clientRequestId,
+    };
+  }
   if (!parsed || parsed.ok !== true) {
+    if (!retainOzonWorkbenchPublishIntentAfterCreateFailure(parsed)) {
+      await clearOzonWorkbenchPublishIntent(intent);
+    }
     return {
       ok: false,
       errorCode: parsed && parsed.errorCode,
       error: parsed && parsed.error || "创建上架日志失败",
+      outcome: parsed && parsed.outcome,
+      requestDispatched: parsed && parsed.requestDispatched,
+      automaticRetryAllowed: parsed && parsed.automaticRetryAllowed,
+      clientRequestId: intent.clientRequestId,
     };
   }
   const jobId = parsed.data && parsed.data.jobId ? String(parsed.data.jobId) : "";
-  if (!jobId) return { ok: false, error: "创建上架日志失败：ERP 未返回任务ID" };
+  if (!jobId) {
+    return {
+      ok: false,
+      error: "创建上架日志失败：ERP 未返回任务ID",
+      errorCode: "device_create_receipt_invalid",
+      clientRequestId: intent.clientRequestId,
+    };
+  }
   await upsertOzonWorkbenchPublishPayloadJob({ jobId, productIds, options });
-  void flushOzonWorkbenchPublishPayloadQueue();
+  await clearOzonWorkbenchPublishIntent(intent);
+  void flushOzonWorkbenchPublishPayloadQueue().catch(() => {});
   return {
     ok: true,
     jobId,
@@ -4296,7 +4670,7 @@ async function createOzonWorkbenchPublishJob(productIds, options = {}) {
       queued: true,
       count: Array.isArray(productIds) ? productIds.length : 0,
     },
-    msg: parsed.msg || "上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据",
+    msg: parsed.msg || "采集任务已创建，浏览器正在补全商品数据；完成后请在 ERP 上架日志审核草稿",
   };
 }
 
@@ -4313,11 +4687,12 @@ async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
   return {
     ok: true,
     jobId: job.jobId,
-    msg: job.msg || "上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据",
+    msg: job.msg || "采集任务已创建，浏览器正在补全商品数据；完成后请在 ERP 上架日志审核草稿",
     data: {
       jobId: job.jobId,
       queued: true,
       count: productIds.length,
+      ...(job.data && job.data.handoff ? { handoff: job.data.handoff } : {}),
     },
   };
 }

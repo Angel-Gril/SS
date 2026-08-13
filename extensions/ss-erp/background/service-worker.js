@@ -1124,6 +1124,21 @@ async function readExtensionDeviceOzonShops() {
 globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS = readExtensionDeviceOzonShops;
 
 function browserOneClickDeviceTransportResult(result, label, scopeFailure) {
+  const body = result && result.body && typeof result.body === 'object'
+    ? result.body
+    : null;
+  const ambiguousHttpOutcome = result && result.state === 'http_error'
+    && ([408, 425, 429].includes(Number(result.status)) || Number(result.status) >= 500);
+  const failureMetadata = body || ambiguousHttpOutcome
+    ? {
+        ...((body && body.outcome === 'UNKNOWN_OUTCOME') || ambiguousHttpOutcome
+          ? { outcome: 'UNKNOWN_OUTCOME' } : {}),
+        ...((body && body.automaticRetryAllowed === false) || ambiguousHttpOutcome
+          ? { automaticRetryAllowed: false } : {}),
+        ...((body && body.requestDispatched === true) || ambiguousHttpOutcome
+          ? { requestDispatched: true } : {}),
+      }
+    : {};
   if (result && result.state === 'response' && result.body) {
     return result.body.code === 1
       ? { ok: true, ...(result.body.data ? { data: result.body.data } : {}), msg: result.body.msg }
@@ -1131,6 +1146,9 @@ function browserOneClickDeviceTransportResult(result, label, scopeFailure) {
           ok: false,
           errorCode: result.body.errorCode || 'device_request_failed',
           error: result.body.msg || label + '失败',
+          status: Number(result.status) || undefined,
+          terminal: result.body.terminal === true,
+          ...failureMetadata,
         };
   }
   if (result && result.state === 'scope_required') {
@@ -1153,6 +1171,9 @@ function browserOneClickDeviceTransportResult(result, label, scopeFailure) {
     errorCode: result && result.body && result.body.errorCode || 'device_request_failed',
     error: result && result.body && (result.body.msg || result.body.error)
       || label + '失败',
+    status: Number(result && result.status) || undefined,
+    terminal: Boolean(result && result.body && result.body.terminal === true),
+    ...failureMetadata,
   };
 }
 
@@ -1160,7 +1181,7 @@ async function createExtensionDeviceBrowserOneClickJob(payload) {
   const result = await getByokDeviceTransport().post(
     '/api/extension-device/browser-one-click/jobs',
     payload,
-    { requiredScope: 'listing:publish' },
+    { requiredScopes: ['capture:write', 'listing:publish'] },
   );
   const normalized = browserOneClickDeviceTransportResult(result, '创建上架任务');
   if (!normalized.ok) return normalized;
@@ -1175,9 +1196,22 @@ async function patchExtensionDeviceBrowserOneClickJob(jobId, payload) {
   const result = await getByokDeviceTransport().post(
     '/api/extension-device/browser-one-click/jobs/' + encodeURIComponent(normalizedJobId),
     payload,
-    { requiredScope: 'listing:publish' },
+    { requiredScopes: ['capture:write', 'listing:publish'] },
   );
   return browserOneClickDeviceTransportResult(result, '更新上架任务');
+}
+
+async function readExtensionDeviceBrowserOneClickJob(jobId) {
+  const normalizedJobId = String(jobId || '').normalize('NFKC').trim();
+  if (!normalizedJobId || normalizedJobId.length > 200 || /[\\/]/.test(normalizedJobId)) {
+    return { ok: false, errorCode: 'invalid_job_id', error: '上架任务 ID 无效' };
+  }
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/browser-one-click/jobs/' + encodeURIComponent(normalizedJobId) + '/read',
+    {},
+    { requiredScopes: ['capture:write', 'listing:publish'] },
+  );
+  return browserOneClickDeviceTransportResult(result, '读取上架任务状态');
 }
 
 async function readExtensionDeviceWatermarkTemplates(shopId) {
@@ -1235,7 +1269,7 @@ async function readExtensionDeviceBrowserOneClickStatus() {
     authMode: 'device',
     endpoint: status.endpoint || '',
     scopes: scopes.slice(),
-    canPublish: scopes.includes('listing:publish'),
+    canPublish: scopes.includes('capture:write') && scopes.includes('listing:publish'),
   };
 }
 
@@ -1243,6 +1277,7 @@ globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK = Object.freeze({
   status: readExtensionDeviceBrowserOneClickStatus,
   create: createExtensionDeviceBrowserOneClickJob,
   patch: patchExtensionDeviceBrowserOneClickJob,
+  read: readExtensionDeviceBrowserOneClickJob,
   watermarks: readExtensionDeviceWatermarkTemplates,
 });
 
@@ -6640,7 +6675,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         connected: devicePaired,
         authMode: deviceObserved ? 'device' : (token ? 'legacy_token' : 'none'),
         scopes,
-        canPublish: devicePaired && scopes.includes('listing:publish'),
+        canPublish: devicePaired
+          && scopes.includes('capture:write')
+          && scopes.includes('listing:publish'),
         lastPush: history.length ? history[history.length - 1] : null,
       });
     }).catch((error) => {

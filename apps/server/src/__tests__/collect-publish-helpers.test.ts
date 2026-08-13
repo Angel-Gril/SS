@@ -3239,6 +3239,27 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('ignores historical browser one-click jobs when checking fallback recreate conflicts', () => {
+    const conflicts = findFallbackRecreateConflicts([{
+      id: 'shared-goods',
+      sku: '3399297127',
+      status: 'collected',
+      variants: [],
+    }], [{
+      id: 'browser-review-job',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        browserOneClickJob: true,
+        mode: 'follow-by-sku',
+        sourceItemIds: ['shared-goods'],
+        sourceSkus: ['3399297127'],
+      },
+    }]);
+
+    expect(conflicts).toEqual([]);
+  });
+
   it('does not plan fallback picture uploads for offers that were already uploaded', () => {
     const plan = planFallbackPictureUploads({
       source: 'collect-publish-fallback',

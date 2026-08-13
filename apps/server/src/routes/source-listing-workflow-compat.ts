@@ -14,6 +14,7 @@ export interface LegacySourceListingDraftPointer {
   draftVersion: number;
   revision: number;
   selectedSkuKeys?: string[];
+  snapshotId?: string;
 }
 
 export interface LegacySourceListingDraftFailure {
@@ -212,6 +213,7 @@ export function createPrismaLegacySourceListingWorkflowAdapter() {
             draftId: draft.id,
             draftVersion: draft.draftVersion,
             revision: draft.revision,
+            snapshotId: owned.sourceCaptureSnapshotId,
             selectedSkuKeys: [...(draft.selectedSkuKeys || owned.selectedSkuKeys)],
           });
         } catch (error) {
@@ -240,6 +242,7 @@ export async function resolveLegacySourceListingCompatibility(input: {
   actorUserId: string;
   shopId: string;
   platform: string;
+  deviceSessionId?: string | null;
   supplyGoodsIds: string[];
   legacyFallback?: boolean;
 }): Promise<LegacySourceListingCompatibilityResult> {
@@ -248,6 +251,7 @@ export async function resolveLegacySourceListingCompatibility(input: {
     ownerUserId: input.ownerUserId,
     shopId: input.shopId,
     platform: input.platform,
+    deviceSessionId: input.deviceSessionId || null,
   });
   if (!decision.enabled) {
     return {

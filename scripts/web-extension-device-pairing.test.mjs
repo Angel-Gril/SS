@@ -146,11 +146,16 @@ test('successful one-click reauthorization replaces stale dialog status', () => 
   );
 });
 
-test('a verified active session hydrates its exact grant without minting a new grant', () => {
+test('a verified active session hydrates its grant plus an explicit deep-link scope request without minting a new grant', () => {
   assert.match(source, /const hydratedSessionRef = useRef\(''\)/);
   assert.match(source, /status\?\.state !== 'paired'[\s\S]{0,500}hydratedSessionRef\.current === session\.id/);
   assert.match(source, /setSelectedShopIds\(session\.shopIds\.slice\(\)\)/);
-  assert.match(source, /setSelectedScopes\(session\.scopes\.slice\(\)\)/);
+  assert.match(source, /const requestedScopes = requestedScopesRef\.current/);
+  assert.match(
+    source,
+    /setSelectedScopes\(\[[\s\S]{0,100}new Set\(\[\.\.\.session\.scopes, \.\.\.requestedScopes\]\)[\s\S]{0,40}\]\)/,
+  );
+  assert.match(source, /setSelectedScopes\([\s\S]{0,180}requestedScopesRef\.current = \[\]/);
   assert.doesNotMatch(
     source,
     /useEffect\(\(\) => \{[\s\S]{0,900}(?:issuePairingCode|createPairingCode|connectExtension)\(/,

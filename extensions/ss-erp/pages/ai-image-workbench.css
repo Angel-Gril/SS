@@ -229,7 +229,7 @@ h2 {
 }
 
 .button-primary:hover:not(:disabled) {
-  background: #762b0b;
+  background: var(--brand);
 }
 
 .button-secondary {

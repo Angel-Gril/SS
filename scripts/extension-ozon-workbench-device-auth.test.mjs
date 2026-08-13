@@ -65,21 +65,41 @@ assert.doesNotMatch(watermark, /getStoredErpConnection|conn\.token|\/api\/waterm
 assert.match(watermark, /SS_ERP_EXTENSION_DEVICE_ONE_CLICK/);
 
 assert.match(serviceWorker, /SS_ERP_EXTENSION_DEVICE_ONE_CLICK\s*=\s*Object\.freeze/);
+assert.match(serviceWorker, /terminal:\s*result\.body\.terminal === true/);
+assert.match(serviceWorker, /ambiguousHttpOutcome[\s\S]*408,\s*425,\s*429[\s\S]*automaticRetryAllowed:\s*false/);
+assert.match(
+  serviceWorker,
+  /body\.outcome\s*===\s*'UNKNOWN_OUTCOME'[\s\S]*outcome:\s*'UNKNOWN_OUTCOME'[\s\S]*body\.automaticRetryAllowed\s*===\s*false[\s\S]*automaticRetryAllowed:\s*false[\s\S]*body\.requestDispatched\s*===\s*true[\s\S]*requestDispatched:\s*true/,
+  'one-click device responses should preserve bounded UNKNOWN outcome metadata',
+);
 assert.match(serviceWorker, /authMode:\s*'device'/);
 assert.match(serviceWorker, /message\.type === 'ozon-calc:erp-endpoint-get'[^]*readExtensionDeviceBrowserOneClickStatus/);
 assert.match(serviceWorker, /connected:\s*devicePaired/);
-assert.match(serviceWorker, /canPublish:\s*devicePaired\s*&&\s*scopes\.includes\('listing:publish'\)/);
+assert.match(
+  serviceWorker,
+  /canPublish:\s*devicePaired[\s\S]*scopes\.includes\('capture:write'\)[\s\S]*scopes\.includes\('listing:publish'\)/,
+);
 assert.doesNotMatch(serviceWorker, /canPublish:[^\n]+Boolean\(token\)/);
 
 assert.match(transport, /extension-device\/browser-one-click\/jobs/);
+assert.match(transport, /browserOneClickJobWritePath[\s\S]*MAX_PUBLISH_REQUEST_BYTES/);
+assert.match(transport, /browserOneClickJobWriteRequest[\s\S]*MAX_PUBLISH_RESPONSE_BYTES/);
+assert.match(transport, /browserOneClickJobReadPath/);
 assert.match(transport, /extension-device\/browser-one-click\/status\/read/);
 assert.match(transport, /extension-device\/browser-one-click\/watermark-templates/);
-assert.match(deviceRoutes, /requiredScope:[^=]+=[\s\S]*'listing:publish'/);
+assert.match(deviceRoutes, /requiredScopes:[^=]+=[\s\S]*'capture:write'[\s\S]*'listing:publish'/);
 assert.match(deviceRoutes, /app\.post\('\/status\/read'[\s\S]*deviceContext\(request,\s*reply,\s*null\)/);
-assert.match(deviceRoutes, /device\.scopes\.includes\(requiredScope\)/);
-assert.match(deviceRoutes, /deviceContext\(request,\s*reply,\s*'capture:write'\)/);
+assert.match(deviceRoutes, /requiredScopes\?\.find[\s\S]*device\.scopes![\s\S]*includes\(scope\)/);
+assert.match(deviceRoutes, /deviceContext\(request,\s*reply,\s*\['capture:write'\]\)/);
+assert.match(serviceWorker, /requiredScopes:\s*\['capture:write',\s*'listing:publish'\]/);
+assert.match(transport, /configuredRequiredScopes[\s\S]*operation\.scopes[\s\S]*includes\(scope\)/);
 assert.match(deviceRoutes, /allowedShopIds/);
 assert.match(listingRoutes, /device_publish_state_forbidden/);
+assert.match(serviceWorker, /readExtensionDeviceBrowserOneClickJob[\s\S]*\/read/);
+assert.match(background, /automaticRetryAllowed\s*===\s*false/);
+assert.match(background, /automaticRetryAllowed:\s*parsed\s*&&\s*parsed\.automaticRetryAllowed/);
+assert.match(background, /browser_payload_outcome_unknown/);
+assert.match(background, /requestedRowHashes[\s\S]*acceptedRowHashes[\s\S]*reconciled/);
 assert.match(listingRoutes, /device_authority_changed/);
 assert.match(serverEntry, /extensionDeviceBrowserOneClickRoutes/);
 assert.match(transport, /scopeExemptRequest\s*=\s*path\s*===\s*BROWSER_ONE_CLICK_STATUS_PATH/);
@@ -104,19 +124,20 @@ assert.match(
 );
 assert.match(
   background,
-  /async function\s+recordOzonWorkbenchPublishPayloadRetry[\s\S]*isOzonWorkbenchPublishPayloadTerminalError\(error\)[\s\S]*terminal:\s*true[\s\S]*lastErrorCode/,
-  'terminal device failures should be parked with an error code instead of retried forever',
+  /async function\s+recordOzonWorkbenchPublishPayloadRetry[\s\S]*isOzonWorkbenchPublishPayloadTerminalError\(error\)[\s\S]*finalizeOzonWorkbenchPublishPayloadJob\(normalized\.jobId\)[\s\S]*terminal:\s*true/,
+  'terminal device failures should consume the durable queue entry and open the ERP log instead of retrying forever',
 );
 assert.match(
   background,
-  /if \(!job\.jobId \|\| job\.terminal === true \|\| !isOzonWorkbenchPublishPayloadDue\(job, nowMs\)\)/,
-  'payload queue flush should skip parked terminal jobs after worker restart and alarm wakeups',
+  /if \(job\.terminal === true\) \{\s*await finalizeOzonWorkbenchPublishPayloadJob\(job\.jobId\);\s*continue;\s*\}/,
+  'payload queue flush should consume legacy parked terminal jobs after worker restart and alarm wakeups',
 );
 assert.match(
   background,
   /errorCode:\s*normalizeErrorCode\(error\)/,
   'payload completion should preserve the device transport error code for retry classification',
 );
+assert.match(background, /terminal:\s*result && result\.terminal === true/);
 assert.doesNotMatch(
   overlay,
   /response\.endpoint\s*&&\s*response\.hasToken\s*\?[^:]+:\s*['"]#dc2626/,

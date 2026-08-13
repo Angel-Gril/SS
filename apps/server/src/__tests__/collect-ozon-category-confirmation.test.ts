@@ -213,6 +213,50 @@ function publishItem(confirmationOverrides: Record<string, unknown> | null = {})
   } as any;
 }
 
+const exactDraftRef = {
+  supplyGoodsId: 'goods-1',
+  draftId: 'draft-1',
+  draftVersion: 2,
+  revision: 7,
+  skuKey: 'offer-1',
+};
+
+function dualReadFeatureFlags(listingStage: 'dual_read' | 'v2_only' = 'dual_read') {
+  return {
+    evaluate: vi.fn(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? {
+          enabled: true,
+          legacyAllowed: true,
+          captureStage: null,
+          listingStage,
+          reason: 'global' as const,
+          revision: 'draft-authority-1',
+        }
+      : {
+          enabled: false,
+          legacyAllowed: true,
+          captureStage: null,
+          reason: 'policy_off' as const,
+          revision: 'draft-authority-1',
+        }),
+  };
+}
+
+function exactDraftAdapter() {
+  return {
+    prepare: vi.fn(async () => ({
+      drafts: [{
+        supplyGoodsId: exactDraftRef.supplyGoodsId,
+        draftId: exactDraftRef.draftId,
+        draftVersion: exactDraftRef.draftVersion,
+        revision: exactDraftRef.revision,
+        selectedSkuKeys: [exactDraftRef.skuKey],
+      }],
+      failures: [],
+    })),
+  };
+}
+
 function publishDependencies(overrides: Partial<CollectRoutesOptions> = {}): CollectRoutesOptions {
   return dependencies({
     featureFlags: {
@@ -227,6 +271,7 @@ function publishDependencies(overrides: Partial<CollectRoutesOptions> = {}): Col
     sourceListingWorkflowAdapter: {
       prepare: vi.fn(async () => ({ drafts: [], failures: [] })),
     },
+    findBrowserOneClickReviewProtectedGoods: vi.fn(async () => []),
     ...overrides,
   });
 }
@@ -796,7 +841,11 @@ describe('collect Ozon category confirmation routes', () => {
   });
 
   describe('source publish category confirmation gate', () => {
-    async function publish(options: CollectRoutesOptions, item: ReturnType<typeof publishItem>) {
+    async function publish(
+      options: CollectRoutesOptions,
+      item: ReturnType<typeof publishItem>,
+      payloadOverrides: Record<string, unknown> = {},
+    ) {
       mocks.authUser.actorUserId = 'owner-1';
       mocks.authUser.role = 'USER';
       mocks.supplyGoodsFindMany.mockResolvedValueOnce([item]);
@@ -808,6 +857,7 @@ describe('collect Ozon category confirmation routes', () => {
           ids: [item.id],
           shopId: 'shop-1',
           source: 'source-publish-page',
+          ...payloadOverrides,
         },
       });
       await app.close();
@@ -818,6 +868,108 @@ describe('collect Ozon category confirmation routes', () => {
       expect(mocks.importBySku).not.toHaveBeenCalled();
       expect(mocks.importProducts).not.toHaveBeenCalled();
     }
+
+    it('requires exact draft refs in dual-read before constructing Ozon', async () => {
+      const response = await publish(publishDependencies({
+        featureFlags: dualReadFeatureFlags(),
+        sourceListingWorkflowAdapter: exactDraftAdapter(),
+      }), publishItem());
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'SOURCE_LISTING_DRAFT_IDENTITY_REQUIRED',
+      });
+      expect(mocks.getDescriptionCategoryAttributes).not.toHaveBeenCalled();
+      expect(mocks.decrypt).not.toHaveBeenCalled();
+      expectNoOzonImport();
+    });
+
+    it.each([
+      ['goods', { supplyGoodsId: 'goods-2' }, 'SOURCE_LISTING_DRAFT_IDENTITY_UNKNOWN_GOODS'],
+      ['draft id', { draftId: 'draft-2' }, 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH'],
+      ['draft version', { draftVersion: 3 }, 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH'],
+      ['revision', { revision: 8 }, 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH'],
+      ['SKU', { skuKey: 'offer-2' }, 'SOURCE_LISTING_DRAFT_IDENTITY_SKU_MISMATCH'],
+    ])('rejects a forged or stale prepared %s binding before Ozon', async (
+      _label,
+      overrides,
+      errorCode,
+    ) => {
+      const response = await publish(publishDependencies({
+        featureFlags: dualReadFeatureFlags(),
+        sourceListingWorkflowAdapter: exactDraftAdapter(),
+      }), publishItem(), { draftRefs: [{ ...exactDraftRef, ...overrides }] });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: 0, errorCode });
+      expect(mocks.getDescriptionCategoryAttributes).not.toHaveBeenCalled();
+      expect(mocks.decrypt).not.toHaveBeenCalled();
+      expectNoOzonImport();
+    });
+
+    it.each(['dual_read', 'v2_only'] as const)(
+      'routes an exact %s draft identity exclusively to the immutable V2 publisher',
+      async (listingStage) => {
+        const response = await publish(publishDependencies({
+          featureFlags: dualReadFeatureFlags(listingStage),
+          sourceListingWorkflowAdapter: exactDraftAdapter(),
+        }), publishItem(), { draftRefs: [exactDraftRef] });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({
+          code: 0,
+          errorCode: 'source_listing_v2_publisher_required',
+          terminal: true,
+        });
+        expect(mocks.getDescriptionCategoryAttributes).not.toHaveBeenCalled();
+        expect(mocks.decrypt).not.toHaveBeenCalled();
+        expectNoOzonImport();
+      },
+    );
+
+    it('keeps a persisted browser review handoff on the V2 publisher after rollout rollback', async () => {
+      const findProtected = vi.fn(async () => ['goods-1']);
+      const adapter = {
+        prepare: vi.fn(async () => ({ drafts: [], failures: [] })),
+      };
+      const response = await publish(publishDependencies({
+        sourceListingWorkflowAdapter: adapter,
+        findBrowserOneClickReviewProtectedGoods: findProtected,
+      }), publishItem());
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_listing_v2_publisher_required',
+        terminal: true,
+      });
+      expect(findProtected).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1',
+        shopId: 'shop-1',
+        supplyGoodsIds: ['goods-1'],
+      });
+      expect(adapter.prepare).not.toHaveBeenCalled();
+      expect(mocks.decrypt).not.toHaveBeenCalled();
+      expectNoOzonImport();
+    });
+
+    it('fails closed when persisted browser review authority cannot be checked', async () => {
+      const response = await publish(publishDependencies({
+        findBrowserOneClickReviewProtectedGoods: vi.fn(async () => {
+          throw new Error('database unavailable');
+        }),
+      }), publishItem());
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_listing_review_authority_unavailable',
+        terminal: false,
+      });
+      expect(mocks.decrypt).not.toHaveBeenCalled();
+      expectNoOzonImport();
+    });
 
     it('requires a server-projected category confirmation', async () => {
       const response = await publish(publishDependencies(), publishItem(null));
@@ -1105,7 +1257,7 @@ describe('collect Ozon category confirmation routes', () => {
       expectNoOzonImport();
     });
 
-    it('persists the main parity report when the post-observation rollout recheck blocks a shared job', async () => {
+    it('persists the main parity report when the post-observation rollout recheck blocks a shared collect job', async () => {
       let listingEvaluations = 0;
       let publisherEvaluations = 0;
       const evaluate = vi.fn(async (feature: string) => {
@@ -1143,9 +1295,8 @@ describe('collect Ozon category confirmation routes', () => {
       mocks.syncJobFindFirst.mockResolvedValueOnce({
         id: 'browser-rollout-job',
         payload: {
-          source: 'browser-one-click-listing',
-          browserOneClickJob: true,
-          entry: 'extension-workbench',
+          source: 'collect-publish',
+          entry: 'collect-page',
         },
         shop: { userId: 'owner-1' },
       });
@@ -1351,7 +1502,7 @@ describe('collect Ozon category confirmation routes', () => {
       }));
     });
 
-    it('attributes browser one-click to its converged collect observation exactly once', async () => {
+    it('rejects a browser one-click job before the legacy publisher can observe or submit it', async () => {
       const report = {
         contractVersion: 'ozon-publisher-entrypoint-parity/v1',
         status: 'MATCH',
@@ -1383,7 +1534,6 @@ describe('collect Ozon category confirmation routes', () => {
       }];
       mocks.authUser.actorUserId = 'owner-1';
       mocks.authUser.role = 'USER';
-      mocks.supplyGoodsFindMany.mockResolvedValueOnce([browserItem]);
       mocks.syncJobFindFirst.mockResolvedValueOnce({
         id: 'browser-job-1',
         payload: {
@@ -1418,16 +1568,16 @@ describe('collect Ozon category confirmation routes', () => {
       });
       await app.close();
 
-      expect(response.statusCode, response.body).toBe(200);
-      expect(observe).toHaveBeenCalledOnce();
-      expect(observe).toHaveBeenCalledWith(expect.objectContaining({
-        entrypoint: 'BROWSER_ONE_CLICK',
-        rolloutRevision: 'rollout-browser-1',
-      }));
-      expect(mocks.importProducts).toHaveBeenCalledOnce();
-      expect(mocks.syncJobUpdate.mock.calls.some(([call]) => (
-        (call as any)?.data?.payload?.publisherEntrypointParity?.status === 'MATCH'
-      ))).toBe(true);
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'browser_one_click_review_required',
+        terminal: true,
+      });
+      expect(observe).not.toHaveBeenCalled();
+      expectNoOzonImport();
+      expect(mocks.supplyGoodsFindMany).not.toHaveBeenCalled();
+      expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
       expect(mocks.syncJobCreate).not.toHaveBeenCalled();
     });
 
@@ -1469,9 +1619,8 @@ describe('collect Ozon category confirmation routes', () => {
       mocks.syncJobFindFirst.mockResolvedValueOnce({
         id: 'browser-mixed-job',
         payload: {
-          source: 'browser-one-click-listing',
-          browserOneClickJob: true,
-          entry: 'extension-workbench',
+          source: 'collect-publish',
+          entry: 'collect-page',
         },
         shop: { userId: 'owner-1' },
       });
@@ -1570,9 +1719,8 @@ describe('collect Ozon category confirmation routes', () => {
       mocks.syncJobFindFirst.mockResolvedValueOnce({
         id: 'browser-mixed-failure-job',
         payload: {
-          source: 'browser-one-click-listing',
-          browserOneClickJob: true,
-          entry: 'extension-workbench',
+          source: 'collect-publish',
+          entry: 'collect-page',
         },
         shop: { userId: 'owner-1' },
       });

@@ -2236,6 +2236,8 @@ if (isExtensionDeviceAuthEnabled()) {
       loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
     }),
     featureFlags: sourceWorkflowFeatureFlags,
+    publisherRollout: ozonPublisherEntrypointRolloutService,
+    sourceCaptureService: sourceCaptureService || undefined,
   });
   const loadExtensionCommandShop = ({ shopId, ownerUserId }: {
     shopId: string;
@@ -3121,6 +3123,7 @@ await app.register(inventoryRoutes, { prefix: '/api/inventory' });
 await app.register(listingRoutes, {
   prefix: '/api/listing',
   featureFlags: sourceWorkflowFeatureFlags,
+  sourceCaptureService: sourceCaptureService || undefined,
   publisherRollout: ozonPublisherEntrypointRolloutService,
   publisherParityObserver: sourceOzonPublisherEntrypointParityObserver,
 });

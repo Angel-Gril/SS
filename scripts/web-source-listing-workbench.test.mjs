@@ -39,13 +39,13 @@ assert.match(workbench, /history\.replaceState|router\.replace/, 'workflow and a
 for (const token of [
   'getPublisherCapability',
   'capability.enabled',
-  'capability.legacyAllowed',
   'createPublishAttempt',
   'v2AttemptStartedRef',
-  '/api/collect/publish-ozon',
 ]) {
   assert.match(workbench, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `workbench should make an explicit rollout decision via ${token}`);
 }
+assert.match(workbench, /capability\.legacyAllowed/, 'legacyAllowed may describe policy state without enabling a legacy publish action');
+assert.doesNotMatch(workbench, /\/api\/collect\/publish-ozon|draftRefs/, 'reviewed drafts must never downgrade to the mutable legacy publisher');
 assert.match(
   workbench,
   /v2AttemptStartedRef\.current[\s\S]{0,500}(?:throw|setError|return)/,
@@ -74,6 +74,16 @@ assert.match(
   /createPublishAttempt\(confirmationDraft\.id,[\s\S]{0,300}expectedRevision: confirmationDraft\.revision/,
   'V2 submission must CAS the exact revision shown in final confirmation',
 );
+const publishStart = workbench.indexOf('async function publish()');
+const publishEnd = workbench.indexOf('\n  async function refreshAttempt', publishStart);
+assert.ok(publishStart >= 0 && publishEnd > publishStart, 'workbench publish handler should be present');
+const publishHandler = workbench.slice(publishStart, publishEnd);
+assert.match(publishHandler, /if\s*\(!capability\.enabled\)[\s\S]*草稿将保持待审核/);
+assert.match(publishHandler, /sourceListingWorkflowClient\.createPublishAttempt\(/);
+assert.doesNotMatch(publishHandler, /\/api\/collect\/publish-ozon|draftRefs/);
+assert.match(workbench, /草稿保持待审核，不会降级发布/);
+assert.match(workbench, /disabled=\{!publishReady[\s\S]{0,160}\|\|\s*!capability\.enabled/);
+assert.match(workbench, /capability\?\.enabled[\s\S]{0,100}\?\s*'提交不可变 V2 任务'[\s\S]{0,100}:\s*'等待开放 V2'/);
 
 for (const token of ['exactWorkflowId={draft.id}', 'exactSnapshotId={activeHandoff.snapshotId}', 'lockedShopId={draft.shopId}', 'exactRevision={draft.revision}', 'onDraftChange={handleAttributeDraftChange}']) {
   assert.match(workbench, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `workbench should bind attributes through ${token}`);

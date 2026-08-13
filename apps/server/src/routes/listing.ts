@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -11,7 +13,6 @@ import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
 import { randomOfferIdFrom } from '../lib/randomize.js';
-import { addBrowserOneClickListingJob, appendBrowserOneClickListingRows } from '../workers/browser-one-click-listing.js';
 import {
   assertLegacySourceOzonPublishAllowed,
   sourceWorkflowFeatureFlags,
@@ -37,10 +38,17 @@ import type {
   OzonPublisherWriterEntrypoint,
 } from '../services/ozon-publisher-entrypoint-rollout.js';
 import type { OzonPublisherEntrypointParityObserver } from '../services/ozon-publisher-entrypoint-parity-shadow.js';
+import type { createSourceCaptureService } from '../services/source-capture.js';
+import {
+  BROWSER_ONE_CLICK_MAX_ITEMS,
+  BROWSER_ONE_CLICK_V2_HANDOFF_VERSION,
+  parseBrowserOneClickReviewHandoff,
+} from '../services/browser-one-click-review-handoff.js';
 
 export interface ListingRoutesOptions {
   featureFlags?: SourceWorkflowFeatureFlagEvaluator;
   sourceListingWorkflowAdapter?: LegacySourceListingWorkflowAdapter;
+  sourceCaptureService?: ReturnType<typeof createSourceCaptureService>;
   publisherRollout?: OzonPublisherEntrypointRolloutService;
   publisherParityObserver?: OzonPublisherEntrypointParityObserver;
   publisherParityTimeoutMs?: number;
@@ -49,6 +57,57 @@ export interface ListingRoutesOptions {
 export interface BrowserOneClickListingHandlersOptions {
   featureFlags: SourceWorkflowFeatureFlagEvaluator;
   sourceListingWorkflowAdapter: LegacySourceListingWorkflowAdapter;
+  sourceCaptureService?: ReturnType<typeof createSourceCaptureService>;
+  publisherRollout?: OzonPublisherEntrypointRolloutService;
+}
+
+function browserOneClickRolloutContext(
+  actor: BrowserOneClickActor,
+  shop: { id: string; platform: unknown },
+) {
+  return {
+    ownerUserId: actor.ownerUserId,
+    shopId: shop.id,
+    platform: String(shop.platform || ''),
+    deviceSessionId: actor.deviceSessionId || null,
+  };
+}
+
+async function evaluateBrowserOneClickRollout(
+  options: BrowserOneClickListingHandlersOptions,
+  actor: BrowserOneClickActor,
+  shop: { id: string; platform: unknown },
+) {
+  return options.publisherRollout?.evaluateWrite({
+    writerEntrypoint: 'COLLECT_PUBLISH_OZON',
+    originChannel: 'BROWSER_ONE_CLICK',
+    context: browserOneClickRolloutContext(actor, shop),
+  }) || null;
+}
+
+function browserOneClickV2Handoff(input: {
+  rollout: OzonPublisherEntrypointRolloutDecision | null;
+  listingRolloutRevision: string;
+  drafts: Array<Record<string, any>>;
+  failures: Array<Record<string, any>>;
+}) {
+  return {
+    contractVersion: BROWSER_ONE_CLICK_V2_HANDOFF_VERSION,
+    state: 'REVIEW_REQUIRED' as const,
+    rollout: input.rollout ? {
+      authority: input.rollout.authority,
+      effectiveStage: input.rollout.effectiveStage,
+      rolloutRevision: input.rollout.rolloutRevision,
+      gateStateVersion: input.rollout.gateStateVersion,
+      evidenceHash: input.rollout.evidenceHash,
+    } : null,
+    listingRolloutRevision: input.listingRolloutRevision,
+    drafts: input.drafts,
+    failures: input.failures.map((failure) => ({
+      supplyGoodsId: String(failure.supplyGoodsId || ''),
+      errorCode: String(failure.errorCode || 'UNKNOWN'),
+    })),
+  };
 }
 
 
@@ -77,6 +136,19 @@ function sendPublisherRolloutBlocked(
       : 'Ozon 发布入口当前不可用',
     rolloutRevision: decision.rolloutRevision,
     rolloutReason: decision.reason,
+  });
+}
+
+function sendLegacyDraftPublisherRequired(
+  reply: FastifyReply,
+  rolloutRevision: string,
+) {
+  return reply.status(409).send({
+    code: 0,
+    errorCode: 'source_listing_v2_publisher_required',
+    terminal: true,
+    msg: '来源商品草稿只能通过不可变 V2 发布器提交；当前兼容入口不会从请求载荷发布',
+    rolloutRevision,
   });
 }
 
@@ -112,6 +184,66 @@ function sourcePublishActorAllowed(
     && actor.isSubAccount !== true
     && actor.role !== 'STAFF'
     && user.disabled !== true;
+}
+
+function rejectBrowserOneClickActor(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: BrowserOneClickActor,
+): boolean {
+  if (sourcePublishActorAllowed(request, actor)) return false;
+  reply.status(403).send({
+    code: 0,
+    errorCode: 'source_publish_owner_required',
+    msg: '仅店铺所有者可创建 Ozon 审核草稿',
+  });
+  return true;
+}
+
+async function evaluateBrowserOneClickWorkflow(input: {
+  featureFlags: SourceWorkflowFeatureFlagEvaluator;
+  actor: BrowserOneClickActor;
+  shop: { id: string; platform: unknown };
+}) {
+  const context = {
+    ownerUserId: input.actor.ownerUserId,
+    shopId: input.shop.id,
+    deviceSessionId: input.actor.deviceSessionId || null,
+    platform: String(input.shop.platform || ''),
+  };
+  const [capture, listing] = await Promise.all([
+    input.featureFlags.evaluate('SOURCE_CAPTURE_V2', context),
+    input.featureFlags.evaluate('SOURCE_LISTING_WORKFLOW', context),
+  ]);
+  const captureReady = capture.enabled
+    && ['shadow_write', 'dual_read', 'v2_only'].includes(String(capture.captureStage || ''));
+  const listingReady = listing.enabled
+    && ['dual_read', 'v2_only'].includes(String(listing.listingStage || ''));
+  return {
+    capture,
+    listing,
+    ready: captureReady && listingReady,
+  };
+}
+
+function browserOneClickWorkflowUnavailable(
+  reply: FastifyReply,
+  workflow: Awaited<ReturnType<typeof evaluateBrowserOneClickWorkflow>>,
+) {
+  const unavailable = [workflow.capture, workflow.listing].some((decision) => (
+    ['policy_invalid', 'context_invalid', 'config_unavailable'].includes(decision.reason)
+  ));
+  return reply.status(unavailable ? 503 : 409).send({
+    code: 0,
+    errorCode: unavailable
+      ? 'source_workflow_rollout_unavailable'
+      : 'browser_one_click_review_workflow_required',
+    msg: unavailable
+      ? '来源商品审核策略暂不可用，请稍后重试'
+      : '浏览器一键上架已改为 ERP 草稿审核流程，当前店铺尚未开放该流程',
+    captureRolloutRevision: workflow.capture.revision,
+    listingRolloutRevision: workflow.listing.revision,
+  });
 }
 
 async function enforceLegacySourceOzonPublish(
@@ -219,12 +351,13 @@ const directOzonImportBySkuSchema = z.object({
 
 const browserOneClickJobSchema = z.object({
   shopId: z.string().min(1),
+  clientRequestId: z.string().trim().min(16).max(200).regex(/^[A-Za-z0-9_-]+$/u).optional(),
   entry: z.string().trim().optional(),
   mode: z.string().trim().optional(),
-  sourceSkus: z.array(z.union([z.string(), z.number()])).optional(),
-  productUrls: z.array(z.string().trim()).optional(),
-  rows: z.array(z.record(z.any())).optional(),
-  itemCount: z.coerce.number().int().positive().optional(),
+  sourceSkus: z.array(z.union([z.string(), z.number()])).max(BROWSER_ONE_CLICK_MAX_ITEMS).optional(),
+  productUrls: z.array(z.string().trim()).max(BROWSER_ONE_CLICK_MAX_ITEMS).optional(),
+  rows: z.array(z.record(z.any())).max(BROWSER_ONE_CLICK_MAX_ITEMS).optional(),
+  itemCount: z.coerce.number().int().positive().max(BROWSER_ONE_CLICK_MAX_ITEMS).optional(),
   watermark: z.record(z.any()).optional().nullable(),
   publish: z.record(z.any()).optional(),
   markupPct: z.coerce.number().optional(),
@@ -248,6 +381,20 @@ const browserOneClickJobPatchSchema = z.object({
   errorMessage: z.string().trim().optional().nullable(),
 });
 
+const browserOneClickEvidencePatchSchema = z.object({
+  stage: z.enum(['collecting', 'submitted', 'collect_failed']).optional(),
+  browserPayloadBatch: z.boolean().optional(),
+  browserPayloadReady: z.boolean().optional(),
+  browserPayloadBatchAt: z.string().max(100).optional(),
+  browserPayloadComplete: z.boolean().optional(),
+  browserPayloadReadyAt: z.string().max(100).optional(),
+  browserPayloadStream: z.record(z.any()).optional(),
+  browserPayloadRetrying: z.boolean().optional(),
+  browserPayloadRetryAt: z.string().max(100).optional(),
+  browserPayloadLastError: z.string().max(260).optional(),
+  rows: z.array(z.record(z.any())).max(BROWSER_ONE_CLICK_MAX_ITEMS).optional(),
+}).strict();
+
 const BROWSER_ONE_CLICK_STAGE_STALE_MS = 15 * 60 * 1000;
 const OZON_MARKING_CODE_REQUIRED_ATTR_ID = 23536;
 
@@ -255,17 +402,48 @@ function objectRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+function inputJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(',')}}`;
+}
+
 function rowSku(row: Record<string, any>): string {
   return String(row.sku || row.productId || '').trim();
 }
 
+const BROWSER_ONE_CLICK_ROW_IDENTITY_KEYS = new Set([
+  'supplyGoodsId',
+  'browserOneClickSkuGoodsIds',
+  'sourceListingDraftRefs',
+  'snapshotId',
+  'draftId',
+  'taskId',
+]);
+
+function browserOneClickEvidenceRow(value: unknown): Record<string, any> {
+  return Object.fromEntries(Object.entries(objectRecord(value))
+    .filter(([key]) => !BROWSER_ONE_CLICK_ROW_IDENTITY_KEYS.has(key)));
+}
+
 function mergeRowsBySku(existingRows: Record<string, any>[], nextRows: Record<string, any>[]): Record<string, any>[] {
   const bySku = new Map<string, Record<string, any>>();
-  for (const row of existingRows) {
+  for (const value of existingRows) {
+    const row = browserOneClickEvidenceRow(value);
     const sku = rowSku(row);
     if (sku) bySku.set(sku, row);
   }
-  for (const row of nextRows) {
+  for (const value of nextRows) {
+    const row = browserOneClickEvidenceRow(value);
     const sku = rowSku(row);
     if (sku) bySku.set(sku, row);
   }
@@ -282,45 +460,313 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
+function browserOneClickProductUrl(
+  payload: Record<string, any>,
+  sku: string,
+  row: Record<string, any>,
+): string {
+  const sourceSkus = stringList(payload.sourceSkus);
+  const productUrls = Array.isArray(payload.productUrls)
+    ? payload.productUrls.map((url) => String(url || '').trim())
+    : [];
+  const index = sourceSkus.indexOf(sku);
+  return String(row.sourceUrl || (index >= 0 ? productUrls[index] : '') || '').trim();
+}
+
 function positiveNumber(value: unknown): number | null {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : null;
 }
 
-function hasImage(row: Record<string, any>): boolean {
-  const images = Array.isArray(row.images) ? row.images : [row.image, row.img, row.picture];
-  return images.some((image) => String(image || '').trim());
+function browserOneClickExpectedSkus(payload: Record<string, any>): string[] {
+  return uniqueStrings(stringList(payload.sourceSkus));
 }
 
-function rowHasPublishCategory(row: Record<string, any>, publish: Record<string, any>): boolean {
-  const categoryId = positiveNumber(publish.categoryId)
-    ?? positiveNumber(row.descriptionCategoryId)
-    ?? positiveNumber(row.description_category_id)
-    ?? positiveNumber(row.categoryId)
-    ?? positiveNumber(row.category3Id);
-  const typeId = positiveNumber(publish.typeId)
-    ?? positiveNumber(row.typeId)
-    ?? positiveNumber(row.descriptionTypeId)
-    ?? positiveNumber(row.description_type_id);
-  return !!(categoryId && typeId);
-}
-
-function hasRecoverableBrowserPayloadRows(payload: Record<string, any>): boolean {
-  const sourceSkus = stringList(payload.sourceSkus);
-  if (!sourceSkus.length) return false;
-  const rows = Array.isArray(payload.rows) ? payload.rows.map(objectRecord) : [];
-  const rowEntries: Array<[string, Record<string, any>]> = [];
+function browserOneClickRowBySku(rows: Record<string, any>[]) {
+  const bySku = new Map<string, Record<string, any>>();
+  const duplicates = new Set<string>();
   for (const row of rows) {
     const sku = rowSku(row);
-    if (sku) rowEntries.push([sku, row]);
+    if (!sku) continue;
+    if (bySku.has(sku)) duplicates.add(sku);
+    bySku.set(sku, row);
   }
-  const rowBySku = new Map<string, Record<string, any>>(rowEntries);
+  return { bySku, duplicates: [...duplicates] };
+}
+
+function browserOneClickCaptureItem(
+  sku: string,
+  row: Record<string, any>,
+  payload: Record<string, any>,
+): Record<string, unknown> {
   const publish = objectRecord(payload.publish);
-  return sourceSkus.every((sku) => {
-    const row = rowBySku.get(sku);
-    if (!row) return false;
-    const title = String(row.title || row.name || '').trim();
-    return !!title && hasImage(row) && rowHasPublishCategory(row, publish);
+  const sourceUrl = browserOneClickProductUrl(payload, sku, row)
+    || `https://www.ozon.ru/product/${encodeURIComponent(sku)}/`;
+  const images = Array.isArray(row.images)
+    ? row.images
+    : [row.image, row.img, row.picture];
+  const cnyPrice = positiveNumber(objectRecord(publish.costs)[sku])
+    ?? positiveNumber(row.costCny)
+    ?? positiveNumber(row.priceCny)
+    ?? (String(row.currency || '').trim().toUpperCase() === 'CNY'
+      ? positiveNumber(row.price) : null);
+  const candidateVariants = Array.isArray(row.variants) ? row.variants.map(objectRecord) : [];
+  const selectedVariant = candidateVariants.find((variant) => [
+    variant.sku,
+    variant.skuId,
+    variant.sourceSkuId,
+    variant.productId,
+    variant.id,
+  ].some((value) => String(value || '').trim() === sku)) || objectRecord(row.selectedSku);
+  const variants = [{
+    ...selectedVariant,
+    sku,
+    price: cnyPrice,
+    stock: Number.isFinite(Number(selectedVariant.stock ?? row.stock))
+      ? Math.max(0, Math.floor(Number(selectedVariant.stock ?? row.stock)))
+      : null,
+    attrs: objectRecord(selectedVariant.attrs || selectedVariant.attributes
+      || row.selectedSku?.attrs || row.attrs || row.attributes),
+  }];
+  return {
+    ...row,
+    sourcePlatform: 'ozon',
+    sourceProductId: sku,
+    sourceUrl,
+    sku,
+    title: String(row.title || row.name || `Ozon SKU ${sku}`).trim(),
+    sourceTitleRaw: String(row.title || row.name || `Ozon SKU ${sku}`).trim(),
+    images: images.map((image) => String(image || '').trim()).filter(Boolean),
+    variants,
+    currency: cnyPrice == null
+      ? String(row.currency || row.pagePriceCurrency || row.priceCurrency || 'RUB').trim().toUpperCase()
+      : 'CNY',
+    price: cnyPrice,
+    sourceCategoryId: row.sourceCategoryId ?? row.categoryId ?? row.descriptionCategoryId,
+    categoryName: row.categoryName ?? row.categoryPath,
+    weightG: row.weightG ?? row.weightGrams ?? row.grossWeightGrams ?? row.weight,
+    lengthMm: row.lengthMm ?? row.depth ?? row.length,
+    widthMm: row.widthMm ?? row.width,
+    heightMm: row.heightMm ?? row.height,
+  };
+}
+
+const BROWSER_ONE_CLICK_EVIDENCE_PAYLOAD_KEYS = new Set([
+  'stage',
+  'browserPayloadBatch',
+  'browserPayloadReady',
+  'browserPayloadBatchAt',
+  'browserPayloadComplete',
+  'browserPayloadReadyAt',
+  'browserPayloadStream',
+  'browserPayloadRetrying',
+  'browserPayloadRetryAt',
+  'browserPayloadLastError',
+  'rows',
+]);
+
+function browserOneClickEvidencePayload(value: unknown): Record<string, any> {
+  const payload = objectRecord(value);
+  return Object.fromEntries(Object.entries(payload)
+    .filter(([key]) => BROWSER_ONE_CLICK_EVIDENCE_PAYLOAD_KEYS.has(key)));
+}
+
+function browserOneClickPatchBoundaryError(
+  data: z.infer<typeof browserOneClickJobPatchSchema>,
+): 'forbidden' | 'too_many_items' | null {
+  if (data.status === 'PENDING' || data.status === 'SUCCESS' || 'result' in data) {
+    return 'forbidden';
+  }
+  const payload = objectRecord(data.payload);
+  if (Array.isArray(payload.rows) && payload.rows.length > BROWSER_ONE_CLICK_MAX_ITEMS) {
+    return 'too_many_items';
+  }
+  return browserOneClickEvidencePatchSchema.safeParse(payload).success ? null : 'forbidden';
+}
+
+function browserOneClickPayloadRevision(payload: Record<string, any>): number | null {
+  const revision = Number(payload.browserPayloadRevision);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+}
+
+export interface BrowserOneClickListingJobReceipt {
+  jobId: string;
+  status: string;
+  stage: string;
+  browserPayloadRevision: number | null;
+  acceptedSkus: string[];
+  acceptedRowHashes: Record<string, string>;
+  handoff?: NonNullable<ReturnType<typeof parseBrowserOneClickReviewHandoff>>;
+}
+
+function browserOneClickListingJobReceipt(job: {
+  id: string;
+  status: string;
+  payload: unknown;
+}): BrowserOneClickListingJobReceipt {
+  const payload = objectRecord(job.payload);
+  const acceptedSkus = uniqueStrings(
+    (Array.isArray(payload.rows) ? payload.rows : [])
+      .map((row) => rowSku(objectRecord(row))),
+  );
+  const acceptedRowHashes = Object.fromEntries(
+    (Array.isArray(payload.rows) ? payload.rows : [])
+      .map((value) => browserOneClickEvidenceRow(value))
+      .map((row) => {
+        const sku = rowSku(row);
+        return sku
+          ? [sku, createHash('sha256').update(canonicalJson(row)).digest('hex')]
+          : null;
+      })
+      .filter((entry): entry is [string, string] => Boolean(entry)),
+  );
+  const handoff = parseBrowserOneClickReviewHandoff(
+    payload.browserOneClickPublishHandoff,
+  );
+  return {
+    jobId: job.id,
+    status: String(job.status || ''),
+    stage: String(payload.stage || 'unknown').trim(),
+    browserPayloadRevision: browserOneClickPayloadRevision(payload),
+    acceptedSkus,
+    acceptedRowHashes,
+    ...(handoff ? { handoff } : {}),
+  };
+}
+
+async function persistBrowserOneClickPayload(input: {
+  job: { id: string; status: string; finishedAt?: Date | null };
+  expectedRevision: number;
+  payload: Record<string, any>;
+  status: 'RUNNING' | 'FAILED';
+  errorMessage: string | null;
+  finishedAt?: Date;
+}) {
+  const payload = {
+    ...input.payload,
+    browserPayloadRevision: input.expectedRevision + 1,
+  };
+  const updated = await prisma.syncJob.updateMany({
+    where: {
+      id: input.job.id,
+      status: input.job.status as any,
+      payload: {
+        path: ['browserPayloadRevision'],
+        equals: input.expectedRevision,
+      } as any,
+    },
+    data: {
+      status: input.status,
+      payload: inputJson(payload),
+      errorMessage: input.errorMessage,
+      ...(input.finishedAt ? { finishedAt: input.finishedAt } : {}),
+    },
+  });
+  if (!updated || updated.count !== 1) return null;
+  return {
+    id: input.job.id,
+    status: input.status,
+    finishedAt: input.finishedAt || input.job.finishedAt || null,
+    payload,
+  };
+}
+
+async function persistBrowserOneClickTerminalFailure(input: {
+  job: { id: string; status: string; finishedAt?: Date | null };
+  previousPayload: Record<string, any>;
+  errorCode: string;
+  errorMessage: string;
+  stage: 'collect_failed' | 'review_handoff_failed';
+}) {
+  const failedAt = new Date();
+  const expectedRevision = browserOneClickPayloadRevision(input.previousPayload);
+  const payload = {
+    ...input.previousPayload,
+    stage: input.stage,
+    browserOneClickTerminalFailure: {
+      errorCode: input.errorCode,
+      failedAt: failedAt.toISOString(),
+    },
+    publishOutcome: {
+      state: 'FAILED',
+      doNotRetry: true,
+      reason: input.errorCode,
+      observedAt: failedAt.toISOString(),
+    },
+    ...(input.stage === 'review_handoff_failed' ? {
+      browserOneClickReviewFailure: {
+        errorCode: input.errorCode,
+        failures: [{ errorCode: input.errorCode }],
+        missingSkus: [],
+        unknownSkus: [],
+        duplicateSkus: [],
+      },
+    } : {}),
+  };
+  if (expectedRevision != null) {
+    return persistBrowserOneClickPayload({
+      job: input.job,
+      expectedRevision,
+      payload,
+      status: 'FAILED',
+      errorMessage: input.errorMessage,
+      finishedAt: failedAt,
+    });
+  }
+
+  const terminalPayload = { ...payload, browserPayloadRevision: 0 };
+  const updated = await prisma.syncJob.updateMany({
+    where: {
+      id: input.job.id,
+      status: input.job.status as any,
+      payload: { equals: inputJson(input.previousPayload) } as any,
+    },
+    data: {
+      status: 'FAILED',
+      payload: inputJson(terminalPayload),
+      errorMessage: input.errorMessage,
+      finishedAt: failedAt,
+    },
+  });
+  if (!updated || updated.count !== 1) return null;
+  return {
+    id: input.job.id,
+    status: 'FAILED' as const,
+    finishedAt: failedAt,
+    payload: terminalPayload,
+  };
+}
+
+async function sendBrowserOneClickTerminalFailure(input: {
+  reply: FastifyReply;
+  job: { id: string; status: string; finishedAt?: Date | null };
+  previousPayload: Record<string, any>;
+  errorCode: string;
+  message: string;
+  stage: 'collect_failed' | 'review_handoff_failed';
+  statusCode: 404 | 409;
+}) {
+  const updated = await persistBrowserOneClickTerminalFailure({
+    job: input.job,
+    previousPayload: input.previousPayload,
+    errorCode: input.errorCode,
+    errorMessage: `${input.errorCode}: ${input.message}`.slice(0, 260),
+    stage: input.stage,
+  });
+  if (!updated) {
+    return input.reply.status(409).send({
+      code: 0,
+      errorCode: 'browser_payload_conflict',
+      terminal: false,
+      msg: '任务状态已被另一个请求更新，请重试以读取最新状态',
+    });
+  }
+  return input.reply.status(input.statusCode).send({
+    code: 0,
+    errorCode: input.errorCode,
+    terminal: true,
+    msg: input.message,
+    data: browserOneClickListingJobReceipt(updated),
   });
 }
 
@@ -909,6 +1355,22 @@ export async function createBrowserOneClickListingJobForActor(
       msg: parsed.error.issues[0]?.message ?? '参数错误',
     });
   }
+  if (actor.deviceSessionId && !parsed.data.clientRequestId) {
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_idempotency_key_required',
+      terminal: true,
+      msg: '设备创建一键上架任务必须提供幂等请求键',
+    });
+  }
+  if (actor.deviceSessionId && parsed.data.rows?.length) {
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_initial_rows_forbidden',
+      terminal: true,
+      msg: '设备必须在任务创建后逐批补全商品证据',
+    });
+  }
   const { shopId } = parsed.data;
   if (!browserOneClickActorShopAllowed(actor, shopId)) {
     return reply.status(404).send({
@@ -924,34 +1386,52 @@ export async function createBrowserOneClickListingJobForActor(
   if (shop.platform !== 'OZON') {
     return reply.send({ code: 0, msg: '暂只支持 OZON 一键上架任务' });
   }
-  if (await enforceLegacySourceOzonPublish(
-    request,
-    reply,
-    shop,
-    options.featureFlags,
+  if (rejectBrowserOneClickActor(request, reply, actor)) return reply;
+  if (!options.sourceCaptureService) {
+    return reply.status(503).send({
+      code: 0,
+      errorCode: 'source_capture_adapter_unavailable',
+      msg: 'ERP 来源商品捕获服务暂不可用',
+    });
+  }
+  const workflow = await evaluateBrowserOneClickWorkflow({
+    featureFlags: options.featureFlags,
     actor,
-  )) return reply;
+    shop,
+  });
+  if (!workflow.ready) return browserOneClickWorkflowUnavailable(reply, workflow);
+  const initialRollout = await evaluateBrowserOneClickRollout(options, actor, shop);
 
   const sourceSkus = (parsed.data.sourceSkus || [])
-    .map((sku) => String(sku || '').trim())
-    .filter(Boolean);
+    .map((sku) => String(sku ?? '').trim());
   const productUrls = (parsed.data.productUrls || [])
-    .map((url) => String(url || '').trim())
-    .filter(Boolean);
-  const rows = Array.isArray(parsed.data.rows) ? parsed.data.rows : [];
-  const sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
-    featureFlags: options.featureFlags,
-    adapter: options.sourceListingWorkflowAdapter,
-    ownerUserId: actor.ownerUserId,
-    actorUserId: actor.actorUserId,
-    shopId,
-    platform: String(shop.platform || ''),
-    supplyGoodsIds: uniqueStrings(rows.flatMap((row) => [
-      row.supplyGoodsId,
-      row.goodsId,
-    ])),
-    legacyFallback: parsed.data.legacyWorkflowFallback,
-  });
+    .map((url) => String(url || '').trim());
+  if (!sourceSkus.length
+    || sourceSkus.some((sku) => !sku)
+    || new Set(sourceSkus).size !== sourceSkus.length) {
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_expected_skus_invalid',
+      msg: '一键上架必须提供唯一且非空的 SKU 列表',
+    });
+  }
+  if (productUrls.length > 0 && productUrls.length !== sourceSkus.length) {
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_product_urls_mismatch',
+      msg: '商品链接数量必须与 SKU 列表一致，或完全省略链接列表',
+    });
+  }
+  if (parsed.data.itemCount !== undefined && parsed.data.itemCount !== sourceSkus.length) {
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_item_count_mismatch',
+      msg: '商品数量与 SKU 列表不一致',
+    });
+  }
+  const rows = Array.isArray(parsed.data.rows)
+    ? parsed.data.rows.map(browserOneClickEvidenceRow)
+    : [];
   const publish = {
     ...objectRecord(parsed.data.publish),
     ...(parsed.data.markupPct !== undefined ? { markupPct: parsed.data.markupPct } : {}),
@@ -968,24 +1448,28 @@ export async function createBrowserOneClickListingJobForActor(
       ? { logisticsFeeCny: parsed.data.logisticsFeeCny } : {}),
   };
   const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
-  const deferStart = actor.deviceSessionId ? true : parsed.data.deferStart === true;
-  const draftRefs = sourceListingCompatibility.drafts.flatMap((draft) => {
-    const row = rows.find((candidate) => (
-      String(candidate.supplyGoodsId || candidate.goodsId || '').trim()
-        === draft.supplyGoodsId
-    ));
-    const skuKey = row ? rowSku(row) : '';
-    return skuKey && draft.selectedSkuKeys?.includes(skuKey) ? [{
-      supplyGoodsId: draft.supplyGoodsId,
-      draftId: draft.draftId,
-      draftVersion: draft.draftVersion,
-      revision: draft.revision,
-      skuKey,
-    }] : [];
-  });
+  const browserOneClickRequestFingerprint = createHash('sha256').update(canonicalJson({
+    ownerUserId: actor.ownerUserId,
+    deviceSessionId: actor.deviceSessionId || null,
+    shopId,
+    entry: parsed.data.entry || 'extension-workbench',
+    mode: parsed.data.mode || 'clone',
+    sourceSkus,
+    productUrls,
+    rows,
+    itemCount,
+    publish,
+    watermark: parsed.data.watermark || null,
+    deferStart: true,
+  })).digest('hex');
   const payload: Record<string, any> = {
     source: 'browser-one-click-listing',
-    stage: deferStart ? 'preparing_browser_data' : 'submitted',
+    ...(parsed.data.clientRequestId ? { clientRequestId: parsed.data.clientRequestId } : {}),
+    ...(parsed.data.clientRequestId
+      ? { browserOneClickRequestFingerprint }
+      : {}),
+    browserOneClickOwnerUserId: actor.ownerUserId,
+    stage: 'preparing_browser_data',
     entry: parsed.data.entry || 'extension-workbench',
     mode: parsed.data.mode || 'clone',
     itemCount,
@@ -993,34 +1477,166 @@ export async function createBrowserOneClickListingJobForActor(
     productUrls,
     rows,
     publish,
-    browserPayloadReady: !deferStart,
+    browserPayloadReady: false,
+    browserPayloadComplete: false,
+    browserPayloadRevision: 0,
     submittedAt: new Date().toISOString(),
-    sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
-    sourceListingDraftRefs: draftRefs,
+    browserOneClickWorkflow: {
+      captureStage: workflow.capture.captureStage,
+      captureRolloutRevision: workflow.capture.revision,
+      listingStage: workflow.listing.listingStage,
+      listingRolloutRevision: workflow.listing.revision,
+      publisherObservation: initialRollout ? {
+        authority: initialRollout.authority,
+        effectiveStage: initialRollout.effectiveStage,
+        rolloutRevision: initialRollout.rolloutRevision,
+        gateStateVersion: initialRollout.gateStateVersion,
+        evidenceHash: initialRollout.evidenceHash,
+      } : null,
+    },
     ...(actor.deviceSessionId
       ? { extensionDeviceSessionId: actor.deviceSessionId }
       : {}),
   };
   if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
 
-  const job = await prisma.syncJob.create({
-    data: {
-      shopId,
-      type: 'PRODUCT_PUSH',
-      status: 'RUNNING',
-      startedAt: new Date(),
-      payload,
-    },
-    select: { id: true },
-  });
-  if (!deferStart) await addBrowserOneClickListingJob(job.id);
-
+  const createJob = async (client: typeof prisma) => {
+    if (parsed.data.clientRequestId) {
+      const existing = await client.syncJob.findFirst({
+        where: {
+          type: 'PRODUCT_PUSH',
+          shop: { userId: actor.ownerUserId },
+          payload: { path: ['clientRequestId'], equals: parsed.data.clientRequestId } as any,
+        },
+        select: { id: true, payload: true, status: true },
+      });
+      const existingPayload = objectRecord(existing?.payload);
+      if (existing
+        && existingPayload.browserOneClickOwnerUserId === actor.ownerUserId
+        && existingPayload.browserOneClickRequestFingerprint === browserOneClickRequestFingerprint
+        && String(existingPayload.extensionDeviceSessionId || '') === String(actor.deviceSessionId || '')) {
+        return { ...existing, idempotent: true };
+      }
+      if (existing) {
+        return null;
+      }
+    }
+    const created = await client.syncJob.create({
+      data: {
+        shopId,
+        type: 'PRODUCT_PUSH',
+        status: 'RUNNING',
+        startedAt: new Date(),
+        payload,
+      },
+      select: { id: true, payload: true, status: true },
+    });
+    return { ...created, idempotent: false };
+  };
+  let job: { id: string; idempotent: boolean } | null = null;
+  if (parsed.data.clientRequestId) {
+    if (typeof (prisma as any).$transaction !== 'function') {
+      return reply.status(503).send({
+        code: 0,
+        errorCode: 'browser_one_click_idempotency_unavailable',
+        terminal: false,
+        msg: 'ERP 暂时无法保证任务幂等创建，请稍后重试',
+      });
+    }
+    try {
+      job = await (prisma as any).$transaction(async (tx: typeof prisma) => {
+        if (typeof (tx as any).$queryRaw !== 'function') {
+          throw Object.assign(new Error('Browser one-click idempotency lock is unavailable'), {
+            code: 'browser_one_click_idempotency_unavailable',
+          });
+        }
+        await (tx as any).$queryRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${actor.ownerUserId}:${parsed.data.clientRequestId}`}, 0))`,
+        );
+        return createJob(tx);
+      });
+    } catch (error: any) {
+      if (error?.code === 'browser_one_click_idempotency_unavailable') {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'browser_one_click_idempotency_unavailable',
+          terminal: false,
+          msg: 'ERP 暂时无法保证任务幂等创建，请稍后重试',
+        });
+      }
+      throw error;
+    }
+  } else {
+    job = await createJob(prisma);
+  }
+  if (!job) {
+    return reply.status(409).send({
+      code: 0,
+      errorCode: 'browser_one_click_idempotency_conflict',
+      terminal: true,
+      msg: '请求键已被其他店铺或设备占用，请重新发起任务',
+    });
+  }
   return reply.send({
     code: 1,
-    msg: deferStart
-      ? '上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据'
-      : '上架任务已提交到 ERP 上架日志，后台队列正在执行',
-    data: { jobId: job.id, queued: !deferStart, deferred: deferStart },
+    msg: job.idempotent
+      ? '已恢复已有浏览器一键上架任务，浏览器正在补全商品数据'
+      : '上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据',
+    data: {
+      jobId: job.id,
+      queued: false,
+      deferred: true,
+      idempotent: job.idempotent,
+    },
+  });
+}
+
+export async function readBrowserOneClickListingJobForActor(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: BrowserOneClickActor,
+) {
+  const { id } = request.params as { id: string };
+  if (!actor.deviceSessionId || !actor.allowedShopIds?.length) {
+    return reply.status(404).send({ code: 0, msg: '任务不存在' });
+  }
+  const job = await prisma.syncJob.findFirst({
+    where: {
+      id,
+      type: 'PRODUCT_PUSH',
+      shopId: { in: [...actor.allowedShopIds] },
+      shop: { userId: actor.ownerUserId },
+      AND: [
+        {
+          payload: {
+            path: ['source'],
+            equals: 'browser-one-click-listing',
+          } as any,
+        },
+        {
+          payload: {
+            path: ['extensionDeviceSessionId'],
+            equals: actor.deviceSessionId,
+          } as any,
+        },
+      ],
+    },
+    include: { shop: { select: { id: true, userId: true, platform: true } } },
+  });
+  if (!job
+    || !browserOneClickActorOwnsJob(actor, job)
+    || !browserOneClickActorShopAllowed(actor, job.shop.id)) {
+    return reply.status(404).send({ code: 0, msg: '任务不存在' });
+  }
+  const payload = objectRecord(job.payload);
+  if (payload.source !== 'browser-one-click-listing'
+    && payload.browserOneClickJob !== true) {
+    return reply.status(404).send({ code: 0, msg: '任务不存在' });
+  }
+  return reply.send({
+    code: 1,
+    msg: 'ok',
+    data: browserOneClickListingJobReceipt(job),
   });
 }
 
@@ -1045,126 +1661,144 @@ export async function patchBrowserOneClickListingJobForActor(
   if (!job || !browserOneClickActorOwnsJob(actor, job)) {
     return reply.status(404).send({ code: 0, msg: '任务不存在' });
   }
+  const previousPayload = objectRecord(job.payload);
+  if (previousPayload.source !== 'browser-one-click-listing'
+    && previousPayload.browserOneClickJob !== true) {
+    return reply.status(404).send({ code: 0, msg: '任务不存在' });
+  }
   if (!browserOneClickActorShopAllowed(actor, job.shop.id)) {
-    return reply.status(404).send({
-      code: 0,
+    return sendBrowserOneClickTerminalFailure({
+      reply,
+      job,
+      previousPayload,
       errorCode: 'device_authority_changed',
-      msg: '设备的店铺授权已变更，请重新授权后再试',
+      message: '设备的店铺授权已变更，请重新授权后再试',
+      stage: 'collect_failed',
+      statusCode: 404,
     });
   }
+  if (rejectBrowserOneClickActor(request, reply, actor)) return reply;
 
-  const previousPayload = objectRecord(job.payload);
-
+  const authoritativeHandoff = parseBrowserOneClickReviewHandoff(
+    previousPayload.browserOneClickPublishHandoff,
+  );
+  if ((previousPayload.browserOneClickPublishHandoff || previousPayload.stage === 'review_required')
+    && !authoritativeHandoff) {
+    return sendBrowserOneClickTerminalFailure({
+      reply,
+      job,
+      previousPayload,
+      errorCode: 'browser_one_click_handoff_invalid',
+      message: 'ERP 审核草稿交接数据无效，任务已停止且不会接受浏览器更新',
+      stage: 'review_handoff_failed',
+      statusCode: 409,
+    });
+  }
+  const patchBoundaryError = browserOneClickPatchBoundaryError(parsed.data);
+  if (patchBoundaryError) {
+    const errorCode = patchBoundaryError === 'too_many_items'
+      ? 'browser_one_click_item_limit_exceeded'
+      : actor.deviceSessionId
+        ? 'device_publish_state_forbidden'
+        : 'browser_one_click_patch_forbidden';
+    const message = patchBoundaryError === 'too_many_items'
+      ? `每个一键上架任务最多包含 ${BROWSER_ONE_CLICK_MAX_ITEMS} 个商品`
+      : '浏览器只能补全商品证据，发布终态、结果和审核交接由 ERP 服务端写入';
+    if (actor.deviceSessionId) {
+      return sendBrowserOneClickTerminalFailure({
+        reply,
+        job,
+        previousPayload,
+        errorCode,
+        message,
+        stage: 'collect_failed',
+        statusCode: 409,
+      });
+    }
+    return reply.status(400).send({
+      code: 0,
+      errorCode,
+      terminal: false,
+      msg: message,
+    });
+  }
+  if (authoritativeHandoff
+    || previousPayload.stage === 'review_handoff_failed'
+    || job.status === 'FAILED'
+    || job.status === 'SUCCESS') {
+    return reply.send({
+      code: 1,
+      msg: '任务已完成浏览器数据交接，忽略迟到更新',
+      data: browserOneClickListingJobReceipt(job),
+    });
+  }
   if (actor.deviceSessionId) {
-    const allowedPayloadKeys = new Set([
-      'stage',
-      'browserPayloadBatch',
-      'browserPayloadReady',
-      'browserPayloadBatchAt',
-      'browserPayloadComplete',
-      'browserPayloadReadyAt',
-      'browserPayloadStream',
-      'browserPayloadRetrying',
-      'browserPayloadRetryAt',
-      'browserPayloadLastError',
-      'extensionDeviceSessionId',
-      'rows',
-    ]);
-    const allowedStages = new Set([
-      'collecting',
-      'submitted',
-      'collect_failed',
-    ]);
-    const requestedPayload = objectRecord(parsed.data.payload);
-    const forbiddenKey = Object.keys(requestedPayload).find((key) => !allowedPayloadKeys.has(key));
-    const requestedStage = String(requestedPayload.stage || '').trim();
-    if (forbiddenKey
-      || (requestedStage && !allowedStages.has(requestedStage))
-      || parsed.data.status === 'SUCCESS'
-      || 'result' in parsed.data) {
-      return reply.status(400).send({
-        code: 0,
-        errorCode: 'device_publish_state_forbidden',
-        msg: '设备只能补全商品数据，发布终态和结果由 ERP 服务端写入',
-      });
-    }
-    if (parsed.data.status && !['RUNNING', 'FAILED'].includes(parsed.data.status)) {
-      return reply.status(400).send({
-        code: 0,
-        errorCode: 'device_publish_state_forbidden',
-        msg: '设备只能更新运行中或失败状态',
-      });
-    }
     if (previousPayload.browserQueueStartedAt) {
       return reply.send({
         code: 1,
         msg: 'ok',
-        data: {
-          id: job.id,
-          status: job.status,
-          finishedAt: job.finishedAt,
-          payload: previousPayload,
-        },
+        data: browserOneClickListingJobReceipt(job),
       });
     }
   }
 
-  const nextStatus = parsed.data.status || job.status;
-  const patchPayload = objectRecord(parsed.data.payload);
-  let ingestResult: Awaited<ReturnType<typeof appendBrowserOneClickListingRows>> | null = null;
-  if (previousPayload.source === 'browser-one-click-listing'
-    && patchPayload.browserPayloadBatch === true
-    && Array.isArray(patchPayload.rows)
-    && patchPayload.rows.length
-    && nextStatus !== 'FAILED') {
-    ingestResult = await appendBrowserOneClickListingRows(
-      job.id,
-      patchPayload.rows.map(objectRecord),
-    );
-  }
-  const shouldStartDeferredJob = previousPayload.source === 'browser-one-click-listing'
-    && previousPayload.browserPayloadReady === false
-    && patchPayload.browserPayloadReady === true
-    && nextStatus !== 'FAILED';
-  const previousRows = Array.isArray(previousPayload.rows)
-    ? previousPayload.rows.map(objectRecord) : [];
-  const patchRows = Array.isArray(patchPayload.rows)
-    ? patchPayload.rows.map(objectRecord) : [];
-  const mergedRows = ingestResult
-    ? ingestResult.rows
-    : (patchRows.length ? mergeRowsBySku(previousRows, patchRows) : previousRows);
-  const mergedSupplyGoodsIds = ingestResult
-    ? ingestResult.supplyGoodsIds
-    : uniqueStrings([
-      ...(Array.isArray(previousPayload.supplyGoodsIds)
-        ? previousPayload.supplyGoodsIds : []),
-      ...(Array.isArray(patchPayload.supplyGoodsIds)
-        ? patchPayload.supplyGoodsIds : []),
-    ]);
-  const mergedSkuGoodsIds = ingestResult
-    ? ingestResult.skuGoodsIds
-    : {
-        ...objectRecord(previousPayload.browserOneClickSkuGoodsIds),
-        ...objectRecord(patchPayload.browserOneClickSkuGoodsIds),
-      };
-  let sourceListingCompatibility: LegacySourceListingCompatibilityResult | null = null;
-  if (previousPayload.source === 'browser-one-click-listing'
-    && (mergedSupplyGoodsIds.length
-      || shouldStartDeferredJob
-      || (nextStatus === 'FAILED' && mergedRows.length))) {
-    sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
-      featureFlags: options.featureFlags,
-      adapter: options.sourceListingWorkflowAdapter,
-      ownerUserId: actor.ownerUserId,
-      actorUserId: actor.actorUserId,
-      shopId: job.shop.id,
-      platform: String(job.shop.platform || ''),
-      supplyGoodsIds: mergedSupplyGoodsIds,
-      legacyFallback: patchPayload.legacyWorkflowFallback === true
-        || objectRecord(previousPayload.sourceListingWorkflow).legacyFallback === true,
+  if (previousPayload.browserQueueStartedAt
+    || objectRecord(previousPayload.publishOutcome).doNotRetry === true) {
+    return reply.send({
+      code: 1,
+      msg: '任务已进入终态，忽略迟到更新',
+      data: browserOneClickListingJobReceipt(job),
     });
   }
-  const basePayload = {
+  const previousRevision = browserOneClickPayloadRevision(previousPayload);
+  if (previousRevision == null) {
+    return sendBrowserOneClickTerminalFailure({
+      reply,
+      job,
+      previousPayload,
+      errorCode: 'browser_payload_revision_required',
+      message: '旧版一键上架任务缺少并发版本，任务已停止且不会自动重试',
+      stage: 'review_handoff_failed',
+      statusCode: 409,
+    });
+  }
+
+  const nextStatus = parsed.data.status || job.status;
+  const patchPayload = browserOneClickEvidencePayload(parsed.data.payload);
+  const shouldFinalizeDeferredJob = previousPayload.source === 'browser-one-click-listing'
+    && patchPayload.browserPayloadReady === true
+    && patchPayload.browserPayloadComplete === true
+    && nextStatus !== 'FAILED';
+  const previousRows = Array.isArray(previousPayload.rows)
+    ? previousPayload.rows.map(browserOneClickEvidenceRow) : [];
+  const patchRows = Array.isArray(patchPayload.rows)
+    ? patchPayload.rows.map(browserOneClickEvidenceRow) : [];
+  const mergedRows = patchRows.length ? mergeRowsBySku(previousRows, patchRows) : previousRows;
+  if (mergedRows.length > BROWSER_ONE_CLICK_MAX_ITEMS) {
+    if (actor.deviceSessionId) {
+      return sendBrowserOneClickTerminalFailure({
+        reply,
+        job,
+        previousPayload,
+        errorCode: 'browser_one_click_item_limit_exceeded',
+        message: `每个一键上架任务最多包含 ${BROWSER_ONE_CLICK_MAX_ITEMS} 个商品`,
+        stage: 'collect_failed',
+        statusCode: 409,
+      });
+    }
+    return reply.status(400).send({
+      code: 0,
+      errorCode: 'browser_one_click_item_limit_exceeded',
+      terminal: false,
+      msg: `每个一键上架任务最多包含 ${BROWSER_ONE_CLICK_MAX_ITEMS} 个商品`,
+    });
+  }
+  let mergedSupplyGoodsIds = uniqueStrings(
+    Array.isArray(previousPayload.supplyGoodsIds) ? previousPayload.supplyGoodsIds : [],
+  );
+  let mergedSkuGoodsIds = { ...objectRecord(previousPayload.browserOneClickSkuGoodsIds) };
+  let sourceListingCompatibility: LegacySourceListingCompatibilityResult | null = null;
+  const basePayload: Record<string, any> = {
     ...previousPayload,
     ...patchPayload,
     ...(actor.deviceSessionId
@@ -1177,76 +1811,252 @@ export async function patchBrowserOneClickListingJobForActor(
     ...(Object.keys(mergedSkuGoodsIds).length
       ? { browserOneClickSkuGoodsIds: mergedSkuGoodsIds }
       : {}),
-    ...(ingestResult ? {
-      browserPayloadIngest: {
-        accepted: ingestResult.accepted,
-        failed: ingestResult.failed,
-        errors: ingestResult.errors,
-        updatedAt: new Date().toISOString(),
-      },
-    } : {}),
     ...(sourceListingCompatibility ? {
       sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
     } : {}),
   };
-  const failureMessage = String(
-    parsed.data.errorMessage
-      || previousPayload.browserPayloadLastError
-      || '浏览器补全商品数据失败',
-  ).slice(0, 260);
-  const shouldRecoverBrowserPayloadFailure = previousPayload.source
-      === 'browser-one-click-listing'
-    && nextStatus === 'FAILED'
-    && String(patchPayload.stage || '').trim() === 'collect_failed'
-    && !previousPayload.taskId
-    && hasRecoverableBrowserPayloadRows(basePayload);
-  const shouldQueueBackendJob = shouldStartDeferredJob
-    || shouldRecoverBrowserPayloadFailure;
-  if (shouldQueueBackendJob && !previousPayload.taskId
-    && await enforceLegacySourceOzonPublish(
-      request,
-      reply,
-      job.shop,
-      options.featureFlags,
-      actor,
-    )) return reply;
-  const payload = {
-    ...basePayload,
-    ...(shouldRecoverBrowserPayloadFailure ? {
-      stage: 'submitted',
-      browserPayloadReady: true,
+  if (!shouldFinalizeDeferredJob) {
+    const effectiveStatus = nextStatus === 'FAILED' ? 'FAILED' : 'RUNNING';
+    const payload = {
+      ...basePayload,
+      stage: effectiveStatus === 'FAILED'
+        ? String(patchPayload.stage || 'collect_failed')
+        : 'collecting',
+      browserPayloadReady: false,
       browserPayloadComplete: false,
-      browserPayloadRetrying: false,
-      browserPayloadRecoveredFromFailure: true,
-      browserPayloadLastError: failureMessage,
-    } : {}),
-    ...(shouldQueueBackendJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
-  };
-  const effectiveStatus = shouldRecoverBrowserPayloadFailure ? 'RUNNING' : nextStatus;
-  const updateData: Record<string, any> = { status: effectiveStatus, payload };
-  if ('result' in parsed.data) updateData.result = parsed.data.result ?? null;
-  if (shouldRecoverBrowserPayloadFailure) {
-    updateData.errorMessage = '浏览器补全商品数据暂时中断，ERP 已接管继续执行: '
-      + failureMessage;
-  } else if ('errorMessage' in parsed.data) {
-    updateData.errorMessage = parsed.data.errorMessage || null;
+    };
+    const finishedAt = effectiveStatus === 'FAILED' ? new Date() : undefined;
+    const updated = await persistBrowserOneClickPayload({
+      job,
+      expectedRevision: previousRevision,
+      payload,
+      status: effectiveStatus,
+      errorMessage: effectiveStatus === 'FAILED'
+        ? String(parsed.data.errorMessage || '浏览器补全商品数据失败').slice(0, 260)
+        : null,
+      ...(finishedAt ? { finishedAt } : {}),
+    });
+    if (!updated) {
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'browser_payload_conflict',
+        terminal: false,
+        msg: '商品数据已被另一个批次更新，请重试当前批次',
+      });
+    }
+    return reply.send({ code: 1, msg: 'ok', data: browserOneClickListingJobReceipt(updated) });
   }
-  if (effectiveStatus === 'SUCCESS' || effectiveStatus === 'FAILED') {
-    updateData.finishedAt = new Date();
-  }
-  const updated = await prisma.syncJob.update({
-    where: { id: job.id },
-    data: updateData,
-    select: { id: true, status: true, finishedAt: true, payload: true },
+
+  const workflow = await evaluateBrowserOneClickWorkflow({
+    featureFlags: options.featureFlags,
+    actor,
+    shop: job.shop,
   });
-  if (shouldQueueBackendJob) {
-    if (actor.deviceSessionId) {
-      await addBrowserOneClickListingJob(job.id, { attempts: 1 });
-    } else {
-      await addBrowserOneClickListingJob(job.id);
+  const currentRollout = await evaluateBrowserOneClickRollout(options, actor, job.shop);
+  const expectedSkus = browserOneClickExpectedSkus(basePayload);
+  const rowsBySku = browserOneClickRowBySku(mergedRows);
+  const unknownSkus = [...rowsBySku.bySku.keys()].filter((sku) => !expectedSkus.includes(sku));
+  const missingSkus = expectedSkus.filter((sku) => !rowsBySku.bySku.has(sku));
+  const streamErrors = Array.isArray(objectRecord(basePayload.browserPayloadStream).errors)
+    ? objectRecord(basePayload.browserPayloadStream).errors
+    : [];
+  let handoffErrorCode = '';
+  if (!options.sourceCaptureService) handoffErrorCode = 'SOURCE_CAPTURE_ADAPTER_UNAVAILABLE';
+  else if (!workflow.ready) handoffErrorCode = 'SOURCE_LISTING_WORKFLOW_NOT_INTERACTIVE';
+  else if (!expectedSkus.length) handoffErrorCode = 'BROWSER_ONE_CLICK_EXPECTED_SKUS_REQUIRED';
+  else if (missingSkus.length) handoffErrorCode = 'BROWSER_ONE_CLICK_SKU_COVERAGE_INCOMPLETE';
+  else if (unknownSkus.length) handoffErrorCode = 'BROWSER_ONE_CLICK_SKU_UNKNOWN';
+  else if (rowsBySku.duplicates.length) handoffErrorCode = 'BROWSER_ONE_CLICK_SKU_DUPLICATE';
+  else if (streamErrors.length || Number(objectRecord(basePayload.browserPayloadIngest).failed || 0) > 0) {
+    handoffErrorCode = 'BROWSER_ONE_CLICK_CAPTURE_PARTIAL_FAILURE';
+  }
+
+  const captureResults = new Map<string, Awaited<ReturnType<NonNullable<typeof options.sourceCaptureService>['ingestLegacy']>>>();
+  const captureFailures: Array<{ sku: string; supplyGoodsId: string; errorCode: string }> = [];
+  if (!handoffErrorCode && options.sourceCaptureService) {
+    for (const sku of expectedSkus) {
+      const supplyGoodsId = String(mergedSkuGoodsIds[sku] || '').trim();
+      const row = rowsBySku.bySku.get(sku)!;
+      try {
+        const item = browserOneClickCaptureItem(sku, row, basePayload);
+        let stableSupplyGoodsId = supplyGoodsId;
+        if (!stableSupplyGoodsId) {
+          const projection = await options.sourceCaptureService.ensureLegacyProjection({
+            trusted: {
+              ownerUserId: actor.ownerUserId,
+              actorUserId: actor.actorUserId,
+              rolloutRevision: workflow.capture.revision,
+              rolloutStage: workflow.capture.captureStage as 'shadow_write' | 'dual_read' | 'v2_only',
+              ingestChannel: 'LEGACY_ADAPTER',
+            },
+            item,
+          });
+          stableSupplyGoodsId = projection.supplyGoodsId;
+        }
+        const capture = await options.sourceCaptureService.ingestLegacy({
+          trusted: {
+            ownerUserId: actor.ownerUserId,
+            actorUserId: actor.actorUserId,
+            rolloutRevision: workflow.capture.revision,
+            rolloutStage: workflow.capture.captureStage as 'shadow_write' | 'dual_read' | 'v2_only',
+            ingestChannel: 'LEGACY_ADAPTER',
+          },
+          item,
+          supplyGoodsId: stableSupplyGoodsId,
+        });
+        if (capture.supplyGoodsId !== stableSupplyGoodsId) {
+          captureFailures.push({ sku, supplyGoodsId: stableSupplyGoodsId, errorCode: 'BROWSER_ONE_CLICK_GOODS_MAPPING_MISMATCH' });
+        } else {
+          mergedSkuGoodsIds = { ...mergedSkuGoodsIds, [sku]: stableSupplyGoodsId };
+          mergedSupplyGoodsIds = uniqueStrings([...mergedSupplyGoodsIds, stableSupplyGoodsId]);
+          captureResults.set(sku, capture);
+        }
+      } catch (error) {
+        captureFailures.push({
+          sku,
+          supplyGoodsId,
+          errorCode: String((error as { code?: string })?.code || 'SOURCE_CAPTURE_LEGACY_INGEST_FAILED'),
+        });
+      }
     }
   }
-  return reply.send({ code: 1, msg: 'ok', data: updated });
+
+  if (!handoffErrorCode && captureFailures.length === 0) {
+    sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
+      featureFlags: options.featureFlags,
+      adapter: options.sourceListingWorkflowAdapter,
+      ownerUserId: actor.ownerUserId,
+      actorUserId: actor.actorUserId,
+      shopId: job.shop.id,
+      platform: String(job.shop.platform || ''),
+      deviceSessionId: actor.deviceSessionId || null,
+      supplyGoodsIds: expectedSkus.map((sku) => captureResults.get(sku)!.supplyGoodsId),
+    });
+  }
+
+  const draftsByGoodsId = new Map((sourceListingCompatibility?.drafts || [])
+    .map((draft) => [draft.supplyGoodsId, draft] as const));
+  const draftFailures = sourceListingCompatibility?.failures || [];
+  const draftRefs = expectedSkus.flatMap((sku) => {
+    const capture = captureResults.get(sku);
+    if (!capture) return [];
+    const draft = draftsByGoodsId.get(capture.supplyGoodsId);
+    if (!draft || draft.snapshotId !== capture.snapshotId || !draft.selectedSkuKeys?.length) return [];
+    const selectedSkuKey = draft.selectedSkuKeys.find(
+      (key) => key === sku || key === `legacy-${sku}`,
+    );
+    return selectedSkuKey ? [{
+      supplyGoodsId: capture.supplyGoodsId,
+      snapshotId: capture.snapshotId,
+      draftId: draft.draftId,
+      draftVersion: draft.draftVersion,
+      revision: draft.revision,
+      skuKey: selectedSkuKey,
+      sourceSku: sku,
+    }] : [];
+  });
+  if (!handoffErrorCode && captureFailures.length) handoffErrorCode = captureFailures[0]!.errorCode;
+  if (!handoffErrorCode && sourceListingCompatibility?.stage !== 'dual_read'
+    && sourceListingCompatibility?.stage !== 'v2_only') {
+    handoffErrorCode = 'SOURCE_LISTING_WORKFLOW_NOT_INTERACTIVE';
+  }
+  if (!handoffErrorCode && (draftFailures.length || draftRefs.length !== expectedSkus.length)) {
+    handoffErrorCode = draftFailures[0]?.errorCode || 'SOURCE_LISTING_DRAFT_COVERAGE_INCOMPLETE';
+  }
+  if (!handoffErrorCode && new Set(draftRefs.map((draft) => draft.supplyGoodsId)).size !== draftRefs.length) {
+    handoffErrorCode = 'SOURCE_LISTING_DRAFT_COVERAGE_AMBIGUOUS';
+  }
+
+  if (handoffErrorCode) {
+    const failures = [
+      ...captureFailures.map((failure) => ({
+        supplyGoodsId: failure.supplyGoodsId,
+        sku: failure.sku,
+        errorCode: failure.errorCode,
+      })),
+      ...draftFailures,
+    ];
+    if (!failures.length) failures.push({ supplyGoodsId: '', errorCode: handoffErrorCode });
+    const failedPayload = {
+      ...basePayload,
+      stage: 'review_handoff_failed',
+      browserPayloadReady: true,
+      browserPayloadComplete: true,
+      browserOneClickReviewFailure: {
+        errorCode: handoffErrorCode,
+        failures,
+        missingSkus,
+        unknownSkus,
+        duplicateSkus: rowsBySku.duplicates,
+      },
+      sourceListingWorkflow: sourceListingCompatibility
+        ? sourceListingCompatibilityMetadata(sourceListingCompatibility)
+        : null,
+      sourceListingDraftRefs: [],
+    };
+    const updated = await persistBrowserOneClickPayload({
+      job,
+      expectedRevision: previousRevision,
+      payload: failedPayload,
+      status: 'FAILED',
+      errorMessage: `ERP 审核草稿交接失败: ${handoffErrorCode}`,
+      finishedAt: new Date(),
+    });
+    if (!updated) {
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'browser_payload_conflict',
+        terminal: false,
+        msg: '商品数据已被另一个批次更新，请重新完成最终交接',
+      });
+    }
+    return reply.status(409).send({
+      code: 0,
+      errorCode: handoffErrorCode,
+      terminal: true,
+      msg: '商品数据未能完整生成 ERP 审核草稿，任务已停止且不会发布',
+      data: browserOneClickListingJobReceipt(updated),
+    });
+  }
+
+  const handoff = browserOneClickV2Handoff({
+    rollout: currentRollout,
+    listingRolloutRevision: workflow.listing.revision,
+    drafts: draftRefs,
+    failures: [],
+  });
+  const payload = {
+    ...basePayload,
+    supplyGoodsIds: mergedSupplyGoodsIds,
+    browserOneClickSkuGoodsIds: mergedSkuGoodsIds,
+    collected: mergedSupplyGoodsIds.length,
+    stage: 'review_required',
+    browserPayloadReady: true,
+    browserPayloadComplete: true,
+    browserOneClickPublishHandoff: handoff,
+    sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility!),
+    sourceListingDraftRefs: draftRefs,
+  };
+  const updated = await persistBrowserOneClickPayload({
+    job,
+    expectedRevision: previousRevision,
+    payload,
+    status: 'RUNNING',
+    errorMessage: null,
+  });
+  if (!updated) {
+    return reply.status(409).send({
+      code: 0,
+      errorCode: 'browser_payload_conflict',
+      terminal: false,
+      msg: '商品数据已被另一个批次更新，请重新完成最终交接',
+    });
+  }
+  return reply.send({
+    code: 1,
+    msg: '商品数据已提交，需在 ERP 草稿工作台完成审核后发布',
+    data: browserOneClickListingJobReceipt(updated),
+  });
 }
 
 export async function listingRoutes(app: FastifyInstance, options: ListingRoutesOptions = {}) {
@@ -1254,6 +2064,7 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
   const sourceListingWorkflowAdapter = options.sourceListingWorkflowAdapter
     || getDefaultLegacySourceListingWorkflowAdapter();
   const publisherRollout = options.publisherRollout;
+  const sourceCaptureService = options.sourceCaptureService;
   const publisherParityObserver = options.publisherParityObserver;
   const publisherParityTimeoutMs = options.publisherParityTimeoutMs ?? 2_000;
 
@@ -1345,17 +2156,21 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
     });
     let draftRefs: SourceListingDraftIdentityRef[] = [];
-    if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
+    if (compatibility.stage !== 'off'
+      || initialRollout?.observeParity
+      || parsed.data.draftRefs !== undefined) {
       try {
         draftRefs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
-        const prepared = compatibility.drafts.map((draft) => ({
-          supplyGoodsId: draft.supplyGoodsId,
-          draftId: draft.draftId,
-          draftVersion: draft.draftVersion,
-          revision: draft.revision,
-          selectedSkuKeys: draft.selectedSkuKeys || [],
-        }));
-        assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
+        if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
+          const prepared = compatibility.drafts.map((draft) => ({
+            supplyGoodsId: draft.supplyGoodsId,
+            draftId: draft.draftId,
+            draftVersion: draft.draftVersion,
+            revision: draft.revision,
+            selectedSkuKeys: draft.selectedSkuKeys || [],
+          }));
+          assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
+        }
       } catch (caught) {
         if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
         return reply.status(caught.statusCode).send({
@@ -1448,7 +2263,15 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
             rolloutRevision: currentCompatibility.rolloutRevision,
           });
         }
+        return sendLegacyDraftPublisherRequired(
+          reply,
+          currentCompatibility.rolloutRevision,
+        );
       }
+    }
+
+    if (draftRefs.length > 0) {
+      return sendLegacyDraftPublisherRequired(reply, compatibility.rolloutRevision);
     }
 
     const client = new OzonClient({
@@ -1531,17 +2354,21 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
     });
     let draftRefs: SourceListingDraftIdentityRef[] = [];
-    if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
+    if (compatibility.stage !== 'off'
+      || initialRollout?.observeParity
+      || parsed.data.draftRefs !== undefined) {
       try {
         draftRefs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
-        const prepared = compatibility.drafts.map((draft) => ({
-          supplyGoodsId: draft.supplyGoodsId,
-          draftId: draft.draftId,
-          draftVersion: draft.draftVersion,
-          revision: draft.revision,
-          selectedSkuKeys: draft.selectedSkuKeys || [],
-        }));
-        assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
+        if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
+          const prepared = compatibility.drafts.map((draft) => ({
+            supplyGoodsId: draft.supplyGoodsId,
+            draftId: draft.draftId,
+            draftVersion: draft.draftVersion,
+            revision: draft.revision,
+            selectedSkuKeys: draft.selectedSkuKeys || [],
+          }));
+          assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
+        }
       } catch (caught) {
         if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
         return reply.status(caught.statusCode).send({
@@ -1630,7 +2457,15 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
             rolloutRevision: currentCompatibility.rolloutRevision,
           });
         }
+        return sendLegacyDraftPublisherRequired(
+          reply,
+          currentCompatibility.rolloutRevision,
+        );
       }
+    }
+
+    if (draftRefs.length > 0) {
+      return sendLegacyDraftPublisherRequired(reply, compatibility.rolloutRevision);
     }
 
     const client = new OzonClient({
@@ -1712,7 +2547,7 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       request,
       reply,
       accountBrowserOneClickActor(request),
-      { featureFlags, sourceListingWorkflowAdapter },
+      { featureFlags, sourceListingWorkflowAdapter, sourceCaptureService, publisherRollout },
     );
   });
 
@@ -1721,7 +2556,7 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       request,
       reply,
       accountBrowserOneClickActor(request),
-      { featureFlags, sourceListingWorkflowAdapter },
+      { featureFlags, sourceListingWorkflowAdapter, sourceCaptureService, publisherRollout },
     );
   });
 

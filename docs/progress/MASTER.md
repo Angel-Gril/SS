@@ -44,30 +44,44 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
-Source-only one-click device authorization and extension UI hardening checkpoint
-(2026-08-13): the working tree now routes browser one-click create/patch and watermark reads
-through `/api/extension-device/browser-one-click`, binds each job to the live owner/shop/device
-session, revalidates publish scope through an authenticated no-store status read that is not
-blocked by stale local scope claims, and limits device-origin queue attempts to one. Device PATCH
-requests use a completion-field allowlist, so they cannot replace server-derived draft identity,
-goods bindings, watermark stages, publish results, or terminal state. Device revocation, missing
-publish scope, authority changes and unpaired states are terminal for the MV3 payload-completion
-queue; transient transport failures retain bounded backoff. Device-origin Ozon publish POSTs now
-use a bounded abort timeout and preserve `RUNNING / publish_outcome_unknown / doNotRetry` for
-ambiguous network, timeout, 408/425/429/5xx, malformed-success or missing-task-id responses, so
-they cannot be automatically re-posted. The product/list workbenches refresh authorization on
-focus/visibility return,
-keep publish disabled after terminal auth failures, preserve the `/collect?extensionAuth=publish`
-login deep link, and request only `capture:write` plus `listing:publish` for a fresh publish flow.
-The settings and Ozon workbench surfaces now share the deep-teal/blue/amber/red operational theme.
-Focused Server tests pass `58/58` across the one-click route/job/worker set, the complete one-click
-static contract passes `12/12`, the
-device-auth contract, unified-theme, list/product workbench, SKU integration and source-security
-contracts pass, and workspace lint/typecheck pass with only existing warnings. This is source-only:
-no Provider request, ERP/Ozon write, VPS access or deployment occurred. The deployed baseline remains
-`0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` below. The browser worker still
-uses the legacy internal `/api/collect/publish-ozon` compatibility publisher; full V2 command-grant,
-receipt and atomic UNKNOWN-outcome coordination remains a separate release-blocking hardening task.
+Source-only browser one-click review-handoff checkpoint (2026-08-14): browser one-click now creates
+a visible `RUNNING / preparing_browser_data` log, streams only sanitized Ozon evidence through the
+live owner/shop/device channel, and stops at ERP `REVIEW_REQUIRED` drafts. ERP converts each complete
+row through Source Capture V2, binds the resulting snapshot, `SupplyGoods`, draft version/revision and
+SKU identity, and persists the final payload with a `browserPayloadRevision` compare-and-swap. SKU/link
+arrays preserve their index slots and reject partial link lists, so a missing URL cannot be reassigned to
+a later SKU. Device
+PATCH requests cannot supply session identity, goods/draft/snapshot/task identity, publish results or
+terminal success. Partial coverage, stale revisions and handoff failures fail closed; transient MV3
+interruptions retain bounded recovery, while successful completion removes the durable extension
+queue before opening at most one `/listing-logs?jobId=...` review tab.
+
+The browser worker no longer creates temporary goods, generates an account Bearer session, calls
+`/api/collect/publish-ozon`, or sends any Ozon request. Its retained compatibility consumer only
+recognizes a completed V2 handoff and otherwise parks old queued jobs as non-retryable failures. The
+generic legacy publish route also rejects reuse of any browser one-click job ID before constructing
+an Ozon client or reading goods, so the review boundary cannot be bypassed through the old endpoint.
+Exact reviewed draft identities in `dual_read` or `v2_only` also receive a terminal
+`source_listing_v2_publisher_required` refusal before credentials or Ozon construction. Non-pilot
+drafts therefore remain `REVIEW_REQUIRED` until the immutable V2 publisher is enabled. The review
+deep link renders only the immutable draft workbench, and the Server joins persisted browser handoff
+identity to the exact owner/shop/workflow/snapshot/version/revision before refusing legacy publish,
+so a later rollout rollback cannot downgrade those drafts to the mutable publisher. Ordinary
+non-draft publishing remains compatible in
+`off` and `shadow_write`, and historical browser jobs are excluded from its fallback duplicate check.
+Ozon RUB evidence is not projected into CNY cost fields. Listing logs expose a validated deep link to
+each draft, label these jobs `待审核`, reject malformed handoffs, avoid stale async responses, and do
+not poll Ozon for review-only jobs. Product/list workbenches retain live authorization refresh, terminal
+failure disabling, review recovery and the unified operational theme.
+
+Focused Server route/capture/job/worker/publisher tests pass `338/338`; the one-click static contract
+passes `12/12`, durable intent recovery passes `9/9`, and Web return/deep-link review contracts pass.
+Web review-handoff, extension recovery/device-auth, list/product workbench and unified-theme contracts
+also pass. Workspace lint/typecheck, extension syntax checks, source-capture contract generation,
+`git diff --check`, and complete local `pnpm preflight` pass; extension verification reports `454`
+passes with only its two existing packaging warnings. This is source-only: no Provider request,
+production ERP/Ozon write, VPS access, package build or deployment occurred. The deployed baseline remains
+`0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` below.
 
 Automatic pairing and device-collection replacement release (2026-08-13): exact target
 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` is deployed in both regions and installed on BINI as

@@ -5,6 +5,7 @@ import { extensionDeviceBrowserOneClickRoutes } from '../routes/extension-device
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   patch: vi.fn(),
+  read: vi.fn(),
   shopFindFirst: vi.fn(),
   shopFindMany: vi.fn(),
   watermarkFindMany: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../routes/listing.js', () => ({
   createBrowserOneClickListingJobForActor: mocks.create,
   patchBrowserOneClickListingJobForActor: mocks.patch,
+  readBrowserOneClickListingJobForActor: mocks.read,
 }));
 
 vi.mock('../lib/prisma.js', () => ({
@@ -75,7 +77,11 @@ describe('extension device browser one-click routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/jobs',
-      payload: { shopId: 'shop-1', sourceSkus: ['sku-1'] },
+      payload: {
+        shopId: 'shop-1',
+        clientRequestId: 'request_20260813_device_1',
+        sourceSkus: ['sku-1'],
+      },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().data.actor).toEqual({
@@ -87,8 +93,62 @@ describe('extension device browser one-click routes', () => {
     });
   });
 
-  it('rejects job creation and mutation without listing:publish', async () => {
-    const { app } = await buildApp(device(['capture:write']));
+  it('rejects device job creation without a durable idempotency key', async () => {
+    const { app } = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/jobs',
+      payload: { shopId: 'shop-1', sourceSkus: ['sku-1'] },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      errorCode: 'browser_one_click_idempotency_key_required',
+      terminal: true,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('passes the exact owner, shop grants, and session binding to compact job reads', async () => {
+    mocks.read.mockImplementation(async (_request: unknown, reply: any, actor: unknown) => (
+      reply.send({
+        code: 1,
+        data: {
+          jobId: 'job-1',
+          status: 'RUNNING',
+          stage: 'collecting',
+          browserPayloadRevision: 3,
+          acceptedSkus: ['sku-1'],
+          actor,
+        },
+      })
+    ));
+    const { app } = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/jobs/job-1/read',
+      payload: {},
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      jobId: 'job-1',
+      status: 'RUNNING',
+      stage: 'collecting',
+      browserPayloadRevision: 3,
+      acceptedSkus: ['sku-1'],
+      actor: {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        allowedShopIds: ['shop-1'],
+        deviceSessionId: 'session-1',
+      },
+    });
+  });
+
+  it.each([
+    [['capture:write'], 'listing:publish'],
+    [['listing:publish'], 'capture:write'],
+  ])('rejects job creation, mutation, and read without every required scope (%s)', async (scopes, missingScope) => {
+    const { app } = await buildApp(device(scopes));
     const created = await app.inject({
       method: 'POST',
       url: '/jobs',
@@ -99,11 +159,20 @@ describe('extension device browser one-click routes', () => {
       url: '/jobs/job-1',
       payload: { status: 'RUNNING' },
     });
+    const read = await app.inject({
+      method: 'POST',
+      url: '/jobs/job-1/read',
+      payload: {},
+    });
     expect(created.statusCode).toBe(403);
     expect(patched.statusCode).toBe(403);
-    expect(created.json()).toMatchObject({ errorCode: 'insufficient_scope' });
+    expect(read.statusCode).toBe(403);
+    expect(created.json()).toMatchObject({ errorCode: 'insufficient_scope', missingScope });
+    expect(patched.json()).toMatchObject({ errorCode: 'insufficient_scope', missingScope });
+    expect(read.json()).toMatchObject({ errorCode: 'insufficient_scope', missingScope });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
   });
 
   it('allows a paired capture device to read only its shop watermarks', async () => {

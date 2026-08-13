@@ -125,6 +125,51 @@ assert.equal(deviceStatusRequests[0].init.headers.Authorization, 'Bearer device-
 assert.equal(deviceStatusRequests[0].init.cache, 'no-store');
 assert.equal(deviceStatusRequests[0].init.credentials, 'omit');
 
+const browserJobRequests = [];
+const browserJobTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials(['capture:write', 'listing:publish']),
+  fetchImpl: async (url, init) => {
+    browserJobRequests.push({ url, init });
+    return response(200, {
+      code: 1,
+      data: { jobId: 'job-1', status: 'RUNNING', acceptedSkus: ['sku-1'] },
+    });
+  },
+});
+const largeBrowserEvidence = {
+  status: 'RUNNING',
+  payload: { stage: 'collecting', rows: [{ sku: 'sku-1', description: 'x'.repeat(700 * 1024) }] },
+};
+assert.equal((await browserJobTransport.post(
+  '/api/extension-device/browser-one-click/jobs/job-1',
+  largeBrowserEvidence,
+  { requiredScopes: ['capture:write', 'listing:publish'] },
+)).state, 'response', 'dynamic browser job writes must use the bounded 1 MiB publish request budget');
+assert.equal((await browserJobTransport.post(
+  '/api/extension-device/browser-one-click/jobs/job-1/read',
+  {},
+  { requiredScopes: ['capture:write', 'listing:publish'] },
+)).state, 'response', 'dynamic browser job receipts must be readable for unknown-outcome reconciliation');
+assert.deepEqual(
+  browserJobRequests.map((request) => request.url),
+  [
+    'https://erp.example/api/extension-device/browser-one-click/jobs/job-1',
+    'https://erp.example/api/extension-device/browser-one-click/jobs/job-1/read',
+  ],
+);
+await assert.rejects(
+  browserJobTransport.post(
+    '/api/extension-device/browser-one-click/jobs/job-1',
+    {
+      status: 'RUNNING',
+      payload: { stage: 'collecting', rows: [{ sku: 'sku-1', description: 'x'.repeat(1024 * 1024) }] },
+    },
+    { requiredScopes: ['capture:write', 'listing:publish'] },
+  ),
+  /source workbench command is too large/u,
+  'dynamic browser job writes must retain the 1 MiB upper bound',
+);
+
 const executionIntentClaimPayload = {
   contractVersion: 'extension-byok-execution-intent-claim-request/v1',
 };

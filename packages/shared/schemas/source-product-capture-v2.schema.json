@@ -658,7 +658,7 @@
       "properties": {
         "captureVersion": { "const": "source-product-capture-v2" },
         "provenanceMode": { "enum": ["native_v2", "legacy_adapted"] },
-        "platform": { "enum": ["1688", "pdd", "taobao", "tmall"] },
+        "platform": { "enum": ["1688", "pdd", "taobao", "tmall", "ozon"] },
         "sourceIdentity": { "$ref": "#/$defs/sourceIdentity" },
         "collector": { "$ref": "#/$defs/collectorIdentity" },
         "capturedAt": { "$ref": "#/$defs/dateTime" },

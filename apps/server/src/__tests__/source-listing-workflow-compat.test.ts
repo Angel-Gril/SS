@@ -90,6 +90,7 @@ describe('legacy source listing workflow compatibility', () => {
         draftId: 'draft-product-only',
         draftVersion: 1,
         revision: 1,
+        snapshotId: 'snapshot-product-only',
         selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
       }],
       failures: [],

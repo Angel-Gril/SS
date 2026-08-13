@@ -1,5 +1,7 @@
 'use client';
 
+import { normalizeLoginReturnTo } from '@/lib/auth-return-to';
+
 const LOCAL_API_PORT = '3001';
 
 function trimTrailingSlash(value: string): string {
@@ -77,7 +79,14 @@ function redirectToLoginForCurrentPath() {
 
   const path = window.location.pathname;
   const isAdminArea = path.startsWith('/admin');
-  const loginPath = isAdminArea ? '/admin/login' : '/login';
+  const returnTo = isAdminArea
+    ? ''
+    : normalizeLoginReturnTo(`${path}${window.location.search}`);
+  const loginPath = isAdminArea
+    ? '/admin/login'
+    : returnTo
+      ? `/login?returnTo=${encodeURIComponent(returnTo)}`
+      : '/login';
   if (path !== loginPath && !path.startsWith('/login') && !path.startsWith('/admin/login')) {
     window.location.href = loginPath;
   }

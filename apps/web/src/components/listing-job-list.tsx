@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { normalizeListingLogJobId } from '@/lib/auth-return-to';
+import { parseBrowserOneClickReviewHandoff } from '@/lib/browser-one-click-review';
 import { explainOzonError, formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { isFallbackPictureJob, resolveListingPictureStage, type ListingPictureStageTone } from 'shared/listing-picture-stage';
 import { ListingJobDetailDialog } from './listing-job-detail-dialog';
@@ -60,6 +62,12 @@ export interface JobRow {
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;
+    stage?: string;
+    browserOneClickPublishHandoff?: {
+      contractVersion?: unknown;
+      state?: unknown;
+    } | null;
+    browserOneClickReviewFailure?: unknown;
   } | null;
   errorMessage: string | null;
   createdAt: string;
@@ -73,7 +81,30 @@ const STATUS_BADGE: Record<Status, { text: string; cls: string }> = {
   FAILED: { text: '失败', cls: 'bg-destructive' },
 };
 
-export function StatusBadge({ s }: { s: Status }) {
+export function StatusBadge({
+  s,
+  reviewRequired = false,
+  reviewFailed = false,
+  reviewInvalid = false,
+}: {
+  s: Status;
+  reviewRequired?: boolean;
+  reviewFailed?: boolean;
+  reviewInvalid?: boolean;
+}) {
+  if (reviewRequired) {
+    return (
+      <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+        待审核
+      </Badge>
+    );
+  }
+  if (reviewFailed) {
+    return <Badge variant="destructive">审核交接失败</Badge>;
+  }
+  if (reviewInvalid) {
+    return <Badge variant="destructive">审核交接异常</Badge>;
+  }
   const v = STATUS_BADGE[s];
   return <Badge className={`${v.cls} text-white`}>{v.text}</Badge>;
 }
@@ -94,7 +125,31 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
   return { text, cls };
 }
 
+function isBrowserOneClickReviewRequired(payload: JobRow['payload']): boolean {
+  return payload?.source === 'browser-one-click-listing'
+    && parseBrowserOneClickReviewHandoff(payload.browserOneClickPublishHandoff) != null;
+}
+
+function isBrowserOneClickReviewFailed(row: JobRow): boolean {
+  return row.status === 'FAILED'
+    && row.payload?.source === 'browser-one-click-listing'
+    && row.payload.stage === 'review_handoff_failed';
+}
+
+function isBrowserOneClickReviewInvalid(row: JobRow): boolean {
+  return row.payload?.source === 'browser-one-click-listing'
+    && !isBrowserOneClickReviewFailed(row)
+    && !isBrowserOneClickReviewRequired(row.payload)
+    && (
+      row.payload.stage === 'review_required'
+      || row.payload.browserOneClickPublishHandoff != null
+    );
+}
+
 function needsRemoteRefresh(row: JobRow): boolean {
+  if (isBrowserOneClickReviewRequired(row.payload)
+    || isBrowserOneClickReviewFailed(row)
+    || isBrowserOneClickReviewInvalid(row)) return false;
   const pictureUploadStatus = row.payload?.pictureUploadStatus;
   const pictureUploads = row.payload?.pictureUploads || [];
   const pictureActivationPendingCount = Number(row.payload?.pictureActivationPendingCount || 0);
@@ -138,6 +193,8 @@ interface Props {
   accentEmerald?: boolean;
   // limit
   limit?: number;
+  // URL recovery entry; opening a detail must not change the active list filters.
+  initialJobId?: string | null;
 }
 
 export function ListingJobList({
@@ -146,10 +203,11 @@ export function ListingJobList({
   title = '上架记录',
   accentEmerald = false,
   limit = 30,
+  initialJobId = null,
 }: Props) {
   const [rows, setRows] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(() => normalizeListingLogJobId(initialJobId));
 
   async function load() {
     setLoading(true);
@@ -182,12 +240,16 @@ export function ListingJobList({
   }, [entryFilter, modeFilter, limit]);
 
   useEffect(() => {
+    setDetailId(normalizeListingLogJobId(initialJobId));
+  }, [initialJobId]);
+
+  useEffect(() => {
     const refreshTargets = rows.filter(needsRemoteRefresh).slice(0, 5);
     if (!refreshTargets.length) return;
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       await Promise.allSettled(
-        refreshTargets.map((row) => api.post(`/api/listing/tasks/${row.id}/refresh`, {})),
+        refreshTargets.map((row) => api.post(`/api/listing/tasks/${encodeURIComponent(row.id)}/refresh`, {})),
       );
       if (!cancelled) await load();
     }, 15000);
@@ -247,6 +309,9 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const showPictureStage = isFallbackPictureJob(row.payload)
     || pictureStage.code === 'picture_failed'
     || pictureStage.code === 'waiting_product_id';
+  const reviewRequired = isBrowserOneClickReviewRequired(row.payload);
+  const reviewFailed = isBrowserOneClickReviewFailed(row);
+  const reviewInvalid = isBrowserOneClickReviewInvalid(row);
 
   return (
     <div className="rounded-lg border p-3 sm:p-4 transition-colors hover:bg-muted/30 space-y-2.5">
@@ -257,7 +322,7 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
           <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{row.shop?.platform}</span>
         </div>
         <Badge variant="outline" className={`text-[10px] ${mode.cls}`}>{mode.text}</Badge>
-        <StatusBadge s={row.status} />
+        <StatusBadge s={row.status} reviewRequired={reviewRequired} reviewFailed={reviewFailed} reviewInvalid={reviewInvalid} />
         {showPictureStage && (
           <Badge variant="outline" className={`text-[10px] ${pictureStageBadgeClass(pictureStage.tone)}`}>
             {pictureStage.label}{pictureStage.countLabel ? ` ${pictureStage.countLabel}` : ''}

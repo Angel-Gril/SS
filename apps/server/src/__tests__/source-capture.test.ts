@@ -372,6 +372,51 @@ describe('source capture service', () => {
     expect(first.supplyGoodsId).toBe('goods-legacy');
   });
 
+  it('adapts an Ozon row into one stable selected SKU capture', async () => {
+    const { repository, ingestLegacy, ensureLegacyProjection } = fakeRepository();
+    const service = createSourceCaptureService({ repository });
+    const input = {
+      trusted: {
+        ownerUserId: 'owner-1',
+        actorUserId: 'owner-1',
+        rolloutRevision: 'pilot-ozon-1',
+        rolloutStage: 'dual_read',
+        ingestChannel: 'LEGACY_ADAPTER',
+      },
+      item: {
+        sourcePlatform: 'ozon',
+        sourceProductId: '2143427743',
+        sourceUrl: 'https://www.ozon.ru/product/2143427743/',
+        title: 'Ozon captured product',
+        currency: 'RUB',
+        variants: [{ sku: '2143427743', price: 1200, stock: 4 }],
+        images: ['https://cdn.example/ozon-main.jpg'],
+      },
+      supplyGoodsId: 'goods-legacy',
+    } as const;
+
+    await service.ensureLegacyProjection({ trusted: input.trusted, item: input.item });
+    await service.ingestLegacy(input);
+
+    const prepared = ingestLegacy.mock.calls[0]![0];
+    expect(prepared.capture.platform).toBe('ozon');
+    expect(prepared.capture.skus).toHaveLength(1);
+    expect(prepared.capture.skus[0]).toMatchObject({
+      key: 'legacy-2143427743',
+      sourceSkuId: '2143427743',
+      priceCny: null,
+      stock: 4,
+    });
+    expect(prepared.capture.prices).toEqual([]);
+    expect(prepared.capture.facts.currency).toBe('RUB');
+    expect(prepared.capture.facts.selectedSkuKey).toBe('legacy-2143427743');
+    expect(prepared.projection).toMatchObject({ purchasePrice: null, currency: 'RUB' });
+    expect(prepared.projection.variants).toEqual([expect.objectContaining({ price: null })]);
+    const legacyProjection = ensureLegacyProjection.mock.calls[0]![0].projection;
+    expect(legacyProjection).toMatchObject({ purchasePrice: null, currency: 'RUB' });
+    expect(legacyProjection.variants).toEqual([expect.objectContaining({ price: null })]);
+  });
+
   it('delegates legacy projection identity to one atomic repository ensure', async () => {
     const { repository, ensureLegacyProjection } = fakeRepository();
     const service = createSourceCaptureService({ repository });

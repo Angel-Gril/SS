@@ -28,20 +28,35 @@ Progress: 3/3 tasks.
 
 ## Notes
 
-- Source-only one-click device authorization/UI hardening checkpoint (2026-08-13): browser
-  one-click create/patch and watermark reads now use a live owner/shop/device session, with a
-  no-store status read for current scopes that bypasses stale local scope claims, immutable
-  session binding, a device completion-field allowlist that protects server-derived publish state,
-  one device-job attempt,
-  and a bounded device-origin publish timeout that parks ambiguous responses as
-  `publish_outcome_unknown / doNotRetry`,
-  focus/visibility authorization refresh, minimal publish deep-link scopes, terminal queue parking
-  for revoked/unpaired/missing-scope sessions, and a unified deep-teal operational UI. Focused
-  Server one-click route/job/worker tests passed `58/58`; one-click static contracts passed `12/12`; complete workspace
-  lint/typecheck passed with existing warnings. No Provider request, ERP/Ozon write, VPS access or
-  deployment occurred. The compatibility worker still calls the legacy internal
-  `/api/collect/publish-ozon`; it is not evidence that the full V2 command-grant/receipt and
-  atomic UNKNOWN-outcome publisher migration is complete.
+- Source-only browser one-click review-handoff checkpoint (2026-08-14): the extension now streams
+  sanitized Ozon evidence through the live owner/shop/device channel, while ERP creates Source
+  Capture V2 projections and exact snapshot/goods/version/revision/SKU-bound drafts. Completion stops
+  at `REVIEW_REQUIRED`; the listing log opens the matching review detail and validated draft links.
+  `browserPayloadRevision` CAS prevents concurrent batches from overwriting each other, SKU/link
+  arrays retain their positions and reject partial lists so a missing URL cannot shift to a later SKU, device
+  evidence cannot forge server/session/publish identity, incomplete or stale handoffs fail closed,
+  and the MV3 queue is removed before one best-effort review-tab open. The retained browser worker
+  performs no temporary-goods write, internal session creation, Ozon fetch or publish call, and old
+  queued jobs without a V2 handoff become non-retryable failures. The generic
+  `/api/collect/publish-ozon` route rejects browser one-click job IDs before Ozon client construction,
+  closing the compatibility bypass. Exact reviewed draft identities also receive a terminal
+  `source_listing_v2_publisher_required` refusal before credentials or Ozon construction, so
+  non-pilot drafts remain `REVIEW_REQUIRED` until immutable V2 is enabled. Review deep links isolate
+  the immutable draft workbench, while the Server joins persisted browser handoff identity to exact
+  owner/shop/workflow/snapshot/version/revision records; later rollout rollback therefore cannot
+  downgrade these drafts to the mutable legacy publisher. Ordinary non-draft publishing stays
+  compatible in `off`/`shadow_write`,
+  while historical browser jobs are ignored by fallback duplicate detection. RUB evidence is not
+  written into CNY cost fields. The Web UI
+  labels review jobs `待审核`, rejects malformed handoffs and protects detail loading from stale
+  responses; extension authorization/recovery and the unified operational theme remain intact.
+  Focused Server tests passed `338/338`; the one-click static contract passed `12/12`; durable intent
+  recovery passed `9/9`; Web return/deep-link review, extension recovery/device-auth, list/product
+  workbench and unified-theme contracts passed. Workspace lint/typecheck, source-capture contract,
+  extension syntax and diff checks passed, and complete local `pnpm preflight` passed with extension
+  verification `454` passes and its two existing packaging warnings. No Provider request, production
+  ERP/Ozon write, VPS access, package build or deployment occurred.
+  Production remains `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306`.
 
 - Automatic pairing and device-collection replacement release (2026-08-13): exact target
   `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` passed target-bound QA-04 in

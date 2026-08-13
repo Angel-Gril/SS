@@ -506,8 +506,8 @@ assert.doesNotMatch(
 );
 assert.match(
   overlay,
-  /上架任务已提交到 ERP 上架日志/,
-  'Ozon list publish panel should hand users off to ERP listing logs after submission',
+  /采集任务已创建[^\n]*完成后请在 ERP 上架日志审核草稿/,
+  'Ozon list workbench should distinguish browser collection from ERP draft review',
 );
 assert.match(
   overlay,

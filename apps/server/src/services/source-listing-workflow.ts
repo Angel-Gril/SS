@@ -321,6 +321,64 @@ function mapRepositoryError(error: unknown): never {
   throw new SourceListingWorkflowError('OZON_LISTING_DRAFT_VERSION_CONFLICT', error.message, 409);
 }
 
+/**
+ * Re-check the complete authoritative draft state immediately before any
+ * compatibility publisher is allowed to construct an Ozon client.
+ *
+ * This is intentionally independent of a publish-intent CAS so the legacy
+ * compatibility route can enforce the same manual-review boundary without
+ * creating a second publish intent.
+ */
+export function assertSourceListingDraftPublishReady(current: OzonListingDraft): void {
+  const notReady: string[] = [];
+  if (current.runState !== 'ACTIVE') notReady.push(`runState=${current.runState}`);
+  if (current.stage !== 'READY_TO_PUBLISH') notReady.push(`stage=${current.stage}`);
+  if (current.validation.status !== 'VALID') {
+    notReady.push(`validation=${current.validation.status}`);
+  }
+  if (current.blockers.length) notReady.push(`blockers=${current.blockers.length}`);
+  if (current.validation.status === 'VALID') {
+    const report = current.validation.report;
+    if (!report || typeof report !== 'object' || Array.isArray(report)) {
+      notReady.push('readiness=VALIDATION_REPORT_INVALID');
+    } else {
+      try {
+        const rechecked = mergeSourceListingWorkflowReadiness({
+          draft: current,
+          validation: {
+            status: 'VALID',
+            report,
+            blockers: current.blockers,
+            warnings: current.warnings,
+          },
+        });
+        if (rechecked.status !== 'VALID') {
+          const codes = [...new Set(rechecked.blockers.map((blocker) => blocker.code))];
+          notReady.push(`readiness=${codes.join(',') || 'BLOCKED'}`);
+        }
+      } catch {
+        notReady.push('readiness=VALIDATION_REPORT_INVALID');
+      }
+    }
+  } else if (sourceListingWorkflowReadinessIssues(current).length) {
+    notReady.push('readiness=BLOCKED');
+  }
+  const staleSections = (Object.entries(current.freshness) as Array<[
+    keyof OzonListingDraft['freshness'],
+    OzonListingDraft['freshness'][keyof OzonListingDraft['freshness']],
+  ]>)
+    .filter(([, freshness]) => freshness.state !== 'CURRENT')
+    .map(([section]) => section);
+  if (staleSections.length) notReady.push(`stale=${staleSections.join(',')}`);
+  if (notReady.length) {
+    throw new SourceListingWorkflowError(
+      'OZON_LISTING_PUBLISH_NOT_READY',
+      `Listing draft is not ready to publish: ${notReady.join('; ')}`,
+      409,
+    );
+  }
+}
+
 export function createSourceListingWorkflowService(options: {
   repository: OzonListingDraftRepository;
   now?: () => Date;
@@ -1009,48 +1067,7 @@ export function createSourceListingWorkflowService(options: {
         return { draft: current, intent: existing, idempotent: true };
       }
 
-      const notReady: string[] = [];
-      if (current.runState !== 'ACTIVE') notReady.push(`runState=${current.runState}`);
-      if (current.stage !== 'READY_TO_PUBLISH') notReady.push(`stage=${current.stage}`);
-      if (current.validation.status !== 'VALID') {
-        notReady.push(`validation=${current.validation.status}`);
-      }
-      if (current.blockers.length) notReady.push(`blockers=${current.blockers.length}`);
-      if (current.validation.status === 'VALID' && current.validation.report) {
-        try {
-          const rechecked = mergeSourceListingWorkflowReadiness({
-            draft: current,
-            validation: {
-              status: 'VALID',
-              report: current.validation.report,
-              blockers: current.blockers,
-              warnings: current.warnings,
-            },
-          });
-          if (rechecked.status !== 'VALID') {
-            const codes = [...new Set(rechecked.blockers.map((blocker) => blocker.code))];
-            notReady.push(`readiness=${codes.join(',') || 'BLOCKED'}`);
-          }
-        } catch {
-          notReady.push('readiness=VALIDATION_REPORT_INVALID');
-        }
-      } else if (sourceListingWorkflowReadinessIssues(current).length) {
-        notReady.push('readiness=BLOCKED');
-      }
-      const staleSections = (Object.entries(current.freshness) as Array<[
-        keyof OzonListingDraft['freshness'],
-        OzonListingDraft['freshness'][keyof OzonListingDraft['freshness']],
-      ]>)
-        .filter(([, freshness]) => freshness.state !== 'CURRENT')
-        .map(([section]) => section);
-      if (staleSections.length) notReady.push(`stale=${staleSections.join(',')}`);
-      if (notReady.length) {
-        throw new SourceListingWorkflowError(
-          'OZON_LISTING_PUBLISH_NOT_READY',
-          `Listing draft is not ready to publish: ${notReady.join('; ')}`,
-          409,
-        );
-      }
+      assertSourceListingDraftPublishReady(current);
 
       const draft = structuredClone(current);
       draft.grantRevocation = { required: false, reason: null, previousShopId: null };

@@ -95,6 +95,33 @@
     return normalized;
   }
 
+  function exactEncodedIdentifier(value) {
+    if (!value || value.includes('/')) return false;
+    try {
+      var decoded = decodeURIComponent(value);
+      return decoded.length > 0 && decoded.length <= 200
+        && decoded === decoded.normalize('NFKC').trim()
+        && !decoded.includes('/') && !decoded.includes('\\')
+        && encodeURIComponent(decoded) === value;
+    } catch {
+      return false;
+    }
+  }
+
+  function browserOneClickJobWritePath(candidate) {
+    var prefix = BROWSER_ONE_CLICK_JOBS_PATH + '/';
+    return candidate.startsWith(prefix)
+      && exactEncodedIdentifier(candidate.slice(prefix.length));
+  }
+
+  function browserOneClickJobReadPath(candidate) {
+    var prefix = BROWSER_ONE_CLICK_JOBS_PATH + '/';
+    var suffix = '/read';
+    return candidate.startsWith(prefix)
+      && candidate.endsWith(suffix)
+      && exactEncodedIdentifier(candidate.slice(prefix.length, -suffix.length));
+  }
+
   function requestPath(value, method) {
     var path = requiredText(value, 'path');
     var commandPaths = new Set([
@@ -158,18 +185,6 @@
         return false;
       }
     }
-    function exactEncodedIdentifier(value) {
-      if (!value || value.includes('/')) return false;
-      try {
-        var decoded = decodeURIComponent(value);
-        return decoded.length > 0 && decoded.length <= 200
-          && decoded === decoded.normalize('NFKC').trim()
-          && !decoded.includes('/') && !decoded.includes('\\')
-          && encodeURIComponent(decoded) === value;
-      } catch {
-        return false;
-      }
-    }
     function byokExecutionBatchMutationPath(candidate) {
       var prefix = BYOK_EXECUTION_BATCH_PATH + '/';
       if (!candidate.startsWith(prefix)) return false;
@@ -202,11 +217,6 @@
       return Boolean(suffix
         && exactEncodedIdentifier(remainder.slice(0, -suffix.length)));
     }
-    function browserOneClickJobWritePath(candidate) {
-      var prefix = BROWSER_ONE_CLICK_JOBS_PATH + '/';
-      return candidate.startsWith(prefix)
-        && exactEncodedIdentifier(candidate.slice(prefix.length));
-    }
     function allowedGetPath(candidate) {
       return candidate.startsWith('/api/extension-device/source-workbench/')
         || byokExecutionBatchReadPath(candidate);
@@ -217,7 +227,8 @@
         || byokExecutionIntentOutcomePath(candidate)
         || byokExecutionBatchMutationPath(candidate)
         || shopAnalyticsWritePath(candidate)
-        || browserOneClickJobWritePath(candidate);
+        || browserOneClickJobWritePath(candidate)
+        || browserOneClickJobReadPath(candidate);
     }
     var parsed;
     try { parsed = new URL(path, 'https://ss-erp.invalid'); } catch {
@@ -488,10 +499,28 @@
 
     async function send(method, pathValue, bodyValue, commandOptions, bodyMode) {
         var path = requestPath(pathValue, method);
+        var configuredRequiredScopes = commandOptions && commandOptions.requiredScopes;
+        if (configuredRequiredScopes != null
+          && (!Array.isArray(configuredRequiredScopes)
+            || configuredRequiredScopes.length === 0
+            || configuredRequiredScopes.some(function (scope) {
+              return ![
+                'listing:review',
+                'listing:write',
+                'listing:publish',
+                'media:execute',
+                'byok:media:ingest',
+                'capture:write',
+              ].includes(scope);
+            }))) {
+          throw new TypeError('source workbench required scopes are invalid');
+        }
+        var browserOneClickJobWriteRequest = browserOneClickJobWritePath(path);
         var publishRequest = Boolean(
           commandOptions
-          && commandOptions.requiredScope === 'listing:publish'
-          && PUBLISH_REQUEST_PATHS.has(path),
+          && (commandOptions.requiredScope === 'listing:publish'
+            || configuredRequiredScopes && configuredRequiredScopes.includes('listing:publish'))
+          && (PUBLISH_REQUEST_PATHS.has(path) || browserOneClickJobWriteRequest),
         );
         var requestBody = null;
         var binaryRequest = null;
@@ -515,7 +544,8 @@
             ? MAX_MEDIA_EDIT_MASK_REQUEST_BYTES
             : shopAnalyticsRequest
               ? MAX_SHOP_ANALYTICS_REQUEST_BYTES
-            : publishRequest && LARGE_PUBLISH_REQUEST_PATHS.has(path)
+            : publishRequest
+              && (LARGE_PUBLISH_REQUEST_PATHS.has(path) || browserOneClickJobWriteRequest)
               ? MAX_PUBLISH_REQUEST_BYTES : MAX_COMMAND_REQUEST_BYTES;
           if (byteLength(requestBody) > maximumRequestBytes) {
             throw new Error('source workbench command is too large');
@@ -569,9 +599,14 @@
             || requestedScope === 'capture:write'
             ? requestedScope
             : method === 'GET' ? 'listing:review' : 'media:execute';
-          if (requiredScope
-            && (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope))) {
-            return { state: 'scope_required', scope: requiredScope };
+          var requiredScopes = scopeExemptRequest
+            ? []
+            : configuredRequiredScopes || (requiredScope ? [requiredScope] : []);
+          var missingScope = requiredScopes.find(function (scope) {
+            return !Array.isArray(operation.scopes) || !operation.scopes.includes(scope);
+          });
+          if (missingScope) {
+            return { state: 'scope_required', scope: missingScope };
           }
           var accessToken = requiredText(operation.accessToken, 'device access token');
           var baseUrl = requiredText(operation.baseUrl, 'baseUrl').replace(/\/+$/, '');
@@ -607,6 +642,7 @@
           }
           var maximumResponseBytes = path === BYOK_PUBLISH_PREVIEW_PATH
             || path === WORKBENCH_PUBLISH_PREVIEW_PATH
+            || browserOneClickJobWriteRequest
             ? MAX_PUBLISH_RESPONSE_BYTES
             : bodyMode === 'hosted-preview'
               ? MAX_HOSTED_PREVIEW_RESPONSE_BYTES
@@ -655,8 +691,8 @@
             }
             return { state: 'authorization_required', status: response.status };
           }
-          if (response.status === 403 && !binaryRequest && requiredScope) {
-            return { state: 'scope_required', scope: requiredScope };
+          if (response.status === 403 && !binaryRequest && requiredScopes.length) {
+            return { state: 'scope_required', scope: missingScope || requiredScopes[0] };
           }
           if (method === 'GET' && response.status === 404) return { state: 'not_found' };
           if (!response.ok) {

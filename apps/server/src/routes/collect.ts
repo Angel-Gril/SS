@@ -18,6 +18,12 @@ import {
   type LegacySourceListingDraftPointer,
   type LegacySourceListingWorkflowAdapter,
 } from './source-listing-workflow-compat.js';
+import {
+  assertSourceListingDraftIdentity,
+  normalizeSourceListingDraftIdentityRefs,
+  SourceListingDraftIdentityError,
+} from '../services/source-listing-draft-identity.js';
+import { findBrowserOneClickReviewProtectedSupplyGoodsIds } from '../services/browser-one-click-review-handoff.js';
 import { prisma } from '../lib/prisma.js';
 import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG } from '../lib/randomize.js';
 import { randomSuffix, chunkArray } from '../lib/util.js';
@@ -3792,6 +3798,7 @@ export function findFallbackRecreateConflicts(
     const status = String(job?.status || '').toUpperCase();
     if (status && status !== 'SUCCESS' && status !== 'RUNNING') continue;
     const payload = metadataRecord(job?.payload);
+    if (payload.source === 'browser-one-click-listing' || payload.browserOneClickJob === true) continue;
     if (payload.source !== 'collect-publish-fallback' && payload.mode !== 'follow-by-sku') continue;
     const jobRef = {
       ...(job?.id ? { jobId: String(job.id) } : {}),
@@ -4103,6 +4110,11 @@ type LoadAuthoritativeOzonCategoryCatalog = (input: {
 export interface CollectRoutesOptions {
   featureFlags?: SourceWorkflowFeatureFlagEvaluator;
   sourceListingWorkflowAdapter?: LegacySourceListingWorkflowAdapter;
+  findBrowserOneClickReviewProtectedGoods?(input: {
+    ownerUserId: string;
+    shopId: string;
+    supplyGoodsIds: string[];
+  }): Promise<string[]>;
   publisherParityObserver?: {
     observe(input: {
       ownerUserId: string;
@@ -4695,6 +4707,8 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
   const featureFlags = options.featureFlags || sourceWorkflowFeatureFlags;
   const sourceListingWorkflowAdapter = options.sourceListingWorkflowAdapter
     || getDefaultLegacySourceListingWorkflowAdapter();
+  const findBrowserOneClickReviewProtectedGoods = options.findBrowserOneClickReviewProtectedGoods
+    || ((input) => findBrowserOneClickReviewProtectedSupplyGoodsIds(prisma, input));
   const publisherParityObserver = options.publisherParityObserver;
   const publisherParityTimeoutMs = Number.isFinite(options.publisherParityTimeoutMs)
     ? Math.max(10, Math.min(5_000, Number(options.publisherParityTimeoutMs)))
@@ -5476,6 +5490,7 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
       forceRecreate?: boolean;
       jobId?: string;
       legacyWorkflowFallback?: boolean;
+      draftRefs?: unknown;
     };
 
     if (!body?.ids?.length || !body.shopId) {
@@ -5519,10 +5534,14 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
     const existingPublishPayload = metadataRecord(existingPublishJob?.payload);
     const isBrowserOneClickPublishJob = existingPublishPayload.source === 'browser-one-click-listing'
       || existingPublishPayload.browserOneClickJob === true;
-
-    const { OzonClient } = await import('../services/ozon-client.js');
-    const { decrypt } = await import('../lib/crypto.js');
-    const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
+    if (isBrowserOneClickPublishJob) {
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'browser_one_click_review_required',
+        terminal: true,
+        msg: '浏览器一键上架必须先在 ERP 草稿工作台完成审核，兼容发布入口不会直接发布该任务',
+      });
+    }
 
     let items = await prisma.supplyGoods.findMany({
       where: { id: { in: body.ids }, userId },
@@ -5530,6 +5549,31 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
 
     if (!items.length) {
       return reply.send({ code: 0, msg: '未找到有效商品' });
+    }
+
+    let reviewProtectedGoods: string[];
+    try {
+      reviewProtectedGoods = await findBrowserOneClickReviewProtectedGoods({
+        ownerUserId: userId,
+        shopId: shop.id,
+        supplyGoodsIds: items.map((item) => item.id),
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'Failed to verify browser one-click review authority');
+      return reply.status(503).send({
+        code: 0,
+        errorCode: 'source_listing_review_authority_unavailable',
+        terminal: false,
+        msg: '无法确认来源草稿发布权限，旧发布入口已失败关闭',
+      });
+    }
+    if (reviewProtectedGoods.length) {
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'source_listing_v2_publisher_required',
+        terminal: true,
+        msg: '浏览器一键上架草稿已进入 ERP 审核流程，只能通过不可变 V2 发布器提交',
+      });
     }
 
     const sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
@@ -5542,6 +5586,39 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
       supplyGoodsIds: items.map((item) => item.id),
       legacyFallback: body.legacyWorkflowFallback,
     });
+    if (['dual_read', 'v2_only'].includes(sourceListingCompatibility.stage)
+      || body.draftRefs !== undefined) {
+      try {
+        const draftRefs = normalizeSourceListingDraftIdentityRefs(body.draftRefs);
+        assertSourceListingDraftIdentity({
+          refs: draftRefs,
+          prepared: sourceListingCompatibility.drafts.map((draft) => ({
+            supplyGoodsId: draft.supplyGoodsId,
+            draftId: draft.draftId,
+            draftVersion: draft.draftVersion,
+            revision: draft.revision,
+            selectedSkuKeys: draft.selectedSkuKeys || [],
+          })),
+        });
+      } catch (caught) {
+        if (caught instanceof SourceListingDraftIdentityError) {
+          return reply.status(caught.statusCode).send({
+            code: 0,
+            errorCode: caught.code,
+            msg: caught.message,
+            rolloutRevision: sourceListingCompatibility.rolloutRevision,
+          });
+        }
+        throw caught;
+      }
+      return reply.status(409).send({
+        code: 0,
+        errorCode: 'source_listing_v2_publisher_required',
+        terminal: true,
+        msg: '已审核来源草稿只能通过不可变 V2 发布器提交；当前兼容入口不会从可变商品投影发布',
+        rolloutRevision: sourceListingCompatibility.rolloutRevision,
+      });
+    }
     if (existingPublishJob) {
       await prisma.syncJob.update({
         where: { id: existingPublishJob.id },
@@ -5553,6 +5630,10 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
         },
       });
     }
+
+    const { OzonClient } = await import('../services/ozon-client.js');
+    const { decrypt } = await import('../lib/crypto.js');
+    const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
 
     const observePublisherParity = async (input: {
       endpoint: '/v3/product/import' | '/v1/product/import-by-sku';

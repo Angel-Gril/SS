@@ -222,7 +222,7 @@ test('product-detail one-click listing submits a backend queued listing-log job'
   assert.doesNotMatch(background, /enqueueOzonWorkbenchPublishQueueJob/);
   assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
   assert.match(content, /正在提交上架任务到 ERP/);
-  assert.match(content, /上架任务已提交到 ERP 上架日志/);
+  assert.match(content, /采集任务已创建[^\n]*完成后请在 ERP 上架日志审核草稿/);
   assert.match(content, /function\s+loadOzonWorkbenchConnectionStatus/);
   assert.match(content, /ozon-calc:erp-endpoint-get/);
   assert.match(content, /缺少上架授权/);

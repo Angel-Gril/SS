@@ -3952,7 +3952,7 @@
         });
       }
       const taskId = response.data && response.data.taskId ? `，任务ID: ${response.data.taskId}` : '';
-      if (status) status.textContent = `上架任务已提交到 ERP 上架日志${taskId}`;
+      if (status) status.textContent = `采集任务已创建${taskId}，浏览器正在补全商品数据；完成后请在 ERP 上架日志审核草稿`;
     } catch (error) {
       if (isListWorkbenchAuthorizationFailure(error)) {
         blockListWorkbenchPublishForAuthorization(modal);

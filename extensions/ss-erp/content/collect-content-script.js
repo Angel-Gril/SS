@@ -2280,7 +2280,7 @@
           status: response && response.status,
         });
       }
-      if (status) status.textContent = "上架任务已提交到 ERP 上架日志";
+      if (status) status.textContent = "采集任务已创建，浏览器正在补全商品数据；完成后请在 ERP 上架日志审核草稿";
     } catch (error) {
       if (isOzonWorkbenchAuthorizationFailure(error)) {
         blockOzonWorkbenchPublishForAuthorization(modal);

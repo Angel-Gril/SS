@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import {
   createBrowserOneClickListingJobForActor,
   patchBrowserOneClickListingJobForActor,
+  readBrowserOneClickListingJobForActor,
   type BrowserOneClickActor,
 } from './listing.js';
 import {
@@ -14,6 +15,8 @@ import {
   sourceWorkflowFeatureFlags,
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
+import type { OzonPublisherEntrypointRolloutService } from '../services/ozon-publisher-entrypoint-rollout.js';
+import type { createSourceCaptureService } from '../services/source-capture.js';
 
 const jobParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();
 const watermarkReadSchema = z.object({
@@ -28,16 +31,20 @@ interface DeviceContext {
   allowedShopIds: string[];
 }
 
+type DeviceScope = 'capture:write' | 'listing:publish';
+
 export interface ExtensionDeviceBrowserOneClickRoutesOptions {
   authenticateDevice(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
   featureFlags?: SourceWorkflowFeatureFlagEvaluator;
   sourceListingWorkflowAdapter?: LegacySourceListingWorkflowAdapter;
+  sourceCaptureService?: ReturnType<typeof createSourceCaptureService>;
+  publisherRollout?: OzonPublisherEntrypointRolloutService;
 }
 
 function deviceContext(
   request: FastifyRequest,
   reply: FastifyReply,
-  requiredScope: 'capture:write' | 'listing:publish' | null = 'listing:publish',
+  requiredScopes: DeviceScope[] | null = ['capture:write', 'listing:publish'],
 ): DeviceContext | null {
   const device = (request as FastifyRequest & {
     device?: Partial<DeviceContext>;
@@ -57,11 +64,13 @@ function deviceContext(
     });
     return null;
   }
-  if (requiredScope && !device.scopes.includes(requiredScope)) {
+  const missingScope = requiredScopes?.find((scope) => !device.scopes!.includes(scope));
+  if (missingScope) {
     reply.status(403).send({
       code: 0,
       errorCode: 'insufficient_scope',
-      msg: requiredScope === 'listing:publish'
+      missingScope,
+      msg: missingScope === 'listing:publish'
         ? '设备缺少 Ozon 上架授权'
         : '设备缺少来源读取授权',
     });
@@ -88,6 +97,8 @@ export async function extensionDeviceBrowserOneClickRoutes(
     featureFlags: options.featureFlags || sourceWorkflowFeatureFlags,
     sourceListingWorkflowAdapter: options.sourceListingWorkflowAdapter
       || getDefaultLegacySourceListingWorkflowAdapter(),
+    sourceCaptureService: options.sourceCaptureService,
+    publisherRollout: options.publisherRollout,
   };
 
   app.addHook('onRequest', async (_request, reply) => {
@@ -117,6 +128,17 @@ export async function extensionDeviceBrowserOneClickRoutes(
   }, async (request, reply) => {
     const device = deviceContext(request, reply);
     if (!device) return reply;
+    const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+      ? request.body as Record<string, unknown>
+      : {};
+    if (!String(body.clientRequestId || '').trim()) {
+      return reply.status(400).send({
+        code: 0,
+        errorCode: 'browser_one_click_idempotency_key_required',
+        terminal: true,
+        msg: '设备创建一键上架任务必须提供幂等请求键',
+      });
+    }
     return createBrowserOneClickListingJobForActor(
       request,
       reply,
@@ -143,6 +165,23 @@ export async function extensionDeviceBrowserOneClickRoutes(
     );
   });
 
+  app.post('/jobs/:id/read', {
+    bodyLimit: 1024,
+    preHandler: [options.authenticateDevice],
+  }, async (request, reply) => {
+    const params = jobParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ code: 0, errorCode: 'invalid_request', msg: '参数错误' });
+    }
+    const device = deviceContext(request, reply);
+    if (!device) return reply;
+    return readBrowserOneClickListingJobForActor(
+      request,
+      reply,
+      listingActor(device),
+    );
+  });
+
   app.post('/watermark-templates/read', {
     bodyLimit: 1024,
     preHandler: [options.authenticateDevice],
@@ -151,7 +190,7 @@ export async function extensionDeviceBrowserOneClickRoutes(
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, errorCode: 'invalid_request', msg: '参数错误' });
     }
-    const device = deviceContext(request, reply, 'capture:write');
+    const device = deviceContext(request, reply, ['capture:write']);
     if (!device) return reply;
     const shopId = parsed.data.shopId;
     if (shopId && !device.allowedShopIds.includes(shopId)) {

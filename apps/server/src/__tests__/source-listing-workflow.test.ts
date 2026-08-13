@@ -716,6 +716,11 @@ describe('source listing workflow', () => {
         message: 'validation=INVALID',
       },
       {
+        label: 'missing validation report',
+        update: (draft) => { draft.validation.report = null; },
+        message: 'readiness=VALIDATION_REPORT_INVALID',
+      },
+      {
         label: 'blockers',
         update: (draft) => { draft.blockers = [{ code: 'BLOCKED', message: 'blocked' }]; },
         message: 'blockers=1',

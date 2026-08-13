@@ -248,10 +248,6 @@ function aiCopyCapabilityLabel(capability: SourceListingAiCopyCapability): strin
   } as const)[capability.reason];
 }
 
-function canonicalSkuIdentity(values: string[]): string {
-  return [...new Set(values)].sort().join('\u0000');
-}
-
 function matchesExactHandoff(
   draft: OzonListingDraft,
   handoff: SourceListingHandoff,
@@ -260,16 +256,6 @@ function matchesExactHandoff(
   return draft.id === expectedDraftId
     && draft.supplyGoodsId === handoff.supplyGoodsId
     && draft.sourceCaptureSnapshotId === handoff.snapshotId;
-}
-
-function matchesConfirmedDraft(current: OzonListingDraft, confirmed: OzonListingDraft): boolean {
-  return current.id === confirmed.id
-    && current.revision === confirmed.revision
-    && current.draftVersion === confirmed.draftVersion
-    && current.supplyGoodsId === confirmed.supplyGoodsId
-    && current.sourceCaptureSnapshotId === confirmed.sourceCaptureSnapshotId
-    && current.shopId === confirmed.shopId
-    && canonicalSkuIdentity(current.selectedSkuKeys) === canonicalSkuIdentity(confirmed.selectedSkuKeys);
 }
 
 function attemptStateLabel(value: SourceListingPublishAttempt['state']): string {
@@ -1424,8 +1410,8 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         : '发布历史仍在读取，请稍后重试');
       return;
     }
-    if (!capability.enabled && !capability.legacyAllowed) {
-      setDraftError(`当前店铺未开放发布：${capability.reason}`);
+    if (!capability.enabled) {
+      setDraftError(`当前店铺尚未开放不可变 V2 发布，草稿将保持待审核：${capability.reason}`);
       return;
     }
     setBusyAction('publish-confirm');
@@ -1446,21 +1432,21 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         .getPublisherCapability(confirmationDraft.shopId);
       if (!isHandoffRequestActive(request, requestDraftId)) return;
       setCapability(confirmationCapability);
-      if (!confirmationCapability.enabled && !confirmationCapability.legacyAllowed) {
-        setDraftError(`当前店铺未开放发布：${confirmationCapability.reason}`);
+      if (!confirmationCapability.enabled) {
+        setDraftError(`当前店铺尚未开放不可变 V2 发布，草稿将保持待审核：${confirmationCapability.reason}`);
         return;
       }
       const shopLabel = shops.find((shop) => shop.id === confirmationDraft.shopId)?.name
         || confirmationDraft.shopId;
       const confirmed = await systemDialog.confirm({
-        title: confirmationCapability.enabled ? '确认提交不可变 V2 任务' : '确认使用兼容旧版发布',
+        title: '确认提交不可变 V2 任务',
         message: [
           `店铺：${shopLabel}`,
           `SKU 数：${confirmationDraft.selectedSkuKeys.length}`,
           `草稿：v${confirmationDraft.draftVersion} / r${confirmationDraft.revision}`,
-          `路径：${confirmationCapability.enabled ? 'V2 不可变发布' : 'Unit 6C 前 legacy 兼容入口'}`,
+          '路径：V2 不可变发布',
         ].join('\n'),
-        confirmText: confirmationCapability.enabled ? '确认提交 V2' : '确认兼容发布',
+        confirmText: '确认提交 V2',
       });
       if (!isHandoffRequestActive(request, requestDraftId)) return;
       if (!confirmed) return;
@@ -1476,63 +1462,26 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         setDraftError('发布策略已变化，请核对路径后重新确认');
         return;
       }
-      if (freshCapability.enabled) {
-        v2AttemptStartedRef.current = true;
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        const created = await sourceListingWorkflowClient.createPublishAttempt(confirmationDraft.id, {
-          expectedRevision: confirmationDraft.revision,
-          idempotencyKey: buildSourceListingPublishIdempotencyKey({
-            draftId: confirmationDraft.id,
-            draftVersion: confirmationDraft.draftVersion,
-            revision: confirmationDraft.revision,
-          }),
-        });
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        setAttempt(created);
-        replaceHandoffUrl({ workflowId: confirmationDraft.id, attemptId: created.id });
-        toast({ title: '已创建不可变 Ozon 发布任务' });
-        pollingStarted = true;
-        void pollPublishAttempt(created);
+      if (!freshCapability.enabled) {
+        setDraftError(`当前店铺尚未开放不可变 V2 发布，草稿将保持待审核：${freshCapability.reason}`);
         return;
       }
-      if (v2AttemptStartedRef.current) {
-        setDraftError('V2 发布已经开始，失败后不会回退旧发布入口');
-        return;
-      }
-      if (freshCapability.legacyAllowed) {
-        const history = await sourceListingWorkflowClient.listPublishAttempts(confirmationDraft.id, { limit: 1 });
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        const latest = history.items[0];
-        if (latest) {
-          v2AttemptStartedRef.current = true;
-          setAttempt(latest);
-          replaceHandoffUrl({ workflowId: confirmationDraft.id, attemptId: latest.id });
-          setDraftError('已发现 V2 发布任务，禁止回退旧发布入口');
-          return;
-        }
-        const current = await sourceListingWorkflowClient.getDraft(confirmationDraft.id);
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        if (!matchesConfirmedDraft(current, confirmationDraft)) {
-          setDraft(current);
-          setDraftError('草稿在确认期间已变化，请核对最新店铺、SKU 和版本后重新确认');
-          return;
-        }
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        const legacy = await api.post('/api/collect/publish-ozon', {
-          ids: [confirmationDraft.supplyGoodsId],
-          shopId: confirmationDraft.shopId,
-          categoryId: confirmationDraft.category?.categoryId,
-          typeId: confirmationDraft.category?.typeId,
-          mode: 'clone',
-          useItemCategory: true,
-          source: 'source-listing-unit6b-legacy-compatible',
-        });
-        if (!isHandoffRequestActive(request, requestDraftId)) return;
-        if (legacy.code !== 1) throw new Error(legacy.msg || '兼容旧版发布失败');
-        setMessage('当前店铺尚未进入 V2 pilot，已明确使用 Unit 6C 前的兼容旧入口');
-        return;
-      }
-      setDraftError('当前店铺未开放 V2 发布，旧入口也已禁用');
+      v2AttemptStartedRef.current = true;
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      const created = await sourceListingWorkflowClient.createPublishAttempt(confirmationDraft.id, {
+        expectedRevision: confirmationDraft.revision,
+        idempotencyKey: buildSourceListingPublishIdempotencyKey({
+          draftId: confirmationDraft.id,
+          draftVersion: confirmationDraft.draftVersion,
+          revision: confirmationDraft.revision,
+        }),
+      });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      setAttempt(created);
+      replaceHandoffUrl({ workflowId: confirmationDraft.id, attemptId: created.id });
+      toast({ title: '已创建不可变 Ozon 发布任务' });
+      pollingStarted = true;
+      void pollPublishAttempt(created);
     } catch (error) {
       if (isHandoffRequestActive(request, requestDraftId)) {
         setDraftError(errorText(error, '提交 Ozon 发布任务失败'));
@@ -1691,7 +1640,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                 {capability.enabled
                   ? `V2 不可变发布已开放 · ${capability.reason}`
                   : capability.legacyAllowed
-                    ? `非 pilot：Unit 6C 前保留兼容旧入口 · ${capability.reason}`
+                    ? `V2 尚未开放：草稿保持待审核，不会降级发布 · ${capability.reason}`
                     : `发布未开放 · ${capability.reason}`}
               </div>
             ) : null}
@@ -2063,7 +2012,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                   onClick={publish}
                   disabled={!publishReady
                     || !capability
-                    || (!capability.enabled && !capability.legacyAllowed)
+                    || !capability.enabled
                     || attemptDiscoveryState !== 'ready'
                     || Boolean(busyAction)
                     || aiMediaMaskDraftDirty}
@@ -2075,9 +2024,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
                       ? '发布历史不可用'
                       : capability?.enabled
                         ? '提交不可变 V2 任务'
-                        : capability?.legacyAllowed
-                          ? '兼容旧版发布'
-                          : '发布未开放'}
+                        : '等待开放 V2'}
                 </Button>
               </div>
             </div>

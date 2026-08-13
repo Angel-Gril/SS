@@ -1,12 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import {
+  browserOneClickReviewDraftHref,
+  parseBrowserOneClickReviewFailure,
+  parseBrowserOneClickReviewHandoff,
+} from '@/lib/browser-one-click-review';
 import { explainOzonError, explainOzonErrors, formatOzonErrorMessage, type OzonErrorHint } from 'shared/ozon-error-hints';
 import { isFallbackPictureJob, resolveListingPictureStage, type ListingPictureStageTone } from 'shared/listing-picture-stage';
 import { StatusBadge, modeLabel, type Status, type JobRow } from './listing-job-list';
@@ -27,6 +33,27 @@ interface DetailData {
   payload: (JobRow['payload'] & { items?: PushItem[] }) | null;
   shopName: string;
   platform: string;
+}
+
+function browserOneClickFailureLabel(errorCode: string): string {
+  const labels: Record<string, string> = {
+    SOURCE_CAPTURE_ADAPTER_UNAVAILABLE: 'ERP 来源采集服务不可用',
+    SOURCE_LISTING_WORKFLOW_NOT_INTERACTIVE: '来源商品审核工作流暂不可用',
+    BROWSER_ONE_CLICK_EXPECTED_SKUS_REQUIRED: '任务缺少预期 SKU',
+    BROWSER_ONE_CLICK_SKU_COVERAGE_INCOMPLETE: '浏览器数据未覆盖全部 SKU',
+    BROWSER_ONE_CLICK_SKU_UNKNOWN: '浏览器返回了任务外 SKU',
+    BROWSER_ONE_CLICK_SKU_DUPLICATE: '浏览器返回了重复 SKU',
+    BROWSER_ONE_CLICK_CAPTURE_PARTIAL_FAILURE: '部分商品采集失败',
+    SOURCE_LISTING_DRAFT_COVERAGE_INCOMPLETE: '审核草稿未覆盖全部商品',
+    SOURCE_LISTING_DRAFT_COVERAGE_AMBIGUOUS: '审核草稿商品映射重复',
+  };
+  return labels[errorCode] || '来源采集或审核草稿生成失败';
+}
+
+function browserOneClickFailureStage(errorCode: string): string {
+  if (errorCode.includes('CAPTURE')) return '采集失败';
+  if (errorCode.includes('DRAFT') || errorCode.includes('SOURCE_LISTING')) return '草稿失败';
+  return '交接失败';
 }
 
 function pictureStageClass(tone: ListingPictureStageTone): string {
@@ -121,6 +148,10 @@ function isBlockingImportError(item: PushItem): boolean {
   });
 }
 
+function isBrowserOneClickPreHandoffStage(stage: unknown): boolean {
+  return stage === 'preparing_browser_data' || stage === 'collecting';
+}
+
 export function ListingJobDetailDialog({
   jobId,
   onClose,
@@ -128,31 +159,69 @@ export function ListingJobDetailDialog({
 }: { jobId: string; onClose: () => void; onRefreshed: () => void }) {
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const loadRequestVersion = useRef(0);
+  const refreshRequestVersion = useRef(0);
 
-  async function load(silent = false) {
+  async function load(silent = false): Promise<boolean> {
+    const requestVersion = ++loadRequestVersion.current;
     if (!silent) setLoading(true);
-    const res = await api.get<DetailData>(`/api/listing/tasks/${jobId}`);
-    if (res.code === 1 && res.data) setData(res.data);
-    setLoading(false);
+    setLoadError('');
+    try {
+      const res = await api.get<DetailData>(`/api/listing/tasks/${encodeURIComponent(jobId)}`);
+      if (loadRequestVersion.current !== requestVersion) return false;
+      if (res.code === 1 && res.data) {
+        setData(res.data);
+        return true;
+      } else {
+        setLoadError(res.msg || '任务详情加载失败');
+      }
+    } catch (error) {
+      if (loadRequestVersion.current !== requestVersion) return false;
+      setLoadError(error instanceof Error ? error.message : '任务详情加载失败');
+    } finally {
+      if (loadRequestVersion.current === requestVersion) setLoading(false);
+    }
+    return false;
   }
 
   async function refresh(silent = false) {
     if (refreshing) return;
+    const requestVersion = ++refreshRequestVersion.current;
     setRefreshing(true);
-    const res = await api.post<{ status: Status }>(`/api/listing/tasks/${jobId}/refresh`, {});
-    if (res.code === 1) {
-      if (!silent) toast({ title: '已从 OZON 拉取最新状态' });
-      await load(silent);
-      onRefreshed();
-    } else if (!silent) {
-      toast({ title: res.msg || '刷新失败', variant: 'destructive' });
+    try {
+      const res = await api.post<{ status: Status }>(`/api/listing/tasks/${encodeURIComponent(jobId)}/refresh`, {});
+      if (refreshRequestVersion.current !== requestVersion) return;
+      if (res.code === 1) {
+        if (!silent) toast({ title: '已从 OZON 拉取最新状态' });
+        await load(silent);
+        if (refreshRequestVersion.current === requestVersion) onRefreshed();
+      } else if (!silent) {
+        toast({ title: res.msg || '刷新失败', variant: 'destructive' });
+      }
+    } catch (error) {
+      if (!silent && refreshRequestVersion.current === requestVersion) {
+        toast({
+          title: '刷新失败',
+          description: error instanceof Error ? error.message : '网络请求失败',
+          variant: 'destructive',
+        });
+      }
+    } finally {
+      if (refreshRequestVersion.current === requestVersion) setRefreshing(false);
     }
-    setRefreshing(false);
   }
 
   useEffect(() => {
-    load();
+    setData(null);
+    setLoadError('');
+    setRefreshing(false);
+    void load();
+    return () => {
+      loadRequestVersion.current += 1;
+      refreshRequestVersion.current += 1;
+    };
   }, [jobId]);
 
   const mode = data ? modeLabel(data.payload) : null;
@@ -181,6 +250,36 @@ export function ListingJobDetailDialog({
   const pictureStage = data
     ? resolveListingPictureStage({ status: data.status, payload: data.payload })
     : null;
+  const payloadRecord = data?.payload as Record<string, unknown> | null;
+  const browserOneClickSource = payloadRecord?.source === 'browser-one-click-listing';
+  const rawReviewHandoff = payloadRecord?.browserOneClickPublishHandoff;
+  const reviewHandoff = browserOneClickSource
+    ? parseBrowserOneClickReviewHandoff(rawReviewHandoff)
+    : null;
+  const rawReviewFailure = payloadRecord?.browserOneClickReviewFailure;
+  const reviewFailure = reviewHandoff ? null : parseBrowserOneClickReviewFailure(rawReviewFailure);
+  const reviewFailureMarked = !reviewHandoff
+    && browserOneClickSource
+    && data?.status === 'FAILED'
+    && (
+      payloadRecord?.stage === 'review_handoff_failed'
+      || rawReviewFailure != null
+    );
+  const reviewHandoffInvalid = !reviewHandoff
+    && !reviewFailureMarked
+    && browserOneClickSource
+    && (payloadRecord?.stage === 'review_required' || rawReviewHandoff != null);
+  const hasOzonTaskId = Number.isFinite(Number(data?.payload?.taskId))
+    && Number(data?.payload?.taskId) > 0;
+  const browserOneClickNeedsErpPolling = !!data
+    && browserOneClickSource
+    && data.status === 'RUNNING'
+    && isBrowserOneClickPreHandoffStage(payloadRecord?.stage)
+    && !hasOzonTaskId
+    && !reviewHandoff
+    && !reviewFailureMarked
+    && !reviewHandoffInvalid;
+  const canRefreshOzon = !browserOneClickSource || hasOzonTaskId;
   const fallbackPictureJob = isFallbackPictureJob(data?.payload);
   const showPictureStage = !!pictureStage && (
     fallbackPictureJob
@@ -194,14 +293,14 @@ export function ListingJobDetailDialog({
     && data.status === 'SUCCESS'
     && !pictureUploadStatus
     && pictureUploads.length === 0;
-  const shouldAutoRefresh = !!data && (
+  const shouldAutoRefresh = !!data && canRefreshOzon && !reviewHandoff && !reviewFailureMarked && !reviewHandoffInvalid && (
     data.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'partial_pending'
     || pictureActivationPendingCount > 0
     || needsLegacyFallbackPictureRefresh
   );
-  const canManualRefresh = !!data && (
+  const canManualRefresh = !!data && canRefreshOzon && !reviewHandoff && !reviewFailureMarked && !reviewHandoffInvalid && (
     data.status !== 'SUCCESS'
     || (data.status === 'SUCCESS' && Number(data.payload?.failedCount || 0) > 0)
     || fallbackPictureJob
@@ -219,19 +318,49 @@ export function ListingJobDetailDialog({
     return () => window.clearTimeout(timer);
   }, [jobId, shouldAutoRefresh, refreshing, data?.payload?.pictureUploadPendingCount, pictureActivationPendingCount]);
 
+  useEffect(() => {
+    if (!browserOneClickNeedsErpPolling) return;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      const loaded = await load(true);
+      if (cancelled) return;
+      if (loaded) onRefreshed();
+      timer = window.setTimeout(() => void poll(), 15000);
+    };
+    timer = window.setTimeout(() => void poll(), 15000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [jobId, browserOneClickNeedsErpPolling]);
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogTitle>上架任务详情</DialogTitle>
-        {loading || !data ? (
+        {loading && !data ? (
           <div className="py-10 text-center text-muted-foreground text-sm">
             <Loader2 className="h-5 w-5 animate-spin inline-block" />
           </div>
+        ) : !data ? (
+          <div className="py-8 text-center text-sm">
+            <p className="text-destructive">{loadError || '任务详情加载失败'}</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => void load()}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              重试
+            </Button>
+          </div>
         ) : (
           <div className="space-y-4 text-sm">
+            {loadError && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {loadError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-x-6 gap-y-2">
               <div><span className="text-muted-foreground">店铺：</span>{data.shopName}</div>
-              <div className="flex items-center gap-2"><span className="text-muted-foreground">状态：</span><StatusBadge s={data.status} /></div>
+              <div className="flex items-center gap-2"><span className="text-muted-foreground">状态：</span><StatusBadge s={data.status} reviewRequired={Boolean(reviewHandoff)} reviewFailed={reviewFailureMarked} reviewInvalid={reviewHandoffInvalid} /></div>
               <div><span className="text-muted-foreground">商品数：</span>{data.payload?.itemCount ?? '—'}</div>
               <div>
                 <span className="text-muted-foreground">失败数：</span>
@@ -270,6 +399,179 @@ export function ListingJobDetailDialog({
                 ) : '—'}
               </div>
             </div>
+
+            {reviewHandoff && (
+              <section
+                aria-labelledby="browser-one-click-review-heading"
+                className="border border-amber-200 bg-amber-50 rounded-md px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="border-amber-400 text-amber-800 dark:border-amber-700 dark:text-amber-200">
+                    需要审核
+                  </Badge>
+                  <h2 id="browser-one-click-review-heading" className="font-medium text-sm">
+                    一键上架草稿
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                  商品尚未发布。请逐项打开草稿，完成内容审核后再提交上架。
+                </p>
+
+                {reviewHandoff.drafts.length > 0 ? (
+                  <div className="mt-3 divide-y divide-amber-200 border-y border-amber-200 dark:divide-amber-800 dark:border-amber-800">
+                    {reviewHandoff.drafts.map((draft, index) => {
+                      const draftHref = browserOneClickReviewDraftHref(draft);
+                      return (
+                        <div
+                          key={`${draft.draftId}:${draft.draftVersion ?? ''}:${draft.revision ?? ''}:${index}`}
+                          className="flex min-w-0 items-center justify-between gap-3 py-2"
+                        >
+                          <div className="min-w-0 text-xs">
+                            <div className="truncate font-mono" title={draft.draftId}>{draft.draftId}</div>
+                            <div className="mt-0.5 flex flex-wrap gap-x-3 text-amber-800 dark:text-amber-300">
+                              {draft.supplyGoodsId && <span>商品 {draft.supplyGoodsId}</span>}
+                              {draft.skuKey && <span>SKU {draft.skuKey}</span>}
+                              {draft.draftVersion != null && <span>版本 {draft.draftVersion}</span>}
+                              {draft.revision != null && <span>修订 {draft.revision}</span>}
+                            </div>
+                          </div>
+                          {draftHref ? (
+                            <Button asChild variant="outline" size="sm" className="h-8 shrink-0 bg-background">
+                              <Link
+                                href={draftHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label={`审核草稿 ${draft.draftId}`}
+                              >
+                                <ExternalLink className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                                打开草稿
+                              </Link>
+                            </Button>
+                          ) : (
+                            <span className="shrink-0 text-xs text-amber-700 dark:text-amber-300">入口信息不完整</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs text-amber-800 dark:text-amber-200">
+                    暂无可打开的草稿，请查看下方失败原因。
+                  </div>
+                )}
+
+                {reviewHandoff.failures.length > 0 && (
+                  <div className="mt-3 border-t border-amber-200 pt-2 text-xs dark:border-amber-800">
+                    <div className="font-medium">草稿创建失败</div>
+                    <ul className="mt-1 space-y-1 text-amber-800 dark:text-amber-200">
+                      {reviewHandoff.failures.map((failure, index) => (
+                        <li key={`${failure.supplyGoodsId ?? ''}:${failure.errorCode}:${index}`} className="break-words">
+                          {failure.supplyGoodsId && <span className="mr-2">商品 {failure.supplyGoodsId}</span>}
+                          <code>{failure.errorCode}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {reviewHandoffInvalid && (
+              <section
+                aria-labelledby="browser-one-click-review-invalid-heading"
+                className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-destructive"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="destructive">审核交接异常</Badge>
+                  <h2 id="browser-one-click-review-invalid-heading" className="text-sm font-medium">
+                    审核草稿身份数据不完整
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs">
+                  任务不会自动发布，也不会查询 Ozon 状态。请记录任务 ID 并联系管理员修复交接数据。
+                </p>
+              </section>
+            )}
+
+            {reviewFailureMarked && (
+              <section
+                aria-labelledby="browser-one-click-review-failure-heading"
+                className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-destructive"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="destructive">审核交接失败</Badge>
+                  <h2 id="browser-one-click-review-failure-heading" className="text-sm font-medium">
+                    未生成完整的可审核草稿
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs">
+                  任务已停止且不会发布。请根据下列诊断修复采集数据或 ERP 工作流后重新发起。
+                </p>
+
+                {reviewFailure ? (
+                  <div className="mt-3 space-y-3 text-xs">
+                    <div>
+                      <span className="font-medium">主要原因：</span>
+                      {browserOneClickFailureLabel(reviewFailure.errorCode)}
+                      <code className="ml-2 break-all">{reviewFailure.errorCode}</code>
+                    </div>
+
+                    {reviewFailure.missingSkus.length > 0 && (
+                      <div>
+                        <div className="font-medium">缺失 SKU</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {reviewFailure.missingSkus.map((sku, index) => (
+                            <code key={`${sku}:${index}`} className="rounded bg-background/80 px-1.5 py-0.5">{sku}</code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {reviewFailure.unknownSkus.length > 0 && (
+                      <div>
+                        <div className="font-medium">任务外 SKU</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {reviewFailure.unknownSkus.map((sku, index) => (
+                            <code key={`${sku}:${index}`} className="rounded bg-background/80 px-1.5 py-0.5">{sku}</code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {reviewFailure.duplicateSkus.length > 0 && (
+                      <div>
+                        <div className="font-medium">重复 SKU</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {reviewFailure.duplicateSkus.map((sku, index) => (
+                            <code key={`${sku}:${index}`} className="rounded bg-background/80 px-1.5 py-0.5">{sku}</code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {reviewFailure.failures.length > 0 && (
+                      <div>
+                        <div className="font-medium">采集 / 草稿诊断</div>
+                        <ul className="mt-1 space-y-1">
+                          {reviewFailure.failures.map((failure, index) => (
+                            <li key={`${failure.errorCode}:${failure.supplyGoodsId ?? ''}:${failure.sku ?? ''}:${index}`} className="break-words">
+                              <span className="mr-2 font-medium">{browserOneClickFailureStage(failure.errorCode)}</span>
+                              {failure.sku && <span className="mr-2">SKU {failure.sku}</span>}
+                              {failure.supplyGoodsId && <span className="mr-2">商品 {failure.supplyGoodsId}</span>}
+                              <code>{failure.errorCode}</code>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs">
+                    交接诊断数据格式异常，请记录任务 ID 并联系管理员排查。
+                  </p>
+                )}
+              </section>
+            )}
 
             {data.error && (
               <div className="border border-destructive/30 bg-destructive/10 rounded-md px-3 py-2 text-destructive text-xs">

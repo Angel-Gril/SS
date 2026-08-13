@@ -140,7 +140,7 @@ test('source workflow handoff opening is a known extension contract with a narro
   assert.equal(policy.isAllowedRuntimeMessageSender(type, sourcePage, 'different-extension-id'), false);
 });
 
-test('the known legacy page publish exception is gated at all server submission boundaries', () => {
+test('browser one-click evidence stops at scoped ERP review boundaries', () => {
   const listing = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
   const deviceListing = fs.readFileSync('apps/server/src/routes/extension-device-browser-one-click.ts', 'utf8');
   const worker = fs.readFileSync('apps/server/src/workers/browser-one-click-listing.ts', 'utf8');
@@ -151,31 +151,52 @@ test('the known legacy page publish exception is gated at all server submission 
     listing.indexOf('export async function createBrowserOneClickListingJobForActor'),
     listing.indexOf('export async function patchBrowserOneClickListingJobForActor'),
   );
-  assert.ok(post.indexOf('enforceLegacySourceOzonPublish') >= 0);
-  assert.ok(post.indexOf('enforceLegacySourceOzonPublish') < post.indexOf('prisma.syncJob.create'));
+  assert.ok(post.indexOf('evaluateBrowserOneClickWorkflow') >= 0);
+  assert.ok(post.indexOf('evaluateBrowserOneClickWorkflow') < post.indexOf('syncJob.create'));
+  assert.match(post, /source_capture_adapter_unavailable/);
+  assert.doesNotMatch(post, /addBrowserOneClickListingJob|OzonClient|fetch\s*\(/);
 
   const patch = listing.slice(
     listing.indexOf('export async function patchBrowserOneClickListingJobForActor'),
     listing.indexOf("export async function listingRoutes"),
   );
-  assert.match(patch, /shouldQueueBackendJob[\s\S]*enforceLegacySourceOzonPublish/);
-  assert.ok(patch.indexOf('enforceLegacySourceOzonPublish') < patch.indexOf('addBrowserOneClickListingJob'));
+  assert.match(patch, /parseBrowserOneClickReviewHandoff[\s\S]*browserOneClickPatchBoundaryError/);
+  assert.match(
+    patch,
+    /evaluateBrowserOneClickWorkflow[\s\S]*resolveLegacySourceListingCompatibility[\s\S]*browserOneClickV2Handoff/,
+  );
+  assert.doesNotMatch(patch, /addBrowserOneClickListingJob|OzonClient|fetch\s*\(/);
   assert.match(deviceListing, /app\.post\('\/jobs'/);
-  assert.match(deviceListing, /device\.scopes\.includes\(requiredScope\)/);
+  assert.match(
+    deviceListing,
+    /requiredScopes:[^=]+=[\s\S]*'capture:write'[\s\S]*'listing:publish'/,
+  );
+  assert.match(deviceListing, /requiredScopes\?\.find[\s\S]*device\.scopes![\s\S]*includes\(scope\)/);
   assert.match(deviceListing, /watermark-templates\/read/);
-  assert.match(deviceListing, /deviceContext\(request, reply, 'capture:write'\)/);
+  assert.match(deviceListing, /deviceContext\(request, reply, \['capture:write'\]\)/);
 
   const runWorker = worker.slice(
     worker.indexOf('export async function runBrowserOneClickListingJob'),
     worker.indexOf('export async function addBrowserOneClickListingJob'),
   );
-  assert.ok(runWorker.indexOf('payload.taskId') < runWorker.indexOf('assertLegacySourceOzonPublishAllowed'));
-  assert.ok(runWorker.indexOf('assertLegacySourceOzonPublishAllowed') < runWorker.indexOf('ensureBrowserOneClickSupplyGoods'));
-  assert.match(worker, /async function callPublishOzon[\s\S]*assertLegacySourceOzonPublishAllowed[\s\S]*fetch\(/);
+  assert.match(
+    runWorker,
+    /parseBrowserOneClickReviewHandoff\(payload\.browserOneClickPublishHandoff\)[\s\S]*if \(handoff\)[\s\S]*v2_review_required/,
+  );
+  assert.match(runWorker, /review_handoff_failed[\s\S]*doNotRetry:\s*true[\s\S]*v2_handoff_required/);
+  assert.doesNotMatch(
+    runWorker,
+    /fetch\s*\(|OzonClient|ensureBrowserOneClickSupplyGoods|prisma\.supplyGoods\.create/,
+  );
 
   const publishRoute = collect.slice(
     collect.indexOf("app.post('/publish-ozon'"),
     collect.indexOf("app.get('/debug-metadata/:id'"),
+  );
+  assert.match(publishRoute, /isBrowserOneClickPublishJob[\s\S]*browser_one_click_review_required/);
+  assert.ok(
+    publishRoute.indexOf('browser_one_click_review_required')
+      < publishRoute.indexOf("await import('../services/ozon-client.js')"),
   );
   assert.ok(publishRoute.indexOf('assertCurrentLegacyPublish') >= 0);
   assert.ok(publishRoute.indexOf('await assertCurrentLegacyPublish()') < publishRoute.indexOf('client.importBySku'));

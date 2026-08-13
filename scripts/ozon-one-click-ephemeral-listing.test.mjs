@@ -6,68 +6,34 @@ const background = fs.readFileSync('extensions/ss-erp/background/collect-backgro
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
 const listingRoute = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
+const sourceListingWorkflowRoute = fs.readFileSync('apps/server/src/routes/source-listing-workflows.ts', 'utf8');
+const sourceListingWorkbench = fs.readFileSync('apps/web/src/components/source-listing/source-listing-workbench.tsx', 'utf8');
+const reviewHandoff = fs.readFileSync('apps/server/src/services/browser-one-click-review-handoff.ts', 'utf8');
 const backendWorker = fs.existsSync('apps/server/src/workers/browser-one-click-listing.ts')
   ? fs.readFileSync('apps/server/src/workers/browser-one-click-listing.ts', 'utf8')
   : '';
-const workerEntry = fs.readFileSync('apps/server/src/worker.ts', 'utf8');
-const serverEntry = fs.readFileSync('apps/server/src/index.ts', 'utf8');
 const listOverlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
 
-test('browser one-click listing uses temporary collect records instead of polluting SKU collect page', () => {
-  assert.match(
-    backendWorker,
-    /ephemeralListing:\s*true/,
-    'ERP backend worker should create temporary collect records for one-click listing',
-  );
-  assert.match(
-    backendWorker,
-    /ephemeralListingExpiresAt:\s*expiresAt\.toISOString\(\)/,
-    'temporary one-click listing records should carry an expiry timestamp',
-  );
-  assert.match(
-    backendWorker,
-    /supplyGoodsIds/,
-    'backend worker should store the generated temporary collect record ids on the listing job for retry safety',
-  );
-  assert.match(
-    collectRoute,
-    /function\s+visibleSupplyGoodsWhereSql/,
-    'collect list queries should use a Postgres-compatible visible-record filter',
-  );
-  assert.match(
-    collectRoute,
-    /coalesce\(\(metadata->>'ephemeralListing'\)::boolean,\s*false\)\s+is\s+not\s+true/,
-    'visible-record filter should hide temporary records while keeping legacy records without ephemeralListing metadata visible',
-  );
-  assert.match(
-    collectRoute,
-    /query\.includeEphemeral\s*===\s*'1'/,
-    'collect list endpoint should only show temporary records when explicitly requested',
-  );
-  assert.match(
-    collectRoute,
-    /scheduleEphemeralListingCleanup\(items,\s*userId,\s*5\s*\*\s*60\s*\*\s*1000\)/,
-    'successful publish should schedule temporary collect records for cleanup after five minutes',
-  );
-  assert.match(
-    collectRoute,
-    /function\s+purgeExpiredEphemeralListingRecords/,
-    'server should have a best-effort cleanup for temporary records after restart',
-  );
-  const purgeStart = collectRoute.indexOf('function purgeExpiredEphemeralListingRecords');
-  const purgeEnd = collectRoute.indexOf('\nfunction ', purgeStart + 1);
-  assert.ok(purgeStart >= 0, 'restart-safe cleanup function should be present');
-  assert.ok(purgeEnd > purgeStart, 'restart-safe cleanup function should have a stable end marker');
-  const purgeFn = collectRoute.slice(purgeStart, purgeEnd);
-  assert.match(
-    purgeFn,
-    /updatedAt:\s*\{\s*lt:\s*new Date\(Date\.now\(\)\s*-\s*EPHEMERAL_LISTING_TTL_MS\)/,
-    'restart-safe cleanup should purge expired temporary records after the TTL',
-  );
+test('browser one-click listing creates reviewed source projections instead of temporary publish records', () => {
   assert.doesNotMatch(
-    purgeFn,
-    /status:\s*'listed'/,
-    'restart-safe cleanup should also purge temporary records that never reached listed status',
+    backendWorker,
+    /ephemeralListing|ensureBrowserOneClickSupplyGoods|appendBrowserOneClickListingRows|prisma\.supplyGoods\.create/,
+    'the compatibility worker must not create temporary goods from browser evidence',
+  );
+  assert.match(
+    listingRoute,
+    /sourceCaptureService\.ensureLegacyProjection\([\s\S]*sourceCaptureService\.ingestLegacy\(/,
+    'ERP should normalize browser evidence through the source-capture boundary',
+  );
+  assert.match(
+    listingRoute,
+    /resolveLegacySourceListingCompatibility\([\s\S]*browserOneClickV2Handoff\(/,
+    'ERP should create reviewed source-listing drafts before completing the handoff',
+  );
+  assert.match(
+    listingRoute,
+    /stage:\s*'review_required'[\s\S]*browserOneClickPublishHandoff:\s*handoff/,
+    'a complete evidence upload should stop at the explicit review-required state',
   );
 });
 
@@ -122,47 +88,61 @@ test('Ozon list publish mode keeps the SKU/KPI table for pre-publish validation'
   );
 });
 
-test('browser one-click listing reuses the pre-created listing-log job through publish-ozon', () => {
+test('browser one-click listing hands off to reviewed V2 drafts and has no legacy worker publisher', () => {
   const publishOzonStart = collectRoute.indexOf("app.post('/publish-ozon'");
   const publishOzonEnd = collectRoute.indexOf('  // 诊断端点', publishOzonStart);
-  assert.ok(publishOzonStart >= 0 && publishOzonEnd > publishOzonStart, 'publish-ozon route should be present');
+  assert.ok(publishOzonStart >= 0 && publishOzonEnd > publishOzonStart, 'legacy publish-ozon route should be present');
   const publishOzonRoute = collectRoute.slice(publishOzonStart, publishOzonEnd);
 
+  assert.match(reviewHandoff, /BROWSER_ONE_CLICK_V2_HANDOFF_VERSION\s*=\s*'browser-one-click-v2-handoff\/v1'/);
+  assert.match(listingRoute, /contractVersion:\s*BROWSER_ONE_CLICK_V2_HANDOFF_VERSION/);
+  assert.match(listingRoute, /REVIEW_REQUIRED/);
+  assert.doesNotMatch(backendWorker, /\/api\/collect\/publish-ozon/);
+  assert.doesNotMatch(backendWorker, /createInternalAuthToken|signToken|storeSession/);
+  assert.doesNotMatch(backendWorker, /fetch\s*\(/);
+  assert.match(listingRoute, /publisherRollout/);
+  assert.match(listingRoute, /browserOneClickPublishHandoff/);
+  assert.match(listingRoute, /需在 ERP 草稿工作台完成审核后发布/);
+  assert.match(publishOzonRoute, /browser_one_click_review_required[\s\S]*terminal:\s*true/);
   assert.match(
     publishOzonRoute,
-    /jobId\?:\s*string/,
-    'publish-ozon should accept a pre-created listing job id from the browser one-click flow',
+    /\['dual_read',\s*'v2_only'\]\.includes\(sourceListingCompatibility\.stage\)[\s\S]*normalizeSourceListingDraftIdentityRefs\(body\.draftRefs\)[\s\S]*assertSourceListingDraftIdentity/,
+    'legacy compatibility publishing must require an exact reviewed draft identity in interactive rollout stages',
   );
   assert.match(
     publishOzonRoute,
-    /prisma\.syncJob\.findFirst\([\s\S]*body\.jobId[\s\S]*type:\s*'PRODUCT_PUSH'[\s\S]*shop:\s*\{\s*select:\s*\{\s*userId:\s*true/,
-    'publish-ozon should verify the pre-created job belongs to the same authenticated user',
+    /errorCode:\s*'source_listing_v2_publisher_required'[\s\S]{0,120}terminal:\s*true/,
+    'the mutable legacy publisher must terminally refuse a reviewed source-listing draft',
+  );
+  const v2RefusalIndex = publishOzonRoute.indexOf("errorCode: 'source_listing_v2_publisher_required'");
+  const ozonConstructionIndex = publishOzonRoute.indexOf("const { OzonClient } = await import('../services/ozon-client.js')");
+  assert.ok(
+    v2RefusalIndex >= 0 && ozonConstructionIndex > v2RefusalIndex,
+    'reviewed drafts must be refused before the legacy route constructs an Ozon client',
+  );
+  assert.match(publishOzonRoute, /已审核来源草稿只能通过不可变 V2 发布器提交/);
+  assert.match(
+    listingRoute,
+    /app\.post\('\/batch'[\s\S]*sendLegacyDraftPublisherRequired[\s\S]*app\.post\('\/ozon\/import-by-sku'[\s\S]*sendLegacyDraftPublisherRequired/,
+    'every mutable listing publisher must refuse an explicit source-listing draft identity',
   );
   assert.match(
-    publishOzonRoute,
-    /upsertPublishOzonSyncJob\([\s\S]*jobId:\s*body\.jobId[\s\S]*payload:/,
-    'publish-ozon should update the accepted job instead of creating a second listing-log row',
+    listingRoute,
+    /previousPayload\.source\s*!==\s*'browser-one-click-listing'[\s\S]*previousPayload\.browserOneClickJob\s*!==\s*true[\s\S]*任务不存在/,
+    'the browser one-click patch route must reject ordinary PRODUCT_PUSH jobs',
   );
   assert.match(
-    publishOzonRoute,
-    /id:\s*\{\s*not:\s*body\.jobId\s*\}/,
-    'publish-ozon retry checks should not block the current pre-created job as a duplicate fallback publish',
+    listingRoute,
+    /persistBrowserOneClickTerminalFailure[\s\S]*browserOneClickTerminalFailure[\s\S]*browser_payload_revision_required/,
+    'terminal browser payload failures must be persisted before the extension queue is released',
   );
   assert.match(
-    publishOzonRoute,
-    /browserOneClickJob/,
-    'publish-ozon should preserve browser-one-click identity when fallback payload replaces the submitted payload',
+    sourceListingWorkflowRoute,
+    /app\.post\('\/:draftId\/publish-attempts'[\s\S]*requireV2PublisherFeature[\s\S]*options\.publisher\.publish\(/,
+    'the source-listing workflow must retain the immutable V2 publish-attempt route',
   );
-  assert.match(
-    publishOzonRoute,
-    /publish:\s*existingPublishPayload\.publish/,
-    'publish-ozon should preserve browser-one-click pricing and offer settings across backend worker retries',
-  );
-  assert.match(
-    publishOzonRoute,
-    /data:\s*\{[\s\S]*jobId:/,
-    'publish-ozon should return the listing job id so the extension can point users to the ERP log',
-  );
+  assert.match(sourceListingWorkbench, /sourceListingWorkflowClient\.createPublishAttempt\(/);
+  assert.doesNotMatch(sourceListingWorkbench, /\/api\/collect\/publish-ozon|draftRefs/);
 });
 
 test('browser one-click listing logs surface stale extension background interruptions', () => {
@@ -206,37 +186,32 @@ test('watermark route processes one-click listing items with bounded concurrency
   );
 });
 
-test('browser one-click listing is executed by the ERP backend worker queue', () => {
+test('browser one-click listing does not enter the legacy ERP publish worker', () => {
+  const createStart = listingRoute.indexOf('export async function createBrowserOneClickListingJobForActor');
+  const createEnd = listingRoute.indexOf('export async function patchBrowserOneClickListingJobForActor', createStart);
+  assert.ok(createStart >= 0 && createEnd > createStart, 'browser one-click create handler should be present');
+  const createHandler = listingRoute.slice(createStart, createEnd);
+  assert.doesNotMatch(
+    createHandler,
+    /addBrowserOneClickListingJob/,
+    'browser one-click job creation must wait for evidence instead of enqueuing a publisher',
+  );
   assert.match(
-    listingRoute,
-    /addBrowserOneClickListingJob\(job\.id\)/,
-    'browser one-click job creation should enqueue the ERP backend worker',
+    createHandler,
+    /queued:\s*false[\s\S]*deferred:\s*true/,
+    'the create response should tell the extension that browser evidence is still required',
   );
   assert.match(
     backendWorker,
-    /payload\.source\s*!==\s*'browser-one-click-listing'[\s\S]*payload\.browserOneClickJob\s*!==\s*true/,
-    'backend worker should resume browser one-click jobs even after publish-ozon rewrites the payload to fallback mode',
+    /parseBrowserOneClickReviewHandoff\(payload\.browserOneClickPublishHandoff\)[\s\S]*if\s*\(handoff\)[\s\S]*reason:\s*'v2_review_required'/,
+    'the retained compatibility worker should only recognize a completed review handoff',
   );
   assert.match(
     backendWorker,
-    /export async function\s+addBrowserOneClickListingJob[\s\S]*browserOneClickListingQueue!?\s*\.add/,
-    'backend worker should expose a BullMQ enqueue function for one-click listing jobs',
+    /stage:\s*'review_handoff_failed'[\s\S]*doNotRetry:\s*true[\s\S]*reason:\s*'v2_handoff_required'/,
+    'legacy queued jobs without a review handoff should fail closed without replay',
   );
-  assert.match(
-    backendWorker,
-    /export function\s+startBrowserOneClickListingWorker[\s\S]*new Worker/,
-    'backend worker should consume one-click listing jobs outside the extension background',
-  );
-  assert.match(
-    workerEntry,
-    /startBrowserOneClickListingWorker/,
-    'standalone worker process should start the browser one-click listing worker',
-  );
-  assert.match(
-    serverEntry,
-    /startBrowserOneClickListingWorker/,
-    'single-process API mode should start the browser one-click listing worker when workers are enabled',
-  );
+  assert.doesNotMatch(backendWorker, /fetch\s*\(|\/api\/collect\/publish-ozon|prisma\.supplyGoods\.create/);
 });
 
 test('Ozon one-click publish syncs target shop cookie before creating the backend job', () => {
@@ -326,7 +301,7 @@ test('Ozon one-click publish payload completion survives MV3 background restarts
     'alarm wakeups should keep retrying unfinished browser payload jobs on VPS/local deployments',
   );
 });
-test('browser one-click listing streams complete Ozon publish data into ERP temporary goods', () => {
+test('browser one-click listing streams complete Ozon evidence into ERP review drafts', () => {
   const publishRowsFn = background.match(/async function\s+buildOzonWorkbenchPublishRows[\s\S]*?\n}\n\nasync function\s+buildOzonWorkbenchPublishPayload/);
   assert.ok(publishRowsFn, 'extension should have a dedicated publish-row enrichment function');
   assert.match(
@@ -342,12 +317,12 @@ test('browser one-click listing streams complete Ozon publish data into ERP temp
   assert.match(
     background,
     /mapOzonProductToWorkbenchPublishRow[\s\S]*ozonAttributes[\s\S]*descriptionCategoryId[\s\S]*typeId[\s\S]*variants/,
-    'publish rows should carry Ozon attributes/category/type/variants so publish-ozon uses product import instead of import-by-sku fallback',
+    'evidence rows should carry Ozon attributes/category/type/variants for ERP draft generation',
   );
   assert.doesNotMatch(
     publishRowsFn[0],
     /collectOzonProductsToErp/,
-    'publish data preparation must not write browser-collected goods directly into ERP; the backend queue owns temporary collect records',
+    'evidence preparation must not write browser-collected goods directly into ERP',
   );
   assert.match(
     background,
@@ -356,17 +331,17 @@ test('browser one-click listing streams complete Ozon publish data into ERP temp
   );
   assert.match(
     listingRoute,
-    /appendBrowserOneClickListingRows\(\s*job\.id,\s*patchPayload\.rows\.map\(objectRecord\),?\s*\)/,
-    'ERP should convert each streamed row into temporary collect records before the backend queue starts',
+    /sourceCaptureService\.ensureLegacyProjection\([\s\S]*sourceCaptureService\.ingestLegacy\(/,
+    'ERP should turn each completed evidence row into a stable source capture',
   );
   assert.match(
-    backendWorker,
-    /export async function\s+appendBrowserOneClickListingRows[\s\S]*prisma\.supplyGoods\.create/,
-    'backend worker helper should persist streamed browser rows as temporary SupplyGoods',
+    listingRoute,
+    /browserOneClickPublishHandoff:\s*handoff[\s\S]*sourceListingDraftRefs:\s*draftRefs/,
+    'ERP should bind captured evidence to review drafts and expose the handoff on the listing job',
   );
-  assert.match(
+  assert.doesNotMatch(
     backendWorker,
-    /buildBrowserOneClickOzonMetadata[\s\S]*ozonAttributes[\s\S]*descriptionCategoryId[\s\S]*typeId[\s\S]*sourceRichDescriptionJson/,
-    'backend worker should store enriched Ozon fields in the same metadata shape as manual SKU collection',
+    /buildBrowserOneClickOzonMetadata|appendBrowserOneClickListingRows|prisma\.supplyGoods\.create|fetch\s*\(/,
+    'the compatibility worker must not persist evidence or call a publisher',
   );
 });

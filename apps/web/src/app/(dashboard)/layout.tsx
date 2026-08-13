@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { api, tokenStore } from '@/lib/api';
+import { normalizeLoginReturnTo } from '@/lib/auth-return-to';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { AnnouncementPopup } from '@/components/announcement-popup';
@@ -46,21 +47,16 @@ function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean)
   return false;
 }
 
-const EXTENSION_PUBLISH_RETURN_TO = '/collect?extensionAuth=publish';
-
-function getLoginPath(pathname: string, extensionAuth: string | null): string {
+function getLoginPath(pathname: string, search: string): string {
   if (pathname.startsWith('/admin')) return '/admin/login';
-  if (pathname === '/collect' && extensionAuth === 'publish') {
-    return `/login?returnTo=${encodeURIComponent(EXTENSION_PUBLISH_RETURN_TO)}`;
-  }
+  const returnTo = normalizeLoginReturnTo(`${pathname}${search}`);
+  if (returnTo) return `/login?returnTo=${encodeURIComponent(returnTo)}`;
   return '/login';
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const extensionAuth = searchParams.get('extensionAuth');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -76,13 +72,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           setUser(res.data);
         } else {
           tokenStore.clear();
-          router.replace(getLoginPath(pathname, extensionAuth));
+          router.replace(getLoginPath(pathname, window.location.search));
         }
       })
       .catch(() => {
         if (cancelled) return;
         tokenStore.clear();
-        router.replace(getLoginPath(pathname, extensionAuth));
+        router.replace(getLoginPath(pathname, window.location.search));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -91,7 +87,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => {
       cancelled = true;
     };
-  }, [router, pathname, extensionAuth]);
+  }, [router, pathname]);
 
   // 路由权限保护：基于 effectiveRole 判断（USER 切仓库端时按 STAFF 视角拦）
   useEffect(() => {

@@ -457,7 +457,7 @@ async function validatedSubmission(
   const captureVersion = (submission as any)?.capture?.captureVersion;
   const platform = (submission as any)?.capture?.platform;
   if (captureVersion !== 'source-product-capture-v2'
-    || !['1688', 'pdd', 'taobao', 'tmall'].includes(String(platform || ''))) {
+    || !['1688', 'ozon', 'pdd', 'taobao', 'tmall'].includes(String(platform || ''))) {
     throw new SourceCaptureError(
       'SOURCE_CAPTURE_VERSION_UNSUPPORTED',
       422,
@@ -576,7 +576,7 @@ function legacyEvidence(
 function legacyPlatform(value: unknown): SourceProductCaptureV2['platform'] {
   const platform = String(value || '').trim().toLowerCase();
   const normalized = platform === 'pinduoduo' ? 'pdd' : platform;
-  if (!['1688', 'pdd', 'taobao', 'tmall'].includes(normalized)) {
+  if (!['1688', 'pdd', 'taobao', 'tmall', 'ozon'].includes(normalized)) {
     throw new SourceCaptureError('SOURCE_CAPTURE_INVALID', 400, 'Legacy source platform is unsupported');
   }
   return normalized as SourceProductCaptureV2['platform'];
@@ -674,6 +674,8 @@ function legacyCapture(item: Record<string, unknown>, observedAt: string): Sourc
   const platform = legacyPlatform(item.sourcePlatform);
   const productId = identifier(item.sourceProductId ?? item.sku, 'sourceProductId');
   const sourceUrl = identifier(item.sourceUrl, 'sourceUrl', 4096);
+  const currency = (legacyText(item.currency) || 'CNY').toUpperCase();
+  const hasCnyPrice = currency === 'CNY';
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(sourceUrl);
@@ -691,7 +693,7 @@ function legacyCapture(item: Record<string, unknown>, observedAt: string): Sourc
     const row = entry as Record<string, unknown>;
     const sourceSkuId = legacyText(row.sku ?? row.skuId ?? row.id);
     const specText = legacyText(row.specText ?? row.title ?? row.name);
-    const priceCny = legacyNumber(row.price, false);
+    const priceCny = hasCnyPrice ? legacyNumber(row.price, false) : null;
     const stockNumber = legacyNumber(row.stock, true);
     const stock = stockNumber == null ? null : Math.floor(stockNumber);
     return [{
@@ -749,7 +751,6 @@ function legacyCapture(item: Record<string, unknown>, observedAt: string): Sourc
   const title = legacyText(item.sourceTitleRaw ?? item.title);
   const shopName = legacyText(item.shopName ?? item.supplier);
   const description = legacyText(item.description);
-  const currency = (legacyText(item.currency) || 'CNY').toUpperCase();
   const selectedSkuKey = skus[0]?.key || null;
   const shippingCny = legacyNumber(item.shippingCny, true);
   const shippingFree = shippingCny === 0 ? true : (typeof item.shippingFree === 'boolean' ? item.shippingFree : null);
@@ -781,8 +782,9 @@ function legacyCapture(item: Record<string, unknown>, observedAt: string): Sourc
     key,
     legacyEvidence(value, `/legacy/facts/${key}`, observedAt),
   ])) as unknown as SourceProductCaptureV2['fieldEvidence'];
-  const priceAmount = skus.find((sku) => sku.priceCny != null)?.priceCny
-    ?? legacyNumber(item.price, false);
+  const priceAmount = hasCnyPrice
+    ? skus.find((sku) => sku.priceCny != null)?.priceCny ?? legacyNumber(item.price, false)
+    : null;
   const prices = priceAmount == null ? [] : [{
     key: 'legacy-selected-price',
     role: 'selected_sku' as const,
@@ -904,6 +906,8 @@ function prepareLegacyProjection(
   const platform = legacyPlatform(item.sourcePlatform);
   const sourceProductId = identifier(item.sourceProductId ?? item.sku, 'sourceProductId');
   const sourceUrl = identifier(item.sourceUrl, 'sourceUrl', 4096);
+  const currency = (legacyText(item.currency) || 'CNY').toUpperCase();
+  const hasCnyPrice = currency === 'CNY';
   try {
     const parsed = new URL(sourceUrl);
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported protocol');
@@ -920,7 +924,7 @@ function prepareLegacyProjection(
     return [{
       sku: legacyText(row.sku ?? row.skuId ?? row.id) || `legacy-sku-${ordinal}`,
       attrs: row.attrs && typeof row.attrs === 'object' && !Array.isArray(row.attrs) ? row.attrs : {},
-      price: legacyNumber(row.price, false),
+      price: hasCnyPrice ? legacyNumber(row.price, false) : null,
       stock: stock == null ? null : Math.floor(stock),
     }];
   });
@@ -931,7 +935,6 @@ function prepareLegacyProjection(
     .filter((value): value is string => Boolean(value && /^https?:\/\//i.test(value)))
     .slice(0, SOURCE_CAPTURE_PROJECTION_MAIN_IMAGE_LIMIT);
   const title = legacyText(item.sourceTitleRaw ?? item.title) || `${platform} ${sourceProductId}`;
-  const currency = (legacyText(item.currency) || 'CNY').toUpperCase();
   const firstSku = variants[0]?.sku || sourceProductId;
   return {
     ownerUserId: trusted.ownerUserId,
@@ -949,8 +952,10 @@ function prepareLegacyProjection(
       sku: String(firstSku),
       images,
       variants,
-      purchasePrice: legacyNumber(item.price, false)
-        ?? (typeof variants[0]?.price === 'number' ? variants[0].price : null),
+      purchasePrice: hasCnyPrice
+        ? legacyNumber(item.price, false)
+          ?? (typeof variants[0]?.price === 'number' ? variants[0].price : null)
+        : null,
       currency: /^[A-Z]{3}$/.test(currency) ? currency : 'CNY',
       metadata: {
         sourceCaptureV2: {

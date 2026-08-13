@@ -3108,18 +3108,20 @@ function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }
 function SourceCollectPageContent() {
   const searchParams = useSearchParams();
   const handoffQuery = searchParams.toString();
-  const handoffState = useMemo<{ handoff: SourceListingHandoff | null; error: string }>(() => {
+  const handoffState = useMemo<{ requested: boolean; handoff: SourceListingHandoff | null; error: string }>(() => {
     const query = new URLSearchParams(handoffQuery);
     if (!SOURCE_LISTING_HANDOFF_KEYS.some((key) => query.has(key))) {
-      return { handoff: null, error: '' };
+      return { requested: false, handoff: null, error: '' };
     }
     try {
       return {
+        requested: true,
         handoff: { ...parseSourceListingHandoff(query), section: 'listing' },
         error: '',
       };
     } catch (error) {
       return {
+        requested: true,
         handoff: null,
         error: error instanceof Error ? error.message : '来源商品工作台链接无效',
       };
@@ -3203,8 +3205,8 @@ function SourceCollectPageContent() {
   }
 
   useEffect(() => {
-    loadItems();
-  }, []);
+    if (!handoffState.requested) loadItems();
+  }, [handoffState.requested]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => platform === 'all' || normalizePlatform(item.sourcePlatform) === platform);
@@ -3225,14 +3227,21 @@ function SourceCollectPageContent() {
     setDetailItem(null);
   }
 
+  if (handoffState.requested) {
+    return (
+      <div className="space-y-4">
+        {handoffState.error ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+            无法打开来源商品上架工作台：{handoffState.error}
+          </div>
+        ) : null}
+        {handoffState.handoff ? <SourceListingWorkbench handoff={handoffState.handoff} /> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {handoffState.error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
-          无法打开来源商品上架工作台：{handoffState.error}
-        </div>
-      ) : null}
-      {handoffState.handoff ? <SourceListingWorkbench handoff={handoffState.handoff} /> : null}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688商品采集</h1>
