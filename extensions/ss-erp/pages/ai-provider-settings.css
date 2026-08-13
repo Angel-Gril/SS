@@ -1,27 +1,27 @@
 :root {
   color-scheme: light;
-  --page: #f6f7f9;
+  --page: #f4f7f7;
   --surface: #ffffff;
-  --surface-muted: #f8fafc;
-  --surface-warm: #fff8f2;
-  --line: #dce1e7;
-  --line-strong: #c7cfd8;
-  --ink: #17202a;
-  --muted: #637083;
-  --quiet: #637083;
-  --brand: #d85f20;
-  --brand-strong: #a53f0e;
-  --brand-soft: #fff0e6;
-  --success: #167448;
-  --success-soft: #e9f7ef;
-  --warning: #9a6700;
-  --warning-soft: #fff7dd;
+  --surface-muted: #f4f7f7;
+  --surface-warm: #ecf8f6;
+  --line: #d7e0e1;
+  --line-strong: #b9c8ca;
+  --ink: #172326;
+  --muted: #5f6f73;
+  --quiet: #5f6f73;
+  --brand: #0f766e;
+  --brand-strong: #0b5d57;
+  --brand-soft: #ecf8f6;
+  --success: #15803d;
+  --success-soft: #edf8f0;
+  --warning: #b45309;
+  --warning-soft: #fff8eb;
   --danger: #b42318;
   --danger-soft: #fff0ee;
-  --info: #235f9c;
-  --info-soft: #edf5fd;
-  --focus: rgba(216, 95, 32, 0.24);
-  --shadow: 0 12px 32px rgba(23, 32, 42, 0.08);
+  --info: #2563eb;
+  --info-soft: #eff6ff;
+  --focus: rgb(15 118 110 / 24%);
+  --shadow: 0 6px 18px rgba(23, 35, 38, 0.06);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
@@ -152,7 +152,7 @@ fieldset {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 8px;
-  background: var(--brand-strong);
+  background: var(--brand);
   color: #ffffff;
   font-size: 13px;
   font-weight: 800;
@@ -231,7 +231,7 @@ h3 {
 }
 
 .button-primary:hover:not(:disabled) {
-  background: #84340d;
+  background: var(--brand-strong);
 }
 
 .button-secondary {

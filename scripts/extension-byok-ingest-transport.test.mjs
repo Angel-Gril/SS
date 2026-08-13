@@ -100,6 +100,31 @@ assert.equal(requests[1].init.credentials, 'omit');
 assert.equal(requests[1].init.cache, 'no-store');
 assert.equal(requests[1].init.redirect, 'error');
 
+const deviceStatusRequests = [];
+const deviceStatusTransport = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION.createTransport({
+  credentials: credentials([]),
+  fetchImpl: async (url, init) => {
+    deviceStatusRequests.push({ url, init });
+    return response(200, {
+      code: 1,
+      data: { scopes: ['listing:publish'], allowedShopIds: ['shop-1'] },
+    });
+  },
+});
+const deviceStatusResult = await deviceStatusTransport.post(
+  '/api/extension-device/browser-one-click/status/read',
+  {},
+);
+assert.equal(deviceStatusResult.state, 'response');
+assert.equal(deviceStatusRequests.length, 1);
+assert.equal(
+  deviceStatusRequests[0].url,
+  'https://erp.example/api/extension-device/browser-one-click/status/read',
+);
+assert.equal(deviceStatusRequests[0].init.headers.Authorization, 'Bearer device-token');
+assert.equal(deviceStatusRequests[0].init.cache, 'no-store');
+assert.equal(deviceStatusRequests[0].init.credentials, 'omit');
+
 const executionIntentClaimPayload = {
   contractVersion: 'extension-byok-execution-intent-claim-request/v1',
 };

@@ -209,7 +209,8 @@ test('extension workbench publish only creates a backend one-click listing job',
   assert.doesNotMatch(background, /\/api\/listing\/ozon\/import-by-sku/);
   assert.doesNotMatch(background, /async function publishOzonWorkbenchRows/);
   assert.doesNotMatch(background, /\/api\/collect\/publish-ozon/);
-  assert.match(background, /\/api\/listing\/browser-one-click-jobs/);
+  assert.match(background, /globalThis\.SS_ERP_EXTENSION_DEVICE_ONE_CLICK[\s\S]*deviceApi\.create/);
+  assert.match(background, /globalThis\.SS_ERP_EXTENSION_DEVICE_ONE_CLICK[\s\S]*deviceApi\.patch/);
   assert.match(background, /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*queued:\s*true/);
   assert.doesNotMatch(background, /directPublish/);
 });

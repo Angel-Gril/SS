@@ -6,19 +6,19 @@
   <title>SS ERP</title>
   <style>
     :root {
-      --brand: #e8722a;
-      --brand-dark: #b85018;
-      --brand-soft: #fff5ed;
-      --brand-line: #f2c8a8;
-      --green: #159947;
-      --red: #dc2626;
-      --orange: #d97706;
-      --text: #18181b;
-      --muted: #6b7280;
-      --line: #e5e7eb;
+      --brand: #0f766e;
+      --brand-dark: #0b5d57;
+      --brand-soft: #ecf8f6;
+      --brand-line: #9ccdc8;
+      --green: #15803d;
+      --red: #b42318;
+      --orange: #b45309;
+      --text: #172326;
+      --muted: #5f6f73;
+      --line: #d7e0e1;
       --surface: #ffffff;
-      --surface-2: #f8fafc;
-      --surface-3: #f3f4f6;
+      --surface-2: #f4f7f7;
+      --surface-3: #eaf0f0;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -37,7 +37,7 @@
       gap: 10px;
       padding: 14px 16px 12px;
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, var(--brand-soft), #fff);
+      background: var(--surface);
     }
 
     .logo {
@@ -81,7 +81,7 @@
       padding: 0 8px;
       border-radius: 999px;
       background: var(--surface-3);
-      color: #374151;
+      color: #334346;
       font-size: 11px;
       font-weight: 650;
     }
@@ -148,6 +148,15 @@
     }
     .secondary-action[hidden] { display: none; }
 
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid rgb(15 118 110 / 24%);
+      outline-offset: 2px;
+    }
+
     .source-platform-prefs {
       display: flex;
       align-items: center;
@@ -166,7 +175,7 @@
       align-items: center;
       gap: 3px;
       min-height: 18px;
-      color: #374151;
+      color: #334346;
       cursor: pointer;
       user-select: none;
     }
@@ -255,7 +264,7 @@
       padding: 11px 16px;
       font-size: 12px;
       font-weight: 700;
-      color: #374151;
+      color: #334346;
       display: flex;
       align-items: center;
       justify-content: space-between;

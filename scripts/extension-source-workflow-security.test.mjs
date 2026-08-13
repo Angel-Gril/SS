@@ -142,23 +142,28 @@ test('source workflow handoff opening is a known extension contract with a narro
 
 test('the known legacy page publish exception is gated at all server submission boundaries', () => {
   const listing = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
+  const deviceListing = fs.readFileSync('apps/server/src/routes/extension-device-browser-one-click.ts', 'utf8');
   const worker = fs.readFileSync('apps/server/src/workers/browser-one-click-listing.ts', 'utf8');
   const collect = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
   const flags = fs.readFileSync('apps/server/src/services/source-workflow-feature-flags.ts', 'utf8');
 
   const post = listing.slice(
-    listing.indexOf("app.post('/browser-one-click-jobs'"),
-    listing.indexOf("app.patch('/browser-one-click-jobs/:id'"),
+    listing.indexOf('export async function createBrowserOneClickListingJobForActor'),
+    listing.indexOf('export async function patchBrowserOneClickListingJobForActor'),
   );
   assert.ok(post.indexOf('enforceLegacySourceOzonPublish') >= 0);
   assert.ok(post.indexOf('enforceLegacySourceOzonPublish') < post.indexOf('prisma.syncJob.create'));
 
   const patch = listing.slice(
-    listing.indexOf("app.patch('/browser-one-click-jobs/:id'"),
-    listing.indexOf("app.get('/tasks'"),
+    listing.indexOf('export async function patchBrowserOneClickListingJobForActor'),
+    listing.indexOf("export async function listingRoutes"),
   );
   assert.match(patch, /shouldQueueBackendJob[\s\S]*enforceLegacySourceOzonPublish/);
   assert.ok(patch.indexOf('enforceLegacySourceOzonPublish') < patch.indexOf('addBrowserOneClickListingJob'));
+  assert.match(deviceListing, /app\.post\('\/jobs'/);
+  assert.match(deviceListing, /device\.scopes\.includes\(requiredScope\)/);
+  assert.match(deviceListing, /watermark-templates\/read/);
+  assert.match(deviceListing, /deviceContext\(request, reply, 'capture:write'\)/);
 
   const runWorker = worker.slice(
     worker.indexOf('export async function runBrowserOneClickListingJob'),

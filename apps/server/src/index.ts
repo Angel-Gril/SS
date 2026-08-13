@@ -113,6 +113,7 @@ import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/
 import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
 import { createOzonPublisherEntrypointRolloutService } from './services/ozon-publisher-entrypoint-rollout.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
+import { extensionDeviceBrowserOneClickRoutes } from './routes/extension-device-browser-one-click.js';
 import {
   createSourceWorkflowCommandResolver,
   extensionCommandGrantRoutes,
@@ -2227,6 +2228,14 @@ if (isExtensionDeviceAuthEnabled()) {
         return stored;
       },
     },
+  });
+  await app.register(extensionDeviceBrowserOneClickRoutes, {
+    prefix: '/api/extension-device/browser-one-click',
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    featureFlags: sourceWorkflowFeatureFlags,
   });
   const loadExtensionCommandShop = ({ shopId, ownerUserId }: {
     shopId: string;

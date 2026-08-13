@@ -1123,6 +1123,129 @@ async function readExtensionDeviceOzonShops() {
 
 globalThis.SS_ERP_EXTENSION_DEVICE_SHOPS = readExtensionDeviceOzonShops;
 
+function browserOneClickDeviceTransportResult(result, label, scopeFailure) {
+  if (result && result.state === 'response' && result.body) {
+    return result.body.code === 1
+      ? { ok: true, ...(result.body.data ? { data: result.body.data } : {}), msg: result.body.msg }
+      : {
+          ok: false,
+          errorCode: result.body.errorCode || 'device_request_failed',
+          error: result.body.msg || label + '失败',
+        };
+  }
+  if (result && result.state === 'scope_required') {
+    return {
+      ok: false,
+      errorCode: scopeFailure && scopeFailure.errorCode || 'device_publish_scope_required',
+      error: scopeFailure && scopeFailure.error
+        || '当前设备缺少 Ozon 上架授权，请在 ERP 设备管理中授权后重试',
+    };
+  }
+  if (result && (result.state === 'authorization_required' || result.state === 'unpaired')) {
+    return {
+      ok: false,
+      errorCode: 'device_authorization_required',
+      error: '设备授权已失效，请重新连接 ERP',
+    };
+  }
+  return {
+    ok: false,
+    errorCode: result && result.body && result.body.errorCode || 'device_request_failed',
+    error: result && result.body && (result.body.msg || result.body.error)
+      || label + '失败',
+  };
+}
+
+async function createExtensionDeviceBrowserOneClickJob(payload) {
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/browser-one-click/jobs',
+    payload,
+    { requiredScope: 'listing:publish' },
+  );
+  const normalized = browserOneClickDeviceTransportResult(result, '创建上架任务');
+  if (!normalized.ok) return normalized;
+  return { ok: true, data: normalized.data, msg: normalized.msg };
+}
+
+async function patchExtensionDeviceBrowserOneClickJob(jobId, payload) {
+  const normalizedJobId = String(jobId || '').normalize('NFKC').trim();
+  if (!normalizedJobId || normalizedJobId.length > 200 || /[\\/]/.test(normalizedJobId)) {
+    return { ok: false, errorCode: 'invalid_job_id', error: '上架任务 ID 无效' };
+  }
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/browser-one-click/jobs/' + encodeURIComponent(normalizedJobId),
+    payload,
+    { requiredScope: 'listing:publish' },
+  );
+  return browserOneClickDeviceTransportResult(result, '更新上架任务');
+}
+
+async function readExtensionDeviceWatermarkTemplates(shopId) {
+  const normalizedShopId = String(shopId || '').normalize('NFKC').trim();
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/browser-one-click/watermark-templates/read',
+    normalizedShopId ? { shopId: normalizedShopId } : {},
+    { requiredScope: 'capture:write' },
+  );
+  const normalized = browserOneClickDeviceTransportResult(result, '获取水印模板');
+  if (!normalized.ok) return normalized;
+  return {
+    ok: true,
+    data: Array.isArray(normalized.data) ? normalized.data : [],
+    authMode: 'device',
+  };
+}
+
+async function readExtensionDeviceBrowserOneClickStatus() {
+  const status = await readExtensionDeviceStatusAfterClaims(false);
+  if (!status || status.state !== 'paired') {
+    return {
+      ok: false,
+      state: status && status.state || 'unpaired',
+      authMode: 'device',
+      endpoint: status && status.endpoint || '',
+      scopes: [],
+      canPublish: false,
+    };
+  }
+  const result = await getByokDeviceTransport().post(
+    '/api/extension-device/browser-one-click/status/read',
+    {},
+  );
+  const normalized = browserOneClickDeviceTransportResult(result, '读取设备上架授权', {
+    errorCode: 'device_publish_scope_required',
+    error: '当前设备缺少 Ozon 上架授权，请在 ERP 设备管理中授权后重试',
+  });
+  if (!normalized.ok) {
+    return {
+      ...normalized,
+      state: result && result.state || 'unreachable',
+      authMode: 'device',
+      endpoint: status.endpoint || '',
+      scopes: [],
+      canPublish: false,
+    };
+  }
+  const scopes = Array.isArray(normalized.data && normalized.data.scopes)
+    ? normalized.data.scopes.filter((scope) => typeof scope === 'string')
+    : [];
+  return {
+    ok: true,
+    state: 'paired',
+    authMode: 'device',
+    endpoint: status.endpoint || '',
+    scopes: scopes.slice(),
+    canPublish: scopes.includes('listing:publish'),
+  };
+}
+
+globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK = Object.freeze({
+  status: readExtensionDeviceBrowserOneClickStatus,
+  create: createExtensionDeviceBrowserOneClickJob,
+  patch: patchExtensionDeviceBrowserOneClickJob,
+  watermarks: readExtensionDeviceWatermarkTemplates,
+});
+
 async function requestExtensionDeviceOzonCdnAuth(method, shopId, payload, expectedSessionId) {
   const normalizedShopId = String(shopId == null ? '' : shopId).trim();
   if (!normalizedShopId || normalizedShopId.length > 200 || /[\\/]/.test(normalizedShopId)) {
@@ -6492,15 +6615,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calc:erp-endpoint-get') {
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, OZON_CALC_ERP_PUSH_HISTORY_KEY, 'ss_erp_connection']).then((result) => {
+    Promise.all([
+      chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, OZON_CALC_ERP_PUSH_HISTORY_KEY, 'ss_erp_connection']),
+      readExtensionDeviceBrowserOneClickStatus().catch(() => null),
+    ]).then(([result, deviceStatus]) => {
       const history = Array.isArray(result[OZON_CALC_ERP_PUSH_HISTORY_KEY]) ? result[OZON_CALC_ERP_PUSH_HISTORY_KEY] : [];
       const legacyConn = result.ss_erp_connection || {};
-      const endpoint = toText(result[OZON_CALC_ERP_ENDPOINT_KEY] || legacyConn.baseUrl).trim();
+      const devicePaired = Boolean(deviceStatus && deviceStatus.ok === true
+        && deviceStatus.state === 'paired');
+      const deviceObserved = Boolean(deviceStatus && deviceStatus.authMode === 'device');
+      const endpoint = toText(
+        devicePaired && deviceStatus.endpoint
+          || result[OZON_CALC_ERP_ENDPOINT_KEY]
+          || legacyConn.baseUrl,
+      ).trim();
       const token = toText(result[OZON_CALC_ERP_TOKEN_KEY] || legacyConn.token).trim();
+      const scopes = devicePaired && Array.isArray(deviceStatus.scopes)
+        ? deviceStatus.scopes.slice()
+        : [];
       sendResponse({
         ok: true,
         endpoint,
         hasToken: Boolean(token),
+        connected: devicePaired,
+        authMode: deviceObserved ? 'device' : (token ? 'legacy_token' : 'none'),
+        scopes,
+        canPublish: devicePaired && scopes.includes('listing:publish'),
         lastPush: history.length ? history[history.length - 1] : null,
       });
     }).catch((error) => {

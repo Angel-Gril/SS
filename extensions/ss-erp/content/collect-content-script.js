@@ -10,18 +10,18 @@
   const OZON_WORKBENCH_MODAL_ID = "ss-erp-ozon-workbench-modal";
   const OZON_QUICK_ACTIONS_ID = "ss-erp-ozon-quick-actions";
   const SS_ERP_PRODUCT_THEME = {
-    primary: "#ea580c",
-    primaryDark: "#9a3412",
-    primaryDarker: "#7c2d12",
-    primarySoft: "#fff7ed",
-    border: "#fed7aa",
-    borderStrong: "#fdba74",
-    blue: "#1e88e5",
+    primary: "#0f766e",
+    primaryDark: "#115e59",
+    primaryDarker: "#134e4a",
+    primarySoft: "#f0fdfa",
+    border: "#cce5e2",
+    borderStrong: "#99c9c3",
+    blue: "#2563eb",
     surface: "#f8fafc",
-    surfaceAlt: "#f9fafb",
-    text: "#111827",
-    muted: "#64748b",
-    headerGradient: "linear-gradient(135deg,#9a3412 0%,#ea580c 100%)",
+    surfaceAlt: "#f1f5f9",
+    text: "#172326",
+    muted: "#5f6f73",
+    headerGradient: "#0f766e",
   };
   const SourceProductCore = globalThis.SS_ERP_SOURCE_PRODUCT_CORE || {};
   const detectPlatform = SourceProductCore.detectPlatform;
@@ -1100,7 +1100,7 @@
         <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>
         <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>
       </div>
-      <button type="button" data-role="quick-open-workbench" title="打开商品上架工作台" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
+      <button type="button" data-role="quick-open-workbench" title="打开商品上架工作台" style="${quickActionButtonStyle(SS_ERP_PRODUCT_THEME.primary, "#ffffff")}">一键上架</button>
       <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
       <button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
       <button type="button" data-role="quick-selection-settings" title="打开选品规则设置入口" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">设置选品</button>
@@ -1398,12 +1398,12 @@
     ].join(";");
 
     panel.innerHTML = `
-      <div data-role="tab" style="writing-mode:vertical-rl;text-orientation:mixed;padding:14px 10px;cursor:pointer;font-size:12px;font-weight:800;color:#9a3412;letter-spacing:0;display:flex;align-items:center;gap:6px;white-space:nowrap;">
-        <span style="writing-mode:horizontal-tb;width:14px;height:14px;border-radius:3px;background:#ea580c;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">D</span>
+      <div data-role="tab" style="writing-mode:vertical-rl;text-orientation:mixed;padding:14px 10px;cursor:pointer;font-size:12px;font-weight:800;color:${SS_ERP_PRODUCT_THEME.primaryDark};letter-spacing:0;display:flex;align-items:center;gap:6px;white-space:nowrap;">
+        <span style="writing-mode:horizontal-tb;width:14px;height:14px;border-radius:3px;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">D</span>
         <span>数据一览</span>
       </div>
       <div data-role="expanded" style="display:none;width:340px;">
-        <div style="background:linear-gradient(135deg,#9a3412 0%,#ea580c 100%);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
+        <div style="background:${SS_ERP_PRODUCT_THEME.headerGradient};padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
           <div>
             <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.01em;">Ozon 数据一览</div>
             <div style="font-size:11px;color:rgba(255,255,255,0.72);margin-top:2px;">SKU ${productId}</div>
@@ -1576,7 +1576,7 @@
     grid.innerHTML = rows
       .map(
         ([label, value]) => `
-          <div style="padding:8px;border-radius:3px;background:#fff7ed;transition:background 0.15s;">
+          <div style="padding:8px;border-radius:3px;background:${SS_ERP_PRODUCT_THEME.primarySoft};transition:background 0.15s;">
             <div style="font-size:10px;color:#98a6ba;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(label)}</div>
             <div style="font-size:12px;font-weight:600;word-break:break-word;color:#1a2332;">${renderOzonPanelValue(value)}</div>
           </div>
@@ -1705,7 +1705,7 @@
             <div style="font-size:15px;font-weight:800;line-height:1.2;">SS ERP 跟卖列表</div>
             <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${Number.isFinite(sellerCount) && sellerCount > 0 ? formatNumber(sellerCount) : rows.length} 个卖家 · 最低 ${escapeHtml(minPrice)} · 最高 ${escapeHtml(maxPrice)}</div>
           </div>
-          <button type="button" data-role="close-seller-list" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
+          <button type="button" data-role="close-seller-list" aria-label="关闭跟卖列表" title="关闭" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
         </div>
         <div style="overflow:auto;padding:12px 14px;background:#fff;">
           <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:13px;border:1px solid ${SS_ERP_PRODUCT_THEME.border};">
@@ -1743,7 +1743,12 @@
 
   function showOzonSkuWorkbench(productId, initialMode) {
     const old = document.getElementById(OZON_WORKBENCH_MODAL_ID);
-    if (old) old.remove();
+    if (old) {
+      if (typeof old.__ssErpConnectionRefreshCleanup === "function") {
+        old.__ssErpConnectionRefreshCleanup();
+      }
+      old.remove();
+    }
     const activeMode = normalizeProductWorkbenchMode(initialMode);
 
     const modal = document.createElement("div");
@@ -1760,13 +1765,13 @@
     ].join(";");
     modal.innerHTML = `
       <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 48px));height:min(720px,calc(100vh - 48px));background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.24);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;">
-        <style>#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f8fafc;color:#334155;box-shadow:0 1px 0 #e5e7eb;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#fff7ed!important;}</style>
+        <style>#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f1f5f9;color:#334155;box-shadow:0 1px 0 #d7e0e1;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#f0fdfa!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="publish-workbench"]:disabled{opacity:.5;cursor:not-allowed!important;box-shadow:none!important;}</style>
         <div style="min-height:56px;background:${SS_ERP_PRODUCT_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_PRODUCT_THEME.primaryDark};">
           <div>
             <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getProductWorkbenchModeTitle(activeMode))}</div>
             <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getProductWorkbenchModeSubtitle(activeMode, productId))}</div>
           </div>
-          <button type="button" data-role="close-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
+          <button type="button" data-role="close-workbench" aria-label="关闭一键上架工作台" title="关闭" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
         </div>
         <div data-role="workbench-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
           <div data-role="publish-target-controls" data-mode-scope="publish" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -1788,6 +1793,8 @@
               <option value="">加载水印...</option>
             </select>
           </div>
+          <div data-role="connection-status" style="font-size:12px;color:${SS_ERP_PRODUCT_THEME.muted};white-space:nowrap;">ERP 连接检测中...</div>
+          <button type="button" data-role="open-publish-authorization" hidden style="height:32px;border:1px solid ${SS_ERP_PRODUCT_THEME.borderStrong};background:${SS_ERP_PRODUCT_THEME.primarySoft};color:${SS_ERP_PRODUCT_THEME.primaryDark};border-radius:4px;padding:0 11px;font-size:12px;font-weight:800;cursor:pointer;">打开 ERP 授权</button>
           <button type="button" data-role="refresh-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新 SKU</button>
         </div>
         <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
@@ -1834,20 +1841,31 @@
     `;
 
     document.body.appendChild(modal);
-    modal.querySelector("[data-role='close-workbench']").addEventListener("click", () => modal.remove());
+    const closeWorkbench = () => {
+      if (typeof modal.__ssErpConnectionRefreshCleanup === "function") {
+        modal.__ssErpConnectionRefreshCleanup();
+      }
+      modal.remove();
+    };
+    modal.querySelector("[data-role='close-workbench']").addEventListener("click", closeWorkbench);
     modal.addEventListener("click", (event) => {
-      if (event.target === modal) modal.remove();
+      if (event.target === modal) closeWorkbench();
     });
     modal.querySelector("[data-role='shop-select']").addEventListener("change", (event) => {
       loadOzonWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
     });
     modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
+    modal.querySelector("[data-role='open-publish-authorization']").addEventListener("click", () => {
+      openErpPage("/collect?extensionAuth=publish");
+    });
     modal.querySelector("[data-role='select-all-workbench']").addEventListener("change", (event) => {
       modal.querySelectorAll("[data-role='workbench-row-check']").forEach((box) => { box.checked = event.target.checked; });
     });
     modal.querySelector("[data-role='publish-workbench']").addEventListener("click", () => publishSelectedOzonWorkbenchRows(modal));
 
     setProductWorkbenchMode(modal, activeMode);
+    loadOzonWorkbenchConnectionStatus(modal).catch(() => {});
+    bindOzonWorkbenchConnectionRefresh(modal);
     loadOzonWorkbenchShops(modal);
     loadOzonWorkbenchWatermarkTemplates(modal).catch(() => {});
     loadOzonWorkbenchRows(modal, productId);
@@ -2061,6 +2079,105 @@
     }
   }
 
+  function formatOzonWorkbenchConnectionLabel(endpoint, hasToken, authMode, canPublish) {
+    const raw = String(endpoint || "").trim();
+    if (!raw) return "ERP 未连接";
+    let host = raw;
+    try {
+      host = new URL(raw).host;
+    } catch (error) {}
+    const lower = host.toLowerCase();
+    const scope = /localhost|127\.0\.0\.1/.test(lower)
+      ? "本地 ERP"
+      : (/ss-erp\.com/.test(lower) ? "云端 ERP" : "ERP");
+    if (authMode === "device") {
+      return `${scope}: ${host}${canPublish ? " · 设备已授权" : " · 缺少上架授权"}`;
+    }
+    return `${scope}: ${host}${hasToken ? " · 兼容连接" : " · 未连接"}`;
+  }
+
+  async function loadOzonWorkbenchConnectionStatus(modal) {
+    const node = modal.querySelector("[data-role='connection-status']");
+    const publishButton = modal.querySelector("[data-role='publish-workbench']");
+    const authorizationButton = modal.querySelector("[data-role='open-publish-authorization']");
+    if (!node) return;
+    try {
+      const response = await sendRuntimeMessage({ type: "ozon-calc:erp-endpoint-get" });
+      if (!response || !response.ok) {
+        throw new Error(response && (response.error || response.msg) || "ERP 连接读取失败");
+      }
+      node.textContent = formatOzonWorkbenchConnectionLabel(
+        response.endpoint,
+        response.hasToken,
+        response.authMode,
+        response.canPublish,
+      );
+      node.style.color = response.connected && response.canPublish
+        ? SS_ERP_PRODUCT_THEME.muted
+        : response.connected ? "#b45309" : "#b42318";
+      modal.__ssErpCanPublish = response.canPublish === true;
+      if (publishButton) {
+        publishButton.disabled = !modal.__ssErpCanPublish;
+        publishButton.title = modal.__ssErpCanPublish
+          ? "提交所选商品"
+          : (response.connected ? "设备缺少 Ozon 上架授权" : "ERP 尚未连接");
+      }
+      if (authorizationButton) {
+        authorizationButton.hidden = response.canPublish === true;
+      }
+    } catch (error) {
+      node.textContent = error && error.message ? error.message : "ERP 连接读取失败";
+      node.style.color = "#b42318";
+      modal.__ssErpCanPublish = false;
+      if (publishButton) publishButton.disabled = true;
+      if (authorizationButton) authorizationButton.hidden = false;
+    }
+  }
+
+  function bindOzonWorkbenchConnectionRefresh(modal) {
+    let lastRefreshAt = 0;
+    const refresh = () => {
+      if (!modal.isConnected) {
+        cleanup();
+        return;
+      }
+      const now = Date.now();
+      if (now - lastRefreshAt < 500) return;
+      lastRefreshAt = now;
+      loadOzonWorkbenchConnectionStatus(modal).catch(() => {});
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const cleanup = () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      modal.__ssErpConnectionRefreshCleanup = null;
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    modal.__ssErpConnectionRefreshCleanup = cleanup;
+  }
+
+  function isOzonWorkbenchAuthorizationFailure(error) {
+    const code = String(error && (error.code || error.errorCode) || "").trim();
+    return [
+      "device_authorization_required",
+      "device_publish_scope_required",
+      "device_unpaired",
+      "device_repair_required",
+      "device_authority_changed",
+    ].includes(code) || [401, 403, 410].includes(Number(error && error.status));
+  }
+
+  function blockOzonWorkbenchPublishForAuthorization(modal) {
+    modal.__ssErpCanPublish = false;
+    const publishButton = modal.querySelector("[data-role='publish-workbench']");
+    const authorizationButton = modal.querySelector("[data-role='open-publish-authorization']");
+    if (publishButton) publishButton.disabled = true;
+    if (authorizationButton) authorizationButton.hidden = false;
+  }
+
   function renderOzonWorkbenchRows(modal, rows) {
     const body = modal.querySelector("[data-role='workbench-body']");
     if (!body) return;
@@ -2112,6 +2229,11 @@
     const status = modal.querySelector("[data-role='workbench-status']");
     const button = modal.querySelector("[data-role='publish-workbench']");
 
+    if (modal.__ssErpCanPublish !== true) {
+      if (status) status.textContent = "ERP 已连接，但当前设备缺少 Ozon 上架授权";
+      return;
+    }
+
     if (!selected.length) {
       if (status) status.textContent = "请先勾选 SKU";
       return;
@@ -2123,6 +2245,7 @@
 
     if (button) button.disabled = true;
     if (status) status.textContent = "正在提交上架任务到 ERP...";
+    let restoreButton = true;
     try {
       const rows = Array.isArray(modal.__ssErpOzonWorkbenchRows)
         ? modal.__ssErpOzonWorkbenchRows.filter((row) => selected.includes(String(row && row.sku || "").trim()))
@@ -2147,12 +2270,25 @@
         watermark: watermark,
         randomOfferId: true,
       });
-      if (!response || !response.ok) throw new Error(response && response.error || "上架失败");
+      if (response && response.timedOut) {
+        restoreButton = false;
+        throw new Error("后台可能仍在执行，请勿重复提交；稍后刷新 ERP 上架日志查看结果");
+      }
+      if (!response || !response.ok) {
+        throw Object.assign(new Error(response && response.error || "上架失败"), {
+          code: response && response.errorCode,
+          status: response && response.status,
+        });
+      }
       if (status) status.textContent = "上架任务已提交到 ERP 上架日志";
     } catch (error) {
+      if (isOzonWorkbenchAuthorizationFailure(error)) {
+        blockOzonWorkbenchPublishForAuthorization(modal);
+        loadOzonWorkbenchConnectionStatus(modal).catch(() => {});
+      }
       if (status) status.textContent = error && error.message ? error.message : String(error);
     } finally {
-      if (button) button.disabled = false;
+      if (button && restoreButton) button.disabled = modal.__ssErpCanPublish !== true;
     }
   }
 

@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildOzonMarkingCodeRepairItems, listingRoutes } from '../routes/listing.js';
+import {
+  buildOzonMarkingCodeRepairItems,
+  listingRoutes,
+  patchBrowserOneClickListingJobForActor,
+} from '../routes/listing.js';
 import { OzonClient } from '../services/ozon-client.js';
 
 const mocks = vi.hoisted(() => ({
@@ -298,6 +302,240 @@ describe('browser one-click listing jobs', () => {
       });
       expect(OzonClient).not.toHaveBeenCalled();
     } finally { await app.close(); }
+  });
+
+  it('keeps a device session binding immutable across browser payload patches', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-device-1',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        extensionDeviceSessionId: 'device-session-1',
+        browserPayloadReady: false,
+      },
+      shop: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => ({
+      id: 'job-device-1',
+      status: data.status,
+      finishedAt: null,
+      payload: data.payload,
+    }));
+    const reply: any = {
+      send: vi.fn((value) => value),
+    };
+    reply.status = vi.fn(() => reply);
+
+    const response = await patchBrowserOneClickListingJobForActor(
+      {
+        params: { id: 'job-device-1' },
+        body: { payload: { extensionDeviceSessionId: '', stage: 'collecting' } },
+        user: {},
+      } as any,
+      reply,
+      {
+        ownerUserId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'USER',
+        allowedShopIds: ['shop-1'],
+        deviceSessionId: 'device-session-1',
+      },
+      {
+        featureFlags: { evaluate: mocks.featureEvaluate },
+        sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+      },
+    );
+
+    expect(response).toMatchObject({
+      code: 1,
+      data: {
+        payload: {
+          extensionDeviceSessionId: 'device-session-1',
+          stage: 'collecting',
+        },
+      },
+    });
+    expect(mocks.syncJobUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        payload: expect.objectContaining({
+          extensionDeviceSessionId: 'device-session-1',
+        }),
+      }),
+    }));
+  });
+
+  it('rejects device patches that forge publish results or terminal state', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-device-forged',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        extensionDeviceSessionId: 'device-session-1',
+      },
+      shop: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+    });
+    const reply: any = { send: vi.fn((value) => value) };
+    reply.status = vi.fn(() => reply);
+
+    const response = await patchBrowserOneClickListingJobForActor(
+      {
+        params: { id: 'job-device-forged' },
+        body: { status: 'SUCCESS', result: { taskId: 99 }, payload: { taskId: 99 } },
+        user: {},
+      } as any,
+      reply,
+      {
+        ownerUserId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'USER',
+        allowedShopIds: ['shop-1'],
+        deviceSessionId: 'device-session-1',
+      },
+      {
+        featureFlags: { evaluate: mocks.featureEvaluate },
+        sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+      },
+    );
+
+    expect(response).toMatchObject({
+      code: 0,
+      errorCode: 'device_publish_state_forbidden',
+    });
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['draft identity', { payload: { sourceListingDraftRefs: [{ draftId: 'forged' }] } }],
+    ['server-derived goods', { payload: { supplyGoodsIds: ['unrelated-goods'] } }],
+    ['watermark stage', { payload: { stage: 'watermarked' } }],
+  ])('rejects device patches that forge %s', async (_label, body) => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-device-boundary',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        extensionDeviceSessionId: 'device-session-1',
+      },
+      shop: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+    });
+    const reply: any = { send: vi.fn((value) => value) };
+    reply.status = vi.fn(() => reply);
+
+    const response = await patchBrowserOneClickListingJobForActor(
+      { params: { id: 'job-device-boundary' }, body, user: {} } as any,
+      reply,
+      {
+        ownerUserId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'USER',
+        allowedShopIds: ['shop-1'],
+        deviceSessionId: 'device-session-1',
+      },
+      {
+        featureFlags: { evaluate: mocks.featureEvaluate },
+        sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+      },
+    );
+
+    expect(response).toMatchObject({
+      code: 0,
+      errorCode: 'device_publish_state_forbidden',
+    });
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns a terminal authority error after the job shop grant is revoked', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-device-revoked-shop',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        extensionDeviceSessionId: 'device-session-1',
+      },
+      shop: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+    });
+    const reply: any = { send: vi.fn((value) => value) };
+    reply.status = vi.fn(() => reply);
+
+    const response = await patchBrowserOneClickListingJobForActor(
+      {
+        params: { id: 'job-device-revoked-shop' },
+        body: { status: 'RUNNING', payload: { stage: 'collecting' } },
+        user: {},
+      } as any,
+      reply,
+      {
+        ownerUserId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'USER',
+        allowedShopIds: [],
+        deviceSessionId: 'device-session-1',
+      },
+      {
+        featureFlags: { evaluate: mocks.featureEvaluate },
+        sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+      },
+    );
+
+    expect(response).toMatchObject({
+      code: 0,
+      errorCode: 'device_authority_changed',
+    });
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+  });
+
+  it('treats a delayed device completion patch as read-only after the worker starts', async () => {
+    const serverPayload = {
+      source: 'browser-one-click-listing',
+      stage: 'publish_outcome_unknown',
+      extensionDeviceSessionId: 'device-session-1',
+      browserQueueStartedAt: '2026-08-13T06:00:00.000Z',
+      publishOutcome: { state: 'UNKNOWN', doNotRetry: true },
+    };
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-device-started',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: serverPayload,
+      shop: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+    });
+    const reply: any = { send: vi.fn((value) => value) };
+    reply.status = vi.fn(() => reply);
+
+    const response = await patchBrowserOneClickListingJobForActor(
+      {
+        params: { id: 'job-device-started' },
+        body: {
+          status: 'RUNNING',
+          payload: { stage: 'submitted', browserPayloadReady: true },
+        },
+        user: {},
+      } as any,
+      reply,
+      {
+        ownerUserId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'USER',
+        allowedShopIds: ['shop-1'],
+        deviceSessionId: 'device-session-1',
+      },
+      {
+        featureFlags: { evaluate: mocks.featureEvaluate },
+        sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+      },
+    );
+
+    expect(response).toMatchObject({
+      code: 1,
+      data: { payload: serverPayload },
+    });
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+    expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
   });
 
   it('fails closed before constructing an Ozon client when the entrypoint is blocked', async () => {

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   storeSession: vi.fn(),
   registerWorker: vi.fn(),
   featureEvaluate: vi.fn(),
+  extensionDeviceSessionFindFirst: vi.fn(),
 }));
 
 vi.mock('../lib/redis.js', () => ({
@@ -38,6 +39,9 @@ vi.mock('../lib/prisma.js', () => ({
     },
     user: {
       findUnique: mocks.userFindUnique,
+    },
+    extensionDeviceSession: {
+      findFirst: mocks.extensionDeviceSessionFindFirst,
     },
   },
 }));
@@ -76,6 +80,70 @@ describe('browser one-click listing worker', () => {
       reason: 'master_off',
       revision: 'master-off',
     });
+    mocks.extensionDeviceSessionFindFirst.mockResolvedValue({ id: 'device-session-1' });
+  });
+
+  function prepareDevicePublishJob(jobId: string) {
+    let currentPayload: Record<string, any> = {
+      source: 'browser-one-click-listing',
+      browserOneClickJob: true,
+      stage: 'publishing',
+      extensionDeviceSessionId: 'device-session-1',
+      sourceItemIds: ['sg-1'],
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: jobId,
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: {
+            userId: 'user-1',
+            platform: 'OZON',
+            user: { id: 'user-1', role: 'USER' },
+          },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: jobId, status: data.status, payload: currentPayload };
+    });
+    mocks.supplyGoodsFindMany.mockResolvedValue([{ id: 'sg-1' }]);
+    mocks.userFindUnique.mockResolvedValue({
+      id: 'user-1', role: 'USER', authVersion: 1,
+    });
+    return () => currentPayload;
+  }
+
+  it('rejects a device-origin job after its publish authorization is revoked', async () => {
+    mocks.syncJobFindUnique.mockResolvedValue({
+      id: 'job-device-revoked',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        extensionDeviceSessionId: 'device-session-1',
+        rows: [{ sku: '2143427743', title: 'Ozon product' }],
+      },
+      shop: {
+        userId: 'user-1',
+        platform: 'OZON',
+        user: { id: 'user-1', role: 'USER' },
+      },
+    });
+    mocks.extensionDeviceSessionFindFirst.mockResolvedValue(null);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-device-revoked')).rejects.toMatchObject({
+      code: 'DEVICE_PUBLISH_AUTHORIZATION_REVOKED',
+    });
+    expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+    expect(mocks.signToken).not.toHaveBeenCalled();
   });
 
   it('blocks a legacy job before creating temporary goods when publisher V2 is enabled', async () => {
@@ -214,6 +282,115 @@ describe('browser one-click listing worker', () => {
     });
     expect(mocks.featureEvaluate).not.toHaveBeenCalled();
     expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+  });
+
+  it('never republishes an unknown device outcome when its stage was overwritten', async () => {
+    mocks.syncJobFindUnique.mockResolvedValue({
+      id: 'job-device-unknown-overwritten',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        extensionDeviceSessionId: 'device-session-1',
+        publishOutcome: { state: 'UNKNOWN', doNotRetry: true },
+      },
+      shop: {
+        userId: 'user-1',
+        platform: 'OZON',
+        user: { id: 'user-1', role: 'USER' },
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-device-unknown-overwritten')).resolves.toEqual({
+      skipped: true,
+      status: 'RUNNING',
+      reason: 'publish_outcome_unknown',
+      doNotRetry: true,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: 'network failure',
+      fetch: () => Promise.reject(new TypeError('socket closed')),
+      reason: 'network_error',
+    },
+    {
+      label: 'server response',
+      fetch: () => Promise.resolve({
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ code: 0, msg: 'upstream unavailable' }),
+      }),
+      reason: 'http_503',
+    },
+    {
+      label: 'malformed success response',
+      fetch: () => Promise.resolve({ ok: true, status: 200, text: async () => '<html>ok</html>' }),
+      reason: 'malformed_success_response',
+    },
+    {
+      label: 'success response without task id',
+      fetch: () => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ code: 1, data: { jobId: 'job-device-unknown' } }),
+      }),
+      reason: 'missing_task_id',
+    },
+  ])('preserves a device publish as unknown without retry after $label', async ({ fetch, reason }) => {
+    const currentPayload = prepareDevicePublishJob('job-device-unknown');
+    const fetchMock = vi.fn(fetch);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-device-unknown')).resolves.toEqual({
+      ok: false,
+      jobId: 'job-device-unknown',
+      outcome: 'UNKNOWN',
+      doNotRetry: true,
+      reason,
+    });
+
+    expect(currentPayload()).toMatchObject({
+      stage: 'publish_outcome_unknown',
+      publishOutcome: {
+        state: 'UNKNOWN',
+        doNotRetry: true,
+        reason,
+      },
+    });
+    const terminalUpdate = mocks.syncJobUpdate.mock.calls.at(-1)?.[0];
+    expect(terminalUpdate?.data.status).toBe('RUNNING');
+
+    await expect(runBrowserOneClickListingJob('job-device-unknown')).resolves.toMatchObject({
+      skipped: true,
+      reason: 'publish_outcome_unknown',
+      doNotRetry: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a definite device publish 400 response as failed', async () => {
+    const currentPayload = prepareDevicePublishJob('job-device-bad-request');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ code: 0, msg: 'invalid listing payload' }),
+    })));
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-device-bad-request')).rejects.toThrow('invalid listing payload');
+
+    expect(currentPayload()).toMatchObject({ stage: 'publish_failed' });
+    const terminalUpdate = mocks.syncJobUpdate.mock.calls.at(-1)?.[0];
+    expect(terminalUpdate?.data.status).toBe('FAILED');
   });
 
   it('appends browser-enriched rows into temporary supply goods one SKU at a time', async () => {

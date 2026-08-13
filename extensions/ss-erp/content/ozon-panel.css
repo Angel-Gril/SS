@@ -1,27 +1,27 @@
 :root {
-  --qe-calc-primary: #ea580c;
-  --qe-calc-primary-dark: #9a3412;
-  --qe-calc-primary-soft: #fff7ed;
-  --qe-calc-primary-line: #fed7aa;
-  --qe-calc-accent: #f59e0b;
-  --qe-calc-accent-soft: #fffbeb;
-  --qe-calc-text: #18212f;
-  --qe-calc-text-soft: #3a3e47;
-  --qe-calc-muted: #6b7280;
+  --qe-calc-primary: #0f766e;
+  --qe-calc-primary-dark: #115e59;
+  --qe-calc-primary-soft: #f0fdfa;
+  --qe-calc-primary-line: #99c9c3;
+  --qe-calc-accent: #2563eb;
+  --qe-calc-accent-soft: #eff6ff;
+  --qe-calc-text: #172326;
+  --qe-calc-text-soft: #334346;
+  --qe-calc-muted: #5f6f73;
   --qe-calc-muted-2: #9aa0a8;
-  --qe-calc-line: rgba(30, 41, 59, 0.12);
-  --qe-calc-line-soft: rgba(30, 41, 59, 0.08);
-  --qe-calc-surface: rgba(255, 255, 255, 0.96);
+  --qe-calc-line: #d7e0e1;
+  --qe-calc-line-soft: #e8eeee;
+  --qe-calc-surface: #ffffff;
   --qe-calc-surface-solid: #ffffff;
-  --qe-calc-surface-soft: rgba(248, 250, 252, 0.76);
-  --qe-calc-ok: #16a34a;
+  --qe-calc-surface-soft: #f8fafa;
+  --qe-calc-ok: #15803d;
   --qe-calc-ok-bg: #dcfce7;
   --qe-calc-warn: #d97706;
   --qe-calc-warn-bg: #fef3c7;
-  --qe-calc-danger: #dc2626;
+  --qe-calc-danger: #b42318;
   --qe-calc-danger-bg: #fee2e2;
-  --qe-calc-shadow-soft: 0 18px 48px rgba(15, 23, 42, 0.12);
-  --qe-calc-shadow-tight: 0 10px 24px rgba(15, 23, 42, 0.1);
+  --qe-calc-shadow-soft: 0 10px 28px rgba(23, 35, 38, 0.12);
+  --qe-calc-shadow-tight: 0 4px 14px rgba(23, 35, 38, 0.1);
 }
 
 #ozon-calc-fab {
@@ -34,12 +34,12 @@
   height: 50px;
   border: none;
   border-radius: 999px;
-  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  background: var(--qe-calc-primary);
   color: #fff;
   font-size: 13px;
   font-weight: 800;
-  letter-spacing: -0.4px;
-  box-shadow: 0 12px 30px rgba(234, 88, 12, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.35) inset;
+  letter-spacing: 0;
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.28);
   cursor: pointer;
   user-select: none;
   touch-action: none;
@@ -51,13 +51,13 @@
   position: absolute;
   inset: -6px;
   border-radius: inherit;
-  background: rgba(234, 88, 12, 0.1);
+  background: rgba(15, 118, 110, 0.1);
   z-index: -1;
 }
 
 #ozon-calc-fab:hover {
   transform: translateY(-50%) scale(1.04);
-  box-shadow: 0 16px 42px rgba(234, 88, 12, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
+  box-shadow: 0 14px 32px rgba(15, 118, 110, 0.32);
 }
 
 #ozon-calc-drawer {
@@ -69,19 +69,17 @@
   height: calc(100vh - 80px);
   max-height: calc(100vh - 80px);
   z-index: 2147483001;
-  background:
-    linear-gradient(180deg, rgba(251, 252, 251, 0.98), rgba(244, 247, 245, 0.96));
+  background: #f4f7f7;
   color: var(--qe-calc-text);
   border: 1px solid rgba(30, 41, 59, 0.1);
-  border-radius: 18px;
-  box-shadow: var(--qe-calc-shadow-soft), 0 0 0 1px rgba(255, 255, 255, 0.48) inset;
+  border-radius: 8px;
+  box-shadow: var(--qe-calc-shadow-soft);
   display: none;
   flex-direction: column;
   overflow: hidden;
   font-family: "Aptos", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 12px;
   -webkit-font-smoothing: antialiased;
-  backdrop-filter: blur(18px);
 }
 
 #ozon-calc-drawer.open {
@@ -99,10 +97,8 @@
   align-items: center;
   gap: 8px;
   padding: 12px 14px;
-  background:
-    radial-gradient(circle at 0 0, rgba(249, 115, 22, 0.16), transparent 16rem),
-    linear-gradient(135deg, rgba(240, 253, 250, 0.96), rgba(239, 246, 255, 0.88));
-  border-bottom: 1px solid rgba(234, 88, 12, 0.16);
+  background: #f8fafa;
+  border-bottom: 1px solid var(--qe-calc-line);
   cursor: move;
   user-select: none;
   flex-shrink: 0;
@@ -116,12 +112,12 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  background: var(--qe-calc-primary);
   color: #fff;
   font-size: 13px;
   font-weight: 800;
-  letter-spacing: -0.5px;
-  box-shadow: 0 6px 14px rgba(234, 88, 12, 0.22);
+  letter-spacing: 0;
+  box-shadow: none;
 }
 
 .ozon-calc-brand-text {
@@ -186,7 +182,7 @@
   height: 22px;
   border: none;
   border-radius: 8px;
-  background: rgba(234, 88, 12, 0.08);
+  background: var(--qe-calc-primary-soft);
   color: var(--qe-calc-primary-dark);
   font-family: inherit;
   font-size: 12px;
@@ -209,7 +205,7 @@
 
 .ozon-calc-refresh:hover,
 .ozon-calc-close:hover {
-  background: rgba(234, 88, 12, 0.16);
+  background: #e0f2f1;
 }
 
 .ozon-calc-body {
@@ -229,7 +225,7 @@
 
 .ozon-calc-card {
   border: 1px solid var(--qe-calc-line);
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--qe-calc-surface);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
   padding: 12px;
@@ -397,17 +393,16 @@
   position: relative;
   min-height: 58px;
   border: 1px solid var(--qe-calc-line-soft);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-surface-soft);
   padding: 14px 8px 8px;
 }
 
 .ozon-calc-price-tag.strong {
   grid-column: span 4;
-  border-color: rgba(234, 88, 12, 0.28);
-  background:
-    linear-gradient(135deg, rgba(240, 253, 250, 0.96), rgba(239, 246, 255, 0.74));
-  box-shadow: 0 8px 20px rgba(234, 88, 12, 0.08);
+  border-color: var(--qe-calc-primary-line);
+  background: var(--qe-calc-primary-soft);
+  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.08);
 }
 
 .ozon-calc-price-badge {
@@ -429,7 +424,7 @@
   font-size: 17px;
   font-weight: 850;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.4px;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -450,7 +445,7 @@
   display: block;
   min-width: 0;
   border: 1px solid var(--qe-calc-line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-surface-soft);
   padding: 8px 9px;
   transition:
@@ -480,7 +475,7 @@
   font-size: 15px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.2px;
+  letter-spacing: 0;
 }
 
 .ozon-calc-spec input::placeholder {
@@ -491,7 +486,7 @@
 .ozon-calc-spec:focus-within {
   border-color: var(--qe-calc-primary-line);
   background: var(--qe-calc-primary-soft);
-  box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.1);
+  box-shadow: 0 0 0 3px rgb(15 118 110 / 12%);
 }
 
 .ozon-calc-spec:focus-within input {
@@ -502,8 +497,8 @@
   display: grid;
   gap: 4px;
   margin: 2px 0 8px;
-  border: 1px solid rgba(234, 88, 12, 0.12);
-  border-radius: 12px;
+  border: 1px solid var(--qe-calc-primary-line);
+  border-radius: 8px;
   background: rgba(240, 253, 250, 0.58);
   padding: 7px 8px;
 }
@@ -514,7 +509,7 @@
   justify-content: space-between;
   gap: 10px;
   border: 1px solid var(--qe-calc-line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-surface-soft);
   padding: 7px 8px;
   color: var(--qe-calc-muted);
@@ -541,7 +536,7 @@
 }
 
 .ozon-calc-toggle-btn.active {
-  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  background: var(--qe-calc-primary);
   color: #fff;
 }
 
@@ -552,11 +547,9 @@
 
 .ozon-calc-compute-bar {
   margin: 0;
-  border: 1px solid rgba(234, 88, 12, 0.16);
-  border-radius: 14px;
-  background:
-    radial-gradient(circle at 100% 0, rgba(245, 158, 11, 0.12), transparent 10rem),
-    linear-gradient(135deg, rgba(240, 253, 250, 0.96), rgba(255, 255, 255, 0.94));
+  border: 1px solid var(--qe-calc-primary-line);
+  border-radius: 8px;
+  background: var(--qe-calc-primary-soft);
   padding: 8px;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
   display: grid;
@@ -588,15 +581,15 @@
 .ozon-calc-actions button {
   flex: 1;
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 8px 10px;
-  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  background: var(--qe-calc-primary);
   color: #fff;
   font-family: inherit;
   font-size: 12px;
   font-weight: 750;
   cursor: pointer;
-  box-shadow: 0 8px 18px rgba(234, 88, 12, 0.2);
+  box-shadow: none;
   transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -609,7 +602,7 @@
 
 .ozon-calc-actions button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(234, 88, 12, 0.24);
+  box-shadow: 0 10px 22px rgba(15, 118, 110, 0.2);
 }
 
 .ozon-calc-actions button.secondary {
@@ -627,7 +620,7 @@
 .ozon-calc-callout {
   margin-bottom: 10px;
   border: 1px solid rgba(245, 158, 11, 0.16);
-  border-radius: 12px;
+  border-radius: 8px;
   background: rgba(255, 251, 235, 0.82);
   color: #d97706;
   padding: 8px 10px;
@@ -638,7 +631,7 @@
 .ozon-calc-warning {
   margin-bottom: 10px;
   border: 1px solid #fde68a;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-warn-bg);
   color: #92400e;
   padding: 8px 10px;
@@ -649,7 +642,7 @@
 .ozon-calc-action-note {
   margin-top: 10px;
   border: 1px solid #bbf7d0;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-ok-bg);
   color: #166534;
   padding: 8px 10px;
@@ -659,24 +652,24 @@
 }
 
 .ozon-calc-summary-card {
-  border-radius: 14px;
+  border-radius: 8px;
   padding: 15px 14px 13px;
   margin: 0;
   transition: background 0.2s ease;
 }
 
 .ozon-calc-summary-card.positive {
-  background: linear-gradient(135deg, rgba(220, 252, 231, 0.96), rgba(240, 253, 250, 0.82));
+  background: var(--qe-calc-ok-bg);
   color: var(--qe-calc-ok);
 }
 
 .ozon-calc-summary-card.negative {
-  background: linear-gradient(135deg, rgba(254, 226, 226, 0.96), rgba(255, 247, 237, 0.8));
+  background: var(--qe-calc-danger-bg);
   color: var(--qe-calc-danger);
 }
 
 .ozon-calc-summary-card.neutral {
-  background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(239, 246, 255, 0.72));
+  background: var(--qe-calc-surface-soft);
   color: var(--qe-calc-muted-2);
 }
 
@@ -722,14 +715,14 @@
   font-size: 34px;
   font-weight: 850;
   line-height: 1;
-  letter-spacing: -1.4px;
+  letter-spacing: 0;
   font-family: "JetBrains Mono", Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 .ozon-calc-summary-pill {
   min-width: 70px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--qe-calc-muted);
   color: #fff;
   padding: 6px 10px;
@@ -760,7 +753,7 @@
   margin-top: 1px;
   font-size: 18px;
   font-weight: 850;
-  letter-spacing: -0.5px;
+  letter-spacing: 0;
   font-family: "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
@@ -772,7 +765,7 @@
   font-family: "JetBrains Mono", Menlo, Consolas, monospace;
   font-size: 17px;
   font-weight: 850;
-  letter-spacing: -0.4px;
+  letter-spacing: 0;
 }
 
 .ozon-calc-summary-pill-input-wrap input {
@@ -1007,10 +1000,8 @@
 
 /* T5：详情页上架操作区 */
 .ozon-calc-publish-card {
-  border-color: rgba(234, 88, 12, 0.22);
-  background:
-    radial-gradient(circle at 100% 0, rgba(245, 158, 11, 0.1), transparent 12rem),
-    linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(255, 255, 255, 0.94));
+  border-color: var(--qe-calc-primary-line);
+  background: var(--qe-calc-primary-soft);
 }
 
 .ozon-calc-publish-controls {
@@ -1066,21 +1057,21 @@
 .ozon-calc-publish-btn {
   width: 100%;
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 10px 12px;
-  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  background: var(--qe-calc-primary);
   color: #fff;
   font-family: inherit;
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
-  box-shadow: 0 8px 18px rgba(234, 88, 12, 0.22);
+  box-shadow: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ozon-calc-publish-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(234, 88, 12, 0.26);
+  box-shadow: 0 10px 22px rgba(15, 118, 110, 0.2);
 }
 
 .ozon-calc-publish-btn:disabled {

@@ -91,6 +91,7 @@ const DEFAULT_DEVICE_SCOPES = [
   'listing:review',
   'media:execute',
 ];
+const PUBLISH_DEVICE_SCOPES = ['capture:write', 'listing:publish'];
 
 function responseErrorCode(response: ApiResponse<unknown>): string {
   const value = response as unknown as Record<string, unknown>;
@@ -182,6 +183,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [copied, setCopied] = useState<CopyTarget>(null);
   const pairingGenerationRef = useRef(0);
   const hydratedSessionRef = useRef('');
+  const requestedScopesRef = useRef<string[]>([]);
 
   const erpUrl = typeof window !== 'undefined' ? getApiBase() : '';
   const shopNameById = useMemo(() => new Map(shops.map((shop) => [shop.id, shop.name])), [shops]);
@@ -230,6 +232,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     beginPairingGeneration();
     if (nextOpen) hydratedSessionRef.current = '';
     if (!nextOpen) {
+      requestedScopesRef.current = [];
       setLoadingContext(false);
       setPairingBusy(false);
       setConnecting(false);
@@ -373,6 +376,18 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   }
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('extensionAuth') !== 'publish') return;
+    requestedScopesRef.current = PUBLISH_DEVICE_SCOPES.slice();
+    setView('pairing');
+    setSelectedScopes(PUBLISH_DEVICE_SCOPES.slice());
+    handleOpenChange(true);
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete('extensionAuth');
+    window.history.replaceState(window.history.state, '', nextUrl.toString());
+  }, []);
+
+  useEffect(() => {
     if (open && extensionDeviceAuthEnabled) {
       const generation = beginPairingGeneration();
       void loadPairingContext(generation)
@@ -395,7 +410,11 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       || hydratedSessionRef.current === session.id) return;
     hydratedSessionRef.current = session.id;
     setSelectedShopIds(session.shopIds.slice());
-    setSelectedScopes(session.scopes.slice());
+    const requestedScopes = requestedScopesRef.current;
+    setSelectedScopes([
+      ...new Set([...session.scopes, ...requestedScopes]),
+    ]);
+    requestedScopesRef.current = [];
   }, [
     currentDeviceSession,
     currentOwnerUserId,
@@ -557,6 +576,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
         scopes: selection.scopes,
       });
       if (detected.state === 'paired' && !needsAuthorization) {
+        requestedScopesRef.current = [];
         showConnectedExtension(detected, generation);
         toast({ title: '扩展已经连接' });
         return;
@@ -625,6 +645,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       }
       if (!isCurrentPairingGeneration(generation)) return;
       setPairing(null);
+      requestedScopesRef.current = [];
       showConnectedExtension(connected, generation);
       toast({ title: '扩展连接成功', description: '设备凭证已安全保存到当前浏览器扩展。' });
       await loadPairingContext(generation);

@@ -5,6 +5,7 @@ import test from 'node:test';
 const content = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 const panel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 
 test('Ozon product data panel keeps listing actions separate from removed selection data actions', () => {
   assert.doesNotMatch(content, /data-role="open-workbench"/);
@@ -27,8 +28,8 @@ test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
   assert.match(content, /width:128px/, 'product quick toolbar should use the same width as the list quick toolbar');
   assert.match(
     content,
-    /quick-open-workbench[\s\S]*quickActionButtonStyle\("#ea580c",\s*"#ffffff"/,
-    'product quick toolbar should use ERP orange for the primary one-click listing action',
+    /quick-open-workbench[\s\S]*quickActionButtonStyle\(SS_ERP_PRODUCT_THEME\.primary,\s*"#ffffff"/,
+    'product quick toolbar should use the shared primary theme for the one-click listing action',
   );
   assert.doesNotMatch(
     content,
@@ -216,12 +217,22 @@ test('product-detail one-click listing submits a backend queued listing-log job'
   assert.match(background, /submitOzonWorkbenchPublishJob/);
   assert.match(background, /spb-self-hosted:publish-ozon-workbench-rows/);
   assert.doesNotMatch(background, /collectOzonProductsToErp\(productIds[\s\S]*\/api\/collect\/publish-ozon/);
-  assert.match(background, /\/api\/listing\/browser-one-click-jobs/);
+  assert.match(background, /globalThis\.SS_ERP_EXTENSION_DEVICE_ONE_CLICK[\s\S]*deviceApi\.create/);
   assert.match(background, /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*queued:\s*true/);
   assert.doesNotMatch(background, /enqueueOzonWorkbenchPublishQueueJob/);
   assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
   assert.match(content, /正在提交上架任务到 ERP/);
   assert.match(content, /上架任务已提交到 ERP 上架日志/);
+  assert.match(content, /function\s+loadOzonWorkbenchConnectionStatus/);
+  assert.match(content, /ozon-calc:erp-endpoint-get/);
+  assert.match(content, /缺少上架授权/);
+  assert.match(content, /openErpPage\("\/collect\?extensionAuth=publish"\)/);
+  assert.match(content, /modal\.__ssErpCanPublish\s*!==\s*true/);
+  assert.match(content, /function\s+bindOzonWorkbenchConnectionRefresh[\s\S]*window\.addEventListener\("focus",\s*refresh\)[\s\S]*visibilitychange/);
+  assert.match(serviceWorker, /readExtensionDeviceBrowserOneClickStatus[\s\S]*browser-one-click\/status\/read/, 'workbench status should revalidate scopes through the device-authenticated server route');
+  assert.match(content, /function\s+isOzonWorkbenchAuthorizationFailure[\s\S]*device_publish_scope_required[\s\S]*device_authority_changed/);
+  assert.match(content, /finally\s*\{[\s\S]*button\.disabled\s*=\s*modal\.__ssErpCanPublish\s*!==\s*true/);
+  assert.match(content, /data-role="close-workbench"[^>]+aria-label="关闭一键上架工作台"/);
   assert.match(content, /entry:\s*"ozon-product-detail"/);
   assert.match(content, /markupPct/);
   assert.match(content, /data-role="watermark-template"/, 'product SKU workbench should expose ERP watermark templates in the publish toolbar');

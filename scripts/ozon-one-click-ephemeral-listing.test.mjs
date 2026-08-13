@@ -264,7 +264,7 @@ test('Ozon one-click cookie sync keeps the target shop company_id when available
   );
 });
 
-test('Ozon one-click cookie sync targets the configured ERP backend for VPS deployments', () => {
+test('Ozon one-click cookie sync targets the paired device ERP backend', () => {
   assert.match(
     serviceWorker,
     /async function\s+getOzonAutoSyncConnection[\s\S]*OZON_CALC_ERP_ENDPOINT_KEY[\s\S]*'ss_erp_connection'[\s\S]*apiBase:\s*endpoint\s*\?\s*endpoint\.replace\(\/\\\/api\\\/\.\*\$\/,\s*''\)\s*:\s*''/,
@@ -272,8 +272,13 @@ test('Ozon one-click cookie sync targets the configured ERP backend for VPS depl
   );
   assert.match(
     serviceWorker,
-    /fetch\(connection\.apiBase\s*\+\s*'\/api\/shops\/'\s*\+\s*encodeURIComponent\(normalizedShopId\)\s*\+\s*'\/ozon-cdn-auth'/,
-    'cookie sync should write the selected shop login state to the configured ERP backend',
+    /fetch\(\s*operation\.baseUrl\s*\+\s*'\/api\/extension-device\/shops\/'[\s\S]*encodeURIComponent\(normalizedShopId\)\s*\+\s*'\/ozon-cdn-auth'/,
+    'cookie sync should write the selected shop login state through the scoped device endpoint',
+  );
+  assert.match(
+    serviceWorker,
+    /Authorization:\s*'Bearer '\s*\+\s*operation\.accessToken/,
+    'cookie sync should authenticate with the paired device session instead of a tenant token',
   );
   assert.match(
     serviceWorker,
@@ -351,7 +356,7 @@ test('browser one-click listing streams complete Ozon publish data into ERP temp
   );
   assert.match(
     listingRoute,
-    /appendBrowserOneClickListingRows\(job\.id,\s*patchPayload\.rows\.map\(objectRecord\)\)/,
+    /appendBrowserOneClickListingRows\(\s*job\.id,\s*patchPayload\.rows\.map\(objectRecord\),?\s*\)/,
     'ERP should convert each streamed row into temporary collect records before the backend queue starts',
   );
   assert.match(

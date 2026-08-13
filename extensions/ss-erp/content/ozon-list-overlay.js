@@ -127,22 +127,22 @@
     computed: '规则/计算',
   };
   const SS_ERP_LIST_THEME = {
-    primary: '#ea580c',
-    primaryDark: '#9a3412',
-    primaryDarker: '#7c2d12',
-    primarySoft: '#fff7ed',
-    primarySoftAlt: '#ffedd5',
-    border: '#fed7aa',
-    borderStrong: '#fdba74',
-    blue: '#1e88e5',
+    primary: '#0f766e',
+    primaryDark: '#115e59',
+    primaryDarker: '#134e4a',
+    primarySoft: '#f0fdfa',
+    primarySoftAlt: '#e6fffb',
+    border: '#cce5e2',
+    borderStrong: '#99c9c3',
+    blue: '#2563eb',
     surface: '#f8fafc',
-    surfaceAlt: '#f9fafb',
-    text: '#111827',
-    muted: '#64748b',
-    danger: '#dc2626',
-    headerGradient: 'linear-gradient(135deg,#9a3412 0%,#ea580c 100%)',
-    cardGradient: 'linear-gradient(135deg,#fff7ed,#ffedd5)',
-    tableHeader: '#33291f',
+    surfaceAlt: '#f1f5f9',
+    text: '#172326',
+    muted: '#5f6f73',
+    danger: '#b42318',
+    headerGradient: '#0f766e',
+    cardGradient: '#f0fdfa',
+    tableHeader: '#f1f5f9',
   };
   const LIST_OVERLAY_STYLE_ID = 'ss-erp-list-overlay-style';
 
@@ -1666,11 +1666,11 @@
       'margin:0',           // 紧贴上沿，不留缝
       'padding:8px 10px',
       'border-radius:8px',
-      'background:linear-gradient(135deg,#fff7ed,#ffedd5)',
-      'border:1px solid #fdba74',
+      `background:${SS_ERP_LIST_THEME.cardGradient}`,
+      `border:1px solid ${SS_ERP_LIST_THEME.borderStrong}`,
       'font-size:12px',
       'color:#1e293b',
-      'box-shadow:0 1px 4px rgba(249,115,22,0.12)',
+      'box-shadow:0 1px 4px rgba(15,118,110,0.10)',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
       'box-sizing:border-box',
       'width:100%',
@@ -1681,7 +1681,7 @@
 
     wrap.innerHTML = [
       '<div class="ss-erp-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">',
-      '  <span style="font-weight:700;color:#c2410c;font-size:13px">SS ERP</span>',
+      `  <span style="font-weight:700;color:${SS_ERP_LIST_THEME.primaryDark};font-size:13px">SS ERP</span>`,
       '  <span style="display:flex;align-items:center;gap:5px;min-width:0;">',
       `    <span data-role="selection-pool-status" data-ss-erp-pool-sku="${escapeHtml(sku)}" style="display:none;align-items:center;border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:800;line-height:1.4;white-space:nowrap;">已入池</span>`,
       '    <span class="ss-erp-status-pill" style="display:none">加载中…</span>',
@@ -1722,9 +1722,9 @@
       'z-index:2147483000',
       'box-sizing:border-box',
       'padding:8px 10px',
-      'border:1px solid #fdba74',
+      `border:1px solid ${SS_ERP_LIST_THEME.borderStrong}`,
       'border-radius:8px',
-      'background:#fff7ed',
+      `background:${SS_ERP_LIST_THEME.primarySoft}`,
       'box-shadow:0 10px 24px rgba(15,23,42,0.18)',
       'max-height:min(520px,70vh)',
       'overflow:auto',
@@ -3001,7 +3001,7 @@
       '  <div style="height:56px;border-top:1px solid #e5e7eb;background:#f3f4f6;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;">',
       '    <div data-role="selection-rules-status" style="margin-right:auto;font-size:12px;color:#64748b;"></div>',
       '    <button type="button" data-role="cancel-selection-rules" style="height:32px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:3px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;">取消</button>',
-      '    <button type="button" data-role="save-selection-rules" style="height:32px;border:0;background:#ea580c;color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存设置</button>',
+      `    <button type="button" data-role="save-selection-rules" style="height:32px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存设置</button>`,
       '  </div>',
       '</div>',
     ].join('');
@@ -3042,7 +3042,12 @@
 
   function openListSkuWorkbench(options) {
     const old = document.getElementById(LIST_WORKBENCH_MODAL_ID);
-    if (old) old.remove();
+    if (old) {
+      if (typeof old.__ssErpConnectionRefreshCleanup === 'function') {
+        old.__ssErpConnectionRefreshCleanup();
+      }
+      old.remove();
+    }
     // 单卡片上架传入 { skus:[sku], lockSkus:true }，锁定后不再并入整页 SKU。
     const lockSkus = Boolean(options && options.lockSkus);
     const explicitSkus = Array.isArray(options && options.skus)
@@ -3072,13 +3077,13 @@
     ].join(';');
     modal.innerHTML = [
       `<div data-role="workbench-shell" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 40px));height:min(720px,calc(100vh - 40px));min-width:min(920px,calc(100vw - 40px));min-height:min(520px,calc(100vh - 40px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);resize:both;background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;animation:ssErpModalIn .16s ease-out;">`,
-      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:${SS_ERP_LIST_THEME.tableHeader};color:#f8fafc;box-shadow:0 1px 0 #241c14;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}</style>`,
+      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:${SS_ERP_LIST_THEME.tableHeader};color:#334155;box-shadow:0 1px 0 #d7e0e1;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}#${LIST_WORKBENCH_MODAL_ID} [data-role="publish-workbench"]:disabled{opacity:.5;cursor:not-allowed!important;box-shadow:none!important;}</style>`,
       `  <div style="min-height:56px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
       '    <div>',
       `      <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getListWorkbenchModeTitle(modal.__ssErpWorkbenchFocus))}</div>`,
       `      <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getListWorkbenchModeSubtitle(modal.__ssErpWorkbenchFocus, skus.length))}</div>`,
       '    </div>',
-      '    <button type="button" data-role="close-list-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>',
+      '    <button type="button" data-role="close-list-workbench" aria-label="关闭一键上架工作台" title="关闭" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>',
       '  </div>',
       `  <div data-role="workbench-filter-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
       '    <div data-role="publish-target-controls" data-mode-scope="publish" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">',
@@ -3092,7 +3097,8 @@
       '    </div>',
       `    <label style="font-size:12px;font-weight:800;color:#334155;">范围</label>`,
       `    <select data-role="row-filter" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="all" ${initialRowFilter === 'all' ? 'selected' : ''}>全部商品</option><option value="matched" ${initialRowFilter === 'matched' ? 'selected' : ''}>仅规则命中</option></select>`,
-      `    <div data-role="connection-status" style="font-size:12px;color:${SS_ERP_LIST_THEME.muted};white-space:nowrap;">ERP连接检测中...</div>`,
+      `    <div data-role="connection-status" style="font-size:12px;color:${SS_ERP_LIST_THEME.muted};white-space:nowrap;">ERP 连接检测中...</div>`,
+      '    <button type="button" data-role="open-publish-authorization" hidden style="height:32px;border:1px solid #f2c58e;background:#fff8eb;color:#b45309;border-radius:4px;padding:0 11px;font-size:12px;font-weight:800;cursor:pointer;">打开 ERP 授权</button>',
       `    <button type="button" data-role="refresh-list-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新 SKU</button>`,
       '  </div>',
       `  <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
@@ -3123,7 +3129,13 @@
 
     document.body.appendChild(modal);
     syncListWorkbenchRuleFilterOptions(modal);
-    modal.querySelector('[data-role="close-list-workbench"]').addEventListener('click', () => modal.remove());
+    const closeListWorkbench = () => {
+      if (typeof modal.__ssErpConnectionRefreshCleanup === 'function') {
+        modal.__ssErpConnectionRefreshCleanup();
+      }
+      modal.remove();
+    };
+    modal.querySelector('[data-role="close-list-workbench"]').addEventListener('click', closeListWorkbench);
     modal.querySelector('[data-role="refresh-list-workbench"]').addEventListener('click', () => loadListWorkbenchRows(modal));
     modal.querySelector('[data-role="shop-select"]').addEventListener('change', (event) => {
       loadListWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
@@ -3136,16 +3148,20 @@
       modal.querySelectorAll('[data-role="workbench-row-check"]').forEach((box) => { box.checked = event.target.checked; });
     });
     modal.querySelector('[data-role="publish-workbench"]').addEventListener('click', () => publishListWorkbenchSelectedRows(modal));
+    modal.querySelector('[data-role="open-publish-authorization"]').addEventListener('click', () => {
+      openErpPage('/collect?extensionAuth=publish');
+    });
     initListWorkbenchColumnResize(modal);
 
     setListWorkbenchMode(modal, modal.__ssErpWorkbenchFocus);
     loadListWorkbenchConnectionStatus(modal).catch(() => {});
+    bindListWorkbenchConnectionRefresh(modal);
     loadListWorkbenchShops(modal);
     loadListWorkbenchWatermarkTemplates(modal).catch(() => {});
     loadListWorkbenchRows(modal);
   }
 
-  function formatListWorkbenchConnectionLabel(endpoint, hasToken) {
+  function formatListWorkbenchConnectionLabel(endpoint, hasToken, authMode, canPublish) {
     const raw = String(endpoint || '').trim();
     if (!raw) return 'ERP未连接';
     let host = raw;
@@ -3155,21 +3171,90 @@
     } catch (error) {}
     const lower = host.toLowerCase();
     const scope = /localhost|127\.0\.0\.1/.test(lower) ? '本地ERP' : (/ss-erp\.com/.test(lower) ? '云端ERP' : 'ERP');
-    return `${scope}: ${host}${hasToken ? '' : ' · Token缺失'}`;
+    if (authMode === 'device') {
+      return `${scope}: ${host}${canPublish ? ' · 设备已授权' : ' · 缺少上架授权'}`;
+    }
+    return `${scope}: ${host}${hasToken ? ' · 兼容连接' : ' · 未连接'}`;
   }
 
   async function loadListWorkbenchConnectionStatus(modal) {
     const node = modal.querySelector('[data-role="connection-status"]');
+    const publishButton = modal.querySelector('[data-role="publish-workbench"]');
+    const authorizationButton = modal.querySelector('[data-role="open-publish-authorization"]');
     if (!node) return;
     try {
       const response = await send({ type: 'ozon-calc:erp-endpoint-get' }, 8000);
       if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || 'ERP连接读取失败');
-      node.textContent = formatListWorkbenchConnectionLabel(response.endpoint, response.hasToken);
-      node.style.color = response.endpoint && response.hasToken ? SS_ERP_LIST_THEME.muted : '#dc2626';
+      node.textContent = formatListWorkbenchConnectionLabel(
+        response.endpoint,
+        response.hasToken,
+        response.authMode,
+        response.canPublish,
+      );
+      node.style.color = response.connected && response.canPublish
+        ? SS_ERP_LIST_THEME.muted
+        : response.connected ? '#b45309' : '#b42318';
+      modal.__ssErpCanPublish = response.canPublish === true;
+      if (publishButton) {
+        publishButton.disabled = !modal.__ssErpCanPublish;
+        publishButton.title = modal.__ssErpCanPublish
+          ? '提交所选商品'
+          : (response.connected ? '设备缺少 Ozon 上架授权' : 'ERP 尚未连接');
+      }
+      if (authorizationButton) {
+        authorizationButton.hidden = response.canPublish === true;
+      }
     } catch (error) {
       node.textContent = error && error.message ? error.message : 'ERP连接读取失败';
       node.style.color = '#dc2626';
+      modal.__ssErpCanPublish = false;
+      if (publishButton) publishButton.disabled = true;
+      if (authorizationButton) authorizationButton.hidden = false;
     }
+  }
+
+  function bindListWorkbenchConnectionRefresh(modal) {
+    let lastRefreshAt = 0;
+    const refresh = () => {
+      if (!modal.isConnected) {
+        cleanup();
+        return;
+      }
+      const now = Date.now();
+      if (now - lastRefreshAt < 500) return;
+      lastRefreshAt = now;
+      loadListWorkbenchConnectionStatus(modal).catch(() => {});
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const cleanup = () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      modal.__ssErpConnectionRefreshCleanup = null;
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    modal.__ssErpConnectionRefreshCleanup = cleanup;
+  }
+
+  function isListWorkbenchAuthorizationFailure(error) {
+    const code = String(error && (error.code || error.errorCode) || '').trim();
+    return [
+      'device_authorization_required',
+      'device_publish_scope_required',
+      'device_unpaired',
+      'device_repair_required',
+      'device_authority_changed',
+    ].includes(code) || [401, 403, 410].includes(Number(error && error.status));
+  }
+
+  function blockListWorkbenchPublishForAuthorization(modal) {
+    modal.__ssErpCanPublish = false;
+    const publishButton = modal.querySelector('[data-role="publish-workbench"]');
+    const authorizationButton = modal.querySelector('[data-role="open-publish-authorization"]');
+    if (publishButton) publishButton.disabled = true;
+    if (authorizationButton) authorizationButton.hidden = false;
   }
 
   async function loadListWorkbenchShops(modal) {
@@ -3805,6 +3890,10 @@
     const watermark = buildListWorkbenchWatermarkConfig(modal);
     const status = modal.querySelector('[data-role="workbench-status"]');
     const button = modal.querySelector('[data-role="publish-workbench"]');
+    if (modal.__ssErpCanPublish !== true) {
+      if (status) status.textContent = 'ERP 已连接，但当前设备缺少 Ozon 上架授权';
+      return;
+    }
     if (!selected.length) {
       if (status) status.textContent = '请先勾选 SKU';
       return;
@@ -3857,14 +3946,21 @@
       }
       if (!response || !response.ok) {
         const message = response && (response.error || response.msg) || '上架失败';
-        throw new Error(message);
+        throw Object.assign(new Error(message), {
+          code: response && response.errorCode,
+          status: response && response.status,
+        });
       }
       const taskId = response.data && response.data.taskId ? `，任务ID: ${response.data.taskId}` : '';
       if (status) status.textContent = `上架任务已提交到 ERP 上架日志${taskId}`;
     } catch (error) {
+      if (isListWorkbenchAuthorizationFailure(error)) {
+        blockListWorkbenchPublishForAuthorization(modal);
+        loadListWorkbenchConnectionStatus(modal).catch(() => {});
+      }
       if (status) status.textContent = error && error.message ? error.message : String(error);
     } finally {
-      if (button && restoreButton) button.disabled = false;
+      if (button && restoreButton) button.disabled = modal.__ssErpCanPublish !== true;
     }
   }
 

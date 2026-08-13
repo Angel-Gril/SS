@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Eye, EyeOff, KeyRound, MessageSquareText } from 'lucide-react';
@@ -31,6 +31,12 @@ const DEFAULT_CHALLENGE_CONFIG: HumanChallengeConfig = {
   smsRateLimitSeconds: 60,
 };
 
+const EXTENSION_PUBLISH_RETURN_TO = '/collect?extensionAuth=publish';
+
+function validatedReturnTo(value: string | null): string {
+  return value === EXTENSION_PUBLISH_RETURN_TO ? value : '';
+}
+
 function resolveAdminLoginHref(hostname: string): string {
   return resolveCrossDeploymentHref(
     hostname,
@@ -42,6 +48,8 @@ function resolveAdminLoginHref(hostname: string): string {
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = validatedReturnTo(searchParams.get('returnTo'));
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loginMode, setLoginMode] = useState<'password' | 'sms'>('password');
@@ -104,7 +112,7 @@ export default function LoginPage() {
   function finishLogin(role: string | undefined) {
     tokenStore.clear();
     if (role === 'STAFF') router.push('/warehouse');
-    else router.push('/orders');
+    else router.push(returnTo || '/orders');
   }
 
   function resetChallenge() {

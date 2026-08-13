@@ -7,18 +7,18 @@
   --line-strong: #c5ced8;
   --ink: #17202a;
   --muted: #5f6b7a;
-  --brand: #c4511c;
-  --brand-strong: #96370e;
-  --brand-soft: #fff2e8;
+  --brand: #0f766e;
+  --brand-strong: #0b5d57;
+  --brand-soft: #ecf8f6;
   --success: #13714a;
   --success-soft: #eaf7f0;
   --warning: #8a6200;
   --warning-soft: #fff7dc;
   --danger: #b42318;
   --danger-soft: #fff0ee;
-  --info: #245f98;
+  --info: #2563eb;
   --info-soft: #edf5fd;
-  --focus: #96370e;
+  --focus: rgb(15 118 110 / 24%);
   --shadow: 0 14px 34px rgba(23, 32, 42, 0.08);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
@@ -898,7 +898,7 @@ h2 {
 }
 
 .workspace-alternative-actions [data-workspace-action="reject-attempt"] {
-  color: #9a3412;
+  color: var(--brand-strong);
 }
 
 .workspace-regenerate-control {

@@ -69,11 +69,27 @@ const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME = "ss-erp:ozon-workbench-publish
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_MINUTES = 1;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_BASE_MS = 60 * 1000;
 const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_MAX_MS = 15 * 60 * 1000;
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_TERMINAL_ERROR_CODES = new Set([
+  "device_authorization_required",
+  "device_publish_scope_required",
+  "device_unpaired",
+  "device_repair_required",
+  "device_authority_changed",
+]);
 let ozonCollectEnrichmentRunQueue = Promise.resolve();
 let ozonWorkbenchPublishPayloadRunQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
+}
+
+function normalizeErrorCode(error) {
+  if (!error || typeof error !== "object") return "";
+  return String(error.errorCode || error.code || "").trim().slice(0, 120);
+}
+
+function isOzonWorkbenchPublishPayloadTerminalError(error) {
+  return OZON_WORKBENCH_PUBLISH_PAYLOAD_TERMINAL_ERROR_CODES.has(normalizeErrorCode(error));
 }
 
 function drainOzonListInsightRequestQueue() {
@@ -391,6 +407,9 @@ function normalizeOzonWorkbenchPublishPayloadJob(job) {
     lastAttemptAt: String(job && job.lastAttemptAt || "").trim(),
     nextRunAt: String(job && job.nextRunAt || "").trim(),
     lastError: String(job && job.lastError || "").slice(0, 260),
+    lastErrorCode: normalizeErrorCode({ errorCode: job && job.lastErrorCode }),
+    terminal: job && job.terminal === true,
+    terminalAt: String(job && job.terminalAt || "").trim(),
   };
 }
 
@@ -420,6 +439,9 @@ async function upsertOzonWorkbenchPublishPayloadJob(job) {
     attempts: Number(existing.attempts) || 0,
     nextRunAt: "",
     lastError: "",
+    lastErrorCode: "",
+    terminal: false,
+    terminalAt: "",
   };
   await writeOzonWorkbenchPublishPayloadQueue([
     ...queue.filter((item) => item.jobId !== normalized.jobId),
@@ -449,13 +471,34 @@ async function recordOzonWorkbenchPublishPayloadRetry(job, error) {
   if (!normalized.jobId) return;
   const queue = await readOzonWorkbenchPublishPayloadQueue();
   const current = queue.find((item) => item.jobId === normalized.jobId) || normalized;
+  const errorCode = normalizeErrorCode(error);
+  const lastError = normalizeErrorMessage(error).slice(0, 260);
+  if (isOzonWorkbenchPublishPayloadTerminalError(error)) {
+    const terminalJob = {
+      ...current,
+      lastAttemptAt: new Date().toISOString(),
+      nextRunAt: "",
+      lastError,
+      lastErrorCode: errorCode,
+      terminal: true,
+      terminalAt: new Date().toISOString(),
+    };
+    await writeOzonWorkbenchPublishPayloadQueue([
+      ...queue.filter((item) => item.jobId !== normalized.jobId),
+      terminalJob,
+    ]);
+    return { terminal: true, errorCode };
+  }
   const attempts = (Number(current.attempts) || 0) + 1;
   const nextJob = {
     ...current,
     attempts,
     lastAttemptAt: new Date().toISOString(),
     nextRunAt: nextOzonWorkbenchPublishPayloadRetryAt(attempts),
-    lastError: normalizeErrorMessage(error).slice(0, 260),
+    lastError,
+    lastErrorCode: errorCode,
+    terminal: false,
+    terminalAt: "",
   };
   await writeOzonWorkbenchPublishPayloadQueue([
     ...queue.filter((item) => item.jobId !== normalized.jobId),
@@ -482,21 +525,22 @@ function ensureOzonWorkbenchPublishPayloadAlarm() {
 
 async function flushOzonWorkbenchPublishPayloadQueue() {
   return enqueueOzonWorkbenchPublishPayloadRun(async () => {
-    const conn = await getStoredErpConnection();
-    if (!conn.baseUrl || !conn.token) return;
-
     const queue = await readOzonWorkbenchPublishPayloadQueue();
     if (!queue.length) return;
 
     const nowMs = Date.now();
     for (const job of queue) {
-      if (!job.jobId || !isOzonWorkbenchPublishPayloadDue(job, nowMs)) continue;
+      if (!job.jobId || job.terminal === true || !isOzonWorkbenchPublishPayloadDue(job, nowMs)) continue;
       try {
-        const result = await completeOzonWorkbenchPublishJobPayload(conn, job.jobId, job.productIds, job.options, { keepQueued: true });
+        const result = await completeOzonWorkbenchPublishJobPayload(null, job.jobId, job.productIds, job.options, { keepQueued: true });
         if (result && result.ok === true) {
           await removeOzonWorkbenchPublishPayloadJob(job.jobId);
         } else {
-          await recordOzonWorkbenchPublishPayloadRetry(job, result && result.error ? result.error : "浏览器补全商品数据失败");
+          const retryError = Object.assign(
+            new Error(result && result.error ? result.error : "浏览器补全商品数据失败"),
+            { errorCode: result && result.errorCode },
+          );
+          await recordOzonWorkbenchPublishPayloadRetry(job, retryError);
         }
       } catch (error) {
         await recordOzonWorkbenchPublishPayloadRetry(job, error);
@@ -4061,21 +4105,17 @@ function buildOzonWorkbenchInitialPublishPayload(productIds, options = {}) {
 }
 
 async function patchOzonWorkbenchPublishJob(conn, jobId, body) {
-  const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs/" + encodeURIComponent(jobId), {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + conn.token,
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  let parsed = null;
-  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
-  if (!response.ok || !parsed || parsed.code === 0) {
-    throw new Error(parsed && parsed.msg || ("更新上架日志失败: HTTP " + response.status + " " + text.slice(0, 200)));
+  const deviceApi = globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK;
+  if (!deviceApi || typeof deviceApi.patch !== "function") {
+    throw new Error("设备上架通道未加载，请重新加载扩展");
   }
-  return parsed;
+  const result = await deviceApi.patch(jobId, body);
+  if (!result || result.ok !== true) {
+    throw Object.assign(new Error(result && result.error || "更新上架日志失败"), {
+      code: result && result.errorCode || "device_publish_update_failed",
+    });
+  }
+  return result;
 }
 
 async function streamOzonWorkbenchPublishRowsToJob(conn, jobId, productIds, options = {}) {
@@ -4195,10 +4235,18 @@ async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, o
       } catch (patchError) {
         console.warn("[SS ERP] record Ozon one-click listing payload retry:", normalizeErrorMessage(patchError));
       }
-      return { ok: false, error: normalizeErrorMessage(error) };
+      return {
+        ok: false,
+        error: normalizeErrorMessage(error),
+        errorCode: normalizeErrorCode(error),
+      };
     }
     await markOzonWorkbenchPublishJobFailed(conn, jobId, error);
-    return { ok: false, error: normalizeErrorMessage(error) };
+    return {
+      ok: false,
+      error: normalizeErrorMessage(error),
+      errorCode: normalizeErrorCode(error),
+    };
   }
 }
 
@@ -4222,24 +4270,19 @@ async function ensureOzonWorkbenchPublishCookieSynced(shopId, options = {}) {
 async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   const shopId = String(options.shopId || "").trim();
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
-  const conn = await getStoredErpConnection();
-  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
   await ensureOzonWorkbenchPublishCookieSynced(shopId, options);
   const payload = buildOzonWorkbenchInitialPublishPayload(productIds, options);
-
-  const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + conn.token,
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await response.text();
-  let parsed = null;
-  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
-  if (!response.ok || !parsed || parsed.code === 0) {
-    return { ok: false, error: parsed && parsed.msg || ("创建上架日志失败: HTTP " + response.status + " " + text.slice(0, 200)) };
+  const deviceApi = globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK;
+  if (!deviceApi || typeof deviceApi.create !== "function") {
+    return { ok: false, error: "设备上架通道未加载，请重新加载扩展" };
+  }
+  const parsed = await deviceApi.create(payload);
+  if (!parsed || parsed.ok !== true) {
+    return {
+      ok: false,
+      errorCode: parsed && parsed.errorCode,
+      error: parsed && parsed.error || "创建上架日志失败",
+    };
   }
   const jobId = parsed.data && parsed.data.jobId ? String(parsed.data.jobId) : "";
   if (!jobId) return { ok: false, error: "创建上架日志失败：ERP 未返回任务ID" };
@@ -4280,18 +4323,12 @@ async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
 }
 
 async function getWatermarkTemplates(shopId) {
-  const conn = await getStoredErpConnection();
-  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
   try {
-    const query = shopId ? ("?shopId=" + encodeURIComponent(String(shopId))) : "";
-    const response = await fetch(conn.baseUrl + "/api/watermark-templates" + query, {
-      method: "GET",
-      headers: { "Authorization": "Bearer " + conn.token },
-    });
-    if (!response.ok) return { ok: false, error: "获取水印模板失败: HTTP " + response.status };
-    const parsed = await response.json();
-    if (parsed.code !== 1) return { ok: false, error: parsed.msg || "获取水印模板失败" };
-    return { ok: true, data: Array.isArray(parsed.data) ? parsed.data : [] };
+    const deviceApi = globalThis.SS_ERP_EXTENSION_DEVICE_ONE_CLICK;
+    if (!deviceApi || typeof deviceApi.watermarks !== "function") {
+      return { ok: false, error: "设备水印通道未加载，请重新加载扩展" };
+    }
+    return await deviceApi.watermarks(shopId);
   } catch (e) {
     return { ok: false, error: "获取水印模板失败: " + (e && e.message ? e.message : String(e)) };
   }

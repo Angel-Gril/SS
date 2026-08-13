@@ -37,6 +37,10 @@
   var WORKBENCH_PUBLISH_PREPARE_PATH = '/api/extension-device/workbench-publish/prepare';
   var WORKBENCH_PUBLISH_STATUS_PATH = '/api/extension-device/workbench-publish/status';
   var OZON_PUBLISH_EXECUTE_PATH = '/api/extension-device/ozon-publish/execute';
+  var BROWSER_ONE_CLICK_JOBS_PATH = '/api/extension-device/browser-one-click/jobs';
+  var BROWSER_ONE_CLICK_STATUS_PATH = '/api/extension-device/browser-one-click/status/read';
+  var BROWSER_ONE_CLICK_WATERMARK_PATH =
+    '/api/extension-device/browser-one-click/watermark-templates/read';
   var HOSTED_PLAN_PATH = '/api/extension-device/source-workbench/plans';
   var HOSTED_LISTING_ASSIGNMENT_PATH =
     '/api/extension-device/source-workbench/ai-image-suite/listing-assignments';
@@ -49,6 +53,8 @@
     WORKBENCH_PUBLISH_PREPARE_PATH,
     WORKBENCH_PUBLISH_STATUS_PATH,
     OZON_PUBLISH_EXECUTE_PATH,
+    BROWSER_ONE_CLICK_JOBS_PATH,
+    BROWSER_ONE_CLICK_WATERMARK_PATH,
   ]);
   var PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
@@ -59,6 +65,8 @@
     WORKBENCH_PUBLISH_PREPARE_PATH,
     WORKBENCH_PUBLISH_STATUS_PATH,
     OZON_PUBLISH_EXECUTE_PATH,
+    BROWSER_ONE_CLICK_JOBS_PATH,
+    BROWSER_ONE_CLICK_WATERMARK_PATH,
   ]);
   var MEDIA_EDIT_LONG_REQUEST_PATHS = new Set([
     MEDIA_EDIT_SOURCE_PATH,
@@ -110,6 +118,9 @@
       WORKBENCH_PUBLISH_PREPARE_PATH,
       WORKBENCH_PUBLISH_STATUS_PATH,
       OZON_PUBLISH_EXECUTE_PATH,
+      BROWSER_ONE_CLICK_STATUS_PATH,
+      BROWSER_ONE_CLICK_JOBS_PATH,
+      BROWSER_ONE_CLICK_WATERMARK_PATH,
       HOSTED_PLAN_PATH,
       HOSTED_LISTING_ASSIGNMENT_PATH,
       HOSTED_PREVIEW_PATH,
@@ -191,6 +202,11 @@
       return Boolean(suffix
         && exactEncodedIdentifier(remainder.slice(0, -suffix.length)));
     }
+    function browserOneClickJobWritePath(candidate) {
+      var prefix = BROWSER_ONE_CLICK_JOBS_PATH + '/';
+      return candidate.startsWith(prefix)
+        && exactEncodedIdentifier(candidate.slice(prefix.length));
+    }
     function allowedGetPath(candidate) {
       return candidate.startsWith('/api/extension-device/source-workbench/')
         || byokExecutionBatchReadPath(candidate);
@@ -200,7 +216,8 @@
         || hostedPlanReviewPath(candidate)
         || byokExecutionIntentOutcomePath(candidate)
         || byokExecutionBatchMutationPath(candidate)
-        || shopAnalyticsWritePath(candidate);
+        || shopAnalyticsWritePath(candidate)
+        || browserOneClickJobWritePath(candidate);
     }
     var parsed;
     try { parsed = new URL(path, 'https://ss-erp.invalid'); } catch {
@@ -539,7 +556,10 @@
           var operation = await credentials.beginOperation();
           if (!operation || operation.state !== 'paired') return { state: 'unpaired' };
           var requestedScope = commandOptions && commandOptions.requiredScope;
-          var requiredScope = bodyMode === 'byok-bytes' || bodyMode === 'byok-multipart'
+          var scopeExemptRequest = path === BROWSER_ONE_CLICK_STATUS_PATH;
+          var requiredScope = scopeExemptRequest
+            ? null
+            : bodyMode === 'byok-bytes' || bodyMode === 'byok-multipart'
             ? 'byok:media:ingest'
             : requestedScope === 'listing:review'
             || requestedScope === 'listing:write'
@@ -549,7 +569,8 @@
             || requestedScope === 'capture:write'
             ? requestedScope
             : method === 'GET' ? 'listing:review' : 'media:execute';
-          if (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope)) {
+          if (requiredScope
+            && (!Array.isArray(operation.scopes) || !operation.scopes.includes(requiredScope))) {
             return { state: 'scope_required', scope: requiredScope };
           }
           var accessToken = requiredText(operation.accessToken, 'device access token');
@@ -634,7 +655,7 @@
             }
             return { state: 'authorization_required', status: response.status };
           }
-          if (response.status === 403 && !binaryRequest) {
+          if (response.status === 403 && !binaryRequest && requiredScope) {
             return { state: 'scope_required', scope: requiredScope };
           }
           if (method === 'GET' && response.status === 404) return { state: 'not_found' };

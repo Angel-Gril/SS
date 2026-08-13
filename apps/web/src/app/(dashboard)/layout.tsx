@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { api, tokenStore } from '@/lib/api';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
@@ -46,14 +46,21 @@ function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean)
   return false;
 }
 
-function getLoginPath(pathname: string): string {
+const EXTENSION_PUBLISH_RETURN_TO = '/collect?extensionAuth=publish';
+
+function getLoginPath(pathname: string, extensionAuth: string | null): string {
   if (pathname.startsWith('/admin')) return '/admin/login';
+  if (pathname === '/collect' && extensionAuth === 'publish') {
+    return `/login?returnTo=${encodeURIComponent(EXTENSION_PUBLISH_RETURN_TO)}`;
+  }
   return '/login';
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const extensionAuth = searchParams.get('extensionAuth');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -69,13 +76,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           setUser(res.data);
         } else {
           tokenStore.clear();
-          router.replace(getLoginPath(pathname));
+          router.replace(getLoginPath(pathname, extensionAuth));
         }
       })
       .catch(() => {
         if (cancelled) return;
         tokenStore.clear();
-        router.replace(getLoginPath(pathname));
+        router.replace(getLoginPath(pathname, extensionAuth));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -84,7 +91,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => {
       cancelled = true;
     };
-  }, [router, pathname]);
+  }, [router, pathname, extensionAuth]);
 
   // 路由权限保护：基于 effectiveRole 判断（USER 切仓库端时按 STAFF 视角拦）
   useEffect(() => {

@@ -17,8 +17,28 @@ export interface BrowserOneClickListingJobOptions {
   featureFlags?: SourceWorkflowFeatureFlagEvaluator;
 }
 
+export interface AddBrowserOneClickListingJobOptions {
+  attempts?: 1 | 2 | 3;
+}
+
 const QUEUE_NAME = 'browser-one-click-listing';
 const EPHEMERAL_LISTING_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_PUBLISH_TIMEOUT_MS = 30_000;
+
+class BrowserOneClickPublishOutcomeUnknownError extends Error {
+  readonly code = 'PUBLISH_OUTCOME_UNKNOWN';
+  readonly doNotRetry = true;
+
+  constructor(
+    message: string,
+    readonly reason: string,
+    readonly statusCode?: number,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'BrowserOneClickPublishOutcomeUnknownError';
+  }
+}
 
 export const browserOneClickListingQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
@@ -30,6 +50,31 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
+}
+
+async function assertDevicePublishAuthorization(job: any, payload: Record<string, any>) {
+  const sessionId = String(payload.extensionDeviceSessionId || '').trim();
+  if (!sessionId) return;
+  const session = await prisma.extensionDeviceSession.findFirst({
+    where: {
+      id: sessionId,
+      ownerUserId: job.shop.userId,
+      actorUserId: job.shop.userId,
+      status: 'ACTIVE',
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+      scopes: { has: 'listing:publish' },
+      shopGrants: {
+        some: { shopId: job.shopId, status: 'ACTIVE' },
+      },
+    },
+    select: { id: true },
+  });
+  if (!session) {
+    throw Object.assign(new Error('设备的 Ozon 上架授权已失效'), {
+      code: 'DEVICE_PUBLISH_AUTHORIZATION_REVOKED',
+    });
+  }
 }
 
 function positiveNumber(value: unknown): number | null {
@@ -365,6 +410,22 @@ function localApiBaseUrl(): string {
   return `http://${host}:${port}`;
 }
 
+function publishTimeoutMs(): number {
+  const configured = Number(process.env.BROWSER_ONE_CLICK_PUBLISH_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_PUBLISH_TIMEOUT_MS;
+  return Math.min(Math.max(Math.trunc(configured), 1_000), 120_000);
+}
+
+function isAmbiguousPublishStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function hasPublishTaskId(value: unknown): boolean {
+  return typeof value === 'number'
+    ? Number.isFinite(value) && value > 0
+    : typeof value === 'string' && value.trim().length > 0;
+}
+
 async function callPublishOzon(
   job: any,
   ids: string[],
@@ -372,40 +433,88 @@ async function callPublishOzon(
 ) {
   const payload = objectRecord(job.payload);
   const publish = objectRecord(payload.publish);
+  await assertDevicePublishAuthorization(job, payload);
   await assertLegacySourceOzonPublishAllowed(featureFlags, {
     ownerUserId: job.shop.userId,
     shopId: job.shopId,
     platform: String(job.shop.platform || ''),
+    deviceSessionId: payload.extensionDeviceSessionId || null,
   });
   await mergeBrowserOneClickJobPayload(job.id, { stage: 'publishing', itemCount: ids.length }, 'RUNNING', null);
   const token = await createInternalAuthToken(job.shop.userId);
-  const response = await fetch(`${localApiBaseUrl()}/api/collect/publish-ozon`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json;charset=utf-8',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      ids,
-      shopId: job.shopId,
-      jobId: job.id,
-      mode: publish.publishMode === 'clone' ? 'clone' : 'follow',
-      followBrand: publish.followBrand === true,
-      markupPct: Number(publish.markupPct) || 0,
-      randomOfferId: publish.randomOfferId !== false,
-      source: payload.entry === 'ozon-product-detail' ? 'ozon-product-detail-workbench' : 'batch-collect-page',
-      sourceListingDraftRefs: Array.isArray(payload.sourceListingDraftRefs)
-        ? payload.sourceListingDraftRefs
-        : [],
-      ...(publish.categoryId ? { categoryId: Number(publish.categoryId) } : {}),
-      ...(publish.typeId ? { typeId: Number(publish.typeId) } : {}),
-    }),
-  });
-  const text = await response.text();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), publishTimeoutMs());
+  timeout.unref?.();
+  let response: Response;
+  try {
+    response = await fetch(`${localApiBaseUrl()}/api/collect/publish-ozon`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json;charset=utf-8',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        ids,
+        shopId: job.shopId,
+        jobId: job.id,
+        mode: publish.publishMode === 'clone' ? 'clone' : 'follow',
+        followBrand: publish.followBrand === true,
+        markupPct: Number(publish.markupPct) || 0,
+        randomOfferId: publish.randomOfferId !== false,
+        source: payload.entry === 'ozon-product-detail' ? 'ozon-product-detail-workbench' : 'batch-collect-page',
+        sourceListingDraftRefs: Array.isArray(payload.sourceListingDraftRefs)
+          ? payload.sourceListingDraftRefs
+          : [],
+        ...(publish.categoryId ? { categoryId: Number(publish.categoryId) } : {}),
+        ...(publish.typeId ? { typeId: Number(publish.typeId) } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    throw new BrowserOneClickPublishOutcomeUnknownError(
+      controller.signal.aborted
+        ? 'ERP 上架请求超时，结果未知，禁止自动重发'
+        : 'ERP 上架请求连接中断，结果未知，禁止自动重发',
+      controller.signal.aborted ? 'request_timeout' : 'network_error',
+      undefined,
+      { cause: error },
+    );
+  }
+  let text = '';
+  try {
+    text = await response.text();
+  } catch (error) {
+    clearTimeout(timeout);
+    if (response.status >= 400 && response.status < 500 && !isAmbiguousPublishStatus(response.status)) {
+      throw new Error(`ERP 上架失败: HTTP ${response.status}`);
+    }
+    throw new BrowserOneClickPublishOutcomeUnknownError(
+      'ERP 上架响应读取失败，结果未知，禁止自动重发',
+      'response_read_failed',
+      response.status,
+      { cause: error },
+    );
+  }
+  clearTimeout(timeout);
   let parsed: any = null;
   try { parsed = JSON.parse(text); } catch { parsed = null; }
-  if (!response.ok || !parsed || parsed.code === 0) {
+  if (isAmbiguousPublishStatus(response.status)) {
+    throw new BrowserOneClickPublishOutcomeUnknownError(
+      parsed?.msg || `ERP 上架响应 HTTP ${response.status}，结果未知，禁止自动重发`,
+      `http_${response.status}`,
+      response.status,
+    );
+  }
+  if (!response.ok || parsed?.code === 0) {
     throw new Error(parsed?.msg || `ERP 上架失败: HTTP ${response.status} ${text.slice(0, 200)}`);
+  }
+  if (!parsed || !hasPublishTaskId(parsed.data?.taskId)) {
+    throw new BrowserOneClickPublishOutcomeUnknownError(
+      'ERP 上架返回缺少可对账的 taskId，结果未知，禁止自动重发',
+      parsed ? 'missing_task_id' : 'malformed_success_response',
+      response.status,
+    );
   }
   await mergeBrowserOneClickJobPayload(job.id, {
     stage: 'published',
@@ -432,12 +541,25 @@ export async function runBrowserOneClickListingJob(
   if (job.status === 'SUCCESS' || job.status === 'FAILED' || payload.taskId) {
     return { skipped: true, status: job.status, taskId: payload.taskId };
   }
+  if (
+    payload.extensionDeviceSessionId
+    && objectRecord(payload.publishOutcome).doNotRetry === true
+  ) {
+    return {
+      skipped: true,
+      status: job.status,
+      reason: 'publish_outcome_unknown',
+      doNotRetry: true,
+    };
+  }
 
   try {
+    await assertDevicePublishAuthorization(job, payload);
     await assertLegacySourceOzonPublishAllowed(featureFlags, {
       ownerUserId: job.shop.userId,
       shopId: job.shopId,
       platform: String(job.shop.platform || ''),
+      deviceSessionId: payload.extensionDeviceSessionId || null,
     });
     const ids = await ensureBrowserOneClickSupplyGoods(job);
     if (!ids.length) throw new Error('没有可上架的 SKU 数据');
@@ -463,7 +585,30 @@ export async function runBrowserOneClickListingJob(
       };
     }
     const latest = await prisma.syncJob.findUnique({ where: { id: job.id }, select: { payload: true } });
-    const failedStage = String(objectRecord(latest?.payload).stage || 'failed');
+    const latestPayload = objectRecord(latest?.payload);
+    if (hasPublishTaskId(latestPayload.taskId)) {
+      return { ok: true, jobId: job.id, taskId: latestPayload.taskId, reconciled: true };
+    }
+    if (error instanceof BrowserOneClickPublishOutcomeUnknownError && payload.extensionDeviceSessionId) {
+      await mergeBrowserOneClickJobPayload(job.id, {
+        stage: 'publish_outcome_unknown',
+        publishOutcome: {
+          state: 'UNKNOWN',
+          doNotRetry: true,
+          reason: error.reason,
+          statusCode: error.statusCode ?? null,
+          observedAt: new Date().toISOString(),
+        },
+      }, 'RUNNING', message);
+      return {
+        ok: false,
+        jobId: job.id,
+        outcome: 'UNKNOWN',
+        doNotRetry: true,
+        reason: error.reason,
+      };
+    }
+    const failedStage = String(latestPayload.stage || 'failed');
     await mergeBrowserOneClickJobPayload(job.id, {
       stage: failedStage === 'watermarking' ? 'watermark_failed' : failedStage === 'publishing' ? 'publish_failed' : 'collect_failed',
     }, 'FAILED', message);
@@ -471,7 +616,10 @@ export async function runBrowserOneClickListingJob(
   }
 }
 
-export async function addBrowserOneClickListingJob(syncJobId: string) {
+export async function addBrowserOneClickListingJob(
+  syncJobId: string,
+  options: AddBrowserOneClickListingJobOptions = {},
+) {
   const id = String(syncJobId || '').trim();
   if (!id) throw new Error('缺少一键上架任务 ID');
   if (redisDisabled) {
@@ -484,7 +632,7 @@ export async function addBrowserOneClickListingJob(syncJobId: string) {
   }
   const job = await browserOneClickListingQueue!.add('publish', { syncJobId: id }, {
     jobId: id,
-    attempts: 3,
+    attempts: options.attempts || 3,
     backoff: { type: 'exponential', delay: 5000 },
     removeOnComplete: 50,
     removeOnFail: 20,

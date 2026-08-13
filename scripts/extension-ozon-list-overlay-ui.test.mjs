@@ -156,8 +156,8 @@ assert.match(
 );
 assert.match(
   overlay,
-  /linear-gradient\(135deg,\s*#9a3412[\s\S]*#ea580c/,
-  'Ozon list dialogs should use the same orange ERP header tone as the extension data panel',
+  /headerGradient:\s*'#0f766e'/,
+  'Ozon list dialogs should use the shared teal ERP header token',
 );
 assert.doesNotMatch(
   overlay,
@@ -416,8 +416,8 @@ assert.match(
 );
 assert.match(
   background,
-  /\/api\/listing\/browser-one-click-jobs/,
-  'Ozon one-click publish should create a listing-log job before long collect/watermark work starts',
+  /globalThis\.SS_ERP_EXTENSION_DEVICE_ONE_CLICK[\s\S]*deviceApi\.create/,
+  'Ozon one-click publish should create a listing-log job through the paired device channel',
 );
 assert.doesNotMatch(
   background,
@@ -446,13 +446,13 @@ assert.match(
 );
 assert.doesNotMatch(
   background,
-  /async function createOzonWorkbenchPublishJob[\s\S]*await\s+buildOzonWorkbenchPublishPayload[\s\S]*\/api\/listing\/browser-one-click-jobs/,
+  /async function createOzonWorkbenchPublishJob[\s\S]*await\s+buildOzonWorkbenchPublishPayload[\s\S]*getStoredErpConnection/,
   'Ozon one-click publish should not wait for full browser-side enrichment before creating the ERP listing log',
 );
 assert.match(
   background,
-  /patchOzonWorkbenchPublishJob[\s\S]*\/api\/listing\/browser-one-click-jobs\/"\s*\+\s*encodeURIComponent\(jobId\)/,
-  'Ozon one-click publish should patch the pre-created listing-log job by id',
+  /patchOzonWorkbenchPublishJob[\s\S]*deviceApi\.patch/,
+  'Ozon one-click publish should patch the pre-created listing-log job through the paired device channel',
 );
 assert.match(
   background,
@@ -513,6 +513,26 @@ assert.match(
   overlay,
   /loadListWorkbenchConnectionStatus[\s\S]*ozon-calc:erp-endpoint-get/,
   'Ozon list publish panel should show which ERP endpoint the extension is currently connected to',
+);
+assert.match(
+  overlay,
+  /function\s+bindListWorkbenchConnectionRefresh[\s\S]*window\.addEventListener\('focus',\s*refresh\)[\s\S]*visibilitychange/,
+  'Ozon list publish panel should refresh device authorization after returning from ERP',
+);
+assert.match(
+  overlay,
+  /function\s+isListWorkbenchAuthorizationFailure[\s\S]*device_publish_scope_required[\s\S]*device_authority_changed/,
+  'Ozon list publish panel should classify terminal device authorization failures',
+);
+assert.match(
+  overlay,
+  /finally\s*\{[\s\S]*button\.disabled\s*=\s*modal\.__ssErpCanPublish\s*!==\s*true/,
+  'Ozon list publish panel should stay disabled after device authority is lost',
+);
+assert.match(
+  listWorkbench,
+  /data-role="close-list-workbench"[^>]+aria-label="关闭一键上架工作台"/,
+  'Ozon list workbench close control should expose an accessible name',
 );
 assert.match(
   overlay,

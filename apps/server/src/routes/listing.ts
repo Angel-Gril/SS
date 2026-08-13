@@ -46,6 +46,12 @@ export interface ListingRoutesOptions {
   publisherParityTimeoutMs?: number;
 }
 
+export interface BrowserOneClickListingHandlersOptions {
+  featureFlags: SourceWorkflowFeatureFlagEvaluator;
+  sourceListingWorkflowAdapter: LegacySourceListingWorkflowAdapter;
+}
+
+
 function sameRolloutDecision(
   initial: OzonPublisherEntrypointRolloutDecision,
   current: OzonPublisherEntrypointRolloutDecision,
@@ -74,14 +80,38 @@ function sendPublisherRolloutBlocked(
   });
 }
 
-function sourcePublishActorAllowed(request: FastifyRequest): boolean {
+export interface BrowserOneClickActor {
+  ownerUserId: string;
+  actorUserId: string;
+  role?: string;
+  isSubAccount?: boolean;
+  allowedShopIds?: readonly string[];
+  deviceSessionId?: string;
+}
+
+function accountBrowserOneClickActor(request: FastifyRequest): BrowserOneClickActor {
   const user = (request as any).user || {};
-  const actorUserId = String(user.actorUserId || user.userId || '');
-  const ownerUserId = String(user.userId || '');
+  return {
+    ownerUserId: String(user.userId || ''),
+    actorUserId: String(user.actorUserId || user.userId || ''),
+    role: typeof user.role === 'string' ? user.role : undefined,
+    isSubAccount: user.isSubAccount === true,
+  };
+}
+
+function sourcePublishActorAllowed(
+  request: FastifyRequest,
+  suppliedActor?: BrowserOneClickActor,
+): boolean {
+  const user = (request as any).user || {};
+  const actor = suppliedActor || accountBrowserOneClickActor(request);
+  const actorUserId = actor.actorUserId;
+  const ownerUserId = actor.ownerUserId;
   return Boolean(ownerUserId)
     && actorUserId === ownerUserId
-    && user.isSubAccount !== true
-    && user.role !== 'STAFF';
+    && actor.isSubAccount !== true
+    && actor.role !== 'STAFF'
+    && user.disabled !== true;
 }
 
 async function enforceLegacySourceOzonPublish(
@@ -89,8 +119,9 @@ async function enforceLegacySourceOzonPublish(
   reply: FastifyReply,
   shop: { id: string; userId?: string; platform: unknown },
   featureFlags: SourceWorkflowFeatureFlagEvaluator,
+  suppliedActor?: BrowserOneClickActor,
 ): Promise<boolean> {
-  if (!sourcePublishActorAllowed(request)) {
+  if (!sourcePublishActorAllowed(request, suppliedActor)) {
     reply.status(403).send({
       code: 0,
       errorCode: 'source_publish_owner_required',
@@ -98,12 +129,15 @@ async function enforceLegacySourceOzonPublish(
     });
     return true;
   }
-  const ownerUserId = String(shop.userId || (request as any).user?.userId || '');
+  const ownerUserId = String(
+    shop.userId || suppliedActor?.ownerUserId || (request as any).user?.userId || '',
+  );
   try {
     await assertLegacySourceOzonPublishAllowed(featureFlags, {
       ownerUserId,
       shopId: shop.id,
       platform: String(shop.platform || ''),
+      deviceSessionId: suppliedActor?.deviceSessionId || null,
     });
     return false;
   } catch (caught) {
@@ -289,6 +323,7 @@ function hasRecoverableBrowserPayloadRows(payload: Record<string, any>): boolean
     return !!title && hasImage(row) && rowHasPublishCategory(row, publish);
   });
 }
+
 
 function importErrorMessage(error: unknown): string {
   const anyError = error as any;
@@ -841,6 +876,379 @@ export async function refreshListingProductPushJob(
   }
 }
 
+function browserOneClickActorShopAllowed(
+  actor: BrowserOneClickActor,
+  shopId: string,
+): boolean {
+  return !actor.allowedShopIds || actor.allowedShopIds.includes(shopId);
+}
+
+function browserOneClickActorOwnsJob(
+  actor: BrowserOneClickActor,
+  job: { shop: { id: string; userId: string }; payload: unknown },
+): boolean {
+  if (job.shop.userId !== actor.ownerUserId) return false;
+  const boundSessionId = String(
+    objectRecord(job.payload).extensionDeviceSessionId || '',
+  ).trim();
+  return actor.deviceSessionId
+    ? boundSessionId === actor.deviceSessionId
+    : !boundSessionId;
+}
+
+export async function createBrowserOneClickListingJobForActor(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: BrowserOneClickActor,
+  options: BrowserOneClickListingHandlersOptions,
+) {
+  const parsed = browserOneClickJobSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.status(400).send({
+      code: 0,
+      msg: parsed.error.issues[0]?.message ?? '参数错误',
+    });
+  }
+  const { shopId } = parsed.data;
+  if (!browserOneClickActorShopAllowed(actor, shopId)) {
+    return reply.status(404).send({
+      code: 0,
+      errorCode: 'device_shop_not_found',
+      msg: '店铺未授权给该设备',
+    });
+  }
+  const shop = await prisma.shop.findFirst({
+    where: { id: shopId, userId: actor.ownerUserId },
+  });
+  if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+  if (shop.platform !== 'OZON') {
+    return reply.send({ code: 0, msg: '暂只支持 OZON 一键上架任务' });
+  }
+  if (await enforceLegacySourceOzonPublish(
+    request,
+    reply,
+    shop,
+    options.featureFlags,
+    actor,
+  )) return reply;
+
+  const sourceSkus = (parsed.data.sourceSkus || [])
+    .map((sku) => String(sku || '').trim())
+    .filter(Boolean);
+  const productUrls = (parsed.data.productUrls || [])
+    .map((url) => String(url || '').trim())
+    .filter(Boolean);
+  const rows = Array.isArray(parsed.data.rows) ? parsed.data.rows : [];
+  const sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
+    featureFlags: options.featureFlags,
+    adapter: options.sourceListingWorkflowAdapter,
+    ownerUserId: actor.ownerUserId,
+    actorUserId: actor.actorUserId,
+    shopId,
+    platform: String(shop.platform || ''),
+    supplyGoodsIds: uniqueStrings(rows.flatMap((row) => [
+      row.supplyGoodsId,
+      row.goodsId,
+    ])),
+    legacyFallback: parsed.data.legacyWorkflowFallback,
+  });
+  const publish = {
+    ...objectRecord(parsed.data.publish),
+    ...(parsed.data.markupPct !== undefined ? { markupPct: parsed.data.markupPct } : {}),
+    ...(parsed.data.followBrand !== undefined ? { followBrand: parsed.data.followBrand } : {}),
+    ...(parsed.data.randomOfferId !== undefined ? { randomOfferId: parsed.data.randomOfferId } : {}),
+    ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId } : {}),
+    ...(parsed.data.typeId !== undefined ? { typeId: parsed.data.typeId } : {}),
+    ...(parsed.data.costs !== undefined ? { costs: parsed.data.costs } : {}),
+    ...(parsed.data.prices !== undefined ? { prices: parsed.data.prices } : {}),
+    ...(parsed.data.fxRate !== undefined ? { fxRate: parsed.data.fxRate } : {}),
+    ...(parsed.data.commissionRate !== undefined
+      ? { commissionRate: parsed.data.commissionRate } : {}),
+    ...(parsed.data.logisticsFeeCny !== undefined
+      ? { logisticsFeeCny: parsed.data.logisticsFeeCny } : {}),
+  };
+  const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
+  const deferStart = actor.deviceSessionId ? true : parsed.data.deferStart === true;
+  const draftRefs = sourceListingCompatibility.drafts.flatMap((draft) => {
+    const row = rows.find((candidate) => (
+      String(candidate.supplyGoodsId || candidate.goodsId || '').trim()
+        === draft.supplyGoodsId
+    ));
+    const skuKey = row ? rowSku(row) : '';
+    return skuKey && draft.selectedSkuKeys?.includes(skuKey) ? [{
+      supplyGoodsId: draft.supplyGoodsId,
+      draftId: draft.draftId,
+      draftVersion: draft.draftVersion,
+      revision: draft.revision,
+      skuKey,
+    }] : [];
+  });
+  const payload: Record<string, any> = {
+    source: 'browser-one-click-listing',
+    stage: deferStart ? 'preparing_browser_data' : 'submitted',
+    entry: parsed.data.entry || 'extension-workbench',
+    mode: parsed.data.mode || 'clone',
+    itemCount,
+    sourceSkus,
+    productUrls,
+    rows,
+    publish,
+    browserPayloadReady: !deferStart,
+    submittedAt: new Date().toISOString(),
+    sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+    sourceListingDraftRefs: draftRefs,
+    ...(actor.deviceSessionId
+      ? { extensionDeviceSessionId: actor.deviceSessionId }
+      : {}),
+  };
+  if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
+
+  const job = await prisma.syncJob.create({
+    data: {
+      shopId,
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      startedAt: new Date(),
+      payload,
+    },
+    select: { id: true },
+  });
+  if (!deferStart) await addBrowserOneClickListingJob(job.id);
+
+  return reply.send({
+    code: 1,
+    msg: deferStart
+      ? '上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据'
+      : '上架任务已提交到 ERP 上架日志，后台队列正在执行',
+    data: { jobId: job.id, queued: !deferStart, deferred: deferStart },
+  });
+}
+
+export async function patchBrowserOneClickListingJobForActor(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  actor: BrowserOneClickActor,
+  options: BrowserOneClickListingHandlersOptions,
+) {
+  const { id } = request.params as { id: string };
+  const parsed = browserOneClickJobPatchSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.status(400).send({
+      code: 0,
+      msg: parsed.error.issues[0]?.message ?? '参数错误',
+    });
+  }
+  const job = await prisma.syncJob.findFirst({
+    where: { id, type: 'PRODUCT_PUSH' },
+    include: { shop: { select: { id: true, userId: true, platform: true } } },
+  });
+  if (!job || !browserOneClickActorOwnsJob(actor, job)) {
+    return reply.status(404).send({ code: 0, msg: '任务不存在' });
+  }
+  if (!browserOneClickActorShopAllowed(actor, job.shop.id)) {
+    return reply.status(404).send({
+      code: 0,
+      errorCode: 'device_authority_changed',
+      msg: '设备的店铺授权已变更，请重新授权后再试',
+    });
+  }
+
+  const previousPayload = objectRecord(job.payload);
+
+  if (actor.deviceSessionId) {
+    const allowedPayloadKeys = new Set([
+      'stage',
+      'browserPayloadBatch',
+      'browserPayloadReady',
+      'browserPayloadBatchAt',
+      'browserPayloadComplete',
+      'browserPayloadReadyAt',
+      'browserPayloadStream',
+      'browserPayloadRetrying',
+      'browserPayloadRetryAt',
+      'browserPayloadLastError',
+      'extensionDeviceSessionId',
+      'rows',
+    ]);
+    const allowedStages = new Set([
+      'collecting',
+      'submitted',
+      'collect_failed',
+    ]);
+    const requestedPayload = objectRecord(parsed.data.payload);
+    const forbiddenKey = Object.keys(requestedPayload).find((key) => !allowedPayloadKeys.has(key));
+    const requestedStage = String(requestedPayload.stage || '').trim();
+    if (forbiddenKey
+      || (requestedStage && !allowedStages.has(requestedStage))
+      || parsed.data.status === 'SUCCESS'
+      || 'result' in parsed.data) {
+      return reply.status(400).send({
+        code: 0,
+        errorCode: 'device_publish_state_forbidden',
+        msg: '设备只能补全商品数据，发布终态和结果由 ERP 服务端写入',
+      });
+    }
+    if (parsed.data.status && !['RUNNING', 'FAILED'].includes(parsed.data.status)) {
+      return reply.status(400).send({
+        code: 0,
+        errorCode: 'device_publish_state_forbidden',
+        msg: '设备只能更新运行中或失败状态',
+      });
+    }
+    if (previousPayload.browserQueueStartedAt) {
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: {
+          id: job.id,
+          status: job.status,
+          finishedAt: job.finishedAt,
+          payload: previousPayload,
+        },
+      });
+    }
+  }
+
+  const nextStatus = parsed.data.status || job.status;
+  const patchPayload = objectRecord(parsed.data.payload);
+  let ingestResult: Awaited<ReturnType<typeof appendBrowserOneClickListingRows>> | null = null;
+  if (previousPayload.source === 'browser-one-click-listing'
+    && patchPayload.browserPayloadBatch === true
+    && Array.isArray(patchPayload.rows)
+    && patchPayload.rows.length
+    && nextStatus !== 'FAILED') {
+    ingestResult = await appendBrowserOneClickListingRows(
+      job.id,
+      patchPayload.rows.map(objectRecord),
+    );
+  }
+  const shouldStartDeferredJob = previousPayload.source === 'browser-one-click-listing'
+    && previousPayload.browserPayloadReady === false
+    && patchPayload.browserPayloadReady === true
+    && nextStatus !== 'FAILED';
+  const previousRows = Array.isArray(previousPayload.rows)
+    ? previousPayload.rows.map(objectRecord) : [];
+  const patchRows = Array.isArray(patchPayload.rows)
+    ? patchPayload.rows.map(objectRecord) : [];
+  const mergedRows = ingestResult
+    ? ingestResult.rows
+    : (patchRows.length ? mergeRowsBySku(previousRows, patchRows) : previousRows);
+  const mergedSupplyGoodsIds = ingestResult
+    ? ingestResult.supplyGoodsIds
+    : uniqueStrings([
+      ...(Array.isArray(previousPayload.supplyGoodsIds)
+        ? previousPayload.supplyGoodsIds : []),
+      ...(Array.isArray(patchPayload.supplyGoodsIds)
+        ? patchPayload.supplyGoodsIds : []),
+    ]);
+  const mergedSkuGoodsIds = ingestResult
+    ? ingestResult.skuGoodsIds
+    : {
+        ...objectRecord(previousPayload.browserOneClickSkuGoodsIds),
+        ...objectRecord(patchPayload.browserOneClickSkuGoodsIds),
+      };
+  let sourceListingCompatibility: LegacySourceListingCompatibilityResult | null = null;
+  if (previousPayload.source === 'browser-one-click-listing'
+    && (mergedSupplyGoodsIds.length
+      || shouldStartDeferredJob
+      || (nextStatus === 'FAILED' && mergedRows.length))) {
+    sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
+      featureFlags: options.featureFlags,
+      adapter: options.sourceListingWorkflowAdapter,
+      ownerUserId: actor.ownerUserId,
+      actorUserId: actor.actorUserId,
+      shopId: job.shop.id,
+      platform: String(job.shop.platform || ''),
+      supplyGoodsIds: mergedSupplyGoodsIds,
+      legacyFallback: patchPayload.legacyWorkflowFallback === true
+        || objectRecord(previousPayload.sourceListingWorkflow).legacyFallback === true,
+    });
+  }
+  const basePayload = {
+    ...previousPayload,
+    ...patchPayload,
+    ...(actor.deviceSessionId
+      ? { extensionDeviceSessionId: actor.deviceSessionId }
+      : {}),
+    ...(mergedRows.length ? { rows: mergedRows } : {}),
+    ...(mergedSupplyGoodsIds.length
+      ? { supplyGoodsIds: mergedSupplyGoodsIds, collected: mergedSupplyGoodsIds.length }
+      : {}),
+    ...(Object.keys(mergedSkuGoodsIds).length
+      ? { browserOneClickSkuGoodsIds: mergedSkuGoodsIds }
+      : {}),
+    ...(ingestResult ? {
+      browserPayloadIngest: {
+        accepted: ingestResult.accepted,
+        failed: ingestResult.failed,
+        errors: ingestResult.errors,
+        updatedAt: new Date().toISOString(),
+      },
+    } : {}),
+    ...(sourceListingCompatibility ? {
+      sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+    } : {}),
+  };
+  const failureMessage = String(
+    parsed.data.errorMessage
+      || previousPayload.browserPayloadLastError
+      || '浏览器补全商品数据失败',
+  ).slice(0, 260);
+  const shouldRecoverBrowserPayloadFailure = previousPayload.source
+      === 'browser-one-click-listing'
+    && nextStatus === 'FAILED'
+    && String(patchPayload.stage || '').trim() === 'collect_failed'
+    && !previousPayload.taskId
+    && hasRecoverableBrowserPayloadRows(basePayload);
+  const shouldQueueBackendJob = shouldStartDeferredJob
+    || shouldRecoverBrowserPayloadFailure;
+  if (shouldQueueBackendJob && !previousPayload.taskId
+    && await enforceLegacySourceOzonPublish(
+      request,
+      reply,
+      job.shop,
+      options.featureFlags,
+      actor,
+    )) return reply;
+  const payload = {
+    ...basePayload,
+    ...(shouldRecoverBrowserPayloadFailure ? {
+      stage: 'submitted',
+      browserPayloadReady: true,
+      browserPayloadComplete: false,
+      browserPayloadRetrying: false,
+      browserPayloadRecoveredFromFailure: true,
+      browserPayloadLastError: failureMessage,
+    } : {}),
+    ...(shouldQueueBackendJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
+  };
+  const effectiveStatus = shouldRecoverBrowserPayloadFailure ? 'RUNNING' : nextStatus;
+  const updateData: Record<string, any> = { status: effectiveStatus, payload };
+  if ('result' in parsed.data) updateData.result = parsed.data.result ?? null;
+  if (shouldRecoverBrowserPayloadFailure) {
+    updateData.errorMessage = '浏览器补全商品数据暂时中断，ERP 已接管继续执行: '
+      + failureMessage;
+  } else if ('errorMessage' in parsed.data) {
+    updateData.errorMessage = parsed.data.errorMessage || null;
+  }
+  if (effectiveStatus === 'SUCCESS' || effectiveStatus === 'FAILED') {
+    updateData.finishedAt = new Date();
+  }
+  const updated = await prisma.syncJob.update({
+    where: { id: job.id },
+    data: updateData,
+    select: { id: true, status: true, finishedAt: true, payload: true },
+  });
+  if (shouldQueueBackendJob) {
+    if (actor.deviceSessionId) {
+      await addBrowserOneClickListingJob(job.id, { attempts: 1 });
+    } else {
+      await addBrowserOneClickListingJob(job.id);
+    }
+  }
+  return reply.send({ code: 1, msg: 'ok', data: updated });
+}
+
 export async function listingRoutes(app: FastifyInstance, options: ListingRoutesOptions = {}) {
   const featureFlags = options.featureFlags || sourceWorkflowFeatureFlags;
   const sourceListingWorkflowAdapter = options.sourceListingWorkflowAdapter
@@ -1300,240 +1708,21 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
   });
 
   app.post('/browser-one-click-jobs', async (request, reply) => {
-    const { userId } = (request as any).user;
-    const parsed = browserOneClickJobSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
-    }
-
-    const { shopId } = parsed.data;
-    const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
-    if (!shop) {
-      return reply.status(404).send({ code: 0, msg: '店铺不存在' });
-    }
-    if (shop.platform !== 'OZON') {
-      return reply.send({ code: 0, msg: '暂只支持 OZON 一键上架任务' });
-    }
-    if (await enforceLegacySourceOzonPublish(request, reply, shop, featureFlags)) return;
-
-    const sourceSkus = (parsed.data.sourceSkus || [])
-      .map((sku) => String(sku || '').trim())
-      .filter(Boolean);
-    const productUrls = (parsed.data.productUrls || [])
-      .map((url) => String(url || '').trim())
-      .filter(Boolean);
-    const rows = Array.isArray(parsed.data.rows) ? parsed.data.rows : [];
-    const sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
-      featureFlags,
-      adapter: sourceListingWorkflowAdapter,
-      ownerUserId: userId,
-      actorUserId: String((request as any).user?.actorUserId || userId),
-      shopId,
-      platform: String(shop.platform || ''),
-      supplyGoodsIds: uniqueStrings(rows.flatMap((row) => [
-        row.supplyGoodsId,
-        row.goodsId,
-      ])),
-      legacyFallback: parsed.data.legacyWorkflowFallback,
-    });
-    const publish = {
-      ...objectRecord(parsed.data.publish),
-      ...(parsed.data.markupPct !== undefined ? { markupPct: parsed.data.markupPct } : {}),
-      ...(parsed.data.followBrand !== undefined ? { followBrand: parsed.data.followBrand } : {}),
-      ...(parsed.data.randomOfferId !== undefined ? { randomOfferId: parsed.data.randomOfferId } : {}),
-      ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId } : {}),
-      ...(parsed.data.typeId !== undefined ? { typeId: parsed.data.typeId } : {}),
-      ...(parsed.data.costs !== undefined ? { costs: parsed.data.costs } : {}),
-      ...(parsed.data.prices !== undefined ? { prices: parsed.data.prices } : {}),
-      ...(parsed.data.fxRate !== undefined ? { fxRate: parsed.data.fxRate } : {}),
-      ...(parsed.data.commissionRate !== undefined ? { commissionRate: parsed.data.commissionRate } : {}),
-      ...(parsed.data.logisticsFeeCny !== undefined ? { logisticsFeeCny: parsed.data.logisticsFeeCny } : {}),
-    };
-    const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
-    const deferStart = parsed.data.deferStart === true;
-    const draftRefs = sourceListingCompatibility.drafts.flatMap((draft) => {
-      const row = rows.find((candidate) => (
-        String(candidate.supplyGoodsId || candidate.goodsId || '').trim() === draft.supplyGoodsId
-      ));
-      const skuKey = row ? rowSku(row) : '';
-      return skuKey && draft.selectedSkuKeys?.includes(skuKey) ? [{
-        supplyGoodsId: draft.supplyGoodsId,
-        draftId: draft.draftId,
-        draftVersion: draft.draftVersion,
-        revision: draft.revision,
-        skuKey,
-      }] : [];
-    });
-    const payload: Record<string, any> = {
-      source: 'browser-one-click-listing',
-      stage: deferStart ? 'preparing_browser_data' : 'submitted',
-      entry: parsed.data.entry || 'extension-workbench',
-      mode: parsed.data.mode || 'clone',
-      itemCount,
-      sourceSkus,
-      productUrls,
-      rows,
-      publish,
-      browserPayloadReady: !deferStart,
-      submittedAt: new Date().toISOString(),
-      sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
-      sourceListingDraftRefs: draftRefs,
-    };
-    if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
-
-    const job = await prisma.syncJob.create({
-      data: {
-        shopId,
-        type: 'PRODUCT_PUSH',
-        status: 'RUNNING',
-        startedAt: new Date(),
-        payload,
-      },
-      select: { id: true },
-    });
-    if (!deferStart) {
-      await addBrowserOneClickListingJob(job.id);
-    }
-
-    return reply.send({
-      code: 1,
-      msg: deferStart
-        ? '上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据'
-        : '上架任务已提交到 ERP 上架日志，后台队列正在执行',
-      data: { jobId: job.id, queued: !deferStart, deferred: deferStart },
-    });
+    return createBrowserOneClickListingJobForActor(
+      request,
+      reply,
+      accountBrowserOneClickActor(request),
+      { featureFlags, sourceListingWorkflowAdapter },
+    );
   });
 
   app.patch('/browser-one-click-jobs/:id', async (request, reply) => {
-    const { userId } = (request as any).user;
-    const { id } = request.params as { id: string };
-    const parsed = browserOneClickJobPatchSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
-    }
-
-    const job = await prisma.syncJob.findFirst({
-      where: { id, type: 'PRODUCT_PUSH' },
-      include: { shop: { select: { id: true, userId: true, platform: true } } },
-    });
-    if (!job || job.shop.userId !== userId) {
-      return reply.status(404).send({ code: 0, msg: '任务不存在' });
-    }
-
-    const nextStatus = parsed.data.status || job.status;
-    const previousPayload = objectRecord(job.payload);
-    const patchPayload = objectRecord(parsed.data.payload);
-    let ingestResult: Awaited<ReturnType<typeof appendBrowserOneClickListingRows>> | null = null;
-    if (
-      previousPayload.source === 'browser-one-click-listing'
-      && patchPayload.browserPayloadBatch === true
-      && Array.isArray(patchPayload.rows)
-      && patchPayload.rows.length
-      && nextStatus !== 'FAILED'
-    ) {
-      ingestResult = await appendBrowserOneClickListingRows(job.id, patchPayload.rows.map(objectRecord));
-    }
-    const shouldStartDeferredJob = previousPayload.source === 'browser-one-click-listing'
-      && previousPayload.browserPayloadReady === false
-      && patchPayload.browserPayloadReady === true
-      && nextStatus !== 'FAILED';
-    const previousRows = Array.isArray(previousPayload.rows) ? previousPayload.rows.map(objectRecord) : [];
-    const patchRows = Array.isArray(patchPayload.rows) ? patchPayload.rows.map(objectRecord) : [];
-    const mergedRows = ingestResult ? ingestResult.rows : (patchRows.length ? mergeRowsBySku(previousRows, patchRows) : previousRows);
-    const mergedSupplyGoodsIds = ingestResult
-      ? ingestResult.supplyGoodsIds
-      : uniqueStrings([...(Array.isArray(previousPayload.supplyGoodsIds) ? previousPayload.supplyGoodsIds : []), ...(Array.isArray(patchPayload.supplyGoodsIds) ? patchPayload.supplyGoodsIds : [])]);
-    const mergedSkuGoodsIds = ingestResult
-      ? ingestResult.skuGoodsIds
-      : { ...objectRecord(previousPayload.browserOneClickSkuGoodsIds), ...objectRecord(patchPayload.browserOneClickSkuGoodsIds) };
-    let sourceListingCompatibility: LegacySourceListingCompatibilityResult | null = null;
-    if (previousPayload.source === 'browser-one-click-listing'
-      && (mergedSupplyGoodsIds.length || shouldStartDeferredJob || (nextStatus === 'FAILED' && mergedRows.length))) {
-      sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
-        featureFlags,
-        adapter: sourceListingWorkflowAdapter,
-        ownerUserId: userId,
-        actorUserId: String((request as any).user?.actorUserId || userId),
-        shopId: job.shop.id,
-        platform: String(job.shop.platform || ''),
-        supplyGoodsIds: mergedSupplyGoodsIds,
-        legacyFallback: patchPayload.legacyWorkflowFallback === true
-          || objectRecord(previousPayload.sourceListingWorkflow).legacyFallback === true,
-      });
-    }
-    const basePayload = {
-      ...previousPayload,
-      ...patchPayload,
-      ...(mergedRows.length ? { rows: mergedRows } : {}),
-      ...(mergedSupplyGoodsIds.length ? { supplyGoodsIds: mergedSupplyGoodsIds, collected: mergedSupplyGoodsIds.length } : {}),
-      ...(Object.keys(mergedSkuGoodsIds).length ? { browserOneClickSkuGoodsIds: mergedSkuGoodsIds } : {}),
-      ...(ingestResult ? {
-        browserPayloadIngest: {
-          accepted: ingestResult.accepted,
-          failed: ingestResult.failed,
-          errors: ingestResult.errors,
-          updatedAt: new Date().toISOString(),
-        },
-      } : {}),
-      ...(sourceListingCompatibility ? {
-        sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
-      } : {}),
-    };
-    const failureMessage = String(parsed.data.errorMessage || previousPayload.browserPayloadLastError || '浏览器补全商品数据失败').slice(0, 260);
-    const shouldRecoverBrowserPayloadFailure = previousPayload.source === 'browser-one-click-listing'
-      && nextStatus === 'FAILED'
-      && String(patchPayload.stage || '').trim() === 'collect_failed'
-      && !previousPayload.taskId
-      && hasRecoverableBrowserPayloadRows(basePayload);
-    const requestedQueueTransition = shouldStartDeferredJob || shouldRecoverBrowserPayloadFailure;
-    const shouldQueueBackendJob = requestedQueueTransition;
-    if (shouldQueueBackendJob && !previousPayload.taskId) {
-      if (await enforceLegacySourceOzonPublish(request, reply, job.shop, featureFlags)) return;
-    }
-    const payload = {
-      ...basePayload,
-      ...(shouldRecoverBrowserPayloadFailure ? {
-        stage: 'submitted',
-        browserPayloadReady: true,
-        browserPayloadComplete: false,
-        browserPayloadRetrying: false,
-        browserPayloadRecoveredFromFailure: true,
-        browserPayloadLastError: failureMessage,
-      } : {}),
-      ...(shouldQueueBackendJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
-    };
-    const effectiveStatus = shouldRecoverBrowserPayloadFailure ? 'RUNNING' : nextStatus;
-    const updateData: Record<string, any> = {
-      status: effectiveStatus,
-      payload,
-    };
-    if ('result' in parsed.data) updateData.result = parsed.data.result ?? null;
-    if (shouldRecoverBrowserPayloadFailure) {
-      updateData.errorMessage = '浏览器补全商品数据暂时中断，ERP 已接管继续执行: ' + failureMessage;
-    } else if ('errorMessage' in parsed.data) {
-      updateData.errorMessage = parsed.data.errorMessage || null;
-    }
-    if (effectiveStatus === 'SUCCESS' || effectiveStatus === 'FAILED') updateData.finishedAt = new Date();
-
-    const updated = await prisma.syncJob.update({
-      where: { id: job.id },
-      data: updateData,
-      select: {
-        id: true,
-        status: true,
-        finishedAt: true,
-        payload: true,
-      },
-    });
-    if (shouldQueueBackendJob) {
-      await addBrowserOneClickListingJob(job.id);
-    }
-
-    return reply.send({
-      code: 1,
-      msg: 'ok',
-      data: updated,
-    });
+    return patchBrowserOneClickListingJobForActor(
+      request,
+      reply,
+      accountBrowserOneClickActor(request),
+      { featureFlags, sourceListingWorkflowAdapter },
+    );
   });
 
   app.get('/tasks', async (request) => {

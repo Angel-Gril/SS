@@ -44,6 +44,31 @@ Overall: 37/37 tasks complete (100%).
 
 ## Current Status
 
+Source-only one-click device authorization and extension UI hardening checkpoint
+(2026-08-13): the working tree now routes browser one-click create/patch and watermark reads
+through `/api/extension-device/browser-one-click`, binds each job to the live owner/shop/device
+session, revalidates publish scope through an authenticated no-store status read that is not
+blocked by stale local scope claims, and limits device-origin queue attempts to one. Device PATCH
+requests use a completion-field allowlist, so they cannot replace server-derived draft identity,
+goods bindings, watermark stages, publish results, or terminal state. Device revocation, missing
+publish scope, authority changes and unpaired states are terminal for the MV3 payload-completion
+queue; transient transport failures retain bounded backoff. Device-origin Ozon publish POSTs now
+use a bounded abort timeout and preserve `RUNNING / publish_outcome_unknown / doNotRetry` for
+ambiguous network, timeout, 408/425/429/5xx, malformed-success or missing-task-id responses, so
+they cannot be automatically re-posted. The product/list workbenches refresh authorization on
+focus/visibility return,
+keep publish disabled after terminal auth failures, preserve the `/collect?extensionAuth=publish`
+login deep link, and request only `capture:write` plus `listing:publish` for a fresh publish flow.
+The settings and Ozon workbench surfaces now share the deep-teal/blue/amber/red operational theme.
+Focused Server tests pass `58/58` across the one-click route/job/worker set, the complete one-click
+static contract passes `12/12`, the
+device-auth contract, unified-theme, list/product workbench, SKU integration and source-security
+contracts pass, and workspace lint/typecheck pass with only existing warnings. This is source-only:
+no Provider request, ERP/Ozon write, VPS access or deployment occurred. The deployed baseline remains
+`0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` below. The browser worker still
+uses the legacy internal `/api/collect/publish-ozon` compatibility publisher; full V2 command-grant,
+receipt and atomic UNKNOWN-outcome coordination remains a separate release-blocking hardening task.
+
 Automatic pairing and device-collection replacement release (2026-08-13): exact target
 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` is deployed in both regions and installed on BINI as
 extension `1.0.306`. Target-bound QA-04 passed in `954` seconds with source `454/454`, Cloud
@@ -2511,8 +2536,8 @@ rename the request, or use it to authorize `FULL_EDIT` or `INPAINT`. Counts rema
 
 ## Next Steps
 
-Completion follow-up: treat exact commit `951ecdc84045d581ce4ec5a305c4eaa01b86a4f4` and extension
-`1.0.305` as the current dual-region/BINI baseline. Keep both regions and every rollout row dark,
+Completion follow-up: treat exact commit `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` and extension
+`1.0.306` as the current dual-region/BINI baseline. Keep both regions and every rollout row dark,
 configure remote backup storage before the next production change, and retain all generated
 analysis, plan, progress, private evidence and operator-helper artifacts until an explicit
 keep/delete decision is made. Do not repeat the completed cycle 20 Ozon import or status request;

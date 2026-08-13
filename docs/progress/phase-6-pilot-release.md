@@ -28,6 +28,21 @@ Progress: 3/3 tasks.
 
 ## Notes
 
+- Source-only one-click device authorization/UI hardening checkpoint (2026-08-13): browser
+  one-click create/patch and watermark reads now use a live owner/shop/device session, with a
+  no-store status read for current scopes that bypasses stale local scope claims, immutable
+  session binding, a device completion-field allowlist that protects server-derived publish state,
+  one device-job attempt,
+  and a bounded device-origin publish timeout that parks ambiguous responses as
+  `publish_outcome_unknown / doNotRetry`,
+  focus/visibility authorization refresh, minimal publish deep-link scopes, terminal queue parking
+  for revoked/unpaired/missing-scope sessions, and a unified deep-teal operational UI. Focused
+  Server one-click route/job/worker tests passed `58/58`; one-click static contracts passed `12/12`; complete workspace
+  lint/typecheck passed with existing warnings. No Provider request, ERP/Ozon write, VPS access or
+  deployment occurred. The compatibility worker still calls the legacy internal
+  `/api/collect/publish-ozon`; it is not evidence that the full V2 command-grant/receipt and
+  atomic UNKNOWN-outcome publisher migration is complete.
+
 - Automatic pairing and device-collection replacement release (2026-08-13): exact target
   `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` / extension `1.0.306` passed target-bound QA-04 in
   `954` seconds with source `454/454`, Cloud `459/459` and Local `455/455`. Canonical acceptance
