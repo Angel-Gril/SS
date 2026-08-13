@@ -13,8 +13,8 @@ description: Maintain, review, test, package, deploy, or resume the completed SS
    authorization as the source of truth; do not recreate deleted planning/progress archives.
 3. Before changing an unfamiliar module, read the relevant source contract, runbook, and test.
 
-Do not restart analysis or repeat completed work. Treat MASTER as the cross-conversation
-source of truth.
+Do not restart analysis or repeat completed work. Treat the committed source, focused
+contracts, release artifacts, and Git history as the cross-conversation source of truth.
 
 ## Enforce the Product Boundary
 
@@ -61,7 +61,7 @@ storage limits, draft revision checks, command grants, publish receipts, or reco
 - Never enable a new production flag by default.
 
 If any invariant fails, stop rollout work, add a regression test, fix the cause, and record
-the decision in the active progress file.
+the decision in the active operator-controlled release artifact and Git history.
 
 ## Apply Network and Media Safety
 
@@ -110,7 +110,7 @@ observable and compatible with this skill's security invariants.
 
 ## Execute a Task
 
-1. Confirm prerequisites from the dependency graph.
+1. Confirm prerequisites from the committed contracts, runbooks, and current release inputs.
 2. Inspect the smallest relevant source and existing tests.
 3. Add a failing characterization or contract test before changing fragile behavior.
 4. Implement the smallest complete slice that meets the task acceptance criteria.
@@ -125,13 +125,13 @@ tests must pass.
 
 ## Use Parallel Agents Safely
 
-At the start of each implementation phase, use the parallel lanes in the task breakdown.
-Assign one bounded task per agent with acceptance criteria and relevant paths.
+At the start of each implementation phase, divide parallel lanes by the current acceptance
+criteria and module boundaries. Assign one bounded task per agent with relevant paths.
 
 - Parallelize new modules and tests with low file overlap.
 - Serialize hotspot files and Prisma migration ordering.
-- Ask agents not to modify progress files when multiple lanes are active; reconcile progress
-  once in the root agent after integrating results.
+- Give one agent ownership of each operator-controlled release artifact; reconcile evidence
+  in the root agent after integrating parallel results.
 - Verify every agent result locally. Run combined tests after merging lanes.
 - If one lane is blocked, continue independent lanes and record the blocker rather than
   weakening a boundary.
