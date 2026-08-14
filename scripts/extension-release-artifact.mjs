@@ -5,6 +5,7 @@ import {
   fsyncSync,
   linkSync,
   openSync,
+  renameSync,
   rmSync,
   writeSync,
 } from 'node:fs';
@@ -71,6 +72,47 @@ export function writeNewArtifactDurably(finalPath, value, { mode = 0o644 } = {})
       rmSync(temporary, { force: true });
     } catch {
       // A hidden temporary inode is never accepted as a release artifact.
+    }
+    throw error;
+  }
+}
+
+export function replaceArtifactDurably(finalPath, value, { mode = 0o644 } = {}) {
+  const absolute = path.resolve(finalPath);
+  const directory = path.dirname(absolute);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(absolute)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+  );
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  let descriptor = null;
+  try {
+    descriptor = openSync(temporary, 'wx', mode);
+    fchmodSync(descriptor, mode);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = writeSync(descriptor, bytes, offset, bytes.length - offset, offset);
+      if (written < 1) throw new Error(`Unable to complete extension artifact write: ${absolute}`);
+      offset += written;
+    }
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+    renameSync(temporary, absolute);
+    syncDirectory(directory);
+    return { bytes: bytes.length, path: absolute };
+  } catch (error) {
+    if (descriptor !== null) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Preserve the original write failure.
+      }
+    }
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // A hidden temporary inode is never accepted as a publication pointer.
     }
     throw error;
   }

@@ -6,6 +6,7 @@ import {
 } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -22,11 +23,14 @@ import {
   canonicalDistributionReceiptJson,
   canonicalReleaseSignatureJson,
   canonicalTrustedKeyringJson,
+  canonicalWebsitePublicationApprovalJson,
   distributionReceiptPayload,
   parseDistributionReceipt,
   parseReleaseSignature,
   parseTrustedKeyring,
+  parseWebsitePublicationApproval,
   sha256,
+  websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
 import {
   canonicalExtensionReleaseEvidenceJson,
@@ -42,8 +46,109 @@ import { verifyExtensionPublication } from './verify-extension-publication.mjs';
 const roots = [];
 const keyId = 'ss-erp-extension-release-test-01';
 const signedAt = '2030-01-01T00:00:00.000Z';
+const canaryObservedAt = '2030-01-01T00:01:00.000Z';
+const approvedAt = '2030-01-01T00:02:00.000Z';
 const observedAt = '2030-01-01T00:05:00.000Z';
 const origin = 'https://releases.example.com';
+
+test('release signature verification reads only the bounded opened-file snapshot', () => {
+  const verifier = readFileSync('scripts/verify-extension-release-signature.mjs', 'utf8');
+  assert.match(verifier, /Buffer\.allocUnsafe\(Number\(opened\.size\)\)/u);
+  assert.match(
+    verifier,
+    /readSync\(descriptor, bytes, offset, bytes\.length - offset, offset\)/u,
+  );
+  assert.doesNotMatch(verifier, /readFileSync\(descriptor\)/u);
+});
+
+function darkCanaryFixture({
+  apiOrigin = origin,
+  expectedGitCommit,
+  observedAt: at = canaryObservedAt,
+}) {
+  const hash = 'a'.repeat(64);
+  const routes = [
+    ['GET', 'GET /ready'],
+    ['GET', 'GET /api/extensions/latest'],
+    ['OPTIONS', 'OPTIONS /api/extension-device/byok-media/readiness'],
+    ['GET', 'GET /api/admin/system-config/:key'],
+    ['GET', 'GET /api/ai-images/suites/readiness'],
+    ['GET', 'GET /api/source-listing-workflows/publisher-capability'],
+    ['POST', 'POST /api/extension-device/pairing-codes'],
+    ['POST', 'POST /api/extension-device/pairing-claims'],
+    ['GET', 'GET /api/extension-device/shops'],
+    ['POST', 'POST /api/extension-device/refresh'],
+    ['GET', 'GET /api/extension-device/sessions'],
+    ['POST', 'POST /api/extension-device/byok-media/readiness'],
+    ['DELETE', 'DELETE /api/extension-device/sessions/:sessionId'],
+    ['GET', 'GET /api/extension-device/shops (revoked)'],
+  ];
+  return {
+    schemaVersion: 1,
+    kind: 'SS_ERP_REL04_DARK_CANARY',
+    status: 'PASS',
+    observedAt: at,
+    bindings: {
+      apiOrigin,
+      expectedGitCommit,
+      extensionOrigin: `chrome-extension://${'a'.repeat(32)}`,
+      shopIdHash: hash,
+      publishReconciliation: {
+        mode: 'TARGET_COMMIT_QA04_REGRESSION',
+        workflowIdHash: null,
+        attemptIdHash: null,
+        regressionEvidenceSha256: hash,
+        notBefore: null,
+      },
+    },
+    checks: [
+      { id: 'deployment-and-publication-isolation', status: 'PASS', evidence: {
+        deployedGitCommit: expectedGitCommit,
+        deployedCandidatePublic: false,
+        existingPublication: null,
+        extensionCorsPreflight: true,
+      } },
+      { id: 'default-off-policy', status: 'PASS', evidence: {
+        master: 'absent', imageToImage: 'absent', suite: 'absent', fullEdit: 'absent',
+        inpaint: 'absent', webMedia: 'absent', extensionWorkbench: 'absent',
+        ozonPublisher: 'absent', legacyGeneration: 'absent/disabled',
+        imageTranslation: 'absent/disabled', policy: 'absent',
+        extensionByok: {
+          expectation: 'off', hostedAi: 'absent(default:false)', generation: 'absent(default:false)',
+          ingest: 'absent(default:false)', publish: 'absent(default:false)', policy: 'absent(default:off)',
+        },
+      } },
+      { id: 'hosted-route-regression', status: 'PASS', evidence: {
+        routeReachable: true, providerDispatchMethodUsed: false, suiteEnabled: false,
+        workflowEnabled: false, reasonCode: 'AI_MEDIA_SUITE_DISABLED',
+      } },
+      { id: 'publish-reconciliation-read', status: 'PASS', evidence: {
+        mode: 'TARGET_COMMIT_QA04_REGRESSION', liveAttemptRead: false,
+        regressionEvidenceSha256: hash, capabilityEnabled: false,
+        capabilityReason: 'master_off', capabilityRevision: 'master-off',
+        capabilityLegacyAllowed: true, ozonMutationRequestSentByCanary: false,
+      } },
+      { id: 'device-pairing-active-lifecycle', status: 'PASS', evidence: {
+        deploymentIdHash: hash, deviceIdHash: hash, sessionIdHash: hash,
+        authorizedShopIdHash: hash, refreshRotated: true,
+      } },
+      { id: 'byok-disabled-path', status: 'PASS', evidence: {
+        rejectedBeforeExecutionIntent: true, providerRequestSentByCanary: false,
+        erpIngestRequestSentByCanary: false, statusCode: 409,
+        errorCode: 'byok_readiness_not_ready',
+      } },
+      { id: 'device-session-cleanup', status: 'PASS', evidence: {
+        action: 'OWNER_REVOKED', sessionIdHash: hash, revokedTokenRejected: true,
+      } },
+    ],
+    requestAudit: {
+      timeoutMs: 15000, redirectsAllowed: false, credentialsMode: 'omit',
+      requests: routes.map(([method, route]) => ({ method, route, statusCode: 200 })),
+      providerDispatchSent: false, erpIngestSent: false, ozonMutationSent: false,
+    },
+    cleanup: { required: true, completed: true, errorCode: null },
+  };
+}
 
 test.afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -143,6 +248,11 @@ function fixture() {
   mkdirSync(publicationRoot);
   const evidencePath = path.join(candidateRoot, `ss-erp-extension-${version}.release-evidence.json`);
   const signaturePath = path.join(publicationRoot, `ss-erp-extension-${version}.release-signature.json`);
+  const darkCanaryPath = path.join(publicationRoot, `ss-erp-extension-${version}.rel04-dark-canary.json`);
+  const approvalPath = path.join(
+    publicationRoot,
+    `ss-erp-extension-${version}.website-publication-approval.json`,
+  );
   const receiptPath = path.join(publicationRoot, `ss-erp-extension-${version}.distribution-receipt.json`);
   const keyringPath = path.join(root, 'trusted-keys.json');
   const privateKeyPath = path.join(root, 'release-signing-key.pem');
@@ -173,6 +283,8 @@ function fixture() {
     }],
   });
   canonicalWrite(keyringPath, keyring, canonicalTrustedKeyringJson);
+  const darkCanary = darkCanaryFixture({ expectedGitCommit: gitCommit });
+  canonicalWrite(darkCanaryPath, darkCanary);
   return {
     root,
     candidateRoot,
@@ -181,14 +293,43 @@ function fixture() {
     evidence,
     evidencePath,
     signaturePath,
+    darkCanaryPath,
+    approvalPath,
     receiptPath,
     keyringPath,
     privateKeyPath,
     privateKey,
     publicKey,
+    darkCanary,
+    darkCanaryBytes: readFileSync(darkCanaryPath),
     cloudBytes,
     localBytes,
   };
+}
+
+function runWebsiteApprovalSigner(value, overrides = {}) {
+  return spawnSync(process.execPath, [
+    'scripts/sign-extension-website-publication.mjs',
+    '--dark-canary', value.darkCanaryPath,
+    '--distribution-origin', origin,
+    '--evidence', value.evidencePath,
+    '--expected-dark-canary-sha256', sha256(value.darkCanaryBytes),
+    '--expected-release-signature-sha256', sha256(value.signatureBytes),
+    '--keyring', value.keyringPath,
+    '--output', value.approvalPath,
+    '--region', 'COM',
+    '--release-signature', value.signaturePath,
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EXTENSION_RELEASE_SIGNING_KEY_PATH: value.privateKeyPath,
+      EXTENSION_RELEASE_SIGNING_KEY_ID: keyId,
+      EXTENSION_WEBSITE_PUBLICATION_APPROVED_AT: approvedAt,
+      ...overrides,
+    },
+  });
 }
 
 function runSigner(value, overrides = {}) {
@@ -218,6 +359,15 @@ function signedFixture() {
   value.signatureBytes = readFileSync(value.signaturePath);
   value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
   assert.equal(value.signatureBytes.toString('utf8'), canonicalReleaseSignatureJson(value.signature));
+  const approvalResult = runWebsiteApprovalSigner(value);
+  assert.equal(approvalResult.status, 0, `${approvalResult.stdout}\n${approvalResult.stderr}`);
+  assert.doesNotMatch(`${approvalResult.stdout}\n${approvalResult.stderr}`, /BEGIN PRIVATE KEY|MC4CAQ/iu);
+  value.approvalBytes = readFileSync(value.approvalPath);
+  value.approval = parseWebsitePublicationApproval(JSON.parse(value.approvalBytes));
+  assert.equal(
+    value.approvalBytes.toString('utf8'),
+    canonicalWebsitePublicationApprovalJson(value.approval),
+  );
   return value;
 }
 
@@ -227,6 +377,7 @@ function latestBytes(value, mutate) {
     data: {
       version: value.version,
       gitCommit: value.gitCommit,
+      publicationApprovalSha256: sha256(value.approvalBytes),
       signatureStatus: 'EXTERNAL_REQUIRED',
       targets: Object.fromEntries(['cloud', 'local'].map((target) => {
         const artifact = value.evidence.artifacts[target];
@@ -268,6 +419,8 @@ function fetcher(value, options = {}) {
           'content-length': String(bytes.length),
           'content-disposition': `attachment; filename="${artifact.filename}"`,
           'x-content-sha256': artifact.zipSha256,
+          'x-publication-approval-sha256': options.responseApprovalSha256
+            || sha256(value.approvalBytes),
         },
       });
     }
@@ -286,6 +439,9 @@ async function completePublication(value, options = {}) {
     evidenceBytes: readFileSync(value.evidencePath),
     signature: value.signature,
     signatureBytes: value.signatureBytes,
+    approval: options.approval || value.approval,
+    approvalBytes: options.approvalBytes || value.approvalBytes,
+    darkCanaryPath: value.darkCanaryPath,
     fetcher: mockFetch,
     signKey: value.privateKey,
     keyId,
@@ -294,6 +450,19 @@ async function completePublication(value, options = {}) {
   });
   canonicalWrite(value.receiptPath, receipt, canonicalDistributionReceiptJson);
   return { receipt, mockFetch };
+}
+
+function verificationInput(value, overrides = {}) {
+  return {
+    evidencePath: value.evidencePath,
+    signaturePath: value.signaturePath,
+    approvalPath: value.approvalPath,
+    darkCanaryPath: value.darkCanaryPath,
+    receiptPath: value.receiptPath,
+    keyringPath: value.keyringPath,
+    now: new Date('2030-01-01T00:06:00.000Z'),
+    ...overrides,
+  };
 }
 
 test('signs the immutable release, probes both exact website downloads, and verifies publication', async () => {
@@ -313,16 +482,131 @@ test('signs the immutable release, probes both exact website downloads, and veri
     assert.equal(Object.hasOwn(call.init.headers, 'Authorization'), false);
     assert.equal(Object.hasOwn(call.init.headers, 'Cookie'), false);
   }
-  const verified = verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  });
+  const verified = verifyExtensionPublication(verificationInput(value));
   assert.equal(verified.version, value.version);
   assert.equal(verified.distributionOrigin, origin);
   assert.equal(verified.keyId, keyId);
+  assert.equal(verified.websitePublicationApprovalSha256, sha256(value.approvalBytes));
+  assert.equal(verified.darkCanarySha256, sha256(value.darkCanaryBytes));
+});
+
+test('rejects a REL-04 observation that predates its release signature at every publication stage', async () => {
+  const lateSignedAt = '2030-01-01T00:01:30.000Z';
+  const signing = fixture();
+  const signatureResult = runSigner(signing, {
+    EXTENSION_RELEASE_SIGNED_AT: lateSignedAt,
+  });
+  assert.equal(signatureResult.status, 0, `${signatureResult.stdout}\n${signatureResult.stderr}`);
+  signing.signatureBytes = readFileSync(signing.signaturePath);
+  signing.signature = parseReleaseSignature(JSON.parse(signing.signatureBytes));
+  const approvalResult = runWebsiteApprovalSigner(signing);
+  assert.notEqual(approvalResult.status, 0);
+  assert.match(approvalResult.stderr, /dark canary observation must not predate/u);
+
+  const value = signedFixture();
+  const { receipt } = await completePublication(value);
+  rmSync(value.signaturePath);
+  const replacementSignature = runSigner(value, {
+    EXTENSION_RELEASE_SIGNED_AT: lateSignedAt,
+  });
+  assert.equal(
+    replacementSignature.status,
+    0,
+    `${replacementSignature.stdout}\n${replacementSignature.stderr}`,
+  );
+  value.signatureBytes = readFileSync(value.signaturePath);
+  value.signature = parseReleaseSignature(JSON.parse(value.signatureBytes));
+
+  const unsignedApproval = parseWebsitePublicationApproval({
+    ...value.approval,
+    releaseSignatureSha256: sha256(value.signatureBytes),
+    signatureBase64: Buffer.alloc(64).toString('base64'),
+  });
+  value.approval = parseWebsitePublicationApproval({
+    ...unsignedApproval,
+    signatureBase64: sign(
+      null,
+      websitePublicationApprovalPayload(unsignedApproval),
+      value.privateKey,
+    ).toString('base64'),
+  });
+  rmSync(value.approvalPath);
+  canonicalWrite(
+    value.approvalPath,
+    value.approval,
+    canonicalWebsitePublicationApprovalJson,
+  );
+  value.approvalBytes = readFileSync(value.approvalPath);
+
+  const unsignedReceipt = parseDistributionReceipt({
+    ...receipt,
+    releaseSignatureSha256: sha256(value.signatureBytes),
+    websitePublicationApprovalSha256: sha256(value.approvalBytes),
+    signatureBase64: Buffer.alloc(64).toString('base64'),
+  });
+  const replacementReceipt = parseDistributionReceipt({
+    ...unsignedReceipt,
+    signatureBase64: sign(
+      null,
+      distributionReceiptPayload(unsignedReceipt),
+      value.privateKey,
+    ).toString('base64'),
+  });
+  rmSync(value.receiptPath);
+  canonicalWrite(value.receiptPath, replacementReceipt, canonicalDistributionReceiptJson);
+
+  const noNetwork = fetcher(value);
+  await assert.rejects(probeWebsiteDistribution({
+    origin,
+    evidence: value.evidence,
+    evidenceBytes: readFileSync(value.evidencePath),
+    signature: value.signature,
+    signatureBytes: value.signatureBytes,
+    approval: value.approval,
+    approvalBytes: value.approvalBytes,
+    darkCanaryPath: value.darkCanaryPath,
+    fetcher: noNetwork,
+    signKey: value.privateKey,
+    keyId,
+    observedAt,
+    now: new Date('2030-01-01T00:06:00.000Z'),
+  }), /predates/u);
+  assert.equal(noNetwork.calls.length, 0);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /dark canary observation predates/u,
+  );
+});
+
+test('uses one environment-selected keyring for release and website approval verification', () => {
+  const value = fixture();
+  const releaseResult = runSigner(value);
+  assert.equal(releaseResult.status, 0, `${releaseResult.stdout}\n${releaseResult.stderr}`);
+  value.signatureBytes = readFileSync(value.signaturePath);
+
+  const result = spawnSync(process.execPath, [
+    'scripts/sign-extension-website-publication.mjs',
+    '--dark-canary', value.darkCanaryPath,
+    '--distribution-origin', origin,
+    '--evidence', value.evidencePath,
+    '--expected-dark-canary-sha256', sha256(value.darkCanaryBytes),
+    '--expected-release-signature-sha256', sha256(value.signatureBytes),
+    '--output', value.approvalPath,
+    '--region', 'COM',
+    '--release-signature', value.signaturePath,
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EXTENSION_RELEASE_SIGNING_KEY_PATH: value.privateKeyPath,
+      EXTENSION_RELEASE_SIGNING_KEY_ID: keyId,
+      EXTENSION_RELEASE_TRUSTED_KEYRING_PATH: value.keyringPath,
+      EXTENSION_WEBSITE_PUBLICATION_APPROVED_AT: approvedAt,
+    },
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(existsSync(value.approvalPath), true);
 });
 
 test('CLI verification rejects an operator-supplied alternate trust root', async () => {
@@ -332,6 +616,8 @@ test('CLI verification rejects an operator-supplied alternate trust root', async
     'scripts/verify-extension-publication.mjs',
     '--evidence', value.evidencePath,
     '--signature', value.signaturePath,
+    '--approval', value.approvalPath,
+    '--dark-canary', value.darkCanaryPath,
     '--receipt', value.receiptPath,
     '--keyring', value.keyringPath,
   ], { cwd: process.cwd(), encoding: 'utf8' });
@@ -428,6 +714,8 @@ test('requires an explicit receipt output outside the immutable four-file candid
     '--origin', origin,
     '--evidence', value.evidencePath,
     '--signature', value.signaturePath,
+    '--approval', value.approvalPath,
+    '--dark-canary', value.darkCanaryPath,
   ];
   const missing = spawnSync(process.execPath, baseArgs, {
     cwd: process.cwd(), encoding: 'utf8', env: process.env,
@@ -571,6 +859,60 @@ test('rejects latest metadata from another version, origin path, or release dige
   }), /metadata does not match/u);
 });
 
+test('rejects a website approval bound to another commit before website I/O', async () => {
+  const value = signedFixture();
+  const noNetwork = fetcher(value);
+  await assert.rejects(probeWebsiteDistribution({
+    origin,
+    evidence: value.evidence,
+    evidenceBytes: readFileSync(value.evidencePath),
+    signature: value.signature,
+    signatureBytes: value.signatureBytes,
+    approval: { ...value.approval, gitCommit: 'c'.repeat(40) },
+    approvalBytes: value.approvalBytes,
+    darkCanaryPath: value.darkCanaryPath,
+    fetcher: noNetwork,
+    signKey: value.privateKey,
+    keyId,
+    observedAt,
+    now: new Date('2030-01-01T00:06:00.000Z'),
+  }), /approval is not bound to the signed release/u);
+  assert.equal(noNetwork.calls.length, 0);
+});
+
+test('rejects website responses whose publication approval SHA does not match', async () => {
+  const value = signedFixture();
+  await assert.rejects(completePublication(value, {
+    mutateLatest(latest) { latest.data.publicationApprovalSha256 = 'f'.repeat(64); },
+  }), /latest response does not match the approved release/u);
+  await assert.rejects(completePublication(value, {
+    responseApprovalSha256: 'f'.repeat(64),
+  }), /download SHA-256 does not match release evidence/u);
+});
+
+test('rejects REL-04 evidence whose SHA no longer matches the signed website approval', async () => {
+  const value = signedFixture();
+  await completePublication(value);
+  writeFileSync(value.darkCanaryPath, `${JSON.stringify({
+    ...value.darkCanary,
+    observedAt: '2030-01-01T00:01:01.000Z',
+  }, null, 2)}\n`);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /dark canary SHA-256 does not match operator approval/u,
+  );
+});
+
+test('rejects hard-linked website approval evidence during final verification', async () => {
+  const value = signedFixture();
+  await completePublication(value);
+  linkSync(value.approvalPath, `${value.approvalPath}.link`);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /bounded non-writable regular file/u,
+  );
+});
+
 test('rejects forged receipt bytes and a revoked or unknown trusted key', async () => {
   const value = signedFixture();
   const { receipt } = await completePublication(value);
@@ -586,52 +928,40 @@ test('rejects forged receipt bytes and a revoked or unknown trusted key', async 
     ...forged,
     signatureBase64: receipt.signatureBase64,
   }, canonicalDistributionReceiptJson);
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /receipt signature verification failed/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /receipt signature verification failed/u,
+  );
 
   rmSync(value.receiptPath);
   canonicalWrite(value.receiptPath, receipt, canonicalDistributionReceiptJson);
   const revoked = JSON.parse(readFileSync(value.keyringPath, 'utf8'));
   revoked.keys[0].status = 'REVOKED';
   writeFileSync(value.keyringPath, canonicalTrustedKeyringJson(revoked));
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /unavailable/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /unavailable/u,
+  );
 
   writeFileSync(value.keyringPath, canonicalTrustedKeyringJson({
     schemaVersion: 1,
     kind: 'SS_ERP_EXTENSION_RELEASE_TRUSTED_KEYS',
     keys: [],
   }));
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /unavailable/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /unavailable/u,
+  );
 });
 
 test('rejects local archive replacement even when the signed receipt remains unchanged', async () => {
   const value = signedFixture();
   await completePublication(value);
   writeFileSync(path.join(value.candidateRoot, value.evidence.artifacts.cloud.filename), 'replaced');
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /archive SHA-256 mismatch/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /archive SHA-256 mismatch/u,
+  );
 });
 
 test('rejects a separately signed receipt replayed against another origin or version', async () => {
@@ -659,24 +989,16 @@ test('rejects a separately signed receipt replayed against another origin or ver
     value.privateKey,
   ).toString('base64');
   writeFileSync(value.receiptPath, canonicalDistributionReceiptJson(replay));
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /latest observation does not match/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /latest observation does not match/u,
+  );
 });
 
 test('rejects stale and future receipts even when their signatures remain valid', async () => {
   const value = signedFixture();
   await completePublication(value);
-  const input = {
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-  };
+  const input = verificationInput(value);
   assert.throws(() => verifyExtensionPublication({
     ...input,
     now: new Date('2030-01-02T00:05:00.001Z'),
@@ -696,6 +1018,9 @@ test('rejects stale and future receipts even when their signatures remain valid'
     evidenceBytes: readFileSync(value.evidencePath),
     signature: value.signature,
     signatureBytes: value.signatureBytes,
+    approval: value.approval,
+    approvalBytes: value.approvalBytes,
+    darkCanaryPath: value.darkCanaryPath,
     fetcher: noNetwork,
     signKey: value.privateKey,
     keyId,
@@ -709,6 +1034,9 @@ test('rejects stale and future receipts even when their signatures remain valid'
     evidenceBytes: readFileSync(value.evidencePath),
     signature: value.signature,
     signatureBytes: value.signatureBytes,
+    approval: value.approval,
+    approvalBytes: value.approvalBytes,
+    darkCanaryPath: value.darkCanaryPath,
     fetcher: noNetwork,
     signKey: value.privateKey,
     keyId,
@@ -721,6 +1049,14 @@ test('rejects stale and future receipts even when their signatures remain valid'
 test('publication schemas reject extra fields, noncanonical key order, and malformed signature bytes', () => {
   const value = signedFixture();
   assert.throws(() => parseReleaseSignature({ ...value.signature, extra: true }), /field set/u);
+  assert.throws(() => parseWebsitePublicationApproval({
+    ...value.approval,
+    extra: true,
+  }), /field set/u);
+  assert.throws(() => parseWebsitePublicationApproval({
+    ...value.approval,
+    region: 'CN',
+  }), /region does not match its origin/u);
   assert.throws(() => parseReleaseSignature({
     ...value.signature,
     signatureBase64: Buffer.alloc(63).toString('base64'),
@@ -744,13 +1080,10 @@ test('publication schemas reject extra fields, noncanonical key order, and malfo
     algorithm: value.signature.algorithm,
   };
   writeFileSync(value.signaturePath, `${JSON.stringify(reorderedSignature, null, 2)}\n`);
-  assert.throws(() => verifyExtensionPublication({
-    evidencePath: value.evidencePath,
-    signaturePath: value.signaturePath,
-    receiptPath: value.receiptPath,
-    keyringPath: value.keyringPath,
-    now: new Date('2030-01-01T00:06:00.000Z'),
-  }), /release signature is not canonical JSON/u);
+  assert.throws(
+    () => verifyExtensionPublication(verificationInput(value)),
+    /release signature is not canonical JSON/u,
+  );
 });
 
 test('the repository keyring is canonical and binds the active first-party release key', () => {

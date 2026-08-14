@@ -8,6 +8,7 @@ set -euo pipefail
 #   DEPLOY_USER=deploy
 #   DEPLOY_BUILD_USER=ss-erp-build
 #   DEPLOY_BUILD_ROOT=/var/lib/ss-erp-deploy-build
+#   EXTENSION_WEBSITE_PUBLICATION_ROOT=/var/lib/ss-erp-extension-publications
 #   ENV_FILE_NAME=.env.staging
 
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
@@ -146,6 +147,7 @@ COMPOSE_LOCK_ROOT=/var/lib/ss-erp-deploy-locks
 DEPLOY_BUILD_ROOT="${DEPLOY_BUILD_ROOT:-/var/lib/ss-erp-deploy-build}"
 DEPLOY_BUILD_LOCK_FILE="$DEPLOY_BUILD_ROOT/deploy.lock"
 EXTENSION_RELEASE_BASE="${EXTENSION_RELEASE_BASE:-/var/lib/ss-erp-extension-releases}"
+EXTENSION_WEBSITE_PUBLICATION_ROOT="${EXTENSION_WEBSITE_PUBLICATION_ROOT:-/var/lib/ss-erp-extension-publications}"
 if [ -L "$COMPOSE_LOCK_ROOT" ] \
   || { [ -e "$COMPOSE_LOCK_ROOT" ] && [ ! -d "$COMPOSE_LOCK_ROOT" ]; }; then
   fail "Compose deployment lock root must be one real directory"
@@ -191,6 +193,27 @@ assert_root_owned_ancestor_chain "$(dirname -- "$EXTENSION_RELEASE_BASE")" "exte
 sudo install -d -o root -g root -m 0755 "$EXTENSION_RELEASE_BASE"
 sudo chown root:root "$EXTENSION_RELEASE_BASE"
 sudo chmod 0755 "$EXTENSION_RELEASE_BASE"
+if [[ "$EXTENSION_WEBSITE_PUBLICATION_ROOT" != /* ]] \
+  || [ "$(readlink -m -- "$EXTENSION_WEBSITE_PUBLICATION_ROOT")" \
+    != "$EXTENSION_WEBSITE_PUBLICATION_ROOT" ] \
+  || [ -L "$EXTENSION_WEBSITE_PUBLICATION_ROOT" ] \
+  || { [ -e "$EXTENSION_WEBSITE_PUBLICATION_ROOT" ] \
+    && [ ! -d "$EXTENSION_WEBSITE_PUBLICATION_ROOT" ]; }; then
+  fail "extension website publication root must be one absolute real canonical directory"
+fi
+assert_real_directory_or_absent "$EXTENSION_WEBSITE_PUBLICATION_ROOT"
+assert_root_owned_ancestor_chain \
+  "$(dirname -- "$EXTENSION_WEBSITE_PUBLICATION_ROOT")" \
+  "extension website publication root"
+sudo install -d -o root -g root -m 0755 \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT" \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT/bundles"
+sudo chown root:root \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT" \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT/bundles"
+sudo chmod 0755 \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT" \
+  "$EXTENSION_WEBSITE_PUBLICATION_ROOT/bundles"
 for compose_project in ss-erp-prod ss-erp-staging; do
   COMPOSE_LOCK_FILE="$COMPOSE_LOCK_ROOT/$compose_project.lock"
   if [ -L "$COMPOSE_LOCK_FILE" ] \

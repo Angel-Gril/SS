@@ -135,7 +135,7 @@ pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 | 公网基础功能 | 本地 | `pnpm smoke:remote` | `/ready` 的 DB/Redis 为 `ok`，公开页面可访问，未登录后台接口被拒绝 |
 | 公网登录后只读接口 | 本地 | `pnpm preflight --remote-core` | 临时用户可登录，核心只读 API 正常返回 |
 | R2/OSS 上传 | 本地 | `pnpm preflight --remote-oss` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
-| VPS 部署层 | VPS | `DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过 |
+| VPS 暗部署层 | VPS | `VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过，且本次 commit 未被官网 pointer 提前公开 |
 | 数据库备份 | VPS | `set -a; . ./.env.staging; . /etc/ss-erp-backup.env; set +a; BACKUP_TARGET_GIT_COMMIT=<full-commit> bash scripts/backup-db.sh` | 生成真实 `ss_erp_*.sql.gz`、canonical latest 状态和不可变 sidecar |
 | 恢复演练 | VPS | `set -a; . ./.env.staging; . /etc/ss-erp-backup.env; set +a; BACKUP_TARGET_GIT_COMMIT=<full-commit> bash scripts/verify-backup-restore.sh` | 临时库恢复成功、表数为正并写出 commit/database 认证 |
 
@@ -420,6 +420,9 @@ VPS 上如果是 git checkout 模式：
 
 ```bash
 cd /opt/ss-erp
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
 DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
@@ -430,16 +433,28 @@ $env:DEPLOY_HOST='45.76.49.64'
 $env:DEPLOY_USER='root'
 $env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
 $env:DEPLOY_ENV_PROFILE='cloud-r2'
+$env:EXTENSION_RELEASE_ROOT='/var/lib/ss-erp-extension-releases/<full-target-commit>'
+$env:EXTENSION_RELEASE_SIGNATURE_PATH='/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json'
+$env:EXTENSION_RELEASE_SIGNATURE_SHA256='<operator-approved-detached-signature-sha256>'
 C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh
 ```
 
 如果已经切到 release 目录 + symlink 模式，不要再用 `deploy-staging.sh`，改用：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> ./scripts/deploy.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy.sh <full-target-commit>
 ```
 
 三种方式三选一。`deploy-app-dir.sh` 适合当前 VPS 已经在跑 `/opt/ss-erp/app` 的情况；`deploy-staging.sh` 适合服务器本身就是 GitHub checkout；`deploy.sh` 适合已经切换到 release/symlink 的线上阶段。
+
+生产扩展仍按五道互不传递的授权执行：`package -> external release sign -> deploy/dark canary ->
+sign website approval -> activate pointer -> distribution probe -> final verify -> same-path upgrade ->
+independently approved pilot`。前三个部署入口只消费签名候选，不修改官网 publication pointer。暗部署
+期间官网可以继续服务不同 commit 的旧批准版本；不能提前公开本次 `DEPLOYED_COMMIT`。
 
 ## GitHub 仓库部署测试
 
@@ -448,8 +463,13 @@ DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> ./scripts/
 ```bash
 cd /opt/ss-erp
 git status --short
-DEPLOY_BRANCH=feature/saas-cloud-prep DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_BRANCH=feature/saas-cloud-prep DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh <full-target-commit>
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 ```
 
@@ -473,15 +493,24 @@ pnpm smoke:remote
 如果 VPS 已经切到 release/symlink 模式，不要在服务器上 `git pull` 部署，改为本地执行：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy.sh <full-target-commit>
 ```
 
-然后同样跑 `diagnose-runtime-env.sh`、`verify-vps-deploy.sh` 和 `smoke:remote`。
+然后同样跑 `diagnose-runtime-env.sh`、暗态
+`VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false verify-vps-deploy.sh` 和 `smoke:remote`。
 
 如果 VPS 仍是 `/opt/ss-erp/app` 模式，则对应命令是：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy-app-dir.sh <full-target-commit>
 ```
 
 部署前可先在 VPS 做只读就绪检查：
@@ -498,8 +527,15 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash 
 ```bash
 cd /opt/ss-erp/app
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 ```
+
+第二个 `false` 会独立访问区域官网 `/api/extensions/latest`。404 或
+不同 commit 的既有批准 pointer 可通过，本次部署 commit 已被公开则失败。暗态 canary 通过后，仍须
+按 `docs/deployment.md` 另行签 website approval、CAS 激活 pointer，并让 probe/final verifier 同时携带
+`--approval` 与 `--dark-canary`，之后才能做同路径升级；真实试点另需第五道授权。
 
 ## 备份验证
 
@@ -530,6 +566,8 @@ set -a; . ./.env.staging; . /etc/ss-erp-backup.env; set +a
 BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
 BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
 bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 ```
 
@@ -556,5 +594,7 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 如果迁移到 release/symlink：
 
 ```bash
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 ```

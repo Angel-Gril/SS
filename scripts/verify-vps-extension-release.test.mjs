@@ -1,18 +1,26 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { canonicalExtensionReleaseEvidenceJson } from './extension-release-contract.mjs';
+import {
+  canonicalReleaseSignatureJson,
+  canonicalTrustedKeyringJson,
+  releaseSignaturePayload,
+} from './extension-release-publication-contract.mjs';
 import { parseStoredZip } from './verify-extension-archive.mjs';
 import {
   canonicalCloudLogisticsFeature,
+  LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT,
   verifyVpsExtensionRelease,
 } from './verify-vps-extension-release.mjs';
 
@@ -23,6 +31,16 @@ const origins = {
   api: 'https://ss-erp.com',
   local: 'http://127.0.0.1:3001',
 };
+
+test('VPS release verification reads only each bounded opened-file snapshot', () => {
+  const verifier = readFileSync('scripts/verify-vps-extension-release.mjs', 'utf8');
+  assert.match(verifier, /Buffer\.allocUnsafe\(Number\(opened\.size\)\)/u);
+  assert.match(
+    verifier,
+    /readSync\(descriptor, bytes, offset, bytes\.length - offset, offset\)/u,
+  );
+  assert.doesNotMatch(verifier, /readFileSync\(descriptor\)/u);
+});
 
 const crcTable = (() => {
   const table = new Uint32Array(256);
@@ -86,12 +104,21 @@ function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function fixture({ cloudLogisticsEnabled = false, corruptCloudCrc = false } = {}) {
+function fixture({
+  cloudLogisticsEnabled = false,
+  corruptCloudCrc = false,
+  gitCommit = commit,
+  markerTrailingNewline = true,
+} = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'ss-erp-vps-extension-release-'));
   const buildRoot = path.join(root, 'extensions');
   mkdirSync(buildRoot);
   const deployedCommitFile = path.join(root, 'DEPLOYED_COMMIT');
-  writeFileSync(deployedCommitFile, `${commit}\n`, { mode: 0o600 });
+  writeFileSync(
+    deployedCommitFile,
+    `${gitCommit}${markerTrailingNewline ? '\n' : ''}`,
+    { mode: 0o600 },
+  );
 
   let cloudArchive = createStoredZip([{
     name: 'ss-erp-cloud/shared/logistics-rules/distribution-feature.js',
@@ -110,7 +137,7 @@ function fixture({ cloudLogisticsEnabled = false, corruptCloudCrc = false } = {}
   }]);
   const evidence = {
     schemaVersion: 1,
-    gitCommit: commit,
+    gitCommit,
     provenance: {
       commitSource: 'GIT_HEAD',
       sourceMode: 'REPOSITORY_SOURCE',
@@ -148,7 +175,49 @@ function fixture({ cloudLogisticsEnabled = false, corruptCloudCrc = false } = {}
   );
   writeFileSync(path.join(buildRoot, evidence.artifacts.cloud.filename), cloudArchive, { mode: 0o600 });
   writeFileSync(path.join(buildRoot, evidence.artifacts.local.filename), localArchive, { mode: 0o600 });
-  return { buildRoot, deployedCommitFile, root };
+  const evidenceBytes = Buffer.from(canonicalExtensionReleaseEvidenceJson(evidence), 'utf8');
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const keyId = 'fixture-release-key';
+  const signature = {
+    schemaVersion: 1,
+    kind: 'SS_ERP_EXTENSION_RELEASE_SIGNATURE',
+    algorithm: 'Ed25519',
+    keyId,
+    signedAt: '2026-08-14T00:00:00.000Z',
+    releaseEvidenceFilename: 'ss-erp-extension-1.2.3.release-evidence.json',
+    releaseEvidenceSha256: sha256(evidenceBytes),
+    signatureBase64: '',
+  };
+  signature.signatureBase64 = sign(
+    null,
+    releaseSignaturePayload({
+      ...signature,
+      signatureBase64: Buffer.alloc(64).toString('base64'),
+    }, evidenceBytes),
+    privateKey,
+  ).toString('base64');
+  const signatureBytes = Buffer.from(canonicalReleaseSignatureJson(signature), 'utf8');
+  const signaturePath = path.join(root, 'ss-erp-extension-1.2.3.release-signature.json');
+  writeFileSync(signaturePath, signatureBytes, { mode: 0o600 });
+  const keyringPath = path.join(root, 'trusted-keys.json');
+  writeFileSync(keyringPath, canonicalTrustedKeyringJson({
+    schemaVersion: 1,
+    kind: 'SS_ERP_EXTENSION_RELEASE_TRUSTED_KEYS',
+    keys: [{
+      algorithm: 'Ed25519',
+      keyId,
+      publicKeyBase64: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+      status: 'ACTIVE',
+    }],
+  }), { mode: 0o600 });
+  return {
+    buildRoot,
+    deployedCommitFile,
+    expectedSignatureSha256: sha256(signatureBytes),
+    keyringPath,
+    root,
+    signaturePath,
+  };
 }
 
 function input(value, expectedCloudLogisticsEnabled = false) {
@@ -157,6 +226,9 @@ function input(value, expectedCloudLogisticsEnabled = false) {
     deployedCommitFile: value.deployedCommitFile,
     expectedOrigins: origins,
     expectedCloudLogisticsEnabled,
+    signaturePath: value.signaturePath,
+    expectedSignatureSha256: value.expectedSignatureSha256,
+    keyringPath: value.keyringPath,
   };
 }
 
@@ -174,7 +246,125 @@ test('verifies the exact four-file candidate and canonical cloud logistics entry
     assert.equal(formalCalls, 1);
     assert.equal(result.gitCommit, commit);
     assert.equal(result.cloudLogisticsEnabled, false);
+    assert.equal(result.signature.keyId, 'fixture-release-key');
     assert.equal(result.files.length, 4);
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('fixed legacy baseline skips only Ed25519 and still runs formal candidate verification', () => {
+  const value = fixture({
+    gitCommit: LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT,
+    markerTrailingNewline: false,
+  });
+  const legacyInput = input(value);
+  delete legacyInput.signaturePath;
+  delete legacyInput.expectedSignatureSha256;
+  delete legacyInput.keyringPath;
+  let formalCalls = 0;
+  let signatureCalls = 0;
+  try {
+    const result = verifyVpsExtensionRelease({
+      ...legacyInput,
+      legacyUnsignedBaseline: LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT,
+    }, {
+      signatureVerify: () => {
+        signatureCalls += 1;
+        assert.fail('legacy compatibility must not invoke Ed25519 verification');
+      },
+      formalVerify: () => {
+        formalCalls += 1;
+      },
+    });
+    assert.equal(signatureCalls, 0);
+    assert.equal(formalCalls, 1);
+    assert.equal(result.gitCommit, LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT);
+    assert.equal(result.signature.status, 'LEGACY_UNSIGNED_FIXED_BASELINE');
+    assert.equal(result.files.length, 4);
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('seven-argument legacy CLI reaches formal verification without new signature flags', () => {
+  const value = fixture({ gitCommit: LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT });
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(process.cwd(), 'scripts', 'verify-vps-extension-release.mjs'),
+      '--build-root', value.buildRoot,
+      '--deployed-commit-file', value.deployedCommitFile,
+      '--expected-web-origin', origins.web,
+      '--expected-admin-origin', origins.admin,
+      '--expected-api-origin', origins.api,
+      '--expected-local-origin', origins.local,
+      '--expected-cloud-logistics-enabled', 'false',
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.notEqual(result.status, 0, 'the synthetic archive should reach and fail formal source verification');
+    assert.match(output, /formal extension release verification failed/u);
+    assert.doesNotMatch(
+      output,
+      /signature path is required|expected signature SHA-256 is invalid/u,
+      'the legacy base CLI must not fall into signed verification',
+    );
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('legacy unsigned mode rejects every commit except the fixed deployed baseline', () => {
+  const value = fixture();
+  const legacyInput = input(value);
+  delete legacyInput.signaturePath;
+  delete legacyInput.expectedSignatureSha256;
+  delete legacyInput.keyringPath;
+  try {
+    assert.throws(
+      () => verifyVpsExtensionRelease({
+        ...legacyInput,
+        legacyUnsignedBaseline: LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT,
+      }, {
+        signatureVerify: () => assert.fail(),
+        formalVerify: () => assert.fail(),
+      }),
+      /fixed to the deployed compatibility baseline/u,
+    );
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a signature whose digest is not the operator-approved digest', () => {
+  const value = fixture();
+  try {
+    assert.throws(
+      () => verifyVpsExtensionRelease({
+        ...input(value),
+        expectedSignatureSha256: 'f'.repeat(64),
+      }, { formalVerify: () => assert.fail() }),
+      /signature SHA-256 does not match operator approval/u,
+    );
+  } finally {
+    rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a signature that does not verify against the trusted keyring', () => {
+  const value = fixture();
+  const signature = JSON.parse(readFileSync(value.signaturePath, 'utf8'));
+  signature.signatureBase64 = Buffer.alloc(64, 1).toString('base64');
+  const bytes = Buffer.from(canonicalReleaseSignatureJson(signature), 'utf8');
+  writeFileSync(value.signaturePath, bytes);
+  value.expectedSignatureSha256 = sha256(bytes);
+  try {
+    assert.throws(
+      () => verifyVpsExtensionRelease(input(value), { formalVerify: () => assert.fail() }),
+      /signature verification failed/u,
+    );
   } finally {
     rmSync(value.root, { recursive: true, force: true });
   }

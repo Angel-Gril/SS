@@ -1,14 +1,6 @@
 #!/usr/bin/env node
 import { createPublicKey, sign, verify } from 'node:crypto';
 import { resolve4, resolve6 } from 'node:dns/promises';
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readSync,
-} from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
@@ -17,17 +9,24 @@ import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { loadProtectedSigningKey } from './sign-extension-release.mjs';
 import {
   MAX_LATEST_BYTES,
+  MAX_PUBLICATION_APPROVAL_BYTES,
   assertPublicationOutputOutsideCandidate,
   canonicalDistributionReceiptJson,
   canonicalJson,
+  parseWebsitePublicationApproval,
   distributionReceiptPayload,
   parseDistributionReceipt,
   parseReleaseSignature,
   publicOriginForPublication,
   releaseSignaturePayload,
   sha256,
+  websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
 import { parseExtensionReleaseEvidence } from './extension-release-contract.mjs';
+import {
+  readStablePublicationFile,
+  verifyRel04DarkCanaryEvidence,
+} from './extension-website-publication-approval.mjs';
 
 const MAX_ZIP_BYTES = 100 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -183,7 +182,9 @@ function option(name) {
 }
 
 function assertArguments() {
-  const allowed = new Set(['--origin', '--evidence', '--signature', '--output']);
+  const allowed = new Set([
+    '--origin', '--evidence', '--signature', '--approval', '--dark-canary', '--output',
+  ]);
   const seen = new Set();
   for (let index = 0; index < args.length; index += 2) {
     if (!allowed.has(args[index]) || seen.has(args[index])
@@ -192,40 +193,15 @@ function assertArguments() {
     }
     seen.add(args[index]);
   }
-  for (const required of ['--origin', '--evidence', '--signature', '--output']) {
+  for (const required of [
+    '--origin', '--evidence', '--signature', '--approval', '--dark-canary', '--output',
+  ]) {
     if (!option(required)) fail(`${required} is required`);
   }
 }
 
 function readRegularFile(file, maxBytes, label) {
-  const absolute = path.resolve(file);
-  const entry = lstatSync(absolute, { throwIfNoEntry: false });
-  if (!entry?.isFile() || entry.isSymbolicLink() || entry.size < 1 || entry.size > maxBytes) {
-    fail(`${label} is missing, unsafe, or too large`);
-  }
-  let descriptor = null;
-  try {
-    descriptor = openSync(
-      absolute,
-      constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
-    );
-    const before = fstatSync(descriptor);
-    if (!before.isFile() || before.size < 1 || before.size > maxBytes) fail(`${label} is missing or too large`);
-    const bytes = Buffer.allocUnsafe(before.size);
-    let offset = 0;
-    while (offset < before.size) {
-      const count = readSync(descriptor, bytes, offset, before.size - offset, offset);
-      if (count < 1) fail(`${label} changed while it was being read`);
-      offset += count;
-    }
-    const after = fstatSync(descriptor);
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
-      fail(`${label} changed while it was being read`);
-    }
-    return bytes;
-  } finally {
-    if (descriptor !== null) closeSync(descriptor);
-  }
+  return readStablePublicationFile(file, maxBytes, label);
 }
 
 function readCanonical(file, parser, maxBytes, label) {
@@ -311,6 +287,9 @@ export async function probeWebsiteDistribution({
   evidenceBytes,
   signature,
   signatureBytes,
+  approval,
+  approvalBytes,
+  darkCanaryPath,
   fetcher,
   signKey,
   keyId,
@@ -322,7 +301,6 @@ export async function probeWebsiteDistribution({
   const observedAtMs = Date.parse(observedAt);
   if (!Number.isFinite(nowMs)) fail('distribution probe now must be a valid Date');
   if (!Number.isFinite(observedAtMs)) fail('distribution observation must be a valid timestamp');
-  if (typeof fetcher !== 'function') fail('fetch is unavailable');
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') fail('TLS certificate verification must remain enabled');
   if (evidence.signature?.status !== 'EXTERNAL_REQUIRED') fail('evidence is not awaiting external publication');
   if (distributionOrigin !== evidence.expectedOrigins.api) {
@@ -337,8 +315,31 @@ export async function probeWebsiteDistribution({
   const privateKey = signKey || loadProtectedSigningKey(keyPath);
   if (privateKey.asymmetricKeyType !== 'ed25519') fail('distribution signing key must be Ed25519');
   if ((keyId || signature.keyId) !== signature.keyId) fail('distribution signing keyId must match release signature');
-  if (observedAtMs < Date.parse(signature.signedAt)) {
-    fail('distribution observation predates the release signature');
+  if (approval.keyId !== signature.keyId
+    || approval.gitCommit !== evidence.gitCommit
+    || approval.version !== evidence.version
+    || approval.distributionOrigin !== distributionOrigin
+    || approval.releaseEvidenceFilename !== signature.releaseEvidenceFilename
+    || approval.releaseEvidenceSha256 !== sha256(evidenceBytes)
+    || approval.releaseSignatureFilename !== `ss-erp-extension-${evidence.version}.release-signature.json`
+    || approval.releaseSignatureSha256 !== sha256(signatureBytes)) {
+    fail('website publication approval is not bound to the signed release');
+  }
+  if (!darkCanaryPath || path.basename(darkCanaryPath) !== approval.darkCanaryFilename) {
+    fail('REL-04 dark canary does not match the website publication approval');
+  }
+  const darkCanary = verifyRel04DarkCanaryEvidence({
+    darkCanaryPath,
+    expectedSha256: approval.darkCanarySha256,
+    expectedGitCommit: evidence.gitCommit,
+    expectedApiOrigin: distributionOrigin,
+    approvedAt: approval.approvedAt,
+    now,
+  });
+  if (observedAtMs < Date.parse(approval.approvedAt)
+    || Date.parse(approval.approvedAt) < Date.parse(signature.signedAt)
+    || Date.parse(darkCanary.observedAt) < Date.parse(signature.signedAt)) {
+    fail('distribution observation predates its signed publication approval');
   }
   if (observedAtMs > nowMs + MAX_CLOCK_SKEW_MS) {
     fail('distribution observation is too far in the future');
@@ -351,8 +352,19 @@ export async function probeWebsiteDistribution({
   )) {
     fail('release signature does not match the distribution signing key');
   }
+  if (!verify(
+    null,
+    websitePublicationApprovalPayload(approval),
+    createPublicKey(privateKey),
+    Buffer.from(approval.signatureBase64, 'base64'),
+  )) {
+    fail('website publication approval does not match the distribution signing key');
+  }
+  const websiteFetcher = fetcher || await createPinnedWebsiteFetcher(distributionOrigin);
+  if (typeof websiteFetcher !== 'function') fail('fetch is unavailable');
+  const approvalSha256 = sha256(approvalBytes);
   const latestUrl = `${distributionOrigin}/api/extensions/latest`;
-  const latestResponse = await fetcher(latestUrl, {
+  const latestResponse = await websiteFetcher(latestUrl, {
     method: 'GET',
     redirect: 'error',
     credentials: 'omit',
@@ -379,12 +391,14 @@ export async function probeWebsiteDistribution({
   exactObject(latest, ['code', 'data'], 'website latest response');
   const latestData = exactObject(
     latest.data,
-    ['gitCommit', 'signatureStatus', 'targets', 'version'],
+    ['gitCommit', 'publicationApprovalSha256', 'signatureStatus', 'targets', 'version'],
     'website latest data',
   );
   const latestTargets = exactObject(latestData.targets, ['cloud', 'local'], 'website latest targets');
   if (latest.code !== 1 || latestData.version !== evidence.version
-    || latest.data.gitCommit !== evidence.gitCommit || latest.data.signatureStatus !== 'EXTERNAL_REQUIRED') {
+    || latest.data.gitCommit !== evidence.gitCommit
+    || latest.data.publicationApprovalSha256 !== approvalSha256
+    || latest.data.signatureStatus !== 'EXTERNAL_REQUIRED') {
     fail('website latest response does not match the approved release');
   }
   const targets = {};
@@ -400,13 +414,25 @@ export async function probeWebsiteDistribution({
     }
     const expectedPath = `/api/extensions/download/${target}/${evidence.version}/${artifact.zipSha256}`;
     const url = requestUrl(distributionOrigin, targetData.downloadUrl, expectedPath);
-    const result = await fetchBytes(fetcher, url, MAX_ZIP_BYTES, `${target} extension download`);
+    const result = await fetchBytes(
+      websiteFetcher,
+      url,
+      MAX_ZIP_BYTES,
+      `${target} extension download`,
+    );
     const contentDisposition = contentDispositionFilename(
       header(result.response, 'content-disposition', `${target} extension download`),
       artifact.filename,
     );
     const xContentSha256 = header(result.response, 'x-content-sha256', `${target} extension download`);
-    if (xContentSha256 !== artifact.zipSha256 || sha256(result.bytes) !== artifact.zipSha256) {
+    const publicationApprovalSha256 = header(
+      result.response,
+      'x-publication-approval-sha256',
+      `${target} extension download`,
+    );
+    if (xContentSha256 !== artifact.zipSha256
+      || publicationApprovalSha256 !== approvalSha256
+      || sha256(result.bytes) !== artifact.zipSha256) {
       fail(`${target} extension download SHA-256 does not match release evidence`);
     }
     targets[target] = {
@@ -417,6 +443,7 @@ export async function probeWebsiteDistribution({
       contentDisposition,
       bodySha256: sha256(result.bytes),
       xContentSha256,
+      publicationApprovalSha256,
     };
   }
   const receipt = {
@@ -431,10 +458,15 @@ export async function probeWebsiteDistribution({
     releaseEvidenceSha256: sha256(evidenceBytes),
     releaseSignatureFilename: `ss-erp-extension-${evidence.version}.release-signature.json`,
     releaseSignatureSha256: sha256(signatureBytes),
+    websitePublicationApprovalFilename:
+      `ss-erp-extension-${evidence.version}.website-publication-approval.json`,
+    websitePublicationApprovalSha256: approvalSha256,
+    darkCanarySha256: approval.darkCanarySha256,
     latest: {
       url: latestUrl,
       statusCode: latestResponse.status,
       responseSha256: sha256(latestBytes),
+      publicationApprovalSha256: approvalSha256,
       version: latestData.version,
       gitCommit: latestData.gitCommit,
       signatureStatus: latestData.signatureStatus,
@@ -454,12 +486,22 @@ async function main() {
   assertArguments();
   const evidencePath = path.resolve(option('--evidence'));
   const signaturePath = path.resolve(option('--signature'));
+  const approvalPath = path.resolve(option('--approval'));
+  const darkCanaryPath = path.resolve(option('--dark-canary'));
   const output = path.resolve(option('--output'));
   assertPublicationOutputOutsideCandidate(evidencePath, output, 'distribution receipt output');
   const evidence = readCanonical(evidencePath, parseExtensionReleaseEvidence, 65_536, 'release evidence');
   const signature = readCanonical(signaturePath, parseReleaseSignature, 16_384, 'release signature');
+  const approval = readCanonical(
+    approvalPath,
+    parseWebsitePublicationApproval,
+    MAX_PUBLICATION_APPROVAL_BYTES,
+    'website publication approval',
+  );
   if (path.basename(evidencePath) !== `ss-erp-extension-${evidence.value.version}.release-evidence.json`
     || path.basename(signaturePath) !== `ss-erp-extension-${evidence.value.version}.release-signature.json`
+    || path.basename(approvalPath)
+      !== `ss-erp-extension-${evidence.value.version}.website-publication-approval.json`
     || path.basename(output) !== `ss-erp-extension-${evidence.value.version}.distribution-receipt.json`) {
     fail('publication evidence, signature, and receipt must use their canonical versioned filenames');
   }
@@ -471,8 +513,10 @@ async function main() {
     evidenceBytes: evidence.bytes,
     signature: signature.value,
     signatureBytes: signature.bytes,
+    approval: approval.value,
+    approvalBytes: approval.bytes,
+    darkCanaryPath,
     keyId,
-    fetcher: await createPinnedWebsiteFetcher(origin),
   });
   writeNewArtifactDurably(output, canonicalDistributionReceiptJson(receipt));
   console.log(JSON.stringify({

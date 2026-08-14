@@ -27,6 +27,27 @@ const composeDarkVerifier = readFileSync('docker/verify-ai-media-dark.mjs', 'utf
 const composeDeploy = readFileSync('scripts/deploy-compose.sh', 'utf8');
 const dockerIgnore = readFileSync('.dockerignore', 'utf8');
 const gitIgnore = readFileSync('.gitignore', 'utf8');
+const deploymentDocs = [
+  'docs/deployment.md',
+  'docs/local-offline-erp.md',
+  'docs/local-development.md',
+  'docs/RUNBOOK.md',
+  'docs/vps-deployment.md',
+].map((path) => [path, readFileSync(path, 'utf8')]);
+
+for (const [path, source] of deploymentDocs) {
+  assert.match(source, /EXTENSION_RELEASE_SIGNATURE_PATH/u, `${path} must document the detached signature path`);
+  assert.match(source, /EXTENSION_RELEASE_SIGNATURE_SHA256/u, `${path} must document the approved signature digest`);
+  const codeBlocks = [...source.matchAll(/```[^\r\n]*\r?\n([\s\S]*?)```/gu)].map((match) => match[1]);
+  for (const block of codeBlocks.filter((value) => /scripts\/deploy(?:-app-dir|-staging)?\.sh/u.test(value))) {
+    assert.match(
+      block,
+      /EXTENSION_RELEASE_SIGNATURE_PATH[\s\S]*EXTENSION_RELEASE_SIGNATURE_SHA256/u,
+      `${path} deployment commands must carry both independent signature inputs`,
+    );
+  }
+}
+
 assert.match(
   composeDeploy,
   /must run as a non-root deployment operator/u,
@@ -564,6 +585,31 @@ for (const entrypoint of deployEntrypoints) {
     /verify-ai-media-dark\.sh[^\r\n]*(?:\|\|\s*true|&\s*$)/mu,
     `${entrypoint.name} must not ignore dark-rollout verification failures`,
   );
+  assert.match(
+    entrypoint.source,
+    /EXTENSION_RELEASE_SIGNATURE_PATH[\s\S]*EXTENSION_RELEASE_SIGNATURE_SHA256/u,
+    `${entrypoint.name} must require an independently approved detached signature`,
+  );
+  assert.match(
+    entrypoint.source,
+    /verify-extension-release-signature\.mjs[\s\S]*--expected-signature-sha256/u,
+    `${entrypoint.name} must verify the detached signature against the target commit`,
+  );
+  assert.match(
+    entrypoint.source,
+    /extension-release-publication[\s\S]*extension-release-signature\.sha256/u,
+    `${entrypoint.name} must seal signature evidence outside the canonical four-file candidate`,
+  );
+  assert.match(
+    entrypoint.source,
+    /signature digest destination must not pre-exist/u,
+    `${entrypoint.name} must reject a pre-existing signature digest path`,
+  );
+  assert.match(
+    entrypoint.source,
+    /EXTENSION_RELEASE_SIGNATURE_SHA_TMP[\s\S]*mv -T -- "\$EXTENSION_RELEASE_SIGNATURE_SHA_TMP" "\$EXTENSION_RELEASE_SIGNATURE_SHA_PATH"/u,
+    `${entrypoint.name} must install the approved digest through a no-follow temporary file`,
+  );
 }
 
 const stagingDeploy = deployEntrypoints.find((entrypoint) => entrypoint.name === 'staging deploy').source;
@@ -584,6 +630,17 @@ assert.match(stagingDarkFailure, /Worker\/API remain stopped[\s\S]*exit 1/u);
 assert.match(stagingDeploy, /git[^\r\n]*status --porcelain --untracked-files=all/u);
 assert.match(stagingDeploy, /readonly TARGET_GIT_COMMIT="\$\(assert_clean_staging_checkout\)"/u);
 assert.match(stagingDeploy, /deploy-source-manifest\.mjs" create-closed/u);
+assert.match(stagingDeploy, /verify-extension-release-signature\.mjs[\s\S]*SEALED_DEPLOY_DIR/u);
+assert.equal(
+  (stagingDeploy.match(/verify-extension-release-signature\.mjs/gu) || []).length,
+  1,
+  'staging must verify the detached signature only after the source is sealed for root verification',
+);
+assert.doesNotMatch(
+  stagingDeploy,
+  /node "\$DEPLOY_DIR\/scripts\/verify-extension-release-signature\.mjs"/u,
+  'staging must not run signature verification from build-user-owned source',
+);
 assert.doesNotMatch(stagingDeploy, /^\s*sudo\b[^\r\n]*(?:\s|\/)git(?:\s|$)/mu);
 assert.ok(
   stagingDeploy.lastIndexOf('SERVICES_QUIESCED=0')
@@ -759,6 +816,45 @@ assert.doesNotMatch(
 assert.match(stagingDeploy, /DEPLOY_BACKUP_GATE_ROOT=\/usr\/local\/lib\/ss-erp-deploy-gate/u);
 assert.match(stagingDeploy, /assert_installed_target_backup_gate "\$TARGET_GIT_COMMIT"/u);
 assert.doesNotMatch(stagingDeploy, /--skip-build|SKIP_BUILD/u);
+assert.match(
+  verifyVpsDeploy,
+  /VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT/u,
+  'VPS verification must name the one unsigned legacy baseline explicitly',
+);
+assert.ok(
+  verifyVpsDeploy.includes("LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT='0c326b10feed5f971052c1d1d6ecb3bd3e61ca13'"),
+  'VPS verification must pin the unsigned compatibility exception to the deployed baseline',
+);
+assert.match(
+  verifyVpsDeploy,
+  /VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT is fixed[\s\S]*cannot be overridden/u,
+  'VPS verification must reject attempts to widen the unsigned compatibility exception',
+);
+assert.match(
+  verifyVpsDeploy,
+  /legacy unsigned extension release baseline[\s\S]*formal candidate verification remains required/u,
+  'the unsigned legacy baseline must skip only detached Ed25519 verification',
+);
+assert.match(
+  verifyVpsDeploy,
+  /local -a release_verifier_args=\([\s\S]*--expected-cloud-logistics-enabled/u,
+  'the fixed legacy baseline must still assemble the formal candidate verifier arguments',
+);
+assert.doesNotMatch(
+  verifyVpsDeploy,
+  /VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT="\$\{VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT:-/u,
+  'VPS verification must not accept an arbitrary environment-selected legacy commit',
+);
+assert.match(
+  verifyVpsDeploy,
+  /value\.match\(\/\^\(\[a-f0-9\]\{40\}\)\(\?:\\n\)\?\$\/[\s\S]*extension release verification/u,
+  'extension release verification must use the same optional-newline commit parser as backup verification',
+);
+assert.match(
+  verifyVpsDeploy,
+  /extension-release-signature\.sha256[\s\S]*--expected-signature-sha256/u,
+  'VPS verification must read and pass the sealed signature digest',
+);
 assert.match(composeDeploy, /--project-name "\$DEPLOY_COMPOSE_PROJECT"/u);
 assert.match(composeDeploy, /unset COMPOSE_PROJECT_NAME/u);
 assert.match(composeDeploy, /unset COMPOSE_PROJECT_NAME DEPLOY_BACKUP_LOCAL_DIR/u);

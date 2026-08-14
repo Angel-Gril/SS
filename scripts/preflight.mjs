@@ -133,6 +133,11 @@ const steps = [
     args: ['--test', 'scripts/rel04-dark-canary.test.mjs'],
   },
   {
+    name: 'extension website publication gate contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-website-publication-gate.test.mjs'],
+  },
+  {
     name: 'REL-04 VPS extension release contract',
     command: 'node',
     args: ['--test', 'scripts/verify-vps-extension-release.test.mjs'],

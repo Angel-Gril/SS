@@ -54,12 +54,17 @@ export interface VerifiedExtensionReleaseSet {
   version: string;
   gitCommit: string;
   signatureStatus: 'EXTERNAL_REQUIRED';
+  expectedOrigins: ReleaseEvidence['expectedOrigins'];
+  releaseEvidenceFilename: string;
+  releaseEvidenceSha256: string;
   artifacts: Record<VerifiedExtensionTarget, VerifiedExtensionReleaseArtifact>;
 }
 
 interface ParsedEvidenceFile {
   evidence: ReleaseEvidence;
   filenameVersion: string;
+  bytes: Buffer;
+  filename: string;
 }
 
 function fail(message: string): never {
@@ -553,7 +558,7 @@ async function readEvidenceFile(buildRoot: string, filename: string): Promise<Pa
     || evidenceText !== `${JSON.stringify(evidence, null, 2)}\n`) {
     fail('extension release evidence is not canonical');
   }
-  return { evidence, filenameVersion };
+  return { evidence, filenameVersion, bytes: evidenceBytes, filename };
 }
 
 export async function loadVerifiedExtensionReleaseSet(input: {
@@ -561,7 +566,13 @@ export async function loadVerifiedExtensionReleaseSet(input: {
   deployedCommitPath?: string;
   requireDeployedCommit?: boolean;
   allowExternalSource?: boolean;
+  expectedEvidenceFilename?: string;
+  requireExactFiles?: boolean;
 }): Promise<VerifiedExtensionReleaseSet> {
+  if (input.expectedEvidenceFilename
+    && !RELEASE_EVIDENCE_PATTERN.test(input.expectedEvidenceFilename)) {
+    fail('expected extension release evidence filename is invalid');
+  }
   const entries = await readdir(input.buildRoot, { withFileTypes: true });
   const evidenceEntries = entries.filter(
     (entry) => entry.isFile() && RELEASE_EVIDENCE_PATTERN.test(entry.name),
@@ -582,14 +593,17 @@ export async function loadVerifiedExtensionReleaseSet(input: {
     parsedEvidence.push(await readEvidenceFile(input.buildRoot, entry.name));
   }
   const matchingEvidence = parsedEvidence.filter(({ evidence }) => (
-    !deployedCommit
-    || evidence.gitCommit === deployedCommit
+    (!deployedCommit || evidence.gitCommit === deployedCommit)
+    && (!input.expectedEvidenceFilename
+      || `ss-erp-extension-${evidence.version}.release-evidence.json`
+        === input.expectedEvidenceFilename)
   ));
   if (matchingEvidence.length < 1) {
     fail('extension release evidence does not match DEPLOYED_COMMIT');
   }
   matchingEvidence.sort((left, right) => compareVersions(right.filenameVersion, left.filenameVersion));
-  const evidence = matchingEvidence[0]!.evidence;
+  const selectedEvidence = matchingEvidence[0]!;
+  const evidence = selectedEvidence.evidence;
   if (evidence.provenance.sourceMode !== 'REPOSITORY_SOURCE'
     && input.allowExternalSource !== true) {
     fail('formal extension release evidence must use repository source');
@@ -622,10 +636,27 @@ export async function loadVerifiedExtensionReleaseSet(input: {
     artifacts[target] = { ...artifact, filePath, byteLength };
   }
 
+  if (input.requireExactFiles === true) {
+    const expectedFiles = [
+      selectedEvidence.filename,
+      evidence.checksumFilename,
+      evidence.artifacts.cloud.filename,
+      evidence.artifacts.local.filename,
+    ].sort();
+    const actualFiles = entries.map((entry) => entry.name).sort();
+    if (JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)
+      || entries.some((entry) => !entry.isFile())) {
+      fail('extension release directory must contain exactly one canonical four-file release');
+    }
+  }
+
   return {
     version: evidence.version,
     gitCommit: evidence.gitCommit,
     signatureStatus: evidence.signature.status,
+    expectedOrigins: evidence.expectedOrigins,
+    releaseEvidenceFilename: selectedEvidence.filename,
+    releaseEvidenceSha256: digest(selectedEvidence.bytes),
     artifacts,
   };
 }

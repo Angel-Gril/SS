@@ -452,6 +452,15 @@ app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => 
   reply.status(status).send({ code: 0, msg: status >= 500 ? '服务器错误' : error.message || '请求失败' });
 });
 
+function deployedGitCommit() {
+  try {
+    const value = readFileSync(join(process.cwd(), '..', '..', 'DEPLOYED_COMMIT'), 'utf8');
+    return value.match(/^([a-f0-9]{40})\n?$/u)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
 app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
 app.get('/ready', async (_request, reply) => {
@@ -473,7 +482,12 @@ app.get('/ready', async (_request, reply) => {
     checks.redis = 'fail';
   }
   const healthy = checks.db === 'ok' && (checks.redis === 'ok' || checks.redis === 'disabled');
-  return reply.status(healthy ? 200 : 503).send({ status: healthy ? 'ready' : 'degraded', checks });
+  const gitCommit = deployedGitCommit();
+  return reply.status(healthy ? 200 : 503).send({
+    status: healthy ? 'ready' : 'degraded',
+    checks,
+    ...(gitCommit ? { deployment: { gitCommit } } : {}),
+  });
 });
 
 await app.register(authRoutes, { prefix: '/api/auth' });
@@ -3206,7 +3220,27 @@ await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension-config' });
-await app.register(extensionDownloadRoutes, { prefix: '/api/extensions' });
+const extensionPublicationApiOrigin = process.env.EXTENSION_RELEASE_EXPECTED_API_ORIGIN || '';
+const extensionPublicationHostname = (() => {
+  try {
+    return new URL(extensionPublicationApiOrigin).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+})();
+const extensionPublicationRegion = extensionPublicationHostname.endsWith('.cn')
+  ? 'CN' as const
+  : extensionPublicationHostname.endsWith('.com')
+    ? 'COM' as const
+    : undefined;
+await app.register(extensionDownloadRoutes, {
+  prefix: '/api/extensions',
+  allowVerifiedDevelopmentBuild: process.env.NODE_ENV === 'development'
+    || process.env.NODE_ENV === 'test',
+  publicationRoot: process.env.EXTENSION_WEBSITE_PUBLICATION_ROOT || undefined,
+  expectedDistributionOrigin: extensionPublicationApiOrigin || undefined,
+  expectedRegion: extensionPublicationRegion,
+});
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
 await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });
 await app.register(adminAiPromptTemplateRoutes, {
@@ -3351,7 +3385,7 @@ await app.register(aiMediaPlanningRoutes, {
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';
-import { createReadStream, existsSync } from 'fs';
+import { createReadStream, existsSync, readFileSync } from 'fs';
 
 function isSafeFilename(name: string): boolean {
   return !name.includes('..') && !name.includes('/') && !name.includes('\\') && !name.includes('\0') && /^[\w.\-]+$/.test(name);

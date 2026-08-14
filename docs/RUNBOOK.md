@@ -71,6 +71,12 @@ migration 都必须经过目标 commit 绑定的备份恢复认证门禁。
 
 线上修复必须保持同一个闭环：本地代码修复 → 本地验证 → git commit → git push → VPS 部署该 commit → 线上验证。VPS 不能作为长期热修源头；如果直接在服务器目录改了业务代码，下一次从 Git 重新部署会覆盖掉这些改动，也会让 `.git` 无法准确说明线上版本。
 
+扩展正式发布还必须保持五道独立授权：生产构建、外部 release 签名、生产部署/暗态 canary、官网
+publication/同路径升级、精确绑定的试点。固定顺序是 `package -> external release sign -> deploy/dark
+canary -> sign website approval -> activate pointer -> distribution probe -> final verify -> same-path
+upgrade -> independently approved pilot`。任何一步通过都不把授权传递给下一步；标准部署脚本不会切换
+官网 publication pointer。
+
 先确认当前服务器部署模式：
 
 ```bash
@@ -85,6 +91,8 @@ DEPLOY_USER=root \
 SSH_KEY=~/.ssh/ss_erp_vultr_sg \
 DEPLOY_ENV_PROFILE=cloud-r2 \
 EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
 ./scripts/deploy-app-dir.sh
 ```
 
@@ -119,6 +127,8 @@ $env:DEPLOY_USER="root"
 $env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
 $env:DEPLOY_ENV_PROFILE="cloud-r2"
 $env:EXTENSION_RELEASE_ROOT="/var/lib/ss-erp-extension-releases/<full-target-commit>"
+$env:EXTENSION_RELEASE_SIGNATURE_PATH="/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json"
+$env:EXTENSION_RELEASE_SIGNATURE_SHA256="<operator-approved-detached-signature-sha256>"
 C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh <commit>
 ```
 
@@ -137,7 +147,10 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash 
 
 ```bash
 cd /opt/ss-erp
-EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh <full-target-commit>
 ```
 
 checkout 模式不会把 deploy 用户可写的 Git 目录复制成 root 代码。每个目标提交必须先按
@@ -148,7 +161,11 @@ checkout 模式不会把 deploy 用户可写的 Git 目录复制成 root 代码�
 如果输出指向 `/opt/ss-erp/current`，使用 release/symlink 模式：
 
 ```bash
-EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 \
+./scripts/deploy.sh <full-target-commit>
 ```
 
 执行部署脚本的用户需要有权限执行 `systemctl restart ss-erp-*`。
@@ -156,8 +173,10 @@ EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> D
 git checkout 模式默认部署当前已 checkout 的分支；如果你想让 VPS 直接跟着 GitHub 仓库跑，这是最省事的方式。若要指定分支或部署目录：
 
 ```bash
-DEPLOY_BRANCH=hardening/prelaunch-auth-security ./scripts/deploy-staging.sh  # 当前预上线分支示例
-DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_BRANCH=hardening/prelaunch-auth-security DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh <full-target-commit>  # 当前预上线分支示例
 ```
 
 `deploy-staging.sh` 必须直接由 runtime `deploy` 用户执行，root helper 以 no-follow descriptor 将
@@ -172,10 +191,12 @@ post-migration guard。脚本不接受 `--skip-build`，会删除旧依赖/构�
 systemd 部署入口的共享锁串行化；不要把它改回 `/run`。环境快照仍只在 `/run`，中断残留仅在名称、
 所有者、规范路径和挂载点验证通过后清理。
 
-所有 systemd 部署模式都必须先把 `pnpm package:extension` 产生并完成外部审批的同一四件套安装到
+所有 systemd 部署模式都必须先把 `pnpm package:extension` 产生并完成外部 release 签名审批的同一四件套安装到
 `/var/lib/ss-erp-extension-releases/<full-target-commit>`，目录为 `root:root 0755`、文件为
 `root:root 0644`。部署只运行 `stage-extension-release.mjs` 复验并复制该候选，不会重新打包或增版。
-候选准备与精确命令见 `docs/deployment.md`；缺少 `EXTENSION_RELEASE_ROOT` 时必须在停服前失败。
+候选准备与精确命令见 `docs/deployment.md`；缺少 `EXTENSION_RELEASE_ROOT` 时必须在停服前失败。部署和
+REL-04 canary 通过后，仍须独立签署 website approval 并以旧 pointer 摘要做 CAS 激活；暗部署不要求
+下线官网既有批准版本。
 
 如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
 
@@ -443,10 +464,14 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-cloud-r
 ```bash
 # git checkout 模式
 cd /opt/ss-erp
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 
 # release/symlink 模式
 cd /opt/ss-erp/current
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 # 国内 direct-origin app-dir 模式
@@ -458,10 +483,12 @@ VERIFY_DOMAIN=ss-erp.cn \
 VERIFY_READY_URL=https://ss-erp.cn/ready \
 DEPLOY_DIR=/opt/ss-erp/app \
 ENV_FILE=.env.staging \
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 bash scripts/verify-vps-deploy.sh
 ```
 
-覆盖 systemd 服务、Nginx 配置、端口绑定、UFW、防火墙策略、备份 cron、备份状态文件、Prisma migration、`/ready` 和最近错误日志。默认 `VERIFY_EXPECT_LOCAL_POSTGRES=true`，此时还验证本地 PostgreSQL 服务、loopback 5432 和临时恢复库残留；external/RDS 模式必须显式设为 `false`，此时要求本机 5432 无监听并跳过本地临时恢复库检查，因此不提供远端 RDS 临时恢复库残留证明，但仍无条件验证 Prisma migration 及本地/公网 `/ready`。默认 `cloudflare` 模式检查 Cloudflare 真源保护和 IP 更新任务；`direct` 模式改为检查 active Nginx 的合法/未知 Host 路由、ACME HTTP-01 不重定向、`acme.sh` 自动续期，以及列表内每个域名的有效证书和 `/ready`。任一模式缺少 UFW 都视为失败。
+覆盖 systemd 服务、Nginx 配置、端口绑定、UFW、防火墙策略、备份 cron、备份状态文件、Prisma migration、`/ready` 和最近错误日志。`VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED` 只校验不可变 cloud 包内的物流分发开关；独立的 `VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false` 才会读取区域官网 `/api/extensions/latest`：没有 pointer 或继续服务不同 commit 的旧批准版本都可通过，但本次 `DEPLOYED_COMMIT` 已被 pointer 公开会失败。pointer 激活后可把后者单独设为 `true`，无需改变候选包内开关。默认 `VERIFY_EXPECT_LOCAL_POSTGRES=true`，此时还验证本地 PostgreSQL 服务、loopback 5432 和临时恢复库残留；external/RDS 模式必须显式设为 `false`，此时要求本机 5432 无监听并跳过本地临时恢复库检查，因此不提供远端 RDS 临时恢复库残留证明，但仍无条件验证 Prisma migration 及本地/公网 `/ready`。默认 `cloudflare` 模式检查 Cloudflare 真源保护和 IP 更新任务；`direct` 模式改为检查 active Nginx 的合法/未知 Host 路由、ACME HTTP-01 不重定向、`acme.sh` 自动续期，以及列表内每个域名的有效证书和 `/ready`。任一模式缺少 UFW 都视为失败。
 
 ### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1 / H2 / H3 / H4）
 
@@ -913,6 +940,8 @@ release/symlink 模式只允许用已测试的 rollback 入口切换现有不可
 
 ```bash
 DEPLOY_HOST=<server> DEPLOY_USER=root ./scripts/rollback.sh [full-target-commit]
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/current bash scripts/verify-vps-deploy.sh
 ```
 
@@ -1085,13 +1114,14 @@ Worker 每天执行一次，清理对象：
 
 ## 发布流程（推荐）
 
-下面的备份、恢复和 verifier 三条命令在目标 VPS 的目标 revision 私有运维 checkout 中执行；
-随后从持有同一 commit 的运维工作站运行标准部署入口。若分支在两步之间移动，commit 绑定会让
-部署失败，必须针对新的目标重新取证，不能复用旧认证。
+先按 `docs/deployment.md` 在最终 clean commit 上完成第一道生产 package 授权，再在外部受保护环境
+完成第二道 release signature 授权。下面的备份、恢复和 verifier 三条命令在目标 VPS 的目标 revision
+私有运维 checkout 中执行；随后只有第三道部署/暗态 canary 授权可以运行标准部署入口。若分支在两步
+之间移动，commit 绑定会让部署失败，必须针对新的目标重新取证，不能复用旧认证。
 
 ```bash
-# 1. 开启维护模式
-# 2. 确认目标 revision，并从该 revision 的私有运维 checkout 执行：
+# 1. 确认 package 与外部 release signature 都精确绑定目标 commit；开启维护模式
+# 2. 从该 revision 的私有运维 checkout 执行：
 TARGET_COMMIT=<lowercase-full-40-character-commit>
 set -a
 . ./.env.staging
@@ -1101,12 +1131,31 @@ BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/backup-db.sh
 BACKUP_TARGET_GIT_COMMIT="$TARGET_COMMIT" bash scripts/verify-backup-restore.sh
 bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 # 3. 使用与部署模式匹配的标准入口；不要直接执行 Prisma migration
-DEPLOY_HOST=<server> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh "$TARGET_COMMIT"
-# release/symlink 模式改用 ./scripts/deploy.sh "$TARGET_COMMIT"
-# 4. 标准入口通过 readiness 和暗态检查后运行 smoke
+DEPLOY_HOST=<server> DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy-app-dir.sh "$TARGET_COMMIT"
+# release/symlink 模式把上面的入口替换为 ./scripts/deploy.sh "$TARGET_COMMIT"，并保留全部签名变量
+# 4. 标准入口通过 readiness 后运行 smoke，并验证本次 commit 尚未被官网 pointer 公开
 cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
-# 5. 关闭维护模式
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-vps-deploy.sh
+# 5. 运行 canary:rel04:dark，确认私密摘要 cleanup.completed=true 后关闭维护模式
 ```
+
+第三道授权到此结束。第四道官网 publication/同路径升级授权必须按顺序完成：签署绑定 release
+signature 与原始 dark-canary 文件的 website approval；用该 approval SHA-256 和当前 pointer SHA-256
+执行 CAS activation。签名只在外部受保护环境进行，私钥不得进入 VPS；VPS 必须先把 approval 和
+dark-canary 安装为 root-owned 输入，再让 activation 读取 active deployment 的
+`build/extensions`、`build/extension-release-publication/<signature>` 和
+`build/extension-release-signature.sha256`。`UNKNOWN_OUTCOME` 必须停止下游并以相同输入重入确认，不能
+盲目重试或报告失败后另行切换。然后运行官网 probe 和最终 verifier。两条公开取证命令都必须包含
+`--approval "$WEBSITE_APPROVAL" --dark-canary "$DARK_CANARY"`，缺任一绑定都不能继续同路径覆盖、
+Chrome reload、active-worker attestation 或 Unicode smoke。只有这些证据全部通过，才可申请第五道、
+精确绑定 owner/shop/device/offer prefix/draft revision/回滚命令/责任操作员的试点授权；部署或分发批准
+不能用于 Provider 或 Ozon 写入。
 
 ## VPS 最小优化建议
 

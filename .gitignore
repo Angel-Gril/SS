@@ -15,6 +15,12 @@ coverage/
 .cache/
 *.tsbuildinfo
 
+# Local agent/release outputs (keep tracked build/scripts helpers)
+/.context/
+/build/*
+!/build/scripts/
+!/build/scripts/**
+
 # Packaged runtime artifacts
 /ss-erp-app-*.tar.gz
 build/dist/

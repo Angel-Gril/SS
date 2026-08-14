@@ -858,6 +858,9 @@ test('VPS verification keeps logistics distribution dark unless rollout expectat
   assert.ok(verifier.includes(
     'VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"',
   ));
+  assert.ok(verifier.includes(
+    'VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED="${VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED:-false}"',
+  ));
   assert.match(verifier, /\r?\ncheck_logistics_rollout_expectations\r?\n/u);
   assert.ok(verifier.includes('LOGISTICS_DISTRIBUTION_ENABLED'));
   assert.ok(verifier.includes('NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED'));
@@ -866,6 +869,14 @@ test('VPS verification keeps logistics distribution dark unless rollout expectat
   assert.match(verifier, /--build-root "\$DEPLOY_DIR\/build\/extensions"/u);
   assert.match(verifier, /--deployed-commit-file "\$DEPLOY_DIR\/DEPLOYED_COMMIT"/u);
   assert.match(verifier, /--expected-cloud-logistics-enabled "\$expected_cloud_extension"/u);
+  assert.match(
+    verifier,
+    /check_extension_website_distribution_state[\s\\]+"\$expected_website_publication" "\$deployed_commit" "\$expected_api_origin"/u,
+  );
+  assert.doesNotMatch(
+    verifier,
+    /check_extension_website_distribution_state[\s\\]+"\$expected_cloud_extension"/u,
+  );
   assert.doesNotMatch(verifier, /build\/extensions\/ss-erp-cloud\//u);
   assert.doesNotMatch(verifier, /grep -Eq "\^\[\[:space:\]\]\*enabled:/u);
   assert.match(vpsExtensionReleaseVerifier, /verify-extension-release\.mjs/u);

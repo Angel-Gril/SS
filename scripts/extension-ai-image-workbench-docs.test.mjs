@@ -42,17 +42,56 @@ for (const releaseControl of [
   'FIRST_PARTY_WEBSITE',
   'config/extension-release-trusted-keys.json',
   'sign-extension-release.mjs',
+  'sign-extension-website-publication.mjs',
+  'activate-extension-website-publication.mjs',
+  '--deploy-lock',
+  '--expected-distribution-origin',
+  '--expected-region',
+  'ACTIVE_CANDIDATE="$ACTIVE_DEPLOY_DIR/build/extensions"',
+  'ACTIVE_RELEASE_SIGNATURE="$ACTIVE_DEPLOY_DIR/build/extension-release-publication/ss-erp-extension-$VERSION.release-signature.json"',
+  '/var/lib/ss-erp-extension-publication-inputs',
+  'build/extension-release-signature.sha256',
+  'ALREADY_ACTIVATED',
+  'UNKNOWN_OUTCOME',
+  '单一密码学信任域',
+  '私钥及其目录不得上传到 VPS',
   'probe-extension-website-distribution.mjs',
   'verify-extension-publication.mjs',
   'EXTENSION_RELEASE_SIGNING_KEY_PATH',
+  'EXTENSION_RELEASE_SIGNATURE_PATH',
+  'EXTENSION_RELEASE_SIGNATURE_SHA256',
+  'VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED',
+  'VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT',
   'verify-extension-byok-rollout-policy.mjs',
   'ingest-pilot',
+  '五个独立、不可传递的操作员授权门',
+  '生产构建 -> 外部 release 签名 -> 双区域暗部署/canary -> 签署 website approval -> 激活 publication pointer -> 官网分发 probe -> 最终 publication verifier -> 同路径扩展升级 -> 单独批准的试点',
 ]) {
   assert.ok(
     deployment.includes(releaseControl),
     `deployment guide must document release control: ${releaseControl}`,
   );
 }
+assert.match(
+  deployment,
+  /probe-extension-website-distribution\.mjs[\s\S]{0,600}--approval[\s\S]{0,200}--dark-canary/u,
+  'website distribution probe must bind the signed approval and dark-canary evidence',
+);
+assert.match(
+  deployment,
+  /verify-extension-publication\.mjs[\s\S]{0,600}--approval[\s\S]{0,200}--dark-canary/u,
+  'final publication verifier must bind the signed approval and dark-canary evidence',
+);
+assert.match(
+  deployment,
+  /activate-extension-website-publication\.mjs[\s\S]{0,600}--candidate-root "\$ACTIVE_CANDIDATE"[\s\S]{0,600}--release-signature "\$ACTIVE_RELEASE_SIGNATURE"/u,
+  'website activation must consume the active deployment candidate and sealed signature',
+);
+assert.match(
+  deployment,
+  /install -o root -g root -m 0644[\s\S]{0,200}\$STAGED_WEBSITE_APPROVAL[\s\S]{0,300}install -o root -g root -m 0600[\s\S]{0,200}\$STAGED_DARK_CANARY/u,
+  'website activation inputs must be installed into root-owned staging paths',
+);
 
 for (const requiredText of [
   'ERP_HOSTED',

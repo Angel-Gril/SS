@@ -5,16 +5,21 @@ import { canonicalPublicHttpsOrigin } from './extension-release-contract.mjs';
 
 export const PUBLICATION_SIGNATURE_ALGORITHM = 'Ed25519';
 export const RELEASE_SIGNATURE_KIND = 'SS_ERP_EXTENSION_RELEASE_SIGNATURE';
+export const WEBSITE_PUBLICATION_APPROVAL_KIND =
+  'SS_ERP_EXTENSION_WEBSITE_PUBLICATION_APPROVAL';
 export const DISTRIBUTION_RECEIPT_KIND = 'SS_ERP_EXTENSION_WEBSITE_DISTRIBUTION_RECEIPT';
 export const DISTRIBUTION_CHANNEL = 'FIRST_PARTY_WEBSITE';
 export const TRUSTED_KEYS_KIND = 'SS_ERP_EXTENSION_RELEASE_TRUSTED_KEYS';
 export const RELEASE_SIGNATURE_DOMAIN = 'SS_ERP_EXTENSION_RELEASE_SIGNATURE_V1';
+export const WEBSITE_PUBLICATION_APPROVAL_DOMAIN =
+  'SS_ERP_EXTENSION_WEBSITE_PUBLICATION_APPROVAL_V1';
 export const DISTRIBUTION_RECEIPT_DOMAIN = 'SS_ERP_EXTENSION_WEBSITE_DISTRIBUTION_RECEIPT_V1';
 export const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 export const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 export const KEY_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 export const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/u;
 export const MAX_SIGNATURE_BYTES = 16_384;
+export const MAX_PUBLICATION_APPROVAL_BYTES = 16_384;
 export const MAX_RECEIPT_BYTES = 65_536;
 export const MAX_LATEST_BYTES = 1_048_576;
 export const MAX_KEYRING_BYTES = 65_536;
@@ -38,6 +43,28 @@ const SIGNATURE_PAYLOAD_KEYS = Object.freeze([
   'schemaVersion',
   'signedAt',
 ]);
+const WEBSITE_PUBLICATION_APPROVAL_KEYS = Object.freeze([
+  'algorithm',
+  'approvedAt',
+  'channel',
+  'darkCanaryFilename',
+  'darkCanarySha256',
+  'distributionOrigin',
+  'gitCommit',
+  'keyId',
+  'kind',
+  'region',
+  'releaseEvidenceFilename',
+  'releaseEvidenceSha256',
+  'releaseSignatureFilename',
+  'releaseSignatureSha256',
+  'schemaVersion',
+  'signatureBase64',
+  'version',
+]);
+const WEBSITE_PUBLICATION_APPROVAL_PAYLOAD_KEYS = Object.freeze(
+  WEBSITE_PUBLICATION_APPROVAL_KEYS.filter((key) => key !== 'signatureBase64'),
+);
 const TRUSTED_KEY_KEYS = Object.freeze(['algorithm', 'keyId', 'publicKeyBase64', 'status']);
 const TRUSTED_KEYRING_KEYS = Object.freeze(['keys', 'kind', 'schemaVersion']);
 const RECEIPT_TARGET_KEYS = Object.freeze([
@@ -45,11 +72,13 @@ const RECEIPT_TARGET_KEYS = Object.freeze([
   'contentDisposition',
   'contentLength',
   'filename',
+  'publicationApprovalSha256',
   'statusCode',
   'url',
   'xContentSha256',
 ]);
 const RECEIPT_LATEST_KEYS = Object.freeze([
+  'publicationApprovalSha256',
   'responseSha256',
   'statusCode',
   'signatureStatus',
@@ -62,6 +91,7 @@ const RECEIPT_KEYS = Object.freeze([
   'algorithm',
   'channel',
   'distributionOrigin',
+  'darkCanarySha256',
   'kind',
   'keyId',
   'latest',
@@ -72,6 +102,8 @@ const RECEIPT_KEYS = Object.freeze([
   'releaseSignatureSha256',
   'schemaVersion',
   'signatureBase64',
+  'websitePublicationApprovalFilename',
+  'websitePublicationApprovalSha256',
 ]);
 const RECEIPT_PAYLOAD_KEYS = Object.freeze(RECEIPT_KEYS.filter((key) => key !== 'signatureBase64'));
 
@@ -178,6 +210,10 @@ function releaseSignatureFilename(value) {
   return filename(value, 'release signature filename', '.release-signature.json');
 }
 
+function darkCanaryFilename(value) {
+  return filename(value, 'REL-04 dark canary filename', '.json');
+}
+
 function parseSignaturePayload(value) {
   const parsed = exactObject(value, SIGNATURE_PAYLOAD_KEYS, 'release signature payload');
   if (parsed.schemaVersion !== 1 || parsed.kind !== RELEASE_SIGNATURE_KIND
@@ -235,6 +271,108 @@ export function releaseSignaturePayload(value, evidenceBytes) {
   ]);
 }
 
+function parseWebsitePublicationApprovalPayload(value) {
+  const parsed = exactObject(
+    value,
+    WEBSITE_PUBLICATION_APPROVAL_PAYLOAD_KEYS,
+    'website publication approval payload',
+  );
+  if (parsed.schemaVersion !== 1
+    || parsed.kind !== WEBSITE_PUBLICATION_APPROVAL_KIND
+    || parsed.algorithm !== PUBLICATION_SIGNATURE_ALGORITHM
+    || parsed.channel !== DISTRIBUTION_CHANNEL) {
+    fail('website publication approval identity is invalid');
+  }
+  const evidence = releaseEvidenceFilename(parsed.releaseEvidenceFilename);
+  const version = releaseVersion(parsed.version);
+  if (evidence.version !== version) {
+    fail('website publication approval version does not match release evidence');
+  }
+  if (parsed.region !== 'COM' && parsed.region !== 'CN') {
+    fail('website publication approval region is invalid');
+  }
+  const distributionOrigin = publicOrigin(
+    parsed.distributionOrigin,
+    'website publication approval origin',
+  );
+  const hostname = new URL(distributionOrigin).hostname.toLowerCase();
+  if ((parsed.region === 'COM' && !hostname.endsWith('.com'))
+    || (parsed.region === 'CN' && !hostname.endsWith('.cn'))) {
+    fail('website publication approval region does not match its origin');
+  }
+  return {
+    schemaVersion: 1,
+    kind: WEBSITE_PUBLICATION_APPROVAL_KIND,
+    algorithm: PUBLICATION_SIGNATURE_ALGORITHM,
+    channel: DISTRIBUTION_CHANNEL,
+    keyId: canonicalString(parsed.keyId, 'website publication approval keyId', KEY_ID_PATTERN, 64),
+    approvedAt: timestamp(parsed.approvedAt, 'website publication approval approvedAt'),
+    region: parsed.region,
+    distributionOrigin,
+    gitCommit: canonicalString(
+      parsed.gitCommit,
+      'website publication approval Git commit',
+      GIT_COMMIT_PATTERN,
+      40,
+    ),
+    version,
+    releaseEvidenceFilename: evidence.filename,
+    releaseEvidenceSha256: digest(
+      parsed.releaseEvidenceSha256,
+      'website publication approval evidence SHA-256',
+    ),
+    releaseSignatureFilename: releaseSignatureFilename(parsed.releaseSignatureFilename),
+    releaseSignatureSha256: digest(
+      parsed.releaseSignatureSha256,
+      'website publication approval release signature SHA-256',
+    ),
+    darkCanaryFilename: darkCanaryFilename(parsed.darkCanaryFilename),
+    darkCanarySha256: digest(
+      parsed.darkCanarySha256,
+      'website publication approval dark canary SHA-256',
+    ),
+  };
+}
+
+export function parseWebsitePublicationApproval(value) {
+  const parsed = exactObject(
+    value,
+    WEBSITE_PUBLICATION_APPROVAL_KEYS,
+    'website publication approval',
+  );
+  const payload = parseWebsitePublicationApprovalPayload(
+    Object.fromEntries(
+      WEBSITE_PUBLICATION_APPROVAL_PAYLOAD_KEYS.map((key) => [key, parsed[key]]),
+    ),
+  );
+  return {
+    ...payload,
+    signatureBase64: base64(
+      parsed.signatureBase64,
+      'website publication approval signatureBase64',
+      64,
+    ),
+  };
+}
+
+export function canonicalWebsitePublicationApprovalJson(value) {
+  return canonicalJson(parseWebsitePublicationApproval(value));
+}
+
+export function websitePublicationApprovalPayload(value) {
+  const approval = parseWebsitePublicationApproval({
+    ...value,
+    signatureBase64: Buffer.alloc(64).toString('base64'),
+  });
+  const payload = Object.fromEntries(
+    WEBSITE_PUBLICATION_APPROVAL_PAYLOAD_KEYS.map((key) => [key, approval[key]]),
+  );
+  return Buffer.from(
+    `${WEBSITE_PUBLICATION_APPROVAL_DOMAIN}\n${canonicalJson(payload)}`,
+    'utf8',
+  );
+}
+
 function parseTrustedKey(value, index) {
   const parsed = exactObject(value, TRUSTED_KEY_KEYS, `trusted key ${index}`);
   if (parsed.algorithm !== PUBLICATION_SIGNATURE_ALGORITHM) fail(`trusted key ${index} algorithm is invalid`);
@@ -277,6 +415,10 @@ function parseReceiptTarget(value, target) {
     url,
     statusCode: statusCode(parsed.statusCode, `distribution receipt ${target} statusCode`),
     filename: targetFilename,
+    publicationApprovalSha256: digest(
+      parsed.publicationApprovalSha256,
+      `distribution receipt ${target} publication approval SHA-256`,
+    ),
     contentLength: positiveInteger(parsed.contentLength, `distribution receipt ${target} contentLength`),
     bodySha256: digest(parsed.bodySha256, `distribution receipt ${target} bodySha256`),
     xContentSha256: digest(parsed.xContentSha256, `distribution receipt ${target} xContentSha256`),
@@ -316,6 +458,10 @@ function parseReceiptLatest(value) {
     url: publicUrl(parsed.url, 'distribution receipt latest URL'),
     statusCode: statusCode(parsed.statusCode, 'distribution receipt latest statusCode'),
     responseSha256: digest(parsed.responseSha256, 'distribution receipt latest responseSha256'),
+    publicationApprovalSha256: digest(
+      parsed.publicationApprovalSha256,
+      'distribution receipt latest publication approval SHA-256',
+    ),
     version: releaseVersion(parsed.version),
     gitCommit: canonicalString(parsed.gitCommit, 'distribution receipt latest gitCommit', GIT_COMMIT_PATTERN, 40),
     signatureStatus: parsed.signatureStatus === 'EXTERNAL_REQUIRED'
@@ -347,6 +493,16 @@ function parseReceiptPayload(value) {
     releaseEvidenceSha256: digest(parsed.releaseEvidenceSha256, 'distribution receipt evidence SHA-256'),
     releaseSignatureFilename: releaseSignatureFilename(parsed.releaseSignatureFilename),
     releaseSignatureSha256: digest(parsed.releaseSignatureSha256, 'distribution receipt signature SHA-256'),
+    websitePublicationApprovalFilename: filename(
+      parsed.websitePublicationApprovalFilename,
+      'website publication approval filename',
+      '.website-publication-approval.json',
+    ),
+    websitePublicationApprovalSha256: digest(
+      parsed.websitePublicationApprovalSha256,
+      'website publication approval SHA-256',
+    ),
+    darkCanarySha256: digest(parsed.darkCanarySha256, 'REL-04 dark canary SHA-256'),
     latest: parseReceiptLatest(parsed.latest),
   };
 }

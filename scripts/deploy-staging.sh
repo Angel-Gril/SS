@@ -14,6 +14,8 @@ WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
+EXTENSION_RELEASE_SIGNATURE_PATH="${EXTENSION_RELEASE_SIGNATURE_PATH:-}"
+EXTENSION_RELEASE_SIGNATURE_SHA256="${EXTENSION_RELEASE_SIGNATURE_SHA256:-}"
 DEPLOY_RUNTIME_ROOT="${DEPLOY_RUNTIME_ROOT:-${DEPLOY_DIR}.runtime}"
 DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
 DEPLOY_BUILD_ROOT=/var/lib/ss-erp-deploy-build
@@ -42,7 +44,8 @@ while IFS= read -r inherited_git_name; do
 done < <(compgen -e)
 
 readonly DEPLOY_DIR ENV_FILE DEPLOY_ENV_PROFILE API_SERVICE WEB_SERVICE WORKER_SERVICE \
-  DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT
+  DEPLOY_RUN_USER DEPLOY_BUILD_USER DEPLOY_BACKUP_GATE_ROOT EXTENSION_RELEASE_ROOT \
+  EXTENSION_RELEASE_SIGNATURE_PATH EXTENSION_RELEASE_SIGNATURE_SHA256
 readonly DEPLOY_RUNTIME_ROOT DEPLOY_BUILD_ROOT DEPLOY_BUILD_LOCK_FILE HEALTH_URL WEB_HEALTH_URL
 
 if [[ ! "$ENV_FILE" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
@@ -58,6 +61,14 @@ case "$EXTENSION_RELEASE_ROOT" in
   /*) ;;
   *) echo "ERROR: EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory" >&2; exit 1 ;;
 esac
+case "$EXTENSION_RELEASE_SIGNATURE_PATH" in
+  /*) ;;
+  *) echo "ERROR: EXTENSION_RELEASE_SIGNATURE_PATH must be one absolute detached signature path" >&2; exit 1 ;;
+esac
+if [[ ! "$EXTENSION_RELEASE_SIGNATURE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "ERROR: EXTENSION_RELEASE_SIGNATURE_SHA256 must be one lowercase SHA-256 digest" >&2
+  exit 1
+fi
 case "$DEPLOY_RUNTIME_ROOT" in
   /*) ;;
   *) echo "ERROR: DEPLOY_RUNTIME_ROOT must be an absolute path" >&2; exit 1 ;;
@@ -137,6 +148,47 @@ if [ "$EXTENSION_RELEASE_FILE_COUNT" -ne 4 ]; then
   echo "ERROR: extension release root must contain exactly four files" >&2
   exit 1
 fi
+
+assert_extension_release_signature_input() {
+  local signature_basename="${EXTENSION_RELEASE_SIGNATURE_PATH##*/}"
+  local ancestor
+  local mode
+  if [ "$(readlink -m -- "$EXTENSION_RELEASE_SIGNATURE_PATH")" != "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [[ ! "$signature_basename" =~ ^ss-erp-extension-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.release-signature\.json$ ]] \
+    || [ -L "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [ ! -f "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [ "$(stat -c '%u:%h' "$EXTENSION_RELEASE_SIGNATURE_PATH" 2>/dev/null)" != "0:1" ]; then
+    echo "ERROR: detached extension signature must be one canonical root-owned regular file" >&2
+    exit 1
+  fi
+  ancestor="$(dirname -- "$EXTENSION_RELEASE_SIGNATURE_PATH")"
+  while true; do
+    if [ -L "$ancestor" ] || [ ! -d "$ancestor" ] \
+      || [ "$(readlink -f -- "$ancestor")" != "$ancestor" ] \
+      || [ "$(stat -c '%u' "$ancestor")" != "0" ]; then
+      echo "ERROR: extension release signature ancestors must be root-owned canonical directories" >&2
+      exit 1
+    fi
+    mode="$(stat -c '%a' "$ancestor")"
+    if (( (8#$mode & 8#022) != 0 )); then
+      echo "ERROR: extension release signature ancestors must not be group/world writable" >&2
+      exit 1
+    fi
+    [ "$ancestor" = "/" ] && break
+    ancestor="$(dirname -- "$ancestor")"
+  done
+  if [ "$(stat -c '%a' "$EXTENSION_RELEASE_SIGNATURE_PATH")" != "644" ]; then
+    echo "ERROR: detached extension signature must use mode 0644" >&2
+    exit 1
+  fi
+  if [ "$(sha256sum "$EXTENSION_RELEASE_SIGNATURE_PATH" | awk '{print $1}')" \
+    != "$EXTENSION_RELEASE_SIGNATURE_SHA256" ]; then
+    echo "ERROR: detached extension signature SHA-256 does not match operator approval" >&2
+    exit 1
+  fi
+}
+
+assert_extension_release_signature_input
 
 cd "$DEPLOY_DIR"
 
@@ -700,6 +752,32 @@ sudo chmod 0755 "$DEPLOY_DIR/build/extensions"
 sudo find -P "$DEPLOY_DIR/build/extensions" -xdev -type f -exec chown root:root -- {} +
 sudo find -P "$DEPLOY_DIR/build/extensions" -xdev -type f -exec chmod 0644 -- {} +
 
+EXTENSION_RELEASE_SIGNATURE_BASENAME="${EXTENSION_RELEASE_SIGNATURE_PATH##*/}"
+EXTENSION_RELEASE_PUBLICATION_DIR="$DEPLOY_DIR/build/extension-release-publication"
+EXTENSION_RELEASE_SIGNATURE_SHA_PATH="$DEPLOY_DIR/build/extension-release-signature.sha256"
+if sudo test -e "$EXTENSION_RELEASE_PUBLICATION_DIR" || sudo test -L "$EXTENSION_RELEASE_PUBLICATION_DIR"; then
+  echo "ERROR: extension release publication directory must not pre-exist before root installation" >&2
+  exit 1
+fi
+sudo install -d -o root -g root -m 0755 "$EXTENSION_RELEASE_PUBLICATION_DIR"
+if sudo test -e "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME" \
+  || sudo test -L "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME"; then
+  echo "ERROR: extension release signature destination must not pre-exist" >&2
+  exit 1
+fi
+sudo install -o root -g root -m 0644 "$EXTENSION_RELEASE_SIGNATURE_PATH" \
+  "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME"
+if sudo test -e "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH" || sudo test -L "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH"; then
+  echo "ERROR: extension release signature digest destination must not pre-exist" >&2
+  exit 1
+fi
+EXTENSION_RELEASE_SIGNATURE_SHA_TMP="$(sudo mktemp "$DEPLOY_DIR/build/.extension-release-signature.sha256.XXXXXX")"
+printf '%s\n' "$EXTENSION_RELEASE_SIGNATURE_SHA256" \
+  | sudo tee "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP" >/dev/null
+sudo chown root:root "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP"
+sudo chmod 0444 "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP"
+sudo mv -T -- "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP" "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH"
+
 echo "[5c/7] Verifying current commit extension release set..."
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
@@ -711,7 +789,6 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   --expected-admin-origin "$EXTENSION_RELEASE_EXPECTED_ADMIN_ORIGIN" \
   --expected-api-origin "$EXTENSION_RELEASE_EXPECTED_API_ORIGIN" \
   --expected-local-origin "${EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN:-http://127.0.0.1:3001}"
-
 if sudo test -L "$DEPLOY_DIR/apps/web/.next" \
   || ! sudo test -d "$DEPLOY_DIR/apps/web/.next" \
   || [ "$(sudo readlink -f -- "$DEPLOY_DIR/apps/web/.next")" \
@@ -744,6 +821,13 @@ sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_DEPLOY_DIR" "$DEPLOY_BUILD_MANIFEST" "$TARGET_GIT_COMMIT"
+sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/root LANG=C.UTF-8 \
+  node "$SEALED_DEPLOY_DIR/scripts/verify-extension-release-signature.mjs" \
+  --build-root "$SEALED_DEPLOY_DIR/build/extensions" \
+  --signature "$SEALED_DEPLOY_DIR/build/extension-release-publication/$EXTENSION_RELEASE_SIGNATURE_BASENAME" \
+  --expected-signature-sha256 "$EXTENSION_RELEASE_SIGNATURE_SHA256" \
+  --expected-git-commit "$TARGET_GIT_COMMIT"
 sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$SEALED_DEPLOY_DIR/scripts/stage-extension-release.mjs" \

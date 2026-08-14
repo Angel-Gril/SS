@@ -20,6 +20,8 @@ set -euo pipefail
 #   DEPLOY_BACKUP_GATE_ROOT=/usr/local/lib/ss-erp-deploy-gate
 #   DEPLOY_SYSTEMD_SNAPSHOT_ROOT=/var/lib/ss-erp-deploy-systemd-snapshots
 #   EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<commit>
+#   EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<commit>/ss-erp-extension-<version>.release-signature.json
+#   EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256>
 #   API_SERVICE=ss-erp-api
 #   WEB_SERVICE=ss-erp-web
 #   WORKER_SERVICE=ss-erp-worker
@@ -45,6 +47,8 @@ DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:-ss-erp-build}"
 DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:-/usr/local/lib/ss-erp-deploy-gate}"
 DEPLOY_SYSTEMD_SNAPSHOT_ROOT="${DEPLOY_SYSTEMD_SNAPSHOT_ROOT:-/var/lib/ss-erp-deploy-systemd-snapshots}"
 EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:-}"
+EXTENSION_RELEASE_SIGNATURE_PATH="${EXTENSION_RELEASE_SIGNATURE_PATH:-}"
+EXTENSION_RELEASE_SIGNATURE_SHA256="${EXTENSION_RELEASE_SIGNATURE_SHA256:-}"
 API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
@@ -99,6 +103,12 @@ if [[ ! "$ENV_FILE_NAME" =~ ^\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
 fi
 if [[ ! "$EXTENSION_RELEASE_ROOT" =~ ^/ ]]; then
   fail "EXTENSION_RELEASE_ROOT must be one absolute pre-staged release directory"
+fi
+if [[ ! "$EXTENSION_RELEASE_SIGNATURE_PATH" =~ ^/ ]]; then
+  fail "EXTENSION_RELEASE_SIGNATURE_PATH must be one absolute detached signature path"
+fi
+if [[ ! "$EXTENSION_RELEASE_SIGNATURE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  fail "EXTENSION_RELEASE_SIGNATURE_SHA256 must be one lowercase SHA-256 digest"
 fi
 if [[ ! "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" =~ ^/ ]] \
   || [ "$(readlink -m -- "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")" != "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ]; then
@@ -213,7 +223,7 @@ if ! scp "${SSH_ARGS[@]}" "$TARBALL" \
 fi
 
 log "Deploying release"
-REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") DEPLOY_SYSTEMD_SNAPSHOT_ROOT=$(shell_escape "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT") EXTENSION_RELEASE_ROOT=$(shell_escape "$EXTENSION_RELEASE_ROOT") bash -s"
+REMOTE_COMMAND="TARGET_GIT_COMMIT=$(shell_escape "$COMMIT_HASH") RELEASE_DIR=$(shell_escape "$RELEASE_DIR") RELEASES_DIR=$(shell_escape "$RELEASES_DIR") CURRENT_LINK=$(shell_escape "$CURRENT_LINK") SHARED_DIR=$(shell_escape "$SHARED_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") KEEP_RELEASES=$(shell_escape "$KEEP_RELEASES") UPLOAD_DIR=$(shell_escape "$REMOTE_UPLOAD_DIR") ARCHIVE_SHA256=$(shell_escape "$ARCHIVE_SHA256") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") REQUESTED_MIGRATION_TIMEOUT=$(shell_escape "$MIGRATION_TIMEOUT") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_BUILD_USER=$(shell_escape "$DEPLOY_BUILD_USER") DEPLOY_BACKUP_GATE_ROOT=$(shell_escape "$DEPLOY_BACKUP_GATE_ROOT") DEPLOY_SYSTEMD_SNAPSHOT_ROOT=$(shell_escape "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT") EXTENSION_RELEASE_ROOT=$(shell_escape "$EXTENSION_RELEASE_ROOT") EXTENSION_RELEASE_SIGNATURE_PATH=$(shell_escape "$EXTENSION_RELEASE_SIGNATURE_PATH") EXTENSION_RELEASE_SIGNATURE_SHA256=$(shell_escape "$EXTENSION_RELEASE_SIGNATURE_SHA256") bash -s"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 umask 077
@@ -238,6 +248,8 @@ readonly DEPLOY_BUILD_USER="${DEPLOY_BUILD_USER:?}"
 readonly DEPLOY_BACKUP_GATE_ROOT="${DEPLOY_BACKUP_GATE_ROOT:?}"
 readonly DEPLOY_SYSTEMD_SNAPSHOT_ROOT="${DEPLOY_SYSTEMD_SNAPSHOT_ROOT:?}"
 readonly EXTENSION_RELEASE_ROOT="${EXTENSION_RELEASE_ROOT:?}"
+readonly EXTENSION_RELEASE_SIGNATURE_PATH="${EXTENSION_RELEASE_SIGNATURE_PATH:?}"
+readonly EXTENSION_RELEASE_SIGNATURE_SHA256="${EXTENSION_RELEASE_SIGNATURE_SHA256:?}"
 readonly TARBALL="$UPLOAD_DIR/archive.tar.gz"
 
 run_health_check() {
@@ -501,6 +513,30 @@ assert_extension_release_files() {
   fi
 }
 
+assert_extension_release_signature_input() {
+  local mode
+  local signature_basename="${EXTENSION_RELEASE_SIGNATURE_PATH##*/}"
+  if [ "$(readlink -m -- "$EXTENSION_RELEASE_SIGNATURE_PATH")" != "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [[ ! "$signature_basename" =~ ^ss-erp-extension-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.release-signature\.json$ ]] \
+    || [ -L "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [ ! -f "$EXTENSION_RELEASE_SIGNATURE_PATH" ] \
+    || [ "$(stat -c '%u:%h' "$EXTENSION_RELEASE_SIGNATURE_PATH" 2>/dev/null)" != "0:1" ]; then
+    echo "[deploy] ERROR: detached extension signature must be one canonical root-owned regular file" >&2
+    exit 1
+  fi
+  assert_root_ancestor_chain "$(dirname -- "$EXTENSION_RELEASE_SIGNATURE_PATH")"
+  mode="$(stat -c '%a' "$EXTENSION_RELEASE_SIGNATURE_PATH")"
+  if [ "$mode" != "644" ]; then
+    echo "[deploy] ERROR: detached extension signature must use mode 0644" >&2
+    exit 1
+  fi
+  if [ "$(sha256sum "$EXTENSION_RELEASE_SIGNATURE_PATH" | awk '{print $1}')" \
+    != "$EXTENSION_RELEASE_SIGNATURE_SHA256" ]; then
+    echo "[deploy] ERROR: detached extension signature SHA-256 does not match operator approval" >&2
+    exit 1
+  fi
+}
+
 install_root_runtime_symlink() {
   local target="$1"
   local link="$2"
@@ -536,6 +572,7 @@ assert_root_ancestor_chain "$RELEASES_DIR"
 assert_root_ancestor_chain "$SHARED_DIR"
 assert_root_ancestor_chain "$(dirname -- "$CURRENT_LINK")"
 assert_root_ancestor_chain "$EXTENSION_RELEASE_ROOT"
+assert_extension_release_signature_input
 assert_root_ancestor_chain "$(dirname -- "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT")"
 if [ -L "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ] \
   || { [ -e "$DEPLOY_SYSTEMD_SNAPSHOT_ROOT" ] \
@@ -577,6 +614,11 @@ tar -xzf "$TARBALL" -C "$RELEASE_DIR" --strip-components=1 --no-same-owner
 rm -f -- "$TARBALL"
 rmdir -- "$UPLOAD_DIR"
 install_target_backup_gate "$RELEASE_DIR"
+node "$RELEASE_DIR/scripts/verify-extension-release-signature.mjs" \
+  --build-root "$EXTENSION_RELEASE_ROOT" \
+  --signature "$EXTENSION_RELEASE_SIGNATURE_PATH" \
+  --expected-signature-sha256 "$EXTENSION_RELEASE_SIGNATURE_SHA256" \
+  --expected-git-commit "$TARGET_GIT_COMMIT"
 if [ -n "$current_target" ]; then
   bash "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/freeze-deploy-source.sh" \
     verify "$previous_git_commit" "$current_target"
@@ -703,6 +745,28 @@ chmod 0755 "$RELEASE_DIR/build/extensions"
 find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chown root:root -- {} +
 find -P "$RELEASE_DIR/build/extensions" -xdev -type f -exec chmod 0644 -- {} +
 
+EXTENSION_RELEASE_SIGNATURE_BASENAME="${EXTENSION_RELEASE_SIGNATURE_PATH##*/}"
+EXTENSION_RELEASE_PUBLICATION_DIR="$RELEASE_DIR/build/extension-release-publication"
+EXTENSION_RELEASE_SIGNATURE_SHA_PATH="$RELEASE_DIR/build/extension-release-signature.sha256"
+if [ -e "$EXTENSION_RELEASE_PUBLICATION_DIR" ] || [ -L "$EXTENSION_RELEASE_PUBLICATION_DIR" ]; then
+  fail "extension release publication directory must not pre-exist before root installation"
+fi
+install -d -o root -g root -m 0755 "$EXTENSION_RELEASE_PUBLICATION_DIR"
+if [ -e "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME" ] \
+  || [ -L "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME" ]; then
+  fail "extension release signature destination must not pre-exist"
+fi
+install -o root -g root -m 0644 "$EXTENSION_RELEASE_SIGNATURE_PATH" \
+  "$EXTENSION_RELEASE_PUBLICATION_DIR/$EXTENSION_RELEASE_SIGNATURE_BASENAME"
+if [ -e "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH" ] || [ -L "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH" ]; then
+  fail "extension release signature digest destination must not pre-exist"
+fi
+EXTENSION_RELEASE_SIGNATURE_SHA_TMP="$(mktemp "$RELEASE_DIR/build/.extension-release-signature.sha256.XXXXXX")"
+printf '%s\n' "$EXTENSION_RELEASE_SIGNATURE_SHA256" > "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP"
+chown root:root "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP"
+chmod 0444 "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP"
+mv -T -- "$EXTENSION_RELEASE_SIGNATURE_SHA_TMP" "$EXTENSION_RELEASE_SIGNATURE_SHA_PATH"
+
 echo "[deploy] Recording closed post-build source manifest"
 if [ -L "$RELEASE_DIR/apps/web/.next" ] || [ ! -d "$RELEASE_DIR/apps/web/.next" ]; then
   echo "[deploy] ERROR: Web build output must be one real directory" >&2
@@ -724,6 +788,11 @@ node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" ve
   "$SEALED_RELEASE_DIR" "$DEPLOY_SOURCE_MANIFEST" "$TARGET_GIT_COMMIT"
 node "$DEPLOY_BACKUP_GATE_ROOT/$TARGET_GIT_COMMIT/deploy-source-manifest.mjs" verify \
   "$SEALED_RELEASE_DIR" "$DEPLOY_BUILD_MANIFEST" "$TARGET_GIT_COMMIT"
+node "$SEALED_RELEASE_DIR/scripts/verify-extension-release-signature.mjs" \
+  --build-root "$SEALED_RELEASE_DIR/build/extensions" \
+  --signature "$SEALED_RELEASE_DIR/build/extension-release-publication/$EXTENSION_RELEASE_SIGNATURE_BASENAME" \
+  --expected-signature-sha256 "$EXTENSION_RELEASE_SIGNATURE_SHA256" \
+  --expected-git-commit "$TARGET_GIT_COMMIT"
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/root LANG=C.UTF-8 \
   node "$SEALED_RELEASE_DIR/scripts/stage-extension-release.mjs" \

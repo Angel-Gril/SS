@@ -8,6 +8,11 @@ import {
   type VerifiedExtensionReleaseArtifact,
   type VerifiedExtensionReleaseSet,
 } from '../services/extension-release-set.js';
+import {
+  loadPublishedExtensionRelease,
+  type PublishedExtensionRelease,
+  type WebsitePublicationApproval,
+} from '../services/extension-website-publication.js';
 
 type ExtensionTarget = 'cloud' | 'local';
 
@@ -29,8 +34,16 @@ interface ExtensionReleaseTarget {
 
 interface ExtensionDownloadRouteOptions {
   buildRoot?: string;
+  allowVerifiedDevelopmentBuild?: boolean;
   allowUnverifiedDevelopmentBuild?: boolean;
+  publicationRoot?: string;
+  publicationOwnerUid?: number | null;
+  trustedKeyringPath?: string;
+  expectedDistributionOrigin?: string;
+  expectedRegion?: WebsitePublicationApproval['region'];
 }
+
+const DEFAULT_WEBSITE_PUBLICATION_ROOT = '/var/lib/ss-erp-extension-publications';
 
 function findExtensionBuildRoot(): string | null {
   const candidates = [
@@ -229,27 +242,167 @@ export async function extensionDownloadRoutes(
   const buildRoot = getExtensionBuildRoot(options.buildRoot);
   const allowDevelopmentFallback = options.allowUnverifiedDevelopmentBuild === true
     && process.env.NODE_ENV !== 'production';
+  const allowVerifiedDevelopmentBuild = (
+    options.allowVerifiedDevelopmentBuild === true
+      || options.allowUnverifiedDevelopmentBuild === true
+  ) && process.env.NODE_ENV !== 'production';
   const repositoryRoot = path.dirname(path.dirname(buildRoot));
-  const verifiedRelease: VerifiedExtensionReleaseSet | null = await loadVerifiedExtensionReleaseSet({
-    buildRoot,
-    deployedCommitPath: path.join(repositoryRoot, 'DEPLOYED_COMMIT'),
-    requireDeployedCommit: process.env.NODE_ENV === 'production',
-  }).catch(() => null);
-  const artifactBytes = new Map<ExtensionTarget, Promise<Buffer>>();
+  const useWebsitePublication = !allowVerifiedDevelopmentBuild
+    || options.publicationRoot !== undefined;
+  const directVerifiedRelease: VerifiedExtensionReleaseSet | null = useWebsitePublication
+    ? null
+    : await loadVerifiedExtensionReleaseSet({
+        buildRoot,
+        deployedCommitPath: path.join(repositoryRoot, 'DEPLOYED_COMMIT'),
+        requireDeployedCommit: false,
+      }).catch(() => null);
+  const publicationRoot = path.resolve(
+    options.publicationRoot || DEFAULT_WEBSITE_PUBLICATION_ROOT,
+  );
+  const trustedKeyringPath = path.resolve(
+    options.trustedKeyringPath
+      || path.join(repositoryRoot, 'config/extension-release-trusted-keys.json'),
+  );
+  const publicationOwnerUid = options.publicationOwnerUid !== undefined
+    ? options.publicationOwnerUid
+    : (useWebsitePublication && process.platform !== 'win32' ? 0 : null);
+  type CurrentRelease = {
+    release: VerifiedExtensionReleaseSet;
+    approvalSha256: string | null;
+    releaseKey: string;
+    artifactBytes: Map<ExtensionTarget, Promise<Buffer>>;
+  };
+  let artifactBytesCache: {
+    releaseKey: string;
+    bytes: Map<ExtensionTarget, Promise<Buffer>>;
+  } | null = null;
+  let publicationValidation: {
+    releaseKey: string;
+    promise: Promise<PublishedExtensionRelease | null>;
+    failedAt: number | null;
+  } | null = null;
+  const publicationValidationRetryMs = 5 * 60 * 1000;
 
-  function verifiedDownloadUrl(artifact: VerifiedExtensionReleaseArtifact) {
-    if (!verifiedRelease) throw new Error('verified extension release is unavailable');
-    return `/api/extensions/download/${artifact.target}/${verifiedRelease.version}/${artifact.zipSha256}`;
+  async function loadWebsitePublication() {
+    return loadPublishedExtensionRelease({
+      publicationRoot,
+      keyringPath: trustedKeyringPath,
+      trustedOwnerUid: publicationOwnerUid,
+      expectedDistributionOrigin: options.expectedDistributionOrigin!,
+      expectedRegion: options.expectedRegion!,
+    }).catch(() => null);
   }
 
-  async function sendVerifiedArtifact(target: ExtensionTarget, reply: FastifyReply) {
-    if (!verifiedRelease) {
+  function publishedReleaseKey(published: PublishedExtensionRelease) {
+    return `${published.approvalSha256}:${published.artifactSnapshotKey}`;
+  }
+
+  async function validatePublishedArtifacts(
+    published: PublishedExtensionRelease,
+    releaseKey: string,
+  ) {
+    for (const target of ['cloud', 'local'] as const) {
+      await readVerifiedExtensionReleaseArtifact(published.release, target);
+    }
+    const stable = await loadWebsitePublication();
+    if (!stable || publishedReleaseKey(stable) !== releaseKey) return null;
+    return stable;
+  }
+
+  async function currentRelease(): Promise<CurrentRelease | null> {
+    if (!useWebsitePublication) {
+      if (!directVerifiedRelease) return null;
+      const releaseKey = 'development';
+      const artifactBytes = artifactBytesFor(releaseKey);
+      return {
+        release: directVerifiedRelease,
+        approvalSha256: null,
+        releaseKey,
+        artifactBytes,
+      };
+    }
+    if (!options.expectedDistributionOrigin || !options.expectedRegion) {
+      artifactBytesCache = null;
+      publicationValidation = null;
+      return null;
+    }
+    const published = await loadWebsitePublication();
+    if (!published) {
+      artifactBytesCache = null;
+      publicationValidation = null;
+      return null;
+    }
+    const releaseKey = publishedReleaseKey(published);
+    let stable: PublishedExtensionRelease | null = published;
+    let releaseCache = artifactBytesCache;
+    if (!releaseCache || releaseCache.releaseKey !== releaseKey) {
+      artifactBytesCache = null;
+      const retryFailedValidation = publicationValidation?.releaseKey === releaseKey
+        && publicationValidation.failedAt !== null
+        && Date.now() - publicationValidation.failedAt >= publicationValidationRetryMs;
+      if (!publicationValidation || publicationValidation.releaseKey !== releaseKey
+        || retryFailedValidation) {
+        const validation = {
+          releaseKey,
+          promise: Promise.resolve<PublishedExtensionRelease | null>(null),
+          failedAt: null as number | null,
+        };
+        validation.promise = validatePublishedArtifacts(published, releaseKey)
+          .catch(() => null)
+          .then((result) => {
+            if (!result) validation.failedAt = Date.now();
+            return result;
+          });
+        publicationValidation = validation;
+      }
+      const validation = publicationValidation;
+      stable = await validation.promise;
+      if (publicationValidation !== validation || !stable) return null;
+      releaseCache = {
+        releaseKey,
+        bytes: new Map<ExtensionTarget, Promise<Buffer>>(),
+      };
+      artifactBytesCache = releaseCache;
+    }
+    if (!releaseCache || releaseCache.releaseKey !== releaseKey) return null;
+    return {
+      release: stable.release,
+      approvalSha256: stable.approvalSha256,
+      releaseKey,
+      artifactBytes: releaseCache.bytes,
+    };
+  }
+
+  function artifactBytesFor(releaseKey: string) {
+    if (!artifactBytesCache || artifactBytesCache.releaseKey !== releaseKey) {
+      artifactBytesCache = {
+        releaseKey,
+        bytes: new Map<ExtensionTarget, Promise<Buffer>>(),
+      };
+    }
+    return artifactBytesCache.bytes;
+  }
+
+  function verifiedDownloadUrl(
+    release: VerifiedExtensionReleaseSet,
+    artifact: VerifiedExtensionReleaseArtifact,
+  ) {
+    return `/api/extensions/download/${artifact.target}/${release.version}/${artifact.zipSha256}`;
+  }
+
+  async function sendVerifiedArtifact(
+    current: CurrentRelease | null,
+    target: ExtensionTarget,
+    reply: FastifyReply,
+  ) {
+    if (!current) {
       return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
     }
-    const artifact = verifiedRelease.artifacts[target];
+    const artifact = current.release.artifacts[target];
+    const artifactBytes = current.artifactBytes;
     let bytesPromise = artifactBytes.get(target);
     if (!bytesPromise) {
-      bytesPromise = readVerifiedExtensionReleaseArtifact(verifiedRelease, target);
+      bytesPromise = readVerifiedExtensionReleaseArtifact(current.release, target);
       artifactBytes.set(target, bytesPromise);
     }
     try {
@@ -259,28 +412,35 @@ export async function extensionDownloadRoutes(
       reply.header('Content-Length', String(bytes.length));
       reply.header('Cache-Control', 'private, no-store');
       reply.header('X-Content-SHA256', artifact.zipSha256);
+      if (current.approvalSha256) {
+        reply.header('X-Publication-Approval-SHA256', current.approvalSha256);
+      }
       return reply.send(bytes);
     } catch {
+      if (artifactBytes.get(target) === bytesPromise) artifactBytes.delete(target);
       return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
     }
   }
 
   app.get('/latest', async (_request, reply) => {
     reply.header('Cache-Control', 'private, no-store');
-    if (verifiedRelease) {
+    const current = await currentRelease();
+    if (current) {
+      const { release, approvalSha256 } = current;
       const targets = Object.fromEntries(
         (['cloud', 'local'] as const).map((target) => [target, {
-          filename: verifiedRelease.artifacts[target].filename,
-          downloadUrl: verifiedDownloadUrl(verifiedRelease.artifacts[target]),
-          sha256: verifiedRelease.artifacts[target].zipSha256,
+          filename: release.artifacts[target].filename,
+          downloadUrl: verifiedDownloadUrl(release, release.artifacts[target]),
+          sha256: release.artifacts[target].zipSha256,
         }]),
       ) as Record<ExtensionTarget, ExtensionReleaseTarget>;
       return reply.send({
         code: 1,
         data: {
-          version: verifiedRelease.version,
-          gitCommit: verifiedRelease.gitCommit,
-          signatureStatus: verifiedRelease.signatureStatus,
+          version: release.version,
+          gitCommit: release.gitCommit,
+          signatureStatus: release.signatureStatus,
+          ...(approvalSha256 ? { publicationApprovalSha256: approvalSha256 } : {}),
           targets,
         },
       });
@@ -333,13 +493,14 @@ export async function extensionDownloadRoutes(
     if (!target) {
       return reply.status(400).send({ code: 0, msg: 'target must be cloud or local' });
     }
-    const artifact = verifiedRelease?.artifacts[target];
+    const current = await currentRelease();
+    const artifact = current?.release.artifacts[target];
     if (!artifact
-      || request.params.version !== verifiedRelease?.version
+      || request.params.version !== current?.release.version
       || request.params.sha256 !== artifact.zipSha256) {
       return reply.status(404).send({ code: 0, msg: '扩展发布证据不完整或无效' });
     }
-    return sendVerifiedArtifact(target, reply);
+    return sendVerifiedArtifact(current, target, reply);
   });
 
   app.get<{ Params: { target: string } }>('/download/:target', async (request, reply) => {
@@ -348,9 +509,13 @@ export async function extensionDownloadRoutes(
       return reply.status(400).send({ code: 0, msg: 'target must be cloud or local' });
     }
 
-    if (verifiedRelease) {
+    const current = await currentRelease();
+    if (current) {
       reply.header('Cache-Control', 'private, no-store');
-      return reply.redirect(verifiedDownloadUrl(verifiedRelease.artifacts[target]));
+      return reply.redirect(verifiedDownloadUrl(
+        current.release,
+        current.release.artifacts[target],
+      ));
     }
     if (!allowDevelopmentFallback) {
       return reply.status(404).send({

@@ -116,7 +116,11 @@ function fixtureFetcher(options = {}) {
           'content-length': String(300 * 1024),
         });
       }
-      return jsonResponse({ status: 'ready', checks: { db: 'ok', redis: 'ok' } });
+      return jsonResponse({
+        status: 'ready',
+        checks: { db: 'ok', redis: 'ok' },
+        deployment: { gitCommit: options.deployedGitCommit || gitCommit },
+      });
     }
     if (url.pathname === '/api/extension-device/byok-media/readiness'
       && init.method === 'OPTIONS') {
@@ -130,6 +134,7 @@ function fixtureFetcher(options = {}) {
       });
     }
     if (url.pathname === '/api/extensions/latest') {
+      if (!options.publicationGitCommit) return jsonResponse({ code: 0 }, 404);
       const version = '1.0.266';
       const cloudSha = 'c'.repeat(64);
       const localSha = 'd'.repeat(64);
@@ -137,8 +142,9 @@ function fixtureFetcher(options = {}) {
         code: 1,
         data: {
           version,
-          gitCommit: options.gitCommit || gitCommit,
+          gitCommit: options.publicationGitCommit,
           signatureStatus: 'EXTERNAL_REQUIRED',
+          publicationApprovalSha256: 'f'.repeat(64),
           targets: {
             cloud: {
               filename: `ss-erp-cloud-${version}.zip`,
@@ -330,7 +336,7 @@ test('runs the bounded dark canary, reads reconciliation, and revokes its device
   assert.equal(summary.cleanup.completed, true);
   assert.equal(fetcher.wasRevoked(), true);
   assert.deepEqual(summary.checks.map(({ id, status }) => [id, status]), [
-    ['readiness-and-release', 'PASS'],
+    ['deployment-and-publication-isolation', 'PASS'],
     ['default-off-policy', 'PASS'],
     ['hosted-route-regression', 'PASS'],
     ['publish-reconciliation-read', 'PASS'],
@@ -387,15 +393,34 @@ test('binds exact-commit QA-04 reconciliation evidence when no live attempt exis
 });
 
 test('fails closed on another deployed commit before creating a pairing code', async () => {
-  const fetcher = fixtureFetcher({ gitCommit: 'e'.repeat(40) });
+  const fetcher = fixtureFetcher({ deployedGitCommit: 'e'.repeat(40) });
   const summary = await runRel04DarkCanary(input(), { fetcher });
   assert.equal(summary.status, 'FAIL');
   assert.deepEqual(summary.checks.map(({ id, status }) => [id, status]), [
-    ['readiness-and-release', 'FAIL'],
+    ['deployment-and-publication-isolation', 'FAIL'],
     ['device-session-cleanup', 'PASS'],
   ]);
   assert.equal(summary.cleanup.required, false);
   assert.equal(fetcher.calls.some(({ path: value }) => value.includes('pairing-codes')), false);
+});
+
+test('fails before pairing when the deployed candidate is already public', async () => {
+  const fetcher = fixtureFetcher({ publicationGitCommit: gitCommit });
+  const summary = await runRel04DarkCanary(input(), { fetcher });
+  assert.equal(summary.status, 'FAIL');
+  assert.equal(summary.checks[0]?.id, 'deployment-and-publication-isolation');
+  assert.equal(summary.checks[0]?.errorCode, 'DEPLOYED_CANDIDATE_PREMATURELY_PUBLISHED');
+  assert.equal(fetcher.calls.some(({ path: value }) => value.includes('pairing-codes')), false);
+});
+
+test('allows a previously approved website release to remain public during a new dark deploy', async () => {
+  const fetcher = fixtureFetcher({ publicationGitCommit: 'e'.repeat(40) });
+  const summary = await runRel04DarkCanary(input(), { fetcher });
+  assert.equal(summary.status, 'PASS');
+  const isolation = summary.checks[0]?.evidence;
+  assert.equal(isolation.deployedGitCommit, gitCommit);
+  assert.equal(isolation.deployedCandidatePublic, false);
+  assert.equal(isolation.existingPublication.gitCommit, 'e'.repeat(40));
 });
 
 test('rejects an enabled BYOK path and still revokes the created device session', async () => {
@@ -485,7 +510,7 @@ test('fails a non-dark policy before creating a device session', async () => {
   const fetcher = fixtureFetcher({ enabledFlag: 'feature_extension_hosted_ai' });
   const summary = await runRel04DarkCanary(input(), { fetcher });
   assert.equal(summary.status, 'FAIL');
-  assert.equal(summary.checks[0]?.id, 'readiness-and-release');
+  assert.equal(summary.checks[0]?.id, 'deployment-and-publication-isolation');
   assert.equal(summary.checks[1]?.id, 'default-off-policy');
   assert.equal(summary.checks[1]?.status, 'FAIL');
   assert.equal(fetcher.calls.some(({ path: value }) => value.includes('pairing-codes')), false);

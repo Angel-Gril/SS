@@ -21,8 +21,16 @@ VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_LOGISTICS_DISTRIBU
 VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:-false}"
 VERIFY_EXPECT_EXTENSION_AUTH_MODE="${VERIFY_EXPECT_EXTENSION_AUTH_MODE:-compat}"
 VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED="${VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED:-false}"
 VERIFY_EXPECT_LOCAL_POSTGRES="${VERIFY_EXPECT_LOCAL_POSTGRES:-true}"
 VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT="${VERIFY_AI_MEDIA_SUITE_DB_GUARD_TIMEOUT:-20m}"
+LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT='0c326b10feed5f971052c1d1d6ecb3bd3e61ca13'
+if [ "${VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT+x}" = x ] \
+  && [ "$VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT" != "$LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT" ]; then
+  echo "[verify-vps] ERROR: VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT is fixed to the deployed legacy baseline and cannot be overridden" >&2
+  exit 1
+fi
+readonly VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT="$LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT"
 
 FAILURES=0
 WARNINGS=0
@@ -275,6 +283,112 @@ process.exit(1);
   else
     fail "$label returned unexpected body: ${body}"
   fi
+}
+
+check_extension_website_distribution_state() {
+  local expected_enabled="$1"
+  local deployed_commit="$2"
+  local api_origin="$3"
+  local latest_url
+  if ! latest_url=$(node -e '
+const origin = process.argv[1];
+try {
+  const url = new URL(origin);
+  if (url.protocol !== "https:"
+    || url.origin !== origin
+    || url.username
+    || url.password
+    || (url.pathname !== "" && url.pathname !== "/")
+    || url.search
+    || url.hash) process.exit(1);
+  process.stdout.write(`${url.origin}/api/extensions/latest`);
+} catch {
+  process.exit(1);
+}
+' "$api_origin"); then
+    fail "extension website distribution origin is invalid: ${api_origin:-<unset>}"
+    return
+  fi
+
+  local response
+  if ! response=$(curl --disable --silent --show-error --proto '=https' --max-redirs 0 \
+    --max-time 10 --max-filesize 65536 --header 'Accept: application/json' \
+    --header 'Cache-Control: no-cache' --write-out $'\n%{http_code}' "$latest_url"); then
+    fail "extension website distribution state is unreachable: $latest_url"
+    return
+  fi
+  local status="${response##*$'\n'}"
+  local body="${response%$'\n'*}"
+  local observation
+  if ! observation=$(node -e '
+function reject(message) {
+  process.stderr.write(message);
+  process.exit(1);
+}
+const [expected, deployedCommit, status, body] = process.argv.slice(1);
+let parsed;
+try { parsed = JSON.parse(body); } catch { reject("response is not JSON"); }
+if (status === "404") {
+  if (parsed?.code !== 0) reject("404 response is not the extension publication endpoint");
+  if (expected === "true") reject("the deployed commit has no active publication pointer");
+  process.stdout.write("NONE");
+  process.exit(0);
+}
+if (status !== "200") reject(`unexpected HTTP status ${status || "missing"}`);
+const data = parsed?.data;
+if (parsed?.code !== 1
+  || !data
+  || !/^[a-f0-9]{40}$/u.test(data.gitCommit || "")
+  || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(data.version || "")
+  || data.signatureStatus !== "EXTERNAL_REQUIRED"
+  || !/^[a-f0-9]{64}$/u.test(data.publicationApprovalSha256 || "")) {
+  reject("response is not an approved extension publication pointer");
+}
+for (const target of ["cloud", "local"]) {
+  const artifact = data.targets?.[target];
+  const digest = artifact?.sha256 || "";
+  const expectedFilename = `ss-erp-${target}-${data.version}.zip`;
+  const expectedUrl = `/api/extensions/download/${target}/${data.version}/${digest}`;
+  if (!/^[a-f0-9]{64}$/u.test(digest)
+    || artifact.filename !== expectedFilename
+    || artifact.downloadUrl !== expectedUrl) {
+    reject(`response has an invalid ${target} publication target`);
+  }
+}
+if (expected === "false") {
+  if (data.gitCommit === deployedCommit) {
+    reject("the dark-deployed commit is already exposed by the website publication pointer");
+  }
+  process.stdout.write(`PREVIOUS\t${data.gitCommit}\t${data.version}`);
+  process.exit(0);
+}
+if (data.gitCommit !== deployedCommit) {
+  reject("the website publication pointer does not expose the deployed commit");
+}
+process.stdout.write(`CURRENT\t${data.gitCommit}\t${data.version}`);
+' "$expected_enabled" "$deployed_commit" "$status" "$body" 2>&1); then
+    fail "extension website distribution expectation failed: $observation"
+    return
+  fi
+
+  local state
+  local observed_commit
+  local observed_version
+  IFS=$'\t' read -r state observed_commit observed_version <<< "$observation"
+  case "$state" in
+    NONE)
+      pass "extension website has no active publication pointer during dark deployment"
+      ;;
+    PREVIOUS)
+      pass "extension website keeps approved version $observed_version from prior commit $observed_commit while $deployed_commit remains dark"
+      ;;
+    CURRENT)
+      pass "extension website publication pointer exposes deployed version $observed_version from commit $observed_commit"
+      ;;
+    *)
+      fail "extension website distribution observation is invalid"
+      ;;
+  esac
 }
 
 check_port_loopback() {
@@ -822,11 +936,13 @@ check_logistics_rollout_expectations() {
   local expected_public="$VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED"
   local expected_auth_mode="$VERIFY_EXPECT_EXTENSION_AUTH_MODE"
   local expected_cloud_extension="$VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED"
+  local expected_website_publication="$VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED"
 
   local rollout_expectations=(
     "VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED:$expected_logistics"
     "VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:$expected_public"
     "VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:$expected_cloud_extension"
+    "VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED:$expected_website_publication"
   )
   local expectation
   for expectation in "${rollout_expectations[@]}"; do
@@ -896,23 +1012,102 @@ check_logistics_rollout_expectations() {
     fail "EXTENSION_AUTH_MODE expected $expected_auth_mode, found ${actual_auth_mode:-<unset>}"
   fi
 
+  local deployed_commit
+  if ! deployed_commit="$(node -e '
+const fs = require("node:fs");
+const value = fs.readFileSync(process.argv[1], "utf8");
+const match = value.match(/^([a-f0-9]{40})(?:\n)?$/);
+if (!match) process.exit(1);
+process.stdout.write(match[1]);
+' "$DEPLOY_DIR/DEPLOYED_COMMIT")"; then
+    fail "DEPLOYED_COMMIT is required before extension release verification"
+    return
+  fi
+
+  local publication_dir="${DEPLOY_DIR}/build/extension-release-publication"
+  local signature_sha_path="${DEPLOY_DIR}/build/extension-release-signature.sha256"
+  local publication_metadata_present=0
+  local legacy_unsigned=0
+  if [ -e "$publication_dir" ] || [ -L "$publication_dir" ] \
+    || [ -e "$signature_sha_path" ] || [ -L "$signature_sha_path" ]; then
+    publication_metadata_present=1
+  fi
+  if [ ! -d "$publication_dir" ] || [ -L "$publication_dir" ] \
+    || [ ! -f "$signature_sha_path" ] || [ -L "$signature_sha_path" ]; then
+    if [ "$publication_metadata_present" -eq 0 ] \
+      && [ "$deployed_commit" = "$VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT" ]; then
+      warn "legacy unsigned extension release baseline $deployed_commit has no detached signature metadata; Ed25519 verification skipped but formal candidate verification remains required"
+      legacy_unsigned=1
+    else
+      fail "deployed extension release signature metadata is missing or not canonical"
+      return
+    fi
+  fi
+
+  local publication_entry=""
+  local publication_entry_count=0
+  local signature_path=""
+  local signature_sha256=""
+  if [ "$legacy_unsigned" -eq 0 ]; then
+    while IFS= read -r -d '' publication_entry; do
+      publication_entry_count=$((publication_entry_count + 1))
+      if [ -L "$publication_entry" ] || [ ! -f "$publication_entry" ]; then
+        fail "deployed extension release publication contains a non-regular entry"
+        return
+      fi
+      if [[ ! "${publication_entry##*/}" =~ ^ss-erp-extension-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.release-signature\.json$ ]]; then
+        fail "deployed extension release publication contains an unexpected file"
+        return
+      fi
+      signature_path="$publication_entry"
+    done < <(find -P "$publication_dir" -mindepth 1 -maxdepth 1 -print0)
+    if [ "$publication_entry_count" -ne 1 ]; then
+      fail "deployed extension release publication must contain exactly one detached signature"
+      return
+    fi
+    if ! signature_sha256="$(node -e '
+const fs = require("node:fs");
+const value = fs.readFileSync(process.argv[1], "utf8");
+const match = value.match(/^([a-f0-9]{64})\n$/);
+if (!match) process.exit(1);
+process.stdout.write(match[1]);
+' "$signature_sha_path")"; then
+      fail "deployed extension release signature SHA-256 sidecar is not canonical"
+      return
+    fi
+  fi
+
   local release_verifier="${DEPLOY_DIR}/scripts/verify-vps-extension-release.mjs"
   if [ ! -r "$release_verifier" ]; then
     fail "VPS extension release verifier is missing or unreadable: $release_verifier"
     return
   fi
-  if node "$release_verifier" \
-    --build-root "$DEPLOY_DIR/build/extensions" \
-    --deployed-commit-file "$DEPLOY_DIR/DEPLOYED_COMMIT" \
-    --expected-web-origin "$expected_web_origin" \
-    --expected-admin-origin "$expected_admin_origin" \
-    --expected-api-origin "$expected_api_origin" \
-    --expected-local-origin "$expected_local_origin" \
-    --expected-cloud-logistics-enabled "$expected_cloud_extension"; then
-    pass "formal extension release and cloud logistics expectation are verified"
+  local -a release_verifier_args=(
+    --build-root "$DEPLOY_DIR/build/extensions"
+    --deployed-commit-file "$DEPLOY_DIR/DEPLOYED_COMMIT"
+    --expected-web-origin "$expected_web_origin"
+    --expected-admin-origin "$expected_admin_origin"
+    --expected-api-origin "$expected_api_origin"
+    --expected-local-origin "$expected_local_origin"
+    --expected-cloud-logistics-enabled "$expected_cloud_extension"
+  )
+  if [ "$legacy_unsigned" -eq 1 ]; then
+    # The deployed legacy verifier predates signature arguments; its seven base
+    # arguments still perform commit/origin/checksum/ZIP/logistics verification.
+    :
+  else
+    release_verifier_args+=(
+      --signature "$signature_path"
+      --expected-signature-sha256 "$signature_sha256"
+    )
+  fi
+  if node "$release_verifier" "${release_verifier_args[@]}"; then
+    pass "formal extension release, cloud logistics, and signature policy are verified"
   else
     fail "formal extension release or cloud logistics verification failed"
   fi
+  check_extension_website_distribution_state \
+    "$expected_website_publication" "$deployed_commit" "$expected_api_origin"
 }
 
 check_prisma_migrations() {

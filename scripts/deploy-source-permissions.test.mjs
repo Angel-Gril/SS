@@ -11,12 +11,14 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
@@ -32,6 +34,82 @@ function run(command, args, options = {}) {
     ...options,
   });
 }
+
+function releasePublicationInstallerBlock() {
+  const deploy = readFileSync(join(process.cwd(), 'scripts', 'deploy.sh'), 'utf8');
+  const start = deploy.indexOf('EXTENSION_RELEASE_SIGNATURE_BASENAME=');
+  const end = deploy.indexOf('\necho "[deploy] Recording closed post-build source manifest"', start);
+  assert.ok(start >= 0 && end > start, 'release publication installer block must remain extractable');
+  return deploy.slice(start, end)
+    .replaceAll('install -d -o root -g root -m', 'install -d -m')
+    .replaceAll('install -o root -g root -m', 'install -m')
+    .replace(/^chown root:root .*$/gmu, ':');
+}
+
+test('release publication installer refuses live and dangling reserved-path symlinks', {
+  skip: process.platform === 'win32',
+}, () => {
+  const installer = releasePublicationInstallerBlock();
+  const execute = (release, signature) => run('bash', ['-c', `
+set -euo pipefail
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+RELEASE_DIR="$1"
+EXTENSION_RELEASE_SIGNATURE_PATH="$2"
+EXTENSION_RELEASE_SIGNATURE_SHA256="$3"
+${installer}
+`, 'contract', release, signature, 'a'.repeat(64)]);
+
+  for (const dangling of [false, true]) {
+    const root = mkdtempSync(join(tmpdir(), 'ss-erp-release-publication-symlink-'));
+    const release = join(root, 'release');
+    const build = join(release, 'build');
+    const signature = join(root, 'ss-erp-extension-1.2.3.release-signature.json');
+    const protectedPath = join(root, dangling ? 'missing-target' : 'protected.txt');
+    try {
+      mkdirSync(build, { recursive: true });
+      writeFileSync(signature, '{"fixture":true}\n');
+      if (!dangling) writeFileSync(protectedPath, 'protected\n');
+      symlinkSync(protectedPath, join(build, 'extension-release-signature.sha256'));
+      const result = execute(release, signature);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /signature digest destination must not pre-exist/u);
+      if (dangling) assert.equal(existsSync(protectedPath), false);
+      else assert.equal(readFileSync(protectedPath, 'utf8'), 'protected\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('release publication installer refuses a pre-positioned publication directory symlink', {
+  skip: process.platform === 'win32',
+}, () => {
+  const installer = releasePublicationInstallerBlock();
+  const root = mkdtempSync(join(tmpdir(), 'ss-erp-release-publication-dir-symlink-'));
+  const release = join(root, 'release');
+  const build = join(release, 'build');
+  const external = join(root, 'external');
+  const signature = join(root, 'ss-erp-extension-1.2.3.release-signature.json');
+  try {
+    mkdirSync(build, { recursive: true });
+    mkdirSync(external);
+    writeFileSync(signature, '{"fixture":true}\n');
+    symlinkSync(external, join(build, 'extension-release-publication'), 'dir');
+    const result = run('bash', ['-c', `
+set -euo pipefail
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+RELEASE_DIR="$1"
+EXTENSION_RELEASE_SIGNATURE_PATH="$2"
+EXTENSION_RELEASE_SIGNATURE_SHA256="$3"
+${installer}
+`, 'contract', release, signature, 'a'.repeat(64)]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /publication directory must not pre-exist/u);
+    assert.deepEqual(readdirSync(external), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('release deployment atomically transitions systemd units before service verification', () => {
   const deploy = readFileSync(join(process.cwd(), 'scripts', 'deploy.sh'), 'utf8');
@@ -264,6 +342,16 @@ test('deployment build stores use one locked root-owned disk parent while env sn
     /install -o root -g "\$DEPLOY_GROUP" -m 0660 \/dev\/null "\$DEPLOY_BUILD_LOCK_FILE"/u,
     'initializer must provision the shared systemd-deployment lock',
   );
+  assert.match(
+    initializer,
+    /EXTENSION_WEBSITE_PUBLICATION_ROOT="\$\{EXTENSION_WEBSITE_PUBLICATION_ROOT:-\/var\/lib\/ss-erp-extension-publications\}"/u,
+    'initializer must provision an independent website publication root',
+  );
+  assert.match(
+    initializer,
+    /install -d -o root -g root -m 0755[\s\\]+"\$EXTENSION_WEBSITE_PUBLICATION_ROOT"[\s\\]+"\$EXTENSION_WEBSITE_PUBLICATION_ROOT\/bundles"/u,
+    'website publication root and immutable bundle parent must remain root-owned',
+  );
 
   for (const scriptName of ['deploy.sh', 'deploy-app-dir.sh', 'deploy-staging.sh']) {
     const deploy = readFileSync(join(process.cwd(), 'scripts', scriptName), 'utf8');
@@ -324,6 +412,7 @@ test('initializer prevents the build identity from renaming its persistent build
         DEPLOY_BUILD_ROOT: buildRoot,
         ENV_FILE_NAME: '.env.staging',
         EXTENSION_RELEASE_BASE: join(root, 'extension-releases'),
+        EXTENSION_WEBSITE_PUBLICATION_ROOT: join(root, 'website-publication'),
       },
     });
     assert.equal(result.status, 0, result.stderr);
@@ -844,6 +933,7 @@ test('initializer refuses a legacy shared symlink before changing its target', {
         DEPLOY_BUILD_ROOT: join(root, 'deploy-build'),
         ENV_FILE_NAME: '.env.staging',
         EXTENSION_RELEASE_BASE: join(root, 'extension-releases'),
+        EXTENSION_WEBSITE_PUBLICATION_ROOT: join(root, 'website-publication'),
       },
     });
     assert.notEqual(result.status, 0);
@@ -877,6 +967,7 @@ test('initializer rejects a writable extension release ancestor', {
         DEPLOY_BUILD_ROOT: join(root, 'deploy-build'),
         ENV_FILE_NAME: '.env.staging',
         EXTENSION_RELEASE_BASE: join(writableParent, 'extension-releases'),
+        EXTENSION_WEBSITE_PUBLICATION_ROOT: join(root, 'website-publication'),
       },
     });
     assert.notEqual(result.status, 0);

@@ -119,7 +119,10 @@ SMOKE_EXPECT_RUNTIME=local SMOKE_BASE_URL=http://127.0.0.1:3001 pnpm --filter se
 服务器本身就是一个 git checkout 时，直接用：
 
 ```bash
-./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy-staging.sh <full-target-commit>
 ```
 
 优点是简单，适合单机小团队。
@@ -135,25 +138,37 @@ pnpm env:check -- --profile local --env .env
 如果你更看重回滚速度和版本隔离，使用：
 
 ```bash
-DEPLOY_HOST=<server> DEPLOY_USER=<user> ./scripts/deploy.sh
+DEPLOY_HOST=<server> DEPLOY_USER=<user> \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy.sh <full-target-commit>
 ```
 
 优点是每次发布都有独立版本目录，失败可以快速切回上一版。
 
-本地离线客户如果没有开发能力，优先选方式 A：服务器上保留 GitHub checkout，远程协助时只需要 `git pull` + `deploy-staging.sh`。等到客户对停机敏感，再切到方式 B。
+本地离线部署同样不能绕过候选四件套和外置 Ed25519 签名。上面两个代码块都是模板，必须先按
+`docs/deployment.md` 完成独立批准的生产构建与签名，并替换所有尖括号占位符；缺少任一签名变量时
+部署入口会在构建或停服前失败。本地离线客户如果没有开发能力，优先选方式 A：服务器保留 GitHub
+checkout，由受控远程运维上传目标 commit 对应的候选和签名后运行 `deploy-staging.sh`。等到客户对停机
+敏感，再切到方式 B。
 
 ### 本地版推荐更新流程
 
-1. 拉取最新代码或切换到目标 commit，记录完整 40 位 `TARGET_COMMIT`。
-2. 在目标服务器上从该 revision 的私有运维 checkout 加载应用 env 和
+1. 拉取最新代码或切换到目标 commit，记录完整 40 位 `TARGET_COMMIT`；按独立生产构建授权生成
+   cloud/local 同版候选四件套。
+2. 在受保护的外部签名环境按第二道授权签署 exact candidate；构建成功不授权签名，签名成功也不
+   授权部署。
+3. 在目标服务器上从该 revision 的私有运维 checkout 加载应用 env 和
    `/etc/ss-erp-backup.env`，生成目标 commit 绑定的备份。
-3. 把同一份备份恢复到临时数据库；只有实际数据库身份一致、public 表数为正、临时库成功删除且
+4. 把同一份备份恢复到临时数据库；只有实际数据库身份一致、public 表数为正、临时库成功删除且
    `verify-deploy-backup.sh "$TARGET_COMMIT"` 通过时才继续。
-4. 使用 `deploy-staging.sh`、`deploy-app-dir.sh "$TARGET_COMMIT"` 或
+5. 在第三道部署授权下使用 `deploy-staging.sh`、`deploy-app-dir.sh "$TARGET_COMMIT"` 或
    `deploy.sh "$TARGET_COMMIT"` 中与安装模式匹配的一条标准入口。入口负责 build、停止旧版
    API/Worker、再次验证认证、migration、暗态检查、整体启动和 readiness。
-5. 跑 `pnpm smoke:remote` 或本地 smoke。
-6. 如果失败，保持 API/Worker 停止并按 Runbook 处理；数据库迁移不可逆时必须按该版本的发布说明
+6. 跑 `pnpm smoke:remote` 或本地 smoke。本地离线部署到此结束，不得把部署授权解释为官网发布或
+   真实试点授权。
+7. 如果失败，保持 API/Worker 停止并按 Runbook 处理；数据库迁移不可逆时必须按该版本的发布说明
    恢复已认证备份。
 
 涉及唯一索引或写入契约变化的版本不支持新旧 API 滚动共存。必须先完成构建，再停掉旧 API/Worker，迁移后整体启动新版本。
@@ -203,6 +218,12 @@ pnpm verify:extension
 ```
 
 local 包允许访问本地 API 和本地运行态，适合局域网或单机部署。cloud 包用于 SaaS 域名和线上 API，二者不要混用。
+
+本地 local 包交付不切换第一方官网 publication pointer。若同一版本另行进入 SaaS 官网分发，仍须
+完整执行五道独立授权及固定顺序：`package -> external release sign -> deploy/dark canary -> sign
+website approval -> activate pointer -> distribution probe -> final verify -> same-path upgrade ->
+independently approved pilot`。公开 probe 与最终 verifier 必须同时传入 `--approval` 和
+`--dark-canary`；本地安装或 smoke 不能替代这些区域官网证据，也不能授权 Provider/Ozon 写入。
 
 ## 什么时候该分拆 worker
 

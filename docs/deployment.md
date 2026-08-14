@@ -214,16 +214,35 @@ verifier 全部通过，才会重建应用服务。失败或超时时旧服务�
 
 标准 systemd 部署应使用 `scripts/deploy.sh`、`scripts/deploy-app-dir.sh` 或 `scripts/deploy-staging.sh`，它们同样在 migration 后、切换或重启服务前执行暗态 verifier。四类入口的 `MIGRATION_TIMEOUT` 默认都是 `20m`，只接受正整数加 `s`、`m` 或 `h`，例如 `900s`、`20m`、`1h`。Linux 脚本通过进程环境覆盖；Compose 在 `.env.production` / `.env.staging` 中设置：
 
+正式发布必须使用五个独立、不可传递的操作员授权门：
+
+1. **生产构建**：只允许从最终 clean commit 为 `.com` 和 `.cn` 分别生成并验证候选四件套；不包含私钥使用、生产网络访问、部署或业务写入。
+2. **签名**：只允许使用受保护的 Ed25519 私钥签署已批准候选；构建成功不自动授权本步骤。
+3. **生产部署与暗态 canary**：只允许把已签名、区域匹配的候选部署到明确主机，并保持全部新功能暗态完成只读/临时会话 canary；签名成功不自动授权部署。
+4. **官网分发与同路径升级**：只允许在对应区域暗态 gate 通过后签署 website approval，以 compare-and-swap 激活独立 publication pointer，生成并验证官网分发回执，再完成同路径升级、活动 worker 和 Unicode smoke 证据；部署成功不自动授权签署 approval、切换 pointer、分发或升级。
+5. **试点验证**：只允许在精确 owner/shop/device、offer 前缀、draft revision、回滚命令和责任操作员全部绑定后执行批准的 Provider 或 Ozon 写入；部署、canary 或升级成功不自动授权试点。
+
+固定顺序为 `生产构建 -> 外部 release 签名 -> 双区域暗部署/canary -> 签署 website approval -> 激活 publication pointer -> 官网分发 probe -> 最终 publication verifier -> 同路径扩展升级 -> 单独批准的试点`。前两步、部署/canary、website publication/升级和试点分别属于上述五道授权；每一门都必须记录目标完整 commit、扩展版本、区域、操作者、输入证据和允许的副作用，批准其中一门不代表批准后续门。构建应绑定文档清理和验证完成后的最终 commit，不能提前复用中间工作树提交。
+
+这里的“独立”指操作员授权、允许副作用和证据交接互不传递。当前 release signature、website
+approval 与 distribution receipt 使用同一 active Ed25519 `keyId`/trusted keyring，但各自使用不同的
+domain-separated payload；因此这是单一密码学信任域中的三类证据，不得描述为密码学职责分离。若要
+由不同密码学主体签署，必须先引入独立 key role/keyring、轮换和验证策略，再修改发布声明。
+
 三个 systemd 部署脚本不再生成或递增扩展版本。正式候选必须先在完整 `QA-02`/`QA-04`
 对应的 clean commit 上按独立 origin 区域各执行一次 `pnpm package:extension`。同一发布的区域候选必须
 使用相同 target commit 和扩展版本，但 `.com` 与 `.cn` 的 cloud 包、evidence、签名及官网回执必须
-分别绑定各自的 Web/Admin/API origin；不得把一个区域的四件套部署到另一区域。完成外部签名和安装
-升级验收后，再把与目标机区域一致的 canonical 四件套预置到该目标机。`init-server.sh` 会创建 root-owned
+分别绑定各自的 Web/Admin/API origin；不得把一个区域的四件套部署到另一区域。完成外部签名并验证
+签名证明后，把与目标机区域一致的 canonical 四件套预置到该目标机；暗部署/canary 通过后，才能
+签署 website approval、原子激活官网 publication pointer、生成官网分发回执并执行同路径安装升级验收。
+`init-server.sh` 会创建 root-owned
 `/var/lib/ss-erp-extension-releases`；每个 commit 使用一个 root-owned、不可被 group/world 写入、
 构建用户只读的子目录，并通过进程环境传入：
 
 ```bash
 EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit>
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256>
 ```
 
 本地可先把包含多版历史产物的 build root 收敛成待上传的精确四件套；四项 origin 必须与目标
@@ -243,7 +262,10 @@ node scripts/stage-extension-release.mjs \
 ```
 
 把该目录内四个原始文件上传后，以 `root:root`、文件 `0644`、目录 `0755` 安装到上述远端
-路径。`deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在构建用户下重新验证完整 commit、
+路径。签名侧车必须留在候选四件套目录之外；三个脚本会先校验其 root-owned/0644 身份、canonical
+JSON、可信 Ed25519 keyring、证据摘要、目标完整 commit 和操作员批准的签名 SHA-256，再在应用构建的
+`build/extension-release-publication/` 封存一份签名与只读的 `build/extension-release-signature.sha256`。
+`deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在构建用户下重新验证完整 commit、
 package-input digest、origin、ZIP SHA/CRC/文件数，然后逐字节暂存到本次应用构建；任何缺失、额外
 匹配候选、符号链接、可写文件或字节漂移都会失败。暂存后 root 会立即收回构建用户写权限，封存
 树再通过可信脚本与远端原候选四项逐文件、逐字节比较；比较发生在 migration/切换之前。部署不再调用
@@ -278,16 +300,28 @@ marker。上传、备份、sandbox evidence 与 commit-scoped Next cache 位于�
 `DEPLOY_RUNTIME_ROOT=/opt/ss-erp.runtime`；root-owned symlink 保持最小写边界。更新、migration、restart 或 health
 任一步失败时 maintenance 与停服状态保持，需操作员恢复；不要在服务运行时手工调用 `thaw`。
 
-生产下载端点只接受 repository source 生成、与当前 `DEPLOYED_COMMIT` 精确绑定的一套 canonical
-release evidence、双包 SHA-256 清单和原始 ZIP；缺任一目标、commit 不符或 ZIP 被替换时统一返回
-404，且不会从 unpacked 目录现场重建。clean checkout 在正式打包时记录的 `commitSource=GIT_HEAD`
+生产下载端点只接受由独立 root-owned publication pointer 指向、已签 release、暗态 canary 与 website
+approval 全部验证通过的一套 canonical release evidence、双包 SHA-256 清单和原始 ZIP；应用部署脚本
+不会创建或切换该 pointer。缺任一目标、批准绑定不符或 ZIP 被替换时统一返回 404，且不会从 unpacked
+目录现场重建。暗部署新 commit 时，官网可以没有 pointer，也可以继续服务不同 commit 的旧批准版本；
+`VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false` 会读取真实 `/api/extensions/latest` 并拒绝
+pointer 已提前指向本次 `DEPLOYED_COMMIT`。设置为 `true` 时反向要求 pointer 已指向当前 commit。
+`VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED` 独立校验不可变 cloud 包内物流开关，两者不得互相
+推导。clean checkout 在正式打包时记录的 `commitSource=GIT_HEAD`
 可部署到相同 commit 的 `DEPLOYED_COMMIT` 目标；commitSource 只描述取证上下文，不替代 commit
 身份校验。`/api/extensions/latest` 返回的每个下载 URL 都包含不可变 version 与
-SHA-256；Server 启动时只解析一次当前元数据，首次下载时只校验并缓存所选 target 的 ZIP，下载
-响应同时携带 `X-Content-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示 canonical 四件套本身
+SHA-256；生产请求从独立 pointer 重新验证 approval、签名、canary 与候选绑定，下载响应同时携带
+`X-Content-SHA256` 和 `X-Publication-Approval-SHA256`。`signatureStatus=EXTERNAL_REQUIRED` 仍表示 canonical 四件套本身
 不内嵌签名；必须另行保留 Ed25519 签名侧车和官网双包下载回执，下载可用不等于 `REL-03` 完成。
 `deploy-staging.sh` 不接受 `--skip-build`；每个目标
 commit 仍必须重新编译 Server/Web 并复验预置扩展候选，避免新 marker/migration 配上旧应用构建。
+`verify-vps-deploy.sh` 会从封存的 publication 目录和 SHA-256 sidecar 读取签名并执行同一 verifier。
+当前线上旧基线 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` 没有签名封存时只允许明确的兼容警告；任何
+其他目标 commit 缺少签名元数据都会失败。兼容例外只固定到当前线上旧基线
+`0c326b10feed5f971052c1d1d6ecb3bd3e61ca13`；`VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT`
+仅作为诊断名称保留，脚本会拒绝任何不同的环境覆盖。变更兼容基线必须修改源码、重新审查并重新发布，
+不得通过环境变量把新候选标记为 legacy。该例外只跳过旧基线不存在的 Ed25519 侧车校验；四件套数量、
+commit、origin、checksum、ZIP 结构、物流开关和正式 release verifier 仍必须全部通过。
 
 ```env
 MIGRATION_TIMEOUT=20m
@@ -357,7 +391,18 @@ pnpm canary:rel04:dark
 
 三项 capability expectation 必须来自部署前已审计策略，不能照抄响应；这样
 `config_unavailable`、非法策略或 revision mismatch 不会被误判为暗态。该 canary 不能替代
-`verify-vps-deploy.sh`、systemd/Web 检查或后续官网 ZIP probe。
+`verify-vps-deploy.sh`、systemd/Web 检查或后续官网 ZIP probe。暗部署阶段必须明确保持
+`VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false` 和
+`VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false`；VPS verifier 会分别证明 cloud 包内
+物流开关为 false，并从区域官网读取 `/api/extensions/latest`，确认新部署 commit 尚未被 publication
+pointer 公开。官网继续服务不同 commit 的旧批准版本属于预期，不要求先下线旧下载：
+
+```bash
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging \
+bash scripts/verify-vps-deploy.sh
+```
 
 正式扩展发布还要求私有部署 env 明确提供四项独立审批证据。前三项是不带路径、查询或片段
 的公开 HTTPS origin；local 首版只允许固定 loopback origin：
@@ -380,7 +425,8 @@ EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001
 不是 Chrome Web Store。canonical 候选目录
 必须始终只保留两份 ZIP、checksum 和 release evidence 四个文件；Ed25519 私钥只能位于操作员的
 受保护私密目录，仓库只保留 `config/extension-release-trusted-keys.json` 公钥 keyring。签名和回执
-必须显式输出到候选目录之外：
+必须显式输出到候选目录之外。私钥及其目录不得上传到 VPS；两个签名命令只在受保护的外部签名
+环境运行，VPS 只接收已签的公开证据：
 
 ```bash
 export EXTENSION_RELEASE_SIGNING_KEY_ID=ss-erp-extension-release-2026-08-02-01
@@ -422,8 +468,73 @@ release evidence、detached signature、官网 distribution receipt、ZIP SHA-25
 managed path、同一 extension ID、非密 profile 保留与 session-only 状态清除；随后再绑定上述
 active-worker 和 Unicode smoke 两份回执 SHA-256。缺少任一项都不能声明 same-path upgrade 通过。
 
-实际下载回执只能在 `REL-04` 暗部署
-并通过 pre-enable canary 后生成：探针不带 Cookie/Authorization、拒绝跳转，先读取
+实际下载回执只能在 `REL-04` 暗部署并通过 pre-enable canary、website approval 已独立签署且
+publication pointer 已通过 CAS 激活后生成。部署脚本绝不替操作员切换 pointer。首次激活把
+`--expected-current-approval-sha256` 设为 `NONE`；后续升级必须传入已审计的旧 pointer SHA-256，摘要
+不匹配即保持旧批准版本继续服务。release signature 的 `signedAt` 必须不晚于 canary `observedAt`，
+且 canary 必须不晚于 approval `approvedAt`。示例中的摘要必须来自独立审批记录，不得用占位符执行。
+先在外部签名环境运行：
+
+```bash
+export RELEASE_SIGNATURE="$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json"
+export RELEASE_SIGNATURE_SHA256=<operator-approved-release-signature-sha256>
+export DARK_CANARY=/operator-private/rel04-dark-canary.json
+export DARK_CANARY_SHA256=<operator-approved-dark-canary-sha256>
+export WEBSITE_APPROVAL="$PUBLICATION/ss-erp-extension-$VERSION.website-publication-approval.json"
+export WEBSITE_APPROVAL_SHA256=<operator-approved-website-approval-sha256>
+export CURRENT_WEBSITE_APPROVAL_SHA256=<current-approved-pointer-sha256-or-NONE>
+
+node scripts/sign-extension-website-publication.mjs \
+  --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
+  --release-signature "$RELEASE_SIGNATURE" \
+  --expected-release-signature-sha256 "$RELEASE_SIGNATURE_SHA256" \
+  --dark-canary "$DARK_CANARY" \
+  --expected-dark-canary-sha256 "$DARK_CANARY_SHA256" \
+  --distribution-origin https://ss-erp.com \
+  --region COM \
+  --keyring config/extension-release-trusted-keys.json \
+  --output "$WEBSITE_APPROVAL"
+```
+
+通过受认证传输只把 website approval 与原始 dark-canary 文件送到 VPS 临时入口；不要传私钥。然后在
+VPS 上把两份输入安装成 root-owned、不可由 group/world 写入的文件，并只使用 active deployment
+内已经封存的四件套、release signature 和 SHA-256 sidecar：
+
+```bash
+export ACTIVE_DEPLOY_DIR=/opt/ss-erp/current
+export TARGET_COMMIT="$(cat "$ACTIVE_DEPLOY_DIR/DEPLOYED_COMMIT")"
+export WEBSITE_INPUT_ROOT="/var/lib/ss-erp-extension-publication-inputs/$TARGET_COMMIT"
+export UPLOADED_WEBSITE_APPROVAL=/root/incoming/ss-erp-extension-$VERSION.website-publication-approval.json
+export UPLOADED_DARK_CANARY=/root/incoming/rel04-dark-canary.json
+export STAGED_WEBSITE_APPROVAL="$WEBSITE_INPUT_ROOT/ss-erp-extension-$VERSION.website-publication-approval.json"
+export STAGED_DARK_CANARY="$WEBSITE_INPUT_ROOT/rel04-dark-canary.json"
+export ACTIVE_CANDIDATE="$ACTIVE_DEPLOY_DIR/build/extensions"
+export ACTIVE_RELEASE_SIGNATURE="$ACTIVE_DEPLOY_DIR/build/extension-release-publication/ss-erp-extension-$VERSION.release-signature.json"
+export DEPLOY_LOCK=/var/lib/ss-erp-deploy-build/deploy.lock
+
+sudo install -d -o root -g root -m 0755 "$WEBSITE_INPUT_ROOT"
+sudo install -o root -g root -m 0644 "$UPLOADED_WEBSITE_APPROVAL" "$STAGED_WEBSITE_APPROVAL"
+sudo install -o root -g root -m 0600 "$UPLOADED_DARK_CANARY" "$STAGED_DARK_CANARY"
+
+sudo node "$ACTIVE_DEPLOY_DIR/scripts/activate-extension-website-publication.mjs" \
+  --active-deployed-commit "$ACTIVE_DEPLOY_DIR/DEPLOYED_COMMIT" \
+  --approval "$STAGED_WEBSITE_APPROVAL" \
+  --candidate-root "$ACTIVE_CANDIDATE" \
+  --dark-canary "$STAGED_DARK_CANARY" \
+  --expected-approval-sha256 "$WEBSITE_APPROVAL_SHA256" \
+  --expected-current-approval-sha256 "$CURRENT_WEBSITE_APPROVAL_SHA256" \
+  --deploy-lock "$DEPLOY_LOCK" \
+  --expected-distribution-origin https://ss-erp.com \
+  --expected-region COM \
+  --keyring "$ACTIVE_DEPLOY_DIR/config/extension-release-trusted-keys.json" \
+  --publication-root /var/lib/ss-erp-extension-publications \
+  --release-signature "$ACTIVE_RELEASE_SIGNATURE"
+```
+
+激活返回 `ACTIVATED` 或在完整复验和 fsync/re-read 后返回 `ALREADY_ACTIVATED`，才可运行公开探针。
+若返回 `UNKNOWN_OUTCOME`，命令以非零状态结束；停止自动下游，不得改 CAS 值或盲目切换，确认 active
+deployment 未变化后以完全相同 approval、摘要和旧 pointer 摘要重跑。重跑只有明确返回
+`ALREADY_ACTIVATED`/`ACTIVATED` 才能继续。探针不带 Cookie/Authorization、拒绝跳转，先读取
 `/api/extensions/latest`，再完整下载 cloud/local 两个 version/SHA URL，并核对 Content-Length、
 Content-Disposition、`X-Content-SHA256` 和 body SHA-256。
 
@@ -431,23 +542,34 @@ Content-Disposition、`X-Content-SHA256` 和 body SHA-256。
 node scripts/probe-extension-website-distribution.mjs \
   --origin https://ss-erp.com \
   --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
-  --signature "$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json" \
+  --signature "$RELEASE_SIGNATURE" \
+  --approval "$WEBSITE_APPROVAL" \
+  --dark-canary "$DARK_CANARY" \
   --output "$PUBLICATION/ss-erp-extension-$VERSION.distribution-receipt.json"
 
 node scripts/verify-extension-publication.mjs \
   --evidence "$CANDIDATE/ss-erp-extension-$VERSION.release-evidence.json" \
-  --signature "$PUBLICATION/ss-erp-extension-$VERSION.release-signature.json" \
+  --signature "$RELEASE_SIGNATURE" \
+  --approval "$WEBSITE_APPROVAL" \
+  --dark-canary "$DARK_CANARY" \
   --receipt "$PUBLICATION/ss-erp-extension-$VERSION.distribution-receipt.json" \
   --keyring config/extension-release-trusted-keys.json
+
+# pointer 已激活，但不可变候选内的物流开关仍保持本次构建值。
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=true \
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging \
+bash scripts/verify-vps-deploy.sh
 ```
 
 国际站和国内站必须分别运行上述 probe/verifier：国际站使用 `https://ss-erp.com` 及 `.com` 候选，
 国内站使用 `https://ss-erp.cn` 及 `.cn` 候选。两份回执不得混用；候选可以同版、同 commit，但其
 evidence/signature/receipt SHA-256 必然独立。
 
-因此执行顺序是 `REL-03a package/sign -> REL-04 dark deploy/canary -> REL-03b website receipt`；只有
-最终 verifier 通过，`REL-03` 与 `REL-04` 才能同时关闭并进入 `REL-02`。任何阶段都不能把私钥复制
-到仓库、VPS、命令参数、日志或候选四件套。
+因此执行顺序是 `package -> external release sign -> deploy/dark canary -> sign website approval ->
+activate pointer -> distribution probe -> final verify -> same-path upgrade -> independently approved
+pilot`。只有最终 verifier 与同路径升级证据都通过，`REL-03` 与 `REL-04` 才能同时关闭；进入
+`REL-02` 仍需第五道独立试点授权。任何阶段都不能把私钥复制到仓库、VPS、命令参数、日志或候选四件套。
 
 `ai_media_workflow_v2_rollout_policy` 必须是合法 JSON、revision 为非负整数且 `tenantIds` 为空。Compose 以 `migrate` service 的成功退出作为强制门禁；以下宿主机命令仅用于独立审计和故障排查：
 

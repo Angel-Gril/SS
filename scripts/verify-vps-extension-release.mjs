@@ -7,7 +7,7 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
+  readSync,
   readdirSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -18,9 +18,12 @@ import {
   parseExtensionReleaseEvidence,
 } from './extension-release-contract.mjs';
 import { parseStoredZip } from './verify-extension-archive.mjs';
+import { verifyExtensionReleaseSignature } from './verify-extension-release-signature.mjs';
 
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const FULL_GIT_COMMIT = /^[a-f0-9]{40}$/u;
+export const LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT =
+  '0c326b10feed5f971052c1d1d6ecb3bd3e61ca13';
 
 function fail(message) {
   throw new Error(message);
@@ -66,7 +69,13 @@ function readStableFile(file, label, maxBytes) {
     );
     const opened = fstatSync(descriptor, { bigint: true });
     if (!sameFileSnapshot(before, opened)) fail(`${label} changed while it was opened`);
-    const bytes = readFileSync(descriptor);
+    const bytes = Buffer.allocUnsafe(Number(opened.size));
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(descriptor, bytes, offset, bytes.length - offset, offset);
+      if (count < 1) fail(`${label} changed while it was read`);
+      offset += count;
+    }
     const openedAfter = fstatSync(descriptor, { bigint: true });
     const pathAfter = lstatSync(file, { bigint: true });
     if (!sameFileSnapshot(before, openedAfter) || !sameFileSnapshot(before, pathAfter)) {
@@ -180,7 +189,7 @@ export function verifyVpsExtensionRelease(input, dependencies = {}) {
     path.resolve(input.deployedCommitFile),
     'DEPLOYED_COMMIT',
     128,
-  ).toString('utf8').match(/^([a-f0-9]{40})\n$/u)?.[1];
+  ).toString('utf8').match(/^([a-f0-9]{40})(?:\n)?$/u)?.[1];
   if (!expectedGitCommit || !FULL_GIT_COMMIT.test(expectedGitCommit)) {
     fail('DEPLOYED_COMMIT must contain one canonical full Git commit');
   }
@@ -194,6 +203,38 @@ export function verifyVpsExtensionRelease(input, dependencies = {}) {
   }
   if (JSON.stringify(evidence.expectedOrigins) !== JSON.stringify(expectedOrigins)) {
     fail('extension release evidence origins do not match the deployment');
+  }
+
+  const legacyUnsignedBaseline = String(input.legacyUnsignedBaseline || '');
+  const legacyUnsigned = legacyUnsignedBaseline !== '';
+  if (legacyUnsigned
+    && (legacyUnsignedBaseline !== LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT
+      || expectedGitCommit !== LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT)) {
+    fail('legacy unsigned verification is fixed to the deployed compatibility baseline');
+  }
+  if (legacyUnsigned && (input.signaturePath || input.expectedSignatureSha256 || input.keyringPath)) {
+    fail('legacy unsigned verification cannot accept signature inputs');
+  }
+
+  let signature;
+  if (legacyUnsigned) {
+    signature = {
+      status: 'LEGACY_UNSIGNED_FIXED_BASELINE',
+      gitCommit: expectedGitCommit,
+      version: evidence.version,
+    };
+  } else {
+    const signatureVerify = dependencies.signatureVerify || verifyExtensionReleaseSignature;
+    signature = signatureVerify({
+      buildRoot: candidate.absolute,
+      signaturePath: input.signaturePath,
+      expectedSignatureSha256: input.expectedSignatureSha256,
+      expectedGitCommit,
+      ...(input.keyringPath ? { keyringPath: input.keyringPath } : {}),
+    });
+    if (signature.gitCommit !== expectedGitCommit || signature.version !== evidence.version) {
+      fail('extension release signature result does not match the candidate');
+    }
   }
 
   const checksumPath = path.join(candidate.absolute, evidence.checksumFilename);
@@ -239,13 +280,14 @@ export function verifyVpsExtensionRelease(input, dependencies = {}) {
     gitCommit: expectedGitCommit,
     version: evidence.version,
     cloudLogisticsEnabled: input.expectedCloudLogisticsEnabled,
+    signature,
     files: candidate.names,
   };
 }
 
 function parseArguments() {
   const args = process.argv.slice(2);
-  const allowed = new Set([
+  const required = new Set([
     '--build-root',
     '--deployed-commit-file',
     '--expected-web-origin',
@@ -254,7 +296,13 @@ function parseArguments() {
     '--expected-local-origin',
     '--expected-cloud-logistics-enabled',
   ]);
-  if (args.length !== allowed.size * 2) fail('VPS extension verifier arguments are incomplete');
+  const allowed = new Set([
+    ...required,
+    '--signature',
+    '--expected-signature-sha256',
+    '--legacy-unsigned-baseline',
+  ]);
+  if (args.length % 2 !== 0) fail('VPS extension verifier arguments are incomplete');
   const values = new Map();
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index];
@@ -264,7 +312,24 @@ function parseArguments() {
     }
     values.set(name, value);
   }
-  if (values.size !== allowed.size) fail('VPS extension verifier arguments are incomplete');
+  if ([...required].some((name) => !values.has(name))) {
+    fail('VPS extension verifier arguments are incomplete');
+  }
+  let legacyUnsignedBaseline = values.get('--legacy-unsigned-baseline') || '';
+  const hasSignature = values.has('--signature');
+  const hasSignatureDigest = values.has('--expected-signature-sha256');
+  if (legacyUnsignedBaseline) {
+    if (legacyUnsignedBaseline !== LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT
+      || hasSignature || hasSignatureDigest) {
+      fail('legacy unsigned verifier mode is fixed and mutually exclusive with signatures');
+    }
+  } else if (!hasSignature && !hasSignatureDigest) {
+    // Keep the fixed old baseline compatible with the pre-signature verifier CLI.
+    legacyUnsignedBaseline = LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT;
+    values.set('--legacy-unsigned-baseline', LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT);
+  } else if (!hasSignature || !hasSignatureDigest) {
+    fail('VPS extension verifier signature arguments are incomplete');
+  }
   const logisticsText = values.get('--expected-cloud-logistics-enabled');
   if (!['true', 'false'].includes(logisticsText)) {
     fail('--expected-cloud-logistics-enabled must be true or false');
@@ -279,6 +344,12 @@ function parseArguments() {
       local: values.get('--expected-local-origin'),
     },
     expectedCloudLogisticsEnabled: logisticsText === 'true',
+    ...(legacyUnsignedBaseline
+      ? { legacyUnsignedBaseline }
+      : {
+          signaturePath: values.get('--signature'),
+          expectedSignatureSha256: values.get('--expected-signature-sha256'),
+        }),
   };
 }
 

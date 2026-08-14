@@ -157,6 +157,14 @@ Before production pilot, require exact endpoint/model/operation evidence, cloud/
 verification, accessibility/responsive QA, default-off flags, rollback controls, and both VPS
 canaries.
 
+Treat production build, external signing, production deployment/dark canary, website
+publication/same-path upgrade, and real pilot writes as five independent operator approvals. An
+approval authorizes only its named stage and never carries forward. Build both regions from the
+final clean commit; sign only the approved immutable candidates; deploy only region-matched signed
+candidates; publish only after the regional dark gate passes; run Provider or Ozon writes only
+after a separate pilot approval binds exact owner, shop, device, input revision, rollback command,
+offer prefix, and responsible operator.
+
 ## Progress and Handoff
 
 After each completed task, report the exact commit, tests, remaining gates, feature flags,

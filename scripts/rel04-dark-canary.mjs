@@ -775,33 +775,50 @@ export async function runRel04DarkCanary(input, dependencies = {}) {
   }
 
   async function normalChecks() {
-    let activeCheck = 'readiness-and-release';
+    let activeCheck = 'deployment-and-publication-isolation';
     try {
       const ready = await requestJson('GET /ready', 'GET', '/ready');
       if (ready.body?.status !== 'ready'
         || ready.body?.checks?.db !== 'ok'
-        || ready.body?.checks?.redis !== 'ok') fail('SERVICE_READINESS_FAILED');
+        || ready.body?.checks?.redis !== 'ok'
+        || ready.body?.deployment?.gitCommit !== expectedGitCommit) {
+        fail('SERVICE_READINESS_FAILED');
+      }
       await verifyExtensionCorsPreflight();
       const latest = await requestJson(
         'GET /api/extensions/latest',
         'GET',
         '/api/extensions/latest',
+        { expectedStatuses: [200, 404] },
       );
-      const release = exactObject(latest.body?.data, 'RELEASE_METADATA');
-      if (latest.body?.code !== 1
-        || release.gitCommit !== expectedGitCommit
-        || release.signatureStatus !== 'EXTERNAL_REQUIRED'
-        || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(release.version)) {
-        fail('DEPLOYED_RELEASE_MISMATCH');
+      let existingPublication = null;
+      if (latest.status === 200) {
+        const release = exactObject(latest.body?.data, 'RELEASE_METADATA');
+        if (latest.body?.code !== 1
+          || release.gitCommit === expectedGitCommit
+          || !/^[a-f0-9]{40}$/u.test(release.gitCommit)
+          || release.signatureStatus !== 'EXTERNAL_REQUIRED'
+          || !/^[a-f0-9]{64}$/u.test(release.publicationApprovalSha256)
+          || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(release.version)) {
+          fail('DEPLOYED_CANDIDATE_PREMATURELY_PUBLISHED');
+        }
+        existingPublication = {
+          gitCommit: release.gitCommit,
+          version: release.version,
+          publicationApprovalSha256: release.publicationApprovalSha256,
+          targets: {
+            cloud: releaseTarget(release, 'cloud', apiOrigin, release.version),
+            local: releaseTarget(release, 'local', apiOrigin, release.version),
+          },
+        };
+      } else if (latest.body?.code !== 0) {
+        fail('WEBSITE_PUBLICATION_GATE_INVALID');
       }
-      const cloud = releaseTarget(release, 'cloud', apiOrigin, release.version);
-      const local = releaseTarget(release, 'local', apiOrigin, release.version);
       checks.push(checkResult(activeCheck, {
-        gitCommit: release.gitCommit,
-        version: release.version,
-        signatureStatus: release.signatureStatus,
+        deployedGitCommit: expectedGitCommit,
+        deployedCandidatePublic: false,
+        existingPublication,
         extensionCorsPreflight: true,
-        targets: { cloud, local },
       }));
 
       activeCheck = 'default-off-policy';

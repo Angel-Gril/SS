@@ -34,6 +34,18 @@ Production fixes must be commit-bound:
 
 Do not patch application source directly under `/opt/ss-erp/app`, `/opt/ss-erp`, or `/opt/ss-erp/current`. Temporary diagnostic files are fine, but the durable fix must live in Git first. This keeps local code, GitHub, and the VPS rebuildable from the same commit.
 
+Extension release operations use five independent approvals: production package, external release
+signature, production deploy/dark canary, website publication plus same-path upgrade, and the pilot.
+These approvals are operationally independent and non-transitive. The current release signature,
+website approval, and distribution receipt use domain-separated payloads under the same active
+Ed25519 key and keyring; they are not separate cryptographic trust domains.
+The exact order is `package -> external release sign -> deploy/dark canary -> sign website approval
+-> activate pointer -> distribution probe -> final verify -> same-path upgrade -> independently
+approved pilot`. Deployment never activates
+`/var/lib/ss-erp-extension-publications/current.website-publication-approval.json`. During the dark
+gate, `/api/extensions/latest` may be 404 or may continue to serve a previously approved commit; it
+must not expose the new `DEPLOYED_COMMIT` until the separate website-publication approval is signed.
+
 Deploy the latest local commit from your workstation:
 
 ```bash
@@ -41,6 +53,9 @@ DEPLOY_HOST=45.76.49.64 \
 DEPLOY_USER=root \
 SSH_KEY=~/.ssh/ss_erp_vultr_sg \
 DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
 ./scripts/deploy-app-dir.sh
 ```
 
@@ -49,7 +64,11 @@ The script packages the requested commit, uploads it to the server, builds it in
 Deploy a specific commit:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh 4b47043
+DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 \
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+./scripts/deploy-app-dir.sh <full-target-commit>
 ```
 
 Every migration requires a separate pre-deploy backup and restore drill. Set the same stable
@@ -117,6 +136,8 @@ ssh -i ~/.ssh/ss_erp_vultr_sg root@45.76.49.64
 cd /opt/ss-erp/app
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 ```
 
@@ -337,7 +358,11 @@ Override them with `API_SERVICE`, `WORKER_SERVICE`, and `WEB_SERVICE` if needed.
 From the local repository:
 
 ```bash
-EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 \
+./scripts/deploy.sh
 ```
 
 When a region is reachable only through an audited jump host, keep the host blocks and their
@@ -349,7 +374,11 @@ credential in a command argument. Keep strict host-key checking enabled for both
 Deploy a specific commit:
 
 ```bash
-EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh <full-target-commit>
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 \
+./scripts/deploy.sh <full-target-commit>
 ```
 
 The script:
@@ -387,7 +416,10 @@ If the VPS is itself a git checkout and you want the lowest-friction update path
 
 ```bash
 cd /opt/ss-erp
-EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+EXTENSION_RELEASE_ROOT=/var/lib/ss-erp-extension-releases/<full-target-commit> \
+EXTENSION_RELEASE_SIGNATURE_PATH=/var/lib/ss-erp-extension-release-signatures/<full-target-commit>/ss-erp-extension-<version>.release-signature.json \
+EXTENSION_RELEASE_SIGNATURE_SHA256=<operator-approved-detached-signature-sha256> \
+DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
 That path is available only after the exact target gate is installed from a root-owned revision
@@ -395,8 +427,11 @@ archive as described above. The release/symlink path is preferred when you want 
 and one-command application rollback.
 
 All three systemd deployment modes require the exact four-file extension candidate to be installed
-under the supplied root-owned `EXTENSION_RELEASE_ROOT` first. Deployment re-verifies and copies that
-candidate; it never rebuilds or increments the extension version.
+under the supplied root-owned `EXTENSION_RELEASE_ROOT` first, plus the externally signed JSON and its
+operator-approved SHA-256 sidecar at the paths shown above. Replace every angle-bracket placeholder
+with the approved release values before execution; deployment re-verifies and copies that candidate and
+signature, and never rebuilds or increments the extension version. A command without both signature
+variables is intentionally rejected.
 
 After switching to release mode, the root backup cron must invoke
 `/opt/ss-erp/current/scripts/backup-db.sh` and explicitly set
@@ -411,6 +446,8 @@ target/database-bound backup evidence with a legacy schema.
 - The current smoke and verification scripts still apply after deploying:
 
 ```bash
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false \
+VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false \
 DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 cd /opt/ss-erp/current/apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
 ```
@@ -423,17 +460,29 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-cloud-r
 SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
 ```
 
-Recommended deploy order:
+Recommended deploy and publication order:
 
-1. freeze the full target commit and create its database/restore-bound backup attestation
-2. publish the commit and use one standard deployment entrypoint
-3. let that entrypoint build, quiesce services, verify evidence, migrate, and enforce the dark gate
-4. run `/ready`
-5. run `smoke:live`
-6. run `verify-vps-deploy.sh`
-7. run the target-bound `canary:rel04:dark` contract from `docs/deployment.md`; retain its private
-   mode-0600 summary and verify that cleanup passed
-8. only after both regions pass, run the exact regional website download probe
+1. With the production-build approval, freeze the full target commit, create each regional package,
+   and create its database/restore-bound backup attestation.
+2. With a separate signing approval, externally sign the immutable regional release candidate and
+   verify the approved signature digest.
+3. With the deploy/dark-canary approval, use one standard deployment entrypoint. Let it build,
+   quiesce services, verify evidence, migrate, and enforce the dark gate; then run `/ready`,
+   `smoke:live`, and `VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED=false
+   VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=false verify-vps-deploy.sh`.
+4. Run the target-bound `canary:rel04:dark` contract from `docs/deployment.md`; retain its private
+   mode-0600 summary and verify cleanup. The dark verifier must show that the new deployed commit is
+   not the live website publication; an older approved pointer may remain active.
+5. With the independent website-publication approval, sign the exact release-signature and dark-canary
+   evidence outside the VPS. Never upload the private key. Install only the approval and dark-canary
+   as root-owned staging inputs, then atomically activate the pointer with its expected old approval
+   SHA-256 CAS value using the active deployment's sealed candidate, signature, and SHA sidecar.
+6. Run the exact regional website distribution probe with both `--approval` and `--dark-canary`, then
+   run the publication verifier with the same two inputs. Re-run the VPS verifier with the immutable
+   cloud-package expectation unchanged and `VERIFY_EXPECT_EXTENSION_WEBSITE_PUBLICATION_ENABLED=true`.
+7. Only after final publication verification, replace the managed extension directory in place,
+   reload it, and retain the active-worker, Unicode smoke, and full same-path upgrade evidence.
+8. Execute any Provider or Ozon write only under the fifth, independently approved pilot binding.
 
 ## Existing Non-Release Deploy
 

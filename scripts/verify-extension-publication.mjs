@@ -1,33 +1,33 @@
 #!/usr/bin/env node
 import { createPublicKey, verify } from 'node:crypto';
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readSync,
-} from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   MAX_KEYRING_BYTES,
+  MAX_PUBLICATION_APPROVAL_BYTES,
   MAX_RECEIPT_BYTES,
   MAX_SIGNATURE_BYTES,
   canonicalDistributionReceiptJson,
   canonicalReleaseSignatureJson,
   canonicalTrustedKeyringJson,
+  canonicalWebsitePublicationApprovalJson,
   distributionReceiptPayload,
   parseDistributionReceipt,
   parseReleaseSignature,
   parseTrustedKeyring,
+  parseWebsitePublicationApproval,
   releaseSignaturePayload,
   sha256,
+  websitePublicationApprovalPayload,
 } from './extension-release-publication-contract.mjs';
 import {
   canonicalExtensionReleaseEvidenceJson,
   parseExtensionReleaseEvidence,
 } from './extension-release-contract.mjs';
+import {
+  readStablePublicationFile,
+  verifyRel04DarkCanaryEvidence,
+} from './extension-website-publication-approval.mjs';
 
 const MAX_EVIDENCE_BYTES = 65_536;
 const MAX_CHECKSUM_BYTES = 4096;
@@ -51,7 +51,14 @@ function option(name) {
 }
 
 function assertArguments() {
-  const allowed = new Set(['--evidence', '--signature', '--receipt', '--keyring']);
+  const allowed = new Set([
+    '--evidence',
+    '--signature',
+    '--approval',
+    '--dark-canary',
+    '--receipt',
+    '--keyring',
+  ]);
   const seen = new Set();
   for (let index = 0; index < args.length; index += 2) {
     if (!allowed.has(args[index]) || seen.has(args[index])
@@ -72,37 +79,7 @@ function cliTrustedKeyring(file) {
 }
 
 function readRegularFile(file, maxBytes, field) {
-  const absolute = path.resolve(file);
-  const entry = lstatSync(absolute, { throwIfNoEntry: false });
-  if (!entry?.isFile() || entry.isSymbolicLink() || entry.size < 1 || entry.size > maxBytes) {
-    fail(`${field} is missing, unsafe, or too large`);
-  }
-  let descriptor = null;
-  try {
-    descriptor = openSync(
-      absolute,
-      constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
-    );
-    const before = fstatSync(descriptor, { bigint: true });
-    if (!before.isFile() || before.size < 1n || before.size > BigInt(maxBytes)) {
-      fail(`${field} is missing or too large`);
-    }
-    const size = Number(before.size);
-    const bytes = Buffer.allocUnsafe(size);
-    let offset = 0;
-    while (offset < size) {
-      const count = readSync(descriptor, bytes, offset, size - offset, offset);
-      if (count < 1) fail(`${field} changed while it was being read`);
-      offset += count;
-    }
-    const after = fstatSync(descriptor, { bigint: true });
-    if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
-      fail(`${field} changed while it was being read`);
-    }
-    return bytes;
-  } finally {
-    if (descriptor !== null) closeSync(descriptor);
-  }
+  return readStablePublicationFile(file, maxBytes, field);
 }
 
 function readCanonical(file, parser, canonicalizer, maxBytes, field) {
@@ -137,9 +114,19 @@ function exactDownloadUrl(origin, target, version, digest) {
   return `${origin}/api/extensions/download/${target}/${version}/${digest}`;
 }
 
+function assertApprovalRegion(approval) {
+  const hostname = new URL(approval.distributionOrigin).hostname.toLowerCase();
+  if ((approval.region === 'COM' && !hostname.endsWith('.com'))
+    || (approval.region === 'CN' && !hostname.endsWith('.cn'))) {
+    fail('website publication approval region does not match its origin');
+  }
+}
+
 export function verifyExtensionPublication({
   evidencePath,
   signaturePath,
+  approvalPath,
+  darkCanaryPath,
   receiptPath,
   keyringPath,
   now = new Date(),
@@ -160,6 +147,13 @@ export function verifyExtensionPublication({
     MAX_SIGNATURE_BYTES,
     'release signature',
   );
+  const approvalFile = readCanonical(
+    approvalPath,
+    parseWebsitePublicationApproval,
+    canonicalWebsitePublicationApprovalJson,
+    MAX_PUBLICATION_APPROVAL_BYTES,
+    'website publication approval',
+  );
   const receiptFile = readCanonical(
     receiptPath,
     parseDistributionReceipt,
@@ -176,13 +170,18 @@ export function verifyExtensionPublication({
   );
   const evidence = evidenceFile.value;
   const signature = signatureFile.value;
+  const approval = approvalFile.value;
   const receipt = receiptFile.value;
   if (evidence.signature.status !== 'EXTERNAL_REQUIRED') fail('release is not an external publication candidate');
   const expectedEvidenceFilename = `ss-erp-extension-${evidence.version}.release-evidence.json`;
   const expectedSignatureFilename = `ss-erp-extension-${evidence.version}.release-signature.json`;
+  const expectedApprovalFilename =
+    `ss-erp-extension-${evidence.version}.website-publication-approval.json`;
   const expectedReceiptFilename = `ss-erp-extension-${evidence.version}.distribution-receipt.json`;
   if (path.basename(evidencePath) !== expectedEvidenceFilename
     || path.basename(signaturePath) !== expectedSignatureFilename
+    || path.basename(approvalPath) !== expectedApprovalFilename
+    || path.basename(darkCanaryPath) !== approval.darkCanaryFilename
     || path.basename(receiptPath) !== expectedReceiptFilename
     || signature.releaseEvidenceFilename !== expectedEvidenceFilename
     || signature.releaseEvidenceSha256 !== sha256(evidenceFile.bytes)) {
@@ -197,19 +196,57 @@ export function verifyExtensionPublication({
   )) {
     fail('release signature verification failed');
   }
-  if (receipt.keyId !== signature.keyId
+  const approvalSha256 = sha256(approvalFile.bytes);
+  const approvalKey = activeKey(keyringFile.value, approval.keyId);
+  if (!verify(
+    null,
+    websitePublicationApprovalPayload(approval),
+    approvalKey,
+    Buffer.from(approval.signatureBase64, 'base64'),
+  )) {
+    fail('website publication approval signature verification failed');
+  }
+  assertApprovalRegion(approval);
+  if (approval.keyId !== signature.keyId
+    || approval.gitCommit !== evidence.gitCommit
+    || approval.version !== evidence.version
+    || approval.distributionOrigin !== evidence.expectedOrigins.api
+    || approval.releaseEvidenceFilename !== expectedEvidenceFilename
+    || approval.releaseEvidenceSha256 !== sha256(evidenceFile.bytes)
+    || approval.releaseSignatureFilename !== expectedSignatureFilename
+    || approval.releaseSignatureSha256 !== sha256(signatureFile.bytes)) {
+    fail('website publication approval is not bound to the signed release');
+  }
+  if (Date.parse(approval.approvedAt) < Date.parse(signature.signedAt)) {
+    fail('website publication approval predates the release signature');
+  }
+  if (receipt.keyId !== approval.keyId
     || receipt.releaseEvidenceFilename !== expectedEvidenceFilename
     || receipt.releaseEvidenceSha256 !== sha256(evidenceFile.bytes)
     || receipt.releaseSignatureFilename !== expectedSignatureFilename
-    || receipt.releaseSignatureSha256 !== sha256(signatureFile.bytes)) {
-    fail('distribution receipt is not bound to the signed release');
+    || receipt.releaseSignatureSha256 !== sha256(signatureFile.bytes)
+    || receipt.websitePublicationApprovalFilename !== expectedApprovalFilename
+    || receipt.websitePublicationApprovalSha256 !== approvalSha256
+    || receipt.darkCanarySha256 !== approval.darkCanarySha256) {
+    fail('distribution receipt is not bound to the approved website publication');
   }
-  if (Date.parse(receipt.observedAt) < Date.parse(signature.signedAt)) {
-    fail('distribution receipt predates the release signature');
+  if (Date.parse(receipt.observedAt) < Date.parse(approval.approvedAt)) {
+    fail('distribution receipt predates the website publication approval');
   }
   const receiptAge = nowMs - Date.parse(receipt.observedAt);
   if (receiptAge < -MAX_CLOCK_SKEW_MS || receiptAge > MAX_RECEIPT_AGE_MS) {
     fail('distribution receipt is stale or too far in the future');
+  }
+  const darkCanary = verifyRel04DarkCanaryEvidence({
+    darkCanaryPath,
+    expectedSha256: approval.darkCanarySha256,
+    expectedGitCommit: evidence.gitCommit,
+    expectedApiOrigin: evidence.expectedOrigins.api,
+    approvedAt: approval.approvedAt,
+    now,
+  });
+  if (Date.parse(darkCanary.observedAt) < Date.parse(signature.signedAt)) {
+    fail('REL-04 dark canary observation predates the release signature');
   }
   if (!verify(
     null,
@@ -223,6 +260,7 @@ export function verifyExtensionPublication({
     || receipt.distributionOrigin !== evidence.expectedOrigins.api
     || receipt.latest.version !== evidence.version
     || receipt.latest.gitCommit !== evidence.gitCommit
+    || receipt.latest.publicationApprovalSha256 !== approvalSha256
     || receipt.latest.signatureStatus !== 'EXTERNAL_REQUIRED'
     || receipt.latest.url !== `${receipt.distributionOrigin}/api/extensions/latest`) {
     fail('distribution receipt latest observation does not match release evidence');
@@ -239,6 +277,7 @@ export function verifyExtensionPublication({
     const observed = receipt.latest.targets[target];
     if (observed.statusCode !== 200
       || observed.filename !== artifact.filename
+      || observed.publicationApprovalSha256 !== approvalSha256
       || observed.bodySha256 !== artifact.zipSha256
       || observed.xContentSha256 !== artifact.zipSha256
       || observed.contentLength !== zipBytes.length
@@ -267,6 +306,8 @@ export function verifyExtensionPublication({
     keyId: signature.keyId,
     releaseEvidenceSha256: sha256(evidenceFile.bytes),
     releaseSignatureSha256: sha256(signatureFile.bytes),
+    websitePublicationApprovalSha256: approvalSha256,
+    darkCanarySha256: darkCanary.sha256,
     distributionReceiptSha256: sha256(receiptFile.bytes),
     targets: Object.fromEntries(['cloud', 'local'].map((target) => [target, {
       filename: evidence.artifacts[target].filename,
@@ -281,6 +322,8 @@ function main() {
   const result = verifyExtensionPublication({
     evidencePath: option('--evidence'),
     signaturePath: option('--signature'),
+    approvalPath: option('--approval'),
+    darkCanaryPath: option('--dark-canary'),
     receiptPath: option('--receipt'),
     keyringPath: cliTrustedKeyring(option('--keyring')),
   });
