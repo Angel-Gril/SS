@@ -1,5 +1,14 @@
 # SS ERP 运维手册 (RUNBOOK)
 
+## 当前生产快照（2026-08-14）
+
+COM/CN 生产环境和官网扩展分发当前均绑定提交
+`8cd99578baee024282d10136c7b9ff5b0333a1b0`，扩展版本为 `1.0.307`；固定 BINI 配置的
+`1.0.306 -> 1.0.307` 同路径升级、活动 Worker 和 Unicode smoke 已通过。发布与升级证据摘要见
+[生产部署文档](./deployment.md#当前生产发布2026-08-14)。本次未执行 Provider 请求、ERP ingest/publish
+或 Ozon 写入，试点开关保持暗态/默认关闭；真实试点仍需新的精确授权。后续纯文档提交不改变生产发布对
+该 commit 的不可变绑定。
+
 ## 专项手册
 
 - [Ozon 物流规则运维与验收](./ozon-logistics-rule-operations.md)

@@ -2,6 +2,24 @@
 
 本文档描述云端 SaaS 部署骨架。本地 Windows 离线包继续使用 `build/scripts`，不要和云端部署混用。
 
+## 当前生产发布（2026-08-14）
+
+- COM 与 CN 两台生产 VPS 均运行不可变应用/扩展发布提交
+  `8cd99578baee024282d10136c7b9ff5b0333a1b0`；官网 publication pointer 已分别激活并通过正式分发 verifier。
+- 当前扩展版本为 `1.0.307`，使用 Ed25519 key ID
+  `ss-erp-extension-release-2026-08-02-01` 的外部 release 签名。固定 BINI 配置已完成
+  `1.0.306 -> 1.0.307` 同路径升级，扩展 ID 保持
+  `nkkemglcckgmhmcfnjjmcfbdhciafahl`，活动 Worker 和 Unicode smoke 均通过。
+- 双区域 publication 汇总 `dual-region-website-publication-summary-8cd99578.json` 的 SHA-256 为
+  `75b42f5350c6e20bc77aaaae4066a32fe1d54736d6405299e4b2b3df93fc4fe1`；同路径升级闭环
+  `bini-upgrade-closure-1.0.307.json` 的 SHA-256 为
+  `af117aa6bd061abdf142c8860154d88a6a1cfd5e80feb066239a9589be99c87e`。原始证据保留在操作员控制的私有发布目录，不提交仓库。
+- 本次生产变更没有执行 Provider 请求、ERP ingest/publish 或 Ozon 写入；相关试点 feature flags 仍为暗态/默认关闭。
+  真实试点仍需单独批准，并精确绑定 owner、shop、device、输入 revision、offer 前缀、回滚命令和责任操作员。
+
+后续纯文档提交只记录上述事实，不改变生产部署和扩展候选对
+`8cd99578baee024282d10136c7b9ff5b0333a1b0` 的不可变绑定。
+
 ## 运行模式
 
 ### 本地开发/离线版
@@ -316,8 +334,8 @@ SHA-256；生产请求从独立 pointer 重新验证 approval、签名、canary 
 `deploy-staging.sh` 不接受 `--skip-build`；每个目标
 commit 仍必须重新编译 Server/Web 并复验预置扩展候选，避免新 marker/migration 配上旧应用构建。
 `verify-vps-deploy.sh` 会从封存的 publication 目录和 SHA-256 sidecar 读取签名并执行同一 verifier。
-当前线上旧基线 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` 没有签名封存时只允许明确的兼容警告；任何
-其他目标 commit 缺少签名元数据都会失败。兼容例外只固定到当前线上旧基线
+上一版历史兼容基线 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13` 没有签名封存时只允许明确的兼容警告；任何
+其他目标 commit 缺少签名元数据都会失败。兼容例外只固定到该历史基线
 `0c326b10feed5f971052c1d1d6ecb3bd3e61ca13`；`VERIFY_LEGACY_UNSIGNED_EXTENSION_RELEASE_COMMIT`
 仅作为诊断名称保留，脚本会拒绝任何不同的环境覆盖。变更兼容基线必须修改源码、重新审查并重新发布，
 不得通过环境变量把新候选标记为 legacy。该例外只跳过旧基线不存在的 Ed25519 侧车校验；四件套数量、

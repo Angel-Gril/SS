@@ -6,6 +6,27 @@ This project can keep the current single-server systemd model. There are three s
 2. direct Git checkout deployment at `/opt/ss-erp`
 3. release directory deployment with `/opt/ss-erp/current`
 
+## Current Production Release (2026-08-14)
+
+- Both COM and CN production VPS deployments are bound to immutable commit
+  `8cd99578baee024282d10136c7b9ff5b0333a1b0`. Each regional website publication pointer is active and
+  its official distribution verifier passes.
+- Extension `1.0.307` is externally signed with Ed25519 key ID
+  `ss-erp-extension-release-2026-08-02-01`. The fixed BINI profile completed the same-path
+  `1.0.306 -> 1.0.307` upgrade without changing extension ID
+  `nkkemglcckgmhmcfnjjmcfbdhciafahl`; active-worker attestation and the live Unicode smoke passed.
+- `dual-region-website-publication-summary-8cd99578.json` has SHA-256
+  `75b42f5350c6e20bc77aaaae4066a32fe1d54736d6405299e4b2b3df93fc4fe1`, and
+  `bini-upgrade-closure-1.0.307.json` has SHA-256
+  `af117aa6bd061abdf142c8860154d88a6a1cfd5e80feb066239a9589be99c87e`. The original evidence remains
+  in the operator-controlled private release directory and is not committed.
+- No Provider request, ERP ingest/publish, or Ozon write was executed. Pilot feature flags remain
+  dark/default-off. A real pilot still requires a separate exact approval bound to owner, shop,
+  device, input revision, offer prefix, rollback command, and responsible operator.
+
+Any later documentation-only commit records this state but does not change the production release
+binding to `8cd99578baee024282d10136c7b9ff5b0333a1b0`.
+
 Do not mix the three in one deploy. First identify which path systemd is currently using:
 
 ```bash
