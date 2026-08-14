@@ -5,6 +5,15 @@
   var READINESS_PATH = '/api/extension-device/byok-media/readiness';
   var OPERATIONS = ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'];
   var SHARED_DETAIL_ROLES = ['SCENE', 'DETAIL', 'SPEC', 'PACKAGING'];
+  var PUBLIC_REASON_CODES = new Set([
+    'POLICY_DISABLED',
+    'OWNER_NOT_ALLOWED',
+    'SHOP_NOT_ALLOWED',
+    'DEVICE_NOT_ALLOWED',
+    'ORIGIN_NOT_ALLOWED',
+    'OPERATION_NOT_ALLOWED',
+    'GENERATION_DISABLED',
+  ]);
 
   function clientError(code) {
     var error = new Error(code);
@@ -164,6 +173,8 @@
           error.state = response && response.state || 'invalid_response';
           error.status = response && response.status || null;
           error.errorCode = response && response.body && response.body.errorCode || null;
+          var reasonCode = response && response.body && response.body.reasonCode;
+          error.reasonCode = PUBLIC_REASON_CODES.has(reasonCode) ? reasonCode : null;
           throw error;
         }
         return handleCache.issue(response.body.data);

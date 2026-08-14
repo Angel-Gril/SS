@@ -101,6 +101,22 @@ assert.match(html, /id=["']publishRecoverButton["']/u);
 assert.match(html, /href=["']\.\/ai-provider-settings\.html["'][^>]*target=["']_blank["']/u);
 assert.match(html, /id=["']contextKicker["']/u);
 assert.match(html, /id=["']contextBadge["']/u);
+assert.match(html, /id=["']flowToolbar["'][\s\S]*data-flow-step=["']context["'][\s\S]*data-flow-step=["']sku["'][\s\S]*data-flow-step=["']media["'][\s\S]*data-flow-step=["']review["']/u,
+  'workbench should expose a compact linear flow toolbar');
+assert.match(html, /id=["']flowProcessButton["'][^>]*>[\s\S]*查看过程/u,
+  'workbench should keep task progress behind an explicit process action');
+assert.match(html, /<details\s+id=["']batchAdvancedDetails["'][\s\S]*批量与恢复[\s\S]*id=["']batchSlotSelection["']/u,
+  'batch slots and recovery should stay behind an advanced disclosure');
+assert.match(batchPageSource, /advancedDetails[\s\S]*view\.active[\s\S]*view\.recoveryRows/u,
+  'an active or recoverable batch should reopen the advanced disclosure');
+assert.match(pageSource, /function setFlowStage\(stage[\s\S]*dataset\.flowStage/u,
+  'workbench should switch visible panels by workflow stage');
+assert.match(pageSource, /function flowStageAvailable\(stage\)[\s\S]*reviewPublishOnly\(\)[\s\S]*state\.candidate/u,
+  'workflow navigation must be gated by the current publish mode and candidate state');
+assert.match(pageSource, /function renderFlowState\(\)[\s\S]*flowSummary/u,
+  'workbench should summarize the current shop, SKU and candidate state');
+assert.match(pageSource, /ORIGIN_NOT_ALLOWED[\s\S]*高级设置检查来源/u,
+  'workbench should explain an exact-origin readiness denial');
 assert.match(html, /已批准但尚未上传 ERP/u);
 assert.doesNotMatch(html, /api[_ -]?key|remember key|记住密钥/iu);
 assert.doesNotMatch(html, /<script[^>]*>\s*[^<]/iu, 'workbench page must not use inline scripts');
@@ -120,6 +136,31 @@ assert.doesNotMatch(launchHtml, /<script|product-|workflow-|api[_ -]?key/iu);
 assert.match(css, /@media\s*\(max-width:\s*720px\)/u);
 assert.match(css, /\.workspace-shell\s*\{[\s\S]*grid-template-columns/u);
 assert.match(css, /\.workspace-task-dock\s*\{[\s\S]*position:\s*sticky/u);
+assert.match(
+  css,
+  /@media\s*\(max-width:\s*520px\)[\s\S]*\.flow-step-list\s*\{[\s\S]*overflow-x:\s*auto/u,
+  'the compact flow toolbar must keep every step reachable on narrow screens',
+);
+assert.match(
+  pageSource,
+  /flowProcessButton[\s\S]*workspaceTaskDock\.hidden\s*=\s*false/u,
+  'the process action must reveal the task dock before scrolling to it',
+);
+assert.doesNotMatch(
+  pageSource,
+  /flowProcessButton[\s\S]{0,700}setFlowStage\([^\n]*true\)/u,
+  'the process action must not bypass review-stage availability',
+);
+assert.match(
+  pageSource,
+  /WORKSPACE_RUNTIME_EVENT[\s\S]*workspaceRuntimeCandidateState[\s\S]*reconcileFlowStage/u,
+  'flow navigation should react to edit, batch, and hosted workspace candidates',
+);
+assert.match(
+  css,
+  /data-process-visible=["']true["'][\s\S]*#workspaceTaskDock[\s\S]*display:\s*grid\s*!important/u,
+  'the process action should reveal the task dock without entering review',
+);
 assert.match(css, /@media\s*\(max-width:\s*1120px\)/u);
 assert.match(css, /\.workspace-task-dock\s*\{[\s\S]*grid-column:\s*3/u);
 assert.match(
@@ -216,6 +257,7 @@ const ids = [
   'promptInput', 'negativePromptInput', 'sizeSelect', 'generateButton',
   'resultPanel', 'previewFrame', 'previewImage', 'previewMeta', 'resultStatus', 'rejectButton',
   'approveButton', 'approvedNotice', 'refreshButton',
+  'flowToolbar', 'flowSummary', 'flowProcessButton',
   'publishPanel', 'publishStatus', 'publishShop', 'publishDraft', 'publishSkuOrder',
   'publishMediaList', 'publishNotice', 'publishConfirmationRow', 'publishConfirmation',
   'publishConfirmButton', 'publishRecoverButton',
@@ -706,6 +748,14 @@ function createPageHarness(options = {}) {
   harnessNodes.sizeSelect.value = '1024x1024';
   harnessNodes.executionModeByok.checked = true;
   harnessNodes.executionModeHosted.disabled = true;
+  const flowButtons = ['context', 'sku', 'media', 'review'].map((stage) => {
+    const button = new TestNode(`flow-${stage}`, 'button');
+    button.dataset.flowStep = stage;
+    return button;
+  });
+  harnessNodes.flowToolbar.querySelectorAll = (selector) => (
+    selector === '[data-flow-step]' ? flowButtons : []
+  );
 
   const authoritative = options.authoritative || { value: isolatedPublicState() };
   const harnessCalls = [];
@@ -893,6 +943,7 @@ function createPageHarness(options = {}) {
     authoritative,
     calls: harnessCalls,
     nodes: harnessNodes,
+    flowButtons,
     body: harnessBody,
     runtimeListeners: harnessRuntimeListeners,
     windowListeners: harnessWindowListeners,
@@ -1030,6 +1081,15 @@ function createPageHarness(options = {}) {
   assert.equal(harness.nodes.negativePromptInput.disabled, true);
   assert.equal(harness.calls.filter((row) => row[0] === 'readiness').length, 0);
   assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 0);
+  assert.match(harness.nodes.flowSummary.textContent, /无需 Provider 设置/u);
+  const reviewOnlyMediaStep = harness.flowButtons.find((button) => button.dataset.flowStep === 'media');
+  assert.equal(reviewOnlyMediaStep.disabled, true);
+  harness.nodes.flowToolbar.listeners.click({
+    isTrusted: true,
+    target: { closest: () => reviewOnlyMediaStep },
+  });
+  assert.equal(harness.body.dataset.flowStage, 'review');
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, false);
   const reviewEvent = harness.documentEvents.find((event) => (
     event.type === 'ss-erp:workbench-publish-review'
   ));
@@ -1057,6 +1117,50 @@ function createPageHarness(options = {}) {
   assert.equal(harness.body.classList.values.has('is-review-publish-only'), false);
   assert.equal(harness.nodes.workspaceShell.hidden, true);
   assert.equal(harness.nodes.workspaceTaskDock.hidden, true);
+}
+
+{
+  const harness = createPageHarness({ authoritative: { value: isolatedPublicState() } });
+  await flushAsync(8);
+  const reviewStep = harness.flowButtons.find((button) => button.dataset.flowStep === 'review');
+  assert.equal(reviewStep.disabled, true, 'review cannot be entered before a candidate exists');
+  harness.nodes.flowToolbar.listeners.click({
+    isTrusted: true,
+    target: { closest: () => reviewStep },
+  });
+  assert.equal(harness.body.dataset.flowStage, 'media');
+  harness.nodes.flowProcessButton.listeners.click({ isTrusted: true });
+  assert.equal(
+    harness.body.dataset.flowStage,
+    'media',
+    'viewing process before a candidate exists must not enter review',
+  );
+  assert.equal(harness.body.dataset.processVisible, 'true');
+  assert.equal(harness.nodes.workspaceTaskDock.hidden, false);
+  assert.equal(harness.nodes.flowProcessButton.getAttribute('aria-expanded'), 'true');
+
+  harness.dispatchDocument('ss-erp:workspace-runtime', {
+    contractVersion: 'extension-byok-workbench-workspace-runtime/v1',
+    slots: [{
+      alternatives: [{
+        attemptId: 'batch-attempt-1',
+        state: 'CANDIDATE_READY',
+        mediaId: 'batch-result-1',
+      }],
+    }],
+  });
+  assert.equal(
+    harness.body.dataset.flowStage,
+    'review',
+    'a batch/edit/hosted workspace candidate should enable the review stage',
+  );
+  assert.equal(reviewStep.disabled, false);
+
+  harness.dispatchDocument('ss-erp:workspace-runtime', {
+    contractVersion: 'extension-byok-workbench-workspace-runtime/v1',
+    slots: [{ alternatives: [] }],
+  });
+  assert.equal(harness.body.dataset.flowStage, 'media');
 }
 
 {

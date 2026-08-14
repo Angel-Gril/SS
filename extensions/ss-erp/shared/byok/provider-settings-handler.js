@@ -2,6 +2,30 @@
   'use strict';
 
   var CONTRACT_VERSION = 'extension-byok-provider-settings-handler/v1';
+  var PUBLIC_READINESS_REASON_CODES = new Set([
+    'POLICY_DISABLED',
+    'OWNER_NOT_ALLOWED',
+    'SHOP_NOT_ALLOWED',
+    'DEVICE_NOT_ALLOWED',
+    'ORIGIN_NOT_ALLOWED',
+    'OPERATION_NOT_ALLOWED',
+    'GENERATION_DISABLED',
+  ]);
+  var PUBLIC_READINESS_ERROR_CODES = new Set([
+    'byok_readiness_request_invalid',
+    'byok_readiness_scope_denied',
+    'byok_readiness_shop_denied',
+    'byok_readiness_draft_stale',
+    'byok_readiness_target_stale',
+    'byok_readiness_not_ready',
+    'byok_readiness_unavailable',
+  ]);
+  var PUBLIC_READINESS_STATES = new Set([
+    'response',
+    'unpaired',
+    'authorization_required',
+    'invalid_response',
+  ]);
   var CAPABILITY_PROMPT = 'A neutral catalog product test image on a plain white background. No text.';
   var REQUEST_MODE_BY_OPERATION = Object.freeze({
     TEXT_TO_IMAGE: 'json',
@@ -289,13 +313,26 @@
 
   function safeFailure(error) {
     var candidate = error && typeof error === 'object' ? String(error.code || '') : '';
-    return {
+    var reasonCode = error && typeof error === 'object' ? error.reasonCode : null;
+    var readinessErrorCode = error && typeof error === 'object' ? error.errorCode : null;
+    var readinessState = error && typeof error === 'object' ? error.state : null;
+    var readinessStatus = Number(error && typeof error === 'object' ? error.status : NaN);
+    var failure = {
       ok: false,
       errorCode: /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidate)
         ? candidate
         : 'SS_ERP_BYOK_PROVIDER_SETTINGS_OPERATION_FAILED',
       error: 'BYOK Provider settings operation failed',
     };
+    if (PUBLIC_READINESS_REASON_CODES.has(reasonCode)) failure.reasonCode = reasonCode;
+    if (PUBLIC_READINESS_ERROR_CODES.has(readinessErrorCode)) {
+      failure.readinessErrorCode = readinessErrorCode;
+    }
+    if (PUBLIC_READINESS_STATES.has(readinessState)) failure.readinessState = readinessState;
+    if (Number.isSafeInteger(readinessStatus) && readinessStatus >= 100 && readinessStatus <= 599) {
+      failure.readinessStatus = readinessStatus;
+    }
+    return failure;
   }
 
   function success(data) {

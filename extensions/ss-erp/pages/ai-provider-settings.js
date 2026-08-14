@@ -15,6 +15,36 @@
     FULL_EDIT: '全图编辑',
     INPAINT: '局部重绘',
   });
+  var READINESS_REASON_PRESENTATION = Object.freeze({
+    POLICY_DISABLED: Object.freeze({
+      summary: '功能未开放',
+      message: 'ERP 尚未开放 BYOK 生图。请联系管理员开启后，点击顶部“刷新状态”。',
+    }),
+    OWNER_NOT_ALLOWED: Object.freeze({
+      summary: '账号未授权',
+      message: '当前 ERP 账号不在 BYOK 试点范围。请联系管理员授权后刷新状态。',
+    }),
+    SHOP_NOT_ALLOWED: Object.freeze({
+      summary: '店铺未授权',
+      message: '当前店铺未获得 BYOK 许可。请换用已授权店铺，或请管理员授权后刷新状态。',
+    }),
+    DEVICE_NOT_ALLOWED: Object.freeze({
+      summary: '设备未授权',
+      message: '当前设备不在 BYOK 试点范围。请在 ERP 设备管理中授权后刷新状态。',
+    }),
+    ORIGIN_NOT_ALLOWED: Object.freeze({
+      summary: '来源未允许',
+      message: '管理员尚未允许此 Provider 精确来源。请将上方显示的来源加入 ERP 允许列表后，点击“刷新状态”。',
+    }),
+    OPERATION_NOT_ALLOWED: Object.freeze({
+      summary: '能力未授权',
+      message: '当前 Provider 能力未获得 ERP 策略许可。请联系管理员开放后刷新状态。',
+    }),
+    GENERATION_DISABLED: Object.freeze({
+      summary: '生图已关闭',
+      message: 'ERP 已关闭 BYOK 生图。请联系管理员开启后，点击顶部“刷新状态”。',
+    }),
+  });
 
   var clientApi = global.SS_ERP_BYOK_PROVIDER_SETTINGS_CLIENT;
   if (!clientApi || typeof clientApi.createClient !== 'function') return;
@@ -77,6 +107,7 @@
     profileState: null,
     permission: null,
     permissionReadiness: null,
+    readinessError: null,
     dirty: false,
     loading: false,
     action: '',
@@ -107,6 +138,60 @@
       SS_ERP_BYOK_PROVIDER_SETTINGS_RUNTIME_FAILED: '扩展后台不可用，请重新加载扩展后重试。',
     };
     return messages[code] || '操作未完成，请检查设备配对、管理员策略和 Provider 配置。';
+  }
+
+  function safeErrorCode(value) {
+    if (typeof value !== 'string') return '';
+    var normalized = value.trim();
+    return /^[a-zA-Z][a-zA-Z0-9_]{0,119}$/u.test(normalized) ? normalized : '';
+  }
+
+  function readinessFailure(error) {
+    var code = safeErrorCode(error && error.code);
+    var errorCode = safeErrorCode(error && error.errorCode);
+    var reasonCode = safeErrorCode(error && error.reasonCode);
+    var presentation = READINESS_REASON_PRESENTATION[reasonCode] || null;
+    var stateCode = safeErrorCode(error && error.state);
+    var rawStatus = error && error.status;
+    var status = rawStatus == null ? NaN : Number(rawStatus);
+    var summary = presentation ? presentation.summary : '需要刷新';
+    var message = presentation ? presentation.message : '';
+    if (!message && (errorCode === 'byok_readiness_scope_denied'
+      || code === 'device_scope_required')) {
+      summary = '设备缺少权限';
+      message = '当前设备缺少 BYOK 媒体权限。请在 ERP 设备管理中授权后刷新状态。';
+    } else if (!message && errorCode === 'byok_readiness_shop_denied') {
+      summary = '店铺不可用';
+      message = '当前设备无权使用所选店铺，或店铺已停用。请更换店铺或完成授权后刷新状态。';
+    } else if (!message && ['unpaired', 'authorization_required'].includes(stateCode)) {
+      summary = '设备需重连';
+      message = '设备配对或授权已失效。请先重新连接 ERP，然后点击“刷新状态”。';
+    } else if (!message && code === 'SS_ERP_BYOK_READINESS_PROFILE_UNAVAILABLE') {
+      summary = '档案能力未开启';
+      message = '当前 Provider 档案未开启所选能力。请修改并保存档案后重试。';
+    } else if (!message && [
+      'SS_ERP_BYOK_PERMISSION_READINESS_EXPIRED',
+      'SS_ERP_BYOK_PROVIDER_READINESS_MISMATCH',
+      'SS_ERP_RUNTIME_MESSAGE_READINESS_MISMATCH',
+      'SS_ERP_RUNTIME_MESSAGE_READINESS_INVALID',
+    ].includes(code)) {
+      summary = '状态已变化';
+      message = '授权校验信息已过期或已变化。请点击顶部“刷新状态”后重新授权。';
+    } else if (!message && errorCode === 'byok_readiness_not_ready') {
+      summary = '策略未允许';
+      message = 'ERP 管理策略尚未允许当前账号、店铺、设备、Provider 来源或能力。请确认策略后刷新状态。';
+    } else if (!message) {
+      message = 'ERP 暂时无法校验 Provider 运行许可。请检查扩展连接后，点击顶部“刷新状态”重试。';
+    }
+    return Object.freeze({
+      code: code,
+      errorCode: errorCode,
+      reasonCode: READINESS_REASON_PRESENTATION[reasonCode] ? reasonCode : '',
+      state: stateCode,
+      status: Number.isFinite(status) ? status : null,
+      summary: summary,
+      message: message,
+    });
   }
 
   function setPageStatus(message, tone) {
@@ -404,21 +489,27 @@
   function renderPermission() {
     var profile = selectedProfile();
     var granted = Boolean(state.permission && state.permission.granted);
+    var readinessBlocked = Boolean(profile && state.readinessError);
     nodes.providerOrigin.textContent = state.permission && state.permission.origin
       ? state.permission.origin : profile ? '等待精确来源校验' : '尚未确定';
     setBadge(
       nodes.permissionStatus,
-      granted ? '已授权' : profile ? '未授权' : '待读取',
+      granted ? '已授权' : readinessBlocked ? '未就绪' : profile ? '未授权' : '待读取',
       granted ? 'success' : profile ? 'warning' : 'pending',
     );
     var reason = '请先保存 Provider 档案';
     if (profile && state.dirty) reason = '请先保存档案修改';
     else if (profile && !permissionOperation(profile)) reason = '当前档案没有可验证的 Provider 能力';
     else if (profile && !state.selectedShopId) reason = '请选择 ERP 授权店铺';
+    else if (profile && state.readinessError) reason = state.readinessError.message;
     else if (profile && !granted && !state.permissionReadiness) reason = '正在校验管理员策略';
     else if (profile && !granted) reason = '管理员策略已允许，可申请精确来源权限';
     else if (profile && granted) reason = '扩展仅可访问此 Provider 来源';
     nodes.permissionReason.textContent = reason;
+    nodes.requestPermissionBtn.title = !granted && readinessBlocked ? reason : '';
+    nodes.refreshPageBtn.title = readinessBlocked
+      ? '重新校验 Provider 授权状态'
+      : '刷新 Provider 配置与授权状态';
     nodes.requestPermissionBtn.disabled = state.loading || Boolean(state.action)
       || !profile || state.dirty || granted || !state.permissionReadiness;
     nodes.revokePermissionBtn.disabled = state.loading || Boolean(state.action)
@@ -454,8 +545,9 @@
     scheduleExpiryRefresh();
   }
 
-  function resetReadiness(message) {
+  function resetReadiness(message, failure) {
     clearPermissionReadiness();
+    state.readinessError = failure || null;
     setBadge(nodes.readinessSummary, message || '待读取', 'pending');
     nodes.generationPolicyState.textContent = message || '待读取';
     nodes.policyRevision.textContent = '待读取';
@@ -467,6 +559,7 @@
     var profile = selectedProfile();
     var operation = permissionOperation(profile);
     clearPermissionReadiness();
+    state.readinessError = null;
     if (!profile || state.dirty || !state.selectedShopId || !operation) {
       resetReadiness(profile ? '等待店铺与档案' : '等待档案');
       renderProfileState();
@@ -493,13 +586,16 @@
         return;
       }
       state.permissionReadiness = prepared;
+      state.readinessError = null;
       setBadge(nodes.readinessSummary, '允许测试', 'success');
       nodes.generationPolicyState.textContent = OPERATION_LABELS[operation] + ' · 已允许';
       nodes.policyRevision.textContent = ready.readinessBinding.policyRevision;
     } catch (error) {
       if (epoch !== state.selectionEpoch) return;
-      resetReadiness('未就绪');
-      nodes.generationPolicyState.textContent = errorText(error);
+      var failure = readinessFailure(error);
+      resetReadiness(failure.summary, failure);
+      nodes.generationPolicyState.textContent = failure.message;
+      setPageStatus(failure.message, 'warning');
     }
     renderProfileState();
   }
@@ -510,6 +606,7 @@
     state.profileState = null;
     state.permission = null;
     clearPermissionReadiness();
+    state.readinessError = null;
     if (!profile) {
       renderProfileState();
       resetReadiness('等待档案');
@@ -527,9 +624,10 @@
       await refreshPermissionReadiness(epoch);
     } catch (error) {
       if (epoch !== state.selectionEpoch) return;
-      setPageStatus(errorText(error), 'error');
+      var failure = readinessFailure(error);
+      setPageStatus(failure.message, 'error');
+      resetReadiness(failure.summary, failure);
       renderProfileState();
-      resetReadiness('未就绪');
     }
   }
 
@@ -538,6 +636,7 @@
     state.loading = true;
     state.selectionEpoch += 1;
     clearPermissionReadiness();
+    state.readinessError = null;
     setPageStatus('正在读取 Provider 配置...', '');
     nodes.refreshPageBtn.disabled = true;
     try {
@@ -879,6 +978,7 @@
   nodes.shopSelect.addEventListener('change', function () {
     state.selectedShopId = nodes.shopSelect.value;
     clearPermissionReadiness();
+    state.readinessError = null;
     var epoch = ++state.selectionEpoch;
     renderProfileState();
     refreshPermissionReadiness(epoch);

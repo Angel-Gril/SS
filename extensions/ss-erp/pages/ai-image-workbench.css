@@ -124,6 +124,51 @@ body.is-review-publish-only .workspace-task-dock {
   max-height: none;
 }
 
+/* The flow toolbar owns the first viewport. Existing panels stay mounted so
+   their state machines and accessibility contracts continue to work, while
+   operators only see the selected stage. */
+body[data-flow-stage="context"] #workspaceShell,
+body[data-flow-stage="context"] .workbench-grid {
+  display: none !important;
+}
+
+body[data-flow-stage="sku"] .workspace-organizer,
+body[data-flow-stage="sku"] .workbench-grid {
+  display: none !important;
+}
+
+body[data-flow-stage="review"] #byokControlPanel,
+body[data-flow-stage="review"] #hostedControlPanel,
+body[data-flow-stage="review"] #emptyResult {
+  display: none !important;
+}
+
+body[data-flow-stage="media"] .workbench-grid > #resultPanel,
+body[data-flow-stage="media"] .workbench-grid > #editResultPanel,
+body[data-flow-stage="media"] .workbench-grid > #emptyResult,
+body[data-flow-stage="media"] .workbench-grid > #workspaceTaskDock,
+body[data-flow-stage="sku"] #workspaceTaskDock,
+body[data-flow-stage="context"] #workspaceTaskDock {
+  display: none !important;
+}
+
+body[data-flow-stage="media"][data-process-visible="true"]
+  .workbench-grid > #workspaceTaskDock {
+  display: grid !important;
+}
+
+body[data-flow-stage="media"] .workbench-grid,
+body[data-flow-stage="review"] .workbench-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-flow-stage="media"] .workbench-grid > #byokControlPanel,
+body[data-flow-stage="review"] .workbench-grid > #resultPanel,
+body[data-flow-stage="review"] .workbench-grid > #editResultPanel,
+body[data-flow-stage="review"] .workbench-grid > #workspaceTaskDock {
+  grid-column: 1;
+}
+
 h1,
 h2,
 p,
@@ -205,6 +250,122 @@ h2 {
   flex-wrap: wrap;
   align-items: center;
   gap: 9px;
+}
+
+.flow-toolbar {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px 10px;
+  box-shadow: 0 5px 18px rgba(31, 42, 55, 0.06);
+}
+
+.flow-step-list {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.flow-step {
+  display: inline-flex;
+  min-height: 38px;
+  min-width: 0;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.flow-step:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.flow-step.is-active,
+.flow-step[aria-current="true"] {
+  border-color: #a9d6d0;
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.flow-step.is-complete .flow-step-index {
+  border-color: var(--success);
+  background: var(--success);
+  color: #fff;
+}
+
+.flow-step-index {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.flow-step-connector {
+  width: 24px;
+  height: 1px;
+  flex: 0 0 auto;
+  background: var(--line-strong);
+}
+
+.flow-process-button {
+  min-height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: #34404d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 760;
+  padding: 0 12px;
+}
+
+.flow-process-button:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.flow-summary {
+  min-height: 32px;
+  margin-top: 8px;
+  border-left: 3px solid var(--info);
+  background: var(--info-soft);
+  color: #244b73;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+body[data-flow-stage] .page-status:not(.is-success):not(.is-warning):not(.is-error) {
+  display: none;
 }
 
 .button {
@@ -1977,9 +2138,49 @@ h2 {
 .batch-control {
   display: grid;
   gap: 12px;
-  margin-top: 4px;
+  margin-top: 0;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+.advanced-disclosure {
+  margin-top: 16px;
+  border-block: 1px solid var(--line);
+}
+
+.advanced-disclosure > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: #34404d;
+  font-size: 12px;
+  font-weight: 760;
+  list-style: none;
+}
+
+.advanced-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-disclosure > summary::after {
+  color: var(--muted);
+  content: '+';
+  font-size: 18px;
+  line-height: 1;
+}
+
+.advanced-disclosure[open] > summary::after {
+  content: '\2212';
+}
+
+.advanced-disclosure > summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .batch-control .workspace-pane-heading {
@@ -2134,6 +2335,104 @@ h2 {
   color: var(--muted);
   overflow-wrap: anywhere;
   font-size: 0.78rem;
+}
+
+/* Compact reference-style composition: SKU strip above a two-pane media
+   workspace. The existing three-column layout is retained only for narrow
+   legacy snapshots and review-only mode. */
+.workspace-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-rail {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.workspace-mode-summary,
+.workspace-sku-list {
+  margin-top: 0;
+}
+
+.workspace-sku-list {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+
+.workspace-sku-list .workspace-sku-item {
+  min-width: 150px;
+  flex: 0 0 150px;
+}
+
+.workspace-board {
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+}
+
+.workspace-prompt-inspector {
+  grid-column: 1 / -1;
+  border-top-style: dashed;
+}
+
+.workbench-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.control-panel,
+.result-panel,
+.empty-result,
+.edit-result-panel,
+.hosted-control-panel,
+.workspace-task-dock {
+  grid-column: 1;
+}
+
+@media (max-width: 720px) {
+  .flow-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .flow-step-list {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .flow-step {
+    min-width: 92px;
+    flex: 0 0 auto;
+    font-size: 11px;
+  }
+
+  .flow-step-connector {
+    width: 12px;
+  }
+
+  .flow-process-button {
+    width: 100%;
+  }
+
+  .workspace-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-mode-summary,
+  .workspace-sku-list {
+    margin-top: 0;
+  }
+
+  .workspace-board {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-prompt-inspector {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 1120px) {
@@ -2504,5 +2803,31 @@ h2 {
   .workspace-slot-list [data-workspace-action="set-main-slot"][aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+}
+
+@media (max-width: 520px) {
+  .header-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flow-step-list {
+    gap: 3px;
+    overflow-x: auto;
+  }
+
+  .flow-step {
+    min-width: 76px;
+    gap: 4px;
+    font-size: 10px;
+  }
+
+  .flow-step-index {
+    width: 20px;
+    height: 20px;
+  }
+
+  .flow-step-connector {
+    width: 6px;
   }
 }

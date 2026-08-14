@@ -6,6 +6,30 @@
   var DEFAULT_TIMEOUT_MS = 15 * 1000;
   var CAPABILITY_TIMEOUT_MS = 315 * 1000;
   var MAX_PREPARED_PERMISSIONS = 64;
+  var PUBLIC_READINESS_REASON_CODES = new Set([
+    'POLICY_DISABLED',
+    'OWNER_NOT_ALLOWED',
+    'SHOP_NOT_ALLOWED',
+    'DEVICE_NOT_ALLOWED',
+    'ORIGIN_NOT_ALLOWED',
+    'OPERATION_NOT_ALLOWED',
+    'GENERATION_DISABLED',
+  ]);
+  var PUBLIC_READINESS_ERROR_CODES = new Set([
+    'byok_readiness_request_invalid',
+    'byok_readiness_scope_denied',
+    'byok_readiness_shop_denied',
+    'byok_readiness_draft_stale',
+    'byok_readiness_target_stale',
+    'byok_readiness_not_ready',
+    'byok_readiness_unavailable',
+  ]);
+  var PUBLIC_READINESS_STATES = new Set([
+    'response',
+    'unpaired',
+    'authorization_required',
+    'invalid_response',
+  ]);
   var MESSAGE_TYPES = Object.freeze({
     GET_SETUP_CONTEXT: 'ss-erp:byok-provider-setup-context',
     LIST_PROFILES: 'ss-erp:byok-provider-profiles-list',
@@ -162,7 +186,24 @@
                 && /^[A-Z][A-Z0-9_]{0,99}$/u.test(response.errorCode)
                 ? response.errorCode
                 : 'SS_ERP_BYOK_PROVIDER_SETTINGS_OPERATION_FAILED';
-              finish(reject, clientError(code));
+              var reasonCode = isRecord(response) ? response.reasonCode : null;
+              var readinessErrorCode = isRecord(response) ? response.readinessErrorCode : null;
+              var readinessState = isRecord(response) ? response.readinessState : null;
+              var readinessStatus = Number(isRecord(response) ? response.readinessStatus : NaN);
+              var details = {};
+              if (PUBLIC_READINESS_REASON_CODES.has(reasonCode)) details.reasonCode = reasonCode;
+              if (PUBLIC_READINESS_ERROR_CODES.has(readinessErrorCode)) {
+                details.errorCode = readinessErrorCode;
+              }
+              if (PUBLIC_READINESS_STATES.has(readinessState)) details.state = readinessState;
+              if (Number.isSafeInteger(readinessStatus)
+                && readinessStatus >= 100 && readinessStatus <= 599) {
+                details.status = readinessStatus;
+              }
+              finish(reject, clientError(
+                code,
+                Object.keys(details).length ? details : null,
+              ));
               return;
             }
             finish(resolve, response.data);

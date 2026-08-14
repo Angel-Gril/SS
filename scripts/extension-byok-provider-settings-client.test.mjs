@@ -287,6 +287,49 @@ test('keeps the session key request one-way and maps background failures to stab
   );
 });
 
+test('projects only a safe readiness reason code from background failures', async () => {
+  const loaded = loadClient();
+  loaded.responses.set(loaded.api.MESSAGE_TYPES.GET_READINESS, {
+    ok: false,
+    errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+    error: 'generic safe failure',
+    reasonCode: 'ORIGIN_NOT_ALLOWED',
+    readinessErrorCode: 'byok_readiness_not_ready',
+    readinessState: 'response',
+    readinessStatus: 409,
+  });
+  await assert.rejects(
+    loaded.client.getReadiness({
+      profileId: 'relay-profile-1',
+      shopId: 'shop-1',
+      operation: 'TEXT_TO_IMAGE',
+    }),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_READINESS_UNAVAILABLE'
+      && error.reasonCode === 'ORIGIN_NOT_ALLOWED'
+      && error.errorCode === 'byok_readiness_not_ready'
+      && error.state === 'response'
+      && error.status === 409,
+  );
+
+  loaded.responses.set(loaded.api.MESSAGE_TYPES.GET_READINESS, {
+    ok: false,
+    errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+    error: 'generic safe failure',
+    reasonCode: 'UNSAFE_UNRECOGNIZED_REASON',
+  });
+  await assert.rejects(
+    loaded.client.getReadiness({
+      profileId: 'relay-profile-1',
+      shopId: 'shop-1',
+      operation: 'TEXT_TO_IMAGE',
+    }),
+    (error) => error
+      && error.code === 'SS_ERP_BYOK_READINESS_UNAVAILABLE'
+      && !Object.prototype.hasOwnProperty.call(error, 'reasonCode'),
+  );
+});
+
 test('invokes exact-origin permissions.request synchronously inside the trusted click path', async () => {
   const loaded = loadClient();
   loaded.responses.set(loaded.api.MESSAGE_TYPES.PREPARE_PERMISSION, {

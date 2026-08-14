@@ -85,6 +85,41 @@ assert.deepEqual(JSON.parse(JSON.stringify(posts)), [{
 }]);
 assert.equal(issued[0], attestation);
 
+const denied = api.createClient({
+  transport: {
+    async post() {
+      return {
+        state: 'response',
+        status: 409,
+        body: {
+          code: 0,
+          errorCode: 'byok_readiness_not_ready',
+          msg: 'safe public message',
+          reasonCode: 'ORIGIN_NOT_ALLOWED',
+        },
+      };
+    },
+  },
+  profileStore: {
+    async getProfile() {
+      return {
+        baseUrl: 'https://relay.example',
+        model: 'm',
+        allowedOperations: ['TEXT_TO_IMAGE'],
+      };
+    },
+  },
+  profileSchema: { canonicalizeEndpoint(value) { return value; } },
+  handleCache: { issue() { throw new Error('must not issue'); } },
+});
+await assert.rejects(denied.getReadiness({
+  profileId: 'profile-1', shopId: 'shop-1', workflowId: null,
+  draftRevision: null, draftVersion: null, operation: 'TEXT_TO_IMAGE',
+}), (error) => error
+  && error.code === 'SS_ERP_BYOK_READINESS_UNAVAILABLE'
+  && error.errorCode === 'byok_readiness_not_ready'
+  && error.reasonCode === 'ORIGIN_NOT_ALLOWED');
+
 function draftRequest(slotKey, overrides = {}) {
   return {
     profileId: 'profile-1',

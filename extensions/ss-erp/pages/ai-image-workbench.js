@@ -9,6 +9,9 @@
   }
 
   var nodes = {
+    flowToolbar: byId('flowToolbar'),
+    flowSummary: byId('flowSummary'),
+    flowProcessButton: byId('flowProcessButton'),
     pageStatus: byId('pageStatus'),
     contextSource: byId('contextSource'),
     contextShop: byId('contextShop'),
@@ -77,6 +80,9 @@
     lifecycleEpoch: 0,
     authoritativeReloadPending: false,
     generationDispatchPending: false,
+    flowStage: 'media',
+    processDockExpanded: false,
+    workspaceHasCandidate: false,
   };
   var PUBLISH_CONTRACT_VERSION = 'extension-byok-listing-publish/v1';
   var PUBLISH_RECOVERY_STATES = [
@@ -247,6 +253,7 @@
     document.body.classList.toggle('is-review-publish-only', reviewOnly);
     if (!nodes.workspaceShell || !nodes.workspaceTaskDock) return;
     if (reviewOnly) {
+      setFlowStage('review');
       nodes.workspaceShell.hidden = false;
       nodes.workspaceShell.setAttribute('aria-busy', 'false');
       nodes.workspaceShell.setAttribute('aria-disabled', 'false');
@@ -262,6 +269,40 @@
     nodes.workspaceShell.setAttribute('aria-disabled', 'true');
     nodes.workspaceShell.setAttribute('data-runtime-state', 'CLEARED');
     nodes.workspaceTaskDock.hidden = true;
+    if (!hasReviewCandidate() && state.flowStage === 'review') setFlowStage('media');
+  }
+
+  function flowStageAvailable(stage) {
+    if (reviewPublishOnly()) return stage === 'review';
+    if (stage === 'context') return true;
+    if (stage === 'sku') {
+      return Boolean(state.publicState && state.publicState.context && !hasReviewCandidate());
+    }
+    if (stage === 'media') return !hasReviewCandidate();
+    if (stage === 'review') return hasReviewCandidate();
+    return false;
+  }
+
+  function hasReviewCandidate() {
+    return Boolean(state.candidate || state.workspaceHasCandidate);
+  }
+
+  function workspaceRuntimeCandidateState(value) {
+    if (!isRecord(value) || value.contractVersion !== WORKSPACE_RUNTIME_VERSION
+      || !Array.isArray(value.slots) || value.slots.length > 500) return null;
+    var candidateStates = new Set([
+      'CANDIDATE_READY', 'APPROVED', 'INGESTING', 'INGESTED', 'BOUND',
+    ]);
+    var valid = value.slots.every(function (slot) {
+      return isRecord(slot) && Array.isArray(slot.alternatives)
+        && slot.alternatives.length <= 20;
+    });
+    if (!valid) return null;
+    return value.slots.some(function (slot) {
+      return slot.alternatives.some(function (alternative) {
+        return isRecord(alternative) && candidateStates.has(alternative.state);
+      });
+    });
   }
 
   function isSha256(value) {
@@ -430,6 +471,79 @@
       nodes.pageStatus.classList.remove(name);
     });
     if (tone) nodes.pageStatus.classList.add('is-' + tone);
+    renderFlowState();
+  }
+
+  function setFlowStage(stage) {
+    var allowed = ['context', 'sku', 'media', 'review'];
+    if (!allowed.includes(stage) || !flowStageAvailable(stage)) return;
+    if (stage !== state.flowStage) state.processDockExpanded = false;
+    state.flowStage = stage;
+    if (document && document.body && document.body.dataset) {
+      document.body.dataset.flowStage = stage;
+    }
+    var buttons = nodes.flowToolbar && typeof nodes.flowToolbar.querySelectorAll === 'function'
+      ? nodes.flowToolbar.querySelectorAll('[data-flow-step]') : [];
+    Array.prototype.forEach.call(buttons, function (button) {
+      var active = button.dataset && button.dataset.flowStep === stage;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-current', active ? 'true' : 'false');
+    });
+  }
+
+  function renderFlowState() {
+    if (document && document.body && document.body.dataset
+      && document.body.dataset.flowStage !== state.flowStage) {
+      document.body.dataset.flowStage = state.flowStage;
+    }
+    if (nodes.flowSummary) {
+      var context = state.publicState && state.publicState.context;
+      var profile = selectedProfileRow();
+      var summary = context
+        ? context.shopId + ' · SKU ' + context.skuKey
+        : '正在读取商品绑定';
+      if (reviewPublishOnly()) {
+        summary += ' · 仅核对已绑定资产，无需 Provider 设置';
+      } else if (hasReviewCandidate()) {
+        summary += ' · 候选已生成，进入审核上传';
+      } else if (profile && profile.profile) {
+        summary += ' · ' + profile.profile.name;
+      } else {
+        summary += ' · 请先完成 Provider 设置';
+      }
+      nodes.flowSummary.textContent = summary;
+    }
+    if (document && document.body && document.body.dataset) {
+      document.body.dataset.processVisible = state.processDockExpanded ? 'true' : 'false';
+    }
+    if (nodes.flowProcessButton) {
+      var processVisible = state.processDockExpanded || state.flowStage === 'review';
+      nodes.flowProcessButton.disabled = !reviewPublishOnly()
+        && !Boolean(state.publicState && state.publicState.context);
+      nodes.flowProcessButton.setAttribute('aria-expanded', processVisible ? 'true' : 'false');
+    }
+    var buttons = nodes.flowToolbar && typeof nodes.flowToolbar.querySelectorAll === 'function'
+      ? nodes.flowToolbar.querySelectorAll('[data-flow-step]') : [];
+    Array.prototype.forEach.call(buttons, function (button) {
+      var step = button.dataset && button.dataset.flowStep;
+      var available = flowStageAvailable(step);
+      button.disabled = !available && step !== state.flowStage;
+      button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+      var complete = step === 'context' ? Boolean(state.publicState && state.publicState.context)
+        : step === 'sku' ? Boolean(state.publicState && state.publicState.context)
+          : step === 'media' ? hasReviewCandidate()
+            : Boolean(state.candidate && state.candidate.reviewState === 'APPROVED');
+      button.classList.toggle('is-complete', complete && step !== state.flowStage);
+    });
+  }
+
+  function reconcileFlowStage() {
+    var candidateAvailable = hasReviewCandidate();
+    if (candidateAvailable && state.flowStage === 'media') setFlowStage('review');
+    if (!candidateAvailable && state.flowStage === 'review' && !reviewPublishOnly()) {
+      setFlowStage('media');
+    }
+    renderFlowState();
   }
 
   function setResultStatus(message, tone) {
@@ -442,6 +556,41 @@
 
   function errorLabel(error) {
     var code = error && typeof error.code === 'string' ? error.code : '';
+    var reasonCode = error && typeof error.reasonCode === 'string' ? error.reasonCode : '';
+    var readinessErrorCode = error && typeof error.readinessErrorCode === 'string'
+      ? error.readinessErrorCode : '';
+    var readinessState = error && typeof error.readinessState === 'string'
+      ? error.readinessState : '';
+    var readinessReasons = {
+      POLICY_DISABLED: 'ERP 尚未开放 BYOK 生图，请联系管理员开启后刷新状态。',
+      OWNER_NOT_ALLOWED: '当前 ERP 账号不在 BYOK 范围，请联系管理员授权后刷新状态。',
+      SHOP_NOT_ALLOWED: '当前设备无权使用所选店铺，请更换店铺或完成店铺授权后刷新状态。',
+      DEVICE_NOT_ALLOWED: '当前设备未获得 BYOK 媒体权限，请在 ERP 设备管理中授权后刷新状态。',
+      ORIGIN_NOT_ALLOWED: 'ERP 管理策略未允许当前 Provider 来源，请到高级设置检查来源并联系管理员后刷新状态。',
+      OPERATION_NOT_ALLOWED: '当前 Provider 未获得文生图能力许可，请到高级设置检查能力策略后刷新状态。',
+      GENERATION_DISABLED: 'ERP 已关闭 BYOK 生图，请联系管理员开启后刷新状态。',
+    };
+    if (Object.prototype.hasOwnProperty.call(readinessReasons, reasonCode)) {
+      return readinessReasons[reasonCode];
+    }
+    if (readinessErrorCode === 'byok_readiness_scope_denied') {
+      return '当前设备缺少 BYOK 媒体权限，请在 ERP 设备管理中授权后刷新状态。';
+    }
+    if (readinessErrorCode === 'byok_readiness_shop_denied') {
+      return '当前设备无权使用所选店铺，请更换店铺或完成店铺授权后刷新状态。';
+    }
+    if (readinessState === 'unpaired' || readinessState === 'authorization_required') {
+      return '设备配对或授权已失效，请重新连接 ERP 后刷新状态。';
+    }
+    if (readinessErrorCode === 'byok_readiness_draft_stale'
+      || readinessErrorCode === 'byok_readiness_target_stale') {
+      return 'ERP 草稿或目标槽位已变化，请从来源商品页重新打开工作台。';
+    }
+    if (readinessErrorCode === 'byok_readiness_not_ready'
+      || readinessErrorCode === 'byok_readiness_unavailable'
+      || code === 'SS_ERP_BYOK_READINESS_UNAVAILABLE') {
+      return 'ERP 暂时无法允许当前 Provider 操作，请点击“刷新状态”重新校验。';
+    }
     var labels = {
       SS_ERP_BYOK_WORKBENCH_SESSION_NOT_FOUND: '工作台会话已失效，请从来源商品页重新打开。',
       SS_ERP_BYOK_WORKBENCH_SESSION_SENDER_DENIED: '工作台页面已重新加载；为保护上下文，请从来源商品页重新打开。',
@@ -859,6 +1008,7 @@
       || (!candidateReady && !approved && !ingesting);
     renderProfileSummary();
     renderPublishControls();
+    reconcileFlowStage();
   }
 
   function revokePreview() {
@@ -886,6 +1036,7 @@
     nodes.approvedNotice.hidden = true;
     nodes.previewMeta.textContent = '等待安全预览';
     setResultStatus('等待结果', 'pending');
+    reconcileFlowStage();
   }
 
   function handlePreviewExpiry(resultId, lifecycleEpoch) {
@@ -1462,6 +1613,27 @@
     state.readiness = null;
     void refreshReadiness({ lifecycleEpoch: state.lifecycleEpoch });
   });
+  if (nodes.flowToolbar && typeof nodes.flowToolbar.addEventListener === 'function') {
+    nodes.flowToolbar.addEventListener('click', function (event) {
+      var button = event && event.target && typeof event.target.closest === 'function'
+        ? event.target.closest('[data-flow-step]') : null;
+      if (!button || button.disabled || !event || event.isTrusted !== true) return;
+      setFlowStage(button.dataset.flowStep);
+    });
+  }
+  if (nodes.flowProcessButton && typeof nodes.flowProcessButton.addEventListener === 'function') {
+    nodes.flowProcessButton.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || nodes.flowProcessButton.disabled) return;
+      var targetStage = hasReviewCandidate() || reviewPublishOnly() ? 'review' : 'media';
+      setFlowStage(targetStage);
+      state.processDockExpanded = targetStage === 'media';
+      if (nodes.workspaceTaskDock) nodes.workspaceTaskDock.hidden = false;
+      renderFlowState();
+      if (nodes.workspaceTaskDock && typeof nodes.workspaceTaskDock.scrollIntoView === 'function') {
+        nodes.workspaceTaskDock.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    });
+  }
   nodes.promptInput.addEventListener('input', renderControls);
   nodes.negativePromptInput.addEventListener('input', renderControls);
   if (document && typeof document.addEventListener === 'function') {
@@ -1499,6 +1671,17 @@
         return;
       }
       emitWorkspaceBootstrap(state.candidate);
+    });
+    document.addEventListener(WORKSPACE_RUNTIME_EVENT, function (event) {
+      var candidateAvailable = workspaceRuntimeCandidateState(event && event.detail);
+      if (candidateAvailable === null) return;
+      state.workspaceHasCandidate = candidateAvailable;
+      reconcileFlowStage();
+    });
+    document.addEventListener(WORKSPACE_CLEAR_EVENT, function () {
+      state.workspaceHasCandidate = false;
+      state.processDockExpanded = false;
+      reconcileFlowStage();
     });
     document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
     document.addEventListener(WORKSPACE_AUTHORITATIVE_RELOAD_EVENT, function (event) {
@@ -1609,6 +1792,8 @@
       state.busy = false;
       state.generationDispatchPending = false;
       state.authoritativeReloadPending = false;
+      state.workspaceHasCandidate = false;
+      state.processDockExpanded = false;
       clearResultView();
       clearWorkspaceView();
       clearContextView('设备已断开', true);
@@ -1619,6 +1804,8 @@
   }
 
   var initialLifecycleEpoch = state.lifecycleEpoch;
+  setFlowStage(state.flowStage);
+  renderFlowState();
   void loadPublicState(initialLifecycleEpoch).then(function (loaded) {
     if (loaded && lifecycleIsCurrent(initialLifecycleEpoch)
       && !reviewPublishOnly() && !state.candidate && !state.unknownOutcome) {

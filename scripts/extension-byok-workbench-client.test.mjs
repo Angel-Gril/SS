@@ -365,6 +365,33 @@ assert.deepEqual(JSON.parse(JSON.stringify(
   type: api.MESSAGE_TYPES.GET_PUBLIC_STATE, payload: {},
 });
 
+const deniedReadinessClient = loadClientWithRuntime({
+  lastError: null,
+  sendMessage(_message, callback) {
+    callback({
+      ok: false,
+      errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+      reasonCode: 'ORIGIN_NOT_ALLOWED',
+      readinessErrorCode: 'byok_readiness_not_ready',
+      readinessState: 'response',
+      readinessStatus: 409,
+    });
+  },
+}, {
+  setTimeout() { return 1; },
+  clearTimeout() {},
+});
+await assert.rejects(
+  () => deniedReadinessClient.getReadiness('profile-1'),
+  (error) => error
+    && error.code === 'SS_ERP_BYOK_READINESS_UNAVAILABLE'
+    && error.reasonCode === 'ORIGIN_NOT_ALLOWED'
+    && error.readinessErrorCode === 'byok_readiness_not_ready'
+    && error.readinessState === 'response'
+    && error.readinessStatus === 409,
+  'workbench client must preserve only the allowlisted readiness denial details',
+);
+
 for (const invalid of [
   { profileId: 'profile-1', prompt: '', negativePrompt: null, size: '1024x1024', idempotencyKey: 'workbench-generate-0002', readiness },
   { profileId: 'profile-1', prompt: 'ok', negativePrompt: null, size: '99999x1', idempotencyKey: 'workbench-generate-0002', readiness },

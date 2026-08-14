@@ -6,7 +6,7 @@
   <title>AI 图片工作台 - SS ERP</title>
   <link rel="stylesheet" href="./ai-image-workbench.css" />
 </head>
-<body>
+<body data-flow-stage="media">
   <main class="workbench-page" aria-labelledby="pageTitle">
     <header class="page-header">
       <div class="title-row">
@@ -18,10 +18,43 @@
         </div>
       </div>
       <div class="header-actions">
-        <a class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">Provider 设置</a>
+        <a class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">高级设置</a>
         <button id="refreshButton" class="button button-secondary" type="button">刷新状态</button>
       </div>
     </header>
+
+    <nav id="flowToolbar" class="flow-toolbar" aria-label="图片处理流程">
+      <div class="flow-step-list" role="list">
+        <button type="button" class="flow-step" data-flow-step="context" aria-current="false">
+          <span class="flow-step-index">1</span><span>基础信息</span>
+        </button>
+        <span class="flow-step-connector" aria-hidden="true"></span>
+        <button type="button" class="flow-step" data-flow-step="sku" aria-current="false">
+          <span class="flow-step-index">2</span><span>选择 SKU</span>
+        </button>
+        <span class="flow-step-connector" aria-hidden="true"></span>
+        <button type="button" class="flow-step is-active" data-flow-step="media" aria-current="true">
+          <span class="flow-step-index">3</span><span>图片处理</span>
+        </button>
+        <span class="flow-step-connector" aria-hidden="true"></span>
+        <button type="button" class="flow-step" data-flow-step="review" aria-current="false">
+          <span class="flow-step-index">4</span><span>审核上传</span>
+        </button>
+      </div>
+      <button
+        id="flowProcessButton"
+        class="flow-process-button"
+        type="button"
+        aria-controls="workspaceTaskDock"
+        aria-expanded="false"
+      >
+        查看过程
+      </button>
+    </nav>
+
+    <div id="flowSummary" class="flow-summary" role="status" aria-live="polite">
+      正在读取商品与设备状态...
+    </div>
 
     <div id="pageStatus" class="page-status" role="status" aria-live="polite">
       正在验证工作台会话...
@@ -269,6 +302,11 @@
           <p id="profileSummary" class="field-hint">正在检查会话密钥、来源权限和能力证据</p>
         </div>
 
+        <details id="batchAdvancedDetails" class="advanced-disclosure">
+          <summary>
+            <span>批量与恢复</span>
+            <small>多槽位、队列与回执</small>
+          </summary>
         <section class="batch-control" aria-labelledby="batchControlTitle">
           <div class="workspace-pane-heading">
             <div>
@@ -309,6 +347,7 @@
             </button>
           </figure>
         </section>
+        </details>
 
         <fieldset id="operationSwitch" class="operation-switch" aria-describedby="operationReason">
           <legend>图片操作</legend>

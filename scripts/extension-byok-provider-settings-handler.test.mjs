@@ -760,4 +760,55 @@ test('maps dependency failures to stable codes without reflecting secret-bearing
   assert.equal(JSON.stringify(response).includes(secret), false);
 });
 
+test('projects only allowlisted readiness reason codes', async () => {
+  const policyFailure = new Error('must not reach the page');
+  policyFailure.code = 'SS_ERP_BYOK_READINESS_UNAVAILABLE';
+  policyFailure.errorCode = 'byok_readiness_not_ready';
+  policyFailure.reasonCode = 'ORIGIN_NOT_ALLOWED';
+  policyFailure.state = 'response';
+  policyFailure.status = 409;
+  const allowed = loadDispatcher({
+    readinessClient: {
+      async getReadiness() { throw policyFailure; },
+    },
+  });
+  assert.deepEqual(
+    plain(await allowed.dispatcher.handlers[TYPES.GET_READINESS]({
+      payload: {
+        profileId: 'relay-profile-1', shopId: 'shop-1', operation: 'TEXT_TO_IMAGE',
+      },
+    })),
+    {
+      ok: false,
+      errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+      error: 'BYOK Provider settings operation failed',
+      reasonCode: 'ORIGIN_NOT_ALLOWED',
+      readinessErrorCode: 'byok_readiness_not_ready',
+      readinessState: 'response',
+      readinessStatus: 409,
+    },
+  );
+
+  const unsafeFailure = new Error('must not reach the page');
+  unsafeFailure.code = 'SS_ERP_BYOK_READINESS_UNAVAILABLE';
+  unsafeFailure.reasonCode = 'UNSAFE_UNRECOGNIZED_REASON';
+  const rejected = loadDispatcher({
+    readinessClient: {
+      async getReadiness() { throw unsafeFailure; },
+    },
+  });
+  assert.deepEqual(
+    plain(await rejected.dispatcher.handlers[TYPES.GET_READINESS]({
+      payload: {
+        profileId: 'relay-profile-1', shopId: 'shop-1', operation: 'TEXT_TO_IMAGE',
+      },
+    })),
+    {
+      ok: false,
+      errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+      error: 'BYOK Provider settings operation failed',
+    },
+  );
+});
+
 console.log('PASS extension BYOK Provider settings background handler contract');

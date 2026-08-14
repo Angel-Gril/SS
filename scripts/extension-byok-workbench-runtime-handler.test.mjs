@@ -890,6 +890,34 @@ assert.deepEqual(JSON.parse(JSON.stringify(readinessCall)), {
   assignmentMode: 'APPEND', assignmentOrdinal: 2, operation: 'TEXT_TO_IMAGE',
 });
 
+const deniedReadinessDispatcher = api.createDispatcher({
+  ...dispatcherOptions,
+  readinessClient: {
+    async getReadiness() {
+      throw Object.assign(new Error('redacted readiness denial'), {
+        code: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+        reasonCode: 'ORIGIN_NOT_ALLOWED',
+        errorCode: 'byok_readiness_not_ready',
+        state: 'response',
+        status: 409,
+      });
+    },
+  },
+  assertSourceCurrent,
+});
+const deniedReadiness = await deniedReadinessDispatcher.handlers[MESSAGE_TYPES.GET_READINESS](
+  { payload: { profileId: 'profile-1' }, sender },
+);
+assert.deepEqual(JSON.parse(JSON.stringify(deniedReadiness)), {
+  ok: false,
+  errorCode: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+  error: 'BYOK workbench operation failed',
+  reasonCode: 'ORIGIN_NOT_ALLOWED',
+  readinessErrorCode: 'byok_readiness_not_ready',
+  readinessState: 'response',
+  readinessStatus: 409,
+});
+
 providerSemaphoreBusy = true;
 const generateCallsBeforeBusy = calls.filter((row) => row[0] === 'generate').length;
 const busyProvider = await dispatcher.handlers[MESSAGE_TYPES.EXECUTE_PROVIDER]({

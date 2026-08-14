@@ -1144,6 +1144,7 @@
     previewMeta: byId('batchPreviewMeta'),
     previewClose: byId('batchPreviewCloseButton'),
   };
+  var advancedDetails = byId('batchAdvancedDetails');
   if (Object.values(nodes).some(function (node) { return !node; })) return;
 
   var client;
@@ -1638,6 +1639,9 @@
     nodes.recoverButton.disabled = !view.canRecoverIngest || !lifecycleReady;
     nodes.clearButton.disabled = !view.canClear;
     nodes.clearButton.hidden = !view.active;
+    if (advancedDetails && (view.active || view.recoveryRows.length > 0)) {
+      advancedDetails.open = true;
+    }
     if (view.active) {
       nodes.generateButton.disabled = true;
       nodes.generateButton.textContent = '批次已开始';

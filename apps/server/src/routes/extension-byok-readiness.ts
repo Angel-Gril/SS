@@ -55,9 +55,37 @@ export interface ExtensionByokReadinessRoutesOptions {
   now?: () => Date;
 }
 
-function routeError(reply: FastifyReply, status: number, code: string, message: string) {
+const PUBLIC_READINESS_REASON_CODES = new Set([
+  'POLICY_DISABLED',
+  'OWNER_NOT_ALLOWED',
+  'SHOP_NOT_ALLOWED',
+  'DEVICE_NOT_ALLOWED',
+  'ORIGIN_NOT_ALLOWED',
+  'OPERATION_NOT_ALLOWED',
+  'GENERATION_DISABLED',
+]);
+
+function publicReadinessReasonCode(value: unknown): string | null {
+  return typeof value === 'string' && PUBLIC_READINESS_REASON_CODES.has(value)
+    ? value
+    : null;
+}
+
+function routeError(
+  reply: FastifyReply,
+  status: number,
+  code: string,
+  message: string,
+  details?: { reasonCode?: unknown },
+) {
   reply.header('Cache-Control', 'no-store');
-  return reply.status(status).send({ code: 0, errorCode: code, msg: message });
+  const reasonCode = publicReadinessReasonCode(details?.reasonCode);
+  return reply.status(status).send({
+    code: 0,
+    errorCode: code,
+    msg: message,
+    ...(reasonCode ? { reasonCode } : {}),
+  });
 }
 
 function deviceContext(
@@ -305,6 +333,15 @@ export async function extensionByokReadinessRoutes(
           }
           throw error;
         }
+      }
+      if (decision.capabilities?.generation?.ready === false) {
+        return routeError(
+          reply,
+          409,
+          'byok_readiness_not_ready',
+          'BYOK Provider 尚未就绪',
+          { reasonCode: decision.capabilities.generation.reasonCode },
+        );
       }
       const attestation = createExtensionByokReadinessAttestation({
         ownerUserId: device.ownerUserId,

@@ -15,6 +15,30 @@
     'shopId', 'workflowId', 'draftRevision', 'draftVersion', 'skuKey', 'slotKey',
     'assignmentMode', 'assignmentOrdinal',
   ];
+  var PUBLIC_READINESS_REASON_CODES = new Set([
+    'POLICY_DISABLED',
+    'OWNER_NOT_ALLOWED',
+    'SHOP_NOT_ALLOWED',
+    'DEVICE_NOT_ALLOWED',
+    'ORIGIN_NOT_ALLOWED',
+    'OPERATION_NOT_ALLOWED',
+    'GENERATION_DISABLED',
+  ]);
+  var PUBLIC_READINESS_ERROR_CODES = new Set([
+    'byok_readiness_request_invalid',
+    'byok_readiness_scope_denied',
+    'byok_readiness_shop_denied',
+    'byok_readiness_draft_stale',
+    'byok_readiness_target_stale',
+    'byok_readiness_not_ready',
+    'byok_readiness_unavailable',
+  ]);
+  var PUBLIC_READINESS_STATES = new Set([
+    'response',
+    'unpaired',
+    'authorization_required',
+    'invalid_response',
+  ]);
 
   function handlerError(code) {
     var error = new Error(code);
@@ -66,13 +90,26 @@
 
   function safeFailure(error) {
     var candidate = error && typeof error === 'object' ? String(error.code || '') : '';
-    return {
+    var failure = {
       ok: false,
       errorCode: /^[A-Z][A-Z0-9_]{0,99}$/u.test(candidate)
         ? candidate
         : 'SS_ERP_BYOK_WORKBENCH_OPERATION_FAILED',
       error: 'BYOK workbench operation failed',
     };
+    var reasonCode = error && typeof error === 'object' ? error.reasonCode : null;
+    var readinessErrorCode = error && typeof error === 'object' ? error.errorCode : null;
+    var readinessState = error && typeof error === 'object' ? error.state : null;
+    var readinessStatus = Number(error && typeof error === 'object' ? error.status : NaN);
+    if (PUBLIC_READINESS_REASON_CODES.has(reasonCode)) failure.reasonCode = reasonCode;
+    if (PUBLIC_READINESS_ERROR_CODES.has(readinessErrorCode)) {
+      failure.readinessErrorCode = readinessErrorCode;
+    }
+    if (PUBLIC_READINESS_STATES.has(readinessState)) failure.readinessState = readinessState;
+    if (Number.isSafeInteger(readinessStatus) && readinessStatus >= 100 && readinessStatus <= 599) {
+      failure.readinessStatus = readinessStatus;
+    }
+    return failure;
   }
 
   function success(data) {

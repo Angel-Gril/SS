@@ -225,6 +225,47 @@ describe('extension BYOK readiness attestation route', () => {
     }
   });
 
+  it('returns only an allowlisted policy reason without replacing the readiness error code', async () => {
+    const allowed = await build({
+      readiness: decision({
+        capabilities: {
+          ...decision().capabilities,
+          generation: { enabled: false, ready: false, reasonCode: 'ORIGIN_NOT_ALLOWED' },
+        },
+      }),
+    });
+    const response = await allowed.app.inject({
+      method: 'POST', url: '/readiness', payload: request(),
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: 0,
+      errorCode: 'byok_readiness_not_ready',
+      msg: 'BYOK Provider 尚未就绪',
+      reasonCode: 'ORIGIN_NOT_ALLOWED',
+    });
+    await allowed.app.close();
+
+    const unrecognized = await build({
+      readiness: decision({
+        capabilities: {
+          ...decision().capabilities,
+          generation: { enabled: false, ready: false, reasonCode: 'POLICY_UNAVAILABLE' },
+        },
+      }),
+    });
+    const hidden = await unrecognized.app.inject({
+      method: 'POST', url: '/readiness', payload: request(),
+    });
+    expect(hidden.statusCode).toBe(409);
+    expect(hidden.json()).toEqual({
+      code: 0,
+      errorCode: 'byok_readiness_not_ready',
+      msg: 'BYOK Provider 尚未就绪',
+    });
+    await unrecognized.app.close();
+  });
+
   it('allows provider settings readiness without accepting a partial draft identity', async () => {
     const { app } = await build();
     const settings = await app.inject({

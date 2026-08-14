@@ -261,7 +261,7 @@ function createPageHarness(options = {}) {
       return {
         profileId: id,
         origin: `https://${id}.example`,
-        granted: true,
+        granted: options.permissionGranted !== false,
       };
     },
     async getReadiness(input) {
@@ -729,6 +729,48 @@ test('invalidates an in-flight readiness request as soon as the profile form bec
   assert.equal(harness.calls.some(([name]) => name === 'preparePermission'), false);
 });
 
+test('shows the exact safe readiness denial and a concrete recovery action', async () => {
+  const denied = Object.assign(new Error('untrusted upstream detail'), {
+    code: 'SS_ERP_BYOK_READINESS_UNAVAILABLE',
+    errorCode: 'byok_readiness_not_ready',
+    reasonCode: 'ORIGIN_NOT_ALLOWED',
+    state: 'response',
+    status: 409,
+  });
+  const harness = createPageHarness({
+    permissionGranted: false,
+    getReadiness() { throw denied; },
+  });
+  await settle();
+
+  assert.equal(harness.nodes.readinessSummary.textContent, '来源未允许');
+  assert.equal(harness.nodes.permissionStatus.textContent, '未就绪');
+  assert.match(harness.nodes.permissionReason.textContent, /Provider 精确来源/u);
+  assert.match(harness.nodes.permissionReason.textContent, /允许列表/u);
+  assert.match(harness.nodes.permissionReason.textContent, /刷新状态/u);
+  assert.doesNotMatch(harness.nodes.permissionReason.textContent, /正在校验/u);
+  assert.equal(harness.nodes.requestPermissionBtn.disabled, true);
+  assert.equal(harness.nodes.refreshPageBtn.disabled, false);
+  assert.match(harness.nodes.refreshPageBtn.title, /重新校验/u);
+  assert.equal(harness.nodes.pageStatus.textContent.includes('untrusted upstream detail'), false);
+});
+
+test('turns readiness transport failures into an explicit refresh path', async () => {
+  const unavailable = Object.assign(new Error('transport internals'), {
+    code: 'SS_ERP_BYOK_PROVIDER_SETTINGS_RUNTIME_TIMEOUT',
+  });
+  const harness = createPageHarness({
+    permissionGranted: false,
+    getReadiness() { throw unavailable; },
+  });
+  await settle();
+  assert.equal(harness.nodes.readinessSummary.textContent, '需要刷新');
+  assert.match(harness.nodes.permissionReason.textContent, /ERP 暂时无法校验/u);
+  assert.match(harness.nodes.permissionReason.textContent, /检查扩展连接/u);
+  assert.equal(harness.nodes.requestPermissionBtn.disabled, true);
+  assert.equal(harness.nodes.refreshPageBtn.disabled, false);
+});
+
 test('preserves Provider profiles when setup or shop discovery is partially unavailable', async () => {
   const setupError = Object.assign(new Error('shop list unavailable'), {
     code: 'SS_ERP_BYOK_PROVIDER_SHOPS_UNAVAILABLE',
@@ -768,6 +810,8 @@ test('wires lifecycle, stale-ticket, partial-refresh and dirty-navigation guards
   assert.match(page, /Promise\.allSettled/u);
   assert.match(page, /shopsState/u);
   assert.match(page, /beforeunload/u);
+  assert.match(page, /readinessError/u);
+  assert.match(page, /ORIGIN_NOT_ALLOWED/u);
 });
 
 test('communicates uncertain Provider completion and failed permission revocation explicitly', () => {

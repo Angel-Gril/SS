@@ -10,6 +10,30 @@
   var INGEST_TIMEOUT_MS = 130 * 1000;
   var PUBLISH_TIMEOUT_MS = 160 * 1000;
   var DEVICE_INVALIDATED_MESSAGE = 'ss-erp:byok-device-session-invalidated';
+  var PUBLIC_READINESS_REASON_CODES = new Set([
+    'POLICY_DISABLED',
+    'OWNER_NOT_ALLOWED',
+    'SHOP_NOT_ALLOWED',
+    'DEVICE_NOT_ALLOWED',
+    'ORIGIN_NOT_ALLOWED',
+    'OPERATION_NOT_ALLOWED',
+    'GENERATION_DISABLED',
+  ]);
+  var PUBLIC_READINESS_ERROR_CODES = new Set([
+    'byok_readiness_request_invalid',
+    'byok_readiness_scope_denied',
+    'byok_readiness_shop_denied',
+    'byok_readiness_draft_stale',
+    'byok_readiness_target_stale',
+    'byok_readiness_not_ready',
+    'byok_readiness_unavailable',
+  ]);
+  var PUBLIC_READINESS_STATES = new Set([
+    'response',
+    'unpaired',
+    'authorization_required',
+    'invalid_response',
+  ]);
   var MESSAGE_TYPES = Object.freeze({
     GET_PUBLIC_STATE: 'ss-erp:ai-image-workbench-state',
     GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
@@ -30,10 +54,40 @@
     EDIT_CLEANUP: 'ss-erp:ai-image-workbench-edit-cleanup',
   });
 
-  function clientError(code) {
+  function clientError(code, details) {
     var error = new Error(code);
     error.code = code;
+    if (details && PUBLIC_READINESS_REASON_CODES.has(details.reasonCode)) {
+      error.reasonCode = details.reasonCode;
+    }
+    if (details && PUBLIC_READINESS_ERROR_CODES.has(details.readinessErrorCode)) {
+      error.readinessErrorCode = details.readinessErrorCode;
+    }
+    if (details && PUBLIC_READINESS_STATES.has(details.readinessState)) {
+      error.readinessState = details.readinessState;
+    }
+    if (details && Number.isSafeInteger(details.readinessStatus)
+      && details.readinessStatus >= 100 && details.readinessStatus <= 599) {
+      error.readinessStatus = details.readinessStatus;
+    }
     return error;
+  }
+
+  function projectedReadinessDetails(value) {
+    if (!isRecord(value)) return null;
+    var details = {};
+    if (PUBLIC_READINESS_REASON_CODES.has(value.reasonCode)) details.reasonCode = value.reasonCode;
+    if (PUBLIC_READINESS_ERROR_CODES.has(value.readinessErrorCode)) {
+      details.readinessErrorCode = value.readinessErrorCode;
+    }
+    if (PUBLIC_READINESS_STATES.has(value.readinessState)) {
+      details.readinessState = value.readinessState;
+    }
+    var status = Number(value.readinessStatus);
+    if (Number.isSafeInteger(status) && status >= 100 && status <= 599) {
+      details.readinessStatus = status;
+    }
+    return Object.keys(details).length ? details : null;
   }
 
   function isRecord(value) {
@@ -321,7 +375,7 @@
                   : publishOutcomeUnknown
                     ? 'SS_ERP_BYOK_PUBLISH_UNKNOWN_OUTCOME'
                   : 'SS_ERP_BYOK_WORKBENCH_OPERATION_FAILED';
-              finish(reject, clientError(code));
+              finish(reject, clientError(code, projectedReadinessDetails(response)));
               return;
             }
             finish(resolve, response.data);
