@@ -58,6 +58,21 @@ assert.match(panelCss, /\.ss-erp-source-icon-btn\s*\{[\s\S]{0,100}width:\s*44px;
 assert.match(panelCss, /\.ss-erp-source-actions button\s*\{[\s\S]{0,100}min-height:\s*44px/u);
 assert.match(panelCss, /\.ss-erp-source-input input\s*\{[\s\S]{0,120}height:\s*44px/u);
 assert.match(panelCss, /#ss-erp-source-costing-panel \*,[\s\S]{0,160}box-sizing:\s*border-box/u);
+assert.match(panel, /id\s*=\s*['"]ss-erp-source-workbench-backdrop['"]/u);
+assert.match(panel, /syncSourcePanelModalState/u);
+assert.match(panel, /trapSourcePanelFocus/u);
+assert.match(panel, /getClientRects\(\)\.length\s*>\s*0/u);
+assert.match(panel, /aria-label=["']关闭工作区["']/u);
+assert.match(
+  panelCss,
+  /#ss-erp-source-costing-panel\.media-focus\s*\{[\s\S]{0,360}inset:\s*24px;[\s\S]{0,180}width:\s*auto;[\s\S]{0,180}height:\s*auto/u,
+  'the AI entry should use a stable full-viewport workspace instead of the costing drawer',
+);
+assert.match(
+  panelCss,
+  /#ss-erp-source-costing-panel\.media-focus[\s\S]*data-role=["']ozon-card["'][\s\S]*display:\s*none/u,
+  'the full AI workspace should not retain the costing cards',
+);
 assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-picker\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
 assert.match(viewCss, /@media \(max-width:\s*520px\)[\s\S]*\.ss-erp-source-workbench-ai-copy\s*\{[\s\S]{0,80}flex:\s*0 0 auto/u);
 assert.match(panelCss, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*#ss-erp-source-costing-panel\.open,[\s\S]*animation:\s*none/u);
@@ -2309,25 +2324,26 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(unpairedContainer, {
 });
 assert.equal(unpairedContainer.hidden, false);
 assert.match(renderedText(unpairedContainer), /扩展尚未连接 ERP/u);
-assert.match(renderedText(unpairedContainer), /AI 图片处理/u);
-for (const label of [
-  '仅图片翻译', 'AI 主图 + 翻译', 'AI 套图', '参考图生图', '全图编辑', '局部重绘',
-]) {
-  assert.ok(renderedText(unpairedContainer).includes(label));
-}
+assert.match(renderedText(unpairedContainer), /独立 AI 图片工作台/u);
+assert.match(renderedText(unpairedContainer), /采集商品.*店铺草稿.*图片处理.*审核应用/u);
+assert.equal(
+  renderedNodes(unpairedContainer).filter((node) => node.attributes['data-workflow-mode']).length,
+  0,
+  'unavailable setup should show one recovery path instead of six repeated blocked modes',
+);
 
 const loadingContainer = new TestNode('section');
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(loadingContainer, null);
 assert.equal(loadingContainer.hidden, false);
 assert.match(renderedText(loadingContainer), /正在读取 ERP 商品工作流/u);
-assert.match(renderedText(loadingContainer), /AI 图片处理/u);
+assert.match(renderedText(loadingContainer), /独立 AI 图片工作台/u);
 
 const missingProductIdContainer = new TestNode('section');
 viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(missingProductIdContainer, {
   state: 'unavailable', reason: 'source_product_id_missing',
 });
 assert.match(renderedText(missingProductIdContainer), /未提取到稳定的商品 ID/u);
-assert.match(renderedText(missingProductIdContainer), /AI 图片处理/u);
+assert.match(renderedText(missingProductIdContainer), /独立 AI 图片工作台/u);
 
 const notCollectedContainer = new TestNode('section');
 const collectForMediaEvents = [];
@@ -2394,7 +2410,7 @@ const rendered = renderedText(container);
 assert.equal(container.hidden, false);
 assert.match(rendered, /Web ERP 的采集详情中使用 AI 图片工作台/u);
 assert.match(rendered, /扩展内处理需先创建店铺草稿/u);
-assert.match(rendered, /AI 图片处理/u);
+assert.match(rendered, /独立 AI 图片工作台/u);
 assert.match(rendered, /图片翻译 · 等待审核/u);
 assert.doesNotMatch(rendered, /已取消|CANCELLED|PENDING/u);
 const openWorkflowForMediaButton = renderedNodes(container)
@@ -3137,7 +3153,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(aiLauncherContainer, {
 const aiNodes = aiLauncherContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
 const aiLauncher = aiNodes.find((node) => node.attributes['data-role'] === 'ai-workbench-launcher');
-const aiButton = aiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+const aiButton = aiNodes.find((node) => node.textContent === '打开独立工作台');
 const aiSkuSelect = aiNodes.find((node) => node.attributes['aria-label'] === '选择 AI 图片工作台 SKU');
 assert.ok(aiLauncher, 'source panel should render one compact unified AI launcher');
 assert.ok(aiButton);
@@ -3181,7 +3197,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(selectedAiLauncherCont
 });
 const selectedAiNodes = selectedAiLauncherContainer.children
   .flatMap(function flatten(node) { return [node, ...node.children.flatMap(flatten)]; });
-const selectedAiButton = selectedAiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+const selectedAiButton = selectedAiNodes.find((node) => node.textContent === '打开独立工作台');
 assert.equal(selectedAiButton.disabled, false);
 selectedAiButton.listeners.click({ isTrusted: false });
 assert.deepEqual(aiLaunchEvents, []);
@@ -3339,7 +3355,7 @@ viewContext.window.SS_ERP_SOURCE_LISTING_WORKBENCH.render(staleAiLauncherContain
   onRefreshAiWorkbench() { aiRefreshEvents.push('refresh'); },
 });
 const staleAiNodes = renderedNodes(staleAiLauncherContainer);
-const staleAiButton = staleAiNodes.find((node) => node.textContent === '打开 AI 图片工作台');
+const staleAiButton = staleAiNodes.find((node) => node.textContent === '打开独立工作台');
 const staleAiMessage = staleAiNodes.find((node) => node.attributes.role === 'alert');
 const staleAiRefresh = staleAiNodes.find((node) => node.textContent === '刷新上下文');
 assert.equal(staleAiButton.disabled, true);

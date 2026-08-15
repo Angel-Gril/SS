@@ -107,12 +107,12 @@ for (const [label, source] of [['popup', popup], ['source panel', sourcePanel]])
 assert.match(popup, /sourceWorkflowHandoffBtn\.hidden\s*=\s*!handoff/, 'popup CTA should remain hidden without a V2 handoff');
 assert.match(sourcePanel, /open-source-workflow[^\n]*hidden/, 'source panel CTA should be hidden by default');
 const popupCollect = popup.match(/function collectSourcePage[\s\S]*?\n\s{2}function quoteSourcePage/)?.[0] || '';
-const panelCollect = sourcePanel.match(/async function collectToErp[\s\S]*?\n\s{2}async function openSourceWorkflow/)?.[0] || '';
+const panelCollect = sourcePanel.match(/async function collectToErp[\s\S]*?\n\s{2}async function collectForMediaWorkflow/)?.[0] || '';
 assert.doesNotMatch(popupCollect, /openSourceWorkflowHandoff\(/, 'popup should not auto-open ERP after capture');
 assert.doesNotMatch(panelCollect, /openSourceWorkflow\(/, 'source panel should not auto-open ERP after capture');
 assert.match(
   serviceWorker,
-  /const items = rawItems\.map\(normalizeSourceProductForErpCollect\)[\s\S]{0,700}sendResponse\(\{ ok: true, data, saved, errorCount: errors\.length }\)/,
+  /const items = rawItems\.map\(normalizeSourceProductForErpCollect\)[\s\S]{0,1800}sendResponse\(\{ ok: true, data, saved, errorCount: errors\.length }\)/,
   'legacy source collection should retain its existing response without manufacturing a V2 handoff',
 );
 

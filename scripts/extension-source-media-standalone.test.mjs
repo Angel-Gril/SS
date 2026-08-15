@@ -378,7 +378,8 @@ assert.equal(typeof api?.createClient, 'function');
     onOpenMediaEditor(value) { editorOpens.push(plain(value)); },
   });
 
-  assert.match(renderedText(container), /AI 图片处理/u);
+  assert.match(renderedText(container), /独立 AI 图片工作台/u);
+  assert.match(renderedText(container), /图片处理方式/u);
   const suiteWorkflow = nodes(container)
     .find((node) => node.attributes['data-workflow-mode'] === 'AI_SUITE');
   assert.ok(suiteWorkflow);

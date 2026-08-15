@@ -278,35 +278,141 @@
     return { ready: true, reason: '可以开始配置' };
   }
 
+  function workbenchJourneyIndex(result, listing, mediaItems) {
+    if (!result || result.state !== 'ready' || !result.status
+      || result.reason === 'source_handoff_mismatch') return 0;
+    if (!listing) return 1;
+    var reviewReady = (Array.isArray(mediaItems) ? mediaItems : []).some(function (item) {
+      return item && item.status === 'SUCCEEDED'
+        && ['PENDING', 'APPROVED'].includes(item.reviewStatus);
+    });
+    return reviewReady || [
+      'PRICING_REVIEW', 'READY_TO_PUBLISH', 'PUBLISH_INTENT_RECORDED', 'PUBLISHED',
+    ].includes(listing.stage) ? 3 : 2;
+  }
+
+  function renderWorkbenchJourney(container, result, listing, mediaItems) {
+    var current = workbenchJourneyIndex(result, listing, mediaItems);
+    var masthead = element('header', 'ss-erp-source-workbench-masthead');
+    var copy = element('div', 'ss-erp-source-workbench-masthead-copy');
+    copy.appendChild(element('span', '', '货源页工作区'));
+    copy.appendChild(element('h2', '', '独立 AI 图片工作台'));
+    masthead.appendChild(copy);
+    masthead.appendChild(element(
+      'b',
+      current >= 2 ? 'is-ready' : 'is-pending',
+      current >= 2 ? '可以处理' : '正在准备',
+    ));
+    container.appendChild(masthead);
+
+    var navigation = element('nav', 'ss-erp-source-workbench-journey');
+    navigation.setAttribute('aria-label', 'AI 图片工作流阶段');
+    var list = element('ol', '');
+    ['采集商品', '店铺草稿', '图片处理', '审核应用'].forEach(function (label, index) {
+      var item = element(
+        'li',
+        index === current ? 'is-active' : index < current ? 'is-complete' : '',
+      );
+      if (index === current) item.setAttribute('aria-current', 'step');
+      item.appendChild(element('span', '', String(index + 1)));
+      item.appendChild(element('b', '', label));
+      list.appendChild(item);
+    });
+    navigation.appendChild(list);
+    container.appendChild(navigation);
+  }
+
   function renderImageWorkflowOverview(container, result, listing, options) {
     var wrapper = element('section', 'ss-erp-source-workbench-workflows');
     wrapper.setAttribute('data-role', 'ai-image-workflows');
     var heading = element('div', 'ss-erp-source-workbench-workflow-heading');
     var title = element('div');
-    title.appendChild(element('strong', '', 'AI 图片处理'));
+    var listingItems = result && result.status && result.status.listing
+      && Array.isArray(result.status.listing.items) ? result.status.listing.items : [];
+    var setupMessage = result && result.state === 'ready' && result.status && !listing
+      ? (listingItems.length > 1
+        ? '请选择要处理的店铺草稿。'
+        : '请先在 ERP 创建店铺草稿。')
+      : workbenchAvailabilityMessage(result || {});
+    title.appendChild(element('strong', '', listing ? '图片处理方式' : '开始前准备'));
     title.appendChild(element(
       'span',
       '',
-      '采集 → 店铺草稿 → 选择流程 → 生成 → 审核应用',
+      listing ? '选择本次处理方式' : setupMessage,
     ));
     heading.appendChild(title);
-    heading.appendChild(element('b', '', '6 种流程'));
+    heading.appendChild(element('b', '', listing ? '6 种方式' : '当前步骤'));
     wrapper.appendChild(heading);
 
+    if (!result || result.state !== 'ready' || !result.status || !listing) {
+      wrapper.classList.add('is-setup');
+      if (result && result.reason === 'source_handoff_mismatch'
+        && options && typeof options.onCollectForMedia === 'function') {
+        var collect = element(
+          'button',
+          'ss-erp-source-workbench-workflow-primary',
+          '采集货源并继续',
+        );
+        collect.type = 'button';
+        collect.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true || collect.disabled) return;
+          options.onCollectForMedia();
+        });
+        wrapper.appendChild(collect);
+      } else if (result && result.state === 'ready' && result.status
+        && Array.isArray(result.status.listing && result.status.listing.items)
+        && result.status.listing.items.length === 0
+        && options && typeof options.onOpenWorkflowForMedia === 'function') {
+        var open = element(
+          'button',
+          'ss-erp-source-workbench-workflow-primary',
+          '打开 ERP 创建草稿',
+        );
+        open.type = 'button';
+        open.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true || open.disabled) return;
+          options.onOpenWorkflowForMedia();
+        });
+        wrapper.appendChild(open);
+      } else if (options && typeof options.onRefreshWorkbenchStatus === 'function') {
+        var refresh = element(
+          'button',
+          'ss-erp-source-workbench-workflow-primary is-secondary',
+          '重新检查连接',
+        );
+        refresh.type = 'button';
+        refresh.addEventListener('click', function (event) {
+          if (!event || event.isTrusted !== true || refresh.disabled) return;
+          options.onRefreshWorkbenchStatus();
+        });
+        wrapper.appendChild(refresh);
+      }
+      container.appendChild(wrapper);
+      return;
+    }
+
     var grid = element('div', 'ss-erp-source-workbench-workflow-grid');
+    grid.setAttribute('role', 'tablist');
+    grid.setAttribute('aria-label', '选择图片处理方式');
+    var selectedMode = String(options && options.selectedMediaWorkflowMode || '');
     imageWorkflowDefinitions().forEach(function (definition) {
       var readiness = workflowReadiness(definition, result, listing, options);
+      var selected = definition.mode === selectedMode;
       var button = element(
         'button',
-        'ss-erp-source-workbench-workflow' + (readiness.ready ? ' is-ready' : ' is-blocked'),
+        'ss-erp-source-workbench-workflow'
+          + (readiness.ready ? ' is-ready' : ' is-blocked')
+          + (selected ? ' is-selected' : ''),
       );
       button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', selected ? 'true' : 'false');
+      button.setAttribute('aria-disabled', readiness.ready ? 'false' : 'true');
       button.disabled = !readiness.ready
         || !options || typeof options.onSelectMediaWorkflow !== 'function';
       button.title = readiness.reason;
       button.setAttribute('data-workflow-mode', definition.mode);
       button.appendChild(element('strong', '', definition.label));
-      button.appendChild(element('span', '', definition.description));
       button.appendChild(element(
         'em',
         '',
@@ -319,47 +425,16 @@
       grid.appendChild(button);
     });
     wrapper.appendChild(grid);
-
-    if (result && result.reason === 'source_handoff_mismatch'
-      && options && typeof options.onCollectForMedia === 'function') {
-      var collect = element(
-        'button',
-        'ss-erp-source-workbench-workflow-primary',
-        '采集货源并继续',
-      );
-      collect.type = 'button';
-      collect.addEventListener('click', function (event) {
-        if (!event || event.isTrusted !== true || collect.disabled) return;
-        options.onCollectForMedia();
-      });
-      wrapper.appendChild(collect);
-    } else if (result && result.state === 'ready' && result.status && !listing
-      && Array.isArray(result.status.listing && result.status.listing.items)
-      && result.status.listing.items.length === 0
-      && options && typeof options.onOpenWorkflowForMedia === 'function') {
-      var open = element(
-        'button',
-        'ss-erp-source-workbench-workflow-primary',
-        '打开 ERP 创建草稿',
-      );
-      open.type = 'button';
-      open.addEventListener('click', function (event) {
-        if (!event || event.isTrusted !== true || open.disabled) return;
-        options.onOpenWorkflowForMedia();
-      });
-      wrapper.appendChild(open);
-    }
     container.appendChild(wrapper);
   }
 
   function renderAiWorkbenchLauncher(container, listing, options) {
-    if (!listing || !options || options.aiWorkbenchAvailable !== true
-      || typeof options.onOpenAiWorkbench !== 'function') return;
+    if (!listing || !options) return;
     var launcher = element('section', 'ss-erp-source-workbench-ai-launcher');
     launcher.setAttribute('data-role', 'ai-workbench-launcher');
     launcher.setAttribute('aria-label', 'AI 图片工作台启动');
     var copy = element('div', 'ss-erp-source-workbench-ai-copy');
-    copy.appendChild(element('strong', '', 'AI 图片工作台'));
+    copy.appendChild(element('strong', '', '独立 AI 图片工作台'));
     copy.appendChild(element('span', '', '当前商品 · 店铺 ' + (listing.shopId || '-')));
     launcher.appendChild(copy);
 
@@ -413,11 +488,13 @@
       'ss-erp-source-workbench-ai-button',
       state === 'refreshing'
         ? '正在刷新...'
-        : options.aiWorkbenchBusy === true ? '正在打开...' : '打开 AI 图片工作台',
+        : options.aiWorkbenchBusy === true ? '正在打开...' : '打开独立工作台',
     );
     button.type = 'button';
     button.setAttribute('data-role', 'ai-workbench-open');
-    button.disabled = options.aiWorkbenchBusy === true
+    button.disabled = options.aiWorkbenchAvailable !== true
+      || typeof options.onOpenAiWorkbench !== 'function'
+      || options.aiWorkbenchBusy === true
       || state === 'stale'
       || state === 'unavailable'
       || (state === 'choice_required' && !skuOptions.some(function (item) {
@@ -444,15 +521,11 @@
   }
 
   function renderWorkbenchAvailability(container, result, options) {
+    renderWorkbenchJourney(container, result, null, []);
     var heading = element('div', 'ss-erp-source-workbench-heading');
     heading.appendChild(element('strong', '', 'ERP 商品工作流'));
     heading.appendChild(element('span', 'is-stale', '尚未就绪'));
     container.appendChild(heading);
-    container.appendChild(element(
-      'p',
-      'ss-erp-source-workbench-empty',
-      workbenchAvailabilityMessage(result),
-    ));
     renderImageWorkflowOverview(container, result, null, options || null);
   }
 
@@ -1621,6 +1694,12 @@
       ? listings.find(function (item) { return item && item.id === selectedId; }) || null
       : (listings.length === 1 ? listings[0] : null);
     var mediaItems = status.media.items || [];
+    renderWorkbenchJourney(
+      container,
+      { state: 'ready', status: status },
+      listing,
+      mediaItems,
+    );
     var heading = element('div', 'ss-erp-source-workbench-heading');
     heading.appendChild(element('strong', '', 'ERP 商品工作流'));
     heading.appendChild(element(

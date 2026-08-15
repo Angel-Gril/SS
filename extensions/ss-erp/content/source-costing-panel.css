@@ -43,11 +43,27 @@
   box-shadow: 0 16px 42px rgba(15, 118, 110, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
 }
 
+#ss-erp-source-workbench-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482991;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+#ss-erp-source-workbench-backdrop[hidden] {
+  display: none;
+}
+
+html.ss-erp-source-media-modal-open {
+  overflow: hidden !important;
+}
+
 #ss-erp-source-costing-panel {
   position: fixed;
   right: 16px;
   top: 64px;
-  z-index: 2147482991;
+  z-index: 2147482992;
   width: min(460px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
   height: calc(100vh - 80px);
@@ -83,13 +99,53 @@
 }
 
 #ss-erp-source-costing-panel.media-focus {
-  width: min(860px, calc(100vw - 24px));
+  inset: 24px;
+  width: auto;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #f8fafa;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.3);
 }
 
 #ss-erp-source-costing-panel.media-focus [data-role="source-listing-workbench"] {
   order: -1;
-  border-color: rgba(15, 118, 110, 0.35);
-  box-shadow: 0 12px 32px rgba(15, 118, 110, 0.1);
+  min-height: 100%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+#ss-erp-source-costing-panel.media-focus [data-role="ozon-card"],
+#ss-erp-source-costing-panel.media-focus [data-role="source-card"],
+#ss-erp-source-costing-panel.media-focus [data-role="cost"],
+#ss-erp-source-costing-panel.media-focus [data-role="input-card"],
+#ss-erp-source-costing-panel.media-focus [data-role="result-card"],
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-cost,
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-actions {
+  display: none;
+}
+
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-head {
+  cursor: default;
+}
+
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-body {
+  display: block;
+  padding: 16px 18px 12px;
+}
+
+#ss-erp-source-costing-panel.media-focus .ss-erp-source-status {
+  position: sticky;
+  bottom: -12px;
+  z-index: 4;
+  min-height: 34px;
+  margin: 16px -18px -12px;
+  border-top: 1px solid #d7e0e1;
+  background: #f8fafa;
+  padding: 9px 18px;
 }
 
 @keyframes ss-erp-source-panel-in {
@@ -433,7 +489,10 @@
 
 
   #ss-erp-source-costing-panel.media-focus {
+    inset: 0;
     width: auto;
+    border: 0;
+    border-radius: 0;
   }
 
   .ss-erp-source-actions {

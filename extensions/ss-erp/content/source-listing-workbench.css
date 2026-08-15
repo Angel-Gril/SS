@@ -3,6 +3,113 @@
   background: #f8fafc;
 }
 
+.ss-erp-source-workbench-masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 0 12px;
+  border-bottom: 1px solid #d7e0e1;
+}
+
+.ss-erp-source-workbench-masthead-copy {
+  min-width: 0;
+}
+
+.ss-erp-source-workbench-masthead-copy span,
+.ss-erp-source-workbench-masthead-copy h2 {
+  display: block;
+  margin: 0;
+}
+
+.ss-erp-source-workbench-masthead-copy span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ss-erp-source-workbench-masthead-copy h2 {
+  margin-top: 2px;
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.ss-erp-source-workbench-masthead > b {
+  flex: 0 0 auto;
+  border-left: 3px solid #d97706;
+  padding: 3px 0 3px 9px;
+  color: #92400e;
+  font-size: 11px;
+}
+
+.ss-erp-source-workbench-masthead > b.is-ready {
+  border-left-color: #0f766e;
+  color: #115e59;
+}
+
+.ss-erp-source-workbench-journey {
+  padding: 12px 0 14px;
+}
+
+.ss-erp-source-workbench-journey ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ss-erp-source-workbench-journey li {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border-top: 2px solid #cbd5e1;
+  padding: 9px 6px 0 0;
+  color: #64748b;
+}
+
+.ss-erp-source-workbench-journey li > span {
+  display: grid;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.ss-erp-source-workbench-journey li > b {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-erp-source-workbench-journey li.is-complete,
+.ss-erp-source-workbench-journey li.is-active {
+  border-top-color: #0f766e;
+  color: #115e59;
+}
+
+.ss-erp-source-workbench-journey li.is-complete > span,
+.ss-erp-source-workbench-journey li.is-active > span {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+
+.ss-erp-source-workbench-journey li.is-active > b {
+  color: #0f172a;
+}
+
 .ss-erp-source-workbench-heading {
   display: flex;
   align-items: center;
@@ -34,6 +141,11 @@
   border-radius: 8px;
   background: #f0fdfa;
   padding: 10px;
+}
+
+.ss-erp-source-workbench-workflows.is-setup {
+  border-color: #d7e0e1;
+  background: #fff;
 }
 
 .ss-erp-source-workbench-workflow-heading {
@@ -74,7 +186,7 @@
 
 .ss-erp-source-workbench-workflow-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
   margin-top: 9px;
 }
@@ -82,7 +194,7 @@
 .ss-erp-source-workbench-workflow {
   display: grid;
   min-width: 0;
-  min-height: 90px;
+  min-height: 64px;
   align-content: start;
   gap: 4px;
   border: 1px solid #cbd5e1;
@@ -105,12 +217,6 @@
   font-size: 11px;
 }
 
-.ss-erp-source-workbench-workflow span {
-  color: #64748b;
-  font-size: 9px;
-  line-height: 1.4;
-}
-
 .ss-erp-source-workbench-workflow em {
   align-self: end;
   color: #b45309;
@@ -126,11 +232,16 @@
 
 .ss-erp-source-workbench-workflow.is-ready:hover {
   border-color: #0f766e;
-  transform: translateY(-1px);
 }
 
 .ss-erp-source-workbench-workflow.is-ready em {
   color: #047857;
+}
+
+.ss-erp-source-workbench-workflow.is-selected {
+  border-color: #0f766e;
+  background: #ccfbf1;
+  box-shadow: inset 0 0 0 1px #0f766e;
 }
 
 .ss-erp-source-workbench-workflow:disabled {
@@ -149,6 +260,12 @@
   cursor: pointer;
   font-size: 11px;
   font-weight: 800;
+}
+
+.ss-erp-source-workbench-workflow-primary.is-secondary {
+  border-color: #64748b;
+  background: #fff;
+  color: #334155;
 }
 
 .ss-erp-source-workbench-ai-launcher {
@@ -749,6 +866,35 @@
   }
 
   .ss-erp-source-workbench-source-gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .ss-erp-source-workbench-workflow-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .ss-erp-source-workbench-masthead {
+    align-items: flex-start;
+  }
+
+  .ss-erp-source-workbench-journey li {
+    align-items: flex-start;
+    gap: 4px;
+    flex-direction: column;
+  }
+
+  .ss-erp-source-workbench-journey li > b {
+    width: 100%;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 520px) {
+  .ss-erp-source-workbench-workflow-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

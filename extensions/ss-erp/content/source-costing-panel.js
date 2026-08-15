@@ -4,6 +4,7 @@
   var PANEL_ID = 'ss-erp-source-costing-panel';
   var FAB_ID = 'ss-erp-source-costing-fab';
   var MEDIA_FAB_ID = 'ss-erp-source-media-fab';
+  var BACKDROP_ID = 'ss-erp-source-workbench-backdrop';
   var PANEL_POSITION_KEY = 'ss-erp:source-costing-panel-position';
   var SourceCosting = window.SS_ERP_SOURCE_COSTING_CORE;
   var AiWorkbenchLaunchContext = window.SS_ERP_SOURCE_AI_WORKBENCH_LAUNCH_CONTEXT;
@@ -215,8 +216,8 @@
       '<div class="ss-erp-source-head">',
       '  <div class="ss-erp-source-mark">ERP</div>',
       '  <div class="ss-erp-source-title"><strong>SS ERP 商品与图片工作台</strong><span data-role="context-title">' + escapeHtml(platformLabel()) + '货源核价 · 读取关联...</span></div>',
-      '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" title="刷新">↻</button>',
-      '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" title="收起">×</button>',
+      '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" aria-label="刷新工作区" title="刷新">↻</button>',
+      '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" aria-label="关闭工作区" title="关闭">×</button>',
       '</div>',
       '<div class="ss-erp-source-body">',
       '  <section class="ss-erp-source-section" data-role="ozon-card"></section>',
@@ -235,8 +236,14 @@
     ].join('');
     renderLoadingContent(panel);
 
+    var backdrop = document.createElement('div');
+    backdrop.id = 'ss-erp-source-workbench-backdrop';
+    backdrop.hidden = true;
+    backdrop.setAttribute('aria-hidden', 'true');
+
     document.documentElement.appendChild(fab);
     document.documentElement.appendChild(mediaFab);
+    document.documentElement.appendChild(backdrop);
     document.documentElement.appendChild(panel);
     restorePanelPosition(panel);
     bindPanelDrag(panel);
@@ -249,7 +256,14 @@
       }
     });
     mediaFab.addEventListener('click', function () {
-      openPanel(panel, { focus: 'media', trigger: mediaFab });
+      if (panel.classList.contains('open') && panel.classList.contains('media-focus')) {
+        closePanel(panel);
+      } else {
+        openPanel(panel, { focus: 'media', trigger: mediaFab });
+      }
+    });
+    backdrop.addEventListener('click', function () {
+      closePanel(panel);
     });
     panel.querySelector('[data-action="close"]').addEventListener('click', function () {
       closePanel(panel);
@@ -261,9 +275,14 @@
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
     panel.querySelector('[data-action="open-source-workflow"]').addEventListener('click', openSourceWorkflow);
     panel.addEventListener('keydown', function (event) {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closePanel(panel);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePanel(panel);
+        return;
+      }
+      if (event.key === 'Tab' && panel.classList.contains('media-focus')) {
+        trapSourcePanelFocus(panel, event);
+      }
     });
     window.addEventListener('resize', function () {
       if (panel.classList.contains('open')) reclampPanelPosition(panel);
@@ -279,6 +298,7 @@
 
   function reclampPanelPosition(panel) {
     if (!panel) return;
+    if (panel.classList.contains('media-focus')) return;
     if (window.innerWidth <= 480) {
       panel.style.removeProperty('left');
       panel.style.removeProperty('right');
@@ -297,12 +317,18 @@
     state.panelTrigger = options.trigger || state.panelTrigger;
     if (options.focus === 'media') {
       panel.classList.add('media-focus');
+      panel.style.removeProperty('left');
+      panel.style.removeProperty('right');
+      panel.style.removeProperty('top');
       state.pendingSourceWorkbenchFocus = true;
     } else {
       panel.classList.remove('media-focus');
       state.pendingSourceWorkbenchFocus = false;
+      restorePanelPosition(panel);
     }
     panel.classList.add('open');
+    syncSourcePanelModalState(panel);
+    syncSourcePanelHeading(panel);
     setPanelExpanded(true);
     reclampPanelPosition(panel);
     state.opened = true;
@@ -322,6 +348,7 @@
     panel = panel || document.getElementById(PANEL_ID);
     if (!panel) return;
     panel.classList.remove('open');
+    syncSourcePanelModalState(panel);
     setPanelExpanded(false);
     state.opened = false;
     stopAutoRefresh();
@@ -329,6 +356,65 @@
     state.panelTrigger = null;
     if (trigger && typeof trigger.focus === 'function') {
       window.setTimeout(function () { trigger.focus({ preventScroll: true }); }, 0);
+    }
+  }
+
+  function syncSourcePanelModalState(panel) {
+    var open = Boolean(panel && panel.classList.contains('open')
+      && panel.classList.contains('media-focus'));
+    var backdrop = document.getElementById(BACKDROP_ID);
+    if (backdrop) {
+      backdrop.hidden = !open;
+      backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+    if (document.documentElement && document.documentElement.classList) {
+      document.documentElement.classList.toggle('ss-erp-source-media-modal-open', open);
+    }
+  }
+
+  function syncSourcePanelHeading(panel) {
+    if (!panel) return;
+    var mediaFocused = panel.classList.contains('media-focus');
+    var title = panel.querySelector('.ss-erp-source-title strong');
+    if (title) {
+      title.textContent = mediaFocused
+        ? 'SS ERP AI 图片工作区'
+        : 'SS ERP 商品与图片工作台';
+    }
+    panel.setAttribute(
+      'aria-label',
+      mediaFocused ? 'SS ERP AI 图片工作区' : 'SS ERP 商品与图片工作台',
+    );
+    panel.setAttribute('role', mediaFocused ? 'dialog' : 'region');
+    if (mediaFocused) {
+      panel.setAttribute('aria-modal', 'true');
+    } else {
+      panel.removeAttribute('aria-modal');
+    }
+  }
+
+  function trapSourcePanelFocus(panel, event) {
+    var focusable = Array.prototype.filter.call(panel.querySelectorAll([
+      'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+      'select:not([disabled])', 'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])',
+    ].join(',')), function (node) {
+      return node.hidden !== true
+        && node.getAttribute('aria-hidden') !== 'true'
+        && (typeof node.getClientRects !== 'function' || node.getClientRects().length > 0);
+    });
+    if (!focusable.length) {
+      event.preventDefault();
+      panel.focus({ preventScroll: true });
+      return;
+    }
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
     }
   }
 
@@ -383,7 +469,9 @@
     if (!header) return;
     var drag = null;
     header.addEventListener('pointerdown', function (event) {
-      if (event.button !== 0 || (event.target && event.target.closest && event.target.closest('button'))) return;
+      if (panel.classList.contains('media-focus')
+        || event.button !== 0
+        || (event.target && event.target.closest && event.target.closest('button'))) return;
       var rect = panel.getBoundingClientRect();
       drag = {
         startX: event.clientX,
@@ -1232,9 +1320,11 @@
 
     var cost = Number(product.totalCostCny || product.priceCny || product.price) || 0;
     if (titleNode) {
-      titleNode.textContent = ozon && (ozon.productId || ozon.title)
-        ? (platformLabel() + '货源核价 · 关联 Ozon ' + (ozon.productId || String(ozon.title).slice(0, 18)))
-        : (platformLabel() + '货源核价 · 未关联 Ozon 商品');
+      titleNode.textContent = panel.classList.contains('media-focus')
+        ? (platformLabel() + ' 商品图片 · ' + String(product.title || document.title || '读取中').slice(0, 36))
+        : ozon && (ozon.productId || ozon.title)
+          ? (platformLabel() + '货源核价 · 关联 Ozon ' + (ozon.productId || String(ozon.title).slice(0, 18)))
+          : (platformLabel() + '货源核价 · 未关联 Ozon 商品');
     }
 
     ozonCard.innerHTML = [
@@ -1269,6 +1359,7 @@
           historyOpen: state.sourceWorkbenchHistoryOpen,
           sourceInputs: currentSourceMediaInputs(),
           selectedListingWorkflowId: state.sourceWorkbenchListingId,
+          selectedMediaWorkflowMode: state.sourceWorkbenchFocusMode,
           mediaCreateDraft: state.sourceWorkbenchMediaCreateDraft,
           mediaCreateOpen: state.sourceWorkbenchMediaCreateOpen,
           busyCommandKey: state.sourceWorkbenchCommandKey,
@@ -1336,6 +1427,9 @@
           },
           onOpenWorkflowForMedia: function () {
             void openSourceWorkflow();
+          },
+          onRefreshWorkbenchStatus: function () {
+            void refreshSourceWorkbenchStatus({ force: true });
           },
           onSelectMediaWorkflow: function (mode) {
             selectSourceMediaWorkflow(mode);
