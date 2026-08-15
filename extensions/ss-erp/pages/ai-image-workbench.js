@@ -12,6 +12,15 @@
     flowToolbar: byId('flowToolbar'),
     flowSummary: byId('flowSummary'),
     flowProcessButton: byId('flowProcessButton'),
+    mediaCommandBar: byId('mediaCommandBar'),
+    mediaOperationBar: byId('mediaOperationBar'),
+    mediaPrimaryStatus: byId('mediaPrimaryStatus'),
+    mediaPrimaryAction: byId('mediaPrimaryAction'),
+    mediaOperationTextToImage: byId('mediaOperationTextToImage'),
+    mediaOperationImageToImage: byId('mediaOperationImageToImage'),
+    mediaOperationFullEdit: byId('mediaOperationFullEdit'),
+    mediaOperationInpaint: byId('mediaOperationInpaint'),
+    advancedSettingsLink: byId('advancedSettingsLink'),
     pageStatus: byId('pageStatus'),
     contextSource: byId('contextSource'),
     contextShop: byId('contextShop'),
@@ -83,6 +92,7 @@
     flowStage: 'media',
     processDockExpanded: false,
     workspaceHasCandidate: false,
+    mediaGenerationLocked: null,
   };
   var PUBLISH_CONTRACT_VERSION = 'extension-byok-listing-publish/v1';
   var PUBLISH_RECOVERY_STATES = [
@@ -472,6 +482,156 @@
     });
     if (tone) nodes.pageStatus.classList.add('is-' + tone);
     renderFlowState();
+  }
+
+  function bodyHasClass(name) {
+    return Boolean(document && document.body && document.body.classList
+      && typeof document.body.classList.contains === 'function'
+      && document.body.classList.contains(name));
+  }
+
+  function currentMediaOperation() {
+    return document && document.body && document.body.dataset
+      && document.body.dataset.mediaOperation
+      ? document.body.dataset.mediaOperation
+      : 'TEXT_TO_IMAGE';
+  }
+
+  function setMediaPrimaryStatus(message, tone) {
+    if (!nodes.mediaPrimaryStatus) return;
+    nodes.mediaPrimaryStatus.textContent = String(message || '');
+    ['is-success', 'is-warning', 'is-error'].forEach(function (name) {
+      nodes.mediaPrimaryStatus.classList.remove(name);
+    });
+    if (tone) nodes.mediaPrimaryStatus.classList.add('is-' + tone);
+  }
+
+  function notifyMediaGenerationLock(locked) {
+    if (!document || !document.body || !document.body.dataset) return;
+    document.body.dataset.byokGenerationLocked = locked ? 'true' : 'false';
+    if (state.mediaGenerationLocked === locked) return;
+    state.mediaGenerationLocked = locked;
+    emitWorkspaceEvent('ss-erp:media-generation-lock-change', null);
+  }
+
+  function setMediaOperationCommandLock(locked) {
+    [
+      nodes.mediaOperationTextToImage,
+      nodes.mediaOperationImageToImage,
+      nodes.mediaOperationFullEdit,
+      nodes.mediaOperationInpaint,
+    ].forEach(function (button) {
+      if (button) button.disabled = locked;
+    });
+  }
+
+  function focusCommandTarget(target) {
+    if (!target) return false;
+    if (typeof target.scrollIntoView === 'function') {
+      var reducedMotion = typeof global.matchMedia === 'function'
+        && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
+    }
+    if (typeof target.focus === 'function') target.focus({ preventScroll: true });
+    return true;
+  }
+
+  function openAdvancedSettingsFromUserAction() {
+    if (!nodes.advancedSettingsLink) return false;
+    if (typeof nodes.advancedSettingsLink.click === 'function') {
+      nodes.advancedSettingsLink.click();
+      return true;
+    }
+    return focusCommandTarget(nodes.advancedSettingsLink);
+  }
+
+  function hostedContinuationTarget() {
+    var ids = [
+      'hostedCreatePlanButton', 'hostedApprovePlanButton', 'hostedCostConfirmation',
+      'hostedStartButton', 'hostedContinueButton', 'hostedAssignApprovedButton',
+    ];
+    for (var index = 0; index < ids.length; index += 1) {
+      var candidate = byId(ids[index]);
+      if (candidate && candidate.hidden !== true && candidate.disabled !== true) return candidate;
+    }
+    return nodes.hostedControlPanel;
+  }
+
+  function renderMediaPrimaryControls() {
+    if (!nodes.mediaPrimaryAction || !nodes.mediaPrimaryStatus) return;
+    var operation = currentMediaOperation();
+    var batchController = batchPageController();
+    var batchLocked = Boolean(batchController && batchController.isLocked());
+    var reviewOnly = reviewPublishOnly();
+    var candidate = hasReviewCandidate();
+    var hostedActive = bodyHasClass('is-hosted-mode');
+    var editTaskLocked = document.body && document.body.dataset
+      && document.body.dataset.editTaskLocked === 'true';
+    var hostedBlocked = !hostedByokExecutionAllowed();
+    var generationLock = reviewOnly || state.busy || candidate || state.unknownOutcome
+      || batchLocked || hostedBlocked;
+    var commandLock = generationLock || editTaskLocked || hostedActive;
+    if (commandLock) {
+      setMediaOperationCommandLock(true);
+    } else if (state.mediaGenerationLocked === true) {
+      setMediaOperationCommandLock(false);
+    }
+    notifyMediaGenerationLock(generationLock);
+
+    if (reviewOnly || candidate) {
+      setMediaPrimaryStatus(
+        reviewOnly ? '已绑定图片等待发布核对' : '候选图片已就绪，继续审核与接收',
+        candidate ? 'success' : '',
+      );
+      nodes.mediaPrimaryAction.textContent = reviewOnly ? '核对发布' : '审核候选图';
+      nodes.mediaPrimaryAction.disabled = state.busy || unifiedPublishMutationBusy();
+      return;
+    }
+    if (hostedActive) {
+      setMediaPrimaryStatus('ERP 托管模式按计划、报价和费用确认继续', 'warning');
+      nodes.mediaPrimaryAction.textContent = '继续托管流程';
+      nodes.mediaPrimaryAction.disabled = state.busy;
+      return;
+    }
+    if (operation !== 'TEXT_TO_IMAGE') return;
+
+    var context = state.publicState && state.publicState.context;
+    var profile = selectedProfileRow();
+    var promptReady = String(nodes.promptInput.value || '').normalize('NFKC').trim().length > 0;
+    if (state.busy || batchLocked) {
+      setMediaPrimaryStatus(batchLocked ? '批量任务正在执行' : '正在处理当前请求');
+      nodes.mediaPrimaryAction.textContent = '处理中';
+      nodes.mediaPrimaryAction.disabled = true;
+    } else if (state.unknownOutcome) {
+      setMediaPrimaryStatus('上一次生成结果未知，只能刷新核对同一请求', 'warning');
+      nodes.mediaPrimaryAction.textContent = '核对生成结果';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (!context) {
+      setMediaPrimaryStatus('尚未取得商品、店铺与草稿绑定', 'warning');
+      nodes.mediaPrimaryAction.textContent = '刷新商品绑定';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (!profile || !profileCanGenerate(profile)) {
+      setMediaPrimaryStatus('Provider 档案、会话密钥或精确来源授权未就绪', 'warning');
+      nodes.mediaPrimaryAction.textContent = '打开高级设置';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (!promptReady) {
+      setMediaPrimaryStatus('填写提示词后即可生成候选图');
+      nodes.mediaPrimaryAction.textContent = '填写提示词';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (editTaskLocked || hostedBlocked) {
+      setMediaPrimaryStatus('正在核对现有任务与执行通道', 'warning');
+      nodes.mediaPrimaryAction.textContent = '等待状态核对';
+      nodes.mediaPrimaryAction.disabled = true;
+    } else {
+      setMediaPrimaryStatus(
+        readinessIsCurrent()
+          ? '生成费用由当前 Provider 账户承担'
+          : '开始前将重新核对精确来源与能力证据',
+      );
+      nodes.mediaPrimaryAction.textContent = batchController && batchController.isAvailable()
+        ? '开始批量处理' : '生成候选图';
+      nodes.mediaPrimaryAction.disabled = false;
+    }
   }
 
   function setFlowStage(stage) {
@@ -1008,6 +1168,7 @@
       || (!candidateReady && !approved && !ingesting);
     renderProfileSummary();
     renderPublishControls();
+    renderMediaPrimaryControls();
     reconcileFlowStage();
   }
 
@@ -1333,20 +1494,26 @@
     var negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
     if (!prompt || state.busy || state.candidate || state.unknownOutcome
       || !hostedByokExecutionAllowed()) return;
-    if (!readinessIsCurrent()) {
-      var ready = await refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
-      if (!lifecycleIsCurrent(lifecycleEpoch) || state.selectedProfileId !== profileId || !ready) return;
-    }
-    prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
-    negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
-    if (!prompt || state.candidate || state.unknownOutcome
-      || !hostedByokExecutionAllowed()) return;
     state.busy = true;
-    state.generationDispatchPending = true;
     renderControls();
-    emitWorkspaceBootstrap(null, true);
-    setStatus('Provider 正在生成候选图。请求超时后不会自动重试。', '');
     try {
+      if (!readinessIsCurrent()) {
+        var ready = await refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
+        if (!lifecycleIsCurrent(lifecycleEpoch)
+          || state.selectedProfileId !== profileId || !ready) return;
+      }
+      prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
+      negativePrompt = String(nodes.negativePromptInput.value || '').normalize('NFKC').trim();
+      var batchController = batchPageController();
+      var editTaskLocked = document.body && document.body.dataset
+        && document.body.dataset.editTaskLocked === 'true';
+      if (!prompt || state.candidate || state.unknownOutcome || editTaskLocked
+        || batchController && batchController.isLocked()
+        || !hostedByokExecutionAllowed()) return;
+      state.generationDispatchPending = true;
+      renderControls();
+      emitWorkspaceBootstrap(null, true);
+      setStatus('Provider 正在生成候选图。请求超时后不会自动重试。', '');
       var candidate = await client.generate({
         profileId: profileId,
         prompt: prompt,
@@ -1600,6 +1767,63 @@
     }
   }
 
+  function refreshWorkbenchFromUserAction() {
+    if (nodes.refreshButton.disabled) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    void loadPublicState(lifecycleEpoch).then(function (loaded) {
+      if (!loaded || !lifecycleIsCurrent(lifecycleEpoch)
+        || state.candidate || state.unknownOutcome) return null;
+      return refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
+    }).catch(function () {});
+  }
+
+  function startTextGenerationFromUserAction() {
+    var batchController = batchPageController();
+    var prompt = String(nodes.promptInput.value || '').normalize('NFKC').trim();
+    if (reviewPublishOnly() || state.busy || state.candidate || state.unknownOutcome
+      || !state.publicState || !state.publicState.context
+      || !profileCanGenerate(selectedProfileRow()) || !prompt
+      || !hostedByokExecutionAllowed()
+      || document.body && document.body.dataset
+        && document.body.dataset.editTaskLocked === 'true') return false;
+    if (batchController && batchController.isLocked()) return false;
+    if (batchController && batchController.isAvailable()) {
+      void batchController.startFromPage().catch(function (error) {
+        setStatus(errorLabel(error), 'error');
+        renderControls();
+      });
+      return true;
+    }
+    void generateCandidate();
+    return true;
+  }
+
+  function revealReviewFromCommandBar() {
+    setFlowStage('review');
+    if (nodes.workspaceTaskDock) nodes.workspaceTaskDock.hidden = false;
+    renderFlowState();
+    return focusCommandTarget(nodes.resultPanel && nodes.resultPanel.hidden !== true
+      ? nodes.resultPanel : nodes.workspaceTaskDock);
+  }
+
+  function handleTextMediaPrimaryAction() {
+    if (reviewPublishOnly() || hasReviewCandidate()) return revealReviewFromCommandBar();
+    if (bodyHasClass('is-hosted-mode')) return focusCommandTarget(hostedContinuationTarget());
+    if (currentMediaOperation() !== 'TEXT_TO_IMAGE') return false;
+    if (state.unknownOutcome || !state.publicState || !state.publicState.context) {
+      refreshWorkbenchFromUserAction();
+      return true;
+    }
+    if (!profileCanGenerate(selectedProfileRow())) {
+      return openAdvancedSettingsFromUserAction();
+    }
+    if (!String(nodes.promptInput.value || '').normalize('NFKC').trim()) {
+      setFlowStage('media');
+      return focusCommandTarget(nodes.promptInput);
+    }
+    return startTextGenerationFromUserAction();
+  }
+
   nodes.profileSelect.addEventListener('change', function (event) {
     if (!event || event.isTrusted !== true || !hostedByokExecutionAllowed()
       || state.busy || state.candidate
@@ -1632,6 +1856,13 @@
       if (nodes.workspaceTaskDock && typeof nodes.workspaceTaskDock.scrollIntoView === 'function') {
         nodes.workspaceTaskDock.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
+    });
+  }
+  if (nodes.mediaPrimaryAction
+    && typeof nodes.mediaPrimaryAction.addEventListener === 'function') {
+    nodes.mediaPrimaryAction.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || nodes.mediaPrimaryAction.disabled) return;
+      handleTextMediaPrimaryAction();
     });
   }
   nodes.promptInput.addEventListener('input', renderControls);
@@ -1684,6 +1915,8 @@
       reconcileFlowStage();
     });
     document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
+    document.addEventListener('ss-erp:media-operation-change', renderMediaPrimaryControls);
+    document.addEventListener('ss-erp:hosted-mode-state-change', renderMediaPrimaryControls);
     document.addEventListener(WORKSPACE_AUTHORITATIVE_RELOAD_EVENT, function (event) {
       var detail = event && event.detail;
       var context = state.publicState && state.publicState.context;
@@ -1727,15 +1960,7 @@
   nodes.generateButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || reviewPublishOnly()
       || nodes.generateButton.disabled) return;
-    var batchController = batchPageController();
-    if (batchController && batchController.isAvailable()) {
-      void batchController.startFromPage().catch(function (error) {
-        setStatus(errorLabel(error), 'error');
-        renderControls();
-      });
-      return;
-    }
-    void generateCandidate();
+    startTextGenerationFromUserAction();
   });
   nodes.rejectButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || nodes.rejectButton.disabled) return;
@@ -1767,12 +1992,7 @@
   });
   nodes.refreshButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || nodes.refreshButton.disabled) return;
-    var lifecycleEpoch = state.lifecycleEpoch;
-    void loadPublicState(lifecycleEpoch).then(function (loaded) {
-      if (!loaded || !lifecycleIsCurrent(lifecycleEpoch)
-        || state.candidate || state.unknownOutcome) return null;
-      return refreshReadiness({ lifecycleEpoch: lifecycleEpoch });
-    }).catch(function () {});
+    refreshWorkbenchFromUserAction();
   });
   global.addEventListener('pagehide', function () {
     state.lifecycleEpoch += 1;

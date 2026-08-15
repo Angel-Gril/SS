@@ -26,6 +26,7 @@ const html = fs.readFileSync(htmlPath, 'utf8');
 const launchHtml = fs.readFileSync(launchPath, 'utf8');
 const css = fs.readFileSync(cssPath, 'utf8');
 const pageSource = fs.readFileSync(pagePath, 'utf8');
+const hostedPageSource = fs.readFileSync(hostedPagePath, 'utf8');
 const batchPageSource = fs.readFileSync(batchPagePath, 'utf8');
 const publishPageSource = fs.readFileSync(publishPagePath, 'utf8');
 const verifierSource = fs.readFileSync('scripts/verify-extension-package.mjs', 'utf8');
@@ -105,6 +106,18 @@ assert.match(html, /id=["']flowToolbar["'][\s\S]*data-flow-step=["']context["'][
   'workbench should expose a compact linear flow toolbar');
 assert.match(html, /id=["']flowProcessButton["'][^>]*>[\s\S]*查看过程/u,
   'workbench should keep task progress behind an explicit process action');
+assert.match(
+  html,
+  /id=["']mediaCommandBar["'][\s\S]*id=["']mediaOperationTextToImage["'][\s\S]*id=["']mediaOperationImageToImage["'][\s\S]*id=["']mediaOperationFullEdit["'][\s\S]*id=["']mediaOperationInpaint["'][\s\S]*id=["']mediaPrimaryAction["']/u,
+  'the first viewport should expose one compact image-operation command bar',
+);
+assert.match(html, /id="mediaPrimaryStatus"[^>]*aria-live="polite"[^>]*aria-atomic="true"/u);
+assert.match(html, /id="mediaPrimaryAction"[\s\S]{0,220}aria-describedby="mediaPrimaryStatus"/u);
+assert.ok(
+  html.indexOf('id="flowSummary"') < html.indexOf('id="mediaCommandBar"')
+    && html.indexOf('id="mediaCommandBar"') < html.indexOf('id="contextTitle"'),
+  'the image command bar should appear before detailed binding and editor panels',
+);
 assert.match(html, /<details\s+id=["']batchAdvancedDetails["'][\s\S]*批量与恢复[\s\S]*id=["']batchSlotSelection["']/u,
   'batch slots and recovery should stay behind an advanced disclosure');
 assert.match(batchPageSource, /advancedDetails[\s\S]*view\.active[\s\S]*view\.recoveryRows/u,
@@ -141,6 +154,21 @@ assert.match(
   /@media\s*\(max-width:\s*520px\)[\s\S]*\.flow-step-list\s*\{[\s\S]*overflow-x:\s*auto/u,
   'the compact flow toolbar must keep every step reachable on narrow screens',
 );
+assert.match(
+  css,
+  /@media\s*\(max-width:\s*520px\)[\s\S]*\.media-operation-bar\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,/u,
+  'the primary operation selector should stay stable in two columns on mobile',
+);
+assert.match(css, /\.media-operation-button\s*\{[\s\S]*min-height:\s*44px/u);
+assert.match(pageSource, /function startTextGenerationFromUserAction\(\)/u);
+assert.match(pageSource, /mediaPrimaryAction[\s\S]*event\.isTrusted\s*!==\s*true/u);
+assert.match(hostedPageSource, /HOSTED_MODE_STATE_EVENT[\s\S]*hosted-mode-state-change[\s\S]*emit\(HOSTED_MODE_STATE_EVENT/u);
+assert.match(hostedPageSource, /modeStateKey[\s\S]*lastModeStateKey[\s\S]*emit\(HOSTED_MODE_STATE_EVENT/u);
+assert.match(pageSource, /hosted-mode-state-change[\s\S]*renderMediaPrimaryControls/u);
+assert.match(pageSource, /hostedContinuationTarget[\s\S]*hostedCostConfirmation[\s\S]*hostedStartButton/u,
+  'Hosted primary navigation focuses explicit cost confirmation before the paid start action');
+assert.match(pageSource, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)[\s\S]*behavior:\s*reducedMotion\s*\?\s*'auto'/u);
+assert.match(css, /\.context-band\s*\{[\s\S]*position:\s*static/u);
 assert.match(
   pageSource,
   /flowProcessButton[\s\S]*workspaceTaskDock\.hidden\s*=\s*false/u,
@@ -258,6 +286,10 @@ const ids = [
   'resultPanel', 'previewFrame', 'previewImage', 'previewMeta', 'resultStatus', 'rejectButton',
   'approveButton', 'approvedNotice', 'refreshButton',
   'flowToolbar', 'flowSummary', 'flowProcessButton',
+  'mediaCommandBar', 'mediaOperationBar', 'mediaPrimaryStatus', 'mediaPrimaryAction',
+  'mediaOperationTextToImage', 'mediaOperationImageToImage',
+  'mediaOperationFullEdit', 'mediaOperationInpaint', 'advancedSettingsLink',
+  'operationTextToImage', 'runEditButton', 'editInputPanel', 'hostedControlPanel',
   'publishPanel', 'publishStatus', 'publishShop', 'publishDraft', 'publishSkuOrder',
   'publishMediaList', 'publishNotice', 'publishConfirmationRow', 'publishConfirmation',
   'publishConfirmButton', 'publishRecoverButton',
@@ -280,6 +312,8 @@ nodes.promptInput.value = 'Create a clean catalog hero image for the described p
 nodes.sizeSelect.value = '1024x1024';
 nodes.executionModeByok.checked = true;
 nodes.executionModeHosted.disabled = true;
+nodes.operationTextToImage.checked = true;
+nodes.operationTextToImage.value = 'TEXT_TO_IMAGE';
 
 const publicState = {
   contractVersion: 'extension-byok-workbench-public-state/v1',
@@ -1392,6 +1426,11 @@ for (const recovery of [false, true]) {
     shopId: 'shop-1', workflowId: 'workflow-1', draftRevision: 3, draftVersion: 4,
   });
   assert.notEqual(runtime.detail.task.schedulerState, 'READY');
+  const generateCount = harness.calls.filter((row) => row[0] === 'generate').length;
+  harness.nodes.mediaPrimaryAction.listeners.click({ isTrusted: true });
+  await flushAsync(4);
+  assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, generateCount,
+    'the command bar only reconciles an unknown Provider outcome and never re-posts it');
 }
 
 {
@@ -1451,7 +1490,13 @@ for (const recovery of [false, true]) {
   initialReadiness.expiresAt = '2000-01-01T00:00:00.000Z';
   harness.nodes.promptInput.value = 'Prompt A before delayed readiness';
   harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  harness.nodes.mediaPrimaryAction.listeners.click({ isTrusted: true });
+  harness.nodes.generateButton.listeners.click({ isTrusted: true });
   await flushAsync(2);
+  assert.equal(readinessCallCount, 2,
+    'new and legacy controls share one readiness single-flight after the initial page check');
+  assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 0,
+    'the Provider request waits for the one authoritative readiness result');
   harness.dispatchDocument('ss-erp:workspace-action', {
     contractVersion: 'extension-byok-workbench-workspace-action/v1',
     action: 'SAVE_PROMPT',
@@ -1469,6 +1514,8 @@ for (const recovery of [false, true]) {
   refreshedReadiness.resolve(nextReadiness);
   await flushAsync(4);
   const generateCall = harness.calls.findLast((row) => row[0] === 'generate');
+  assert.equal(harness.calls.filter((row) => row[0] === 'generate').length, 1,
+    'rapid clicks across both visible submit controls dispatch exactly one paid request');
   assert.equal(generateCall?.[1].prompt, 'Prompt B saved while readiness is pending');
   assert.equal(generateCall?.[1].negativePrompt, 'no watermark');
   const pendingBootstrap = harness.documentEvents.findLast((event) => (
@@ -1981,9 +2028,12 @@ for (const transientCode of [
     },
   });
   await flushAsync(8);
-  harness.nodes.generateButton.listeners.click({ isTrusted: true });
+  harness.nodes.mediaPrimaryAction.listeners.click({ isTrusted: false });
   await flushAsync(2);
-  assert.equal(batchStarts, 1, 'the visible generate command delegates to the batch controller');
+  assert.equal(batchStarts, 0, 'synthetic command-bar clicks cannot start batch work');
+  harness.nodes.mediaPrimaryAction.listeners.click({ isTrusted: true });
+  await flushAsync(2);
+  assert.equal(batchStarts, 1, 'the first-viewport command delegates to the batch controller');
   assert.equal(harness.calls.some((row) => row[0] === 'generate'), false,
     'the legacy Provider path cannot run beside an available batch controller');
 }

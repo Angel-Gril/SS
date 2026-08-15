@@ -58,6 +58,15 @@
     regenerateChargeConfirmation: byId('regenerateChargeConfirmation'),
     regenerateEditButton: byId('regenerateEditButton'),
     refreshButton: byId('refreshButton'),
+    mediaCommandBar: byId('mediaCommandBar'),
+    mediaOperationBar: byId('mediaOperationBar'),
+    mediaPrimaryStatus: byId('mediaPrimaryStatus'),
+    mediaPrimaryAction: byId('mediaPrimaryAction'),
+    mediaOperationTextToImage: byId('mediaOperationTextToImage'),
+    mediaOperationImageToImage: byId('mediaOperationImageToImage'),
+    mediaOperationFullEdit: byId('mediaOperationFullEdit'),
+    mediaOperationInpaint: byId('mediaOperationInpaint'),
+    advancedSettingsLink: byId('advancedSettingsLink'),
   };
   if (Object.keys(nodes).some(function (key) { return !nodes[key]; })) return;
 
@@ -83,6 +92,12 @@
     IMAGE_TO_IMAGE: '参考图生成',
     FULL_EDIT: '整图编辑',
     INPAINT: '局部重绘',
+  };
+  var MEDIA_OPERATION_NODES = {
+    TEXT_TO_IMAGE: nodes.mediaOperationTextToImage,
+    IMAGE_TO_IMAGE: nodes.mediaOperationImageToImage,
+    FULL_EDIT: nodes.mediaOperationFullEdit,
+    INPAINT: nodes.mediaOperationInpaint,
   };
   var state = {
     operation: 'TEXT_TO_IMAGE',
@@ -404,11 +419,60 @@
     return '';
   }
 
+  function setMediaPrimaryStatus(message, tone) {
+    nodes.mediaPrimaryStatus.textContent = String(message || '');
+    ['is-success', 'is-warning', 'is-error'].forEach(function (name) {
+      nodes.mediaPrimaryStatus.classList.remove(name);
+    });
+    if (tone) nodes.mediaPrimaryStatus.classList.add('is-' + tone);
+  }
+
+  function mainGenerationLocked() {
+    return document.body && document.body.dataset
+      && document.body.dataset.byokGenerationLocked === 'true';
+  }
+
+  function focusCommandTarget(target) {
+    if (!target) return false;
+    if (typeof target.scrollIntoView === 'function') {
+      var reducedMotion = typeof global.matchMedia === 'function'
+        && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
+    }
+    if (typeof target.focus === 'function') target.focus({ preventScroll: true });
+    return true;
+  }
+
+  function openAdvancedSettingsFromUserAction() {
+    if (typeof nodes.advancedSettingsLink.click === 'function') {
+      nodes.advancedSettingsLink.click();
+      return true;
+    }
+    return focusCommandTarget(nodes.advancedSettingsLink);
+  }
+
+  function mediaRecoveryTarget(reason) {
+    if (state.restartBlocked) return nodes.restartChargeConfirmation;
+    if (state.referenceSyncPending) return nodes.refreshButton;
+    if (!operationCapability(state.operation).enabled) return nodes.advancedSettingsLink;
+    if (!normalizedPrompt()) return nodes.promptInput;
+    if (state.operation === 'IMAGE_TO_IMAGE') return nodes.referenceFiles;
+    if (['FULL_EDIT', 'INPAINT'].includes(state.operation) && !state.source) {
+      return nodes.sourceFile;
+    }
+    if (state.operation === 'INPAINT' && reason) return nodes.editMaskCanvas;
+    return null;
+  }
+
   function renderOperationOptions() {
     var taskLocked = state.restartBlocked || Boolean(state.snapshot && state.snapshot.operation);
     var hostedBlocked = !hostedByokExecutionAllowed();
     var batchBlocked = document.body && document.body.dataset
       && document.body.dataset.byokBatchLocked === 'true';
+    var generationLocked = mainGenerationLocked();
+    if (document.body && document.body.dataset) {
+      document.body.dataset.mediaOperation = state.operation;
+    }
     OPERATIONS.forEach(function (operation) {
       var input = byId('operation' + ({
         TEXT_TO_IMAGE: 'TextToImage', IMAGE_TO_IMAGE: 'ImageToImage',
@@ -417,10 +481,16 @@
       var option = document.querySelector('[data-operation-option="' + operation + '"]');
       var reason = document.querySelector('[data-operation-reason="' + operation + '"]');
       var capability = operationCapability(operation);
-      input.disabled = hostedBlocked || taskLocked || !capability.enabled;
+      var disabled = hostedBlocked || taskLocked || batchBlocked
+        || generationLocked || !capability.enabled;
+      input.disabled = disabled;
       input.checked = state.operation === operation;
       option.classList.toggle('is-selected', state.operation === operation);
       option.classList.toggle('is-disabled', hostedBlocked || !capability.enabled);
+      var mediaButton = MEDIA_OPERATION_NODES[operation];
+      mediaButton.disabled = disabled;
+      mediaButton.classList.toggle('is-selected', state.operation === operation);
+      mediaButton.setAttribute('aria-pressed', state.operation === operation ? 'true' : 'false');
       reason.textContent = batchBlocked ? 'BYOK 批次正在执行，编辑入口已锁定'
         : hostedBlocked ? '正在核对 ERP 托管任务状态'
         : taskLocked ? '当前任务已锁定操作与 Provider' : capability.reason;
@@ -689,6 +759,9 @@
   function renderControls() {
     var editing = state.operation !== 'TEXT_TO_IMAGE';
     var hostedBlocked = !hostedByokExecutionAllowed();
+    var generationLocked = mainGenerationLocked();
+    var batchBlocked = document.body && document.body.dataset
+      && document.body.dataset.byokBatchLocked === 'true';
     var started = Boolean(state.snapshot && state.snapshot.operation);
     var editTaskState = state.restartBlocked ? 'UNKNOWN_OUTCOME'
       : state.editDispatchPending ? 'SUBMITTING'
@@ -726,15 +799,19 @@
       || nodes.restartChargeConfirmation.checked !== true;
     var profiles = state.publicState && Array.isArray(state.publicState.profiles)
       ? state.publicState.profiles : [];
-    nodes.profileSelect.disabled = hostedBlocked || state.busy || started
+    nodes.profileSelect.disabled = hostedBlocked || generationLocked || batchBlocked
+      || state.busy || started
       || state.restartBlocked || !profiles.length;
-    nodes.runEditButton.disabled = hostedBlocked || !editing || state.busy
-      || started || Boolean(reason);
-    nodes.referenceScopeGlobal.disabled = hostedBlocked || state.busy || running;
-    nodes.referenceScopeSlot.disabled = hostedBlocked || state.busy || running;
-    nodes.referenceFiles.disabled = hostedBlocked || state.busy || running || state.restartBlocked
-      || Boolean(state.referenceSyncPending);
-    nodes.sourceFile.disabled = hostedBlocked || state.busy || running || state.restartBlocked;
+    nodes.runEditButton.disabled = hostedBlocked || generationLocked || batchBlocked
+      || !editing || state.busy || started || Boolean(reason);
+    nodes.referenceScopeGlobal.disabled = hostedBlocked || generationLocked
+      || batchBlocked || state.busy || running;
+    nodes.referenceScopeSlot.disabled = hostedBlocked || generationLocked
+      || batchBlocked || state.busy || running;
+    nodes.referenceFiles.disabled = hostedBlocked || generationLocked || batchBlocked
+      || state.busy || running || state.restartBlocked || Boolean(state.referenceSyncPending);
+    nodes.sourceFile.disabled = hostedBlocked || generationLocked || batchBlocked
+      || state.busy || running || state.restartBlocked;
     var hasSlotHistory = Boolean(state.snapshot && state.snapshot.slot
       && state.snapshot.slot.revision > 0 && state.snapshot.alternatives
       && state.snapshot.alternatives.length > 0);
@@ -742,6 +819,43 @@
     nodes.regenerateChargeConfirmation.disabled = hostedBlocked || state.busy || !hasSlotHistory;
     nodes.regenerateEditButton.disabled = hostedBlocked || state.busy || running || !hasSlotHistory
       || nodes.regenerateChargeConfirmation.checked !== true;
+    if (!editing) {
+      setMediaPrimaryStatus('使用文字生成商品图片候选');
+      nodes.mediaPrimaryAction.textContent = '生成候选图';
+      nodes.mediaPrimaryAction.disabled = nodes.generateButton.disabled;
+      dispatchWorkspaceEvent('ss-erp:media-operation-change', null);
+    } else if (document.body.classList.contains('is-hosted-mode')) {
+      // The main page keeps Hosted actions bound to plan and cost-confirmation controls.
+    } else if (mainGenerationLocked()) {
+      setMediaPrimaryStatus('当前候选或批量任务尚未结束', 'warning');
+      nodes.mediaPrimaryAction.textContent = '当前任务已锁定';
+      nodes.mediaPrimaryAction.disabled = true;
+    } else if (hostedBlocked) {
+      setMediaPrimaryStatus('正在核对现有任务与执行通道', 'warning');
+      nodes.mediaPrimaryAction.textContent = '等待状态核对';
+      nodes.mediaPrimaryAction.disabled = true;
+    } else if (state.busy || state.editDispatchPending) {
+      setMediaPrimaryStatus('正在处理当前编辑请求');
+      nodes.mediaPrimaryAction.textContent = '处理中';
+      nodes.mediaPrimaryAction.disabled = true;
+    } else if (state.restartBlocked) {
+      setMediaPrimaryStatus('上一次 Provider 请求结果未知，请先核对恢复操作', 'warning');
+      nodes.mediaPrimaryAction.textContent = '查看恢复操作';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (started) {
+      setMediaPrimaryStatus('编辑任务已创建，继续查看任务状态与候选');
+      nodes.mediaPrimaryAction.textContent = '查看编辑任务';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else if (reason) {
+      setMediaPrimaryStatus(reason, 'warning');
+      nodes.mediaPrimaryAction.textContent = operationCapability(state.operation).enabled
+        ? '补全编辑条件' : '打开高级设置';
+      nodes.mediaPrimaryAction.disabled = false;
+    } else {
+      setMediaPrimaryStatus('已满足' + OPERATION_LABELS[state.operation] + '执行条件', 'success');
+      nodes.mediaPrimaryAction.textContent = '开始' + OPERATION_LABELS[state.operation];
+      nodes.mediaPrimaryAction.disabled = nodes.runEditButton.disabled;
+    }
     renderAlternatives();
   }
 
@@ -1121,19 +1235,22 @@
 
   async function startEdit() {
     var reason = operationInputReason();
-    if (!hostedByokExecutionAllowed() || reason || state.busy) return;
+    var batchBlocked = document.body && document.body.dataset
+      && document.body.dataset.byokBatchLocked === 'true';
+    if (!hostedByokExecutionAllowed() || mainGenerationLocked()
+      || batchBlocked || reason || state.busy) return;
     state.busy = true;
     var lifecycleEpoch = state.lifecycleEpoch;
-    var workspaceDispatchLocked = false;
+    var workspaceDispatchLocked = true;
+    state.editDispatchPending = true;
     renderControls();
+    dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
     try {
       var maskHandle = await ensureMaskHandle(lifecycleEpoch);
       if (state.lifecycleEpoch !== lifecycleEpoch) return;
-      if (!hostedByokExecutionAllowed()) return;
-      state.editDispatchPending = true;
-      workspaceDispatchLocked = true;
-      renderControls();
-      dispatchWorkspaceEvent(WORKSPACE_REFRESH_EVENT, null);
+      var latestBatchBlocked = document.body && document.body.dataset
+        && document.body.dataset.byokBatchLocked === 'true';
+      if (!hostedByokExecutionAllowed() || mainGenerationLocked() || latestBatchBlocked) return;
       var snapshot = await client.startEdit(commandInput(maskHandle));
       if (state.lifecycleEpoch !== lifecycleEpoch) return;
       if (!renderSnapshot(snapshot)) return;
@@ -1308,18 +1425,31 @@
   function setOperation(operation) {
     if (!hostedByokExecutionAllowed()
       || state.restartBlocked || state.snapshot && state.snapshot.operation
+      || mainGenerationLocked()
+      || document.body && document.body.dataset
+        && document.body.dataset.byokBatchLocked === 'true'
       || !OPERATIONS.includes(operation) || !operationCapability(operation).enabled) {
       renderControls();
       return;
     }
     state.operation = operation;
     renderControls();
+    dispatchWorkspaceEvent('ss-erp:media-operation-change', null);
   }
 
   if (document && typeof document.addEventListener === 'function') {
     document.addEventListener(WORKSPACE_REFRESH_EVENT, renderControls);
     document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
+    document.addEventListener('ss-erp:media-generation-lock-change', renderControls);
+    document.addEventListener('ss-erp:hosted-mode-state-change', renderControls);
   }
+
+  nodes.mediaOperationBar.addEventListener('click', function (event) {
+    var button = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('[data-media-operation]') : null;
+    if (!event || event.isTrusted !== true || !button || button.disabled) return;
+    setOperation(button.dataset.mediaOperation);
+  });
 
   [nodes.operationTextToImage, nodes.operationImageToImage,
     nodes.operationFullEdit, nodes.operationInpaint].forEach(function (input) {
@@ -1357,6 +1487,27 @@
   nodes.runEditButton.addEventListener('click', function (event) {
     if (!event || event.isTrusted !== true || nodes.runEditButton.disabled) return;
     void startEdit();
+  });
+  nodes.mediaPrimaryAction.addEventListener('click', function (event) {
+    if (!event || event.isTrusted !== true || state.operation === 'TEXT_TO_IMAGE'
+      || document.body.classList.contains('is-hosted-mode')
+      || nodes.mediaPrimaryAction.disabled) return;
+    var reason = operationInputReason();
+    if (state.restartBlocked) {
+      focusCommandTarget(nodes.restartRecovery);
+      return;
+    }
+    if (state.snapshot && state.snapshot.operation) {
+      focusCommandTarget(nodes.editResultPanel);
+      return;
+    }
+    if (reason) {
+      var target = mediaRecoveryTarget(reason);
+      if (target === nodes.advancedSettingsLink) openAdvancedSettingsFromUserAction();
+      else focusCommandTarget(target);
+      return;
+    }
+    if (!nodes.runEditButton.disabled) void startEdit();
   });
   nodes.regenerateChargeConfirmation.addEventListener('change', function (event) {
     if (!event || event.isTrusted !== true) return;

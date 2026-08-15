@@ -18,7 +18,7 @@
         </div>
       </div>
       <div class="header-actions">
-        <a class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">高级设置</a>
+        <a id="advancedSettingsLink" class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">高级设置</a>
         <button id="refreshButton" class="button button-secondary" type="button">刷新状态</button>
       </div>
     </header>
@@ -55,6 +55,54 @@
     <div id="flowSummary" class="flow-summary" role="status" aria-live="polite">
       正在读取商品与设备状态...
     </div>
+
+    <section id="mediaCommandBar" class="media-command-bar" aria-labelledby="mediaCommandTitle">
+      <div class="media-command-heading">
+        <p class="section-kicker">图片处理</p>
+        <h2 id="mediaCommandTitle">选择处理方式</h2>
+      </div>
+      <div id="mediaOperationBar" class="media-operation-bar" role="group" aria-label="图片处理方式">
+        <button
+          id="mediaOperationTextToImage"
+          class="media-operation-button is-selected"
+          type="button"
+          data-media-operation="TEXT_TO_IMAGE"
+          aria-pressed="true"
+        >文生图</button>
+        <button
+          id="mediaOperationImageToImage"
+          class="media-operation-button"
+          type="button"
+          data-media-operation="IMAGE_TO_IMAGE"
+          aria-pressed="false"
+        >参考图</button>
+        <button
+          id="mediaOperationFullEdit"
+          class="media-operation-button"
+          type="button"
+          data-media-operation="FULL_EDIT"
+          aria-pressed="false"
+        >整图编辑</button>
+        <button
+          id="mediaOperationInpaint"
+          class="media-operation-button"
+          type="button"
+          data-media-operation="INPAINT"
+          aria-pressed="false"
+        >局部重绘</button>
+      </div>
+      <div class="media-primary-control">
+        <p id="mediaPrimaryStatus" class="media-primary-status" role="status" aria-live="polite" aria-atomic="true">
+          正在检查执行条件
+        </p>
+        <button
+          id="mediaPrimaryAction"
+          class="button button-primary media-primary-action"
+          type="button"
+          aria-describedby="mediaPrimaryStatus"
+        >开始处理</button>
+      </div>
+    </section>
 
     <div id="pageStatus" class="page-status" role="status" aria-live="polite">
       正在验证工作台会话...
@@ -349,7 +397,7 @@
         </section>
         </details>
 
-        <fieldset id="operationSwitch" class="operation-switch" aria-describedby="operationReason">
+        <fieldset id="operationSwitch" class="operation-switch" aria-describedby="operationReason" hidden aria-hidden="true">
           <legend>图片操作</legend>
           <label class="operation-option is-selected" data-operation-option="TEXT_TO_IMAGE">
             <input id="operationTextToImage" type="radio" name="imageOperation" value="TEXT_TO_IMAGE" checked />

@@ -13,7 +13,10 @@ for (const id of [
   'editMaskCanvas', 'maskPaintButton', 'maskEraseButton', 'maskUndoButton',
   'maskRedoButton', 'editAlternatives', 'regenerateChargeConfirmation',
   'regenerateEditButton', 'restartRecovery', 'restartChargeConfirmation',
-  'restartAcknowledgeButton',
+  'restartAcknowledgeButton', 'mediaCommandBar', 'mediaOperationBar',
+  'mediaPrimaryStatus', 'mediaPrimaryAction', 'mediaOperationTextToImage',
+  'mediaOperationImageToImage', 'mediaOperationFullEdit', 'mediaOperationInpaint',
+  'advancedSettingsLink',
 ]) {
   assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
 }
@@ -32,6 +35,7 @@ assert.match(css, /\.button-primary:hover:not\(:disabled\)\s*\{[\s\S]*background
 assert.match(css, /#editResultNotice\.is-error/u);
 assert.match(html, /id="editMaskCanvas"[\s\S]*tabindex="0"/u);
 assert.match(html, /class="mask-toolbar" role="group"/u);
+assert.match(html, /id="mediaOperationBar" class="media-operation-bar" role="group"/u);
 assert.doesNotMatch(html, /class="mask-toolbar" role="toolbar"/u);
 assert.match(html, /id="editResultStatus"[\s\S]*aria-live="polite"/u);
 assert.match(css, /@media\s*\(max-width:\s*520px\)/u);
@@ -43,6 +47,10 @@ assert.match(source, /maskCanvasApi\.sourcePoint/u);
 assert.match(source, /maskCanvasApi\.exportPng/u);
 assert.match(source, /selectEditAlternative/u);
 assert.match(source, /warningVersion:\s*'external-provider-charge\/v1'/u);
+assert.match(source, /mediaPrimaryAction[\s\S]*event\.isTrusted\s*!==\s*true/u);
+assert.match(source, /mediaOperationBar[\s\S]*data-media-operation/u);
+assert.match(source, /async function startEdit\(\)[\s\S]*mainGenerationLocked\(\)[\s\S]*byokBatchLocked/u);
+assert.match(source, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)[\s\S]*behavior:\s*reducedMotion\s*\?\s*'auto'/u);
 assert.match(source, /state\s*===\s*'EXPIRED'/u);
 assert.match(source, /var lifecycleEpoch = state\.lifecycleEpoch;[\s\S]*client\.getEditState\(\)/u);
 assert.match(source, /client\.startEdit\([\s\S]*state\.lifecycleEpoch !== lifecycleEpoch/u);
@@ -139,6 +147,9 @@ const ids = [
   'editResultStatus', 'editSelectedPreview', 'editSelectedImage', 'editSelectedMeta',
   'editAlternatives', 'editResultNotice', 'regenerateConfirmationRow',
   'regenerateChargeConfirmation', 'regenerateEditButton', 'refreshButton',
+  'mediaCommandBar', 'mediaOperationBar', 'mediaPrimaryStatus', 'mediaPrimaryAction',
+  'mediaOperationTextToImage', 'mediaOperationImageToImage',
+  'mediaOperationFullEdit', 'mediaOperationInpaint', 'advancedSettingsLink',
 ];
 const nodes = Object.fromEntries(ids.map((id) => [id, new FakeNode(id,
   id.startsWith('operation') || id.startsWith('referenceScope')
@@ -473,12 +484,23 @@ await tick();
 
 assert.equal(nodes.operationImageToImage.disabled, false);
 assert.match(reasonNodes.IMAGE_TO_IMAGE.textContent, /证据有效/u);
+assert.equal(nodes.mediaOperationTextToImage.attributes['aria-pressed'], 'true');
+assert.equal(nodes.mediaOperationImageToImage.attributes['aria-pressed'], 'false');
 
-nodes.operationTextToImage.checked = false;
-nodes.operationImageToImage.checked = true;
-nodes.operationImageToImage.dispatch('change');
+nodes.mediaOperationBar.dispatch('click', {
+  target: {
+    closest() {
+      return {
+        disabled: false,
+        dataset: { mediaOperation: 'IMAGE_TO_IMAGE' },
+      };
+    },
+  },
+});
 assert.equal(body.classList.contains('is-edit-operation'), true);
 assert.equal(nodes.referenceInputGroup.hidden, false);
+assert.equal(nodes.mediaOperationTextToImage.attributes['aria-pressed'], 'false');
+assert.equal(nodes.mediaOperationImageToImage.attributes['aria-pressed'], 'true');
 assert.match(nodes.operationReason.textContent, /1-4 张参考图/u);
 
 const globalReference = new Blob(['global'], { type: 'image/png' });
@@ -544,6 +566,31 @@ assert.deepEqual(JSON.parse(JSON.stringify(calls.filter((row) => row[0] === 'ref
 });
 assert.equal(nodes.runEditButton.disabled, false);
 
+const startsBeforeSharedLocks = calls.filter((row) => row[0] === 'start').length;
+body.dataset.byokGenerationLocked = 'true';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:media-generation-lock-change'));
+assert.equal(nodes.runEditButton.disabled, true);
+assert.equal(nodes.mediaOperationImageToImage.disabled, true);
+nodes.runEditButton.dispatch('click');
+nodes.mediaPrimaryAction.dispatch('click');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'start').length, startsBeforeSharedLocks,
+  'text generation lock blocks both edit submit controls');
+body.dataset.byokGenerationLocked = 'false';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:media-generation-lock-change'));
+assert.equal(nodes.runEditButton.disabled, false);
+body.dataset.byokBatchLocked = 'true';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:byok-batch-lock-change'));
+assert.equal(nodes.runEditButton.disabled, true);
+nodes.runEditButton.dispatch('click');
+nodes.mediaPrimaryAction.dispatch('click');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'start').length, startsBeforeSharedLocks,
+  'batch lock blocks both edit submit controls');
+body.dataset.byokBatchLocked = 'false';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:byok-batch-lock-change'));
+assert.equal(nodes.runEditButton.disabled, false);
+
 hostedByokExecutionAllowed = false;
 context.document.dispatchEvent(new context.CustomEvent('ss-erp:workspace-refresh-request'));
 assert.equal(nodes.runEditButton.disabled, true,
@@ -552,6 +599,8 @@ assert.equal(nodes.profileSelect.disabled, true);
 assert.equal(nodes.referenceFiles.disabled, true);
 assert.equal(nodes.sourceFile.disabled, true);
 assert.equal(nodes.operationImageToImage.disabled, true);
+assert.equal(nodes.mediaOperationImageToImage.disabled, true);
+assert.equal(nodes.mediaPrimaryAction.disabled, true);
 const startsBeforeHostedLockClick = calls.filter((row) => row[0] === 'start').length;
 nodes.runEditButton.dispatch('click');
 await tick();
@@ -576,7 +625,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(
 
 const dispatchRefreshOffset = documentEvents.length;
 deferredStartEdit = createDeferred();
-nodes.runEditButton.dispatch('click');
+nodes.mediaPrimaryAction.dispatch('click');
 await tick();
 assert.equal(body.dataset.editTaskLocked, 'true');
 assert.ok(documentEvents.slice(dispatchRefreshOffset).some(
@@ -587,6 +636,8 @@ deferredStartEdit = null;
 await tick();
 await tick();
 assert.equal(calls.filter((row) => row[0] === 'start').length, 1);
+assert.equal(nodes.mediaOperationImageToImage.disabled, true,
+  'the compact operation selector freezes with the existing edit task');
 assert.equal(calls.filter((row) => row[0] === 'select').length, 1,
   'the first reviewable alternative is selected without discarding other attempts');
 const selectedWorkspaceRuntime = documentEvents.filter(
@@ -756,6 +807,35 @@ assert.equal(nodes.maskUndoButton.disabled, false);
 assert.equal(nodes.maskEditPixels.textContent, '100');
 assert.equal(nodes.editAlternatives.children.length, 0,
   'restart acknowledgement clears stale candidate DOM nodes');
+
+const startsBeforeMaskPreparation = calls.filter((row) => row[0] === 'start').length;
+const maskPreparationEventOffset = documentEvents.length;
+const deferredMaskUpload = createDeferred();
+deferredUploads.set('MASK', deferredMaskUpload);
+nodes.mediaPrimaryAction.dispatch('click');
+assert.equal(body.dataset.editTaskLocked, 'true',
+  'edit preparation freezes text generation before the first asynchronous mask operation');
+assert.ok(documentEvents.slice(maskPreparationEventOffset).some(
+  (event) => event.type === 'ss-erp:workspace-refresh-request',
+), 'edit preparation broadcasts its shared lock before awaiting mask upload');
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'upload').at(-1)[1], 'MASK');
+body.dataset.byokBatchLocked = 'true';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:byok-batch-lock-change'));
+deferredMaskUpload.resolve({
+  mediaHandle: `mh_${'7'.repeat(48)}`,
+  purpose: 'MASK',
+  metadata: {
+    mimeType: 'image/png', byteLength: 4, width: 100, height: 300,
+    sha256: '7'.repeat(64),
+  },
+});
+await tick();
+await tick();
+assert.equal(calls.filter((row) => row[0] === 'start').length, startsBeforeMaskPreparation,
+  'a batch lock acquired during mask preparation prevents the edit Provider request');
+body.dataset.byokBatchLocked = 'false';
+context.document.dispatchEvent(new context.CustomEvent('ss-erp:byok-batch-lock-change'));
 
 profileRow.profile.allowedOperations = ['TEXT_TO_IMAGE'];
 nodes.refreshButton.dispatch('click');

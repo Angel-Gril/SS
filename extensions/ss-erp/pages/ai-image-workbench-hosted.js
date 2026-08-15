@@ -8,6 +8,7 @@
   var WORKSPACE_OUTCOME_EVENT = 'ss-erp:workspace-intent-outcome';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
+  var HOSTED_MODE_STATE_EVENT = 'ss-erp:hosted-mode-state-change';
   var WORKSPACE_ACTION_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var WORKSPACE_INTENT_VERSION = 'extension-byok-workbench-action-intent/v1';
   var WORKSPACE_OUTCOME_VERSION = 'extension-byok-workbench-action-outcome/v1';
@@ -67,6 +68,7 @@
     authorityEpoch: 0,
     status: '正在检查 ERP 托管权限。',
     statusTone: 'pending',
+    lastModeStateKey: null,
   };
   var refreshImplementation = function () { return Promise.resolve(false); };
 
@@ -590,6 +592,15 @@
     }
     nodes.assignmentNotice.textContent = assignmentMessage;
     renderSlots();
+    var modeStateKey = [
+      state.active, state.available, state.busy, state.absorbing,
+      Boolean(state.revalidation), state.invalidated, state.authorityPending,
+      state.authorityResolved, state.modeLockState, state.hostedExecutionEnabled,
+    ].join('|');
+    if (modeStateKey !== state.lastModeStateKey) {
+      state.lastModeStateKey = modeStateKey;
+      emit(HOSTED_MODE_STATE_EVENT, null);
+    }
   }
 
   function emit(type, detail) {
