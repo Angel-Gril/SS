@@ -62,6 +62,12 @@ export interface ExtensionMediaTranslationLaunchContext {
   revision: number;
   draftVersion: number;
   sourceMediaKeys: string[];
+  sourceInputs?: Array<{
+    sourceMediaKey: string;
+    role: string;
+    scope: 'PRODUCT' | 'SKU';
+    skuKeys: string[];
+  }>;
   category?: { categoryId: number; typeId: number };
 }
 

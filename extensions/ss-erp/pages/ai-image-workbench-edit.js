@@ -69,6 +69,7 @@
     advancedSettingsLink: byId('advancedSettingsLink'),
   };
   if (Object.keys(nodes).some(function (key) { return !nodes[key]; })) return;
+  var generationSettingsDetails = byId('byokControlPanel');
 
   var client;
   try {
@@ -87,6 +88,8 @@
   var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
+  var SOURCE_OPERATION_READY_EVENT = 'ss-erp:workbench-source-operation-ready';
+  var SOURCE_OPERATION_VERSION = 'extension-byok-workbench-source-operation/v1';
   var OPERATION_LABELS = {
     TEXT_TO_IMAGE: '文生图',
     IMAGE_TO_IMAGE: '参考图生成',
@@ -789,7 +792,7 @@
     var capability = operationCapability(state.operation);
     nodes.operationReason.textContent = editing
       ? (reason || capability.reason)
-      : '文生图能力沿用当前单图审核、ERP 接收与发布流程。';
+      : '';
     nodes.operationReason.classList.toggle('is-error', editing && Boolean(reason));
     var running = Boolean(state.snapshot && state.snapshot.scheduler
       && ['RUNNING', 'PAUSING'].includes(state.snapshot.scheduler.state));
@@ -1433,8 +1436,43 @@
       return;
     }
     state.operation = operation;
+    if (operation !== 'TEXT_TO_IMAGE' && generationSettingsDetails) {
+      generationSettingsDetails.open = true;
+    }
     renderControls();
     dispatchWorkspaceEvent('ss-erp:media-operation-change', null);
+  }
+
+  async function useSourceMediaOperation(detail) {
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)
+      || Object.keys(detail).length !== 4
+      || !['contractVersion', 'mediaId', 'operation', 'blob'].every(function (key) {
+        return Object.prototype.hasOwnProperty.call(detail, key);
+      })
+      || detail.contractVersion !== SOURCE_OPERATION_VERSION
+      || typeof detail.mediaId !== 'string' || !/^sm_[a-f0-9]{48}$/u.test(detail.mediaId)
+      || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(detail.operation)
+      || typeof global.Blob !== 'function' || !(detail.blob instanceof global.Blob)
+      || !['image/png', 'image/jpeg'].includes(detail.blob.type)
+      || detail.blob.size < 1 || detail.blob.size > 20 * 1024 * 1024
+      || state.busy) return;
+    var capability = operationCapability(detail.operation);
+    if (!hostedByokExecutionAllowed() || !capability.enabled) {
+      setNotice(capability.reason || '当前执行方式不能编辑来源图片。', 'error');
+      renderControls();
+      return;
+    }
+    setOperation(detail.operation);
+    if (state.operation !== detail.operation) return;
+    if (detail.operation === 'IMAGE_TO_IMAGE') {
+      await addReferences([detail.blob]);
+    } else {
+      await chooseSource(detail.blob);
+    }
+    if (state.operation === detail.operation) {
+      setNotice('已选用来源商品图，可填写指令后直接生成。', '');
+      renderControls();
+    }
   }
 
   if (document && typeof document.addEventListener === 'function') {
@@ -1442,6 +1480,9 @@
     document.addEventListener('ss-erp:byok-batch-lock-change', renderControls);
     document.addEventListener('ss-erp:media-generation-lock-change', renderControls);
     document.addEventListener('ss-erp:hosted-mode-state-change', renderControls);
+    document.addEventListener(SOURCE_OPERATION_READY_EVENT, function (event) {
+      void useSourceMediaOperation(event && event.detail);
+    });
   }
 
   nodes.mediaOperationBar.addEventListener('click', function (event) {

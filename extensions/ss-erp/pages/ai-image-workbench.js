@@ -21,7 +21,12 @@
     mediaOperationFullEdit: byId('mediaOperationFullEdit'),
     mediaOperationInpaint: byId('mediaOperationInpaint'),
     advancedSettingsLink: byId('advancedSettingsLink'),
+    generationSettingsDetails: byId('byokControlPanel'),
     pageStatus: byId('pageStatus'),
+    workspaceRecovery: byId('workspaceRecovery'),
+    workspaceRecoveryTitle: byId('workspaceRecoveryTitle'),
+    workspaceRecoveryMessage: byId('workspaceRecoveryMessage'),
+    workspaceRecoveryReturnButton: byId('workspaceRecoveryReturnButton'),
     contextSource: byId('contextSource'),
     contextShop: byId('contextShop'),
     contextDraft: byId('contextDraft'),
@@ -93,6 +98,10 @@
     processDockExpanded: false,
     workspaceHasCandidate: false,
     mediaGenerationLocked: null,
+    sourceCatalog: [],
+    sourceMediaById: new Map(),
+    sourcePreviews: new Map(),
+    sourcePreviewLoads: new Map(),
   };
   var PUBLISH_CONTRACT_VERSION = 'extension-byok-listing-publish/v1';
   var PUBLISH_RECOVERY_STATES = [
@@ -103,6 +112,7 @@
   var WORKSPACE_CONTRACT_VERSION = 'extension-byok-workbench-workspace-state/v1';
   var WORKSPACE_ACTION_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var WORKSPACE_RUNTIME_VERSION = 'extension-byok-workbench-workspace-runtime/v1';
+  var WORKSPACE_PREVIEW_STATE_VERSION = 'extension-byok-workbench-preview-state/v1';
   var WORKSPACE_BOOTSTRAP_EVENT = 'ss-erp:workspace-bootstrap';
   var WORKSPACE_RUNTIME_EVENT = 'ss-erp:workspace-runtime';
   var WORKSPACE_CLEAR_EVENT = 'ss-erp:workspace-clear';
@@ -110,6 +120,13 @@
   var WORKSPACE_AUTHORITATIVE_RELOAD_EVENT = 'ss-erp:workspace-authoritative-reload';
   var WORKSPACE_AUTHORITATIVE_RELOAD_VERSION =
     'extension-byok-workbench-authoritative-reload/v1';
+  var SOURCE_CATALOG_VERSION = 'extension-byok-workbench-source-catalog/v1';
+  var SOURCE_PREVIEW_STATE_VERSION = 'extension-byok-workbench-source-preview-state/v1';
+  var SOURCE_PREVIEW_STATE_EVENT = 'ss-erp:workspace-source-preview-state';
+  var SOURCE_PREVIEW_REQUEST_EVENT = 'ss-erp:workspace-source-preview-request';
+  var SOURCE_OPERATION_EVENT = 'ss-erp:workspace-source-operation';
+  var SOURCE_OPERATION_READY_EVENT = 'ss-erp:workbench-source-operation-ready';
+  var SOURCE_OPERATION_VERSION = 'extension-byok-workbench-source-operation/v1';
   var REVIEW_PUBLIC_STATE_VERSION = 'extension-byok-workbench-review-public-state/v1';
   var REVIEW_CONTEXT_VERSION = 'extension-byok-workbench-review-launch-context/v1';
   var DIRECT_REVIEW_EVENT = 'ss-erp:workbench-publish-review';
@@ -342,6 +359,167 @@
     return true;
   }
 
+  function emitSinglePreviewState(resultId, ready, objectUrl) {
+    var context = state.publicState && state.publicState.context;
+    if (!context || typeof context.slotKey !== 'string'
+      || typeof resultId !== 'string'
+      || (ready === true && (typeof objectUrl !== 'string'
+        || !objectUrl.startsWith('blob:')))) return false;
+    return emitWorkspaceEvent('ss-erp:workspace-preview-state', Object.freeze({
+      contractVersion: WORKSPACE_PREVIEW_STATE_VERSION,
+      slotKey: context.slotKey,
+      attemptId: 'single:' + resultId,
+      ready: ready === true,
+      objectUrl: ready === true ? objectUrl : null,
+    }));
+  }
+
+  function sourceLibraryItems() {
+    return state.sourceCatalog.map(function (item) {
+      return {
+        mediaId: item.mediaId,
+        sourceType: item.scope === 'SKU' || item.role === 'sku' ? 'SKU' : 'CAPTURED',
+        label: item.label,
+        secondaryLabel: item.scope === 'SKU' ? '当前 SKU 来源图' : '商品来源图',
+        skuKeys: item.scope === 'SKU' ? item.skuKeys.slice() : [],
+        referenceEligible: true,
+      };
+    });
+  }
+
+  function emitSourcePreviewState(mediaId, ready, objectUrl) {
+    return emitWorkspaceEvent(SOURCE_PREVIEW_STATE_EVENT, Object.freeze({
+      contractVersion: SOURCE_PREVIEW_STATE_VERSION,
+      mediaId: mediaId,
+      ready: ready === true,
+      objectUrl: ready === true ? objectUrl : null,
+    }));
+  }
+
+  function revokeSourceMedia() {
+    state.sourcePreviewLoads.clear();
+    state.sourcePreviews.forEach(function (preview, mediaId) {
+      emitSourcePreviewState(mediaId, false, null);
+      try { preview.revoke(); } catch {}
+    });
+    state.sourcePreviews.clear();
+    state.sourceMediaById.clear();
+    state.sourceCatalog = [];
+  }
+
+  function canonicalSourceCatalog(value, context) {
+    if (!exactKeys(value, ['contractVersion', 'items'])
+      || value.contractVersion !== SOURCE_CATALOG_VERSION
+      || !Array.isArray(value.items) || value.items.length > 50) return null;
+    var mediaIds = new Set();
+    var sourceKeys = new Set();
+    var items = [];
+    for (var index = 0; index < value.items.length; index += 1) {
+      var item = value.items[index];
+      if (!exactKeys(item, ['mediaId', 'sourceMediaKey', 'role', 'scope', 'skuKeys', 'label'])
+        || typeof item.mediaId !== 'string' || !/^sm_[a-f0-9]{48}$/u.test(item.mediaId)
+        || !isCanonicalText(item.sourceMediaKey, 1, 500)
+        || !isCanonicalText(item.role, 1, 100)
+        || !['PRODUCT', 'SKU'].includes(item.scope)
+        || !Array.isArray(item.skuKeys) || item.skuKeys.length > 500
+        || !item.skuKeys.every(function (skuKey) {
+          return isCanonicalText(skuKey, 1, 500);
+        })
+        || !isCanonicalText(item.label, 1, 200)
+        || mediaIds.has(item.mediaId) || sourceKeys.has(item.sourceMediaKey)
+        || (item.scope === 'SKU' && !item.skuKeys.includes(context.skuKey))) return null;
+      mediaIds.add(item.mediaId);
+      sourceKeys.add(item.sourceMediaKey);
+      items.push(Object.freeze({
+        mediaId: item.mediaId,
+        sourceMediaKey: item.sourceMediaKey,
+        role: item.role,
+        scope: item.scope,
+        skuKeys: Object.freeze(item.skuKeys.slice()),
+        label: item.label,
+      }));
+    }
+    return items;
+  }
+
+  async function openSourceThumbnail(mediaId, expectedLifecycleEpoch) {
+    var lifecycleEpoch = Number.isSafeInteger(expectedLifecycleEpoch)
+      ? expectedLifecycleEpoch : state.lifecycleEpoch;
+    var item = state.sourceMediaById.get(mediaId);
+    if (!item) return false;
+    var cached = state.sourcePreviews.get(mediaId);
+    if (cached) {
+      emitSourcePreviewState(mediaId, true, cached.objectUrl);
+      return true;
+    }
+    if (state.sourcePreviewLoads.has(mediaId)) return state.sourcePreviewLoads.get(mediaId);
+    var load = client.openSourcePreview(item.sourceMediaKey, 'THUMBNAIL').then(function (preview) {
+      if (!lifecycleIsCurrent(lifecycleEpoch) || state.sourceMediaById.get(mediaId) !== item) {
+        try { preview.revoke(); } catch {}
+        return false;
+      }
+      state.sourcePreviews.set(mediaId, preview);
+      emitSourcePreviewState(mediaId, true, preview.objectUrl);
+      return true;
+    }).catch(function () {
+      if (lifecycleIsCurrent(lifecycleEpoch)) emitSourcePreviewState(mediaId, false, null);
+      return false;
+    }).finally(function () {
+      if (state.sourcePreviewLoads.get(mediaId) === load) {
+        state.sourcePreviewLoads.delete(mediaId);
+      }
+    });
+    state.sourcePreviewLoads.set(mediaId, load);
+    return load;
+  }
+
+  function preloadSourceThumbnails(lifecycleEpoch) {
+    state.sourceCatalog.slice(0, 12).forEach(function (item) {
+      void openSourceThumbnail(item.mediaId, lifecycleEpoch);
+    });
+  }
+
+  async function loadSourceCatalog(lifecycleEpoch, context) {
+    revokeSourceMedia();
+    var catalog = await client.getSourceCatalog();
+    if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
+    var items = canonicalSourceCatalog(catalog, context);
+    if (!items) throw new Error('source_catalog_invalid');
+    state.sourceCatalog = items;
+    state.sourceMediaById = new Map(items.map(function (item) {
+      return [item.mediaId, item];
+    }));
+    return true;
+  }
+
+  async function runSourceOperation(detail) {
+    if (!exactKeys(detail, ['contractVersion', 'mediaId', 'operation'])
+      || detail.contractVersion !== SOURCE_OPERATION_VERSION
+      || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(detail.operation)) return;
+    var item = state.sourceMediaById.get(detail.mediaId);
+    if (!item || !state.publicState || !state.publicState.context || state.busy) return;
+    var lifecycleEpoch = state.lifecycleEpoch;
+    nodes.mediaPrimaryStatus.textContent = '正在准备安全来源图片...';
+    try {
+      var preview = await client.openSourcePreview(item.sourceMediaKey, 'WORKING');
+      if (!lifecycleIsCurrent(lifecycleEpoch) || state.sourceMediaById.get(detail.mediaId) !== item) {
+        try { preview.revoke(); } catch {}
+        return;
+      }
+      emitWorkspaceEvent(SOURCE_OPERATION_READY_EVENT, {
+        contractVersion: SOURCE_OPERATION_VERSION,
+        mediaId: detail.mediaId,
+        operation: detail.operation,
+        blob: preview.blob,
+      });
+      try { preview.revoke(); } catch {}
+    } catch (error) {
+      if (!lifecycleIsCurrent(lifecycleEpoch)) return;
+      setStatus(errorLabel(error), 'error');
+      renderControls();
+    }
+  }
+
   function hostedByokExecutionAllowed() {
     var hostedController = global.SS_ERP_HOSTED_AI_IMAGE_WORKBENCH_CONTROLLER;
     return Boolean(hostedController
@@ -386,14 +564,15 @@
       : null;
     var attemptId = candidate && typeof candidate.resultId === 'string'
       ? 'single:' + candidate.resultId : pendingAttemptId;
-    var libraryItems = candidate ? [{
+    var libraryItems = sourceLibraryItems();
+    if (candidate) libraryItems.push({
       mediaId: candidate.resultId,
       sourceType: 'GENERATED',
       label: '当前单图候选',
       secondaryLabel: candidateState,
       skuKeys: [context.skuKey],
       referenceEligible: false,
-    }] : [];
+    });
     var alternatives = candidate || pendingAttemptId ? [{
       attemptId: attemptId,
       state: candidate ? candidateState
@@ -430,7 +609,9 @@
       && hostedController.isAvailable()) {
       detail.availableExecutionModes = ['BYOK', 'ERP_HOSTED'];
     }
-    return emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, detail);
+    var emitted = emitWorkspaceEvent(WORKSPACE_BOOTSTRAP_EVENT, detail);
+    preloadSourceThumbnails(state.lifecycleEpoch);
+    return emitted;
   }
 
   function emitWorkspaceUnknownOutcome() {
@@ -481,7 +662,39 @@
       nodes.pageStatus.classList.remove(name);
     });
     if (tone) nodes.pageStatus.classList.add('is-' + tone);
+    if (document.body && document.body.classList
+      && typeof document.body.classList.contains === 'function'
+      && document.body.classList.contains('is-context-unavailable')
+      && nodes.workspaceRecoveryMessage && message) {
+      nodes.workspaceRecoveryMessage.textContent = String(message);
+    }
     renderFlowState();
+  }
+
+  function setWorkspaceRecoveryState(mode, message) {
+    var normalized = ['loading', 'unavailable', 'ready'].includes(mode) ? mode : 'loading';
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle('is-context-loading', normalized === 'loading');
+      document.body.classList.toggle('is-context-unavailable', normalized === 'unavailable');
+      document.body.classList.toggle('is-context-ready', normalized === 'ready');
+    }
+    if (!nodes.workspaceRecovery) return;
+    var ready = normalized === 'ready';
+    var loading = normalized === 'loading';
+    nodes.workspaceRecovery.hidden = ready;
+    nodes.workspaceRecovery.setAttribute('aria-busy', loading ? 'true' : 'false');
+    nodes.workspaceRecovery.setAttribute('data-recovery-state', normalized);
+    if (nodes.workspaceRecoveryTitle) {
+      nodes.workspaceRecoveryTitle.textContent = loading
+        ? '正在连接来源商品'
+        : '从来源商品页重新打开工作台';
+    }
+    if (nodes.workspaceRecoveryMessage && message) {
+      nodes.workspaceRecoveryMessage.textContent = String(message);
+    }
+    if (nodes.workspaceRecoveryReturnButton) {
+      nodes.workspaceRecoveryReturnButton.disabled = loading || ready;
+    }
   }
 
   function bodyHasClass(name) {
@@ -543,6 +756,12 @@
       return true;
     }
     return focusCommandTarget(nodes.advancedSettingsLink);
+  }
+
+  function openGenerationSettings() {
+    if (!nodes.generationSettingsDetails) return false;
+    nodes.generationSettingsDetails.open = true;
+    return true;
   }
 
   function hostedContinuationTarget() {
@@ -699,7 +918,6 @@
 
   function reconcileFlowStage() {
     var candidateAvailable = hasReviewCandidate();
-    if (candidateAvailable && state.flowStage === 'media') setFlowStage('review');
     if (!candidateAvailable && state.flowStage === 'review' && !reviewPublishOnly()) {
       setFlowStage('media');
     }
@@ -829,6 +1047,7 @@
       + ' · r' + context.draftRevision + ' · v' + context.draftVersion;
     nodes.contextSku.textContent = context.skuKey + ' · 主图 · '
       + (reviewOnly ? '已绑定位置 ' : '追加位置 ') + (context.assignmentOrdinal + 1);
+    setWorkspaceRecoveryState('ready', '');
   }
 
   function clearContextView(label, unavailable) {
@@ -843,6 +1062,12 @@
     nodes.contextShop.textContent = value;
     nodes.contextDraft.textContent = value;
     nodes.contextSku.textContent = value;
+    setWorkspaceRecoveryState(
+      unavailable ? 'unavailable' : 'loading',
+      unavailable
+        ? '当前安全会话不能继续使用。返回来源商品页，再从商品的 AI 图片入口打开。'
+        : '正在读取商品、SKU、店铺与草稿绑定。',
+    );
   }
 
   function renderProfileOptions() {
@@ -1181,6 +1406,9 @@
     state.previewEpoch += 1;
     state.preview = null;
     state.previewReadyResultId = null;
+    if (previous && typeof previous.resultId === 'string') {
+      emitSinglePreviewState(previous.resultId, false, null);
+    }
     if (previous && typeof previous.revoke === 'function') {
       previous.revoke();
     }
@@ -1424,6 +1652,7 @@
         nodes.profileSelect.replaceChildren();
         state.selectedProfileId = '';
         nodes.profileSummary.textContent = '当前会话仅核对已绑定资产，不会调用 Provider。';
+        revokeSourceMedia();
         clearResultView();
         clearWorkspaceView();
         setReviewPublishOnlyClass(true);
@@ -1445,6 +1674,13 @@
         if (priorUnknownOutcome && !state.unknownOutcome) clearWorkspaceView();
         renderContext(next.context);
         renderProfileOptions();
+        try {
+          await loadSourceCatalog(lifecycleEpoch, next.context);
+        } catch {
+          if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
+          revokeSourceMedia();
+        }
+        if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
         if (next.result && isRecord(next.result)) {
           var previewAvailable = await showCandidate(next.result, lifecycleEpoch);
           if (!lifecycleIsCurrent(lifecycleEpoch)) return false;
@@ -1466,6 +1702,7 @@
       state.publicState = null;
       state.readiness = null;
       state.authoritativeReloadPending = false;
+      revokeSourceMedia();
       clearResultView();
       clearWorkspaceView();
       emitWorkspaceEvent(DIRECT_REVIEW_CLEAR_EVENT, null);
@@ -1819,6 +2056,7 @@
     }
     if (!String(nodes.promptInput.value || '').normalize('NFKC').trim()) {
       setFlowStage('media');
+      openGenerationSettings();
       return focusCommandTarget(nodes.promptInput);
     }
     return startTextGenerationFromUserAction();
@@ -1854,7 +2092,12 @@
       if (nodes.workspaceTaskDock) nodes.workspaceTaskDock.hidden = false;
       renderFlowState();
       if (nodes.workspaceTaskDock && typeof nodes.workspaceTaskDock.scrollIntoView === 'function') {
-        nodes.workspaceTaskDock.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        var reducedMotion = typeof global.matchMedia === 'function'
+          && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        nodes.workspaceTaskDock.scrollIntoView({
+          block: 'start',
+          behavior: reducedMotion ? 'auto' : 'smooth',
+        });
       }
     });
   }
@@ -1946,6 +2189,11 @@
       || nodes.previewImage.naturalWidth < 1
       || nodes.previewImage.naturalHeight < 1) return;
     state.previewReadyResultId = state.candidate.resultId;
+    emitSinglePreviewState(
+      state.candidate.resultId,
+      true,
+      state.preview.objectUrl,
+    );
     if (state.candidate.reviewState === 'CANDIDATE_READY') {
       setResultStatus('等待审核', 'pending');
     }
@@ -1954,6 +2202,7 @@
   nodes.previewImage.addEventListener('error', function () {
     if (!state.preview || nodes.previewImage.src !== state.preview.objectUrl) return;
     state.previewReadyResultId = null;
+    if (state.candidate) emitSinglePreviewState(state.candidate.resultId, false, null);
     setResultStatus('预览加载失败 · 可驳回删除', 'error');
     renderControls();
   });
@@ -1994,10 +2243,36 @@
     if (!event || event.isTrusted !== true || nodes.refreshButton.disabled) return;
     refreshWorkbenchFromUserAction();
   });
+  if (document && typeof document.addEventListener === 'function') {
+    document.addEventListener(SOURCE_PREVIEW_REQUEST_EVENT, function (event) {
+      var detail = event && event.detail;
+      if (!exactKeys(detail, ['contractVersion', 'mediaId'])
+        || detail.contractVersion !== SOURCE_PREVIEW_STATE_VERSION
+        || typeof detail.mediaId !== 'string') return;
+      void openSourceThumbnail(detail.mediaId, state.lifecycleEpoch);
+    });
+    document.addEventListener(SOURCE_OPERATION_EVENT, function (event) {
+      void runSourceOperation(event && event.detail);
+    });
+  }
+  if (nodes.workspaceRecoveryReturnButton
+    && typeof nodes.workspaceRecoveryReturnButton.addEventListener === 'function') {
+    nodes.workspaceRecoveryReturnButton.addEventListener('click', function (event) {
+      if (!event || event.isTrusted !== true || nodes.workspaceRecoveryReturnButton.disabled) return;
+      if (typeof global.close === 'function') {
+        try { global.close(); } catch {}
+      }
+      setWorkspaceRecoveryState(
+        'unavailable',
+        '请切回来源商品页，并从商品的 AI 图片入口重新打开工作台。',
+      );
+    });
+  }
   global.addEventListener('pagehide', function () {
     state.lifecycleEpoch += 1;
     state.authoritativeReloadPending = false;
     state.generationDispatchPending = false;
+    revokeSourceMedia();
     revokePreview();
     clearWorkspaceView();
   });
@@ -2014,6 +2289,7 @@
       state.authoritativeReloadPending = false;
       state.workspaceHasCandidate = false;
       state.processDockExpanded = false;
+      revokeSourceMedia();
       clearResultView();
       clearWorkspaceView();
       clearContextView('设备已断开', true);

@@ -19,6 +19,11 @@ assert.match(
   /workbenchPublishCoordinator:\s*getWorkbenchListingPublishCoordinator\(\)/u,
   'the workbench dispatcher must own the unified hosted/BYOK publish bridge',
 );
+assert.match(
+  serviceWorkerSource,
+  /previewBroker:\s*getByokWorkbenchPreviewBroker\(\),\s*sourceMediaLibrary:\s*getByokWorkbenchSourceMediaLibrary\(\),\s*editController:/u,
+  'the interactive workbench dispatcher must own the source media library',
+);
 assert.doesNotMatch(
   serviceWorkerSource,
   /const ingestHandler\s*=|WORKBENCH\.INGEST\]:\s*ingestHandler/u,
@@ -40,6 +45,8 @@ const MESSAGE_TYPES = {
   GET_READINESS: 'readiness',
   EXECUTE_PROVIDER: 'execute',
   OPEN_PREVIEW: 'preview',
+  SOURCE_CATALOG: 'source-catalog',
+  SOURCE_PREVIEW: 'source-preview',
   REVIEW_RESULT: 'review',
   INGEST: 'ingest',
   RECOVER_INGEST: 'recover-ingest',
@@ -432,6 +439,27 @@ const previewBroker = {
   },
   releaseResult(id) { calls.push(['release-preview', id]); return 1; },
 };
+const sourceMediaCatalog = {
+  contractVersion: 'extension-byok-workbench-source-catalog/v1',
+  items: [{
+    mediaId: `sm_${'8'.repeat(48)}`,
+    sourceMediaKey: 'source-main-1',
+    role: 'product_main',
+    scope: 'PRODUCT',
+    skuKeys: [],
+    label: '商品主图 1',
+  }],
+};
+const sourceMediaLibrary = {
+  async loadCatalog(sourceContext) {
+    calls.push(['source-catalog', sourceContext]);
+    return sourceMediaCatalog;
+  },
+  async open(sourceContext, sourceMediaKey, purpose) {
+    calls.push(['source-preview', sourceContext, sourceMediaKey, purpose]);
+    return { contractVersion: 'preview/v1', channelName: 'source-channel', previewTicket: 'source-ticket' };
+  },
+};
 let ingestGate = null;
 let ingestFailure = null;
 let ingestRecoveryFailure = null;
@@ -663,6 +691,7 @@ const dispatcherOptions = {
   sessionManager, launchClient, profileStore, permissionBroker, readinessClient,
   providerClient, vault, authorityGuard, previewBroker, ingestClient, publishCoordinator,
   workbenchPublishCoordinator,
+  sourceMediaLibrary,
   editController, editMediaStore, editEpochGuard,
   providerSemaphore,
   now: () => new Date('2026-07-26T10:00:00.000Z'),
@@ -734,6 +763,22 @@ assert.deepEqual(JSON.parse(JSON.stringify(stateResponse.data.profiles[0].capabi
   },
 ]);
 assert.equal(JSON.stringify(stateResponse).includes('apiKey'), false);
+
+const catalogResponse = await dispatcher.handlers[MESSAGE_TYPES.SOURCE_CATALOG]({
+  payload: {}, sender,
+});
+assert.equal(catalogResponse.ok, true);
+assert.deepEqual(JSON.parse(JSON.stringify(catalogResponse.data)), sourceMediaCatalog);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(calls.find((row) => row[0] === 'source-catalog')[1])),
+  launchContext,
+);
+const sourcePreviewResponse = await dispatcher.handlers[MESSAGE_TYPES.SOURCE_PREVIEW]({
+  payload: { sourceMediaKey: 'source-main-1', purpose: 'WORKING' }, sender,
+});
+assert.equal(sourcePreviewResponse.ok, true);
+assert.equal(calls.some((row) => row[0] === 'source-preview'
+  && row[2] === 'source-main-1' && row[3] === 'WORKING'), true);
 
 const editOwnerProjection = {
   tabId: 77,

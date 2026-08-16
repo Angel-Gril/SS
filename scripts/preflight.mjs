@@ -457,6 +457,11 @@ const steps = [
     args: ['scripts/extension-byok-workbench-client.test.mjs'],
   },
   {
+    name: 'extension BYOK source media library contract',
+    command: 'node',
+    args: ['scripts/extension-byok-workbench-source-media-library.test.mjs'],
+  },
+  {
     name: 'extension BYOK workbench runtime handler contract',
     command: 'node',
     args: ['scripts/extension-byok-workbench-runtime-handler.test.mjs'],

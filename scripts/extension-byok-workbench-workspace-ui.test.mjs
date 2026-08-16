@@ -27,7 +27,9 @@ for (const id of [
   'workspaceTaskProgress', 'workspacePauseButton', 'workspaceContinueButton',
   'workspaceTaskControlReason', 'workspaceQueuedAttempts', 'workspacePublishSummary',
   'workspaceChargeAcknowledgement', 'workspaceRegenerateButton',
-  'workspaceRegenerateReason',
+  'workspaceRegenerateReason', 'workspaceSourceStage', 'workspaceSourceImage',
+  'workspaceSourcePlaceholder', 'workspaceSourceTitle', 'workspaceSourceMeta',
+  'workspaceSourceActions',
 ]) {
   assert.match(htmlSource, new RegExp(`id=["']${id}["']`, 'u'), `${id} must exist`);
 }
@@ -167,8 +169,11 @@ class FakeCustomEvent {
 }
 
 const ids = [
-  'workspaceShell', 'workspaceSkuList', 'workspaceLibraryTabs', 'workspaceLibraryList',
-  'workspaceSlotList', 'workspacePromptInspector', 'workspacePromptInput',
+  'workspaceShell', 'workspaceBoard', 'workspaceMobileSwitcher',
+  'workspaceSkuList', 'workspaceLibraryTabs', 'workspaceLibraryList',
+  'workspaceSlotList', 'workspaceSourceStage', 'workspaceSourceImage',
+  'workspaceSourcePlaceholder', 'workspaceSourceTitle', 'workspaceSourceMeta',
+  'workspaceSourceActions', 'workspacePromptInspector', 'workspacePromptInput',
   'workspaceNegativePromptInput', 'workspaceSavePromptButton', 'workspaceReferenceSummary',
   'workspaceTaskDock', 'workspaceTaskSummary', 'workspaceTaskProgress',
   'workspacePauseButton', 'workspaceContinueButton', 'workspaceTaskControlReason',
@@ -180,9 +185,13 @@ const ids = [
 ];
 const nodeTags = {
   workspaceSkuList: 'ul',
+  workspaceBoard: 'div',
+  workspaceMobileSwitcher: 'div',
   workspaceLibraryTabs: 'div',
   workspaceLibraryList: 'ul',
   workspaceSlotList: 'ol',
+  workspaceSourceImage: 'img',
+  workspaceSourceActions: 'div',
   workspacePromptInput: 'textarea',
   workspaceNegativePromptInput: 'textarea',
   workspaceSavePromptButton: 'button',
@@ -199,9 +208,16 @@ const nodeTags = {
   workspaceOrderAnnouncement: 'p',
 };
 const nodes = Object.fromEntries(ids.map((id) => [id, new FakeNode(id, nodeTags[id] || 'div')]));
+for (const operation of ['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT']) {
+  const button = new FakeNode('', 'button');
+  button.dataset.sourceOperation = operation;
+  nodes.workspaceSourceActions.appendChild(button);
+}
 const documentListeners = new Map();
 const emittedActions = [];
 const emittedIntents = [];
+const emittedSourcePreviewRequests = [];
+const emittedSourceOperations = [];
 let commandIdSequence = 0;
 const crypto = {
   randomUUID() {
@@ -221,6 +237,12 @@ const document = {
   dispatchEvent(event) {
     if (event.type === 'ss-erp:workspace-action') emittedActions.push(event.detail);
     if (event.type === 'ss-erp:workspace-intent') emittedIntents.push(event.detail);
+    if (event.type === 'ss-erp:workspace-source-preview-request') {
+      emittedSourcePreviewRequests.push(event.detail);
+    }
+    if (event.type === 'ss-erp:workspace-source-operation') {
+      emittedSourceOperations.push(event.detail);
+    }
     for (const listener of documentListeners.get(event.type) || []) listener(event);
     return true;
   },
@@ -682,6 +704,7 @@ dispatchDocument('ss-erp:workspace-preview-state', {
   slotKey: 'blue:detail',
   attemptId: 'attempt-blue-detail-alt',
   ready: true,
+  objectUrl: 'blob:ss-erp-workspace-preview',
 });
 assert.equal(keepAlternative.disabled, false);
 assert.equal(rejectAlternative.disabled, false);
@@ -1278,5 +1301,36 @@ assert.equal(actionNode(
 assert.equal(nodes.workspaceShell.attributes['data-runtime-state'], 'READY');
 assert.ok(context.SS_ERP_BYOK_WORKBENCH_WORKSPACE_EVENTS.nextRuntimeRevision() < 9100,
   'discarded retained runtime cannot pollute the active binding clock');
+
+dispatchDocument('ss-erp:workspace-clear', null);
+const sourceMediaId = `sm_${'a'.repeat(48)}`;
+dispatchDocument('ss-erp:workspace-bootstrap', bootstrapInput({
+  globalReferenceIds: [],
+  libraryItems: [libraryItem(sourceMediaId, 'CAPTURED', {
+    label: '商品主图 1',
+    secondaryLabel: '商品来源图',
+  })],
+}));
+assert.equal(nodes.workspaceSourceStage.hidden, false);
+assert.equal(nodes.workspaceSourceTitle.textContent, '商品主图 1');
+assert.equal(emittedSourcePreviewRequests.at(-1).mediaId, sourceMediaId);
+dispatchDocument('ss-erp:workspace-source-preview-state', {
+  contractVersion: 'extension-byok-workbench-source-preview-state/v1',
+  mediaId: sourceMediaId,
+  ready: true,
+  objectUrl: 'blob:source-main-1',
+});
+assert.equal(nodes.workspaceSourceImage.hidden, false);
+assert.equal(nodes.workspaceSourceImage.src, 'blob:source-main-1');
+const referenceGeneration = actionNode(
+  nodes.workspaceLibraryList, 'source-operation', 'operation', 'IMAGE_TO_IMAGE',
+);
+assert.equal(referenceGeneration.disabled, false);
+referenceGeneration.dispatch('click');
+assert.deepEqual(JSON.parse(JSON.stringify(emittedSourceOperations.at(-1))), {
+  contractVersion: 'extension-byok-workbench-source-operation/v1',
+  mediaId: sourceMediaId,
+  operation: 'IMAGE_TO_IMAGE',
+});
 
 console.log('Extension BYOK workspace UI tests passed');

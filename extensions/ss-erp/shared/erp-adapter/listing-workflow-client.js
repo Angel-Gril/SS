@@ -217,9 +217,19 @@
 
   function validSourceInput(value) {
     var item = record(value);
-    return item
-      && Object.keys(item).every(function (key) { return key === 'sourceMediaKey'; })
-      && text(item.sourceMediaKey, 500);
+    if (!item || !text(item.sourceMediaKey, 500)) return false;
+    var keys = Object.keys(item);
+    if (keys.length === 1) return keys[0] === 'sourceMediaKey';
+    if (keys.length !== 4
+      || !['sourceMediaKey', 'role', 'scope', 'skuKeys'].every(function (key) {
+        return Object.prototype.hasOwnProperty.call(item, key);
+      })
+      || !text(item.role, 100)
+      || !['PRODUCT', 'SKU'].includes(item.scope)
+      || !Array.isArray(item.skuKeys) || item.skuKeys.length > 500
+      || item.skuKeys.some(function (skuKey) { return !text(skuKey, 500); })
+      || new Set(item.skuKeys).size !== item.skuKeys.length) return false;
+    return item.scope === 'SKU' ? item.skuKeys.length > 0 : item.skuKeys.length === 0;
   }
 
   function validLaunchContext(value, input) {

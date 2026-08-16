@@ -405,6 +405,7 @@
         slotKey: prior.slotKey,
         attemptId: prior.attemptId,
         ready: false,
+        objectUrl: null,
       }));
       notify();
       return true;
@@ -888,6 +889,7 @@
         slotKey: preview.slotKey,
         attemptId: preview.attemptId,
         ready: true,
+        objectUrl: preview.objectUrl,
       }));
       notify();
       return true;
@@ -1144,6 +1146,7 @@
     previewMeta: byId('batchPreviewMeta'),
     previewClose: byId('batchPreviewCloseButton'),
   };
+  var generationSettingsDetails = byId('byokControlPanel');
   var advancedDetails = byId('batchAdvancedDetails');
   if (Object.values(nodes).some(function (node) { return !node; })) return;
 
@@ -1641,6 +1644,9 @@
     nodes.clearButton.hidden = !view.active;
     if (advancedDetails && (view.active || view.recoveryRows.length > 0)) {
       advancedDetails.open = true;
+    }
+    if (generationSettingsDetails && (view.active || view.recoveryRows.length > 0)) {
+      generationSettingsDetails.open = true;
     }
     if (view.active) {
       nodes.generateButton.disabled = true;

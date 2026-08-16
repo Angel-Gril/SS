@@ -75,6 +75,21 @@ export interface ExtensionMediaLaunchRoutesOptions {
     revision: number;
     draftVersion: number;
   }): Promise<ExtensionMediaTranslationLaunchContext | null>;
+  loadPreview(input: {
+    ownerUserId: string;
+    listingWorkflowId: string;
+    revision: number;
+    draftVersion: number;
+    skuKey: string;
+    sourceMediaKey: string;
+    purpose: 'THUMBNAIL' | 'WORKING';
+  }): Promise<{
+    bytes: Buffer;
+    mimeType: 'image/jpeg' | 'image/png';
+    width: number;
+    height: number;
+    sha256: string;
+  }>;
   getCapability(input: {
     ownerUserId: string;
     workflowDecision: ExtensionMediaWorkflowDecision;
@@ -113,6 +128,20 @@ const querySchema = z.object({
   draftVersion: z.coerce.number().int().min(1),
   contractVersion: z.literal('2').optional(),
 }).strict();
+const previewSchema = z.object({
+  snapshotId: id,
+  supplyGoodsId: id,
+  shopId: id,
+  listingWorkflowId: id,
+  revision: z.number().int().min(1),
+  draftVersion: z.number().int().min(1),
+  skuKey: z.string().trim().min(1).max(500),
+  sourceMediaKey: z.string().trim().min(1).max(500),
+  purpose: z.enum(['THUMBNAIL', 'WORKING']),
+}).strict();
+
+const SOURCE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+const SOURCE_PREVIEW_MAX_EDGE = 2048;
 
 function disabledOperations(reason: string, revision: string): ExtensionMediaOperationCapabilities {
   const disabled = <T extends ExtensionMediaStandaloneOperation>(operation: T) => ({
@@ -185,6 +214,10 @@ function disabledCapability(reason: string, revision: string): ExtensionMediaLau
 }
 
 function publicContext(context: ExtensionMediaTranslationLaunchContext, query: z.infer<typeof querySchema>) {
+  const detailsByKey = new Map((context.sourceInputs || []).map((item) => [
+    item.sourceMediaKey,
+    item,
+  ]));
   return {
     id: context.id,
     shopId: context.shopId,
@@ -192,9 +225,15 @@ function publicContext(context: ExtensionMediaTranslationLaunchContext, query: z
     snapshotId: context.snapshotId,
     revision: context.revision,
     draftVersion: context.draftVersion,
-    sourceInputs: context.sourceMediaKeys.slice(0, 50).map((sourceMediaKey) => ({
-      sourceMediaKey,
-    })),
+    sourceInputs: context.sourceMediaKeys.slice(0, 50).map((sourceMediaKey) => {
+      const detail = detailsByKey.get(sourceMediaKey);
+      return detail ? {
+        sourceMediaKey,
+        role: detail.role,
+        scope: detail.scope,
+        skuKeys: [...detail.skuKeys],
+      } : { sourceMediaKey };
+    }),
     requested: {
       snapshotId: query.snapshotId,
       listingWorkflowId: query.listingWorkflowId,
@@ -262,6 +301,93 @@ export async function extensionMediaLaunchRoutes(
   app: FastifyInstance,
   options: ExtensionMediaLaunchRoutesOptions,
 ) {
+  app.post('/media-preview', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
+    const parsed = previewSchema.safeParse(request.body);
+    if (!parsed.success) return error(reply, 400, 'invalid_request', '参数错误');
+    const device = deviceContext(request);
+    if (!device) return error(reply, 401, 'invalid_device_context', '无效的设备工作台身份');
+    if (!device.scopes.includes('media:execute')) {
+      return error(reply, 403, 'command_scope_denied', '设备无权读取媒体预览');
+    }
+    if (!device.allowedShopIds.includes(parsed.data.shopId)) {
+      return error(reply, 403, 'command_shop_denied', '设备无权访问该店铺');
+    }
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Pragma', 'no-cache');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    let extensionDecision: SourceWorkflowFeatureDecision;
+    let workflowDecision: ExtensionMediaWorkflowDecision;
+    let webDecision: SourceWorkflowFeatureDecision;
+    try {
+      [extensionDecision, workflowDecision, webDecision] = await Promise.all([
+        options.featureFlags.evaluate('SOURCE_LISTING_EXTENSION_WORKBENCH', {
+          ownerUserId: device.ownerUserId,
+          shopId: parsed.data.shopId,
+          deviceSessionId: device.sessionId,
+        }),
+        options.getMediaWorkflowDecision
+          ? options.getMediaWorkflowDecision(device.ownerUserId)
+          : options.featureFlags.evaluate('AI_MEDIA_WORKFLOW_V2', {
+            ownerUserId: device.ownerUserId,
+          }),
+        options.featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', {
+          ownerUserId: device.ownerUserId,
+        }),
+      ]);
+    } catch {
+      return error(reply, 503, 'media_preview_unavailable', '来源图片预览策略暂不可用');
+    }
+    if (!extensionDecision.enabled || !workflowDecision.enabled || !webDecision.enabled) {
+      return error(reply, 503, 'media_preview_disabled', '来源图片预览尚未开放');
+    }
+    const exactContext = await loadExactContext(options, device, parsed.data);
+    if (exactContext.kind === 'error'
+      || !exactContext.context.sourceMediaKeys.includes(parsed.data.sourceMediaKey)) {
+      return error(reply, 409, 'media_preview_context_stale', '来源图片或草稿已变化，请刷新后重试');
+    }
+    let preview: Awaited<ReturnType<typeof options.loadPreview>>;
+    try {
+      preview = await options.loadPreview({
+        ownerUserId: device.ownerUserId,
+        listingWorkflowId: parsed.data.listingWorkflowId,
+        revision: parsed.data.revision,
+        draftVersion: parsed.data.draftVersion,
+        skuKey: parsed.data.skuKey,
+        sourceMediaKey: parsed.data.sourceMediaKey,
+        purpose: parsed.data.purpose,
+      });
+    } catch (caught) {
+      const code = String((caught as { code?: unknown } | null)?.code || '');
+      const statusCode = Number((caught as { statusCode?: unknown } | null)?.statusCode);
+      if (statusCode === 404 || statusCode === 409
+        || ['SOURCE_MEDIA_NOT_FOUND', 'STALE_MEDIA_CONTEXT'].includes(code)) {
+        return error(reply, 409, 'media_preview_context_stale', '来源图片或草稿已变化，请刷新后重试');
+      }
+      request.log.error({ err: caught }, 'source media preview failed');
+      return error(reply, 503, 'media_preview_unavailable', '来源图片预览暂不可用');
+    }
+    const actualSha256 = Buffer.isBuffer(preview?.bytes)
+      ? createHash('sha256').update(preview.bytes).digest('hex') : '';
+    if (!Buffer.isBuffer(preview?.bytes)
+      || preview.bytes.length < 1 || preview.bytes.length > SOURCE_PREVIEW_MAX_BYTES
+      || !['image/jpeg', 'image/png'].includes(preview.mimeType)
+      || !Number.isSafeInteger(preview.width) || preview.width < 1
+      || preview.width > SOURCE_PREVIEW_MAX_EDGE
+      || !Number.isSafeInteger(preview.height) || preview.height < 1
+      || preview.height > SOURCE_PREVIEW_MAX_EDGE
+      || !/^[a-f0-9]{64}$/u.test(preview.sha256)
+      || actualSha256 !== preview.sha256) {
+      return error(reply, 503, 'media_preview_unavailable', '来源图片预览暂不可用');
+    }
+    reply.header('Content-Type', preview.mimeType);
+    reply.header('Content-Length', String(preview.bytes.length));
+    reply.header('X-SS-ERP-Content-Sha256', preview.sha256);
+    reply.header('X-SS-ERP-Image-Width', String(preview.width));
+    reply.header('X-SS-ERP-Image-Height', String(preview.height));
+    reply.header('Cross-Origin-Resource-Policy', 'same-origin');
+    return reply.send(preview.bytes);
+  });
+
   app.get('/media-launch', { preHandler: [options.authenticateDevice] }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
     if (!parsed.success) return error(reply, 400, 'invalid_request', '参数错误');

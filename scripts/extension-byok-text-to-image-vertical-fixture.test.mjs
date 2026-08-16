@@ -743,6 +743,8 @@ const MESSAGE_TYPES = {
   GET_READINESS: 'qa01-readiness',
   EXECUTE_PROVIDER: 'qa01-execute',
   OPEN_PREVIEW: 'qa01-preview',
+  SOURCE_CATALOG: 'qa01-source-catalog',
+  SOURCE_PREVIEW: 'qa01-source-preview',
   REVIEW_RESULT: 'qa01-review',
   INGEST: 'qa01-ingest',
   RECOVER_INGEST: 'qa01-recover-ingest',
@@ -907,6 +909,14 @@ const dispatcher = runtimeApi.createDispatcher({
       return ticket;
     },
     releaseResult() { return 1; },
+  },
+  sourceMediaLibrary: {
+    async loadCatalog() {
+      throw new Error('source catalog is outside the text-to-image fixture');
+    },
+    async open() {
+      throw new Error('source preview is outside the text-to-image fixture');
+    },
   },
   ingestClient,
   publishCoordinator,

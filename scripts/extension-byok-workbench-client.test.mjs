@@ -52,6 +52,18 @@ const readiness = {
 const resultId = 'br_' + 'b'.repeat(48);
 const mediaHandle = 'mh_' + '1'.repeat(48);
 const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
+const sourceMediaId = 'sm_' + '7'.repeat(48);
+const sourceCatalog = {
+  contractVersion: 'extension-byok-workbench-source-catalog/v1',
+  items: [{
+    mediaId: sourceMediaId,
+    sourceMediaKey: 'source-main-1',
+    role: 'product_main',
+    scope: 'PRODUCT',
+    skuKeys: [],
+    label: '商品主图 1',
+  }],
+};
 const editSnapshot = {
   contractVersion: 'extension-byok-workbench-edit-controller/v1', executionMode: 'BYOK',
   slotKey: 'sku:sku-1:hero', profileId: null, operation: null,
@@ -128,6 +140,17 @@ const responses = new Map([
       previewTicket: 'pt_' + 'e'.repeat(48),
       expiresAt: '2026-07-26T10:00:15.000Z',
       metadata: { mimeType: 'image/png', byteLength: blob.size, sha256: 'c'.repeat(64) },
+    },
+  }],
+  [api.MESSAGE_TYPES.SOURCE_CATALOG, { ok: true, data: sourceCatalog }],
+  [api.MESSAGE_TYPES.SOURCE_PREVIEW, {
+    ok: true,
+    data: {
+      contractVersion: 'extension-byok-workbench-preview-channel/v1',
+      channelName: 'ss-erp:byok-preview:' + '7'.repeat(48),
+      previewTicket: 'pt_' + '8'.repeat(48),
+      expiresAt: '2026-07-26T10:00:15.000Z',
+      metadata: { mimeType: 'image/png', byteLength: blob.size, sha256: '7'.repeat(64) },
     },
   }],
   [api.MESSAGE_TYPES.REVIEW_RESULT, { ok: true, data: { resultId, reviewState: 'APPROVED' } }],
@@ -213,6 +236,49 @@ assert.equal(objectUrls[0], blob);
 preview.revoke();
 preview.revoke();
 assert.deepEqual(revoked, ['blob:extension-preview-1']);
+
+assert.deepEqual(JSON.parse(JSON.stringify(await client.getSourceCatalog())), sourceCatalog);
+const sourceChannelName = responses.get(api.MESSAGE_TYPES.SOURCE_PREVIEW).data.channelName;
+FakeBroadcastChannel.hooks.set(sourceChannelName, (page, value) => {
+  assert.deepEqual(JSON.parse(JSON.stringify(value)), {
+    type: 'READY', previewTicket: 'pt_' + '8'.repeat(48),
+  });
+  page.onmessage({
+    data: {
+      contractVersion: 'extension-byok-workbench-preview-channel/v1',
+      type: 'PREVIEW',
+      previewTicket: 'pt_' + '8'.repeat(48),
+      image: blob,
+      metadata: { mimeType: 'image/png', byteLength: blob.size, sha256: '7'.repeat(64) },
+    },
+  });
+});
+const sourcePreview = await client.openSourcePreview('source-main-1', 'WORKING');
+assert.equal(sourcePreview.blob, blob);
+assert.equal(sourcePreview.objectUrl, 'blob:extension-preview-1');
+sourcePreview.revoke();
+const sourceMessageCount = messages.length;
+await assert.rejects(
+  client.openSourcePreview('', 'THUMBNAIL'),
+  (error) => error && error.code === 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID',
+);
+await assert.rejects(
+  client.openSourcePreview('source-main-1', 'ORIGINAL'),
+  (error) => error && error.code === 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID',
+);
+assert.equal(messages.length, sourceMessageCount, 'invalid source previews fail before runtime I/O');
+assert.deepEqual(JSON.parse(JSON.stringify(
+  messages.filter((message) => [
+    api.MESSAGE_TYPES.SOURCE_CATALOG,
+    api.MESSAGE_TYPES.SOURCE_PREVIEW,
+  ].includes(message.type)),
+)), [
+  { type: api.MESSAGE_TYPES.SOURCE_CATALOG, payload: {} },
+  {
+    type: api.MESSAGE_TYPES.SOURCE_PREVIEW,
+    payload: { sourceMediaKey: 'source-main-1', purpose: 'WORKING' },
+  },
+]);
 
 const approved = await client.reviewResult(resultId, 'APPROVE');
 assert.equal(approved.reviewState, 'APPROVED');

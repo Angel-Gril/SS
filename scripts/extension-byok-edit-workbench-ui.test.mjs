@@ -783,6 +783,26 @@ nodes.restartAcknowledgeButton.dispatch('click');
 await tick();
 await tick();
 
+const catalogSourceBlob = new Blob(['catalog-source'], { type: 'image/png' });
+const catalogSourceUploadOffset = calls.filter((row) => row[0] === 'upload').length;
+context.document.dispatchEvent(new context.CustomEvent(
+  'ss-erp:workbench-source-operation-ready',
+  { detail: {
+    contractVersion: 'extension-byok-workbench-source-operation/v1',
+    mediaId: `sm_${'a'.repeat(48)}`,
+    operation: 'FULL_EDIT',
+    blob: catalogSourceBlob,
+  } },
+));
+await tick();
+await tick();
+let catalogSourceUploads = calls.filter((row) => row[0] === 'upload');
+assert.equal(catalogSourceUploads.length, catalogSourceUploadOffset + 1);
+assert.equal(catalogSourceUploads.at(-1)[1], 'SOURCE');
+assert.equal(catalogSourceUploads.at(-1)[2], catalogSourceBlob);
+assert.equal(nodes.mediaOperationFullEdit.attributes['aria-pressed'], 'true');
+assert.match(nodes.editResultNotice.textContent, /已选用来源商品图/u);
+
 nodes.operationImageToImage.checked = false;
 nodes.operationInpaint.checked = true;
 nodes.operationInpaint.dispatch('change');

@@ -1354,6 +1354,12 @@ if (isExtensionDeviceAuthEnabled()) {
       );
       if (draft.revision !== draftRevision || draft.draftVersion !== draftVersion) return null;
       const trustedCategory = resolveTrustedAiImageTranslationCategory(draft);
+      const sourceInputs = context.inputs.map((item) => ({
+        sourceMediaKey: String(item.sourceMediaKey || '').trim(),
+        role: String(item.role || 'unknown').trim() || 'unknown',
+        scope: item.scope === 'SKU' ? 'SKU' as const : 'PRODUCT' as const,
+        skuKeys: Array.isArray(item.skuKeys) ? [...item.skuKeys] : [],
+      })).filter((item) => item.sourceMediaKey);
       return {
         id: draft.id,
         ownerUserId: draft.ownerUserId,
@@ -1362,9 +1368,8 @@ if (isExtensionDeviceAuthEnabled()) {
         snapshotId: draft.sourceCaptureSnapshotId,
         revision: draft.revision,
         draftVersion: draft.draftVersion,
-        sourceMediaKeys: [...new Set(context.inputs
-          .map((item) => String(item.sourceMediaKey || '').trim())
-          .filter(Boolean))].slice(0, 50),
+        sourceMediaKeys: [...new Set(sourceInputs.map((item) => item.sourceMediaKey))].slice(0, 50),
+        sourceInputs: sourceInputs.slice(0, 50),
         ...(trustedCategory ? { category: trustedCategory } : {}),
       };
     } catch (error) {
@@ -2772,6 +2777,25 @@ if (isExtensionDeviceAuthEnabled()) {
         || context.snapshotId !== snapshotId) return null;
       return context;
     },
+    loadPreview: ({
+      ownerUserId,
+      listingWorkflowId,
+      revision,
+      draftVersion,
+      skuKey,
+      sourceMediaKey,
+      purpose,
+    }) => extensionMediaContextService.loadListingDraftPreview(
+      ownerUserId,
+      listingWorkflowId,
+      sourceMediaKey,
+      {
+        expectedRevision: revision,
+        expectedDraftVersion: draftVersion,
+        skuKey,
+      },
+      purpose,
+    ),
     getCapability: async ({ workflowDecision }) => {
       const [
         enabled, provider, model, dailyLimit, estimatedCostCents, categoryGlossaryJson, storage,

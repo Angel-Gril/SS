@@ -47,6 +47,8 @@
   var HOSTED_PREVIEW_PATH =
     '/api/extension-device/source-workbench/ai-image-suite/candidate-preview';
   var HOSTED_PREVIEW_CONSUME_PATH = HOSTED_PREVIEW_PATH + '/consume';
+  var SOURCE_MEDIA_PREVIEW_PATH =
+    '/api/extension-device/source-workbench/media-preview';
   var LARGE_PUBLISH_REQUEST_PATHS = new Set([
     '/api/extension-device/command-grants',
     WORKBENCH_PUBLISH_PREVIEW_PATH,
@@ -74,6 +76,7 @@
     BYOK_MEDIA_INGEST_PATH,
     BYOK_MEDIA_BATCH_INGEST_PATH,
     HOSTED_PREVIEW_CONSUME_PATH,
+    SOURCE_MEDIA_PREVIEW_PATH,
   ]);
   var BYOK_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
@@ -152,6 +155,7 @@
       HOSTED_LISTING_ASSIGNMENT_PATH,
       HOSTED_PREVIEW_PATH,
       HOSTED_PREVIEW_CONSUME_PATH,
+      SOURCE_MEDIA_PREVIEW_PATH,
     ]);
     function hostedPlanReviewPath(candidate) {
       var prefix = HOSTED_PLAN_PATH + '/';
@@ -531,7 +535,9 @@
           binaryRequest = byokBatchMultipartRequest(bodyValue, commandOptions, path);
           requestBody = binaryRequest.body;
         } else if (method === 'POST') {
-          if (bodyMode === 'hosted-preview' && path !== HOSTED_PREVIEW_CONSUME_PATH) {
+          if (bodyMode === 'hosted-preview'
+            && path !== HOSTED_PREVIEW_CONSUME_PATH
+            && path !== SOURCE_MEDIA_PREVIEW_PATH) {
             throw new TypeError('hosted preview response path is invalid');
           }
           if (!bodyValue || typeof bodyValue !== 'object' || Array.isArray(bodyValue)) {
@@ -611,7 +617,11 @@
           var accessToken = requiredText(operation.accessToken, 'device access token');
           var baseUrl = requiredText(operation.baseUrl, 'baseUrl').replace(/\/+$/, '');
           var headers = {
-            Accept: bodyMode === 'hosted-preview' ? 'image/png' : 'application/json',
+            Accept: bodyMode === 'hosted-preview'
+              ? path === SOURCE_MEDIA_PREVIEW_PATH
+                ? 'image/png, image/jpeg'
+                : 'image/png'
+              : 'application/json',
             Authorization: 'Bearer ' + accessToken,
           };
           if (method === 'POST') {

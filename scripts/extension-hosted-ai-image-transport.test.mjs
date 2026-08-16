@@ -14,6 +14,7 @@ vm.runInNewContext(readFileSync(sessionPath, 'utf8'), context, { filename: sessi
 const api = context.SS_ERP_SOURCE_WORKFLOW_DEVICE_SESSION;
 const previewPath =
   '/api/extension-device/source-workbench/ai-image-suite/candidate-preview/consume';
+const sourceMediaPreviewPath = '/api/extension-device/source-workbench/media-preview';
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function headers(values = {}) {
@@ -89,6 +90,19 @@ assert.equal(requests[0].init.headers.Authorization, 'Bearer device-token');
 assert.equal(requests[0].init.credentials, 'omit');
 assert.equal(requests[0].init.cache, 'no-store');
 assert.equal(requests[0].init.redirect, 'error');
+
+const sourceRequests = [];
+const sourceTransport = api.createTransport({
+  credentials: credentials(),
+  fetchImpl: async (url, init) => {
+    sourceRequests.push({ url, init });
+    return binaryResponse();
+  },
+});
+await sourceTransport.postRaw(sourceMediaPreviewPath, {
+  sourceMediaKey: 'source-main-1', purpose: 'THUMBNAIL',
+}, { requiredScopes: ['listing:review', 'media:execute'] });
+assert.equal(sourceRequests[0].init.headers.Accept, 'image/png, image/jpeg');
 
 const externalAbort = new AbortController();
 let observedAbort = false;

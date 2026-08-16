@@ -37,6 +37,7 @@ try { importScripts('../shared/byok/workbench-launch-client.js'); } catch (e) { 
 try { importScripts('../shared/byok/workbench-batch-launch-client.js'); } catch (e) { console.warn('[SS ERP] BYOK batch launch client load error:', e); }
 try { importScripts('../shared/byok/workbench-launch-session.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench session load error:', e); }
 try { importScripts('../shared/byok/workbench-preview-channel.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench preview channel load error:', e); }
+try { importScripts('../shared/byok/workbench-source-media-library.js'); } catch (e) { console.warn('[SS ERP] BYOK source media library load error:', e); }
 try { importScripts('../shared/byok/workbench-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK workbench runtime handler load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-registry.js'); } catch (e) { console.warn('[SS ERP] BYOK batch registry load error:', e); }
 try { importScripts('../shared/byok/workbench-batch-runtime-handler.js'); } catch (e) { console.warn('[SS ERP] BYOK batch runtime handler load error:', e); }
@@ -430,6 +431,7 @@ let byokWorkbenchLaunchClient = null;
 let byokWorkbenchBatchLaunchClient = null;
 let byokWorkbenchSessionManager = null;
 let byokWorkbenchPreviewBroker = null;
+let byokWorkbenchSourceMediaLibrary = null;
 let byokWorkbenchRuntimeDispatcher = null;
 let byokWorkbenchBatchRegistry = null;
 let byokWorkbenchBatchRuntimeDispatcher = null;
@@ -2028,6 +2030,22 @@ function getByokWorkbenchPreviewBroker() {
   return byokWorkbenchPreviewBroker;
 }
 
+function getByokWorkbenchSourceMediaLibrary() {
+  if (byokWorkbenchSourceMediaLibrary) return byokWorkbenchSourceMediaLibrary;
+  const api = globalThis.SS_ERP_BYOK_WORKBENCH_SOURCE_MEDIA_LIBRARY;
+  if (!api || typeof api.createLibrary !== 'function') {
+    throw new Error('BYOK source media library is unavailable');
+  }
+  byokWorkbenchSourceMediaLibrary = api.createLibrary({
+    listingClient: getSourceListingWorkflowClient(),
+    transport: getByokDeviceTransport(),
+    previewBroker: getByokWorkbenchPreviewBroker(),
+    crypto: globalThis.crypto,
+    Blob: globalThis.Blob,
+  });
+  return byokWorkbenchSourceMediaLibrary;
+}
+
 function getByokWorkbenchMediaBroker() {
   if (byokWorkbenchMediaBroker) return byokWorkbenchMediaBroker;
   const api = globalThis.SS_ERP_BYOK_WORKBENCH_MEDIA_CHANNEL;
@@ -2216,6 +2234,7 @@ function getByokWorkbenchRuntimeDispatcher() {
     vault: getByokGeneratedResultVault(),
     authorityGuard: getByokRuntimeAuthorityGuard(),
     previewBroker: getByokWorkbenchPreviewBroker(),
+    sourceMediaLibrary: getByokWorkbenchSourceMediaLibrary(),
     editController: getByokWorkbenchEditController(),
     editMediaStore: getByokWorkbenchEditMediaStore(),
     editEpochGuard: getByokWorkbenchEditEpochGuard(),

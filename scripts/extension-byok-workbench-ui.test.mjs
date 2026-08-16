@@ -66,6 +66,7 @@ assert.ok(
 );
 assert.match(html, /ai-image-workbench\.js/u);
 for (const id of [
+  'workspaceRecovery', 'workspaceRecoveryMessage', 'workspaceRecoveryReturnButton',
   'workspaceShell', 'workspaceModeSummary', 'workspaceSkuList', 'workspaceLibraryTabs',
   'workspaceLibraryList', 'workspaceSlotList', 'workspacePromptInspector',
   'workspacePromptInput', 'workspaceNegativePromptInput', 'workspaceSavePromptButton',
@@ -102,10 +103,20 @@ assert.match(html, /id=["']publishRecoverButton["']/u);
 assert.match(html, /href=["']\.\/ai-provider-settings\.html["'][^>]*target=["']_blank["']/u);
 assert.match(html, /id=["']contextKicker["']/u);
 assert.match(html, /id=["']contextBadge["']/u);
+assert.ok(
+  html.indexOf('id="workspaceRecovery"') < html.indexOf('id="workspaceShell"'),
+  'an unavailable launch must retain a media-first recovery workspace before live controls',
+);
+assert.match(
+  html,
+  /id=["']workspaceRecovery["'][\s\S]*等待来源商品图片[\s\S]*选择图片后在这里预览和处理/u,
+  'the recovery surface should preserve the source-library and selected-image mental model',
+);
+assert.match(html, /id=["']workspaceRecoveryReturnButton["']/u);
 assert.match(html, /id=["']flowToolbar["'][\s\S]*data-flow-step=["']context["'][\s\S]*data-flow-step=["']sku["'][\s\S]*data-flow-step=["']media["'][\s\S]*data-flow-step=["']review["']/u,
   'workbench should expose a compact linear flow toolbar');
-assert.match(html, /id=["']flowProcessButton["'][^>]*>[\s\S]*查看过程/u,
-  'workbench should keep task progress behind an explicit process action');
+assert.match(html, /id=["']flowProcessButton["'][^>]*>[\s\S]*任务/u,
+  'workbench should keep task progress behind an explicit task action');
 assert.match(
   html,
   /id=["']mediaCommandBar["'][\s\S]*id=["']mediaOperationTextToImage["'][\s\S]*id=["']mediaOperationImageToImage["'][\s\S]*id=["']mediaOperationFullEdit["'][\s\S]*id=["']mediaOperationInpaint["'][\s\S]*id=["']mediaPrimaryAction["']/u,
@@ -114,14 +125,37 @@ assert.match(
 assert.match(html, /id="mediaPrimaryStatus"[^>]*aria-live="polite"[^>]*aria-atomic="true"/u);
 assert.match(html, /id="mediaPrimaryAction"[\s\S]{0,220}aria-describedby="mediaPrimaryStatus"/u);
 assert.ok(
-  html.indexOf('id="flowSummary"') < html.indexOf('id="mediaCommandBar"')
-    && html.indexOf('id="mediaCommandBar"') < html.indexOf('id="contextTitle"'),
-  'the image command bar should appear before detailed binding and editor panels',
+  html.indexOf('id="mediaPrimaryAction"') < html.indexOf('id="workspaceSlotList"'),
+  'generation results must follow the primary image operation instead of interrupting it',
 );
+assert.ok(
+  html.indexOf('id="contextTitle"') < html.indexOf('id="workspaceActionPane"')
+    && html.indexOf('id="workspaceActionPane"') < html.indexOf('id="mediaCommandBar"')
+    && html.indexOf('id="mediaCommandBar"') < html.indexOf('id="promptInput"')
+    && html.indexOf('id="promptInput"') < html.indexOf('id="mediaPrimaryAction"'),
+  'the contextual action pane should lead from operation to prompt to one primary action',
+);
+assert.match(html, /批量槽位规则[\s\S]*仅用于逐槽位提示词/u,
+  'advanced slot rules must be distinct from the primary single-operation prompt');
 assert.match(html, /<details\s+id=["']batchAdvancedDetails["'][\s\S]*批量与恢复[\s\S]*id=["']batchSlotSelection["']/u,
   'batch slots and recovery should stay behind an advanced disclosure');
+assert.match(
+  html,
+  /<details\s+id=["']byokControlPanel["'][^>]*class=["'][^"']*generation-settings-disclosure[^"']*["'][\s\S]*<summary[^>]*>[\s\S]*生成设置[\s\S]*Provider、批量与恢复/u,
+  'Provider and recovery controls should remain available behind one compact disclosure',
+);
+assert.match(
+  html,
+  /<details\s+id=["']workspacePromptDisclosure["'][^>]*class=["'][^"']*workspace-prompt-disclosure[^"']*["'][\s\S]*id=["']workspacePromptInspector["']/u,
+  'slot prompt controls should stay behind a contextual disclosure instead of occupying a permanent canvas column',
+);
 assert.match(batchPageSource, /advancedDetails[\s\S]*view\.active[\s\S]*view\.recoveryRows/u,
   'an active or recoverable batch should reopen the advanced disclosure');
+assert.match(
+  batchPageSource,
+  /generationSettingsDetails[\s\S]*view\.active[\s\S]*view\.recoveryRows[\s\S]*generationSettingsDetails\.open\s*=\s*true/u,
+  'active or recoverable batch work must also reopen the parent generation settings',
+);
 assert.match(pageSource, /function setFlowStage\(stage[\s\S]*dataset\.flowStage/u,
   'workbench should switch visible panels by workflow stage');
 assert.match(pageSource, /function flowStageAvailable\(stage\)[\s\S]*reviewPublishOnly\(\)[\s\S]*state\.candidate/u,
@@ -148,6 +182,31 @@ assert.doesNotMatch(html, /https?:\/\//iu, 'workbench page must not load remote 
 assert.doesNotMatch(launchHtml, /<script|product-|workflow-|api[_ -]?key/iu);
 assert.match(css, /@media\s*\(max-width:\s*720px\)/u);
 assert.match(css, /\.workspace-shell\s*\{[\s\S]*grid-template-columns/u);
+assert.match(
+  css,
+  /\.workspace-recovery-board\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*0\.9fr\)\s+minmax\(0,\s*1\.1fr\)/u,
+  'the recovery workspace should keep a stable source/selected two-pane layout on desktop',
+);
+assert.match(
+  css,
+  /\.workspace-board\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px,\s*0\.62fr\)\s+minmax\(440px,\s*1\.3fr\)\s+minmax\(340px,\s*0\.9fr\)/u,
+  'the primary workspace should keep source, active canvas and current action visible together',
+);
+assert.match(
+  css,
+  /\.workspace-library-list\s*\{[\s\S]*grid-template-columns:\s*1fr/u,
+  'source media should render as one readable image list instead of narrow card tiles',
+);
+assert.match(
+  html,
+  /id=["']workspaceMobileSwitcher["'][\s\S]*data-workspace-mobile-view=["']library["'][\s\S]*data-workspace-mobile-view=["']canvas["'][\s\S]*data-workspace-mobile-view=["']actions["']/u,
+  'mobile should switch between focused panes instead of stacking the desktop workspace',
+);
+assert.match(
+  css,
+  /@media\s*\(max-width:\s*720px\)[\s\S]*\.workspace-recovery-board\s*\{[\s\S]*grid-template-columns:\s*1fr/u,
+  'the recovery workspace should collapse to one column on narrow screens',
+);
 assert.match(css, /\.workspace-task-dock\s*\{[\s\S]*position:\s*sticky/u);
 assert.match(
   css,
@@ -160,7 +219,39 @@ assert.match(
   'the primary operation selector should stay stable in two columns on mobile',
 );
 assert.match(css, /\.media-operation-button\s*\{[\s\S]*min-height:\s*44px/u);
+assert.match(
+  css,
+  /@media\s*\(min-width:\s*721px\)[\s\S]*\.workspace-source-visual\s*\{[\s\S]*height:\s*clamp\(250px,\s*28dvh,\s*360px\)/u,
+  'desktop source preview should leave room for operation, prompt and primary action',
+);
+assert.doesNotMatch(
+  css,
+  /\.workspace-source-visual\s*\{\s*min-height:\s*420px/u,
+  'a late desktop override must not expand the source preview beyond the primary workflow',
+);
+assert.match(
+  css,
+  /@media\s*\(min-width:\s*721px\)[\s\S]*\.workspace-source-actions,[\s\S]*\.workspace-action-heading\s*\{[\s\S]*display:\s*none/u,
+  'desktop should not repeat source actions and the current-operation heading',
+);
+assert.match(
+  css,
+  /@media\s*\(min-width:\s*721px\)\s*\{[\s\S]*\.workspace-organizer-heading\s*\{[\s\S]*display:\s*none/u,
+  'desktop should not repeat the workspace title and adapter status above the source-first board',
+);
+assert.match(
+  css,
+  /@media\s*\(max-width:\s*720px\)[\s\S]*\.workspace-library-item\s*\{[\s\S]*grid-template-rows:\s*minmax\(68px,\s*auto\)\s+auto[\s\S]*\.workspace-library-item\s+\.workspace-library-select\s*\{[\s\S]*grid-row:\s*1/u,
+  'mobile source thumbnails and their action row must occupy separate grid rows',
+);
 assert.match(pageSource, /function startTextGenerationFromUserAction\(\)/u);
+assert.match(pageSource, /function openGenerationSettings\(\)[\s\S]*generationSettingsDetails\.open\s*=\s*true/u);
+assert.match(pageSource, /function setWorkspaceRecoveryState\(mode, message\)/u);
+assert.match(
+  pageSource,
+  /workspaceRecoveryReturnButton[\s\S]*event\.isTrusted\s*!==\s*true[\s\S]*global\.close\(\)/u,
+  'returning to the source page must require a trusted user action',
+);
 assert.match(pageSource, /mediaPrimaryAction[\s\S]*event\.isTrusted\s*!==\s*true/u);
 assert.match(hostedPageSource, /HOSTED_MODE_STATE_EVENT[\s\S]*hosted-mode-state-change[\s\S]*emit\(HOSTED_MODE_STATE_EVENT/u);
 assert.match(hostedPageSource, /modeStateKey[\s\S]*lastModeStateKey[\s\S]*emit\(HOSTED_MODE_STATE_EVENT/u);
@@ -234,6 +325,7 @@ assert.match(verifierSource, /pages\/ai-image-workbench\.html/u);
 assert.match(verifierSource, /shared\/byok\/workbench-runtime-handler\.js/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-ui\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-runtime-handler\.test\.mjs/u);
+assert.match(preflightSource, /scripts\/extension-byok-workbench-source-media-library\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-state\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-workspace-ui\.test\.mjs/u);
 assert.match(preflightSource, /scripts\/extension-byok-workbench-batch-client\.test\.mjs/u);
@@ -796,6 +888,13 @@ function createPageHarness(options = {}) {
   let harnessRevokeCount = 0;
   const operations = {
     getPublicState: options.getPublicState || (() => authoritative.value),
+    getSourceCatalog: options.getSourceCatalog || (() => ({
+      contractVersion: 'extension-byok-workbench-source-catalog/v1',
+      items: [],
+    })),
+    openSourcePreview: options.openSourcePreview || (() => {
+      throw new Error('source preview is not expected');
+    }),
     getReadiness: options.getReadiness || (() => readiness),
     generate: options.generate || (() => isolatedCandidate()),
     openPreview: options.openPreview || (() => ({
@@ -843,6 +942,14 @@ function createPageHarness(options = {}) {
   };
   const harnessClient = {
     async getPublicState() { harnessCalls.push(['state']); return operations.getPublicState(); },
+    async getSourceCatalog() {
+      harnessCalls.push(['source-catalog']);
+      return operations.getSourceCatalog();
+    },
+    async openSourcePreview(sourceMediaKey, purpose) {
+      harnessCalls.push(['source-preview', sourceMediaKey, purpose]);
+      return operations.openSourcePreview(sourceMediaKey, purpose);
+    },
     async getReadiness(profileId) {
       harnessCalls.push(['readiness', profileId]);
       return operations.getReadiness(profileId);
@@ -901,7 +1008,7 @@ function createPageHarness(options = {}) {
   const timerApi = options.timers || createManualTimers();
   let harnessRandomByte = 32;
   const harnessContext = {
-    Array, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
+    Array, Blob, Boolean, Date, Error, Map, Math, Number, Object, Promise, Set, String, Uint8Array,
     document: {
       body: harnessBody,
       getElementById(id) { return harnessNodes[id] || null; },
@@ -1185,10 +1292,19 @@ function createPageHarness(options = {}) {
   });
   assert.equal(
     harness.body.dataset.flowStage,
-    'review',
-    'a batch/edit/hosted workspace candidate should enable the review stage',
+    'media',
+    'a completed workspace candidate must not pull the operator away from the active canvas',
   );
   assert.equal(reviewStep.disabled, false);
+  harness.nodes.flowToolbar.listeners.click({
+    isTrusted: true,
+    target: { closest: () => reviewStep },
+  });
+  assert.equal(
+    harness.body.dataset.flowStage,
+    'review',
+    'the enabled review stage should open only after an explicit operator action',
+  );
 
   harness.dispatchDocument('ss-erp:workspace-runtime', {
     contractVersion: 'extension-byok-workbench-workspace-runtime/v1',
@@ -2082,6 +2198,79 @@ for (const [errorCode, expectedLabel] of [
   assert.equal(harness.calls.filter((row) => row[0] === 'state').length >= 2, true);
   assert.match(harness.nodes.contextDraft.textContent, /r4.*v5/u,
     'batch ingest success must reload the authoritative bound draft');
+}
+
+{
+  const sourceMediaId = `sm_${'a'.repeat(48)}`;
+  const sourceBlob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+  let sourcePreviewSequence = 0;
+  const harness = createPageHarness({
+    getSourceCatalog: () => ({
+      contractVersion: 'extension-byok-workbench-source-catalog/v1',
+      items: [{
+        mediaId: sourceMediaId,
+        sourceMediaKey: 'source-main-1',
+        role: 'product_main',
+        scope: 'PRODUCT',
+        skuKeys: [],
+        label: '商品主图 1',
+      }],
+    }),
+    openSourcePreview: (_sourceMediaKey, purpose) => ({
+      blob: sourceBlob,
+      objectUrl: `blob:source-${purpose.toLowerCase()}-${++sourcePreviewSequence}`,
+      revoke() {},
+    }),
+  });
+  await flushAsync(10);
+  const bootstrap = harness.documentEvents.find((event) => (
+    event.type === 'ss-erp:workspace-bootstrap'
+    && event.detail.libraryItems.some((item) => item.mediaId === sourceMediaId)
+  ));
+  assert.ok(bootstrap, 'the source catalog must enter the independent workspace bootstrap');
+  assert.deepEqual(cloneValue(bootstrap.detail.libraryItems[0]), {
+    mediaId: sourceMediaId,
+    sourceType: 'CAPTURED',
+    label: '商品主图 1',
+    secondaryLabel: '商品来源图',
+    skuKeys: [],
+    referenceEligible: true,
+  });
+  assert.ok(harness.documentEvents.some((event) => (
+    event.type === 'ss-erp:workspace-source-preview-state'
+    && event.detail.mediaId === sourceMediaId
+    && event.detail.objectUrl.startsWith('blob:source-thumbnail-')
+  )), 'the first source images should receive safe thumbnail projections');
+  const projectedPreviewCount = harness.documentEvents.filter((event) => (
+    event.type === 'ss-erp:workspace-source-preview-state'
+    && event.detail.mediaId === sourceMediaId
+    && event.detail.ready === true
+  )).length;
+  harness.dispatchDocument('ss-erp:workspace-source-preview-request', {
+    contractVersion: 'extension-byok-workbench-source-preview-state/v1',
+    mediaId: sourceMediaId,
+  });
+  await flushAsync(2);
+  assert.equal(harness.documentEvents.filter((event) => (
+    event.type === 'ss-erp:workspace-source-preview-state'
+    && event.detail.mediaId === sourceMediaId
+    && event.detail.ready === true
+  )).length, projectedPreviewCount + 1,
+  'a cached source preview must be projected again after workspace re-bootstrap');
+  harness.dispatchDocument('ss-erp:workspace-source-operation', {
+    contractVersion: 'extension-byok-workbench-source-operation/v1',
+    mediaId: sourceMediaId,
+    operation: 'FULL_EDIT',
+  });
+  await flushAsync(6);
+  const ready = harness.documentEvents.find((event) => (
+    event.type === 'ss-erp:workbench-source-operation-ready'
+  ));
+  assert.equal(ready.detail.mediaId, sourceMediaId);
+  assert.equal(ready.detail.operation, 'FULL_EDIT');
+  assert.equal(ready.detail.blob, sourceBlob);
+  assert.equal(harness.calls.some((row) => row[0] === 'source-preview'
+    && row[1] === 'source-main-1' && row[2] === 'WORKING'), true);
 }
 
 console.log('extension BYOK workbench UI tests passed');

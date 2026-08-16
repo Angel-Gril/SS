@@ -95,6 +95,16 @@ assert.match(
 );
 assert.match(worker, /openAuthoritativeSourceAiWorkbench/);
 assert.match(panel, /ss-erp:source-ai-workbench-open/);
+assert.match(
+  panel,
+  /mediaFab\.addEventListener\(['"]click['"][\s\S]{0,500}openPrimaryAiWorkbench\(mediaFab\)/u,
+  'the primary AI image button should enter the standalone workbench instead of opening the legacy media panel first',
+);
+assert.match(
+  panel,
+  /async function openPrimaryAiWorkbench\(trigger\)[\s\S]{0,1600}openSourceAiWorkbench\(listing\)/u,
+  'the primary AI entry should load authoritative context and open the standalone workbench when it is available',
+);
 assert.match(panel, /onOpenAiWorkbench/);
 assert.match(panel, /preferredSkuKey/u);
 assert.match(panel, /sourceSelectionKey:\s*sourceSelectionKey/u);

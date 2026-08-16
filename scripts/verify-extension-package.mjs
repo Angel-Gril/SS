@@ -654,6 +654,7 @@ const requiredByokModules = [
   'shared/byok/workbench-edit-epoch-guard.js',
   'shared/byok/workbench-edit-controller.js',
   'shared/byok/workbench-workspace-state.js',
+  'shared/byok/workbench-source-media-library.js',
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
   'shared/byok/workbench-client.js',
@@ -681,6 +682,7 @@ const requiredByokBackgroundModules = [
   'shared/byok/workbench-edit-media-store.js',
   'shared/byok/workbench-edit-epoch-guard.js',
   'shared/byok/workbench-edit-controller.js',
+  'shared/byok/workbench-source-media-library.js',
   'shared/byok/workbench-runtime-handler.js',
   'shared/byok/listing-publish-coordinator.js',
   ...requiredByokBatchBackgroundModules,
@@ -813,6 +815,14 @@ const unifiedPublishWired = [
 ].every((token) => swText.includes(token));
 if (unifiedPublishWired) pass('service worker unified publish wiring is complete');
 else fail('service worker unified publish wiring is incomplete');
+
+const sourceMediaLibraryWired = [
+  "importScripts('../shared/byok/workbench-source-media-library.js')",
+  'function getByokWorkbenchSourceMediaLibrary()',
+  'sourceMediaLibrary: getByokWorkbenchSourceMediaLibrary()',
+].every((token) => swText.includes(token));
+if (sourceMediaLibraryWired) pass('service worker source media preview wiring is complete');
+else fail('service worker source media preview wiring is incomplete');
 
 const workbenchHtmlText = readFileSync(relToAbs('pages/ai-image-workbench.html'), 'utf8');
 const workbenchLaunchHtmlText = readFileSync(

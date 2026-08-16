@@ -28,6 +28,11 @@ export {
 type AiMediaInternalizePurpose = 'GENERAL' | 'EDIT';
 
 export const AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS = 50;
+export const AI_MEDIA_SOURCE_PREVIEW_MAX_EDGE = 640;
+export const AI_MEDIA_SOURCE_WORKING_PREVIEW_MAX_EDGE = 2048;
+export const AI_MEDIA_SOURCE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+
+export type AiMediaSourcePreviewPurpose = 'THUMBNAIL' | 'WORKING';
 
 export interface AiMediaListingDraftContextScope {
   expectedRevision?: number;
@@ -791,9 +796,70 @@ export function createAiMediaContextService(
       }
   }
 
+  async function loadListingDraftPreview(
+    ownerUserId: string,
+    draftId: string,
+    sourceMediaKey: string,
+    scope: AiMediaListingDraftContextScope,
+    purpose: AiMediaSourcePreviewPurpose,
+  ) {
+    if (!['THUMBNAIL', 'WORKING'].includes(purpose)) {
+      throw new AiMediaContextError('AI_MEDIA_CONTEXT_INVALID', 400, 'Preview purpose is invalid');
+    }
+    const context = await loadListingDraft(ownerUserId, draftId, scope);
+    const selected = context.inputs.find((item) => item.sourceMediaKey === sourceMediaKey);
+    if (!selected) {
+      throw new AiMediaContextError('SOURCE_MEDIA_NOT_FOUND', 404, 'Source image was not found');
+    }
+    const downloaded = await dependencies.downloadPublicImage(selected.sourceUrl);
+    const sanitized = await dependencies.sanitizeOzonPublishImageBuffer(
+      downloaded.buffer,
+      `source-preview-${createHash('sha256').update(sourceMediaKey).digest('hex').slice(0, 16)}.jpg`,
+      downloaded.contentType,
+    );
+    const maximumEdge = purpose === 'THUMBNAIL'
+      ? AI_MEDIA_SOURCE_PREVIEW_MAX_EDGE
+      : AI_MEDIA_SOURCE_WORKING_PREVIEW_MAX_EDGE;
+    const pipeline = sharp(sanitized.buffer, {
+      animated: false,
+      limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+    })
+      .rotate()
+      .resize({
+        width: maximumEdge,
+        height: maximumEdge,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+    const mimeType = sanitized.mimeType;
+    const bytes = mimeType === 'image/png'
+      ? await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+      : await pipeline.jpeg({ quality: purpose === 'THUMBNAIL' ? 84 : 92, mozjpeg: true }).toBuffer();
+    if (bytes.length < 1 || bytes.length > AI_MEDIA_SOURCE_PREVIEW_MAX_BYTES) {
+      throw new AiMediaContextError('INVALID_MEDIA_INPUT', 400, 'Source preview exceeds the byte limit');
+    }
+    const metadata = await sharp(bytes, {
+      animated: false,
+      limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+    }).metadata();
+    if (!Number.isSafeInteger(metadata.width) || !Number.isSafeInteger(metadata.height)
+      || Number(metadata.width) < 1 || Number(metadata.height) < 1
+      || Number(metadata.width) > maximumEdge || Number(metadata.height) > maximumEdge) {
+      throw new AiMediaContextError('INVALID_MEDIA_INPUT', 400, 'Source preview dimensions are invalid');
+    }
+    return {
+      bytes,
+      mimeType,
+      width: Number(metadata.width),
+      height: Number(metadata.height),
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    };
+  }
+
   return {
     loadCollect,
     loadListingDraft,
+    loadListingDraftPreview,
     async load(
       ownerUserId: string,
       context:

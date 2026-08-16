@@ -6,122 +6,128 @@
   <title>AI 图片工作台 - SS ERP</title>
   <link rel="stylesheet" href="./ai-image-workbench.css" />
 </head>
-<body data-flow-stage="media">
+<body class="is-context-loading" data-flow-stage="media">
   <main class="workbench-page" aria-labelledby="pageTitle">
     <header class="page-header">
       <div class="title-row">
         <span class="brand-mark" aria-hidden="true">SS</span>
         <div>
-          <p class="eyebrow">扩展独立工作区</p>
+          <p class="eyebrow">SS ERP · 商品媒体</p>
           <h1 id="pageTitle">AI 图片工作台</h1>
-          <p class="page-subtitle">ERP 托管与自带 API 图片工作区</p>
+          <p class="page-subtitle">生图、改图与发布审核</p>
         </div>
       </div>
+      <nav id="flowToolbar" class="flow-toolbar" aria-label="工作台视图">
+        <div class="flow-step-list" role="list">
+          <button type="button" class="flow-step flow-step-secondary" data-flow-step="context" aria-current="false">
+            <span class="flow-step-index">1</span><span>商品</span>
+          </button>
+          <button type="button" class="flow-step flow-step-secondary" data-flow-step="sku" aria-current="false">
+            <span class="flow-step-index">2</span><span>SKU</span>
+          </button>
+          <button type="button" class="flow-step is-active" data-flow-step="media" aria-current="true">
+            <span class="flow-step-index">3</span><span>创作</span>
+          </button>
+          <button type="button" class="flow-step" data-flow-step="review" aria-current="false">
+            <span class="flow-step-index">4</span><span>发布</span>
+          </button>
+        </div>
+        <button
+          id="flowProcessButton"
+          class="flow-process-button"
+          type="button"
+          aria-controls="workspaceTaskDock"
+          aria-expanded="false"
+        >任务</button>
+      </nav>
       <div class="header-actions">
-        <a id="advancedSettingsLink" class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">高级设置</a>
-        <button id="refreshButton" class="button button-secondary" type="button">刷新状态</button>
+        <a id="advancedSettingsLink" class="button button-secondary" href="./ai-provider-settings.html" target="_blank" rel="noopener">生成设置</a>
+        <button id="refreshButton" class="button button-secondary" type="button">重新读取</button>
       </div>
     </header>
-
-    <nav id="flowToolbar" class="flow-toolbar" aria-label="图片处理流程">
-      <div class="flow-step-list" role="list">
-        <button type="button" class="flow-step" data-flow-step="context" aria-current="false">
-          <span class="flow-step-index">1</span><span>基础信息</span>
-        </button>
-        <span class="flow-step-connector" aria-hidden="true"></span>
-        <button type="button" class="flow-step" data-flow-step="sku" aria-current="false">
-          <span class="flow-step-index">2</span><span>选择 SKU</span>
-        </button>
-        <span class="flow-step-connector" aria-hidden="true"></span>
-        <button type="button" class="flow-step is-active" data-flow-step="media" aria-current="true">
-          <span class="flow-step-index">3</span><span>图片处理</span>
-        </button>
-        <span class="flow-step-connector" aria-hidden="true"></span>
-        <button type="button" class="flow-step" data-flow-step="review" aria-current="false">
-          <span class="flow-step-index">4</span><span>审核上传</span>
-        </button>
-      </div>
-      <button
-        id="flowProcessButton"
-        class="flow-process-button"
-        type="button"
-        aria-controls="workspaceTaskDock"
-        aria-expanded="false"
-      >
-        查看过程
-      </button>
-    </nav>
 
     <div id="flowSummary" class="flow-summary" role="status" aria-live="polite">
       正在读取商品与设备状态...
     </div>
 
-    <section id="mediaCommandBar" class="media-command-bar" aria-labelledby="mediaCommandTitle">
-      <div class="media-command-heading">
-        <p class="section-kicker">图片处理</p>
-        <h2 id="mediaCommandTitle">选择处理方式</h2>
-      </div>
-      <div id="mediaOperationBar" class="media-operation-bar" role="group" aria-label="图片处理方式">
-        <button
-          id="mediaOperationTextToImage"
-          class="media-operation-button is-selected"
-          type="button"
-          data-media-operation="TEXT_TO_IMAGE"
-          aria-pressed="true"
-        >文生图</button>
-        <button
-          id="mediaOperationImageToImage"
-          class="media-operation-button"
-          type="button"
-          data-media-operation="IMAGE_TO_IMAGE"
-          aria-pressed="false"
-        >参考图</button>
-        <button
-          id="mediaOperationFullEdit"
-          class="media-operation-button"
-          type="button"
-          data-media-operation="FULL_EDIT"
-          aria-pressed="false"
-        >整图编辑</button>
-        <button
-          id="mediaOperationInpaint"
-          class="media-operation-button"
-          type="button"
-          data-media-operation="INPAINT"
-          aria-pressed="false"
-        >局部重绘</button>
-      </div>
-      <div class="media-primary-control">
-        <p id="mediaPrimaryStatus" class="media-primary-status" role="status" aria-live="polite" aria-atomic="true">
-          正在检查执行条件
-        </p>
-        <button
-          id="mediaPrimaryAction"
-          class="button button-primary media-primary-action"
-          type="button"
-          aria-describedby="mediaPrimaryStatus"
-        >开始处理</button>
-      </div>
-    </section>
-
     <div id="pageStatus" class="page-status" role="status" aria-live="polite">
       正在验证工作台会话...
     </div>
 
-    <section class="context-band" aria-labelledby="contextTitle">
-      <div class="section-heading">
+    <details class="context-band" aria-labelledby="contextTitle">
+      <summary class="context-summary">
         <div>
           <p id="contextKicker" class="section-kicker">服务器绑定待确认</p>
-          <h2 id="contextTitle">本次目标</h2>
+          <h2 id="contextTitle">当前商品 <span id="contextSource">待读取</span></h2>
         </div>
         <span id="contextBadge" class="state-badge state-pending">正在验证</span>
-      </div>
+      </summary>
       <dl class="context-grid">
-        <div><dt>来源商品</dt><dd id="contextSource">待读取</dd></div>
         <div><dt>Ozon 店铺</dt><dd id="contextShop">待读取</dd></div>
         <div><dt>草稿版本</dt><dd id="contextDraft">待读取</dd></div>
         <div><dt>目标槽位</dt><dd id="contextSku">待读取</dd></div>
       </dl>
+    </details>
+
+    <section
+      id="workspaceRecovery"
+      class="workspace-recovery"
+      aria-labelledby="workspaceRecoveryTitle"
+      aria-busy="true"
+    >
+      <header class="workspace-recovery-header">
+        <div>
+          <p class="section-kicker">商品工作区</p>
+          <h2 id="workspaceRecoveryTitle">正在连接来源商品</h2>
+          <p id="workspaceRecoveryMessage" class="workspace-recovery-message" role="status" aria-live="polite">
+            正在读取商品、SKU、店铺与草稿绑定。
+          </p>
+        </div>
+        <button
+          id="workspaceRecoveryReturnButton"
+          class="button button-primary"
+          type="button"
+          disabled
+        >关闭并返回商品页</button>
+      </header>
+
+      <div class="workspace-recovery-sku" aria-label="SKU 状态">
+        <strong>SKU</strong>
+        <span class="workspace-recovery-sku-chip is-active">等待商品</span>
+        <span class="workspace-recovery-sku-chip" aria-hidden="true">--</span>
+        <span class="workspace-recovery-sku-chip" aria-hidden="true">--</span>
+      </div>
+
+      <div class="workspace-recovery-board">
+        <section class="workspace-recovery-pane" aria-labelledby="workspaceRecoverySourceTitle">
+          <div class="workspace-pane-heading">
+            <h3 id="workspaceRecoverySourceTitle">来源素材</h3>
+            <span>等待来源商品图片</span>
+          </div>
+          <div class="workspace-recovery-tabs" aria-hidden="true">
+            <span class="is-active">商品图</span><span>SKU 图</span><span>上传</span><span>生成</span>
+          </div>
+          <div class="workspace-recovery-thumbnails" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </section>
+
+        <section class="workspace-recovery-pane workspace-recovery-selected" aria-labelledby="workspaceRecoverySelectedTitle">
+          <div class="workspace-pane-heading">
+            <h3 id="workspaceRecoverySelectedTitle">已选图片</h3>
+            <span>0 张</span>
+          </div>
+          <div class="workspace-recovery-canvas">
+            <div>
+              <strong>选择图片后在这里预览和处理</strong>
+              <span>可进行文生图、参考图、整图编辑和局部重绘</span>
+            </div>
+          </div>
+          <div class="workspace-recovery-footer" aria-hidden="true">
+            <span class="is-active">文生图</span><span>参考图</span><span>整图编辑</span><span>局部重绘</span>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section id="workspaceShell" class="workspace-shell" aria-labelledby="workspaceTitle" aria-busy="true">
@@ -148,47 +154,242 @@
         <section class="workspace-organizer" aria-labelledby="workspaceTitle">
           <div class="workspace-organizer-heading">
             <div>
-              <p class="section-kicker">商品媒体编排</p>
-              <h2 id="workspaceTitle">素材、槽位与提示词</h2>
+              <p class="section-kicker">图片工作区</p>
+              <h2 id="workspaceTitle">素材与图片顺序</h2>
             </div>
             <span id="workspaceConnectionBadge" class="state-badge state-warning">正在检查执行通道</span>
           </div>
 
-          <div class="workspace-library-heading">
-            <h3>素材库</h3>
-            <div
-              id="workspaceLibraryTabs"
-              class="workspace-library-tabs"
-              role="tablist"
-              aria-label="素材来源"
-            ></div>
+          <div id="workspaceMobileSwitcher" class="workspace-mobile-switcher" role="tablist" aria-label="工作区面板">
+            <button type="button" role="tab" data-workspace-mobile-view="library" aria-controls="workspaceLibraryPane" aria-selected="false" tabindex="-1">素材</button>
+            <button type="button" role="tab" data-workspace-mobile-view="canvas" aria-controls="workspaceCanvasPane" aria-selected="true" tabindex="0">图片</button>
+            <button type="button" role="tab" data-workspace-mobile-view="actions" aria-controls="workspaceActionPane" aria-selected="false" tabindex="-1">操作</button>
           </div>
 
-          <div class="workspace-board">
-            <section class="workspace-library-pane" aria-labelledby="workspaceLibraryTitle">
+          <div id="workspaceBoard" class="workspace-board" data-mobile-view="canvas">
+            <section id="workspaceLibraryPane" class="workspace-library-pane" aria-labelledby="workspaceLibraryTitle">
               <div class="workspace-pane-heading">
-                <h3 id="workspaceLibraryTitle">可用素材</h3>
-                <span>选择后设为参考图</span>
+                <h3 id="workspaceLibraryTitle">商品图片</h3>
+                <span>先选图片，再选择处理方式</span>
+              </div>
+              <div class="workspace-library-heading">
+                <h3>素材库</h3>
+                <div
+                  id="workspaceLibraryTabs"
+                  class="workspace-library-tabs"
+                  role="tablist"
+                  aria-label="素材来源"
+                ></div>
               </div>
               <ul id="workspaceLibraryList" class="workspace-library-list" aria-live="polite"></ul>
             </section>
 
-            <section class="workspace-slot-pane" aria-labelledby="workspaceSlotTitle">
+            <section id="workspaceCanvasPane" class="workspace-slot-pane" aria-labelledby="workspaceSlotTitle">
               <div class="workspace-pane-heading">
-                <h3 id="workspaceSlotTitle">工作区图片顺序</h3>
-                <span>本地草稿，发布前仍需统一核对</span>
+                <h3 id="workspaceSlotTitle">当前图片</h3>
+                <span>选图后直接选择处理方式</span>
               </div>
-              <ol id="workspaceSlotList" class="workspace-slot-list"></ol>
+              <div id="workspaceSourceStage" class="workspace-source-stage" hidden>
+                <div class="workspace-source-visual">
+                  <img id="workspaceSourceImage" alt="当前来源商品图" hidden />
+                  <span id="workspaceSourcePlaceholder">正在读取来源图片</span>
+                </div>
+                <div class="workspace-source-summary">
+                  <div>
+                    <span>当前选择</span>
+                    <strong id="workspaceSourceTitle">来源商品图</strong>
+                    <small id="workspaceSourceMeta">安全预览仅保留在当前扩展页面</small>
+                  </div>
+                  <div id="workspaceSourceActions" class="workspace-source-actions" role="group" aria-label="当前图片处理方式">
+                    <button type="button" data-source-operation="IMAGE_TO_IMAGE">参考生成</button>
+                    <button type="button" data-source-operation="FULL_EDIT">整图编辑</button>
+                    <button type="button" data-source-operation="INPAINT">局部重绘</button>
+                  </div>
+                </div>
+              </div>
             </section>
 
-            <section
-              id="workspacePromptInspector"
-              class="workspace-prompt-inspector"
-              aria-labelledby="workspacePromptTitle"
-            >
+            <aside id="workspaceActionPane" class="workspace-action-pane" aria-labelledby="workspaceActionTitle">
+              <div class="workspace-pane-heading workspace-action-heading">
+                <h3 id="workspaceActionTitle">当前操作</h3>
+                <span>选择方式并执行</span>
+              </div>
+
+              <section id="mediaCommandBar" class="media-command-bar" aria-labelledby="mediaCommandTitle">
+                <div class="media-command-heading">
+                  <p class="section-kicker">图片处理</p>
+                  <h2 id="mediaCommandTitle">处理方式</h2>
+                </div>
+                <div id="mediaOperationBar" class="media-operation-bar" role="group" aria-label="图片处理方式">
+                  <button
+                    id="mediaOperationTextToImage"
+                    class="media-operation-button is-selected"
+                    type="button"
+                    data-media-operation="TEXT_TO_IMAGE"
+                    aria-pressed="true"
+                  >文生图</button>
+                  <button
+                    id="mediaOperationImageToImage"
+                    class="media-operation-button"
+                    type="button"
+                    data-media-operation="IMAGE_TO_IMAGE"
+                    aria-pressed="false"
+                  >参考图</button>
+                  <button
+                    id="mediaOperationFullEdit"
+                    class="media-operation-button"
+                    type="button"
+                    data-media-operation="FULL_EDIT"
+                    aria-pressed="false"
+                  >整图编辑</button>
+                  <button
+                    id="mediaOperationInpaint"
+                    class="media-operation-button"
+                    type="button"
+                    data-media-operation="INPAINT"
+                    aria-pressed="false"
+                  >局部重绘</button>
+                </div>
+              </section>
+
+              <p id="operationReason" class="operation-reason" role="status" aria-live="polite"></p>
+              <div id="restartRecovery" class="restart-recovery" role="alert" hidden>
+                <label for="restartChargeConfirmation">
+                  <input id="restartChargeConfirmation" type="checkbox" />
+                  <span>我确认上一次 Provider 请求可能已经扣费，仍要重置本地编辑会话</span>
+                </label>
+                <button id="restartAcknowledgeButton" class="button button-danger" type="button" disabled>
+                  确认并重置
+                </button>
+              </div>
+
+              <section id="editInputPanel" class="edit-input-panel" aria-labelledby="editInputTitle" hidden>
+                <div class="edit-input-heading">
+                  <div>
+                    <p class="section-kicker">编辑素材</p>
+                    <h3 id="editInputTitle">选择来源图片</h3>
+                  </div>
+                  <span id="editMediaCount" class="media-count">0 / 4</span>
+                </div>
+
+                <div id="referenceInputGroup" class="edit-media-group" hidden>
+                  <fieldset class="reference-scope">
+                    <legend>参考图应用范围</legend>
+                    <label><input id="referenceScopeGlobal" type="radio" name="referenceScope" value="GLOBAL" checked />本次会话</label>
+                    <label><input id="referenceScopeSlot" type="radio" name="referenceScope" value="SLOT" />当前槽位</label>
+                  </fieldset>
+                  <label class="file-input-label" for="referenceFiles">添加 1-4 张参考图</label>
+                  <input id="referenceFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                  <p class="field-hint">当前槽位存在参考图时会覆盖本次会话的默认参考图。</p>
+                  <ul id="referenceList" class="media-handle-list" aria-label="已选参考图"></ul>
+                </div>
+
+                <div id="sourceInputGroup" class="edit-media-group" hidden>
+                  <label class="file-input-label" for="sourceFile">选择一张待编辑图片</label>
+                  <input id="sourceFile" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <div id="sourceStage" class="source-stage" hidden>
+                    <img id="editSourceImage" alt="待编辑来源图片" />
+                    <canvas
+                      id="editMaskCanvas"
+                      aria-label="局部重绘遮罩。方向键移动光标，空格或回车应用当前工具"
+                      aria-describedby="maskKeyboardHelp"
+                      tabindex="0"
+                      hidden
+                    ></canvas>
+                  </div>
+                  <p id="sourceMeta" class="field-hint">尚未选择来源图片</p>
+                  <p id="maskKeyboardHelp" class="sr-only">
+                    使用方向键移动遮罩光标，使用空格或回车在当前位置应用画笔或橡皮。
+                  </p>
+                </div>
+
+                <div id="maskTools" class="mask-tools" hidden>
+                  <div class="mask-toolbar" role="group" aria-label="局部重绘遮罩工具">
+                    <button id="maskPaintButton" class="tool-button is-active" type="button" aria-pressed="true">画笔</button>
+                    <button id="maskEraseButton" class="tool-button" type="button" aria-pressed="false">橡皮</button>
+                    <label for="maskBrushSize">笔刷</label>
+                    <input id="maskBrushSize" type="range" min="1" max="100" value="24" />
+                    <output id="maskBrushValue" for="maskBrushSize">24 px</output>
+                    <button id="maskUndoButton" class="button button-secondary button-compact" type="button" disabled>撤销</button>
+                    <button id="maskRedoButton" class="button button-secondary button-compact" type="button" disabled>重做</button>
+                    <button id="maskClearButton" class="button button-secondary button-compact" type="button" disabled>清空</button>
+                  </div>
+                  <dl class="mask-summary">
+                    <div><dt>重绘像素</dt><dd id="maskEditPixels">0</dd></div>
+                    <div><dt>保留像素</dt><dd id="maskPreservedPixels">0</dd></div>
+                  </dl>
+                </div>
+              </section>
+
+              <div class="quick-prompt-panel">
+                <div class="field-group">
+                  <label for="promptInput">生成提示词</label>
+                  <textarea
+                    id="promptInput"
+                    maxlength="8000"
+                    rows="5"
+                    placeholder="描述已知商品、构图、背景和光线"
+                  ></textarea>
+                </div>
+                <details class="quick-prompt-options">
+                  <summary>更多参数</summary>
+                  <div class="field-group">
+                    <label for="negativePromptInput">负面提示词（可选）</label>
+                    <textarea
+                      id="negativePromptInput"
+                      maxlength="4000"
+                      rows="3"
+                      placeholder="例如：水印、额外文字、变形、低清晰度"
+                    ></textarea>
+                  </div>
+                  <div class="field-group size-field">
+                    <label for="sizeSelect">图片尺寸</label>
+                    <select id="sizeSelect">
+                      <option value="1024x1024">1024 × 1024</option>
+                      <option value="1024x1536">1024 × 1536</option>
+                      <option value="1536x1024">1536 × 1024</option>
+                    </select>
+                  </div>
+                </details>
+                <div class="generation-footer generation-footer-delegate" hidden aria-hidden="true">
+                  <button id="generateButton" class="button button-primary" type="button" disabled>生成候选图</button>
+                  <button id="runEditButton" class="button button-primary" type="button" disabled hidden>创建编辑候选</button>
+                </div>
+              </div>
+
+              <div class="media-primary-control">
+                <p id="mediaPrimaryStatus" class="media-primary-status" role="status" aria-live="polite" aria-atomic="true">
+                  正在检查执行条件
+                </p>
+                <button
+                  id="mediaPrimaryAction"
+                  class="button button-primary media-primary-action"
+                  type="button"
+                  aria-describedby="mediaPrimaryStatus"
+                >开始处理</button>
+              </div>
+
+              <section class="workspace-output-section" aria-labelledby="workspaceOutputTitle">
+                <div class="workspace-output-heading">
+                  <strong id="workspaceOutputTitle">生成结果与发布顺序</strong>
+                  <span>采用后才会进入 ERP 草稿</span>
+                </div>
+                <ol id="workspaceSlotList" class="workspace-slot-list"></ol>
+              </section>
+
+            <details id="workspacePromptDisclosure" class="workspace-prompt-disclosure">
+              <summary>
+                <span><strong>批量槽位规则</strong><small>仅用于逐槽位提示词、参考范围与重新生成</small></span>
+                <span aria-hidden="true">设置</span>
+              </summary>
+              <section
+                id="workspacePromptInspector"
+                class="workspace-prompt-inspector"
+                aria-labelledby="workspacePromptTitle"
+              >
               <div class="workspace-pane-heading">
-                <h3 id="workspacePromptTitle">槽位提示词</h3>
-                <span>仅保存当前工作区草稿</span>
+                <h3 id="workspacePromptTitle">当前槽位规则</h3>
+                <span>仅保存到批量工作区草稿</span>
               </div>
               <p id="workspaceReferenceSummary" class="workspace-reference-summary">
                 选择槽位后查看参考图范围。
@@ -226,7 +427,9 @@
                   aria-live="polite"
                 ></p>
               </div>
-            </section>
+              </section>
+            </details>
+            </aside>
           </div>
         </section>
 
@@ -321,7 +524,15 @@
         </div>
       </section>
 
-      <section id="byokControlPanel" class="control-panel" aria-labelledby="generationTitle">
+      <details id="byokControlPanel" class="control-panel generation-settings-disclosure">
+        <summary class="generation-settings-summary">
+          <span>
+            <strong>生成设置</strong>
+            <small>Provider、批量与恢复</small>
+          </span>
+          <span class="generation-settings-summary-action" aria-hidden="true">展开</span>
+        </summary>
+        <div class="generation-settings-body">
         <div class="section-heading">
           <div>
             <p class="section-kicker">生成配置</p>
@@ -416,115 +627,8 @@
             <span><strong>局部重绘</strong><small data-operation-reason="INPAINT">正在读取能力证据</small></span>
           </label>
         </fieldset>
-        <p id="operationReason" class="operation-reason" role="status" aria-live="polite">
-          文生图能力将沿用当前单图审核与发布流程。
-        </p>
-        <div id="restartRecovery" class="restart-recovery" role="alert" hidden>
-          <label for="restartChargeConfirmation">
-            <input id="restartChargeConfirmation" type="checkbox" />
-            <span>我确认上一次 Provider 请求可能已经扣费，仍要重置本地编辑会话</span>
-          </label>
-          <button id="restartAcknowledgeButton" class="button button-danger" type="button" disabled>
-            确认并重置
-          </button>
         </div>
-
-        <section id="editInputPanel" class="edit-input-panel" aria-labelledby="editInputTitle" hidden>
-          <div class="edit-input-heading">
-            <div>
-              <p class="section-kicker">编辑素材</p>
-              <h3 id="editInputTitle">选择来源图片</h3>
-            </div>
-            <span id="editMediaCount" class="media-count">0 / 4</span>
-          </div>
-
-          <div id="referenceInputGroup" class="edit-media-group" hidden>
-            <fieldset class="reference-scope">
-              <legend>参考图应用范围</legend>
-              <label><input id="referenceScopeGlobal" type="radio" name="referenceScope" value="GLOBAL" checked />本次会话</label>
-              <label><input id="referenceScopeSlot" type="radio" name="referenceScope" value="SLOT" />当前槽位</label>
-            </fieldset>
-            <label class="file-input-label" for="referenceFiles">添加 1-4 张参考图</label>
-            <input id="referenceFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-            <p class="field-hint">当前槽位存在参考图时会覆盖本次会话的默认参考图。</p>
-            <ul id="referenceList" class="media-handle-list" aria-label="已选参考图"></ul>
-          </div>
-
-          <div id="sourceInputGroup" class="edit-media-group" hidden>
-            <label class="file-input-label" for="sourceFile">选择一张待编辑图片</label>
-            <input id="sourceFile" type="file" accept="image/png,image/jpeg,image/webp" />
-            <div id="sourceStage" class="source-stage" hidden>
-              <img id="editSourceImage" alt="待编辑来源图片" />
-              <canvas
-                id="editMaskCanvas"
-                aria-label="局部重绘遮罩。方向键移动光标，空格或回车应用当前工具"
-                aria-describedby="maskKeyboardHelp"
-                tabindex="0"
-                hidden
-              ></canvas>
-            </div>
-            <p id="sourceMeta" class="field-hint">尚未选择来源图片</p>
-            <p id="maskKeyboardHelp" class="sr-only">
-              使用方向键移动遮罩光标，使用空格或回车在当前位置应用画笔或橡皮。
-            </p>
-          </div>
-
-          <div id="maskTools" class="mask-tools" hidden>
-            <div class="mask-toolbar" role="group" aria-label="局部重绘遮罩工具">
-              <button id="maskPaintButton" class="tool-button is-active" type="button" aria-pressed="true">画笔</button>
-              <button id="maskEraseButton" class="tool-button" type="button" aria-pressed="false">橡皮</button>
-              <label for="maskBrushSize">笔刷</label>
-              <input id="maskBrushSize" type="range" min="1" max="100" value="24" />
-              <output id="maskBrushValue" for="maskBrushSize">24 px</output>
-              <button id="maskUndoButton" class="button button-secondary button-compact" type="button" disabled>撤销</button>
-              <button id="maskRedoButton" class="button button-secondary button-compact" type="button" disabled>重做</button>
-              <button id="maskClearButton" class="button button-secondary button-compact" type="button" disabled>清空</button>
-            </div>
-            <dl class="mask-summary">
-              <div><dt>重绘像素</dt><dd id="maskEditPixels">0</dd></div>
-              <div><dt>保留像素</dt><dd id="maskPreservedPixels">0</dd></div>
-            </dl>
-          </div>
-        </section>
-
-        <div class="field-group">
-          <label for="promptInput">生成提示词</label>
-          <textarea
-            id="promptInput"
-            maxlength="8000"
-            rows="7"
-            placeholder="只描述已知商品事实、构图、背景和光线；不要填写未确认的材质、尺寸或认证。"
-          ></textarea>
-          <p class="field-hint">提示词会发送到所选 Provider。请仅提交您有权处理的内容。</p>
-        </div>
-
-        <div class="field-group">
-          <label for="negativePromptInput">负面提示词（可选）</label>
-          <textarea
-            id="negativePromptInput"
-            maxlength="4000"
-            rows="3"
-            placeholder="例如：水印、额外文字、变形、低清晰度"
-          ></textarea>
-        </div>
-
-        <div class="generation-footer">
-          <div class="field-group size-field">
-            <label for="sizeSelect">图片尺寸</label>
-            <select id="sizeSelect">
-              <option value="1024x1024">1024 × 1024</option>
-              <option value="1024x1536">1024 × 1536</option>
-              <option value="1536x1024">1536 × 1024</option>
-            </select>
-          </div>
-          <button id="generateButton" class="button button-primary" type="button" disabled>
-            生成候选图
-          </button>
-          <button id="runEditButton" class="button button-primary" type="button" disabled hidden>
-            创建编辑候选
-          </button>
-        </div>
-      </section>
+      </details>
 
       <section id="resultPanel" class="result-panel" aria-labelledby="resultTitle" hidden>
         <div class="section-heading">

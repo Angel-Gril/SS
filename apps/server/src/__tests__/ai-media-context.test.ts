@@ -5,6 +5,7 @@ import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import {
   AI_MEDIA_EDIT_SOURCE_MAX_BYTES,
   AI_MEDIA_LISTING_CONTEXT_MAX_INPUTS,
+  AI_MEDIA_SOURCE_PREVIEW_MAX_EDGE,
   createAiMediaContextService,
   normalizeAiMediaSourceBuffer,
 } from '../services/ai-media-context.js';
@@ -353,6 +354,65 @@ describe('AI media collect context', () => {
 });
 
 describe('AI media listing-draft context', () => {
+  it('returns a metadata-stripped bounded source preview without persisting the remote URL', async () => {
+    const source = await sharp({
+      create: { width: 1200, height: 800, channels: 3, background: '#806040' },
+    }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const downloadPublicImage = vi.fn(async () => ({
+      buffer: source,
+      contentType: 'image/jpeg',
+      sourceUrl: 'https://source.example/red.jpg',
+      finalUrl: 'https://source.example/red.jpg',
+      redirectCount: 0,
+    }));
+    const sanitizeOzonPublishImageBuffer = vi.fn(async () => ({
+      buffer: source,
+      filename: 'source.jpg',
+      mimeType: 'image/jpeg' as const,
+      converted: false,
+      sourceFormat: 'jpeg',
+    }));
+    const service = createAiMediaContextService(listingClient() as never, {
+      downloadPublicImage,
+      sanitizeOzonPublishImageBuffer,
+    });
+
+    const preview = await service.loadListingDraftPreview(
+      'owner-1',
+      'draft-1',
+      'sku-red-1',
+      { expectedRevision: 4, expectedDraftVersion: 2, skuKey: 'sku-red' },
+      'THUMBNAIL',
+    );
+
+    expect(preview).toMatchObject({
+      mimeType: 'image/jpeg',
+      width: Math.round(AI_MEDIA_SOURCE_PREVIEW_MAX_EDGE * 2 / 3),
+      height: AI_MEDIA_SOURCE_PREVIEW_MAX_EDGE,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(Buffer.isBuffer(preview.bytes)).toBe(true);
+    expect(preview.bytes.length).toBeGreaterThan(0);
+    expect(preview).not.toHaveProperty('sourceUrl');
+    expect((await sharp(preview.bytes).metadata()).orientation).toBeUndefined();
+    expect(downloadPublicImage).toHaveBeenCalledWith('https://source.example/red.jpg');
+    expect(sanitizeOzonPublishImageBuffer).toHaveBeenCalledOnce();
+  });
+
+  it('does not preview media owned by another selected SKU', async () => {
+    const service = createAiMediaContextService(listingClient() as never, {
+      downloadPublicImage: vi.fn(),
+    });
+
+    await expect(service.loadListingDraftPreview(
+      'owner-1',
+      'draft-1',
+      'sku-blue-1',
+      { expectedRevision: 4, expectedDraftVersion: 2, skuKey: 'sku-red' },
+      'WORKING',
+    )).rejects.toMatchObject({ code: 'SOURCE_MEDIA_NOT_FOUND', statusCode: 404 });
+  });
+
   it('loads the current owner-scoped draft with product and selected-SKU media', async () => {
     const db = listingClient();
     const result = await createAiMediaContextService(db as never).loadListingDraft(

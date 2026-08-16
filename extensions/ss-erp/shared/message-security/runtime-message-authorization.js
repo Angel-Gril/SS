@@ -46,6 +46,8 @@
       EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
       RECOVER_PROVIDER: 'ss-erp:ai-image-workbench-provider-recover',
       OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
+      SOURCE_CATALOG: 'ss-erp:ai-image-workbench-source-catalog',
+      SOURCE_PREVIEW: 'ss-erp:ai-image-workbench-source-preview',
       REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
       INGEST: 'ss-erp:ai-image-workbench-ingest',
       RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',

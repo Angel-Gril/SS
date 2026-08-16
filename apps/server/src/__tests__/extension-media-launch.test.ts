@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { extensionMediaLaunchRoutes } from '../routes/extension-media-launch.js';
@@ -25,6 +26,7 @@ async function setup(input: {
   operationCapabilities?: Record<string, Record<string, unknown>>;
   loadContextError?: Error;
   context?: Record<string, unknown> | null;
+  preview?: Record<string, unknown>;
 } = {}) {
   const evaluate = vi.fn(async (feature: string) => (
     feature === 'SOURCE_LISTING_EXTENSION_WORKBENCH'
@@ -74,6 +76,13 @@ async function setup(input: {
       maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS, maxMaskBytes: 20 * 1024 * 1024,
     },
   }));
+  const loadPreview = vi.fn(async () => input.preview || ({
+    bytes: Buffer.from('preview-bytes'),
+    mimeType: 'image/jpeg',
+    width: 640,
+    height: 480,
+    sha256: createHash('sha256').update('preview-bytes').digest('hex'),
+  }));
   const app = Fastify();
   await app.register(extensionMediaLaunchRoutes, {
     prefix: '/api/extension-device/source-workbench',
@@ -87,12 +96,14 @@ async function setup(input: {
     featureFlags: { evaluate },
     getMediaWorkflowDecision,
     loadContext: loadContext as any,
+    loadPreview: loadPreview as any,
     getCapability,
     getCapabilities: getCapabilities as any,
   });
   await app.ready();
   return {
-    app, evaluate, getMediaWorkflowDecision, loadContext, getCapability, getCapabilities,
+    app, evaluate, getMediaWorkflowDecision, loadContext, loadPreview,
+    getCapability, getCapabilities,
   };
 }
 
@@ -100,7 +111,95 @@ const url = '/api/extension-device/source-workbench/media-launch'
   + '?snapshotId=snapshot-1&supplyGoodsId=goods-1&shopId=shop-1'
   + '&listingWorkflowId=listing-1&revision=11&draftVersion=7';
 
+const previewBody = {
+  snapshotId: 'snapshot-1',
+  supplyGoodsId: 'goods-1',
+  shopId: 'shop-1',
+  listingWorkflowId: 'listing-1',
+  revision: 11,
+  draftVersion: 7,
+  skuKey: 'sku-red',
+  sourceMediaKey: 'media-1',
+  purpose: 'THUMBNAIL',
+};
+
 describe('extension media launch route', () => {
+  it('returns only normalized source preview bytes for the exact live draft and SKU', async () => {
+    const state = await setup();
+    try {
+      const response = await state.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-preview',
+        payload: previewBody,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers).toMatchObject({
+        'cache-control': 'no-store',
+        'content-type': 'image/jpeg',
+        'content-length': String(Buffer.byteLength('preview-bytes')),
+        'x-content-type-options': 'nosniff',
+        'x-ss-erp-content-sha256': createHash('sha256').update('preview-bytes').digest('hex'),
+        'x-ss-erp-image-width': '640',
+        'x-ss-erp-image-height': '480',
+      });
+      expect(response.rawPayload).toEqual(Buffer.from('preview-bytes'));
+      expect(state.loadPreview).toHaveBeenCalledWith({
+        ownerUserId: 'owner-1',
+        listingWorkflowId: 'listing-1',
+        revision: 11,
+        draftVersion: 7,
+        skuKey: 'sku-red',
+        sourceMediaKey: 'media-1',
+        purpose: 'THUMBNAIL',
+      });
+      expect(response.body).not.toContain('source.example');
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('fails closed when a source preview key, device scope, or output metadata is invalid', async () => {
+    const wrongSource = await setup();
+    const noScope = await setup({ scopes: ['listing:review'] });
+    const malformed = await setup({
+      preview: {
+        bytes: Buffer.from('preview-bytes'), mimeType: 'text/html',
+        width: 640, height: 480, sha256: 'a'.repeat(64),
+      },
+    });
+    try {
+      const wrongSourceResponse = await wrongSource.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-preview',
+        payload: { ...previewBody, sourceMediaKey: 'media-foreign' },
+      });
+      expect(wrongSourceResponse.statusCode).toBe(409);
+      expect(wrongSourceResponse.json()).toMatchObject({
+        errorCode: 'media_preview_context_stale',
+      });
+      expect(wrongSource.loadPreview).not.toHaveBeenCalled();
+
+      expect((await noScope.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-preview',
+        payload: previewBody,
+      })).statusCode).toBe(403);
+
+      const malformedResponse = await malformed.app.inject({
+        method: 'POST',
+        url: '/api/extension-device/source-workbench/media-preview',
+        payload: previewBody,
+      });
+      expect(malformedResponse.statusCode).toBe(503);
+      expect(malformedResponse.json()).toMatchObject({
+        errorCode: 'media_preview_unavailable',
+      });
+    } finally {
+      await Promise.all([wrongSource.app.close(), noScope.app.close(), malformed.app.close()]);
+    }
+  });
+
   it('returns only bounded source media keys for an exact fake-only launch context', async () => {
     const state = await setup();
     try {
@@ -184,6 +283,31 @@ describe('extension media launch route', () => {
         ownerUserId: 'owner-1', snapshotId: 'snapshot-1', supplyGoodsId: 'goods-1',
         shopId: 'shop-1', listingWorkflowId: 'listing-1', revision: 11, draftVersion: 7,
       });
+    } finally {
+      await state.app.close();
+    }
+  });
+
+  it('projects source role and SKU scope without exposing the remote source URL', async () => {
+    const state = await setup({ context: {
+      id: 'listing-1', ownerUserId: 'owner-1', shopId: 'shop-1',
+      supplyGoodsId: 'goods-1', snapshotId: 'snapshot-1',
+      revision: 11, draftVersion: 7, sourceMediaKeys: ['media-1', 'media-2'],
+      sourceInputs: [{
+        sourceMediaKey: 'media-1', role: 'product_main', scope: 'PRODUCT', skuKeys: [],
+      }, {
+        sourceMediaKey: 'media-2', role: 'sku', scope: 'SKU', skuKeys: ['sku-red'],
+      }],
+    } });
+    try {
+      const response = await state.app.inject({ method: 'GET', url: `${url}&contractVersion=2` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.context.sourceInputs).toEqual([{
+        sourceMediaKey: 'media-1', role: 'product_main', scope: 'PRODUCT', skuKeys: [],
+      }, {
+        sourceMediaKey: 'media-2', role: 'sku', scope: 'SKU', skuKeys: ['sku-red'],
+      }]);
+      expect(response.body).not.toContain('http');
     } finally {
       await state.app.close();
     }

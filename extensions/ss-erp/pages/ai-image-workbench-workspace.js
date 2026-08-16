@@ -15,6 +15,11 @@
   var INTENT_OUTCOME_EVENT = 'ss-erp:workspace-intent-outcome';
   var PREVIEW_STATE_EVENT = 'ss-erp:workspace-preview-state';
   var PREVIEW_STATE_VERSION = 'extension-byok-workbench-preview-state/v1';
+  var SOURCE_PREVIEW_STATE_EVENT = 'ss-erp:workspace-source-preview-state';
+  var SOURCE_PREVIEW_REQUEST_EVENT = 'ss-erp:workspace-source-preview-request';
+  var SOURCE_OPERATION_EVENT = 'ss-erp:workspace-source-operation';
+  var SOURCE_PREVIEW_STATE_VERSION = 'extension-byok-workbench-source-preview-state/v1';
+  var SOURCE_OPERATION_VERSION = 'extension-byok-workbench-source-operation/v1';
   var ACTION_CONTRACT_VERSION = 'extension-byok-workbench-workspace-action/v1';
   var LIBRARY_KINDS = Object.freeze(['CAPTURED', 'SKU', 'UPLOADED', 'GENERATED']);
   var EXECUTION_MODES = Object.freeze(['ERP_HOSTED', 'BYOK']);
@@ -35,10 +40,18 @@
 
   var nodes = {
     shell: byId('workspaceShell'),
+    board: byId('workspaceBoard'),
+    mobileSwitcher: byId('workspaceMobileSwitcher'),
     skuList: byId('workspaceSkuList'),
     libraryTabs: byId('workspaceLibraryTabs'),
     libraryList: byId('workspaceLibraryList'),
     slotList: byId('workspaceSlotList'),
+    sourceStage: byId('workspaceSourceStage'),
+    sourceImage: byId('workspaceSourceImage'),
+    sourcePlaceholder: byId('workspaceSourcePlaceholder'),
+    sourceTitle: byId('workspaceSourceTitle'),
+    sourceMeta: byId('workspaceSourceMeta'),
+    sourceActions: byId('workspaceSourceActions'),
     promptInspector: byId('workspacePromptInspector'),
     promptInput: byId('workspacePromptInput'),
     negativePromptInput: byId('workspaceNegativePromptInput'),
@@ -77,6 +90,9 @@
   var retainedRuntime = null;
   var pendingIntent = null;
   var previewReadyAttempt = null;
+  var selectedSourceMediaId = null;
+  var sourcePreviewUrls = new Map();
+  var sourcePreviewRequests = new Set();
   var lastPublishAnnouncementKey = null;
   var runtimeRevisionClock = 0;
 
@@ -273,6 +289,13 @@
     global.document.dispatchEvent(new global.CustomEvent(ACTION_EVENT, {
       detail: actionDetail(action, values),
     }));
+  }
+
+  function emitDocumentEvent(type, detail) {
+    if (!global.document || typeof global.document.dispatchEvent !== 'function'
+      || typeof global.CustomEvent !== 'function') return false;
+    global.document.dispatchEvent(new global.CustomEvent(type, { detail: detail }));
+    return true;
   }
 
   function emitIntent(intent, commandId) {
@@ -495,6 +518,31 @@
     return Boolean(event) && event.isTrusted === true;
   }
 
+  function setMobileView(view, shouldFocus) {
+    if (!['library', 'canvas', 'actions'].includes(view)) return false;
+    nodes.board.dataset.mobileView = view;
+    var tabs = nodes.mobileSwitcher.querySelectorAll('[data-workspace-mobile-view]');
+    Array.prototype.forEach.call(tabs, function (tab) {
+      var selected = tab.dataset.workspaceMobileView === view;
+      tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && shouldFocus && typeof tab.focus === 'function') tab.focus();
+    });
+    return true;
+  }
+
+  function moveMobileView(key) {
+    var views = ['library', 'canvas', 'actions'];
+    var current = views.indexOf(nodes.board.dataset.mobileView || 'canvas');
+    var next = current;
+    if (key === 'Home') next = 0;
+    else if (key === 'End') next = views.length - 1;
+    else if (key === 'ArrowLeft') next = (current - 1 + views.length) % views.length;
+    else if (key === 'ArrowRight') next = (current + 1) % views.length;
+    else return false;
+    return setMobileView(views[next], true);
+  }
+
   function humanMode(mode) {
     return mode === 'ERP_HOSTED' ? 'ERP 托管' : '自带 API';
   }
@@ -507,10 +555,10 @@
 
   function humanLibraryKind(kind) {
     return {
-      CAPTURED: '采集素材',
-      SKU: 'SKU 素材',
-      UPLOADED: '已上传',
-      GENERATED: '生成结果',
+      CAPTURED: '商品图',
+      SKU: 'SKU 图',
+      UPLOADED: '上传',
+      GENERATED: '生成',
     }[kind] || kind;
   }
 
@@ -696,12 +744,18 @@
         var button = createButton('', 'select-sku', { skuKey: sku.skuKey });
         button.className = 'workspace-sku-button';
         button.setAttribute('role', 'option');
+        var thumbnail = global.document.createElement('span');
+        thumbnail.className = 'workspace-sku-thumb';
+        thumbnail.setAttribute('aria-hidden', 'true');
         var label = global.document.createElement('strong');
         var meta = global.document.createElement('span');
+        button.appendChild(thumbnail);
         button.appendChild(label);
         button.appendChild(meta);
         row.appendChild(button);
-        row._workspace = { button: button, label: label, meta: meta };
+        row._workspace = {
+          button: button, thumbnail: thumbnail, label: label, meta: meta,
+        };
         button.addEventListener('click', function (event) {
           if (!trustedActivation(event) || button.disabled) return;
           if (blockDirtyPromptNavigation()) return;
@@ -718,6 +772,7 @@
       },
       function (row, sku) {
         var selected = snapshot.selectedSkuKey === sku.skuKey;
+        row._workspace.thumbnail.textContent = String(sku.label || sku.skuKey).slice(0, 2);
         row._workspace.label.textContent = sku.label;
         row._workspace.meta.textContent = sku.slotKeys.length + ' 个图片槽位';
         row._workspace.button.disabled = Boolean(runtimeFault);
@@ -829,9 +884,65 @@
     return Boolean(slot && item.skuKeys.includes(slot.skuKey));
   }
 
+  function isSourceMedia(item) {
+    return Boolean(item && ['CAPTURED', 'SKU'].includes(item.sourceType)
+      && /^sm_[a-f0-9]{48}$/u.test(item.mediaId));
+  }
+
+  function requestSourcePreview(mediaId) {
+    if (sourcePreviewUrls.has(mediaId) || sourcePreviewRequests.has(mediaId)) return;
+    sourcePreviewRequests.add(mediaId);
+    emitDocumentEvent(SOURCE_PREVIEW_REQUEST_EVENT, {
+      contractVersion: SOURCE_PREVIEW_STATE_VERSION,
+      mediaId: mediaId,
+    });
+  }
+
+  function selectSourceMedia(mediaId, shouldFocus) {
+    if (!snapshot) return;
+    var item = snapshot.libraryItems.find(function (candidate) {
+      return candidate.mediaId === mediaId;
+    });
+    if (!isSourceMedia(item)) return;
+    selectedSourceMediaId = mediaId;
+    requestSourcePreview(mediaId);
+    renderLibraryItems();
+    renderSourceStage();
+    if (shouldFocus) {
+      var row = libraryItemNodes.get(mediaId);
+      var button = row && row._workspace && row._workspace.selectButton;
+      if (button && typeof button.focus === 'function') button.focus();
+    }
+  }
+
+  function startSourceOperation(mediaId, operation) {
+    if (!snapshot || snapshot.executionMode !== 'BYOK' || runtimeFault) return;
+    var item = snapshot.libraryItems.find(function (candidate) {
+      return candidate.mediaId === mediaId;
+    });
+    if (!isSourceMedia(item)
+      || !['IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT'].includes(operation)) return;
+    selectedSourceMediaId = mediaId;
+    renderLibraryItems();
+    renderSourceStage();
+    emitDocumentEvent(SOURCE_OPERATION_EVENT, {
+      contractVersion: SOURCE_OPERATION_VERSION,
+      mediaId: mediaId,
+      operation: operation,
+    });
+  }
+
   function createLibraryRow(item) {
     var row = global.document.createElement('li');
     row.className = 'workspace-library-item';
+    var thumbnail = createButton('', 'select-source-media', { mediaId: item.mediaId });
+    thumbnail.className = 'workspace-media-thumb workspace-library-select';
+    var thumbnailImage = global.document.createElement('img');
+    thumbnailImage.alt = '';
+    thumbnailImage.hidden = true;
+    var thumbnailPlaceholder = global.document.createElement('span');
+    thumbnail.appendChild(thumbnailImage);
+    thumbnail.appendChild(thumbnailPlaceholder);
     var copy = global.document.createElement('div');
     copy.className = 'workspace-library-copy';
     var label = global.document.createElement('strong');
@@ -846,6 +957,25 @@
     var slotButton = createButton('槽位', 'toggle-slot-reference', {
       mediaId: item.mediaId,
     });
+    var sourceButtons = [
+      ['参考生成', 'IMAGE_TO_IMAGE'],
+      ['整图编辑', 'FULL_EDIT'],
+      ['局部重绘', 'INPAINT'],
+    ].map(function (definition) {
+      var button = createButton(definition[0], 'source-operation', {
+        mediaId: item.mediaId,
+        operation: definition[1],
+      });
+      button.addEventListener('click', function (event) {
+        if (!trustedActivation(event) || button.disabled) return;
+        startSourceOperation(item.mediaId, definition[1]);
+      });
+      return button;
+    });
+    thumbnail.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || thumbnail.disabled) return;
+      selectSourceMedia(item.mediaId, false);
+    });
     globalButton.addEventListener('click', function (event) {
       if (!trustedActivation(event) || globalButton.disabled) return;
       toggleReference(item.mediaId, 'GLOBAL');
@@ -856,13 +986,19 @@
     });
     actions.appendChild(globalButton);
     actions.appendChild(slotButton);
+    sourceButtons.forEach(function (button) { actions.appendChild(button); });
+    row.appendChild(thumbnail);
     row.appendChild(copy);
     row.appendChild(actions);
     row._workspace = {
+      thumbnail: thumbnail,
+      thumbnailImage: thumbnailImage,
+      thumbnailPlaceholder: thumbnailPlaceholder,
       label: label,
       meta: meta,
       globalButton: globalButton,
       slotButton: slotButton,
+      sourceButtons: sourceButtons,
     };
     return row;
   }
@@ -879,8 +1015,29 @@
       createLibraryRow,
       function (row, item) {
         var slot = selectedSlot();
+        var sourceItem = isSourceMedia(item);
+        var sourceUrl = sourceItem ? sourcePreviewUrls.get(item.mediaId) : null;
+        row._workspace.thumbnail.disabled = !sourceItem;
+        row._workspace.thumbnail.setAttribute(
+          'aria-label', sourceItem ? '选择 ' + item.label : item.label,
+        );
+        row._workspace.thumbnailImage.hidden = !sourceUrl;
+        row._workspace.thumbnailPlaceholder.hidden = Boolean(sourceUrl);
+        row._workspace.thumbnailPlaceholder.textContent = sourceItem
+          ? '读取中' : humanLibraryKind(item.sourceType).slice(0, 2);
+        if (sourceUrl) {
+          if (row._workspace.thumbnailImage.src !== sourceUrl) {
+            row._workspace.thumbnailImage.src = sourceUrl;
+          }
+        } else {
+          row._workspace.thumbnailImage.removeAttribute('src');
+          if (sourceItem) requestSourcePreview(item.mediaId);
+        }
         row._workspace.label.textContent = item.label;
         row._workspace.meta.textContent = item.secondaryLabel;
+        row.classList.toggle('is-selected', sourceItem && item.mediaId === selectedSourceMediaId);
+        row._workspace.globalButton.hidden = sourceItem;
+        row._workspace.slotButton.hidden = sourceItem;
         row._workspace.globalButton.disabled = Boolean(
           runtimeFault || snapshot.executionModeFrozen || !item.referenceEligible
             || !referenceCompatible(item, 'GLOBAL'),
@@ -906,6 +1063,14 @@
           'is-reference',
           item.selectedAsGlobalReference || item.selectedAsSlotReference,
         );
+        row._workspace.sourceButtons.forEach(function (button) {
+          button.hidden = !sourceItem;
+          button.disabled = !sourceItem || Boolean(runtimeFault)
+            || snapshot.executionMode !== 'BYOK' || snapshot.executionModeFrozen;
+          button.title = snapshot.executionMode !== 'BYOK'
+            ? '切换到自带 API 后可直接编辑来源图'
+            : snapshot.executionModeFrozen ? '任务已派发，图片操作已冻结' : '';
+        });
       },
     );
     libraryEmptyNode.hidden = items.length > 0;
@@ -925,6 +1090,15 @@
   function createSlotRow(slot) {
     var row = global.document.createElement('li');
     row.className = 'workspace-slot-item';
+    var thumbnail = global.document.createElement('span');
+    thumbnail.className = 'workspace-media-thumb';
+    thumbnail.setAttribute('aria-hidden', 'true');
+    var thumbnailImage = global.document.createElement('img');
+    thumbnailImage.alt = '';
+    thumbnailImage.hidden = true;
+    var thumbnailPlaceholder = global.document.createElement('span');
+    thumbnail.appendChild(thumbnailImage);
+    thumbnail.appendChild(thumbnailPlaceholder);
     var selectButton = createButton('', 'select-slot', { slotKey: slot.slotKey });
     selectButton.className = 'workspace-slot-select';
     var title = global.document.createElement('strong');
@@ -936,9 +1110,11 @@
     actions.setAttribute('role', 'group');
     actions.setAttribute('aria-label', '槽位编排操作');
     var mainButton = createButton('主图', 'set-main-slot', { slotKey: slot.slotKey });
+    var previewButton = createButton('预览', 'preview-slot', { slotKey: slot.slotKey });
     var upButton = createButton('↑', 'move-slot-up', { slotKey: slot.slotKey });
     var downButton = createButton('↓', 'move-slot-down', { slotKey: slot.slotKey });
     mainButton.setAttribute('aria-label', '设为主图 ' + slot.slotKey);
+    previewButton.setAttribute('aria-label', '预览 ' + slot.slotKey);
     upButton.setAttribute('aria-label', '上移 ' + slot.slotKey);
     downButton.setAttribute('aria-label', '下移 ' + slot.slotKey);
     selectButton.addEventListener('click', function (event) {
@@ -971,6 +1147,15 @@
         slotKey: slot.slotKey,
       })) focusSlotAction(slot.slotKey, 'mainButton');
     });
+    previewButton.addEventListener('click', function (event) {
+      if (!trustedActivation(event) || previewButton.disabled
+        || !row._workspace.previewAttemptId) return;
+      emitAction('PREVIEW_ATTEMPT', {
+        skuKey: row._workspace.previewSkuKey,
+        slotKey: slot.slotKey,
+        attemptId: row._workspace.previewAttemptId,
+      });
+    });
     upButton.addEventListener('click', function (event) {
       if (!trustedActivation(event) || upButton.disabled) return;
       if (blockDirtyPromptNavigation()) return;
@@ -1000,17 +1185,25 @@
       focusSlotAction(slot.slotKey, 'downButton');
     });
     actions.appendChild(mainButton);
+    actions.appendChild(previewButton);
     actions.appendChild(upButton);
     actions.appendChild(downButton);
+    row.appendChild(thumbnail);
     row.appendChild(selectButton);
     row.appendChild(actions);
     row._workspace = {
+      thumbnail: thumbnail,
+      thumbnailImage: thumbnailImage,
+      thumbnailPlaceholder: thumbnailPlaceholder,
       selectButton: selectButton,
       title: title,
       meta: meta,
       mainButton: mainButton,
+      previewButton: previewButton,
       upButton: upButton,
       downButton: downButton,
+      previewAttemptId: null,
+      previewSkuKey: slot.skuKey,
     };
     return row;
   }
@@ -1060,6 +1253,32 @@
         var selected = slot.slotKey === snapshot.selectedSlotKey;
         var orderingLocked = snapshot.taskSummary.activeAttempts > 0
           || snapshot.taskSummary.queuedAttempts > 0;
+        var previewAlternative = slot.alternatives.find(function (alternative) {
+          return alternative.attemptId === slot.selectedAttemptId
+            && alternative.mediaId !== null;
+        }) || slot.alternatives.slice().reverse().find(function (alternative) {
+          return alternative.state === 'CANDIDATE_READY' && alternative.mediaId !== null;
+        });
+        var previewCurrent = Boolean(previewAlternative && previewReadyAttempt
+          && previewReadyAttempt.slotKey === slot.slotKey
+          && previewReadyAttempt.attemptId === previewAlternative.attemptId
+          && typeof previewReadyAttempt.objectUrl === 'string'
+          && previewReadyAttempt.objectUrl.startsWith('blob:'));
+        row._workspace.thumbnailPlaceholder.textContent = String(index + 1);
+        row._workspace.thumbnailPlaceholder.hidden = previewCurrent;
+        if (previewCurrent) {
+          if (row._workspace.thumbnailImage.src !== previewReadyAttempt.objectUrl) {
+            row._workspace.thumbnailImage.src = previewReadyAttempt.objectUrl;
+          }
+          row._workspace.thumbnailImage.hidden = false;
+        } else {
+          row._workspace.thumbnailImage.hidden = true;
+          row._workspace.thumbnailImage.removeAttribute('src');
+        }
+        row._workspace.previewAttemptId = previewAlternative
+          && previewAlternative.state === 'CANDIDATE_READY'
+          ? previewAlternative.attemptId : null;
+        row._workspace.previewSkuKey = slot.skuKey;
         row._workspace.title.textContent = (index + 1) + '. ' + humanRole(slot.role);
         var scopeText = slotScopeText(slot);
         row._workspace.meta.textContent = humanStatus(slot.status)
@@ -1073,6 +1292,12 @@
         row._workspace.mainButton.title = orderingLocked
           ? humanDisabledReason('ORDER_LOCKED_WHILE_ACTIVE')
           : slot.isMain ? '当前槽位已是主图' : '设为当前 SKU 主图';
+        row._workspace.previewButton.disabled = !row._workspace.previewAttemptId
+          || Boolean(runtimeFault || pendingIntent);
+        row._workspace.previewButton.textContent = previewCurrent ? '已预览' : '预览';
+        row._workspace.previewButton.title = row._workspace.previewButton.disabled
+          ? humanDisabledReason(pendingIntent ? 'ACTION_IN_FLIGHT' : 'ATTEMPT_NOT_REVIEWABLE')
+          : '通过一次性安全通道打开候选预览';
         row._workspace.upButton.disabled = Boolean(
           runtimeFault || orderingLocked || index === 0,
         );
@@ -1087,6 +1312,7 @@
           : index === slots.length - 1 ? '已经是最后一张' : '向后移动一位';
         row.classList.toggle('is-selected', selected);
         row.classList.toggle('is-main', slot.isMain);
+        row.classList.toggle('has-preview', previewCurrent);
       },
     );
     nodes.slotList.setAttribute('aria-label', '图片槽位顺序');
@@ -1529,6 +1755,47 @@
     nodes.taskSummary.setAttribute('data-state', runtimeFault ? 'INVALID' : task.schedulerState);
   }
 
+  function renderSourceStage() {
+    var sourceItems = snapshot ? snapshot.libraryItems.filter(isSourceMedia) : [];
+    var selected = sourceItems.find(function (item) {
+      return item.mediaId === selectedSourceMediaId;
+    });
+    if (!selected && sourceItems.length > 0) {
+      selected = sourceItems[0];
+      selectedSourceMediaId = selected.mediaId;
+    }
+    nodes.sourceStage.hidden = !selected;
+    if (!selected) {
+      nodes.sourceImage.hidden = true;
+      nodes.sourceImage.removeAttribute('src');
+      return;
+    }
+    var objectUrl = sourcePreviewUrls.get(selected.mediaId);
+    nodes.sourceTitle.textContent = selected.label;
+    nodes.sourceMeta.textContent = selected.secondaryLabel
+      + ' · 安全预览仅保留在当前扩展页面';
+    nodes.sourceImage.hidden = !objectUrl;
+    nodes.sourcePlaceholder.hidden = Boolean(objectUrl);
+    nodes.sourcePlaceholder.textContent = objectUrl ? '' : '正在读取来源图片';
+    if (objectUrl) {
+      if (nodes.sourceImage.src !== objectUrl) nodes.sourceImage.src = objectUrl;
+    } else {
+      nodes.sourceImage.removeAttribute('src');
+      requestSourcePreview(selected.mediaId);
+    }
+    Array.from(nodes.sourceActions.children).filter(function (button) {
+      return button && button.dataset && button.dataset.sourceOperation;
+    })
+      .forEach(function (button) {
+        button.disabled = Boolean(runtimeFault || snapshot.executionModeFrozen
+          || snapshot.executionMode !== 'BYOK');
+        button.dataset.mediaId = selected.mediaId;
+        button.title = snapshot.executionMode !== 'BYOK'
+          ? '切换到自带 API 后可直接编辑来源图'
+          : snapshot.executionModeFrozen ? '任务已派发，图片操作已冻结' : '';
+      });
+  }
+
   function render() {
     nodes.shell.hidden = false;
     nodes.shell.setAttribute(
@@ -1543,6 +1810,7 @@
     renderModes();
     renderSkus();
     renderLibrary();
+    renderSourceStage();
     renderSlots();
     renderPromptInspector();
     renderReferenceSummary();
@@ -1632,6 +1900,12 @@
       stopWorkspaceSubscription();
       workspace = nextWorkspace;
       snapshot = nextSnapshot;
+      if (!nextSnapshot.libraryItems.some(function (item) {
+        return isSourceMedia(item) && item.mediaId === selectedSourceMediaId;
+      })) {
+        var firstSource = nextSnapshot.libraryItems.find(isSourceMedia);
+        selectedSourceMediaId = firstSource ? firstSource.mediaId : null;
+      }
       if (!sameBinding(priorBinding, nextSnapshot.binding)) pendingIntent = null;
       preserveDirtyPrompt = preserveDirtyPrompt
         && sameBinding(priorBinding, nextSnapshot.binding)
@@ -1780,6 +2054,9 @@
     retainedRuntime = null;
     pendingIntent = null;
     previewReadyAttempt = null;
+    selectedSourceMediaId = null;
+    sourcePreviewUrls.clear();
+    sourcePreviewRequests.clear();
     lastPublishAnnouncementKey = null;
     selectedLibraryKind = LIBRARY_KINDS[0];
     clearCache(skuNodes);
@@ -1815,6 +2092,9 @@
     nodes.regenerateButton.disabled = true;
     nodes.regenerateReason.textContent = '';
     nodes.orderAnnouncement.textContent = '';
+    nodes.sourceStage.hidden = true;
+    nodes.sourceImage.hidden = true;
+    nodes.sourceImage.removeAttribute('src');
     nodes.shell.setAttribute('aria-busy', 'true');
     nodes.shell.setAttribute('aria-disabled', 'true');
     nodes.shell.setAttribute('data-runtime-state', 'CLEARED');
@@ -1890,6 +2170,20 @@
     }
   });
 
+  nodes.mobileSwitcher.addEventListener('click', function (event) {
+    var tab = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('[data-workspace-mobile-view]') : null;
+    if (!trustedActivation(event) || !tab || !nodes.mobileSwitcher.contains(tab)) return;
+    setMobileView(tab.dataset.workspaceMobileView, false);
+  });
+
+  nodes.mobileSwitcher.addEventListener('keydown', function (event) {
+    if (!trustedActivation(event)
+      || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    moveMobileView(event.key);
+  });
+
   global.document.addEventListener(BOOTSTRAP_EVENT, function (event) {
     bootstrap(event.detail);
   });
@@ -1904,9 +2198,15 @@
   });
   global.document.addEventListener(PREVIEW_STATE_EVENT, function (event) {
     var detail = event && event.detail;
-    if (!exactKeys(detail, ['contractVersion', 'slotKey', 'attemptId', 'ready'])
+    if (!exactKeys(detail, [
+      'contractVersion', 'slotKey', 'attemptId', 'ready', 'objectUrl',
+    ])
       || detail.contractVersion !== PREVIEW_STATE_VERSION
-      || typeof detail.ready !== 'boolean' || !snapshot) return;
+      || typeof detail.ready !== 'boolean'
+      || (detail.ready === true && (typeof detail.objectUrl !== 'string'
+        || !detail.objectUrl.startsWith('blob:')))
+      || (detail.ready === false && detail.objectUrl !== null)
+      || !snapshot) return;
     var slot = snapshot.slots.find(function (candidate) {
       return candidate.slotKey === detail.slotKey;
     });
@@ -1916,13 +2216,38 @@
     if (detail.ready === true && (!alternative
       || alternative.state !== 'CANDIDATE_READY' || alternative.mediaId === null)) return;
     if (detail.ready) {
-      previewReadyAttempt = { slotKey: detail.slotKey, attemptId: detail.attemptId };
+      previewReadyAttempt = {
+        slotKey: detail.slotKey,
+        attemptId: detail.attemptId,
+        objectUrl: detail.objectUrl,
+      };
     } else if (previewReadyAttempt
       && previewReadyAttempt.slotKey === detail.slotKey
       && previewReadyAttempt.attemptId === detail.attemptId) {
       previewReadyAttempt = null;
     }
     render();
+  });
+  global.document.addEventListener(SOURCE_PREVIEW_STATE_EVENT, function (event) {
+    var detail = event && event.detail;
+    if (!exactKeys(detail, ['contractVersion', 'mediaId', 'ready', 'objectUrl'])
+      || detail.contractVersion !== SOURCE_PREVIEW_STATE_VERSION
+      || typeof detail.mediaId !== 'string'
+      || typeof detail.ready !== 'boolean'
+      || (detail.ready === true && (typeof detail.objectUrl !== 'string'
+        || !detail.objectUrl.startsWith('blob:')))
+      || (detail.ready === false && detail.objectUrl !== null)) return;
+    sourcePreviewRequests.delete(detail.mediaId);
+    if (detail.ready) sourcePreviewUrls.set(detail.mediaId, detail.objectUrl);
+    else sourcePreviewUrls.delete(detail.mediaId);
+    if (snapshot) render();
+  });
+  nodes.sourceActions.addEventListener('click', function (event) {
+    var button = event && event.target && event.target.dataset
+      && event.target.dataset.sourceOperation ? event.target : null;
+    if (!trustedActivation(event) || !button || button.disabled
+      || !Array.from(nodes.sourceActions.children).includes(button)) return;
+    startSourceOperation(button.dataset.mediaId, button.dataset.sourceOperation);
   });
   global.document.addEventListener(CLEAR_EVENT, function () {
     clearWorkspace();

@@ -10,6 +10,7 @@
   var WORKSPACE_REFRESH_EVENT = 'ss-erp:workspace-refresh-request';
   var HOSTED_MODE_STATE_EVENT = 'ss-erp:hosted-mode-state-change';
   var WORKSPACE_ACTION_VERSION = 'extension-byok-workbench-workspace-action/v1';
+  var WORKSPACE_PREVIEW_STATE_VERSION = 'extension-byok-workbench-preview-state/v1';
   var WORKSPACE_INTENT_VERSION = 'extension-byok-workbench-action-intent/v1';
   var WORKSPACE_OUTCOME_VERSION = 'extension-byok-workbench-action-outcome/v1';
   var LAUNCH_CONTEXT_VERSION = 'extension-byok-workbench-launch-context/v1';
@@ -744,6 +745,15 @@
   function revokePreview() {
     var preview = state.preview;
     state.preview = null;
+    if (preview && preview.slotKey && preview.attemptId) {
+      emit('ss-erp:workspace-preview-state', Object.freeze({
+        contractVersion: WORKSPACE_PREVIEW_STATE_VERSION,
+        slotKey: preview.slotKey,
+        attemptId: preview.attemptId,
+        ready: false,
+        objectUrl: null,
+      }));
+    }
     if (preview && typeof preview.revoke === 'function') {
       try { preview.revoke(); } catch {}
     }
@@ -1277,7 +1287,11 @@
         throw controllerError('SS_ERP_HOSTED_CANDIDATE_PREVIEW_INVALID');
       }
       revokePreview();
-      state.preview = resource;
+      state.preview = {
+        ...resource,
+        slotKey: slot.slotKey,
+        attemptId: 'hosted:' + slot.id + ':' + slot.attempt,
+      };
       nodes.previewImage.src = resource.objectUrl;
       nodes.previewPanel.hidden = false;
       nodes.previewMeta.textContent = 'PNG · ' + resource.metadata.byteLength + ' 字节';
@@ -1372,6 +1386,34 @@
       && value.skuKey === null && value.slotKey === null && value.mediaId === null
       && value.attemptId === null && value.libraryKind === null && value.direction === null
       && value.prompt === null && value.negativePrompt === null;
+  }
+
+  function previewActionSlot(event) {
+    var value = event && event.detail;
+    if (!event || event.target !== global.document
+      || !Object.isFrozen(value)
+      || !exactKeys(value, WORKSPACE_ACTION_KEYS)
+      || value.contractVersion !== WORKSPACE_ACTION_VERSION
+      || value.action !== 'PREVIEW_ATTEMPT'
+      || value.executionMode !== 'ERP_HOSTED'
+      || !Number.isSafeInteger(value.revision) || value.revision < 1
+      || typeof value.slotKey !== 'string' || typeof value.attemptId !== 'string') return null;
+    var suite = currentSuite();
+    var slot = suite && Array.isArray(suite.slots)
+      ? suite.slots.find(function (candidate) {
+        return candidate.slotKey === value.slotKey
+          && 'hosted:' + candidate.id + ':' + candidate.attempt === value.attemptId;
+      }) : null;
+    return slot && slot.previewAvailable ? slot : null;
+  }
+
+  function handleWorkspaceAction(event) {
+    var previewSlot = previewActionSlot(event);
+    if (previewSlot) {
+      if (state.active && canPreview() && !state.previewBusy) void openPreview(previewSlot);
+      return;
+    }
+    handleModeAction(event);
   }
 
   function handleModeAction(event) {
@@ -1581,7 +1623,20 @@
     setStatus('候选预览加载失败，已撤销临时资源。', 'warning');
     render();
   });
-  global.document.addEventListener(WORKSPACE_ACTION_EVENT, handleModeAction);
+  nodes.previewImage.addEventListener('load', function () {
+    var preview = state.preview;
+    if (!preview || nodes.previewImage.src !== preview.objectUrl
+      || nodes.previewImage.complete !== true
+      || nodes.previewImage.naturalWidth < 1 || nodes.previewImage.naturalHeight < 1) return;
+    emit('ss-erp:workspace-preview-state', Object.freeze({
+      contractVersion: WORKSPACE_PREVIEW_STATE_VERSION,
+      slotKey: preview.slotKey,
+      attemptId: preview.attemptId,
+      ready: true,
+      objectUrl: preview.objectUrl,
+    }));
+  });
+  global.document.addEventListener(WORKSPACE_ACTION_EVENT, handleWorkspaceAction);
   global.document.addEventListener(WORKSPACE_INTENT_EVENT, handleWorkspaceIntent);
   if (typeof global.addEventListener === 'function') {
     global.addEventListener('pagehide', function () { cleanup(true); });

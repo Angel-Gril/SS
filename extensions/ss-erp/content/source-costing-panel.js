@@ -256,11 +256,7 @@
       }
     });
     mediaFab.addEventListener('click', function () {
-      if (panel.classList.contains('open') && panel.classList.contains('media-focus')) {
-        closePanel(panel);
-      } else {
-        openPanel(panel, { focus: 'media', trigger: mediaFab });
-      }
+      void openPrimaryAiWorkbench(mediaFab);
     });
     backdrop.addEventListener('click', function () {
       closePanel(panel);
@@ -685,7 +681,7 @@
           hydrateInputs();
           renderContent();
         }
-        void refreshSourceWorkbenchStatus({
+        await refreshSourceWorkbenchStatus({
           force: Boolean(changed || options.force),
           maxAgeMs: 5000,
         });
@@ -1075,6 +1071,27 @@
       }
       renderContent();
     }
+  }
+
+  async function openPrimaryAiWorkbench(trigger) {
+    if (state.sourceAiWorkbenchOpening || state.sourceAiWorkbenchState === 'refreshing') return;
+    state.panelTrigger = trigger || state.panelTrigger;
+    try {
+      if (!state.loaded) {
+        state.loaded = true;
+        await refreshAll();
+      } else {
+        await refreshProductOnly({ force: true, skipAuto: true });
+      }
+      var listing = currentSourceWorkbenchListing();
+      if (listing && state.sourceWorkflowHandoff) {
+        await openSourceAiWorkbench(listing);
+        return;
+      }
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    }
+    openPanel(null, { focus: 'media', trigger: trigger });
   }
 
   function sourceWorkbenchAiImageSuiteBinding(listing, sourceProductId) {

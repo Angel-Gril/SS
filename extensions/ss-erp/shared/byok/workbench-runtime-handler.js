@@ -287,6 +287,7 @@
     }
     var requiredTypes = [
       'GET_PUBLIC_STATE', 'GET_READINESS', 'EXECUTE_PROVIDER', 'OPEN_PREVIEW',
+      'SOURCE_CATALOG', 'SOURCE_PREVIEW',
       'REVIEW_RESULT', 'INGEST', 'RECOVER_INGEST', 'PUBLISH',
       'EDIT_MEDIA_PREPARE', 'EDIT_MEDIA_RELEASE', 'EDIT_STATE', 'EDIT_REFERENCES',
       'EDIT_START', 'EDIT_SELECT', 'EDIT_REGENERATE', 'EDIT_PREVIEW', 'EDIT_CLEANUP',
@@ -370,6 +371,9 @@
     var matchesVaultAuthority = requiredMethod(config.authorityGuard, 'matchesVaultAuthority');
     var openPreview = requiredMethod(config.previewBroker, 'open');
     var releasePreviewResult = requiredMethod(config.previewBroker, 'releaseResult');
+    var sourceMediaLibrary = config.sourceMediaLibrary;
+    var loadSourceCatalog = requiredMethod(sourceMediaLibrary, 'loadCatalog');
+    var openSourcePreview = requiredMethod(sourceMediaLibrary, 'open');
     var editController = config.editController;
     var openEdit = requiredMethod(editController, 'open');
     var setEditReferences = requiredMethod(editController, 'setReferences');
@@ -1081,6 +1085,28 @@
       var entry = getVaultEntry(id);
       await assertEntryAuthority(entry, session.context);
       return openPreview(entry);
+    });
+
+    handlers[messageTypes.SOURCE_CATALOG] = generationGuarded(async function (handlerContext) {
+      if (!exactKeys(handlerContext.payload || {}, [])) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      return loadSourceCatalog(session.context);
+    });
+
+    handlers[messageTypes.SOURCE_PREVIEW] = generationGuarded(async function (handlerContext) {
+      var input = handlerContext.payload || {};
+      if (!exactKeys(input, ['sourceMediaKey', 'purpose'])
+        || !['THUMBNAIL', 'WORKING'].includes(input.purpose)) {
+        throw handlerError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+      }
+      var session = await claimLive(handlerContext.sender);
+      return openSourcePreview(
+        session.context,
+        text(input.sourceMediaKey, 500, 'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID'),
+        input.purpose,
+      );
     });
 
     handlers[messageTypes.REVIEW_RESULT] = generationGuarded(function (handlerContext) {

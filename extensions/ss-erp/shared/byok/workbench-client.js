@@ -39,6 +39,8 @@
     GET_READINESS: 'ss-erp:ai-image-workbench-readiness',
     EXECUTE_PROVIDER: 'ss-erp:ai-image-workbench-provider-execute',
     OPEN_PREVIEW: 'ss-erp:ai-image-workbench-preview-open',
+    SOURCE_CATALOG: 'ss-erp:ai-image-workbench-source-catalog',
+    SOURCE_PREVIEW: 'ss-erp:ai-image-workbench-source-preview',
     REVIEW_RESULT: 'ss-erp:ai-image-workbench-result-review',
     INGEST: 'ss-erp:ai-image-workbench-ingest',
     RECOVER_INGEST: 'ss-erp:ai-image-workbench-ingest-recover',
@@ -514,9 +516,8 @@
       return value;
     }
 
-    function openPreviewWithType(messageType, resultIdValue) {
-      var id = resultId(resultIdValue);
-      return send(messageType, { resultId: id }).then(previewTicket).then(function (prepared) {
+    function openPreviewMessage(messageType, payload) {
+      return send(messageType, payload).then(previewTicket).then(function (prepared) {
         return new Promise(function (resolve, reject) {
           var channel = new Channel(prepared.channelName);
           var settled = false;
@@ -555,6 +556,7 @@
             var objectUrl = urlApi.createObjectURL(message.image);
             var revoked = false;
             resolve(Object.freeze({
+              blob: message.image,
               objectUrl: objectUrl,
               metadata: Object.freeze({ ...prepared.metadata }),
               revoke: function () {
@@ -571,6 +573,10 @@
           }
         });
       });
+    }
+
+    function openPreviewWithType(messageType, resultIdValue) {
+      return openPreviewMessage(messageType, { resultId: resultId(resultIdValue) });
     }
 
     function uploadEditMedia(purposeValue, blob) {
@@ -681,6 +687,26 @@
       },
       openPreview: function (resultIdValue) {
         return openPreviewWithType(MESSAGE_TYPES.OPEN_PREVIEW, resultIdValue);
+      },
+      getSourceCatalog: function () {
+        return send(MESSAGE_TYPES.SOURCE_CATALOG, {});
+      },
+      openSourcePreview: function (sourceMediaKeyValue, purpose) {
+        try {
+          return openPreviewMessage(MESSAGE_TYPES.SOURCE_PREVIEW, {
+            sourceMediaKey: text(
+              sourceMediaKeyValue,
+              1,
+              500,
+              'SS_ERP_BYOK_WORKBENCH_INPUT_INVALID',
+            ),
+            purpose: ['THUMBNAIL', 'WORKING'].includes(purpose) ? purpose : (function () {
+              throw clientError('SS_ERP_BYOK_WORKBENCH_INPUT_INVALID');
+            }()),
+          });
+        } catch (error) {
+          return Promise.reject(error);
+        }
       },
       reviewResult: function (resultIdValue, decision) {
         if (decision !== 'APPROVE' && decision !== 'REJECT') {
