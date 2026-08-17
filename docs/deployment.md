@@ -2,23 +2,25 @@
 
 本文档描述云端 SaaS 部署骨架。本地 Windows 离线包继续使用 `build/scripts`，不要和云端部署混用。
 
-## 当前生产发布（2026-08-14）
+## 当前生产发布（2026-08-17）
 
 - COM 与 CN 两台生产 VPS 均运行不可变应用/扩展发布提交
-  `8cd99578baee024282d10136c7b9ff5b0333a1b0`；官网 publication pointer 已分别激活并通过正式分发 verifier。
-- 当前扩展版本为 `1.0.307`，使用 Ed25519 key ID
+  `97326fdaeb2ab866960aa392456941346567268a`；官网 publication pointer 已分别激活并通过正式分发 verifier。
+- 当前扩展版本为 `1.0.310`，使用 Ed25519 key ID
   `ss-erp-extension-release-2026-08-02-01` 的外部 release 签名。固定 BINI 配置已完成
-  `1.0.306 -> 1.0.307` 同路径升级，扩展 ID 保持
+  `1.0.308 -> 1.0.310` 同路径升级，扩展 ID 保持
   `nkkemglcckgmhmcfnjjmcfbdhciafahl`，活动 Worker 和 Unicode smoke 均通过。
-- 双区域 publication 汇总 `dual-region-website-publication-summary-8cd99578.json` 的 SHA-256 为
-  `75b42f5350c6e20bc77aaaae4066a32fe1d54736d6405299e4b2b3df93fc4fe1`；同路径升级闭环
-  `bini-upgrade-closure-1.0.307.json` 的 SHA-256 为
-  `af117aa6bd061abdf142c8860154d88a6a1cfd5e80feb066239a9589be99c87e`。原始证据保留在操作员控制的私有发布目录，不提交仓库。
+- 双区域 publication 汇总的 SHA-256 为
+  `d5c2893418d0805962e8c12cfa8f16efe6c582ad3bfa86b099d8181405240d7a`；同路径升级闭环
+  `same-path-upgrade-closure-1.0.310.json` 的 SHA-256 为
+  `1220c96f1e486d27666afd4f9e8d36b90953331035074c57c767506b4fc71a2e`。原子替换后残留的
+  1.0.308 Worker 缓存已通过受信的 `chrome://extensions` reload 清除，处置回执 SHA-256 为
+  `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`。原始证据保留在操作员控制的私有发布目录，不提交仓库。
 - 本次生产变更没有执行 Provider 请求、ERP ingest/publish 或 Ozon 写入；相关试点 feature flags 仍为暗态/默认关闭。
   真实试点仍需单独批准，并精确绑定 owner、shop、device、输入 revision、offer 前缀、回滚命令和责任操作员。
 
 后续纯文档提交只记录上述事实，不改变生产部署和扩展候选对
-`8cd99578baee024282d10136c7b9ff5b0333a1b0` 的不可变绑定。
+`97326fdaeb2ab866960aa392456941346567268a` 的不可变绑定。
 
 ## 运行模式
 

@@ -6,26 +6,29 @@ This project can keep the current single-server systemd model. There are three s
 2. direct Git checkout deployment at `/opt/ss-erp`
 3. release directory deployment with `/opt/ss-erp/current`
 
-## Current Production Release (2026-08-14)
+## Current Production Release (2026-08-17)
 
 - Both COM and CN production VPS deployments are bound to immutable commit
-  `8cd99578baee024282d10136c7b9ff5b0333a1b0`. Each regional website publication pointer is active and
+  `97326fdaeb2ab866960aa392456941346567268a`. Each regional website publication pointer is active and
   its official distribution verifier passes.
-- Extension `1.0.307` is externally signed with Ed25519 key ID
+- Extension `1.0.310` is externally signed with Ed25519 key ID
   `ss-erp-extension-release-2026-08-02-01`. The fixed BINI profile completed the same-path
-  `1.0.306 -> 1.0.307` upgrade without changing extension ID
+  `1.0.308 -> 1.0.310` upgrade without changing extension ID
   `nkkemglcckgmhmcfnjjmcfbdhciafahl`; active-worker attestation and the live Unicode smoke passed.
-- `dual-region-website-publication-summary-8cd99578.json` has SHA-256
-  `75b42f5350c6e20bc77aaaae4066a32fe1d54736d6405299e4b2b3df93fc4fe1`, and
-  `bini-upgrade-closure-1.0.307.json` has SHA-256
-  `af117aa6bd061abdf142c8860154d88a6a1cfd5e80feb066239a9589be99c87e`. The original evidence remains
+- The dual-region publication summary has SHA-256
+  `d5c2893418d0805962e8c12cfa8f16efe6c582ad3bfa86b099d8181405240d7a`, and
+  `same-path-upgrade-closure-1.0.310.json` has SHA-256
+  `1220c96f1e486d27666afd4f9e8d36b90953331035074c57c767506b4fc71a2e`. A stale 1.0.308 Worker cache
+  left after atomic replacement was cleared with a trusted `chrome://extensions` reload; the
+  remediation receipt has SHA-256
+  `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`. The original evidence remains
   in the operator-controlled private release directory and is not committed.
 - No Provider request, ERP ingest/publish, or Ozon write was executed. Pilot feature flags remain
   dark/default-off. A real pilot still requires a separate exact approval bound to owner, shop,
   device, input revision, offer prefix, rollback command, and responsible operator.
 
 Any later documentation-only commit records this state but does not change the production release
-binding to `8cd99578baee024282d10136c7b9ff5b0333a1b0`.
+binding to `97326fdaeb2ab866960aa392456941346567268a`.
 
 Do not mix the three in one deploy. First identify which path systemd is currently using:
 
