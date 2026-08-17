@@ -23,9 +23,12 @@ This project can keep the current single-server systemd model. There are three s
   remediation receipt has SHA-256
   `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`. The original evidence remains
   in the operator-controlled private release directory and is not committed.
-- No Provider request, ERP ingest/publish, or Ozon write was executed. Pilot feature flags remain
-  dark/default-off. A real pilot still requires a separate exact approval bound to owner, shop,
-  device, input revision, offer prefix, rollback command, and responsible operator.
+- No Provider request, ERP ingest/publish, or Ozon write was executed by this production change. CN
+  retains its disabled pilot configuration. COM restored the pre-deploy extension hosted/BYOK flags
+  and `global` BYOK policy, while the source workflow, AI Media V2, and Ozon Publisher V2 remain off.
+  Before a real pilot, the COM BYOK policy must be narrowed to an exact owner/shop/device/origin/operation
+  and separately approved with the input revision, a new offer prefix, rollback command, and responsible
+  operator.
 
 Any later documentation-only commit records this state but does not change the production release
 binding to `97326fdaeb2ab866960aa392456941346567268a`.

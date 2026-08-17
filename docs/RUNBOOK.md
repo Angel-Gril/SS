@@ -1,13 +1,15 @@
 # SS ERP 运维手册 (RUNBOOK)
 
-## 当前生产快照（2026-08-14）
+## 当前生产快照（2026-08-17）
 
 COM/CN 生产环境和官网扩展分发当前均绑定提交
-`8cd99578baee024282d10136c7b9ff5b0333a1b0`，扩展版本为 `1.0.307`；固定 BINI 配置的
-`1.0.306 -> 1.0.307` 同路径升级、活动 Worker 和 Unicode smoke 已通过。发布与升级证据摘要见
-[生产部署文档](./deployment.md#当前生产发布2026-08-14)。本次未执行 Provider 请求、ERP ingest/publish
-或 Ozon 写入，试点开关保持暗态/默认关闭；真实试点仍需新的精确授权。后续纯文档提交不改变生产发布对
-该 commit 的不可变绑定。
+`97326fdaeb2ab866960aa392456941346567268a`，扩展版本为 `1.0.310`；固定 BINI 配置的
+`1.0.308 -> 1.0.310` 同路径升级、活动 Worker 和 Unicode smoke 已通过。发布与升级证据摘要见
+[生产部署文档](./deployment.md#当前生产发布2026-08-17)。本次生产变更未执行 Provider 请求、ERP
+ingest/publish 或 Ozon 写入。CN 试点配置保持关闭；COM 恢复部署前已有的扩展 hosted/BYOK 开关和
+`global` BYOK 策略，但来源工作流、AI Media V2 与 Ozon Publisher V2 仍关闭。真实试点前必须把 COM
+策略收紧到精确 owner/shop/device/origin/operation，并取得绑定新草稿 revision、全新 offer 前缀、回滚命令
+和责任操作员的单独授权。后续纯文档提交不改变生产发布对该 commit 的不可变绑定。
 
 ## 专项手册
 

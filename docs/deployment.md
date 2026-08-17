@@ -16,8 +16,10 @@
   `1220c96f1e486d27666afd4f9e8d36b90953331035074c57c767506b4fc71a2e`。原子替换后残留的
   1.0.308 Worker 缓存已通过受信的 `chrome://extensions` reload 清除，处置回执 SHA-256 为
   `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`。原始证据保留在操作员控制的私有发布目录，不提交仓库。
-- 本次生产变更没有执行 Provider 请求、ERP ingest/publish 或 Ozon 写入；相关试点 feature flags 仍为暗态/默认关闭。
-  真实试点仍需单独批准，并精确绑定 owner、shop、device、输入 revision、offer 前缀、回滚命令和责任操作员。
+- 本次生产变更没有执行 Provider 请求、ERP ingest/publish 或 Ozon 写入。CN 的相关试点配置保持关闭；COM
+  恢复了部署前已有的扩展 hosted/BYOK 开关与 `global` BYOK 策略，但来源工作流、AI Media V2 和 Ozon
+  Publisher V2 仍关闭。执行真实试点前必须先把 COM BYOK 策略收紧到精确的 owner/shop/device/origin/operation，
+  并单独批准输入 revision、全新的 offer 前缀、回滚命令和责任操作员。
 
 后续纯文档提交只记录上述事实，不改变生产部署和扩展候选对
 `97326fdaeb2ab866960aa392456941346567268a` 的不可变绑定。
