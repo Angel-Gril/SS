@@ -148,6 +148,9 @@ test('keeps capability runtime messaging alive beyond the background Provider de
     profileId: 'relay-profile-1',
     operation: 'TEXT_TO_IMAGE',
     idempotencyKey: 'probe-long-running-1',
+    prompt: 'A neutral catalog product test image on a plain white background. No text.',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
     readiness: readiness(),
   });
   assert.equal(delays[0], 15_000);
@@ -172,6 +175,9 @@ test('locks an uncertain capability probe instead of retrying it with a fresh id
     profileId: 'relay-profile-1',
     operation: 'TEXT_TO_IMAGE',
     idempotencyKey: 'probe-uncertain-1',
+    prompt: 'A neutral catalog product test image on a plain white background. No text.',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
     readiness: readiness(),
   });
   assert.equal(timers[0].delay, 315_000);
@@ -188,6 +194,9 @@ test('locks an uncertain capability probe instead of retrying it with a fresh id
       profileId: 'relay-profile-1',
       operation: 'TEXT_TO_IMAGE',
       idempotencyKey: 'probe-uncertain-2',
+      prompt: 'A neutral catalog product test image on a plain white background. No text.',
+      quotedCostUsd: 0.08,
+      maximumCostUsd: 0.10,
       readiness: readiness(),
     }),
     (error) => error
@@ -200,6 +209,9 @@ test('locks an uncertain capability probe instead of retrying it with a fresh id
       profileId: 'relay-profile-1',
       operation: 'TEXT_TO_IMAGE',
       idempotencyKey: 'probe-uncertain-3',
+      prompt: 'A neutral catalog product test image on a plain white background. No text.',
+      quotedCostUsd: 0.08,
+      maximumCostUsd: 0.10,
       readiness: readiness(),
     }),
     (error) => error
@@ -221,6 +233,9 @@ test('treats capability runtime channel loss as an unknown Provider outcome', as
       profileId: 'relay-profile-1',
       operation: 'TEXT_TO_IMAGE',
       idempotencyKey: 'probe-channel-loss-1',
+      prompt: 'A neutral catalog product test image on a plain white background. No text.',
+      quotedCostUsd: 0.08,
+      maximumCostUsd: 0.10,
       readiness: readiness(),
     }),
     (error) => error
@@ -246,6 +261,9 @@ test('uses the exact closed background message contract and binds capability rea
     profileId: 'relay-profile-1',
     operation: 'TEXT_TO_IMAGE',
     idempotencyKey: 'probe-1',
+    prompt: 'A neutral catalog product test image on a plain white background. No text.',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
     readiness: ready,
   });
   assert.deepEqual(loaded.messages[0], {
@@ -261,6 +279,31 @@ test('uses the exact closed background message contract and binds capability rea
   });
   assert.equal(loaded.messages[1].readinessHandle, ready.readinessHandle);
   assert.deepEqual(loaded.messages[1].readinessBinding, plain(ready.readinessBinding));
+});
+
+test('transports a custom text prompt and bounded USD cost control', async () => {
+  const loaded = loadClient();
+  loaded.responses.set(loaded.api.MESSAGE_TYPES.TEST_CAPABILITY, {
+    ok: true,
+    data: { operation: 'TEXT_TO_IMAGE', verifiedAt: '2026-07-26T08:00:00.000Z' },
+  });
+  await loaded.client.testCapability({
+    profileId: 'relay-profile-1',
+    operation: 'TEXT_TO_IMAGE',
+    idempotencyKey: 'probe-custom-cost-1',
+    prompt: '生成一张白色马克杯的纯白背景产品图',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
+    readiness: readiness(),
+  });
+  assert.deepEqual(loaded.messages[0].payload, {
+    profileId: 'relay-profile-1',
+    operation: 'TEXT_TO_IMAGE',
+    idempotencyKey: 'probe-custom-cost-1',
+    prompt: '生成一张白色马克杯的纯白背景产品图',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.1,
+  });
 });
 
 test('keeps the session key request one-way and maps background failures to stable codes', async () => {

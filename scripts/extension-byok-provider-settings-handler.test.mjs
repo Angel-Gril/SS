@@ -682,6 +682,9 @@ test('routes every implemented operation through exact capability evidence and r
       profileId: 'relay-profile-1',
       operation: 'TEXT_TO_IMAGE',
       idempotencyKey: 'probe-text-to-image-1',
+      prompt: 'A neutral catalog product test image on a plain white background. No text.',
+      quotedCostUsd: 0.08,
+      maximumCostUsd: 0.10,
     },
     authorization,
   });
@@ -695,6 +698,11 @@ test('routes every implemented operation through exact capability evidence and r
       policyRevision: '17',
       verifiedAt: '2026-07-25T12:00:00.000Z',
       expiresAt: '2026-07-26T12:00:00.000Z',
+      costControl: {
+        currency: 'USD',
+        quotedCostUsd: 0.08,
+        maximumCostUsd: 0.1,
+      },
     },
   });
   const probe = calls.find((call) => call.method === 'probe');
@@ -706,6 +714,54 @@ test('routes every implemented operation through exact capability evidence and r
   assert.equal(typeof probe.value.prompt, 'string');
   assert.equal(probe.value.prompt.length > 0, true);
   assert.equal(JSON.stringify(response).includes(secret), false);
+
+  const missingCost = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
+    payload: {
+      profileId: 'relay-profile-1',
+      operation: 'TEXT_TO_IMAGE',
+      idempotencyKey: 'probe-text-to-image-missing-cost-1',
+      prompt: '生成一张白色马克杯的纯白背景产品图',
+    },
+    authorization,
+  });
+  assert.equal(missingCost.ok, false);
+  assert.equal(missingCost.errorCode, 'SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED');
+
+  const custom = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
+    payload: {
+      profileId: 'relay-profile-1',
+      operation: 'TEXT_TO_IMAGE',
+      idempotencyKey: 'probe-text-to-image-custom-1',
+      prompt: '生成一张白色马克杯的纯白背景产品图',
+      quotedCostUsd: 0.08,
+      maximumCostUsd: 0.10,
+    },
+    authorization,
+  });
+  assert.equal(custom.ok, true);
+  assert.deepEqual(plain(custom.data.costControl), {
+    currency: 'USD',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.1,
+  });
+  const customProbe = calls.filter((call) => call.method === 'probe')[1];
+  assert.equal(customProbe.value.prompt, '生成一张白色马克杯的纯白背景产品图');
+  assert.equal(customProbe.value.quotedCostUsd, 0.08);
+  assert.equal(customProbe.value.maximumCostUsd, 0.1);
+
+  const overBudget = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
+    payload: {
+      profileId: 'relay-profile-1',
+      operation: 'TEXT_TO_IMAGE',
+      idempotencyKey: 'probe-text-to-image-over-budget-1',
+      prompt: '生成一张白色马克杯的纯白背景产品图',
+      quotedCostUsd: 0.11,
+      maximumCostUsd: 0.10,
+    },
+    authorization,
+  });
+  assert.equal(overBudget.ok, false);
+  assert.equal(overBudget.errorCode, 'SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
 
   const fullEdit = await dispatcher.handlers[TYPES.TEST_CAPABILITY]({
     payload: {
@@ -727,10 +783,10 @@ test('routes every implemented operation through exact capability evidence and r
       expiresAt: '2026-07-26T12:00:00.000Z',
     },
   });
-  const editProbe = calls.filter((call) => call.method === 'probe')[1];
+  const editProbe = calls.filter((call) => call.method === 'probe')[2];
   assert.equal(editProbe.value.operation, 'FULL_EDIT');
   assert.deepEqual(editProbe.value.readinessBinding, readinessBinding({ operation: 'FULL_EDIT' }));
-  assert.equal(calls.filter((call) => call.method === 'probe').length, 2);
+  assert.equal(calls.filter((call) => call.method === 'probe').length, 3);
 });
 
 test('maps dependency failures to stable codes without reflecting secret-bearing messages', async () => {

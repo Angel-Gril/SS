@@ -67,6 +67,19 @@
     return normalized;
   }
 
+  function optionalMoneyUsd(value) {
+    if (value == null) return null;
+    if (typeof value !== 'number' || !Number.isFinite(value)
+      || value <= 0 || value > 1000) {
+      throw clientError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+    }
+    var normalized = Math.round(value * 1000000) / 1000000;
+    if (normalized !== value) {
+      throw clientError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+    }
+    return normalized;
+  }
+
   function profileId(value) {
     var id = text(value, 128);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u.test(id)) {
@@ -303,6 +316,17 @@
         }
         var normalizedProfileId = profileId(input.profileId);
         var normalizedOperation = text(input.operation, 64);
+        var prompt = input.prompt == null ? null : text(input.prompt, 8000);
+        var quotedCostUsd = optionalMoneyUsd(input.quotedCostUsd);
+        var maximumCostUsd = optionalMoneyUsd(input.maximumCostUsd);
+        if ((quotedCostUsd === null) !== (maximumCostUsd === null)
+          || (quotedCostUsd !== null && quotedCostUsd > maximumCostUsd)) {
+          throw clientError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+        }
+        if (normalizedOperation === 'TEXT_TO_IMAGE'
+          && (prompt === null || quotedCostUsd === null || maximumCostUsd === null)) {
+          throw clientError('SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED');
+        }
         var probeKey = capabilityProbeKey(normalizedProfileId, normalizedOperation);
         if (uncertainCapabilityProbes.has(probeKey)) {
           return Promise.reject(unknownCapabilityError(true));
@@ -311,6 +335,8 @@
           profileId: normalizedProfileId,
           operation: normalizedOperation,
           idempotencyKey: profileId(input.idempotencyKey),
+          ...(prompt === null ? {} : { prompt }),
+          ...(quotedCostUsd === null ? {} : { quotedCostUsd, maximumCostUsd }),
         }, input.readiness, CAPABILITY_TIMEOUT_MS).catch(function (error) {
           if (error && error.code === 'SS_ERP_BYOK_PROVIDER_UNKNOWN_OUTCOME') {
             uncertainCapabilityProbes.set(probeKey, true);

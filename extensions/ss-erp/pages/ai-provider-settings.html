@@ -300,6 +300,51 @@
             <span id="capabilitySummary" class="state-badge state-pending">0 项有效证据</span>
           </div>
 
+          <div class="probe-inputs" aria-labelledby="probeInputsTitle">
+            <div class="probe-inputs-heading">
+              <h3 id="probeInputsTitle">受控文生图验证</h3>
+              <span class="state-badge state-pending">结果自动丢弃</span>
+            </div>
+            <label class="field probe-prompt-field" for="capabilityPromptInput">
+              <span>测试提示词</span>
+              <textarea
+                id="capabilityPromptInput"
+                maxlength="8000"
+                rows="3"
+                placeholder="输入本次验证使用的提示词"
+              ></textarea>
+            </label>
+            <div class="probe-cost-grid">
+              <label class="field" for="capabilityQuotedCostInput">
+                <span>Provider 报价（USD）</span>
+                <input
+                  id="capabilityQuotedCostInput"
+                  type="number"
+                  min="0.000001"
+                  max="1000"
+                  step="0.000001"
+                  inputmode="decimal"
+                  placeholder="例如 0.08"
+                />
+              </label>
+              <label class="field" for="capabilityMaximumCostInput">
+                <span>单次最高费用（USD）</span>
+                <input
+                  id="capabilityMaximumCostInput"
+                  type="number"
+                  min="0.000001"
+                  max="1000"
+                  step="0.000001"
+                  inputmode="decimal"
+                  value="0.10"
+                />
+              </label>
+            </div>
+            <p id="capabilityCostReason" class="action-reason">
+              必须录入 Provider 控制台当前报价，且报价不得超过单次最高费用。
+            </p>
+          </div>
+
           <div class="capability-table" id="capabilityRows" role="list" aria-label="Provider 模型能力">
             <article class="capability-row" data-operation="TEXT_TO_IMAGE" role="listitem">
               <div class="capability-name">

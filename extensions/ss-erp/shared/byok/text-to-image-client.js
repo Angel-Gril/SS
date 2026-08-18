@@ -136,6 +136,27 @@
     return result;
   }
 
+  function optionalMoneyUsd(value) {
+    if (value == null) return null;
+    if (typeof value !== 'number' || !Number.isFinite(value)
+      || value <= 0 || value > 1000) {
+      throw clientError(
+        'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
+        'cost control is invalid',
+        'FAILED_RETRYABLE',
+      );
+    }
+    var normalized = Math.round(value * 1000000) / 1000000;
+    if (normalized !== value) {
+      throw clientError(
+        'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
+        'cost control precision is invalid',
+        'FAILED_RETRYABLE',
+      );
+    }
+    return normalized;
+  }
+
   function normalizedSize(value) {
     if (typeof value !== 'string' || !/^\d{1,4}x\d{1,4}$/u.test(value.trim())) {
       throw clientError('SS_ERP_BYOK_PROVIDER_INPUT_INVALID', 'image size is invalid', 'FAILED_RETRYABLE');
@@ -153,6 +174,7 @@
   function normalizeInput(value) {
     assertClosedRecord(value, [
       'profileId', 'prompt', 'negativePrompt', 'size', 'idempotencyKey', 'readinessBinding',
+      'quotedCostUsd', 'maximumCostUsd',
     ], 'SS_ERP_BYOK_PROVIDER_INPUT_INVALID');
     var profileId = normalizedId(
       requiredOwn(value, 'profileId', 'SS_ERP_BYOK_PROVIDER_INPUT_INVALID'),
@@ -170,6 +192,16 @@
       'negativePrompt',
       true,
     );
+    var quotedCostUsd = optionalMoneyUsd(value.quotedCostUsd);
+    var maximumCostUsd = optionalMoneyUsd(value.maximumCostUsd);
+    if ((quotedCostUsd === null) !== (maximumCostUsd === null)
+      || (quotedCostUsd !== null && quotedCostUsd > maximumCostUsd)) {
+      throw clientError(
+        'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
+        'quoted cost must not exceed the maximum cost',
+        'FAILED_RETRYABLE',
+      );
+    }
     return {
       profileId: profileId,
       prompt: prompt,
@@ -184,6 +216,8 @@
         'readinessBinding',
         'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
       ),
+      quotedCostUsd: quotedCostUsd,
+      maximumCostUsd: maximumCostUsd,
     };
   }
 
@@ -1083,6 +1117,11 @@
         endpoint: endpoint.endpoint,
         idempotencyKey: input.idempotencyKey,
         body: body,
+        costControl: input.quotedCostUsd === null ? null : {
+          currency: 'USD',
+          quotedCostUsd: input.quotedCostUsd,
+          maximumCostUsd: input.maximumCostUsd,
+        },
       }));
       return {
         input: input,
@@ -1596,8 +1635,17 @@
     }
 
     async function run(value, requireCapabilityEvidence, capabilityProbe) {
+      var prepared = await prepare(value, requireCapabilityEvidence);
+      if (capabilityProbe === true
+        && (prepared.input.quotedCostUsd === null || prepared.input.maximumCostUsd === null)) {
+        throw clientError(
+          'SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED',
+          'A quoted Provider cost and maximum cost are required for capability verification',
+          'FAILED_RETRYABLE',
+        );
+      }
       return runPrepared(
-        await prepare(value, requireCapabilityEvidence),
+        prepared,
         capabilityProbe,
       );
     }

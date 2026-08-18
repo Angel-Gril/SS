@@ -102,6 +102,8 @@ function request(overrides = {}) {
     size: '1024x1024',
     idempotencyKey: 'generate-1',
     readinessBinding: readiness(),
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
     ...overrides,
   };
 }
@@ -954,7 +956,11 @@ test('probe creates exact short-lived evidence without claiming or reporting a d
       });
     },
   });
-  const result = await client.probe(request({ idempotencyKey: 'probe-text-to-image-1' }));
+  const result = await client.probe(request({
+    idempotencyKey: 'probe-text-to-image-1',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
+  }));
   assert.equal(fetchCalls, 1);
   assert.deepEqual(plain(result.evidence), capabilityEvidence({
     verifiedAt: '2026-07-25T12:00:00.000Z',
@@ -971,6 +977,61 @@ test('probe creates exact short-lived evidence without claiming or reporting a d
   assert.equal(client.getOperationState('probe-text-to-image-1').image.retained, false);
   assert.equal(JSON.stringify(result).includes('provider-probe-1'), false);
   assert.deepEqual(executionIntentCalls, []);
+});
+
+test('binds a custom probe quote and maximum to the request identity without sending cost fields to Provider', async () => {
+  const calls = [];
+  const { client } = loadClient({
+    evidence: [],
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({
+        data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }],
+      });
+    },
+  });
+  const result = await client.probe(request({
+    idempotencyKey: 'probe-cost-control-1',
+    prompt: '生成一张白色马克杯的纯白背景产品图',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
+  }));
+  assert.equal(result.operation, 'TEXT_TO_IMAGE');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    model: 'image-model-v1',
+    prompt: '生成一张白色马克杯的纯白背景产品图',
+    n: 1,
+    size: '1024x1024',
+  });
+  await assert.rejects(
+    client.probe(request({
+      idempotencyKey: 'probe-cost-control-invalid-1',
+      quotedCostUsd: 0.11,
+      maximumCostUsd: 0.10,
+    })),
+    (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_INPUT_INVALID',
+  );
+  assert.equal(calls.length, 1, 'invalid quote must fail before Provider I/O');
+});
+
+test('rejects a capability probe when cost control is omitted before Provider I/O', async () => {
+  let fetchCalls = 0;
+  const { client } = loadClient({
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({ data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }] });
+    },
+  });
+  await assert.rejects(
+    client.probe(request({
+      idempotencyKey: 'probe-cost-control-missing-1',
+      quotedCostUsd: null,
+      maximumCostUsd: null,
+    })),
+    (error) => error && error.code === 'SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED',
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test('accepts shop-only readiness for capability probes but never for normal generation', async () => {
@@ -1279,7 +1340,11 @@ test('does not commit probe evidence when the session key rotates during Provide
     evidence: [],
     fetchImpl: async () => new Promise((resolve) => { release = resolve; }),
   });
-  const pending = loaded.client.probe(request({ idempotencyKey: 'probe-key-rotation-1' }));
+  const pending = loaded.client.probe(request({
+    idempotencyKey: 'probe-key-rotation-1',
+    quotedCostUsd: 0.08,
+    maximumCostUsd: 0.10,
+  }));
   while (!release) await new Promise((resolve) => setTimeout(resolve, 0));
   loaded.rotateCredential();
   release(jsonResponse({ data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }] }));
@@ -1329,7 +1394,9 @@ test('discards a completed result and probe evidence when Provider consent is re
     const input = request({
       idempotencyKey: capabilityProbe ? 'probe-permission-revoked-1' : 'generate-permission-revoked-1',
     });
-    const pending = capabilityProbe ? loaded.client.probe(input) : loaded.client.generate(input);
+    const pending = capabilityProbe
+      ? loaded.client.probe({ ...input, quotedCostUsd: 0.08, maximumCostUsd: 0.10 })
+      : loaded.client.generate(input);
     while (!release) await new Promise((resolve) => setTimeout(resolve, 0));
     await loaded.permissionBroker.removeOriginPermission('https://relay.example/v1');
     release(jsonResponse({ data: [{ b64_json: Buffer.from(pngBytes).toString('base64') }] }));

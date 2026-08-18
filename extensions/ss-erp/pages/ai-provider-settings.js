@@ -95,6 +95,10 @@
     revokePermissionBtn: byId('revokePermissionBtn'),
     permissionReason: byId('permissionReason'),
     capabilitySummary: byId('capabilitySummary'),
+    capabilityPromptInput: byId('capabilityPromptInput'),
+    capabilityQuotedCostInput: byId('capabilityQuotedCostInput'),
+    capabilityMaximumCostInput: byId('capabilityMaximumCostInput'),
+    capabilityCostReason: byId('capabilityCostReason'),
     capabilityRows: byId('capabilityRows'),
     capabilityLiveRegion: byId('capabilityLiveRegion'),
   };
@@ -128,6 +132,7 @@
       SS_ERP_BYOK_READINESS_PROFILE_UNAVAILABLE: '当前档案未启用该能力。',
       SS_ERP_BYOK_PROVIDER_OPERATION_UNSUPPORTED: '该能力的 Provider 适配尚未开放。',
       SS_ERP_BYOK_PROVIDER_CAPABILITY_REQUIRED: '需要先完成当前模型能力验证。',
+      SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED: '请先填写当前 Provider 报价和单次最高费用，且报价不得超过上限。',
       SS_ERP_BYOK_PERMISSION_GESTURE_REQUIRED: '请直接点击授权按钮后重试。',
       SS_ERP_BYOK_PERMISSION_READINESS_EXPIRED: '授权许可已过期，正在重新校验。',
       SS_ERP_BYOK_PERMISSION_NOT_ALLOWED: 'ERP 管理员尚未允许该 Provider 来源。',
@@ -430,13 +435,52 @@
     if (!hasKey) return '请先加载当前会话 API Key';
     if (!granted) return '请先授权精确 Provider 来源';
     if (!state.selectedShopId) return '请选择 ERP 授权店铺';
+    if (operation === 'TEXT_TO_IMAGE') {
+      var controlled = controlledTextProbe();
+      if (!controlled.ready) return controlled.reason;
+    }
     return '可以验证当前 endpoint、模型与能力组合';
+  }
+
+  function controlledTextProbe() {
+    var prompt = String(nodes.capabilityPromptInput.value || '').normalize('NFKC').trim();
+    var quoteText = String(nodes.capabilityQuotedCostInput.value || '').trim();
+    var maximumText = String(nodes.capabilityMaximumCostInput.value || '').trim();
+    var moneyPattern = /^(?:0|[1-9]\d{0,3})(?:\.\d{1,6})?$/u;
+    if (!prompt || prompt.length > 8000) {
+      return { ready: false, reason: '请输入本次文生图验证使用的提示词' };
+    }
+    if (!moneyPattern.test(quoteText)) {
+      return { ready: false, reason: '请录入 Provider 控制台当前 USD 报价' };
+    }
+    if (!moneyPattern.test(maximumText)) {
+      return { ready: false, reason: '请录入有效的单次最高费用' };
+    }
+    var quotedCostUsd = Number(quoteText);
+    var maximumCostUsd = Number(maximumText);
+    if (!Number.isFinite(quotedCostUsd) || !Number.isFinite(maximumCostUsd)
+      || quotedCostUsd <= 0 || maximumCostUsd <= 0
+      || quotedCostUsd > 1000 || maximumCostUsd > 1000) {
+      return { ready: false, reason: '报价和单次最高费用必须为有效的正数' };
+    }
+    if (quotedCostUsd > maximumCostUsd) {
+      return { ready: false, reason: 'Provider 报价超过单次最高费用，已禁止发送' };
+    }
+    return {
+      ready: true,
+      reason: '报价已受上限约束；Provider 实际账单仍需单独核对',
+      prompt: prompt,
+      quotedCostUsd: quotedCostUsd,
+      maximumCostUsd: maximumCostUsd,
+    };
   }
 
   function renderCapabilities() {
     var profile = selectedProfile();
     var hasKey = Boolean(state.profileState && state.profileState.hasKey);
     var granted = Boolean(state.permission && state.permission.granted);
+    var textProbe = controlledTextProbe();
+    nodes.capabilityCostReason.textContent = textProbe.reason;
     var currentEvidence = 0;
     nodes.capabilityRows.querySelectorAll('[data-operation]').forEach(function (row) {
       var operation = row.dataset.operation;
@@ -470,7 +514,8 @@
       action.disabled = state.loading || Boolean(state.action)
         || !profile || state.dirty || !profile.allowedOperations.includes(operation)
         || !IMPLEMENTED_OPERATIONS.has(operation) || !hasKey || !granted
-        || !state.selectedShopId || Boolean(evidence);
+        || !state.selectedShopId || Boolean(evidence)
+        || (operation === 'TEXT_TO_IMAGE' && !textProbe.ready);
     });
     setBadge(
       nodes.capabilitySummary,
@@ -893,6 +938,13 @@
     var operation = row && row.dataset.operation;
     var profile = selectedProfile();
     if (!profile || !IMPLEMENTED_OPERATIONS.has(operation)) return;
+    var textProbe = operation === 'TEXT_TO_IMAGE' ? controlledTextProbe() : null;
+    if (textProbe && !textProbe.ready) {
+      var costError = new Error('SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED');
+      costError.code = 'SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED';
+      setPageStatus(errorText(costError), 'error');
+      return;
+    }
     var epoch = state.selectionEpoch;
     state.action = 'probe-' + operation;
     button.disabled = true;
@@ -909,6 +961,11 @@
         operation: operation,
         idempotencyKey: newProbeId(),
         readiness: ready,
+        ...(textProbe ? {
+          prompt: textProbe.prompt,
+          quotedCostUsd: textProbe.quotedCostUsd,
+          maximumCostUsd: textProbe.maximumCostUsd,
+        } : {}),
       });
       var nextProfileState = await client.getProfileState(profile.id);
       if (epoch === state.selectionEpoch && state.selectedProfileId === profile.id) {
@@ -995,6 +1052,9 @@
   nodes.requestPermissionBtn.addEventListener('click', requestPermission);
   nodes.revokePermissionBtn.addEventListener('click', revokePermission);
   nodes.capabilityRows.addEventListener('click', testCapability);
+  nodes.capabilityPromptInput.addEventListener('input', renderProfileState);
+  nodes.capabilityQuotedCostInput.addEventListener('input', renderProfileState);
+  nodes.capabilityMaximumCostInput.addEventListener('input', renderProfileState);
   if (global.chrome && global.chrome.runtime && global.chrome.runtime.onMessage
     && typeof global.chrome.runtime.onMessage.addListener === 'function') {
     global.chrome.runtime.onMessage.addListener(handleDeviceSessionInvalidated);

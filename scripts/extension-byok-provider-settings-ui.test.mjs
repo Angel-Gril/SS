@@ -152,7 +152,9 @@ function createPageHarness(options = {}) {
     'profileNameInput', 'baseUrlInput', 'modelInput', 'profileDirtyState', 'saveProfileBtn',
     'sessionKeyForm', 'apiKeyInput', 'setSessionKeyBtn', 'clearSessionKeyBtn', 'keyStatus',
     'permissionStatus', 'providerOrigin', 'requestPermissionBtn', 'revokePermissionBtn',
-    'permissionReason', 'capabilitySummary', 'capabilityRows', 'capabilityLiveRegion',
+    'permissionReason', 'capabilitySummary', 'capabilityPromptInput',
+    'capabilityQuotedCostInput', 'capabilityMaximumCostInput', 'capabilityCostReason',
+    'capabilityRows', 'capabilityLiveRegion',
   ];
   const nodes = Object.fromEntries(ids.map((id) => [id, new FixtureElement('div', id)]));
   for (const id of [
@@ -165,6 +167,10 @@ function createPageHarness(options = {}) {
   nodes.baseUrlInput.tagName = 'INPUT';
   nodes.modelInput.tagName = 'INPUT';
   nodes.apiKeyInput.tagName = 'INPUT';
+  nodes.capabilityPromptInput.tagName = 'TEXTAREA';
+  nodes.capabilityQuotedCostInput.tagName = 'INPUT';
+  nodes.capabilityMaximumCostInput.tagName = 'INPUT';
+  nodes.capabilityMaximumCostInput.value = '0.10';
 
   const operationInputs = [
     'TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'FULL_EDIT', 'INPAINT',
@@ -641,6 +647,34 @@ test('accepts capability evidence only for the live policy, mode, operation and 
     '已验证',
   );
   assert.equal(editReady.nodes.capabilitySummary.textContent, '1 项有效证据');
+});
+
+test('requires a bounded custom text prompt and Provider quote before dispatch', async () => {
+  const harness = createPageHarness();
+  await settle();
+  const row = harness.capabilityRows.get('TEXT_TO_IMAGE');
+  const button = row.fields['[data-action="test-capability"]'];
+  assert.equal(button.disabled, true);
+
+  harness.nodes.capabilityPromptInput.value = '生成一张白色马克杯的纯白背景产品图';
+  harness.nodes.capabilityQuotedCostInput.value = '0.11';
+  harness.nodes.capabilityMaximumCostInput.value = '0.10';
+  harness.nodes.capabilityPromptInput.dispatch('input');
+  await settle();
+  assert.equal(button.disabled, true);
+  assert.match(harness.nodes.capabilityCostReason.textContent, /超过单次最高费用/u);
+
+  harness.nodes.capabilityQuotedCostInput.value = '0.08';
+  harness.nodes.capabilityQuotedCostInput.dispatch('input');
+  await settle();
+  assert.equal(button.disabled, false);
+  harness.nodes.capabilityRows.dispatch('click', { target: button });
+  await settle(12);
+  const call = harness.calls.find(([name]) => name === 'testCapability');
+  assert.ok(call, 'text-to-image capability request should be dispatched');
+  assert.equal(call[1].prompt, '生成一张白色马克杯的纯白背景产品图');
+  assert.equal(call[1].quotedCostUsd, 0.08);
+  assert.equal(call[1].maximumCostUsd, 0.1);
 });
 
 test('requires explicit confirmation before dirty profile state is replaced', async () => {

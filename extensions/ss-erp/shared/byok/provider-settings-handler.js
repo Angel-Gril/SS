@@ -125,6 +125,19 @@
     return value;
   }
 
+  function optionalMoneyUsd(value) {
+    if (value == null) return null;
+    if (typeof value !== 'number' || !Number.isFinite(value)
+      || value <= 0 || value > 1000) {
+      throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+    }
+    var normalized = Math.round(value * 1000000) / 1000000;
+    if (normalized !== value) {
+      throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+    }
+    return normalized;
+  }
+
   function isoDate(value, nullable) {
     if (nullable && (value == null || value === '')) return null;
     var parsed = value instanceof Date ? new Date(value.getTime()) : new Date(value);
@@ -307,6 +320,17 @@
       || result.requestMode !== expected.requestMode
       || result.policyRevision !== expected.policyRevision) {
       throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_OUTPUT_INVALID');
+    }
+    if (expected.quotedCostUsd !== null || expected.maximumCostUsd !== null) {
+      if (expected.quotedCostUsd === null || expected.maximumCostUsd === null
+        || expected.quotedCostUsd > expected.maximumCostUsd) {
+        throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_OUTPUT_INVALID');
+      }
+      result.costControl = {
+        currency: 'USD',
+        quotedCostUsd: expected.quotedCostUsd,
+        maximumCostUsd: expected.maximumCostUsd,
+      };
     }
     return result;
   }
@@ -680,12 +704,26 @@
     handlers[messageTypes.TEST_CAPABILITY] = guarded(async function (context) {
       var input = payload(
         context,
-        ['profileId', 'operation', 'idempotencyKey'],
+        [
+          'profileId', 'operation', 'idempotencyKey', 'prompt',
+          'quotedCostUsd', 'maximumCostUsd',
+        ],
         ['profileId', 'operation', 'idempotencyKey'],
       );
       var id = profileId(input.profileId);
       var requestedOperation = operation(input.operation, schema);
       var idempotencyKey = profileId(input.idempotencyKey);
+      var prompt = input.prompt == null ? null : text(input.prompt, 8000);
+      var quotedCostUsd = optionalMoneyUsd(input.quotedCostUsd);
+      var maximumCostUsd = optionalMoneyUsd(input.maximumCostUsd);
+      if ((quotedCostUsd === null) !== (maximumCostUsd === null)
+        || (quotedCostUsd !== null && quotedCostUsd > maximumCostUsd)) {
+        throw handlerError('SS_ERP_BYOK_PROVIDER_SETTINGS_INPUT_INVALID');
+      }
+      if (requestedOperation === 'TEXT_TO_IMAGE'
+        && (prompt === null || quotedCostUsd === null || maximumCostUsd === null)) {
+        throw handlerError('SS_ERP_BYOK_PROVIDER_COST_CONTROL_REQUIRED');
+      }
       var binding = context && context.authorization && context.authorization.readiness
         && context.authorization.readiness.binding;
       var selected = await loadProfile(id);
@@ -698,17 +736,20 @@
       var result = await probe({
         profileId: id,
         operation: requestedOperation,
-        prompt: CAPABILITY_PROMPT,
+        prompt: prompt || CAPABILITY_PROMPT,
         negativePrompt: null,
         size: selected.preferences.defaultSize,
         idempotencyKey: idempotencyKey,
         readinessBinding: binding,
+        ...(quotedCostUsd === null ? {} : { quotedCostUsd, maximumCostUsd }),
       });
       return projectProbe(result, {
         profileId: id,
         operation: requestedOperation,
         requestMode: REQUEST_MODE_BY_OPERATION[requestedOperation],
         policyRevision: binding.policyRevision,
+        quotedCostUsd,
+        maximumCostUsd,
       }, schema);
     });
 
