@@ -6,32 +6,33 @@ This project can keep the current single-server systemd model. There are three s
 2. direct Git checkout deployment at `/opt/ss-erp`
 3. release directory deployment with `/opt/ss-erp/current`
 
-## Current Production Release (2026-08-17)
+## Current Production Release (2026-08-20)
 
 - Both COM and CN production VPS deployments are bound to immutable commit
-  `97326fdaeb2ab866960aa392456941346567268a`. Each regional website publication pointer is active and
-  its official distribution verifier passes.
-- Extension `1.0.310` is externally signed with Ed25519 key ID
-  `ss-erp-extension-release-2026-08-02-01`. The fixed BINI profile completed the same-path
-  `1.0.308 -> 1.0.310` upgrade without changing extension ID
-  `nkkemglcckgmhmcfnjjmcfbdhciafahl`; active-worker attestation and the live Unicode smoke passed.
-- The dual-region publication summary has SHA-256
-  `d5c2893418d0805962e8c12cfa8f16efe6c582ad3bfa86b099d8181405240d7a`, and
-  `same-path-upgrade-closure-1.0.310.json` has SHA-256
-  `1220c96f1e486d27666afd4f9e8d36b90953331035074c57c767506b4fc71a2e`. A stale 1.0.308 Worker cache
-  left after atomic replacement was cleared with a trusted `chrome://extensions` reload; the
-  remediation receipt has SHA-256
-  `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`. The original evidence remains
-  in the operator-controlled private release directory and is not committed.
-- No Provider request, ERP ingest/publish, or Ozon write was executed by this production change. CN
-  retains its disabled pilot configuration. COM restored the pre-deploy extension hosted/BYOK flags
-  and `global` BYOK policy, while the source workflow, AI Media V2, and Ozon Publisher V2 remain off.
-  Before a real pilot, the COM BYOK policy must be narrowed to an exact owner/shop/device/origin/operation
-  and separately approved with the input revision, a new offer prefix, rollback command, and responsible
-  operator.
+  `d27b3ad855bb7bc373cb168b2861100c4aeea61e`. Application services are active and `/ready`
+  reports database and Redis readiness. Extension `1.0.311` is deployed dark; the website
+  publication pointer remains on the previously approved `1.0.310` release.
+- The approved deployment run is `rel04-d27b3ad8-311-20260819`, using deployment helper
+  `83fe9f907ee9189cbce82d7dd6e4780f2539607c64260b2d749e5a987cd6c868`. The dual-region summary
+  SHA-256 is `4da008349ff0de62c85bea2a35df6157500eab6f5a29950dfa2f36f7f554fd06`.
+  The externally signed candidates use Ed25519 key ID `ss-erp-extension-release-2026-08-02-01`;
+  COM/CN signature SHA-256 values are
+  `f566956d399a8e577844bd7a7cec2a399e5a0813bf25b60ca09e741f243c289b` and
+  `e89f25a983db42c533b776598f04c6570dab6e60d928947d03d48a8881043b07`.
+  Target-bound backup/restore authentication, 146 migration checks, service restart, health
+  checks, and the `7/32` REL-04 dark canary passed. COM's eight AI/BYOK settings were temporarily
+  darkened with revision+value-hash CAS and restored.
+- CN backup/restore evidence is currently local-only because remote backup storage is not
+  configured. This did not block the approved dark deployment, but it remains an operational
+  hardening item before long-term production operation.
+- The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed.
+  They require a separate approval and must remain independent from website publication.
+- No Provider request, ERP ingest/publish, Ozon write, or pilot operation was executed. Before a
+  real pilot, narrow the COM BYOK policy to the exact owner/shop/device/origin/operation and obtain
+  separate approval for the draft revision, offer prefix, rollback command, and responsible operator.
 
-Any later documentation-only commit records this state but does not change the production release
-binding to `97326fdaeb2ab866960aa392456941346567268a`.
+Any later documentation-only commit records this state; it does not change the production release
+binding or activate the `1.0.311` website pointer.
 
 Do not mix the three in one deploy. First identify which path systemd is currently using:
 

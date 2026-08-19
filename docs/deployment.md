@@ -2,27 +2,27 @@
 
 本文档描述云端 SaaS 部署骨架。本地 Windows 离线包继续使用 `build/scripts`，不要和云端部署混用。
 
-## 当前生产发布（2026-08-17）
+## 当前生产发布（2026-08-20）
 
-- COM 与 CN 两台生产 VPS 均运行不可变应用/扩展发布提交
-  `97326fdaeb2ab866960aa392456941346567268a`；官网 publication pointer 已分别激活并通过正式分发 verifier。
-- 当前扩展版本为 `1.0.310`，使用 Ed25519 key ID
-  `ss-erp-extension-release-2026-08-02-01` 的外部 release 签名。固定 BINI 配置已完成
-  `1.0.308 -> 1.0.310` 同路径升级，扩展 ID 保持
-  `nkkemglcckgmhmcfnjjmcfbdhciafahl`，活动 Worker 和 Unicode smoke 均通过。
-- 双区域 publication 汇总的 SHA-256 为
-  `d5c2893418d0805962e8c12cfa8f16efe6c582ad3bfa86b099d8181405240d7a`；同路径升级闭环
-  `same-path-upgrade-closure-1.0.310.json` 的 SHA-256 为
-  `1220c96f1e486d27666afd4f9e8d36b90953331035074c57c767506b4fc71a2e`。原子替换后残留的
-  1.0.308 Worker 缓存已通过受信的 `chrome://extensions` reload 清除，处置回执 SHA-256 为
-  `4916ed3757a5faaf3e20a02f58ff78df05caf6dc518c8d7aadd14ced6debbd61`。原始证据保留在操作员控制的私有发布目录，不提交仓库。
-- 本次生产变更没有执行 Provider 请求、ERP ingest/publish 或 Ozon 写入。CN 的相关试点配置保持关闭；COM
-  恢复了部署前已有的扩展 hosted/BYOK 开关与 `global` BYOK 策略，但来源工作流、AI Media V2 和 Ozon
-  Publisher V2 仍关闭。执行真实试点前必须先把 COM BYOK 策略收紧到精确的 owner/shop/device/origin/operation，
-  并单独批准输入 revision、全新的 offer 前缀、回滚命令和责任操作员。
+- COM 与 CN 两台生产 VPS 均运行不可变提交
+  `d27b3ad855bb7bc373cb168b2861100c4aeea61e`；扩展 `1.0.311` 已部署但保持暗态，官网
+  publication pointer 仍为已发布的 `1.0.310`。
+- 部署 Run ID 为 `rel04-d27b3ad8-311-20260819`，helper SHA-256 为
+  `83fe9f907ee9189cbce82d7dd6e4780f2539607c64260b2d749e5a987cd6c868`。双区域部署摘要
+  SHA-256 为 `4da008349ff0de62c85bea2a35df6157500eab6f5a29950dfa2f36f7f554fd06`；备份/恢复
+  认证、146 migrations、服务健康检查和 `7/32` REL-04 暗态 canary 已通过。
+- 1.0.311 候选使用 Ed25519 key ID `ss-erp-extension-release-2026-08-02-01`；COM/CN 签名
+  SHA-256 分别为 `f566956d399a8e577844bd7a7cec2a399e5a0813bf25b60ca09e741f243c289b` 和
+  `e89f25a983db42c533b776598f04c6570dab6e60d928947d03d48a8881043b07`。
+- CN 当前仅有本地备份，远端备份存储尚未配置。这不阻塞已批准的暗部署，但属于长期生产运维前
+  仍需处理的加固项。
+- 1.0.311 的 BINI 同路径升级、活动 Worker/Unicode 闭环及官网 publication 尚未执行，均需
+  独立精确批准。部署不会自动切换官网 pointer。
+- 本次变更未执行 Provider 请求、ERP ingest/publish、Ozon 写入或试点操作。真实试点前仍须
+  将 COM BYOK 策略收紧到精确 owner/shop/device/origin/operation，并绑定草稿 revision、全新
+  offer 前缀、回滚命令和责任操作员。
 
-后续纯文档提交只记录上述事实，不改变生产部署和扩展候选对
-`97326fdaeb2ab866960aa392456941346567268a` 的不可变绑定。
+后续纯文档提交只记录上述事实，不改变生产部署、功能开关或官网 pointer。
 
 ## 运行模式
 
