@@ -29,7 +29,9 @@ This project can keep the current single-server systemd model. There are three s
   hardening item before long-term production operation.
 - The 1.0.311 publication receipt and local final verifier were generated, but the DNS-quorum
   closure's read-only remote verifiers did not close: COM still reports BYOK settings as non-dark,
-  and CN reports backup/restore evidence older than 36 hours. No pointer rollback was attempted.
+  and CN reports backup/restore evidence older than 36 hours. The prior COM darken/restore cycle
+  restored values but advanced all eight config revisions by two, so its old CAS-bound wrapper cannot
+  be reused. No pointer rollback was attempted.
   The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed;
   they require a separate approval and must remain independent from website publication.
 - No Provider request, ERP ingest/publish, Ozon write, or pilot operation was executed. Before a

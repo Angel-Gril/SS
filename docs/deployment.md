@@ -20,7 +20,8 @@
   仍需处理的加固项。
 - 1.0.311 的官网公开分发 receipt 和本地最终 verifier 已生成；DNS-quorum closure 的两端
   只读 VPS verifier 未闭合：COM 当前暗态门禁要求配置仍为 dark，CN 还报告部署备份/恢复证明
-  已超过 36 小时。两端 pointer 保持目标 approval，未回滚。BINI 同路径升级及活动
+  已超过 36 小时。上一次 COM 暗化/恢复已恢复原值，但八项配置 revision 各增加 2，原 closure
+  wrapper 的旧 revision 绑定不可重用。两端 pointer 保持目标 approval，未回滚。BINI 同路径升级及活动
   Worker/Unicode 闭环仍未执行，需独立精确批准。
 - 本次变更未执行 Provider 请求、ERP ingest/publish、Ozon 写入或试点操作。真实试点前仍须
   将 COM BYOK 策略收紧到精确 owner/shop/device/origin/operation，并绑定草稿 revision、全新

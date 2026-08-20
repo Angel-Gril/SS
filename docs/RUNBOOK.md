@@ -9,7 +9,8 @@ COM/CN 生产应用均绑定提交 `d27b3ad855bb7bc373cb168b2861100c4aeea61e`，
 `rel04-d27b3ad8-311-20260819`，`7/32` REL-04 暗态 canary、备份/恢复认证、146 migrations
 和服务健康检查已通过。官网公开分发 receipt 与本地最终 verifier 已生成，但 DNS-quorum closure
 的 COM/CN 只读 VPS verifier 未闭合（COM 配置当前非暗态；CN 备份/恢复证明超过 36 小时）；pointer
-未回滚。1.0.311 的 BINI 同路径升级和活动 Worker/Unicode 闭环尚未执行，必须分别取得精确授权。
+未回滚。上一次 COM 暗化/恢复已恢复原值但使八项配置 revision 各增加 2，旧 closure wrapper
+不可重用。1.0.311 的 BINI 同路径升级和活动 Worker/Unicode 闭环尚未执行，必须分别取得精确授权。
 本次生产变更未执行 Provider 请求、ERP ingest/publish 或 Ozon
 写入；真实试点仍需绑定精确 owner/shop/device/origin/operation、草稿 revision、全新 offer 前缀、
 回滚命令和责任操作员。CN 远端备份存储尚未配置，当前恢复证据仅绑定本地备份。后续纯文档提交
