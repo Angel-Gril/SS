@@ -18,10 +18,22 @@
   `e89f25a983db42c533b776598f04c6570dab6e60d928947d03d48a8881043b07`。
 - CN 当前仅有本地备份，远端备份存储尚未配置。这不阻塞已批准的暗部署，但属于长期生产运维前
   仍需处理的加固项。
-- 1.0.311 的官网公开分发 receipt 和本地最终 verifier 已生成；DNS-quorum closure 的两端
-  只读 VPS verifier 未闭合：COM 当前暗态门禁要求配置仍为 dark，CN 还报告部署备份/恢复证明
-  已超过 36 小时。上一次 COM 暗化/恢复已恢复原值，但八项配置 revision 各增加 2，原 closure
-  wrapper 的旧 revision 绑定不可重用。两端 pointer 保持目标 approval，未回滚。BINI 同路径升级及活动
+- 1.0.311 的 DNS-quorum publication closure 已完成。修正版 publication helper SHA-256 为
+  `b2bd6f7f825e9308b91d81ea21d0037039930d65593077a42e02e11ca701ab01`，rollout-preserve
+  wrapper SHA-256 为 `1d4b48d6d8bca542f5dc6d0a61fdf97d668f0a9ed7eed98a0985d29c6a919d04`，DNS
+  quorum evidence SHA-256 为 `9cc22f7dad6882cf549eb7fd77d6442093d7db82642460b28398fc148902921c`。
+  Run ID 为 `rel04-d27b3ad8-311-publication-closure-dns-r3-20260820`。COM/CN 只读远程
+  verifier 均 `PASS`（0 failures、1 warning）；唯一 warning 是远端备份存储尚未配置。
+  双区域 publication summary SHA-256 为
+  `000d9800e8f7dadd45032db2d3763f26c436eabe49ea87671e7e1f552abd81bb`。
+- 本次 closure 刷新了目标绑定备份/恢复证明：COM attestation SHA-256 为
+  `6ab3174159a13f1622dc4d93a220a1f9b1158fcab857780da1355066c7777f4b`（142 restore tables，
+  backup artifact `45e53ae8498725202c2454793c2603812721ef68fd864ccd0a29dcc5ca6a8836`）；CN
+  attestation SHA-256 为 `0b767a21d3e8e810c781cbceb4c34d1a49bc579543692aa06e7a44d66554841c`
+  （141 restore tables，backup artifact `d0529fce515436060c90a2043466b046cdbbb85ca0cbc393249457755073711a`）。
+  临时恢复库均已清理，未修改业务库。
+- COM 暗化/恢复 CAS 已将八项配置 revision 各推进 2，值哈希恢复为快照值；因此旧 revision
+  绑定 wrapper 不可复用，后续暗态操作必须重新生成并核对 helper。BINI 同路径升级及活动
   Worker/Unicode 闭环仍未执行，需独立精确批准。
 - 本次变更未执行 Provider 请求、ERP ingest/publish、Ozon 写入或试点操作。真实试点前仍须
   将 COM BYOK 策略收紧到精确 owner/shop/device/origin/operation，并绑定草稿 revision、全新

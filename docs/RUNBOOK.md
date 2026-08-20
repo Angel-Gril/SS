@@ -7,9 +7,17 @@ COM/CN 生产应用均绑定提交 `d27b3ad855bb7bc373cb168b2861100c4aeea61e`，
 `a65fa010239033550694437c97844f943648cdc6f53f0c82d622684b7ca5d4d5`，CN approval
 `0e481fb68068409a57997c087f98711cb072c86a06c7f0e82fe4b9d9ab86f4f0`）。部署 Run ID 为
 `rel04-d27b3ad8-311-20260819`，`7/32` REL-04 暗态 canary、备份/恢复认证、146 migrations
-和服务健康检查已通过。官网公开分发 receipt 与本地最终 verifier 已生成，但 DNS-quorum closure
-的 COM/CN 只读 VPS verifier 未闭合（COM 配置当前非暗态；CN 备份/恢复证明超过 36 小时）；pointer
-未回滚。上一次 COM 暗化/恢复已恢复原值但使八项配置 revision 各增加 2，旧 closure wrapper
+和服务健康检查已通过。DNS-quorum publication closure 已完成：Run ID 为
+`rel04-d27b3ad8-311-publication-closure-dns-r3-20260820`，修正版 publication helper
+`b2bd6f7f825e9308b91d81ea21d0037039930d65593077a42e02e11ca701ab01`，wrapper
+`1d4b48d6d8bca542f5dc6d0a61fdf97d668f0a9ed7eed98a0985d29c6a919d04`，DNS quorum
+`9cc22f7dad6882cf549eb7fd77d6442093d7db82642460b28398fc148902921c`。COM/CN 只读远程 verifier
+均 `PASS`（0 failures、1 warning）；唯一 warning 是远端备份存储尚未配置。publication summary
+SHA-256 为 `000d9800e8f7dadd45032db2d3763f26c436eabe49ea87671e7e1f552abd81bb`。
+本次刷新后的 COM/CN backup attestation SHA-256 分别为
+`6ab3174159a13f1622dc4d93a220a1f9b1158fcab857780da1355066c7777f4b` 和
+`0b767a21d3e8e810c781cbceb4c34d1a49bc579543692aa06e7a44d66554841c`；临时恢复库均已清理。
+COM 暗化/恢复 CAS 让八项配置 revision 各增加 2 但值哈希已恢复，旧 revision 绑定 wrapper
 不可重用。1.0.311 的 BINI 同路径升级和活动 Worker/Unicode 闭环尚未执行，必须分别取得精确授权。
 本次生产变更未执行 Provider 请求、ERP ingest/publish 或 Ozon
 写入；真实试点仍需绑定精确 owner/shop/device/origin/operation、草稿 revision、全新 offer 前缀、

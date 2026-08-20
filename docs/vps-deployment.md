@@ -27,11 +27,19 @@ This project can keep the current single-server systemd model. There are three s
 - CN backup/restore evidence is currently local-only because remote backup storage is not
   configured. This did not block the approved dark deployment, but it remains an operational
   hardening item before long-term production operation.
-- The 1.0.311 publication receipt and local final verifier were generated, but the DNS-quorum
-  closure's read-only remote verifiers did not close: COM still reports BYOK settings as non-dark,
-  and CN reports backup/restore evidence older than 36 hours. The prior COM darken/restore cycle
-  restored values but advanced all eight config revisions by two, so its old CAS-bound wrapper cannot
-  be reused. No pointer rollback was attempted.
+- The 1.0.311 DNS-quorum publication closure passed. Run ID is
+  `rel04-d27b3ad8-311-publication-closure-dns-r3-20260820`; publication helper SHA-256 is
+  `b2bd6f7f825e9308b91d81ea21d0037039930d65593077a42e02e11ca701ab01`, rollout-preserve wrapper
+  SHA-256 is `1d4b48d6d8bca542f5dc6d0a61fdf97d668f0a9ed7eed98a0985d29c6a919d04`, and DNS-quorum
+  evidence SHA-256 is `9cc22f7dad6882cf549eb7fd77d6442093d7db82642460b28398fc148902921c`.
+  Both read-only remote verifiers returned `PASS` with 0 failures and 1 warning; the only warning is
+  that remote backup storage is not configured. Publication summary SHA-256 is
+  `000d9800e8f7dadd45032db2d3763f26c436eabe49ea87671e7e1f552abd81bb`.
+- Fresh target-bound backup attestations were verified and temporary restore databases were removed:
+  COM `6ab3174159a13f1622dc4d93a220a1f9b1158fcab857780da1355066c7777f4b` (142 restore tables) and
+  CN `0b767a21d3e8e810c781cbceb4c34d1a49bc579543692aa06e7a44d66554841c` (141 restore tables).
+  The COM darken/restore CAS cycle advanced each of the eight config revisions by two while restoring
+  the original value hashes, so the previous revision-bound wrapper must not be reused.
   The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed;
   they require a separate approval and must remain independent from website publication.
 - No Provider request, ERP ingest/publish, Ozon write, or pilot operation was executed. Before a
