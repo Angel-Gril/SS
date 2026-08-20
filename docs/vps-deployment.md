@@ -11,7 +11,9 @@ This project can keep the current single-server systemd model. There are three s
 - Both COM and CN production VPS deployments are bound to immutable commit
   `d27b3ad855bb7bc373cb168b2861100c4aeea61e`. Application services are active and `/ready`
   reports database and Redis readiness. Extension `1.0.311` is deployed dark; the website
-  publication pointer remains on the previously approved `1.0.310` release.
+  publication pointer is CAS-activated to `1.0.311` (COM approval
+  `a65fa010239033550694437c97844f943648cdc6f53f0c82d622684b7ca5d4d5`, CN approval
+  `0e481fb68068409a57997c087f98711cb072c86a06c7f0e82fe4b9d9ab86f4f0`).
 - The approved deployment run is `rel04-d27b3ad8-311-20260819`, using deployment helper
   `83fe9f907ee9189cbce82d7dd6e4780f2539607c64260b2d749e5a987cd6c868`. The dual-region summary
   SHA-256 is `4da008349ff0de62c85bea2a35df6157500eab6f5a29950dfa2f36f7f554fd06`.
@@ -25,14 +27,17 @@ This project can keep the current single-server systemd model. There are three s
 - CN backup/restore evidence is currently local-only because remote backup storage is not
   configured. This did not block the approved dark deployment, but it remains an operational
   hardening item before long-term production operation.
-- The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed.
-  They require a separate approval and must remain independent from website publication.
+- The 1.0.311 publication receipt and local final verifier were generated, but the DNS-quorum
+  closure's read-only remote verifiers did not close: COM still reports BYOK settings as non-dark,
+  and CN reports backup/restore evidence older than 36 hours. No pointer rollback was attempted.
+  The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed;
+  they require a separate approval and must remain independent from website publication.
 - No Provider request, ERP ingest/publish, Ozon write, or pilot operation was executed. Before a
   real pilot, narrow the COM BYOK policy to the exact owner/shop/device/origin/operation and obtain
   separate approval for the draft revision, offer prefix, rollback command, and responsible operator.
 
 Any later documentation-only commit records this state; it does not change the production release
-binding or activate the `1.0.311` website pointer.
+binding, feature flags, or publication pointer.
 
 Do not mix the three in one deploy. First identify which path systemd is currently using:
 

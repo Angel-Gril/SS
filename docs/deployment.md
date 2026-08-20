@@ -6,7 +6,9 @@
 
 - COM 与 CN 两台生产 VPS 均运行不可变提交
   `d27b3ad855bb7bc373cb168b2861100c4aeea61e`；扩展 `1.0.311` 已部署但保持暗态，官网
-  publication pointer 仍为已发布的 `1.0.310`。
+  publication pointer 已通过 CAS 激活到 `1.0.311`。COM approval SHA-256 为
+  `a65fa010239033550694437c97844f943648cdc6f53f0c82d622684b7ca5d4d5`，CN approval
+  SHA-256 为 `0e481fb68068409a57997c087f98711cb072c86a06c7f0e82fe4b9d9ab86f4f0`。
 - 部署 Run ID 为 `rel04-d27b3ad8-311-20260819`，helper SHA-256 为
   `83fe9f907ee9189cbce82d7dd6e4780f2539607c64260b2d749e5a987cd6c868`。双区域部署摘要
   SHA-256 为 `4da008349ff0de62c85bea2a35df6157500eab6f5a29950dfa2f36f7f554fd06`；备份/恢复
@@ -16,8 +18,10 @@
   `e89f25a983db42c533b776598f04c6570dab6e60d928947d03d48a8881043b07`。
 - CN 当前仅有本地备份，远端备份存储尚未配置。这不阻塞已批准的暗部署，但属于长期生产运维前
   仍需处理的加固项。
-- 1.0.311 的 BINI 同路径升级、活动 Worker/Unicode 闭环及官网 publication 尚未执行，均需
-  独立精确批准。部署不会自动切换官网 pointer。
+- 1.0.311 的官网公开分发 receipt 和本地最终 verifier 已生成；DNS-quorum closure 的两端
+  只读 VPS verifier 未闭合：COM 当前暗态门禁要求配置仍为 dark，CN 还报告部署备份/恢复证明
+  已超过 36 小时。两端 pointer 保持目标 approval，未回滚。BINI 同路径升级及活动
+  Worker/Unicode 闭环仍未执行，需独立精确批准。
 - 本次变更未执行 Provider 请求、ERP ingest/publish、Ozon 写入或试点操作。真实试点前仍须
   将 COM BYOK 策略收紧到精确 owner/shop/device/origin/operation，并绑定草稿 revision、全新
   offer 前缀、回滚命令和责任操作员。
