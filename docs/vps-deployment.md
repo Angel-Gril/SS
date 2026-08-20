@@ -40,8 +40,14 @@ This project can keep the current single-server systemd model. There are three s
   CN `0b767a21d3e8e810c781cbceb4c34d1a49bc579543692aa06e7a44d66554841c` (141 restore tables).
   The COM darken/restore CAS cycle advanced each of the eight config revisions by two while restoring
   the original value hashes, so the previous revision-bound wrapper must not be reused.
-  The 1.0.311 BINI same-path upgrade and active-worker/Unicode closure have not been executed;
-  they require a separate approval and must remain independent from website publication.
+  The COM BINI same-path upgrade `1.0.310 -> 1.0.311` is complete under a separate approval.
+  The installed tree SHA-256 is
+  `3270fbdaa93b1f7ac1df24ae3d1d6329208d66b337462e4d1f772766e46967bb`; the retained previous-tree
+  backup SHA-256 is `5cce7010bcffdeb2e27ca55d12731be9f71f785670786802f2828ea9c15cfbca`.
+  Active-worker receipt SHA-256 is `fbbdc67dd3ed74b816c3cff43eec7865c09ffc2b379069913e9859a787972fb2`,
+  Unicode smoke receipt SHA-256 is `ae28e385e134fa66c8a0c2254d103ced5f2e20eb253c0b590e07e73afccdb705`,
+  and same-path closure SHA-256 is `9260f491007d86494e81546d598bebb9de7ca89d7a16c785206c85ac45b86c66`.
+  The browser profile is idle after verification. CN local managed extension was outside this BINI scope.
 - No Provider request, ERP ingest/publish, Ozon write, or pilot operation was executed. Before a
   real pilot, narrow the COM BYOK policy to the exact owner/shop/device/origin/operation and obtain
   separate approval for the draft revision, offer prefix, rollback command, and responsible operator.

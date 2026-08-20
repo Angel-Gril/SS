@@ -33,8 +33,14 @@
   （141 restore tables，backup artifact `d0529fce515436060c90a2043466b046cdbbb85ca0cbc393249457755073711a`）。
   临时恢复库均已清理，未修改业务库。
 - COM 暗化/恢复 CAS 已将八项配置 revision 各推进 2，值哈希恢复为快照值；因此旧 revision
-  绑定 wrapper 不可复用，后续暗态操作必须重新生成并核对 helper。BINI 同路径升级及活动
-  Worker/Unicode 闭环仍未执行，需独立精确批准。
+  绑定 wrapper 不可复用，后续暗态操作必须重新生成并核对 helper。COM BINI 已在独立批准下
+  完成同路径 `1.0.310 -> 1.0.311` 升级：安装树 SHA-256 为
+  `3270fbdaa93b1f7ac1df24ae3d1d6329208d66b337462e4d1f772766e46967bb`，旧版本 backup 树
+  SHA-256 为 `5cce7010bcffdeb2e27ca55d12731be9f71f785670786802f2828ea9c15cfbca`；active-worker
+  receipt SHA-256 为 `fbbdc67dd3ed74b816c3cff43eec7865c09ffc2b379069913e9859a787972fb2`，Unicode
+  smoke receipt SHA-256 为 `ae28e385e134fa66c8a0c2254d103ced5f2e20eb253c0b590e07e73afccdb705`，
+  same-path closure SHA-256 为 `9260f491007d86494e81546d598bebb9de7ca89d7a16c785206c85ac45b86c66`。
+  CN 本机托管扩展不在本次 BINI 范围内。
 - 本次变更未执行 Provider 请求、ERP ingest/publish、Ozon 写入或试点操作。真实试点前仍须
   将 COM BYOK 策略收紧到精确 owner/shop/device/origin/operation，并绑定草稿 revision、全新
   offer 前缀、回滚命令和责任操作员。

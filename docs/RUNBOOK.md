@@ -18,7 +18,13 @@ SHA-256 为 `000d9800e8f7dadd45032db2d3763f26c436eabe49ea87671e7e1f552abd81bb`�
 `6ab3174159a13f1622dc4d93a220a1f9b1158fcab857780da1355066c7777f4b` 和
 `0b767a21d3e8e810c781cbceb4c34d1a49bc579543692aa06e7a44d66554841c`；临时恢复库均已清理。
 COM 暗化/恢复 CAS 让八项配置 revision 各增加 2 但值哈希已恢复，旧 revision 绑定 wrapper
-不可重用。1.0.311 的 BINI 同路径升级和活动 Worker/Unicode 闭环尚未执行，必须分别取得精确授权。
+不可重用。COM BINI 已在独立批准下完成受管扩展 `1.0.310 -> 1.0.311` 同路径升级；安装树
+SHA-256 为 `3270fbdaa93b1f7ac1df24ae3d1d6329208d66b337462e4d1f772766e46967bb`，旧版本 backup
+树 SHA-256 为 `5cce7010bcffdeb2e27ca55d12731be9f71f785670786802f2828ea9c15cfbca`。active-worker
+receipt SHA-256 为 `fbbdc67dd3ed74b816c3cff43eec7865c09ffc2b379069913e9859a787972fb2`，Unicode smoke
+receipt SHA-256 为 `ae28e385e134fa66c8a0c2254d103ced5f2e20eb253c0b590e07e73afccdb705`，same-path
+closure SHA-256 为 `9260f491007d86494e81546d598bebb9de7ca89d7a16c785206c85ac45b86c66`。本次仅有
+本机受管目录和浏览器 profile 的升级验证；CN 本机扩展不在范围内。
 本次生产变更未执行 Provider 请求、ERP ingest/publish 或 Ozon
 写入；真实试点仍需绑定精确 owner/shop/device/origin/operation、草稿 revision、全新 offer 前缀、
 回滚命令和责任操作员。CN 远端备份存储尚未配置，当前恢复证据仅绑定本地备份。后续纯文档提交
