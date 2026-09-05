@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-3-supply-chain-ci-data-gates
+- authorization_substage: stage-4-maintainability-browser-quality
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-3-supply-chain-ci-data-gates
+- active_substage: stage-4-maintainability-browser-quality
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: ["pnpm audit --registry=https://registry.npmjs.org --audit-level=high --prod: 0 high, 2 moderate, 2 low", "node --test scripts/ci-supply-chain-gates.test.mjs scripts/vps-origin-mode-contract.test.mjs: 15 passed, 1 skipped", "pnpm --filter server test:logistics:postgres: 12 files, 103 passed", "pnpm --filter server test: 391 files passed, 5154 tests passed, 223 skipped", "pnpm typecheck: passed", "pnpm lint: 0 errors, 20 existing warnings", "pnpm --filter server exec prisma validate && prisma format --check: passed", "pnpm --filter server build: passed", "pnpm --filter web build: passed"]
+- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts: 142 passed", "pnpm --filter server test: 391 files passed, 5154 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm typecheck: passed", "pnpm --filter server lint: 0 errors, 20 existing warnings", "pnpm --filter server build: passed", "pnpm --filter web build: passed", "local Chrome CDP Web smoke: /login HTTP 200, title and form observed, no console error/warning events", "extension CDP contracts: 29 passed; live service-worker target unavailable"]
 
 ## 阶段目标与用户流程
 
@@ -87,14 +87,22 @@
 - 当前线上提交和运行健康、真实浏览器全流程、真实 Provider/Ozon 质量仍未验证。
 - 每个子阶段完成后只回写本阶段并形成 checkpoint，不自动扩大到阶段外工作。
 
-## 实施回写
-
-本节随 active_substage 收尾更新；结构通过不替代真实命令证据。
+## stage-3 历史检查点
 
 - actual_result: stage-3-supply-chain-ci-data-gates 已完成；直接依赖与传递依赖高危项已收敛到 0 high，CI audit/Semgrep/Prisma/integration gate 已改为阻断式，物流 PostgreSQL runner 在随机隔离 schema 中完整 replay 146 migrations 并通过 12 个文件 103 tests，schema 已格式化。
 - changed_owners: `apps/server/package.json`、`apps/web/package.json`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`.github/workflows/ci.yml`、`apps/server/scripts/logistics-postgres-integration.mjs`、`scripts/ci-supply-chain-gates.test.mjs`、`apps/server/prisma/schema.prisma`、Fastify trustProxy/Sharp 类型适配和 `source-listing-workflow.postgres.integration.test.ts` fixture。
 - plan_deviation: PostgreSQL integration fixture 原先缺少当前强制的 Ozon import readiness contract，首次 runner 2 tests 失败；按现有单元测试 owner 补齐完整 category/copy/media/pricing/readiness 流程，并把 revision 断言改为数据库不变量 `revision rows === current revision`，第三次 runner 全绿。未修改生产 schema/migration。
 - fresh_evidence: official npm audit 0 high（2 moderate/2 low）；CI/VPS contract 15 passed/1 skipped；server 391 files/5154 passed/223 skipped；logistics PostgreSQL 12 files/103 passed；typecheck/build/web build/Prisma validate+format 均通过；lint 0 errors、20 个既有 warnings。
-- remaining_risk: 2 个 moderate 与 2 个 low 传递依赖公告仍待上游修复或后续专门评估；20 个 lint warnings 未在本阶段扩大处理；Semgrep 由 CI 阻断但本地未执行；真实浏览器全流程、线上健康、真实 Provider/Ozon、生产部署和公开仓库隐私仍未验证。
-- next_substage: stage-4-maintainability-browser-quality
-- git_checkpoint: stage-3 已通过 closeout；随后以单一目的 commit 提交并 push 当前分支，commit hash 在交付回执中记录。
+- git_checkpoint: commit `3a77bb43` 已 push 到 `origin/feat/ai-media-prompt-registry`。
+
+## 实施回写
+
+本节随 active_substage 收尾更新；结构通过不替代真实命令证据。
+
+- actual_result: stage-4-maintainability-browser-quality 已完成；从高冲突 `collect.ts` 提取标题规范化与来源标题解析 owner 到 `services/collect-title-normalizer.ts`，route 通过 re-export 保持现有消费者合同不变，行为无变化证据完整。
+- changed_owners: `apps/server/src/services/collect-title-normalizer.ts`、`apps/server/src/routes/collect.ts`。
+- plan_deviation: 无；未修改用户已有认证、部署文档、preflight 或 CDP launcher 改动。
+- fresh_evidence: characterization `collect-publish-helpers.test.ts` 142 passed；server 全量 391 files/5154 passed/223 skipped；workspace typecheck、server/web build、server lint 均通过；local Chrome CDP `/login` 返回 HTTP 200、标题/表单/3 个输入可见且无 console error/warning；extension CDP contracts 29 passed。
+- remaining_risk: 真实扩展 worker smoke 受 Chrome target 生命周期影响未验证；browse skill 本地 binary 缺少 `server.ts` 未执行；20 个既有 lint warnings、真实线上/Provider/Ozon/生产面仍不在本阶段授权范围。
+- next_substage: none; 后续维护性或真实扩展验收需要新阶段授权。
+- git_checkpoint: stage-4 已通过 closeout；随后以单一目的 commit 提交并 push 当前分支，commit hash 在交付回执中记录。
