@@ -29,6 +29,7 @@ describe('source video transfer shop context', () => {
       sourcePlatform: 'taobao',
       userId: 'user-1',
       shopId: 'shop-1',
+      lookup: async () => [{ address: '1.1.1.1', family: 4 }],
       fetchImpl: async (_url: string, init?: { method?: string }) => {
         if (init?.method === 'HEAD') {
           return {
@@ -95,6 +96,7 @@ describe('source video transfer shop context', () => {
       userId: 'user-1',
       shopId: 'shop-1',
       preferOzonCdn: true,
+      lookup: async () => [{ address: '1.1.1.1', family: 4 }],
       fetchImpl: async (_url: string, init?: { method?: string }) => {
         if (init?.method === 'HEAD') {
           return {

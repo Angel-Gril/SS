@@ -79,7 +79,7 @@ function publicLookupError(hostname: string): NodeJS.ErrnoException {
   });
 }
 
-async function resolvePublicAddresses(
+export async function resolvePublicSourceAddresses(
   hostname: string,
   resolver: SourceAddressResolver,
 ): Promise<SourceAddressRecord[]> {
@@ -122,17 +122,21 @@ export function createValidatedPublicLookup(
   resolver: SourceAddressResolver = async (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
 ): ValidatedPublicLookup {
   return (hostname, options, callback) => {
-    void resolvePublicAddresses(hostname, resolver)
+    void resolvePublicSourceAddresses(hostname, resolver)
       .then((records) => callbackWithRecords(records, options, callback))
       .catch((error) => callback(error as NodeJS.ErrnoException));
   };
+}
+
+export function createPinnedPublicDispatcher(records: SourceAddressRecord[]): Agent {
+  return new Agent({ connect: { lookup: pinnedLookup(records) as never } });
 }
 
 function pinnedLookup(records: SourceAddressRecord[]): ValidatedPublicLookup {
   return (_hostname, options, callback) => callbackWithRecords(records, options, callback);
 }
 
-function normalizedSourceUrl(raw: string): URL {
+export function normalizePublicSourceUrl(raw: string): URL {
   const text = String(raw || '').normalize('NFKC').trim();
   if (!text || text.length > MAX_SOURCE_URL_LENGTH) {
     throw new Error('Source image URL is empty or too long');
@@ -216,7 +220,7 @@ export async function downloadPublicImage(
   const resolver = options.lookup || (async (hostname: string) => (
     dnsLookup(hostname, { all: true, verbatim: true })
   ));
-  const source = normalizedSourceUrl(rawUrl);
+    const source = normalizePublicSourceUrl(rawUrl);
   let current = source;
   let redirectCount = 0;
 
@@ -224,7 +228,7 @@ export async function downloadPublicImage(
     const hostname = current.hostname.replace(/^\[|\]$/g, '');
     const records = isIP(hostname)
       ? [{ address: hostname, family: isIP(hostname) }]
-      : await resolvePublicAddresses(hostname, resolver);
+    : await resolvePublicSourceAddresses(hostname, resolver);
     if (records.some((record) => !isPublicSourceAddress(record.address))) {
       throw publicLookupError(hostname);
     }
@@ -261,7 +265,7 @@ export async function downloadPublicImage(
         const location = response.headers.get('location');
         if (!location) throw new Error('Source image redirect has no location');
         if (redirectCount >= maxRedirects) throw new Error('Source image redirect limit exceeded');
-        current = normalizedSourceUrl(new URL(location, current).href);
+        current = normalizePublicSourceUrl(new URL(location, current).href);
         redirectCount += 1;
         continue;
       }

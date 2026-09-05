@@ -1,6 +1,11 @@
 import { getStorageBackend } from './image-storage.js';
 import { normalizeOzonPublishImageUrl, waitForOzonImageReady } from './ozon-image-resolver.js';
 import sharp from 'sharp';
+import {
+  downloadPublicImage,
+  type PublicImageFetch,
+  type SourceAddressResolver,
+} from './source-public-image-download.js';
 
 export const OZON_RICH_CONTENT_ATTR_ID = 22336;
 export const OZON_LEGACY_RICH_CONTENT_ATTR_ID = 11254;
@@ -638,25 +643,26 @@ export async function transferRichContentImage(
   url: string,
   shopId: string,
   ownerId?: string,
+  options: { fetchImpl?: PublicImageFetch; lookup?: SourceAddressResolver } = {},
 ): Promise<string> {
   const sourceUrl = normalizeImageUrl(url);
   if (!sourceUrl) throw new Error('富内容图片 URL 无效');
-  const res = await fetch(sourceUrl, {
-    method: 'GET',
-    redirect: 'follow',
-    signal: AbortSignal.timeout(15000),
+  const downloaded = await downloadPublicImage(sourceUrl, {
+    maxBytes: 20 * 1024 * 1024,
+    maxRedirects: 0,
+    ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
+    ...(options.lookup ? { lookup: options.lookup } : {}),
   });
-  if (!res.ok) throw new Error(`富内容图片下载失败: HTTP ${res.status}`);
-  const contentType = res.headers.get('content-type') || undefined;
-  if (contentType && !contentType.toLowerCase().startsWith('image/')) {
-    throw new Error(`富内容图片类型无效: ${contentType}`);
-  }
-  const buffer = Buffer.from(await res.arrayBuffer());
   const backend = await getStorageBackend(shopId);
-  const uploaded = await backend.uploadBuffer(buffer, filenameFromUrl(sourceUrl, contentType), contentType, {
+  const uploaded = await backend.uploadBuffer(
+    downloaded.buffer,
+    filenameFromUrl(downloaded.finalUrl, downloaded.contentType),
+    downloaded.contentType,
+    {
     category: 'raw',
     ownerId,
-  });
+    },
+  );
   const normalized = normalizeOzonPublishImageUrl(uploaded.url);
   await waitForOzonImageReady(normalized);
   return normalized;

@@ -1,7 +1,15 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { getOzonCdnStorageBackend, getStorageBackend, type ImageStorageBackend } from './image-storage.js';
 import { isDomesticSourcePlatform } from './source-image-transfer.js';
+import {
+  createPinnedPublicDispatcher,
+  normalizePublicSourceUrl,
+  resolvePublicSourceAddresses,
+  type SourceAddressRecord,
+  type SourceAddressResolver,
+} from './source-public-image-download.js';
 
 const MAX_SOURCE_VIDEO_BYTES = 80 * 1024 * 1024;
 const MAX_TRANSFER_VIDEOS = 4;
@@ -28,6 +36,7 @@ type ResponseLike = {
   url: string;
   headers: { get(name: string): string | null };
   arrayBuffer?: () => Promise<ArrayBuffer | SharedArrayBuffer>;
+  body?: { cancel?: () => Promise<unknown> } | null;
 };
 
 type DownloadedVideoBuffer = {
@@ -92,11 +101,12 @@ export type TransferSourceProductVideosInput = {
   preferOzonCdn?: boolean;
   storageBackend?: ImageStorageBackend;
   fetchImpl?: VideoFetch;
+  lookup?: SourceAddressResolver;
 };
 
 export async function diagnoseSourceVideoUrl(
   rawUrl: unknown,
-  options: { fetchImpl?: VideoFetch } = {},
+  options: { fetchImpl?: VideoFetch; lookup?: SourceAddressResolver } = {},
 ): Promise<SourceVideoUrlDiagnostic> {
   const url = normalizeVideoUrl(rawUrl);
   if (!url) {
@@ -131,7 +141,7 @@ export async function diagnoseSourceVideoUrl(
 
   const fetchImpl = options.fetchImpl || (fetch as VideoFetch);
   try {
-    const diag = await fetchVideoHeadOrRange(url, fetchImpl);
+    const diag = await fetchVideoHeadOrRange(url, fetchImpl, options.lookup);
     const contentLengthNumber = Number(diag.contentLength || 0);
     if (Number.isFinite(contentLengthNumber) && contentLengthNumber > MAX_SOURCE_VIDEO_BYTES) {
       return {
@@ -204,7 +214,10 @@ export async function transferSourceProductVideos(
   for (let offset = 0; offset < originalVideos.length; offset += TRANSFER_CONCURRENCY) {
     const rows = await Promise.all(originalVideos.slice(offset, offset + TRANSFER_CONCURRENCY).map(async (video, batchIndex) => {
       const index = offset + batchIndex;
-      const diag = await diagnoseSourceVideoUrl(video.url, { fetchImpl: input.fetchImpl });
+      const diag = await diagnoseSourceVideoUrl(video.url, {
+        fetchImpl: input.fetchImpl,
+        lookup: input.lookup,
+      });
       if (diag.status === 'ozon_cdn_ready') {
         return { index, video: { ...video, transferStatus: 'ozon_cdn_ready' as const, transferReason: diag.status }, diag, skipped: true as const };
       }
@@ -219,7 +232,14 @@ export async function transferSourceProductVideos(
             ? await getOzonCdnStorageBackend(String(input.shopId || ''))
             : await getStorageBackend(input.shopId);
         }
-        const transferred = await transferSingleSourceVideo(backend, video, input.userId, input.fetchImpl, diag);
+        const transferred = await transferSingleSourceVideo(
+          backend,
+          video,
+          input.userId,
+          input.fetchImpl,
+          diag,
+          input.lookup,
+        );
         return { index, video: transferred.video, diag, backend: transferred.backend };
       } catch (error: any) {
         const reason = transferFailureReason(error);
@@ -274,12 +294,14 @@ async function transferSingleSourceVideo(
   userId: string,
   fetchImpl: VideoFetch = fetch as VideoFetch,
   diagnostic?: SourceVideoUrlDiagnostic,
+  lookupResolver?: SourceAddressResolver,
 ): Promise<{ video: SourceVideo; backend: string }> {
-  const originalUrl = await validateRemoteVideoUrl(video.url, { skipDnsCheck: fetchImpl !== fetch });
+  const originalUrl = normalizePublicSourceUrl(video.url);
   const preferredUrl = normalizeVideoUrl(diagnostic?.finalUrl) || originalUrl.href;
-  const remoteUrl = await validateRemoteVideoUrl(preferredUrl, { skipDnsCheck: fetchImpl !== fetch });
+  const remoteUrl = normalizePublicSourceUrl(preferredUrl);
   const downloaded = await downloadRemoteVideo(remoteUrl, {
     fetchImpl,
+    lookup: lookupResolver,
     refererUrl: originalUrl,
     contentLength: diagnostic?.contentLength,
     contentType: diagnostic?.contentType,
@@ -302,6 +324,7 @@ async function downloadRemoteVideo(
   remoteUrl: URL,
   options: {
     fetchImpl: VideoFetch;
+    lookup?: SourceAddressResolver;
     refererUrl: URL;
     contentLength?: string | null;
     contentType?: string | null;
@@ -332,30 +355,37 @@ async function downloadFullVideo(
   remoteUrl: URL,
   options: {
     fetchImpl: VideoFetch;
+    lookup?: SourceAddressResolver;
     refererUrl: URL;
     contentType?: string | null;
   },
 ): Promise<DownloadedVideoBuffer> {
-  const res = await options.fetchImpl(remoteUrl.href, {
-    redirect: 'follow',
+  const { response: res, finalUrl, close } = await fetchPublicVideoResource(remoteUrl.href, {
+    fetchImpl: options.fetchImpl,
+    lookup: options.lookup,
     signal: AbortSignal.timeout(FULL_DOWNLOAD_TIMEOUT_MS),
     headers: sourceVideoRequestHeaders(options.refererUrl),
   });
+  try {
   if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
   const contentType = normalizeMime(res.headers.get('content-type') || '');
-  const responseUrl = res.url || remoteUrl.href;
+  const responseUrl = finalUrl || res.url || remoteUrl.href;
   if (!isDirectVideoMime(contentType) && !isDirectVideoFileUrl(responseUrl) && !isDirectVideoFileUrl(remoteUrl.href)) {
     throw new Error(`不支持的视频类型: ${contentType || 'unknown'}`);
   }
   const buffer = await readLimitedResponseBuffer(res, MAX_SOURCE_VIDEO_BYTES);
   const mime = isDirectVideoMime(contentType) ? contentType : mimeFromVideoUrl(responseUrl || remoteUrl.href);
   return { buffer, mime };
+  } finally {
+    await close();
+  }
 }
 
 async function downloadVideoByRange(
   remoteUrl: URL,
   options: {
     fetchImpl: VideoFetch;
+    lookup?: SourceAddressResolver;
     refererUrl: URL;
     contentType?: string | null;
   },
@@ -366,16 +396,18 @@ async function downloadVideoByRange(
   for (let start = 0; start < contentLength; start += RANGE_CHUNK_BYTES) {
     const end = Math.min(contentLength - 1, start + RANGE_CHUNK_BYTES - 1);
     const expectedLength = end - start + 1;
-    const res = await options.fetchImpl(remoteUrl.href, {
+    const { response: res, finalUrl, close } = await fetchPublicVideoResource(remoteUrl.href, {
+      fetchImpl: options.fetchImpl,
+      lookup: options.lookup,
       method: 'GET',
-      redirect: 'follow',
       signal: AbortSignal.timeout(RANGE_DOWNLOAD_TIMEOUT_MS),
       headers: sourceVideoRequestHeaders(options.refererUrl, `bytes=${start}-${end}`),
     });
+    try {
     if (!res.ok) throw new Error(`range fetch failed: ${res.status}`);
     const contentType = normalizeMime(res.headers.get('content-type') || '');
     if (contentType) observedMime = contentType;
-    const responseUrl = res.url || remoteUrl.href;
+    const responseUrl = finalUrl || res.url || remoteUrl.href;
     if (!isDirectVideoMime(observedMime) && !isDirectVideoFileUrl(responseUrl) && !isDirectVideoFileUrl(remoteUrl.href)) {
       throw new Error(`不支持的视频类型: ${observedMime || 'unknown'}`);
     }
@@ -390,6 +422,9 @@ async function downloadVideoByRange(
       throw new Error(`range length mismatch: expected ${expectedLength}, got ${buffer.length}`);
     }
     chunks.push(buffer);
+    } finally {
+      await close();
+    }
   }
   const buffer = Buffer.concat(chunks);
   if (buffer.length !== contentLength) {
@@ -401,36 +436,103 @@ async function downloadVideoByRange(
   };
 }
 
-async function fetchVideoHeadOrRange(url: string, fetchImpl: VideoFetch): Promise<{
+async function fetchVideoHeadOrRange(
+  url: string,
+  fetchImpl: VideoFetch,
+  lookupResolver?: SourceAddressResolver,
+): Promise<{
   ok: boolean;
   statusCode?: number;
   contentType?: string | null;
   contentLength?: string | null;
   finalUrl?: string;
 }> {
-  const toDiag = (res: ResponseLike) => ({
+  const toDiag = (res: ResponseLike, finalUrl?: string) => ({
     ok: res.ok,
     statusCode: res.status,
     contentType: res.headers.get('content-type'),
     contentLength: res.headers.get('content-length'),
-    finalUrl: res.url || url,
+    finalUrl: finalUrl || res.url || url,
   });
 
-  const head = toDiag(await fetchImpl(url, {
+  const headRequest = await fetchPublicVideoResource(url, {
+    fetchImpl,
+    lookup: lookupResolver,
     method: 'HEAD',
-    redirect: 'follow',
     signal: AbortSignal.timeout(8000),
     headers: sourceVideoRequestHeaders(new URL(url)),
-  }));
+  });
+  const head = toDiag(headRequest.response, headRequest.finalUrl);
+  await headRequest.close();
   if (head.ok && (isDirectVideoMime(head.contentType) || isDirectVideoFileUrl(head.finalUrl || url))) return head;
 
-  const ranged = toDiag(await fetchImpl(url, {
+  const rangedRequest = await fetchPublicVideoResource(url, {
+    fetchImpl,
+    lookup: lookupResolver,
     method: 'GET',
-    redirect: 'follow',
     signal: AbortSignal.timeout(10000),
     headers: sourceVideoRequestHeaders(new URL(url), 'bytes=0-0'),
-  }));
+  });
+  const ranged = toDiag(rangedRequest.response, rangedRequest.finalUrl);
+  await rangedRequest.close();
   return ranged.ok ? ranged : head;
+}
+
+async function fetchPublicVideoResource(
+  rawUrl: string,
+  options: {
+    fetchImpl: VideoFetch;
+    lookup?: SourceAddressResolver;
+    method?: string;
+    signal: AbortSignal;
+    headers: Record<string, string>;
+  },
+): Promise<{ response: ResponseLike; finalUrl: string; close: () => Promise<void> }> {
+  let current = normalizePublicSourceUrl(rawUrl);
+  const resolver = options.lookup || (async (hostname: string) => (
+    lookup(hostname, { all: true, verbatim: true })
+  ));
+  for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+    const hostname = current.hostname.replace(/^\[|\]$/g, '');
+    const records: SourceAddressRecord[] = isIP(hostname)
+      ? [{ address: hostname, family: isIP(hostname) }]
+      : await resolvePublicSourceAddresses(hostname, resolver);
+    const dispatcher: Agent | undefined = options.fetchImpl === (fetch as VideoFetch)
+      ? createPinnedPublicDispatcher(records)
+      : undefined;
+    let response: ResponseLike;
+    try {
+      response = options.fetchImpl === (fetch as VideoFetch)
+        ? await (undiciFetch(current.href, {
+          method: options.method,
+          redirect: 'manual',
+          signal: options.signal,
+          headers: options.headers,
+          dispatcher,
+        }) as unknown as ResponseLike)
+        : await options.fetchImpl(current.href, {
+          method: options.method,
+          redirect: 'manual',
+          signal: options.signal,
+          headers: options.headers,
+        });
+    } catch (error) {
+      await dispatcher?.close().catch(() => undefined);
+      throw error;
+    }
+    const close = async () => {
+      await response.body?.cancel?.().catch(() => undefined);
+      await dispatcher?.close().catch(() => undefined);
+    };
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return { response, finalUrl: response.url || current.href, close };
+    }
+    const location = response.headers.get('location');
+    await close();
+    if (!location || redirectCount === 5) throw new Error('视频重定向无效或超过上限');
+    current = normalizePublicSourceUrl(new URL(location, current).href);
+  }
+  throw new Error('视频重定向无效');
 }
 
 function normalizeSourceVideoList(value: unknown): SourceVideo[] {
@@ -544,58 +646,6 @@ async function readLimitedResponseBuffer(res: ResponseLike, maxBytes: number): P
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length > maxBytes) throw new Error(`remote video exceeds ${maxBytes} bytes`);
   return buf;
-}
-
-async function validateRemoteVideoUrl(rawUrl: string, options: { skipDnsCheck?: boolean } = {}): Promise<URL> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error('URL 格式错误');
-  }
-
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error('仅支持 http/https 视频 URL');
-  }
-  if (!parsed.hostname || parsed.username || parsed.password) {
-    throw new Error('视频 URL 不允许包含认证信息');
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    throw new Error('不允许抓取本机地址');
-  }
-  if (isIP(hostname) && isPrivateIp(hostname)) {
-    throw new Error('不允许抓取内网地址');
-  }
-  if (options.skipDnsCheck) return parsed;
-
-  const records = await lookup(hostname, { all: true });
-  if (!records.length || records.some((record) => isPrivateIp(record.address))) {
-    throw new Error('不允许抓取内网地址');
-  }
-  return parsed;
-}
-
-function isPrivateIp(address: string): boolean {
-  if (address === '::1') return true;
-  if (address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
-
-  const mapped = address.startsWith('::ffff:') ? address.slice(7) : address;
-  if (isIP(mapped) !== 4) return false;
-
-  const parts = mapped.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-
-  const a = parts[0]!;
-  const b = parts[1]!;
-  if (a === 10 || a === 127 || a === 0) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
-  return false;
 }
 
 function sourceRefererFor(url: URL): string {

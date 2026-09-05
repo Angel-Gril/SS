@@ -1,8 +1,7 @@
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 import sharp from 'sharp';
 import { getStorageBackend } from './image-storage.js';
 import { isLikelyNonImageMediaUrl, sanitizeOzonPublishImageBuffer } from './ozon-image-sanitizer.js';
+import { downloadPublicImage } from './source-public-image-download.js';
 
 const MAX_SOURCE_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_TRANSFER_IMAGES = 20;
@@ -155,19 +154,13 @@ async function transferSingleSourceImage(
   rawUrl: string,
   userId: string,
 ) {
-  const remoteUrl = await validateRemoteImageUrl(rawUrl);
-  const res = await fetch(remoteUrl, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(15000),
-    headers: {
-      'user-agent': 'Mozilla/5.0',
-      referer: sourceRefererFor(remoteUrl),
-    },
+  const downloaded = await downloadPublicImage(rawUrl, {
+    maxBytes: MAX_SOURCE_IMAGE_BYTES,
+    maxRedirects: 0,
   });
-  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-
-  const buf = await readLimitedResponseBuffer(res, MAX_SOURCE_IMAGE_BYTES);
-  const contentType = normalizeMime(res.headers.get('content-type') || '');
+  const remoteUrl = new URL(downloaded.finalUrl);
+  const buf = downloaded.buffer;
+  const contentType = normalizeMime(downloaded.contentType);
   const detected = await sharp(buf).metadata().catch(() => null);
   if (!detected?.format) throw new Error('远程 URL 不是有效图片');
 
@@ -178,90 +171,6 @@ async function transferSingleSourceImage(
   const filename = safeSourceImageFilename(remoteUrl, mime);
   const sanitized = await sanitizeOzonPublishImageBuffer(buf, filename, mime);
   return backend.uploadBuffer(sanitized.buffer, sanitized.filename, sanitized.mimeType, { category: 'raw', ownerId: userId });
-}
-
-async function readLimitedResponseBuffer(res: Response, maxBytes: number): Promise<Buffer> {
-  const contentLength = Number(res.headers.get('content-length') || 0);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error(`remote file exceeds ${maxBytes} bytes`);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > maxBytes) throw new Error(`remote file exceeds ${maxBytes} bytes`);
-    return buf;
-  }
-
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      throw new Error(`remote file exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-
-  return Buffer.concat(chunks, total);
-}
-
-async function validateRemoteImageUrl(rawUrl: string): Promise<URL> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error('URL 格式错误');
-  }
-
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error('仅支持 http/https 图片 URL');
-  }
-  if (!parsed.hostname || parsed.username || parsed.password) {
-    throw new Error('图片 URL 不允许包含认证信息');
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    throw new Error('不允许抓取本机地址');
-  }
-  if (isIP(hostname) && isPrivateIp(hostname)) {
-    throw new Error('不允许抓取内网地址');
-  }
-
-  const records = await lookup(hostname, { all: true });
-  if (!records.length || records.some((record) => isPrivateIp(record.address))) {
-    throw new Error('不允许抓取内网地址');
-  }
-
-  return parsed;
-}
-
-function isPrivateIp(address: string): boolean {
-  if (address === '::1') return true;
-  if (address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
-
-  const mapped = address.startsWith('::ffff:') ? address.slice(7) : address;
-  if (isIP(mapped) !== 4) return false;
-
-  const parts = mapped.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return true;
-  }
-
-  const a = parts[0]!;
-  const b = parts[1]!;
-  if (a === 10 || a === 127 || a === 0) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
-
-  return false;
 }
 
 function normalizeMime(value: string): string {
@@ -302,16 +211,6 @@ function extensionFromMime(mime: string): string {
     default:
       return 'jpg';
   }
-}
-
-function sourceRefererFor(url: URL): string {
-  if (/(?:^|\.)alicdn\.com$/i.test(url.hostname) || /(?:^|\.)1688\.com$/i.test(url.hostname)) {
-    return 'https://detail.1688.com/';
-  }
-  if (/(?:^|\.)pinduoduo\.com$/i.test(url.hostname) || /(?:^|\.)yangkeduo\.com$/i.test(url.hostname)) {
-    return 'https://mobile.yangkeduo.com/';
-  }
-  return `${url.protocol}//${url.hostname}/`;
 }
 
 function shortError(error: unknown): string {

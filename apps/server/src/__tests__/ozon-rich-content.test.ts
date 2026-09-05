@@ -1,4 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const uploadBuffer = vi.fn();
+vi.mock('../services/image-storage.js', () => ({
+  getStorageBackend: vi.fn(async () => ({ uploadBuffer })),
+}));
+vi.mock('../services/ozon-image-resolver.js', () => ({
+  normalizeOzonPublishImageUrl: (value: string) => value,
+  waitForOzonImageReady: vi.fn(async () => undefined),
+}));
 import {
   appendOzonRichContentAttribute,
   buildOzonSizeChartAttribute,
@@ -9,9 +18,27 @@ import {
   planCollectedVideoPublish,
   renderSizeChartSvg,
   resolveOzonSizeChartAttributeDef,
+  transferRichContentImage,
 } from '../services/ozon-rich-content.js';
 
 describe('Ozon rich content publishing', () => {
+  it('rejects a redirect to a private address before uploading rich content bytes', async () => {
+    uploadBuffer.mockReset();
+    const fetchImpl = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: 'http://127.0.0.1:3001/internal' },
+    }));
+
+    await expect(transferRichContentImage(
+      'https://img.example.com/start.jpg',
+      'shop-1',
+      'user-1',
+      { fetchImpl, lookup: async () => [{ address: '1.1.1.1', family: 4 }] },
+    )).rejects.toThrow(/public|private|redirect/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
   it('extracts text and image blocks from collected Ozon rich JSON', () => {
     const parsed = parseCollectedRichContent(JSON.stringify({
       content: [{

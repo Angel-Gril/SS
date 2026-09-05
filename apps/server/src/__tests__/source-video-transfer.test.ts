@@ -4,9 +4,12 @@ import {
   transferSourceProductVideos,
 } from '../services/source-video-transfer.js';
 
+const publicLookup = async () => [{ address: '1.1.1.1', family: 4 }];
+
 describe('source video transfer', () => {
   it('diagnoses direct mp4 videos as transferable', async () => {
     const result = await diagnoseSourceVideoUrl('https://cdn.example.com/demo.mp4', {
+      lookup: publicLookup,
       fetchImpl: async (_url, init) => ({
         ok: true,
         status: init?.method === 'HEAD' ? 200 : 206,
@@ -36,6 +39,7 @@ describe('source video transfer', () => {
     });
 
     const blocked = await diagnoseSourceVideoUrl('https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/abc.mp4', {
+      lookup: publicLookup,
       fetchImpl: async () => ({
         ok: false,
         status: 490,
@@ -55,6 +59,21 @@ describe('source video transfer', () => {
       statusCode: 490,
       contentType: 'application/json;charset=UTF-8',
     });
+  });
+
+  it('rejects a private redirect during video diagnosis before a second request', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: { location: 'http://127.0.0.1:3001/internal' },
+    }));
+
+    const result = await diagnoseSourceVideoUrl('https://cdn.example.com/demo.mp4', {
+      fetchImpl: fetchImpl as any,
+      lookup: publicLookup,
+    });
+
+    expect(result).toMatchObject({ status: 'error', canTransfer: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('recognizes Ozon CDN videos as already auto-publishable', async () => {
@@ -81,6 +100,7 @@ describe('source video transfer', () => {
       sourceVideos: [{ url: 'https://cdn.example.com/demo.mp4', coverUrl: 'https://cdn.example.com/cover.jpg' }],
       sourcePlatform: '1688',
       userId: 'user-1',
+      lookup: publicLookup,
       fetchImpl: async (_url, init) => {
         if (init?.method === 'HEAD') {
           return {
@@ -148,6 +168,7 @@ describe('source video transfer', () => {
       sourceVideos: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/demo.mp4' }],
       sourcePlatform: '1688',
       userId: 'user-1',
+      lookup: publicLookup,
       fetchImpl: async (_url, init) => {
         if (init?.method === 'HEAD') {
           return {
@@ -203,6 +224,7 @@ describe('source video transfer', () => {
       sourceVideos: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/demo.mp4' }],
       sourcePlatform: '1688',
       userId: 'user-1',
+      lookup: publicLookup,
       fetchImpl: async (url, init) => {
         if (init?.method === 'HEAD') {
           return {
@@ -270,6 +292,7 @@ describe('source video transfer', () => {
       sourceVideos: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/ranged.mp4' }],
       sourcePlatform: '1688',
       userId: 'user-1',
+      lookup: publicLookup,
       fetchImpl: async (url, init) => {
         if (init?.method === 'HEAD') {
           return {
