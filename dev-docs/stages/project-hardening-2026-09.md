@@ -145,6 +145,15 @@
 - next_substage: none; 下一阶段需要独立外部验收授权或新的安全修复范围。
 - git_checkpoint: commits `96dfe6ad`、`8e16de4e`、`95a22ed8`、`ed0841ac`、`73b46b59` 已按顺序 push。
 
+## stage-9 受管扩展验收准备
+
+- actual_result: 新增受管扩展安装诊断命令和合同测试，自动扫描标准 Chrome/Chromium profile、校验固定 Extension ID 绑定的 MV3 manifest 与 service worker、拒绝 symlink/unpacked 路径、可选从外部稳定 key 派生 ID，并只探测 loopback CDP `/json/version` 端点。
+- changed_owners: `scripts/extension-managed-install-diagnostics.mjs`、`scripts/extension-managed-install-diagnostics.test.mjs`、`scripts/preflight.mjs`、`package.json`、`docs/deployment.md` 与 `dev-docs/acceptance.md`。
+- plan_deviation: 无；未结束现有 Chrome、未修改 Chrome 策略、未读取密钥内容、未调用 Provider/Ozon 或生产环境。
+- fresh_evidence: managed diagnostics contract 6/6；CLI 在当前机器返回 `EXTENSION_STATUS=MISSING`、`CDP_STATUS=NOT_FOUND`、退出码 2；受管安装未被错误地降级为 unpacked 验收。
+- remaining_risk: 固定 ID 对应的受管目录和 CDP 端口仍需外部 provisioning；稳定 key 只能由受管发布方提供，仓库不生成或替代该身份。
+- next_substage: 受管扩展安装后运行 `pnpm diagnose:extension:managed -- --expected-version <version>`，再执行 active-worker attestation 与 Unicode smoke。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

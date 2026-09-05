@@ -495,7 +495,13 @@ node scripts/sign-extension-release.mjs \
 关闭旧的专用 QA Chrome，再用下方 launcher 和同一个受管 QA profile 启动新进程；launcher 会通过
 `--load-extension` 加载当前安装树。如果专用 QA Chrome 不能关闭，则不要运行 launcher：改在
 `chrome://extensions` 对目标扩展明确 reload，并直接使用该实例既有的 loopback CDP 地址执行活动
-主脚本证明和独立语义 smoke。两条路径都不得复用操作员的常规 Chrome。
+验收。
+
+安装前可在目标机器运行 `pnpm diagnose:extension:managed -- --expected-version <version>`，确认固定
+Extension ID、受管目录、稳定 key 派生 ID 和 loopback CDP 端口均已绑定。诊断返回
+`EXTENSION_STATUS=FOUND` 与 `CDP_STATUS=READY` 后，再按下方命令执行 active-worker attestation；
+`MISSING`、`UNBOUND`、`STALE` 或 `KEY_MISMATCH` 均不得用 unpacked 包替代。该诊断只证明安装
+边界和端口存在；随后仍需执行主脚本 attestation 和独立语义 smoke。两条路径都不得复用操作员的常规 Chrome。
 
 ```bash
 # QA 可重复启动独立的有界面 Chromium；默认打开 about:blank，不访问生产，也不会关闭或复用操作员的常规 Chrome。

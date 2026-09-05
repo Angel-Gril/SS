@@ -53,6 +53,11 @@ const steps = [
     ],
   },
   {
+    name: 'managed extension install diagnostics contract',
+    command: 'node',
+    args: ['--test', 'scripts/extension-managed-install-diagnostics.test.mjs'],
+  },
+  {
     name: 'extension CDP launcher argument contract',
     command: 'node',
     args: ['--test', 'scripts/launch-extension-cdp.test.mjs'],
