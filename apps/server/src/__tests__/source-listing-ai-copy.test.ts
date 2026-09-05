@@ -297,19 +297,26 @@ describe('source listing AI copy', () => {
       userInstructions: '',
     };
     const baseGenerate = first.generateContent.getMockImplementation()!;
+    let providerStarted!: () => void;
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => { providerStarted = resolve; });
+    const providerRelease = new Promise<void>((resolve) => { releaseProvider = resolve; });
     first.generateContent.mockImplementation(async (value) => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      providerStarted();
+      await providerRelease;
       return baseGenerate(value);
     });
 
-    const result = await Promise.allSettled([first.service.generate(input), second.generate(input)]);
+    const firstPromise = first.service.generate(input);
+    await providerGate;
+    await expect(second.generate(input)).rejects.toMatchObject({
+      code: 'OZON_LISTING_AI_GENERATION_IN_PROGRESS',
+      statusCode: 409,
+    });
+    releaseProvider();
+    await firstPromise;
 
     expect(first.generateContent).toHaveBeenCalledTimes(1);
-    expect(result.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
-    expect(result.find((item) => item.status === 'rejected')).toMatchObject({
-      status: 'rejected',
-      reason: expect.objectContaining({ code: 'OZON_LISTING_AI_GENERATION_IN_PROGRESS' }),
-    });
   });
 
   it('refuses to apply a generated candidate after reviewed facts drift', async () => {
