@@ -183,7 +183,7 @@ export async function warehouseTemplateRoutes(app: FastifyInstance) {
   });
 
   app.post('/commands/dispatch', async (request, reply) => {
-    const { userId, actorUserId } = (request as any).user;
+    const { actorUserId } = (request as any).user;
     const parsed = dispatchCommandSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
@@ -248,7 +248,7 @@ export async function warehouseTemplateRoutes(app: FastifyInstance) {
   });
 
   app.post('/commands/schedule', async (request, reply) => {
-    const { userId, actorUserId } = (request as any).user;
+    const { actorUserId } = (request as any).user;
     const body = request.body as { shopIds: string[]; templateId: string; scheduledAt: string };
     if (!body?.shopIds?.length || !body.templateId || !body.scheduledAt) {
       return reply.status(400).send({ code: 0, msg: '缺少 shopIds / templateId / scheduledAt' });

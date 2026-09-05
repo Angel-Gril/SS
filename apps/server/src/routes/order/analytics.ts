@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { authenticate } from '../../lib/auth.js';
 import { prisma } from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';

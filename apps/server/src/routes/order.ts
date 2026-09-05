@@ -5,8 +5,6 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
-import { describeSubstatus } from '../lib/ozon-substatus.js';
-import { getRate } from '../services/exchange-rate.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {

@@ -1,6 +1,6 @@
 import { Queue, Worker } from 'bullmq';
 import type { Prisma } from '@prisma/client';
-import { redis, redisDisabled } from '../lib/redis.js';
+import { redisDisabled } from '../lib/redis.js';
 import { connection } from '../lib/bullmq-connection.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';

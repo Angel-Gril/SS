@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma.js';
-import { authenticate } from '../lib/auth.js';
 
 export async function noticeRoutes(app: FastifyInstance) {
   app.get('/', async (request) => {

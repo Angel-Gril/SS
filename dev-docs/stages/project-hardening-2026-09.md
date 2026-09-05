@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-5-runtime-reliability-audit-observability
+- authorization_substage: stage-6-lint-zero-maintenance
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-5-runtime-reliability-audit-observability
+- active_substage: stage-6-lint-zero-maintenance
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "stage-4 checkpoint: commit 1a574ccb pushed", "focused reliability/audit tests: 6 passed", "pnpm --filter server test: 393 files passed, 5160 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm --filter server lint: 0 errors, 20 existing warnings", "pnpm --filter server build: passed", "real local Redis atomic check: rate true,true,false; quota true,false; usage 60; isolated keys deleted"]
+- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "stage-4 checkpoint: commit 1a574ccb pushed", "stage-5 checkpoint: commit 068e06e8 pushed", "stage-6 lint: 0 errors, 0 warnings", "pnpm --filter server test: 393 files passed, 5160 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm --filter server build: passed"]
 
 ## 阶段目标与用户流程
 
@@ -59,6 +59,7 @@
 | stage-3-supply-chain-ci-data-gates | 可信依赖与数据库 CI | manifests/lock/CI/integration runners | 高危项消除或阻断，关键 integration runner 可执行，schema 格式通过 | audit、CI contract、isolated PostgreSQL | 正式 release、生产 migration |
 | stage-4-maintainability-browser-quality | 降低 owner 冲突并补真实 UI smoke | server owner/Web QA | 一处渐进拆分无行为变化，最小 browser smoke 可跑 | characterization、build/browser smoke | 全量重写、视觉重设计 |
 | stage-5-runtime-reliability-audit-observability | 统一上传配额与生产审计失败关闭 | `upload-limiter.ts`、`audit-log.ts`、相关 API consumers | 云端限流跨实例原子化，Redis 故障失败关闭，生产审计默认开启且失败可观测 | focused unit/route tests、server regression、typecheck | schema/migration、真实生产、Provider/Ozon |
+| stage-6-lint-zero-maintenance | 清理既有 server lint warning | route/adapter/service/test 参数与 import owner | lint 0 errors / 0 warnings，行为无变化 | lint、typecheck、server regression | API、schema、权限、生产配置 |
 
 ## 测试、安全与影响
 
@@ -123,3 +124,13 @@
 - remaining_risk: Redis 集群/多实例线上拓扑未验证；生产审计数据库故障后的运营告警通道未接入外部监控；20 个既有 lint warnings、真实线上/Provider/Ozon/生产面仍不在授权范围。
 - next_substage: none; 后续 Redis 集群验收、外部告警接入或真实生产验证需要新阶段授权。
 - git_checkpoint: 待 stage-5 closeout、commit 与 push。
+
+## stage-6 执行回写
+
+- actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
+- changed_owners: `apps/server/src/adapters/extension-sync.ts`、`apps/server/src/routes/{finance,notice,order,order/analytics,ozon-logistics,provider,user,warehouse-template}.ts`、`apps/server/src/services/ozon-rich-content.ts`、`apps/server/src/workers/product-sync.ts`、两个测试文件。
+- plan_deviation: 无。
+- fresh_evidence: `pnpm --filter server lint` 0 errors/0 warnings；`pnpm --filter server typecheck` passed；`pnpm --filter server test` 393 files/5160 passed/223 skipped；CI supply-chain contract 4 passed。
+- remaining_risk: Web lint/build 既有 Next plugin 提示仍未专门处理；真实线上/Provider/Ozon/生产面仍不在授权范围。
+- next_substage: none; 后续 Web lint plugin、真实浏览器扩展 worker 或线上验收需要新阶段授权。
+- git_checkpoint: 待 stage-6 closeout、commit 与 push。

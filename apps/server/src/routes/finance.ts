@@ -21,7 +21,7 @@ export async function financeRoutes(app: FastifyInstance) {
   });
 
   app.post('/recharge', async (request, reply) => {
-    const { userId, role } = (request as any).user;
+    const { userId } = (request as any).user;
     const parsed = rechargeSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });

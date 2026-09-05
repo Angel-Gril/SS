@@ -12,7 +12,7 @@ export interface ExtensionSyncAdapter {
 
 class DirectSyncAdapter implements ExtensionSyncAdapter {
   mode = 'direct' as const;
-  async submitTask(shopId: string, taskType: string, payload: unknown) {
+  async submitTask(_shopId: string, _taskType: string, _payload: unknown) {
     return { taskId: `local-${Date.now()}` };
   }
 }

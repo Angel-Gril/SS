@@ -11,7 +11,7 @@ export async function userRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   app.get('/me', async (request) => {
-    const { actorUserId, effectiveUserId, isSubAccount, parentId, accountCode } = (request as any).user;
+    const { actorUserId, effectiveUserId, isSubAccount } = (request as any).user;
 
     // 个人字段（手机号/昵称/头像）取实际登录账号；能力字段（perOrderFee/isTransitProvider 等）取数据归属账号（即父账号）
     const [actor, owner] = await Promise.all([

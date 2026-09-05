@@ -1010,7 +1010,7 @@ describe('ozon category catalog', () => {
         ],
       },
     ]);
-    const translate = vi.fn(async (term: string) => ({
+    const translate = vi.fn(async (_term: string) => ({
       outputText: '女士内衣',
       source: 'provider' as const,
     }));

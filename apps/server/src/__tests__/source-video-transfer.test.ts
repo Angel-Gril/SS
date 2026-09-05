@@ -71,7 +71,7 @@ describe('source video transfer', () => {
 
   it('uploads direct mp4 videos to OSS-compatible storage and records diagnostics', async () => {
     const video = Buffer.from('fake mp4 bytes');
-    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, mimeType?: string) => ({
+    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, _mimeType?: string) => ({
       url: `https://app.ss-erp.com/api/cdn/users/user-1/video/${filename}`,
       filename,
       backend: 'oss' as const,
@@ -192,7 +192,7 @@ describe('source video transfer', () => {
   it('retries transient full video download failures before marking transfer failed', async () => {
     const video = Buffer.from('retry succeeds');
     const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'AbortError' });
-    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, mimeType?: string) => ({
+    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, _mimeType?: string) => ({
       url: `https://app.ss-erp.com/api/cdn/users/user-1/video/${filename}`,
       filename,
       backend: 'oss' as const,
@@ -258,7 +258,7 @@ describe('source video transfer', () => {
       Buffer.from('tail'),
     ]);
     const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'AbortError' });
-    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, mimeType?: string) => ({
+    const uploadBuffer = vi.fn(async (_buffer: Buffer, filename: string, _mimeType?: string) => ({
       url: `https://app.ss-erp.com/api/cdn/users/user-1/video/${filename}`,
       filename,
       backend: 'oss' as const,

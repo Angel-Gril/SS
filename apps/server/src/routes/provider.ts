@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { authenticate, requireRole } from '../lib/auth.js';
+import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { createNotification } from './notification.js';
 

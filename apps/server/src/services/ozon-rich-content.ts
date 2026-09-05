@@ -234,7 +234,6 @@ function visitRichNode(node: unknown, out: ParsedRichContentBlock[], seen: Set<s
   if (out.length >= RICH_BLOCK_MAX_COUNT) return;
   if (node == null) return;
 
-  const key = keyHint.toLocaleLowerCase('ru-RU');
   if (typeof node === 'string' || typeof node === 'number') {
     if (/^(title|description|content|value|text|caption)$/i.test(keyHint)) pushText(out, seen, node);
     if (/^(imageurl|originalurl|src|picture|cover)$/i.test(keyHint)) pushImage(out, seen, node);
