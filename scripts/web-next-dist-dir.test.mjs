@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const PHASE_DEVELOPMENT_SERVER = 'phase-development-server';
 const PHASE_PRODUCTION_BUILD = 'phase-production-build';
 const PHASE_PRODUCTION_SERVER = 'phase-production-server';
-const configUrl = pathToFileURL('apps/web/next.config.mjs').href;
+const repoRoot = process.cwd();
+const webRoot = path.join(repoRoot, 'apps/web');
+const configUrl = pathToFileURL(path.join(webRoot, 'next.config.mjs')).href;
 
 async function loadConfigs({ sentryEnabled, cacheKey }) {
   const originalDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
@@ -15,6 +18,8 @@ async function loadConfigs({ sentryEnabled, cacheKey }) {
     delete process.env.NEXT_PUBLIC_SENTRY_DSN;
   }
 
+  const previousCwd = process.cwd();
+  process.chdir(webRoot);
   try {
     const { default: createNextConfig } = await import(`${configUrl}?case=${cacheKey}`);
     assert.equal(typeof createNextConfig, 'function', 'Next config should be phase-aware');
@@ -26,6 +31,7 @@ async function loadConfigs({ sentryEnabled, cacheKey }) {
       start: createNextConfig(PHASE_PRODUCTION_SERVER, { defaultConfig: {} }),
     };
   } finally {
+    process.chdir(previousCwd);
     if (originalDsn === undefined) {
       delete process.env.NEXT_PUBLIC_SENTRY_DSN;
     } else {
@@ -45,11 +51,16 @@ assert.equal(
   '.next-dev',
   'Sentry wrapping should preserve the development dist directory',
 );
+assert.deepEqual(
+  sentryConfigs.dev.experimental?.clientTraceMetadata,
+  ['baggage', 'sentry-trace'],
+  'Next 15 Sentry tracing should add the canonical client trace metadata contract',
+);
 
-const gitignore = fs.readFileSync('.gitignore', 'utf8');
-const dockerignore = fs.readFileSync('.dockerignore', 'utf8');
-const ciWorkflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
-const tsconfig = JSON.parse(fs.readFileSync('apps/web/tsconfig.json', 'utf8'));
+const gitignore = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8');
+const dockerignore = fs.readFileSync(path.join(repoRoot, '.dockerignore'), 'utf8');
+const ciWorkflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+const tsconfig = JSON.parse(fs.readFileSync(path.join(webRoot, 'tsconfig.json'), 'utf8'));
 
 assert.match(gitignore, /^\.next-dev\/$/m, 'root .next-dev output should be ignored');
 assert.match(gitignore, /^\*\*\/\.next-dev\/$/m, 'workspace .next-dev output should be ignored');
