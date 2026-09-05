@@ -1,12 +1,12 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-05，stage-9 代码证据同步于 `af653843`。该结论来自当前分支、文件和本地命令，不替代生产验收。
+审计日期：2026-09-05，stage-10 代码证据同步于 `d2293bc9`。该结论来自当前分支、文件和本地命令，不替代生产验收。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git dirty state：当前工作树干净；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同和受管扩展诊断证据已按逻辑提交并推送。
+- Git evidence state：stage-10 实现已提交并推送，文档同步提交后工作树应恢复干净；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断和部署备份 retention 修复均有独立检查点。
 - 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
@@ -79,6 +79,7 @@
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
 - 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
 - 用户级工具边界：`C:\Users\550W\.codex\skills` 的 45 个顶层技能入口指向未授权的 `C:\Users\550W\.cc-switch\skills`，其内容未审计；允许目录内的 gstack 工具包含自动更新、遥测、会话导入和 Hook 设置写入能力，但没有证据表明这些 Hook 在当前用户配置中已启用。下一步必须先取得 `.cc-switch` 或实际用户配置的独立授权，不能把技能目录中的模板当作运行态证据。
+- 日本/COM VPS 只读证据：运行提交 `d27b3ad8...` 的服务、DB/Redis、Nginx/UFW、migration、双 `/ready` 和公开 extension `1.0.311` 均健康；每日备份正常，但发布 attestation 引用的 8 月 gzip 已被普通 retention 删除。仓库 `d2293bc9` 已修复未来清理，但尚未部署，已丢失证据必须通过新备份和恢复演练重新签发。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
 - 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
 

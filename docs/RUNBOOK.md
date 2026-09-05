@@ -940,6 +940,11 @@ bash scripts/verify-deploy-backup.sh "$TARGET_COMMIT"
 root）所有且不可被 group/world 写入；应用 `DATABASE_URL` 与备份 `BACKUP_DB_URL` 的目标
 数据库名、OID 和库内 deployment UUID 必须一致；hostname/port 路由可以不同。
 
+兼容仍共用目录的旧部署时，日常 retention 必须经 `prune-backup-retention.mjs` 保护
+`backup-status.json` 和 `deploy-backup-*.attestation*.json` 引用的 gzip/sidecar。若 verifier 报告
+attestation 所绑定 gzip 已丢失，只能重新生成备份并完成恢复演练后签发新认证；不能手工改写
+attestation 或把普通最新备份重命名成旧文件。
+
 同一 commit 的认证过期后直接重新运行恢复演练。脚本由 root 先将旧认证以完整 SHA-256 命名归档，
 保留原始 inode/字节，再签发新的 commit 指针；不要手工删除、覆盖或改名
 `deploy-backup-<commit>.attestation.json`。任何轮换失败都不允许继续 migration。

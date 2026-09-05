@@ -28,7 +28,9 @@
 - 受管扩展诊断合同已加入 `pnpm diagnose:extension:managed`：自动扫描标准 Chrome/Chromium profile、拒绝 symlink/unbound unpacked 目录、校验 MV3 manifest/worker、可选派生稳定 key 的固定 ID，并仅探测 loopback CDP 版本端点。当前实际诊断结果为 `EXTENSION_STATUS=MISSING`、`CDP_STATUS=NOT_FOUND`、退出码 2；该命令不会结束现有 Chrome 或修改浏览器配置。
 - 本轮安全修复已按顺序推送：`96dfe6ad` 收紧图片/视频/rich-content SSRF；`8e16de4e` 增加 PostgreSQL AI quota reservation、类目翻译每请求最多 20 项和未知结果保留额度；`95a22ed8` 增加 source listing durable operation claim；`ed0841ac` 固定 CI Actions SHA 并限制 workflow token；`73b46b59` 修正跨实例 claim 回归测试时序。最终 `pnpm preflight` 退出码为 0。
 - 全局用户级工具只读扫描（2026-09-05）：`C:\Users\550W\.codex\skills` 有 654 个 `SKILL.md`，顶层 45 个技能入口是指向未授权 `C:\Users\550W\.cc-switch\skills` 的符号链接，未跟随读取；`C:\Users\550W\.agents\skills` 有 19 个本地 `SKILL.md` 且无符号链接。授权目录内未发现实际用户设置文件，只有 `story-setup` 的 `settings-hooks.json` 模板和 Hook 脚本。gstack Hook/脚本具备条件式 `git pull --ff-only`+`setup -q` 自动更新、遥测 POST、读取 `~/.codex/sessions`、写入 `~/.claude/settings.json` 和本地问题日志的能力；这些均未在本轮执行，实际是否启用仍需读取对应用户配置并另行授权。`story-setup` Hook 模板主要读取项目状态，`session-end` 仅在 `STORY_SESSION_LOG=1` 时写入项目追踪日志，提交校验为 advisory-only。
-- 当前代码与文档同步：最新代码检查点为 `6e159af8`，随后 `42729300` 记录受管扩展探测，当前工作树保持干净；下一次代码改动应重新生成本段状态证据。
+- 当前代码与文档同步：stage-9 扩展检查点为 `af653843`，stage-10 备份 retention 检查点为 `d2293bc9`；本段文档同步后工作树应恢复干净。
+- 日本/COM VPS 只读验收（2026-09-05）：严格 host-key SSH 到 `45.76.49.64` 成功，运行提交为 `d27b3ad855bb7bc373cb168b2861100c4aeea61e`；API/Web/Worker、PostgreSQL、Redis、Nginx/UFW、Prisma migration、本地及公网 `/ready` 均通过，官网 extension `1.0.311` publication/signature 验证通过。完整 verifier 剩两项失败：当前部署 attestation 引用的 `ss_erp_20260820_084502.sql.gz` 已被日常 retention 删除；Extension BYOK 保留 revision 5 的单 owner/shop/device、单 origin/operation sandbox pilot，因此全暗态检查失败。每日备份本身正常，最新 2026-09-05 gzip 为 47,644,148 bytes；本轮未修改 VPS、未重启服务、未调用 Provider/Ozon 写入。
+- Provider/Ozon 只读证据：VPS 历史 sandbox 显示 `TEXT_TO_IMAGE` 成功并结算 CNY 0.0119，三次 `IMAGE_TO_IMAGE` 均明确拒绝且结算零费用；DashScope 英俄图片翻译有成功结果但仍无结算费用。当前 server Provider 为 `custom / gpt-image-2`、API key revision 2 存在但价格未配置。Ozon 有 15 个 ACTIVE/5 个 DISABLED 店铺；pilot 绑定店铺有凭据但没有专用测试店铺标记，禁止据此执行 sandbox 写入。
 
 ## 第一个安全任务
 

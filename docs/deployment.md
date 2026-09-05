@@ -171,6 +171,11 @@ proof 绑定最终 schema v2 attestation。maintenance 路由在新库中写入�
 不得 group/world writable。Compose runtime 因此包含只读 PostgreSQL client，只查询身份而不把
 数据库 URL 放进 argv。
 
+当历史环境仍让每日备份与发布证据共用目录时，`backup-db.sh` 使用
+`prune-backup-retention.mjs` 先读取 canonical `backup-status.json` 和所有部署 attestation，保护其
+引用的 gzip 与 sidecar 后才清理无引用旧备份。损坏、非规范或 symlink attestation 会让清理失败
+关闭；不得恢复为裸 `find -delete`。新部署仍应优先把后台备份与发布证据拆到不同目录。
+
 同一 target commit 的认证过期时，重新运行恢复演练即可受控刷新；不要手工删除旧认证。root-only
 `archive` 步骤先把旧文件以
 `deploy-backup-<commit>.attestation.archived-<sha256>.json` 原字节留存，再删除当前 commit 指针并

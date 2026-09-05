@@ -155,6 +155,16 @@
 - next_substage: 受管扩展安装后运行 `pnpm diagnose:extension:managed -- --expected-version <version>`，再执行 active-worker attestation 与 Unicode smoke。
 - git_checkpoint: implementation commits `b2155982` and `af653843` 已 push 到 `origin/feat/ai-media-prompt-registry`；完整 `pnpm preflight` 在 `b2155982` 检查点通过，边界收紧修复在 `af653843`。
 
+## stage-10 生产证据与备份保留修复
+
+- actual_result: 日本/COM VPS 完成只读运行态、发布、Provider/Ozon 与扩展 pilot 盘点；定位到当前部署 attestation 的 gzip 被普通 7 天 retention 删除。新增 `prune-backup-retention.mjs`，在新 latest status 原子落盘后，保护 latest 和所有部署 attestation 引用的 gzip/sidecar，只删除超过保留期且无引用的普通备份。
+- changed_owners: `scripts/prune-backup-retention.mjs`、对应测试、`backup-db.sh`、preflight/CI backup gate、部署 Runbook 与内部验收。
+- plan_deviation: 无；远程范围保持只读，未修补 VPS 文件、未部署、未重启、未生成备份/恢复库、未改开关或会话，未发送 Provider/Ozon 请求。
+- fresh_evidence: 完整 `pnpm preflight` 退出码 0，server `5164 passed / 223 skipped`，extension `459/0/0`，backup retention/deploy contracts `27 passed / 13 skipped`；Bash syntax 与 ESLint 通过。远端运行提交 `d27b3ad8...` 的基础设施和 publication `1.0.311` 通过；每日最新备份存在；full verifier 的实际剩余失败为缺失的部署绑定 gzip 和非暗态 BYOK pilot。
+- remaining_risk: 已删除的部署备份无法由代码恢复；修复部署后必须生成新备份、执行恢复演练并刷新目标提交 attestation。BYOK revision 5 pilot 绑定的 session 仍 ACTIVE 且无 intent/batch；是否撤销需生产写授权。没有可证明的 Ozon 专用测试店铺，编辑/inpaint Provider 仍无成功证据。
+- next_substage: 生产修复、pilot 撤销、Provider GET-only preflight、Ozon sandbox 和 BINI live worker 分别需要对应运行授权或专用环境。
+- git_checkpoint: commit `d2293bc9` 已 push 到 `origin/feat/ai-media-prompt-registry`；完整 preflight 已通过，生产修复仍需独立变更审批。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
