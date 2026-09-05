@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 加固阶段：stage-1 至 stage-6 已完成并推送；当前 HEAD/远端为 `811b825c`。
+- 加固阶段：stage-1 至 stage-7 已完成并推送；当前 HEAD/远端为 `196d11dc`。
 - 当前主风险：生产/线上运行态、Redis 集群拓扑、外部告警、真实 Provider/Ozon 行为和扩展 live worker 仍未验证；这些不阻塞本地继续开发，但阻塞发布准备。
 - 推荐下一步：继续开发前把新增功能绑定到明确 owner 和测试门禁；发布前另开验收/发布准备阶段。
 - 未验证项：GitHub 仓库可见性、线上运行态、Redis 集群与告警、真实 Provider/Ozon 行为、完整浏览器回归和扩展 live worker smoke。

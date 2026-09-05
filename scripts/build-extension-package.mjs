@@ -2,6 +2,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES } from './extension-release-contract.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const sourceDir = path.resolve(process.env.EXTENSION_SOURCE_DIR || 'extensions/ss-erp');
@@ -270,24 +271,19 @@ const CLOUD_ERP_MATCHES = unique([
 
 const CLOUD_WEB_RESOURCE_MATCHES = [
   ...CLOUD_ERP_MATCHES,
-  'https://seller.ozon.ru/*',
-  'https://globalcalculator.ozon.ru/*',
-  'https://*.ozon.ru/*',
-  'https://*.ozon.kz/*',
-  'https://*.ozon.by/*',
-  'https://s.1688.com/*',
-  'https://*.1688.com/*',
-  'https://pifa.pinduoduo.com/*',
-  'https://www.taobao.com/*',
-  'https://s.taobao.com/*',
-  'https://www.goofish.com/*',
-  'https://goofish.com/*',
-  'https://2.taobao.com/*',
+  ...EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
 ];
 
 const LOCAL_HOST_PERMISSIONS = unique([
   ...CLOUD_HOST_PERMISSIONS,
-  'file:///*',
+  'http://localhost/*',
+  'https://localhost/*',
+  'http://127.0.0.1/*',
+  'https://127.0.0.1/*',
+]);
+
+const LOCAL_WEB_RESOURCE_MATCHES = unique([
+  ...CLOUD_WEB_RESOURCE_MATCHES,
   'http://localhost/*',
   'https://localhost/*',
   'http://127.0.0.1/*',
@@ -342,6 +338,10 @@ if (target === 'cloud') {
   manifest.name = `${manifest.name} (Local)`;
   manifest.short_name = 'SS ERP Local';
   manifest.host_permissions = LOCAL_HOST_PERMISSIONS;
+  manifest.web_accessible_resources = (manifest.web_accessible_resources || []).map((group) => ({
+    ...group,
+    matches: LOCAL_WEB_RESOURCE_MATCHES,
+  }));
 }
 
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

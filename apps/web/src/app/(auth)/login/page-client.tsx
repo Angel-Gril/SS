@@ -310,7 +310,12 @@ export default function LoginPage() {
                     type="button"
                     variant="outline"
                     onClick={onSendSmsCode}
-                    disabled={sendingSms || smsCountdown > 0 || loading}
+                    disabled={
+                      sendingSms
+                      || smsCountdown > 0
+                      || loading
+                      || (challengeProvider !== 'disabled' && !challengeReady)
+                    }
                     className="w-32 shrink-0"
                   >
                     {smsCountdown > 0 ? `${smsCountdown}s 后重试` : sendingSms ? '发送中...' : '发送验证码'}

@@ -954,7 +954,7 @@ pnpm build:extension:cloud
 STRICT_EXTENSION_CHECK=1 EXTENSION_DIR=build/extensions/ss-erp-cloud pnpm verify:extension
 ```
 
-覆盖 manifest 引用文件、所有扩展 JS 语法、service worker adapter import、cloud/local adapter 基本行为、外部连接域名和官网分发权限风险提示。`cloud` 包会移除本地/旧 IP/`<all_urls>`/`file:///*` 权限；`local` 包保留离线调试能力。
+覆盖 manifest 引用文件、所有扩展 JS 语法、service worker adapter import、cloud/local adapter 基本行为、外部连接域名和官网分发权限风险提示。`cloud` 包会移除本地与旧 IP 来源；source/cloud/local 均不保留 `<all_urls>` 或未使用的 `file:///*` 权限，`local` 包只额外保留 localhost/127.0.0.1 离线 ERP 来源。
 
 如果脚本失败，先确认清理状态：
 

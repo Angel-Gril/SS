@@ -17,6 +17,32 @@ const PROVENANCE_KEYS = Object.freeze([
 ]);
 const PUBLIC_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
 export const EXTENSION_RELEASE_LOCAL_ORIGIN = 'http://127.0.0.1:3001';
+export const EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES = Object.freeze([
+  'https://seller.ozon.ru/*',
+  'https://globalcalculator.ozon.ru/*',
+  'https://*.ozon.ru/*',
+  'https://*.ozon.kz/*',
+  'https://*.ozon.by/*',
+  'https://s.1688.com/*',
+  'https://*.1688.com/*',
+  'https://detail.1688.com/*',
+  'https://trade.1688.com/*',
+  'https://pifa.pinduoduo.com/*',
+  'https://mobile.pinduoduo.com/*',
+  'https://*.pinduoduo.com/*',
+  'https://*.yangkeduo.com/*',
+  'https://www.temu.com/*',
+  'https://*.aliexpress.com/*',
+  'https://www.wildberries.ru/*',
+  'https://item.jd.com/*',
+  'https://www.taobao.com/*',
+  'https://s.taobao.com/*',
+  'https://item.taobao.com/*',
+  'https://detail.tmall.com/*',
+  'https://www.goofish.com/*',
+  'https://goofish.com/*',
+  'https://2.taobao.com/*',
+]);
 
 function fail(message) {
   throw new Error(message);

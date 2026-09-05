@@ -3069,13 +3069,6 @@ function numberInCellRange(cell: string, rawSize: string): boolean {
   return false;
 }
 
-function orderedMatchRows(template: OzonSizeChartTemplate): OzonSizeChartTemplateRow[] {
-  return [
-    ...template.body.filter(isPreferredMatchRow),
-    ...template.body.filter((row) => !isPreferredMatchRow(row)),
-  ];
-}
-
 function exactRowIndexForSize(template: OzonSizeChartTemplate, rawSize: string): number | null {
   const exact = normalizeToken(rawSize);
   const rows = [

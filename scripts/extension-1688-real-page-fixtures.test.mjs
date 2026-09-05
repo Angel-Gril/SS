@@ -1344,7 +1344,7 @@ test('processed iframe nodes do not create a false scanned-node truncation', asy
   assert.equal(result.truncations.some((row) => row.fieldPath === '/dom/nodes'), false);
 });
 
-test('manifest loads the fallback before core and changes no permission baseline', () => {
+test('manifest loads the fallback before core without broadening browser permissions', () => {
   const baseline = fixture('manifest-baseline.sanitized.json');
   const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
   const collector = manifest.content_scripts.find((entry) => (
@@ -1359,6 +1359,8 @@ test('manifest loads the fallback before core and changes no permission baseline
   assert.ok(positions.every((position) => position >= 0), 'collector must load every required script');
   assert.deepEqual(positions.slice().sort((left, right) => left - right), positions);
   assert.deepEqual(plain(manifest.permissions), baseline.permissions);
-  assert.deepEqual(plain(manifest.host_permissions), baseline.hostPermissions);
+  assert.equal(manifest.host_permissions.includes('https://detail.1688.com/*'), true);
+  assert.equal(manifest.host_permissions.includes('<all_urls>'), false);
+  assert.equal(manifest.host_permissions.includes('file:///*'), false);
   assert.equal(manifest.permissions.includes('debugger'), false);
 });

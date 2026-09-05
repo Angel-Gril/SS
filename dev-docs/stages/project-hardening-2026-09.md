@@ -130,11 +130,10 @@
 - actual_result: stage-7-project-truth-sync 已完成，内部验收、当前状态、技术选型与索引已同步到现有 stage-1 至 stage-6 提交证据。
 - changed_owners: `dev-docs/README.md`、`dev-docs/acceptance.md`、`dev-docs/current-state-audit.md`、`dev-docs/technical-selection.md`。
 - plan_deviation: 无；公开 docs、用户现有改动和生产状态未触碰。
-- fresh_evidence: adoption/foundation contract guardrail valid；旧审计指标搜索无结果；当前 HEAD `811b825c` 与远端一致。
+- fresh_evidence: adoption/foundation contract guardrail valid；旧审计指标搜索无结果；当前 HEAD `196d11dc` 与远端一致。
 - remaining_risk: 外部运行态、Redis 集群/告警、真实 Provider/Ozon、完整浏览器和发布证据仍未验证。
 - next_substage: none; 继续本地开发可直接开始，发布准备需要另行验收授权。
-- git_checkpoint: 待 stage-7 closeout、commit 与 push。
-- git_checkpoint: 待 stage-5 closeout、commit 与 push。
+- git_checkpoint: commit `196d11dc` 已 push 到 `origin/feat/ai-media-prompt-registry`；后续本地开发不改变本阶段 closeout。
 
 ## stage-6 执行回写
 

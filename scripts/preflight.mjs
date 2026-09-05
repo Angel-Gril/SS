@@ -34,6 +34,11 @@ const steps = [
     args: ['scripts/vps-origin-mode-contract.test.mjs'],
   },
   {
+    name: 'local Docker Compose network security contract',
+    command: 'node',
+    args: ['--test', 'scripts/local-compose-network-security.test.mjs'],
+  },
+  {
     name: 'extension package versioning and deployment contract',
     command: 'node',
     args: ['scripts/extension-package-auto-bump.test.mjs'],
@@ -48,9 +53,24 @@ const steps = [
     ],
   },
   {
+    name: 'extension CDP launcher argument contract',
+    command: 'node',
+    args: ['--test', 'scripts/launch-extension-cdp.test.mjs'],
+  },
+  {
     name: 'Web auth security settings contract',
     command: 'node',
     args: ['scripts/web-auth-security-settings.test.mjs'],
+  },
+  {
+    name: 'Web auth human challenge UI contract',
+    command: 'node',
+    args: ['scripts/web-auth-human-challenge-ui.test.mjs'],
+  },
+  {
+    name: 'Web auth Turnstile UI contract',
+    command: 'node',
+    args: ['scripts/web-auth-turnstile-ui.test.mjs'],
   },
   {
     name: 'Web admin runtime settings UI contract',

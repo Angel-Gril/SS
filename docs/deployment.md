@@ -117,6 +117,8 @@ OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见�
 
 `HUMAN_CHALLENGE_PROVIDER`、`TURNSTILE_*` 和 PoW 环境变量显式设置后优先于管理员后台；未设置时才读取 `SystemConfig`。部署前必须确认最终生效来源，避免环境变量和后台保存两套冲突值。旧部署若仍使用 `FEATURE_TURNSTILE_LOGIN=true`，同样必须配置 Turnstile 两把 key 与 `TURNSTILE_ALLOWED_HOSTNAMES`。
 
+Turnstile 依赖浏览器访问 `https://challenges.cloudflare.com`。如果登录页显示错误码（例如 `300030`）或持续提示加载失败，先在普通的最新版 Chrome/Edge 中关闭广告拦截、脚本拦截和严格隐私扩展，并确认该域名可访问；CDP、无头浏览器和部分企业代理会被 Cloudflare 拒绝，反复点击重试不会生成有效 token。中国大陆或无法稳定访问 Cloudflare 的部署应改用 `builtin-pow`，配置至少 32 位的 `HUMAN_CHALLENGE_SIGNING_SECRET` 后重启 API/Web，而不是把 Turnstile 密钥留空。
+
 首个超级管理员只允许通过 `/setup` 引导流程创建。公开注册只创建普通 `USER`，且在系统没有任何 `ADMIN` 前会被后端拒绝。生产环境必须配置 `SETUP_TOKEN`，防止公网首次访问者抢占管理员账号。
 
 ## 部署命令示例
@@ -489,11 +491,21 @@ node scripts/sign-extension-release.mjs \
 官网 ZIP 是下载后解压并用 Chrome 开发者模式加载的完整 MV3 包；Ed25519 侧车不把 ZIP 变成 CRX、
 商店安装或自动更新。首次安装必须使用受管固定目录并把实际 `chrome-extension://<id>` 加入
 `CORS_EXTENSION_ORIGINS`；升级时覆盖同一路径后重新加载，避免路径变化造成扩展 ID 和本地 profile
-隔离。磁盘 manifest 版本和安装目录哈希不能单独证明 Chrome 正在执行新 Worker；同路径替换后必须
-在 `chrome://extensions` 对目标扩展执行一次明确 reload，再从专用 loopback CDP 会话运行活动主脚本
-证明和独立语义 smoke：
+隔离。磁盘 manifest 版本和安装目录哈希不能单独证明 Chrome 正在执行新 Worker。同路径替换后，
+关闭旧的专用 QA Chrome，再用下方 launcher 和同一个受管 QA profile 启动新进程；launcher 会通过
+`--load-extension` 加载当前安装树。如果专用 QA Chrome 不能关闭，则不要运行 launcher：改在
+`chrome://extensions` 对目标扩展明确 reload，并直接使用该实例既有的 loopback CDP 地址执行活动
+主脚本证明和独立语义 smoke。两条路径都不得复用操作员的常规 Chrome。
 
 ```bash
+# QA 可重复启动独立的有界面 Chromium；默认打开 about:blank，不访问生产，也不会关闭或复用操作员的常规 Chrome。
+pnpm launch:extension:cdp -- \
+  --extension-dir "$MANAGED_EXTENSION_DIR" \
+  --extension-id "$EXTENSION_ID" \
+  --expected-version "$VERSION" \
+  --profile "$MANAGED_QA_PROFILE" \
+  --port "$CDP_PORT"
+
 pnpm attest:extension:active-worker -- \
   --cdp http://127.0.0.1:$CDP_PORT \
   --extension-id "$EXTENSION_ID" \

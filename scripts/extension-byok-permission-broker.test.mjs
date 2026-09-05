@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES } from './extension-release-contract.mjs';
 
 const modulePath = 'extensions/ss-erp/shared/byok/permission-broker.js';
 const moduleSource = fs.existsSync(modulePath) ? fs.readFileSync(modulePath, 'utf8') : '';
@@ -586,6 +587,20 @@ test('cloud manifest declares Provider access only as optional and never as a ma
   assert.deepEqual(manifest.optional_host_permissions, ['https://*/*']);
   assert.equal((manifest.host_permissions || []).includes('<all_urls>'), false);
   assert.equal((manifest.host_permissions || []).includes('https://*/*'), false);
+  assert.equal((manifest.host_permissions || []).includes('file:///*'), false);
+  assert.equal(
+    (manifest.web_accessible_resources || [])
+      .flatMap((group) => group.matches || [])
+      .includes('<all_urls>'),
+    false,
+  );
+  for (const requiredMatch of EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES) {
+    assert.equal(
+      (manifest.web_accessible_resources || [])
+        .every((group) => (group.matches || []).includes(requiredMatch)),
+      true,
+    );
+  }
   assert.match(buildScript, /optional_host_permissions/u);
   assert.match(buildScript, /https:\/\/\*\/\*/u);
   const verifier = fs.readFileSync('scripts/verify-extension-package.mjs', 'utf8');
@@ -602,6 +617,13 @@ test('local package also requires a trusted exact-origin Provider grant', () => 
   const manifest = JSON.parse(readFileSync('build/extensions/ss-erp-local/manifest.json', 'utf8'));
   assert.equal((manifest.host_permissions || []).includes('<all_urls>'), false);
   assert.equal((manifest.host_permissions || []).includes('https://*/*'), false);
+  assert.equal((manifest.host_permissions || []).includes('file:///*'), false);
+  assert.equal(
+    (manifest.web_accessible_resources || [])
+      .flatMap((group) => group.matches || [])
+      .includes('<all_urls>'),
+    false,
+  );
   assert.deepEqual(manifest.optional_host_permissions, ['https://*/*']);
 });
 

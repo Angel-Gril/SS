@@ -4,6 +4,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
   parseExpectedReleaseOrigins,
   parseExtensionDeploymentDefaults,
 } from './extension-release-contract.mjs';
@@ -1099,19 +1100,7 @@ if (expectedReleaseOrigins && packageTarget === 'cloud') {
 
   const approvedWebResourceMatches = new Set([
     ...approvedErpMatches,
-    'https://seller.ozon.ru/*',
-    'https://globalcalculator.ozon.ru/*',
-    'https://*.ozon.ru/*',
-    'https://*.ozon.kz/*',
-    'https://*.ozon.by/*',
-    'https://s.1688.com/*',
-    'https://*.1688.com/*',
-    'https://pifa.pinduoduo.com/*',
-    'https://www.taobao.com/*',
-    'https://s.taobao.com/*',
-    'https://www.goofish.com/*',
-    'https://goofish.com/*',
-    'https://2.taobao.com/*',
+    ...EXTENSION_MARKETPLACE_WEB_RESOURCE_MATCHES,
   ]);
   const unknownWebResourceMatch = webResourceMatches.find(
     (match) => !approvedWebResourceMatches.has(match),

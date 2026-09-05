@@ -8,7 +8,7 @@
 | 文档索引 | active、stale、public、internal 已区分 | 已确认 |
 | agent 宪法 | `AGENTS.md` 绑定真实 owner 和命令 | 已确认 |
 | owner map | `architecture.md` 记录当前与目标 owner | 已确认 |
-| 启动基线 | local env 校验、DB/Redis、Web/API 首屏 | 部分：local env 校验与本地 Redis/Chrome CDP Web smoke 已通过；本轮未重启完整 API/Worker |
+| 启动基线 | local env 校验、DB/Redis、Web/API 首屏 | 部分：local env 校验与本地 PostgreSQL/Redis 健康检查、Chrome CDP Web smoke 已通过；本轮未重启完整 API/Worker |
 | Git 隐私 | `.env` 未跟踪，阶段按路径提交 | 已确认；远端 visibility 未验证 |
 | AI 债务 | 超大 owner、静态 UI 合同、preflight 成本已分类 | 已确认 |
 | 第一个安全任务 | 范围、owner、RED/GREEN 和停止条件明确 | 已确认 |
@@ -17,11 +17,13 @@
 
 - 文件路径：根 manifests、`apps/`、`extensions/`、Prisma、CI、公开 docs 和本目录。
 - 命令：`pnpm typecheck`、server typecheck、server build、Web build 通过；server tests `5160 passed / 223 skipped`；扩展 CDP 合同 29 条通过。
-- 格式：server lint `0 errors / 0 warnings`；Prisma `validate` 与 `format --check` 通过。
-- 环境：先复现 local env 8 项失败；运行 bootstrap 后 `pnpm env:check -- --profile local --env .env` 为 0 failure。
+- 格式：workspace lint `0 errors / 0 warnings`；Prisma `validate` 与 `format --check` 通过。
+- 环境：先复现 local env 8 项失败；运行 bootstrap 后 `pnpm env:check -- --profile local --env .env` 为 0 failure。Docker PostgreSQL/Redis 已无损重建并保持 healthy，主机端口只发布到 `127.0.0.1:5432/6379`；本地 compose 网络安全合同 `1/1`。
 - 供应链：npm 官方 audit 已降为 `0 high`，剩余 `2 moderate / 2 low`；CI audit/Semgrep 为阻断门。
 - 数据库证据：146 migrations；隔离 PostgreSQL runner replay 全部迁移并通过 103 个物流/设备/来源/发布测试；普通 suite 的 PostgreSQL 文件按显式 runner 执行。
 - 已运行本地 Chrome CDP `/login` smoke；未运行远端/生产 smoke、Provider/Ozon 写入、部署和扩展 live worker smoke，因为这些仍需独立环境/授权。
+- 当前认证/CDP 工作线在 HEAD `196d11dc` 的 dirty worktree 上通过完整 `pnpm preflight`、生产构建、Web lint/typecheck 和 12 条聚焦契约；本地 `/ready`、登录/注册桌面与 390px 移动视图无横向溢出。cloud-like 本地进程使用合成 PoW secret 实测登录/注册 pending-to-ready 与登录重新验证；Cloudflare 官方测试 key 实测 Turnstile 登录/注册成功回调，以及 `600010` 失败、按钮保持禁用和显式重试。官方测试合同核对于 2026-09-05：`https://developers.cloudflare.com/turnstile/troubleshooting/testing/`。
+- 扩展 source verifier 为 `459 pass / 0 failure / 0 warning`；普通 cloud/local package verifier 分别为 `464/0/0` 与 `460/0/0`，绑定正式 origins 后的 cloud/local verifier 分别为 `471/0/0` 与 `461/0/0`，严格发布打包合同通过。`web_accessible_resources` 已收紧到实际 ERP/marketplace 来源，未使用的 `file:///*` 已删除；打包器与 verifier 共用同一 marketplace WAR 来源策略。CDP launcher 合同 `7/7`，默认只打开 `about:blank`，拒绝带 query/fragment 的回显 URL，并在启动或 worker 验证失败后终止本次 Chrome、清理 launcher 自建 profile。当前机器没有受管扩展 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 的安装目录，因此真实 active worker attestation 仍需在受管安装完成后执行。
 
 ## 第一个安全任务
 
@@ -45,7 +47,8 @@
 
 - 当前结果：`可继续开发`，不是 `可发布`。
 - 本地代码、CI、隔离数据库和 server/Web 构建证据已收口。
-- 生产部署、真实 Provider/Ozon、线上健康、Redis 集群与外部告警、完整浏览器回归仍未验证。
+- 本地认证 challenge 与扩展静态/package 权限门禁已收口；受管扩展 live worker 仍未验证。
+- 生产部署、真实 Provider/Ozon、线上健康、Redis 集群与外部告警、CN 远端备份仍未验证。
 
 ## 停止条件
 

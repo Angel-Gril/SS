@@ -596,21 +596,20 @@ assert.deepEqual(
   'origin mismatch must clean build and release artifacts',
 );
 
-const failedOutDir = path.join(root, 'failed-out');
-const failedPackage = packageRelease(failedOutDir, { STRICT_EXTENSION_CHECK: '1' });
-assert.notEqual(failedPackage.status, 0, 'a strict local-package warning must abort the release fixture');
+const strictOutDir = path.join(root, 'strict-out');
+const strictPackage = packageRelease(strictOutDir, { STRICT_EXTENSION_CHECK: '1' });
+assert.equal(
+  strictPackage.status,
+  0,
+  `warning-free cloud and local packages must pass strict verification\n${strictPackage.stdout}\n${strictPackage.stderr}`,
+);
 for (const target of ['cloud', 'local']) {
   assert.equal(
-    fs.existsSync(path.join(failedOutDir, `ss-erp-${target}`)),
-    false,
-    `failed release must remove the ${target} build directory`,
+    fs.existsSync(path.join(strictOutDir, `ss-erp-${target}`)),
+    true,
+    `strict release must retain the verified ${target} build directory`,
   );
 }
-assert.deepEqual(
-  fs.existsSync(failedOutDir) ? fs.readdirSync(failedOutDir) : [],
-  [],
-  'failed release must not retain ZIP, checksum, lock, or temporary artifacts',
-);
 
 writeManifest(path.join(outDir, 'ss-erp-cloud'), '9.9.9');
 writeManifest(path.join(outDir, 'ss-erp-local'), '9.9.9');

@@ -36,7 +36,7 @@ export default function RegisterPage() {
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [challengeConfig, setChallengeConfig] = useState<HumanChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
-  const [_challengeReady, setChallengeReady] = useState(true);
+  const [challengeReady, setChallengeReady] = useState(true);
   const challengeRef = useRef<HumanChallengeHandle | null>(null);
   const needsSms = challengeConfig.runtimeMode === 'cloud' && challengeConfig.smsRegisterEnabled;
   const challengeProvider = needsSms ? resolveHumanChallengeProvider(challengeConfig) : 'disabled';
@@ -165,7 +165,11 @@ export default function RegisterPage() {
                     type="button"
                     variant="outline"
                     onClick={onSendCode}
-                    disabled={sending || countdown > 0}
+                    disabled={
+                      sending
+                      || countdown > 0
+                      || (challengeProvider !== 'disabled' && !challengeReady)
+                    }
                     className="shrink-0 w-32"
                   >
                     {countdown > 0 ? `${countdown}s 后重试` : sending ? '发送中...' : '发送验证码'}
@@ -213,9 +217,11 @@ export default function RegisterPage() {
                 />
                 <span>
                   我已阅读并同意
-                  <a href="/terms" target="_blank" rel="noreferrer" className="mx-1 font-medium text-primary hover:underline">《用户协议》</a>
-                  和
-                  <a href="/privacy" target="_blank" rel="noreferrer" className="ml-1 font-medium text-primary hover:underline">《隐私政策》</a>
+                  <a href="/terms" target="_blank" rel="noreferrer" className="mx-1 whitespace-nowrap font-medium text-primary hover:underline">《用户协议》</a>
+                  <span className="whitespace-nowrap">
+                    和
+                    <a href="/privacy" target="_blank" rel="noreferrer" className="ml-1 font-medium text-primary hover:underline">《隐私政策》</a>
+                  </span>
                 </span>
               </label>
               {errors.legalAccepted && <p className="text-xs text-destructive">{errors.legalAccepted.message}</p>}
