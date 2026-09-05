@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
@@ -399,7 +399,7 @@ async function verifyCandidateBytes(
     || bytes.length < 8
     || !bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
     || createHash('sha256').update(bytes).digest('hex') !== candidate.sha256) notAvailable();
-  let metadata: sharp.Metadata;
+  let metadata: Metadata;
   try {
     metadata = await sharp(bytes, {
       animated: false,

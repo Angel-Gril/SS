@@ -108,7 +108,7 @@ function aliyunConfig() {
 }
 
 async function createApp() {
-  const app = Fastify({ trustProxy: 1 });
+  const app = Fastify({ trustProxy: '127.0.0.1' });
   await app.register(systemStatusRoutes);
   return app;
 }

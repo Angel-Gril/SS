@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp, { type OverlayOptions } from 'sharp';
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -140,7 +140,7 @@ export async function applyWatermark(imageUrl: string, itemId: string, index: nu
   const width = metadata.width || 800;
   const height = metadata.height || 800;
 
-  let compositeInput: sharp.OverlayOptions[];
+  let compositeInput: OverlayOptions[];
 
   if (safeConfig.type === 'image' && safeConfig.imageUrl) {
     const wmBuffer = await fetchImageBuffer(safeConfig.imageUrl);

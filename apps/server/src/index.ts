@@ -399,7 +399,7 @@ const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
   // Nginx is the single trusted hop in production. Trusting an arbitrary XFF
   // chain lets direct-origin clients spoof request.ip and bypass IP quotas.
-  trustProxy: process.env.NODE_ENV === 'production' ? 1 : false,
+  trustProxy: process.env.NODE_ENV === 'production' ? '127.0.0.1' : false,
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     redact: {

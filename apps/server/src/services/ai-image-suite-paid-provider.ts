@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 import { getConfig } from '../config/system-config-schema.js';
 import { loadAiImageEditInputBuffer } from './ai-image-edit-input-reader.js';
 import {
@@ -217,7 +217,7 @@ async function loadFrozenInputs(
         'AI image suite reference bytes changed after materialization',
       );
     }
-    let metadata: sharp.Metadata;
+    let metadata: Metadata;
     try {
       metadata = await sharp(buffer, { animated: false, failOn: 'warning' }).metadata();
     } catch {

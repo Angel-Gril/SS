@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import sharp from 'sharp';
+import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import {
   AI_IMAGE_SUITE_OUTPUT_HEIGHT,
   AI_IMAGE_SUITE_OUTPUT_WIDTH,
@@ -84,7 +84,7 @@ function mimeForSharpFormat(format: string | undefined): AiImageSuiteProviderOut
   return null;
 }
 
-function hasAnimationMetadata(metadata: sharp.Metadata): boolean {
+function hasAnimationMetadata(metadata: Metadata): boolean {
   return Number(metadata.pages ?? 1) !== 1
     || (Array.isArray(metadata.delay) && metadata.delay.length > 0);
 }
@@ -130,7 +130,7 @@ export async function normalizeAiImageSuiteProviderOutput(
     );
   }
 
-  let metadata: sharp.Metadata;
+  let metadata: Metadata;
   try {
     metadata = await sharp(input.buffer, {
       animated: false,
@@ -166,7 +166,7 @@ export async function normalizeAiImageSuiteProviderOutput(
     );
   }
 
-  let normalized: { data: Buffer; info: sharp.OutputInfo };
+  let normalized: { data: Buffer; info: OutputInfo };
   try {
     normalized = await sharp(input.buffer, {
       animated: false,

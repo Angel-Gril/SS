@@ -109,7 +109,7 @@ const activeUser = {
 };
 
 async function buildApp() {
-  const app = Fastify({ trustProxy: 1 });
+  const app = Fastify({ trustProxy: '127.0.0.1' });
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.ready();
   return app;

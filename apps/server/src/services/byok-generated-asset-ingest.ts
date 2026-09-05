@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import sharp from 'sharp';
+import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import { AI_IMAGE_WORKBENCH_LIMITS } from 'shared';
 import type {
   ImageUploadResult,
@@ -438,7 +438,7 @@ export async function normalizeByokGeneratedImage(
     fail('BYOK_IMAGE_MIME_MISMATCH', 422, 'Image MIME does not match its magic bytes');
   }
 
-  let metadata: sharp.Metadata;
+  let metadata: Metadata;
   try {
     metadata = await sharp(input.buffer, {
       animated: true,
@@ -465,7 +465,7 @@ export async function normalizeByokGeneratedImage(
     limits,
   );
 
-  let normalized: { data: Buffer; info: sharp.OutputInfo };
+  let normalized: { data: Buffer; info: OutputInfo };
   try {
     let pipeline = sharp(input.buffer, {
       animated: false,

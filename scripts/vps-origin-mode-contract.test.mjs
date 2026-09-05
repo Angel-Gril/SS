@@ -241,7 +241,7 @@ check_no_restore_temp_db
 });
 
 test('client IP forwarding trusts only the nearest Nginx hop', () => {
-  assert.match(serverEntrypoint, /trustProxy: process\.env\.NODE_ENV === 'production' \? 1 : false/u);
+  assert.match(serverEntrypoint, /trustProxy: process\.env\.NODE_ENV === 'production' \? '127\.0\.0\.1' : false/u);
   for (const nginxConfig of [cloudflareNginx, directNginx]) {
     assert.match(nginxConfig, /proxy_set_header X-Forwarded-For \$remote_addr;/u);
     assert.doesNotMatch(nginxConfig, /proxy_add_x_forwarded_for/u);

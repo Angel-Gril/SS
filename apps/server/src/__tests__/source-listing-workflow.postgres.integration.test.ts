@@ -93,13 +93,75 @@ async function makePublishReady(
   seed: Awaited<ReturnType<typeof seedWorkflowOwner>>,
   draft: OzonListingDraft,
 ): Promise<OzonListingDraft> {
-  return service.recordValidationResult({
+  const categorized = await service.setCategory({
     draftId: draft.id,
     ownerUserId: seed.ownerUserId,
     actorUserId: seed.ownerUserId,
     expectedRevision: draft.revision,
+    category: { categoryId: 170001, typeId: 91001, catalogRevision: 'catalog-v1' },
+  });
+  const generated = await service.addAiCopyCandidate({
+    draftId: draft.id,
+    ownerUserId: seed.ownerUserId,
+    actorUserId: seed.ownerUserId,
+    expectedRevision: categorized.revision,
+    titleRu: 'Товар для продажи',
+    descriptionRu: 'Описание товара.',
+    sourcePromptVersion: 'copy-v1',
+  });
+  const copied = await service.applyAiCopyCandidate({
+    draftId: draft.id,
+    ownerUserId: seed.ownerUserId,
+    actorUserId: seed.ownerUserId,
+    expectedRevision: generated.draft.revision,
+    candidateId: generated.candidate.id,
+    operationKey: `apply-${draft.id}`,
+  });
+  const withMedia = await service.setMediaAssignments({
+    draftId: draft.id,
+    ownerUserId: seed.ownerUserId,
+    actorUserId: seed.ownerUserId,
+    expectedRevision: copied.revision,
+    assignments: [{
+      scope: 'PRODUCT',
+      slotKey: 'product-main',
+      assetId: 'asset-main',
+      source: 'REVIEWED',
+    }],
+  });
+  const priced = await service.setPricing({
+    draftId: draft.id,
+    ownerUserId: seed.ownerUserId,
+    actorUserId: seed.ownerUserId,
+    expectedRevision: withMedia.revision,
+    value: {
+      contractVersion: 'ozon-listing-pricing/v1',
+      items: withMedia.selectedSkuKeys.map((skuKey, index) => ({
+        skuKey,
+        price: String(100 + index),
+        oldPrice: String(120 + index),
+        currencyCode: 'RUB',
+        vat: '0',
+      })),
+    },
+  });
+  return service.recordValidationResult({
+    draftId: draft.id,
+    ownerUserId: seed.ownerUserId,
+    actorUserId: seed.ownerUserId,
+    expectedRevision: priced.revision,
     status: 'VALID',
-    report: { fixture: 'unit5-postgres' },
+    report: {
+      schemaVersion: 'ozon-attribute-validation/v1',
+      schemaRevision: 'unit5-postgres',
+      normalizedAttributes: [],
+      fieldDecisions: [],
+      operationReadiness: {
+        ozonImport: { status: 'READY', issues: [] },
+        inventoryActivation: { status: 'READY', issues: [] },
+        costingAutoPricing: { status: 'READY', issues: [] },
+      },
+    },
     blockers: [],
     warnings: [],
   });
@@ -349,7 +411,7 @@ describePostgres('source listing workflow PostgreSQL integration', () => {
        FROM "source_listing_workflows" WHERE "id" = $1`,
       draft.id,
     );
-    expect(Number(durable[0]?.revisions)).toBe(4);
+    expect(Number(durable[0]?.revisions)).toBe(changed.revision);
     expect(Number(durable[0]?.intents)).toBe(1);
     expect(durable[0]?.currentRevision).toBe(changed.revision);
 

@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-2-p0-security-boundaries
+- authorization_substage: stage-3-supply-chain-ci-data-gates
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-2-p0-security-boundaries
+- active_substage: stage-3-supply-chain-ci-data-gates
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: [apps/server/src/__tests__/seed-safety.test.ts, apps/server/src/__tests__/runtime-mode-safety.test.ts, apps/server/src/__tests__/image-source-loader.test.ts, apps/server/src/__tests__/image-processing-input.test.ts, apps/server/src/__tests__/image-processing-security-wiring.test.ts]
+- evidence_refs: ["pnpm audit --registry=https://registry.npmjs.org --audit-level=high --prod: 0 high, 2 moderate, 2 low", "node --test scripts/ci-supply-chain-gates.test.mjs scripts/vps-origin-mode-contract.test.mjs: 15 passed, 1 skipped", "pnpm --filter server test:logistics:postgres: 12 files, 103 passed", "pnpm --filter server test: 391 files passed, 5154 tests passed, 223 skipped", "pnpm typecheck: passed", "pnpm lint: 0 errors, 20 existing warnings", "pnpm --filter server exec prisma validate && prisma format --check: passed", "pnpm --filter server build: passed", "pnpm --filter web build: passed"]
 
 ## 阶段目标与用户流程
 
@@ -91,10 +91,10 @@
 
 本节随 active_substage 收尾更新；结构通过不替代真实命令证据。
 
-- actual_result: 固定管理员 seed 已移除；production/cloud 禁止 Noop Redis；上传、水印、collect/product 和批量缩放统一消费受限图片来源与输入 owner
-- changed_owners: `apps/server/prisma/seed.ts`、`bootstrap-config.ts`、`runtime-mode-safety.ts`、`image-processing-input.ts`、`image-source-loader.ts`、`watermark.ts` 及三个 route 消费者
-- plan_deviation: 本地 reader factory 首次接线出现模块初始化顺序错误，定向测试立即失败；移动默认依赖初始化后恢复，无兼容分支
-- fresh_evidence: focused 7 files/47 tests；full server 391 files/5154 tests，223 environment skips；server build、typecheck 通过；lint 0 errors/20 existing warnings
-- remaining_risk: 真实生产启动、远程攻击流量和浏览器图片操作未执行；供应链、CI PostgreSQL、审计/配额与结构债务仍待后续阶段
-- next_substage: stage-3-supply-chain-ci-data-gates
-- git_checkpoint: 本阶段以 `fix(security): close runtime and image processing boundaries` 独立提交并推送当前分支
+- actual_result: stage-3-supply-chain-ci-data-gates 已完成；直接依赖与传递依赖高危项已收敛到 0 high，CI audit/Semgrep/Prisma/integration gate 已改为阻断式，物流 PostgreSQL runner 在随机隔离 schema 中完整 replay 146 migrations 并通过 12 个文件 103 tests，schema 已格式化。
+- changed_owners: `apps/server/package.json`、`apps/web/package.json`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`.github/workflows/ci.yml`、`apps/server/scripts/logistics-postgres-integration.mjs`、`scripts/ci-supply-chain-gates.test.mjs`、`apps/server/prisma/schema.prisma`、Fastify trustProxy/Sharp 类型适配和 `source-listing-workflow.postgres.integration.test.ts` fixture。
+- plan_deviation: PostgreSQL integration fixture 原先缺少当前强制的 Ozon import readiness contract，首次 runner 2 tests 失败；按现有单元测试 owner 补齐完整 category/copy/media/pricing/readiness 流程，并把 revision 断言改为数据库不变量 `revision rows === current revision`，第三次 runner 全绿。未修改生产 schema/migration。
+- fresh_evidence: official npm audit 0 high（2 moderate/2 low）；CI/VPS contract 15 passed/1 skipped；server 391 files/5154 passed/223 skipped；logistics PostgreSQL 12 files/103 passed；typecheck/build/web build/Prisma validate+format 均通过；lint 0 errors、20 个既有 warnings。
+- remaining_risk: 2 个 moderate 与 2 个 low 传递依赖公告仍待上游修复或后续专门评估；20 个 lint warnings 未在本阶段扩大处理；Semgrep 由 CI 阻断但本地未执行；真实浏览器全流程、线上健康、真实 Provider/Ozon、生产部署和公开仓库隐私仍未验证。
+- next_substage: stage-4-maintainability-browser-quality
+- git_checkpoint: stage-3 已通过 closeout；随后以单一目的 commit 提交并 push 当前分支，commit hash 在交付回执中记录。

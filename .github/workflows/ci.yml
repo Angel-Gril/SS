@@ -26,6 +26,9 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter server db:generate
 
+      - name: Check Prisma schema formatting
+        run: pnpm --filter server exec prisma format --check
+
       - name: Typecheck server
         run: pnpm --filter server typecheck
 
@@ -49,11 +52,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Report-only until the planned Next 15 migration removes the current
-      # Next 14 advisories without mixing a framework upgrade into feature PRs.
       - name: Audit production dependencies
-        run: pnpm audit --audit-level=high --prod
-        continue-on-error: true
+        run: pnpm audit --registry=https://registry.npmjs.org --audit-level=high --prod
 
       - name: Semgrep static analysis
         uses: returntocorp/semgrep-action@v1
@@ -64,7 +64,6 @@ jobs:
             p/nodejs
             p/owasp-top-ten
             p/secrets
-        continue-on-error: true
 
   test:
     runs-on: ubuntu-latest
@@ -152,6 +151,9 @@ jobs:
       - name: Verify Web Ozon video probe surface contract
         run: node scripts/web-ozon-video-probe-routing.test.mjs
 
+      - name: Verify CI supply-chain and PostgreSQL gates
+        run: node --test scripts/ci-supply-chain-gates.test.mjs
+
       - name: Test SMS quota Redis state machine
         run: pnpm --filter server test:sms-quota:redis
 
@@ -197,6 +199,9 @@ jobs:
 
       - name: Replay migrations and run AI Media PostgreSQL integration
         run: pnpm --filter server test:ai-media:postgres
+
+      - name: Replay migrations and run logistics PostgreSQL integration
+        run: pnpm --filter server test:logistics:postgres
 
   build:
     runs-on: ubuntu-latest
