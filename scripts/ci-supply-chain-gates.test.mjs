@@ -38,6 +38,15 @@ test('makes dependency and static security findings blocking CI gates', () => {
   assert.doesNotMatch(securityJob, /continue-on-error:\s*true/u);
 });
 
+test('pins every GitHub Action to an immutable commit and limits the workflow token', () => {
+  assert.match(ci, /^permissions:\s*\r?\n\s+contents:\s+read\s*$/mu);
+  const actionRefs = [...ci.matchAll(/uses:\s*([^\s#]+)/gu)].map((match) => match[1]);
+  assert.ok(actionRefs.length > 0);
+  for (const reference of actionRefs) {
+    assert.match(reference, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[a-f0-9]{40}$/u, reference);
+  }
+});
+
 test('runs Prisma format and the isolated logistics PostgreSQL suite in CI', () => {
   assert.match(ci, /pnpm --filter server exec prisma format --check/u);
   assert.match(ci, /pnpm --filter server test:logistics:postgres/u);
