@@ -83,11 +83,12 @@ function readManifestVersion(directoryPath) {
   }
 }
 
-function hasManagedIdentitySegment(directoryPath, extensionId) {
+function hasManagedIdentityPath(directoryPath, extensionId, version) {
   const expected = extensionId.toLowerCase();
-  return normalizedPath(directoryPath)
-    .split('/')
-    .some((segment) => segment === expected);
+  const normalized = normalizedPath(directoryPath).split('/');
+  const basename = normalized.at(-1) || '';
+  const parent = normalized.at(-2) || '';
+  return basename === expected || (parent === expected && basename === version);
 }
 
 function safeDirectories(directoryPath) {
@@ -181,11 +182,11 @@ export function inspectManagedExtensionDirectory(directoryPath, {
   if (!isDirectoryNonSymlink(resolved)) {
     return Object.freeze({ path: resolved, status: 'MISSING', reason: 'directory_missing_or_symlink' });
   }
-  if (!hasManagedIdentitySegment(resolved, extensionId)) {
-    return Object.freeze({ path: resolved, status: 'UNBOUND', reason: 'path_not_bound_to_extension_id' });
-  }
   const version = readManifestVersion(resolved);
   if (!version) return Object.freeze({ path: resolved, status: 'INVALID', reason: 'manifest_invalid' });
+  if (!hasManagedIdentityPath(resolved, extensionId, version)) {
+    return Object.freeze({ path: resolved, status: 'UNBOUND', version, reason: 'path_not_bound_to_extension_id' });
+  }
   if (expectedVersion && version !== expectedVersion) {
     return Object.freeze({
       path: resolved,

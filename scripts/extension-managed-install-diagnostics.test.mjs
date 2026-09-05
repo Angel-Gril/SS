@@ -53,8 +53,26 @@ test('rejects unpacked paths, stale versions, and symlinked roots', (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const unpacked = path.join(root, 'unpacked');
   mkdirSync(unpacked, { recursive: true });
-  writeFileSync(path.join(unpacked, 'manifest.json'), '{}\n');
+  writeFileSync(path.join(unpacked, 'manifest.json'), `${JSON.stringify({
+    manifest_version: 3,
+    version: VERSION,
+    background: { service_worker: 'service-worker.js' },
+  })}\n`);
+  writeFileSync(path.join(unpacked, 'service-worker.js'), 'globalThis.fixture = true;\n');
   assert.equal(inspectManagedExtensionDirectory(unpacked, { extensionId: EXTENSION_ID }).status, 'UNBOUND');
+
+  const misleading = path.join(root, EXTENSION_ID, 'unpacked');
+  mkdirSync(misleading, { recursive: true });
+  writeFileSync(path.join(misleading, 'manifest.json'), `${JSON.stringify({
+    manifest_version: 3,
+    version: VERSION,
+    background: { service_worker: 'service-worker.js' },
+  })}\n`);
+  writeFileSync(path.join(misleading, 'service-worker.js'), 'globalThis.fixture = true;\n');
+  assert.equal(
+    inspectManagedExtensionDirectory(misleading, { extensionId: EXTENSION_ID }).status,
+    'UNBOUND',
+  );
 
   const stale = fixtureManagedExtension(root, '1.0.263');
   assert.equal(
