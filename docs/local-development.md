@@ -25,10 +25,13 @@
 
 ```bash
 pnpm install
+node scripts/bootstrap-local-env.mjs --env .env
 pnpm env:check -- --profile local --env .env
 pnpm --filter server db:migrate
 pnpm dev
 ```
+
+`bootstrap-local-env.mjs` 只补齐 local profile 缺失项，并替换明确的开发占位密钥；已有真实配置保持不变。命令不会打印密钥值，可重复执行。若文件已经标记为 `RUNTIME_MODE=cloud`，脚本会拒绝改写，避免误把云端配置转成本地配置。
 
 如果你是第一次跑，先确认 `.env`、`.env.staging`、`apps/server/.env` 里至少有：
 

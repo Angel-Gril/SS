@@ -1,0 +1,100 @@
+# SS ERP 当前状态审计
+
+审计日期：2026-09-05。该结论来自当前分支、文件和本地命令，不替代生产验收。
+
+## 现状证据
+
+- 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
+- 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
+- Git dirty state：存在用户进行中的验证码、部署文档、preflight 与 CDP launcher 改动；本阶段必须按明确路径隔离提交。
+- 未跟踪文件：`scripts/launch-extension-cdp.mjs`、`scripts/launch-extension-cdp.test.mjs`，属于既有用户工作。
+- 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
+- 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
+- 现有内部文档：审计前没有统一真源；`docs/plans/` 含历史实施计划但状态跨度较大。
+- 现有公开文档：`README.md`、`docs/PROJECT-OVERVIEW.md`、`docs/README.md`、`docs/RUNBOOK.md`、`docs/deployment.md`。
+- package/framework 文件：根 `package.json`、`pnpm-lock.yaml`、`apps/web/package.json`、`apps/server/package.json`、`packages/shared/package.json`。
+- 启动/测试/构建脚本：`pnpm dev`、`pnpm typecheck`、`pnpm lint`、`pnpm preflight`、server Vitest、Web build、扩展 verifier。
+- schema/migration：`apps/server/prisma/schema.prisma`，146 个迁移；本地 `prisma migrate status` 为 up to date。
+- 部署脚本：`scripts/deploy*.sh`、`docker-compose*.yml`、`deploy/systemd*` 与扩展签名/分发 gate。
+- 配置模板：`.env.example`、`.env.staging.example`、`.env.production.example`；真实 `.env` 被 Git 忽略。
+- 已知启动证据：类型检查、后端测试、Web build、扩展静态验证通过；`bootstrap-local-env.mjs` 修复当前 ignored `.env` 后，local profile 校验为 0 failure。
+- 当前用户请求：按审计优先级分阶段修复、形成阶段提交并推送当前远端分支。
+
+## 产品边界
+
+- 当前产品看起来是什么：面向 Ozon 跨境卖家的 SaaS/本地双模式 ERP，包含 Web、API、Worker、PostgreSQL/Redis、对象存储和 Chrome 扩展。
+- 当前产品不是：通用多租户基础平台、微服务集群、K8s 平台或完全由浏览器端承担业务真相的扩展。
+- 用户确认的方向：沿用当前功能和技术组合，按审计顺序修复治理、安全、供应链和可维护性问题。
+- 旧名称、旧概念或过期语义：`docs/LAUNCH-OPTIMIZATION-PLAN.md` 与 `docs/plans/saas-remaining-tasks.md` 中部分待办已被后续代码完成，不能直接当当前 backlog。
+- 用户明确否定的方向：本轮没有授权换栈、部署、真实 Provider/Ozon 写入或破坏性数据库操作。
+
+## 已确认的演进边界
+
+- 当前必须交付：关闭已证实的 P0 安全边界，恢复可信依赖/CI 门禁，建立当前真源，并做最小结构收敛。
+- 已确认的下一阶段能力：在当前单体与扩展边界上继续迭代，不增加新基础设施。
+- 当前不实现但不能堵死：后续真实浏览器回归、Provider/Ozon 试点和生产发布仍消费现有合同与 gate。
+- 明确不会做：本轮不切换框架、数据库、认证模型、支付模型或部署拓扑。
+- 只是设想，不得影响当前架构：K8s、微服务拆分、API 多实例等只有出现可观测容量或组织触发条件后再评估。
+- 临时 fallback 真源迁移：从分散的 `docs/plans/` 状态描述迁到本目录；公开文档保留公开职责，不移动历史文件。
+
+## 技术栈适配
+
+- 当前前端：Next.js 15 App Router、React 18、TypeScript、TailwindCSS、Radix UI、TanStack Query。
+- 当前后端：Fastify 5、TypeScript、Prisma、BullMQ、Vitest。
+- 当前数据库：PostgreSQL 16，Redis 7 负责会话、队列与分布式控制。
+- 当前第三方服务：Ozon、Cloudflare Turnstile/R2、S3-compatible OSS、阿里云/腾讯云短信、Sentry、AI 图片 Provider。
+- 当前部署方式：单 VPS，Nginx + systemd 或 Compose，API/Web/Worker 分进程。
+- 结论：沿用但修正。
+- 证据：现有组合已通过类型、构建、5136 个后端测试和扩展验证；风险集中在边界与门禁，而不是框架不适配。
+- 用户需要决定：本轮无需新的产品决定；真实部署、费用、凭据与迁移仍需单独授权。
+
+## 调用链和 owner
+
+| 功能/概念 | 当前入口 | 真实 owner | 下游展示/adapter | 风险 |
+| --- | --- | --- | --- | --- |
+| Web 会话 | `/api/auth/*` | `apps/server/src/lib/auth.ts` 与 Redis session | 登录/注册页面、扩展 Bearer adapter | Redis disabled 时会话可被错误视为有效 |
+| 图片远程读取 | `/api/images/*`、水印服务 | `apps/server/src/services/source-public-image-download.ts` 应成为统一下载 owner | image-upload route、watermark、Web 图片处理页 | 部分入口绕过 SSRF/大小/像素边界 |
+| 上传配额 | image-upload route | `apps/server/src/lib/upload-limiter.ts` | Web 图片管理 | 进程内 Map 不跨重启/实例 |
+| 数据模型 | API/Worker | `apps/server/prisma/schema.prisma` + migrations | Prisma repositories/services | schema 大且格式检查未进入日常 gate |
+| 扩展发布 | `pnpm package:extension` | release/package/verify 脚本和签名证据 | 官网下载 API、MV3 扩展 | preflight 单一串行入口过重 |
+| 项目真相 | 根 README 与公开 docs | `dev-docs/README.md` 索引的内部 owner | Agent、开发者、阶段验收 | 审计前缺少唯一当前状态 |
+
+## 文档盘点
+
+| 文件 | 当前角色 | 状态 | 建议动作 |
+| --- | --- | --- | --- |
+| `docs/PROJECT-OVERVIEW.md` | public | active | keep，维护公开产品/架构入口 |
+| `docs/deployment.md` | public | active | keep，线上记录必须绑定提交与日期 |
+| `docs/RUNBOOK.md` | public | active | keep，继续承载运维步骤 |
+| `docs/plans/*.md` | internal history | stale | keep，不作为当前阶段状态 owner |
+| `docs/archive/` | history | active | keep，不回流当前决策 |
+| `dev-docs/*.md` | internal truth | active | 按 owner 职责更新 |
+
+## AI 债务和假成功
+
+- 重复页面/组件/API：多个超大 route/page/extension 文件聚合了多个职责，存在高变更冲突风险。
+- mock/假数据：大量合同测试有价值，但 Web 的源码字符串测试不能替代真实浏览器行为。
+- 自定义 wrapper：扩展发布与部署 gate 很完整，但 `preflight` 串行包含 132 个步骤，定位和耗时成本过高。
+- 多套状态/请求/权限模式：账号 token 与设备 session 已有明确迁移边界；旧兼容路径必须继续由 rollout gate 限制。
+- 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
+- 异常吞掉或假成功：安全 CI 使用 `continue-on-error`；审计日志写入失败只记录 console；普通 server test 跳过多组 PostgreSQL 集成测试。
+- 必须先修：P0 身份、SSRF/资源和供应链门禁。
+- 可以排期：大文件渐进拆分、真实 Web 浏览器回归、上传配额 Redis 化和审计失败可观测性。
+
+## 危险接管动作
+
+- 是否要创建或改写 agent 宪法：是，用户已明确要求按审计流程修复并继续。
+- 是否要确认内部真源目录：使用此前审计推荐的 `dev-docs/`，用户已要求按该流程执行。
+- 是否要移动/归档/删除旧文档：否。
+- 是否要重命名产品或公开文案：否。
+- 是否要删除旧 API/字段/路由：否。
+- 是否要改变 Git/发布流程：只做当前分支阶段提交与 push，不创建 tag、GitHub Release 或生产发布。
+
+## 下一步
+
+- 推荐下一路线：按 `stages/project-hardening-2026-09.md` 执行当前唯一子阶段。
+- 为什么不是直接开发：多 owner 修复需要一个持久顺序，防止安全、CI 和结构更改互相污染。
+- 第一个安全任务：建立治理和运行基线，确保后续提交有唯一范围和验收 owner。
+- 需要用户确认：已由 2026-09-05 “按照这个流程修复这些问题并且按阶段性 push”覆盖本地实现、阶段提交与当前分支推送；生产操作不包含在内。
+- 停止条件：出现产品行为改变、数据迁移、真实费用、凭据、部署、公开发布或无法隔离用户现有改动。
+- 未验证项：远端仓库 visibility、生产运行态、真实浏览器/Provider/Ozon 行为。
