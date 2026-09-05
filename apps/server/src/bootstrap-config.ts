@@ -25,6 +25,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateExtensionDeviceAuthEnvironment } from './lib/extension-device-auth.js';
+import { assertRuntimeModeSafety } from './lib/runtime-mode-safety.js';
 
 function loadExternalConfig(): void {
   const candidates: string[] = [];
@@ -78,6 +79,7 @@ function loadExternalConfig(): void {
 loadExternalConfig();
 
 try {
+  assertRuntimeModeSafety(process.env);
   validateExtensionDeviceAuthEnvironment(process.env);
 } catch (error) {
   console.error(`[FATAL] ${(error as Error).message}`);
@@ -100,12 +102,6 @@ if (process.env.NODE_ENV === 'production') {
 
   if (!process.env.DATABASE_URL) {
     console.error('[FATAL] DATABASE_URL 未配置，拒绝启动');
-    process.exit(1);
-  }
-
-  const redisDisabled = process.env.REDIS_DISABLED === '1' || process.env.REDIS_DISABLED === 'true';
-  if (!redisDisabled && !process.env.REDIS_URL) {
-    console.error('[FATAL] REDIS_URL 未配置且 REDIS_DISABLED 未开启，拒绝启动');
     process.exit(1);
   }
 

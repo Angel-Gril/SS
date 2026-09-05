@@ -88,6 +88,7 @@ import { generateProductContentDraft, type ProductContentField } from '../servic
 import { buildSourceProductProfile, type SourceProductProfile } from '../services/source-product-profile.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { transferSourceProductVideos } from '../services/source-video-transfer.js';
+import { parseCollectWatermarkInput } from '../services/image-processing-input.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
 import { buildSourceRichContentPlan } from 'shared/source-rich-content-plan';
@@ -8003,36 +8004,18 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
   // ====== 水印处理 ======
   app.post('/watermark', async (request, reply) => {
     const { userId } = (request as any).user;
-    const body = request.body as {
-      ids: string[];
-      type: 'text' | 'image';
-      text?: string;
-      imageUrl?: string;
-      position?: string;
-      opacity?: number;
-      fontSize?: number;
-      fontColor?: string;
-      scale?: number;
-    };
-
-    if (!body?.ids?.length) {
-      return reply.status(400).send({ code: 0, msg: '请选择商品' });
+    let parsed;
+    try {
+      parsed = parseCollectWatermarkInput(request.body);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
     }
 
     const { processItemWatermarks } = await import('../services/watermark.js');
-    const config: any = {
-      type: body.type || 'text',
-      text: body.text || 'SS ERP',
-      imageUrl: body.imageUrl,
-      position: body.position || 'bottom-right',
-      opacity: body.opacity ?? 50,
-      fontSize: body.fontSize,
-      fontColor: body.fontColor,
-      scale: body.scale,
-    };
+    const { ids, config } = parsed;
 
     const items = await prisma.supplyGoods.findMany({
-      where: { id: { in: body.ids }, userId },
+      where: { id: { in: ids }, userId },
     });
 
     const { processed, failed } = await processWatermarkItemsWithConcurrency(items, config, processItemWatermarks);

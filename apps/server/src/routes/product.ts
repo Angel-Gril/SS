@@ -18,6 +18,7 @@ import {
   invalidateWarehouseLogisticsScope,
   warehouseLogisticsScopeChanged,
 } from '../services/logistics-scope-invalidation.js';
+import { parseWatermarkConfig } from '../services/image-processing-input.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -1150,21 +1151,11 @@ export async function productRoutes(app: FastifyInstance) {
   app.post('/:id/watermark-and-replace', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const body = request.body as {
-      config: {
-        type: 'text' | 'image';
-        text?: string;
-        imageUrl?: string;
-        position: string;
-        opacity: number;
-        fontSize?: number;
-        fontColor?: string;
-        scale?: number;
-      };
-    };
-
-    if (!body?.config) {
-      return reply.status(400).send({ code: 0, msg: '缺少水印配置' });
+    let config;
+    try {
+      config = parseWatermarkConfig((request.body as { config?: unknown } | null)?.config);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
     }
 
     const product = await prisma.product.findFirst({
@@ -1186,7 +1177,7 @@ export async function productRoutes(app: FastifyInstance) {
     const { processItemWatermarks } = await import('../services/watermark.js');
     const { getStorageBackend } = await import('../services/image-storage.js');
 
-    const wmResult = await processItemWatermarks(images, product.id, body.config as any);
+    const wmResult = await processItemWatermarks(images, product.id, config);
     if (wmResult.failed === images.length) {
       return reply.status(500).send({ code: 0, msg: '所有图片水印处理均失败' });
     }

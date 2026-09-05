@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-1-governance-runtime-baseline
+- authorization_substage: stage-2-p0-security-boundaries
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-1-governance-runtime-baseline
+- active_substage: stage-2-p0-security-boundaries
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: [dev-docs/current-state-audit.md, dev-docs/technical-selection.md, dev-docs/architecture.md, dev-docs/acceptance.md, scripts/bootstrap-local-env.test.mjs]
+- evidence_refs: [apps/server/src/__tests__/seed-safety.test.ts, apps/server/src/__tests__/runtime-mode-safety.test.ts, apps/server/src/__tests__/image-source-loader.test.ts, apps/server/src/__tests__/image-processing-input.test.ts, apps/server/src/__tests__/image-processing-security-wiring.test.ts]
 
 ## 阶段目标与用户流程
 
@@ -91,10 +91,10 @@
 
 本节随 active_substage 收尾更新；结构通过不替代真实命令证据。
 
-- actual_result: 内部真源、Agent 宪法和安全的 local env bootstrap 已建立；当前 ignored `.env` 已通过 local profile 校验
-- changed_owners: `AGENTS.md`、`dev-docs/*`、`scripts/bootstrap-local-env.mjs`、`docs/local-development.md`
-- plan_deviation: bootstrap 脚本在 plan gate 通过后、execute 状态写回前完成；保留真实 RED/GREEN，但该次流程顺序证据不完整
-- fresh_evidence: Sliver adoption/constitution/plan/execute guardrail 通过；`node --test scripts/bootstrap-local-env.test.mjs` 3/3；local env check 0 failure；diff check 通过
-- remaining_risk: Web/API 本轮未重启；P0 安全、供应链、CI 和结构问题仍由后续子阶段处理
-- next_substage: stage-2-p0-security-boundaries
-- git_checkpoint: 本阶段以 `docs(project): establish hardening truth and local runtime baseline` 独立提交并推送当前分支
+- actual_result: 固定管理员 seed 已移除；production/cloud 禁止 Noop Redis；上传、水印、collect/product 和批量缩放统一消费受限图片来源与输入 owner
+- changed_owners: `apps/server/prisma/seed.ts`、`bootstrap-config.ts`、`runtime-mode-safety.ts`、`image-processing-input.ts`、`image-source-loader.ts`、`watermark.ts` 及三个 route 消费者
+- plan_deviation: 本地 reader factory 首次接线出现模块初始化顺序错误，定向测试立即失败；移动默认依赖初始化后恢复，无兼容分支
+- fresh_evidence: focused 7 files/47 tests；full server 391 files/5154 tests，223 environment skips；server build、typecheck 通过；lint 0 errors/20 existing warnings
+- remaining_risk: 真实生产启动、远程攻击流量和浏览器图片操作未执行；供应链、CI PostgreSQL、审计/配额与结构债务仍待后续阶段
+- next_substage: stage-3-supply-chain-ci-data-gates
+- git_checkpoint: 本阶段以 `fix(security): close runtime and image processing boundaries` 独立提交并推送当前分支

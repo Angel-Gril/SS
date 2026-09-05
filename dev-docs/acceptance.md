@@ -35,7 +35,7 @@
 ## 分层完成标准
 
 - 阶段 1：内部真源 guardrail 通过；当前 local env 校验可复现或有明确修复入口。
-- 阶段 2：固定 seed 凭据删除；cloud/production 禁止 Noop Redis；所有用户 URL 图片读取统一受限；负例测试通过。
+- 阶段 2：已完成。固定 seed 凭据删除；cloud/production 禁止 Noop Redis；水印/上传/缩放 URL 统一受公网或受控本地 reader 限制；负例与全量后端回归通过。
 - 阶段 3：高危生产依赖修复或显式阻断；CI audit 可执行且阻断；关键 PostgreSQL integration 有隔离 runner；schema format 检查通过。
 - 阶段 4：至少一个高冲突 owner 完成无行为变化的渐进拆分；Web 真实浏览器最小 smoke 有可执行入口；lint 本轮不新增 warning。
 

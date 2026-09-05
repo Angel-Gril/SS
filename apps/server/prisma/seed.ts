@@ -1,26 +1,8 @@
 import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const adminPhone = '13800000000';
-  const existing = await prisma.user.findUnique({ where: { phone: adminPhone } });
-
-  if (!existing) {
-    const passwordHash = await bcrypt.hash('admin123456', 12);
-    await prisma.user.create({
-      data: {
-        phone: adminPhone,
-        passwordHash,
-        nickname: '系统管理员',
-        role: 'ADMIN',
-        balance: 10000,
-      },
-    });
-    console.log('Created admin user: 13800000000 / admin123456');
-  }
-
   const noticeCount = await prisma.notice.count();
   if (noticeCount === 0) {
     await prisma.notice.createMany({

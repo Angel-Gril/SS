@@ -1,17 +1,26 @@
 import type { FastifyInstance } from 'fastify';
 import { authenticate, requireRole } from '../lib/auth.js';
 import { getStorageBackend } from '../services/image-storage.js';
-import { applyWatermark, type WatermarkConfig } from '../services/watermark.js';
+import { applyWatermark } from '../services/watermark.js';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { lookup } from 'dns/promises';
-import { isIP } from 'net';
 import sharp from 'sharp';
 import { uploadLimiter } from '../lib/upload-limiter.js';
 import { getConfig } from '../config/system-config-schema.js';
+import {
+  parseBatchResizeInput,
+  parseUploadFromUrlInput,
+  parseWatermarkBatchInput,
+  parseWatermarkPreviewInput,
+} from '../services/image-processing-input.js';
+import {
+  IMAGE_PROCESSING_MAX_BYTES,
+  IMAGE_PROCESSING_MAX_PIXELS,
+  loadBoundedImageSource,
+} from '../services/image-source-loader.js';
 
-const MAX_BYTES = 20 * 1024 * 1024;
+const MAX_BYTES = IMAGE_PROCESSING_MAX_BYTES;
 
 const LARGE_BODY_LIMIT = 30 * 1024 * 1024;
 
@@ -76,90 +85,6 @@ async function checkUploadLimits(userId: string, bytes: number): Promise<UploadL
   const rateCheck = await checkUploadRateLimit(userId);
   if (!rateCheck.allowed) return rateCheck;
   return checkUploadQuota(userId, bytes);
-}
-
-async function readLimitedResponseBuffer(res: Response, maxBytes: number): Promise<Buffer> {
-  const contentLength = Number(res.headers.get('content-length') || 0);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error(`remote file exceeds ${maxBytes} bytes`);
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > maxBytes) throw new Error(`remote file exceeds ${maxBytes} bytes`);
-    return buf;
-  }
-
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      throw new Error(`remote file exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(Buffer.from(value));
-  }
-
-  return Buffer.concat(chunks, total);
-}
-
-function isPrivateIp(address: string): boolean {
-  if (address === '::1') return true;
-  if (address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
-
-  const mapped = address.startsWith('::ffff:') ? address.slice(7) : address;
-  if (isIP(mapped) !== 4) return false;
-
-  const parts = mapped.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return true;
-  }
-
-  const a = parts[0]!;
-  const b = parts[1]!;
-  if (a === 10 || a === 127 || a === 0) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
-
-  return false;
-}
-
-async function validateRemoteImageUrl(rawUrl: string): Promise<URL> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error('URL 格式错误');
-  }
-
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error('仅支持 http/https 图片 URL');
-  }
-  if (!parsed.hostname || parsed.username || parsed.password) {
-    throw new Error('图片 URL 不允许包含认证信息');
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    throw new Error('不允许抓取本机地址');
-  }
-  if (isIP(hostname) && isPrivateIp(hostname)) {
-    throw new Error('不允许抓取内网地址');
-  }
-
-  const records = await lookup(hostname, { all: true });
-  if (!records.length || records.some((record) => isPrivateIp(record.address))) {
-    throw new Error('不允许抓取内网地址');
-  }
-
-  return parsed;
 }
 
 export async function imageUploadRoutes(app: FastifyInstance) {
@@ -278,8 +203,12 @@ export async function imageUploadRoutes(app: FastifyInstance) {
   });
 
   app.post('/upload-from-url', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
-    const body = request.body as { url: string; shopId?: string };
-    if (!body?.url) return reply.status(400).send({ code: 0, msg: '缺少 url' });
+    let body;
+    try {
+      body = parseUploadFromUrlInput(request.body);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
+    }
     try {
       const { userId } = (request as any).user;
       const rateCheck = await checkUploadRateLimit(userId);
@@ -287,32 +216,20 @@ export async function imageUploadRoutes(app: FastifyInstance) {
         return reply.status(429).send({ code: 0, msg: rateCheck.reason });
       }
 
-      const remoteUrl = await validateRemoteImageUrl(body.url);
-      const res = await fetch(remoteUrl, {
-        redirect: 'error',
-        signal: AbortSignal.timeout(30000),
-      });
-      if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-      const buf = await readLimitedResponseBuffer(res, MAX_BYTES);
+      const source = await loadBoundedImageSource(body.url);
+      const buf = source.buffer;
 
       const quotaCheck = await checkUploadQuota(userId, buf.length);
       if (!quotaCheck.allowed) {
         return reply.status(429).send({ code: 0, msg: quotaCheck.reason });
       }
 
-      const contentType = normalizeMime(res.headers.get('content-type') || '');
+      const contentType = normalizeMime(source.contentType);
       if (contentType && !ALLOWED_MIME.has(contentType)) {
         return reply.status(400).send({ code: 0, msg: `不支持的图片类型: ${contentType}` });
       }
-      const detected = await sharp(buf).metadata().catch(() => null);
-      if (!detected || !detected.format) {
-        return reply.status(400).send({ code: 0, msg: '远程 URL 不是有效图片' });
-      }
-      if (buf.length > MAX_BYTES) {
-        return reply.status(413).send({ code: 0, msg: '图片超出 20MB 限制' });
-      }
-
-      const filename = decodeURIComponent(remoteUrl.pathname.split('/').pop() || '') || `img_${Date.now()}.jpg`;
+      const finalUrl = new URL(source.finalUrl);
+      const filename = decodeURIComponent(finalUrl.pathname.split('/').pop() || '') || `img_${Date.now()}.jpg`;
       const backend = await getStorageBackend(body.shopId);
       const result = await backend.uploadBuffer(buf, filename, contentType || undefined, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
@@ -322,21 +239,16 @@ export async function imageUploadRoutes(app: FastifyInstance) {
   });
 
   app.post('/upload-watermarked', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
-    const body = request.body as {
-      sourceUrls: string[];
-      itemId: string;
-      config: WatermarkConfig;
-      uploadToCdn?: boolean;
-      shopId?: string;
-    };
-    if (!Array.isArray(body?.sourceUrls) || body.sourceUrls.length === 0) {
-      return reply.status(400).send({ code: 0, msg: '缺少 sourceUrls' });
-    }
-    if (!body.itemId || !body.config) {
-      return reply.status(400).send({ code: 0, msg: '缺少 itemId 或 config' });
+    let body;
+    try {
+      body = parseWatermarkBatchInput(request.body);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
     }
 
     const { userId } = (request as any).user;
+    const rateCheck = await checkUploadRateLimit(userId);
+    if (!rateCheck.allowed) return reply.status(429).send({ code: 0, msg: rateCheck.reason });
     const results: Array<{ source: string; watermarked: string; uploaded?: string; error?: string }> = [];
     const backend = body.uploadToCdn ? await getStorageBackend(body.shopId).catch((e) => {
       throw new Error(`存储后端未配置: ${e.message}`);
@@ -351,6 +263,8 @@ export async function imageUploadRoutes(app: FastifyInstance) {
         if (backend) {
           const localPath = join(process.cwd(), 'public', relativePath.replace(/^\//, ''));
           const buf = await readFile(localPath);
+          const quotaCheck = await checkUploadQuota(userId, buf.length);
+          if (!quotaCheck.allowed) throw new Error(quotaCheck.reason);
           const filename = relativePath.split('/').pop() || `wm_${i}.jpg`;
           const uploaded = await backend.uploadBuffer(buf, filename, undefined, { category: 'watermarked', ownerId: userId });
           entry.uploaded = uploaded.url;
@@ -367,11 +281,16 @@ export async function imageUploadRoutes(app: FastifyInstance) {
   });
 
   app.post('/preview-watermark', async (request, reply) => {
-    const body = request.body as { url: string; config: WatermarkConfig };
-    if (!body?.url || !body?.config) {
-      return reply.status(400).send({ code: 0, msg: '缺少 url 或 config' });
+    let body;
+    try {
+      body = parseWatermarkPreviewInput(request.body);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
     }
     try {
+      const { userId } = (request as any).user;
+      const rateCheck = await checkUploadRateLimit(userId);
+      if (!rateCheck.allowed) return reply.status(429).send({ code: 0, msg: rateCheck.reason });
       const previewId = `preview_${Date.now()}`;
       const relativePath = await applyWatermark(body.url, previewId, 0, body.config);
       return reply.send({ code: 1, msg: 'ok', data: { previewUrl: relativePath } });
@@ -382,21 +301,15 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
   // ─── 批量改分辨率 ───
   app.post('/batch-resize', async (request, reply) => {
-    const body = request.body as {
-      urls: string[];
-      width?: number;
-      height?: number;
-      quality?: number;
-      uploadToCdn?: boolean;
-    };
+    let body;
+    try {
+      body = parseBatchResizeInput(request.body);
+    } catch (error: any) {
+      return reply.status(400).send({ code: 0, msg: error.issues?.[0]?.message || '参数错误' });
+    }
     const { userId } = (request as any).user;
-
-    if (!Array.isArray(body?.urls) || body.urls.length === 0) {
-      return reply.status(400).send({ code: 0, msg: '缺少 urls 数组' });
-    }
-    if (!body.width && !body.height) {
-      return reply.status(400).send({ code: 0, msg: '至少指定 width 或 height' });
-    }
+    const rateCheck = await checkUploadRateLimit(userId);
+    if (!rateCheck.allowed) return reply.status(429).send({ code: 0, msg: rateCheck.reason });
 
     const RESIZE_DIR = join(process.cwd(), 'public', 'resized');
     await mkdir(RESIZE_DIR, { recursive: true });
@@ -406,18 +319,17 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
     for (const url of body.urls) {
       try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
+        const source = await loadBoundedImageSource(url);
+        const buf = source.buffer;
 
-        const pipeline = sharp(buf).resize({
+        const pipeline = sharp(buf, { limitInputPixels: IMAGE_PROCESSING_MAX_PIXELS }).resize({
           width: body.width,
           height: body.height,
           fit: 'inside',
           withoutEnlargement: true,
         });
-        const outputBuf = await pipeline.jpeg({ quality: body.quality || 90 }).toBuffer();
-        const meta = await sharp(outputBuf).metadata();
+        const outputBuf = await pipeline.jpeg({ quality: body.quality }).toBuffer();
+        const meta = await sharp(outputBuf, { limitInputPixels: IMAGE_PROCESSING_MAX_PIXELS }).metadata();
 
         const hash = createHash('md5').update(buf).digest('hex').slice(0, 8);
         const filename = `resize_${Date.now()}_${hash}.jpg`;
@@ -428,6 +340,8 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
         if (backend) {
           try {
+            const quotaCheck = await checkUploadQuota(userId, outputBuf.length);
+            if (!quotaCheck.allowed) throw new Error(quotaCheck.reason);
             const uploaded = await backend.uploadBuffer(outputBuf, filename, 'image/jpeg', { category: 'tmp', ownerId: userId });
             entry.uploaded = uploaded.url;
           } catch (e: any) {

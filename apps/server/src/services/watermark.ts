@@ -2,6 +2,16 @@ import sharp from 'sharp';
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import {
+  IMAGE_PROCESSING_MAX_PIXELS,
+  loadBoundedImageSource,
+} from './image-source-loader.js';
+import {
+  parseWatermarkConfig,
+  parseWatermarkImageUrls,
+  parseWatermarkItemId,
+  type WatermarkConfig,
+} from './image-processing-input.js';
 
 const WATERMARK_DIR = join(process.cwd(), 'public', 'watermarked');
 
@@ -13,16 +23,7 @@ export type WatermarkPosition =
   | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
   | 'center' | 'tile';
 
-export interface WatermarkConfig {
-  type: 'text' | 'image';
-  text?: string;
-  imageUrl?: string;
-  position: WatermarkPosition;
-  opacity: number; // 0-100
-  fontSize?: number;
-  fontColor?: string; // #rrggbb
-  scale?: number; // 图片水印占原图宽度百分比 0-100
-}
+export type { WatermarkConfig } from './image-processing-input.js';
 
 export function normalizeWatermarkSourceUrl(url: string): string {
   const text = String(url || '').trim();
@@ -41,9 +42,7 @@ export function normalizeWatermarkSourceUrl(url: string): string {
 
 async function fetchImageBuffer(url: string): Promise<Buffer> {
   const sourceUrl = normalizeWatermarkSourceUrl(url);
-  const res = await fetch(sourceUrl, { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`Failed to fetch image: HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  return (await loadBoundedImageSource(sourceUrl)).buffer;
 }
 
 // 字体回退链：DejaVu Sans / Liberation Sans 在 Linux librsvg 中通常自带；
@@ -134,22 +133,24 @@ function imageGravity(pos: WatermarkPosition): string {
 }
 
 export async function applyWatermark(imageUrl: string, itemId: string, index: number, config: WatermarkConfig): Promise<string> {
+  const safeItemId = parseWatermarkItemId(itemId);
+  const safeConfig = parseWatermarkConfig(config);
   const imgBuffer = await fetchImageBuffer(imageUrl);
-  const metadata = await sharp(imgBuffer).metadata();
+  const metadata = await sharp(imgBuffer, { limitInputPixels: IMAGE_PROCESSING_MAX_PIXELS }).metadata();
   const width = metadata.width || 800;
   const height = metadata.height || 800;
 
   let compositeInput: sharp.OverlayOptions[];
 
-  if (config.type === 'image' && config.imageUrl) {
-    const wmBuffer = await fetchImageBuffer(config.imageUrl);
-    const scalePct = Math.max(5, Math.min(100, config.scale ?? 25));
-    const wmResized = await sharp(wmBuffer)
+  if (safeConfig.type === 'image' && safeConfig.imageUrl) {
+    const wmBuffer = await fetchImageBuffer(safeConfig.imageUrl);
+    const scalePct = Math.max(5, Math.min(100, safeConfig.scale ?? 25));
+    const wmResized = await sharp(wmBuffer, { limitInputPixels: IMAGE_PROCESSING_MAX_PIXELS })
       .resize({ width: Math.floor(width * scalePct / 100), withoutEnlargement: true })
-      .ensureAlpha(config.opacity / 100)
+      .ensureAlpha(safeConfig.opacity / 100)
       .toBuffer();
 
-    if (config.position === 'tile') {
+    if (safeConfig.position === 'tile') {
       // 图片水印的 tile：通过 SVG 多次引入 base64 图片
       const meta = await sharp(wmResized).metadata();
       const wmW = meta.width || Math.floor(width * scalePct / 100);
@@ -160,27 +161,30 @@ export async function applyWatermark(imageUrl: string, itemId: string, index: nu
       let body = '';
       for (let y = 0; y < height + stepY; y += stepY) {
         for (let x = -stepX; x < width + stepX; x += stepX) {
-          body += `<image x="${x}" y="${y}" width="${wmW}" height="${wmH}" href="data:image/png;base64,${b64}" transform="rotate(-30 ${x + wmW / 2} ${y + wmH / 2})" opacity="${config.opacity / 100}"/>`;
+          body += `<image x="${x}" y="${y}" width="${wmW}" height="${wmH}" href="data:image/png;base64,${b64}" transform="rotate(-30 ${x + wmW / 2} ${y + wmH / 2})" opacity="${safeConfig.opacity / 100}"/>`;
         }
       }
       const tileSvg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${body}</svg>`);
       compositeInput = [{ input: tileSvg }];
     } else {
-      compositeInput = [{ input: wmResized, gravity: imageGravity(config.position) as any }];
+      compositeInput = [{ input: wmResized, gravity: imageGravity(safeConfig.position) as any }];
     }
   } else {
-    const text = config.text || 'WATERMARK';
+    const text = safeConfig.text || 'WATERMARK';
     // 文字 SVG 已经按位置在画布内自定位，不能再用 sharp gravity（会再叠加偏移）
-    const wmSvg = config.position === 'tile'
-      ? buildTileTextSvg(text, width, height, config)
-      : buildSingleTextSvg(text, width, height, config);
+    const wmSvg = safeConfig.position === 'tile'
+      ? buildTileTextSvg(text, width, height, safeConfig)
+      : buildSingleTextSvg(text, width, height, safeConfig);
     compositeInput = [{ input: wmSvg }];
   }
 
-  const result = await sharp(imgBuffer).composite(compositeInput).jpeg({ quality: 90 }).toBuffer();
+  const result = await sharp(imgBuffer, { limitInputPixels: IMAGE_PROCESSING_MAX_PIXELS })
+    .composite(compositeInput)
+    .jpeg({ quality: 90 })
+    .toBuffer();
 
-  const hash = createHash('md5').update(imageUrl + JSON.stringify(config)).digest('hex').slice(0, 8);
-  const filename = `${itemId}_${index}_${hash}.jpg`;
+  const hash = createHash('md5').update(imageUrl + JSON.stringify(safeConfig)).digest('hex').slice(0, 8);
+  const filename = `${safeItemId}_${index}_${hash}.jpg`;
   const filepath = join(WATERMARK_DIR, filename);
 
   await sharp(result).toFile(filepath);
@@ -193,17 +197,19 @@ export async function processItemWatermarks(
   itemId: string,
   config: WatermarkConfig,
 ): Promise<{ watermarkedImages: string[]; failed: number }> {
+  const safeImages = parseWatermarkImageUrls(images);
+  const safeConfig = parseWatermarkConfig(config);
   const watermarkedImages: string[] = [];
   let failed = 0;
 
-  for (let i = 0; i < images.length; i++) {
+  for (let i = 0; i < safeImages.length; i++) {
     try {
-      const relativePath = await applyWatermark(images[i]!, itemId, i, config);
+      const relativePath = await applyWatermark(safeImages[i]!, itemId, i, safeConfig);
       watermarkedImages.push(relativePath);
     } catch (e: any) {
       console.warn(`[watermark] failed for image ${i} of item ${itemId}:`, e.message?.slice(0, 100));
       failed++;
-      watermarkedImages.push(images[i]!);
+      watermarkedImages.push(safeImages[i]!);
     }
   }
 

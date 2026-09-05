@@ -78,7 +78,7 @@
 - 多套状态/请求/权限模式：账号 token 与设备 session 已有明确迁移边界；旧兼容路径必须继续由 rollout gate 限制。
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
 - 异常吞掉或假成功：安全 CI 使用 `continue-on-error`；审计日志写入失败只记录 console；普通 server test 跳过多组 PostgreSQL 集成测试。
-- 必须先修：P0 身份、SSRF/资源和供应链门禁。
+- 必须先修：P0 身份与 SSRF/资源边界已关闭；下一步是供应链与 CI 门禁。
 - 可以排期：大文件渐进拆分、真实 Web 浏览器回归、上传配额 Redis 化和审计失败可观测性。
 
 ## 危险接管动作
