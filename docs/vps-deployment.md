@@ -6,7 +6,19 @@ This project can keep the current single-server systemd model. There are three s
 2. direct Git checkout deployment at `/opt/ss-erp`
 3. release directory deployment with `/opt/ss-erp/current`
 
-## Current Production Release (2026-08-20)
+## Latest Japan/COM Deployment (2026-09-05)
+
+- The COM VPS now runs immutable commit
+  `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8`. Extension `1.0.313` was signed with
+  Ed25519 key ID `ss-erp-extension-release-2026-09-05-01` and deployed dark.
+- Target-bound backup `ss_erp_20260905_145638.sql.gz` passed a 142-table temporary restore drill;
+  148 migrations, service restart, and local/public `/ready` checks passed.
+- The website publication pointer intentionally remains on approved `1.0.311`; `1.0.313` has not
+  been published. AI Media and BYOK remain dark.
+- Post-deploy VPS verification returned `0 failures / 1 warning`; the only warning is unconfigured
+  remote backup storage. No Provider or Ozon writes were executed.
+
+## Historical Production Release (2026-08-20)
 
 - Both COM and CN production VPS deployments are bound to immutable commit
   `d27b3ad855bb7bc373cb168b2861100c4aeea61e`. Application services are active and `/ready`

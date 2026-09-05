@@ -173,6 +173,13 @@
 - VPS 只读签名盘点确认：目标 `445033cd/1.0.312` 签名路径缺失，仅存在 `1.0.307` 至 `1.0.311` 的历史公开签名，未发现旧发布私钥；旧签名不能重放到新提交。随后在本机受保护目录创建新 Ed25519 key，保留旧公钥用于历史验证，待 keyring 轮换提交后重新构建候选并签名。
 - 剩余风险：唯一线上 verifier warning 为未配置 CN/远端备份；没有可证明的 Ozon 专用测试店铺，编辑/inpaint Provider、受管扩展 live worker 仍未验证。
 
+### stage-10 deployment closeout（2026-09-05）
+
+- 旧签名 key 在 VPS/本机授权目录均不可恢复；新 Ed25519 key `ss-erp-extension-release-2026-09-05-01` 已加入 trusted keyring，旧 key 保留以验证历史发布。
+- `be6a6374` 的 `1.0.313` cloud/local 候选完成签名，VPS release-mode 部署成功；部署过程启用 SSH keepalive，避免旧 release 冻结扫描期间通道空闲断开。
+- 目标备份 `ss_erp_20260905_145638.sql.gz` 完成 142 表恢复演练并清理临时库；`be6a6374` attestation、148 migrations、服务重启和本地/公网 `/ready` 均通过。
+- 暗部署后 verifier 为 `0 failure / 1 warning`；官网 pointer 继续服务已批准的 `1.0.311`，`1.0.313` 未执行 website publication。未产生 Provider 费用或 Ozon/Provider 写入。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

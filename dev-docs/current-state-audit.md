@@ -79,7 +79,7 @@
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
 - 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
 - 用户级工具边界：`C:\Users\550W\.codex\skills` 的 45 个顶层技能入口指向未授权的 `C:\Users\550W\.cc-switch\skills`，其内容未审计；允许目录内的 gstack 工具包含自动更新、遥测、会话导入和 Hook 设置写入能力，但没有证据表明这些 Hook 在当前用户配置中已启用。下一步必须先取得 `.cc-switch` 或实际用户配置的独立授权，不能把技能目录中的模板当作运行态证据。
-- 日本/COM VPS 生产修复证据：当前运行提交仍为 `d27b3ad8...`，服务、DB/Redis、Nginx/UFW、migration、双 `/ready` 和公开 extension `1.0.311` 均健康；已生成 `ss_erp_20260905_125513.sql.gz` 并完成 142 表临时恢复演练，d27 attestation 已刷新。BYOK pilot session 已撤销，policy 为 `revision:0/mode:off`，AI Media 写入能力保持暗态；完整 verifier 为 `0 failure / 1 warning`，仅剩 CN/远端备份未配置。修复提交 `d2293bc9` 已 push 但尚未部署，当前部署仍等待受控 keyring 轮换后新目标提交对应的外部 Ed25519 发布签名。
+- 日本/COM VPS 生产修复证据：current 已运行 `be6a6374...`，服务、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260905_145638.sql.gz` 已完成 142 表临时恢复演练，目标 attestation 已绑定 be6a6374。BYOK pilot session 已撤销，policy 为 `revision:0/mode:off`，AI Media 写入能力保持暗态；官网 pointer 仍保留已批准的 `1.0.311`，新版本未提前公开。完整 verifier 为 `0 failure / 1 warning`，仅剩 CN/远端备份未配置。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
 - 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
 
@@ -97,6 +97,6 @@
 - 推荐下一路线：本地开发可继续；需要发布时进入 `验收`/`发布准备`，补齐外部运行证据，不把本地绿灯当作发布授权。
 - 为什么不是直接开发：多 owner 修复需要一个持久顺序，防止安全、CI 和结构更改互相污染。
 - 第一个安全任务：建立治理和运行基线，确保后续提交有唯一范围和验收 owner。
-- 需要用户确认：2026-09-05 用户明确授权日本 VPS 生产修复操作；当前代码部署仍需外部 Ed25519 签名材料，Provider/Ozon 写入和远端备份仍未执行。
+- 需要用户确认：2026-09-05 用户明确授权日本 VPS 生产修复、key rotation、部署和恢复演练；当前 Provider/Ozon 写入和远端备份仍未执行，受管扩展 live worker 仍待独立验收。
 - 停止条件：出现产品行为改变、数据迁移、真实费用、凭据、部署、公开发布或无法隔离用户现有改动。
 - 未验证项：远端仓库 visibility、生产运行态、真实浏览器/Provider/Ozon 行为。

@@ -2,7 +2,15 @@
 
 本文档描述云端 SaaS 部署骨架。本地 Windows 离线包继续使用 `build/scripts`，不要和云端部署混用。
 
-## 当前生产发布（2026-08-20）
+## 日本/COM 最新部署（2026-09-05）
+
+- COM VPS 已切换到不可变提交 `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8`；扩展 `1.0.313`
+  使用 Ed25519 key ID `ss-erp-extension-release-2026-09-05-01` 完成签名和暗部署。
+- 目标备份 `ss_erp_20260905_145638.sql.gz` 已完成 142 表临时恢复演练并清理恢复库，148 migrations、服务重启和双 `/ready` 均通过。
+- 官网 publication pointer 继续保留已批准的 `1.0.311`，`1.0.313` 尚未公开发布；AI Media/BYOK 保持暗态。
+- 部署后 VPS verifier 为 `0 failure / 1 warning`，唯一 warning 为未配置远端备份；本次未执行 Provider/Ozon 写入。
+
+## 历史生产发布（2026-08-20）
 
 - COM 与 CN 两台生产 VPS 均运行不可变提交
   `d27b3ad855bb7bc373cb168b2861100c4aeea61e`；扩展 `1.0.311` 已部署但保持暗态，官网
@@ -481,7 +489,7 @@ EXTENSION_RELEASE_EXPECTED_LOCAL_ORIGIN=http://127.0.0.1:3001
 环境运行，VPS 只接收已签的公开证据：
 
 ```bash
-export EXTENSION_RELEASE_SIGNING_KEY_ID=ss-erp-extension-release-2026-08-02-01
+export EXTENSION_RELEASE_SIGNING_KEY_ID=ss-erp-extension-release-2026-09-05-01
 export EXTENSION_RELEASE_SIGNING_KEY_PATH=/operator-private/extension-release-signing-key.pkcs8.pem
 
 # 仅首次创建或审计轮换时运行；父目录必须预先限制为操作员/SYSTEM/Administrators。
