@@ -153,6 +153,7 @@
 - fresh_evidence: managed diagnostics contract 6/6；CLI 在当前机器返回 `EXTENSION_STATUS=MISSING`、`CDP_STATUS=NOT_FOUND`、退出码 2；受管安装未被错误地降级为 unpacked 验收。
 - remaining_risk: 固定 ID 对应的受管目录和 CDP 端口仍需外部 provisioning；稳定 key 只能由受管发布方提供，仓库不生成或替代该身份。
 - next_substage: 受管扩展安装后运行 `pnpm diagnose:extension:managed -- --expected-version <version>`，再执行 active-worker attestation 与 Unicode smoke。
+- git_checkpoint: commit `b2155982` 已 push 到 `origin/feat/ai-media-prompt-registry`；完整 `pnpm preflight` 在该检查点通过。
 
 ## stage-6 执行回写
 

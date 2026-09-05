@@ -1,12 +1,12 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-05，代码证据同步于 `6e159af8`，验收文档随后同步于 `42729300`。该结论来自当前分支、文件和本地命令，不替代生产验收。
+审计日期：2026-09-05，stage-9 代码证据同步于 `b2155982`。该结论来自当前分支、文件和本地命令，不替代生产验收。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git dirty state：当前工作树干净；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同和受管扩展探测证据已按逻辑提交并推送。
+- Git dirty state：当前工作树干净；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同和受管扩展诊断证据已按逻辑提交并推送。
 - 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
