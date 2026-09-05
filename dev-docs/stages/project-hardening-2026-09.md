@@ -130,10 +130,20 @@
 - actual_result: stage-7-project-truth-sync 已完成，内部验收、当前状态、技术选型与索引已同步到现有 stage-1 至 stage-6 提交证据。
 - changed_owners: `dev-docs/README.md`、`dev-docs/acceptance.md`、`dev-docs/current-state-audit.md`、`dev-docs/technical-selection.md`。
 - plan_deviation: 无；公开 docs、用户现有改动和生产状态未触碰。
-- fresh_evidence: adoption/foundation contract guardrail valid；旧审计指标搜索无结果；当前 HEAD `196d11dc` 与远端一致。
+- fresh_evidence: adoption/constitution guardrail valid；最终 `pnpm preflight` 退出码 0；server `5164 passed / 223 skipped`；source verifier `459/0/0`；AI quota、SSRF、durable operation claim、CI Action pin 合同均通过；当前 HEAD `73b46b59` 与远端一致。
 - remaining_risk: 外部运行态、Redis 集群/告警、真实 Provider/Ozon、完整浏览器和发布证据仍未验证。
 - next_substage: none; 继续本地开发可直接开始，发布准备需要另行验收授权。
-- git_checkpoint: commit `196d11dc` 已 push 到 `origin/feat/ai-media-prompt-registry`；后续本地开发不改变本阶段 closeout。
+- git_checkpoint: commit `73b46b59` 已 push 到 `origin/feat/ai-media-prompt-registry`；后续本地开发不改变本阶段 closeout。
+
+## stage-8 执行回写
+
+- actual_result: stage-8-security-boundary-repair 已完成。服务端图片、视频和 Ozon rich-content 下载统一使用公网 DNS 校验、固定连接、逐跳重定向限制和响应大小边界；AI 类目翻译增加每请求 20 项上限与 PostgreSQL 原子 quota reservation；商品生成额度改为 Provider 前原子预占，明确失败释放、未知结果保留；source listing AI operationKey 增加持久化 claim；CI Actions 固定完整 SHA 并限制 `contents: read`。
+- changed_owners: `apps/server/src/services/source-public-image-download.ts`、`source-image-transfer.ts`、`source-video-transfer.ts`、`ozon-rich-content.ts`、`ai-usage.ts`、`product-content-ai.ts`、`source-listing-ai-copy-execution.ts`、Prisma schema/migrations、`.github/workflows/ci.yml` 与对应合同测试。
+- plan_deviation: 无；未调用真实 Provider/Ozon、生产环境或远端备份，未改变默认关闭 feature flags。
+- fresh_evidence: SSRF focused 53/53；AI usage/product/category/listing tests passed；真实本地 PostgreSQL quota concurrency smoke 为 limit=2 时 5 并发恰好 2 成功；durable claim smoke 为 claimed -> in_progress -> replay；CI supply-chain contract 5/5；最终 preflight 0。
+- remaining_risk: 受管扩展 live worker、真实 Provider/Ozon、生产运行态/Redis 告警与 CN 远端备份仍未验证；全局用户级 skills/hooks 未扫描。
+- next_substage: none; 下一阶段需要独立外部验收授权或新的安全修复范围。
+- git_checkpoint: commits `96dfe6ad`、`8e16de4e`、`95a22ed8`、`ed0841ac`、`73b46b59` 已按顺序 push。
 
 ## stage-6 执行回写
 

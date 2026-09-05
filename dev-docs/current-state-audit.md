@@ -1,20 +1,20 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-05，最后同步于 commit `196d11dc`。该结论来自当前分支、文件和本地命令，不替代生产验收。
+审计日期：2026-09-05，最后同步于 commit `73b46b59`。该结论来自当前分支、文件和本地命令，不替代生产验收。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git dirty state：存在用户进行中的验证码、部署文档、preflight 与 CDP launcher 改动；本阶段必须按明确路径隔离提交。
-- 未跟踪文件：`scripts/launch-extension-cdp.mjs`、`scripts/launch-extension-cdp.test.mjs`，属于既有用户工作。
+- Git dirty state：当前工作树干净；认证、扩展发布、SSRF、AI quota、durable operation claim 与 CI pin 修复已按逻辑提交并推送。
+- 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
 - 现有内部文档：审计前没有统一真源；`docs/plans/` 含历史实施计划但状态跨度较大。
 - 现有公开文档：`README.md`、`docs/PROJECT-OVERVIEW.md`、`docs/README.md`、`docs/RUNBOOK.md`、`docs/deployment.md`。
 - package/framework 文件：根 `package.json`、`pnpm-lock.yaml`、`apps/web/package.json`、`apps/server/package.json`、`packages/shared/package.json`。
 - 启动/测试/构建脚本：`pnpm dev`、`pnpm typecheck`、`pnpm lint`、`pnpm preflight`、server Vitest、Web build、扩展 verifier。
-- schema/migration：`apps/server/prisma/schema.prisma`，146 个迁移；本地 `prisma migrate status` 为 up to date。
+- schema/migration：`apps/server/prisma/schema.prisma`，148 个迁移；本地 `prisma migrate status` 为 up to date。
 - 部署脚本：`scripts/deploy*.sh`、`docker-compose*.yml`、`deploy/systemd*` 与扩展签名/分发 gate。
 - 配置模板：`.env.example`、`.env.staging.example`、`.env.production.example`；真实 `.env` 被 Git 忽略。
 - 已知启动证据：类型检查、后端测试、Web build、扩展静态验证通过；`bootstrap-local-env.mjs` 修复当前 ignored `.env` 后，local profile 校验为 0 failure。
@@ -45,7 +45,7 @@
 - 当前第三方服务：Ozon、Cloudflare Turnstile/R2、S3-compatible OSS、阿里云/腾讯云短信、Sentry、AI 图片 Provider。
 - 当前部署方式：单 VPS，Nginx + systemd 或 Compose，API/Web/Worker 分进程。
 - 结论：沿用但修正。
-- 证据：现有组合已通过类型、构建、5160 个后端测试和扩展合同验证；风险集中在外部运行证据，而不是框架不适配。
+- 证据：现有组合已通过类型、构建、5164 个后端测试和扩展合同验证；风险集中在外部运行证据，而不是框架不适配。
 - 用户需要决定：本轮无需新的产品决定；真实部署、费用、凭据与迁移仍需单独授权。
 
 ## 调用链和 owner
