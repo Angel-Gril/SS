@@ -54,6 +54,14 @@ function memoryUsageStore(existing = 0): AiUsageStore {
     async record(event) {
       if (event.kind === 'request') fresh += 1;
     },
+    async reserveDailyLimit({ limit }) {
+      if (fresh >= limit) return { allowed: false, used: fresh, remaining: 0, limit };
+      fresh += 1;
+      return { allowed: true, used: fresh, remaining: Math.max(0, limit - fresh), limit };
+    },
+    async releaseDailyReservation() {
+      fresh = Math.max(0, fresh - 1);
+    },
   };
 }
 

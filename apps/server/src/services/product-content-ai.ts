@@ -6,7 +6,9 @@ import {
 } from './ai-translation-cache.js';
 import {
   assertAiDailyLimit,
+  isUnknownAiOutcome,
   normalizeAiUsageDate,
+  reserveAiDailyLimit,
   recordAiUsageEvent,
   type AiUsageStore,
 } from './ai-usage.js';
@@ -628,66 +630,87 @@ export async function generateProductContentDraft(params: GenerateProductContent
         store: params.cacheStore,
         now: () => now,
         translate: async () => {
-          const limit = await assertAiDailyLimit({
+          const limit = await reserveAiDailyLimit({
             store: params.usageStore,
             namespace,
             actorUserId: params.actorUserId,
             limit: params.config.userDailyProductGenerationLimit,
-            cacheHit: false,
             date,
           });
           latestLimit = { used: limit.used, remaining: limit.remaining, limit: limit.limit };
           if (!limit.allowed) throw new Error('AI product generation daily limit reached');
-
-          const ai = await params.generateText({
-            config: fieldConfig,
-            messages: [
-              { role: 'system', content: compiled.systemPrompt },
-              { role: 'user', content: compiled.userPrompt },
-            ],
-            temperature: compiled.temperature,
-            maxTokens: compiled.maxTokens,
-            allowReasoningRetry: compiled.allowReasoningRetry,
-          });
-          if (!ai.ok) {
-            await recordAiUsageEvent(params.usageStore, {
+          let reservationOpen = true;
+          const releaseReservation = async () => {
+            if (!reservationOpen || !params.usageStore.releaseDailyReservation) return;
+            await params.usageStore.releaseDailyReservation({
               namespace,
-              provider: fieldConfig.provider,
-              model: fieldConfig.model,
               actorUserId: params.actorUserId,
               date,
-              kind: 'failure',
             });
-            throw new Error(ai.error || 'AI generation failed');
-          }
+            reservationOpen = false;
+          };
+          try {
+            const ai = await params.generateText({
+              config: fieldConfig,
+              messages: [
+                { role: 'system', content: compiled.systemPrompt },
+                { role: 'user', content: compiled.userPrompt },
+              ],
+              temperature: compiled.temperature,
+              maxTokens: compiled.maxTokens,
+              allowReasoningRetry: compiled.allowReasoningRetry,
+            });
+            if (!ai.ok) {
+              await recordAiUsageEvent(params.usageStore, {
+                namespace,
+                provider: fieldConfig.provider,
+                model: fieldConfig.model,
+                actorUserId: params.actorUserId,
+                date,
+                kind: 'failure',
+              });
+              if (isUnknownAiOutcome(ai)) {
+                reservationOpen = false;
+              } else {
+                await releaseReservation();
+              }
+              throw new Error(ai.error || 'AI generation failed');
+            }
 
-          const parsed = parseGeneratedProductContent(field, ai.text);
-          const validationError = parsed.hasProhibitedStructuredContent
-            ? (field === 'title' ? 'AI 标题草稿不符合 Ozon 上架要求' : 'AI 描述草稿不符合 Ozon 上架要求')
-            : validateGeneratedText(field, parsed.text);
-          if (validationError) {
+            const parsed = parseGeneratedProductContent(field, ai.text);
+            const validationError = parsed.hasProhibitedStructuredContent
+              ? (field === 'title' ? 'AI 标题草稿不符合 Ozon 上架要求' : 'AI 描述草稿不符合 Ozon 上架要求')
+              : validateGeneratedText(field, parsed.text);
+            if (validationError) {
+              await recordAiUsageEvent(params.usageStore, {
+                namespace,
+                provider: ai.provider,
+                model: ai.model,
+                actorUserId: params.actorUserId,
+                date,
+                kind: 'failure',
+                usage: ai.usage,
+              });
+              await releaseReservation();
+              throw new Error(validationError);
+            }
+
             await recordAiUsageEvent(params.usageStore, {
               namespace,
               provider: ai.provider,
               model: ai.model,
               actorUserId: params.actorUserId,
               date,
-              kind: 'failure',
+              kind: 'request',
+              reserved: true,
               usage: ai.usage,
             });
-            throw new Error(validationError);
+            reservationOpen = false;
+            return { outputText: serializeProductContentDraftForCache(parsed), provider: ai.provider, model: ai.model, usage: ai.usage ? { ...ai.usage } : null };
+          } catch (error) {
+            await releaseReservation();
+            throw error;
           }
-
-          await recordAiUsageEvent(params.usageStore, {
-            namespace,
-            provider: ai.provider,
-            model: ai.model,
-            actorUserId: params.actorUserId,
-            date,
-            kind: 'request',
-            usage: ai.usage,
-          });
-          return { outputText: serializeProductContentDraftForCache(parsed), provider: ai.provider, model: ai.model, usage: ai.usage ? { ...ai.usage } : null };
         },
       });
 

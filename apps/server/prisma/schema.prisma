@@ -2667,6 +2667,22 @@ model AiUsageDaily {
   @@map("ai_usage_daily")
 }
 
+// AI quota reservations: atomic per-user/day slots held before Provider dispatch.
+model AiUsageQuotaDaily {
+  id            String   @id @default(cuid())
+  date          DateTime @db.Date
+  namespace     String
+  actorUserId   String   @map("actor_user_id")
+  consumedCount Int      @default(0) @map("consumed_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([date, namespace, actorUserId], name: "ai_usage_quota_daily_key")
+  @@index([date])
+  @@index([actorUserId, date])
+  @@map("ai_usage_quota_daily")
+}
+
 enum AiImageJobStatus {
   PENDING
   QUEUED

@@ -81,6 +81,31 @@ describe('AI usage controls', () => {
     expect(store.record).toHaveBeenNthCalledWith(3, expect.objectContaining({ kind: 'failure' }));
   });
 
+  it('atomically reserves a fresh provider call and releases failed reservations', async () => {
+    const prisma = {
+      $queryRaw: vi.fn().mockResolvedValueOnce([{ consumed_count: 3 }]),
+      $executeRaw: vi.fn(async () => 1),
+    };
+    const store = createPrismaAiUsageStore(prisma as unknown as PrismaAiUsageClient);
+
+    await expect(store.reserveDailyLimit!({
+      namespace: 'category_term',
+      actorUserId: 'user-1',
+      limit: 4,
+      date: '2026-06-25',
+    })).resolves.toMatchObject({ allowed: true, used: 3, remaining: 1, limit: 4 });
+    await expect(store.releaseDailyReservation!({
+      namespace: 'category_term',
+      actorUserId: 'user-1',
+      date: '2026-06-25',
+    })).resolves.toBeUndefined();
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(String(prisma.$queryRaw.mock.calls[0]?.[0])).toMatch(/ON CONFLICT[\s\S]*consumed_count.*< /u);
+    expect(String(prisma.$queryRaw.mock.calls[0]?.[0])).toMatch(/ai_usage_quota_daily/u);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
   it('creates a Prisma-backed store using daily aggregate upserts', async () => {
     const prisma = {
       $queryRaw: vi.fn(async () => [{

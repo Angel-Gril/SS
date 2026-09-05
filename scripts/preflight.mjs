@@ -108,6 +108,11 @@ const steps = [
     args: ['scripts/ai-media-provider-contract.test.mjs'],
   },
   {
+    name: 'AI category translation quota and fan-out guard',
+    command: 'node',
+    args: ['scripts/ai-category-translation-guard.test.mjs'],
+  },
+  {
     name: 'AI image capability candidate review contract',
     command: 'node',
     args: ['--test', 'scripts/ai-image-capability-candidate.test.mjs'],

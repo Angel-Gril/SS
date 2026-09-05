@@ -23,6 +23,8 @@ export interface AiUsageRecordEvent {
   completionTokens?: number;
   totalTokens?: number;
   usage?: AiTextUsage | null;
+  /** The request slot was already consumed by an atomic quota reservation. */
+  reserved?: boolean;
 }
 
 export interface AiUsageSummaryQuery {
@@ -36,6 +38,28 @@ export interface AiUsageSummaryQuery {
 export interface AiUsageStore {
   getDailySummary(query: AiUsageSummaryQuery): Promise<AiUsageSummary>;
   record(event: AiUsageRecordEvent): Promise<void>;
+  reserveDailyLimit?(params: AiUsageReservationParams): Promise<AiUsageReservationResult>;
+  releaseDailyReservation?(params: AiUsageReservationReleaseParams): Promise<void>;
+}
+
+export interface AiUsageReservationParams {
+  namespace: string;
+  actorUserId?: string | null;
+  limit: number;
+  date?: string;
+}
+
+export interface AiUsageReservationReleaseParams {
+  namespace: string;
+  actorUserId?: string | null;
+  date?: string;
+}
+
+export interface AiUsageReservationResult {
+  allowed: boolean;
+  used: number;
+  remaining: number;
+  limit: number;
 }
 
 export type PrismaAiUsageClient = {
@@ -45,6 +69,11 @@ export type PrismaAiUsageClient = {
 
 export function normalizeAiUsageDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
+}
+
+export function isUnknownAiOutcome(error: unknown): boolean {
+  const text = String((error as { error?: unknown })?.error || error || '').toLowerCase();
+  return /timeout|timed out|aborted|socket|econnreset|network|fetch failed|connection/i.test(text);
 }
 
 function numberValue(value: unknown): number {
@@ -102,6 +131,13 @@ export async function recordAiUsageEvent(store: AiUsageStore, event: AiUsageReco
   });
 }
 
+export async function reserveAiDailyLimit(params: AiUsageReservationParams & { store: AiUsageStore }): Promise<AiUsageReservationResult> {
+  if (!params.store.reserveDailyLimit) {
+    throw new Error('AI usage store does not support atomic reservations');
+  }
+  return params.store.reserveDailyLimit(params);
+}
+
 export function createPrismaAiUsageStore(prisma: PrismaAiUsageClient): AiUsageStore {
   return {
     async getDailySummary(query) {
@@ -120,6 +156,7 @@ export function createPrismaAiUsageStore(prisma: PrismaAiUsageClient): AiUsageSt
           AND (${query.provider || null}::text IS NULL OR "provider" = ${query.provider || null})
           AND (${query.model || null}::text IS NULL OR "model" = ${query.model || null})
           AND (${query.actorUserId || null}::text IS NULL OR "actor_user_id" = ${query.actorUserId || null})
+          AND "namespace" NOT LIKE '%::__reservation__'
       `;
       return normalizeSummary(rows[0]);
     },
@@ -168,6 +205,45 @@ export function createPrismaAiUsageStore(prisma: PrismaAiUsageClient): AiUsageSt
           "completion_tokens" = "ai_usage_daily"."completion_tokens" + EXCLUDED."completion_tokens",
           "total_tokens" = "ai_usage_daily"."total_tokens" + EXCLUDED."total_tokens",
           "updated_at" = CURRENT_TIMESTAMP
+      `;
+    },
+    async reserveDailyLimit(params) {
+      const limit = Math.max(0, Math.trunc(Number(params.limit) || 0));
+      const date = params.date || normalizeAiUsageDate();
+      const namespace = `${cleanText(params.namespace)}::__reservation__`;
+      const actorUserId = params.actorUserId || '';
+      const rows = await prisma.$queryRaw<any[]>`
+        INSERT INTO "ai_usage_quota_daily" (
+          "id", "date", "namespace", "actor_user_id", "consumed_count", "updated_at"
+        )
+        SELECT ${randomUUID()}, ${date}::date, ${namespace}, ${actorUserId}, 1, CURRENT_TIMESTAMP
+        WHERE ${limit} > 0
+        ON CONFLICT ("date", "namespace", "actor_user_id")
+        DO UPDATE SET
+          "consumed_count" = "ai_usage_quota_daily"."consumed_count" + 1,
+          "updated_at" = CURRENT_TIMESTAMP
+        WHERE "ai_usage_quota_daily"."consumed_count" < ${limit}
+        RETURNING "consumed_count"
+      `;
+      const used = Number(rows[0]?.consumed_count || 0);
+      return {
+        allowed: rows.length === 1,
+        used,
+        remaining: Math.max(0, limit - used),
+        limit,
+      };
+    },
+    async releaseDailyReservation(params) {
+      const date = params.date || normalizeAiUsageDate();
+      const namespace = `${cleanText(params.namespace)}::__reservation__`;
+      await prisma.$executeRaw`
+        UPDATE "ai_usage_quota_daily"
+        SET "consumed_count" = "consumed_count" - 1,
+            "updated_at" = CURRENT_TIMESTAMP
+        WHERE "date" = ${date}::date
+          AND "namespace" = ${namespace}
+          AND "actor_user_id" = ${params.actorUserId || ''}
+          AND "consumed_count" > 0
       `;
     },
   };

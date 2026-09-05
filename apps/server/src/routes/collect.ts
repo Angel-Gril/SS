@@ -83,7 +83,12 @@ import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js
 import { getConfig } from '../config/system-config-schema.js';
 import { generateAiText } from '../services/ai-text.js';
 import { createPrismaAiTranslationCacheStore, getCachedAiTranslation } from '../services/ai-translation-cache.js';
-import { createPrismaAiUsageStore } from '../services/ai-usage.js';
+import {
+  createPrismaAiUsageStore,
+  isUnknownAiOutcome,
+  recordAiUsageEvent,
+  reserveAiDailyLimit,
+} from '../services/ai-usage.js';
 import { generateProductContentDraft, type ProductContentField } from '../services/product-content-ai.js';
 import { buildSourceProductProfile, type SourceProductProfile } from '../services/source-product-profile.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
@@ -2765,7 +2770,11 @@ export async function loadSourceOzonCategoryCatalogForCandidates(input: {
 
   return { categoryTree, categoryCatalog, refreshed, persisted };
 }
-async function createAiOzonCategoryTranslationEnricher(): Promise<undefined | ((entries: OzonCategoryCatalogEntry[]) => Promise<OzonCategoryCatalogEntry[]>)> {
+const MAX_CATEGORY_TRANSLATION_TERMS_PER_REQUEST = 20;
+
+async function createAiOzonCategoryTranslationEnricher(
+  actorUserId: string,
+): Promise<undefined | ((entries: OzonCategoryCatalogEntry[]) => Promise<OzonCategoryCatalogEntry[]>)> {
   const enabled = await getConfig('ai_category_translation_enabled');
   if (!enabled) return undefined;
 
@@ -2776,12 +2785,15 @@ async function createAiOzonCategoryTranslationEnricher(): Promise<undefined | ((
   const providerLabel = String(await getConfig('ai_provider_label') || '').trim();
   const timeoutMs = Number(await getConfig('ai_timeout_ms')) || 30000;
   const prompt = String(await getConfig('ai_category_translation_prompt') || '').trim();
+  const dailyLimit = Number(await getConfig('ai_user_daily_category_translation_limit')) || 0;
   if (provider !== 'custom' || !baseUrl || !apiKey || !model || !prompt) return undefined;
 
   const cacheStore = createPrismaAiTranslationCacheStore(prisma);
+  const usageStore = createPrismaAiUsageStore(prisma);
   const promptHash = createHash('sha256').update(prompt).digest('hex');
 
   return (entries: OzonCategoryCatalogEntry[]) => enrichMissingOzonCategoryCatalogTranslations(entries, {
+    maxTerms: MAX_CATEGORY_TRANSLATION_TERMS_PER_REQUEST,
     translateTerm: async (term) => {
       const result = await getCachedAiTranslation({
         namespace: 'category_term',
@@ -2793,22 +2805,53 @@ async function createAiOzonCategoryTranslationEnricher(): Promise<undefined | ((
         model,
         store: cacheStore,
         translate: async () => {
-          const ai = await generateAiText({
-            config: { provider, baseUrl, apiKey, model, providerLabel, timeoutMs },
-            messages: [
-              { role: 'system', content: prompt },
-              { role: 'user', content: term },
-            ],
-            temperature: 0,
-            maxTokens: 80,
+          const reservation = await reserveAiDailyLimit({
+            store: usageStore,
+            namespace: 'category_term',
+            actorUserId,
+            limit: dailyLimit,
           });
-          if (!ai.ok) throw new Error(ai.error);
-          return {
-            outputText: ai.text,
-            usage: ai.usage ? { ...ai.usage } : null,
-            provider: ai.provider,
-            model: ai.model,
+          if (!reservation.allowed) throw new Error('AI category translation daily limit reached');
+          let reservationOpen = true;
+          const releaseReservation = async () => {
+            if (!reservationOpen || !usageStore.releaseDailyReservation) return;
+            await usageStore.releaseDailyReservation({ namespace: 'category_term', actorUserId });
+            reservationOpen = false;
           };
+          try {
+            const ai = await generateAiText({
+              config: { provider, baseUrl, apiKey, model, providerLabel, timeoutMs },
+              messages: [
+                { role: 'system', content: prompt },
+                { role: 'user', content: term },
+              ],
+              temperature: 0,
+              maxTokens: 80,
+            });
+            if (!ai.ok) {
+              if (isUnknownAiOutcome(ai)) reservationOpen = false;
+              throw new Error(ai.error);
+            }
+            await recordAiUsageEvent(usageStore, {
+              namespace: 'category_term',
+              provider: ai.provider,
+              model: ai.model,
+              actorUserId,
+              kind: 'request',
+              reserved: true,
+              usage: ai.usage ? { ...ai.usage } : null,
+            });
+            reservationOpen = false;
+            return {
+              outputText: ai.text,
+              usage: ai.usage ? { ...ai.usage } : null,
+              provider: ai.provider,
+              model: ai.model,
+            };
+          } catch (error) {
+            await releaseReservation();
+            throw error;
+          }
         },
       });
       return { outputText: result.outputText, source: result.source };
@@ -7376,7 +7419,7 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
     const store = createPrismaOzonCategoryCatalogStore(prisma);
 
     try {
-      const enrichMissingTranslations = await createAiOzonCategoryTranslationEnricher();
+      const enrichMissingTranslations = await createAiOzonCategoryTranslationEnricher(userId);
       const result = await searchOrRefreshOzonCategoryCatalogForShop({
         shopId,
         query: query.q || '',

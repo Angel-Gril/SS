@@ -455,6 +455,7 @@ export type OzonCategoryTermTranslator = (term: string) => Promise<{ outputText:
 
 export interface EnrichOzonCategoryCatalogTranslationDeps {
   translateTerm: OzonCategoryTermTranslator;
+  maxTerms?: number;
 }
 
 export interface BackfillOzonCategoryCatalogTranslationDeps extends EnrichOzonCategoryCatalogTranslationDeps {
