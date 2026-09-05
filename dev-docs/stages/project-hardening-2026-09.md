@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-4-maintainability-browser-quality
+- authorization_substage: stage-5-runtime-reliability-audit-observability
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-4-maintainability-browser-quality
+- active_substage: stage-5-runtime-reliability-audit-observability
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts: 142 passed", "pnpm --filter server test: 391 files passed, 5154 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm typecheck: passed", "pnpm --filter server lint: 0 errors, 20 existing warnings", "pnpm --filter server build: passed", "pnpm --filter web build: passed", "local Chrome CDP Web smoke: /login HTTP 200, title and form observed, no console error/warning events", "extension CDP contracts: 29 passed; live service-worker target unavailable"]
+- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "stage-4 checkpoint: commit 1a574ccb pushed", "focused reliability/audit tests: 6 passed", "pnpm --filter server test: 393 files passed, 5160 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm --filter server lint: 0 errors, 20 existing warnings", "pnpm --filter server build: passed", "real local Redis atomic check: rate true,true,false; quota true,false; usage 60; isolated keys deleted"]
 
 ## 阶段目标与用户流程
 
@@ -58,6 +58,7 @@
 | stage-2-p0-security-boundaries | 关闭 seed、Redis、图片 URL P0 | seed/bootstrap/image downloader | 负例先 RED 后 GREEN，server regression 通过 | focused Vitest + typecheck | schema、生产状态、真实外部调用 |
 | stage-3-supply-chain-ci-data-gates | 可信依赖与数据库 CI | manifests/lock/CI/integration runners | 高危项消除或阻断，关键 integration runner 可执行，schema 格式通过 | audit、CI contract、isolated PostgreSQL | 正式 release、生产 migration |
 | stage-4-maintainability-browser-quality | 降低 owner 冲突并补真实 UI smoke | server owner/Web QA | 一处渐进拆分无行为变化，最小 browser smoke 可跑 | characterization、build/browser smoke | 全量重写、视觉重设计 |
+| stage-5-runtime-reliability-audit-observability | 统一上传配额与生产审计失败关闭 | `upload-limiter.ts`、`audit-log.ts`、相关 API consumers | 云端限流跨实例原子化，Redis 故障失败关闭，生产审计默认开启且失败可观测 | focused unit/route tests、server regression、typecheck | schema/migration、真实生产、Provider/Ozon |
 
 ## 测试、安全与影响
 
@@ -106,3 +107,19 @@
 - remaining_risk: 真实扩展 worker smoke 受 Chrome target 生命周期影响未验证；browse skill 本地 binary 缺少 `server.ts` 未执行；20 个既有 lint warnings、真实线上/Provider/Ozon/生产面仍不在本阶段授权范围。
 - next_substage: none; 后续维护性或真实扩展验收需要新阶段授权。
 - git_checkpoint: stage-4 已通过 closeout；随后以单一目的 commit 提交并 push 当前分支，commit hash 在交付回执中记录。
+
+## stage-4 历史检查点
+
+- actual_result: stage-4-maintainability-browser-quality 已完成；从高冲突 `collect.ts` 提取标题规范化与来源标题解析 owner 到 `services/collect-title-normalizer.ts`，route 通过 re-export 保持现有消费者合同不变，行为无变化证据完整。
+- fresh_evidence: characterization 142 passed；server 全量 391 files/5154 passed/223 skipped；workspace typecheck、server/web build、server lint 均通过；local Chrome CDP `/login` HTTP 200，页面标题/表单/3 个输入可见且无 console error/warning；extension CDP contracts 29 passed。
+- git_checkpoint: commit `1a574ccb` 已 push 到 `origin/feat/ai-media-prompt-registry`。
+
+## stage-5 执行回写
+
+- actual_result: stage-5-runtime-reliability-audit-observability 已完成。上传限流在云端使用 Redis Lua 原子检查+递增，key 只含用户 hash；Redis 故障在图片上传、AI 图片和蒙版路径返回 503 失败关闭；本地离线模式保留显式内存限流。生产审计默认强制开启，审计写入失败抛出 `AUDIT_LOG_WRITE_FAILED`；支付网关/收款码配置、人工充值审核已接入脱敏审计事件。
+- changed_owners: `apps/server/src/lib/upload-limiter.ts`、`apps/server/src/lib/audit-log.ts`、`apps/server/src/config/system-config-schema.ts`、`apps/server/src/routes/image-upload.ts`、`apps/server/src/routes/ai-images.ts`、`apps/server/src/index.ts`、`apps/server/src/routes/admin-payment.ts`、focused tests。
+- plan_deviation: 无；未修改 schema/migrations、用户认证产品模型、生产配置或真实支付/Provider/Ozon 状态。
+- fresh_evidence: focused reliability/audit tests 6 passed；system-config security suite 57 passed；server full regression 393 files/5160 passed/223 skipped；server typecheck/build passed；server lint 0 errors/20 existing warnings；real local Redis rate/quota atomic check passed and temporary keys were deleted。
+- remaining_risk: Redis 集群/多实例线上拓扑未验证；生产审计数据库故障后的运营告警通道未接入外部监控；20 个既有 lint warnings、真实线上/Provider/Ozon/生产面仍不在授权范围。
+- next_substage: none; 后续 Redis 集群验收、外部告警接入或真实生产验证需要新阶段授权。
+- git_checkpoint: 待 stage-5 closeout、commit 与 push。

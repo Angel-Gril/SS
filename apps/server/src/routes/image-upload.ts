@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
-import { uploadLimiter } from '../lib/upload-limiter.js';
+import { UploadLimiterUnavailableError, uploadLimiter } from '../lib/upload-limiter.js';
 import { getConfig } from '../config/system-config-schema.js';
 import {
   parseBatchResizeInput,
@@ -53,14 +53,14 @@ const ATTACHMENT_EXT_MAP: Record<string, string> = {
   'text/plain': 'txt',
 };
 
-type UploadLimitCheck = { allowed: true } | { allowed: false; reason: string };
+type UploadLimitCheck = { allowed: true } | { allowed: false; reason: string; statusCode: 429 | 503 };
 
 async function checkUploadRateLimit(userId: string): Promise<UploadLimitCheck> {
   const rateLimitEnabled = await getConfig('upload_rate_limit_enabled');
   if (rateLimitEnabled) {
     const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
-    if (!uploadLimiter.checkRateLimit(userId, maxPerMinute)) {
-      return { allowed: false, reason: `上传过于频繁，每分钟最多 ${maxPerMinute} 次` };
+    if (!await uploadLimiter.checkRateLimit(userId, maxPerMinute)) {
+      return { allowed: false, reason: `上传过于频繁，每分钟最多 ${maxPerMinute} 次`, statusCode: 429 };
     }
   }
 
@@ -72,9 +72,9 @@ async function checkUploadQuota(userId: string, bytes: number): Promise<UploadLi
   if (quotaEnabled) {
     const maxMB = await getConfig('upload_daily_quota_mb');
     const maxBytes = maxMB * 1024 * 1024;
-    if (!uploadLimiter.checkDailyQuota(userId, bytes, maxBytes)) {
-      const usedMB = Math.round(uploadLimiter.getDailyUsage(userId) / 1024 / 1024);
-      return { allowed: false, reason: `今日上传配额已用完（${usedMB}MB / ${maxMB}MB）` };
+    if (!await uploadLimiter.checkDailyQuota(userId, bytes, maxBytes)) {
+      const usedMB = Math.round(await uploadLimiter.getDailyUsage(userId) / 1024 / 1024);
+      return { allowed: false, reason: `今日上传配额已用完（${usedMB}MB / ${maxMB}MB）`, statusCode: 429 };
     }
   }
 
@@ -82,9 +82,14 @@ async function checkUploadQuota(userId: string, bytes: number): Promise<UploadLi
 }
 
 async function checkUploadLimits(userId: string, bytes: number): Promise<UploadLimitCheck> {
-  const rateCheck = await checkUploadRateLimit(userId);
-  if (!rateCheck.allowed) return rateCheck;
-  return checkUploadQuota(userId, bytes);
+  try {
+    const rateCheck = await checkUploadRateLimit(userId);
+    if (!rateCheck.allowed) return rateCheck;
+    return checkUploadQuota(userId, bytes);
+  } catch (error) {
+    if (!(error instanceof UploadLimiterUnavailableError)) throw error;
+    return { allowed: false, reason: '上传限流服务暂不可用，请稍后重试', statusCode: 503 };
+  }
 }
 
 export async function imageUploadRoutes(app: FastifyInstance) {
@@ -110,7 +115,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
     const limitCheck = await checkUploadLimits(userId, sizeBytes);
     if (!limitCheck.allowed) {
-      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
+      return reply.status(limitCheck.statusCode).send({ code: 0, msg: limitCheck.reason });
     }
 
     try {
@@ -154,7 +159,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     // 检查上传限制
     const limitCheck = await checkUploadLimits(userId, buf.length);
     if (!limitCheck.allowed) {
-      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
+      return reply.status(limitCheck.statusCode).send({ code: 0, msg: limitCheck.reason });
     }
 
     const ext = mime.split('/')[1]!.replace('jpeg', 'jpg');
@@ -188,7 +193,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     // 检查上传限制（管理员也受限）
     const limitCheck = await checkUploadLimits(userId, buf.length);
     if (!limitCheck.allowed) {
-      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
+      return reply.status(limitCheck.statusCode).send({ code: 0, msg: limitCheck.reason });
     }
 
     const ext = ATTACHMENT_EXT_MAP[mime] || 'bin';

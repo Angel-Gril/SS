@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from '../config/system-config-schema.js';
-import { uploadLimiter } from '../lib/upload-limiter.js';
+import { UploadLimiterUnavailableError, uploadLimiter } from '../lib/upload-limiter.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
 import { AiImageJobError, createAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
@@ -324,7 +324,7 @@ interface AiImageEditRouteSettings {
   globalDailyBudgetCents: number;
 }
 
-type EditMaskUploadLimitCheck = { allowed: true } | { allowed: false; reason: string };
+type EditMaskUploadLimitCheck = { allowed: true } | { allowed: false; reason: string; statusCode?: 429 | 503 };
 
 export interface AiImageOperationReadiness {
   enabled: boolean;
@@ -401,6 +401,12 @@ function actor(request: FastifyRequest) {
 }
 
 function sendError(reply: any, error: unknown) {
+  if (error instanceof UploadLimiterUnavailableError) {
+    return reply.status(503).send({
+      code: error.code,
+      msg: 'Upload rate limiting is temporarily unavailable',
+    });
+  }
   if (error instanceof AiMediaWorkflowError) {
     const status = error.code === 'NOT_FOUND'
       ? 404
@@ -1268,11 +1274,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const checkEditMaskRequestRate = options.checkEditMaskRequestRate || (async (
     ownerUserId: string,
   ): Promise<EditMaskUploadLimitCheck> => {
-    if (await getConfig('upload_rate_limit_enabled')) {
-      const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
-      if (!uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)) {
-        return { allowed: false, reason: `Edit mask upload exceeds ${maxPerMinute} requests per minute` };
+    try {
+      if (await getConfig('upload_rate_limit_enabled')) {
+        const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
+        if (!await uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)) {
+          return { allowed: false, reason: `Edit mask upload exceeds ${maxPerMinute} requests per minute`, statusCode: 429 };
+        }
       }
+    } catch (error) {
+      if (!(error instanceof UploadLimiterUnavailableError)) throw error;
+      return { allowed: false, reason: 'Upload rate limiting is temporarily unavailable', statusCode: 503 };
     }
     return { allowed: true };
   });
@@ -1280,11 +1291,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     ownerUserId: string,
     bytes: number,
   ): Promise<EditMaskUploadLimitCheck> => {
-    if (await getConfig('upload_daily_quota_enabled')) {
-      const maxMegabytes = await getConfig('upload_daily_quota_mb');
-      if (!uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)) {
-        return { allowed: false, reason: `Edit mask upload exceeds the ${maxMegabytes} MB daily quota` };
+    try {
+      if (await getConfig('upload_daily_quota_enabled')) {
+        const maxMegabytes = await getConfig('upload_daily_quota_mb');
+        if (!await uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)) {
+          return { allowed: false, reason: `Edit mask upload exceeds the ${maxMegabytes} MB daily quota`, statusCode: 429 };
+        }
       }
+    } catch (error) {
+      if (!(error instanceof UploadLimiterUnavailableError)) throw error;
+      return { allowed: false, reason: 'Upload rate limiting is temporarily unavailable', statusCode: 503 };
     }
     return { allowed: true };
   });
@@ -2348,7 +2364,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     onRequest: async (request, reply) => {
       const rateCheck = await checkEditMaskRequestRate(actor(request).ownerUserId);
       if (!rateCheck.allowed) {
-        return reply.status(429).send({
+        return reply.status(rateCheck.statusCode || 429).send({
           code: 'EDIT_RESOURCE_RATE_LIMITED',
           msg: rateCheck.reason,
         });
@@ -2416,7 +2432,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     onRequest: async (request, reply) => {
       const rateCheck = await checkEditMaskRequestRate(actor(request).ownerUserId);
       if (!rateCheck.allowed) {
-        return reply.status(429).send({
+        return reply.status(rateCheck.statusCode || 429).send({
           code: 'EDIT_RESOURCE_RATE_LIMITED',
           msg: rateCheck.reason,
         });

@@ -10,6 +10,7 @@ import {
   serializeRechargeOrder,
 } from '../services/recharge.js';
 import { buildSignedEpayParams, parseSupportedMethods } from '../services/epay-adapter.js';
+import { extractRequestMeta, logAudit } from '../lib/audit-log.js';
 
 const providerSchema = z.object({
   type: z.enum(['epay', 'manual']).default('epay'),
@@ -70,6 +71,45 @@ function providerData(parsed: z.infer<typeof providerSchema>, merchantKeyEncrypt
   return data;
 }
 
+function paymentProviderAuditView(provider: any) {
+  return {
+    id: provider.id,
+    type: provider.type,
+    name: provider.name,
+    isEnabled: provider.isEnabled,
+    priority: provider.priority,
+    supportedMethods: parseSupportedMethods(provider.supportedMethods),
+    minAmount: provider.minAmount?.toString?.() ?? provider.minAmount,
+    maxAmount: provider.maxAmount?.toString?.() ?? provider.maxAmount,
+    dailyLimit: provider.dailyLimit?.toString?.() ?? null,
+    feeRate: provider.feeRate?.toString?.() ?? null,
+    feeFixed: provider.feeFixed?.toString?.() ?? null,
+    feePayer: provider.feePayer,
+  };
+}
+
+function paymentQrAuditView(qr: any) {
+  return {
+    id: qr.id,
+    method: qr.method,
+    name: qr.name,
+    isEnabled: qr.isEnabled,
+    minAmount: qr.minAmount?.toString?.() ?? qr.minAmount,
+    maxAmount: qr.maxAmount?.toString?.() ?? qr.maxAmount,
+    dailyLimit: qr.dailyLimit?.toString?.() ?? null,
+    weight: qr.weight,
+  };
+}
+
+function auditActor(request: any) {
+  const actor = request.user || {};
+  return {
+    actorId: actor.actorUserId || actor.userId,
+    actorRole: actor.role,
+    ...extractRequestMeta(request),
+  };
+}
+
 export async function adminPaymentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
@@ -89,6 +129,12 @@ export async function adminPaymentRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
     const provider = await prisma.paymentProvider.create({ data: providerData(parsed.data) });
+    await logAudit({
+      ...auditActor(request),
+      action: 'payment_provider_create',
+      target: provider.id,
+      after: paymentProviderAuditView(provider),
+    });
     return reply.send({ code: 1, msg: '创建成功', data: serializePaymentProvider(provider) });
   });
 
@@ -103,6 +149,13 @@ export async function adminPaymentRoutes(app: FastifyInstance) {
     const provider = await prisma.paymentProvider.update({
       where: { id },
       data: providerData(parsed.data, existing.merchantKeyEncrypted),
+    });
+    await logAudit({
+      ...auditActor(request),
+      action: 'payment_provider_update',
+      target: provider.id,
+      before: paymentProviderAuditView(existing),
+      after: paymentProviderAuditView(provider),
     });
     return reply.send({ code: 1, msg: '已保存', data: serializePaymentProvider(provider) });
   });
@@ -154,16 +207,31 @@ export async function adminPaymentRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
     const qr = await prisma.manualPaymentQRCode.create({ data: parsed.data });
+    await logAudit({
+      ...auditActor(request),
+      action: 'payment_qrcode_create',
+      target: qr.id,
+      after: paymentQrAuditView(qr),
+    });
     return reply.send({ code: 1, msg: '创建成功', data: qr });
   });
 
   app.put('/qrcodes/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const existing = await prisma.manualPaymentQRCode.findUnique({ where: { id } });
+    if (!existing) return reply.status(404).send({ code: 0, msg: '收款码不存在' });
     const parsed = qrSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
     const qr = await prisma.manualPaymentQRCode.update({ where: { id }, data: parsed.data });
+    await logAudit({
+      ...auditActor(request),
+      action: 'payment_qrcode_update',
+      target: qr.id,
+      before: paymentQrAuditView(existing),
+      after: paymentQrAuditView(qr),
+    });
     return reply.send({ code: 1, msg: '已保存', data: qr });
   });
 
@@ -201,12 +269,19 @@ export async function adminPaymentRoutes(app: FastifyInstance) {
   app.post('/recharges/:id/approve', async (request, reply) => {
     const { id } = request.params as { id: string };
     const actor = (request as any).user;
+    let result;
     try {
-      const result = await approveManualRecharge(id, actor.actorUserId || actor.userId);
-      return reply.send({ code: 1, msg: '审核通过', data: result });
+      result = await approveManualRecharge(id, actor.actorUserId || actor.userId);
     } catch (error: any) {
       return reply.status(400).send({ code: 0, msg: error?.message || '审核失败' });
     }
+    await logAudit({
+      ...auditActor(request),
+      action: 'manual_recharge_approve',
+      target: id,
+      after: { status: 'paid', idempotent: result.message === 'already processed' },
+    });
+    return reply.send({ code: 1, msg: '审核通过', data: result });
   });
 
   app.post('/recharges/:id/reject', async (request, reply) => {
@@ -216,12 +291,19 @@ export async function adminPaymentRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
+    let order;
     try {
-      const order = await rejectManualRecharge(id, actor.actorUserId || actor.userId, parsed.data.reason);
-      return reply.send({ code: 1, msg: '已拒绝', data: order });
+      order = await rejectManualRecharge(id, actor.actorUserId || actor.userId, parsed.data.reason);
     } catch (error: any) {
       return reply.status(400).send({ code: 0, msg: error?.message || '审核失败' });
     }
+    await logAudit({
+      ...auditActor(request),
+      action: 'manual_recharge_reject',
+      target: id,
+      after: { status: 'rejected' },
+    });
+    return reply.send({ code: 1, msg: '已拒绝', data: order });
   });
 
   app.get('/notify-logs', async (request, reply) => {

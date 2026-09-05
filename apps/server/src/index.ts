@@ -3025,7 +3025,7 @@ if (isExtensionDeviceAuthEnabled()) {
     checkMaskRequestRate: async (ownerUserId) => {
       if (!await getConfig('upload_rate_limit_enabled')) return { allowed: true } as const;
       const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
-      return uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)
+      return await uploadLimiter.checkRateLimit(ownerUserId, maxPerMinute)
         ? { allowed: true } as const
         : { allowed: false, reason: `Edit mask upload exceeds ${maxPerMinute} requests per minute` } as const;
     },
@@ -3039,7 +3039,7 @@ if (isExtensionDeviceAuthEnabled()) {
         checkUploadQuota: async (ownerUserId, bytes) => {
           if (!await getConfig('upload_daily_quota_enabled')) return { allowed: true } as const;
           const maxMegabytes = await getConfig('upload_daily_quota_mb');
-          return uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)
+          return await uploadLimiter.checkDailyQuota(ownerUserId, bytes, maxMegabytes * 1024 * 1024)
             ? { allowed: true } as const
             : {
               allowed: false,

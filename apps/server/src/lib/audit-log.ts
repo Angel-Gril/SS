@@ -14,12 +14,22 @@ export interface AuditLogEntry {
   force?: boolean;
 }
 
+export class AuditLogWriteError extends Error {
+  readonly code = 'AUDIT_LOG_WRITE_FAILED';
+
+  constructor(action: string, cause: unknown) {
+    super(`Required audit log write failed for ${action}`, { cause });
+    this.name = 'AuditLogWriteError';
+  }
+}
+
 /**
- * 记录审计日志（仅当 security_audit_log_enabled=true 时写入）
+ * 记录审计日志。生产环境与 force 事件始终强制写入。
  */
 export async function logAudit(entry: AuditLogEntry): Promise<void> {
   const enabled = await getConfig('security_audit_log_enabled');
-  if (!enabled && !entry.force) return;
+  const required = entry.force === true || process.env.NODE_ENV === 'production';
+  if (!enabled && !required) return;
 
   try {
     const data: Prisma.AuditLogUncheckedCreateInput = {
@@ -37,7 +47,12 @@ export async function logAudit(entry: AuditLogEntry): Promise<void> {
       data,
     });
   } catch (error) {
-    console.error('[audit] failed to write audit log:', error);
+    console.error('[audit] required log write failed', {
+      action: entry.action,
+      error: error instanceof Error ? error.message : String(error),
+      required,
+    });
+    if (required) throw new AuditLogWriteError(entry.action, error);
   }
 }
 

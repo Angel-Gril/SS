@@ -168,7 +168,7 @@ export const SystemConfigSchema = {
   security_admin_ip_whitelist: z.string().default(''),
   security_session_ttl_hours: z.number().int().min(1).max(720).default(168),
   security_admin_session_ttl_hours: z.number().int().min(1).max(168).default(24),
-  security_audit_log_enabled: z.boolean().default(false),
+  security_audit_log_enabled: z.boolean().default(process.env.NODE_ENV === 'production'),
 
   // ─── listing / Ozon publish workers ───
   listing_task_refresh_interval_ms: z.number().int().min(5000).max(300000).default(30000),
@@ -831,7 +831,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   security_audit_log_enabled: {
     label: '审计日志',
     group: 'security',
-    description: '记录管理员/超管的写操作（需先建表）',
+    description: '记录管理员/超管的写操作；生产环境强制开启，写入失败会返回错误',
   },
 
   listing_task_refresh_interval_ms: {
