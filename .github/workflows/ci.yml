@@ -104,7 +104,7 @@ jobs:
         run: node scripts/ai-media-dark-deploy.test.mjs
 
       - name: Verify deployment backup attestation contract
-        run: node --test scripts/deploy-backup-attestation.test.mjs scripts/backup-operations-contract.test.mjs
+        run: node --test scripts/deploy-backup-attestation.test.mjs scripts/backup-operations-contract.test.mjs scripts/prune-backup-retention.test.mjs
 
       - name: Verify deployment build inputs are Git-bound
         run: node --test scripts/deploy-build-inputs.test.mjs

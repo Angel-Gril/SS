@@ -179,6 +179,7 @@ const steps = [
       '--test',
       'scripts/deploy-backup-attestation.test.mjs',
       'scripts/backup-operations-contract.test.mjs',
+      'scripts/prune-backup-retention.test.mjs',
     ],
   },
   {

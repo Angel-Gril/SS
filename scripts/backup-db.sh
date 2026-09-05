@@ -181,14 +181,6 @@ if [ "$S3_ENABLED" -eq 1 ]; then
   echo "[backup] S3 上传完成"
 fi
 
-# 清理本地旧备份
-DELETED=$(find "$BACKUP_LOCAL_DIR" -maxdepth 1 -type f -name "ss_erp_*.sql.gz" -mtime +"$BACKUP_KEEP_DAYS" -print -delete | wc -l | tr -d '[:space:]')
-find "$BACKUP_LOCAL_DIR" -maxdepth 1 -type f -name "ss_erp_*.sql.gz.status.json" \
-  -mtime +"$BACKUP_KEEP_DAYS" -delete
-if [ "$DELETED" -gt 0 ]; then
-  echo "[backup] 已清理 ${DELETED} 个超过 ${BACKUP_KEEP_DAYS} 天的旧备份"
-fi
-
 # 写入备份状态 JSON（供后台 API 读取）
 STATUS_FILE="${BACKUP_LOCAL_DIR}/backup-status.json"
 STATUS_EVIDENCE_FILE="${FILEPATH}.status.json"
@@ -267,6 +259,17 @@ if command -v getent >/dev/null 2>&1 && getent group "$BACKUP_STATUS_GROUP" >/de
   chgrp "$BACKUP_STATUS_GROUP" "$BACKUP_LOCAL_DIR" "$STATUS_FILE" || true
   chmod 750 "$BACKUP_LOCAL_DIR" || true
   chmod 640 "$STATUS_FILE" || true
+fi
+
+# 清理本地旧备份，但保留 backup-status.json 和部署 attestation 引用的证据文件。
+DELETED="$(node "$SCRIPT_DIR/prune-backup-retention.mjs" \
+  --backup-dir "$BACKUP_LOCAL_DIR" --keep-days "$BACKUP_KEEP_DAYS" --count)"
+if [[ ! "$DELETED" =~ ^[0-9]+$ ]]; then
+  echo "[backup] ERROR: 备份保留策略未返回规范的删除计数" >&2
+  exit 1
+fi
+if [ "$DELETED" -gt 0 ]; then
+  echo "[backup] 已清理 ${DELETED} 个超过 ${BACKUP_KEEP_DAYS} 天且未被部署证据引用的旧备份"
 fi
 
 echo "[backup] $(date '+%F %T') 完成"

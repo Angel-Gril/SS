@@ -33,6 +33,10 @@ const deployReadiness = readFileSync(
   'utf8',
 );
 const backupScript = readFileSync(new URL('./backup-db.sh', import.meta.url), 'utf8');
+const backupRetention = readFileSync(
+  new URL('./prune-backup-retention.mjs', import.meta.url),
+  'utf8',
+);
 const restoreVerifier = readFileSync(
   new URL('./verify-backup-restore.sh', import.meta.url),
   'utf8',
@@ -103,6 +107,16 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
     'backup freshness must start before the database snapshot is read',
   );
   assert.match(backupScript, /--url-env BACKUP_DB_URL --command pg_dump/u);
+  assert.match(backupScript, /prune-backup-retention\.mjs/u);
+  assert.doesNotMatch(backupScript, /-name "ss_erp_\*\.sql\.gz"[^\n]*-delete/u);
+  assert.ok(
+    backupScript.indexOf('mv -f -- "$LATEST_STATUS_TMP" "$STATUS_FILE"')
+      < backupScript.indexOf('prune-backup-retention.mjs'),
+    'retention must run only after the new latest status pointer is durable',
+  );
+  assert.match(backupRetention, /deploy-backup-/u);
+  assert.match(backupRetention, /backup-status\.json/u);
+  assert.match(backupRetention, /protectedFiles\.has\(entry\.name\)/u);
   assert.doesNotMatch(backupScript, /PGDATABASE="\$BACKUP_DB_URL"/u);
   assert.match(restoreVerifier, /run_postgres_url/u);
   assert.doesNotMatch(restoreVerifier, /PGDATABASE="\$(?:TEMP_DB_URL|MAINTENANCE_URL)"/u);
@@ -160,6 +174,7 @@ test('backup and restore emit exact commit/database-bound deployment evidence', 
   for (const source of [preflight, ciWorkflow]) {
     assert.match(source, /deploy-backup-attestation\.test\.mjs/u);
     assert.match(source, /backup-operations-contract\.test\.mjs/u);
+    assert.match(source, /prune-backup-retention\.test\.mjs/u);
   }
   for (const source of [productionEnvExample, stagingEnvExample]) {
     assert.match(source, /^DEPLOY_BACKUP_LOCAL_DIR=\/var\/backups\/ss-erp$/mu);
