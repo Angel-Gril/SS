@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 加固阶段：stage-1 至 stage-8 已完成并推送；当前 HEAD/远端为 `73b46b59`。
+- 加固阶段：stage-1 至 stage-8 已完成并推送；最近代码检查点为 `6e159af8`，随后又推送了文档/验收同步提交 `42729300`。
 - 当前主风险：生产/线上运行态、Redis 集群拓扑、外部告警、真实 Provider/Ozon 行为和扩展 live worker 仍未验证；这些不阻塞本地继续开发，但阻塞发布准备。
 - 推荐下一步：补齐受管扩展 live worker、真实 Provider/Ozon 与生产环境证据；发布前另开验收/发布准备阶段。
 - 未验证项：GitHub 仓库可见性、线上运行态、Redis 集群与告警、真实 Provider/Ozon 行为、完整浏览器回归和扩展 live worker smoke。
