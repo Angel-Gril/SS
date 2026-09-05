@@ -165,6 +165,13 @@
 - next_substage: 生产修复、pilot 撤销、Provider GET-only preflight、Ozon sandbox 和 BINI live worker 分别需要对应运行授权或专用环境。
 - git_checkpoint: commit `d2293bc9` 已 push 到 `origin/feat/ai-media-prompt-registry`；完整 preflight 已通过，生产修复仍需独立变更审批。
 
+### stage-10 follow-up 生产修复回写（2026-09-05）
+
+- 初始盘点保持只读；随后按用户授权完成 VPS 备份/恢复、attestation 刷新、目标 pilot session 撤销和暗态恢复，未执行 Provider/Ozon 写入。
+- VPS 生成 `ss_erp_20260905_125513.sql.gz`，临时恢复库检测到 142 张表后成功删除，d27 attestation 刷新并归档旧证据；BYOK policy 为 `revision:0/mode:off`，正确的网站既有发布期望下 full verifier 为 `0 failure / 1 warning`。
+- 当前候选 `445033cd` 的 `1.0.312` cloud/local 包通过正式 release verifier（461 pass、0 failure），但 VPS 仍运行 `d27b3ad8...`；部署被当前提交对应的外部 Ed25519 发布签名缺失阻塞，未复用旧签名或绕过门禁。
+- 剩余风险：唯一线上 verifier warning 为未配置 CN/远端备份；没有可证明的 Ozon 专用测试店铺，编辑/inpaint Provider、受管扩展 live worker 仍未验证。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
