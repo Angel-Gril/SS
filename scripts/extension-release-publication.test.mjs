@@ -1094,9 +1094,16 @@ test('the repository keyring is canonical and binds the active first-party relea
   assert.deepEqual(parsed.keys.map(({ keyId, status }) => ({ keyId, status })), [{
     keyId: 'ss-erp-extension-release-2026-08-02-01',
     status: 'ACTIVE',
+  }, {
+    keyId: 'ss-erp-extension-release-2026-09-05-01',
+    status: 'ACTIVE',
   }]);
   assert.equal(
     sha256(Buffer.from(parsed.keys[0].publicKeyBase64, 'base64')),
     '78b7e0cf06c3c08a8903b59674216d1f11e1f908aef156fff410d06fa757a9a9',
+  );
+  assert.equal(
+    sha256(Buffer.from(parsed.keys[1].publicKeyBase64, 'base64')),
+    '4686ac85b999132a0f994be3cb83ec8d3da25101b7aea6c56086ce2e973d43ff',
   );
 });

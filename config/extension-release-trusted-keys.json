@@ -7,6 +7,12 @@
       "keyId": "ss-erp-extension-release-2026-08-02-01",
       "publicKeyBase64": "MCowBQYDK2VwAyEALfYx12YXo3RwbGdgu/ld848WRbHdmCz1D9XLNvEWLVs=",
       "status": "ACTIVE"
+    },
+    {
+      "algorithm": "Ed25519",
+      "keyId": "ss-erp-extension-release-2026-09-05-01",
+      "publicKeyBase64": "MCowBQYDK2VwAyEAmiKFkOjlKH10bFbrwaxqvzpmHddogputTw9B6Df7L+A=",
+      "status": "ACTIVE"
     }
   ]
 }

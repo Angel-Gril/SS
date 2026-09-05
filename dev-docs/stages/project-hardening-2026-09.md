@@ -170,7 +170,7 @@
 - 初始盘点保持只读；随后按用户授权完成 VPS 备份/恢复、attestation 刷新、目标 pilot session 撤销和暗态恢复，未执行 Provider/Ozon 写入。
 - VPS 生成 `ss_erp_20260905_125513.sql.gz`，临时恢复库检测到 142 张表后成功删除，d27 attestation 刷新并归档旧证据；BYOK policy 为 `revision:0/mode:off`，正确的网站既有发布期望下 full verifier 为 `0 failure / 1 warning`。
 - 当前候选 `445033cd` 的 `1.0.312` cloud/local 包通过正式 release verifier（461 pass、0 failure），但 VPS 仍运行 `d27b3ad8...`；部署被当前提交对应的外部 Ed25519 发布签名缺失阻塞，未复用旧签名或绕过门禁。
-- VPS 只读签名盘点确认：目标 `445033cd/1.0.312` 签名路径缺失，仅存在 `1.0.307` 至 `1.0.311` 的历史公开签名，未发现发布私钥；旧签名不能重放到新提交。
+- VPS 只读签名盘点确认：目标 `445033cd/1.0.312` 签名路径缺失，仅存在 `1.0.307` 至 `1.0.311` 的历史公开签名，未发现旧发布私钥；旧签名不能重放到新提交。随后在本机受保护目录创建新 Ed25519 key，保留旧公钥用于历史验证，待 keyring 轮换提交后重新构建候选并签名。
 - 剩余风险：唯一线上 verifier warning 为未配置 CN/远端备份；没有可证明的 Ozon 专用测试店铺，编辑/inpaint Provider、受管扩展 live worker 仍未验证。
 
 ## stage-6 执行回写
