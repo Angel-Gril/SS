@@ -9,7 +9,7 @@
 - source_coverage: complete
 - blocking_unknowns: none
 - source_conflicts: none
-- network_evidence: verified_current: 2026-09-05 https://github.com/vercel/next.js/security/advisories/GHSA-m99w-x7hq-7vfj 返回 200，并确认当前 Next 15.5.18 低于该公告修复版本
+- network_evidence: verified_current: 2026-09-05 https://github.com/vercel/next.js/security/advisories/GHSA-m99w-x7hq-7vfj 返回 200；当前 Next 已升级至 15.5.25，继续沿用当前框架
 - poc_status: not_required: 当前组合已由现有构建、测试和迁移状态证明可行，本轮不存在决定换栈的关键未知
 - user_confirmation_scope: product_consequences_only
 - product_consequence_confirmation: original_request_confirmed: 用户在审计结论后要求按该流程修复并分阶段推送，确认保留产品行为与当前技术路线进行加固
@@ -70,14 +70,14 @@
 
 | Candidate Or Decision | Claim Being Checked | Primary URL/Source | Source Type | Checked Date | Version/Support Target | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| SS ERP TypeScript modular monolith | 当前 Next 版本需要安全补丁而非换框架 | https://github.com/vercel/next.js/security/advisories/GHSA-m99w-x7hq-7vfj | official_advisory | 2026-09-05 | Next 15.5.x | 当前 15.5.18 低于 15.5.21 修复线，应做兼容补丁升级 |
+| SS ERP TypeScript modular monolith | 当前 Next 版本需要安全补丁而非换框架 | https://github.com/vercel/next.js/security/advisories/GHSA-m99w-x7hq-7vfj | official_advisory | 2026-09-05 | Next 15.5.x | 已升级到 Next 15.5.25，继续保留当前框架 |
 | SS ERP TypeScript modular monolith | Fastify 5 的 Node 支持边界 | https://fastify.dev/docs/latest/Reference/LTS/ | official_docs | 2026-09-05 | Fastify 5 / Node 20+ | 当前 Node 22 满足支持边界，保留框架合理 |
 | SS ERP TypeScript modular monolith | Prisma 当前运行时要求 | https://www.prisma.io/docs/orm/v7/reference/system-requirements | official_docs | 2026-09-05 | Prisma 当前系统要求 | Node 22 满足现代 Prisma 路线；本轮避免跨主版本迁移 |
 | SS ERP TypeScript modular monolith | Node 22 生命周期 | https://nodejs.org/en/about/previous-releases | official_release | 2026-09-05 | Node 22 | 当前引擎与部署版本仍在支持路线内 |
 
 ## Proof Of Concept
 
-- poc_hypothesis: 不需要 PoC；当前组合是否可行已由现有生产构建、5136 个后端测试、Prisma 迁移状态和扩展 verifier 直接证明。
+- poc_hypothesis: 不需要 PoC；当前组合是否可行已由生产构建、5160 个后端测试、Prisma 迁移状态和扩展合同验证直接证明。
 - disposable_boundary: 不产生实验实现；依赖升级和安全修复各自使用测试先行及独立提交验证。
 
 | PoC ID | Success Criterion | Failure Criterion | Evidence Reference | Observed Result | Decision Impact |

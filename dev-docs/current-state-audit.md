@@ -1,6 +1,6 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-05。该结论来自当前分支、文件和本地命令，不替代生产验收。
+审计日期：2026-09-05，最后同步于 commit `811b825c`。该结论来自当前分支、文件和本地命令，不替代生产验收。
 
 ## 现状证据
 
@@ -45,16 +45,16 @@
 - 当前第三方服务：Ozon、Cloudflare Turnstile/R2、S3-compatible OSS、阿里云/腾讯云短信、Sentry、AI 图片 Provider。
 - 当前部署方式：单 VPS，Nginx + systemd 或 Compose，API/Web/Worker 分进程。
 - 结论：沿用但修正。
-- 证据：现有组合已通过类型、构建、5136 个后端测试和扩展验证；风险集中在边界与门禁，而不是框架不适配。
+- 证据：现有组合已通过类型、构建、5160 个后端测试和扩展合同验证；风险集中在外部运行证据，而不是框架不适配。
 - 用户需要决定：本轮无需新的产品决定；真实部署、费用、凭据与迁移仍需单独授权。
 
 ## 调用链和 owner
 
 | 功能/概念 | 当前入口 | 真实 owner | 下游展示/adapter | 风险 |
 | --- | --- | --- | --- | --- |
-| Web 会话 | `/api/auth/*` | `apps/server/src/lib/auth.ts` 与 Redis session | 登录/注册页面、扩展 Bearer adapter | Redis disabled 时会话可被错误视为有效 |
-| 图片远程读取 | `/api/images/*`、水印服务 | `apps/server/src/services/source-public-image-download.ts` 应成为统一下载 owner | image-upload route、watermark、Web 图片处理页 | 部分入口绕过 SSRF/大小/像素边界 |
-| 上传配额 | image-upload route | `apps/server/src/lib/upload-limiter.ts` | Web 图片管理 | 进程内 Map 不跨重启/实例 |
+| Web 会话 | `/api/auth/*` | `apps/server/src/lib/auth.ts` 与 Redis session | 登录/注册页面、扩展 Bearer adapter | cloud/production 已拒绝 Redis disabled；线上 ready/会话行为仍未验证 |
+| 图片远程读取 | `/api/images/*`、水印服务 | `apps/server/src/services/source-public-image-download.ts` | image-upload route、watermark、Web 图片处理页 | URL/重定向/字节/像素边界已统一；线上外部地址回归未验证 |
+| 上传配额 | image-upload route | `apps/server/src/lib/upload-limiter.ts` | Web 图片管理 | 云端 Redis Lua 原子计数已完成；Redis 集群拓扑仍未验证 |
 | 数据模型 | API/Worker | `apps/server/prisma/schema.prisma` + migrations | Prisma repositories/services | schema 大且格式检查未进入日常 gate |
 | 扩展发布 | `pnpm package:extension` | release/package/verify 脚本和签名证据 | 官网下载 API、MV3 扩展 | preflight 单一串行入口过重 |
 | 项目真相 | 根 README 与公开 docs | `dev-docs/README.md` 索引的内部 owner | Agent、开发者、阶段验收 | 审计前缺少唯一当前状态 |
@@ -77,9 +77,9 @@
 - 自定义 wrapper：扩展发布与部署 gate 很完整，但 `preflight` 串行包含 132 个步骤，定位和耗时成本过高。
 - 多套状态/请求/权限模式：账号 token 与设备 session 已有明确迁移边界；旧兼容路径必须继续由 rollout gate 限制。
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
-- 异常吞掉或假成功：安全 CI 使用 `continue-on-error`；审计日志写入失败只记录 console；普通 server test 跳过多组 PostgreSQL 集成测试。
-- 必须先修：P0 身份与 SSRF/资源边界已关闭；下一步是供应链与 CI 门禁。
-- 可以排期：大文件渐进拆分、真实 Web 浏览器回归、上传配额 Redis 化和审计失败可观测性。
+- 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
+- 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
+- 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
 
 ## 危险接管动作
 
@@ -92,7 +92,7 @@
 
 ## 下一步
 
-- 推荐下一路线：按 `stages/project-hardening-2026-09.md` 执行当前唯一子阶段。
+- 推荐下一路线：本地开发可继续；需要发布时进入 `验收`/`发布准备`，补齐外部运行证据，不把本地绿灯当作发布授权。
 - 为什么不是直接开发：多 owner 修复需要一个持久顺序，防止安全、CI 和结构更改互相污染。
 - 第一个安全任务：建立治理和运行基线，确保后续提交有唯一范围和验收 owner。
 - 需要用户确认：已由 2026-09-05 “按照这个流程修复这些问题并且按阶段性 push”覆盖本地实现、阶段提交与当前分支推送；生产操作不包含在内。

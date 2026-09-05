@@ -18,13 +18,13 @@
 - effect_class: local_reversible
 - operational_mode: planned
 - scope_authorization: original_request_authorized: 2026-09-05 用户要求按审计流程修复全部列出问题并按阶段提交推送当前分支
-- authorization_substage: stage-6-lint-zero-maintenance
+- authorization_substage: stage-7-project-truth-sync
 - product_decision: confirmed: 保持现有产品行为和技术/部署组合，执行局部加固；生产与真实外部写入不在范围内
-- active_substage: stage-6-lint-zero-maintenance
+- active_substage: stage-7-project-truth-sync
 - result_status: completed
 - truth_writeback: complete
 - migration_state: not_applicable
-- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "stage-4 checkpoint: commit 1a574ccb pushed", "stage-5 checkpoint: commit 068e06e8 pushed", "stage-6 lint: 0 errors, 0 warnings", "pnpm --filter server test: 393 files passed, 5160 tests passed, 223 skipped", "pnpm --filter server typecheck: passed", "pnpm --filter server build: passed"]
+- evidence_refs: ["stage-3 checkpoint: commit 3a77bb43 pushed", "stage-4 checkpoint: commit 1a574ccb pushed", "stage-5 checkpoint: commit 068e06e8 pushed", "stage-6 checkpoint: commit 811b825c pushed", "stage-7 docs sync: acceptance/current-state/technical-selection/README updated", "adoption guardrail: valid"]
 
 ## 阶段目标与用户流程
 
@@ -60,6 +60,7 @@
 | stage-4-maintainability-browser-quality | 降低 owner 冲突并补真实 UI smoke | server owner/Web QA | 一处渐进拆分无行为变化，最小 browser smoke 可跑 | characterization、build/browser smoke | 全量重写、视觉重设计 |
 | stage-5-runtime-reliability-audit-observability | 统一上传配额与生产审计失败关闭 | `upload-limiter.ts`、`audit-log.ts`、相关 API consumers | 云端限流跨实例原子化，Redis 故障失败关闭，生产审计默认开启且失败可观测 | focused unit/route tests、server regression、typecheck | schema/migration、真实生产、Provider/Ozon |
 | stage-6-lint-zero-maintenance | 清理既有 server lint warning | route/adapter/service/test 参数与 import owner | lint 0 errors / 0 warnings，行为无变化 | lint、typecheck、server regression | API、schema、权限、生产配置 |
+| stage-7-project-truth-sync | 同步内部验收、当前审计和技术选型真源 | `dev-docs/README.md`、`acceptance.md`、`current-state-audit.md`、`technical-selection.md` | 旧指标清除，当前提交和未验证边界一致 | adoption/foundation guardrail、旧指标搜索、diff | 公开 docs、生产状态、用户代码 |
 
 ## 测试、安全与影响
 
@@ -123,6 +124,16 @@
 - fresh_evidence: focused reliability/audit tests 6 passed；system-config security suite 57 passed；server full regression 393 files/5160 passed/223 skipped；server typecheck/build passed；server lint 0 errors/20 existing warnings；real local Redis rate/quota atomic check passed and temporary keys were deleted。
 - remaining_risk: Redis 集群/多实例线上拓扑未验证；生产审计数据库故障后的运营告警通道未接入外部监控；20 个既有 lint warnings、真实线上/Provider/Ozon/生产面仍不在授权范围。
 - next_substage: none; 后续 Redis 集群验收、外部告警接入或真实生产验证需要新阶段授权。
+
+## stage-7 执行回写
+
+- actual_result: stage-7-project-truth-sync 已完成，内部验收、当前状态、技术选型与索引已同步到现有 stage-1 至 stage-6 提交证据。
+- changed_owners: `dev-docs/README.md`、`dev-docs/acceptance.md`、`dev-docs/current-state-audit.md`、`dev-docs/technical-selection.md`。
+- plan_deviation: 无；公开 docs、用户现有改动和生产状态未触碰。
+- fresh_evidence: adoption/foundation contract guardrail valid；旧审计指标搜索无结果；当前 HEAD `811b825c` 与远端一致。
+- remaining_risk: 外部运行态、Redis 集群/告警、真实 Provider/Ozon、完整浏览器和发布证据仍未验证。
+- next_substage: none; 继续本地开发可直接开始，发布准备需要另行验收授权。
+- git_checkpoint: 待 stage-7 closeout、commit 与 push。
 - git_checkpoint: 待 stage-5 closeout、commit 与 push。
 
 ## stage-6 执行回写

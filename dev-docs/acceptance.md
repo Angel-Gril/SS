@@ -8,7 +8,7 @@
 | 文档索引 | active、stale、public、internal 已区分 | 已确认 |
 | agent 宪法 | `AGENTS.md` 绑定真实 owner 和命令 | 已确认 |
 | owner map | `architecture.md` 记录当前与目标 owner | 已确认 |
-| 启动基线 | local env 校验、DB/Redis、Web/API 首屏 | 部分：local env 校验已通过；本轮未重启 Web/API |
+| 启动基线 | local env 校验、DB/Redis、Web/API 首屏 | 部分：local env 校验与本地 Redis/Chrome CDP Web smoke 已通过；本轮未重启完整 API/Worker |
 | Git 隐私 | `.env` 未跟踪，阶段按路径提交 | 已确认；远端 visibility 未验证 |
 | AI 债务 | 超大 owner、静态 UI 合同、preflight 成本已分类 | 已确认 |
 | 第一个安全任务 | 范围、owner、RED/GREEN 和停止条件明确 | 已确认 |
@@ -16,12 +16,12 @@
 ## 证据记录
 
 - 文件路径：根 manifests、`apps/`、`extensions/`、Prisma、CI、公开 docs 和本目录。
-- 命令：`pnpm typecheck` 通过；server tests `5136 passed / 223 skipped`；Web build 与 extension verifier 通过。
-- 格式：lint `0 errors / 20 warnings`；`prisma format --check` 失败。
+- 命令：`pnpm typecheck`、server typecheck、server build、Web build 通过；server tests `5160 passed / 223 skipped`；扩展 CDP 合同 29 条通过。
+- 格式：server lint `0 errors / 0 warnings`；Prisma `validate` 与 `format --check` 通过。
 - 环境：先复现 local env 8 项失败；运行 bootstrap 后 `pnpm env:check -- --profile local --env .env` 为 0 failure。
-- 供应链：npm 官方 audit 返回 43 个生产依赖漏洞，其中 24 高危；当前 npmmirror audit endpoint 不存在。
-- 数据库证据：146 migrations，`prisma migrate status` 为 up to date；普通 suite 跳过 PostgreSQL integration。
-- 未运行原因：未授权生产、Provider/Ozon 写入、远端 smoke、部署与真实浏览器控制。
+- 供应链：npm 官方 audit 已降为 `0 high`，剩余 `2 moderate / 2 low`；CI audit/Semgrep 为阻断门。
+- 数据库证据：146 migrations；隔离 PostgreSQL runner replay 全部迁移并通过 103 个物流/设备/来源/发布测试；普通 suite 的 PostgreSQL 文件按显式 runner 执行。
+- 已运行本地 Chrome CDP `/login` smoke；未运行远端/生产 smoke、Provider/Ozon 写入、部署和扩展 live worker smoke，因为这些仍需独立环境/授权。
 
 ## 第一个安全任务
 
@@ -34,10 +34,18 @@
 
 ## 分层完成标准
 
-- 阶段 1：内部真源 guardrail 通过；当前 local env 校验可复现或有明确修复入口。
+- 阶段 1：已完成，内部真源 guardrail 与 local env 校验通过。
 - 阶段 2：已完成。固定 seed 凭据删除；cloud/production 禁止 Noop Redis；水印/上传/缩放 URL 统一受公网或受控本地 reader 限制；负例与全量后端回归通过。
-- 阶段 3：高危生产依赖修复或显式阻断；CI audit 可执行且阻断；关键 PostgreSQL integration 有隔离 runner；schema format 检查通过。
-- 阶段 4：至少一个高冲突 owner 完成无行为变化的渐进拆分；Web 真实浏览器最小 smoke 有可执行入口；lint 本轮不新增 warning。
+- 阶段 3：已完成，高危生产依赖已降为 0 high 并阻断，CI audit 可执行且阻断，关键 PostgreSQL integration 有隔离 runner，schema format 检查通过。
+- 阶段 4：已完成，`collect.ts` 标题 owner 已拆分；本地 Chrome CDP Web 最小 smoke 通过。
+- 阶段 5：已完成，Redis 上传限流原子化、故障失败关闭、生产审计默认开启，支付配置/人工充值审计覆盖已补齐。
+- 阶段 6：已完成，server lint 为 0 errors / 0 warnings。
+
+## 当前发布边界
+
+- 当前结果：`可继续开发`，不是 `可发布`。
+- 本地代码、CI、隔离数据库和 server/Web 构建证据已收口。
+- 生产部署、真实 Provider/Ozon、线上健康、Redis 集群与外部告警、完整浏览器回归仍未验证。
 
 ## 停止条件
 
