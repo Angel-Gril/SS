@@ -141,7 +141,7 @@
 - changed_owners: `apps/server/src/services/source-public-image-download.ts`、`source-image-transfer.ts`、`source-video-transfer.ts`、`ozon-rich-content.ts`、`ai-usage.ts`、`product-content-ai.ts`、`source-listing-ai-copy-execution.ts`、Prisma schema/migrations、`.github/workflows/ci.yml` 与对应合同测试。
 - plan_deviation: 无；未调用真实 Provider/Ozon、生产环境或远端备份，未改变默认关闭 feature flags。
 - fresh_evidence: SSRF focused 53/53；AI usage/product/category/listing tests passed；真实本地 PostgreSQL quota concurrency smoke 为 limit=2 时 5 并发恰好 2 成功；durable claim smoke 为 claimed -> in_progress -> replay；CI supply-chain contract 5/5；最终 preflight 0。
-- remaining_risk: 受管扩展 live worker、真实 Provider/Ozon、生产运行态/Redis 告警与 CN 远端备份仍未验证；全局用户级 skills/hooks 未扫描。
+- remaining_risk: 受管扩展 live worker、真实 Provider/Ozon、生产运行态/Redis 告警与 CN 远端备份仍未验证；用户级 skills 已在授权目录内完成只读盘点，但 45 个 `.cc-switch` 符号链接目标、实际用户 Hook 配置和 Hook 运行态仍未验证。
 - next_substage: none; 下一阶段需要独立外部验收授权或新的安全修复范围。
 - git_checkpoint: commits `96dfe6ad`、`8e16de4e`、`95a22ed8`、`ed0841ac`、`73b46b59` 已按顺序 push。
 
