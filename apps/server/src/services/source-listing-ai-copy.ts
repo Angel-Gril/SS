@@ -36,6 +36,8 @@ import {
   sourceListingAiCopyContextHash,
   type SourceListingWorkflowService,
 } from './source-listing-workflow.js';
+import { isUnknownAiOutcome } from './ai-usage.js';
+import type { SourceListingAiCopyExecutionStore } from './source-listing-ai-copy-execution.js';
 
 const MAX_USER_INSTRUCTIONS_LENGTH = 2_000;
 const MAX_FACT_ATTRIBUTES = 20;
@@ -77,6 +79,7 @@ export interface SourceListingAiCopyServiceOptions {
     variables: Record<string, unknown>;
   }): Promise<ResolvedTemplate>;
   generateContent(input: SourceListingAiCopyGenerateContentInput): Promise<ProductContentDraftResult>;
+  executionStore?: SourceListingAiCopyExecutionStore;
 }
 
 export interface GenerateSourceListingAiCopyInput {
@@ -464,25 +467,55 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
         };
       }
 
-      const generated = await options.generateContent({
-        actorUserId: input.actorUserId,
-        fields,
-        prompts,
-      });
-      if (!generated.ok) {
+      const claim = options.executionStore
+        ? await options.executionStore.claim({
+          ownerUserId: input.ownerUserId,
+          draftId: current.id,
+          operationKey,
+          clientRequestHash,
+        })
+        : null;
+      if (claim?.kind === 'conflict') {
         throw new SourceListingWorkflowError(
-          'OZON_LISTING_AI_GENERATION_FAILED', generated.error || 'AI listing copy generation failed', 502,
+          'OZON_LISTING_AI_GENERATION_OPERATION_CONFLICT',
+          'AI copy generation operation key was reused with different inputs',
+          409,
         );
       }
-      const titleDraft = fields.includes('title') ? generated.drafts.title : undefined;
-      const descriptionDraft = fields.includes('description') ? generated.drafts.description : undefined;
-      if ((fields.includes('title') && !titleDraft) || (fields.includes('description') && !descriptionDraft)) {
+      if (claim?.kind === 'replay') {
+        const latest = await options.workflow.getDraft({ draftId: input.draftId, ownerUserId: input.ownerUserId });
+        const candidate = latest.copy.candidates.find((value) => value.generation?.operationKey === operationKey);
+        if (candidate) return { draft: latest, candidate };
         throw new SourceListingWorkflowError(
-          'OZON_LISTING_AI_GENERATION_FAILED', 'AI listing copy generation returned an incomplete result', 502,
+          'OZON_LISTING_AI_GENERATION_IN_PROGRESS', 'AI copy generation result is still being reconciled', 409,
         );
       }
-      const sequences = fields.map((field) => prompts[field]!.resolved.release.sequence).join('-');
-      return options.workflow.addAiCopyCandidate({
+      if (claim?.kind === 'in_progress' || claim?.kind === 'unknown') {
+        throw new SourceListingWorkflowError(
+          'OZON_LISTING_AI_GENERATION_IN_PROGRESS', 'AI copy generation is already running or needs reconciliation', 409,
+        );
+      }
+
+      try {
+        const generated = await options.generateContent({
+          actorUserId: input.actorUserId,
+          fields,
+          prompts,
+        });
+        if (!generated.ok) {
+          throw new SourceListingWorkflowError(
+            'OZON_LISTING_AI_GENERATION_FAILED', generated.error || 'AI listing copy generation failed', 502,
+          );
+        }
+        const titleDraft = fields.includes('title') ? generated.drafts.title : undefined;
+        const descriptionDraft = fields.includes('description') ? generated.drafts.description : undefined;
+        if ((fields.includes('title') && !titleDraft) || (fields.includes('description') && !descriptionDraft)) {
+          throw new SourceListingWorkflowError(
+            'OZON_LISTING_AI_GENERATION_FAILED', 'AI listing copy generation returned an incomplete result', 502,
+          );
+        }
+        const sequences = fields.map((field) => prompts[field]!.resolved.release.sequence).join('-');
+        const result = await options.workflow.addAiCopyCandidate({
         draftId: current.id,
         ownerUserId: input.ownerUserId,
         actorUserId: input.actorUserId,
@@ -508,7 +541,16 @@ export function createSourceListingAiCopyService(options: SourceListingAiCopySer
             }),
           } : {}),
         },
-      }).then((result) => ({ ...result, limit: generated.limit }));
+        }).then((result) => ({ ...result, limit: generated.limit }));
+        if (claim?.kind === 'claimed') await options.executionStore!.complete(claim.executionId);
+        return result;
+      } catch (error) {
+        if (claim?.kind === 'claimed') {
+          if (isUnknownAiOutcome(error)) await options.executionStore!.markUnknown(claim.executionId);
+          else await options.executionStore!.release(claim.executionId);
+        }
+        throw error;
+      }
   }
 
   return {

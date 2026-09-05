@@ -2683,6 +2683,21 @@ model AiUsageQuotaDaily {
   @@map("ai_usage_quota_daily")
 }
 
+model SourceListingAiCopyExecution {
+  id                String   @id
+  ownerUserId       String   @map("owner_user_id")
+  draftId           String   @map("draft_id")
+  operationKey      String   @map("operation_key") @db.VarChar(200)
+  clientRequestHash String   @map("client_request_hash") @db.Char(64)
+  status            String   @db.VarChar(16)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([ownerUserId, draftId, operationKey], map: "source_listing_ai_copy_execution_owner_draft_operation_key")
+  @@index([status, updatedAt], map: "source_listing_ai_copy_execution_status_updated_idx")
+  @@map("source_listing_ai_copy_executions")
+}
+
 enum AiImageJobStatus {
   PENDING
   QUEUED

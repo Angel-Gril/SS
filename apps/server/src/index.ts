@@ -180,6 +180,7 @@ import {
   createSourceListingWorkflowService,
 } from './services/source-listing-workflow.js';
 import { createSourceListingAiCopyService } from './services/source-listing-ai-copy.js';
+import { createPrismaSourceListingAiCopyExecutionStore } from './services/source-listing-ai-copy-execution.js';
 import { createPrismaSourceListingWorkflowRepository } from './services/source-listing-workflow-prisma.js';
 import { createPrismaSourceListingWorkflowContextResolver } from './services/source-listing-workflow-context.js';
 import { createSourceListingWorkflowCategoryValidator } from './services/source-listing-workflow-category.js';
@@ -530,6 +531,7 @@ const sourceListingWorkflowService = createSourceListingWorkflowService({
 });
 const sourceListingAiCopyService = createSourceListingAiCopyService({
   workflow: sourceListingWorkflowService,
+  executionStore: createPrismaSourceListingAiCopyExecutionStore({ client: prisma as never }),
   loadOwnedSnapshot: async ({ ownerUserId, snapshotId }) => {
     const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
       where: { id: snapshotId, subject: { ownerUserId } },

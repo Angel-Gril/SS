@@ -9,6 +9,7 @@ import {
   createSourceListingAiCopyService,
   type SourceListingAiCopyServiceOptions,
 } from '../services/source-listing-ai-copy.js';
+import type { SourceListingAiCopyExecutionStore } from '../services/source-listing-ai-copy-execution.js';
 import {
   compileProductContentRequest,
 } from '../services/product-content-ai.js';
@@ -44,7 +45,7 @@ function template(key: 'listing-copy.title' | 'listing-copy.description', sequen
   };
 }
 
-async function setup() {
+async function setup(executionStore?: SourceListingAiCopyExecutionStore) {
   const repository = new InMemoryOzonListingDraftRepository();
   let id = 0;
   const workflow = createSourceListingWorkflowService({
@@ -134,6 +135,7 @@ async function setup() {
     : null);
   const service = createSourceListingAiCopyService({
     workflow,
+    executionStore,
     loadOwnedSnapshot,
     resolveTemplate,
     generateContent,
@@ -254,6 +256,60 @@ describe('source listing AI copy', () => {
     expect(generateContent).toHaveBeenCalledTimes(1);
     expect(right.candidate.id).toBe(left.candidate.id);
     expect((await workflow.getDraft({ draftId: draft.id, ownerUserId: 'owner-1' })).copy.candidates).toHaveLength(1);
+  });
+
+  it('blocks a duplicate operation across two service instances before Provider dispatch', async () => {
+    const claims = new Map<string, { hash: string; status: 'CLAIMED' | 'SUCCEEDED' | 'UNKNOWN' }>();
+    const executionStore: SourceListingAiCopyExecutionStore = {
+      async claim(input) {
+        const key = `${input.ownerUserId}\0${input.draftId}\0${input.operationKey}`;
+        const existing = claims.get(key);
+        if (!existing) {
+          claims.set(key, { hash: input.clientRequestHash, status: 'CLAIMED' });
+          return { kind: 'claimed', executionId: key };
+        }
+        if (existing.hash !== input.clientRequestHash) return { kind: 'conflict', executionId: key };
+        return existing.status === 'CLAIMED'
+          ? { kind: 'in_progress', executionId: key }
+          : existing.status === 'UNKNOWN'
+            ? { kind: 'unknown', executionId: key }
+            : { kind: 'replay', executionId: key };
+      },
+      async complete(executionId) { claims.get(executionId)!.status = 'SUCCEEDED'; },
+      async release(executionId) { claims.delete(executionId); },
+      async markUnknown(executionId) { claims.get(executionId)!.status = 'UNKNOWN'; },
+    };
+    const first = await setup(executionStore);
+    const second = createSourceListingAiCopyService({
+      workflow: first.workflow,
+      executionStore,
+      loadOwnedSnapshot: first.loadOwnedSnapshot,
+      resolveTemplate: first.resolveTemplate,
+      generateContent: first.generateContent,
+    });
+    const input = {
+      draftId: first.draft.id,
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: first.draft.revision,
+      operationKey: 'generate-copy-cross-instance',
+      fields: ['title'] as const,
+      userInstructions: '',
+    };
+    const baseGenerate = first.generateContent.getMockImplementation()!;
+    first.generateContent.mockImplementation(async (value) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return baseGenerate(value);
+    });
+
+    const result = await Promise.allSettled([first.service.generate(input), second.generate(input)]);
+
+    expect(first.generateContent).toHaveBeenCalledTimes(1);
+    expect(result.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+    expect(result.find((item) => item.status === 'rejected')).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ code: 'OZON_LISTING_AI_GENERATION_IN_PROGRESS' }),
+    });
   });
 
   it('refuses to apply a generated candidate after reviewed facts drift', async () => {
