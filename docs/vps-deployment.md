@@ -374,6 +374,10 @@ EnvironmentFile=/opt/ss-erp/shared/.env.staging
 ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1
 ```
 
+For release-mode backup and restore drills, source `/opt/ss-erp/shared/.env.staging` together with
+`/etc/ss-erp-backup.env`. The legacy `/opt/ss-erp/app/.env.staging` copy is not read by these
+systemd units and may contain stale credentials.
+
 `deploy.sh` performs the first unit transition itself. After it switches `current`, but before any
 service restart, it validates the release templates with `systemd-analyze`, snapshots the existing
 unit files under `/var/lib/ss-erp-deploy-systemd-snapshots/<target-commit>`, installs them atomically,
