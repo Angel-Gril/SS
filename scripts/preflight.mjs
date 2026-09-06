@@ -68,6 +68,11 @@ const steps = [
     args: ['scripts/web-auth-security-settings.test.mjs'],
   },
   {
+    name: 'typed smoke account token contract',
+    command: 'node',
+    args: ['--test', 'scripts/create-smoke-token-contract.test.mjs'],
+  },
+  {
     name: 'Web auth human challenge UI contract',
     command: 'node',
     args: ['scripts/web-auth-human-challenge-ui.test.mjs'],
