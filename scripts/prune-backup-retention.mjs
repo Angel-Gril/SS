@@ -230,7 +230,16 @@ function main() {
   else console.log(JSON.stringify(result, null, 2));
 }
 
-if (path.resolve(process.argv[1] || '') === path.resolve(fileURLToPath(import.meta.url))) {
+function isDirectRun(entry = process.argv[1]) {
+  if (!entry) return false;
+  try {
+    return realpathSync.native(path.resolve(entry)) === realpathSync.native(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
   try {
     main();
   } catch (error) {

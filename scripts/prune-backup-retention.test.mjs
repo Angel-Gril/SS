@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   collectProtectedBackupFiles,
@@ -105,6 +107,41 @@ test('does not prune files inside a symlinked or broadly writable backup root', 
       if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
       t.skip('platform does not permit an unprivileged directory symlink');
     }
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+    rmSync(value.directory, { recursive: true, force: true });
+  }
+});
+
+test('CLI runs through a symlinked release directory and emits its deletion count', (t) => {
+  const value = fixture();
+  const parent = mkdtempSync(path.join(tmpdir(), 'ss-erp-backup-retention-cli-link-'));
+  const currentRelease = path.join(parent, 'current');
+  const realScript = fileURLToPath(new URL('./prune-backup-retention.mjs', import.meta.url));
+  try {
+    if (process.platform !== 'win32') chmodSync(parent, 0o700);
+    try {
+      symlinkSync(
+        path.dirname(realScript),
+        currentRelease,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
+      t.skip('platform does not permit an unprivileged directory symlink');
+      return;
+    }
+    const result = spawnSync(process.execPath, [
+      path.join(currentRelease, 'prune-backup-retention.mjs'),
+      '--backup-dir',
+      value.directory,
+      '--keep-days',
+      '7',
+      '--count',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(existsSync(path.join(value.directory, value.orphan)), false);
   } finally {
     rmSync(parent, { recursive: true, force: true });
     rmSync(value.directory, { recursive: true, force: true });
