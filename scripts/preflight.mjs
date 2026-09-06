@@ -39,6 +39,11 @@ const steps = [
     args: ['--test', 'scripts/local-compose-network-security.test.mjs'],
   },
   {
+    name: 'Redis runtime diagnostic contract',
+    command: 'node',
+    args: ['--test', 'scripts/diagnose-redis-runtime.test.mjs'],
+  },
+  {
     name: 'extension package versioning and deployment contract',
     command: 'node',
     args: ['scripts/extension-package-auto-bump.test.mjs'],

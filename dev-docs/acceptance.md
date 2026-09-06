@@ -41,6 +41,7 @@
 - Provider/Ozon 当前门禁（2026-09-06）：阿里官方 `wanx2.1-imageedit` 价格仍为 CNY 0.14/成功图片，但 credential 的计费账户尚未关联；指定测试店 `DOTH / Client ID 4980990` 的 Seller Info 只读已通过。Ozon 商品写入和 Provider POST 仍需独立 pilot 授权，且两条真实写入路径继续 fail-closed。
 - 国内版 VPS 部署（2026-09-06）：使用受保护 `ss-erp-cn-rel04` SSH 配置将 `a986d0f6` 部署到 `8.163.122.40`；目标 RDS 迁移、API/Web/Worker 重启、`https://ss-erp.cn/ready` 和 `VERIFY_ORIGIN_MODE=direct` verifier 全部通过（`0 failure / 1 warning`）。国内 `.cn` `1.0.317` cloud/local 候选分别为 `86c74e16...32a0` / `a2c64e19...1eb7`，签名 SHA-256 为 `1c03c234...50444`；官网 CN pointer 继续保持已批准的 `1.0.311 / d27b3ad8`，未公开新候选。
 - Redis/告警盘点（2026-09-06）：COM/CN Redis 均为单机 standalone master，无 replica/cluster，未发现专用告警 unit/timer/cron；仅证明当前健康，不构成高可用或告警验收。远端备份按用户决定暂不配置。
+- Redis 诊断工具（2026-09-06）：新增 `pnpm diagnose:redis`，合同测试 `2/2` 通过；工具只读检查 `PING`、`INFO`、`CONFIG GET`、systemd 和 cron，不输出密钥。COM/CN 实跑均为 PASS，但明确报告无副本、非 cluster、RDB-only、未发现 Redis 专用告警；本机 Windows 因未安装 `redis-cli` 按预期失败关闭。
 - Next 工具链盘点（2026-09-06）：Web lint 0 error/0 warning；Next build 的 legacy ESLint 检测器仍提示 flat config 未发现插件。官方 plugin 接入会扩大既有 `<img>` warning，且不能消除该提示，暂不引入额外依赖。
 
 ## 第一个安全任务

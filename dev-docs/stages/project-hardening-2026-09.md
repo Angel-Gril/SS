@@ -223,6 +223,12 @@
 - COM/CN Redis 新鲜盘点均为 standalone master、无副本/集群和专用告警；应用 `/ready` 通过不等于高可用验收。建设 Redis 拓扑和外部告警需要独立基础设施授权，本阶段未修改生产拓扑。
 - Web lint 为 0 error/0 warning；Next build legacy ESLint 检测器对 flat config 的提示仍存在。官方插件试验会引入 47 个既有 `<img>` 警告且无法消除 build 提示，已撤销该无收益变更。
 
+### stage-17 Redis 运行态诊断合同（2026-09-06）
+
+- 新增只读 `scripts/diagnose-redis-runtime.sh` 和 `pnpm diagnose:redis`，并加入 preflight 合同；测试 `2/2` 通过，shell 语法检查通过。
+- COM/CN 实际执行均确认 Redis standalone master、无副本、RDB-only、未发现 Redis 专用告警；输出将当前可用与 HA/告警状态分开，避免 `/ready` 健康被误读为高可用证据。
+- 未修改 Redis 配置、systemd、cron、集群拓扑或生产数据；建设副本/集群和外部告警仍需独立运维授权。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
