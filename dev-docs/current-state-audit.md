@@ -92,7 +92,8 @@
 - Redis 诊断合同：`pnpm diagnose:redis` / `scripts/diagnose-redis-runtime.sh` 只读执行 `PING`、`INFO`、`CONFIG GET`、systemd unit 枚举和用户 cron 枚举，分别输出运行可用性、拓扑、副本、持久化、客户端压力和告警发现状态，不打印认证信息。COM/CN 实际结果均为 `REDIS_RUNTIME_STATUS=PASS`、`REDIS_TOPOLOGY=standalone`、`REDIS_REPLICATION_STATUS=no_replicas`、`REDIS_ALERTING_STATUS=not_detected`、`REDIS_PERSISTENCE_STATUS=rdb_only`；该工具不改变 Redis 配置，也不把健康状态升级为高可用验收。
 - 开发体验盘点：`pnpm --filter web lint` 为 0 error/0 warning；Next `15.5.25` build 仍提示 flat ESLint config 未被其 legacy 检测器识别。引入官方 plugin 会产生 47 个既有 `<img>` 警告且不能消除 build 提示，已撤销无收益依赖变更，保留为低优先级工具链项。
 - Node ESM 提示已通过 `apps/web/package.json` 的显式 `"type": "module"` 关闭；依赖 Web TypeScript 源文件的 28 个合同测试不再输出 `MODULE_TYPELESS_PACKAGE_JSON`，Web typecheck/lint/build 均通过。该声明由 `web-next-dist-dir.test.mjs` 固定，Next plugin 检测提示仍独立保留。
-- Ozon 写入前门禁：`scripts/sandbox/ozon-source-listing-contract.mjs --preflight --offer-id <reserved-id>` 现在提供只读 Seller Info + reserved offer 检查，要求独立 `OZON_SANDBOX_READONLY_CONFIRM`，输出 `READY_FOR_SEPARATE_WRITE_APPROVAL` 才能进入后续写入审批；合同测试 `8/8` 通过并断言不调用 import/archive。真实 Ozon 写入仍未执行。
+- Ozon 写入前门禁：`scripts/sandbox/ozon-source-listing-contract.mjs --preflight --offer-id <reserved-id>` 现在提供只读 Seller Info + reserved offer 检查，要求独立 `OZON_SANDBOX_READONLY_CONFIRM`，输出 `READY_FOR_SEPARATE_WRITE_APPROVAL` 才能进入后续写入审批；合同测试 `9/9` 通过并断言不调用 import/archive。真实 Ozon 写入仍未执行。
+- Ozon 真实只读 preflight：COM VPS 从加密数据库选择唯一 `DOTH / Client ID 4980990`，对 reserved offer `ss-erp-sbx-preflight-20260906-a986d0f6-01` 执行 Seller Info 和 product info lookup；结果 `READY_FOR_SEPARATE_WRITE_APPROVAL`、`offerExists=false`、`networkWritesSent=false`，私有回执 SHA-256 为 `5bb18366222892fafce2e29d31cf3ac90a82b9e1b06caac2e4f21fc99ccee646`。Ozon 返回卖家名 `DOIT`，与 ERP 别名 `DOTH` 不同，真实写入前仍需操作员确认此身份和完整 compiled payload。
 
 ## 危险接管动作
 

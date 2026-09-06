@@ -45,6 +45,7 @@
 - Next 工具链盘点（2026-09-06）：Web lint 0 error/0 warning；Next build 的 legacy ESLint 检测器仍提示 flat config 未发现插件。官方 plugin 接入会扩大既有 `<img>` warning，且不能消除该提示，暂不引入额外依赖。
 - Node ESM 收口（2026-09-06）：Web package 显式声明 ESM，28 个直接导入 Web TypeScript 模块的合同测试不再产生 `MODULE_TYPELESS_PACKAGE_JSON`；Web typecheck、lint 和生产 build 通过。Next plugin 检测提示是另一条 Next 15 legacy 检测限制，仍保留。
 - Ozon 只读 preflight（2026-09-06）：源码 HEAD `dd55cf4b` 的 sandbox 脚本新增 `--preflight --offer-id` 模式，要求独立只读确认词，只调用 Seller Info 和 reserved offer lookup，不读取写入 payload、不调用 `/v3/product/import` 或 `/v1/product/archive`；合同测试 `9/9` 通过。该结果只证明凭据和 reserved offer 可用，不授权商品写入；该仓库工具更新尚未单独部署到 VPS，当前 VPS 运行包仍为 `a986d0f6`。
+- Ozon 真实只读 preflight（2026-09-06）：临时上传已验证脚本到 COM VPS，在进程内读取加密店铺凭据后对 `DOTH / 4980990` 和 reserved offer `ss-erp-sbx-preflight-20260906-a986d0f6-01` 执行；Seller Info 和 offer lookup 通过、offer 不存在、network writes 为 0，回执 SHA-256 为 `5bb18366...ee646`。Ozon 返回卖家名 `DOIT`，真实写入前需确认该平台身份与 ERP 别名的对应关系。
 
 ## 第一个安全任务
 

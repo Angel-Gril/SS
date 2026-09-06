@@ -238,6 +238,7 @@
 
 - sandbox 脚本新增独立 `--preflight --offer-id` 模式和 `OZON_SANDBOX_READONLY_CONFIRM` 门禁，执行 Seller Info 与 reserved offer lookup 后输出可供后续审批的 readiness 状态。
 - 合同测试 `9/9` 通过，明确断言 preflight 不调用 `/v3/product/import`、`/v1/product/import/info` 或 `/v1/product/archive`；真实商品写入、回滚和对账仍需专用店与独立 pilot 授权。该仓库工具更新绑定源码 `dd55cf4b`，尚未触发 VPS 运行包重部署。
+- COM VPS 临时执行真实只读 preflight：`DOTH / 4980990` Seller Info 有效、reserved offer 不存在、结果为 `READY_FOR_SEPARATE_WRITE_APPROVAL`，回执 SHA-256 `5bb18366...ee646`；未调用 import/archive，临时 runner 已清理。Ozon 卖家名为 `DOIT`，真实写入前仍需确认别名对应和 compiled payload。
 
 ## stage-6 执行回写
 
