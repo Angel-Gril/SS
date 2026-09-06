@@ -215,6 +215,14 @@
 - 1.0.317 cloud/local 候选分别绑定 `a986d0f6`，SHA-256 为 `e9ab7c3d...7ca4be` / `c692326c...7f358`；候选保持暗部署，官网 pointer 继续服务已批准的 `1.0.316 / b64b723c`。
 - 指定测试店 `DOTH / Client ID 4980990` 的 Seller Info 零重试只读检查通过，回执 SHA-256 为 `c56b173e...79094`；未执行 Ozon 商品写入、Provider POST 或真实费用操作。
 
+### stage-16 国内 VPS 部署与剩余瓶颈盘点（2026-09-06）
+
+- 国内/CN VPS 原运行 `d27b3ad8`；使用 `.cn` 独立扩展四件套和既有 Ed25519 key 完成 `a986d0f6` 部署。148 migrations、外部 RDS、API/Web/Worker、Nginx/UFW、四个 HTTPS host 和 `/ready` 均通过，直连 verifier `0 failure / 1 warning`。
+- 目标提交备份恢复演练恢复 141 张表，备份 `ss_erp_20260906_171253.sql.gz`，attestation SHA-256 为 `dadc95dfe5b952aeea188b6283b950597f3f41c68e1947bb42c8433e3eb82d75`；远端备份按用户决定暂不配置。
+- `.cn` 候选 `1.0.317` 绑定 `a986d0f6`，cloud/local SHA-256 为 `86c74e16...32a0` / `a2c64e19...1eb7`，签名 SHA-256 为 `1c03c234...50444`。候选保持暗部署，CN 官网 pointer 继续服务已批准 `1.0.311 / d27b3ad8`。
+- COM/CN Redis 新鲜盘点均为 standalone master、无副本/集群和专用告警；应用 `/ready` 通过不等于高可用验收。建设 Redis 拓扑和外部告警需要独立基础设施授权，本阶段未修改生产拓扑。
+- Web lint 为 0 error/0 warning；Next build legacy ESLint 检测器对 flat config 的提示仍存在。官方插件试验会引入 47 个既有 `<img>` 警告且无法消除 build 提示，已撤销该无收益变更。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

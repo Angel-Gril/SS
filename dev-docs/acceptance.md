@@ -39,6 +39,9 @@
 - `1.0.316` 发布与同路径升级（2026-09-06）：官网 pointer 已绑定 `b64b723c`，cloud/local 下载摘要重新下载验证一致；受管目录从 `1.0.315` 升级后安装树 193 文件，active-worker 与 Unicode smoke 通过。私有 same-path closure SHA-256 为 `c4539426d97b6f459f331b14ceaaf34000de9b48fa0ab46cab120713beb728e8`。后续 `1.0.317` 仅完成签名候选和 VPS 暗部署，未改变官网 pointer。
 - typed production smoke（2026-09-06）：`3d3333ef` 修复 helper 的 token 类型、issuer/audience/deployment/authVersion、TTL 和 Redis session 契约；完整 preflight 通过。600 秒 USER/ADMIN token 在 VPS 上完成域名隔离、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime 检查，未上传图片，两个 session 已立即撤销；随后针对 `a986d0f6` 的 VPS verifier 为 `0 failure / 1 warning`，唯一 warning 为远端备份未配置。
 - Provider/Ozon 当前门禁（2026-09-06）：阿里官方 `wanx2.1-imageedit` 价格仍为 CNY 0.14/成功图片，但 credential 的计费账户尚未关联；指定测试店 `DOTH / Client ID 4980990` 的 Seller Info 只读已通过。Ozon 商品写入和 Provider POST 仍需独立 pilot 授权，且两条真实写入路径继续 fail-closed。
+- 国内版 VPS 部署（2026-09-06）：使用受保护 `ss-erp-cn-rel04` SSH 配置将 `a986d0f6` 部署到 `8.163.122.40`；目标 RDS 迁移、API/Web/Worker 重启、`https://ss-erp.cn/ready` 和 `VERIFY_ORIGIN_MODE=direct` verifier 全部通过（`0 failure / 1 warning`）。国内 `.cn` `1.0.317` cloud/local 候选分别为 `86c74e16...32a0` / `a2c64e19...1eb7`，签名 SHA-256 为 `1c03c234...50444`；官网 CN pointer 继续保持已批准的 `1.0.311 / d27b3ad8`，未公开新候选。
+- Redis/告警盘点（2026-09-06）：COM/CN Redis 均为单机 standalone master，无 replica/cluster，未发现专用告警 unit/timer/cron；仅证明当前健康，不构成高可用或告警验收。远端备份按用户决定暂不配置。
+- Next 工具链盘点（2026-09-06）：Web lint 0 error/0 warning；Next build 的 legacy ESLint 检测器仍提示 flat config 未发现插件。官方 plugin 接入会扩大既有 `<img>` warning，且不能消除该提示，暂不引入额外依赖。
 
 ## 第一个安全任务
 
