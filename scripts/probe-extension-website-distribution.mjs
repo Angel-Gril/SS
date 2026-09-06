@@ -4,7 +4,6 @@ import { resolve4, resolve6 } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { writeNewArtifactDurably } from './extension-release-artifact.mjs';
 import { loadProtectedSigningKey } from './sign-extension-release.mjs';
 import {
@@ -534,7 +533,7 @@ async function main() {
   }, null, 2));
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   try { await main(); } catch (error) {
     console.error(`FAIL ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

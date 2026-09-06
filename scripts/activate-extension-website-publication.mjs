@@ -14,7 +14,6 @@ import {
   rmSync,
 } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   replaceArtifactDurably,
   writeNewArtifactDurably,
@@ -541,7 +540,7 @@ function runLocked(options) {
   return result.status ?? 1;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   try {
     const options = cliOptions();
     const lockedStatus = runLocked(options);

@@ -8,11 +8,13 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import {
   activateExtensionWebsitePublication,
   assertDeployLockFile,
@@ -518,4 +520,64 @@ test('keeps deployment scripts separate from the website publication pointer', (
     vpsVerifier,
     /check_extension_website_distribution_state[\s\\]+"\$expected_cloud_extension"/u,
   );
+});
+
+test('critical release CLIs reject invalid input when invoked through a symlinked release path', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-release-cli-link-'));
+  roots.push(root);
+  const linkedScripts = path.join(root, 'current-scripts');
+  try {
+    symlinkSync(
+      path.resolve('scripts'),
+      linkedScripts,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+  } catch (error) {
+    if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
+    t.skip('platform does not permit an unprivileged directory symlink');
+    return;
+  }
+
+  for (const script of [
+    'activate-extension-website-publication.mjs',
+    'probe-extension-website-distribution.mjs',
+    'verify-extension-release-signature.mjs',
+    'verify-vps-extension-release.mjs',
+  ]) {
+    const result = spawnSync(process.execPath, [path.join(linkedScripts, script), '--invalid'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0, `${script} silently skipped its CLI entrypoint`);
+    assert.match(result.stderr, /FAIL/u);
+  }
+});
+
+test('critical release modules do not resolve a mutable host entry path when imported', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ss-erp-release-cli-import-'));
+  roots.push(root);
+  const missingHostEntry = path.join(root, 'deleted-host-entry.mjs');
+
+  for (const script of [
+    'activate-extension-website-publication.mjs',
+    'probe-extension-website-distribution.mjs',
+    'verify-extension-release-signature.mjs',
+    'verify-vps-extension-release.mjs',
+  ]) {
+    const scriptPath = path.resolve('scripts', script);
+    const source = readFileSync(scriptPath, 'utf8');
+    assert.match(source, /if \(import\.meta\.main\)/u, `${script} must use runtime module identity`);
+
+    const program = [
+      `process.argv[1] = ${JSON.stringify(missingHostEntry)};`,
+      `await import(${JSON.stringify(pathToFileURL(scriptPath).href)});`,
+    ].join('\n');
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', program], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `${script} import failed: ${result.stderr}`);
+    assert.equal(result.stdout, '', `${script} ran its CLI while imported`);
+    assert.equal(result.stderr, '', `${script} emitted an import-time error`);
+  }
 });

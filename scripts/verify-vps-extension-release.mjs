@@ -11,7 +11,6 @@ import {
   readdirSync,
 } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   canonicalExtensionReleaseEvidenceJson,
   parseExpectedReleaseOrigins,
@@ -353,9 +352,7 @@ function parseArguments() {
   };
 }
 
-const isMain = process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-if (isMain) {
+if (import.meta.main) {
   try {
     console.log(JSON.stringify(verifyVpsExtensionRelease(parseArguments()), null, 2));
   } catch (error) {
