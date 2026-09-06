@@ -212,6 +212,27 @@ describe('shop logistics scope invalidation routes', () => {
         status: 'ERROR',
       }),
     }));
+    expect(mocks.decrypt).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns only write-only credential state from shop details', async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: 'GET', url: '/api/shops/shop-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        id: 'shop-1',
+        clientId: 'client-old',
+        apiKeyConfigured: true,
+      },
+    });
+    expect(response.json().data).not.toHaveProperty('apiKey');
+    expect(response.body).not.toContain('key-old');
+    expect(mocks.decrypt).not.toHaveBeenCalled();
 
     await app.close();
   });

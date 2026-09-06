@@ -82,7 +82,7 @@
 - 日本/COM VPS 当前运行 `b64b723c37c16f2adf2beb3a081d9f6bf159e01d`：API/Web/Worker、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260906_033442.sql.gz`（47,645,659 bytes）已完成 144 表临时恢复演练，attestation SHA-256 为 `33dcc8db42583e3986beac68fbfa4e5daff7656f9072158ab855b36760687b40`。远端备份按用户决定暂不配置，verifier 唯一 warning 为本地备份。
 - 公开扩展与受管 COM 路径均为 `1.0.316`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变。官网 approval/receipt SHA-256 分别为 `31da6742...4783`、`43b69ccd...a496d9f`；受管升级、active-worker、Unicode 回执分别为 `d44efe57...d7b51`、`05c59166...1044f`、`6b401528...723ca`，私有 same-path closure SHA-256 为 `c4539426...728e8`。专用 CDP 已关闭，普通 Chrome 未操作。
 - 最新外部只读预检：Xiaoyi 双域 7-GET 预检成功且无费用；DashScope 当前 credential 仍能读取 `wanx2.1-imageedit`，阿里官方价格页于 2026-09-06 仍列出 CNY 0.14/成功图片，私有价格观察 SHA-256 为 `ede27c30...524a62`。既有 Wanx IMAGE_TO_IMAGE/FULL_EDIT/INPAINT 技术结果成功但计费账户未关联，不能提升 Registry 或替代新 pilot 批准。
-- Ozon Seller Info 已在 `b64b723c` 以零重试复现：绑定店铺为 ACTIVE 且凭据字段完整，但 Ozon 返回 HTTP 400、`code=3`、`Invalid Api-Key`；脱敏证据 SHA-256 为 `b4383731...572fd`。数据库仍为 0 个专用 sandbox/test 标记，修复 API Key 也不自动授权写入。
+- Ozon Seller Info 根因复核：此前 `b4383731...572fd` 的 HTTP 400、`code=3 Invalid Api-Key` 来自错误绑定的占位店铺，并非操作员指定测试店。生产库另有三条未禁用记录共用同一 Client ID；最近更新的操作员指定测试店已在 `b64b723c` 通过零重试 Seller Info，只读检查没有商品写入。当前本地修复把店铺 API Key 改为只写字段，详情只返回配置状态，替换凭据不再为比较而解密旧值；该安全修复部署前，生产详情接口仍可能回显明文 Key。Ozon 写入仍需独立的精确 pilot 批准。
 - 生产 smoke 使用 `3d3333ef` 的 600 秒 typed USER/ADMIN token helper 对运行中的 `b64b723c` 执行；域名隔离、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime 全部通过，上传被明确跳过，两个 Redis session 随即撤销，临时 helper/token 文件已清理。
 - 受管扩展活动 COM 目录及其 228 个子项已完成 ACL 收紧：禁用继承，仅允许当前用户、SYSTEM、Administrators；无 reparse 点或额外主体，固定路径身份诊断保持 `FOUND`。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。

@@ -16,6 +16,9 @@ for (const hiddenSurface of [
   'handleVideoProbe',
   'readVideoProbeFile',
   'accept="video/mp4"',
+  '解密后的原始值',
+  'setApiKey\\(res\\.data\\.apiKey',
+  'detail\\?\\.apiKey',
 ]) {
   assert.doesNotMatch(
     page,
@@ -23,6 +26,17 @@ for (const hiddenSurface of [
     `Ozon shop page should not expose the developer probe surface: ${hiddenSurface}`,
   );
 }
+
+assert.match(
+  page,
+  /apiKeyConfigured/,
+  'The Ozon shop editor should consume only redacted API Key configuration state',
+);
+assert.match(
+  page,
+  /留空[^<\n]*不修改/,
+  'The Ozon shop editor should explain that an empty API Key preserves the stored credential',
+);
 
 assert.match(
   route,

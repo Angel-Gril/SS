@@ -378,10 +378,8 @@ export async function shopRoutes(app: FastifyInstance) {
 
     const credentialChanged =
       (parsed.data.clientId !== undefined && parsed.data.clientId !== shop.clientId) ||
-      (parsed.data.apiKey !== undefined && parsed.data.apiKey !== decrypt(shop.apiKeyEncrypted)) ||
-      (parsed.data.apiSecret !== undefined &&
-        parsed.data.apiSecret !==
-          (shop.apiSecretEncrypted ? decrypt(shop.apiSecretEncrypted) : undefined));
+      parsed.data.apiKey !== undefined ||
+      parsed.data.apiSecret !== undefined;
     const data: Record<string, unknown> = {};
     if (parsed.data.name) data.name = parsed.data.name;
     if (parsed.data.clientId) data.clientId = parsed.data.clientId;
@@ -420,7 +418,8 @@ export async function shopRoutes(app: FastifyInstance) {
         platform: shop.platform,
         name: shop.name,
         clientId: shop.clientId,
-        apiKey: decrypt(shop.apiKeyEncrypted),
+        apiKeyConfigured: Boolean(shop.apiKeyEncrypted),
+        apiSecretConfigured: Boolean(shop.apiSecretEncrypted),
         status: shop.status,
         createdAt: shop.createdAt,
       },

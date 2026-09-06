@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, RefreshCw, TestTube2, Package, Trash2, Loader2, Pencil, Eye, EyeOff } from 'lucide-react';
+import { Plus, RefreshCw, TestTube2, Package, Trash2, Loader2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -38,6 +38,16 @@ interface Shop {
   errorMessage: string | null;
   productCount: number;
   orderCount: number;
+  createdAt: string;
+}
+
+interface ShopDetail {
+  id: string;
+  platform: string;
+  name: string;
+  clientId: string | null;
+  apiKeyConfigured: boolean;
+  status: 'ACTIVE' | 'DISABLED' | 'ERROR';
   createdAt: string;
 }
 
@@ -351,23 +361,22 @@ function EditShopDialog({ shopId, onClose, onSuccess }: {
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [detail, setDetail] = useState<any>(null);
+  const [detail, setDetail] = useState<ShopDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
   const [clientId, setClientId] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!shopId) { setDetail(null); setShowKey(false); return; }
+    if (!shopId) { setDetail(null); setApiKey(''); return; }
     setLoading(true);
-    api.get(`/api/shops/${shopId}`).then((res: any) => {
+    api.get<ShopDetail>(`/api/shops/${shopId}`).then((res) => {
       if (res.code === 1 && res.data) {
         setDetail(res.data);
         setName(res.data.name || '');
         setClientId(res.data.clientId || '');
-        setApiKey(res.data.apiKey || '');
+        setApiKey('');
       }
       setLoading(false);
     });
@@ -379,7 +388,7 @@ function EditShopDialog({ shopId, onClose, onSuccess }: {
     const body: Record<string, string> = {};
     if (name !== detail?.name) body.name = name;
     if (clientId !== detail?.clientId) body.clientId = clientId;
-    if (apiKey !== detail?.apiKey) body.apiKey = apiKey;
+    if (apiKey.trim()) body.apiKey = apiKey.trim();
 
     if (Object.keys(body).length === 0) {
       toast({ title: '没有修改' });
@@ -419,18 +428,19 @@ function EditShopDialog({ shopId, onClose, onSuccess }: {
             </div>
             <div className="space-y-2">
               <Label>API Key</Label>
-              <div className="flex gap-2">
-                <Input
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="font-mono flex-1"
-                />
-                <Button type="button" size="icon" variant="outline" onClick={() => setShowKey(!showKey)} title={showKey ? '隐藏' : '显示'}>
-                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">API Key 已加密存储，此处显示的是解密后的原始值</p>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="new-password"
+                placeholder={detail.apiKeyConfigured ? 'API Key 已配置，留空则不修改' : '输入 Ozon Seller Api-Key'}
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                {detail.apiKeyConfigured
+                  ? 'API Key 已安全保存且不会回显；留空则不修改，输入新值将替换现有 Key。'
+                  : '尚未配置 API Key，请输入新值。'}
+              </p>
             </div>
             <div className="text-xs text-muted-foreground">
               状态: {detail.status} | 创建时间: {formatDate(detail.createdAt)}
