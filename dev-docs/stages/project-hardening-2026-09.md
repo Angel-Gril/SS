@@ -208,6 +208,13 @@
 - 阿里官方页面当前仍列出 `wanx2.1-imageedit` CNY 0.14/成功图片，私有价格观察 SHA-256 为 `ede27c30...524a62`；现有 Wanx 三种编辑技术证据因计费账户未关联，仍不能提升 Registry 或授权新请求。
 - Ozon Seller Info 对绑定 ACTIVE 店铺返回 HTTP 400、`code=3 Invalid Api-Key`；脱敏证据 SHA-256 为 `b4383731...572fd`。下一步必须更新专用测试店凭据并先通过只读 Seller Info，不能拿现有生产店铺试写。
 
+### stage-15 `a986d0f6` 安全修复部署与状态收口（2026-09-06）
+
+- `a986d0f6` 已推送并部署到日本 VPS；API/Web/Worker、数据库、Redis、Nginx/UFW、双 `/ready` 和完整 VPS verifier 均通过，结果为 `0 failure / 1 warning`，唯一 warning 为按用户决定暂不配置远端备份。
+- Ozon 店铺详情改为只写凭据：GET 只返回 `apiKeyConfigured/apiSecretConfigured`，编辑留空不变、输入新值才替换，服务端不再解密旧 Key 做比较；对应安全测试和 Web Ozon 路由合同通过。
+- 1.0.317 cloud/local 候选分别绑定 `a986d0f6`，SHA-256 为 `e9ab7c3d...7ca4be` / `c692326c...7f358`；候选保持暗部署，官网 pointer 继续服务已批准的 `1.0.316 / b64b723c`。
+- 指定测试店 `DOTH / Client ID 4980990` 的 Seller Info 零重试只读检查通过，回执 SHA-256 为 `c56b173e...79094`；未执行 Ozon 商品写入、Provider POST 或真实费用操作。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

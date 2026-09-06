@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 加固与发布验收阶段：stage-1 至 stage-14 已完成；最近实现检查点 `3d3333ef` 已推送。日本 VPS 与公开扩展仍绑定运行提交 `b64b723c`、版本 `1.0.316`，诊断 helper 提交没有改变运行包字节。
+- 加固与发布验收阶段：stage-1 至 stage-15 已完成；当前实现检查点为 `a986d0f6`，已推送并部署到日本 VPS。VPS 当前运行 `a986d0f6`；扩展候选为 `1.0.317` 且保持暗部署，公开官网指针仍按批准状态绑定 `b64b723c` / `1.0.316`。
 - 已验证：完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要。
-- 当前主风险：真实 Provider pilot 尚缺费用批准和可关联计费账户；现有 Ozon 绑定店铺 API Key 已被 Ozon 以 `code=3` 拒绝，且没有专用测试店铺；Redis 集群拓扑、外部告警和 CN 远端备份仍未验证。
-- 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再提供带有效只读凭据的专用 Ozon 测试店；远端备份按当前用户决定暂不配置。
+- 当前主风险：真实 Provider pilot 尚缺可关联计费账户和独立费用批准；Ozon 指定测试店 Seller Info 只读已通过，但专用测试店写入、回滚和对账仍未授权；Redis 集群拓扑、外部告警和 CN 远端备份仍未验证。
+- 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再为 Ozon 测试店绑定明确的写入/回滚 pilot；远端备份按当前用户决定暂不配置。

@@ -1,12 +1,12 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-06，最新代码检查点为 `3d3333ef`，日本 VPS 与公开扩展运行证据绑定 `b64b723c`。该结论来自当前分支、文件和新鲜命令，不用诊断 helper 提交冒充运行包证据。
+审计日期：2026-09-06，最新代码检查点为 `a986d0f6`，日本 VPS 当前运行同一提交；公开扩展仍按批准状态绑定 `b64b723c` / `1.0.316`，`1.0.317` 仅为暗部署候选。该结论来自当前分支、文件和新鲜命令，不用诊断 helper 提交冒充运行包证据。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git evidence state：`3d3333ef` 已提交并推送；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断、部署备份 retention 和 typed production smoke token 均有独立检查点。
+- Git evidence state：`a986d0f6` 已提交并推送；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断、部署备份 retention、typed production smoke token 和 Ozon Key 只写修复均有独立检查点。
 - 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
@@ -79,11 +79,11 @@
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
 - 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
 - 用户级工具边界：`C:\Users\550W\.codex\skills` 的 45 个顶层技能入口指向未授权的 `C:\Users\550W\.cc-switch\skills`，其内容未审计；允许目录内的 gstack 工具包含自动更新、遥测、会话导入和 Hook 设置写入能力，但没有证据表明这些 Hook 在当前用户配置中已启用。下一步必须先取得 `.cc-switch` 或实际用户配置的独立授权，不能把技能目录中的模板当作运行态证据。
-- 日本/COM VPS 当前运行 `b64b723c37c16f2adf2beb3a081d9f6bf159e01d`：API/Web/Worker、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260906_033442.sql.gz`（47,645,659 bytes）已完成 144 表临时恢复演练，attestation SHA-256 为 `33dcc8db42583e3986beac68fbfa4e5daff7656f9072158ab855b36760687b40`。远端备份按用户决定暂不配置，verifier 唯一 warning 为本地备份。
-- 公开扩展与受管 COM 路径均为 `1.0.316`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变。官网 approval/receipt SHA-256 分别为 `31da6742...4783`、`43b69ccd...a496d9f`；受管升级、active-worker、Unicode 回执分别为 `d44efe57...d7b51`、`05c59166...1044f`、`6b401528...723ca`，私有 same-path closure SHA-256 为 `c4539426...728e8`。专用 CDP 已关闭，普通 Chrome 未操作。
+- 日本/COM VPS 当前运行 `a986d0f6817d4c1783f510ac56410687817ccdfa`：API/Web/Worker、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260906_073135.sql.gz`（47,647,846 bytes）已完成 144 表临时恢复演练，attestation SHA-256 为 `6354965d20d5a6fd7caadb35557bc8b3a67275b387274f4cced5198a01172568`。远端备份按用户决定暂不配置，verifier 唯一 warning 为本地备份。
+- 公开扩展仍为已批准的 `1.0.316`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变；VPS 暗部署候选为 `1.0.317`，cloud/local SHA-256 分别为 `e9ab7c3d258e4f8edd8795aabcc3d0ed0115e5e9565299c16e44dfb1ed7ca4be`、`c692326cc3231d0692fbc746d307c1a4f13abc5105d5687a6ed4378b0ac7f358`。候选 release evidence SHA-256 为 `cb25890f2bf0477fd632bd6899c2d77f172b09454b45df1b7938e1578cc29685`，签名 SHA-256 为 `208c9c3d90d106d6ae83300972d3e6e96d02d284c3addb092698f80ca9820fb8`；官网仍明确保持 `1.0.316` 指针。专用 CDP 已关闭，普通 Chrome 未操作。
 - 最新外部只读预检：Xiaoyi 双域 7-GET 预检成功且无费用；DashScope 当前 credential 仍能读取 `wanx2.1-imageedit`，阿里官方价格页于 2026-09-06 仍列出 CNY 0.14/成功图片，私有价格观察 SHA-256 为 `ede27c30...524a62`。既有 Wanx IMAGE_TO_IMAGE/FULL_EDIT/INPAINT 技术结果成功但计费账户未关联，不能提升 Registry 或替代新 pilot 批准。
-- Ozon Seller Info 根因复核：此前 `b4383731...572fd` 的 HTTP 400、`code=3 Invalid Api-Key` 来自错误绑定的占位店铺，并非操作员指定测试店。生产库另有三条未禁用记录共用同一 Client ID；最近更新的操作员指定测试店已在 `b64b723c` 通过零重试 Seller Info，只读检查没有商品写入。当前本地修复把店铺 API Key 改为只写字段，详情只返回配置状态，替换凭据不再为比较而解密旧值；该安全修复部署前，生产详情接口仍可能回显明文 Key。Ozon 写入仍需独立的精确 pilot 批准。
-- 生产 smoke 使用 `3d3333ef` 的 600 秒 typed USER/ADMIN token helper 对运行中的 `b64b723c` 执行；域名隔离、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime 全部通过，上传被明确跳过，两个 Redis session 随即撤销，临时 helper/token 文件已清理。
+- Ozon Seller Info 根因复核：此前 `b4383731...572fd` 的 HTTP 400、`code=3 Invalid Api-Key` 来自错误绑定的占位店铺，并非操作员指定测试店。生产库另有三条未禁用记录共用同一 Client ID；操作员指定测试店 `DOTH / Client ID 4980990` 已在 `a986d0f6` 通过零重试 Seller Info，只读回执 SHA-256 为 `c56b173ee0843b3ab5438f868296d540a766c5f1905dbcfb6fc4661982379094`，没有商品写入。店铺 API Key 详情现只返回配置状态，替换凭据不再解密旧值；Ozon 写入仍需独立的精确 pilot 批准。
+- 生产 smoke 使用目标部署前的 `3d3333ef` 600 秒 typed USER/ADMIN token helper 对当前运行中的 `a986d0f6` 复核；此前通过的域名隔离、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime 保持有效，本轮未上传图片，AI Media/BYOK/Ozon Publisher 仍全暗态。
 - 受管扩展活动 COM 目录及其 228 个子项已完成 ACL 收紧：禁用继承，仅允许当前用户、SYSTEM、Administrators；无 reparse 点或额外主体，固定路径身份诊断保持 `FOUND`。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
 - 仍需单独验收：可对账的真实 Provider pilot、专用 Ozon 测试店写入/回滚、Redis 集群拓扑/外部告警和 CN 远端备份；生产域名、公开扩展、受管 active worker 与基础只读运行态已不再属于未验证项。
