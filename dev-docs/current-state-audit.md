@@ -1,12 +1,12 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-06，最新代码检查点为 `a986d0f6`，日本 VPS 当前运行同一提交；公开扩展仍按批准状态绑定 `b64b723c` / `1.0.316`，`1.0.317` 仅为暗部署候选。该结论来自当前分支、文件和新鲜命令，不用诊断 helper 提交冒充运行包证据。
+审计日期：2026-09-06，最新源码检查点为 `dd55cf4b`；日本、国内 VPS 当前运行安全修复提交 `a986d0f6`。公开扩展仍按批准状态绑定 `b64b723c` / `1.0.316`（COM）和 `d27b3ad8` / `1.0.311`（CN），`1.0.317` 仅为暗部署候选。该结论来自当前分支、文件和新鲜命令，不用诊断 helper 提交冒充运行包证据。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git evidence state：`a986d0f6` 已提交并推送；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断、部署备份 retention、typed production smoke token 和 Ozon Key 只写修复均有独立检查点。
+- Git evidence state：源码 HEAD `dd55cf4b` 已提交并推送；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断、部署备份 retention、typed production smoke token、Ozon Key 只写修复和 Ozon 只读 preflight 均有独立检查点。两地运行包仍绑定 `a986d0f6`，因为后续 preflight 只改仓库工具/合同，未触发新的运行部署。
 - 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。

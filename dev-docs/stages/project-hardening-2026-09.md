@@ -237,7 +237,7 @@
 ### stage-19 Ozon 写入前只读 preflight（2026-09-06）
 
 - sandbox 脚本新增独立 `--preflight --offer-id` 模式和 `OZON_SANDBOX_READONLY_CONFIRM` 门禁，执行 Seller Info 与 reserved offer lookup 后输出可供后续审批的 readiness 状态。
-- 合同测试 `8/8` 通过，明确断言 preflight 不调用 `/v3/product/import`、`/v1/product/import/info` 或 `/v1/product/archive`；真实商品写入、回滚和对账仍需专用店与独立 pilot 授权。
+- 合同测试 `9/9` 通过，明确断言 preflight 不调用 `/v3/product/import`、`/v1/product/import/info` 或 `/v1/product/archive`；真实商品写入、回滚和对账仍需专用店与独立 pilot 授权。该仓库工具更新绑定源码 `dd55cf4b`，尚未触发 VPS 运行包重部署。
 
 ## stage-6 执行回写
 
