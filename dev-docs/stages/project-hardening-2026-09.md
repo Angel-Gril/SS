@@ -247,7 +247,8 @@
 - Ozon transport 使用 `redirect:error` 和 2 MiB 响应上限；offer ID 与共享合同统一为总长 50；archive 请求接受后必须由 product info 的 `is_archived=true` 复查，其他状态返回 cleanup pending/failure。
 - fresh_evidence: QA-04/Ozon 聚焦合同通过；`0ede34ebd479157b96de946e0bd8347dbc2b8a7e` clean checkout 上完整 `pnpm qa:04:offline` 通过，server `5165 passed / 223 skipped`，source/cloud/local verifier 均 `0 failure / 0 warning`，PostgreSQL 148 migrations replay 通过。
 - remaining_risk: Provider 计费账户无法关联，QA-02 不能诚实标记 COMPLETE；现有 DOTH/DOIT receipt 是 v1，须确认身份后针对完整 production compiler envelope 重跑 v2 preflight；REL-04 canary 尚未绑定区域/版本/release-evidence/signature/VPS verifier 摘要。
-- external_effects: Provider request 0、Ozon write 0、VPS access 0、deployment 0、feature flag change 0。
+- external_effects: Provider request 0、Ozon write 0、VPS read-only preflight/metadata query 1 次、private receipt write 1 个、deployment 0、feature flag change 0。
+- follow_up_readonly_evidence: COM VPS v2 preflight 绑定 `DOTH / 4980990`、Seller `DOIT` 和 `ss-erp-sbx-v2-20260906-0ede34eb-01`，状态 `READY_FOR_SEPARATE_WRITE_APPROVAL`，receipt SHA-256 `3dbeef29...d6d1`；后续只读 metadata 查询确认该店 workflow 0、compiler-eligible draft 0。VPS access 为只读 API/数据库查询加私有回执写入，Ozon import/archive 仍为 0。
 
 ## stage-6 执行回写
 

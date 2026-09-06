@@ -48,6 +48,7 @@
 - Ozon 真实只读 preflight（2026-09-06）：临时上传已验证脚本到 COM VPS，在进程内读取加密店铺凭据后对 `DOTH / 4980990` 和 reserved offer `ss-erp-sbx-preflight-20260906-a986d0f6-01` 执行；Seller Info 和 offer lookup 通过、offer 不存在、network writes 为 0，回执 SHA-256 为 `5bb18366...ee646`。Ozon 返回卖家名 `DOIT`，真实写入前需确认该平台身份与 ERP 别名的对应关系。
 - QA-04/Ozon sandbox 加固（2026-09-06）：`fbb5f11d` 让 QA-04 offline gate 首尾绑定同一 clean Git root/40 位 commit 并拒绝 staged、untracked 和运行中漂移；`0ede34eb` 让 Ozon execute 强制消费 24 小时内的 v2 preflight SHA、同一 credential revision、店铺别名/Seller 名/offer 和 production compiler envelope，禁止 redirect、限制响应 2 MiB，并把 archive acceptance 与 `is_archived=true` 的复查分开。聚焦合同 `10/10` 和 QA-04 contract 通过。
 - `0ede34ebd479157b96de946e0bd8347dbc2b8a7e` clean checkout 上完整 `pnpm qa:04:offline` 通过：server `5165 passed / 223 skipped`，source/cloud/local extension verifier 均为 `0 failure / 0 warning`，148 migrations 的 scope-revocation 与 AI Media PostgreSQL replay 通过。该证据仍是 offline rehearsal；准确付费 Provider QA-02 未完成，未生成正式 `QA04_FINAL_ACCEPTANCE`。
+- Ozon v2 只读 follow-up（2026-09-06）：COM VPS 对 `DOTH / 4980990` 和新 offer `ss-erp-sbx-v2-20260906-0ede34eb-01` 返回 Seller `DOIT`、offer 不存在、network writes 0；v2 receipt SHA-256 为 `3dbeef29...d6d1`，本机/VPS 字节一致。只读 metadata 盘点确认该店 source workflow 0、compiler-eligible draft 0，因此没有合法 production compiler envelope，真实 import 继续阻断。
 
 ## 第一个安全任务
 
