@@ -83,6 +83,14 @@ const workflow = loadClientModule();
     workflowId: 'workflow-1',
     attemptId: 'attempt-1',
   });
+  const platformHandoff = workflow.parseSourceListingHandoff(
+    '?supplyGoodsId=goods-1&snapshotId=snapshot-1&sourceProductId=12345678901234567890&platform=1688&section=listing',
+  );
+  assert.equal(platformHandoff.platform, '1688');
+  assert.equal(
+    workflow.buildSourceListingHandoffSearchParams(platformHandoff).get('platform'),
+    '1688',
+  );
   for (const invalid of [
     '?supplyGoodsId=goods-1',
     '?snapshotId=snapshot-1',
@@ -94,6 +102,7 @@ const workflow = loadClientModule();
     '?supplyGoodsId=goods-1&snapshotId=snapshot-1&sourceProductId=not-numeric',
     '?supplyGoodsId=goods-1&snapshotId=snapshot-1&section=overview',
     '?supplyGoodsId=goods-1&snapshotId=snapshot-1&attemptId=attempt-1',
+    '?supplyGoodsId=goods-1&snapshotId=snapshot-1&platform=ozon',
   ]) {
     assert.throws(
       () => workflow.parseSourceListingHandoff(invalid),

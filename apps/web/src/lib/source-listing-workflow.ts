@@ -28,6 +28,7 @@ const HANDOFF_KEYS = [
   'snapshotId',
   'snapshotVersion',
   'sourceProductId',
+  'platform',
   'section',
   'workflowId',
   'attemptId',
@@ -61,6 +62,7 @@ export interface SourceListingHandoff {
   snapshotId: string;
   snapshotVersion?: number;
   sourceProductId?: string;
+  platform?: '1688' | 'pdd' | 'taobao' | 'tmall';
   section?: 'listing';
   workflowId?: string;
   attemptId?: string;
@@ -335,6 +337,10 @@ export function parseSourceListingHandoff(input: HandoffQuery): SourceListingHan
         if (!/^[1-9]\d*$/.test(value) || BigInt(value) <= 0n) throw new Error('invalid source product ID');
         return [key, value];
       }
+      if (key === 'platform') {
+        if (!['1688', 'pdd', 'taobao', 'tmall'].includes(value)) throw new Error('invalid handoff platform');
+        return [key, value];
+      }
       if (key === 'section' && value !== 'listing') throw new Error('invalid handoff section');
       return [key, value];
     } catch {
@@ -352,6 +358,7 @@ export function parseSourceListingHandoff(input: HandoffQuery): SourceListingHan
     snapshotId: values.snapshotId,
     ...(values.snapshotVersion ? { snapshotVersion: Number(values.snapshotVersion) } : {}),
     ...(values.sourceProductId ? { sourceProductId: values.sourceProductId } : {}),
+    ...(values.platform ? { platform: values.platform as SourceListingHandoff['platform'] } : {}),
     ...(values.section ? { section: 'listing' as const } : {}),
     ...(values.workflowId ? { workflowId: values.workflowId } : {}),
     ...(values.attemptId ? { attemptId: values.attemptId } : {}),
@@ -364,6 +371,7 @@ export function buildSourceListingHandoffSearchParams(handoff: SourceListingHand
     snapshotId: handoff.snapshotId,
     ...(handoff.snapshotVersion !== undefined ? { snapshotVersion: String(handoff.snapshotVersion) } : {}),
     ...(handoff.sourceProductId ? { sourceProductId: handoff.sourceProductId } : {}),
+    ...(handoff.platform ? { platform: handoff.platform } : {}),
     ...(handoff.section ? { section: handoff.section } : {}),
     ...(handoff.workflowId ? { workflowId: handoff.workflowId } : {}),
     ...(handoff.attemptId ? { attemptId: handoff.attemptId } : {}),
@@ -373,6 +381,7 @@ export function buildSourceListingHandoffSearchParams(handoff: SourceListingHand
     snapshotId: parsed.snapshotId,
     ...(parsed.snapshotVersion !== undefined ? { snapshotVersion: String(parsed.snapshotVersion) } : {}),
     ...(parsed.sourceProductId ? { sourceProductId: parsed.sourceProductId } : {}),
+    ...(parsed.platform ? { platform: parsed.platform } : {}),
     ...(parsed.section ? { section: parsed.section } : {}),
     ...(parsed.workflowId ? { workflowId: parsed.workflowId } : {}),
     ...(parsed.attemptId ? { attemptId: parsed.attemptId } : {}),

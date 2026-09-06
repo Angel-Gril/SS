@@ -5994,7 +5994,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const handoff = await readPersistedSourceWorkflowHandoff(platform, sourceProductId);
       if (!handoff || !sourceProductId || !platform
         || handoff.sourceProductId !== sourceProductId || handoff.platform !== platform) {
-        return { state: 'unavailable', reason: 'source_handoff_mismatch' };
+        return {
+          handoff: null,
+          result: { state: 'unavailable', reason: 'source_handoff_mismatch' },
+          launch: null,
+        };
       }
       const result = await getSourceListingWorkflowClient().getStatus({
         snapshotId: handoff.snapshotId,

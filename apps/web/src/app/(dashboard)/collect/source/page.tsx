@@ -208,6 +208,7 @@ const SOURCE_LISTING_HANDOFF_KEYS = [
   'snapshotId',
   'snapshotVersion',
   'sourceProductId',
+  'platform',
   'section',
   'workflowId',
   'attemptId',

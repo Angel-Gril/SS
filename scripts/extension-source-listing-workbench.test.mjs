@@ -119,6 +119,11 @@ assert.match(worker, /loadAuthoritativeSourceAiImageSuiteProjection/);
 assert.match(worker, /executeAuthoritativeSourceAiImageSuiteCommand/);
 assert.match(worker, /readPersistedSourceWorkflowHandoff\(platform, sourceProductId\)/);
 assert.match(worker, /handoff\.sourceProductId/);
+assert.match(
+  worker,
+  /if \(!handoff[\s\S]{0,360}return \{[\s\S]{0,120}handoff:\s*null,[\s\S]{0,120}result:\s*\{\s*state:\s*'unavailable',\s*reason:\s*'source_handoff_mismatch'\s*\},[\s\S]{0,120}launch:\s*null[\s\S]{0,60}\};/u,
+  'a missing source handoff must preserve the nested result contract consumed by the page',
+);
 assert.match(worker, /CREATE_TRANSLATION/);
 assert.match(worker, /ss-erp:source-workbench:translation-intents:v1/);
 assert.match(worker, /getOrCreateSourceTranslationIntent/);
