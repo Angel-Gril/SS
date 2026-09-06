@@ -38,6 +38,15 @@ export interface OzonAttributeValuesParams {
   limit?: number;
 }
 
+export interface OzonAttributeValueSearchParams {
+  description_category_id: number;
+  type_id: number;
+  attribute_id: number;
+  value: string;
+  language?: string;
+  limit?: number;
+}
+
 export interface OzonAttributePaginationLimits {
   maxPages?: number;
   maxRows?: number;
@@ -524,6 +533,26 @@ export class OzonClient {
       }
     }
     return { values, hasNext: res.has_next === true, nextCursor };
+  }
+
+  async searchAttributeValues(params: OzonAttributeValueSearchParams): Promise<OzonAttributeValue[]> {
+    const value = String(params.value || '').normalize('NFKC').trim();
+    const limit = Math.min(100, positiveInt(params.limit, 100));
+    if (!value || value.length > 200) throw new Error('Ozon attribute dictionary search value is invalid');
+    const res = await this.request<{ result: OzonAttributeValue[] }>(
+      '/v1/description-category/attribute/values/search',
+      {
+        body: {
+          description_category_id: params.description_category_id,
+          type_id: params.type_id,
+          attribute_id: params.attribute_id,
+          language: params.language || 'DEFAULT',
+          value,
+          limit,
+        },
+      },
+    );
+    return Array.isArray(res.result) ? res.result : [];
   }
 
   async getAttributeValues(

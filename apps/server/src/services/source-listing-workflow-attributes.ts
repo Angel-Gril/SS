@@ -100,6 +100,15 @@ export interface SourceListingAttributeDictionary {
   warning?: string;
 }
 
+export interface SourceListingAttributeDictionarySearchResult {
+  scope: 'SEARCH_RESULTS';
+  catalogRevision: string;
+  values: Array<{ id: number; value?: string | null }>;
+  source: 'cache' | 'ozon_api' | 'stale-cache';
+  resultExhaustive: boolean;
+  warning?: string;
+}
+
 export interface SourceListingAttributeManualChange {
   attributeId: number;
   skuKey?: string;
@@ -142,6 +151,14 @@ export interface SourceListingWorkflowAttributeServiceOptions {
     field: OzonNormalizedAttributeField;
     freshness: SourceListingAttributeFreshness;
   }): Promise<SourceListingAttributeDictionary>;
+  searchDictionary?(input: {
+    ownerUserId: string;
+    draft: OzonListingDraft;
+    schema: OzonNormalizedAttributeSchema;
+    field: OzonNormalizedAttributeField;
+    queries: string[];
+    freshness: Exclude<SourceListingAttributeFreshness, 'PUBLISH_CACHE_REQUIRED'>;
+  }): Promise<SourceListingAttributeDictionarySearchResult>;
   dictionaryAliases?(input: {
     field: OzonNormalizedAttributeField;
     value: unknown;
@@ -880,13 +897,20 @@ export function createSourceListingWorkflowAttributeService(
     for (const [attributeId, values] of candidateValues) {
       const field = input.fields.find((entry) => entry.attributeId === attributeId);
       if (!field || field.valuePolicy === 'FREE_TEXT') continue;
-      const dictionary = await dictionaryFor({
-        ownerUserId: input.ownerUserId,
-        draft: input.draft,
-        schema: input.schema,
-        field,
-        dictionaryMemo: input.dictionaryMemo,
-      });
+      let dictionary: SourceListingAttributeDictionary;
+      try {
+        dictionary = await dictionaryFor({
+          ownerUserId: input.ownerUserId,
+          draft: input.draft,
+          schema: input.schema,
+          field,
+          dictionaryMemo: input.dictionaryMemo,
+        });
+      } catch {
+        // An oversized or temporarily unavailable full dictionary cannot
+        // authorize an AI suggestion. Preserve the blocked source value.
+        continue;
+      }
       if (!dictionary.complete) continue;
       const resolution = await resolveDictionaryMatches({
         field,
@@ -1061,7 +1085,17 @@ export function createSourceListingWorkflowAttributeService(
       attributeId: number;
       query?: string;
       limit?: number;
-    }): Promise<{ attributeId: number; complete: boolean; values: Array<{ id: number; value: string }> }> {
+    }): Promise<{
+      attributeId: number;
+      complete: boolean;
+      dictionaryComplete: boolean;
+      resultExhaustive: boolean;
+      hasMore: boolean;
+      resultTruncated: boolean;
+      source: 'cache' | 'ozon_api' | 'stale-cache' | 'bounded_scan';
+      catalogRevision: string;
+      values: Array<{ id: number; value: string }>;
+    }> {
       const schema = await loadSchema(input);
       const field = schema.fields.find((entry) => entry.attributeId === input.attributeId);
       if (!field) throw new SourceListingWorkflowAttributeError(
@@ -1072,20 +1106,59 @@ export function createSourceListingWorkflowAttributeService(
           'OZON_ATTRIBUTE_FIELD_READ_ONLY', 422, `${field.name} does not have an official dictionary`,
         );
       }
+      const query = normalizedText(input.query);
+      const limit = Number.isSafeInteger(input.limit)
+        ? Math.max(1, Math.min(100, Number(input.limit)))
+        : 50;
+      if (query && options.searchDictionary) {
+        const result = await options.searchDictionary({
+          ownerUserId: input.ownerUserId,
+          draft: input.draft,
+          schema,
+          field,
+          queries: [query],
+          freshness: 'OFFICIAL_REFRESH_REQUIRED',
+        });
+        const values = normalizedDictionary({
+          complete: false,
+          values: result.values,
+        })
+          .slice(0, limit)
+          .map((entry) => ({ id: entry.id, value: String(entry.value) }));
+        return {
+          attributeId: field.attributeId,
+          complete: false,
+          dictionaryComplete: false,
+          resultExhaustive: result.resultExhaustive && result.values.length <= limit,
+          hasMore: !result.resultExhaustive || result.values.length > limit,
+          resultTruncated: !result.resultExhaustive || result.values.length > limit,
+          source: result.source,
+          catalogRevision: result.catalogRevision,
+          values,
+        };
+      }
       const dictionary = await dictionaryFor({
         ownerUserId: input.ownerUserId,
         draft: input.draft,
         schema,
         field,
       });
-      const query = normalizedText(input.query);
-      const limit = Number.isSafeInteger(input.limit)
-        ? Math.max(1, Math.min(100, Number(input.limit)))
-        : 50;
-      const values = normalizedDictionary(dictionary)
-        .filter((entry) => !query || normalizedText(entry.value).includes(query))
-        .slice(0, limit);
-      return { attributeId: field.attributeId, complete: dictionary.complete === true, values };
+      const matchingValues = normalizedDictionary(dictionary)
+        .filter((entry) => !query || normalizedText(entry.value).includes(query));
+      const values = matchingValues.slice(0, limit);
+      return {
+        attributeId: field.attributeId,
+        complete: dictionary.complete === true,
+        dictionaryComplete: dictionary.complete === true,
+        resultExhaustive: values.length === matchingValues.length,
+        hasMore: values.length < matchingValues.length,
+        resultTruncated: values.length < matchingValues.length,
+        source: dictionary.source === 'stale-cache'
+          ? 'stale-cache'
+          : dictionary.source === 'cache' ? 'cache' : 'ozon_api',
+        catalogRevision: input.draft.category?.catalogRevision || '',
+        values: values.map((entry) => ({ id: entry.id, value: String(entry.value) })),
+      };
     },
 
     async prepareManualValues(input: {

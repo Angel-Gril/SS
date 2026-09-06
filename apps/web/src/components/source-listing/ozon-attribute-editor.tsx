@@ -113,6 +113,12 @@ interface DictionaryValue {
 interface DictionarySearchState {
   loading: boolean;
   complete: boolean;
+  dictionaryComplete?: boolean;
+  resultExhaustive?: boolean;
+  hasMore?: boolean;
+  resultTruncated?: boolean;
+  source?: 'cache' | 'ozon_api' | 'stale-cache' | 'bounded_scan';
+  warning?: string;
   values: DictionaryValue[];
   error: string;
 }
@@ -742,7 +748,17 @@ export function OzonAttributeEditor({
     }));
     const query = encodeURIComponent(dictionaryQueries[key] || '');
     try {
-      const res = await api.get<{ attributeId: number; complete: boolean; values: DictionaryValue[] }>(
+      const res = await api.get<{
+        attributeId: number;
+        complete: boolean;
+        dictionaryComplete?: boolean;
+        resultExhaustive?: boolean;
+        hasMore?: boolean;
+        resultTruncated?: boolean;
+        source?: 'cache' | 'ozon_api' | 'stale-cache' | 'bounded_scan';
+        warning?: string;
+        values: DictionaryValue[];
+      }>(
         `/api/source-listing-workflows/${encodeURIComponent(context.draftId)}/attributes/${field.attributeId}/dictionary?query=${query}&limit=50`,
       );
       if (dictionaryRequestIdsRef.current[key] !== requestId
@@ -751,7 +767,18 @@ export function OzonAttributeEditor({
       if (res.code === 1 && res.data) {
         setDictionarySearches((current) => ({
           ...current,
-          [key]: { loading: false, complete: res.data!.complete, values: res.data!.values, error: '' },
+          [key]: {
+            loading: false,
+            complete: res.data!.complete,
+            dictionaryComplete: res.data!.dictionaryComplete,
+            resultExhaustive: res.data!.resultExhaustive,
+            hasMore: res.data!.hasMore,
+            resultTruncated: res.data!.resultTruncated,
+            source: res.data!.source,
+            warning: res.data!.warning,
+            values: res.data!.values,
+            error: '',
+          },
         }));
       } else {
         setDictionarySearches((current) => ({
@@ -1110,6 +1137,15 @@ export function OzonAttributeEditor({
                         </button>
                       );
                     })}
+                  </div>
+                ) : null}
+                {dictionary && (dictionary.resultTruncated || dictionary.resultExhaustive === false || dictionary.source === 'stale-cache') ? (
+                  <div className="text-xs text-amber-700" role="status">
+                    {dictionary.source === 'stale-cache'
+                      ? '当前结果来自过期缓存，保存时仍会重新校验官方字典。'
+                      : dictionary.resultTruncated || dictionary.resultExhaustive === false
+                        ? '当前仅显示部分搜索结果，请继续缩小关键词。保存时会由服务端完整校验。'
+                        : null}
                   </div>
                 ) : null}
                 {dictionary?.error ? <div className="text-xs text-destructive">{dictionary.error}</div> : null}

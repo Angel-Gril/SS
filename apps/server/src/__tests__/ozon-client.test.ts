@@ -275,6 +275,42 @@ describe('Ozon client warehouse APIs', () => {
 });
 
 describe('Ozon attribute dictionary pagination', () => {
+  it('uses the bounded official endpoint for targeted attribute-value search', async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    class StubClient extends OzonClient {
+      override async request<T = unknown>(path: string, options: { body?: unknown } = {}): Promise<T> {
+        calls.push({ path, body: options.body });
+        return { result: [{ id: 126745801, value: 'Нет бренда', info: '', picture: '' }] } as T;
+      }
+    }
+
+    const client = new StubClient({ clientId: 'client', apiKey: 'key' });
+    await expect(client.searchAttributeValues({
+      description_category_id: 17027937,
+      type_id: 95483,
+      attribute_id: 85,
+      value: 'Без бренда',
+      limit: 5000,
+    })).resolves.toEqual([{ id: 126745801, value: 'Нет бренда', info: '', picture: '' }]);
+    expect(calls).toEqual([{
+      path: '/v1/description-category/attribute/values/search',
+      body: {
+        description_category_id: 17027937,
+        type_id: 95483,
+        attribute_id: 85,
+        language: 'DEFAULT',
+        value: 'Без бренда',
+        limit: 100,
+      },
+    }]);
+    await expect(client.searchAttributeValues({
+      description_category_id: 1,
+      type_id: 1,
+      attribute_id: 1,
+      value: ' ',
+    })).rejects.toThrow('search value is invalid');
+  });
+
   it('retains has_next and exposes the next cursor from an attribute-value page', async () => {
     const calls: Array<{ path: string; body: unknown }> = [];
     class StubClient extends OzonClient {

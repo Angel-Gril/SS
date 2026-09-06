@@ -146,17 +146,28 @@ function build(
       { id: 202, value: 'Красный' },
     ],
   }));
+  const searchDictionary = vi.fn(async () => ({
+    scope: 'SEARCH_RESULTS' as const,
+    catalogRevision: activeSchema.catalogRevision,
+    source: 'ozon_api' as const,
+    resultExhaustive: true,
+    values: [
+      { id: 201, value: 'Белый' },
+      { id: 202, value: 'Красный' },
+    ],
+  }));
   const service = createSourceListingWorkflowAttributeService({
     loadSchema,
     loadSourceContext,
     loadDictionary,
+    searchDictionary,
     dictionaryAliases: ({ value }) => value === '白色'
       ? ['Белый']
       : value === '红色'
         ? ['Красный']
         : [value],
   });
-  return { service, loadSchema, loadSourceContext, loadDictionary };
+  return { service, loadSchema, loadSourceContext, loadDictionary, searchDictionary };
 }
 
 function reviewedSkuColors(
@@ -211,7 +222,7 @@ describe('source listing workflow attribute integration', () => {
     expect(compatibleContext.loadDictionary).toHaveBeenCalledTimes(1);
   });
 
-  it('resolves source suggestions through the complete server dictionary and explains blockers', async () => {
+  it('resolves source suggestions through exact official search results and explains blockers', async () => {
     const { service, loadDictionary } = build();
     const workspace = await service.getWorkspace({ ownerUserId: 'owner-1', draft: draft() });
 
@@ -765,7 +776,7 @@ describe('source listing workflow attribute integration', () => {
   });
 
   it('searches only the current official dictionary with a bounded result set', async () => {
-    const { service, loadDictionary } = build();
+    const { service, loadDictionary, searchDictionary } = build();
     const result = await service.searchDictionary({
       ownerUserId: 'owner-1',
       draft: draft(),
@@ -776,13 +787,32 @@ describe('source listing workflow attribute integration', () => {
 
     expect(result).toEqual({
       attributeId: 100,
-      complete: true,
-      values: [{ id: 202, value: 'Красный' }],
+      complete: false,
+      dictionaryComplete: false,
+      resultExhaustive: false,
+      hasMore: true,
+      resultTruncated: true,
+      source: 'ozon_api',
+      catalogRevision: 'catalog-1',
+      values: [{ id: 201, value: 'Белый' }],
     });
-    expect(loadDictionary).toHaveBeenCalledWith(expect.objectContaining({
+    expect(searchDictionary).toHaveBeenCalledWith(expect.objectContaining({
       field: expect.objectContaining({ attributeId: 100 }),
       schema: expect.objectContaining({ catalogRevision: 'catalog-1' }),
+      queries: ['крас'],
     }));
+    expect(loadDictionary).not.toHaveBeenCalled();
+  });
+
+  it('keeps the workspace usable without attempting a bounded full dictionary scan', async () => {
+    const active = build();
+    active.loadDictionary.mockRejectedValue(new Error('dictionary exceeded row limit'));
+    const workspace = await active.service.getWorkspace({ ownerUserId: 'owner-1', draft: draft() });
+    expect(workspace.validationPreview.status).toBe('INVALID');
+    expect(workspace.suggestions['100']).toBeUndefined();
+    expect(workspace.validationPreview.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'OZON_ATTRIBUTE_SKU_VALUE_REQUIRED' }),
+    ]));
   });
 
   it('classifies real top-level package, stock and freight facts by affected operation', async () => {

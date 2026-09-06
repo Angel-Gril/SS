@@ -160,7 +160,14 @@ export function sourceStandardDictionaryAliases(
   });
   const inputKey = normalizedText(input.value);
   const mapped = plan.valueAliases.find((entry) => normalizedText(entry.sourceValue) === inputKey);
-  if (mapped) return [input.value, ...mapped.aliases];
+  if (mapped) {
+    const officialAliases = plan.standardKey === 'brand' && inputKey === normalizedText('Без бренда')
+      ? ['Нет бренда']
+      : plan.standardKey === 'materials' && inputKey === 'pe'
+        ? ['Полиэтилен']
+        : [];
+    return [input.value, ...mapped.aliases, ...officialAliases];
+  }
 
   // Aggregate aliases belong to the aggregate candidate itself, never to one contributing source value.
   if (plan.aggregateCandidate && normalizedText(plan.aggregateCandidate.value) === inputKey) {

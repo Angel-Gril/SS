@@ -764,6 +764,31 @@ const sourceListingWorkflowAttributeService = createSourceListingWorkflowAttribu
       ...(dictionary.warning ? { warning: dictionary.warning } : {}),
     };
   },
+  searchDictionary: async ({ ownerUserId, draft, schema, field, queries }) => {
+    const client = await loadOwnedSourceListingOzonClient(ownerUserId, draft.shopId);
+    const resultSets = await Promise.all(
+      [...new Set(queries.map((value) => String(value || '').normalize('NFKC').trim()).filter(Boolean))]
+        .slice(0, 5)
+        .map((value) => client.searchAttributeValues({
+          description_category_id: schema.descriptionCategoryId,
+          type_id: schema.typeId,
+          attribute_id: field.attributeId,
+          language: schema.language,
+          value,
+          limit: 100,
+        })),
+    );
+    const values = [...new Map(resultSets.flat().map((entry) => [Number(entry.id), entry])).values()]
+      .filter((entry) => Number.isSafeInteger(Number(entry.id)) && Number(entry.id) > 0)
+      .slice(0, 500);
+    return {
+      scope: 'SEARCH_RESULTS' as const,
+      catalogRevision: schema.catalogRevision,
+      values,
+      source: 'ozon_api' as const,
+      resultExhaustive: resultSets.every((items) => items.length < 100),
+    };
+  },
   loadSourceContext: loadSourceListingAttributeSourceContext,
   dictionaryAliases: sourceStandardDictionaryAliases,
 });

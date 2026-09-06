@@ -42,6 +42,23 @@ function standard(overrides: Partial<SourceStandardAttributes> = {}): SourceStan
 }
 
 describe('source standard dictionary aliases', () => {
+  it('includes official Ozon search terms for brandless and PE source facts', () => {
+    const sourceStandard = standard({
+      brand: { value: '', isBrandless: true },
+      materials: ['PE'],
+    });
+    expect(sourceStandardDictionaryAliases({
+      field: field({ attributeId: 85, name: 'Бренд', cardinality: 'SINGLE', ownership: 'EDITOR' }),
+      value: 'Без бренда',
+      sourceContext: { sourceStandard },
+    })).toEqual(['Без бренда', 'Нет бренда']);
+    expect(sourceStandardDictionaryAliases({
+      field: field({ attributeId: 6383, name: 'Материал', cardinality: 'MULTI', ownership: 'EDITOR' }),
+      value: 'PE',
+      sourceContext: { sourceStandard },
+    })).toEqual(['PE', 'Полиэтилен']);
+  });
+
   it('keeps explicit aliases for six Chinese colors without assigning multicolor to a single color', () => {
     const sourceStandard = standard({
       colors: ['白色', '黑色', '红色', '绿色', '蓝色', '黄色'],
