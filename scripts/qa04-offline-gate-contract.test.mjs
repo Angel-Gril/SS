@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   QA04_OFFLINE_STEPS,
   qa04OfflineManifest,
+  readQa04GitProvenance,
   runQa04OfflineGate,
 } from './qa04-offline-gate.mjs';
 
@@ -26,6 +27,32 @@ const expectedSteps = [
   ['extension-cloud', 'pnpm', ['build:extension:cloud']],
   ['extension-local', 'pnpm', ['build:extension:local']],
 ];
+const currentCommit = 'a'.repeat(40);
+
+function gitRunnerSequence({
+  repositoryRoot,
+  firstCommit = currentCommit,
+  secondCommit = firstCommit,
+  firstStatus = '',
+  secondStatus = firstStatus,
+} = {}) {
+  const outputs = [
+    `${repositoryRoot}\n`,
+    `${firstCommit}\n`,
+    firstStatus,
+    `${repositoryRoot}\n`,
+    `${secondCommit}\n`,
+    secondStatus,
+  ];
+  const calls = [];
+  return {
+    calls,
+    runner(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, signal: null, stdout: outputs.shift(), stderr: '' };
+    },
+  };
+}
 
 assert.equal(
   packageJson.scripts['qa:04:offline'],
@@ -108,11 +135,13 @@ function memoryWriter() {
 const successCalls = [];
 const successStdout = memoryWriter();
 const successStderr = memoryWriter();
+const successGit = gitRunnerSequence({ repositoryRoot });
 const success = runQa04OfflineGate({
   repositoryRoot,
   platform: 'linux',
   stdout: successStdout,
   stderr: successStderr,
+  gitRunner: successGit.runner,
   runner(command, args, options) {
     successCalls.push({ command, args, options });
     return { status: 0, signal: null };
@@ -120,8 +149,10 @@ const success = runQa04OfflineGate({
 });
 assert.equal(success, 0);
 assert.equal(successCalls.length, expectedSteps.length);
+assert.equal(successGit.calls.length, 6, 'the gate must bind clean Git state before and after all steps');
 assert.equal(successStderr.value(), '');
 assert.match(successStdout.value(), /Formal QA-04 completion still requires complete QA-02/u);
+assert.match(successStdout.value(), new RegExp(`Git commit: ${currentCommit}`, 'u'));
 for (const call of successCalls) {
   assert.equal(call.options.cwd, repositoryRoot);
   assert.equal(call.options.shell, false);
@@ -130,11 +161,13 @@ for (const call of successCalls) {
 
 const failureCalls = [];
 const failureStderr = memoryWriter();
+const failureGit = gitRunnerSequence({ repositoryRoot });
 const failure = runQa04OfflineGate({
   repositoryRoot,
   platform: 'linux',
   stdout: memoryWriter(),
   stderr: failureStderr,
+  gitRunner: failureGit.runner,
   runner(command, args) {
     failureCalls.push({ command, args });
     return { status: failureCalls.length === 3 ? 23 : 0, signal: null };
@@ -142,15 +175,18 @@ const failure = runQa04OfflineGate({
 });
 assert.equal(failure, 23, 'the gate must preserve the first failing exit status');
 assert.equal(failureCalls.length, 3, 'the gate must not run later steps after a failure');
+assert.equal(failureGit.calls.length, 3, 'a failed step must not be mislabeled with a post-run Git check');
 assert.match(failureStderr.value(), /FAILED at workspace-lint: exit 23/u);
 
 const startFailureCalls = [];
 const startFailureStderr = memoryWriter();
+const startFailureGit = gitRunnerSequence({ repositoryRoot });
 const startFailure = runQa04OfflineGate({
   repositoryRoot,
   platform: 'linux',
   stdout: memoryWriter(),
   stderr: startFailureStderr,
+  gitRunner: startFailureGit.runner,
   runner(command, args) {
     startFailureCalls.push({ command, args });
     return { status: null, signal: null, error: new Error('not found') };
@@ -161,12 +197,14 @@ assert.equal(startFailureCalls.length, 1);
 assert.match(startFailureStderr.value(), /failed to start gate-contract: not found/u);
 
 const windowsCalls = [];
+const windowsGit = gitRunnerSequence({ repositoryRoot });
 const windowsFailure = runQa04OfflineGate({
   repositoryRoot,
   platform: 'win32',
   comSpec: 'C:\\Windows\\System32\\cmd.exe',
   stdout: memoryWriter(),
   stderr: memoryWriter(),
+  gitRunner: windowsGit.runner,
   runner(command, args) {
     windowsCalls.push({ command, args });
     return { status: 29, signal: null };
@@ -179,6 +217,55 @@ assert.deepEqual(windowsCalls, [
     args: ['/d', '/s', '/c', 'pnpm test:qa04:offline-contract'],
   },
 ]);
+
+const directProvenanceGit = gitRunnerSequence({ repositoryRoot });
+assert.deepEqual(readQa04GitProvenance({
+  repositoryRoot,
+  runner: directProvenanceGit.runner,
+}), {
+  repositoryRoot,
+  gitCommit: currentCommit,
+});
+assert.equal(directProvenanceGit.calls.length, 3);
+
+const dirtyCalls = [];
+const dirtyStderr = memoryWriter();
+const dirtyGit = gitRunnerSequence({
+  repositoryRoot,
+  firstStatus: ' M scripts/qa04-offline-gate.mjs\n',
+});
+const dirty = runQa04OfflineGate({
+  repositoryRoot,
+  platform: 'linux',
+  stdout: memoryWriter(),
+  stderr: dirtyStderr,
+  gitRunner: dirtyGit.runner,
+  runner(command, args) {
+    dirtyCalls.push({ command, args });
+    return { status: 0, signal: null };
+  },
+});
+assert.equal(dirty, 1);
+assert.equal(dirtyCalls.length, 0, 'dirty worktrees must fail before any QA command runs');
+assert.match(dirtyStderr.value(), /Git provenance rejected: worktree is not clean/u);
+
+const driftStderr = memoryWriter();
+const driftGit = gitRunnerSequence({
+  repositoryRoot,
+  secondCommit: 'b'.repeat(40),
+});
+const drift = runQa04OfflineGate({
+  repositoryRoot,
+  platform: 'linux',
+  stdout: memoryWriter(),
+  stderr: driftStderr,
+  gitRunner: driftGit.runner,
+  runner() {
+    return { status: 0, signal: null };
+  },
+});
+assert.equal(drift, 1);
+assert.match(driftStderr.value(), /Git provenance changed while the gate was running/u);
 
 const listResult = spawnSync(process.execPath, ['scripts/qa04-offline-gate.mjs', '--list'], {
   cwd: repositoryRoot,

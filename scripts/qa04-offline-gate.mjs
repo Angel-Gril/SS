@@ -80,6 +80,55 @@ export function qa04OfflineManifest() {
   };
 }
 
+function runGitProvenanceCommand(runner, repositoryRoot, args, label) {
+  let result;
+  try {
+    result = runner('git', args, {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      shell: false,
+      windowsHide: true,
+    });
+  } catch (error) {
+    throw new Error(`${label} could not start: ${error.message}`);
+  }
+  if (result?.error) throw new Error(`${label} could not start: ${result.error.message}`);
+  if (result?.status !== 0) throw new Error(`${label} exited with ${result?.status ?? 1}`);
+  return String(result.stdout || '').trim();
+}
+
+export function readQa04GitProvenance({
+  repositoryRoot = REPOSITORY_ROOT,
+  runner = spawnSync,
+} = {}) {
+  const actualRoot = path.resolve(runGitProvenanceCommand(
+    runner,
+    repositoryRoot,
+    ['rev-parse', '--show-toplevel'],
+    'git root check',
+  ));
+  if (actualRoot !== path.resolve(repositoryRoot)) {
+    throw new Error('repository root does not match the QA-04 working directory');
+  }
+  const gitCommit = runGitProvenanceCommand(
+    runner,
+    repositoryRoot,
+    ['rev-parse', '--verify', 'HEAD'],
+    'git commit check',
+  ).toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(gitCommit)) {
+    throw new Error('HEAD is not one exact 40-character Git commit');
+  }
+  const status = runGitProvenanceCommand(
+    runner,
+    repositoryRoot,
+    ['status', '--porcelain=v1', '--untracked-files=all'],
+    'git worktree check',
+  );
+  if (status) throw new Error('worktree is not clean');
+  return { repositoryRoot: actualRoot, gitCommit };
+}
+
 function spawnSpec(step, platform, comSpec) {
   if (platform === 'win32' && step.command === 'pnpm') {
     return {
@@ -100,6 +149,7 @@ function displayCommand(step) {
 
 export function runQa04OfflineGate({
   runner = spawnSync,
+  gitRunner = spawnSync,
   stdout = process.stdout,
   stderr = process.stderr,
   platform = process.platform,
@@ -108,6 +158,17 @@ export function runQa04OfflineGate({
 } = {}) {
   stdout.write('QA-04 offline rehearsal\n');
   stdout.write('Formal QA-04 completion still requires complete QA-02 evidence.\n');
+  let initialProvenance;
+  try {
+    initialProvenance = readQa04GitProvenance({
+      repositoryRoot,
+      runner: gitRunner,
+    });
+  } catch (error) {
+    stderr.write(`[qa04-offline] Git provenance rejected: ${error.message}\n`);
+    return 1;
+  }
+  stdout.write(`Git commit: ${initialProvenance.gitCommit}\n`);
 
   for (const step of QA04_OFFLINE_STEPS) {
     stdout.write(`\n[qa04-offline] ${step.name}\n`);
@@ -138,6 +199,22 @@ export function runQa04OfflineGate({
       stderr.write(`[qa04-offline] FAILED at ${step.id}: exit ${status}${signal}\n`);
       return status;
     }
+  }
+
+  let finalProvenance;
+  try {
+    finalProvenance = readQa04GitProvenance({
+      repositoryRoot,
+      runner: gitRunner,
+    });
+  } catch (error) {
+    stderr.write(`[qa04-offline] Git provenance rejected after checks: ${error.message}\n`);
+    return 1;
+  }
+  if (finalProvenance.repositoryRoot !== initialProvenance.repositoryRoot
+    || finalProvenance.gitCommit !== initialProvenance.gitCommit) {
+    stderr.write('[qa04-offline] Git provenance changed while the gate was running\n');
+    return 1;
   }
 
   stdout.write('\n[qa04-offline] all offline rehearsal checks passed\n');
