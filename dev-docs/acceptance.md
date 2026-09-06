@@ -49,6 +49,7 @@
 - QA-04/Ozon sandbox 加固（2026-09-06）：`fbb5f11d` 让 QA-04 offline gate 首尾绑定同一 clean Git root/40 位 commit 并拒绝 staged、untracked 和运行中漂移；`0ede34eb` 让 Ozon execute 强制消费 24 小时内的 v2 preflight SHA、同一 credential revision、店铺别名/Seller 名/offer 和 production compiler envelope，禁止 redirect、限制响应 2 MiB，并把 archive acceptance 与 `is_archived=true` 的复查分开。聚焦合同 `10/10` 和 QA-04 contract 通过。
 - `0ede34ebd479157b96de946e0bd8347dbc2b8a7e` clean checkout 上完整 `pnpm qa:04:offline` 通过：server `5165 passed / 223 skipped`，source/cloud/local extension verifier 均为 `0 failure / 0 warning`，148 migrations 的 scope-revocation 与 AI Media PostgreSQL replay 通过。该证据仍是 offline rehearsal；准确付费 Provider QA-02 未完成，未生成正式 `QA04_FINAL_ACCEPTANCE`。
 - Ozon v2 只读 follow-up（2026-09-06）：COM VPS 对 `DOTH / 4980990` 和新 offer `ss-erp-sbx-v2-20260906-0ede34eb-01` 返回 Seller `DOIT`、offer 不存在、network writes 0；v2 receipt SHA-256 为 `3dbeef29...d6d1`，本机/VPS 字节一致。只读 metadata 盘点确认该店 source workflow 0、compiler-eligible draft 0，因此没有合法 production compiler envelope，真实 import 继续阻断。
+- Ozon ERP-only test asset（2026-09-06）：确定性生成并人工检查 1200x1200 `TEST ONLY` PNG，通过临时 600 秒 account session 上传到 COM OSS；源/重新下载 SHA-256 均为 `f53b25e7...d7b74`，上传回执 `ec11f958...3701b`，session 撤销复核通过。未调用 Provider/Ozon，未改 feature flags。来源 capture/listing/mapping/publisher 实跑决策仍全为 `master_off`，因此工作流尚未创建且未绕过 gate。
 
 ## 第一个安全任务
 

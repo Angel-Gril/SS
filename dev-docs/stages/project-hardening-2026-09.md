@@ -250,6 +250,14 @@
 - external_effects: Provider request 0、Ozon write 0、VPS read-only preflight/metadata query 1 次、private receipt write 1 个、deployment 0、feature flag change 0。
 - follow_up_readonly_evidence: COM VPS v2 preflight 绑定 `DOTH / 4980990`、Seller `DOIT` 和 `ss-erp-sbx-v2-20260906-0ede34eb-01`，状态 `READY_FOR_SEPARATE_WRITE_APPROVAL`，receipt SHA-256 `3dbeef29...d6d1`；后续只读 metadata 查询确认该店 workflow 0、compiler-eligible draft 0。VPS access 为只读 API/数据库查询加私有回执写入，Ozon import/archive 仍为 0。
 
+### stage-21 Ozon ERP-only 测试草稿准备（2026-09-06）
+
+- operator_scope: 已确认 `DOTH` 对应 Ozon Seller `DOIT`，授权在日本 VPS 创建纯测试 ERP 来源工作流和合成测试图；明确不授权 Ozon import/archive。
+- completed: 生成并人工检查 `TEST ONLY / NO REAL PRODUCT / NOT FOR SALE` 1200x1200 PNG；COM OSS 上传和公网重新下载 SHA-256 均为 `f53b25e7...d7b74`，private upload receipt SHA-256 `ec11f958...3701b`。临时 USER session 已删除并复核无短时残留。
+- runtime_gate: exact shop/owner 的 `SOURCE_CAPTURE_V2`、`SOURCE_LISTING_WORKFLOW`、mapping read/write 和 publisher 决策均为 `master_off`；未改 SystemConfig、未绕过 route/service owner、未创建半成品 workflow。
+- next_authorization: 临时启用 exact owner 的 capture `shadow_write` 与 exact shop 的 listing `dual_read`，publisher 继续 `master_off`；完成 Capture/Workflow/envelope 后回滚原配置。另需操作员提供测试商品真实包裹重量/长宽高、价格/币种/VAT 与类目方向，禁止 Agent 虚构。
+- external_effects: ERP OSS image upload 1；Redis temporary session create/delete 1；Provider request 0；Ozon request 0；feature flag change 0；workflow/database row create 0。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

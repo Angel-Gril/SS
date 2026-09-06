@@ -31,5 +31,5 @@
 
 - 加固与发布验收阶段：stage-1 至 stage-20 已完成；当前实现检查点为 `0ede34eb`，其中运行时安全修复提交 `a986d0f6` 已推送并部署到日本、国内两台 VPS。两地 VPS 当前均运行 `a986d0f6`；扩展候选为 `1.0.317` 且保持暗部署，COM 官网指针仍按批准状态绑定 `b64b723c` / `1.0.316`，CN 官网指针仍绑定 `d27b3ad8` / `1.0.311`。`0ede34eb` 的 QA-04/Ozon sandbox 加固属于仓库工具与合同更新，尚未部署。
 - 已验证：完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要。
-- 当前主风险：真实 Provider pilot 尚缺可关联计费账户和独立费用批准；Ozon 指定测试店 v2 preflight 已通过，但该店当前没有来源工作流，无法导出 production compiler envelope，必须先创建并审核一条纯测试草稿；两台 VPS 的 Redis 均为 standalone、无副本/集群和专用告警，CN 远端备份仍按决定未配置；Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
+- 当前主风险：真实 Provider pilot 尚缺可关联计费账户和独立费用批准；Ozon 指定测试店 v2 preflight 与合成测试图 OSS 上传已通过，但来源 Capture/Workflow master 仍全关，创建草稿前需单独批准 exact owner/shop pilot，并提供不可虚构的测试商品包裹事实；两台 VPS 的 Redis 均为 standalone、无副本/集群和专用告警，CN 远端备份仍按决定未配置；Node ESM 提示已解决，Next build 的 flat-config 检测提示仍属工具链限制。
 - 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再为 Ozon 测试店绑定明确的写入/回滚 pilot；远端备份按当前用户决定暂不配置。
