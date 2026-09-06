@@ -157,6 +157,16 @@ export function deriveExtensionIdFromPublicKey(keyBytes) {
     .join('');
 }
 
+export function deriveExtensionIdFromPath(directoryPath) {
+  if (typeof directoryPath !== 'string' || !directoryPath.trim()) fail('extension path is required');
+  const resolved = path.resolve(directoryPath);
+  if (!isDirectoryNonSymlink(resolved)) {
+    fail('extension path must be a directory and must not be a symlink');
+  }
+  const pathBytes = Buffer.from(resolved, process.platform === 'win32' ? 'utf16le' : 'utf8');
+  return deriveExtensionIdFromPublicKey(pathBytes);
+}
+
 export function deriveExtensionIdFromKeyFile(keyPath) {
   if (typeof keyPath !== 'string' || !keyPath.trim()) fail('key path is required');
   const resolved = path.resolve(keyPath);
@@ -184,7 +194,9 @@ export function inspectManagedExtensionDirectory(directoryPath, {
   }
   const version = readManifestVersion(resolved);
   if (!version) return Object.freeze({ path: resolved, status: 'INVALID', reason: 'manifest_invalid' });
-  if (!hasManagedIdentityPath(resolved, extensionId, version)) {
+  const directIdentityBinding = hasManagedIdentityPath(resolved, extensionId, version);
+  const pathDerivedIdentityBinding = deriveExtensionIdFromPath(resolved) === extensionId;
+  if (!directIdentityBinding && !pathDerivedIdentityBinding) {
     return Object.freeze({ path: resolved, status: 'UNBOUND', version, reason: 'path_not_bound_to_extension_id' });
   }
   if (expectedVersion && version !== expectedVersion) {
@@ -202,6 +214,7 @@ export function inspectManagedExtensionDirectory(directoryPath, {
       path: resolved,
       status: 'FOUND',
       version,
+      identityBinding: directIdentityBinding ? 'MANAGED_ID_DIRECTORY' : 'CHROME_STABLE_PATH',
       manifestSha256: identity.manifest.fileSha256,
       workerSha256: identity.worker.sha256,
       workerByteLength: identity.worker.byteLength,

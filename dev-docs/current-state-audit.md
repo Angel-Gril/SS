@@ -80,6 +80,7 @@
 - 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
 - 用户级工具边界：`C:\Users\550W\.codex\skills` 的 45 个顶层技能入口指向未授权的 `C:\Users\550W\.cc-switch\skills`，其内容未审计；允许目录内的 gstack 工具包含自动更新、遥测、会话导入和 Hook 设置写入能力，但没有证据表明这些 Hook 在当前用户配置中已启用。下一步必须先取得 `.cc-switch` 或实际用户配置的独立授权，不能把技能目录中的模板当作运行态证据。
 - 日本/COM VPS 生产修复证据：current 已运行 `be6a6374...`，服务、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260905_145638.sql.gz` 已完成 142 表临时恢复演练，目标 attestation 已绑定 be6a6374。BYOK pilot session 已撤销，policy 为 `revision:0/mode:off`，AI Media 写入能力保持暗态；官网 pointer 仍保留已批准的 `1.0.311`，新版本未提前公开。完整 verifier 为 `0 failure / 1 warning`，仅剩 CN/远端备份未配置。
+- 受管扩展 live smoke 已在固定 COM 路径完成：ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`、版本 `1.0.313`、active-worker 和 Unicode smoke 均通过；Provider 设置/工作台隔离 UI smoke 通过，未产生 Provider、Ozon 或 ERP 写入。真实 Provider 质量/费用和 Ozon 测试店写入仍未验收。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
 - 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
 

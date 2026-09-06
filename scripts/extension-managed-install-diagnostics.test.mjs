@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   deriveExtensionIdFromPublicKey,
   deriveExtensionIdFromKeyFile,
+  deriveExtensionIdFromPath,
   discoverManagedExtensionDirectories,
   inspectManagedExtension,
   inspectManagedExtensionDirectory,
@@ -87,6 +88,35 @@ test('rejects unpacked paths, stale versions, and symlinked roots', (t) => {
   } catch (error) {
     if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
     t.skip('platform does not permit an unprivileged directory symlink');
+  }
+});
+
+test('accepts an explicit stable Chrome path only for its path-derived extension ID', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ss-erp-managed-extension-path-'));
+  try {
+    const directory = path.join(root, 'ss-erp-cloud');
+    mkdirSync(path.join(directory, 'background'), { recursive: true });
+    writeFileSync(path.join(directory, 'manifest.json'), `${JSON.stringify({
+      manifest_version: 3,
+      version: VERSION,
+      background: { service_worker: 'background/service-worker.js' },
+    })}\n`);
+    writeFileSync(path.join(directory, 'background/service-worker.js'), 'globalThis.fixture = true;\n');
+    const extensionId = deriveExtensionIdFromPath(directory);
+    assert.match(extensionId, /^[a-p]{32}$/u);
+    assert.equal(
+      inspectManagedExtensionDirectory(directory, { extensionId, expectedVersion: VERSION }).status,
+      'FOUND',
+    );
+    assert.equal(
+      inspectManagedExtensionDirectory(directory, {
+        extensionId: extensionId === EXTENSION_ID ? 'a'.repeat(32) : EXTENSION_ID,
+        expectedVersion: VERSION,
+      }).status,
+      'UNBOUND',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

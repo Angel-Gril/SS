@@ -180,6 +180,13 @@
 - 目标备份 `ss_erp_20260905_145638.sql.gz` 完成 142 表恢复演练并清理临时库；`be6a6374` attestation、148 migrations、服务重启和本地/公网 `/ready` 均通过。
 - 暗部署后 verifier 为 `0 failure / 1 warning`；官网 pointer 继续服务已批准的 `1.0.311`，`1.0.313` 未执行 website publication。未产生 Provider 费用或 Ozon/Provider 写入。
 
+### stage-11 受管扩展 live worker 与 UI smoke（2026-09-06）
+
+- 找回历史 COM 固定路径并同路径替换到 `1.0.313`；专用 Chromium 使用 CDP `9387` 启动，实际 worker URL 为 `chrome-extension://nkkemglcckgmhmcfnjjmcfbdhciafahl/background/service-worker.js`。
+- active-worker attestation 和 Unicode smoke 均通过，回执 SHA-256 分别为 `3abb80bff314d29c87922e847e64d9a4404f91cec0182cedbc4831221e872337` 与 `f218dbf42be0684fee0950e29354b2cc609fa97c25bc1eaddf33143c3aec532c`；专用浏览器已关闭，临时 QA profile 已清理。
+- Provider 设置页和 AI 图片工作台隔离 smoke 通过：非密档案保存、session-only sentinel key 清除、暗态门控、390px 无横向溢出；未发送 Provider、Ozon 或 ERP 写请求。
+- 剩余风险：真实 Provider 付费生图/编辑和 Ozon 专用测试店铺写入仍需精确 pilot 绑定；官网 `1.0.313` publication pointer 仍未激活。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
