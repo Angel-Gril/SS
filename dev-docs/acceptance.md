@@ -34,6 +34,7 @@
 - 受管扩展 live smoke（2026-09-06）：找回历史固定路径 `C:\Users\550W\AppData\Local\SS-ERP\managed-extensions\cloud-com\ss-erp-cloud`，同路径升级到 `1.0.313` 后固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变。active-worker receipt SHA-256 为 `3abb80bff314d29c87922e847e64d9a4404f91cec0182cedbc4831221e872337`，Unicode smoke receipt SHA-256 为 `f218dbf42be0684fee0950e29354b2cc609fa97c25bc1eaddf33143c3aec532c`；专用 Chromium CDP 已关闭，普通 Chrome 未关闭。
 - 扩展页面隔离 smoke：Provider 非密档案保存成功；合成 sentinel key 只进入当前会话，输入框立即清空，DOM/localStorage/sessionStorage 均未发现 sentinel，清除会话后恢复未加载。工作台 390px viewport 无横向溢出，暗态下发布/任务/生成按钮保持禁用；截图和回执保存在用户私有 `C:\Users\550W\AppData\Local\SS-ERP\private\rel04-be6a6374\live-1.0.313`，未产生 Provider/Ozon/ERP 写入或 Provider 请求。
 - Provider/Ozon 只读证据：VPS 历史 sandbox 显示 `TEXT_TO_IMAGE` 成功并结算 CNY 0.0119，三次 `IMAGE_TO_IMAGE` 均明确拒绝且结算零费用；DashScope 英俄图片翻译有成功结果但仍无结算费用。当前 server Provider 为 `custom / gpt-image-2`、API key revision 2 存在但价格未配置。Ozon 有 15 个 ACTIVE/5 个 DISABLED 店铺；pilot 绑定店铺有凭据但没有专用测试店铺标记，禁止据此执行 sandbox 写入。
+- Provider/Ozon 最新只读验收：日本 VPS 以当前部署 `be6a6374...` 的加密配置执行 Xiaoyi 双域 GET-only 预检，7 个 GET 全部通过，`gpt-image-2` 可见，前后计量响应未变化；证据 manifest SHA-256 为 `023e1d23e4a9de4cf21df23d7abfd8db2f2626531217117c915fb128ae676d17`，`providerPostSent=false`、`chargeObserved=false`，证据目录为 `/opt/ss-erp/shared/ai-image-sandbox/qa02-xiaoyi-readonly-evidence-20260906-be6a6374-01`。Ozon 服务器侧 Seller Info 只读检查绑定店铺哈希 `152cd1b068448e7dc675d259a1ddcfc23e67badc58ac62af9734554a18d9aab5`，返回 HTTP 400 且无 seller 信息；未发送商品/草稿/发布写入。当前仍有 15 个 ACTIVE、5 个 DISABLED 店铺，0 个专用 sandbox/test 配置标记，Ozon 写入继续禁止。
 
 ## 第一个安全任务
 

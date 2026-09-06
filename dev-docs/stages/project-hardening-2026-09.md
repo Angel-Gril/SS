@@ -187,6 +187,13 @@
 - Provider 设置页和 AI 图片工作台隔离 smoke 通过：非密档案保存、session-only sentinel key 清除、暗态门控、390px 无横向溢出；未发送 Provider、Ozon 或 ERP 写请求。
 - 剩余风险：真实 Provider 付费生图/编辑和 Ozon 专用测试店铺写入仍需精确 pilot 绑定；官网 `1.0.313` publication pointer 仍未激活。
 
+### stage-12 外部 Provider/Ozon 只读预检（2026-09-06）
+
+- 日本 VPS 从加密 SystemConfig 读取图片 Provider key，仅以审查过的 Xiaoyi 双域身份执行 7 个固定 GET：计量三组前后各一次、模型目录一次；`gpt-image-2` 可见，前后响应字节未变化，manifest SHA-256 为 `023e1d23e4a9de4cf21df23d7abfd8db2f2626531217117c915fb128ae676d17`。
+- 预检绑定 `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8` 和 `admin-config-ai-image-key-r2`，证据目录 `/opt/ss-erp/shared/ai-image-sandbox/qa02-xiaoyi-readonly-evidence-20260906-be6a6374-01` 为 `700`，文件为 `600`；manifest 明确 `providerPostSent=false`、`chargeObserved=false`。
+- Ozon 仅执行服务器侧 Seller Info 只读请求，绑定店铺哈希 `152cd1b068448e7dc675d259a1ddcfc23e67badc58ac62af9734554a18d9aab5`，HTTP 400 且未返回 seller 信息；未发送商品导入、草稿、发布或回滚写入。数据库没有专用 sandbox/test 配置标记，Ozon 写入继续 fail-closed。
+- 结论：Provider 身份/模型目录和 Ozon 凭据可达性尚未构成付费生图、编辑/inpaint 或 Ozon 测试店验收；下一步仍需独立的 Provider 费用/质量审批和专用 Ozon 测试店绑定。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
