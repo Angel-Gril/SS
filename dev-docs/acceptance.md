@@ -43,6 +43,7 @@
 - Redis/告警盘点（2026-09-06）：COM/CN Redis 均为单机 standalone master，无 replica/cluster，未发现专用告警 unit/timer/cron；仅证明当前健康，不构成高可用或告警验收。远端备份按用户决定暂不配置。
 - Redis 诊断工具（2026-09-06）：新增 `pnpm diagnose:redis`，合同测试 `2/2` 通过；工具只读检查 `PING`、`INFO`、`CONFIG GET`、systemd 和 cron，不输出密钥。COM/CN 实跑均为 PASS，但明确报告无副本、非 cluster、RDB-only、未发现 Redis 专用告警；本机 Windows 因未安装 `redis-cli` 按预期失败关闭。
 - Next 工具链盘点（2026-09-06）：Web lint 0 error/0 warning；Next build 的 legacy ESLint 检测器仍提示 flat config 未发现插件。官方 plugin 接入会扩大既有 `<img>` warning，且不能消除该提示，暂不引入额外依赖。
+- Node ESM 收口（2026-09-06）：Web package 显式声明 ESM，28 个直接导入 Web TypeScript 模块的合同测试不再产生 `MODULE_TYPELESS_PACKAGE_JSON`；Web typecheck、lint 和生产 build 通过。Next plugin 检测提示是另一条 Next 15 legacy 检测限制，仍保留。
 
 ## 第一个安全任务
 
