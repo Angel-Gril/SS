@@ -46,6 +46,8 @@
 - Node ESM 收口（2026-09-06）：Web package 显式声明 ESM，28 个直接导入 Web TypeScript 模块的合同测试不再产生 `MODULE_TYPELESS_PACKAGE_JSON`；Web typecheck、lint 和生产 build 通过。Next plugin 检测提示是另一条 Next 15 legacy 检测限制，仍保留。
 - Ozon 只读 preflight（2026-09-06）：源码 HEAD `dd55cf4b` 的 sandbox 脚本新增 `--preflight --offer-id` 模式，要求独立只读确认词，只调用 Seller Info 和 reserved offer lookup，不读取写入 payload、不调用 `/v3/product/import` 或 `/v1/product/archive`；合同测试 `9/9` 通过。该结果只证明凭据和 reserved offer 可用，不授权商品写入；该仓库工具更新尚未单独部署到 VPS，当前 VPS 运行包仍为 `a986d0f6`。
 - Ozon 真实只读 preflight（2026-09-06）：临时上传已验证脚本到 COM VPS，在进程内读取加密店铺凭据后对 `DOTH / 4980990` 和 reserved offer `ss-erp-sbx-preflight-20260906-a986d0f6-01` 执行；Seller Info 和 offer lookup 通过、offer 不存在、network writes 为 0，回执 SHA-256 为 `5bb18366...ee646`。Ozon 返回卖家名 `DOIT`，真实写入前需确认该平台身份与 ERP 别名的对应关系。
+- QA-04/Ozon sandbox 加固（2026-09-06）：`fbb5f11d` 让 QA-04 offline gate 首尾绑定同一 clean Git root/40 位 commit 并拒绝 staged、untracked 和运行中漂移；`0ede34eb` 让 Ozon execute 强制消费 24 小时内的 v2 preflight SHA、同一 credential revision、店铺别名/Seller 名/offer 和 production compiler envelope，禁止 redirect、限制响应 2 MiB，并把 archive acceptance 与 `is_archived=true` 的复查分开。聚焦合同 `10/10` 和 QA-04 contract 通过。
+- `0ede34ebd479157b96de946e0bd8347dbc2b8a7e` clean checkout 上完整 `pnpm qa:04:offline` 通过：server `5165 passed / 223 skipped`，source/cloud/local extension verifier 均为 `0 failure / 0 warning`，148 migrations 的 scope-revocation 与 AI Media PostgreSQL replay 通过。该证据仍是 offline rehearsal；准确付费 Provider QA-02 未完成，未生成正式 `QA04_FINAL_ACCEPTANCE`。
 
 ## 第一个安全任务
 

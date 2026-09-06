@@ -240,6 +240,15 @@
 - 合同测试 `9/9` 通过，明确断言 preflight 不调用 `/v3/product/import`、`/v1/product/import/info` 或 `/v1/product/archive`；真实商品写入、回滚和对账仍需专用店与独立 pilot 授权。该仓库工具更新绑定源码 `dd55cf4b`，尚未触发 VPS 运行包重部署。
 - COM VPS 临时执行真实只读 preflight：`DOTH / 4980990` Seller Info 有效、reserved offer 不存在、结果为 `READY_FOR_SEPARATE_WRITE_APPROVAL`，回执 SHA-256 `5bb18366...ee646`；未调用 import/archive，临时 runner 已清理。Ozon 卖家名为 `DOIT`，真实写入前仍需确认别名对应和 compiled payload。
 
+### stage-20 QA-04 与 Ozon pilot 证据链加固（2026-09-06）
+
+- `fbb5f11d` 为 QA-04 offline gate 增加首尾 Git provenance：只允许 exact root、40 位 HEAD 和 clean porcelain，任何 staged/untracked 文件或运行中 commit/worktree 漂移均失败关闭；九项门禁内容未减少。
+- `0ede34eb` 将 Ozon execute 从“任意单 item JSON + 自声明测试店”收紧为 production compiler envelope + 24 小时 v2 preflight receipt；receipt SHA、credential revision、Client ID hash、ERP alias、Seller Info 名称和 offer ID 必须一致，execute 在 import 前重新读取 Seller Info。
+- Ozon transport 使用 `redirect:error` 和 2 MiB 响应上限；offer ID 与共享合同统一为总长 50；archive 请求接受后必须由 product info 的 `is_archived=true` 复查，其他状态返回 cleanup pending/failure。
+- fresh_evidence: QA-04/Ozon 聚焦合同通过；`0ede34ebd479157b96de946e0bd8347dbc2b8a7e` clean checkout 上完整 `pnpm qa:04:offline` 通过，server `5165 passed / 223 skipped`，source/cloud/local verifier 均 `0 failure / 0 warning`，PostgreSQL 148 migrations replay 通过。
+- remaining_risk: Provider 计费账户无法关联，QA-02 不能诚实标记 COMPLETE；现有 DOTH/DOIT receipt 是 v1，须确认身份后针对完整 production compiler envelope 重跑 v2 preflight；REL-04 canary 尚未绑定区域/版本/release-evidence/signature/VPS verifier 摘要。
+- external_effects: Provider request 0、Ozon write 0、VPS access 0、deployment 0、feature flag change 0。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。
