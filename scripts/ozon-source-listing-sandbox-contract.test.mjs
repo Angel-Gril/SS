@@ -18,6 +18,7 @@ function cleanEnvironment(extra = {}) {
   const environment = { ...process.env, ...extra };
   for (const key of [
     'OZON_SANDBOX_CONFIRM',
+    'OZON_SANDBOX_READONLY_CONFIRM',
     'OZON_SANDBOX_TEST_SHOP',
     'OZON_SANDBOX_TEST_CLIENT_ID',
     'OZON_SANDBOX_TEST_API_KEY',
@@ -60,6 +61,145 @@ test('sandbox probe requires the independent confirmation and test-shop gates', 
   });
   assert.notEqual(missingDedicatedCredentials.status, 0);
   assert.match(missingDedicatedCredentials.stderr, /Dedicated OZON_SANDBOX_TEST_CLIENT_ID/u);
+});
+
+test('read-only preflight checks Seller Info and the reserved offer without import or archive', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-readonly-preflight-'));
+  const auditPath = join(directory, 'audit.json');
+  const callLogPath = join(directory, 'calls.log');
+  const preloadPath = join(directory, 'mock-fetch.mjs');
+  const offerId = 'ss-erp-sbx-readonly-1';
+  try {
+    writeFileSync(preloadPath, `
+import { appendFileSync } from 'node:fs';
+const json = (value) => new Response(JSON.stringify(value), {
+  status: 200,
+  headers: { 'content-type': 'application/json' },
+});
+
+globalThis.fetch = async (input) => {
+  const path = new URL(String(input)).pathname;
+  appendFileSync(process.env.SS_ERP_SANDBOX_CALL_LOG, path + '\\n');
+  if (path === '/v1/seller/info') return json({ company: { name: 'Dedicated Test Shop' } });
+  if (path === '/v3/product/info/list') return json({ items: [] });
+  throw new Error('unexpected mocked endpoint: ' + path);
+};
+`);
+    const result = spawnSync(process.execPath, [
+      '--import',
+      pathToFileURL(preloadPath).href,
+      scriptPath,
+      '--preflight',
+      '--offer-id',
+      offerId,
+      '--audit',
+      auditPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: cleanEnvironment({
+        OZON_SANDBOX_READONLY_CONFIRM: 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK',
+        OZON_SANDBOX_TEST_SHOP: 'true',
+        OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
+        OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+        SS_ERP_SANDBOX_CALL_LOG: callLogPath,
+      }),
+      timeout: 10_000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(readFileSync(callLogPath, 'utf8').trim().split(/\r?\n/u), [
+      '/v1/seller/info',
+      '/v3/product/info/list',
+    ]);
+    const auditText = readFileSync(auditPath, 'utf8');
+    const audit = JSON.parse(auditText);
+    assert.equal(audit.finalState, 'READY_FOR_SEPARATE_WRITE_APPROVAL');
+    assert.equal(audit.networkWritesSent, false);
+    assert.equal(audit.offerExists, false);
+    assert.doesNotMatch(auditText, /test-client-id|test-api-key/u);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /test-client-id|test-api-key/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('read-only preflight rejects payload arguments and malformed Seller Info', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-readonly-invalid-'));
+  const payloadPath = join(directory, 'compiled.json');
+  const preloadPath = join(directory, 'mock-fetch.mjs');
+  try {
+    writeFileSync(payloadPath, JSON.stringify({ items: [] }));
+    writeFileSync(preloadPath, `
+globalThis.fetch = async () => new Response(JSON.stringify({}), {
+  status: 200,
+  headers: { 'content-type': 'application/json' },
+});
+`);
+    const result = spawnSync(process.execPath, [
+      '--import',
+      pathToFileURL(preloadPath).href,
+      scriptPath,
+      '--preflight',
+      '--offer-id',
+      'ss-erp-sbx-invalid-1',
+      '--payload',
+      payloadPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: cleanEnvironment({
+        OZON_SANDBOX_READONLY_CONFIRM: 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK',
+        OZON_SANDBOX_TEST_SHOP: 'true',
+        OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
+        OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+      }),
+      timeout: 10_000,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--payload is only valid with --execute/u);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /api-seller\.ozon\.ru|test-client-id|test-api-key/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  const malformedDirectory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-readonly-malformed-'));
+  const auditPath = join(malformedDirectory, 'audit.json');
+  const malformedPreloadPath = join(malformedDirectory, 'mock-fetch.mjs');
+  try {
+    writeFileSync(malformedPreloadPath, `
+globalThis.fetch = async () => new Response(JSON.stringify({ company: {} }), {
+  status: 200,
+  headers: { 'content-type': 'application/json' },
+});
+`);
+    const result = spawnSync(process.execPath, [
+      '--import',
+      pathToFileURL(malformedPreloadPath).href,
+      scriptPath,
+      '--preflight',
+      '--offer-id',
+      'ss-erp-sbx-invalid-2',
+      '--audit',
+      auditPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: cleanEnvironment({
+        OZON_SANDBOX_READONLY_CONFIRM: 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK',
+        OZON_SANDBOX_TEST_SHOP: 'true',
+        OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
+        OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+      }),
+      timeout: 10_000,
+    });
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    const audit = JSON.parse(readFileSync(auditPath, 'utf8'));
+    assert.equal(audit.finalState, 'PREFLIGHT_FAILED');
+    assert.equal(audit.networkWritesSent, false);
+    assert.doesNotMatch(readFileSync(auditPath, 'utf8'), /test-client-id|test-api-key/u);
+  } finally {
+    rmSync(malformedDirectory, { recursive: true, force: true });
+  }
 });
 
 test('sandbox probe rejects a non-reserved offer before any network request', () => {

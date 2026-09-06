@@ -2,6 +2,19 @@
 
 This runbook executes a real create/update request against a **dedicated Ozon test shop**. It is an opt-in acceptance probe, not a normal test and not a production recovery tool. The script sends at most one item and one `/v3/product/import` request per process.
 
+Before requesting write approval, use the read-only preflight. It calls only Seller Info and reserved-offer lookup; it never calls import or archive:
+
+```bash
+export OZON_SANDBOX_TEST_SHOP=true
+export OZON_SANDBOX_READONLY_CONFIRM=READ_ONLY_SELLER_INFO_AND_OFFER_CHECK
+node scripts/sandbox/ozon-source-listing-contract.mjs \
+  --preflight \
+  --offer-id ss-erp-sbx-<new-unique-suffix> \
+  --audit tmp/sandbox-audits/ozon-source-listing-readonly-<suffix>.json
+```
+
+Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately approved write. `OFFER_NOT_AVAILABLE` or `PREFLIGHT_FAILED` blocks the write.
+
 ## Preconditions
 
 1. Use credentials belonging only to a dedicated test shop. Never use a production shop, even temporarily.

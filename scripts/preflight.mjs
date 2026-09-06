@@ -103,6 +103,11 @@ const steps = [
     args: ['scripts/web-ozon-video-probe-routing.test.mjs'],
   },
   {
+    name: 'Ozon source listing sandbox contract',
+    command: 'node',
+    args: ['--test', 'scripts/ozon-source-listing-sandbox-contract.test.mjs'],
+  },
+  {
     name: 'extension Ozon list performance runtime contract',
     command: 'node',
     args: ['--test', 'scripts/extension-ozon-list-performance-runtime.test.mjs'],

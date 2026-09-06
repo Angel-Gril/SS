@@ -234,6 +234,11 @@
 - `apps/web/package.json` 显式声明 `"type": "module"`，并由现有 Web Next 输出合同固定；依赖 Web TypeScript 源文件的 28 个测试不再产生 Node `MODULE_TYPELESS_PACKAGE_JSON` 提示。
 - Web typecheck、lint 和生产 build 通过；Next 15.5.25 对 flat ESLint config 的 legacy 检测提示仍存在，不能用 Node ESM 声明冒充已解决。
 
+### stage-19 Ozon 写入前只读 preflight（2026-09-06）
+
+- sandbox 脚本新增独立 `--preflight --offer-id` 模式和 `OZON_SANDBOX_READONLY_CONFIRM` 门禁，执行 Seller Info 与 reserved offer lookup 后输出可供后续审批的 readiness 状态。
+- 合同测试 `8/8` 通过，明确断言 preflight 不调用 `/v3/product/import`、`/v1/product/import/info` 或 `/v1/product/archive`；真实商品写入、回滚和对账仍需专用店与独立 pilot 授权。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

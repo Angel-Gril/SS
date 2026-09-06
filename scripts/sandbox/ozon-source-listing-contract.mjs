@@ -7,9 +7,11 @@ const OZON_BASE_URL = 'https://api-seller.ozon.ru';
 const IMPORT_PATH = '/v3/product/import';
 const IMPORT_INFO_PATH = '/v1/product/import/info';
 const PRODUCT_INFO_PATH = '/v3/product/info/list';
+const SELLER_INFO_PATH = '/v1/seller/info';
 const ARCHIVE_PATH = '/v1/product/archive';
 const RESERVED_OFFER_PREFIX = 'ss-erp-sbx-';
 const CONFIRMATION_PHRASE = 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING';
+const READONLY_CONFIRMATION_PHRASE = 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK';
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_AUDIT_POLLS = 200;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -30,14 +32,17 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/sandbox/ozon-source-listing-contract.mjs --execute --payload <compiled.json> [options]',
+    '  node scripts/sandbox/ozon-source-listing-contract.mjs --preflight --offer-id <reserved-offer-id> [options]',
     '',
     'Required environment:',
     `  OZON_SANDBOX_CONFIRM=${CONFIRMATION_PHRASE}`,
+    `  OZON_SANDBOX_READONLY_CONFIRM=${READONLY_CONFIRMATION_PHRASE}`,
     '  OZON_SANDBOX_TEST_SHOP=true',
     '  OZON_SANDBOX_TEST_CLIENT_ID=<dedicated test shop client ID>',
     '  OZON_SANDBOX_TEST_API_KEY=<dedicated test shop API key>',
     '',
     'Options:',
+    '  --offer-id <id>             Reserved offer ID for --preflight',
     '  --audit <path>              Audit JSON path (default: tmp/sandbox-audits/<run>.json)',
     '  --poll-interval-ms <ms>     1000..60000 (default: 5000)',
     '  --poll-timeout-ms <ms>      10000..1800000 (default: 300000)',
@@ -59,6 +64,7 @@ function parseInteger(value, label, minimum, maximum) {
 function parseArguments(argv) {
   const options = {
     execute: false,
+    preflight: false,
     help: false,
     payloadPath: null,
     auditPath: null,
@@ -68,14 +74,15 @@ function parseArguments(argv) {
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--execute' || argument === '--help') {
+    if (argument === '--execute' || argument === '--preflight' || argument === '--help') {
       if (seen.has(argument)) throw new ContractError(`Duplicate argument: ${argument}`);
       seen.add(argument);
       if (argument === '--execute') options.execute = true;
+      if (argument === '--preflight') options.preflight = true;
       if (argument === '--help') options.help = true;
       continue;
     }
-    if (!['--payload', '--audit', '--poll-interval-ms', '--poll-timeout-ms'].includes(argument)) {
+    if (!['--payload', '--offer-id', '--audit', '--poll-interval-ms', '--poll-timeout-ms'].includes(argument)) {
       throw new ContractError(`Unknown argument: ${argument}`);
     }
     if (seen.has(argument)) throw new ContractError(`Duplicate argument: ${argument}`);
@@ -84,6 +91,7 @@ function parseArguments(argv) {
     if (!value || value.startsWith('--')) throw new ContractError(`Missing value for ${argument}`);
     index += 1;
     if (argument === '--payload') options.payloadPath = resolve(value);
+    if (argument === '--offer-id') options.offerId = value;
     if (argument === '--audit') options.auditPath = resolve(value);
     if (argument === '--poll-interval-ms') {
       options.pollIntervalMs = parseInteger(value, argument, 1_000, 60_000);
@@ -96,11 +104,14 @@ function parseArguments(argv) {
 }
 
 function requireExecutionGates(options, environment) {
-  if (!options.execute) {
-    throw new ContractError('Refusing to run without the explicit --execute flag.');
+  if (options.execute === options.preflight) {
+    throw new ContractError('Refusing to run without the explicit --execute flag or --preflight flag; writes require explicit --execute.');
   }
-  if (environment.OZON_SANDBOX_CONFIRM !== CONFIRMATION_PHRASE) {
+  if (options.execute && environment.OZON_SANDBOX_CONFIRM !== CONFIRMATION_PHRASE) {
     throw new ContractError('Refusing to run without the exact OZON_SANDBOX_CONFIRM phrase.');
+  }
+  if (options.preflight && environment.OZON_SANDBOX_READONLY_CONFIRM !== READONLY_CONFIRMATION_PHRASE) {
+    throw new ContractError('Refusing to run without the exact OZON_SANDBOX_READONLY_CONFIRM phrase.');
   }
   if (environment.OZON_SANDBOX_TEST_SHOP !== 'true') {
     throw new ContractError('Refusing to run unless OZON_SANDBOX_TEST_SHOP=true identifies dedicated test credentials.');
@@ -110,7 +121,21 @@ function requireExecutionGates(options, environment) {
   if (!clientId || !apiKey || clientId.length > 500 || apiKey.length > 500) {
     throw new ContractError('Dedicated OZON_SANDBOX_TEST_CLIENT_ID and OZON_SANDBOX_TEST_API_KEY are required.');
   }
-  if (!options.payloadPath) throw new ContractError('--payload is required after all execution gates pass.');
+  if (options.execute && !options.payloadPath) {
+    throw new ContractError('--payload is required after all execution gates pass.');
+  }
+  if (options.preflight && options.payloadPath) {
+    throw new ContractError('--payload is only valid with --execute; preflight is read-only.');
+  }
+  if (options.preflight) {
+    const offerId = String(options.offerId || '').normalize('NFKC').trim();
+    const suffix = offerId.startsWith(RESERVED_OFFER_PREFIX)
+      ? offerId.slice(RESERVED_OFFER_PREFIX.length)
+      : '';
+    if (!/^[a-z0-9][a-z0-9._-]{0,179}$/u.test(suffix) || offerId !== options.offerId) {
+      throw new ContractError(`--offer-id must use the reserved ${RESERVED_OFFER_PREFIX} lowercase prefix.`);
+    }
+  }
 }
 
 function sha256(value) {
@@ -410,6 +435,18 @@ async function lookupProducts(credentials, offerIds) {
   })).filter((item) => item.offerId && item.productId);
 }
 
+async function lookupSeller(credentials) {
+  const response = await ozonRequest(credentials, SELLER_INFO_PATH, {});
+  if (!response.ok) throw new Error(`Ozon seller info returned HTTP ${response.status}`);
+  const name = typeof response.body?.company?.name === 'string'
+    ? response.body.company.name.normalize('NFKC').trim().slice(0, 200)
+    : '';
+  if (!name) throw new Error('Ozon seller info response did not contain a valid company name');
+  return {
+    name,
+  };
+}
+
 async function findCleanupProducts(credentials, offerIds, knownResults) {
   const byOffer = new Map();
   for (const result of knownResults || []) {
@@ -456,6 +493,53 @@ async function main() {
     return 0;
   }
   requireExecutionGates(options, process.env);
+
+  if (options.preflight) {
+    const runId = randomUUID();
+    const auditPath = options.auditPath || defaultAuditPath(runId).replace(
+      'ozon-source-listing-',
+      'ozon-source-listing-readonly-',
+    );
+    await assertAuditPathAvailable(auditPath, '');
+    const credentials = {
+      clientId: process.env.OZON_SANDBOX_TEST_CLIENT_ID.trim(),
+      apiKey: process.env.OZON_SANDBOX_TEST_API_KEY.trim(),
+    };
+    const audit = {
+      schema: 'ss-erp/ozon-source-listing-readonly-preflight/v1',
+      runId,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      finalState: 'PREPARED',
+      networkWritesSent: false,
+      endpoints: { sellerInfo: SELLER_INFO_PATH, offerLookup: PRODUCT_INFO_PATH },
+      offerId: options.offerId,
+      seller: null,
+      offerExists: null,
+      error: null,
+    };
+    try {
+      audit.seller = await lookupSeller(credentials);
+      const existing = await lookupProducts(credentials, [options.offerId]);
+      audit.offerExists = existing.length > 0;
+      audit.finalState = audit.offerExists ? 'OFFER_NOT_AVAILABLE' : 'READY_FOR_SEPARATE_WRITE_APPROVAL';
+    } catch (error) {
+      audit.finalState = 'PREFLIGHT_FAILED';
+      audit.error = boundedError(error);
+    } finally {
+      audit.finishedAt = new Date().toISOString();
+      await writeAudit(auditPath, audit, credentials);
+    }
+    console.log(JSON.stringify({
+      mode: 'READ_ONLY_PREFLIGHT',
+      finalState: audit.finalState,
+      offerId: options.offerId,
+      offerExists: audit.offerExists,
+      auditPath,
+      networkWritesSent: false,
+    }));
+    return audit.finalState === 'READY_FOR_SEPARATE_WRITE_APPROVAL' ? 0 : 2;
+  }
 
   const payloadBytes = await readFile(options.payloadPath);
   let parsed;
