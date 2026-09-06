@@ -193,6 +193,7 @@
 - 预检绑定 `be6a63747877ec1f130b7eee6f2f58f39f9b8bf8` 和 `admin-config-ai-image-key-r2`，证据目录 `/opt/ss-erp/shared/ai-image-sandbox/qa02-xiaoyi-readonly-evidence-20260906-be6a6374-01` 为 `700`，文件为 `600`；manifest 明确 `providerPostSent=false`、`chargeObserved=false`。
 - Ozon 仅执行服务器侧 Seller Info 只读请求，绑定店铺哈希 `152cd1b068448e7dc675d259a1ddcfc23e67badc58ac62af9734554a18d9aab5`，HTTP 400 且未返回 seller 信息；未发送商品导入、草稿、发布或回滚写入。数据库没有专用 sandbox/test 配置标记，Ozon 写入继续 fail-closed。
 - 结论：Provider 身份/模型目录和 Ozon 凭据可达性尚未构成付费生图、编辑/inpaint 或 Ozon 测试店验收；下一步仍需独立的 Provider 费用/质量审批和专用 Ozon 测试店绑定。
+- 受管扩展安全边界补强：活动 COM 路径及 228 个子项禁用继承，仅保留 `MOSS\\550W`、`NT AUTHORITY\\SYSTEM`、`BUILTIN\\Administrators`；无 reparse 点或额外 ACL 主体，固定路径诊断保持 `FOUND / CHROME_STABLE_PATH`。
 
 ## stage-6 执行回写
 

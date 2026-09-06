@@ -82,6 +82,7 @@
 - 日本/COM VPS 生产修复证据：current 已运行 `be6a6374...`，服务、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260905_145638.sql.gz` 已完成 142 表临时恢复演练，目标 attestation 已绑定 be6a6374。BYOK pilot session 已撤销，policy 为 `revision:0/mode:off`，AI Media 写入能力保持暗态；官网 pointer 仍保留已批准的 `1.0.311`，新版本未提前公开。完整 verifier 为 `0 failure / 1 warning`，仅剩 CN/远端备份未配置。
 - 受管扩展 live smoke 已在固定 COM 路径完成：ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`、版本 `1.0.313`、active-worker 和 Unicode smoke 均通过；Provider 设置/工作台隔离 UI smoke 通过，未产生 Provider、Ozon 或 ERP 写入。真实 Provider 质量/费用和 Ozon 测试店写入仍未验收。
 - 最新外部只读预检：Xiaoyi `image.xiaoyiapi.xyz` + `xiaoyiapi.xyz` 双域 7-GET 预检成功，精确模型可见且计量未变化；manifest SHA-256 `023e1d23e4a9de4cf21df23d7abfd8db2f2626531217117c915fb128ae676d17`，无 Provider POST/费用。Ozon Seller Info 只读请求对绑定店铺返回 HTTP 400；无专用 sandbox/test 标记，因此不执行 Ozon 写入。
+- 受管扩展活动 COM 目录及其 228 个子项已完成 ACL 收紧：禁用继承，仅允许当前用户、SYSTEM、Administrators；无 reparse 点或额外主体，固定路径身份诊断保持 `FOUND`。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
 - 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
 
