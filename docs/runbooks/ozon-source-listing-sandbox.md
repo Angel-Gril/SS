@@ -7,18 +7,20 @@ Before requesting write approval, use the read-only preflight. It calls only Sel
 ```bash
 export OZON_SANDBOX_TEST_SHOP=true
 export OZON_SANDBOX_READONLY_CONFIRM=READ_ONLY_SELLER_INFO_AND_OFFER_CHECK
+export OZON_SANDBOX_TEST_SHOP_ALIAS=<exact-erp-alias>
+export OZON_SANDBOX_EXPECTED_SELLER_NAME=<exact-ozon-company-name>
 node scripts/sandbox/ozon-source-listing-contract.mjs \
   --preflight \
   --offer-id ss-erp-sbx-<new-unique-suffix> \
   --audit tmp/sandbox-audits/ozon-source-listing-readonly-<suffix>.json
 ```
 
-Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately approved write. `OFFER_NOT_AVAILABLE` or `PREFLIGHT_FAILED` blocks the write.
+Only `READY_FOR_SEPARATE_WRITE_APPROVAL` is eligible for a later, separately approved write. Record the emitted preflight receipt SHA-256 in that approval. `OFFER_NOT_AVAILABLE` or `PREFLIGHT_FAILED` blocks the write.
 
 ## Preconditions
 
 1. Use credentials belonging only to a dedicated test shop. Never use a production shop, even temporarily.
-2. Compile and review one immutable V2 listing payload with exactly this shape: `{ "items": [<one complete compiled item>] }`.
+2. Export and review one immutable production compiler envelope from `ozon-listing-production-compile-adapter/v1`. A hand-written `{ "items": [...] }` payload is rejected even when its fields look complete.
 3. Give the item a new lowercase offer ID beginning with `ss-erp-sbx-`, for example `ss-erp-sbx-20260715-a1b2c3`. Never reuse an offer ID from an earlier probe.
 4. Confirm all images are intentionally public test assets and that the item contains no real customer, supplier, credential, or personal data.
 5. Choose a new audit path. Existing audit evidence is never overwritten intentionally.
@@ -34,9 +36,13 @@ Bash example using values already injected into the shell environment:
 ```bash
 export OZON_SANDBOX_TEST_SHOP=true
 export OZON_SANDBOX_CONFIRM=CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING
+export OZON_SANDBOX_TEST_SHOP_ALIAS=<exact-erp-alias>
+export OZON_SANDBOX_EXPECTED_SELLER_NAME=<exact-ozon-company-name>
 node scripts/sandbox/ozon-source-listing-contract.mjs \
   --execute \
-  --payload tmp/sandbox/compiled-ozon-item.json
+  --payload tmp/sandbox/compiled-ozon-envelope.json \
+  --preflight-receipt /operator-private/ozon-readonly-preflight.json \
+  --preflight-sha256 <approved-receipt-sha256>
 ```
 
 The secret injector must provide these two variables without echoing their values:
@@ -55,7 +61,9 @@ Run from the repository root:
 ```bash
 node scripts/sandbox/ozon-source-listing-contract.mjs \
   --execute \
-  --payload tmp/sandbox/compiled-ozon-item.json \
+  --payload tmp/sandbox/compiled-ozon-envelope.json \
+  --preflight-receipt /operator-private/ozon-readonly-preflight.json \
+  --preflight-sha256 <approved-receipt-sha256> \
   --audit tmp/sandbox-audits/ozon-source-listing-20260715-a1b2c3.json
 ```
 
@@ -63,14 +71,15 @@ Optional polling controls are `--poll-interval-ms` (1-60 seconds) and `--poll-ti
 
 The script:
 
-1. Validates both explicit opt-ins, the test-shop marker, dedicated credential variables, payload bounds, and reserved offer prefix.
-2. Verifies the offer does not already exist in the test shop.
-3. Calls `/v3/product/import` exactly once.
-4. Polls `/v1/product/import/info` only when a durable task ID is returned.
-5. Records bounded item results and errors in a redacted audit JSON file.
-6. Uses known `product_id` values or `/v3/product/info/list` offer lookup, then attempts `/v1/product/archive` cleanup.
+1. Validates both explicit opt-ins, the exact shop alias/Seller identity, dedicated credential variables, and the approved preflight receipt SHA-256.
+2. Recomputes the production compiler envelope and authority hashes, then requires one complete item and a reserved offer ID no longer than 50 characters.
+3. Re-reads Seller Info and verifies the offer does not already exist in the same credential-bound test shop.
+4. Calls `/v3/product/import` exactly once.
+5. Polls `/v1/product/import/info` only when a durable task ID is returned.
+6. Records bounded item results and errors in a redacted audit JSON file.
+7. Uses known `product_id` values or `/v3/product/info/list` offer lookup, then attempts `/v1/product/archive` cleanup.
 
-Archival is best effort. A failed cleanup must be completed manually in the test shop and recorded beside the audit artifact.
+Archive acceptance is followed by a product-info lookup. Only `ARCHIVE_VERIFIED` is a completed cleanup; `ARCHIVE_ACCEPTED`, `CLEANUP_PENDING`, or a failed cleanup must be completed manually in the test shop and recorded beside the audit artifact.
 
 ## UNKNOWN Outcomes
 

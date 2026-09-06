@@ -13,12 +13,18 @@ const RESERVED_OFFER_PREFIX = 'ss-erp-sbx-';
 const CONFIRMATION_PHRASE = 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING';
 const READONLY_CONFIRMATION_PHRASE = 'READ_ONLY_SELLER_INFO_AND_OFFER_CHECK';
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const MAX_PREFLIGHT_BYTES = 64 * 1024;
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_PREFLIGHT_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_OFFER_ID_LENGTH = 50;
 const MAX_AUDIT_POLLS = 200;
 const REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_POLL_TIMEOUT_MS = 5 * 60_000;
 const MAX_POLL_TIMEOUT_MS = 30 * 60_000;
 const SENSITIVE_KEY = /(?:authorization|api[_-]?key|client[_-]?id|cookie|password|secret|token)/iu;
+const SAFE_IDENTITY_HASH_KEY = /^(?:clientIdSha256|credentialRevisionSha256|revisionSha256)$/u;
 
 class ContractError extends Error {
   constructor(message, exitCode = 64) {
@@ -40,9 +46,13 @@ function usage() {
     '  OZON_SANDBOX_TEST_SHOP=true',
     '  OZON_SANDBOX_TEST_CLIENT_ID=<dedicated test shop client ID>',
     '  OZON_SANDBOX_TEST_API_KEY=<dedicated test shop API key>',
+    '  OZON_SANDBOX_TEST_SHOP_ALIAS=<exact ERP test-shop alias>',
+    '  OZON_SANDBOX_EXPECTED_SELLER_NAME=<exact Ozon Seller Info company name>',
     '',
     'Options:',
     '  --offer-id <id>             Reserved offer ID for --preflight',
+    '  --preflight-receipt <path>  Exact v2 read-only receipt required by --execute',
+    '  --preflight-sha256 <digest> Approved receipt SHA-256 required by --execute',
     '  --audit <path>              Audit JSON path (default: tmp/sandbox-audits/<run>.json)',
     '  --poll-interval-ms <ms>     1000..60000 (default: 5000)',
     '  --poll-timeout-ms <ms>      10000..1800000 (default: 300000)',
@@ -67,6 +77,8 @@ function parseArguments(argv) {
     preflight: false,
     help: false,
     payloadPath: null,
+    preflightReceiptPath: null,
+    preflightSha256: null,
     auditPath: null,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     pollTimeoutMs: DEFAULT_POLL_TIMEOUT_MS,
@@ -82,7 +94,10 @@ function parseArguments(argv) {
       if (argument === '--help') options.help = true;
       continue;
     }
-    if (!['--payload', '--offer-id', '--audit', '--poll-interval-ms', '--poll-timeout-ms'].includes(argument)) {
+    if (![
+      '--payload', '--offer-id', '--preflight-receipt', '--preflight-sha256', '--audit',
+      '--poll-interval-ms', '--poll-timeout-ms',
+    ].includes(argument)) {
       throw new ContractError(`Unknown argument: ${argument}`);
     }
     if (seen.has(argument)) throw new ContractError(`Duplicate argument: ${argument}`);
@@ -92,6 +107,8 @@ function parseArguments(argv) {
     index += 1;
     if (argument === '--payload') options.payloadPath = resolve(value);
     if (argument === '--offer-id') options.offerId = value;
+    if (argument === '--preflight-receipt') options.preflightReceiptPath = resolve(value);
+    if (argument === '--preflight-sha256') options.preflightSha256 = value.toLowerCase();
     if (argument === '--audit') options.auditPath = resolve(value);
     if (argument === '--poll-interval-ms') {
       options.pollIntervalMs = parseInteger(value, argument, 1_000, 60_000);
@@ -121,20 +138,28 @@ function requireExecutionGates(options, environment) {
   if (!clientId || !apiKey || clientId.length > 500 || apiKey.length > 500) {
     throw new ContractError('Dedicated OZON_SANDBOX_TEST_CLIENT_ID and OZON_SANDBOX_TEST_API_KEY are required.');
   }
+  const shopAlias = exactBoundedText(environment.OZON_SANDBOX_TEST_SHOP_ALIAS, 100);
+  const sellerName = exactBoundedText(environment.OZON_SANDBOX_EXPECTED_SELLER_NAME, 200);
+  if (!shopAlias || !sellerName) {
+    throw new ContractError('Exact OZON_SANDBOX_TEST_SHOP_ALIAS and OZON_SANDBOX_EXPECTED_SELLER_NAME are required.');
+  }
   if (options.execute && !options.payloadPath) {
     throw new ContractError('--payload is required after all execution gates pass.');
+  }
+  if (options.execute && (!options.preflightReceiptPath || !/^[a-f0-9]{64}$/u.test(options.preflightSha256 || ''))) {
+    throw new ContractError('--preflight-receipt and --preflight-sha256 are required for --execute.');
+  }
+  if (options.execute && options.offerId) {
+    throw new ContractError('--offer-id is only valid with --preflight; execute derives it from the compiler envelope.');
   }
   if (options.preflight && options.payloadPath) {
     throw new ContractError('--payload is only valid with --execute; preflight is read-only.');
   }
+  if (options.preflight && (options.preflightReceiptPath || options.preflightSha256)) {
+    throw new ContractError('Preflight receipt arguments are only valid with --execute.');
+  }
   if (options.preflight) {
-    const offerId = String(options.offerId || '').normalize('NFKC').trim();
-    const suffix = offerId.startsWith(RESERVED_OFFER_PREFIX)
-      ? offerId.slice(RESERVED_OFFER_PREFIX.length)
-      : '';
-    if (!/^[a-z0-9][a-z0-9._-]{0,179}$/u.test(suffix) || offerId !== options.offerId) {
-      throw new ContractError(`--offer-id must use the reserved ${RESERVED_OFFER_PREFIX} lowercase prefix.`);
-    }
+    validateReservedOfferId(options.offerId, '--offer-id');
   }
 }
 
@@ -147,6 +172,54 @@ function record(value, label) {
     throw new ContractError(`${label} must be an object`);
   }
   return value;
+}
+
+function exactBoundedText(value, maxLength) {
+  const text = typeof value === 'string' ? value : '';
+  const normalized = text.normalize('NFKC').trim();
+  const unsafe = [...normalized].some((character) => {
+    const codePoint = character.codePointAt(0) || 0;
+    return codePoint < 32 || codePoint === 127;
+  });
+  return normalized === text && normalized && [...normalized].length <= maxLength && !unsafe
+    ? normalized
+    : '';
+}
+
+function validateReservedOfferId(value, label = 'offer_id') {
+  const offerId = exactBoundedText(value, MAX_OFFER_ID_LENGTH);
+  const suffix = offerId.startsWith(RESERVED_OFFER_PREFIX)
+    ? offerId.slice(RESERVED_OFFER_PREFIX.length)
+    : '';
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(suffix)) {
+    throw new ContractError(`${label} must use the reserved ${RESERVED_OFFER_PREFIX} lowercase prefix.`);
+  }
+  return offerId;
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new ContractError('Canonical JSON requires finite numbers');
+    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (!value || typeof value !== 'object') {
+    throw new ContractError('Canonical JSON supports only JSON values');
+  }
+  return `{${Object.keys(value).sort().map((key) => {
+    const child = value[key];
+    if (child === undefined) throw new ContractError('Canonical JSON does not allow undefined');
+    return `${JSON.stringify(key)}:${canonicalJson(child)}`;
+  }).join(',')}}`;
+}
+
+function exactSha256(value, label) {
+  const digest = String(value || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new ContractError(`${label} must be a SHA-256 digest`);
+  return digest;
 }
 
 function scanForSensitiveKeys(value, path = '$', depth = 0) {
@@ -168,27 +241,116 @@ function validateCompiledPayload(parsed, byteLength) {
   if (byteLength > MAX_PAYLOAD_BYTES) {
     throw new ContractError(`Compiled payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
   }
-  const payload = record(parsed, 'Compiled payload');
-  const topLevelKeys = Object.keys(payload);
-  if (topLevelKeys.length !== 1 || topLevelKeys[0] !== 'items') {
-    throw new ContractError('Compiled payload must have exactly one top-level key: items');
+  const envelope = record(parsed, 'Production compiler envelope');
+  const expectedKeys = [
+    'attributeSchemaHash', 'attributeSchemaSnapshot', 'catalogRevision', 'catalogSnapshot',
+    'catalogSnapshotHash', 'catalogSnapshotId', 'draftStateHash', 'endpoint', 'offerTrace',
+    'publisherContractVersion', 'requestPayload', 'requestPayloadHash',
+  ];
+  if (JSON.stringify(Object.keys(envelope).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new ContractError('Sandbox execution requires the exact production compiler envelope.');
   }
-  if (!Array.isArray(payload.items) || payload.items.length !== 1) {
+  if (envelope.publisherContractVersion !== 'ozon-listing-production-compile-adapter/v1'
+    || envelope.endpoint !== IMPORT_PATH) {
+    throw new ContractError('Production compiler envelope version or endpoint is invalid.');
+  }
+  exactSha256(envelope.draftStateHash, 'draftStateHash');
+  const catalogSnapshot = record(envelope.catalogSnapshot, 'catalogSnapshot');
+  const attributeSchemaSnapshot = record(envelope.attributeSchemaSnapshot, 'attributeSchemaSnapshot');
+  const catalogSnapshotId = exactBoundedText(envelope.catalogSnapshotId, 500);
+  const catalogRevision = exactBoundedText(envelope.catalogRevision, 500);
+  if (!catalogSnapshotId || !catalogRevision) {
+    throw new ContractError('Production compiler catalog authority is invalid.');
+  }
+  if (sha256(canonicalJson(catalogSnapshot)) !== exactSha256(envelope.catalogSnapshotHash, 'catalogSnapshotHash')
+    || sha256(canonicalJson(attributeSchemaSnapshot)) !== exactSha256(envelope.attributeSchemaHash, 'attributeSchemaHash')) {
+    throw new ContractError('Production compiler authority snapshot hash does not match.');
+  }
+  const requestPayload = record(envelope.requestPayload, 'requestPayload');
+  if (sha256(canonicalJson(requestPayload)) !== exactSha256(envelope.requestPayloadHash, 'requestPayloadHash')) {
+    throw new ContractError('Production compiler request payload hash does not match.');
+  }
+  if (Object.keys(requestPayload).length !== 1 || !Array.isArray(requestPayload.items)
+    || requestPayload.items.length !== 1) {
     throw new ContractError('Sandbox execution requires exactly one compiled Ozon item');
   }
-  scanForSensitiveKeys(payload);
-  const item = record(payload.items[0], 'Compiled payload item');
-  const offerId = typeof item.offer_id === 'string' ? item.offer_id.normalize('NFKC').trim() : '';
-  const offerSuffix = offerId.startsWith(RESERVED_OFFER_PREFIX)
-    ? offerId.slice(RESERVED_OFFER_PREFIX.length)
-    : '';
-  if (!/^[a-z0-9][a-z0-9._-]{0,179}$/u.test(offerSuffix)) {
-    throw new ContractError(`offer_id must use the reserved ${RESERVED_OFFER_PREFIX} lowercase prefix`);
+  scanForSensitiveKeys(envelope);
+  const item = record(requestPayload.items[0], 'Compiled payload item');
+  const offerId = validateReservedOfferId(item.offer_id);
+  for (const field of ['description_category_id', 'type_id']) {
+    if (!Number.isSafeInteger(item[field]) || item[field] <= 0) {
+      throw new ContractError(`Compiled payload item ${field} must be a positive integer`);
+    }
   }
-  if (item.offer_id !== offerId) {
-    throw new ContractError('offer_id must already be normalized and contain no surrounding whitespace');
+  if (!exactBoundedText(item.name, 500)) throw new ContractError('Compiled payload item name is invalid');
+  if (item.description !== undefined && typeof item.description !== 'string') {
+    throw new ContractError('Compiled payload item description is invalid');
   }
-  return { payload, offerIds: [offerId] };
+  if (typeof item.description === 'string' && [...item.description].length > 200_000) {
+    throw new ContractError('Compiled payload item description exceeds the compiler limit');
+  }
+  for (const field of ['price', 'old_price']) {
+    if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(String(item[field] || ''))
+      || Number(item[field]) <= 0 || !Number.isFinite(Number(item[field]))) {
+      throw new ContractError(`Compiled payload item ${field} is invalid`);
+    }
+  }
+  if (Number(item.old_price) < Number(item.price)
+    || !['CNY', 'RUB'].includes(item.currency_code)
+    || !['0', '0.05', '0.07', '0.1', '0.2', '0.22'].includes(item.vat)
+    || item.dimension_unit !== 'mm' || item.weight_unit !== 'g') {
+    throw new ContractError('Compiled payload item pricing or unit contract is invalid');
+  }
+  for (const field of ['weight', 'depth', 'width', 'height']) {
+    if (typeof item[field] !== 'number' || !Number.isFinite(item[field]) || item[field] <= 0) {
+      throw new ContractError(`Compiled payload item ${field} must be positive`);
+    }
+  }
+  if (!Array.isArray(item.images) || item.images.length < 1 || item.images.length > 15
+    || new Set(item.images).size !== item.images.length
+    || item.images.some((value) => {
+      try {
+        if (typeof value !== 'string' || value.length > 4_096 || value !== value.trim()) return true;
+        const url = new URL(value);
+        return url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.hash;
+      } catch {
+        return true;
+      }
+    })) {
+    throw new ContractError('Compiled payload item images require bounded HTTPS URLs');
+  }
+  if (!Array.isArray(item.attributes) || item.attributes.length < 1 || item.attributes.length > 100) {
+    throw new ContractError('Compiled payload item attributes are incomplete');
+  }
+  for (const attribute of item.attributes) {
+    if (!attribute || typeof attribute !== 'object' || Array.isArray(attribute)
+      || !Number.isSafeInteger(attribute.id) || attribute.id <= 0
+      || !Array.isArray(attribute.values) || attribute.values.length < 1
+      || attribute.values.length > 100) {
+      throw new ContractError('Compiled payload item attribute values are invalid');
+    }
+  }
+  if (!Array.isArray(envelope.offerTrace) || envelope.offerTrace.length !== 1) {
+    throw new ContractError('Production compiler offer trace must cover exactly one item');
+  }
+  const trace = record(envelope.offerTrace[0], 'offerTrace[0]');
+  if (trace.ordinal !== 0 || trace.offerId !== offerId || !exactBoundedText(trace.skuKey, 500)
+    || !['USER', 'DETERMINISTIC'].includes(trace.source)) {
+    throw new ContractError('Production compiler offer trace does not match the request payload');
+  }
+  return {
+    payload: requestPayload,
+    offerIds: [offerId],
+    envelope: {
+      publisherContractVersion: envelope.publisherContractVersion,
+      requestPayloadHash: envelope.requestPayloadHash,
+      draftStateHash: envelope.draftStateHash,
+      catalogSnapshotId,
+      catalogRevision,
+      catalogSnapshotHash: envelope.catalogSnapshotHash,
+      attributeSchemaHash: envelope.attributeSchemaHash,
+    },
+  };
 }
 
 function redactedClone(value, state = { nodes: 0 }, depth = 0) {
@@ -201,7 +363,9 @@ function redactedClone(value, state = { nodes: 0 }, depth = 0) {
   if (!value || typeof value !== 'object') return String(value);
   const output = {};
   for (const [key, item] of Object.entries(value).slice(0, 500)) {
-    output[key] = SENSITIVE_KEY.test(key) ? '[REDACTED]' : redactedClone(item, state, depth + 1);
+    output[key] = SENSITIVE_KEY.test(key) && !SAFE_IDENTITY_HASH_KEY.test(key)
+      ? '[REDACTED]'
+      : redactedClone(item, state, depth + 1);
   }
   return output;
 }
@@ -250,6 +414,7 @@ async function writeAudit(auditPath, audit, credentials) {
     encoding: 'utf8',
     mode: 0o600,
   });
+  return sha256(`${serialized}\n`);
 }
 
 async function sleep(milliseconds) {
@@ -269,6 +434,40 @@ function parseResponseText(text) {
   }
 }
 
+async function boundedResponseText(response) {
+  const declaredText = response.headers.get('content-length');
+  const declared = declaredText == null ? null : Number(declaredText);
+  if (declared !== null && (!Number.isSafeInteger(declared) || declared < 0
+    || declared > MAX_RESPONSE_BYTES)) {
+    throw new Error('Ozon response exceeded the bounded response size');
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('Ozon response exceeded the bounded response size');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 async function ozonRequest(credentials, path, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -283,8 +482,9 @@ async function ozonRequest(credentials, path, body) {
       },
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
-    const text = await response.text();
+    const text = await boundedResponseText(response);
     return {
       ok: response.ok,
       status: response.status,
@@ -293,6 +493,71 @@ async function ozonRequest(credentials, path, body) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function clientIdFingerprint(clientId) {
+  return sha256(`SS_ERP_OZON_SANDBOX_CLIENT_ID\0${clientId}`);
+}
+
+function credentialFingerprint(credentials) {
+  return sha256(
+    `SS_ERP_OZON_SANDBOX_CREDENTIAL\0${credentials.clientId}\0${credentials.apiKey}`,
+  );
+}
+
+async function readPreflightReceipt(options, credentials, environment, offerId) {
+  const bytes = await readFile(options.preflightReceiptPath);
+  if (bytes.byteLength < 1 || bytes.byteLength > MAX_PREFLIGHT_BYTES) {
+    throw new ContractError('Preflight receipt size is invalid');
+  }
+  if (sha256(bytes) !== options.preflightSha256) {
+    throw new ContractError('Approved preflight receipt SHA-256 does not match the file.');
+  }
+  let receipt;
+  try {
+    receipt = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new ContractError('Preflight receipt is not valid JSON');
+  }
+  const value = record(receipt, 'Preflight receipt');
+  const endpoints = record(value.endpoints, 'Preflight receipt endpoints');
+  const credential = record(value.credential, 'Preflight receipt credential');
+  const seller = record(value.seller, 'Preflight receipt seller');
+  const startedAt = Date.parse(value.startedAt);
+  const finishedAt = Date.parse(value.finishedAt);
+  const now = Date.now();
+  if (value.schema !== 'ss-erp/ozon-source-listing-readonly-preflight/v2'
+    || value.finalState !== 'READY_FOR_SEPARATE_WRITE_APPROVAL'
+    || value.networkWritesSent !== false
+    || endpoints.sellerInfo !== SELLER_INFO_PATH
+    || endpoints.offerLookup !== PRODUCT_INFO_PATH
+    || value.offerExists !== false
+    || value.error !== null
+    || value.offerId !== offerId
+    || value.shopAlias !== environment.OZON_SANDBOX_TEST_SHOP_ALIAS
+    || seller.name !== environment.OZON_SANDBOX_EXPECTED_SELLER_NAME
+    || credential.clientIdSha256 !== clientIdFingerprint(credentials.clientId)
+    || credential.revisionSha256 !== credentialFingerprint(credentials)
+    || !Number.isFinite(startedAt) || !Number.isFinite(finishedAt)
+    || startedAt > finishedAt
+    || finishedAt > now + MAX_CLOCK_SKEW_MS
+    || now - finishedAt > MAX_PREFLIGHT_AGE_MS) {
+    if (credential.revisionSha256 !== credentialFingerprint(credentials)) {
+      throw new ContractError('Preflight credential revision does not match current credentials.');
+    }
+    throw new ContractError('Preflight receipt is stale or does not match the exact shop, seller, and offer.');
+  }
+  const runId = exactBoundedText(value.runId, 200);
+  if (!runId) throw new ContractError('Preflight receipt run identity is invalid');
+  return {
+    sha256: options.preflightSha256,
+    runId,
+    finishedAt: new Date(finishedAt).toISOString(),
+    shopAlias: value.shopAlias,
+    sellerName: seller.name,
+    clientIdSha256: credential.clientIdSha256,
+    credentialRevisionSha256: credential.revisionSha256,
+  };
 }
 
 let importCallCount = 0;
@@ -432,6 +697,7 @@ async function lookupProducts(credentials, offerIds) {
   return extractProductInfoItems(response.body).map((item) => ({
     offerId: String(item?.offer_id || '').normalize('NFKC').trim(),
     productId: productId(item?.id ?? item?.product_id),
+    archived: item?.is_archived === true,
   })).filter((item) => item.offerId && item.productId);
 }
 
@@ -478,7 +744,12 @@ async function cleanupPublishedProducts(credentials, offerIds, knownResults) {
   if (!response.ok || response.body?.result !== true) {
     throw new Error(`Ozon archive returned HTTP ${response.status}`);
   }
-  return { state: 'ARCHIVED', productIds };
+  const archived = await lookupProducts(credentials, offerIds);
+  const archivedIds = new Set(archived.filter((item) => item.archived).map((item) => item.productId));
+  return {
+    state: archivedIds.size === productIds.length ? 'ARCHIVE_VERIFIED' : 'ARCHIVE_ACCEPTED',
+    productIds,
+  };
 }
 
 function defaultAuditPath(runId) {
@@ -506,20 +777,29 @@ async function main() {
       apiKey: process.env.OZON_SANDBOX_TEST_API_KEY.trim(),
     };
     const audit = {
-      schema: 'ss-erp/ozon-source-listing-readonly-preflight/v1',
+      schema: 'ss-erp/ozon-source-listing-readonly-preflight/v2',
       runId,
       startedAt: new Date().toISOString(),
       finishedAt: null,
       finalState: 'PREPARED',
       networkWritesSent: false,
       endpoints: { sellerInfo: SELLER_INFO_PATH, offerLookup: PRODUCT_INFO_PATH },
+      shopAlias: process.env.OZON_SANDBOX_TEST_SHOP_ALIAS,
+      credential: {
+        clientIdSha256: clientIdFingerprint(credentials.clientId),
+        revisionSha256: credentialFingerprint(credentials),
+      },
       offerId: options.offerId,
       seller: null,
       offerExists: null,
       error: null,
     };
+    let auditSha256 = null;
     try {
       audit.seller = await lookupSeller(credentials);
+      if (audit.seller.name !== process.env.OZON_SANDBOX_EXPECTED_SELLER_NAME) {
+        throw new Error('Ozon Seller Info identity differs from OZON_SANDBOX_EXPECTED_SELLER_NAME');
+      }
       const existing = await lookupProducts(credentials, [options.offerId]);
       audit.offerExists = existing.length > 0;
       audit.finalState = audit.offerExists ? 'OFFER_NOT_AVAILABLE' : 'READY_FOR_SEPARATE_WRITE_APPROVAL';
@@ -528,7 +808,7 @@ async function main() {
       audit.error = boundedError(error);
     } finally {
       audit.finishedAt = new Date().toISOString();
-      await writeAudit(auditPath, audit, credentials);
+      auditSha256 = await writeAudit(auditPath, audit, credentials);
     }
     console.log(JSON.stringify({
       mode: 'READ_ONLY_PREFLIGHT',
@@ -536,6 +816,7 @@ async function main() {
       offerId: options.offerId,
       offerExists: audit.offerExists,
       auditPath,
+      auditSha256,
       networkWritesSent: false,
     }));
     return audit.finalState === 'READY_FOR_SEPARATE_WRITE_APPROVAL' ? 0 : 2;
@@ -552,10 +833,20 @@ async function main() {
   const runId = randomUUID();
   const auditPath = options.auditPath || defaultAuditPath(runId);
   await assertAuditPathAvailable(auditPath, options.payloadPath);
+  if (options.preflightReceiptPath === options.payloadPath
+    || options.preflightReceiptPath === auditPath) {
+    throw new ContractError('Preflight receipt path must differ from payload and audit paths');
+  }
   const credentials = {
     clientId: process.env.OZON_SANDBOX_TEST_CLIENT_ID.trim(),
     apiKey: process.env.OZON_SANDBOX_TEST_API_KEY.trim(),
   };
+  const preflight = await readPreflightReceipt(
+    options,
+    credentials,
+    process.env,
+    compiled.offerIds[0],
+  );
   const audit = {
     schema: 'ss-erp/ozon-source-listing-sandbox-audit/v1',
     runId,
@@ -563,11 +854,24 @@ async function main() {
     finishedAt: null,
     finalState: 'PREPARED',
     automaticResubmitAllowed: false,
+    shop: {
+      alias: preflight.shopAlias,
+      sellerName: preflight.sellerName,
+      clientIdSha256: preflight.clientIdSha256,
+      credentialRevisionSha256: preflight.credentialRevisionSha256,
+    },
+    preflight: {
+      schema: 'ss-erp/ozon-source-listing-readonly-preflight/v2',
+      sha256: preflight.sha256,
+      runId: preflight.runId,
+      finishedAt: preflight.finishedAt,
+    },
     payload: {
       sha256: sha256(payloadBytes),
       byteLength: payloadBytes.byteLength,
       itemCount: compiled.payload.items.length,
       offerIds: compiled.offerIds,
+      ...compiled.envelope,
     },
     endpoints: {
       submit: IMPORT_PATH,
@@ -586,6 +890,10 @@ async function main() {
   try {
     let existing;
     try {
+      const seller = await lookupSeller(credentials);
+      if (seller.name !== preflight.sellerName) {
+        throw new Error('Current Seller Info identity differs from the approved preflight receipt');
+      }
       existing = await lookupProducts(credentials, compiled.offerIds);
     } catch (error) {
       audit.finalState = 'PRECHECK_FAILED';
@@ -653,10 +961,14 @@ async function main() {
       try {
         const cleanup = await cleanupPublishedProducts(credentials, compiled.offerIds, audit.itemResults);
         audit.cleanup = { attempted: true, ...cleanup, error: null };
-        if (exitCode === 0 && cleanup.state !== 'ARCHIVED') exitCode = 2;
+        if (cleanup.state !== 'ARCHIVE_VERIFIED') {
+          if (audit.finalState === 'SUCCEEDED') audit.finalState = 'CLEANUP_PENDING';
+          if (exitCode === 0) exitCode = 2;
+        }
       } catch (error) {
         audit.cleanup.state = 'FAILED';
         audit.cleanup.error = boundedError(error);
+        if (audit.finalState === 'SUCCEEDED') audit.finalState = 'CLEANUP_FAILED';
         if (exitCode === 0) exitCode = 2;
       }
     }

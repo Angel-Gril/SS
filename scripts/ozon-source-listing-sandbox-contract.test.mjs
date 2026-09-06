@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -22,10 +23,134 @@ function cleanEnvironment(extra = {}) {
     'OZON_SANDBOX_TEST_SHOP',
     'OZON_SANDBOX_TEST_CLIENT_ID',
     'OZON_SANDBOX_TEST_API_KEY',
+    'OZON_SANDBOX_TEST_SHOP_ALIAS',
+    'OZON_SANDBOX_EXPECTED_SELLER_NAME',
   ]) {
     if (!(key in extra)) delete environment[key];
   }
   return environment;
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('test canonical JSON requires finite numbers');
+    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+  )).join(',')}}`;
+}
+
+function credentialFingerprint(clientId, apiKey) {
+  return sha256(`SS_ERP_OZON_SANDBOX_CREDENTIAL\0${clientId}\0${apiKey}`);
+}
+
+function clientIdFingerprint(clientId) {
+  return sha256(`SS_ERP_OZON_SANDBOX_CLIENT_ID\0${clientId}`);
+}
+
+function completeItem(offerId) {
+  return {
+    description_category_id: 17028922,
+    type_id: 9163,
+    name: 'Sandbox test item',
+    description: 'Synthetic sandbox item for one-time Ozon contract verification.',
+    offer_id: offerId,
+    price: '10.00',
+    old_price: '12.00',
+    currency_code: 'CNY',
+    vat: '0',
+    dimension_unit: 'mm',
+    weight_unit: 'g',
+    weight: 100,
+    depth: 100,
+    width: 100,
+    height: 100,
+    images: ['https://assets.example.com/ozon-sandbox.png'],
+    attributes: [{ id: 10, values: [{ value: 'sandbox' }] }],
+  };
+}
+
+function compiledCandidate(offerId) {
+  const requestPayload = { items: [completeItem(offerId)] };
+  const catalogSnapshot = {
+    contractVersion: 'ozon-listing-catalog-authority/v1',
+    snapshotId: 'catalog-snapshot-1',
+    revision: 'catalog-revision-1',
+  };
+  const attributeSchemaSnapshot = {
+    contractVersion: 'ozon-listing-attribute-schema-authority/v1',
+    schemaRevision: 'schema-revision-1',
+  };
+  return {
+    publisherContractVersion: 'ozon-listing-production-compile-adapter/v1',
+    endpoint: '/v3/product/import',
+    draftStateHash: '1'.repeat(64),
+    catalogSnapshotId: 'catalog-snapshot-1',
+    catalogRevision: 'catalog-revision-1',
+    catalogSnapshot,
+    catalogSnapshotHash: sha256(canonicalJson(catalogSnapshot)),
+    attributeSchemaSnapshot,
+    attributeSchemaHash: sha256(canonicalJson(attributeSchemaSnapshot)),
+    requestPayload,
+    requestPayloadHash: sha256(canonicalJson(requestPayload)),
+    offerTrace: [{ ordinal: 0, skuKey: 'sku-1', offerId, source: 'USER' }],
+  };
+}
+
+function writePreflightReceipt(directory, {
+  offerId,
+  clientId,
+  apiKey,
+  shopAlias = 'TEST',
+  sellerName = 'Dedicated Test Shop',
+  finishedAt = new Date(Date.now() - 1_000).toISOString(),
+} = {}) {
+  const receiptPath = join(directory, 'preflight.json');
+  const receipt = {
+    schema: 'ss-erp/ozon-source-listing-readonly-preflight/v2',
+    runId: '00000000-0000-4000-8000-000000000001',
+    startedAt: new Date(Date.parse(finishedAt) - 1_000).toISOString(),
+    finishedAt,
+    finalState: 'READY_FOR_SEPARATE_WRITE_APPROVAL',
+    networkWritesSent: false,
+    endpoints: {
+      sellerInfo: '/v1/seller/info',
+      offerLookup: '/v3/product/info/list',
+    },
+    shopAlias,
+    credential: {
+      clientIdSha256: clientIdFingerprint(clientId),
+      revisionSha256: credentialFingerprint(clientId, apiKey),
+    },
+    offerId,
+    seller: { name: sellerName },
+    offerExists: false,
+    error: null,
+  };
+  const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
+  writeFileSync(receiptPath, bytes);
+  return { receiptPath, receiptSha256: sha256(bytes) };
+}
+
+function executionEnvironment(extra = {}) {
+  return cleanEnvironment({
+    OZON_SANDBOX_CONFIRM: 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING',
+    OZON_SANDBOX_TEST_SHOP: 'true',
+    OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
+    OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+    OZON_SANDBOX_TEST_SHOP_ALIAS: 'TEST',
+    OZON_SANDBOX_EXPECTED_SELLER_NAME: 'Dedicated Test Shop',
+    ...extra,
+  });
 }
 
 function run(args, environment = {}) {
@@ -102,6 +227,8 @@ globalThis.fetch = async (input) => {
         OZON_SANDBOX_TEST_SHOP: 'true',
         OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
         OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+        OZON_SANDBOX_TEST_SHOP_ALIAS: 'TEST',
+        OZON_SANDBOX_EXPECTED_SELLER_NAME: 'Dedicated Test Shop',
         SS_ERP_SANDBOX_CALL_LOG: callLogPath,
       }),
       timeout: 10_000,
@@ -116,6 +243,12 @@ globalThis.fetch = async (input) => {
     assert.equal(audit.finalState, 'READY_FOR_SEPARATE_WRITE_APPROVAL');
     assert.equal(audit.networkWritesSent, false);
     assert.equal(audit.offerExists, false);
+    assert.equal(audit.schema, 'ss-erp/ozon-source-listing-readonly-preflight/v2');
+    assert.equal(audit.shopAlias, 'TEST');
+    assert.match(audit.credential.clientIdSha256, /^[a-f0-9]{64}$/u);
+    assert.match(audit.credential.revisionSha256, /^[a-f0-9]{64}$/u);
+    const resultSummary = JSON.parse(result.stdout.trim());
+    assert.equal(resultSummary.auditSha256, sha256(auditText));
     assert.doesNotMatch(auditText, /test-client-id|test-api-key/u);
     assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /test-client-id|test-api-key/u);
   } finally {
@@ -152,6 +285,8 @@ globalThis.fetch = async () => new Response(JSON.stringify({}), {
         OZON_SANDBOX_TEST_SHOP: 'true',
         OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
         OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+        OZON_SANDBOX_TEST_SHOP_ALIAS: 'TEST',
+        OZON_SANDBOX_EXPECTED_SELLER_NAME: 'Dedicated Test Shop',
       }),
       timeout: 10_000,
     });
@@ -189,6 +324,8 @@ globalThis.fetch = async () => new Response(JSON.stringify({ company: {} }), {
         OZON_SANDBOX_TEST_SHOP: 'true',
         OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
         OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+        OZON_SANDBOX_TEST_SHOP_ALIAS: 'TEST',
+        OZON_SANDBOX_EXPECTED_SELLER_NAME: 'Dedicated Test Shop',
       }),
       timeout: 10_000,
     });
@@ -206,17 +343,80 @@ test('sandbox probe rejects a non-reserved offer before any network request', ()
   const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-contract-'));
   const payloadPath = join(directory, 'compiled.json');
   try {
-    writeFileSync(payloadPath, JSON.stringify({ items: [{ offer_id: 'production-offer-1' }] }));
-    const result = run(['--execute', '--payload', payloadPath], {
-      OZON_SANDBOX_CONFIRM: 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING',
-      OZON_SANDBOX_TEST_SHOP: 'true',
-      OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
-      OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+    const offerId = 'production-offer-1';
+    writeFileSync(payloadPath, JSON.stringify(compiledCandidate(offerId)));
+    const preflight = writePreflightReceipt(directory, {
+      offerId, clientId: 'test-client-id', apiKey: 'test-api-key',
     });
+    const result = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', preflight.receiptSha256,
+    ], executionEnvironment());
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /reserved ss-erp-sbx- lowercase prefix/u);
     assert.doesNotMatch(result.stderr, /fetch failed|api-seller\.ozon\.ru/u);
     assert.doesNotMatch(result.stderr, /test-client-id|test-api-key/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('sandbox execution rejects raw payloads and missing or drifted preflight bindings before network', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ss-erp-ozon-sandbox-binding-'));
+  const payloadPath = join(directory, 'compiled.json');
+  const offerId = 'ss-erp-sbx-binding-1';
+  try {
+    writeFileSync(payloadPath, JSON.stringify({ items: [completeItem(offerId)] }));
+    const missingReceipt = run(['--execute', '--payload', payloadPath], executionEnvironment());
+    assert.equal(missingReceipt.status, 64);
+    assert.match(missingReceipt.stderr, /--preflight-receipt and --preflight-sha256 are required/u);
+
+    const preflight = writePreflightReceipt(directory, {
+      offerId, clientId: 'test-client-id', apiKey: 'test-api-key',
+    });
+    const rawPayload = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', preflight.receiptSha256,
+    ], executionEnvironment());
+    assert.equal(rawPayload.status, 64);
+    assert.match(rawPayload.stderr, /production compiler envelope/u);
+
+    writeFileSync(payloadPath, JSON.stringify(compiledCandidate(offerId)));
+    const wrongDigest = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', '0'.repeat(64),
+    ], executionEnvironment());
+    assert.equal(wrongDigest.status, 64);
+    assert.match(wrongDigest.stderr, /preflight receipt SHA-256 does not match/u);
+
+    const wrongCredential = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', preflight.receiptPath,
+      '--preflight-sha256', preflight.receiptSha256,
+    ], executionEnvironment({ OZON_SANDBOX_TEST_API_KEY: 'rotated-test-api-key' }));
+    assert.equal(wrongCredential.status, 64);
+    assert.match(wrongCredential.stderr, /credential revision does not match/u);
+
+    const stalePreflight = writePreflightReceipt(directory, {
+      offerId,
+      clientId: 'test-client-id',
+      apiKey: 'test-api-key',
+      finishedAt: new Date(Date.now() - (25 * 60 * 60 * 1_000)).toISOString(),
+    });
+    const staleReceipt = run([
+      '--execute', '--payload', payloadPath,
+      '--preflight-receipt', stalePreflight.receiptPath,
+      '--preflight-sha256', stalePreflight.receiptSha256,
+    ], executionEnvironment());
+    assert.equal(staleReceipt.status, 64);
+    assert.match(staleReceipt.stderr, /Preflight receipt is stale/u);
+    assert.doesNotMatch(
+      `${missingReceipt.stdout}${missingReceipt.stderr}${rawPayload.stdout}${rawPayload.stderr}${wrongDigest.stdout}${wrongDigest.stderr}${wrongCredential.stdout}${wrongCredential.stderr}${staleReceipt.stdout}${staleReceipt.stderr}`,
+      /api-seller\.ozon\.ru|test-api-key|rotated-test-api-key/u,
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -230,7 +430,13 @@ test('UNKNOWN transport outcome is audited, redacted, archived, and never resubm
   const preloadPath = join(directory, 'mock-fetch.mjs');
   const offerId = 'ss-erp-sbx-contract-unknown-1';
   try {
-    writeFileSync(payloadPath, JSON.stringify({ items: [{ offer_id: offerId }] }));
+    writeFileSync(payloadPath, JSON.stringify(compiledCandidate(offerId)));
+    const preflight = writePreflightReceipt(directory, {
+      offerId,
+      clientId: 'test-client-credential',
+      apiKey: 'test-api-secret',
+      sellerName: 'Dedicated Test Shop',
+    });
     writeFileSync(preloadPath, `
 import { appendFileSync } from 'node:fs';
 let lookupCount = 0;
@@ -241,9 +447,12 @@ const json = (value) => new Response(JSON.stringify(value), {
 globalThis.fetch = async (input) => {
   const path = new URL(String(input)).pathname;
   appendFileSync(process.env.SS_ERP_SANDBOX_CALL_LOG, path + '\\n');
+  if (path === '/v1/seller/info') return json({ company: { name: 'Dedicated Test Shop' } });
   if (path === '/v3/product/info/list') {
     lookupCount += 1;
-    return json({ items: lookupCount === 1 ? [] : [{ offer_id: '${offerId}', id: 777 }] });
+    return json({ items: lookupCount === 1 ? [] : [{
+      offer_id: '${offerId}', id: 777, is_archived: lookupCount >= 3,
+    }] });
   }
   if (path === '/v3/product/import') {
     throw new Error('simulated transport loss ' + process.env.OZON_SANDBOX_TEST_API_KEY);
@@ -253,7 +462,7 @@ globalThis.fetch = async (input) => {
 };
 `);
 
-    const environment = cleanEnvironment({
+    const environment = executionEnvironment({
       OZON_SANDBOX_CONFIRM: 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING',
       OZON_SANDBOX_TEST_SHOP: 'true',
       OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-credential',
@@ -267,6 +476,10 @@ globalThis.fetch = async (input) => {
       '--execute',
       '--payload',
       payloadPath,
+      '--preflight-receipt',
+      preflight.receiptPath,
+      '--preflight-sha256',
+      preflight.receiptSha256,
       '--audit',
       auditPath,
     ], {
@@ -280,17 +493,19 @@ globalThis.fetch = async (input) => {
     const calls = readFileSync(callLogPath, 'utf8').trim().split(/\r?\n/u);
     assert.equal(calls.filter((path) => path === '/v3/product/import').length, 1);
     assert.deepEqual(calls, [
+      '/v1/seller/info',
       '/v3/product/info/list',
       '/v3/product/import',
       '/v3/product/info/list',
       '/v1/product/archive',
+      '/v3/product/info/list',
     ]);
     const auditText = readFileSync(auditPath, 'utf8');
     const audit = JSON.parse(auditText);
     assert.equal(audit.finalState, 'UNKNOWN');
     assert.equal(audit.automaticResubmitAllowed, false);
     assert.equal(audit.submit.callCount, 1);
-    assert.equal(audit.cleanup.state, 'ARCHIVED');
+    assert.equal(audit.cleanup.state, 'ARCHIVE_VERIFIED');
     assert.deepEqual(audit.cleanup.productIds, [777]);
     assert.doesNotMatch(auditText, /test-client-credential|test-api-secret/u);
     assert.match(auditText, /\[REDACTED_SECRET\]/u);
@@ -308,9 +523,13 @@ test('acknowledged submission polls import info and archives the returned produc
   const preloadPath = join(directory, 'mock-fetch.mjs');
   const offerId = 'ss-erp-sbx-contract-success-1';
   try {
-    writeFileSync(payloadPath, JSON.stringify({ items: [{ offer_id: offerId }] }));
+    writeFileSync(payloadPath, JSON.stringify(compiledCandidate(offerId)));
+    const preflight = writePreflightReceipt(directory, {
+      offerId, clientId: 'test-client-id', apiKey: 'test-api-key',
+    });
     writeFileSync(preloadPath, `
 import { appendFileSync } from 'node:fs';
+let archived = false;
 const json = (value) => new Response(JSON.stringify(value), {
   status: 200,
   headers: { 'content-type': 'application/json' },
@@ -318,12 +537,18 @@ const json = (value) => new Response(JSON.stringify(value), {
 globalThis.fetch = async (input) => {
   const path = new URL(String(input)).pathname;
   appendFileSync(process.env.SS_ERP_SANDBOX_CALL_LOG, path + '\\n');
-  if (path === '/v3/product/info/list') return json({ items: [] });
+  if (path === '/v1/seller/info') return json({ company: { name: 'Dedicated Test Shop' } });
+  if (path === '/v3/product/info/list') return json({ items: archived ? [{
+    offer_id: '${offerId}', id: 888, is_archived: true,
+  }] : [] });
   if (path === '/v3/product/import') return json({ result: { task_id: 123 } });
   if (path === '/v1/product/import/info') return json({
     result: { items: [{ offer_id: '${offerId}', product_id: 888, status: 'imported', errors: [] }] },
   });
-  if (path === '/v1/product/archive') return json({ result: true });
+  if (path === '/v1/product/archive') {
+    archived = true;
+    return json({ result: true });
+  }
   throw new Error('unexpected mocked endpoint: ' + path);
 };
 `);
@@ -335,16 +560,16 @@ globalThis.fetch = async (input) => {
       '--execute',
       '--payload',
       payloadPath,
+      '--preflight-receipt',
+      preflight.receiptPath,
+      '--preflight-sha256',
+      preflight.receiptSha256,
       '--audit',
       auditPath,
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      env: cleanEnvironment({
-        OZON_SANDBOX_CONFIRM: 'CREATE_AND_ARCHIVE_RESERVED_TEST_LISTING',
-        OZON_SANDBOX_TEST_SHOP: 'true',
-        OZON_SANDBOX_TEST_CLIENT_ID: 'test-client-id',
-        OZON_SANDBOX_TEST_API_KEY: 'test-api-key',
+      env: executionEnvironment({
         SS_ERP_SANDBOX_CALL_LOG: callLogPath,
       }),
       timeout: 10_000,
@@ -352,16 +577,18 @@ globalThis.fetch = async (input) => {
 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.deepEqual(readFileSync(callLogPath, 'utf8').trim().split(/\r?\n/u), [
+      '/v1/seller/info',
       '/v3/product/info/list',
       '/v3/product/import',
       '/v1/product/import/info',
       '/v1/product/archive',
+      '/v3/product/info/list',
     ]);
     const audit = JSON.parse(readFileSync(auditPath, 'utf8'));
     assert.equal(audit.finalState, 'SUCCEEDED');
     assert.equal(audit.submit.taskId, '123');
     assert.equal(audit.poll.total, 1);
-    assert.equal(audit.cleanup.state, 'ARCHIVED');
+    assert.equal(audit.cleanup.state, 'ARCHIVE_VERIFIED');
     assert.deepEqual(audit.cleanup.productIds, [888]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -370,7 +597,7 @@ globalThis.fetch = async (input) => {
 
 test('sandbox source keeps submission single-shot, prefix-bound, redacted, and non-resubmitting', () => {
   assert.match(source, /const RESERVED_OFFER_PREFIX = 'ss-erp-sbx-'/u);
-  assert.match(source, /payload\.items\.length !== 1/u);
+  assert.match(source, /requestPayload\.items\.length !== 1/u);
   assert.match(source, /let importCallCount = 0/u);
   assert.match(source, /if \(importCallCount !== 1\)/u);
   assert.equal((source.match(/submitProductOnce\(/gu) || []).length, 2, 'one definition and one call are expected');
@@ -382,6 +609,8 @@ test('sandbox source keeps submission single-shot, prefix-bound, redacted, and n
   assert.match(source, /'\[REDACTED_SECRET\]'/u);
   assert.match(source, /OZON_SANDBOX_TEST_CLIENT_ID/u);
   assert.match(source, /OZON_SANDBOX_TEST_API_KEY/u);
+  assert.match(source, /OZON_SANDBOX_EXPECTED_SELLER_NAME/u);
+  assert.match(source, /redirect:\s*'error'/u);
   assert.doesNotMatch(source, /process\.env\.OZON_(?:CLIENT_ID|API_KEY)\b/u);
   for (const endpoint of [
     '/v3/product/import',
@@ -411,4 +640,6 @@ test('runbook documents the live-write warning, UNKNOWN rule, and credential hyg
   assert.match(runbook, /UNKNOWN[\s\S]*never run the payload again/iu);
   assert.match(runbook, /must not be written to the payload, audit file, shell history, or issue tracker/iu);
   assert.match(runbook, /\/v1\/product\/archive/u);
+  assert.match(runbook, /production compiler envelope/iu);
+  assert.match(runbook, /preflight receipt SHA-256/iu);
 });
