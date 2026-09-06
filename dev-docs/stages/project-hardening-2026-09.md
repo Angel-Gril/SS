@@ -195,6 +195,19 @@
 - 结论：Provider 身份/模型目录和 Ozon 凭据可达性尚未构成付费生图、编辑/inpaint 或 Ozon 测试店验收；下一步仍需独立的 Provider 费用/质量审批和专用 Ozon 测试店绑定。
 - 受管扩展安全边界补强：活动 COM 路径及 228 个子项禁用继承，仅保留 `MOSS\\550W`、`NT AUTHORITY\\SYSTEM`、`BUILTIN\\Administrators`；无 reparse 点或额外 ACL 主体，固定路径诊断保持 `FOUND / CHROME_STABLE_PATH`。
 
+### stage-13 `1.0.316` 发布与同路径升级（2026-09-06）
+
+- 日本 VPS 切换并保持运行 `b64b723c37c16f2adf2beb3a081d9f6bf159e01d`；新备份 `ss_erp_20260906_033442.sql.gz` 为 47,645,659 bytes，恢复演练得到 144 张表，attestation SHA-256 为 `33dcc8db...7b40`。远端备份按用户决定暂不配置。
+- 官网 pointer 已通过 CAS 切换到 `1.0.316`；cloud/local ZIP SHA-256 分别为 `ebf14e52...14ab`、`91032165...dae`，本轮重新下载后逐字节匹配。
+- 固定 ID COM 扩展从 `1.0.315` 同路径升级到 `1.0.316`；升级、active-worker、Unicode smoke 回执 SHA-256 分别为 `d44efe57...d7b51`、`05c59166...1044f`、`6b401528...723ca`。私有 same-path closure SHA-256 为 `c4539426...728e8`，专用 CDP 已关闭。
+
+### stage-14 生产 smoke 与外部门禁收敛（2026-09-06）
+
+- `3d3333ef` 修复生产 smoke token 漂移并加入 preflight 契约：token 与生产 `verifyToken` 的 type、use、issuer、audience、deployment、authVersion 和 7 天上限一致，Redis session 写入失败关闭。完整 preflight、server `393 files / 5164 tests` 和扩展静态 `459/459` 通过。
+- VPS 使用 600 秒 USER/ADMIN token 完成生产域名、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime smoke；上传明确跳过，两个 Redis session 立即撤销，临时文件已清理。AI Media/BYOK/Ozon Publisher 复核保持全暗态。
+- 阿里官方页面当前仍列出 `wanx2.1-imageedit` CNY 0.14/成功图片，私有价格观察 SHA-256 为 `ede27c30...524a62`；现有 Wanx 三种编辑技术证据因计费账户未关联，仍不能提升 Registry 或授权新请求。
+- Ozon Seller Info 对绑定 ACTIVE 店铺返回 HTTP 400、`code=3 Invalid Api-Key`；脱敏证据 SHA-256 为 `b4383731...572fd`。下一步必须更新专用测试店凭据并先通过只读 Seller Info，不能拿现有生产店铺试写。
+
 ## stage-6 执行回写
 
 - actual_result: stage-6-lint-zero-maintenance 已完成；清理 20 个既有无用 import、参数和局部变量 warning，未改变运行时分支、权限或 API 合同。

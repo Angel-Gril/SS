@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-- 加固阶段：stage-1 至 stage-10 已完成并推送；最近实现检查点为 `d2293bc9`，随后会继续记录文档同步提交。
-- 当前主风险：生产/线上运行态、Redis 集群拓扑、外部告警、真实 Provider/Ozon 行为和扩展 live worker 仍未验证；这些不阻塞本地继续开发，但阻塞发布准备。
-- 推荐下一步：补齐受管扩展 live worker、真实 Provider/Ozon 与生产环境证据；发布前另开验收/发布准备阶段。
-- 未验证项：GitHub 仓库可见性、线上运行态、Redis 集群与告警、真实 Provider/Ozon 行为、完整浏览器回归和扩展 live worker smoke。
+- 加固与发布验收阶段：stage-1 至 stage-14 已完成；最近实现检查点 `3d3333ef` 已推送。日本 VPS 与公开扩展仍绑定运行提交 `b64b723c`、版本 `1.0.316`，诊断 helper 提交没有改变运行包字节。
+- 已验证：完整 preflight、生产域名/Turnstile/USER+ADMIN 只读 smoke、COM 受管扩展固定 ID 同路径升级、active worker、Unicode smoke、官网指针与 cloud/local 下载摘要。
+- 当前主风险：真实 Provider pilot 尚缺费用批准和可关联计费账户；现有 Ozon 绑定店铺 API Key 已被 Ozon 以 `code=3` 拒绝，且没有专用测试店铺；Redis 集群拓扑、外部告警和 CN 远端备份仍未验证。
+- 推荐下一步：先绑定可对账的 Provider 账户并逐操作审批一次性 pilot，再提供带有效只读凭据的专用 Ozon 测试店；远端备份按当前用户决定暂不配置。

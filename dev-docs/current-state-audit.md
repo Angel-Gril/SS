@@ -1,12 +1,12 @@
 # SS ERP 当前状态审计
 
-审计日期：2026-09-05，stage-10 代码证据同步于 `d2293bc9`。该结论来自当前分支、文件和本地命令，不替代生产验收。
+审计日期：2026-09-06，最新代码检查点为 `3d3333ef`，日本 VPS 与公开扩展运行证据绑定 `b64b723c`。该结论来自当前分支、文件和新鲜命令，不用诊断 helper 提交冒充运行包证据。
 
 ## 现状证据
 
 - 项目根目录：`D:/AI Agent/Work/QE/SS ERP`。
 - 当前分支：`feat/ai-media-prompt-registry`，跟踪 `origin/feat/ai-media-prompt-registry`。
-- Git evidence state：stage-10 实现已提交并推送，文档同步提交后工作树应恢复干净；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断和部署备份 retention 修复均有独立检查点。
+- Git evidence state：`3d3333ef` 已提交并推送；认证、扩展发布、SSRF、AI quota、durable operation claim、CI pin、Web 配置合同、受管扩展诊断、部署备份 retention 和 typed production smoke token 均有独立检查点。
 - 未跟踪文件：无。
 - 嵌套 Git 仓库：只发现项目根 `.git`；`git submodule` 在当前 Windows Git 环境因缺少 Unix helper 未完成验证。
 - 现有 agent 指令文件：审计前未找到；本次按用户授权新增根 `AGENTS.md`。
@@ -18,7 +18,7 @@
 - 部署脚本：`scripts/deploy*.sh`、`docker-compose*.yml`、`deploy/systemd*` 与扩展签名/分发 gate。
 - 配置模板：`.env.example`、`.env.staging.example`、`.env.production.example`；真实 `.env` 被 Git 忽略。
 - 已知启动证据：类型检查、后端测试、Web build、扩展静态验证通过；`bootstrap-local-env.mjs` 修复当前 ignored `.env` 后，local profile 校验为 0 failure。
-- 当前用户请求：按审计优先级分阶段修复、形成阶段提交并推送当前远端分支；已授权只读扫描用户级 skills 目录，未授权读取其余用户配置或执行其中脚本。
+- 当前用户请求：按优先级继续验收并解决受管扩展、Provider、Ozon 与生产运行瓶颈；远端备份暂不配置。VPS 与 skills 已获授权，但 Provider 费用和 Ozon 测试店写入仍必须绑定精确的一次性批准。
 
 ## 产品边界
 
@@ -26,7 +26,7 @@
 - 当前产品不是：通用多租户基础平台、微服务集群、K8s 平台或完全由浏览器端承担业务真相的扩展。
 - 用户确认的方向：沿用当前功能和技术组合，按审计顺序修复治理、安全、供应链和可维护性问题。
 - 旧名称、旧概念或过期语义：`docs/LAUNCH-OPTIMIZATION-PLAN.md` 与 `docs/plans/saas-remaining-tasks.md` 中部分待办已被后续代码完成，不能直接当当前 backlog。
-- 用户明确否定的方向：本轮没有授权换栈、部署、真实 Provider/Ozon 写入或破坏性数据库操作。
+- 用户明确否定或延期的方向：不换栈、不执行破坏性数据库操作，远端备份暂不配置；未满足费用/测试店门禁时不执行真实 Provider/Ozon 写入。
 
 ## 已确认的演进边界
 
@@ -52,7 +52,7 @@
 
 | 功能/概念 | 当前入口 | 真实 owner | 下游展示/adapter | 风险 |
 | --- | --- | --- | --- | --- |
-| Web 会话 | `/api/auth/*` | `apps/server/src/lib/auth.ts` 与 Redis session | 登录/注册页面、扩展 Bearer adapter | cloud/production 已拒绝 Redis disabled；线上 ready/会话行为仍未验证 |
+| Web 会话 | `/api/auth/*` | `apps/server/src/lib/auth.ts` 与 Redis session | 登录/注册页面、扩展 Bearer adapter | cloud/production 已拒绝 Redis disabled；生产只读会话已验证，Redis 集群拓扑仍未验证 |
 | 图片远程读取 | `/api/images/*`、水印服务 | `apps/server/src/services/source-public-image-download.ts` | image-upload route、watermark、Web 图片处理页 | URL/重定向/字节/像素边界已统一；线上外部地址回归未验证 |
 | 上传配额 | image-upload route | `apps/server/src/lib/upload-limiter.ts` | Web 图片管理 | 云端 Redis Lua 原子计数已完成；Redis 集群拓扑仍未验证 |
 | 数据模型 | API/Worker | `apps/server/prisma/schema.prisma` + migrations | Prisma repositories/services | schema 大且格式检查未进入日常 gate |
@@ -79,12 +79,14 @@
 - 旧备份/死文件：ignored 的 `*.orig`、大量 build 历史产物不进入 Git，但会增加本机扫描噪声。
 - 已修复的假成功：CI audit/Semgrep 已阻断；审计日志生产失败会抛 `AUDIT_LOG_WRITE_FAILED`；上传配额已使用 Redis Lua 原子计数；PostgreSQL 关键集成有隔离 runner。
 - 用户级工具边界：`C:\Users\550W\.codex\skills` 的 45 个顶层技能入口指向未授权的 `C:\Users\550W\.cc-switch\skills`，其内容未审计；允许目录内的 gstack 工具包含自动更新、遥测、会话导入和 Hook 设置写入能力，但没有证据表明这些 Hook 在当前用户配置中已启用。下一步必须先取得 `.cc-switch` 或实际用户配置的独立授权，不能把技能目录中的模板当作运行态证据。
-- 日本/COM VPS 生产修复证据：current 已运行 `be6a6374...`，服务、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260905_145638.sql.gz` 已完成 142 表临时恢复演练，目标 attestation 已绑定 be6a6374。BYOK pilot session 已撤销，policy 为 `revision:0/mode:off`，AI Media 写入能力保持暗态；官网 pointer 仍保留已批准的 `1.0.311`，新版本未提前公开。完整 verifier 为 `0 failure / 1 warning`，仅剩 CN/远端备份未配置。
-- 受管扩展 live smoke 已在固定 COM 路径完成：ID `nkkemglcckgmhmcfnjjmcfbdhciafahl`、版本 `1.0.313`、active-worker 和 Unicode smoke 均通过；Provider 设置/工作台隔离 UI smoke 通过，未产生 Provider、Ozon 或 ERP 写入。真实 Provider 质量/费用和 Ozon 测试店写入仍未验收。
-- 最新外部只读预检：Xiaoyi `image.xiaoyiapi.xyz` + `xiaoyiapi.xyz` 双域 7-GET 预检成功，精确模型可见且计量未变化；manifest SHA-256 `023e1d23e4a9de4cf21df23d7abfd8db2f2626531217117c915fb128ae676d17`，无 Provider POST/费用。Ozon Seller Info 只读请求对绑定店铺返回 HTTP 400；无专用 sandbox/test 标记，因此不执行 Ozon 写入。
+- 日本/COM VPS 当前运行 `b64b723c37c16f2adf2beb3a081d9f6bf159e01d`：API/Web/Worker、DB/Redis、Nginx/UFW、148 migrations、双 `/ready` 和暗态 verifier 均健康；`ss_erp_20260906_033442.sql.gz`（47,645,659 bytes）已完成 144 表临时恢复演练，attestation SHA-256 为 `33dcc8db42583e3986beac68fbfa4e5daff7656f9072158ab855b36760687b40`。远端备份按用户决定暂不配置，verifier 唯一 warning 为本地备份。
+- 公开扩展与受管 COM 路径均为 `1.0.316`，固定 ID `nkkemglcckgmhmcfnjjmcfbdhciafahl` 保持不变。官网 approval/receipt SHA-256 分别为 `31da6742...4783`、`43b69ccd...a496d9f`；受管升级、active-worker、Unicode 回执分别为 `d44efe57...d7b51`、`05c59166...1044f`、`6b401528...723ca`，私有 same-path closure SHA-256 为 `c4539426...728e8`。专用 CDP 已关闭，普通 Chrome 未操作。
+- 最新外部只读预检：Xiaoyi 双域 7-GET 预检成功且无费用；DashScope 当前 credential 仍能读取 `wanx2.1-imageedit`，阿里官方价格页于 2026-09-06 仍列出 CNY 0.14/成功图片，私有价格观察 SHA-256 为 `ede27c30...524a62`。既有 Wanx IMAGE_TO_IMAGE/FULL_EDIT/INPAINT 技术结果成功但计费账户未关联，不能提升 Registry 或替代新 pilot 批准。
+- Ozon Seller Info 已在 `b64b723c` 以零重试复现：绑定店铺为 ACTIVE 且凭据字段完整，但 Ozon 返回 HTTP 400、`code=3`、`Invalid Api-Key`；脱敏证据 SHA-256 为 `b4383731...572fd`。数据库仍为 0 个专用 sandbox/test 标记，修复 API Key 也不自动授权写入。
+- 生产 smoke 使用 `3d3333ef` 的 600 秒 typed USER/ADMIN token helper 对运行中的 `b64b723c` 执行；域名隔离、Turnstile 拒绝、17 个用户只读端点、管理员只读状态和 cloud/OSS runtime 全部通过，上传被明确跳过，两个 Redis session 随即撤销，临时 helper/token 文件已清理。
 - 受管扩展活动 COM 目录及其 228 个子项已完成 ACL 收紧：禁用继承，仅允许当前用户、SYSTEM、Administrators；无 reparse 点或额外主体，固定路径身份诊断保持 `FOUND`。
 - 当前可以继续开发：本地代码、server/Web 构建、测试和 owner 内重构均有可重复门禁。
-- 仍需单独验收：线上运行态、Redis 集群/外部告警、真实 Web/扩展流程、Provider/Ozon 和发布准备。
+- 仍需单独验收：可对账的真实 Provider pilot、专用 Ozon 测试店写入/回滚、Redis 集群拓扑/外部告警和 CN 远端备份；生产域名、公开扩展、受管 active worker 与基础只读运行态已不再属于未验证项。
 
 ## 危险接管动作
 
@@ -100,6 +102,6 @@
 - 推荐下一路线：本地开发可继续；需要发布时进入 `验收`/`发布准备`，补齐外部运行证据，不把本地绿灯当作发布授权。
 - 为什么不是直接开发：多 owner 修复需要一个持久顺序，防止安全、CI 和结构更改互相污染。
 - 第一个安全任务：建立治理和运行基线，确保后续提交有唯一范围和验收 owner。
-- 需要用户确认：2026-09-05 用户明确授权日本 VPS 生产修复、key rotation、部署和恢复演练；当前 Provider/Ozon 写入和远端备份仍未执行，受管扩展 live worker 仍待独立验收。
+- 需要用户确认：Provider 每个真实操作仍需独立精确费用上限和一次性批准；Ozon 写入仍需有效凭据且可证明为专用测试店。远端备份按用户决定暂不配置，受管扩展 live worker 已完成独立验收。
 - 停止条件：出现产品行为改变、数据迁移、真实费用、凭据、部署、公开发布或无法隔离用户现有改动。
-- 未验证项：远端仓库 visibility、生产运行态、真实浏览器/Provider/Ozon 行为。
+- 未验证项：远端仓库 visibility、Redis 集群/外部告警、可对账 Provider pilot、Ozon 专用测试店写入与 CN 远端备份。
